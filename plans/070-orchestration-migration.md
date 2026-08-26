@@ -58,7 +58,7 @@ model-facing guidance.
   (`spawnVisibleTask`, `buildVisibleTaskCommand` usage) and its capacity gate
   (`assertAgentCapacityAvailable`).
 - `src/background-tasks/visible-spawn.ts` + `src/task-mode.ts` — the
-  cmux-pane agent-runner machinery (`sumocode task` handoff, marker files,
+  terminal-pane agent-runner machinery (`sumocode task` handoff, marker files,
   auto-exit). Used ONLY by `bg_task runner=sumocode`.
 - `src/native-task-tool.ts` — the `task` tool, installed in
   `src/extension.ts` (~lines 196 and 296) with a system-prompt patch:
@@ -270,9 +270,9 @@ exposes `baseRef`.
 ### Step 7: Dead-code sweep and full check
 
 Run `pnpm dead-code`; remove now-unreferenced exports flagged in
-`src/background-tasks/` and `src/spike/cmux-background/` is OUT of scope
-(spike dir, documented as non-production). Do not chase unrelated knip
-findings.
+the background-task implementation. Its completed terminal-host spike is OUT
+of scope (spike dir, documented as non-production). Do not chase unrelated
+knip findings.
 
 **Verify**: `pnpm typecheck && pnpm test` → exit 0, all pass.
 
@@ -320,6 +320,6 @@ Stop and report back if:
   `SUMOCODE_BG_AGENT_*` env config after this lands (report reminder — outside
   repo scope).
 - Follow-ups deliberately deferred: `bin/sumocode.sh task` subcommand removal,
-  cmux visible PANES as an optional task VIEW (spawn stays headless), durable
+  terminal-host visible PANES as an optional task VIEW (spawn stays headless), durable
   subagent recovery across reloads, steerable backends, the result loop
   (diff → apply/discard) consuming plan 069's manifest.

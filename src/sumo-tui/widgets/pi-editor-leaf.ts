@@ -116,7 +116,7 @@ export class PiEditorLeaf extends PiComponentLeaf {
 		// Pi suppresses CURSOR_MARKER while autocomplete is active and paints a fake
 		// inverse cursor instead. Keep the real terminal cursor on top of that cell
 		// rather than hiding it globally; hiding (`\x1b[?25l`) also hides the mouse
-		// pointer in cmux/Ghostty.
+		// pointer in Ghostty.
 		if (this.hardwareCursor === null) this.hardwareCursor = fallbackInverseCursor;
 	}
 

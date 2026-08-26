@@ -78,7 +78,7 @@ function buildMemoryEditor({ cols, search, selectedPanel, totalFacts }) {
 		{ title: "PREFERENCES", items: ["prefers TypeScript strict", "pnpm not npm"] },
 		{ title: "WORKFLOW", items: ["TDD by default", "visual approval before done"] },
 		{ title: "PROJECTS", items: ["sumocode/cathedral parity", "openclaw ACPX integration"] },
-		{ title: "SYSTEM", items: ["cmux runtime, libghostty", "mac mini portrait", "macbook landscape"] },
+		{ title: "SYSTEM", items: ["host runtime, libghostty", "mac mini portrait", "macbook landscape"] },
 		{ title: "GENERAL", items: ["ask open-ended questions", "commit hash must be verified"] },
 	].map((p) => buildPanel(p.title, p.items, panelWidth, selectedPanel === p.title));
 

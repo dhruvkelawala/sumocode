@@ -4,8 +4,8 @@
  * When SumoCode launches via `sumocode task "<prompt>"` (i.e.
  * `SUMOCODE_TASK_MODE=1`), the session is a hand-off from an orchestrator:
  * do one delegated turn, then shut down the child process. This module wires
- * the lifecycle that exits the agent while leaving the cmux pane itself as a
- * preserved viewport the orchestrator/human can inspect.
+ * the lifecycle that exits the agent while leaving the terminal pane itself as
+ * a preserved viewport the orchestrator/human can inspect.
  *
  * Behavior:
  *
@@ -18,9 +18,9 @@
  *   the auto-exit permanently for this session. User has taken over.
  * - Opt out entirely with `SUMOCODE_TASK_KEEP_OPEN=1`.
  *
- * Shutdown uses Pi's `ctx.shutdown()` instead of `cmux close-surface`: task
- * completion belongs to the child process lifecycle, while pane close is an
- * explicit orchestrator/user decision (for example subagent cancellation).
+ * Shutdown uses Pi's `ctx.shutdown()`: task completion belongs to the child
+ * process lifecycle, while pane close is an explicit orchestrator/user decision
+ * (for example subagent cancellation).
  */
 
 import { appendFileSync, writeFileSync } from "node:fs";
@@ -76,8 +76,6 @@ interface DiagDetail {
 	readonly taskMode?: string;
 	readonly keepOpen?: string;
 	readonly graceMs?: number;
-	readonly cmuxSurfaceId?: string;
-	readonly cmuxWorkspaceId?: string;
 	readonly source?: string;
 	readonly armed?: boolean;
 	readonly userTookOver?: boolean;
@@ -87,8 +85,7 @@ interface DiagDetail {
 
 /**
  * Env-gated diagnostic logging. Set `SUMOCODE_TASK_DIAG_FILE=/tmp/xxx.jsonl`
- * to capture every lifecycle event the auto-exit goes through. Used by
- * `scripts/diag-task-auto-exit.mjs` to figure out where the close stalls.
+ * to capture every lifecycle event the auto-exit goes through.
  * No-op when the env var is unset (production default).
  */
 function diagLog(event: string, detail?: DiagDetail): void {
@@ -252,11 +249,7 @@ export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoE
 	let userTookOver = false;
 	let pending: { tick: ReturnType<typeof setInterval>; shutdown: ReturnType<typeof setTimeout> } | undefined;
 	let armed = false;
-	diagLog("install", {
-		graceMs,
-		cmuxSurfaceId: process.env.CMUX_SURFACE_ID,
-		cmuxWorkspaceId: process.env.CMUX_WORKSPACE_ID,
-	});
+	diagLog("install", { graceMs });
 
 	const cancelPending = (ctx: { ui: { setStatus: (key: string, value?: string) => void } }, reason: "user" | "fired"): void => {
 		if (!pending) return;

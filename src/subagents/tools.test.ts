@@ -14,9 +14,7 @@ interface ToolResult {
 const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly SubagentRole[], roleWarnings: readonly string[] = []) => {
 	const registered: Array<{ name: string; parameters?: unknown; execute: (...args: unknown[]) => Promise<ToolResult> }> = [];
 	const emitters = new Map<string, (event: SubagentEvent) => void>();
-	const sendPaneText = vi.fn(async () => hostKind === "cmux"
-		? { ok: false as const, error: "not supported on cmux" }
-		: { ok: true as const });
+	const sendPaneText = vi.fn(async () => ({ ok: true as const }));
 	const host: TerminalHost = {
 		kind: hostKind,
 		startAgentPane: vi.fn(),
@@ -178,7 +176,7 @@ describe("subagent tools", () => {
 	it("rejects visible spawning without a terminal host", async () => {
 		const { tool, ctx } = createHarness("none");
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
-		await expect(tool("subagent_spawn").execute("tc", { prompt: "watch", name: "worker", visible: true }, undefined, undefined, ctx as never)).rejects.toThrow("require a running terminal host");
+		await expect(tool("subagent_spawn").execute("tc", { prompt: "watch", name: "worker", visible: true }, undefined, undefined, ctx as never)).rejects.toThrow("require a running herdr terminal host");
 	});
 
 	it("passes worktree isolation, branch, and baseRef overrides to the manager", async () => {
@@ -243,11 +241,6 @@ describe("subagent tools", () => {
 		settled.emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
 		await vi.waitFor(() => expect(settled.manager.get("sa-1")?.status).toBe("done"));
 		await expect(settled.tool("subagent_send").execute("tc", { id: "sa-1", text: "hi" })).rejects.toThrow("already settled");
-
-		const cmux = createHarness("cmux");
-		// SAFETY: the ctx double carries only the fields the tool handlers read.
-		await cmux.tool("subagent_spawn").execute("tc", { prompt: "watch", name: "visible", visible: true }, undefined, undefined, cmux.ctx as never);
-		await expect(cmux.tool("subagent_send").execute("tc", { id: "sa-1", text: "hi" })).rejects.toThrow("not supported on cmux");
 	});
 
 	it("check does not consume", async () => {

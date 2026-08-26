@@ -10,9 +10,9 @@ const pane = (tabId: string, index: number): SubagentPaneRef => ({
 });
 
 describe("planPlacement", () => {
-	it.each(["cmux", "none"] as const)("uses the degraded split fallback on %s", (hostKind) => {
-		expect(planPlacement({ hostKind, isolated: false, visiblePanes: [] })).toEqual({ kind: "fallback-split", direction: "right" });
-		expect(planPlacement({ hostKind, isolated: true, visiblePanes: [] })).toEqual({ kind: "fallback-split", direction: "right" });
+	it("uses the degraded split fallback without a host", () => {
+		expect(planPlacement({ hostKind: "none", isolated: false, visiblePanes: [] })).toEqual({ kind: "fallback-split", direction: "right" });
+		expect(planPlacement({ hostKind: "none", isolated: true, visiblePanes: [] })).toEqual({ kind: "fallback-split", direction: "right" });
 	});
 
 	it("uses a workspace for isolated Herdr children only when no caller tab is available", () => {

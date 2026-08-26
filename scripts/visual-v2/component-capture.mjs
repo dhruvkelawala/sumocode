@@ -137,7 +137,7 @@ async function renderSidebarEditorial(width) {
 		],
 		memory: [
 			"prefers Scriptorium language",
-			"uses cmux over Ghostty directly",
+			"uses herdr with Ghostty",
 			"keeps UI review evidence",
 		],
 		memoryTotal: 48,

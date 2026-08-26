@@ -267,7 +267,7 @@ export class RetainedShellRenderer {
 		this.footerLeaf = PiComponentLeaf.create(this.yoga, footerProxy, this.root);
 		this.footerLeaf.height = SHELL_FOOTER_ROW;
 
-		// 8) bottom safe row. cmux/Ghostty prompt/cursor affordances are easier to
+		// 8) bottom safe row. Ghostty prompt/cursor affordances are easier to
 		// read with a terminal-bottom guard row, and the visual Bible encodes this
 		// as the final blank row in active portrait/landscape scenes.
 		this.bottomSafeSpacer = new SumoNode(this.yoga.Node.create(), this.root);

@@ -69,7 +69,7 @@ and overlays are NOT yet ported (they stay disabled in the RPC path until 003–
   `test/integration/spawn-pi-pty.ts` or adding a sibling `spawn-sumocode-pty.ts` that reuses its
   terminal-state probes.
 - A new activation flag (e.g. `SUMO_RPC=1`) wired through `bin/sumocode.sh` as an opt-in,
-  non-default path. The `extension.ts` child-bail guard (`PI_CMUX_CHILD`/`SUMOCODE_BG_CHILD`,
+  non-default path. The `extension.ts` child-bail guard (`SUMOCODE_BG_CHILD`,
   ~line 125) gains an rpc-host branch.
 
 **Out of scope (do NOT touch in this phase):** the 8 `ctx.ui.custom<>` overlays

@@ -123,5 +123,5 @@ sidebar already is the fleet view.
 | Orchestrator steering | `pane run` (prompt + Enter) exposed as a `subagent_send`-style verb, visible children only |
 | Completion | existing harvest → settle → 069 manifest → 066 typed delivery card; optional `notification show --sound done` |
 | Never steal focus | `--no-focus` on every spawn/split/tab/workspace call |
-| cmux fallback | degrade to the existing single-split visible spawn; no new cmux features (compat-only promise) |
+| generic fallback | degrade to a single-split visible spawn with no host-specific features |
 | In-app dashboard | **not built** — herdr sidebar is the fleet UI; footer keeps a running-count chip |

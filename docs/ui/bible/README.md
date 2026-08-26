@@ -68,7 +68,7 @@ Portrait dimensions: **60 cols × 100 rows** (Mac mini portrait, sidebar hidden)
 ## Mockup contrast disclaimer
 
 The runtime cathedral palette uses `--divider: #3A2F25` (1.3:1 contrast
-against bg). In dark cmux/Ghostty with dark-adapted eyes this reads as
+against bg). In dark Ghostty with dark-adapted eyes this reads as
 intentionally subtle. In PNG export viewed on bright IDE this looks
 invisible. The bible uses `--divider-mockup: #5A4D3C` (3:1 contrast) for
 legibility WHILE THE RUNTIME PALETTE STAYS LOCKED. This is a design

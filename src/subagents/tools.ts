@@ -152,7 +152,7 @@ export function registerSubagentTools(
 			}
 			const visible = params.visible ?? role?.defaultVisible;
 			if (visible === true && host.kind === "none") {
-				throw new Error("visible subagents require a running terminal host (herdr or cmux)");
+				throw new Error("visible subagents require a running herdr terminal host");
 			}
 			const activeTools = pi.getActiveTools();
 			const builtInTools = role?.tools

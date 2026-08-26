@@ -484,7 +484,7 @@ promotion still requires Dhruv's explicit approval.
 agent + the `davis7dotsh/my-pi-setup` reference implementation). Decided shape: verb-per-tool
 surfaces (`subagent_spawn/check/wait/cancel/list`, `bg_start/bg_status/bg_kill/bg_list`), typed
 deferred result delivery with consumed-tracking (no fake-user prose), an in-app dashboard +
-takeover view instead of mandatory cmux panes, worktree isolation + host-derived completion
+takeover view instead of mandatory external panes, worktree isolation + host-derived completion
 manifests, then retirement of the `bg_task` mega-tool and delegation routing ambiguity.
 
 **Planned at:** `d4ce41d`, 2026-07-15.
@@ -499,7 +499,7 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 | 070 | [Migration: retire bg_task + routing guidance](070-orchestration-migration.md) | P3 | M | 065–069 + operator gate | [#308](https://github.com/dhruvkelawala/sumocode/issues/308) | DONE — PR #337; one grammar (subagent_* + bg_* + task); retired bg_task/runner=sumocode/notifyOnExit; migrated /sumo:review to SubagentManager; added baseRef + dispatch-recipe guideline; Codex P1 (review tool-narrowing) fixed; 1,778 tests |
 | 071 | [On-demand interactive worktrees (fresh/reopen)](071-on-demand-interactive-worktrees.md) | P2 | S | — (independent) | [#309](https://github.com/dhruvkelawala/sumocode/issues/309) | DONE — PRs #310/#314 (`26de5cb`, `237355e`) |
 | 073 | [Herdr Terminal Theme](073-herdr-terminal-theme.md) | P1 | M | — | [#312](https://github.com/dhruvkelawala/sumocode/issues/312) | DONE — PR #315 (`b91f7ad` + `ae93792` approved-palette realignment) |
-| 072 | [Terminal-host abstraction: herdr + cmux](072-terminal-host-abstraction-herdr.md) | P2 | M | 071 (same file) | [#311](https://github.com/dhruvkelawala/sumocode/issues/311) | DONE — PR #313 (`52f33d6`, `fc56f14`): facade + worktree/diff/review/bg-task ports + pane-ref schema v3 |
+| 072 | Terminal-host abstraction for Herdr | P2 | M | 071 (same file) | [#311](https://github.com/dhruvkelawala/sumocode/issues/311) | DONE — PR #313 (`52f33d6`, `fc56f14`): facade + worktree/diff/review/bg-task ports + pane-ref schema v3 |
 | 074 | [Herdr-native integration: approval attention queue + native worktree workspaces](074-herdr-native-integration.md) | P2 | S | 072 | [#316](https://github.com/dhruvkelawala/sumocode/issues/316) | DONE — PR #320 (`93e077a`); Claude autoreview 3 rounds → clean; live-verified: blocked flip + attention-queue jump during approval modal (operator screenshot 2026-07-18) |
 | 075 | [Ultraviolet Core Application Theme](075-ultraviolet-core-application-theme.md) | P1 | L | 073 | [#319](https://github.com/dhruvkelawala/sumocode/issues/319) | DONE — implementation branch `advisor/075-ultraviolet-core-application-theme`; review-only visual evidence, no golden promotion |
 | 076 | [Ultraviolet RunCat working indicator](076-ultraviolet-runcat-working-indicator.md) | P2 | M | 075 | [#331](https://github.com/dhruvkelawala/sumocode/issues/331) | IN PROGRESS — automated implementation approved at `3747af4`; 1,759 unit tests, 45 integration tests, 101 Bible renders, and 22 visual scenarios pass; two-Mac human canary pending |
@@ -516,8 +516,7 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
   font/setup path, and classic/retained/RPC parity only. It must not reopen Ultraviolet's
   palette/application roles or install the upstream Pi extension as a second indicator owner.
 
-- **Host pivot 2026-07-18**: the operator's primary terminal host is now herdr (herdr.dev), not
-  cmux — capability evidence in `docs/research/HERDR_CAPABILITIES_2026.md` (CLI/socket protocol,
+- **Host pivot 2026-07-18**: the operator's primary terminal host is now Herdr (herdr.dev); capability evidence is in `docs/research/HERDR_CAPABILITIES_2026.md` (CLI/socket protocol,
   SKILL.md + plugin system, native worktrees, `herdr:blocked` hook, all verified against v0.7.0).
   071/072/073 landed against this reality; 074 captures the herdr-native follow-ups the research
   surfaced (approval → attention queue, native worktree workspaces, custom-status mirror).
@@ -529,7 +528,7 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 - 070 is gated on explicit operator confirmation of real-work parity — it deletes working
   functionality (`bg_task` tool, `runner=sumocode` spawn path, `notifyOnExit` prose wake).
 - 072 makes every pane/notification surface (worktree, diff, review, visible bg tasks) work under
-  herdr (herdr.dev) as well as cmux via a `TerminalHost` facade; land after 071 (shared
+  herdr (herdr.dev) via a `TerminalHost` facade; land after 071 (shared
   `worktree.ts`). Herdr-native worktree workspaces and `wait agent-status` orchestration hooks
   are recorded follow-ups, not v1 scope.
 - 071 is fully independent (touches only `src/commands/worktree.ts` + test) and can run first
@@ -537,7 +536,7 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
   (bare/`new [name]`/`--base <ref>`) and `open <branch-or-path>` reopen, keeping the delegated
   `<task>` form and `prune` back-compatible.
 - Deliberately deferred (recorded in 065/068/069/070/071 maintenance notes): durable subagent
-  recovery across reloads, claude/codex harness backends, steering into live children, cmux
+  recovery across reloads, claude/codex harness backends, steering into live children, terminal
   panes as optional task views, the diff→apply/discard result loop, worktree pruning UI/status
   badges, and local⇄worktree handoff.
 

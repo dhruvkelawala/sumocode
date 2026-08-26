@@ -183,7 +183,7 @@ From `GET /engram/v1/memories/:id`, a memory has:
   "status": "active",
   "created": "2026-04-26T14:41:40.725Z",
   "updated": "2026-04-26T14:41:40.725Z",
-  "content": "cmux ships vertical tabs...",
+  "content": "Herdr ships workspace and pane management...",
   "frontmatter": {
     "id": "fact-1777214500725-3yyl",
     "category": "fact",
@@ -314,7 +314,7 @@ The CLI is broad, but the SumoCode memory editor should prefer the public HTTP A
   "status": "active",
   "tags": [],
   "entityRef": null,
-  "preview": "cmux ships vertical tabs and is purpose-built for AI coding agents. Visual verification of SumoCode UI must account for the cmux host..."
+  "preview": "Herdr ships workspace and pane management and is purpose-built for AI coding agents. Visual verification of SumoCode UI must account for the Herdr host..."
 }
 ```
 
@@ -325,7 +325,7 @@ The CLI is broad, but the SumoCode memory editor should prefer the public HTTP A
   "status": "active",
   "tags": [],
   "entityRef": null,
-  "preview": "user runs sumocode inside cmux from manaflow-ai/cmux..., not Ghostty directly..."
+  "preview": "user runs sumocode inside Herdr, not standalone Ghostty..."
 }
 ```
 
@@ -354,7 +354,7 @@ Tell users to add memories like:
 identity: User is a senior frontend engineer at BigCo in London.
 preference: prefers TDD and visual approval before UI slices are done.
 stack: uses pnpm, TypeScript strict, React Native, Next.js.
-project: SumoCode runs inside cmux; sidebar hidden on splash.
+project: SumoCode runs inside Herdr; sidebar hidden on splash.
 ```
 
 ### Remnic support
@@ -399,7 +399,7 @@ Small.
    ╰────────────────────────────────╯  ╰────────────────────────────────╯
 
    ╭─ STACK ────────────────────────╮  ╭─ PROJECTS ──────────────────────╮
-   │ TypeScript strict              │  │ SumoCode inside cmux            │
+   │ TypeScript strict              │  │ SumoCode inside Herdr           │
    │ React Native / Expo            │  │ Cathedral v0.2 parity           │
    │ Next.js / Convex               │  │ OpenClaw ACPX integration       │
    ╰────────────────────────────────╯  ╰────────────────────────────────╯
@@ -436,8 +436,8 @@ Because Remnic category names are generic, SumoCode should define a display taxo
 | `IDENTITY` | tag `sumocode:identity`, content matching `works at`/`based in`/`senior frontend` (and friends), category `entity`/`relationship` |
 | `PREFERENCES` | category `preference`, `rule`, `principle`; tag `sumocode:preference` |
 | `WORKFLOW` | category `procedure`, `skill`, `rule`, `decision`; tags `sumocode:workflow`, `sumocode:tdd`, `sumocode:visual` |
-| `PROJECTS` | tags `sumocode:project`, `project:sumocode`, `project:openclaw`, content with `sumocode`, `openclaw`, `cmux`, `cathedral` |
-| `SYSTEM` | tags `sumocode:system`, content with hardware/runtime constraints: `mac mini`, `macbook`, `cmux`, `terminal`, `visual verification` |
+| `PROJECTS` | tags `sumocode:project`, `project:sumocode`, `project:openclaw`, content with `sumocode`, `openclaw`, `herdr`, `cathedral` |
+| `SYSTEM` | tags `sumocode:system`, content with hardware/runtime constraints: `mac mini`, `macbook`, `herdr`, `terminal`, `visual verification` |
 | `GENERAL` | anything unclassified |
 
 Panel label change from the Stitch v1/v3 mockups:
@@ -512,12 +512,12 @@ Required SumoCode pieces:
 
    WORKFLOW                         PROJECTS
    ─────────────────────────────    ─────────────────────────────
-   · visual verification via cmux   · SumoCode UI targets Cathedral parity
+   · visual verification via Herdr  · SumoCode UI targets Cathedral parity
    · sidebar supports both screens  · OpenClaw ACPX integration planned
 
    SYSTEM                           GENERAL
    ─────────────────────────────    ─────────────────────────────
-   · cmux embeds libghostty         · unclassified active fact
+   · Ghostty uses libghostty        · unclassified active fact
 
    ────────────────────────────────────────────────────────────────────────
    ↑↓ navigate    / search    c copy id    esc close
@@ -668,10 +668,10 @@ Small.
 
    RECENT
    ────────────────────────────────────────────────────────────────────────
-   ❯ cmux ships vertical tabs and is purpose-built for AI coding agents…
+   ❯ Herdr ships workspace and pane management and is purpose-built for AI coding agents…
      fact · fact-1777214500725-3yyl · updated today
 
-     user runs sumocode inside cmux from manaflow-ai/cmux…
+     user runs sumocode inside Herdr, not standalone Ghostty…
      fact · fact-1777214500714-5ypz · updated today
 
      mac mini is in portrait orientation. macbook is landscape…

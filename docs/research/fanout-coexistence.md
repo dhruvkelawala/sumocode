@@ -9,9 +9,9 @@ Issue: #279
 SumoCode uses two fan-out lanes with a hard routing boundary:
 
 - **Synthesis fan-out**: in-memory subagents for research, audits, comparisons, and review synthesis where the output is one answer. The preferred path is the already-installed `pi-subagents` capability; `pi-dynamic-workflows` remains prior art until it is older, stable, and clearly better than `pi-subagents` for this repo.
-- **Production fan-out**: visible `bg_task` / cmux panes, optionally with `worktree=true`, for agents that may change files on isolated named branches and produce artifacts that the orchestrator reconciles and ships.
+- **Production fan-out**: visible `bg_task` / Herdr panes, optionally with `worktree=true`, for agents that may change files on isolated named branches and produce artifacts that the orchestrator reconciles and ships.
 
-Do **not** express production worktree fan-out as a dynamic workflow script. Worktree fan-out needs visible panes, durable task metadata, cmux lifecycle, branch/worktree tracking, and explicit prune/ship controls. Those are host/runtime concerns, not a model-authored in-memory DAG concern.
+Do **not** express production worktree fan-out as a dynamic workflow script. Worktree fan-out needs visible panes, durable task metadata, terminal-host lifecycle, branch/worktree tracking, and explicit prune/ship controls. Those are host/runtime concerns, not a model-authored in-memory DAG concern.
 
 ## Tool-routing guidance
 
@@ -26,7 +26,7 @@ Use production fan-out (`bg_task runner=sumocode visible=true worktree=true`) wh
 
 - a child may edit files or commit work;
 - isolation from the parent checkout matters;
-- the user needs an inspectable cmux pane;
+- the user needs an inspectable Herdr pane;
 - the output includes a branch/worktree to reconcile, review, prune, or ship.
 
 ## Relationship to pi-dynamic-workflows
@@ -42,4 +42,4 @@ It is not adopted as a SumoCode dependency in v0.4. If it matures, open a follow
 
 ## Impact on v0.4 production track
 
-No production-track issue changes because of this decision. Issues #273–#276 continue to use SumoCode-local git/cmux/bg_task primitives. The concurrency-cap UX in #271 may reuse the concise progress/backpressure language from workflow tools, but not their execution substrate.
+No production-track issue changes because of this decision. Issues #273–#276 continue to use SumoCode-local git/terminal-host/bg_task primitives. The concurrency-cap UX in #271 may reuse the concise progress/backpressure language from workflow tools, but not their execution substrate.

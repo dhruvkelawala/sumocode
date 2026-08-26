@@ -253,7 +253,7 @@
       </h1>
       <p class="lede">
         Both apps are <strong>GUI orchestration shells</strong> wrapped around agent backends.
-        SumoCode is a retained <strong>TUI</strong> inside a cmux surface. The features that
+        SumoCode is a retained <strong>TUI</strong> inside a Herdr pane. The features that
         translate are the <em>workflow primitives</em> — worktree isolation, turn-scoped review,
         one-shot ship — not the Electron chrome. This audit maps every notable feature to what
         SumoCode already has, what's partial, and what's worth building.
@@ -349,7 +349,7 @@
             <tr><td><b>Commit / push / open PR in-app</b></td><td>✓</td><td>✓ 1-click</td><td>Agent can run <code>gh</code> via bash; no UI flow</td><td style="text-align:right"><span class="pill partial">Partial</span></td></tr>
             <tr><td><b>PR status on thread sidebar</b></td><td>✓</td><td>✓</td><td>Sidebar has no PR/git surface</td><td style="text-align:right"><span class="pill gap">Gap</span></td></tr>
             <tr><td><b>Parallel agents / projects</b></td><td>✓</td><td>✓</td><td>bg_task sumocode panes + pi-subagents</td><td style="text-align:right"><span class="pill have">Have</span></td></tr>
-            <tr><td><b>Integrated terminal per task</b></td><td>✓</td><td>✓</td><td>cmux splits already are this</td><td style="text-align:right"><span class="pill have">Have</span></td></tr>
+            <tr><td><b>Integrated terminal per task</b></td><td>✓</td><td>✓</td><td>Herdr splits already provide this</td><td style="text-align:right"><span class="pill have">Have</span></td></tr>
             <tr><td><b>Quick actions (shell buttons)</b></td><td>✓ actions</td><td>✓</td><td>Slash commands; no per-project buttons</td><td style="text-align:right"><span class="pill partial">Partial</span></td></tr>
             <tr><td><b>Auto-run setup on new env</b></td><td>✓ local env</td><td>✓</td><td>None (no worktree lifecycle)</td><td style="text-align:right"><span class="pill gap">Gap</span></td></tr>
             <tr><td><b>Scheduled automations (cron)</b></td><td>✓</td><td>—</td><td>None</td><td style="text-align:right"><span class="pill gap">Gap</span></td></tr>
@@ -378,17 +378,17 @@
     <section id="worktree">
       <div class="section-label"><span class="dot"></span><span class="num">04</span> The feature you liked: worktree + review <span class="rule"></span></div>
       <h2>Codex's worktree model, decoded</h2>
-      <p class="subhead">This is the mechanic you responded to. Here's exactly how Codex implements it — and what maps cleanly onto SumoCode's cmux foundation. The default is a <em>plain interactive pane</em>, not a delegated task.</p>
+      <p class="subhead">This is the mechanic you responded to. Here's exactly how Codex implements it — and what maps cleanly onto SumoCode's terminal-host foundation. The default is a <em>plain interactive pane</em>, not a delegated task.</p>
       <div class="layers">
         <div class="layer have">
           <div class="id">Modes</div>
           <div><p class="who">Local / Worktree / Cloud at thread start</p><p class="what">Worktree creates a 2nd checkout in <code>$CODEX_HOME/worktrees</code>, detached HEAD, so branches stay clean.</p></div>
-          <div class="owner"><span class="own-have">cmux fits</span></div>
+          <div class="owner"><span class="own-have">Herdr fits</span></div>
         </div>
         <div class="layer have">
           <div class="id">Isolation</div>
           <div><p class="who">Each worktree = own files, shared <code>.git</code></p><p class="what">A second sumocode session edits a feature branch while you keep working on main. No conflicts.</p></div>
-          <div class="owner"><span class="own-have">cmux pane fits</span></div>
+          <div class="owner"><span class="own-have">Herdr pane fits</span></div>
         </div>
         <div class="layer partial">
           <div class="id">Handoff</div>
@@ -414,7 +414,7 @@
       <div class="boundary" style="margin-top:28px;margin-bottom:0">
         <p>
           <strong>bg_task is not required here.</strong> The default <code>/sumo:worktree &lt;task&gt;</code> just opens
-          a <span class="accent-2">plain interactive cmux pane</span> running sumocode inside a fresh git worktree —
+          a <span class="accent-2">plain interactive Herdr pane</span> running sumocode inside a fresh git worktree —
           the same <code>openCommandInNewSplit</code> plumbing <code>/sumo:diff</code> already uses. You drive that
           session directly. bg_task only earns its place when you want to <span class="accent">dispatch-and-walk-away</span>
           and have the orchestrator harvest the result.
@@ -422,7 +422,7 @@
       </div>
       <p class="body" style="margin-top:24px">
         <strong>The win for SumoCode:</strong> <code>/sumo:worktree &lt;task&gt;</code> creates a git worktree under a
-        managed dir, opens a cmux split running sumocode in it, and auto-runs a configured setup action. You review
+        managed dir, opens a Herdr split running sumocode in it, and auto-runs a configured setup action. You review
         with the existing <code>/sumo:diff</code> + <code>/sumo:review</code>, then <code>/sumo:ship</code> does
         commit→push→PR. Every piece is plumbing you already own — no delegation layer needed for the interactive path.
       </p>
@@ -440,7 +440,7 @@
         <div class="tool-card codex">
           <div class="role">CODEX · <span class="runner">underrated</span></div>
           <h3>Terminal output as context</h3>
-          <p class="pitch">Codex can <b>read the integrated terminal's live output</b> — check a dev server's status, refer back to a failed build — without you pasting it. cmux already hosts the terminal; piping a pane's scrollback into the agent's context on request is a small, high-leverage bridge.</p>
+          <p class="pitch">Codex can <b>read the integrated terminal's live output</b> — check a dev server's status, refer back to a failed build — without you pasting it. Herdr already hosts the terminal; piping a pane's scrollback into the agent's context on request is a small, high-leverage bridge.</p>
         </div>
         <div class="tool-card t3">
           <div class="role">T3 · <span class="runner">underrated</span></div>
@@ -462,8 +462,8 @@
         <div class="pcard p1">
           <div class="ptag"><span class="rank">PRIORITY 01</span> · highest leverage</div>
           <h3>The worktree → review → ship loop</h3>
-          <p><code>/sumo:worktree &lt;task&gt;</code> creates a git worktree under a managed dir, opens a <b>plain interactive sumocode pane</b> inside it via a cmux split, and auto-runs a configured setup action. You drive that session directly. Review with the existing <code>/sumo:diff</code> + <code>/sumo:review</code>, then <code>/sumo:ship</code> commits, pushes, and opens the PR.</p>
-          <p class="why"><b>Why first:</b> it's the convergent feature both products lead with, it's exactly what you flagged, and every piece (cmux splits via <code>openCommandInNewSplit</code>, hunkdiff, review scribe, gh) already exists. <b>No bg_task needed</b> — the interactive pane is the same plumbing <code>/sumo:diff</code> uses. This is assembly, not invention.</p>
+          <p><code>/sumo:worktree &lt;task&gt;</code> creates a git worktree under a managed dir, opens a <b>plain interactive sumocode pane</b> inside it via a Herdr split, and auto-runs a configured setup action. You drive that session directly. Review with the existing <code>/sumo:diff</code> + <code>/sumo:review</code>, then <code>/sumo:ship</code> commits, pushes, and opens the PR.</p>
+          <p class="why"><b>Why first:</b> it's the convergent feature both products lead with, it's exactly what you flagged, and every piece (terminal-host splits via <code>openCommandInNewSplit</code>, hunkdiff, review scribe, gh) already exists. <b>No bg_task needed</b> — the interactive pane is the same plumbing <code>/sumo:diff</code> uses. This is assembly, not invention.</p>
         </div>
         <div class="pcard p2">
           <div class="ptag"><span class="rank">PRIORITY 02</span> · strong follow-up</div>
@@ -474,7 +474,7 @@
         <div class="pcard p2">
           <div class="ptag"><span class="rank">PRIORITY 03</span> · self-contained quick win</div>
           <h3>Inline image rendering in the transcript</h3>
-          <p>Pi ships an <code>Image</code> TUI component that renders in Kitty / iTerm2 / Ghostty / WezTerm — and cmux embeds libghostty, so it qualifies. SumoTUI's retained renderer never wired it up: <code>ChatBlock</code> has no image variant, and <code>blocksFromContentPart</code> hits its <code>default:</code> case for <code>type: "image"</code> parts and drops them. Add an <code>image</code> block type, carry the base64 + MIME through the view-model, and render via Pi's <code>Image</code> in the scroll-renderer.</p>
+          <p>Pi ships an <code>Image</code> TUI component that renders in Kitty / iTerm2 / Ghostty / WezTerm — Ghostty supports the required protocol. SumoTUI's retained renderer never wired it up: <code>ChatBlock</code> has no image variant, and <code>blocksFromContentPart</code> hits its <code>default:</code> case for <code>type: "image"</code> parts and drops them. Add an <code>image</code> block type, carry the base64 + MIME through the view-model, and render via Pi's <code>Image</code> in the scroll-renderer.</p>
           <p class="why"><b>Why:</b> pasted/generated images currently vanish in default mode — Pi's classic renderer would have shown them. No new dependency (the component is Pi's), no protocol work, no git surface. Pure assembly inside <code>src/sumo-tui/transcript</code>.</p>
         </div>
         <div class="pcard p2">
@@ -492,7 +492,7 @@
         <div class="pcard p3">
           <div class="ptag"><span class="rank">PRIORITY 06</span> · exploratory</div>
           <h3>Stateful scheduled automations</h3>
-          <p>Context-preserving thread wake-ups (cron + heartbeat) on top of bg_task. Plus a "read this cmux pane's output into context" bridge. Genuinely new capability, but heavier and less requested — stage it after the core loop proves out.</p>
+          <p>Context-preserving thread wake-ups (cron + heartbeat) on top of bg_task. Plus a "read this terminal pane's output into context" bridge. Genuinely new capability, but heavier and less requested — stage it after the core loop proves out.</p>
           <p class="why"><b>Why last:</b> highest novelty, lowest certainty of payoff; revisit once the worktree loop is daily-driven.</p>
         </div>
       </div>
@@ -505,7 +505,7 @@
         <table>
           <thead><tr><th>Feature</th><th>Why skip</th></tr></thead>
           <tbody>
-            <tr><td><b>Pop-out / always-on-top window</b></td><td>GUI-only affordance. cmux/tmux pane management already covers spatial arrangement.</td></tr>
+            <tr><td><b>Pop-out / always-on-top window</b></td><td>GUI-only affordance. terminal pane management already covers spatial arrangement.</td></tr>
             <tr><td><b>In-app browser + element comments</b></td><td>Heavy. <code>agent_browser</code> + <code>chrome-devtools</code> MCP already give SumoCode real browser control; element-comment UX isn't worth a custom renderer.</td></tr>
             <tr><td><b>Computer use (drive macOS apps)</b></td><td>Large surface, narrow payoff, region-restricted even in Codex. Out of scope for a coding TUI.</td></tr>
             <tr><td><b>Image generation in-thread</b></td><td>Nice-to-have, not workflow-critical. Pi handles image input already; generation is a model/provider concern.</td></tr>
@@ -518,7 +518,7 @@
       <p class="body">
         The discipline here mirrors T3's: don't rebuild Electron chrome in a terminal. Adopt the
         <strong>workflow primitives</strong> that convergent products validated, lean on MCP for the
-        browser/vision surface, and keep SumoCode's identity — a fast, retained, cmux-native renderer.
+        browser/vision surface, and keep SumoCode's identity — a fast, retained, terminal-native renderer.
       </p>
     </section>
 

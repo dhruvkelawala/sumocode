@@ -60,7 +60,7 @@ Unchanged from v1. Reproduced for completeness.
 | `#8E7AB5` | `state.learning` | violet — `INSCRIBING` |
 | `#6F5D46` | `syntax.comment` | comments |
 
-OSC 11 (`\x1b]11;#1A1511\x1b\\`) painted on altscreen entry. OSC 111 reset on exit. **Focus**: cmux/Ghostty (libghostty); other terminals best-effort. Research follow-up listed in §7.
+OSC 11 (`\x1b]11;#1A1511\x1b\\`) painted on altscreen entry. OSC 111 reset on exit. **Focus**: Ghostty (libghostty); other terminals best-effort. Research follow-up listed in §7.
 
 ---
 
@@ -965,7 +965,7 @@ Each message renders as a self-contained closed-frame box:
 
 ### 6.3 Cathedral OSC 11 bg
 
-**Decision**: keep paint for v1, focus on cmux/Ghostty (libghostty). Other terminals: best-effort. Research follow-up: investigate per-terminal escape handling for v2 (e.g., does Apple Terminal honor OSC 111 reset reliably? iTerm2? Alacritty?).
+**Decision**: keep paint for v1, focus on Ghostty (libghostty). Other terminals: best-effort. Research follow-up: investigate per-terminal escape handling for v2 (e.g., does Apple Terminal honor OSC 111 reset reliably? iTerm2? Alacritty?).
 
 ### 6.4 Resume flow performance (HIGH priority)
 

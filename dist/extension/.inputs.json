@@ -32,7 +32,6 @@
     "src/cathedral/multiline-paste.ts",
     "src/cathedral/scriptorium-chrome.ts",
     "src/command-palette.ts",
-    "src/commands/cmux-split.ts",
     "src/commands/cursor.ts",
     "src/commands/diff.ts",
     "src/commands/divine-query.ts",
@@ -106,10 +105,10 @@
     "src/sumo-tui/runtime/terminal-errors.ts",
     "src/sumo-tui/runtime/worker-runtime.ts",
     "src/task-mode.ts",
-    "src/terminal-host/cmux.ts",
     "src/terminal-host/detect.ts",
     "src/terminal-host/herdr.ts",
     "src/terminal-host/index.ts",
+    "src/terminal-host/shell-command.ts",
     "src/theme-check.ts",
     "src/themes/amber-crt.ts",
     "src/themes/cathedral.ts",
@@ -126,6 +125,6 @@
     "src/working-indicator.ts",
     "tsconfig.json"
   ],
-  "hash": "a923f5f57812f68d7bc1e88be50aa93fa9ff57467aafde176db8b7fbf3690f54",
-  "outputsHash": "dda723ee71bdb662f79ba3acd7d57230bfb134f94b8701f5d0b5321ead18a883"
+  "hash": "67928ff618ca98a4a33e3df85eaa4cf5a0d503be10d4911c4e90f1967c373add",
+  "outputsHash": "e6c9c5bd9845c183c7be9bdfdc27fcee081939104cbae829f3b2a520add96df4"
 }

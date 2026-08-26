@@ -22,7 +22,7 @@ function snapshot(): RegistrySidebarSnapshot {
 			"prefers TypeScript strict",
 			"pnpm not npm",
 			"based in London",
-			"uses cmux",
+			"uses herdr",
 			"visual verification before done",
 			"hidden sixth fact",
 		],

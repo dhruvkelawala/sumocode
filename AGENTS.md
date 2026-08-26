@@ -192,7 +192,7 @@ Runtime scenarios invoke:
 ./bin/sumocode.sh --offline --no-extensions --no-session
 ```
 
-`tmux`, cmux/Ghostty screenshots, and live terminal captures are debugging aids only. They must not define CI pass/fail for V2 parity.
+`tmux`, Ghostty screenshots, and live terminal captures are debugging aids only. They must not define CI pass/fail for V2 parity.
 
 Required crops gate against committed approved runtime goldens. Bible diffs remain review evidence. Promote runtime goldens only after Dhruv explicitly approves the capture.
 
@@ -244,7 +244,7 @@ When generating HTML diagrams, visual explainers, architecture docs, plan review
 - Section labels: cyan dot · gold two-digit number · uppercase mono title · thin horizontal rule filling remaining width
 - **AXIOM callout** for thesis statements: surface-elevated card with a small `AXIOM` mono tag floating on the top border
 - Card depth tiers: hero (gold top-border, gold-dim background wash) → default (cyan top-border) → recessed (no border accent, surface-recessed bg)
-- Terminal mockups: two-pane split with `cmux · workspace:N` headlining, monospace body, blinking cursor as a 7×12px filled block
+- Terminal mockups: two-pane split with `herdr · workspace:N` headlining, monospace body, blinking cursor as a 7×12px filled block
 - Tables: sticky mono `<thead>` with letter-spaced uppercase labels; hover row uses `--surface-elevated`
 - Footer signoff: mono, 11px, project name in gold + date + brief sign-off (e.g. `zeus ⚡ · sumodeus temple`)
 

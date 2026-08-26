@@ -24,7 +24,7 @@ This audit is based on the summarized video in which Theo walks through his curr
 SumoCode already has several strong fits with this model:
 
 1. **Model default is already aligned.** `~/.pi/agent/settings.json` uses `openai-codex/gpt-5.5` by default.
-2. **App-like runtime is the core product.** SumoCode runs inside cmux and owns the retained terminal UX, rather than treating the terminal as an incidental transport.
+2. **App-like runtime is the core product.** SumoCode runs inside Herdr and owns the retained terminal UX, rather than treating the terminal as an incidental transport.
 3. **Remote/delegated work exists.** `bg_task` can spawn shell work or visible child SumoCode panes, and `sumocode task --prompt-file` gives delegated agents a first-class path.
 4. **Verification discipline is strong.** Project instructions require typecheck/build and visual evidence for UI work.
 5. **The persona is already relatively concise.** `APPEND_SYSTEM.md` is much smaller than the full project context and contains personal operating agreements.
@@ -86,7 +86,7 @@ Suggested text:
 - SumoCode: Dhruv's Pi extension and CLI wrapper. Owns UX, Cathedral UI, task panes, prompt ergonomics.
 - SumoTUI: retained renderer inside SumoCode. Use for layout, terminal UI, scroll, modal, mouse, and visual parity work.
 - Classic extension API: Pi's `ctx.ui.*` layer. Use only for lightweight classic surfaces.
-- cmux: the host terminal app. Do not assume Ghostty windows directly.
+- Herdr: the host terminal workspace manager. Do not assume standalone Ghostty windows.
 - Cathedral: the SumoCode visual/product language.
 - Dhruv: the human product owner.
 - Zeus: the agent persona implementing and advising.
@@ -124,7 +124,7 @@ Introduce profile-oriented setup. Example profile shape:
 ```json
 {
   "profiles": {
-    "core": ["sumocode", "pi-cmux", "agent-browser", "github", "summarize", "sem", "commit", "diagnose", "code-review"],
+    "core": ["sumocode", "agent-browser", "github", "summarize", "sem", "commit", "diagnose", "code-review"],
     "design": ["core", "figma", "stitch-kit", "visual-explainer"],
     "infra": ["core", "railway", "github"],
     "planning": ["core", "grill-with-docs", "to-prd", "to-issues", "triage"]

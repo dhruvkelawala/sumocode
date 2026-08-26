@@ -5021,7 +5021,7 @@ function defaultDelay(ms) {
 async function executeSumoReload(ctx, deps = {}) {
   const env = deps.env ?? process.env;
   const exit = deps.exit ?? ((code) => process.exit(code));
-  const delay2 = deps.delay ?? defaultDelay;
+  const delay = deps.delay ?? defaultDelay;
   if (!env.SUMOCODE_LAUNCHER) {
     ctx.ui.notify(
       "reload needs the bin/sumocode.sh launcher; please rerun via `sumocode` or quit + relaunch",
@@ -5030,7 +5030,7 @@ async function executeSumoReload(ctx, deps = {}) {
     return;
   }
   ctx.ui.notify("hard reloading SumoCode\u2026", "info");
-  await delay2(FLUSH_DELAY_MS);
+  await delay(FLUSH_DELAY_MS);
   exit(SUMOCODE_RELOAD_EXIT_CODE);
 }
 function registerSumoReloadCommand(pi, deps = {}) {
@@ -6021,21 +6021,7 @@ function registerCursorCommand(pi, terminalSession = defaultTerminalSessionOwner
   });
 }
 
-// src/commands/cmux-split.ts
-var CMUX_TIMEOUT_MS = 5e3;
-var SPLIT_READY_ATTEMPTS = 20;
-var SPLIT_READY_DELAY_MS = 150;
-var SURFACE_BOOT_DELAY_MS = 250;
-function delay(ms) {
-  return new Promise((resolve8) => setTimeout(resolve8, ms));
-}
-function parseJson(text) {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return void 0;
-  }
-}
+// src/terminal-host/shell-command.ts
 function shellEscape(value) {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
@@ -6043,187 +6029,10 @@ function buildShellCommand(cwd, command) {
   const shellCommand = ["cd", shellEscape(cwd), "&&", command].join(" ");
   return ["bash", "-lc", shellEscape(shellCommand)].join(" ");
 }
-function collectSurfaceRefs(panes) {
-  const refs = /* @__PURE__ */ new Set();
-  for (const pane of panes) {
-    if (pane.selected_surface_ref) refs.add(pane.selected_surface_ref);
-    for (const surfaceRef of pane.surface_refs ?? []) refs.add(surfaceRef);
-  }
-  return refs;
-}
-async function execCmux(pi, args) {
-  const result = await pi.exec("cmux", [...args], { timeout: CMUX_TIMEOUT_MS });
-  if (result.killed) {
-    return { ok: false, stdout: result.stdout, stderr: result.stderr, error: "cmux command timed out" };
-  }
-  if (result.code !== 0) {
-    return {
-      ok: false,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      error: result.stderr.trim() || result.stdout.trim() || `cmux exited with code ${result.code}`
-    };
-  }
-  return { ok: true, stdout: result.stdout, stderr: result.stderr };
-}
-async function getCallerInfo(pi) {
-  const result = await execCmux(pi, ["--json", "identify"]);
-  if (!result.ok) return { ok: false, error: result.error ?? "Failed to identify cmux caller" };
-  const parsed = parseJson(result.stdout);
-  const workspaceRef = parsed?.caller?.workspace_ref;
-  const surfaceRef = parsed?.caller?.surface_ref;
-  if (!workspaceRef || !surfaceRef) {
-    return { ok: false, error: "This command must be run from inside a cmux surface" };
-  }
-  return { ok: true, caller: { workspace_ref: workspaceRef, surface_ref: surfaceRef } };
-}
-async function listPanes(pi, workspaceRef) {
-  const result = await execCmux(pi, ["--json", "list-panes", "--workspace", workspaceRef]);
-  if (!result.ok) return { ok: false, error: result.error ?? "Failed to list cmux panes" };
-  const parsed = parseJson(result.stdout);
-  return { ok: true, panes: parsed?.panes ?? [] };
-}
-async function waitForNewSurface(pi, workspaceRef, previousPanes) {
-  const previousPaneRefs = new Set(
-    previousPanes.map((pane) => pane.ref).filter((ref) => Boolean(ref))
-  );
-  const previousSurfaceRefs = collectSurfaceRefs(previousPanes);
-  for (let attempt = 0; attempt < SPLIT_READY_ATTEMPTS; attempt += 1) {
-    const panesResult = await listPanes(pi, workspaceRef);
-    if (!panesResult.ok) return void 0;
-    for (const pane of panesResult.panes) {
-      if (pane.ref && !previousPaneRefs.has(pane.ref)) {
-        if (pane.selected_surface_ref) return pane.selected_surface_ref;
-        const firstNew = pane.surface_refs?.find((ref) => !previousSurfaceRefs.has(ref));
-        if (firstNew) return firstNew;
-      }
-    }
-    await delay(SPLIT_READY_DELAY_MS);
-  }
-  return void 0;
-}
-async function openCommandInCurrentSurface(pi, command) {
-  const callerResult = await getCallerInfo(pi);
-  if (!callerResult.ok) return callerResult;
-  const { workspace_ref: workspaceRef, surface_ref: surfaceRef } = callerResult.caller;
-  const respawnResult = await execCmux(pi, [
-    "respawn-pane",
-    "--workspace",
-    workspaceRef,
-    "--surface",
-    surfaceRef,
-    "--command",
-    command
-  ]);
-  if (!respawnResult.ok) {
-    return { ok: false, error: respawnResult.error ?? "Failed to run command in the current surface" };
-  }
-  return { ok: true };
-}
-function parseNewSplitOutput(stdout) {
-  const surfaceMatch = stdout.match(/surface:\S+/);
-  const workspaceMatch = stdout.match(/workspace:\S+/);
-  return {
-    surfaceRef: surfaceMatch?.[0],
-    workspaceRef: workspaceMatch?.[0]
-  };
-}
-async function resolveNewSplitSurface(pi, workspaceRef, beforePanes, splitStdout) {
-  const parsed = parseNewSplitOutput(splitStdout);
-  if (parsed.surfaceRef) {
-    return parsed.surfaceRef;
-  }
-  return waitForNewSurface(pi, workspaceRef, beforePanes);
-}
-async function openCommandInNewSplitWithRefs(pi, direction, command) {
-  const callerResult = await getCallerInfo(pi);
-  if (!callerResult.ok) return callerResult;
-  const { workspace_ref: workspaceRef, surface_ref: surfaceRef } = callerResult.caller;
-  const beforePanesResult = await listPanes(pi, workspaceRef);
-  if (!beforePanesResult.ok) return beforePanesResult;
-  const splitResult = await execCmux(pi, [
-    "new-split",
-    direction,
-    "--workspace",
-    workspaceRef,
-    "--surface",
-    surfaceRef
-  ]);
-  if (!splitResult.ok) {
-    return { ok: false, error: splitResult.error ?? "Failed to create cmux split" };
-  }
-  const newSurfaceRef = await resolveNewSplitSurface(
-    pi,
-    workspaceRef,
-    beforePanesResult.panes,
-    splitResult.stdout
-  );
-  if (!newSurfaceRef) {
-    return { ok: false, error: "Created split, but could not find the new cmux surface" };
-  }
-  await delay(SURFACE_BOOT_DELAY_MS);
-  const respawnResult = await execCmux(pi, [
-    "respawn-pane",
-    "--workspace",
-    workspaceRef,
-    "--surface",
-    newSurfaceRef,
-    "--command",
-    command
-  ]);
-  if (!respawnResult.ok) {
-    return { ok: false, error: respawnResult.error ?? "Failed to run command in the new split" };
-  }
-  return { ok: true, workspaceRef, surfaceRef: newSurfaceRef };
-}
-
-// src/terminal-host/cmux.ts
-var shellEscape2 = (value) => `'${value.replace(/'/g, `'\\''`)}'`;
-var cmuxTerminalHost = {
-  kind: "cmux",
-  async startAgentPane(pi, options) {
-    const result = await this.openCommandInSplit(pi, "right", {
-      cwd: options.cwd,
-      shellCommand: `bash -lc ${shellEscape2(options.shellCommand)}`
-    });
-    if (!result.ok) return result;
-    return {
-      ok: true,
-      pane: result.pane,
-      agentName: options.name,
-      workspaceId: result.pane.workspaceId,
-      paneId: result.pane.paneId
-    };
-  },
-  async sendPaneText(_pi, _pane, _text) {
-    return { ok: false, error: "not supported on cmux" };
-  },
-  async openCommandInSplit(pi, direction, options) {
-    const result = await openCommandInNewSplitWithRefs(pi, direction, options.shellCommand);
-    if (!result.ok) return result;
-    return { ok: true, pane: { host: "cmux", paneId: result.surfaceRef, workspaceId: result.workspaceRef } };
-  },
-  async replaceCurrentPane(pi, options) {
-    return openCommandInCurrentSurface(pi, options.shellCommand);
-  },
-  async closePane(pi, pane) {
-    const result = await pi.exec("cmux", ["close-surface", "--workspace", pane.workspaceId ?? "", "--surface", pane.paneId], { timeout: 5e3 });
-    if (result.code !== 0) return { ok: false, error: result.stderr || result.stdout || `cmux close-surface exited ${result.code}` };
-    return { ok: true };
-  },
-  async notify(pi, title, body, pane) {
-    const args = ["notify", "--title", title, "--body", body];
-    if (pane?.workspaceId) args.push("--workspace", pane.workspaceId);
-    if (pane?.paneId) args.push("--surface", pane.paneId);
-    await pi.exec("cmux", args, { timeout: 5e3 }).catch(() => void 0);
-  }
-};
 
 // src/terminal-host/detect.ts
 function detectTerminalHost(env = process.env) {
-  if (env.HERDR_ENV === "1" && env.HERDR_PANE_ID) return "herdr";
-  if (env.CMUX_SURFACE_ID || env.CMUX_WORKSPACE_ID) return "cmux";
-  return "none";
+  return env.HERDR_ENV === "1" && env.HERDR_PANE_ID ? "herdr" : "none";
 }
 
 // src/terminal-host/herdr.ts
@@ -6438,25 +6247,23 @@ var herdrTerminalHost = {
 var noneTerminalHost = {
   kind: "none",
   async startAgentPane() {
-    return { ok: false, error: "requires a terminal host (cmux or herdr)" };
+    return { ok: false, error: "requires a running herdr terminal host" };
   },
   async sendPaneText() {
-    return { ok: false, error: "requires a terminal host (cmux or herdr)" };
+    return { ok: false, error: "requires a running herdr terminal host" };
   },
   async openCommandInSplit() {
-    return { ok: false, error: "requires a terminal host (cmux or herdr)" };
+    return { ok: false, error: "requires a running herdr terminal host" };
   },
   async closePane() {
-    return { ok: false, error: "requires a terminal host (cmux or herdr)" };
+    return { ok: false, error: "requires a running herdr terminal host" };
   },
   async notify() {
   }
 };
 function getTerminalHost(env = process.env) {
   const kind = detectTerminalHost(env);
-  if (kind === "herdr") return herdrTerminalHost;
-  if (kind === "cmux") return cmuxTerminalHost;
-  return noneTerminalHost;
+  return kind === "herdr" ? herdrTerminalHost : noneTerminalHost;
 }
 
 // src/commands/diff.ts
@@ -8189,7 +7996,7 @@ function registerWorktreeCommand(pi, options = {}) {
         }
         const terminalHost = configuredTerminalHost ?? getTerminalHost();
         if (terminalHost.kind === "none") {
-          notify6(pi, ctx, "/sumo:worktree requires a terminal host (cmux or herdr)", "warning");
+          notify6(pi, ctx, "/sumo:worktree requires a running herdr terminal host", "warning");
           return;
         }
         if (parsed.mode === "reopen") {
@@ -8502,7 +8309,7 @@ function routeFactToPanel(fact) {
   if (cat === "entity" || cat === "relationship") return "IDENTITY";
   const text = (fact.text ?? "").toLowerCase();
   if (/\b(works\s+at|based\s+in|located\s+in|lives\s+in|senior\s+(frontend|backend|engineer|developer)|software\s+engineer|principal\s+engineer|staff\s+engineer|lead\s+engineer)\b/.test(text)) return "IDENTITY";
-  if (/\b(cmux|portrait|landscape|terminal|libghostty|visual verification)\b/.test(text)) return "SYSTEM";
+  if (/\b(herdr|portrait|landscape|terminal|libghostty|visual verification)\b/.test(text)) return "SYSTEM";
   if (/\b(sumocode|openclaw|cathedral|project:)\b/.test(text)) return "PROJECTS";
   if (/\b(tdd|workflow|always|never|prefer)\b/.test(text)) return "WORKFLOW";
   if (/\b(typescript|pnpm|react|vite|tailwind|next\.?js|bun|node)\b/.test(text)) return "PREFERENCES";
@@ -11735,7 +11542,7 @@ function buildVisibleTaskPaths(taskId, startedAtMs, baseDir) {
     diagFile: join13(dir, "diag.jsonl")
   };
 }
-function shellEscape3(value) {
+function shellEscape2(value) {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 function buildVisibleAgentArgs(options) {
@@ -11747,11 +11554,11 @@ function buildVisibleAgentArgs(options) {
 function buildVisibleAgentCommand(options) {
   return [
     "cd",
-    shellEscape3(options.cwd),
+    shellEscape2(options.cwd),
     "&&",
     "exec",
     "sumocode",
-    ...buildVisibleAgentArgs(options).map(shellEscape3)
+    ...buildVisibleAgentArgs(options).map(shellEscape2)
   ].join(" ");
 }
 function readExitCodeFromFile(contents) {
@@ -11921,24 +11728,24 @@ function buildPosixScript(options) {
     "umask 077",
     "set +e",
     "launch_wait=0",
-    `while [ ! -f ${shellEscape3(options.launchFile)} ]; do`,
+    `while [ ! -f ${shellEscape2(options.launchFile)} ]; do`,
     '  if [ "$launch_wait" -ge 3000 ]; then',
-    `    printf '%s\\n' '[sumocode-terminal] launch gate timed out' >> ${shellEscape3(options.logFile)}`,
-    `    printf '%s' 125 > ${shellEscape3(options.exitFile)}`,
+    `    printf '%s\\n' '[sumocode-terminal] launch gate timed out' >> ${shellEscape2(options.logFile)}`,
+    `    printf '%s' 125 > ${shellEscape2(options.exitFile)}`,
     "    exit 125",
     "  fi",
     "  sleep 0.01",
     "  launch_wait=$((launch_wait + 1))",
     "done",
-    `if ! cd ${shellEscape3(options.cwd)}; then`,
-    `  printf '%s\\n' ${shellEscape3(`[sumocode-terminal] working directory unavailable: ${options.cwd}`)} >> ${shellEscape3(options.logFile)}`,
+    `if ! cd ${shellEscape2(options.cwd)}; then`,
+    `  printf '%s\\n' ${shellEscape2(`[sumocode-terminal] working directory unavailable: ${options.cwd}`)} >> ${shellEscape2(options.logFile)}`,
     "  code=1",
     "else",
     "  export SUMOCODE_BG_CHILD=1",
-    `  ${shellEscape3(process.execPath)} ${shellEscape3(BOUNDED_TERMINAL_RUNNER_FILE)} posix ${shellEscape3(options.commandFile)} ${shellEscape3(options.logFile)} ${options.logMaxBytes}`,
+    `  ${shellEscape2(process.execPath)} ${shellEscape2(BOUNDED_TERMINAL_RUNNER_FILE)} posix ${shellEscape2(options.commandFile)} ${shellEscape2(options.logFile)} ${options.logMaxBytes}`,
     "  code=$?",
     "fi",
-    `printf '%s' "$code" > ${shellEscape3(options.exitFile)}`,
+    `printf '%s' "$code" > ${shellEscape2(options.exitFile)}`,
     // Retain the verified group leader until the manager disposes the complete
     // tree and records the command's already-captured natural exit code.
     "while :; do sleep 1; done"
@@ -14569,7 +14376,7 @@ ${options.prompt}` : options.prompt;
   };
   const agentCommand = buildVisibleAgentCommand(commandOptions);
   const exitGuard = [
-    `__sumo_exit_file=${shellEscape3(paths.exitFile)}`,
+    `__sumo_exit_file=${shellEscape2(paths.exitFile)}`,
     `__sumo_finish() { [ -f "$__sumo_exit_file" ] || printf '%s' "$1" > "$__sumo_exit_file"; }`,
     `trap '__sumo_finish "$?"' EXIT`,
     `trap '__sumo_finish 129' HUP`,
@@ -14580,10 +14387,10 @@ ${options.prompt}` : options.prompt;
     "#!/usr/bin/env bash",
     "set -u",
     exitGuard,
-    `( ${agentCommand} ) 2>> ${shellEscape3(paths.logFile)}`
+    `( ${agentCommand} ) 2>> ${shellEscape2(paths.logFile)}`
   ].join("\n");
   fs3.writeFileSync(paths.scriptFile, script, { mode: 448 });
-  const shellCommand = `exec ${shellEscape3(paths.scriptFile)}`;
+  const shellCommand = `exec ${shellEscape2(paths.scriptFile)}`;
   let emitEvent;
   let pane;
   let pollTimer;
@@ -15752,7 +15559,7 @@ var SUBAGENT_PROMPT_GUIDELINES = [
   "Use visible subagents for long or interactive work the human may want to watch or steer; use headless subagents for silent, bounded fan-out.",
   "All children have their own context, cannot see this conversation, and cannot spawn subagents; prompts must be self-contained with objective, paths, constraints, expected output, and stop conditions.",
   "Use subagent_send to steer a running visible child; it sends the text followed by Enter. Headless or settled children cannot receive input.",
-  "Visible Herdr children split beside the parent when its tab is available, including worktree-backed children; overflow falls back to subagent tabs/workspaces. cmux provides only a degraded single-split fallback.",
+  "Visible Herdr children split beside the parent when its tab is available, including worktree-backed children; overflow falls back to subagent tabs/workspaces.",
   "delegation is fire-and-forget: after spawning, continue other work or end your turn. settled results arrive as automatic follow-up messages that wake you. do NOT call subagent_wait right after subagent_spawn.",
   "spawn with a role for recurring shapes: research, review, documentor, designer, implement-cheap, implement-smart. the role sets the child's system prompt, tool limits, and defaults; your prompt supplies the concrete objective and stop conditions.",
   "if spawn returns status=queued, the child starts automatically when a slot frees \u2014 do not retry, do not wait.",
@@ -15885,7 +15692,7 @@ ${loaded.warnings.map((warning) => `- ${warning}`).join("\n")}`, {
       }
       const visible = params.visible ?? role?.defaultVisible;
       if (visible === true && host.kind === "none") {
-        throw new Error("visible subagents require a running terminal host (herdr or cmux)");
+        throw new Error("visible subagents require a running herdr terminal host");
       }
       const activeTools = pi.getActiveTools();
       const builtInTools = role?.tools ? role.tools.filter((tool) => activeTools.includes(tool)) : activeTools;
@@ -16371,11 +16178,7 @@ function installTaskModeAutoExit(pi, options = {}) {
   let userTookOver = false;
   let pending;
   let armed = false;
-  diagLog("install", {
-    graceMs,
-    cmuxSurfaceId: process.env.CMUX_SURFACE_ID,
-    cmuxWorkspaceId: process.env.CMUX_WORKSPACE_ID
-  });
+  diagLog("install", { graceMs });
   const cancelPending = (ctx, reason) => {
     if (!pending) return;
     clearInterval(pending.tick);
@@ -17087,7 +16890,7 @@ function shouldInstallNativeTaskTool(options = {}) {
 }
 function shouldNoopHelperSubprocess(options = {}) {
   const env = options.env ?? process.env;
-  return env.PI_CMUX_CHILD === "1" || env.SUMOCODE_BG_CHILD === "1";
+  return env.SUMOCODE_BG_CHILD === "1";
 }
 function isTaskMode(options = {}) {
   const env = options.env ?? process.env;

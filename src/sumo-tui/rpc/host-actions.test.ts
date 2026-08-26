@@ -854,7 +854,7 @@ describe("RpcHostActions", () => {
 		const { actions, controls, inlineSelectors, rehydrateCalls } = setup();
 		controls.forkMessages = [
 			{ entryId: "entry-real", text: 'check "/tmp/pi-clipboard-9f.png"\nand this\nmultiline prompt' },
-			{ entryId: "entry-wake", text: "background task bg-abc123 failed: smoke tests (cmux surface:41)" },
+			{ entryId: "entry-wake", text: "background task bg-abc123 failed: smoke tests (herdr pane w1:p41)" },
 		];
 
 		const forkPromise = actions.handleSubmittedText("/fork");

@@ -122,7 +122,6 @@ describe("shouldInstallTaskModeAutoExit", () => {
 });
 
 describe("installTaskModeAutoExit", () => {
-	let originalSurfaceId: string | undefined;
 	let originalResponseFile: string | undefined;
 	let originalExitFile: string | undefined;
 	let originalStartedFile: string | undefined;
@@ -130,8 +129,6 @@ describe("installTaskModeAutoExit", () => {
 
 	beforeEach(() => {
 		vi.useFakeTimers();
-		originalSurfaceId = process.env.CMUX_SURFACE_ID;
-		process.env.CMUX_SURFACE_ID = "surface:test";
 		originalResponseFile = process.env.SUMOCODE_TASK_RESPONSE_FILE;
 		originalExitFile = process.env.SUMOCODE_TASK_EXIT_FILE;
 		originalStartedFile = process.env.SUMOCODE_TASK_STARTED_FILE;
@@ -143,8 +140,6 @@ describe("installTaskModeAutoExit", () => {
 
 	afterEach(() => {
 		vi.useRealTimers();
-		if (originalSurfaceId === undefined) delete process.env.CMUX_SURFACE_ID;
-		else process.env.CMUX_SURFACE_ID = originalSurfaceId;
 		if (originalResponseFile === undefined) delete process.env.SUMOCODE_TASK_RESPONSE_FILE;
 		else process.env.SUMOCODE_TASK_RESPONSE_FILE = originalResponseFile;
 		if (originalExitFile === undefined) delete process.env.SUMOCODE_TASK_EXIT_FILE;
@@ -211,7 +206,7 @@ describe("installTaskModeAutoExit", () => {
 		vi.advanceTimersByTime(3_000);
 		handlers.get("input")?.[0]?.({ source: "interactive", text: "follow-up" }, ctx);
 
-		// Run remaining time — cmux close-surface must NOT fire
+		// Run remaining time — shutdown must not fire
 		vi.advanceTimersByTime(20_000);
 		expect(pi.exec).not.toHaveBeenCalled();
 		expect(ctx.ui.notify).toHaveBeenCalledWith(

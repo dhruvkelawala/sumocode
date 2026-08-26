@@ -45,6 +45,10 @@ landed between the original scaffold and this release.
   provenance, and `pnpm runcat:install` / `pnpm runcat:check` setup helpers.
 
 ### Changed
+- **Herdr-only terminal hosting** — removed the legacy alternate-host adapter,
+  split helpers, environment probes, diagnostics, compatibility copy, and
+  obsolete research artifacts. Visible panes, worktrees, notifications, and
+  host detection now use Herdr exclusively.
 - **Terminal API v2 migration** — callable background terminals are now
   `terminal_start/check/wait/stop/list`, with durable passive-by-default
   completion and hardened process-tree ownership. Private `sumocode-config`
@@ -87,7 +91,7 @@ reloads, and gate the ship leg through explicit human confirmations.
 - **Image plumbing** — retained transcript image blocks render through Pi TUI's
   Image component with fallback, and editor image paste uses `[Image N]` tokens
   while composing.
-- **Fan-out decision docs** — synthesis-vs-production boundary and pi-cmux
+- **Fan-out decision docs** — synthesis-vs-production boundary and legacy pane integration
   compatibility stance documented under `docs/research/`.
 
 ### Changed
@@ -126,7 +130,7 @@ last several weeks; the announce release is built on top of this commit.
   with structural detection and a session-replay skip.
 - **`/reload`** (#239) — hard-reload the SumoCode shell via launcher loop
   and exit code 100. Strips `--resume`/`-r` on relaunch and replaces with
-  `--continue`. Preserves cmux/terminal context.
+  `--continue`. Preserves terminal context.
 - **Eager splash paint + transition fade** (#225, PR #230) — splash repaints
   before SumoTUI boots; visual handoff fades through `RetainedShellTransition`
   with a `fading-splash` phase. `SUMOCODE_REDUCED_MOTION=1` and non-TTY bypass.

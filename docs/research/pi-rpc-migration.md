@@ -186,18 +186,16 @@ conclusions:
 - **Transcript reinforced** — image-block parsing makes the view-model more
   input-source-agnostic (good for RPC; adds an image-turn case Phase 0 must replay).
 - **Bigger bg-task/worktree re-test surface** (`task-manager.ts` +434, new
-  `git/worktree.ts` +257) — but the cmux/pane boundary is process-level via
+  `git/worktree.ts` +257) — but the terminal-pane boundary is process-level via
   `bin/sumocode.sh` launching `sumocode` per pane (see
-  [`fanout-coexistence.md`](fanout-coexistence.md) and
-  [`pi-cmux-agent-command-boundary.md`](pi-cmux-agent-command-boundary.md)). Under RPC each
+  [`fanout-coexistence.md`](fanout-coexistence.md)). Under RPC each
   pane simply becomes `sumocode`-host → `pi`-rpc-child — compatible, not a new risk
   category. Synthesis fan-out (in-process `pi-subagents`) is unaffected.
 - **Launcher had become more patch-invested** before retirement, but added
   startup-readiness instrumentation
   (`boot_screen_frame`/`app_ready`/`input_ready`, `docs/perf/startup.json`) — a baseline for
   the Phase-0 "same-or-better" perf gate.
-- **Open item:** `extension.ts` child-bail guard (`PI_CMUX_CHILD`/`SUMOCODE_BG_CHILD`,
-  ~line 125) does not cover rpc-host mode — needs a new branch.
+- **Open item:** `extension.ts` child-bail guard (`SUMOCODE_BG_CHILD`, ~line 125) does not cover rpc-host mode — needs a new branch.
 
 ## Phased plan (UI identical at each step)
 

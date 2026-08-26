@@ -16,7 +16,8 @@ class TypingEditor implements Component {
 }
 
 function asEditor(component: Component): CustomEditor {
-	return component as unknown as CustomEditor;
+	// SAFETY: TypingEditor implements the Component surface PiEditorLeaf reads.
+	return component as never;
 }
 
 describe("sumo-tui cursor positioning integration", () => {

@@ -7,6 +7,7 @@ import {
 	TOP_CHROME_BRAND,
 } from "./top-chrome.js";
 
+// oxlint-disable-next-line no-control-regex -- intentional ESC/control-byte match to strip ANSI in captured output
 const ANSI = /\u001b\[[0-9;]*m/g;
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
 
@@ -150,12 +151,19 @@ describe("renderTopChrome", () => {
 
 describe("installTopChrome", () => {
 	it("hides the top chrome on splash and shows it after messages exist", () => {
-		const handlers = new Map<string, ((event: unknown, ctx: unknown) => void)[]>();
-		const on = vi.fn((event: string, handler: (event: unknown, ctx: unknown) => void) => {
+		type ComponentFactory = (tui: { requestRender(): void }) => { render(width: number): string[] };
+		interface TopChromeTestContext {
+			hasUI: boolean;
+			ui: { setHeader(factory: ComponentFactory | undefined): void };
+			sessionManager: { getBranch(): unknown[] };
+		}
+		const handlers = new Map<string, ((event: { type: string }, ctx: TopChromeTestContext) => void)[]>();
+		const on = vi.fn((event: string, handler: (event: { type: string }, ctx: TopChromeTestContext) => void) => {
 			const list = handlers.get(event) ?? [];
 			list.push(handler);
 			handlers.set(event, list);
 		});
+		// SAFETY: the on() double supplies the registrar surface installTopChrome reads.
 		installTopChrome({ on } as never, () => snapshot({ recentSessions: [] }));
 
 		let factory: ((tui: { requestRender(): void }) => { render(width: number): string[] }) | undefined;

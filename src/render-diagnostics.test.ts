@@ -3,60 +3,70 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+type RenderComponent = { render(width: number): string[] };
+type ComponentFactory = (...args: unknown[]) => RenderComponent;
 
-type SessionStartHandler = (event: unknown, ctx: ExtensionContext) => void;
+interface DiagnosticsTestCtx {
+	hasUI: boolean;
+	cwd: string;
+	ui: {
+		setFooter(factory: ComponentFactory): void;
+		setHeader(factory: ComponentFactory): void;
+		setEditorComponent(factory: ComponentFactory): void;
+		setWidget(key: string, content: ComponentFactory): void;
+	};
+	sessionManager: { getBranch(): unknown[] };
+}
 
-function makePi(): { pi: ExtensionAPI; fireSessionStart: (ctx: ExtensionContext) => void } {
+type SessionStartHandler = (event: { type: string }, ctx: DiagnosticsTestCtx) => void;
+
+function makePi() {
 	let handler: SessionStartHandler | undefined;
-	const pi = {
-		on: vi.fn((eventName: string, h: SessionStartHandler) => {
-			if (eventName === "session_start") handler = h;
-		}),
-	} as unknown as ExtensionAPI;
+	const onSpy = vi.fn((eventName: string, h: SessionStartHandler) => {
+		if (eventName === "session_start") handler = h;
+	});
+	const pi = { on: onSpy };
+	// SAFETY: the on() double supplies the registrar surface installRenderDiagnostics reads.
 	return {
-		pi,
-		fireSessionStart: (ctx: ExtensionContext) => handler?.({ type: "session_start" }, ctx),
+		pi: pi as never,
+		onSpy,
+		fireSessionStart: (ctx: DiagnosticsTestCtx) => handler?.({ type: "session_start" }, ctx),
 	};
 }
 
 type RegisteredFactories = {
-	footer?: (...args: unknown[]) => unknown;
-	header?: (...args: unknown[]) => unknown;
-	editor?: (...args: unknown[]) => unknown;
-	widgets: Map<string, (...args: unknown[]) => unknown>;
+	footer?: ComponentFactory;
+	header?: ComponentFactory;
+	editor?: ComponentFactory;
+	widgets: Map<string, ComponentFactory>;
 };
 
-function makeCtx(): {
-	ctx: ExtensionContext;
-	registered: RegisteredFactories;
-	getBranchSpy: ReturnType<typeof vi.fn>;
-} {
+function makeCtx() {
 	// Capture what the wrapper passes through to the underlying ctx.ui setters,
 	// because instrumentUi mutates the methods on ctx.ui in-place — keeping a
 	// separate spy reference would also be mutated.
 	const registered: RegisteredFactories = { widgets: new Map() };
 	const ui = {
-		setFooter: (factory: (...args: unknown[]) => unknown): void => {
+		setFooter: (factory: ComponentFactory): void => {
 			registered.footer = factory;
 		},
-		setHeader: (factory: (...args: unknown[]) => unknown): void => {
+		setHeader: (factory: ComponentFactory): void => {
 			registered.header = factory;
 		},
-		setEditorComponent: (factory: (...args: unknown[]) => unknown): void => {
+		setEditorComponent: (factory: ComponentFactory): void => {
 			registered.editor = factory;
 		},
-		setWidget: (key: string, content: (...args: unknown[]) => unknown): void => {
+		setWidget: (key: string, content: ComponentFactory): void => {
 			registered.widgets.set(key, content);
 		},
 	};
 	const getBranchSpy = vi.fn(() => []);
-	const ctx = {
+	const ctx: DiagnosticsTestCtx = {
 		hasUI: true,
 		cwd: "/tmp",
 		ui,
 		sessionManager: { getBranch: getBranchSpy },
-	} as unknown as ExtensionContext;
+	};
 	return { ctx, registered, getBranchSpy };
 }
 
@@ -68,9 +78,9 @@ describe("render-diagnostics — disabled (no SUMO_TUI_DIAG_FILE)", () => {
 
 	it("does not subscribe to events or wrap ui surfaces", async () => {
 		const { installRenderDiagnostics } = await import("./render-diagnostics.js");
-		const { pi } = makePi();
+		const { pi, onSpy } = makePi();
 		installRenderDiagnostics(pi);
-		expect((pi.on as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0);
+		expect(onSpy.mock.calls.length).toBe(0);
 	});
 });
 
@@ -90,10 +100,21 @@ describe("render-diagnostics — enabled", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	function readEvents(): Array<Record<string, unknown>> {
+	interface DiagEvent {
+		event: string;
+		target?: string;
+		width?: number;
+		lines?: number;
+	}
+
+	function readEvents(): DiagEvent[] {
 		const text = readFileSync(file, "utf8").trim();
 		if (!text) return [];
-		return text.split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+		return text.split("\n").map((line) =>
+			// SAFETY: the diagnostics file is JSONL written by the instrumented wrapper
+			// with the event fields asserted below.
+			JSON.parse(line) as DiagEvent,
+		);
 	}
 
 	it("wraps setFooter so component.render gets timed and writes a render_sample for slow renders", async () => {
@@ -113,10 +134,11 @@ describe("render-diagnostics — enabled", () => {
 		});
 		const factory = vi.fn(() => ({ render: slowRender }));
 
-		(ctx.ui as unknown as { setFooter: (factory: unknown) => void }).setFooter(factory);
+		// SAFETY: the ui double's setFooter is captured via the registered-factory wrapper.
+		ctx.ui.setFooter(factory);
 
 		expect(registered.footer).toBeTypeOf("function");
-		const component = registered.footer!({}, {}, {}) as { render: (w: number) => string[] };
+		const component = registered.footer!({}, {}, {});
 
 		const result = component.render(80);
 		expect(result).toEqual(["row1", "row2"]);
@@ -139,7 +161,7 @@ describe("render-diagnostics — enabled", () => {
 		fireSessionStart(ctx);
 
 		// Calling getBranch through ctx.sessionManager should still return the underlying value.
-		const branch = (ctx.sessionManager as unknown as { getBranch: () => unknown[] }).getBranch();
+		const branch = ctx.sessionManager.getBranch();
 		expect(branch).toEqual([]);
 		expect(getBranchSpy).toHaveBeenCalledTimes(1);
 	});
@@ -164,8 +186,10 @@ describe("render-diagnostics — enabled", () => {
 		const editor = new Editor();
 		const factory = (): Editor => editor;
 
-		(ctx.ui as unknown as { setEditorComponent: (factory: unknown) => void }).setEditorComponent(factory);
+		// SAFETY: the ui double's setEditorComponent is captured via the registered-factory wrapper.
+		ctx.ui.setEditorComponent(factory);
 		expect(registered.editor).toBeTypeOf("function");
+		// SAFETY: the registered editor factory returns the Editor instance created above.
 		const result = registered.editor!({}, {}, {}) as Editor;
 
 		// Same instance — only `render` is patched.

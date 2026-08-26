@@ -1,4 +1,4 @@
-import type { ExtensionAPI, RegisteredCommand } from "@earendil-works/pi-coding-agent";
+import type { RegisteredCommand } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { installCommandPalette } from "../../src/command-palette.js";
 import { registerMemoryCommand } from "../../src/memory-editor.js";
@@ -8,7 +8,7 @@ import { registerTabsCommand } from "../../src/commands/tabs.js";
 import { registerThemeCommand } from "../../src/commands/theme.js";
 import { registerThemeCheckCommand } from "../../src/commands/theme-check.js";
 
-function commandRegistry(): { pi: ExtensionAPI; commands: Map<string, Omit<RegisteredCommand, "name" | "sourceInfo">> } {
+function commandRegistry() {
 	const commands = new Map<string, Omit<RegisteredCommand, "name" | "sourceInfo">>();
 	const pi = {
 		registerCommand: (name: string, options: Omit<RegisteredCommand, "name" | "sourceInfo">) => {
@@ -18,8 +18,9 @@ function commandRegistry(): { pi: ExtensionAPI; commands: Map<string, Omit<Regis
 		registerMessageRenderer: () => undefined,
 		sendMessage: () => undefined,
 		on: () => undefined,
-	} as unknown as ExtensionAPI;
-	return { pi, commands };
+	};
+	// SAFETY: the double supplies the registrar surface these commands touch.
+	return { pi: pi as never, commands };
 }
 
 describe("Phase 4 slash command pipe", () => {

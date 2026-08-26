@@ -12,7 +12,7 @@ export interface RetainedShellTransitionParts {
 	readonly emptyChatQuote?: EmptyChatQuoteNode;
 	readonly scheduleRender?: () => void;
 	readonly now?: () => number;
-	readonly setTimeout?: (callback: () => void, ms: number) => unknown;
+	readonly setTimeout?: (callback: () => void, ms: number) => number;
 	readonly reducedMotion?: boolean;
 }
 

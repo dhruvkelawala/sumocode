@@ -77,15 +77,17 @@ function writeLine(stream: Pick<NodeJS.WriteStream, "write">, line: string): voi
 }
 
 function writeTerminalTitle(stream: Pick<NodeJS.WriteStream, "write">, title: string): void {
+	// oxlint-disable-next-line no-control-regex -- intentional control-byte strip so OSC titles stay single-line
 	stream.write(`\u001b]0;${title.replace(/[\x00-\x1F\x7F-\x9F]/g, "")}\u0007`);
 }
 
-function formatUnknownError(error: unknown): string {
-	return error instanceof Error ? error.stack ?? error.message : String(error);
+function formatUnknownError(cause: unknown): string {
+	return cause instanceof Error ? cause.stack ?? cause.message : String(cause);
 }
 
-function valuesEqual(left: unknown, right: unknown): boolean {
+function valuesEqual(left: readonly unknown[] | undefined, right: readonly unknown[] | undefined): boolean {
 	if (left === right) return true;
+	if (left === undefined || right === undefined) return false;
 	try {
 		return JSON.stringify(left) === JSON.stringify(right);
 	} catch {
@@ -240,12 +242,12 @@ export interface UnhandledRejectionShutdownOptions {
 	readonly exit: (code: number) => void;
 }
 
-export function createUnhandledRejectionHandler(options: UnhandledRejectionShutdownOptions): (reason: unknown) => void {
+export function createUnhandledRejectionHandler(options: UnhandledRejectionShutdownOptions): (cause: unknown) => void {
 	let shutdown: Promise<void> | undefined;
-	return (reason: unknown): void => {
+	return (cause: unknown): void => {
 		if (shutdown) return;
 		shutdown = (async () => {
-			writeLine(options.stderr, `[sumocode-rpc] unhandled rejection: ${formatUnknownError(reason)}`);
+			writeLine(options.stderr, `[sumocode-rpc] unhandled rejection: ${formatUnknownError(cause)}`);
 			await options.cleanup(1);
 			options.exit(1);
 		})().catch((error) => {
@@ -277,6 +279,8 @@ type ChildSpawnPlan = {
 };
 
 const requireFromRuntime = createRequire(import.meta.url);
+// SAFETY: spawn-child.mjs is this package's own compiled module; its export
+// signature is pinned by host-spawn-plan.test.ts.
 const { buildChildSpawnPlan } = requireFromRuntime("./spawn-child.mjs") as {
 	buildChildSpawnPlan(env: NodeJS.ProcessEnv, argv: readonly string[], defaultPiBin?: string): ChildSpawnPlan | undefined;
 };
@@ -318,11 +322,13 @@ export function writeExitCodeFile(env: NodeJS.ProcessEnv, code: number): void {
 }
 
 function activityPresentation(snapshot: ActivityStoreSnapshot) {
-	return {
+	const presentation = {
 		activities: snapshot.activities,
 		expansion: snapshot.expansion,
-		...(snapshot.defaultExpansion === undefined ? {} : { defaultExpansion: snapshot.defaultExpansion }),
+		defaultExpansion: snapshot.defaultExpansion,
 	};
+	if (snapshot.defaultExpansion === undefined) delete presentation.defaultExpansion;
+	return presentation;
 }
 
 export function activitySnapshotMatchesSession(snapshot: ActivityStoreSnapshot, sessionId: string | undefined): boolean {
@@ -642,6 +648,8 @@ export function createRpcExitHandler(deps: RpcHostExitDependencies): (error: Err
 		const timer = scheduleTimeout(() => {
 			void deps.stopHost(exitCode).then(() => deps.exit(exitCode));
 		}, shutdownDelayMs);
+		// SAFETY: the injectable scheduleTimeout returns a real Node timer in
+		// production; unref is optional so test fakes without it stay usable.
 		(timer as { unref?: () => void }).unref?.();
 	};
 }
@@ -829,7 +837,7 @@ export function createThinkingCycleHandler(deps: RpcHostThinkingCycleDependencie
 }
 
 export interface RpcHostToolsExpandDependencies {
-	readonly toggleActivityExpansion: () => unknown;
+	readonly toggleActivityExpansion: () => void;
 	readonly requestRender: () => void;
 }
 
@@ -1020,6 +1028,9 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			writeTerminalTitle(stdout, title);
 		},
 	};
+	// SAFETY: the host wires a minimal TUI/theme surface; RegionRegistry only
+	// consults these members for extension region layout, and each stub
+	// provides exactly the members exercised on this path.
 	const regionRegistry = new RegionRegistry({
 		yoga: await loadYoga(),
 		tui: { requestRender, terminal: hostTerminal } as never,
@@ -1318,18 +1329,18 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			// authoritative destination state and message history are fetched.
 			// Retrying here preserves the suffix without risking cross-session
 			// disclosure or committing an incomplete transcript.
-		} finally {
-			if (!hydrationSucceeded) {
-				sessionHydrationRetrying = true;
-				sessionHydrationRetryTimer = setTimeout(() => {
-					sessionHydrationRetryTimer = undefined;
-					void refreshSessionRuntime();
-				}, 100);
-				sessionHydrationRetryTimer.unref?.();
-				return;
-			}
-			sessionHydrationRetrying = false;
-			const replay = sessionEvents.finishHydration();
+		}
+		if (!hydrationSucceeded) {
+			sessionHydrationRetrying = true;
+			sessionHydrationRetryTimer = setTimeout(() => {
+				sessionHydrationRetryTimer = undefined;
+				void refreshSessionRuntime();
+			}, 100);
+			sessionHydrationRetryTimer.unref?.();
+			return;
+		}
+		sessionHydrationRetrying = false;
+		const replay = sessionEvents.finishHydration();
 			// State/messages snapshots supersede UI projection for earlier passes,
 			// but event-only scheduler effects still replay in order. The final
 			// in-flight suffix goes through every consumer and identity reconciliation.
@@ -1352,7 +1363,6 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 					}
 				});
 			}
-		}
 	};
 
 	const setTreeNavigationBusy = (busy: boolean): void => {
@@ -1361,7 +1371,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		if (!busy && treeNavigationCapture) return;
 		treeNavigationBusy = busy;
 		const state = stateStore.setBranchSummaryBusy(busy);
-		runtime?.update({ state, ...(busy ? {} : { activities: activityPresentation(latestActivitySnapshot) }) });
+		if (busy) runtime?.update({ state });
+		else runtime?.update({ state, activities: activityPresentation(latestActivitySnapshot) });
 		if (!busy) deferActivityRuntimeUpdate = false;
 	};
 

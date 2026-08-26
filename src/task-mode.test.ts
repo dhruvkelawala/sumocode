@@ -12,7 +12,7 @@ import {
 	writeTaskStartedMarker,
 } from "./task-mode.js";
 
-type Handler = (...args: unknown[]) => unknown;
+type Handler = (...args: unknown[]) => void;
 
 function buildPiStub() {
 	const handlers = new Map<string, Handler[]>();
@@ -22,7 +22,7 @@ function buildPiStub() {
 			list.push(handler);
 			handlers.set(event, list);
 		}),
-		exec: vi.fn(async (_cmd: string, _args: string[], _opts?: unknown) => ({
+		exec: vi.fn(async (_cmd: string, _args: string[], _opts?: { timeout?: number; env?: NodeJS.ProcessEnv }) => ({
 			code: 0,
 			stdout: "",
 			stderr: "",
@@ -94,8 +94,11 @@ describe("extractFinalAssistantText", () => {
 	});
 
 	it("handles malformed input defensively", () => {
-		expect(extractFinalAssistantText(null as unknown as unknown[])).toBe("");
-		expect(extractFinalAssistantText([null, undefined, "not an object"] as unknown[])).toBe("");
+		// SAFETY: the malformed arguments are deliberately not message arrays;
+		// the extractor must return "" rather than throw.
+		expect(extractFinalAssistantText(null as never)).toBe("");
+		// SAFETY: the entries are deliberately not message records; the extractor must ignore them.
+		expect(extractFinalAssistantText([null, undefined, "not an object"] as never)).toBe("");
 	});
 });
 
@@ -153,12 +156,14 @@ describe("installTaskModeAutoExit", () => {
 
 	it("does nothing when not in task mode", () => {
 		const { pi } = buildPiStub();
+		// SAFETY: the pi double supplies the on/exec surfaces installTaskModeAutoExit reads.
 		installTaskModeAutoExit(pi as never, { env: {} });
 		expect(pi.on).not.toHaveBeenCalled();
 	});
 
 	it("does nothing when keep-open is set", () => {
 		const { pi } = buildPiStub();
+		// SAFETY: the pi double supplies the on/exec surfaces installTaskModeAutoExit reads.
 		installTaskModeAutoExit(pi as never, {
 			env: { SUMOCODE_TASK_MODE: "1", SUMOCODE_TASK_KEEP_OPEN: "1" },
 		});
@@ -167,6 +172,7 @@ describe("installTaskModeAutoExit", () => {
 
 	it("schedules process shutdown after the grace period on first agent_end", async () => {
 		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the on/exec surfaces installTaskModeAutoExit reads.
 		installTaskModeAutoExit(pi as never, { env: { SUMOCODE_TASK_MODE: "1" }, graceMs: 10_000 });
 
 		const ctx = buildCtxStub();
@@ -196,6 +202,7 @@ describe("installTaskModeAutoExit", () => {
 
 	it("cancels auto-exit when the user types interactively during the grace period", () => {
 		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the on/exec surfaces installTaskModeAutoExit reads.
 		installTaskModeAutoExit(pi as never, { env: { SUMOCODE_TASK_MODE: "1" }, graceMs: 10_000 });
 
 		const ctx = buildCtxStub();
@@ -215,6 +222,7 @@ describe("installTaskModeAutoExit", () => {
 
 	it("ignores input that fires BEFORE the first agent_end (this is the CLI kickoff)", async () => {
 		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the on/exec surfaces installTaskModeAutoExit reads.
 		installTaskModeAutoExit(pi as never, { env: { SUMOCODE_TASK_MODE: "1" }, graceMs: 10_000 });
 
 		const ctx = buildCtxStub();
@@ -232,6 +240,7 @@ describe("installTaskModeAutoExit", () => {
 
 	it("cancels auto-exit when the user types AFTER the first agent_end (real follow-up)", () => {
 		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the on/exec surfaces installTaskModeAutoExit reads.
 		installTaskModeAutoExit(pi as never, { env: { SUMOCODE_TASK_MODE: "1" }, graceMs: 10_000 });
 
 		const ctx = buildCtxStub();
@@ -250,6 +259,7 @@ describe("installTaskModeAutoExit", () => {
 
 	it("does not re-arm on subsequent agent_end events", () => {
 		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the on/exec surfaces installTaskModeAutoExit reads.
 		installTaskModeAutoExit(pi as never, { env: { SUMOCODE_TASK_MODE: "1" }, graceMs: 10_000 });
 
 		const ctx = buildCtxStub();
@@ -272,6 +282,7 @@ describe("installTaskModeAutoExit", () => {
 		process.env.SUMOCODE_TASK_RESPONSE_FILE = responseFile;
 
 		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the on/exec surfaces installTaskModeAutoExit reads.
 		installTaskModeAutoExit(pi as never, { env: { SUMOCODE_TASK_MODE: "1" }, graceMs: 10_000 });
 
 		const ctx = buildCtxStub();
@@ -295,6 +306,7 @@ describe("installTaskModeAutoExit", () => {
 		process.env.SUMOCODE_TASK_RESPONSE_FILE = responseFile;
 
 		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the on/exec surfaces installTaskModeAutoExit reads.
 		installTaskModeAutoExit(pi as never, { env: { SUMOCODE_TASK_MODE: "1" }, graceMs: 10_000 });
 
 		const ctx = buildCtxStub();
@@ -309,6 +321,7 @@ describe("installTaskModeAutoExit", () => {
 	it("writes a task-started marker for manager startup liveness", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
 		const startedFile = join(workDir, "started.marker");
+		// SAFETY: the env double carries only the marker key the helper reads.
 		writeTaskStartedMarker({ SUMOCODE_TASK_STARTED_FILE: startedFile } as NodeJS.ProcessEnv);
 
 		expect(readFileSync(startedFile, "utf8").trim()).toBe(String(process.pid));
@@ -319,6 +332,7 @@ describe("installTaskModeAutoExit", () => {
 		const startedFile = join(workDir, "started.marker");
 		const { pi } = buildPiStub();
 
+		// SAFETY: the pi double supplies the on/exec surfaces installTaskModeAutoExit reads.
 		installTaskModeAutoExit(pi as never, {
 			env: { SUMOCODE_TASK_MODE: "1", SUMOCODE_TASK_STARTED_FILE: startedFile },
 			graceMs: 10_000,
@@ -330,6 +344,7 @@ describe("installTaskModeAutoExit", () => {
 	it("writes a real-exit marker for the manager to harvest", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
 		const exitFile = join(workDir, "exit.code");
+		// SAFETY: the env double carries only the marker key the helper reads.
 		writeTaskExitMarker(0, { SUMOCODE_TASK_EXIT_FILE: exitFile } as NodeJS.ProcessEnv);
 
 		expect(readFileSync(exitFile, "utf8").trim()).toBe("0");
@@ -349,6 +364,7 @@ describe("installTaskModeAutoExit", () => {
 			SUMOCODE_TASK_DIAG_FILE: join(workDir, "diag.jsonl"),
 		};
 		try {
+			// SAFETY: the pi double supplies the on/exec surfaces installTaskModeAutoExit reads.
 			installTaskModeAutoExit(pi as never, { env, graceMs: 10_000 });
 
 			// Marker keys must be gone from the env (what subprocesses inherit)…
@@ -391,6 +407,7 @@ describe("installTaskModeAutoExit", () => {
 
 	it("does not write response.md when env var is unset", () => {
 		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the on/exec surfaces installTaskModeAutoExit reads.
 		installTaskModeAutoExit(pi as never, { env: { SUMOCODE_TASK_MODE: "1" }, graceMs: 10_000 });
 
 		const ctx = buildCtxStub();

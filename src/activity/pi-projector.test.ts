@@ -104,6 +104,7 @@ describe("Pi Activity projector", () => {
 	});
 
 	it("sanitizes producer output and accepts cyclic invocation values", () => {
+		// oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type, anti-slop/no-known-value-widening -- the cyclic invocation fixture is intentionally an open record.
 		const invocation: Record<string, unknown> = { command: "run\t界", password: "hidden" };
 		invocation.self = invocation;
 		const activity = projectPiToolActivity({ id: "custom-1", name: "custom", arguments: invocation, output: "\u001b[31mred\u001b[0m\rnext" }, scope);

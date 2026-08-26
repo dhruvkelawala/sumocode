@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildReviewPrompt, DEFAULT_REVIEW_MODEL, extractModelAlias, MODEL_ALIASES, parseReviewScope, registerReviewCommand, resolveReviewModel, reviewScopeLabel } from "./review.js";
+import type { SubagentSnapshot } from "../subagents/domain.js";
 
 describe("/sumo:review", () => {
 	describe("resolveReviewModel", () => {
@@ -156,7 +157,7 @@ describe("/sumo:review", () => {
 	});
 
 	describe("registerReviewCommand", () => {
-		const snapshot = (overrides: Record<string, unknown> = {}) => ({
+		const snapshotBase = (): SubagentSnapshot => ({
 			id: "sa-42",
 			title: "review: branch diff",
 			prompt: "review",
@@ -171,8 +172,8 @@ describe("/sumo:review", () => {
 			liveText: "",
 			liveTools: [],
 			finalText: "",
-			...overrides,
-		});
+	});
+	const snapshot = (overrides: Partial<ReturnType<typeof snapshotBase>> = {}) => ({ ...snapshotBase(), ...overrides });
 
 		function setup(subagentSpawner = { spawn: vi.fn().mockResolvedValue(snapshot()) }) {
 			let handler: ((args: string, ctx: { hasUI: boolean; cwd: string; ui: { notify: ReturnType<typeof vi.fn> } }) => Promise<void>) | undefined;
@@ -182,6 +183,7 @@ describe("/sumo:review", () => {
 			});
 			const notify = vi.fn();
 			const getActiveTools = vi.fn(() => ["read", "bash", "edit", "write", "grep", "find", "ls"]);
+			// SAFETY: test double only exercises the members this test asserts on.
 			registerReviewCommand({ registerCommand, sendUserMessage, getActiveTools } as never, { subagentSpawner: subagentSpawner as never });
 			const ctx = { hasUI: true, cwd: "/tmp/sumo-fixture", ui: { notify } };
 			return { handler, registerCommand, sendUserMessage, notify, subagentSpawner, ctx };
@@ -215,6 +217,7 @@ describe("/sumo:review", () => {
 			let handler: ((args: string, ctx: { hasUI: boolean; cwd: string; ui: { notify: ReturnType<typeof vi.fn> } }) => Promise<void>) | undefined;
 			const registerCommand = vi.fn((_name: string, options: { handler: typeof handler }) => { handler = options.handler; });
 			const getActiveTools = vi.fn(() => ["read", "grep"]);
+			// SAFETY: test double only exercises the members this test asserts on.
 			registerReviewCommand({ registerCommand, sendUserMessage: vi.fn(), getActiveTools } as never, { subagentSpawner: subagentSpawner as never });
 			await handler?.("src/foo.ts", { hasUI: true, cwd: "/tmp/sumo-fixture", ui: { notify: vi.fn() } });
 			expect(subagentSpawner.spawn).toHaveBeenCalledWith(expect.objectContaining({ builtInTools: ["read", "grep"] }));
@@ -277,6 +280,7 @@ describe("/sumo:review", () => {
 				handler = options.handler;
 			});
 			const notify = vi.fn();
+			// SAFETY: test double only exercises the members this test asserts on.
 			registerReviewCommand({ registerCommand, sendUserMessage } as never);
 
 			await handler?.("", { hasUI: true, cwd: "/tmp/sumo-fixture", ui: { notify } });

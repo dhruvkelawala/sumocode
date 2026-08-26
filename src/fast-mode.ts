@@ -128,6 +128,8 @@ function buildBaseProviderOptions(model: Pick<Model<Api>, "maxTokens" | "context
 function clampReasoning(model: Model<Api>, reasoning: SimpleStreamOptions["reasoning"]): OpenAIResponsesOptions["reasoningEffort"] {
 	if (!reasoning) return undefined;
 	const clamped = clampThinkingLevel(model, reasoning);
+	// SAFETY: clampThinkingLevel returns the same union the provider options
+	// accept, plus "off" which is dropped to undefined here.
 	return (clamped === "off" ? undefined : clamped) as OpenAIResponsesOptions["reasoningEffort"];
 }
 
@@ -142,6 +144,8 @@ export function buildOpenAIResponsesFastOptions(model: Model<Api>, options: Simp
 export function buildOpenAICodexResponsesFastOptions(model: Model<Api>, options: SimpleStreamOptions | undefined): OpenAICodexResponsesOptions {
 	return {
 		...buildBaseProviderOptions(model, options),
+		// SAFETY: clampReasoning already narrowed to the reasoningEffort union;
+		// Codex accepts the same values as the Responses reasoningEffort type.
 		reasoningEffort: clampReasoning(model, options?.reasoning) as OpenAICodexResponsesOptions["reasoningEffort"],
 		serviceTier: SERVICE_TIER,
 	};
@@ -151,11 +155,15 @@ function createFastModeStream(config: () => FastModeConfig, streamers: FastModeS
 	return (model: Model<Api>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream => {
 		const currentConfig = config();
 		if (model.api === "openai-responses") {
+			// SAFETY: the api discriminator above narrowed the provider; the
+			// streamers are keyed by that same api value.
 			return shouldApplyFastMode(currentConfig, model)
 				? streamers.streamOpenAIResponses(model as Model<"openai-responses">, context, buildOpenAIResponsesFastOptions(model, options))
 				: streamers.streamSimpleOpenAIResponses(model as Model<"openai-responses">, context, options);
 		}
 		if (model.api === "openai-codex-responses") {
+			// SAFETY: the api discriminator above narrowed the provider; the
+			// streamers are keyed by that same api value.
 			return shouldApplyFastMode(currentConfig, model)
 				? streamers.streamOpenAICodexResponses(model as Model<"openai-codex-responses">, context, buildOpenAICodexResponsesFastOptions(model, options))
 				: streamers.streamSimpleOpenAICodexResponses(model as Model<"openai-codex-responses">, context, options);
@@ -181,9 +189,15 @@ function notify(ctx: FastModeUiContext, message: string, level: "info" | "warnin
 
 function publishFastModeStatus(ctx: FastModeUiContext | undefined, state: FastModeState, model: FastModeModel | undefined): void {
 	if (!ctx?.hasUI) return;
+	// SAFETY: the ui surface exposes an optional setStatus registrar; the
+	// typeof guard below verifies it before calling.
 	const setStatus = (ctx.ui as { setStatus?: (key: string, text: string | undefined) => void }).setStatus;
-	if (typeof setStatus !== "function") return;
+	if (!isSetStatusFunction(setStatus)) return;
 	setStatus.call(ctx.ui, FAST_MODE_STATUS_KEY, shouldApplyFastMode(state, model) ? FAST_MODE_STATUS_TEXT : undefined);
+}
+
+function isSetStatusFunction(value: ((key: string, text: string | undefined) => void) | undefined): value is (key: string, text: string | undefined) => void {
+	return typeof value === "function";
 }
 
 export function installFastMode(
@@ -210,23 +224,29 @@ export function installFastMode(
 
 	registerApiProvider({
 		api: "openai-responses",
+		// SAFETY: the api discriminator keys the stream; the fallback path casts
+		// the generic model/options to the provider's concrete shapes.
 		stream: nativeOpenAIResponses?.stream ?? ((model, context, streamOptions) => streamOpenAIResponses(model as Model<"openai-responses">, context, streamOptions as OpenAIResponsesOptions | undefined)),
 		streamSimple,
 	}, OPENAI_RESPONSES_FAST_SOURCE);
 	registerApiProvider({
 		api: "openai-codex-responses",
+		// SAFETY: the api discriminator keys the stream; the fallback path casts
+		// the generic model/options to the provider's concrete shapes.
 		stream: nativeOpenAICodexResponses?.stream ?? ((model, context, streamOptions) => streamOpenAICodexResponses(model as Model<"openai-codex-responses">, context, streamOptions as OpenAICodexResponsesOptions | undefined)),
 		streamSimple,
 	}, OPENAI_CODEX_RESPONSES_FAST_SOURCE);
 
 	pi.on("session_start", async (_event, ctx: ExtensionContext) => {
 		state.enabled = false;
+		// SAFETY: Pi's session context carries the active model in the same shape.
 		currentModel = ctx.model as FastModeModel | undefined;
 		activeUiContext = ctx;
 		publishFastModeStatus(activeUiContext, state, currentModel);
 		options.onChange?.();
 	});
 	pi.on("model_select", async (event) => {
+		// SAFETY: Pi's model_select event carries the selected model in the same shape.
 		currentModel = event.model as FastModeModel;
 		publishFastModeStatus(activeUiContext, state, currentModel);
 	});
@@ -234,6 +254,7 @@ export function installFastMode(
 	pi.registerCommand("fast", {
 		description: "Toggle OpenAI/Codex fast mode",
 		handler: async (args, ctx) => {
+			// SAFETY: Pi's command context carries the active model in the same shape.
 			currentModel = ctx.model as FastModeModel | undefined;
 			const arg = args.trim().toLowerCase();
 			if (!arg || arg === "toggle") state.enabled = !state.enabled;

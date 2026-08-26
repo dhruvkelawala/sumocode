@@ -11,6 +11,8 @@ import { composite } from "../render/compositor.js";
 import { SelectionController } from "../input/selection.js";
 import type { ChatBlock } from "../transcript/view-model.js";
 import { ChatMessage } from "./chat-message.js";
+/* oxlint-disable anti-slop/no-chained-type-assertions -- test doubles cast minimal stub objects to Pi context types. */
+/* oxlint-disable anti-slop/require-safety-comment-for-type-assertion -- stub shape is exercised by the assertions below. */
 
 const FIXED_TIME = new Date("2026-04-30T11:42:00.000");
 
@@ -25,9 +27,18 @@ function activityBlock(id: string, path: string, status: "running" | "succeeded"
 	};
 }
 
+function hasSetTimestamp<T>(value: T): value is T & { setTimestamp(timestamp: Date): void } {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		"setTimestamp" in value &&
+		typeof value.setTimestamp === "function"
+	);
+}
+
 function setTimestamp(message: ChatMessage, timestamp: Date): void {
 	const candidate: unknown = message;
-	if (candidate && typeof candidate === "object" && "setTimestamp" in candidate && typeof candidate.setTimestamp === "function") {
+	if (hasSetTimestamp(candidate)) {
 		candidate.setTimestamp(timestamp);
 		return;
 	}

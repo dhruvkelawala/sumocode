@@ -13,6 +13,7 @@ import {
 	type SidebarSnapshot,
 } from "./sidebar.js";
 
+// oxlint-disable-next-line no-control-regex -- intentional ANSI SGR escape match to strip styling in captured output
 const ANSI = /\u001b\[[0-9;]*m/g;
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
 const untrack = (s: string): string => s.replace(/\u202F/g, "");
@@ -36,7 +37,7 @@ function deferred<T>() {
 	return { promise, resolve };
 }
 
-function component(lines: string[]): { renderCalls: number[]; node: { render(width: number): string[]; invalidate(): void } } {
+function component(lines: string[]) {
 	const renderCalls: number[] = [];
 	return {
 		renderCalls,

@@ -79,6 +79,8 @@ function parseExtractionResult(text: string): ExtractionResult | null {
 		const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
 		if (jsonMatch) jsonStr = jsonMatch[1].trim();
 		const parsed = JSON.parse(jsonStr);
+		// SAFETY: `parsed` is JSON.parse output guarded here by the Array.isArray(p.questions)
+		// check; the remaining fields are re-validated by consumers of ExtractionResult.
 		return parsed && Array.isArray(parsed.questions) ? (parsed as ExtractionResult) : null;
 	} catch {
 		return null;

@@ -19,10 +19,6 @@ const out = resolve(repoRoot, "docs", "ui", "bible");
 const rep = (ch, n) => ch.repeat(n);
 const visibleLen = (s) =>
 	s.replace(/<[^>]+>/g, "").replace(/&gt;/g, ">").replace(/&lt;/g, "<").replace(/&amp;/g, "&").replace(/&nbsp;/g, " ").length;
-const padRight = (s, n) => {
-	const need = n - visibleLen(s);
-	return need > 0 ? s + rep(" ", need) : s;
-};
 
 // Active-session dot is STATIC accent (matches SUMOCODE wordmark color).
 // Agent state lives in the FOOTER dot, not here. Top-bar dot just marks

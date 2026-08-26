@@ -1,8 +1,15 @@
+// oxlint-disable no-control-regex -- intentional ESC byte matches for terminal frame assertions
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RpcSessionState } from "@earendil-works/pi-coding-agent";
+
+/** JSON-ish fixture payload returned by the controls double. */
+type FixtureValue = string | number | boolean | null | FixtureValue[] | FixturePayload;
+interface FixturePayload {
+	[key: string]: FixtureValue;
+}
 import { Key } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it } from "vitest";
 import type { MemoryFact, MemoryStatus, RemnicMemoryClient } from "../../memory.js";
@@ -65,9 +72,9 @@ class FakeControls {
 	public treeOutcomeLeafId: string | null | undefined;
 	public treeNavigationError: Error | undefined;
 
-	public async refreshState(): Promise<Record<string, unknown>> {
+	public async refreshState(): Promise<RpcHostChromeState> {
 		this.calls.push("refreshState");
-		return {};
+		return new RpcHostStateStore().getSnapshot();
 	}
 
 	public async getAvailableModels(): Promise<RpcModelOption[]> {
@@ -80,12 +87,12 @@ class FakeControls {
 		return this.enabledModels ?? this.models;
 	}
 
-	public async setModel(provider: string, modelId: string): Promise<Record<string, unknown>> {
+	public async setModel(provider: string, modelId: string): Promise<FixturePayload> {
 		this.calls.push(`setModel:${provider}/${modelId}`);
 		return { modelLabel: `${provider}/${modelId}` };
 	}
 
-	public async setThinkingLevel(level: RpcSessionState["thinkingLevel"]): Promise<Record<string, unknown>> {
+	public async setThinkingLevel(level: RpcSessionState["thinkingLevel"]): Promise<FixturePayload> {
 		this.calls.push(`setThinking:${level}`);
 		return { thinkingLevel: level };
 	}
@@ -95,7 +102,7 @@ class FakeControls {
 		return this.thinkingLevels;
 	}
 
-	public async compact(customInstructions?: string): Promise<Record<string, unknown>> {
+	public async compact(customInstructions?: string): Promise<FixturePayload> {
 		this.calls.push(`compact:${customInstructions ?? ""}`);
 		return {};
 	}
@@ -147,6 +154,8 @@ class FakeControls {
 		} catch {
 			return { entries: [], leafId: this.leafId };
 		}
+		// SAFETY: the fixture writes one jsonl entry per line; only id/type are
+		// read here, matching the session-reader contract.
 		const lines = content.split("\n").filter(Boolean).map((line) => JSON.parse(line) as SessionEntryLike & { type: string });
 		const entries = lines.filter((line) => line.type !== "session");
 		const start = since === undefined ? 0 : entries.findIndex((line) => line.id === since) + 1;
@@ -162,7 +171,7 @@ class FakeControls {
 		return { requestId: request.requestId, status: this.treeOutcomeStatus, leafId: this.treeOutcomeLeafId ?? this.leafId };
 	}
 
-	public async getSessionStats(): Promise<Record<string, unknown>> {
+	public async getSessionStats(): Promise<FixturePayload> {
 		this.calls.push("getSessionStats");
 		return {
 			sessionFile: "/tmp/session.jsonl",
@@ -177,7 +186,7 @@ class FakeControls {
 		};
 	}
 
-	public async setSessionName(name: string): Promise<Record<string, unknown>> {
+	public async setSessionName(name: string): Promise<FixturePayload> {
 		this.calls.push(`setSessionName:${name}`);
 		return { sessionName: name };
 	}
@@ -302,6 +311,7 @@ function setup(options: {
 	const controls = new FakeControls();
 	controls.sessionFile = options.sessionFile;
 	const stateStore = new RpcHostStateStore();
+	// SAFETY: fixtures populate only the model fields these tests read.
 	stateStore.hydrateFromRpcState({
 		model: { provider: "anthropic", id: "claude-opus-4-8", name: "Claude" } as RpcSessionState["model"],
 		thinkingLevel: "medium",
@@ -329,7 +339,9 @@ function setup(options: {
 	const stateChanges: Array<RpcHostChromeState | undefined> = [];
 	const persistedThemes: string[] = [];
 	const actions = new RpcHostActions({
-		controls: controls as unknown as RpcHostControls,
+		// SAFETY: the controls double implements the dispatch surface driven by
+		// these tests; unrelated members are never invoked.
+		controls: controls as RpcHostControls & typeof controls,
 		stateStore,
 		modals,
 		overlays,
@@ -606,7 +618,9 @@ describe("RpcHostActions", () => {
 			inlineSelectors.handleInput(SELECTOR_ESCAPE); // close scope editor
 			await lovelyWeb;
 
-			const config = JSON.parse(await readFile(join(agentDir, "xl0-pi-lovely-web.json"), "utf8")) as Record<string, unknown>;
+			// SAFETY: the file was written by the code under test; tests only
+			// assert on string/boolean fields via toMatchObject.
+			const config: FixturePayload = JSON.parse(await readFile(join(agentDir, "xl0-pi-lovely-web.json"), "utf8"));
 			expect(config).toMatchObject({ webSearchProvider: "exa" });
 			expect(notifications).toContainEqual(expect.objectContaining({ message: expect.stringContaining("Lovely Web config saved"), level: "info" }));
 		} finally {
@@ -651,7 +665,9 @@ describe("RpcHostActions", () => {
 			inlineSelectors.handleInput(SELECTOR_ESCAPE);
 			await lovelyWeb;
 
-			const config = JSON.parse(await readFile(join(agentDir, "xl0-pi-lovely-web.json"), "utf8")) as Record<string, unknown>;
+			// SAFETY: the file was written by the code under test; tests only
+			// assert on string/boolean fields via toMatchObject.
+			const config: FixturePayload = JSON.parse(await readFile(join(agentDir, "xl0-pi-lovely-web.json"), "utf8"));
 			expect(config.firecrawlApiKey).toBe("fc-secret-key");
 		} finally {
 			process.chdir(originalCwd);
@@ -695,7 +711,8 @@ describe("RpcHostActions", () => {
 			modals.handleInput(JSON.stringify({ webSearchProvider: "tavily", exaApiKey: "must-not-save", webApiKeys: { brave: "also-must-not-save" } }));
 			modals.handleInput(SELECTOR_ENTER);
 			await rawUser;
-			const saved = JSON.parse(await readFile(join(agentDir, "xl0-pi-lovely-web.json"), "utf8")) as Record<string, unknown>;
+			// SAFETY: same written-by-test contract as above.
+			const saved: FixturePayload = JSON.parse(await readFile(join(agentDir, "xl0-pi-lovely-web.json"), "utf8"));
 			expect(saved).toMatchObject({ webSearchProvider: "tavily", firecrawlApiKey: "must-stay-secret" });
 			expect(saved.exaApiKey).toBeUndefined();
 			expect(saved.braveApiKey).toBeUndefined();
@@ -1146,7 +1163,9 @@ describe("RpcHostActions", () => {
 				}
 				await treePromise;
 				const request = controls.treeRequests[0];
-				expect(request).toMatchObject({ targetId: "child-b", summarize, ...(customInstructions === undefined ? {} : { customInstructions }) });
+				const expected: FixturePayload = { targetId: "child-b", summarize };
+				if (customInstructions !== undefined) expected["customInstructions"] = customInstructions;
+				expect(request).toMatchObject(expected);
 				expect(controls.calls.some((call) => call.startsWith("fork:"))).toBe(false);
 			} finally {
 				rmSync(dir, { recursive: true, force: true });
@@ -1250,7 +1269,7 @@ describe("RpcHostActions", () => {
 			let capture = true;
 			let busy = false;
 			const unhandled: unknown[] = [];
-			const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+			const onUnhandled = (cause: unknown): void => { unhandled.push(cause); };
 			process.on("unhandledRejection", onUnhandled);
 			try {
 				const sessionFile = writeBranchedFixture(dir);
@@ -1575,7 +1594,11 @@ describe("RpcHostActions", () => {
 
 	it("warns when theme persistence fails but still applies the theme", async () => {
 		const { actions, notifications } = setup();
-		(actions as unknown as { persistTheme: (name: string) => { success: boolean; error?: string } }).persistTheme = () => ({ success: false, error: "disk full" });
+		// Simulate persistence failure: the own property below shadows the
+		// prototype's host-private persistTheme without touching real disk state.
+		Object.assign(actions, {
+			persistTheme: () => ({ success: false, error: "disk full" }),
+		});
 
 		await expect(actions.handleSubmittedText("/sumo:theme amber-crt")).resolves.toBe(true);
 		expect(getActiveTheme().name).toBe("amber-crt");

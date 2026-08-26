@@ -22,7 +22,9 @@ export interface ParsedMouseStream {
 }
 
 const ESCAPE = "\x1b";
+// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for SGR mouse sequence parsing
 const SGR_MOUSE_SEQUENCE_PATTERN = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/;
+// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for SGR mouse sequence parsing
 const COMPLETE_SGR_MOUSE_SEQUENCE_PATTERN = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])/;
 
 function parseButton(code: number): number | undefined {

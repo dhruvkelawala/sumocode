@@ -5,7 +5,9 @@ import {
 	type FetchLike,
 } from "./memory.js";
 
-function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+function jsonResponse(body: JsonValue, init: ResponseInit = {}): Response {
 	return new Response(JSON.stringify(body), {
 		status: 200,
 		headers: { "content-type": "application/json" },

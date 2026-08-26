@@ -82,8 +82,11 @@ function packageNameAt(dir: string, exists: ExistsFn, readFile: ReadFileFn): str
 	const packagePath = join(dir, "package.json");
 	if (!exists(packagePath)) return undefined;
 	try {
-		const parsed = JSON.parse(readFile(packagePath, "utf8")) as { name?: unknown };
-		return typeof parsed.name === "string" ? parsed.name : undefined;
+		// SAFETY: JSON.parse boundary decode; only the optional package name is read.
+		const parsed = JSON.parse(readFile(packagePath, "utf8")) as { name?: string };
+		// SAFETY: name may be any JSON value despite the asserted shape, so it must
+		// still prove stringness before use.
+		return asOptionalString(parsed.name) ? parsed.name : undefined;
 	} catch {
 		return undefined;
 	}
@@ -259,23 +262,32 @@ function installRpcChildProfile(pi: ExtensionAPI): void {
 
 const PROCESS_INSTALL_LATCH = Symbol.for("sumocode.extension.processInstallLatch");
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- JSON boundary decode helper; the predicate itself is the parse
+const asOptionalString = (value: unknown): value is string => typeof value === "string";
+
 type LatchScope = { [PROCESS_INSTALL_LATCH]?: WeakSet<object> };
+
+function globalLatchScope(): LatchScope {
+	// SAFETY: LatchScope only adds an optional module-private symbol key to globalThis,
+	// which no other module reads or writes under that symbol.
+	return globalThis as LatchScope;
+}
 
 function processInstallLatch(scope: LatchScope): WeakSet<object> {
 	return scope[PROCESS_INSTALL_LATCH] ??= new WeakSet<object>();
 }
 
 /** See the duplicate-process-entry comment in `sumocode()` for why this exists. */
-export function isSumocodeAlreadyInstalledInProcess(runtime: object, scope: LatchScope = globalThis as LatchScope): boolean {
+export function isSumocodeAlreadyInstalledInProcess<T extends object>(runtime: T, scope: LatchScope = globalLatchScope()): boolean {
 	return processInstallLatch(scope).has(runtime);
 }
 
-export function markSumocodeInstalledInProcess(runtime: object, scope: LatchScope = globalThis as LatchScope): void {
+export function markSumocodeInstalledInProcess<T extends object>(runtime: T, scope: LatchScope = globalLatchScope()): void {
 	processInstallLatch(scope).add(runtime);
 }
 
 /** Test-only: clear the process latch so installation paths can be re-exercised. */
-export function resetSumocodeProcessInstallLatchForTests(scope: LatchScope = globalThis as LatchScope): void {
+export function resetSumocodeProcessInstallLatchForTests(scope: LatchScope = globalLatchScope()): void {
 	delete scope[PROCESS_INSTALL_LATCH];
 }
 

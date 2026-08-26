@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+/* oxlint-disable anti-slop/no-chained-type-assertions -- test doubles cast minimal stub objects to Pi context types. */
+/* oxlint-disable anti-slop/require-safety-comment-for-type-assertion -- stub shape is exercised by the assertions below. */
 
 describe("UX_SPEC §0 — splash takes no-messages slot, not empty-chat-quote (#60)", () => {
 	it("splash predicate triggers when chat has zero messages regardless of sidebar visibility", () => {

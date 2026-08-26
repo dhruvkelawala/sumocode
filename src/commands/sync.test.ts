@@ -17,6 +17,7 @@ function sumocodeRepoExists(path: string): boolean {
 describe("/sumo:sync", () => {
 	it("registers both slash commands", () => {
 		const registerCommand = vi.fn();
+		// SAFETY: test double only exercises the members this test asserts on.
 		registerSumoSyncCommand({ registerCommand } as never);
 		expect(registerCommand).toHaveBeenCalledWith(
 			"sumo:sync",
@@ -33,6 +34,7 @@ describe("/sumo:sync", () => {
 		const linkConfig = vi.fn(() => ({ label: "config symlinks", ok: true, output: "linked" }));
 		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		const context = ctx();
+		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
 		const results = await executeSumoSync(context as never, {
 			env: { SUMOCODE_CONFIG_DIR: "/config" },
 			homeDir: "/Users/test",
@@ -68,6 +70,7 @@ describe("/sumo:sync", () => {
 	it("resolves the package root from a flattened extension bundle", async () => {
 		const calls: Array<{ file: string; cwd?: string }> = [];
 		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
 		await executeSumoSync(ctx() as never, {
 			env: { SUMOCODE_CONFIG_DIR: "/config" },
 			homeDir: "/Users/test",
@@ -90,6 +93,7 @@ describe("/sumo:sync", () => {
 		const calls: Array<{ file: string; args: readonly string[]; cwd?: string }> = [];
 		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		const context = ctx();
+		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
 		await executeSumoSync(context as never, {
 			env: {},
 			homeDir: "/Users/test",
@@ -111,6 +115,7 @@ describe("/sumo:sync", () => {
 	it("reports error when config repo is not present", async () => {
 		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		const context = ctx();
+		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
 		const results = await executeSumoSync(context as never, {
 			env: {},
 			homeDir: "/Users/test",
@@ -137,6 +142,7 @@ describe("/sumo:sync", () => {
 			return { stdout: "", stderr: "" };
 		});
 		const linkConfig = vi.fn(() => ({ label: "config symlinks", ok: true, output: "linked" }));
+		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
 		const results = await executeSumoSync(context as never, {
 			env: { SUMOCODE_CONFIG_DIR: "/config" },
 			cwd: "/tmp",
@@ -168,6 +174,7 @@ describe("/sumo:sync", () => {
 
 		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		const context = ctx();
+		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
 		const results = await executeSumoSync(context as never, {
 			env: {},
 			homeDir: home,
@@ -194,6 +201,7 @@ describe("/sumo:sync", () => {
 		const calls: Array<{ file: string; cwd?: string }> = [];
 		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		const context = ctx();
+		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
 		const results = await executeSumoSync(context as never, {
 			env: { SUMOCODE_CONFIG_DIR: "/config" },
 			cwd: "/repo/sumocode",
@@ -221,6 +229,7 @@ describe("/sumo:bootstrap", () => {
 		const linkConfig = vi.fn(() => ({ label: "config symlinks", ok: true, output: "linked" }));
 		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		const context = ctx();
+		// SAFETY: ctx double carries cwd/ui, the members executeSumoBootstrap reads.
 		const results = await executeSumoBootstrap(context as never, {
 			env: {},
 			homeDir: "/Users/test",
@@ -257,6 +266,7 @@ describe("/sumo:bootstrap", () => {
 		const exec = vi.fn(async () => ({ stdout: "", stderr: "" }));
 		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		const context = ctx();
+		// SAFETY: ctx double carries cwd/ui, the members executeSumoBootstrap reads.
 		const results = await executeSumoBootstrap(context as never, {
 			env: {},
 			homeDir: "/Users/test",
@@ -279,6 +289,7 @@ describe("/sumo:bootstrap", () => {
 		const calls: Array<{ file: string }> = [];
 		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		const context = ctx();
+		// SAFETY: ctx double carries cwd/ui, the members executeSumoBootstrap reads.
 		await executeSumoBootstrap(context as never, {
 			env: {},
 			homeDir: "/Users/test",

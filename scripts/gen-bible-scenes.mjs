@@ -12,20 +12,6 @@ import { fileURLToPath } from "node:url";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const out = resolve(repoRoot, "docs", "ui", "bible");
 
-// Helper: extract the inner term content from an existing mockup file
-function extractTermContent(filename) {
-	const html = readFileSync(resolve(out, filename), "utf8");
-	const match = html.match(/<div data-render-rect class="term[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/body>/);
-	return match ? match[1].trim() : "";
-}
-
-// Helper: read just the inner <pre> content from a single-element mockup
-function extractPreContent(filename) {
-	const html = readFileSync(resolve(out, filename), "utf8");
-	const match = html.match(/<pre class="grid"[^>]*>([\s\S]+?)<\/pre>/);
-	return match ? match[1] : "";
-}
-
 // ─── Scene: splash overlay over active scene ───────────────────────────
 // We compose the splash full-screen scene by reusing 03-splash.html as the
 // target. So this scene just confirms splash IS the splash element.
@@ -33,7 +19,7 @@ function extractPreContent(filename) {
 // For modal overlay scenes we need the active scene's middle pane visible
 // behind a centered modal. Use CSS positioning.
 
-function buildOverlayScene({ baseFilename, modalFilename, modalCols, modalRows, label, blurb }) {
+function buildOverlayScene({ baseFilename, modalFilename, label, blurb }) {
 	const baseHtml = readFileSync(resolve(out, baseFilename), "utf8");
 	// The base is a complete .term scene. We need to insert a modal layer
 	// positioned absolute on top.

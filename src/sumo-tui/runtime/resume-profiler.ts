@@ -107,10 +107,12 @@ export function summarizeResumeProfiles(profiles: readonly ResumeProfile[]): Res
 	const stages = Object.fromEntries(stageNames.map((name) => {
 		const values = profiles.flatMap((profile) => profile.stages.filter((stage) => stage.name === name).map((stage) => stage.durationMs));
 		return [name, summarize(values)];
-	})) as Record<ResumeStageName, PercentileSummary>;
+	}));
+	// SAFETY: stageNames enumerates every ResumeStageName literal, so the
+	// built object has exactly those keys.
 	return {
 		total: summarize(profiles.map((profile) => profile.totalMs)),
-		stages,
+		stages: stages as ResumeProfileSummary["stages"],
 	};
 }
 

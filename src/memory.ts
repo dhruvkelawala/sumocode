@@ -1,3 +1,6 @@
+// oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof, anti-slop/no-unsafe-dictionary-type -- Remnic HTTP boundary parser: daemon JSON payloads arrive as untrusted values,
+// so unknown-typed inputs, runtime typeof decoding guards, and open string-keyed
+// records are this module's parsing contract.
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -134,10 +137,10 @@ function errorCodeForStatus(status: number): MemoryClientErrorCode {
 	return "request_failed";
 }
 
-function jsonHeaders(token?: string): Record<string, string> {
+function jsonHeaders(token?: string) {
 	return {
 		"content-type": "application/json",
-		...(token ? { authorization: `Bearer ${token}` } : {}),
+		...(token && { authorization: `Bearer ${token}` }),
 	};
 }
 
@@ -153,7 +156,9 @@ export function createRemnicMemoryClient(options: RemnicMemoryClientOptions = {}
 	const tokenProvider = options.tokenProvider ?? defaultTokenProvider;
 	const timeoutMs = options.timeoutMs ?? DEFAULT_REMNIC_TIMEOUT_MS;
 
-	async function requestJson(path: string, init: RequestInit = {}): Promise<unknown> {
+	type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+async function requestJson(path: string, init: RequestInit = {}): Promise<JsonValue> {
 		const controller = withTimeout(timeoutMs);
 		const token = tokenProvider();
 		try {
@@ -162,7 +167,7 @@ export function createRemnicMemoryClient(options: RemnicMemoryClientOptions = {}
 				signal: controller.signal,
 				headers: {
 					...jsonHeaders(token),
-					...(init.headers ?? {}),
+					...(init.headers ?? undefined),
 				},
 			});
 
@@ -172,7 +177,9 @@ export function createRemnicMemoryClient(options: RemnicMemoryClientOptions = {}
 			}
 
 			try {
-				return await response.json();
+				// SAFETY: response.json() parses the daemon's JSON body; malformed
+				// payloads throw here and are rethrown as MemoryClientError below.
+				return await response.json() as JsonValue;
 			} catch (err) {
 				throw new MemoryClientError("malformed_response", "Remnic returned invalid JSON", err);
 			}
@@ -225,7 +232,7 @@ export function createRemnicMemoryClient(options: RemnicMemoryClientOptions = {}
 		async add(text: string, category?: string): Promise<MemoryFact> {
 			const payload = await requestJson("/engram/v1/memories", {
 				method: "POST",
-				body: JSON.stringify({ content: text, ...(category ? { category } : {}) }),
+				body: JSON.stringify({ content: text, ...(category && { category }) }),
 			});
 			const immediate = factFromUnknown(payload);
 			if (immediate) return immediate;

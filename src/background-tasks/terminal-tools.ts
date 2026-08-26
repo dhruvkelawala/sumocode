@@ -19,10 +19,19 @@ const MAX_WAIT_TIMEOUT_MS = 300_000;
 const MAX_TERMINAL_IDS = 64;
 const COMPLETION_OUTPUT_BYTES = 8 * 1024;
 
-const StringEnum = <T extends readonly string[]>(values: T, options?: { description?: string }) =>
-	Type.Unsafe<T[number]>({ type: "string", enum: [...values], ...(options?.description ? { description: options.description } : {}) });
+interface UnsafeStringSchema<T> {
+	type: "string";
+	enum: T;
+	description?: string;
+}
 
-function makeToolResult(text: string, details?: unknown) {
+const StringEnum = <T extends readonly string[]>(values: T, options?: { description?: string }) => {
+	const schema: UnsafeStringSchema<[...T]> = { type: "string", enum: [...values] };
+	if (options?.description !== undefined) schema.description = options.description;
+	return Type.Unsafe<T[number]>(schema);
+};
+
+function makeToolResult<TDetails>(text: string, details?: TDetails) {
 	return { content: [{ type: "text" as const, text }], details };
 }
 
@@ -42,26 +51,48 @@ interface ObservableCompletions {
 	readonly receipts: readonly TerminalDeliveryReceipt[];
 }
 
+/** JSON-shaped payload read back from Pi session entries and custom messages. */
+type SessionEntryPayload =
+	| string
+	| number
+	| boolean
+	| null
+	| undefined
+	| readonly SessionEntryPayload[]
+	| { readonly [key: string]: SessionEntryPayload | undefined };
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- guard over an arbitrary Pi session entry; the predicate itself is the parse.
+function isPayloadObject(value: unknown): value is { readonly [key: string]: SessionEntryPayload } {
+	return typeof value === "object" && value !== null;
+}
+
+function isPayloadString(value: SessionEntryPayload): value is string {
+	return typeof value === "string";
+}
+
+/** Missing extension details normalize to null so the object check below skips them. */
+function branchDetails(record: { readonly [key: string]: SessionEntryPayload }): SessionEntryPayload {
+	return record.details ?? null;
+}
+
 function completionsFromContext(ctx: ExtensionContext): ObservableCompletions {
 	const ids = new Set<string>();
 	const receipts: TerminalDeliveryReceipt[] = [];
 	for (const entry of ctx.sessionManager.getBranch()) {
-		if (!entry || typeof entry !== "object") continue;
-		const record = entry as unknown as Record<string, unknown>;
-		let details: unknown;
-		if (record.type === "custom_message") details = record.details;
-		else if (record.type === "message") {
-			const message = record.message;
-			if (message && typeof message === "object" && (message as { role?: unknown }).role === "custom") {
-				details = (message as { details?: unknown }).details;
-			}
+		if (!isPayloadObject(entry)) continue;
+		let details: SessionEntryPayload;
+		if (entry.type === "custom_message") details = branchDetails(entry);
+		else if (entry.type === "message") {
+			const message = entry.message;
+			details = isPayloadObject(message) && message.role === "custom" ? branchDetails(message) : null;
 		}
-		if (!details || typeof details !== "object") continue;
-		const completionId = (details as { completionId?: unknown }).completionId;
-		const claimToken = (details as { deliveryClaimToken?: unknown }).deliveryClaimToken;
-		if (typeof completionId !== "string") continue;
+		else details = null;
+		if (!isPayloadObject(details)) continue;
+		const completionId = details.completionId;
+		const claimToken = details.deliveryClaimToken;
+		if (!isPayloadString(completionId)) continue;
 		ids.add(completionId);
-		if (typeof claimToken === "string") receipts.push({ completionId, claimToken });
+		if (isPayloadString(claimToken)) receipts.push({ completionId, claimToken });
 	}
 	return { ids, receipts };
 }
@@ -338,8 +369,7 @@ export function installTerminalTools(
 		}
 	});
 	pi.on("session_shutdown", (event) => {
-		const reason = (event as { reason?: string } | null | undefined)?.reason;
-		if (reason === "quit") coordinator.dispose();
+		if (event.reason === "quit") coordinator.dispose();
 		else coordinator.unbind();
 	});
 	return coordinator;

@@ -11,6 +11,7 @@ import {
 import type { MemoryFact, RemnicMemoryClient } from "./memory.js";
 import { groupFactsByPanel } from "./memory-categorization.js";
 
+// oxlint-disable-next-line no-control-regex -- intentional ANSI SGR escape match to strip styling in captured output
 const ANSI = /\u001b\[[0-9;]*m/g;
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
 
@@ -41,7 +42,14 @@ function snapshot(overrides: Partial<MemoryEditorSnapshot> = {}): MemoryEditorSn
 	};
 }
 
+interface MemoryCommandTestCtx {
+	mode?: "rpc";
+	ui: { custom?(...args: unknown[]): Promise<undefined>; notify(...args: unknown[]): void };
+}
+
 function fakeClient(overrides: Partial<RemnicMemoryClient> = {}): RemnicMemoryClient {
+	// SAFETY: the fake implements the Remnic client surface the editor touches;
+	// each unused member defaults to a no-op or empty result.
 	return {
 		browse: vi.fn(async () => []),
 		add: vi.fn(async () => undefined),
@@ -350,6 +358,7 @@ describe("formatMemoryStatus", () => {
 describe("registerMemoryCommand", () => {
 	it("registers the /sumo:memory slash command", () => {
 		const registerCommand = vi.fn();
+		// SAFETY: the double supplies the registerCommand surface the command registers on.
 		registerMemoryCommand({ registerCommand } as never);
 		expect(registerCommand).toHaveBeenCalledWith(
 			"sumo:memory",
@@ -358,10 +367,12 @@ describe("registerMemoryCommand", () => {
 	});
 
 	it("/sumo:memory (no args) reaches the editor or notifies unavailable", async () => {
-		let handler: ((args: string, ctx: unknown) => Promise<void>) | undefined;
+// SAFETY: the ctx double below supplies only the ui/mode surface the handler reads.
+		let handler: ((args: string, ctx: MemoryCommandTestCtx) => Promise<void>) | undefined;
 		const registerCommand = vi.fn((_name: string, opts: { handler: typeof handler }) => {
 			handler = opts.handler;
 		});
+		// SAFETY: the double supplies the registerCommand surface the command registers on.
 		registerMemoryCommand({ registerCommand } as never);
 
 		const custom = vi.fn(async () => undefined);
@@ -372,11 +383,13 @@ describe("registerMemoryCommand", () => {
 	});
 
 	it("/sumo:memory defers the editor overlay visibly in RPC mode", async () => {
-		let handler: ((args: string, ctx: unknown) => Promise<void>) | undefined;
+// SAFETY: the ctx double below supplies only the ui/mode surface the handler reads.
+		let handler: ((args: string, ctx: MemoryCommandTestCtx) => Promise<void>) | undefined;
 		const registerCommand = vi.fn((_name: string, opts: { handler: typeof handler }) => {
 			handler = opts.handler;
 		});
 		const client = fakeClient({ browse: vi.fn(async () => [fact()]) });
+		// SAFETY: the double supplies the registerCommand surface and a fake client provider.
 		registerMemoryCommand({ registerCommand } as never, () => client);
 
 		const custom = vi.fn();
@@ -389,13 +402,15 @@ describe("registerMemoryCommand", () => {
 	});
 
 	it("/sumo:memory status exposes Remnic extraction freshness", async () => {
-		let handler: ((args: string, ctx: unknown) => Promise<void>) | undefined;
+// SAFETY: the ctx double below supplies only the ui/mode surface the handler reads.
+		let handler: ((args: string, ctx: MemoryCommandTestCtx) => Promise<void>) | undefined;
 		const registerCommand = vi.fn((_name: string, opts: { handler: typeof handler }) => {
 			handler = opts.handler;
 		});
 		const client = fakeClient({
 			status: vi.fn(async () => ({ ok: true, factCount: 3, lastExtractionAt: "2026-04-26T14:41:40.725Z" })),
 		});
+		// SAFETY: the double supplies the registerCommand surface and a fake client provider.
 		registerMemoryCommand({ registerCommand } as never, () => client);
 
 		const notify = vi.fn();
@@ -406,13 +421,15 @@ describe("registerMemoryCommand", () => {
 	});
 
 	it("/sumo:memory status still runs directly in RPC mode", async () => {
-		let handler: ((args: string, ctx: unknown) => Promise<void>) | undefined;
+// SAFETY: the ctx double below supplies only the ui/mode surface the handler reads.
+		let handler: ((args: string, ctx: MemoryCommandTestCtx) => Promise<void>) | undefined;
 		const registerCommand = vi.fn((_name: string, opts: { handler: typeof handler }) => {
 			handler = opts.handler;
 		});
 		const client = fakeClient({
 			status: vi.fn(async () => ({ ok: true, factCount: 1 })),
 		});
+		// SAFETY: the double supplies the registerCommand surface and a fake client provider.
 		registerMemoryCommand({ registerCommand } as never, () => client);
 
 		const custom = vi.fn();

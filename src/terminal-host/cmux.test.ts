@@ -13,6 +13,7 @@ describe("cmuxTerminalHost", () => {
 			"OK surface:2 workspace:1",
 			"",
 		]);
+		// SAFETY: test double only exercises the members this test asserts on.
 		const result = await cmuxTerminalHost.openCommandInSplit(fake as never, "right", { cwd: "/tmp", shellCommand: "echo ok" });
 		expect(result).toEqual({ ok: true, pane: { host: "cmux", paneId: "surface:2", workspaceId: "workspace:1" } });
 	});
@@ -23,6 +24,7 @@ describe("cmuxTerminalHost", () => {
 			"OK surface:2 workspace:1",
 			"",
 		]);
+		// SAFETY: test double only exercises the members this test asserts on.
 		const result = await cmuxTerminalHost.startAgentPane(fake as never, {
 			name: "worker",
 			cwd: "/tmp",
@@ -33,11 +35,13 @@ describe("cmuxTerminalHost", () => {
 	});
 
 	it("reports pane steering as unsupported", async () => {
+		// SAFETY: test double only exercises the members this test asserts on.
 		await expect(cmuxTerminalHost.sendPaneText({ exec: vi.fn() } as never, { host: "cmux", paneId: "surface:2" }, "continue")).resolves.toEqual({ ok: false, error: "not supported on cmux" });
 	});
 
 	it("notify is best-effort when exec rejects", async () => {
 		const fake = { exec: vi.fn(async () => { throw new Error("no cmux"); }) };
+		// SAFETY: test double only exercises the members this test asserts on.
 		await expect(cmuxTerminalHost.notify(fake as never, "title", "body")).resolves.toBeUndefined();
 	});
 });

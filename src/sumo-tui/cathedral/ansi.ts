@@ -5,7 +5,9 @@ import { lineToAnsi, span, textLine } from "../render/primitives.js";
 export const RESET = "\u001b[0m";
 export const SIDEBAR_INDENT = "  ";
 
-function parseHex(hex: string): { r: number; g: number; b: number } {
+type Rgb = { r: number; g: number; b: number };
+
+function parseHex(hex: string): Rgb {
 	const normalized = hex.replace("#", "");
 	return {
 		r: Number.parseInt(normalized.slice(0, 2), 16),

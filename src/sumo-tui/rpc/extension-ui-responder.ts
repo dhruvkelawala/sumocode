@@ -108,13 +108,14 @@ export class RpcExtensionUiResponder {
 				const loginUrl = decoded.auth ? firstHttpUrl(this.loginDetails) : undefined;
 				if (controller) this.authPromptControllers.add(controller);
 				try {
-					const value = await this.modals.input(decoded.title, request.placeholder, {
+					const inputOptions = {
 						timeout: request.timeout,
 						signal: controller?.signal,
 						secret: decoded.secret,
-						...(decoded.auth && this.loginDetails.length > 0 ? { details: this.loginDetails } : {}),
-						...(loginUrl ? { copyValue: loginUrl } : {}),
-					});
+						details: decoded.auth && this.loginDetails.length > 0 ? this.loginDetails : undefined,
+						copyValue: loginUrl,
+					};
+					const value = await this.modals.input(decoded.title, request.placeholder, inputOptions);
 					return valueResponse(request.id, value);
 				} finally {
 					if (controller) this.authPromptControllers.delete(controller);
@@ -159,6 +160,8 @@ export class RpcExtensionUiResponder {
 			case "setWidget":
 				if (request.widgetKey === "sumocode.login") this.loginDetails = request.widgetLines ?? [];
 				this.widgets.set(request.widgetKey, request.widgetLines);
+				// SAFETY: widgetPlacement arrives as an untyped wire string; an
+				// unrecognized value degrades to the default placement downstream.
 				this.regionRegistry?.mountWidget(request.widgetKey, request.widgetLines, { placement: request.widgetPlacement as WidgetPlacement | undefined });
 				this.onRenderRequest();
 				return undefined;
@@ -179,6 +182,9 @@ export class RpcExtensionUiResponder {
 				// wedging Pi's rpc-mode.js pendingExtensionRequests entry forever. Return an
 				// explicit cancelled response and log so the gap surfaces during a Pi upgrade
 				// instead of silently hanging.
+				// SAFETY: this default arm only runs for wire shapes outside the
+				// typed union; only method/id are read and both are string-keyed
+				// fields on every real request variant.
 				const unknownRequest = request as { method?: unknown; id: string };
 				console.error(
 					`[sumocode] extension_ui request with unrecognized method "${String(unknownRequest.method)}" (id=${unknownRequest.id}); responding cancelled. This likely means Pi added a new extension_ui method that RpcExtensionUiResponder needs to implement.`,

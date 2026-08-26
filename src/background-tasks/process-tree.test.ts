@@ -34,6 +34,7 @@ describe("process tree operations", () => {
 	it.skipIf(process.platform === "win32")("signals only the POSIX process group and never falls back on EPERM", async () => {
 		const processStartTime = captureProcessStartTime(process.pid)!;
 		const denied = Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+		// SAFETY: the mock narrows process.kill to the (pid, signal?) string-signal overload the tree code uses.
 		const kill = vi.spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
 			if (pid === -123 && signal === "SIGTERM") throw denied;
 			return true;

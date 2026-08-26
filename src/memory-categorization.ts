@@ -37,6 +37,7 @@ export function routeFactToPanel(fact: MemoryFact): PanelId {
 	for (const tag of fact.tags ?? []) {
 		const lower = tag.toLowerCase();
 		if (!lower.startsWith("sumocode:")) continue;
+		// SAFETY: membership in KNOWN_PANEL_SET is verified on the next line before use.
 		const panel = lower.slice("sumocode:".length).toUpperCase() as PanelId;
 		if (KNOWN_PANEL_SET.has(panel)) return panel;
 	}

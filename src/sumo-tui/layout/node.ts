@@ -15,6 +15,7 @@ import {
 	type PositionType,
 	type YogaNode,
 } from "./yoga.js";
+import type { MouseEvent } from "../input/mouse.js";
 
 export type SumoNodePosition = "absolute" | "relative" | "static" | PositionType;
 export type SumoNodeSize = number | `${number}%`;
@@ -22,10 +23,10 @@ export type SumoNodeSize = number | `${number}%`;
 export type SumoNodeEventHandlerResult = boolean | void;
 
 export interface SumoNodeEventHandlers {
-	onMouseDown?: (node: SumoNode, event: unknown) => SumoNodeEventHandlerResult;
-	onMouseUp?: (node: SumoNode, event: unknown) => SumoNodeEventHandlerResult;
-	onMouseMove?: (node: SumoNode, event: unknown) => SumoNodeEventHandlerResult;
-	onScroll?: (node: SumoNode, event: unknown) => SumoNodeEventHandlerResult;
+	onMouseDown?: (node: SumoNode, event: MouseEvent) => SumoNodeEventHandlerResult;
+	onMouseUp?: (node: SumoNode, event: MouseEvent) => SumoNodeEventHandlerResult;
+	onMouseMove?: (node: SumoNode, event: MouseEvent) => SumoNodeEventHandlerResult;
+	onScroll?: (node: SumoNode, event: MouseEvent) => SumoNodeEventHandlerResult;
 }
 
 function assertFiniteLayoutNumber(value: number): number {

@@ -6,6 +6,13 @@ import { findClipboardImageModulePath, pasteClipboardImageToTempFile, resetClipb
 
 const written: string[] = [];
 
+// SAFETY: dynamic-import surface probe used only to assert function exports.
+type AnyFunction = (...args: never[]) => void;
+
+function isFunction<T>(value: T): value is T & AnyFunction {
+	return typeof value === "function";
+}
+
 afterEach(() => {
 	resetClipboardImageLoaderForTests();
 	for (const path of written.splice(0)) rmSync(path, { force: true });
@@ -58,8 +65,10 @@ describe("pasteClipboardImageToTempFile", () => {
 		expect(modulePath).not.toBeNull();
 		const { pathToFileURL } = await import("node:url");
 		const mod = await import(pathToFileURL(modulePath!).href);
-		expect(typeof mod.readClipboardImage).toBe("function");
-		expect(typeof mod.extensionForImageMimeType).toBe("function");
+		// SAFETY: the deep import is untyped by design; these assertions pin its
+		// exported function surface.
+		expect(isFunction(mod["readClipboardImage"])).toBe(true);
+		expect(isFunction(mod["extensionForImageMimeType"])).toBe(true);
 	});
 
 	it("findClipboardImageModulePath returns null when nothing is found", () => {

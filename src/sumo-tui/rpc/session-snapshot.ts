@@ -1,4 +1,5 @@
 import { readSessionEntries, type SessionEntryLike, type SessionEntrySnapshot, type SessionDiskEntries } from "./session-reader.js";
+import type { SessionEntryValue } from "./session-reader.js";
 import type { RpcHostControls } from "./controls.js";
 
 export interface SessionSnapshotControls {
@@ -10,13 +11,13 @@ export interface SessionSnapshotOptions {
 	readonly sessionId?: string;
 }
 
-function isCursorNotFound(error: unknown, cursor: string): boolean {
-	if (!(error instanceof Error)) return false;
+function isCursorNotFound(cause: unknown, cursor: string): boolean {
+	if (!(cause instanceof Error)) return false;
 	const notFound = `Entry not found: ${cursor}`;
 	// This mirrors Pi's rpc-mode get_entries error exactly, while accepting the
 	// responseData wrapper used by the host. A different missing-entry error is
 	// not evidence that the since cursor was rejected and must propagate.
-	return error.message === notFound || error.message === `get_entries failed: ${notFound}`;
+	return cause.message === notFound || cause.message === `get_entries failed: ${notFound}`;
 }
 
 function mergeEntries(diskEntries: readonly SessionEntryLike[], deltaEntries: readonly SessionEntryLike[]): readonly SessionEntryLike[] {
@@ -30,23 +31,35 @@ function mergeEntries(diskEntries: readonly SessionEntryLike[], deltaEntries: re
 	return merged;
 }
 
-function asEntries(entries: unknown): readonly SessionEntryLike[] {
-	if (!Array.isArray(entries)) throw new Error("get_entries returned an invalid entries list");
-	return entries.map((entry) => {
-		if (typeof entry !== "object" || entry === null || typeof (entry as { id?: unknown }).id !== "string" || typeof (entry as { type?: unknown }).type !== "string") {
-			throw new Error("get_entries returned an invalid session entry");
-		}
+function isWireString(value: string | null | undefined): value is string {
+	return typeof value === "string";
+}
+
+function isSessionEntry(entry: SessionEntryValue): entry is SessionEntryLike {
+	return typeof entry === "object" && entry !== null && !Array.isArray(entry)
+		&& typeof entry["id"] === "string" && typeof entry["type"] === "string";
+}
+
+function asEntries(response: { readonly entries: readonly unknown[] }): readonly SessionEntryLike[] {
+	if (!Array.isArray(response.entries)) throw new Error("get_entries returned an invalid entries list");
+	return response.entries.map((entry) => {
+		// SAFETY: wire entries are untyped JSON from Pi; the guard validates the
+		// id/type fields this module relies on before the value escapes.
+		if (!isSessionEntry(entry as SessionEntryValue)) throw new Error("get_entries returned an invalid session entry");
+		// SAFETY: isSessionEntry validated the id/type contract; all other
+		// fields are intentionally opaque session-entry payload.
 		return entry as SessionEntryLike;
 	});
 }
 
-function validLeafId(value: unknown): value is string | null {
-	return value === null || typeof value === "string";
+function validatedLeafId(leafId: string | null | undefined): string | null {
+	if (leafId === undefined || (leafId !== null && !isWireString(leafId))) throw new Error("get_entries returned an invalid leafId");
+	return leafId;
 }
 
-function validatedResponse(response: { readonly entries: unknown; readonly leafId: unknown }): SessionEntrySnapshot {
-	if (!validLeafId(response.leafId)) throw new Error("get_entries returned an invalid leafId");
-	return { entries: mergeEntries([], asEntries(response.entries)), leafId: response.leafId };
+function validatedResponse(response: { readonly entries: readonly unknown[]; readonly leafId: string | null }): SessionEntrySnapshot {
+	const leafId = validatedLeafId(response.leafId);
+	return { entries: mergeEntries([], asEntries({ entries: response.entries })), leafId };
 }
 
 async function fullSnapshot(controls: SessionSnapshotControls): Promise<SessionEntrySnapshot> {
@@ -75,9 +88,9 @@ export async function readAuthoritativeSessionSnapshot(
 		if (!isCursorNotFound(error, disk.lastEntryId)) throw error;
 		return fullSnapshot(controls);
 	}
-	if (!validLeafId(delta.leafId)) throw new Error("get_entries returned an invalid leafId");
+	const leafId = validatedLeafId(delta.leafId);
 	return {
-		entries: mergeEntries(disk.entries, asEntries(delta.entries)),
-		leafId: delta.leafId,
+		entries: mergeEntries(disk.entries, asEntries(delta)),
+		leafId,
 	};
 }

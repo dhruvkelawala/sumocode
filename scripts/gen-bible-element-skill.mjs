@@ -12,10 +12,6 @@ const out = resolve(repoRoot, "docs", "ui", "bible");
 const rep = (ch, n) => ch.repeat(n);
 const visibleLen = (s) =>
 	s.replace(/<[^>]+>/g, "").replace(/&gt;/g, ">").replace(/&lt;/g, "<").replace(/&amp;/g, "&").replace(/&nbsp;/g, " ").length;
-const padRight = (s, n) => {
-	const need = n - visibleLen(s);
-	return need > 0 ? s + rep(" ", need) : s;
-};
 
 const COLS = 130;
 const innerCols = COLS - 4;
@@ -95,16 +91,6 @@ function pillToolStyle(name) {
 //      Create distinctive, production-grade frontend interfaces…
 //      ⌘O to expand
 // (Multiple lines)
-function pillDecorative(name, desc) {
-	const truncDesc = desc.length > innerCols - 8 ? desc.slice(0, innerCols - 9) + "\u2026" : desc;
-	return (
-		`<span class="fg-accent">\u2767</span>  <span class="fg-dim">SKILL \u00b7 </span><span class="fg-accent">${name}</span>` +
-		`</span><span class="fg-divider">\u2502</span></span></span>\n` + // close + reopen the box-fill row
-		// Hack: we can't break inside one bodyRow; this approach won't work cleanly
-		// Use a different strategy — pass multi-row content in this builder
-		``
-	);
-}
 
 // V3 needs multi-row support; simpler: render it inline with line break and
 // re-wrap with bodyRow externally. Let me restructure as a separate builder.

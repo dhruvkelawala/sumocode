@@ -56,6 +56,7 @@ function writeTerminal(terminal, bytes) {
 }
 
 function snapshotCell(cell) {
+	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- duck-typed xterm cell API probe
 	const width = typeof cell.getWidth === "function" ? cell.getWidth() : 1;
 	return {
 		char: normalizeChar(cell.getChars?.() ?? "", width),

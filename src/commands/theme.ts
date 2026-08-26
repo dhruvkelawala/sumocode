@@ -17,6 +17,12 @@ export interface ApplyThemeOutcome {
 	readonly persistenceWarning?: string;
 }
 
+/** Mutable builder shape for {@link ApplyThemeOutcome}. */
+interface MutableApplyThemeOutcome {
+	piWarning?: string;
+	persistenceWarning?: string;
+}
+
 export function applyKnownTheme(
 	theme: { name: string },
 	applyPiTheme: ((name: string) => { success: boolean; error?: string }) | undefined,
@@ -30,7 +36,10 @@ export function applyKnownTheme(
 	emitCathedralThemeChanged(theme.name);
 	const persistResult = persistTheme?.(theme.name);
 	const persistenceWarning = persistResult && !persistResult.success ? persistResult.error ?? theme.name : undefined;
-	return { ...(piWarning === undefined ? {} : { piWarning }), ...(persistenceWarning === undefined ? {} : { persistenceWarning }) };
+	const result: MutableApplyThemeOutcome = {};
+	if (piWarning !== undefined) result.piWarning = piWarning;
+	if (persistenceWarning !== undefined) result.persistenceWarning = persistenceWarning;
+	return result;
 }
 
 export const THEME_RESULT_CUSTOM_TYPE = "sumocode-theme-result";
@@ -40,11 +49,10 @@ export interface ThemeResultDetails {
 	readonly lines: readonly string[];
 }
 
-function isThemeResultDetails(details: unknown): details is ThemeResultDetails {
+function isThemeResultDetails(details: ThemeResultDetails | undefined): details is ThemeResultDetails {
 	if (typeof details !== "object" || details === null) return false;
-	const record = details as { tone?: unknown; lines?: unknown };
-	return (record.tone === "info" || record.tone === "warning") && Array.isArray(record.lines)
-		&& record.lines.every((line) => typeof line === "string");
+	return (details.tone === "info" || details.tone === "warning") && Array.isArray(details.lines)
+		&& details.lines.every((line): line is string => typeof line === "string");
 }
 
 function rgbAnsi(hex: string, channel: 38 | 48): string {
@@ -95,7 +103,7 @@ class ThemeResultComponent implements Component {
 }
 
 export function registerThemeResultRenderer(pi: ExtensionAPI): void {
-	pi.registerMessageRenderer(THEME_RESULT_CUSTOM_TYPE, (message) => {
+	pi.registerMessageRenderer<ThemeResultDetails>(THEME_RESULT_CUSTOM_TYPE, (message) => {
 		if (!isThemeResultDetails(message.details)) return undefined;
 		return new ThemeResultComponent(message.details);
 	});

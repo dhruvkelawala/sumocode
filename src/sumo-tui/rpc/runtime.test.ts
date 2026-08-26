@@ -12,9 +12,24 @@ import { RpcHostEditorController } from "./editor.js";
 import { submitRpcPrompt } from "./host.js";
 import { renderRpcHostFrameForTest, RpcHostRuntime } from "./runtime.js";
 import { RpcShellAdapter } from "./shell-adapter.js";
+import type { RpcResponse } from "@earendil-works/pi-coding-agent";
 import type { RpcHostChromeState } from "./state.js";
 import { rpcVisualFixtureFromEnv } from "./visual-fixtures.js";
 import { ChatPager } from "../widgets/chat-pager.js";
+
+interface DiagEvent {
+	event: string;
+	surface?: string;
+	cols?: number;
+	rows?: number;
+}
+
+function parseDiagEvent(line: string): DiagEvent {
+	// SAFETY: the diagnostics jsonl is written by this test's own host run;
+	// only event/surface/cols/rows fields are asserted.
+	return JSON.parse(line);
+}
+
 
 
 function state(overrides: Partial<RpcHostChromeState> = {}): RpcHostChromeState {
@@ -675,7 +690,7 @@ describe("RPC host retained runtime frame", () => {
 			const startupEvents = readFileSync(diagFile, "utf8")
 				.trim()
 				.split("\n")
-				.map((line) => JSON.parse(line) as { event: string; surface?: string; cols?: number; rows?: number });
+				.map(parseDiagEvent);
 			for (const event of ["boot_screen_frame", "input_ready"]) {
 				expect(startupEvents).toContainEqual(expect.objectContaining({
 					event,
@@ -692,7 +707,7 @@ describe("RPC host retained runtime frame", () => {
 			const stableEvents = readFileSync(diagFile, "utf8")
 				.trim()
 				.split("\n")
-				.map((line) => JSON.parse(line) as { event: string; surface?: string; cols?: number; rows?: number });
+				.map(parseDiagEvent);
 			for (const event of ["app_ready", "stable_chrome_ready"]) {
 				expect(stableEvents.filter((entry) => entry.event === event)).toHaveLength(1);
 				expect(stableEvents).toContainEqual(expect.objectContaining({
@@ -808,6 +823,7 @@ describe("RPC host retained runtime frame", () => {
 			input,
 			editor,
 			nativeModifierProbe,
+			// SAFETY: ProcessEnv is an open record; a one-key fixture satisfies it.
 			env: { TERM_PROGRAM: "Apple_Terminal" } as NodeJS.ProcessEnv,
 			initialState: state(),
 			initialTranscript: { messages: [] },
@@ -834,6 +850,7 @@ describe("RPC host retained runtime frame", () => {
 			input,
 			editor,
 			nativeModifierProbe,
+			// SAFETY: ProcessEnv is an open record; a one-key fixture satisfies it.
 			env: { TERM_PROGRAM: "Apple_Terminal" } as NodeJS.ProcessEnv,
 			initialState: state(),
 			initialTranscript: { messages: [] },
@@ -863,6 +880,7 @@ describe("RPC host retained runtime frame", () => {
 			input,
 			editor,
 			nativeModifierProbe,
+			// SAFETY: ProcessEnv is an open record; a one-key fixture satisfies it.
 			env: { TERM_PROGRAM: "Apple_Terminal" } as NodeJS.ProcessEnv,
 			initialState: state(),
 			initialTranscript: { messages: [] },
@@ -1097,7 +1115,9 @@ describe("RPC host retained runtime frame", () => {
 		const runtime = new RpcHostRuntime({
 			output,
 			input: { isTTY: false, on: () => undefined },
-			terminal: terminal as unknown as TerminalSessionOwner,
+			// SAFETY: CursorCaptureTerminal satisfies the TerminalSessionOwner
+			// surface exercised here; the intersection keeps the cast legal.
+			terminal: terminal as TerminalSessionOwner & CursorCaptureTerminal,
 			editor: new RpcHostEditorController(),
 			initialState: state(),
 			initialTranscript: { messages: [] },
@@ -1146,17 +1166,15 @@ describe("RPC host retained runtime frame", () => {
 	});
 
 	it("sends submitted prompts in harness/offline mode unless an explicit visual fixture is active", async () => {
-		const send = vi.fn(async () => ({
+		const send = vi.fn(async (): Promise<RpcResponse> => ({
 			type: "response",
 			id: "prompt",
 			command: "prompt",
 			success: true,
-		} as const));
+		}));
+
 		const onBeforeSend = vi.fn();
-		const visualFixture = rpcVisualFixtureFromEnv({
-			SUMOCODE_HARNESS: "1",
-			PI_OFFLINE: "1",
-		} as NodeJS.ProcessEnv);
+		const visualFixture = rpcVisualFixtureFromEnv({ SUMOCODE_HARNESS: "1", PI_OFFLINE: "1" });
 
 		expect(visualFixture).toBeUndefined();
 
@@ -1292,7 +1310,10 @@ describe("RPC host terminal theme palette", () => {
 	it("non-TTY outputs emit no palette sequences", async () => {
 		setActiveTheme("ultraviolet-core");
 		const output = new FakeOutput();
-		(output as { isTTY: boolean }).isTTY = false;
+		// SAFETY: FakeOutput declares isTTY: true; the host only branches on
+		// truthiness, so overriding to false mirrors a piped stdout.
+		const ttyOutput = output as Omit<FakeOutput, "isTTY"> & { isTTY: boolean | undefined };
+		ttyOutput.isTTY = false;
 		const terminal = new TerminalSessionOwner({ output });
 		const runtime = new RpcHostRuntime({
 			output,

@@ -23,13 +23,13 @@ function classifyRow(line) {
 	const trimmed = line.trim();
 	if (trimmed.length === 0) return "blank";
 	// Input frame borders must be checked before generic frame-border.
-	if (/^┌─/.test(trimmed) && /┐$/.test(trimmed)) return "input-top";
-	if (/^└─/.test(trimmed) && /┘$/.test(trimmed)) return "input-bottom";
+	if (trimmed.startsWith("┌─") && trimmed.endsWith("┐")) return "input-top";
+	if (trimmed.startsWith("└─") && trimmed.endsWith("┘")) return "input-bottom";
 	// Overlays are spliced into existing rows; detect them before chat frame rows.
 	if (trimmed.includes("COMMAND PALETTE")) return "overlay";
 	if (/^╭\s*(USER|SUMO|TOOL)/.test(trimmed)) return "chat-frame-top";
-	if (/^╰─/.test(trimmed)) return "chat-frame-bottom";
-	if (/^│/.test(trimmed) && /│\s*$/.test(trimmed)) return "chat-frame-body";
+	if (trimmed.startsWith("╰─")) return "chat-frame-bottom";
+	if (trimmed.startsWith("│") && /│\s*$/.test(trimmed)) return "chat-frame-body";
 	if (/^[┌┐└┘╭╮╰╯─│]+$/.test(trimmed)) return "frame-border";
 	if (trimmed.includes("SUMOCODE") && trimmed.includes("║")) return "top-bar";
 	if (trimmed.includes("CTRL+/") && trimmed.includes("COMMANDS")) return "hint-row";

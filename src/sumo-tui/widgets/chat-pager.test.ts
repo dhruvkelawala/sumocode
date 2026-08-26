@@ -11,6 +11,8 @@ import { PiEditorLeaf } from "./pi-editor-leaf.js";
 import { ChatPager, type ChatPagerRenderControls } from "./chat-pager.js";
 import { TranscriptController } from "../transcript/controller.js";
 import type { ChatMessageViewModel } from "../transcript/view-model.js";
+/* oxlint-disable anti-slop/no-chained-type-assertions -- test doubles cast minimal stub objects to Pi context types. */
+/* oxlint-disable anti-slop/require-safety-comment-for-type-assertion -- stub shape is exercised by the assertions below. */
 
 class FakeEditor implements Component {
 	public constructor(private readonly rows: string[]) {}

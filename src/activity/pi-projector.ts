@@ -11,6 +11,8 @@ import {
 	boundedOutputTail,
 } from "./output-tail.js";
 
+// oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type -- I/O boundary parser (Pi tool-record projection boundary): inputs are untrusted producer JSON,
+// so `unknown` parameters and open string-keyed records are this module's real input contract.
 export interface PiToolProjectionScope {
 	readonly messageId: string;
 	readonly blockIndex: number;
@@ -27,12 +29,24 @@ const MAX_INVOCATION_CHARS = 4 * 1024;
 const MAX_SOURCE_INSPECT_CHARS = ACTIVITY_OUTPUT_MAX_BYTES * 4;
 const MAX_CONTENT_PARTS = 64;
 
+function isStringValue(value: unknown): value is string {
+	return typeof value === "string";
+}
+
+function isNumberValue(value: unknown): value is number {
+	return typeof value === "number";
+}
+
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
-	return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+	return isRecordLike(value) ? value : undefined;
 }
 
 function boundedSanitizedHead(value: unknown, maxChars: number): string | undefined {
-	if (typeof value !== "string") return undefined;
+	if (!isStringValue(value)) return undefined;
 	const inspected = value.slice(0, Math.max(1, maxChars * 2));
 	const sanitized = sanitizeActivityText(inspected).slice(0, maxChars).trim();
 	return sanitized.length > 0 ? sanitized : undefined;
@@ -47,25 +61,25 @@ function firstString(maxChars: number, ...values: unknown[]): string | undefined
 }
 
 function firstContentText(content: unknown): string | undefined {
-	if (typeof content === "string") return content;
+	if (isStringValue(content)) return content;
 	if (!Array.isArray(content)) return undefined;
 	const inspected = Math.min(content.length, MAX_CONTENT_PARTS);
 	for (let index = 0; index < inspected; index += 1) {
 		const record = asRecord(content[index]);
-		if (record?.type === "text" && typeof record.text === "string") return record.text;
+		if (record?.type === "text" && isStringValue(record.text)) return record.text;
 	}
 	return undefined;
 }
 
 /** Preserve the newest useful text parts without joining an unbounded MCP result. */
 function tailFromContent(content: unknown): string | undefined {
-	if (typeof content === "string") return boundedOutputTail(content);
+	if (isStringValue(content)) return boundedOutputTail(content);
 	if (!Array.isArray(content)) return undefined;
 	let tail = "";
 	let inspected = 0;
 	for (let index = content.length - 1; index >= 0 && inspected < MAX_CONTENT_PARTS; index -= 1) {
 		const record = asRecord(content[index]);
-		if (record?.type !== "text" || typeof record.text !== "string") continue;
+		if (record?.type !== "text" || !isStringValue(record.text)) continue;
 		inspected += 1;
 		const part = boundedOutputTail(record.text);
 		if (!part) continue;
@@ -86,7 +100,7 @@ export function normalizePiActivityStatus(value: unknown, fallback: ActivityStat
 }
 
 function finiteNumber(value: unknown): number | undefined {
-	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+	return isNumberValue(value) && Number.isFinite(value) ? value : undefined;
 }
 
 function sourceLineCount(text: string): number {
@@ -117,7 +131,7 @@ function excerptText(value: unknown): string | undefined {
 	if (!Array.isArray(value)) return undefined;
 	let raw = "";
 	for (const item of value.slice(0, ACTIVITY_OUTPUT_MAX_LINES)) {
-		if (typeof item !== "string") continue;
+		if (!isStringValue(item)) continue;
 		const remaining = MAX_SOURCE_INSPECT_CHARS - raw.length;
 		if (remaining <= 0) break;
 		raw += `${raw ? "\n" : ""}${item.slice(0, remaining)}`;
@@ -128,7 +142,21 @@ function excerptText(value: unknown): string | undefined {
 const READ_SHOWING_NOTICE = /\n\n\[Showing lines \d+-\d+ of (\d+)(?: \([^\n\]]+\))?\. Use offset=\d+ to continue\.\]\s*$/i;
 const READ_REMAINING_NOTICE = /\n\n\[(\d+) more lines in file\. Use offset=\d+ to continue\.\]\s*$/i;
 
-function projectReadOutput(output: string | undefined, startLine: number): { text?: string; totalLines?: number } {
+interface ResultSummary {
+	summary?: string;
+	error?: string;
+}
+
+type MutableSourceBody = {
+	-readonly [K in keyof Extract<ActivityBody, { kind: "source" }>]: Extract<ActivityBody, { kind: "source" }>[K];
+};
+
+interface ReadProjection {
+	text?: string;
+	totalLines?: number;
+}
+
+function projectReadOutput(output: string | undefined, startLine: number): ReadProjection {
 	if (!output) return {};
 	const showing = READ_SHOWING_NOTICE.exec(output);
 	if (showing) return { text: output.slice(0, showing.index), totalLines: Number(showing[1]) };
@@ -150,7 +178,7 @@ function sourceBody(
 ): ActivityBody {
 	const args = asRecord(invocation);
 	const excerpt = excerptText(details?.excerpt);
-	const invocationContent = name === "write" && typeof args?.content === "string" ? args.content : undefined;
+	const invocationContent = name === "write" && isStringValue(args?.content) ? args.content : undefined;
 	const startLine = finiteNumber(details?.startLine)
 		?? (name === "read" ? finiteNumber(args?.offset) : undefined);
 	const readOutput = name === "read" ? projectReadOutput(sourceOutput, startLine ?? 1) : undefined;
@@ -164,17 +192,15 @@ function sourceBody(
 		?? (name === "read"
 			? readOutput?.totalLines ?? truncationTotal
 			: truncationTotal ?? sourceLineCount(rawText));
-	return {
-		kind: "source",
-		text,
-		...(startLine === undefined ? {} : { startLine }),
-		...(totalLines === undefined ? {} : { totalLines }),
-	};
+	const body: MutableSourceBody = { kind: "source", text };
+	if (startLine !== undefined) body.startLine = startLine;
+	if (totalLines !== undefined) body.totalLines = totalLines;
+	return body;
 }
 
 function diffBody(details: Record<string, unknown> | undefined, output: string | undefined, error: string | undefined): ActivityBody {
 	const rawDiff = details?.diff;
-	const base = typeof rawDiff === "string"
+	const base = isStringValue(rawDiff)
 		? boundedSourceHead(rawDiff)
 		: excerptText(rawDiff) ?? error ?? output ?? "";
 	const collapsedLines = finiteNumber(details?.collapsedLines);
@@ -215,7 +241,21 @@ function bodyForTool(
 	return genericBody(invocationPreview, output, error);
 }
 
-function boundedInvocation(value: unknown): { readonly snapshot: unknown; readonly preview: string } {
+/** Producer-shaped arguments snapshot recovered from the bounded preview. */
+type InvocationSnapshot =
+	| string
+	| number
+	| boolean
+	| null
+	| readonly InvocationSnapshot[]
+	| { readonly [key: string]: InvocationSnapshot };
+
+interface BoundedInvocation {
+	readonly snapshot: InvocationSnapshot;
+	readonly preview: string;
+}
+
+function boundedInvocation(value: unknown): BoundedInvocation {
 	const preview = safeValuePreview(value, {
 		maxChars: MAX_INVOCATION_CHARS,
 		maxDepth: 6,
@@ -225,7 +265,7 @@ function boundedInvocation(value: unknown): { readonly snapshot: unknown; readon
 		maxTotalStringChars: MAX_INVOCATION_CHARS,
 	});
 	try {
-		return { snapshot: JSON.parse(preview) as unknown, preview };
+		return { snapshot: JSON.parse(preview), preview };
 	} catch {
 		return { snapshot: preview, preview };
 	}
@@ -245,9 +285,9 @@ export function projectPiToolActivity(recordValue: unknown, scope: PiToolProject
 	const invocation = rawInvocation === undefined ? undefined : boundedInvocation(rawInvocation);
 	const details = asRecord(record.details);
 	const contentOutput = tailFromContent(record.content);
-	const directOutput = typeof record.output === "string" ? boundedOutputTail(record.output) : undefined;
+	const directOutput = isStringValue(record.output) ? boundedOutputTail(record.output) : undefined;
 	const output = contentOutput ?? directOutput;
-	const sourceOutput = firstContentText(record.content) ?? (typeof record.output === "string" ? record.output : undefined);
+	const sourceOutput = firstContentText(record.content) ?? (isStringValue(record.output) ? record.output : undefined);
 	const declaredErrorRaw = firstString(ACTIVITY_OUTPUT_MAX_BYTES, record.errorMessage, record.error);
 	const declaredError = declaredErrorRaw ? boundedOutputTail(declaredErrorRaw) : undefined;
 	const isError = record.isError === true || declaredError !== undefined;
@@ -257,15 +297,32 @@ export function projectPiToolActivity(recordValue: unknown, scope: PiToolProject
 	const args = asRecord(rawInvocation);
 	const subject = firstString(MAX_SUBJECT_CHARS, args?.path, args?.filePath, args?.target, args?.command, details?.path, details?.filePath, details?.target, details?.command);
 	const summary = firstString(ACTIVITY_OUTPUT_MAX_BYTES, details?.summary, details?.note, details?.description);
-	return {
+	type ProjectedToolActivity = {
+		id: string;
+		kind: "tool";
+		title: string;
+		status: ActivityStatus;
+		invocation?: InvocationSnapshot;
+		subject?: string;
+		outputTail?: string;
+		body: ActivityBody;
+		result?: ResultSummary;
+	};
+	const activity: ProjectedToolActivity = {
 		id,
 		kind: "tool",
 		title: name,
 		status: isError ? "failed" : status,
-		...(invocation === undefined ? {} : { invocation: invocation.snapshot }),
-		...(subject ? { subject } : {}),
-		...(output ? { outputTail: output } : {}),
 		body: bodyForTool(name, rawInvocation, invocation?.preview, sourceOutput, output, error, details),
-		...(summary || error ? { result: { ...(summary ? { summary } : {}), ...(error ? { error } : {}) } } : {}),
 	};
+	if (invocation !== undefined) activity.invocation = invocation.snapshot;
+	if (subject) activity.subject = subject;
+	if (output) activity.outputTail = output;
+	if (summary || error) {
+		const resultSummary: ResultSummary = {};
+		if (summary) resultSummary.summary = summary;
+		if (error) resultSummary.error = error;
+		activity.result = resultSummary;
+	}
+	return activity;
 }

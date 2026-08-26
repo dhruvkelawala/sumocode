@@ -230,6 +230,7 @@ function registerHarness(options: { persistTheme?: any } = {}): RegisteredHarnes
 	const registerMessageRenderer = vi.fn();
 	const persistTheme = options.persistTheme ?? vi.fn(() => ({ success: true }));
 
+	// SAFETY: test double only exercises the members this test asserts on.
 	registerThemeCommand({ registerCommand, registerShortcut, sendMessage, registerMessageRenderer } as never, { persistTheme });
 	if (!handler) throw new Error("handler was not registered");
 	return { handler, shortcuts, sendMessage, registerMessageRenderer, persistTheme };

@@ -6,6 +6,7 @@ import {
 	renderThemeCheck,
 } from "./theme-check.js";
 
+// oxlint-disable-next-line no-control-regex -- intentional ANSI SGR escape match to strip styling in captured output
 const ANSI = /\u001b\[[0-9;]*m/g;
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
 

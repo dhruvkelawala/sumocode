@@ -9,22 +9,22 @@ import type { ActivityPresentationSnapshot } from "../transcript/activity-view-m
 import type { TranscriptViewModel } from "../transcript/view-model.js";
 import type { MermaidRenderingMode } from "../transcript/mermaid.js";
 import { containsCtrlCToken, isAppleTerminalSession, isEscapeInput, normalizeAppleTerminalInput, SharedInputRouter } from "../input/shared-input-router.js";
-import { RpcShellAdapter } from "./shell-adapter.js";
+import { RpcShellAdapter, type RpcShellAdapterSnapshot } from "./shell-adapter.js";
 import type { RpcHostChromeState } from "./state.js";
 
 export interface RpcHostTerminalOutput extends TerminalOutput {
 	readonly columns?: number;
 	readonly rows?: number;
-	on?(event: "resize", listener: () => void): unknown;
-	off?(event: "resize", listener: () => void): unknown;
-	removeListener?(event: "resize", listener: () => void): unknown;
+	on?(event: "resize", listener: () => void): void;
+	off?(event: "resize", listener: () => void): void;
+	removeListener?(event: "resize", listener: () => void): void;
 }
 
 export interface RpcHostInput {
 	readonly isTTY?: boolean;
-	on(event: "data", listener: (data: string | Buffer) => void): unknown;
-	off?(event: "data", listener: (data: string | Buffer) => void): unknown;
-	removeListener?(event: "data", listener: (data: string | Buffer) => void): unknown;
+	on(event: "data", listener: (data: string | Buffer) => void): void;
+	off?(event: "data", listener: (data: string | Buffer) => void): void;
+	removeListener?(event: "data", listener: (data: string | Buffer) => void): void;
 	setRawMode?(enabled: boolean): void;
 	resume?(): void;
 	pause?(): void;
@@ -132,10 +132,8 @@ const nativeModifierUnavailable: NativeModifierProbe = () => false;
 const requireFromRuntime = createRequire(import.meta.url);
 let cachedPiNativeModifierProbe: NativeModifierProbe | undefined;
 
-function isNativeModifierModule(value: unknown): value is NativeModifierModule {
-	if (!value || typeof value !== "object") return false;
-	if (!("isNativeModifierPressed" in value)) return false;
-	return typeof value.isNativeModifierPressed === "function";
+function hasNativeModifierProbe(candidate: Partial<NativeModifierModule> | undefined): candidate is NativeModifierModule {
+	return typeof candidate?.isNativeModifierPressed === "function";
 }
 
 function readNativeModifier(probe: NativeModifierProbe, key: NativeModifierKey): boolean {
@@ -153,8 +151,12 @@ function resolvePiNativeModifierProbe(): NativeModifierProbe {
 	// removes the native probe degrades to plain Enter behavior instead of
 	// crashing the RPC host at boot.
 	try {
-		const nativeModifiersModule = requireFromRuntime("@earendil-works/pi-tui/dist/native-modifiers.js") as unknown;
-		if (isNativeModifierModule(nativeModifiersModule)) {
+		// PI-BUMP NOTE: this private pi-tui export is untyped on purpose; its
+		// shape is validated by hasNativeModifierProbe before use, so a future
+		// Pi bump degrades to plain Enter behavior instead of crashing boot.
+		const nativeModifiersModule: Partial<NativeModifierModule> | undefined =
+			requireFromRuntime("@earendil-works/pi-tui/dist/native-modifiers.js");
+		if (hasNativeModifierProbe(nativeModifiersModule)) {
 			cachedPiNativeModifierProbe = (key) => readNativeModifier(nativeModifiersModule.isNativeModifierPressed, key);
 			return cachedPiNativeModifierProbe;
 		}
@@ -210,7 +212,7 @@ export class RpcHostRuntime {
 		// only ever emit whole, complete chunks (never a codepoint split
 		// across two Buffers), since toString('utf8') per-chunk cannot
 		// reassemble a split sequence.
-		const text = typeof data === "string" ? data : data.toString("utf8");
+		const text = Buffer.isBuffer(data) ? data.toString("utf8") : data;
 		// A session-changing RPC has been sent but authoritative ownership is not
 		// rebound. Drop prompts rather than dispatch an A draft into B; retain a
 		// direct Ctrl-C escape hatch so a failed rebind can always terminate.
@@ -232,6 +234,8 @@ export class RpcHostRuntime {
 
 	public constructor(options: RpcHostRuntimeOptions = {}) {
 		this.output = options.output ?? process.stdout;
+		// SAFETY: Node's stdin already exposes the full RpcHostInput surface;
+		// the assertion only restates that contract for the optional members.
 		this.input = options.input ?? (process.stdin as RpcHostInput);
 		this.terminal = options.terminal ?? defaultTerminalSessionOwner;
 		this.isAppleTerminal = isAppleTerminalSession(options.env ?? process.env);
@@ -393,12 +397,17 @@ export class RpcHostRuntime {
 		if (snapshot.state) this.state = snapshot.state;
 		if (snapshot.transcript) this.transcript = snapshot.transcript;
 		if (snapshot.activities) this.activities = snapshot.activities;
-		this.shell?.update({
-			state: this.state,
-			...(snapshot.transcript ? { transcript: this.transcript, transcriptRevision: snapshot.transcriptRevision } : {}),
-			...(snapshot.activities ? { activities: this.activities } : {}),
-			...(snapshot.suppressSettledFeedOnly ? { suppressSettledFeedOnly: true } : {}),
-		});
+		type ShellUpdate = {
+			-readonly [K in keyof RpcShellAdapterSnapshot]?: RpcShellAdapterSnapshot[K];
+		};
+		const shellUpdate: ShellUpdate = { state: this.state };
+		if (snapshot.transcript) {
+			shellUpdate.transcript = this.transcript;
+			shellUpdate.transcriptRevision = snapshot.transcriptRevision;
+		}
+		if (snapshot.activities) shellUpdate.activities = this.activities;
+		if (snapshot.suppressSettledFeedOnly) shellUpdate.suppressSettledFeedOnly = true;
+		this.shell?.update(shellUpdate);
 		this.scheduleRender();
 	}
 

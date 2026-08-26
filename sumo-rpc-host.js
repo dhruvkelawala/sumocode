@@ -37,6 +37,7 @@ async function bundleIsFresh() {
 		// from a different concurrent build (interleaved renames) is rejected in
 		// favour of the source fallback.
 		return await hostInputManifestIsFresh(root, manifest)
+			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- validating the untrusted bundle manifest's declared hash field
 			&& typeof manifest.outputsHash === "string"
 			&& await hostOutputsHash(root) === manifest.outputsHash
 			&& sourceFaceBytes.equals(bundledFaceBytes)
@@ -216,6 +217,7 @@ try {
 	if (bundleFresh) {
 		try {
 			const bundledModule = await import(pathToFileURL(bundlePath).href);
+			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- validating an untrusted module export before calling it
 			if (typeof bundledModule.main !== "function") {
 				throw new Error("host bundle does not export main()");
 			}

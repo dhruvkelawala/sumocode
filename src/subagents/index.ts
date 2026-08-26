@@ -2,11 +2,12 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { activityFromSubagentSnapshot } from "../activity/subagent-adapter.js";
 import { BUILT_IN_TOOLS, getBuiltInToolsFromActiveTools } from "../native-task-config.js";
 import { getTerminalHost } from "../terminal-host/index.js";
+import type { TerminalHost } from "../terminal-host/types.js";
 import { spawnPaneChild } from "./backend-pane.js";
 import { spawnPiChild } from "./backend-pi.js";
 import { createDeferredResultDelivery, type DeliveryPayload } from "./delivery.js";
 import type { SubagentSnapshot } from "./domain.js";
-import { SubagentManager } from "./manager.js";
+import { SubagentManager, type SubagentManagerDependencies } from "./manager.js";
 import { buildSubagentResultMessage } from "./prompt.js";
 import { registerSubagentTools } from "./tools.js";
 
@@ -37,13 +38,22 @@ const settledPayload = (snapshot: SubagentSnapshot): DeliveryPayload => {
 			status: snapshot.status,
 			activity: activityFromSubagentSnapshot(snapshot),
 			manifest: snapshot.manifest,
-			...(snapshot.pane ? { pane: snapshot.pane } : {}),
+			pane: snapshot.pane,
 		},
 	};
 };
 
-export function installSubagents(pi: ExtensionAPI): SubagentManager {
-	const host = getTerminalHost();
+export interface SubagentsInstallOptions {
+	readonly terminalHost?: TerminalHost;
+	readonly spawnPaneChild?: typeof spawnPaneChild;
+	readonly spawnPiChild?: typeof spawnPiChild;
+	readonly managerDependencies?: SubagentManagerDependencies;
+}
+
+export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOptions = {}): SubagentManager {
+	const host = options.terminalHost ?? getTerminalHost();
+	const spawnPane = options.spawnPaneChild ?? spawnPaneChild;
+	const spawnHeadless = options.spawnPiChild ?? spawnPiChild;
 	const manager = new SubagentManager((task) => {
 		if (task.visible) {
 			if (!task.placement) {
@@ -73,7 +83,7 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 			// toward LESS access, never more — acceptable until pi grows a
 			// built-ins-only restriction flag.
 			const paneNarrowed = task.builtInTools !== undefined && paneBuiltIn.length < BUILT_IN_TOOLS.length;
-			return spawnPaneChild({
+			return spawnPane({
 				prompt: task.prompt,
 				name: task.title,
 				cwd: task.cwd,
@@ -87,7 +97,7 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 				placement: task.placement,
 			});
 		}
-		return spawnPiChild({
+		return spawnHeadless({
 			prompt: task.prompt,
 			cwd: task.cwd,
 			model: task.model,
@@ -96,7 +106,7 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 			builtInTools: getBuiltInToolsFromActiveTools([...(task.builtInTools ?? [])]),
 			signal: task.signal,
 		});
-	}, { terminalHost: host, pi });
+	}, { terminalHost: host, pi, ...options.managerDependencies });
 	const delivery = createDeferredResultDelivery();
 	const observedSettledIds = new Set<string>();
 	let latestContext: ExtensionContext | undefined;

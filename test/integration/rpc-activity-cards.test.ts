@@ -29,6 +29,8 @@ function delay(ms: number): Promise<void> {
 async function waitForCommandTypes(path: string, expected: readonly string[]): Promise<string[]> {
 	for (let attempt = 0; attempt < 100; attempt += 1) {
 		try {
+			// SAFETY: the fixture command log is written as JSON lines, each
+			// carrying the type field asserted below.
 			const types = (await readFile(path, "utf8"))
 				.trim()
 				.split("\n")
@@ -47,6 +49,18 @@ afterEach(() => {
 	app?.cleanup();
 	app = undefined;
 });
+
+interface DiagnosticEntry {
+	readonly event: string;
+	readonly ownerSessionId?: string;
+	readonly activityCount?: number;
+	readonly rpcSessionId?: string;
+	readonly feedOwnerSessionId?: string;
+}
+
+function isString(value: string | undefined): value is string {
+	return typeof value === "string";
+}
 
 function externalFeedWriter(ownerSessionId: string, rootDir: string): ActivityFeedPublisher {
 	const processStartTime = captureProcessBirthTime(process.pid);
@@ -175,8 +189,12 @@ describe("RPC durable Activity cards", () => {
 			.trim()
 			.split("\n")
 			.filter(Boolean)
-			.map((line) => JSON.parse(line) as Record<string, unknown>);
-		const bridge = diagnostics.find((entry) => entry.event === "activity_bridge_bound" && typeof entry.ownerSessionId === "string");
+			.map((line) =>
+				// SAFETY: the diagnostics file is JSONL written by the RPC host's
+				// activity/owner observers with the fields asserted below.
+				JSON.parse(line) as DiagnosticEntry,
+			);
+		const bridge = diagnostics.find((entry) => entry.event === "activity_bridge_bound" && isString(entry.ownerSessionId));
 		const host = diagnostics.find((entry) => entry.event === "rpc_activity_owner_observed" && Number(entry.activityCount) > 0);
 		expect(bridge).toBeDefined();
 		expect(host).toMatchObject({

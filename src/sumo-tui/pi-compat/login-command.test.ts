@@ -2,14 +2,16 @@ import { describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { cancelActiveRpcLogin, executeRpcLogin, registerRpcLoginCommand, type RpcLoginRuntime } from "./login-command.js";
 import { decodeAuthInputTitle, isSecretInputTitle } from "./secret-input.js";
+/* oxlint-disable anti-slop/no-chained-type-assertions -- test doubles cast minimal stub objects to Pi context types. */
+/* oxlint-disable anti-slop/require-safety-comment-for-type-assertion -- stub shape is exercised by the assertions below. */
 
 function provider(options: { oauth?: boolean; apiKey?: boolean } = { oauth: true }) {
 	return {
 		id: "anthropic",
 		name: "Anthropic",
 		auth: {
-			...(options.oauth ? { oauth: {} } : {}),
-			...(options.apiKey ? { apiKey: { name: "Anthropic API key", login: vi.fn() } } : {}),
+			...(options.oauth && { oauth: {} }),
+			...(options.apiKey && { apiKey: { name: "Anthropic API key", login: vi.fn() } }),
 		},
 	};
 }

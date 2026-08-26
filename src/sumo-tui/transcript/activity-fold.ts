@@ -105,11 +105,20 @@ function foldableBlockId(block: FoldableBlock): string {
 	return block.delegation.id ?? block.delegation.title;
 }
 
+export interface FoldResult {
+	messages: ChatMessageViewModel[];
+	folded: boolean;
+}
+
+export interface FoldedBlocksResult extends FoldResult {
+	unmatched: FoldableBlock[];
+}
+
 export function foldBlockIntoMessages(
 	messages: readonly ChatMessageViewModel[],
 	incoming: FoldableBlock,
 	options: { readonly requireMatch: boolean },
-): { messages: ChatMessageViewModel[]; folded: boolean } {
+) {
 	const matchingMessageIndex = findLastMessageIndex(messages, (message) => (
 		canOwnFoldableUpdates(message) && matchingFoldableBlockIndex(message.blocks, incoming) !== -1
 	));
@@ -117,15 +126,13 @@ export function foldBlockIntoMessages(
 	const targetIndex = matchingMessageIndex !== -1 ? matchingMessageIndex : fallbackIndex;
 	if (targetIndex === -1) {
 		if (options.requireMatch) return { messages: [...messages], folded: false };
-		return {
-			messages: [...messages, {
-				id: `live-foldable-${foldableBlockId(incoming)}`,
-				role: "sumo",
-				displayName: "SUMO",
-				blocks: [incoming],
-			}],
-			folded: true,
+		const created: ChatMessageViewModel = {
+			id: `live-foldable-${foldableBlockId(incoming)}`,
+			role: "sumo",
+			displayName: "SUMO",
+			blocks: [incoming],
 		};
+		return { messages: [...messages, created], folded: true };
 	}
 	return {
 		messages: messages.map((message, index) => (
@@ -139,7 +146,7 @@ export function foldBlocksIntoMessages(
 	messages: readonly ChatMessageViewModel[],
 	blocks: readonly FoldableBlock[],
 	options: { readonly requireMatch: boolean },
-): { messages: ChatMessageViewModel[]; folded: boolean; unmatched: FoldableBlock[] } {
+): FoldedBlocksResult {
 	let next = [...messages];
 	let foldedAny = false;
 	const unmatched: FoldableBlock[] = [];
@@ -162,7 +169,7 @@ function imageBlockKey(block: Extract<ChatBlock, { type: "image" }>): string {
 export function foldResultViewModelIntoMessages(
 	messages: readonly ChatMessageViewModel[],
 	message: ChatMessageViewModel,
-): { messages: ChatMessageViewModel[]; folded: boolean } {
+) {
 	if (!isFoldableResultViewModel(message)) return { messages: [...messages], folded: false };
 	const foldable = message.blocks.filter(isFoldableBlock);
 	const targetIndices = foldable.map((block) => findLastMessageIndex(messages, (candidate) => (

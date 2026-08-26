@@ -9,15 +9,16 @@ import {
 import { activeThemeApplicationRoles, activeThemeColors, type ThemeApplicationRoles } from "../../themes/index.js";
 import { lineToAnsi, lineWidth, span, textLine, truncateLine, wrapLine, type Span } from "../render/primitives.js";
 import { expandKey } from "./expand-key.js";
+import type { SessionRecord } from "./view-model.js";
 
-const STATUS_GLYPH: Record<ActivityStatus, string> = {
+const STATUS_GLYPH = {
 	queued: "○",
 	running: "▶",
 	succeeded: "✓",
 	failed: "✗",
 	cancelled: "✗",
 	lost: "✗",
-};
+} satisfies Record<ActivityStatus, string>;
 
 const BODY_MAX_SOURCE_LINES = 25;
 const BODY_MAX_ROWS = 29;
@@ -29,8 +30,17 @@ const FALLBACK_SETTLED = "no output captured";
 
 type ActivityLedgerRoles = ThemeApplicationRoles["toolLedger"];
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-	return typeof value === "object" && value !== null ? value as Record<string, unknown> : undefined;
+// Boundary predicates for opaque activity invocation payloads decoded upstream.
+function isRecord<T>(value: T): value is T & SessionRecord {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asRecord<T>(value: T): T & SessionRecord | undefined {
+	return isRecord(value) ? value : undefined;
+}
+
+function isString<T>(value: T): value is T & string {
+	return typeof value === "string";
 }
 
 function compactWhitespace(value: string): string {
@@ -61,14 +71,14 @@ export function activityStatusGlyph(status: ActivityStatus): string {
 
 export function activityStatusColor(status: ActivityStatus): string {
 	const colors = activeThemeColors();
-	const colorsByStatus: Record<ActivityStatus, string> = {
+	const colorsByStatus = {
 		queued: colors.foregroundDim,
 		running: colors.states.tool,
 		succeeded: colors.states.idle,
 		failed: colors.states.approval,
 		cancelled: colors.foregroundDim,
 		lost: colors.states.approval,
-	};
+	} satisfies Record<ActivityStatus, string>;
 	return colorsByStatus[status];
 }
 
@@ -76,7 +86,7 @@ export function activityTarget(activity: ActivitySnapshot): string {
 	if (activity.subject) return compactWhitespace(activity.subject);
 	const invocation = asRecord(activity.invocation);
 	for (const value of [invocation?.path, invocation?.filePath, invocation?.target, invocation?.command]) {
-		if (typeof value === "string" && compactWhitespace(value).length > 0) return compactWhitespace(value);
+		if (isString(value) && compactWhitespace(value).length > 0) return compactWhitespace(value);
 	}
 	if (activity.body?.kind === "terminal" && activity.body.command) return compactWhitespace(activity.body.command);
 	return firstLine(activity.result?.error ?? activity.result?.summary ?? activity.outputTail ?? activity.body?.text) ?? activityTitle(activity);
@@ -132,7 +142,7 @@ function padAnsi(line: string, width: number): string {
 	return `${line}${" ".repeat(width - visible)}`;
 }
 
-function ledgerStyle(roles: ActivityLedgerRoles): { bg: string } {
+function ledgerStyle(roles: ActivityLedgerRoles) {
 	return { bg: roles.surface };
 }
 
@@ -180,7 +190,7 @@ function renderHeader(activity: ActivitySnapshot, width: number, roles: Activity
 }
 
 function bodySpan(part: Span | string, roles: ActivityLedgerRoles): Span {
-	if (typeof part === "string") return span(part, { fg: roles.body });
+	if (isString(part)) return span(part, { fg: roles.body });
 	return part.style?.fg ? part : span(part.text, { ...part.style, fg: roles.body });
 }
 
@@ -197,7 +207,7 @@ function renderBodyLines(
 	width: number,
 	roles: ActivityLedgerRoles,
 	maxRows: number,
-): { rows: string[]; truncated: boolean } {
+) {
 	if (maxRows <= 0) return { rows: [], truncated: true };
 	const continuationPrefix = "↳ ";
 	const firstRowWidth = Math.max(1, width - 2);
@@ -242,7 +252,7 @@ function sourceContentLines(text: string): string[] {
 function boundedStreamLines(
 	values: readonly (string | undefined)[],
 	invocation: string | undefined,
-): { lines: string[]; truncated: boolean } {
+) {
 	const lines: string[] = [];
 	const seen = new Set<string>();
 	let remainingChars = STREAM_INPUT_MAX_CHARS;

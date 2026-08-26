@@ -32,6 +32,16 @@ function worktreeWorkspaceLabel(branch: string): string {
 	return branch.replace(/^sumo\//, "sumo · ");
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- predicate over an arbitrary execFile rejection field; the typeof check is the sanctioned parse.
+function isString(value: unknown): value is string {
+	return typeof value === "string";
+}
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- predicate over an arbitrary execFile rejection field; the typeof check is the sanctioned parse.
+function isNumber(value: unknown): value is number {
+	return typeof value === "number";
+}
+
 function createExecAdapter(env: NodeJS.ProcessEnv): PiExecLike {
 	return {
 		exec: async (command, args, options = {}) => {
@@ -44,11 +54,13 @@ function createExecAdapter(env: NodeJS.ProcessEnv): PiExecLike {
 				});
 				return { stdout: result.stdout, stderr: result.stderr, code: 0, killed: false };
 			} catch (error) {
+				// SAFETY: execFileAsync rejects with an ExecFileException carrying
+				// these optional fields; the predicates below decode each field.
 				const failed = error as { stdout?: unknown; stderr?: unknown; code?: unknown; killed?: unknown };
 				return {
-					stdout: typeof failed.stdout === "string" ? failed.stdout : "",
-					stderr: typeof failed.stderr === "string" ? failed.stderr : error instanceof Error ? error.message : String(error),
-					code: typeof failed.code === "number" ? failed.code : 1,
+					stdout: isString(failed.stdout) ? failed.stdout : "",
+					stderr: isString(failed.stderr) ? failed.stderr : error instanceof Error ? error.message : String(error),
+					code: isNumber(failed.code) ? failed.code : 1,
 					killed: failed.killed === true,
 				};
 			}

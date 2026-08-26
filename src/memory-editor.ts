@@ -15,7 +15,7 @@
  * Triggered via `/sumo:memory` (or `/sumo:memory edit`).
  */
 
-import type { Component, KeybindingsManager, OverlayHandle, OverlayOptions, TUI } from "@earendil-works/pi-tui";
+import type { Component, OverlayHandle, OverlayOptions, TUI } from "@earendil-works/pi-tui";
 import { matchesKey, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
@@ -402,12 +402,13 @@ export async function showMemoryEditor(
 	};
 
 	await ctx.ui.custom<void>(
-		(tui: TUI, _theme: unknown, _kb: KeybindingsManager, done: () => void) => new MemoryEditorComponent(initial, {
-			client,
-			notify: (message, level) => ctx.ui.notify(message, level ?? "info"),
-			invalidate: () => tui.requestRender(),
-			close: () => done(),
-		}),
+		(_tui: TUI, _theme, _kb, done: () => void) =>
+			new MemoryEditorComponent(initial, {
+				client,
+				notify: (message, level) => ctx.ui.notify(message, level ?? "info"),
+				invalidate: () => _tui.requestRender(),
+				close: () => done(),
+			}),
 		{
 			overlay: true,
 			overlayOptions: MEMORY_EDITOR_OVERLAY_OPTIONS,

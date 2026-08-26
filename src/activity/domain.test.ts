@@ -145,6 +145,7 @@ describe("Activity domain", () => {
 	});
 
 	it("renders cyclic and huge values safely while redacting secret-shaped fields", () => {
+		// oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type, anti-slop/no-known-value-widening -- the cyclic fixture is intentionally an open record for the preview traversal.
 		const cyclic: Record<string, unknown> = {
 			apiKey: "top-secret",
 			"x-api-key": "header-api-nope",
@@ -185,8 +186,11 @@ describe("Activity domain", () => {
 	});
 
 	it("bounds global nodes, value characters, and oversized object keys incrementally", () => {
+		// SAFETY: the loop below rebuilds `deep` as nested wrapper objects; its static type must stay open.
+		// oxlint-disable anti-slop/no-known-value-widening -- the nesting depth is only known at runtime.
 		let deep: unknown = { value: "visible" };
 		for (let index = 0; index < 10_000; index += 1) deep = { next: deep };
+		// oxlint-enable anti-slop/no-known-value-widening
 		const hugeKey = `${"x".repeat(100_000)}token`;
 		const preview = safeValuePreview({ [hugeKey]: "must-not-leak", deep }, {
 			maxChars: 200,

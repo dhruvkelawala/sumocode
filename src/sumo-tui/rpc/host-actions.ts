@@ -43,6 +43,8 @@ import {
 	withoutLovelyWebApiKeys,
 	writeLovelyWebPatch,
 	type LovelyWebConfigKey,
+	type LovelyWebConfigObject,
+	type LovelyWebConfigValue,
 	type LovelyWebConfigScope,
 } from "./lovely-web-config.js";
 import type { InlineSelectorHost, InlineSelectorItem, InlineSelectorTab } from "./inline-selector.js";
@@ -142,6 +144,12 @@ export interface RpcHostActionsOptions {
 
 const FALLBACK_THINKING_LEVELS: readonly RpcThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
+function isRpcThinkingLevel(value: string): value is RpcThinkingLevel {
+	// SAFETY: FALLBACK_THINKING_LEVELS only holds RpcThinkingLevel literals,
+	// so widening the array to readonly string[] loses nothing.
+	return (FALLBACK_THINKING_LEVELS as readonly string[]).includes(value);
+}
+
 export const RPC_HOST_SLASH_COMMANDS: readonly RpcHostSlashCommand[] = Object.freeze([
 	{ name: "settings", description: "Open RPC settings" },
 	{ name: "login", description: "Configure provider authentication" },
@@ -176,12 +184,47 @@ export function isRpcHostSlashCommandName(name: string): boolean {
 	return RPC_HOST_SLASH_COMMAND_NAMES.has(normalizeCommandName(name));
 }
 
+function isLovelyWebConfigObject(value: LovelyWebConfigValue | undefined): value is LovelyWebConfigObject {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Writable mirror of RpcTreeNavigationRequest for incremental construction. */
+type RpcTreeNavigationRequestMutable = {
+	-readonly [K in keyof RpcTreeNavigationRequest]: RpcTreeNavigationRequest[K];
+};
+
+type WithGetEntries = Pick<RpcHostControls, "getEntries"> & {
+	getEntries: NonNullable<RpcHostControls["getEntries"]>;
+};
+
+function hasGetEntries(controls: Pick<RpcHostControls, "getEntries">): controls is WithGetEntries {
+	return typeof controls.getEntries === "function";
+}
+
+const MERMAID_RENDERING_MODES: readonly MermaidRenderingMode[] = ["off", "final", "streaming"];
+
+function isMermaidRenderingMode(value: string): value is MermaidRenderingMode {
+	// SAFETY: MERMAID_RENDERING_MODES only holds MermaidRenderingMode literals,
+	// so widening the array to readonly string[] loses nothing.
+	return (MERMAID_RENDERING_MODES as readonly string[]).includes(value);
+}
+
 function notify(notifications: HostNotifications, message: string, level: NotificationLevel = "info"): void {
 	notifications.notify(message, level);
 }
 
-function scopedValueDescription(scopeValue: unknown, effectiveValue: unknown): string {
-	return scopeValue === undefined ? `${String(effectiveValue)} (inherited)` : String(scopeValue);
+function isConfigScalar(value: LovelyWebConfigValue): value is string | number | boolean | null | undefined {
+	return !Array.isArray(value) && !isLovelyWebConfigObject(value);
+}
+
+function scopedValueLabel(value: LovelyWebConfigValue): string {
+	if (!isConfigScalar(value)) return JSON.stringify(value);
+	if (value === undefined || value === null) return "";
+	return String(value);
+}
+
+function scopedValueDescription(scopeValue: LovelyWebConfigValue, effectiveValue: LovelyWebConfigValue): string {
+	return scopeValue === undefined ? `${scopedValueLabel(effectiveValue)} (inherited)` : scopedValueLabel(scopeValue);
 }
 
 function modelSelectorItem(model: RpcModelOption): InlineSelectorItem {
@@ -202,7 +245,13 @@ function parseModelLabel(label: string): { provider: string; id: string } | unde
 	return { provider: cleaned.slice(0, slash), id: cleaned.slice(slash + 1) };
 }
 
-function firstArg(input: string): { command: string; args: string } {
+/** Split a raw slash-command input into its command word and argument tail. */
+interface ParsedCommandInput {
+	command: string;
+	args: string;
+}
+
+function firstArg(input: string): ParsedCommandInput {
 	const trimmed = input.trim();
 	const match = /^(\S+)(?:\s+([\s\S]*))?$/.exec(trimmed);
 	return { command: match?.[1]?.toLowerCase() ?? "", args: match?.[2] ?? "" };
@@ -771,8 +820,9 @@ export class RpcHostActions {
 		else if (selected === "Enable auto retry") await this.setAutoRetry(true);
 		else if (selected === "Disable auto retry") await this.setAutoRetry(false);
 		else if (selected?.startsWith("mermaid:")) {
-			const mode = selected.slice("mermaid:".length) as MermaidRenderingMode;
-			this.setMermaidRenderingMode(mode);
+			const modeText = selected.slice("mermaid:".length);
+			if (!isMermaidRenderingMode(modeText)) return;
+			this.setMermaidRenderingMode(modeText);
 			this.onRenderRequest();
 		}
 	}
@@ -840,6 +890,7 @@ export class RpcHostActions {
 	}
 
 	private lovelyWebApiKeyItems(value: { readonly firecrawlApiKey: string; readonly exaApiKey: string; readonly tavilyApiKey: string; readonly braveApiKey: string }): InlineSelectorItem[] {
+		// SAFETY: LOVELY_WEB_API_KEY_FIELDS maps provider names to config keys.
 		return (Object.entries(LOVELY_WEB_API_KEY_FIELDS) as Array<[string, LovelyWebConfigKey]>).map(([provider, key]) => ({
 			value: `apiKey:${provider}`,
 			label: `${provider} API key`,
@@ -895,6 +946,8 @@ export class RpcHostActions {
 			notify(this.notifications, "Lovely Web API keys are user-only", "warning");
 			return;
 		}
+		// SAFETY: LOVELY_WEB_API_KEY_FIELDS is keyed by provider name; an
+		// unknown provider yields undefined and the caller returns early below.
 		const key = LOVELY_WEB_API_KEY_FIELDS[provider as keyof typeof LOVELY_WEB_API_KEY_FIELDS];
 		if (!key) {
 			notify(this.notifications, `unknown Lovely Web provider: ${provider}`, "warning");
@@ -910,24 +963,28 @@ export class RpcHostActions {
 		const safePatch = withoutLovelyWebApiKeys(patch);
 		const edited = await this.modals.editor(`Lovely Web ${scope} JSON`, `${JSON.stringify(safePatch, null, 2)}\n`);
 		if (edited === undefined) return;
-		let parsed: unknown;
+		let parsed: LovelyWebConfigValue | undefined;
 		try {
-			parsed = JSON.parse(edited);
+			// SAFETY: the raw editor text is untyped JSON by definition; the
+			// shape is validated immediately below before any field access.
+			parsed = JSON.parse(edited) as LovelyWebConfigValue;
 		} catch (error) {
 			notify(this.notifications, `invalid Lovely Web JSON: ${error instanceof Error ? error.message : String(error)}`, "error");
 			return;
 		}
-		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+		if (!isLovelyWebConfigObject(parsed)) {
 			notify(this.notifications, "invalid Lovely Web JSON: expected an object", "error");
 			return;
 		}
-		const editedPatch = withoutLovelyWebApiKeys(parsed as Record<string, unknown>);
+		// SAFETY: the guards above prove parsed is a non-null, non-array object;
+		// field-level validation happens in withoutLovelyWebApiKeys' normalizer.
+		const editedPatch = withoutLovelyWebApiKeys(parsed);
 		const preservedSecrets = scope === "user" ? lovelyWebApiKeyPatch(patch) : {};
 		const path = writeLovelyWebPatch(scope, cwd, { ...editedPatch, ...preservedSecrets });
 		this.notifyLovelyWebSaved(path);
 	}
 
-	private saveLovelyWebValue(scope: LovelyWebConfigScope, cwd: string, key: LovelyWebConfigKey, value: unknown): void {
+	private saveLovelyWebValue(scope: LovelyWebConfigScope, cwd: string, key: LovelyWebConfigKey, value: LovelyWebConfigValue): void {
 		const path = updateLovelyWebConfigValue(scope, cwd, key, value);
 		this.notifyLovelyWebSaved(path);
 	}
@@ -1037,7 +1094,7 @@ export class RpcHostActions {
 			notify(this.notifications, "branch summary in progress", "warning");
 			return;
 		}
-		if (typeof (this.controls as unknown as { getEntries?: unknown }).getEntries !== "function") {
+		if (!hasGetEntries(this.controls)) {
 			notify(this.notifications, "session tree unavailable", "warning");
 			return;
 		}
@@ -1088,12 +1145,12 @@ export class RpcHostActions {
 				if (customInstructions !== undefined) break;
 			}
 			if (summaryChoice === undefined) continue;
-			const request: RpcTreeNavigationRequest = {
+			const request: RpcTreeNavigationRequestMutable = {
 				requestId: randomUUID(),
 				targetId: selected,
 				summarize: summaryChoice !== "No summary",
-				...(customInstructions === undefined ? {} : { customInstructions }),
 			};
+			if (customInstructions !== undefined) request.customInstructions = customInstructions;
 			try {
 				validateRpcTreeNavigationRequest(request);
 			} catch {
@@ -1269,7 +1326,12 @@ export class RpcHostActions {
 	}
 
 	private async setThinkingFromText(value: string): Promise<void> {
-		const level = value.trim().toLowerCase() as RpcThinkingLevel;
+		const levelText = value.trim().toLowerCase();
+		if (!isRpcThinkingLevel(levelText)) {
+			notify(this.notifications, `unknown thinking level: ${value}`, "warning");
+			return;
+		}
+		const level = levelText;
 		const levels = await this.availableThinkingLevels();
 		if (!levels.includes(level)) {
 			notify(this.notifications, `unknown thinking level: ${value}`, "warning");

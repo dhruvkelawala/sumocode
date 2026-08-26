@@ -14,13 +14,13 @@ import type { ToolCallViewModel, ToolStatus } from "./view-model.js";
 const LEGACY_TOOL_IDS = new WeakMap<object, string>();
 let nextLegacyToolId = 1;
 
-const ACTIVITY_STATUS: Record<ToolStatus, ActivityStatus> = {
+const ACTIVITY_STATUS = {
 	pending: "queued",
 	running: "running",
 	success: "succeeded",
 	error: "failed",
 	cancelled: "cancelled",
-};
+} satisfies Record<ToolStatus, ActivityStatus>;
 
 function legacyToolId(tool: ToolCallViewModel): string {
 	if (tool.id) return tool.id;

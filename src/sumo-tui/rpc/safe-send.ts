@@ -1,7 +1,7 @@
 import type { NotificationLevel } from "../widgets/notification.js";
 
 export interface ErrorNotifier {
-	notify(message: string, level?: NotificationLevel): unknown;
+	notify(message: string, level?: NotificationLevel): void;
 }
 
 export interface NotifyOnErrorOptions {
@@ -9,8 +9,8 @@ export interface NotifyOnErrorOptions {
 	readonly level?: NotificationLevel;
 }
 
-function errorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
+function errorMessage(cause: unknown): string {
+	return cause instanceof Error ? cause.message : String(cause);
 }
 
 export async function notifyOnError(
@@ -20,7 +20,7 @@ export async function notifyOnError(
 ): Promise<void> {
 	try {
 		await action();
-	} catch (error) {
-		notifier.notify(`${options.prefix ?? "rpc error"}: ${errorMessage(error)}`, options.level ?? "warning");
+	} catch (cause) {
+		notifier.notify(`${options.prefix ?? "rpc error"}: ${errorMessage(cause)}`, options.level ?? "warning");
 	}
 }

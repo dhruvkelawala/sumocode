@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ModalManager } from "./modal.js";
 
+// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for ANSI stripping assertions
 const ANSI_PATTERN = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\)|_[^\u0007]*(?:\u0007|\u001b\\))/g;
 
 function stripAnsi(text: string): string {

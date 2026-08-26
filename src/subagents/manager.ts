@@ -97,26 +97,30 @@ const makeInitialSnapshot = (
 	cwd = task.cwd,
 	worktree?: SubagentWorktreeRef,
 	sessionFilePath?: string,
-): SubagentSnapshot => ({
-	id,
-	...(task.sourceId ? { sourceId: task.sourceId } : {}),
-	title: task.title,
-	prompt: task.prompt,
-	cwd,
-	baseRef,
-	worktree,
-	...(task.visible ? { visible: true } : {}),
-	status: "running",
-	createdAt,
-	modelLabel: task.model ?? (task.inherited?.model ? `${task.inherited.model.provider}/${task.inherited.model.id}` : undefined),
-	thinkingLabel: task.thinking ?? task.inherited?.thinking,
-	sessionFilePath,
-	usage: { turns: 0 },
-	transcript: [],
-	liveText: "",
-	liveTools: [],
-	finalText: "",
-});
+): SubagentSnapshot => {
+	type MutableSnapshot = { -readonly [K in keyof SubagentSnapshot]: SubagentSnapshot[K] };
+	const snapshot: MutableSnapshot = {
+		id,
+		title: task.title,
+		prompt: task.prompt,
+		cwd,
+		baseRef,
+		worktree,
+		status: "running",
+		createdAt,
+		modelLabel: task.model ?? (task.inherited?.model ? `${task.inherited.model.provider}/${task.inherited.model.id}` : undefined),
+		thinkingLabel: task.thinking ?? task.inherited?.thinking,
+		sessionFilePath,
+		usage: { turns: 0 },
+		transcript: [],
+		liveText: "",
+		liveTools: [],
+		finalText: "",
+	};
+	if (task.sourceId !== undefined) snapshot.sourceId = task.sourceId;
+	if (task.visible) snapshot.visible = true;
+	return snapshot;
+};
 
 const upsertTool = (tools: readonly LiveToolState[], next: LiveToolState): readonly LiveToolState[] => {
 	const index = tools.findIndex((tool) => tool.id === next.id);
@@ -451,7 +455,7 @@ export class SubagentManager {
 
 	private consumeEvents(id: string, events: SpawnedChild["events"]): void {
 		const emit = (event: SubagentEvent) => this.fold(id, event);
-		if (typeof events === "function") {
+		if (!(Symbol.asyncIterator in events)) {
 			events(emit);
 			return;
 		}
@@ -593,6 +597,7 @@ export class SubagentManager {
 	}
 
 	private waitForSettle(id: string, timeoutMs: number): Promise<void> {
+		// SAFETY: settled snapshots are always stored complete; only transient maps can miss the id.
 		if (isSettled(this.snapshots.get(id) as SubagentSnapshot)) return Promise.resolve();
 		return new Promise((resolve, reject) => {
 			const timeout = setTimeout(() => {

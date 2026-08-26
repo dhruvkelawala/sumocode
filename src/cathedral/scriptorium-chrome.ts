@@ -26,6 +26,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { activeThemeColors } from "../themes/index.js";
 
 export const RESET = "\u001b[0m";
+// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for terminal control sequences
 export const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 
 export const TITLE_FLOWER = "\u273E";
@@ -61,6 +62,7 @@ export function fg(text: string, hex: string): string {
  */
 export function persistentBg(text: string, fgHex: string, bgHex: string): string {
 	const style = `${sgr(fgHex, 38)}${sgr(bgHex, 48)}`;
+	// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for terminal control sequences
 	return `${style}${text.replace(/\u001b\[0m/g, `${RESET}${style}`)}${RESET}`;
 }
 

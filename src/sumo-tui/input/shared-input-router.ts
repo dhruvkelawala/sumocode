@@ -40,7 +40,9 @@ interface MouseInputDiagnosticsFields {
 	readonly leftoverHex: string;
 }
 
+// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for ANSI input parsing
 const COMPLETE_SGR_MOUSE_SEQUENCE = /\x1b\[<\d+;\d+;\d+[Mm]/g;
+// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for ANSI input parsing
 const BRACKETED_PASTE_BLOCK_PATTERN = /\x1b\[200~[\s\S]*?\x1b\[201~/g;
 // CSI (`ESC [ ... final-byte`) and SS3 (`ESC O <letter>`) sequences are single
 // discrete key events. This mirrors pi-tui's Kitty CSI-u / arrow / func /
@@ -50,6 +52,7 @@ const BRACKETED_PASTE_BLOCK_PATTERN = /\x1b\[200~[\s\S]*?\x1b\[201~/g;
 // `:3u`/`:3~`/`:3<letter>` substrings on its input — is only ever asked about
 // one key event at a time, never a coalesced chunk that also contains an
 // unrelated press.
+// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for ANSI input parsing
 const CSI_OR_SS3_SEQUENCE_PATTERN = /\x1b(?:\[[0-9;:]*[A-Za-z~]|O[A-Za-z])/g;
 
 /**
@@ -118,6 +121,7 @@ const BARE_ESCAPE_DISPATCH_DELAY_MS = 25;
  * The terminating M / m is intentionally absent because that would be a
  * complete sequence. Anchored to end-of-string only.
  */
+// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for ANSI input parsing
 const SGR_MOUSE_PREFIX_TAIL_PATTERN = /(?:\x1b(?:\[(?:<\d*(?:;\d*){0,2})?)?)$/;
 
 function toHex(value: string): string {
@@ -287,6 +291,7 @@ export class SharedInputRouter {
 			}
 
 			if (nextData.includes("\x1b[<")) {
+				// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for ANSI input parsing
 				const stripped = nextData.replace(/\x1b\[<[\d;]*[Mm]?/g, "");
 				if (stripped !== nextData) {
 					nextData = stripped;

@@ -23,6 +23,7 @@ export const CSI_U_SHIFT_ENTER = "\x1b[13;2u";
  */
 export function countLegacyModifierEnterPresses(data: string): number {
 	if (data === "\n") return 1; // ctrl+j
+	// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for terminal control sequences
 	if (/^(?:\x1b[\r\n])+$/.test(data)) return data.length / 2;
 	return 0;
 }
@@ -46,6 +47,7 @@ export function normalizeRawMultilinePasteInput(data: string): string {
 	// because the paste content is what we actually need to normalize.
 	// CSI u modifier-Enter sequences such as `\x1b[13;2u` already do not
 	// contain CR, so they are unaffected by the rewrite below.
+	// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for terminal control sequences
 	if (/^(?:\x1b[\r\n])+$/.test(data)) return data;
 	return data.replace(/\r\n?/g, "\n");
 }

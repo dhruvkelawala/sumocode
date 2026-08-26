@@ -8,14 +8,14 @@ import { latestText, type SubagentSnapshot } from "./domain.js";
 import { type AtCapacityDetails, SubagentManager } from "./manager.js";
 import { formatCompletionManifestSummary, SUBAGENT_PROMPT_GUIDELINES, SUBAGENT_PROMPT_SNIPPET, SUBAGENT_TOOL_DESCRIPTIONS } from "./prompt.js";
 
-const StringEnum = <T extends readonly string[]>(values: T, options?: { description?: string }) =>
-	Type.Unsafe<T[number]>({
-		type: "string",
-		enum: [...values],
-		...(options?.description ? { description: options.description } : {}),
-	});
+const StringEnum = <T extends readonly string[]>(values: T, options?: { description?: string }) => {
+	const schema = { type: "string" as const, enum: [...values] };
+	return Type.Unsafe<T[number]>(
+		options?.description ? { ...schema, description: options.description } : schema,
+	);
+};
 
-const makeToolResult = (text: string, details?: unknown) => ({ content: [{ type: "text" as const, text }], details });
+const makeToolResult = <T>(text: string, details?: T) => ({ content: [{ type: "text" as const, text }], details });
 
 const activityEnvelope = (snapshot: SubagentSnapshot, sourceId?: string) => {
 	const activity = activityFromSubagentSnapshot(snapshot);
@@ -42,13 +42,24 @@ const trimLines = (text: string, maxChars: number, maxLines: number): string => 
 };
 
 /** Cancellation details expose bounded identity/status, never raw transcripts. */
-const cancellationMetadata = (snapshot: SubagentSnapshot) => ({
-	id: snapshot.id,
-	title: trimLines(snapshot.title, 256, 1),
-	status: snapshot.status,
-	createdAt: snapshot.createdAt,
-	...(snapshot.settledAt === undefined ? {} : { settledAt: snapshot.settledAt }),
-});
+interface CancellationMetadata {
+	id: string;
+	title: string;
+	status: SubagentSnapshot["status"];
+	createdAt: number;
+	settledAt?: number;
+}
+
+const cancellationMetadata = (snapshot: SubagentSnapshot): CancellationMetadata => {
+	const meta: CancellationMetadata = {
+		id: snapshot.id,
+		title: trimLines(snapshot.title, 256, 1),
+		status: snapshot.status,
+		createdAt: snapshot.createdAt,
+	};
+	if (snapshot.settledAt !== undefined) meta.settledAt = snapshot.settledAt;
+	return meta;
+};
 
 const formatDuration = (ms: number): string => {
 	const seconds = Math.max(0, Math.round(ms / 1000));

@@ -25,7 +25,9 @@ import { sessionHasMessages as cachedSessionHasMessages } from "./session-cache.
 import { activeThemeColors } from "./themes/index.js";
 
 const RESET = "\u001b[0m";
+// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for ANSI parsing
 const ANSI_PATTERN = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\))/g;
+// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for cursor show/hide
 const CURSOR_VISIBILITY_PATTERN = /\u001b\[\?25[lh]/g;
 
 function fg(hex: string): string {
@@ -62,8 +64,12 @@ function center(line: string, width: number): string {
  * and 5 rows tall. Stored uncolored; the renderer applies the cathedral
  * accent at output time.
  */
+interface WordmarkGlyphTable {
+	readonly [key: string]: readonly string[];
+}
+
 export const SUMOCODE_WORDMARK: readonly string[] = (() => {
-	const glyphs: Record<string, readonly string[]> = {
+	const glyphs: WordmarkGlyphTable = {
 		S: ["█████ ", "█     ", "█████ ", "    █ ", "█████ "],
 		U: ["█   █ ", "█   █ ", "█   █ ", "█   █ ", "█████ "],
 		M: ["█   █ ", "██ ██ ", "█ █ █ ", "█   █ ", "█   █ "],

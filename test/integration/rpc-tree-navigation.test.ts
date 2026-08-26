@@ -5,19 +5,40 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it } from "vitest";
 
+interface RpcEntry {
+	readonly id: string;
+}
+
+interface RpcData {
+	readonly sessionId?: string;
+	readonly sessionFile?: string;
+	readonly leafId?: string | null;
+	readonly entries?: readonly RpcEntry[];
+	readonly messages?: readonly unknown[];
+}
+
 interface RpcValue {
 	readonly id?: string;
 	readonly type?: string;
 	readonly method?: string;
 	readonly statusKey?: string;
 	readonly statusText?: string;
-	readonly [key: string]: unknown;
+	readonly success?: boolean;
+	readonly command?: string;
+	readonly data?: RpcData;
+}
+
+interface RpcCommand {
+	readonly type: string;
+	readonly message?: string;
+	readonly since?: string;
+	readonly entryId?: string;
 }
 
 interface RpcClient {
 	readonly child: ChildProcessWithoutNullStreams;
 	readonly events: readonly RpcValue[];
-	request(command: Record<string, unknown>): Promise<RpcValue>;
+	request(command: RpcCommand): Promise<RpcValue>;
 	waitForOutcome(): Promise<RpcValue>;
 }
 
@@ -34,6 +55,10 @@ function isolatedChildEnv(agentDir: string, evidence: string, diagFile?: string)
 	for (const key of ["SUMO_TUI_DIAG_FILE", "SUMOCODE_TASK_DIAG_FILE", "SUMOCODE_TASK_RESPONSE_FILE", "SUMOCODE_TASK_EXIT_FILE", "SUMOCODE_TASK_STARTED_FILE"]) delete env[key];
 	if (diagFile !== undefined) env.SUMO_TUI_DIAG_FILE = diagFile;
 	return env;
+}
+
+function isString(value: string | undefined): value is string {
+	return typeof value === "string";
 }
 
 function waitForExit(child: ChildProcessWithoutNullStreams): Promise<void> {
@@ -105,6 +130,8 @@ function launch(extension: string, fauxProvider: string, hook: string, sessionFi
 	const outcomeWaiters: Array<{ resolve(value: RpcValue): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }> = [];
 	let sequence = 0;
 	createInterface({ input: child.stdout }).on("line", (line) => {
+		// SAFETY: every RPC reply frame is a JSON object; the known fields are
+		// optional so unrelated frames simply fall through the guards below.
 		const value = JSON.parse(line) as RpcValue;
 		if (value.type === "extension_ui_request" && value.method === "setStatus" && value.statusKey === "sumocode.rpc-tree-navigation-result") {
 			const waiter = outcomeWaiters.shift();
@@ -114,7 +141,7 @@ function launch(extension: string, fauxProvider: string, hook: string, sessionFi
 			} else outcomes.push(value);
 			return;
 		}
-		if (value.type === "extension_ui_request" && typeof value.id === "string") {
+		if (value.type === "extension_ui_request" && isString(value.id)) {
 			child.stdin.write(`${JSON.stringify({ type: "extension_ui_response", id: value.id, cancelled: true })}\n`);
 			return;
 		}
@@ -185,13 +212,14 @@ describe("real Pi RPC tree navigation bridge", () => {
 		expect(initial.success).toBe(true);
 		expect(initial.data).toMatchObject({ sessionId, sessionFile });
 		const beforeEntries = await client.request({ type: "get_entries" });
-		const beforeLeaf = (beforeEntries.data as { leafId: string }).leafId;
-
+		const beforeLeaf = beforeEntries.data?.leafId;
 		const payload = Buffer.from(JSON.stringify({ requestId, targetId: "tree-user", summarize: false }), "utf8").toString("base64url");
 		const prompt = client.request({ type: "prompt", message: `/sumo:rpc-tree-navigate ${payload}` });
 		const outcome = client.waitForOutcome();
 		expect(await prompt).toMatchObject({ type: "response", command: "prompt", success: true });
 		expect(await outcome).toMatchObject({ statusKey: "sumocode.rpc-tree-navigation-result" });
+		// SAFETY: the outcome statusText is a base64url JSON payload produced by
+		// the tree-navigation command; the fields below are asserted immediately after.
 		const outcomePayload = JSON.parse(Buffer.from((await outcome).statusText!, "base64url").toString("utf8")) as { status: string; leafId: string | null; editorText?: string };
 		expect(outcomePayload).toMatchObject({ status: "committed", leafId: null, editorText: "selected prompt" });
 
@@ -199,10 +227,14 @@ describe("real Pi RPC tree navigation bridge", () => {
 		const afterEntries = await client.request({ type: "get_entries" });
 		const afterMessages = await client.request({ type: "get_messages" });
 		expect(after.data).toMatchObject({ sessionId, sessionFile });
-		expect((afterEntries.data as { leafId: string | null }).leafId).not.toBe(beforeLeaf);
+		expect(afterEntries.data?.leafId).not.toBe(beforeLeaf);
 		expect(afterMessages.data).toEqual({ messages: [] });
 		expect(JSON.stringify(after)).not.toContain("extension_error");
-		const evidenceLines = (await readFile(evidence, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as { type: string; targetId?: string; summarize?: boolean; customInstructions?: string | null; oldLeafId?: string; newLeafId?: string });
+		const evidenceLines = (await readFile(evidence, "utf8")).trim().split("\n").filter(Boolean).map((line) =>
+			// SAFETY: the tree hook evidence file is JSONL written by the fixture
+			// extension with exactly the fields asserted below.
+			JSON.parse(line) as { type: string; targetId?: string; summarize?: boolean; customInstructions?: string | null; oldLeafId?: string; newLeafId?: string },
+		);
 		expect(evidenceLines.map((line) => line.type)).toEqual(["install", "session_before_tree", "session_tree"]);
 		expect(evidenceLines[1]).toMatchObject({ targetId: "tree-user", summarize: false, customInstructions: null });
 		expect(evidenceLines[2]?.oldLeafId).toEqual(expect.any(String));
@@ -226,10 +258,12 @@ describe("real Pi RPC tree navigation bridge", () => {
 		const invoke = async (targetId: string, summarize: boolean, customInstructions?: string) => {
 			invocation += 1;
 			const navigationRequestId = `019f8a78-b4f5-7b7b-b774-2d2e4bce${String(910 + invocation).padStart(4, "0")}`;
-			const payload = Buffer.from(JSON.stringify({ requestId: navigationRequestId, targetId, summarize, ...(customInstructions === undefined ? {} : { customInstructions }) }), "utf8").toString("base64url");
+			const payload = Buffer.from(JSON.stringify({ requestId: navigationRequestId, targetId, summarize, ...(customInstructions === undefined && { customInstructions }) }), "utf8").toString("base64url");
 			const prompt = client.request({ type: "prompt", message: `/sumo:rpc-tree-navigate ${payload}` });
 			const outcomePromise = client.waitForOutcome();
 			expect(await prompt).toMatchObject({ type: "response", command: "prompt", success: true });
+			// SAFETY: the outcome statusText is a base64url JSON payload produced by
+			// the tree-navigation command; the fields below are asserted immediately after.
 			return JSON.parse(Buffer.from((await outcomePromise).statusText!, "base64url").toString("utf8")) as { status: string; leafId: string | null };
 		};
 
@@ -248,9 +282,15 @@ describe("real Pi RPC tree navigation bridge", () => {
 		expect(veto.status).toBe("cancelled");
 		const afterVeto = await client.request({ type: "get_entries" });
 		const afterVetoMessages = await client.request({ type: "get_messages" });
+		// SAFETY: get_entries replies always carry leafId; the tests below compare
+		// pre/post veto leaves for identity, never assuming a specific value.
 		expect((afterVeto.data as { leafId: string | null }).leafId).toBe((beforeVeto.data as { leafId: string | null }).leafId);
 		expect(afterVetoMessages.data).toEqual(beforeVetoMessages.data);
-		const evidenceLines = (await readFile(evidence, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as { type: string; targetId?: string; summarize?: boolean; customInstructions?: string | null });
+		const evidenceLines = (await readFile(evidence, "utf8")).trim().split("\n").filter(Boolean).map((line) =>
+			// SAFETY: the tree hook evidence file is JSONL written by the fixture
+			// extension with exactly the fields asserted below.
+			JSON.parse(line) as { type: string; targetId?: string; summarize?: boolean; customInstructions?: string | null },
+		);
 		const treeHooks = evidenceLines.filter((line) => line.type === "session_before_tree");
 		expect(treeHooks.map((line) => ({ targetId: line.targetId, summarize: line.summarize, customInstructions: line.customInstructions }))).toEqual([
 			{ targetId: "tree-user", summarize: true, customInstructions: null },
@@ -277,7 +317,7 @@ describe("real Pi RPC tree navigation bridge", () => {
 		const client = launch(resolve(process.cwd(), "src/extension.ts"), resolve(process.cwd(), "scripts/visual-v2/runtime-faux-provider.mjs"), hook, sessionFile, agentDir, evidence);
 		const beforeState = await client.request({ type: "get_state" });
 		const beforeEntries = await client.request({ type: "get_entries" });
-		const beforeLeaf = (beforeEntries.data as { leafId: string | null }).leafId;
+		const beforeLeaf = beforeEntries.data?.leafId;
 		const beforeMessages = await client.request({ type: "get_messages" });
 		const payload = Buffer.from(JSON.stringify({ requestId, targetId: "long-5999", summarize: false }), "utf8").toString("base64url");
 		const prompt = client.request({ type: "prompt", message: `/sumo:rpc-tree-navigate ${payload}` });
@@ -289,11 +329,11 @@ describe("real Pi RPC tree navigation bridge", () => {
 		const afterState = await client.request({ type: "get_state" });
 		const afterEntries = await client.request({ type: "get_entries" });
 		expect(afterState.data).toMatchObject({ sessionId, sessionFile });
-		expect((afterEntries.data as { leafId: string | null }).leafId).not.toBe(beforeLeaf);
+		expect(afterEntries.data?.leafId).not.toBe(beforeLeaf);
 		const afterMessages = await client.request({ type: "get_messages" });
 		expect(JSON.stringify(afterMessages.data)).toContain("long prompt 0");
 		expect(JSON.stringify(afterMessages.data)).not.toBe(JSON.stringify(beforeMessages.data));
-		const persistedLastId = ((afterEntries.data as { entries: Array<{ id: string }> }).entries.at(-1)?.id);
+		const persistedLastId = afterEntries.data?.entries.at(-1)?.id;
 		expect(persistedLastId).toEqual(expect.any(String));
 		const delta = await client.request({ type: "get_entries", since: persistedLastId });
 		expect(delta.data).toMatchObject({ entries: [], leafId: "long-5999" });
@@ -317,9 +357,16 @@ describe("real Pi RPC tree navigation bridge", () => {
 		const response = await client.request({ type: "fork", entryId: "tree-user" });
 		expect(response).toMatchObject({ type: "response", command: "fork", success: true });
 		const after = await client.request({ type: "get_state" });
+		// SAFETY: fork replies carry a replacement session identity; the assertions
+		// below only compare pre/post values for inequality.
 		expect((after.data as { sessionId: string; sessionFile: string }).sessionId).not.toBe((before.data as { sessionId: string }).sessionId);
+		// SAFETY: fork replies carry a replacement session file; the assertion
+		// below only compares pre/post values for inequality.
 		expect((after.data as { sessionFile: string }).sessionFile).not.toBe((before.data as { sessionFile: string }).sessionFile);
-		const forkEvidence = (await readFile(evidence, "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line) as { type: string });
+		const forkEvidence = (await readFile(evidence, "utf8")).split("\n").filter(Boolean).map((line) =>
+			// SAFETY: the tree hook evidence file is JSONL written by the fixture extension.
+			JSON.parse(line) as { type: string },
+		);
 		expect(forkEvidence.filter((line) => line.type === "session_before_tree" || line.type === "session_tree")).toEqual([]);
 		expect(forkEvidence.filter((line) => line.type === "install")).toHaveLength(2);
 		expect(client.events.some((event) => event.type === "extension_error")).toBe(false);

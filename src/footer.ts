@@ -336,24 +336,31 @@ function getThinkingLevel(pi: ExtensionAPI, ctx: ExtensionContext): ThinkingLeve
 	// to "medium" because that property doesn't exist on ctx. This call site
 	// fixes the lookup to use `pi.getThinkingLevel()`.
 	try {
+		// SAFETY: duck-typed capability probe for optional Pi API across supported versions; typeof guard verifies callability before use.
 		const piGetter = (pi as { getThinkingLevel?: () => ThinkingLevel }).getThinkingLevel;
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- capability probe for optional Pi API across supported versions
 		if (typeof piGetter === "function") return piGetter.call(pi);
 	} catch {
 		// fall through
 	}
 	// Legacy probe (kept so older Pi versions / mocked contexts still work).
 	try {
+		// SAFETY: duck-typed capability probe for optional Pi API across supported versions; typeof guard verifies callability before use.
 		const ctxGetter = (ctx as { getThinkingLevel?: () => ThinkingLevel }).getThinkingLevel;
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- capability probe for optional Pi API across supported versions
 		if (typeof ctxGetter === "function") return ctxGetter.call(ctx);
 	} catch {
 		// fall through
 	}
+	// SAFETY: final fallback read of an optional field that older Pi contexts expose.
 	return safeRead(() => (ctx as { thinkingLevel?: ThinkingLevel }).thinkingLevel, undefined) ?? "medium";
 }
 
 function getContextTokens(ctx: ExtensionContext, usage: Usage): number {
 	try {
+		// SAFETY: duck-typed capability probe; every read is guarded below.
 		const contextUsage = (ctx as { getContextUsage?: () => { tokens?: number } | undefined }).getContextUsage?.();
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- numeric guard on an optional Pi usage hook
 		if (typeof contextUsage?.tokens === "number") return contextUsage.tokens;
 	} catch {
 		// fall through
@@ -363,7 +370,9 @@ function getContextTokens(ctx: ExtensionContext, usage: Usage): number {
 
 function getContextWindow(ctx: ExtensionContext): number {
 	try {
+		// SAFETY: duck-typed capability probe; every read is guarded below.
 		const contextUsage = (ctx as { getContextUsage?: () => { contextWindow?: number } | undefined }).getContextUsage?.();
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- numeric guard on an optional Pi usage hook
 		if (typeof contextUsage?.contextWindow === "number") return contextUsage.contextWindow;
 	} catch {
 		// fall through

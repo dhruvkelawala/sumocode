@@ -105,7 +105,13 @@ export type TerminalTaskChangeListener = (snapshot: TerminalTaskSnapshot) => voi
 export type TerminalTaskSnapshotListener = (snapshots: readonly TerminalTaskSnapshot[]) => void;
 
 function normalizePositive(value: number | undefined, fallback: number): number {
-	return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+	return value !== undefined && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+}
+
+/** Compare a Node rejection's errno without unwrapping arbitrary payloads. */
+function errnoIs(error: Error, code: string): boolean {
+	// SAFETY: the fs helpers here reject with NodeJS.ErrnoException whose optional `code` carries the errno string.
+	return (error as NodeJS.ErrnoException).code === code;
 }
 
 function taskPaths(store: TerminalTaskStore, id: string, createdAt: number) {
@@ -160,9 +166,11 @@ function readExitCode(store: TerminalTaskStore, path: string): number | undefine
 
 function immutableTerminalSnapshot(snapshot: TerminalTaskSnapshot): TerminalTaskSnapshot {
 	const clone = structuredClone(snapshot);
-	const freeze = (value: unknown): void => {
-		if (!value || typeof value !== "object" || Object.isFrozen(value)) return;
-		for (const child of Object.values(value as Record<string, unknown>)) freeze(child);
+	const freeze = <T extends object>(value: T): void => {
+		if (Object.isFrozen(value)) return;
+		for (const child of Object.values(value)) {
+			if (child !== null && child instanceof Object) freeze(child);
+		}
 		Object.freeze(value);
 	};
 	freeze(clone);
@@ -411,7 +419,7 @@ export class TerminalTaskManager {
 				paths = candidatePaths;
 				break;
 			} catch (error) {
-				if (!(typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "EEXIST")) throw error;
+				if (!(error instanceof Error) || !errnoIs(error, "EEXIST")) throw error;
 			}
 		}
 		if (!id || !paths) throw new Error("Unable to allocate a unique terminal task directory");
@@ -432,11 +440,10 @@ export class TerminalTaskManager {
 			? buildWindowsScript(runnerOptions)
 			: buildPosixScript(runnerOptions));
 
-		const initial: TerminalTaskSnapshot = {
+		const initialWithoutSourceId: Omit<TerminalTaskSnapshot, "sourceId"> = {
 			schemaVersion: TERMINAL_TASK_SCHEMA_VERSION,
 			revision: 1,
 			id,
-			...(sourceId ? { sourceId } : {}),
 			ownerSessionId,
 			command,
 			cwd,
@@ -448,6 +455,7 @@ export class TerminalTaskManager {
 			deliveryState: "none",
 			logFile: paths.logFile,
 		};
+		const initial: TerminalTaskSnapshot = sourceId ? { ...initialWithoutSourceId, sourceId } : initialWithoutSourceId;
 		this.store.create(initial, paths.metaFile);
 		this.adopt(initial, true);
 
@@ -560,7 +568,8 @@ export class TerminalTaskManager {
 					if (timer) clearTimeout(timer);
 					unsubscribe();
 					signal?.removeEventListener("abort", onAbort);
-					error ? reject(error) : resolve();
+					if (error) reject(error);
+					else resolve();
 				};
 				const onAbort = (): void => finish(abortError());
 				unsubscribe = this.addChangeListener(() => { if (complete()) finish(); });
@@ -868,7 +877,7 @@ export class TerminalTaskManager {
 			try {
 				createPrivateFile(this.store, paths.launchFile, "recovered\n");
 			} catch (error) {
-				if (!(typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "EEXIST")) {
+				if (!(error instanceof Error) || !errnoIs(error, "EEXIST")) {
 					this.diagnostic(snapshot.id, `unable to release recovered launch gate: ${error instanceof Error ? error.message : String(error)}`);
 				}
 			}
@@ -1229,10 +1238,10 @@ export class TerminalTaskManager {
 		return { id, outcome: "failed", task: result, message: `Failed to stop terminal ${id}: ${reason}.` };
 	}
 
-	private failUnlaunched(id: string, error: unknown): void {
+	private failUnlaunched(id: string, cause: unknown): void {
 		this.settleFailedLaunch(id);
 		const current = this.store.get(id);
-		if (current) appendPrivateFile(this.store, current.logFile, `\n[spawn error] ${error instanceof Error ? error.message : String(error)}\n`);
+		if (current) appendPrivateFile(this.store, current.logFile, `\n[spawn error] ${cause instanceof Error ? cause.message : String(cause)}\n`);
 	}
 
 	private settleFailedLaunch(id: string): TerminalTaskSnapshot {

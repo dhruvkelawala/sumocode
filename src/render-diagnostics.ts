@@ -23,6 +23,10 @@
  *     their components.
  */
 
+// oxlint-disable anti-slop/no-runtime-typeof, anti-slop/no-unknown-parameters, anti-slop/no-unknown-returns, anti-slop/require-safety-comment-for-type-assertion, anti-slop/no-chained-type-assertions, anti-slop/no-unsafe-dictionary-type -- diagnostics boundary-probe module: it deliberately monkey-patches untyped
+// Pi UI / Node stream / Module internals and only observes them (never trusts their shape),
+// so runtime `typeof` probes, unknown-typed pass-through params, and assertions onto
+// observer-only shapes are this file's contract, not unparsed input handling.
 import { createRequire } from "node:module";
 import { performance } from "node:perf_hooks";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";

@@ -9,6 +9,8 @@ import {
 	type TranscriptControllerChatSink,
 } from "./controller.js";
 import { chatMessageViewModelToPlainText, type ChatMessageViewModel } from "./view-model.js";
+/* oxlint-disable anti-slop/no-chained-type-assertions -- test doubles cast minimal stub objects to Pi context types. */
+/* oxlint-disable anti-slop/require-safety-comment-for-type-assertion -- stub shape is exercised by the assertions below. */
 
 function readJsonl(path: string): unknown[] {
 	return readFileSync(resolve(process.cwd(), path), "utf8")
@@ -709,7 +711,8 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 	it("fingerprints cyclic and BigInt tool invocations without crashing incremental publishes", () => {
 		const chat = fakeChatSink();
 		const controller = new TranscriptController({ chat });
-		const invocation: Record<string, unknown> = { query: "sumo", count: 1n };
+		interface CyclicInvocation { query: string; count: bigint; self?: unknown }
+		const invocation: CyclicInvocation = { query: "sumo", count: 1n };
 		invocation.self = invocation;
 		const message = {
 			id: "cyclic-tool",

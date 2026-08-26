@@ -1,11 +1,30 @@
 import { describe, expect, it, vi } from "vitest";
 import { registerSlateCommand, getSlate } from "./slate.js";
 
+/** Minimal command-handler context shape exercised by these tests. */
+type CommandHandler = (
+	args: string[],
+	ctx: { hasUI: boolean; ui?: { notify?: (...args: unknown[]) => void } },
+) => Promise<void>;
+
+/** Tool result shape the tests inspect. */
+interface ToolResult {
+	content: { type: string; text: string }[];
+	isError?: boolean;
+}
+
+/** Minimal tool-definition shape captured from registerTool. */
+interface CapturedToolDef {
+	name: string;
+	execute: (...args: unknown[]) => Promise<ToolResult>;
+}
+
 describe("/slate slash command", () => {
 	it("registers /slate command and two tools on the pi API", () => {
 		const registerCommand = vi.fn();
 		const registerTool = vi.fn();
 		const on = vi.fn();
+		// SAFETY: test double only exercises registerCommand/registerTool/on, the members used here.
 		registerSlateCommand({ registerCommand, registerTool, on } as never);
 
 		expect(registerCommand).toHaveBeenCalledWith(
@@ -13,6 +32,7 @@ describe("/slate slash command", () => {
 			expect.objectContaining({ description: expect.stringContaining("Park an idea") }),
 		);
 		expect(registerTool).toHaveBeenCalledTimes(2);
+		// SAFETY: every registerTool call receives a definition object with a string name.
 		const toolNames = registerTool.mock.calls.map((call: unknown[]) => (call[0] as { name: string }).name);
 		expect(toolNames).toContain("slate_list");
 		expect(toolNames).toContain("slate_done");
@@ -20,6 +40,7 @@ describe("/slate slash command", () => {
 
 	it("subscribes to session_start and session_shutdown", () => {
 		const on = vi.fn();
+		// SAFETY: test double only exercises registerCommand/registerTool/on, the members used here.
 		registerSlateCommand({ registerCommand: vi.fn(), registerTool: vi.fn(), on } as never);
 
 		const eventNames = on.mock.calls.map((call: unknown[]) => call[0]);
@@ -28,11 +49,12 @@ describe("/slate slash command", () => {
 	});
 
 	it("prints a message in non-interactive mode", async () => {
-		let handler: ((args: string[], ctx: unknown) => Promise<void>) | undefined;
+		let handler: CommandHandler | undefined;
 		const registerCommand = vi.fn((_name: string, options: { handler: typeof handler }) => {
 			handler = options.handler;
 		});
 		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		// SAFETY: test double only exercises registerCommand/registerTool/on, the members used here.
 		registerSlateCommand({ registerCommand, registerTool: vi.fn(), on: vi.fn() } as never);
 
 		try {
@@ -46,10 +68,11 @@ describe("/slate slash command", () => {
 
 describe("slate_list tool", () => {
 	it("returns empty message when slate is empty", async () => {
-		const tools = new Map<string, { execute: (...args: unknown[]) => Promise<{ content: { type: string; text: string }[] }> }>();
-		const registerTool = vi.fn((def: { name: string; execute: (...args: unknown[]) => Promise<unknown> }) => {
-			tools.set(def.name, def as never);
+		const tools = new Map<string, CapturedToolDef>();
+		const registerTool = vi.fn((def: CapturedToolDef) => {
+			tools.set(def.name, def);
 		});
+		// SAFETY: test double only exercises registerCommand/registerTool/on, the members used here.
 		registerSlateCommand({ registerCommand: vi.fn(), registerTool, on: vi.fn() } as never);
 
 		// Clear the slate
@@ -60,10 +83,11 @@ describe("slate_list tool", () => {
 	});
 
 	it("returns numbered list when slate has items", async () => {
-		const tools = new Map<string, { execute: (...args: unknown[]) => Promise<{ content: { type: string; text: string }[] }> }>();
-		const registerTool = vi.fn((def: { name: string; execute: (...args: unknown[]) => Promise<unknown> }) => {
-			tools.set(def.name, def as never);
+		const tools = new Map<string, CapturedToolDef>();
+		const registerTool = vi.fn((def: CapturedToolDef) => {
+			tools.set(def.name, def);
 		});
+		// SAFETY: test double only exercises registerCommand/registerTool/on, the members used here.
 		registerSlateCommand({ registerCommand: vi.fn(), registerTool, on: vi.fn() } as never);
 
 		getSlate().clear();
@@ -78,10 +102,11 @@ describe("slate_list tool", () => {
 
 describe("slate_done tool", () => {
 	it("removes item at given index", async () => {
-		const tools = new Map<string, { execute: (...args: unknown[]) => Promise<{ content: { type: string; text: string }[]; isError?: boolean }> }>();
-		const registerTool = vi.fn((def: { name: string; execute: (...args: unknown[]) => Promise<unknown> }) => {
-			tools.set(def.name, def as never);
+		const tools = new Map<string, CapturedToolDef>();
+		const registerTool = vi.fn((def: CapturedToolDef) => {
+			tools.set(def.name, def);
 		});
+		// SAFETY: test double only exercises registerCommand/registerTool/on, the members used here.
 		registerSlateCommand({ registerCommand: vi.fn(), registerTool, on: vi.fn() } as never);
 
 		getSlate().clear();
@@ -95,10 +120,11 @@ describe("slate_done tool", () => {
 	});
 
 	it("returns error for out-of-bounds index", async () => {
-		const tools = new Map<string, { execute: (...args: unknown[]) => Promise<{ content: { type: string; text: string }[]; isError?: boolean }> }>();
-		const registerTool = vi.fn((def: { name: string; execute: (...args: unknown[]) => Promise<unknown> }) => {
-			tools.set(def.name, def as never);
+		const tools = new Map<string, CapturedToolDef>();
+		const registerTool = vi.fn((def: CapturedToolDef) => {
+			tools.set(def.name, def);
 		});
+		// SAFETY: test double only exercises registerCommand/registerTool/on, the members used here.
 		registerSlateCommand({ registerCommand: vi.fn(), registerTool, on: vi.fn() } as never);
 
 		getSlate().clear();

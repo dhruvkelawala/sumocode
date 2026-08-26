@@ -1,12 +1,6 @@
 import { EventEmitter } from "node:events";
-import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
-
-vi.mock("node:child_process", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("node:child_process")>();
-	return { ...actual, spawn: vi.fn(actual.spawn) };
-});
 import { RpcChildExitError, SumoRpcClient, type SumoRpcClientOptions } from "./client.js";
 
 function nodeRpcClient(script: string, options: Partial<Omit<SumoRpcClientOptions, "command" | "args">> = {}): SumoRpcClient {
@@ -18,8 +12,16 @@ function nodeRpcClient(script: string, options: Partial<Omit<SumoRpcClientOption
 	});
 }
 
+function asPreSpawnedChild(child: FakeRpcChild): ChildProcessWithoutNullStreams {
+	// SAFETY: FakeRpcChild implements the stdin/stdout/stderr surface the
+	// client consumes; remaining ChildProcess members are never exercised.
+	return child as ChildProcessWithoutNullStreams & FakeRpcChild;
+}
+
 function clientChild(client: SumoRpcClient): ChildProcessWithoutNullStreams {
-	return (client as unknown as { child: ChildProcessWithoutNullStreams }).child;
+	const child = client.adoptedChild;
+	// SAFETY: every call site awaits start() first, so the child exists.
+	return child!;
 }
 
 async function waitFor(predicate: () => boolean): Promise<void> {
@@ -62,10 +64,12 @@ describe("SumoRpcClient", () => {
 		vi.useFakeTimers();
 		try {
 			const child = new FakeRpcChild();
+			// SAFETY: FakeRpcChild implements the stdin/stdout/stderr surface the
+			// client consumes; the remaining ChildProcess members are unused.
 			const client = new SumoRpcClient({
 				command: "unused",
 				args: [],
-				preSpawnedChild: child as never,
+				preSpawnedChild: asPreSpawnedChild(child),
 			});
 			// Under fake timers the old fixed 50ms sleep would hang forever here;
 			// the pid fast-path must resolve without any timer advancing.
@@ -77,16 +81,20 @@ describe("SumoRpcClient", () => {
 
 	it("uses a pre-spawned child without calling spawn again", async () => {
 		const child = new FakeRpcChild();
-		vi.mocked(spawn).mockClear();
+		const spawnSpy = vi.fn(() => {
+			throw new Error("spawn must not be called when a pre-spawned child is supplied");
+		});
+		// SAFETY: same FakeRpcChild surface contract as the pre-spawn test above.
 		const client = new SumoRpcClient({
 			command: "unused",
 			args: [],
-			preSpawnedChild: child as never,
+			preSpawnedChild: asPreSpawnedChild(child),
+			spawnFn: spawnSpy,
 		});
 
 		await client.start();
 
-		expect(spawn).not.toHaveBeenCalled();
+		expect(spawnSpy).not.toHaveBeenCalled();
 		expect(client.pid).toBe(child.pid);
 		await client.stop();
 	});
@@ -100,7 +108,7 @@ describe("SumoRpcClient", () => {
 			});
 			return true;
 		});
-		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: child as never });
+		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
 		await client.start();
 
 		let stopped = false;
@@ -114,10 +122,11 @@ describe("SumoRpcClient", () => {
 
 	it("delivers a buffered success response between deliberate exit and stdio close", async () => {
 		const child = new FakeRpcChild();
-		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: child as never });
+		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
 		await client.start();
 		const response = client.send({ type: "get_state" });
-		const request = JSON.parse(String(child.stdin.write.mock.calls.at(-1)?.[0])) as { id: string };
+		// SAFETY: the client writes single-line JSON requests over stdin.
+		const request: { id: string } = JSON.parse(String(child.stdin.write.mock.calls.at(-1)?.[0]));
 		child.kill.mockImplementation(() => {
 			queueMicrotask(() => {
 				child.signalCode = "SIGTERM";
@@ -141,7 +150,7 @@ describe("SumoRpcClient", () => {
 
 	it("transfers ownership after lifecycle listeners attach but before startup grace resolves", async () => {
 		const child = new FakeRpcChild();
-		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: child as never });
+		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
 		const onAdopted = vi.fn(() => ({
 			exitListeners: child.listenerCount("exit"),
 			errorListeners: child.listenerCount("error"),
@@ -158,11 +167,13 @@ describe("SumoRpcClient", () => {
 
 	it("reports a pre-spawn error captured before host adoption", async () => {
 		const child = new FakeRpcChild();
-		(child as unknown as Record<PropertyKey, unknown>)[Symbol.for("sumocode.rpc.preSpawnError")] = new Error("pi executable disappeared");
+		// The Symbol.for channel is shared with client.ts; stamping mirrors what
+		// the entry file does before handing the child over.
+		Object.assign(child, { [Symbol.for("sumocode.rpc.preSpawnError")]: new Error("pi executable disappeared") });
 		const client = new SumoRpcClient({
 			command: "unused",
 			args: [],
-			preSpawnedChild: child as never,
+			preSpawnedChild: asPreSpawnedChild(child),
 		});
 
 		await expect(client.start()).rejects.toThrow("pi executable disappeared");
@@ -175,7 +186,7 @@ describe("SumoRpcClient", () => {
 		const client = new SumoRpcClient({
 			command: "unused",
 			args: [],
-			preSpawnedChild: child as never,
+			preSpawnedChild: asPreSpawnedChild(child),
 		});
 
 		await expect(client.start()).rejects.toMatchObject({
@@ -602,7 +613,9 @@ describe("SumoRpcClient", () => {
 
 		const error = errors[0];
 		expect(error).toBeInstanceOf(RpcChildExitError);
+		/* SAFETY: onExit errors are constructed as RpcChildExitError by the host exit path under test. */
 		expect((error as RpcChildExitError).code).toBe(1);
+		/* SAFETY: same RpcChildExitError contract as the assertion above. */
 		expect((error as RpcChildExitError).signal).toBeNull();
 	});
 
@@ -620,6 +633,7 @@ describe("SumoRpcClient", () => {
 
 		const error = errors[0];
 		expect(error).toBeInstanceOf(RpcChildExitError);
+		// SAFETY: same RpcChildExitError contract as the crash-shape test above.
 		expect((error as RpcChildExitError).code).toBe(100);
 	});
 

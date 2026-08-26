@@ -236,8 +236,7 @@ function buildChatHTML(cols, toolStyle = "inline") {
 			rows.push(blankRow());
 			const codeInner = Math.min(innerCols - 4, 96);
 			const lang = msg.code.language;
-			const langTag = `─ <span class="fg-code-gutter">${lang}</span> ─`;
-			const langLen = 2 + lang.length + 3;
+				const langLen = 2 + lang.length + 3;
 			rows.push(bodyRow(`<span class="fg-code-border">╭─ </span><span class="fg-code-gutter">${lang}</span><span class="fg-code-border"> ${rep("─", Math.max(1, codeInner - langLen))}╮</span>`, codeInner));
 			for (let i = 0; i < msg.code.lines.length; i++) {
 				const lineNum = String(i + 1).padStart(3);
@@ -328,8 +327,7 @@ function buildChatHTML(cols, toolStyle = "inline") {
 				}
 
 				if (toolStyle === "ledger" || ((toolStyle === "activity-cards" || toolStyle === "scroll") && tool.expanded !== false)) {
-					const status = tool.note ? `${glyph} ${tool.note}` : glyph;
-					const statusHTML = `<span class="${dotClass}">${glyph}</span>${tool.note ? `<span class="fg-dim"> ${tool.note}</span>` : ""}`;
+						const statusHTML = `<span class="${dotClass}">${glyph}</span>${tool.note ? `<span class="fg-dim"> ${tool.note}</span>` : ""}`;
 					const title = `[${tool.name}]  ${tool.target}`;
 					const leftHTML = `<span class="fg-tool-border">╭─ </span><span class="fg-tool-label">[${tool.name}]</span><span class="fg-tool-target">  ${tool.target}</span> `;
 					const leftLen = 3 + title.length + 1;

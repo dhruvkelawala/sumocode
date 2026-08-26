@@ -14,8 +14,12 @@ export interface KeyTarget {
 	handleKey(event: KeyEvent): boolean | void;
 }
 
+function isString<T>(value: T): value is T & string {
+	return typeof value === "string";
+}
+
 function normalizeKey(event: string | KeyEvent): KeyEvent {
-	return typeof event === "string" ? { key: event } : event;
+	return isString(event) ? { key: event } : event;
 }
 
 /** Minimal focus-aware keybinding registry for sumo-tui widgets. */

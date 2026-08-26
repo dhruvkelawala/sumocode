@@ -54,8 +54,12 @@ function packageNameFromNodeModules(input: string): string | undefined {
 	return parts[0];
 }
 
+function isString<T>(value: T): value is T & string {
+	return typeof value === "string";
+}
+
 export function packageNameForExtension(identity: ExtensionIdentity | string): string {
-	if (typeof identity === "string") {
+	if (isString(identity)) {
 		return normalizeNpmSource(identity) ?? packageNameFromNodeModules(identity) ?? identity;
 	}
 	return (
@@ -154,7 +158,11 @@ export function createForeignAwareUIContext(base: ExtensionUIContext, options: F
 			base.setWidget(key, content, widgetOptions);
 		},
 		custom: async <T>(factory: CustomFactory<T>, customOptions?: CustomOptions): Promise<T> => {
-			if (block("custom")) return undefined as T;
+			if (block("custom")) {
+				// SAFETY: the blocked stub must still satisfy the caller's T; it
+				// resolves undefined exactly like an aborted Pi custom flow.
+				return undefined as T;
+			}
 			return base.custom<T>(factory, customOptions);
 		},
 	};

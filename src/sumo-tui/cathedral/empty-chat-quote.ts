@@ -61,7 +61,7 @@ export class EmptyChatQuoteNode extends SumoNode {
 		}
 	}
 
-	private measure(width: number, widthMode: MeasureMode, height: number, heightMode: MeasureMode): { width: number; height: number } {
+	private measure(width: number, widthMode: MeasureMode, height: number, heightMode: MeasureMode) {
 		const resolvedWidth = widthMode === MEASURE_MODE_EXACTLY ? Math.max(1, Math.floor(width)) : 42;
 		const resolvedHeight = heightMode === MEASURE_MODE_EXACTLY ? Math.max(1, Math.floor(height)) : 3;
 		return { width: resolvedWidth, height: resolvedHeight };

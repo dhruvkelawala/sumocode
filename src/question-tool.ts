@@ -57,11 +57,13 @@ type DialogOption = NormalizedQuestionOption & {
 	isFreeText: boolean;
 };
 
+const isStringOption = (option: QuestionOptionParam): option is string => typeof option === "string";
+
 export function normalizeQuestionOptions(options: readonly QuestionOptionParam[] | undefined): NormalizedQuestionOption[] {
 	if (!options?.length) return [];
 	return options
 		.map((option): NormalizedQuestionOption => {
-			if (typeof option === "string") {
+			if (isStringOption(option)) {
 				const label = option.trim();
 				return { label, value: label };
 			}
@@ -338,6 +340,8 @@ export function installQuestionTool(pi: ExtensionAPI): void {
 		},
 
 		renderResult(result, _options, theme) {
+			// SAFETY: result.details is the opaque details bag Pi returns; the tool writes
+			// exactly this shape in execute(), so the structural assertion is the decode.
 			const details = result.details as { cancelled?: boolean; answer?: string; entries?: { answer: string }[] } | undefined;
 			if (!details || details.cancelled) {
 				return new Text(theme.fg("warning", "Cancelled"), 0, 0);

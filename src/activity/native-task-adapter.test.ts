@@ -275,8 +275,11 @@ describe("native task Activity adapter", () => {
 	});
 
 	it("bounds huge arrays and deeply nested unknown values before traversal", () => {
+		// SAFETY: the loop below rebuilds `deep` as nested wrapper objects; its static type must stay open.
+		// oxlint-disable anti-slop/no-known-value-widening -- the nesting depth is only known at runtime.
 		let deep: unknown = { leaf: "visible" };
 		for (let index = 0; index < 10_000; index += 1) deep = { next: deep };
+		// oxlint-enable anti-slop/no-known-value-widening
 		const activity = activityFromNativeTaskRecord({
 			name: "task",
 			arguments: {

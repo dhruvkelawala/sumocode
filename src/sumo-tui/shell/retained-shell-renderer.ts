@@ -25,6 +25,7 @@
  */
 
 import type { CustomEditor } from "@earendil-works/pi-coding-agent";
+
 import { SumoNode } from "../layout/node.js";
 import {
 	ALIGN_STRETCH,
@@ -244,6 +245,9 @@ export class RetainedShellRenderer {
 		this.editorLeftSpacer = new SumoNode(this.yoga.Node.create());
 		this.editorLeftSpacer.flexGrow = 1;
 		this.editorLeftSpacer.flexShrink = 1;
+		// SAFETY: LazyComponentProxy lazily wraps Pi's live editor; PiEditorLeaf
+		// only consumes its render/invalidate surface, which the proxy implements.
+		// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- lazy proxy to CustomEditor requires the two-step cast.
 		this.editorLeaf = PiEditorLeaf.create(this.yoga, editorProxy as unknown as CustomEditor);
 		this.editorRightSpacer = new SumoNode(this.yoga.Node.create());
 		this.editorRightSpacer.flexGrow = 1;
@@ -571,6 +575,7 @@ export class RetainedShellRenderer {
 			const chatWidth = Math.max(1, Math.floor(this.chat.getComputedWidth()));
 			const chatLeft = Math.floor(this.chatRow.getComputedLeft() + this.chat.getComputedLeft());
 			const rendered = container.render(chatWidth);
+			// oxlint-disable-next-line no-control-regex -- intentional ESC byte match to detect non-empty rendered chat lines
 			const contentLines = rendered.filter((line: string) => line.replace(/\x1b\[[0-9;]*m/g, "").trim().length > 0);
 			if (contentLines.length === 0) return;
 
@@ -581,6 +586,7 @@ export class RetainedShellRenderer {
 
 			const T = activeThemeColors();
 			for (let i = 0; i < height; i += 1) {
+				// oxlint-disable-next-line no-control-regex -- intentional ESC byte match to strip ANSI styling before repainting
 				const plain = (contentLines[i] ?? "").replace(/\x1b\[[0-9;]*m/g, "");
 				const padded = plain.length < chatWidth ? `${plain}${" ".repeat(chatWidth - plain.length)}` : plain.slice(0, chatWidth);
 				frame.paintRow(top + i, withPersistentStyle(padded, T.foregroundDim, T.surfaceLifted), chatLeft, chatWidth);
@@ -602,6 +608,8 @@ export class RetainedShellRenderer {
 
 	private isOverlayVisible(entry: ShellOverlayEntry, termWidth: number, termHeight: number): boolean {
 		if (entry.hidden === true) return false;
+		// SAFETY: ShellOverlayEntry.options is an opaque overlay options bag;
+		// only the optional visible callback is probed and invoked inside try/catch.
 		const visibleFn = (entry.options as { visible?: (cols: number, rows: number) => boolean } | undefined)?.visible;
 		if (visibleFn) {
 			try {
@@ -701,7 +709,7 @@ export class RetainedShellRenderer {
 		};
 	}
 
-	private nodeRect(node: SumoNode): { top: number; left: number; width: number; height: number } {
+	private nodeRect(node: SumoNode) {
 		return {
 			top: node.getComputedTop(),
 			left: node.getComputedLeft(),
@@ -787,9 +795,13 @@ interface ResolvedOverlayLayout {
 	maxHeight: number | undefined;
 }
 
+function isNumber<T>(value: T): value is T & number {
+	return typeof value === "number";
+}
+
 function parseSizeValue(value: number | string | undefined, reference: number): number | undefined {
 	if (value === undefined) return undefined;
-	if (typeof value === "number") return value;
+	if (isNumber(value)) return value;
 	const match = value.match(/^(\d+(?:\.\d+)?)%$/);
 	if (match) return Math.floor((reference * Number.parseFloat(match[1])) / 100);
 	return undefined;
@@ -836,7 +848,7 @@ function resolveOverlayLayout(
 	termHeight: number,
 ): ResolvedOverlayLayout {
 	const opt = options ?? {};
-	const margin = typeof opt.margin === "number"
+	const margin = isNumber(opt.margin)
 		? { top: opt.margin, right: opt.margin, bottom: opt.margin, left: opt.margin }
 		: opt.margin ?? {};
 	const marginTop = Math.max(0, margin.top ?? 0);
@@ -859,12 +871,12 @@ function resolveOverlayLayout(
 	let col: number;
 	const anchor = opt.anchor ?? "center";
 	if (opt.row !== undefined) {
-		row = typeof opt.row === "number" ? opt.row : (parseSizeValue(opt.row, availHeight) ?? resolveAnchorRow(anchor, effectiveHeight, availHeight, marginTop));
+		row = isNumber(opt.row) ? opt.row : (parseSizeValue(opt.row, availHeight) ?? resolveAnchorRow(anchor, effectiveHeight, availHeight, marginTop));
 	} else {
 		row = resolveAnchorRow(anchor, effectiveHeight, availHeight, marginTop);
 	}
 	if (opt.col !== undefined) {
-		col = typeof opt.col === "number" ? opt.col : (parseSizeValue(opt.col, availWidth) ?? resolveAnchorCol(anchor, width, availWidth, marginLeft));
+		col = isNumber(opt.col) ? opt.col : (parseSizeValue(opt.col, availWidth) ?? resolveAnchorCol(anchor, width, availWidth, marginLeft));
 	} else {
 		col = resolveAnchorCol(anchor, width, availWidth, marginLeft);
 	}

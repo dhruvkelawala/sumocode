@@ -3,6 +3,8 @@ import { getApiProvider, resetApiProviders, type Api, type Model, type SimpleStr
 import { buildOpenAICodexResponsesFastOptions, buildOpenAIResponsesFastOptions, installFastMode, isConfiguredFastModel, shouldApplyFastMode } from "./fast-mode.js";
 
 function model(overrides: Partial<Model<Api>> = {}): Model<Api> {
+	// SAFETY: the fixture fills every Model field the fast-mode code paths read;
+	// callers override only the fields each test varies.
 	return {
 		provider: "openai-codex",
 		id: "gpt-5.5",
@@ -30,6 +32,7 @@ describe("fast mode", () => {
 	});
 
 	it("enables fast mode for the current gpt-5.6-sol model", () => {
+		// SAFETY: the double supplies the on/registerCommand surface the installer reads.
 		const state = installFastMode({ on: vi.fn(), registerCommand: vi.fn() } as never);
 		expect(shouldApplyFastMode(
 			{ ...state, enabled: true },
@@ -111,6 +114,8 @@ describe("fast mode", () => {
 		const result = buildOpenAIResponsesFastOptions(offOnlyModel, { reasoning: "high" });
 		expect(result.reasoningEffort).toBeUndefined();
 
+		// SAFETY: the spread keeps every model field; only the api discriminator is
+		// switched to the Codex value for the options builder under test.
 		const codexResult = buildOpenAICodexResponsesFastOptions(
 			{ ...offOnlyModel, api: "openai-codex-responses" } as typeof offOnlyModel,
 			{ reasoning: "medium" },
@@ -120,6 +125,7 @@ describe("fast mode", () => {
 
 	it("leaves non-Responses OpenAI APIs on their native simple stream", () => {
 		const nativeOpenAICompletions = getApiProvider("openai-completions")?.streamSimple;
+		// SAFETY: the double supplies the on/registerCommand surface the installer reads.
 		installFastMode({
 			on: vi.fn(),
 			registerCommand: vi.fn(),
@@ -134,6 +140,7 @@ describe("fast mode", () => {
 			registerCommand: vi.fn(),
 			registerProvider: vi.fn(),
 		};
+		// SAFETY: the double supplies the on/registerCommand/registerProvider surface the installer reads.
 		installFastMode(pi as never);
 
 		expect(pi.registerProvider).not.toHaveBeenCalled();
@@ -142,13 +149,20 @@ describe("fast mode", () => {
 	});
 
 	it("publishes fast status when /fast enables an applicable model", async () => {
-		let fastHandler: ((args: string, ctx: unknown) => Promise<void>) | undefined;
+		interface FastTestCtx {
+			hasUI: boolean;
+			model: Model<Api>;
+			ui: { notify(...args: unknown[]): void; setStatus(...args: unknown[]): void };
+		}
+		let fastHandler: ((args: string, ctx: FastTestCtx) => Promise<void>) | undefined;
 		const pi = {
 			on: vi.fn(),
-			registerCommand: vi.fn((name: string, command: { handler: (args: string, ctx: unknown) => Promise<void> }) => {
+			registerCommand: vi.fn((name: string, command: { handler: (args: string, ctx: FastTestCtx) => Promise<void> }) => {
 				if (name === "fast") fastHandler = command.handler;
 			}),
 		};
+		// SAFETY: the double supplies the on/registerCommand surface the installer reads.
+		// SAFETY: the double supplies the on/registerCommand/registerProvider surface the installer reads.
 		installFastMode(pi as never);
 		const setStatus = vi.fn();
 
@@ -162,9 +176,9 @@ describe("fast mode", () => {
 	});
 
 	it("resets enabled state on each session_start", async () => {
-		const handlers = new Map<string, Array<(...args: unknown[]) => unknown>>();
+		const handlers = new Map<string, Array<(...args: unknown[]) => void>>();
 		const pi = {
-			on: vi.fn((event: string, handler: (...args: unknown[]) => unknown) => {
+			on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
 				const list = handlers.get(event) ?? [];
 				list.push(handler);
 				handlers.set(event, list);
@@ -172,6 +186,7 @@ describe("fast mode", () => {
 			registerCommand: vi.fn(),
 			registerProvider: vi.fn(),
 		};
+		// SAFETY: the double supplies the on/registerCommand/registerProvider surface the installer reads.
 		const state = installFastMode(pi as never, { initialEnabled: true });
 		expect(state.enabled).toBe(true);
 

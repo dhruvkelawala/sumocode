@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { PiExecLike } from "../terminal-host/types.js";
 
 export function isInCmux(): boolean {
 	return Boolean(process.env.CMUX_WORKSPACE_ID || process.env.CMUX_SURFACE_ID);
@@ -60,6 +60,7 @@ function delay(ms: number): Promise<void> {
 
 function parseJson<T>(text: string): T | undefined {
 	try {
+		// SAFETY: callers pass T matching the documented cmux stdout shape; malformed JSON rejects into the catch below.
 		return JSON.parse(text) as T;
 	} catch {
 		return undefined;
@@ -98,7 +99,7 @@ function collectSurfaceRefs(panes: readonly CmuxPaneInfo[]): Set<string> {
 	return refs;
 }
 
-async function execCmux(pi: ExtensionAPI, args: readonly string[]): Promise<CmuxExecResult> {
+async function execCmux(pi: PiExecLike, args: readonly string[]): Promise<CmuxExecResult> {
 	const result = await pi.exec("cmux", [...args], { timeout: CMUX_TIMEOUT_MS });
 	if (result.killed) {
 		return { ok: false, stdout: result.stdout, stderr: result.stderr, error: "cmux command timed out" };
@@ -115,7 +116,7 @@ async function execCmux(pi: ExtensionAPI, args: readonly string[]): Promise<Cmux
 }
 
 async function getCallerInfo(
-	pi: ExtensionAPI,
+	pi: PiExecLike,
 ): Promise<{ ok: true; caller: Required<CmuxCallerInfo> } | { ok: false; error: string }> {
 	const result = await execCmux(pi, ["--json", "identify"]);
 	if (!result.ok) return { ok: false, error: result.error ?? "Failed to identify cmux caller" };
@@ -130,7 +131,7 @@ async function getCallerInfo(
 }
 
 async function listPanes(
-	pi: ExtensionAPI,
+	pi: PiExecLike,
 	workspaceRef: string,
 ): Promise<{ ok: true; panes: CmuxPaneInfo[] } | { ok: false; error: string }> {
 	const result = await execCmux(pi, ["--json", "list-panes", "--workspace", workspaceRef]);
@@ -140,7 +141,7 @@ async function listPanes(
 }
 
 async function waitForNewSurface(
-	pi: ExtensionAPI,
+	pi: PiExecLike,
 	workspaceRef: string,
 	previousPanes: readonly CmuxPaneInfo[],
 ): Promise<string | undefined> {
@@ -182,7 +183,7 @@ export type OpenSplitWithRefsResult =
 
 /** Replace the caller's current cmux surface process with `command`. */
 export async function openCommandInCurrentSurface(
-	pi: ExtensionAPI,
+	pi: PiExecLike,
 	command: string,
 ): Promise<OpenSplitResult> {
 	const callerResult = await getCallerInfo(pi);
@@ -204,8 +205,14 @@ export async function openCommandInCurrentSurface(
 	return { ok: true };
 }
 
+/** Surface/workspace references echoed by `cmux new-split` stdout. */
+export interface NewSplitRefs {
+	surfaceRef?: string;
+	workspaceRef?: string;
+}
+
 /** Parse `cmux new-split` stdout, e.g. `OK surface:2 workspace:1`. */
-export function parseNewSplitOutput(stdout: string): { surfaceRef?: string; workspaceRef?: string } {
+export function parseNewSplitOutput(stdout: string): NewSplitRefs {
 	const surfaceMatch = stdout.match(/surface:\S+/);
 	const workspaceMatch = stdout.match(/workspace:\S+/);
 	return {
@@ -215,7 +222,7 @@ export function parseNewSplitOutput(stdout: string): { surfaceRef?: string; work
 }
 
 async function resolveNewSplitSurface(
-	pi: ExtensionAPI,
+	pi: PiExecLike,
 	workspaceRef: string,
 	beforePanes: readonly CmuxPaneInfo[],
 	splitStdout: string,
@@ -233,7 +240,7 @@ async function resolveNewSplitSurface(
  * visible pane (background tasks, notifications, etc.).
  */
 export async function openCommandInNewSplitWithRefs(
-	pi: ExtensionAPI,
+	pi: PiExecLike,
 	direction: SplitDirection,
 	command: string,
 ): Promise<OpenSplitWithRefsResult> {
@@ -291,7 +298,7 @@ export async function openCommandInNewSplitWithRefs(
  * `ctx.ui.notify`).
  */
 export async function openCommandInNewSplit(
-	pi: ExtensionAPI,
+	pi: PiExecLike,
 	direction: SplitDirection,
 	command: string,
 ): Promise<OpenSplitResult> {

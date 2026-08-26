@@ -7,6 +7,8 @@ import {
 	isForeignExtension,
 	packageNameForExtension,
 } from "./foreign-extension-warning.js";
+/* oxlint-disable anti-slop/no-chained-type-assertions -- test doubles cast minimal stub objects to Pi context types. */
+/* oxlint-disable anti-slop/require-safety-comment-for-type-assertion -- stub shape is exercised by the assertions below. */
 
 class TestComponent implements Component {
 	public invalidate(): void {}

@@ -1,8 +1,7 @@
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { chromium } from "playwright";
-import { bibleFontPath, bibleTokensCss, outDir, runcatFontPath } from "./paths.mjs";
+import { bibleFontPath, bibleTokensCss, runcatFontPath } from "./paths.mjs";
 import { writeFile } from "./fs-utils.mjs";
 
 export async function renderTerminalSnapshot(snapshot, outputPng, options = {}) {
@@ -11,10 +10,9 @@ export async function renderTerminalSnapshot(snapshot, outputPng, options = {}) 
 	writeFile(htmlPath, html);
 
 	const chromiumExecutablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
-	const browser = await chromium.launch({
-		headless: true,
-		...(chromiumExecutablePath ? { executablePath: chromiumExecutablePath } : {}),
-	});
+	const launchOptions = { headless: true };
+	if (chromiumExecutablePath) launchOptions.executablePath = chromiumExecutablePath;
+	const browser = await chromium.launch(launchOptions);
 	try {
 		const page = await browser.newPage({
 			viewport: { width: 2200, height: 2200 },

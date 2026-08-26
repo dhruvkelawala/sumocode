@@ -48,8 +48,12 @@ function ensureNodePtySpawnHelperExecutable(): void {
 	chmodSync(spawnHelper, 0o755);
 }
 
+function isStringPattern(pattern: string | RegExp): pattern is string {
+	return typeof pattern === "string";
+}
+
 function matches(output: string, pattern: string | RegExp): boolean {
-	return typeof pattern === "string" ? output.includes(pattern) : pattern.test(output);
+	return isStringPattern(pattern) ? output.includes(pattern) : pattern.test(output);
 }
 
 function lastModeState(buffer: string, enableSequence: string, disableSequence: string): boolean {
@@ -126,7 +130,7 @@ export function buildSpawnEnv(parent: NodeJS.ProcessEnv, overrides: NodeJS.Proce
 	for (const key of SUMO_DEBUG_ENV_KEYS) delete scrubbed[key];
 	return {
 		...scrubbed,
-		...(overrides ?? {}),
+		...overrides,
 		PI_OFFLINE: "1",
 		TERM: "xterm-256color",
 	};

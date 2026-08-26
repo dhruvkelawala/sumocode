@@ -13,10 +13,11 @@ import {
 	installNonCapturingSidebarOverlay,
 } from "./sidebar-placement.js";
 
+// oxlint-disable-next-line no-control-regex -- intentional ESC/control-byte match to strip ANSI in captured output
 const ANSI = /\u001b\[[0-9;]*m/g;
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
 
-function component(lines: string[]): { renderCalls: number[]; node: { render(width: number): string[]; invalidate(): void } } {
+function component(lines: string[]) {
 	const renderCalls: number[] = [];
 	return {
 		renderCalls,

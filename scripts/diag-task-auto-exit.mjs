@@ -15,7 +15,7 @@
  *   1  pane did not close (auto-exit broken)
  *   2  setup error (cmux unavailable, pane never opened, etc.)
  */
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -61,7 +61,7 @@ function cmuxJson(...cliArgs) {
 }
 
 function log(stage, detail) {
-	const out = { t: Date.now(), stage, ...(detail ?? {}) };
+	const out = { t: Date.now(), stage, ...detail };
 	console.log(JSON.stringify(out));
 }
 

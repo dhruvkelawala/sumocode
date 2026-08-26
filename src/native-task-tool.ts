@@ -1,3 +1,6 @@
+// oxlint-disable anti-slop/no-runtime-typeof, anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type, anti-slop/require-safety-comment-for-type-assertion -- task tool boundary parser: subprocess JSONL events, Pi tool args, and skill frontmatter arrive
+// as untrusted data, so runtime typeof decoding guards, open arg records, unknown-typed
+// parse predicates, and parse-site assertions are this module's decoding contract.
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -421,7 +424,9 @@ const aggregateUsage = (results: SingleResult[]): UsageStats => {
 	return total;
 };
 
-const formatAvailableSkills = (skills: Skill[], maxItems: number): { text: string; remaining: number } => {
+type SkillSummary = { text: string; remaining: number };
+
+const formatAvailableSkills = (skills: Skill[], maxItems: number): SkillSummary => {
 	if (skills.length === 0) return { text: "none", remaining: 0 };
 	const listed = skills.slice(0, maxItems);
 	const remaining = skills.length - listed.length;
@@ -530,10 +535,12 @@ const getTaskErrorText = (result: SingleResult): string => {
 	return result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
 };
 
+type AbortGuard = { isAborted: () => boolean };
+
 const attachAbortSignal = (
 	proc: ChildProcessWithoutNullStreams,
 	signal: AbortSignal | undefined,
-): { isAborted: () => boolean } => {
+): AbortGuard => {
 	let aborted = false;
 	if (!signal) return { isAborted: () => aborted };
 
@@ -662,7 +669,7 @@ const mapWithConcurrencyLimit = async <TIn, TOut>(
 ): Promise<TOut[]> => {
 	if (items.length === 0) return [];
 	const limit = Math.max(1, Math.min(concurrency, items.length));
-	const results: TOut[] = new Array(items.length);
+	const results: TOut[] = Array.from({ length: items.length });
 	let nextIndex = 0;
 
 	const runWorker = async (): Promise<void> => {
@@ -673,7 +680,7 @@ const mapWithConcurrencyLimit = async <TIn, TOut>(
 		await runWorker();
 	};
 
-	await Promise.all(new Array(limit).fill(null).map(async () => runWorker()));
+	await Promise.all(Array.from({ length: limit }, () => null).map(async () => runWorker()));
 	return results;
 };
 

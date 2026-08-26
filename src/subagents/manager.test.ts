@@ -11,6 +11,7 @@ const fakeManifestBuilder = async (options: Parameters<NonNullable<import("./man
 	headRef: options.baseRef,
 	branch: options.worktree?.branch,
 	worktreePath: options.worktree?.path,
+	// SAFETY: the manifest double never reports changed paths.
 	changedPaths: [] as readonly string[],
 	dirty: false,
 	commits: 0,
@@ -337,7 +338,8 @@ describe("SubagentManager", () => {
 				},
 				interrupt: () => undefined,
 			};
-		}, { captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }), terminalHost: host, pi: { exec: vi.fn() } as never });
+		}, { captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }), terminalHost: host, // SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never });
 
 		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
 		await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true });
@@ -367,7 +369,8 @@ describe("SubagentManager", () => {
 				},
 				interrupt: () => undefined,
 			};
-		}, { captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }), terminalHost: host, pi: { exec: vi.fn() } as never });
+		}, { captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }), terminalHost: host, // SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never });
 
 		for (let index = 0; index < 5; index += 1) {
 			await manager.spawn({ prompt: `p${index}`, title: `task ${index}`, cwd: "/repo", visible: true });
@@ -402,7 +405,8 @@ describe("SubagentManager", () => {
 				},
 				interrupt: () => undefined,
 			};
-		}, { captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }), terminalHost: host, pi: { exec: vi.fn() } as never });
+		}, { captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }), terminalHost: host, // SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never });
 
 		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
 		expect(backendTasks[0]?.placement).toEqual({ kind: "new-tab", label: "subagents" });
@@ -442,7 +446,8 @@ describe("SubagentManager", () => {
 				ready: Promise.resolve(),
 				interrupt: () => undefined,
 			};
-		}, { captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }), terminalHost: host, pi: { exec: vi.fn() } as never });
+		}, { captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }), terminalHost: host, // SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never });
 
 		const first = manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
 		await vi.waitFor(() => expect(backendTasks).toHaveLength(1));
@@ -473,7 +478,8 @@ describe("SubagentManager", () => {
 			createWorktree: async () => ({ ok: true, path: "/isolated/worktree", branch: "sumo/api", baseRef: "abc123" }),
 			resolveWorktreeBaseRef: async () => "abc123",
 			terminalHost: host,
-			pi: { exec: vi.fn() } as never,
+			// SAFETY: the manager only calls pi.exec on this object.
+pi: { exec: vi.fn() } as never,
 		});
 
 		await manager.spawn({ prompt: "p", title: "api work", cwd: "/repo/packages/api", visible: true, worktree: true });
@@ -496,12 +502,14 @@ describe("SubagentManager", () => {
 			createWorktree: async () => ({ ok: true, path: "/isolated/preserved", branch: "sumo/preserved", baseRef: "abc123" }),
 			resolveWorktreeBaseRef: async () => "abc123",
 			terminalHost: host,
-			pi: { exec: vi.fn() } as never,
+			// SAFETY: the manager only calls pi.exec on this object.
+pi: { exec: vi.fn() } as never,
 		});
 
 		const spawned = await manager.spawn({ prompt: "p", title: "preserved", cwd: "/repo", visible: true, worktree: true });
 
 		expect(spawned).toMatchObject({ status: "error", errorText: expect.stringContaining("daemon unavailable"), worktree: { path: "/isolated/preserved" } });
+		// SAFETY: failed spawns always carry an errorText field.
 		expect((spawned as { errorText?: string }).errorText).toContain("is preserved");
 		expect(backendFactory).not.toHaveBeenCalled();
 	});
@@ -569,6 +577,7 @@ describe("SubagentManager", () => {
 			interrupt: vi.fn(),
 		}), { captureGitContext: async () => ({ baseRef: "base-ref" }), buildCompletionManifest: fakeManifestBuilder });
 		const spawned = await manager.spawn({ prompt: "p", title: "t", cwd: "/tmp" });
+		// SAFETY: spawn always resolves to a snapshot carrying the generated id.
 		const id = (spawned as { id: string }).id;
 		emitFn?.({ kind: "run-settled", outcome: { kind: "interrupted" } });
 		await vi.waitFor(() => expect(manager.get(id)?.status).toBe("error"));
@@ -586,8 +595,11 @@ describe("SubagentManager", () => {
 			interrupt: () => undefined,
 		}), { captureGitContext: async () => ({ baseRef: "base-ref" }), buildCompletionManifest: manifestBuilder });
 		const spawned = await manager.spawn({ prompt: "p", title: "t", cwd: "/tmp" });
+		// SAFETY: synchronous failures resolve to an error snapshot with these fields.
 		expect((spawned as { status: string }).status).toBe("error");
+		// SAFETY: synchronous failures resolve to an error snapshot with these fields.
 		expect((spawned as { errorText?: string }).errorText).toBe("bad model");
+		// SAFETY: synchronous failures resolve to an error snapshot with these fields.
 		expect((spawned as { manifest?: unknown }).manifest).toMatchObject({ exit: "failed" });
 		expect(manifestBuilder).not.toHaveBeenCalled();
 	});
@@ -596,6 +608,7 @@ describe("SubagentManager", () => {
 		let emitFn: ((event: import("./domain.js").SubagentEvent) => void) | undefined;
 		const manager = new SubagentManager(() => ({ events: (emit) => { emitFn = emit; }, interrupt: () => undefined }), { captureGitContext: async () => ({ baseRef: "base-ref" }) });
 		const spawned = await manager.spawn({ prompt: "p", title: "t", cwd: "/tmp" });
+		// SAFETY: spawn always resolves to a snapshot carrying the generated id.
 		const id = (spawned as { id: string }).id;
 		emitFn?.({ kind: "usage", tokens: 120, costUsd: 0.05 });
 		emitFn?.({ kind: "usage" });
@@ -609,11 +622,13 @@ describe("SubagentManager", () => {
 		let nextTitle = "";
 		const manager = new SubagentManager((task) => ({
 			events: (emit) => { emitters.set(nextTitle, emit); },
-			interrupt: () => { interrupts.push(nextTitle = nextTitle); interrupts[interrupts.length - 1] = task.id; },
+			interrupt: () => { interrupts.push(task.id); },
 		}), { captureGitContext: async () => ({ baseRef: "base-ref" }), buildCompletionManifest: fakeManifestBuilder });
 		nextTitle = "a";
+		// SAFETY: spawn always resolves to a snapshot carrying the generated id.
 		const a = await manager.spawn({ prompt: "p", title: "a", cwd: "/tmp" }) as { id: string };
 		nextTitle = "b";
+		// SAFETY: spawn always resolves to a snapshot carrying the generated id.
 		const b = await manager.spawn({ prompt: "p", title: "b", cwd: "/tmp" }) as { id: string };
 		const cancelPromise = manager.cancel([a.id, b.id]);
 		// Both interrupts must have fired synchronously, before either settles.

@@ -41,7 +41,9 @@ afterEach(() => {
 	else process.env.USERPROFILE = originalUserProfile;
 });
 
-function writeJson(path: string, value: unknown): void {
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+function writeJson(path: string, value: JsonValue): void {
 	mkdirSync(join(path, ".."), { recursive: true });
 	writeFileSync(path, JSON.stringify(value), "utf8");
 }

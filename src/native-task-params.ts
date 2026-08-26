@@ -1,3 +1,6 @@
+// oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof, anti-slop/no-unsafe-dictionary-type, anti-slop/require-safety-comment-for-type-assertion -- tool-parameter boundary parser: `task` tool arguments arrive as untrusted JSON,
+// so unknown-typed inputs, runtime typeof decoding guards, open records, and widening
+// assertions onto const option lists are this module's parsing contract.
 export const MAX_PARALLEL_TASKS = 8;
 export const VALID_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export const VALID_THINKING_OPTIONS = ["inherit", ...VALID_THINKING_LEVELS] as const;

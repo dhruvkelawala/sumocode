@@ -5,23 +5,29 @@ import { TranscriptController } from "../transcript/controller.js";
 import { chatMessageViewModelToPlainText, createTranscriptViewModelMapper } from "../transcript/view-model.js";
 import { RpcTranscriptPump } from "./transcript-pump.js";
 
-function readJson(path: string): unknown {
+type JsonValue = string | number | boolean | null | undefined | JsonValue[] | { [key: string]: JsonValue };
+
+function readJson(path: string): JsonValue {
 	return JSON.parse(readFileSync(resolve(process.cwd(), path), "utf8"));
 }
 
-function readJsonl(path: string): unknown[] {
+function readJsonl(path: string): JsonValue[] {
 	return readFileSync(resolve(process.cwd(), path), "utf8")
 		.trim()
 		.split("\n")
 		.filter(Boolean)
-		.map((line) => JSON.parse(line) as unknown);
+		.map((line) => JSON.parse(line));
 }
 
-function comparable(value: unknown): unknown {
+function isJsonObjectValue(value: JsonValue): value is { [key: string]: JsonValue } {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function comparable(value: JsonValue): JsonValue {
 	if (Array.isArray(value)) return value.map(comparable);
-	if (typeof value !== "object" || value === null) return value;
-	const source = value as Record<string, unknown>;
-	const result: Record<string, unknown> = {};
+	if (!isJsonObjectValue(value)) return value ?? null;
+	const source = value;
+	const result: { [key: string]: JsonValue } = {};
 	for (const key of Object.keys(source).sort()) {
 		const child = source[key];
 		if (key === "displayName" || key === "timestamp") continue;
@@ -30,17 +36,19 @@ function comparable(value: unknown): unknown {
 		if (child === undefined) continue;
 		result[key] = comparable(child);
 	}
-	if (result.type === "activity" && typeof result.activity === "object" && result.activity !== null) {
-		const activity = result.activity as Record<string, unknown>;
-		if (activity.status === "queued") activity.status = "running";
+	const activity = result["activity"];
+	if (result["type"] === "activity" && isJsonObjectValue(activity)) {
+		if (activity["status"] === "queued") activity["status"] = "running";
 	}
 	return result;
 }
 
-function replay(path: string): unknown {
+function replay(path: string): JsonValue {
 	const pump = new RpcTranscriptPump();
 	for (const event of readJsonl(path)) pump.handleAgentEvent(event);
-	return comparable(pump.viewModel());
+	// SAFETY: view models are JSON-serializable by contract (they are
+	// snapshotted to jsonl fixtures), so the round-trip is lossless here.
+	return comparable(JSON.parse(JSON.stringify(pump.viewModel())));
 }
 
 describe("RpcTranscriptPump", () => {
@@ -56,7 +64,7 @@ describe("RpcTranscriptPump", () => {
 		const pump = new RpcTranscriptPump();
 		for (const event of readJsonl("scratch/rpc-spike/events-task-partial.jsonl")) {
 			pump.handleAgentEvent(event);
-			if ((event as { type?: unknown }).type === "tool_execution_update") break;
+			if (isJsonObjectValue(event) && event["type"] === "tool_execution_update") break;
 		}
 
 		const partials = pump.getTaskPartials();
@@ -91,6 +99,7 @@ describe("RpcTranscriptPump", () => {
 		}
 
 		expect(messageFromPiMessage).toHaveBeenCalledTimes(5);
+		// SAFETY: the mocked mapper receives untyped Pi messages; tests only read id.
 		expect(messageFromPiMessage.mock.calls.map(([message]) => (message as { id?: string }).id)).toEqual(["draft", "draft", "draft", "draft", "draft"]);
 	});
 

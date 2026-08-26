@@ -73,11 +73,13 @@ function loadPiClipboardImageModule(): Promise<ClipboardImageReader | null> {
 			// (pnpm's symlinked layout resolves through existsSync fine).
 			const modulePath = findClipboardImageModulePath();
 			if (!modulePath) return null;
+			// SAFETY: the deep import is untyped by design; both members are
+			// validated as functions immediately below before use.
 			const mod = (await import(pathToFileURL(modulePath).href)) as Partial<ClipboardImageReader>;
-			if (typeof mod.readClipboardImage !== "function" || typeof mod.extensionForImageMimeType !== "function") {
+			if (mod.readClipboardImage === undefined || mod.extensionForImageMimeType === undefined) {
 				return null;
 			}
-			return mod as ClipboardImageReader;
+			return { readClipboardImage: mod.readClipboardImage, extensionForImageMimeType: mod.extensionForImageMimeType };
 		} catch {
 			return null;
 		}

@@ -4,7 +4,7 @@ export interface ExtensionEntryImportOptions<T> {
 	readonly useBundle: boolean;
 	readonly bundleImporter: (path: string) => Promise<T>;
 	readonly sourceImporter: (path: string) => Promise<T>;
-	readonly onBundleFailure?: (error: unknown) => void;
+	readonly onBundleFailure?: (error: Error) => void;
 	/**
 	 * Re-checked AFTER the bundle import resolves. A source edit or rebuild that
 	 * lands in the check/import window makes this return false, so the shim
@@ -28,7 +28,7 @@ export async function importExtensionEntry<T>(options: ExtensionEntryImportOptio
 			}
 			return bundleModule;
 		} catch (error) {
-			options.onBundleFailure?.(error);
+			options.onBundleFailure?.(error instanceof Error ? error : new Error(String(error)));
 		}
 	}
 	return options.sourceImporter(options.sourcePath);

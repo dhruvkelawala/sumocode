@@ -54,7 +54,12 @@ async function makeAdapter(options: { terminal?: SpyTerminal; notifications?: Sp
 }
 
 /** Locate the (row, col) of the first occurrence of `needle` in a rendered frame. */
-function findText(frame: CellBuffer, needle: string): { row: number; col: number } {
+interface FrameHit {
+	row: number;
+	col: number;
+}
+
+function findText(frame: CellBuffer, needle: string): FrameHit {
 	const { rows } = frame.getDimensions();
 	for (let row = 0; row < rows; row += 1) {
 		const col = frame.toPlainRow(row).indexOf(needle);
@@ -651,7 +656,9 @@ describe("RpcShellAdapter mouse drag-select + OSC52 copy", () => {
 			expect(adapter.handleMouseEvent(mouseEvent("up", end.row, end.col))).toBe(true);
 
 			expect(terminal.clipboardSequences.length).toBe(1);
+			// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for OSC 52 header
 			expect(terminal.clipboardSequences[0]).toMatch(/^\x1b\]52;c;/);
+			// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for OSC 52 clipboard payloads
 			const decoded = Buffer.from(terminal.clipboardSequences[0]!.replace(/^\x1b\]52;c;/, "").replace(/\x1b\\$/, ""), "base64").toString("utf8");
 			expect(decoded).toContain("selectable drag target");
 

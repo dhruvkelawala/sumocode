@@ -35,6 +35,10 @@ const DEFAULT_PRIVATE_FILE_LOCK_POLL_MS = 5;
 let currentProcessBirthTime: string | undefined;
 let currentProcessBirthTimeCaptured = false;
 
+type WritablePrivateFileLockOwner = {
+	-readonly [K in keyof PrivateFileLockOwner]: PrivateFileLockOwner[K];
+};
+
 interface PrivateFileLockOwner {
 	readonly schemaVersion: typeof PRIVATE_FILE_LOCK_SCHEMA_VERSION;
 	readonly token: string;
@@ -56,29 +60,50 @@ export interface ActivityPaths {
 	readonly writerFile: string;
 }
 
-function errorCode(error: unknown): string | undefined {
-	return typeof error === "object" && error !== null && "code" in error
-		? String((error as { code?: unknown }).code)
-		: undefined;
+// oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type -- durable state I/O boundary: persisted documents are untrusted JSON,
+// so `unknown` inputs and open records are this module's parsing contract.
+function errorCode(error: Error): string | undefined {
+	// SAFETY: the fs calls here reject with NodeJS.ErrnoException whose optional `code` carries the errno string.
+	const code = (error as NodeJS.ErrnoException).code;
+	return code === undefined || code === null ? undefined : String(code);
+}
+
+/** Preserve the original fallback semantics for values thrown outside Error. */
+function errorMatches(error: unknown, code: string): boolean {
+	return error instanceof Error && errorCode(error) === code;
+}
+
+function isStringValue(value: unknown): value is string {
+	return typeof value === "string";
+}
+
+function isSafePositiveInteger(value: unknown): value is number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function recordOf(value: unknown): Record<string, unknown> | undefined {
-	return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+	return isRecordLike(value) ? value : undefined;
 }
 
 function parsePrivateFileLockOwner(value: unknown): PrivateFileLockOwner | undefined {
 	const record = recordOf(value);
 	if (
 		!record || record.schemaVersion !== PRIVATE_FILE_LOCK_SCHEMA_VERSION ||
-		typeof record.token !== "string" || !record.token ||
-		typeof record.pid !== "number" || !Number.isSafeInteger(record.pid) || record.pid <= 0 ||
-		!(record.processStartTime === undefined || typeof record.processStartTime === "string")
+		!isStringValue(record.token) || !record.token ||
+		!isSafePositiveInteger(record.pid) ||
+		!(record.processStartTime === undefined || isStringValue(record.processStartTime))
 	) return undefined;
+	const trailing: Pick<WritablePrivateFileLockOwner, "processStartTime"> = {};
+	if (record.processStartTime) trailing.processStartTime = record.processStartTime;
 	return {
 		schemaVersion: PRIVATE_FILE_LOCK_SCHEMA_VERSION,
 		token: record.token,
 		pid: record.pid,
-		...(record.processStartTime ? { processStartTime: record.processStartTime } : {}),
+		...trailing,
 	};
 }
 
@@ -97,7 +122,9 @@ function ownProcessBirthTime(): string | undefined {
 function assertOwnedDirectory(path: string): void {
 	const stat = lstatSync(path);
 	if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`Activity state path is not a directory: ${path}`);
-	if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
+	// process.getuid is POSIX-only and may be absent at runtime on Windows builds.
+	const uid = process.getuid?.();
+	if (uid !== undefined && stat.uid !== uid) {
 		throw new Error(`Activity state path is owned by a different user: ${path}`);
 	}
 }
@@ -120,7 +147,7 @@ function ensureCanonicalBaseDirectory(path: string): string {
 			if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`Activity state path is not a directory: ${cursor}`);
 			break;
 		} catch (error) {
-			if (errorCode(error) !== "ENOENT") throw error;
+			if (!errorMatches(error, "ENOENT")) throw error;
 			missing.unshift(basename(cursor));
 			const parent = dirname(cursor);
 			if (parent === cursor) throw error;
@@ -133,7 +160,7 @@ function ensureCanonicalBaseDirectory(path: string): string {
 		try {
 			mkdirSync(candidate, { mode: PRIVATE_ACTIVITY_DIRECTORY_MODE });
 		} catch (error) {
-			if (errorCode(error) !== "EEXIST") throw error;
+			if (!errorMatches(error, "EEXIST")) throw error;
 		}
 		assertOwnedDirectory(candidate);
 		canonical = candidate;
@@ -148,7 +175,7 @@ function ensurePrivateChildDirectory(parent: string, name: string): string {
 	try {
 		mkdirSync(candidate, { mode: PRIVATE_ACTIVITY_DIRECTORY_MODE });
 	} catch (error) {
-		if (errorCode(error) !== "EEXIST") throw error;
+		if (!errorMatches(error, "EEXIST")) throw error;
 	}
 	// Validate type and ownership before chmod: chmod follows symlinks.
 	assertOwnedDirectory(candidate);
@@ -183,7 +210,7 @@ export function ensurePrivateSumocodeDirectory(segments: readonly string[], root
 		try {
 			mkdirSync(join(root, segment), { mode: PRIVATE_ACTIVITY_DIRECTORY_MODE });
 		} catch (error) {
-			if (errorCode(error) !== "EEXIST") throw error;
+			if (!errorMatches(error, "EEXIST")) throw error;
 		}
 		const candidate = join(root, segment);
 		assertOwnedDirectory(candidate);
@@ -214,7 +241,16 @@ export function activityPaths(ownerSessionId: string, rootDir = defaultActivityS
 	};
 }
 
-export function readPrivateJson(path: string, maxBytes = ACTIVITY_DOCUMENT_MAX_BYTES): unknown | undefined {
+/** JSON-shaped contents of a persisted private state file. */
+type PersistedJson =
+	| string
+	| number
+	| boolean
+	| null
+	| readonly PersistedJson[]
+	| { readonly [key: string]: PersistedJson };
+
+export function readPrivateJson(path: string, maxBytes = ACTIVITY_DOCUMENT_MAX_BYTES): PersistedJson | undefined {
 	let descriptor: number | undefined;
 	try {
 		const before = lstatSync(path);
@@ -228,9 +264,9 @@ export function readPrivateJson(path: string, maxBytes = ACTIVITY_DOCUMENT_MAX_B
 			throw new Error(`Activity state file changed during read: ${path}`);
 		}
 		if (opened.size > maxBytes) throw new Error(`Activity state file exceeds ${maxBytes} bytes: ${path}`);
-		return JSON.parse(readFileSync(descriptor, "utf8")) as unknown;
+		return JSON.parse(readFileSync(descriptor, "utf8"));
 	} catch (error) {
-		if (errorCode(error) === "ENOENT") return undefined;
+		if (errorMatches(error, "ENOENT")) return undefined;
 		throw error;
 	} finally {
 		if (descriptor !== undefined) closeSync(descriptor);
@@ -269,11 +305,14 @@ export function writePrivateJsonExclusive(path: string, value: unknown): void {
 		}
 	} finally {
 		if (descriptor !== undefined) closeSync(descriptor);
-		try {
-			unlinkSync(temporary);
-		} catch (error) {
-			if (errorCode(error) !== "ENOENT") throw error;
-		}
+	}
+	// Cleanup lives outside finally so a failed unlink can never mask the
+	// operation's own success or failure; a leftover dot-prefixed temporary is
+	// unreferenced and harmless.
+	try {
+		unlinkSync(temporary);
+	} catch (error) {
+		if (!errorMatches(error, "ENOENT")) throw error;
 	}
 }
 
@@ -289,8 +328,8 @@ function privateFileLockOwnerGone(owner: PrivateFileLockOwner): boolean {
 	try {
 		process.kill(owner.pid, 0);
 	} catch (error) {
-		if (errorCode(error) === "ESRCH") return true;
-		if (errorCode(error) !== "EPERM") return false;
+		if (errorMatches(error, "ESRCH")) return true;
+		if (!errorMatches(error, "EPERM")) return false;
 	}
 	if (!owner.processStartTime) return false;
 	const actualStartTime = captureProcessBirthTime(owner.pid);
@@ -323,7 +362,7 @@ function hasBlockingPrivateFileTakeover(lockPath: string, ownToken: string): boo
 			try {
 				unlinkSync(path);
 			} catch (error) {
-				if (errorCode(error) !== "ENOENT") blocked = true;
+				if (!errorMatches(error, "ENOENT")) blocked = true;
 			}
 			continue;
 		}
@@ -341,7 +380,7 @@ function restoreDisplacedPrivateFileLock(path: string, lockPath: string): void {
 	try {
 		linkSync(path, lockPath);
 	} catch (error) {
-		if (errorCode(error) !== "EEXIST") throw error;
+		if (!errorMatches(error, "EEXIST")) throw error;
 	}
 	if (readPrivateFileLockOwner(lockPath)) unlinkSync(path);
 }
@@ -354,7 +393,7 @@ function breakAbandonedPrivateFileLock(lockPath: string, beforeTakeover?: () => 
 	try {
 		renameSync(lockPath, takeoverPath);
 	} catch (error) {
-		return errorCode(error) === "ENOENT";
+		return errorMatches(error, "ENOENT");
 	}
 	const displaced = readPrivateFileLockOwner(takeoverPath);
 	if (!displaced || displaced.token !== owner.token) {
@@ -366,7 +405,7 @@ function breakAbandonedPrivateFileLock(lockPath: string, beforeTakeover?: () => 
 	try {
 		unlinkSync(takeoverPath);
 	} catch (error) {
-		if (errorCode(error) !== "ENOENT") throw error;
+		if (!errorMatches(error, "ENOENT")) throw error;
 	}
 	return true;
 }
@@ -381,7 +420,7 @@ function releasePrivateFileLock(lockPath: string, token: string): void {
 			try {
 				renameSync(path, releasePath);
 			} catch (error) {
-				if (errorCode(error) !== "ENOENT") throw error;
+				if (!errorMatches(error, "ENOENT")) throw error;
 				continue;
 			}
 			const displaced = readPrivateFileLockOwner(releasePath);
@@ -406,11 +445,13 @@ export function withPrivateFileLock<T>(
 ): T {
 	const token = randomUUID();
 	const processStartTime = ownProcessBirthTime();
+	const trailing: Pick<WritablePrivateFileLockOwner, "processStartTime"> = {};
+	if (processStartTime) trailing.processStartTime = processStartTime;
 	const owner: PrivateFileLockOwner = {
 		schemaVersion: PRIVATE_FILE_LOCK_SCHEMA_VERSION,
 		token,
 		pid: process.pid,
-		...(processStartTime ? { processStartTime } : {}),
+		...trailing,
 	};
 	const timeoutMs = Math.max(1, Math.floor(options.timeoutMs ?? DEFAULT_PRIVATE_FILE_LOCK_TIMEOUT_MS));
 	const pollMs = Math.max(1, Math.floor(options.pollMs ?? DEFAULT_PRIVATE_FILE_LOCK_POLL_MS));
@@ -429,7 +470,7 @@ export function withPrivateFileLock<T>(
 			if (ownsPrivateFileLock(lockPath, token) && !hasBlockingPrivateFileTakeover(lockPath, token)) break;
 			releasePrivateFileLock(lockPath, token);
 		} catch (error) {
-			if (errorCode(error) !== "EEXIST") throw error;
+			if (!errorMatches(error, "EEXIST")) throw error;
 		}
 		if (breakAbandonedPrivateFileLock(lockPath, options.beforeAbandonedLockTakeover)) continue;
 		if (Date.now() >= deadline) throw new Error(`Timed out waiting for private file lock: ${lockPath}`);
@@ -471,10 +512,13 @@ export function atomicWritePrivateJson(path: string, value: unknown): void {
 		}
 	} finally {
 		if (descriptor !== undefined) closeSync(descriptor);
-		try {
-			unlinkSync(temporary);
-		} catch (error) {
-			if (errorCode(error) !== "ENOENT") throw error;
-		}
+	}
+	// Cleanup lives outside finally so a failed unlink can never mask the
+	// operation's own success or failure; a leftover dot-prefixed temporary is
+	// unreferenced and harmless.
+	try {
+		unlinkSync(temporary);
+	} catch (error) {
+		if (!errorMatches(error, "ENOENT")) throw error;
 	}
 }

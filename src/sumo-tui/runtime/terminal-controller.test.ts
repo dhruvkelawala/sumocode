@@ -133,6 +133,8 @@ describe("TerminalSessionOwner", () => {
 		// key, so any future module evaluation finds and reuses it". Verify
 		// directly: the export must be the same object globalThis holds, and
 		// re-evaluating the export expression must yield that same object.
+		// SAFETY: this module owns the __sumoDefaultTerminalSessionOwner slot;
+		// reading it back verifies the pinning contract under test.
 		const pinned = (globalThis as { __sumoDefaultTerminalSessionOwner?: TerminalSessionOwner })
 			.__sumoDefaultTerminalSessionOwner;
 		expect(pinned).toBeDefined();
@@ -463,7 +465,9 @@ describe("TerminalSessionOwner", () => {
 
 	it.each(["EPIPE", "EIO", "ENOTTY"] as const)("catches %s silently and suppresses later writes (EC-5.5)", (code) => {
 		const write = vi.fn(() => {
-			const error = new Error(code) as NodeJS.ErrnoException;
+			// SAFETY: every NodeJS.ErrnoException field is assigned explicitly below.
+			// SAFETY: every NodeJS.ErrnoException field is assigned explicitly below.
+		const error = new Error(code) as NodeJS.ErrnoException;
 			error.code = code;
 			throw error;
 		});

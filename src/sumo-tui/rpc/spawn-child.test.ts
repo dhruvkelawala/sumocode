@@ -11,6 +11,8 @@ type ChildSpawnPlan = {
 };
 
 const require = createRequire(import.meta.url);
+// SAFETY: spawn-child.mjs is this package's own module; the export shape is
+// exercised directly by these tests.
 const { buildChildSpawnPlan } = require("./spawn-child.mjs") as {
 	buildChildSpawnPlan(env: NodeJS.ProcessEnv, argv: readonly string[]): ChildSpawnPlan | undefined;
 };

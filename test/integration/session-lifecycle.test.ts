@@ -1,5 +1,5 @@
 import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
-import type { Component, EditorComponent, EditorTheme, TUI } from "@earendil-works/pi-tui";
+import type { Component, EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { RegionRegistry } from "../../src/sumo-tui/pi-compat/region-registry.js";
 import { DIRECTION_LTR, loadYoga } from "../../src/sumo-tui/layout/yoga.js";
@@ -20,19 +20,23 @@ class TestEditor implements Component {
 }
 
 function fakeTui(): TUI {
-	return { requestRender: vi.fn(), terminal: { columns: 80, rows: 24, setTitle: vi.fn() } } as unknown as TUI;
+	// SAFETY: fake supplies the requestRender/terminal surface the widgets read.
+	return { requestRender: vi.fn(), terminal: { columns: 80, rows: 24, setTitle: vi.fn() } } as never;
 }
 
 function fakeTheme(): Theme {
-	return {} as Theme;
+	// SAFETY: the theme surface is only read for token lookups in these tests.
+	return {} as never;
 }
 
 function fakeEditorTheme(): EditorTheme {
-	return { borderColor: (value: string) => value, selectList: {} } as EditorTheme;
+	// SAFETY: the theme's color functions are identity mappers for these tests.
+	return { borderColor: (value: string) => value, selectList: {} } as never;
 }
 
 function fakeKeybindings(): KeybindingsManager {
-	return {} as KeybindingsManager;
+	// SAFETY: no keybinding lookups run in these tests.
+	return {} as never;
 }
 
 describe("Phase 4 retained session lifecycle", () => {
@@ -49,7 +53,8 @@ describe("Phase 4 retained session lifecycle", () => {
 		const editor = new TestEditor();
 
 		registry.mountHeader(["SUMOCODE"]);
-		registry.mountEditor(() => editor as unknown as EditorComponent);
+		// SAFETY: TestEditor implements the editor surface mountEditor expects.
+		registry.mountEditor(() => editor as never);
 		chat.addMessage("user", "hello");
 		chat.addMessage("sumo", "world");
 		registry.root.width = 80;

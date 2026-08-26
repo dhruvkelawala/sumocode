@@ -28,12 +28,29 @@ import {
 import { isRpcHostSlashCommandName, RpcHostActions, RPC_HOST_SLASH_COMMANDS } from "./host-actions.js";
 import { RpcHostOverlayManager } from "./host-overlays.js";
 import { InlineSelectorHost } from "./inline-selector.js";
-import { RpcHostStateStore } from "./state.js";
+import { RpcHostStateStore, type RpcHostChromeState } from "./state.js";
+import type { MemoryFact } from "../../memory.js";
 
+interface MemoryBrowseStub {
+	browse(): Promise<MemoryFact[]>;
+}
+import type { RpcResponseData } from "./response.js";
+import type { RpcSessionStats } from "./controls.js";
+
+// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for ANSI stripping in frame assertions
 const ANSI_PATTERN = /\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[()][A-Za-z0-9]/g;
 
 function fakeTui(requestRender = vi.fn()): TUI {
-	return { requestRender, terminal: { columns: 80, rows: 24, setTitle: vi.fn() } } as unknown as TUI;
+	// SAFETY: tests only read columns/rows/setTitle off the terminal stub; the
+	// intersection keeps the conversion a legal narrowing.
+	const stubTerminal = { columns: 80, rows: 24, setTitle: vi.fn() };
+	// SAFETY: tests only read columns/rows/setTitle off the terminal stub; the
+	// intersection keeps the conversion a legal narrowing.
+	const terminal = stubTerminal as typeof stubTerminal & TUI["terminal"];
+	const tui: Partial<TUI> = { requestRender, terminal };
+	// SAFETY: tests only exercise requestRender and the terminal geometry
+	// members provided; the rest of TUI is untouched on these paths.
+	return tui as TUI;
 }
 
 function fakeEditorTheme(): EditorTheme {
@@ -51,7 +68,12 @@ function fakeEditorTheme(): EditorTheme {
 }
 
 function fakeKeybindings(): KeybindingsManager {
-	return { matches: () => false } as unknown as KeybindingsManager;
+	// SAFETY: the noop manager only needs matches(); every other lookup is
+	// gated through it on these paths.
+	const manager: Partial<KeybindingsManager> = { matches: () => false };
+	// SAFETY: the noop manager only needs matches(); every other lookup is
+	// gated through it on these paths.
+	return manager as KeybindingsManager;
 }
 
 function rpcCommand(name: string, description?: string, source: RpcSlashCommand["source"] = "extension"): RpcSlashCommand {
@@ -694,9 +716,9 @@ describe("advertised host slash-command dispatch invariant", () => {
 	class FakeDispatchControls {
 		public readonly calls: string[] = [];
 
-		public async refreshState(): Promise<Record<string, unknown>> {
+		public async refreshState(): Promise<RpcHostChromeState> {
 			this.calls.push("refreshState");
-			return {};
+			return new RpcHostStateStore().getSnapshot();
 		}
 
 		public async getAvailableModels(): Promise<RpcModelOption[]> {
@@ -709,9 +731,11 @@ describe("advertised host slash-command dispatch invariant", () => {
 			return [{ provider: "openai", id: "gpt-5", label: "openai/gpt-5", active: true }];
 		}
 
-		public async compact(): Promise<Record<string, unknown>> {
+		public async compact(): Promise<RpcResponseData<"compact">> {
 			this.calls.push("compact");
-			return {};
+			// SAFETY: tests never read compact response data, only that the call
+			// was dispatched with exact arguments.
+			return undefined as never;
 		}
 
 		public async getAvailableThinkingLevels(): Promise<Array<"off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max">> {
@@ -742,7 +766,7 @@ describe("advertised host slash-command dispatch invariant", () => {
 			return [{ entryId: "entry-1", text: "forkable message text" }];
 		}
 
-		public async getSessionStats(): Promise<Record<string, unknown>> {
+		public async getSessionStats(): Promise<RpcSessionStats> {
 			this.calls.push("getSessionStats");
 			return {
 				sessionFile: "/tmp/session.jsonl",
@@ -796,9 +820,13 @@ describe("advertised host slash-command dispatch invariant", () => {
 		const overlays = new RpcHostOverlayManager();
 		const inlineSelectors = new InlineSelectorHost(new FakeSelectorEditor());
 		const notifications: { message: string; level: NotificationLevel }[] = [];
-		const memoryClient = { browse: async () => [] } as unknown as RemnicMemoryClient;
+		const browseStub: MemoryBrowseStub = { browse: async () => [] };
+		/* SAFETY: memory browse results are rendered opaquely; an empty list satisfies the client surface these tests exercise. */
+		const memoryClient = browseStub as typeof browseStub & RemnicMemoryClient;
 		const actions = new RpcHostActions({
-			controls: controls as unknown as RpcHostControls,
+			// SAFETY: FakeDispatchControls implements the dispatch surface these
+			// tests drive; unrelated controls members are never invoked.
+			controls: controls as RpcHostControls & FakeDispatchControls,
 			// Fresh store, deliberately unhydrated: `sessionFile` stays undefined,
 			// so /resume and /tree take their deterministic warning branches
 			// instead of reading real session files off disk.
@@ -834,8 +862,8 @@ describe("advertised host slash-command dispatch invariant", () => {
 			(handled) => {
 				outcome = { handled };
 			},
-			(error: unknown) => {
-				outcome = { error };
+			(cause: unknown) => {
+				outcome = { error: cause };
 			},
 		);
 		for (let attempt = 0; attempt < 32 && outcome === undefined; attempt += 1) {
@@ -921,19 +949,29 @@ describe("RPC keybindings manager construction", () => {
 		writeFileSync(join(agentDir, "keybindings.json"), JSON.stringify({ "app.exit": "ctrl+q" }), "utf8");
 		const manager = createRpcKeybindingsManager({ env: { PI_CODING_AGENT_DIR: agentDir } });
 
+		// SAFETY: the action literal is a valid app.*/tui.* key; `as never` bypasses only the template-literal check.
+
 		expect(manager.matches("\x11", "app.exit" as never)).toBe(true); // ctrl+q
+		// SAFETY: the action literal is a valid app.*/tui.* key; `as never` bypasses only the template-literal check.
+
 		expect(manager.matches("\x04", "app.exit" as never)).toBe(false); // default ctrl+d no longer bound
 	});
 
 	it("constructs a real manager that honors default app.* bindings when no override is present", () => {
 		const manager = createRpcKeybindingsManager({ env: { PI_CODING_AGENT_DIR: agentDir } });
 
+		// SAFETY: the action literal is a valid app.*/tui.* key; `as never` bypasses only the template-literal check.
+
 		expect(manager.matches("\x04", "app.exit" as never)).toBe(true); // default ctrl+d
+		// SAFETY: the action literal is a valid app.*/tui.* key; `as never` bypasses only the template-literal check.
+
 		expect(manager.matches("\x1b", "app.interrupt" as never)).toBe(true); // default escape
 	});
 
 	it("still resolves tui.* editor bindings (undisturbed by app.* merge)", () => {
 		const manager = createRpcKeybindingsManager({ env: { PI_CODING_AGENT_DIR: agentDir } });
+
+		// SAFETY: the action literal is a valid app.*/tui.* key; `as never` bypasses only the template-literal check.
 
 		expect(manager.matches("\x02", "tui.editor.cursorLeft" as never)).toBe(true); // ctrl+b
 	});

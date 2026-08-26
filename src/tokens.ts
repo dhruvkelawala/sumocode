@@ -4,4 +4,4 @@ export const CATHEDRAL_TOKENS = CATHEDRAL_THEME.tokens;
 
 export type { SumoCodeState };
 
-export const SUMOCODE_STATES = [...SUMOCODE_STATE_NAMES] as SumoCodeState[];
+export const SUMOCODE_STATES: SumoCodeState[] = [...SUMOCODE_STATE_NAMES];

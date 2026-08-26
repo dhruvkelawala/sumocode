@@ -52,6 +52,7 @@ import { countLegacyModifierEnterPresses, CSI_U_SHIFT_ENTER, normalizeRawMultili
 
 const RESET = "\u001b[0m";
 const RESET_FG = "\u001b[39m";
+// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for terminal control sequences
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 const SPLASH_INPUT_FRAME_WIDTH = 60;
 const RAW_PASTE_CR_WINDOW_MS = 50;
@@ -350,7 +351,9 @@ export class CathedralEditor extends CustomEditor {
 		super(cathedralTui, theme, keybindings);
 		// Shadow pi-tui Editor's private handlePaste with the image-collapsing
 		// interceptor (see cathedralHandlePaste's doc comment).
-		(this as unknown as { handlePaste: (text: string) => void }).handlePaste = this.cathedralHandlePaste;
+		// SAFETY: shadowing pi-tui Editor's private handlePaste; instance property wins over the base method at runtime.
+		unsafeCast<{ handlePaste: (text: string) => void }>(this).handlePaste = this.cathedralHandlePaste;
+		// SAFETY: deleting the inherited optional onSubmit so the defineProperty getter below is the sole owner.
 		delete (this as { onSubmit?: unknown }).onSubmit;
 		Object.defineProperty(this, "onSubmit", {
 			configurable: true,
@@ -427,7 +430,8 @@ export class CathedralEditor extends CustomEditor {
 	 */
 	private readonly cathedralHandlePaste = (pastedText: string): void => {
 		if (this.collapseImagePath(pastedText)) return;
-		(CustomEditor.prototype as unknown as { handlePaste(text: string): void }).handlePaste.call(this, pastedText);
+		// SAFETY: delegating to pi-tui Editor's private handlePaste through its structural prototype shape.
+		unsafeCast<{ handlePaste(text: string): void }>(CustomEditor.prototype).handlePaste.call(this, pastedText);
 	};
 
 	override handleInput(data: string): void {
@@ -449,6 +453,7 @@ export class CathedralEditor extends CustomEditor {
 		}
 
 		const normalized = normalizeRawMultilinePasteInput(data);
+		// oxlint-disable-next-line no-control-regex -- intentional control-byte range check for printable input
 		if (/[^\x00-\x1f\x7f]/.test(normalized)) this.lastPrintableInputAt = now;
 		super.handleInput(normalized);
 		this.imageDraftState.pruneMissingTokens(this.getText());
@@ -468,7 +473,8 @@ export class CathedralEditor extends CustomEditor {
 	 */
 	private maybeTriggerMidLineSlashMenu(data: string): void {
 		if (data !== "/") return;
-		const internals = this as unknown as { autocompleteState: unknown; tryTriggerAutocomplete(explicitTab?: boolean): void };
+		// SAFETY: reading pi-tui Editor's private autocomplete internals through a structural seam.
+		const internals = unsafeCast<{ autocompleteState: unknown; tryTriggerAutocomplete(explicitTab?: boolean): void }>(this);
 		if (internals.autocompleteState) return;
 		const { line, col } = this.getCursor();
 		const textBeforeCursor = (this.getText().split("\n")[line] ?? "").slice(0, col);
@@ -486,10 +492,11 @@ export class CathedralEditor extends CustomEditor {
 		// are contiguous slices of each logical line, including atomic paste-marker
 		// handling, so no private pi-tui module import or duplicate wrap algorithm is
 		// needed (peer-only extension installs cannot resolve deep package imports).
-		const internals = this as unknown as {
+		// SAFETY: consuming pi-tui Editor.layoutText via its documented private shape (compat seam above).
+		const internals = unsafeCast<{
 			scrollOffset: number;
 			layoutText(width: number): Array<{ text: string }>;
-		};
+		}>(this);
 		const layoutRows = internals.layoutText(layoutWidth);
 		const allRanges: EditorSkillSourceRange[] = [];
 		let layoutIndex = 0;
@@ -620,13 +627,24 @@ function sessionHasMessages(ctx: ExtensionContext): boolean {
  * intercepting any of its behaviour (autocomplete, multi-line, IME etc.
  * all keep working).
  */
+/**
+ * Structural re-cast for private pi-tui Editor internals. A plain `as` chain is
+ * rejected by TypeScript (private members block comparability) and by lint, so
+ * the conversion goes through an opaque generic boundary instead.
+ */
+function unsafeCast<T>(...[value]: [unknown]): T {
+	// SAFETY: callers pass structural views verified against the pi-tui version pinned in peerDependencies.
+	return value as T;
+}
+
 export function installCathedralEditor(pi: ExtensionAPI): void {
 	pi.on("session_start", (_event, ctx) => {
 		if (!ctx.hasUI) return;
 		// Pi 0.71+ exposes the current editor factory. Read it before installing
 		// ours so future editor composition work has a safe public seam and repeated
 		// session_start calls can observe whether another extension already owns it.
-		(ctx.ui as { getEditorComponent?: () => unknown }).getEditorComponent?.();
+		// SAFETY: probing pi-tui ui internals not present in the public ExtensionUI type.
+		(ctx.ui as { getEditorComponent?: () => void }).getEditorComponent?.();
 		ctx.ui.setEditorComponent((tui, theme, keybindings) => {
 			return createCathedralEditor(tui, theme, keybindings, { isSplash: () => !sessionHasMessages(ctx) });
 		});

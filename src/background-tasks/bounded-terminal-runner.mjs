@@ -48,5 +48,6 @@ child.stdout?.on("data", appendBounded);
 child.on("error", (error) => appendBounded(Buffer.from(`[spawn error] ${error.message}\n`, "utf8")));
 child.on("close", (code) => {
 	closeSync(descriptor);
-	process.exitCode = typeof code === "number" ? code : 1;
+	// The close handler receives the numeric exit code or null on signal death.
+	process.exitCode = Number.isFinite(code) ? code : 1;
 });

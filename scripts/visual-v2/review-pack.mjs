@@ -1,5 +1,5 @@
 import { relative } from "node:path";
-import { outDir, repoRoot } from "./paths.mjs";
+import { outDir } from "./paths.mjs";
 import { writeFile, writeJson } from "./fs-utils.mjs";
 
 export function writeReviewPack(results, options = {}) {

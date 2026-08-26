@@ -10,6 +10,7 @@ function setup(execImpl: (cmd: string, args: string[]) => Promise<{ code: number
 		exec: vi.fn(async (cmd: string, args: string[]) => execImpl(cmd, args)),
 	};
 	const ask = vi.fn(async () => choices.shift() ?? "Cancel");
+	// SAFETY: doubles exercise registerCommand and options.ask, the members this test asserts on.
 	registerShipCommand(pi as never, { ask: ask as never });
 	const notify = vi.fn();
 	const ctx = { hasUI: true, cwd: "/repo", ui: { notify } };

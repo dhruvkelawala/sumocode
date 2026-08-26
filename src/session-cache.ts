@@ -19,7 +19,7 @@
  */
 
 import { execFile, execFileSync } from "node:child_process";
-import type { ExtensionAPI, ExtensionContext, ReadonlyFooterDataProvider } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, MessageEndEvent, ReadonlyFooterDataProvider, SessionCompactEvent, SessionStartEvent, ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import { logDiagnostic } from "./sumo-tui/runtime/diagnostics.js";
 import { renderDiagnosticsCounters } from "./render-diagnostics.js";
 
@@ -113,6 +113,8 @@ export function getSessionUsage(ctx: ExtensionContext): SessionUsage {
 		// Defensive: tests and edge sessions may carry partial message shapes.
 		// Skip usage tally when fields are missing rather than throwing — the
 		// `hasMessages` flag is the only thing several call sites depend on.
+		// SAFETY: defensive decode of partial Pi message shapes per the comment above;
+		// every field read is optional and re-checked before use.
 		const message = e.message as { role?: string; usage?: { input?: number; output?: number; cost?: { total?: number } } } | undefined;
 		if (!message || message.role !== "assistant" || !message.usage) continue;
 		input += message.usage.input ?? 0;
@@ -278,7 +280,8 @@ function defaultAsyncGitRunner(args: string[], cwd: string): Promise<string> {
  * consumer (footer/sidebar/top-chrome) installs.
  */
 export function installSessionCache(pi: ExtensionAPI): void {
-	const drop = (_event: unknown, ctx: ExtensionContext): void => {
+	type DropEvent = SessionStartEvent | MessageEndEvent | ToolResultEvent | SessionCompactEvent;
+	const drop = (_event: DropEvent, ctx: ExtensionContext): void => {
 		invalidateSessionUsage(ctx);
 	};
 	pi.on("session_start", (_event, ctx) => {

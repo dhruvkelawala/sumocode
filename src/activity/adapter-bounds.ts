@@ -1,3 +1,5 @@
+// oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type -- I/O boundary parser (bounded traversal of untrusted tool payloads): inputs are untrusted producer JSON,
+// so `unknown` parameters and open string-keyed records are this module's real input contract.
 import { safeValuePreview, sanitizeActivityText, type SafeValuePreviewOptions } from "./domain.js";
 
 export interface AdapterTraversalBudget {
@@ -23,9 +25,13 @@ function claimNode(budget: AdapterTraversalBudget): boolean {
 	return true;
 }
 
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
 export function boundedRecord(value: unknown, budget: AdapterTraversalBudget): Record<string, unknown> | undefined {
-	if (typeof value !== "object" || value === null || !claimNode(budget)) return undefined;
-	return value as Record<string, unknown>;
+	if (!isRecordLike(value) || !claimNode(budget)) return undefined;
+	return value;
 }
 
 /** Slice unknown arrays before any mapping and reserve one global traversal node. */
@@ -91,13 +97,17 @@ export function boundedPriorityArray(
 	return [...preferred, ...selectedSettled];
 }
 
+function isStringValue(value: unknown): value is string {
+	return typeof value === "string";
+}
+
 /** Inspect only the remaining raw-character budget before sanitizing. */
 export function boundedAdapterText(
 	value: unknown,
 	maxChars: number,
 	budget: AdapterTraversalBudget,
 ): string | undefined {
-	if (typeof value !== "string" || budget.remainingChars <= 0) return undefined;
+	if (!isStringValue(value) || budget.remainingChars <= 0) return undefined;
 	const outputMax = Math.max(1, Math.floor(maxChars));
 	const inspectedChars = Math.min(value.length, outputMax, budget.remainingChars);
 	budget.remainingChars -= inspectedChars;

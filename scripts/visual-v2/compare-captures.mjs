@@ -472,6 +472,7 @@ function sortedRecord(record) {
 
 function stableJson(value) {
 	if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- object probe in stable JSON canonicalizer
 	if (value && typeof value === "object") {
 		return `{${Object.entries(value)
 			.sort(([left], [right]) => left.localeCompare(right))
@@ -633,7 +634,7 @@ function parseArgs(argv) {
 	return parsed;
 }
 
-function resolvePathArg(value, name) {
+function resolvePathArg(value, _name) {
 	if (!value) {
 		console.error(`Usage: pnpm visual:compare -- --baseline-root <main-out> --candidate-root <branch-out> [--scenario id] [--lane runtime] [--out path]`);
 		process.exit(2);

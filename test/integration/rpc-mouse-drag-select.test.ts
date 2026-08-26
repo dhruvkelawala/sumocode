@@ -6,6 +6,7 @@ import { MOUSE_SGR_ENABLE_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-c
 import { createRpcChildFixture, transcriptMessages } from "./rpc-child-fixture.js";
 import { replayScreenRows, spawnSumocodePty, waitForScreen, type SpawnedPiPty } from "./spawn-pi-pty.js";
 
+// oxlint-disable-next-line no-control-regex -- intentional ESC/control-byte match to strip ANSI in captured output
 const OSC52_PATTERN = /\x1b\]52;c;/;
 
 let app: SpawnedPiPty | undefined;
@@ -16,7 +17,7 @@ afterEach(() => {
 });
 
 /** Locate the first (row, col) where `needle` starts in the replayed screen. */
-function findAnchor(lines: readonly string[], needle: string): { row: number; col: number } {
+function findAnchor(lines: readonly string[], needle: string) {
 	for (let row = 0; row < lines.length; row += 1) {
 		const col = (lines[row] ?? "").indexOf(needle);
 		if (col >= 0) return { row, col };

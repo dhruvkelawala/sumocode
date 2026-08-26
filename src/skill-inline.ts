@@ -130,7 +130,7 @@ export function installSkillInlineExpansion(pi: ExtensionAPI, options: SkillInli
 	const loadSkillsOnce = (): Promise<Skill[]> => {
 		if (cache) return cache;
 		const pending = (options.discoverSkills ?? discoverSkills)(options.cwd);
-		const cached = pending.catch((error: unknown) => {
+		const cached = pending.catch((error: Error) => {
 			if (cache === cached) cache = undefined;
 			throw error;
 		});

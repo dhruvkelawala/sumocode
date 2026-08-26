@@ -1,4 +1,14 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { SessionRecord, SessionValue } from "../transcript/view-model.js";
+
+/** Parsed JSON payload objects crossing this command's RPC boundary. */
+function isPayloadObject<T>(value: T): value is T & SessionRecord {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isString<T>(value: T): value is T & string {
+	return typeof value === "string";
+}
 
 export const RPC_TREE_NAVIGATION_COMMAND = "sumo:rpc-tree-navigate";
 export const RPC_TREE_NAVIGATION_RESULT_STATUS_KEY = "sumocode.rpc-tree-navigation-result";
@@ -38,7 +48,7 @@ function utf8Bytes(value: string): number {
 	return Buffer.byteLength(value, "utf8");
 }
 
-function isCanonicalUuid(value: unknown): value is string {
+function isCanonicalUuid<T>(value: T): value is T & string {
 	return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
 }
 
@@ -54,15 +64,15 @@ function decodeBase64Url(encoded: string): Uint8Array {
 	return decoded;
 }
 
-function exactKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+function exactKeys(value: SessionRecord, allowed: readonly string[]): boolean {
 	const keys = Object.keys(value).sort();
 	const sortedAllowed = [...allowed].sort();
 	return keys.length === sortedAllowed.length && keys.every((key, index) => key === sortedAllowed[index]);
 }
 
-export function validateRpcTreeNavigationRequest(value: unknown): asserts value is RpcTreeNavigationRequest {
-	if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("tree navigation request must be an object");
-	const record = value as unknown as Record<string, unknown>;
+export function validateRpcTreeNavigationRequest<T>(value: T): asserts value is T & RpcTreeNavigationRequest {
+	if (!isPayloadObject(value)) throw new Error("tree navigation request must be an object");
+	const record: SessionRecord = value;
 	const allowed = record.summarize === true
 		? ["requestId", "targetId", "summarize", ...(Object.hasOwn(record, "customInstructions") ? ["customInstructions"] : [])]
 		: ["requestId", "targetId", "summarize"];
@@ -88,15 +98,12 @@ function parseRequestJson(decoded: Uint8Array): RpcTreeNavigationRequest {
 	} catch {
 		throw new Error("tree navigation payload is malformed JSON");
 	}
-	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("tree navigation payload must be an object");
+	if (!isPayloadObject(parsed)) throw new Error("tree navigation payload must be an object");
 	validateRpcTreeNavigationRequest(parsed);
-	const record = parsed as unknown as Record<string, unknown>;
-	return {
-		requestId: record.requestId as string,
-		targetId: (record.targetId as string).trim(),
-		summarize: record.summarize as boolean,
-		...(typeof record.customInstructions === "string" ? { customInstructions: record.customInstructions } : {}),
-	};
+	if (isString(parsed.customInstructions)) {
+		return { requestId: parsed.requestId, targetId: parsed.targetId.trim(), summarize: parsed.summarize, customInstructions: parsed.customInstructions };
+	}
+	return { requestId: parsed.requestId, targetId: parsed.targetId.trim(), summarize: parsed.summarize };
 }
 
 export function encodeRpcTreeNavigationPayload(request: RpcTreeNavigationRequest): string {
@@ -114,9 +121,7 @@ export function decodeRpcTreeNavigationPayload(encoded: string): RpcTreeNavigati
 
 function boundedOutcome(outcome: RpcTreeNavigationOutcome): RpcTreeNavigationOutcome {
 	if (outcome.editorText !== undefined && utf8Bytes(outcome.editorText) > MAX_TREE_NAVIGATION_EDITOR_TEXT_BYTES) {
-		const withoutEditorText = { ...outcome } as { requestId: string; status: RpcTreeNavigationOutcome["status"]; leafId: string | null; editorText?: string };
-		delete withoutEditorText.editorText;
-		return withoutEditorText;
+		return { requestId: outcome.requestId, status: outcome.status, leafId: outcome.leafId };
 	}
 	return outcome;
 }
@@ -138,29 +143,32 @@ export function decodeRpcTreeNavigationOutcome(encoded: string): RpcTreeNavigati
 	} catch {
 		throw new Error("tree navigation outcome is malformed JSON");
 	}
-	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("tree navigation outcome must be an object");
-	const record = parsed as Record<string, unknown>;
+	if (!isPayloadObject(parsed)) throw new Error("tree navigation outcome must be an object");
+	const record: SessionRecord = parsed;
 	const outcomeKeys = Object.hasOwn(record, "editorText") ? ["editorText", "leafId", "requestId", "status"] : ["leafId", "requestId", "status"];
 	if (!exactKeys(record, outcomeKeys)) throw new Error("tree navigation outcome has unknown fields");
-	if (!isCanonicalUuid(record.requestId) || (record.status !== "committed" && record.status !== "cancelled" && record.status !== "error")) {
+	const requestId = record.requestId;
+	const status = record.status;
+	if (!isCanonicalUuid(requestId) || (status !== "committed" && status !== "cancelled" && status !== "error")) {
 		throw new Error("tree navigation outcome is invalid");
 	}
-	if (record.leafId !== null && typeof record.leafId !== "string") throw new Error("tree navigation outcome leafId is invalid");
-	if (Object.hasOwn(record, "editorText") && (typeof record.editorText !== "string" || utf8Bytes(record.editorText) > MAX_TREE_NAVIGATION_EDITOR_TEXT_BYTES)) throw new Error("tree navigation outcome editorText is invalid");
-	return {
-		requestId: record.requestId,
-		status: record.status,
-		leafId: record.leafId,
-		...(typeof record.editorText === "string" ? { editorText: record.editorText } : {}),
-	};
+	const leafId = record.leafId;
+	if (leafId !== null && !isString(leafId)) throw new Error("tree navigation outcome leafId is invalid");
+	const editorText = Object.hasOwn(record, "editorText") ? record.editorText : undefined;
+	if (editorText !== undefined && (!isString(editorText) || utf8Bytes(editorText) > MAX_TREE_NAVIGATION_EDITOR_TEXT_BYTES)) {
+		throw new Error("tree navigation outcome editorText is invalid");
+	}
+	return editorText !== undefined
+		? { requestId, status, leafId, editorText }
+		: { requestId, status, leafId };
 }
 
-function entryEditorText(entry: unknown): string | undefined {
-	if (typeof entry !== "object" || entry === null) return undefined;
-	const record = entry as { type?: unknown; message?: unknown; content?: unknown };
+function entryEditorText<T>(entry: T): string | undefined {
+	if (!isPayloadObject(entry)) return undefined;
+	const record = entry;
 	if (record.type === "message") {
-		if (typeof record.message !== "object" || record.message === null) return undefined;
-		const message = record.message as { role?: unknown; content?: unknown };
+		if (!isPayloadObject(record.message)) return undefined;
+		const message = record.message;
 		if (message.role !== "user") return undefined;
 		const text = contentText(message.content);
 		return utf8Bytes(text) <= MAX_TREE_NAVIGATION_EDITOR_TEXT_BYTES ? text : undefined;
@@ -172,11 +180,20 @@ function entryEditorText(entry: unknown): string | undefined {
 	return undefined;
 }
 
-function contentText(content: unknown): string {
-	if (typeof content === "string") return content;
+interface TextContentBlock {
+	type: "text";
+	text: string;
+}
+
+function isTextBlock<T>(value: T): value is T & TextContentBlock {
+	return isPayloadObject(value) && value.type === "text" && isString(value.text);
+}
+
+function contentText(content: SessionValue): string {
+	if (isString(content)) return content;
 	if (!Array.isArray(content)) return "";
 	return content
-		.filter((block): block is { type: "text"; text: string } => typeof block === "object" && block !== null && (block as { type?: unknown }).type === "text" && typeof (block as { text?: unknown }).text === "string")
+		.filter(isTextBlock)
 		.map((block) => block.text)
 		.join("");
 }
@@ -185,9 +202,9 @@ function recoverRequestId(encoded: string): string | undefined {
 	try {
 		if (utf8Bytes(encoded) > MAX_TREE_NAVIGATION_ENCODED_BYTES) return undefined;
 		const decoded = decodeBase64Url(encoded);
-		const parsed = JSON.parse(Buffer.from(decoded).toString("utf8")) as unknown;
-		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
-		const requestId = (parsed as Record<string, unknown>).requestId;
+		const parsed: unknown = JSON.parse(Buffer.from(decoded).toString("utf8"));
+		if (!isPayloadObject(parsed)) return undefined;
+		const requestId = parsed.requestId;
 		return isCanonicalUuid(requestId) ? requestId : undefined;
 	} catch {
 		return undefined;
@@ -218,16 +235,14 @@ export async function executeRpcTreeNavigation(encoded: string, ctx: ExtensionCo
 	let editorText: string | undefined;
 	try {
 		editorText = entryEditorText(ctx.sessionManager.getEntry(request.targetId));
-		const result = await ctx.navigateTree(request.targetId, {
-			summarize: request.summarize,
-			...(request.customInstructions === undefined ? {} : { customInstructions: request.customInstructions }),
-		});
-		const outcome: RpcTreeNavigationOutcome = {
-			requestId: request.requestId,
-			status: result.cancelled ? "cancelled" : "committed",
-			leafId: ctx.sessionManager.getLeafId(),
-			...(result.cancelled || editorText === undefined ? {} : { editorText }),
-		};
+		const navigateOptions = request.customInstructions === undefined
+			? { summarize: request.summarize }
+			: { summarize: request.summarize, customInstructions: request.customInstructions };
+		const result = await ctx.navigateTree(request.targetId, navigateOptions);
+		const leafId = ctx.sessionManager.getLeafId();
+		const outcome: RpcTreeNavigationOutcome = result.cancelled || editorText === undefined
+			? { requestId: request.requestId, status: result.cancelled ? "cancelled" : "committed", leafId }
+			: { requestId: request.requestId, status: "committed", leafId, editorText };
 		ctx.ui.setStatus(RPC_TREE_NAVIGATION_RESULT_STATUS_KEY, encodeRpcTreeNavigationOutcome(outcome));
 	} catch {
 		const outcome: RpcTreeNavigationOutcome = {

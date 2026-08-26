@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { buildSessionTreeFromEntries, currentTreeSelection, flattenSessionTree, treeNodeSummary, type SessionTreeNode } from "./session-tree.js";
 import type { SessionEntryLike } from "./session-reader.js";
 
-function entry(id: string, parentId: string | null, overrides: Record<string, unknown> = {}): SessionEntryLike {
+function entry(id: string, parentId: string | null, overrides: Record<string, string | number | null> = {}): SessionEntryLike {
+	// SAFETY: test fixtures only set the fields the tree builder reads.
 	return {
 		type: "message",
 		id,
@@ -54,7 +55,7 @@ describe("iterative session tree projection", () => {
 		const roots = buildSessionTreeFromEntries([
 			entry("root", null),
 			{ ...entry("label-1", "root"), type: "label", targetId: "root", label: "bookmark" },
-			{ ...entry("label-2", "root"), type: "label", targetId: "root", label: undefined },
+			{ ...entry("label-2", "root"), type: "label", targetId: "root", label: null },
 		]);
 		expect(roots[0]?.label).toBeUndefined();
 		expect(treeNodeSummary(roots[0]!)).toContain("root");

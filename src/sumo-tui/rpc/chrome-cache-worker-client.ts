@@ -35,6 +35,14 @@ const { pathToFileURL } = require("node:url");
 });
 `;
 
+/** Payload the worker posts back for a completed request (reads: chrome; writes: ack). */
+interface ChromeCacheReadValue extends CachedChrome {}
+type ChromeCacheWorkerValue = ChromeCacheReadValue | boolean | undefined;
+
+function isCachedChrome(value: ChromeCacheWorkerValue): value is ChromeCacheReadValue {
+	return typeof value === "object";
+}
+
 interface ChromeCacheWorkerRequest {
 	readonly id: number;
 	readonly operation: "read" | "write";
@@ -44,7 +52,7 @@ interface ChromeCacheWorkerRequest {
 
 interface ChromeCacheWorkerReply {
 	readonly id?: number;
-	readonly value?: unknown;
+	readonly value?: ChromeCacheWorkerValue;
 	readonly error?: string;
 	readonly fatal?: string;
 }
@@ -95,19 +103,18 @@ export class ChromeCacheWorkerClient {
 	private worker: Worker | undefined;
 	private nextId = 0;
 	private disposed = false;
-	private readonly pending = new Map<number, (value: unknown) => void>();
+	private readonly pending = new Map<number, (value: ChromeCacheWorkerValue) => void>();
 
 	public constructor(private readonly options: ChromeCacheWorkerClientOptions) {}
 
 	public async read(cwd: string): Promise<CachedChrome | undefined> {
 		try {
 			const value = await this.request({ operation: "read", cwd });
-			if (typeof value !== "object" || value === null) return undefined;
-			const record = value as Record<string, unknown>;
-			return {
-				...(typeof record.modelLabel === "string" ? { modelLabel: record.modelLabel } : {}),
-				...(typeof record.thinkingLevel === "string" ? { thinkingLevel: record.thinkingLevel } : {}),
-			};
+			if (!isCachedChrome(value)) return undefined;
+			const result: CachedChrome = {};
+			if (value.modelLabel !== undefined) result.modelLabel = value.modelLabel;
+			if (value.thinkingLevel !== undefined) result.thinkingLevel = value.thinkingLevel;
+			return result;
 		} catch {
 			return undefined;
 		}
@@ -130,7 +137,7 @@ export class ChromeCacheWorkerClient {
 		if (worker) await worker.terminate().catch(() => undefined);
 	}
 
-	private request(request: Omit<ChromeCacheWorkerRequest, "id">): Promise<unknown> {
+	private request(request: Omit<ChromeCacheWorkerRequest, "id">): Promise<ChromeCacheWorkerValue> {
 		if (this.disposed) return Promise.resolve(undefined);
 		const worker = this.ensureWorker();
 		const id = ++this.nextId;

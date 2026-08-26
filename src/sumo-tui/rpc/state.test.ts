@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { RpcHostStateStore } from "./state.js";
+import type { RpcSessionState } from "@earendil-works/pi-coding-agent";
+
+// SAFETY: fixtures populate only the RpcSessionState fields each test reads;
+// unread fields (roles, content, etc.) are irrelevant to these behaviors.
+function asRpcSessionState<T extends object>(value: T): RpcSessionState {
+	// SAFETY: fixtures supply every RpcSessionState field the store consumes.
+	return value as RpcSessionState;
+}
+
+// SAFETY: only the model identity fields are read by the store.
+const modelFixture = { provider: "openai", id: "gpt-5.5" } as never;
 
 describe("RpcHostStateStore", () => {
 	it("preserves a live git branch through hydration when no branch is supplied", () => {
@@ -7,8 +18,8 @@ describe("RpcHostStateStore", () => {
 		// The detached branch lookup writes the real branch to the store during
 		// hydration; a hydration commit that omits the branch must keep it.
 		store.setGitBranch("feature/live");
-		const hydrated = store.hydrateFromRpcState({
-			model: { provider: "openai", id: "gpt-5.5" } as never,
+		const hydrated = store.hydrateFromRpcState(asRpcSessionState({
+			model: modelFixture,
 			thinkingLevel: "high",
 			isStreaming: false,
 			isCompacting: false,
@@ -19,14 +30,16 @@ describe("RpcHostStateStore", () => {
 			messageCount: 0,
 			pendingMessageCount: 0,
 			costUsd: 0,
-		} as never);
+		}));
+
+
 		expect(hydrated.gitBranch).toBe("feature/live");
 	});
 
 	it("hydrates minimal chrome state from get_state", () => {
 		const store = new RpcHostStateStore();
-		const state = store.hydrateFromRpcState({
-			model: { provider: "openai", id: "gpt-5.5" } as never,
+		const state = store.hydrateFromRpcState(asRpcSessionState({
+			model: modelFixture,
 			thinkingLevel: "high",
 			isStreaming: false,
 			isCompacting: false,
@@ -37,7 +50,7 @@ describe("RpcHostStateStore", () => {
 			autoCompactionEnabled: true,
 			messageCount: 2,
 			pendingMessageCount: 1,
-		}, "codex/rpc-host-shell-002-exec");
+		}), "codex/rpc-host-shell-002-exec");
 
 		expect(state).toMatchObject({
 			sessionId: "session-1",
@@ -77,7 +90,7 @@ describe("RpcHostStateStore", () => {
 		expect(store.getSnapshot().hydrated).toBeUndefined();
 		expect(store.applyModelChange({ provider: "anthropic", id: "claude-opus-4-8" }).hydrated).toBeUndefined();
 
-		expect(store.hydrateFromRpcState({
+		expect(store.hydrateFromRpcState(asRpcSessionState({
 			thinkingLevel: "medium",
 			isStreaming: false,
 			isCompacting: false,
@@ -87,13 +100,13 @@ describe("RpcHostStateStore", () => {
 			autoCompactionEnabled: true,
 			messageCount: 0,
 			pendingMessageCount: 0,
-		}).hydrated).toBe(true);
+		})).hydrated).toBe(true);
 	});
 
 	it("surfaces sessionFile from a get_state payload", () => {
 		const store = new RpcHostStateStore();
-		const state = store.hydrateFromRpcState({
-			model: { provider: "openai", id: "gpt-5.5" } as never,
+		const state = store.hydrateFromRpcState(asRpcSessionState({
+			model: modelFixture,
 			thinkingLevel: "high",
 			isStreaming: false,
 			isCompacting: false,
@@ -104,7 +117,7 @@ describe("RpcHostStateStore", () => {
 			autoCompactionEnabled: true,
 			messageCount: 0,
 			pendingMessageCount: 0,
-		});
+		}));
 
 		expect(state.sessionFile).toBe(
 			"/Users/sumo-deus/.pi/agent/sessions/--test--/2026-07-02T20-24-17-673Z_019f2480.jsonl",
@@ -113,7 +126,7 @@ describe("RpcHostStateStore", () => {
 
 	it("keeps sessionFile undefined when the payload omits it", () => {
 		const store = new RpcHostStateStore();
-		const state = store.hydrateFromRpcState({
+		const state = store.hydrateFromRpcState(asRpcSessionState({
 			thinkingLevel: "high",
 			isStreaming: false,
 			isCompacting: false,
@@ -123,7 +136,7 @@ describe("RpcHostStateStore", () => {
 			autoCompactionEnabled: true,
 			messageCount: 0,
 			pendingMessageCount: 0,
-		});
+		}));
 
 		expect(state.sessionFile).toBeUndefined();
 	});
@@ -178,7 +191,7 @@ describe("RpcHostStateStore", () => {
 		const store = new RpcHostStateStore();
 
 		store.handleAgentEvent({ type: "compaction_start", reason: "manual" });
-		const state = store.hydrateFromRpcState({
+		const state = store.hydrateFromRpcState(asRpcSessionState({
 			thinkingLevel: "medium",
 			isStreaming: false,
 			isCompacting: false,
@@ -188,7 +201,7 @@ describe("RpcHostStateStore", () => {
 			autoCompactionEnabled: true,
 			messageCount: 0,
 			pendingMessageCount: 0,
-		});
+		}));
 
 		expect(state.isCompacting).toBe(false);
 		expect(state.compactionReason).toBeUndefined();
@@ -228,7 +241,7 @@ describe("RpcHostStateStore", () => {
 		const store = new RpcHostStateStore();
 
 		expect(store.setHostQueuedMessages(["host b"]).queuedMessages).toEqual(["host b"]);
-		expect(store.hydrateFromRpcState({
+		expect(store.hydrateFromRpcState(asRpcSessionState({
 			thinkingLevel: "medium",
 			isStreaming: true,
 			isCompacting: false,
@@ -238,7 +251,7 @@ describe("RpcHostStateStore", () => {
 			autoCompactionEnabled: true,
 			messageCount: 1,
 			pendingMessageCount: 0,
-		}).queuedMessages).toEqual(["host b"]);
+		})).queuedMessages).toEqual(["host b"]);
 		expect(store.getSnapshot().pendingMessageCount).toBe(1);
 
 		expect(store.handleAgentEvent({ type: "queue_update", steering: ["pi steer"], followUp: [] }).queuedMessages).toEqual(["pi steer", "host b"]);
@@ -280,8 +293,8 @@ describe("RpcHostStateStore", () => {
 			lastEventType: "tool_execution_update",
 		});
 
-		const hydrated = store.hydrateFromRpcState({
-			model: { provider: "openai", id: "gpt-5.5" } as never,
+		const hydrated = store.hydrateFromRpcState(asRpcSessionState({
+			model: modelFixture,
 			thinkingLevel: "medium",
 			isStreaming: true,
 			isCompacting: false,
@@ -292,7 +305,7 @@ describe("RpcHostStateStore", () => {
 			autoCompactionEnabled: true,
 			messageCount: 2,
 			pendingMessageCount: 1,
-		});
+		}));
 
 		expect(hydrated).toMatchObject({
 			isStreaming: true,
@@ -303,8 +316,8 @@ describe("RpcHostStateStore", () => {
 
 	it("applyModelChange patches modelLabel (and thinkingLevel, if given) directly, without touching other state", () => {
 		const store = new RpcHostStateStore();
-		store.hydrateFromRpcState({
-			model: { provider: "openai", id: "gpt-5.5" } as never,
+		store.hydrateFromRpcState(asRpcSessionState({
+			model: modelFixture,
 			thinkingLevel: "medium",
 			isStreaming: false,
 			isCompacting: false,
@@ -315,7 +328,7 @@ describe("RpcHostStateStore", () => {
 			autoCompactionEnabled: true,
 			messageCount: 2,
 			pendingMessageCount: 1,
-		});
+		}));
 
 		const afterModelOnly = store.applyModelChange({ provider: "anthropic", id: "claude-opus-4-8" });
 		expect(afterModelOnly).toMatchObject({
@@ -330,8 +343,8 @@ describe("RpcHostStateStore", () => {
 
 	it("applyModelChange leaves modelLabel untouched when given an unresolvable model", () => {
 		const store = new RpcHostStateStore();
-		store.hydrateFromRpcState({
-			model: { provider: "openai", id: "gpt-5.5" } as never,
+		store.hydrateFromRpcState(asRpcSessionState({
+			model: modelFixture,
 			thinkingLevel: "medium",
 			isStreaming: false,
 			isCompacting: false,
@@ -342,15 +355,15 @@ describe("RpcHostStateStore", () => {
 			autoCompactionEnabled: true,
 			messageCount: 2,
 			pendingMessageCount: 1,
-		});
+		}));
 
 		expect(store.applyModelChange(undefined)).toMatchObject({ modelLabel: "openai/gpt-5.5" });
 	});
 
 	it("applySessionName patches sessionName directly, without touching other state", () => {
 		const store = new RpcHostStateStore();
-		store.hydrateFromRpcState({
-			model: { provider: "openai", id: "gpt-5.5" } as never,
+		store.hydrateFromRpcState(asRpcSessionState({
+			model: modelFixture,
 			thinkingLevel: "medium",
 			isStreaming: false,
 			isCompacting: false,
@@ -361,7 +374,7 @@ describe("RpcHostStateStore", () => {
 			autoCompactionEnabled: true,
 			messageCount: 2,
 			pendingMessageCount: 1,
-		});
+		}));
 
 		expect(store.applySessionName("Plan 041")).toMatchObject({
 			sessionId: "session-1",
@@ -373,8 +386,8 @@ describe("RpcHostStateStore", () => {
 
 	it("applyThinkingLevel patches thinkingLevel directly, without touching other state", () => {
 		const store = new RpcHostStateStore();
-		store.hydrateFromRpcState({
-			model: { provider: "openai", id: "gpt-5.5" } as never,
+		store.hydrateFromRpcState(asRpcSessionState({
+			model: modelFixture,
 			thinkingLevel: "medium",
 			isStreaming: false,
 			isCompacting: false,
@@ -385,7 +398,7 @@ describe("RpcHostStateStore", () => {
 			autoCompactionEnabled: true,
 			messageCount: 2,
 			pendingMessageCount: 1,
-		});
+		}));
 
 		expect(store.applyThinkingLevel("xhigh")).toMatchObject({ thinkingLevel: "xhigh", sessionId: "session-1" });
 	});

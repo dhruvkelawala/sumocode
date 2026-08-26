@@ -78,7 +78,7 @@ export class SumoTuiTestBackend {
 		});
 	}
 
-	public get dimensions(): { cols: number; rows: number } {
+	public get dimensions() {
 		return { cols: this.cols, rows: this.rows };
 	}
 

@@ -57,7 +57,9 @@ interface TextSegmenter {
 	segment(input: string): Iterable<{ segment: string }>;
 }
 
-const SEGMENTER_CTOR = (Intl as unknown as {
+// SAFETY: Intl.Segmenter is only available on newer runtimes; the constructor
+// is feature-detected here and callers fall back to whole-string segmentation.
+const SEGMENTER_CTOR = (Intl as {
 	Segmenter?: new (locale: string | undefined, options: { granularity: "grapheme" }) => TextSegmenter;
 }).Segmenter;
 const GRAPHEME_SEGMENTER = SEGMENTER_CTOR ? new SEGMENTER_CTOR(undefined, { granularity: "grapheme" }) : undefined;
@@ -73,6 +75,7 @@ export function withPersistentStyle(ansiText: string, fgHex: string, bgHex: stri
 	const bg = parseHex(bgHex);
 	if (!fg || !bg) return ansiText;
 	const styleCode = `\u001b[38;2;${fg[0]};${fg[1]};${fg[2]}m\u001b[48;2;${bg[0]};${bg[1]};${bg[2]}m`;
+	// oxlint-disable-next-line no-control-regex -- intentional ESC byte match to re-inject reset sequences into styled text
 	return `${styleCode}${ansiText.replace(/\u001b\[0m/g, `${RESET}${styleCode}`)}${RESET}`;
 }
 
@@ -127,8 +130,12 @@ function hasStyle(style: Style): boolean {
 	);
 }
 
+function isString<T>(value: T): value is T & string {
+	return typeof value === "string";
+}
+
 function toSpan(part: Span | string): Span {
-	return typeof part === "string" ? { text: part } : part;
+	return isString(part) ? { text: part } : part;
 }
 
 export function span(text: string, style?: Style): Span {
@@ -288,7 +295,7 @@ export function renderBox(content: readonly Line[], options: BoxOptions): Line[]
 	const fillStyle = options.fillStyle ?? options.style;
 	const topParts: (Span | string)[] = [span("┌", borderStyle)];
 	if (options.title !== undefined && innerWidth > 0) {
-		const titleParts = typeof options.title === "string" ? [span(` ${options.title} `, borderStyle)] : options.title;
+		const titleParts = isString(options.title) ? [span(` ${options.title} `, borderStyle)] : options.title;
 		const titleWidth = titleParts.reduce((sum, part) => sum + visibleWidth(part.text), 0);
 		const rightRule = Math.max(0, innerWidth - titleWidth);
 		topParts.push(...titleParts, span("─".repeat(rightRule), borderStyle));

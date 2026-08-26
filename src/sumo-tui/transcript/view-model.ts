@@ -11,6 +11,27 @@ import { appendOrFoldTranscriptMessage } from "./activity-fold.js";
 import { expandKey } from "./expand-key.js";
 import { isMermaidLanguage } from "./mermaid.js";
 
+/**
+ * Decoded shape of values arriving from Pi session payloads at this module's
+ * parse boundary. Structural on purpose: every field is re-validated by the
+ * `is*` / `as*` helpers below before use, so no property access trusts the
+ * wire format.
+ */
+export type SessionValue =
+	| string
+	| number
+	| bigint
+	| boolean
+	| null
+	| undefined
+	| Date
+	| SessionValue[]
+	| SessionRecord;
+
+export interface SessionRecord {
+	[key: string]: SessionValue;
+}
+
 export type ChatMessageRole = "user" | "sumo" | "system";
 
 export type ToolStatus = "pending" | "running" | "success" | "error" | "cancelled";
@@ -82,45 +103,71 @@ export interface MarkdownBlockParseOptions {
 	readonly includeOpenMermaidFence?: boolean;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-	return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined;
+function isRecord(value: SessionValue): value is SessionRecord {
+	// Mirrors the historical coercion exactly: arrays pass the object check and
+	// flow through as records (their fields simply read as undefined).
+	return typeof value === "object" && value !== null;
 }
 
-function asString(value: unknown): string | undefined {
-	return typeof value === "string" ? value : undefined;
+function asRecord(value: SessionValue): SessionRecord | undefined {
+	return isRecord(value) ? value : undefined;
 }
 
-function asBoolean(value: unknown): boolean | undefined {
-	return typeof value === "boolean" ? value : undefined;
+function isString(value: SessionValue): value is string {
+	return typeof value === "string";
 }
 
-function asStringArray(value: unknown): string[] {
+function asString(value: SessionValue): string | undefined {
+	return isString(value) ? value : undefined;
+}
+
+function isBoolean(value: SessionValue): value is boolean {
+	return typeof value === "boolean";
+}
+
+function asBoolean(value: SessionValue): boolean | undefined {
+	return isBoolean(value) ? value : undefined;
+}
+
+function isNumber(value: SessionValue): value is number {
+	return typeof value === "number";
+}
+
+function asNumber(value: SessionValue): number | undefined {
+	return isNumber(value) ? value : undefined;
+}
+
+function isFiniteNumber(value: SessionValue): value is number {
+	return typeof value === "number" && Number.isFinite(value);
+}
+
+function asStringArray(value: SessionValue): string[] {
 	if (!Array.isArray(value)) return [];
-	return value.filter((item): item is string => typeof item === "string");
+	return value.filter((item): item is string => isString(item));
 }
 
-function firstString(...values: unknown[]): string | undefined {
+function firstString(...values: SessionValue[]): string | undefined {
 	for (const value of values) {
-		if (typeof value === "string" && value.length > 0) return value;
+		if (isString(value) && value.length > 0) return value;
 	}
 	return undefined;
 }
 
-function timestampFrom(value: unknown): Date | undefined {
+function timestampFrom(value: SessionValue): Date | undefined {
 	if (value instanceof Date) return value;
-	if (typeof value === "number" && Number.isFinite(value)) return new Date(value);
-	if (typeof value === "string") {
+	if (isFiniteNumber(value)) return new Date(value);
+	if (isString(value)) {
 		const timestamp = Date.parse(value);
 		if (Number.isFinite(timestamp)) return new Date(timestamp);
 	}
 	return undefined;
 }
 
-function messageId(record: Record<string, unknown>, fallbackIndex: number): string {
+function messageId(record: SessionRecord, fallbackIndex: number): string {
 	return firstString(record.id, record.messageId, record.responseId, record.toolCallId) ?? `message-${fallbackIndex}`;
 }
 
-function roleFromMessage(record: Record<string, unknown>): ChatMessageRole {
+function roleFromMessage(record: SessionRecord): ChatMessageRole {
 	if (record.role === "user") return "user";
 	if (record.role === "assistant") return "sumo";
 	return "system";
@@ -132,14 +179,14 @@ function displayName(role: ChatMessageRole): string {
 	return "SYSTEM";
 }
 
-function normalizeStatus(value: unknown, fallback: ToolStatus): ToolStatus {
+function normalizeStatus(value: SessionValue, fallback: ToolStatus): ToolStatus {
 	if (value === "pending" || value === "running" || value === "success" || value === "error" || value === "cancelled") return value;
 	if (value === "ok" || value === "done") return "success";
 	if (value === "failed" || value === "failure") return "error";
 	return fallback;
 }
 
-function normalizeDelegationStatus(value: unknown): DelegationStatus {
+function normalizeDelegationStatus(value: SessionValue): DelegationStatus {
 	if (value === "queued" || value === "running" || value === "success" || value === "error" || value === "cancelled") return value;
 	if (value === "ok" || value === "done") return "success";
 	if (value === "failed" || value === "failure") return "error";
@@ -178,8 +225,8 @@ export function markdownAndCodeBlocksFromText(text: string, options: MarkdownBlo
 	return blocks.length > 0 ? blocks : [{ type: "markdown", text }];
 }
 
-function textFromContent(content: unknown): string {
-	if (typeof content === "string") return content;
+function textFromContent(content: SessionValue): string {
+	if (isString(content)) return content;
 	if (!Array.isArray(content)) return "";
 	return content
 		.map((part) => {
@@ -191,31 +238,33 @@ function textFromContent(content: unknown): string {
 		.join("");
 }
 
-function authFailureHintFromMessage(record: Record<string, unknown>): string | undefined {
+function authFailureHintFromMessage(record: SessionRecord): string | undefined {
 	const errorMessage = asString(record.errorMessage) ?? asString(record.error);
 	const provider = asString(record.provider) ?? errorMessage?.match(/^No API key for provider: ([A-Za-z0-9_-]+)$/)?.[1];
 	if (!errorMessage || !provider || !errorMessage.includes(`No API key for provider: ${provider}`)) return undefined;
 	return `${provider} auth failed — run pi directly and /login to re-authenticate`;
 }
 
-function thinkingBlockFromRecord(record: Record<string, unknown>): ChatBlock[] {
+function thinkingBlockFromRecord(record: SessionRecord): ChatBlock[] {
 	const text = firstString(record.thinking, record.reasoning, record.text, record.content, record.delta);
 	const hidden = record.hidden === true || record.redacted === true || record.encrypted === true;
 	if (hidden && (!text || text.trim().length === 0)) return [{ type: "thinking", text: "Thinking...", hidden: true }];
 	if (!text || text.trim().length === 0) return [];
-	return [{ type: "thinking", text: text.trim(), ...(hidden ? { hidden: true } : {}) }];
+	return hidden
+		? [{ type: "thinking", text: text.trim(), hidden: true }]
+		: [{ type: "thinking", text: text.trim() }];
 }
 
-const ACTIVITY_STATUS_FROM_TOOL: Record<ToolStatus, ActivityStatus> = {
+const ACTIVITY_STATUS_FROM_TOOL = {
 	pending: "queued",
 	running: "running",
 	success: "succeeded",
 	error: "failed",
 	cancelled: "cancelled",
-};
+} satisfies Record<ToolStatus, ActivityStatus>;
 
 function activityBlockFromRecord(
-	record: Record<string, unknown>,
+	record: SessionRecord,
 	fallbackStatus: ToolStatus,
 	scope: { readonly messageId: string; readonly blockIndex: number },
 ): ChatBlock {
@@ -227,7 +276,7 @@ function activityBlockFromRecord(
 	return { type: "activity", activity };
 }
 
-function skillBlockFromRecord(record: Record<string, unknown>): ChatBlock {
+function skillBlockFromRecord(record: SessionRecord): ChatBlock {
 	return {
 		type: "skill",
 		name: firstString(record.name, record.skill, record.skillName) ?? "unknown-skill",
@@ -235,16 +284,16 @@ function skillBlockFromRecord(record: Record<string, unknown>): ChatBlock {
 	};
 }
 
-function summaryBlockFromRecord(record: Record<string, unknown>, kind: "branch" | "compaction"): ChatBlock {
+function summaryBlockFromRecord(record: SessionRecord, kind: "branch" | "compaction"): ChatBlock {
 	const content = firstString(record.summary, record.text, asString(record.content)) ?? "";
-	const tokens = typeof record.tokensBefore === "number" ? record.tokensBefore.toLocaleString() : undefined;
+	const tokens = asNumber(record.tokensBefore)?.toLocaleString();
 	const label = kind === "compaction"
 		? (tokens ? `[compaction] Compacted from ${tokens} tokens` : "[compaction] Compacted")
 		: "[branch] Branch summary";
 	return { type: "summary", kind, label, content, expanded: false };
 }
 
-function terminalActivitiesFromDetails(details: Record<string, unknown> | undefined): ActivitySnapshot[] {
+function terminalActivitiesFromDetails(details: SessionRecord | undefined): ActivitySnapshot[] {
 	if (!details) return [];
 	const values = [details.activity, ...(Array.isArray(details.activities) ? details.activities.slice(0, 64) : [])];
 	const activities = new Map<string, ActivitySnapshot>();
@@ -256,7 +305,7 @@ function terminalActivitiesFromDetails(details: Record<string, unknown> | undefi
 }
 
 function terminalBlocksFromRecord(
-	record: Record<string, unknown>,
+	record: SessionRecord,
 	fallbackStatus: ToolStatus,
 	scope: { readonly messageId: string; readonly blockIndex: number },
 ): ChatBlock[] | undefined {
@@ -273,7 +322,7 @@ function terminalBlocksFromRecord(
 	];
 }
 
-function terminalResultBlockFromRecord(record: Record<string, unknown>): ChatBlock {
+function terminalResultBlockFromRecord(record: SessionRecord): ChatBlock {
 	const details = asRecord(record.details);
 	const activity = parseActivitySnapshot(details?.activity);
 	if (activity?.kind === "terminal") return { type: "activity", activity };
@@ -281,7 +330,7 @@ function terminalResultBlockFromRecord(record: Record<string, unknown>): ChatBlo
 	// transcript rendering without treating legacy metadata as active state.
 	const id = firstString(details?.id, record.terminalId) ?? "terminal";
 	const title = firstString(details?.title, details?.command, record.title) ?? "untitled";
-	const exitCode = typeof details?.exitCode === "number" ? details.exitCode : undefined;
+	const exitCode = asNumber(details?.exitCode);
 	const outcome = `exited (${exitCode ?? "unknown"})`;
 	return {
 		type: "summary",
@@ -292,7 +341,7 @@ function terminalResultBlockFromRecord(record: Record<string, unknown>): ChatBlo
 	};
 }
 
-function imageBlockFromRecord(record: Record<string, unknown>): ChatBlock[] {
+function imageBlockFromRecord(record: SessionRecord): ChatBlock[] {
 	const source = asRecord(record.source);
 	const data = firstString(record.data, record.base64, record.base64Data, source?.data, source?.base64, source?.base64Data);
 	const mime = firstString(record.mime, record.mimeType, record.mediaType, record.media_type, source?.mime, source?.mimeType, source?.mediaType, source?.media_type);
@@ -325,7 +374,7 @@ export function collapseImagePathsForDisplay(text: string): string {
  * become sibling image blocks so the chat card renders them (inline pixels
  * where supported, `[Image: …]` chip otherwise).
  */
-function imageBlocksFromContent(content: unknown): ChatBlock[] {
+function imageBlocksFromContent(content: SessionValue): ChatBlock[] {
 	if (!Array.isArray(content)) return [];
 	return content.flatMap((part) => {
 		const record = asRecord(part);
@@ -335,7 +384,7 @@ function imageBlocksFromContent(content: unknown): ChatBlock[] {
 	});
 }
 
-function questionBlockFromRecord(record: Record<string, unknown>): ChatBlock {
+function questionBlockFromRecord(record: SessionRecord): ChatBlock {
 	return {
 		type: "question",
 		question: {
@@ -348,7 +397,7 @@ function questionBlockFromRecord(record: Record<string, unknown>): ChatBlock {
 	};
 }
 
-function parseDelegationTools(value: unknown): ToolCallViewModel[] {
+function parseDelegationTools(value: SessionValue): ToolCallViewModel[] {
 	if (!Array.isArray(value)) return [];
 	const results: ToolCallViewModel[] = [];
 	for (const item of value) {
@@ -356,7 +405,7 @@ function parseDelegationTools(value: unknown): ToolCallViewModel[] {
 		if (!r) continue;
 		results.push({
 			name: firstString(r.name, r.toolName) ?? "tool",
-			status: normalizeStatus(r.status, "success") as ToolStatus,
+			status: normalizeStatus(r.status, "success"),
 			input: r.input ?? r.arguments,
 			output: asString(r.output),
 		});
@@ -366,30 +415,30 @@ function parseDelegationTools(value: unknown): ToolCallViewModel[] {
 
 interface TaskMetadata {
 	readonly id: string;
-	readonly arguments?: Record<string, unknown>;
+	readonly arguments?: SessionRecord;
 	readonly prompt?: string;
 	readonly model?: string;
 	readonly thinking?: string;
 }
 
-function taskRecordId(record: Record<string, unknown>): string | undefined {
+function taskRecordId(record: SessionRecord): string | undefined {
 	return firstString(record.id, record.toolCallId);
 }
 
-function isTaskToolRecord(record: Record<string, unknown>): boolean {
+function isTaskToolRecord(record: SessionRecord): boolean {
 	return firstString(record.name, record.toolName) === "task";
 }
 
-function taskArgumentsFromRecord(record: Record<string, unknown>): Record<string, unknown> | undefined {
+function taskArgumentsFromRecord(record: SessionRecord) {
 	return asRecord(record.arguments ?? record.input);
 }
 
-function firstTaskFromArgs(args: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+function firstTaskFromArgs(args: SessionRecord | undefined) {
 	const tasks = Array.isArray(args?.tasks) ? args.tasks : [];
 	return asRecord(tasks[0]);
 }
 
-function taskMetadataFromRecord(record: Record<string, unknown>): TaskMetadata | undefined {
+function taskMetadataFromRecord(record: SessionRecord): TaskMetadata | undefined {
 	if (!isTaskToolRecord(record)) return undefined;
 	const id = taskRecordId(record);
 	if (!id) return undefined;
@@ -404,7 +453,7 @@ function taskMetadataFromRecord(record: Record<string, unknown>): TaskMetadata |
 	};
 }
 
-function collectTaskMetadataFromRecord(record: Record<string, unknown>, cache: Map<string, TaskMetadata>): void {
+function collectTaskMetadataFromRecord(record: SessionRecord, cache: Map<string, TaskMetadata>): void {
 	const metadata = taskMetadataFromRecord(record);
 	if (metadata && (metadata.arguments || metadata.prompt || metadata.model || metadata.thinking)) cache.set(metadata.id, metadata);
 	if (!Array.isArray(record.content)) return;
@@ -414,7 +463,7 @@ function collectTaskMetadataFromRecord(record: Record<string, unknown>, cache: M
 	}
 }
 
-function enrichTaskRecordFromCache(record: Record<string, unknown>, cache: Map<string, TaskMetadata>): Record<string, unknown> {
+function enrichTaskRecordFromCache(record: SessionRecord, cache: Map<string, TaskMetadata>) {
 	const id = taskRecordId(record);
 	if (!id || !isTaskToolRecord(record)) return record;
 	const metadata = cache.get(id);
@@ -428,7 +477,7 @@ function enrichTaskRecordFromCache(record: Record<string, unknown>, cache: Map<s
 	};
 }
 
-function enrichTaskResultsFromCache(record: Record<string, unknown>, cache: Map<string, TaskMetadata>): Record<string, unknown> {
+function enrichTaskResultsFromCache(record: SessionRecord, cache: Map<string, TaskMetadata>) {
 	const enriched = enrichTaskRecordFromCache(record, cache);
 	if (!Array.isArray(enriched.content)) return enriched;
 	return {
@@ -441,14 +490,14 @@ function enrichTaskResultsFromCache(record: Record<string, unknown>, cache: Map<
 }
 
 function scopedToolCallId(
-	record: Record<string, unknown>,
+	record: SessionRecord,
 	scope: { readonly messageId: string; readonly blockIndex: number },
 ): string {
 	return firstString(record.toolCallId, record.id) ?? `pi-tool:${scope.messageId}:${Math.max(0, Math.floor(scope.blockIndex))}`;
 }
 
 function nativeTaskBlockFromRecord(
-	record: Record<string, unknown>,
+	record: SessionRecord,
 	fallbackStatus: ToolStatus,
 	scope: { readonly messageId: string; readonly blockIndex: number },
 ): ChatBlock {
@@ -462,7 +511,7 @@ function nativeTaskBlockFromRecord(
 }
 
 function subagentBlocksFromRecord(
-	record: Record<string, unknown>,
+	record: SessionRecord,
 	fallbackStatus: ToolStatus,
 	scope: { readonly messageId: string; readonly blockIndex: number },
 ): ChatBlock[] {
@@ -480,7 +529,7 @@ function subagentBlocksFromRecord(
 	return updates.length > 0 ? [operation, ...updates] : [operation];
 }
 
-function delegationBlockFromRecord(record: Record<string, unknown>): ChatBlock {
+function delegationBlockFromRecord(record: SessionRecord): ChatBlock {
 	const details = asRecord(record.details);
 	return {
 		type: "delegation",
@@ -493,15 +542,15 @@ function delegationBlockFromRecord(record: Record<string, unknown>): ChatBlock {
 			model: firstString(details?.model, record.model),
 			thinking: firstString(details?.thinking, record.thinking),
 			nestedTools: parseDelegationTools(details?.tools ?? record.tools),
-			tokensIn: typeof (details?.tokensIn ?? record.tokensIn) === "number" ? (details?.tokensIn ?? record.tokensIn) as number : undefined,
-			tokensOut: typeof (details?.tokensOut ?? record.tokensOut) === "number" ? (details?.tokensOut ?? record.tokensOut) as number : undefined,
-			elapsedMs: typeof (details?.elapsedMs ?? record.elapsedMs) === "number" ? (details?.elapsedMs ?? record.elapsedMs) as number : undefined,
+			tokensIn: asNumber(details?.tokensIn ?? record.tokensIn),
+			tokensOut: asNumber(details?.tokensOut ?? record.tokensOut),
+			elapsedMs: asNumber(details?.elapsedMs ?? record.elapsedMs),
 		},
 	};
 }
 
 function blocksFromContentPart(
-	part: unknown,
+	part: SessionValue,
 	scope: { readonly messageId: string; readonly blockIndex: number },
 	options: MarkdownBlockParseOptions,
 ): ChatBlock[] {
@@ -554,13 +603,13 @@ function blocksFromContentPart(
 	}
 }
 
-function blocksFromContent(content: unknown, messageScope: string, options: MarkdownBlockParseOptions): ChatBlock[] {
-	if (typeof content === "string") return markdownAndCodeBlocksFromText(content, options);
+function blocksFromContent(content: SessionValue, messageScope: string, options: MarkdownBlockParseOptions): ChatBlock[] {
+	if (isString(content)) return markdownAndCodeBlocksFromText(content, options);
 	if (!Array.isArray(content)) return [];
 	return content.flatMap((part, blockIndex) => blocksFromContentPart(part, { messageId: messageScope, blockIndex }, options));
 }
 
-function blocksFromMessage(record: Record<string, unknown>, messageScope: string, options: MarkdownBlockParseOptions): ChatBlock[] {
+function blocksFromMessage(record: SessionRecord, messageScope: string, options: MarkdownBlockParseOptions): ChatBlock[] {
 	if (record.role === "branchSummary") return [summaryBlockFromRecord(record, "branch")];
 	if (record.role === "compactionSummary") return [summaryBlockFromRecord(record, "compaction")];
 	if (record.role === "bashExecution") {
@@ -576,14 +625,15 @@ function blocksFromMessage(record: Record<string, unknown>, messageScope: string
 		if (toolName?.startsWith("subagent_")) return subagentBlocksFromRecord(record, "success", scope);
 		return [activityBlockFromRecord(record, "success", scope), ...imageBlocksFromContent(record.content)];
 	}
-	if (record.role === "custom" && typeof record.customType === "string") {
-		if (record.customType === "skill") return [skillBlockFromRecord(asRecord(record.details) ?? record)];
-		if (record.customType === "question") return [questionBlockFromRecord(asRecord(record.details) ?? record)];
-		if (record.customType === "delegation") return [delegationBlockFromRecord(asRecord(record.details) ?? record)];
-		if (record.customType === "subagent-result") return [{ type: "activity", activity: activityFromSubagentResultRecord(record) }];
-		if (record.customType === "terminal-result") return [terminalResultBlockFromRecord(record)];
+	const customType = asString(record.customType);
+	if (record.role === "custom" && customType !== undefined) {
+		if (customType === "skill") return [skillBlockFromRecord(asRecord(record.details) ?? record)];
+		if (customType === "question") return [questionBlockFromRecord(asRecord(record.details) ?? record)];
+		if (customType === "delegation") return [delegationBlockFromRecord(asRecord(record.details) ?? record)];
+		if (customType === "subagent-result") return [{ type: "activity", activity: activityFromSubagentResultRecord(record) }];
+		if (customType === "terminal-result") return [terminalResultBlockFromRecord(record)];
 		// Unrecognized custom type: preserve provenance (mirrors Pi's CustomMessageComponent default).
-		const labeled: ChatBlock[] = [{ type: "markdown", text: `[${record.customType}]` }];
+		const labeled: ChatBlock[] = [{ type: "markdown", text: `[${customType}]` }];
 		labeled.push(...blocksFromContent(record.content, messageScope, options));
 		return labeled;
 	}
@@ -613,12 +663,14 @@ function blocksFromMessage(record: Record<string, unknown>, messageScope: string
 	return errorMessage ? [{ type: "markdown", text: errorMessage }] : [];
 }
 
-export function chatMessageViewModelFromPiMessage(
-	message: unknown,
+export function chatMessageViewModelFromPiMessage<T>(
+	message: T,
 	index = 0,
 	options: MarkdownBlockParseOptions = {},
 ): ChatMessageViewModel | undefined {
-	const record = asRecord(message);
+	// SAFETY: T forwards the caller's raw payload verbatim; asRecord re-validates
+	// the object shape at runtime before any property access below.
+	const record = asRecord(message as SessionValue);
 	if (!record) return undefined;
 	if (record.role === "custom" && record.display === false) return undefined;
 
@@ -636,8 +688,8 @@ export function chatMessageViewModelFromPiMessage(
 
 export interface TranscriptViewModelMapper {
 	reset(): void;
-	messageFromPiMessage(message: unknown, index?: number, options?: MarkdownBlockParseOptions): ChatMessageViewModel | undefined;
-	transcriptFromSessionContext(sessionContext: unknown): TranscriptViewModel;
+	messageFromPiMessage<T>(message: T, index?: number, options?: MarkdownBlockParseOptions): ChatMessageViewModel | undefined;
+	transcriptFromSessionContext<T>(sessionContext: T): TranscriptViewModel;
 }
 
 export function createTranscriptViewModelMapper(): TranscriptViewModelMapper {
@@ -646,16 +698,20 @@ export function createTranscriptViewModelMapper(): TranscriptViewModelMapper {
 		reset(): void {
 			taskMetadata.clear();
 		},
-		messageFromPiMessage(message: unknown, index = 0, options: MarkdownBlockParseOptions = {}): ChatMessageViewModel | undefined {
-			const record = asRecord(message);
+		messageFromPiMessage<T>(message: T, index = 0, options: MarkdownBlockParseOptions = {}): ChatMessageViewModel | undefined {
+			// SAFETY: T forwards the caller's raw payload verbatim; asRecord
+			// re-validates the object shape at runtime before any field reads.
+			const record = asRecord(message as SessionValue);
 			if (!record) return undefined;
 			const enriched = enrichTaskResultsFromCache(record, taskMetadata);
 			const viewModel = chatMessageViewModelFromPiMessage(enriched, index, options);
 			collectTaskMetadataFromRecord(enriched, taskMetadata);
 			return viewModel;
 		},
-		transcriptFromSessionContext(sessionContext: unknown): TranscriptViewModel {
-			const messages = asRecord(sessionContext)?.messages;
+		transcriptFromSessionContext<T>(sessionContext: T): TranscriptViewModel {
+			// SAFETY: T forwards the caller's raw session payload verbatim;
+			// asRecord plus the Array check below validate shape at runtime.
+			const messages = asRecord(sessionContext as SessionValue)?.messages;
 			if (!Array.isArray(messages)) return { messages: [] };
 			let projected: ChatMessageViewModel[] = [];
 			for (let index = 0; index < messages.length; index += 1) {
@@ -667,7 +723,7 @@ export function createTranscriptViewModelMapper(): TranscriptViewModelMapper {
 	};
 }
 
-export function transcriptFromSessionContext(sessionContext: unknown): TranscriptViewModel {
+export function transcriptFromSessionContext<T>(sessionContext: T): TranscriptViewModel {
 	const mapper = createTranscriptViewModelMapper();
 	return mapper.transcriptFromSessionContext(sessionContext);
 }

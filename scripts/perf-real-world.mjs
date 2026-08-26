@@ -27,11 +27,13 @@ function parseJsonOutput(output) {
 }
 
 function collectPaneMatches(value, name, scratch, matches = []) {
+	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- guard on parsed tmux pane JSON
 	if (!value || typeof value !== "object") return matches;
 	if (Array.isArray(value)) {
 		for (const entry of value) collectPaneMatches(entry, name, scratch, matches);
 		return matches;
 	}
+	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- field check on parsed pane JSON
 	if (typeof value.pane_id === "string") {
 		const isMatch = value.agent === name || value.name === name || value.label === name || value.cwd === scratch;
 		if (isMatch) matches.push(value.pane_id);
@@ -80,6 +82,7 @@ async function readEvents(diag) {
 		return raw.split("\n").filter(Boolean).flatMap((line) => {
 			try {
 				const event = JSON.parse(line);
+				// oxlint-disable-next-line anti-slop/no-runtime-typeof -- guard on parsed diagnostics JSONL event
 				return event && typeof event === "object" ? [event] : [];
 			} catch {
 				return [];
@@ -195,9 +198,11 @@ async function run() {
 				startedPanes.add(pane);
 				const startup = await waitForInputReady(diag, 1);
 				const bootFrame = startup.events.find((event) => event.event === "boot_screen_frame");
+				// oxlint-disable-next-line anti-slop/no-runtime-typeof -- timestamp check on parsed diagnostics event
 				if (typeof bootFrame?.ts !== "number") throw new Error("startup diagnostics did not include boot_screen_frame");
 				firstFrameMs = bootFrame.ts - t0;
 				const startupAppReady = await waitForEvent(diag, "app_ready", 1);
+				// oxlint-disable-next-line anti-slop/no-runtime-typeof -- timestamp check on parsed diagnostics event
 				if (typeof startupAppReady.event.ts !== "number") throw new Error("startup diagnostics did not include app_ready");
 				startupMs = startup.event.ts - t0;
 				appReadyMs = startupAppReady.event.ts - t0;
@@ -211,6 +216,7 @@ async function run() {
 				herdr(["pane", "send-keys", pane, "Enter"]);
 				const reload = await waitForInputReady(diag, 2);
 				const reloadAppReady = await waitForEvent(diag, "app_ready", 2);
+				// oxlint-disable-next-line anti-slop/no-runtime-typeof -- timestamp check on parsed diagnostics event
 				if (typeof reloadAppReady.event.ts !== "number") throw new Error("reload diagnostics did not include app_ready");
 				reloadMs = reload.event.ts - t1;
 				reloadAppReadyMs = reloadAppReady.event.ts - t1;
@@ -246,6 +252,7 @@ async function run() {
 			results.push({ run: index, startup_ms: startupMs, first_frame_ms: firstFrameMs, app_ready_ms: appReadyMs, reload_ms: reloadMs, reload_app_ready_ms: reloadAppReadyMs, error: errorMessage });
 		}
 
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- numeric-filter over collected run timings
 		const successful = (key) => results.map((runResult) => runResult[key]).filter((value) => typeof value === "number");
 		const report = {
 			commit: gitCommit(),

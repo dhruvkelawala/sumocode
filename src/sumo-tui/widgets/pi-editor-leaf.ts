@@ -5,6 +5,7 @@ import type { Yoga, YogaNode } from "../layout/yoga.js";
 import type { CellBuffer, Rect } from "../render/buffer.js";
 import { PiComponentLeaf } from "./pi-component-leaf.js";
 
+// oxlint-disable-next-line no-control-regex -- intentional ESC/ANSI byte match for stripping foreign component styling
 const ANSI_PATTERN = /\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[()][A-Za-z0-9]/g;
 const HORIZONTAL_BAR_PATTERN = /[\u2500\u2501\u2504\u2505\u2508\u2509\u254C\u254D\u2550]/;
 const VERTICAL_BAR_PATTERN = /[\u2502\u2503\u2506\u2507\u250A\u250B\u254E\u254F\u2551]/;

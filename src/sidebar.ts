@@ -203,23 +203,44 @@ export function createSidebarMemoryCache(
 	};
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- predicate over an untyped Pi message; the typeof check is the sanctioned parse.
+function isObjectMessage(value: unknown): value is { role?: unknown; content?: unknown } {
+	return typeof value === "object" && value !== null;
+}
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- predicate over an untyped Pi message field; the typeof check is the sanctioned parse.
+function isString(value: unknown): value is string {
+	return typeof value === "string";
+}
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- predicate over an untyped Pi message part; the typeof checks are the sanctioned parse.
+function isTextPart(value: unknown): value is { type: "text"; text: string } {
+	if (typeof value !== "object" || value === null) return false;
+	// SAFETY: guarded by the object check above; only the type/text fields are read.
+	const record = value as { type?: unknown; text?: unknown };
+	return record.type === "text" && isString(record.text);
+}
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- boundary decoder for untyped Pi message payloads; narrowing happens in the predicates below.
 function messageText(message: unknown): string {
-	if (!message || typeof message !== "object") return "";
-	const maybe = message as { role?: unknown; content?: unknown };
+	if (!isObjectMessage(message)) return "";
+	const maybe = message;
 	if (maybe.role !== "user") return "";
-	if (typeof maybe.content === "string") return maybe.content;
+	if (isString(maybe.content)) return maybe.content;
 	if (Array.isArray(maybe.content)) {
 		return maybe.content
 			.map((part) => {
-				if (part && typeof part === "object" && (part as { type?: unknown }).type === "text") {
-					return (part as { text?: unknown }).text;
-				}
+				if (isTextPart(part)) return part.text;
 				return undefined;
 			})
 			.filter((part): part is string => typeof part === "string")
 			.join("\n");
 	}
 	return "";
+}
+
+function isNumber(value: number | null | undefined): value is number {
+	return typeof value === "number";
 }
 
 function sessionHasMessages(ctx: ExtensionContext): boolean {
@@ -238,7 +259,7 @@ function snapshotFromContext(
 	const contextWindow = contextUsage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
 	// Current context tokens from Pi's live context usage API — same source as the footer.
 	// Falls back to cumulative input+output only if the API is unavailable.
-	const currentContextTokens = typeof contextUsage?.tokens === "number" ? contextUsage.tokens : undefined;
+	const currentContextTokens = isNumber(contextUsage?.tokens) ? contextUsage.tokens : undefined;
 	const branch = getCachedGitBranch(ctx) ?? undefined;
 
 	return {
@@ -313,6 +334,8 @@ export function installSidebar(pi: ExtensionAPI): void {
 			const sidebarComponent = createSidebarComponent(
 				() => snapshotFromContext(ctx, memoryCache?.snapshot() ?? { memory: [] }, activeSubTab, metricsHud.snapshot()),
 				undefined,
+				// SAFETY: the TUI terminal exposes an optional rows field; a missing
+				// value falls back to the default overlay row target.
 				() => sidebarOverlayTargetRows((tui.terminal as { rows?: number } | undefined)?.rows ?? 0),
 			);
 			const overlay = installNonCapturingSidebarOverlay(tui, sidebarComponent, () => sessionHasMessages(ctx));

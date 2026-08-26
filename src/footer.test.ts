@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ExtensionAPI, ExtensionContext, ReadonlyFooterDataProvider } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, ReadonlyFooterDataProvider, Theme } from "@earendil-works/pi-coding-agent";
 import { SUMOCODE_STATES, type SumoCodeState } from "./tokens.js";
 import {
 	formatCwd,
@@ -17,6 +17,7 @@ import {
 } from "./footer.js";
 import { VOICE } from "./voice.js";
 
+// oxlint-disable-next-line no-control-regex -- intentional ESC/control-byte match to strip ANSI in captured output
 const ANSI = /\u001b\[[0-9;]*m/g;
 const tempDirs: string[] = [];
 
@@ -57,26 +58,23 @@ afterEach(() => {
 type FooterComponent = { render(width: number): string[]; dispose?(): void };
 type FooterFactory = (
 	tui: { requestRender(): void },
-	theme: unknown,
+	theme: Theme,
 	footerData: Pick<ReadonlyFooterDataProvider, "getGitBranch" | "onBranchChange">,
 ) => FooterComponent;
 
-function installFooterHarness(): {
-	setFooter(factory: FooterFactory | undefined): void;
-	fireSessionStart(ctx: ExtensionContext): void;
-	latestFactory(): FooterFactory;
-} {
-	const handlers = new Map<string, Array<(event: unknown, ctx: ExtensionContext) => void>>();
+function installFooterHarness() {
+	const handlers = new Map<string, Array<(event: { type: string }, ctx: ExtensionContext) => void>>();
 	let factory: FooterFactory | undefined;
 	const pi = {
-		on: vi.fn((eventName: string, handler: (event: unknown, ctx: ExtensionContext) => void) => {
+		on: vi.fn((eventName: string, handler: (event: { type: string }, ctx: ExtensionContext) => void) => {
 			const list = handlers.get(eventName) ?? [];
 			list.push(handler);
 			handlers.set(eventName, list);
 		}),
 		getThinkingLevel: () => "medium",
-	} as unknown as ExtensionAPI;
-	installFooter(pi);
+	};
+	// SAFETY: the double supplies the on/getThinkingLevel surface installFooter reads.
+	installFooter(pi as never);
 	return {
 		setFooter(next: FooterFactory | undefined): void {
 			factory = next;
@@ -123,7 +121,8 @@ function footerCtx(options: { cwd?: string; modelId?: string; throwOnSnapshot?: 
 			},
 		},
 	});
-	return ctx as unknown as ExtensionContext;
+	// SAFETY: the double supplies the hasUI/ui/sessionManager surface installFooter reads.
+	return ctx as never;
 }
 
 function footerData(branch: string | null, throwOnRead = false): Pick<ReadonlyFooterDataProvider, "getGitBranch" | "onBranchChange"> {
@@ -142,11 +141,13 @@ describe("installFooter", () => {
 		const tui = { requestRender: vi.fn() };
 		const staleCtx = footerCtx({ throwOnSnapshot: true, setFooter: harness.setFooter });
 		harness.fireSessionStart(staleCtx);
-		const staleComponent = harness.latestFactory()(tui, {}, footerData("old", true));
+		// SAFETY: the theme is unused by the render paths exercised here.
+		const staleComponent = harness.latestFactory()(tui, {} as never, footerData("old", true));
 
 		const freshCtx = footerCtx({ modelId: "fresh-model", setFooter: harness.setFooter });
 		harness.fireSessionStart(freshCtx);
-		harness.latestFactory()(tui, {}, footerData("fresh"));
+		// SAFETY: the theme is unused by the render paths exercised here.
+		harness.latestFactory()(tui, {} as never, footerData("fresh"));
 
 		const plain = staleComponent.render(100).join("\n").replace(ANSI, "");
 		expect(plain).toContain("fresh-model");
@@ -157,7 +158,8 @@ describe("installFooter", () => {
 		const harness = installFooterHarness();
 		const staleCtx = footerCtx({ throwOnSnapshot: true, setFooter: harness.setFooter });
 		harness.fireSessionStart(staleCtx);
-		const component = harness.latestFactory()({ requestRender: vi.fn() }, {}, footerData("old", true));
+		// SAFETY: the theme is unused by the render paths exercised here.
+		const component = harness.latestFactory()({ requestRender: vi.fn() }, {} as never, footerData("old", true));
 
 		expect(() => component.render(100)).not.toThrow();
 	});

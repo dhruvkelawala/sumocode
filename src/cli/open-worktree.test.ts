@@ -27,6 +27,8 @@ describe("openWorktree", () => {
 		const opened = vi.fn(async () => ({ ok: true as const, pane: { host: "herdr" as const, paneId: "p1" } }));
 		const create = vi.fn();
 		const stream = output();
+		// SAFETY: the stdout/stderr/pi options accept minimal test doubles that
+		// only implement the write/exec surface openWorktree touches.
 		const code = await openWorktree("new-worktree", {
 			cwd: "/repo",
 			env: { SHELL: "/bin/zsh", SUMOCODE_LAUNCHER: "/repo/bin/sumocode.sh" },
@@ -53,6 +55,8 @@ describe("openWorktree", () => {
 		const openCommandInSplit = vi.fn(async () => ({ ok: true as const, pane: { host: "cmux" as const, paneId: "p1" } }));
 		const create = vi.fn(async () => ({ ok: true as const, path: "/repo.sumo-worktrees/sumo__feature", branch: "sumo/feature", baseRef: "HEAD" }));
 		const stream = output();
+		// SAFETY: the stdout/stderr/pi options accept minimal test doubles that
+		// only implement the write/exec surface openWorktree touches.
 		const code = await openWorktree("feature", {
 			cwd: "/repo",
 			env: { SHELL: "/bin/bash", SUMOCODE_LAUNCHER: "/repo/bin/sumocode.sh", SUMOCODE_WORKTREE_SETUP: "" },
@@ -74,6 +78,8 @@ describe("openWorktree", () => {
 	it("fails before creating anything when no terminal host is available", async () => {
 		const create = vi.fn();
 		const stream = output();
+		// SAFETY: the stdout/stderr options accept minimal test doubles that
+		// only implement the write surface openWorktree touches.
 		const code = await openWorktree(undefined, {
 			terminalHost: baseHost({ kind: "none" }),
 			create,

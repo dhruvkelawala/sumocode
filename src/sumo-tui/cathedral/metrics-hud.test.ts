@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { CATHEDRAL_TOKENS } from "../../tokens.js";
 import { stripAnsi } from "./ansi.js";
 import { MetricsHud, cpuMetricColor, fpsMetricColor, memoryMetricColor, renderMetricsHudLines, renderSparkline } from "./metrics-hud.js";
+/* oxlint-disable anti-slop/no-chained-type-assertions -- test doubles cast minimal stub objects to Pi context types. */
+/* oxlint-disable anti-slop/require-safety-comment-for-type-assertion -- stub shape is exercised by the assertions below. */
 
 describe("metrics HUD", () => {
 	it("renders CPU/MEM/FPS rows with 10-cell sparklines", () => {

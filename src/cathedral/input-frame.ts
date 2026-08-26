@@ -34,6 +34,7 @@ import { activeThemeColors } from "../themes/index.js";
 
 const RESET = "\u001b[0m";
 const RESET_BG = "\u001b[49m";
+// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for terminal control sequences
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 
 export const INPUT_FRAME_LABEL_SPLASH = "DIVINE INVOCATION";

@@ -21,6 +21,7 @@ describe("registerCursorCommand", () => {
 
 	it("registers /sumo:cursor on the pi API", () => {
 		const registerCommand = vi.fn();
+		// SAFETY: test double only exercises the members this test asserts on.
 		registerCursorCommand({ registerCommand } as never, new TerminalSessionOwner({ output: outputStub() }));
 		expect(registerCommand).toHaveBeenCalledWith(
 			"sumo:cursor",
@@ -37,7 +38,9 @@ describe("registerCursorCommand", () => {
 		});
 		const notify = vi.fn();
 
+		// SAFETY: test double only exercises the members this test asserts on.
 		registerCursorCommand({ registerCommand } as never, terminal);
+		// SAFETY: handler receives only hasUI/ui.notify, the context members the command reads.
 		await handler!("accent", { hasUI: true, ui: { notify } } as never);
 
 		expect(output.writes).toEqual([CURSOR_COLOR_SET]);
@@ -58,7 +61,9 @@ describe("registerCursorCommand", () => {
 		});
 		const notify = vi.fn();
 
+		// SAFETY: test double only exercises the members this test asserts on.
 		registerCursorCommand({ registerCommand } as never, terminal);
+		// SAFETY: handler receives only hasUI/ui.notify, the context members the command reads.
 		await handler!("accent", { hasUI: true, ui: { notify } } as never);
 
 		expect(output.writes).toEqual([`\x1b]12;${accent}\x1b\\`]);
@@ -76,7 +81,9 @@ describe("registerCursorCommand", () => {
 		});
 		const notify = vi.fn();
 
+		// SAFETY: test double only exercises the members this test asserts on.
 		registerCursorCommand({ registerCommand } as never, terminal);
+		// SAFETY: handler receives only hasUI/ui.notify, the context members the command reads.
 		await handler!("orange", { hasUI: true, ui: { notify } } as never);
 
 		expect(output.writes).toEqual(["\x1b]12;#39FF14\x1b\\"]);
@@ -91,8 +98,11 @@ describe("registerCursorCommand", () => {
 		});
 		const notify = vi.fn();
 
+		// SAFETY: test double only exercises the members this test asserts on.
 		registerCursorCommand({ registerCommand } as never, terminal);
+		// SAFETY: handler receives only hasUI/ui.notify, the context members the command reads.
 		await handler!("accent", { hasUI: true, ui: { notify } } as never);
+		// SAFETY: handler receives only hasUI/ui.notify, the context members the command reads.
 		await handler!("reset", { hasUI: true, ui: { notify } } as never);
 
 		expect(output.writes).toEqual([CURSOR_COLOR_SET, CURSOR_COLOR_RESET]);
@@ -109,7 +119,9 @@ describe("registerCursorCommand", () => {
 		});
 		const notify = vi.fn();
 
+		// SAFETY: test double only exercises the members this test asserts on.
 		registerCursorCommand({ registerCommand } as never, terminal);
+		// SAFETY: handler receives only hasUI/ui.notify, the context members the command reads.
 		await handler!("", { hasUI: true, ui: { notify } } as never);
 
 		expect(output.writes).toEqual([]);

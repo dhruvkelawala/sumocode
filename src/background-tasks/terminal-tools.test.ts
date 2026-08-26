@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import type { TerminalTaskManager } from "./task-manager.js";
 import { installTerminalTools, TerminalDeliveryCoordinator } from "./terminal-tools.js";
 import { TERMINAL_TASK_SCHEMA_VERSION, type TerminalTaskSnapshot } from "./task-types.js";
 
@@ -40,7 +39,9 @@ function createHarness(initial: TerminalTaskSnapshot[] = []) {
 	const listeners = new Set<(snapshot: TerminalTaskSnapshot) => void>();
 	let activeSessionId = "session-a";
 	let idle = true;
-	const branch: Array<Record<string, unknown>> = [];
+	// SAFETY: the fake session branch intentionally stores loose fixture records; the coordinator re-parses them.
+	// oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- fixture records are deliberately open.
+	const branch = [] as Array<Record<string, unknown>>;
 	let recordSentMessage = true;
 	let onSend: (() => void) | undefined;
 	let claimSequence = 0;
@@ -130,7 +131,8 @@ function createHarness(initial: TerminalTaskSnapshot[] = []) {
 		on: vi.fn((event: string, handler: Handler) => handlers.set(event, [...(handlers.get(event) ?? []), handler])),
 		sendMessage,
 	};
-	const coordinator = installTerminalTools(pi as never, manager as unknown as TerminalTaskManager);
+	// SAFETY: `pi` is a partial test double and `manager` a behavior-compatible fake; the cast skips the full class contract.
+	const coordinator = installTerminalTools(pi as never, manager as never);
 	const ctx = () => ({
 		cwd: "/default",
 		isIdle: () => idle,
@@ -162,7 +164,17 @@ function createHarness(initial: TerminalTaskSnapshot[] = []) {
 	};
 }
 
-async function execute(tool: RegisteredTool, params: unknown, ctx: unknown, signal?: AbortSignal) {
+interface FakeToolContext {
+	readonly cwd: string;
+	isIdle(): boolean;
+	sessionManager: {
+		getSessionId(): string;
+		// oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- fixture records are deliberately open.
+		getBranch(): Array<Record<string, unknown>>;
+	};
+}
+
+async function execute<P>(tool: RegisteredTool, params: P, ctx: FakeToolContext, signal?: AbortSignal) {
 	return tool.execute("call-1", params, signal, undefined, ctx);
 }
 
@@ -337,7 +349,9 @@ describe("installTerminalTools", () => {
 		harness.tasks.set(settled.id, { ...harness.tasks.get(settled.id)!, deliveryState: "pending", deliveryClaimToken: undefined });
 		harness.setRecordSentMessage(true);
 		harness.setOnSend(undefined);
-		const replacement = new TerminalDeliveryCoordinator(harness.pi as never, harness.manager as unknown as TerminalTaskManager);
+		// SAFETY: same partial-double rationale as the primary harness construction above.
+		const replacement = new TerminalDeliveryCoordinator(harness.pi as never, harness.manager as never);
+		// SAFETY: the shared harness ctx satisfies the coordinator's structural needs for this test.
 		replacement.bind(harness.ctx() as never);
 		await Promise.resolve();
 		await Promise.resolve();

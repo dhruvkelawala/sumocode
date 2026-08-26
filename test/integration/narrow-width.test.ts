@@ -5,6 +5,7 @@ import xterm from "@xterm/headless";
 import { afterEach, describe, expect, it } from "vitest";
 import { spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
 
+// oxlint-disable-next-line no-control-regex -- intentional ESC/control-byte match to strip ANSI in captured output
 const ANSI_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|_[^\x07]*(?:\x07|\x1b\\))/g;
 
 let app: SpawnedPiPty | undefined;

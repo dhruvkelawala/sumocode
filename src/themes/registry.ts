@@ -25,7 +25,11 @@ interface ThemeRegistryState {
 }
 
 function ensureState(): ThemeRegistryState {
-	const host = globalThis as unknown as Record<symbol, ThemeRegistryState | undefined>;
+	// SAFETY: the symbol key is namespaced to this extension, so only this
+	// module ever stores a ThemeRegistryState under it on globalThis.
+	const host = globalThis as typeof globalThis & {
+		[REGISTRY_KEY]?: ThemeRegistryState;
+	};
 	let state = host[REGISTRY_KEY];
 	if (!state) {
 		// Registry insertion order is the user-visible cycle order for both

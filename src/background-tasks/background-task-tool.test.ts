@@ -12,11 +12,12 @@ afterEach(() => {
 });
 
 function lifecycleHarness() {
-	const handlers = new Map<string, (event: unknown, ctx: any) => Promise<void> | void>();
+	type Handler = (event: { readonly reason?: string }, ctx: { sessionManager: { getSessionId(): string } }) => Promise<void> | void;
+	const handlers = new Map<string, Handler>();
 	const pi = {
 		registerTool: vi.fn(),
 		registerCommand: vi.fn(),
-		on: vi.fn((event: string, handler: (event: unknown, ctx: any) => Promise<void> | void) => handlers.set(event, handler)),
+		on: vi.fn((event: string, handler: Handler) => handlers.set(event, handler)),
 	};
 	return { pi, handlers };
 }
@@ -24,6 +25,8 @@ function lifecycleHarness() {
 describe("installBackgroundTasks", () => {
 	it("migrates the pre-Activity process-global lifecycle shape across reload", () => {
 		const key = Symbol.for("@dhruvkelawala/sumocode/terminal-process-lifecycle");
+		// SAFETY: the symbol key is namespaced to this extension, so only this module stores state there.
+		// oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- the pre-Activity shape under this key is deliberately loose for the migration test.
 		const global = globalThis as typeof globalThis & { [key: symbol]: unknown };
 		const previous = global[key];
 		try {
@@ -39,6 +42,7 @@ describe("installBackgroundTasks", () => {
 		const rootDir = mkdtempSync(join(tmpdir(), "sumocode-terminal-install-"));
 		roots.push(rootDir);
 		const firstRuntime = lifecycleHarness();
+		// SAFETY: firstRuntime.pi is a partial test double covering only the events this test drives.
 		const first = installBackgroundTasks(firstRuntime.pi as never, { store: new TerminalTaskStore({ rootDir }) });
 		const firstDetach = vi.spyOn(first, "detach");
 		const firstStopOwned = vi.spyOn(first, "stopOwned").mockResolvedValue([]);
@@ -51,6 +55,7 @@ describe("installBackgroundTasks", () => {
 		expect(firstDetach).toHaveBeenCalledOnce();
 
 		const replacementRuntime = lifecycleHarness();
+		// SAFETY: replacementRuntime.pi is the same partial test-double shape as above.
 		const replacement = installBackgroundTasks(replacementRuntime.pi as never, { store: new TerminalTaskStore({ rootDir }) });
 		const replacementDetach = vi.spyOn(replacement, "detach");
 		const replacementStopOwned = vi.spyOn(replacement, "stopOwned").mockResolvedValue([]);

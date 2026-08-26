@@ -3,7 +3,7 @@ import { SumoNode } from "../layout/node.js";
 import { DIRECTION_LTR, FLEX_DIRECTION_COLUMN, loadYoga, type Yoga } from "../layout/yoga.js";
 import { CellBuffer } from "../render/buffer.js";
 import { composite } from "../render/compositor.js";
-import { transcriptFromSessionContext, type ChatMessageViewModel } from "../transcript/view-model.js";
+import { transcriptFromSessionContext } from "../transcript/view-model.js";
 import { ChatPager } from "../widgets/chat-pager.js";
 import { ResumeProfiler, summarizeResumeProfiles, type ResumeProfile } from "./resume-profiler.js";
 
@@ -50,7 +50,8 @@ async function measureResume(yoga: Yoga, messages: readonly SyntheticPiMessage[]
 	try {
 		const rawMessages = profiler.measure("session_scan", () => messages);
 		const transcript = profiler.measure("transcript_model", () => transcriptFromSessionContext({ messages: rawMessages }));
-		const stats = profiler.measure("transcript_hydrate", () => chat.replaceViewModels(transcript.messages as readonly ChatMessageViewModel[]));
+		const stats = profiler.measure("transcript_hydrate", () => chat.replaceViewModels(transcript.messages));
+
 		profiler.measure("yoga_first_layout", () => root.yogaNode.calculateLayout(WIDTH, HEIGHT, DIRECTION_LTR));
 		profiler.measure("first_frame_render", () => composite(root, new CellBuffer(HEIGHT, WIDTH)));
 		return profiler.finish({

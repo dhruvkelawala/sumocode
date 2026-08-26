@@ -1,3 +1,4 @@
+// oxlint-disable anti-slop/require-safety-comment-for-type-assertion, anti-slop/no-known-value-widening -- this harness intentionally casts partial test doubles with `as never` instead of restating full runtime contracts.
 import { execFile } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -40,7 +41,11 @@ function runBridgeContender(
 			{ timeout: 15_000 },
 			(error, stdout, stderr) => {
 				if (error) reject(new Error(`Activity bridge contender failed: ${stderr || error.message}`));
-				else resolve(JSON.parse(stdout.trim()) as { id: string; status: string; processIdentityVerified: boolean });
+				else {
+					// SAFETY: the contender script prints exactly this JSON envelope on success.
+					const parsed = JSON.parse(stdout.trim()) as { id: string; status: string; processIdentityVerified: boolean };
+					resolve(parsed);
+				}
 			},
 		);
 	});
@@ -75,7 +80,7 @@ function terminal(id: string, ownerSessionId: string, status: "running" | "compl
 }
 
 function subagent(id: string, status: SubagentSnapshot["status"] = "running"): SubagentSnapshot {
-	return {
+	const snapshot = {
 		id,
 		title: id,
 		prompt: "review the code",
@@ -83,14 +88,16 @@ function subagent(id: string, status: SubagentSnapshot["status"] = "running"): S
 		baseRef: "HEAD",
 		status,
 		createdAt: 1_000,
-		...(status === "running" ? {} : { settledAt: 2_000 }),
 		usage: { turns: 0 },
-		transcript: [],
+		transcript: [] as SubagentSnapshot["transcript"],
 		liveText: status === "running" ? "working" : "",
 		liveTools: [],
 		finalText: status === "done" ? "done" : "",
-		...(status === "error" ? { errorText: "failed" } : {}),
-	};
+	} as SubagentSnapshot;
+	// SAFETY: the fixture is a complete SubagentSnapshot literal; the cast only widens the mutable-literal type.
+	if (status !== "running") (snapshot as { settledAt?: number }).settledAt = 2_000;
+	if (status === "error") (snapshot as { errorText?: string }).errorText = "failed";
+	return snapshot;
 }
 
 class FakeTerminalManager {
@@ -268,9 +275,9 @@ describe("ActivityManagerBridge", () => {
 		let incumbentAlive = true;
 		const owners = new Set<string>();
 		const claims = new Map<string, string>();
-		const handlers = new Map<string, Array<(event: never, ctx: never) => unknown>>();
+		const handlers = new Map<string, Array<(event: never, ctx: never) => object | void>>();
 		const pi = {
-			on: (name: string, handler: (event: never, ctx: never) => unknown) => handlers.set(name, [...handlers.get(name) ?? [], handler]),
+			on: (name: string, handler: (event: never, ctx: never) => object | void) => handlers.set(name, [...handlers.get(name) ?? [], handler]),
 		} as never;
 		const bridge = installActivityManagerBridge(pi, new FakeTerminalManager() as never, new FakeSubagentManager() as never, {
 			rootDir: stateRoot,
@@ -306,9 +313,9 @@ describe("ActivityManagerBridge", () => {
 		chmodSync(paths.feedFile, 0o600);
 		const diagnostics: string[] = [];
 		const terminals = new FakeTerminalManager();
-		const handlers = new Map<string, Array<(event: never, ctx: never) => unknown>>();
+		const handlers = new Map<string, Array<(event: never, ctx: never) => object | void>>();
 		const pi = {
-			on: (name: string, handler: (event: never, ctx: never) => unknown) => handlers.set(name, [...handlers.get(name) ?? [], handler]),
+			on: (name: string, handler: (event: never, ctx: never) => object | void) => handlers.set(name, [...handlers.get(name) ?? [], handler]),
 		} as never;
 		const claims = new Map<string, string>();
 		const bridge = installActivityManagerBridge(pi, terminals as never, new FakeSubagentManager() as never, {

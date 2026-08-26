@@ -11,6 +11,7 @@ import {
 	type ApprovalModalSnapshot,
 } from "./approval-modal.js";
 
+// oxlint-disable-next-line no-control-regex -- intentional ESC/control-byte match to strip ANSI in captured output
 const ANSI = /\u001b\[[0-9;]*m/g;
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
 const originalHerdrEnv = {
@@ -95,6 +96,7 @@ describe("renderApprovalModal", () => {
 		const lines = renderApprovalModal(snapshot({ activeButton: "yes" }), 80);
 		const buttonLine = lines.find((line) => stripAnsi(line).includes("YES"));
 		expect(buttonLine).toContain("\u001b[48;2;193;68;62m");
+		// oxlint-disable-next-line no-control-regex -- intentional ESC/control-byte match to strip ANSI in captured output
 		const matches = buttonLine!.match(/\u001b\[48;2;193;68;62m/g) ?? [];
 		expect(matches.length).toBe(1);
 	});
@@ -106,7 +108,7 @@ describe("renderApprovalModal", () => {
 	});
 
 	it("wraps long commands and descriptions inside the modal width", () => {
-		const longCommand = `cd \"/Volumes/SumoDeus NVMe/code/sumocode\" && gh issue create --title \"Approval modal leaks long commands across the terminal\" --body \"long quoted body with spaces\"`;
+		const longCommand = `cd "/Volumes/SumoDeus NVMe/code/sumocode" && gh issue create --title "Approval modal leaks long commands across the terminal" --body "long quoted body with spaces"`;
 		const lines = renderApprovalModal(snapshot({
 			command: longCommand,
 			descriptionLines: ["This command mutates GitHub state and has a very long quoted body that should wrap inside the lifted modal without leaking past the terminal edge."],
@@ -257,16 +259,22 @@ describe("approval config", () => {
 });
 
 describe("installApprovalGate — Pi event subscription", () => {
+	type ApprovalUiStub = {
+		custom?: (prompt: string) => Promise<string | undefined>;
+		select?: (message: string, choices: string[], options: { timeout: number }) => Promise<string | undefined>;
+	};
+	type ApprovalCtxStub = { hasUI: boolean; mode: "rpc" | "tui"; ui: ApprovalUiStub };
 	type ApprovalHandler = (
 		event: { toolName: string; input: { command: string } },
-		ctx: unknown,
-	) => Promise<unknown>;
+		ctx: ApprovalCtxStub,
+	) => Promise<{ block: true; reason: string } | undefined>;
 
 	function captureApprovalHandler(): ApprovalHandler {
 		let handler: ApprovalHandler | undefined;
 		const on = vi.fn((_eventName: string, callback: ApprovalHandler) => {
 			handler = callback;
 		});
+		// SAFETY: test double supplies only the context surface this code path reads (mode/ui/events).
 		installApprovalGate({ on } as never);
 		expect(on).toHaveBeenCalledWith("tool_call", expect.any(Function));
 		expect(handler).toBeDefined();
@@ -284,6 +292,7 @@ describe("installApprovalGate — Pi event subscription", () => {
 			}),
 		]) {
 			const result = await showApprovalModal(
+				// SAFETY: test double supplies only the context surface this code path reads (mode/ui/events).
 				{ mode: "rpc", ui: { custom, select } } as never,
 				{ command: "rm -rf node_modules/", descriptionLines: ["This will permanently delete files."] },
 			);
@@ -303,10 +312,12 @@ describe("installApprovalGate — Pi event subscription", () => {
 		const alwaysSelect = vi.fn(async () => "Always");
 
 		await expect(showApprovalModal(
+			// SAFETY: test double supplies only the context surface this code path reads (mode/ui/events).
 			{ mode: "rpc", ui: { select: yesSelect } } as never,
 			{ command: "rm -rf node_modules/", descriptionLines: ["This will permanently delete files."] },
 		)).resolves.toBe("yes");
 		await expect(showApprovalModal(
+			// SAFETY: test double supplies only the context surface this code path reads (mode/ui/events).
 			{ mode: "rpc", ui: { select: alwaysSelect } } as never,
 			{ command: "rm -rf node_modules/", descriptionLines: ["This will permanently delete files."] },
 		)).resolves.toBe("always");
@@ -319,8 +330,10 @@ describe("installApprovalGate — Pi event subscription", () => {
 		const emit = vi.fn();
 
 		await showRpcApprovalPrompt(
+			// SAFETY: test double supplies only the context surface this code path reads (mode/ui/events).
 			{ ui: { select: vi.fn(async () => selection) } } as never,
 			{ command: "rm -rf node_modules/", descriptionLines: ["This will permanently delete files."] },
+			// SAFETY: test double supplies only the context surface this code path reads (mode/ui/events).
 			{ events: { emit } } as never,
 		);
 
@@ -336,8 +349,10 @@ describe("installApprovalGate — Pi event subscription", () => {
 		const emit = vi.fn();
 
 		await expect(showRpcApprovalPrompt(
+			// SAFETY: test double supplies only the context surface this code path reads (mode/ui/events).
 			{ ui: { select: vi.fn(async () => { throw new Error("closed"); }) } } as never,
 			{ command: "rm -rf node_modules/", descriptionLines: ["This will permanently delete files."] },
+			// SAFETY: test double supplies only the context surface this code path reads (mode/ui/events).
 			{ events: { emit } } as never,
 		)).resolves.toBe("no");
 
@@ -352,8 +367,10 @@ describe("installApprovalGate — Pi event subscription", () => {
 		const emit = vi.fn();
 
 		await showRpcApprovalPrompt(
+			// SAFETY: test double supplies only the context surface this code path reads (mode/ui/events).
 			{ ui: { select: vi.fn(async () => "Yes") } } as never,
 			{ command: "rm -rf node_modules/", descriptionLines: ["This will permanently delete files."] },
+			// SAFETY: test double supplies only the context surface this code path reads (mode/ui/events).
 			{ events: { emit } } as never,
 		);
 
@@ -362,6 +379,7 @@ describe("installApprovalGate — Pi event subscription", () => {
 
 	it("subscribes to tool_call", () => {
 		const on = vi.fn();
+		// SAFETY: test double supplies only the context surface this code path reads (mode/ui/events).
 		installApprovalGate({ on } as never);
 		expect(on).toHaveBeenCalledWith("tool_call", expect.any(Function));
 	});

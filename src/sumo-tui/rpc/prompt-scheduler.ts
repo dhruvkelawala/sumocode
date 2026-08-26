@@ -23,12 +23,30 @@ export class RpcPromptPreflightRejection extends Error {
 	}
 }
 
+/** Result of draining the scheduler queue back into the editor draft. */
+export interface RpcPromptRestoreResult {
+	count: number;
+	text: string;
+}
+
+/**
+ * Agent lifecycle events consumed by the scheduler. The host delivers Pi
+ * agent events plus its own synthetic lifecycle events (agent_settled,
+ * turn_end); only the fields declared here are read.
+ */
+export interface RpcSchedulerEvent {
+	readonly type?: string;
+	readonly message?: { readonly role?: string; readonly content?: unknown } | undefined;
+	readonly steering?: readonly string[] | undefined;
+	readonly followUp?: readonly string[] | undefined;
+}
+
 export interface RpcPromptScheduler {
 	submit(message: string, options?: { forceQueue?: boolean }): Promise<"sent" | "queued" | "ignored" | "handled">;
 	forceSendNext(): Promise<RpcPromptForceSendResult>;
-	handleAgentEvent(event: unknown): void;
-	restoreAll(currentDraft: string, options?: RpcPromptSchedulerRestoreOptions): { count: number; text: string };
-	rebindSession(sessionId: string | undefined, currentDraft: string): { count: number; text: string };
+	handleAgentEvent(event: RpcSchedulerEvent): void;
+	restoreAll(currentDraft: string, options?: RpcPromptSchedulerRestoreOptions): RpcPromptRestoreResult;
+	rebindSession(sessionId: string | undefined, currentDraft: string): RpcPromptRestoreResult;
 	getSnapshot(): RpcPromptSchedulerSnapshot;
 }
 
@@ -40,33 +58,25 @@ export interface RpcPromptSchedulerOptions {
 	readonly handleHostCommand?: (message: string) => boolean | Promise<boolean>;
 	readonly onQueueChange?: (messages: readonly string[]) => void;
 	readonly onDispatchStart?: (message: string) => void;
-	readonly onDispatchFailure?: (error: unknown) => void;
+	readonly onDispatchFailure?: (cause: unknown) => void;
 	/**
 	 * Repaint optimistic dispatch state from the host's authoritative state when
 	 * a force-send fails without a follow-up agent event.
 	 */
 	readonly onDispatchStateSync?: () => void;
-	readonly onSteerAcceptanceUnknown?: (message: string, error: unknown) => void;
+	readonly onSteerAcceptanceUnknown?: (message: string, cause: unknown) => void;
 }
 
-type AgentEventLike = {
-	type?: unknown;
-	message?: { role?: unknown };
-	steering?: unknown;
-};
-
-function eventType(event: unknown): string | undefined {
-	const type = (event as AgentEventLike).type;
-	return typeof type === "string" ? type : undefined;
+function eventType(event: RpcSchedulerEvent): string | undefined {
+	return event.type;
 }
 
-function isUserMessageStart(event: unknown): boolean {
-	return (event as AgentEventLike).message?.role === "user";
+function isUserMessageStart(event: RpcSchedulerEvent): boolean {
+	return event.message?.role === "user";
 }
 
-function steeringQueue(event: unknown): readonly string[] | undefined {
-	const steering = (event as AgentEventLike).steering;
-	return Array.isArray(steering) && steering.every((message) => typeof message === "string") ? steering : undefined;
+function steeringQueue(event: RpcSchedulerEvent): readonly string[] | undefined {
+	return Array.isArray(event.steering) ? event.steering : undefined;
 }
 
 function isSteeringQueueAppend(previous: readonly string[] | undefined, current: readonly string[]): boolean {
@@ -173,7 +183,7 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 		return this.forceSteerState?.ownership === "pi-queued" ? "accepted" : "held";
 	}
 
-	public handleAgentEvent(event: unknown): void {
+	public handleAgentEvent(event: RpcSchedulerEvent): void {
 		switch (eventType(event)) {
 			case "agent_start":
 				this.busy = true;
@@ -221,7 +231,7 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 		}
 	}
 
-	public restoreAll(currentDraft: string, options: RpcPromptSchedulerRestoreOptions = {}): { count: number; text: string } {
+	public restoreAll(currentDraft: string, options: RpcPromptSchedulerRestoreOptions = {}): RpcPromptRestoreResult {
 		const restored = this.queue;
 		this.queue = [];
 		this.pausedAfterFailure = false;
@@ -236,7 +246,7 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 		return { count: restored.length, text: combineDrafts(restored, currentDraft) };
 	}
 
-	public rebindSession(sessionId: string | undefined, currentDraft: string): { count: number; text: string } {
+	public rebindSession(sessionId: string | undefined, currentDraft: string): RpcPromptRestoreResult {
 		const restored = this.restoreAll(currentDraft);
 		this.sessionId = sessionId;
 		this.generation += 1;

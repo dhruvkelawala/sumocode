@@ -20,6 +20,7 @@ import { renderInputHints } from "./input-frame.js";
 
 const SPLASH_INPUT_FRAME_WIDTH = 60;
 const ACTIVE_HINT_HORIZONTAL_PADDING = 1;
+// oxlint-disable-next-line no-control-regex -- intentional ESC byte match to strip ANSI styling
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 
 function centerAnsi(line: string, width: number): string {
@@ -66,7 +67,10 @@ function latestThinkingLevel(ctx: ExtensionContext): ThinkingLevel | undefined {
 	let latest: ThinkingLevel | undefined;
 	try {
 		for (const entry of ctx.sessionManager.getBranch()) {
-			if (entry.type === "thinking_level_change") latest = entry.thinkingLevel as ThinkingLevel;
+			if (entry.type === "thinking_level_change") {
+				// SAFETY: entries tagged thinking_level_change always carry a valid ThinkingLevel payload.
+				latest = entry.thinkingLevel as ThinkingLevel;
+			}
 		}
 	} catch {
 		return undefined;

@@ -1,3 +1,6 @@
+// oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof, anti-slop/no-unsafe-dictionary-type, anti-slop/require-safety-comment-for-type-assertion -- agent-message boundary parser: Pi transcript content blocks arrive as untrusted JSON,
+// so unknown-typed inputs, runtime typeof decoding guards, open records, and widening
+// assertions onto record shapes are this module's parsing contract.
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createRemnicMemoryClient, type MemoryObservationMessage, type RemnicMemoryClient } from "./memory.js";
 import { logDiagnostic } from "./sumo-tui/runtime/diagnostics.js";

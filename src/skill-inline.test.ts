@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { parseSkillBlock, type ExtensionAPI, type Skill } from "@earendil-works/pi-coding-agent";
+import { parseSkillBlock, type Skill } from "@earendil-works/pi-coding-agent";
 import { type ReadSkillBody, expandInlineSkillTokens, installSkillInlineExpansion } from "./skill-inline.js";
 
 const makeSkill = (overrides: Partial<Skill> = {}): Skill => ({
@@ -93,23 +93,26 @@ describe("expandInlineSkillTokens", () => {
 });
 
 describe("installSkillInlineExpansion", () => {
+	type PiHandler = (event: { text: string }) => Promise<{ action: string; text?: string }>;
+
 	it("registers input and session_start handlers without loading skills eagerly", () => {
-		const handlers = new Map<string, unknown>();
-		const pi = { on: (event: string, handler: unknown) => handlers.set(event, handler) } as unknown as ExtensionAPI;
+		const handlers = new Map<string, PiHandler>();
+		// SAFETY: the on() double supplies the registrar surface installSkillInlineExpansion reads.
+		const pi = { on: (event: string, handler: PiHandler) => handlers.set(event, handler) } as never;
 		installSkillInlineExpansion(pi);
 		expect(handlers.has("input")).toBe(true);
 		expect(handlers.has("session_start")).toBe(true);
 	});
 
 	it("retries discovery after a transient rejection", async () => {
-		type InputHandler = (event: { text: string }) => Promise<unknown>;
-		const handlers = new Map<string, unknown>();
-		const pi = { on: (event: string, handler: unknown) => handlers.set(event, handler) } as unknown as ExtensionAPI;
+		const handlers = new Map<string, PiHandler>();
+		// SAFETY: the on() double supplies the registrar surface installSkillInlineExpansion reads.
+		const pi = { on: (event: string, handler: PiHandler) => handlers.set(event, handler) } as never;
 		const discoverSkills = vi.fn()
 			.mockRejectedValueOnce(new Error("temporary filesystem failure"))
 			.mockResolvedValueOnce([makeSkill()]);
 		installSkillInlineExpansion(pi, { discoverSkills, readSkillBody: readBody });
-		const input = handlers.get("input") as InputHandler;
+		const input = handlers.get("input")!;
 
 		expect(await input({ text: "use /skill:tdd now" })).toEqual({ action: "continue" });
 		expect(await input({ text: "use /skill:tdd now" })).toMatchObject({ action: "transform" });
@@ -117,13 +120,13 @@ describe("installSkillInlineExpansion", () => {
 	});
 
 	it("uses resource-loader discovery so contributed skills can transform", async () => {
-		type InputHandler = (event: { text: string }) => Promise<unknown>;
-		const handlers = new Map<string, unknown>();
-		const pi = { on: (event: string, handler: unknown) => handlers.set(event, handler) } as unknown as ExtensionAPI;
+		const handlers = new Map<string, PiHandler>();
+		// SAFETY: the on() double supplies the registrar surface installSkillInlineExpansion reads.
+		const pi = { on: (event: string, handler: PiHandler) => handlers.set(event, handler) } as never;
 		const herdr = makeSkill({ name: "herdr", filePath: "/project/.agents/skills/herdr/SKILL.md", baseDir: "/project/.agents/skills/herdr" });
 		installSkillInlineExpansion(pi, { discoverSkills: async () => [herdr], readSkillBody: readBody });
 
-		const result = await (handlers.get("input") as InputHandler)({ text: "check this /skill:herdr" });
+		const result = await handlers.get("input")!({ text: "check this /skill:herdr" });
 		expect(result).toEqual({
 			action: "transform",
 			text: '<skill name="herdr" location="/project/.agents/skills/herdr/SKILL.md">\nReferences are relative to /project/.agents/skills/herdr.\n\nbody of herdr\n</skill>\n\ncheck this',

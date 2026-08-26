@@ -186,6 +186,8 @@ type AnyKey = Parameters<typeof matchesKey>[1];
 
 function keyEq(data: string, ...ids: readonly AnyKey[]): boolean {
 	for (const id of ids) {
+		// SAFETY: AnyKey is the union of Key.* literal ID types, each of which is
+		// representable as a string for the direct equality fast path.
 		if (data === (id as string)) return true;
 		if (matchesKey(data, id)) return true;
 	}
@@ -267,6 +269,8 @@ export function buildPaletteSnapshot(ctx: PaletteSnapshotContext): CommandPalett
 }
 
 function thinkingLevelsForContext(ctx: ExtensionContext): readonly ThinkingLevel[] {
+	// SAFETY: Pi's context exposes the active model; only its thinking-level
+	// capabilities are read via getSupportedThinkingLevels below.
 	const model = (ctx as { model?: Parameters<typeof getSupportedThinkingLevels>[0] }).model;
 	if (!model) return COMMAND_PALETTE_THINKING_LEVELS;
 	return getSupportedThinkingLevels(model);
@@ -291,7 +295,10 @@ export async function handlePaletteSelection(mode: PaletteMode | undefined, ctx:
 	if (mode === "THINKING") {
 		const levels = thinkingLevelsForContext(ctx);
 		const selected = await showDivineQuery(ctx, "Set thinking level", [...levels]);
+		// SAFETY: showDivineQuery returns one of the option strings passed in,
+		// which are exactly the ThinkingLevel entries of `levels` above.
 		if (selected && levels.includes(selected as ThinkingLevel)) {
+			// SAFETY: guarded by the includes() membership check against levels.
 			pi.setThinkingLevel(selected as ThinkingLevel);
 		}
 		return;
@@ -330,6 +337,9 @@ export function installCommandPalette(pi: ExtensionAPI): void {
 			if (!ctx.hasUI) return;
 			const selection = await ctx.ui.custom<PaletteMode | undefined>(
 				(_tui, _theme, _keybindings, done) =>
+					// SAFETY: the palette component receives the ctx surface it reads
+					// (model/registry/thinking-level accessors) plus a getThinkingLevel
+					// bound to the live Pi instance.
 					new CommandPaletteComponent(
 						buildPaletteSnapshot({ ...ctx, getThinkingLevel: () => pi.getThinkingLevel() } as never),
 						done,

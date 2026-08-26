@@ -46,6 +46,7 @@ describe("question tool options", () => {
 			},
 		};
 
+		// SAFETY: the double implements only the registerTool surface these tests read.
 		installQuestionTool(pi as never);
 		const result = await tool!.execute("call-1", {
 			question: "Preferred framing?",
@@ -76,6 +77,7 @@ describe("question tool options", () => {
 			},
 		};
 
+		// SAFETY: the double implements only the registerTool surface these tests read.
 		installQuestionTool(pi as never);
 		const result = await tool!.execute("call-1", {
 			question: "Approve?",
@@ -105,6 +107,7 @@ describe("question tool options", () => {
 			},
 		};
 
+		// SAFETY: the double implements only the registerTool surface these tests read.
 		installQuestionTool(pi as never);
 		const result = await tool!.execute("call-1", {
 			question: "Pick one",
@@ -134,6 +137,7 @@ describe("question tool options", () => {
 			},
 		};
 
+		// SAFETY: the double implements only the registerTool surface these tests read.
 		installQuestionTool(pi as never);
 		const result = await tool!.execute("call-1", { question: "What should I do?" }, undefined, undefined, ctx);
 
@@ -161,6 +165,7 @@ describe("question tool options", () => {
 			},
 		};
 
+		// SAFETY: the double implements only the registerTool surface these tests read.
 		installQuestionTool(pi as never);
 		const result = await tool!.execute("call-1", { question: "What should I do?" }, undefined, undefined, ctx);
 
@@ -173,10 +178,11 @@ describe("question tool options", () => {
 
 describe("question tool RPC primitives", () => {
 	function registerTool() {
-		let tool: { execute: (...args: unknown[]) => Promise<{ content: { text: string }[]; details: Record<string, unknown> }> } | undefined;
+		let tool: { execute: (...args: unknown[]) => Promise<{ content: { text: string }[]; details: { answer?: string; wasCustom?: boolean; cancelled?: boolean } }> } | undefined;
 		const pi = {
 			registerTool: vi.fn((definition) => { tool = definition; }),
 		};
+		// SAFETY: the double implements only the registerTool surface these tests read.
 		installQuestionTool(pi as never);
 		return tool!;
 	}

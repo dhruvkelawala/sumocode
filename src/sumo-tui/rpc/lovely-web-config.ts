@@ -21,7 +21,12 @@ export type LovelyWebConfigKey =
 	| "tavilyApiKey"
 	| "braveApiKey";
 
-export type LovelyWebConfigPatch = Record<string, unknown>;
+/** JSON-ish value shapes allowed inside a Lovely Web config file. */
+export interface LovelyWebConfigObject {
+	[key: string]: LovelyWebConfigValue;
+}
+export type LovelyWebConfigValue = string | boolean | number | null | undefined | LovelyWebConfigObject[] | LovelyWebConfigObject;
+export type LovelyWebConfigPatch = LovelyWebConfigObject;
 
 export interface LovelyWebResolvedConfig {
 	readonly webSearchProvider: LovelyWebSearchProvider;
@@ -72,14 +77,16 @@ const DEFAULTS: LovelyWebResolvedConfig = {
 	braveApiKey: "",
 };
 
-function isObject(value: unknown): value is Record<string, unknown> {
-	return !!value && typeof value === "object" && !Array.isArray(value);
+function isConfigObject(value: LovelyWebConfigValue | undefined): value is LovelyWebConfigObject {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readJsonObject(path: string): LovelyWebConfigPatch {
 	if (!existsSync(path)) return {};
-	const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
-	if (!isObject(parsed)) throw new Error(`Invalid Lovely Web config at ${path}: expected a JSON object`);
+	// SAFETY: parsed config files are consumed only through shape-validating
+	// guards below; any non-object payload throws before escaping this function.
+	const parsed = JSON.parse(readFileSync(path, "utf8")) as LovelyWebConfigValue;
+	if (!isConfigObject(parsed)) throw new Error(`Invalid Lovely Web config at ${path}: expected a JSON object`);
 	return { ...parsed };
 }
 
@@ -162,33 +169,53 @@ function writeManagedUserPatch(targetPath: string, value: LovelyWebConfigPatch, 
 	symlinkSync(sourcePath, targetPath);
 }
 
-function asString(value: unknown): string | undefined {
-	return typeof value === "string" ? value : undefined;
+function isConfigString(value: LovelyWebConfigValue | undefined): value is string {
+	return typeof value === "string";
 }
 
-function asBoolean(value: unknown): boolean | undefined {
-	return typeof value === "boolean" ? value : undefined;
+function asString(value: LovelyWebConfigValue | undefined): string | undefined {
+	return isConfigString(value) ? value : undefined;
 }
 
-function asPositiveNumber(value: unknown): number | undefined {
-	return typeof value === "number" && Number.isFinite(value) && value >= 1 ? value : undefined;
+function isConfigBoolean(value: LovelyWebConfigValue | undefined): value is boolean {
+	return typeof value === "boolean";
 }
 
-function validSearchProvider(value: unknown): LovelyWebSearchProvider | undefined {
-	return typeof value === "string" && LOVELY_WEB_SEARCH_PROVIDERS.includes(value as LovelyWebSearchProvider)
-		? value as LovelyWebSearchProvider
-		: undefined;
+function asBoolean(value: LovelyWebConfigValue | undefined): boolean | undefined {
+	return isConfigBoolean(value) ? value : undefined;
 }
 
-function validFetchProvider(value: unknown): LovelyWebFetchProvider | undefined {
-	return typeof value === "string" && LOVELY_WEB_FETCH_PROVIDERS.includes(value as LovelyWebFetchProvider)
-		? value as LovelyWebFetchProvider
-		: undefined;
+function isPositiveNumber(value: LovelyWebConfigValue | undefined): value is number {
+	return typeof value === "number" && Number.isFinite(value) && value >= 1;
 }
 
-function legacyProvider(value: unknown, allowed: readonly string[]): string | undefined {
+function asPositiveNumber(value: LovelyWebConfigValue | undefined): number | undefined {
+	return isPositiveNumber(value) ? value : undefined;
+}
+
+function isSearchProvider(value: LovelyWebConfigValue | undefined): value is LovelyWebSearchProvider {
+	// SAFETY: LOVELY_WEB_SEARCH_PROVIDERS only holds LovelyWebSearchProvider
+	// literals, so widening the array to readonly string[] loses nothing.
+	return typeof value === "string" && (LOVELY_WEB_SEARCH_PROVIDERS as readonly string[]).includes(value);
+}
+
+function validSearchProvider(value: LovelyWebConfigValue | undefined): LovelyWebSearchProvider | undefined {
+	return isSearchProvider(value) ? value : undefined;
+}
+
+function isFetchProvider(value: LovelyWebConfigValue | undefined): value is LovelyWebFetchProvider {
+	// SAFETY: LOVELY_WEB_FETCH_PROVIDERS only holds LovelyWebFetchProvider
+	// literals, so widening the array to readonly string[] loses nothing.
+	return typeof value === "string" && (LOVELY_WEB_FETCH_PROVIDERS as readonly string[]).includes(value);
+}
+
+function validFetchProvider(value: LovelyWebConfigValue | undefined): LovelyWebFetchProvider | undefined {
+	return isFetchProvider(value) ? value : undefined;
+}
+
+function legacyProvider(value: LovelyWebConfigValue | undefined, allowed: readonly string[]): string | undefined {
 	if (value === null) return "disabled";
-	return typeof value === "string" && allowed.includes(value) ? value : undefined;
+	return isConfigString(value) && allowed.includes(value) ? value : undefined;
 }
 
 /**
@@ -199,15 +226,15 @@ function legacyProvider(value: unknown, allowed: readonly string[]): string | un
  */
 export function normalizeLovelyWebPatch(input: LovelyWebConfigPatch): LovelyWebConfigPatch {
 	const patch: LovelyWebConfigPatch = { ...input };
-	const webSearch = isObject(input.webSearch) ? input.webSearch : undefined;
+	const webSearch = isConfigObject(input.webSearch) ? input.webSearch : undefined;
 	const searchProvider = legacyProvider(webSearch?.provider, LOVELY_WEB_SEARCH_PROVIDERS);
 	if (patch.webSearchProvider === undefined && searchProvider !== undefined) patch.webSearchProvider = searchProvider;
 
-	const webFetch = isObject(input.webFetch) ? input.webFetch : undefined;
+	const webFetch = isConfigObject(input.webFetch) ? input.webFetch : undefined;
 	const fetchProvider = legacyProvider(webFetch?.provider, LOVELY_WEB_FETCH_PROVIDERS);
 	if (patch.webFetchProvider === undefined && fetchProvider !== undefined) patch.webFetchProvider = fetchProvider;
 
-	const webImage = isObject(input.webImage) ? input.webImage : undefined;
+	const webImage = isConfigObject(input.webImage) ? input.webImage : undefined;
 	const imageEnabled = asBoolean(webImage?.enabled);
 	if (patch.webImageEnabled === undefined && imageEnabled !== undefined) patch.webImageEnabled = imageEnabled;
 	const imageResize = asBoolean(webImage?.resize);
@@ -215,7 +242,7 @@ export function normalizeLovelyWebPatch(input: LovelyWebConfigPatch): LovelyWebC
 	const imageMaxSize = asPositiveNumber(webImage?.maxSize);
 	if (patch.webImageMaxSize === undefined && imageMaxSize !== undefined) patch.webImageMaxSize = imageMaxSize;
 
-	const webApiKeys = isObject(input.webApiKeys) ? input.webApiKeys : undefined;
+	const webApiKeys = isConfigObject(input.webApiKeys) ? input.webApiKeys : undefined;
 	for (const [provider, keyField] of Object.entries(LOVELY_WEB_API_KEY_FIELDS)) {
 		const key = asString(webApiKeys?.[provider]);
 		if (patch[keyField] === undefined && key) patch[keyField] = key;
@@ -268,7 +295,7 @@ export function updateLovelyWebConfigValue(
 	scope: LovelyWebConfigScope,
 	cwd: string,
 	key: LovelyWebConfigKey,
-	value: unknown,
+	value: LovelyWebConfigValue,
 	env: NodeJS.ProcessEnv = process.env,
 ): string {
 	const patch = readLovelyWebPatch(scope, cwd, env);

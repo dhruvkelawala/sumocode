@@ -15,11 +15,25 @@ type ExecFileCall = {
 	readonly options: ExecFileOptions;
 };
 
+type AnyCallable = (...args: never[]) => void;
+
+function asExecFileFn(fn: AnyCallable): ExecFileFn {
+	// SAFETY: doubles drive behavior through the callback; only call-shape
+	// matters, and ExecFileFn is itself callable so this narrowing is exact.
+	return fn as ExecFileFn;
+}
+
+function unusedChildProcess(): ChildProcess {
+	// SAFETY: the handle is never dereferenced on these callback-driven paths;
+	// ChildProcess satisfies this empty structural surface.
+	return {} as ChildProcess;
+}
+
 function fakeExecFile(handler: (call: ExecFileCall, callback: ExecFileCallback) => void): ExecFileFn {
-	return ((file: string, args: readonly string[], options: ExecFileOptions, callback: ExecFileCallback): ChildProcess => {
+	return asExecFileFn((file: string, args: readonly string[], options: ExecFileOptions, callback: ExecFileCallback): ChildProcess => {
 		handler({ file, args: [...args], options }, callback);
-		return undefined as unknown as ChildProcess;
-	}) as unknown as ExecFileFn;
+		return unusedChildProcess();
+	});
 }
 
 describe("watchGitBranch", () => {
@@ -131,10 +145,12 @@ describe("readGitBranch", () => {
 		const unref = vi.fn();
 		const stdoutUnref = vi.fn();
 		const stderrUnref = vi.fn();
-		const execFileFn = ((_file: string, _args: readonly string[], _options: ExecFileOptions, callback: ExecFileCallback): ChildProcess => {
+		const execFileFn = asExecFileFn((_file: string, _args: readonly string[], _options: ExecFileOptions, callback: ExecFileCallback): ChildProcess => {
 			callback(null, "main\n", "");
-			return { unref, stdout: { unref: stdoutUnref }, stderr: { unref: stderrUnref } } as unknown as ChildProcess;
-		}) as unknown as ExecFileFn;
+			const handle = { unref, stdout: { unref: stdoutUnref }, stderr: { unref: stderrUnref } };
+			// SAFETY: the double provides exactly the unref surface readGitBranch touches.
+			return handle as ChildProcess & typeof handle;
+		});
 
 		await expect(readGitBranch("/repo/worktree", execFileFn)).resolves.toBe("main");
 		expect(unref).toHaveBeenCalledTimes(1);
@@ -146,7 +162,7 @@ describe("readGitBranch", () => {
 		const calls: ExecFileCall[] = [];
 		const execFileFn = fakeExecFile((call, callback) => {
 			calls.push(call);
-			callback(new Error("git failed") as ExecFileException, "", "fatal");
+			callback(new Error("git failed"), "", "fatal");
 		});
 
 		await expect(readGitBranch("/repo/worktree", execFileFn)).resolves.toBeUndefined();

@@ -576,7 +576,7 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
-| 086 | [Restore long-session-safe Pi `/tree` navigation parity](086-rpc-tree-navigation-parity.md) | P0 | L | 078 | IN PROGRESS — PR [#350](https://github.com/dhruvkelawala/sumocode/pull/350) ready for review; full unit/integration/visual gates pass; final Claude Opus 4.8 autoreview clean |
+| 086 | [Restore long-session-safe Pi `/tree` navigation parity](086-rpc-tree-navigation-parity.md) | P0 | L | 078 | DONE — PR [#350](https://github.com/dhruvkelawala/sumocode/pull/350) merged into `main` (`3172778`, 2026-08-06); unit/integration/visual gates + Claude Opus 4.8 autoreview clean; post-merge lint parity in `11e4de2` |
 
 ### Locked decisions
 

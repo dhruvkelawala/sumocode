@@ -42,7 +42,7 @@
 - **Supersedes**: Plan 035 Phase 3's obsolete claim that a new Pi RPC verb is required
 - **Category**: bug / parity
 - **Planned at**: commit `3ca11da`, 2026-08-04
-- **Execution status**: IN PROGRESS — implementation complete and published as PR [#350](https://github.com/dhruvkelawala/sumocode/pull/350). Commits `339e462`, `02c8318`, and `c0160f8`; full unit/integration/visual gates pass and final Claude Opus 4.8 autoreview is clean. Awaiting CI and human merge.
+- **Execution status**: DONE — merged as PR [#350](https://github.com/dhruvkelawala/sumocode/pull/350) into `main` (`3172778`, 2026-08-06). Commits `339e462`, `02c8318`, and `c0160f8`; full unit/integration/visual gates passed and the final Claude Opus 4.8 autoreview was clean at review time. Post-merge lint parity landed in `11e4de2` (PR #373).
 
 ## Outcome
 
@@ -806,7 +806,7 @@ Final evidence:
 - real-Pi tree-navigation integration — 4 tests pass;
 - Bible render, four Plan 086 visual reviews (executed under provisional numbering 083), and `pnpm visual:ci` — pass;
 - final `/apr` review: Claude Opus 4.8, branch mode against `origin/main`, clean with no accepted/actionable findings after fixing one P2 liveness issue;
-- ready-for-review PR: [#350](https://github.com/dhruvkelawala/sumocode/pull/350).
+- PR merged: [#350](https://github.com/dhruvkelawala/sumocode/pull/350) → `main` merge commit `3172778` (2026-08-06).
 
 No visual goldens were promoted. Manual interactive Gate 6 remains the human
 canary before merge if desired.

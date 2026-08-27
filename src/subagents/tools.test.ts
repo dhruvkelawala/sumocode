@@ -14,7 +14,10 @@ interface ToolResult {
 const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly SubagentRole[], roleWarnings: readonly string[] = []) => {
 	const registered: Array<{ name: string; parameters?: unknown; execute: (...args: unknown[]) => Promise<ToolResult> }> = [];
 	const emitters = new Map<string, (event: SubagentEvent) => void>();
+	const childSends = new Map<string, ReturnType<typeof vi.fn>>();
+	const childRequestCloses = new Map<string, ReturnType<typeof vi.fn>>();
 	const sendPaneText = vi.fn(async () => ({ ok: true as const }));
+	const delivery = { consume: vi.fn() };
 	const host: TerminalHost = {
 		kind: hostKind,
 		startAgentPane: vi.fn(),
@@ -30,7 +33,12 @@ const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly Su
 	const spawnedTasks: Array<SpawnSubagentTask & { id: string }> = [];
 	const manager = new SubagentManager((task: SpawnSubagentTask & { id: string }) => {
 		spawnedTasks.push(task);
-		return {
+		const child: {
+			events: (emit: (event: SubagentEvent) => void) => void;
+			interrupt: () => void;
+			send?: (text: string) => Promise<void>;
+			requestClose?: () => void;
+		} = {
 			events: (emit) => {
 				emitters.set(task.id, emit);
 				emit({ kind: "run-started" });
@@ -38,6 +46,16 @@ const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly Su
 			},
 			interrupt: vi.fn(() => emitters.get(task.id)?.({ kind: "run-settled", outcome: { kind: "interrupted" } })),
 		};
+		// Model the real capability split: only visible children can steer/close.
+		if (task.visible) {
+			const send = vi.fn(async () => undefined);
+			const requestClose = vi.fn();
+			child.send = send;
+			child.requestClose = requestClose;
+			childSends.set(task.id, send);
+			childRequestCloses.set(task.id, requestClose);
+		}
+		return child as import("./backend-pi.js").SpawnedChild;
 	}, {
 		captureGitContext: async () => ({ repoRoot: "/tmp/project", baseRef: "base-ref" }),
 		createWorktree,
@@ -59,18 +77,18 @@ const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly Su
 	const pi = { registerTool: vi.fn((tool) => registered.push(tool)), on: vi.fn(), getThinkingLevel: vi.fn(() => "medium"), getActiveTools: vi.fn(() => ["read", "bash"]) };
 	const roleLoader: typeof loadRoles = roles ? (() => ({ roles, warnings: roleWarnings })) : loadRoles;
 	// SAFETY: the double implements registerTool/on/getThinkingLevel/getActiveTools, all registerSubagentTools uses.
-	registerSubagentTools(pi as never, manager, undefined, host, roleLoader);
+	registerSubagentTools(pi as never, manager, delivery, host, roleLoader);
 	const tool = (name: string) => registered.find((entry) => entry.name === name)!;
 	const ctx = { cwd: "/tmp/project", model: { provider: "openai", id: "gpt-5", thinkingLevel: "low" } };
-	return { registered, manager, emitters, tool, ctx, host, sendPaneText, createWorktree, spawnedTasks };
+	return { registered, manager, emitters, tool, ctx, host, sendPaneText, createWorktree, spawnedTasks, childSends, childRequestCloses, delivery };
 };
 
 const textOf = <T extends { content: Array<{ text: string }> }>(result: T): string => result.content[0]!.text;
 
 describe("subagent tools", () => {
-	it("registers the six subagent tools and exposes visible spawning with baseRef", () => {
+	it("registers the seven subagent tools and exposes visible spawning with baseRef", () => {
 		const { registered, tool } = createHarness();
-		expect(registered.map((entry) => entry.name)).toEqual(["subagent_spawn", "subagent_send", "subagent_check", "subagent_wait", "subagent_cancel", "subagent_list"]);
+		expect(registered.map((entry) => entry.name)).toEqual(["subagent_spawn", "subagent_send", "subagent_check", "subagent_wait", "subagent_cancel", "subagent_close", "subagent_list"]);
 		const spawnSchema = JSON.stringify(tool("subagent_spawn").parameters);
 		expect(spawnSchema).toContain("visible");
 		expect(spawnSchema).toContain("baseRef");
@@ -216,16 +234,18 @@ describe("subagent tools", () => {
 		expect(result).toMatchObject({ details: { subagent: { id: queuedId, status: "queued" }, activity: { status: "queued" } } });
 	});
 
-	it("sends text to a running visible child pane", async () => {
-		const { tool, ctx, sendPaneText } = createHarness();
+	it("sends steering text through the child's control channel, not the pane PTY", async () => {
+		const { tool, ctx, childSends, sendPaneText } = createHarness();
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		await tool("subagent_spawn").execute("tc", { prompt: "watch", name: "worker", visible: true }, undefined, undefined, ctx as never);
 
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		const result = await tool("subagent_send").execute("tc", { id: "sa-1", text: "continue with tests" }, undefined, undefined, ctx as never);
 
-		expect(textOf(result)).toBe("Sent input to sa-1 (worker).");
-		expect(sendPaneText).toHaveBeenCalledWith(expect.anything(), { host: "herdr", paneId: "w1:p2", workspaceId: "w1" }, "continue with tests");
+		expect(textOf(result)).toBe("Sent steering input to sa-1 (worker). It is delivered after the child's current turn — no ack beyond delivery-to-child is possible.");
+		expect(childSends.get("sa-1")).toHaveBeenCalledWith("continue with tests");
+		expect(sendPaneText).not.toHaveBeenCalled();
+		expect(result).toMatchObject({ details: { action: "send", id: "sa-1", pane: { paneId: "w1:p2" } } });
 	});
 
 	it("reports subagent_send error taxonomy", async () => {
@@ -360,5 +380,68 @@ describe("subagent tools", () => {
 		expect(metadata).not.toHaveProperty("finalText");
 		// SAFETY: details exists on every tool result envelope.
 		expect(JSON.stringify((result as { details: unknown }).details)).not.toContain('"transcript"');
+	});
+});
+
+describe("subagent_close tool", () => {
+	it("consumes delivery and appends bounded results for ids that settled", async () => {
+		const { tool, ctx, emitters, manager, delivery } = createHarness();
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		await tool("subagent_spawn").execute("spawn-1", { prompt: "do", name: "w" }, undefined, undefined, ctx as never);
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "final answer" } });
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
+
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const result = await tool("subagent_close").execute("close-1", { ids: ["sa-1"] }, undefined, undefined, ctx as never);
+
+		expect(textOf(result)).toContain("sa-1 was already done");
+		expect(textOf(result)).toContain("final answer");
+		expect(delivery.consume).toHaveBeenCalledWith("sa-1");
+		expect(result).toMatchObject({
+			details: {
+				action: "close",
+				ids: ["sa-1"],
+				subagents: [{ id: "sa-1", title: "w", status: "done" }],
+				activity: [{ id: "subagent:sa-1", status: "succeeded" }],
+			},
+		});
+	});
+
+	it("closes a running visible child inline and consumes its delivered result", async () => {
+		const { tool, ctx, emitters, childRequestCloses, manager, delivery } = createHarness();
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		await tool("subagent_spawn").execute("spawn-1", { prompt: "do", name: "worker", visible: true }, undefined, undefined, ctx as never);
+		// SAFETY: visible harness children always register a requestClose double.
+		(childRequestCloses.get("sa-1") as ReturnType<typeof vi.fn>).mockImplementation(() => {
+			emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "wrapped up" } });
+		});
+
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const result = await tool("subagent_close").execute("close-1", { ids: ["sa-1"] }, undefined, undefined, ctx as never);
+
+		expect(textOf(result)).toContain("Closed sa-1");
+		expect(textOf(result)).toContain("wrapped up");
+		expect(manager.get("sa-1")?.status).toBe("done");
+		expect(delivery.consume).toHaveBeenCalledWith("sa-1");
+	});
+
+	it("keeps a still-running child unconsumed with a follow-up line", async () => {
+		vi.useFakeTimers();
+		try {
+			const { tool, ctx, childRequestCloses, manager, delivery } = createHarness();
+			// SAFETY: the ctx double carries only the fields the tool handlers read.
+			await tool("subagent_spawn").execute("spawn-1", { prompt: "do", name: "worker", visible: true }, undefined, undefined, ctx as never);
+
+			const closing = tool("subagent_close").execute("close-1", { ids: ["sa-1"] });
+			await vi.advanceTimersByTimeAsync(15_000);
+			const result = await closing;
+
+			expect(textOf(result)).toContain("close requested for sa-1; still running — check the pane or use subagent_cancel");
+			expect(manager.get("sa-1")?.status).toBe("running");
+			expect(delivery.consume).not.toHaveBeenCalled();
+			expect(childRequestCloses.get("sa-1")).toHaveBeenCalledTimes(1);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

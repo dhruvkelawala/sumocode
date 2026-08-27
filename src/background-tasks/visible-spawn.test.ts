@@ -15,6 +15,7 @@ describe("visible-spawn", () => {
 		expect(paths.scriptFile).toBe("/tmp/test-bg/bg-1-1700000000000/run.sh");
 		expect(paths.metaFile).toBe("/tmp/test-bg/bg-1-1700000000000/meta.json");
 		expect(paths.markerFile).toBe("/tmp/test-bg/bg-1-1700000000000/started.marker");
+		expect(paths.controlDir).toBe("/tmp/test-bg/bg-1-1700000000000/control");
 	});
 
 	it("shell-escapes cwd in the cwd-missing diagnostic", () => {

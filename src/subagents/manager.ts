@@ -13,6 +13,7 @@ const execFileAsync = promisify(execFile);
 const MAX_TRACKED = 64;
 const ERROR_TEXT_MAX = 4096;
 const CANCEL_WAIT_MS = 5_500;
+const CLOSE_WAIT_MS = 15_000;
 const GIT_READ_TIMEOUT_MS = 5_000;
 const MANIFEST_TIMEOUT_MS = 5_000;
 
@@ -479,6 +480,88 @@ export class SubagentManager {
 				await this.startSettle(id, { kind: "interrupted", partialText: this.snapshots.get(id)?.finalText || this.snapshots.get(id)?.liveText });
 			}
 			lines.set(id, `Cancelled ${id}`);
+		}));
+		void this.scheduleDequeue();
+		return ids.map((id) => lines.get(id) ?? `${id} is unknown`);
+	}
+
+	/**
+	 * Deliver steering text to a running child over its control channel.
+	 * Throws with the same shapes the subagent tools surface directly.
+	 */
+	public async sendTo(id: string, text: string): Promise<SubagentSnapshot> {
+		const snapshot = this.snapshots.get(id);
+		if (!snapshot) {
+			throw new Error(`Unknown subagent id: ${id}. Known ids: ${this.list().map((known) => known.id).join(", ") || "(none)"}`);
+		}
+		if (snapshot.status === "queued") {
+			throw new Error(`Subagent ${id} is queued and cannot receive input until it starts`);
+		}
+		if (isSettled(snapshot)) {
+			throw new Error(`Subagent ${id} is already settled (${snapshot.status}) and cannot receive input`);
+		}
+		const child = this.children.get(id)?.child;
+		if (!child?.send) {
+			throw new Error("headless children cannot receive input — respawn with visible: true");
+		}
+		await child.send(text);
+		return this.snapshots.get(id) ?? snapshot;
+	}
+
+	/**
+	 * Gracefully close visible children: each child persists its response and
+	 * exits, settling with a normal completion manifest. Unlike cancel, a
+	 * close timeout never force-settles — the pane stays genuinely running
+	 * and the orchestrator can fall back to subagent_cancel.
+	 */
+	public async close(ids: readonly string[]): Promise<string[]> {
+		// Fire every close request synchronously FIRST, then await settles in
+		// parallel, mirroring cancel() so one slow child cannot delay the batch.
+		const lines = new Map<string, string>();
+		const targets: string[] = [];
+		for (const id of ids) {
+			const snapshot = this.snapshots.get(id);
+			if (!snapshot) {
+				lines.set(id, `${id} is unknown`);
+				continue;
+			}
+			const settlingOutcome = this.settlingOutcomes.get(id);
+			if (settlingOutcome) {
+				lines.set(id, `${id} was already ${settlingOutcome.kind === "completed" ? "done" : "settled"}`);
+				continue;
+			}
+			if (isSettled(snapshot)) {
+				lines.set(id, `${id} was already ${snapshot.status === "done" ? "done" : "settled"}`);
+				continue;
+			}
+			if (snapshot.status === "queued") {
+				const queueIndex = this.queuedTasks.findIndex((queued) => queued.id === id);
+				if (queueIndex >= 0) this.queuedTasks.splice(queueIndex, 1);
+				else if (this.pendingSpawns.has(id)) this.cancelledSetupIds.add(id);
+				void this.startSettle(id, { kind: "interrupted" });
+				lines.set(id, `Cancelled queued ${id}`);
+				continue;
+			}
+			const child = this.children.get(id)?.child;
+			if (!child?.requestClose) {
+				lines.set(id, `${id} is headless — it settles on its own; use subagent_cancel to stop it`);
+				continue;
+			}
+			child.requestClose();
+			targets.push(id);
+		}
+		await Promise.allSettled(targets.map(async (id) => {
+			try {
+				await this.waitForSettle(id, CLOSE_WAIT_MS);
+				// The tool returns this child's result inline, so mark it consumed
+				// here — only when the close actually settled.
+				this.consumedIds.add(id);
+				lines.set(id, `Closed ${id}`);
+			} catch {
+				// Do NOT force a synthetic settle — that is cancel's job. The real
+				// child is still running and its pane stays open.
+				lines.set(id, `close requested for ${id}; still running — check the pane or use subagent_cancel`);
+			}
 		}));
 		void this.scheduleDequeue();
 		return ids.map((id) => lines.get(id) ?? `${id} is unknown`);

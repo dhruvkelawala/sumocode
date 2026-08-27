@@ -1,7 +1,7 @@
 // src/extension.ts
-import { existsSync as existsSync12, readFileSync as readFileSync16, realpathSync as realpathSync4 } from "node:fs";
+import { existsSync as existsSync13, readFileSync as readFileSync17, realpathSync as realpathSync4 } from "node:fs";
 import { homedir as homedir15 } from "node:os";
-import { dirname as dirname13, join as join20, resolve as resolve7, sep } from "node:path";
+import { dirname as dirname13, join as join21, resolve as resolve7, sep } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 
 // src/cathedral/input-hints.ts
@@ -11539,7 +11539,8 @@ function buildVisibleTaskPaths(taskId, startedAtMs, baseDir) {
     metaFile: join13(dir, "meta.json"),
     promptFile: join13(dir, "prompt.txt"),
     responseFile: join13(dir, "response.md"),
-    diagFile: join13(dir, "diag.jsonl")
+    diagFile: join13(dir, "diag.jsonl"),
+    controlDir: join13(dir, "control")
   };
 }
 function shellEscape2(value) {
@@ -14343,15 +14344,20 @@ import {
   existsSync as existsSync10,
   mkdirSync as mkdirSync9,
   readFileSync as readFileSync14,
+  renameSync as renameSync6,
   writeFileSync as writeFileSync8
 } from "node:fs";
 import { dirname as dirname11, join as join17 } from "node:path";
 var RESPONSE_POLL_INTERVAL_MS = 750;
+var SEND_ACK_POLL_MS = 250;
+var SEND_ACK_TIMEOUT_MS = 5e3;
+var CLOSE_REQUEST_FILE = "close.request";
 var ERROR_TEXT_MAX = 4096;
 var nodeFs = {
   existsSync: existsSync10,
   mkdirSync: mkdirSync9,
   readFileSync: readFileSync14,
+  renameSync: renameSync6,
   writeFileSync: writeFileSync8
 };
 var errorText2 = (error) => error instanceof Error ? error.message : String(error);
@@ -14361,6 +14367,7 @@ var createPaneChildSpawner = (dependencies = {}) => (options) => {
   const baseDir = dependencies.baseDir ?? join17(process.env.TMPDIR ?? "/tmp", "sumocode-subagents");
   const paths = buildVisibleTaskPaths(options.id, now(), baseDir);
   fs3.mkdirSync(dirname11(paths.promptFile), { recursive: true });
+  fs3.mkdirSync(paths.controlDir, { recursive: true });
   const prompt = options.appendSystemPrompt ? `role instructions (follow these for this entire session):
 ${options.appendSystemPrompt}
 ---
@@ -14461,6 +14468,42 @@ ${options.prompt}` : options.prompt;
     clearWatcher();
     void closeInterruptedPane();
   }
+  let steerSeq = 0;
+  const send = (text) => {
+    if (settled || interrupted) {
+      return Promise.reject(new Error(`visible subagent ${options.id} has settled; input was not delivered`));
+    }
+    const seq = ++steerSeq;
+    const finalPath = join17(paths.controlDir, `steer-${seq}.txt`);
+    fs3.writeFileSync(`${finalPath}.tmp`, text);
+    fs3.renameSync(`${finalPath}.tmp`, finalPath);
+    const ackPollMs = dependencies.sendAckPollMs ?? SEND_ACK_POLL_MS;
+    const ackTimeoutMs = dependencies.sendAckTimeoutMs ?? SEND_ACK_TIMEOUT_MS;
+    return new Promise((resolve8, reject) => {
+      let elapsed2 = 0;
+      const ackTimer = setInterval(() => {
+        if (!fs3.existsSync(finalPath)) {
+          clearInterval(ackTimer);
+          resolve8();
+          return;
+        }
+        if (fs3.existsSync(paths.exitFile) && readText(paths.exitFile).trim()) {
+          clearInterval(ackTimer);
+          reject(new Error(`${options.id} exited before receiving input`));
+          return;
+        }
+        elapsed2 += ackPollMs;
+        if (elapsed2 >= ackTimeoutMs) {
+          clearInterval(ackTimer);
+          reject(new Error(`steer input to ${options.id} was not acknowledged within ${ackTimeoutMs}ms \u2014 the file remains and the child may still consume it`));
+        }
+      }, ackPollMs);
+      ackTimer.unref?.();
+    });
+  };
+  const requestClose = () => {
+    fs3.writeFileSync(join17(paths.controlDir, CLOSE_REQUEST_FILE), "1");
+  };
   const events = (emit) => {
     emitEvent = emit;
     emit({ kind: "run-started" });
@@ -14505,7 +14548,7 @@ ${options.prompt}` : options.prompt;
   };
   if (options.signal?.aborted) interrupted = true;
   else options.signal?.addEventListener("abort", interrupt, { once: true });
-  return { events, interrupt, ready };
+  return { events, interrupt, ready, send, requestClose };
 };
 var spawnPaneChild = createPaneChildSpawner();
 
@@ -14755,7 +14798,7 @@ var createPiChildSpawner = (spawnImpl = nodeSpawn, resolveAdapterEntry = resolve
     let stderr = "";
     let finalAssistantText = "";
     let stopReason;
-    let errorMessage;
+    let errorMessage2;
     const processLine = (line) => {
       const parsed = parseJsonLine2(line);
       if (!parsed) return;
@@ -14766,7 +14809,7 @@ var createPiChildSpawner = (spawnImpl = nodeSpawn, resolveAdapterEntry = resolve
       const messageValue = parsed.message;
       if (isMessage2(messageValue) && messageValue.role === "assistant") {
         if (isString5(messageValue.stopReason)) stopReason = messageValue.stopReason;
-        if (isString5(messageValue.errorMessage)) errorMessage = messageValue.errorMessage;
+        if (isString5(messageValue.errorMessage)) errorMessage2 = messageValue.errorMessage;
       }
     };
     proc.stdout.on("data", (data) => {
@@ -14792,7 +14835,7 @@ var createPiChildSpawner = (spawnImpl = nodeSpawn, resolveAdapterEntry = resolve
         kind: "run-settled",
         outcome: {
           kind: "failed",
-          errorText: (errorMessage || stderr || (closeSignal ? `pi killed by ${closeSignal}` : `pi exited with code ${code ?? "unknown"}`)).slice(0, ERROR_MAX),
+          errorText: (errorMessage2 || stderr || (closeSignal ? `pi killed by ${closeSignal}` : `pi exited with code ${code ?? "unknown"}`)).slice(0, ERROR_MAX),
           partialText: finalAssistantText || void 0
         }
       });
@@ -14929,6 +14972,7 @@ var execFileAsync3 = promisify4(execFile6);
 var MAX_TRACKED = 64;
 var ERROR_TEXT_MAX2 = 4096;
 var CANCEL_WAIT_MS = 5500;
+var CLOSE_WAIT_MS = 15e3;
 var GIT_READ_TIMEOUT_MS = 5e3;
 var MANIFEST_TIMEOUT_MS = 5e3;
 async function gitRead(cwd, args) {
@@ -15293,6 +15337,80 @@ var SubagentManager = class {
     void this.scheduleDequeue();
     return ids.map((id) => lines.get(id) ?? `${id} is unknown`);
   }
+  /**
+   * Deliver steering text to a running child over its control channel.
+   * Throws with the same shapes the subagent tools surface directly.
+   */
+  async sendTo(id, text) {
+    const snapshot = this.snapshots.get(id);
+    if (!snapshot) {
+      throw new Error(`Unknown subagent id: ${id}. Known ids: ${this.list().map((known) => known.id).join(", ") || "(none)"}`);
+    }
+    if (snapshot.status === "queued") {
+      throw new Error(`Subagent ${id} is queued and cannot receive input until it starts`);
+    }
+    if (isSettled(snapshot)) {
+      throw new Error(`Subagent ${id} is already settled (${snapshot.status}) and cannot receive input`);
+    }
+    const child = this.children.get(id)?.child;
+    if (!child?.send) {
+      throw new Error("headless children cannot receive input \u2014 respawn with visible: true");
+    }
+    await child.send(text);
+    return this.snapshots.get(id) ?? snapshot;
+  }
+  /**
+   * Gracefully close visible children: each child persists its response and
+   * exits, settling with a normal completion manifest. Unlike cancel, a
+   * close timeout never force-settles — the pane stays genuinely running
+   * and the orchestrator can fall back to subagent_cancel.
+   */
+  async close(ids) {
+    const lines = /* @__PURE__ */ new Map();
+    const targets = [];
+    for (const id of ids) {
+      const snapshot = this.snapshots.get(id);
+      if (!snapshot) {
+        lines.set(id, `${id} is unknown`);
+        continue;
+      }
+      const settlingOutcome = this.settlingOutcomes.get(id);
+      if (settlingOutcome) {
+        lines.set(id, `${id} was already ${settlingOutcome.kind === "completed" ? "done" : "settled"}`);
+        continue;
+      }
+      if (isSettled(snapshot)) {
+        lines.set(id, `${id} was already ${snapshot.status === "done" ? "done" : "settled"}`);
+        continue;
+      }
+      if (snapshot.status === "queued") {
+        const queueIndex = this.queuedTasks.findIndex((queued) => queued.id === id);
+        if (queueIndex >= 0) this.queuedTasks.splice(queueIndex, 1);
+        else if (this.pendingSpawns.has(id)) this.cancelledSetupIds.add(id);
+        void this.startSettle(id, { kind: "interrupted" });
+        lines.set(id, `Cancelled queued ${id}`);
+        continue;
+      }
+      const child = this.children.get(id)?.child;
+      if (!child?.requestClose) {
+        lines.set(id, `${id} is headless \u2014 it settles on its own; use subagent_cancel to stop it`);
+        continue;
+      }
+      child.requestClose();
+      targets.push(id);
+    }
+    await Promise.allSettled(targets.map(async (id) => {
+      try {
+        await this.waitForSettle(id, CLOSE_WAIT_MS);
+        this.consumedIds.add(id);
+        lines.set(id, `Closed ${id}`);
+      } catch {
+        lines.set(id, `close requested for ${id}; still running \u2014 check the pane or use subagent_cancel`);
+      }
+    }));
+    void this.scheduleDequeue();
+    return ids.map((id) => lines.get(id) ?? `${id} is unknown`);
+  }
   disposeAll() {
     this.lifecycleGeneration += 1;
     const queuedIds = this.queuedTasks.map((queued) => queued.id);
@@ -15558,7 +15676,8 @@ var SUBAGENT_PROMPT_GUIDELINES = [
   "Use subagent_spawn for independent research, review, or implementation slices that can proceed while you keep working.",
   "Use visible subagents for long or interactive work the human may want to watch or steer; use headless subagents for silent, bounded fan-out.",
   "All children have their own context, cannot see this conversation, and cannot spawn subagents; prompts must be self-contained with objective, paths, constraints, expected output, and stop conditions.",
-  "Use subagent_send to steer a running visible child; it sends the text followed by Enter. Headless or settled children cannot receive input.",
+  "Use subagent_send to steer a running visible child; the text is delivered as a Pi steering message after the child's current turn, not typed into its terminal. Headless or settled children cannot receive input.",
+  "visible children stay open while active and auto-close after 30s of silence; use subagent_close to end one deliberately.",
   "Visible Herdr children split beside the parent when its tab is available, including worktree-backed children; overflow falls back to subagent tabs/workspaces.",
   "delegation is fire-and-forget: after spawning, continue other work or end your turn. settled results arrive as automatic follow-up messages that wake you. do NOT call subagent_wait right after subagent_spawn.",
   "spawn with a role for recurring shapes: research, review, documentor, designer, implement-cheap, implement-smart. the role sets the child's system prompt, tool limits, and defaults; your prompt supplies the concrete objective and stop conditions. read the role list in the spawn tool for per-role defaults \u2014 research and review run in the shared checkout; documentor, designer, and the implement roles default to isolated worktrees.",
@@ -15572,7 +15691,8 @@ var SUBAGENT_PROMPT_GUIDELINES = [
 var SUBAGENT_PROMPT_SNIPPET = "Spawn, steer, check, wait for, cancel, and list headless or visible subagents with self-contained prompts.";
 var SUBAGENT_TOOL_DESCRIPTIONS = {
   spawn: "Start one child subagent and return immediately with its id. Set visible=true for an interactive terminal-host pane, or omit it for silent headless execution. Optionally isolate it in a preserved git worktree. Its result is delivered automatically when it settles; no polling is needed.",
-  send: "Send prompt text followed by Enter to a running visible subagent pane.",
+  send: "Send steering text to a running visible subagent. Delivered as a Pi steering message after the child's current turn \u2014 not typed into its terminal.",
+  close: "Gracefully close visible subagents: the child saves its final response and exits cleanly, settling with a normal completion manifest. Use subagent_cancel only to abort work.",
   check: "Peek at one subagent without consuming its eventual result.",
   wait: "Block until subagents settle. Last resort: results deliver automatically on settlement; prefer ending your turn. Use only when nothing can proceed without the result.",
   cancel: "Interrupt running subagents and mark their results consumed.",
@@ -15593,6 +15713,7 @@ var activityEnvelope = (snapshot, sourceId) => {
   return sourceId ? { ...activity, sourceId } : activity;
 };
 var isAtCapacity = (value) => "status" in value && value.status === "at_capacity";
+var isSettledSnapshot = (snapshot) => snapshot.status !== "running" && snapshot.status !== "queued";
 var formatAtCapacity = (details) => {
   const runningLines = details.running.length > 0 ? details.running.map((task) => `- ${task.id}${task.title ? ` \xB7 ${task.title}` : ""} \xB7 ${task.status} \xB7 ${Math.round(task.ageMs / 1e3)}s`).join("\n") : "- (no running subagents found)";
   return makeToolResult2([
@@ -15752,22 +15873,11 @@ ${loaded.warnings.map((warning) => `- ${warning}`).join("\n")}`, {
     promptGuidelines: SUBAGENT_PROMPT_GUIDELINES,
     parameters: Type5.Object({
       id: Type5.String({ description: "Running visible subagent id, e.g. sa-1." }),
-      text: Type5.String({ description: "Prompt text to send followed by Enter." })
+      text: Type5.String({ description: "Steering text to deliver to the child." })
     }),
     async execute(_toolCallId, params) {
-      const snapshot = manager.get(params.id);
-      if (!snapshot) throw new Error(`Unknown subagent id: ${params.id}`);
-      if (snapshot.status === "queued") throw new Error(`Subagent ${params.id} is queued and cannot receive input until it starts`);
-      if (snapshot.status !== "running") throw new Error(`Subagent ${params.id} is already settled (${snapshot.status}) and cannot receive input`);
-      if (!snapshot.visible) throw new Error("headless children cannot receive input \u2014 respawn with visible: true");
-      if (!snapshot.pane?.paneId) throw new Error(`Visible subagent ${params.id} does not have a ready pane`);
-      if (host.kind === "none") throw new Error("visible subagent terminal host is unavailable");
-      const sendPaneText = host.sendPaneText;
-      if (!sendPaneText) throw new Error(`sending pane input is not supported on ${host.kind}`);
-      const pane = { host: host.kind, paneId: snapshot.pane.paneId, workspaceId: snapshot.pane.workspaceId };
-      const result = await sendPaneText.call(host, pi, pane, params.text);
-      if (!result.ok) throw new Error(`Unable to send input to ${params.id}: ${result.error}`);
-      return makeToolResult2(`Sent input to ${params.id} (${snapshot.title}).`, { action: "send", id: params.id, pane: snapshot.pane });
+      const snapshot = await manager.sendTo(params.id, params.text);
+      return makeToolResult2(`Sent steering input to ${params.id} (${snapshot.title}). It is delivered after the child's current turn \u2014 no ack beyond delivery-to-child is possible.`, { action: "send", id: params.id, pane: snapshot.pane });
     }
   });
   pi.registerTool({
@@ -15830,6 +15940,31 @@ ${loaded.warnings.map((warning) => `- ${warning}`).join("\n")}`, {
         ids: params.ids,
         subagents: snapshots.map(cancellationMetadata),
         activity: snapshots.map((snapshot) => activityEnvelope(snapshot))
+      });
+    }
+  });
+  pi.registerTool({
+    name: "subagent_close",
+    label: "Subagent Close",
+    description: SUBAGENT_TOOL_DESCRIPTIONS.close,
+    promptSnippet: SUBAGENT_PROMPT_SNIPPET,
+    promptGuidelines: SUBAGENT_PROMPT_GUIDELINES,
+    parameters: Type5.Object({
+      ids: Type5.Array(Type5.String(), { maxItems: 64, description: "Visible subagent ids to close gracefully." })
+    }),
+    async execute(_toolCallId, params) {
+      const lines = await manager.close(params.ids);
+      const snapshots = params.ids.map((id) => manager.get(id)).filter((snapshot) => snapshot !== void 0);
+      const settled = snapshots.filter(isSettledSnapshot);
+      for (const snapshot of settled) delivery?.consume(snapshot.id);
+      const text = settled.length > 0 ? `${lines.join("\n")}
+
+${boundedWaitText(settled)}` : lines.join("\n");
+      return makeToolResult2(text, {
+        action: "close",
+        ids: params.ids,
+        subagents: settled.map(cancellationMetadata),
+        activity: settled.map((snapshot) => activityEnvelope(snapshot))
       });
     }
   });
@@ -16045,12 +16180,14 @@ function installSubagents(pi, options = {}) {
 }
 
 // src/task-mode.ts
-import { appendFileSync as appendFileSync3, writeFileSync as writeFileSync9 } from "node:fs";
+import { appendFileSync as appendFileSync3, existsSync as existsSync12, readdirSync as readdirSync4, readFileSync as readFileSync16, unlinkSync as unlinkSync3, writeFileSync as writeFileSync9 } from "node:fs";
+import { join as join20 } from "node:path";
 var TASK_MARKER_ENV_KEYS = [
   "SUMOCODE_TASK_RESPONSE_FILE",
   "SUMOCODE_TASK_EXIT_FILE",
   "SUMOCODE_TASK_STARTED_FILE",
-  "SUMOCODE_TASK_DIAG_FILE"
+  "SUMOCODE_TASK_DIAG_FILE",
+  "SUMOCODE_TASK_CONTROL_DIR"
 ];
 var capturedMarkerEnv;
 function captureAndScrubTaskMarkerEnv(env = process.env) {
@@ -16145,13 +16282,19 @@ function writeTaskStartedMarker(env = process.env) {
 function isNumber2(value) {
   return typeof value === "number";
 }
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
 function installTaskExitMarker(env = process.env) {
   if (!env.SUMOCODE_TASK_EXIT_FILE) return;
   process.once("exit", (code) => writeTaskExitMarker(isNumber2(code) ? code : 0, env));
 }
 var STATUS_KEY = "sumocode-task-auto-exit";
-var DEFAULT_GRACE_MS = 1e4;
+var DEFAULT_GRACE_MS = 3e4;
 var TICK_MS2 = 1e3;
+var CONTROL_POLL_MS = 500;
+var CLOSE_REQUEST_FILE2 = "close.request";
+var STEER_FILE_PATTERN = /^steer-(\d+)\.txt$/;
 function isActive(env) {
   return env.SUMOCODE_TASK_MODE === "1";
 }
@@ -16162,13 +16305,126 @@ function shouldInstallTaskModeAutoExit(options = {}) {
   const env = options.env ?? process.env;
   return isActive(env) && !isKeepOpen(env);
 }
+function installControlWatcher(pi, controlDir, hooks) {
+  if (!controlDir) return () => void 0;
+  let stopped = false;
+  let timer;
+  const stop = () => {
+    stopped = true;
+    if (timer) {
+      clearInterval(timer);
+      timer = void 0;
+    }
+  };
+  const injectSteer = (file) => {
+    let text;
+    try {
+      text = readFileSync16(file, "utf8");
+    } catch (error) {
+      diagLog("steer_read_failed", { file, message: errorMessage(error) });
+      return;
+    }
+    if (!text.trim()) {
+      try {
+        unlinkSync3(file);
+      } catch {
+      }
+      return;
+    }
+    try {
+      hooks.cancelCountdown();
+      pi.sendUserMessage(text, { deliverAs: "steer" });
+      unlinkSync3(file);
+      diagLog("steer_injected", { file, bytes: text.length });
+    } catch (error) {
+      diagLog("steer_inject_failed", { file, message: errorMessage(error) });
+    }
+  };
+  const tick = () => {
+    try {
+      if (existsSync12(join20(controlDir, CLOSE_REQUEST_FILE2))) {
+        diagLog("close_requested");
+        hooks.cancelCountdown();
+        const ctx = hooks.getLatestCtx();
+        if (!ctx) return;
+        stop();
+        ctx.shutdown();
+        return;
+      }
+      let entries;
+      try {
+        entries = readdirSync4(controlDir);
+      } catch {
+        return;
+      }
+      const seqOf = (name) => Number(name.match(STEER_FILE_PATTERN)?.[1] ?? Number.MAX_SAFE_INTEGER);
+      const steerFiles = entries.filter((entry) => STEER_FILE_PATTERN.test(entry)).sort((a, b) => seqOf(a) - seqOf(b));
+      for (const name of steerFiles) injectSteer(join20(controlDir, name));
+    } catch (error) {
+      diagLog("control_poll_failed", { message: errorMessage(error) });
+    }
+  };
+  timer = setInterval(() => {
+    if (!stopped) tick();
+  }, CONTROL_POLL_MS);
+  timer.unref?.();
+  return stop;
+}
 function installTaskModeAutoExit(pi, options = {}) {
   const env = options.env ?? process.env;
-  if (isActive(env)) {
-    const markers = captureAndScrubTaskMarkerEnv(env);
-    writeTaskStartedMarker(markers);
-    installTaskExitMarker(markers);
+  if (!isActive(env)) {
+    diagLog("install_skipped", {
+      taskMode: env.SUMOCODE_TASK_MODE,
+      keepOpen: env.SUMOCODE_TASK_KEEP_OPEN
+    });
+    return;
   }
+  const markers = captureAndScrubTaskMarkerEnv(env);
+  writeTaskStartedMarker(markers);
+  installTaskExitMarker(markers);
+  let latestCtx;
+  let pending;
+  let everArmed = false;
+  const cancelPending = (ctx) => {
+    if (!pending) return;
+    clearInterval(pending.tick);
+    clearTimeout(pending.shutdown);
+    pending = void 0;
+    ctx.ui.setStatus(STATUS_KEY, void 0);
+  };
+  const armCountdown = (ctx) => {
+    cancelPending(ctx);
+    let remaining = Math.ceil(graceMs / 1e3);
+    diagLog(everArmed ? "timer_rearmed" : "timer_armed", { graceMs, remaining });
+    everArmed = true;
+    ctx.ui.setStatus(STATUS_KEY, `task done \xB7 exiting in ${remaining}s \xB7 type or steer to extend`);
+    const tick = setInterval(() => {
+      remaining -= 1;
+      if (remaining > 0) {
+        ctx.ui.setStatus(STATUS_KEY, `task done \xB7 exiting in ${remaining}s \xB7 type or steer to extend`);
+      }
+    }, TICK_MS2);
+    const shutdown = setTimeout(() => {
+      diagLog("timer_fired");
+      cancelPending(ctx);
+      ctx.shutdown();
+    }, graceMs);
+    pending = { tick, shutdown };
+  };
+  const stopWatcher = installControlWatcher(pi, markers.SUMOCODE_TASK_CONTROL_DIR, {
+    getLatestCtx: () => latestCtx,
+    cancelCountdown: () => {
+      if (latestCtx) cancelPending(latestCtx);
+    }
+  });
+  pi.on("session_start", (_event, ctx) => {
+    latestCtx = ctx;
+  });
+  pi.on("session_shutdown", (_event, ctx) => {
+    diagLog("session_shutdown");
+    stopWatcher();
+    cancelPending(ctx);
+  });
   if (!shouldInstallTaskModeAutoExit(options)) {
     diagLog("install_skipped", {
       taskMode: env.SUMOCODE_TASK_MODE,
@@ -16177,58 +16433,33 @@ function installTaskModeAutoExit(pi, options = {}) {
     return;
   }
   const graceMs = options.graceMs ?? DEFAULT_GRACE_MS;
-  let userTookOver = false;
-  let pending;
-  let armed = false;
   diagLog("install", { graceMs });
-  const cancelPending = (ctx, reason) => {
-    if (!pending) return;
-    clearInterval(pending.tick);
-    clearTimeout(pending.shutdown);
-    pending = void 0;
-    ctx.ui.setStatus(STATUS_KEY, void 0);
-    if (reason === "user") {
-      userTookOver = true;
-    }
-  };
   pi.on("input", (event, ctx) => {
-    diagLog("input", { source: event.source, armed });
-    if (!armed) return;
+    latestCtx = ctx;
+    diagLog("input", { source: event.source, pending: pending !== void 0 });
     if (event.source !== "interactive") return;
     if (pending) {
-      cancelPending(ctx, "user");
-      ctx.ui.notify("task auto-exit cancelled \u2014 pane will stay open", "info");
+      cancelPending(ctx);
+      diagLog("timer_cancelled_input");
+      ctx.ui.notify("task auto-exit deferred \u2014 the countdown re-arms after this turn", "info");
+    }
+  });
+  pi.on("agent_start", (_event, ctx) => {
+    latestCtx = ctx;
+    if (pending) {
+      cancelPending(ctx);
+      diagLog("timer_cancelled_agent_start");
     }
   });
   pi.on("agent_end", (event, ctx) => {
-    diagLog("agent_end", { userTookOver, armed });
+    latestCtx = ctx;
+    diagLog("agent_end", { pending: pending !== void 0 });
     persistResponse(
       // SAFETY: agent_end carries the completed turn's messages; non-array
       // payloads fall back to an empty list below.
       event.messages ?? []
     );
-    if (userTookOver) return;
-    if (armed) return;
-    armed = true;
-    let remaining = Math.ceil(graceMs / 1e3);
-    ctx.ui.setStatus(STATUS_KEY, `task done \xB7 exiting in ${remaining}s \xB7 type to cancel`);
-    diagLog("timer_armed", { graceMs, remaining });
-    const tick = setInterval(() => {
-      remaining -= 1;
-      if (remaining > 0) {
-        ctx.ui.setStatus(STATUS_KEY, `task done \xB7 exiting in ${remaining}s \xB7 type to cancel`);
-      }
-    }, TICK_MS2);
-    const shutdown = setTimeout(() => {
-      diagLog("timer_fired");
-      cancelPending(ctx, "fired");
-      ctx.shutdown();
-    }, graceMs);
-    pending = { tick, shutdown };
-  });
-  pi.on("session_shutdown", (_event, ctx) => {
-    diagLog("session_shutdown");
-    cancelPending(ctx, "fired");
+    armCountdown(ctx);
   });
 }
 
@@ -16807,7 +17038,7 @@ function registerRpcTreeNavigationCommand(pi) {
 
 // src/extension.ts
 var SUMOCODE_PACKAGE_NAME = "@dhruvkelawala/sumocode";
-var LEGACY_TASK_TOOL_EXTENSION_PATH = join20(".pi", "agent", "extensions", "task-tool", "index.ts");
+var LEGACY_TASK_TOOL_EXTENSION_PATH = join21(".pi", "agent", "extensions", "task-tool", "index.ts");
 function canonicalize(path2, realpath) {
   try {
     return realpath(path2);
@@ -16828,7 +17059,7 @@ function isInstalledPiAgentGitModule(moduleUrl, homeDir = homedir15()) {
   return modulePath.startsWith(agentGitRoot);
 }
 function packageNameAt2(dir, exists, readFile) {
-  const packagePath = join20(dir, "package.json");
+  const packagePath = join21(dir, "package.json");
   if (!exists(packagePath)) return void 0;
   try {
     const parsed = JSON.parse(readFile(packagePath, "utf8"));
@@ -16848,13 +17079,13 @@ function packageRootFromModulePath(modulePath, exists, readFile) {
   return void 0;
 }
 function findActiveSumoDevTree2(cwd, options = {}) {
-  const exists = options.exists ?? existsSync12;
-  const readFile = options.readFile ?? ((path2, encoding) => readFileSync16(path2, encoding));
+  const exists = options.exists ?? existsSync13;
+  const readFile = options.readFile ?? ((path2, encoding) => readFileSync17(path2, encoding));
   let current = resolve7(cwd);
   while (true) {
     const isSumocodePackage = packageNameAt2(current, exists, readFile) === SUMOCODE_PACKAGE_NAME;
-    const hasExtensionSource = exists(join20(current, "src", "extension.ts"));
-    const hasGitMetadata = exists(join20(current, ".git"));
+    const hasExtensionSource = exists(join21(current, "src", "extension.ts"));
+    const hasGitMetadata = exists(join21(current, ".git"));
     if (isSumocodePackage && hasExtensionSource && hasGitMetadata) return current;
     const parent = dirname13(current);
     if (parent === current) return void 0;
@@ -16868,8 +17099,8 @@ function shouldNoopDuplicateInstalledExtension(options = {}) {
   const launcherRoot = env.SUMOCODE_ROOT_DIR;
   if (launcherRoot) {
     const realpath = options.realpath ?? ((path2) => realpathSync4(path2));
-    const exists = options.exists ?? existsSync12;
-    const readFile = options.readFile ?? ((path2, encoding) => readFileSync16(path2, encoding));
+    const exists = options.exists ?? existsSync13;
+    const readFile = options.readFile ?? ((path2, encoding) => readFileSync17(path2, encoding));
     const modulePath = canonicalize(moduleUrlToPath2(moduleUrl), realpath);
     const packageRoot = packageRootFromModulePath(modulePath, exists, readFile);
     const canonicalLauncherRoot = canonicalize(launcherRoot, realpath);
@@ -16883,8 +17114,8 @@ function shouldNoopDuplicateInstalledExtension(options = {}) {
   return findActiveSumoDevTree2(options.cwd ?? process.cwd(), options) !== void 0;
 }
 function hasLegacyTaskToolExtension(options = {}) {
-  const exists = options.exists ?? existsSync12;
-  return exists(join20(options.homeDir ?? homedir15(), LEGACY_TASK_TOOL_EXTENSION_PATH));
+  const exists = options.exists ?? existsSync13;
+  return exists(join21(options.homeDir ?? homedir15(), LEGACY_TASK_TOOL_EXTENSION_PATH));
 }
 function shouldInstallNativeTaskTool(options = {}) {
   if (options.force === "1" || options.force === "true") return true;

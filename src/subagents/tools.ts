@@ -3,7 +3,7 @@ import { Type } from "typebox";
 import type { DeferredResultDelivery } from "./delivery.js";
 import { activityFromSubagentSnapshot } from "../activity/subagent-adapter.js";
 import { getTerminalHost } from "../terminal-host/index.js";
-import type { PaneRef, TerminalHost } from "../terminal-host/types.js";
+import type { TerminalHost } from "../terminal-host/types.js";
 import { latestText, type SubagentSnapshot } from "./domain.js";
 import { type AtCapacityDetails, SubagentManager } from "./manager.js";
 import { formatCompletionManifestSummary, SUBAGENT_PROMPT_GUIDELINES, SUBAGENT_PROMPT_SNIPPET, SUBAGENT_TOOL_DESCRIPTIONS } from "./prompt.js";
@@ -24,6 +24,8 @@ const activityEnvelope = (snapshot: SubagentSnapshot, sourceId?: string) => {
 };
 
 const isAtCapacity = (value: SubagentSnapshot | AtCapacityDetails): value is AtCapacityDetails => "status" in value && value.status === "at_capacity";
+
+const isSettledSnapshot = (snapshot: SubagentSnapshot): boolean => snapshot.status !== "running" && snapshot.status !== "queued";
 
 const formatAtCapacity = (details: AtCapacityDetails) => {
 	const runningLines = details.running.length > 0
@@ -216,22 +218,11 @@ export function registerSubagentTools(
 		promptGuidelines: SUBAGENT_PROMPT_GUIDELINES,
 		parameters: Type.Object({
 			id: Type.String({ description: "Running visible subagent id, e.g. sa-1." }),
-			text: Type.String({ description: "Prompt text to send followed by Enter." }),
+			text: Type.String({ description: "Steering text to deliver to the child." }),
 		}),
 		async execute(_toolCallId, params) {
-			const snapshot = manager.get(params.id);
-			if (!snapshot) throw new Error(`Unknown subagent id: ${params.id}`);
-			if (snapshot.status === "queued") throw new Error(`Subagent ${params.id} is queued and cannot receive input until it starts`);
-			if (snapshot.status !== "running") throw new Error(`Subagent ${params.id} is already settled (${snapshot.status}) and cannot receive input`);
-			if (!snapshot.visible) throw new Error("headless children cannot receive input — respawn with visible: true");
-			if (!snapshot.pane?.paneId) throw new Error(`Visible subagent ${params.id} does not have a ready pane`);
-			if (host.kind === "none") throw new Error("visible subagent terminal host is unavailable");
-			const sendPaneText = host.sendPaneText;
-			if (!sendPaneText) throw new Error(`sending pane input is not supported on ${host.kind}`);
-			const pane: PaneRef = { host: host.kind, paneId: snapshot.pane.paneId, workspaceId: snapshot.pane.workspaceId };
-			const result = await sendPaneText.call(host, pi, pane, params.text);
-			if (!result.ok) throw new Error(`Unable to send input to ${params.id}: ${result.error}`);
-			return makeToolResult(`Sent input to ${params.id} (${snapshot.title}).`, { action: "send", id: params.id, pane: snapshot.pane });
+			const snapshot = await manager.sendTo(params.id, params.text);
+			return makeToolResult(`Sent steering input to ${params.id} (${snapshot.title}). It is delivered after the child's current turn — no ack beyond delivery-to-child is possible.`, { action: "send", id: params.id, pane: snapshot.pane });
 		},
 	});
 
@@ -301,6 +292,33 @@ export function registerSubagentTools(
 				ids: params.ids,
 				subagents: snapshots.map(cancellationMetadata),
 				activity: snapshots.map((snapshot) => activityEnvelope(snapshot)),
+			});
+		},
+	});
+
+	pi.registerTool({
+		name: "subagent_close",
+		label: "Subagent Close",
+		description: SUBAGENT_TOOL_DESCRIPTIONS.close,
+		promptSnippet: SUBAGENT_PROMPT_SNIPPET,
+		promptGuidelines: SUBAGENT_PROMPT_GUIDELINES,
+		parameters: Type.Object({
+			ids: Type.Array(Type.String(), { maxItems: 64, description: "Visible subagent ids to close gracefully." }),
+		}),
+		async execute(_toolCallId, params) {
+			const lines = await manager.close(params.ids);
+			// Ids that settled during the close return their result inline —
+			// consume them so the deferred delivery does not ALSO report them
+			// on the next agent_end. Still-running ids keep their deferred result.
+			const snapshots = params.ids.map((id) => manager.get(id)).filter((snapshot): snapshot is SubagentSnapshot => snapshot !== undefined);
+			const settled = snapshots.filter(isSettledSnapshot);
+			for (const snapshot of settled) delivery?.consume(snapshot.id);
+			const text = settled.length > 0 ? `${lines.join("\n")}\n\n${boundedWaitText(settled)}` : lines.join("\n");
+			return makeToolResult(text, {
+				action: "close",
+				ids: params.ids,
+				subagents: settled.map(cancellationMetadata),
+				activity: settled.map((snapshot) => activityEnvelope(snapshot)),
 			});
 		},
 	});

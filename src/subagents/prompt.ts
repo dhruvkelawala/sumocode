@@ -54,7 +54,8 @@ export const SUBAGENT_PROMPT_GUIDELINES = [
 	"Use subagent_spawn for independent research, review, or implementation slices that can proceed while you keep working.",
 	"Use visible subagents for long or interactive work the human may want to watch or steer; use headless subagents for silent, bounded fan-out.",
 	"All children have their own context, cannot see this conversation, and cannot spawn subagents; prompts must be self-contained with objective, paths, constraints, expected output, and stop conditions.",
-	"Use subagent_send to steer a running visible child; it sends the text followed by Enter. Headless or settled children cannot receive input.",
+	"Use subagent_send to steer a running visible child; the text is delivered as a Pi steering message after the child's current turn, not typed into its terminal. Headless or settled children cannot receive input.",
+	"visible children stay open while active and auto-close after 30s of silence; use subagent_close to end one deliberately.",
 	"Visible Herdr children split beside the parent when its tab is available, including worktree-backed children; overflow falls back to subagent tabs/workspaces.",
 	"delegation is fire-and-forget: after spawning, continue other work or end your turn. settled results arrive as automatic follow-up messages that wake you. do NOT call subagent_wait right after subagent_spawn.",
 	"spawn with a role for recurring shapes: research, review, documentor, designer, implement-cheap, implement-smart. the role sets the child's system prompt, tool limits, and defaults; your prompt supplies the concrete objective and stop conditions. read the role list in the spawn tool for per-role defaults — research and review run in the shared checkout; documentor, designer, and the implement roles default to isolated worktrees.",
@@ -70,7 +71,8 @@ export const SUBAGENT_PROMPT_SNIPPET = "Spawn, steer, check, wait for, cancel, a
 
 export const SUBAGENT_TOOL_DESCRIPTIONS = {
 	spawn: "Start one child subagent and return immediately with its id. Set visible=true for an interactive terminal-host pane, or omit it for silent headless execution. Optionally isolate it in a preserved git worktree. Its result is delivered automatically when it settles; no polling is needed.",
-	send: "Send prompt text followed by Enter to a running visible subagent pane.",
+	send: "Send steering text to a running visible subagent. Delivered as a Pi steering message after the child's current turn — not typed into its terminal.",
+	close: "Gracefully close visible subagents: the child saves its final response and exits cleanly, settling with a normal completion manifest. Use subagent_cancel only to abort work.",
 	check: "Peek at one subagent without consuming its eventual result.",
 	wait: "Block until subagents settle. Last resort: results deliver automatically on settlement; prefer ending your turn. Use only when nothing can proceed without the result.",
 	cancel: "Interrupt running subagents and mark their results consumed.",

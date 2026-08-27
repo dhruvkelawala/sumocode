@@ -919,3 +919,151 @@ pi: { exec: vi.fn() } as never,
 		expect(lines).toEqual([`Cancelled ${a.id}`, `Cancelled ${b.id}`]);
 	});
 });
+
+describe("SubagentManager steering and close", () => {
+	/** Like deferredBackend, but visible children expose send/requestClose. */
+	const steerableBackend = () => {
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const sends = new Map<string, ReturnType<typeof vi.fn>>();
+		const requestCloses = new Map<string, ReturnType<typeof vi.fn>>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => {
+			const child: {
+				events: (emit: (event: SubagentEvent) => void) => void;
+				interrupt: () => void;
+				send?: (text: string) => Promise<void>;
+				requestClose?: () => void;
+			} = {
+				events: (emit) => {
+					emitters.set(task.id, emit);
+					emit({ kind: "run-started" });
+				},
+				interrupt: vi.fn(() => emitters.get(task.id)?.({ kind: "run-settled", outcome: { kind: "interrupted" } })),
+			};
+			if (task.visible) {
+				const send = vi.fn(async () => undefined);
+				const requestClose = vi.fn(() => emitters.get(task.id)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "closed cleanly" } }));
+				child.send = send;
+				child.requestClose = requestClose;
+				sends.set(task.id, send);
+				requestCloses.set(task.id, requestClose);
+			}
+			return child as import("./backend-pi.js").SpawnedChild;
+		}, {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "base-ref" }),
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+		});
+		return { manager, emitters, sends, requestCloses };
+	};
+
+	const spawnVisible = async (manager: SubagentManager, title: string): Promise<string> => {
+		const spawned = await manager.spawn({ prompt: "p", title, cwd: "/tmp", visible: true });
+		// SAFETY: a steerable spawn always resolves to a snapshot with an id.
+		return (spawned as { id: string }).id;
+	};
+
+	describe("sendTo", () => {
+		it("rejects unknown ids with the known id list", async () => {
+			const { manager } = steerableBackend();
+			await manager.spawn(makeTask("known"));
+			await expect(manager.sendTo("sa-9", "hi")).rejects.toThrow("Unknown subagent id: sa-9. Known ids: sa-1");
+		});
+
+		it("rejects queued children", async () => {
+			const { manager } = steerableBackend();
+			for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await manager.spawn(makeTask(`running-${index}`));
+			await manager.spawn(makeTask("queued"));
+			await expect(manager.sendTo(firstQueuedId, "hi")).rejects.toThrow(`Subagent ${firstQueuedId} is queued and cannot receive input until it starts`);
+		});
+
+		it("rejects settled children", async () => {
+			const { manager, emitters } = steerableBackend();
+			await manager.spawn(makeTask("done"));
+			emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+			await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
+			await expect(manager.sendTo("sa-1", "hi")).rejects.toThrow("already settled (done)");
+		});
+
+		it("rejects children without a send capability as headless", async () => {
+			const { manager } = deferredBackend();
+			await manager.spawn(makeTask("headless"));
+			await expect(manager.sendTo("sa-1", "hi")).rejects.toThrow("headless children cannot receive input — respawn with visible: true");
+		});
+
+		it("delivers text through the child's send and returns the snapshot", async () => {
+			const { manager, sends } = steerableBackend();
+			const id = await spawnVisible(manager, "steered");
+			await expect(manager.sendTo(id, "focus the tests")).resolves.toMatchObject({ id, status: "running" });
+			expect(sends.get(id)).toHaveBeenCalledWith("focus the tests");
+		});
+	});
+
+	describe("close", () => {
+		it("reports unknown and already-settled ids without action", async () => {
+			const { manager, emitters } = steerableBackend();
+			await manager.spawn(makeTask("done"));
+			emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+			await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
+
+			await expect(manager.close(["sa-9", "sa-1"])).resolves.toEqual(["sa-9 is unknown", "sa-1 was already done"]);
+			expect(manager.consumedIds.has("sa-1")).toBe(false);
+		});
+
+		it("cancels a queued child without starting it", async () => {
+			const { manager, requestCloses } = steerableBackend();
+			for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await manager.spawn(makeTask(`running-${index}`));
+			await manager.spawn(makeTask("queued"));
+
+			await expect(manager.close([firstQueuedId])).resolves.toEqual([`Cancelled queued ${firstQueuedId}`]);
+			expect(manager.get(firstQueuedId)).toMatchObject({ status: "error", errorText: "interrupted" });
+			expect(requestCloses.has(firstQueuedId)).toBe(false);
+		});
+
+		it("reports headless running children without acting", async () => {
+			const { manager } = deferredBackend();
+			await manager.spawn(makeTask("headless"));
+			await expect(manager.close(["sa-1"])).resolves.toEqual(["sa-1 is headless — it settles on its own; use subagent_cancel to stop it"]);
+			expect(manager.get("sa-1")?.status).toBe("running");
+		});
+
+		it("closes a visible child, marks it consumed, and returns its line", async () => {
+			const { manager, requestCloses } = steerableBackend();
+			const id = await spawnVisible(manager, "closable");
+
+			await expect(manager.close([id])).resolves.toEqual([`Closed ${id}`]);
+			expect(requestCloses.get(id)).toHaveBeenCalledTimes(1);
+			await vi.waitFor(() => expect(manager.get(id)?.status).toBe("done"));
+			expect(manager.consumedIds.has(id)).toBe(true);
+		});
+
+		it("leaves the child running when the close times out and does not consume", async () => {
+			vi.useFakeTimers();
+			try {
+				const { manager, emitters, requestCloses } = steerableBackend();
+				const id = await spawnVisible(manager, "slow");
+				// SAFETY: visible spawns always register a requestClose double.
+				(requestCloses.get(id) as ReturnType<typeof vi.fn>).mockImplementation(() => undefined);
+
+				const closing = manager.close([id]);
+				await vi.advanceTimersByTimeAsync(15_000);
+				await expect(closing).resolves.toEqual([`close requested for ${id}; still running — check the pane or use subagent_cancel`]);
+				expect(manager.get(id)?.status).toBe("running");
+				expect(manager.consumedIds.has(id)).toBe(false);
+
+				// The real settle still lands afterwards and stays truthful.
+				emitters.get(id)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "eventually" } });
+				await vi.waitFor(() => expect(manager.get(id)?.status).toBe("done"));
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+	});
+});

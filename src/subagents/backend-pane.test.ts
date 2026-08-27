@@ -19,6 +19,13 @@ class FakeFs {
 		return value;
 	}
 
+	renameSync(source: string, target: string): void {
+		const value = this.files.get(source);
+		if (value === undefined) throw new Error(`missing ${source}`);
+		this.files.delete(source);
+		this.files.set(target, value);
+	}
+
 	writeFileSync(path: string, contents: string): void {
 		this.files.set(path, contents);
 	}
@@ -42,6 +49,7 @@ const createHarness = (
 	startResult: typeof startedPane | { ok: false; error: string } = startedPane,
 	placement: { kind: "tab"; tabId: string; direction: "right" } | { kind: "workspace"; workspaceId: string; paneId: string } = { kind: "tab", tabId: "w1:t1", direction: "right" },
 	appendSystemPrompt?: string,
+	spawnerDependencies?: { sendAckPollMs?: number; sendAckTimeoutMs?: number },
 ) => {
 	const fs = new FakeFs();
 	const closePane = vi.fn(async () => ({ ok: true as const }));
@@ -53,7 +61,7 @@ const createHarness = (
 		closePane,
 		notify: vi.fn(async () => undefined),
 	};
-	const spawn = createPaneChildSpawner({ fs, now: () => 1234, baseDir: "/tmp/subagents", pollIntervalMs: 750 });
+	const spawn = createPaneChildSpawner({ fs, now: () => 1234, baseDir: "/tmp/subagents", pollIntervalMs: 750, ...spawnerDependencies });
 	const child = spawn({
 		prompt: "do the work",
 		name: "worker",
@@ -277,5 +285,114 @@ describe("pane subagent backend", () => {
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("pane subagent steering and close", () => {
+	it("publishes steer files tmp-then-rename and resolves when the child unlinks them", async () => {
+		vi.useFakeTimers();
+		try {
+			const harness = createHarness();
+			await flushPromises();
+			const steerPath = `${harness.paths.controlDir}/steer-1.txt`;
+
+			const sendPromise = harness.child.send!("focus the tests");
+			// tmp-then-rename: the tmp file is consumed by the rename immediately.
+			expect(harness.fs.files.has(`${steerPath}.tmp`)).toBe(false);
+			expect(harness.fs.files.get(steerPath)).toBe("focus the tests");
+
+			// No ack yet — the promise must stay pending.
+			await vi.advanceTimersByTimeAsync(250);
+			let settled = false;
+			void sendPromise.then(() => { settled = true; });
+			await flushPromises();
+			expect(settled).toBe(false);
+
+			// The child's watcher consumes the file: unlink is the ack.
+			harness.fs.files.delete(steerPath);
+			await vi.advanceTimersByTimeAsync(250);
+			await expect(sendPromise).resolves.toBeUndefined();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("increments the steer seq across sends", async () => {
+		vi.useFakeTimers();
+		try {
+			const harness = createHarness();
+			await flushPromises();
+			const first = harness.child.send!("first steer");
+			const second = harness.child.send!("second steer");
+
+			expect(harness.fs.files.get(`${harness.paths.controlDir}/steer-1.txt`)).toBe("first steer");
+			expect(harness.fs.files.get(`${harness.paths.controlDir}/steer-2.txt`)).toBe("second steer");
+
+			harness.fs.files.delete(`${harness.paths.controlDir}/steer-1.txt`);
+			harness.fs.files.delete(`${harness.paths.controlDir}/steer-2.txt`);
+			await vi.advanceTimersByTimeAsync(250);
+			await expect(first).resolves.toBeUndefined();
+			await expect(second).resolves.toBeUndefined();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("rejects the send when the child exits before consuming the steer file", async () => {
+		vi.useFakeTimers();
+		try {
+			const harness = createHarness();
+			await flushPromises();
+			const sendPromise = harness.child.send!("too late");
+			// Attach the rejection handler before the timer tick rejects.
+			const rejection = expect(sendPromise).rejects.toThrow("exited before receiving input");
+			harness.fs.files.set(harness.paths.exitFile, "0");
+
+			await vi.advanceTimersByTimeAsync(250);
+			await rejection;
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("rejects the send when the ack poll times out", async () => {
+		vi.useFakeTimers();
+		try {
+			const harness = createHarness(startedPane, { kind: "tab", tabId: "w1:t1", direction: "right" }, undefined, { sendAckPollMs: 100, sendAckTimeoutMs: 500 });
+			await flushPromises();
+			const sendPromise = harness.child.send!("never acked");
+			// Attach the rejection handler before the timer tick rejects.
+			const rejection = expect(sendPromise).rejects.toThrow("not acknowledged within 500ms");
+
+			await vi.advanceTimersByTimeAsync(600);
+			await rejection;
+			// The file remains so a later-booting child can still consume it.
+			expect(harness.fs.files.has(`${harness.paths.controlDir}/steer-1.txt`)).toBe(true);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("rejects send after the child settled", async () => {
+		vi.useFakeTimers();
+		try {
+			const harness = createHarness();
+			await flushPromises();
+			harness.fs.files.set(harness.paths.responseFile, "done");
+			harness.fs.files.set(harness.paths.exitFile, "0");
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(settledEvents(harness.events)).toHaveLength(1);
+
+			await expect(harness.child.send!("late")).rejects.toThrow("has settled");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("requestClose writes the close.request control file", () => {
+		const harness = createHarness();
+		harness.child.requestClose?.();
+		expect(harness.fs.files.get(`${harness.paths.controlDir}/close.request`)).toBe("1");
+		harness.child.interrupt();
 	});
 });

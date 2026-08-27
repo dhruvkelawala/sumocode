@@ -236,7 +236,7 @@ Indexed 2026-07-07 (previously tracked only in the dogfood ledger below).
 | 032 | [Bible demotion and regeneration](032-bible-demotion-and-regeneration.md) | TODO — status not recorded in plan file; verify before dispatch |
 | 033 | [Track D integration branch](033-track-d-integration-branch.md) | DONE — `integrate/track-d` is this branch |
 | 034 | [Legacy cleanup](034-legacy-cleanup.md) | TODO — approval-gated; do not start until APPROVED-TO-RUN (Dhruv) |
-| 035 | [Restore Pi command family](035-restore-pi-command-family.md) | IN PROGRESS — Phase 1 DONE (`9405422`); Phase 2 (/trust, /share, 2 settings toggles) pending; Phase 3 blocked upstream |
+| 035 | [Restore Pi command family](035-restore-pi-command-family.md) | IN PROGRESS — Phase 1 DONE (`9405422`); Phase 2 (/trust, /share, 2 settings toggles) pending; Phase 3 `/tree` claim superseded by Plan 086 after Pi 0.83 exposed `ExtensionCommandContext.navigateTree()` |
 | 036 | [Inline selector parity](036-inline-selector-parity.md) | DONE — `7b77b94`, merged |
 | 037 | [Cathedral selector styling](037-cathedral-selector-styling.md) | DONE — `4383f37`, merged `149f58c` |
 | 038 | [Wire app.* action keybindings](038-wire-app-action-keybindings.md) | DONE — merged `fcd2224` (incl. cycleBackward fix `a20532e`) |
@@ -569,6 +569,40 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 - Cards update in place by stable ID. Producer updates never own expansion state.
 - Generic/unknown tools render bounded useful content; `Preview collapsed` is removed rather than renamed.
 - No file deletion, legacy-process cleanup, Pi private patch, custom RPC protocol, fleet dashboard, or visual golden promotion is authorized by these plans.
+
+## Session navigation parity (086)
+
+**Planned at:** `3ca11da`, 2026-08-04.
+
+| Plan | Title | Priority | Effort | Depends on | Status |
+|------|-------|----------|--------|------------|--------|
+| 086 | [Restore long-session-safe Pi `/tree` navigation parity](086-rpc-tree-navigation-parity.md) | P0 | L | 078 | IN PROGRESS — PR [#350](https://github.com/dhruvkelawala/sumocode/pull/350) ready for review; full unit/integration/visual gates pass; final Claude Opus 4.8 autoreview clean |
+
+### Locked decisions
+
+- `/tree` navigates in place through Pi 0.83's public extension-command context; `/fork` remains a replacement-session operation.
+- Deep traversal is iterative. The host uses streamed local entries plus flat `get_entries since=<cursor>` for authoritative leaf/delta data; it never uses nested RPC `get_tree` or a larger V8 stack.
+- The exact Pi summary choices are restored, including multiline custom instructions. Active in-flight branch-summary cancellation remains blocked on a public Pi RPC/context capability; no private seam is authorized.
+- Real-Pi tests use synthetic 6,001-entry sessions and a deterministic summary extension, never the user's reproduction file or live credentials.
+- Visual evidence is review-only; golden promotion remains human-approved.
+
+## RPC queue steering escape hatch (087)
+
+**Planned at:** `6f5be80`, 2026-08-12.
+
+| Plan | Title | Priority | Effort | Depends on | Status |
+|------|-------|----------|--------|------------|--------|
+| 087 | [Force-send the next host-queued message as Pi steering](087-force-send-next-queued-message.md) | P1 | M | 078 | BLOCKED — Pi 0.83 cannot distinguish handled input from the active-to-idle normal-start race; two revisions exhausted at `1857f8d` |
+
+### Locked decisions
+
+- Ordinary busy Enter remains an undoable host FIFO append; ordinary FIFO drain still waits for `agent_settled`.
+- `super+enter` (Command+Enter) force-sends only the oldest FIFO entry through `prompt.streamingBehavior: "steer"`; later entries keep their order.
+- Shift+Enter remains multiline input and is never a fallback force-send binding.
+- An explicit Pi preflight rejection restores the entry at the FIFO head; an ambiguous transport timeout never requeues it. After Pi accepts it, the entry is Pi-owned and Alt+Up cannot reclaim it.
+- An `agent_settled` that races force-send acceptance cannot release the next FIFO entry before the accepted steering lifecycle settles.
+- Force-send is disabled outside an active streaming turn, including compaction and tree-navigation windows.
+- No Pi patch, hidden child queue, new RPC command, queue-card redesign, or golden promotion is authorized.
 
 ## Theme expansion — Herdr Terminal (073)
 

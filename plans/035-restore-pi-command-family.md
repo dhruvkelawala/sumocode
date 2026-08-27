@@ -106,10 +106,12 @@ and its unit test green.
 7. **`/tree` (browse/preview only)** — read the CURRENT session's `.jsonl`
    (`sessionFile`) via `session-reader.ts`, reconstruct the parent/child branch
    graph (port `getTree()`'s walk), render a navigable tree overlay. The
-   "jump to node" action is Phase 3 (needs `navigate_tree`); for now, offer
-   `fork`-from-node via the existing `fork(entryId)` primitive and clearly
-   label it as forking (behaviorally: creates a branch, not leaf-repositioning).
-   Test: graph build from a branched fixture matches expected structure.
+   original Phase 1 approximation offered `fork`-from-node because the pinned
+   Pi version then lacked a known navigation seam. **Reconciled 2026-08-04:**
+   Pi 0.83 now exposes public `ExtensionCommandContext.navigateTree()`; Plan 086
+   supersedes this fork-only behavior with long-session-safe in-place navigation
+   and branch-summary choices. Test: graph build from a branched fixture matches
+   expected structure.
 8. **`/fork` polish** — upgrade `openForkSelector` from a flat list to a
    searchable/preview modal against the same `get_fork_messages` data. Test.
 9. **`/session` panel** — render the full `get_session_stats` payload as a
@@ -174,8 +176,10 @@ hacks that fake them:
   fits a device-code flow. Interim: users run bare `pi` once for auth (creds
   persist to shared `auth.json`). 
 - **`/import`** (arbitrary external `.jsonl` replace) — needs an `import_jsonl` verb.
-- **`/tree` "navigate to node"** (leaf repositioning with summarize-on-branch)
-  — needs a `navigate_tree` verb; `fork` is behaviorally different.
+- **`/tree` "navigate to node"** — **SUPERSEDED by Plan 086 (2026-08-04).**
+  Pi 0.83 exposes `ExtensionCommandContext.navigateTree()` to RPC-child
+  extension commands, so SumoCode can bridge in-place navigation without a new
+  RPC verb. `fork` remains behaviorally different and must stay separate.
 - **`/reload`** — needs a child respawn / `reload_extensions` contract.
 - **`/export .jsonl`** — needs `export_jsonl` (only `export_html` exists).
 

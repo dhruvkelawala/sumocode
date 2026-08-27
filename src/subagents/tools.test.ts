@@ -11,6 +11,14 @@ interface ToolResult {
 	details?: unknown;
 }
 
+/** Spawned-child double: only visible children get send/requestClose. */
+type FakeSpawnedChild = {
+	events: (emit: (event: SubagentEvent) => void) => void;
+	interrupt: () => void;
+	send?: (text: string) => Promise<void>;
+	requestClose?: () => void;
+};
+
 const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly SubagentRole[], roleWarnings: readonly string[] = []) => {
 	const registered: Array<{ name: string; parameters?: unknown; execute: (...args: unknown[]) => Promise<ToolResult> }> = [];
 	const emitters = new Map<string, (event: SubagentEvent) => void>();
@@ -33,12 +41,7 @@ const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly Su
 	const spawnedTasks: Array<SpawnSubagentTask & { id: string }> = [];
 	const manager = new SubagentManager((task: SpawnSubagentTask & { id: string }) => {
 		spawnedTasks.push(task);
-		const child: {
-			events: (emit: (event: SubagentEvent) => void) => void;
-			interrupt: () => void;
-			send?: (text: string) => Promise<void>;
-			requestClose?: () => void;
-		} = {
+		const child: FakeSpawnedChild = {
 			events: (emit) => {
 				emitters.set(task.id, emit);
 				emit({ kind: "run-started" });
@@ -55,6 +58,7 @@ const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly Su
 			childSends.set(task.id, send);
 			childRequestCloses.set(task.id, requestClose);
 		}
+		// SAFETY: the fake child implements every SpawnedChild member this manager path calls; send/requestClose are present exactly for visible children, mirroring the real backends.
 		return child as import("./backend-pi.js").SpawnedChild;
 	}, {
 		captureGitContext: async () => ({ repoRoot: "/tmp/project", baseRef: "base-ref" }),

@@ -4,6 +4,14 @@ import { SUBAGENT_MAX_QUEUED, SUBAGENT_MAX_RUNNING, type SubagentEvent } from ".
 import type { CompletionManifest, CompletionManifestEvidence } from "./manifest.js";
 import type { TerminalHost } from "../terminal-host/types.js";
 
+/** Spawned-child double: only visible children get send/requestClose. */
+type FakeSpawnedChild = {
+	events: (emit: (event: SubagentEvent) => void) => void;
+	interrupt: () => void;
+	send?: (text: string) => Promise<void>;
+	requestClose?: () => void;
+};
+
 const makeTask = (title: string): SpawnSubagentTask => ({ title, prompt: `prompt ${title}`, cwd: "/tmp" });
 const subagentId = (sequence: number): string => `sa-${sequence}`;
 const firstQueuedId = subagentId(SUBAGENT_MAX_RUNNING + 1);
@@ -933,12 +941,7 @@ describe("SubagentManager steering and close", () => {
 			notify: vi.fn(),
 		};
 		const manager = new SubagentManager((task) => {
-			const child: {
-				events: (emit: (event: SubagentEvent) => void) => void;
-				interrupt: () => void;
-				send?: (text: string) => Promise<void>;
-				requestClose?: () => void;
-			} = {
+			const child: FakeSpawnedChild = {
 				events: (emit) => {
 					emitters.set(task.id, emit);
 					emit({ kind: "run-started" });
@@ -953,6 +956,7 @@ describe("SubagentManager steering and close", () => {
 				sends.set(task.id, send);
 				requestCloses.set(task.id, requestClose);
 			}
+			// SAFETY: the fake child implements every SpawnedChild member this manager path calls; send/requestClose are present exactly for visible children, mirroring the real backends.
 			return child as import("./backend-pi.js").SpawnedChild;
 		}, {
 			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "base-ref" }),

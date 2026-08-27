@@ -195,7 +195,7 @@ function isNumber(value: number | undefined): value is number {
 	return typeof value === "number";
 }
 
-function errorMessage(error: unknown): string {
+function errorMessage<T>(error: T): string {
 	return error instanceof Error ? error.message : String(error);
 }
 

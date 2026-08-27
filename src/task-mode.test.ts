@@ -463,13 +463,14 @@ describe("control watcher", () => {
 		const controlDir = join(workDir!, "control");
 		mkdirSync(controlDir, { recursive: true });
 		const { pi, handlers } = buildPiStub();
+		const env: NodeJS.ProcessEnv = {
+			SUMOCODE_TASK_MODE: "1",
+			SUMOCODE_TASK_CONTROL_DIR: controlDir,
+		};
+		if (keepOpen) env.SUMOCODE_TASK_KEEP_OPEN = "1";
 		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
 		installTaskModeAutoExit(pi as never, {
-			env: {
-				SUMOCODE_TASK_MODE: "1",
-				SUMOCODE_TASK_CONTROL_DIR: controlDir,
-				...(keepOpen ? { SUMOCODE_TASK_KEEP_OPEN: "1" } : {}),
-			},
+			env,
 			graceMs: 10_000,
 		});
 		const ctx = buildCtxStub();

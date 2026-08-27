@@ -547,7 +547,17 @@ export class SubagentManager {
 				lines.set(id, `${id} is headless — it settles on its own; use subagent_cancel to stop it`);
 				continue;
 			}
-			child.requestClose();
+			try {
+				child.requestClose();
+			} catch (error) {
+				// The pane backend writes a file here, so this can throw when the task
+				// dir was removed or became unwritable. Isolate it: an uncaught throw
+				// would abort the whole batch, so later ids would never receive their
+				// close request and the caller would get an error instead of per-id
+				// results.
+				lines.set(id, `unable to request close for ${id}: ${error instanceof Error ? error.message : String(error)}`);
+				continue;
+			}
 			targets.push(id);
 		}
 		await Promise.allSettled(targets.map(async (id) => {

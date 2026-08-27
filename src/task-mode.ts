@@ -50,11 +50,17 @@ let capturedMarkerEnv: NodeJS.ProcessEnv | undefined;
 
 /**
  * Capture the marker-file env vars into a snapshot and scrub them from the
- * given env (typically `process.env`). Returns the snapshot. Exposed for
- * tests; production code calls this once via `installTaskModeAutoExit`.
+ * given env (typically `process.env`). Returns the snapshot.
+ *
+ * MERGES with any previous capture instead of replacing it. Pi recreates the
+ * extension API in the SAME process for `/new`, `/resume`, and `/fork`, so a
+ * second install sees an env this function already scrubbed. Replacing the
+ * snapshot there would blank every marker path: response persistence would
+ * stop and no replacement control watcher could be installed, silently
+ * breaking steering and graceful close for the rest of the process lifetime.
  */
 export function captureAndScrubTaskMarkerEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-	const snapshot: NodeJS.ProcessEnv = {};
+	const snapshot: NodeJS.ProcessEnv = { ...capturedMarkerEnv };
 	for (const key of TASK_MARKER_ENV_KEYS) {
 		const value = env[key];
 		if (value !== undefined) {
@@ -234,6 +240,8 @@ export function shouldInstallTaskModeAutoExit(options: TaskModeAutoExitOptions =
 interface TaskModeControlHooks {
 	getLatestCtx(): ExtensionContext | undefined;
 	cancelCountdown(): void;
+	/** Shut down now, or defer until the active turn reaches `agent_end`. */
+	requestShutdown(ctx: ExtensionContext): void;
 }
 
 /**
@@ -289,15 +297,20 @@ function installControlWatcher(pi: ExtensionAPI, controlDir: string | undefined,
 
 	const tick = (): void => {
 		try {
+			const ctx = hooks.getLatestCtx();
+			// Gate EVERY control action on a captured context. Its absence means
+			// session_start has not fired, i.e. the extension runtime is still
+			// loading — and both `sendUserMessage` and `shutdown` throw during
+			// loading ("Extension runtime not initialized"). Ticking anyway burns
+			// the steer file's first delivery attempt and pushes the real
+			// injection past the orchestrator's ack budget, so a delivered steer
+			// gets reported to the parent as a failure. Retry next tick instead.
+			if (!ctx) return;
 			if (existsSync(join(controlDir, CLOSE_REQUEST_FILE))) {
 				diagLog("close_requested");
 				hooks.cancelCountdown();
-				const ctx = hooks.getLatestCtx();
-				// Close can arrive before any handler captured a context (e.g.
-				// before session_start); retry on the next tick instead of throwing.
-				if (!ctx) return;
 				stop();
-				ctx.shutdown();
+				hooks.requestShutdown(ctx);
 				return;
 			}
 			let entries: string[];
@@ -347,9 +360,16 @@ export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoE
 	writeTaskStartedMarker(markers);
 	installTaskExitMarker(markers);
 
+	const countdownEnabled = shouldInstallTaskModeAutoExit(options);
+	const graceMs = options.graceMs ?? DEFAULT_GRACE_MS;
 	let latestCtx: ExtensionContext | undefined;
 	let pending: { tick: ReturnType<typeof setInterval>; shutdown: ReturnType<typeof setTimeout> } | undefined;
 	let everArmed = false;
+	// A turn is active between agent_start and agent_end. Close requests that
+	// arrive inside that window must wait for it: agent_end is the ONLY place
+	// response.md is written.
+	let turnActive = false;
+	let closeRequested = false;
 
 	const cancelPending = (ctx: ExtensionContext): void => {
 		if (!pending) return;
@@ -383,15 +403,66 @@ export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoE
 		pending = { tick, shutdown };
 	};
 
+	const shutdownNow = (ctx: ExtensionContext): void => {
+		cancelPending(ctx);
+		ctx.shutdown();
+	};
+
 	const stopWatcher = installControlWatcher(pi, markers.SUMOCODE_TASK_CONTROL_DIR, {
 		getLatestCtx: () => latestCtx,
 		cancelCountdown: () => {
 			if (latestCtx) cancelPending(latestCtx);
 		},
+		requestShutdown: (ctx) => {
+			if (turnActive) {
+				// Exiting mid-turn would settle the parent on a stale or empty
+				// response.md while reporting a normal completion — silently losing
+				// the work the child is producing right now. agent_end persists the
+				// turn and then honors this request.
+				closeRequested = true;
+				diagLog("close_deferred_active_turn");
+				return;
+			}
+			shutdownNow(ctx);
+		},
 	});
 
 	pi.on("session_start", (_event, ctx) => {
 		latestCtx = ctx;
+	});
+
+	// Turn tracking, response persistence, and deferred close are registered for
+	// EVERY task-mode session. They are orchestrator-facing guarantees, not
+	// countdown behavior, so keep-open sessions need them too.
+	pi.on("agent_start", (_event, ctx) => {
+		latestCtx = ctx;
+		turnActive = true;
+		// A turn is running — never exit mid-turn. agent_end re-arms afterwards.
+		if (pending) {
+			cancelPending(ctx);
+			diagLog("timer_cancelled_agent_start");
+		}
+	});
+
+	pi.on("agent_end", (event, ctx) => {
+		latestCtx = ctx;
+		turnActive = false;
+		diagLog("agent_end", { pending: pending !== undefined });
+		// Always persist the latest completed turn. Completion is keyed off the
+		// real process-exit marker, so response.md can be overwritten safely if a
+		// human takes over and sends follow-up turns before shutdown.
+		persistResponse(
+			// SAFETY: agent_end carries the completed turn's messages; non-array
+			// payloads fall back to an empty list below.
+			(event as { messages?: unknown[] }).messages ?? [],
+		);
+		if (closeRequested) {
+			// The deferred close from mid-turn: the finished turn is now on disk.
+			diagLog("close_completed_after_turn");
+			shutdownNow(ctx);
+			return;
+		}
+		if (countdownEnabled) armCountdown(ctx);
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
@@ -402,7 +473,9 @@ export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoE
 		cancelPending(ctx);
 	});
 
-	if (!shouldInstallTaskModeAutoExit(options)) {
+	if (!countdownEnabled) {
+		// Keep-open opts out of the silence countdown only; the watcher, turn
+		// tracking, and response persistence above stay live.
 		diagLog("install_skipped", {
 			taskMode: env.SUMOCODE_TASK_MODE,
 			keepOpen: env.SUMOCODE_TASK_KEEP_OPEN,
@@ -410,7 +483,6 @@ export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoE
 		return;
 	}
 
-	const graceMs = options.graceMs ?? DEFAULT_GRACE_MS;
 	diagLog("install", { graceMs });
 
 	pi.on("input", (event, ctx) => {
@@ -428,26 +500,4 @@ export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoE
 		}
 	});
 
-	pi.on("agent_start", (_event, ctx) => {
-		latestCtx = ctx;
-		// A turn is running — never exit mid-turn. agent_end re-arms afterwards.
-		if (pending) {
-			cancelPending(ctx);
-			diagLog("timer_cancelled_agent_start");
-		}
-	});
-
-	pi.on("agent_end", (event, ctx) => {
-		latestCtx = ctx;
-		diagLog("agent_end", { pending: pending !== undefined });
-		// Always persist the latest completed turn. Completion is keyed off the
-		// real process-exit marker, so response.md can be overwritten safely if a
-		// human takes over and sends follow-up turns before shutdown.
-		persistResponse(
-			// SAFETY: agent_end carries the completed turn's messages; non-array
-			// payloads fall back to an empty list below.
-			(event as { messages?: unknown[] }).messages ?? [],
-		);
-		armCountdown(ctx);
-	});
 }

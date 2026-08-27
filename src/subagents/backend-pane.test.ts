@@ -6,12 +6,17 @@ import type { SubagentEvent } from "./domain.js";
 
 class FakeFs {
 	readonly files = new Map<string, string>();
+	/** Recorded creation modes so permission expectations are assertable. */
+	readonly dirModes = new Map<string, number | undefined>();
+	readonly fileModes = new Map<string, number | undefined>();
 
 	existsSync(path: string): boolean {
 		return this.files.has(path);
 	}
 
-	mkdirSync(): void {}
+	mkdirSync(path?: string, options?: { recursive: true; mode?: number }): void {
+		if (path !== undefined) this.dirModes.set(path, options?.mode);
+	}
 
 	readFileSync(path: string): string {
 		const value = this.files.get(path);
@@ -24,10 +29,14 @@ class FakeFs {
 		if (value === undefined) throw new Error(`missing ${source}`);
 		this.files.delete(source);
 		this.files.set(target, value);
+		// A real rename carries the source's mode across.
+		this.fileModes.set(target, this.fileModes.get(source));
+		this.fileModes.delete(source);
 	}
 
-	writeFileSync(path: string, contents: string): void {
+	writeFileSync(path: string, contents: string, options?: { mode?: number }): void {
 		this.files.set(path, contents);
+		this.fileModes.set(path, options?.mode);
 	}
 }
 
@@ -394,5 +403,32 @@ describe("pane subagent steering and close", () => {
 		harness.child.requestClose?.();
 		expect(harness.fs.files.get(`${harness.paths.controlDir}/close.request`)).toBe("1");
 		harness.child.interrupt();
+	});
+
+	it("keeps the task dir, control dir, and control files owner-only", async () => {
+		vi.useFakeTimers();
+		try {
+			const harness = createHarness();
+			await flushPromises();
+			// Steering text routinely carries source snippets, and a timed-out send
+			// leaves its file behind, so world-readable /tmp defaults would leak it.
+			expect(harness.fs.dirModes.get(harness.paths.controlDir)).toBe(0o700);
+			expect([...harness.fs.dirModes.values()].every((mode) => mode === 0o700)).toBe(true);
+
+			const steerPath = `${harness.paths.controlDir}/steer-1.txt`;
+			const sendPromise = harness.child.send!("secret steering text");
+			// The tmp file is written 0600 and rename preserves it, so the published
+			// file is never briefly world-readable.
+			expect(harness.fs.fileModes.get(steerPath)).toBe(0o600);
+
+			harness.child.requestClose?.();
+			expect(harness.fs.fileModes.get(`${harness.paths.controlDir}/close.request`)).toBe(0o600);
+
+			harness.fs.files.delete(steerPath);
+			await vi.advanceTimersByTimeAsync(250);
+			await expect(sendPromise).resolves.toBeUndefined();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

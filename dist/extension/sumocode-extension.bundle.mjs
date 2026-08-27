@@ -14350,7 +14350,9 @@ import {
 import { dirname as dirname11, join as join17 } from "node:path";
 var RESPONSE_POLL_INTERVAL_MS = 750;
 var SEND_ACK_POLL_MS = 250;
-var SEND_ACK_TIMEOUT_MS = 5e3;
+var SEND_ACK_TIMEOUT_MS = 3e4;
+var PRIVATE_DIR_MODE = 448;
+var PRIVATE_FILE_MODE3 = 384;
 var CLOSE_REQUEST_FILE = "close.request";
 var ERROR_TEXT_MAX = 4096;
 var nodeFs = {
@@ -14366,8 +14368,8 @@ var createPaneChildSpawner = (dependencies = {}) => (options) => {
   const now = dependencies.now ?? Date.now;
   const baseDir = dependencies.baseDir ?? join17(process.env.TMPDIR ?? "/tmp", "sumocode-subagents");
   const paths = buildVisibleTaskPaths(options.id, now(), baseDir);
-  fs3.mkdirSync(dirname11(paths.promptFile), { recursive: true });
-  fs3.mkdirSync(paths.controlDir, { recursive: true });
+  fs3.mkdirSync(dirname11(paths.promptFile), { recursive: true, mode: PRIVATE_DIR_MODE });
+  fs3.mkdirSync(paths.controlDir, { recursive: true, mode: PRIVATE_DIR_MODE });
   const prompt = options.appendSystemPrompt ? `role instructions (follow these for this entire session):
 ${options.appendSystemPrompt}
 ---
@@ -14475,7 +14477,7 @@ ${options.prompt}` : options.prompt;
     }
     const seq = ++steerSeq;
     const finalPath = join17(paths.controlDir, `steer-${seq}.txt`);
-    fs3.writeFileSync(`${finalPath}.tmp`, text);
+    fs3.writeFileSync(`${finalPath}.tmp`, text, { mode: PRIVATE_FILE_MODE3 });
     fs3.renameSync(`${finalPath}.tmp`, finalPath);
     const ackPollMs = dependencies.sendAckPollMs ?? SEND_ACK_POLL_MS;
     const ackTimeoutMs = dependencies.sendAckTimeoutMs ?? SEND_ACK_TIMEOUT_MS;
@@ -14502,7 +14504,7 @@ ${options.prompt}` : options.prompt;
     });
   };
   const requestClose = () => {
-    fs3.writeFileSync(join17(paths.controlDir, CLOSE_REQUEST_FILE), "1");
+    fs3.writeFileSync(join17(paths.controlDir, CLOSE_REQUEST_FILE), "1", { mode: PRIVATE_FILE_MODE3 });
   };
   const events = (emit) => {
     emitEvent = emit;
@@ -15396,7 +15398,12 @@ var SubagentManager = class {
         lines.set(id, `${id} is headless \u2014 it settles on its own; use subagent_cancel to stop it`);
         continue;
       }
-      child.requestClose();
+      try {
+        child.requestClose();
+      } catch (error) {
+        lines.set(id, `unable to request close for ${id}: ${error instanceof Error ? error.message : String(error)}`);
+        continue;
+      }
       targets.push(id);
     }
     await Promise.allSettled(targets.map(async (id) => {
@@ -16191,7 +16198,7 @@ var TASK_MARKER_ENV_KEYS = [
 ];
 var capturedMarkerEnv;
 function captureAndScrubTaskMarkerEnv(env = process.env) {
-  const snapshot = {};
+  const snapshot = { ...capturedMarkerEnv };
   for (const key of TASK_MARKER_ENV_KEYS) {
     const value = env[key];
     if (value !== void 0) {
@@ -16342,13 +16349,13 @@ function installControlWatcher(pi, controlDir, hooks) {
   };
   const tick = () => {
     try {
+      const ctx = hooks.getLatestCtx();
+      if (!ctx) return;
       if (existsSync12(join20(controlDir, CLOSE_REQUEST_FILE2))) {
         diagLog("close_requested");
         hooks.cancelCountdown();
-        const ctx = hooks.getLatestCtx();
-        if (!ctx) return;
         stop();
-        ctx.shutdown();
+        hooks.requestShutdown(ctx);
         return;
       }
       let entries;
@@ -16382,9 +16389,13 @@ function installTaskModeAutoExit(pi, options = {}) {
   const markers = captureAndScrubTaskMarkerEnv(env);
   writeTaskStartedMarker(markers);
   installTaskExitMarker(markers);
+  const countdownEnabled = shouldInstallTaskModeAutoExit(options);
+  const graceMs = options.graceMs ?? DEFAULT_GRACE_MS;
   let latestCtx;
   let pending;
   let everArmed = false;
+  let turnActive = false;
+  let closeRequested = false;
   const cancelPending = (ctx) => {
     if (!pending) return;
     clearInterval(pending.tick);
@@ -16411,28 +16422,63 @@ function installTaskModeAutoExit(pi, options = {}) {
     }, graceMs);
     pending = { tick, shutdown };
   };
+  const shutdownNow = (ctx) => {
+    cancelPending(ctx);
+    ctx.shutdown();
+  };
   const stopWatcher = installControlWatcher(pi, markers.SUMOCODE_TASK_CONTROL_DIR, {
     getLatestCtx: () => latestCtx,
     cancelCountdown: () => {
       if (latestCtx) cancelPending(latestCtx);
+    },
+    requestShutdown: (ctx) => {
+      if (turnActive) {
+        closeRequested = true;
+        diagLog("close_deferred_active_turn");
+        return;
+      }
+      shutdownNow(ctx);
     }
   });
   pi.on("session_start", (_event, ctx) => {
     latestCtx = ctx;
+  });
+  pi.on("agent_start", (_event, ctx) => {
+    latestCtx = ctx;
+    turnActive = true;
+    if (pending) {
+      cancelPending(ctx);
+      diagLog("timer_cancelled_agent_start");
+    }
+  });
+  pi.on("agent_end", (event, ctx) => {
+    latestCtx = ctx;
+    turnActive = false;
+    diagLog("agent_end", { pending: pending !== void 0 });
+    persistResponse(
+      // SAFETY: agent_end carries the completed turn's messages; non-array
+      // payloads fall back to an empty list below.
+      event.messages ?? []
+    );
+    if (closeRequested) {
+      diagLog("close_completed_after_turn");
+      shutdownNow(ctx);
+      return;
+    }
+    if (countdownEnabled) armCountdown(ctx);
   });
   pi.on("session_shutdown", (_event, ctx) => {
     diagLog("session_shutdown");
     stopWatcher();
     cancelPending(ctx);
   });
-  if (!shouldInstallTaskModeAutoExit(options)) {
+  if (!countdownEnabled) {
     diagLog("install_skipped", {
       taskMode: env.SUMOCODE_TASK_MODE,
       keepOpen: env.SUMOCODE_TASK_KEEP_OPEN
     });
     return;
   }
-  const graceMs = options.graceMs ?? DEFAULT_GRACE_MS;
   diagLog("install", { graceMs });
   pi.on("input", (event, ctx) => {
     latestCtx = ctx;
@@ -16443,23 +16489,6 @@ function installTaskModeAutoExit(pi, options = {}) {
       diagLog("timer_cancelled_input");
       ctx.ui.notify("task auto-exit deferred \u2014 the countdown re-arms after this turn", "info");
     }
-  });
-  pi.on("agent_start", (_event, ctx) => {
-    latestCtx = ctx;
-    if (pending) {
-      cancelPending(ctx);
-      diagLog("timer_cancelled_agent_start");
-    }
-  });
-  pi.on("agent_end", (event, ctx) => {
-    latestCtx = ctx;
-    diagLog("agent_end", { pending: pending !== void 0 });
-    persistResponse(
-      // SAFETY: agent_end carries the completed turn's messages; non-array
-      // payloads fall back to an empty list below.
-      event.messages ?? []
-    );
-    armCountdown(ctx);
   });
 }
 

@@ -167,13 +167,20 @@ describe("installTaskModeAutoExit", () => {
 			env: { SUMOCODE_TASK_MODE: "1", SUMOCODE_TASK_KEEP_OPEN: "1", SUMOCODE_TASK_CONTROL_DIR: controlDir },
 			graceMs: 10_000,
 		});
-		// No auto-exit handlers: agent_end must not arm a countdown.
-		expect(handlers.has("agent_end")).toBe(false);
+		// The countdown-only handler stays off under keep-open.
 		expect(handlers.has("input")).toBe(false);
+		// agent_end IS registered: it persists response.md and honors a deferred
+		// close. Those are orchestrator guarantees, not countdown behavior.
+		expect(handlers.has("agent_end")).toBe(true);
 
-		// Close is explicit, not silence-based — it works under keep-open.
 		const ctx = buildCtxStub();
 		handlers.get("session_start")?.[0]?.({}, ctx);
+		handlers.get("agent_end")?.[0]?.({ messages: [] }, ctx);
+		// ...but it must never arm a countdown here.
+		expect(ctx.ui.setStatus).not.toHaveBeenCalled();
+		expect(ctx.shutdown).not.toHaveBeenCalled();
+
+		// Close is explicit, not silence-based — it works under keep-open.
 		writeFileSync(join(controlDir, "close.request"), "1");
 		vi.advanceTimersByTime(500);
 		expect(ctx.shutdown).toHaveBeenCalledTimes(1);
@@ -556,6 +563,107 @@ describe("control watcher", () => {
 
 		expect(() => vi.advanceTimersByTime(1_500)).not.toThrow();
 		expect(pi.sendUserMessage).not.toHaveBeenCalled();
+	});
+
+	it("holds steer injection until the extension runtime is initialized", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const controlDir = join(workDir, "control");
+		mkdirSync(controlDir, { recursive: true });
+		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
+		installTaskModeAutoExit(pi as never, {
+			env: { SUMOCODE_TASK_MODE: "1", SUMOCODE_TASK_CONTROL_DIR: controlDir },
+			graceMs: 10_000,
+		});
+		const steerPath = join(controlDir, "steer-1.txt");
+		writeFileSync(steerPath, "steer before boot");
+
+		// No session_start yet: sendUserMessage would throw "Extension runtime not
+		// initialized", burning the delivery and pushing the real injection past
+		// the orchestrator's ack budget.
+		vi.advanceTimersByTime(2_000);
+		expect(pi.sendUserMessage).not.toHaveBeenCalled();
+		expect(existsSync(steerPath)).toBe(true);
+
+		handlers.get("session_start")?.[0]?.({}, buildCtxStub());
+		vi.advanceTimersByTime(500);
+
+		expect(pi.sendUserMessage).toHaveBeenCalledWith("steer before boot", { deliverAs: "steer" });
+		expect(existsSync(steerPath)).toBe(false);
+	});
+
+	it("defers a mid-turn close until agent_end has persisted the response", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const controlDir = join(workDir, "control");
+		mkdirSync(controlDir, { recursive: true });
+		const responseFile = join(workDir, "response.md");
+		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
+		installTaskModeAutoExit(pi as never, {
+			env: {
+				SUMOCODE_TASK_MODE: "1",
+				SUMOCODE_TASK_CONTROL_DIR: controlDir,
+				SUMOCODE_TASK_RESPONSE_FILE: responseFile,
+			},
+			graceMs: 10_000,
+		});
+		const ctx = buildCtxStub();
+		handlers.get("session_start")?.[0]?.({}, ctx);
+
+		// A turn is streaming when the orchestrator asks to close.
+		handlers.get("agent_start")?.[0]?.({}, ctx);
+		writeFileSync(join(controlDir, "close.request"), "1");
+		vi.advanceTimersByTime(1_500);
+
+		// Exiting here would settle the parent on an empty response.md while
+		// reporting a normal completion — losing the in-flight turn.
+		expect(ctx.shutdown).not.toHaveBeenCalled();
+		expect(existsSync(responseFile)).toBe(false);
+
+		handlers.get("agent_end")?.[0]?.({
+			messages: [{ role: "assistant", content: [{ type: "text", text: "the real answer" }] }],
+		}, ctx);
+
+		expect(readFileSync(responseFile, "utf8")).toContain("the real answer");
+		expect(ctx.shutdown).toHaveBeenCalledTimes(1);
+		// The deferred close wins over re-arming the silence countdown.
+		expect(ctx.ui.setStatus).not.toHaveBeenCalledWith(expect.any(String), expect.stringContaining("exiting in"));
+	});
+
+	it("closes immediately when no turn is active", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const { controlDir, ctx } = installWithControlDir();
+		writeFileSync(join(controlDir, "close.request"), "1");
+
+		vi.advanceTimersByTime(500);
+
+		expect(ctx.shutdown).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps steering alive across session recreation (/new, /resume, /fork)", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const controlDir = join(workDir, "control");
+		mkdirSync(controlDir, { recursive: true });
+		// Pi recreates the extension API in the SAME process, so the second
+		// install sees an env the first one already scrubbed.
+		const env: NodeJS.ProcessEnv = { SUMOCODE_TASK_MODE: "1", SUMOCODE_TASK_CONTROL_DIR: controlDir };
+		const first = buildPiStub();
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
+		installTaskModeAutoExit(first.pi as never, { env, graceMs: 10_000 });
+		first.handlers.get("session_start")?.[0]?.({}, buildCtxStub());
+		first.handlers.get("session_shutdown")?.[0]?.({}, buildCtxStub());
+		expect(env.SUMOCODE_TASK_CONTROL_DIR).toBeUndefined();
+
+		const second = buildPiStub();
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
+		installTaskModeAutoExit(second.pi as never, { env, graceMs: 10_000 });
+		second.handlers.get("session_start")?.[0]?.({}, buildCtxStub());
+		const steerPath = join(controlDir, "steer-1.txt");
+		writeFileSync(steerPath, "steer after resume");
+		vi.advanceTimersByTime(500);
+
+		expect(second.pi.sendUserMessage).toHaveBeenCalledWith("steer after resume", { deliverAs: "steer" });
+		expect(existsSync(steerPath)).toBe(false);
 	});
 
 	it("steering cancels a pending silence countdown", () => {

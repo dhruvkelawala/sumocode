@@ -1048,6 +1048,27 @@ describe("SubagentManager steering and close", () => {
 			expect(manager.consumedIds.has(id)).toBe(true);
 		});
 
+		it("isolates a throwing close request so later ids still get theirs", async () => {
+			const { manager, requestCloses } = steerableBackend();
+			const first = await spawnVisible(manager, "unwritable");
+			const second = await spawnVisible(manager, "healthy");
+			// The pane backend writes a file here, so a removed/unwritable task dir
+			// throws synchronously. That must not abort the rest of the batch.
+			// SAFETY: visible spawns always register a requestClose double.
+			(requestCloses.get(first) as ReturnType<typeof vi.fn>).mockImplementation(() => {
+				throw new Error("ENOENT: control dir is gone");
+			});
+
+			await expect(manager.close([first, second])).resolves.toEqual([
+				`unable to request close for ${first}: ENOENT: control dir is gone`,
+				`Closed ${second}`,
+			]);
+			expect(requestCloses.get(second)).toHaveBeenCalledTimes(1);
+			expect(manager.get(first)?.status).toBe("running");
+			// The failed id keeps its deferred result: nothing was reported inline.
+			expect(manager.consumedIds.has(first)).toBe(false);
+		});
+
 		it("leaves the child running when the close times out and does not consume", async () => {
 			vi.useFakeTimers();
 			try {

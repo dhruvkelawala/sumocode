@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -22,6 +22,7 @@ function buildPiStub() {
 			list.push(handler);
 			handlers.set(event, list);
 		}),
+		sendUserMessage: vi.fn(),
 		exec: vi.fn(async (_cmd: string, _args: string[], _opts?: { timeout?: number; env?: NodeJS.ProcessEnv }) => ({
 			code: 0,
 			stdout: "",
@@ -156,16 +157,36 @@ describe("installTaskModeAutoExit", () => {
 		expect(pi.on).not.toHaveBeenCalled();
 	});
 
-	it("does nothing when keep-open is set", () => {
-		const { pi } = buildPiStub();
-		// SAFETY: the pi double supplies the on/exec surfaces installTaskModeAutoExit reads.
+	it("skips countdown wiring when keep-open is set but still installs the control watcher", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
+		const controlDir = join(workDir, "control");
+		mkdirSync(controlDir, { recursive: true });
+		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
 		installTaskModeAutoExit(pi as never, {
-			env: { SUMOCODE_TASK_MODE: "1", SUMOCODE_TASK_KEEP_OPEN: "1" },
+			env: { SUMOCODE_TASK_MODE: "1", SUMOCODE_TASK_KEEP_OPEN: "1", SUMOCODE_TASK_CONTROL_DIR: controlDir },
+			graceMs: 10_000,
 		});
-		expect(pi.on).not.toHaveBeenCalled();
+		// The countdown-only handler stays off under keep-open.
+		expect(handlers.has("input")).toBe(false);
+		// agent_end IS registered: it persists response.md and honors a deferred
+		// close. Those are orchestrator guarantees, not countdown behavior.
+		expect(handlers.has("agent_end")).toBe(true);
+
+		const ctx = buildCtxStub();
+		handlers.get("session_start")?.[0]?.({}, ctx);
+		handlers.get("agent_end")?.[0]?.({ messages: [] }, ctx);
+		// ...but it must never arm a countdown here.
+		expect(ctx.ui.setStatus).not.toHaveBeenCalled();
+		expect(ctx.shutdown).not.toHaveBeenCalled();
+
+		// Close is explicit, not silence-based — it works under keep-open.
+		writeFileSync(join(controlDir, "close.request"), "1");
+		vi.advanceTimersByTime(500);
+		expect(ctx.shutdown).toHaveBeenCalledTimes(1);
 	});
 
-	it("schedules process shutdown after the grace period on first agent_end", async () => {
+	it("schedules process shutdown after the silence window on first agent_end", async () => {
 		const { pi, handlers } = buildPiStub();
 		// SAFETY: the pi double supplies the on/exec surfaces installTaskModeAutoExit reads.
 		installTaskModeAutoExit(pi as never, { env: { SUMOCODE_TASK_MODE: "1" }, graceMs: 10_000 });
@@ -181,6 +202,10 @@ describe("installTaskModeAutoExit", () => {
 			"sumocode-task-auto-exit",
 			expect.stringContaining("exiting in 10s"),
 		);
+		expect(ctx.ui.setStatus).toHaveBeenCalledWith(
+			"sumocode-task-auto-exit",
+			expect.stringContaining("type or steer to extend"),
+		);
 
 		// nothing has fired yet
 		expect(pi.exec).not.toHaveBeenCalled();
@@ -195,35 +220,15 @@ describe("installTaskModeAutoExit", () => {
 		expect(ctx.shutdown).toHaveBeenCalledTimes(1);
 	});
 
-	it("cancels auto-exit when the user types interactively during the grace period", () => {
-		const { pi, handlers } = buildPiStub();
-		// SAFETY: the pi double supplies the on/exec surfaces installTaskModeAutoExit reads.
-		installTaskModeAutoExit(pi as never, { env: { SUMOCODE_TASK_MODE: "1" }, graceMs: 10_000 });
-
-		const ctx = buildCtxStub();
-		handlers.get("agent_end")?.[0]?.({ messages: [] }, ctx);
-		// Simulate user typing 3 seconds in
-		vi.advanceTimersByTime(3_000);
-		handlers.get("input")?.[0]?.({ source: "interactive", text: "follow-up" }, ctx);
-
-		// Run remaining time — shutdown must not fire
-		vi.advanceTimersByTime(20_000);
-		expect(pi.exec).not.toHaveBeenCalled();
-		expect(ctx.ui.notify).toHaveBeenCalledWith(
-			expect.stringContaining("auto-exit cancelled"),
-			"info",
-		);
-	});
-
-	it("ignores input that fires BEFORE the first agent_end (this is the CLI kickoff)", async () => {
+	it("kickoff input before the first agent_end is a no-op (no countdown exists yet)", async () => {
 		const { pi, handlers } = buildPiStub();
 		// SAFETY: the pi double supplies the on/exec surfaces installTaskModeAutoExit reads.
 		installTaskModeAutoExit(pi as never, { env: { SUMOCODE_TASK_MODE: "1" }, graceMs: 10_000 });
 
 		const ctx = buildCtxStub();
 		// Pi delivers the CLI positional kickoff as input with source=interactive.
-		// This must NOT cancel the auto-exit — it's the orchestrator's prompt,
-		// not the user typing.
+		// This must NOT cancel anything — there is no countdown to cancel, and
+		// the subsequent agent_end arms the timer normally.
 		handlers.get("input")?.[0]?.({ source: "interactive", text: "kickoff prompt" }, ctx);
 		handlers.get("agent_end")?.[0]?.({ messages: [] }, ctx);
 
@@ -233,26 +238,53 @@ describe("installTaskModeAutoExit", () => {
 		expect(ctx.shutdown).toHaveBeenCalledTimes(1);
 	});
 
-	it("cancels auto-exit when the user types AFTER the first agent_end (real follow-up)", () => {
+	it("interactive input cancels the pending countdown; the next agent_end re-arms it", async () => {
 		const { pi, handlers } = buildPiStub();
 		// SAFETY: the pi double supplies the on/exec surfaces installTaskModeAutoExit reads.
 		installTaskModeAutoExit(pi as never, { env: { SUMOCODE_TASK_MODE: "1" }, graceMs: 10_000 });
 
 		const ctx = buildCtxStub();
-		// Kickoff input (ignored)
-		handlers.get("input")?.[0]?.({ source: "interactive", text: "kickoff" }, ctx);
-		// First agent_end arms the timer
 		handlers.get("agent_end")?.[0]?.({ messages: [] }, ctx);
-		// User types during grace period
+		// User types 3 seconds in — cancels, no longer permanently
 		vi.advanceTimersByTime(3_000);
 		handlers.get("input")?.[0]?.({ source: "interactive", text: "follow-up" }, ctx);
-		// Run remaining time — close must NOT fire
 		vi.advanceTimersByTime(20_000);
-		expect(pi.exec).not.toHaveBeenCalled();
-		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("auto-exit cancelled"), "info");
+		expect(ctx.shutdown).not.toHaveBeenCalled();
+		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("auto-exit deferred"), "info");
+
+		// The follow-up turn settles: a fresh full window is armed.
+		handlers.get("agent_end")?.[0]?.({ messages: [] }, ctx);
+		expect(ctx.ui.setStatus).toHaveBeenCalledWith(
+			"sumocode-task-auto-exit",
+			expect.stringContaining("exiting in 10s"),
+		);
+		vi.advanceTimersByTime(9_999);
+		expect(ctx.shutdown).not.toHaveBeenCalled();
+		vi.advanceTimersByTime(1);
+		await Promise.resolve();
+		expect(ctx.shutdown).toHaveBeenCalledTimes(1);
 	});
 
-	it("does not re-arm on subsequent agent_end events", () => {
+	it("agent_start cancels a pending countdown so a running turn is never interrupted", async () => {
+		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the on/exec surfaces installTaskModeAutoExit reads.
+		installTaskModeAutoExit(pi as never, { env: { SUMOCODE_TASK_MODE: "1" }, graceMs: 10_000 });
+
+		const ctx = buildCtxStub();
+		handlers.get("agent_end")?.[0]?.({ messages: [] }, ctx);
+		handlers.get("agent_start")?.[0]?.({}, ctx);
+
+		vi.advanceTimersByTime(60_000);
+		expect(ctx.shutdown).not.toHaveBeenCalled();
+
+		// Silence after the turn ends exits normally.
+		handlers.get("agent_end")?.[0]?.({ messages: [] }, ctx);
+		vi.advanceTimersByTime(10_000);
+		await Promise.resolve();
+		expect(ctx.shutdown).toHaveBeenCalledTimes(1);
+	});
+
+	it("re-arms a fresh countdown on every agent_end (silence window restarts)", async () => {
 		const { pi, handlers } = buildPiStub();
 		// SAFETY: the pi double supplies the on/exec surfaces installTaskModeAutoExit reads.
 		installTaskModeAutoExit(pi as never, { env: { SUMOCODE_TASK_MODE: "1" }, graceMs: 10_000 });
@@ -260,15 +292,15 @@ describe("installTaskModeAutoExit", () => {
 		const ctx = buildCtxStub();
 		const onAgentEnd = handlers.get("agent_end")?.[0];
 
-		// First agent_end → arms
 		onAgentEnd!({ messages: [] }, ctx);
-		// User types → cancels and marks as "took over"
-		handlers.get("input")?.[0]?.({ source: "interactive", text: "follow-up" }, ctx);
-		// Second agent_end after their follow-up turn — must NOT re-arm
+		// A second agent_end 8s in replaces the countdown — the full window restarts.
+		vi.advanceTimersByTime(8_000);
 		onAgentEnd!({ messages: [] }, ctx);
-
-		vi.advanceTimersByTime(60_000);
-		expect(pi.exec).not.toHaveBeenCalled();
+		vi.advanceTimersByTime(8_000);
+		expect(ctx.shutdown).not.toHaveBeenCalled();
+		vi.advanceTimersByTime(2_000);
+		await Promise.resolve();
+		expect(ctx.shutdown).toHaveBeenCalledTimes(1);
 	});
 
 	it("writes response.md with final assistant text on first agent_end", () => {
@@ -295,7 +327,7 @@ describe("installTaskModeAutoExit", () => {
 		expect(readFileSync(responseFile, "utf8").trim()).toBe("done x");
 	});
 
-	it("updates response.md on later agent_end events without re-arming shutdown", () => {
+	it("updates response.md on later agent_end events while re-arming the countdown", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
 		const responseFile = join(workDir, "response.md");
 		process.env.SUMOCODE_TASK_RESPONSE_FILE = responseFile;
@@ -310,7 +342,13 @@ describe("installTaskModeAutoExit", () => {
 		onAgentEnd?.({ messages: [{ role: "assistant", content: [{ type: "text", text: "second" }] }] }, ctx);
 
 		expect(readFileSync(responseFile, "utf8").trim()).toBe("second");
-		expect(ctx.ui.setStatus).toHaveBeenCalledTimes(1);
+		// Both agent_end events armed/re-armed the countdown status (the re-arm
+		// first clears the status line via cancelPending, then writes the copy).
+		expect(ctx.ui.setStatus).toHaveBeenCalledTimes(3);
+		expect(ctx.ui.setStatus).toHaveBeenLastCalledWith(
+			"sumocode-task-auto-exit",
+			expect.stringContaining("exiting in 10s"),
+		);
 	});
 
 	it("writes a task-started marker for manager startup liveness", () => {
@@ -417,5 +455,241 @@ describe("installTaskModeAutoExit", () => {
 
 		// No file path was given — nothing to check, just ensure no crash.
 		expect(true).toBe(true);
+	});
+});
+
+describe("control watcher", () => {
+	let workDir: string | undefined;
+
+	beforeEach(() => {
+		vi.useFakeTimers();
+	});
+
+	/** Install task mode with a control dir inside a fresh temp workdir. */
+	const installWithControlDir = (keepOpen = false) => {
+		const controlDir = join(workDir!, "control");
+		mkdirSync(controlDir, { recursive: true });
+		const { pi, handlers } = buildPiStub();
+		const env: NodeJS.ProcessEnv = {
+			SUMOCODE_TASK_MODE: "1",
+			SUMOCODE_TASK_CONTROL_DIR: controlDir,
+		};
+		if (keepOpen) env.SUMOCODE_TASK_KEEP_OPEN = "1";
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
+		installTaskModeAutoExit(pi as never, {
+			env,
+			graceMs: 10_000,
+		});
+		const ctx = buildCtxStub();
+		// Capture a context the way a real Pi session would.
+		handlers.get("session_start")?.[0]?.({}, ctx);
+		return { pi, handlers, controlDir, ctx };
+	};
+
+	afterEach(() => {
+		vi.useRealTimers();
+		if (workDir) rmSync(workDir, { recursive: true, force: true });
+		workDir = undefined;
+		resetTaskMarkerEnvForTests();
+	});
+
+	it("injects a steer file as a Pi steering message and unlinks it (the ack)", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const { pi, controlDir } = installWithControlDir();
+		const steerPath = join(controlDir, "steer-1.txt");
+		writeFileSync(steerPath, "focus on the failing tests");
+
+		vi.advanceTimersByTime(500);
+
+		expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
+		expect(pi.sendUserMessage).toHaveBeenCalledWith("focus on the failing tests", { deliverAs: "steer" });
+		expect(existsSync(steerPath)).toBe(false);
+	});
+
+	it("processes steer files in ascending seq order within one tick", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const { pi, controlDir } = installWithControlDir();
+		// Written out of order on purpose: consumption must sort by seq.
+		writeFileSync(join(controlDir, "steer-2.txt"), "second");
+		writeFileSync(join(controlDir, "steer-1.txt"), "first");
+
+		vi.advanceTimersByTime(500);
+
+		expect(pi.sendUserMessage.mock.calls.map((call) => call[0])).toEqual(["first", "second"]);
+	});
+
+	it("ignores .tmp steer writes until they are renamed into place", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const { pi, controlDir } = installWithControlDir();
+		const tmpPath = join(controlDir, "steer-1.txt.tmp");
+		writeFileSync(tmpPath, "half written");
+
+		vi.advanceTimersByTime(1_500);
+
+		expect(pi.sendUserMessage).not.toHaveBeenCalled();
+		expect(existsSync(tmpPath)).toBe(true);
+	});
+
+	it("deletes empty steer files without injecting", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const { pi, controlDir } = installWithControlDir();
+		const emptyPath = join(controlDir, "steer-3.txt");
+		writeFileSync(emptyPath, "");
+
+		vi.advanceTimersByTime(500);
+
+		expect(pi.sendUserMessage).not.toHaveBeenCalled();
+		expect(existsSync(emptyPath)).toBe(false);
+	});
+
+	it("close.request shuts the child down and stops the watcher", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const { pi, controlDir, ctx } = installWithControlDir();
+		writeFileSync(join(controlDir, "close.request"), "1");
+
+		vi.advanceTimersByTime(500);
+		expect(ctx.shutdown).toHaveBeenCalledTimes(1);
+
+		// The watcher is stopped — later ticks must not re-fire shutdown.
+		writeFileSync(join(controlDir, "steer-1.txt"), "late steer");
+		vi.advanceTimersByTime(2_000);
+		expect(ctx.shutdown).toHaveBeenCalledTimes(1);
+		expect(pi.sendUserMessage).not.toHaveBeenCalled();
+	});
+
+	it("tolerates a missing control directory (child booted before the parent created it)", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const { pi } = installWithControlDir();
+
+		expect(() => vi.advanceTimersByTime(1_500)).not.toThrow();
+		expect(pi.sendUserMessage).not.toHaveBeenCalled();
+	});
+
+	it("holds steer injection until the extension runtime is initialized", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const controlDir = join(workDir, "control");
+		mkdirSync(controlDir, { recursive: true });
+		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
+		installTaskModeAutoExit(pi as never, {
+			env: { SUMOCODE_TASK_MODE: "1", SUMOCODE_TASK_CONTROL_DIR: controlDir },
+			graceMs: 10_000,
+		});
+		const steerPath = join(controlDir, "steer-1.txt");
+		writeFileSync(steerPath, "steer before boot");
+
+		// No session_start yet: sendUserMessage would throw "Extension runtime not
+		// initialized", burning the delivery and pushing the real injection past
+		// the orchestrator's ack budget.
+		vi.advanceTimersByTime(2_000);
+		expect(pi.sendUserMessage).not.toHaveBeenCalled();
+		expect(existsSync(steerPath)).toBe(true);
+
+		handlers.get("session_start")?.[0]?.({}, buildCtxStub());
+		vi.advanceTimersByTime(500);
+
+		expect(pi.sendUserMessage).toHaveBeenCalledWith("steer before boot", { deliverAs: "steer" });
+		expect(existsSync(steerPath)).toBe(false);
+	});
+
+	it("defers a mid-turn close until agent_end has persisted the response", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const controlDir = join(workDir, "control");
+		mkdirSync(controlDir, { recursive: true });
+		const responseFile = join(workDir, "response.md");
+		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
+		installTaskModeAutoExit(pi as never, {
+			env: {
+				SUMOCODE_TASK_MODE: "1",
+				SUMOCODE_TASK_CONTROL_DIR: controlDir,
+				SUMOCODE_TASK_RESPONSE_FILE: responseFile,
+			},
+			graceMs: 10_000,
+		});
+		const ctx = buildCtxStub();
+		handlers.get("session_start")?.[0]?.({}, ctx);
+
+		// A turn is streaming when the orchestrator asks to close.
+		handlers.get("agent_start")?.[0]?.({}, ctx);
+		writeFileSync(join(controlDir, "close.request"), "1");
+		vi.advanceTimersByTime(1_500);
+
+		// Exiting here would settle the parent on an empty response.md while
+		// reporting a normal completion — losing the in-flight turn.
+		expect(ctx.shutdown).not.toHaveBeenCalled();
+		expect(existsSync(responseFile)).toBe(false);
+
+		handlers.get("agent_end")?.[0]?.({
+			messages: [{ role: "assistant", content: [{ type: "text", text: "the real answer" }] }],
+		}, ctx);
+
+		expect(readFileSync(responseFile, "utf8")).toContain("the real answer");
+		expect(ctx.shutdown).toHaveBeenCalledTimes(1);
+		// The deferred close wins over re-arming the silence countdown.
+		expect(ctx.ui.setStatus).not.toHaveBeenCalledWith(expect.any(String), expect.stringContaining("exiting in"));
+	});
+
+	it("closes immediately when no turn is active", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const { controlDir, ctx } = installWithControlDir();
+		writeFileSync(join(controlDir, "close.request"), "1");
+
+		vi.advanceTimersByTime(500);
+
+		expect(ctx.shutdown).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps steering alive across session recreation (/new, /resume, /fork)", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const controlDir = join(workDir, "control");
+		mkdirSync(controlDir, { recursive: true });
+		// Pi recreates the extension API in the SAME process, so the second
+		// install sees an env the first one already scrubbed.
+		const env: NodeJS.ProcessEnv = { SUMOCODE_TASK_MODE: "1", SUMOCODE_TASK_CONTROL_DIR: controlDir };
+		const first = buildPiStub();
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
+		installTaskModeAutoExit(first.pi as never, { env, graceMs: 10_000 });
+		first.handlers.get("session_start")?.[0]?.({}, buildCtxStub());
+		first.handlers.get("session_shutdown")?.[0]?.({}, buildCtxStub());
+		expect(env.SUMOCODE_TASK_CONTROL_DIR).toBeUndefined();
+
+		const second = buildPiStub();
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
+		installTaskModeAutoExit(second.pi as never, { env, graceMs: 10_000 });
+		second.handlers.get("session_start")?.[0]?.({}, buildCtxStub());
+		const steerPath = join(controlDir, "steer-1.txt");
+		writeFileSync(steerPath, "steer after resume");
+		vi.advanceTimersByTime(500);
+
+		expect(second.pi.sendUserMessage).toHaveBeenCalledWith("steer after resume", { deliverAs: "steer" });
+		expect(existsSync(steerPath)).toBe(false);
+	});
+
+	it("steering cancels a pending silence countdown", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const { pi, handlers, controlDir, ctx } = installWithControlDir();
+		handlers.get("agent_end")?.[0]?.({ messages: [] }, ctx);
+		writeFileSync(join(controlDir, "steer-1.txt"), "steer mid-countdown");
+
+		vi.advanceTimersByTime(500);
+		expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
+
+		// The countdown was cancelled with the steer; nothing re-arms it here
+		// (the stub does not fire agent_start/agent_end for the new turn).
+		vi.advanceTimersByTime(20_000);
+		expect(ctx.shutdown).not.toHaveBeenCalled();
+	});
+
+	it("keeps a steer file readable after a read failure on a later tick", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const { pi, controlDir } = installWithControlDir();
+		// A directory where a steer file is expected makes readFileSync throw.
+		mkdirSync(join(controlDir, "steer-9.txt"));
+
+		expect(() => vi.advanceTimersByTime(1_000)).not.toThrow();
+		writeFileSync(join(controlDir, "steer-1.txt"), "still works");
+		vi.advanceTimersByTime(500);
+		expect(pi.sendUserMessage).toHaveBeenCalledWith("still works", { deliverAs: "steer" });
 	});
 });

@@ -444,6 +444,7 @@ describe("sumocode extension", () => {
 				"subagent_check",
 				"subagent_wait",
 				"subagent_cancel",
+				"subagent_close",
 				"subagent_list",
 			]);
 			expect(toolNames.filter((name) => name.startsWith("terminal_"))).toEqual(["terminal_start", "terminal_check", "terminal_wait", "terminal_stop", "terminal_list"]);

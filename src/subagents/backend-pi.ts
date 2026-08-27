@@ -106,6 +106,10 @@ export interface SpawnedChild {
 	readonly sessionFilePath?: string;
 	readonly ready?: Promise<void>;
 	interrupt(): void;
+	/** Deliver steering text to a running child. Rejects when unsupported or unconfirmed. */
+	send?(text: string): Promise<void>;
+	/** Ask the child to persist its response and shut down gracefully. */
+	requestClose?(): void;
 }
 
 type SpawnLike = typeof nodeSpawn;

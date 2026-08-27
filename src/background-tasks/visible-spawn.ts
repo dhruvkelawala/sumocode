@@ -16,6 +16,7 @@ interface VisibleTaskPaths {
 	promptFile: string;
 	responseFile: string;
 	diagFile: string;
+	controlDir: string;
 }
 
 interface VisibleTaskCommandOptions {
@@ -45,6 +46,7 @@ export function buildVisibleTaskPaths(taskId: string, startedAtMs: number, baseD
 		promptFile: join(dir, "prompt.txt"),
 		responseFile: join(dir, "response.md"),
 		diagFile: join(dir, "diag.jsonl"),
+		controlDir: join(dir, "control"),
 	};
 }
 

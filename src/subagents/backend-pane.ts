@@ -2,6 +2,7 @@ import {
 	existsSync,
 	mkdirSync,
 	readFileSync,
+	renameSync,
 	writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -21,12 +22,22 @@ import type { SpawnedChild } from "./backend-pi.js";
 import type { SubagentEvent } from "./domain.js";
 
 const RESPONSE_POLL_INTERVAL_MS = 750;
+const SEND_ACK_POLL_MS = 250;
+// Generous on purpose: the ack cannot land until the child's extension runtime
+// has finished loading, which on a cold child takes seconds. A tight budget
+// reports a DELIVERED steer as a failure.
+const SEND_ACK_TIMEOUT_MS = 30_000;
+/** Task and control dirs hold prompt/steer text; keep them owner-only. */
+const PRIVATE_DIR_MODE = 0o700;
+const PRIVATE_FILE_MODE = 0o600;
+const CLOSE_REQUEST_FILE = "close.request";
 const ERROR_TEXT_MAX = 4096;
 
 interface PaneBackendFs {
 	existsSync(path: string): boolean;
-	mkdirSync(path: string, options: { recursive: true }): void;
+	mkdirSync(path: string, options: { recursive: true; mode?: number }): void;
 	readFileSync(path: string, encoding: "utf8"): string;
+	renameSync(source: string, target: string): void;
 	writeFileSync(path: string, contents: string, options?: { mode?: number }): void;
 }
 
@@ -50,12 +61,17 @@ export interface PaneBackendDependencies {
 	now?: () => number;
 	baseDir?: string;
 	pollIntervalMs?: number;
+	/** Steer-ack poll interval (design contract: 250ms). */
+	sendAckPollMs?: number;
+	/** Steer-ack total budget (design contract: 5s). */
+	sendAckTimeoutMs?: number;
 }
 
 const nodeFs: PaneBackendFs = {
 	existsSync,
 	mkdirSync,
 	readFileSync,
+	renameSync,
 	writeFileSync,
 };
 
@@ -66,7 +82,14 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	const now = dependencies.now ?? Date.now;
 	const baseDir = dependencies.baseDir ?? join(process.env.TMPDIR ?? "/tmp", "sumocode-subagents");
 	const paths = buildVisibleTaskPaths(options.id, now(), baseDir);
-	fs.mkdirSync(dirname(paths.promptFile), { recursive: true });
+	// Owner-only: these directories carry the prompt and every steering message,
+	// which routinely contain source snippets. Default /tmp modes (0755) would
+	// expose them to other local users, and a timed-out send deliberately leaves
+	// its steer file behind.
+	fs.mkdirSync(dirname(paths.promptFile), { recursive: true, mode: PRIVATE_DIR_MODE });
+	// The control dir is the steering/close channel shared with the child's
+	// task-mode watcher; it must exist before the orchestrator writes to it.
+	fs.mkdirSync(paths.controlDir, { recursive: true, mode: PRIVATE_DIR_MODE });
 	// Headless children receive a true appended system prompt. The visible task
 	// wrapper has no equivalent flag yet, so preserve the role contract as a
 	// prompt-file preamble until that wrapper seam is added.
@@ -196,6 +219,55 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		void closeInterruptedPane();
 	}
 
+	let steerSeq = 0;
+
+	/**
+	 * Deliver steering text via the task-dir control channel: write
+	 * `steer-<seq>.txt.tmp`, rename into place (atomic publish), then wait for
+	 * the child's watcher to unlink it — unlink is the ack. Rejects when the
+	 * child exits before consuming the file or the ack poll times out (the
+	 * file remains and a later-booting child may still consume it).
+	 */
+	const send = (text: string): Promise<void> => {
+		if (settled || interrupted) {
+			return Promise.reject(new Error(`visible subagent ${options.id} has settled; input was not delivered`));
+		}
+		const seq = ++steerSeq;
+		const finalPath = join(paths.controlDir, `steer-${seq}.txt`);
+		// 0600 on the temp file: rename preserves the mode, so the published file
+		// is never briefly world-readable.
+		fs.writeFileSync(`${finalPath}.tmp`, text, { mode: PRIVATE_FILE_MODE });
+		fs.renameSync(`${finalPath}.tmp`, finalPath);
+		const ackPollMs = dependencies.sendAckPollMs ?? SEND_ACK_POLL_MS;
+		const ackTimeoutMs = dependencies.sendAckTimeoutMs ?? SEND_ACK_TIMEOUT_MS;
+		return new Promise<void>((resolve, reject) => {
+			let elapsed = 0;
+			const ackTimer = setInterval(() => {
+				if (!fs.existsSync(finalPath)) {
+					clearInterval(ackTimer);
+					resolve();
+					return;
+				}
+				if (fs.existsSync(paths.exitFile) && readText(paths.exitFile).trim()) {
+					clearInterval(ackTimer);
+					reject(new Error(`${options.id} exited before receiving input`));
+					return;
+				}
+				elapsed += ackPollMs;
+				if (elapsed >= ackTimeoutMs) {
+					clearInterval(ackTimer);
+					reject(new Error(`steer input to ${options.id} was not acknowledged within ${ackTimeoutMs}ms — the file remains and the child may still consume it`));
+				}
+			}, ackPollMs);
+			ackTimer.unref?.();
+		});
+	};
+
+	/** Ask the child's task-mode watcher to persist its response and exit. */
+	const requestClose = (): void => {
+		fs.writeFileSync(join(paths.controlDir, CLOSE_REQUEST_FILE), "1", { mode: PRIVATE_FILE_MODE });
+	};
+
 	const events = (emit: (event: SubagentEvent) => void): void => {
 		emitEvent = emit;
 		emit({ kind: "run-started" });
@@ -242,7 +314,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	if (options.signal?.aborted) interrupted = true;
 	else options.signal?.addEventListener("abort", interrupt, { once: true });
 
-	return { events, interrupt, ready };
+	return { events, interrupt, ready, send, requestClose };
 };
 
 export const spawnPaneChild = createPaneChildSpawner();

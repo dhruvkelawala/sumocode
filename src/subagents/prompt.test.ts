@@ -34,11 +34,18 @@ describe("subagent prompt guidance", () => {
 		expect(guidance).toContain("completion manifest");
 	});
 
-	it("documents pane steering and its visible-only boundary", () => {
+	it("documents steering delivery and the close/auto-close lifecycle", () => {
 		const guidance = SUBAGENT_PROMPT_GUIDELINES.join("\n");
 		expect(guidance).toContain("Use subagent_send to steer a running visible child");
+		expect(guidance).toContain("delivered as a Pi steering message after the child's current turn");
+		expect(guidance).toContain("not typed into its terminal");
 		expect(guidance).toContain("Headless or settled children cannot receive input");
-		expect(SUBAGENT_TOOL_DESCRIPTIONS.send).toContain("followed by Enter");
+		expect(guidance).toContain("visible children stay open while active and auto-close after 30s of silence");
+		expect(guidance).toContain("use subagent_close to end one deliberately");
+		expect(SUBAGENT_TOOL_DESCRIPTIONS.send).toContain("steering message");
+		expect(SUBAGENT_TOOL_DESCRIPTIONS.send).toContain("not typed into its terminal");
+		expect(SUBAGENT_TOOL_DESCRIPTIONS.close).toContain("Gracefully close visible subagents");
+		expect(SUBAGENT_TOOL_DESCRIPTIONS.close).toContain("Use subagent_cancel only to abort work");
 		expect(SUBAGENT_TOOL_DESCRIPTIONS.spawn).toContain("visible=true");
 	});
 

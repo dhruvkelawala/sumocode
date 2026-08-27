@@ -367,6 +367,7 @@ if [[ -n "${TASK_DIR}" ]]; then
 	export SUMOCODE_TASK_EXIT_FILE="${TASK_DIR}/exit.code"
 	export SUMOCODE_TASK_STARTED_FILE="${TASK_DIR}/started.marker"
 	export SUMOCODE_TASK_DIAG_FILE="${TASK_DIR}/diag.jsonl"
+	export SUMOCODE_TASK_CONTROL_DIR="${TASK_DIR}/control"
 fi
 if [[ "${COMMAND}" == "task" ]]; then
 	if [[ -n "${PROMPT_FILE}" ]]; then

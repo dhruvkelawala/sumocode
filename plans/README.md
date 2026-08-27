@@ -592,7 +592,7 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
-| 087 | [Force-send the next host-queued message as Pi steering](087-force-send-next-queued-message.md) | P1 | M | 078 | BLOCKED — Pi 0.83 cannot distinguish handled input from the active-to-idle normal-start race; two revisions exhausted at `1857f8d` |
+| 087 | [Force-send the next host-queued message as Pi steering](087-force-send-next-queued-message.md) | P1 | M | 078 | BLOCKED — Pi 0.83 cannot distinguish handled input from the active-to-idle normal-start race; two revisions exhausted at `1857f8d`. **Supersession queued**: plan 089 retires the host FIFO entirely once a Pi release ships RPC `clear_queue` (earendil-works/pi#8432, merged upstream 2026-08-25, absent from 0.84.3) |
 
 ### Locked decisions
 
@@ -603,6 +603,46 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 - An `agent_settled` that races force-send acceptance cannot release the next FIFO entry before the accepted steering lifecycle settles.
 - Force-send is disabled outside an active streaming turn, including compaction and tree-navigation windows.
 - No Pi patch, hidden child queue, new RPC command, queue-card redesign, or golden promotion is authorized.
+
+## Subagent steering & native queue (088–089)
+
+**Planned at:** `1ad967b`, 2026-08-27. Origin: visible subagents close 10s after their
+first `agent_end` (usually before the orchestrator's next turn), `subagent_send` types
+into the child PTY and only lands after the whole run settles, and a steer during the
+grace window permanently cancels auto-exit — pinning a capacity slot until manual cancel.
+
+| Plan | Title | Priority | Effort | Depends on | Status |
+|------|-------|----------|--------|------------|--------|
+| 088 | [Steerable visible subagents with silence-based lifecycle and graceful close](088-visible-subagent-steering-and-lifecycle.md) | P1 | M | — | DONE — executor commit `4462932` on `advisor/088-subagent-steering-v2`, APPROVED after review 2026-08-27; autoreview clean (claude/claude-opus-5, 8 passes, 0 findings); [PR #381](https://github.com/dhruvkelawala/sumocode/pull/381) open, awaiting operator merge |
+| 089 | [Retire the host prompt FIFO for Pi native steer/follow_up/clear_queue](089-native-pi-queue-migration.md) | P2 | L | Pi release > 0.84.3 with RPC `clear_queue` | BLOCKED (version gate) — executable the day the Pi bump lands |
+| 090 | [Conversational children — live pane turns + headless `subagent_reply`](090-conversational-children.md) | P2 | M | 088 | TODO |
+
+### Locked decisions
+
+- Orchestrator steering uses a task-dir control-file channel injected via
+  `pi.sendUserMessage(text, { deliverAs: "steer", triggerTurn: true })` inside the child —
+  never PTY typing. Unlink-of-the-steer-file is the delivery ack.
+- Visible children exit after **30s of silence** (re-armed on every `agent_end`, cancelled
+  by `agent_start`, input, or steer) or on an explicit `subagent_close`; `subagent_cancel`
+  remains the abort path. The permanent `userTookOver` latch is removed.
+- 089 adopts Pi interactive semantics (busy Enter = steer, Alt+Enter = follow_up,
+  Esc = `clear_queue` + restore + `abort`) and deletes the force-send escape hatch;
+  it supersedes 087 and retires 078's host FIFO. No Pi patch or vendored types.
+
+### Direction backlog (audited 2026-08-27, not yet planned)
+
+- ~~Conversational children~~ — planned as 090 without an RPC transport: visible children
+  converse live (088 steer channel + per-turn `response.md` surfacing); headless children
+  persist sessions (`--session-dir`) and continue via `subagent_reply` respawn
+  (`pi --session <file>`, the `native-task-tool.ts` fork-session pattern). RPC-mode
+  headless children remain rejected as over-engineering; revisit only if mid-run steering
+  of headless children becomes a demonstrated need.
+- **Durable subagent registry**: every child is killed on `/reload`, `/new`, `/resume`,
+  `/fork` (`subagents/index.ts` session_shutdown; recorded deferral from plan 065).
+- **Worktree loop closure**: worktrees are preserved forever with no diff/merge/cleanup
+  affordance; the orchestrator hand-rolls `git -C <worktree>` commands after every child.
+- **Budgets & stall detection**: no token/time budget and no "no events for N minutes"
+  flag; a hung child pins a slot silently until manual cancel.
 
 ## Theme expansion — Herdr Terminal (073)
 

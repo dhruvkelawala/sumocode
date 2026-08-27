@@ -41,4 +41,20 @@ describe("subagent prompt guidance", () => {
 		expect(SUBAGENT_TOOL_DESCRIPTIONS.send).toContain("followed by Enter");
 		expect(SUBAGENT_TOOL_DESCRIPTIONS.spawn).toContain("visible=true");
 	});
+
+	it("teaches role isolation defaults and the dirty-checkout visibility boundary", () => {
+		const guidance = SUBAGENT_PROMPT_GUIDELINES.join("\n");
+		expect(guidance).toContain("research and review run in the shared checkout");
+		expect(guidance).toContain("documentor, designer, and the implement roles default to isolated worktrees");
+		expect(guidance).toContain("worktree children branch from committed HEAD");
+		expect(guidance).toContain("run checks of uncommitted edits in the parent, not in a worktree child");
+	});
+
+	it("teaches how to consume a settled worktree child's manifest", () => {
+		const guidance = SUBAGENT_PROMPT_GUIDELINES.join("\n");
+		expect(guidance).toContain("read its completion manifest before acting");
+		expect(guidance).toContain("+0 commits means nothing to apply");
+		expect(guidance).toContain("merge or cherry-pick its sumo/<branch> from the preserved worktree path");
+		expect(guidance).toContain("removing one requires explicit user approval");
+	});
 });

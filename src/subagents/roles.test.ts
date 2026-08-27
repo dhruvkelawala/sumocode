@@ -28,6 +28,16 @@ describe("subagent roles", () => {
 		}
 	});
 
+	it("splits write-capable roles into isolated worktrees and keeps read-only roles in the shared checkout", () => {
+		const byId = new Map(BUILT_IN_ROLES.map((role) => [role.id, role]));
+		expect(byId.get("research")?.defaultWorktree).toBeUndefined();
+		expect(byId.get("review")?.defaultWorktree).toBeUndefined();
+		expect(byId.get("documentor")?.defaultWorktree).toBe(true);
+		expect(byId.get("designer")?.defaultWorktree).toBe(true);
+		expect(byId.get("implement-cheap")?.defaultWorktree).toBe(true);
+		expect(byId.get("implement-smart")?.defaultWorktree).toBe(true);
+	});
+
 	it("merges built-in overrides field by field", () => {
 		const loaded = fromJson({ roles: [{ id: "research", label: "Deep Research", thinking: "high" }] });
 		const role = loaded.roles.find((candidate) => candidate.id === "research");

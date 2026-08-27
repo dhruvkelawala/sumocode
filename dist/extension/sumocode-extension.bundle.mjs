@@ -5094,7 +5094,7 @@ var BUILT_IN_ROLES = [
   {
     id: "implement-cheap",
     label: "Implement Cheap",
-    description: "use for a precise implementation slice with explicit verification",
+    description: "use for a precise, fully specified implementation slice or verification run",
     systemPrompt: "implement exactly the specified slice. make the smallest diff that passes verification. run the named verification commands. if the specification is ambiguous, stop and report instead of improvising.",
     thinking: "low",
     defaultWorktree: true
@@ -5102,7 +5102,7 @@ var BUILT_IN_ROLES = [
   {
     id: "implement-smart",
     label: "Implement Smart",
-    description: "use for a bounded implementation slice that requires judgment",
+    description: "use for a bounded implementation slice that needs judgment or tradeoffs mid-flight",
     systemPrompt: "implement with judgment. keep scope tight. document tradeoffs made. run full relevant verification.",
     thinking: "high",
     defaultWorktree: true
@@ -15561,7 +15561,9 @@ var SUBAGENT_PROMPT_GUIDELINES = [
   "Use subagent_send to steer a running visible child; it sends the text followed by Enter. Headless or settled children cannot receive input.",
   "Visible Herdr children split beside the parent when its tab is available, including worktree-backed children; overflow falls back to subagent tabs/workspaces.",
   "delegation is fire-and-forget: after spawning, continue other work or end your turn. settled results arrive as automatic follow-up messages that wake you. do NOT call subagent_wait right after subagent_spawn.",
-  "spawn with a role for recurring shapes: research, review, documentor, designer, implement-cheap, implement-smart. the role sets the child's system prompt, tool limits, and defaults; your prompt supplies the concrete objective and stop conditions.",
+  "spawn with a role for recurring shapes: research, review, documentor, designer, implement-cheap, implement-smart. the role sets the child's system prompt, tool limits, and defaults; your prompt supplies the concrete objective and stop conditions. read the role list in the spawn tool for per-role defaults \u2014 research and review run in the shared checkout; documentor, designer, and the implement roles default to isolated worktrees.",
+  "worktree children branch from committed HEAD \u2014 they cannot see the parent's dirty working tree. run checks of uncommitted edits in the parent, not in a worktree child.",
+  "after a worktree child settles, read its completion manifest before acting: +0 commits means nothing to apply; +N commits means review the changed paths, then merge or cherry-pick its sumo/<branch> from the preserved worktree path. worktrees accumulate and are never auto-removed; removing one requires explicit user approval.",
   "if spawn returns status=queued, the child starts automatically when a slot frees \u2014 do not retry, do not wait.",
   `At most ${SUBAGENT_MAX_RUNNING} subagents can run concurrently. If spawn returns status=at_capacity, the queue is full; cancel something or end your turn and respawn later.`,
   "To delegate a self-contained coding task, spawn an isolated, watchable child: `subagent_spawn { visible: true, worktree: true, model, baseRef: 'origin/main' }`. It branches `sumo/<slug>` from baseRef, opens beside the parent when possible (otherwise in a Herdr workspace), and returns a completion manifest to review before acting on the result.",
@@ -15648,7 +15650,7 @@ function registerSubagentTools(pi, manager, delivery, host = getTerminalHost(), 
   const registeredRoles = roleLoader().roles;
   const roleDescription = [
     "Optional role preset. Explicit spawn parameters override role defaults. Known roles:",
-    ...registeredRoles.map((role) => `${role.id} \u2014 ${role.description}`)
+    ...registeredRoles.map((role) => `${role.id} \u2014 ${role.description}${role.defaultWorktree ? " (isolated worktree by default)" : ""}`)
   ].join("\n");
   pi.registerTool({
     name: "subagent_spawn",

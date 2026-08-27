@@ -109,7 +109,7 @@ export function registerSubagentTools(
 	const registeredRoles = roleLoader().roles;
 	const roleDescription = [
 		"Optional role preset. Explicit spawn parameters override role defaults. Known roles:",
-		...registeredRoles.map((role) => `${role.id} — ${role.description}`),
+		...registeredRoles.map((role) => `${role.id} — ${role.description}${role.defaultWorktree ? " (isolated worktree by default)" : ""}`),
 	].join("\n");
 	pi.registerTool({
 		name: "subagent_spawn",

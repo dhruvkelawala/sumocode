@@ -54,7 +54,7 @@ export const BUILT_IN_ROLES: readonly SubagentRole[] = [
 	{
 		id: "implement-cheap",
 		label: "Implement Cheap",
-		description: "use for a precise implementation slice with explicit verification",
+		description: "use for a precise, fully specified implementation slice or verification run",
 		systemPrompt: "implement exactly the specified slice. make the smallest diff that passes verification. run the named verification commands. if the specification is ambiguous, stop and report instead of improvising.",
 		thinking: "low",
 		defaultWorktree: true,
@@ -62,7 +62,7 @@ export const BUILT_IN_ROLES: readonly SubagentRole[] = [
 	{
 		id: "implement-smart",
 		label: "Implement Smart",
-		description: "use for a bounded implementation slice that requires judgment",
+		description: "use for a bounded implementation slice that needs judgment or tradeoffs mid-flight",
 		systemPrompt: "implement with judgment. keep scope tight. document tradeoffs made. run full relevant verification.",
 		thinking: "high",
 		defaultWorktree: true,

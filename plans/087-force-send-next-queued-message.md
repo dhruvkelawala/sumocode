@@ -51,7 +51,7 @@
 - **Depends on**: Plan 078's host-owned RPC prompt queue (DONE)
 - **Category**: feature / parity
 - **Planned at**: commit `6f5be80`, 2026-08-12
-- **Execution status**: BLOCKED — Pi 0.83 cannot atomically distinguish a handled steering input from the active-to-idle race where the same `steer` prompt starts a normal lifecycle; two revision rounds exhausted at executor commit `1857f8d`.
+- **Execution status**: REJECTED — `clear_queue` does not resolve the handled-input versus idle-start disposition race. Release-gated Plan 090 replaces the two-owner architecture with direct `prompt.streamingBehavior` delivery, so this force-send algorithm must not resume.
 
 ## Outcome
 

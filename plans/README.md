@@ -503,7 +503,7 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 | 074 | [Herdr-native integration: approval attention queue + native worktree workspaces](074-herdr-native-integration.md) | P2 | S | 072 | [#316](https://github.com/dhruvkelawala/sumocode/issues/316) | DONE — PR #320 (`93e077a`); Claude autoreview 3 rounds → clean; live-verified: blocked flip + attention-queue jump during approval modal (operator screenshot 2026-07-18) |
 | 075 | [Ultraviolet Core Application Theme](075-ultraviolet-core-application-theme.md) | P1 | L | 073 | [#319](https://github.com/dhruvkelawala/sumocode/issues/319) | DONE — implementation branch `advisor/075-ultraviolet-core-application-theme`; review-only visual evidence, no golden promotion |
 | 076 | [Ultraviolet RunCat working indicator](076-ultraviolet-runcat-working-indicator.md) | P2 | M | 075 | [#331](https://github.com/dhruvkelawala/sumocode/issues/331) | IN PROGRESS — automated implementation approved at `3747af4`; 1,759 unit tests, 45 integration tests, 101 Bible renders, and 22 visual scenarios pass; two-Mac human canary pending |
-| 078 | [Host-owned RPC prompt queue and queued-message undo](078-restore-queued-message-undo.md) | P1 | M | PR #325 | — | DONE — approved at `48949b5`; 1,741 unit tests, 48 integration tests, 100 Bible renders, 21 visual scenarios, and final Claude autoreview pass |
+| 078 | [Host-owned RPC prompt queue and queued-message undo](078-restore-queued-message-undo.md) | P1 | M | PR #325 | — | DONE — approved at `48949b5`; historical ownership model is scheduled to be superseded by release-gated Plan 090 |
 
 ### Dependency notes
 
@@ -592,7 +592,7 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
-| 087 | [Force-send the next host-queued message as Pi steering](087-force-send-next-queued-message.md) | P1 | M | 078 | BLOCKED — Pi 0.83 cannot distinguish handled input from the active-to-idle normal-start race; two revisions exhausted at `1857f8d` |
+| 087 | [Force-send the next host-queued message as Pi steering](087-force-send-next-queued-message.md) | P1 | M | 078 | REJECTED — `clear_queue` does not solve its disposition race; Plan 090 replaces the two-owner design with direct native delivery |
 
 ### Locked decisions
 
@@ -603,6 +603,103 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 - An `agent_settled` that races force-send acceptance cannot release the next FIFO entry before the accepted steering lifecycle settles.
 - Force-send is disabled outside an active streaming turn, including compaction and tree-navigation windows.
 - No Pi patch, hidden child queue, new RPC command, queue-card redesign, or golden promotion is authorized.
+
+## Pi RPC main alignment — release-gated ownership and missing features (088–092)
+
+**Audit:** [`SUMOCODE_PI_RPC_AUDIT_2026.md`](../docs/research/SUMOCODE_PI_RPC_AUDIT_2026.md)
+
+**Upstream inventory:** [`PI_RPC_MAIN_SPEC_RESEARCH.md`](../docs/research/PI_RPC_MAIN_SPEC_RESEARCH.md)
+
+**Visual map:** [`SUMOCODE_PI_RPC_AUDIT_VISUAL.html`](../docs/research/SUMOCODE_PI_RPC_AUDIT_VISUAL.html)
+**Planned at:** `1ad967b`, 2026-08-27.
+
+> **Global execution gate:** every plan in this track is BLOCKED until the first
+> published `@earendil-works/pi-coding-agent` release whose shipped public types
+> and runtime contain `clear_queue`. Published `0.84.3` does not contain it; the
+> audited feature is still Unreleased on Pi main. Plan 088 is the only task that
+> may qualify and lift this gate. A Git SHA, version guess, or local patch does
+> not qualify.
+
+| Plan | Title | Priority | Effort | Depends on | Issue | Status |
+|---|---|---|---|---|---|---|
+| 088 | [Upgrade to the first published Pi release containing `clear_queue`](088-upgrade-pi-clear-queue-contract.md) | P0 | M | published Pi release | [#375](https://github.com/dhruvkelawala/sumocode/issues/375) | BLOCKED — latest published Pi is 0.84.3; `clear_queue` remains Unreleased |
+| 089 | [Make SumoCode project Pi's lifecycle and policy state truthfully](089-correct-rpc-lifecycle-and-projection.md) | P0 | L | 088 | [#376](https://github.com/dhruvkelawala/sumocode/issues/376) | BLOCKED — coordinated next-Pi release gate; then Plan 088 |
+| 090 | [Move prompt delivery to Pi queues with a steer-default toggle](090-move-delivery-to-pi-native-queues.md) | P0 | L | 088, 089 | [#377](https://github.com/dhruvkelawala/sumocode/issues/377) | BLOCKED — requires published `clear_queue` plus truthful settled lifecycle |
+| 091 | [Add Pi-native direct bash to the RPC host](091-add-pi-native-direct-bash.md) | P1 | L | 088 | [#378](https://github.com/dhruvkelawala/sumocode/issues/378) | BLOCKED — coordinated next-Pi release gate; may run parallel to 089 after 088 |
+| 092 | [Send native RPC images without losing queued attachments](092-send-native-rpc-images-safely.md) | P1 | M | 088, 090 | [#379](https://github.com/dhruvkelawala/sumocode/issues/379) | BLOCKED — coordinated next-Pi release gate plus native queue ownership |
+
+### Dependency and execution order
+
+```text
+first published Pi release containing clear_queue
+                       │
+                       ▼
+             088 upgrade + contract gate
+                ┌──────┴─────────┐
+                ▼                ▼
+        089 lifecycle truth   091 direct bash
+                │
+                ▼
+        090 native queues + STEER default toggle
+                │
+                ▼
+        092 safe native images + busy capability gate
+```
+
+- 088 updates `pi-ai`, `pi-coding-agent`, and `pi-tui` together, repairs target
+  launcher/doctor drift, and proves `clear_queue` against the installed worker.
+- 089 corrects `agent_end`/`agent_settled`, the fake worker, policy hydration,
+  tool state, retry/compaction/error presentation, and additive usage fields
+  before queue UX relies on that state.
+- 090 is intentionally atomic: direct native enqueue, visible STEER/FOLLOW-UP
+  toggle, typed queue display, clear/restore, and clear-before-abort must land
+  together. Ordinary busy Enter defaults to exact classic steering behavior.
+- 091 is operationally independent after 088. Rebase its small lifecycle seams
+  over 089/090 if those land first; direct user bash remains distinct from the
+  LLM bash tool and its approval gate.
+- 092 follows 090 because target `clear_queue` is text-only. It sends idle images
+  natively and blocks busy attachment enqueue rather than claiming lossy restore.
+
+### Locked decisions
+
+- Keep the RPC subprocess, strict JSONL client, hydration barrier, transcript
+  reconstruction, tool lifecycle, extension UI bridge, and flat `get_entries`
+  navigation data. This is an ownership correction, not a runtime rewrite.
+- The delivery toggle chooses `steer` versus `followUp`; it defaults to `steer`
+  and is process-local. It is separate from Pi's `one-at-a-time`/`all` drain
+  settings.
+- Editor input uses `prompt + streamingBehavior`, never direct `steer`/
+  `follow_up`, so extension commands, input hooks, skills, and templates retain
+  classic preflight behavior.
+- Alt+Enter remains a one-shot follow-up. Super+Enter becomes the delivery-mode
+  toggle and no longer force-sends a host FIFO item.
+- Alt+Up clears/restores without abort. Escape clears/restores before agent
+  abort. Neither path pretends generic abort cancels compaction or branch summary.
+- No plan may promote one native queue entry by clearing and requeueing the rest;
+  the protocol has no atomic stable-ID operation.
+- Visual changes require canonical capture/review evidence. Runtime golden
+  promotion remains human-only.
+
+### Findings considered and deliberately deferred
+
+- **Replace `get_entries` with `get_tree`** — rejected. `get_tree` is read-only
+  and nested; it cannot replace durable cursors, abandoned history, or in-place
+  navigation reconciliation. A future contract test may use it only as a
+  topology oracle.
+- **Direct RPC `steer`/`follow_up` for editor input** — rejected because those
+  lower-level methods bypass the extension input event and reject extension
+  commands. `prompt.streamingBehavior` is the correct classic-equivalent seam.
+- **Resume Plan 087 after `clear_queue` ships** — rejected. Its blocker is an
+  indistinguishable handled-input versus idle-start disposition, not queue
+  clearing. Direct native delivery removes the need for that algorithm.
+- **Lossless busy native images** — deferred until RPC exposes structured queue
+  entries/images or another atomic recovery contract. Text matching is not a
+  stable attachment identity.
+- **Exact Escape during compaction/branch summarization** — upstream-blocked.
+  RPC exposes neither `abort_compaction` nor `abort_branch_summary`; generic
+  `abort` cancels neither.
+- **Authoritative auto-retry setting display** — upstream-blocked because target
+  `get_state` exposes auto-compaction but not current auto-retry state.
 
 ## Theme expansion — Herdr Terminal (073)
 

@@ -4,7 +4,7 @@
 >
 > **Drift check (run first)**: `git diff --stat b34bd79..HEAD -- package.json scripts/smoke-pi-versions.sh scripts/pi-compat-contract.mjs scripts/pi-compat-contract.test.mjs .github/workflows/ci.yml .github/workflows/pi-compat.yml`
 > If this reports an in-scope change, compare the Current state excerpts and assumptions with live code. If behavior or signatures differ, STOP and request plan reconciliation.
-> **Read-only contract-reference check**: `git diff --stat b34bd79..HEAD -- bin/sumocode.sh src/sumo-tui/rpc/host-actions.ts src/sumo-tui/rpc/host-actions.test.ts src/extension.ts src/interaction-registry.ts`. These are reference surfaces, not files this plan may modify. If their named contracts changed, STOP and reconcile the fixture expectations.
+> **Read-only contract-reference check**: `git diff --stat b34bd79..HEAD -- bin/sumocode.sh src/sumo-tui/rpc/host-actions.ts src/sumo-tui/rpc/host-actions.test.ts src/sumo-tui/rpc/editor.ts src/extension.ts src/interaction-registry.ts`. These are reference surfaces, not files this plan may modify. If their named contracts changed, STOP and reconcile the fixture expectations.
 > **Dependency check**: Confirm every plan named in **Depends on** is `DONE` in `plans/README.md`. If any is not DONE, STOP; do not recreate or assume its APIs.
 
 ## Status
@@ -27,7 +27,9 @@
 
 `package.json:27-39` declares peer ranges `~0.84.3` and pins dev dependencies to `0.84.3`. `scripts/smoke-pi-versions.sh` defaults to one version, creates a fixed `/tmp/sumo-pi-${VERSION}` directory, installs only coding-agent plus SumoCode, checks `pi --version`, and tests direct-Pi dry-run bypass. `.github/workflows/ci.yml` has no Pi compatibility job.
 
-AGENTS.md requires every Pi bump to re-verify the RPC declaration contract, hardcoded built-in slash inventory, tool-bypass/security behavior, and direct-Pi modes. The installed declaration is under the candidate package root at `dist/modes/rpc/rpc-types.d.ts`; it is not a tracked SumoCode source file. The SumoCode inventories to compare are `RPC_HOST_SLASH_COMMANDS` and `RPC_HOST_ROUTED_CHILD_COMMANDS` in `src/sumo-tui/rpc/host-actions.ts:154-185`, plus `isTreeNavigationBlockedCommand()` around lines 694-711. `src/sumo-tui/rpc/host-actions.test.ts:1779-1805` already checks SumoCode's table-to-dispatch correspondence but does not compare different installed Pi versions.
+AGENTS.md requires every Pi bump to re-verify the RPC declaration contract, hardcoded built-in slash inventory, tool-bypass/security behavior, and direct-Pi modes. Candidate Pi owns two different command surfaces: `dist/core/slash-commands.js` exports `BUILTIN_SLASH_COMMANDS`, while RPC `get_commands` returns registered extension, prompt-template, and skill commands—not built-ins. `buildRpcAutocompleteCommands()` in `src/sumo-tui/rpc/editor.ts:99-121` deliberately unions those child-reported commands with the host inventory.
+
+The installed RPC declaration is under the candidate package root at `dist/modes/rpc/rpc-types.d.ts`; it is not a tracked SumoCode source file. SumoCode's host and routed-child inventories are `RPC_HOST_SLASH_COMMANDS` and `RPC_HOST_ROUTED_CHILD_COMMANDS` in `src/sumo-tui/rpc/host-actions.ts:154-185`, plus `isTreeNavigationBlockedCommand()` around lines 694-711. `src/sumo-tui/rpc/host-actions.test.ts:1779-1805` already checks SumoCode's table-to-dispatch correspondence but does not compare different installed Pi versions.
 
 Plan 076 intentionally retired the *active registration* while retaining dormant `src/approval-modal.ts`, `src/commands/approval.ts`, and their tests. The compatibility fixture must assert `installApprovalGate` is not imported/called by `src/extension.ts`, `registerApprovalCommand` is not installed by `src/interaction-registry.ts`, and no `sumo:approval`/approval-overlay RPC route is active. Do not delete the dormant modules or flag generic confirmations/modals and the `approval` color token.
 
@@ -70,7 +72,14 @@ Any `package.json` change invalidates both committed bundle manifests. After fin
 
 ### Step 1: Define and unit-test the compatibility contract
 
-Create `scripts/pi-compat-contract.mjs` as a pure checker and `scripts/pi-compat-contract.test.mjs` with committed fixtures. The checker must validate: aligned AI/coding-agent/TUI versions; the expected RPC requests/events used by SumoCode against `dist/modes/rpc/rpc-types.d.ts`; SumoCode's hardcoded command inventory against candidate `get_commands`; absence of active approval-gate registration/routes named above; and direct-Pi/`--tui-mode` result records supplied by the smoke script. A changed declaration or command fixture must fail with the missing/extra member names.
+Create `scripts/pi-compat-contract.mjs` as a pure checker and `scripts/pi-compat-contract.test.mjs` with committed fixtures. The checker must validate: aligned AI/coding-agent/TUI versions; the expected RPC requests/events used by SumoCode against `dist/modes/rpc/rpc-types.d.ts`; command inventories using the ownership rules below; absence of active approval-gate registration/routes named above; and direct-Pi/`--tui-mode` result records supplied by the smoke script. A changed declaration or command fixture must fail with the missing/extra member names.
+
+Keep command ownership explicit and test the surfaces separately:
+- require a committed ownership fixture that classifies every `RPC_HOST_SLASH_COMMANDS` entry as Pi-mirrored or host-owned; load candidate Pi's `BUILTIN_SLASH_COMMANDS` from its disposable `dist/core/slash-commands.js` and compare only the Pi-mirrored subset;
+- validate the complete classified SumoCode host table against its host action/dispatch fixture independently of child RPC output;
+- filter `get_commands` by `source === "extension"` in the isolated disposable install, then validate the expected SumoCode extension and `RPC_HOST_ROUTED_CHILD_COMMANDS` inventories; exclude prompt/skill entries and never require host-only commands such as `hotkeys` to appear in `get_commands`.
+
+Fixtures must include a host-only command, a child extension command, and prompt/skill noise so an ownership regression fails while the known-good union passes.
 
 Add `--supported-matrix`: resolve the peer minimum (currently 0.84.3) and latest published version satisfying the declared `~0.84.3` range, fail clearly if declared peer ranges diverge, then run those two unique versions. Do not test every patch if the range becomes large; minimum + latest is the required boundary. Preserve explicit version arguments for a pending bump.
 
@@ -86,9 +95,9 @@ Extend checks to cover:
 - `--tui-mode` positional extraction;
 - RPC child starts and answers bounded `get_state`/`get_commands` requests offline;
 - expected SumoCode terminal/subagent tools are discoverable;
-- the installed `dist/modes/rpc/rpc-types.d.ts` is located from the disposable candidate package root and passed to the pure contract checker;
+- the installed `dist/modes/rpc/rpc-types.d.ts` and `dist/core/slash-commands.js` are located from the disposable candidate package root and passed to the pure contract checker;
 - dormant approval modules may exist, but their installers/commands/routes remain absent from active extension/registry/RPC paths;
-- candidate commands are passed to the checker for an explicit missing/extra inventory diff.
+- candidate built-ins and source-tagged `get_commands` entries are passed separately to the checker for ownership-scoped missing/extra inventory diffs.
 
 **Verify**: `scripts/smoke-pi-versions.sh --supported-matrix` → one PASS marker per unique minimum/latest version and no contract-drift marker (one marker is valid only when minimum equals latest).
 
@@ -106,13 +115,13 @@ Keep documentation changes in Plan 115. Add `--help` output and a concise script
 
 ## Test plan
 
-Exercise minimum/latest, explicit unsupported version, unavailable registry response, RPC timeout, changed command inventory, and launcher flag parsing. All fixtures run offline after package installation.
+Exercise minimum/latest, explicit unsupported version, unavailable registry response, RPC timeout, changed Pi-owned built-in, missing/extra SumoCode extension command, host-only command absent from `get_commands`, prompt/skill noise, and launcher flag parsing. All fixtures run offline after package installation.
 
 ## Done criteria
 
 - [ ] CI tests the minimum and latest version allowed by all Pi peer ranges.
 - [ ] All Pi packages are version-aligned in each fixture.
-- [ ] RPC, command inventory, tool boundary, and direct-Pi bypass are checked.
+- [ ] RPC, ownership-separated Pi built-in/host/extension command inventories, tool boundary, and direct-Pi bypass are checked.
 - [ ] Temporary installs cannot collide and are cleaned.
 - [ ] `pnpm vitest run scripts/pi-compat-contract.test.mjs` and `scripts/smoke-pi-versions.sh --supported-matrix` pass.
 - [ ] Full local gates pass.

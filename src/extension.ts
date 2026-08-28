@@ -30,6 +30,7 @@ import { installSubagents } from "./subagents/index.js";
 import { installTaskModeAutoExit } from "./task-mode.js";
 import { logDiagnostic } from "./sumo-tui/runtime/diagnostics.js";
 import { registerRpcLoginCommand } from "./sumo-tui/pi-compat/login-command.js";
+import { registerAccountsCommand } from "./commands/accounts.js";
 import { installHerdrRpcBridge } from "./herdr-rpc-bridge.js";
 import { registerRpcTreeNavigationCommand } from "./sumo-tui/pi-compat/tree-navigation-command.js";
 
@@ -253,6 +254,7 @@ function installRpcChildProfile(pi: ExtensionAPI): void {
 	installTaskModeAutoExit(pi);
 	registerSumoReloadCommand(pi);
 	registerRolesCommand(pi);
+	registerAccountsCommand(pi);
 	installSumoInteractions(pi, { subagentManager, includeUiSurfaces: false });
 }
 
@@ -400,6 +402,7 @@ export default function sumocode(pi: ExtensionAPI): void {
 	installCompactionIndicator(pi);
 	registerSumoReloadCommand(pi);
 	registerRolesCommand(pi);
+	registerAccountsCommand(pi);
 	installSumoInteractions(pi, { subagentManager });
 	logDiagnostic("extension_activate_end", {
 		taskMode: isTaskMode(),

@@ -24,7 +24,7 @@ const AUTH_LABELS = {
 	api_key: "Sign in with an API key",
 } satisfies Record<AuthType, string>;
 
-function getRuntimeFromContext(ctx: ExtensionCommandContext): RpcLoginRuntime {
+export function getRpcLoginRuntime(ctx: ExtensionCommandContext): RpcLoginRuntime {
 	// Pi exposes only the synchronous ModelRegistry compatibility facade to
 	// extensions, while its supported login orchestration lives on the paired
 	// ModelRuntime. In 0.83.x ModelRegistry retains that runtime as an ordinary
@@ -212,7 +212,7 @@ export function cancelActiveRpcLogin(): boolean {
 }
 
 export function registerRpcLoginCommand(pi: ExtensionAPI, deps: RpcLoginCommandDeps = {}): void {
-	const getRuntime = deps.getRuntime ?? getRuntimeFromContext;
+	const getRuntime = deps.getRuntime ?? getRpcLoginRuntime;
 	pi.registerCommand("login", {
 		description: "Configure provider authentication",
 		handler: async (args, ctx) => executeRpcLogin(args, ctx, getRuntime(ctx)),

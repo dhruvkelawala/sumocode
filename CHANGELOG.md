@@ -11,6 +11,20 @@ landed between the original scaffold and this release.
 ## [Unreleased]
 
 ### Added
+- **Multi-account Claude OAuth modal preview** — OAuth login modals now show
+  an identifiable two-row preview of the authorization URL (with ellipsis
+  truncation) instead of hiding the destination behind a generic
+  "open authentication page" label. The complete URL stays the OSC-8
+  hyperlink target, and Ctrl+Y copies the full URL.
+- **`/accounts` command** — manage multiple Claude subscription accounts
+  registered through `pi-multi-pass`. Lists the base `anthropic` provider plus
+  `anthropic-2`… extras with signed-in status, adds and labels extra accounts
+  in `~/.pi/agent/multi-pass.json` (preserving pools/chains/presets and
+  non-Claude entries), offers in-UI `pi-multi-pass` installation behind an
+  explicit confirmation, requests a reload after adding, switches the active
+  provider while preserving the current model ID where possible, renames
+  extras, and hands sign-in to the SumoCode RPC `/login` flow with the exact
+  provider id. Requires the SumoCode RPC runtime; warns elsewhere.
 - **Herdr Terminal theme** (`herdr`) — fourth first-party theme, matching the
   approved Herdr/Ghostty operator setup: green-black `#040704` chassis,
   electric-green `#39FF14` phosphor focus/body, amber `#FFB000` execution, red

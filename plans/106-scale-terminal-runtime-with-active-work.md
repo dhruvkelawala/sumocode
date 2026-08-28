@@ -20,17 +20,17 @@
 
 ## Why this matters
 
-Each active terminal currently owns a 250ms interval. Every tick rereads validated metadata and the exit marker synchronously, and `runtime` entries survive after their timers clear. Runtime CPU/heap therefore grow with active/touched terminals. The full lightweight ID/owner index introduced by Plan 093 must remain intact so old records stay directly queryable without a new full scan.
+Each active terminal currently owns a 250ms interval. Every tick rereads validated metadata and the exit marker synchronously, and `runtime` entries survive after their timers clear. Runtime CPU/heap therefore grow with active/touched terminals. The compact ID/path/owner-selection index introduced by Plan 093 must remain intact so old records stay directly queryable without a new full scan.
 
 ## Current state
 
 - `src/background-tasks/task-manager.ts:390-392` constructor adoption iterates the store load and calls `adopt()`/`recover()` for every record.
 - `task-manager.ts:46` sets `DEFAULT_POLL_INTERVAL_MS = 250`; `arm()` at `:898-905` creates one interval per active task.
 - `reconcile()` rereads store metadata/exit state and periodically performs process-tree verification; `get(id, owner)` is at `:531`.
-- `getSnapshots()` at `:814-828` limits settled records only in returned output; the backing `tasks`/`runtime` maps remain unbounded. Plan 093 must provide a lightweight complete store index before any settled snapshot eviction is attempted.
+- `getSnapshots()` at `:814-828` limits settled records only in returned output; the backing `tasks`/`runtime` maps remain unbounded. Plan 093 must provide a complete compact path/selection index before any settled snapshot eviction is attempted.
 - Durable-history deletion is explicitly forbidden without separate policy.
 
-Plan 093 provides direct ID/owner metadata-path indexes whose lookup tests must show zero `loadAll()` calls after refresh. This plan may evict heavyweight settled snapshot/runtime objects only while preserving that complete lightweight index.
+Plan 093 provides direct ID metadata paths plus owner/delivery selection fields whose tests prove zero `loadAll()` calls after refresh and zero metadata reads for all-owner candidate selection. This plan may evict heavyweight settled snapshot/runtime objects only while preserving that complete compact index.
 
 ## Commands you will need
 
@@ -75,7 +75,7 @@ After final source edits, run `pnpm build:extension` before `pnpm test`; keep th
 
 After the dependency row is `DONE`, require the exact downstream API Plan 093 owns. Do not substitute `loadAll()`/`listOwned()` fallbacks.
 
-**Verify**: `rg -n "refreshIndex\(|getIndexed\(|listOwnedIndexed\(" src/background-tasks/task-store.ts` → all three public methods are present; `pnpm vitest run src/background-tasks/task-store.test.ts -t "serves an old indexed ID with one metadata read and zero full scans"` → one pass. If either check fails, STOP for Plan 093 reconciliation.
+**Verify**: `rg -n "refreshIndex\(|getIndexed\(|listOwnedIndexed\(" src/background-tasks/task-store.ts` → all three public methods are present; `pnpm vitest run src/background-tasks/task-store.test.ts -t "selects 1500 owned candidates with zero metadata reads|serves an old indexed ID with one metadata read and zero full scans"` → two passes. If either check fails, STOP for Plan 093 reconciliation.
 
 ### Step 1: Characterize work and memory shape
 
@@ -97,7 +97,7 @@ A durable metadata refresh is required when external revision/takeover evidence 
 
 ### Step 3: Bound the in-memory settled mirror
 
-Retain all non-settled tasks plus at most the existing settled replay count per owner in the heavyweight manager snapshot map. Serve older ID lookups/list history through Plan 093's derived in-memory metadata-path index with direct record reads. Eviction removes only manager snapshot/runtime objects; never the store's ID/owner path entries and never files.
+Retain all non-settled tasks plus at most the existing settled replay count per owner in the heavyweight manager snapshot map. Serve bounded list/replay output from those retained snapshots; serve an explicit older-ID lookup through Plan 093's indexed path with one direct record read. Compact owner/delivery candidate selection remains available from Plan 093 without reopening every historical record. Eviction removes only manager snapshot/runtime objects; never the store's path/selection entries and never files.
 
 Ensure a pending/claimed completion cannot be evicted before delivery, even if settled. Define this as a positive invariant in code/tests.
 
@@ -123,7 +123,7 @@ Cover large settled history, many active tasks, pending/claimed settled retentio
 
 - [ ] Exactly one terminal supervision scheduler exists per manager.
 - [ ] Unchanged active ticks avoid full metadata validation/read.
-- [ ] In-memory heavyweight settled/runtime state is bounded without deleting durable records or the lightweight Plan 093 path indexes.
+- [ ] In-memory heavyweight settled/runtime state is bounded without deleting durable records or the compact Plan 093 path/selection indexes.
 - [ ] Evicted old-ID/owner queries never trigger a full-store scan.
 - [ ] Pending/claimed completion and stop/recovery safety remain intact.
 - [ ] Named operation-count tests prove one scheduler, bounded heavy maps, and zero full scans for evicted indexed IDs.

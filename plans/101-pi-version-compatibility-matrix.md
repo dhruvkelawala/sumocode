@@ -1,4 +1,4 @@
-# Plan 101: Test every supported Pi version through the real package boundary
+# Plan 101: Gate the supported Pi range at minimum/latest package boundaries
 
 > **Executor instructions**: Follow this plan step by step and run every verification command. Build a version matrix from the declared peer range, not guessed versions. Keep all three Pi packages aligned. Run installs only in disposable temporary directories. Stop if supported versions expose incompatible public RPC contracts. When done, update this plan's row in `plans/README.md` unless a reviewer says they own the index.
 >

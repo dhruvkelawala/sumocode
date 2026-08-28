@@ -16693,11 +16693,10 @@ function isRecord4(value) {
 function parseSubscription(value) {
   if (!isRecord4(value) || typeof value.provider !== "string" || typeof value.index !== "number") return void 0;
   if (!Number.isInteger(value.index) || value.index < 2) return void 0;
-  return {
-    provider: value.provider,
-    index: value.index,
-    ...typeof value.label === "string" && value.label.trim() ? { label: value.label.trim() } : {}
-  };
+  const label = typeof value.label === "string" ? value.label.trim() : "";
+  const subscription = { provider: value.provider, index: value.index };
+  if (label) return { ...subscription, label };
+  return subscription;
 }
 function readDocument(path2) {
   if (!existsSync13(path2)) return {};

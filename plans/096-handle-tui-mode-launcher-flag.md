@@ -41,6 +41,7 @@ This is neither the launcher's unconditional class nor its existing `--print`/`-
 |---|---|---|
 | Shell syntax | `bash -n bin/sumocode.sh` | exit 0 |
 | Launcher test | `pnpm vitest run test/integration/spawn-pi-pty.test.ts` | all pass |
+| Integration | `pnpm test:integration` | exit 0 |
 | Full gates | `pnpm exec tsc --noEmit && pnpm build && pnpm lint && pnpm test` | exit 0 |
 
 ## Scope
@@ -105,7 +106,7 @@ Cover space form, equals form, missing value, flags before/after the positional,
 - [ ] Missing/following-flag/invalid/`@file` consumption matches the pinned Pi parser exactly.
 - [ ] Direct-Pi bypass behavior is unchanged.
 - [ ] Known booleans, standalone `@file`, special print/list modes, and unknown long-option values match pinned Pi consumption.
-- [ ] Shell syntax, targeted tests, typecheck/build, lint, and unit tests pass.
+- [ ] Shell syntax, targeted tests, typecheck/build, lint, unit, and full integration tests pass.
 - [ ] `git status --short` contains only files listed in Scope plus this plan/index bookkeeping.
 - [ ] Plan 096's `plans/README.md` row is updated to `DONE` with completion evidence.
 

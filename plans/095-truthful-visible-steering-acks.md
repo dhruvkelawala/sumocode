@@ -134,4 +134,4 @@ Cover synchronous submit success/throw, file consumed, file timeout, child exit 
 
 ## Maintenance notes
 
-A true delivery acknowledgement is upstream-blocked in Pi 0.84.1. If a future Pi release adds it, Plan 101's compatibility matrix must gate the version and this protocol can be upgraded from “consumed/submitted” to “accepted.”
+A true delivery acknowledgement remains upstream-blocked in Pi 0.84.3. If a future Pi release adds it, Plan 101's compatibility matrix must gate the version and this protocol can be upgraded from “consumed/submitted” to “accepted.”

@@ -49,6 +49,7 @@ The gate is released only after state/transcript hydration, Activity ownership, 
 | Runtime tests | `pnpm vitest run src/sumo-tui/rpc/runtime.test.ts src/sumo-tui/rpc/initial-hydration-action-gate.test.ts src/sumo-tui/rpc/host-actions.test.ts` | all pass |
 | Startup report | `pnpm perf:startup` | report contains editor-ready and command-ready |
 | Integration | `pnpm test:integration` | exit 0 |
+| Visual parity | `pnpm visual:ci` | exit 0; no runtime/Bible drift |
 | Full gates | `pnpm exec tsc --noEmit && pnpm build && pnpm lint && pnpm test` | exit 0 |
 
 ## Committed bundle freshness
@@ -116,7 +117,7 @@ Measure and report `editorReadyMs`, `commandReadyMs`, and their gap. Update `scr
 
 ### Step 5: Run full runtime gates
 
-**Verify**: all commands in the command table pass. If feedback changes a captured surface, run `pnpm visual:review` and attach evidence; do not run `visual:promote`.
+**Verify**: all commands in the command table pass, including `pnpm visual:ci`. If feedback changes a captured surface, also run `pnpm visual:review` and attach evidence; do not run `visual:promote`.
 
 ## Test plan
 
@@ -129,7 +130,7 @@ Cover cold start, reload hydration, deferred model/thinking action, pre-ready or
 - [ ] Pre-ready Enter provides immediate truthful feedback and dispatches once later.
 - [ ] Startup report includes the editor-to-command gap.
 - [ ] Early paint, typing, interrupt, and `/quit` behavior are preserved.
-- [ ] Required tests and integration gates pass.
+- [ ] Required tests, integration, and visual CI gates pass.
 
 ## STOP conditions
 

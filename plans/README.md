@@ -653,7 +653,7 @@ startup-speed claim.
 | 107 | [Scale retained transcript/live Activity](107-scale-retained-transcript-and-live-activity.md) | P2 | L | M3 | 103 | TODO | [#401](https://github.com/dhruvkelawala/sumocode/issues/401) |
 | 110 | [Effect `SubagentManager` pilot](110-effect-subagent-manager-pilot.md) | P2 | L | M4 | 109 | TODO | [#404](https://github.com/dhruvkelawala/sumocode/issues/404) |
 | 111 | [Extract RPC host lifecycle seam](111-extract-rpc-host-lifecycle-seam.md) | P2 | L | M4 | 094, 104 | TODO | [#405](https://github.com/dhruvkelawala/sumocode/issues/405) |
-| 112 | [Durable subagent registry](112-durable-subagent-registry.md) | P2 | L | M5 | 095, 104, 109 | TODO | [#406](https://github.com/dhruvkelawala/sumocode/issues/406) |
+| 112 | [Durable subagent registry](112-durable-subagent-registry.md) | P2 | L | M5 | 095, 097, 098, 104, 109 | TODO | [#406](https://github.com/dhruvkelawala/sumocode/issues/406) |
 | 113 | [Worktree result disposition loop](113-worktree-result-disposition-loop.md) | P2 | L | M5 | 109, 112 | TODO | [#407](https://github.com/dhruvkelawala/sumocode/issues/407) |
 | 114 | [Subagent budgets and stall visibility](114-subagent-budgets-and-stall-visibility.md) | P3 | L | M5 | 109, 112 | TODO | [#408](https://github.com/dhruvkelawala/sumocode/issues/408) |
 | 115 | [Reconcile active documentation](115-reconcile-active-documentation.md) | P2 | L | M6 | 094, 101 + final-wave gate | TODO | [#409](https://github.com/dhruvkelawala/sumocode/issues/409) |
@@ -670,9 +670,11 @@ startup-speed claim.
    Pi matrix.
 4. **M4 lifecycle/Effect:** after 109, 110 may evaluate Effect off the production path. Independently,
    after 094/104, 111 extracts the plain-TypeScript host lifecycle seam; neither outcome gates the other.
-5. **M5 product durability:** run 112 after 095/104/109. Both 113 and 114 then branch from the
-   completed 112 registry contract; because they share snapshot/schema surfaces, integrate them serially
-   (recommended 114 then 113) even though neither feature depends on the other's product behavior.
+5. **M5 product durability:** run 112 after prompt transport, visible task-directory hardening,
+   terminal recovery, and lifecycle containment (Plans 095/097/098/104/109). Both 113 and 114 then
+   branch from the completed 112 registry contract; because they share snapshot/schema surfaces,
+   integrate them serially (recommended 114 then 113) even though neither feature depends on the
+   other's product behavior.
 6. **M6 docs:** 115 runs last so readiness/version/plan claims are facts rather than forecasts.
    `EXECUTION.md` enforces this by requiring every non-rejected Plan 091–114 row to be `DONE`.
 

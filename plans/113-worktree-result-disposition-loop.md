@@ -34,7 +34,7 @@ Isolated children return a host-observed completion manifest, but the parent sti
 
 A settled isolated result has dispositions:
 - **inspect**: show bounded diff/stat/base/dirty/commit evidence and optionally open the worktree/diff;
-- **apply**: explicit confirmation, committed child changes only, safe preflight, apply to current checkout, abort/restore on conflict;
+- **apply**: explicit confirmation, committed child changes only, safe preflight, apply to current checkout, restore the exact pre-action state on conflict;
 - **dismiss**: hide/mark handled; no filesystem or branch deletion;
 - **prune**: separate explicit confirmation; remove only a proven clean worktree, preserve branch by default.
 
@@ -100,9 +100,9 @@ Name inspection cases with the prefix `inspects result:`.
 
 V1 refuses every dirty parent; there is no non-overlap exception. Allow apply only when child and parent `git status --porcelain=v1 -z` are empty, commit count is positive, base is an ancestor of child HEAD, parent branch/repository are known, and the child range contains no merge commit. Resolve the ordered commit list with `git rev-list --reverse <base>..<child-head>` and show exact commits/files in `showDivineQuery()` before confirmation.
 
-After explicit confirmation, invoke exactly `git cherry-pick --no-commit <ordered-commit>...` through `execFile` arguments. This applies committed child changes to the parent index/worktree while leaving parent HEAD unchanged and creating no commit/merge/push/PR. Capture pre-action HEAD and porcelain bytes. On conflict/failure, invoke only `git cherry-pick --abort`, then verify parent HEAD and porcelain bytes equal the pre-action snapshot. Never use `reset --hard`, `clean`, merge, squash, or branch deletion. If abort/restoration cannot be proven, leave evidence intact, report the started/abort commands, and STOP for manual recovery. The child branch/worktree is never mutated.
+After explicit confirmation, invoke exactly `git cherry-pick --no-commit <ordered-commit>...` through `execFile` arguments. This applies committed child changes to the parent index/worktree while leaving parent HEAD unchanged and creating no commit/merge/push/PR. Capture pre-action HEAD and porcelain bytes. A single `--no-commit` operation does not create a cherry-pick sequence, so `git cherry-pick --abort` is not a valid recovery command. On conflict/failure, invoke only `git restore --source=<pre-action-head> --staged --worktree -- .` from the repository root, then verify parent HEAD and porcelain bytes equal the pre-action snapshot. Never use `reset --hard`, `clean`, merge, squash, or branch deletion. If restoration cannot be proven, leave evidence intact, report the started/restoration commands, and STOP for manual recovery. The child branch/worktree is never mutated.
 
-**Verify**: `pnpm vitest run src/git/worktree-disposition.test.ts -t "applies linear commits|aborts cherry-pick"` → clean one/multi-commit ranges leave HEAD unchanged with expected staged patch; dirty parent/merge range refuse before Git mutation; conflict invokes `cherry-pick --abort`, restores exact pre-state, and leaves child HEAD/status unchanged.
+**Verify**: `pnpm vitest run src/git/worktree-disposition.test.ts -t "applies linear commits|restores failed cherry-pick"` → clean one/multi-commit ranges leave HEAD unchanged with expected staged patch; dirty parent/merge range refuse before Git mutation; a conflict after an earlier commit was applied invokes the exact `git restore` command (never `cherry-pick --abort`), restores exact pre-state including removal of newly added paths, and leaves child HEAD/status unchanged.
 
 ### Step 4: Add dismiss and conservative prune
 
@@ -122,7 +122,7 @@ Add a terse result-card hint and a command/modal showing evidence/actions. Use e
 
 ## Test plan
 
-Use temporary Git repos/worktrees. Cover zero/one/multiple commits, dirty child, dirty parent, overlap, diverged base, conflict abort, missing path, inspect/open, dismiss, prune confirmation/cancel, and path shell safety.
+Use temporary Git repos/worktrees. Cover zero/one/multiple commits, dirty child, dirty parent, overlap, diverged base, conflict restoration after a partially applied multi-commit range, missing path, inspect/open, dismiss, prune confirmation/cancel, and path shell safety.
 
 ## Done criteria
 
@@ -138,7 +138,7 @@ Use temporary Git repos/worktrees. Cover zero/one/multiple commits, dirty child,
 ## STOP conditions
 
 - Commit-range/working-tree preflight changes a Current state assumption, any verification fails twice after a reasonable fix, or completion requires an out-of-scope file.
-- Parent checkout cannot be restored exactly after a failed apply or `cherry-pick --abort` cannot prove the pre-action HEAD/porcelain snapshot.
+- Parent checkout cannot be restored exactly after a failed apply or the `git restore` result cannot prove the pre-action HEAD/porcelain snapshot.
 - Applying requires force, branch deletion, or automatic merge.
 - Manifest evidence is stale and cannot be revalidated from Git.
 - UI requires a new overlay outside the shared Cathedral modal contract.

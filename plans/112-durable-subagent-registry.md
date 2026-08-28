@@ -12,7 +12,7 @@
 - **Priority**: P2
 - **Effort**: L
 - **Risk**: HIGH
-- **Depends on**: `plans/095-truthful-visible-steering-acks.md`, `plans/104-terminal-delivery-end-to-end-recovery.md`, `plans/109-contain-subagent-lifecycle-failures.md`
+- **Depends on**: `plans/095-truthful-visible-steering-acks.md`, `plans/issues/097.md` (prompt transport), `plans/issues/098.md` (visible task-directory hardening), `plans/104-terminal-delivery-end-to-end-recovery.md`, `plans/109-contain-subagent-lifecycle-failures.md`
 - **Category**: direction
 - **Milestone**: M5 — Product durability
 - **Planned at**: commit `b34bd79`, 2026-08-28

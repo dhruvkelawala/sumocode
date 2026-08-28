@@ -1,0 +1,55 @@
+# Plan execution contract
+
+Use this contract when implementing plans 091–115. The plan file is the execution authority; the linked GitHub issue is coordination metadata.
+
+## 1. Select only ready work
+
+1. Read the plan completely.
+2. Confirm every **Depends on** row is `DONE` in `plans/README.md`.
+3. Run the plan's commit-range drift check and working-tree preflight before editing.
+4. If either preflight or a named dependency contract fails, mark the row `BLOCKED` with evidence. Do not recreate dependency APIs.
+
+Completion criterion: the selected plan is `TODO`, all dependencies are `DONE`, and both preflights are clean.
+
+## 2. Isolate one plan per worktree
+
+Branch from the committed planning baseline into one isolated worktree. Keep one plan per branch; shared-surface plans follow the integration order in `plans/README.md`. Execute only the plan's **In scope** paths plus its own plan/index bookkeeping. Build committed host/extension bundles exactly when the plan requires them.
+
+Do not push, open a PR, promote visual goldens, delete records/worktrees/branches, or broaden scope without explicit operator approval.
+
+Completion criterion: `git status --short` contains only scoped implementation, generated bundle, and plan/index status files.
+
+## 3. Route model strength by risk
+
+Until the cheap-agent trial is reviewed:
+
+- **Cheap trial only:** Plan 105 is authorized as the representative low-risk execution test.
+- **Smart implementation:** P0/P1, security, persistence, lifecycle, Git mutation, retained-renderer, RPC-host, and Effect plans.
+- **Human gate:** visual golden promotion, dependency-security disposition, worktree apply/prune, final Effect GO/NO-GO, push, and PR publication.
+
+A cheap agent passing Plan 105 does not authorize it for every plan. Expand routing only from measured execution/review evidence.
+
+## 4. Hand off local-only security plans
+
+Full plans 092, 097–100, and 102 are intentionally ignored in this public repository. Their sanitized briefs under `plans/issues/` are not implementation specifications.
+
+For one of these plans:
+
+1. Create the isolated implementation worktree from the committed public baseline.
+2. In the child prompt, provide only the absolute path to the ignored full plan in the primary checkout.
+3. Tell the child to read that file as instructions while editing only its isolated worktree.
+4. Use a smart implementation model and require a separate security review.
+5. Keep the full plan and detailed evidence out of commits, issues, PRs, transcripts, diagnostics, and build artifacts.
+
+Completion criterion: the implementation branch contains no ignored plan/evidence content, and the public issue receives only sanitized status information.
+
+## 5. Verify and record
+
+Run every step gate and final command in the plan. After success:
+
+1. Rerun required bundle builders after integration tests.
+2. Confirm no out-of-scope changes.
+3. Update the plan's row in `plans/README.md` to `DONE` with commit/test evidence.
+4. Leave issue/PR synchronization to the operator unless explicitly instructed.
+
+If a verification fails twice after a reasonable fix, preserve evidence and mark the plan `BLOCKED`; do not improvise around the gate.

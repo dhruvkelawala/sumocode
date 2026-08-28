@@ -604,6 +604,84 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 - Force-send is disabled outside an active streaming turn, including compaction and tree-navigation windows.
 - No Pi patch, hidden child queue, new RPC command, queue-card redesign, or golden promotion is authorized.
 
+## Deep improvement audit — command readiness, security, lifecycle, and Effect (091–115)
+
+**Planned at:** `b34bd79`, 2026-08-28. This deep audit covered all nine improve categories
+across `src/`, `test/`, `scripts/`, `bin/`, package/CI configuration, active architecture/intent
+material, and contributor docs. It did not inspect private `sumocode-config`, live credential
+values, remote provider infrastructure, or native Windows behavior. Visual code was inspected;
+the full visual capture suite was not rerun during the read-only audit.
+
+The measured trigger was a **7.913s first-frame → command-ready gap** with 1,444 terminal
+records/55 MiB. Six synchronous owner scans alone took 4.433s. Effect is therefore sequenced
+after the persistence/readiness correction and is evaluated as a correctness tool, never a
+startup-speed claim.
+
+### Priority and milestone policy
+
+- **P0** — measured command-readiness blocker, false delivery acknowledgement, or direct
+  credential/prompt exposure. Execute before architectural work.
+- **P1** — security/lifecycle correctness and the compatibility gates required to change them.
+- **P2** — scaling, coverage, architecture, and product durability after foundations are green.
+- **P3** — warning-only product policy whose demand is real but less urgent.
+- Internal milestones M1–M6 below are dependency waves. The public repository currently has only
+  the historical `v0.4` GitHub milestone; issues remain unassigned remotely until the maintainer
+  creates matching milestones. The milestone is still included in every plan/issue body.
+
+### Execution order and status
+
+| Plan | Title | Priority | Effort | Milestone | Depends on | Status | Issue |
+|---|---|---|---|---|---|---|---|
+| 091 | [Isolate extension-install tests](091-isolate-extension-install-tests.md) | P0 | S | M1 | — | TODO | [#385](https://github.com/dhruvkelawala/sumocode/issues/385) |
+| 092 | [Credential-safe PTY harness — sanitized public brief](issues/092.md) | P0 | M | M1 | — | TODO | [#386](https://github.com/dhruvkelawala/sumocode/issues/386) |
+| 095 | [Honest, settlement-aware visible steering ACKs](095-truthful-visible-steering-acks.md) | P1 | M | M1 | 092 | TODO | [#389](https://github.com/dhruvkelawala/sumocode/issues/389) |
+| 093 | [Indexed terminal-store startup](093-index-terminal-store-startup.md) | P0 | L | M1 | 091, 092 | TODO | [#387](https://github.com/dhruvkelawala/sumocode/issues/387) |
+| 096 | [Mirror Pi option consumption (`--tui-mode` and extension flags)](096-handle-tui-mode-launcher-flag.md) | P1 | M | M1 | 092 | TODO | [#390](https://github.com/dhruvkelawala/sumocode/issues/390) |
+| 094 | [Truthful command readiness](094-truthful-command-readiness.md) | P0 | M | M1 | 093 | TODO | [#388](https://github.com/dhruvkelawala/sumocode/issues/388) |
+| 099 | [Bound child protocol buffers — sanitized public brief](issues/099.md) | P1 | M | M2 | — | TODO | [#393](https://github.com/dhruvkelawala/sumocode/issues/393) |
+| 100 | [Redact terminal session payloads — sanitized public brief](issues/100.md) | P1 | M | M2 | — | TODO | [#394](https://github.com/dhruvkelawala/sumocode/issues/394) |
+| 098 | [Harden visible task directories — sanitized public brief](issues/098.md) | P1 | L | M2 | 095 | TODO | [#392](https://github.com/dhruvkelawala/sumocode/issues/392) |
+| 097 | [Remove prompts from process metadata — sanitized public brief](issues/097.md) | P0 | L | M2 | 092, 096 | TODO | [#391](https://github.com/dhruvkelawala/sumocode/issues/391) |
+| 101 | [Pi compatibility matrix](101-pi-version-compatibility-matrix.md) | P1 | M | M3 | 092, 096 | TODO | [#395](https://github.com/dhruvkelawala/sumocode/issues/395) |
+| 102 | [Remediate dependency advisories — sanitized public brief](issues/102.md) | P1 | M | M2 | — | TODO | [#396](https://github.com/dhruvkelawala/sumocode/issues/396) |
+| 103 | [Replace timing sleeps with state waits](103-replace-timing-sleeps-with-state-waits.md) | P2 | M | M3 | 092 | TODO | [#397](https://github.com/dhruvkelawala/sumocode/issues/397) |
+| 105 | [Integration-only integration lane](105-run-only-integration-tests-in-integration-lane.md) | P2 | S | M3 | — | TODO | [#399](https://github.com/dhruvkelawala/sumocode/issues/399) |
+| 109 | [Contain subagent lifecycle failures](109-contain-subagent-lifecycle-failures.md) | P1 | M | M3 | 095 | TODO | [#403](https://github.com/dhruvkelawala/sumocode/issues/403) |
+| 108 | [Preserve child executable provenance](108-preserve-child-executable-provenance.md) | P1 | M | M3 | 101 | TODO | [#402](https://github.com/dhruvkelawala/sumocode/issues/402) |
+| 104 | [Terminal delivery recovery E2E](104-terminal-delivery-end-to-end-recovery.md) | P1 | L | M3 | 092, 093, 100 | TODO | [#398](https://github.com/dhruvkelawala/sumocode/issues/398) |
+| 106 | [Scale terminal runtime with active work](106-scale-terminal-runtime-with-active-work.md) | P2 | L | M3 | 093, 104 | TODO | [#400](https://github.com/dhruvkelawala/sumocode/issues/400) |
+| 107 | [Scale retained transcript/live Activity](107-scale-retained-transcript-and-live-activity.md) | P2 | L | M3 | 103 | TODO | [#401](https://github.com/dhruvkelawala/sumocode/issues/401) |
+| 110 | [Effect `SubagentManager` pilot](110-effect-subagent-manager-pilot.md) | P2 | L | M4 | 109 | TODO | [#404](https://github.com/dhruvkelawala/sumocode/issues/404) |
+| 111 | [Extract RPC host lifecycle seam](111-extract-rpc-host-lifecycle-seam.md) | P2 | L | M4 | 094, 104 | TODO | [#405](https://github.com/dhruvkelawala/sumocode/issues/405) |
+| 112 | [Durable subagent registry](112-durable-subagent-registry.md) | P2 | L | M5 | 095, 104, 109 | TODO | [#406](https://github.com/dhruvkelawala/sumocode/issues/406) |
+| 113 | [Worktree result disposition loop](113-worktree-result-disposition-loop.md) | P2 | L | M5 | 109, 112 | TODO | [#407](https://github.com/dhruvkelawala/sumocode/issues/407) |
+| 114 | [Subagent budgets and stall visibility](114-subagent-budgets-and-stall-visibility.md) | P3 | L | M5 | 109, 112 | TODO | [#408](https://github.com/dhruvkelawala/sumocode/issues/408) |
+| 115 | [Reconcile active documentation](115-reconcile-active-documentation.md) | P2 | L | M6 | 094, 101 | TODO | [#409](https://github.com/dhruvkelawala/sumocode/issues/409) |
+
+### Dependency waves
+
+1. **M1 foundation:** run 091 and 092 in parallel; then 093, 095, and 096; then 094.
+2. **M2 security:** 099, 100, and 102 can start immediately; 098 follows 095; 097 follows
+   092/096. If 102 finds a fixed Pi candidate before 101 lands, it runs the existing explicit
+   minimum/candidate smoke command; 101 later makes that compatibility gate durable in CI.
+3. **M3 reliability/scale:** 105 is independent; 103 follows PTY isolation; 109 follows truthful
+   steering; 104 follows store/redaction foundations; 106 follows the real recovery test; 107
+   follows state-based tests; 108 follows the Pi matrix.
+4. **M4 lifecycle/Effect:** after 109, 110 may evaluate Effect off the production path. Independently,
+   after 094/104, 111 extracts the plain-TypeScript host lifecycle seam; neither outcome gates the other.
+5. **M5 product durability:** run 112 after 095/104/109. Both 113 and 114 then branch from the
+   completed 112 registry contract; because they share snapshot/schema surfaces, integrate them serially
+   (recommended 114 then 113) even though neither feature depends on the other's product behavior.
+6. **M6 docs:** 115 runs last so readiness/version/plan claims are facts rather than forecasts.
+
+### Publication and execution contract
+
+Issues #385–#409 are published in the public repository, but the committed plan files remain the
+execution authority. Follow [EXECUTION.md](EXECUTION.md) for worktree/model routing and dependency
+status updates. Security plans 092, 097–100, and 102 publish **sanitized** issue bodies; their full
+executor plans stay ignored in the primary local checkout and use the private-plan handoff described
+there. Never copy private security evidence into a branch, issue, PR, transcript, or build artifact.
+
 ## Theme expansion — Herdr Terminal (073)
 
 **Planned at:** `933f33d`, 2026-07-17. **Reconciled 2026-07-18:** duplicate status row removed —
@@ -648,10 +726,10 @@ TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-
   audit): rejected — `scripts/visual-v2/index.mjs:203-217` gates required crops against the Bible
   target before golden promotion and exits 1 on failure; the unit test's golden-existence filter
   intentionally covers only promoted scenarios (promotion needs Dhruv's approval per AGENTS.md).
-- **"Approval fails open under RPC"** (pre-migration landmine): verified closed — cancel, timeout,
-  malformed values, thrown errors, and missing UI all normalize to "no" and block
-  (`src/approval-modal.ts` `showRpcApprovalPrompt` + `installApprovalGate`). Track D may change
-  presentation or region mounting, but must not weaken the gate logic.
+- **Restore or rely on SumoCode's retired approval gate**: rejected by current product decision.
+  `plans/076-disable-approval-gate.md` removed active installation/registration while deliberately
+  retaining dormant modules/tests; current SumoCode does not present itself as an OS/tool sandbox.
+  Tool safety remains owned by Pi policy and the operator.
 - **Reuse `chat-viewport-controller` / `installChatViewportBridge` in the RPC host** (2026-07-02
   audit): rejected as a direct import because it bridges into Pi InteractiveMode internals that do
   not exist under RPC. Track D instead extracts shared transcript/input behavior from it and adapts
@@ -663,3 +741,23 @@ TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-
   and Cathedral approval routing (022 Steps 3b/3c), transcript-pump performance requirements (021),
   slash-command honesty (023 Step 4), and behavioral PTY acceptance evidence (024 Step 1b).
   Evidence lives in [draft-rpc-host-main-brain-rebuild.md](draft-rpc-host-main-brain-rebuild.md).
+- **Use Effect to fix startup latency** (2026-08-28): rejected — fibers preserve the repeated
+  synchronous `O(records)` scans. Plans 093/094 fix indexing and readiness before Plan 110 evaluates
+  Effect for lifecycle correctness.
+- **Delete or age out the 1,444 durable terminal records as the startup fix**: rejected — retention
+  has no approved policy and may erase pending/queryable results. Plans 093/106 optimize projections
+  without deleting files.
+- **Treat `research`/`review` role prose as an OS sandbox**: rejected — these roles intentionally
+  retain `bash` under the documented native-task trust model. A real least-privilege sandbox would
+  be a separate product/security design, not a label-only patch.
+- **Restore Windows CI as part of this audit**: rejected — no Windows behavior was verified and the
+  current product/runtime contract is terminal-host/POSIX focused. Revisit only with a supported
+  platform contract and dedicated runner evidence.
+- **Deduplicate Visual Bible CI jobs now**: not planned — overlap is real but low leverage, and the
+  jobs publish different artifacts. Revisit with measured CI-cost evidence or shared-artifact design.
+- **Add sidebar-memory disposal as a standalone plan**: not planned — the leak is confined to the
+  classic sidebar path and no user impact was reproduced. Re-evaluate when that path next changes;
+  any late callback must still be generation-guarded.
+- **Add npm package-content allowlisting**: rejected for this audit — the supported distribution is
+  Pi's git package install, which intentionally receives the repository. Revisit before publishing
+  an npm-tarball distribution contract.

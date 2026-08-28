@@ -1,4 +1,4 @@
-# Plan 107: Keep streaming transcript and live Activity rendering bounded with history
+# Plan 107: Bound streaming transcript lookup/block work and live Activity rendering with history
 
 > **Executor instructions**: Follow this plan step by step and run every verification command. Add performance characterization before changing retained rendering. Preserve message ordering, folding, scroll/read state, and live status visibility. Use headless behavioral coverage for the 100-card stress case and existing visual canon only; never add/promote a golden in this plan. When done, update this plan's row in `plans/README.md` unless a reviewer says they own the index.
 >
@@ -21,7 +21,7 @@
 
 ## Why this matters
 
-Every agent event currently copies the complete committed view-model array, and each live tool fold scans/maps message history. Separately, `ChatPager` exempts every non-settled feed card from virtualization, so many concurrent live Activities keep an unbounded number of retained Yoga/message nodes. Long sessions and worker fan-out can therefore make every stream update/render proportional to history and live-card count.
+Every agent event currently copies the complete committed view-model array, and each live tool fold scans/maps message history. Separately, `ChatPager` exempts every non-settled feed card from virtualization, so many concurrent live Activities keep an unbounded number of retained Yoga/message nodes. This plan removes history-wide lookup/remap/deep-copy work and bounds retained nodes. It explicitly retains one shallow O(history) array snapshot copy required by the current immutable `TranscriptViewModel.messages` contract; migrating that public representation and every consumer is a separate architectural change.
 
 ## Current state
 
@@ -38,6 +38,7 @@ It then folds every live tool through `foldBlocksIntoMessages`, whose implementa
 Existing constraints:
 - `TranscriptViewModelMapper` carries order-dependent `taskMetadata`; any structural committed-message change must still reset the mapper and replay from message 0 so later task-result enrichment remains correct;
 - stable message/activity IDs own in-place updates;
+- every returned `TranscriptViewModel.messages` is a readonly array snapshot, so replacing a historical entry while preserving prior snapshots requires one shallow O(history) array-envelope copy under the current API;
 - full `replaceViewModels` is reserved for hydration/session replacement;
 - cards must remain queryable/visible through the feed even when their render node is virtualized;
 - visual changes require `pnpm visual:ci` and review evidence.
@@ -74,6 +75,7 @@ After final source edits, run `pnpm build:host` before `pnpm test`; keep the gen
 - Visual golden promotion.
 - Terminal manager persistence (Plans 093/106).
 - `src/activity/manager-bridge.ts` and its intentional retention of every running Activity identity; this plan bounds retained render nodes, not producer/feed truth.
+- Replacing the readonly-array transcript snapshot with a persistent/chunked/delta representation or migrating its downstream consumers.
 
 ## Git workflow
 
@@ -87,19 +89,19 @@ After final source edits, run `pnpm build:host` before `pnpm test`; keep the gen
 
 ### Step 1: Add operation-count characterizations
 
-Create 100, 1,000, and 10,000-message fixtures with one draft and multiple live tools. Instrument message mapping, identity lookup, array copy/map, and node count. Add 100 live Activity fixtures with a small viewport.
+Create 100, 1,000, and 10,000-message fixtures with one draft and multiple live tools. Instrument message mapping, identity lookup, deep message/block copy/map work, the required shallow array-envelope copy, and node count. Add 100 live Activity fixtures with a small viewport.
 
-Gate on operation growth/retained node count, not wall-clock milliseconds. Name transcript cases `characterizes live update operations:` and pager cases `characterizes live-card retention:`. Current code should fail the desired bounded assertions.
+Gate on operation growth/retained node count, not wall-clock milliseconds. Name transcript cases `characterizes live update operations:` and pager cases `characterizes live-card retention:`. Treat exactly one shallow messages-array copy proportional to history as the documented baseline, not a failure; history-wide identity scans, mapper replays, deep message/block copies, or multiple envelope copies must fail the desired assertions.
 
-**Verify**: `pnpm vitest run src/sumo-tui/transcript/controller.perf.test.ts src/sumo-tui/widgets/chat-pager.perf.test.ts -t "characterizes live update operations:|characterizes live-card retention:"` → expected red before implementation for history-wide copies/scans and 100 retained live nodes.
+**Verify**: `pnpm vitest run src/sumo-tui/transcript/controller.perf.test.ts src/sumo-tui/widgets/chat-pager.perf.test.ts -t "characterizes live update operations:|characterizes live-card retention:"` → expected red before implementation for history-wide scans/remaps/deep copies and 100 retained live nodes, while the fixture separately reports the accepted shallow snapshot copy.
 
 ### Step 2: Index the live update boundary
 
-Retain committed view models by reference while unchanged. Maintain stable ID → message/block location indexes for foldable Activities/tools only while the committed view-model cache is structurally unchanged. On a live update, copy only the changed message/block path plus the final transcript envelope required by immutable consumers. On hydration, compaction insertion, committed append/replace, or any structural committed change, call the existing mapper reset and replay from message 0 before rebuilding indexes; never retain stale task-metadata enrichment by reference across that boundary.
+Retain committed view-model objects by reference while unchanged. Maintain stable ID → message/block location indexes for foldable Activities/tools only while the committed view-model cache is structurally unchanged. On a live update, use constant indexed lookup, copy only the changed message/block path, and perform exactly one shallow O(history) `messages` array-envelope copy so prior immutable snapshots remain unchanged. On hydration, compaction insertion, committed append/replace, or any structural committed change, call the existing mapper reset and replay from message 0 before rebuilding indexes; never retain stale task-metadata enrichment by reference across that boundary.
 
 Preserve append/fold ordering, stateful mapper semantics, and cache invalidation. Avoid an index that becomes a second source of truth.
 
-**Verify**: `pnpm vitest run src/sumo-tui/transcript/controller.test.ts src/sumo-tui/transcript/activity-fold.test.ts src/sumo-tui/transcript/controller.perf.test.ts -t "live update|structural committed change|task metadata"` → one live update has constant indexed lookup and copies only its message/block path; structural changes reset/replay mapper state and preserve task metadata.
+**Verify**: `pnpm vitest run src/sumo-tui/transcript/controller.test.ts src/sumo-tui/transcript/activity-fold.test.ts src/sumo-tui/transcript/controller.perf.test.ts -t "live update|structural committed change|task metadata"` → one live update has constant indexed lookup, copies only its changed message/block path plus one shallow messages-array envelope, and does no history-wide scan/remap; structural changes reset/replay mapper state and preserve task metadata; previously returned snapshots remain unchanged.
 
 ### Step 3: Virtualize off-screen live cards safely
 
@@ -125,7 +127,7 @@ Cover long committed history, draft replacement, multiple live tools, unknown to
 
 ## Done criteria
 
-- [ ] A live update touches a bounded message path rather than copying/scanning all history.
+- [ ] A live update uses constant indexed lookup and bounded message/block copying, with only the documented single shallow O(history) messages-array snapshot copy.
 - [ ] Retained render node count is viewport/budget bounded even when many Activities run.
 - [ ] Underlying live Activity identities/status are never dropped.
 - [ ] Scroll, ordering, folding, expansion, and hydration behavior remain correct.
@@ -145,4 +147,4 @@ Cover long committed history, draft replacement, multiple live tools, unknown to
 
 ## Maintenance notes
 
-Rebuild indexes at structural boundaries; do not incrementally patch through unknown changes. Reviewers should inspect mutation tests that swap duplicate IDs/order, not only happy-path performance fixtures.
+Rebuild indexes at structural boundaries; do not incrementally patch through unknown changes. The shallow array-envelope copy is an explicit current-API cost, not evidence of a failed optimization; any persistent/chunked representation proposal needs a separate consumer-migration plan. Reviewers should inspect mutation tests that swap duplicate IDs/order, not only happy-path performance fixtures.

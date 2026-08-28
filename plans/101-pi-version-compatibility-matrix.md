@@ -2,9 +2,9 @@
 
 > **Executor instructions**: Follow this plan step by step and run every verification command. Build a version matrix from the declared peer range, not guessed versions. Keep all three Pi packages aligned. Run installs only in disposable temporary directories. Stop if supported versions expose incompatible public RPC contracts. When done, update this plan's row in `plans/README.md` unless a reviewer says they own the index.
 >
-> **Drift check (run first)**: `git diff --stat b34bd79..HEAD -- package.json scripts/smoke-pi-versions.sh scripts/pi-compat-contract.mjs scripts/pi-compat-contract.test.mjs .github/workflows/ci.yml .github/workflows/pi-compat.yml`
-> If this reports an in-scope change, compare the Current state excerpts and assumptions with live code. If behavior or signatures differ, STOP and request plan reconciliation.
-> **Read-only contract-reference check**: `git diff --stat b34bd79..HEAD -- bin/sumocode.sh src/sumo-tui/rpc/host-actions.ts src/sumo-tui/rpc/host-actions.test.ts src/sumo-tui/rpc/editor.ts src/extension.ts src/interaction-registry.ts`. These are reference surfaces, not files this plan may modify. If their named contracts changed, STOP and reconcile the fixture expectations.
+> **Drift check (run first)**: `git diff --stat 23c010a..HEAD -- package.json scripts/smoke-pi-versions.sh scripts/pi-compat-contract.mjs scripts/pi-compat-contract.test.mjs .github/workflows/ci.yml .github/workflows/pi-compat.yml`
+> If this reports an in-scope change, compare the Current state excerpts and assumptions with live code. If behavior or signatures differ, STOP and request plan reconciliation. Commit `23c010a` is the recorded Pi-0.84.3/accounts-command reconciliation baseline; do not revert to the original `b34bd79` audit point for execution drift.
+> **Read-only contract-reference check**: `git diff --stat 23c010a..HEAD -- bin/sumocode.sh src/sumo-tui/rpc/host-actions.ts src/sumo-tui/rpc/host-actions.test.ts src/sumo-tui/rpc/editor.ts src/extension.ts src/interaction-registry.ts`. These are reference surfaces, not files this plan may modify. If their named contracts changed after the reconciled baseline, STOP and reconcile the fixture expectations.
 > **Dependency check**: Confirm every plan named in **Depends on** is `DONE` in `plans/README.md`. If any is not DONE, STOP; do not recreate or assume its APIs.
 
 ## Status
@@ -29,7 +29,7 @@
 
 AGENTS.md requires every Pi bump to re-verify the RPC declaration contract, hardcoded built-in slash inventory, tool-bypass/security behavior, and direct-Pi modes. Candidate Pi owns two different command surfaces: `dist/core/slash-commands.js` exports `BUILTIN_SLASH_COMMANDS`, while RPC `get_commands` returns registered extension, prompt-template, and skill commands—not built-ins. `buildRpcAutocompleteCommands()` in `src/sumo-tui/rpc/editor.ts:99-121` deliberately unions those child-reported commands with the host inventory.
 
-The installed RPC declaration is under the candidate package root at `dist/modes/rpc/rpc-types.d.ts`; it is not a tracked SumoCode source file. SumoCode's host and routed-child inventories are `RPC_HOST_SLASH_COMMANDS` and `RPC_HOST_ROUTED_CHILD_COMMANDS` in `src/sumo-tui/rpc/host-actions.ts:154-185`, plus `isTreeNavigationBlockedCommand()` around lines 694-711. `src/sumo-tui/rpc/host-actions.test.ts:1779-1805` already checks SumoCode's table-to-dispatch correspondence but does not compare different installed Pi versions.
+The installed RPC declaration is under the candidate package root at `dist/modes/rpc/rpc-types.d.ts`; it is not a tracked SumoCode source file. SumoCode's host and routed-child inventories are `RPC_HOST_SLASH_COMMANDS` and `RPC_HOST_ROUTED_CHILD_COMMANDS` in `src/sumo-tui/rpc/host-actions.ts:154-185`, plus `isTreeNavigationBlockedCommand()` around lines 694-711. `src/sumo-tui/rpc/host-actions.test.ts:1779-1805` already checks SumoCode's table-to-dispatch correspondence but does not compare different installed Pi versions. The reconciled `23c010a` extension inventory includes `registerAccountsCommand(pi)` in both RPC-child and normal profiles; `accounts` must be present in the expected SumoCode extension-command fixture.
 
 Plan 076 intentionally retired the *active registration* while retaining dormant `src/approval-modal.ts`, `src/commands/approval.ts`, and their tests. The compatibility fixture must assert `installApprovalGate` is not imported/called by `src/extension.ts`, `registerApprovalCommand` is not installed by `src/interaction-registry.ts`, and no `sumo:approval`/approval-overlay RPC route is active. Do not delete the dormant modules or flag generic confirmations/modals and the `approval` color token.
 
@@ -79,7 +79,7 @@ Keep command ownership explicit and test the surfaces separately:
 - validate the complete classified SumoCode host table against its host action/dispatch fixture independently of child RPC output;
 - filter `get_commands` by `source === "extension"` in the isolated disposable install, then validate the expected SumoCode extension and `RPC_HOST_ROUTED_CHILD_COMMANDS` inventories; exclude prompt/skill entries and never require host-only commands such as `hotkeys` to appear in `get_commands`.
 
-Fixtures must include a host-only command, a child extension command, and prompt/skill noise so an ownership regression fails while the known-good union passes.
+Fixtures must include a host-only command, the reconciled `accounts` extension command, another child extension command, and prompt/skill noise so an ownership regression fails while the known-good union passes.
 
 Add `--supported-matrix`: resolve the peer minimum (currently 0.84.3) and latest published version satisfying the declared `~0.84.3` range, fail clearly if declared peer ranges diverge, then run those two unique versions. Do not test every patch if the range becomes large; minimum + latest is the required boundary. Preserve explicit version arguments for a pending bump.
 

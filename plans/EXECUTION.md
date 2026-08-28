@@ -21,13 +21,13 @@ Completion criterion: `git status --short` contains only scoped implementation, 
 
 ## 3. Route model strength by risk
 
-Until the cheap-agent trial is reviewed:
+The 2026-08-28 Plan-105 trial used `zai/glm-5.3-flash` in an isolated worktree. It stayed in scope, produced a coherent regression, passed targeted/type/build/lint checks, reproduced unrelated suite failures against pristine baseline, and stopped instead of weakening gates. It also proved Plan 105's expected red premise false: Vitest already filters the integration invocation to 30 integration-only files. Plan 105 is therefore rejected, and the trial does **not** justify cheap execution across this backlog.
 
-- **Cheap trial only:** Plan 105 is authorized as the representative low-risk execution test.
-- **Smart implementation:** P0/P1, security, persistence, lifecycle, Git mutation, retained-renderer, RPC-host, and Effect plans.
+- **Cheap implementation with smart review:** Plans 103 and 115 only. The cheap child may produce a bounded candidate branch; a smart reviewer must verify wait semantics or documentation authority before integration.
+- **Smart implementation:** Plans 091–102, 104, and 106–114. This includes every P0/P1, security, persistence, lifecycle, Git mutation, retained-renderer, RPC-host, and Effect plan.
 - **Human gate:** visual golden promotion, dependency-security disposition, worktree apply/prune, final Effect GO/NO-GO, push, and PR publication.
 
-A cheap agent passing Plan 105 does not authorize it for every plan. Expand routing only from measured execution/review evidence.
+A cheap child may still perform a precisely scoped mechanical subtask inside smart-owned work, but it does not own the plan verdict, scope changes, or final integration.
 
 ## 4. Hand off local-only security plans
 

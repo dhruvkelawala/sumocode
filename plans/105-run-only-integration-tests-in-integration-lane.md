@@ -1,6 +1,8 @@
 # Plan 105: Stop rerunning unit tests in the integration lane
 
-> **Executor instructions**: Follow this plan step by step and run every verification command. Change Vitest selection only. Prove unit and integration commands are disjoint and complete. Do not increase parallelism for PTY tests. When done, update this plan's row in `plans/README.md` unless a reviewer says they own the index.
+> **Disposition: REJECTED (2026-08-28). Do not execute.** A cheap-agent trial on Vitest 4.1.5 proved the current `pnpm vitest list test/integration/ --fileParallelism=false` invocation already returns only the 30 integration files: the CLI path filter narrows the broader config include. The required red premise was false. A structural include-only patch and six inventory tests passed targeted/type/build/lint checks on preserved branch `advisor/105-integration-only-lane`, but add complexity without fixing reproduced duplicate execution. Full-suite retries also hit unrelated baseline timeouts covered by Plans 091–092. Reconsider only with measured duplicate execution on the supported Vitest version.
+
+> **Executor instructions**: Historical proposal below. Follow it only if a future audit reproduces duplicate unit execution and the ledger status is explicitly returned to `TODO`.
 >
 > **Drift check (run first)**: `git diff --stat b34bd79..HEAD -- vitest.config.ts package.json .github/workflows/ci.yml scripts/vitest-lane-selection.test.mjs`
 > If this reports an in-scope change, compare the Current state excerpts and assumptions with live code. If behavior or signatures differ, STOP and request plan reconciliation.
@@ -15,6 +17,7 @@
 - **Milestone**: M3 — Lifecycle reliability
 - **Planned at**: commit `b34bd79`, 2026-08-28
 - **Issue**: https://github.com/dhruvkelawala/sumocode/issues/399
+- **Disposition evidence**: cheap trial branch `advisor/105-integration-only-lane`; implementation `28a2661`, blocked-evidence note `fa65980`
 
 ## Why this matters
 

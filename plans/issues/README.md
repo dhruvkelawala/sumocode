@@ -1,6 +1,6 @@
 # Audit issue publication manifest
 
-Published 2026-08-28 to `dhruvkelawala/sumocode` (public) as issues #385–#409 after maintainer confirmation. The plan files/index remain authoritative; post-publication cold-review amendments require an explicit issue-body synchronization pass.
+Published 2026-08-28 to `dhruvkelawala/sumocode` (public) as issues #385–#409 after maintainer confirmation. The plan files/index remain authoritative. Post-review body synchronization completed against planning baseline `6eb9c6c`; Plan 105 was subsequently rejected after the cheap-agent execution trial and issue #399 was closed with that evidence.
 
 The repository currently has only the open `v0.4` GitHub milestone. These issues therefore carry internal milestone M1–M6 in their title/body and remain unassigned to a GitHub milestone. Existing labels only are used; this workflow does not create labels or milestones.
 

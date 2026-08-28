@@ -645,7 +645,7 @@ startup-speed claim.
 | 101 | [Pi compatibility matrix](101-pi-version-compatibility-matrix.md) | P1 | M | M3 | 092, 096 | TODO | [#395](https://github.com/dhruvkelawala/sumocode/issues/395) |
 | 102 | [Remediate dependency advisories — sanitized public brief](issues/102.md) | P1 | M | M2 | — | TODO | [#396](https://github.com/dhruvkelawala/sumocode/issues/396) |
 | 103 | [Replace timing sleeps with state waits](103-replace-timing-sleeps-with-state-waits.md) | P2 | M | M3 | 092 | TODO | [#397](https://github.com/dhruvkelawala/sumocode/issues/397) |
-| 105 | [Integration-only integration lane](105-run-only-integration-tests-in-integration-lane.md) | P2 | S | M3 | — | TODO | [#399](https://github.com/dhruvkelawala/sumocode/issues/399) |
+| 105 | [Integration-only integration lane](105-run-only-integration-tests-in-integration-lane.md) | P2 | S | M3 | — | REJECTED — Vitest 4.1.5 path filtering already yields 30 integration-only files; cheap trial `28a2661` found no red duplicate-execution state | [#399](https://github.com/dhruvkelawala/sumocode/issues/399) |
 | 109 | [Contain subagent lifecycle failures](109-contain-subagent-lifecycle-failures.md) | P1 | M | M3 | 095 | TODO | [#403](https://github.com/dhruvkelawala/sumocode/issues/403) |
 | 108 | [Preserve child executable provenance](108-preserve-child-executable-provenance.md) | P1 | M | M3 | 101 | TODO | [#402](https://github.com/dhruvkelawala/sumocode/issues/402) |
 | 104 | [Terminal delivery recovery E2E](104-terminal-delivery-end-to-end-recovery.md) | P1 | L | M3 | 092, 093, 100 | TODO | [#398](https://github.com/dhruvkelawala/sumocode/issues/398) |

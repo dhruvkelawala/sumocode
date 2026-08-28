@@ -714,6 +714,29 @@ first published Pi release containing clear_queue
 - **Authoritative auto-retry setting display** — upstream-blocked because target
   `get_state` exposes auto-compaction but not current auto-retry state.
 
+## PR #382 reconciliation — steerable and conversational children (094–095)
+
+**Reconciled at:** `b34bd79`, 2026-08-28.
+
+| Plan | Title | Priority | Effort | Depends on | Status |
+|---|---|---|---|---|---|
+| 094 | [Steerable visible subagents with silence-based lifecycle and graceful close](094-visible-subagent-steering-and-lifecycle.md) | P1 | M | — | DONE — originally PR #382 Plan 088; implemented by merged PR #381 at `b34bd79` |
+| 095 | [Conversational children: live visible turns and replies to settled headless children](095-conversational-children.md) | P2 | M | 094 | TODO — rebased onto the merged PR #381 seams |
+
+PR #382 used plan numbers 088–090 concurrently with the deeper Pi RPC audit.
+This index resolves the collision without preserving two queue migrations:
+
+- Its visible-subagent Plan 088 is retained as historical Plan 094 because the
+  implementation already merged in PR #381.
+- Its native-queue Plan 089 is superseded by audited Plan 090. Both choose Pi
+  as the sole general queue authority and use `queue_update`/`clear_queue`, but
+  Plan 090 preserves `prompt.streamingBehavior` preflight semantics, the
+  requested STEER/FOLLOW-UP toggle, session-epoch protection, and the narrow
+  compaction queue.
+- Its conversational-children Plan 090 becomes Plan 095. It remains independent
+  of the next-Pi release gate because it builds on PR #381 and the pinned Pi
+  session/extension seams, not RPC `clear_queue`.
+
 ## Theme expansion — Herdr Terminal (073)
 
 **Planned at:** `933f33d`, 2026-07-17. **Reconciled 2026-07-18:** duplicate status row removed —

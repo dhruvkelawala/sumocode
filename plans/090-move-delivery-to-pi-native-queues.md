@@ -36,6 +36,9 @@
 - **Category**: migration / feature / parity
 - **Planned at**: commit `1ad967b`, 2026-08-27
 - **Deep-audit revision**: commit `42e6eec`, 2026-08-28
+- **PR #382 reconciliation**: its former Plan 089 is superseded by this plan;
+  its useful native-queue requirements are retained here without adopting
+  direct queue commands or removing the requested delivery toggle
 - **Issue**: [#377](https://github.com/dhruvkelawala/sumocode/issues/377)
 - **Execution status**: BLOCKED — wait for the published Pi release containing `clear_queue`, then Plans 088 and 089
 
@@ -80,6 +83,13 @@ Use RPC `prompt + streamingBehavior`, not direct `steer`/`follow_up`, because
 `AgentSession.prompt()` preserves extension-command execution, input hooks,
 skill expansion, and prompt-template expansion before it queues. The lower-level
 commands reject extension commands and bypass the input event.
+
+This deliberately reconciles, rather than stacks with, PR #382's native-queue
+plan. That plan correctly identified Pi as the sole general queue authority,
+`queue_update` as the display snapshot, and `clear_queue` as the restore seam.
+Its direct `steer`/`follow_up` dispatch and removal of Super+Enter conflict with
+the audited extension-input contract and the product decision to expose a
+steer-default toggle, so those two details are not carried forward.
 
 The delivery toggle is not Pi's queue drain mode. The toggle selects the queue
 that receives Enter. Pi's independent `steeringMode`/`followUpMode` selects

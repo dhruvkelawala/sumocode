@@ -2,8 +2,8 @@
 
 > **Executor instructions**: Follow this plan step by step and run every verification command. Begin with a feasibility gate for headless and visible backends. Preserve children on shutdown only after durable identity, recovery, and delivery are proven. Never leave an untracked process running. Do not delete worktrees or task directories automatically. When done, update this plan's row in `plans/README.md` unless a reviewer says they own the index.
 >
-> **Drift check (run first)**: `git diff --stat b34bd79..HEAD -- dist/host dist/extension src/subagents src/activity/subagent-adapter.ts src/activity/subagent-adapter.test.ts src/activity/manager-bridge.ts src/activity/manager-bridge.test.ts src/task-mode.ts src/task-mode.test.ts test/integration/subagent-recovery.test.ts`
-> **Working-tree preflight (run at the same time)**: `git status --short -- dist/host dist/extension src/subagents src/activity/subagent-adapter.ts src/activity/subagent-adapter.test.ts src/activity/manager-bridge.ts src/activity/manager-bridge.test.ts src/task-mode.ts src/task-mode.test.ts test/integration/subagent-recovery.test.ts`. If this reports pre-existing work, STOP and preserve it.
+> **Drift check (run first)**: `git diff --stat b34bd79..HEAD -- dist/host dist/extension src/subagents src/activity/subagent-adapter.ts src/activity/subagent-adapter.test.ts src/activity/manager-bridge.ts src/activity/manager-bridge.test.ts src/task-mode.ts src/task-mode.test.ts test/integration/subagent-recovery.test.ts scripts/visual-v2/fixture-capture.mjs docs/visual/parity/scenarios.json`
+> **Working-tree preflight (run at the same time)**: `git status --short -- dist/host dist/extension src/subagents src/activity/subagent-adapter.ts src/activity/subagent-adapter.test.ts src/activity/manager-bridge.ts src/activity/manager-bridge.test.ts src/task-mode.ts src/task-mode.test.ts test/integration/subagent-recovery.test.ts scripts/visual-v2/fixture-capture.mjs docs/visual/parity/scenarios.json`. If this reports pre-existing work, STOP and preserve it.
 > If commit-range drift changes a Current state behavior/signature, STOP and request plan reconciliation.
 > **Dependency check**: Confirm every plan named in **Depends on** is `DONE` in `plans/README.md`. If any is not DONE, STOP; do not recreate or assume its APIs.
 
@@ -49,7 +49,7 @@ Use terminal persistence as a safety pattern, not as a schema to copy blindly:
 | Purpose | Command | Expected |
 |---|---|---|
 | Registry/subagents | `pnpm vitest run src/subagents/registry.test.ts src/subagents/*.test.ts` | pass |
-| Activity/delivery | `pnpm vitest run src/activity/manager-bridge.test.ts` | pass |
+| Activity/delivery | `pnpm vitest run src/activity/manager-bridge.test.ts && pnpm visual:review -- --scenario fixture-subagent-recovery-states-landscape` | pass; recovered/lost/ambiguous capture exists |
 | Recovery integration | `pnpm vitest run test/integration/subagent-recovery.test.ts --fileParallelism=false` | pass |
 | Full/visual | `pnpm exec tsc --noEmit && pnpm build && pnpm lint && pnpm test && pnpm test:integration && pnpm visual:ci` | exit 0 |
 
@@ -65,6 +65,7 @@ After final source edits, run `pnpm build:host && pnpm build:extension` before `
 - `src/task-mode.ts` marker/heartbeat/session support required for recovery.
 - Subagent Activity/delivery adapter and bridge.
 - `test/integration/subagent-recovery.test.ts` and its isolated fixtures (create).
+- `scripts/visual-v2/fixture-capture.mjs` and `docs/visual/parity/scenarios.json` for one deterministic review-only 160×45 fixture covering recovered, lost, and ambiguous cards. Use the existing activity-cards Bible target only as a comparison baseline; do not alter Bible/runtime goldens.
 
 **Out of scope**:
 - Automatic task-dir/worktree deletion or archival.
@@ -72,6 +73,7 @@ After final source edits, run `pnpm build:host && pnpm build:extension` before `
 - Changing worktree disposition (Plan 113).
 - Automatic stalled-child cancellation (Plan 114).
 - Reusing terminal records as subagent records.
+- Bible HTML/PNG targets, parity runtime goldens/status, required crops, or golden promotion.
 
 ## Git workflow
 
@@ -129,9 +131,9 @@ Persist completion IDs/claims. Check/wait/cancel/close suppress or consume pendi
 
 ### Step 6: Run full gates and visual evidence
 
-Update status/list/card copy to distinguish recovered/lost/ambiguous only using existing voice/tokens. Produce visual review if cards change; no golden promotion.
+Update status/list/card copy to distinguish recovered/lost/ambiguous only using existing voice/tokens. Add fixture `subagent-recovery-states` with deterministic expanded cards for a recovered-running child, a lost child, and an ambiguous-identity child; no live process/clock dependency. Register review-only scenario `fixture-subagent-recovery-states-landscape` at 160×45, compared against the existing activity-cards Bible target. Intentional styled-cell differences must isolate the three recovery labels/evidence lines.
 
-**Verify**: all command-table gates pass.
+**Verify**: `pnpm visual:review -- --scenario fixture-subagent-recovery-states-landscape && pnpm visual:ci` → exit 0; the review pack contains candidate full/chat-area PNGs plus styled-cell/geometry reports showing all three states, and `git status --short docs/ui/bible docs/visual/parity/approved-runtime` is empty. Then run all other command-table gates.
 
 ## Test plan
 
@@ -144,6 +146,7 @@ Cover starting/running/settled cut points, visible/headless feasibility states, 
 - [ ] Durable identity/revision/lease/process verification is fail-closed.
 - [ ] Completion/result delivery is exact-once across replacement.
 - [ ] No automatic record/worktree deletion is introduced.
+- [ ] Deterministic visual review evidence captures recovered, lost, and ambiguous subagent cards.
 - [ ] `pnpm vitest run test/integration/subagent-recovery.test.ts --fileParallelism=false` passes the complete feasibility/transition/handoff/delivery matrix.
 - [ ] Full gates pass.
 - [ ] `git status --short` contains only files listed in Scope plus this plan/index bookkeeping.
@@ -157,6 +160,7 @@ Cover starting/running/settled cut points, visible/headless feasibility states, 
 - Two managers can concurrently signal or deliver one child.
 - Full headless recovery requires a private Pi patch/protocol.
 - Persistence would store prompt/result content in world-readable metadata.
+- Capturing recovery states would require changing a Bible target, required crop, runtime golden/status, or promoting a golden.
 
 ## Maintenance notes
 

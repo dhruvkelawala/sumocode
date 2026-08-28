@@ -2,8 +2,8 @@
 
 > **Executor instructions**: Follow this plan step by step and run every verification command. Preserve every worktree and branch by default. No action may commit, merge, push, open a PR, delete a branch, or remove a worktree without the explicit human choice defined below. Conflict paths must restore the parent checkout and keep the child worktree intact. When done, update this plan's row in `plans/README.md` unless a reviewer says they own the index.
 >
-> **Drift check (run first)**: `git diff --stat b34bd79..HEAD -- dist/host dist/extension src/git/worktree.ts src/git/worktree.test.ts src/git/worktree-disposition.ts src/git/worktree-disposition.test.ts src/subagents/manifest.ts src/subagents/manifest.test.ts src/subagents/registry.ts src/subagents/registry.test.ts src/commands/worktree.ts src/commands/worktree.test.ts src/interaction-registry.ts src/interaction-registry.test.ts src/activity/subagent-adapter.ts src/activity/subagent-adapter.test.ts`
-> **Working-tree preflight (run at the same time)**: `git status --short -- dist/host dist/extension src/git/worktree.ts src/git/worktree.test.ts src/git/worktree-disposition.ts src/git/worktree-disposition.test.ts src/subagents/manifest.ts src/subagents/manifest.test.ts src/subagents/registry.ts src/subagents/registry.test.ts src/commands/worktree.ts src/commands/worktree.test.ts src/interaction-registry.ts src/interaction-registry.test.ts src/activity/subagent-adapter.ts src/activity/subagent-adapter.test.ts`. If this reports pre-existing work, STOP and preserve it.
+> **Drift check (run first)**: `git diff --stat b34bd79..HEAD -- dist/host dist/extension src/git/worktree.ts src/git/worktree.test.ts src/git/worktree-disposition.ts src/git/worktree-disposition.test.ts src/subagents/manifest.ts src/subagents/manifest.test.ts src/subagents/registry.ts src/subagents/registry.test.ts src/commands/worktree.ts src/commands/worktree.test.ts src/interaction-registry.ts src/interaction-registry.test.ts src/activity/subagent-adapter.ts src/activity/subagent-adapter.test.ts scripts/visual-v2/fixture-capture.mjs docs/visual/parity/scenarios.json`
+> **Working-tree preflight (run at the same time)**: `git status --short -- dist/host dist/extension src/git/worktree.ts src/git/worktree.test.ts src/git/worktree-disposition.ts src/git/worktree-disposition.test.ts src/subagents/manifest.ts src/subagents/manifest.test.ts src/subagents/registry.ts src/subagents/registry.test.ts src/commands/worktree.ts src/commands/worktree.test.ts src/interaction-registry.ts src/interaction-registry.test.ts src/activity/subagent-adapter.ts src/activity/subagent-adapter.test.ts scripts/visual-v2/fixture-capture.mjs docs/visual/parity/scenarios.json`. If this reports pre-existing work, STOP and preserve it.
 > If commit-range drift changes a Current state behavior/signature, STOP and request plan reconciliation.
 > **Dependency check**: Confirm every plan named in **Depends on** is `DONE` in `plans/README.md`. If any is not DONE, STOP; do not recreate or assume its APIs.
 
@@ -47,7 +47,7 @@ No automatic merge, push, PR, branch deletion, force removal, or dirty-worktree 
 | Git/worktree | `pnpm vitest run src/git/worktree.test.ts src/commands/worktree.test.ts` | pass |
 | Subagent/tools | `pnpm vitest run src/subagents/manifest.test.ts src/subagents/tools.test.ts` | pass |
 | Command/Activity | `pnpm vitest run src/commands/worktree.test.ts src/interaction-registry.test.ts src/activity/subagent-adapter.test.ts src/divine-query.test.ts` | pass |
-| Full/visual | `pnpm exec tsc --noEmit && pnpm build && pnpm lint && pnpm test && pnpm test:integration && pnpm visual:ci` | exit 0 |
+| Full/visual | `pnpm exec tsc --noEmit && pnpm build && pnpm lint && pnpm test && pnpm test:integration && pnpm visual:review -- --scenario fixture-worktree-result-disposition-landscape && pnpm visual:ci` | exit 0; card/modal capture exists |
 
 ## Committed bundle freshness
 
@@ -63,6 +63,7 @@ After final source/UI edits, run `pnpm build:host && pnpm build:extension` befor
 - `src/interaction-registry.ts` and test to inject the subagent registry/result service into the command.
 - `src/activity/subagent-adapter.ts` and test for result-card hint/status integration.
 - Existing `showDivineQuery()` confirmation surface as a read-only pattern/API.
+- `scripts/visual-v2/fixture-capture.mjs` and `docs/visual/parity/scenarios.json` for one deterministic review-only 160×45 result-card + disposition-modal fixture. Use the existing activity-cards Bible target only as a comparison baseline; do not alter Bible/runtime goldens.
 
 **Out of scope**:
 - Changes to `src/divine-query.ts`; if the existing confirmation API is insufficient, STOP and split that UI work.
@@ -71,6 +72,7 @@ After final source/UI edits, run `pnpm build:host && pnpm build:extension` befor
 - Force-removing dirty worktrees.
 - Applying uncommitted child changes automatically.
 - Rewriting `/sumo:ship` into a general release system.
+- Bible HTML/PNG targets, parity runtime goldens/status, required crops, or golden promotion.
 
 ## Git workflow
 
@@ -112,9 +114,11 @@ Dismiss changes only disposition. Prune requires a second explicit confirmation 
 
 ### Step 5: Surface the loop in Activity/command UX
 
-Add a terse result-card hint and a command/modal showing evidence/actions. Use existing Cathedral modal primitives and voice. Do not add ad hoc ANSI. Keep actions keyboard accessible. Produce visual review evidence.
+Add a terse result-card hint and a command/modal showing evidence/actions. Use existing Cathedral modal primitives and voice. Do not add ad hoc ANSI. Keep actions keyboard accessible.
 
-**Verify**: `pnpm vitest run src/commands/worktree.test.ts src/interaction-registry.test.ts src/activity/subagent-adapter.test.ts src/divine-query.test.ts && pnpm visual:ci` → exit 0; command tests prove `result` never reaches delegation and confirmation cancellation performs no Git mutation; no golden files change.
+Add fixture `worktree-result-disposition` with a settled, unreviewed worktree result card containing deterministic commit/file/cleanliness evidence and overlay `result-disposition`, rendered through the same Divine Query primitive with inspect/apply/dismiss/prune choices and apply focused. Register review-only scenario `fixture-worktree-result-disposition-landscape` at 160×45, compared against the existing activity-cards Bible target. The capture must show both the underlying result card and centered modal.
+
+**Verify**: `pnpm vitest run src/commands/worktree.test.ts src/interaction-registry.test.ts src/activity/subagent-adapter.test.ts src/divine-query.test.ts && pnpm visual:review -- --scenario fixture-worktree-result-disposition-landscape && pnpm visual:ci` → exit 0; command tests prove `result` never reaches delegation and confirmation cancellation performs no Git mutation; review output contains candidate full/chat-area PNGs plus styled-cell/geometry reports for the card/modal; `git status --short docs/ui/bible docs/visual/parity/approved-runtime` is empty.
 
 ### Step 6: Run all gates
 
@@ -131,6 +135,7 @@ Use temporary Git repos/worktrees. Cover zero/one/multiple commits, dirty child,
 - [ ] Dismiss is non-destructive.
 - [ ] Prune is clean-only, non-force, confirmed, and branch-preserving.
 - [ ] No automatic push/merge/PR/branch deletion exists.
+- [ ] Deterministic visual review evidence captures the settled result card and disposition modal together.
 - [ ] Full unit/integration/visual gates pass with review evidence.
 - [ ] `git status --short` contains only files listed in Scope plus this plan/index bookkeeping.
 - [ ] Plan 113's `plans/README.md` row is updated to `DONE` with completion evidence.
@@ -142,6 +147,7 @@ Use temporary Git repos/worktrees. Cover zero/one/multiple commits, dirty child,
 - Applying requires force, branch deletion, or automatic merge.
 - Manifest evidence is stale and cannot be revalidated from Git.
 - UI requires a new overlay outside the shared Cathedral modal contract.
+- Capturing the result flow would require changing a Bible target, required crop, runtime golden/status, or promoting a golden.
 
 ## Maintenance notes
 

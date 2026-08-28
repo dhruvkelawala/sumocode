@@ -36,6 +36,7 @@
 - **Depends on**: Plans 088 and 089
 - **Category**: performance / architecture / tests
 - **Planned at**: commit `42e6eec`, 2026-08-28
+- **Issue**: [#383](https://github.com/dhruvkelawala/sumocode/issues/383)
 - **Execution status**: BLOCKED — coordinated next-Pi release gate, then Plans 088 and 089
 
 ## Outcome

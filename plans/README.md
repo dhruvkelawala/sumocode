@@ -628,7 +628,7 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 | 090 | [Move prompt delivery to Pi queues with a steer-default toggle](090-move-delivery-to-pi-native-queues.md) | P0 | L | 088, 089 | [#377](https://github.com/dhruvkelawala/sumocode/issues/377) | BLOCKED — requires published `clear_queue` plus truthful settled lifecycle |
 | 091 | [Add Pi-native direct bash to the RPC host](091-add-pi-native-direct-bash.md) | P1 | L | 088 | [#378](https://github.com/dhruvkelawala/sumocode/issues/378) | BLOCKED — coordinated next-Pi release gate; may run parallel to 089 after 088 |
 | 092 | [Send native RPC images without losing queued attachments](092-send-native-rpc-images-safely.md) | P1 | M | 088, 090 | [#379](https://github.com/dhruvkelawala/sumocode/issues/379) | BLOCKED — coordinated next-Pi release gate plus native queue ownership |
-| 093 | [Finish history-independent RPC event streaming](093-finish-history-independent-rpc-streaming.md) | P1 | M | 088, 089 | — | BLOCKED — coordinated next-Pi release gate; completes Plan 047's partial O(1) claim after wire/lifecycle correction |
+| 093 | [Finish history-independent RPC event streaming](093-finish-history-independent-rpc-streaming.md) | P1 | M | 088, 089 | [#383](https://github.com/dhruvkelawala/sumocode/issues/383) | BLOCKED — coordinated next-Pi release gate; completes Plan 047's partial O(1) claim after wire/lifecycle correction |
 
 ### Dependency and execution order
 
@@ -718,10 +718,10 @@ first published Pi release containing clear_queue
 
 **Reconciled at:** `b34bd79`, 2026-08-28.
 
-| Plan | Title | Priority | Effort | Depends on | Status |
-|---|---|---|---|---|---|
-| 094 | [Steerable visible subagents with silence-based lifecycle and graceful close](094-visible-subagent-steering-and-lifecycle.md) | P1 | M | — | DONE — originally PR #382 Plan 088; implemented by merged PR #381 at `b34bd79` |
-| 095 | [Conversational children: live visible turns and replies to settled headless children](095-conversational-children.md) | P2 | M | 094 | TODO — rebased onto the merged PR #381 seams |
+| Plan | Title | Priority | Effort | Depends on | Issue | Status |
+|---|---|---|---|---|---|---|
+| 094 | [Steerable visible subagents with silence-based lifecycle and graceful close](094-visible-subagent-steering-and-lifecycle.md) | P1 | M | — | PR [#381](https://github.com/dhruvkelawala/sumocode/pull/381) | DONE — originally PR #382 Plan 088; implemented at `b34bd79` |
+| 095 | [Conversational children: live visible turns and replies to settled headless children](095-conversational-children.md) | P2 | M | 094 | [#384](https://github.com/dhruvkelawala/sumocode/issues/384) | TODO — rebased onto the merged PR #381 seams |
 
 PR #382 used plan numbers 088–090 concurrently with the deeper Pi RPC audit.
 This index resolves the collision without preserving two queue migrations:

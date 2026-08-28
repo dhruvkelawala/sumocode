@@ -36,6 +36,7 @@
 - **Depends on**: Plan 094 (steer channel, silence lifecycle, `manager.sendTo`)
 - **Category**: feature (subagent orchestration ergonomics)
 - **Planned at**: commit `b34bd79`, 2026-08-28
+- **Issue**: [#384](https://github.com/dhruvkelawala/sumocode/issues/384)
 
 ## Why this matters
 

@@ -16,15 +16,16 @@
 - **Category**: migration
 - **Milestone**: M3 — Lifecycle reliability
 - **Planned at**: commit `b34bd79`, 2026-08-28
+- **Reconciled at**: commit `23c010a`, 2026-08-28 (Pi 0.84.3 baseline)
 - **Issue**: https://github.com/dhruvkelawala/sumocode/issues/395
 
 ## Why this matters
 
-`package.json` advertises `~0.84.1` compatibility for Pi AI, coding-agent, and TUI, but development and CI install only 0.84.1. A later allowed 0.84.x can change RPC commands, CLI value flags, built-in slash commands, or extension contracts without any gate. The existing smoke script accepts versions but is not run by CI and checks only install plus direct-Pi dry runs.
+`package.json` advertises `~0.84.3` compatibility for Pi AI, coding-agent, and TUI, but development and CI install only 0.84.3. A later allowed 0.84.x can change RPC commands, CLI value flags, built-in slash commands, or extension contracts without any gate. The existing smoke script accepts versions but is not run by CI and checks only install plus direct-Pi dry runs.
 
 ## Current state
 
-`package.json:27-39` declares peer ranges `~0.84.1` and pins dev dependencies to `0.84.1`. `scripts/smoke-pi-versions.sh` defaults to one version, creates a fixed `/tmp/sumo-pi-${VERSION}` directory, installs only coding-agent plus SumoCode, checks `pi --version`, and tests direct-Pi dry-run bypass. `.github/workflows/ci.yml` has no Pi compatibility job.
+`package.json:27-39` declares peer ranges `~0.84.3` and pins dev dependencies to `0.84.3`. `scripts/smoke-pi-versions.sh` defaults to one version, creates a fixed `/tmp/sumo-pi-${VERSION}` directory, installs only coding-agent plus SumoCode, checks `pi --version`, and tests direct-Pi dry-run bypass. `.github/workflows/ci.yml` has no Pi compatibility job.
 
 AGENTS.md requires every Pi bump to re-verify the RPC declaration contract, hardcoded built-in slash inventory, tool-bypass/security behavior, and direct-Pi modes. The installed declaration is under the candidate package root at `dist/modes/rpc/rpc-types.d.ts`; it is not a tracked SumoCode source file. The SumoCode inventories to compare are `RPC_HOST_SLASH_COMMANDS` and `RPC_HOST_ROUTED_CHILD_COMMANDS` in `src/sumo-tui/rpc/host-actions.ts:154-185`, plus `isTreeNavigationBlockedCommand()` around lines 694-711. `src/sumo-tui/rpc/host-actions.test.ts:1779-1805` already checks SumoCode's table-to-dispatch correspondence but does not compare different installed Pi versions.
 
@@ -71,7 +72,7 @@ Any `package.json` change invalidates both committed bundle manifests. After fin
 
 Create `scripts/pi-compat-contract.mjs` as a pure checker and `scripts/pi-compat-contract.test.mjs` with committed fixtures. The checker must validate: aligned AI/coding-agent/TUI versions; the expected RPC requests/events used by SumoCode against `dist/modes/rpc/rpc-types.d.ts`; SumoCode's hardcoded command inventory against candidate `get_commands`; absence of active approval-gate registration/routes named above; and direct-Pi/`--tui-mode` result records supplied by the smoke script. A changed declaration or command fixture must fail with the missing/extra member names.
 
-Add `--supported-matrix`: resolve the peer minimum (currently 0.84.1) and latest published version satisfying the declared `~0.84.1` range, fail clearly if declared peer ranges diverge, then run those two unique versions. Do not test every patch if the range becomes large; minimum + latest is the required boundary. Preserve explicit version arguments for a pending bump.
+Add `--supported-matrix`: resolve the peer minimum (currently 0.84.3) and latest published version satisfying the declared `~0.84.3` range, fail clearly if declared peer ranges diverge, then run those two unique versions. Do not test every patch if the range becomes large; minimum + latest is the required boundary. Preserve explicit version arguments for a pending bump.
 
 **Verify**: `pnpm vitest run scripts/pi-compat-contract.test.mjs` → current fixture passes; mismatched package versions, removed RPC member, added/removed command, and reintroduced gate fixtures fail for the asserted reason.
 

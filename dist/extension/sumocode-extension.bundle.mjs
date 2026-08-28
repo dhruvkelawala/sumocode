@@ -16612,6 +16612,17 @@ function showEvent(ctx, event) {
       ctx.ui.setStatus("sumocode.login", event.message);
   }
 }
+function logLoginFailure(attempt, providerRef, error) {
+  const failure2 = error instanceof Error ? error : void 0;
+  const stack = failure2?.stack ? failure2.stack.split("\n").slice(0, 8).map((frame) => frame.trim()) : [];
+  logDiagnostic("rpc_login_failed", {
+    provider: attempt?.provider.id ?? providerRef,
+    authType: attempt?.authType,
+    errorName: failure2?.name ?? "non_error_rejection",
+    errorMessage: failure2?.message ?? String(error),
+    stack
+  });
+}
 async function executeRpcLogin(args, ctx, runtime) {
   if (ctx.mode !== "rpc" || !ctx.hasUI) {
     ctx.ui.notify("/login compatibility command requires SumoCode RPC mode", "warning");
@@ -16623,16 +16634,22 @@ async function executeRpcLogin(args, ctx, runtime) {
   }
   const loginAbort = new AbortController();
   activeLoginAbort = loginAbort;
+  let attempt;
   try {
     await runtime.getAvailable();
     if (loginAbort.signal.aborted) throw cancelled();
     const methods = loginMethods(runtime);
+    logDiagnostic("rpc_login_methods", {
+      requested: args.trim(),
+      providers: methods.map((entry) => `${entry.provider.id}:${entry.authType}`)
+    });
     if (methods.length === 0) {
       ctx.ui.notify("No login providers available", "warning");
       return;
     }
     const method = await resolveLoginMethod(args, ctx, methods, loginAbort.signal);
     if (!method || loginAbort.signal.aborted) return;
+    attempt = method;
     const apiKeyMethod = method.provider.auth.apiKey;
     if (method.authType === "api_key" && !apiKeyMethod?.login) {
       ctx.ui.notify(`${apiKeyMethod?.name ?? method.provider.name} is configured outside Pi`, "info");
@@ -16646,6 +16663,7 @@ async function executeRpcLogin(args, ctx, runtime) {
     ctx.ui.notify(`Logged in to ${method.provider.name}`, "info");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (message !== "Login cancelled") logLoginFailure(attempt, args.trim(), error);
     if (!loginAbort.signal.aborted && message !== "Login cancelled") ctx.ui.notify(`Login failed: ${message}`, "error");
   } finally {
     loginAbort.abort();
@@ -16674,18 +16692,19 @@ function registerRpcLoginCommand(pi, deps = {}) {
 }
 
 // src/commands/accounts.ts
-import { execFile as execFile7 } from "node:child_process";
 import { existsSync as existsSync13, mkdirSync as mkdirSync10, readFileSync as readFileSync17, renameSync as renameSync7, writeFileSync as writeFileSync10 } from "node:fs";
 import { homedir as homedir15 } from "node:os";
 import { dirname as dirname13, join as join21 } from "node:path";
-import { promisify as promisify5 } from "node:util";
-var execFileAsync4 = promisify5(execFile7);
-var MULTI_PASS_SOURCE = "npm:pi-multi-pass";
+var ACCOUNTS_CONFIG_FILE = "claude-accounts.json";
+var LEGACY_CONFIG_FILE = "multi-pass.json";
 function resolveAgentDir(deps) {
   return deps.agentDir ?? deps.env?.PI_CODING_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR ?? join21(deps.homeDir ?? homedir15(), ".pi", "agent");
 }
-function resolveMultiPassConfigPath(deps = {}) {
-  return join21(resolveAgentDir(deps), "multi-pass.json");
+function resolveAccountsConfigPath(deps = {}) {
+  return join21(resolveAgentDir(deps), ACCOUNTS_CONFIG_FILE);
+}
+function resolveLegacyConfigPath(deps) {
+  return join21(resolveAgentDir(deps), LEGACY_CONFIG_FILE);
 }
 function isRecord4(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -16707,51 +16726,30 @@ function readDocument(path2) {
     return {};
   }
 }
+function claudeSubscriptionsFrom(document) {
+  if (!Array.isArray(document.subscriptions)) return [];
+  return document.subscriptions.map(parseSubscription).filter((entry) => entry?.provider === "anthropic").sort((left, right) => left.index - right.index);
+}
 function loadClaudeSubscriptions(deps = {}) {
-  const raw = readDocument(resolveMultiPassConfigPath(deps)).subscriptions;
-  if (!Array.isArray(raw)) return [];
-  return raw.map(parseSubscription).filter((entry) => entry?.provider === "anthropic").sort((left, right) => left.index - right.index);
+  const primary = claudeSubscriptionsFrom(readDocument(resolveAccountsConfigPath(deps)));
+  if (primary.length > 0) return primary;
+  if (existsSync13(resolveAccountsConfigPath(deps))) return primary;
+  return claudeSubscriptionsFrom(readDocument(resolveLegacyConfigPath(deps)));
 }
 function saveClaudeSubscriptions(subscriptions, deps = {}) {
-  const path2 = resolveMultiPassConfigPath(deps);
+  const path2 = resolveAccountsConfigPath(deps);
   const document = readDocument(path2);
   const existing = Array.isArray(document.subscriptions) ? document.subscriptions : [];
   const nonClaude = existing.filter((entry) => parseSubscription(entry)?.provider !== "anthropic");
   const next = {
     ...document,
-    subscriptions: [...nonClaude, ...subscriptions],
-    pools: Array.isArray(document.pools) ? document.pools : [],
-    chains: Array.isArray(document.chains) ? document.chains : [],
-    presets: Array.isArray(document.presets) ? document.presets : []
+    subscriptions: [...nonClaude, ...subscriptions]
   };
   mkdirSync10(dirname13(path2), { recursive: true, mode: 448 });
   const temporary = `${path2}.${process.pid}.tmp`;
   writeFileSync10(temporary, `${JSON.stringify(next, null, 2)}
 `, { encoding: "utf8", mode: 384 });
   renameSync7(temporary, path2);
-}
-function packageSource(value) {
-  if (typeof value === "string") return value;
-  if (isRecord4(value) && typeof value.source === "string") return value.source;
-  return void 0;
-}
-function isMultiPassInstalled(deps = {}) {
-  const settingsPath = join21(resolveAgentDir(deps), "settings.json");
-  if (!existsSync13(settingsPath)) return false;
-  try {
-    const parsed = JSON.parse(readFileSync17(settingsPath, "utf8"));
-    if (!isRecord4(parsed) || !Array.isArray(parsed.packages)) return false;
-    return parsed.packages.some((entry) => packageSource(entry)?.includes("pi-multi-pass") === true);
-  } catch {
-    return false;
-  }
-}
-async function defaultInstallMultiPass() {
-  await execFileAsync4("pi", ["install", MULTI_PASS_SOURCE], {
-    env: process.env,
-    timeout: 12e4,
-    maxBuffer: 1024 * 1024
-  });
 }
 function nextIndex(subscriptions) {
   const used = new Set(subscriptions.map((entry) => entry.index));
@@ -16766,17 +16764,20 @@ function authConfigured(ctx, providerId) {
   return ctx.modelRegistry.getProviderAuthStatus(providerId).configured;
 }
 function accounts(ctx, deps) {
+  const activeProvider = ctx.model?.provider;
   return [
     {
       providerId: "anthropic",
-      label: "default Claude account",
-      configured: authConfigured(ctx, "anthropic")
+      label: "default account",
+      configured: authConfigured(ctx, "anthropic"),
+      active: activeProvider === "anthropic"
     },
     ...loadClaudeSubscriptions(deps).map((subscription) => ({
       providerId: accountProviderId(subscription),
       label: subscription.label ?? `Claude account ${subscription.index}`,
       subscription,
-      configured: authConfigured(ctx, accountProviderId(subscription))
+      configured: authConfigured(ctx, accountProviderId(subscription)),
+      active: activeProvider === accountProviderId(subscription)
     }))
   ];
 }
@@ -16786,32 +16787,21 @@ async function defaultLogin(providerId, ctx) {
     runtime = getRpcLoginRuntime(ctx);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    logDiagnostic("accounts_login_runtime_unavailable", { provider: providerId, errorMessage: message });
     ctx.ui.notify(`Sign-in unavailable: ${message}`, "error");
     return;
   }
+  logDiagnostic("accounts_login_start", { provider: providerId });
   await executeRpcLogin(providerId, ctx, runtime);
 }
+function accountState(account) {
+  if (account.active) return "in use";
+  return account.configured ? "signed in" : "sign in required";
+}
 function accountRow(account) {
-  return `${account.label}  ${account.providerId} \xB7 ${account.configured ? "signed in" : "sign in required"}`;
+  return `${account.label} \xB7 ${accountState(account)}  ${account.providerId}`;
 }
 async function addAccount(ctx, deps) {
-  if (!isMultiPassInstalled(deps)) {
-    const install = await ctx.ui.confirm(
-      "SET UP MULTI-ACCOUNT CLAUDE",
-      "SumoCode uses pi-multi-pass to keep each OAuth subscription separate. Install it now?"
-    );
-    if (!install) return;
-    ctx.ui.setStatus("sumocode.accounts", "installing pi-multi-pass\u2026");
-    try {
-      await (deps.installMultiPass ?? defaultInstallMultiPass)();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      ctx.ui.notify(`Unable to install pi-multi-pass: ${message}`, "error");
-      return;
-    } finally {
-      ctx.ui.setStatus("sumocode.accounts", void 0);
-    }
-  }
   const subscriptions = loadClaudeSubscriptions(deps);
   const index = nextIndex(subscriptions);
   const suggestedLabel = index === 2 ? "company" : `Claude account ${index}`;
@@ -16826,7 +16816,7 @@ async function addAccount(ctx, deps) {
   ctx.ui.notify(`Added ${subscription.label} as anthropic-${index}`, "info");
   const reload = await ctx.ui.confirm(
     "RELOAD TO ACTIVATE ACCOUNT",
-    "Reload SumoCode now? After reload, open /accounts and choose the new account to sign in."
+    "Reload SumoCode now? After reload, open /accounts and sign in to the new account."
   );
   if (reload) await (deps.reload ?? ((reloadCtx) => executeSumoReload(reloadCtx)))(ctx);
 }
@@ -16856,7 +16846,7 @@ async function renameAccount(ctx, account, deps) {
 }
 async function accountActions(pi, ctx, account, deps) {
   const actions = [
-    ...account.configured ? ["use this account"] : [],
+    ...account.configured && !account.active ? ["use this account"] : [],
     account.configured ? "sign in again" : "sign in",
     ...account.subscription ? ["rename account"] : []
   ];
@@ -16873,7 +16863,7 @@ async function executeAccountsCommand(pi, ctx, deps = {}) {
   }
   const accountList = accounts(ctx, deps);
   const rows = accountList.map(accountRow);
-  const addLabel = "add Claude account  install/configure pi-multi-pass";
+  const addLabel = "add Claude account";
   const selected = await ctx.ui.select("CLAUDE ACCOUNTS", [...rows, addLabel]);
   if (selected === addLabel) {
     await addAccount(ctx, deps);

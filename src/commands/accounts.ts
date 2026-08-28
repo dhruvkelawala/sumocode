@@ -1,3 +1,4 @@
+// oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof, anti-slop/no-unsafe-dictionary-type -- multi-pass.json boundary parser: subscriptions, pools, chains, and presets are untrusted user-authored JSON; the typeof predicates below are the sanctioned parse and unknown keys must survive round-trips untouched.
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -55,11 +56,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function parseSubscription(value: unknown): MultiPassSubscription | undefined {
 	if (!isRecord(value) || typeof value.provider !== "string" || typeof value.index !== "number") return undefined;
 	if (!Number.isInteger(value.index) || value.index < 2) return undefined;
-	return {
-		provider: value.provider,
-		index: value.index,
-		...(typeof value.label === "string" && value.label.trim() ? { label: value.label.trim() } : {}),
-	};
+	const label = typeof value.label === "string" ? value.label.trim() : "";
+	const subscription: MultiPassSubscription = { provider: value.provider, index: value.index };
+	if (label) return { ...subscription, label };
+	return subscription;
 }
 
 function readDocument(path: string): MultiPassDocument {

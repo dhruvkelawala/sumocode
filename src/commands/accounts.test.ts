@@ -2,6 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
 	executeAccountsCommand,
 	isMultiPassInstalled,
@@ -59,6 +60,22 @@ function makeCtx(options: CtxOptions) {
 
 function withAgentDir(agentDir: string): AccountsCommandDeps {
 	return { agentDir };
+}
+
+function commandContext(ctx: ReturnType<typeof makeCtx>["ctx"]): ExtensionCommandContext {
+	// SAFETY: the double carries every member the accounts command reads (mode, hasUI, ui dialogs, modelRegistry, model); unrelated ExtensionCommandContext members are never touched.
+	return ctx as never;
+}
+
+// SAFETY: the double provides setModel, the only ExtensionAPI member the account flows invoke; switchAccount guards its call sites.
+function extensionApi(setModel?: ExtensionAPI["setModel"]): ExtensionAPI {
+	// SAFETY: the double provides setModel, the only ExtensionAPI member the account flows invoke; switchAccount guards its call sites.
+	return { setModel } as never;
+}
+
+function selectOptionsAt(select: ReturnType<typeof makeCtx>["select"], callIndex: number): string[] {
+	// SAFETY: vitest records each select() invocation as [title, options]; index 1 is always the options string array passed by the command.
+	return select.mock.calls[callIndex][1] as string[];
 }
 
 const ADD_LABEL = "add Claude account  install/configure pi-multi-pass";
@@ -198,7 +215,7 @@ describe("executeAccountsCommand", () => {
 	it("warns outside RPC mode", async () => {
 		const { ctx, notify, select } = makeCtx({ agentDir: tempAgentDir() });
 		ctx.mode = "print";
-		await executeAccountsCommand({} as never, ctx as never, {});
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), {});
 		expect(notify).toHaveBeenCalledWith(expect.stringContaining("/accounts requires"), "warning");
 		expect(select).not.toHaveBeenCalled();
 	});
@@ -214,8 +231,8 @@ describe("executeAccountsCommand", () => {
 			agentDir,
 			auth: { anthropic: true, "anthropic-2": false },
 		});
-		await executeAccountsCommand({} as never, ctx as never, withAgentDir(agentDir));
-		const options = select.mock.calls[0][1] as string[];
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), withAgentDir(agentDir));
+		const options = selectOptionsAt(select, 0);
 		expect(options[0]).toContain("anthropic · signed in");
 		expect(options[1]).toContain("company");
 		expect(options[1]).toContain("anthropic-2 · sign in required");
@@ -232,12 +249,12 @@ describe("executeAccountsCommand", () => {
 		const { ctx } = makeCtx({
 			agentDir,
 			auth: { anthropic: true },
-			onSelect: ((title: string, options: string[]) => {
+			onSelect: (title: string, options: string[]) => {
 				if (title === "CLAUDE ACCOUNTS") return options[1];
 				return options.find((option) => option === "sign in");
-			}) as CtxOptions["onSelect"],
+			},
 		});
-		await executeAccountsCommand({} as never, ctx as never, { ...withAgentDir(agentDir), login });
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), login });
 		expect(login).toHaveBeenCalledWith("anthropic-2", expect.anything());
 	});
 
@@ -258,13 +275,12 @@ describe("executeAccountsCommand", () => {
 			auth: { anthropic: true, "anthropic-2": true },
 			models,
 			currentModel: { provider: "anthropic", id: "claude-sonnet" },
-			onSelect: ((title: string, options: string[]) => {
+			onSelect: (title: string, options: string[]) => {
 				if (title === "CLAUDE ACCOUNTS") return options[1];
 				return options.find((option) => option === "use this account");
-			}) as CtxOptions["onSelect"],
+			},
 		});
-		const pi = { setModel };
-		await executeAccountsCommand(pi as never, ctx as never, withAgentDir(agentDir));
+		await executeAccountsCommand(extensionApi(setModel), commandContext(ctx), withAgentDir(agentDir));
 		expect(setModel).toHaveBeenCalledWith(models[1]);
 	});
 
@@ -284,12 +300,12 @@ describe("executeAccountsCommand", () => {
 			auth: { anthropic: true, "anthropic-2": true },
 			models,
 			currentModel: { provider: "anthropic", id: "claude-opus" },
-			onSelect: ((title: string, options: string[]) => {
+			onSelect: (title: string, options: string[]) => {
 				if (title === "CLAUDE ACCOUNTS") return options[1];
 				return options.find((option) => option === "use this account");
-			}) as CtxOptions["onSelect"],
+			},
 		});
-		await executeAccountsCommand({ setModel } as never, ctx as never, withAgentDir(agentDir));
+		await executeAccountsCommand(extensionApi(setModel), commandContext(ctx), withAgentDir(agentDir));
 		expect(setModel).toHaveBeenCalledWith(models[1]);
 	});
 
@@ -305,8 +321,8 @@ describe("executeAccountsCommand", () => {
 			auth: { anthropic: true, "anthropic-2": false },
 			onSelect: pickOption("company"),
 		});
-		await executeAccountsCommand({} as never, ctx as never, withAgentDir(agentDir));
-		const actionOptions = select.mock.calls[1][1] as string[];
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), withAgentDir(agentDir));
+		const actionOptions = selectOptionsAt(select, 1);
 		expect(actionOptions).not.toContain("use this account");
 		expect(actionOptions).toContain("sign in");
 	});
@@ -321,7 +337,7 @@ describe("executeAccountsCommand", () => {
 			onConfirm: (title) => title !== "",
 			onInput: () => "company",
 		});
-		await executeAccountsCommand({} as never, ctx as never, { ...withAgentDir(agentDir), installMultiPass, reload });
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), installMultiPass, reload });
 
 		expect(installMultiPass).toHaveBeenCalledTimes(1);
 		expect(confirm).toHaveBeenCalledTimes(2);
@@ -347,7 +363,7 @@ describe("executeAccountsCommand", () => {
 			onConfirm: () => true,
 			onInput: () => "second",
 		});
-		await executeAccountsCommand({} as never, ctx as never, { ...withAgentDir(agentDir), reload });
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), reload });
 		expect(input).toHaveBeenCalledWith("ACCOUNT LABEL", "Claude account 3");
 		expect(reload).toHaveBeenCalledTimes(1);
 		expect(loadClaudeSubscriptions(withAgentDir(agentDir))).toEqual([
@@ -367,7 +383,7 @@ describe("executeAccountsCommand", () => {
 			onConfirm: () => true,
 			onInput: () => "company",
 		});
-		await executeAccountsCommand({} as never, ctx as never, { ...withAgentDir(agentDir), installMultiPass, reload });
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), installMultiPass, reload });
 		expect(installMultiPass).not.toHaveBeenCalled();
 		expect(reload).toHaveBeenCalledTimes(1);
 		expect(confirm).toHaveBeenCalledTimes(1);
@@ -383,7 +399,7 @@ describe("executeAccountsCommand", () => {
 			onSelect: pickOption(ADD_LABEL),
 			onConfirm: () => true,
 		});
-		await executeAccountsCommand({} as never, ctx as never, { ...withAgentDir(agentDir), installMultiPass });
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), installMultiPass });
 
 		expect(notify).toHaveBeenCalledWith(expect.stringContaining("Unable to install pi-multi-pass: network down"), "error");
 		expect(confirm).toHaveBeenCalledTimes(1);
@@ -398,7 +414,7 @@ describe("executeAccountsCommand", () => {
 			onSelect: pickOption(ADD_LABEL),
 			onConfirm: () => false,
 		});
-		await executeAccountsCommand({} as never, ctx as never, { ...withAgentDir(agentDir), installMultiPass });
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), installMultiPass });
 		expect(installMultiPass).not.toHaveBeenCalled();
 		expect(input).not.toHaveBeenCalled();
 		expect(existsSync(join(agentDir, "multi-pass.json"))).toBe(false);
@@ -419,13 +435,13 @@ describe("executeAccountsCommand", () => {
 		const { ctx } = makeCtx({
 			agentDir,
 			auth: { anthropic: true },
-			onSelect: ((title: string, options: string[]) => {
+			onSelect: (title: string, options: string[]) => {
 				if (title === "CLAUDE ACCOUNTS") return options[1];
 				return options.find((option) => option === "rename account");
-			}) as CtxOptions["onSelect"],
+			},
 			onInput: () => "personal",
 		});
-		await executeAccountsCommand({} as never, ctx as never, withAgentDir(agentDir));
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), withAgentDir(agentDir));
 		expect(loadClaudeSubscriptions(withAgentDir(agentDir))).toEqual([{ provider: "anthropic", index: 2, label: "personal" }]);
 		const saved = JSON.parse(readFileSync(join(agentDir, "multi-pass.json"), "utf8"));
 		expect(saved.subscriptions).toContainEqual({ provider: "openai", index: 4, label: "work" });
@@ -435,6 +451,7 @@ describe("executeAccountsCommand", () => {
 describe("registerAccountsCommand", () => {
 	it("registers the /accounts slash command", () => {
 		const registerCommand = vi.fn();
+		// SAFETY: the double provides registerCommand, the sole ExtensionAPI member registerAccountsCommand calls.
 		registerAccountsCommand({ registerCommand } as never);
 		expect(registerCommand).toHaveBeenCalledWith(
 			"accounts",
@@ -447,10 +464,12 @@ describe("registerAccountsCommand", () => {
 
 	it("handler delegates to executeAccountsCommand", async () => {
 		const registerCommand = vi.fn();
+		// SAFETY: the double provides registerCommand, the sole ExtensionAPI member registerAccountsCommand calls.
 		registerAccountsCommand({ registerCommand } as never);
-		const handler = registerCommand.mock.calls[0][1].handler as (args: string, ctx: unknown) => Promise<void>;
+		// SAFETY: registerAccountsCommand registers exactly one command whose handler receives the command context double below.
+		const handler = registerCommand.mock.calls[0][1].handler as (args: string, ctx: ExtensionCommandContext) => Promise<void>;
 		const { ctx, select } = makeCtx({ agentDir: tempAgentDir() });
-		await handler("", ctx);
+		await handler("", commandContext(ctx));
 		expect(select).toHaveBeenCalled();
 	});
 });

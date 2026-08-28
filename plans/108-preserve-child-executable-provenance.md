@@ -13,7 +13,7 @@
 - **Priority**: P1
 - **Effort**: M
 - **Risk**: MED
-- **Depends on**: `plans/101-pi-version-compatibility-matrix.md`
+- **Depends on**: `plans/issues/097.md` (prompt transport), `plans/101-pi-version-compatibility-matrix.md`
 - **Category**: tech-debt
 - **Milestone**: M3 — Lifecycle reliability
 - **Planned at**: commit `b34bd79`, 2026-08-28
@@ -119,7 +119,7 @@ Cover explicit absolute binary, PATH command resolution, path with spaces, inval
 
 ## STOP conditions
 
-- Plan 101 is not `DONE` or its named compatibility helper/`--supported-matrix` contract is absent.
+- Plan 097 or 101 is not `DONE`, or Plan 101's named compatibility helper/`--supported-matrix` contract is absent.
 - Commit-range/working-tree preflight changes a provenance assumption, any verification fails twice after a reasonable fix, or completion requires an out-of-scope file.
 - Parent provenance cannot be validated without invoking the binary.
 - Fix requires a global mutable singleton shared across unrelated sessions.

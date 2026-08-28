@@ -21,13 +21,13 @@
 
 ## Why this matters
 
-Public guidance mixes the current RPC-first 0.4.1 product with obsolete v0.1–0.4 roadmaps, a retired private-patch architecture, dead VHS instructions, wrong test/CI claims, a machine-specific checkout path, and incomplete durable-state documentation. Contributors can run the wrong entry point, expose a credential while troubleshooting, repeat shipped work, or treat historical plans as active.
+Public guidance mixes the current RPC-first 0.4.1 product with obsolete v0.1–0.4 roadmaps, a retired private-patch architecture, dead VHS instructions, wrong test/CI claims, machine-specific checkout assumptions outside the canonical primary-tree rule, and incomplete durable-state documentation. Contributors can run the wrong entry point, expose a credential while troubleshooting, repeat shipped work, or treat historical plans as active.
 
 ## Current state
 
 Verified drift includes:
 - `README.md` badge says 0.4.0 while `package.json` is 0.4.1.
-- `AGENTS.md`, `DEV_LOOP.md`, and `SETUP.md` hard-code `/Volumes/SumoDeus NVMe/code/sumocode`; the audited checkout is elsewhere.
+- `DEV_LOOP.md` and `SETUP.md` treat `/Volumes/SumoDeus NVMe/code/sumocode` as the universal checkout. `AGENTS.md` intentionally names it as the canonical primary dev tree and requires quoting paths with spaces; preserve that non-negotiable while making portable contributor commands repository-relative.
 - `DEV_LOOP.md` says the launcher runs `src/extension.ts`, lists obsolete test counts/Pi/version, and claims PR CI/lint do not exist.
 - Canonical runtime entry is `src/extension-entry.ts` via package metadata/spawn helper; `extension.ts` is implementation/source fallback.
 - `docs/perf/startup.md` uses old readiness names/baseline (Plan 094 updates metrics).
@@ -88,9 +88,9 @@ Create `scripts/check-doc-references.mjs` and its fixture-driven test. It must r
 
 ### Step 2: Fix contributor and release guidance
 
-Replace machine-specific checkout paths with repository-relative commands or documented `$SUMOCODE_ROOT`. Correct version badge, Node/Pi/package metadata, canonical `extension-entry.ts` behavior, release propagation, CI/lint/test commands, and remove mutable hard-coded test counts unless generated.
+Replace universal machine-specific checkout assumptions in contributor/setup docs with repository-relative commands or documented `$SUMOCODE_ROOT`. Retain AGENTS.md's canonical `/Volumes/SumoDeus NVMe/code/sumocode` primary-tree rule and its requirement to quote paths with spaces. Correct version badge, Node/Pi/package metadata, canonical `extension-entry.ts` behavior, release propagation, CI/lint/test commands, and remove mutable hard-coded test counts unless generated.
 
-Update AGENTS.md without weakening non-negotiables. Correct the approval narrative with the full citation `plans/076-disable-approval-gate.md`: active installation/registration was intentionally retired; dormant modules/tests remain; external Pi/operator trust policy owns approval. Do not claim the source files were deleted.
+Update AGENTS.md without weakening non-negotiables or removing that canonical path rule. Correct the approval narrative with the full citation `plans/076-disable-approval-gate.md`: active installation/registration was intentionally retired; dormant modules/tests remain; external Pi/operator trust policy owns approval. Do not claim the source files were deleted.
 
 **Verify**: `node scripts/check-doc-references.mjs --check active-claims` → exit 0; checker fixtures prove an active old version/path/entrypoint claim fails while the same text in a correctly bannered historical file passes.
 
@@ -135,7 +135,7 @@ Documentation verification is search/link/file evidence:
 
 ## Done criteria
 
-- [ ] Active docs use repository-relative/configurable paths.
+- [ ] Contributor/setup docs use repository-relative/configurable paths; AGENTS.md retains the canonical primary-tree and quoted-path rules.
 - [ ] Version, Pi, entrypoint, CI, lint, test, and release guidance match current code.
 - [ ] Setup never prints credential values and documents all durable state.
 - [ ] RPC overlay/tool architecture is accurate.
@@ -153,6 +153,7 @@ Documentation verification is search/link/file evidence:
 - A document's historical status is genuinely disputed.
 - Correcting a claim would require exposing private configuration or credential locations beyond existing public contracts.
 - Visual inventory generation changes HTML/PNG outputs.
+- An AGENTS.md edit would remove or weaken the canonical primary-tree or quoted-path rules.
 
 ## Maintenance notes
 

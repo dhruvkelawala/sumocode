@@ -647,7 +647,7 @@ startup-speed claim.
 | 103 | [Replace timing sleeps with state waits](103-replace-timing-sleeps-with-state-waits.md) | P2 | M | M3 | 092 | TODO | [#397](https://github.com/dhruvkelawala/sumocode/issues/397) |
 | 105 | [Integration-only integration lane](105-run-only-integration-tests-in-integration-lane.md) | P2 | S | M3 | — | REJECTED — Vitest 4.1.5 path filtering already yields 30 integration-only files; cheap trial `28a2661` found no red duplicate-execution state | [#399](https://github.com/dhruvkelawala/sumocode/issues/399) |
 | 109 | [Contain subagent lifecycle failures](109-contain-subagent-lifecycle-failures.md) | P1 | M | M3 | 095 | TODO | [#403](https://github.com/dhruvkelawala/sumocode/issues/403) |
-| 108 | [Preserve child executable provenance](108-preserve-child-executable-provenance.md) | P1 | M | M3 | 101 | TODO | [#402](https://github.com/dhruvkelawala/sumocode/issues/402) |
+| 108 | [Preserve child executable provenance](108-preserve-child-executable-provenance.md) | P1 | M | M3 | 097, 101 | TODO | [#402](https://github.com/dhruvkelawala/sumocode/issues/402) |
 | 104 | [Terminal delivery recovery E2E](104-terminal-delivery-end-to-end-recovery.md) | P1 | L | M3 | 092, 093, 100 | TODO | [#398](https://github.com/dhruvkelawala/sumocode/issues/398) |
 | 106 | [Scale terminal runtime with active work](106-scale-terminal-runtime-with-active-work.md) | P2 | L | M3 | 093, 104 | TODO | [#400](https://github.com/dhruvkelawala/sumocode/issues/400) |
 | 107 | [Scale retained transcript/live Activity](107-scale-retained-transcript-and-live-activity.md) | P2 | L | M3 | 103 | TODO | [#401](https://github.com/dhruvkelawala/sumocode/issues/401) |
@@ -666,7 +666,8 @@ startup-speed claim.
    compatibility gate rather than the legacy direct-Pi smoke alone.
 3. **M3 reliability/scale:** 105 remains rejected and is excluded; 103 follows PTY isolation;
    109 follows truthful steering; 104 follows store/redaction foundations; 106 follows the real
-   recovery test; 107 follows state-based tests; 108 follows the Pi matrix.
+   recovery test; 107 follows state-based tests; 108 follows prompt-transport security and the
+   Pi matrix.
 4. **M4 lifecycle/Effect:** after 109, 110 may evaluate Effect off the production path. Independently,
    after 094/104, 111 extracts the plain-TypeScript host lifecycle seam; neither outcome gates the other.
 5. **M5 product durability:** run 112 after 095/104/109. Both 113 and 114 then branch from the

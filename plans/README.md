@@ -263,13 +263,13 @@ last:    056 claude-oauth-401 (user-deferred to end)
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
 | 040 | [Fix unit-test exit gate](040-fix-unit-test-exit-gate.md) | P1 | S | — | DONE (reviewer-approved) — `advisor/040-fix-unit-test-exit-gate` `6734ff5`; `pnpm test` exits 0 twice (1419 tests); also made the sidebar runtime test hermetic |
-| 041 | [Optimistic model/thinking chrome](041-optimistic-model-thinking-chrome.md) | P1 | M | — | DONE (reviewer-approved) — `advisor/041-optimistic-model-thinking-chrome` `4a0c9f0`; optimistic apply + reconcile + error-rollback push, model-list cache, hydration reset; 101 tests |
+| 041 | [Optimistic model/thinking chrome](041-optimistic-model-thinking-chrome.md) | P1 | M | — | DONE UX / CORRECTNESS SUPERSEDED BY 089 — `advisor/041-optimistic-model-thinking-chrome` `4a0c9f0`; optimistic paint shipped, but void `set_thinking_level` success does not prove the requested level survived Pi clamping |
 | 042 | [Stable session selector values](042-stable-session-selector-values.md) | P1 | S | — | DONE (reviewer-approved) — `advisor/042-stable-session-selector-values` `de9c7cd`; /resume, /tree, /fork by stable id + duplicate-label regressions; scope amended to include openForkSelector |
 | 043 | [Transcript replace semantics](043-transcript-replace-semantics.md) | P1 | M | — | DONE (reviewer-approved) — `advisor/043-transcript-replace-semantics` `8914623`; expansion + timestamp survive replace; 60 tests |
 | 044 | [Input router interrupt fixes](044-input-router-interrupt-fixes.md) | P2 | M | — | DONE (reviewer-approved) — `advisor/044-input-router-interrupt-fixes` `eabbf5a`; paste-then-Ctrl-C fixed; Apple Terminal Shift+Enter via guarded lazy pi-tui native probe (case a) with fallback stub |
 | 045 | [Diagnostics file hardening](045-diagnostics-file-hardening.md) | P2 | S | 044 | DONE (reviewer-approved) — `advisor/045-diagnostics-file-hardening` `392648a`; 0600 trace file, selection previews dropped |
 | 046 | [extension_ui protocol hardening](046-extension-ui-protocol-hardening.md) | P1 | M | — | DONE (reviewer-approved) — `advisor/046-extension-ui-protocol-hardening` `ffeae01`; multiline editor(), overlays.drain() on teardown, logged handler errors; 91 tests |
-| 047 | [Streaming pipeline perf](047-streaming-pipeline-perf.md) | P2 | M | 043 | DONE (reviewer-approved) — `advisor/047-streaming-pipeline-perf` `12bb229`; WeakMap key memo + op-hint diff + bounded archive dispose |
+| 047 | [Streaming pipeline perf](047-streaming-pipeline-perf.md) | P2 | M | 043 | PARTIAL HISTORICAL DONE / SUPERSEDED BY 093 — `advisor/047-streaming-pipeline-perf` `12bb229`; WeakMap key memo + op-hint diff + bounded archive dispose landed, but full committed-array cloning remains per delta/event |
 | 048 | [/resume bounded metadata](048-resume-bounded-metadata.md) | P2 | M | 042 | DONE (reviewer-approved) — `advisor/048-resume-bounded-metadata` `22d4303`; byte-capped scan + N+ labels + concurrency 8 |
 | 049 | [Renderer characterization tests](049-renderer-characterization-tests.md) | P2 | M | — | DONE (reviewer-approved) — `advisor/049-renderer-characterization-tests` `144acce`; 6 mutation-tested renderer contracts |
 | 050 | [Indicator narrow invalidation](050-indicator-narrow-invalidation.md) | P2 | M | 049 | DONE (reviewer-approved) — `advisor/050-indicator-narrow-invalidation` `7d2dbff`; scoped repaintRegion, no relayout on tick, overlay/selection fallback, frame convergence proven |
@@ -428,7 +428,7 @@ what "keybindings don't work" has meant all along.
 | DF-2 (retry) | ✅ FIXED (`fa8f056`, merged). Confirmed main's `setStatus` is a TOTAL no-op — SumoCode's own `installFooter` replaces Pi's default footer and never reads `getExtensionStatuses()`, and main's adapter never wires an `onStatus` callback. `ExtensionStatusPublication.render()` now returns `[]` to match; bookkeeping (`getStatuses()`) kept intact for other readback paths, not deleted.
 | DF-5 | ✅ RE-AUDITED (exhaustive, from Pi's canonical `core/slash-commands.js` registry — 22 commands + 3 hidden). Good news: most of Pi's real command set is now Class A (done) thanks to 035 Phase 1. Genuinely still open: `/trust` `/share` (Phase 2, unexecuted), `/fork` fuzzy-filter polish, 2 new `/settings` toggles (`set_steering_mode`/`set_follow_up_mode` — buildable today, just unwired). **`/scoped-models` re-verdict 2026-07-15: buildable host-side** — the private `_scopedModels` field is still unreadable over RPC, but plan 057's host-authority ring (`enabled-models.ts` + `set_model`) proved the pattern; make the ring session-mutable, move forward Ctrl+P off `cycle_model`, reimplement session persistence + per-model thinking overrides host-side. See plan 035 Phase 2 for the build plan; upstream `get/set_scoped_models` verbs demoted to nice-to-have. `/debug` + 2 easter eggs correctly out of scope.
 | DF-6 | ✅ DONE — 037 executed (`4383f37`, merged). Selector rebuilt on `scriptorium-chrome.ts` panel chrome (bg fill, ❈/· Cathedral glyphs, ✦ header, footer hint, description/current-value column, ● current marker where real state exists). `SelectList` bypassed entirely rather than forked (its row-prefix had no override hook); scroll/selection math reimplemented to match; `getKeybindings()` still used for input parity. 8 new styling-regression tests assert real SGR/glyphs, not substrings.
-| DF-7 | ✅ FIXED (`021004d`). After 038 landed, dogfooding found the newly-wired model/thinking keybindings "not optimistic" — footer sat on the stale value for a few seconds. Root cause: `RpcHostControls.setModel`/`cycleModel`/`setThinkingLevel`/`cycleThinkingLevel` each sent the real mutating RPC command, then threw away its response and issued a *second* `get_state` round-trip just to read back the same thing — `set_model`/`cycle_model`/`cycle_thinking_level`'s own responses already carry the resulting model/level inline (`rpc-types.d.ts`). Added `RpcHostStateStore.applyModelChange`/`applyThinkingLevel` to patch the store directly from the first response; `refreshState()` (boot, `/resume`, etc.) is untouched. Halves the round-trips on every affected keybinding.
+| DF-7 | ✅ UX FIXED (`021004d`); THINKING AUTHORITY SUPERSEDED BY 089. Optimistic model/thinking paint removed the visible delay. Correction from the 2026-08-28 RPC audit: `set_model`, `cycle_model`, and `cycle_thinking_level` provide effective response data, but `set_thinking_level` is a void acknowledgement and Pi may clamp it. When clamp returns to the already-current level, Pi emits no change event, so one authoritative readback is required; the old “same result, half the round trips” claim is invalid for that setter.
 | DF-8 | ✅ FIXED (`175eae3`). User reported the above-editor "Working…" indicator "stops when streaming or thinking, or animates weird." Root cause: `RpcShellAdapter.renderWorkingIndicator` advanced its own animation tick every time it was CALLED, not on a wall-clock cadence — render frequency tracks agent activity, which is bursty (many renders/sec while streaming deltas arrive → animation raced ahead; near-zero renders while waiting on a tool call/first token → animation froze solid). Added a real `setInterval` (`workingIndicatorTimer`, keyed to the active theme's `intervalMs`) started/stopped on idle↔busy transitions, mirroring classic Pi's `WorkingIndicatorComponent`; `RpcShellAdapterOptions` gained a `requestRender` callback (wired from `RpcHostRuntime.scheduleRender`) so the timer can trigger its own repaint instead of piggybacking on renders that may not happen. 5 new regression tests with fake timers pin: ticks with zero renders in between, doesn't race under a render burst, stops immediately on going idle, calls `requestRender` every tick, and the timer is cleared on `dispose()`.
 
 ## Verification gates
@@ -611,7 +611,8 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 **Upstream inventory:** [`PI_RPC_MAIN_SPEC_RESEARCH.md`](../docs/research/PI_RPC_MAIN_SPEC_RESEARCH.md)
 
 **Visual map:** [`SUMOCODE_PI_RPC_AUDIT_VISUAL.html`](../docs/research/SUMOCODE_PI_RPC_AUDIT_VISUAL.html)
-**Planned at:** `1ad967b`, 2026-08-27.
+**Planned at:** `1ad967b`, 2026-08-27. **Deep-audit revision:** `42e6eec`,
+2026-08-28.
 
 > **Global execution gate:** every plan in this track is BLOCKED until the first
 > published `@earendil-works/pi-coding-agent` release whose shipped public types
@@ -622,11 +623,12 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 
 | Plan | Title | Priority | Effort | Depends on | Issue | Status |
 |---|---|---|---|---|---|---|
-| 088 | [Upgrade to the first published Pi release containing `clear_queue`](088-upgrade-pi-clear-queue-contract.md) | P0 | M | published Pi release | [#375](https://github.com/dhruvkelawala/sumocode/issues/375) | BLOCKED — latest published Pi is 0.84.3; `clear_queue` remains Unreleased |
-| 089 | [Make SumoCode project Pi's lifecycle and policy state truthfully](089-correct-rpc-lifecycle-and-projection.md) | P0 | L | 088 | [#376](https://github.com/dhruvkelawala/sumocode/issues/376) | BLOCKED — coordinated next-Pi release gate; then Plan 088 |
+| 088 | [Upgrade to the first published Pi release containing `clear_queue`](088-upgrade-pi-clear-queue-contract.md) | P0 | L | published Pi release | [#375](https://github.com/dhruvkelawala/sumocode/issues/375) | BLOCKED — latest published Pi is 0.84.3; `clear_queue` remains Unreleased |
+| 089 | [Project Pi's authoritative RPC state truthfully](089-correct-rpc-lifecycle-and-projection.md) | P0 | L | 088 | [#376](https://github.com/dhruvkelawala/sumocode/issues/376) | BLOCKED — next-Pi gate; includes thinking clamp/readback, mutation ordering/session epochs, extension-command reconciliation, persistence honesty, lifecycle/policy projection |
 | 090 | [Move prompt delivery to Pi queues with a steer-default toggle](090-move-delivery-to-pi-native-queues.md) | P0 | L | 088, 089 | [#377](https://github.com/dhruvkelawala/sumocode/issues/377) | BLOCKED — requires published `clear_queue` plus truthful settled lifecycle |
 | 091 | [Add Pi-native direct bash to the RPC host](091-add-pi-native-direct-bash.md) | P1 | L | 088 | [#378](https://github.com/dhruvkelawala/sumocode/issues/378) | BLOCKED — coordinated next-Pi release gate; may run parallel to 089 after 088 |
 | 092 | [Send native RPC images without losing queued attachments](092-send-native-rpc-images-safely.md) | P1 | M | 088, 090 | [#379](https://github.com/dhruvkelawala/sumocode/issues/379) | BLOCKED — coordinated next-Pi release gate plus native queue ownership |
+| 093 | [Finish history-independent RPC event streaming](093-finish-history-independent-rpc-streaming.md) | P1 | M | 088, 089 | — | BLOCKED — coordinated next-Pi release gate; completes Plan 047's partial O(1) claim after wire/lifecycle correction |
 
 ### Dependency and execution order
 
@@ -637,28 +639,33 @@ first published Pi release containing clear_queue
              088 upgrade + contract gate
                 ┌──────┴─────────┐
                 ▼                ▼
-        089 lifecycle truth   091 direct bash
-                │
-                ▼
-        090 native queues + STEER default toggle
-                │
-                ▼
-        092 safe native images + busy capability gate
+      089 authoritative state  091 direct bash
+          ┌─────┴─────┐
+          ▼           ▼
+  090 native queues  093 history-independent streaming
+          │
+          ▼
+  092 atomic idle-only native images
 ```
 
 - 088 updates `pi-ai`, `pi-coding-agent`, and `pi-tui` together, repairs target
-  launcher/doctor drift, and proves `clear_queue` against the installed worker.
-- 089 corrects `agent_end`/`agent_settled`, the fake worker, policy hydration,
-  tool state, retry/compaction/error presentation, and additive usage fields
-  before queue UX relies on that state.
+  launcher/doctor/clipboard/smoke drift, qualifies thinking persistence and
+  concurrency, and proves `clear_queue` against the installed worker.
+- 089 corrects `agent_end`/`agent_settled`, the fake worker, model/thinking
+  clamping and save truth, ordered session-bound mutations, extension-command
+  ownership, policy hydration, tool state, retry/compaction/error presentation,
+  and additive usage fields before queue UX relies on that state.
 - 090 is intentionally atomic: direct native enqueue, visible STEER/FOLLOW-UP
   toggle, typed queue display, clear/restore, and clear-before-abort must land
   together. Ordinary busy Enter defaults to exact classic steering behavior.
 - 091 is operationally independent after 088. Rebase its small lifecycle seams
   over 089/090 if those land first; direct user bash remains distinct from the
-  LLM bash tool and its approval gate.
+  LLM `tool_call` lifecycle. Pi's built-in bash remains intentionally ungated.
 - 092 follows 090 because target `clear_queue` is text-only. It sends idle images
-  natively and blocks busy attachment enqueue rather than claiming lossy restore.
+  without `streamingBehavior`, letting Pi atomically reject an idle-to-busy race,
+  and never authorizes an unrecoverable attachment queue.
+- 093 follows 089's corrected event fixture/state model and removes the remaining
+  committed-history clone/refold from plain deltas and neutral events.
 
 ### Locked decisions
 
@@ -668,9 +675,11 @@ first published Pi release containing clear_queue
 - The delivery toggle chooses `steer` versus `followUp`; it defaults to `steer`
   and is process-local. It is separate from Pi's `one-at-a-time`/`all` drain
   settings.
-- Editor input uses `prompt + streamingBehavior`, never direct `steer`/
-  `follow_up`, so extension commands, input hooks, skills, and templates retain
-  classic preflight behavior.
+- Text-only editor input uses `prompt + streamingBehavior`, never direct
+  `steer`/`follow_up`, so extension commands, input hooks, skills, and templates
+  retain classic preflight behavior. Image-bearing prompts omit the behavior
+  field so Pi atomically accepts only while idle; text-only queue recovery
+  cannot safely represent images.
 - Alt+Enter remains a one-shot follow-up. Super+Enter becomes the delivery-mode
   toggle and no longer force-sends a host FIFO item.
 - Alt+Up clears/restores without abort. Escape clears/restores before agent
@@ -695,6 +704,10 @@ first published Pi release containing clear_queue
 - **Lossless busy native images** — deferred until RPC exposes structured queue
   entries/images or another atomic recovery contract. Text matching is not a
   stable attachment identity.
+- **Persistent model/thinking save parity** — upstream capability-gated. Current
+  RPC setters mutate the session but expose no `persist` option; SumoCode must
+  not advertise `app.models.save` unless the qualified release supplies an
+  official command/field.
 - **Exact Escape during compaction/branch summarization** — upstream-blocked.
   RPC exposes neither `abort_compaction` nor `abort_branch_summary`; generic
   `abort` cancels neither.
@@ -745,10 +758,12 @@ TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-
   audit): rejected — `scripts/visual-v2/index.mjs:203-217` gates required crops against the Bible
   target before golden promotion and exits 1 on failure; the unit test's golden-existence filter
   intentionally covers only promoted scenarios (promotion needs Dhruv's approval per AGENTS.md).
-- **"Approval fails open under RPC"** (pre-migration landmine): verified closed — cancel, timeout,
-  malformed values, thrown errors, and missing UI all normalize to "no" and block
-  (`src/approval-modal.ts` `showRpcApprovalPrompt` + `installApprovalGate`). Track D may change
-  presentation or region mounting, but must not weaken the gate logic.
+- **"Approval fails open under RPC"** (historical pre-removal landmine): the
+  modal implementation itself failed closed when installed, but current product
+  architecture intentionally does not install a gate for Pi built-in tools.
+  `src/extension.test.ts` now pins the canonical non-blocking full-install
+  boundary. Do not use the dormant modal's isolated tests as evidence of an
+  active LLM bash gate.
 - **Reuse `chat-viewport-controller` / `installChatViewportBridge` in the RPC host** (2026-07-02
   audit): rejected as a direct import because it bridges into Pi InteractiveMode internals that do
   not exist under RPC. Track D instead extracts shared transcript/input behavior from it and adapts

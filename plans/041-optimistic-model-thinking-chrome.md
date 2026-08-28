@@ -1,5 +1,16 @@
 # Plan 041: Make model/thinking changes update chrome instantly (optimistic, one round-trip max)
 
+> **Post-audit correction (2026-08-28)**: This is a completed historical plan,
+> not a valid implementation instruction for thinking-level authority. Pi may
+> clamp `set_thinking_level`, its success response carries no effective level,
+> and it emits `thinking_level_changed` only when the effective value changes.
+> The shipped optimistic UX remains useful, but the claim that “the level we
+> asked for is the result” is false when Pi clamps to the already-current level
+> and emits no event. Plan 089 supersedes that invariant with authoritative
+> post-success reconciliation, session-epoch ordering, and double-failure
+> handling. Do not re-execute this plan or reuse its one-round-trip requirement
+> for the void thinking setter.
+
 > **Executor instructions**: Follow this plan step by step. Run every
 > verification command and confirm the expected result before moving to the
 > next step. If anything in the "STOP conditions" section occurs, stop and
@@ -18,6 +29,8 @@
 - **Depends on**: none
 - **Category**: bug + perf
 - **Planned at**: commit `86e5062`, 2026-07-07
+- **Historical result**: UX optimization DONE; thinking correctness superseded
+  by release-gated Plan 089
 
 ## Why this matters
 
@@ -258,3 +271,7 @@ hydrate-reset, rename-no-double-fetch.
   computation in the backward handler can be deleted.
 - Follow-up deferred: `/model` selector open still awaits a full
   `get_available_models` (cache from Step 3 also speeds this after first use).
+- Post-audit invariant: optimistic presentation may reduce perceived latency,
+  but only a typed effective payload, change event, or authoritative state
+  readback can verify the final thinking level. Event silence is not
+  confirmation.

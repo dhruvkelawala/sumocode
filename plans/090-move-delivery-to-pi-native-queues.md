@@ -9,7 +9,7 @@
 > **Drift check (run first)**:
 >
 > ```bash
-> git diff --stat 1ad967b..HEAD -- \
+> git diff --stat 42e6eec..HEAD -- \
 >   src/cathedral/input-frame.ts src/cathedral/input-frame.test.ts \
 >   src/sumo-tui/rpc/controls.ts src/sumo-tui/rpc/controls.test.ts \
 >   src/sumo-tui/rpc/state.ts src/sumo-tui/rpc/state.test.ts \
@@ -35,6 +35,7 @@
 - **Depends on**: Plans 088 and 089
 - **Category**: migration / feature / parity
 - **Planned at**: commit `1ad967b`, 2026-08-27
+- **Deep-audit revision**: commit `42e6eec`, 2026-08-28
 - **Issue**: [#377](https://github.com/dhruvkelawala/sumocode/issues/377)
 - **Execution status**: BLOCKED — wait for the published Pi release containing `clear_queue`, then Plans 088 and 089
 
@@ -97,6 +98,10 @@ that receives Enter. Pi's independent `steeringMode`/`followUpMode` selects
 - `host.ts:1698-1705` restores the local queue synchronously before abort; this
   cannot preserve ordering with asynchronous `clear_queue`.
 - `state.ts:177-185` flattens Pi steering and follow-up arrays into one list.
+- `state.ts:84-86,111-132` retains Pi queue text outside the chrome snapshot
+  without a session owner, then combines that old text with a newly hydrated
+  session's count. Session B can inherit session A's queue projection even when
+  B never emits a correcting `queue_update`.
 - `shell-adapter.ts:497-533` labels all messages generically `QUEUED`.
 - `editor.ts:580-582` exposes Alt+Enter follow-up, Super+Enter force-send, and
   Alt+Up dequeue; no mode toggle exists.
@@ -169,8 +174,16 @@ separately. `pendingMessageCount` derives from those snapshots plus only the
 narrow compaction-local queue. Malformed elements are ignored defensively; an
 absent queue is not invented from message count.
 
+Bind Pi queue snapshots to Plan 089's authoritative session epoch. Advance or
+clear that ownership synchronously before new/switch/fork/clone destination
+hydration; only same-epoch `queue_update` events may repopulate the text. A
+`get_state.pendingMessageCount` value can represent unknown queued items but
+must never preserve old-session text to explain the count.
+
 **Verify**: controls/state tests prove exact request shape, restoration order,
-separate snapshots, malformed payload behavior, and clearing.
+separate snapshots, malformed payload behavior, clearing, and queue text/count
+ownership across new/switch/fork/clone when the destination emits no
+`queue_update`.
 
 ### Step 2: Replace force-send with the process-local delivery toggle
 
@@ -279,6 +292,8 @@ Do not promote runtime goldens without Dhruv's approval.
 - Alt+Up restores steering then follow-up then current draft.
 - Escape restores before abort; failed clear never reports cancellation.
 - Session replacement/tree navigation cannot apply stale clear results.
+- Session B never renders session A's queue text or derives B's count from A's
+  retained snapshot.
 - Compaction-local messages retain delivery mode and flush safely.
 - Handled extension input requires no force-send disposition heuristic.
 
@@ -289,6 +304,8 @@ Do not promote runtime goldens without Dhruv's approval.
 - [ ] Enter uses `prompt + streamingBehavior`; Alt+Enter always uses follow-up.
 - [ ] Alt+Up and Escape use the ordered `clear_queue` transaction.
 - [ ] Queue kinds are separately visible and correctly counted.
+- [ ] Pi queue snapshots are session-epoch bound and cleared before destination
+  hydration.
 - [ ] The old force-send action/barrier has no production references.
 - [ ] The local scheduler holds only compaction/summarization submissions.
 - [ ] Unit, integration, real-Pi, visual CI, lint, typecheck, and build pass.
@@ -310,6 +327,8 @@ Do not promote runtime goldens without Dhruv's approval.
 - Keep delivery selection and queue drain mode named distinctly in types, copy,
   and settings. “Follow-up mode” is otherwise ambiguous.
 - `queue_update` is a full snapshot, not an append event.
+- Queue text has a session owner. `get_state` supplies only a count, so it cannot
+  authorize carrying queue strings across an identity change.
 - Classic-equivalent steering happens after the current assistant response and
   its tool calls; it does not preempt an executing tool.
 - Future structured queue IDs/images may allow lossless attachment recovery, but

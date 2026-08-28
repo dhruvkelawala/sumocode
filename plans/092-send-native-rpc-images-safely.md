@@ -10,7 +10,7 @@
 > **Drift check (run first)**:
 >
 > ```bash
-> git diff --stat 1ad967b..HEAD -- \
+> git diff --stat 42e6eec..HEAD -- \
 >   src/cathedral/editor-draft-state.ts src/cathedral/editor-draft-state.test.ts \
 >   src/cathedral/cathedral-editor.ts src/cathedral/cathedral-editor.test.ts \
 >   src/sumo-tui/rpc/clipboard-paste.ts src/sumo-tui/rpc/clipboard-paste.test.ts \
@@ -31,6 +31,7 @@
 - **Depends on**: Plans 088 and 090
 - **Category**: feature / correctness
 - **Planned at**: commit `1ad967b`, 2026-08-27
+- **Deep-audit revision**: commit `42e6eec`, 2026-08-28
 - **Issue**: [#379](https://github.com/dhruvkelawala/sumocode/issues/379)
 - **Execution status**: BLOCKED — wait for the published Pi release containing `clear_queue`, then Plans 088 and 090
 
@@ -46,8 +47,10 @@ Because target-main `queue_update` and `clear_queue` expose only strings, a draf
 with attachments is not sent into steering/follow-up or the local compaction
 queue. While Pi is busy, SumoCode keeps the draft intact and tells the user that
 native image delivery waits for idle. Text-only drafts continue to use Plan
-090's native queues. This explicit capability gate prevents Alt+Up/Escape from
-claiming recovery while discarding image content.
+090's native queues. Image-bearing `prompt` requests deliberately omit
+`streamingBehavior`, so Pi atomically starts them only while idle or rejects if
+the state changed after SumoCode's advisory check. This capability gate prevents
+Alt+Up/Escape from claiming recovery while discarding image content.
 
 ## Why this matters
 
@@ -84,12 +87,13 @@ text makes a host-side attachment lookup ambiguous, so do not invent one.
 
 | Case | Required result |
 |---|---|
-| Idle text + images | send text and native `images[]`; clear only after correlated success |
-| Idle images only | send a valid empty/minimal text with native `images[]` as permitted by the shipped type/runtime |
+| Idle text + images | send text and native `images[]` without `streamingBehavior`; clear only after correlated preflight success |
+| Idle images only | send valid empty/minimal text with native `images[]` and no busy-queue behavior, as permitted by the shipped type/runtime |
 | Missing/unreadable/unsupported file | preserve draft and attachments; show bounded error |
 | Preflight rejection | preserve full typed draft |
 | Ambiguous transport failure | preserve local attachment files/metadata and say acceptance is unknown; never auto-resend |
 | Busy/compacting with attachments | do not enqueue; keep draft untouched; tell user to wait for idle or remove attachments |
+| Idle check races with new activity | Pi rejects the behavior-less prompt atomically; preserve the complete draft and prove no queue entry exists |
 | Busy text-only | unchanged Plan 090 steer/follow-up behavior |
 | Alt+Up/Escape | text queue recovery remains truthful; no native attachment could have entered that queue |
 
@@ -209,20 +213,23 @@ redacted errors.
 
 ### Step 4: Send native images only through the safe dispatch path
 
-Extend the Plan 090 prompt sender to accept `images`. When Pi is idle and not
-compacting/summarizing, send:
+Extend the Plan 090 prompt sender to accept `images`. The host idle check remains
+an early UX/read-avoidance optimization, not the safety authority. For every
+image-bearing submission send:
 
 ```ts
 {
 	type: "prompt",
 	message: draft.text,
 	images,
-	streamingBehavior: selectedMode,
 }
 ```
 
-Keep the behavior field even while idle, matching Plan 090's race-free command
-shape. On success, commit editor history and clear the typed draft. On explicit
+Omitting `streamingBehavior` is mandatory: Pi checks its live state inside
+`prompt` and either starts immediately or rejects. Supplying Plan 090's selected
+mode would authorize an idle-to-busy race to enqueue the images into a queue
+whose `clear_queue` result cannot reconstruct them. On correlated preflight
+success, commit editor history and clear the typed draft. On explicit busy/other
 failure, preserve it. On ambiguous timeout/child exit, never auto-resend; retain
 local attachment metadata and show acceptance-unknown recovery copy.
 
@@ -231,7 +238,8 @@ submission, decline before reading/encoding files and leave the editor untouched
 Text-only drafts continue normally.
 
 **Verify**: host/client tests assert exact JSON shape without snapshotting raw
-base64, idle race behavior, success/failure/unknown ownership, and busy gate.
+base64, absence of `streamingBehavior`, deterministic stale-idle race rejection
+with zero queue entries, success/failure/unknown ownership, and busy gate.
 
 ### Step 5: Prove real-worker and privacy behavior
 
@@ -268,6 +276,7 @@ Run every command in the table. Do not promote goldens.
 - MIME/path/size/signature validation and exact byte encoding.
 - Text+image and image-only RPC payloads.
 - Success, explicit rejection, and ambiguous transport failure.
+- Idle-to-busy race is rejected by Pi and creates no steering/follow-up entry.
 - Busy/compaction gate preserves every attachment and sends nothing.
 - No base64/temp path in diagnostics, notifications, cache, or visual output.
 - Resume/durable message renders compactly without duplicate/raw data.
@@ -278,6 +287,8 @@ Run every command in the table. Do not promote goldens.
 - [ ] Image-only and multi-image submissions work against the real worker.
 - [ ] Draft clearing is two-phase and failures preserve attachment identity.
 - [ ] Busy/compacting images fail closed without entering text-only queues.
+- [ ] Every image-bearing prompt omits `streamingBehavior`; a stale host idle
+  check cannot enqueue an unrecoverable attachment.
 - [ ] Text-only Plan 090 behavior is unchanged.
 - [ ] Base64 is absent from diagnostics, caches, notifications, and committed fixtures.
 - [ ] Unit, integration, visual CI, lint, typecheck, and build pass.
@@ -291,6 +302,8 @@ Run every command in the table. Do not promote goldens.
 - The target adds structured recoverable queue entries; amend rather than ignore them.
 - Correct busy recovery requires matching attachments by prompt string/order.
 - A draft would be cleared before correlated acceptance or an attachment silently dropped.
+- The target accepts a behavior-less image prompt into a busy queue instead of
+  rejecting it; STOP until an atomic idle-only/structured recovery contract exists.
 - Validation requires reading an unbounded file or logging encoded payloads.
 - The change would alter classic extension-only behavior.
 
@@ -298,6 +311,9 @@ Run every command in the table. Do not promote goldens.
 
 - The busy gate is capability-driven. Remove it only with an atomic structured
   queue recovery API and dedicated migration tests.
+- Host `isStreaming` is advisory. The behavior-less Pi prompt is the atomic busy
+  gate for image-bearing submissions; never add the delivery mode to that wire
+  shape while queue restoration remains text-only.
 - Queue text restoration matching classic Pi does not imply image restoration;
   keep those claims separate in copy and release notes.
 - If provider/image limits vary, validate against the installed Pi abstraction

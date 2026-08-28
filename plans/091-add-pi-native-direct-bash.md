@@ -3,13 +3,13 @@
 > **Executor instructions**: Do not execute until Plan 088 is DONE. Read Pi's
 > shipped `bash`, `bash_execution_update`, and `abort_bash` types before editing.
 > Implement direct bash as its own user-initiated activity lifecycle; do not route
-> it through the LLM bash-tool approval gate or disguise it as an agent prompt.
+> it through the LLM `tool_call` lifecycle or disguise it as an agent prompt.
 > Stop on any contract or security-boundary mismatch.
 >
 > **Drift check (run first)**:
 >
 > ```bash
-> git diff --stat 1ad967b..HEAD -- \
+> git diff --stat 42e6eec..HEAD -- \
 >   src/sumo-tui/rpc/client.ts src/sumo-tui/rpc/client.test.ts \
 >   src/sumo-tui/rpc/controls.ts src/sumo-tui/rpc/controls.test.ts \
 >   src/sumo-tui/rpc/host-actions.ts src/sumo-tui/rpc/host-actions.test.ts \
@@ -30,6 +30,7 @@
 - **Depends on**: Plan 088; may execute in parallel with Plan 089 after rebasing compatible lifecycle state
 - **Category**: feature / parity
 - **Planned at**: commit `1ad967b`, 2026-08-27
+- **Deep-audit revision**: commit `42e6eec`, 2026-08-28
 - **Issue**: [#378](https://github.com/dhruvkelawala/sumocode/issues/378)
 - **Execution status**: BLOCKED — wait for the published Pi release containing `clear_queue` and Plan 088, per the coordinated release gate
 
@@ -93,7 +94,9 @@ Classic input ordering to preserve:
 - busy Alt+Enter remains a prompt follow-up string and does not execute shell;
 - an empty `!`/`!!` does not start an operation;
 - direct user bash is explicit local execution and is not an LLM tool call, so
-  the dangerous-tool approval modal must not intercept it.
+  it must never emit/enter the LLM `tool_call` seam. SumoCode intentionally does
+  not gate Pi's built-in bash tool either; this plan must preserve that existing
+  architecture rather than assert a dormant approval boundary.
 
 ## Commands you will need
 
@@ -102,7 +105,7 @@ Classic input ordering to preserve:
 | Client/controls | `pnpm vitest run src/sumo-tui/rpc/client.test.ts src/sumo-tui/rpc/controls.test.ts` | all pass |
 | Host/interrupt | `pnpm vitest run src/sumo-tui/rpc/host-actions.test.ts src/sumo-tui/rpc/host.test.ts src/sumo-tui/rpc/interrupt.test.ts` | all pass |
 | Direct bash integration | `pnpm vitest run test/integration/rpc-direct-bash.test.ts --fileParallelism=false` | all fixture and real-worker smokes pass |
-| Approval regression | `pnpm vitest run src/approval-modal.test.ts` | LLM bash-tool gate remains fail-closed; direct bash is not routed through it |
+| Tool-boundary regression | `pnpm vitest run src/extension.test.ts -t "does not block dangerous bash tool calls during full extension install"` | built-in bash remains ungated and direct bash has separate RPC lifecycle tests |
 | Full gates | `pnpm lint && pnpm test && pnpm test:integration && pnpm visual:ci` | all pass |
 | Required build | `pnpm exec tsc --noEmit && pnpm build` | exit 0, no errors |
 
@@ -124,7 +127,8 @@ Classic input ordering to preserve:
 
 - Spawning `/bin/bash`, a PTY, or a terminal task directly from SumoCode.
 - Reusing or changing the LLM `bash` tool execution pipeline as the owner.
-- Applying the dangerous-tool approval modal to explicit `!` user commands.
+- Routing explicit `!` user commands through `tool_call` or any dormant approval
+  modal.
 - Changing native prompt queue behavior from Plan 090.
 - Adding shell history expansion, aliases, or a persistent subshell.
 - Rendering unbounded output or embedding full-output file contents automatically.
@@ -147,12 +151,18 @@ Evolve `SumoRpcClient.send` compatibly so ordinary calls retain the current
 timer (for example `timeoutMs: null`). Pending-map cleanup, child exit rejection,
 stdin write failure, and explicit host shutdown must still settle the promise.
 
+Expose a narrow local-write acknowledgement for this staged submission (for
+example a request handle with `written` and `response` promises). Pi's `bash`
+RPC response arrives only after execution completes, so do not call it a
+preflight/acceptance response. The write acknowledgement proves only that bytes
+entered the child pipe; child exit afterward remains acceptance-unknown.
+
 Do not use an arbitrary multi-hour timeout. Direct commands such as a build or
 server may validly exceed it; cancellation comes from `abort_bash` or child exit.
 
 **Verify**: client tests prove default timeout, custom timeout, no-timeout pending
-request, response cleanup, child-exit cleanup, and stop cleanup without leaked
-timers/listeners.
+request, write success/failure, response cleanup, child-exit cleanup, and stop
+cleanup without leaked timers/listeners.
 
 ### Step 2: Create the direct-bash domain/controller
 
@@ -190,14 +200,24 @@ submitted draft:
 
 Apply the parser in ordinary submit after built-in slash routing and before
 agent/queue dispatch. Preserve the busy Alt+Enter exception from the locked
-behavior table. Add history only after Pi accepts the bash request.
+behavior table. Define the editor transition exactly:
+
+- before local write acknowledgement, keep draft and history unchanged;
+- after write acknowledgement, add history, clear the visible draft, and retain
+  a controller-owned recovery copy while status is running;
+- on synchronous write failure, leave the draft untouched;
+- on child exit/timeout before a final response, report acceptance unknown and
+  offer the retained text for manual recovery without automatic resend.
+
+Do not wait for command completion to clear the editor, and do not label the
+local write as Pi acceptance.
 
 Use `RpcHostControls.runBash(command, excludeFromContext, id)` to send the command
 with no response timeout. Do not call any OS shell API.
 
 **Verify**: host/action tests cover include/exclude parsing, whitespace, empty
-input, streaming Enter, idle/busy Alt+Enter, overlapping rejection, preflight
-error, and ambiguous child exit.
+input, streaming Enter, idle/busy Alt+Enter, overlapping rejection, synchronous
+write failure, and ambiguous child exit before/after local write acknowledgement.
 
 ### Step 4: Stream events and route Escape to `abort_bash`
 
@@ -248,7 +268,8 @@ Run every gate in the command table. Do not promote goldens.
 - Escape routes only to `abort_bash` while direct bash is active.
 - Included result becomes next-prompt context; excluded result does not.
 - Resume renders one durable bash execution.
-- Direct bash bypasses the LLM tool approval hook without weakening that hook.
+- Direct bash never routes through `tool_call`; the existing intentional
+  non-gating behavior for Pi's built-in bash remains unchanged.
 
 ## Done criteria
 
@@ -257,7 +278,8 @@ Run every gate in the command table. Do not promote goldens.
 - [ ] Long-running commands do not hit the ordinary 30-second timeout.
 - [ ] Escape calls `abort_bash` and final state comes from Pi.
 - [ ] Context inclusion/exclusion and resume behavior are integration-tested.
-- [ ] The dangerous LLM bash-tool approval tests remain fail-closed.
+- [ ] The full-install built-in-tool boundary remains ungated, and direct bash
+  has no `tool_call` event/approval dependency.
 - [ ] Unit, integration, visual CI, lint, typecheck, and build pass.
 - [ ] No golden was promoted without approval.
 - [ ] Plan 091 and the index are updated.

@@ -5,10 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
 	executeAccountsCommand,
-	isMultiPassInstalled,
 	loadClaudeSubscriptions,
 	registerAccountsCommand,
-	resolveMultiPassConfigPath,
+	resolveAccountsConfigPath,
 	saveClaudeSubscriptions,
 	type AccountsCommandDeps,
 } from "./accounts.js";
@@ -26,6 +25,16 @@ function tempAgentDir(): string {
 	const dir = mkdtempSync(join(tmpdir(), "sumocode-accounts-"));
 	tempDirs.push(dir);
 	return dir;
+}
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- test helper: serializes an arbitrary JSON fixture into the config read boundary.
+function writeAccounts(agentDir: string, document: unknown): void {
+	writeFileSync(join(agentDir, "claude-accounts.json"), JSON.stringify(document), "utf8");
+}
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- test helper: serializes an arbitrary JSON fixture into the legacy config read boundary.
+function writeLegacy(agentDir: string, document: unknown): void {
+	writeFileSync(join(agentDir, "multi-pass.json"), JSON.stringify(document), "utf8");
 }
 
 interface CtxOptions {
@@ -67,7 +76,6 @@ function commandContext(ctx: ReturnType<typeof makeCtx>["ctx"]): ExtensionComman
 	return ctx as never;
 }
 
-// SAFETY: the double provides setModel, the only ExtensionAPI member the account flows invoke; switchAccount guards its call sites.
 function extensionApi(setModel?: ExtensionAPI["setModel"]): ExtensionAPI {
 	// SAFETY: the double provides setModel, the only ExtensionAPI member the account flows invoke; switchAccount guards its call sites.
 	return { setModel } as never;
@@ -78,94 +86,100 @@ function selectOptionsAt(select: ReturnType<typeof makeCtx>["select"], callIndex
 	return select.mock.calls[callIndex][1] as string[];
 }
 
-const ADD_LABEL = "add Claude account  install/configure pi-multi-pass";
+const ADD_LABEL = "add Claude account";
 
 function pickOption(expected: string) {
 	return (_title: string, options: string[]) => options.find((option) => option.startsWith(expected));
 }
 
-describe("resolveMultiPassConfigPath", () => {
+describe("resolveAccountsConfigPath", () => {
 	it("prefers the injected agent dir", () => {
-		expect(resolveMultiPassConfigPath({ agentDir: "/agents/a" })).toBe(join("/agents/a", "multi-pass.json"));
+		expect(resolveAccountsConfigPath({ agentDir: "/agents/a" })).toBe(join("/agents/a", "claude-accounts.json"));
 	});
 
 	it("resolves PI_CODING_AGENT_DIR from the injected env", () => {
-		expect(resolveMultiPassConfigPath({ env: { PI_CODING_AGENT_DIR: "/agents/b" } })).toBe(
-			join("/agents/b", "multi-pass.json"),
+		expect(resolveAccountsConfigPath({ env: { PI_CODING_AGENT_DIR: "/agents/b" } })).toBe(
+			join("/agents/b", "claude-accounts.json"),
 		);
 	});
 
 	it("falls back to ~/.pi/agent", () => {
-		expect(resolveMultiPassConfigPath({ homeDir: "/home/u" })).toBe(join("/home/u", ".pi", "agent", "multi-pass.json"));
+		expect(resolveAccountsConfigPath({ homeDir: "/home/u" })).toBe(join("/home/u", ".pi", "agent", "claude-accounts.json"));
 	});
 });
 
 describe("loadClaudeSubscriptions", () => {
-	it("returns nothing when the config file is missing", () => {
+	it("returns nothing when no config file exists", () => {
 		expect(loadClaudeSubscriptions(withAgentDir(tempAgentDir()))).toEqual([]);
 	});
 
 	it("returns nothing when the config file is malformed", () => {
 		const agentDir = tempAgentDir();
-		writeFileSync(join(agentDir, "multi-pass.json"), "{not json", "utf8");
+		writeFileSync(join(agentDir, "claude-accounts.json"), "{not json", "utf8");
 		expect(loadClaudeSubscriptions(withAgentDir(agentDir))).toEqual([]);
 	});
 
 	it("returns nothing when subscriptions is not an array", () => {
 		const agentDir = tempAgentDir();
-		writeFileSync(join(agentDir, "multi-pass.json"), JSON.stringify({ subscriptions: "nope" }), "utf8");
+		writeAccounts(agentDir, { subscriptions: "nope" });
 		expect(loadClaudeSubscriptions(withAgentDir(agentDir))).toEqual([]);
 	});
 
 	it("keeps only well-formed anthropic subscriptions, sorted by index", () => {
 		const agentDir = tempAgentDir();
-		writeFileSync(
-			join(agentDir, "multi-pass.json"),
-			JSON.stringify({
-				subscriptions: [
-					{ provider: "anthropic", index: 3, label: "third" },
-					{ provider: "openai", index: 1, label: "not claude" },
-					{ provider: "anthropic", index: 2 },
-					{ provider: "anthropic", index: 1 },
-					{ provider: "anthropic", index: 1.5 },
-					"garbage",
-				],
-			}),
-			"utf8",
-		);
+		writeAccounts(agentDir, {
+			subscriptions: [
+				{ provider: "anthropic", index: 3, label: "third" },
+				{ provider: "openai", index: 1, label: "not claude" },
+				{ provider: "anthropic", index: 2 },
+				{ provider: "anthropic", index: 1 },
+				{ provider: "anthropic", index: 1.5 },
+				"garbage",
+			],
+		});
 		expect(loadClaudeSubscriptions(withAgentDir(agentDir))).toEqual([
 			{ provider: "anthropic", index: 2 },
 			{ provider: "anthropic", index: 3, label: "third" },
 		]);
 	});
+
+	it("falls back to the legacy multi-pass.json when no adapter config exists", () => {
+		const agentDir = tempAgentDir();
+		writeLegacy(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });
+		expect(loadClaudeSubscriptions(withAgentDir(agentDir))).toEqual([{ provider: "anthropic", index: 2, label: "company" }]);
+	});
+
+	it("prefers the adapter config over the legacy file when both exist", () => {
+		const agentDir = tempAgentDir();
+		writeAccounts(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "primary" }] });
+		writeLegacy(agentDir, { subscriptions: [{ provider: "anthropic", index: 3, label: "legacy" }] });
+		expect(loadClaudeSubscriptions(withAgentDir(agentDir))).toEqual([{ provider: "anthropic", index: 2, label: "primary" }]);
+	});
+
+	it("does not fall back to legacy once the adapter config exists but has no Claude accounts", () => {
+		const agentDir = tempAgentDir();
+		writeAccounts(agentDir, { subscriptions: [] });
+		writeLegacy(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "legacy" }] });
+		expect(loadClaudeSubscriptions(withAgentDir(agentDir))).toEqual([]);
+	});
 });
 
 describe("saveClaudeSubscriptions", () => {
-	it("preserves pools, chains, presets, unknown keys, and non-Claude subscriptions", () => {
+	it("writes claude-accounts.json, preserving unknown keys and non-Claude subscriptions", () => {
 		const agentDir = tempAgentDir();
-		writeFileSync(
-			join(agentDir, "multi-pass.json"),
-			JSON.stringify({
-				subscriptions: [
-					{ provider: "openai", index: 4, label: "work" },
-					{ provider: "anthropic", index: 2, label: "company" },
-					{ note: "unparseable entry" },
-				],
-				pools: [{ name: "pool" }],
-				chains: [{ name: "chain" }],
-				presets: [{ name: "preset" }],
-				unknownKey: { keep: true },
-			}),
-			"utf8",
-		);
+		writeAccounts(agentDir, {
+			subscriptions: [
+				{ provider: "openai", index: 4, label: "work" },
+				{ provider: "anthropic", index: 2, label: "company" },
+				{ note: "unparseable entry" },
+			],
+			unknownKey: { keep: true },
+		});
 
 		saveClaudeSubscriptions([{ provider: "anthropic", index: 5, label: "next" }], withAgentDir(agentDir));
 
-		const saved = JSON.parse(readFileSync(join(agentDir, "multi-pass.json"), "utf8"));
+		const saved = JSON.parse(readFileSync(join(agentDir, "claude-accounts.json"), "utf8"));
 		expect(saved.unknownKey).toEqual({ keep: true });
-		expect(saved.pools).toEqual([{ name: "pool" }]);
-		expect(saved.chains).toEqual([{ name: "chain" }]);
-		expect(saved.presets).toEqual([{ name: "preset" }]);
 		expect(saved.subscriptions).toEqual([
 			{ provider: "openai", index: 4, label: "work" },
 			{ note: "unparseable entry" },
@@ -173,41 +187,20 @@ describe("saveClaudeSubscriptions", () => {
 		]);
 	});
 
-	it("creates pools, chains, and presets keys when missing", () => {
+	it("creates the adapter config from nothing", () => {
 		const agentDir = tempAgentDir();
 		saveClaudeSubscriptions([{ provider: "anthropic", index: 2, label: "company" }], withAgentDir(agentDir));
-		const saved = JSON.parse(readFileSync(join(agentDir, "multi-pass.json"), "utf8"));
-		expect(saved.pools).toEqual([]);
-		expect(saved.chains).toEqual([]);
-		expect(saved.presets).toEqual([]);
+		const saved = JSON.parse(readFileSync(join(agentDir, "claude-accounts.json"), "utf8"));
 		expect(saved.subscriptions).toEqual([{ provider: "anthropic", index: 2, label: "company" }]);
-	});
-});
-
-describe("isMultiPassInstalled", () => {
-	it("detects string-form packages entries", () => {
-		const agentDir = tempAgentDir();
-		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: ["npm:pi-multi-pass"] }), "utf8");
-		expect(isMultiPassInstalled(withAgentDir(agentDir))).toBe(true);
+		expect(existsSync(join(agentDir, "multi-pass.json"))).toBe(false);
 	});
 
-	it("detects object-form packages entries", () => {
+	it("does not modify the legacy multi-pass.json", () => {
 		const agentDir = tempAgentDir();
-		writeFileSync(
-			join(agentDir, "settings.json"),
-			JSON.stringify({ packages: [{ source: "npm:something-else" }, { source: "npm:pi-multi-pass" }] }),
-			"utf8",
-		);
-		expect(isMultiPassInstalled(withAgentDir(agentDir))).toBe(true);
-	});
-
-	it("returns false when missing, malformed, or unrelated", () => {
-		const agentDir = tempAgentDir();
-		expect(isMultiPassInstalled(withAgentDir(agentDir))).toBe(false);
-		writeFileSync(join(agentDir, "settings.json"), "{bad", "utf8");
-		expect(isMultiPassInstalled(withAgentDir(agentDir))).toBe(false);
-		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: ["npm:other"] }), "utf8");
-		expect(isMultiPassInstalled(withAgentDir(agentDir))).toBe(false);
+		const legacy = { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }], pools: [{ name: "pool" }] };
+		writeLegacy(agentDir, legacy);
+		saveClaudeSubscriptions([{ provider: "anthropic", index: 2, label: "renamed" }], withAgentDir(agentDir));
+		expect(JSON.parse(readFileSync(join(agentDir, "multi-pass.json"), "utf8"))).toEqual(legacy);
 	});
 });
 
@@ -222,29 +215,50 @@ describe("executeAccountsCommand", () => {
 
 	it("lists base and extra accounts with signed-in status", async () => {
 		const agentDir = tempAgentDir();
-		writeFileSync(
-			join(agentDir, "multi-pass.json"),
-			JSON.stringify({ subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] }),
-			"utf8",
-		);
+		writeAccounts(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });
 		const { ctx, select } = makeCtx({
 			agentDir,
 			auth: { anthropic: true, "anthropic-2": false },
 		});
 		await executeAccountsCommand(extensionApi(), commandContext(ctx), withAgentDir(agentDir));
 		const options = selectOptionsAt(select, 0);
-		expect(options[0]).toContain("anthropic · signed in");
-		expect(options[1]).toContain("company");
-		expect(options[1]).toContain("anthropic-2 · sign in required");
+		expect(options[0]).toContain("default account · signed in");
+		expect(options[1]).toContain("company · sign in required");
+		expect(options[1]).toContain("anthropic-2");
+	});
+
+	it("marks the account backing the current model as in use", async () => {
+		const agentDir = tempAgentDir();
+		writeAccounts(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });
+		const { ctx, select } = makeCtx({
+			agentDir,
+			auth: { anthropic: true, "anthropic-2": true },
+			currentModel: { provider: "anthropic-2", id: "claude-opus" },
+		});
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), withAgentDir(agentDir));
+		const options = selectOptionsAt(select, 0);
+		expect(options[0]).toContain("default account · signed in");
+		expect(options[1]).toContain("company · in use");
+	});
+
+	it("does not offer switching to the account already in use", async () => {
+		const agentDir = tempAgentDir();
+		writeAccounts(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });
+		const { ctx, select } = makeCtx({
+			agentDir,
+			auth: { anthropic: true, "anthropic-2": true },
+			currentModel: { provider: "anthropic-2", id: "claude-opus" },
+			onSelect: pickOption("company"),
+		});
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), withAgentDir(agentDir));
+		const actionOptions = selectOptionsAt(select, 1);
+		expect(actionOptions).not.toContain("use this account");
+		expect(actionOptions).toContain("sign in again");
 	});
 
 	it("passes the exact provider id to the injected login flow", async () => {
 		const agentDir = tempAgentDir();
-		writeFileSync(
-			join(agentDir, "multi-pass.json"),
-			JSON.stringify({ subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] }),
-			"utf8",
-		);
+		writeAccounts(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });
 		const login = vi.fn(async () => {});
 		const { ctx } = makeCtx({
 			agentDir,
@@ -260,11 +274,7 @@ describe("executeAccountsCommand", () => {
 
 	it("switching preserves the current model id on the target provider", async () => {
 		const agentDir = tempAgentDir();
-		writeFileSync(
-			join(agentDir, "multi-pass.json"),
-			JSON.stringify({ subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] }),
-			"utf8",
-		);
+		writeAccounts(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });
 		const models = [
 			{ provider: "anthropic", id: "claude-opus" },
 			{ provider: "anthropic-2", id: "claude-sonnet" },
@@ -286,11 +296,7 @@ describe("executeAccountsCommand", () => {
 
 	it("switching falls back to the first model of the provider", async () => {
 		const agentDir = tempAgentDir();
-		writeFileSync(
-			join(agentDir, "multi-pass.json"),
-			JSON.stringify({ subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] }),
-			"utf8",
-		);
+		writeAccounts(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });
 		const models = [
 			{ provider: "anthropic", id: "claude-opus" },
 			{ provider: "anthropic-2", id: "claude-sonnet" },
@@ -311,11 +317,7 @@ describe("executeAccountsCommand", () => {
 
 	it("does not offer switching for unsigned accounts", async () => {
 		const agentDir = tempAgentDir();
-		writeFileSync(
-			join(agentDir, "multi-pass.json"),
-			JSON.stringify({ subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] }),
-			"utf8",
-		);
+		writeAccounts(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });
 		const { ctx, select } = makeCtx({
 			agentDir,
 			auth: { anthropic: true, "anthropic-2": false },
@@ -327,20 +329,17 @@ describe("executeAccountsCommand", () => {
 		expect(actionOptions).toContain("sign in");
 	});
 
-	it("add flow confirms install, writes config, then requests reload", async () => {
+	it("add flow prompts for a label, writes config, then requests reload", async () => {
 		const agentDir = tempAgentDir();
-		const installMultiPass = vi.fn(async () => {});
 		const reload = vi.fn(async () => {});
-		const { ctx, confirm, input } = makeCtx({
+		const { ctx, input } = makeCtx({
 			agentDir,
 			onSelect: pickOption(ADD_LABEL),
-			onConfirm: (title) => title !== "",
+			onConfirm: () => true,
 			onInput: () => "company",
 		});
-		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), installMultiPass, reload });
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), reload });
 
-		expect(installMultiPass).toHaveBeenCalledTimes(1);
-		expect(confirm).toHaveBeenCalledTimes(2);
 		expect(input).toHaveBeenCalledWith("ACCOUNT LABEL", "company");
 		expect(loadClaudeSubscriptions(withAgentDir(agentDir))).toEqual([
 			{ provider: "anthropic", index: 2, label: "company" },
@@ -348,14 +347,9 @@ describe("executeAccountsCommand", () => {
 		expect(reload).toHaveBeenCalledTimes(1);
 	});
 
-	it("add flow picks the next free index", async () => {
+	it("add flow picks the next free index and migrates legacy accounts forward", async () => {
 		const agentDir = tempAgentDir();
-		writeFileSync(
-			join(agentDir, "multi-pass.json"),
-			JSON.stringify({ subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] }),
-			"utf8",
-		);
-		const installMultiPass = vi.fn(async () => {});
+		writeLegacy(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });
 		const reload = vi.fn(async () => {});
 		const { ctx, input } = makeCtx({
 			agentDir,
@@ -364,76 +358,39 @@ describe("executeAccountsCommand", () => {
 			onConfirm: () => true,
 			onInput: () => "second",
 		});
-		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), installMultiPass, reload });
-		expect(installMultiPass).toHaveBeenCalledTimes(1);
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), reload });
 		expect(input).toHaveBeenCalledWith("ACCOUNT LABEL", "Claude account 3");
 		expect(reload).toHaveBeenCalledTimes(1);
+		// Both the migrated legacy account and the new one now live in the adapter config.
 		expect(loadClaudeSubscriptions(withAgentDir(agentDir))).toEqual([
 			{ provider: "anthropic", index: 2, label: "company" },
 			{ provider: "anthropic", index: 3, label: "second" },
 		]);
+		expect(existsSync(join(agentDir, "claude-accounts.json"))).toBe(true);
 	});
 
-	it("add flow skips install when pi-multi-pass is already present", async () => {
+	it("add flow does nothing when the label prompt is cancelled", async () => {
 		const agentDir = tempAgentDir();
-		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: ["npm:pi-multi-pass"] }), "utf8");
-		const installMultiPass = vi.fn(async () => {});
 		const reload = vi.fn(async () => {});
 		const { ctx, confirm } = makeCtx({
 			agentDir,
 			onSelect: pickOption(ADD_LABEL),
-			onConfirm: () => true,
-			onInput: () => "company",
+			onInput: () => undefined,
 		});
-		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), installMultiPass, reload });
-		expect(installMultiPass).not.toHaveBeenCalled();
-		expect(reload).toHaveBeenCalledTimes(1);
-		expect(confirm).toHaveBeenCalledTimes(1);
-	});
-
-	it("add flow reports installer failure visibly and writes nothing", async () => {
-		const agentDir = tempAgentDir();
-		const installMultiPass = vi.fn(async () => {
-			throw new Error("network down");
-		});
-		const { ctx, notify, confirm } = makeCtx({
-			agentDir,
-			onSelect: pickOption(ADD_LABEL),
-			onConfirm: () => true,
-		});
-		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), installMultiPass });
-
-		expect(notify).toHaveBeenCalledWith(expect.stringContaining("Unable to install pi-multi-pass: network down"), "error");
-		expect(confirm).toHaveBeenCalledTimes(1);
-		expect(existsSync(join(agentDir, "multi-pass.json"))).toBe(false);
-	});
-
-	it("add flow does nothing when install is declined", async () => {
-		const agentDir = tempAgentDir();
-		const installMultiPass = vi.fn(async () => {});
-		const { ctx, input } = makeCtx({
-			agentDir,
-			onSelect: pickOption(ADD_LABEL),
-			onConfirm: () => false,
-		});
-		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), installMultiPass });
-		expect(installMultiPass).not.toHaveBeenCalled();
-		expect(input).not.toHaveBeenCalled();
-		expect(existsSync(join(agentDir, "multi-pass.json"))).toBe(false);
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), reload });
+		expect(reload).not.toHaveBeenCalled();
+		expect(confirm).not.toHaveBeenCalled();
+		expect(existsSync(join(agentDir, "claude-accounts.json"))).toBe(false);
 	});
 
 	it("rename updates only the target subscription label", async () => {
 		const agentDir = tempAgentDir();
-		writeFileSync(
-			join(agentDir, "multi-pass.json"),
-			JSON.stringify({
-				subscriptions: [
-					{ provider: "openai", index: 4, label: "work" },
-					{ provider: "anthropic", index: 2, label: "company" },
-				],
-			}),
-			"utf8",
-		);
+		writeAccounts(agentDir, {
+			subscriptions: [
+				{ provider: "openai", index: 4, label: "work" },
+				{ provider: "anthropic", index: 2, label: "company" },
+			],
+		});
 		const { ctx } = makeCtx({
 			agentDir,
 			auth: { anthropic: true },
@@ -445,7 +402,7 @@ describe("executeAccountsCommand", () => {
 		});
 		await executeAccountsCommand(extensionApi(), commandContext(ctx), withAgentDir(agentDir));
 		expect(loadClaudeSubscriptions(withAgentDir(agentDir))).toEqual([{ provider: "anthropic", index: 2, label: "personal" }]);
-		const saved = JSON.parse(readFileSync(join(agentDir, "multi-pass.json"), "utf8"));
+		const saved = JSON.parse(readFileSync(join(agentDir, "claude-accounts.json"), "utf8"));
 		expect(saved.subscriptions).toContainEqual({ provider: "openai", index: 4, label: "work" });
 	});
 });

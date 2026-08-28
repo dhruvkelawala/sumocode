@@ -1,27 +1,25 @@
-// oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof, anti-slop/no-unsafe-dictionary-type -- multi-pass.json boundary parser: subscriptions, pools, chains, and presets are untrusted user-authored JSON; the typeof predicates below are the sanctioned parse and unknown keys must survive round-trips untouched.
-import { execFile } from "node:child_process";
+// oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof, anti-slop/no-unsafe-dictionary-type -- account-config boundary parser: claude-accounts.json (and the legacy multi-pass.json it migrates from) are untrusted user-authored JSON; the typeof predicates below are the sanctioned parse and unknown keys must survive round-trips untouched.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { promisify } from "node:util";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { executeSumoReload } from "./reload.js";
+import { logDiagnostic } from "../sumo-tui/runtime/diagnostics.js";
 import { executeRpcLogin, getRpcLoginRuntime, type RpcLoginRuntime } from "../sumo-tui/pi-compat/login-command.js";
 
-const execFileAsync = promisify(execFile);
-const MULTI_PASS_SOURCE = "npm:pi-multi-pass";
+/** Adapter-native account config; the pi-claude-oauth-adapter reads this first. */
+const ACCOUNTS_CONFIG_FILE = "claude-accounts.json";
+/** Legacy pi-multi-pass config, read once so existing accounts migrate forward. */
+const LEGACY_CONFIG_FILE = "multi-pass.json";
 
-export interface MultiPassSubscription {
+export interface ClaudeSubscription {
 	readonly provider: string;
 	readonly index: number;
 	readonly label?: string;
 }
 
-interface MultiPassDocument {
+interface AccountsDocument {
 	subscriptions?: unknown;
-	pools?: unknown;
-	chains?: unknown;
-	presets?: unknown;
 	[key: string]: unknown;
 }
 
@@ -29,7 +27,6 @@ export interface AccountsCommandDeps {
 	readonly agentDir?: string;
 	readonly env?: NodeJS.ProcessEnv;
 	readonly homeDir?: string;
-	readonly installMultiPass?: () => Promise<void>;
 	readonly login?: (providerId: string, ctx: ExtensionCommandContext) => Promise<void>;
 	readonly reload?: (ctx: ExtensionCommandContext) => Promise<void>;
 }
@@ -37,32 +34,38 @@ export interface AccountsCommandDeps {
 interface ClaudeAccount {
 	readonly providerId: string;
 	readonly label: string;
-	readonly subscription?: MultiPassSubscription;
+	readonly subscription?: ClaudeSubscription;
 	readonly configured: boolean;
+	/** True when the session's current model already routes through this account. */
+	readonly active: boolean;
 }
 
 function resolveAgentDir(deps: AccountsCommandDeps): string {
 	return deps.agentDir ?? deps.env?.PI_CODING_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR ?? join(deps.homeDir ?? homedir(), ".pi", "agent");
 }
 
-export function resolveMultiPassConfigPath(deps: AccountsCommandDeps = {}): string {
-	return join(resolveAgentDir(deps), "multi-pass.json");
+export function resolveAccountsConfigPath(deps: AccountsCommandDeps = {}): string {
+	return join(resolveAgentDir(deps), ACCOUNTS_CONFIG_FILE);
+}
+
+function resolveLegacyConfigPath(deps: AccountsCommandDeps): string {
+	return join(resolveAgentDir(deps), LEGACY_CONFIG_FILE);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function parseSubscription(value: unknown): MultiPassSubscription | undefined {
+function parseSubscription(value: unknown): ClaudeSubscription | undefined {
 	if (!isRecord(value) || typeof value.provider !== "string" || typeof value.index !== "number") return undefined;
 	if (!Number.isInteger(value.index) || value.index < 2) return undefined;
 	const label = typeof value.label === "string" ? value.label.trim() : "";
-	const subscription: MultiPassSubscription = { provider: value.provider, index: value.index };
+	const subscription: ClaudeSubscription = { provider: value.provider, index: value.index };
 	if (label) return { ...subscription, label };
 	return subscription;
 }
 
-function readDocument(path: string): MultiPassDocument {
+function readDocument(path: string): AccountsDocument {
 	if (!existsSync(path)) return {};
 	try {
 		const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
@@ -72,26 +75,34 @@ function readDocument(path: string): MultiPassDocument {
 	}
 }
 
-export function loadClaudeSubscriptions(deps: AccountsCommandDeps = {}): MultiPassSubscription[] {
-	const raw = readDocument(resolveMultiPassConfigPath(deps)).subscriptions;
-	if (!Array.isArray(raw)) return [];
-	return raw
+function claudeSubscriptionsFrom(document: AccountsDocument): ClaudeSubscription[] {
+	if (!Array.isArray(document.subscriptions)) return [];
+	return document.subscriptions
 		.map(parseSubscription)
-		.filter((entry): entry is MultiPassSubscription => entry?.provider === "anthropic")
+		.filter((entry): entry is ClaudeSubscription => entry?.provider === "anthropic")
 		.sort((left, right) => left.index - right.index);
 }
 
-export function saveClaudeSubscriptions(subscriptions: readonly MultiPassSubscription[], deps: AccountsCommandDeps = {}): void {
-	const path = resolveMultiPassConfigPath(deps);
+/**
+ * Load Claude subscriptions, preferring the adapter-native config and falling
+ * back to the legacy pi-multi-pass file so existing setups keep working until
+ * the next save migrates them forward.
+ */
+export function loadClaudeSubscriptions(deps: AccountsCommandDeps = {}): ClaudeSubscription[] {
+	const primary = claudeSubscriptionsFrom(readDocument(resolveAccountsConfigPath(deps)));
+	if (primary.length > 0) return primary;
+	if (existsSync(resolveAccountsConfigPath(deps))) return primary;
+	return claudeSubscriptionsFrom(readDocument(resolveLegacyConfigPath(deps)));
+}
+
+export function saveClaudeSubscriptions(subscriptions: readonly ClaudeSubscription[], deps: AccountsCommandDeps = {}): void {
+	const path = resolveAccountsConfigPath(deps);
 	const document = readDocument(path);
 	const existing = Array.isArray(document.subscriptions) ? document.subscriptions : [];
 	const nonClaude = existing.filter((entry) => parseSubscription(entry)?.provider !== "anthropic");
-	const next: MultiPassDocument = {
+	const next: AccountsDocument = {
 		...document,
 		subscriptions: [...nonClaude, ...subscriptions],
-		pools: Array.isArray(document.pools) ? document.pools : [],
-		chains: Array.isArray(document.chains) ? document.chains : [],
-		presets: Array.isArray(document.presets) ? document.presets : [],
 	};
 	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
 	const temporary = `${path}.${process.pid}.tmp`;
@@ -99,40 +110,14 @@ export function saveClaudeSubscriptions(subscriptions: readonly MultiPassSubscri
 	renameSync(temporary, path);
 }
 
-function packageSource(value: unknown): string | undefined {
-	if (typeof value === "string") return value;
-	if (isRecord(value) && typeof value.source === "string") return value.source;
-	return undefined;
-}
-
-export function isMultiPassInstalled(deps: AccountsCommandDeps = {}): boolean {
-	const settingsPath = join(resolveAgentDir(deps), "settings.json");
-	if (!existsSync(settingsPath)) return false;
-	try {
-		const parsed: unknown = JSON.parse(readFileSync(settingsPath, "utf8"));
-		if (!isRecord(parsed) || !Array.isArray(parsed.packages)) return false;
-		return parsed.packages.some((entry) => packageSource(entry)?.includes("pi-multi-pass") === true);
-	} catch {
-		return false;
-	}
-}
-
-async function defaultInstallMultiPass(): Promise<void> {
-	await execFileAsync("pi", ["install", MULTI_PASS_SOURCE], {
-		env: process.env,
-		timeout: 120_000,
-		maxBuffer: 1024 * 1024,
-	});
-}
-
-function nextIndex(subscriptions: readonly MultiPassSubscription[]): number {
+function nextIndex(subscriptions: readonly ClaudeSubscription[]): number {
 	const used = new Set(subscriptions.map((entry) => entry.index));
 	let index = 2;
 	while (used.has(index)) index += 1;
 	return index;
 }
 
-function accountProviderId(subscription: MultiPassSubscription): string {
+function accountProviderId(subscription: ClaudeSubscription): string {
 	return `${subscription.provider}-${subscription.index}`;
 }
 
@@ -141,17 +126,20 @@ function authConfigured(ctx: ExtensionCommandContext, providerId: string): boole
 }
 
 function accounts(ctx: ExtensionCommandContext, deps: AccountsCommandDeps): ClaudeAccount[] {
+	const activeProvider = ctx.model?.provider;
 	return [
 		{
 			providerId: "anthropic",
-			label: "default Claude account",
+			label: "default account",
 			configured: authConfigured(ctx, "anthropic"),
+			active: activeProvider === "anthropic",
 		},
 		...loadClaudeSubscriptions(deps).map((subscription) => ({
 			providerId: accountProviderId(subscription),
 			label: subscription.label ?? `Claude account ${subscription.index}`,
 			subscription,
 			configured: authConfigured(ctx, accountProviderId(subscription)),
+			active: activeProvider === accountProviderId(subscription),
 		})),
 	];
 }
@@ -162,41 +150,36 @@ async function defaultLogin(providerId: string, ctx: ExtensionCommandContext): P
 		runtime = getRpcLoginRuntime(ctx);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
+		logDiagnostic("accounts_login_runtime_unavailable", { provider: providerId, errorMessage: message });
 		ctx.ui.notify(`Sign-in unavailable: ${message}`, "error");
 		return;
 	}
+	logDiagnostic("accounts_login_start", { provider: providerId });
 	await executeRpcLogin(providerId, ctx, runtime);
 }
 
+function accountState(account: ClaudeAccount): string {
+	if (account.active) return "in use";
+	return account.configured ? "signed in" : "sign in required";
+}
+
+/**
+ * Portrait/narrow modals clip the right-aligned value column first, so the
+ * account state (which account a session is actually on) lives left of the
+ * two-space seam and the provider id — derivable from the label — is what
+ * gets truncated instead.
+ */
 function accountRow(account: ClaudeAccount): string {
-	return `${account.label}  ${account.providerId} · ${account.configured ? "signed in" : "sign in required"}`;
+	return `${account.label} · ${accountState(account)}  ${account.providerId}`;
 }
 
 async function addAccount(ctx: ExtensionCommandContext, deps: AccountsCommandDeps): Promise<void> {
-	if (!isMultiPassInstalled(deps)) {
-		const install = await ctx.ui.confirm(
-			"SET UP MULTI-ACCOUNT CLAUDE",
-			"SumoCode uses pi-multi-pass to keep each OAuth subscription separate. Install it now?",
-		);
-		if (!install) return;
-		ctx.ui.setStatus("sumocode.accounts", "installing pi-multi-pass…");
-		try {
-			await (deps.installMultiPass ?? defaultInstallMultiPass)();
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			ctx.ui.notify(`Unable to install pi-multi-pass: ${message}`, "error");
-			return;
-		} finally {
-			ctx.ui.setStatus("sumocode.accounts", undefined);
-		}
-	}
-
 	const subscriptions = loadClaudeSubscriptions(deps);
 	const index = nextIndex(subscriptions);
 	const suggestedLabel = index === 2 ? "company" : `Claude account ${index}`;
 	const label = await ctx.ui.input("ACCOUNT LABEL", suggestedLabel);
 	if (label === undefined) return;
-	const subscription: MultiPassSubscription = {
+	const subscription: ClaudeSubscription = {
 		provider: "anthropic",
 		index,
 		label: label.trim() || suggestedLabel,
@@ -205,7 +188,7 @@ async function addAccount(ctx: ExtensionCommandContext, deps: AccountsCommandDep
 	ctx.ui.notify(`Added ${subscription.label} as anthropic-${index}`, "info");
 	const reload = await ctx.ui.confirm(
 		"RELOAD TO ACTIVATE ACCOUNT",
-		"Reload SumoCode now? After reload, open /accounts and choose the new account to sign in.",
+		"Reload SumoCode now? After reload, open /accounts and sign in to the new account.",
 	);
 	if (reload) await (deps.reload ?? ((reloadCtx) => executeSumoReload(reloadCtx)))(ctx);
 }
@@ -238,7 +221,7 @@ async function renameAccount(ctx: ExtensionCommandContext, account: ClaudeAccoun
 
 async function accountActions(pi: ExtensionAPI, ctx: ExtensionCommandContext, account: ClaudeAccount, deps: AccountsCommandDeps): Promise<void> {
 	const actions = [
-		...(account.configured ? ["use this account"] : []),
+		...(account.configured && !account.active ? ["use this account"] : []),
 		account.configured ? "sign in again" : "sign in",
 		...(account.subscription ? ["rename account"] : []),
 	];
@@ -256,7 +239,7 @@ export async function executeAccountsCommand(pi: ExtensionAPI, ctx: ExtensionCom
 	}
 	const accountList = accounts(ctx, deps);
 	const rows = accountList.map(accountRow);
-	const addLabel = "add Claude account  install/configure pi-multi-pass";
+	const addLabel = "add Claude account";
 	const selected = await ctx.ui.select("CLAUDE ACCOUNTS", [...rows, addLabel]);
 	if (selected === addLabel) {
 		await addAccount(ctx, deps);

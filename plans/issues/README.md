@@ -13,7 +13,7 @@ Security issue bodies are sanitized. Their full executor plans remain local, are
 | 093 | `[P0 · M1] Index terminal state and collapse startup reconciliation` | full plan | enhancement | M1 |
 | 094 | `[P0 · M1] Expose editor-ready and command-ready states truthfully` | full plan | bug, sumo-tui | M1 |
 | 095 | `[P1 · M1] Make visible steering acknowledgements settlement-aware and honest` | full plan | bug, ready-for-agent | M1 |
-| 096 | `[P1 · M1] Preserve prompts after Pi --tui-mode parsing` | full plan | bug | M1 |
+| 096 | `[P1 · M1] Mirror Pi option consumption without corrupting the initial prompt` | full plan | bug | M1 |
 | 097 | `[P0 · M2] Keep prompts out of process metadata and diagnostics` | `plans/issues/097.md` | bug | M2 |
 | 098 | `[P1 · M2] Harden visible-subagent task artifact handling` | `plans/issues/098.md` | bug | M2 |
 | 099 | `[P1 · M2] Bound child-process protocol buffers` | `plans/issues/099.md` | bug | M2 |

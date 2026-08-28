@@ -664,9 +664,9 @@ startup-speed claim.
 2. **M2 security:** 099, 100, and 102 can start immediately; 098 follows 095; 097 follows
    092/096. If 102 finds a fixed Pi candidate before 101 lands, it runs the existing explicit
    minimum/candidate smoke command; 101 later makes that compatibility gate durable in CI.
-3. **M3 reliability/scale:** 105 is independent; 103 follows PTY isolation; 109 follows truthful
-   steering; 104 follows store/redaction foundations; 106 follows the real recovery test; 107
-   follows state-based tests; 108 follows the Pi matrix.
+3. **M3 reliability/scale:** 105 remains rejected and is excluded; 103 follows PTY isolation;
+   109 follows truthful steering; 104 follows store/redaction foundations; 106 follows the real
+   recovery test; 107 follows state-based tests; 108 follows the Pi matrix.
 4. **M4 lifecycle/Effect:** after 109, 110 may evaluate Effect off the production path. Independently,
    after 094/104, 111 extracts the plain-TypeScript host lifecycle seam; neither outcome gates the other.
 5. **M5 product durability:** run 112 after 095/104/109. Both 113 and 114 then branch from the

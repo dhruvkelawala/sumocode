@@ -32,6 +32,7 @@
     "src/cathedral/multiline-paste.ts",
     "src/cathedral/scriptorium-chrome.ts",
     "src/command-palette.ts",
+    "src/commands/accounts.ts",
     "src/commands/cursor.ts",
     "src/commands/diff.ts",
     "src/commands/divine-query.ts",
@@ -125,6 +126,6 @@
     "src/working-indicator.ts",
     "tsconfig.json"
   ],
-  "hash": "bd77a46368e4c0c447afd5616685dd124fbf72a743c12c184b842c5af08598c7",
-  "outputsHash": "c916daec61877b511f6d1bd2b445f73ea496e7ed142f1a78b686d0a2b54eca06"
+  "hash": "0ffc22e5943cb479e22854e81a110b59cb3aba28a2a969e795be14c29355d9f9",
+  "outputsHash": "e9d50efa1e5025ac82795161afc98c64c11b55a4e50b1f8432c3075c35090266"
 }

@@ -1,7 +1,7 @@
 // src/extension.ts
-import { existsSync as existsSync13, readFileSync as readFileSync17, realpathSync as realpathSync4 } from "node:fs";
-import { homedir as homedir15 } from "node:os";
-import { dirname as dirname13, join as join21, resolve as resolve7, sep } from "node:path";
+import { existsSync as existsSync14, readFileSync as readFileSync18, realpathSync as realpathSync4 } from "node:fs";
+import { homedir as homedir16 } from "node:os";
+import { dirname as dirname14, join as join22, resolve as resolve7, sep } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 
 // src/cathedral/input-hints.ts
@@ -1315,8 +1315,8 @@ function nextThemeName(currentName = getActiveTheme().name) {
   const names = listThemes().map((theme) => theme.name);
   if (names.length === 0) return currentName;
   const currentIndex = names.indexOf(currentName);
-  const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % names.length;
-  return names[nextIndex];
+  const nextIndex2 = currentIndex === -1 ? 0 : (currentIndex + 1) % names.length;
+  return names[nextIndex2];
 }
 function onThemeChanged(listener) {
   const state = ensureState();
@@ -3341,10 +3341,10 @@ var mapWithConcurrencyLimit = async (items, concurrency, fn) => {
   if (items.length === 0) return [];
   const limit = Math.max(1, Math.min(concurrency, items.length));
   const results = Array.from({ length: items.length });
-  let nextIndex = 0;
+  let nextIndex2 = 0;
   const runWorker = async () => {
-    const currentIndex = nextIndex;
-    nextIndex += 1;
+    const currentIndex = nextIndex2;
+    nextIndex2 += 1;
     if (currentIndex >= items.length) return;
     results[currentIndex] = await fn(items[currentIndex], currentIndex);
     await runWorker();
@@ -8531,8 +8531,8 @@ var MemoryEditorComponent = class {
       return;
     }
     const currentIndex = this.snapshot.focusedFactId === null ? -1 : visible.findIndex((fact) => fact.id === this.snapshot.focusedFactId);
-    const nextIndex = currentIndex === -1 ? delta > 0 ? 0 : visible.length - 1 : (currentIndex + delta + visible.length) % visible.length;
-    this.snapshot = { ...this.snapshot, focusedFactId: visible[nextIndex].id };
+    const nextIndex2 = currentIndex === -1 ? delta > 0 ? 0 : visible.length - 1 : (currentIndex + delta + visible.length) % visible.length;
+    this.snapshot = { ...this.snapshot, focusedFactId: visible[nextIndex2].id };
     this.deps.invalidate();
   }
   async handleForget() {
@@ -16505,7 +16505,7 @@ var AUTH_LABELS = {
   oauth: "Sign in with an account",
   api_key: "Sign in with an API key"
 };
-function getRuntimeFromContext(ctx) {
+function getRpcLoginRuntime(ctx) {
   const rawRuntime = Reflect.get(ctx.modelRegistry, "runtime");
   if (!isLoginRuntime(rawRuntime)) {
     throw new Error("Pi's authentication runtime is unavailable; update SumoCode's Pi compatibility adapter");
@@ -16660,7 +16660,7 @@ function cancelActiveRpcLogin() {
   return true;
 }
 function registerRpcLoginCommand(pi, deps = {}) {
-  const getRuntime = deps.getRuntime ?? getRuntimeFromContext;
+  const getRuntime = deps.getRuntime ?? getRpcLoginRuntime;
   pi.registerCommand("login", {
     description: "Configure provider authentication",
     handler: async (args, ctx) => executeRpcLogin(args, ctx, getRuntime(ctx))
@@ -16670,6 +16670,223 @@ function registerRpcLoginCommand(pi, deps = {}) {
     handler: async (_args, ctx) => {
       if (cancelActiveRpcLogin()) ctx.ui.notify("Login cancelled", "info");
     }
+  });
+}
+
+// src/commands/accounts.ts
+import { execFile as execFile7 } from "node:child_process";
+import { existsSync as existsSync13, mkdirSync as mkdirSync10, readFileSync as readFileSync17, renameSync as renameSync7, writeFileSync as writeFileSync10 } from "node:fs";
+import { homedir as homedir15 } from "node:os";
+import { dirname as dirname13, join as join21 } from "node:path";
+import { promisify as promisify5 } from "node:util";
+var execFileAsync4 = promisify5(execFile7);
+var MULTI_PASS_SOURCE = "npm:pi-multi-pass";
+function resolveAgentDir(deps) {
+  return deps.agentDir ?? deps.env?.PI_CODING_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR ?? join21(deps.homeDir ?? homedir15(), ".pi", "agent");
+}
+function resolveMultiPassConfigPath(deps = {}) {
+  return join21(resolveAgentDir(deps), "multi-pass.json");
+}
+function isRecord4(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function parseSubscription(value) {
+  if (!isRecord4(value) || typeof value.provider !== "string" || typeof value.index !== "number") return void 0;
+  if (!Number.isInteger(value.index) || value.index < 2) return void 0;
+  return {
+    provider: value.provider,
+    index: value.index,
+    ...typeof value.label === "string" && value.label.trim() ? { label: value.label.trim() } : {}
+  };
+}
+function readDocument(path2) {
+  if (!existsSync13(path2)) return {};
+  try {
+    const parsed = JSON.parse(readFileSync17(path2, "utf8"));
+    return isRecord4(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function loadClaudeSubscriptions(deps = {}) {
+  const raw = readDocument(resolveMultiPassConfigPath(deps)).subscriptions;
+  if (!Array.isArray(raw)) return [];
+  return raw.map(parseSubscription).filter((entry) => entry?.provider === "anthropic").sort((left, right) => left.index - right.index);
+}
+function saveClaudeSubscriptions(subscriptions, deps = {}) {
+  const path2 = resolveMultiPassConfigPath(deps);
+  const document = readDocument(path2);
+  const existing = Array.isArray(document.subscriptions) ? document.subscriptions : [];
+  const nonClaude = existing.filter((entry) => parseSubscription(entry)?.provider !== "anthropic");
+  const next = {
+    ...document,
+    subscriptions: [...nonClaude, ...subscriptions],
+    pools: Array.isArray(document.pools) ? document.pools : [],
+    chains: Array.isArray(document.chains) ? document.chains : [],
+    presets: Array.isArray(document.presets) ? document.presets : []
+  };
+  mkdirSync10(dirname13(path2), { recursive: true, mode: 448 });
+  const temporary = `${path2}.${process.pid}.tmp`;
+  writeFileSync10(temporary, `${JSON.stringify(next, null, 2)}
+`, { encoding: "utf8", mode: 384 });
+  renameSync7(temporary, path2);
+}
+function packageSource(value) {
+  if (typeof value === "string") return value;
+  if (isRecord4(value) && typeof value.source === "string") return value.source;
+  return void 0;
+}
+function isMultiPassInstalled(deps = {}) {
+  const settingsPath = join21(resolveAgentDir(deps), "settings.json");
+  if (!existsSync13(settingsPath)) return false;
+  try {
+    const parsed = JSON.parse(readFileSync17(settingsPath, "utf8"));
+    if (!isRecord4(parsed) || !Array.isArray(parsed.packages)) return false;
+    return parsed.packages.some((entry) => packageSource(entry)?.includes("pi-multi-pass") === true);
+  } catch {
+    return false;
+  }
+}
+async function defaultInstallMultiPass() {
+  await execFileAsync4("pi", ["install", MULTI_PASS_SOURCE], {
+    env: process.env,
+    timeout: 12e4,
+    maxBuffer: 1024 * 1024
+  });
+}
+function nextIndex(subscriptions) {
+  const used = new Set(subscriptions.map((entry) => entry.index));
+  let index = 2;
+  while (used.has(index)) index += 1;
+  return index;
+}
+function accountProviderId(subscription) {
+  return `${subscription.provider}-${subscription.index}`;
+}
+function authConfigured(ctx, providerId) {
+  return ctx.modelRegistry.getProviderAuthStatus(providerId).configured;
+}
+function accounts(ctx, deps) {
+  return [
+    {
+      providerId: "anthropic",
+      label: "default Claude account",
+      configured: authConfigured(ctx, "anthropic")
+    },
+    ...loadClaudeSubscriptions(deps).map((subscription) => ({
+      providerId: accountProviderId(subscription),
+      label: subscription.label ?? `Claude account ${subscription.index}`,
+      subscription,
+      configured: authConfigured(ctx, accountProviderId(subscription))
+    }))
+  ];
+}
+async function defaultLogin(providerId, ctx) {
+  let runtime;
+  try {
+    runtime = getRpcLoginRuntime(ctx);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    ctx.ui.notify(`Sign-in unavailable: ${message}`, "error");
+    return;
+  }
+  await executeRpcLogin(providerId, ctx, runtime);
+}
+function accountRow(account) {
+  return `${account.label}  ${account.providerId} \xB7 ${account.configured ? "signed in" : "sign in required"}`;
+}
+async function addAccount(ctx, deps) {
+  if (!isMultiPassInstalled(deps)) {
+    const install = await ctx.ui.confirm(
+      "SET UP MULTI-ACCOUNT CLAUDE",
+      "SumoCode uses pi-multi-pass to keep each OAuth subscription separate. Install it now?"
+    );
+    if (!install) return;
+    ctx.ui.setStatus("sumocode.accounts", "installing pi-multi-pass\u2026");
+    try {
+      await (deps.installMultiPass ?? defaultInstallMultiPass)();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.ui.notify(`Unable to install pi-multi-pass: ${message}`, "error");
+      return;
+    } finally {
+      ctx.ui.setStatus("sumocode.accounts", void 0);
+    }
+  }
+  const subscriptions = loadClaudeSubscriptions(deps);
+  const index = nextIndex(subscriptions);
+  const suggestedLabel = index === 2 ? "company" : `Claude account ${index}`;
+  const label = await ctx.ui.input("ACCOUNT LABEL", suggestedLabel);
+  if (label === void 0) return;
+  const subscription = {
+    provider: "anthropic",
+    index,
+    label: label.trim() || suggestedLabel
+  };
+  saveClaudeSubscriptions([...subscriptions, subscription], deps);
+  ctx.ui.notify(`Added ${subscription.label} as anthropic-${index}`, "info");
+  const reload = await ctx.ui.confirm(
+    "RELOAD TO ACTIVATE ACCOUNT",
+    "Reload SumoCode now? After reload, open /accounts and choose the new account to sign in."
+  );
+  if (reload) await (deps.reload ?? ((reloadCtx) => executeSumoReload(reloadCtx)))(ctx);
+}
+async function switchAccount(pi, ctx, account) {
+  if (!account.configured) {
+    ctx.ui.notify(`${account.label} must be signed in before it can be selected`, "warning");
+    return;
+  }
+  const models = ctx.modelRegistry.getAll().filter((model) => model.provider === account.providerId);
+  const target = models.find((model) => model.id === ctx.model?.id) ?? models[0];
+  if (!target) {
+    ctx.ui.notify(`${account.providerId} is not active; reload SumoCode after adding the account`, "warning");
+    return;
+  }
+  const selected = await pi.setModel(target);
+  ctx.ui.notify(selected ? `Using ${account.label} \xB7 ${target.id}` : `Unable to select ${account.label}`, selected ? "info" : "error");
+}
+async function renameAccount(ctx, account, deps) {
+  if (!account.subscription) return;
+  const label = await ctx.ui.input("ACCOUNT LABEL", account.label);
+  if (label === void 0 || !label.trim()) return;
+  const subscriptions = loadClaudeSubscriptions(deps).map(
+    (entry) => entry.index === account.subscription?.index ? { ...entry, label: label.trim() } : entry
+  );
+  saveClaudeSubscriptions(subscriptions, deps);
+  ctx.ui.notify(`Renamed ${account.providerId} to ${label.trim()}`, "info");
+}
+async function accountActions(pi, ctx, account, deps) {
+  const actions = [
+    ...account.configured ? ["use this account"] : [],
+    account.configured ? "sign in again" : "sign in",
+    ...account.subscription ? ["rename account"] : []
+  ];
+  const action = await ctx.ui.select(`${account.label.toUpperCase()} \xB7 ${account.providerId}`, actions);
+  if (action === "use this account") await switchAccount(pi, ctx, account);
+  else if (action === "sign in" || action === "sign in again") {
+    await (deps.login ?? defaultLogin)(account.providerId, ctx);
+  } else if (action === "rename account") await renameAccount(ctx, account, deps);
+}
+async function executeAccountsCommand(pi, ctx, deps = {}) {
+  if (ctx.mode !== "rpc" || !ctx.hasUI) {
+    ctx.ui.notify("/accounts requires the SumoCode RPC interface", "warning");
+    return;
+  }
+  const accountList = accounts(ctx, deps);
+  const rows = accountList.map(accountRow);
+  const addLabel = "add Claude account  install/configure pi-multi-pass";
+  const selected = await ctx.ui.select("CLAUDE ACCOUNTS", [...rows, addLabel]);
+  if (selected === addLabel) {
+    await addAccount(ctx, deps);
+    return;
+  }
+  const account = accountList[rows.indexOf(selected ?? "")];
+  if (account) await accountActions(pi, ctx, account, deps);
+}
+function registerAccountsCommand(pi, deps = {}) {
+  pi.registerCommand("accounts", {
+    description: "Manage and switch Claude subscription accounts",
+    handler: async (_args, ctx) => executeAccountsCommand(pi, ctx, deps)
   });
 }
 
@@ -17067,7 +17284,7 @@ function registerRpcTreeNavigationCommand(pi) {
 
 // src/extension.ts
 var SUMOCODE_PACKAGE_NAME = "@dhruvkelawala/sumocode";
-var LEGACY_TASK_TOOL_EXTENSION_PATH = join21(".pi", "agent", "extensions", "task-tool", "index.ts");
+var LEGACY_TASK_TOOL_EXTENSION_PATH = join22(".pi", "agent", "extensions", "task-tool", "index.ts");
 function canonicalize(path2, realpath) {
   try {
     return realpath(path2);
@@ -17082,13 +17299,13 @@ function moduleUrlToPath2(moduleUrl) {
     return moduleUrl;
   }
 }
-function isInstalledPiAgentGitModule(moduleUrl, homeDir = homedir15()) {
+function isInstalledPiAgentGitModule(moduleUrl, homeDir = homedir16()) {
   const modulePath = resolve7(moduleUrlToPath2(moduleUrl));
   const agentGitRoot = `${resolve7(homeDir, ".pi", "agent", "git")}${sep}`;
   return modulePath.startsWith(agentGitRoot);
 }
 function packageNameAt2(dir, exists, readFile) {
-  const packagePath = join21(dir, "package.json");
+  const packagePath = join22(dir, "package.json");
   if (!exists(packagePath)) return void 0;
   try {
     const parsed = JSON.parse(readFile(packagePath, "utf8"));
@@ -17098,44 +17315,44 @@ function packageNameAt2(dir, exists, readFile) {
   }
 }
 function packageRootFromModulePath(modulePath, exists, readFile) {
-  let current = dirname13(modulePath);
+  let current = dirname14(modulePath);
   for (let level = 0; level < 5; level += 1) {
     if (packageNameAt2(current, exists, readFile) === SUMOCODE_PACKAGE_NAME) return current;
-    const parent = dirname13(current);
+    const parent = dirname14(current);
     if (parent === current) return void 0;
     current = parent;
   }
   return void 0;
 }
 function findActiveSumoDevTree2(cwd, options = {}) {
-  const exists = options.exists ?? existsSync13;
-  const readFile = options.readFile ?? ((path2, encoding) => readFileSync17(path2, encoding));
+  const exists = options.exists ?? existsSync14;
+  const readFile = options.readFile ?? ((path2, encoding) => readFileSync18(path2, encoding));
   let current = resolve7(cwd);
   while (true) {
     const isSumocodePackage = packageNameAt2(current, exists, readFile) === SUMOCODE_PACKAGE_NAME;
-    const hasExtensionSource = exists(join21(current, "src", "extension.ts"));
-    const hasGitMetadata = exists(join21(current, ".git"));
+    const hasExtensionSource = exists(join22(current, "src", "extension.ts"));
+    const hasGitMetadata = exists(join22(current, ".git"));
     if (isSumocodePackage && hasExtensionSource && hasGitMetadata) return current;
-    const parent = dirname13(current);
+    const parent = dirname14(current);
     if (parent === current) return void 0;
     current = parent;
   }
 }
 function shouldNoopDuplicateInstalledExtension(options = {}) {
   const moduleUrl = options.moduleUrl ?? import.meta.url;
-  if (!isInstalledPiAgentGitModule(moduleUrl, options.homeDir ?? homedir15())) return false;
+  if (!isInstalledPiAgentGitModule(moduleUrl, options.homeDir ?? homedir16())) return false;
   const env = options.env ?? process.env;
   const launcherRoot = env.SUMOCODE_ROOT_DIR;
   if (launcherRoot) {
     const realpath = options.realpath ?? ((path2) => realpathSync4(path2));
-    const exists = options.exists ?? existsSync13;
-    const readFile = options.readFile ?? ((path2, encoding) => readFileSync17(path2, encoding));
+    const exists = options.exists ?? existsSync14;
+    const readFile = options.readFile ?? ((path2, encoding) => readFileSync18(path2, encoding));
     const modulePath = canonicalize(moduleUrlToPath2(moduleUrl), realpath);
     const packageRoot = packageRootFromModulePath(modulePath, exists, readFile);
     const canonicalLauncherRoot = canonicalize(launcherRoot, realpath);
     if (packageRoot !== void 0 && canonicalize(packageRoot, realpath) === canonicalLauncherRoot) return false;
-    const moduleDir = dirname13(modulePath);
-    const grandparent = dirname13(moduleDir);
+    const moduleDir = dirname14(modulePath);
+    const grandparent = dirname14(moduleDir);
     if (grandparent === canonicalLauncherRoot) return false;
     return true;
   }
@@ -17143,8 +17360,8 @@ function shouldNoopDuplicateInstalledExtension(options = {}) {
   return findActiveSumoDevTree2(options.cwd ?? process.cwd(), options) !== void 0;
 }
 function hasLegacyTaskToolExtension(options = {}) {
-  const exists = options.exists ?? existsSync13;
-  return exists(join21(options.homeDir ?? homedir15(), LEGACY_TASK_TOOL_EXTENSION_PATH));
+  const exists = options.exists ?? existsSync14;
+  return exists(join22(options.homeDir ?? homedir16(), LEGACY_TASK_TOOL_EXTENSION_PATH));
 }
 function shouldInstallNativeTaskTool(options = {}) {
   if (options.force === "1" || options.force === "true") return true;
@@ -17202,6 +17419,7 @@ function installRpcChildProfile(pi) {
   installTaskModeAutoExit(pi);
   registerSumoReloadCommand(pi);
   registerRolesCommand(pi);
+  registerAccountsCommand(pi);
   installSumoInteractions(pi, { subagentManager, includeUiSurfaces: false });
 }
 var PROCESS_INSTALL_LATCH = /* @__PURE__ */ Symbol.for("sumocode.extension.processInstallLatch");
@@ -17291,6 +17509,7 @@ function sumocode(pi) {
   installCompactionIndicator(pi);
   registerSumoReloadCommand(pi);
   registerRolesCommand(pi);
+  registerAccountsCommand(pi);
   installSumoInteractions(pi, { subagentManager });
   logDiagnostic("extension_activate_end", {
     taskMode: isTaskMode(),

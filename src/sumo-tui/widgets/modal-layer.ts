@@ -20,13 +20,21 @@ export interface ModalLayerOptions extends ModalManagerOptions {
 
 const RESET = "\u001b[0m";
 const OSC8_CLOSE = "\u001b]8;;\u001b\\";
+const MAX_VISIBLE_URL_ROWS = 2;
 
-function linkedHttpUrl(text: string, color: string): string {
-	if (!/^https?:\/\/[^\s]+$/u.test(text)) return scriptoriumFg(text, color);
-	// OSC 8 is the terminal-native hyperlink protocol. Keeping it here, next to
-	// ModalSurfaceComponent's low-level terminal chrome, gives a short label one
-	// complete clickable target without teaching generic text spans about links.
-	return `\u001b]8;;${text}\u001b\\${scriptoriumFg("open authentication page", color)}${OSC8_CLOSE}`;
+function detailRows(text: string, width: number, color: string): string[] {
+	if (!/^https?:\/\/[^\s]+$/u.test(text)) {
+		return wrapTextWithAnsi(scriptoriumFg(text, color), width);
+	}
+
+	// OAuth URLs can be hundreds of columns long. Show an identifiable two-line
+	// preview rather than hiding the destination behind a generic label or letting
+	// it consume the whole modal. OSC 8 still targets the complete URL, and the
+	// modal's copy shortcut copies the complete value rather than this preview.
+	const previewWidth = Math.max(1, width * MAX_VISIBLE_URL_ROWS);
+	const preview = visibleWidth(text) > previewWidth ? truncateToWidth(text, previewWidth, "…") : text;
+	const open = `\u001b]8;;${text}\u001b\\`;
+	return wrapTextWithAnsi(preview, width).map((row) => `${open}${scriptoriumFg(row, color)}${OSC8_CLOSE}`);
 }
 
 function rgb(hex: string) {
@@ -166,9 +174,9 @@ export class ModalLayer extends ModalManager {
 			const shown = dialog.value
 				? scriptoriumFg(`> ${dialog.value}█`, colors.foreground)
 				: `${scriptoriumFg("> █", colors.foreground)}${scriptoriumFg(dialog.placeholder ?? "", colors.foregroundDim)}`;
-			const detailRows = (dialog.details ?? []).flatMap((detail) =>
+			const renderedDetailRows = (dialog.details ?? []).flatMap((detail) =>
 				detail.split("\n").flatMap((paragraph) =>
-					wrapTextWithAnsi(linkedHttpUrl(paragraph, colors.foregroundDim), inputWidth).map((row) => `     ${row}`),
+					detailRows(paragraph, inputWidth, colors.foregroundDim).map((row) => `     ${row}`),
 				),
 			);
 			const inputRows = wrapTextWithAnsi(shown, inputWidth).map((row) => `     ${row}`);
@@ -178,10 +186,10 @@ export class ModalLayer extends ModalManager {
 				{
 					compact: true,
 					extras: [
-						...detailRows,
-						...(detailRows.length > 0 ? [""] : []),
+						...renderedDetailRows,
+						...(renderedDetailRows.length > 0 ? [""] : []),
 						...inputRows,
-						...(dialog.copyAvailable ? [`     ${scriptoriumFg("ctrl+y copy link · ctrl+click open", colors.foregroundDim)}`] : []),
+						...(dialog.copyAvailable ? [`     ${scriptoriumFg("ctrl+y copy full URL · ctrl+click URL to open", colors.foregroundDim)}`] : []),
 						`     ${scriptoriumFg("⏎ submit · ⎋ retreat", colors.foregroundDim)}`,
 					],
 				},

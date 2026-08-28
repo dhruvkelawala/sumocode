@@ -124,9 +124,10 @@ describe("ModalLayer", () => {
 		const visibleText = stripAnsi(visibleRows.join("\n"));
 		const visibleAnsi = visibleRows.join("\n");
 
-		expect(visibleText).toContain("open authentication page");
+		expect(visibleText).toContain("https://claude.ai/oauth/authorize");
+		expect(visibleText).toContain("…");
 		expect(visibleText).toContain("> █");
-		expect(visibleText).toContain("ctrl+y copy link");
+		expect(visibleText).toContain("ctrl+y copy full URL");
 		expect(visibleText).toContain("⏎ submit");
 		expect(visibleAnsi).toContain(`\x1b]8;;${loginUrl}\x1b\\`);
 	});

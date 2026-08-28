@@ -142,7 +142,7 @@ describe("RpcExtensionUiResponder", () => {
 		expect(modalText).toContain("https://claude.ai/oauth/authorize");
 		expect(modalText).toContain(`\x1b]8;;${loginUrl}\x1b\\`);
 		expect(modalText).toContain("\x1b]8;;\x1b\\");
-		expect(modalText).toContain("ctrl+y copy link");
+		expect(modalText).toContain("ctrl+y copy full URL");
 
 		modals.handleInput("\x19"); // Raw Ctrl+Y byte from the terminal.
 		expect(copied).toEqual([loginUrl]);

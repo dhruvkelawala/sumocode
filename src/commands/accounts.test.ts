@@ -355,6 +355,7 @@ describe("executeAccountsCommand", () => {
 			JSON.stringify({ subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] }),
 			"utf8",
 		);
+		const installMultiPass = vi.fn(async () => {});
 		const reload = vi.fn(async () => {});
 		const { ctx, input } = makeCtx({
 			agentDir,
@@ -363,7 +364,8 @@ describe("executeAccountsCommand", () => {
 			onConfirm: () => true,
 			onInput: () => "second",
 		});
-		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), reload });
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), installMultiPass, reload });
+		expect(installMultiPass).toHaveBeenCalledTimes(1);
 		expect(input).toHaveBeenCalledWith("ACCOUNT LABEL", "Claude account 3");
 		expect(reload).toHaveBeenCalledTimes(1);
 		expect(loadClaudeSubscriptions(withAgentDir(agentDir))).toEqual([

@@ -101,11 +101,13 @@ Extend checks to cover:
 
 **Verify**: `scripts/smoke-pi-versions.sh --supported-matrix` → one PASS marker per unique minimum/latest version and no contract-drift marker (one marker is valid only when minimum equals latest).
 
-### Step 3: Add a bounded CI job
+### Step 3: Add bounded PR and registry-freshness CI
 
-Run the minimum/latest matrix on pull requests that touch package metadata, launcher/RPC, extension entry, or the workflow/script itself. Set a timeout and upload only bounded failure logs. No secrets or provider calls.
+Run the minimum/latest matrix on pull requests that touch package metadata, launcher/RPC, extension entry, or the workflow/script itself. Also run the same job from a daily UTC `schedule` on the default branch so a newly published patch inside the advertised peer range is tested without waiting for a repository change; include `workflow_dispatch` for immediate maintainer checks. Scheduled/manual runs must resolve the registry's current latest satisfying version rather than reuse a cached matrix result.
 
-**Verify**: `scripts/smoke-pi-versions.sh --supported-matrix` is the literal workflow command and produces the same PASS markers locally; `pnpm lint` exits 0; `rg -n "timeout-minutes|smoke-pi-versions.sh --supported-matrix" .github/workflows/*.yml` shows the compatibility job's bounded timeout and exactly one supported-matrix invocation.
+Set a timeout and upload only bounded failure logs. No secrets or provider calls. Use concurrency to cancel superseded runs of the same ref/event without cancelling the distinct scheduled freshness check.
+
+**Verify**: `scripts/smoke-pi-versions.sh --supported-matrix` is the literal workflow command and produces the same PASS markers locally; `pnpm lint` exits 0; workflow fixtures/tests prove qualifying PR, daily schedule, and manual dispatch all select the one bounded matrix job; `rg -n "schedule:|cron:|workflow_dispatch:|timeout-minutes|smoke-pi-versions.sh --supported-matrix" .github/workflows/*.yml` shows the external triggers, bounded timeout, and one canonical matrix invocation.
 
 ### Step 4: Make the script self-documenting
 
@@ -115,11 +117,11 @@ Keep documentation changes in Plan 115. Add `--help` output and a concise script
 
 ## Test plan
 
-Exercise minimum/latest, explicit unsupported version, unavailable registry response, RPC timeout, changed Pi-owned built-in, missing/extra SumoCode extension command, host-only command absent from `get_commands`, prompt/skill noise, and launcher flag parsing. All fixtures run offline after package installation.
+Exercise minimum/latest, explicit unsupported version, unavailable registry response, RPC timeout, changed Pi-owned built-in, missing/extra SumoCode extension command, host-only command absent from `get_commands`, prompt/skill noise, launcher flag parsing, and workflow selection for PR/schedule/manual events. All contract fixtures run offline after package installation; the matrix install/resolution itself intentionally uses the package registry.
 
 ## Done criteria
 
-- [ ] CI tests the minimum and latest version allowed by all Pi peer ranges.
+- [ ] CI tests the minimum and latest version allowed by all Pi peer ranges on qualifying PRs and on a daily registry-freshness schedule, with manual dispatch available.
 - [ ] All Pi packages are version-aligned in each fixture.
 - [ ] RPC, ownership-separated Pi built-in/host/extension command inventories, tool boundary, and direct-Pi bypass are checked.
 - [ ] Temporary installs cannot collide and are cleaned.

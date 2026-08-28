@@ -41,10 +41,10 @@ public listOwned(ownerSessionId: string): TerminalTaskSnapshot[] {
 
 ## Target design
 
-1. `TerminalTaskStore` exposes `refreshIndex()` as the only full validated scan boundary, then serves `getIndexed(id)` and `listOwnedIndexed(ownerSessionId)` from complete lightweight ID→metadata-path and owner→ID/path indexes. These indexes are derived/cache state, never a second durable authority. Indexed reads never fall back to `loadAll()` while the generation is valid; callers must invoke `refreshIndex()` explicitly at a proven freshness boundary.
-2. `TerminalTaskManager` retains its immutable-by-replacement snapshot projection and uses the store's lightweight owner/ID index for candidate selection. Plan 106 may later bound old snapshot objects without losing direct indexed lookups.
+1. `TerminalTaskStore` exposes `refreshIndex()` as the only full validated scan boundary. The generation retains each validated immutable snapshot (including owner/order/status and delivery-selection fields) plus ID→metadata-path and owner→ID indexes. `getIndexed(id)` and `listOwnedIndexed(ownerSessionId)` return those cached snapshot objects with zero metadata-file reads while the generation is valid; callers must invoke `refreshIndex()` explicitly at a proven freshness boundary.
+2. `TerminalTaskManager` seeds its existing immutable-by-replacement snapshot projection from the same validated generation rather than reparsing records. Store indexes remain derived/cache state, never a second durable authority. Plan 106 may later bound manager-retained snapshots without losing direct store-index lookups.
 3. Disk refresh is explicit: construction and proven writer takeover/rebind are freshness boundaries.
-4. Owner queries, claim selection, acknowledgement selection, retry-delay calculation, and list use indexed candidates; transitions still reread the locked current record and enforce revisions.
+4. Owner queries, claim selection, acknowledgement selection, retry-delay calculation, and list use cached indexed snapshots. Only a record selected for mutation is reread under its task lock before the transition, with revision/lease checks enforced; pure selection/list/retry queries perform no metadata rereads.
 5. One coordinator startup method refreshes/reconciles/acknowledges/claims from one projection generation.
 6. Activity publication consumes the manager projection. Only proven cross-process takeover may request a fresh disk scan.
 
@@ -92,9 +92,9 @@ After final source edits, run `pnpm build:extension` before `pnpm test`; keep th
 
 ### Step 1: Characterize scan count and cross-process freshness
 
-Add deterministic tests using an injected/counting store—not wall-clock budgets. Pin:
-- manager construction performs one full load;
-- binding an empty owner and flushing does not perform repeated full loads;
+Add deterministic tests using an injected/counting store—not wall-clock budgets. Count both full directory scans and individual metadata-file reads. Pin:
+- manager construction performs one full validated load and retains that generation's snapshots;
+- binding/listing/flushing an owner performs no repeated full loads and zero metadata rereads for pure queries;
 - owner A queries never return owner B;
 - an explicitly invoked refresh adopts a higher external revision;
 - stale revisions and lease-token mismatches still fail safely.
@@ -105,9 +105,9 @@ The target startup count is one full load for manager construction, plus at most
 
 ### Step 2: Add the ID/owner projection
 
-Implement the named API from Target design: `refreshIndex()` rebuilds complete lightweight `metaPathById` plus owner→ID/path state; `getIndexed(id)` and `listOwnedIndexed(ownerSessionId)` require a valid generation and perform direct reads only. Update the indexes on create and on reread of a valid immutable owner. Keep them derived from canonical metadata; do not persist a second index file. Owner buckets exclude malformed/skipped records and identity fields remain immutable.
+Implement the named API from Target design: `refreshIndex()` rebuilds `metaPathById`, owner→ID state, and an ID→validated immutable snapshot projection containing every field needed for list/claim/acknowledgement/retry selection. `getIndexed(id)` and `listOwnedIndexed(ownerSessionId)` require a valid generation and return cached snapshots without opening metadata files. Update the projection by immutable replacement after each successful local create/transition; external writers become visible only at an explicit refresh boundary. Keep the projection derived from canonical validated metadata; do not persist a second index file. Owner buckets exclude malformed/skipped records and identity fields remain immutable.
 
-Keep transition/read-current operations authoritative at mutation time. Indexed candidate selection does not bypass task locks or revision checks. Remove any implicit `loadAll()` fallback from indexed APIs. Name the regression `serves an old indexed ID with one metadata read and zero full scans`.
+Keep transition/read-current operations authoritative at mutation time: after selecting a candidate from the projection, reread only that record under its task lock and enforce revision/lease checks before writing. Indexed candidate selection does not bypass locks or revision checks. Remove any implicit `loadAll()` or per-candidate metadata-read fallback from indexed query APIs. Name regressions `serves an old indexed ID with zero metadata reads and zero full scans` and `rereads only the selected record before mutation`.
 
 **Verify**: store/manager tests pass, including duplicate ID, corrupt record, external-revision, lock, lease, and process-identity cases.
 
@@ -120,7 +120,7 @@ Replace the bind → reconcile → queued duplicate reconcile sequence with one 
 - retain passive-before-wake ordering;
 - schedule a lease retry only when a claimed record remains.
 
-Subsequent listener-driven flushes may query the projection but must not rescan disk.
+Subsequent listener-driven flushes may query the projection but must not rescan disk or reopen every owned metadata file.
 
 **Verify**: `terminal-tools.test.ts` passes and the scan-count regression reports the target count.
 
@@ -132,7 +132,7 @@ On normal same-process ownership, use `getSnapshots()`/subscription output. On p
 
 ### Step 5: Run full gates and record evidence
 
-Add a test fixture with at least 1,500 tiny metadata records and assert scan count remains constant with record count. A duration may be recorded as non-gating evidence; do not encode machine-specific milliseconds in unit tests.
+Add a test fixture with at least 1,500 tiny metadata records and assert full-scan count remains constant and post-refresh pure owner queries perform zero metadata reads regardless of owned-record count. A selected mutation may reread exactly one current record. A duration may be recorded as non-gating evidence; do not encode machine-specific milliseconds in unit tests.
 
 **Verify**: all commands in the table pass.
 
@@ -143,7 +143,7 @@ Required cases: empty store, 1,500 records across owners, duplicate/corrupt reco
 ## Done criteria
 
 - [ ] Normal startup performs one full terminal-store load, not six owner scans.
-- [ ] Owner and ID query cost is independent of total record count after refresh, including direct lookup after a manager snapshot is no longer retained.
+- [ ] Owner and ID queries after refresh use cached validated snapshots with zero metadata rereads, including direct lookup after a manager snapshot is no longer retained; mutation rereads only its selected record.
 - [ ] Cross-process refresh is explicit and tested.
 - [ ] Locks, revision CAS, lease tokens, file validation, and PID identity checks are unchanged or stronger.
 - [ ] No durable record is deleted or rewritten solely for indexing.
@@ -158,4 +158,4 @@ Required cases: empty store, 1,500 records across owners, duplicate/corrupt reco
 
 ## Maintenance notes
 
-The projection is a read/selection accelerator, not the persistence authority. Any future multi-process terminal writer must either publish projection updates through an explicit protocol or trigger the existing refresh boundary.
+The validated snapshot projection is a read/selection accelerator, not the persistence authority. Local writes replace its cached entry only after the durable transition succeeds. Any future multi-process terminal writer must either publish projection updates through an explicit protocol or trigger the existing refresh boundary.

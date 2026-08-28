@@ -6,10 +6,11 @@ Use this contract when implementing plans 091–115. The plan file is the execut
 
 1. Read the plan completely.
 2. Confirm every **Depends on** row is `DONE` in `plans/README.md`.
-3. Run the plan's commit-range drift check and working-tree preflight before editing.
-4. If either preflight or a named dependency contract fails, mark the row `BLOCKED` with evidence. Do not recreate dependency APIs.
+3. For Plan 115, additionally confirm every non-rejected Plan 091–114 row is `DONE`; this final-wave gate is mandatory even when the plan's direct API dependencies are complete.
+4. Run the plan's commit-range drift check and working-tree preflight before editing.
+5. If either preflight or a dependency/final-wave contract fails, mark the row `BLOCKED` with evidence. Do not recreate dependency APIs.
 
-Completion criterion: the selected plan is `TODO`, all dependencies are `DONE`, and both preflights are clean.
+Completion criterion: the selected plan is `TODO`, all dependencies and any final-wave gate are `DONE`, and both preflights are clean.
 
 ## 2. Isolate one plan per worktree
 

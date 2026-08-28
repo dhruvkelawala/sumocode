@@ -643,7 +643,7 @@ startup-speed claim.
 | 098 | [Harden visible task directories — sanitized public brief](issues/098.md) | P1 | L | M2 | 095 | TODO | [#392](https://github.com/dhruvkelawala/sumocode/issues/392) |
 | 097 | [Remove prompts from process metadata — sanitized public brief](issues/097.md) | P0 | L | M2 | 092, 096 | TODO | [#391](https://github.com/dhruvkelawala/sumocode/issues/391) |
 | 101 | [Pi compatibility matrix](101-pi-version-compatibility-matrix.md) | P1 | M | M3 | 092, 096 | TODO | [#395](https://github.com/dhruvkelawala/sumocode/issues/395) |
-| 102 | [Remediate dependency advisories — sanitized public brief](issues/102.md) | P1 | M | M2 | — | TODO | [#396](https://github.com/dhruvkelawala/sumocode/issues/396) |
+| 102 | [Remediate dependency advisories — sanitized public brief](issues/102.md) | P1 | M | M2 | 101 | TODO | [#396](https://github.com/dhruvkelawala/sumocode/issues/396) |
 | 103 | [Replace timing sleeps with state waits](103-replace-timing-sleeps-with-state-waits.md) | P2 | M | M3 | 092 | TODO | [#397](https://github.com/dhruvkelawala/sumocode/issues/397) |
 | 105 | [Integration-only integration lane](105-run-only-integration-tests-in-integration-lane.md) | P2 | S | M3 | — | REJECTED — Vitest 4.1.5 path filtering already yields 30 integration-only files; cheap trial `28a2661` found no red duplicate-execution state | [#399](https://github.com/dhruvkelawala/sumocode/issues/399) |
 | 109 | [Contain subagent lifecycle failures](109-contain-subagent-lifecycle-failures.md) | P1 | M | M3 | 095 | TODO | [#403](https://github.com/dhruvkelawala/sumocode/issues/403) |
@@ -656,14 +656,14 @@ startup-speed claim.
 | 112 | [Durable subagent registry](112-durable-subagent-registry.md) | P2 | L | M5 | 095, 104, 109 | TODO | [#406](https://github.com/dhruvkelawala/sumocode/issues/406) |
 | 113 | [Worktree result disposition loop](113-worktree-result-disposition-loop.md) | P2 | L | M5 | 109, 112 | TODO | [#407](https://github.com/dhruvkelawala/sumocode/issues/407) |
 | 114 | [Subagent budgets and stall visibility](114-subagent-budgets-and-stall-visibility.md) | P3 | L | M5 | 109, 112 | TODO | [#408](https://github.com/dhruvkelawala/sumocode/issues/408) |
-| 115 | [Reconcile active documentation](115-reconcile-active-documentation.md) | P2 | L | M6 | 094, 101 | TODO | [#409](https://github.com/dhruvkelawala/sumocode/issues/409) |
+| 115 | [Reconcile active documentation](115-reconcile-active-documentation.md) | P2 | L | M6 | 094, 101 + final-wave gate | TODO | [#409](https://github.com/dhruvkelawala/sumocode/issues/409) |
 
 ### Dependency waves
 
 1. **M1 foundation:** run 091 and 092 in parallel; then 093, 095, and 096; then 094.
-2. **M2 security:** 099, 100, and 102 can start immediately; 098 follows 095; 097 follows
-   092/096. If 102 finds a fixed Pi candidate before 101 lands, it runs the existing explicit
-   minimum/candidate smoke command; 101 later makes that compatibility gate durable in CI.
+2. **M2 security:** 099 and 100 can start immediately; 098 follows 095; 097 follows 092/096.
+   Plan 102 follows Plan 101 so any Pi remediation uses the complete version/RPC/command/tool-bypass
+   compatibility gate rather than the legacy direct-Pi smoke alone.
 3. **M3 reliability/scale:** 105 remains rejected and is excluded; 103 follows PTY isolation;
    109 follows truthful steering; 104 follows store/redaction foundations; 106 follows the real
    recovery test; 107 follows state-based tests; 108 follows the Pi matrix.
@@ -673,6 +673,7 @@ startup-speed claim.
    completed 112 registry contract; because they share snapshot/schema surfaces, integrate them serially
    (recommended 114 then 113) even though neither feature depends on the other's product behavior.
 6. **M6 docs:** 115 runs last so readiness/version/plan claims are facts rather than forecasts.
+   `EXECUTION.md` enforces this by requiring every non-rejected Plan 091–114 row to be `DONE`.
 
 ### Publication and execution contract
 

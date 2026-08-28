@@ -6,14 +6,14 @@
 > **Working-tree preflight (run at the same time)**: `git status --short -- AGENTS.md README.md DEV_LOOP.md SETUP.md docs/perf/startup.md docs/SUMO_TUI_PI_PATCH_STRATEGY.md docs/SUMO_TUI_AUDIT.md docs/SUMO_TUI_CONSOLIDATION_PLAN.md docs/adr/0001-sumo-tui-framework.md docs/prd.md docs/research/v0.4-roadmap.md docs/PI_TOOL_ARCHITECTURE.md docs/ui/bible/README.md docs/visual/README.md plans/README.md scripts/check-doc-references.mjs scripts/check-doc-references.test.mjs`. If this reports pre-existing work, STOP and preserve it; do not overwrite a dirty authority document.
 > If commit-range drift changes a Current state fact, STOP and request plan reconciliation.
 > **Read-only authority check**: `git diff --stat b34bd79..HEAD -- package.json bin/sumocode.sh src/extension-entry.ts src/sumo-tui/rpc/spawn-child.mjs .github/workflows`. These files define facts but are out of scope; if they changed, re-verify every affected statement and STOP if this plan would need source/config edits.
-> **Dependency check**: Confirm every plan named in **Depends on** is `DONE` in `plans/README.md`. If any is not DONE, STOP; do not recreate or assume its APIs.
+> **Dependency check**: Confirm every plan named in **Depends on** is `DONE` in `plans/README.md`. Then apply `plans/EXECUTION.md`'s final-wave gate: every non-rejected Plan 091–114 row must be `DONE`. If either check fails, STOP; do not document unfinished campaign work as current fact.
 
 ## Status
 
 - **Priority**: P2
 - **Effort**: L
 - **Risk**: LOW
-- **Depends on**: `plans/094-truthful-command-readiness.md`, `plans/101-pi-version-compatibility-matrix.md`
+- **Depends on**: `plans/094-truthful-command-readiness.md`, `plans/101-pi-version-compatibility-matrix.md`, plus the final-wave gate covering every non-rejected Plan 091–114 row
 - **Category**: docs
 - **Milestone**: M6 — Maintenance
 - **Planned at**: commit `b34bd79`, 2026-08-28
@@ -143,12 +143,13 @@ Documentation verification is search/link/file evidence:
 - [ ] Bible inventory and readiness terminology are current.
 - [ ] No production source, package/workflow config, or golden file changed; only scoped docs/checker files plus plan bookkeeping appear in `git status --short`.
 - [ ] `pnpm vitest run scripts/check-doc-references.test.mjs && node scripts/check-doc-references.mjs --check all` exits 0.
+- [ ] Every non-rejected Plan 091–114 row was `DONE` before documentation edits began.
 - [ ] Plan 115's `plans/README.md` row is updated to `DONE` with completion evidence.
 
 ## STOP conditions
 
 - Commit-range/working-tree/read-only authority preflight changes a Current state assumption, any verification fails twice after a reasonable fix, or completion requires an out-of-scope file.
-- Plan 094 or 101 is not complete and current readiness/version facts cannot be stated.
+- Plan 094 or 101 is not complete, any other non-rejected Plan 091–114 row is unfinished, or current readiness/version facts cannot be stated.
 - A document's historical status is genuinely disputed.
 - Correcting a claim would require exposing private configuration or credential locations beyond existing public contracts.
 - Visual inventory generation changes HTML/PNG outputs.

@@ -2,8 +2,8 @@
 
 > **Executor instructions**: Follow this plan step by step and run every verification command. Implement observability and explicit policy before enforcement. V1 must never auto-kill a child based on inferred stall or budget exhaustion. Cancellation remains an explicit human/agent action. When done, update this plan's row in `plans/README.md` unless a reviewer says they own the index.
 >
-> **Drift check (run first)**: `git diff --stat b34bd79..HEAD -- dist/host dist/extension src/subagents/domain.ts src/subagents/budget-policy.ts src/subagents/budget-policy.test.ts src/subagents/registry.ts src/subagents/registry.test.ts src/subagents/manager.ts src/subagents/manager.test.ts src/subagents/tools.ts src/subagents/tools.test.ts src/subagents/backend-pi.ts src/subagents/backend-pi.test.ts src/subagents/backend-pane.ts src/subagents/backend-pane.test.ts src/task-mode.ts src/task-mode.test.ts src/activity/subagent-adapter.ts src/activity/subagent-adapter.test.ts src/sumo-tui/transcript/activity-renderer.ts src/sumo-tui/transcript/activity-renderer.test.ts`
-> **Working-tree preflight (run at the same time)**: `git status --short -- dist/host dist/extension src/subagents/domain.ts src/subagents/budget-policy.ts src/subagents/budget-policy.test.ts src/subagents/registry.ts src/subagents/registry.test.ts src/subagents/manager.ts src/subagents/manager.test.ts src/subagents/tools.ts src/subagents/tools.test.ts src/subagents/backend-pi.ts src/subagents/backend-pi.test.ts src/subagents/backend-pane.ts src/subagents/backend-pane.test.ts src/task-mode.ts src/task-mode.test.ts src/activity/subagent-adapter.ts src/activity/subagent-adapter.test.ts src/sumo-tui/transcript/activity-renderer.ts src/sumo-tui/transcript/activity-renderer.test.ts`. If this reports pre-existing work, STOP and preserve it.
+> **Drift check (run first)**: `git diff --stat b34bd79..HEAD -- dist/host dist/extension src/subagents/domain.ts src/subagents/budget-policy.ts src/subagents/budget-policy.test.ts src/subagents/registry.ts src/subagents/registry.test.ts src/subagents/manager.ts src/subagents/manager.test.ts src/subagents/tools.ts src/subagents/tools.test.ts src/subagents/backend-pi.ts src/subagents/backend-pi.test.ts src/subagents/backend-pane.ts src/subagents/backend-pane.test.ts src/task-mode.ts src/task-mode.test.ts src/activity/subagent-adapter.ts src/activity/subagent-adapter.test.ts src/sumo-tui/transcript/activity-renderer.ts src/sumo-tui/transcript/activity-renderer.test.ts scripts/visual-v2/fixture-capture.mjs docs/visual/parity/scenarios.json`
+> **Working-tree preflight (run at the same time)**: `git status --short -- dist/host dist/extension src/subagents/domain.ts src/subagents/budget-policy.ts src/subagents/budget-policy.test.ts src/subagents/registry.ts src/subagents/registry.test.ts src/subagents/manager.ts src/subagents/manager.test.ts src/subagents/tools.ts src/subagents/tools.test.ts src/subagents/backend-pi.ts src/subagents/backend-pi.test.ts src/subagents/backend-pane.ts src/subagents/backend-pane.test.ts src/task-mode.ts src/task-mode.test.ts src/activity/subagent-adapter.ts src/activity/subagent-adapter.test.ts src/sumo-tui/transcript/activity-renderer.ts src/sumo-tui/transcript/activity-renderer.test.ts scripts/visual-v2/fixture-capture.mjs docs/visual/parity/scenarios.json`. If this reports pre-existing work, STOP and preserve it.
 > If commit-range drift changes a Current state behavior/signature, STOP and request plan reconciliation.
 > **Dependency check**: Confirm every plan named in **Depends on** is `DONE` in `plans/README.md`. If any is not DONE, STOP; do not recreate or assume its APIs.
 
@@ -44,7 +44,7 @@ SumoCode permits ten running and sixteen queued subagents but exposes no wall-ti
 |---|---|---|
 | Domain/manager | `pnpm vitest run src/subagents/manager.test.ts src/subagents/tools.test.ts` | pass |
 | Backends | `pnpm vitest run src/subagents/backend-pi.test.ts src/subagents/backend-pane.test.ts src/task-mode.test.ts` | pass |
-| Activity/visual | `pnpm vitest run src/activity/subagent-adapter.test.ts src/sumo-tui/transcript/activity-renderer.test.ts && pnpm visual:ci` | exit 0; no golden promotion |
+| Activity/visual | `pnpm vitest run src/activity/subagent-adapter.test.ts src/sumo-tui/transcript/activity-renderer.test.ts && pnpm visual:review -- --scenario fixture-subagent-budget-warnings-landscape && pnpm visual:ci` | exit 0; warning capture exists; no golden promotion |
 | Full gates | `pnpm exec tsc --noEmit && pnpm build && pnpm lint && pnpm test && pnpm test:integration` | exit 0 |
 
 ## Committed bundle freshness
@@ -60,6 +60,7 @@ After final source/UI edits, run `pnpm build:host && pnpm build:extension` befor
 - Optional spawn/tool parameters or role defaults.
 - Headless event timestamps and a visible-child heartbeat/liveness signal if feasible.
 - List/check presentation in `src/subagents/tools.ts`, Activity projection in `src/activity/subagent-adapter.ts`, and retained rendering in `src/sumo-tui/transcript/activity-renderer.ts`, with colocated tests and warning dedup.
+- `scripts/visual-v2/fixture-capture.mjs` and `docs/visual/parity/scenarios.json` for one deterministic review-only landscape fixture containing both warning states. Use the existing activity-cards Bible target only as a comparison baseline; expected warning diffs are review evidence, not a target/golden update.
 
 **Out of scope**:
 - Automatic cancellation/kill.
@@ -67,6 +68,7 @@ After final source/UI edits, run `pnpm build:host && pnpm build:extension` befor
 - Billing guarantees.
 - Global agent recursion/depth policy.
 - Changing Plan 112's lease/process-ownership protocol beyond serializing the new budget/progress fields.
+- Bible HTML/PNG targets, parity runtime goldens/status, required crops, or golden promotion.
 
 ## Git workflow
 
@@ -100,7 +102,9 @@ Use one unrefed scheduler to recompute health for running children. Notify liste
 
 Add optional spawn parameters with bounded maxima and role/session defaults only where configuration has an established home. `list`/`check` show utilization and last progress. Cards use existing warning colors/state roles; do not create a new theme token without spec. Include exact next action: inspect or explicitly cancel.
 
-**Verify**: `pnpm vitest run src/subagents/tools.test.ts src/subagents/registry.test.ts src/activity/subagent-adapter.test.ts src/sumo-tui/transcript/activity-renderer.test.ts && pnpm visual:ci` → exit 0; spawn validation bounds limits, registry round-trips them, list/check/cards use approved voice/tokens, and no golden file changes.
+Add fixture `activity-budget-warnings` with one expanded `stalled-warning` subagent and one expanded `over-budget-warning` subagent, deterministic utilization/progress text, and no live clock dependency. Register review-only scenario `fixture-subagent-budget-warnings-landscape` at 160×45. Compare against the existing activity-cards Bible target without changing it; the intentional styled-cell diff must isolate the two warning cards and their next-action copy.
+
+**Verify**: `pnpm vitest run src/subagents/tools.test.ts src/subagents/registry.test.ts src/activity/subagent-adapter.test.ts src/sumo-tui/transcript/activity-renderer.test.ts && pnpm visual:review -- --scenario fixture-subagent-budget-warnings-landscape && pnpm visual:ci` → exit 0; spawn validation bounds limits, registry round-trips them, list/check/cards use approved voice/tokens, and the review pack contains candidate full/chat-area PNGs plus styled-cell/geometry reports showing both warning states; `git status --short docs/ui/bible docs/visual/parity/approved-runtime` is empty.
 
 ### Step 5: Run full gates
 
@@ -118,7 +122,8 @@ Cover wall/token/cost boundaries, missing usage, heartbeat, long tool grace, vis
 - [ ] Progress/liveness semantics are truthful per backend.
 - [ ] One scheduler evaluates health and cleans up.
 - [ ] V1 never auto-cancels or closes a child.
-- [ ] Full unit/integration/visual gates pass.
+- [ ] Deterministic visual review evidence captures both `stalled-warning` and `over-budget-warning` cards and their explicit next actions.
+- [ ] Full unit/integration/visual gates pass without Bible/runtime-golden changes.
 - [ ] `git status --short` contains only files listed in Scope plus this plan/index bookkeeping.
 - [ ] Plan 114's `plans/README.md` row is updated to `DONE` with completion evidence.
 
@@ -129,6 +134,7 @@ Cover wall/token/cost boundaries, missing usage, heartbeat, long tool grace, vis
 - Provider usage cannot be mapped to the advertised budget unit.
 - Implementation requires automatic kill to be useful.
 - New visual tokens are required without design approval.
+- Capturing the warning states would require changing a Bible target, required crop, runtime golden/status, or promoting a golden.
 
 ## Maintenance notes
 

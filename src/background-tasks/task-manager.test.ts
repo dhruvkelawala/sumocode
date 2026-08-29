@@ -345,6 +345,35 @@ describe("TerminalTaskManager", () => {
 		expect(reads).toEqual({ scans: 0, metadata: 1 });
 	});
 
+	it("readIndexed re-verifies the owner from the fresh read when the compact index went stale", async () => {
+		const reads = { scans: 0, metadata: 0 };
+		// SAFETY: the fake models one divergence only — disk truth was rewritten
+		// outside the CAS protocol so the durable record's owner moved to
+		// session-b while this process's compact index (refreshed only at explicit
+		// boundaries) still names session-a. The precheck passes; the read happens;
+		// the fresh owner must win.
+		class StaleCompactOwnerStore extends TerminalTaskStore {
+			public override getIndexed(id: string): TerminalTaskSnapshot | undefined {
+				const snapshot = super.getIndexed(id);
+				return snapshot ? { ...snapshot, ownerSessionId: "session-b" } : undefined;
+			}
+		}
+		const target = manager({
+			store: new StaleCompactOwnerStore({
+				rootDir,
+				onRead: (kind) => { reads[kind === "full-scan" ? "scans" : "metadata"] += 1; },
+			}),
+		});
+		const task = await start(target);
+		reads.scans = 0;
+		reads.metadata = 0;
+
+		expect(target.readIndexed(task.id, "session-a")).toBeUndefined();
+		// The stale compact entry admitted the precheck, so the mismatch cost
+		// exactly the one authoritative read and no scan.
+		expect(reads).toEqual({ scans: 0, metadata: 1 });
+	});
+
 	it("refreshes the compact candidate after a locked no-op so stale claim state stops rereading", async () => {
 		const reads = { scans: 0, metadata: 0 };
 		const store = new TerminalTaskStore({

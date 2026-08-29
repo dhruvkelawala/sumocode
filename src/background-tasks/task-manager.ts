@@ -855,12 +855,14 @@ export class TerminalTaskManager {
 	}
 
 	/**
-	 * Authoritative store-index read of one record, bypassing the retained
-	 * projection. Narrow surface for pre-send/pre-publication freshness checks;
-	 * never scans the store and only resolves indexed ids.
+	 * Authoritative single indexed read of one record, bypassing the retained
+	 * projection. Owner-isolated: another session's record reads as `undefined`.
+	 * Narrow surface for pre-send/pre-publication freshness checks; never scans
+	 * the store and only resolves indexed ids.
 	 */
-	public readIndexed(id: string): TerminalTaskSnapshot | undefined {
-		return this.store.getIndexed(id);
+	public readIndexed(id: string, ownerSessionId: string): TerminalTaskSnapshot | undefined {
+		const snapshot = this.store.getIndexed(id);
+		return snapshot?.ownerSessionId === ownerSessionId ? snapshot : undefined;
 	}
 
 	public getSnapshots(): readonly TerminalTaskSnapshot[] {

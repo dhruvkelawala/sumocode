@@ -324,6 +324,25 @@ describe("TerminalTaskManager", () => {
 		expect(durableTask(task.id)).toMatchObject({ deliveryState: "claimed", deliveryClaimToken: "claim-rival" });
 	});
 
+	it("readIndexed is owner-isolated and never scans the store", async () => {
+		const reads = { scans: 0, metadata: 0 };
+		const store = new TerminalTaskStore({
+			rootDir,
+			onRead: (kind) => { reads[kind === "full-scan" ? "scans" : "metadata"] += 1; },
+		});
+		const target = manager({ store });
+		const task = await start(target);
+		reads.scans = 0;
+		reads.metadata = 0;
+
+		expect(target.readIndexed(task.id, "session-b")).toBeUndefined();
+		expect(target.readIndexed(task.id, "session-a")).toMatchObject({ id: task.id, ownerSessionId: "session-a" });
+		expect(target.readIndexed("term-missing", "session-a")).toBeUndefined();
+		// Each owner-scoped read is one selected indexed record; a mismatched or
+		// unknown id never falls back to a directory scan.
+		expect(reads).toEqual({ scans: 0, metadata: 2 });
+	});
+
 	it("rereads only a selected delivery record for each mutation", async () => {
 		const reads = { scans: 0, metadata: 0 };
 		const store = new TerminalTaskStore({

@@ -89,7 +89,10 @@ function createHarness(initial: TerminalTaskSnapshot[] = []) {
 			const entry = tasks.get(id);
 			return entry?.ownerSessionId === owner ? entry : undefined;
 		}),
-		readIndexed: vi.fn((id: string) => tasks.get(id)),
+		readIndexed: vi.fn((id: string, owner: string) => {
+			const entry = tasks.get(id);
+			return entry?.ownerSessionId === owner ? entry : undefined;
+		}),
 		getOutput: vi.fn(() => "bounded output"),
 		claimPending: vi.fn((owner: string, includeWake: boolean) => {
 			const claimed: TerminalTaskSnapshot[] = [];

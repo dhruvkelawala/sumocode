@@ -35,10 +35,13 @@ import {
 	TERMINAL_TASK_SCHEMA_VERSION,
 	isTerminalTaskSettled,
 	type StartTerminalTaskOptions,
+	type TerminalCompletionPolicy,
 	type TerminalDeliveryReceipt,
+	type TerminalDeliveryState,
 	type TerminalStopResult,
 	type TerminalTaskObservation,
 	type TerminalTaskSnapshot,
+	type TerminalTaskStatus,
 	type TerminalWaitResult,
 } from "./task-types.js";
 import { buildVisibleTaskPaths, shellEscape } from "./visible-spawn.js";
@@ -347,6 +350,50 @@ function abortError(): Error {
 	return error;
 }
 
+/** Eligibility fields shared verbatim by compact index entries and full snapshots. */
+interface DeliveryEligibility {
+	readonly ownerSessionId: string;
+	readonly status: TerminalTaskStatus;
+	readonly deliveryState: TerminalDeliveryState;
+	readonly completionPolicy: TerminalCompletionPolicy;
+	readonly updatedAt: number;
+	readonly completionId?: string;
+	readonly deliveryClaimToken?: string;
+}
+
+/**
+ * Single claimability policy. The compact prefilter and the authoritative
+ * locked-snapshot closure must agree on owner, settlement, delivery state,
+ * claim-lease expiry, and the wake-claim cap without restating any rule.
+ */
+function isClaimable(
+	task: DeliveryEligibility,
+	ownerSessionId: string,
+	includeWake: boolean,
+	wakeClaimsUsed: number,
+	maxWake: number,
+	now: number,
+	claimLeaseMs: number,
+): boolean {
+	if (task.ownerSessionId !== ownerSessionId) return false;
+	if (!isTerminalTaskSettled(task.status)) return false;
+	const claimLeaseExpired = task.deliveryState === "claimed" && now - task.updatedAt >= claimLeaseMs;
+	if (task.deliveryState !== "pending" && !claimLeaseExpired) return false;
+	if (task.completionPolicy === "wake" && (!includeWake || wakeClaimsUsed >= maxWake)) return false;
+	return true;
+}
+
+/**
+ * Single acknowledgement-matching policy: owner plus claimed delivery state
+ * plus the exact completionId/claimToken receipt pair.
+ */
+function isAcknowledgementMatch(task: DeliveryEligibility, ownerSessionId: string, receiptKeys: ReadonlySet<string>): boolean {
+	if (task.ownerSessionId !== ownerSessionId) return false;
+	if (task.deliveryState !== "claimed") return false;
+	if (task.completionId === undefined || task.deliveryClaimToken === undefined) return false;
+	return receiptKeys.has(`${task.completionId}\u0000${task.deliveryClaimToken}`);
+}
+
 export class TerminalTaskManager {
 	private readonly store: TerminalTaskStore;
 	private readonly processTree: ProcessTreeOperations;
@@ -363,7 +410,6 @@ export class TerminalTaskManager {
 	private readonly startingRecoveryGraceMs: number;
 	private readonly onDiagnostic?: TerminalTaskManagerOptions["onDiagnostic"];
 	private readonly tasks = new Map<string, TerminalTaskSnapshot>();
-	private readonly taskIdsByOwner = new Map<string, Set<string>>();
 	private readonly runtime = new Map<string, RuntimeTask>();
 	private readonly listeners = new Set<TerminalTaskChangeListener>();
 	private readonly snapshotListeners = new Set<TerminalTaskSnapshotListener>();
@@ -524,14 +570,12 @@ export class TerminalTaskManager {
 		return running.snapshot;
 	}
 
-	/** Pure inventory read joined from the retained manager projection. */
+	/** Owner-ordered inventory: the store's owner index joins retained full snapshots. */
 	public list(ownerSessionId: string): TerminalTaskSnapshot[] {
-		return [...this.taskIdsByOwner.get(ownerSessionId) ?? []]
-			.flatMap((id) => {
-				const task = this.tasks.get(id);
-				return task ? [task] : [];
-			})
-			.sort((left, right) => right.createdAt - left.createdAt);
+		return this.store.listOwnedIndexed(ownerSessionId).flatMap((indexed) => {
+			const task = this.tasks.get(indexed.id);
+			return task ? [task] : [];
+		});
 	}
 
 	public get(id: string, ownerSessionId: string): TerminalTaskSnapshot | undefined {
@@ -744,15 +788,9 @@ export class TerminalTaskManager {
 		const claimed: TerminalTaskSnapshot[] = [];
 		let claimedWake = 0;
 		for (const candidate of this.store.listOwnedIndexed(ownerSessionId)) {
-			if (!isTerminalTaskSettled(candidate.status)) continue;
-			const expiredClaim = candidate.deliveryState === "claimed" && this.now() - candidate.updatedAt >= this.claimLeaseMs;
-			if (candidate.deliveryState !== "pending" && !expiredClaim) continue;
-			if (candidate.completionPolicy === "wake" && (!includeWake || claimedWake >= maxWake)) continue;
+			if (!isClaimable(candidate, ownerSessionId, includeWake, claimedWake, maxWake, this.now(), this.claimLeaseMs)) continue;
 			const result = this.mutate(candidate.id, (current) => {
-				if (current.ownerSessionId !== ownerSessionId || !isTerminalTaskSettled(current.status)) return undefined;
-				const expiredClaim = current.deliveryState === "claimed" && this.now() - current.updatedAt >= this.claimLeaseMs;
-				if (current.deliveryState !== "pending" && !expiredClaim) return undefined;
-				if (current.completionPolicy === "wake" && (!includeWake || claimedWake >= maxWake)) return undefined;
+				if (!isClaimable(current, ownerSessionId, includeWake, claimedWake, maxWake, this.now(), this.claimLeaseMs)) return undefined;
 				return {
 					...current,
 					deliveryState: "claimed",
@@ -771,13 +809,9 @@ export class TerminalTaskManager {
 		const receiptKeys = new Set(receipts.map(({ completionId, claimToken }) => `${completionId}\u0000${claimToken}`));
 		const acknowledged: TerminalTaskSnapshot[] = [];
 		for (const candidate of this.store.listOwnedIndexed(ownerSessionId)) {
-			if (!candidate.completionId || !candidate.deliveryClaimToken || !receiptKeys.has(`${candidate.completionId}\u0000${candidate.deliveryClaimToken}`)) continue;
+			if (!isAcknowledgementMatch(candidate, ownerSessionId, receiptKeys)) continue;
 			const result = this.mutate(candidate.id, (current) => {
-				if (
-					current.ownerSessionId !== ownerSessionId || current.deliveryState !== "claimed" ||
-					!current.completionId || !current.deliveryClaimToken ||
-					!receiptKeys.has(`${current.completionId}\u0000${current.deliveryClaimToken}`)
-				) return undefined;
+				if (!isAcknowledgementMatch(current, ownerSessionId, receiptKeys)) return undefined;
 				return { ...current, deliveryState: "delivered", deliveryClaimToken: undefined, updatedAt: this.timestamp(current) };
 			});
 			if (result.changed) acknowledged.push(result.snapshot);
@@ -1328,9 +1362,6 @@ export class TerminalTaskManager {
 	private adopt(snapshot: TerminalTaskSnapshot, notify: boolean): void {
 		const previous = this.tasks.get(snapshot.id);
 		this.tasks.set(snapshot.id, snapshot);
-		const owned = this.taskIdsByOwner.get(snapshot.ownerSessionId) ?? new Set<string>();
-		owned.add(snapshot.id);
-		this.taskIdsByOwner.set(snapshot.ownerSessionId, owned);
 		this.ensureRuntime(snapshot);
 		if (!notify || previous?.revision === snapshot.revision) return;
 		for (const listener of this.listeners) {

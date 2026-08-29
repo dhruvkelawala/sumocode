@@ -191,6 +191,11 @@ export function isValidTerminalTaskId(id: string): boolean {
 	return TERMINAL_ID_PATTERN.test(id) && !id.includes("..");
 }
 
+/** Single canonical terminal ordering: newest createdAt first. */
+function terminalCreatedAtDesc(left: Readonly<{ createdAt: number }>, right: Readonly<{ createdAt: number }>): number {
+	return right.createdAt - left.createdAt;
+}
+
 function isStatusValue(value: unknown): value is TerminalTaskStatus {
 	// SAFETY: membership in STATUSES proves this string is a TerminalTaskStatus.
 	return typeof value === "string" && STATUSES.has(value as TerminalTaskStatus);
@@ -418,7 +423,7 @@ export class TerminalTaskStore {
 	public readonly rootDir: string;
 	private readonly metaPathById = new Map<string, string>();
 	private readonly indexedById = new Map<string, IndexedTerminalTask>();
-	private readonly indexedIdsByOwner = new Map<string, readonly string[]>();
+	private readonly indexedIdsByOwner = new Map<string, Set<string>>();
 	private readonly onDiagnostic?: (diagnostic: TerminalTaskStoreDiagnostic) => void;
 	private readonly onRead?: (kind: TerminalTaskStoreReadKind) => void;
 	private readonly lockTimeoutMs: number;
@@ -493,10 +498,14 @@ export class TerminalTaskStore {
 	}
 
 	public listOwnedIndexed(ownerSessionId: string): readonly IndexedTerminalTask[] {
-		return (this.indexedIdsByOwner.get(ownerSessionId) ?? []).flatMap((id) => {
-			const indexed = this.indexedById.get(id);
-			return indexed ? [indexed] : [];
-		});
+		const ids = this.indexedIdsByOwner.get(ownerSessionId);
+		if (!ids || ids.size === 0) return [];
+		return [...ids]
+			.flatMap((id) => {
+				const indexed = this.indexedById.get(id);
+				return indexed ? [indexed] : [];
+			})
+			.sort(terminalCreatedAtDesc);
 	}
 
 	public create(snapshot: TerminalTaskSnapshot, metaPath: string): TerminalTaskSnapshot {
@@ -573,29 +582,28 @@ export class TerminalTaskStore {
 		this.metaPathById.clear();
 		this.indexedById.clear();
 		this.indexedIdsByOwner.clear();
-		const idsByOwner = new Map<string, string[]>();
 		for (const snapshot of snapshots) {
 			const path = paths.get(snapshot.id);
 			if (!path) continue;
 			this.metaPathById.set(snapshot.id, path);
 			this.indexedById.set(snapshot.id, this.compact(snapshot));
-			const owned = idsByOwner.get(snapshot.ownerSessionId) ?? [];
-			owned.push(snapshot.id);
-			idsByOwner.set(snapshot.ownerSessionId, owned);
-		}
-		for (const [owner, ids] of idsByOwner) {
-			ids.sort((left, right) => (this.indexedById.get(right)?.createdAt ?? 0) - (this.indexedById.get(left)?.createdAt ?? 0));
-			this.indexedIdsByOwner.set(owner, Object.freeze(ids));
+			this.ownerMembership(snapshot).add(snapshot.id);
 		}
 	}
 
 	private replaceIndexedEntry(snapshot: TerminalTaskSnapshot): void {
 		this.indexedById.set(snapshot.id, this.compact(snapshot));
-		const currentIds = this.indexedIdsByOwner.get(snapshot.ownerSessionId) ?? [];
-		if (currentIds.includes(snapshot.id)) return;
-		const nextIds = [...currentIds, snapshot.id]
-			.sort((left, right) => (this.indexedById.get(right)?.createdAt ?? 0) - (this.indexedById.get(left)?.createdAt ?? 0));
-		this.indexedIdsByOwner.set(snapshot.ownerSessionId, Object.freeze(nextIds));
+		this.ownerMembership(snapshot).add(snapshot.id);
+	}
+
+	/** O(1) owner membership; createdAt-desc ordering is applied lazily by listOwnedIndexed. */
+	private ownerMembership(snapshot: TerminalTaskSnapshot): Set<string> {
+		let ids = this.indexedIdsByOwner.get(snapshot.ownerSessionId);
+		if (!ids) {
+			ids = new Set<string>();
+			this.indexedIdsByOwner.set(snapshot.ownerSessionId, ids);
+		}
+		return ids;
 	}
 
 	private compact(snapshot: TerminalTaskSnapshot): IndexedTerminalTask {

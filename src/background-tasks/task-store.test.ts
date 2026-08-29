@@ -25,8 +25,8 @@ function taskDirectory(store: TerminalTaskStore, id: string, createdAt = 1_000):
 	return directory;
 }
 
-function snapshot(store: TerminalTaskStore, id: string, ownerSessionId = "session-a"): TerminalTaskSnapshot {
-	const directory = taskDirectory(store, id);
+function snapshot(store: TerminalTaskStore, id: string, ownerSessionId = "session-a", createdAt = 1_000): TerminalTaskSnapshot {
+	const directory = taskDirectory(store, id, createdAt);
 	return {
 		schemaVersion: TERMINAL_TASK_SCHEMA_VERSION,
 		revision: 1,
@@ -37,8 +37,8 @@ function snapshot(store: TerminalTaskStore, id: string, ownerSessionId = "sessio
 		title: "tests",
 		status: "starting",
 		completionPolicy: "passive",
-		createdAt: 1_000,
-		updatedAt: 1_000,
+		createdAt,
+		updatedAt: createdAt,
 		deliveryState: "none",
 		logFile: join(directory, "output.log"),
 	};
@@ -142,14 +142,15 @@ describe("TerminalTaskStore", () => {
 		expect(store.listOwnedIndexed("session-b").map((task) => task.id)).toEqual(["term-b"]);
 	});
 
-	it("selects 1500 owned candidates with zero metadata reads", () => {
+	it("selects 1500 owned candidates across owners with zero metadata reads", () => {
 		const reads = { scans: 0, metadata: 0 };
 		const store = new TerminalTaskStore({
 			rootDir,
 			onRead: (kind) => { reads[kind === "full-scan" ? "scans" : "metadata"] += 1; },
 		});
+		const owners = ["session-a", "session-b", "session-c"];
 		for (let index = 0; index < 1_500; index += 1) {
-			const task = snapshot(store, `term-indexed-${index}`);
+			const task = snapshot(store, `term-indexed-${index}`, owners[index % owners.length]!, 1_000 + index);
 			privateWrite(join(dirname(task.logFile), "meta.json"), `${JSON.stringify(task)}\n`);
 		}
 
@@ -159,12 +160,43 @@ describe("TerminalTaskStore", () => {
 		reads.metadata = 0;
 
 		const candidates = store.listOwnedIndexed("session-a");
-		expect(candidates).toHaveLength(1_500);
+		expect(candidates).toHaveLength(500);
+		expect(candidates.every((task) => task.ownerSessionId === "session-a")).toBe(true);
+		expect(store.listOwnedIndexed("session-b")).toHaveLength(500);
+		expect(store.listOwnedIndexed("session-c")).toHaveLength(500);
+		expect(store.listOwnedIndexed("session-unknown")).toEqual([]);
 		expect(candidates[0]).not.toHaveProperty("command");
 		expect(candidates[0]).not.toHaveProperty("cwd");
 		expect(candidates[0]).not.toHaveProperty("title");
 		expect(candidates[0]).not.toHaveProperty("logFile");
 		expect(reads).toEqual({ scans: 0, metadata: 0 });
+	}, 120_000);
+
+	it("creates 1500 indexed records with zero scans, zero rereads, and no per-create sort", () => {
+		const reads = { scans: 0, metadata: 0 };
+		const store = new TerminalTaskStore({
+			rootDir,
+			onRead: (kind) => { reads[kind === "full-scan" ? "scans" : "metadata"] += 1; },
+		});
+		const sortCalls = vi.spyOn(Array.prototype, "sort");
+		try {
+			for (let index = 0; index < 1_500; index += 1) {
+				const task = snapshot(store, `term-created-${index}`, index % 2 === 0 ? "session-a" : "session-b", 1_000 + index);
+				store.create(task, join(dirname(task.logFile), "meta.json"));
+			}
+		} finally {
+			sortCalls.mockRestore();
+		}
+		// Real store.create never rescans the directory, rereads metadata, or
+		// re-sorts owner buckets per create; ordering is applied lazily on read.
+		expect(reads).toEqual({ scans: 0, metadata: 0 });
+		expect(sortCalls).not.toHaveBeenCalled();
+
+		const owned = store.listOwnedIndexed("session-a");
+		expect(owned).toHaveLength(750);
+		expect(owned.every((task) => task.ownerSessionId === "session-a")).toBe(true);
+		expect(owned.map((task) => task.createdAt)).toEqual(Array.from({ length: 750 }, (_, position) => 2_498 - position * 2));
+		expect(store.listOwnedIndexed("session-b")).toHaveLength(750);
 	}, 120_000);
 
 	it("serves an old indexed ID with one metadata read and zero full scans", () => {

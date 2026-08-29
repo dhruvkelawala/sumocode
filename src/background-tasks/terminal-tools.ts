@@ -128,6 +128,9 @@ export class TerminalDeliveryCoordinator {
 		// The queued flush is the sole startup pass: acknowledge visible receipts,
 		// reclaim eligible completions, preserve passive-before-wake ordering, and
 		// schedule any remaining lease retry from one manager projection.
+		// Flush is idle-dependent: it returns without delivering while ctx.isIdle()
+		// is false, and agent_end/agent_settled re-run flushWhenIdle so a busy
+		// startup still converges once the session settles.
 		this.requestFlush();
 	}
 

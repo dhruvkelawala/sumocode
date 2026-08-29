@@ -7,6 +7,7 @@ import type { ChildProcess } from "node:child_process";
 import type { ProcessTreeIdentity, ProcessTreeOperations } from "./process-tree.js";
 import { TerminalTaskManager } from "./task-manager.js";
 import { TerminalTaskStore } from "./task-store.js";
+import { TerminalDeliveryCoordinator } from "./terminal-tools.js";
 import { TERMINAL_TASK_SCHEMA_VERSION, type TerminalTaskSnapshot } from "./task-types.js";
 
 type MockChild = EventEmitter & { pid: number; unref: ReturnType<typeof vi.fn> };
@@ -196,14 +197,15 @@ describe("TerminalTaskManager", () => {
 		unsubscribe();
 	});
 
-	it("builds one index and joins 1500 retained owner snapshots without further metadata reads", () => {
+	it("builds one index and joins 1500 retained owner snapshots across owners without further metadata reads", () => {
 		const reads = { scans: 0, metadata: 0 };
 		const store = new TerminalTaskStore({
 			rootDir,
 			onRead: (kind) => { reads[kind === "full-scan" ? "scans" : "metadata"] += 1; },
 		});
+		const owners = ["session-indexed", "session-other"];
 		for (let index = 0; index < 1_500; index += 1) {
-			persistSettledTask(store, `term-retained-${index}`, "session-indexed", 1_000 + index);
+			persistSettledTask(store, `term-retained-${index}`, owners[index % owners.length]!, 1_000 + index);
 		}
 
 		const target = manager({ store });
@@ -211,14 +213,58 @@ describe("TerminalTaskManager", () => {
 		reads.scans = 0;
 		reads.metadata = 0;
 
-		expect(target.list("session-indexed")).toHaveLength(1_500);
+		const owned = target.list("session-indexed");
+		expect(owned).toHaveLength(750);
+		expect(owned.every((task) => task.ownerSessionId === "session-indexed")).toBe(true);
+		expect(owned[0]!.id).toBe("term-retained-1498");
+		expect(owned.map((task) => task.createdAt)).toEqual(Array.from({ length: 750 }, (_, position) => 2_498 - position * 2));
+		expect(target.list("session-other")).toHaveLength(750);
+		expect(target.list("session-unknown")).toEqual([]);
 		expect(target.claimPending("session-indexed", true)).toEqual([]);
 		expect(target.acknowledge("session-indexed", [])).toEqual([]);
 		expect(target.getClaimRetryDelay("session-indexed")).toBeUndefined();
-		expect(target.get("term-retained-1499", "session-indexed")?.id).toBe("term-retained-1499");
+		expect(target.get("term-retained-1498", "session-indexed")?.id).toBe("term-retained-1498");
+		expect(target.get("term-retained-1499", "session-indexed")).toBeUndefined();
 		expect(target.get("term-missing", "session-indexed")).toBeUndefined();
 		expect(reads).toEqual({ scans: 0, metadata: 0 });
 	}, 120_000);
+
+	it("binds the real coordinator with one full scan and one selected mutation reread", async () => {
+		const reads = { scans: 0, metadata: 0 };
+		const store = new TerminalTaskStore({
+			rootDir,
+			onRead: (kind) => { reads[kind === "full-scan" ? "scans" : "metadata"] += 1; },
+		});
+		const target = manager({ store });
+		expect(reads).toEqual({ scans: 1, metadata: 0 });
+		const task = await start(target);
+		writeFileSync(exitFile(task), "0");
+		children[0]?.emit("close", 0);
+		await vi.waitFor(() => expect(target.get(task.id, "session-a")?.deliveryState).toBe("pending"));
+		reads.scans = 0;
+		reads.metadata = 0;
+
+		const sent: Array<{ details?: { completionId?: string } }> = [];
+		// SAFETY: the coordinator reads only this structural ExtensionAPI surface.
+		const pi = { sendMessage: (message: { details?: { completionId?: string } }) => { sent.push(message); } } as never;
+		const coordinator = new TerminalDeliveryCoordinator(pi, target);
+		// SAFETY: the real manager only reads this structural ctx surface.
+		const ctx = {
+			cwd: "/repo",
+			isIdle: () => true,
+			sessionManager: { getSessionId: () => "session-a", getBranch: () => [] },
+		} as never;
+		coordinator.bind(ctx);
+		await Promise.resolve();
+		await Promise.resolve();
+		coordinator.dispose();
+
+		// Startup performed exactly one full scan (construction). Bind/flush
+		// rescans nothing and rereads only the record it claims under its lock.
+		expect(reads).toEqual({ scans: 0, metadata: 1 });
+		expect(sent).toHaveLength(1);
+		expect(target.get(task.id, "session-a")).toMatchObject({ deliveryState: "claimed" });
+	});
 
 	it("rereads only a selected delivery record for each mutation", async () => {
 		const reads = { scans: 0, metadata: 0 };

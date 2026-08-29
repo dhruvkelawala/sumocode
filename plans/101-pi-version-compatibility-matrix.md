@@ -1,4 +1,4 @@
-# Plan 101: Gate the supported Pi range at minimum/latest package boundaries
+# Plan 101: Test every published Pi patch in the advertised supported range
 
 > **Executor instructions**: Follow this plan step by step and run every verification command. Build a version matrix from the declared peer range, not guessed versions. Keep all three Pi packages aligned. Run installs only in disposable temporary directories. Stop if supported versions expose incompatible public RPC contracts. When done, update this plan's row in `plans/README.md` unless a reviewer says they own the index.
 >
@@ -40,7 +40,7 @@ Plan 076 intentionally retired the *active registration* while retaining dormant
 |---|---|---|
 | Script syntax | `bash -n scripts/smoke-pi-versions.sh` | exit 0 |
 | Contract fixture | `pnpm vitest run scripts/pi-compat-contract.test.mjs` | all current/drift fixtures pass |
-| Local matrix | `scripts/smoke-pi-versions.sh --supported-matrix` | resolves peer minimum/latest and prints one PASS marker per aligned version |
+| Local matrix | `scripts/smoke-pi-versions.sh --supported-matrix` | resolves every published version satisfying the peer range and prints one PASS marker per aligned version |
 | Required gates | `pnpm exec tsc --noEmit && pnpm build && pnpm lint && pnpm test` | exit 0 |
 
 ## Committed bundle freshness
@@ -82,7 +82,7 @@ Keep command ownership explicit and test the surfaces separately:
 
 Fixtures must include a host-only command, the reconciled `accounts` extension command, another child extension command, and prompt/skill noise so an ownership regression fails while the known-good union passes.
 
-Add `--supported-matrix`: resolve the peer minimum (currently 0.84.3) and latest published version satisfying the declared `~0.84.3` range, fail clearly if declared peer ranges diverge, then run those two unique versions. Do not test every patch if the range becomes large; minimum + latest is the required boundary. Preserve explicit version arguments for a pending bump.
+Add `--supported-matrix`: fetch the published version list, intersect it with each declared Pi peer range, fail clearly if the three declared ranges or satisfying-version sets diverge, sort semantically, and run every unique published version satisfying the advertised range (currently every published `~0.84.3` patch). Preserve explicit version arguments for a pending bump. If the supported set becomes too large for bounded CI, narrow the advertised peer range in a separately reviewed compatibility change rather than sampling versions that remain declared compatible.
 
 **Verify**: `pnpm vitest run scripts/pi-compat-contract.test.mjs` → current fixture passes; mismatched package versions, removed RPC member, added/removed command, and reintroduced gate fixtures fail for the asserted reason.
 
@@ -100,11 +100,11 @@ Extend checks to cover:
 - dormant approval modules may exist, but their installers/commands/routes remain absent from active extension/registry/RPC paths;
 - candidate built-ins and source-tagged `get_commands` entries are passed separately to the checker for ownership-scoped missing/extra inventory diffs.
 
-**Verify**: `scripts/smoke-pi-versions.sh --supported-matrix` → one PASS marker per unique minimum/latest version and no contract-drift marker (one marker is valid only when minimum equals latest).
+**Verify**: `scripts/smoke-pi-versions.sh --supported-matrix` → the resolved row list exactly equals every published version satisfying all three peer ranges, with one PASS marker per row and no contract-drift marker.
 
 ### Step 3: Add bounded PR and registry-freshness CI
 
-Run the minimum/latest matrix on pull requests that touch package metadata, launcher/RPC, extension entry, or the workflow/script itself. Also run the same job from a daily UTC `schedule` on the default branch so a newly published patch inside the advertised peer range is tested without waiting for a repository change; include `workflow_dispatch` for immediate maintainer checks. Scheduled/manual runs must resolve the registry's current latest satisfying version rather than reuse a cached matrix result.
+Run the complete supported-patch matrix on pull requests that touch package metadata, launcher/RPC, extension entry, or the workflow/script itself. Also run the same job from a daily UTC `schedule` on the default branch so every newly published patch inside the advertised peer range is tested without waiting for a repository change; include `workflow_dispatch` for immediate maintainer checks. Scheduled/manual runs must freshly resolve the registry's complete satisfying-version set rather than reuse a cached row list.
 
 Set a timeout and upload only bounded failure logs. No secrets or provider calls. Use concurrency to cancel superseded runs of the same ref/event without cancelling the distinct scheduled freshness check.
 
@@ -112,17 +112,17 @@ Set a timeout and upload only bounded failure logs. No secrets or provider calls
 
 ### Step 4: Make the script self-documenting
 
-Keep documentation changes in Plan 115. Add `--help` output and a concise script comment that identify minimum + latest supported as the canonical bump gate and show the exact explicit-version command used by CI. Do not copy patch numbers into additional docs here.
+Keep documentation changes in Plan 115. Add `--help` output and a concise script comment that identify every published peer-range-satisfying patch as the canonical compatibility gate and show the exact explicit-version command used for a pending bump. Do not copy patch numbers into additional docs here.
 
-**Verify**: `scripts/smoke-pi-versions.sh --help | grep -F "minimum + latest supported"` → exactly one matching line; `rg -n "scripts/smoke-pi-versions.sh" .github/workflows scripts/smoke-pi-versions.sh` shows the CI invocation and script usage text only.
+**Verify**: `scripts/smoke-pi-versions.sh --help | grep -F "every published supported patch"` → exactly one matching line; `rg -n "scripts/smoke-pi-versions.sh" .github/workflows scripts/smoke-pi-versions.sh` shows the CI invocation and script usage text only.
 
 ## Test plan
 
-Exercise minimum/latest, explicit unsupported version, unavailable registry response, RPC timeout, changed Pi-owned built-in, missing/extra SumoCode extension command, host-only command absent from `get_commands`, prompt/skill noise, launcher flag parsing, and workflow selection for PR/schedule/manual events. All contract fixtures run offline after package installation; the matrix install/resolution itself intentionally uses the package registry.
+Exercise a published range with minimum/intermediate/latest patches, a range with one patch, explicit unsupported version, unavailable registry response, divergent peer satisfying sets, RPC timeout, changed Pi-owned built-in, missing/extra SumoCode extension command, host-only command absent from `get_commands`, prompt/skill noise, launcher flag parsing, and workflow selection for PR/schedule/manual events. All contract fixtures run offline after package installation; matrix resolution/install intentionally uses the package registry.
 
 ## Done criteria
 
-- [ ] CI tests the minimum and latest version allowed by all Pi peer ranges on qualifying PRs and on a daily registry-freshness schedule, with manual dispatch available.
+- [ ] CI tests every published version allowed by all Pi peer ranges on qualifying PRs and on a daily registry-freshness schedule, with manual dispatch available.
 - [ ] All Pi packages are version-aligned in each fixture.
 - [ ] RPC, ownership-separated Pi built-in/host/extension command inventories, tool boundary, and direct-Pi bypass are checked.
 - [ ] Temporary installs cannot collide and are cleaned.

@@ -2,8 +2,8 @@
 
 > **Executor instructions**: Follow this plan step by step and run every verification command. Thread resolved executables through explicit dependencies. Preserve PATH fallback only when no parent provenance exists. Test with fake binaries; do not invoke a developer's global Pi/SumoCode installation. When done, update this plan's row in `plans/README.md` unless a reviewer says they own the index.
 >
-> **Drift check (run first)**: `git diff --stat b34bd79..HEAD -- dist/host dist/extension src/executable-provenance.ts src/executable-provenance.test.ts src/subagents/backend-pi.ts src/subagents/backend-pi.test.ts src/native-task-tool.ts src/native-task-tool.test.ts src/background-tasks/visible-spawn.ts src/background-tasks/visible-spawn.test.ts scripts/smoke-pi-versions.sh scripts/pi-compat-contract.mjs scripts/pi-compat-contract.test.mjs`
-> **Working-tree preflight (run at the same time)**: `git status --short -- dist/host dist/extension src/executable-provenance.ts src/executable-provenance.test.ts src/subagents/backend-pi.ts src/subagents/backend-pi.test.ts src/native-task-tool.ts src/native-task-tool.test.ts src/background-tasks/visible-spawn.ts src/background-tasks/visible-spawn.test.ts scripts/smoke-pi-versions.sh scripts/pi-compat-contract.mjs scripts/pi-compat-contract.test.mjs`. If this reports pre-existing work, STOP and preserve it.
+> **Drift check (run first)**: `git diff --stat b34bd79..HEAD -- dist/host dist/extension src/executable-provenance.ts src/executable-provenance.test.ts src/subagents/backend-pi.ts src/subagents/backend-pi.test.ts src/native-task-tool.ts src/native-task-tool.test.ts src/background-tasks/visible-spawn.ts src/background-tasks/visible-spawn.test.ts scripts/smoke-pi-versions.sh scripts/pi-compat-contract.mjs scripts/pi-compat-contract.test.mjs .github/workflows/ci.yml .github/workflows/pi-compat.yml`
+> **Working-tree preflight (run at the same time)**: `git status --short -- dist/host dist/extension src/executable-provenance.ts src/executable-provenance.test.ts src/subagents/backend-pi.ts src/subagents/backend-pi.test.ts src/native-task-tool.ts src/native-task-tool.test.ts src/background-tasks/visible-spawn.ts src/background-tasks/visible-spawn.test.ts scripts/smoke-pi-versions.sh scripts/pi-compat-contract.mjs scripts/pi-compat-contract.test.mjs .github/workflows/ci.yml .github/workflows/pi-compat.yml`. If this reports pre-existing work, STOP and preserve it.
 > If commit-range drift changes a Current state provenance assumption, STOP and request plan reconciliation.
 > **Read-only launcher check**: `git diff --stat b34bd79..HEAD -- bin/sumocode.sh src/sumo-tui/rpc/spawn-child.mjs src/sumo-tui/rpc/spawn-child.test.ts test/integration/spawn-pi-pty.test.ts`. These already carry parent environment provenance and are regression surfaces, not modification targets; if that contract changed, reconcile before proceeding.
 > **Dependency check**: Confirm every plan named in **Depends on** is `DONE` in `plans/README.md`. If any is not DONE, STOP; do not recreate or assume its APIs.
@@ -51,6 +51,7 @@ After final source edits, run `pnpm build:host && pnpm build:extension` before `
 - `src/executable-provenance.ts` and `src/executable-provenance.test.ts` (create): immutable per-spawn resolution contract.
 - `src/subagents/backend-pi.ts`, `src/native-task-tool.ts`, and `src/background-tasks/visible-spawn.ts`, with colocated tests.
 - Plan-101 `scripts/smoke-pi-versions.sh`, `scripts/pi-compat-contract.mjs`, and test for package-boundary provenance coverage.
+- The existing Plan-101 compatibility workflow (`.github/workflows/pi-compat.yml`, or `.github/workflows/ci.yml` if that is where the job landed) only to add provenance-source paths to its pull-request trigger.
 
 **Out of scope**:
 - Installing or discovering arbitrary Pi versions.
@@ -92,11 +93,11 @@ Pass a shell-escaped resolved launcher path into `buildVisibleAgentCommand`. Kee
 
 ### Step 4: Add package-boundary matrix coverage
 
-Extend the exact Plan-101 helpers. First add a pure `preserves nested executable provenance` fixture to `scripts/pi-compat-contract.test.mjs` using two synthetic executable paths representing parent-selected and PATH-global versions. Then extend the default `scripts/smoke-pi-versions.sh --supported-matrix` path so every disposable installed-package row runs nested provenance through source and installed layouts, explicit `PI_BIN`, explicit `SUMOCODE_LAUNCHER`, and PATH-only fallback. Do not hide this behind an opt-in flag: Plan 101's existing pull-request, daily scheduled, and manual workflow invocation must remain the literal `scripts/smoke-pi-versions.sh --supported-matrix` and automatically gain this check.
+Extend the exact Plan-101 helpers. First add a pure `preserves nested executable provenance` fixture to `scripts/pi-compat-contract.test.mjs` using two synthetic executable paths representing parent-selected and PATH-global versions. Then extend the default `scripts/smoke-pi-versions.sh --supported-matrix` path so every disposable installed-package row runs nested provenance through source and installed layouts, explicit `PI_BIN`, explicit `SUMOCODE_LAUNCHER`, and PATH-only fallback. Do not hide this behind an opt-in flag: Plan 101's existing pull-request, daily scheduled, and manual workflow invocation must remain the literal `scripts/smoke-pi-versions.sh --supported-matrix` and automatically gain this check. Expand that workflow's pull-request path filter to include `src/executable-provenance.ts`, `src/subagents/backend-pi.ts`, `src/native-task-tool.ts`, `src/background-tasks/visible-spawn.ts`, and their relevant tests so provenance regressions gate before merge rather than waiting for the daily run.
 
 This package-boundary command requires registry/network access for disposable installs. If unavailable, run the pure/local tests and STOP with Plan 108 marked `BLOCKED — package-boundary matrix unavailable`; do not claim completion. If Plan 101 is `DONE` but its named `--supported-matrix`/contract helper or scheduled workflow invocation is absent, STOP for reconciliation rather than inventing another fixture.
 
-**Verify**: `pnpm vitest run scripts/pi-compat-contract.test.mjs -t "preserves nested executable provenance" && scripts/smoke-pi-versions.sh --supported-matrix` → exit 0; every minimum/latest installed row reports a nested-provenance PASS marker for parent-selected Pi/SumoCode commands and the explicit fallback case reports PATH commands. `rg -n "smoke-pi-versions.sh --supported-matrix" .github/workflows/*.yml` still shows the canonical scheduled/manual matrix invocation with no extra opt-in flag.
+**Verify**: `pnpm vitest run scripts/pi-compat-contract.test.mjs -t "preserves nested executable provenance" && scripts/smoke-pi-versions.sh --supported-matrix` → exit 0; every published supported installed row reports a nested-provenance PASS marker for parent-selected Pi/SumoCode commands and the explicit fallback case reports PATH commands. Workflow fixture/tests prove a pull request touching each provenance source selects the compatibility job; `rg -n "executable-provenance|backend-pi|native-task-tool|visible-spawn|smoke-pi-versions.sh --supported-matrix" .github/workflows/*.yml` shows the source filters and canonical scheduled/manual invocation with no extra opt-in flag.
 
 ### Step 5: Run full gates
 
@@ -112,7 +113,7 @@ Cover explicit absolute binary, PATH command resolution, path with spaces, inval
 - [ ] Visible children use the parent-selected SumoCode launcher when available.
 - [ ] Standalone fallback remains functional and explicit.
 - [ ] Paths are shell-safe and diagnostics contain no prompts/secrets.
-- [ ] Exact pure and package-boundary provenance fixtures run by default in every PR/scheduled/manual supported-matrix row; no opt-in or “targeted tests or matrix” escape route remains.
+- [ ] Exact pure and package-boundary provenance fixtures run by default in every published supported-version row, and provenance-source pull requests trigger the matrix before merge; no opt-in or “targeted tests or matrix” escape route remains.
 - [ ] Full gates pass.
 - [ ] `git status --short` contains only files listed in Scope plus this plan/index bookkeeping.
 - [ ] Plan 108's `plans/README.md` row is updated to `DONE` with completion evidence.

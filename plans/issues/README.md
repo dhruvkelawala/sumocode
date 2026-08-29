@@ -18,7 +18,7 @@ Security issue bodies are sanitized. Their full executor plans remain local, are
 | 098 | `[P1 · M2] Harden visible-subagent task artifact handling` | `plans/issues/098.md` | bug | M2 |
 | 099 | `[P1 · M2] Bound child-process protocol buffers` | `plans/issues/099.md` | bug | M2 |
 | 100 | `[P1 · M2] Redact sensitive terminal data before session publication` | `plans/issues/100.md` | bug | M2 |
-| 101 | `[P1 · M3] Gate the supported Pi range at minimum/latest package boundaries` | full plan | enhancement | M3 |
+| 101 | `[P1 · M3] Test every published Pi patch in the advertised supported range` | full plan | enhancement | M3 |
 | 102 | `[P1 · M2] Remediate reachable dependency advisories` | `plans/issues/102.md` | bug | M2 |
 | 103 | `[P2 · M3] Replace timing sleeps with observable-state waits` | full plan | enhancement | M3 |
 | 104 | `[P1 · M3] Cover terminal completion and recovery end to end` | full plan | enhancement | M3 |

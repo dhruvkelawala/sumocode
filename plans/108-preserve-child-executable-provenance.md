@@ -92,11 +92,11 @@ Pass a shell-escaped resolved launcher path into `buildVisibleAgentCommand`. Kee
 
 ### Step 4: Add package-boundary matrix coverage
 
-Extend the exact Plan-101 helpers. First add a pure `preserves nested executable provenance` fixture to `scripts/pi-compat-contract.test.mjs` using two synthetic executable paths representing parent-selected and PATH-global versions. Then add `--check-nested-provenance` to `scripts/smoke-pi-versions.sh --supported-matrix`; each disposable installed-package row runs the fixture through source and installed layouts, explicit `PI_BIN`, explicit `SUMOCODE_LAUNCHER`, and PATH-only fallback.
+Extend the exact Plan-101 helpers. First add a pure `preserves nested executable provenance` fixture to `scripts/pi-compat-contract.test.mjs` using two synthetic executable paths representing parent-selected and PATH-global versions. Then extend the default `scripts/smoke-pi-versions.sh --supported-matrix` path so every disposable installed-package row runs nested provenance through source and installed layouts, explicit `PI_BIN`, explicit `SUMOCODE_LAUNCHER`, and PATH-only fallback. Do not hide this behind an opt-in flag: Plan 101's existing pull-request, daily scheduled, and manual workflow invocation must remain the literal `scripts/smoke-pi-versions.sh --supported-matrix` and automatically gain this check.
 
-This package-boundary command requires registry/network access for disposable installs. If unavailable, run the pure/local tests and STOP with Plan 108 marked `BLOCKED — package-boundary matrix unavailable`; do not claim completion. If Plan 101 is `DONE` but its named `--supported-matrix`/contract helper is absent, STOP for reconciliation rather than inventing another fixture.
+This package-boundary command requires registry/network access for disposable installs. If unavailable, run the pure/local tests and STOP with Plan 108 marked `BLOCKED — package-boundary matrix unavailable`; do not claim completion. If Plan 101 is `DONE` but its named `--supported-matrix`/contract helper or scheduled workflow invocation is absent, STOP for reconciliation rather than inventing another fixture.
 
-**Verify**: `pnpm vitest run scripts/pi-compat-contract.test.mjs -t "preserves nested executable provenance" && scripts/smoke-pi-versions.sh --supported-matrix --check-nested-provenance` → exit 0; every minimum/latest installed row reports parent-selected nested Pi/SumoCode commands and the explicit fallback case reports PATH commands.
+**Verify**: `pnpm vitest run scripts/pi-compat-contract.test.mjs -t "preserves nested executable provenance" && scripts/smoke-pi-versions.sh --supported-matrix` → exit 0; every minimum/latest installed row reports a nested-provenance PASS marker for parent-selected Pi/SumoCode commands and the explicit fallback case reports PATH commands. `rg -n "smoke-pi-versions.sh --supported-matrix" .github/workflows/*.yml` still shows the canonical scheduled/manual matrix invocation with no extra opt-in flag.
 
 ### Step 5: Run full gates
 
@@ -112,7 +112,7 @@ Cover explicit absolute binary, PATH command resolution, path with spaces, inval
 - [ ] Visible children use the parent-selected SumoCode launcher when available.
 - [ ] Standalone fallback remains functional and explicit.
 - [ ] Paths are shell-safe and diagnostics contain no prompts/secrets.
-- [ ] Exact pure and package-boundary provenance fixtures pass; no “targeted tests or matrix” escape route remains.
+- [ ] Exact pure and package-boundary provenance fixtures run by default in every PR/scheduled/manual supported-matrix row; no opt-in or “targeted tests or matrix” escape route remains.
 - [ ] Full gates pass.
 - [ ] `git status --short` contains only files listed in Scope plus this plan/index bookkeeping.
 - [ ] Plan 108's `plans/README.md` row is updated to `DONE` with completion evidence.

@@ -3,6 +3,7 @@
 > **Executor instructions**: Follow this plan step by step. Run every verification command and confirm the expected result before moving on. Stop on any STOP condition; do not improvise. When done, update this plan's row in `plans/README.md` unless a reviewer says they maintain the index.
 >
 > **Drift check (run first)**: `git diff --stat b34bd79..HEAD -- src/extension.test.ts src/extension.ts src/background-tasks/task-store.ts`
+> **Working-tree preflight (run at the same time)**: `git status --short -- src/extension.test.ts`. If this reports pre-existing work, STOP and preserve it.
 > If these files changed, compare the excerpts below with live code before proceeding.
 
 ## Status

@@ -2,8 +2,9 @@
 
 > **Executor instructions**: Preserve early first paint and command ordering. Implement the diagnostic and feedback contract below without blocking typing. Run runtime, hydration, integration, and perf gates. Do not promote visual goldens.
 >
-> **Drift check (run first)**: `git diff --stat b34bd79..HEAD -- src/sumo-tui/rpc/runtime.ts src/sumo-tui/rpc/host.ts src/sumo-tui/rpc/initial-hydration-action-gate.ts scripts/perf-startup.mjs scripts/perf-real-world.mjs docs/perf/startup.md docs/perf/real-world.md src/sumo-tui/rpc/*.test.ts`
-> If this reports an in-scope change, compare the Current state excerpts and assumptions with live code. If behavior or signatures differ, STOP and request plan reconciliation.
+> **Drift check (run first)**: `git diff --stat b34bd79..HEAD -- src/sumo-tui/rpc/runtime.ts src/sumo-tui/rpc/host.ts src/sumo-tui/rpc/initial-hydration-action-gate.ts scripts/perf-startup.mjs scripts/perf-real-world.mjs docs/perf/startup.md docs/perf/startup.json docs/perf/real-world.md src/sumo-tui/rpc/*.test.ts`
+> **Working-tree preflight (run at the same time)**: `git status --short -- dist/host src/sumo-tui/rpc/runtime.ts src/sumo-tui/rpc/host.ts src/sumo-tui/rpc/initial-hydration-action-gate.ts scripts/perf-startup.mjs scripts/perf-real-world.mjs docs/perf/startup.md docs/perf/startup.json docs/perf/real-world.md src/sumo-tui/rpc/*.test.ts`. If this reports pre-existing work, STOP and preserve it.
+> If the drift check reports an in-scope change, compare the Current state excerpts and assumptions with live code. If behavior or signatures differ, STOP and request plan reconciliation.
 > **Dependency check**: Confirm every plan named in **Depends on** is `DONE` in `plans/README.md`. If any is not DONE, STOP; do not recreate or assume its APIs.
 
 ## Status

@@ -3,7 +3,8 @@
 > **Executor instructions**: Follow this plan step by step and run every verification command. Replace only sleeps that stand in for an observable event. Preserve intentional timeout/backoff and negative-observation windows unless a causal boundary can replace them. Prove each new waiter fails when state never changes. When done, update this plan's row in `plans/README.md` unless a reviewer says they own the index.
 >
 > **Drift check (run first)**: `git diff --stat b34bd79..HEAD -- src/sumo-tui/rpc/host-actions.test.ts test/integration/*.test.ts src/activity/*.test.ts src/background-tasks/*.test.ts scripts/test-wait-classification.test.mjs`
-> If this reports an in-scope change, compare the Current state excerpts and assumptions with live code. If behavior or signatures differ, STOP and request plan reconciliation.
+> **Working-tree preflight (run at the same time)**: `git status --short -- dist/host src/sumo-tui/rpc/host-actions.test.ts test/integration/*.test.ts src/activity/*.test.ts src/background-tasks/*.test.ts scripts/test-wait-classification.test.mjs`. If this reports pre-existing work, STOP and preserve it.
+> If the drift check reports an in-scope change, compare the Current state excerpts and assumptions with live code. If behavior or signatures differ, STOP and request plan reconciliation.
 > **Dependency check**: Confirm every plan named in **Depends on** is `DONE` in `plans/README.md`. If any is not DONE, STOP; do not recreate or assume its APIs.
 
 ## Status

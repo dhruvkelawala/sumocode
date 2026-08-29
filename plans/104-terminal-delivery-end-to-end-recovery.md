@@ -3,7 +3,8 @@
 > **Executor instructions**: Follow this plan step by step and run every verification command. Build tests before changing production behavior. Use isolated Pi/session/terminal roots and no credentials. Exercise the real `TerminalTaskManager` and `TerminalDeliveryCoordinator`; a fixture that calls `sendMessage` directly does not satisfy this plan. When done, update this plan's row in `plans/README.md` unless a reviewer says they own the index.
 >
 > **Drift check (run first)**: `git diff --stat b34bd79..HEAD -- test/integration/terminal-completion-fidelity.test.ts src/background-tasks/terminal-tools.ts src/background-tasks/task-manager.ts src/activity/manager-bridge.ts test/integration/spawn-pi-pty.ts`
-> If this reports an in-scope change, compare the Current state excerpts and assumptions with live code. If behavior or signatures differ, STOP and request plan reconciliation.
+> **Working-tree preflight (run at the same time)**: `git status --short -- dist/extension test/integration/terminal-completion-fidelity.test.ts test/integration/terminal-completion-recovery.test.ts test/integration/spawn-pi-pty.ts test/fixtures src/background-tasks/terminal-tools.ts src/background-tasks/task-manager.ts src/activity/manager-bridge.ts`. If this reports pre-existing work, STOP and preserve it.
+> If the drift check reports an in-scope change, compare the Current state excerpts and assumptions with live code. If behavior or signatures differ, STOP and request plan reconciliation.
 > **Dependency check**: Confirm every plan named in **Depends on** is `DONE` in `plans/README.md`. If any is not DONE, STOP; do not recreate or assume its APIs.
 
 ## Status

@@ -3,7 +3,9 @@
 > **Executor instructions**: Do not add `await` to a void-returning API or mock a Promise that production cannot return. Preserve the task-directory control protocol. Improve only the guarantees SumoCode can actually observe, and clean parent waiters promptly when the child settles.
 >
 > **Drift check (run first)**: `git diff --stat b34bd79..HEAD -- src/task-mode.ts src/task-mode.test.ts src/subagents/backend-pane.ts src/subagents/backend-pane.test.ts src/subagents/manager.ts src/subagents/manager.test.ts src/subagents/tools.ts src/subagents/tools.test.ts`
-> If this reports an in-scope change, compare the Current state excerpts and assumptions with live code. If behavior or signatures differ, STOP and request plan reconciliation.
+> **Working-tree preflight (run at the same time)**: `git status --short -- dist/extension src/task-mode.ts src/task-mode.test.ts src/subagents/backend-pane.ts src/subagents/backend-pane.test.ts src/subagents/manager.ts src/subagents/manager.test.ts src/subagents/tools.ts src/subagents/tools.test.ts`. If this reports pre-existing work, STOP and preserve it.
+> If the drift check reports an in-scope change, compare the Current state excerpts and assumptions with live code. If behavior or signatures differ, STOP and request plan reconciliation.
+> **Dependency check**: Confirm every plan named in **Depends on** is `DONE` in `plans/README.md`. If any is not DONE, STOP; do not recreate or assume its APIs.
 
 ## Status
 

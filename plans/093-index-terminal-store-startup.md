@@ -3,7 +3,8 @@
 > **Executor instructions**: This is a persistence/lifecycle change. Follow the characterization-first order exactly. Run each verification gate. Never delete durable terminal records. Stop rather than weakening ownership, revision, lease, or process-identity checks.
 >
 > **Drift check (run first)**: `git diff --stat b34bd79..HEAD -- src/background-tasks/task-store.ts src/background-tasks/task-manager.ts src/background-tasks/terminal-tools.ts src/activity/manager-bridge.ts src/background-tasks/*.test.ts src/activity/manager-bridge.test.ts`
-> If this reports an in-scope change, compare the Current state excerpts and assumptions with live code. If behavior or signatures differ, STOP and request plan reconciliation.
+> **Working-tree preflight (run at the same time)**: `git status --short -- dist/extension src/background-tasks/task-store.ts src/background-tasks/task-manager.ts src/background-tasks/terminal-tools.ts src/activity/manager-bridge.ts src/background-tasks/*.test.ts src/activity/manager-bridge.test.ts`. If this reports pre-existing work, STOP and preserve it.
+> If the drift check reports an in-scope change, compare the Current state excerpts and assumptions with live code. If behavior or signatures differ, STOP and request plan reconciliation.
 > **Dependency check**: Confirm every plan named in **Depends on** is `DONE` in `plans/README.md`. If any is not DONE, STOP; do not recreate or assume its APIs.
 
 ## Status

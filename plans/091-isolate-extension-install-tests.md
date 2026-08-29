@@ -16,6 +16,7 @@
 - **Milestone**: M1 — Command-ready foundation
 - **Planned at**: commit `b34bd79`, 2026-08-28
 - **Issue**: https://github.com/dhruvkelawala/sumocode/issues/385
+- **Execution status**: DONE — implemented in `6ef8c13`; focused isolation 1/1, extension file 29/29 twice (1.57s and 1.44s), and full unit suite 2,514/2,514 with typecheck/build/lint green
 
 ## Why this matters
 
@@ -88,12 +89,23 @@ Add one focused test named exactly `isolates terminal state under the temporary 
 
 ## Done criteria
 
-- [ ] Every `sumocode(pi)` call in `src/extension.test.ts` runs with an isolated `PI_CODING_AGENT_DIR`.
-- [ ] The original environment value is restored after every test.
-- [ ] Temporary roots are removed after every test.
-- [ ] `pnpm vitest run src/extension.test.ts` passes twice.
-- [ ] Typecheck, build, lint, and unit suite pass.
-- [ ] `git status --porcelain -- src/ test/ scripts/ bin/ package.json pnpm-lock.yaml` shows only `src/extension.test.ts`; pre-existing unrelated dirty files are ignored, not modified.
+- [x] Every `sumocode(pi)` call in `src/extension.test.ts` runs with an isolated `PI_CODING_AGENT_DIR`.
+- [x] The original environment value is restored after every test.
+- [x] Temporary roots are removed after every test.
+- [x] `pnpm vitest run src/extension.test.ts` passes twice.
+- [x] Typecheck, build, lint, and unit suite pass.
+- [x] `git status --porcelain -- src/ test/ scripts/ bin/ package.json pnpm-lock.yaml` shows only `src/extension.test.ts`; pre-existing unrelated dirty files are ignored, not modified.
+
+## Execution outcome — 2026-08-29
+
+Implementation commit: `6ef8c13` (`test: isolate extension install state`). The top-level test lifecycle owns one fresh Pi agent directory per test, restores `PI_CODING_AGENT_DIR` with undefined fidelity, and removes the directory in `afterEach`. The focused regression observes eager store creation through `sumocode(pi)` only; it does not start a terminal or inspect the home-directory terminal store. Keeping isolation at the suite lifecycle, rather than wrapping selected installs, ensures future full-install tests inherit it automatically.
+
+TDD and verification evidence:
+
+- Safe red: shell-owned `PI_CODING_AGENT_DIR` plus a distinct assertion root; focused test failed as expected (`1 failed`, Vitest 1.78s, real 3.80s) without touching the home terminal store.
+- Focused green: `pnpm vitest run src/extension.test.ts -t "isolates terminal state"` passed 1/1 (Vitest 889ms, real 1.31s).
+- Stability: `pnpm vitest run src/extension.test.ts` passed 29/29 twice (Vitest 1.57s/1.44s; real 2.00s/1.88s).
+- Repository gates: `pnpm exec tsc --noEmit && pnpm build && pnpm lint && pnpm test` passed with `VITEST_MAX_WORKERS=1` (193 files, 2,514 tests; real 82.92s). Default parallel retries exposed unrelated timing-sensitive failures in `host-actions.test.ts` (and once `native-task-tool.test.ts`/`visual-parity-contract.test.ts`); those files passed in isolation, and `pnpm exec vitest run --fileParallelism=false` passed the same 193 files/2,514 tests in 72.58s. No out-of-scope test timing changes were made.
 
 ## STOP conditions
 

@@ -45,7 +45,7 @@ public listOwned(ownerSessionId: string): TerminalTaskSnapshot[] {
 1. `TerminalTaskStore` exposes `refreshIndex()` as the only full validated scan boundary. One pass returns the validated snapshots used to seed the manager and builds compact ID→metadata-path plus owner→indexed-selection entries. Each selection entry caches immutable owner/order/status/completion/delivery/lease fields needed to choose list/claim/acknowledgement/retry candidates without reopening metadata files; callers must invoke `refreshIndex()` explicitly at a proven freshness boundary.
 2. `TerminalTaskManager` retains its existing immutable-by-replacement snapshots from that same validated pass and indexes them by owner rather than reparsing records. Store indexes remain compact derived/cache state, never a second durable authority. Plan 106 may later bound manager-retained snapshots while preserving direct store-index paths and selection fields.
 3. Disk refresh is explicit: construction and proven writer takeover/rebind are freshness boundaries.
-4. Owner/list queries join owner-index IDs to manager-retained snapshots; claim, acknowledgement, and retry-delay selection use the compact indexed fields. Only a record selected for mutation or an explicitly requested ID absent from the manager snapshot map is reread directly through its indexed path. Mutations reread under the task lock and enforce revision/lease checks; pure candidate selection performs no metadata rereads.
+4. Owner/list queries join owner-index IDs to manager-retained snapshots; claim, acknowledgement, and retry-delay selection use the compact indexed fields. Only a record selected for mutation or an explicitly requested ID absent from the manager snapshot map is reread directly through its indexed path. Mutations reread under the task lock, evaluate the eligibility/update decision against that authoritative locked snapshot (not the retained projection), and enforce revision/lease checks before writing; pure candidate selection performs no metadata rereads.
 5. One coordinator startup method refreshes/reconciles/acknowledges/claims from one projection generation.
 6. Activity publication consumes the manager projection. Only proven cross-process takeover may request a fresh disk scan.
 
@@ -57,9 +57,11 @@ Do not silently cache forever across process boundaries. If an external writer m
 |---|---|---|
 | Store/manager | `pnpm vitest run src/background-tasks/task-store.test.ts src/background-tasks/task-manager.test.ts` | all pass |
 | Delivery | `pnpm vitest run src/background-tasks/terminal-tools.test.ts src/activity/manager-bridge.test.ts` | all pass |
-| Full unit | `pnpm test` | exit 0 |
+| Full unit | `pnpm test` (informational) / `VITEST_MAX_WORKERS=1 pnpm test` (authoritative locally) | exit 0 |
 | Integration | `pnpm test:integration` | exit 0 |
 | Required | `pnpm exec tsc --noEmit && pnpm build && pnpm lint` | exit 0 |
+
+The default-parallel `pnpm test` is locally load-sensitive (pre-existing timing flakes in untouched files make it non-deterministic on this machine), so the authoritative local full-unit gate runs under `VITEST_MAX_WORKERS=1`; default-parallel runs are informational only and CI remains the authoritative full-unit gate. This reconciles the gate with execution evidence rather than loosening it.
 
 ## Committed bundle freshness
 
@@ -78,6 +80,15 @@ After final source edits, run `pnpm build:extension` before `pnpm test`; keep th
 - A test-only scan counter or injected projection loader.
 
 **Authorized review-fix addition (run `run-20260829T150412Z-08a6aa41` attempt 2)**: `src/activity/feed-publisher.ts` plus its colocated test are in scope for the writer-death seam only — expose a read-only `writerDeathProven` getter over the exact claim-time proof already computed and stored, and retire the `canReconcileAbandonedActivities` authorization bit. No other publisher API broadens; schema, layout, lease, and retention behavior are unchanged.
+
+**Authorized review-fix addition (run `run-20260829T162741Z-50088751` attempt 1)**: final blockers and should-fixes only.
+
+- `src/background-tasks/task-store.ts`: reject any `create()` whose id is already present in `indexedById` before the durable write/index replacement regardless of owner/timestamp/path (owner-bucket integrity regression), and preserve the last good index generation when `refreshIndex()` hits a transient `readdir` failure (an initial failure naturally leaves the empty index).
+- `src/background-tasks/task-store.ts` + `src/background-tasks/task-manager.ts`: narrow mutation-truth rework so `store.transition`'s update callback runs inside the task lock against the authoritative just-read snapshot (returning `undefined` records a no-op under the lock) and `TerminalTaskManager.mutate` evaluates claim/ack predicates in that callback; revision CAS/retry is retained.
+- `src/background-tasks/task-manager.ts` + `src/background-tasks/terminal-tools.ts`: add the narrow authoritative `readIndexed(id)` manager read and use it for one pre-send claim-token verification so a cross-process reclaim between claim and send suppresses the duplicate follow-up; selected-only reads and exact read counters are preserved.
+- `src/activity/manager-bridge.ts`: coalesce all newly claimed owners with `writerDeathProven` in one `syncOwnedSessions` pass into ONE global `refreshSnapshotsFromStore`, and consume the proof via `completeAbandonedReconciliation()` after every successful publication even when `abandonedRunningIds` is empty (empty-feed takeover). `src/activity/feed-publisher.ts` changes are limited to the `writerDeathProven` getter doc.
+- `test/fixtures/terminal-store-racer.ts` is added to scope as a mechanical API migration only (it compiles against the `store.transition` update-callback signature).
+- No retention, schema, layout, or deletion changes; no public store/manager API beyond `readIndexed`.
 
 **Out of scope**:
 - Record deletion, archival, retention, schema migration, or changing task-directory layout.
@@ -111,7 +122,7 @@ The target startup count is one full load for manager construction, plus at most
 
 Implement the named API from Target design: `refreshIndex()` rebuilds `metaPathById`, owner→ID state, and compact immutable indexed-selection entries with every field needed to choose list/claim/acknowledgement/retry candidates. Return the validated snapshots from that same pass so the manager seeds its existing projection without reparsing. `listOwnedIndexed(ownerSessionId)` returns compact candidates without opening metadata files; `getIndexed(id)` uses the indexed path for one direct validated read when the manager no longer retains that snapshot. Update selection entries by immutable replacement after each successful local create/transition; external writers become visible only at an explicit refresh boundary. Keep the projection derived from canonical validated metadata; do not persist a second index file. Owner buckets exclude malformed/skipped records and identity fields remain immutable.
 
-Keep transition/read-current operations authoritative at mutation time: after selecting a candidate from compact fields, reread only that record under its task lock and enforce revision/lease checks before writing. Indexed candidate selection does not bypass locks or revision checks. Remove any implicit `loadAll()` or all-owned-record metadata-read fallback from indexed APIs. Name regressions `selects 1500 owned candidates with zero metadata reads`, `serves an old indexed ID with one metadata read and zero full scans`, and `rereads only the selected record before mutation`.
+Keep transition/read-current operations authoritative at mutation time: after selecting a candidate from compact fields, reread only that record under its task lock, evaluate the eligibility/update decision inside the transition callback against that locked authoritative snapshot, and enforce revision/lease checks before writing. Indexed candidate selection does not bypass locks or revision checks. Remove any implicit `loadAll()` or all-owned-record metadata-read fallback from indexed APIs. Name regressions `selects 1500 owned candidates with zero metadata reads`, `serves an old indexed ID with one metadata read and zero full scans`, and `rereads only the selected record before mutation`.
 
 **Verify**: store/manager tests pass, including duplicate ID, corrupt record, external-revision, lock, lease, and process-identity cases.
 

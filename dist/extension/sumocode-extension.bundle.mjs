@@ -11361,7 +11361,6 @@ var TerminalTaskStore = class {
       entries = readdirSync(this.rootDir, { withFileTypes: true });
     } catch (error) {
       this.diagnostic("io", this.rootDir, error);
-      this.replaceIndex([], /* @__PURE__ */ new Map());
       return [];
     }
     const snapshots = [];
@@ -11409,6 +11408,10 @@ var TerminalTaskStore = class {
     this.assertSnapshotPath(snapshot, resolvedMetaPath);
     return this.withTaskLock(resolvedMetaPath, () => {
       if (pathExists2(resolvedMetaPath)) throw new Error(`Terminal metadata already exists: ${resolvedMetaPath}`);
+      const existingPath = this.metaPathById.get(snapshot.id);
+      if (this.indexedById.has(snapshot.id) || existingPath !== void 0) {
+        throw new Error(`Terminal id ${snapshot.id} is already indexed at ${existingPath ?? "an indexed record"}`);
+      }
       atomicWriteJson(resolvedMetaPath, snapshot);
       this.metaPathById.set(snapshot.id, resolvedMetaPath);
       this.replaceIndexedEntry(snapshot);
@@ -11443,6 +11446,15 @@ var TerminalTaskStore = class {
     }
     return openPrivateExistingFile(resolvedPath, flags);
   }
+  /**
+   * CAS one durable transition under the record's task lock. `update` runs
+   * against the authoritative snapshot just read under that lock — never a
+   * retained projection — so eligibility predicates decide on disk truth.
+   * Returning `undefined` records a no-op: the lock is honored, nothing is
+   * written, and the current snapshot is returned unchanged. A revision
+   * mismatch still fails with StaleTerminalTaskRevisionError before `update`
+   * runs, so a changed record is retried against freshly loaded state.
+   */
   transition(id, expectedRevision, update) {
     const path2 = this.metaPathById.get(id);
     if (!path2) throw new Error(`Unknown terminal task ${id}`);
@@ -11452,7 +11464,9 @@ var TerminalTaskStore = class {
       if (current.revision !== expectedRevision) {
         throw new StaleTerminalTaskRevisionError(id, expectedRevision, current.revision);
       }
-      const next = { ...update(current), revision: current.revision + 1 };
+      const decided = update(current);
+      if (!decided) return current;
+      const next = { ...decided, revision: current.revision + 1 };
       if (next.id !== current.id || next.ownerSessionId !== current.ownerSessionId || next.schemaVersion !== current.schemaVersion || next.createdAt !== current.createdAt || next.logFile !== current.logFile) {
         throw new Error("Terminal task identity fields are immutable");
       }
@@ -12360,6 +12374,14 @@ ${command}
     }
     return this.getSnapshots();
   }
+  /**
+   * Authoritative store-index read of one record, bypassing the retained
+   * projection. Narrow surface for pre-send/pre-publication freshness checks;
+   * never scans the store and only resolves indexed ids.
+   */
+  readIndexed(id) {
+    return this.store.getIndexed(id);
+  }
   getSnapshots() {
     const snapshots = [...this.tasks.values()];
     const replayed = snapshots.filter((snapshot) => !isTerminalTaskSettled(snapshot.status));
@@ -12759,15 +12781,31 @@ ${command}
     }
     this.failUnlaunched(id, error);
   }
+  /**
+   * One authoritative decision per mutation: the update closure runs inside
+   * the store's task lock against the just-read durable snapshot, so claim/ack
+   * predicates can never fire on retained state that disk has already moved
+   * past (including a same-revision content change the revision CAS alone
+   * would accept). A stale expected revision is retried against freshly
+   * loaded state up to MAX_TRANSITION_RETRIES times.
+   */
   mutate(id, update) {
     let latest = this.tasks.get(id) ?? this.store.getIndexed(id);
     if (!latest) throw new Error(`Unknown terminal task ${id}`);
     for (let attempt = 0; attempt < MAX_TRANSITION_RETRIES; attempt += 1) {
       this.adopt(latest, false);
-      const next = update(latest);
-      if (!next) return { snapshot: latest, changed: false };
+      let changed = false;
       try {
-        const transitioned = this.store.transition(id, latest.revision, () => next);
+        const transitioned = this.store.transition(id, latest.revision, (current2) => {
+          const next = update(current2);
+          if (!next) return void 0;
+          changed = true;
+          return next;
+        });
+        if (!changed) {
+          this.adopt(transitioned, false);
+          return { snapshot: transitioned, changed: false };
+        }
         this.adopt(transitioned, true);
         return { snapshot: transitioned, changed: true };
       } catch (error) {
@@ -13092,8 +13130,9 @@ var TerminalDeliveryCoordinator = class {
       let sentMessage = false;
       const claimed = this.manager.claimPending(active.ownerSessionId, true, 1).sort((left, right) => Number(left.completionPolicy === "wake") - Number(right.completionPolicy === "wake"));
       for (const task of claimed) {
-        const current = this.manager.get(task.id, active.ownerSessionId);
-        if (current?.deliveryState !== "claimed" || !current.deliveryClaimToken || current.completionId !== task.completionId || current.deliveryClaimToken !== task.deliveryClaimToken) continue;
+        const current = this.manager.readIndexed(task.id);
+        if (!current || current.ownerSessionId !== active.ownerSessionId) continue;
+        if (current.deliveryState !== "claimed" || !current.deliveryClaimToken || current.completionId !== task.completionId || current.deliveryClaimToken !== task.deliveryClaimToken) continue;
         const observable = completionsFromContext(active.ctx);
         if (current.completionId && observable.ids.has(current.completionId)) {
           this.manager.acknowledge(active.ownerSessionId, [{
@@ -13814,7 +13853,9 @@ var ActivityFeedPublisher = class {
   /**
    * The exact claim-time proof that a previous writer died. This is the sole
    * authorization bit for one cross-process terminal-index refresh; it stays
-   * readable until completeAbandonedReconciliation consumes it.
+   * readable until completeAbandonedReconciliation consumes it. The bridge
+   * consumes it after the takeover's first successful publication — including
+   * empty feeds, where there are no abandoned running producers to reconcile.
    */
   get writerDeathProven() {
     return this.writerDeathProof;
@@ -14317,24 +14358,25 @@ var ActivityManagerBridge = class {
   }
   syncOwnedSessions() {
     if (!this.writerVerifiable) return;
+    const takeoverOwners = [];
     for (const owner of this.sessionOwnership.ownedSessionIds()) {
       if (this.claimedOwners.has(owner)) continue;
       if (!this.sessionOwnership.claim(owner, this.bridgeToken)) continue;
       const publisher = this.publisher(owner);
       if (publisher.hasWriterOwnership) {
-        if (publisher.writerDeathProven) {
-          try {
-            const refreshed = this.terminalManager.refreshSnapshotsFromStore?.();
-            if (refreshed) this.adoptTerminalSnapshots(refreshed);
-          } catch (error) {
-            this.diagnostic({ kind: "io", path: owner, message: `terminal takeover refresh failed: ${error instanceof Error ? error.message : String(error)}` });
-          }
-        }
+        if (publisher.writerDeathProven) takeoverOwners.push(owner);
         this.claimedOwners.add(owner);
       } else {
         this.publishers.delete(owner);
         this.sessionOwnership.release(owner, this.bridgeToken);
       }
+    }
+    if (takeoverOwners.length === 0) return;
+    try {
+      const refreshed = this.terminalManager.refreshSnapshotsFromStore?.();
+      if (refreshed) this.adoptTerminalSnapshots(refreshed);
+    } catch (error) {
+      this.diagnostic({ kind: "io", path: takeoverOwners[0], message: `terminal takeover refresh failed: ${error instanceof Error ? error.message : String(error)}` });
     }
   }
   publishAll() {
@@ -14417,7 +14459,7 @@ var ActivityManagerBridge = class {
     }
     try {
       publisher.publish(merged);
-      if (abandonedRunningIds.size > 0) publisher.completeAbandonedReconciliation();
+      publisher.completeAbandonedReconciliation();
     } catch (error) {
       if (!publisher.hasWriterOwnership) {
         this.claimedOwners.delete(owner);

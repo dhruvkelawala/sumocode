@@ -170,7 +170,7 @@ Then map `U+E900–U+E904` to the installed `icomoon` font in the terminal and s
 
 ## Development
 
-Pi executes TypeScript through jiti; there is no emitted application build required for the normal source loop. SumoCode also supports committed host and extension bundles with source fallback.
+Pi executes TypeScript through jiti; there is no emitted application build required for the normal source loop. SumoCode also supports committed host and extension bundles with source fallback. A committed extension bundle is self-verifying: `dist/extension/.inputs.json` binds the input-graph hash to the `outputsHash` of the published bytes, `pnpm build:extension` reproduces both deterministically, and the runtime rejects stale inputs or a mismatched artifact.
 
 ```bash
 pnpm install

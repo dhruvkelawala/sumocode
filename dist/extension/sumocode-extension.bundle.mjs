@@ -11361,7 +11361,7 @@ var TerminalTaskStore = class {
       entries = readdirSync(this.rootDir, { withFileTypes: true });
     } catch (error) {
       this.diagnostic("io", this.rootDir, error);
-      return [];
+      return { ok: false, snapshots: [] };
     }
     const snapshots = [];
     const paths = /* @__PURE__ */ new Map();
@@ -11390,7 +11390,11 @@ var TerminalTaskStore = class {
       snapshots.push(snapshot);
     }
     this.replaceIndex(snapshots, paths);
-    return snapshots;
+    return { ok: true, snapshots };
+  }
+  /** O(1) no-I/O owner membership check against the compact index. */
+  isIndexedOwner(id, ownerSessionId2) {
+    return this.indexedById.get(id)?.ownerSessionId === ownerSessionId2;
   }
   listOwnedIndexed(ownerSessionId2) {
     const ids = this.indexedIdsByOwner.get(ownerSessionId2);
@@ -11465,7 +11469,10 @@ var TerminalTaskStore = class {
         throw new StaleTerminalTaskRevisionError(id, expectedRevision, current.revision);
       }
       const decided = update(current);
-      if (!decided) return current;
+      if (!decided) {
+        this.replaceIndexedEntry(current);
+        return current;
+      }
       const next = { ...decided, revision: current.revision + 1 };
       if (next.id !== current.id || next.ownerSessionId !== current.ownerSessionId || next.schemaVersion !== current.schemaVersion || next.createdAt !== current.createdAt || next.logFile !== current.logFile) {
         throw new Error("Terminal task identity fields are immutable");
@@ -11995,7 +12002,7 @@ var TerminalTaskManager = class {
     this.claimLeaseMs = normalizePositive(options.claimLeaseMs, DEFAULT_CLAIM_LEASE_MS);
     this.startingRecoveryGraceMs = normalizePositive(options.startingRecoveryGraceMs, DEFAULT_STARTING_RECOVERY_GRACE_MS);
     this.onDiagnostic = options.onDiagnostic;
-    for (const snapshot of this.store.refreshIndex()) {
+    for (const snapshot of this.store.refreshIndex().snapshots) {
       this.adopt(snapshot, false);
       this.recover(snapshot);
     }
@@ -12363,26 +12370,33 @@ ${command}
    * Adopt records created or advanced by another process after this manager was
    * constructed. Recovery re-verifies durable process identity before any
    * lifecycle transition; callers receive the refreshed immutable projection.
+   * `ok` is false when the store directory could not be read: the previous
+   * projection generation stays authoritative and callers must treat freshness
+   * as unproven instead of adopting the returned snapshots.
    */
   refreshSnapshotsFromStore() {
-    if (this.detached) return this.getSnapshots();
-    for (const snapshot of this.store.refreshIndex()) {
+    if (this.detached) return { ok: true, snapshots: this.getSnapshots() };
+    const refresh = this.store.refreshIndex();
+    if (!refresh.ok) return { ok: false, snapshots: this.getSnapshots() };
+    for (const snapshot of refresh.snapshots) {
       const previous = this.tasks.get(snapshot.id);
       if (previous?.revision === snapshot.revision) continue;
       this.adopt(snapshot, false);
       this.recover(snapshot);
     }
-    return this.getSnapshots();
+    return { ok: true, snapshots: this.getSnapshots() };
   }
   /**
    * Authoritative single indexed read of one record, bypassing the retained
    * projection. Owner-isolated: another session's record reads as `undefined`.
-   * Narrow surface for pre-send/pre-publication freshness checks; never scans
-   * the store and only resolves indexed ids.
+   * The owner precheck runs against the compact index with no I/O, so a foreign
+   * or unknown id costs zero metadata reads and a matching id costs exactly
+   * one. Narrow surface for pre-send/pre-publication freshness checks; never
+   * scans the store and only resolves indexed ids.
    */
   readIndexed(id, ownerSessionId2) {
-    const snapshot = this.store.getIndexed(id);
-    return snapshot?.ownerSessionId === ownerSessionId2 ? snapshot : void 0;
+    if (!this.store.isIndexedOwner(id, ownerSessionId2)) return void 0;
+    return this.store.getIndexed(id);
   }
   getSnapshots() {
     const snapshots = [...this.tasks.values()];
@@ -14367,19 +14381,20 @@ var ActivityManagerBridge = class {
       const publisher = this.publisher(owner);
       if (publisher.hasWriterOwnership) {
         if (publisher.writerDeathProven) takeoverOwners.push(owner);
-        this.claimedOwners.add(owner);
+        else this.claimedOwners.add(owner);
       } else {
         this.publishers.delete(owner);
         this.sessionOwnership.release(owner, this.bridgeToken);
       }
     }
     if (takeoverOwners.length === 0) return;
-    try {
-      const refreshed = this.terminalManager.refreshSnapshotsFromStore?.();
-      if (refreshed) this.adoptTerminalSnapshots(refreshed);
-    } catch (error) {
-      this.diagnostic({ kind: "io", path: takeoverOwners[0], message: `terminal takeover refresh failed: ${error instanceof Error ? error.message : String(error)}` });
+    const refresh = this.terminalManager.refreshSnapshotsFromStore?.();
+    if (refresh && !refresh.ok) {
+      this.diagnostic({ kind: "io", path: takeoverOwners[0], message: "terminal takeover refresh failed; takeover retries on the next sync" });
+      return;
     }
+    if (refresh) this.adoptTerminalSnapshots(refresh.snapshots);
+    for (const owner of takeoverOwners) this.claimedOwners.add(owner);
   }
   publishAll() {
     if (this.disposed) return;

@@ -157,11 +157,7 @@ export class TerminalDeliveryCoordinator {
 	public reconcile(ctx: ExtensionContext): void {
 		const ownerSessionId = sessionId(ctx);
 		this.acknowledgeObservable(ctx, ownerSessionId);
-		const retryDelay = this.manager.getClaimRetryDelay(ownerSessionId);
-		if (retryDelay === undefined && this.retryTimer) {
-			clearTimeout(this.retryTimer);
-			this.retryTimer = undefined;
-		}
+		this.syncLeaseRetry(ownerSessionId);
 	}
 
 	private acknowledgeObservable(ctx: ExtensionContext, ownerSessionId: string): void {
@@ -241,11 +237,20 @@ export class TerminalDeliveryCoordinator {
 					this.safeReconcile(this.active.ctx);
 				});
 			}
-			const retryDelay = this.manager.getClaimRetryDelay(active.ownerSessionId);
-			if (retryDelay !== undefined) this.scheduleLeaseRetry(retryDelay);
+			this.syncLeaseRetry(active.ownerSessionId);
 		} finally {
 			this.flushing = false;
 		}
+	}
+
+	private syncLeaseRetry(ownerSessionId: string): void {
+		const retryDelay = this.manager.getClaimRetryDelay(ownerSessionId);
+		if (retryDelay !== undefined) {
+			this.scheduleLeaseRetry(retryDelay);
+			return;
+		}
+		if (this.retryTimer) clearTimeout(this.retryTimer);
+		this.retryTimer = undefined;
 	}
 
 	private scheduleLeaseRetry(delayMs: number): void {

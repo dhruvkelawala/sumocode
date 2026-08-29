@@ -13051,11 +13051,7 @@ var TerminalDeliveryCoordinator = class {
   reconcile(ctx) {
     const ownerSessionId2 = sessionId(ctx);
     this.acknowledgeObservable(ctx, ownerSessionId2);
-    const retryDelay = this.manager.getClaimRetryDelay(ownerSessionId2);
-    if (retryDelay === void 0 && this.retryTimer) {
-      clearTimeout(this.retryTimer);
-      this.retryTimer = void 0;
-    }
+    this.syncLeaseRetry(ownerSessionId2);
   }
   acknowledgeObservable(ctx, ownerSessionId2) {
     this.manager.acknowledge(ownerSessionId2, completionsFromContext(ctx).receipts);
@@ -13117,11 +13113,19 @@ var TerminalDeliveryCoordinator = class {
           this.safeReconcile(this.active.ctx);
         });
       }
-      const retryDelay = this.manager.getClaimRetryDelay(active.ownerSessionId);
-      if (retryDelay !== void 0) this.scheduleLeaseRetry(retryDelay);
+      this.syncLeaseRetry(active.ownerSessionId);
     } finally {
       this.flushing = false;
     }
+  }
+  syncLeaseRetry(ownerSessionId2) {
+    const retryDelay = this.manager.getClaimRetryDelay(ownerSessionId2);
+    if (retryDelay !== void 0) {
+      this.scheduleLeaseRetry(retryDelay);
+      return;
+    }
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = void 0;
   }
   scheduleLeaseRetry(delayMs) {
     if (this.retryTimer) clearTimeout(this.retryTimer);

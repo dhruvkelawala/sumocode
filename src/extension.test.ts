@@ -50,9 +50,10 @@ interface RealpathTable {
 
 let ambientEnvSnapshot: Map<string, string | undefined>;
 let piCodingAgentDirSnapshot: string | undefined;
-let temporaryPiAgentDir: string;
+let temporaryPiAgentDir: string | undefined;
 
 beforeEach(() => {
+	temporaryPiAgentDir = undefined;
 	ambientEnvSnapshot = new Map();
 	for (const key of AMBIENT_ENV_KEYS) {
 		ambientEnvSnapshot.set(key, process.env[key]);
@@ -73,9 +74,11 @@ afterEach(() => {
 	}
 	if (piCodingAgentDirSnapshot === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = piCodingAgentDirSnapshot;
-	rmSync(temporaryPiAgentDir, { recursive: true, force: true });
-	// Never leak the process-global latch into other test files in this worker.
+	// Reset process-global state before cleanup, which can throw independently.
 	resetSumocodeProcessInstallLatchForTests();
+	const ownedPiAgentDir = temporaryPiAgentDir;
+	temporaryPiAgentDir = undefined;
+	if (ownedPiAgentDir !== undefined) rmSync(ownedPiAgentDir, { recursive: true, force: true });
 });
 
 function buildPiStub() {
@@ -415,6 +418,7 @@ describe("sumocode extension", () => {
 		// SAFETY: the pi double supplies the register*/on surfaces the extension installs on.
 		sumocode(pi as never);
 
+		if (temporaryPiAgentDir === undefined) throw new Error("temporary Pi agent directory was not created");
 		expect(existsSync(join(temporaryPiAgentDir, "state", "sumocode-terminals"))).toBe(true);
 	});
 

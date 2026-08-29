@@ -16,7 +16,7 @@
 - **Milestone**: M1 — Command-ready foundation
 - **Planned at**: commit `b34bd79`, 2026-08-28
 - **Issue**: https://github.com/dhruvkelawala/sumocode/issues/385
-- **Execution status**: DONE — implemented in `6ef8c13`; focused isolation 1/1, extension file 29/29 twice (1.57s and 1.44s), and full unit suite 2,514/2,514 with typecheck/build/lint green
+- **Execution status**: DONE — implemented in `6ef8c13`; focused isolation 1/1 and extension file 29/29 twice (1.57s and 1.44s); the full unit suite passed 2,514/2,514 with one worker, while default parallel runs hit documented unrelated timing flakes; typecheck/build/lint green; CI pending
 
 ## Why this matters
 
@@ -98,7 +98,7 @@ Add one focused test named exactly `isolates terminal state under the temporary 
 
 ## Execution outcome — 2026-08-29
 
-Implementation commit: `6ef8c13` (`test: isolate extension install state`). The top-level test lifecycle owns one fresh Pi agent directory per test, restores `PI_CODING_AGENT_DIR` with undefined fidelity, and removes the directory in `afterEach`. The focused regression observes eager store creation through `sumocode(pi)` only; it does not start a terminal or inspect the home-directory terminal store. Keeping isolation at the suite lifecycle, rather than wrapping selected installs, ensures future full-install tests inherit it automatically.
+Implementation commit: `6ef8c13` (`test: isolate extension install state`). The top-level test lifecycle owns one fresh Pi agent directory per test, restores `PI_CODING_AGENT_DIR` with undefined fidelity, resets the process-global install latch before fallible recursive cleanup, and removes the directory in `afterEach`. The focused regression observes eager store creation through `sumocode(pi)` only; it does not start a terminal or inspect the home-directory terminal store. Keeping isolation at the suite lifecycle, rather than wrapping selected installs, ensures future full-install tests inherit it automatically. The fixture keeps its path optional so a failed temp-directory allocation cannot make teardown mask the setup error.
 
 TDD and verification evidence:
 

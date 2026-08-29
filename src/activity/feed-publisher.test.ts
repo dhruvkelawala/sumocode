@@ -13,7 +13,7 @@ import {
 	type ActivityFeedPublisherOptions,
 } from "./feed-publisher.js";
 import { ACTIVITY_OUTPUT_MAX_BYTES, ACTIVITY_OUTPUT_MAX_LINES } from "./output-tail.js";
-import { ACTIVITY_DOCUMENT_MAX_BYTES, ACTIVITY_FEED_MAX_BYTES, activityPaths, atomicWritePrivateJson, hashedSessionId } from "./persistence.js";
+import { ACTIVITY_DOCUMENT_MAX_BYTES, ACTIVITY_FEED_MAX_BYTES, activityPaths, atomicWritePrivateJson, hashedSessionId, writePrivateJsonExclusive } from "./persistence.js";
 
 const require = createRequire(import.meta.url);
 const roots: string[] = [];
@@ -74,7 +74,7 @@ const jiti = createJiti(${JSON.stringify(join(process.cwd(), "feed-writer-test.c
   try {
     published = publisher.publish([{ id: ${JSON.stringify(id)}, kind: "subagent", title: ${JSON.stringify(id)}, status: "running", createdAt: Date.now() }]);
   } catch (caught) { error = caught instanceof Error ? caught.message : String(caught); }
-  process.stdout.write(JSON.stringify({ published, writerDeathProven: publisher.canReconcileAbandonedActivities, error }) + "\\n");
+  process.stdout.write(JSON.stringify({ published, writerDeathProven: publisher.writerDeathProven, error }) + "\\n");
   if (${holdMs} > 0) setTimeout(() => process.exit(0), ${holdMs});
 })().catch((error) => { process.stderr.write(String(error && error.stack || error)); process.exit(1); });
 `;
@@ -254,6 +254,7 @@ describe("ActivityFeedPublisher", () => {
 			},
 		});
 		expect(takeover.hasWriterOwnership).toBe(true);
+		expect(takeover.writerDeathProven).toBe(true);
 		expect(takeover.getSnapshot().map((entry) => entry.id)).toEqual(["before", "final"]);
 		takeover.publish(takeover.getSnapshot());
 		expect(fixturePublisher("session-final-update", { rootDir: stateRoot }).getSnapshot().map((entry) => entry.id)).toEqual(["before", "final"]);
@@ -293,7 +294,113 @@ describe("ActivityFeedPublisher", () => {
 			inspectWriter: () => "dead",
 		});
 		expect(recovered.hasWriterOwnership).toBe(true);
-		expect(recovered.canReconcileAbandonedActivities).toBe(true);
+		expect(recovered.writerDeathProven).toBe(true);
+	});
+
+	it("exposes writer-death proof on a proven empty-feed takeover where abandoned reconciliation could not", () => {
+		const stateRoot = root();
+		const incumbent = fixturePublisher("session-empty-proof", {
+			rootDir: stateRoot,
+			writerIdentity: { token: "incumbent", pid: 101, processStartTime: "incumbent-start" },
+			inspectWriter: () => "alive",
+		});
+		incumbent.publish([]);
+
+		const takeover = fixturePublisher("session-empty-proof", {
+			rootDir: stateRoot,
+			writerIdentity: { token: "takeover", pid: 202, processStartTime: "takeover-start" },
+			inspectWriter: () => "dead",
+		});
+		expect(takeover.hasWriterOwnership).toBe(true);
+		expect(takeover.getAbandonedRunningIds().size).toBe(0);
+		expect(takeover.writerDeathProven).toBe(true);
+		takeover.completeAbandonedReconciliation();
+		expect(takeover.writerDeathProven).toBe(false);
+	});
+
+	it("withholds writer-death proof when a live takeover path blocks the claim", () => {
+		const stateRoot = root();
+		const first = fixturePublisher("session-blocked", {
+			rootDir: stateRoot,
+			writerIdentity: { token: "first", pid: 111, processStartTime: "first-start" },
+			inspectWriter: () => "alive",
+		});
+		first.publish([activity("still-running")]);
+		const paths = activityPaths("session-blocked", stateRoot);
+		renameSync(paths.writerFile, `${paths.writerFile}.takeover-live`);
+
+		const contender = new ActivityFeedPublisher("session-blocked", {
+			rootDir: stateRoot,
+			writerIdentity: { token: "contender", pid: 222, processStartTime: "contender-start" },
+			inspectWriter: () => "alive",
+		});
+		expect(contender.hasWriterOwnership).toBe(false);
+		expect(contender.writerDeathProven).toBe(false);
+	});
+
+	it("withholds writer-death proof when dead takeover paths are cleaned but a live path still blocks", () => {
+		const stateRoot = root();
+		const first = fixturePublisher("session-mixed-takeover", {
+			rootDir: stateRoot,
+			writerIdentity: { token: "first", pid: 111, processStartTime: "first-start" },
+			inspectWriter: () => "alive",
+		});
+		first.publish([activity("held")]);
+		const paths = activityPaths("session-mixed-takeover", stateRoot);
+		renameSync(paths.writerFile, `${paths.writerFile}.takeover-live`);
+		writePrivateJsonExclusive(`${paths.writerFile}.takeover-dead`, { schemaVersion: 1, token: "dead-writer", pid: 333, processStartTime: "dead-start" });
+
+		const contender = new ActivityFeedPublisher("session-mixed-takeover", {
+			rootDir: stateRoot,
+			writerIdentity: { token: "contender", pid: 222, processStartTime: "contender-start" },
+			inspectWriter: (writer) => writer.token === "dead-writer" ? "dead" : "alive",
+		});
+		expect(contender.hasWriterOwnership).toBe(false);
+		expect(contender.writerDeathProven).toBe(false);
+	});
+
+	it("withholds writer-death proof when a dead canonical writer exists but ownership stays blocked", () => {
+		const stateRoot = root();
+		const first = fixturePublisher("session-dead-blocked", {
+			rootDir: stateRoot,
+			writerIdentity: { token: "first", pid: 111, processStartTime: "first-start" },
+			inspectWriter: () => "alive",
+		});
+		first.publish([activity("held")]);
+		const paths = activityPaths("session-dead-blocked", stateRoot);
+		renameSync(paths.writerFile, `${paths.writerFile}.takeover-live`);
+		writePrivateJsonExclusive(paths.writerFile, { schemaVersion: 1, token: "dead-writer", pid: 333, processStartTime: "dead-start" });
+
+		const contender = new ActivityFeedPublisher("session-dead-blocked", {
+			rootDir: stateRoot,
+			writerIdentity: { token: "contender", pid: 222, processStartTime: "contender-start" },
+			inspectWriter: (writer) => writer.token === "dead-writer" ? "dead" : "alive",
+		});
+		expect(contender.hasWriterOwnership).toBe(false);
+		expect(contender.writerDeathProven).toBe(false);
+	});
+
+	it("does not grant writer-death proof on a same-process ABA handoff", () => {
+		const stateRoot = root();
+		const first = fixturePublisher("session-aba", {
+			rootDir: stateRoot,
+			writerIdentity: { token: "first", pid: 4_242, processStartTime: "shared-start" },
+			inspectWriter: () => "alive",
+		});
+		first.publish([activity("held")]);
+		const paths = activityPaths("session-aba", stateRoot);
+		renameSync(paths.writerFile, `${paths.writerFile}.takeover-aba`);
+
+		const contender = new ActivityFeedPublisher("session-aba", {
+			rootDir: stateRoot,
+			writerIdentity: { token: "second", pid: 4_242, processStartTime: "shared-start" },
+			inspectWriter: () => "alive",
+		});
+		// Ownership transfers via the same-process handoff, but no writer death was
+		// proven, so the refresh authorization bit must stay off.
+		expect(contender.hasWriterOwnership).toBe(true);
+		expect(contender.writerDeathProven).toBe(false);
+		expect(readFileSync(paths.writerFile, "utf8")).toContain("second");
 	});
 
 	it("bounds and sanitizes output, invocation secrets, ANSI, and controls", () => {

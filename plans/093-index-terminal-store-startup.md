@@ -2,8 +2,8 @@
 
 > **Executor instructions**: This is a persistence/lifecycle change. Follow the characterization-first order exactly. Run each verification gate. Never delete durable terminal records. Stop rather than weakening ownership, revision, lease, or process-identity checks.
 >
-> **Drift check (run first)**: `git diff --stat b34bd79..HEAD -- src/background-tasks/task-store.ts src/background-tasks/task-manager.ts src/background-tasks/terminal-tools.ts src/activity/manager-bridge.ts src/background-tasks/*.test.ts src/activity/manager-bridge.test.ts`
-> **Working-tree preflight (run at the same time)**: `git status --short -- dist/extension src/background-tasks/task-store.ts src/background-tasks/task-manager.ts src/background-tasks/terminal-tools.ts src/activity/manager-bridge.ts src/background-tasks/*.test.ts src/activity/manager-bridge.test.ts`. If this reports pre-existing work, STOP and preserve it.
+> **Drift check (run first)**: `git diff --stat b34bd79..HEAD -- src/background-tasks/task-store.ts src/background-tasks/task-manager.ts src/background-tasks/terminal-tools.ts src/activity/manager-bridge.ts src/activity/feed-publisher.ts src/background-tasks/*.test.ts src/activity/manager-bridge.test.ts src/activity/feed-publisher.test.ts`
+> **Working-tree preflight (run at the same time)**: `git status --short -- dist/extension src/background-tasks/task-store.ts src/background-tasks/task-manager.ts src/background-tasks/terminal-tools.ts src/activity/manager-bridge.ts src/activity/feed-publisher.ts src/background-tasks/*.test.ts src/activity/manager-bridge.test.ts src/activity/feed-publisher.test.ts`. If this reports pre-existing work, STOP and preserve it.
 > If the drift check reports an in-scope change, compare the Current state excerpts and assumptions with live code. If behavior or signatures differ, STOP and request plan reconciliation.
 > **Dependency check**: Confirm every plan named in **Depends on** is `DONE` in `plans/README.md`. If any is not DONE, STOP; do not recreate or assume its APIs.
 
@@ -73,8 +73,11 @@ After final source edits, run `pnpm build:extension` before `pnpm test`; keep th
 - `src/background-tasks/task-manager.ts`
 - `src/background-tasks/terminal-tools.ts`
 - `src/activity/manager-bridge.ts`
+- `src/activity/feed-publisher.ts`
 - Their colocated tests.
 - A test-only scan counter or injected projection loader.
+
+**Authorized review-fix addition (run `run-20260829T150412Z-08a6aa41` attempt 2)**: `src/activity/feed-publisher.ts` plus its colocated test are in scope for the writer-death seam only — expose a read-only `writerDeathProven` getter over the exact claim-time proof already computed and stored, and retire the `canReconcileAbandonedActivities` authorization bit. No other publisher API broadens; schema, layout, lease, and retention behavior are unchanged.
 
 **Out of scope**:
 - Record deletion, archival, retention, schema migration, or changing task-directory layout.

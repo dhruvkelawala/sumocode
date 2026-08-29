@@ -1,6 +1,6 @@
 // oxlint-disable anti-slop/require-safety-comment-for-type-assertion, anti-slop/no-known-value-widening -- this harness intentionally casts partial test doubles with `as never` instead of restating full runtime contracts.
 import { execFile } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,7 +9,7 @@ import { TerminalTaskManager, type TerminalOutputTail } from "../background-task
 import { TerminalTaskStore, type TerminalTaskIndexRefreshResult } from "../background-tasks/task-store.js";
 import { terminalActivitySnapshot, type TerminalTaskSnapshot } from "../background-tasks/task-types.js";
 import type { SubagentSnapshot } from "../subagents/domain.js";
-import { ACTIVITY_SETTLED_RETENTION_COUNT, ACTIVITY_SETTLED_RETENTION_MS, ActivityFeedPublisher, type ActivityFeedPublisherOptions } from "./feed-publisher.js";
+import { ACTIVITY_SETTLED_RETENTION_COUNT, ACTIVITY_SETTLED_RETENTION_MS, ActivityFeedPublisher, type ActivityFeedDiagnostic, type ActivityFeedPublisherOptions } from "./feed-publisher.js";
 import { activityPaths } from "./persistence.js";
 import { ActivityManagerBridge, installActivityManagerBridge } from "./manager-bridge.js";
 
@@ -77,6 +77,38 @@ function terminal(id: string, ownerSessionId: string, status: "running" | "compl
 		completionId: `completion-${id}`,
 		observedAt: 2_000,
 	};
+}
+
+function persistSettledTerminal(store: TerminalTaskStore, id: string, ownerSessionId: string, createdAt: number): TerminalTaskSnapshot {
+	const directory = join(store.rootDir, `${id}-${createdAt}`);
+	mkdirSync(directory, { mode: 0o700 });
+	chmodSync(directory, 0o700);
+	const logFile = join(directory, "output.log");
+	writeFileSync(logFile, "", { mode: 0o600 });
+	chmodSync(logFile, 0o600);
+	const snapshot: TerminalTaskSnapshot = {
+		schemaVersion: 4,
+		revision: 1,
+		id,
+		ownerSessionId,
+		command: "printf hello",
+		cwd: "/tmp",
+		title: id,
+		status: "completed",
+		completionPolicy: "passive",
+		createdAt,
+		updatedAt: createdAt,
+		settledAt: createdAt,
+		exitCode: 0,
+		observedAt: createdAt,
+		deliveryState: "suppressed",
+		completionId: `completion-${id}`,
+		logFile,
+	};
+	const metaFile = join(directory, "meta.json");
+	writeFileSync(metaFile, `${JSON.stringify(snapshot)}\n`, { mode: 0o600 });
+	chmodSync(metaFile, 0o600);
+	return snapshot;
 }
 
 function subagent(id: string, status: SubagentSnapshot["status"] = "running"): SubagentSnapshot {
@@ -399,6 +431,108 @@ describe("ActivityManagerBridge", () => {
 		expect(successfulPublishes).toBe(1);
 		bridge.dispose();
 	});
+
+	it("contains an unexpected takeover-refresh throw and retries with the proof intact", () => {
+		const stateRoot = root();
+		const incumbent = new ActivityFeedPublisher("session-refresh-throw", {
+			rootDir: stateRoot,
+			writerIdentity: { token: "incumbent", pid: 101, processStartTime: "incumbent-start" },
+			inspectWriter: () => "alive",
+		});
+		incumbent.publish([]);
+		let incumbentAlive = true;
+		const terminals = new FakeTerminalManager();
+		terminals.refreshedSnapshots = [terminal("term-after-throw", "session-refresh-throw")];
+		terminals.outputs.set("/tmp/term-after-throw.log", "late output");
+		const diagnostics: ActivityFeedDiagnostic[] = [];
+		const realRefresh = terminals.refreshSnapshotsFromStore.bind(terminals);
+		let refreshCalls = 0;
+		terminals.refreshSnapshotsFromStore = () => {
+			refreshCalls += 1;
+			if (refreshCalls === 1) throw new Error("injected refresh failure");
+			return realRefresh();
+		};
+		const created: ActivityFeedPublisher[] = [];
+		const bridge = new ActivityManagerBridge(terminals, new FakeSubagentManager(), {
+			rootDir: stateRoot,
+			writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
+			inspectWriter: () => incumbentAlive ? "alive" : "dead",
+			onDiagnostic: (entry) => diagnostics.push(entry),
+			publisherFactory: (owner) => {
+				const publisher = new ActivityFeedPublisher(owner, {
+					rootDir: stateRoot,
+					writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
+					inspectWriter: () => incumbentAlive ? "alive" : "dead",
+				});
+				created.push(publisher);
+				return publisher;
+			},
+		});
+
+		// The bridge first sees the session while the incumbent is alive: the
+		// owner is noted but its blocked publisher is discarded unclaimed.
+		bridge.bindSession("session-refresh-throw");
+
+		// Pass 1: the death-proven takeover's refresh throws unexpectedly. The
+		// throw is contained like the explicit {ok:false} path: the owner stays
+		// unclaimed and unpublished while the publisher keeps its writer lease
+		// and proof so the next sync retries.
+		incumbentAlive = false;
+		expect(bridge.canProduceActivity("session-refresh-throw")).toBe(false);
+		expect(refreshCalls).toBe(1);
+		const takeoverPublisher = created.at(-1)!;
+		expect(takeoverPublisher.writerDeathProven).toBe(true);
+		expect(fixturePublisher("session-refresh-throw", { rootDir: stateRoot }).getSnapshot()).toEqual([]);
+		expect(diagnostics.at(-1)).toMatchObject({ kind: "io", path: "session-refresh-throw" });
+
+		// Pass 2: the retry succeeds, discovers the late terminal, claims the
+		// owner, and publication consumes the proof exactly once.
+		expect(bridge.canProduceActivity("session-refresh-throw")).toBe(true);
+		expect(refreshCalls).toBe(2);
+		bridge.bindSession("session-refresh-throw");
+		expect(refreshCalls).toBe(2);
+		expect(takeoverPublisher.writerDeathProven).toBe(false);
+		expect(fixturePublisher("session-refresh-throw", { rootDir: stateRoot }).getSnapshot()).toEqual(expect.arrayContaining([
+			expect.objectContaining({ id: "term-after-throw", status: "running", outputTail: "late output" }),
+		]));
+		bridge.dispose();
+	});
+
+	it("takeover publication omits a terminal the refresh quarantined from the retained projection", () => {
+		const stateRoot = root();
+		const terminalRoot = root();
+		const store = new TerminalTaskStore({ rootDir: terminalRoot });
+		persistSettledTerminal(store, "term-keep", "session-quarantine", 1_000);
+		persistSettledTerminal(store, "term-drop", "session-quarantine", 1_100);
+		const terminals = new TerminalTaskManager({ store });
+		// The durable record becomes corrupt/unreadable after manager adoption;
+		// the takeover refresh must quarantine it, prune the retained projection,
+		// and never republish it into the durable feed.
+		writeFileSync(join(terminalRoot, "term-drop-1100", "meta.json"), "{not json", { mode: 0o600 });
+		const incumbent = new ActivityFeedPublisher("session-quarantine", {
+			rootDir: stateRoot,
+			writerIdentity: { token: "incumbent", pid: 101, processStartTime: "incumbent-start" },
+			inspectWriter: () => "alive",
+		});
+		incumbent.publish([]);
+		let incumbentAlive = true;
+		const bridge = new ActivityManagerBridge(terminals, new FakeSubagentManager(), {
+			rootDir: stateRoot,
+			now: () => 2_000,
+			writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
+			inspectWriter: () => incumbentAlive ? "alive" : "dead",
+		});
+
+		bridge.bindSession("session-quarantine");
+		incumbentAlive = false;
+		bridge.bindSession("session-quarantine");
+
+		expect(terminals.getSnapshots().map((task) => task.id)).toEqual(["term-keep"]);
+		expect(fixturePublisher("session-quarantine", { rootDir: stateRoot }).getSnapshot().map((activity) => activity.id)).toEqual(["term-keep"]);
+		bridge.dispose();
+		terminals.detach();
+	});
+
 
 	it.skipIf(process.platform === "win32")("refreshes a late durable terminal before a two-process writer takeover", async () => {
 		const stateRoot = root();

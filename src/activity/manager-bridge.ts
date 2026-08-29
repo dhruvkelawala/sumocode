@@ -297,7 +297,17 @@ export class ActivityManagerBridge {
 			}
 		}
 		if (takeoverOwners.length === 0) return;
-		const refresh = this.terminalManager.refreshSnapshotsFromStore?.();
+		let refresh: TerminalTaskIndexRefreshResult | undefined;
+		try {
+			refresh = this.terminalManager.refreshSnapshotsFromStore?.();
+		} catch (error) {
+			// An unexpected refresh throw is contained exactly like the explicit
+			// {ok:false} non-throw path: the death-proven owners stay unclaimed,
+			// unpublished, and their proof intact, and the session claim stays with
+			// this token so the next sync retries the one global refresh.
+			this.diagnostic({ kind: "io", path: takeoverOwners[0]!, message: `terminal takeover refresh failed safely; takeover retries on the next sync: ${error instanceof Error ? error.message : String(error)}` });
+			return;
+		}
 		if (refresh && !refresh.ok) {
 			// A failed takeover refresh must not publish the death-proven owners,
 			// claim them, or consume their proof. Their publishers keep the writer

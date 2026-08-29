@@ -505,6 +505,94 @@ describe("TerminalTaskManager", () => {
 		}
 	});
 
+	it("prunes quarantined ids from the retained projection on success and preserves them on failure", async () => {
+		const store = new TerminalTaskStore({ rootDir });
+		const target = manager({ store });
+		const keep = await start(target);
+		const drop = await start(target);
+		for (const task of [keep, drop]) {
+			writeFileSync(exitFile(task), "0");
+			children[keep.id === task.id ? 0 : 1]?.emit("close", 0);
+		}
+		await vi.waitFor(() => expect(target.get(keep.id, "session-a")?.status).toBe("completed"));
+		await vi.waitFor(() => expect(target.get(drop.id, "session-a")?.status).toBe("completed"));
+
+		// A failed refresh preserves the whole last-good projection.
+		chmodSync(rootDir, 0o000);
+		try {
+			expect(target.refreshSnapshotsFromStore().ok).toBe(false);
+			expect(target.getSnapshots().map((task) => task.id).sort()).toEqual([keep.id, drop.id].sort());
+			expect(target.list("session-a").map((task) => task.id).sort()).toEqual([keep.id, drop.id].sort());
+			expect(target.get(drop.id, "session-a")).toBeDefined();
+		} finally {
+			chmodSync(rootDir, 0o700);
+		}
+
+		// The durable record becomes corrupt/unreadable; the next successful
+		// refresh quarantines it and the retained projection is replaced to match
+		// exactly the refreshed index generation.
+		const metaFile = join(dirname(drop.logFile), "meta.json");
+		writeFileSync(metaFile, "{not json", { mode: 0o600 });
+		expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+		expect(target.getSnapshots().map((task) => task.id)).toEqual([keep.id]);
+		expect(target.list("session-a").map((task) => task.id)).toEqual([keep.id]);
+		expect(target.get(drop.id, "session-a")).toBeUndefined();
+		expect(target.get(keep.id, "session-a")).toMatchObject({ id: keep.id, status: "completed" });
+		// Quarantine stays logical: the corrupt durable record is untouched.
+		expect(readFileSync(metaFile, "utf8")).toBe("{not json");
+	});
+
+	it("routes ids quarantined after the wait began to the unknown bucket", async () => {
+		const store = new TerminalTaskStore({ rootDir });
+		const target = manager({ store });
+		const task = await start(target);
+		const waited = target.wait([task.id, "term-missing"], "session-a", 25);
+		// Quarantine while the wait is parked: the initial known collection
+		// already listed the task, so its post-await read must not assert
+		// non-null — the id routes to unknownIds through the normal result shape.
+		writeFileSync(join(dirname(task.logFile), "meta.json"), "{not json", { mode: 0o600 });
+		expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+		await expect(waited).resolves.toEqual({
+			settled: [],
+			pendingIds: [],
+			unknownIds: [task.id, "term-missing"],
+			timedOut: false,
+		});
+	});
+
+	it("returns the normal unknown outcome when the record is quarantined during the async stop window", async () => {
+		const store = new TerminalTaskStore({ rootDir });
+		const target = manager({ store });
+		const task = await start(target);
+		writeFileSync(exitFile(task), "0");
+		// Quarantine the record exactly inside the stop's async process window:
+		// the natural-stop tree wait quarantines before settlement mutates.
+		tree.operations.waitForTreeEmpty = vi.fn(async (_identity: ProcessTreeIdentity) => {
+			writeFileSync(join(dirname(task.logFile), "meta.json"), "{not json", { mode: 0o600 });
+			expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+			return true;
+		});
+		const results = await target.stop([task.id], "session-a");
+		expect(results).toEqual([
+			{ id: task.id, outcome: "unknown", message: `Unknown terminal ${task.id}.` },
+		]);
+		// Quarantine stays logical: the corrupt durable record is untouched.
+		expect(readFileSync(join(dirname(task.logFile), "meta.json"), "utf8")).toBe("{not json");
+	});
+
+	it("reports a failed refresh with retained snapshots once detached", () => {
+		const store = new TerminalTaskStore({ rootDir });
+		persistSettledTask(store, "term-a", "session-a", 1_000);
+		const target = manager({ store });
+		target.detach();
+		// A detached manager performs no scan, so it cannot prove freshness or
+		// authorize consuming writer-death proof: report failure while still
+		// handing back the retained snapshots.
+		const result = target.refreshSnapshotsFromStore();
+		expect(result.ok).toBe(false);
+		expect(result.snapshots.map((task) => task.id)).toEqual(["term-a"]);
+	});
+
 	it("terminates the new process tree when spawn identity persistence fails", async () => {
 		const store = new TerminalTaskStore({ rootDir });
 		const transition = vi.spyOn(store, "transition").mockImplementation(() => {

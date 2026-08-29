@@ -613,7 +613,6 @@ export class TerminalTaskManager {
 		const uniqueIds = [...new Set(ids)];
 		const known = uniqueIds.filter((id) => this.get(id, ownerSessionId) !== undefined);
 		const knownSet = new Set(known);
-		const unknownIds = uniqueIds.filter((id) => !knownSet.has(id));
 		const complete = (): boolean => known.every((id) => {
 			const task = this.get(id, ownerSessionId);
 			return task !== undefined && isTerminalTaskSettled(task.status);
@@ -648,8 +647,17 @@ export class TerminalTaskManager {
 		}
 		const settled: TerminalTaskObservation[] = [];
 		const pendingIds: string[] = [];
+		// An id collected as known can become unqueryable while parked: a
+		// concurrent successful refresh quarantines it from the compact index.
+		// Such ids route to the unknown bucket through the normal result shape
+		// instead of the historical non-null assertion throwing on undefined.
+		const quarantined = new Set<string>();
 		for (const id of known) {
-			const current = this.get(id, ownerSessionId)!;
+			const current = this.get(id, ownerSessionId);
+			if (!current) {
+				quarantined.add(id);
+				continue;
+			}
 			if (!isTerminalTaskSettled(current.status)) {
 				pendingIds.push(id);
 				continue;
@@ -657,7 +665,12 @@ export class TerminalTaskManager {
 			const task = this.observe(id, true);
 			settled.push({ task, output: this.getOutput(task, WAIT_OUTPUT_BYTES) });
 		}
-		return { settled, pendingIds, unknownIds, timedOut: pendingIds.length > 0 };
+		return {
+			settled,
+			pendingIds,
+			unknownIds: uniqueIds.filter((id) => !knownSet.has(id) || quarantined.has(id)),
+			timedOut: pendingIds.length > 0,
+		};
 	}
 
 	public async stop(ids: readonly string[], ownerSessionId: string): Promise<TerminalStopResult[]> {
@@ -788,8 +801,8 @@ export class TerminalTaskManager {
 			this.safeVerifiedSignal(identity, naturalExitCode === undefined ? "SIGTERM" : "SIGKILL", verification)));
 		await Promise.all(targets.map(async ({ task, identity, verification, naturalExitCode }, index) => {
 			results.set(task.id, naturalExitCode === undefined
-				? await this.finishStop(task.id, identity, termSignals[index]!, true, verification)
-				: await this.finishNaturalStop(task.id, identity, naturalExitCode, termSignals[index]!, verification));
+				? await this.finishStop(task.id, ownerSessionId, identity, termSignals[index]!, true, verification)
+				: await this.finishNaturalStop(task.id, ownerSessionId, identity, naturalExitCode, termSignals[index]!, verification));
 		}));
 		return uniqueIds.map((id) => results.get(id)!);
 	}
@@ -852,12 +865,19 @@ export class TerminalTaskManager {
 	 * Adopt records created or advanced by another process after this manager was
 	 * constructed. Recovery re-verifies durable process identity before any
 	 * lifecycle transition; callers receive the refreshed immutable projection.
-	 * `ok` is false when the store directory could not be read: the previous
-	 * projection generation stays authoritative and callers must treat freshness
-	 * as unproven instead of adopting the returned snapshots.
+	 * `ok` is false when the store directory could not be read or when this
+	 * manager is detached (no scan, therefore no provable freshness): the
+	 * previous projection generation stays authoritative and callers must treat
+	 * freshness as unproven instead of adopting the returned snapshots, and
+	 * takeover callers keep their death proof unconsumed. On success the
+	 * retained projection is replaced to match exactly the refreshed index
+	 * generation: ids the scan quarantined or no longer reports are dropped from
+	 * `tasks` and `getSnapshots()` so stale retained snapshots cannot be
+	 * republished. Quarantine stays logical — durable records and the separate
+	 * runtime process bookkeeping are preserved.
 	 */
 	public refreshSnapshotsFromStore(): TerminalTaskIndexRefreshResult {
-		if (this.detached) return { ok: true, snapshots: this.getSnapshots() };
+		if (this.detached) return { ok: false, snapshots: this.getSnapshots() };
 		const refresh = this.store.refreshIndex();
 		if (!refresh.ok) return { ok: false, snapshots: this.getSnapshots() };
 		for (const snapshot of refresh.snapshots) {
@@ -865,6 +885,12 @@ export class TerminalTaskManager {
 			if (previous?.revision === snapshot.revision) continue;
 			this.adopt(snapshot, false);
 			this.recover(snapshot);
+		}
+		const refreshed = new Set(refresh.snapshots.map((snapshot) => snapshot.id));
+		// Copy before deleting: the projection map mutates while pruning.
+		for (const id of Array.from(this.tasks.keys())) {
+			if (refreshed.has(id)) continue;
+			this.tasks.delete(id);
 		}
 		return { ok: true, snapshots: this.getSnapshots() };
 	}
@@ -1096,6 +1122,7 @@ export class TerminalTaskManager {
 
 	private async recoverStopping(id: string, identity: ProcessTreeIdentity): Promise<void> {
 		const current = this.store.getIndexed(id);
+		const ownerSessionId = current?.ownerSessionId;
 		if (this.processTree.isTreeEmpty(identity, current?.processTreeVerification)) {
 			this.settleDisposedStop(id);
 			return;
@@ -1130,7 +1157,7 @@ export class TerminalTaskManager {
 			}
 		}
 		const term = await this.safeVerifiedSignal(identity, "SIGTERM", verification);
-		await this.finishStop(id, identity, term, false, verification);
+		await this.finishStop(id, ownerSessionId, identity, term, false, verification);
 	}
 
 	private settleNatural(id: string, exitCode: number): TerminalTaskSnapshot {
@@ -1212,16 +1239,26 @@ export class TerminalTaskManager {
 		}).snapshot;
 	}
 
+	/** True when a concurrent successful refresh quarantined this id out of the compact index. */
+	private isQuarantined(id: string, ownerSessionId: string | undefined): boolean {
+		return ownerSessionId === undefined || !this.store.isIndexedOwner(id, ownerSessionId);
+	}
+
 	private async finishNaturalStop(
 		id: string,
+		ownerSessionId: string,
 		identity: ProcessTreeIdentity,
 		exitCode: number,
 		signal: ProcessTreeSignalResult,
 		verification?: ProcessTreeVerification,
 	): Promise<TerminalStopResult> {
 		const gone = signal.gone || (signal.ok && await this.processTree.waitForTreeEmpty(identity, this.killGraceMs, verification));
+		// The record may have been quarantined out of the index during the async
+		// process window; settle mutations must then report the normal unknown
+		// outcome instead of throwing on the missing indexed path.
+		if (this.isQuarantined(id, ownerSessionId)) return { id, outcome: "unknown", message: `Unknown terminal ${id}.` };
 		if (!signal.ok || !gone) {
-			if (!this.processTree.isTreeEmpty(identity, verification)) return this.handleStopSignalFailure(id, signal, false, true);
+			if (!this.processTree.isTreeEmpty(identity, verification)) return this.handleStopSignalFailure(id, ownerSessionId, signal, false, true);
 		}
 		const settled = this.settleNatural(id, exitCode);
 		const observed = this.observe(id, false);
@@ -1261,22 +1298,27 @@ export class TerminalTaskManager {
 
 	private async finishStop(
 		id: string,
+		ownerSessionId: string | undefined,
 		identity: ProcessTreeIdentity,
 		termSignal: ProcessTreeSignalResult,
 		restoreOnFailure: boolean,
 		verification?: ProcessTreeVerification,
 	): Promise<TerminalStopResult> {
-		if (!termSignal.ok && !termSignal.forceRequired) return this.handleStopSignalFailure(id, termSignal, restoreOnFailure);
+		if (!termSignal.ok && !termSignal.forceRequired) return this.handleStopSignalFailure(id, ownerSessionId, termSignal, restoreOnFailure);
 		let empty = termSignal.ok && (termSignal.gone || await this.processTree.waitForTreeEmpty(identity, this.termGraceMs, verification));
 		if (!empty) {
 			const kill = await this.safeVerifiedSignal(identity, "SIGKILL", verification);
+			// The record may have been quarantined out of the index during the async
+			// process window; settlement must then report the normal unknown outcome
+			// instead of throwing on the missing indexed path.
+			if (this.isQuarantined(id, ownerSessionId)) return { id, outcome: "unknown", message: `Unknown terminal ${id}.` };
 			// TERM (or a failed soft taskkill) may already have removed the leader.
 			// From this point onward the persisted anchors are the only safe retry
 			// authority, so retain `stopping` on failure for recovery to resume.
-			if (!kill.ok) return this.handleStopSignalFailure(id, kill, false);
+			if (!kill.ok) return this.handleStopSignalFailure(id, ownerSessionId, kill, false);
 			empty = kill.gone || await this.processTree.waitForTreeEmpty(identity, this.killGraceMs, verification);
 		}
-		if (!empty) return this.failedStop(id, "process tree remains alive after SIGKILL", false);
+		if (!empty) return this.failedStop(id, ownerSessionId, "process tree remains alive after SIGKILL", false);
 		// The command may have written exit.code after target collection but before
 		// TERM crossed the boundary. Durable natural evidence wins this race.
 		return this.settleDisposedStop(id);
@@ -1284,10 +1326,15 @@ export class TerminalTaskManager {
 
 	private handleStopSignalFailure(
 		id: string,
+		ownerSessionId: string | undefined,
 		signal: ProcessTreeSignalResult,
 		restoreOnFailure: boolean,
 		suppressOnSettlement = restoreOnFailure,
 	): TerminalStopResult {
+		// A quarantine during the async stop window leaves no queryable record;
+		// report the normal unknown outcome instead of letting the settlement
+		// mutation throw on the missing indexed path.
+		if (this.isQuarantined(id, ownerSessionId)) return { id, outcome: "unknown", message: `Unknown terminal ${id}.` };
 		const current = this.store.getIndexed(id);
 		const identity = current ? identityOf(current) : undefined;
 		if (identity && this.processTree.isTreeEmpty(identity, current?.processTreeVerification)) {
@@ -1301,10 +1348,11 @@ export class TerminalTaskManager {
 		const reason = signal.identityStatus === "unknown"
 			? "process identity could not be verified; refusing to signal"
 			: signal.error ?? "process-tree signal failed";
-		return this.failedStop(id, reason, restoreOnFailure);
+		return this.failedStop(id, ownerSessionId, reason, restoreOnFailure);
 	}
 
-	private failedStop(id: string, reason: string, restore: boolean): TerminalStopResult {
+	private failedStop(id: string, ownerSessionId: string | undefined, reason: string, restore: boolean): TerminalStopResult {
+		if (this.isQuarantined(id, ownerSessionId)) return { id, outcome: "unknown", message: `Unknown terminal ${id}.` };
 		const result = restore
 			? this.mutate(id, (task) => task.status === "stopping" ? { ...task, status: "running", updatedAt: this.timestamp(task) } : undefined).snapshot
 			: this.store.getIndexed(id);

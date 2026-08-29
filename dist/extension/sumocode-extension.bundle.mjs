@@ -12157,7 +12157,6 @@ ${command}
     const uniqueIds = [...new Set(ids)];
     const known = uniqueIds.filter((id) => this.get(id, ownerSessionId2) !== void 0);
     const knownSet = new Set(known);
-    const unknownIds = uniqueIds.filter((id) => !knownSet.has(id));
     const complete2 = () => known.every((id) => {
       const task = this.get(id, ownerSessionId2);
       return task !== void 0 && isTerminalTaskSettled(task.status);
@@ -12193,8 +12192,13 @@ ${command}
     }
     const settled = [];
     const pendingIds = [];
+    const quarantined = /* @__PURE__ */ new Set();
     for (const id of known) {
       const current = this.get(id, ownerSessionId2);
+      if (!current) {
+        quarantined.add(id);
+        continue;
+      }
       if (!isTerminalTaskSettled(current.status)) {
         pendingIds.push(id);
         continue;
@@ -12202,7 +12206,12 @@ ${command}
       const task = this.observe(id, true);
       settled.push({ task, output: this.getOutput(task, WAIT_OUTPUT_BYTES) });
     }
-    return { settled, pendingIds, unknownIds, timedOut: pendingIds.length > 0 };
+    return {
+      settled,
+      pendingIds,
+      unknownIds: uniqueIds.filter((id) => !knownSet.has(id) || quarantined.has(id)),
+      timedOut: pendingIds.length > 0
+    };
   }
   async stop(ids, ownerSessionId2) {
     const uniqueIds = [...new Set(ids)];
@@ -12316,7 +12325,7 @@ ${command}
     }
     const termSignals = await Promise.all(targets.map(({ identity, verification, naturalExitCode }) => this.safeVerifiedSignal(identity, naturalExitCode === void 0 ? "SIGTERM" : "SIGKILL", verification)));
     await Promise.all(targets.map(async ({ task, identity, verification, naturalExitCode }, index) => {
-      results.set(task.id, naturalExitCode === void 0 ? await this.finishStop(task.id, identity, termSignals[index], true, verification) : await this.finishNaturalStop(task.id, identity, naturalExitCode, termSignals[index], verification));
+      results.set(task.id, naturalExitCode === void 0 ? await this.finishStop(task.id, ownerSessionId2, identity, termSignals[index], true, verification) : await this.finishNaturalStop(task.id, ownerSessionId2, identity, naturalExitCode, termSignals[index], verification));
     }));
     return uniqueIds.map((id) => results.get(id));
   }
@@ -12371,12 +12380,19 @@ ${command}
    * Adopt records created or advanced by another process after this manager was
    * constructed. Recovery re-verifies durable process identity before any
    * lifecycle transition; callers receive the refreshed immutable projection.
-   * `ok` is false when the store directory could not be read: the previous
-   * projection generation stays authoritative and callers must treat freshness
-   * as unproven instead of adopting the returned snapshots.
+   * `ok` is false when the store directory could not be read or when this
+   * manager is detached (no scan, therefore no provable freshness): the
+   * previous projection generation stays authoritative and callers must treat
+   * freshness as unproven instead of adopting the returned snapshots, and
+   * takeover callers keep their death proof unconsumed. On success the
+   * retained projection is replaced to match exactly the refreshed index
+   * generation: ids the scan quarantined or no longer reports are dropped from
+   * `tasks` and `getSnapshots()` so stale retained snapshots cannot be
+   * republished. Quarantine stays logical — durable records and the separate
+   * runtime process bookkeeping are preserved.
    */
   refreshSnapshotsFromStore() {
-    if (this.detached) return { ok: true, snapshots: this.getSnapshots() };
+    if (this.detached) return { ok: false, snapshots: this.getSnapshots() };
     const refresh = this.store.refreshIndex();
     if (!refresh.ok) return { ok: false, snapshots: this.getSnapshots() };
     for (const snapshot of refresh.snapshots) {
@@ -12384,6 +12400,11 @@ ${command}
       if (previous?.revision === snapshot.revision) continue;
       this.adopt(snapshot, false);
       this.recover(snapshot);
+    }
+    const refreshed = new Set(refresh.snapshots.map((snapshot) => snapshot.id));
+    for (const id of Array.from(this.tasks.keys())) {
+      if (refreshed.has(id)) continue;
+      this.tasks.delete(id);
     }
     return { ok: true, snapshots: this.getSnapshots() };
   }
@@ -12581,6 +12602,7 @@ ${command}
   }
   async recoverStopping(id, identity) {
     const current = this.store.getIndexed(id);
+    const ownerSessionId2 = current?.ownerSessionId;
     if (this.processTree.isTreeEmpty(identity, current?.processTreeVerification)) {
       this.settleDisposedStop(id);
       return;
@@ -12611,7 +12633,7 @@ ${command}
       }
     }
     const term = await this.safeVerifiedSignal(identity, "SIGTERM", verification);
-    await this.finishStop(id, identity, term, false, verification);
+    await this.finishStop(id, ownerSessionId2, identity, term, false, verification);
   }
   settleNatural(id, exitCode) {
     return this.settle(id, exitCode === 0 ? "completed" : "failed", exitCode, false);
@@ -12682,10 +12704,15 @@ ${command}
       };
     }).snapshot;
   }
-  async finishNaturalStop(id, identity, exitCode, signal, verification) {
+  /** True when a concurrent successful refresh quarantined this id out of the compact index. */
+  isQuarantined(id, ownerSessionId2) {
+    return ownerSessionId2 === void 0 || !this.store.isIndexedOwner(id, ownerSessionId2);
+  }
+  async finishNaturalStop(id, ownerSessionId2, identity, exitCode, signal, verification) {
     const gone = signal.gone || signal.ok && await this.processTree.waitForTreeEmpty(identity, this.killGraceMs, verification);
+    if (this.isQuarantined(id, ownerSessionId2)) return { id, outcome: "unknown", message: `Unknown terminal ${id}.` };
     if (!signal.ok || !gone) {
-      if (!this.processTree.isTreeEmpty(identity, verification)) return this.handleStopSignalFailure(id, signal, false, true);
+      if (!this.processTree.isTreeEmpty(identity, verification)) return this.handleStopSignalFailure(id, ownerSessionId2, signal, false, true);
     }
     const settled = this.settleNatural(id, exitCode);
     const observed = this.observe(id, false);
@@ -12721,18 +12748,20 @@ ${command}
       message: `Cancelled terminal ${id}.`
     };
   }
-  async finishStop(id, identity, termSignal, restoreOnFailure, verification) {
-    if (!termSignal.ok && !termSignal.forceRequired) return this.handleStopSignalFailure(id, termSignal, restoreOnFailure);
+  async finishStop(id, ownerSessionId2, identity, termSignal, restoreOnFailure, verification) {
+    if (!termSignal.ok && !termSignal.forceRequired) return this.handleStopSignalFailure(id, ownerSessionId2, termSignal, restoreOnFailure);
     let empty = termSignal.ok && (termSignal.gone || await this.processTree.waitForTreeEmpty(identity, this.termGraceMs, verification));
     if (!empty) {
       const kill = await this.safeVerifiedSignal(identity, "SIGKILL", verification);
-      if (!kill.ok) return this.handleStopSignalFailure(id, kill, false);
+      if (this.isQuarantined(id, ownerSessionId2)) return { id, outcome: "unknown", message: `Unknown terminal ${id}.` };
+      if (!kill.ok) return this.handleStopSignalFailure(id, ownerSessionId2, kill, false);
       empty = kill.gone || await this.processTree.waitForTreeEmpty(identity, this.killGraceMs, verification);
     }
-    if (!empty) return this.failedStop(id, "process tree remains alive after SIGKILL", false);
+    if (!empty) return this.failedStop(id, ownerSessionId2, "process tree remains alive after SIGKILL", false);
     return this.settleDisposedStop(id);
   }
-  handleStopSignalFailure(id, signal, restoreOnFailure, suppressOnSettlement = restoreOnFailure) {
+  handleStopSignalFailure(id, ownerSessionId2, signal, restoreOnFailure, suppressOnSettlement = restoreOnFailure) {
+    if (this.isQuarantined(id, ownerSessionId2)) return { id, outcome: "unknown", message: `Unknown terminal ${id}.` };
     const current = this.store.getIndexed(id);
     const identity = current ? identityOf(current) : void 0;
     if (identity && this.processTree.isTreeEmpty(identity, current?.processTreeVerification)) {
@@ -12744,9 +12773,10 @@ ${command}
       return { id, outcome: "failed", task: lost, message: `Terminal ${id} process identity changed; recorded lost without signalling.` };
     }
     const reason = signal.identityStatus === "unknown" ? "process identity could not be verified; refusing to signal" : signal.error ?? "process-tree signal failed";
-    return this.failedStop(id, reason, restoreOnFailure);
+    return this.failedStop(id, ownerSessionId2, reason, restoreOnFailure);
   }
-  failedStop(id, reason, restore) {
+  failedStop(id, ownerSessionId2, reason, restore) {
+    if (this.isQuarantined(id, ownerSessionId2)) return { id, outcome: "unknown", message: `Unknown terminal ${id}.` };
     const result = restore ? this.mutate(id, (task) => task.status === "stopping" ? { ...task, status: "running", updatedAt: this.timestamp(task) } : void 0).snapshot : this.store.getIndexed(id);
     if (result && !isTerminalTaskSettled(result.status)) this.arm(id);
     if (!restore) this.diagnostic(id, `persisted stop remains pending: ${reason}`);
@@ -14393,7 +14423,13 @@ var ActivityManagerBridge = class {
       }
     }
     if (takeoverOwners.length === 0) return;
-    const refresh = this.terminalManager.refreshSnapshotsFromStore?.();
+    let refresh;
+    try {
+      refresh = this.terminalManager.refreshSnapshotsFromStore?.();
+    } catch (error) {
+      this.diagnostic({ kind: "io", path: takeoverOwners[0], message: `terminal takeover refresh failed safely; takeover retries on the next sync: ${error instanceof Error ? error.message : String(error)}` });
+      return;
+    }
     if (refresh && !refresh.ok) {
       this.diagnostic({ kind: "io", path: takeoverOwners[0], message: "terminal takeover refresh failed; takeover retries on the next sync" });
       return;

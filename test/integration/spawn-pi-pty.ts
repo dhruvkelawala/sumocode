@@ -128,7 +128,7 @@ const SUMO_DEBUG_ENV_KEYS = [
 ] as const;
 
 const PROVIDER_CREDENTIAL_PREFIX = /^(?:AWS_|AZURE_|GOOGLE_|GEMINI_|OPENAI_|ANTHROPIC_|MISTRAL_|GROQ_|XAI_|DEEPSEEK_|OPENROUTER_|TOGETHER_|FIRECRAWL_|TAVILY_|BRAVE_)/i;
-const CREDENTIAL_SUFFIX = /(?:API_KEY|API_TOKEN|AUTH_TOKEN|ACCESS_TOKEN|CLIENT_SECRET|PASSWORD)$/i;
+const CREDENTIAL_SUFFIX = /(?:API_KEY|API_TOKEN|AUTH_TOKEN|ACCESS_TOKEN|CLIENT_SECRET|PASSWORD|_SECRET|_TOKEN)$/i;
 
 /** Test-only policy for environment keys that may carry provider credentials. */
 export function isCredentialEnvKey(key: string): boolean {

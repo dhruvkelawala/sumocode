@@ -138,7 +138,13 @@ describe("buildSpawnEnv", () => {
 			{
 				OPENAI_TEST_CREDENTIAL: "provider-sentinel",
 				INTERNAL_ACCESS_TOKEN: "suffix-sentinel",
+				GITHUB_TOKEN: "github-sentinel",
+				GH_TOKEN: "gh-sentinel",
+				NPM_TOKEN: "npm-sentinel",
+				HF_TOKEN: "hf-sentinel",
+				DATABASE_SECRET: "secret-sentinel",
 				PATH: "/usr/bin",
+				HOME: "/Users/test",
 				EDITOR: "vi",
 				TERM: "vt100",
 			},
@@ -147,7 +153,13 @@ describe("buildSpawnEnv", () => {
 
 		expect(env.OPENAI_TEST_CREDENTIAL).toBeUndefined();
 		expect(env.INTERNAL_ACCESS_TOKEN).toBeUndefined();
+		expect(env.GITHUB_TOKEN).toBeUndefined();
+		expect(env.GH_TOKEN).toBeUndefined();
+		expect(env.NPM_TOKEN).toBeUndefined();
+		expect(env.HF_TOKEN).toBeUndefined();
+		expect(env.DATABASE_SECRET).toBeUndefined();
 		expect(env.PATH).toBe("/usr/bin");
+		expect(env.HOME).toBe("/Users/test");
 		expect(env.EDITOR).toBe("vi");
 		expect(env.TERM).toBe("xterm-256color");
 	});

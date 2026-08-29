@@ -25,7 +25,7 @@
  */
 
 import { appendFileSync, existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 /**
@@ -250,6 +250,46 @@ interface TaskModeControlHooks {
 }
 
 /**
+ * Module-owned registry of controls whose synchronous Pi submission already
+ * succeeded, keyed by canonical control directory. Pi recreates the extension
+ * API in the SAME process for `/new`, `/resume`, and `/fork`; a watcher-local
+ * record would die with the old watcher and let the replacement watcher
+ * resubmit a still-present control (submission succeeded, ack unlink kept
+ * failing) — duplicating steering Pi already owns. Entries are removed only
+ * when the ack unlink finally succeeds, and empty directory buckets are
+ * deleted, so ordinary watcher stops neither clear nor leak pending ownership.
+ * A process restart loses this memory; resubmission after a restart remains an
+ * upstream/durable-protocol ambiguity this in-process registry does not solve.
+ */
+const submittedControlsByDir = new Map<string, Set<string>>();
+
+const submittedControlsFor = (controlDir: string): Set<string> => {
+	const key = resolve(controlDir);
+	let bucket = submittedControlsByDir.get(key);
+	if (!bucket) {
+		bucket = new Set();
+		submittedControlsByDir.set(key, bucket);
+	}
+	return bucket;
+};
+
+/** Drop a submitted entry after its ack unlink finally succeeded. */
+const clearSubmittedControl = (controlDir: string, file: string): void => {
+	const key = resolve(controlDir);
+	const bucket = submittedControlsByDir.get(key);
+	if (!bucket?.delete(file)) return;
+	if (bucket.size === 0) submittedControlsByDir.delete(key);
+};
+
+const isControlSubmitted = (controlDir: string, file: string): boolean =>
+	submittedControlsByDir.get(resolve(controlDir))?.has(file) ?? false;
+
+/** Test seam: inspect the module-owned submitted-control registry. */
+export function submittedControlsForTests(): ReadonlyMap<string, ReadonlySet<string>> {
+	return submittedControlsByDir;
+}
+
+/**
  * Poll `<controlDir>` for orchestrator control files (the parent-side writer
  * lives in `src/subagents/backend-pane.ts`). Steer files are consumed and
  * synchronously submitted to Pi; `close.request` shuts the child down. The
@@ -265,10 +305,10 @@ function installControlWatcher(
 	if (!controlDir) return () => undefined;
 	let stopped = false;
 	let timer: ReturnType<typeof setInterval> | undefined;
-	// Controls whose synchronous submission already succeeded. A failing ack
-	// unlink must never turn into a resubmission: Pi may already own the steer,
-	// and a second sendUserMessage would duplicate it.
-	const submittedControls = new Set<string>();
+	// Submission ownership lives in the module-wide submittedControlsByDir, so
+	// watcher recreation keeps it. Ordinary stops deliberately clear nothing
+	// here: clearing would let a recreated watcher resubmit a control Pi
+	// already owns when only the ack unlink was still failing.
 
 	const stop = (): void => {
 		stopped = true;
@@ -276,15 +316,13 @@ function installControlWatcher(
 			clearInterval(timer);
 			timer = undefined;
 		}
-		// Watcher shutdown ends this runtime's ownership of pending ack unlinks.
-		submittedControls.clear();
 	};
 
 	/** Acknowledgement cleanup: unlink the consumed control, never resubmit. */
 	const discardSubmittedControl = (file: string): void => {
 		try {
 			unlinkControl(file);
-			submittedControls.delete(file);
+			clearSubmittedControl(controlDir, file);
 			diagLog("steer_ack_unlinked", { file });
 		} catch (error) {
 			// Truthful ack-cleanup diagnostic — the submission itself succeeded and
@@ -294,7 +332,7 @@ function installControlWatcher(
 	};
 
 	const submitSteer = (file: string): void => {
-		if (submittedControls.has(file)) {
+		if (isControlSubmitted(controlDir, file)) {
 			// Submission already handed this control to Pi. Retry the unlink only.
 			discardSubmittedControl(file);
 			return;
@@ -331,14 +369,15 @@ function installControlWatcher(
 			diagLog("steer_submit_failed", { file, message: errorMessage(error) });
 			return;
 		}
-		// Submission succeeded — mark the control so no poll ever resubmits it,
-		// even if the ack unlink below keeps failing.
-		submittedControls.add(file);
+		// Submission succeeded — record ownership module-wide so no watcher ever
+		// resubmits it, even across session recreation while the ack unlink keeps
+		// failing.
+		submittedControlsFor(controlDir).add(file);
 		try {
 			// Unlink tells the parent that the watcher consumed the control and the
 			// synchronous submission did not throw. It is not model-turn delivery.
 			unlinkControl(file);
-			submittedControls.delete(file);
+			clearSubmittedControl(controlDir, file);
 			diagLog("steer_submitted", { file, bytes: text.length });
 		} catch (error) {
 			diagLog("steer_ack_unlink_failed", { file, message: errorMessage(error) });

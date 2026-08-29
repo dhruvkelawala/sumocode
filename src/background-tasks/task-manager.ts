@@ -29,6 +29,7 @@ import {
 	StaleTerminalTaskRevisionError,
 	TerminalTaskStore,
 	isValidTerminalTaskId,
+	type TerminalTaskIndexRefreshResult,
 	type TerminalTaskStoreDiagnostic,
 } from "./task-store.js";
 import {
@@ -434,7 +435,7 @@ export class TerminalTaskManager {
 		// deletion/cleanup without human approval. Do not revive the legacy
 		// recovery-time artifact pruning here: retention/GC needs its own approved
 		// policy that cannot erase pending, claimed, or still-queryable results.
-		for (const snapshot of this.store.refreshIndex()) {
+		for (const snapshot of this.store.refreshIndex().snapshots) {
 			this.adopt(snapshot, false);
 			this.recover(snapshot);
 		}
@@ -842,27 +843,34 @@ export class TerminalTaskManager {
 	 * Adopt records created or advanced by another process after this manager was
 	 * constructed. Recovery re-verifies durable process identity before any
 	 * lifecycle transition; callers receive the refreshed immutable projection.
+	 * `ok` is false when the store directory could not be read: the previous
+	 * projection generation stays authoritative and callers must treat freshness
+	 * as unproven instead of adopting the returned snapshots.
 	 */
-	public refreshSnapshotsFromStore(): readonly TerminalTaskSnapshot[] {
-		if (this.detached) return this.getSnapshots();
-		for (const snapshot of this.store.refreshIndex()) {
+	public refreshSnapshotsFromStore(): TerminalTaskIndexRefreshResult {
+		if (this.detached) return { ok: true, snapshots: this.getSnapshots() };
+		const refresh = this.store.refreshIndex();
+		if (!refresh.ok) return { ok: false, snapshots: this.getSnapshots() };
+		for (const snapshot of refresh.snapshots) {
 			const previous = this.tasks.get(snapshot.id);
 			if (previous?.revision === snapshot.revision) continue;
 			this.adopt(snapshot, false);
 			this.recover(snapshot);
 		}
-		return this.getSnapshots();
+		return { ok: true, snapshots: this.getSnapshots() };
 	}
 
 	/**
 	 * Authoritative single indexed read of one record, bypassing the retained
 	 * projection. Owner-isolated: another session's record reads as `undefined`.
-	 * Narrow surface for pre-send/pre-publication freshness checks; never scans
-	 * the store and only resolves indexed ids.
+	 * The owner precheck runs against the compact index with no I/O, so a foreign
+	 * or unknown id costs zero metadata reads and a matching id costs exactly
+	 * one. Narrow surface for pre-send/pre-publication freshness checks; never
+	 * scans the store and only resolves indexed ids.
 	 */
 	public readIndexed(id: string, ownerSessionId: string): TerminalTaskSnapshot | undefined {
-		const snapshot = this.store.getIndexed(id);
-		return snapshot?.ownerSessionId === ownerSessionId ? snapshot : undefined;
+		if (!this.store.isIndexedOwner(id, ownerSessionId)) return undefined;
+		return this.store.getIndexed(id);
 	}
 
 	public getSnapshots(): readonly TerminalTaskSnapshot[] {

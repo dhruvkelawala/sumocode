@@ -40,6 +40,13 @@ export interface TerminalTaskStoreDiagnostic {
 
 export type TerminalTaskStoreReadKind = "full-scan" | "metadata";
 
+/** Explicit outcome of one full validated index pass. */
+export interface TerminalTaskIndexRefreshResult {
+	/** false when the store directory could not be read; the last good index generation is preserved. */
+	readonly ok: boolean;
+	readonly snapshots: readonly TerminalTaskSnapshot[];
+}
+
 export interface TerminalTaskStoreOptions {
 	readonly rootDir?: string;
 	readonly onDiagnostic?: (diagnostic: TerminalTaskStoreDiagnostic) => void;
@@ -457,17 +464,19 @@ export class TerminalTaskStore {
 	}
 
 	/** Rebuild every derived path/selection bucket from one validated disk pass. */
-	public refreshIndex(): TerminalTaskSnapshot[] {
+	public refreshIndex(): TerminalTaskIndexRefreshResult {
 		this.onRead?.("full-scan");
 		let entries: Dirent[];
 		try {
 			entries = readdirSync(this.rootDir, { withFileTypes: true });
 		} catch (error) {
 			// A transient scan failure (EACCES, EMFILE, ...) must never replace the
-			// last good generation with an empty index. An initial failure naturally
-			// leaves the fresh empty index in place.
+			// last good generation with an empty index. The failure is reported
+			// explicitly so freshness-boundary callers can distinguish an unreadable
+			// store from a successfully refreshed empty one. An initial failure
+			// naturally leaves the fresh empty index in place.
 			this.diagnostic("io", this.rootDir, error);
-			return [];
+			return { ok: false, snapshots: [] };
 		}
 		const snapshots: TerminalTaskSnapshot[] = [];
 		const paths = new Map<string, string>();
@@ -496,7 +505,12 @@ export class TerminalTaskStore {
 			snapshots.push(snapshot);
 		}
 		this.replaceIndex(snapshots, paths);
-		return snapshots;
+		return { ok: true, snapshots };
+	}
+
+	/** O(1) no-I/O owner membership check against the compact index. */
+	public isIndexedOwner(id: string, ownerSessionId: string): boolean {
+		return this.indexedById.get(id)?.ownerSessionId === ownerSessionId;
 	}
 
 	public listOwnedIndexed(ownerSessionId: string): readonly IndexedTerminalTask[] {
@@ -586,7 +600,15 @@ export class TerminalTaskStore {
 				throw new StaleTerminalTaskRevisionError(id, expectedRevision, current.revision);
 			}
 			const decided = update(current);
-			if (!decided) return current;
+			if (!decided) {
+				// The locked snapshot is authoritative even for a no-op decision:
+				// refresh this record's compact entry from it so later candidate
+				// selection (claim/acknowledgement/retry-delay) sees state an external
+				// writer already advanced, instead of looping on reread/retry until the
+				// next explicit refreshIndex boundary.
+				this.replaceIndexedEntry(current);
+				return current;
+			}
 			const next = { ...decided, revision: current.revision + 1 } satisfies TerminalTaskSnapshot;
 			if (next.id !== current.id || next.ownerSessionId !== current.ownerSessionId || next.schemaVersion !== current.schemaVersion || next.createdAt !== current.createdAt || next.logFile !== current.logFile) {
 				throw new Error("Terminal task identity fields are immutable");

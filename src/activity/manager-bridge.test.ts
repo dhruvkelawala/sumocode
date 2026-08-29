@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TerminalTaskManager, type TerminalOutputTail } from "../background-tasks/task-manager.js";
-import { TerminalTaskStore } from "../background-tasks/task-store.js";
+import { TerminalTaskStore, type TerminalTaskIndexRefreshResult } from "../background-tasks/task-store.js";
 import { terminalActivitySnapshot, type TerminalTaskSnapshot } from "../background-tasks/task-types.js";
 import type { SubagentSnapshot } from "../subagents/domain.js";
 import { ACTIVITY_SETTLED_RETENTION_COUNT, ACTIVITY_SETTLED_RETENTION_MS, ActivityFeedPublisher, type ActivityFeedPublisherOptions } from "./feed-publisher.js";
@@ -104,6 +104,8 @@ class FakeTerminalManager {
 	public snapshots: TerminalTaskSnapshot[] = [];
 	public refreshedSnapshots: TerminalTaskSnapshot[] | undefined;
 	public refreshCount = 0;
+	/** Programmed refresh outcome: false models a transient store-read failure. */
+	public refreshOk = true;
 	public outputs = new Map<string, string>();
 	public outputBytes = new Map<string, Uint8Array>();
 	public outputReads = new Map<string, number>();
@@ -115,10 +117,11 @@ class FakeTerminalManager {
 		return () => { this.listener = undefined; };
 	}
 
-	public refreshSnapshotsFromStore(): readonly TerminalTaskSnapshot[] {
+	public refreshSnapshotsFromStore(): TerminalTaskIndexRefreshResult {
 		this.refreshCount += 1;
+		if (!this.refreshOk) return { ok: false, snapshots: [] };
 		this.snapshots = this.refreshedSnapshots ?? this.snapshots;
-		return this.snapshots;
+		return { ok: true, snapshots: this.snapshots };
 	}
 
 	public getOutput(task: Pick<TerminalTaskSnapshot, "logFile">): string {
@@ -321,6 +324,79 @@ describe("ActivityManagerBridge", () => {
 		bridge.bindSession("session-multi-a");
 		bridge.bindSession("session-multi-b");
 		expect(terminals.refreshCount).toBe(1);
+		bridge.dispose();
+	});
+
+	it("retries a failed takeover refresh without claiming, publishing, or consuming the proof", () => {
+		const stateRoot = root();
+		const incumbent = new ActivityFeedPublisher("session-refresh-retry", {
+			rootDir: stateRoot,
+			writerIdentity: { token: "incumbent", pid: 101, processStartTime: "incumbent-start" },
+			inspectWriter: () => "alive",
+		});
+		incumbent.publish([]);
+		let incumbentAlive = true;
+		const terminals = new FakeTerminalManager();
+		// Transient store-read failure; the retry discovers a terminal created
+		// between the incumbent's death and the successful refresh.
+		terminals.refreshOk = false;
+		terminals.refreshedSnapshots = [terminal("term-late-takeover", "session-refresh-retry")];
+		terminals.outputs.set("/tmp/term-late-takeover.log", "late output");
+		const created: ActivityFeedPublisher[] = [];
+		let successfulPublishes = 0;
+		const bridge = new ActivityManagerBridge(terminals, new FakeSubagentManager(), {
+			rootDir: stateRoot,
+			writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
+			inspectWriter: () => incumbentAlive ? "alive" : "dead",
+			publisherFactory: (owner) => {
+				const publisher = new ActivityFeedPublisher(owner, {
+					rootDir: stateRoot,
+					writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
+					inspectWriter: () => incumbentAlive ? "alive" : "dead",
+				});
+				const publish = publisher.publish.bind(publisher);
+				publisher.publish = (activities) => {
+					const wrote = publish(activities);
+					if (wrote) successfulPublishes += 1;
+					return wrote;
+				};
+				created.push(publisher);
+				return publisher;
+			},
+		});
+
+		// The bridge first sees the session while the incumbent is alive: the
+		// owner is noted but its blocked publisher is discarded unclaimed.
+		bridge.bindSession("session-refresh-retry");
+
+		// Pass 1: the death-proven takeover's one global refresh fails. The owner
+		// stays unclaimed and unpublished while the publisher keeps its writer
+		// lease and proof so the next sync retries.
+		incumbentAlive = false;
+		expect(bridge.canProduceActivity("session-refresh-retry")).toBe(false);
+		expect(terminals.refreshCount).toBe(1);
+		const takeoverPublisher = created.at(-1)!;
+		expect(takeoverPublisher.writerDeathProven).toBe(true);
+		expect(successfulPublishes).toBe(0);
+		expect(fixturePublisher("session-refresh-retry", { rootDir: stateRoot }).getSnapshot()).toEqual([]);
+
+		// Pass 2: the retry succeeds, discovers the late terminal, and only then
+		// claims the owner; publication consumes the proof exactly once.
+		terminals.refreshOk = true;
+		expect(bridge.canProduceActivity("session-refresh-retry")).toBe(true);
+		expect(terminals.refreshCount).toBe(2);
+		bridge.bindSession("session-refresh-retry");
+		expect(terminals.refreshCount).toBe(2);
+		expect(takeoverPublisher.writerDeathProven).toBe(false);
+		expect(successfulPublishes).toBe(1);
+		expect(fixturePublisher("session-refresh-retry", { rootDir: stateRoot }).getSnapshot()).toEqual(expect.arrayContaining([
+			expect.objectContaining({ id: "term-late-takeover", status: "running", outputTail: "late output" }),
+		]));
+
+		// Settled ownership neither re-refreshes nor re-publishes.
+		bridge.bindSession("session-refresh-retry");
+		expect(terminals.refreshCount).toBe(2);
+		expect(successfulPublishes).toBe(1);
 		bridge.dispose();
 	});
 

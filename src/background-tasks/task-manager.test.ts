@@ -178,7 +178,7 @@ describe("TerminalTaskManager", () => {
 		});
 		expect(children[0]?.unref).toHaveBeenCalledOnce();
 		expect(existsSync(join(dirname(task.logFile), "launch.ready"))).toBe(true);
-		expect(new TerminalTaskStore({ rootDir }).refreshIndex()[0]).toEqual(task);
+		expect(new TerminalTaskStore({ rootDir }).refreshIndex().snapshots[0]).toEqual(task);
 	});
 
 	it("does not cap terminal execution to the feed presentation budget", async () => {
@@ -336,12 +336,55 @@ describe("TerminalTaskManager", () => {
 		reads.metadata = 0;
 
 		expect(target.readIndexed(task.id, "session-b")).toBeUndefined();
-		expect(target.readIndexed(task.id, "session-a")).toMatchObject({ id: task.id, ownerSessionId: "session-a" });
+		expect(reads).toEqual({ scans: 0, metadata: 0 });
 		expect(target.readIndexed("term-missing", "session-a")).toBeUndefined();
-		// Each owner-scoped read is one selected indexed record; a mismatched or
-		// unknown id never falls back to a directory scan.
-		expect(reads).toEqual({ scans: 0, metadata: 2 });
+		expect(reads).toEqual({ scans: 0, metadata: 0 });
+		expect(target.readIndexed(task.id, "session-a")).toMatchObject({ id: task.id, ownerSessionId: "session-a" });
+		// A foreign or unknown id is resolved from the compact index with zero
+		// metadata reads; only the matching owner's id opens its one record.
+		expect(reads).toEqual({ scans: 0, metadata: 1 });
 	});
+
+	it("refreshes the compact candidate after a locked no-op so stale claim state stops rereading", async () => {
+		const reads = { scans: 0, metadata: 0 };
+		const store = new TerminalTaskStore({
+			rootDir,
+			onRead: (kind) => { reads[kind === "full-scan" ? "scans" : "metadata"] += 1; },
+		});
+		const target = manager({ store, createClaimToken: () => "claim-ours" });
+		const task = await start(target);
+		writeFileSync(exitFile(task), "0");
+		children[0]?.emit("close", 0);
+		await vi.waitFor(() => expect(target.get(task.id, "session-a")?.deliveryState).toBe("pending"));
+		const claimed = target.claimPending("session-a", true);
+		expect(claimed).toHaveLength(1);
+		const receipt = { completionId: claimed[0]!.completionId!, claimToken: "claim-ours" };
+
+		// An external writer delivers the completion at a higher revision; this
+		// manager's compact candidate still says "claimed".
+		const external = new TerminalTaskStore({ rootDir });
+		external.refreshIndex();
+		const durable = external.refreshIndex().snapshots.find((entry) => entry.id === task.id)!;
+		expect(external.transition(task.id, durable.revision, (current) => ({
+			...current,
+			deliveryState: "delivered",
+			deliveryClaimToken: undefined,
+		}))).toMatchObject({ deliveryState: "delivered" });
+
+		// The stale compact candidate enters the mutation: the locked
+		// authoritative snapshot is already delivered, so the locked update
+		// no-ops and the store refreshes that record's compact entry from it.
+		reads.scans = 0;
+		reads.metadata = 0;
+		expect(target.acknowledge("session-a", [receipt])).toEqual([]);
+		expect(store.listOwnedIndexed("session-a")[0]).toMatchObject({ deliveryState: "delivered" });
+
+		// Retry-delay and candidate selection now see delivered from the compact
+		// entry: the reread/retry loop stops with zero further metadata reads.
+		expect(target.getClaimRetryDelay("session-a")).toBeUndefined();
+		expect(target.claimPending("session-a", true)).toEqual([]);
+		expect(reads).toEqual({ scans: 0, metadata: 3 });
+	}, 20_000);
 
 	it("rereads only a selected delivery record for each mutation", async () => {
 		const reads = { scans: 0, metadata: 0 };
@@ -461,7 +504,7 @@ describe("TerminalTaskManager", () => {
 		const originalSubscribe = target.addChangeListener.bind(target);
 		vi.spyOn(target, "addChangeListener").mockImplementation((listener) => {
 			const store = new TerminalTaskStore({ rootDir });
-			const current = store.refreshIndex().find((entry) => entry.id === task.id)!;
+			const current = store.refreshIndex().snapshots.find((entry) => entry.id === task.id)!;
 			store.transition(task.id, current.revision, (entry) => ({
 				...entry,
 				status: "completed",
@@ -665,12 +708,12 @@ describe("TerminalTaskManager", () => {
 		const target = manager();
 		const own = await start(target, "session-a");
 		await start(target, "session-b");
-		const before = new TerminalTaskStore({ rootDir }).refreshIndex().find((task) => task.id === own.id)!;
+		const before = new TerminalTaskStore({ rootDir }).refreshIndex().snapshots.find((task) => task.id === own.id)!;
 
 		expect(target.list("session-a").map((task) => task.id)).toEqual([own.id]);
 		expect(target.check(own.id, "session-b")).toBeUndefined();
 		expect((await target.stop([own.id], "session-b"))[0]?.outcome).toBe("unknown");
-		const after = new TerminalTaskStore({ rootDir }).refreshIndex().find((task) => task.id === own.id)!;
+		const after = new TerminalTaskStore({ rootDir }).refreshIndex().snapshots.find((task) => task.id === own.id)!;
 		expect(after).toEqual(before);
 	});
 
@@ -763,7 +806,7 @@ describe("TerminalTaskManager", () => {
 		const first = manager();
 		const task = await start(first);
 		const store = new TerminalTaskStore({ rootDir });
-		const current = store.refreshIndex().find((entry) => entry.id === task.id)!;
+		const current = store.refreshIndex().snapshots.find((entry) => entry.id === task.id)!;
 		store.transition(task.id, current.revision, (entry) => ({ ...entry, status: "stopping", updatedAt: 2_000 }));
 		first.detach();
 
@@ -832,7 +875,7 @@ describe("TerminalTaskManager", () => {
 		const first = manager();
 		const task = await start(first);
 		const store = new TerminalTaskStore({ rootDir });
-		const current = store.refreshIndex().find((entry) => entry.id === task.id)!;
+		const current = store.refreshIndex().snapshots.find((entry) => entry.id === task.id)!;
 		store.transition(task.id, current.revision, (entry) => ({ ...entry, status: "stopping", updatedAt: 2_000 }));
 		first.detach();
 		tree.empty.set(task.processGroupId!, true);
@@ -847,7 +890,7 @@ describe("TerminalTaskManager", () => {
 		const first = manager();
 		const task = await start(first);
 		const store = new TerminalTaskStore({ rootDir });
-		const current = store.refreshIndex().find((entry) => entry.id === task.id)!;
+		const current = store.refreshIndex().snapshots.find((entry) => entry.id === task.id)!;
 		store.transition(task.id, current.revision, (entry) => ({ ...entry, status: "stopping", updatedAt: 2_000 }));
 		first.detach();
 		tree.operations.identityMatches = vi.fn((): "different" => "different");
@@ -942,7 +985,7 @@ describe("TerminalTaskManager", () => {
 
 		const claims = [first.claimPending("session-a", true), second.claimPending("session-a", true)];
 		expect(claims.map((entries) => entries.length).sort()).toEqual([0, 1]);
-		expect(new TerminalTaskStore({ rootDir }).refreshIndex()[0]?.deliveryState).toBe("claimed");
+		expect(new TerminalTaskStore({ rootDir }).refreshIndex().snapshots[0]?.deliveryState).toBe("claimed");
 	});
 
 	it("settles safely with competing recovery pollers and no unhandled rejection", async () => {
@@ -958,7 +1001,7 @@ describe("TerminalTaskManager", () => {
 			await vi.waitFor(() => expect(second.get(task.id, "session-a")?.status).toBe("completed"));
 			await new Promise((resolve) => setTimeout(resolve, 25));
 			expect(unhandled).toEqual([]);
-			expect(new TerminalTaskStore({ rootDir }).refreshIndex()[0]).toMatchObject({
+			expect(new TerminalTaskStore({ rootDir }).refreshIndex().snapshots[0]).toMatchObject({
 				status: "completed",
 				revision: 4,
 				processTreeVerification: { members: expect.any(Array) },

@@ -111,7 +111,7 @@ describe("TerminalTaskStore", () => {
 		const winner = first.transition(initial.id, 1, (current) => ({ ...current, title: "first", updatedAt: 2_000 }));
 		expect(winner.title).toBe("first");
 		expect(() => second.transition(initial.id, 1, (current) => ({ ...current, title: "second", updatedAt: 2_000 }))).toThrow(StaleTerminalTaskRevisionError);
-		expect(new TerminalTaskStore({ rootDir }).refreshIndex()[0]?.title).toBe("first");
+		expect(new TerminalTaskStore({ rootDir }).refreshIndex().snapshots[0]?.title).toBe("first");
 	});
 
 	it("serializes a real subprocess revision race with one success and one stale result", async () => {
@@ -129,7 +129,7 @@ describe("TerminalTaskStore", () => {
 		const results = await Promise.all([first, second]);
 		expect(results.map((result) => result.stdout.trim()).sort()).toEqual(["stale", "success"]);
 		expect(results.every((result) => result.code === 0)).toBe(true);
-		expect(new TerminalTaskStore({ rootDir }).refreshIndex()[0]?.revision).toBe(2);
+		expect(new TerminalTaskStore({ rootDir }).refreshIndex().snapshots[0]?.revision).toBe(2);
 	});
 
 	it("filters indexed records by durable owner session", () => {
@@ -155,7 +155,7 @@ describe("TerminalTaskStore", () => {
 			privateWrite(join(dirname(task.logFile), "meta.json"), `${JSON.stringify(task)}\n`);
 		}
 
-		expect(store.refreshIndex()).toHaveLength(1_500);
+		expect(store.refreshIndex().snapshots).toHaveLength(1_500);
 		expect(reads).toEqual({ scans: 1, metadata: 1_500 });
 		reads.scans = 0;
 		reads.metadata = 0;
@@ -255,7 +255,7 @@ describe("TerminalTaskStore", () => {
 		privateWrite(secondPath, `${JSON.stringify(second)}\n`);
 		const diagnostics: TerminalTaskStoreDiagnostic[] = [];
 		const verifier = new TerminalTaskStore({ rootDir, onDiagnostic: (entry) => diagnostics.push(entry) });
-		expect(verifier.refreshIndex().map((task) => task.id)).toEqual(["term-dup"]);
+		expect(verifier.refreshIndex().snapshots.map((task) => task.id)).toEqual(["term-dup"]);
 		expect(diagnostics.filter((entry) => entry.kind === "duplicate")).toHaveLength(1);
 		const holdingOwners = ["session-a", "session-b"].filter((owner) => verifier.listOwnedIndexed(owner).length > 0);
 		expect(holdingOwners).toHaveLength(1);
@@ -266,17 +266,19 @@ describe("TerminalTaskStore", () => {
 		const store = new TerminalTaskStore({ rootDir, onDiagnostic: (entry) => diagnostics.push(entry) });
 		const initial = snapshot(store, "term-transient");
 		store.create(initial, join(dirname(initial.logFile), "meta.json"));
-		expect(store.refreshIndex()).toHaveLength(1);
+		expect(store.refreshIndex().snapshots).toHaveLength(1);
 		// A fresh store whose first refresh fails naturally stays empty.
 		const fresh = new TerminalTaskStore({ rootDir });
 
 		chmodSync(rootDir, 0o000);
 		try {
-			expect(store.refreshIndex()).toEqual([]);
+			const failed = store.refreshIndex();
+			expect(failed.ok).toBe(false);
+			expect(failed.snapshots).toEqual([]);
 			expect(diagnostics.at(-1)).toMatchObject({ kind: "io", path: store.rootDir });
 			// The failed refresh must not replace the last good generation.
 			expect(store.listOwnedIndexed("session-a").map((task) => task.id)).toEqual(["term-transient"]);
-			expect(fresh.refreshIndex()).toEqual([]);
+			expect(fresh.refreshIndex().ok).toBe(false);
 		} finally {
 			chmodSync(rootDir, 0o700);
 		}
@@ -286,8 +288,51 @@ describe("TerminalTaskStore", () => {
 		// The next successful explicit refresh replaces the projection normally.
 		const later = snapshot(store, "term-later", "session-b", 2_000);
 		privateWrite(join(dirname(later.logFile), "meta.json"), `${JSON.stringify(later)}\n`);
-		expect(store.refreshIndex().map((task) => task.id).sort()).toEqual(["term-later", "term-transient"]);
+		const recovered = store.refreshIndex();
+		expect(recovered.ok).toBe(true);
+		expect(recovered.snapshots.map((task) => task.id).sort()).toEqual(["term-later", "term-transient"]);
 		expect(store.listOwnedIndexed("session-b")).toEqual([expect.objectContaining({ id: "term-later" })]);
+	});
+
+	it("refreshes the compact indexed entry from the locked snapshot when the update no-ops", () => {
+		const store = new TerminalTaskStore({ rootDir });
+		const initial = snapshot(store, "term-noop-index");
+		store.create(initial, join(dirname(initial.logFile), "meta.json"));
+		store.transition(initial.id, 1, (current) => ({ ...current, title: "advanced", updatedAt: 2_000 }));
+		// An external writer advances the record again; this store's compact
+		// candidate still shows the pre-external revision until a locked decision
+		// rereads the record.
+		const external = new TerminalTaskStore({ rootDir });
+		external.refreshIndex();
+		external.transition(initial.id, 2, (current) => ({ ...current, title: "external", updatedAt: 3_000 }));
+		expect(store.listOwnedIndexed("session-a")[0]?.revision).toBe(2);
+
+		// A locked no-op decision returns the authoritative snapshot unchanged and
+		// refreshes that record's compact entry from it.
+		expect(store.transition(initial.id, 3, () => undefined)).toMatchObject({ revision: 3, title: "external" });
+		expect(store.listOwnedIndexed("session-a")[0]).toMatchObject({ revision: 3, updatedAt: 3_000 });
+	});
+
+	it("answers isIndexedOwner from the compact index with no I/O", () => {
+		const reads = { scans: 0, metadata: 0 };
+		const store = new TerminalTaskStore({
+			rootDir,
+			onRead: (kind) => { reads[kind === "full-scan" ? "scans" : "metadata"] += 1; },
+		});
+		const own = snapshot(store, "term-owner", "session-a");
+		store.create(own, join(dirname(own.logFile), "meta.json"));
+		const foreign = snapshot(store, "term-foreign", "session-b");
+		privateWrite(join(dirname(foreign.logFile), "meta.json"), `${JSON.stringify(foreign)}\n`);
+		store.refreshIndex();
+		reads.scans = 0;
+		reads.metadata = 0;
+
+		expect(store.isIndexedOwner("term-owner", "session-a")).toBe(true);
+		expect(store.isIndexedOwner("term-owner", "session-b")).toBe(false);
+		expect(store.isIndexedOwner("term-foreign", "session-b")).toBe(true);
+		expect(store.isIndexedOwner("term-missing", "session-a")).toBe(false);
+		// Membership is pure index state: no scan, no metadata read.
+		expect(reads).toEqual({ scans: 0, metadata: 0 });
 	});
 
 	it("strictly rejects schema-v4 traversal, identity, path, and state invariant violations", () => {
@@ -304,7 +349,7 @@ describe("TerminalTaskStore", () => {
 
 		const invalid = { ...initial, logFile: join(store.rootDir, "outside.log") };
 		privateWrite(join(dirname(initial.logFile), "meta.json"), `${JSON.stringify(invalid)}\n`);
-		expect(store.refreshIndex()).toEqual([]);
+		expect(store.refreshIndex().snapshots).toEqual([]);
 	});
 
 	it.skipIf(process.platform === "win32")("rejects symlink/reparse roots, task directories, metadata, and artifacts", () => {
@@ -324,7 +369,7 @@ describe("TerminalTaskStore", () => {
 		chmodSync(outsideDirectory, 0o700);
 		symlinkSync(outsideDirectory, join(linkedStore.rootDir, "term-linked-1000"), "dir");
 		const linkedDiagnostic = vi.fn();
-		expect(new TerminalTaskStore({ rootDir: linkedStore.rootDir, onDiagnostic: linkedDiagnostic }).refreshIndex()).toEqual([]);
+		expect(new TerminalTaskStore({ rootDir: linkedStore.rootDir, onDiagnostic: linkedDiagnostic }).refreshIndex().snapshots).toEqual([]);
 		expect(linkedDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ kind: "corrupt", message: expect.stringMatching(/symlink|reparse/) }));
 
 		const metadataStoreRoot = join(rootDir, "metadata-store");
@@ -336,7 +381,7 @@ describe("TerminalTaskStore", () => {
 		const outsideMeta = join(rootDir, "outside-meta.json");
 		privateWrite(outsideMeta, `${JSON.stringify(metadataTask)}\n`);
 		symlinkSync(outsideMeta, join(dirname(metadataTask.logFile), "meta.json"));
-		expect(metadataStore.refreshIndex()).toEqual([]);
+		expect(metadataStore.refreshIndex().snapshots).toEqual([]);
 		expect(metadataDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ kind: "corrupt" }));
 
 		const onDiagnostic = vi.fn();
@@ -348,7 +393,7 @@ describe("TerminalTaskStore", () => {
 		symlinkSync(outside, initial.logFile);
 		privateWrite(join(dirname(initial.logFile), "meta.json"), `${JSON.stringify(initial)}\n`);
 
-		expect(store.refreshIndex()).toEqual([]);
+		expect(store.refreshIndex().snapshots).toEqual([]);
 		expect(onDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ kind: "corrupt" }));
 	});
 
@@ -366,7 +411,7 @@ describe("TerminalTaskStore", () => {
 		privateWrite(corruptPath, "{not json");
 		privateWrite(legacyPath, JSON.stringify({ schemaVersion: 3, id: "bg-old" }));
 
-		expect(store.refreshIndex()).toEqual([]);
+		expect(store.refreshIndex().snapshots).toEqual([]);
 		expect(onDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ kind: "corrupt", path: corruptPath }));
 		expect(onDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ kind: "legacy", path: legacyPath }));
 		expect(readFileSync(corruptPath, "utf8")).toBe("{not json");
@@ -413,7 +458,7 @@ describe("TerminalTaskStore", () => {
 		privateWrite(join(lockPath, "owner.json"), `${JSON.stringify({ token: "dead", pid: 2_147_483_647, processStartTime: "old", verifiable: true })}\n`);
 
 		expect(() => store.transition(initial.id, 1, (current) => ({ ...current, title: "unsafe", updatedAt: 2_000 }))).toThrow(TerminalTaskLockBusyError);
-		expect(new TerminalTaskStore({ rootDir }).refreshIndex().find((task) => task.id === initial.id)).toMatchObject({ revision: 1, title: "tests" });
+		expect(new TerminalTaskStore({ rootDir }).refreshIndex().snapshots.find((task) => task.id === initial.id)).toMatchObject({ revision: 1, title: "tests" });
 		expect(readdirSync(dirname(metaPath)).some((name) => name.startsWith(".meta.lock.takeover-"))).toBe(true);
 	});
 

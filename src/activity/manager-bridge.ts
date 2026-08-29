@@ -7,6 +7,7 @@ import {
 } from "../background-tasks/background-task-tool.js";
 import { captureProcessBirthTime } from "../background-tasks/process-tree.js";
 import type { TerminalOutputTail, TerminalTaskManager } from "../background-tasks/task-manager.js";
+import type { TerminalTaskIndexRefreshResult } from "../background-tasks/task-store.js";
 import { isTerminalTaskSettled, terminalActivitySnapshot, type TerminalTaskSnapshot } from "../background-tasks/task-types.js";
 import type { SubagentSnapshot } from "../subagents/domain.js";
 import type { SubagentManager } from "../subagents/manager.js";
@@ -33,7 +34,7 @@ const TERMINAL_REDACTION_CONTEXT_BYTES = 64 * 1024;
 interface TerminalProjectionSource {
 	subscribeChanges(listener: (snapshots: readonly TerminalTaskSnapshot[]) => void): () => void;
 	/** Reload records created/advanced by another process after manager construction. */
-	refreshSnapshotsFromStore?(): readonly TerminalTaskSnapshot[];
+	refreshSnapshotsFromStore?(): TerminalTaskIndexRefreshResult;
 	getOutput(task: Pick<TerminalTaskSnapshot, "logFile">, maxBytes?: number): string;
 	getOutputTailBytes?(task: Pick<TerminalTaskSnapshot, "logFile">, maxBytes?: number): TerminalOutputTail;
 	getOutputBytes?(task: Pick<TerminalTaskSnapshot, "logFile">, maxBytes?: number): Uint8Array;
@@ -283,9 +284,10 @@ export class ActivityManagerBridge {
 				// authorizes one extra terminal-index refresh, including takeover of an
 				// empty feed. Same-process handoffs and blocked claims authorize nothing.
 				// Every owner newly claimed in this pass shares ONE global refresh so a
-				// multi-owner takeover still scans the store exactly once.
+				// multi-owner takeover still scans the store exactly once; death-proven
+				// owners are claimed only after that refresh succeeds.
 				if (publisher.writerDeathProven) takeoverOwners.push(owner);
-				this.claimedOwners.add(owner);
+				else this.claimedOwners.add(owner);
 			} else {
 				// A live incumbent may die while this process remains open. Failed
 				// publishers hold no resources; discard them so the next poll can run
@@ -295,12 +297,18 @@ export class ActivityManagerBridge {
 			}
 		}
 		if (takeoverOwners.length === 0) return;
-		try {
-			const refreshed = this.terminalManager.refreshSnapshotsFromStore?.();
-			if (refreshed) this.adoptTerminalSnapshots(refreshed);
-		} catch (error) {
-			this.diagnostic({ kind: "io", path: takeoverOwners[0]!, message: `terminal takeover refresh failed: ${error instanceof Error ? error.message : String(error)}` });
+		const refresh = this.terminalManager.refreshSnapshotsFromStore?.();
+		if (refresh && !refresh.ok) {
+			// A failed takeover refresh must not publish the death-proven owners,
+			// claim them, or consume their proof. Their publishers keep the writer
+			// lease and the death proof, and the session claim stays with this token,
+			// so the next sync retries the one global refresh and discovers whatever
+			// the store holds at that proven freshness boundary.
+			this.diagnostic({ kind: "io", path: takeoverOwners[0]!, message: "terminal takeover refresh failed; takeover retries on the next sync" });
+			return;
 		}
+		if (refresh) this.adoptTerminalSnapshots(refresh.snapshots);
+		for (const owner of takeoverOwners) this.claimedOwners.add(owner);
 	}
 
 	private publishAll(): void {

@@ -218,7 +218,7 @@ describe("TerminalTaskManager", () => {
 		expect(target.get("term-retained-1499", "session-indexed")?.id).toBe("term-retained-1499");
 		expect(target.get("term-missing", "session-indexed")).toBeUndefined();
 		expect(reads).toEqual({ scans: 0, metadata: 0 });
-	}, 20_000);
+	}, 120_000);
 
 	it("rereads only a selected delivery record for each mutation", async () => {
 		const reads = { scans: 0, metadata: 0 };

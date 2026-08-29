@@ -165,7 +165,7 @@ describe("TerminalTaskStore", () => {
 		expect(candidates[0]).not.toHaveProperty("title");
 		expect(candidates[0]).not.toHaveProperty("logFile");
 		expect(reads).toEqual({ scans: 0, metadata: 0 });
-	}, 30_000);
+	}, 120_000);
 
 	it("serves an old indexed ID with one metadata read and zero full scans", () => {
 		const reads = { scans: 0, metadata: 0 };

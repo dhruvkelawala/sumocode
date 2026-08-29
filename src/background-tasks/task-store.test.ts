@@ -18,6 +18,10 @@ function privateWrite(path: string, contents: string): void {
 	chmodSync(path, 0o600);
 }
 
+function transientFault(code: string): Error {
+	return Object.assign(new Error(`injected ${code} metadata read failure`), { code });
+}
+
 function taskDirectory(store: TerminalTaskStore, id: string, createdAt = 1_000): string {
 	const directory = join(store.rootDir, `${id}-${createdAt}`);
 	mkdirSync(directory, { mode: 0o700 });
@@ -292,6 +296,77 @@ describe("TerminalTaskStore", () => {
 		expect(recovered.ok).toBe(true);
 		expect(recovered.snapshots.map((task) => task.id).sort()).toEqual(["term-later", "term-transient"]);
 		expect(store.listOwnedIndexed("session-b")).toEqual([expect.objectContaining({ id: "term-later" })]);
+	});
+
+	it("retains a known record's index entry when only its metadata read fails transiently", () => {
+		const diagnostics: TerminalTaskStoreDiagnostic[] = [];
+		const faults = new Map<string, Error>();
+		const store = new TerminalTaskStore({
+			rootDir,
+			onDiagnostic: (entry) => diagnostics.push(entry),
+			metaReadFault: (path) => faults.get(path),
+		});
+		const initial = snapshot(store, "term-transient-read");
+		const metaPath = join(dirname(initial.logFile), "meta.json");
+		store.create(initial, metaPath);
+		const healthy = snapshot(store, "term-healthy", "session-b", 2_000);
+		privateWrite(join(dirname(healthy.logFile), "meta.json"), `${JSON.stringify(healthy)}\n`);
+
+		faults.set(metaPath, transientFault("EACCES"));
+		const failed = store.refreshIndex();
+		expect(failed.ok).toBe(true);
+		expect(failed.snapshots.map((task) => task.id)).toEqual(["term-healthy"]);
+		expect(failed.preservedIds).toEqual(["term-transient-read"]);
+		// The transient read is diagnosed as I/O, not corruption.
+		expect(diagnostics.at(-1)).toMatchObject({ kind: "io", path: metaPath });
+		// The prior path and compact entry are retained for the owner.
+		expect(store.listOwnedIndexed("session-a")).toEqual([expect.objectContaining({ id: "term-transient-read" })]);
+		expect(store.isIndexedOwner("term-transient-read", "session-a")).toBe(true);
+		faults.clear();
+		// The retained path resolves the durable record again without a rescan.
+		expect(store.getIndexed("term-transient-read")).toEqual(initial);
+
+		// The next successful refresh reports the preserved record normally.
+		const recovered = store.refreshIndex();
+		expect(recovered.ok).toBe(true);
+		expect(recovered.snapshots.map((task) => task.id).sort()).toEqual(["term-healthy", "term-transient-read"]);
+		expect(recovered.preservedIds).toEqual([]);
+
+		// True corruption still quarantines and prunes the record.
+		privateWrite(metaPath, "{not json");
+		const corrupt = store.refreshIndex();
+		expect(corrupt.ok).toBe(true);
+		expect(corrupt.snapshots.map((task) => task.id)).toEqual(["term-healthy"]);
+		expect(corrupt.preservedIds).toEqual([]);
+		expect(store.listOwnedIndexed("session-a")).toEqual([]);
+	});
+
+	it("preserves the indexed entry for exactly the transient read errnos", () => {
+		const codes = ["EACCES", "EIO", "EMFILE", "ENFILE", "EAGAIN"];
+		const faults = new Map<string, Error>();
+		const store = new TerminalTaskStore({ rootDir, metaReadFault: (path) => faults.get(path) });
+		const records = codes.map((_code, index) => {
+			const record = snapshot(store, `term-transient-${index}`, "session-a", 1_000 + index);
+			privateWrite(join(dirname(record.logFile), "meta.json"), `${JSON.stringify(record)}\n`);
+			return record;
+		});
+		expect(store.refreshIndex().snapshots).toHaveLength(codes.length);
+		for (const [index, code] of codes.entries()) {
+			const metaPath = join(dirname(records[index]!.logFile), "meta.json");
+			faults.set(metaPath, transientFault(code));
+			const failed = store.refreshIndex();
+			expect(failed.ok).toBe(true);
+			expect(failed.preservedIds).toEqual([records[index]!.id]);
+			expect(store.isIndexedOwner(records[index]!.id, "session-a")).toBe(true);
+			faults.delete(metaPath);
+		}
+		// A non-errno injected failure is not transient: the record quarantines.
+		const lastPath = join(dirname(records[0]!.logFile), "meta.json");
+		faults.set(lastPath, new Error("injected non-errno failure"));
+		const invalid = store.refreshIndex();
+		expect(invalid.preservedIds).toEqual([]);
+		expect(invalid.snapshots).toHaveLength(codes.length - 1);
+		expect(store.isIndexedOwner(records[0]!.id, "session-a")).toBe(false);
 	});
 
 	it("refreshes the compact indexed entry from the locked snapshot when the update no-ops", () => {

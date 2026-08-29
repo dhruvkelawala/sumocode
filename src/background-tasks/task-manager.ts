@@ -873,8 +873,11 @@ export class TerminalTaskManager {
 	 * retained projection is replaced to match exactly the refreshed index
 	 * generation: ids the scan quarantined or no longer reports are dropped from
 	 * `tasks` and `getSnapshots()` so stale retained snapshots cannot be
-	 * republished. Quarantine stays logical — durable records and the separate
-	 * runtime process bookkeeping are preserved.
+	 * republished, and their poll timers are cleared while the separate runtime
+	 * child/process bookkeeping stays preserved. Ids whose metadata read failed
+	 * transiently keep their compact index entry and their retained full
+	 * snapshot: only a genuinely quarantined id is pruned. Quarantine stays
+	 * logical — durable records are preserved.
 	 */
 	public refreshSnapshotsFromStore(): TerminalTaskIndexRefreshResult {
 		if (this.detached) return { ok: false, snapshots: this.getSnapshots() };
@@ -890,6 +893,13 @@ export class TerminalTaskManager {
 		// Copy before deleting: the projection map mutates while pruning.
 		for (const id of Array.from(this.tasks.keys())) {
 			if (refreshed.has(id)) continue;
+			// A transient per-file metadata read failure retained the record's
+			// compact index entry, so its retained full snapshot stays authoritative
+			// for this generation instead of being pruned like a quarantined id.
+			if (refresh.preservedIds?.includes(id)) continue;
+			// A genuinely quarantined id stops polling: no further reconciles are
+			// scheduled for a projection entry the refreshed index no longer reports.
+			this.clearPoll(id);
 			this.tasks.delete(id);
 		}
 		return { ok: true, snapshots: this.getSnapshots() };
@@ -1320,7 +1330,10 @@ export class TerminalTaskManager {
 		}
 		if (!empty) return this.failedStop(id, ownerSessionId, "process tree remains alive after SIGKILL", false);
 		// The command may have written exit.code after target collection but before
-		// TERM crossed the boundary. Durable natural evidence wins this race.
+		// TERM crossed the boundary. Durable natural evidence wins this race. A
+		// quarantine during the wait leaves no queryable record: report the normal
+		// unknown outcome instead of settleDisposedStop's failed result.
+		if (this.isQuarantined(id, ownerSessionId)) return { id, outcome: "unknown", message: `Unknown terminal ${id}.` };
 		return this.settleDisposedStop(id);
 	}
 

@@ -159,6 +159,8 @@ export class ActivityManagerBridge {
 	private readonly writerVerifiable: boolean;
 	private readonly bridgeToken = randomUUID();
 	private readonly claimedOwners = new Set<string>();
+	/** Every owner whose process-global session claim currently belongs to this bridge token. */
+	private readonly claimedSessionOwners = new Set<string>();
 	private readonly publishers = new Map<string, ActivityFeedPublisher>();
 	private terminalSnapshots: readonly TerminalTaskSnapshot[] = [];
 	private readonly terminalOutputCache = new Map<string, { revision: number; output: string }>();
@@ -168,6 +170,7 @@ export class ActivityManagerBridge {
 	private subagentTimer: ReturnType<typeof setTimeout> | undefined;
 	private terminalOutputTimer: ReturnType<typeof setInterval> | undefined;
 	private retentionTimer: ReturnType<typeof setInterval> | undefined;
+	private takeoverRefreshFailureDiagnosed = false;
 	private disposed = false;
 
 	public constructor(
@@ -257,7 +260,12 @@ export class ActivityManagerBridge {
 		if (this.retentionTimer) clearInterval(this.retentionTimer);
 		this.retentionTimer = undefined;
 		this.terminalOutputCache.clear();
-		for (const owner of this.claimedOwners) this.sessionOwnership.release(owner, this.bridgeToken);
+		// Release every session claim this bridge holds — published owners and
+		// owners still pending a failed takeover-refresh retry — so a replacement
+		// bridge in this process can claim and publish. Iterating the claim set
+		// alone avoids a double release of owners present in both sets.
+		for (const owner of this.claimedSessionOwners) this.sessionOwnership.release(owner, this.bridgeToken);
+		this.claimedSessionOwners.clear();
 		this.claimedOwners.clear();
 	}
 
@@ -276,6 +284,10 @@ export class ActivityManagerBridge {
 		for (const owner of this.sessionOwnership.ownedSessionIds()) {
 			if (this.claimedOwners.has(owner)) continue;
 			if (!this.sessionOwnership.claim(owner, this.bridgeToken)) continue;
+			// Track the successful claim even before publication: a failed takeover
+			// refresh must keep it for retry, and dispose() must release it so a
+			// replacement bridge in this process can claim the session.
+			this.claimedSessionOwners.add(owner);
 			const publisher = this.publisher(owner);
 			if (publisher.hasWriterOwnership) {
 				// A same-process claim consumes the manager generation already built at
@@ -294,6 +306,7 @@ export class ActivityManagerBridge {
 				// a fresh PID/start-token claim and safely take over.
 				this.publishers.delete(owner);
 				this.sessionOwnership.release(owner, this.bridgeToken);
+				this.claimedSessionOwners.delete(owner);
 			}
 		}
 		if (takeoverOwners.length === 0) return;
@@ -305,7 +318,7 @@ export class ActivityManagerBridge {
 			// {ok:false} non-throw path: the death-proven owners stay unclaimed,
 			// unpublished, and their proof intact, and the session claim stays with
 			// this token so the next sync retries the one global refresh.
-			this.diagnostic({ kind: "io", path: takeoverOwners[0]!, message: `terminal takeover refresh failed safely; takeover retries on the next sync: ${error instanceof Error ? error.message : String(error)}` });
+			this.diagnoseTakeoverRefreshFailure(takeoverOwners[0]!, `terminal takeover refresh failed safely; takeover retries on the next sync: ${error instanceof Error ? error.message : String(error)}`);
 			return;
 		}
 		if (refresh && !refresh.ok) {
@@ -314,11 +327,21 @@ export class ActivityManagerBridge {
 			// lease and the death proof, and the session claim stays with this token,
 			// so the next sync retries the one global refresh and discovers whatever
 			// the store holds at that proven freshness boundary.
-			this.diagnostic({ kind: "io", path: takeoverOwners[0]!, message: "terminal takeover refresh failed; takeover retries on the next sync" });
+			this.diagnoseTakeoverRefreshFailure(takeoverOwners[0]!, "terminal takeover refresh failed; takeover retries on the next sync");
 			return;
 		}
+		// A successful refresh ends this failure episode and re-arms the
+		// once-per-episode diagnostic for the next one.
+		this.takeoverRefreshFailureDiagnosed = false;
 		if (refresh) this.adoptTerminalSnapshots(refresh.snapshots);
 		for (const owner of takeoverOwners) this.claimedOwners.add(owner);
+	}
+
+	/** Emit the expected takeover-refresh failure once per failure episode; a successful refresh resets it. */
+	private diagnoseTakeoverRefreshFailure(path: string, message: string): void {
+		if (this.takeoverRefreshFailureDiagnosed) return;
+		this.takeoverRefreshFailureDiagnosed = true;
+		this.diagnostic({ kind: "io", path, message });
 	}
 
 	private publishAll(): void {
@@ -343,6 +366,7 @@ export class ActivityManagerBridge {
 			this.claimedOwners.delete(owner);
 			this.publishers.delete(owner);
 			this.sessionOwnership.release(owner, this.bridgeToken);
+			this.claimedSessionOwners.delete(owner);
 			return;
 		}
 		const retained = publisher.getSnapshot();
@@ -426,6 +450,7 @@ export class ActivityManagerBridge {
 				this.claimedOwners.delete(owner);
 				this.publishers.delete(owner);
 				this.sessionOwnership.release(owner, this.bridgeToken);
+				this.claimedSessionOwners.delete(owner);
 			}
 			this.diagnostic({ kind: "io", path: owner, message: error instanceof Error ? error.message : String(error) });
 		}

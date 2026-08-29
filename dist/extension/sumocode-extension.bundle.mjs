@@ -11087,6 +11087,7 @@ var DEFAULT_LOCK_TIMEOUT_MS = 5e3;
 var DEFAULT_LOCK_POLL_MS = 10;
 var NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
 var LOCK_SLEEP = new Int32Array(new SharedArrayBuffer(4));
+var TRANSIENT_READ_ERRNOS = /* @__PURE__ */ new Set(["EACCES", "EIO", "EMFILE", "ENFILE", "EAGAIN"]);
 var KNOWN_ARTIFACT_NAMES = ["output.log", "exit.code", "launch.ready", "run.sh", "run.cmd"];
 function isSafeInteger(value) {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
@@ -11141,6 +11142,9 @@ function pathExists2(path2) {
 function errorCode2(error) {
   const code = error.code;
   return code === void 0 || code === null ? void 0 : String(code);
+}
+function isTransientReadError(error) {
+  return causeIsError(error) && TRANSIENT_READ_ERRNOS.has(errorCode2(error) ?? "");
 }
 function errorMatches(cause, code) {
   return causeIsError(cause) && errorCode2(cause) === code;
@@ -11330,6 +11334,7 @@ var TerminalTaskStore = class {
   lockPollMs;
   processStartTime;
   beforeAbandonedLockRename;
+  metaReadFault;
   constructor(options = {}) {
     const requestedRoot = resolve4(options.rootDir ?? defaultTerminalStoreRoot());
     const uid = process.getuid?.();
@@ -11352,6 +11357,7 @@ var TerminalTaskStore = class {
     this.lockPollMs = Math.max(1, options.lockPollMs ?? DEFAULT_LOCK_POLL_MS);
     this.processStartTime = captureProcessStartTime(process.pid);
     this.beforeAbandonedLockRename = options.beforeAbandonedLockRename;
+    this.metaReadFault = options.metaReadFault;
   }
   /** Rebuild every derived path/selection bucket from one validated disk pass. */
   refreshIndex() {
@@ -11365,6 +11371,7 @@ var TerminalTaskStore = class {
     }
     const snapshots = [];
     const paths = /* @__PURE__ */ new Map();
+    const preservedEntries = [];
     for (const entry of entries) {
       const taskDirectory = join12(this.rootDir, entry.name);
       if (entry.isSymbolicLink()) {
@@ -11380,17 +11387,31 @@ var TerminalTaskStore = class {
       }
       const metaPath = join12(taskDirectory, "meta.json");
       if (!pathExists2(metaPath)) continue;
-      const snapshot = this.readCandidate(metaPath);
-      if (!snapshot) continue;
-      if (paths.has(snapshot.id)) {
-        this.diagnostic("duplicate", metaPath, `duplicate terminal id ${snapshot.id}`);
+      const read = this.readCandidate(metaPath);
+      if (read.kind === "transient") {
+        const priorId = this.priorIdForMetaPath(metaPath);
+        const priorEntry = priorId === void 0 ? void 0 : this.indexedById.get(priorId);
+        if (priorEntry && !paths.has(priorEntry.id)) {
+          preservedEntries.push(priorEntry);
+          paths.set(priorEntry.id, metaPath);
+        }
         continue;
       }
-      paths.set(snapshot.id, metaPath);
-      snapshots.push(snapshot);
+      if (read.kind === "invalid") continue;
+      if (paths.has(read.snapshot.id)) {
+        this.diagnostic("duplicate", metaPath, `duplicate terminal id ${read.snapshot.id}`);
+        continue;
+      }
+      paths.set(read.snapshot.id, metaPath);
+      snapshots.push(read.snapshot);
     }
     this.replaceIndex(snapshots, paths);
-    return { ok: true, snapshots };
+    for (const priorEntry of preservedEntries) {
+      this.metaPathById.set(priorEntry.id, paths.get(priorEntry.id));
+      this.indexedById.set(priorEntry.id, priorEntry);
+      this.ownerMembership(priorEntry).add(priorEntry.id);
+    }
+    return { ok: true, snapshots, preservedIds: preservedEntries.map((entry) => entry.id) };
   }
   /** O(1) no-I/O owner membership check against the compact index. */
   isIndexedOwner(id, ownerSessionId2) {
@@ -11483,6 +11504,13 @@ var TerminalTaskStore = class {
       return next;
     });
   }
+  /** The id whose metadata path is this exact canonical path, if any. */
+  priorIdForMetaPath(path2) {
+    for (const [id, existing] of this.metaPathById) {
+      if (existing === path2) return id;
+    }
+    return void 0;
+  }
   replaceIndex(snapshots, paths) {
     this.metaPathById.clear();
     this.indexedById.clear();
@@ -11500,11 +11528,11 @@ var TerminalTaskStore = class {
     this.ownerMembership(snapshot).add(snapshot.id);
   }
   /** O(1) owner membership; createdAt-desc ordering is applied lazily by listOwnedIndexed. */
-  ownerMembership(snapshot) {
-    let ids = this.indexedIdsByOwner.get(snapshot.ownerSessionId);
+  ownerMembership(record) {
+    let ids = this.indexedIdsByOwner.get(record.ownerSessionId);
     if (!ids) {
       ids = /* @__PURE__ */ new Set();
-      this.indexedIdsByOwner.set(snapshot.ownerSessionId, ids);
+      this.indexedIdsByOwner.set(record.ownerSessionId, ids);
     }
     return ids;
   }
@@ -11548,35 +11576,47 @@ var TerminalTaskStore = class {
     }
     assertPrivateFile(snapshot.logFile);
   }
+  /** One indexed candidate read outcome: a validated snapshot, a transient I/O failure, or an invalid record. */
   readCandidate(path2) {
     let value;
     try {
       this.onRead?.("metadata");
+      const fault = this.metaReadFault?.(path2);
+      if (fault) throw fault;
       value = JSON.parse(readFileNoFollow(path2));
     } catch (error) {
+      if (isTransientReadError(error)) {
+        this.diagnostic("io", path2, error);
+        return { kind: "transient" };
+      }
       this.diagnostic("corrupt", path2, error);
-      return void 0;
+      return { kind: "invalid" };
     }
     const version = schemaVersionOf(value);
     if (version === 2 || version === 3) {
       this.diagnostic("legacy", path2, `legacy schema v${version} retained for diagnostics only`);
-      return void 0;
+      return { kind: "invalid" };
     }
     const snapshot = parseTerminalTaskSnapshot(value);
     if (!snapshot) {
       this.diagnostic("corrupt", path2, `invalid or unsupported terminal record schema ${String(version)}`);
-      return void 0;
+      return { kind: "invalid" };
     }
     try {
       this.assertSnapshotPath(snapshot, path2);
     } catch (error) {
+      if (isTransientReadError(error)) {
+        this.diagnostic("io", path2, error);
+        return { kind: "transient" };
+      }
       this.diagnostic("corrupt", path2, error);
-      return void 0;
+      return { kind: "invalid" };
     }
-    return snapshot;
+    return { kind: "ok", snapshot };
   }
   readCurrent(path2) {
-    return this.readCandidate(path2);
+    const read = this.readCandidate(path2);
+    return read.kind === "ok" ? read.snapshot : void 0;
   }
   withTaskLock(metaPath, operation) {
     const lockPath = join12(dirname6(metaPath), ".meta.lock");
@@ -12388,8 +12428,11 @@ ${command}
    * retained projection is replaced to match exactly the refreshed index
    * generation: ids the scan quarantined or no longer reports are dropped from
    * `tasks` and `getSnapshots()` so stale retained snapshots cannot be
-   * republished. Quarantine stays logical — durable records and the separate
-   * runtime process bookkeeping are preserved.
+   * republished, and their poll timers are cleared while the separate runtime
+   * child/process bookkeeping stays preserved. Ids whose metadata read failed
+   * transiently keep their compact index entry and their retained full
+   * snapshot: only a genuinely quarantined id is pruned. Quarantine stays
+   * logical — durable records are preserved.
    */
   refreshSnapshotsFromStore() {
     if (this.detached) return { ok: false, snapshots: this.getSnapshots() };
@@ -12404,6 +12447,8 @@ ${command}
     const refreshed = new Set(refresh.snapshots.map((snapshot) => snapshot.id));
     for (const id of Array.from(this.tasks.keys())) {
       if (refreshed.has(id)) continue;
+      if (refresh.preservedIds?.includes(id)) continue;
+      this.clearPoll(id);
       this.tasks.delete(id);
     }
     return { ok: true, snapshots: this.getSnapshots() };
@@ -12758,6 +12803,7 @@ ${command}
       empty = kill.gone || await this.processTree.waitForTreeEmpty(identity, this.killGraceMs, verification);
     }
     if (!empty) return this.failedStop(id, ownerSessionId2, "process tree remains alive after SIGKILL", false);
+    if (this.isQuarantined(id, ownerSessionId2)) return { id, outcome: "unknown", message: `Unknown terminal ${id}.` };
     return this.settleDisposedStop(id);
   }
   handleStopSignalFailure(id, ownerSessionId2, signal, restoreOnFailure, suppressOnSettlement = restoreOnFailure) {
@@ -14310,6 +14356,8 @@ var ActivityManagerBridge = class {
   writerVerifiable;
   bridgeToken = randomUUID5();
   claimedOwners = /* @__PURE__ */ new Set();
+  /** Every owner whose process-global session claim currently belongs to this bridge token. */
+  claimedSessionOwners = /* @__PURE__ */ new Set();
   publishers = /* @__PURE__ */ new Map();
   terminalSnapshots = [];
   terminalOutputCache = /* @__PURE__ */ new Map();
@@ -14319,6 +14367,7 @@ var ActivityManagerBridge = class {
   subagentTimer;
   terminalOutputTimer;
   retentionTimer;
+  takeoverRefreshFailureDiagnosed = false;
   disposed = false;
   constructor(terminalManager, subagentManager, options = {}) {
     this.terminalManager = terminalManager;
@@ -14396,7 +14445,8 @@ var ActivityManagerBridge = class {
     if (this.retentionTimer) clearInterval(this.retentionTimer);
     this.retentionTimer = void 0;
     this.terminalOutputCache.clear();
-    for (const owner of this.claimedOwners) this.sessionOwnership.release(owner, this.bridgeToken);
+    for (const owner of this.claimedSessionOwners) this.sessionOwnership.release(owner, this.bridgeToken);
+    this.claimedSessionOwners.clear();
     this.claimedOwners.clear();
   }
   publisher(owner) {
@@ -14413,6 +14463,7 @@ var ActivityManagerBridge = class {
     for (const owner of this.sessionOwnership.ownedSessionIds()) {
       if (this.claimedOwners.has(owner)) continue;
       if (!this.sessionOwnership.claim(owner, this.bridgeToken)) continue;
+      this.claimedSessionOwners.add(owner);
       const publisher = this.publisher(owner);
       if (publisher.hasWriterOwnership) {
         if (publisher.writerDeathProven) takeoverOwners.push(owner);
@@ -14420,6 +14471,7 @@ var ActivityManagerBridge = class {
       } else {
         this.publishers.delete(owner);
         this.sessionOwnership.release(owner, this.bridgeToken);
+        this.claimedSessionOwners.delete(owner);
       }
     }
     if (takeoverOwners.length === 0) return;
@@ -14427,15 +14479,22 @@ var ActivityManagerBridge = class {
     try {
       refresh = this.terminalManager.refreshSnapshotsFromStore?.();
     } catch (error) {
-      this.diagnostic({ kind: "io", path: takeoverOwners[0], message: `terminal takeover refresh failed safely; takeover retries on the next sync: ${error instanceof Error ? error.message : String(error)}` });
+      this.diagnoseTakeoverRefreshFailure(takeoverOwners[0], `terminal takeover refresh failed safely; takeover retries on the next sync: ${error instanceof Error ? error.message : String(error)}`);
       return;
     }
     if (refresh && !refresh.ok) {
-      this.diagnostic({ kind: "io", path: takeoverOwners[0], message: "terminal takeover refresh failed; takeover retries on the next sync" });
+      this.diagnoseTakeoverRefreshFailure(takeoverOwners[0], "terminal takeover refresh failed; takeover retries on the next sync");
       return;
     }
+    this.takeoverRefreshFailureDiagnosed = false;
     if (refresh) this.adoptTerminalSnapshots(refresh.snapshots);
     for (const owner of takeoverOwners) this.claimedOwners.add(owner);
+  }
+  /** Emit the expected takeover-refresh failure once per failure episode; a successful refresh resets it. */
+  diagnoseTakeoverRefreshFailure(path2, message) {
+    if (this.takeoverRefreshFailureDiagnosed) return;
+    this.takeoverRefreshFailureDiagnosed = true;
+    this.diagnostic({ kind: "io", path: path2, message });
   }
   publishAll() {
     if (this.disposed) return;
@@ -14455,6 +14514,7 @@ var ActivityManagerBridge = class {
       this.claimedOwners.delete(owner);
       this.publishers.delete(owner);
       this.sessionOwnership.release(owner, this.bridgeToken);
+      this.claimedSessionOwners.delete(owner);
       return;
     }
     const retained = publisher.getSnapshot();
@@ -14523,6 +14583,7 @@ var ActivityManagerBridge = class {
         this.claimedOwners.delete(owner);
         this.publishers.delete(owner);
         this.sessionOwnership.release(owner, this.bridgeToken);
+        this.claimedSessionOwners.delete(owner);
       }
       this.diagnostic({ kind: "io", path: owner, message: error instanceof Error ? error.message : String(error) });
     }

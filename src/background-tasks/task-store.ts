@@ -45,6 +45,13 @@ export interface TerminalTaskIndexRefreshResult {
 	/** false when the store directory could not be read; the last good index generation is preserved. */
 	readonly ok: boolean;
 	readonly snapshots: readonly TerminalTaskSnapshot[];
+	/**
+	 * Ids whose metadata read failed transiently but whose prior path and compact
+	 * index entry were retained. Snapshot consumers that prune stale entries (the
+	 * manager's retained projection) must keep their retained full snapshot for
+	 * these ids in this successful generation instead of pruning them.
+	 */
+	readonly preservedIds?: readonly string[];
 }
 
 export interface TerminalTaskStoreOptions {
@@ -56,6 +63,8 @@ export interface TerminalTaskStoreOptions {
 	readonly onRead?: (kind: TerminalTaskStoreReadKind) => void;
 	/** Test seam for deterministic stale-lock replacement races. */
 	readonly beforeAbandonedLockRename?: () => void;
+	/** Test seam for deterministic per-file metadata-read faults inside the index scan. */
+	readonly metaReadFault?: (path: string) => Error | undefined;
 }
 
 /** Compact derived selection state. Durable metadata remains authoritative. */
@@ -98,6 +107,8 @@ const DEFAULT_LOCK_TIMEOUT_MS = 5_000;
 const DEFAULT_LOCK_POLL_MS = 10;
 const NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
 const LOCK_SLEEP = new Int32Array(new SharedArrayBuffer(4));
+/** Transient per-file read errnos that must never quarantine an indexed record. */
+const TRANSIENT_READ_ERRNOS = new Set(["EACCES", "EIO", "EMFILE", "ENFILE", "EAGAIN"]);
 const KNOWN_ARTIFACT_NAMES = ["output.log", "exit.code", "launch.ready", "run.sh", "run.cmd"] as const;
 
 interface LockOwner {
@@ -176,6 +187,10 @@ function errorCode(error: Error): string | undefined {
 	// SAFETY: lstat/rename/unlink reject with NodeJS.ErrnoException whose optional `code` carries the errno string.
 	const code = (error as NodeJS.ErrnoException).code;
 	return code === undefined || code === null ? undefined : String(code);
+}
+
+function isTransientReadError(error: unknown): boolean {
+	return causeIsError(error) && TRANSIENT_READ_ERRNOS.has(errorCode(error) ?? "");
 }
 
 function errorMatches(cause: unknown, code: string): boolean {
@@ -437,6 +452,7 @@ export class TerminalTaskStore {
 	private readonly lockPollMs: number;
 	private readonly processStartTime: string | undefined;
 	private readonly beforeAbandonedLockRename?: () => void;
+	private readonly metaReadFault?: (path: string) => Error | undefined;
 
 	public constructor(options: TerminalTaskStoreOptions = {}) {
 		const requestedRoot = resolve(options.rootDir ?? defaultTerminalStoreRoot());
@@ -461,6 +477,7 @@ export class TerminalTaskStore {
 		this.lockPollMs = Math.max(1, options.lockPollMs ?? DEFAULT_LOCK_POLL_MS);
 		this.processStartTime = captureProcessStartTime(process.pid);
 		this.beforeAbandonedLockRename = options.beforeAbandonedLockRename;
+		this.metaReadFault = options.metaReadFault;
 	}
 
 	/** Rebuild every derived path/selection bucket from one validated disk pass. */
@@ -480,6 +497,9 @@ export class TerminalTaskStore {
 		}
 		const snapshots: TerminalTaskSnapshot[] = [];
 		const paths = new Map<string, string>();
+		// Prior compact entries must be captured during the scan: replaceIndex
+		// clears the derived maps before the retained entries are re-applied.
+		const preservedEntries: IndexedTerminalTask[] = [];
 		for (const entry of entries) {
 			const taskDirectory = join(this.rootDir, entry.name);
 			if (entry.isSymbolicLink()) {
@@ -495,17 +515,35 @@ export class TerminalTaskStore {
 			}
 			const metaPath = join(taskDirectory, "meta.json");
 			if (!pathExists(metaPath)) continue;
-			const snapshot = this.readCandidate(metaPath);
-			if (!snapshot) continue;
-			if (paths.has(snapshot.id)) {
-				this.diagnostic("duplicate", metaPath, `duplicate terminal id ${snapshot.id}`);
+			const read = this.readCandidate(metaPath);
+			if (read.kind === "transient") {
+				// A transient per-file read failure must not quarantine a record the
+				// last good index already knows. Retain its prior path and compact
+				// entry, and report the id so the manager preserves its retained full
+				// snapshot in this successful generation instead of pruning it.
+				const priorId = this.priorIdForMetaPath(metaPath);
+				const priorEntry = priorId === undefined ? undefined : this.indexedById.get(priorId);
+				if (priorEntry && !paths.has(priorEntry.id)) {
+					preservedEntries.push(priorEntry);
+					paths.set(priorEntry.id, metaPath);
+				}
 				continue;
 			}
-			paths.set(snapshot.id, metaPath);
-			snapshots.push(snapshot);
+			if (read.kind === "invalid") continue;
+			if (paths.has(read.snapshot.id)) {
+				this.diagnostic("duplicate", metaPath, `duplicate terminal id ${read.snapshot.id}`);
+				continue;
+			}
+			paths.set(read.snapshot.id, metaPath);
+			snapshots.push(read.snapshot);
 		}
 		this.replaceIndex(snapshots, paths);
-		return { ok: true, snapshots };
+		for (const priorEntry of preservedEntries) {
+			this.metaPathById.set(priorEntry.id, paths.get(priorEntry.id)!);
+			this.indexedById.set(priorEntry.id, priorEntry);
+			this.ownerMembership(priorEntry).add(priorEntry.id);
+		}
+		return { ok: true, snapshots, preservedIds: preservedEntries.map((entry) => entry.id) };
 	}
 
 	/** O(1) no-I/O owner membership check against the compact index. */
@@ -620,6 +658,14 @@ export class TerminalTaskStore {
 		});
 	}
 
+	/** The id whose metadata path is this exact canonical path, if any. */
+	private priorIdForMetaPath(path: string): string | undefined {
+		for (const [id, existing] of this.metaPathById) {
+			if (existing === path) return id;
+		}
+		return undefined;
+	}
+
 	private replaceIndex(snapshots: readonly TerminalTaskSnapshot[], paths: ReadonlyMap<string, string>): void {
 		this.metaPathById.clear();
 		this.indexedById.clear();
@@ -639,11 +685,11 @@ export class TerminalTaskStore {
 	}
 
 	/** O(1) owner membership; createdAt-desc ordering is applied lazily by listOwnedIndexed. */
-	private ownerMembership(snapshot: TerminalTaskSnapshot): Set<string> {
-		let ids = this.indexedIdsByOwner.get(snapshot.ownerSessionId);
+	private ownerMembership(record: Readonly<{ ownerSessionId: string }>): Set<string> {
+		let ids = this.indexedIdsByOwner.get(record.ownerSessionId);
 		if (!ids) {
 			ids = new Set<string>();
-			this.indexedIdsByOwner.set(snapshot.ownerSessionId, ids);
+			this.indexedIdsByOwner.set(record.ownerSessionId, ids);
 		}
 		return ids;
 	}
@@ -691,36 +737,48 @@ export class TerminalTaskStore {
 		assertPrivateFile(snapshot.logFile);
 	}
 
-	private readCandidate(path: string): TerminalTaskSnapshot | undefined {
+	/** One indexed candidate read outcome: a validated snapshot, a transient I/O failure, or an invalid record. */
+	private readCandidate(path: string): { kind: "ok"; snapshot: TerminalTaskSnapshot } | { kind: "transient" } | { kind: "invalid" } {
 		let value: unknown;
 		try {
 			this.onRead?.("metadata");
+			const fault = this.metaReadFault?.(path);
+			if (fault) throw fault;
 			value = JSON.parse(readFileNoFollow(path));
 		} catch (error) {
+			if (isTransientReadError(error)) {
+				this.diagnostic("io", path, error);
+				return { kind: "transient" };
+			}
 			this.diagnostic("corrupt", path, error);
-			return undefined;
+			return { kind: "invalid" };
 		}
 		const version = schemaVersionOf(value);
 		if (version === 2 || version === 3) {
 			this.diagnostic("legacy", path, `legacy schema v${version} retained for diagnostics only`);
-			return undefined;
+			return { kind: "invalid" };
 		}
 		const snapshot = parseTerminalTaskSnapshot(value);
 		if (!snapshot) {
 			this.diagnostic("corrupt", path, `invalid or unsupported terminal record schema ${String(version)}`);
-			return undefined;
+			return { kind: "invalid" };
 		}
 		try {
 			this.assertSnapshotPath(snapshot, path);
 		} catch (error) {
+			if (isTransientReadError(error)) {
+				this.diagnostic("io", path, error);
+				return { kind: "transient" };
+			}
 			this.diagnostic("corrupt", path, error);
-			return undefined;
+			return { kind: "invalid" };
 		}
-		return snapshot;
+		return { kind: "ok", snapshot };
 	}
 
 	private readCurrent(path: string): TerminalTaskSnapshot | undefined {
-		return this.readCandidate(path);
+		const read = this.readCandidate(path);
+		return read.kind === "ok" ? read.snapshot : undefined;
 	}
 
 	private withTaskLock<T>(metaPath: string, operation: () => T): T {

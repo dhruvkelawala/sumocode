@@ -112,9 +112,13 @@ describe("TerminalTaskManager", () => {
 		});
 	}
 
-	function exitFile(task: { logFile: string }): string {
-		return join(dirname(task.logFile), "exit.code");
-	}
+function exitFile(task: { logFile: string }): string {
+	return join(dirname(task.logFile), "exit.code");
+}
+
+function transientFault(code: string): Error {
+	return Object.assign(new Error(`injected ${code} metadata read failure`), { code });
+}
 
 	function durableTask(id: string): TerminalTaskSnapshot | undefined {
 		const store = new TerminalTaskStore({ rootDir });
@@ -578,6 +582,108 @@ describe("TerminalTaskManager", () => {
 		]);
 		// Quarantine stays logical: the corrupt durable record is untouched.
 		expect(readFileSync(join(dirname(task.logFile), "meta.json"), "utf8")).toBe("{not json");
+	});
+
+	it("returns the normal unknown outcome when the record is quarantined during the TERM tree wait", async () => {
+		const store = new TerminalTaskStore({ rootDir });
+		const target = manager({ store });
+		const task = await start(target);
+		// No exit.code: the ordinary TERM stop path. Quarantine exactly inside the
+		// TERM grace wait so the wait's success path must report the normal
+		// unknown outcome instead of settleDisposedStop's failed result.
+		tree.operations.waitForTreeEmpty = vi.fn(async (_identity: ProcessTreeIdentity) => {
+			writeFileSync(join(dirname(task.logFile), "meta.json"), "{not json", { mode: 0o600 });
+			expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+			return true;
+		});
+		const results = await target.stop([task.id], "session-a");
+		expect(results).toEqual([
+			{ id: task.id, outcome: "unknown", message: `Unknown terminal ${task.id}.` },
+		]);
+		// Quarantine stays logical: the corrupt durable record is untouched.
+		expect(readFileSync(join(dirname(task.logFile), "meta.json"), "utf8")).toBe("{not json");
+	});
+
+	it("preserves a healthy retained task when only its metadata read fails transiently", async () => {
+		vi.useFakeTimers();
+		let target: TerminalTaskManager | undefined;
+		try {
+			const reads = { metadata: 0 };
+			const faults = new Map<string, Error>();
+			const store = new TerminalTaskStore({
+				rootDir,
+				metaReadFault: (path) => faults.get(path),
+				onRead: (kind) => { if (kind === "metadata") reads.metadata += 1; },
+			});
+			target = manager({ store, pollIntervalMs: 10 });
+			const task = await start(target);
+			const metaFile = join(dirname(task.logFile), "meta.json");
+			await vi.advanceTimersByTimeAsync(30);
+			expect(reads.metadata).toBeGreaterThan(0);
+
+			// Inject exactly one transient per-file read failure on the healthy
+			// indexed task's metadata file.
+			faults.set(metaFile, transientFault("EIO"));
+			const refreshed = target.refreshSnapshotsFromStore();
+			expect(refreshed.ok).toBe(true);
+			// The transient read yields no fresh snapshot, but the generation must
+			// not prune the record: it stays queryable, listed, and its poll timer
+			// keeps reconciling it.
+			expect(target.get(task.id, "session-a")).toMatchObject({ id: task.id, status: "running" });
+			expect(target.list("session-a").map((entry) => entry.id)).toEqual([task.id]);
+			const readsWhilePreserved = reads.metadata;
+			await vi.advanceTimersByTimeAsync(30);
+			expect(reads.metadata).toBeGreaterThan(readsWhilePreserved);
+			faults.clear();
+
+			// The next successful refresh recovers the record and adopts an external
+			// advance made while the record was only transiently unreadable.
+			const external = new TerminalTaskStore({ rootDir });
+			external.refreshIndex();
+			const durable = external.getIndexed(task.id)!;
+			external.transition(task.id, durable.revision, (current) => ({ ...current, title: "after", updatedAt: Date.now() }));
+			const recovered = target.refreshSnapshotsFromStore();
+			expect(recovered.ok).toBe(true);
+			expect(target.get(task.id, "session-a")).toMatchObject({ id: task.id, revision: durable.revision + 1, title: "after" });
+			expect(target.list("session-a").map((entry) => entry.id)).toEqual([task.id]);
+		} finally {
+			target?.detach();
+			vi.useRealTimers();
+		}
+	});
+
+	it("stops polling a genuinely quarantined id after a successful refresh prune", async () => {
+		vi.useFakeTimers();
+		let target: TerminalTaskManager | undefined;
+		try {
+			const reads = { metadata: 0 };
+			const store = new TerminalTaskStore({ rootDir, onRead: (kind) => { if (kind === "metadata") reads.metadata += 1; } });
+			target = manager({ store, pollIntervalMs: 10 });
+			const task = await start(target);
+			const metaFile = join(dirname(task.logFile), "meta.json");
+			await vi.advanceTimersByTimeAsync(30);
+			expect(reads.metadata).toBeGreaterThan(0);
+			// Exactly one pending timer: the task's poll interval.
+			expect(vi.getTimerCount()).toBe(1);
+
+			// The durable record becomes corrupt; the next successful refresh
+			// quarantines it, prunes the retained projection, and clears its poll
+			// timer so no further reconciles are scheduled for the id.
+			writeFileSync(metaFile, "{not json", { mode: 0o600 });
+			expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+			expect(target.get(task.id, "session-a")).toBeUndefined();
+			// The quarantined id's timer is gone — not merely silent.
+			expect(vi.getTimerCount()).toBe(0);
+			await vi.advanceTimersByTimeAsync(30);
+			const drained = reads.metadata;
+			await vi.advanceTimersByTimeAsync(50);
+			expect(reads.metadata).toBe(drained);
+			// Quarantine stays logical: the corrupt durable record is untouched.
+			expect(readFileSync(metaFile, "utf8")).toBe("{not json");
+		} finally {
+			target?.detach();
+			vi.useRealTimers();
+		}
 	});
 
 	it("reports a failed refresh with retained snapshots once detached", () => {

@@ -16493,6 +16493,12 @@ function isNumber2(value) {
 function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
+function isErrnoException(error) {
+  return error instanceof Error;
+}
+function isEnoent(error) {
+  return isErrnoException(error) && error.code === "ENOENT";
+}
 function installTaskExitMarker(env = process.env) {
   if (!env.SUMOCODE_TASK_EXIT_FILE) return;
   process.once("exit", (code) => writeTaskExitMarker(isNumber2(code) ? code : 0, env));
@@ -16513,27 +16519,35 @@ function shouldInstallTaskModeAutoExit(options = {}) {
   const env = options.env ?? process.env;
   return isActive(env) && !isKeepOpen(env);
 }
-var submittedControlsByDir = /* @__PURE__ */ new Map();
-var submittedControlsFor = (controlDir) => {
-  const key = resolve7(controlDir);
-  let bucket = submittedControlsByDir.get(key);
+var SUBMITTED_CONTROLS_REGISTRY = /* @__PURE__ */ Symbol.for("sumocode.task-mode.submittedControls");
+function globalSubmittedControlsScope() {
+  return globalThis;
+}
+function submittedControlsRegistry() {
+  const scope = globalSubmittedControlsScope();
+  return scope[SUBMITTED_CONTROLS_REGISTRY] ??= /* @__PURE__ */ new Map();
+}
+var submittedControlsFor = (canonicalControlDir) => {
+  const registry = submittedControlsRegistry();
+  let bucket = registry.get(canonicalControlDir);
   if (!bucket) {
     bucket = /* @__PURE__ */ new Set();
-    submittedControlsByDir.set(key, bucket);
+    registry.set(canonicalControlDir, bucket);
   }
   return bucket;
 };
-var clearSubmittedControl = (controlDir, file) => {
-  const key = resolve7(controlDir);
-  const bucket = submittedControlsByDir.get(key);
+var clearSubmittedControl = (canonicalControlDir, file) => {
+  const registry = submittedControlsRegistry();
+  const bucket = registry.get(canonicalControlDir);
   if (!bucket?.delete(file)) return;
-  if (bucket.size === 0) submittedControlsByDir.delete(key);
+  if (bucket.size === 0) registry.delete(canonicalControlDir);
 };
-var isControlSubmitted = (controlDir, file) => submittedControlsByDir.get(resolve7(controlDir))?.has(file) ?? false;
+var isControlSubmitted = (canonicalControlDir, file) => submittedControlsRegistry().get(canonicalControlDir)?.has(file) ?? false;
 function installControlWatcher(pi, controlDir, hooks, unlinkControl) {
   if (!controlDir) return () => void 0;
   let stopped = false;
   let timer;
+  const canonicalControlDir = resolve7(controlDir);
   const stop = () => {
     stopped = true;
     if (timer) {
@@ -16544,14 +16558,19 @@ function installControlWatcher(pi, controlDir, hooks, unlinkControl) {
   const discardSubmittedControl = (file) => {
     try {
       unlinkControl(file);
-      clearSubmittedControl(controlDir, file);
+      clearSubmittedControl(canonicalControlDir, file);
       diagLog("steer_ack_unlinked", { file });
     } catch (error) {
+      if (isEnoent(error)) {
+        clearSubmittedControl(canonicalControlDir, file);
+        diagLog("steer_ack_already_unlinked", { file });
+        return;
+      }
       diagLog("steer_ack_unlink_failed", { file, message: errorMessage(error) });
     }
   };
   const submitSteer = (file) => {
-    if (isControlSubmitted(controlDir, file)) {
+    if (isControlSubmitted(canonicalControlDir, file)) {
       discardSubmittedControl(file);
       return;
     }
@@ -16577,12 +16596,17 @@ function installControlWatcher(pi, controlDir, hooks, unlinkControl) {
       diagLog("steer_submit_failed", { file, message: errorMessage(error) });
       return;
     }
-    submittedControlsFor(controlDir).add(file);
+    submittedControlsFor(canonicalControlDir).add(file);
     try {
       unlinkControl(file);
-      clearSubmittedControl(controlDir, file);
+      clearSubmittedControl(canonicalControlDir, file);
       diagLog("steer_submitted", { file, bytes: text.length });
     } catch (error) {
+      if (isEnoent(error)) {
+        clearSubmittedControl(canonicalControlDir, file);
+        diagLog("steer_ack_already_unlinked", { file, bytes: text.length });
+        return;
+      }
       diagLog("steer_ack_unlink_failed", { file, message: errorMessage(error) });
     }
   };
@@ -16590,7 +16614,7 @@ function installControlWatcher(pi, controlDir, hooks, unlinkControl) {
     try {
       const ctx = hooks.getLatestCtx();
       if (!ctx) return;
-      if (existsSync12(join20(controlDir, CLOSE_REQUEST_FILE2))) {
+      if (existsSync12(join20(canonicalControlDir, CLOSE_REQUEST_FILE2))) {
         diagLog("close_requested");
         hooks.cancelCountdown();
         stop();
@@ -16599,13 +16623,13 @@ function installControlWatcher(pi, controlDir, hooks, unlinkControl) {
       }
       let entries;
       try {
-        entries = readdirSync4(controlDir);
+        entries = readdirSync4(canonicalControlDir);
       } catch {
         return;
       }
       const seqOf = (name) => Number(name.match(STEER_FILE_PATTERN)?.[1] ?? Number.MAX_SAFE_INTEGER);
       const steerFiles = entries.filter((entry) => STEER_FILE_PATTERN.test(entry)).sort((a, b) => seqOf(a) - seqOf(b));
-      for (const name of steerFiles) submitSteer(join20(controlDir, name));
+      for (const name of steerFiles) submitSteer(join20(canonicalControlDir, name));
     } catch (error) {
       diagLog("control_poll_failed", { message: errorMessage(error) });
     }

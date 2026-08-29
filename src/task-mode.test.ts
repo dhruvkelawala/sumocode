@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
@@ -609,6 +609,168 @@ describe("control watcher", () => {
 		vi.advanceTimersByTime(500);
 		expect(second.pi.sendUserMessage).toHaveBeenCalledTimes(1);
 		expect(second.pi.sendUserMessage).toHaveBeenCalledWith("fresh steer", { deliverAs: "steer" });
+	});
+
+	it("treats an ENOENT ack unlink as already acknowledged: clears ownership without resubmitting or leaking", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const diagFile = join(workDir, "diag.jsonl");
+		// The submission succeeds and the first ack unlink fails with EBUSY. By the
+		// retry poll, another consumer has already removed the consumed control, so
+		// the retry unlink reports ENOENT — the acknowledgement is then complete.
+		let firstUnlink = true;
+		const { pi, controlDir } = installWithControlDir(false, diagFile, (path) => {
+			if (firstUnlink) {
+				firstUnlink = false;
+				throw new Error("EBUSY: ack unlink raced a reader");
+			}
+			// Simulate the other consumer winning the race between readdir and this
+			// unlink: the file is gone, and Node surfaces that as ENOENT.
+			rmSync(path, { force: true });
+			// SAFETY: NodeJS.ErrnoException carries the errno string on its optional `code`; the fixture pins the shape a real unlink rejection would have.
+			const enoent = new Error(`ENOENT: no such file or directory, unlink '${path}'`) as NodeJS.ErrnoException;
+			enoent.code = "ENOENT";
+			throw enoent;
+		});
+		const steerPath = join(controlDir, "steer-1.txt");
+		writeFileSync(steerPath, "acked by removal");
+
+		vi.advanceTimersByTime(500);
+		expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
+		expect(submittedControlsForTests().get(resolve(controlDir))).toEqual(new Set([steerPath]));
+
+		// The ENOENT retry clears ownership and names the already-complete ack —
+		// it is not retained as a pending unlink failure.
+		vi.advanceTimersByTime(500);
+		expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
+		const diagnostics = readFileSync(diagFile, "utf8");
+		expect(diagnostics).toContain('"event":"steer_ack_already_unlinked"');
+		expect(diagnostics.match(/"event":"steer_ack_unlink_failed"/g)).toHaveLength(1);
+		expect(submittedControlsForTests().get(resolve(controlDir))).toBeUndefined();
+		expect([...submittedControlsForTests().keys()].filter((key) => key.startsWith(workDir!))).toEqual([]);
+
+		// No leak, no duplicate: a genuinely new control submits normally.
+		writeFileSync(join(controlDir, "steer-2.txt"), "after the race");
+		vi.advanceTimersByTime(500);
+		expect(pi.sendUserMessage).toHaveBeenCalledTimes(2);
+		expect(pi.sendUserMessage).toHaveBeenCalledWith("after the race", { deliverAs: "steer" });
+		expect(existsSync(join(controlDir, "steer-2.txt"))).toBe(false);
+	});
+
+	it("canonicalizes the control dir once: equivalent spellings share one bucket with canonical member paths", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const controlDir = join(workDir, "control");
+		mkdirSync(controlDir, { recursive: true });
+		const canonicalControlDir = resolve(controlDir);
+		const steerPath = join(canonicalControlDir, "steer-1.txt");
+		writeFileSync(steerPath, "one canonical spelling");
+
+		let failUnlink = true;
+		const unlink = (path: string): void => {
+			if (failUnlink) throw new Error("EBUSY: ack unlink raced a reader");
+			unlinkSync(path);
+		};
+
+		// The first install sees an equivalent-but-different spelling (trailing
+		// separator) of the SAME directory; the second sees the plain spelling.
+		const first = buildPiStub();
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
+		installTaskModeAutoExit(first.pi as never, {
+			env: { SUMOCODE_TASK_MODE: "1", SUMOCODE_TASK_CONTROL_DIR: `${controlDir}${sep}` },
+			graceMs: 10_000,
+			unlink,
+		});
+		first.handlers.get("session_start")?.[0]?.({}, buildCtxStub());
+		vi.advanceTimersByTime(500);
+
+		// The bucket key and its member path are both the canonical spelling.
+		const snapshot = submittedControlsForTests();
+		expect(snapshot.get(canonicalControlDir)).toEqual(new Set([steerPath]));
+		expect([...snapshot.keys()].filter((key) => key.startsWith(workDir!))).toEqual([canonicalControlDir]);
+
+		// Session recreation on the plain spelling: the replacement retries the
+		// unlink only — equivalent spellings must not duplicate the submission.
+		first.handlers.get("session_shutdown")?.[0]?.({}, buildCtxStub());
+		failUnlink = false;
+		const second = buildPiStub();
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
+		installTaskModeAutoExit(second.pi as never, {
+			env: { SUMOCODE_TASK_MODE: "1", SUMOCODE_TASK_CONTROL_DIR: controlDir },
+			graceMs: 10_000,
+			unlink,
+		});
+		second.handlers.get("session_start")?.[0]?.({}, buildCtxStub());
+		vi.advanceTimersByTime(500);
+
+		expect(first.pi.sendUserMessage).toHaveBeenCalledTimes(1);
+		expect(second.pi.sendUserMessage).not.toHaveBeenCalled();
+		expect(existsSync(steerPath)).toBe(false);
+		expect(submittedControlsForTests().get(canonicalControlDir)).toBeUndefined();
+	});
+
+	it("shares submitted ownership across distinct module instances in the same process", async () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const controlDir = join(workDir, "control");
+		mkdirSync(controlDir, { recursive: true });
+		const steerPath = join(controlDir, "steer-1.txt");
+		writeFileSync(steerPath, "owned process-wide");
+		const env: NodeJS.ProcessEnv = { SUMOCODE_TASK_MODE: "1", SUMOCODE_TASK_CONTROL_DIR: controlDir };
+		let failUnlink = true;
+		const unlink = (path: string): void => {
+			if (failUnlink) throw new Error("EBUSY: ack unlink raced a reader");
+			unlinkSync(path);
+		};
+		const first = buildPiStub();
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
+		installTaskModeAutoExit(first.pi as never, { env, graceMs: 10_000, unlink });
+		first.handlers.get("session_start")?.[0]?.({}, buildCtxStub());
+		vi.advanceTimersByTime(500);
+
+		// Re-evaluating the SAME source models the distinct module instance a
+		// committed bundle or second entry path creates. Its registry view must
+		// show the first instance's submission — the registry is process-wide.
+		vi.resetModules();
+		const freshInstance = await import("./task-mode.js");
+		expect(freshInstance.submittedControlsForTests().get(resolve(controlDir))).toEqual(new Set([steerPath]));
+
+		// The sibling instance's watcher retries the unlink only: no duplicate Pi
+		// submission, and the eventual unlink clears the shared bucket.
+		failUnlink = false;
+		const second = buildPiStub();
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
+		freshInstance.installTaskModeAutoExit(second.pi as never, {
+			env: { SUMOCODE_TASK_MODE: "1", SUMOCODE_TASK_CONTROL_DIR: controlDir },
+			graceMs: 10_000,
+			unlink,
+		});
+		second.handlers.get("session_start")?.[0]?.({}, buildCtxStub());
+		vi.advanceTimersByTime(500);
+		expect(first.pi.sendUserMessage).toHaveBeenCalledTimes(1);
+		expect(second.pi.sendUserMessage).not.toHaveBeenCalled();
+		expect(existsSync(steerPath)).toBe(false);
+		expect(freshInstance.submittedControlsForTests().get(resolve(controlDir))).toBeUndefined();
+		freshInstance.resetTaskMarkerEnvForTests();
+	});
+
+	it("exposes only a cloned snapshot: mutating the test view cannot touch real ownership", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const diagFile = join(workDir, "diag.jsonl");
+		const { pi, controlDir } = installWithControlDir(false, diagFile, () => {
+			throw new Error("EBUSY: ack unlink raced a reader");
+		});
+		const steerPath = join(controlDir, "steer-1.txt");
+		writeFileSync(steerPath, "snapshot safety");
+
+		vi.advanceTimersByTime(500);
+		expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
+		expect(submittedControlsForTests().get(resolve(controlDir))).toEqual(new Set([steerPath]));
+
+		// Wipe the snapshot — even bypassing the readonly types — and the live
+		// registry keeps its entry: the next poll still retries the unlink only.
+		// SAFETY: the seam returns a deep clone, so this deliberate readonly bypass can mutate only the snapshot; the assertions below prove the live registry kept its entry.
+		(submittedControlsForTests() as Map<string, Set<string>>).get(resolve(controlDir))?.clear();
+		expect(submittedControlsForTests().get(resolve(controlDir))).toEqual(new Set([steerPath]));
+		vi.advanceTimersByTime(500);
+		expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
 	});
 
 	it("preserves and retries a steer when ExtensionAPI throws synchronously", () => {

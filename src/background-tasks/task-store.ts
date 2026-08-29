@@ -563,10 +563,19 @@ export class TerminalTaskStore {
 		return openPrivateExistingFile(resolvedPath, flags);
 	}
 
+	/**
+	 * CAS one durable transition under the record's task lock. `update` runs
+	 * against the authoritative snapshot just read under that lock — never a
+	 * retained projection — so eligibility predicates decide on disk truth.
+	 * Returning `undefined` records a no-op: the lock is honored, nothing is
+	 * written, and the current snapshot is returned unchanged. A revision
+	 * mismatch still fails with StaleTerminalTaskRevisionError before `update`
+	 * runs, so a changed record is retried against freshly loaded state.
+	 */
 	public transition(
 		id: string,
 		expectedRevision: number,
-		update: (current: TerminalTaskSnapshot) => Omit<TerminalTaskSnapshot, "revision">,
+		update: (current: TerminalTaskSnapshot) => Omit<TerminalTaskSnapshot, "revision"> | undefined,
 	): TerminalTaskSnapshot {
 		const path = this.metaPathById.get(id);
 		if (!path) throw new Error(`Unknown terminal task ${id}`);
@@ -576,7 +585,9 @@ export class TerminalTaskStore {
 			if (current.revision !== expectedRevision) {
 				throw new StaleTerminalTaskRevisionError(id, expectedRevision, current.revision);
 			}
-			const next = { ...update(current), revision: current.revision + 1 } satisfies TerminalTaskSnapshot;
+			const decided = update(current);
+			if (!decided) return current;
+			const next = { ...decided, revision: current.revision + 1 } satisfies TerminalTaskSnapshot;
 			if (next.id !== current.id || next.ownerSessionId !== current.ownerSessionId || next.schemaVersion !== current.schemaVersion || next.createdAt !== current.createdAt || next.logFile !== current.logFile) {
 				throw new Error("Terminal task identity fields are immutable");
 			}

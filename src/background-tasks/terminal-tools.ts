@@ -202,12 +202,14 @@ export class TerminalDeliveryCoordinator {
 			const claimed = this.manager.claimPending(active.ownerSessionId, true, 1)
 				.sort((left, right) => Number(left.completionPolicy === "wake") - Number(right.completionPolicy === "wake"));
 			for (const task of claimed) {
-				// An explicit observer or an expired concurrent claimant can take
-				// ownership before this stack reaches send. The unique claim token,
-				// not completionId alone, decides which coordinator may publish.
-				const current = this.manager.get(task.id, active.ownerSessionId);
+				// Authoritative pre-send read: a different process may have reclaimed
+				// the claim token after our selection, which the retained projection
+				// cannot see. The unique claim token, not completionId alone, decides
+				// which coordinator may publish.
+				const current = this.manager.readIndexed(task.id);
+				if (!current || current.ownerSessionId !== active.ownerSessionId) continue;
 				if (
-					current?.deliveryState !== "claimed" || !current.deliveryClaimToken ||
+					current.deliveryState !== "claimed" || !current.deliveryClaimToken ||
 					current.completionId !== task.completionId || current.deliveryClaimToken !== task.deliveryClaimToken
 				) continue;
 				const observable = completionsFromContext(active.ctx);

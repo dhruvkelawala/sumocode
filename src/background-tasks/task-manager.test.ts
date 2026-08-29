@@ -77,8 +77,11 @@ describe("TerminalTaskManager", () => {
 		rmSync(rootDir, { recursive: true, force: true });
 	});
 
-	function manager(overrides: Partial<ConstructorParameters<typeof TerminalTaskManager>[0]> = {}): TerminalTaskManager {
-		const next = new TerminalTaskManager({
+	function manager(
+		overrides: Partial<ConstructorParameters<typeof TerminalTaskManager>[0]> = {},
+		create: (options: ConstructorParameters<typeof TerminalTaskManager>[0]) => TerminalTaskManager = (options) => new TerminalTaskManager(options),
+	): TerminalTaskManager {
+		const next = create({
 			store: new TerminalTaskStore({ rootDir }),
 			processTree: tree.operations,
 			// SAFETY: the mock spawn only implements the call signature this manager exercises.
@@ -229,7 +232,7 @@ describe("TerminalTaskManager", () => {
 		expect(reads).toEqual({ scans: 0, metadata: 0 });
 	}, 120_000);
 
-	it("binds the real coordinator with one full scan and one selected mutation reread", async () => {
+	it("binds the real coordinator with one full scan and one selected read per delivery step", async () => {
 		const reads = { scans: 0, metadata: 0 };
 		const store = new TerminalTaskStore({
 			rootDir,
@@ -260,10 +263,65 @@ describe("TerminalTaskManager", () => {
 		coordinator.dispose();
 
 		// Startup performed exactly one full scan (construction). Bind/flush
-		// rescans nothing and rereads only the record it claims under its lock.
-		expect(reads).toEqual({ scans: 0, metadata: 1 });
+		// rescans nothing and reads only the selected record: once for its locked
+		// claim mutation and once for the authoritative pre-send token check.
+		expect(reads).toEqual({ scans: 0, metadata: 2 });
 		expect(sent).toHaveLength(1);
 		expect(target.get(task.id, "session-a")).toMatchObject({ deliveryState: "claimed" });
+	});
+
+	it("suppresses a duplicate follow-up when another process reclaims the claim before send", async () => {
+		const reads = { scans: 0, metadata: 0 };
+		const store = new TerminalTaskStore({
+			rootDir,
+			onRead: (kind) => { reads[kind === "full-scan" ? "scans" : "metadata"] += 1; },
+		});
+		let rival: TerminalTaskManager | undefined;
+		class RivalReclaimManager extends TerminalTaskManager {
+			private reclaimed = false;
+			public override claimPending(ownerSessionId: string, includeWake: boolean, maxWake = 1): TerminalTaskSnapshot[] {
+				const claimed = super.claimPending(ownerSessionId, includeWake, maxWake);
+				if (claimed.length > 0 && !this.reclaimed) {
+					this.reclaimed = true;
+					// A different process reclaims the expired lease between this
+					// manager's claim and the coordinator's send.
+					now += 31;
+					rival?.claimPending(ownerSessionId, includeWake, maxWake);
+				}
+				return claimed;
+			}
+		}
+		const target = manager({ store }, (options) => new RivalReclaimManager(options));
+		const task = await start(target);
+		writeFileSync(exitFile(task), "0");
+		children[0]?.emit("close", 0);
+		await vi.waitFor(() => expect(target.get(task.id, "session-a")?.deliveryState).toBe("pending"));
+		// The rival builds its projection only after the record is durable.
+		rival = manager({ createClaimToken: () => "claim-rival" });
+		reads.scans = 0;
+		reads.metadata = 0;
+
+		const sent: Array<{ details?: { completionId?: string } }> = [];
+		// SAFETY: the coordinator reads only this structural ExtensionAPI surface.
+		const pi = { sendMessage: (message: { details?: { completionId?: string } }) => { sent.push(message); } } as never;
+		const coordinator = new TerminalDeliveryCoordinator(pi, target);
+		// SAFETY: the real manager only reads this structural ctx surface.
+		const ctx = {
+			cwd: "/repo",
+			isIdle: () => true,
+			sessionManager: { getSessionId: () => "session-a", getBranch: () => [] },
+		} as never;
+		coordinator.bind(ctx);
+		await Promise.resolve();
+		await Promise.resolve();
+		coordinator.dispose();
+
+		// The pre-send authoritative read detected the rival token: no follow-up
+		// was published, and every post-claim read stayed selected-only (no scans).
+		expect(sent).toEqual([]);
+		expect(reads.scans).toBe(0);
+		// The rival's reclaim token survived; our pre-send claim token never published.
+		expect(durableTask(task.id)).toMatchObject({ deliveryState: "claimed", deliveryClaimToken: "claim-rival" });
 	});
 
 	it("rereads only a selected delivery record for each mutation", async () => {
@@ -797,6 +855,40 @@ describe("TerminalTaskManager", () => {
 		const receipt = [{ completionId: claimed[0]!.completionId!, claimToken: claimed[0]!.deliveryClaimToken! }];
 		expect(target.acknowledge("session-a", receipt)[0]?.deliveryState).toBe("delivered");
 		expect(target.acknowledge("session-a", receipt)).toEqual([]);
+	});
+
+	it("decides claim and acknowledgement eligibility on the locked durable snapshot", async () => {
+		const target = manager();
+		const task = await start(target);
+		writeFileSync(exitFile(task), "0");
+		children[0]?.emit("close", 0);
+		await vi.waitFor(() => expect(target.get(task.id, "session-a")?.deliveryState).toBe("pending"));
+		const pending = target.get(task.id, "session-a")!;
+		const metaPath = join(dirname(task.logFile), "meta.json");
+
+		const rewriteAtSameRevision = (overrides: Partial<TerminalTaskSnapshot>): void => {
+			// SAFETY: meta.json is this store's documented JSON record; the rewrite models a rival writer that
+			// committed different content at the SAME revision, which the revision CAS alone would accept.
+			const current = JSON.parse(readFileSync(metaPath, "utf8")) as TerminalTaskSnapshot;
+			writeFileSync(metaPath, `${JSON.stringify({ ...current, ...overrides })}\n`, { mode: 0o600 });
+		};
+
+		// A rival claim committed at the same revision must not be reclaimed by a
+		// decision made against the stale retained projection.
+		rewriteAtSameRevision({ deliveryState: "claimed", deliveryClaimToken: "claim-rival", updatedAt: pending.updatedAt + 1 });
+		expect(target.claimPending("session-a", true)).toEqual([]);
+		expect(durableTask(task.id)).toMatchObject({ deliveryState: "claimed", deliveryClaimToken: "claim-rival", revision: pending.revision });
+		// The no-op decision adopted the authoritative snapshot into retained state.
+		expect(target.get(task.id, "session-a")).toMatchObject({ deliveryClaimToken: "claim-rival" });
+
+		// Once the rival lease expires this manager may claim; a rival rewrite at
+		// the claimed revision must then also suppress our duplicate acknowledgement.
+		now += 31;
+		const ours = target.claimPending("session-a", true)[0]!;
+		expect(ours.deliveryState).toBe("claimed");
+		rewriteAtSameRevision({ deliveryClaimToken: "claim-rival-2", updatedAt: ours.updatedAt });
+		expect(target.acknowledge("session-a", [{ completionId: ours.completionId!, claimToken: ours.deliveryClaimToken! }])).toEqual([]);
+		expect(durableTask(task.id)).toMatchObject({ deliveryState: "claimed", deliveryClaimToken: "claim-rival-2", revision: ours.revision });
 	});
 
 	it("rejects a stalled claimant after a concurrent lease reclaim changes the token", async () => {

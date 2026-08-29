@@ -854,6 +854,15 @@ export class TerminalTaskManager {
 		return this.getSnapshots();
 	}
 
+	/**
+	 * Authoritative store-index read of one record, bypassing the retained
+	 * projection. Narrow surface for pre-send/pre-publication freshness checks;
+	 * never scans the store and only resolves indexed ids.
+	 */
+	public readIndexed(id: string): TerminalTaskSnapshot | undefined {
+		return this.store.getIndexed(id);
+	}
+
 	public getSnapshots(): readonly TerminalTaskSnapshot[] {
 		const snapshots = [...this.tasks.values()];
 		const replayed = snapshots.filter((snapshot) => !isTerminalTaskSettled(snapshot.status));
@@ -1332,6 +1341,14 @@ export class TerminalTaskManager {
 		this.failUnlaunched(id, error);
 	}
 
+	/**
+	 * One authoritative decision per mutation: the update closure runs inside
+	 * the store's task lock against the just-read durable snapshot, so claim/ack
+	 * predicates can never fire on retained state that disk has already moved
+	 * past (including a same-revision content change the revision CAS alone
+	 * would accept). A stale expected revision is retried against freshly
+	 * loaded state up to MAX_TRANSITION_RETRIES times.
+	 */
 	private mutate(
 		id: string,
 		update: (current: TerminalTaskSnapshot) => Omit<TerminalTaskSnapshot, "revision"> | undefined,
@@ -1340,10 +1357,20 @@ export class TerminalTaskManager {
 		if (!latest) throw new Error(`Unknown terminal task ${id}`);
 		for (let attempt = 0; attempt < MAX_TRANSITION_RETRIES; attempt += 1) {
 			this.adopt(latest, false);
-			const next = update(latest);
-			if (!next) return { snapshot: latest, changed: false };
+			let changed = false;
 			try {
-				const transitioned = this.store.transition(id, latest.revision, () => next);
+				const transitioned = this.store.transition(id, latest.revision, (current) => {
+					const next = update(current);
+					if (!next) return undefined;
+					changed = true;
+					return next;
+				});
+				if (!changed) {
+					// The locked snapshot is authoritative even for a no-op decision;
+					// adopt it silently so retained state stops lagging disk truth.
+					this.adopt(transitioned, false);
+					return { snapshot: transitioned, changed: false };
+				}
 				this.adopt(transitioned, true);
 				return { snapshot: transitioned, changed: true };
 			} catch (error) {

@@ -272,7 +272,7 @@ describe("TerminalTaskStore", () => {
 		const second = snapshot(store, "term-dup", "session-b", 2_000);
 		const secondPath = join(dirname(second.logFile), "meta.json");
 
-		expect(() => store.create(second, secondPath)).toThrow(/already indexed/);
+		expect(() => store.create(second, secondPath)).toThrow(/already reserved/);
 		expect(existsSync(secondPath)).toBe(false);
 		// Owner buckets keep their integrity: A still lists only its own record,
 		// B stays empty, and the indexed id still resolves to A's durable record.
@@ -460,6 +460,9 @@ describe("TerminalTaskStore", () => {
 		// the id the (now missing) prior path owns.
 		rmSync(duplicateMetaPath);
 		privateWrite(priorMetaPath, `${JSON.stringify(initial)}\n`);
+		// The re-index pass must be a real readdir: clear the seeded override so
+		// this pass and the re-seed below observe the directory as it is now.
+		scanOrderOverride.clear();
 		expect(store.refreshIndex().snapshots).toHaveLength(1);
 		privateWrite(duplicateMetaPath, `${JSON.stringify(duplicate)}\n`);
 		seedScanOrder(store.rootDir, "term-quarantine-2000");
@@ -471,6 +474,60 @@ describe("TerminalTaskStore", () => {
 		expect(store.listOwnedIndexed("session-b")).toEqual([]);
 		// Quarantine stays logical: the duplicate record is untouched on disk.
 		expect(existsSync(duplicateMetaPath)).toBe(true);
+	});
+
+	it("keeps a quarantined id's reservation across later refreshes and create", () => {
+		const reads = { scans: 0, metadata: 0 };
+		const diagnostics: TerminalTaskStoreDiagnostic[] = [];
+		const store = new TerminalTaskStore({
+			rootDir,
+			onDiagnostic: (entry) => diagnostics.push(entry),
+			onRead: (kind) => { reads[kind === "full-scan" ? "scans" : "metadata"] += 1; },
+		});
+		const initial = snapshot(store, "term-persist", "session-a", 1_000);
+		const priorMetaPath = join(dirname(initial.logFile), "meta.json");
+		store.create(initial, priorMetaPath);
+		expect(store.refreshIndex().snapshots).toHaveLength(1);
+
+		// The prior record corrupts while a same-id duplicate sits under another
+		// owner: this first refresh quarantines the id and skips the duplicate.
+		const duplicate = snapshot(store, "term-persist", "session-b", 2_000);
+		const duplicateMetaPath = join(dirname(duplicate.logFile), "meta.json");
+		privateWrite(duplicateMetaPath, `${JSON.stringify(duplicate)}\n`);
+		privateWrite(priorMetaPath, "{not json");
+		const quarantined = store.refreshIndex();
+		expect(quarantined.ok).toBe(true);
+		expect(quarantined.snapshots).toEqual([]);
+		expect(store.listOwnedIndexed("session-a")).toEqual([]);
+		expect(store.listOwnedIndexed("session-b")).toEqual([]);
+		expect(diagnostics.filter((entry) => entry.kind === "duplicate" && entry.path === duplicateMetaPath)).toHaveLength(1);
+
+		// The reservation outlives the quarantine: every later refresh still
+		// diagnoses the same path as a duplicate and never adopts it, with one
+		// O(1) reservation lookup per candidate — no reverse-index rebuild, no
+		// extra reads beyond the two metadata files on disk.
+		const readsBeforeLaterRefreshes = reads.metadata;
+		expect(store.refreshIndex().snapshots).toEqual([]);
+		expect(store.refreshIndex().snapshots).toEqual([]);
+		expect(store.listOwnedIndexed("session-b")).toEqual([]);
+		expect(diagnostics.filter((entry) => entry.kind === "duplicate" && entry.path === duplicateMetaPath)).toHaveLength(3);
+		expect(reads.metadata).toBe(readsBeforeLaterRefreshes + 4);
+
+		// create rejects the reserved id even though its active entry is gone:
+		// a hijack-shaped record at a new path/owner/timestamp never lands, and
+		// the reservation path is O(1) — zero scans, zero metadata reads.
+		reads.scans = 0;
+		reads.metadata = 0;
+		const hijack = snapshot(store, "term-persist", "session-c", 3_000);
+		const hijackMetaPath = join(dirname(hijack.logFile), "meta.json");
+		expect(() => store.create(hijack, hijackMetaPath)).toThrow(/already reserved/);
+		expect(existsSync(hijackMetaPath)).toBe(false);
+		expect(reads).toEqual({ scans: 0, metadata: 0 });
+
+		// Quarantine stays logical: the duplicate record is untouched on disk and
+		// a later refresh still refuses to adopt it.
+		expect(readFileSync(duplicateMetaPath, "utf8")).toContain("session-b");
+		expect(store.refreshIndex().snapshots).toEqual([]);
 	});
 
 	it("keeps an unindexed record absent when only its metadata read fails transiently", () => {

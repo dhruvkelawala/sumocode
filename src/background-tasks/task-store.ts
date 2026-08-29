@@ -446,6 +446,18 @@ export class TerminalTaskStore {
 	private readonly metaPathById = new Map<string, string>();
 	private readonly indexedById = new Map<string, IndexedTerminalTask>();
 	private readonly indexedIdsByOwner = new Map<string, Set<string>>();
+	/**
+	 * Store-instance-lifetime identity reservation: id → canonical metadata
+	 * path, kept separate from the active query index above. One validated
+	 * adoption or create reserves the id; refresh quarantine may drop the id
+	 * from the active index but never releases or migrates this binding, so no
+	 * other path can adopt the id and create cannot resurrect it in this
+	 * process. Bounded security state by design: compact canonical paths only,
+	 * never full snapshots, so a Plan 106 bound on retained manager snapshots
+	 * leaves this reservation as O(ids) paths without becoming a second durable
+	 * authority.
+	 */
+	private readonly reservedPathById = new Map<string, string>();
 	private readonly onDiagnostic?: (diagnostic: TerminalTaskStoreDiagnostic) => void;
 	private readonly onRead?: (kind: TerminalTaskStoreReadKind) => void;
 	private readonly lockTimeoutMs: number;
@@ -495,12 +507,20 @@ export class TerminalTaskStore {
 			this.diagnostic("io", this.rootDir, error);
 			return { ok: false, snapshots: [] };
 		}
-		// O(1) known-path reservation, built once per scan: the id→path half is
-		// the live metaPathById itself. A prior indexed path owns its id for the
-		// whole pass, so duplicate-identity decisions never depend on scan order
-		// or on linear path lookups.
-		const priorIdByPath = new Map<string, string>();
-		for (const [id, path] of this.metaPathById) priorIdByPath.set(path, id);
+		// The prior path→id reverse index is built lazily on the first transient
+		// read: a scan without transient failures never pays the O(index) build,
+		// and duplicate identity never depends on it because the persistent
+		// reservation map answers those decisions with one O(1) lookup.
+		let priorIdByPath: Map<string, string> | undefined;
+		const priorIdForPath = (path: string): string | undefined => {
+			let reverse = priorIdByPath;
+			if (!reverse) {
+				reverse = new Map();
+				for (const [id, priorPath] of this.metaPathById) reverse.set(priorPath, id);
+				priorIdByPath = reverse;
+			}
+			return reverse.get(path);
+		};
 		const snapshots: TerminalTaskSnapshot[] = [];
 		const paths = new Map<string, string>();
 		// Prior compact entries must be captured during the scan: replaceIndex
@@ -527,7 +547,7 @@ export class TerminalTaskStore {
 				// last good index already knows. Retain its prior path and compact
 				// entry, and report the id so the manager preserves its retained full
 				// snapshot in this successful generation instead of pruning it.
-				const priorId = priorIdByPath.get(metaPath);
+				const priorId = priorIdForPath(metaPath);
 				const priorEntry = priorId === undefined ? undefined : this.indexedById.get(priorId);
 				if (priorEntry && !paths.has(priorEntry.id)) {
 					preservedEntries.push(priorEntry);
@@ -536,12 +556,14 @@ export class TerminalTaskStore {
 				continue;
 			}
 			if (read.kind === "invalid") continue;
-			// Known-path reservation: a parsed id whose prior indexed path differs is
-			// a duplicate of that prior record no matter where it sorts in this scan —
-			// and even if the prior path later fails transiently, is corrupt, or has
-			// disappeared by the time it is visited. The known path owns the identity;
-			// a duplicate never takes it over.
-			const reservedPath = this.metaPathById.get(read.snapshot.id);
+			// Known-path reservation: a parsed id whose reserved path differs is a
+			// duplicate of that prior record no matter where it sorts in this scan —
+			// and even if the prior path later fails transiently, is corrupt, has
+			// disappeared by the time it is visited, or was already quarantined out
+			// of the active index by a previous refresh. The reservation is
+			// store-instance lifetime: the known path owns the identity; a duplicate
+			// never takes it over.
+			const reservedPath = this.reservedPathById.get(read.snapshot.id);
 			if (reservedPath !== undefined && reservedPath !== metaPath) {
 				this.diagnostic("duplicate", metaPath, `duplicate terminal id ${read.snapshot.id}`);
 				continue;
@@ -586,14 +608,17 @@ export class TerminalTaskStore {
 		this.assertSnapshotPath(snapshot, resolvedMetaPath);
 		return this.withTaskLock(resolvedMetaPath, () => {
 			if (pathExists(resolvedMetaPath)) throw new Error(`Terminal metadata already exists: ${resolvedMetaPath}`);
-			// An id already indexed under any owner/timestamp/path must be rejected
-			// before the durable write or index replacement, or the new record would
-			// hijack the existing id's projection entry and leak across owner buckets.
-			const existingPath = this.metaPathById.get(snapshot.id);
-			if (this.indexedById.has(snapshot.id) || existingPath !== undefined) {
-				throw new Error(`Terminal id ${snapshot.id} is already indexed at ${existingPath ?? "an indexed record"}`);
+			// A reserved id must be rejected before the durable write or index
+			// replacement — even when an earlier refresh already quarantined the
+			// reserved record out of the active index — or a new record could hijack
+			// the reserved identity and leak across owner buckets. The reservation
+			// check is one O(1) map lookup: no scan, no metadata read.
+			const reservedPath = this.reservedPathById.get(snapshot.id);
+			if (reservedPath !== undefined) {
+				throw new Error(`Terminal id ${snapshot.id} is already reserved at ${reservedPath}`);
 			}
 			atomicWriteJson(resolvedMetaPath, snapshot);
+			this.reservedPathById.set(snapshot.id, resolvedMetaPath);
 			this.metaPathById.set(snapshot.id, resolvedMetaPath);
 			this.replaceIndexedEntry(snapshot);
 			return snapshot;
@@ -681,6 +706,7 @@ export class TerminalTaskStore {
 		for (const snapshot of snapshots) {
 			const path = paths.get(snapshot.id);
 			if (!path) continue;
+			this.reservedPathById.set(snapshot.id, path);
 			this.metaPathById.set(snapshot.id, path);
 			this.indexedById.set(snapshot.id, this.compact(snapshot));
 			this.ownerMembership(snapshot).add(snapshot.id);

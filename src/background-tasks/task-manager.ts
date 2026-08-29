@@ -103,6 +103,10 @@ export interface TerminalTaskManagerOptions {
 	readonly claimLeaseMs?: number;
 	readonly startingRecoveryGraceMs?: number;
 	readonly onDiagnostic?: (diagnostic: TerminalTaskStoreDiagnostic | { kind: "manager"; message: string; id?: string }) => void;
+	/** Test-only spy: invoked once per fresh snapshot `refreshSnapshotsFromStore` adopts. */
+	readonly onRefreshAdopt?: (id: string) => void;
+	/** Test-only spy: invoked once per snapshot whose recovery work (log cap/launch gate/arm/reconcile) `refreshSnapshotsFromStore` actually runs. */
+	readonly onRefreshRecover?: (id: string) => void;
 }
 
 export type TerminalTaskChangeListener = (snapshot: TerminalTaskSnapshot) => void;
@@ -410,6 +414,8 @@ export class TerminalTaskManager {
 	private readonly claimLeaseMs: number;
 	private readonly startingRecoveryGraceMs: number;
 	private readonly onDiagnostic?: TerminalTaskManagerOptions["onDiagnostic"];
+	private readonly onRefreshAdopt?: (id: string) => void;
+	private readonly onRefreshRecover?: (id: string) => void;
 	private readonly tasks = new Map<string, TerminalTaskSnapshot>();
 	private readonly runtime = new Map<string, RuntimeTask>();
 	private readonly listeners = new Set<TerminalTaskChangeListener>();
@@ -431,6 +437,8 @@ export class TerminalTaskManager {
 		this.claimLeaseMs = normalizePositive(options.claimLeaseMs, DEFAULT_CLAIM_LEASE_MS);
 		this.startingRecoveryGraceMs = normalizePositive(options.startingRecoveryGraceMs, DEFAULT_STARTING_RECOVERY_GRACE_MS);
 		this.onDiagnostic = options.onDiagnostic;
+		this.onRefreshAdopt = options.onRefreshAdopt;
+		this.onRefreshRecover = options.onRefreshRecover;
 		// Plan 080 makes completed snapshots durable and explicitly forbids file
 		// deletion/cleanup without human approval. Do not revive the legacy
 		// recovery-time artifact pruning here: retention/GC needs its own approved
@@ -879,8 +887,13 @@ export class TerminalTaskManager {
 	 * republished, and their poll timers are cleared while the separate runtime
 	 * child/process bookkeeping stays preserved. Ids whose metadata read failed
 	 * transiently keep their compact index entry and their retained full
-	 * snapshot: only a genuinely quarantined id is pruned. Quarantine stays
-	 * logical — durable records are preserved.
+	 * snapshot: only a genuinely quarantined id is pruned. Recovery side effects
+	 * (settled log cap, launch-gate release, arm, reconcile scheduling) are
+	 * gated: only a record new to this projection or one whose meaningful
+	 * durable identity changed — a different revision or owner — pays them
+	 * again, so unchanged records are never log-capped or rescheduled per
+	 * refresh, while a same-revision owner divergence still recovers. Quarantine
+	 * stays logical — durable records are preserved.
 	 */
 	public refreshSnapshotsFromStore(): TerminalTaskIndexRefreshResult {
 		if (this.detached) return { ok: false, snapshots: this.getSnapshots() };
@@ -890,8 +903,19 @@ export class TerminalTaskManager {
 			// Adoption is unconditional: revision equality alone must never skip a
 			// refreshed snapshot, or an external same-revision owner/content rewrite
 			// would leave the retained projection answering for the previous owner.
+			const previous = this.tasks.get(snapshot.id);
 			this.adopt(snapshot, false);
-			this.recover(snapshot);
+			this.onRefreshAdopt?.(snapshot.id);
+			// Recovery work is gated on meaningful durable identity: a record new to
+			// this projection, or one whose revision or owner changed. Revision and
+			// owner are sufficient — a deep same-revision, same-owner content compare
+			// is deliberately avoided — so such a rewrite is adopted above with no
+			// recovery side effects, and unchanged records are not capped or
+			// rescheduled again on every refresh.
+			if (previous === undefined || previous.revision !== snapshot.revision || previous.ownerSessionId !== snapshot.ownerSessionId) {
+				this.recover(snapshot);
+				this.onRefreshRecover?.(snapshot.id);
+			}
 		}
 		const refreshed = new Set(refresh.snapshots.map((snapshot) => snapshot.id));
 		const preserved = refresh.preservedIds === undefined ? undefined : new Set(refresh.preservedIds);

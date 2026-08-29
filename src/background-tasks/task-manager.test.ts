@@ -676,6 +676,73 @@ function transientFault(code: string): Error {
 		expect(target.getSnapshots().every((task) => task.ownerSessionId === "session-b")).toBe(true);
 	});
 
+	it("gates refresh recovery to records that are new or durably changed", () => {
+		const store = new TerminalTaskStore({ rootDir });
+		persistSettledTask(store, "term-recap", "session-a", 1_000, "before");
+		const adopted: string[] = [];
+		const recovered: string[] = [];
+		const target = manager({
+			store,
+			onRefreshAdopt: (id) => adopted.push(id),
+			onRefreshRecover: (id) => recovered.push(id),
+		});
+		// The constructor adopted term-recap already, so the first explicit refresh
+		// finds it unchanged: adopted, but not recovered again.
+		expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+		expect(adopted).toEqual(["term-recap"]);
+		expect(recovered).toEqual([]);
+
+		// A record created externally after construction is new to the projection:
+		// adopted AND recovered exactly once.
+		persistSettledTask(store, "term-fresh", "session-a", 2_000, "fresh");
+		adopted.length = 0;
+		expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+		expect([...adopted].sort()).toEqual(["term-fresh", "term-recap"]);
+		expect(recovered).toEqual(["term-fresh"]);
+
+		// Unchanged record: still adopted every refresh, but never recovered again
+		// — no repeated log cap, no reschedule.
+		adopted.length = 0;
+		recovered.length = 0;
+		expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+		expect([...adopted].sort()).toEqual(["term-fresh", "term-recap"]);
+		expect(recovered).toEqual([]);
+
+		// Same-revision, same-owner content rewrite: adopted with no recovery side
+		// effects — revision plus owner are sufficient durable identity, so no
+		// deep content compare runs and nothing is capped or rescheduled.
+		const fresh = store.getIndexed("term-fresh")!;
+		const metaFile = join(dirname(fresh.logFile), "meta.json");
+		writeFileSync(metaFile, `${JSON.stringify({ ...fresh, title: "same-revision", updatedAt: 2_500 })}\n`, { mode: 0o600 });
+		chmodSync(metaFile, 0o600);
+		adopted.length = 0;
+		expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+		expect(adopted).toContain("term-fresh");
+		expect(recovered).toEqual([]);
+		expect(target.get("term-fresh", "session-a")).toMatchObject({ revision: 1, title: "same-revision" });
+
+		// Revision advance: recovery runs again, exactly once.
+		adopted.length = 0;
+		recovered.length = 0;
+		const external = new TerminalTaskStore({ rootDir });
+		external.refreshIndex();
+		external.transition("term-fresh", 1, (current) => ({ ...current, title: "bumped", updatedAt: 3_000 }));
+		expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+		expect(adopted).toContain("term-fresh");
+		expect(recovered).toEqual(["term-fresh"]);
+
+		// Same-revision owner divergence: recovery still triggers for the new owner.
+		adopted.length = 0;
+		recovered.length = 0;
+		writeFileSync(metaFile, `${JSON.stringify({ ...fresh, revision: 2, ownerSessionId: "session-b", title: "bumped", updatedAt: 3_000 })}\n`, { mode: 0o600 });
+		chmodSync(metaFile, 0o600);
+		expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+		expect(adopted).toContain("term-fresh");
+		expect(recovered).toEqual(["term-fresh"]);
+		expect(target.list("session-a").map((task) => task.id)).not.toContain("term-fresh");
+		expect(target.list("session-b")).toEqual([expect.objectContaining({ id: "term-fresh", ownerSessionId: "session-b" })]);
+	});
+
 	it("stops polling a genuinely quarantined id after a successful refresh prune", async () => {
 		vi.useFakeTimers();
 		let target: TerminalTaskManager | undefined;

@@ -11328,6 +11328,18 @@ var TerminalTaskStore = class {
   metaPathById = /* @__PURE__ */ new Map();
   indexedById = /* @__PURE__ */ new Map();
   indexedIdsByOwner = /* @__PURE__ */ new Map();
+  /**
+   * Store-instance-lifetime identity reservation: id → canonical metadata
+   * path, kept separate from the active query index above. One validated
+   * adoption or create reserves the id; refresh quarantine may drop the id
+   * from the active index but never releases or migrates this binding, so no
+   * other path can adopt the id and create cannot resurrect it in this
+   * process. Bounded security state by design: compact canonical paths only,
+   * never full snapshots, so a Plan 106 bound on retained manager snapshots
+   * leaves this reservation as O(ids) paths without becoming a second durable
+   * authority.
+   */
+  reservedPathById = /* @__PURE__ */ new Map();
   onDiagnostic;
   onRead;
   lockTimeoutMs;
@@ -11369,8 +11381,16 @@ var TerminalTaskStore = class {
       this.diagnostic("io", this.rootDir, error);
       return { ok: false, snapshots: [] };
     }
-    const priorIdByPath = /* @__PURE__ */ new Map();
-    for (const [id, path2] of this.metaPathById) priorIdByPath.set(path2, id);
+    let priorIdByPath;
+    const priorIdForPath = (path2) => {
+      let reverse = priorIdByPath;
+      if (!reverse) {
+        reverse = /* @__PURE__ */ new Map();
+        for (const [id, priorPath] of this.metaPathById) reverse.set(priorPath, id);
+        priorIdByPath = reverse;
+      }
+      return reverse.get(path2);
+    };
     const snapshots = [];
     const paths = /* @__PURE__ */ new Map();
     const preservedEntries = [];
@@ -11391,7 +11411,7 @@ var TerminalTaskStore = class {
       if (!pathExists2(metaPath)) continue;
       const read = this.readCandidate(metaPath);
       if (read.kind === "transient") {
-        const priorId = priorIdByPath.get(metaPath);
+        const priorId = priorIdForPath(metaPath);
         const priorEntry = priorId === void 0 ? void 0 : this.indexedById.get(priorId);
         if (priorEntry && !paths.has(priorEntry.id)) {
           preservedEntries.push(priorEntry);
@@ -11400,7 +11420,7 @@ var TerminalTaskStore = class {
         continue;
       }
       if (read.kind === "invalid") continue;
-      const reservedPath = this.metaPathById.get(read.snapshot.id);
+      const reservedPath = this.reservedPathById.get(read.snapshot.id);
       if (reservedPath !== void 0 && reservedPath !== metaPath) {
         this.diagnostic("duplicate", metaPath, `duplicate terminal id ${read.snapshot.id}`);
         continue;
@@ -11440,11 +11460,12 @@ var TerminalTaskStore = class {
     this.assertSnapshotPath(snapshot, resolvedMetaPath);
     return this.withTaskLock(resolvedMetaPath, () => {
       if (pathExists2(resolvedMetaPath)) throw new Error(`Terminal metadata already exists: ${resolvedMetaPath}`);
-      const existingPath = this.metaPathById.get(snapshot.id);
-      if (this.indexedById.has(snapshot.id) || existingPath !== void 0) {
-        throw new Error(`Terminal id ${snapshot.id} is already indexed at ${existingPath ?? "an indexed record"}`);
+      const reservedPath = this.reservedPathById.get(snapshot.id);
+      if (reservedPath !== void 0) {
+        throw new Error(`Terminal id ${snapshot.id} is already reserved at ${reservedPath}`);
       }
       atomicWriteJson(resolvedMetaPath, snapshot);
+      this.reservedPathById.set(snapshot.id, resolvedMetaPath);
       this.metaPathById.set(snapshot.id, resolvedMetaPath);
       this.replaceIndexedEntry(snapshot);
       return snapshot;
@@ -11518,6 +11539,7 @@ var TerminalTaskStore = class {
     for (const snapshot of snapshots) {
       const path2 = paths.get(snapshot.id);
       if (!path2) continue;
+      this.reservedPathById.set(snapshot.id, path2);
       this.metaPathById.set(snapshot.id, path2);
       this.indexedById.set(snapshot.id, this.compact(snapshot));
       this.ownerMembership(snapshot).add(snapshot.id);
@@ -12030,6 +12052,8 @@ var TerminalTaskManager = class {
   claimLeaseMs;
   startingRecoveryGraceMs;
   onDiagnostic;
+  onRefreshAdopt;
+  onRefreshRecover;
   tasks = /* @__PURE__ */ new Map();
   runtime = /* @__PURE__ */ new Map();
   listeners = /* @__PURE__ */ new Set();
@@ -12050,6 +12074,8 @@ var TerminalTaskManager = class {
     this.claimLeaseMs = normalizePositive(options.claimLeaseMs, DEFAULT_CLAIM_LEASE_MS);
     this.startingRecoveryGraceMs = normalizePositive(options.startingRecoveryGraceMs, DEFAULT_STARTING_RECOVERY_GRACE_MS);
     this.onDiagnostic = options.onDiagnostic;
+    this.onRefreshAdopt = options.onRefreshAdopt;
+    this.onRefreshRecover = options.onRefreshRecover;
     for (const snapshot of this.store.refreshIndex().snapshots) {
       this.adopt(snapshot, false);
       this.recover(snapshot);
@@ -12442,16 +12468,26 @@ ${command}
    * republished, and their poll timers are cleared while the separate runtime
    * child/process bookkeeping stays preserved. Ids whose metadata read failed
    * transiently keep their compact index entry and their retained full
-   * snapshot: only a genuinely quarantined id is pruned. Quarantine stays
-   * logical — durable records are preserved.
+   * snapshot: only a genuinely quarantined id is pruned. Recovery side effects
+   * (settled log cap, launch-gate release, arm, reconcile scheduling) are
+   * gated: only a record new to this projection or one whose meaningful
+   * durable identity changed — a different revision or owner — pays them
+   * again, so unchanged records are never log-capped or rescheduled per
+   * refresh, while a same-revision owner divergence still recovers. Quarantine
+   * stays logical — durable records are preserved.
    */
   refreshSnapshotsFromStore() {
     if (this.detached) return { ok: false, snapshots: this.getSnapshots() };
     const refresh = this.store.refreshIndex();
     if (!refresh.ok) return { ok: false, snapshots: this.getSnapshots() };
     for (const snapshot of refresh.snapshots) {
+      const previous = this.tasks.get(snapshot.id);
       this.adopt(snapshot, false);
-      this.recover(snapshot);
+      this.onRefreshAdopt?.(snapshot.id);
+      if (previous === void 0 || previous.revision !== snapshot.revision || previous.ownerSessionId !== snapshot.ownerSessionId) {
+        this.recover(snapshot);
+        this.onRefreshRecover?.(snapshot.id);
+      }
     }
     const refreshed = new Set(refresh.snapshots.map((snapshot) => snapshot.id));
     const preserved = refresh.preservedIds === void 0 ? void 0 : new Set(refresh.preservedIds);

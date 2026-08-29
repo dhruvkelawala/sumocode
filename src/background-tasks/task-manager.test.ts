@@ -112,6 +112,50 @@ describe("TerminalTaskManager", () => {
 		return join(dirname(task.logFile), "exit.code");
 	}
 
+	function durableTask(id: string): TerminalTaskSnapshot | undefined {
+		const store = new TerminalTaskStore({ rootDir });
+		store.refreshIndex();
+		return store.getIndexed(id);
+	}
+
+	function persistSettledTask(
+		store: TerminalTaskStore,
+		id: string,
+		ownerSessionId: string,
+		createdAt: number,
+		title = id,
+	): TerminalTaskSnapshot {
+		const directory = join(store.rootDir, `${id}-${createdAt}`);
+		mkdirSync(directory, { mode: 0o700 });
+		chmodSync(directory, 0o700);
+		const logFile = join(directory, "output.log");
+		writeFileSync(logFile, "", { mode: 0o600 });
+		chmodSync(logFile, 0o600);
+		const snapshot: TerminalTaskSnapshot = {
+			schemaVersion: TERMINAL_TASK_SCHEMA_VERSION,
+			revision: 1,
+			id,
+			ownerSessionId,
+			command: "true",
+			cwd: "/repo",
+			title,
+			status: "completed",
+			completionPolicy: "passive",
+			createdAt,
+			updatedAt: createdAt,
+			settledAt: createdAt,
+			exitCode: 0,
+			observedAt: createdAt,
+			deliveryState: "suppressed",
+			completionId: `completion-${id}`,
+			logFile,
+		};
+		const metaFile = join(directory, "meta.json");
+		writeFileSync(metaFile, `${JSON.stringify(snapshot)}\n`, { mode: 0o600 });
+		chmodSync(metaFile, 0o600);
+		return snapshot;
+	}
+
 	it("persists spawn identity before releasing a detached terminal", async () => {
 		const target = manager();
 		const task = await start(target);
@@ -130,7 +174,7 @@ describe("TerminalTaskManager", () => {
 		});
 		expect(children[0]?.unref).toHaveBeenCalledOnce();
 		expect(existsSync(join(dirname(task.logFile), "launch.ready"))).toBe(true);
-		expect(new TerminalTaskStore({ rootDir }).loadAll()[0]).toEqual(task);
+		expect(new TerminalTaskStore({ rootDir }).refreshIndex()[0]).toEqual(task);
 	});
 
 	it("does not cap terminal execution to the feed presentation budget", async () => {
@@ -150,6 +194,76 @@ describe("TerminalTaskManager", () => {
 		expect(() => { titleHolder.title = "mutated"; }).toThrow();
 		expect(target.getSnapshots()[0]?.title).toBe("tests");
 		unsubscribe();
+	});
+
+	it("builds one index and joins 1500 retained owner snapshots without further metadata reads", () => {
+		const reads = { scans: 0, metadata: 0 };
+		const store = new TerminalTaskStore({
+			rootDir,
+			onRead: (kind) => { reads[kind === "full-scan" ? "scans" : "metadata"] += 1; },
+		});
+		for (let index = 0; index < 1_500; index += 1) {
+			persistSettledTask(store, `term-retained-${index}`, "session-indexed", 1_000 + index);
+		}
+
+		const target = manager({ store });
+		expect(reads).toEqual({ scans: 1, metadata: 1_500 });
+		reads.scans = 0;
+		reads.metadata = 0;
+
+		expect(target.list("session-indexed")).toHaveLength(1_500);
+		expect(target.claimPending("session-indexed", true)).toEqual([]);
+		expect(target.acknowledge("session-indexed", [])).toEqual([]);
+		expect(target.getClaimRetryDelay("session-indexed")).toBeUndefined();
+		expect(target.get("term-retained-1499", "session-indexed")?.id).toBe("term-retained-1499");
+		expect(target.get("term-missing", "session-indexed")).toBeUndefined();
+		expect(reads).toEqual({ scans: 0, metadata: 0 });
+	}, 20_000);
+
+	it("rereads only a selected delivery record for each mutation", async () => {
+		const reads = { scans: 0, metadata: 0 };
+		const store = new TerminalTaskStore({
+			rootDir,
+			onRead: (kind) => { reads[kind === "full-scan" ? "scans" : "metadata"] += 1; },
+		});
+		const target = manager({ store });
+		const task = await start(target);
+		writeFileSync(exitFile(task), "0");
+		children[0]?.emit("close", 0);
+		await vi.waitFor(() => expect(target.get(task.id, "session-a")?.deliveryState).toBe("pending"));
+		reads.scans = 0;
+		reads.metadata = 0;
+
+		const claimed = target.claimPending("session-a", true);
+		expect(claimed).toHaveLength(1);
+		expect(reads).toEqual({ scans: 0, metadata: 1 });
+		reads.metadata = 0;
+		expect(target.getClaimRetryDelay("session-a")).toBe(30);
+		expect(reads.metadata).toBe(0);
+
+		const receipt = [{ completionId: claimed[0]!.completionId!, claimToken: claimed[0]!.deliveryClaimToken! }];
+		expect(target.acknowledge("session-a", receipt)).toHaveLength(1);
+		expect(reads).toEqual({ scans: 0, metadata: 1 });
+	});
+
+	it("adopts an external higher revision only at the explicit refresh boundary", () => {
+		const reads = { scans: 0, metadata: 0 };
+		const indexedStore = new TerminalTaskStore({
+			rootDir,
+			onRead: (kind) => { reads[kind === "full-scan" ? "scans" : "metadata"] += 1; },
+		});
+		const initial = persistSettledTask(indexedStore, "term-external", "session-a", 1_000, "before");
+		const target = manager({ store: indexedStore });
+		expect(reads.scans).toBe(1);
+
+		const external = new TerminalTaskStore({ rootDir });
+		external.refreshIndex();
+		external.transition(initial.id, 1, (current) => ({ ...current, title: "after", updatedAt: 2_000 }));
+		expect(target.get(initial.id, "session-a")).toMatchObject({ revision: 1, title: "before" });
+
+		target.refreshSnapshotsFromStore();
+		expect(reads.scans).toBe(2);
+		expect(target.get(initial.id, "session-a")).toMatchObject({ revision: 2, title: "after" });
 	});
 
 	it("terminates the new process tree when spawn identity persistence fails", async () => {
@@ -224,7 +338,7 @@ describe("TerminalTaskManager", () => {
 		const originalSubscribe = target.addChangeListener.bind(target);
 		vi.spyOn(target, "addChangeListener").mockImplementation((listener) => {
 			const store = new TerminalTaskStore({ rootDir });
-			const current = store.loadAll().find((entry) => entry.id === task.id)!;
+			const current = store.refreshIndex().find((entry) => entry.id === task.id)!;
 			store.transition(task.id, current.revision, (entry) => ({
 				...entry,
 				status: "completed",
@@ -332,7 +446,7 @@ describe("TerminalTaskManager", () => {
 		target.detach();
 
 		expect(result[0]).toMatchObject({ outcome: "failed", task: { status: "stopping" } });
-		expect(new TerminalTaskStore({ rootDir }).get(task.id)).toMatchObject({
+		expect(durableTask(task.id)).toMatchObject({
 			status: "stopping",
 			processTreeVerification: { members: expect.any(Array) },
 		});
@@ -409,7 +523,7 @@ describe("TerminalTaskManager", () => {
 			"SIGKILL",
 			retained,
 		);
-		expect(new TerminalTaskStore({ rootDir }).get(task.id)?.processTreeVerification).toEqual(retained);
+		expect(durableTask(task.id)?.processTreeVerification).toEqual(retained);
 	});
 
 	it("stopOwned uses the same identity refusal and never signals an unrelated group", async () => {
@@ -428,12 +542,12 @@ describe("TerminalTaskManager", () => {
 		const target = manager();
 		const own = await start(target, "session-a");
 		await start(target, "session-b");
-		const before = new TerminalTaskStore({ rootDir }).loadAll().find((task) => task.id === own.id)!;
+		const before = new TerminalTaskStore({ rootDir }).refreshIndex().find((task) => task.id === own.id)!;
 
 		expect(target.list("session-a").map((task) => task.id)).toEqual([own.id]);
 		expect(target.check(own.id, "session-b")).toBeUndefined();
 		expect((await target.stop([own.id], "session-b"))[0]?.outcome).toBe("unknown");
-		const after = new TerminalTaskStore({ rootDir }).loadAll().find((task) => task.id === own.id)!;
+		const after = new TerminalTaskStore({ rootDir }).refreshIndex().find((task) => task.id === own.id)!;
 		expect(after).toEqual(before);
 	});
 
@@ -472,7 +586,7 @@ describe("TerminalTaskManager", () => {
 		const target = manager();
 		const task = await start(target);
 
-		await vi.waitFor(() => expect(new TerminalTaskStore({ rootDir }).get(task.id)?.processTreeVerification).toEqual({
+		await vi.waitFor(() => expect(durableTask(task.id)?.processTreeVerification).toEqual({
 			members: [{ pid: task.pid! + 1, processStartTime: `child-${task.pid! + 1}` }],
 		}));
 		const captures = vi.mocked(tree.operations.captureTreeVerification!).mock.calls.length;
@@ -496,7 +610,8 @@ describe("TerminalTaskManager", () => {
 		const task = await start(first);
 		const verification = { members: [{ pid: task.pid!, processStartTime: task.processStartTime! }] };
 		const store = new TerminalTaskStore({ rootDir });
-		const current = store.get(task.id)!;
+		store.refreshIndex();
+		const current = store.getIndexed(task.id)!;
 		store.transition(task.id, current.revision, (entry) => ({
 			...entry,
 			updatedAt: 2_000,
@@ -525,7 +640,7 @@ describe("TerminalTaskManager", () => {
 		const first = manager();
 		const task = await start(first);
 		const store = new TerminalTaskStore({ rootDir });
-		const current = store.loadAll().find((entry) => entry.id === task.id)!;
+		const current = store.refreshIndex().find((entry) => entry.id === task.id)!;
 		store.transition(task.id, current.revision, (entry) => ({ ...entry, status: "stopping", updatedAt: 2_000 }));
 		first.detach();
 
@@ -559,7 +674,7 @@ describe("TerminalTaskManager", () => {
 		const task = await start(first);
 		void first.stop([task.id], "session-a");
 		await vi.waitFor(() => expect(firstTermSent).toBe(true));
-		const durableStopping = new TerminalTaskStore({ rootDir }).get(task.id)!;
+		const durableStopping = durableTask(task.id)!;
 		expect(durableStopping).toMatchObject({ status: "stopping", processTreeVerification: verification });
 		first.detach();
 
@@ -594,7 +709,7 @@ describe("TerminalTaskManager", () => {
 		const first = manager();
 		const task = await start(first);
 		const store = new TerminalTaskStore({ rootDir });
-		const current = store.loadAll().find((entry) => entry.id === task.id)!;
+		const current = store.refreshIndex().find((entry) => entry.id === task.id)!;
 		store.transition(task.id, current.revision, (entry) => ({ ...entry, status: "stopping", updatedAt: 2_000 }));
 		first.detach();
 		tree.empty.set(task.processGroupId!, true);
@@ -609,7 +724,7 @@ describe("TerminalTaskManager", () => {
 		const first = manager();
 		const task = await start(first);
 		const store = new TerminalTaskStore({ rootDir });
-		const current = store.loadAll().find((entry) => entry.id === task.id)!;
+		const current = store.refreshIndex().find((entry) => entry.id === task.id)!;
 		store.transition(task.id, current.revision, (entry) => ({ ...entry, status: "stopping", updatedAt: 2_000 }));
 		first.detach();
 		tree.operations.identityMatches = vi.fn((): "different" => "different");
@@ -670,7 +785,7 @@ describe("TerminalTaskManager", () => {
 
 		const claims = [first.claimPending("session-a", true), second.claimPending("session-a", true)];
 		expect(claims.map((entries) => entries.length).sort()).toEqual([0, 1]);
-		expect(new TerminalTaskStore({ rootDir }).loadAll()[0]?.deliveryState).toBe("claimed");
+		expect(new TerminalTaskStore({ rootDir }).refreshIndex()[0]?.deliveryState).toBe("claimed");
 	});
 
 	it("settles safely with competing recovery pollers and no unhandled rejection", async () => {
@@ -686,7 +801,7 @@ describe("TerminalTaskManager", () => {
 			await vi.waitFor(() => expect(second.get(task.id, "session-a")?.status).toBe("completed"));
 			await new Promise((resolve) => setTimeout(resolve, 25));
 			expect(unhandled).toEqual([]);
-			expect(new TerminalTaskStore({ rootDir }).loadAll()[0]).toMatchObject({
+			expect(new TerminalTaskStore({ rootDir }).refreshIndex()[0]).toMatchObject({
 				status: "completed",
 				revision: 4,
 				processTreeVerification: { members: expect.any(Array) },

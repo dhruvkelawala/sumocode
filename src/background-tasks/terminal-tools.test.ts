@@ -234,6 +234,16 @@ describe("installTerminalTools", () => {
 		expect(harness.manager.getClaimRetryDelay).not.toHaveBeenCalled();
 	});
 
+	it("performs one startup reconciliation over the retained projection", async () => {
+		const harness = createHarness();
+
+		await harness.fire("session_start");
+
+		expect(harness.manager.acknowledge).toHaveBeenCalledOnce();
+		expect(harness.manager.claimPending).toHaveBeenCalledOnce();
+		expect(harness.manager.getClaimRetryDelay).toHaveBeenCalledOnce();
+	});
+
 	it("does not arm lease retries when no completion was claimed", async () => {
 		const harness = createHarness();
 		const timeout = vi.spyOn(globalThis, "setTimeout");

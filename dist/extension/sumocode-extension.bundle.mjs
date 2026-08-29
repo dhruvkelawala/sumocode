@@ -11319,7 +11319,10 @@ function processProvesOwnerGone(owner) {
 var TerminalTaskStore = class {
   rootDir;
   metaPathById = /* @__PURE__ */ new Map();
+  indexedById = /* @__PURE__ */ new Map();
+  indexedIdsByOwner = /* @__PURE__ */ new Map();
   onDiagnostic;
+  onRead;
   lockTimeoutMs;
   lockPollMs;
   processStartTime;
@@ -11341,21 +11344,25 @@ var TerminalTaskStore = class {
     this.rootDir = realpathSync2(requestedRoot);
     assertPrivateDirectory(this.rootDir);
     this.onDiagnostic = options.onDiagnostic;
+    this.onRead = options.onRead;
     this.lockTimeoutMs = Math.max(1, options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS);
     this.lockPollMs = Math.max(1, options.lockPollMs ?? DEFAULT_LOCK_POLL_MS);
     this.processStartTime = captureProcessStartTime(process.pid);
     this.beforeAbandonedLockRename = options.beforeAbandonedLockRename;
   }
-  loadAll() {
-    this.metaPathById.clear();
+  /** Rebuild every derived path/selection bucket from one validated disk pass. */
+  refreshIndex() {
+    this.onRead?.("full-scan");
     let entries;
     try {
       entries = readdirSync(this.rootDir, { withFileTypes: true });
     } catch (error) {
       this.diagnostic("io", this.rootDir, error);
+      this.replaceIndex([], /* @__PURE__ */ new Map());
       return [];
     }
     const snapshots = [];
+    const paths = /* @__PURE__ */ new Map();
     for (const entry of entries) {
       const taskDirectory = join12(this.rootDir, entry.name);
       if (entry.isSymbolicLink()) {
@@ -11373,17 +11380,21 @@ var TerminalTaskStore = class {
       if (!pathExists2(metaPath)) continue;
       const snapshot = this.readCandidate(metaPath);
       if (!snapshot) continue;
-      if (this.metaPathById.has(snapshot.id)) {
+      if (paths.has(snapshot.id)) {
         this.diagnostic("duplicate", metaPath, `duplicate terminal id ${snapshot.id}`);
         continue;
       }
-      this.metaPathById.set(snapshot.id, metaPath);
+      paths.set(snapshot.id, metaPath);
       snapshots.push(snapshot);
     }
+    this.replaceIndex(snapshots, paths);
     return snapshots;
   }
-  listOwned(ownerSessionId2) {
-    return this.loadAll().filter((task) => task.ownerSessionId === ownerSessionId2).sort((left, right) => right.createdAt - left.createdAt);
+  listOwnedIndexed(ownerSessionId2) {
+    return (this.indexedIdsByOwner.get(ownerSessionId2) ?? []).flatMap((id) => {
+      const indexed = this.indexedById.get(id);
+      return indexed ? [indexed] : [];
+    });
   }
   create(snapshot, metaPath) {
     if (snapshot.schemaVersion !== TERMINAL_TASK_SCHEMA_VERSION || snapshot.revision !== 1) {
@@ -11395,21 +11406,15 @@ var TerminalTaskStore = class {
       if (pathExists2(resolvedMetaPath)) throw new Error(`Terminal metadata already exists: ${resolvedMetaPath}`);
       atomicWriteJson(resolvedMetaPath, snapshot);
       this.metaPathById.set(snapshot.id, resolvedMetaPath);
+      this.replaceIndexedEntry(snapshot);
       return snapshot;
     });
   }
-  get(id) {
-    let path2 = this.metaPathById.get(id);
-    if (!path2) {
-      this.loadAll();
-      path2 = this.metaPathById.get(id);
-    }
+  /** Read one known indexed record without falling back to a directory scan. */
+  getIndexed(id) {
+    const path2 = this.metaPathById.get(id);
     if (!path2) return void 0;
     return this.readCurrent(path2);
-  }
-  getOwned(id, ownerSessionId2) {
-    const snapshot = this.get(id);
-    return snapshot?.ownerSessionId === ownerSessionId2 ? snapshot : void 0;
   }
   /** Verify a direct child directory before creating or opening task artifacts. */
   assertTaskDirectory(path2) {
@@ -11434,11 +11439,7 @@ var TerminalTaskStore = class {
     return openPrivateExistingFile(resolvedPath, flags);
   }
   transition(id, expectedRevision, update) {
-    let path2 = this.metaPathById.get(id);
-    if (!path2) {
-      this.loadAll();
-      path2 = this.metaPathById.get(id);
-    }
+    const path2 = this.metaPathById.get(id);
     if (!path2) throw new Error(`Unknown terminal task ${id}`);
     return this.withTaskLock(path2, () => {
       const current = this.readCurrent(path2);
@@ -11452,8 +11453,50 @@ var TerminalTaskStore = class {
       }
       this.assertSnapshotPath(next, path2);
       atomicWriteJson(path2, next);
+      this.replaceIndexedEntry(next);
       return next;
     });
+  }
+  replaceIndex(snapshots, paths) {
+    this.metaPathById.clear();
+    this.indexedById.clear();
+    this.indexedIdsByOwner.clear();
+    const idsByOwner = /* @__PURE__ */ new Map();
+    for (const snapshot of snapshots) {
+      const path2 = paths.get(snapshot.id);
+      if (!path2) continue;
+      this.metaPathById.set(snapshot.id, path2);
+      this.indexedById.set(snapshot.id, this.compact(snapshot));
+      const owned = idsByOwner.get(snapshot.ownerSessionId) ?? [];
+      owned.push(snapshot.id);
+      idsByOwner.set(snapshot.ownerSessionId, owned);
+    }
+    for (const [owner, ids] of idsByOwner) {
+      ids.sort((left, right) => (this.indexedById.get(right)?.createdAt ?? 0) - (this.indexedById.get(left)?.createdAt ?? 0));
+      this.indexedIdsByOwner.set(owner, Object.freeze(ids));
+    }
+  }
+  replaceIndexedEntry(snapshot) {
+    this.indexedById.set(snapshot.id, this.compact(snapshot));
+    const currentIds = this.indexedIdsByOwner.get(snapshot.ownerSessionId) ?? [];
+    if (currentIds.includes(snapshot.id)) return;
+    const nextIds = [...currentIds, snapshot.id].sort((left, right) => (this.indexedById.get(right)?.createdAt ?? 0) - (this.indexedById.get(left)?.createdAt ?? 0));
+    this.indexedIdsByOwner.set(snapshot.ownerSessionId, Object.freeze(nextIds));
+  }
+  compact(snapshot) {
+    const indexed = {
+      id: snapshot.id,
+      ownerSessionId: snapshot.ownerSessionId,
+      revision: snapshot.revision,
+      status: snapshot.status,
+      completionPolicy: snapshot.completionPolicy,
+      createdAt: snapshot.createdAt,
+      updatedAt: snapshot.updatedAt,
+      deliveryState: snapshot.deliveryState
+    };
+    if (snapshot.completionId !== void 0) indexed.completionId = snapshot.completionId;
+    if (snapshot.deliveryClaimToken !== void 0) indexed.deliveryClaimToken = snapshot.deliveryClaimToken;
+    return Object.freeze(indexed);
   }
   assertStoreMetaPath(path2) {
     const resolvedPath = resolve4(path2);
@@ -11483,6 +11526,7 @@ var TerminalTaskStore = class {
   readCandidate(path2) {
     let value;
     try {
+      this.onRead?.("metadata");
       value = JSON.parse(readFileNoFollow(path2));
     } catch (error) {
       this.diagnostic("corrupt", path2, error);
@@ -11900,6 +11944,7 @@ var TerminalTaskManager = class {
   startingRecoveryGraceMs;
   onDiagnostic;
   tasks = /* @__PURE__ */ new Map();
+  taskIdsByOwner = /* @__PURE__ */ new Map();
   runtime = /* @__PURE__ */ new Map();
   listeners = /* @__PURE__ */ new Set();
   snapshotListeners = /* @__PURE__ */ new Set();
@@ -11919,7 +11964,7 @@ var TerminalTaskManager = class {
     this.claimLeaseMs = normalizePositive(options.claimLeaseMs, DEFAULT_CLAIM_LEASE_MS);
     this.startingRecoveryGraceMs = normalizePositive(options.startingRecoveryGraceMs, DEFAULT_STARTING_RECOVERY_GRACE_MS);
     this.onDiagnostic = options.onDiagnostic;
-    for (const snapshot of this.store.loadAll()) {
+    for (const snapshot of this.store.refreshIndex()) {
       this.adopt(snapshot, false);
       this.recover(snapshot);
     }
@@ -12048,14 +12093,18 @@ ${command}
     this.arm(id);
     return running.snapshot;
   }
-  /** Pure inventory read: no recovery, delivery reconciliation, observation, or listener notification. */
+  /** Pure inventory read joined from the retained manager projection. */
   list(ownerSessionId2) {
-    return this.store.listOwned(ownerSessionId2);
+    return [...this.taskIdsByOwner.get(ownerSessionId2) ?? []].flatMap((id) => {
+      const task = this.tasks.get(id);
+      return task ? [task] : [];
+    }).sort((left, right) => right.createdAt - left.createdAt);
   }
   get(id, ownerSessionId2) {
-    const task = this.store.getOwned(id, ownerSessionId2);
-    if (!task) return void 0;
-    this.adopt(task, false);
+    const retained = this.tasks.get(id);
+    const task = retained ?? this.store.getIndexed(id);
+    if (!task || task.ownerSessionId !== ownerSessionId2) return void 0;
+    if (!retained) this.adopt(task, false);
     if (!isTerminalTaskSettled(task.status)) this.arm(id);
     return task;
   }
@@ -12235,13 +12284,15 @@ ${command}
   claimPending(ownerSessionId2, includeWake, maxWake = 1) {
     const claimed = [];
     let claimedWake = 0;
-    for (const candidate of this.store.listOwned(ownerSessionId2)) {
+    for (const candidate of this.store.listOwnedIndexed(ownerSessionId2)) {
       if (!isTerminalTaskSettled(candidate.status)) continue;
+      const expiredClaim = candidate.deliveryState === "claimed" && this.now() - candidate.updatedAt >= this.claimLeaseMs;
+      if (candidate.deliveryState !== "pending" && !expiredClaim) continue;
       if (candidate.completionPolicy === "wake" && (!includeWake || claimedWake >= maxWake)) continue;
       const result = this.mutate(candidate.id, (current) => {
         if (current.ownerSessionId !== ownerSessionId2 || !isTerminalTaskSettled(current.status)) return void 0;
-        const expiredClaim = current.deliveryState === "claimed" && this.now() - current.updatedAt >= this.claimLeaseMs;
-        if (current.deliveryState !== "pending" && !expiredClaim) return void 0;
+        const expiredClaim2 = current.deliveryState === "claimed" && this.now() - current.updatedAt >= this.claimLeaseMs;
+        if (current.deliveryState !== "pending" && !expiredClaim2) return void 0;
         if (current.completionPolicy === "wake" && (!includeWake || claimedWake >= maxWake)) return void 0;
         return {
           ...current,
@@ -12259,7 +12310,7 @@ ${command}
   acknowledge(ownerSessionId2, receipts) {
     const receiptKeys = new Set(receipts.map(({ completionId, claimToken }) => `${completionId}\0${claimToken}`));
     const acknowledged = [];
-    for (const candidate of this.store.listOwned(ownerSessionId2)) {
+    for (const candidate of this.store.listOwnedIndexed(ownerSessionId2)) {
       if (!candidate.completionId || !candidate.deliveryClaimToken || !receiptKeys.has(`${candidate.completionId}\0${candidate.deliveryClaimToken}`)) continue;
       const result = this.mutate(candidate.id, (current) => {
         if (current.ownerSessionId !== ownerSessionId2 || current.deliveryState !== "claimed" || !current.completionId || !current.deliveryClaimToken || !receiptKeys.has(`${current.completionId}\0${current.deliveryClaimToken}`)) return void 0;
@@ -12270,7 +12321,7 @@ ${command}
     return acknowledged;
   }
   getClaimRetryDelay(ownerSessionId2) {
-    const delays = this.store.listOwned(ownerSessionId2).filter((task) => task.deliveryState === "claimed").map((task) => Math.max(0, this.claimLeaseMs - (this.now() - task.updatedAt)));
+    const delays = this.store.listOwnedIndexed(ownerSessionId2).filter((task) => task.deliveryState === "claimed").map((task) => Math.max(0, this.claimLeaseMs - (this.now() - task.updatedAt)));
     return delays.length > 0 ? Math.min(...delays) : void 0;
   }
   addChangeListener(listener) {
@@ -12290,7 +12341,7 @@ ${command}
    */
   refreshSnapshotsFromStore() {
     if (this.detached) return this.getSnapshots();
-    for (const snapshot of this.store.loadAll()) {
+    for (const snapshot of this.store.refreshIndex()) {
       const previous = this.tasks.get(snapshot.id);
       if (previous?.revision === snapshot.revision) continue;
       this.adopt(snapshot, false);
@@ -12324,7 +12375,7 @@ ${command}
     return this.getOutputTailBytes(task, maxBytes).bytes;
   }
   async stopOwned(ownerSessionId2) {
-    const running = this.store.listOwned(ownerSessionId2).filter((task) => !isTerminalTaskSettled(task.status));
+    const running = this.list(ownerSessionId2).filter((task) => !isTerminalTaskSettled(task.status));
     return this.stop(running.map((task) => task.id), ownerSessionId2);
   }
   detach() {
@@ -12370,7 +12421,7 @@ ${command}
   }
   arm(id) {
     if (this.detached) return;
-    const task = this.tasks.get(id) ?? this.store.get(id);
+    const task = this.tasks.get(id) ?? this.store.getIndexed(id);
     if (!task || isTerminalTaskSettled(task.status)) return;
     const runtime = this.ensureRuntime(task);
     if (runtime.pollTimer) return;
@@ -12379,7 +12430,7 @@ ${command}
   }
   scheduleReconcile(id) {
     if (this.detached) return;
-    const task = this.tasks.get(id) ?? this.store.get(id);
+    const task = this.tasks.get(id) ?? this.store.getIndexed(id);
     if (!task) return;
     const runtime = this.ensureRuntime(task);
     if (runtime.reconcilePromise) return;
@@ -12389,7 +12440,7 @@ ${command}
   }
   async reconcile(id) {
     if (this.detached) return;
-    const current = this.store.get(id);
+    const current = this.store.getIndexed(id);
     if (!current) return;
     this.adopt(current, true);
     if (isTerminalTaskSettled(current.status)) {
@@ -12427,10 +12478,10 @@ ${command}
       return;
     }
     const identityStatus = this.processTree.identityMatches(identity);
-    if (identityStatus === "different" && this.store.get(id)?.status === "running") this.settleLost(id, null, false);
+    if (identityStatus === "different" && this.store.getIndexed(id)?.status === "running") this.settleLost(id, null, false);
   }
   async finishNaturalCompletion(id, identity, exitCode) {
-    let current = this.store.get(id);
+    let current = this.store.getIndexed(id);
     if (current?.status !== "running") return;
     if (this.processTree.isTreeEmpty(identity, current.processTreeVerification)) {
       this.settleNatural(id, exitCode);
@@ -12465,7 +12516,7 @@ ${command}
     const killed = await this.safeVerifiedSignal(identity, "SIGKILL", verification);
     const gone = killed.gone || killed.ok && await this.processTree.waitForTreeEmpty(identity, this.killGraceMs, verification);
     if (killed.ok && gone) {
-      if (this.store.get(id)?.status === "running") this.settleNatural(id, exitCode);
+      if (this.store.getIndexed(id)?.status === "running") this.settleNatural(id, exitCode);
       return;
     }
     if (killed.identityStatus === "different" && this.processTree.isTreeEmpty(identity, verification)) {
@@ -12475,7 +12526,7 @@ ${command}
     this.diagnostic(id, `natural completion tree disposition unproven; refusing settlement: ${killed.error ?? "tree did not become empty"}`);
   }
   async recoverStopping(id, identity) {
-    const current = this.store.get(id);
+    const current = this.store.getIndexed(id);
     if (this.processTree.isTreeEmpty(identity, current?.processTreeVerification)) {
       this.settleDisposedStop(id);
       return;
@@ -12593,7 +12644,7 @@ ${command}
     };
   }
   settleDisposedStop(id) {
-    const current = this.store.get(id);
+    const current = this.store.getIndexed(id);
     if (!current) return { id, outcome: "failed", message: `Failed to settle terminal ${id}: durable record unavailable.` };
     const exitCode = readExitCode(this.store, taskPaths(this.store, current.id, current.createdAt).exitFile);
     if (exitCode !== void 0) {
@@ -12628,28 +12679,28 @@ ${command}
     return this.settleDisposedStop(id);
   }
   handleStopSignalFailure(id, signal, restoreOnFailure, suppressOnSettlement = restoreOnFailure) {
-    const current = this.store.get(id);
+    const current = this.store.getIndexed(id);
     const identity = current ? identityOf(current) : void 0;
     if (identity && this.processTree.isTreeEmpty(identity, current?.processTreeVerification)) {
       return this.settleDisposedStop(id);
     }
     if (signal.identityStatus === "different") {
       this.settleLost(id, null, false);
-      const lost = suppressOnSettlement ? this.observe(id, false) : this.store.get(id);
+      const lost = suppressOnSettlement ? this.observe(id, false) : this.store.getIndexed(id);
       return { id, outcome: "failed", task: lost, message: `Terminal ${id} process identity changed; recorded lost without signalling.` };
     }
     const reason = signal.identityStatus === "unknown" ? "process identity could not be verified; refusing to signal" : signal.error ?? "process-tree signal failed";
     return this.failedStop(id, reason, restoreOnFailure);
   }
   failedStop(id, reason, restore) {
-    const result = restore ? this.mutate(id, (task) => task.status === "stopping" ? { ...task, status: "running", updatedAt: this.timestamp(task) } : void 0).snapshot : this.store.get(id);
+    const result = restore ? this.mutate(id, (task) => task.status === "stopping" ? { ...task, status: "running", updatedAt: this.timestamp(task) } : void 0).snapshot : this.store.getIndexed(id);
     if (result && !isTerminalTaskSettled(result.status)) this.arm(id);
     if (!restore) this.diagnostic(id, `persisted stop remains pending: ${reason}`);
     return { id, outcome: "failed", task: result, message: `Failed to stop terminal ${id}: ${reason}.` };
   }
   failUnlaunched(id, cause) {
     this.settleFailedLaunch(id);
-    const current = this.store.get(id);
+    const current = this.store.getIndexed(id);
     if (current) appendPrivateFile(this.store, current.logFile, `
 [spawn error] ${cause instanceof Error ? cause.message : String(cause)}
 `);
@@ -12675,7 +12726,7 @@ ${command}
   }
   async handleChildError(id, error) {
     if (this.detached) return;
-    const current = this.store.get(id);
+    const current = this.store.getIndexed(id);
     if (!current || isTerminalTaskSettled(current.status)) return;
     this.adopt(current, false);
     const identity = identityOf(current);
@@ -12698,7 +12749,7 @@ ${command}
     this.failUnlaunched(id, error);
   }
   mutate(id, update) {
-    let latest = this.store.get(id);
+    let latest = this.tasks.get(id) ?? this.store.getIndexed(id);
     if (!latest) throw new Error(`Unknown terminal task ${id}`);
     for (let attempt = 0; attempt < MAX_TRANSITION_RETRIES; attempt += 1) {
       this.adopt(latest, false);
@@ -12710,19 +12761,22 @@ ${command}
         return { snapshot: transitioned, changed: true };
       } catch (error) {
         if (!(error instanceof StaleTerminalTaskRevisionError)) throw error;
-        const reloaded = this.store.get(id);
+        const reloaded = this.store.getIndexed(id);
         if (!reloaded) throw new Error(`Terminal task ${id} disappeared during transition`);
         latest = reloaded;
       }
     }
     this.diagnostic(id, "abandoned transition after repeated stale revisions");
-    const current = this.store.get(id) ?? latest;
+    const current = this.store.getIndexed(id) ?? latest;
     this.adopt(current, false);
     return { snapshot: current, changed: false };
   }
   adopt(snapshot, notify7) {
     const previous = this.tasks.get(snapshot.id);
     this.tasks.set(snapshot.id, snapshot);
+    const owned = this.taskIdsByOwner.get(snapshot.ownerSessionId) ?? /* @__PURE__ */ new Set();
+    owned.add(snapshot.id);
+    this.taskIdsByOwner.set(snapshot.ownerSessionId, owned);
     this.ensureRuntime(snapshot);
     if (!notify7 || previous?.revision === snapshot.revision) return;
     for (const listener of this.listeners) {
@@ -12973,7 +13027,6 @@ var TerminalDeliveryCoordinator = class {
   flushing = false;
   bind(ctx) {
     this.active = { ownerSessionId: sessionId(ctx), ctx };
-    this.safeReconcile(ctx);
     this.requestFlush();
   }
   touch(ctx) {
@@ -12997,12 +13050,15 @@ var TerminalDeliveryCoordinator = class {
   }
   reconcile(ctx) {
     const ownerSessionId2 = sessionId(ctx);
-    this.manager.acknowledge(ownerSessionId2, completionsFromContext(ctx).receipts);
+    this.acknowledgeObservable(ctx, ownerSessionId2);
     const retryDelay = this.manager.getClaimRetryDelay(ownerSessionId2);
     if (retryDelay === void 0 && this.retryTimer) {
       clearTimeout(this.retryTimer);
       this.retryTimer = void 0;
     }
+  }
+  acknowledgeObservable(ctx, ownerSessionId2) {
+    this.manager.acknowledge(ownerSessionId2, completionsFromContext(ctx).receipts);
   }
   safeReconcile(ctx) {
     try {
@@ -13028,7 +13084,8 @@ var TerminalDeliveryCoordinator = class {
     if (!active || this.flushing || !active.ctx.isIdle()) return;
     this.flushing = true;
     try {
-      this.reconcile(active.ctx);
+      this.acknowledgeObservable(active.ctx, active.ownerSessionId);
+      let sentMessage = false;
       const claimed = this.manager.claimPending(active.ownerSessionId, true, 1).sort((left, right) => Number(left.completionPolicy === "wake") - Number(right.completionPolicy === "wake"));
       for (const task of claimed) {
         const current = this.manager.get(task.id, active.ownerSessionId);
@@ -13051,12 +13108,15 @@ var TerminalDeliveryCoordinator = class {
           },
           { deliverAs: "followUp", triggerTurn: current.completionPolicy === "wake" }
         );
+        sentMessage = true;
         if (current.completionPolicy === "wake") break;
       }
-      queueMicrotask(() => {
-        if (this.active?.ownerSessionId !== active.ownerSessionId) return;
-        this.safeReconcile(this.active.ctx);
-      });
+      if (sentMessage) {
+        queueMicrotask(() => {
+          if (this.active?.ownerSessionId !== active.ownerSessionId) return;
+          this.safeReconcile(this.active.ctx);
+        });
+      }
       const retryDelay = this.manager.getClaimRetryDelay(active.ownerSessionId);
       if (retryDelay !== void 0) this.scheduleLeaseRetry(retryDelay);
     } finally {
@@ -14142,6 +14202,7 @@ var ActivityManagerBridge = class {
   writerVerifiable;
   bridgeToken = randomUUID5();
   claimedOwners = /* @__PURE__ */ new Set();
+  provenTakeoverOwners = /* @__PURE__ */ new Set();
   publishers = /* @__PURE__ */ new Map();
   terminalSnapshots = [];
   terminalOutputCache = /* @__PURE__ */ new Map();
@@ -14168,14 +14229,21 @@ var ActivityManagerBridge = class {
       processStartTime
     } : void 0);
     this.writerVerifiable = writerIdentity !== void 0 || options.publisherFactory !== void 0;
+    const inspectWriter = options.inspectWriter ?? inspectProcessWriter;
     const publisherOptions = {
       rootDir: options.rootDir,
       now: this.now,
       onDiagnostic: options.onDiagnostic,
-      writerIdentity,
-      inspectWriter: options.inspectWriter ?? inspectProcessWriter
+      writerIdentity
     };
-    this.publisherFactory = options.publisherFactory ?? ((owner) => new ActivityFeedPublisher(owner, publisherOptions));
+    this.publisherFactory = options.publisherFactory ?? ((owner) => new ActivityFeedPublisher(owner, {
+      ...publisherOptions,
+      inspectWriter: (writer) => {
+        const state = inspectWriter(writer);
+        if (state === "dead") this.provenTakeoverOwners.add(owner);
+        return state;
+      }
+    }));
     if (!writerIdentity && !options.publisherFactory) {
       this.diagnostic({ kind: "io", path: "activity-writer", message: "current process start identity is not verifiable; feed publication disabled" });
     }
@@ -14245,11 +14313,14 @@ var ActivityManagerBridge = class {
       if (!this.sessionOwnership.claim(owner, this.bridgeToken)) continue;
       const publisher = this.publisher(owner);
       if (publisher.hasWriterOwnership) {
-        try {
-          const refreshed = this.terminalManager.refreshSnapshotsFromStore?.();
-          if (refreshed) this.adoptTerminalSnapshots(refreshed);
-        } catch (error) {
-          this.diagnostic({ kind: "io", path: owner, message: `terminal takeover refresh failed: ${error instanceof Error ? error.message : String(error)}` });
+        const refreshForTakeover = this.provenTakeoverOwners.delete(owner) || publisher.canReconcileAbandonedActivities;
+        if (refreshForTakeover) {
+          try {
+            const refreshed = this.terminalManager.refreshSnapshotsFromStore?.();
+            if (refreshed) this.adoptTerminalSnapshots(refreshed);
+          } catch (error) {
+            this.diagnostic({ kind: "io", path: owner, message: `terminal takeover refresh failed: ${error instanceof Error ? error.message : String(error)}` });
+          }
         }
         this.claimedOwners.add(owner);
       } else {

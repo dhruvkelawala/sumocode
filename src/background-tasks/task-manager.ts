@@ -363,6 +363,7 @@ export class TerminalTaskManager {
 	private readonly startingRecoveryGraceMs: number;
 	private readonly onDiagnostic?: TerminalTaskManagerOptions["onDiagnostic"];
 	private readonly tasks = new Map<string, TerminalTaskSnapshot>();
+	private readonly taskIdsByOwner = new Map<string, Set<string>>();
 	private readonly runtime = new Map<string, RuntimeTask>();
 	private readonly listeners = new Set<TerminalTaskChangeListener>();
 	private readonly snapshotListeners = new Set<TerminalTaskSnapshotListener>();
@@ -387,7 +388,7 @@ export class TerminalTaskManager {
 		// deletion/cleanup without human approval. Do not revive the legacy
 		// recovery-time artifact pruning here: retention/GC needs its own approved
 		// policy that cannot erase pending, claimed, or still-queryable results.
-		for (const snapshot of this.store.loadAll()) {
+		for (const snapshot of this.store.refreshIndex()) {
 			this.adopt(snapshot, false);
 			this.recover(snapshot);
 		}
@@ -523,15 +524,21 @@ export class TerminalTaskManager {
 		return running.snapshot;
 	}
 
-	/** Pure inventory read: no recovery, delivery reconciliation, observation, or listener notification. */
+	/** Pure inventory read joined from the retained manager projection. */
 	public list(ownerSessionId: string): TerminalTaskSnapshot[] {
-		return this.store.listOwned(ownerSessionId);
+		return [...this.taskIdsByOwner.get(ownerSessionId) ?? []]
+			.flatMap((id) => {
+				const task = this.tasks.get(id);
+				return task ? [task] : [];
+			})
+			.sort((left, right) => right.createdAt - left.createdAt);
 	}
 
 	public get(id: string, ownerSessionId: string): TerminalTaskSnapshot | undefined {
-		const task = this.store.getOwned(id, ownerSessionId);
-		if (!task) return undefined;
-		this.adopt(task, false);
+		const retained = this.tasks.get(id);
+		const task = retained ?? this.store.getIndexed(id);
+		if (!task || task.ownerSessionId !== ownerSessionId) return undefined;
+		if (!retained) this.adopt(task, false);
 		if (!isTerminalTaskSettled(task.status)) this.arm(id);
 		return task;
 	}
@@ -736,8 +743,10 @@ export class TerminalTaskManager {
 	public claimPending(ownerSessionId: string, includeWake: boolean, maxWake = 1): TerminalTaskSnapshot[] {
 		const claimed: TerminalTaskSnapshot[] = [];
 		let claimedWake = 0;
-		for (const candidate of this.store.listOwned(ownerSessionId)) {
+		for (const candidate of this.store.listOwnedIndexed(ownerSessionId)) {
 			if (!isTerminalTaskSettled(candidate.status)) continue;
+			const expiredClaim = candidate.deliveryState === "claimed" && this.now() - candidate.updatedAt >= this.claimLeaseMs;
+			if (candidate.deliveryState !== "pending" && !expiredClaim) continue;
 			if (candidate.completionPolicy === "wake" && (!includeWake || claimedWake >= maxWake)) continue;
 			const result = this.mutate(candidate.id, (current) => {
 				if (current.ownerSessionId !== ownerSessionId || !isTerminalTaskSettled(current.status)) return undefined;
@@ -761,7 +770,7 @@ export class TerminalTaskManager {
 	public acknowledge(ownerSessionId: string, receipts: readonly TerminalDeliveryReceipt[]): TerminalTaskSnapshot[] {
 		const receiptKeys = new Set(receipts.map(({ completionId, claimToken }) => `${completionId}\u0000${claimToken}`));
 		const acknowledged: TerminalTaskSnapshot[] = [];
-		for (const candidate of this.store.listOwned(ownerSessionId)) {
+		for (const candidate of this.store.listOwnedIndexed(ownerSessionId)) {
 			if (!candidate.completionId || !candidate.deliveryClaimToken || !receiptKeys.has(`${candidate.completionId}\u0000${candidate.deliveryClaimToken}`)) continue;
 			const result = this.mutate(candidate.id, (current) => {
 				if (
@@ -777,7 +786,7 @@ export class TerminalTaskManager {
 	}
 
 	public getClaimRetryDelay(ownerSessionId: string): number | undefined {
-		const delays = this.store.listOwned(ownerSessionId)
+		const delays = this.store.listOwnedIndexed(ownerSessionId)
 			.filter((task) => task.deliveryState === "claimed")
 			.map((task) => Math.max(0, this.claimLeaseMs - (this.now() - task.updatedAt)));
 		return delays.length > 0 ? Math.min(...delays) : undefined;
@@ -802,7 +811,7 @@ export class TerminalTaskManager {
 	 */
 	public refreshSnapshotsFromStore(): readonly TerminalTaskSnapshot[] {
 		if (this.detached) return this.getSnapshots();
-		for (const snapshot of this.store.loadAll()) {
+		for (const snapshot of this.store.refreshIndex()) {
 			const previous = this.tasks.get(snapshot.id);
 			if (previous?.revision === snapshot.revision) continue;
 			this.adopt(snapshot, false);
@@ -845,7 +854,7 @@ export class TerminalTaskManager {
 	}
 
 	public async stopOwned(ownerSessionId: string): Promise<TerminalStopResult[]> {
-		const running = this.store.listOwned(ownerSessionId).filter((task) => !isTerminalTaskSettled(task.status));
+		const running = this.list(ownerSessionId).filter((task) => !isTerminalTaskSettled(task.status));
 		return this.stop(running.map((task) => task.id), ownerSessionId);
 	}
 
@@ -897,7 +906,7 @@ export class TerminalTaskManager {
 
 	private arm(id: string): void {
 		if (this.detached) return;
-		const task = this.tasks.get(id) ?? this.store.get(id);
+		const task = this.tasks.get(id) ?? this.store.getIndexed(id);
 		if (!task || isTerminalTaskSettled(task.status)) return;
 		const runtime = this.ensureRuntime(task);
 		if (runtime.pollTimer) return;
@@ -907,7 +916,7 @@ export class TerminalTaskManager {
 
 	private scheduleReconcile(id: string): void {
 		if (this.detached) return;
-		const task = this.tasks.get(id) ?? this.store.get(id);
+		const task = this.tasks.get(id) ?? this.store.getIndexed(id);
 		if (!task) return;
 		const runtime = this.ensureRuntime(task);
 		if (runtime.reconcilePromise) return;
@@ -920,7 +929,7 @@ export class TerminalTaskManager {
 
 	private async reconcile(id: string): Promise<void> {
 		if (this.detached) return;
-		const current = this.store.get(id);
+		const current = this.store.getIndexed(id);
 		if (!current) return;
 		this.adopt(current, true);
 		if (isTerminalTaskSettled(current.status)) {
@@ -963,11 +972,11 @@ export class TerminalTaskManager {
 			return;
 		}
 		const identityStatus = this.processTree.identityMatches(identity);
-		if (identityStatus === "different" && this.store.get(id)?.status === "running") this.settleLost(id, null, false);
+		if (identityStatus === "different" && this.store.getIndexed(id)?.status === "running") this.settleLost(id, null, false);
 	}
 
 	private async finishNaturalCompletion(id: string, identity: ProcessTreeIdentity, exitCode: number): Promise<void> {
-		let current = this.store.get(id);
+		let current = this.store.getIndexed(id);
 		if (current?.status !== "running") return;
 		if (this.processTree.isTreeEmpty(identity, current.processTreeVerification)) {
 			// Crash recovery after tree disposal but before the final metadata CAS:
@@ -1009,7 +1018,7 @@ export class TerminalTaskManager {
 		const killed = await this.safeVerifiedSignal(identity, "SIGKILL", verification);
 		const gone = killed.gone || (killed.ok && await this.processTree.waitForTreeEmpty(identity, this.killGraceMs, verification));
 		if (killed.ok && gone) {
-			if (this.store.get(id)?.status === "running") this.settleNatural(id, exitCode);
+			if (this.store.getIndexed(id)?.status === "running") this.settleNatural(id, exitCode);
 			return;
 		}
 		if (killed.identityStatus === "different" && this.processTree.isTreeEmpty(identity, verification)) {
@@ -1020,7 +1029,7 @@ export class TerminalTaskManager {
 	}
 
 	private async recoverStopping(id: string, identity: ProcessTreeIdentity): Promise<void> {
-		const current = this.store.get(id);
+		const current = this.store.getIndexed(id);
 		if (this.processTree.isTreeEmpty(identity, current?.processTreeVerification)) {
 			this.settleDisposedStop(id);
 			return;
@@ -1160,7 +1169,7 @@ export class TerminalTaskManager {
 	}
 
 	private settleDisposedStop(id: string): TerminalStopResult {
-		const current = this.store.get(id);
+		const current = this.store.getIndexed(id);
 		if (!current) return { id, outcome: "failed", message: `Failed to settle terminal ${id}: durable record unavailable.` };
 		const exitCode = readExitCode(this.store, taskPaths(this.store, current.id, current.createdAt).exitFile);
 		if (exitCode !== undefined) {
@@ -1213,14 +1222,14 @@ export class TerminalTaskManager {
 		restoreOnFailure: boolean,
 		suppressOnSettlement = restoreOnFailure,
 	): TerminalStopResult {
-		const current = this.store.get(id);
+		const current = this.store.getIndexed(id);
 		const identity = current ? identityOf(current) : undefined;
 		if (identity && this.processTree.isTreeEmpty(identity, current?.processTreeVerification)) {
 			return this.settleDisposedStop(id);
 		}
 		if (signal.identityStatus === "different") {
 			this.settleLost(id, null, false);
-			const lost = suppressOnSettlement ? this.observe(id, false) : this.store.get(id)!;
+			const lost = suppressOnSettlement ? this.observe(id, false) : this.store.getIndexed(id)!;
 			return { id, outcome: "failed", task: lost, message: `Terminal ${id} process identity changed; recorded lost without signalling.` };
 		}
 		const reason = signal.identityStatus === "unknown"
@@ -1232,7 +1241,7 @@ export class TerminalTaskManager {
 	private failedStop(id: string, reason: string, restore: boolean): TerminalStopResult {
 		const result = restore
 			? this.mutate(id, (task) => task.status === "stopping" ? { ...task, status: "running", updatedAt: this.timestamp(task) } : undefined).snapshot
-			: this.store.get(id);
+			: this.store.getIndexed(id);
 		if (result && !isTerminalTaskSettled(result.status)) this.arm(id);
 		if (!restore) this.diagnostic(id, `persisted stop remains pending: ${reason}`);
 		return { id, outcome: "failed", task: result, message: `Failed to stop terminal ${id}: ${reason}.` };
@@ -1240,7 +1249,7 @@ export class TerminalTaskManager {
 
 	private failUnlaunched(id: string, cause: unknown): void {
 		this.settleFailedLaunch(id);
-		const current = this.store.get(id);
+		const current = this.store.getIndexed(id);
 		if (current) appendPrivateFile(this.store, current.logFile, `\n[spawn error] ${cause instanceof Error ? cause.message : String(cause)}\n`);
 	}
 
@@ -1266,7 +1275,7 @@ export class TerminalTaskManager {
 
 	private async handleChildError(id: string, error: Error): Promise<void> {
 		if (this.detached) return;
-		const current = this.store.get(id);
+		const current = this.store.getIndexed(id);
 		if (!current || isTerminalTaskSettled(current.status)) return;
 		this.adopt(current, false);
 		const identity = identityOf(current);
@@ -1293,7 +1302,7 @@ export class TerminalTaskManager {
 		id: string,
 		update: (current: TerminalTaskSnapshot) => Omit<TerminalTaskSnapshot, "revision"> | undefined,
 	): MutationResult {
-		let latest = this.store.get(id);
+		let latest = this.tasks.get(id) ?? this.store.getIndexed(id);
 		if (!latest) throw new Error(`Unknown terminal task ${id}`);
 		for (let attempt = 0; attempt < MAX_TRANSITION_RETRIES; attempt += 1) {
 			this.adopt(latest, false);
@@ -1305,13 +1314,13 @@ export class TerminalTaskManager {
 				return { snapshot: transitioned, changed: true };
 			} catch (error) {
 				if (!(error instanceof StaleTerminalTaskRevisionError)) throw error;
-				const reloaded = this.store.get(id);
+				const reloaded = this.store.getIndexed(id);
 				if (!reloaded) throw new Error(`Terminal task ${id} disappeared during transition`);
 				latest = reloaded;
 			}
 		}
 		this.diagnostic(id, "abandoned transition after repeated stale revisions");
-		const current = this.store.get(id) ?? latest;
+		const current = this.store.getIndexed(id) ?? latest;
 		this.adopt(current, false);
 		return { snapshot: current, changed: false };
 	}
@@ -1319,6 +1328,9 @@ export class TerminalTaskManager {
 	private adopt(snapshot: TerminalTaskSnapshot, notify: boolean): void {
 		const previous = this.tasks.get(snapshot.id);
 		this.tasks.set(snapshot.id, snapshot);
+		const owned = this.taskIdsByOwner.get(snapshot.ownerSessionId) ?? new Set<string>();
+		owned.add(snapshot.id);
+		this.taskIdsByOwner.set(snapshot.ownerSessionId, owned);
 		this.ensureRuntime(snapshot);
 		if (!notify || previous?.revision === snapshot.revision) return;
 		for (const listener of this.listeners) {

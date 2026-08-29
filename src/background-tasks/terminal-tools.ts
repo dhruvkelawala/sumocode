@@ -125,7 +125,9 @@ export class TerminalDeliveryCoordinator {
 
 	public bind(ctx: ExtensionContext): void {
 		this.active = { ownerSessionId: sessionId(ctx), ctx };
-		this.safeReconcile(ctx);
+		// The queued flush is the sole startup pass: acknowledge visible receipts,
+		// reclaim eligible completions, preserve passive-before-wake ordering, and
+		// schedule any remaining lease retry from one manager projection.
 		this.requestFlush();
 	}
 
@@ -154,12 +156,16 @@ export class TerminalDeliveryCoordinator {
 
 	public reconcile(ctx: ExtensionContext): void {
 		const ownerSessionId = sessionId(ctx);
-		this.manager.acknowledge(ownerSessionId, completionsFromContext(ctx).receipts);
+		this.acknowledgeObservable(ctx, ownerSessionId);
 		const retryDelay = this.manager.getClaimRetryDelay(ownerSessionId);
 		if (retryDelay === undefined && this.retryTimer) {
 			clearTimeout(this.retryTimer);
 			this.retryTimer = undefined;
 		}
+	}
+
+	private acknowledgeObservable(ctx: ExtensionContext, ownerSessionId: string): void {
+		this.manager.acknowledge(ownerSessionId, completionsFromContext(ctx).receipts);
 	}
 
 	private safeReconcile(ctx: ExtensionContext): void {
@@ -192,7 +198,8 @@ export class TerminalDeliveryCoordinator {
 		if (!active || this.flushing || !active.ctx.isIdle()) return;
 		this.flushing = true;
 		try {
-			this.reconcile(active.ctx);
+			this.acknowledgeObservable(active.ctx, active.ownerSessionId);
+			let sentMessage = false;
 			const claimed = this.manager.claimPending(active.ownerSessionId, true, 1)
 				.sort((left, right) => Number(left.completionPolicy === "wake") - Number(right.completionPolicy === "wake"));
 			for (const task of claimed) {
@@ -225,12 +232,15 @@ export class TerminalDeliveryCoordinator {
 					},
 					{ deliverAs: "followUp", triggerTurn: current.completionPolicy === "wake" },
 				);
+				sentMessage = true;
 				if (current.completionPolicy === "wake") break;
 			}
-			queueMicrotask(() => {
-				if (this.active?.ownerSessionId !== active.ownerSessionId) return;
-				this.safeReconcile(this.active.ctx);
-			});
+			if (sentMessage) {
+				queueMicrotask(() => {
+					if (this.active?.ownerSessionId !== active.ownerSessionId) return;
+					this.safeReconcile(this.active.ctx);
+				});
+			}
 			const retryDelay = this.manager.getClaimRetryDelay(active.ownerSessionId);
 			if (retryDelay !== undefined) this.scheduleLeaseRetry(retryDelay);
 		} finally {

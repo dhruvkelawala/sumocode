@@ -38,14 +38,34 @@ export interface TerminalTaskStoreDiagnostic {
 	readonly message: string;
 }
 
+export type TerminalTaskStoreReadKind = "full-scan" | "metadata";
+
 export interface TerminalTaskStoreOptions {
 	readonly rootDir?: string;
 	readonly onDiagnostic?: (diagnostic: TerminalTaskStoreDiagnostic) => void;
 	readonly lockTimeoutMs?: number;
 	readonly lockPollMs?: number;
+	/** Test seam for deterministic projection scan/read assertions. */
+	readonly onRead?: (kind: TerminalTaskStoreReadKind) => void;
 	/** Test seam for deterministic stale-lock replacement races. */
 	readonly beforeAbandonedLockRename?: () => void;
 }
+
+/** Compact derived selection state. Durable metadata remains authoritative. */
+export interface IndexedTerminalTask {
+	readonly id: string;
+	readonly ownerSessionId: string;
+	readonly revision: number;
+	readonly status: TerminalTaskStatus;
+	readonly completionPolicy: TerminalCompletionPolicy;
+	readonly createdAt: number;
+	readonly updatedAt: number;
+	readonly deliveryState: TerminalDeliveryState;
+	readonly completionId?: string;
+	readonly deliveryClaimToken?: string;
+}
+
+type MutableIndexedTerminalTask = { -readonly [K in keyof IndexedTerminalTask]: IndexedTerminalTask[K] };
 
 export class StaleTerminalTaskRevisionError extends Error {
 	public constructor(
@@ -397,7 +417,10 @@ function processProvesOwnerGone(owner: LockOwner): boolean {
 export class TerminalTaskStore {
 	public readonly rootDir: string;
 	private readonly metaPathById = new Map<string, string>();
+	private readonly indexedById = new Map<string, IndexedTerminalTask>();
+	private readonly indexedIdsByOwner = new Map<string, readonly string[]>();
 	private readonly onDiagnostic?: (diagnostic: TerminalTaskStoreDiagnostic) => void;
+	private readonly onRead?: (kind: TerminalTaskStoreReadKind) => void;
 	private readonly lockTimeoutMs: number;
 	private readonly lockPollMs: number;
 	private readonly processStartTime: string | undefined;
@@ -421,22 +444,26 @@ export class TerminalTaskStore {
 		this.rootDir = realpathSync(requestedRoot);
 		assertPrivateDirectory(this.rootDir);
 		this.onDiagnostic = options.onDiagnostic;
+		this.onRead = options.onRead;
 		this.lockTimeoutMs = Math.max(1, options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS);
 		this.lockPollMs = Math.max(1, options.lockPollMs ?? DEFAULT_LOCK_POLL_MS);
 		this.processStartTime = captureProcessStartTime(process.pid);
 		this.beforeAbandonedLockRename = options.beforeAbandonedLockRename;
 	}
 
-	public loadAll(): TerminalTaskSnapshot[] {
-		this.metaPathById.clear();
+	/** Rebuild every derived path/selection bucket from one validated disk pass. */
+	public refreshIndex(): TerminalTaskSnapshot[] {
+		this.onRead?.("full-scan");
 		let entries: Dirent[];
 		try {
 			entries = readdirSync(this.rootDir, { withFileTypes: true });
 		} catch (error) {
 			this.diagnostic("io", this.rootDir, error);
+			this.replaceIndex([], new Map());
 			return [];
 		}
 		const snapshots: TerminalTaskSnapshot[] = [];
+		const paths = new Map<string, string>();
 		for (const entry of entries) {
 			const taskDirectory = join(this.rootDir, entry.name);
 			if (entry.isSymbolicLink()) {
@@ -454,20 +481,22 @@ export class TerminalTaskStore {
 			if (!pathExists(metaPath)) continue;
 			const snapshot = this.readCandidate(metaPath);
 			if (!snapshot) continue;
-			if (this.metaPathById.has(snapshot.id)) {
+			if (paths.has(snapshot.id)) {
 				this.diagnostic("duplicate", metaPath, `duplicate terminal id ${snapshot.id}`);
 				continue;
 			}
-			this.metaPathById.set(snapshot.id, metaPath);
+			paths.set(snapshot.id, metaPath);
 			snapshots.push(snapshot);
 		}
+		this.replaceIndex(snapshots, paths);
 		return snapshots;
 	}
 
-	public listOwned(ownerSessionId: string): TerminalTaskSnapshot[] {
-		return this.loadAll()
-			.filter((task) => task.ownerSessionId === ownerSessionId)
-			.sort((left, right) => right.createdAt - left.createdAt);
+	public listOwnedIndexed(ownerSessionId: string): readonly IndexedTerminalTask[] {
+		return (this.indexedIdsByOwner.get(ownerSessionId) ?? []).flatMap((id) => {
+			const indexed = this.indexedById.get(id);
+			return indexed ? [indexed] : [];
+		});
 	}
 
 	public create(snapshot: TerminalTaskSnapshot, metaPath: string): TerminalTaskSnapshot {
@@ -480,23 +509,16 @@ export class TerminalTaskStore {
 			if (pathExists(resolvedMetaPath)) throw new Error(`Terminal metadata already exists: ${resolvedMetaPath}`);
 			atomicWriteJson(resolvedMetaPath, snapshot);
 			this.metaPathById.set(snapshot.id, resolvedMetaPath);
+			this.replaceIndexedEntry(snapshot);
 			return snapshot;
 		});
 	}
 
-	public get(id: string): TerminalTaskSnapshot | undefined {
-		let path = this.metaPathById.get(id);
-		if (!path) {
-			this.loadAll();
-			path = this.metaPathById.get(id);
-		}
+	/** Read one known indexed record without falling back to a directory scan. */
+	public getIndexed(id: string): TerminalTaskSnapshot | undefined {
+		const path = this.metaPathById.get(id);
 		if (!path) return undefined;
 		return this.readCurrent(path);
-	}
-
-	public getOwned(id: string, ownerSessionId: string): TerminalTaskSnapshot | undefined {
-		const snapshot = this.get(id);
-		return snapshot?.ownerSessionId === ownerSessionId ? snapshot : undefined;
 	}
 
 	/** Verify a direct child directory before creating or opening task artifacts. */
@@ -528,14 +550,10 @@ export class TerminalTaskStore {
 		expectedRevision: number,
 		update: (current: TerminalTaskSnapshot) => Omit<TerminalTaskSnapshot, "revision">,
 	): TerminalTaskSnapshot {
-		let path = this.metaPathById.get(id);
-		if (!path) {
-			this.loadAll();
-			path = this.metaPathById.get(id);
-		}
+		const path = this.metaPathById.get(id);
 		if (!path) throw new Error(`Unknown terminal task ${id}`);
 		return this.withTaskLock(path, () => {
-			const current = this.readCurrent(path!);
+			const current = this.readCurrent(path);
 			if (!current) throw new CorruptTerminalTaskRecordError(`Terminal record ${id} is corrupt or unreadable`);
 			if (current.revision !== expectedRevision) {
 				throw new StaleTerminalTaskRevisionError(id, expectedRevision, current.revision);
@@ -544,10 +562,56 @@ export class TerminalTaskStore {
 			if (next.id !== current.id || next.ownerSessionId !== current.ownerSessionId || next.schemaVersion !== current.schemaVersion || next.createdAt !== current.createdAt || next.logFile !== current.logFile) {
 				throw new Error("Terminal task identity fields are immutable");
 			}
-			this.assertSnapshotPath(next, path!);
-			atomicWriteJson(path!, next);
+			this.assertSnapshotPath(next, path);
+			atomicWriteJson(path, next);
+			this.replaceIndexedEntry(next);
 			return next;
 		});
+	}
+
+	private replaceIndex(snapshots: readonly TerminalTaskSnapshot[], paths: ReadonlyMap<string, string>): void {
+		this.metaPathById.clear();
+		this.indexedById.clear();
+		this.indexedIdsByOwner.clear();
+		const idsByOwner = new Map<string, string[]>();
+		for (const snapshot of snapshots) {
+			const path = paths.get(snapshot.id);
+			if (!path) continue;
+			this.metaPathById.set(snapshot.id, path);
+			this.indexedById.set(snapshot.id, this.compact(snapshot));
+			const owned = idsByOwner.get(snapshot.ownerSessionId) ?? [];
+			owned.push(snapshot.id);
+			idsByOwner.set(snapshot.ownerSessionId, owned);
+		}
+		for (const [owner, ids] of idsByOwner) {
+			ids.sort((left, right) => (this.indexedById.get(right)?.createdAt ?? 0) - (this.indexedById.get(left)?.createdAt ?? 0));
+			this.indexedIdsByOwner.set(owner, Object.freeze(ids));
+		}
+	}
+
+	private replaceIndexedEntry(snapshot: TerminalTaskSnapshot): void {
+		this.indexedById.set(snapshot.id, this.compact(snapshot));
+		const currentIds = this.indexedIdsByOwner.get(snapshot.ownerSessionId) ?? [];
+		if (currentIds.includes(snapshot.id)) return;
+		const nextIds = [...currentIds, snapshot.id]
+			.sort((left, right) => (this.indexedById.get(right)?.createdAt ?? 0) - (this.indexedById.get(left)?.createdAt ?? 0));
+		this.indexedIdsByOwner.set(snapshot.ownerSessionId, Object.freeze(nextIds));
+	}
+
+	private compact(snapshot: TerminalTaskSnapshot): IndexedTerminalTask {
+		const indexed: MutableIndexedTerminalTask = {
+			id: snapshot.id,
+			ownerSessionId: snapshot.ownerSessionId,
+			revision: snapshot.revision,
+			status: snapshot.status,
+			completionPolicy: snapshot.completionPolicy,
+			createdAt: snapshot.createdAt,
+			updatedAt: snapshot.updatedAt,
+			deliveryState: snapshot.deliveryState,
+		};
+		if (snapshot.completionId !== undefined) indexed.completionId = snapshot.completionId;
+		if (snapshot.deliveryClaimToken !== undefined) indexed.deliveryClaimToken = snapshot.deliveryClaimToken;
+		return Object.freeze(indexed);
 	}
 
 	private assertStoreMetaPath(path: string): string {
@@ -580,6 +644,7 @@ export class TerminalTaskStore {
 	private readCandidate(path: string): TerminalTaskSnapshot | undefined {
 		let value: unknown;
 		try {
+			this.onRead?.("metadata");
 			value = JSON.parse(readFileNoFollow(path));
 		} catch (error) {
 			this.diagnostic("corrupt", path, error);

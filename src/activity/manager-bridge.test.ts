@@ -102,6 +102,8 @@ function subagent(id: string, status: SubagentSnapshot["status"] = "running"): S
 
 class FakeTerminalManager {
 	public snapshots: TerminalTaskSnapshot[] = [];
+	public refreshedSnapshots: TerminalTaskSnapshot[] | undefined;
+	public refreshCount = 0;
 	public outputs = new Map<string, string>();
 	public outputBytes = new Map<string, Uint8Array>();
 	public outputReads = new Map<string, number>();
@@ -111,6 +113,12 @@ class FakeTerminalManager {
 		this.listener = listener;
 		listener(this.snapshots);
 		return () => { this.listener = undefined; };
+	}
+
+	public refreshSnapshotsFromStore(): readonly TerminalTaskSnapshot[] {
+		this.refreshCount += 1;
+		this.snapshots = this.refreshedSnapshots ?? this.snapshots;
+		return this.snapshots;
 	}
 
 	public getOutput(task: Pick<TerminalTaskSnapshot, "logFile">): string {
@@ -200,6 +208,7 @@ describe("ActivityManagerBridge", () => {
 
 		originalWriterAlive = false;
 		liveContender.bindSession("session-a");
+		expect(contenderTerminals.refreshCount).toBe(1);
 		expect(fixturePublisher("session-a", { rootDir: stateRoot }).getSnapshot()).toMatchObject([
 			{ id: "subagent:remote", status: "lost", settledAt: 2_000 },
 		]);
@@ -212,6 +221,38 @@ describe("ActivityManagerBridge", () => {
 			expect.objectContaining({ id: "replacement-owned", status: "running" }),
 		]));
 		liveContender.dispose();
+	});
+
+	it("refreshes exactly once after a proven empty-feed writer takeover", () => {
+		const stateRoot = root();
+		const incumbent = new ActivityFeedPublisher("session-empty-takeover", {
+			rootDir: stateRoot,
+			writerIdentity: { token: "incumbent", pid: 101, processStartTime: "incumbent-start" },
+			inspectWriter: () => "alive",
+		});
+		incumbent.publish([]);
+		let incumbentAlive = true;
+		const terminals = new FakeTerminalManager();
+		terminals.refreshedSnapshots = [terminal("term-after-empty-feed", "session-empty-takeover")];
+		terminals.outputs.set("/tmp/term-after-empty-feed.log", "late output");
+		const bridge = new ActivityManagerBridge(terminals, new FakeSubagentManager(), {
+			rootDir: stateRoot,
+			writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
+			inspectWriter: () => incumbentAlive ? "alive" : "dead",
+		});
+
+		bridge.bindSession("session-empty-takeover");
+		expect(terminals.refreshCount).toBe(0);
+		incumbentAlive = false;
+		bridge.bindSession("session-empty-takeover");
+
+		expect(terminals.refreshCount).toBe(1);
+		expect(fixturePublisher("session-empty-takeover", { rootDir: stateRoot }).getSnapshot()).toEqual(expect.arrayContaining([
+			expect.objectContaining({ id: "term-after-empty-feed", status: "running" }),
+		]));
+		bridge.bindSession("session-empty-takeover");
+		expect(terminals.refreshCount).toBe(1);
+		bridge.dispose();
 	});
 
 	it.skipIf(process.platform === "win32")("refreshes a late durable terminal before a two-process writer takeover", async () => {
@@ -257,7 +298,9 @@ describe("ActivityManagerBridge", () => {
 				status: "running",
 				processIdentityVerified: true,
 			});
-			expect(new TerminalTaskStore({ rootDir: terminalRoot }).get(task.id)?.processTreeVerification?.members.length).toBeGreaterThan(0);
+			const verifyingStore = new TerminalTaskStore({ rootDir: terminalRoot });
+			verifyingStore.refreshIndex();
+			expect(verifyingStore.getIndexed(task.id)?.processTreeVerification?.members.length).toBeGreaterThan(0);
 		} finally {
 			if (task) await terminalManager.stop([task.id], owner);
 			terminalManager.detach();

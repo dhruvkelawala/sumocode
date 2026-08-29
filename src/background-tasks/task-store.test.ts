@@ -96,7 +96,7 @@ describe("TerminalTaskStore", () => {
 		}));
 
 		expect(running.revision).toBe(2);
-		expect(store.get(initial.id)).toEqual(running);
+		expect(store.getIndexed(initial.id)).toEqual(running);
 		expect(() => store.transition(initial.id, 1, (current) => ({ ...current }))).toThrow(StaleTerminalTaskRevisionError);
 	});
 
@@ -105,12 +105,12 @@ describe("TerminalTaskStore", () => {
 		const initial = snapshot(first, "term-race");
 		first.create(initial, join(dirname(initial.logFile), "meta.json"));
 		const second = new TerminalTaskStore({ rootDir });
-		second.loadAll();
+		second.refreshIndex();
 
 		const winner = first.transition(initial.id, 1, (current) => ({ ...current, title: "first", updatedAt: 2_000 }));
 		expect(winner.title).toBe("first");
 		expect(() => second.transition(initial.id, 1, (current) => ({ ...current, title: "second", updatedAt: 2_000 }))).toThrow(StaleTerminalTaskRevisionError);
-		expect(new TerminalTaskStore({ rootDir }).loadAll()[0]?.title).toBe("first");
+		expect(new TerminalTaskStore({ rootDir }).refreshIndex()[0]?.title).toBe("first");
 	});
 
 	it("serializes a real subprocess revision race with one success and one stale result", async () => {
@@ -128,19 +128,77 @@ describe("TerminalTaskStore", () => {
 		const results = await Promise.all([first, second]);
 		expect(results.map((result) => result.stdout.trim()).sort()).toEqual(["stale", "success"]);
 		expect(results.every((result) => result.code === 0)).toBe(true);
-		expect(new TerminalTaskStore({ rootDir }).loadAll()[0]?.revision).toBe(2);
+		expect(new TerminalTaskStore({ rootDir }).refreshIndex()[0]?.revision).toBe(2);
 	});
 
-	it("filters records by durable owner session", () => {
+	it("filters indexed records by durable owner session", () => {
 		const store = new TerminalTaskStore({ rootDir });
 		const first = snapshot(store, "term-a", "session-a");
 		const second = snapshot(store, "term-b", "session-b");
 		store.create(first, join(dirname(first.logFile), "meta.json"));
 		store.create(second, join(dirname(second.logFile), "meta.json"));
 
-		expect(store.listOwned("session-a").map((task) => task.id)).toEqual(["term-a"]);
-		expect(store.getOwned("term-b", "session-a")).toBeUndefined();
-		expect(store.getOwned("term-b", "session-b")?.id).toBe("term-b");
+		expect(store.listOwnedIndexed("session-a").map((task) => task.id)).toEqual(["term-a"]);
+		expect(store.listOwnedIndexed("session-b").map((task) => task.id)).toEqual(["term-b"]);
+	});
+
+	it("selects 1500 owned candidates with zero metadata reads", () => {
+		const reads = { scans: 0, metadata: 0 };
+		const store = new TerminalTaskStore({
+			rootDir,
+			onRead: (kind) => { reads[kind === "full-scan" ? "scans" : "metadata"] += 1; },
+		});
+		for (let index = 0; index < 1_500; index += 1) {
+			const task = snapshot(store, `term-indexed-${index}`);
+			privateWrite(join(dirname(task.logFile), "meta.json"), `${JSON.stringify(task)}\n`);
+		}
+
+		expect(store.refreshIndex()).toHaveLength(1_500);
+		expect(reads).toEqual({ scans: 1, metadata: 1_500 });
+		reads.scans = 0;
+		reads.metadata = 0;
+
+		const candidates = store.listOwnedIndexed("session-a");
+		expect(candidates).toHaveLength(1_500);
+		expect(candidates[0]).not.toHaveProperty("command");
+		expect(candidates[0]).not.toHaveProperty("cwd");
+		expect(candidates[0]).not.toHaveProperty("title");
+		expect(candidates[0]).not.toHaveProperty("logFile");
+		expect(reads).toEqual({ scans: 0, metadata: 0 });
+	}, 30_000);
+
+	it("serves an old indexed ID with one metadata read and zero full scans", () => {
+		const reads = { scans: 0, metadata: 0 };
+		const store = new TerminalTaskStore({
+			rootDir,
+			onRead: (kind) => { reads[kind === "full-scan" ? "scans" : "metadata"] += 1; },
+		});
+		const initial = snapshot(store, "term-evicted");
+		store.create(initial, join(dirname(initial.logFile), "meta.json"));
+		store.refreshIndex();
+		reads.scans = 0;
+		reads.metadata = 0;
+
+		expect(store.getIndexed(initial.id)).toEqual(initial);
+		expect(reads).toEqual({ scans: 0, metadata: 1 });
+		expect(store.getIndexed("term-missing")).toBeUndefined();
+		expect(reads).toEqual({ scans: 0, metadata: 1 });
+	});
+
+	it("rereads only the selected record before mutation", () => {
+		const reads = { scans: 0, metadata: 0 };
+		const store = new TerminalTaskStore({
+			rootDir,
+			onRead: (kind) => { reads[kind === "full-scan" ? "scans" : "metadata"] += 1; },
+		});
+		const initial = snapshot(store, "term-selected");
+		store.create(initial, join(dirname(initial.logFile), "meta.json"));
+		reads.scans = 0;
+		reads.metadata = 0;
+
+		const transitioned = store.transition(initial.id, initial.revision, (current) => ({ ...current, title: "selected", updatedAt: 2_000 }));
+		expect(transitioned).toMatchObject({ revision: 2, title: "selected" });
+		expect(reads).toEqual({ scans: 0, metadata: 1 });
 	});
 
 	it("strictly rejects schema-v4 traversal, identity, path, and state invariant violations", () => {
@@ -157,7 +215,7 @@ describe("TerminalTaskStore", () => {
 
 		const invalid = { ...initial, logFile: join(store.rootDir, "outside.log") };
 		privateWrite(join(dirname(initial.logFile), "meta.json"), `${JSON.stringify(invalid)}\n`);
-		expect(store.loadAll()).toEqual([]);
+		expect(store.refreshIndex()).toEqual([]);
 	});
 
 	it.skipIf(process.platform === "win32")("rejects symlink/reparse roots, task directories, metadata, and artifacts", () => {
@@ -177,7 +235,7 @@ describe("TerminalTaskStore", () => {
 		chmodSync(outsideDirectory, 0o700);
 		symlinkSync(outsideDirectory, join(linkedStore.rootDir, "term-linked-1000"), "dir");
 		const linkedDiagnostic = vi.fn();
-		expect(new TerminalTaskStore({ rootDir: linkedStore.rootDir, onDiagnostic: linkedDiagnostic }).loadAll()).toEqual([]);
+		expect(new TerminalTaskStore({ rootDir: linkedStore.rootDir, onDiagnostic: linkedDiagnostic }).refreshIndex()).toEqual([]);
 		expect(linkedDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ kind: "corrupt", message: expect.stringMatching(/symlink|reparse/) }));
 
 		const metadataStoreRoot = join(rootDir, "metadata-store");
@@ -189,7 +247,7 @@ describe("TerminalTaskStore", () => {
 		const outsideMeta = join(rootDir, "outside-meta.json");
 		privateWrite(outsideMeta, `${JSON.stringify(metadataTask)}\n`);
 		symlinkSync(outsideMeta, join(dirname(metadataTask.logFile), "meta.json"));
-		expect(metadataStore.loadAll()).toEqual([]);
+		expect(metadataStore.refreshIndex()).toEqual([]);
 		expect(metadataDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ kind: "corrupt" }));
 
 		const onDiagnostic = vi.fn();
@@ -201,7 +259,7 @@ describe("TerminalTaskStore", () => {
 		symlinkSync(outside, initial.logFile);
 		privateWrite(join(dirname(initial.logFile), "meta.json"), `${JSON.stringify(initial)}\n`);
 
-		expect(store.loadAll()).toEqual([]);
+		expect(store.refreshIndex()).toEqual([]);
 		expect(onDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ kind: "corrupt" }));
 	});
 
@@ -219,7 +277,7 @@ describe("TerminalTaskStore", () => {
 		privateWrite(corruptPath, "{not json");
 		privateWrite(legacyPath, JSON.stringify({ schemaVersion: 3, id: "bg-old" }));
 
-		expect(store.loadAll()).toEqual([]);
+		expect(store.refreshIndex()).toEqual([]);
 		expect(onDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ kind: "corrupt", path: corruptPath }));
 		expect(onDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ kind: "legacy", path: legacyPath }));
 		expect(readFileSync(corruptPath, "utf8")).toBe("{not json");
@@ -266,7 +324,7 @@ describe("TerminalTaskStore", () => {
 		privateWrite(join(lockPath, "owner.json"), `${JSON.stringify({ token: "dead", pid: 2_147_483_647, processStartTime: "old", verifiable: true })}\n`);
 
 		expect(() => store.transition(initial.id, 1, (current) => ({ ...current, title: "unsafe", updatedAt: 2_000 }))).toThrow(TerminalTaskLockBusyError);
-		expect(new TerminalTaskStore({ rootDir }).get(initial.id)).toMatchObject({ revision: 1, title: "tests" });
+		expect(new TerminalTaskStore({ rootDir }).refreshIndex().find((task) => task.id === initial.id)).toMatchObject({ revision: 1, title: "tests" });
 		expect(readdirSync(dirname(metaPath)).some((name) => name.startsWith(".meta.lock.takeover-"))).toBe(true);
 	});
 

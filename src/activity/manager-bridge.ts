@@ -158,6 +158,7 @@ export class ActivityManagerBridge {
 	private readonly writerVerifiable: boolean;
 	private readonly bridgeToken = randomUUID();
 	private readonly claimedOwners = new Set<string>();
+	private readonly provenTakeoverOwners = new Set<string>();
 	private readonly publishers = new Map<string, ActivityFeedPublisher>();
 	private terminalSnapshots: readonly TerminalTaskSnapshot[] = [];
 	private readonly terminalOutputCache = new Map<string, { revision: number; output: string }>();
@@ -189,14 +190,21 @@ export class ActivityManagerBridge {
 			processStartTime,
 		} : undefined);
 		this.writerVerifiable = writerIdentity !== undefined || options.publisherFactory !== undefined;
+		const inspectWriter = options.inspectWriter ?? inspectProcessWriter;
 		const publisherOptions: ActivityFeedPublisherOptions = {
 			rootDir: options.rootDir,
 			now: this.now,
 			onDiagnostic: options.onDiagnostic,
 			writerIdentity,
-			inspectWriter: options.inspectWriter ?? inspectProcessWriter,
 		};
-		this.publisherFactory = options.publisherFactory ?? ((owner) => new ActivityFeedPublisher(owner, publisherOptions));
+		this.publisherFactory = options.publisherFactory ?? ((owner) => new ActivityFeedPublisher(owner, {
+			...publisherOptions,
+			inspectWriter: (writer) => {
+				const state = inspectWriter(writer);
+				if (state === "dead") this.provenTakeoverOwners.add(owner);
+				return state;
+			},
+		}));
 		if (!writerIdentity && !options.publisherFactory) {
 			this.diagnostic({ kind: "io", path: "activity-writer", message: "current process start identity is not verifiable; feed publication disabled" });
 		}
@@ -275,11 +283,17 @@ export class ActivityManagerBridge {
 			if (!this.sessionOwnership.claim(owner, this.bridgeToken)) continue;
 			const publisher = this.publisher(owner);
 			if (publisher.hasWriterOwnership) {
-				try {
-					const refreshed = this.terminalManager.refreshSnapshotsFromStore?.();
-					if (refreshed) this.adoptTerminalSnapshots(refreshed);
-				} catch (error) {
-					this.diagnostic({ kind: "io", path: owner, message: `terminal takeover refresh failed: ${error instanceof Error ? error.message : String(error)}` });
+				// A same-process claim consumes the manager generation already built at
+				// startup. Only durable proof that a previous writer died authorizes one
+				// extra terminal-index refresh, including takeover of an empty feed.
+				const refreshForTakeover = this.provenTakeoverOwners.delete(owner) || publisher.canReconcileAbandonedActivities;
+				if (refreshForTakeover) {
+					try {
+						const refreshed = this.terminalManager.refreshSnapshotsFromStore?.();
+						if (refreshed) this.adoptTerminalSnapshots(refreshed);
+					} catch (error) {
+						this.diagnostic({ kind: "io", path: owner, message: `terminal takeover refresh failed: ${error instanceof Error ? error.message : String(error)}` });
+					}
 				}
 				this.claimedOwners.add(owner);
 			} else {

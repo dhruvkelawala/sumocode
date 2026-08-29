@@ -34,15 +34,18 @@ A cheap child may still perform a precisely scoped mechanical subtask inside sma
 
 Full plans 092, 097–100, and 102 are intentionally ignored in this public repository. Their sanitized briefs under `plans/issues/` are not implementation specifications.
 
+Do not give the path to `subagent_spawn`, an ordinary Pi session, or any other recorded child and tell it to read the file: the read result would become durable transcript content. Do not read a full private plan through tools in the public campaign/orchestrator session.
+
 For one of these plans:
 
 1. Create the isolated implementation worktree from the committed public baseline.
-2. In the child prompt, provide only the absolute path to the ignored full plan in the primary checkout.
-3. Tell the child to read that file as instructions while editing only its isolated worktree.
-4. Use a smart implementation model and require a separate security review.
-5. Keep the full plan and detailed evidence out of commits, issues, PRs, transcripts, diagnostics, and build artifacts.
+2. Invoke the approved private non-recording runner with only the absolute ignored-plan path and isolated-worktree path visible to the orchestrator. The runner itself lives outside this public repository.
+3. The runner must use a smart model with Pi session persistence disabled, deliver plan content through private mode-0600 stdin/file input rather than process argv, disable diagnostics, and capture raw stdout/stderr to mode-0600 storage outside the repository. It may return only an allowlisted summary: exit state, commit/head, changed paths, named gate pass/fail, and a generic blocker category.
+4. Before the first security implementation, run the private runner's contract test and prove: no Pi/SumoCode session or task transcript was created; process metadata contained no prompt/plan content; no diagnostics/public artifact contained private text; and the orchestrator received only the allowlisted summary. If the pinned Pi/runtime cannot satisfy this, mark the security wave `BLOCKED` instead of falling back to an ordinary child.
+5. Run the independent smart security review through the same non-recording boundary. Never inject its raw review/tool output into the campaign transcript; only the allowlisted verdict/summary may return.
+6. Keep the full plan and detailed evidence out of commits, issues, PRs, ordinary agent transcripts, terminal/task records, diagnostics, and build artifacts. Public issue/PR text uses only the sanitized brief and sanitized status.
 
-Completion criterion: the implementation branch contains no ignored plan/evidence content, and the public issue receives only sanitized status information.
+Completion criterion: both implementation and security-review runner contract tests pass; the implementation branch contains no ignored plan/evidence content; the orchestrator transcript contains no private plan/tool output; and the public issue receives only sanitized status information.
 
 ## 5. Verify and record
 

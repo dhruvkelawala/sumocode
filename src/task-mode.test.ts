@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
 	captureAndScrubTaskMarkerEnv,
 	extractFinalAssistantText,
@@ -16,13 +17,16 @@ type Handler = (...args: unknown[]) => void;
 
 function buildPiStub() {
 	const handlers = new Map<string, Handler[]>();
+	// Pin the public extension seam: unlike ReplacedSessionContext's method,
+	// ExtensionAPI.sendUserMessage synchronously returns void, not Promise<void>.
+	const sendUserMessage = vi.fn<ExtensionAPI["sendUserMessage"]>(() => undefined);
 	const pi = {
 		on: vi.fn((event: string, handler: Handler) => {
 			const list = handlers.get(event) ?? [];
 			list.push(handler);
 			handlers.set(event, list);
 		}),
-		sendUserMessage: vi.fn(),
+		sendUserMessage,
 		exec: vi.fn(async (_cmd: string, _args: string[], _opts?: { timeout?: number; env?: NodeJS.ProcessEnv }) => ({
 			code: 0,
 			stdout: "",
@@ -466,13 +470,14 @@ describe("control watcher", () => {
 	});
 
 	/** Install task mode with a control dir inside a fresh temp workdir. */
-	const installWithControlDir = (keepOpen = false) => {
+	const installWithControlDir = (keepOpen = false, diagFile?: string) => {
 		const controlDir = join(workDir!, "control");
 		mkdirSync(controlDir, { recursive: true });
 		const { pi, handlers } = buildPiStub();
 		const env: NodeJS.ProcessEnv = {
 			SUMOCODE_TASK_MODE: "1",
 			SUMOCODE_TASK_CONTROL_DIR: controlDir,
+			SUMOCODE_TASK_DIAG_FILE: diagFile,
 		};
 		if (keepOpen) env.SUMOCODE_TASK_KEEP_OPEN = "1";
 		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
@@ -493,16 +498,41 @@ describe("control watcher", () => {
 		resetTaskMarkerEnvForTests();
 	});
 
-	it("injects a steer file as a Pi steering message and unlinks it (the ack)", () => {
+	it("submits a steer through the void ExtensionAPI and unlinks only after the synchronous call returns", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
-		const { pi, controlDir } = installWithControlDir();
+		const diagFile = join(workDir, "diag.jsonl");
+		const { pi, controlDir } = installWithControlDir(false, diagFile);
 		const steerPath = join(controlDir, "steer-1.txt");
 		writeFileSync(steerPath, "focus on the failing tests");
 
 		vi.advanceTimersByTime(500);
 
+		expectTypeOf(pi.sendUserMessage).returns.toEqualTypeOf<void>();
 		expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
 		expect(pi.sendUserMessage).toHaveBeenCalledWith("focus on the failing tests", { deliverAs: "steer" });
+		expect(existsSync(steerPath)).toBe(false);
+		const diagnostics = readFileSync(diagFile, "utf8");
+		expect(diagnostics).toContain('"event":"steer_submitted"');
+		expect(diagnostics).not.toMatch(/steer_(?:injected|delivered|accepted)/);
+	});
+
+	it("preserves and retries a steer when ExtensionAPI throws synchronously", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const diagFile = join(workDir, "diag.jsonl");
+		const { pi, controlDir } = installWithControlDir(false, diagFile);
+		const steerPath = join(controlDir, "steer-1.txt");
+		writeFileSync(steerPath, "retry after sync failure");
+		pi.sendUserMessage.mockImplementationOnce(() => {
+			throw new Error("runtime not ready");
+		});
+
+		vi.advanceTimersByTime(500);
+
+		expect(existsSync(steerPath)).toBe(true);
+		expect(readFileSync(diagFile, "utf8")).toContain('"event":"steer_submit_failed"');
+
+		vi.advanceTimersByTime(500);
+		expect(pi.sendUserMessage).toHaveBeenCalledTimes(2);
 		expect(existsSync(steerPath)).toBe(false);
 	});
 
@@ -530,7 +560,7 @@ describe("control watcher", () => {
 		expect(existsSync(tmpPath)).toBe(true);
 	});
 
-	it("deletes empty steer files without injecting", () => {
+	it("consumes empty steer files without submitting them", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
 		const { pi, controlDir } = installWithControlDir();
 		const emptyPath = join(controlDir, "steer-3.txt");
@@ -565,7 +595,7 @@ describe("control watcher", () => {
 		expect(pi.sendUserMessage).not.toHaveBeenCalled();
 	});
 
-	it("holds steer injection until the extension runtime is initialized", () => {
+	it("holds steer submission until the extension runtime is initialized", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
 		const controlDir = join(workDir, "control");
 		mkdirSync(controlDir, { recursive: true });
@@ -579,8 +609,8 @@ describe("control watcher", () => {
 		writeFileSync(steerPath, "steer before boot");
 
 		// No session_start yet: sendUserMessage would throw "Extension runtime not
-		// initialized", burning the delivery and pushing the real injection past
-		// the orchestrator's ack budget.
+		// initialized", burning the submission and pushing control consumption
+		// past the orchestrator's acknowledgement budget.
 		vi.advanceTimersByTime(2_000);
 		expect(pi.sendUserMessage).not.toHaveBeenCalled();
 		expect(existsSync(steerPath)).toBe(true);

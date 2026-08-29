@@ -246,8 +246,8 @@ interface TaskModeControlHooks {
 
 /**
  * Poll `<controlDir>` for orchestrator control files (the parent-side writer
- * lives in `src/subagents/backend-pane.ts`). Steer files are injected as real
- * Pi steering messages mid-run; `close.request` shuts the child down. The
+ * lives in `src/subagents/backend-pane.ts`). Steer files are consumed and
+ * synchronously submitted to Pi; `close.request` shuts the child down. The
  * watcher is independent of the auto-exit countdown: it also runs for
  * keep-open sessions, because close is explicit while auto-exit is silence.
  */
@@ -263,7 +263,7 @@ function installControlWatcher(pi: ExtensionAPI, controlDir: string | undefined,
 		}
 	};
 
-	const injectSteer = (file: string): void => {
+	const submitSteer = (file: string): void => {
 		let text: string;
 		try {
 			text = readFileSync(file, "utf8");
@@ -272,8 +272,8 @@ function installControlWatcher(pi: ExtensionAPI, controlDir: string | undefined,
 			return;
 		}
 		if (!text.trim()) {
-			// Empty writes carry nothing to inject; deleting them still acks the
-			// orchestrator's poll so it does not wait out its full budget.
+			// Empty writes carry nothing to submit; deletion still records control
+			// consumption so the orchestrator does not wait out its full budget.
 			try {
 				unlinkSync(file);
 			} catch {
@@ -283,15 +283,18 @@ function installControlWatcher(pi: ExtensionAPI, controlDir: string | undefined,
 		}
 		try {
 			hooks.cancelCountdown();
-			// The pinned Pi triggers a turn on its own when idle; while streaming
-			// the steer queues for delivery after the current turn's tool calls.
+			// ExtensionAPI.sendUserMessage returns void (unlike the internal
+			// ReplacedSessionContext method). A true acceptance ACK requires an
+			// upstream awaitable result or callback; this call can observe only a
+			// synchronous throw. Do not add a cosmetic await here.
 			pi.sendUserMessage(text, { deliverAs: "steer" });
-			// Unlink is the ack the orchestrator's send poll waits for.
+			// Unlink tells the parent that the watcher consumed the control and the
+			// synchronous submission did not throw. It is not model-turn delivery.
 			unlinkSync(file);
-			diagLog("steer_injected", { file, bytes: text.length });
+			diagLog("steer_submitted", { file, bytes: text.length });
 		} catch (error) {
-			// One bad file must not wedge the watcher; the next tick retries.
-			diagLog("steer_inject_failed", { file, message: errorMessage(error) });
+			// One bad file must not wedge the watcher; preserve it for the next tick.
+			diagLog("steer_submit_failed", { file, message: errorMessage(error) });
 		}
 	};
 
@@ -302,9 +305,8 @@ function installControlWatcher(pi: ExtensionAPI, controlDir: string | undefined,
 			// session_start has not fired, i.e. the extension runtime is still
 			// loading — and both `sendUserMessage` and `shutdown` throw during
 			// loading ("Extension runtime not initialized"). Ticking anyway burns
-			// the steer file's first delivery attempt and pushes the real
-			// injection past the orchestrator's ack budget, so a delivered steer
-			// gets reported to the parent as a failure. Retry next tick instead.
+			// the first submission attempt and can push control consumption past the
+			// parent's acknowledgement budget. Retry next tick instead.
 			if (!ctx) return;
 			if (existsSync(join(controlDir, CLOSE_REQUEST_FILE))) {
 				diagLog("close_requested");
@@ -323,7 +325,7 @@ function installControlWatcher(pi: ExtensionAPI, controlDir: string | undefined,
 			}
 			const seqOf = (name: string): number => Number(name.match(STEER_FILE_PATTERN)?.[1] ?? Number.MAX_SAFE_INTEGER);
 			const steerFiles = entries.filter((entry) => STEER_FILE_PATTERN.test(entry)).sort((a, b) => seqOf(a) - seqOf(b));
-			for (const name of steerFiles) injectSteer(join(controlDir, name));
+			for (const name of steerFiles) submitSteer(join(controlDir, name));
 		} catch (error) {
 			diagLog("control_poll_failed", { message: errorMessage(error) });
 		}

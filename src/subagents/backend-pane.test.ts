@@ -298,7 +298,7 @@ describe("pane subagent backend", () => {
 });
 
 describe("pane subagent steering and close", () => {
-	it("publishes steer files tmp-then-rename and resolves when the child unlinks them", async () => {
+	it("publishes steer files tmp-then-rename and resolves when the child consumes them", async () => {
 		vi.useFakeTimers();
 		try {
 			const harness = createHarness();
@@ -309,24 +309,31 @@ describe("pane subagent steering and close", () => {
 			// tmp-then-rename: the tmp file is consumed by the rename immediately.
 			expect(harness.fs.files.has(`${steerPath}.tmp`)).toBe(false);
 			expect(harness.fs.files.get(steerPath)).toBe("focus the tests");
+			expect(vi.getTimerCount()).toBe(2);
 
-			// No ack yet — the promise must stay pending.
+			// No consumption evidence yet — the promise must stay pending.
 			await vi.advanceTimersByTimeAsync(250);
 			let settled = false;
 			void sendPromise.then(() => { settled = true; });
 			await flushPromises();
 			expect(settled).toBe(false);
 
-			// The child's watcher consumes the file: unlink is the ack.
+			// Unlink proves that the child watcher consumed the control file. It does
+			// not prove that Pi accepted the steer into a model turn.
 			harness.fs.files.delete(steerPath);
 			await vi.advanceTimersByTimeAsync(250);
 			await expect(sendPromise).resolves.toBeUndefined();
+			expect(vi.getTimerCount()).toBe(1);
+
+			harness.child.interrupt();
+			await flushPromises();
+			expect(vi.getTimerCount()).toBe(0);
 		} finally {
 			vi.useRealTimers();
 		}
 	});
 
-	it("increments the steer seq across sends", async () => {
+	it("tracks simultaneous sends independently and clears both consumption timers", async () => {
 		vi.useFakeTimers();
 		try {
 			const harness = createHarness();
@@ -336,47 +343,135 @@ describe("pane subagent steering and close", () => {
 
 			expect(harness.fs.files.get(`${harness.paths.controlDir}/steer-1.txt`)).toBe("first steer");
 			expect(harness.fs.files.get(`${harness.paths.controlDir}/steer-2.txt`)).toBe("second steer");
+			expect(vi.getTimerCount()).toBe(3);
 
 			harness.fs.files.delete(`${harness.paths.controlDir}/steer-1.txt`);
 			harness.fs.files.delete(`${harness.paths.controlDir}/steer-2.txt`);
 			await vi.advanceTimersByTimeAsync(250);
 			await expect(first).resolves.toBeUndefined();
 			await expect(second).resolves.toBeUndefined();
+			expect(vi.getTimerCount()).toBe(1);
+
+			harness.child.interrupt();
+			await flushPromises();
+			expect(vi.getTimerCount()).toBe(0);
 		} finally {
 			vi.useRealTimers();
 		}
 	});
 
-	it("rejects the send when the child exits before consuming the steer file", async () => {
+	it("rejects all sends and clears every timer when the child exits before consumption", async () => {
 		vi.useFakeTimers();
 		try {
 			const harness = createHarness();
 			await flushPromises();
-			const sendPromise = harness.child.send!("too late");
-			// Attach the rejection handler before the timer tick rejects.
-			const rejection = expect(sendPromise).rejects.toThrow("exited before receiving input");
+			const first = harness.child.send!("too late");
+			const second = harness.child.send!("also too late");
+			const firstRejection = expect(first).rejects.toThrow("has settled");
+			const secondRejection = expect(second).rejects.toThrow("has settled");
 			harness.fs.files.set(harness.paths.exitFile, "0");
 
 			await vi.advanceTimersByTimeAsync(250);
-			await rejection;
+			await firstRejection;
+			await secondRejection;
+			expect(settledEvents(harness.events)).toHaveLength(1);
+			expect(vi.getTimerCount()).toBe(0);
 		} finally {
 			vi.useRealTimers();
 		}
 	});
 
-	it("rejects the send when the ack poll times out", async () => {
+	it("rejects on consumption timeout, preserves the ambiguous file, and removes its timer once", async () => {
 		vi.useFakeTimers();
 		try {
 			const harness = createHarness(startedPane, { kind: "tab", tabId: "w1:t1", direction: "right" }, undefined, { sendAckPollMs: 100, sendAckTimeoutMs: 500 });
 			await flushPromises();
 			const sendPromise = harness.child.send!("never acked");
-			// Attach the rejection handler before the timer tick rejects.
-			const rejection = expect(sendPromise).rejects.toThrow("not acknowledged within 500ms");
+			const rejection = expect(sendPromise).rejects.toThrow("consumption was not acknowledged within 500ms");
 
 			await vi.advanceTimersByTimeAsync(600);
 			await rejection;
-			// The file remains so a later-booting child can still consume it.
+			// The file remains because Pi may still consume it later; retrying could
+			// duplicate steering that Pi already owns.
 			expect(harness.fs.files.has(`${harness.paths.controlDir}/steer-1.txt`)).toBe(true);
+			expect(vi.getTimerCount()).toBe(1);
+
+			harness.child.interrupt();
+			await flushPromises();
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("rejects a pending send when spawn settlement wins the race", async () => {
+		vi.useFakeTimers();
+		try {
+			const harness = createHarness({ ok: false, error: "herdr unavailable" });
+			const sendPromise = harness.child.send!("pending during setup");
+			const rejection = expect(sendPromise).rejects.toThrow("has settled");
+
+			await flushPromises();
+			await rejection;
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("rejects simultaneous pending sends immediately on interrupt", async () => {
+		vi.useFakeTimers();
+		try {
+			const harness = createHarness();
+			await flushPromises();
+			const first = harness.child.send!("first pending");
+			const second = harness.child.send!("second pending");
+			const firstRejection = expect(first).rejects.toThrow("has settled");
+			const secondRejection = expect(second).rejects.toThrow("has settled");
+
+			harness.child.interrupt();
+			await firstRejection;
+			await secondRejection;
+			await flushPromises();
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("rejects an ambiguous unlink race when interrupt happens before the consumption poll", async () => {
+		vi.useFakeTimers();
+		try {
+			const harness = createHarness();
+			await flushPromises();
+			const sendPromise = harness.child.send!("possibly consumed");
+			const rejection = expect(sendPromise).rejects.toThrow("before steering consumption was acknowledged");
+			harness.fs.files.delete(`${harness.paths.controlDir}/steer-1.txt`);
+
+			harness.child.interrupt();
+			await rejection;
+			await flushPromises();
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("settles a pending send and clears timers after a graceful close exits", async () => {
+		vi.useFakeTimers();
+		try {
+			const harness = createHarness();
+			await flushPromises();
+			const sendPromise = harness.child.send!("pending at close");
+			const rejection = expect(sendPromise).rejects.toThrow("has settled");
+			harness.child.requestClose?.();
+			harness.fs.files.set(harness.paths.responseFile, "closed");
+			harness.fs.files.set(harness.paths.exitFile, "0");
+
+			await vi.advanceTimersByTimeAsync(250);
+			await rejection;
+			expect(settledEvents(harness.events)).toEqual([{ kind: "run-settled", outcome: { kind: "completed", finalText: "closed" } }]);
+			expect(vi.getTimerCount()).toBe(0);
 		} finally {
 			vi.useRealTimers();
 		}

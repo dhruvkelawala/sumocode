@@ -246,7 +246,8 @@ describe("subagent tools", () => {
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		const result = await tool("subagent_send").execute("tc", { id: "sa-1", text: "continue with tests" }, undefined, undefined, ctx as never);
 
-		expect(textOf(result)).toBe("Sent steering input to sa-1 (worker). It is delivered after the child's current turn — no ack beyond delivery-to-child is possible.");
+		expect(textOf(result)).toBe("Steering submitted to the child runtime for sa-1 (worker); Pi exposes no post-acceptance acknowledgement.");
+		expect(textOf(result)).not.toMatch(/(?:was|is) (?:delivered|accepted)|delivery-to-child/);
 		expect(childSends.get("sa-1")).toHaveBeenCalledWith("continue with tests");
 		expect(sendPaneText).not.toHaveBeenCalled();
 		expect(result).toMatchObject({ details: { action: "send", id: "sa-1", pane: { paneId: "w1:p2" } } });

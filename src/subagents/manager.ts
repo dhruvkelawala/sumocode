@@ -486,7 +486,8 @@ export class SubagentManager {
 	}
 
 	/**
-	 * Deliver steering text to a running child over its control channel.
+	 * Wait until a running child's watcher consumes the steering control and
+	 * synchronously submits it to Pi. This is not a model-turn delivery ACK.
 	 * Throws with the same shapes the subagent tools surface directly.
 	 */
 	public async sendTo(id: string, text: string): Promise<SubagentSnapshot> {

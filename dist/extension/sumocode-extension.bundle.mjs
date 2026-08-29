@@ -14498,19 +14498,38 @@ ${options.prompt}` : options.prompt;
   let pollTimer;
   let interrupted = false;
   let settled = false;
+  let steerSeq = 0;
   let markReady = () => void 0;
   const ready = new Promise((resolve9) => {
     markReady = resolve9;
   });
+  const pendingSteeringAcks = /* @__PURE__ */ new Map();
   const clearWatcher = () => {
     if (!pollTimer) return;
     clearInterval(pollTimer);
     pollTimer = void 0;
   };
+  const steeringSettlementError = () => new Error(
+    `visible subagent ${options.id} has settled before steering consumption was acknowledged`
+  );
+  const finishPendingSteeringAck = (path2, error) => {
+    const pending = pendingSteeringAcks.get(path2);
+    if (!pending) return;
+    pendingSteeringAcks.delete(path2);
+    clearInterval(pending.timer);
+    if (error) pending.reject(error);
+    else pending.resolve();
+  };
+  const rejectPendingSteeringAcks = () => {
+    for (const path2 of pendingSteeringAcks.keys()) {
+      finishPendingSteeringAck(path2, steeringSettlementError());
+    }
+  };
   const settle = (event) => {
     if (settled) return;
     settled = true;
     clearWatcher();
+    rejectPendingSteeringAcks();
     options.signal?.removeEventListener("abort", interrupt);
     emitEvent?.(event);
   };
@@ -14561,13 +14580,11 @@ ${options.prompt}` : options.prompt;
     if (settled || interrupted) return;
     interrupted = true;
     clearWatcher();
+    rejectPendingSteeringAcks();
     void closeInterruptedPane();
   }
-  let steerSeq = 0;
   const send = (text) => {
-    if (settled || interrupted) {
-      return Promise.reject(new Error(`visible subagent ${options.id} has settled; input was not delivered`));
-    }
+    if (settled || interrupted) return Promise.reject(steeringSettlementError());
     const seq = ++steerSeq;
     const finalPath = join17(paths.controlDir, `steer-${seq}.txt`);
     fs3.writeFileSync(`${finalPath}.tmp`, text, { mode: PRIVATE_FILE_MODE3 });
@@ -14578,21 +14595,22 @@ ${options.prompt}` : options.prompt;
       let elapsed2 = 0;
       const ackTimer = setInterval(() => {
         if (!fs3.existsSync(finalPath)) {
-          clearInterval(ackTimer);
-          resolve9();
+          finishPendingSteeringAck(finalPath);
           return;
         }
         if (fs3.existsSync(paths.exitFile) && readText(paths.exitFile).trim()) {
-          clearInterval(ackTimer);
-          reject(new Error(`${options.id} exited before receiving input`));
+          poll();
           return;
         }
         elapsed2 += ackPollMs;
         if (elapsed2 >= ackTimeoutMs) {
-          clearInterval(ackTimer);
-          reject(new Error(`steer input to ${options.id} was not acknowledged within ${ackTimeoutMs}ms \u2014 the file remains and the child may still consume it`));
+          finishPendingSteeringAck(
+            finalPath,
+            new Error(`steering consumption was not acknowledged within ${ackTimeoutMs}ms for ${options.id} \u2014 the file remains and the child may still consume it`)
+          );
         }
       }, ackPollMs);
+      pendingSteeringAcks.set(finalPath, { timer: ackTimer, resolve: resolve9, reject });
       ackTimer.unref?.();
     });
   };
@@ -15520,7 +15538,8 @@ var SubagentManager = class {
     return ids.map((id) => lines.get(id) ?? `${id} is unknown`);
   }
   /**
-   * Deliver steering text to a running child over its control channel.
+   * Wait until a running child's watcher consumes the steering control and
+   * synchronously submits it to Pi. This is not a model-turn delivery ACK.
    * Throws with the same shapes the subagent tools surface directly.
    */
   async sendTo(id, text) {
@@ -15863,7 +15882,7 @@ var SUBAGENT_PROMPT_GUIDELINES = [
   "Use subagent_spawn for independent research, review, or implementation slices that can proceed while you keep working.",
   "Use visible subagents for long or interactive work the human may want to watch or steer; use headless subagents for silent, bounded fan-out.",
   "All children have their own context, cannot see this conversation, and cannot spawn subagents; prompts must be self-contained with objective, paths, constraints, expected output, and stop conditions.",
-  "Use subagent_send to steer a running visible child; the text is delivered as a Pi steering message after the child's current turn, not typed into its terminal. Headless or settled children cannot receive input.",
+  "Use subagent_send to steer a running visible child; success means its watcher consumed the control and synchronously submitted it to Pi. It does not prove the text was delivered as a Pi steering message after the child's current turn or accepted into a model turn, and it is not typed into its terminal. Headless or settled children cannot receive input.",
   "visible children stay open while active and auto-close after 30s of silence; use subagent_close to end one deliberately.",
   "Visible Herdr children split beside the parent when its tab is available, including worktree-backed children; overflow falls back to subagent tabs/workspaces.",
   "delegation is fire-and-forget: after spawning, continue other work or end your turn. settled results arrive as automatic follow-up messages that wake you. do NOT call subagent_wait right after subagent_spawn.",
@@ -15878,7 +15897,7 @@ var SUBAGENT_PROMPT_GUIDELINES = [
 var SUBAGENT_PROMPT_SNIPPET = "Spawn, steer, check, wait for, cancel, and list headless or visible subagents with self-contained prompts.";
 var SUBAGENT_TOOL_DESCRIPTIONS = {
   spawn: "Start one child subagent and return immediately with its id. Set visible=true for an interactive terminal-host pane, or omit it for silent headless execution. Optionally isolate it in a preserved git worktree. Its result is delivered automatically when it settles; no polling is needed.",
-  send: "Send steering text to a running visible subagent. Delivered as a Pi steering message after the child's current turn \u2014 not typed into its terminal.",
+  send: "Submit a Pi steering message to a running visible subagent. Success confirms child-runtime control consumption and synchronous submission, not model-turn acceptance; text is not typed into its terminal.",
   close: "Gracefully close visible subagents: the child saves its final response and exits cleanly, settling with a normal completion manifest. Use subagent_cancel only to abort work.",
   check: "Peek at one subagent without consuming its eventual result.",
   wait: "Block until subagents settle. Last resort: results deliver automatically on settlement; prefer ending your turn. Use only when nothing can proceed without the result.",
@@ -16060,11 +16079,11 @@ ${loaded.warnings.map((warning) => `- ${warning}`).join("\n")}`, {
     promptGuidelines: SUBAGENT_PROMPT_GUIDELINES,
     parameters: Type5.Object({
       id: Type5.String({ description: "Running visible subagent id, e.g. sa-1." }),
-      text: Type5.String({ description: "Steering text to deliver to the child." })
+      text: Type5.String({ description: "Steering text to submit to the child runtime." })
     }),
     async execute(_toolCallId, params) {
       const snapshot = await manager.sendTo(params.id, params.text);
-      return makeToolResult2(`Sent steering input to ${params.id} (${snapshot.title}). It is delivered after the child's current turn \u2014 no ack beyond delivery-to-child is possible.`, { action: "send", id: params.id, pane: snapshot.pane });
+      return makeToolResult2(`Steering submitted to the child runtime for ${params.id} (${snapshot.title}); Pi exposes no post-acceptance acknowledgement.`, { action: "send", id: params.id, pane: snapshot.pane });
     }
   });
   pi.registerTool({
@@ -16503,7 +16522,7 @@ function installControlWatcher(pi, controlDir, hooks) {
       timer = void 0;
     }
   };
-  const injectSteer = (file) => {
+  const submitSteer = (file) => {
     let text;
     try {
       text = readFileSync16(file, "utf8");
@@ -16522,9 +16541,9 @@ function installControlWatcher(pi, controlDir, hooks) {
       hooks.cancelCountdown();
       pi.sendUserMessage(text, { deliverAs: "steer" });
       unlinkSync3(file);
-      diagLog("steer_injected", { file, bytes: text.length });
+      diagLog("steer_submitted", { file, bytes: text.length });
     } catch (error) {
-      diagLog("steer_inject_failed", { file, message: errorMessage(error) });
+      diagLog("steer_submit_failed", { file, message: errorMessage(error) });
     }
   };
   const tick = () => {
@@ -16546,7 +16565,7 @@ function installControlWatcher(pi, controlDir, hooks) {
       }
       const seqOf = (name) => Number(name.match(STEER_FILE_PATTERN)?.[1] ?? Number.MAX_SAFE_INTEGER);
       const steerFiles = entries.filter((entry) => STEER_FILE_PATTERN.test(entry)).sort((a, b) => seqOf(a) - seqOf(b));
-      for (const name of steerFiles) injectSteer(join20(controlDir, name));
+      for (const name of steerFiles) submitSteer(join20(controlDir, name));
     } catch (error) {
       diagLog("control_poll_failed", { message: errorMessage(error) });
     }

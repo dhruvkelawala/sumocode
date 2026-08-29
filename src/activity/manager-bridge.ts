@@ -271,6 +271,7 @@ export class ActivityManagerBridge {
 
 	private syncOwnedSessions(): void {
 		if (!this.writerVerifiable) return;
+		const takeoverOwners: string[] = [];
 		for (const owner of this.sessionOwnership.ownedSessionIds()) {
 			if (this.claimedOwners.has(owner)) continue;
 			if (!this.sessionOwnership.claim(owner, this.bridgeToken)) continue;
@@ -281,14 +282,9 @@ export class ActivityManagerBridge {
 				// writer died (publisher.hasWriterOwnership && publisher.writerDeathProven)
 				// authorizes one extra terminal-index refresh, including takeover of an
 				// empty feed. Same-process handoffs and blocked claims authorize nothing.
-				if (publisher.writerDeathProven) {
-					try {
-						const refreshed = this.terminalManager.refreshSnapshotsFromStore?.();
-						if (refreshed) this.adoptTerminalSnapshots(refreshed);
-					} catch (error) {
-						this.diagnostic({ kind: "io", path: owner, message: `terminal takeover refresh failed: ${error instanceof Error ? error.message : String(error)}` });
-					}
-				}
+				// Every owner newly claimed in this pass shares ONE global refresh so a
+				// multi-owner takeover still scans the store exactly once.
+				if (publisher.writerDeathProven) takeoverOwners.push(owner);
 				this.claimedOwners.add(owner);
 			} else {
 				// A live incumbent may die while this process remains open. Failed
@@ -297,6 +293,13 @@ export class ActivityManagerBridge {
 				this.publishers.delete(owner);
 				this.sessionOwnership.release(owner, this.bridgeToken);
 			}
+		}
+		if (takeoverOwners.length === 0) return;
+		try {
+			const refreshed = this.terminalManager.refreshSnapshotsFromStore?.();
+			if (refreshed) this.adoptTerminalSnapshots(refreshed);
+		} catch (error) {
+			this.diagnostic({ kind: "io", path: takeoverOwners[0]!, message: `terminal takeover refresh failed: ${error instanceof Error ? error.message : String(error)}` });
 		}
 	}
 
@@ -396,7 +399,10 @@ export class ActivityManagerBridge {
 		}
 		try {
 			publisher.publish(merged);
-			if (abandonedRunningIds.size > 0) publisher.completeAbandonedReconciliation();
+			// Consume the takeover proof after every successful publication — even
+			// when the feed had no abandoned running producers (empty feed), so the
+			// refresh authorization cannot outlive its one-shot purpose.
+			publisher.completeAbandonedReconciliation();
 		} catch (error) {
 			if (!publisher.hasWriterOwnership) {
 				this.claimedOwners.delete(owner);

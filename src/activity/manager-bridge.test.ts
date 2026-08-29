@@ -235,10 +235,22 @@ describe("ActivityManagerBridge", () => {
 		const terminals = new FakeTerminalManager();
 		terminals.refreshedSnapshots = [terminal("term-after-empty-feed", "session-empty-takeover")];
 		terminals.outputs.set("/tmp/term-after-empty-feed.log", "late output");
+		const proofAtClaim: boolean[] = [];
+		const created: ActivityFeedPublisher[] = [];
 		const bridge = new ActivityManagerBridge(terminals, new FakeSubagentManager(), {
 			rootDir: stateRoot,
 			writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
 			inspectWriter: () => incumbentAlive ? "alive" : "dead",
+			publisherFactory: (owner) => {
+				const publisher = new ActivityFeedPublisher(owner, {
+					rootDir: stateRoot,
+					writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
+					inspectWriter: () => incumbentAlive ? "alive" : "dead",
+				});
+				proofAtClaim.push(publisher.writerDeathProven);
+				created.push(publisher);
+				return publisher;
+			},
 		});
 
 		bridge.bindSession("session-empty-takeover");
@@ -250,7 +262,64 @@ describe("ActivityManagerBridge", () => {
 		expect(fixturePublisher("session-empty-takeover", { rootDir: stateRoot }).getSnapshot()).toEqual(expect.arrayContaining([
 			expect.objectContaining({ id: "term-after-empty-feed", status: "running" }),
 		]));
+		// The takeover proof was real and is consumed by the first successful
+		// publication even though the feed had no abandoned running producers.
+		expect(proofAtClaim).toEqual([false, false, true]);
+		expect(created.at(-1)!.writerDeathProven).toBe(false);
 		bridge.bindSession("session-empty-takeover");
+		expect(terminals.refreshCount).toBe(1);
+		bridge.dispose();
+	});
+
+	it("coalesces a multi-owner death-proven takeover into exactly one store refresh", () => {
+		const stateRoot = root();
+		const incumbentA = new ActivityFeedPublisher("session-multi-a", {
+			rootDir: stateRoot,
+			writerIdentity: { token: "writer-a", pid: 101, processStartTime: "start-a" },
+			inspectWriter: () => "alive",
+		});
+		incumbentA.publish([{ id: "held-a", kind: "subagent", title: "held-a", status: "running", createdAt: 1_000 }]);
+		const incumbentB = new ActivityFeedPublisher("session-multi-b", {
+			rootDir: stateRoot,
+			writerIdentity: { token: "writer-b", pid: 102, processStartTime: "start-b" },
+			inspectWriter: () => "alive",
+		});
+		incumbentB.publish([]);
+		let incumbentsAlive = true;
+		const terminals = new FakeTerminalManager();
+		terminals.refreshedSnapshots = [terminal("term-multi-a", "session-multi-a"), terminal("term-multi-b", "session-multi-b")];
+		terminals.outputs.set("/tmp/term-multi-a.log", "a output");
+		terminals.outputs.set("/tmp/term-multi-b.log", "b output");
+		const bridge = new ActivityManagerBridge(terminals, new FakeSubagentManager(), {
+			rootDir: stateRoot,
+			writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
+			inspectWriter: () => incumbentsAlive ? "alive" : "dead",
+		});
+
+		// Live incumbents and unproven claims authorize no refresh.
+		bridge.bindSession("session-multi-a");
+		bridge.bindSession("session-multi-b");
+		expect(terminals.refreshCount).toBe(0);
+
+		// Both writers die; one sync pass claims both owners and refreshes once.
+		incumbentsAlive = false;
+		bridge.bindSession("session-multi-a");
+		expect(terminals.refreshCount).toBe(1);
+		bridge.bindSession("session-multi-b");
+		expect(terminals.refreshCount).toBe(1);
+
+		// Every owner published from the same refreshed projection.
+		expect(fixturePublisher("session-multi-a", { rootDir: stateRoot }).getSnapshot()).toEqual(expect.arrayContaining([
+			expect.objectContaining({ id: "term-multi-a", status: "running" }),
+			expect.objectContaining({ id: "held-a", status: "lost" }),
+		]));
+		expect(fixturePublisher("session-multi-b", { rootDir: stateRoot }).getSnapshot()).toEqual(expect.arrayContaining([
+			expect.objectContaining({ id: "term-multi-b", status: "running" }),
+		]));
+
+		// Repeat syncs never trigger a second refresh.
+		bridge.bindSession("session-multi-a");
+		bridge.bindSession("session-multi-b");
 		expect(terminals.refreshCount).toBe(1);
 		bridge.dispose();
 	});

@@ -523,7 +523,9 @@ export class ActivityFeedPublisher {
 	/**
 	 * The exact claim-time proof that a previous writer died. This is the sole
 	 * authorization bit for one cross-process terminal-index refresh; it stays
-	 * readable until completeAbandonedReconciliation consumes it.
+	 * readable until completeAbandonedReconciliation consumes it. The bridge
+	 * consumes it after the takeover's first successful publication — including
+	 * empty feeds, where there are no abandoned running producers to reconcile.
 	 */
 	public get writerDeathProven(): boolean {
 		return this.writerDeathProof;

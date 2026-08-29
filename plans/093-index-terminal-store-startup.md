@@ -100,6 +100,12 @@ After final source edits, run `pnpm build:extension` before `pnpm test`; keep th
 - `plans/README.md`: the 093 evidence line cites the verifiable committed extension manifest input hash plus `outputsHash` freshness instead of the unverifiable "rebuilt three times byte-identical" claim. One-worker and serial full-unit gates are preserved as the local authoritative runs; CI remains authoritative.
 - No retention, schema, layout, or deletion changes; no public store/manager API beyond `isIndexedOwner` and the explicit refresh result shape already required by this plan.
 
+**Authorized review-fix addition (run `run-20260829T180227Z-03c8c56f` attempt 2) — release should-fixes only**:
+
+- `src/background-tasks/task-manager.ts` (+ colocated test): `readIndexed` re-verifies `snapshot.ownerSessionId` from the freshly read record after the compact precheck and its one `getIndexed` read — defense-in-depth so a compact entry gone stale relative to disk can never return another session's record. The recheck costs no extra I/O (a mismatch still costs exactly one metadata read and zero scans) and the foreign/unknown-owner zero-read precheck behavior is unchanged.
+- Root `README.md`: the one-line self-verifying extension bundle contract note (`dist/extension/.inputs.json` binds the input-graph hash to `outputsHash`, `pnpm build:extension` reproduces both, the runtime rejects stale inputs or a mismatched artifact) is an authorized part of this plan's bundle-freshness evidence repair and is kept; this authorization covers that file for the working-tree preflight/drift check.
+- No other behavior, schema, layout, retention, or public API changes.
+
 **Out of scope**:
 - Record deletion, archival, retention, schema migration, or changing task-directory layout.
 - Polling cadence/process verification (Plan 106).

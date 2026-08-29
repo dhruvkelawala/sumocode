@@ -12391,12 +12391,16 @@ ${command}
    * projection. Owner-isolated: another session's record reads as `undefined`.
    * The owner precheck runs against the compact index with no I/O, so a foreign
    * or unknown id costs zero metadata reads and a matching id costs exactly
-   * one. Narrow surface for pre-send/pre-publication freshness checks; never
-   * scans the store and only resolves indexed ids.
+   * one. The owner check is re-verified against the freshly read snapshot at no
+   * extra cost, so a compact entry gone stale relative to disk cannot leak
+   * another session's record. Narrow surface for pre-send/pre-publication
+   * freshness checks; never scans the store and only resolves indexed ids.
    */
   readIndexed(id, ownerSessionId2) {
     if (!this.store.isIndexedOwner(id, ownerSessionId2)) return void 0;
-    return this.store.getIndexed(id);
+    const snapshot = this.store.getIndexed(id);
+    if (snapshot && snapshot.ownerSessionId !== ownerSessionId2) return void 0;
+    return snapshot;
   }
   getSnapshots() {
     const snapshots = [...this.tasks.values()];

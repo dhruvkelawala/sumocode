@@ -461,6 +461,50 @@ describe("TerminalTaskManager", () => {
 		expect(target.get(initial.id, "session-a")).toMatchObject({ revision: 2, title: "after" });
 	});
 
+	it("stops serving retained snapshots once a successful refresh quarantines the record", async () => {
+		const store = new TerminalTaskStore({ rootDir });
+		const target = manager({ store });
+		const task = await start(target);
+		writeFileSync(exitFile(task), "0");
+		children[0]?.emit("close", 0);
+		await vi.waitFor(() => expect(target.get(task.id, "session-a")?.status).toBe("completed"));
+
+		// The durable record becomes corrupt/unreadable; the next successful
+		// explicit refresh quarantines it from the compact index without deleting
+		// or rewriting it.
+		const metaFile = join(dirname(task.logFile), "meta.json");
+		writeFileSync(metaFile, "{not json", { mode: 0o600 });
+		expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+		expect(store.isIndexedOwner(task.id, "session-a")).toBe(false);
+
+		// The stale retained snapshot must not answer explicit queries: get and
+		// the terminal_check seam yield normal unknown semantics instead of
+		// throwing on the missing indexed path downstream.
+		expect(target.get(task.id, "session-a")).toBeUndefined();
+		expect(target.check(task.id, "session-a")).toBeUndefined();
+		// Quarantine stays logical: the corrupt record itself is untouched.
+		expect(readFileSync(metaFile, "utf8")).toBe("{not json");
+	});
+
+	it("keeps retained snapshots queryable when a refresh fails", async () => {
+		const target = manager();
+		const task = await start(target);
+		writeFileSync(exitFile(task), "0");
+		children[0]?.emit("close", 0);
+		await vi.waitFor(() => expect(target.get(task.id, "session-a")?.status).toBe("completed"));
+
+		chmodSync(rootDir, 0o000);
+		try {
+			// A failed refresh preserves the last good index, so the retained
+			// settled task remains queryable via the explicit query seam across
+			// the transient failure.
+			expect(target.refreshSnapshotsFromStore().ok).toBe(false);
+			expect(target.get(task.id, "session-a")).toMatchObject({ id: task.id, status: "completed" });
+		} finally {
+			chmodSync(rootDir, 0o700);
+		}
+	});
+
 	it("terminates the new process tree when spawn identity persistence fails", async () => {
 		const store = new TerminalTaskStore({ rootDir });
 		const transition = vi.spyOn(store, "transition").mockImplementation(() => {

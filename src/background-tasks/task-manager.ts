@@ -580,6 +580,15 @@ export class TerminalTaskManager {
 	}
 
 	public get(id: string, ownerSessionId: string): TerminalTaskSnapshot | undefined {
+		// Retained snapshots stay queryable only while the store's current compact
+		// index still recognizes this id for this owner. A successful refresh that
+		// quarantined a corrupt/unreadable record drops it from the index; without
+		// this no-I/O precheck the stale retained snapshot would keep answering
+		// explicit queries and downstream observe/mutate would throw on the missing
+		// indexed path instead of reporting a normal unknown terminal. A failed
+		// refresh preserves the last good index, so retained tasks remain queryable
+		// across transient store unavailability.
+		if (!this.store.isIndexedOwner(id, ownerSessionId)) return undefined;
 		const retained = this.tasks.get(id);
 		const task = retained ?? this.store.getIndexed(id);
 		if (!task || task.ownerSessionId !== ownerSessionId) return undefined;

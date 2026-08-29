@@ -12139,6 +12139,7 @@ ${command}
     });
   }
   get(id, ownerSessionId2) {
+    if (!this.store.isIndexedOwner(id, ownerSessionId2)) return void 0;
     const retained = this.tasks.get(id);
     const task = retained ?? this.store.getIndexed(id);
     if (!task || task.ownerSessionId !== ownerSessionId2) return void 0;

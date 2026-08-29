@@ -455,9 +455,9 @@ args_request_noninteractive_pi() {
 	return 1
 }
 
-# Extracts the first plain (non-flag) positional from SUMOCODE_ARGS, matching
-# Pi's own CLI contract: `parsed.messages[0]` (the first bare positional in
-# argv order -- see @earendil-works/pi-coding-agent's cli/args.js and
+# Extracts the first actual message (parsed.messages[0]) from SUMOCODE_ARGS,
+# mirroring Pi's own CLI contract: the first bare positional in argv order
+# (see @earendil-works/pi-coding-agent's cli/args.js and
 # cli/initial-message.js) becomes the kickoff/initial message in interactive
 # mode. `--mode rpc` never reads this positional at all (rpc-mode.js only
 # consumes stdin JSON commands), so on the RPC path this positional would
@@ -472,37 +472,86 @@ args_request_noninteractive_pi() {
 # unchanged (and are still silently ignored there, same as before this fix,
 # which is a pre-existing multi-positional limitation out of scope here).
 #
-# VALUE-CONSUMING FLAG TABLE -- mirrors
+# OPTION-CONSUMPTION CLASS TABLE -- mirrors
 # node_modules/@earendil-works/pi-coding-agent/dist/cli/args.js parseArgs()
-# (pi-coding-agent 0.79.1) EXACTLY, so that this wrapper skips a flag's value
+# (pi-coding-agent 0.84.3) EXACTLY, so that this wrapper skips a flag's value
 # together with the flag itself instead of mistaking the value for the first
-# plain positional. This is the same reason the wrapper's own arg loop above
-# never needs to worry about ITS OWN value-taking flags (--diag-file,
-# --prompt-file): those are consumed at the wrapper's parse stage before
-# anything reaches SUMOCODE_ARGS. Only Pi's flags need a table here, since
-# Pi's own unrecognized/unknown flags are forwarded opaquely by this wrapper.
+# actual message. Every flag/value token stays in the forwarded argv; only
+# the first real positional message is extracted. This is the same reason the
+# wrapper's own arg loop above never needs to worry about ITS OWN
+# value-taking flags (--diag-file, --prompt-file): those are consumed at the
+# wrapper's parse stage before anything reaches SUMOCODE_ARGS. Only Pi's
+# flags need a table here, since extension flags reach Pi through args.js's
+# generic unknown-long-option branch, which is mirrored as class 5 below.
 #
-# PI-BUMP NOTE: if @earendil-works/pi-coding-agent is upgraded, re-diff
-# cli/args.js's parseArgs() against this table (`git diff` the file, or just
-# re-read it) -- any newly added value-taking flag must be added below, or it
-# will silently reintroduce this same bug for that flag.
+# PI-BUMP NOTE (pinned: pi-coding-agent 0.84.3, dist/cli/args.js): if
+# @earendil-works/pi-coding-agent is upgraded, re-read parseArgs() in the NEW
+# dist/cli/args.js and re-diff every consumption class below (`git diff` the
+# file, or just re-read it) -- any newly added value-taking flag or changed
+# lookahead rule must be mirrored here, or it will silently corrupt the
+# extracted kickoff prompt. Plan 101 (Pi compatibility matrix) owns the
+# per-version rerun of this table.
 #
-# Unconditional space-form value flags (always consume `args[++i]` when a
-# next token exists, per args.js -- note --mode consumes its next token even
-# if the value is invalid, since the `i+1 < args.length` check runs before
-# validity is checked):
-#   --mode, --provider, --model, --api-key, --system-prompt,
-#   --append-system-prompt, --name/-n, --session, --session-id, --fork,
-#   --session-dir, --models, --tools/-t, --exclude-tools/-xt, --thinking,
-#   --export, --extension/-e, --skill, --prompt-template, --theme
+# Class 1 -- unconditional space-form value flags: consume `args[++i]`
+#   whenever a next token EXISTS (args.js checks `i + 1 < args.length` before
+#   validity, so dash/@/invalid values are still consumed; --mode consumes
+#   its next token even when the value is invalid):
+#     --mode, --provider, --model, --api-key, --system-prompt,
+#     --append-system-prompt, --name/-n, --session, --session-id, --fork,
+#     --session-dir, --models, --tools/-t, --exclude-tools/-xt, --thinking,
+#     --export, --extension/-e, --skill, --prompt-template, --theme
 #
-# Conditional space-form value flags (args.js only consumes the next token if
-# it doesn't look like a flag or @file -- mirrored with the same lookahead
-# here so we don't eat a following real positional):
-#   --print/-p, --list-models
+# Class 2 -- known boolean flags: never consume. These MUST be recognized
+#   before the generic unknown branch (class 5) or a boolean such as
+#   --offline would wrongly consume the real prompt as its value:
+#     --help/-h, --version/-v, --continue/-c, --resume/-r, --no-session,
+#     --no-tools/-nt, --no-builtin-tools/-nbt, --no-extensions/-ne,
+#     --no-skills/-ns, --no-prompt-templates/-np, --no-themes,
+#     --no-context-files/-nc, --verbose, --approve/-a, --no-approve/-na,
+#     --offline
 #
-# `--flag=value` forms (any flag, per args.js's generic `--` handler) are
-# already a single token and need no table entry -- skipped as-is below.
+# Class 3 -- dedicated lookahead flags with distinct rules in args.js:
+#   --print/-p    consumes the next token as a print message only when it is
+#                 not an @file AND either does not start with `-` or starts
+#                 with `---` (Pi's dash-leading-message exception).
+#   --list-models consumes the next token as a search pattern only when it
+#                 starts with neither `-` nor `@`; otherwise it stands
+#                 boolean.
+#   --tui-mode    consumes the next token only when it is exactly `regular`
+#                 or `fullscreen`; a missing or dash-following value is NOT
+#                 consumed (Pi errors); any other non-dash value, including
+#                 @file, IS consumed as invalid.
+#   --use-theme   consumes the next token unless it starts with `-`
+#                 (@-prefixed theme names included); a missing or
+#                 dash-following value is not consumed (Pi errors).
+#
+# Class 4 -- standalone `@file` tokens: args.js files them as fileArgs, never
+#   messages; keep them and never extract them as the prompt.
+#
+# Class 5 -- unknown `--flag` (how extension flags reach Pi): consume ONE
+#   next token exactly when args.js's generic branch would -- a next token
+#   exists and does not start with `-` or `@`; otherwise the flag stands
+#   alone. `--flag=value` is a single token in args.js's generic handler and
+#   never consumes anything (known flags compared with `==` never match
+#   equals form in args.js either; they fall into the same generic bucket).
+#
+# Class 6 -- plain positional: the first remaining non-dash, non-@ token is
+#   parsed.messages[0]; extract it and remove it from the forwarded argv.
+#
+# Do not infer extension flag schemas beyond args.js's generic class-5 rule:
+# Pi itself treats unknown flags opaquely, and so does this table.
+
+# Pure membership test so each consumption class below reads as a table.
+_sumocode_arg_in() {
+	local candidate="$1"
+	shift
+	local item
+	for item in "$@"; do
+		[[ "${candidate}" == "${item}" ]] && return 0
+	done
+	return 1
+}
+
 extract_first_positional() {
 	EXTRACTED_INITIAL_PROMPT=""
 	local -a kept=()
@@ -511,34 +560,36 @@ extract_first_positional() {
 	local n="${#SUMOCODE_ARGS[@]}"
 	local arg next
 
-	# Pi flags that always consume the following token as a value (space
-	# form). See the flag table comment above for the args.js citation.
+	# Class 1: unconditional value flags (see table above for the args.js
+	# citation).
 	local -a value_flags=(
 		--mode --provider --model --api-key --system-prompt
 		--append-system-prompt --name -n --session --session-id --fork
 		--session-dir --models --tools -t --exclude-tools -xt --thinking
 		--export --extension -e --skill --prompt-template --theme
 	)
-	# Pi flags that conditionally consume the following token only if it does
-	# not look like another flag or an @file argument.
-	local -a conditional_value_flags=(--print -p --list-models)
+	# Class 2: known boolean flags -- recognized BEFORE the generic unknown
+	# branch so a boolean like --offline never consumes the real prompt.
+	local -a boolean_flags=(
+		--help -h --version -v --continue -c --resume -r --no-session
+		--no-tools -nt --no-builtin-tools -nbt --no-extensions -ne
+		--no-skills -ns --no-prompt-templates -np --no-themes
+		--no-context-files -nc --verbose --approve -a --no-approve -na
+		--offline
+	)
 
 	while [[ "${i}" -lt "${n}" ]]; do
 		arg="${SUMOCODE_ARGS[i]}"
 
 		if [[ "${arg}" == --*=* ]]; then
-			# `--flag=value` is already one token; nothing to skip alongside it.
+			# Class 5 (equals form): already one token; consumes nothing.
 			kept+=("${arg}")
 			i=$((i + 1))
 			continue
 		fi
 
-		local is_value_flag=0
-		local f
-		for f in "${value_flags[@]}"; do
-			if [[ "${arg}" == "${f}" ]]; then is_value_flag=1; break; fi
-		done
-		if [[ "${is_value_flag}" -eq 1 ]]; then
+		if _sumocode_arg_in "${arg}" "${value_flags[@]}"; then
+			# Class 1: consume the next token whenever one exists.
 			kept+=("${arg}")
 			if [[ $((i + 1)) -lt "${n}" ]]; then
 				kept+=("${SUMOCODE_ARGS[i+1]}")
@@ -549,15 +600,20 @@ extract_first_positional() {
 			continue
 		fi
 
-		local is_conditional_flag=0
-		for f in "${conditional_value_flags[@]}"; do
-			if [[ "${arg}" == "${f}" ]]; then is_conditional_flag=1; break; fi
-		done
-		if [[ "${is_conditional_flag}" -eq 1 ]]; then
+		if _sumocode_arg_in "${arg}" "${boolean_flags[@]}"; then
+			# Class 2: booleans never consume.
+			kept+=("${arg}")
+			i=$((i + 1))
+			continue
+		fi
+
+		if [[ "${arg}" == --print || "${arg}" == -p ]]; then
+			# Class 3: --print consumes a non-@file next token only when it does
+			# not start with `-`, or starts with `---`.
 			kept+=("${arg}")
 			if [[ $((i + 1)) -lt "${n}" ]]; then
 				next="${SUMOCODE_ARGS[i+1]}"
-				if [[ -n "${next}" && "${next}" != -* && "${next}" != @* ]]; then
+				if [[ "${next}" != @* && ( "${next}" != -* || "${next}" == ---* ) ]]; then
 					kept+=("${next}")
 					i=$((i + 2))
 					continue
@@ -567,13 +623,93 @@ extract_first_positional() {
 			continue
 		fi
 
-		if [[ "${found}" -eq 0 && -n "${arg}" && "${arg}" != -* ]]; then
+		if [[ "${arg}" == --list-models ]]; then
+			# Class 3: --list-models consumes a search pattern that starts with
+			# neither `-` nor `@`.
+			kept+=("${arg}")
+			if [[ $((i + 1)) -lt "${n}" ]]; then
+				next="${SUMOCODE_ARGS[i+1]}"
+				if [[ "${next}" != -* && "${next}" != @* ]]; then
+					kept+=("${next}")
+					i=$((i + 2))
+					continue
+				fi
+			fi
+			i=$((i + 1))
+			continue
+		fi
+
+		if [[ "${arg}" == --tui-mode ]]; then
+			# Class 3: --tui-mode consumes exactly regular/fullscreen and, like
+			# args.js, also any other non-dash value (consumed as invalid); a
+			# missing or dash-following value is not consumed.
+			kept+=("${arg}")
+			if [[ $((i + 1)) -lt "${n}" ]]; then
+				next="${SUMOCODE_ARGS[i+1]}"
+				if [[ "${next}" != -* ]]; then
+					kept+=("${next}")
+					i=$((i + 2))
+					continue
+				fi
+			fi
+			i=$((i + 1))
+			continue
+		fi
+
+		if [[ "${arg}" == --use-theme ]]; then
+			# Class 3: --use-theme consumes the next token unless it starts
+			# with `-` (@-prefixed theme names included).
+			kept+=("${arg}")
+			if [[ $((i + 1)) -lt "${n}" ]]; then
+				next="${SUMOCODE_ARGS[i+1]}"
+				if [[ "${next}" != -* ]]; then
+					kept+=("${next}")
+					i=$((i + 2))
+					continue
+				fi
+			fi
+			i=$((i + 1))
+			continue
+		fi
+
+		if [[ "${arg}" == @* ]]; then
+			# Class 4: standalone @file is a Pi fileArg, never a message.
+			kept+=("${arg}")
+			i=$((i + 1))
+			continue
+		fi
+
+		if [[ "${arg}" == --* ]]; then
+			# Class 5: unknown long option (extension flags). Consume ONE next
+			# token exactly when args.js's generic branch would: a next token
+			# exists, is not `-`-prefixed and not `@`-prefixed.
+			kept+=("${arg}")
+			if [[ $((i + 1)) -lt "${n}" ]]; then
+				next="${SUMOCODE_ARGS[i+1]}"
+				if [[ "${next}" != -* && "${next}" != @* ]]; then
+					kept+=("${next}")
+					i=$((i + 2))
+					continue
+				fi
+			fi
+			i=$((i + 1))
+			continue
+		fi
+
+		if [[ "${found}" -eq 0 && -n "${arg}" ]]; then
+			# Class 6: first actual message -- extract it, drop it from the
+			# forwarded argv (non-dash/non-@ is guaranteed by the classes
+			# above).
 			EXTRACTED_INITIAL_PROMPT="${arg}"
 			found=1
 			i=$((i + 1))
 			continue
 		fi
 
+		# Anything else (short unknown options like `-x`, extra positionals
+		# after the first message) is kept; args.js never consumes a following
+		# token for them either (it only records an "Unknown option"
+		# diagnostic).
 		kept+=("${arg}")
 		i=$((i + 1))
 	done

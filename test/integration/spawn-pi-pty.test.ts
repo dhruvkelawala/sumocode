@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { IDisposable, IEvent, IPty } from "node-pty";
+import { dirname, join, resolve } from "node:path";
+import { spawn, type IDisposable, type IEvent, type IPty } from "node-pty";
 import { describe, expect, it } from "vitest";
 import { buildSpawnEnv, spawnPiPty, type SpawnPiPtyOptions } from "./spawn-pi-pty.js";
 
@@ -255,6 +256,214 @@ describe("spawnPiPty agent state isolation", () => {
 			rmSync(generatedRoot, { recursive: true, force: true });
 		}
 	});
+});
+
+/**
+ * Plan 096 fixture table: one row per option-consumption class pinned to
+ * @earendil-works/pi-coding-agent 0.84.3 `dist/cli/args.js` `parseArgs()`.
+ * Each row runs `bin/sumocode.sh --dry-run <args>` under a real PTY so the
+ * launcher selects its RPC path and exercises `extract_first_positional`
+ * (the execFile-based dry-run tests above are non-TTY and never extract).
+ *
+ * Plan 101 (Pi compatibility matrix) reruns this table per supported Pi
+ * version: bump the pinned version here alongside the class table in
+ * `bin/sumocode.sh`, re-read the new `parseArgs()`, and adjust expectations.
+ * The prompt values are asserted literally under current behavior; Plan 097
+ * replaces them with redacted presence/length assertions.
+ */
+interface OptionConsumptionRow {
+	readonly name: string;
+	readonly args: readonly string[];
+	/** Literal extracted kickoff prompt; empty when nothing may be extracted. */
+	readonly expectedPrompt: string;
+	/** Space-joined argv forwarded to the child after extraction. */
+	readonly expectedArgs: string;
+	/** `--print` / `--mode` rows must keep the direct-Pi bypass (no RPC host, no extraction). */
+	readonly directBypass?: boolean;
+}
+
+const OPTION_CONSUMPTION_ROWS: readonly OptionConsumptionRow[] = [
+	{
+		name: "tui-mode consumes `regular` and extracts the real positional prompt",
+		args: ["--tui-mode", "regular", "review the diff"],
+		expectedPrompt: "review the diff",
+		expectedArgs: "--tui-mode regular",
+	},
+	{
+		name: "tui-mode equals form stays a single token",
+		args: ["--tui-mode=regular", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--tui-mode=regular",
+	},
+	{
+		name: "tui-mode with a missing value consumes nothing",
+		args: ["--tui-mode"],
+		expectedPrompt: "",
+		expectedArgs: "--tui-mode",
+	},
+	{
+		name: "tui-mode does not consume a dash-following value",
+		args: ["--tui-mode", "--offline", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--tui-mode --offline",
+	},
+	{
+		name: "tui-mode consumes an invalid plain value like Pi",
+		args: ["--tui-mode", "bogus", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--tui-mode bogus",
+	},
+	{
+		name: "tui-mode consumes an @file value as invalid like Pi",
+		args: ["--tui-mode", "@mode.txt", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--tui-mode @mode.txt",
+	},
+	{
+		name: "standalone @file stays a Pi fileArg and is never the prompt",
+		args: ["@notes.md", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "@notes.md",
+	},
+	{
+		name: "use-theme consumes an @-prefixed theme name",
+		args: ["--use-theme", "@cathedral/dark", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--use-theme @cathedral/dark",
+	},
+	{
+		name: "use-theme does not consume a dash-following value",
+		args: ["--use-theme", "--offline", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--use-theme --offline",
+	},
+	{
+		name: "known boolean --offline never consumes the prompt",
+		args: ["--offline", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--offline",
+	},
+	{
+		name: "unknown extension flag consumes one dash-free value",
+		args: ["--plan", "active", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--plan active",
+	},
+	{
+		name: "boolean-style unknown extension flag does not consume a following flag",
+		args: ["--plan", "--offline", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--plan --offline",
+	},
+	{
+		name: "unknown extension flag equals form stays a single token",
+		args: ["--plan=strict", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--plan=strict",
+	},
+	{
+		name: "list-models consumes a dash-free search pattern",
+		args: ["--list-models", "sonnet", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--list-models sonnet",
+	},
+	{
+		name: "list-models refuses an @file search pattern",
+		args: ["--list-models", "@models.txt", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--list-models @models.txt",
+	},
+	{
+		name: "unconditional value flags bind before and after the positional",
+		args: ["--model", "sonnet", "PROMPT", "--offline"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--model sonnet --offline",
+	},
+	{
+		name: "print keeps the --- message quirk and the direct-Pi bypass intact",
+		args: ["--print", "---text", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "--print ---text PROMPT",
+		directBypass: true,
+	},
+	{
+		name: "explicit --mode keeps the direct-Pi bypass intact",
+		args: ["--mode", "rpc", "--offline", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "--mode rpc --offline PROMPT",
+		directBypass: true,
+	},
+];
+
+describe("sumocode launcher mirrors Pi option consumption (PTY RPC path)", () => {
+	/** macOS node-pty needs its spawn-helper executable; mirror spawn-pi-pty's ensure step. */
+	function ensureNodePtySpawnHelperExecutableForTest(): void {
+		try {
+			const require = createRequire(import.meta.url);
+			const nodePtyMain = require.resolve("node-pty");
+			const spawnHelper = join(dirname(nodePtyMain), "..", "prebuilds", `${process.platform}-${process.arch}`, "spawn-helper");
+			if (existsSync(spawnHelper)) chmodSync(spawnHelper, 0o755);
+		} catch {
+			// Resolution differences surface as a real spawn error below.
+		}
+	}
+
+	/** Runs `bin/sumocode.sh --dry-run <args>` with stdout on a real PTY (RPC path). */
+	function ptyDryRun(args: readonly string[]): Promise<string> {
+		ensureNodePtySpawnHelperExecutableForTest();
+		return new Promise<string>((resolveRun, rejectRun) => {
+			const child = spawn(resolve(process.cwd(), "bin/sumocode.sh"), ["--dry-run", ...args], {
+				name: "xterm-256color",
+				cols: 80,
+				rows: 24,
+				cwd: process.cwd(),
+				env: buildSpawnEnv(process.env, { PI_BIN: "/bin/echo" }),
+			});
+			let output = "";
+			child.onData((data) => {
+				output += data;
+			});
+			child.onExit(({ exitCode }) => {
+				if (exitCode === 0) resolveRun(output);
+				else rejectRun(new Error(`launcher dry-run exited ${exitCode}. Output:\n${output}`));
+			});
+		});
+	}
+
+	function dryRunField(output: string, field: string): string {
+		const line = output.split(/\r?\n/).find((candidate) => candidate.startsWith(`${field}=`));
+		if (line === undefined) throw new Error(`dry-run output missing ${field}. Output:\n${output}`);
+		return line.slice(field.length + 1);
+	}
+
+	for (const row of OPTION_CONSUMPTION_ROWS) {
+		it(row.name, async () => {
+			const output = await ptyDryRun(row.args);
+			const prompt = dryRunField(output, "SUMOCODE_INITIAL_PROMPT");
+			const forwardedArgs = dryRunField(output, "ARGS");
+			const execLine = output.split(/\r?\n/).find((candidate) => candidate.startsWith("exec "));
+			if (execLine === undefined) throw new Error(`dry-run output missing exec line. Output:\n${output}`);
+
+			if (row.directBypass === true) {
+				// Direct-Pi bypass stays byte-for-byte: no RPC host, no extraction,
+				// argv forwarded exactly as typed (including `---`-prefixed print
+				// messages Pi would consume).
+				expect(prompt).toBe("");
+				expect(forwardedArgs).toBe(row.expectedArgs);
+				expect(execLine.startsWith("exec /bin/echo -e ")).toBe(true);
+				expect(execLine).toContain("/src/extension-entry.ts");
+				expect(execLine.endsWith(` ${row.expectedArgs}`)).toBe(true);
+				expect(execLine).not.toContain("sumo-rpc-host.js");
+				return;
+			}
+
+			// RPC path: flags/values stay in the forwarded argv; only the first
+			// actual message moves to the kickoff-prompt side channel.
+			expect(prompt).toBe(row.expectedPrompt);
+			expect(forwardedArgs).toBe(row.expectedArgs);
+			expect(execLine).toBe(`exec node ${process.cwd()}/sumo-rpc-host.js ${row.expectedArgs}`);
+		});
+	}
 });
 
 describe("sumocode launcher mode decision", () => {

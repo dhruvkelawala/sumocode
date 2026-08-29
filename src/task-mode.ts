@@ -220,6 +220,11 @@ const STEER_FILE_PATTERN = /^steer-(\d+)\.txt$/;
 export interface TaskModeAutoExitOptions {
 	readonly env?: NodeJS.ProcessEnv;
 	readonly graceMs?: number;
+	/**
+	 * Ack-unlink seam (dependency injection for tests): defaults to the real
+	 * unlinkSync. The watcher only ever unlinks control files with it.
+	 */
+	readonly unlink?: (path: string) => void;
 }
 
 /** True when task mode is active. Mirrors `isTaskMode` in extension.ts. */
@@ -251,19 +256,49 @@ interface TaskModeControlHooks {
  * watcher is independent of the auto-exit countdown: it also runs for
  * keep-open sessions, because close is explicit while auto-exit is silence.
  */
-function installControlWatcher(pi: ExtensionAPI, controlDir: string | undefined, hooks: TaskModeControlHooks): () => void {
+function installControlWatcher(
+	pi: ExtensionAPI,
+	controlDir: string | undefined,
+	hooks: TaskModeControlHooks,
+	unlinkControl: (path: string) => void,
+): () => void {
 	if (!controlDir) return () => undefined;
 	let stopped = false;
 	let timer: ReturnType<typeof setInterval> | undefined;
+	// Controls whose synchronous submission already succeeded. A failing ack
+	// unlink must never turn into a resubmission: Pi may already own the steer,
+	// and a second sendUserMessage would duplicate it.
+	const submittedControls = new Set<string>();
+
 	const stop = (): void => {
 		stopped = true;
 		if (timer) {
 			clearInterval(timer);
 			timer = undefined;
 		}
+		// Watcher shutdown ends this runtime's ownership of pending ack unlinks.
+		submittedControls.clear();
+	};
+
+	/** Acknowledgement cleanup: unlink the consumed control, never resubmit. */
+	const discardSubmittedControl = (file: string): void => {
+		try {
+			unlinkControl(file);
+			submittedControls.delete(file);
+			diagLog("steer_ack_unlinked", { file });
+		} catch (error) {
+			// Truthful ack-cleanup diagnostic — the submission itself succeeded and
+			// must not be retried; only the unlink is pending.
+			diagLog("steer_ack_unlink_failed", { file, message: errorMessage(error) });
+		}
 	};
 
 	const submitSteer = (file: string): void => {
+		if (submittedControls.has(file)) {
+			// Submission already handed this control to Pi. Retry the unlink only.
+			discardSubmittedControl(file);
+			return;
+		}
 		let text: string;
 		try {
 			text = readFileSync(file, "utf8");
@@ -272,29 +307,41 @@ function installControlWatcher(pi: ExtensionAPI, controlDir: string | undefined,
 			return;
 		}
 		if (!text.trim()) {
-			// Empty writes carry nothing to submit; deletion still records control
-			// consumption so the orchestrator does not wait out its full budget.
+			// Legacy blank control: nothing to submit, so no Pi call and no
+			// submission diagnostic. Deletion still records consumption so the
+			// orchestrator does not wait out its full budget.
 			try {
-				unlinkSync(file);
+				unlinkControl(file);
+				diagLog("steer_blank_consumed", { file });
 			} catch {
 				// nothing to salvage from an unreadable empty file
 			}
 			return;
 		}
+		hooks.cancelCountdown();
 		try {
-			hooks.cancelCountdown();
 			// ExtensionAPI.sendUserMessage returns void (unlike the internal
 			// ReplacedSessionContext method). A true acceptance ACK requires an
 			// upstream awaitable result or callback; this call can observe only a
 			// synchronous throw. Do not add a cosmetic await here.
 			pi.sendUserMessage(text, { deliverAs: "steer" });
+		} catch (error) {
+			// A synchronous throw means Pi does not own the request: preserve the
+			// file so a later poll can retry the submission.
+			diagLog("steer_submit_failed", { file, message: errorMessage(error) });
+			return;
+		}
+		// Submission succeeded — mark the control so no poll ever resubmits it,
+		// even if the ack unlink below keeps failing.
+		submittedControls.add(file);
+		try {
 			// Unlink tells the parent that the watcher consumed the control and the
 			// synchronous submission did not throw. It is not model-turn delivery.
-			unlinkSync(file);
+			unlinkControl(file);
+			submittedControls.delete(file);
 			diagLog("steer_submitted", { file, bytes: text.length });
 		} catch (error) {
-			// One bad file must not wedge the watcher; preserve it for the next tick.
-			diagLog("steer_submit_failed", { file, message: errorMessage(error) });
+			diagLog("steer_ack_unlink_failed", { file, message: errorMessage(error) });
 		}
 	};
 
@@ -427,7 +474,7 @@ export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoE
 			}
 			shutdownNow(ctx);
 		},
-	});
+	}, options.unlink ?? unlinkSync);
 
 	pi.on("session_start", (_event, ctx) => {
 		latestCtx = ctx;

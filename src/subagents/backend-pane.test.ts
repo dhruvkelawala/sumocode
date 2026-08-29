@@ -404,6 +404,42 @@ describe("pane subagent steering and close", () => {
 		}
 	});
 
+	it("keeps the ACK budget monotonic when the exit marker re-reads empty mid-tick", async () => {
+		vi.useFakeTimers();
+		try {
+			const harness = createHarness(startedPane, { kind: "tab", tabId: "w1:t1", direction: "right" }, undefined, { sendAckPollMs: 100, sendAckTimeoutMs: 500 });
+			await flushPromises();
+			// Model the producer's truncate-before-write: the ack poll's gate read
+			// sees a written marker, but poll()'s own re-read sees the truncated
+			// empty file and returns without settling. The timeout must still fire.
+			const originalRead = harness.fs.readFileSync.bind(harness.fs);
+			let exitReads = 0;
+			harness.fs.readFileSync = (path: string): string => {
+				const value = originalRead(path);
+				if (path === harness.paths.exitFile && value.trim()) {
+					exitReads += 1;
+					return exitReads % 2 === 1 ? value : "";
+				}
+				return value;
+			};
+			harness.fs.files.set(harness.paths.exitFile, "0");
+			const sendPromise = harness.child.send!("racy marker");
+			const rejection = expect(sendPromise).rejects.toThrow("consumption was not acknowledged within 500ms");
+
+			await vi.advanceTimersByTimeAsync(600);
+			await rejection;
+			// Ambiguous ownership: the steer file remains, exactly like the plain
+			// timeout path.
+			expect(harness.fs.files.has(`${harness.paths.controlDir}/steer-1.txt`)).toBe(true);
+
+			harness.child.interrupt();
+			await flushPromises();
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("rejects a pending send when spawn settlement wins the race", async () => {
 		vi.useFakeTimers();
 		try {

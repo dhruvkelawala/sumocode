@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -470,7 +470,7 @@ describe("control watcher", () => {
 	});
 
 	/** Install task mode with a control dir inside a fresh temp workdir. */
-	const installWithControlDir = (keepOpen = false, diagFile?: string) => {
+	const installWithControlDir = (keepOpen = false, diagFile?: string, unlink?: (path: string) => void) => {
 		const controlDir = join(workDir!, "control");
 		mkdirSync(controlDir, { recursive: true });
 		const { pi, handlers } = buildPiStub();
@@ -484,6 +484,7 @@ describe("control watcher", () => {
 		installTaskModeAutoExit(pi as never, {
 			env,
 			graceMs: 10_000,
+			unlink,
 		});
 		const ctx = buildCtxStub();
 		// Capture a context the way a real Pi session would.
@@ -514,6 +515,45 @@ describe("control watcher", () => {
 		const diagnostics = readFileSync(diagFile, "utf8");
 		expect(diagnostics).toContain('"event":"steer_submitted"');
 		expect(diagnostics).not.toMatch(/steer_(?:injected|delivered|accepted)/);
+	});
+
+	it("never resubmits a submitted steer whose ack unlink fails; retries the unlink only", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const diagFile = join(workDir, "diag.jsonl");
+		// The submission succeeds but the acknowledgement unlink fails once; the
+		// injected seam then delegates to the real unlinkSync for the retries.
+		let failNextUnlink = true;
+		const { pi, controlDir } = installWithControlDir(false, diagFile, (path) => {
+			if (failNextUnlink) {
+				failNextUnlink = false;
+				throw new Error("EBUSY: ack unlink raced a reader");
+			}
+			unlinkSync(path);
+		});
+		const steerPath = join(controlDir, "steer-1.txt");
+		writeFileSync(steerPath, "submit exactly once");
+
+		vi.advanceTimersByTime(500);
+
+		// Submitted exactly once, file left behind, and the diagnostic names the
+		// ack cleanup — not a submit failure.
+		expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
+		expect(pi.sendUserMessage).toHaveBeenCalledWith("submit exactly once", { deliverAs: "steer" });
+		expect(existsSync(steerPath)).toBe(true);
+		const diagnostics = readFileSync(diagFile, "utf8");
+		expect(diagnostics).toContain('"event":"steer_ack_unlink_failed"');
+		expect(diagnostics).not.toContain('"event":"steer_submit_failed"');
+
+		// The next poll retries ONLY the unlink — no second Pi call.
+		vi.advanceTimersByTime(500);
+		expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
+
+		// The eventual unlink success restores the parent semantics: the file is
+		// gone, so the parent's consumption acknowledgement resolves.
+		vi.advanceTimersByTime(1);
+		expect(existsSync(steerPath)).toBe(false);
+		expect(readFileSync(diagFile, "utf8")).toContain('"event":"steer_ack_unlinked"');
+		expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
 	});
 
 	it("preserves and retries a steer when ExtensionAPI throws synchronously", () => {
@@ -562,14 +602,20 @@ describe("control watcher", () => {
 
 	it("consumes empty steer files without submitting them", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
-		const { pi, controlDir } = installWithControlDir();
+		const diagFile = join(workDir, "diag.jsonl");
+		const { pi, controlDir } = installWithControlDir(false, diagFile);
 		const emptyPath = join(controlDir, "steer-3.txt");
 		writeFileSync(emptyPath, "");
 
 		vi.advanceTimersByTime(500);
 
+		// Truthful legacy-blank handling: consumption is recorded with its own
+		// diagnostic, and no diagnostic or call claims a Pi submission.
 		expect(pi.sendUserMessage).not.toHaveBeenCalled();
 		expect(existsSync(emptyPath)).toBe(false);
+		const diagnostics = readFileSync(diagFile, "utf8");
+		expect(diagnostics).toContain('"event":"steer_blank_consumed"');
+		expect(diagnostics).not.toContain('"event":"steer_submitted"');
 	});
 
 	it("close.request shuts the child down and stops the watcher", () => {

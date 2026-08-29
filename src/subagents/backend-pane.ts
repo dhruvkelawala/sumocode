@@ -274,14 +274,20 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 					finishPendingSteeringAck(finalPath);
 					return;
 				}
+				// The budget advances on EVERY tick, before any branch: poll() can hit
+				// the producer's truncate-before-write window and re-read the exit
+				// marker as empty, returning without settling. A budget that only grew
+				// on the fallback branch would then never fire and the waiter would
+				// hang past its acknowledgement timeout.
+				elapsed += ackPollMs;
 				if (fs.existsSync(paths.exitFile) && readText(paths.exitFile).trim()) {
 					// Reuse the normal settlement path so every concurrent waiter and the
 					// response watcher are cleaned up exactly once.
 					poll();
-					return;
 				}
-				elapsed += ackPollMs;
-				if (elapsed >= ackTimeoutMs) {
+				// Guard on map presence: if poll() settled, this waiter was already
+				// finished exactly once with the child-settled error.
+				if (elapsed >= ackTimeoutMs && pendingSteeringAcks.has(finalPath)) {
 					finishPendingSteeringAck(
 						finalPath,
 						new Error(`steering consumption was not acknowledged within ${ackTimeoutMs}ms for ${options.id} — the file remains and the child may still consume it`),

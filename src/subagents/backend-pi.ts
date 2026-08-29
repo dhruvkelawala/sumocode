@@ -144,7 +144,12 @@ export interface SpawnedChild {
 	readonly sessionFilePath?: string;
 	readonly ready?: Promise<void>;
 	interrupt(): void;
-	/** Deliver steering text to a running child. Rejects when unsupported or unconfirmed. */
+	/**
+	 * Publish steering text to a running child's control channel and wait for the
+	 * child watcher to consume it and synchronously submit it to Pi. Rejects when
+	 * unsupported, unconfirmed, or the child settles first; Pi exposes no
+	 * post-acceptance acknowledgement, so this never proves model-turn delivery.
+	 */
 	send?(text: string): Promise<void>;
 	/** Ask the child to persist its response and shut down gracefully. */
 	requestClose?(): void;

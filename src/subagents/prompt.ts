@@ -54,7 +54,7 @@ export const SUBAGENT_PROMPT_GUIDELINES = [
 	"Use subagent_spawn for independent research, review, or implementation slices that can proceed while you keep working.",
 	"Use visible subagents for long or interactive work the human may want to watch or steer; use headless subagents for silent, bounded fan-out.",
 	"All children have their own context, cannot see this conversation, and cannot spawn subagents; prompts must be self-contained with objective, paths, constraints, expected output, and stop conditions.",
-	"Use subagent_send to steer a running visible child; success means its watcher consumed the control and synchronously submitted it to Pi. It does not prove the text was delivered as a Pi steering message after the child's current turn or accepted into a model turn, and it is not typed into its terminal. Headless or settled children cannot receive input.",
+	"Use subagent_send to steer a running visible child; success means the child runtime consumed the control and synchronously submitted it to Pi, and Pi exposes no post-acceptance acknowledgement. It does not prove the text was delivered as a Pi steering message or accepted into a model turn, and it is not typed into its terminal. Headless or settled children cannot receive input.",
 	"visible children stay open while active and auto-close after 30s of silence; use subagent_close to end one deliberately.",
 	"Visible Herdr children split beside the parent when its tab is available, including worktree-backed children; overflow falls back to subagent tabs/workspaces.",
 	"delegation is fire-and-forget: after spawning, continue other work or end your turn. settled results arrive as automatic follow-up messages that wake you. do NOT call subagent_wait right after subagent_spawn.",

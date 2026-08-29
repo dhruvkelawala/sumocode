@@ -1,6 +1,80 @@
-import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { buildSpawnEnv } from "./spawn-pi-pty.js";
+import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { IDisposable, IEvent, IPty } from "node-pty";
+import { describe, expect, it } from "vitest";
+import { buildSpawnEnv, spawnPiPty, type SpawnPiPtyOptions } from "./spawn-pi-pty.js";
+
+type PtySpawn = NonNullable<SpawnPiPtyOptions["spawn"]>;
+type PtySpawnOptions = Parameters<PtySpawn>[2];
+type PtyExitListener = Parameters<IEvent<{ exitCode: number; signal?: number }>>[0];
+
+interface SpawnCall {
+	readonly options: PtySpawnOptions;
+}
+
+class FakePty implements IPty {
+	public readonly pid = 123;
+	public readonly cols = 100;
+	public readonly rows = 30;
+	public readonly process = "synthetic-pty";
+	public handleFlowControl = false;
+	public readonly killSignals: Array<string | undefined> = [];
+	private readonly disposable: IDisposable = { dispose(): void {} };
+	private exitListener: PtyExitListener | undefined;
+
+	public readonly onData: IEvent<string> = () => this.disposable;
+	public readonly onExit: IEvent<{ exitCode: number; signal?: number }> = (listener) => {
+		this.exitListener = listener;
+		return this.disposable;
+	};
+
+	public resize(_columns: number, _rows: number): void {}
+	public clear(): void {}
+	public write(_data: string | Buffer): void {}
+	public kill(signal?: string): void {
+		this.killSignals.push(signal);
+	}
+	public pause(): void {}
+	public resume(): void {}
+
+	public exit(): void {
+		this.exitListener?.({ exitCode: 0, signal: 0 });
+	}
+}
+
+class FakePtySpawner {
+	public readonly calls: SpawnCall[] = [];
+	public readonly ptys: FakePty[] = [];
+	public error: Error | undefined;
+
+	public readonly spawn: PtySpawn = (_file, _args, options) => {
+		this.calls.push({ options });
+		if (this.error !== undefined) throw this.error;
+		const pty = new FakePty();
+		this.ptys.push(pty);
+		return pty;
+	};
+
+	public call(index: number): SpawnCall {
+		const call = this.calls[index];
+		if (call === undefined) throw new Error(`missing fake spawn call ${index}`);
+		return call;
+	}
+
+	public pty(index: number): FakePty {
+		const pty = this.ptys[index];
+		if (pty === undefined) throw new Error(`missing fake pty ${index}`);
+		return pty;
+	}
+}
+
+function agentDir(call: SpawnCall): string {
+	const value = call.options.env?.PI_CODING_AGENT_DIR;
+	if (value === undefined) throw new Error("spawn call has no Pi agent root");
+	return value;
+}
 
 describe("buildSpawnEnv", () => {
 	const retiredModuleKey = ["SUMO", "TUI", "MODULE"].join("_");
@@ -59,6 +133,25 @@ describe("buildSpawnEnv", () => {
 		expect(env.HOME).toBe("/Users/test");
 	});
 
+	it("scrubs inherited credential-shaped keys while preserving benign keys", () => {
+		const env = buildSpawnEnv(
+			{
+				OPENAI_TEST_CREDENTIAL: "provider-sentinel",
+				INTERNAL_ACCESS_TOKEN: "suffix-sentinel",
+				PATH: "/usr/bin",
+				EDITOR: "vi",
+				TERM: "vt100",
+			},
+			undefined,
+		);
+
+		expect(env.OPENAI_TEST_CREDENTIAL).toBeUndefined();
+		expect(env.INTERNAL_ACCESS_TOKEN).toBeUndefined();
+		expect(env.PATH).toBe("/usr/bin");
+		expect(env.EDITOR).toBe("vi");
+		expect(env.TERM).toBe("xterm-256color");
+	});
+
 	it("applies pi-friendly defaults", () => {
 		const env = buildSpawnEnv({}, undefined);
 		expect(env.PI_OFFLINE).toBe("1");
@@ -77,16 +170,78 @@ describe("buildSpawnEnv", () => {
 
 	it("lets overrides win over scrub when intentionally setting the same key", () => {
 		const env = buildSpawnEnv(
-			{ SUMO_TUI_DEBUG: "1" },
-			{ SUMO_TUI_DEBUG: "0" },
+			{ SUMO_TUI_DEBUG: "1", ANTHROPIC_TEST_CREDENTIAL: "parent-sentinel" },
+			{ SUMO_TUI_DEBUG: "0", ANTHROPIC_TEST_CREDENTIAL: "synthetic-test-value" },
 		);
 		expect(env.SUMO_TUI_DEBUG).toBe("0");
+		expect(env.ANTHROPIC_TEST_CREDENTIAL).toBe("synthetic-test-value");
 	});
 
 	it("preserves overrides for unrelated env vars", () => {
 		const env = buildSpawnEnv({ HOME: "/Users/parent" }, { PI_CODING_AGENT_DIR: "/tmp/foo" });
 		expect(env.HOME).toBe("/Users/parent");
 		expect(env.PI_CODING_AGENT_DIR).toBe("/tmp/foo");
+	});
+});
+
+describe("spawnPiPty agent state isolation", () => {
+	it("creates private unique roots and removes them only after child exit", () => {
+		const spawner = new FakePtySpawner();
+		const first = spawnPiPty({ spawn: spawner.spawn });
+		spawnPiPty({ spawn: spawner.spawn });
+		const roots = [agentDir(spawner.call(0)), agentDir(spawner.call(1))];
+		const firstPty = spawner.pty(0);
+		const secondPty = spawner.pty(1);
+		try {
+			expect(roots[0]).not.toBe(roots[1]);
+			for (const root of roots) {
+				expect(root.startsWith(tmpdir())).toBe(true);
+				expect(existsSync(root)).toBe(true);
+				expect(statSync(root).mode & 0o077).toBe(0);
+			}
+
+			first.cleanup();
+			expect(firstPty.killSignals).toEqual(["SIGTERM"]);
+			expect(existsSync(roots[0])).toBe(true);
+
+			firstPty.exit();
+			expect(existsSync(roots[0])).toBe(false);
+			expect(existsSync(roots[1])).toBe(true);
+
+			secondPty.exit();
+			expect(existsSync(roots[1])).toBe(false);
+		} finally {
+			for (const pty of spawner.ptys) pty.exit();
+			for (const root of roots) rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("preserves a caller-owned root after child exit", () => {
+		const callerRoot = mkdtempSync(join(tmpdir(), "sumocode-caller-agent-"));
+		const spawner = new FakePtySpawner();
+		try {
+			const child = spawnPiPty({ env: { PI_CODING_AGENT_DIR: callerRoot }, spawn: spawner.spawn });
+			expect(agentDir(spawner.call(0))).toBe(callerRoot);
+			child.cleanup();
+			expect(existsSync(callerRoot)).toBe(true);
+			spawner.pty(0).exit();
+			expect(existsSync(callerRoot)).toBe(true);
+		} finally {
+			rmSync(callerRoot, { recursive: true, force: true });
+		}
+	});
+
+	it("removes a helper-owned root when spawning throws", () => {
+		const spawner = new FakePtySpawner();
+		spawner.error = new Error("synthetic spawn failure");
+
+		expect(() => spawnPiPty({ spawn: spawner.spawn })).toThrow("synthetic spawn failure");
+		const generatedRoot = agentDir(spawner.call(0));
+		try {
+			expect(existsSync(generatedRoot)).toBe(false);
+		} finally {
+			rmSync(generatedRoot, { recursive: true, force: true });
+		}
 	});
 });
 

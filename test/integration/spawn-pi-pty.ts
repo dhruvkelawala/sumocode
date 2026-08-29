@@ -1,5 +1,6 @@
-import { chmodSync, existsSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import xterm from "@xterm/headless";
 import { spawn, type IPty } from "node-pty";
@@ -22,6 +23,7 @@ export interface SpawnPiPtyOptions {
 	readonly rows?: number;
 	readonly env?: NodeJS.ProcessEnv;
 	readonly args?: string[];
+	readonly spawn?: typeof spawn;
 }
 
 export interface SpawnedPiPty {
@@ -125,8 +127,23 @@ const SUMO_DEBUG_ENV_KEYS = [
 	"SUMOCODE_TEST_BUNDLE_SCAN_DELAY_MS",
 ] as const;
 
+const PROVIDER_CREDENTIAL_PREFIX = /^(?:AWS_|AZURE_|GOOGLE_|GEMINI_|OPENAI_|ANTHROPIC_|MISTRAL_|GROQ_|XAI_|DEEPSEEK_|OPENROUTER_|TOGETHER_|FIRECRAWL_|TAVILY_|BRAVE_)/i;
+const CREDENTIAL_SUFFIX = /(?:API_KEY|API_TOKEN|AUTH_TOKEN|ACCESS_TOKEN|CLIENT_SECRET|PASSWORD)$/i;
+
+/** Test-only policy for environment keys that may carry provider credentials. */
+export function isCredentialEnvKey(key: string): boolean {
+	return PROVIDER_CREDENTIAL_PREFIX.test(key) || CREDENTIAL_SUFFIX.test(key);
+}
+
+/**
+ * Builds a credential-safe child environment. Explicit overrides are applied
+ * after scrubbing so tests may intentionally provide synthetic credentials.
+ */
 export function buildSpawnEnv(parent: NodeJS.ProcessEnv, overrides: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
 	const scrubbed: NodeJS.ProcessEnv = { ...parent };
+	for (const key of Object.keys(scrubbed)) {
+		if (isCredentialEnvKey(key)) delete scrubbed[key];
+	}
 	for (const key of SUMO_DEBUG_ENV_KEYS) delete scrubbed[key];
 	return {
 		...scrubbed,
@@ -136,19 +153,48 @@ export function buildSpawnEnv(parent: NodeJS.ProcessEnv, overrides: NodeJS.Proce
 	};
 }
 
+function removeOwnedAgentDir(agentDir: string | undefined): void {
+	if (agentDir === undefined) return;
+	try {
+		rmSync(agentDir, { recursive: true, force: true });
+	} catch {
+		// Best-effort exit cleanup must not obscure the PTY's result.
+	}
+}
+
+function createOwnedAgentDir(): string {
+	const agentDir = mkdtempSync(join(tmpdir(), "sumocode-pi-agent-"));
+	try {
+		chmodSync(agentDir, 0o700);
+		return agentDir;
+	} catch (error) {
+		removeOwnedAgentDir(agentDir);
+		throw error;
+	}
+}
+
 export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 	ensureNodePtySpawnHelperExecutable();
 
 	const cwd = resolve(options.cwd ?? process.cwd());
 	const command = options.command ?? process.env.PI_BIN ?? "pi";
 	const args = applyDefaultProjectTrustOverride(options.args ?? ["--offline", "--no-extensions", "-e", "./src/extension.ts", "--no-session"]);
-	const child: IPty = spawn(command, args, {
-		name: "xterm-256color",
-		cols: options.cols ?? 100,
-		rows: options.rows ?? 30,
-		cwd,
-		env: buildSpawnEnv(process.env, options.env),
-	});
+	const spawnPty = options.spawn ?? spawn;
+	const ownedAgentDir = options.env?.PI_CODING_AGENT_DIR === undefined ? createOwnedAgentDir() : undefined;
+	const envOverrides = ownedAgentDir === undefined ? options.env : { ...options.env, PI_CODING_AGENT_DIR: ownedAgentDir };
+	let child: IPty;
+	try {
+		child = spawnPty(command, args, {
+			name: "xterm-256color",
+			cols: options.cols ?? 100,
+			rows: options.rows ?? 30,
+			cwd,
+			env: buildSpawnEnv(process.env, envOverrides),
+		});
+	} catch (error) {
+		removeOwnedAgentDir(ownedAgentDir);
+		throw error;
+	}
 
 	let output = "";
 	const waiters: Waiter[] = [];
@@ -172,13 +218,17 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 	});
 
 	child.onExit(({ exitCode, signal }) => {
-		for (const waiter of waiters.splice(0)) {
-			clearTimeout(waiter.timer);
-			if (matches(output, waiter.pattern)) {
-				waiter.resolve(output);
-			} else {
-				waiter.reject(new Error(`pi pty exited before output matched ${String(waiter.pattern)} (exitCode=${exitCode}, signal=${signal})`));
+		try {
+			for (const waiter of waiters.splice(0)) {
+				clearTimeout(waiter.timer);
+				if (matches(output, waiter.pattern)) {
+					waiter.resolve(output);
+				} else {
+					waiter.reject(new Error(`pi pty exited before output matched ${String(waiter.pattern)} (exitCode=${exitCode}, signal=${signal})`));
+				}
 			}
+		} finally {
+			removeOwnedAgentDir(ownedAgentDir);
 		}
 	});
 

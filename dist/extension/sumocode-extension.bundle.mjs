@@ -11369,6 +11369,8 @@ var TerminalTaskStore = class {
       this.diagnostic("io", this.rootDir, error);
       return { ok: false, snapshots: [] };
     }
+    const priorIdByPath = /* @__PURE__ */ new Map();
+    for (const [id, path2] of this.metaPathById) priorIdByPath.set(path2, id);
     const snapshots = [];
     const paths = /* @__PURE__ */ new Map();
     const preservedEntries = [];
@@ -11389,7 +11391,7 @@ var TerminalTaskStore = class {
       if (!pathExists2(metaPath)) continue;
       const read = this.readCandidate(metaPath);
       if (read.kind === "transient") {
-        const priorId = this.priorIdForMetaPath(metaPath);
+        const priorId = priorIdByPath.get(metaPath);
         const priorEntry = priorId === void 0 ? void 0 : this.indexedById.get(priorId);
         if (priorEntry && !paths.has(priorEntry.id)) {
           preservedEntries.push(priorEntry);
@@ -11398,6 +11400,11 @@ var TerminalTaskStore = class {
         continue;
       }
       if (read.kind === "invalid") continue;
+      const reservedPath = this.metaPathById.get(read.snapshot.id);
+      if (reservedPath !== void 0 && reservedPath !== metaPath) {
+        this.diagnostic("duplicate", metaPath, `duplicate terminal id ${read.snapshot.id}`);
+        continue;
+      }
       if (paths.has(read.snapshot.id)) {
         this.diagnostic("duplicate", metaPath, `duplicate terminal id ${read.snapshot.id}`);
         continue;
@@ -11504,13 +11511,6 @@ var TerminalTaskStore = class {
       return next;
     });
   }
-  /** The id whose metadata path is this exact canonical path, if any. */
-  priorIdForMetaPath(path2) {
-    for (const [id, existing] of this.metaPathById) {
-      if (existing === path2) return id;
-    }
-    return void 0;
-  }
   replaceIndex(snapshots, paths) {
     this.metaPathById.clear();
     this.indexedById.clear();
@@ -11524,6 +11524,14 @@ var TerminalTaskStore = class {
     }
   }
   replaceIndexedEntry(snapshot) {
+    const previous = this.indexedById.get(snapshot.id);
+    if (previous && previous.ownerSessionId !== snapshot.ownerSessionId) {
+      const staleIds = this.indexedIdsByOwner.get(previous.ownerSessionId);
+      if (staleIds) {
+        staleIds.delete(snapshot.id);
+        if (staleIds.size === 0) this.indexedIdsByOwner.delete(previous.ownerSessionId);
+      }
+    }
     this.indexedById.set(snapshot.id, this.compact(snapshot));
     this.ownerMembership(snapshot).add(snapshot.id);
   }
@@ -12424,9 +12432,12 @@ ${command}
    * manager is detached (no scan, therefore no provable freshness): the
    * previous projection generation stays authoritative and callers must treat
    * freshness as unproven instead of adopting the returned snapshots, and
-   * takeover callers keep their death proof unconsumed. On success the
-   * retained projection is replaced to match exactly the refreshed index
-   * generation: ids the scan quarantined or no longer reports are dropped from
+   * takeover callers keep their death proof unconsumed. On success every
+   * fresh valid snapshot is adopted — including one whose revision equals the
+   * retained entry, so an external same-revision owner or content divergence
+   * at this proven freshness boundary updates the full projection and owner
+   * lists — and the retained projection is replaced to match exactly the
+   * refreshed index generation: ids the scan quarantined or no longer reports are dropped from
    * `tasks` and `getSnapshots()` so stale retained snapshots cannot be
    * republished, and their poll timers are cleared while the separate runtime
    * child/process bookkeeping stays preserved. Ids whose metadata read failed
@@ -12439,15 +12450,14 @@ ${command}
     const refresh = this.store.refreshIndex();
     if (!refresh.ok) return { ok: false, snapshots: this.getSnapshots() };
     for (const snapshot of refresh.snapshots) {
-      const previous = this.tasks.get(snapshot.id);
-      if (previous?.revision === snapshot.revision) continue;
       this.adopt(snapshot, false);
       this.recover(snapshot);
     }
     const refreshed = new Set(refresh.snapshots.map((snapshot) => snapshot.id));
+    const preserved = refresh.preservedIds === void 0 ? void 0 : new Set(refresh.preservedIds);
     for (const id of Array.from(this.tasks.keys())) {
       if (refreshed.has(id)) continue;
-      if (refresh.preservedIds?.includes(id)) continue;
+      if (preserved?.has(id)) continue;
       this.clearPoll(id);
       this.tasks.delete(id);
     }
@@ -14474,7 +14484,10 @@ var ActivityManagerBridge = class {
         this.claimedSessionOwners.delete(owner);
       }
     }
-    if (takeoverOwners.length === 0) return;
+    if (takeoverOwners.length === 0) {
+      this.takeoverRefreshFailureDiagnosed = false;
+      return;
+    }
     let refresh;
     try {
       refresh = this.terminalManager.refreshSnapshotsFromStore?.();

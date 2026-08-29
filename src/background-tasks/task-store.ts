@@ -495,6 +495,12 @@ export class TerminalTaskStore {
 			this.diagnostic("io", this.rootDir, error);
 			return { ok: false, snapshots: [] };
 		}
+		// O(1) known-path reservation, built once per scan: the id→path half is
+		// the live metaPathById itself. A prior indexed path owns its id for the
+		// whole pass, so duplicate-identity decisions never depend on scan order
+		// or on linear path lookups.
+		const priorIdByPath = new Map<string, string>();
+		for (const [id, path] of this.metaPathById) priorIdByPath.set(path, id);
 		const snapshots: TerminalTaskSnapshot[] = [];
 		const paths = new Map<string, string>();
 		// Prior compact entries must be captured during the scan: replaceIndex
@@ -521,7 +527,7 @@ export class TerminalTaskStore {
 				// last good index already knows. Retain its prior path and compact
 				// entry, and report the id so the manager preserves its retained full
 				// snapshot in this successful generation instead of pruning it.
-				const priorId = this.priorIdForMetaPath(metaPath);
+				const priorId = priorIdByPath.get(metaPath);
 				const priorEntry = priorId === undefined ? undefined : this.indexedById.get(priorId);
 				if (priorEntry && !paths.has(priorEntry.id)) {
 					preservedEntries.push(priorEntry);
@@ -530,6 +536,16 @@ export class TerminalTaskStore {
 				continue;
 			}
 			if (read.kind === "invalid") continue;
+			// Known-path reservation: a parsed id whose prior indexed path differs is
+			// a duplicate of that prior record no matter where it sorts in this scan —
+			// and even if the prior path later fails transiently, is corrupt, or has
+			// disappeared by the time it is visited. The known path owns the identity;
+			// a duplicate never takes it over.
+			const reservedPath = this.metaPathById.get(read.snapshot.id);
+			if (reservedPath !== undefined && reservedPath !== metaPath) {
+				this.diagnostic("duplicate", metaPath, `duplicate terminal id ${read.snapshot.id}`);
+				continue;
+			}
 			if (paths.has(read.snapshot.id)) {
 				this.diagnostic("duplicate", metaPath, `duplicate terminal id ${read.snapshot.id}`);
 				continue;
@@ -658,14 +674,6 @@ export class TerminalTaskStore {
 		});
 	}
 
-	/** The id whose metadata path is this exact canonical path, if any. */
-	private priorIdForMetaPath(path: string): string | undefined {
-		for (const [id, existing] of this.metaPathById) {
-			if (existing === path) return id;
-		}
-		return undefined;
-	}
-
 	private replaceIndex(snapshots: readonly TerminalTaskSnapshot[], paths: ReadonlyMap<string, string>): void {
 		this.metaPathById.clear();
 		this.indexedById.clear();
@@ -680,6 +688,17 @@ export class TerminalTaskStore {
 	}
 
 	private replaceIndexedEntry(snapshot: TerminalTaskSnapshot): void {
+		const previous = this.indexedById.get(snapshot.id);
+		if (previous && previous.ownerSessionId !== snapshot.ownerSessionId) {
+			// A locked no-op against an externally rewritten record must migrate the
+			// id out of the stale owner bucket before adding the new one, so the id
+			// never answers in two owners' lists; emptied buckets are removed.
+			const staleIds = this.indexedIdsByOwner.get(previous.ownerSessionId);
+			if (staleIds) {
+				staleIds.delete(snapshot.id);
+				if (staleIds.size === 0) this.indexedIdsByOwner.delete(previous.ownerSessionId);
+			}
+		}
 		this.indexedById.set(snapshot.id, this.compact(snapshot));
 		this.ownerMembership(snapshot).add(snapshot.id);
 	}

@@ -115,6 +115,16 @@ After final source edits, run `pnpm build:extension` before `pnpm test`; keep th
 - `src/activity/manager-bridge.ts` (+ colocated test): the expected takeover-refresh failure diagnostic (both the `{ok:false}` and unexpected-throw paths) is emitted once per failure episode; a successful refresh resets the dedupe so the next failure episode is diagnosed again.
 - No retention, schema, layout, or deletion changes; the public store/manager surface grows only by the optional `preservedIds` refresh-result field and the test-only `metaReadFault` store option.
 
+**Authorized review-fix addition (run `run-20260829T203858Z-77e98acd` attempt 2) — transient owner blockers only**:
+
+- `src/background-tasks/task-store.ts`: known-ID reservation during refresh. One O(1) prior path→id map is built per scan (the id→path half is the live `metaPathById`), replacing the linear `priorIdForMetaPath` walk. A candidate whose parsed id matches a prior indexed id at a different metadata path is diagnosed and skipped as `duplicate` regardless of scan order — even if the prior path later fails transiently, is corrupt, or is missing in the same scan. The known path owns identity: a duplicate never takes over. Known transient reads keep preserving the prior compact entry, prior path, and `preservedIds` exactly as before.
+- `src/background-tasks/task-store.ts`: `replaceIndexedEntry` migrates the id out of the stale owner bucket when a locked no-op observes a divergent compact owner (empty buckets are removed), so the id can never answer in two owners' lists.
+- `src/background-tasks/task-manager.ts`: on a successful refresh every fresh valid snapshot is adopted even when its revision equals the retained entry — revision equality alone no longer skips adoption — so an external same-revision owner/content divergence updates the full projection, `getSnapshots()`, and both owner lists to the refreshed owner. `preservedIds` is converted to a `Set` once before the prune loop.
+- `src/activity/manager-bridge.ts`: the takeover-refresh failure diagnostic dedupe also resets on a sync pass with zero pending takeover owners (no refresh ran, so it cannot end the episode), so future failure episodes log again.
+- `src/activity/manager-bridge.test.ts`: fix the noted misindented continuation comment.
+- Regressions: duplicate directory sorting before its transient-failing prior keeps the prior owner/path; a duplicate never takes over a corrupt or missing prior (id quarantined); same-revision owner A→B adoption (owner A lists empty, owner B lists the refreshed snapshot across list/get/getSnapshots); locked no-op owner-bucket migration without dual membership; an unindexed transient read stays absent and fail-safe. Security, CAS, lease, process-identity, and duplicate diagnostics are unchanged. The scan-order test uses a test-only passthrough `node:fs` wrapper (inline lint-suppressed) because readdir order is not otherwise controllable; no public store/manager API growth.
+- No retention, schema, layout, or deletion changes.
+
 **Out of scope**:
 - Record deletion, archival, retention, schema migration, or changing task-directory layout.
 - Polling cadence/process verification (Plan 106).

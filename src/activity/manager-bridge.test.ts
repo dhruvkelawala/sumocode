@@ -538,7 +538,7 @@ describe("ActivityManagerBridge", () => {
 			sessionOwnership: ownership,
 		});
 		// The bridge first sees the session while the incumbent is alive: its
-			// blocked publisher is discarded unclaimed.
+		// blocked publisher is discarded unclaimed.
 		bridge.bindSession(owner);
 
 		// The death-proven takeover's refresh fails: the session claim stays with
@@ -626,6 +626,18 @@ describe("ActivityManagerBridge", () => {
 		expect(takeoverFailures()).toBe(2);
 		bridge.bindSession(lateOwner);
 		expect(takeoverFailures()).toBe(2);
+
+		// A pass with zero pending takeover owners runs no refresh at all — it
+		// also re-arms the dedupe, so the next failure episode logs again even
+		// though no refresh succeeded in between.
+		const pending = owners.splice(0);
+		bridge.bindSession(pending[0]!);
+		expect(takeoverFailures()).toBe(2);
+		owners.push(...pending);
+		bridge.bindSession(lateOwner);
+		expect(takeoverFailures()).toBe(3);
+		bridge.bindSession(lateOwner);
+		expect(takeoverFailures()).toBe(3);
 		bridge.dispose();
 	});
 

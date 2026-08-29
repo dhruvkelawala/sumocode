@@ -309,7 +309,13 @@ export class ActivityManagerBridge {
 				this.claimedSessionOwners.delete(owner);
 			}
 		}
-		if (takeoverOwners.length === 0) return;
+		if (takeoverOwners.length === 0) {
+			// This pass ran no refresh, so it cannot end the failure episode itself:
+			// re-arm the once-per-episode diagnostic so a future failure episode is
+			// logged again instead of staying silent behind a stale dedupe.
+			this.takeoverRefreshFailureDiagnosed = false;
+			return;
+		}
 		let refresh: TerminalTaskIndexRefreshResult | undefined;
 		try {
 			refresh = this.terminalManager.refreshSnapshotsFromStore?.();

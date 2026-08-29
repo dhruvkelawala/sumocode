@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Dirent } from "node:fs";
 import {
 	StaleTerminalTaskRevisionError,
 	TerminalTaskLockBusyError,
@@ -16,6 +17,30 @@ import { TERMINAL_TASK_SCHEMA_VERSION, type TerminalTaskSnapshot } from "./task-
 function privateWrite(path: string, contents: string): void {
 	writeFileSync(path, contents, { mode: 0o600 });
 	chmodSync(path, 0o600);
+}
+
+// Deterministic scan-order seam: refreshIndex must reach the same ownership
+// decision no matter which duplicate directory readdirSync visits first.
+const scanOrderOverride = vi.hoisted(() => new Map<string, Dirent[]>());
+// oxlint-disable-next-line anti-slop/no-module-mocking -- readdir order is not controllable through the real fs and the store deliberately has no injection seam for it; this wrapper only substitutes a seeded Dirent array for one exact path and passes every other call through to the real fs.
+vi.mock("node:fs", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs")>();
+	// SAFETY: the wrapper only substitutes a test-seeded Dirent array for one
+	// exact scanned path; every other call passes through to the real fs.
+	const realReaddir = actual.readdirSync as (path: string, options?: { withFileTypes?: boolean }) => string[] | Dirent[];
+	const readdirSync = (path: string, options?: { withFileTypes?: boolean }): string[] | Dirent[] => {
+		const seeded = scanOrderOverride.get(path);
+		return seeded ?? realReaddir(path, options);
+	};
+	return { ...actual, readdirSync };
+});
+
+function seedScanOrder(rootPath: string, firstName: string): void {
+	const entries = readdirSync(rootPath, { withFileTypes: true });
+	const ordered = [...entries];
+	const at = ordered.findIndex((entry) => entry.name === firstName);
+	if (at > 0) ordered.unshift(...ordered.splice(at, 1));
+	scanOrderOverride.set(rootPath, ordered);
 }
 
 function transientFault(code: string): Error {
@@ -68,6 +93,7 @@ describe("TerminalTaskStore", () => {
 	});
 
 	afterEach(() => {
+		scanOrderOverride.clear();
 		rmSync(rootDir, { recursive: true, force: true });
 	});
 
@@ -265,6 +291,26 @@ describe("TerminalTaskStore", () => {
 		expect(holdingOwners).toHaveLength(1);
 	});
 
+	it("migrates a locked no-op indexed entry out of a stale owner bucket without dual membership", () => {
+		const store = new TerminalTaskStore({ rootDir });
+		const initial = snapshot(store, "term-ownermove", "session-a", 1_000);
+		const metaPath = join(dirname(initial.logFile), "meta.json");
+		store.create(initial, metaPath);
+
+		// An external writer rewrites the record for another owner at the same
+		// revision: the locked no-op transition refreshes the compact entry from
+		// that authoritative snapshot and migrates the owner bucket.
+		const divergent = { ...initial, ownerSessionId: "session-b" };
+		privateWrite(metaPath, `${JSON.stringify(divergent)}\n`);
+		const noOp = store.transition("term-ownermove", 1, () => undefined);
+
+		expect(noOp).toEqual(divergent);
+		expect(store.listOwnedIndexed("session-a")).toEqual([]);
+		expect(store.listOwnedIndexed("session-b")).toEqual([expect.objectContaining({ id: "term-ownermove", ownerSessionId: "session-b" })]);
+		expect(store.isIndexedOwner("term-ownermove", "session-a")).toBe(false);
+		expect(store.isIndexedOwner("term-ownermove", "session-b")).toBe(true);
+	});
+
 	it.skipIf(process.platform === "win32")("keeps the last good index across a transient scan failure", () => {
 		const diagnostics: TerminalTaskStoreDiagnostic[] = [];
 		const store = new TerminalTaskStore({ rootDir, onDiagnostic: (entry) => diagnostics.push(entry) });
@@ -339,6 +385,126 @@ describe("TerminalTaskStore", () => {
 		expect(corrupt.snapshots.map((task) => task.id)).toEqual(["term-healthy"]);
 		expect(corrupt.preservedIds).toEqual([]);
 		expect(store.listOwnedIndexed("session-a")).toEqual([]);
+	});
+
+	it("keeps the prior owner and path when a duplicate id sorts before a transient-failing prior", () => {
+		const diagnostics: TerminalTaskStoreDiagnostic[] = [];
+		const faults = new Map<string, Error>();
+		const store = new TerminalTaskStore({
+			rootDir,
+			onDiagnostic: (entry) => diagnostics.push(entry),
+			metaReadFault: (path) => faults.get(path),
+		});
+		const initial = snapshot(store, "term-reserve", "session-a", 1_000);
+		const priorMetaPath = join(dirname(initial.logFile), "meta.json");
+		store.create(initial, priorMetaPath);
+		expect(store.refreshIndex().snapshots).toHaveLength(1);
+
+		// A same-id directory under a different owner is pinned to sort BEFORE
+		// the prior path: identity must not depend on scan order.
+		const duplicate = snapshot(store, "term-reserve", "session-b", 2_000);
+		const duplicateMetaPath = join(dirname(duplicate.logFile), "meta.json");
+		privateWrite(duplicateMetaPath, `${JSON.stringify(duplicate)}\n`);
+		seedScanOrder(store.rootDir, "term-reserve-2000");
+		faults.set(priorMetaPath, transientFault("EACCES"));
+
+		const refreshed = store.refreshIndex();
+		expect(refreshed.ok).toBe(true);
+		// The known path owns the identity: the duplicate is diagnosed and
+		// skipped, and the transient prior keeps its compact entry, path, owner,
+		// and preservedId for this generation.
+		expect(refreshed.snapshots).toEqual([]);
+		expect(refreshed.preservedIds).toEqual(["term-reserve"]);
+		expect(diagnostics.some((entry) => entry.kind === "duplicate" && entry.path === duplicateMetaPath)).toBe(true);
+		expect(diagnostics.some((entry) => entry.kind === "io" && entry.path === priorMetaPath)).toBe(true);
+		// Scan-order proof: the duplicate was diagnosed before the prior's
+		// transient read, yet the prior still owns the id.
+		expect(diagnostics.findIndex((entry) => entry.path === duplicateMetaPath))
+			.toBeLessThan(diagnostics.findIndex((entry) => entry.path === priorMetaPath));
+		expect(store.listOwnedIndexed("session-a")).toEqual([expect.objectContaining({ id: "term-reserve", ownerSessionId: "session-a" })]);
+		expect(store.listOwnedIndexed("session-b")).toEqual([]);
+		faults.clear();
+		// The retained prior path still resolves the durable record without a rescan.
+		expect(store.getIndexed("term-reserve")).toEqual(initial);
+	});
+
+	it("quarantines a duplicated id rather than letting it take over a corrupt or missing prior", () => {
+		const diagnostics: TerminalTaskStoreDiagnostic[] = [];
+		const store = new TerminalTaskStore({ rootDir, onDiagnostic: (entry) => diagnostics.push(entry) });
+		const initial = snapshot(store, "term-quarantine", "session-a", 1_000);
+		const priorDirectory = dirname(initial.logFile);
+		const priorMetaPath = join(priorDirectory, "meta.json");
+		store.create(initial, priorMetaPath);
+		expect(store.refreshIndex().snapshots).toHaveLength(1);
+		const duplicate = snapshot(store, "term-quarantine", "session-b", 2_000);
+		const duplicateMetaPath = join(dirname(duplicate.logFile), "meta.json");
+		privateWrite(duplicateMetaPath, `${JSON.stringify(duplicate)}\n`);
+		seedScanOrder(store.rootDir, "term-quarantine-2000");
+
+		// Corrupt prior: the duplicate is skipped by reservation regardless of
+		// scan order, and the id quarantines out of the generation entirely.
+		privateWrite(priorMetaPath, "{not json");
+		const corrupt = store.refreshIndex();
+		expect(corrupt.ok).toBe(true);
+		expect(corrupt.snapshots).toEqual([]);
+		expect(corrupt.preservedIds).toEqual([]);
+		expect(store.listOwnedIndexed("session-a")).toEqual([]);
+		expect(store.listOwnedIndexed("session-b")).toEqual([]);
+		expect(store.isIndexedOwner("term-quarantine", "session-a")).toBe(false);
+		expect(store.isIndexedOwner("term-quarantine", "session-b")).toBe(false);
+		expect(diagnostics.some((entry) => entry.kind === "duplicate" && entry.path === duplicateMetaPath)).toBe(true);
+
+		// Missing prior: the corrupt generation left the id unowned, so re-index
+		// the restored record with the duplicate absent, put the duplicate back,
+		// then delete the prior directory — the duplicate still must not adopt
+		// the id the (now missing) prior path owns.
+		rmSync(duplicateMetaPath);
+		privateWrite(priorMetaPath, `${JSON.stringify(initial)}\n`);
+		expect(store.refreshIndex().snapshots).toHaveLength(1);
+		privateWrite(duplicateMetaPath, `${JSON.stringify(duplicate)}\n`);
+		seedScanOrder(store.rootDir, "term-quarantine-2000");
+		rmSync(priorDirectory, { recursive: true, force: true });
+		const missing = store.refreshIndex();
+		expect(missing.ok).toBe(true);
+		expect(missing.snapshots).toEqual([]);
+		expect(store.listOwnedIndexed("session-a")).toEqual([]);
+		expect(store.listOwnedIndexed("session-b")).toEqual([]);
+		// Quarantine stays logical: the duplicate record is untouched on disk.
+		expect(existsSync(duplicateMetaPath)).toBe(true);
+	});
+
+	it("keeps an unindexed record absent when only its metadata read fails transiently", () => {
+		const diagnostics: TerminalTaskStoreDiagnostic[] = [];
+		const faults = new Map<string, Error>();
+		const store = new TerminalTaskStore({
+			rootDir,
+			onDiagnostic: (entry) => diagnostics.push(entry),
+			metaReadFault: (path) => faults.get(path),
+		});
+		// Neither record was ever indexed by this store: no prior generation
+		// knows either id, so a transient read preserves nothing.
+		const healthy = snapshot(store, "term-fresh-good", "session-a", 1_000);
+		privateWrite(join(dirname(healthy.logFile), "meta.json"), `${JSON.stringify(healthy)}\n`);
+		const faulted = snapshot(store, "term-fresh-fault", "session-a", 2_000);
+		const faultedMetaPath = join(dirname(faulted.logFile), "meta.json");
+		privateWrite(faultedMetaPath, `${JSON.stringify(faulted)}\n`);
+		faults.set(faultedMetaPath, transientFault("EIO"));
+
+		const refreshed = store.refreshIndex();
+		expect(refreshed.ok).toBe(true);
+		// Fail-safe: the scan still succeeds, and the unindexed transient record
+		// stays absent — never preserved, indexed, or assigned an owner — until a
+		// later refresh can actually read it.
+		expect(refreshed.snapshots).toEqual([healthy]);
+		expect(refreshed.preservedIds).toEqual([]);
+		expect(store.listOwnedIndexed("session-a")).toEqual([expect.objectContaining({ id: "term-fresh-good" })]);
+		expect(store.getIndexed("term-fresh-fault")).toBeUndefined();
+		expect(store.isIndexedOwner("term-fresh-fault", "session-a")).toBe(false);
+		expect(diagnostics.at(-1)).toMatchObject({ kind: "io", path: faultedMetaPath });
+
+		// Once the fault clears, the next refresh adopts the record normally.
+		faults.clear();
+		expect(store.refreshIndex().snapshots.map((task) => task.id).sort()).toEqual(["term-fresh-fault", "term-fresh-good"]);
 	});
 
 	it("preserves the indexed entry for exactly the transient read errnos", () => {

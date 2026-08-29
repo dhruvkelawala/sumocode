@@ -869,9 +869,12 @@ export class TerminalTaskManager {
 	 * manager is detached (no scan, therefore no provable freshness): the
 	 * previous projection generation stays authoritative and callers must treat
 	 * freshness as unproven instead of adopting the returned snapshots, and
-	 * takeover callers keep their death proof unconsumed. On success the
-	 * retained projection is replaced to match exactly the refreshed index
-	 * generation: ids the scan quarantined or no longer reports are dropped from
+	 * takeover callers keep their death proof unconsumed. On success every
+	 * fresh valid snapshot is adopted — including one whose revision equals the
+	 * retained entry, so an external same-revision owner or content divergence
+	 * at this proven freshness boundary updates the full projection and owner
+	 * lists — and the retained projection is replaced to match exactly the
+	 * refreshed index generation: ids the scan quarantined or no longer reports are dropped from
 	 * `tasks` and `getSnapshots()` so stale retained snapshots cannot be
 	 * republished, and their poll timers are cleared while the separate runtime
 	 * child/process bookkeeping stays preserved. Ids whose metadata read failed
@@ -884,19 +887,21 @@ export class TerminalTaskManager {
 		const refresh = this.store.refreshIndex();
 		if (!refresh.ok) return { ok: false, snapshots: this.getSnapshots() };
 		for (const snapshot of refresh.snapshots) {
-			const previous = this.tasks.get(snapshot.id);
-			if (previous?.revision === snapshot.revision) continue;
+			// Adoption is unconditional: revision equality alone must never skip a
+			// refreshed snapshot, or an external same-revision owner/content rewrite
+			// would leave the retained projection answering for the previous owner.
 			this.adopt(snapshot, false);
 			this.recover(snapshot);
 		}
 		const refreshed = new Set(refresh.snapshots.map((snapshot) => snapshot.id));
+		const preserved = refresh.preservedIds === undefined ? undefined : new Set(refresh.preservedIds);
 		// Copy before deleting: the projection map mutates while pruning.
 		for (const id of Array.from(this.tasks.keys())) {
 			if (refreshed.has(id)) continue;
 			// A transient per-file metadata read failure retained the record's
 			// compact index entry, so its retained full snapshot stays authoritative
 			// for this generation instead of being pruned like a quarantined id.
-			if (refresh.preservedIds?.includes(id)) continue;
+			if (preserved?.has(id)) continue;
 			// A genuinely quarantined id stops polling: no further reconciles are
 			// scheduled for a projection entry the refreshed index no longer reports.
 			this.clearPoll(id);

@@ -652,6 +652,30 @@ function transientFault(code: string): Error {
 		}
 	});
 
+	it("adopts an external same-revision owner divergence across the full projection", () => {
+		const store = new TerminalTaskStore({ rootDir });
+		const original = persistSettledTask(store, "term-move", "session-a", 1_000);
+		const target = manager({ store });
+		expect(target.list("session-a").map((task) => task.id)).toEqual(["term-move"]);
+
+		// An external writer rewrites the record for another owner WITHOUT
+		// bumping the revision: the refreshed disk truth must win at the
+		// freshness boundary instead of the retained same-revision snapshot.
+		const divergent = { ...original, ownerSessionId: "session-b" };
+		const metaFile = join(dirname(original.logFile), "meta.json");
+		writeFileSync(metaFile, `${JSON.stringify(divergent)}\n`, { mode: 0o600 });
+		chmodSync(metaFile, 0o600);
+
+		const refreshed = target.refreshSnapshotsFromStore();
+		expect(refreshed.ok).toBe(true);
+		// The full projection and both owner lists follow the refreshed owner.
+		expect(target.list("session-a")).toEqual([]);
+		expect(target.list("session-b")).toEqual([expect.objectContaining({ id: "term-move", ownerSessionId: "session-b" })]);
+		expect(target.get("term-move", "session-b")).toMatchObject({ id: "term-move", ownerSessionId: "session-b" });
+		expect(target.get("term-move", "session-a")).toBeUndefined();
+		expect(target.getSnapshots().every((task) => task.ownerSessionId === "session-b")).toBe(true);
+	});
+
 	it("stops polling a genuinely quarantined id after a successful refresh prune", async () => {
 		vi.useFakeTimers();
 		let target: TerminalTaskManager | undefined;

@@ -175,9 +175,15 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		else pending.resolve();
 	};
 
-	const rejectPendingSteeringAcks = (): void => {
+	// Settlement and interrupt honor the consumption boundary: an absent control
+	// file proves the child watcher consumed it and synchronously submitted to
+	// Pi, so that waiter resolves even when settlement wins the race against the
+	// next ack tick. Only controls still on disk are ambiguous and rejected with
+	// the settled error shape. finishPendingSteeringAck keeps exactly-once
+	// timer/map cleanup for both outcomes.
+	const settlePendingSteeringAcks = (): void => {
 		for (const path of pendingSteeringAcks.keys()) {
-			finishPendingSteeringAck(path, steeringSettlementError());
+			finishPendingSteeringAck(path, fs.existsSync(path) ? steeringSettlementError() : undefined);
 		}
 	};
 
@@ -185,7 +191,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		if (settled) return;
 		settled = true;
 		clearWatcher();
-		rejectPendingSteeringAcks();
+		settlePendingSteeringAcks();
 		options.signal?.removeEventListener("abort", interrupt);
 		emitEvent?.(event);
 	};
@@ -243,8 +249,9 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		interrupted = true;
 		clearWatcher();
 		// Cancellation starts settlement asynchronously through pane close. Parent
-		// senders must stop waiting now rather than lingering until their timeout.
-		rejectPendingSteeringAcks();
+		// senders must stop waiting now rather than lingering until their timeout:
+		// consumed controls resolve, controls still on disk reject.
+		settlePendingSteeringAcks();
 		void closeInterruptedPane();
 	}
 

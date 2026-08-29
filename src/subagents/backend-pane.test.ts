@@ -475,18 +475,50 @@ describe("pane subagent steering and close", () => {
 		}
 	});
 
-	it("rejects an ambiguous unlink race when interrupt happens before the consumption poll", async () => {
+	// Race: the child consumes the control and writes its exit marker BEFORE the
+	// next ack tick, so the response poll settles first. The waiter must still
+	// resolve — consumption is proven by the absent file, not by the ack tick.
+	it("resolves a send whose control was consumed even when the response poll settles first", async () => {
+		vi.useFakeTimers();
+		try {
+			// A 1s ack interval against the 750ms response poll makes the
+			// settlement-first ordering deterministic.
+			const harness = createHarness(startedPane, { kind: "tab", tabId: "w1:t1", direction: "right" }, undefined, { sendAckPollMs: 1_000 });
+			await flushPromises();
+			const sendPromise = harness.child.send!("consumed then settled");
+			const steerPath = `${harness.paths.controlDir}/steer-1.txt`;
+			expect(harness.fs.files.get(steerPath)).toBe("consumed then settled");
+
+			// The child consumes the steer and exits before any ack tick.
+			harness.fs.files.delete(steerPath);
+			harness.fs.files.set(harness.paths.responseFile, "final answer");
+			harness.fs.files.set(harness.paths.exitFile, "0");
+
+			await vi.advanceTimersByTimeAsync(750);
+
+			await expect(sendPromise).resolves.toBeUndefined();
+			expect(settledEvents(harness.events)).toEqual([{ kind: "run-settled", outcome: { kind: "completed", finalText: "final answer" } }]);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("resolves an interrupted send whose control was already consumed", async () => {
 		vi.useFakeTimers();
 		try {
 			const harness = createHarness();
 			await flushPromises();
-			const sendPromise = harness.child.send!("possibly consumed");
-			const rejection = expect(sendPromise).rejects.toThrow("before steering consumption was acknowledged");
+			const sendPromise = harness.child.send!("consumed before interrupt");
+			// The child watcher consumed the control before the interrupt landed:
+			// the submission boundary occurred, so the waiter resolves instead of
+			// being rejected as ambiguous.
 			harness.fs.files.delete(`${harness.paths.controlDir}/steer-1.txt`);
 
 			harness.child.interrupt();
-			await rejection;
+			await expect(sendPromise).resolves.toBeUndefined();
 			await flushPromises();
+			expect(settledEvents(harness.events)).toEqual([{ kind: "run-settled", outcome: { kind: "interrupted" } }]);
 			expect(vi.getTimerCount()).toBe(0);
 		} finally {
 			vi.useRealTimers();

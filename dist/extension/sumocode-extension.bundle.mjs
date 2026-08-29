@@ -12375,12 +12375,14 @@ ${command}
     return this.getSnapshots();
   }
   /**
-   * Authoritative store-index read of one record, bypassing the retained
-   * projection. Narrow surface for pre-send/pre-publication freshness checks;
-   * never scans the store and only resolves indexed ids.
+   * Authoritative single indexed read of one record, bypassing the retained
+   * projection. Owner-isolated: another session's record reads as `undefined`.
+   * Narrow surface for pre-send/pre-publication freshness checks; never scans
+   * the store and only resolves indexed ids.
    */
-  readIndexed(id) {
-    return this.store.getIndexed(id);
+  readIndexed(id, ownerSessionId2) {
+    const snapshot = this.store.getIndexed(id);
+    return snapshot?.ownerSessionId === ownerSessionId2 ? snapshot : void 0;
   }
   getSnapshots() {
     const snapshots = [...this.tasks.values()];
@@ -13130,8 +13132,8 @@ var TerminalDeliveryCoordinator = class {
       let sentMessage = false;
       const claimed = this.manager.claimPending(active.ownerSessionId, true, 1).sort((left, right) => Number(left.completionPolicy === "wake") - Number(right.completionPolicy === "wake"));
       for (const task of claimed) {
-        const current = this.manager.readIndexed(task.id);
-        if (!current || current.ownerSessionId !== active.ownerSessionId) continue;
+        const current = this.manager.readIndexed(task.id, active.ownerSessionId);
+        if (!current) continue;
         if (current.deliveryState !== "claimed" || !current.deliveryClaimToken || current.completionId !== task.completionId || current.deliveryClaimToken !== task.deliveryClaimToken) continue;
         const observable = completionsFromContext(active.ctx);
         if (current.completionId && observable.ids.has(current.completionId)) {

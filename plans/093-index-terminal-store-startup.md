@@ -57,11 +57,11 @@ Do not silently cache forever across process boundaries. If an external writer m
 |---|---|---|
 | Store/manager | `pnpm vitest run src/background-tasks/task-store.test.ts src/background-tasks/task-manager.test.ts` | all pass |
 | Delivery | `pnpm vitest run src/background-tasks/terminal-tools.test.ts src/activity/manager-bridge.test.ts` | all pass |
-| Full unit | `pnpm test` (informational) / `VITEST_MAX_WORKERS=1 pnpm test` (authoritative locally) | exit 0 |
+| Full unit | `VITEST_MAX_WORKERS=1 pnpm test` (one-worker gate) and a serial `pnpm vitest run --fileParallelism=false` run (both authoritative locally); default-parallel `pnpm test` is informational | exit 0 |
 | Integration | `pnpm test:integration` | exit 0 |
 | Required | `pnpm exec tsc --noEmit && pnpm build && pnpm lint` | exit 0 |
 
-The default-parallel `pnpm test` is locally load-sensitive (pre-existing timing flakes in untouched files make it non-deterministic on this machine), so the authoritative local full-unit gate runs under `VITEST_MAX_WORKERS=1`; default-parallel runs are informational only and CI remains the authoritative full-unit gate. This reconciles the gate with execution evidence rather than loosening it.
+The default-parallel `pnpm test` is locally load-sensitive: it can fail on pre-existing load-sensitive timing assertions whose test bodies and budgets this plan does not change. Some of those assertions live in files this plan touches (such as task-manager), but each failing test is byte-identical to its pre-plan version and passes in isolation; no timeout or budget was inflated. The authoritative local full-unit gates are the one-worker run (`VITEST_MAX_WORKERS=1 pnpm test`) and a serial run (`--fileParallelism=false`); default-parallel runs are informational only and CI remains the authoritative full-unit gate. This reconciles the gate with execution evidence rather than loosening it.
 
 ## Committed bundle freshness
 
@@ -89,6 +89,8 @@ After final source edits, run `pnpm build:extension` before `pnpm test`; keep th
 - `src/activity/manager-bridge.ts`: coalesce all newly claimed owners with `writerDeathProven` in one `syncOwnedSessions` pass into ONE global `refreshSnapshotsFromStore`, and consume the proof via `completeAbandonedReconciliation()` after every successful publication even when `abandonedRunningIds` is empty (empty-feed takeover). `src/activity/feed-publisher.ts` changes are limited to the `writerDeathProven` getter doc.
 - `test/fixtures/terminal-store-racer.ts` is added to scope as a mechanical API migration only (it compiles against the `store.transition` update-callback signature).
 - No retention, schema, layout, or deletion changes; no public store/manager API beyond `readIndexed`.
+
+**Authorized review-fix addition (run `run-20260829T162741Z-50088751` attempt 2)**: `readIndexed` is owner-scoped — signature `readIndexed(id, ownerSessionId)`, returning `undefined` for another owner's record — and the coordinator passes the current session owner to the pre-send read while keeping its explicit receipt/claim-token check; still no broader public tool exposure. Gate wording in this plan and `plans/README.md` is corrected: default-parallel failures are pre-existing load-sensitive assertions whose test bodies and budgets are unchanged by this plan (some occur in touched files such as task-manager, but each failing test is byte-identical and passes in isolation); the one-worker and serial runs are the local full-unit gates and CI remains authoritative. No timeout/budget inflation.
 
 **Out of scope**:
 - Record deletion, archival, retention, schema migration, or changing task-directory layout.

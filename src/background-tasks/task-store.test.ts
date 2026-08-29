@@ -9,6 +9,7 @@ import {
 	TerminalTaskLockBusyError,
 	TerminalTaskStore,
 	parseTerminalTaskSnapshot,
+	type TerminalTaskStoreDiagnostic,
 } from "./task-store.js";
 import { TERMINAL_TASK_SCHEMA_VERSION, type TerminalTaskSnapshot } from "./task-types.js";
 
@@ -231,6 +232,62 @@ describe("TerminalTaskStore", () => {
 		const transitioned = store.transition(initial.id, initial.revision, (current) => ({ ...current, title: "selected", updatedAt: 2_000 }));
 		expect(transitioned).toMatchObject({ revision: 2, title: "selected" });
 		expect(reads).toEqual({ scans: 0, metadata: 1 });
+	});
+
+	it("rejects a duplicate id at create before any durable write, whatever the owner", () => {
+		const store = new TerminalTaskStore({ rootDir });
+		const first = snapshot(store, "term-dup", "session-a", 1_000);
+		store.create(first, join(dirname(first.logFile), "meta.json"));
+		// Same id, different owner/timestamp/path: exactly the leak-shaped create.
+		const second = snapshot(store, "term-dup", "session-b", 2_000);
+		const secondPath = join(dirname(second.logFile), "meta.json");
+
+		expect(() => store.create(second, secondPath)).toThrow(/already indexed/);
+		expect(existsSync(secondPath)).toBe(false);
+		// Owner buckets keep their integrity: A still lists only its own record,
+		// B stays empty, and the indexed id still resolves to A's durable record.
+		expect(store.listOwnedIndexed("session-a")).toEqual([expect.objectContaining({ id: "term-dup", ownerSessionId: "session-a" })]);
+		expect(store.listOwnedIndexed("session-b")).toEqual([]);
+		expect(store.getIndexed("term-dup")).toEqual(first);
+
+		// A duplicate found during refresh stays diagnosed and skipped, never
+		// indexed twice and never assigned to two owner buckets.
+		privateWrite(secondPath, `${JSON.stringify(second)}\n`);
+		const diagnostics: TerminalTaskStoreDiagnostic[] = [];
+		const verifier = new TerminalTaskStore({ rootDir, onDiagnostic: (entry) => diagnostics.push(entry) });
+		expect(verifier.refreshIndex().map((task) => task.id)).toEqual(["term-dup"]);
+		expect(diagnostics.filter((entry) => entry.kind === "duplicate")).toHaveLength(1);
+		const holdingOwners = ["session-a", "session-b"].filter((owner) => verifier.listOwnedIndexed(owner).length > 0);
+		expect(holdingOwners).toHaveLength(1);
+	});
+
+	it.skipIf(process.platform === "win32")("keeps the last good index across a transient scan failure", () => {
+		const diagnostics: TerminalTaskStoreDiagnostic[] = [];
+		const store = new TerminalTaskStore({ rootDir, onDiagnostic: (entry) => diagnostics.push(entry) });
+		const initial = snapshot(store, "term-transient");
+		store.create(initial, join(dirname(initial.logFile), "meta.json"));
+		expect(store.refreshIndex()).toHaveLength(1);
+		// A fresh store whose first refresh fails naturally stays empty.
+		const fresh = new TerminalTaskStore({ rootDir });
+
+		chmodSync(rootDir, 0o000);
+		try {
+			expect(store.refreshIndex()).toEqual([]);
+			expect(diagnostics.at(-1)).toMatchObject({ kind: "io", path: store.rootDir });
+			// The failed refresh must not replace the last good generation.
+			expect(store.listOwnedIndexed("session-a").map((task) => task.id)).toEqual(["term-transient"]);
+			expect(fresh.refreshIndex()).toEqual([]);
+		} finally {
+			chmodSync(rootDir, 0o700);
+		}
+		// The preserved index still resolves the durable path once I/O recovers.
+		expect(store.getIndexed(initial.id)).toEqual(initial);
+
+		// The next successful explicit refresh replaces the projection normally.
+		const later = snapshot(store, "term-later", "session-b", 2_000);
+		privateWrite(join(dirname(later.logFile), "meta.json"), `${JSON.stringify(later)}\n`);
+		expect(store.refreshIndex().map((task) => task.id).sort()).toEqual(["term-later", "term-transient"]);
+		expect(store.listOwnedIndexed("session-b")).toEqual([expect.objectContaining({ id: "term-later" })]);
 	});
 
 	it("strictly rejects schema-v4 traversal, identity, path, and state invariant violations", () => {

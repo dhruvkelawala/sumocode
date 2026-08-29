@@ -463,8 +463,10 @@ export class TerminalTaskStore {
 		try {
 			entries = readdirSync(this.rootDir, { withFileTypes: true });
 		} catch (error) {
+			// A transient scan failure (EACCES, EMFILE, ...) must never replace the
+			// last good generation with an empty index. An initial failure naturally
+			// leaves the fresh empty index in place.
 			this.diagnostic("io", this.rootDir, error);
-			this.replaceIndex([], new Map());
 			return [];
 		}
 		const snapshots: TerminalTaskSnapshot[] = [];
@@ -516,6 +518,13 @@ export class TerminalTaskStore {
 		this.assertSnapshotPath(snapshot, resolvedMetaPath);
 		return this.withTaskLock(resolvedMetaPath, () => {
 			if (pathExists(resolvedMetaPath)) throw new Error(`Terminal metadata already exists: ${resolvedMetaPath}`);
+			// An id already indexed under any owner/timestamp/path must be rejected
+			// before the durable write or index replacement, or the new record would
+			// hijack the existing id's projection entry and leak across owner buckets.
+			const existingPath = this.metaPathById.get(snapshot.id);
+			if (this.indexedById.has(snapshot.id) || existingPath !== undefined) {
+				throw new Error(`Terminal id ${snapshot.id} is already indexed at ${existingPath ?? "an indexed record"}`);
+			}
 			atomicWriteJson(resolvedMetaPath, snapshot);
 			this.metaPathById.set(snapshot.id, resolvedMetaPath);
 			this.replaceIndexedEntry(snapshot);

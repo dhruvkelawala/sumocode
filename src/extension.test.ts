@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import sumocode, {
 	findActiveSumoDevTree,
@@ -46,6 +49,8 @@ interface RealpathTable {
 }
 
 let ambientEnvSnapshot: Map<string, string | undefined>;
+let piCodingAgentDirSnapshot: string | undefined;
+let temporaryPiAgentDir: string;
 
 beforeEach(() => {
 	ambientEnvSnapshot = new Map();
@@ -53,6 +58,9 @@ beforeEach(() => {
 		ambientEnvSnapshot.set(key, process.env[key]);
 		delete process.env[key];
 	}
+	piCodingAgentDirSnapshot = process.env.PI_CODING_AGENT_DIR;
+	temporaryPiAgentDir = mkdtempSync(join(tmpdir(), "sumocode-extension-test-"));
+	process.env.PI_CODING_AGENT_DIR = temporaryPiAgentDir;
 	// Each test gets a fresh "process" as far as the install latch is concerned
 	// (the latch is deliberately process-global in production).
 	resetSumocodeProcessInstallLatchForTests();
@@ -63,6 +71,9 @@ afterEach(() => {
 		if (value === undefined) delete process.env[key];
 		else process.env[key] = value;
 	}
+	if (piCodingAgentDirSnapshot === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = piCodingAgentDirSnapshot;
+	rmSync(temporaryPiAgentDir, { recursive: true, force: true });
 	// Never leak the process-global latch into other test files in this worker.
 	resetSumocodeProcessInstallLatchForTests();
 });
@@ -399,6 +410,14 @@ describe("helper subprocess guard", () => {
 });
 
 describe("sumocode extension", () => {
+	it("isolates terminal state under the temporary Pi agent directory", () => {
+		const { pi } = buildPiStub();
+		// SAFETY: the pi double supplies the register*/on surfaces the extension installs on.
+		sumocode(pi as never);
+
+		expect(existsSync(join(temporaryPiAgentDir, "state", "sumocode-terminals"))).toBe(true);
+	});
+
 	it("detects whether native task can install without conflicting with the legacy task extension", () => {
 		expect(shouldInstallNativeTaskTool({ homeDir: "/home/user", exists: () => false })).toBe(true);
 		expect(shouldInstallNativeTaskTool({ homeDir: "/home/user", exists: () => true })).toBe(false);

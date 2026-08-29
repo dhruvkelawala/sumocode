@@ -633,7 +633,7 @@ startup-speed claim.
 | Plan | Title | Priority | Effort | Milestone | Depends on | Status | Issue |
 |---|---|---|---|---|---|---|---|
 | 091 | [Isolate extension-install tests](091-isolate-extension-install-tests.md) | P0 | S | M1 | — | DONE locally — `01bdac8`; exact evidence `73bae7d`: 1/1 focused, 29/29 twice, type/build/lint green, default parallel failed only in 4 untouched load-sensitive tests, full one-worker 2,560/2,560; final-head CI pending | [#385](https://github.com/dhruvkelawala/sumocode/issues/385) |
-| 092 | [Credential-safe PTY harness — sanitized public brief](issues/092.md) | P0 | M | M1 | — | TODO | [#386](https://github.com/dhruvkelawala/sumocode/issues/386) |
+| 092 | [Credential-safe PTY harness — sanitized public brief](issues/092.md) | P0 | M | M1 | — | DONE — `e1648c5`; 19/19 focused; 2,514/2,514 unit (2 workers); 111/111 integration; typecheck/build/lint green; CI pending | [#386](https://github.com/dhruvkelawala/sumocode/issues/386) |
 | 095 | [Honest, settlement-aware visible steering ACKs](095-truthful-visible-steering-acks.md) | P1 | M | M1 | 092 | TODO | [#389](https://github.com/dhruvkelawala/sumocode/issues/389) |
 | 093 | [Indexed terminal-store startup](093-index-terminal-store-startup.md) | P0 | L | M1 | 091, 092 | TODO | [#387](https://github.com/dhruvkelawala/sumocode/issues/387) |
 | 096 | [Mirror Pi option consumption (`--tui-mode` and extension flags)](096-handle-tui-mode-launcher-flag.md) | P1 | M | M1 | 092 | TODO | [#390](https://github.com/dhruvkelawala/sumocode/issues/390) |

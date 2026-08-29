@@ -7,6 +7,7 @@ import {
 	captureAndScrubTaskMarkerEnv,
 	extractFinalAssistantText,
 	installTaskModeAutoExit,
+	resetSubmittedControlsForTests,
 	resetTaskMarkerEnvForTests,
 	shouldInstallTaskModeAutoExit,
 	submittedControlsForTests,
@@ -498,6 +499,9 @@ describe("control watcher", () => {
 		if (workDir) rmSync(workDir, { recursive: true, force: true });
 		workDir = undefined;
 		resetTaskMarkerEnvForTests();
+		// The submitted-control registry is process-global; drop it here so
+		// ownership state cannot leak across tests or files.
+		resetSubmittedControlsForTests();
 	});
 
 	it("submits a steer through the void ExtensionAPI and unlinks only after the synchronous call returns", () => {
@@ -771,6 +775,23 @@ describe("control watcher", () => {
 		expect(submittedControlsForTests().get(resolve(controlDir))).toEqual(new Set([steerPath]));
 		vi.advanceTimersByTime(500);
 		expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
+	});
+
+	it("resetSubmittedControlsForTests clears the process-global registry", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const diagFile = join(workDir, "diag.jsonl");
+		const { pi, controlDir } = installWithControlDir(false, diagFile, () => {
+			throw new Error("EBUSY: ack unlink raced a reader");
+		});
+		const steerPath = join(controlDir, "steer-1.txt");
+		writeFileSync(steerPath, "reset clears ownership");
+
+		vi.advanceTimersByTime(500);
+		expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
+		expect(submittedControlsForTests().get(resolve(controlDir))).toEqual(new Set([steerPath]));
+
+		resetSubmittedControlsForTests();
+		expect(submittedControlsForTests().size).toBe(0);
 	});
 
 	it("preserves and retries a steer when ExtensionAPI throws synchronously", () => {

@@ -321,6 +321,11 @@ export function submittedControlsForTests(): ReadonlyMap<string, ReadonlySet<str
 	return new Map([...submittedControlsRegistry()].map(([dir, files]) => [dir, new Set(files)]));
 }
 
+/** Test-only: clear the process-wide submitted-control registry (same pattern as `resetSumocodeProcessInstallLatchForTests` in `extension.ts`) so it cannot leak across tests or files. */
+export function resetSubmittedControlsForTests(): void {
+	delete globalSubmittedControlsScope()[SUBMITTED_CONTROLS_REGISTRY];
+}
+
 /**
  * Poll `<controlDir>` for orchestrator control files (the parent-side writer
  * lives in `src/subagents/backend-pane.ts`). Steer files are consumed and

@@ -11157,6 +11157,9 @@ function sleepSync(milliseconds) {
 function isValidTerminalTaskId(id) {
   return TERMINAL_ID_PATTERN.test(id) && !id.includes("..");
 }
+function terminalCreatedAtDesc(left, right) {
+  return right.createdAt - left.createdAt;
+}
 function isStatusValue(value) {
   return typeof value === "string" && STATUSES.has(value);
 }
@@ -11391,10 +11394,12 @@ var TerminalTaskStore = class {
     return snapshots;
   }
   listOwnedIndexed(ownerSessionId2) {
-    return (this.indexedIdsByOwner.get(ownerSessionId2) ?? []).flatMap((id) => {
+    const ids = this.indexedIdsByOwner.get(ownerSessionId2);
+    if (!ids || ids.size === 0) return [];
+    return [...ids].flatMap((id) => {
       const indexed = this.indexedById.get(id);
       return indexed ? [indexed] : [];
-    });
+    }).sort(terminalCreatedAtDesc);
   }
   create(snapshot, metaPath) {
     if (snapshot.schemaVersion !== TERMINAL_TASK_SCHEMA_VERSION || snapshot.revision !== 1) {
@@ -11461,27 +11466,26 @@ var TerminalTaskStore = class {
     this.metaPathById.clear();
     this.indexedById.clear();
     this.indexedIdsByOwner.clear();
-    const idsByOwner = /* @__PURE__ */ new Map();
     for (const snapshot of snapshots) {
       const path2 = paths.get(snapshot.id);
       if (!path2) continue;
       this.metaPathById.set(snapshot.id, path2);
       this.indexedById.set(snapshot.id, this.compact(snapshot));
-      const owned = idsByOwner.get(snapshot.ownerSessionId) ?? [];
-      owned.push(snapshot.id);
-      idsByOwner.set(snapshot.ownerSessionId, owned);
-    }
-    for (const [owner, ids] of idsByOwner) {
-      ids.sort((left, right) => (this.indexedById.get(right)?.createdAt ?? 0) - (this.indexedById.get(left)?.createdAt ?? 0));
-      this.indexedIdsByOwner.set(owner, Object.freeze(ids));
+      this.ownerMembership(snapshot).add(snapshot.id);
     }
   }
   replaceIndexedEntry(snapshot) {
     this.indexedById.set(snapshot.id, this.compact(snapshot));
-    const currentIds = this.indexedIdsByOwner.get(snapshot.ownerSessionId) ?? [];
-    if (currentIds.includes(snapshot.id)) return;
-    const nextIds = [...currentIds, snapshot.id].sort((left, right) => (this.indexedById.get(right)?.createdAt ?? 0) - (this.indexedById.get(left)?.createdAt ?? 0));
-    this.indexedIdsByOwner.set(snapshot.ownerSessionId, Object.freeze(nextIds));
+    this.ownerMembership(snapshot).add(snapshot.id);
+  }
+  /** O(1) owner membership; createdAt-desc ordering is applied lazily by listOwnedIndexed. */
+  ownerMembership(snapshot) {
+    let ids = this.indexedIdsByOwner.get(snapshot.ownerSessionId);
+    if (!ids) {
+      ids = /* @__PURE__ */ new Set();
+      this.indexedIdsByOwner.set(snapshot.ownerSessionId, ids);
+    }
+    return ids;
   }
   compact(snapshot) {
     const indexed = {
@@ -11928,6 +11932,20 @@ function abortError() {
   error.name = "AbortError";
   return error;
 }
+function isClaimable(task, ownerSessionId2, includeWake, wakeClaimsUsed, maxWake, now, claimLeaseMs) {
+  if (task.ownerSessionId !== ownerSessionId2) return false;
+  if (!isTerminalTaskSettled(task.status)) return false;
+  const claimLeaseExpired = task.deliveryState === "claimed" && now - task.updatedAt >= claimLeaseMs;
+  if (task.deliveryState !== "pending" && !claimLeaseExpired) return false;
+  if (task.completionPolicy === "wake" && (!includeWake || wakeClaimsUsed >= maxWake)) return false;
+  return true;
+}
+function isAcknowledgementMatch(task, ownerSessionId2, receiptKeys) {
+  if (task.ownerSessionId !== ownerSessionId2) return false;
+  if (task.deliveryState !== "claimed") return false;
+  if (task.completionId === void 0 || task.deliveryClaimToken === void 0) return false;
+  return receiptKeys.has(`${task.completionId}\0${task.deliveryClaimToken}`);
+}
 var TerminalTaskManager = class {
   store;
   processTree;
@@ -11944,7 +11962,6 @@ var TerminalTaskManager = class {
   startingRecoveryGraceMs;
   onDiagnostic;
   tasks = /* @__PURE__ */ new Map();
-  taskIdsByOwner = /* @__PURE__ */ new Map();
   runtime = /* @__PURE__ */ new Map();
   listeners = /* @__PURE__ */ new Set();
   snapshotListeners = /* @__PURE__ */ new Set();
@@ -12093,12 +12110,12 @@ ${command}
     this.arm(id);
     return running.snapshot;
   }
-  /** Pure inventory read joined from the retained manager projection. */
+  /** Owner-ordered inventory: the store's owner index joins retained full snapshots. */
   list(ownerSessionId2) {
-    return [...this.taskIdsByOwner.get(ownerSessionId2) ?? []].flatMap((id) => {
-      const task = this.tasks.get(id);
+    return this.store.listOwnedIndexed(ownerSessionId2).flatMap((indexed) => {
+      const task = this.tasks.get(indexed.id);
       return task ? [task] : [];
-    }).sort((left, right) => right.createdAt - left.createdAt);
+    });
   }
   get(id, ownerSessionId2) {
     const retained = this.tasks.get(id);
@@ -12285,15 +12302,9 @@ ${command}
     const claimed = [];
     let claimedWake = 0;
     for (const candidate of this.store.listOwnedIndexed(ownerSessionId2)) {
-      if (!isTerminalTaskSettled(candidate.status)) continue;
-      const expiredClaim = candidate.deliveryState === "claimed" && this.now() - candidate.updatedAt >= this.claimLeaseMs;
-      if (candidate.deliveryState !== "pending" && !expiredClaim) continue;
-      if (candidate.completionPolicy === "wake" && (!includeWake || claimedWake >= maxWake)) continue;
+      if (!isClaimable(candidate, ownerSessionId2, includeWake, claimedWake, maxWake, this.now(), this.claimLeaseMs)) continue;
       const result = this.mutate(candidate.id, (current) => {
-        if (current.ownerSessionId !== ownerSessionId2 || !isTerminalTaskSettled(current.status)) return void 0;
-        const expiredClaim2 = current.deliveryState === "claimed" && this.now() - current.updatedAt >= this.claimLeaseMs;
-        if (current.deliveryState !== "pending" && !expiredClaim2) return void 0;
-        if (current.completionPolicy === "wake" && (!includeWake || claimedWake >= maxWake)) return void 0;
+        if (!isClaimable(current, ownerSessionId2, includeWake, claimedWake, maxWake, this.now(), this.claimLeaseMs)) return void 0;
         return {
           ...current,
           deliveryState: "claimed",
@@ -12311,9 +12322,9 @@ ${command}
     const receiptKeys = new Set(receipts.map(({ completionId, claimToken }) => `${completionId}\0${claimToken}`));
     const acknowledged = [];
     for (const candidate of this.store.listOwnedIndexed(ownerSessionId2)) {
-      if (!candidate.completionId || !candidate.deliveryClaimToken || !receiptKeys.has(`${candidate.completionId}\0${candidate.deliveryClaimToken}`)) continue;
+      if (!isAcknowledgementMatch(candidate, ownerSessionId2, receiptKeys)) continue;
       const result = this.mutate(candidate.id, (current) => {
-        if (current.ownerSessionId !== ownerSessionId2 || current.deliveryState !== "claimed" || !current.completionId || !current.deliveryClaimToken || !receiptKeys.has(`${current.completionId}\0${current.deliveryClaimToken}`)) return void 0;
+        if (!isAcknowledgementMatch(current, ownerSessionId2, receiptKeys)) return void 0;
         return { ...current, deliveryState: "delivered", deliveryClaimToken: void 0, updatedAt: this.timestamp(current) };
       });
       if (result.changed) acknowledged.push(result.snapshot);
@@ -12774,9 +12785,6 @@ ${command}
   adopt(snapshot, notify7) {
     const previous = this.tasks.get(snapshot.id);
     this.tasks.set(snapshot.id, snapshot);
-    const owned = this.taskIdsByOwner.get(snapshot.ownerSessionId) ?? /* @__PURE__ */ new Set();
-    owned.add(snapshot.id);
-    this.taskIdsByOwner.set(snapshot.ownerSessionId, owned);
     this.ensureRuntime(snapshot);
     if (!notify7 || previous?.revision === snapshot.revision) return;
     for (const listener of this.listeners) {
@@ -13772,12 +13780,12 @@ var ActivityFeedPublisher = class {
     if (this.writerIdentity) {
       const claim = claimWriter(this.writerFile, this.writerIdentity, options.inspectWriter ?? (() => "unknown"));
       this.writerOwned = claim.owned;
-      this.writerDeathProven = claim.writerDeathProven;
+      this.writerDeathProof = claim.writerDeathProven;
     } else {
       this.writerOwned = this.unleasedWriterForTests && !existsSync9(this.writerFile);
     }
     this.load();
-    if (this.writerOwned && this.writerDeathProven) {
+    if (this.writerOwned && this.writerDeathProof) {
       for (const activity of this.activities) {
         if (activity.status === "queued" || activity.status === "running") this.abandonedRunningIds.add(activity.id);
       }
@@ -13792,7 +13800,7 @@ var ActivityFeedPublisher = class {
   writerIdentity;
   unleasedWriterForTests;
   writerOwned;
-  writerDeathProven = false;
+  writerDeathProof = false;
   abandonedRunningIds = /* @__PURE__ */ new Set();
   revision = 0;
   activities = [];
@@ -13803,9 +13811,13 @@ var ActivityFeedPublisher = class {
   get canPublish() {
     return this.writerOwned;
   }
-  /** Missing running records may be reconciled only after the former writer is proven dead. */
-  get canReconcileAbandonedActivities() {
-    return this.writerOwned && this.abandonedRunningIds.size > 0;
+  /**
+   * The exact claim-time proof that a previous writer died. This is the sole
+   * authorization bit for one cross-process terminal-index refresh; it stays
+   * readable until completeAbandonedReconciliation consumes it.
+   */
+  get writerDeathProven() {
+    return this.writerDeathProof;
   }
   getAbandonedRunningIds() {
     return new Set(this.abandonedRunningIds);
@@ -13813,7 +13825,7 @@ var ActivityFeedPublisher = class {
   /** Consume former-writer death proof only after replacement publication succeeds. */
   completeAbandonedReconciliation() {
     this.abandonedRunningIds.clear();
-    this.writerDeathProven = false;
+    this.writerDeathProof = false;
   }
   getSnapshot() {
     return this.activities.map((activity) => activity);
@@ -14206,7 +14218,6 @@ var ActivityManagerBridge = class {
   writerVerifiable;
   bridgeToken = randomUUID5();
   claimedOwners = /* @__PURE__ */ new Set();
-  provenTakeoverOwners = /* @__PURE__ */ new Set();
   publishers = /* @__PURE__ */ new Map();
   terminalSnapshots = [];
   terminalOutputCache = /* @__PURE__ */ new Map();
@@ -14238,16 +14249,10 @@ var ActivityManagerBridge = class {
       rootDir: options.rootDir,
       now: this.now,
       onDiagnostic: options.onDiagnostic,
-      writerIdentity
+      writerIdentity,
+      inspectWriter
     };
-    this.publisherFactory = options.publisherFactory ?? ((owner) => new ActivityFeedPublisher(owner, {
-      ...publisherOptions,
-      inspectWriter: (writer) => {
-        const state = inspectWriter(writer);
-        if (state === "dead") this.provenTakeoverOwners.add(owner);
-        return state;
-      }
-    }));
+    this.publisherFactory = options.publisherFactory ?? ((owner) => new ActivityFeedPublisher(owner, publisherOptions));
     if (!writerIdentity && !options.publisherFactory) {
       this.diagnostic({ kind: "io", path: "activity-writer", message: "current process start identity is not verifiable; feed publication disabled" });
     }
@@ -14317,8 +14322,7 @@ var ActivityManagerBridge = class {
       if (!this.sessionOwnership.claim(owner, this.bridgeToken)) continue;
       const publisher = this.publisher(owner);
       if (publisher.hasWriterOwnership) {
-        const refreshForTakeover = this.provenTakeoverOwners.delete(owner) || publisher.canReconcileAbandonedActivities;
-        if (refreshForTakeover) {
+        if (publisher.writerDeathProven) {
           try {
             const refreshed = this.terminalManager.refreshSnapshotsFromStore?.();
             if (refreshed) this.adoptTerminalSnapshots(refreshed);

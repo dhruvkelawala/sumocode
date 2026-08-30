@@ -574,7 +574,7 @@ extract_first_positional() {
 	local n="${#SUMOCODE_ARGS[@]}"
 	local arg next
 
-	# Class 1: unconditional value flags (see table above for the args.js
+	# Class 2: unconditional value flags (see table above for the args.js
 	# citation).
 	local -a value_flags=(
 		--mode --provider --model --api-key --system-prompt
@@ -582,7 +582,7 @@ extract_first_positional() {
 		--session-dir --models --tools -t --exclude-tools -xt --thinking
 		--export --extension -e --skill --prompt-template --theme
 	)
-	# Class 2: known boolean flags -- recognized BEFORE the generic unknown
+	# Class 3: known boolean flags -- recognized BEFORE the generic unknown
 	# branch so a boolean like --offline never consumes the real prompt.
 	local -a boolean_flags=(
 		--help -h --version -v --continue -c --resume -r --no-session

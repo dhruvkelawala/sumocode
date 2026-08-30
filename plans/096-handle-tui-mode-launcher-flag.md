@@ -101,14 +101,14 @@ Cover space form, equals form, missing value, flags before/after the positional,
 
 ## Done criteria
 
-- [ ] `--tui-mode regular "prompt"` extracts only `prompt`.
-- [ ] `--tui-mode=regular "prompt"` remains correct.
-- [ ] Missing/following-flag/invalid/`@file` consumption matches the pinned Pi parser exactly.
-- [ ] Direct-Pi bypass behavior is unchanged.
-- [ ] Known booleans, standalone `@file`, special print/list modes, and unknown long-option values match pinned Pi consumption.
-- [ ] Shell syntax, targeted tests, typecheck/build, lint, unit, and full integration tests pass.
-- [ ] `git status --short` contains only files listed in Scope plus this plan/index bookkeeping.
-- [ ] Plan 096's `plans/README.md` row is updated to `DONE` with completion evidence.
+- [x] `--tui-mode regular "prompt"` extracts only `prompt`.
+- [x] `--tui-mode=regular "prompt"` remains correct.
+- [x] Missing/following-flag/invalid/`@file` consumption matches the pinned Pi parser exactly.
+- [x] Direct-Pi bypass behavior is unchanged.
+- [x] Known booleans, standalone `@file`, special print/list modes, and unknown long-option values match pinned Pi consumption.
+- [x] Shell syntax, targeted tests, typecheck/build, lint, unit, and full integration tests pass.
+- [x] `git status --short` contains only files listed in Scope plus this plan/index bookkeeping.
+- [x] Plan 096's `plans/README.md` row is updated to `DONE` with completion evidence.
 
 ## STOP conditions
 

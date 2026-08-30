@@ -465,6 +465,8 @@ export class TerminalTaskStore {
 	private readonly processStartTime: string | undefined;
 	private readonly beforeAbandonedLockRename?: () => void;
 	private readonly metaReadFault?: (path: string) => Error | undefined;
+	/** Consecutive refreshIndex scan failures are diagnosed once per episode; the first successful scan resets the dedupe. */
+	private refreshFailureDiagnosed = false;
 
 	public constructor(options: TerminalTaskStoreOptions = {}) {
 		const requestedRoot = resolve(options.rootDir ?? defaultTerminalStoreRoot());
@@ -504,7 +506,15 @@ export class TerminalTaskStore {
 			// explicitly so freshness-boundary callers can distinguish an unreadable
 			// store from a successfully refreshed empty one. An initial failure
 			// naturally leaves the fresh empty index in place.
-			this.diagnostic("io", this.rootDir, error);
+			// Consecutive scan failures are diagnosed once per episode: a manager's
+			// lazy initialization retries share one episode with the constructor
+			// scan, so a persistently unreadable store does not repeat the
+			// store-level I/O diagnostic behind the caller's own deduped episode
+			// diagnostic. The first successful scan resets the dedupe.
+			if (!this.refreshFailureDiagnosed) {
+				this.refreshFailureDiagnosed = true;
+				this.diagnostic("io", this.rootDir, error);
+			}
 			return { ok: false, snapshots: [] };
 		}
 		// The prior path→id reverse index is built lazily on the first transient
@@ -581,6 +591,9 @@ export class TerminalTaskStore {
 			this.indexedById.set(priorEntry.id, priorEntry);
 			this.ownerMembership(priorEntry).add(priorEntry.id);
 		}
+		// A successful scan ends the failure episode: the next failure is
+		// diagnosed again.
+		this.refreshFailureDiagnosed = false;
 		return { ok: true, snapshots, preservedIds: preservedEntries.map((entry) => entry.id) };
 	}
 

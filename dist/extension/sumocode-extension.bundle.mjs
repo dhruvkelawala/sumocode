@@ -11347,6 +11347,8 @@ var TerminalTaskStore = class {
   processStartTime;
   beforeAbandonedLockRename;
   metaReadFault;
+  /** Consecutive refreshIndex scan failures are diagnosed once per episode; the first successful scan resets the dedupe. */
+  refreshFailureDiagnosed = false;
   constructor(options = {}) {
     const requestedRoot = resolve4(options.rootDir ?? defaultTerminalStoreRoot());
     const uid = process.getuid?.();
@@ -11378,7 +11380,10 @@ var TerminalTaskStore = class {
     try {
       entries = readdirSync(this.rootDir, { withFileTypes: true });
     } catch (error) {
-      this.diagnostic("io", this.rootDir, error);
+      if (!this.refreshFailureDiagnosed) {
+        this.refreshFailureDiagnosed = true;
+        this.diagnostic("io", this.rootDir, error);
+      }
       return { ok: false, snapshots: [] };
     }
     let priorIdByPath;
@@ -11438,6 +11443,7 @@ var TerminalTaskStore = class {
       this.indexedById.set(priorEntry.id, priorEntry);
       this.ownerMembership(priorEntry).add(priorEntry.id);
     }
+    this.refreshFailureDiagnosed = false;
     return { ok: true, snapshots, preservedIds: preservedEntries.map((entry) => entry.id) };
   }
   /** O(1) no-I/O owner membership check against the compact index. */
@@ -12051,12 +12057,12 @@ function isAcknowledgementMatch(task, ownerSessionId2, receiptKeys) {
   if (task.completionId === void 0 || task.deliveryClaimToken === void 0) return false;
   return receiptKeys.has(`${task.completionId}\0${task.deliveryClaimToken}`);
 }
-function recoveryRelevantAdoption(previous, snapshot) {
-  return previous === void 0 || previous.revision !== snapshot.revision || previous.ownerSessionId !== snapshot.ownerSessionId || previous.status !== snapshot.status || previous.pid !== snapshot.pid || previous.processGroupId !== snapshot.processGroupId || previous.processStartTime !== snapshot.processStartTime;
-}
 function deliveryEligibilityChanged(previous, snapshot) {
   if (previous.deliveryState !== snapshot.deliveryState || previous.completionPolicy !== snapshot.completionPolicy || previous.completionId !== snapshot.completionId || previous.deliveryClaimToken !== snapshot.deliveryClaimToken) return true;
   return previous.updatedAt !== snapshot.updatedAt && (previous.deliveryState === "claimed" || snapshot.deliveryState === "claimed");
+}
+function recoveryRelevantAdoption(previous, snapshot) {
+  return previous === void 0 || previous.revision !== snapshot.revision || previous.ownerSessionId !== snapshot.ownerSessionId || previous.status !== snapshot.status || previous.pid !== snapshot.pid || previous.processGroupId !== snapshot.processGroupId || previous.processStartTime !== snapshot.processStartTime;
 }
 var TerminalTaskManager = class {
   store;
@@ -12083,6 +12089,13 @@ var TerminalTaskManager = class {
   refreshBatchDepth = 0;
   /** Per-task changes queued while a refresh batch is open, deduped to the latest snapshot per id. */
   refreshBatchQueued = /* @__PURE__ */ new Map();
+  /**
+   * Set when publishProjection is called while a refresh batch is open: the
+   * publication defers to the batch close, whose single fan-out supersedes any
+   * intermediate projection. No current in-batch path publishes directly, so
+   * this is batch-safety future-proofing for sync-in-batch mutation paths.
+   */
+  projectionPublishDeferred = false;
   detached = false;
   /** False until one successful full scan seeds the retained projection generation. */
   indexInitialized = false;
@@ -12470,6 +12483,7 @@ ${command}
     return claimed;
   }
   acknowledge(ownerSessionId2, receipts) {
+    this.ensureIndexInitialized();
     const receiptKeys = new Set(receipts.map(({ completionId, claimToken }) => `${completionId}\0${claimToken}`));
     const acknowledged = [];
     for (const candidate of this.store.listOwnedIndexed(ownerSessionId2)) {
@@ -12483,6 +12497,7 @@ ${command}
     return acknowledged;
   }
   getClaimRetryDelay(ownerSessionId2) {
+    this.ensureIndexInitialized();
     const delays = this.store.listOwnedIndexed(ownerSessionId2).filter((task) => task.deliveryState === "claimed").map((task) => Math.max(0, this.claimLeaseMs - (this.now() - task.updatedAt)));
     return delays.length > 0 ? Math.min(...delays) : void 0;
   }
@@ -12579,19 +12594,7 @@ ${command}
       adoptionChangedStoredState = this.runRefreshLoops(refresh, changed);
     } finally {
       this.refreshBatchDepth -= 1;
-      const fanout = /* @__PURE__ */ new Map();
-      for (const snapshot of changed) fanout.set(snapshot.id, snapshot);
-      for (const [id, snapshot] of this.refreshBatchQueued) fanout.set(id, snapshot);
-      this.refreshBatchQueued.clear();
-      for (const id of fanout.keys()) {
-        const retained = this.tasks.get(id);
-        if (retained) fanout.set(id, retained);
-      }
-      if (fanout.size > 0) {
-        this.notifyChanges([...fanout.values()]);
-      } else if (adoptionChangedStoredState) {
-        this.publishProjection();
-      }
+      this.drainRefreshBatch(changed, adoptionChangedStoredState);
     }
     return { ok: true, snapshots: this.getSnapshots() };
   }
@@ -13091,7 +13094,8 @@ ${command}
    * loaded state up to MAX_TRANSITION_RETRIES times.
    */
   mutate(id, update) {
-    let latest = this.tasks.get(id) ?? this.store.getIndexed(id);
+    const retainedBeforeMutation = this.tasks.get(id);
+    let latest = retainedBeforeMutation ?? this.store.getIndexed(id);
     if (!latest) throw new Error(`Unknown terminal task ${id}`);
     for (let attempt = 0; attempt < MAX_TRANSITION_RETRIES; attempt += 1) {
       this.adopt(latest, false);
@@ -13104,7 +13108,7 @@ ${command}
           return next;
         });
         if (!changed) {
-          this.adoptLockedNoOpSnapshot(transitioned);
+          this.adoptLockedNoOpSnapshot(transitioned, retainedBeforeMutation);
           return { snapshot: transitioned, changed: false };
         }
         this.adopt(transitioned, true);
@@ -13131,29 +13135,45 @@ ${command}
   /**
    * Classification for the locked no-op adoption site, applying the same gates
    * the refresh loops apply at their proven freshness boundary to the
-   * authoritative locked snapshot: a recovery-relevant divergence (record new
-   * to the projection, or changed revision/owner/lifecycle status/process
-   * identity — e.g. settled retained vs running on disk) triggers the
+   * authoritative locked snapshot. The classification baseline is the snapshot
+   * retained when the enclosing mutation started, not the map state at adoption
+   * time: stale-revision retries adopt each reloaded authoritative snapshot
+   * silently on the way to a no-op, so the map would hold the reloaded snapshot
+   * itself and a revision-bumped divergence (retained settled v1 vs running v2
+   * on disk) would classify against itself and recover, notify, and publish
+   * nothing. A recovery-relevant divergence (record new to the projection, or
+   * changed revision/owner/lifecycle status/process identity) triggers the
    * recover-equivalent side effects (settled log cap, launch-gate release,
-   * arm, reconcile scheduling) outside any refresh batch and joins a per-task
-   * notification; a delivery-eligibility/receipt change raises only the
-   * per-task notification that wakes the TerminalDeliveryCoordinator; a
-   * content-only divergence publishes the projection once. A cosmetic no-op
-   * adoption (identical content) stays quiet as before.
+   * arm, reconcile scheduling) and joins a per-task notification; a
+   * delivery-eligibility/receipt change raises only the per-task notification
+   * that wakes the TerminalDeliveryCoordinator; a content-only divergence
+   * publishes the projection once. A cosmetic no-op adoption (identical
+   * content) stays quiet as before. The recovery branch fans out through the
+   * refresh's notification batch and its dedupe-to-latest close: recovery can
+   * synchronously mutate and publish a newer revision (reconcile's
+   * tree-verification mutation, settlement), and notifying the original locked
+   * snapshot after it would reintroduce a newer-then-stale per-task sequence
+   * and duplicate projection fan-out — the batch folds everything into one
+   * final per-task payload per id and exactly one final publication.
    */
-  adoptLockedNoOpSnapshot(snapshot) {
-    const previous = this.tasks.get(snapshot.id);
+  adoptLockedNoOpSnapshot(snapshot, classificationBaseline) {
     this.adopt(snapshot, false);
-    if (recoveryRelevantAdoption(previous, snapshot)) {
-      this.recover(snapshot);
+    if (recoveryRelevantAdoption(classificationBaseline, snapshot)) {
+      this.refreshBatchDepth += 1;
+      try {
+        this.recover(snapshot);
+        this.notifyChanges([snapshot]);
+      } finally {
+        this.refreshBatchDepth -= 1;
+        this.drainRefreshBatch([snapshot], false);
+      }
+      return;
+    }
+    if (classificationBaseline !== void 0 && deliveryEligibilityChanged(classificationBaseline, snapshot)) {
       this.notifyChanges([snapshot]);
       return;
     }
-    if (previous !== void 0 && deliveryEligibilityChanged(previous, snapshot)) {
-      this.notifyChanges([snapshot]);
-      return;
-    }
-    if (previous !== void 0 && !snapshotContentEquals(previous, snapshot)) this.publishProjection();
+    if (classificationBaseline !== void 0 && !snapshotContentEquals(classificationBaseline, snapshot)) this.publishProjection();
   }
   /**
    * Fan a batch of changed snapshots out: per-task listeners receive each
@@ -13177,8 +13197,42 @@ ${command}
     if (this.snapshotListeners.size === 0) return;
     this.publishProjection();
   }
+  /**
+   * One merged fan-out that closes a notification batch — transactional across
+   * the success and the throw path: fold in whatever a synchronous recovery
+   * path queued mid-batch plus everything the caller collected, then resolve
+   * each id to the latest retained snapshot at fan-out time (a fresh-then-stale
+   * v2→v1 per-task sequence can never be observed). Per-task listeners receive
+   * each final payload (waiters re-evaluate completion, the delivery
+   * coordinator re-runs its claim pass), and projection listeners receive
+   * exactly one publication of the current retained projection — a publication
+   * a sync-in-batch path deferred through publishProjection's batch guard is
+   * superseded by it. The queue is drained unconditionally, so batch state
+   * never carries across refresh calls.
+   */
+  drainRefreshBatch(changed, adoptionChangedStoredState) {
+    const fanout = /* @__PURE__ */ new Map();
+    for (const snapshot of changed) fanout.set(snapshot.id, snapshot);
+    for (const [id, snapshot] of this.refreshBatchQueued) fanout.set(id, snapshot);
+    this.refreshBatchQueued.clear();
+    for (const id of fanout.keys()) {
+      const retained = this.tasks.get(id);
+      if (retained) fanout.set(id, retained);
+    }
+    const deferredProjection = this.projectionPublishDeferred;
+    this.projectionPublishDeferred = false;
+    if (fanout.size > 0) {
+      this.notifyChanges([...fanout.values()]);
+    } else if (adoptionChangedStoredState || deferredProjection) {
+      this.publishProjection();
+    }
+  }
   /** Publish the current retained projection once to snapshot listeners; observer errors cannot break lifecycle transitions. */
   publishProjection() {
+    if (this.refreshBatchDepth > 0) {
+      this.projectionPublishDeferred = true;
+      return;
+    }
     if (this.snapshotListeners.size === 0) return;
     const snapshots = this.getSnapshots();
     for (const listener of this.snapshotListeners) {

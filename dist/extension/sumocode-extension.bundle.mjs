@@ -16612,21 +16612,19 @@ function showEvent(ctx, event) {
       ctx.ui.setStatus("sumocode.login", event.message);
   }
 }
-function redactLoginErrorText(text) {
-  return text.replace(/([?&](?:code|access_token|refresh_token|id_token|token|api_key|apikey|state)=)[^&\s]+/gi, "$1[redacted]").replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]").replace(/\bsk-[A-Za-z0-9_-]{8,}/g, "[redacted]");
+function errorIdentity(error) {
+  if (error instanceof DOMException) return error.name === "AbortError" ? "AbortError" : "DOMException";
+  if (error instanceof TypeError) return "TypeError";
+  if (error instanceof RangeError) return "RangeError";
+  if (error instanceof SyntaxError) return "SyntaxError";
+  if (error instanceof Error) return "Error";
+  return "non_error_rejection";
 }
-function logLoginFailure(attempt, providerRef, error) {
-  const failure2 = error instanceof Error ? error : void 0;
-  const credentialFree = attempt?.authType === "api_key";
-  const stack = failure2?.stack && !credentialFree ? failure2.stack.split("\n").slice(0, 8).map((frame) => redactLoginErrorText(frame.trim())) : [];
+function logLoginFailure(attempt, error) {
   logDiagnostic("rpc_login_failed", {
-    // The fallback is the raw /login argument (user-controlled); a failure
-    // before provider resolution would otherwise persist it verbatim.
-    provider: attempt?.provider.id ?? redactLoginErrorText(providerRef),
+    provider: attempt?.provider.id ?? null,
     authType: attempt?.authType,
-    errorName: failure2?.name ?? "non_error_rejection",
-    errorMessage: credentialFree ? "[redacted: api-key provider error]" : redactLoginErrorText(failure2?.message ?? String(error)),
-    stack
+    errorName: errorIdentity(error)
   });
 }
 async function executeRpcLogin(args, ctx, runtime) {
@@ -16646,10 +16644,6 @@ async function executeRpcLogin(args, ctx, runtime) {
     if (loginAbort.signal.aborted) throw cancelled();
     const methods = loginMethods(runtime);
     logDiagnostic("rpc_login_methods", {
-      // args is raw slash-command input (a mistyped credential or pasted URL
-      // must not land verbatim in the trace), so it gets the same redaction
-      // as provider failure text.
-      requested: redactLoginErrorText(args.trim()),
       providers: methods.map((entry) => `${entry.provider.id}:${entry.authType}`)
     });
     if (methods.length === 0) {
@@ -16672,8 +16666,11 @@ async function executeRpcLogin(args, ctx, runtime) {
     ctx.ui.notify(`Logged in to ${method.provider.name}`, "info");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (message !== "Login cancelled") logLoginFailure(attempt, args.trim(), error);
-    if (!loginAbort.signal.aborted && message !== "Login cancelled") ctx.ui.notify("Login failed; run sumocode -d for details", "error");
+    const wasCancelled = loginAbort.signal.aborted || message === "Login cancelled";
+    if (!wasCancelled) {
+      logLoginFailure(attempt, error);
+      ctx.ui.notify("Login failed; run sumocode -d for details", "error");
+    }
   } finally {
     loginAbort.abort();
     if (activeLoginAbort === loginAbort) activeLoginAbort = void 0;

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { cancelActiveRpcLogin, executeRpcLogin, redactLoginErrorText, registerRpcLoginCommand, type RpcLoginRuntime } from "./login-command.js";
+import { cancelActiveRpcLogin, executeRpcLogin, registerRpcLoginCommand, type RpcLoginRuntime } from "./login-command.js";
 import { decodeAuthInputTitle, isSecretInputTitle } from "./secret-input.js";
 /* oxlint-disable anti-slop/no-chained-type-assertions -- test doubles cast minimal stub objects to Pi context types. */
 /* oxlint-disable anti-slop/require-safety-comment-for-type-assertion -- stub shape is exercised by the assertions below. */
@@ -46,6 +46,20 @@ function runtimeFor(providerValue = provider()): RpcLoginRuntime {
 			return { type: "oauth" } as never;
 		}),
 	};
+}
+
+async function withDiagnostics(run: (file: string) => Promise<void>): Promise<void> {
+	const dir = mkdtempSync(join(tmpdir(), "sumocode-login-diag-"));
+	const file = join(dir, "diagnostics.jsonl");
+	const previous = process.env.SUMO_TUI_DIAG_FILE;
+	process.env.SUMO_TUI_DIAG_FILE = file;
+	try {
+		await run(file);
+	} finally {
+		if (previous === undefined) delete process.env.SUMO_TUI_DIAG_FILE;
+		else process.env.SUMO_TUI_DIAG_FILE = previous;
+		rmSync(dir, { recursive: true, force: true });
+	}
 }
 
 describe("RPC /login compatibility command", () => {
@@ -157,20 +171,23 @@ describe("RPC /login compatibility command", () => {
 	});
 
 	it("does not report a provider-specific abort error after cancellation", async () => {
-		const ctx = context();
-		const runtime = runtimeFor();
-		(runtime.login as ReturnType<typeof vi.fn>).mockImplementation(async (_providerId, _type, interaction) => {
-			return new Promise((_resolve, reject) => {
-				interaction.signal?.addEventListener("abort", () => reject(new DOMException("This operation was aborted", "AbortError")), { once: true });
+		await withDiagnostics(async (file) => {
+			const ctx = context();
+			const runtime = runtimeFor();
+			(runtime.login as ReturnType<typeof vi.fn>).mockImplementation(async (_providerId, _type, interaction) => {
+				return new Promise((_resolve, reject) => {
+					interaction.signal?.addEventListener("abort", () => reject(new DOMException("This operation was aborted", "AbortError")), { once: true });
+				});
 			});
+
+			const login = executeRpcLogin("anthropic", ctx, runtime);
+			await vi.waitFor(() => expect(runtime.login).toHaveBeenCalled());
+			expect(cancelActiveRpcLogin()).toBe(true);
+			await login;
+
+			expect(ctx.ui.notify).not.toHaveBeenCalledWith(expect.stringContaining("Login failed"), "error");
+			expect(readFileSync(file, "utf8")).not.toContain('"event":"rpc_login_failed"');
 		});
-
-		const login = executeRpcLogin("anthropic", ctx, runtime);
-		await vi.waitFor(() => expect(runtime.login).toHaveBeenCalled());
-		expect(cancelActiveRpcLogin()).toBe(true);
-		await login;
-
-		expect(ctx.ui.notify).not.toHaveBeenCalledWith(expect.stringContaining("Login failed"), "error");
 	});
 
 	it("cancels an authentication prompt that omits its own signal", async () => {
@@ -216,60 +233,41 @@ describe("RPC /login compatibility command", () => {
 		expect(title).not.toContain("sk-secret");
 	});
 
-	it("persists only error identity when an arbitrary API key is echoed by its provider", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "sumocode-login-diag-"));
-		const file = join(dir, "diagnostics.jsonl");
-		const previous = process.env.SUMO_TUI_DIAG_FILE;
-		process.env.SUMO_TUI_DIAG_FILE = file;
-		try {
-			const apiKeyProvider = { ...provider({ oauth: false, apiKey: true }), id: "acme", name: "Acme" };
-			const ctx = context({ inputs: ["acme_live_credential_987654321"] });
-			const runtime = runtimeFor(apiKeyProvider);
-			(runtime.login as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("rejected acme_live_credential_987654321"));
+	it("persists only a normalized identity when an OAuth provider echoes an arbitrary secret", async () => {
+		await withDiagnostics(async (file) => {
+			const oauthProvider = { ...provider(), id: "acme", name: "Acme" };
+			const ctx = context();
+			const runtime = runtimeFor(oauthProvider);
+			(runtime.login as ReturnType<typeof vi.fn>).mockRejectedValue(new TypeError("rejected acme_live_credential_987654321"));
 
 			await executeRpcLogin("acme", ctx, runtime);
 
 			const trace = readFileSync(file, "utf8");
-			expect(trace).toContain('"errorName":"Error"');
-			expect(trace).toContain('"errorMessage":"[redacted: api-key provider error]"');
-			expect(trace).toContain('"stack":[]');
+			const failures = trace.trim().split("\n").map((line) => JSON.parse(line) as {
+				event?: string;
+				provider?: string | null;
+				authType?: string;
+				errorName?: string;
+				errorMessage?: string;
+				stack?: string[];
+			}).filter((entry) => entry.event === "rpc_login_failed");
+			expect(failures).toHaveLength(1);
+			expect(failures[0]).toEqual(expect.objectContaining({ provider: "acme", authType: "oauth", errorName: "TypeError" }));
+			expect(failures[0]).not.toHaveProperty("errorMessage");
+			expect(failures[0]).not.toHaveProperty("stack");
 			expect(trace).not.toContain("acme_live_credential_987654321");
 			expect(ctx.ui.notify).toHaveBeenCalledWith("Login failed; run sumocode -d for details", "error");
-			expect(ctx.ui.notify).not.toHaveBeenCalledWith(expect.stringContaining("acme_live_credential_987654321"), expect.anything());
-		} finally {
-			if (previous === undefined) delete process.env.SUMO_TUI_DIAG_FILE;
-			else process.env.SUMO_TUI_DIAG_FILE = previous;
-			rmSync(dir, { recursive: true, force: true });
-		}
-	});
-});
-
-describe("redactLoginErrorText", () => {
-	it("redacts credential-bearing URL query values", () => {
-		const input = "request to https://console.anthropic.com/v1/oauth/callback?code=abc-secret-123&state=s1 failed";
-		expect(redactLoginErrorText(input)).toBe(
-			"request to https://console.anthropic.com/v1/oauth/callback?code=[redacted]&state=[redacted] failed",
-		);
+		});
 	});
 
-	it("redacts bearer tokens and sk- keys", () => {
-		expect(redactLoginErrorText("auth failed for Bearer sk-ant-abcdef123456789")).toBe("auth failed for Bearer [redacted]");
-		expect(redactLoginErrorText("bad key sk-abcdef1234567890")).toBe("bad key [redacted]");
-	});
-
-	it("leaves ordinary error text untouched", () => {
-		const input = "Unknown login provider: anthropic-2";
-		expect(redactLoginErrorText(input)).toBe(input);
-	});
-});
-
-describe("rpc_login_methods diagnostics", () => {
-	it("redacts credential-bearing slash-command arguments before persistence", () => {
-		// The command persists redactLoginErrorText(args.trim()); pin the exact
-		// shapes a mistyped credential or pasted OAuth URL can take.
-		expect(redactLoginErrorText("sk-ant-abcdef123456789")).toBe("[redacted]");
-		expect(redactLoginErrorText("https://claude.ai/oauth/authorize?code=super-secret&state=x")).toBe(
-			"https://claude.ai/oauth/authorize?code=[redacted]&state=[redacted]",
-		);
+	it("never persists arbitrary slash-command input", async () => {
+		await withDiagnostics(async (file) => {
+			const secret = "third_party_secret_without_a_known_prefix";
+			await executeRpcLogin(secret, context(), runtimeFor());
+			const trace = readFileSync(file, "utf8");
+			expect(trace).toContain('"event":"rpc_login_methods"');
+			expect(trace).not.toContain(secret);
+			expect(trace).not.toContain('"requested"');
+		});
 	});
 });

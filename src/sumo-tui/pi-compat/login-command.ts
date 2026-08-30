@@ -164,47 +164,26 @@ function showEvent(ctx: ExtensionCommandContext, event: AuthEvent): void {
 }
 
 /**
- * Login failures surface only as a transient toast, which clips long provider
- * adapter errors (e.g. a third-party OAuth adapter whose entry point moved).
- * Mirror the failure into the diagnostics stream so `sumocode -d` captures the
- * error identity and call site. Credentials never reach this path: only the
- * provider id, auth type, error message, and stack frames are recorded.
+ * Normalize a caught rejection to an identity chosen by SumoCode. Error names,
+ * messages, and stacks are provider-controlled and can echo arbitrary secrets;
+ * none cross the diagnostics boundary.
  */
-/**
- * Redact credential-bearing substrings before provider errors reach the
- * diagnostics stream. `/login` executes third-party provider code, so rejection
- * text is not a credential-free boundary: OAuth callback URLs carry `code=`
- * values, failures can echo bearer tokens or `sk-` keys. Applies to the message
- * and to stack frames, which repeat the message.
- */
-export function redactLoginErrorText(text: string): string {
-	return text
-		.replace(/([?&](?:code|access_token|refresh_token|id_token|token|api_key|apikey|state)=)[^&\s]+/gi, "$1[redacted]")
-		.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
-		.replace(/\bsk-[A-Za-z0-9_-]{8,}/g, "[redacted]");
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- caught rejection boundary: instanceof checks classify the identity.
+function errorIdentity(error: unknown): string {
+	if (error instanceof DOMException) return error.name === "AbortError" ? "AbortError" : "DOMException";
+	if (error instanceof TypeError) return "TypeError";
+	if (error instanceof RangeError) return "RangeError";
+	if (error instanceof SyntaxError) return "SyntaxError";
+	if (error instanceof Error) return "Error";
+	return "non_error_rejection";
 }
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- caught rejection boundary: the instanceof Error checks below are the parse.
-function logLoginFailure(attempt: LoginMethod | undefined, providerRef: string, error: unknown): void {
-	const failure = error instanceof Error ? error : undefined;
-	// API-key providers accept arbitrary key formats, so no message pattern can
-	// prove provider-controlled text credential-free. Persist error identity
-	// only for these flows; OAuth failures retain their redacted diagnostics.
-	const credentialFree = attempt?.authType === "api_key";
-	const stack = failure?.stack && !credentialFree
-		? failure.stack
-				.split("\n")
-				.slice(0, 8)
-				.map((frame) => redactLoginErrorText(frame.trim()))
-		: [];
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- caught rejection boundary: errorIdentity performs the parse.
+function logLoginFailure(attempt: LoginMethod | undefined, error: unknown): void {
 	logDiagnostic("rpc_login_failed", {
-		// The fallback is the raw /login argument (user-controlled); a failure
-		// before provider resolution would otherwise persist it verbatim.
-		provider: attempt?.provider.id ?? redactLoginErrorText(providerRef),
+		provider: attempt?.provider.id ?? null,
 		authType: attempt?.authType,
-		errorName: failure?.name ?? "non_error_rejection",
-		errorMessage: credentialFree ? "[redacted: api-key provider error]" : redactLoginErrorText(failure?.message ?? String(error)),
-		stack,
+		errorName: errorIdentity(error),
 	});
 }
 
@@ -224,11 +203,9 @@ export async function executeRpcLogin(args: string, ctx: ExtensionCommandContext
 		await runtime.getAvailable();
 		if (loginAbort.signal.aborted) throw cancelled();
 		const methods = loginMethods(runtime);
+		// Persist only provider registry data; raw slash-command input can be an
+		// arbitrary pasted credential and never crosses the diagnostics boundary.
 		logDiagnostic("rpc_login_methods", {
-			// args is raw slash-command input (a mistyped credential or pasted URL
-			// must not land verbatim in the trace), so it gets the same redaction
-			// as provider failure text.
-			requested: redactLoginErrorText(args.trim()),
 			providers: methods.map((entry) => `${entry.provider.id}:${entry.authType}`),
 		});
 		if (methods.length === 0) {
@@ -251,10 +228,13 @@ export async function executeRpcLogin(args: string, ctx: ExtensionCommandContext
 		ctx.ui.notify(`Logged in to ${method.provider.name}`, "info");
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		if (message !== "Login cancelled") logLoginFailure(attempt, args.trim(), error);
-		// Provider-controlled rejection text may echo credentials in formats that
-		// cannot be recognized safely; keep the visible failure credential-free.
-		if (!loginAbort.signal.aborted && message !== "Login cancelled") ctx.ui.notify("Login failed; run sumocode -d for details", "error");
+		const wasCancelled = loginAbort.signal.aborted || message === "Login cancelled";
+		if (!wasCancelled) {
+			logLoginFailure(attempt, error);
+			// Provider-controlled rejection text may echo credentials in formats that
+			// cannot be recognized safely; keep the visible failure credential-free.
+			ctx.ui.notify("Login failed; run sumocode -d for details", "error");
+		}
 	} finally {
 		loginAbort.abort();
 		if (activeLoginAbort === loginAbort) activeLoginAbort = undefined;

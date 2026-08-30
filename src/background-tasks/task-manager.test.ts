@@ -164,6 +164,42 @@ function transientFault(code: string): Error {
 		return snapshot;
 	}
 
+	function persistRunningTask(
+		store: TerminalTaskStore,
+		id: string,
+		ownerSessionId: string,
+		createdAt: number,
+	): TerminalTaskSnapshot {
+		const directory = join(store.rootDir, `${id}-${createdAt}`);
+		mkdirSync(directory, { mode: 0o700 });
+		chmodSync(directory, 0o700);
+		const logFile = join(directory, "output.log");
+		writeFileSync(logFile, "", { mode: 0o600 });
+		chmodSync(logFile, 0o600);
+		const snapshot: TerminalTaskSnapshot = {
+			schemaVersion: TERMINAL_TASK_SCHEMA_VERSION,
+			revision: 1,
+			id,
+			ownerSessionId,
+			command: "sleep 1",
+			cwd: "/repo",
+			title: id,
+			status: "running",
+			completionPolicy: "passive",
+			createdAt,
+			updatedAt: createdAt,
+			deliveryState: "none",
+			pid: 4000,
+			processGroupId: 4000,
+			processStartTime: "start-4000",
+			logFile,
+		};
+		const metaFile = join(directory, "meta.json");
+		writeFileSync(metaFile, `${JSON.stringify(snapshot)}\n`, { mode: 0o600 });
+		chmodSync(metaFile, 0o600);
+		return snapshot;
+	}
+
 	it("persists spawn identity before releasing a detached terminal", async () => {
 		const target = manager();
 		const task = await start(target);
@@ -1068,6 +1104,123 @@ function transientFault(code: string): Error {
 			target?.detach();
 			vi.useRealTimers();
 		}
+	});
+
+	it("keeps the refresh batch closed until adopt and prune complete", async () => {
+		const reads = { scans: 0 };
+		const store = new TerminalTaskStore({
+			rootDir,
+			onRead: (kind) => { if (kind === "full-scan") reads.scans += 1; },
+		});
+		const drop = persistSettledTask(store, "term-drop", "session-a", 1_100);
+		// A running record adopted at construction: its recovery reconcile runs
+		// synchronously and persists a first tree verification.
+		persistRunningTask(store, "term-active", "session-a", 1_000);
+		const target = manager({ store, pollIntervalMs: 60_000 });
+		// Settle the construction reconcile's promise bookkeeping so the refresh's
+		// own recover can schedule a fresh synchronous reconcile.
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		// Advance past the tree-verification refresh window and make the next
+		// capture disagree with the persisted anchors, so the refresh's recover
+		// reaches reconcile's verification mutation synchronously mid-batch, and
+		// bump the record's revision so the recovery gate fires at all.
+		now += 10_000;
+		tree.operations.captureTreeVerification = vi.fn((identity: ProcessTreeIdentity) => ({
+			members: [{ pid: identity.pid + 7, processStartTime: `mutated-${identity.pid}` }],
+		}));
+		const external = new TerminalTaskStore({ rootDir });
+		external.refreshIndex();
+		external.transition("term-active", 2, (current) => ({ ...current, title: "bumped", updatedAt: 3_000 }));
+		// The same refresh quarantines term-drop.
+		writeFileSync(join(dirname(drop.logFile), "meta.json"), "{not json", { mode: 0o600 });
+
+		const publications: Array<readonly TerminalTaskSnapshot[]> = [];
+		const changes: TerminalTaskSnapshot[] = [];
+		let refreshRunning = false;
+		const unsubscribeProjection = target.subscribeChanges((snapshots) => {
+			publications.push(snapshots);
+			// Model the bridge guard: a listener that observes an intermediate
+			// generation — a quarantined id not yet pruned — rescans the store.
+			if (refreshRunning && snapshots.some((task) => task.id === drop.id)) target.refreshSnapshotsFromStore();
+		});
+		const unsubscribeTasks = target.addChangeListener((snapshot) => changes.push(snapshot));
+		const scansBefore = reads.scans;
+		const publicationsBefore = publications.length;
+
+		refreshRunning = true;
+		expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+		refreshRunning = false;
+
+		// The whole refresh is one notification batch: exactly one scan (no
+		// listener-triggered re-entrant refresh), exactly one final projection
+		// publication that already excludes the quarantined id, and exactly one
+		// final per-task payload per id at the latest revision — the mid-refresh
+		// verification mutation never publishes, so a fresh-then-stale v2→v1
+		// per-task sequence cannot be observed.
+		expect(reads.scans - scansBefore).toBe(1);
+		expect(publications.length - publicationsBefore).toBe(1);
+		expect(publications.at(-1)!.map((task) => task.id)).toEqual(["term-active"]);
+		expect(changes.filter((task) => task.id === "term-active").map((task) => task.revision)).toEqual([4]);
+		expect(changes.filter((task) => task.id === drop.id)).toHaveLength(1);
+		expect(target.get("term-active", "session-a")).toMatchObject({ id: "term-active", revision: 4, title: "bumped" });
+		expect(target.get(drop.id, "session-a")).toBeUndefined();
+		unsubscribeProjection();
+		unsubscribeTasks();
+	});
+
+	it("wakes delivery when a refresh discovers a new settled record", async () => {
+		const store = new TerminalTaskStore({ rootDir });
+		const target = manager({ store, pollIntervalMs: 60_000 });
+		const publications: Array<readonly TerminalTaskSnapshot[]> = [];
+		const changes: TerminalTaskSnapshot[] = [];
+		const unsubscribeProjection = target.subscribeChanges((snapshots) => publications.push(snapshots));
+		const unsubscribeTasks = target.addChangeListener((snapshot) => changes.push(snapshot));
+		const baseline = publications.length;
+
+		// The delivery coordinator's only wakeup for externally discovered
+		// completions is the manager's per-task notification.
+		const sendMessage = vi.fn();
+		const pi = { sendMessage };
+		const ctx = {
+			sessionManager: { getSessionId: () => "session-a", getBranch: () => [] },
+			isIdle: () => true,
+		};
+		// SAFETY: the double implements exactly the ExtensionAPI members the coordinator touches.
+		const coordinator = new TerminalDeliveryCoordinator(pi as never, target);
+		// SAFETY: the double implements exactly the ExtensionContext members the coordinator touches.
+		coordinator.bind(ctx as never);
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		expect(sendMessage).not.toHaveBeenCalled();
+
+		// A completed terminal with a pending completion appears on disk — written
+		// by the previous writer before it died. The refresh must include the new
+		// record in its batched notification so the coordinator claims and sends it.
+		// A pending delivery carries no observation timestamps (store schema).
+		const seeded = persistSettledTask(store, "term-fresh", "session-a", 1_500, "fresh");
+		const pending = {
+			...seeded,
+			deliveryState: "pending" as const,
+			completionId: "completion-discovered",
+			observedAt: undefined,
+			consumedAt: undefined,
+		};
+		const metaFile = join(dirname(seeded.logFile), "meta.json");
+		writeFileSync(metaFile, `${JSON.stringify(pending)}\n`, { mode: 0o600 });
+		chmodSync(metaFile, 0o600);
+
+		expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+		expect(changes.map((task) => task.id)).toEqual(["term-fresh"]);
+		expect(changes[0]).toMatchObject({ id: "term-fresh", status: "completed", deliveryState: "pending" });
+		expect(publications.length - baseline).toBe(1);
+		expect(publications.at(-1)!.map((task) => task.id)).toEqual(["term-fresh"]);
+
+		// The per-task notification flushes the coordinator: it claims the pending
+		// completion and sends the terminal-result message.
+		await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+		expect(sendMessage.mock.calls[0][0]).toMatchObject({ customType: "terminal-result" });
+		coordinator.dispose();
+		unsubscribeProjection();
+		unsubscribeTasks();
 	});
 
 	it("signals every stop target before waiting, escalates, and confirms cancellation", async () => {

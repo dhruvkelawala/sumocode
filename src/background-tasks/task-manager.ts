@@ -420,6 +420,10 @@ export class TerminalTaskManager {
 	private readonly runtime = new Map<string, RuntimeTask>();
 	private readonly listeners = new Set<TerminalTaskChangeListener>();
 	private readonly snapshotListeners = new Set<TerminalTaskSnapshotListener>();
+	/** Open while a refresh batch is running: notifyChanges queues instead of publishing. */
+	private refreshBatchDepth = 0;
+	/** Per-task changes queued while a refresh batch is open, deduped to the latest snapshot per id. */
+	private readonly refreshBatchQueued = new Map<string, TerminalTaskSnapshot>();
 	private detached = false;
 
 	public constructor(options: TerminalTaskManagerOptions = {}) {
@@ -902,25 +906,64 @@ export class TerminalTaskManager {
 	 * same-revision same-owner rewrite that flips status or process identity
 	 * recovers instead of leaving an active terminal unarmed behind a stale
 	 * projection. Quarantine stays logical — durable records are preserved.
-	 * Waiter-relevant changes — each genuinely pruned id and each retained
-	 * record whose recovery-relevant identity changed (an external rewrite
-	 * flipping e.g. running→settled at this boundary) — are collected during
-	 * the loops and fanned out once after adoption and pruning complete:
-	 * per-task listeners receive each change so parked waiters that collected
-	 * an id as known resolve promptly instead of waiting out the clock, and
-	 * projection listeners receive exactly one publication of the final
-	 * projection, so no intermediate projection that still contains a
-	 * not-yet-pruned quarantined id is ever adopted or published.
+	 * Waiter- and delivery-relevant changes — each genuinely pruned id and each
+	 * recovery-gated adopted record (one new to the projection, or a retained
+	 * record whose recovery-relevant identity changed, e.g. an external rewrite
+	 * flipping running→settled at this boundary) — are collected during the
+	 * loops and fanned out once after adoption and pruning complete: per-task
+	 * listeners receive each change so parked waiters that collected an id as
+	 * known resolve promptly instead of waiting out the clock and a takeover
+	 * retry that discovers an already-settled pending completion wakes the
+	 * delivery coordinator, and projection listeners receive exactly one
+	 * publication of the final projection, so no intermediate projection that
+	 * still contains a not-yet-pruned quarantined id is ever adopted or
+	 * published. The whole fan-out runs inside a notification batch: recovery
+	 * work below can synchronously reach mutate()→adopt(…, true) — reconcile's
+	 * async body runs to its first await when scheduled here, including its
+	 * tree-verification mutation and starting/lost settlement — so any
+	 * notification fired mid-batch queues its per-task changes and publishes
+	 * nothing; the batch flag is cleared in finally and one merged fan-out
+	 * emits the final per-task payload per id — the latest retained snapshot at
+	 * fan-out time, so a fresh-then-stale v2→v1 sequence can never be observed —
+	 * plus exactly one final projection.
 	 */
 	public refreshSnapshotsFromStore(): TerminalTaskIndexRefreshResult {
 		if (this.detached) return { ok: false, snapshots: this.getSnapshots() };
 		const refresh = this.store.refreshIndex();
 		if (!refresh.ok) return { ok: false, snapshots: this.getSnapshots() };
-		// Waiter-relevant changes are collected across both loops and fanned out
-		// once after adoption and pruning complete, so projection listeners can
-		// never observe — or re-enter a nested refresh against — an intermediate
-		// generation that still contains a not-yet-pruned quarantined id.
+		// Waiter- and delivery-relevant changes are collected across both loops and
+		// fanned out once after adoption and pruning complete, so projection
+		// listeners can never observe — or re-enter a nested refresh against — an
+		// intermediate generation that still contains a not-yet-pruned quarantined
+		// id. The batch flag routes any notification a synchronous recovery path
+		// fires mid-loop into that same merged fan-out instead of publishing it.
+		this.refreshBatchDepth += 1;
 		const changed: TerminalTaskSnapshot[] = [];
+		try {
+			this.runRefreshLoops(refresh, changed);
+		} finally {
+			this.refreshBatchDepth -= 1;
+		}
+		// Single merged fan-out: fold in whatever a synchronous recovery path
+		// queued mid-batch, then resolve each id to the latest retained snapshot
+		// at fan-out time. Per-task listeners receive each final payload (waiters
+		// re-evaluate completion, the delivery coordinator re-runs its claim
+		// pass), and projection listeners receive exactly one publication of that
+		// final projection.
+		const fanout = new Map<string, TerminalTaskSnapshot>();
+		for (const snapshot of changed) fanout.set(snapshot.id, snapshot);
+		for (const [id, snapshot] of this.refreshBatchQueued) fanout.set(id, snapshot);
+		this.refreshBatchQueued.clear();
+		for (const id of fanout.keys()) {
+			const retained = this.tasks.get(id);
+			if (retained) fanout.set(id, retained);
+		}
+		this.notifyChanges([...fanout.values()]);
+		return { ok: true, snapshots: this.getSnapshots() };
+	}
+
+	/** The refresh adoption and prune loops; every notification stays inside the caller's batch. */
+	private runRefreshLoops(refresh: TerminalTaskIndexRefreshResult, changed: TerminalTaskSnapshot[]): void {
 		for (const snapshot of refresh.snapshots) {
 			// Adoption is unconditional: revision equality alone must never skip a
 			// refreshed snapshot, or an external same-revision owner/content rewrite
@@ -948,10 +991,13 @@ export class TerminalTaskManager {
 			) {
 				this.recover(snapshot);
 				this.onRefreshRecover?.(snapshot.id);
-				// An external advance on a retained record is waiter-relevant: a
-				// parked wait on this id must re-evaluate against the refreshed
-				// identity (e.g. running→settled) instead of waiting out the clock.
-				if (previous !== undefined) changed.push(snapshot);
+				// Every recovery-gated adoption is waiter- and delivery-relevant: a
+				// retained record advanced externally must re-evaluate parked waits
+				// (e.g. running→settled), and a record new to this projection — such
+				// as a takeover retry discovering an already-settled pending
+				// completion — must wake the delivery coordinator, which listens for
+				// per-task notifications only.
+				changed.push(snapshot);
 			}
 		}
 		const refreshed = new Set(refresh.snapshots.map((snapshot) => snapshot.id));
@@ -973,12 +1019,6 @@ export class TerminalTaskManager {
 			// silence here would park the waiter for the full timeout.
 			if (pruned) changed.push(pruned);
 		}
-		// Single fan-out: per-task listeners receive each waiter-relevant change
-		// (waiters re-evaluate completion against the final projection), and
-		// projection listeners receive exactly one publication of that final
-		// projection.
-		this.notifyChanges(changed);
-		return { ok: true, snapshots: this.getSnapshots() };
 	}
 
 	/**
@@ -1561,6 +1601,14 @@ export class TerminalTaskManager {
 	 */
 	private notifyChanges(changed: readonly TerminalTaskSnapshot[]): void {
 		if (changed.length === 0) return;
+		if (this.refreshBatchDepth > 0) {
+			// A refresh batch is open: queue the per-task changes (deduped to the
+			// latest snapshot per id) and publish nothing — an intermediate
+			// projection must never reach a listener mid-refresh. The refresh's
+			// single merged fan-out publishes once adopt and prune are complete.
+			for (const snapshot of changed) this.refreshBatchQueued.set(snapshot.id, snapshot);
+			return;
+		}
 		for (const snapshot of changed) {
 			for (const listener of this.listeners) {
 				try {

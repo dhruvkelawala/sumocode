@@ -142,7 +142,7 @@ function initialManagedConfigContent(item: typeof MANAGED_CONFIG_ITEMS[number], 
 	if (item !== "claude-accounts.json") return undefined;
 	try {
 		const targetStat = lstatSync(target);
-		if (targetStat.isFile() && !targetStat.isSymbolicLink()) return readFileSync(target, "utf8");
+		if (targetStat.isFile() || targetStat.isSymbolicLink()) return readFileSync(target, "utf8");
 	} catch {
 		// No regular adapter-native target to migrate; try the legacy source.
 	}

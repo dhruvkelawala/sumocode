@@ -7288,7 +7288,7 @@ function initialManagedConfigContent(item, target) {
   if (item !== "claude-accounts.json") return void 0;
   try {
     const targetStat = lstatSync(target);
-    if (targetStat.isFile() && !targetStat.isSymbolicLink()) return readFileSync6(target, "utf8");
+    if (targetStat.isFile() || targetStat.isSymbolicLink()) return readFileSync6(target, "utf8");
   } catch {
   }
   const legacyPath = join6(dirname3(target), "multi-pass.json");

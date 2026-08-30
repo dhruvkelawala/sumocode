@@ -1,6 +1,6 @@
 // oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof, anti-slop/no-unsafe-dictionary-type -- account-config boundary parser: claude-accounts.json (and the legacy multi-pass.json it migrates from) are untrusted user-authored JSON; the typeof predicates below are the sanctioned parse and unknown keys must survive round-trips untouched.
 import { execFile } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -93,6 +93,13 @@ function resolveAccountsWriteDestination(deps: AccountsCommandDeps): AccountsWri
 	const targetPath = resolveAccountsConfigPath(deps);
 	const managedTarget = resolvePrivateAccountsPath(deps);
 	const privateConfigDir = dirname(managedTarget);
+	try {
+		// Supported canonical layout: ~/.pi/agent itself points at the private
+		// config repo, so both lexical paths name the same file already.
+		if (realpathSync(dirname(targetPath)) === realpathSync(privateConfigDir)) return { writePath: managedTarget };
+	} catch {
+		// One parent does not exist yet; normal bootstrap/link handling follows.
+	}
 	if (pathEntryExists(managedTarget) && lstatSync(managedTarget).isSymbolicLink()) {
 		throw new Error(`Refusing to replace a symlinked private accounts source: ${managedTarget}`);
 	}

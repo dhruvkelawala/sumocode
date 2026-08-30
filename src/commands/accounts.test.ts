@@ -78,7 +78,12 @@ function makeCtx(options: CtxOptions) {
 function withAgentDir(agentDir: string): AccountsCommandDeps {
 	// Keep private-config fallback inside the test sandbox too; otherwise an
 	// injected agentDir would still resolve ~/.config/sumocode from the host.
-	return { agentDir, homeDir: agentDir, pendingReloadProviders: new Set<string>() };
+	return {
+		agentDir,
+		homeDir: agentDir,
+		env: { SUMOCODE_CONFIG_DIR: join(agentDir, "private-config") },
+		pendingReloadProviders: new Set<string>(),
+	};
 }
 
 function commandContext(ctx: ReturnType<typeof makeCtx>["ctx"]): ExtensionCommandContext {
@@ -277,6 +282,28 @@ describe("saveClaudeSubscriptions symlink handling", () => {
 		expect(JSON.parse(readFileSync(join(configDir, "claude-accounts.json"), "utf8"))).toEqual({
 			unknownFutureKey: "keep",
 			subscriptions: [{ provider: "anthropic", index: 2, label: "personal" }],
+		});
+	});
+
+	it("writes directly when the entire agent directory points at the private config repo", () => {
+		const root = tempAgentDir();
+		const agentDir = join(root, "linked-agent");
+		const configDir = tempAgentDir();
+		mkdirSync(join(configDir, ".git"));
+		symlinkSync(configDir, agentDir);
+
+		saveClaudeSubscriptions([{ provider: "anthropic", index: 2, label: "company" }], {
+			agentDir,
+			env: { SUMOCODE_CONFIG_DIR: configDir },
+		});
+
+		const source = join(configDir, "claude-accounts.json");
+		expect(lstatSync(source).isSymbolicLink()).toBe(false);
+		expect(JSON.parse(readFileSync(source, "utf8"))).toEqual({
+			subscriptions: [{ provider: "anthropic", index: 2, label: "company" }],
+		});
+		expect(JSON.parse(readFileSync(join(agentDir, "claude-accounts.json"), "utf8"))).toEqual({
+			subscriptions: [{ provider: "anthropic", index: 2, label: "company" }],
 		});
 	});
 

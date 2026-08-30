@@ -48,7 +48,11 @@ async function accountRows(): Promise<string[]> {
 	};
 	// SAFETY: the doubles supply every API and context member read before the
 	// intentionally cancelled first selector.
-	await executeAccountsCommand({} as never, ctx as never, { agentDir, homeDir: agentDir });
+	await executeAccountsCommand({} as never, ctx as never, {
+		agentDir,
+		homeDir: agentDir,
+		env: { SUMOCODE_CONFIG_DIR: join(agentDir, "private-config") },
+	});
 	const firstCall = select.mock.calls[0];
 	if (!firstCall) throw new Error("/accounts did not open its account selector");
 	return firstCall[1];

@@ -1,5 +1,5 @@
 // src/extension.ts
-import { existsSync as existsSync14, readFileSync as readFileSync18, realpathSync as realpathSync4 } from "node:fs";
+import { existsSync as existsSync14, readFileSync as readFileSync18, realpathSync as realpathSync5 } from "node:fs";
 import { homedir as homedir16 } from "node:os";
 import { dirname as dirname14, join as join22, resolve as resolve8, sep } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
@@ -16750,7 +16750,7 @@ function registerRpcLoginCommand(pi, deps = {}) {
 
 // src/commands/accounts.ts
 import { execFile as execFile7 } from "node:child_process";
-import { existsSync as existsSync13, lstatSync as lstatSync4, mkdirSync as mkdirSync10, readFileSync as readFileSync17, readlinkSync, renameSync as renameSync7, rmSync as rmSync4, symlinkSync as symlinkSync2, writeFileSync as writeFileSync11 } from "node:fs";
+import { existsSync as existsSync13, lstatSync as lstatSync4, mkdirSync as mkdirSync10, readFileSync as readFileSync17, readlinkSync, realpathSync as realpathSync4, renameSync as renameSync7, rmSync as rmSync4, symlinkSync as symlinkSync2, writeFileSync as writeFileSync11 } from "node:fs";
 import { homedir as homedir15 } from "node:os";
 import { dirname as dirname13, join as join21, resolve as resolve7 } from "node:path";
 import { promisify as promisify5 } from "node:util";
@@ -16786,6 +16786,10 @@ function resolveAccountsWriteDestination(deps) {
   const targetPath = resolveAccountsConfigPath(deps);
   const managedTarget = resolvePrivateAccountsPath(deps);
   const privateConfigDir = dirname13(managedTarget);
+  try {
+    if (realpathSync4(dirname13(targetPath)) === realpathSync4(privateConfigDir)) return { writePath: managedTarget };
+  } catch {
+  }
   if (pathEntryExists(managedTarget) && lstatSync4(managedTarget).isSymbolicLink()) {
     throw new Error(`Refusing to replace a symlinked private accounts source: ${managedTarget}`);
   }
@@ -17516,7 +17520,7 @@ function shouldNoopDuplicateInstalledExtension(options = {}) {
   const env = options.env ?? process.env;
   const launcherRoot = env.SUMOCODE_ROOT_DIR;
   if (launcherRoot) {
-    const realpath = options.realpath ?? ((path2) => realpathSync4(path2));
+    const realpath = options.realpath ?? ((path2) => realpathSync5(path2));
     const exists = options.exists ?? existsSync14;
     const readFile = options.readFile ?? ((path2, encoding) => readFileSync18(path2, encoding));
     const modulePath = canonicalize(moduleUrlToPath2(moduleUrl), realpath);

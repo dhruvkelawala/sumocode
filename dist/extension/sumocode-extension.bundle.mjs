@@ -16643,7 +16643,10 @@ async function executeRpcLogin(args, ctx, runtime) {
     if (loginAbort.signal.aborted) throw cancelled();
     const methods = loginMethods(runtime);
     logDiagnostic("rpc_login_methods", {
-      requested: args.trim(),
+      // args is raw slash-command input (a mistyped credential or pasted URL
+      // must not land verbatim in the trace), so it gets the same redaction
+      // as provider failure text.
+      requested: redactLoginErrorText(args.trim()),
       providers: methods.map((entry) => `${entry.provider.id}:${entry.authType}`)
     });
     if (methods.length === 0) {

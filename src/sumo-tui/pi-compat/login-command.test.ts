@@ -232,3 +232,14 @@ describe("redactLoginErrorText", () => {
 		expect(redactLoginErrorText(input)).toBe(input);
 	});
 });
+
+describe("rpc_login_methods diagnostics", () => {
+	it("redacts credential-bearing slash-command arguments before persistence", () => {
+		// The command persists redactLoginErrorText(args.trim()); pin the exact
+		// shapes a mistyped credential or pasted OAuth URL can take.
+		expect(redactLoginErrorText("sk-ant-abcdef123456789")).toBe("[redacted]");
+		expect(redactLoginErrorText("https://claude.ai/oauth/authorize?code=super-secret&state=x")).toBe(
+			"https://claude.ai/oauth/authorize?code=[redacted]&state=[redacted]",
+		);
+	});
+});

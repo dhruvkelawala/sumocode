@@ -12133,6 +12133,9 @@ var TerminalTaskManager = class {
   indexInitBackoffMs = INDEX_INIT_RETRY_BACKOFF_MS;
   /** Init-scan failures are diagnosed once per episode kind; a failed⇄incomplete transition re-diagnoses once and the first complete scan resets the dedupe. */
   indexInitDiagnosedKind;
+  /** One idle retry that wakes an uninitialized index at the current backoff boundary. */
+  indexInitRetryTimer;
+  indexInitRetryDueAt;
   constructor(options = {}) {
     this.store = options.store ?? new TerminalTaskStore({ onDiagnostic: options.onDiagnostic });
     this.processTree = options.processTree ?? systemProcessTree;
@@ -12150,6 +12153,7 @@ var TerminalTaskManager = class {
     this.onDiagnostic = options.onDiagnostic;
     this.onRefreshAdopt = options.onRefreshAdopt;
     this.onRefreshRecover = options.onRefreshRecover;
+    const initializationAttemptAt = Math.max(1, Math.floor(this.now()));
     const initialization = this.store.refreshIndex();
     if (initialization.ok) {
       this.indexInitialized = initialization.complete;
@@ -12157,9 +12161,13 @@ var TerminalTaskManager = class {
         this.adopt(snapshot, false);
         this.recover(snapshot);
       }
-      if (!initialization.complete) this.diagnoseIndexInitFailure(true);
+      if (!initialization.complete) {
+        this.diagnoseIndexInitFailure(true);
+        this.scheduleIndexInitRetryTimer(initializationAttemptAt);
+      }
     } else {
       this.diagnoseIndexInitFailure();
+      this.scheduleIndexInitRetryTimer(initializationAttemptAt);
     }
   }
   async start(options) {
@@ -12647,9 +12655,17 @@ ${command}
    * incomplete store from being rescanned by every following entry.
    */
   ensureIndexInitialized() {
-    if (this.indexInitialized || this.detached || this.indexInitInFlight) return;
+    if (this.indexInitialized || this.detached) {
+      this.clearIndexInitRetryTimer();
+      return;
+    }
+    if (this.indexInitInFlight) return;
     const attemptAt = Math.max(1, Math.floor(this.now()));
-    if (attemptAt - this.indexInitLastAttemptAt < this.indexInitBackoffMs) return;
+    if (attemptAt - this.indexInitLastAttemptAt < this.indexInitBackoffMs) {
+      this.scheduleIndexInitRetryTimer();
+      return;
+    }
+    this.clearIndexInitRetryTimer();
     this.indexInitLastAttemptAt = attemptAt;
     this.indexInitInFlight = true;
     try {
@@ -12660,6 +12676,7 @@ ${command}
           INDEX_INIT_RETRY_BACKOFF_MS * 2 ** Math.min(this.indexInitFailedAttempts - 1, 32),
           INDEX_INIT_RETRY_BACKOFF_MAX_MS
         );
+        this.scheduleIndexInitRetryTimer(attemptAt);
       }
     } finally {
       this.indexInitInFlight = false;
@@ -12682,6 +12699,34 @@ ${command}
     this.indexInitDiagnosedKind = void 0;
     this.indexInitFailedAttempts = 0;
     this.indexInitBackoffMs = INDEX_INIT_RETRY_BACKOFF_MS;
+    this.clearIndexInitRetryTimer();
+  }
+  scheduleIndexInitRetryTimer(baseAt = Number.isFinite(this.indexInitLastAttemptAt) ? this.indexInitLastAttemptAt : Math.max(1, Math.floor(this.now()))) {
+    if (this.indexInitialized || this.detached || this.hasActiveTasks()) {
+      this.clearIndexInitRetryTimer();
+      return;
+    }
+    const dueAt = baseAt + this.indexInitBackoffMs;
+    if (this.indexInitRetryTimer && this.indexInitRetryDueAt === dueAt) return;
+    this.clearIndexInitRetryTimer();
+    this.indexInitRetryDueAt = dueAt;
+    this.indexInitRetryTimer = setTimeout(() => {
+      this.indexInitRetryTimer = void 0;
+      this.indexInitRetryDueAt = void 0;
+      this.ensureIndexInitialized();
+    }, Math.max(0, dueAt - this.now()));
+    this.indexInitRetryTimer.unref?.();
+  }
+  clearIndexInitRetryTimer() {
+    if (this.indexInitRetryTimer) clearTimeout(this.indexInitRetryTimer);
+    this.indexInitRetryTimer = void 0;
+    this.indexInitRetryDueAt = void 0;
+  }
+  hasActiveTasks() {
+    for (const task of this.tasks.values()) {
+      if (!isTerminalTaskSettled(task.status)) return true;
+    }
+    return false;
   }
   /**
    * The refresh adoption and prune loops; every notification stays inside the
@@ -12765,6 +12810,7 @@ ${command}
   detach() {
     if (this.detached) return;
     this.detached = true;
+    this.clearIndexInitRetryTimer();
     for (const runtime of this.runtime.values()) {
       if (runtime.pollTimer) clearInterval(runtime.pollTimer);
       runtime.pollTimer = void 0;
@@ -12808,9 +12854,13 @@ ${command}
     const task = this.tasks.get(id) ?? this.store.getIndexed(id);
     if (!task || isTerminalTaskSettled(task.status)) return;
     const runtime = this.ensureRuntime(task);
-    if (runtime.pollTimer) return;
+    if (runtime.pollTimer) {
+      if (!this.indexInitialized) this.clearIndexInitRetryTimer();
+      return;
+    }
     runtime.pollTimer = setInterval(() => this.scheduleReconcile(id), this.pollIntervalMs);
     runtime.pollTimer.unref?.();
+    if (!this.indexInitialized) this.clearIndexInitRetryTimer();
   }
   scheduleReconcile(id) {
     if (this.detached) return;
@@ -13304,6 +13354,7 @@ ${command}
     if (!runtime?.pollTimer) return;
     clearInterval(runtime.pollTimer);
     runtime.pollTimer = void 0;
+    if (!this.indexInitialized) this.scheduleIndexInitRetryTimer();
   }
   timestamp(task) {
     return Math.max(task.updatedAt, Math.max(1, Math.floor(this.now())));

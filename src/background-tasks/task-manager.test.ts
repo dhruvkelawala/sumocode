@@ -697,6 +697,202 @@ function transientFault(code: string): Error {
 		unsubscribeTasks();
 	});
 
+	it("retries an incomplete startup scan from a timer when no later entry point runs and delivers the recovered completion", async () => {
+		vi.useFakeTimers();
+		let target: TerminalTaskManager | undefined;
+		let coordinator: TerminalDeliveryCoordinator | undefined;
+		try {
+			const faults = new Map<string, Error>();
+			const store = new TerminalTaskStore({
+				rootDir,
+				metaReadFault: (path) => faults.get(path),
+			});
+			const seeded = persistSettledTask(store, "term-idle-init", "session-a", 1_000, "idle");
+			const pending = { ...seeded, deliveryState: "pending" as const, observedAt: undefined, consumedAt: undefined };
+			const metaPath = join(dirname(seeded.logFile), "meta.json");
+			writeFileSync(metaPath, `${JSON.stringify(pending)}\n`, { mode: 0o600 });
+			chmodSync(metaPath, 0o600);
+			faults.set(metaPath, transientFault("EIO"));
+
+			target = manager({ store, pollIntervalMs: 60_000 });
+			const branch: Array<{ type: "custom_message"; details: unknown }> = [];
+			const sendMessage = vi.fn((message: { details?: unknown }) => {
+				branch.push({ type: "custom_message", details: message.details });
+			});
+			const pi = { sendMessage };
+			const ctx = {
+				sessionManager: { getSessionId: () => "session-a", getBranch: () => branch },
+				isIdle: () => true,
+			};
+			// SAFETY: the double implements exactly the ExtensionAPI members the coordinator touches.
+			coordinator = new TerminalDeliveryCoordinator(pi as never, target);
+			// SAFETY: the double implements exactly the ExtensionContext members the coordinator touches.
+			coordinator.bind(ctx as never);
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(sendMessage).not.toHaveBeenCalled();
+			expect(store.isIndexedOwner("term-idle-init", "session-a")).toBe(false);
+			// The startup flush consumed the one direct entry point and left exactly one
+			// lazy init retry timer for the backoff boundary.
+			expect(vi.getTimerCount()).toBe(1);
+
+			faults.clear();
+			now += 999;
+			await vi.advanceTimersByTimeAsync(999);
+			expect(sendMessage).not.toHaveBeenCalled();
+			expect(store.isIndexedOwner("term-idle-init", "session-a")).toBe(false);
+
+			now += 1;
+			await vi.advanceTimersByTimeAsync(1);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(sendMessage).toHaveBeenCalledTimes(1);
+			expect(sendMessage.mock.calls[0][0]).toMatchObject({ customType: "terminal-result" });
+			expect(target.get("term-idle-init", "session-a")).toMatchObject({ id: "term-idle-init", deliveryState: "delivered" });
+			expect(durableTask("term-idle-init")).toMatchObject({ deliveryState: "delivered" });
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			coordinator?.dispose();
+			target?.detach();
+			vi.useRealTimers();
+		}
+	});
+
+	it("escalates init retry timers across consecutive incomplete attempts", async () => {
+		vi.useFakeTimers();
+		let target: TerminalTaskManager | undefined;
+		try {
+			class ScriptedInitStore extends TerminalTaskStore {
+				public attempts = 0;
+				public incompleteAttempts = 3;
+				public override refreshIndex(): TerminalTaskIndexRefreshResult {
+					this.attempts += 1;
+					if (this.incompleteAttempts > 0) {
+						this.incompleteAttempts -= 1;
+						return { ok: true, complete: false, snapshots: [] };
+					}
+					return super.refreshIndex();
+				}
+			}
+			const store = new ScriptedInitStore({ rootDir });
+			target = manager({ store, pollIntervalMs: 60_000 });
+			expect(store.attempts).toBe(1);
+
+			// The startup entry point takes over the constructor's armed retry and opens
+			// the first 1s lazy-retry window.
+			expect(target.list("session-a")).toEqual([]);
+			expect(store.attempts).toBe(2);
+			expect(vi.getTimerCount()).toBe(1);
+
+			now += 999;
+			await vi.advanceTimersByTimeAsync(999);
+			expect(store.attempts).toBe(2);
+
+			now += 1;
+			await vi.advanceTimersByTimeAsync(1);
+			expect(store.attempts).toBe(3);
+			expect(vi.getTimerCount()).toBe(1);
+
+			now += 1_999;
+			await vi.advanceTimersByTimeAsync(1_999);
+			expect(store.attempts).toBe(3);
+
+			now += 1;
+			await vi.advanceTimersByTimeAsync(1);
+			expect(store.attempts).toBe(4);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			target?.detach();
+			vi.useRealTimers();
+		}
+	});
+
+	it("clears init retry timers on complete scans and detach", async () => {
+		vi.useFakeTimers();
+		let target: TerminalTaskManager | undefined;
+		let detached: TerminalTaskManager | undefined;
+		try {
+			class FlakyInitStore extends TerminalTaskStore {
+				public attempts = 0;
+				public remainingFailures = Number.POSITIVE_INFINITY;
+				public override refreshIndex(): TerminalTaskIndexRefreshResult {
+					this.attempts += 1;
+					if (this.remainingFailures > 0) {
+						this.remainingFailures -= 1;
+						return { ok: false, complete: false, snapshots: [] };
+					}
+					return super.refreshIndex();
+				}
+			}
+
+			const store = new FlakyInitStore({ rootDir });
+			target = manager({ store, pollIntervalMs: 60_000 });
+			expect(target.list("session-a")).toEqual([]);
+			expect(store.attempts).toBe(2);
+			expect(vi.getTimerCount()).toBe(1);
+
+			store.remainingFailures = 0;
+			now += 1_000;
+			expect(target.refreshSnapshotsFromStore()).toMatchObject({ ok: true, complete: true });
+			expect(vi.getTimerCount()).toBe(0);
+			const attemptsAfterComplete = store.attempts;
+			await vi.advanceTimersByTimeAsync(1_000);
+			expect(store.attempts).toBe(attemptsAfterComplete);
+			target.detach();
+			target = undefined;
+
+			const detachStore = new FlakyInitStore({ rootDir });
+			detached = manager({ store: detachStore, pollIntervalMs: 60_000 });
+			expect(detached.list("session-a")).toEqual([]);
+			expect(detachStore.attempts).toBe(2);
+			expect(vi.getTimerCount()).toBe(1);
+			detached.detach();
+			detached = undefined;
+			expect(vi.getTimerCount()).toBe(0);
+			now += 1_000;
+			await vi.advanceTimersByTimeAsync(1_000);
+			expect(detachStore.attempts).toBe(2);
+		} finally {
+			target?.detach();
+			detached?.detach();
+			vi.useRealTimers();
+		}
+	});
+
+	it("lets direct init entries take over an armed retry without double-arming", async () => {
+		vi.useFakeTimers();
+		let target: TerminalTaskManager | undefined;
+		try {
+			class FlakyInitStore extends TerminalTaskStore {
+				public attempts = 0;
+				public override refreshIndex(): TerminalTaskIndexRefreshResult {
+					this.attempts += 1;
+					return { ok: false, complete: false, snapshots: [] };
+				}
+			}
+			const store = new FlakyInitStore({ rootDir });
+			target = manager({ store, pollIntervalMs: 60_000 });
+
+			expect(target.list("session-a")).toEqual([]);
+			expect(store.attempts).toBe(2);
+			expect(vi.getTimerCount()).toBe(1);
+
+			expect(target.get("term-missing", "session-a")).toBeUndefined();
+			expect(store.attempts).toBe(2);
+			expect(vi.getTimerCount()).toBe(1);
+
+			now += 1_000;
+			expect(target.claimPending("session-a", true)).toEqual([]);
+			expect(store.attempts).toBe(3);
+			expect(vi.getTimerCount()).toBe(1);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(store.attempts).toBe(3);
+			expect(vi.getTimerCount()).toBe(1);
+		} finally {
+			target?.detach();
+			vi.useRealTimers();
+		}
+	});
+
 	it("re-arms init retries when a mid-life takeover refresh skips an unindexed record transiently", () => {
 		const reads = { scans: 0, metadata: 0 };
 		const faults = new Map<string, Error>();

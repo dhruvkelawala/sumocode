@@ -534,6 +534,9 @@ export class TerminalTaskManager {
 	private indexInitBackoffMs = INDEX_INIT_RETRY_BACKOFF_MS;
 	/** Init-scan failures are diagnosed once per episode kind; a failed⇄incomplete transition re-diagnoses once and the first complete scan resets the dedupe. */
 	private indexInitDiagnosedKind: "failed" | "incomplete" | undefined;
+	/** One idle retry that wakes an uninitialized index at the current backoff boundary. */
+	private indexInitRetryTimer: ReturnType<typeof setTimeout> | undefined;
+	private indexInitRetryDueAt: number | undefined;
 
 	public constructor(options: TerminalTaskManagerOptions = {}) {
 		this.store = options.store ?? new TerminalTaskStore({ onDiagnostic: options.onDiagnostic });
@@ -556,6 +559,7 @@ export class TerminalTaskManager {
 		// deletion/cleanup without human approval. Do not revive the legacy
 		// recovery-time artifact pruning here: retention/GC needs its own approved
 		// policy that cannot erase pending, claimed, or still-queryable results.
+		const initializationAttemptAt = Math.max(1, Math.floor(this.now()));
 		const initialization = this.store.refreshIndex();
 		if (initialization.ok) {
 			// An incomplete successful scan — any candidate hit a transient read or
@@ -568,13 +572,17 @@ export class TerminalTaskManager {
 				this.adopt(snapshot, false);
 				this.recover(snapshot);
 			}
-			if (!initialization.complete) this.diagnoseIndexInitFailure(true);
+			if (!initialization.complete) {
+				this.diagnoseIndexInitFailure(true);
+				this.scheduleIndexInitRetryTimer(initializationAttemptAt);
+			}
 		} else {
 			// A transient scan failure must not permanently seed an empty generation:
 			// the projection stays uninitialized and query/mutation entry points
 			// retry the scan lazily (ensureIndexInitialized) until the first success
 			// seeds it exactly like a successful refresh.
 			this.diagnoseIndexInitFailure();
+			this.scheduleIndexInitRetryTimer(initializationAttemptAt);
 		}
 	}
 
@@ -1148,9 +1156,20 @@ export class TerminalTaskManager {
 	 * incomplete store from being rescanned by every following entry.
 	 */
 	private ensureIndexInitialized(): void {
-		if (this.indexInitialized || this.detached || this.indexInitInFlight) return;
+		if (this.indexInitialized || this.detached) {
+			this.clearIndexInitRetryTimer();
+			return;
+		}
+		if (this.indexInitInFlight) return;
 		const attemptAt = Math.max(1, Math.floor(this.now()));
-		if (attemptAt - this.indexInitLastAttemptAt < this.indexInitBackoffMs) return;
+		if (attemptAt - this.indexInitLastAttemptAt < this.indexInitBackoffMs) {
+			this.scheduleIndexInitRetryTimer();
+			return;
+		}
+		// A direct entry point reached the retry boundary first. Let it own this
+		// attempt and replace the timer with the next window only if the scan still
+		// cannot prove a complete generation.
+		this.clearIndexInitRetryTimer();
 		this.indexInitLastAttemptAt = attemptAt;
 		this.indexInitInFlight = true;
 		try {
@@ -1166,6 +1185,7 @@ export class TerminalTaskManager {
 					INDEX_INIT_RETRY_BACKOFF_MS * 2 ** Math.min(this.indexInitFailedAttempts - 1, 32),
 					INDEX_INIT_RETRY_BACKOFF_MAX_MS,
 				);
+				this.scheduleIndexInitRetryTimer(attemptAt);
 			}
 		} finally {
 			this.indexInitInFlight = false;
@@ -1192,6 +1212,37 @@ export class TerminalTaskManager {
 		this.indexInitDiagnosedKind = undefined;
 		this.indexInitFailedAttempts = 0;
 		this.indexInitBackoffMs = INDEX_INIT_RETRY_BACKOFF_MS;
+		this.clearIndexInitRetryTimer();
+	}
+
+	private scheduleIndexInitRetryTimer(baseAt = Number.isFinite(this.indexInitLastAttemptAt) ? this.indexInitLastAttemptAt : Math.max(1, Math.floor(this.now()))): void {
+		if (this.indexInitialized || this.detached || this.hasActiveTasks()) {
+			this.clearIndexInitRetryTimer();
+			return;
+		}
+		const dueAt = baseAt + this.indexInitBackoffMs;
+		if (this.indexInitRetryTimer && this.indexInitRetryDueAt === dueAt) return;
+		this.clearIndexInitRetryTimer();
+		this.indexInitRetryDueAt = dueAt;
+		this.indexInitRetryTimer = setTimeout(() => {
+			this.indexInitRetryTimer = undefined;
+			this.indexInitRetryDueAt = undefined;
+			this.ensureIndexInitialized();
+		}, Math.max(0, dueAt - this.now()));
+		this.indexInitRetryTimer.unref?.();
+	}
+
+	private clearIndexInitRetryTimer(): void {
+		if (this.indexInitRetryTimer) clearTimeout(this.indexInitRetryTimer);
+		this.indexInitRetryTimer = undefined;
+		this.indexInitRetryDueAt = undefined;
+	}
+
+	private hasActiveTasks(): boolean {
+		for (const task of this.tasks.values()) {
+			if (!isTerminalTaskSettled(task.status)) return true;
+		}
+		return false;
 	}
 
 	/**
@@ -1323,6 +1374,7 @@ export class TerminalTaskManager {
 	public detach(): void {
 		if (this.detached) return;
 		this.detached = true;
+		this.clearIndexInitRetryTimer();
 		for (const runtime of this.runtime.values()) {
 			if (runtime.pollTimer) clearInterval(runtime.pollTimer);
 			runtime.pollTimer = undefined;
@@ -1371,9 +1423,13 @@ export class TerminalTaskManager {
 		const task = this.tasks.get(id) ?? this.store.getIndexed(id);
 		if (!task || isTerminalTaskSettled(task.status)) return;
 		const runtime = this.ensureRuntime(task);
-		if (runtime.pollTimer) return;
+		if (runtime.pollTimer) {
+			if (!this.indexInitialized) this.clearIndexInitRetryTimer();
+			return;
+		}
 		runtime.pollTimer = setInterval(() => this.scheduleReconcile(id), this.pollIntervalMs);
 		runtime.pollTimer.unref?.();
+		if (!this.indexInitialized) this.clearIndexInitRetryTimer();
 	}
 
 	private scheduleReconcile(id: string): void {
@@ -1983,6 +2039,7 @@ export class TerminalTaskManager {
 		if (!runtime?.pollTimer) return;
 		clearInterval(runtime.pollTimer);
 		runtime.pollTimer = undefined;
+		if (!this.indexInitialized) this.scheduleIndexInitRetryTimer();
 	}
 
 	private timestamp(task: TerminalTaskSnapshot): number {

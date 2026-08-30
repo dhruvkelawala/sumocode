@@ -67,10 +67,9 @@ function resolvePrivateAccountsPath(deps: AccountsCommandDeps): string {
 }
 
 function resolveAccountsReadPath(deps: AccountsCommandDeps): string {
-	const targetPath = resolveAccountsConfigPath(deps);
-	if (existsSync(targetPath)) return targetPath;
 	const privatePath = resolvePrivateAccountsPath(deps);
-	return existsSync(privatePath) ? privatePath : targetPath;
+	if (existsSync(privatePath)) return privatePath;
+	return resolveAccountsConfigPath(deps);
 }
 
 interface AccountsWriteDestination {

@@ -233,7 +233,7 @@ export async function executeRpcLogin(args: string, ctx: ExtensionCommandContext
 			logLoginFailure(attempt, error);
 			// Provider-controlled rejection text may echo credentials in formats that
 			// cannot be recognized safely; keep the visible failure credential-free.
-			ctx.ui.notify("Login failed; run sumocode -d for details", "error");
+			ctx.ui.notify("Login failed", "error");
 		}
 	} finally {
 		loginAbort.abort();

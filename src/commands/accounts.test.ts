@@ -256,13 +256,17 @@ describe("saveClaudeSubscriptions symlink handling", () => {
 		});
 	});
 
-	it("reads an existing private source before recreating a missing managed link", () => {
+	it("prefers an existing private source over a divergent regular agent file", () => {
 		const agentDir = tempAgentDir();
 		const configDir = tempAgentDir();
 		mkdirSync(join(configDir, ".git"));
 		writeFileSync(join(configDir, "claude-accounts.json"), JSON.stringify({
 			unknownFutureKey: "keep",
 			subscriptions: [{ provider: "anthropic", index: 2, label: "company" }],
+		}));
+		writeFileSync(join(agentDir, "claude-accounts.json"), JSON.stringify({
+			staleAgentKey: true,
+			subscriptions: [{ provider: "anthropic", index: 3, label: "stale" }],
 		}));
 		const deps = { agentDir, env: { SUMOCODE_CONFIG_DIR: configDir } };
 

@@ -16720,7 +16720,7 @@ async function executeRpcLogin(args, ctx, runtime) {
     const wasCancelled = loginAbort.signal.aborted || message === "Login cancelled";
     if (!wasCancelled) {
       logLoginFailure(attempt, error);
-      ctx.ui.notify("Login failed; run sumocode -d for details", "error");
+      ctx.ui.notify("Login failed", "error");
     }
   } finally {
     loginAbort.abort();
@@ -16769,10 +16769,9 @@ function resolvePrivateAccountsPath(deps) {
   return join21(privateConfigDir, ACCOUNTS_CONFIG_FILE);
 }
 function resolveAccountsReadPath(deps) {
-  const targetPath = resolveAccountsConfigPath(deps);
-  if (existsSync13(targetPath)) return targetPath;
   const privatePath = resolvePrivateAccountsPath(deps);
-  return existsSync13(privatePath) ? privatePath : targetPath;
+  if (existsSync13(privatePath)) return privatePath;
+  return resolveAccountsConfigPath(deps);
 }
 function pathEntryExists(path2) {
   try {

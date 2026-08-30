@@ -256,7 +256,7 @@ describe("RPC /login compatibility command", () => {
 			expect(failures[0]).not.toHaveProperty("errorMessage");
 			expect(failures[0]).not.toHaveProperty("stack");
 			expect(trace).not.toContain("acme_live_credential_987654321");
-			expect(ctx.ui.notify).toHaveBeenCalledWith("Login failed; run sumocode -d for details", "error");
+			expect(ctx.ui.notify).toHaveBeenCalledWith("Login failed", "error");
 		});
 	});
 

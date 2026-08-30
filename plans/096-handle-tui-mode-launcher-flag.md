@@ -164,3 +164,19 @@ Task launch prompt validation now checks the first Pi-style positional and requi
 Fixture table grew from 40 to 41 rows with the `--model -- --print PROMPT` delimiter-agreement regression, plus four task launcher regressions for bare `task --`, empty prompt, prompt-file + `--`, and task-dir + `--`.
 
 - **Gates**: `bash -n bin/sumocode.sh` clean; focused option-consumption/task fixture `pnpm vitest run test/integration/spawn-pi-pty.test.ts -t "mirrors Pi option consumption"` 45/45 selected (15 skipped); focused launcher file 60/60; `pnpm exec tsc --noEmit && pnpm build` green; `pnpm lint` green; unit one-worker verifying run 2,618/2,618, with the previously documented load-sensitive task-manager timing flake still possible under local load and passing in isolation; integration serial 156/156. No `dist/extension` changes.
+
+
+## Repair evidence (run-20260830T172321Z-56f523e4, whitespace task prompt)
+
+`f441079` rejects whitespace-only inline and `--prompt-file` task prompts by
+stripping `[[:space:]]` before the non-empty check, matching the host's
+`submitRpcPrompt` trim-emptiness gate for ASCII whitespace. Launcher 62/62,
+integration 158/158, tsc/build/lint green.
+
+### Disclosed residual
+The gate uses POSIX `[[:space:]]` (locale-dependent). Under a C/POSIX locale,
+Unicode whitespace outside the ASCII class (NBSP U+00A0, BOM U+FEFF,
+U+2000-200A, U+2028/2029, U+202F, U+205F, U+3000) is not stripped, so an
+all-Unicode-whitespace task prompt passes the launcher but is discarded
+host-side. Bounded and non-regressive; deferred to Plan 101's re-diff.
+

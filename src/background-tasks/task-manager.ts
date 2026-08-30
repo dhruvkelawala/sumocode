@@ -67,6 +67,12 @@ const PRIVATE_FILE_MODE = 0o600;
 const PRIVATE_DIRECTORY_MODE = 0o700;
 const NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
 const MAX_TRANSITION_RETRIES = 16;
+/**
+ * Minimal injectable-clock backoff between lazy index-initialization retry
+ * attempts, so a persistently unreadable store is not rescanned by every
+ * query/mutation entry point while the projection stays unseeded.
+ */
+const INDEX_INIT_RETRY_BACKOFF_MS = 1_000;
 
 interface RuntimeTask {
 	child?: ChildProcess;
@@ -441,6 +447,28 @@ function isAcknowledgementMatch(task: DeliveryEligibility, ownerSessionId: strin
  * the per-task fan-out: the `TerminalDeliveryCoordinator` listens for per-task
  * change notifications only.
  */
+/**
+ * Recovery-relevant durable identity gate shared by the refresh loops and the
+ * locked no-op adoption site: a record new to this projection, or one whose
+ * revision, owner, lifecycle status, or process identity changed, pays recovery
+ * side effects again (settled log cap, launch-gate release, arm, reconcile
+ * scheduling) and is waiter/delivery-relevant. Revision plus owner alone miss
+ * an external same-revision, same-owner rewrite that flips status or process
+ * identity (e.g. settled retained vs running on disk), which would leave an
+ * active terminal unarmed behind a stale projection; a deep full content
+ * compare is still avoided, so a pure same-revision, same-owner content rewrite
+ * is adopted with no recovery side effects.
+ */
+function recoveryRelevantAdoption(previous: TerminalTaskSnapshot | undefined, snapshot: TerminalTaskSnapshot): boolean {
+	return previous === undefined
+		|| previous.revision !== snapshot.revision
+		|| previous.ownerSessionId !== snapshot.ownerSessionId
+		|| previous.status !== snapshot.status
+		|| previous.pid !== snapshot.pid
+		|| previous.processGroupId !== snapshot.processGroupId
+		|| previous.processStartTime !== snapshot.processStartTime;
+}
+
 function deliveryEligibilityChanged(previous: TerminalTaskSnapshot, snapshot: TerminalTaskSnapshot): boolean {
 	if (previous.deliveryState !== snapshot.deliveryState
 		|| previous.completionPolicy !== snapshot.completionPolicy
@@ -476,6 +504,14 @@ export class TerminalTaskManager {
 	/** Per-task changes queued while a refresh batch is open, deduped to the latest snapshot per id. */
 	private readonly refreshBatchQueued = new Map<string, TerminalTaskSnapshot>();
 	private detached = false;
+	/** False until one successful full scan seeds the retained projection generation. */
+	private indexInitialized = false;
+	/** True while the lazy seeding scan runs, so a listener fanned out by it cannot re-enter. */
+	private indexInitInFlight = false;
+	/** Injectable-clock stamp of the last lazy init retry; further attempts back off. */
+	private indexInitLastAttemptAt = Number.NEGATIVE_INFINITY;
+	/** Init-scan failures are diagnosed once per episode; the first successful scan resets the dedupe. */
+	private indexInitFailureDiagnosed = false;
 
 	public constructor(options: TerminalTaskManagerOptions = {}) {
 		this.store = options.store ?? new TerminalTaskStore({ onDiagnostic: options.onDiagnostic });
@@ -498,9 +534,19 @@ export class TerminalTaskManager {
 		// deletion/cleanup without human approval. Do not revive the legacy
 		// recovery-time artifact pruning here: retention/GC needs its own approved
 		// policy that cannot erase pending, claimed, or still-queryable results.
-		for (const snapshot of this.store.refreshIndex().snapshots) {
-			this.adopt(snapshot, false);
-			this.recover(snapshot);
+		const initialization = this.store.refreshIndex();
+		if (initialization.ok) {
+			this.indexInitialized = true;
+			for (const snapshot of initialization.snapshots) {
+				this.adopt(snapshot, false);
+				this.recover(snapshot);
+			}
+		} else {
+			// A transient scan failure must not permanently seed an empty generation:
+			// the projection stays uninitialized and query/mutation entry points
+			// retry the scan lazily (ensureIndexInitialized) until the first success
+			// seeds it exactly like a successful refresh.
+			this.diagnoseIndexInitFailure();
 		}
 	}
 
@@ -636,6 +682,7 @@ export class TerminalTaskManager {
 
 	/** Owner-ordered inventory: the store's owner index joins retained full snapshots. */
 	public list(ownerSessionId: string): TerminalTaskSnapshot[] {
+		this.ensureIndexInitialized();
 		return this.store.listOwnedIndexed(ownerSessionId).flatMap((indexed) => {
 			const task = this.tasks.get(indexed.id);
 			return task ? [task] : [];
@@ -643,6 +690,10 @@ export class TerminalTaskManager {
 	}
 
 	public get(id: string, ownerSessionId: string): TerminalTaskSnapshot | undefined {
+		// An uninitialized projection (constructor scan failed transiently) must
+		// retry the scan before the compact-index precheck, or pre-existing
+		// terminals would read as unknown for the manager lifetime.
+		this.ensureIndexInitialized();
 		// Retained snapshots stay queryable only while the store's current compact
 		// index still recognizes this id for this owner. A successful refresh that
 		// quarantined a corrupt/unreadable record drops it from the index; without
@@ -661,6 +712,7 @@ export class TerminalTaskManager {
 	}
 
 	public check(id: string, ownerSessionId: string): TerminalTaskObservation | undefined {
+		this.ensureIndexInitialized();
 		const current = this.get(id, ownerSessionId);
 		if (!current) return undefined;
 		const task = isTerminalTaskSettled(current.status) ? this.observe(current.id, false) : current;
@@ -673,6 +725,7 @@ export class TerminalTaskManager {
 		timeoutMs: number,
 		signal?: AbortSignal,
 	): Promise<TerminalWaitResult> {
+		this.ensureIndexInitialized();
 		const uniqueIds = [...new Set(ids)];
 		const known = uniqueIds.filter((id) => this.get(id, ownerSessionId) !== undefined);
 		const knownSet = new Set(known);
@@ -742,6 +795,7 @@ export class TerminalTaskManager {
 	}
 
 	public async stop(ids: readonly string[], ownerSessionId: string): Promise<TerminalStopResult[]> {
+		this.ensureIndexInitialized();
 		const uniqueIds = [...new Set(ids)];
 		const results = new Map<string, TerminalStopResult>();
 		const targets: StopTarget[] = [];
@@ -876,6 +930,7 @@ export class TerminalTaskManager {
 	}
 
 	public claimPending(ownerSessionId: string, includeWake: boolean, maxWake = 1): TerminalTaskSnapshot[] {
+		this.ensureIndexInitialized();
 		const claimed: TerminalTaskSnapshot[] = [];
 		let claimedWake = 0;
 		for (const candidate of this.store.listOwnedIndexed(ownerSessionId)) {
@@ -1003,6 +1058,11 @@ export class TerminalTaskManager {
 		if (this.detached) return { ok: false, snapshots: this.getSnapshots() };
 		const refresh = this.store.refreshIndex();
 		if (!refresh.ok) return { ok: false, snapshots: this.getSnapshots() };
+		// A successful scan seeds the generation a failed constructor scan could
+		// not and ends the init-failure episode (the next failure is diagnosed
+		// again).
+		this.indexInitialized = true;
+		this.indexInitFailureDiagnosed = false;
 		// Waiter- and delivery-relevant changes are collected across both loops and
 		// fanned out once after adoption and pruning complete, so projection
 		// listeners can never observe — or re-enter a nested refresh against — an
@@ -1046,6 +1106,36 @@ export class TerminalTaskManager {
 	}
 
 	/**
+	 * Coalesced lazy retry of the constructor's failed initialization scan. The
+	 * first successful retry seeds the generation exactly like a successful
+	 * refresh (adopt, recover, single batched fan-out, no intermediate
+	 * projections) and the zero-scan query guarantee resumes; until then every
+	 * query/mutation entry point pays at most one scan attempt per entry. A
+	 * minimal in-flight guard keeps a listener fanned out by the seeding scan
+	 * from re-entering it, and an injectable-clock backoff keeps a persistently
+	 * unreadable store from being rescanned by every following entry.
+	 */
+	private ensureIndexInitialized(): void {
+		if (this.indexInitialized || this.detached || this.indexInitInFlight) return;
+		const attemptAt = Math.max(1, Math.floor(this.now()));
+		if (attemptAt - this.indexInitLastAttemptAt < INDEX_INIT_RETRY_BACKOFF_MS) return;
+		this.indexInitLastAttemptAt = attemptAt;
+		this.indexInitInFlight = true;
+		try {
+			if (!this.refreshSnapshotsFromStore().ok) this.diagnoseIndexInitFailure();
+		} finally {
+			this.indexInitInFlight = false;
+		}
+	}
+
+	/** Init-scan failures are diagnosed once per episode; the first successful scan resets the dedupe. */
+	private diagnoseIndexInitFailure(): void {
+		if (this.indexInitFailureDiagnosed) return;
+		this.indexInitFailureDiagnosed = true;
+		this.onDiagnostic?.({ kind: "manager", message: "terminal store scan failed before the projection was seeded; entry points retry lazily until the first successful scan" });
+	}
+
+	/**
 	 * The refresh adoption and prune loops; every notification stays inside the
 	 * caller's batch. Returns whether any adoption replaced a retained snapshot
 	 * with differing content without joining the per-task fan-out (a cosmetic
@@ -1068,24 +1158,10 @@ export class TerminalTaskManager {
 			// compare (no deep JSON of large payloads) so the refresh still publishes
 			// the updated projection exactly once.
 			if (previous !== undefined && !snapshotContentEquals(previous, snapshot)) adoptionChangedStoredState = true;
-			// Recovery work is gated on recovery-relevant durable identity: a record
-			// new to this projection, or one whose revision, owner, lifecycle status,
-			// or process identity changed. Revision plus owner alone miss an external
-			// same-revision, same-owner rewrite that flips status or process identity
-			// (e.g. settled retained vs running on disk), which would leave an active
-			// terminal unarmed; a deep full content compare is still avoided, so a
-			// pure same-revision, same-owner content rewrite is adopted above with no
-			// recovery side effects, and unchanged records are not capped or
-			// rescheduled again on every refresh.
-			if (
-				previous === undefined
-				|| previous.revision !== snapshot.revision
-				|| previous.ownerSessionId !== snapshot.ownerSessionId
-				|| previous.status !== snapshot.status
-				|| previous.pid !== snapshot.pid
-				|| previous.processGroupId !== snapshot.processGroupId
-				|| previous.processStartTime !== snapshot.processStartTime
-			) {
+			// Recovery work is gated on the shared recovery-relevant durable identity
+			// gate (see recoveryRelevantAdoption); every recovery-gated adoption is
+			// waiter- and delivery-relevant and joins the batched fan-out below.
+			if (recoveryRelevantAdoption(previous, snapshot)) {
 				this.recover(snapshot);
 				this.onRefreshRecover?.(snapshot.id);
 				// Every recovery-gated adoption is waiter- and delivery-relevant: a
@@ -1676,8 +1752,12 @@ export class TerminalTaskManager {
 				});
 				if (!changed) {
 					// The locked snapshot is authoritative even for a no-op decision;
-					// adopt it silently so retained state stops lagging disk truth.
-					this.adopt(transitioned, false);
+					// adopt it so retained state stops lagging disk truth — classified
+					// exactly like a refresh adoption so a divergent durable snapshot
+					// recovers, notifies, or publishes instead of being adopted
+					// silently (a now-running task must not stay unarmed with a stale
+					// settled projection and Activity must not go stale).
+					this.adoptLockedNoOpSnapshot(transitioned);
 					return { snapshot: transitioned, changed: false };
 				}
 				this.adopt(transitioned, true);
@@ -1701,6 +1781,34 @@ export class TerminalTaskManager {
 		this.ensureRuntime(snapshot);
 		if (!notify || previous?.revision === snapshot.revision) return;
 		this.notifyChanges([snapshot]);
+	}
+
+	/**
+	 * Classification for the locked no-op adoption site, applying the same gates
+	 * the refresh loops apply at their proven freshness boundary to the
+	 * authoritative locked snapshot: a recovery-relevant divergence (record new
+	 * to the projection, or changed revision/owner/lifecycle status/process
+	 * identity — e.g. settled retained vs running on disk) triggers the
+	 * recover-equivalent side effects (settled log cap, launch-gate release,
+	 * arm, reconcile scheduling) outside any refresh batch and joins a per-task
+	 * notification; a delivery-eligibility/receipt change raises only the
+	 * per-task notification that wakes the TerminalDeliveryCoordinator; a
+	 * content-only divergence publishes the projection once. A cosmetic no-op
+	 * adoption (identical content) stays quiet as before.
+	 */
+	private adoptLockedNoOpSnapshot(snapshot: TerminalTaskSnapshot): void {
+		const previous = this.tasks.get(snapshot.id);
+		this.adopt(snapshot, false);
+		if (recoveryRelevantAdoption(previous, snapshot)) {
+			this.recover(snapshot);
+			this.notifyChanges([snapshot]);
+			return;
+		}
+		if (previous !== undefined && deliveryEligibilityChanged(previous, snapshot)) {
+			this.notifyChanges([snapshot]);
+			return;
+		}
+		if (previous !== undefined && !snapshotContentEquals(previous, snapshot)) this.publishProjection();
 	}
 
 	/**

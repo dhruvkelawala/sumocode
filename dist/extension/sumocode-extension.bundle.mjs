@@ -11816,6 +11816,7 @@ var PRIVATE_FILE_MODE2 = 384;
 var PRIVATE_DIRECTORY_MODE2 = 448;
 var NO_FOLLOW2 = constants2.O_NOFOLLOW ?? 0;
 var MAX_TRANSITION_RETRIES = 16;
+var INDEX_INIT_RETRY_BACKOFF_MS = 1e3;
 function normalizePositive(value, fallback) {
   return value !== void 0 && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
 }
@@ -12050,6 +12051,9 @@ function isAcknowledgementMatch(task, ownerSessionId2, receiptKeys) {
   if (task.completionId === void 0 || task.deliveryClaimToken === void 0) return false;
   return receiptKeys.has(`${task.completionId}\0${task.deliveryClaimToken}`);
 }
+function recoveryRelevantAdoption(previous, snapshot) {
+  return previous === void 0 || previous.revision !== snapshot.revision || previous.ownerSessionId !== snapshot.ownerSessionId || previous.status !== snapshot.status || previous.pid !== snapshot.pid || previous.processGroupId !== snapshot.processGroupId || previous.processStartTime !== snapshot.processStartTime;
+}
 function deliveryEligibilityChanged(previous, snapshot) {
   if (previous.deliveryState !== snapshot.deliveryState || previous.completionPolicy !== snapshot.completionPolicy || previous.completionId !== snapshot.completionId || previous.deliveryClaimToken !== snapshot.deliveryClaimToken) return true;
   return previous.updatedAt !== snapshot.updatedAt && (previous.deliveryState === "claimed" || snapshot.deliveryState === "claimed");
@@ -12080,6 +12084,14 @@ var TerminalTaskManager = class {
   /** Per-task changes queued while a refresh batch is open, deduped to the latest snapshot per id. */
   refreshBatchQueued = /* @__PURE__ */ new Map();
   detached = false;
+  /** False until one successful full scan seeds the retained projection generation. */
+  indexInitialized = false;
+  /** True while the lazy seeding scan runs, so a listener fanned out by it cannot re-enter. */
+  indexInitInFlight = false;
+  /** Injectable-clock stamp of the last lazy init retry; further attempts back off. */
+  indexInitLastAttemptAt = Number.NEGATIVE_INFINITY;
+  /** Init-scan failures are diagnosed once per episode; the first successful scan resets the dedupe. */
+  indexInitFailureDiagnosed = false;
   constructor(options = {}) {
     this.store = options.store ?? new TerminalTaskStore({ onDiagnostic: options.onDiagnostic });
     this.processTree = options.processTree ?? systemProcessTree;
@@ -12097,9 +12109,15 @@ var TerminalTaskManager = class {
     this.onDiagnostic = options.onDiagnostic;
     this.onRefreshAdopt = options.onRefreshAdopt;
     this.onRefreshRecover = options.onRefreshRecover;
-    for (const snapshot of this.store.refreshIndex().snapshots) {
-      this.adopt(snapshot, false);
-      this.recover(snapshot);
+    const initialization = this.store.refreshIndex();
+    if (initialization.ok) {
+      this.indexInitialized = true;
+      for (const snapshot of initialization.snapshots) {
+        this.adopt(snapshot, false);
+        this.recover(snapshot);
+      }
+    } else {
+      this.diagnoseIndexInitFailure();
     }
   }
   async start(options) {
@@ -12228,12 +12246,14 @@ ${command}
   }
   /** Owner-ordered inventory: the store's owner index joins retained full snapshots. */
   list(ownerSessionId2) {
+    this.ensureIndexInitialized();
     return this.store.listOwnedIndexed(ownerSessionId2).flatMap((indexed) => {
       const task = this.tasks.get(indexed.id);
       return task ? [task] : [];
     });
   }
   get(id, ownerSessionId2) {
+    this.ensureIndexInitialized();
     if (!this.store.isIndexedOwner(id, ownerSessionId2)) return void 0;
     const retained = this.tasks.get(id);
     const task = retained ?? this.store.getIndexed(id);
@@ -12243,12 +12263,14 @@ ${command}
     return task;
   }
   check(id, ownerSessionId2) {
+    this.ensureIndexInitialized();
     const current = this.get(id, ownerSessionId2);
     if (!current) return void 0;
     const task = isTerminalTaskSettled(current.status) ? this.observe(current.id, false) : current;
     return { task, output: this.getOutput(task, CHECK_OUTPUT_BYTES) };
   }
   async wait(ids, ownerSessionId2, timeoutMs, signal) {
+    this.ensureIndexInitialized();
     const uniqueIds = [...new Set(ids)];
     const known = uniqueIds.filter((id) => this.get(id, ownerSessionId2) !== void 0);
     const knownSet = new Set(known);
@@ -12310,6 +12332,7 @@ ${command}
     };
   }
   async stop(ids, ownerSessionId2) {
+    this.ensureIndexInitialized();
     const uniqueIds = [...new Set(ids)];
     const results = /* @__PURE__ */ new Map();
     const targets = [];
@@ -12426,6 +12449,7 @@ ${command}
     return uniqueIds.map((id) => results.get(id));
   }
   claimPending(ownerSessionId2, includeWake, maxWake = 1) {
+    this.ensureIndexInitialized();
     const claimed = [];
     let claimedWake = 0;
     for (const candidate of this.store.listOwnedIndexed(ownerSessionId2)) {
@@ -12546,6 +12570,8 @@ ${command}
     if (this.detached) return { ok: false, snapshots: this.getSnapshots() };
     const refresh = this.store.refreshIndex();
     if (!refresh.ok) return { ok: false, snapshots: this.getSnapshots() };
+    this.indexInitialized = true;
+    this.indexInitFailureDiagnosed = false;
     this.refreshBatchDepth += 1;
     const changed = [];
     let adoptionChangedStoredState = false;
@@ -12570,6 +12596,34 @@ ${command}
     return { ok: true, snapshots: this.getSnapshots() };
   }
   /**
+   * Coalesced lazy retry of the constructor's failed initialization scan. The
+   * first successful retry seeds the generation exactly like a successful
+   * refresh (adopt, recover, single batched fan-out, no intermediate
+   * projections) and the zero-scan query guarantee resumes; until then every
+   * query/mutation entry point pays at most one scan attempt per entry. A
+   * minimal in-flight guard keeps a listener fanned out by the seeding scan
+   * from re-entering it, and an injectable-clock backoff keeps a persistently
+   * unreadable store from being rescanned by every following entry.
+   */
+  ensureIndexInitialized() {
+    if (this.indexInitialized || this.detached || this.indexInitInFlight) return;
+    const attemptAt = Math.max(1, Math.floor(this.now()));
+    if (attemptAt - this.indexInitLastAttemptAt < INDEX_INIT_RETRY_BACKOFF_MS) return;
+    this.indexInitLastAttemptAt = attemptAt;
+    this.indexInitInFlight = true;
+    try {
+      if (!this.refreshSnapshotsFromStore().ok) this.diagnoseIndexInitFailure();
+    } finally {
+      this.indexInitInFlight = false;
+    }
+  }
+  /** Init-scan failures are diagnosed once per episode; the first successful scan resets the dedupe. */
+  diagnoseIndexInitFailure() {
+    if (this.indexInitFailureDiagnosed) return;
+    this.indexInitFailureDiagnosed = true;
+    this.onDiagnostic?.({ kind: "manager", message: "terminal store scan failed before the projection was seeded; entry points retry lazily until the first successful scan" });
+  }
+  /**
    * The refresh adoption and prune loops; every notification stays inside the
    * caller's batch. Returns whether any adoption replaced a retained snapshot
    * with differing content without joining the per-task fan-out (a cosmetic
@@ -12583,7 +12637,7 @@ ${command}
       this.adopt(snapshot, false);
       this.onRefreshAdopt?.(snapshot.id);
       if (previous !== void 0 && !snapshotContentEquals(previous, snapshot)) adoptionChangedStoredState = true;
-      if (previous === void 0 || previous.revision !== snapshot.revision || previous.ownerSessionId !== snapshot.ownerSessionId || previous.status !== snapshot.status || previous.pid !== snapshot.pid || previous.processGroupId !== snapshot.processGroupId || previous.processStartTime !== snapshot.processStartTime) {
+      if (recoveryRelevantAdoption(previous, snapshot)) {
         this.recover(snapshot);
         this.onRefreshRecover?.(snapshot.id);
         changed.push(snapshot);
@@ -13050,7 +13104,7 @@ ${command}
           return next;
         });
         if (!changed) {
-          this.adopt(transitioned, false);
+          this.adoptLockedNoOpSnapshot(transitioned);
           return { snapshot: transitioned, changed: false };
         }
         this.adopt(transitioned, true);
@@ -13073,6 +13127,33 @@ ${command}
     this.ensureRuntime(snapshot);
     if (!notify7 || previous?.revision === snapshot.revision) return;
     this.notifyChanges([snapshot]);
+  }
+  /**
+   * Classification for the locked no-op adoption site, applying the same gates
+   * the refresh loops apply at their proven freshness boundary to the
+   * authoritative locked snapshot: a recovery-relevant divergence (record new
+   * to the projection, or changed revision/owner/lifecycle status/process
+   * identity — e.g. settled retained vs running on disk) triggers the
+   * recover-equivalent side effects (settled log cap, launch-gate release,
+   * arm, reconcile scheduling) outside any refresh batch and joins a per-task
+   * notification; a delivery-eligibility/receipt change raises only the
+   * per-task notification that wakes the TerminalDeliveryCoordinator; a
+   * content-only divergence publishes the projection once. A cosmetic no-op
+   * adoption (identical content) stays quiet as before.
+   */
+  adoptLockedNoOpSnapshot(snapshot) {
+    const previous = this.tasks.get(snapshot.id);
+    this.adopt(snapshot, false);
+    if (recoveryRelevantAdoption(previous, snapshot)) {
+      this.recover(snapshot);
+      this.notifyChanges([snapshot]);
+      return;
+    }
+    if (previous !== void 0 && deliveryEligibilityChanged(previous, snapshot)) {
+      this.notifyChanges([snapshot]);
+      return;
+    }
+    if (previous !== void 0 && !snapshotContentEquals(previous, snapshot)) this.publishProjection();
   }
   /**
    * Fan a batch of changed snapshots out: per-task listeners receive each

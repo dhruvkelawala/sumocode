@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChildProcess } from "node:child_process";
 import type { ProcessTreeIdentity, ProcessTreeOperations } from "./process-tree.js";
 import { TerminalTaskManager } from "./task-manager.js";
-import { TerminalTaskStore } from "./task-store.js";
+import { TerminalTaskStore, type TerminalTaskIndexRefreshResult } from "./task-store.js";
 import { TerminalDeliveryCoordinator } from "./terminal-tools.js";
 import { TERMINAL_TASK_SCHEMA_VERSION, type TerminalTaskSnapshot } from "./task-types.js";
 
@@ -543,6 +543,89 @@ function transientFault(code: string): Error {
 		} finally {
 			chmodSync(rootDir, 0o700);
 		}
+	});
+
+	it("seeds the projection lazily after a failed constructor scan and resumes the zero-scan guarantee", async () => {
+		const reads = { scans: 0, metadata: 0 };
+		// Only the constructor's startup scan and the first lazy retry fail; every
+		// later scan is healthy. A store double keeps the injection deterministic
+		// (a chmod-based root fault cannot survive the harness's default-store
+		// construction, which re-chmods the root before the manager scans).
+		class FlakyConstructorScanStore extends TerminalTaskStore {
+			public attempts = 0;
+			public remainingFailures = 2;
+			public override refreshIndex(): TerminalTaskIndexRefreshResult {
+				this.attempts += 1;
+				if (this.remainingFailures > 0) {
+					this.remainingFailures -= 1;
+					return { ok: false, snapshots: [] };
+				}
+				return super.refreshIndex();
+			}
+		}
+		const store = new FlakyConstructorScanStore({
+			rootDir,
+			onRead: (kind) => { reads[kind === "full-scan" ? "scans" : "metadata"] += 1; },
+		});
+		persistSettledTask(store, "term-lazy", "session-a", 1_000);
+		const diagnostics: Array<{ kind: string }> = [];
+		const target = manager({ store, onDiagnostic: (entry) => diagnostics.push(entry) });
+		// The constructor's one startup scan fails: the manager must not
+		// permanently seed an empty generation, and the failure is diagnosed once.
+		expect(store.attempts).toBe(1);
+		expect(reads.scans).toBe(0);
+		expect(diagnostics).toEqual([expect.objectContaining({ kind: "manager" })]);
+
+		const changes: TerminalTaskSnapshot[] = [];
+		const publications: Array<readonly TerminalTaskSnapshot[]> = [];
+		const unsubscribeProjection = target.subscribeChanges((snapshots) => publications.push(snapshots));
+		const unsubscribeTasks = target.addChangeListener((snapshot) => changes.push(snapshot));
+
+		// Queries answer empty while uninitialized, but every entry point retries
+		// the scan lazily — the first entry pays one attempt.
+		expect(target.get("term-lazy", "session-a")).toBeUndefined();
+		expect(store.attempts).toBe(2);
+		expect(reads.scans).toBe(0);
+		// The failure stays deduped: no second manager diagnostic.
+		expect(diagnostics).toHaveLength(1);
+
+		// Further entries at the same clock reading coalesce into the backoff: one
+		// attempt per entry at most, never per id, and no retry storm.
+		expect(target.list("session-a")).toEqual([]);
+		expect(target.get("term-lazy", "session-a")).toBeUndefined();
+		await expect(target.wait(["term-lazy", "term-other"], "session-a", 0)).resolves.toMatchObject({
+			settled: [],
+			pendingIds: [],
+			unknownIds: ["term-lazy", "term-other"],
+		});
+		expect(store.attempts).toBe(2);
+
+		// Fault cleared: the next entry's single retry seeds the generation exactly
+		// like a successful refresh — adoption, recovery, one per-task change, and
+		// exactly one projection publication, with no re-diagnosis.
+		now += 1_000;
+		const changesBefore = changes.length;
+		const publicationsBefore = publications.length;
+		expect(target.get("term-lazy", "session-a")).toMatchObject({ id: "term-lazy", status: "completed" });
+		expect(store.attempts).toBe(3);
+		expect(reads.scans).toBe(1);
+		expect(diagnostics).toHaveLength(1);
+		expect(changes.slice(changesBefore)).toEqual([expect.objectContaining({ id: "term-lazy", status: "completed" })]);
+		expect(publications.length - publicationsBefore).toBe(1);
+		expect(target.list("session-a").map((task) => task.id)).toEqual(["term-lazy"]);
+
+		// The zero-scan query guarantee resumes: even well past the backoff
+		// window, initialized managers never rescan on query/mutation entries.
+		now += 60_000;
+		expect(target.list("session-a")).toHaveLength(1);
+		expect(target.get("term-lazy", "session-a")).toBeDefined();
+		expect(target.check("term-lazy", "session-a")?.task).toMatchObject({ id: "term-lazy" });
+		expect(target.claimPending("session-a", true)).toEqual([]);
+		expect(store.attempts).toBe(3);
+		expect(reads.scans).toBe(1);
+
+		unsubscribeProjection();
+		unsubscribeTasks();
 	});
 
 	it("prunes quarantined ids from the retained projection on success and preserves them on failure", async () => {
@@ -1972,6 +2055,115 @@ function transientFault(code: string): Error {
 		rewriteAtSameRevision({ deliveryClaimToken: "claim-rival-2", updatedAt: ours.updatedAt });
 		expect(target.acknowledge("session-a", [{ completionId: ours.completionId!, claimToken: ours.deliveryClaimToken! }])).toEqual([]);
 		expect(durableTask(task.id)).toMatchObject({ deliveryState: "claimed", deliveryClaimToken: "claim-rival-2", revision: ours.revision });
+	});
+
+	it("classifies a locked no-op adoption of a divergent durable snapshot like a refresh", async () => {
+		vi.useFakeTimers();
+		let target: TerminalTaskManager | undefined;
+		try {
+			const store = new TerminalTaskStore({ rootDir });
+			// Seeded before construction: the constructor adopts the settled record.
+			const seeded = persistSettledTask(store, "term-noop", "session-a", 1_000, "before");
+			target = manager({ store, pollIntervalMs: 60_000 });
+			const publications: Array<readonly TerminalTaskSnapshot[]> = [];
+			const changes: TerminalTaskSnapshot[] = [];
+			const unsubscribeProjection = target.subscribeChanges((snapshots) => publications.push(snapshots));
+			const unsubscribeTasks = target.addChangeListener((snapshot) => changes.push(snapshot));
+
+			// An external writer flips the settled record to running at the SAME
+			// revision (complete fresh process identity; anchors matching the harness
+			// capture so recovery's reconcile cannot mutate the record).
+			const metaFile = join(dirname(seeded.logFile), "meta.json");
+			const running = {
+				...seeded,
+				status: "running" as const,
+				pid: 5_100,
+				processGroupId: 5_100,
+				processStartTime: "start-5100",
+				processTreeVerification: { members: [{ pid: 5_101, processStartTime: "child-5101" }] },
+				deliveryState: "none" as const,
+				settledAt: undefined,
+				exitCode: undefined,
+				observedAt: undefined,
+				consumedAt: undefined,
+				completionId: undefined,
+				updatedAt: 1_500,
+			};
+			writeFileSync(metaFile, `${JSON.stringify(running)}\n`, { mode: 0o600 });
+			chmodSync(metaFile, 0o600);
+
+			// The mutation path selects the stale settled entry; the locked
+			// authoritative snapshot is running and the observation predicate no-ops.
+			// The locked no-op adoption must classify the divergence like a refresh:
+			// recovery side effects (launch-gate release, arm, reconcile) plus
+			// per-task/projection notification — not a silent adoption.
+			const changesBefore = changes.length;
+			const publicationsBefore = publications.length;
+			expect(target.check("term-noop", "session-a")?.task).toMatchObject({
+				id: "term-noop",
+				status: "running",
+				pid: 5_100,
+				revision: seeded.revision,
+			});
+			// The poll is armed: exactly one pending timer (the task's poll interval).
+			expect(vi.getTimerCount()).toBe(1);
+			expect(changes.slice(changesBefore)).toEqual([expect.objectContaining({ id: "term-noop", status: "running" })]);
+			expect(publications.length - publicationsBefore).toBe(1);
+			expect(publications.at(-1)).toEqual([expect.objectContaining({ id: "term-noop", status: "running" })]);
+			expect(target.get("term-noop", "session-a")).toMatchObject({ status: "running" });
+			await vi.advanceTimersByTimeAsync(0);
+			// Recovery's reconcile could not mutate (anchors match) and the durable
+			// record keeps its external revision.
+			expect(durableTask("term-noop")).toMatchObject({ status: "running", revision: seeded.revision });
+
+			// Subsequent behavior is normal: the armed poll settles from durable
+			// exit evidence and tears its timer down. The marker must be private
+			// (0600): the store validates artifact modes on every record read.
+			writeFileSync(exitFile(seeded), "0", { mode: 0o600 });
+			chmodSync(exitFile(seeded), 0o600);
+			await vi.advanceTimersByTimeAsync(60_000);
+			await vi.advanceTimersByTimeAsync(50);
+			expect(target.get("term-noop", "session-a")).toMatchObject({ status: "completed", exitCode: 0 });
+			expect(vi.getTimerCount()).toBe(0);
+
+			// Consume the completion so the record reaches its quiescent suppressed
+			// state before the delivery-eligibility phase.
+			target.check("term-noop", "session-a");
+			const quiesced = store.getIndexed("term-noop")!;
+			expect(quiesced).toMatchObject({ deliveryState: "suppressed", revision: seeded.revision + 2 });
+			await vi.advanceTimersByTimeAsync(0);
+			const changesAfterSettle = changes.length;
+
+			// A same-revision external rewrite flipping only a delivery receipt field
+			// (completionId) is delivery-relevant: the no-op adoption raises the
+			// per-task notification that wakes the coordinator — with no recovery side
+			// effect and no new timer.
+			writeFileSync(metaFile, `${JSON.stringify({ ...quiesced, completionId: "completion-external" })}\n`, { mode: 0o600 });
+			chmodSync(metaFile, 0o600);
+			expect(target.check("term-noop", "session-a")?.task).toMatchObject({ completionId: "completion-external", deliveryState: "suppressed" });
+			expect(changes.length - changesAfterSettle).toBe(1);
+			expect(changes.at(-1)).toMatchObject({ id: "term-noop", completionId: "completion-external" });
+			expect(vi.getTimerCount()).toBe(0);
+			expect(durableTask("term-noop")!.revision).toBe(quiesced.revision);
+
+			// A cosmetic no-op adoption (title-only rewrite) stays quiet per-task
+			// with no recovery: projection-only, exactly as at the refresh boundary.
+			const changesAfterReceipt = changes.length;
+			const publicationsAfterReceipt = publications.length;
+			writeFileSync(metaFile, `${JSON.stringify({ ...store.getIndexed("term-noop")!, title: "cosmetic" })}\n`, { mode: 0o600 });
+			chmodSync(metaFile, 0o600);
+			expect(target.check("term-noop", "session-a")?.task).toMatchObject({ title: "cosmetic" });
+			expect(changes.length).toBe(changesAfterReceipt);
+			expect(publications.length - publicationsAfterReceipt).toBe(1);
+			expect(vi.getTimerCount()).toBe(0);
+			expect(durableTask("term-noop")!.revision).toBe(quiesced.revision);
+
+			unsubscribeProjection();
+			unsubscribeTasks();
+		} finally {
+			target?.detach();
+			vi.useRealTimers();
+		}
 	});
 
 	it("rejects a stalled claimant after a concurrent lease reclaim changes the token", async () => {

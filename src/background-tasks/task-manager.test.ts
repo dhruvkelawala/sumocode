@@ -866,8 +866,12 @@ function transientFault(code: string): Error {
 			expect(reads.scans).toBe(2);
 			expect(diagnostics).toHaveLength(2);
 
-			// Each later backoff-window retry fails silently: the store-level
-			// refresh-failure diagnostic stays deduped for the whole episode.
+			// Each later escalated-backoff retry fails silently: the store-level
+			// refresh-failure diagnostic stays deduped for the whole episode, and
+			// consecutive failures double the next window (1s, 2s, 4s).
+			now += 1_000;
+			expect(target.get("term-quiet-io", "session-a")).toBeUndefined();
+			expect(reads.scans).toBe(3);
 			now += 1_000;
 			expect(target.get("term-quiet-io", "session-a")).toBeUndefined();
 			expect(reads.scans).toBe(3);
@@ -877,9 +881,9 @@ function transientFault(code: string): Error {
 			expect(diagnostics).toHaveLength(2);
 
 			// The first successful scan ends the episode silently and resets both
-			// dedupes.
+			// dedupes and the backoff schedule.
 			chmodSync(rootDir, 0o700);
-			now += 1_000;
+			now += 4_000;
 			expect(target.get("term-quiet-io", "session-a")).toMatchObject({ id: "term-quiet-io" });
 			expect(reads.scans).toBe(5);
 			expect(diagnostics).toHaveLength(2);
@@ -894,6 +898,142 @@ function transientFault(code: string): Error {
 		} finally {
 			chmodSync(rootDir, 0o700);
 		}
+	});
+
+	it("escalates lazy init-retry backoff across consecutive failures and resets on the first complete scan", () => {
+		class FlakyInitStore extends TerminalTaskStore {
+			public attempts = 0;
+			public remainingFailures = Number.POSITIVE_INFINITY;
+			public override refreshIndex(): TerminalTaskIndexRefreshResult {
+				this.attempts += 1;
+				if (this.remainingFailures > 0) {
+					this.remainingFailures -= 1;
+					return { ok: false, complete: false, snapshots: [] };
+				}
+				return super.refreshIndex();
+			}
+		}
+		const store = new FlakyInitStore({ rootDir });
+		persistSettledTask(store, "term-backoff", "session-a", 1_000);
+		const target = manager({ store });
+		// The constructor scan is the first failed attempt; the first lazy retry
+		// still runs immediately and waits the base delay afterwards.
+		expect(store.attempts).toBe(1);
+		expect(target.get("term-backoff", "session-a")).toBeUndefined();
+		expect(store.attempts).toBe(2);
+
+		// Consecutive failed attempts double the next window — 1s, 2s, 4s, 8s,
+		// 16s, 32s, then the 60s cap holds. Each mid-window entry coalesces.
+		const attempt = (advance: number): number => {
+			now += advance;
+			target.get("term-backoff", "session-a");
+			return store.attempts;
+		};
+		expect(attempt(1_000)).toBe(3); // base window
+		expect(attempt(1_999)).toBe(3); // 2s window coalesces at +1.999s
+		expect(attempt(1)).toBe(4); // T+3s
+		expect(attempt(3_999)).toBe(4); // 4s window coalesces
+		expect(attempt(1)).toBe(5); // T+7s
+		expect(attempt(7_999)).toBe(5); // 8s window coalesces
+		expect(attempt(1)).toBe(6); // T+15s
+		expect(attempt(15_999)).toBe(6); // 16s window coalesces
+		expect(attempt(1)).toBe(7); // T+31s
+		expect(attempt(31_999)).toBe(7); // 32s window coalesces
+		expect(attempt(1)).toBe(8); // T+63s
+		expect(attempt(59_999)).toBe(8); // cap window coalesces
+		expect(attempt(1)).toBe(9); // T+123s
+		expect(attempt(59_999)).toBe(9); // cap stays the schedule ceiling
+		expect(attempt(1)).toBe(10); // T+183s
+
+		// The fault clears: the next gated attempt is the first complete scan. It
+		// seeds the generation (per-task change plus one publication) and resets
+		// the escalation, after which no entry point rescans at all.
+		store.remainingFailures = 0;
+		const changes: TerminalTaskSnapshot[] = [];
+		const publications: Array<readonly TerminalTaskSnapshot[]> = [];
+		const unsubscribeProjection = target.subscribeChanges((snapshots) => publications.push(snapshots));
+		const unsubscribeTasks = target.addChangeListener((snapshot) => changes.push(snapshot));
+		const changesBefore = changes.length;
+		const publicationsBefore = publications.length;
+		expect(attempt(60_000)).toBe(11);
+		expect(target.get("term-backoff", "session-a")).toMatchObject({ id: "term-backoff", status: "completed" });
+		expect(changes.slice(changesBefore).map((task) => task.id)).toEqual(["term-backoff"]);
+		expect(publications.length - publicationsBefore).toBe(1);
+		now += 300_000;
+		expect(target.list("session-a")).toHaveLength(1);
+		expect(target.claimPending("session-a", true)).toEqual([]);
+		expect(store.attempts).toBe(11);
+
+		unsubscribeProjection();
+		unsubscribeTasks();
+	});
+
+	it("restarts the escalation from the base delay after a complete scan and re-diagnoses failed⇄incomplete transitions", () => {
+		class ScriptedInitStore extends TerminalTaskStore {
+			public attempts = 0;
+			public script: Array<"fail" | "incomplete"> = [];
+			public override refreshIndex(): TerminalTaskIndexRefreshResult {
+				this.attempts += 1;
+				const step = this.script.shift();
+				if (step === "fail") return { ok: false, complete: false, snapshots: [] };
+				if (step === "incomplete") return { ok: true, complete: false, snapshots: [] };
+				return super.refreshIndex();
+			}
+		}
+		const diagnostics: Array<TerminalTaskStoreDiagnostic | { kind: "manager"; message: string }> = [];
+		const store = new ScriptedInitStore({ rootDir });
+		store.script = ["fail", "fail", "fail"];
+		persistSettledTask(store, "term-reset", "session-a", 1_000);
+		const target = manager({ store, onDiagnostic: (entry) => diagnostics.push(entry) });
+		const failureMessage = "terminal store scan failed before the projection was seeded; entry points retry lazily until the first successful scan";
+		const incompleteMessage = "terminal store scan indexed an incomplete generation; entry points retry lazily until a complete scan";
+		// The constructor and the first lazy retry fail: one failed-episode
+		// diagnostic, deduped across consecutive failures of the same kind.
+		expect(target.get("term-reset", "session-a")).toBeUndefined();
+		expect(store.attempts).toBe(2);
+		expect(diagnostics.map((entry) => entry.kind === "manager" ? entry.message : entry.kind)).toEqual([failureMessage]);
+		// The second lazy retry needs the doubled 2s window; then the script is
+		// exhausted and the complete scan seeds and resets the episode.
+		now += 1_000;
+		expect(target.get("term-reset", "session-a")).toBeUndefined();
+		expect(store.attempts).toBe(3);
+		now += 2_000;
+		expect(target.get("term-reset", "session-a")).toMatchObject({ id: "term-reset", status: "completed" });
+		expect(store.attempts).toBe(4);
+		expect(diagnostics.map((entry) => entry.kind === "manager" ? entry.message : entry.kind)).toEqual([failureMessage]);
+
+		// An incomplete explicit refresh re-arms the retries and re-diagnoses ONCE
+		// for the failed→incomplete transition. The scripted generation reports no
+		// records, so the manager prunes its retained projection while the store's
+		// untouched compact index still answers explicit reads (get re-adopts).
+		store.script = ["incomplete"];
+		expect(target.refreshSnapshotsFromStore().complete).toBe(false);
+		expect(target.get("term-reset", "session-a")).toMatchObject({ id: "term-reset" });
+		expect(diagnostics.map((entry) => entry.kind === "manager" ? entry.message : entry.kind)).toEqual([failureMessage, incompleteMessage]);
+
+		// Consecutive incomplete LAZY attempts also escalate — but from the BASE
+		// again: 1s then 2s, not the previous episode's larger windows.
+		store.script = ["incomplete", "incomplete"];
+		now += 5_000;
+		expect(target.get("term-reset", "session-a")).toMatchObject({ id: "term-reset" });
+		expect(store.attempts).toBe(6);
+		expect(diagnostics.filter((entry) => entry.kind === "manager")).toHaveLength(2);
+		now += 1_000;
+		expect(target.get("term-reset", "session-a")).toMatchObject({ id: "term-reset" });
+		expect(store.attempts).toBe(7);
+		now += 1_000;
+		expect(target.get("term-reset", "session-a")).toMatchObject({ id: "term-reset" });
+		expect(store.attempts).toBe(7); // 2s window coalesces at +1s
+		now += 1_000;
+		// The script is empty: the complete scan re-adopts the pruned record,
+		// resets the dedupe and schedule, and stops the retries.
+		expect(target.get("term-reset", "session-a")).toMatchObject({ id: "term-reset", status: "completed" });
+		expect(store.attempts).toBe(8);
+		now += 60_000;
+		expect(target.list("session-a")).toHaveLength(1);
+		expect(store.attempts).toBe(8);
+		// Same-kind episodes never repeat the message; only transitions did.
+		expect(diagnostics.map((entry) => entry.kind === "manager" ? entry.message : entry.kind)).toEqual([failureMessage, incompleteMessage]);
 	});
 
 	it("prunes quarantined ids from the retained projection on success and preserves them on failure", async () => {

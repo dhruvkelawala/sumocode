@@ -576,6 +576,66 @@ describe("TerminalTaskStore", () => {
 		expect(recovered.snapshots.map((task) => task.id).sort()).toEqual(["term-fresh-fault", "term-fresh-good"]);
 	});
 
+	it.skipIf(process.platform === "win32")("routes transient task-directory validation failures through the transient read contract", () => {
+		const diagnostics: TerminalTaskStoreDiagnostic[] = [];
+		const faults = new Map<string, Error>();
+		const store = new TerminalTaskStore({
+			rootDir,
+			onDiagnostic: (entry) => diagnostics.push(entry),
+			directoryAssertFault: (path) => faults.get(path),
+		});
+		// A known record whose directory validation fails transiently keeps its
+		// prior path and compact entry — the directory-level twin of the per-file
+		// transient read — and its preservation is complete coverage of the id.
+		const known = snapshot(store, "term-dir-known");
+		const knownDirectory = dirname(known.logFile);
+		store.create(known, join(knownDirectory, "meta.json"));
+		expect(store.refreshIndex().snapshots).toHaveLength(1);
+		faults.set(knownDirectory, transientFault("EMFILE"));
+		const knownFaulted = store.refreshIndex();
+		expect(knownFaulted.ok).toBe(true);
+		expect(knownFaulted.complete).toBe(true);
+		expect(knownFaulted.snapshots).toEqual([]);
+		expect(knownFaulted.preservedIds).toEqual(["term-dir-known"]);
+		expect(diagnostics.at(-1)).toMatchObject({ kind: "io", path: knownDirectory });
+		expect(store.listOwnedIndexed("session-a")).toEqual([expect.objectContaining({ id: "term-dir-known" })]);
+		faults.clear();
+		// The retained path still resolves the durable record without a rescan.
+		expect(store.getIndexed("term-dir-known")).toEqual(known);
+
+		// An unknown record whose directory validation fails transiently is
+		// skipped and makes the generation incomplete, so initialization-boundary
+		// callers keep retrying until the fault clears.
+		const unknown = snapshot(store, "term-dir-unknown", "session-b", 2_000);
+		const unknownDirectory = dirname(unknown.logFile);
+		privateWrite(join(unknownDirectory, "meta.json"), `${JSON.stringify(unknown)}\n`);
+		faults.set(unknownDirectory, transientFault("EIO"));
+		const unknownFaulted = store.refreshIndex();
+		expect(unknownFaulted.ok).toBe(true);
+		expect(unknownFaulted.complete).toBe(false);
+		expect(unknownFaulted.snapshots.map((task) => task.id)).toEqual(["term-dir-known"]);
+		expect(unknownFaulted.preservedIds).toEqual([]);
+		expect(diagnostics.at(-1)).toMatchObject({ kind: "io", path: unknownDirectory });
+		expect(store.listOwnedIndexed("session-b")).toEqual([]);
+		// The fault clears: the next refresh adopts the record and the generation
+		// is complete again.
+		faults.clear();
+		const recovered = store.refreshIndex();
+		expect(recovered.ok).toBe(true);
+		expect(recovered.complete).toBe(true);
+		expect(recovered.snapshots.map((task) => task.id).sort()).toEqual(["term-dir-known", "term-dir-unknown"]);
+
+		// Genuine validation failures still quarantine the corrupt directory as a
+		// terminal decision that never makes the generation incomplete.
+		chmodSync(unknownDirectory, 0o755);
+		const corrupt = store.refreshIndex();
+		expect(corrupt.ok).toBe(true);
+		expect(corrupt.complete).toBe(true);
+		expect(corrupt.snapshots.map((task) => task.id)).toEqual(["term-dir-known"]);
+		expect(diagnostics.at(-1)).toMatchObject({ kind: "corrupt", path: unknownDirectory });
+		expect(store.listOwnedIndexed("session-b")).toEqual([]);
+	});
+
 	it("preserves the indexed entry for exactly the transient read errnos", () => {
 		const codes = ["EACCES", "EIO", "EMFILE", "ENFILE", "EAGAIN"];
 		const faults = new Map<string, Error>();

@@ -11347,6 +11347,7 @@ var TerminalTaskStore = class {
   processStartTime;
   beforeAbandonedLockRename;
   metaReadFault;
+  directoryAssertFault;
   /** Consecutive refreshIndex scan failures are diagnosed once per episode; the first successful scan resets the dedupe. */
   refreshFailureDiagnosed = false;
   constructor(options = {}) {
@@ -11372,6 +11373,7 @@ var TerminalTaskStore = class {
     this.processStartTime = captureProcessStartTime(process.pid);
     this.beforeAbandonedLockRename = options.beforeAbandonedLockRename;
     this.metaReadFault = options.metaReadFault;
+    this.directoryAssertFault = options.directoryAssertFault;
   }
   /** Rebuild every derived path/selection bucket from one validated disk pass. */
   refreshIndex() {
@@ -11407,13 +11409,26 @@ var TerminalTaskStore = class {
         continue;
       }
       if (!entry.isDirectory()) continue;
+      const metaPath = join12(taskDirectory, "meta.json");
       try {
+        const fault = this.directoryAssertFault?.(taskDirectory);
+        if (fault) throw fault;
         this.assertTaskDirectory(taskDirectory);
       } catch (error) {
+        if (isTransientReadError(error)) {
+          this.diagnostic("io", taskDirectory, error);
+          const priorId = priorIdForPath(metaPath);
+          const priorEntry = priorId === void 0 ? void 0 : this.indexedById.get(priorId);
+          if (priorEntry && !paths.has(priorEntry.id)) {
+            preservedEntries.push(priorEntry);
+            paths.set(priorEntry.id, metaPath);
+          }
+          if (!priorEntry) generationComplete = false;
+          continue;
+        }
         this.diagnostic("corrupt", taskDirectory, error);
         continue;
       }
-      const metaPath = join12(taskDirectory, "meta.json");
       if (!pathExists2(metaPath)) continue;
       const read = this.readCandidate(metaPath);
       if (read.kind === "transient") {
@@ -11825,6 +11840,7 @@ var PRIVATE_DIRECTORY_MODE2 = 448;
 var NO_FOLLOW2 = constants2.O_NOFOLLOW ?? 0;
 var MAX_TRANSITION_RETRIES = 16;
 var INDEX_INIT_RETRY_BACKOFF_MS = 1e3;
+var INDEX_INIT_RETRY_BACKOFF_MAX_MS = 6e4;
 function normalizePositive(value, fallback) {
   return value !== void 0 && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
 }
@@ -12111,8 +12127,12 @@ var TerminalTaskManager = class {
   indexInitInFlight = false;
   /** Injectable-clock stamp of the last lazy init retry; further attempts back off. */
   indexInitLastAttemptAt = Number.NEGATIVE_INFINITY;
-  /** Init-scan failures are diagnosed once per episode; the first successful scan resets the dedupe. */
-  indexInitFailureDiagnosed = false;
+  /** Consecutive lazy init retries that left the index incomplete or failed; drives the doubling. */
+  indexInitFailedAttempts = 0;
+  /** Backoff the next lazy init retry must wait since the last attempt; reset by a complete scan. */
+  indexInitBackoffMs = INDEX_INIT_RETRY_BACKOFF_MS;
+  /** Init-scan failures are diagnosed once per episode kind; a failed⇄incomplete transition re-diagnoses once and the first complete scan resets the dedupe. */
+  indexInitDiagnosedKind;
   constructor(options = {}) {
     this.store = options.store ?? new TerminalTaskStore({ onDiagnostic: options.onDiagnostic });
     this.processTree = options.processTree ?? systemProcessTree;
@@ -12600,8 +12620,9 @@ ${command}
     const refresh = this.store.refreshIndex();
     if (!refresh.ok) return { ok: false, complete: false, snapshots: this.getSnapshots() };
     this.indexInitialized = refresh.complete;
-    if (refresh.complete) this.indexInitFailureDiagnosed = false;
-    else this.diagnoseIndexInitFailure(true);
+    if (refresh.complete) {
+      this.resetIndexInitEpisode();
+    } else this.diagnoseIndexInitFailure(true);
     this.refreshBatchDepth += 1;
     const changed = [];
     let adoptionChangedStoredState = false;
@@ -12622,29 +12643,45 @@ ${command}
    * armed. Until initialization completes, every query/mutation entry point
    * pays at most one scan attempt per entry. A minimal in-flight guard keeps a
    * listener fanned out by the seeding scan from re-entering it, and an
-   * injectable-clock backoff keeps a persistently unreadable store from being
-   * rescanned by every following entry.
+   * escalating injectable-clock backoff keeps a persistently unreadable or
+   * incomplete store from being rescanned by every following entry.
    */
   ensureIndexInitialized() {
     if (this.indexInitialized || this.detached || this.indexInitInFlight) return;
     const attemptAt = Math.max(1, Math.floor(this.now()));
-    if (attemptAt - this.indexInitLastAttemptAt < INDEX_INIT_RETRY_BACKOFF_MS) return;
+    if (attemptAt - this.indexInitLastAttemptAt < this.indexInitBackoffMs) return;
     this.indexInitLastAttemptAt = attemptAt;
     this.indexInitInFlight = true;
     try {
       if (!this.refreshSnapshotsFromStore().ok) this.diagnoseIndexInitFailure();
+      if (!this.indexInitialized) {
+        this.indexInitFailedAttempts += 1;
+        this.indexInitBackoffMs = Math.min(
+          INDEX_INIT_RETRY_BACKOFF_MS * 2 ** Math.min(this.indexInitFailedAttempts - 1, 32),
+          INDEX_INIT_RETRY_BACKOFF_MAX_MS
+        );
+      }
     } finally {
       this.indexInitInFlight = false;
     }
   }
   /**
    * Init-scan failures and incomplete generations are diagnosed once per
-   * episode; the first complete successful scan resets the dedupe.
+   * episode kind — a failed⇄incomplete transition re-diagnoses once so the
+   * message matches the store state — and the first complete successful scan
+   * resets the dedupe.
    */
   diagnoseIndexInitFailure(incomplete = false) {
-    if (this.indexInitFailureDiagnosed) return;
-    this.indexInitFailureDiagnosed = true;
+    const kind = incomplete ? "incomplete" : "failed";
+    if (this.indexInitDiagnosedKind === kind) return;
+    this.indexInitDiagnosedKind = kind;
     this.onDiagnostic?.({ kind: "manager", message: incomplete ? "terminal store scan indexed an incomplete generation; entry points retry lazily until a complete scan" : "terminal store scan failed before the projection was seeded; entry points retry lazily until the first successful scan" });
+  }
+  /** A complete scan ends the episode: the diagnostic dedupe and the escalating retry schedule both reset. */
+  resetIndexInitEpisode() {
+    this.indexInitDiagnosedKind = void 0;
+    this.indexInitFailedAttempts = 0;
+    this.indexInitBackoffMs = INDEX_INIT_RETRY_BACKOFF_MS;
   }
   /**
    * The refresh adoption and prune loops; every notification stays inside the

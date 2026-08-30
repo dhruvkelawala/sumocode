@@ -46,8 +46,9 @@ export interface TerminalTaskIndexRefreshResult {
 	readonly ok: boolean;
 	/**
 	 * Generation completeness. False when the directory read failed or when any
-	 * transient per-file read prevented indexing a candidate the prior index did
-	 * not already preserve; a known record's transient read counts as complete
+	 * transient per-file read or transient task-directory validation prevented
+	 * indexing a candidate the prior index did not already preserve; a known
+	 * record's transient read or directory-assert failure counts as complete
 	 * coverage of that id (its prior entry is retained and reported through
 	 * `preservedIds`), while corrupt, duplicate, and legacy quarantines are
 	 * terminal decisions that never make a generation incomplete. Callers that
@@ -76,6 +77,8 @@ export interface TerminalTaskStoreOptions {
 	readonly beforeAbandonedLockRename?: () => void;
 	/** Test seam for deterministic per-file metadata-read faults inside the index scan. */
 	readonly metaReadFault?: (path: string) => Error | undefined;
+	/** Test seam for deterministic task-directory validation faults inside the index scan. */
+	readonly directoryAssertFault?: (path: string) => Error | undefined;
 }
 
 /** Compact derived selection state. Durable metadata remains authoritative. */
@@ -476,6 +479,7 @@ export class TerminalTaskStore {
 	private readonly processStartTime: string | undefined;
 	private readonly beforeAbandonedLockRename?: () => void;
 	private readonly metaReadFault?: (path: string) => Error | undefined;
+	private readonly directoryAssertFault?: (path: string) => Error | undefined;
 	/** Consecutive refreshIndex scan failures are diagnosed once per episode; the first successful scan resets the dedupe. */
 	private refreshFailureDiagnosed = false;
 
@@ -503,6 +507,7 @@ export class TerminalTaskStore {
 		this.processStartTime = captureProcessStartTime(process.pid);
 		this.beforeAbandonedLockRename = options.beforeAbandonedLockRename;
 		this.metaReadFault = options.metaReadFault;
+		this.directoryAssertFault = options.directoryAssertFault;
 	}
 
 	/** Rebuild every derived path/selection bucket from one validated disk pass. */
@@ -559,13 +564,33 @@ export class TerminalTaskStore {
 				continue;
 			}
 			if (!entry.isDirectory()) continue;
+			const metaPath = join(taskDirectory, "meta.json");
 			try {
+				const fault = this.directoryAssertFault?.(taskDirectory);
+				if (fault) throw fault;
 				this.assertTaskDirectory(taskDirectory);
 			} catch (error) {
+				// A transient directory-assert failure (an lstat/realpath errno from
+				// assertPrivateDirectory/realpathSync) is the directory-level twin of
+				// the transient per-file read below: a known id keeps its prior path
+				// and compact entry, and an unknown id is skipped while marking the
+				// generation incomplete so freshness-boundary callers keep retrying.
+				// Genuine validation failures still quarantine the directory as corrupt
+				// without arming retries.
+				if (isTransientReadError(error)) {
+					this.diagnostic("io", taskDirectory, error);
+					const priorId = priorIdForPath(metaPath);
+					const priorEntry = priorId === undefined ? undefined : this.indexedById.get(priorId);
+					if (priorEntry && !paths.has(priorEntry.id)) {
+						preservedEntries.push(priorEntry);
+						paths.set(priorEntry.id, metaPath);
+					}
+					if (!priorEntry) generationComplete = false;
+					continue;
+				}
 				this.diagnostic("corrupt", taskDirectory, error);
 				continue;
 			}
-			const metaPath = join(taskDirectory, "meta.json");
 			if (!pathExists(metaPath)) continue;
 			const read = this.readCandidate(metaPath);
 			if (read.kind === "transient") {

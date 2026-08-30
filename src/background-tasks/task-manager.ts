@@ -68,11 +68,16 @@ const PRIVATE_DIRECTORY_MODE = 0o700;
 const NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
 const MAX_TRANSITION_RETRIES = 16;
 /**
- * Minimal injectable-clock backoff between lazy index-initialization retry
- * attempts, so a persistently unreadable store is not rescanned by every
+ * Base of the escalating injectable-clock backoff between lazy
+ * index-initialization retry attempts: the first retry after an unsuccessful
+ * attempt waits this long, and each further consecutive failed or incomplete
+ * attempt doubles the wait up to INDEX_INIT_RETRY_BACKOFF_MAX_MS, so a
+ * chronically unreadable or incomplete store is not rescanned by every
  * query/mutation entry point while the projection stays unseeded.
  */
 const INDEX_INIT_RETRY_BACKOFF_MS = 1_000;
+/** Upper bound of the escalating init-retry backoff schedule. */
+const INDEX_INIT_RETRY_BACKOFF_MAX_MS = 60_000;
 
 interface RuntimeTask {
 	child?: ChildProcess;
@@ -523,8 +528,12 @@ export class TerminalTaskManager {
 	private indexInitInFlight = false;
 	/** Injectable-clock stamp of the last lazy init retry; further attempts back off. */
 	private indexInitLastAttemptAt = Number.NEGATIVE_INFINITY;
-	/** Init-scan failures are diagnosed once per episode; the first successful scan resets the dedupe. */
-	private indexInitFailureDiagnosed = false;
+	/** Consecutive lazy init retries that left the index incomplete or failed; drives the doubling. */
+	private indexInitFailedAttempts = 0;
+	/** Backoff the next lazy init retry must wait since the last attempt; reset by a complete scan. */
+	private indexInitBackoffMs = INDEX_INIT_RETRY_BACKOFF_MS;
+	/** Init-scan failures are diagnosed once per episode kind; a failed⇄incomplete transition re-diagnoses once and the first complete scan resets the dedupe. */
+	private indexInitDiagnosedKind: "failed" | "incomplete" | undefined;
 
 	public constructor(options: TerminalTaskManagerOptions = {}) {
 		this.store = options.store ?? new TerminalTaskStore({ onDiagnostic: options.onDiagnostic });
@@ -1099,8 +1108,12 @@ export class TerminalTaskManager {
 		// next entry-point retry can pick up a record a transient read skipped,
 		// including after a mid-life takeover refresh.
 		this.indexInitialized = refresh.complete;
-		if (refresh.complete) this.indexInitFailureDiagnosed = false;
-		else this.diagnoseIndexInitFailure(true);
+		if (refresh.complete) {
+			// A complete scan ends the failure episode (the next failure is
+			// diagnosed again) and resets the escalating retry schedule, so a
+			// later episode starts from the base delay.
+			this.resetIndexInitEpisode();
+		} else this.diagnoseIndexInitFailure(true);
 		// Waiter- and delivery-relevant changes are collected across both loops and
 		// fanned out once after adoption and pruning complete, so projection
 		// listeners can never observe — or re-enter a nested refresh against — an
@@ -1130,17 +1143,29 @@ export class TerminalTaskManager {
 	 * armed. Until initialization completes, every query/mutation entry point
 	 * pays at most one scan attempt per entry. A minimal in-flight guard keeps a
 	 * listener fanned out by the seeding scan from re-entering it, and an
-	 * injectable-clock backoff keeps a persistently unreadable store from being
-	 * rescanned by every following entry.
+	 * escalating injectable-clock backoff keeps a persistently unreadable or
+	 * incomplete store from being rescanned by every following entry.
 	 */
 	private ensureIndexInitialized(): void {
 		if (this.indexInitialized || this.detached || this.indexInitInFlight) return;
 		const attemptAt = Math.max(1, Math.floor(this.now()));
-		if (attemptAt - this.indexInitLastAttemptAt < INDEX_INIT_RETRY_BACKOFF_MS) return;
+		if (attemptAt - this.indexInitLastAttemptAt < this.indexInitBackoffMs) return;
 		this.indexInitLastAttemptAt = attemptAt;
 		this.indexInitInFlight = true;
 		try {
 			if (!this.refreshSnapshotsFromStore().ok) this.diagnoseIndexInitFailure();
+			// A failed or incomplete attempt leaves initialization open: escalate
+			// the next gap — the base delay doubled per consecutive attempt, capped
+			// at INDEX_INIT_RETRY_BACKOFF_MAX_MS — so a chronically incomplete or
+			// unreadable generation is no longer rescanned on every entry point. A
+			// complete scan resets the schedule inside refreshSnapshotsFromStore.
+			if (!this.indexInitialized) {
+				this.indexInitFailedAttempts += 1;
+				this.indexInitBackoffMs = Math.min(
+					INDEX_INIT_RETRY_BACKOFF_MS * 2 ** Math.min(this.indexInitFailedAttempts - 1, 32),
+					INDEX_INIT_RETRY_BACKOFF_MAX_MS,
+				);
+			}
 		} finally {
 			this.indexInitInFlight = false;
 		}
@@ -1148,14 +1173,24 @@ export class TerminalTaskManager {
 
 	/**
 	 * Init-scan failures and incomplete generations are diagnosed once per
-	 * episode; the first complete successful scan resets the dedupe.
+	 * episode kind — a failed⇄incomplete transition re-diagnoses once so the
+	 * message matches the store state — and the first complete successful scan
+	 * resets the dedupe.
 	 */
 	private diagnoseIndexInitFailure(incomplete = false): void {
-		if (this.indexInitFailureDiagnosed) return;
-		this.indexInitFailureDiagnosed = true;
+		const kind = incomplete ? "incomplete" as const : "failed" as const;
+		if (this.indexInitDiagnosedKind === kind) return;
+		this.indexInitDiagnosedKind = kind;
 		this.onDiagnostic?.({ kind: "manager", message: incomplete
 			? "terminal store scan indexed an incomplete generation; entry points retry lazily until a complete scan"
 			: "terminal store scan failed before the projection was seeded; entry points retry lazily until the first successful scan" });
+	}
+
+	/** A complete scan ends the episode: the diagnostic dedupe and the escalating retry schedule both reset. */
+	private resetIndexInitEpisode(): void {
+		this.indexInitDiagnosedKind = undefined;
+		this.indexInitFailedAttempts = 0;
+		this.indexInitBackoffMs = INDEX_INIT_RETRY_BACKOFF_MS;
 	}
 
 	/**

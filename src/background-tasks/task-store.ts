@@ -45,23 +45,23 @@ export interface TerminalTaskIndexRefreshResult {
 	/** false when the store directory could not be read; the last good index generation is preserved. */
 	readonly ok: boolean;
 	/**
-	 * Generation completeness. False when the directory read failed or when any
-	 * transient per-file read or transient task-directory validation prevented
-	 * indexing a candidate the prior index did not already preserve; a known
-	 * record's transient read or directory-assert failure counts as complete
-	 * coverage of that id (its prior entry is retained and reported through
-	 * `preservedIds`), while corrupt, duplicate, and legacy quarantines are
-	 * terminal decisions that never make a generation incomplete. Callers that
-	 * must guarantee eventual visibility of every durable record — the manager's
-	 * index initialization — keep retrying until a complete scan lands.
+	 * Generation completeness. False when the directory read failed, or when any
+	 * transient per-file read or transient task-directory validation prevented a
+	 * candidate from being freshly read — including a known record whose prior
+	 * compact entry is preserved through `preservedIds`. Corrupt, duplicate, and
+	 * legacy quarantines are terminal decisions that never make a generation
+	 * incomplete. Callers that must guarantee eventual visibility of every durable
+	 * record — the manager's index initialization — keep retrying until a complete
+	 * scan lands.
 	 */
 	readonly complete: boolean;
 	readonly snapshots: readonly TerminalTaskSnapshot[];
 	/**
-	 * Ids whose metadata read failed transiently but whose prior path and compact
-	 * index entry were retained. Snapshot consumers that prune stale entries (the
-	 * manager's retained projection) must keep their retained full snapshot for
-	 * these ids in this successful generation instead of pruning them.
+	 * Ids whose metadata read or task-directory validation failed transiently but
+	 * whose prior path and compact index entry were retained. Snapshot consumers
+	 * that prune stale entries (the manager's retained projection) must keep their
+	 * retained full snapshot for these ids in this successful generation instead
+	 * of pruning them.
 	 */
 	readonly preservedIds?: readonly string[];
 }
@@ -549,10 +549,11 @@ export class TerminalTaskStore {
 		};
 		const snapshots: TerminalTaskSnapshot[] = [];
 		const paths = new Map<string, string>();
-		// Whether this successful scan indexed every candidate it could have: a
-		// transient read of a record unknown to the prior index skips it, so the
-		// generation is reported incomplete and freshness-boundary callers keep
-		// retrying until a scan reads it.
+		// Whether this successful scan freshly read every candidate it could have: a
+		// transient per-record failure skips the fresh read, so the generation is
+		// reported incomplete and freshness-boundary callers keep retrying until a
+		// scan reads it. Known records still preserve their prior compact entry for
+		// availability, but preservation is not complete freshness.
 		let generationComplete = true;
 		// Prior compact entries must be captured during the scan: replaceIndex
 		// clears the derived maps before the retained entries are re-applied.
@@ -573,10 +574,10 @@ export class TerminalTaskStore {
 				// A transient directory-assert failure (an lstat/realpath errno from
 				// assertPrivateDirectory/realpathSync) is the directory-level twin of
 				// the transient per-file read below: a known id keeps its prior path
-				// and compact entry, and an unknown id is skipped while marking the
-				// generation incomplete so freshness-boundary callers keep retrying.
-				// Genuine validation failures still quarantine the directory as corrupt
-				// without arming retries.
+				// and compact entry for availability, while any such transient leaves
+				// the generation incomplete so freshness-boundary callers keep retrying
+				// until the durable record is freshly read. Genuine validation failures
+				// still quarantine the directory as corrupt without arming retries.
 				if (isTransientReadError(error)) {
 					this.diagnostic("io", taskDirectory, error);
 					const priorId = priorIdForPath(metaPath);
@@ -585,7 +586,7 @@ export class TerminalTaskStore {
 						preservedEntries.push(priorEntry);
 						paths.set(priorEntry.id, metaPath);
 					}
-					if (!priorEntry) generationComplete = false;
+					generationComplete = false;
 					continue;
 				}
 				this.diagnostic("corrupt", taskDirectory, error);
@@ -597,17 +598,16 @@ export class TerminalTaskStore {
 				// A transient per-file read failure must not quarantine a record the
 				// last good index already knows. Retain its prior path and compact
 				// entry, and report the id so the manager preserves its retained full
-				// snapshot in this successful generation instead of pruning it.
+				// snapshot in this successful generation instead of pruning it. The
+				// generation is still incomplete: takeover and lazy-init callers must
+				// retry until the durable record is freshly read.
 				const priorId = priorIdForPath(metaPath);
 				const priorEntry = priorId === undefined ? undefined : this.indexedById.get(priorId);
 				if (priorEntry && !paths.has(priorEntry.id)) {
 					preservedEntries.push(priorEntry);
 					paths.set(priorEntry.id, metaPath);
 				}
-				// A preserved known record keeps this generation's coverage of its id
-				// complete; a candidate the prior index does not know is skipped
-				// unindexed, so the generation is incomplete.
-				if (!priorEntry) generationComplete = false;
+				generationComplete = false;
 				continue;
 			}
 			if (read.kind === "invalid") continue;

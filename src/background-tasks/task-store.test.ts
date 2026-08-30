@@ -361,8 +361,9 @@ describe("TerminalTaskStore", () => {
 		faults.set(metaPath, transientFault("EACCES"));
 		const failed = store.refreshIndex();
 		expect(failed.ok).toBe(true);
-		// A known record's transient preservation is complete coverage of its id.
-		expect(failed.complete).toBe(true);
+		// Preservation keeps the last-good index available, but the generation is
+		// incomplete until the durable record is freshly read.
+		expect(failed.complete).toBe(false);
 		expect(failed.snapshots.map((task) => task.id)).toEqual(["term-healthy"]);
 		expect(failed.preservedIds).toEqual(["term-transient-read"]);
 		// The transient read is diagnosed as I/O, not corruption.
@@ -417,8 +418,9 @@ describe("TerminalTaskStore", () => {
 		expect(refreshed.ok).toBe(true);
 		// The known path owns the identity: the duplicate is diagnosed and
 		// skipped, and the transient prior keeps its compact entry, path, owner,
-		// and preservedId for this generation. Preservation is complete coverage.
-		expect(refreshed.complete).toBe(true);
+		// and preservedId for this generation. The generation is incomplete until
+		// the durable prior path is freshly read.
+		expect(refreshed.complete).toBe(false);
 		expect(refreshed.snapshots).toEqual([]);
 		expect(refreshed.preservedIds).toEqual(["term-reserve"]);
 		expect(diagnostics.some((entry) => entry.kind === "duplicate" && entry.path === duplicateMetaPath)).toBe(true);
@@ -586,7 +588,8 @@ describe("TerminalTaskStore", () => {
 		});
 		// A known record whose directory validation fails transiently keeps its
 		// prior path and compact entry — the directory-level twin of the per-file
-		// transient read — and its preservation is complete coverage of the id.
+		// transient read — while the generation remains incomplete until a later
+		// scan freshly validates it.
 		const known = snapshot(store, "term-dir-known");
 		const knownDirectory = dirname(known.logFile);
 		store.create(known, join(knownDirectory, "meta.json"));
@@ -594,7 +597,7 @@ describe("TerminalTaskStore", () => {
 		faults.set(knownDirectory, transientFault("EMFILE"));
 		const knownFaulted = store.refreshIndex();
 		expect(knownFaulted.ok).toBe(true);
-		expect(knownFaulted.complete).toBe(true);
+		expect(knownFaulted.complete).toBe(false);
 		expect(knownFaulted.snapshots).toEqual([]);
 		expect(knownFaulted.preservedIds).toEqual(["term-dir-known"]);
 		expect(diagnostics.at(-1)).toMatchObject({ kind: "io", path: knownDirectory });
@@ -651,6 +654,7 @@ describe("TerminalTaskStore", () => {
 			faults.set(metaPath, transientFault(code));
 			const failed = store.refreshIndex();
 			expect(failed.ok).toBe(true);
+			expect(failed.complete).toBe(false);
 			expect(failed.preservedIds).toEqual([records[index]!.id]);
 			expect(store.isIndexedOwner(records[index]!.id, "session-a")).toBe(true);
 			faults.delete(metaPath);

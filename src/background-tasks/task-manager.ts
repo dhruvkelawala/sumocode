@@ -558,11 +558,11 @@ export class TerminalTaskManager {
 		// policy that cannot erase pending, claimed, or still-queryable results.
 		const initialization = this.store.refreshIndex();
 		if (initialization.ok) {
-			// An incomplete successful scan — a candidate unknown to the prior index
-			// hit a transient read — seeds and serves the indexed generation
+			// An incomplete successful scan — any candidate hit a transient read or
+			// directory-validation failure — seeds and serves the indexed generation
 			// immediately but keeps init-retry state armed so a later complete scan
-			// picks the skipped record up; only a complete scan starts fully
-			// initialized and stops the retries.
+			// freshly reads the skipped/preserved record; only a complete scan starts
+			// fully initialized and stops the retries.
 			this.indexInitialized = initialization.complete;
 			for (const snapshot of initialization.snapshots) {
 				this.adopt(snapshot, false);
@@ -1030,12 +1030,12 @@ export class TerminalTaskManager {
 	 * previous projection generation stays authoritative and callers must treat
 	 * freshness as unproven instead of adopting the returned snapshots, and
 	 * takeover callers keep their death proof unconsumed. `complete` is false
-	 * when even the successful scan could not index a candidate unknown to the
-	 * prior index because its metadata read failed transiently: that scan still
-	 * replaces the projection with its indexed generation, but this manager
-	 * keeps its lazy index-init retry armed (one deduped episode diagnostic)
-	 * until a later complete scan picks the skipped record up. On success every
-	 * fresh valid snapshot is adopted — including one whose revision equals the
+	 * when even the successful scan hit a transient per-record metadata read or
+	 * directory-validation failure: that scan still replaces the projection with
+	 * its indexed generation and preserves last-good snapshots for `preservedIds`,
+	 * but this manager keeps its lazy index-init retry armed (one deduped episode
+	 * diagnostic) until a later complete scan freshly reads every candidate. On
+	 * success every fresh valid snapshot is adopted — including one whose revision equals the
 	 * retained entry, so an external same-revision owner or content divergence
 	 * at this proven freshness boundary updates the full projection and owner
 	 * lists — and the retained projection is replaced to match exactly the
@@ -1105,8 +1105,9 @@ export class TerminalTaskManager {
 		// diagnosed again) and stops lazy init retries; an incomplete scan still
 		// serves the indexed generation immediately but keeps init-retry state
 		// armed — one deduped episode diagnostic per incomplete episode — so the
-		// next entry-point retry can pick up a record a transient read skipped,
-		// including after a mid-life takeover refresh.
+		// next entry-point retry can freshly read a record a transient read or
+		// directory-validation failure skipped or preserved, including after a
+		// mid-life takeover refresh.
 		this.indexInitialized = refresh.complete;
 		if (refresh.complete) {
 			// A complete scan ends the failure episode (the next failure is

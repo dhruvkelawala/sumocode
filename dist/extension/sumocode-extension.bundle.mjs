@@ -11423,7 +11423,7 @@ var TerminalTaskStore = class {
             preservedEntries.push(priorEntry);
             paths.set(priorEntry.id, metaPath);
           }
-          if (!priorEntry) generationComplete = false;
+          generationComplete = false;
           continue;
         }
         this.diagnostic("corrupt", taskDirectory, error);
@@ -11438,7 +11438,7 @@ var TerminalTaskStore = class {
           preservedEntries.push(priorEntry);
           paths.set(priorEntry.id, metaPath);
         }
-        if (!priorEntry) generationComplete = false;
+        generationComplete = false;
         continue;
       }
       if (read.kind === "invalid") continue;
@@ -12549,12 +12549,12 @@ ${command}
    * previous projection generation stays authoritative and callers must treat
    * freshness as unproven instead of adopting the returned snapshots, and
    * takeover callers keep their death proof unconsumed. `complete` is false
-   * when even the successful scan could not index a candidate unknown to the
-   * prior index because its metadata read failed transiently: that scan still
-   * replaces the projection with its indexed generation, but this manager
-   * keeps its lazy index-init retry armed (one deduped episode diagnostic)
-   * until a later complete scan picks the skipped record up. On success every
-   * fresh valid snapshot is adopted — including one whose revision equals the
+   * when even the successful scan hit a transient per-record metadata read or
+   * directory-validation failure: that scan still replaces the projection with
+   * its indexed generation and preserves last-good snapshots for `preservedIds`,
+   * but this manager keeps its lazy index-init retry armed (one deduped episode
+   * diagnostic) until a later complete scan freshly reads every candidate. On
+   * success every fresh valid snapshot is adopted — including one whose revision equals the
    * retained entry, so an external same-revision owner or content divergence
    * at this proven freshness boundary updates the full projection and owner
    * lists — and the retained projection is replaced to match exactly the

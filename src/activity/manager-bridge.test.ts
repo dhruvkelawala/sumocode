@@ -2,9 +2,10 @@
 import { execFile } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ProcessTreeOperations } from "../background-tasks/process-tree.js";
 import { TerminalTaskManager, type TerminalOutputTail } from "../background-tasks/task-manager.js";
 import { TerminalTaskStore, type TerminalTaskIndexRefreshResult } from "../background-tasks/task-store.js";
 import { terminalActivitySnapshot, type TerminalTaskSnapshot } from "../background-tasks/task-types.js";
@@ -69,6 +70,22 @@ function runBridgeContender(
 			},
 		);
 	});
+}
+
+function terminalProcessTree(): ProcessTreeOperations {
+	return {
+		captureStartTime: vi.fn((pid) => `start-${pid}`),
+		identityMatches: vi.fn(() => "same" as const),
+		isTreeEmpty: vi.fn(() => false),
+		captureTreeVerification: vi.fn(() => undefined),
+		verificationMatches: vi.fn(() => "same" as const),
+		signalTree: vi.fn(async () => ({ ok: true, gone: false })),
+		waitForTreeEmpty: vi.fn(async () => false),
+	};
+}
+
+function transientFault(code: string): Error {
+	return Object.assign(new Error(`injected ${code} metadata read failure`), { code });
 }
 
 function terminal(id: string, ownerSessionId: string, status: "running" | "completed" = "running"): TerminalTaskSnapshot {
@@ -550,6 +567,138 @@ describe("ActivityManagerBridge", () => {
 		expect(terminals.refreshCount).toBe(2);
 		expect(successfulPublishes).toBe(1);
 		bridge.dispose();
+	});
+
+	it("keeps a death-proven takeover retrying when a preserved known record transiently hides an active rewrite", async () => {
+		vi.useFakeTimers();
+		let bridge: ActivityManagerBridge | undefined;
+		let manager: TerminalTaskManager | undefined;
+		try {
+			const stateRoot = root();
+			const terminalRoot = root();
+			const owner = "session-preserved-active-takeover";
+			let clock = 2_000;
+			const reads = { scans: 0 };
+			const faults = new Map<string, Error>();
+			const store = new TerminalTaskStore({
+				rootDir: terminalRoot,
+				metaReadFault: (path) => faults.get(path),
+				onRead: (kind) => { if (kind === "full-scan") reads.scans += 1; },
+			});
+			const settled = persistSettledTerminal(store, "term-preserved-active", owner, 1_000);
+			writeFileSync(settled.logFile, "active output\n", { mode: 0o600 });
+			chmodSync(settled.logFile, 0o600);
+			manager = new TerminalTaskManager({
+				store,
+				processTree: terminalProcessTree(),
+				now: () => clock,
+				pollIntervalMs: 10,
+			});
+			expect(reads.scans).toBe(1);
+			expect(manager.getSnapshots()).toEqual([expect.objectContaining({ id: settled.id, status: "completed" })]);
+
+			// The prior process rewrites the durable record back to active before
+			// dying, while this manager still retains the settled snapshot from its
+			// startup generation.
+			const active: TerminalTaskSnapshot = {
+				...settled,
+				status: "running",
+				updatedAt: 2_000,
+				settledAt: undefined,
+				exitCode: undefined,
+				observedAt: undefined,
+				consumedAt: undefined,
+				deliveryState: "none",
+				completionId: undefined,
+				pid: 9_001,
+				processGroupId: 9_001,
+				processStartTime: "active-start",
+			};
+			const metaFile = join(dirname(settled.logFile), "meta.json");
+			writeFileSync(metaFile, `${JSON.stringify(active)}\n`, { mode: 0o600 });
+			chmodSync(metaFile, 0o600);
+
+			const incumbent = new ActivityFeedPublisher(owner, {
+				rootDir: stateRoot,
+				now: () => clock,
+				writerIdentity: { token: "incumbent", pid: 101, processStartTime: "incumbent-start" },
+				inspectWriter: () => "alive",
+			});
+			incumbent.publish([]);
+			let incumbentAlive = true;
+			const created: ActivityFeedPublisher[] = [];
+			let successfulPublishes = 0;
+			bridge = new ActivityManagerBridge(manager, new FakeSubagentManager(), {
+				rootDir: stateRoot,
+				now: () => clock,
+				writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
+				inspectWriter: () => incumbentAlive ? "alive" : "dead",
+				publisherFactory: (factoryOwner) => {
+					const publisher = new ActivityFeedPublisher(factoryOwner, {
+						rootDir: stateRoot,
+						now: () => clock,
+						writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
+						inspectWriter: () => incumbentAlive ? "alive" : "dead",
+					});
+					const publish = publisher.publish.bind(publisher);
+					publisher.publish = (activities) => {
+						const wrote = publish(activities);
+						if (wrote) successfulPublishes += 1;
+						return wrote;
+					};
+					created.push(publisher);
+					return publisher;
+				},
+			});
+
+			// Live incumbent: the bridge notes the owner but has no proof and no
+			// takeover refresh authorization yet.
+			bridge.bindSession(owner);
+			expect(reads.scans).toBe(1);
+			expect(successfulPublishes).toBe(0);
+
+			// Pass 1: the incumbent is proven dead, but the active durable rewrite's
+			// metadata read fails transiently. The store preserves the known compact
+			// entry for availability but reports an incomplete generation, so the
+			// bridge must not claim, publish, or consume the death proof.
+			faults.set(metaFile, transientFault("EIO"));
+			incumbentAlive = false;
+			expect(bridge.canProduceActivity(owner)).toBe(false);
+			expect(reads.scans).toBe(2);
+			const takeoverPublisher = created.at(-1)!;
+			expect(takeoverPublisher.writerDeathProven).toBe(true);
+			expect(successfulPublishes).toBe(0);
+			expect(manager.getSnapshots()).toEqual([expect.objectContaining({ id: settled.id, status: "completed" })]);
+			expect(fixturePublisher(owner, { rootDir: stateRoot }).getSnapshot()).toEqual([]);
+			expect(vi.getTimerCount()).toBe(2);
+
+			// The idle deferred takeover retry is armed: in-window time does not rescan,
+			// and crossing the backoff with the fault cleared performs the complete
+			// refresh that consumes the proof exactly once.
+			clock += 999;
+			await vi.advanceTimersByTimeAsync(999);
+			expect(reads.scans).toBe(2);
+			expect(successfulPublishes).toBe(0);
+			faults.clear();
+			clock += 1;
+			await vi.advanceTimersByTimeAsync(1);
+			expect(reads.scans).toBe(3);
+			expect(takeoverPublisher.writerDeathProven).toBe(false);
+			expect(successfulPublishes).toBe(1);
+			expect(manager.getSnapshots()).toEqual([expect.objectContaining({ id: settled.id, status: "running", pid: 9_001 })]);
+			expect(vi.getTimerCount()).toBeGreaterThanOrEqual(3);
+			expect(fixturePublisher(owner, { rootDir: stateRoot }).getSnapshot()).toEqual(expect.arrayContaining([
+				expect.objectContaining({ id: settled.id, status: "running", outputTail: "active output\n" }),
+			]));
+
+			bridge.bindSession(owner);
+			expect(reads.scans).toBe(3);
+			expect(successfulPublishes).toBe(1);
+		} finally {
+			bridge?.dispose();
+			manager?.detach();
+			vi.useRealTimers();
+		}
 	});
 
 	it("logs an incomplete takeover-refresh episode once until a complete scan resets it", () => {

@@ -16,6 +16,7 @@ const MANAGED_CONFIG_ITEMS = [
 	"mcp.json",
 	"models.json",
 	"sumocode.json",
+	"claude-accounts.json",
 	"xl0-pi-lovely-web.json",
 	"extensions",
 	"themes",

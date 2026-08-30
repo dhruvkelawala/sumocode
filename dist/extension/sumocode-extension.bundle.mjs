@@ -1,7 +1,7 @@
 // src/extension.ts
 import { existsSync as existsSync14, readFileSync as readFileSync18, realpathSync as realpathSync4 } from "node:fs";
 import { homedir as homedir16 } from "node:os";
-import { dirname as dirname14, join as join22, resolve as resolve7, sep } from "node:path";
+import { dirname as dirname14, join as join22, resolve as resolve8, sep } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 
 // src/cathedral/input-hints.ts
@@ -918,10 +918,10 @@ function refreshGitBranchAsync(ctx, runGit = defaultAsyncGitRunner) {
   });
 }
 function defaultAsyncGitRunner(args, cwd) {
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     execFile("git", args, { cwd, encoding: "utf8" }, (error, stdout) => {
       if (error) reject(error);
-      else resolve8(stdout);
+      else resolve9(stdout);
     });
   });
 }
@@ -3386,7 +3386,7 @@ var runSingleTask = async (options) => {
   }
   try {
     const args = [...applyForkSessionArgs(options.subprocessArgs, forkSession), options.subprocessPrompt];
-    const exitCode = await new Promise((resolve8) => {
+    const exitCode = await new Promise((resolve9) => {
       const proc = spawn("pi", args, {
         cwd: options.defaultCwd,
         shell: false,
@@ -3455,11 +3455,11 @@ var runSingleTask = async (options) => {
         if (buffer.trim()) processLine(buffer);
         currentResult.exitCode = code ?? 0;
         if (abortState.isAborted()) currentResult.stopReason = "aborted";
-        resolve8(code ?? 0);
+        resolve9(code ?? 0);
       });
       proc.on("error", () => {
         currentResult.exitCode = 1;
-        resolve8(1);
+        resolve9(1);
       });
     });
     currentResult.exitCode = exitCode;
@@ -5016,7 +5016,7 @@ import { writeFileSync as writeFileSync2 } from "node:fs";
 var SUMOCODE_RELOAD_EXIT_CODE = 100;
 var FLUSH_DELAY_MS = 60;
 function defaultDelay(ms) {
-  return new Promise((resolve8) => setTimeout(resolve8, ms));
+  return new Promise((resolve9) => setTimeout(resolve9, ms));
 }
 async function executeSumoReload(ctx, deps = {}) {
   const env = deps.env ?? process.env;
@@ -6115,7 +6115,7 @@ async function paneForTab(pi, tabId) {
     if (!listed.ok) return listed;
     const pane = listed.panes.find((candidate) => candidate.tab_id === tabId);
     if (pane?.pane_id) return { ok: true, pane };
-    if (attempt < 3) await new Promise((resolve8) => setTimeout(resolve8, 25));
+    if (attempt < 3) await new Promise((resolve9) => setTimeout(resolve9, 25));
   }
   return { ok: false, error: `herdr returned no pane for tab ${tabId}` };
 }
@@ -7201,6 +7201,7 @@ var MANAGED_CONFIG_ITEMS = [
   "mcp.json",
   "models.json",
   "sumocode.json",
+  "claude-accounts.json",
   "xl0-pi-lovely-web.json",
   "extensions",
   "themes",
@@ -8870,8 +8871,8 @@ var CancellableWorkerRuntime = class {
     const controller = new AbortController();
     let handle;
     let resolveResult;
-    const result = new Promise((resolve8) => {
-      resolveResult = resolve8;
+    const result = new Promise((resolve9) => {
+      resolveResult = resolve9;
     });
     const isCurrent = () => !options.exclusiveGroup || this.exclusiveWorkers.get(options.exclusiveGroup) === handle;
     handle = {
@@ -10000,8 +10001,8 @@ var CompactionStatusComponent = class {
   markComplete() {
     this.completed = true;
     this.tui.requestRender();
-    return new Promise((resolve8) => {
-      const t = setTimeout(resolve8, COMPLETE_HOLD_MS);
+    return new Promise((resolve9) => {
+      const t = setTimeout(resolve9, COMPLETE_HOLD_MS);
       t.unref?.();
     });
   }
@@ -10208,14 +10209,14 @@ var executeWindowsTaskkill = (args, callback) => {
   execFile4("taskkill.exe", [...args], (error) => callback(error));
 };
 function runWindowsTaskkill(pid, force, execute = executeWindowsTaskkill) {
-  return new Promise((resolve8) => {
+  return new Promise((resolve9) => {
     const args = ["/PID", String(pid), "/T", ...force ? ["/F"] : []];
     execute(args, (error) => {
       if (!error) {
-        resolve8({ ok: true, gone: true });
+        resolve9({ ok: true, gone: true });
         return;
       }
-      resolve8({ ok: false, gone: false, forceRequired: !force, error: error.message });
+      resolve9({ ok: false, gone: false, forceRequired: !force, error: error.message });
     });
   });
 }
@@ -10291,19 +10292,19 @@ var systemProcessTree = {
   },
   signalFreshTree: rawSystemSignal,
   waitForTreeEmpty(identity, timeoutMs, verification) {
-    return new Promise((resolve8) => {
+    return new Promise((resolve9) => {
       if (this.isTreeEmpty(identity, verification)) {
-        resolve8(true);
+        resolve9(true);
         return;
       }
       const deadline = Date.now() + Math.max(0, timeoutMs);
       const poll = () => {
         if (this.isTreeEmpty(identity, verification)) {
-          resolve8(true);
+          resolve9(true);
           return;
         }
         if (Date.now() >= deadline) {
-          resolve8(false);
+          resolve9(false);
           return;
         }
         const timer = setTimeout(poll, 25);
@@ -11982,7 +11983,7 @@ ${command}
       return task !== void 0 && isTerminalTaskSettled(task.status);
     });
     if (!complete2() && timeoutMs > 0) {
-      await new Promise((resolve8, reject) => {
+      await new Promise((resolve9, reject) => {
         let finished = false;
         let timer;
         let unsubscribe = () => {
@@ -11994,7 +11995,7 @@ ${command}
           unsubscribe();
           signal?.removeEventListener("abort", onAbort);
           if (error) reject(error);
-          else resolve8();
+          else resolve9();
         };
         const onAbort = () => finish(abortError());
         unsubscribe = this.addChangeListener(() => {
@@ -14406,8 +14407,8 @@ ${options.prompt}` : options.prompt;
   let interrupted = false;
   let settled = false;
   let markReady = () => void 0;
-  const ready = new Promise((resolve8) => {
-    markReady = resolve8;
+  const ready = new Promise((resolve9) => {
+    markReady = resolve9;
   });
   const clearWatcher = () => {
     if (!pollTimer) return;
@@ -14481,12 +14482,12 @@ ${options.prompt}` : options.prompt;
     fs3.renameSync(`${finalPath}.tmp`, finalPath);
     const ackPollMs = dependencies.sendAckPollMs ?? SEND_ACK_POLL_MS;
     const ackTimeoutMs = dependencies.sendAckTimeoutMs ?? SEND_ACK_TIMEOUT_MS;
-    return new Promise((resolve8, reject) => {
+    return new Promise((resolve9, reject) => {
       let elapsed2 = 0;
       const ackTimer = setInterval(() => {
         if (!fs3.existsSync(finalPath)) {
           clearInterval(ackTimer);
-          resolve8();
+          resolve9();
           return;
         }
         if (fs3.existsSync(paths.exitFile) && readText(paths.exitFile).trim()) {
@@ -15287,7 +15288,7 @@ var SubagentManager = class {
   }
   nextChange(signal) {
     if (signal?.aborted) return Promise.reject(new Error("Aborted"));
-    return new Promise((resolve8, reject) => {
+    return new Promise((resolve9, reject) => {
       let cleanup = () => void 0;
       const onAbort = () => {
         cleanup();
@@ -15295,7 +15296,7 @@ var SubagentManager = class {
       };
       const unsubscribe = this.addChangeListener(() => {
         cleanup();
-        resolve8();
+        resolve9();
       });
       cleanup = () => {
         unsubscribe();
@@ -15493,8 +15494,8 @@ var SubagentManager = class {
   async reserveVisibleSpawn() {
     const previous = this.visibleSpawnTail;
     let release = () => void 0;
-    this.visibleSpawnTail = new Promise((resolve8) => {
-      release = resolve8;
+    this.visibleSpawnTail = new Promise((resolve9) => {
+      release = resolve9;
     });
     await previous;
     return release;
@@ -15634,8 +15635,8 @@ var SubagentManager = class {
           startedAt: snapshot.createdAt,
           worktree: snapshot.worktree
         }).catch(() => fallback),
-        new Promise((resolve8) => {
-          timeout = setTimeout(() => resolve8(fallback), MANIFEST_TIMEOUT_MS);
+        new Promise((resolve9) => {
+          timeout = setTimeout(() => resolve9(fallback), MANIFEST_TIMEOUT_MS);
         })
       ]);
     } finally {
@@ -15644,7 +15645,7 @@ var SubagentManager = class {
   }
   waitForSettle(id, timeoutMs) {
     if (isSettled(this.snapshots.get(id))) return Promise.resolve();
-    return new Promise((resolve8, reject) => {
+    return new Promise((resolve9, reject) => {
       const timeout = setTimeout(() => {
         unsubscribe();
         reject(new Error("cancel timeout"));
@@ -15654,7 +15655,7 @@ var SubagentManager = class {
         if (snapshot && isSettled(snapshot)) {
           clearTimeout(timeout);
           unsubscribe();
-          resolve8();
+          resolve9();
         }
       });
     });
@@ -16728,9 +16729,9 @@ function registerRpcLoginCommand(pi, deps = {}) {
 
 // src/commands/accounts.ts
 import { execFile as execFile7 } from "node:child_process";
-import { existsSync as existsSync13, mkdirSync as mkdirSync10, readFileSync as readFileSync17, renameSync as renameSync7, writeFileSync as writeFileSync10 } from "node:fs";
+import { existsSync as existsSync13, lstatSync as lstatSync4, mkdirSync as mkdirSync10, readFileSync as readFileSync17, readlinkSync, renameSync as renameSync7, writeFileSync as writeFileSync10 } from "node:fs";
 import { homedir as homedir15 } from "node:os";
-import { dirname as dirname13, join as join21 } from "node:path";
+import { dirname as dirname13, join as join21, resolve as resolve7 } from "node:path";
 import { promisify as promisify5 } from "node:util";
 var ACCOUNTS_CONFIG_FILE = "claude-accounts.json";
 var LEGACY_CONFIG_FILE = "multi-pass.json";
@@ -16741,6 +16742,21 @@ function resolveAgentDir(deps) {
 }
 function resolveAccountsConfigPath(deps = {}) {
   return join21(resolveAgentDir(deps), ACCOUNTS_CONFIG_FILE);
+}
+function resolveAccountsWritePath(deps) {
+  const targetPath = resolveAccountsConfigPath(deps);
+  let targetStat;
+  try {
+    targetStat = lstatSync4(targetPath);
+  } catch {
+    return targetPath;
+  }
+  if (!targetStat.isSymbolicLink()) return targetPath;
+  const linkTarget = resolve7(dirname13(targetPath), readlinkSync(targetPath));
+  const privateConfigDir = resolve7(deps.env?.SUMOCODE_CONFIG_DIR ?? process.env.SUMOCODE_CONFIG_DIR ?? join21(deps.homeDir ?? homedir15(), ".config", "sumocode"));
+  const managedTarget = join21(privateConfigDir, ACCOUNTS_CONFIG_FILE);
+  if (linkTarget !== managedTarget) throw new Error(`Refusing to write accounts through an unmanaged symlink: ${targetPath}`);
+  return managedTarget;
 }
 function resolveLegacyConfigPath(deps) {
   return join21(resolveAgentDir(deps), LEGACY_CONFIG_FILE);
@@ -16777,6 +16793,7 @@ function loadClaudeSubscriptions(deps = {}) {
 }
 function saveClaudeSubscriptions(subscriptions, deps = {}) {
   const path2 = resolveAccountsConfigPath(deps);
+  const writePath = resolveAccountsWritePath(deps);
   const document = readDocument(path2);
   const existing = Array.isArray(document.subscriptions) ? document.subscriptions : [];
   const nonClaude = existing.filter((entry) => parseSubscription(entry)?.provider !== "anthropic");
@@ -16784,11 +16801,11 @@ function saveClaudeSubscriptions(subscriptions, deps = {}) {
     ...document,
     subscriptions: [...nonClaude, ...subscriptions]
   };
-  mkdirSync10(dirname13(path2), { recursive: true, mode: 448 });
-  const temporary = `${path2}.${process.pid}.tmp`;
+  mkdirSync10(dirname13(writePath), { recursive: true, mode: 448 });
+  const temporary = `${writePath}.${process.pid}.tmp`;
   writeFileSync10(temporary, `${JSON.stringify(next, null, 2)}
 `, { encoding: "utf8", mode: 384 });
-  renameSync7(temporary, path2);
+  renameSync7(temporary, writePath);
 }
 function nextIndex(subscriptions) {
   const used = new Set(subscriptions.map((entry) => entry.index));
@@ -16988,7 +17005,7 @@ function socketEndpoint(path2) {
   return process.platform === "win32" ? `\\\\.\\pipe\\${path2}` : path2;
 }
 function sendSocketRequestAttempt(path2, request, timeoutMs) {
-  return new Promise((resolve8) => {
+  return new Promise((resolve9) => {
     let settled = false;
     let timeout;
     const socket = net.createConnection(socketEndpoint(path2));
@@ -16997,7 +17014,7 @@ function sendSocketRequestAttempt(path2, request, timeoutMs) {
       settled = true;
       if (timeout) clearTimeout(timeout);
       socket.destroy();
-      resolve8(delivered);
+      resolve9(delivered);
     };
     socket.on("error", () => finish(false));
     socket.on("connect", () => socket.write(`${JSON.stringify(request)}
@@ -17376,7 +17393,7 @@ function canonicalize(path2, realpath) {
   try {
     return realpath(path2);
   } catch {
-    return resolve7(path2);
+    return resolve8(path2);
   }
 }
 function moduleUrlToPath2(moduleUrl) {
@@ -17387,8 +17404,8 @@ function moduleUrlToPath2(moduleUrl) {
   }
 }
 function isInstalledPiAgentGitModule(moduleUrl, homeDir = homedir16()) {
-  const modulePath = resolve7(moduleUrlToPath2(moduleUrl));
-  const agentGitRoot = `${resolve7(homeDir, ".pi", "agent", "git")}${sep}`;
+  const modulePath = resolve8(moduleUrlToPath2(moduleUrl));
+  const agentGitRoot = `${resolve8(homeDir, ".pi", "agent", "git")}${sep}`;
   return modulePath.startsWith(agentGitRoot);
 }
 function packageNameAt2(dir, exists, readFile) {
@@ -17414,7 +17431,7 @@ function packageRootFromModulePath(modulePath, exists, readFile) {
 function findActiveSumoDevTree2(cwd, options = {}) {
   const exists = options.exists ?? existsSync14;
   const readFile = options.readFile ?? ((path2, encoding) => readFileSync18(path2, encoding));
-  let current = resolve7(cwd);
+  let current = resolve8(cwd);
   while (true) {
     const isSumocodePackage = packageNameAt2(current, exists, readFile) === SUMOCODE_PACKAGE_NAME;
     const hasExtensionSource = exists(join22(current, "src", "extension.ts"));

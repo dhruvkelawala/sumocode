@@ -1,8 +1,8 @@
 // oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof, anti-slop/no-unsafe-dictionary-type -- account-config boundary parser: claude-accounts.json (and the legacy multi-pass.json it migrates from) are untrusted user-authored JSON; the typeof predicates below are the sanctioned parse and unknown keys must survive round-trips untouched.
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { executeSumoReload } from "./reload.js";
@@ -61,6 +61,22 @@ export function resolveAccountsConfigPath(deps: AccountsCommandDeps = {}): strin
 	return join(resolveAgentDir(deps), ACCOUNTS_CONFIG_FILE);
 }
 
+function resolveAccountsWritePath(deps: AccountsCommandDeps): string {
+	const targetPath = resolveAccountsConfigPath(deps);
+	let targetStat: ReturnType<typeof lstatSync>;
+	try {
+		targetStat = lstatSync(targetPath);
+	} catch {
+		return targetPath;
+	}
+	if (!targetStat.isSymbolicLink()) return targetPath;
+	const linkTarget = resolve(dirname(targetPath), readlinkSync(targetPath));
+	const privateConfigDir = resolve(deps.env?.SUMOCODE_CONFIG_DIR ?? process.env.SUMOCODE_CONFIG_DIR ?? join(deps.homeDir ?? homedir(), ".config", "sumocode"));
+	const managedTarget = join(privateConfigDir, ACCOUNTS_CONFIG_FILE);
+	if (linkTarget !== managedTarget) throw new Error(`Refusing to write accounts through an unmanaged symlink: ${targetPath}`);
+	return managedTarget;
+}
+
 function resolveLegacyConfigPath(deps: AccountsCommandDeps): string {
 	return join(resolveAgentDir(deps), LEGACY_CONFIG_FILE);
 }
@@ -110,6 +126,7 @@ export function loadClaudeSubscriptions(deps: AccountsCommandDeps = {}): ClaudeS
 
 export function saveClaudeSubscriptions(subscriptions: readonly ClaudeSubscription[], deps: AccountsCommandDeps = {}): void {
 	const path = resolveAccountsConfigPath(deps);
+	const writePath = resolveAccountsWritePath(deps);
 	const document = readDocument(path);
 	const existing = Array.isArray(document.subscriptions) ? document.subscriptions : [];
 	const nonClaude = existing.filter((entry) => parseSubscription(entry)?.provider !== "anthropic");
@@ -117,10 +134,10 @@ export function saveClaudeSubscriptions(subscriptions: readonly ClaudeSubscripti
 		...document,
 		subscriptions: [...nonClaude, ...subscriptions],
 	};
-	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-	const temporary = `${path}.${process.pid}.tmp`;
+	mkdirSync(dirname(writePath), { recursive: true, mode: 0o700 });
+	const temporary = `${writePath}.${process.pid}.tmp`;
 	writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-	renameSync(temporary, path);
+	renameSync(temporary, writePath);
 }
 
 function nextIndex(subscriptions: readonly ClaudeSubscription[]): number {

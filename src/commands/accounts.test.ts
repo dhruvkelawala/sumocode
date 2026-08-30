@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -212,6 +212,46 @@ describe("saveClaudeSubscriptions", () => {
 	});
 });
 
+
+describe("saveClaudeSubscriptions symlink handling", () => {
+	it("preserves the managed private-config symlink and atomically updates its target", () => {
+		const agentDir = tempAgentDir();
+		const configDir = tempAgentDir();
+		const target = join(agentDir, "claude-accounts.json");
+		const source = join(configDir, "claude-accounts.json");
+		writeFileSync(source, JSON.stringify({ unknownFutureKey: "keep", subscriptions: [] }), { mode: 0o600 });
+		symlinkSync(source, target);
+
+		saveClaudeSubscriptions([{ provider: "anthropic", index: 2, label: "company" }], {
+			agentDir,
+			env: { SUMOCODE_CONFIG_DIR: configDir },
+		});
+
+		expect(lstatSync(target).isSymbolicLink()).toBe(true);
+		expect(readlinkSync(target)).toBe(source);
+		expect(JSON.parse(readFileSync(source, "utf8"))).toEqual({
+			unknownFutureKey: "keep",
+			subscriptions: [{ provider: "anthropic", index: 2, label: "company" }],
+		});
+	});
+
+	it("refuses to write through an unmanaged accounts symlink", () => {
+		const agentDir = tempAgentDir();
+		const configDir = tempAgentDir();
+		const externalDir = tempAgentDir();
+		const target = join(agentDir, "claude-accounts.json");
+		const external = join(externalDir, "outside.json");
+		writeFileSync(external, JSON.stringify({ subscriptions: [] }));
+		symlinkSync(external, target);
+
+		expect(() => saveClaudeSubscriptions([{ provider: "anthropic", index: 2 }], {
+			agentDir,
+			env: { SUMOCODE_CONFIG_DIR: configDir },
+		})).toThrow(/unmanaged symlink/);
+		expect(readFileSync(external, "utf8")).toBe(JSON.stringify({ subscriptions: [] }));
+		expect(lstatSync(target).isSymbolicLink()).toBe(true);
+	});
+});
 
 describe("isAdapterInstalled", () => {
 	it("detects the exact pinned source in string-form packages entries", () => {

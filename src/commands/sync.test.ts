@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -159,6 +159,62 @@ describe("/sumo:sync", () => {
 		expect(linkConfig).not.toHaveBeenCalled();
 		expect(context.ui.notify).toHaveBeenLastCalledWith("/sumo:sync failed at config repo git pull", "warning");
 		expect(stdout).not.toHaveBeenCalled();
+		stdout.mockRestore();
+	});
+
+	it("creates and links the private accounts source when the config repo does not have one yet", async () => {
+		const home = mkdtempSync(join(tmpdir(), "sumocode-sync-"));
+		const configRepo = join(home, ".config", "sumocode");
+		const agentDir = join(home, ".pi", "agent");
+		mkdirSync(join(configRepo, ".git"), { recursive: true });
+
+		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
+		await executeSumoSync(ctx() as never, {
+			env: {},
+			homeDir: home,
+			cwd: "/repo/sumocode",
+			moduleUrl: "file:///repo/sumocode/src/commands/sync.ts",
+			exists: (path) => path === join(configRepo, ".git") || sumocodeRepoExists(path),
+			readFile: () => JSON.stringify({ name: "@dhruvkelawala/sumocode" }),
+			exec: async () => ({ stdout: "", stderr: "" }),
+		});
+
+		const source = join(configRepo, "claude-accounts.json");
+		const target = join(agentDir, "claude-accounts.json");
+		expect(JSON.parse(readFileSync(source, "utf8"))).toEqual({ subscriptions: [] });
+		expect(statSync(source).mode & 0o777).toBe(0o600);
+		expect(lstatSync(target).isSymbolicLink()).toBe(true);
+		expect(readlinkSync(target)).toBe(source);
+		stdout.mockRestore();
+	});
+
+	it("migrates an existing regular accounts file into the private source before linking", async () => {
+		const home = mkdtempSync(join(tmpdir(), "sumocode-sync-"));
+		const configRepo = join(home, ".config", "sumocode");
+		const agentDir = join(home, ".pi", "agent");
+		mkdirSync(join(configRepo, ".git"), { recursive: true });
+		mkdirSync(agentDir, { recursive: true });
+		const existing = `${JSON.stringify({ subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] }, null, 2)}\n`;
+		writeFileSync(join(agentDir, "claude-accounts.json"), existing);
+
+		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
+		await executeSumoSync(ctx() as never, {
+			env: {},
+			homeDir: home,
+			cwd: "/repo/sumocode",
+			moduleUrl: "file:///repo/sumocode/src/commands/sync.ts",
+			exists: (path) => path === join(configRepo, ".git") || sumocodeRepoExists(path),
+			readFile: () => JSON.stringify({ name: "@dhruvkelawala/sumocode" }),
+			exec: async () => ({ stdout: "", stderr: "" }),
+		});
+
+		const source = join(configRepo, "claude-accounts.json");
+		const target = join(agentDir, "claude-accounts.json");
+		expect(readFileSync(source, "utf8")).toBe(existing);
+		expect(lstatSync(target).isSymbolicLink()).toBe(true);
+		expect(readlinkSync(target)).toBe(source);
 		stdout.mockRestore();
 	});
 

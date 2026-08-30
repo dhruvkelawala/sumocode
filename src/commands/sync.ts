@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -138,6 +138,17 @@ function resolvesToSamePath(left: string, right: string): boolean {
 	}
 }
 
+function initialManagedConfigContent(item: typeof MANAGED_CONFIG_ITEMS[number], target: string): string | undefined {
+	if (item !== "claude-accounts.json") return undefined;
+	try {
+		const targetStat = lstatSync(target);
+		if (targetStat.isFile() && !targetStat.isSymbolicLink()) return readFileSync(target, "utf8");
+	} catch {
+		// No regular target to migrate: initialize the adapter-native document.
+	}
+	return `${JSON.stringify({ subscriptions: [] }, null, 2)}\n`;
+}
+
 function ensureConfigSymlinks(configRepo: string, agentDir: string): SyncStepResult {
 	mkdirSync(agentDir, { recursive: true });
 	let backupDir: string | undefined;
@@ -146,9 +157,13 @@ function ensureConfigSymlinks(configRepo: string, agentDir: string): SyncStepRes
 
 	for (const item of MANAGED_CONFIG_ITEMS) {
 		const source = join(configRepo, item);
-		if (!pathExists(source)) continue;
-
 		const target = join(agentDir, item);
+		if (!pathExists(source)) {
+			const initialContent = initialManagedConfigContent(item, target);
+			if (initialContent === undefined) continue;
+			writeFileSync(source, initialContent, { encoding: "utf8", mode: 0o600 });
+		}
+
 		if (pathExists(target)) {
 			if (resolvesToSamePath(source, target)) {
 				linked += 1;

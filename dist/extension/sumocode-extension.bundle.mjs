@@ -7186,7 +7186,7 @@ function registerSpinnerCommand(pi) {
 
 // src/commands/sync.ts
 import { execFile as execFileCallback } from "node:child_process";
-import { existsSync as existsSync4, lstatSync, mkdirSync as mkdirSync4, readFileSync as readFileSync6, realpathSync, renameSync as renameSync2, rmSync, symlinkSync } from "node:fs";
+import { existsSync as existsSync4, lstatSync, mkdirSync as mkdirSync4, readFileSync as readFileSync6, realpathSync, renameSync as renameSync2, rmSync, symlinkSync, writeFileSync as writeFileSync4 } from "node:fs";
 import { homedir as homedir7 } from "node:os";
 import { dirname as dirname3, join as join6, resolve as resolve2 } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7284,6 +7284,16 @@ function resolvesToSamePath(left, right) {
     return false;
   }
 }
+function initialManagedConfigContent(item, target) {
+  if (item !== "claude-accounts.json") return void 0;
+  try {
+    const targetStat = lstatSync(target);
+    if (targetStat.isFile() && !targetStat.isSymbolicLink()) return readFileSync6(target, "utf8");
+  } catch {
+  }
+  return `${JSON.stringify({ subscriptions: [] }, null, 2)}
+`;
+}
 function ensureConfigSymlinks(configRepo, agentDir) {
   mkdirSync4(agentDir, { recursive: true });
   let backupDir;
@@ -7291,8 +7301,12 @@ function ensureConfigSymlinks(configRepo, agentDir) {
   let backedUp = 0;
   for (const item of MANAGED_CONFIG_ITEMS) {
     const source = join6(configRepo, item);
-    if (!pathExists(source)) continue;
     const target = join6(agentDir, item);
+    if (!pathExists(source)) {
+      const initialContent = initialManagedConfigContent(item, target);
+      if (initialContent === void 0) continue;
+      writeFileSync4(source, initialContent, { encoding: "utf8", mode: 384 });
+    }
     if (pathExists(target)) {
       if (resolvesToSamePath(source, target)) {
         linked += 1;
@@ -7439,7 +7453,7 @@ function registerSumoSyncCommand(pi, deps = {}) {
 }
 
 // src/commands/tabs.ts
-import { existsSync as existsSync5, readFileSync as readFileSync7, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync5, readFileSync as readFileSync7, writeFileSync as writeFileSync5 } from "node:fs";
 import { homedir as homedir8 } from "node:os";
 import { join as join7 } from "node:path";
 var TABS_LOCAL_CONFIG_KEY = "topChromeHidden";
@@ -7469,7 +7483,7 @@ function setTopChromeHidden(hidden, configPath = DEFAULT_TABS_CONFIG_PATH) {
     parsed = {};
   }
   parsed[TABS_LOCAL_CONFIG_KEY] = hidden;
-  writeFileSync4(configPath, `${JSON.stringify(parsed, null, 2)}
+  writeFileSync5(configPath, `${JSON.stringify(parsed, null, 2)}
 `);
 }
 function registerTabsCommand(pi, options = {}) {
@@ -10073,7 +10087,7 @@ import {
   openSync as openSync2,
   readFileSync as readFileSync12,
   readSync,
-  writeFileSync as writeFileSync6
+  writeFileSync as writeFileSync7
 } from "node:fs";
 import { dirname as dirname8, join as join14 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
@@ -10366,7 +10380,7 @@ import {
   renameSync as renameSync3,
   rmSync as rmSync2,
   unlinkSync,
-  writeFileSync as writeFileSync5
+  writeFileSync as writeFileSync6
 } from "node:fs";
 import { homedir as homedir12 } from "node:os";
 import { basename as basename4, dirname as dirname6, isAbsolute, join as join12, relative, resolve as resolve4 } from "node:path";
@@ -11164,7 +11178,7 @@ function writeExclusivePrivateFile(path2, contents) {
   const descriptor = openSync(path2, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NO_FOLLOW, PRIVATE_FILE_MODE);
   try {
     fchmodSync(descriptor, PRIVATE_FILE_MODE);
-    writeFileSync5(descriptor, contents, "utf8");
+    writeFileSync6(descriptor, contents, "utf8");
     fsyncSync(descriptor);
   } finally {
     closeSync(descriptor);
@@ -11176,7 +11190,7 @@ function atomicWriteJson(path2, value) {
   try {
     descriptor = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NO_FOLLOW, PRIVATE_FILE_MODE);
     fchmodSync(descriptor, PRIVATE_FILE_MODE);
-    writeFileSync5(descriptor, `${JSON.stringify(value, null, 2)}
+    writeFileSync6(descriptor, `${JSON.stringify(value, null, 2)}
 `, "utf8");
     fsyncSync(descriptor);
     closeSync(descriptor);
@@ -11610,7 +11624,7 @@ function createPrivateFile(store, path2, contents) {
   const descriptor = openSync2(path2, constants2.O_WRONLY | constants2.O_CREAT | constants2.O_EXCL | NO_FOLLOW2, PRIVATE_FILE_MODE2);
   try {
     fchmodSync2(descriptor, PRIVATE_FILE_MODE2);
-    writeFileSync6(descriptor, contents, "utf8");
+    writeFileSync7(descriptor, contents, "utf8");
   } finally {
     closeSync2(descriptor);
   }
@@ -11695,7 +11709,7 @@ function capSettledLog(store, path2, maxBytes) {
     descriptor = openPrivateFile(store, path2, constants2.O_WRONLY);
     try {
       ftruncateSync(descriptor, 0);
-      writeFileSync6(descriptor, `${marker}${tail}`.slice(-maxBytes), "utf8");
+      writeFileSync7(descriptor, `${marker}${tail}`.slice(-maxBytes), "utf8");
     } finally {
       closeSync2(descriptor);
     }
@@ -11706,7 +11720,7 @@ function appendPrivateFile(store, path2, contents) {
   let descriptor;
   try {
     descriptor = openPrivateFile(store, path2, constants2.O_WRONLY | constants2.O_APPEND);
-    writeFileSync6(descriptor, contents, "utf8");
+    writeFileSync7(descriptor, contents, "utf8");
   } catch {
   } finally {
     if (descriptor !== void 0) closeSync2(descriptor);
@@ -13120,7 +13134,7 @@ import {
   realpathSync as realpathSync3,
   renameSync as renameSync4,
   unlinkSync as unlinkSync2,
-  writeFileSync as writeFileSync7
+  writeFileSync as writeFileSync8
 } from "node:fs";
 import { homedir as homedir13 } from "node:os";
 import { basename as basename5, dirname as dirname9, join as join15, resolve as resolve5 } from "node:path";
@@ -13268,7 +13282,7 @@ function writePrivateJsonExclusive(path2, value) {
   try {
     descriptor = openSync3(temporary, constants3.O_WRONLY | constants3.O_CREAT | constants3.O_EXCL | NO_FOLLOW3, PRIVATE_ACTIVITY_FILE_MODE);
     fchmodSync3(descriptor, PRIVATE_ACTIVITY_FILE_MODE);
-    writeFileSync7(descriptor, `${JSON.stringify(value, null, 2)}
+    writeFileSync8(descriptor, `${JSON.stringify(value, null, 2)}
 `, "utf8");
     fsyncSync2(descriptor);
     closeSync3(descriptor);
@@ -13299,7 +13313,7 @@ function atomicWritePrivateJson(path2, value) {
   try {
     descriptor = openSync3(temporary, constants3.O_WRONLY | constants3.O_CREAT | constants3.O_EXCL | NO_FOLLOW3, PRIVATE_ACTIVITY_FILE_MODE);
     fchmodSync3(descriptor, PRIVATE_ACTIVITY_FILE_MODE);
-    writeFileSync7(descriptor, `${JSON.stringify(value, null, 2)}
+    writeFileSync8(descriptor, `${JSON.stringify(value, null, 2)}
 `, "utf8");
     fsyncSync2(descriptor);
     closeSync3(descriptor);
@@ -14346,7 +14360,7 @@ import {
   mkdirSync as mkdirSync9,
   readFileSync as readFileSync14,
   renameSync as renameSync6,
-  writeFileSync as writeFileSync8
+  writeFileSync as writeFileSync9
 } from "node:fs";
 import { dirname as dirname11, join as join17 } from "node:path";
 var RESPONSE_POLL_INTERVAL_MS = 750;
@@ -14361,7 +14375,7 @@ var nodeFs = {
   mkdirSync: mkdirSync9,
   readFileSync: readFileSync14,
   renameSync: renameSync6,
-  writeFileSync: writeFileSync8
+  writeFileSync: writeFileSync9
 };
 var errorText2 = (error) => error instanceof Error ? error.message : String(error);
 var createPaneChildSpawner = (dependencies = {}) => (options) => {
@@ -16217,7 +16231,7 @@ function installSubagents(pi, options = {}) {
 }
 
 // src/task-mode.ts
-import { appendFileSync as appendFileSync3, existsSync as existsSync12, readdirSync as readdirSync4, readFileSync as readFileSync16, unlinkSync as unlinkSync3, writeFileSync as writeFileSync9 } from "node:fs";
+import { appendFileSync as appendFileSync3, existsSync as existsSync12, readdirSync as readdirSync4, readFileSync as readFileSync16, unlinkSync as unlinkSync3, writeFileSync as writeFileSync10 } from "node:fs";
 import { join as join20 } from "node:path";
 var TASK_MARKER_ENV_KEYS = [
   "SUMOCODE_TASK_RESPONSE_FILE",
@@ -16281,7 +16295,7 @@ function persistResponse(messages) {
     return;
   }
   try {
-    writeFileSync9(file, `${text}
+    writeFileSync10(file, `${text}
 `);
     diagLog("response_written", { file, bytes: text.length });
   } catch (error) {
@@ -16294,7 +16308,7 @@ function writeTaskExitMarker(code, env = process.env) {
   const file = env.SUMOCODE_TASK_EXIT_FILE;
   if (!file) return;
   try {
-    writeFileSync9(file, `${code}
+    writeFileSync10(file, `${code}
 `);
     diagLog("exit_marker_written", { file, code });
   } catch (error) {
@@ -16307,7 +16321,7 @@ function writeTaskStartedMarker(env = process.env) {
   const file = env.SUMOCODE_TASK_STARTED_FILE;
   if (!file) return;
   try {
-    writeFileSync9(file, `${process.pid}
+    writeFileSync10(file, `${process.pid}
 `);
     diagLog("started_marker_written", { file });
   } catch (error) {
@@ -16729,7 +16743,7 @@ function registerRpcLoginCommand(pi, deps = {}) {
 
 // src/commands/accounts.ts
 import { execFile as execFile7 } from "node:child_process";
-import { existsSync as existsSync13, lstatSync as lstatSync4, mkdirSync as mkdirSync10, readFileSync as readFileSync17, readlinkSync, renameSync as renameSync7, writeFileSync as writeFileSync10 } from "node:fs";
+import { existsSync as existsSync13, lstatSync as lstatSync4, mkdirSync as mkdirSync10, readFileSync as readFileSync17, readlinkSync, renameSync as renameSync7, writeFileSync as writeFileSync11 } from "node:fs";
 import { homedir as homedir15 } from "node:os";
 import { dirname as dirname13, join as join21, resolve as resolve7 } from "node:path";
 import { promisify as promisify5 } from "node:util";
@@ -16803,7 +16817,7 @@ function saveClaudeSubscriptions(subscriptions, deps = {}) {
   };
   mkdirSync10(dirname13(writePath), { recursive: true, mode: 448 });
   const temporary = `${writePath}.${process.pid}.tmp`;
-  writeFileSync10(temporary, `${JSON.stringify(next, null, 2)}
+  writeFileSync11(temporary, `${JSON.stringify(next, null, 2)}
 `, { encoding: "utf8", mode: 384 });
   renameSync7(temporary, writePath);
 }

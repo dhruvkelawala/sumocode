@@ -1139,6 +1139,35 @@ describe("ActivityManagerBridge", () => {
 		expect(vi.getTimerCount()).toBe(0);
 	});
 
+	it("arms terminal output polling when listener adoption sees running work before publication completes", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(25_000);
+		const stateRoot = root();
+		const terminals = new FakeTerminalManager();
+		let throwOnOwnedSessions = false;
+		const bridge = new ActivityManagerBridge(terminals, new FakeSubagentManager(), {
+			rootDir: stateRoot,
+			terminalOutputPollMs: 250,
+			writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
+			sessionOwnership: {
+				ownedSessionIds: () => {
+					if (throwOnOwnedSessions) throw new Error("publish blocked after adoption");
+					return [];
+				},
+				claim: (_owner: string, _token: string) => true,
+				release: (_owner: string, _token: string) => undefined,
+			},
+		});
+		expect(vi.getTimerCount()).toBe(1);
+
+		terminals.snapshots = [terminal("term-listener-adoption", "session-listener-adoption")];
+		throwOnOwnedSessions = true;
+		expect(() => terminals.emit()).toThrow("publish blocked after adoption");
+		expect(vi.getTimerCount()).toBe(2);
+		bridge.dispose();
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
 	it("does not arm an idle takeover retry timer while running-terminal polling retries", async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(30_000);

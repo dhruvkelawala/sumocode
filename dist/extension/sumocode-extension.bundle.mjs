@@ -15042,6 +15042,7 @@ var ActivityManagerBridge = class {
     for (const key of this.terminalOutputCache.keys()) {
       if (!retainedKeys.has(key)) this.terminalOutputCache.delete(key);
     }
+    this.syncTerminalOutputPoll();
   }
   terminalCacheKey(task) {
     return `${task.ownerSessionId}\0${task.id}`;

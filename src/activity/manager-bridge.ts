@@ -603,6 +603,7 @@ export class ActivityManagerBridge {
 		for (const key of this.terminalOutputCache.keys()) {
 			if (!retainedKeys.has(key)) this.terminalOutputCache.delete(key);
 		}
+		this.syncTerminalOutputPoll();
 	}
 
 	private terminalCacheKey(task: Pick<TerminalTaskSnapshot, "id" | "ownerSessionId">): string {

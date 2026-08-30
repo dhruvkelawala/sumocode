@@ -44,6 +44,17 @@ export type TerminalTaskStoreReadKind = "full-scan" | "metadata";
 export interface TerminalTaskIndexRefreshResult {
 	/** false when the store directory could not be read; the last good index generation is preserved. */
 	readonly ok: boolean;
+	/**
+	 * Generation completeness. False when the directory read failed or when any
+	 * transient per-file read prevented indexing a candidate the prior index did
+	 * not already preserve; a known record's transient read counts as complete
+	 * coverage of that id (its prior entry is retained and reported through
+	 * `preservedIds`), while corrupt, duplicate, and legacy quarantines are
+	 * terminal decisions that never make a generation incomplete. Callers that
+	 * must guarantee eventual visibility of every durable record — the manager's
+	 * index initialization — keep retrying until a complete scan lands.
+	 */
+	readonly complete: boolean;
 	readonly snapshots: readonly TerminalTaskSnapshot[];
 	/**
 	 * Ids whose metadata read failed transiently but whose prior path and compact
@@ -515,7 +526,7 @@ export class TerminalTaskStore {
 				this.refreshFailureDiagnosed = true;
 				this.diagnostic("io", this.rootDir, error);
 			}
-			return { ok: false, snapshots: [] };
+			return { ok: false, complete: false, snapshots: [] };
 		}
 		// The prior path→id reverse index is built lazily on the first transient
 		// read: a scan without transient failures never pays the O(index) build,
@@ -533,6 +544,11 @@ export class TerminalTaskStore {
 		};
 		const snapshots: TerminalTaskSnapshot[] = [];
 		const paths = new Map<string, string>();
+		// Whether this successful scan indexed every candidate it could have: a
+		// transient read of a record unknown to the prior index skips it, so the
+		// generation is reported incomplete and freshness-boundary callers keep
+		// retrying until a scan reads it.
+		let generationComplete = true;
 		// Prior compact entries must be captured during the scan: replaceIndex
 		// clears the derived maps before the retained entries are re-applied.
 		const preservedEntries: IndexedTerminalTask[] = [];
@@ -563,6 +579,10 @@ export class TerminalTaskStore {
 					preservedEntries.push(priorEntry);
 					paths.set(priorEntry.id, metaPath);
 				}
+				// A preserved known record keeps this generation's coverage of its id
+				// complete; a candidate the prior index does not know is skipped
+				// unindexed, so the generation is incomplete.
+				if (!priorEntry) generationComplete = false;
 				continue;
 			}
 			if (read.kind === "invalid") continue;
@@ -594,7 +614,7 @@ export class TerminalTaskStore {
 		// A successful scan ends the failure episode: the next failure is
 		// diagnosed again.
 		this.refreshFailureDiagnosed = false;
-		return { ok: true, snapshots, preservedIds: preservedEntries.map((entry) => entry.id) };
+		return { ok: true, complete: generationComplete, snapshots, preservedIds: preservedEntries.map((entry) => entry.id) };
 	}
 
 	/** O(1) no-I/O owner membership check against the compact index. */

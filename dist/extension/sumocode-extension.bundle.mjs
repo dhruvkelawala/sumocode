@@ -11384,7 +11384,7 @@ var TerminalTaskStore = class {
         this.refreshFailureDiagnosed = true;
         this.diagnostic("io", this.rootDir, error);
       }
-      return { ok: false, snapshots: [] };
+      return { ok: false, complete: false, snapshots: [] };
     }
     let priorIdByPath;
     const priorIdForPath = (path2) => {
@@ -11398,6 +11398,7 @@ var TerminalTaskStore = class {
     };
     const snapshots = [];
     const paths = /* @__PURE__ */ new Map();
+    let generationComplete = true;
     const preservedEntries = [];
     for (const entry of entries) {
       const taskDirectory = join12(this.rootDir, entry.name);
@@ -11422,6 +11423,7 @@ var TerminalTaskStore = class {
           preservedEntries.push(priorEntry);
           paths.set(priorEntry.id, metaPath);
         }
+        if (!priorEntry) generationComplete = false;
         continue;
       }
       if (read.kind === "invalid") continue;
@@ -11444,7 +11446,7 @@ var TerminalTaskStore = class {
       this.ownerMembership(priorEntry).add(priorEntry.id);
     }
     this.refreshFailureDiagnosed = false;
-    return { ok: true, snapshots, preservedIds: preservedEntries.map((entry) => entry.id) };
+    return { ok: true, complete: generationComplete, snapshots, preservedIds: preservedEntries.map((entry) => entry.id) };
   }
   /** O(1) no-I/O owner membership check against the compact index. */
   isIndexedOwner(id, ownerSessionId2) {
@@ -12097,7 +12099,13 @@ var TerminalTaskManager = class {
    */
   projectionPublishDeferred = false;
   detached = false;
-  /** False until one successful full scan seeds the retained projection generation. */
+  /**
+   * False until one complete successful scan seeds the retained projection
+   * generation. An incomplete successful scan (a candidate unknown to the
+   * prior index hit a transient read) serves its indexed generation
+   * immediately but keeps this false so init retries stay armed until a
+   * complete scan lands.
+   */
   indexInitialized = false;
   /** True while the lazy seeding scan runs, so a listener fanned out by it cannot re-enter. */
   indexInitInFlight = false;
@@ -12124,11 +12132,12 @@ var TerminalTaskManager = class {
     this.onRefreshRecover = options.onRefreshRecover;
     const initialization = this.store.refreshIndex();
     if (initialization.ok) {
-      this.indexInitialized = true;
+      this.indexInitialized = initialization.complete;
       for (const snapshot of initialization.snapshots) {
         this.adopt(snapshot, false);
         this.recover(snapshot);
       }
+      if (!initialization.complete) this.diagnoseIndexInitFailure(true);
     } else {
       this.diagnoseIndexInitFailure();
     }
@@ -12519,7 +12528,12 @@ ${command}
    * manager is detached (no scan, therefore no provable freshness): the
    * previous projection generation stays authoritative and callers must treat
    * freshness as unproven instead of adopting the returned snapshots, and
-   * takeover callers keep their death proof unconsumed. On success every
+   * takeover callers keep their death proof unconsumed. `complete` is false
+   * when even the successful scan could not index a candidate unknown to the
+   * prior index because its metadata read failed transiently: that scan still
+   * replaces the projection with its indexed generation, but this manager
+   * keeps its lazy index-init retry armed (one deduped episode diagnostic)
+   * until a later complete scan picks the skipped record up. On success every
    * fresh valid snapshot is adopted — including one whose revision equals the
    * retained entry, so an external same-revision owner or content divergence
    * at this proven freshness boundary updates the full projection and owner
@@ -12582,11 +12596,12 @@ ${command}
    * are all unchanged (and which prunes nothing) publishes nothing.
    */
   refreshSnapshotsFromStore() {
-    if (this.detached) return { ok: false, snapshots: this.getSnapshots() };
+    if (this.detached) return { ok: false, complete: false, snapshots: this.getSnapshots() };
     const refresh = this.store.refreshIndex();
-    if (!refresh.ok) return { ok: false, snapshots: this.getSnapshots() };
-    this.indexInitialized = true;
-    this.indexInitFailureDiagnosed = false;
+    if (!refresh.ok) return { ok: false, complete: false, snapshots: this.getSnapshots() };
+    this.indexInitialized = refresh.complete;
+    if (refresh.complete) this.indexInitFailureDiagnosed = false;
+    else this.diagnoseIndexInitFailure(true);
     this.refreshBatchDepth += 1;
     const changed = [];
     let adoptionChangedStoredState = false;
@@ -12596,17 +12611,19 @@ ${command}
       this.refreshBatchDepth -= 1;
       this.drainRefreshBatch(changed, adoptionChangedStoredState);
     }
-    return { ok: true, snapshots: this.getSnapshots() };
+    return { ok: true, complete: refresh.complete, snapshots: this.getSnapshots() };
   }
   /**
-   * Coalesced lazy retry of the constructor's failed initialization scan. The
-   * first successful retry seeds the generation exactly like a successful
-   * refresh (adopt, recover, single batched fan-out, no intermediate
-   * projections) and the zero-scan query guarantee resumes; until then every
-   * query/mutation entry point pays at most one scan attempt per entry. A
-   * minimal in-flight guard keeps a listener fanned out by the seeding scan
-   * from re-entering it, and an injectable-clock backoff keeps a persistently
-   * unreadable store from being rescanned by every following entry.
+   * Coalesced lazy retry of the constructor's failed or incomplete
+   * initialization scan. The first complete retry seeds the generation exactly
+   * like a successful refresh (adopt, recover, single batched fan-out, no
+   * intermediate projections) and the zero-scan query guarantee resumes; an
+   * incomplete retry still serves its indexed generation but keeps the backoff
+   * armed. Until initialization completes, every query/mutation entry point
+   * pays at most one scan attempt per entry. A minimal in-flight guard keeps a
+   * listener fanned out by the seeding scan from re-entering it, and an
+   * injectable-clock backoff keeps a persistently unreadable store from being
+   * rescanned by every following entry.
    */
   ensureIndexInitialized() {
     if (this.indexInitialized || this.detached || this.indexInitInFlight) return;
@@ -12620,11 +12637,14 @@ ${command}
       this.indexInitInFlight = false;
     }
   }
-  /** Init-scan failures are diagnosed once per episode; the first successful scan resets the dedupe. */
-  diagnoseIndexInitFailure() {
+  /**
+   * Init-scan failures and incomplete generations are diagnosed once per
+   * episode; the first complete successful scan resets the dedupe.
+   */
+  diagnoseIndexInitFailure(incomplete = false) {
     if (this.indexInitFailureDiagnosed) return;
     this.indexInitFailureDiagnosed = true;
-    this.onDiagnostic?.({ kind: "manager", message: "terminal store scan failed before the projection was seeded; entry points retry lazily until the first successful scan" });
+    this.onDiagnostic?.({ kind: "manager", message: incomplete ? "terminal store scan indexed an incomplete generation; entry points retry lazily until a complete scan" : "terminal store scan failed before the projection was seeded; entry points retry lazily until the first successful scan" });
   }
   /**
    * The refresh adoption and prune loops; every notification stays inside the

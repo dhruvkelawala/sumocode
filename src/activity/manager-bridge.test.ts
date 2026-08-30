@@ -171,14 +171,14 @@ class FakeTerminalManager {
 
 	public refreshSnapshotsFromStore(): TerminalTaskIndexRefreshResult {
 		this.refreshCount += 1;
-		if (!this.refreshOk) return { ok: false, snapshots: [] };
+		if (!this.refreshOk) return { ok: false, complete: false, snapshots: [] };
 		this.snapshots = this.refreshedSnapshots ?? this.snapshots;
 		// Mirror the real manager's single post-loop fan-out: the stored projection
 		// listener is invoked during refresh, so the bridge's re-entrancy guard is
 		// actually exercised instead of the coalesced-refresh assertions passing
 		// vacuously.
 		this.emit();
-		return { ok: true, snapshots: this.snapshots };
+		return { ok: true, complete: true, snapshots: this.snapshots };
 	}
 
 	public getOutput(task: Pick<TerminalTaskSnapshot, "logFile">): string {

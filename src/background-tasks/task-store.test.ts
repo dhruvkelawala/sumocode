@@ -361,6 +361,8 @@ describe("TerminalTaskStore", () => {
 		faults.set(metaPath, transientFault("EACCES"));
 		const failed = store.refreshIndex();
 		expect(failed.ok).toBe(true);
+		// A known record's transient preservation is complete coverage of its id.
+		expect(failed.complete).toBe(true);
 		expect(failed.snapshots.map((task) => task.id)).toEqual(["term-healthy"]);
 		expect(failed.preservedIds).toEqual(["term-transient-read"]);
 		// The transient read is diagnosed as I/O, not corruption.
@@ -375,13 +377,16 @@ describe("TerminalTaskStore", () => {
 		// The next successful refresh reports the preserved record normally.
 		const recovered = store.refreshIndex();
 		expect(recovered.ok).toBe(true);
+		expect(recovered.complete).toBe(true);
 		expect(recovered.snapshots.map((task) => task.id).sort()).toEqual(["term-healthy", "term-transient-read"]);
 		expect(recovered.preservedIds).toEqual([]);
 
-		// True corruption still quarantines and prunes the record.
+		// True corruption still quarantines and prunes the record. A terminal
+		// quarantine decision never makes the generation incomplete.
 		privateWrite(metaPath, "{not json");
 		const corrupt = store.refreshIndex();
 		expect(corrupt.ok).toBe(true);
+		expect(corrupt.complete).toBe(true);
 		expect(corrupt.snapshots.map((task) => task.id)).toEqual(["term-healthy"]);
 		expect(corrupt.preservedIds).toEqual([]);
 		expect(store.listOwnedIndexed("session-a")).toEqual([]);
@@ -412,7 +417,8 @@ describe("TerminalTaskStore", () => {
 		expect(refreshed.ok).toBe(true);
 		// The known path owns the identity: the duplicate is diagnosed and
 		// skipped, and the transient prior keeps its compact entry, path, owner,
-		// and preservedId for this generation.
+		// and preservedId for this generation. Preservation is complete coverage.
+		expect(refreshed.complete).toBe(true);
 		expect(refreshed.snapshots).toEqual([]);
 		expect(refreshed.preservedIds).toEqual(["term-reserve"]);
 		expect(diagnostics.some((entry) => entry.kind === "duplicate" && entry.path === duplicateMetaPath)).toBe(true);
@@ -551,7 +557,9 @@ describe("TerminalTaskStore", () => {
 		expect(refreshed.ok).toBe(true);
 		// Fail-safe: the scan still succeeds, and the unindexed transient record
 		// stays absent — never preserved, indexed, or assigned an owner — until a
-		// later refresh can actually read it.
+		// later refresh can actually read it. But the generation is explicitly
+		// incomplete: a candidate unknown to the prior index was skipped.
+		expect(refreshed.complete).toBe(false);
 		expect(refreshed.snapshots).toEqual([healthy]);
 		expect(refreshed.preservedIds).toEqual([]);
 		expect(store.listOwnedIndexed("session-a")).toEqual([expect.objectContaining({ id: "term-fresh-good" })]);
@@ -559,9 +567,13 @@ describe("TerminalTaskStore", () => {
 		expect(store.isIndexedOwner("term-fresh-fault", "session-a")).toBe(false);
 		expect(diagnostics.at(-1)).toMatchObject({ kind: "io", path: faultedMetaPath });
 
-		// Once the fault clears, the next refresh adopts the record normally.
+		// Once the fault clears, the next refresh adopts the record normally and
+		// reports a complete generation.
 		faults.clear();
-		expect(store.refreshIndex().snapshots.map((task) => task.id).sort()).toEqual(["term-fresh-fault", "term-fresh-good"]);
+		const recovered = store.refreshIndex();
+		expect(recovered.ok).toBe(true);
+		expect(recovered.complete).toBe(true);
+		expect(recovered.snapshots.map((task) => task.id).sort()).toEqual(["term-fresh-fault", "term-fresh-good"]);
 	});
 
 	it("preserves the indexed entry for exactly the transient read errnos", () => {

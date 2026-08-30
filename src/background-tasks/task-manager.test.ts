@@ -558,7 +558,7 @@ function transientFault(code: string): Error {
 				this.attempts += 1;
 				if (this.remainingFailures > 0) {
 					this.remainingFailures -= 1;
-					return { ok: false, snapshots: [] };
+					return { ok: false, complete: false, snapshots: [] };
 				}
 				return super.refreshIndex();
 			}
@@ -628,6 +628,144 @@ function transientFault(code: string): Error {
 		unsubscribeTasks();
 	});
 
+	it("keeps init retries armed after an incomplete seeding scan until a complete scan lands and delivery fires", () => {
+		const reads = { scans: 0, metadata: 0 };
+		const diagnostics: Array<TerminalTaskStoreDiagnostic | { kind: "manager"; message: string }> = [];
+		const faults = new Map<string, Error>();
+		const store = new TerminalTaskStore({
+			rootDir,
+			onDiagnostic: (entry) => diagnostics.push(entry),
+			onRead: (kind) => { reads[kind === "full-scan" ? "scans" : "metadata"] += 1; },
+			metaReadFault: (path) => faults.get(path),
+		});
+		// Both records are durable before construction and unknown to the empty
+		// prior index. term-known reads cleanly and seeds the indexed subset;
+		// term-late's transient read skips it unindexed — a settled pending
+		// completion that must not stay invisible for the manager lifetime.
+		persistSettledTask(store, "term-known", "session-a", 1_000);
+		const seeded = persistSettledTask(store, "term-late", "session-a", 2_000, "late");
+		const pending = { ...seeded, deliveryState: "pending" as const, observedAt: undefined, consumedAt: undefined };
+		const lateMetaPath = join(dirname(seeded.logFile), "meta.json");
+		writeFileSync(lateMetaPath, `${JSON.stringify(pending)}\n`, { mode: 0o600 });
+		chmodSync(lateMetaPath, 0o600);
+		faults.set(lateMetaPath, transientFault("EIO"));
+
+		const target = manager({ store, onDiagnostic: (entry) => diagnostics.push(entry) });
+		// The constructor scan succeeded but incomplete: the indexed subset is
+		// seeded and served, and the incomplete episode is diagnosed once.
+		expect(reads.scans).toBe(1);
+		expect(target.get("term-known", "session-a")).toMatchObject({ id: "term-known", status: "completed" });
+		expect(target.get("term-late", "session-a")).toBeUndefined();
+		// The first query entry paid exactly one coalesced lazy retry, still faulted.
+		expect(reads.scans).toBe(2);
+		expect(diagnostics.filter((entry) => entry.kind === "manager")).toHaveLength(1);
+		// One store io diagnostic per transient read inside a successful scan.
+		expect(diagnostics.filter((entry) => entry.kind === "io")).toHaveLength(2);
+
+		// The fault clears: the next entry after the backoff window rescans and
+		// the complete scan makes the skipped record visible and queryable.
+		faults.clear();
+		const changes: TerminalTaskSnapshot[] = [];
+		const publications: Array<readonly TerminalTaskSnapshot[]> = [];
+		const unsubscribeProjection = target.subscribeChanges((snapshots) => publications.push(snapshots));
+		const unsubscribeTasks = target.addChangeListener((snapshot) => changes.push(snapshot));
+		now += 1_000;
+		const changesBefore = changes.length;
+		const publicationsBefore = publications.length;
+		expect(target.get("term-late", "session-a")).toMatchObject({ id: "term-late", status: "completed", deliveryState: "pending" });
+		expect(reads.scans).toBe(3);
+		// A record new to the projection joins the batched fan-out: delivery
+		// listeners wake and the projection publishes the completed generation.
+		expect(changes.slice(changesBefore).map((task) => task.id)).toEqual(["term-late"]);
+		expect(changes[changesBefore]).toMatchObject({ status: "completed", deliveryState: "pending" });
+		expect(publications.length - publicationsBefore).toBe(1);
+
+		// Delivery fires: the claim pass claims the recovered durable completion.
+		expect(target.claimPending("session-a", true).map((task) => task.id)).toEqual(["term-late"]);
+		expect(durableTask("term-late")).toMatchObject({ deliveryState: "claimed" });
+
+		// A complete scan stops the retries: no entry point rescans, even well
+		// past the backoff window, and the episode stays deduped.
+		now += 60_000;
+		expect(target.list("session-a").map((task) => task.id).sort()).toEqual(["term-known", "term-late"]);
+		expect(target.get("term-known", "session-a")).toBeDefined();
+		expect(target.claimPending("session-b", true)).toEqual([]);
+		expect(reads.scans).toBe(3);
+		expect(diagnostics.filter((entry) => entry.kind === "manager")).toHaveLength(1);
+
+		unsubscribeProjection();
+		unsubscribeTasks();
+	});
+
+	it("re-arms init retries when a mid-life takeover refresh skips an unindexed record transiently", () => {
+		const reads = { scans: 0, metadata: 0 };
+		const faults = new Map<string, Error>();
+		const store = new TerminalTaskStore({
+			rootDir,
+			onRead: (kind) => { reads[kind === "full-scan" ? "scans" : "metadata"] += 1; },
+			metaReadFault: (path) => faults.get(path),
+		});
+		const target = manager({ store });
+		expect(reads.scans).toBe(1);
+
+		// An external writer lands a settled pending completion; its metadata
+		// read fails transiently at the mid-life takeover refresh.
+		const seeded = persistSettledTask(store, "term-takeover", "session-b", 2_000, "takeover");
+		const pending = { ...seeded, deliveryState: "pending" as const, observedAt: undefined, consumedAt: undefined };
+		const metaPath = join(dirname(seeded.logFile), "meta.json");
+		writeFileSync(metaPath, `${JSON.stringify(pending)}\n`, { mode: 0o600 });
+		chmodSync(metaPath, 0o600);
+		faults.set(metaPath, transientFault("EIO"));
+		const takeover = target.refreshSnapshotsFromStore();
+		expect(takeover.ok).toBe(true);
+		expect(takeover.complete).toBe(false);
+		// The incomplete takeover keeps init-retry state armed: the next entry
+		// point retries the scan (still faulted) instead of never rescanning.
+		expect(target.get("term-takeover", "session-b")).toBeUndefined();
+		expect(reads.scans).toBe(3);
+
+		// Fault cleared: the next entry after the backoff picks the record up.
+		faults.clear();
+		now += 1_000;
+		expect(target.get("term-takeover", "session-b")).toMatchObject({ id: "term-takeover", status: "completed" });
+		expect(reads.scans).toBe(4);
+		// The complete scan stops the retries.
+		now += 60_000;
+		expect(target.list("session-b").map((task) => task.id)).toEqual(["term-takeover"]);
+		expect(reads.scans).toBe(4);
+	});
+
+	it("treats corrupt quarantine as a terminal decision and does not arm init retries", () => {
+		const reads = { scans: 0, metadata: 0 };
+		const store = new TerminalTaskStore({
+			rootDir,
+			onRead: (kind) => { reads[kind === "full-scan" ? "scans" : "metadata"] += 1; },
+		});
+		persistSettledTask(store, "term-healthy", "session-a", 1_000);
+		const corruptDirectory = join(store.rootDir, "term-corrupt-1000");
+		mkdirSync(corruptDirectory, { mode: 0o700 });
+		chmodSync(corruptDirectory, 0o700);
+		writeFileSync(join(corruptDirectory, "output.log"), "", { mode: 0o600 });
+		chmodSync(join(corruptDirectory, "output.log"), 0o600);
+		writeFileSync(join(corruptDirectory, "meta.json"), "{not json", { mode: 0o600 });
+		chmodSync(join(corruptDirectory, "meta.json"), 0o600);
+
+		const target = manager({ store });
+		expect(reads.scans).toBe(1);
+		expect(target.get("term-healthy", "session-a")).toMatchObject({ id: "term-healthy" });
+		// A later takeover refresh that quarantines another corrupt record stays
+		// complete: a terminal quarantine decision is full generation coverage.
+		writeFileSync(join(corruptDirectory, "meta.json"), "still {not json", { mode: 0o600 });
+		expect(target.refreshSnapshotsFromStore().complete).toBe(true);
+		expect(reads.scans).toBe(2);
+		// No init retries are armed: entry points never rescan.
+		now += 60_000;
+		expect(target.list("session-a").map((task) => task.id)).toEqual(["term-healthy"]);
+		expect(target.check("term-healthy", "session-a")?.task).toBeDefined();
+		expect(target.claimPending("session-a", true)).toEqual([]);
+		expect(reads.scans).toBe(2);
+	});
+
 	it("seeds the index from the coordinator's acknowledge entry so a non-idle reconcile lands durable receipts", () => {
 		class FlakyConstructorScanStore extends TerminalTaskStore {
 			public attempts = 0;
@@ -636,7 +774,7 @@ function transientFault(code: string): Error {
 				this.attempts += 1;
 				if (this.remainingFailures > 0) {
 					this.remainingFailures -= 1;
-					return { ok: false, snapshots: [] };
+					return { ok: false, complete: false, snapshots: [] };
 				}
 				return super.refreshIndex();
 			}

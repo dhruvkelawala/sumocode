@@ -16,6 +16,8 @@ const LEGACY_CONFIG_FILE = "multi-pass.json";
 /** The adapter registers `anthropic-N` providers with working OAuth; without it added accounts can never sign in. */
 const ADAPTER_PACKAGE_SOURCE = "git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account";
 const ADAPTER_PACKAGE_MATCH = "pi-claude-oauth-adapter";
+/** Only the multi-account branch registers `anthropic-N`; upstream builds leave added accounts unable to sign in. */
+const ADAPTER_MULTI_ACCOUNT_MATCH = "multi-account";
 
 const execFileAsync = promisify(execFile);
 
@@ -132,9 +134,10 @@ function packageSource(value: unknown): string | undefined {
 }
 
 /**
- * Detect the OAuth adapter in settings.json packages. Without it no extension
- * registers the `anthropic-N` provider ids, so added accounts could never
- * sign in; the add flow gates on this check.
+ * Detect the multi-account OAuth adapter in settings.json packages. Requires
+ * the `multi-account` source: upstream adapter builds do not register the
+ * `anthropic-N` provider ids, so added accounts could never sign in; the add
+ * flow gates on this check.
  */
 export function isAdapterInstalled(deps: AccountsCommandDeps = {}): boolean {
 	const settingsPath = join(resolveAgentDir(deps), "settings.json");
@@ -142,7 +145,14 @@ export function isAdapterInstalled(deps: AccountsCommandDeps = {}): boolean {
 	try {
 		const parsed: unknown = JSON.parse(readFileSync(settingsPath, "utf8"));
 		if (!isRecord(parsed) || !Array.isArray(parsed.packages)) return false;
-		return parsed.packages.some((entry) => packageSource(entry)?.includes(ADAPTER_PACKAGE_MATCH) === true);
+		return parsed.packages.some((entry) => {
+			const source = packageSource(entry);
+			return (
+				source !== undefined &&
+				source.includes(ADAPTER_PACKAGE_MATCH) === true &&
+				source.includes(ADAPTER_MULTI_ACCOUNT_MATCH) === true
+			);
+		});
 	} catch {
 		return false;
 	}

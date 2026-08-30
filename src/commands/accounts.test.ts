@@ -227,6 +227,18 @@ describe("isAdapterInstalled", () => {
 		expect(isAdapterInstalled(withAgentDir(agentDir))).toBe(true);
 	});
 
+	it("rejects upstream adapter builds without multi-account", () => {
+		const agentDir = tempAgentDir();
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: ["npm:pi-claude-oauth-adapter"] }), "utf8");
+		expect(isAdapterInstalled(withAgentDir(agentDir))).toBe(false);
+		writeFileSync(
+			join(agentDir, "settings.json"),
+			JSON.stringify({ packages: [{ source: "git:github.com/minzique/pi-claude-oauth-adapter@main" }] }),
+			"utf8",
+		);
+		expect(isAdapterInstalled(withAgentDir(agentDir))).toBe(false);
+	});
+
 	it("returns false when missing, malformed, or unrelated", () => {
 		const agentDir = tempAgentDir();
 		expect(isAdapterInstalled(withAgentDir(agentDir))).toBe(false);
@@ -444,6 +456,23 @@ describe("executeAccountsCommand", () => {
 		expect(notify).toHaveBeenCalledWith(expect.stringContaining("Unable to install pi-claude-oauth-adapter: network down"), "error");
 		expect(confirm).toHaveBeenCalledTimes(1);
 		expect(existsSync(join(agentDir, "claude-accounts.json"))).toBe(false);
+	});
+
+	it("add flow still installs when only the upstream adapter is present", async () => {
+		const agentDir = tempAgentDir();
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: ["npm:pi-claude-oauth-adapter"] }), "utf8");
+		const installAdapter = vi.fn(async () => {});
+		const reload = vi.fn(async () => {});
+		const { ctx, input } = makeCtx({
+			agentDir,
+			onSelect: pickOption(ADD_LABEL),
+			onConfirm: () => true,
+			onInput: () => "company",
+		});
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), installAdapter, reload });
+		expect(installAdapter).toHaveBeenCalledTimes(1);
+		expect(input).toHaveBeenCalledWith("ACCOUNT LABEL", "company");
+		expect(reload).toHaveBeenCalledTimes(1);
 	});
 
 	it("add flow does nothing when install is declined", async () => {

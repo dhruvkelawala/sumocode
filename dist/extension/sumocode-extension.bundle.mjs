@@ -16701,6 +16701,7 @@ var ACCOUNTS_CONFIG_FILE = "claude-accounts.json";
 var LEGACY_CONFIG_FILE = "multi-pass.json";
 var ADAPTER_PACKAGE_SOURCE = "git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account";
 var ADAPTER_PACKAGE_MATCH = "pi-claude-oauth-adapter";
+var ADAPTER_MULTI_ACCOUNT_MATCH = "multi-account";
 var execFileAsync4 = promisify5(execFile7);
 function resolveAgentDir(deps) {
   return deps.agentDir ?? deps.env?.PI_CODING_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR ?? join21(deps.homeDir ?? homedir15(), ".pi", "agent");
@@ -16773,7 +16774,10 @@ function isAdapterInstalled(deps = {}) {
   try {
     const parsed = JSON.parse(readFileSync17(settingsPath, "utf8"));
     if (!isRecord4(parsed) || !Array.isArray(parsed.packages)) return false;
-    return parsed.packages.some((entry) => packageSource(entry)?.includes(ADAPTER_PACKAGE_MATCH) === true);
+    return parsed.packages.some((entry) => {
+      const source = packageSource(entry);
+      return source !== void 0 && source.includes(ADAPTER_PACKAGE_MATCH) === true && source.includes(ADAPTER_MULTI_ACCOUNT_MATCH) === true;
+    });
   } catch {
     return false;
   }

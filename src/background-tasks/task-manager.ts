@@ -422,6 +422,25 @@ function isAcknowledgementMatch(task: DeliveryEligibility, ownerSessionId: strin
 	return receiptKeys.has(`${task.completionId}\u0000${task.deliveryClaimToken}`);
 }
 
+/**
+ * True when two snapshots differ in a delivery-eligibility or receipt field the
+ * claim/acknowledgement predicates above read that the refresh recovery gate
+ * does not already cover: deliveryState, completionPolicy, completionId, and
+ * deliveryClaimToken. (Owner, status, and process identity gate recovery
+ * directly; updatedAt only shifts the claim-lease clock that
+ * `getClaimRetryDelay` retry timers already own, so a rewrite touching just
+ * those stays projection-only.) Such a difference changes whether a completion
+ * is deliverable without changing recovery-relevant identity, so it must reach
+ * the per-task fan-out: the `TerminalDeliveryCoordinator` listens for per-task
+ * change notifications only.
+ */
+function deliveryEligibilityChanged(previous: TerminalTaskSnapshot, snapshot: TerminalTaskSnapshot): boolean {
+	return previous.deliveryState !== snapshot.deliveryState
+		|| previous.completionPolicy !== snapshot.completionPolicy
+		|| previous.completionId !== snapshot.completionId
+		|| previous.deliveryClaimToken !== snapshot.deliveryClaimToken;
+}
+
 export class TerminalTaskManager {
 	private readonly store: TerminalTaskStore;
 	private readonly processTree: ProcessTreeOperations;
@@ -954,12 +973,19 @@ export class TerminalTaskManager {
 	 * promptly) and queue state never carries across refresh calls, while the
 	 * throw keeps propagating to the caller and any publication reflects the
 	 * current retained projection. A same-revision, same-owner content-only
-	 * rewrite is adopted silently with no per-task change and no recovery side
-	 * effects, but because it replaced the stored snapshot with differing
-	 * content it still marks the refresh's stored state as changed, so a
-	 * successful refresh emits exactly one final projection publication even
-	 * when the per-task changed list is empty; a refresh whose records are all
-	 * unchanged (and which prunes nothing) publishes nothing.
+	 * rewrite is adopted with no recovery side effects. When its differing
+	 * content touches no delivery-eligibility or receipt field (deliveryState,
+	 * completionPolicy, completionId, deliveryClaimToken) it is purely cosmetic:
+	 * it joins no per-task change but still marks the refresh's stored state as
+	 * changed, so a successful refresh emits exactly one final projection
+	 * publication even when the per-task changed list is empty. When any of
+	 * those delivery fields differs — e.g. a delivered/suppressed settled record
+	 * rewritten back to pending-eligible at the same revision — the rewrite
+	 * instead joins the per-task fan-out so the TerminalDeliveryCoordinator,
+	 * which listens for per-task notifications only, wakes and schedules its
+	 * flush; no recovery side effect runs for such a delivery-only change
+	 * because status and process identity are unchanged. A refresh whose records
+	 * are all unchanged (and which prunes nothing) publishes nothing.
 	 */
 	public refreshSnapshotsFromStore(): TerminalTaskIndexRefreshResult {
 		if (this.detached) return { ok: false, snapshots: this.getSnapshots() };
@@ -1010,8 +1036,9 @@ export class TerminalTaskManager {
 	/**
 	 * The refresh adoption and prune loops; every notification stays inside the
 	 * caller's batch. Returns whether any adoption replaced a retained snapshot
-	 * with differing content (a same-revision, same-owner content-only rewrite),
-	 * so the caller can publish the projection even with an empty changed list.
+	 * with differing content without joining the per-task fan-out (a cosmetic
+	 * same-revision, same-owner content-only rewrite), so the caller can publish
+	 * the projection even with an empty changed list.
 	 */
 	private runRefreshLoops(refresh: TerminalTaskIndexRefreshResult, changed: TerminalTaskSnapshot[]): boolean {
 		let adoptionChangedStoredState = false;
@@ -1024,9 +1051,10 @@ export class TerminalTaskManager {
 			this.onRefreshAdopt?.(snapshot.id);
 			// A same-revision, same-owner content-only rewrite replaced the stored
 			// snapshot object with differing content but fires no recovery gate and
-			// joins no per-task change: report it with a cheap shallow field compare
-			// (no deep JSON of large payloads) so the refresh still publishes the
-			// updated projection exactly once.
+			// joins no per-task change unless it flipped a delivery-eligibility or
+			// receipt field (handled below): report it with a cheap shallow field
+			// compare (no deep JSON of large payloads) so the refresh still publishes
+			// the updated projection exactly once.
 			if (previous !== undefined && !snapshotContentEquals(previous, snapshot)) adoptionChangedStoredState = true;
 			// Recovery work is gated on recovery-relevant durable identity: a record
 			// new to this projection, or one whose revision, owner, lifecycle status,
@@ -1054,6 +1082,17 @@ export class TerminalTaskManager {
 				// as a takeover retry discovering an already-settled pending
 				// completion — must wake the delivery coordinator, which listens for
 				// per-task notifications only.
+				changed.push(snapshot);
+			} else if (previous !== undefined && deliveryEligibilityChanged(previous, snapshot)) {
+				// A same-revision, same-owner rewrite that flipped only delivery
+				// eligibility/receipt fields (e.g. a delivered/suppressed settled
+				// record rewritten back to pending) is delivery-relevant without being
+				// recovery-relevant: it joins the batched fan-out so the delivery
+				// coordinator wakes and schedules its flush, while recovery side
+				// effects (cap/arm/reconcile) stay gated on status and process
+				// identity and never run for a delivery-only change. A rewrite whose
+				// differing content touches none of those fields stays projection-only
+				// via the content compare above.
 				changed.push(snapshot);
 			}
 		}

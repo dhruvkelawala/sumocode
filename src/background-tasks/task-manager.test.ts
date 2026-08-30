@@ -1361,6 +1361,94 @@ function transientFault(code: string): Error {
 		unsubscribeTasks();
 	});
 
+	it("wakes delivery when a same-revision rewrite reopens a settled completion and stays projection-only for cosmetic rewrites", async () => {
+		const store = new TerminalTaskStore({ rootDir });
+		const recovered: string[] = [];
+		// Seeded before construction so the constructor adopts the suppressed record
+		// and the refresh spy matrix below observes only the external rewrite.
+		const seeded = persistSettledTask(store, "term-reopen", "session-a", 1_000, "reopen");
+		expect(seeded.deliveryState).toBe("suppressed");
+		const target = manager({ store, pollIntervalMs: 60_000, onRefreshRecover: (id) => recovered.push(id) });
+		const publications: Array<readonly TerminalTaskSnapshot[]> = [];
+		const changes: TerminalTaskSnapshot[] = [];
+		const unsubscribeProjection = target.subscribeChanges((snapshots) => publications.push(snapshots));
+		const unsubscribeTasks = target.addChangeListener((snapshot) => changes.push(snapshot));
+
+		// The settled record the previous writer already observed/consumed is
+		// suppressed on disk: nothing is deliverable when the coordinator binds.
+		expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+		expect(recovered).toEqual([]);
+
+		// The double's branch models Pi's observable transcript: every sent
+		// terminal-result becomes a custom_message entry, so the coordinator's
+		// acknowledge pass can observe its own delivery receipt exactly as in the
+		// real runtime.
+		const branch: Array<{ type: "custom_message"; details: unknown }> = [];
+		const sendMessage = vi.fn((message: { details?: unknown }) => {
+			branch.push({ type: "custom_message", details: message.details });
+		});
+		const pi = { sendMessage };
+		const ctx = {
+			sessionManager: { getSessionId: () => "session-a", getBranch: () => branch },
+			isIdle: () => true,
+		};
+		// SAFETY: the double implements exactly the ExtensionAPI members the coordinator touches.
+		const coordinator = new TerminalDeliveryCoordinator(pi as never, target);
+		// SAFETY: the double implements exactly the ExtensionContext members the coordinator touches.
+		coordinator.bind(ctx as never);
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		expect(sendMessage).not.toHaveBeenCalled();
+
+		// An external writer rewrites the record at the SAME revision, same owner,
+		// same status, same process identity — flipping only delivery fields back to
+		// pending-eligible. The refresh must join a per-task change (the coordinator
+		// listens for per-task notifications only) without any recovery side effect,
+		// and the coordinator must schedule a flush delivering the terminal result.
+		const durable = store.getIndexed("term-reopen")!;
+		const metaFile = join(dirname(durable.logFile), "meta.json");
+		const reopened = {
+			...durable,
+			deliveryState: "pending" as const,
+			observedAt: undefined,
+			consumedAt: undefined,
+		};
+		writeFileSync(metaFile, `${JSON.stringify(reopened)}\n`, { mode: 0o600 });
+		chmodSync(metaFile, 0o600);
+
+		const changesBefore = changes.length;
+		const publicationsBefore = publications.length;
+		expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+		expect(changes.slice(changesBefore).map((task) => task.id)).toEqual(["term-reopen"]);
+		expect(changes.at(-1)).toMatchObject({ id: "term-reopen", revision: seeded.revision, status: "completed", deliveryState: "pending" });
+		expect(publications.length - publicationsBefore).toBe(1);
+		// Delivery-only change: adopted, but the recovery gate never ran.
+		expect(recovered).toEqual([]);
+
+		await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+		expect(sendMessage.mock.calls[0][0]).toMatchObject({ customType: "terminal-result" });
+		// The flush's acknowledge settles the record as delivered on disk; wait for
+		// that durable advance so the cosmetic rewrite below starts from it.
+		await vi.waitFor(() => expect(store.getIndexed("term-reopen")!.deliveryState).toBe("delivered"));
+		const changesAfterDelivery = changes.length;
+		const publicationsAfterDelivery = publications.length;
+
+		// A same-revision cosmetic rewrite (title only; every delivery-eligibility
+		// and receipt field equal) stays projection-only: exactly one publication,
+		// zero per-task noise, still no recovery side effect.
+		const delivered = store.getIndexed("term-reopen")!;
+		writeFileSync(metaFile, `${JSON.stringify({ ...delivered, title: "cosmetic" })}\n`, { mode: 0o600 });
+		chmodSync(metaFile, 0o600);
+		expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+		expect(changes.length).toBe(changesAfterDelivery);
+		expect(publications.length - publicationsAfterDelivery).toBe(1);
+		expect(publications.at(-1)).toEqual([expect.objectContaining({ id: "term-reopen", title: "cosmetic" })]);
+		expect(recovered).toEqual([]);
+
+		coordinator.dispose();
+		unsubscribeProjection();
+		unsubscribeTasks();
+	});
+
 	it("signals every stop target before waiting, escalates, and confirms cancellation", async () => {
 		const target = manager();
 		const first = await start(target);

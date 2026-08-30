@@ -12,6 +12,7 @@ import { RpcHostStateStore } from "./state.js";
 import {
 	activitySnapshotMatchesSession,
 	canRpcForceSteer,
+	createEditorSubmitHandler,
 	createLazyChatSink,
 	createModelCycleBackwardHandler,
 	createModelCycleForwardHandler,
@@ -120,6 +121,54 @@ function interruptDeps(overrides: Partial<RpcHostInterruptDependencies> = {}): R
 
 const CTRL_C = "";
 const ESCAPE = "";
+
+describe("editor command-readiness submission", () => {
+	it.each(["ordinary prompt", "/help exact text"])("notifies immediately and dispatches pre-ready text exactly once: %s", async (message) => {
+		const settled = deferred();
+		let ready = false;
+		const notifications = { notify: vi.fn() };
+		const submit = vi.fn(async () => undefined);
+		const handler = createEditorSubmitHandler({
+			gate: {
+				get isReady() { return ready; },
+				whenSettled: () => settled.promise,
+			},
+			notifications,
+			submit,
+			requestExit: vi.fn(),
+			isTreeBusy: () => false,
+		});
+
+		const pending = handler(message);
+		expect(notifications.notify).toHaveBeenCalledOnce();
+		expect(notifications.notify).toHaveBeenCalledWith("finishing startup · command queued", "warning");
+		expect(submit).not.toHaveBeenCalled();
+
+		ready = true;
+		settled.resolve();
+		await pending;
+		expect(submit).toHaveBeenCalledOnce();
+		expect(submit).toHaveBeenCalledWith(message);
+	});
+
+	it("keeps quit immediate and silent before command readiness", async () => {
+		const notifications = { notify: vi.fn() };
+		const requestExit = vi.fn();
+		const submit = vi.fn(async () => undefined);
+		const handler = createEditorSubmitHandler({
+			gate: { isReady: false, whenSettled: () => new Promise<void>(() => undefined) },
+			notifications,
+			submit,
+			requestExit,
+			isTreeBusy: () => false,
+		});
+
+		await handler("  /quit now  ");
+		expect(requestExit).toHaveBeenCalledWith(0);
+		expect(notifications.notify).not.toHaveBeenCalled();
+		expect(submit).not.toHaveBeenCalled();
+	});
+});
 
 describe("RPC force-steer gate", () => {
 	it("requires streaming without compaction or tree navigation", () => {

@@ -504,6 +504,38 @@ export async function submitRpcPrompt(message: string, options: RpcPromptSubmitO
 	responseData(await options.client.send({ type: "prompt", message }), "prompt");
 }
 
+export interface EditorSubmitReadinessGate {
+	readonly isReady: boolean;
+	whenSettled(): Promise<void>;
+}
+
+export interface EditorSubmitHandlerDependencies {
+	readonly gate: EditorSubmitReadinessGate;
+	readonly notifications: ErrorNotifier;
+	readonly submit: (message: string) => Promise<void>;
+	readonly requestExit: (code: number) => void;
+	readonly isTreeBusy: () => boolean;
+}
+
+/** Keeps early editing responsive while command dispatch waits for hydration. */
+export function createEditorSubmitHandler(deps: EditorSubmitHandlerDependencies): (message: string) => Promise<void> {
+	return async (message) => {
+		const trimmed = message.trim();
+		if (trimmed.length === 0) return;
+		if (/^\/quit(?:\s|$)/.test(trimmed)) {
+			deps.requestExit(0);
+			return;
+		}
+		if (!deps.gate.isReady) deps.notifications.notify("finishing startup · command queued", "warning");
+		await deps.gate.whenSettled();
+		if (deps.isTreeBusy()) {
+			deps.notifications.notify("branch summary in progress", "warning");
+			return;
+		}
+		await deps.submit(message);
+	};
+}
+
 /**
  * Submits `SUMOCODE_INITIAL_PROMPT` (set by `bin/sumocode.sh` when a task/
  * prompt positional was destined for `pi --mode rpc`, which never reads argv
@@ -1099,7 +1131,9 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const initialHydration = new Promise<void>((resolve) => {
 		releaseInitialHydration = resolve;
 	});
-	const hydrationActionGate = new InitialHydrationActionGate(initialHydration);
+	const hydrationActionGate = new InitialHydrationActionGate(initialHydration, {
+		onReady: () => runtime?.markCommandReady(),
+	});
 	/**
 	 * The retained editor can accept text as soon as the splash paints, but a
 	 * submit must wait for scheduler session ownership to rebind. Otherwise an
@@ -1107,28 +1141,17 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	 * be consumed by the pre-hydration scheduler generation. Keeping this gate
 	 * at submit (not typing) preserves early editing without dropping a prompt.
 	 */
-	const submitFromEditor = async (message: string): Promise<void> => {
-		// /quit is entirely host-owned and must remain available when the child
-		// never completes initial hydration. Other commands/prompts retain the
-		// ownership gate because they can read or replace child session state.
-		if (/^\/quit(?:\s|$)/.test(message.trim())) {
-			requestHostExit(0);
-			return;
-		}
-		// Wait for hydration AND for any deferred child-dependent intent (e.g. a
-		// model/thinking cycle) to fully apply, so a prompt never dispatches under
-		// state an earlier gated shortcut is still committing.
-		await hydrationActionGate.whenSettled();
-		if (treeNavigationBusy) {
-			notifications.notify("branch summary in progress", "warning");
-			return;
-		}
-		await submitRpcPrompt(message, {
+	const submitFromEditor = createEditorSubmitHandler({
+		gate: hydrationActionGate,
+		notifications,
+		requestExit: (code) => requestHostExit(code),
+		isTreeBusy: () => treeNavigationBusy,
+		submit: (message) => submitRpcPrompt(message, {
 			visualFixture,
 			scheduler,
 			client,
-		});
-	};
+		}),
+	});
 	const keybindings = createRpcKeybindingsManager({ env });
 	const handleModelCycleForward = createModelCycleForwardHandler({
 		controls,

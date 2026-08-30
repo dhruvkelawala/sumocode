@@ -17,6 +17,7 @@
 - **Milestone**: M1 — Command-ready foundation
 - **Planned at**: commit `b34bd79`, 2026-08-28
 - **Issue**: https://github.com/dhruvkelawala/sumocode/issues/388
+- **Execution**: STOPPED after local implementation at the user's request; no review, push, PR, CI watch, or merge
 
 ## Why this matters
 
@@ -66,6 +67,7 @@ After final source edits, run `pnpm build:host` before `pnpm test`; keep the gen
 - `src/sumo-tui/rpc/initial-hydration-action-gate.ts`
 - Colocated tests, including an exported pure editor-submit handler seam in `host.ts`.
 - `scripts/perf-startup.mjs`, `scripts/perf-real-world.mjs` (both are included in the drift check and migrate to the new names).
+- `bin/sumocode.sh` diagnostics-event help text only, so the public glossary names the new readiness events truthfully.
 - `docs/perf/startup.md`, `docs/perf/real-world.md`, and generated JSON only when their respective perf commands intentionally update them.
 
 **Out of scope**:
@@ -123,6 +125,19 @@ Measure and report `editorReadyMs`, `commandReadyMs`, and their gap. Update `scr
 ## Test plan
 
 Cover cold start, reload hydration, deferred model/thinking action, pre-ready ordinary prompt, pre-ready slash command, `/quit`, duplicate `markChromeStable`, and shutdown before readiness.
+
+## Local execution evidence (stopped before review/publication)
+
+The user confirmed that Plan 093's `STACK_READY` PR #418, already contained by exact predecessor PR #419 at `0a00886674342d182b55f1581bdb841cee5d39f7`, satisfies this unmerged campaign dependency despite the root index retaining `REVIEWING`. Implementation used `openai-codex/gpt-5.6-sol` at `xhigh` with fast mode requested; the separate `gpt-5.5` xhigh fast scout stayed read-only at the exact base.
+
+- Focused runtime/gate/host/perf suites: 195/195 passed.
+- `pnpm perf:startup`: passed 5/5 samples; `editor-ready` 516.3ms, `command-ready` 1069.3ms, gap 550.3ms on the stripped `--offline --no-extensions --no-session` lane.
+- Typecheck, build, lint, and `bash -n bin/sumocode.sh`: passed.
+- Default parallel unit run: 2622/2625, with three load-sensitive unrelated failures; all three passed independently and the serial full run passed 2625/2625.
+- `pnpm test:integration`: 145/158 twice, with the same 13 known PTY/load-sensitive failures; this required gate is not green.
+- `pnpm visual:ci`: exited 0 for all 29 scenarios after copying the existing approved, ignored Bible inputs into the isolated worktree; no golden was changed or promoted. Final `pnpm build:host` passed.
+- The configured Herdr real-world probe and `docs/perf/real-world.md` regeneration were not run. The parser's new-event preference and alias fallback are covered by unit tests.
+- Review-ready, local Codex review, APR, push, PR creation, CI, GitHub Codex, and PR gate were intentionally not run after the user stopped the plan.
 
 ## Done criteria
 

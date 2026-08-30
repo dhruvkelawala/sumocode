@@ -198,6 +198,7 @@ export class RpcHostRuntime {
 	private inputStarted = false;
 	private stopped = false;
 	private chromeStableMarked = false;
+	private commandReadyMarked = false;
 	private exitCode: number | undefined;
 	private readonly waiters: Array<(code: number) => void> = [];
 	private readonly isAppleTerminal: boolean;
@@ -377,7 +378,12 @@ export class RpcHostRuntime {
 		const cols = terminalColumns(this.output);
 		const rows = terminalRows(this.output);
 		this.render();
-		for (const event of ["boot_screen_frame", "input_ready"]) {
+		for (const event of [
+			"boot_screen_frame",
+			"editor_ready",
+			// Deprecated compatibility alias for one release.
+			"input_ready",
+		]) {
 			logDiagnostic(event, { surface: "rpc_host", cols, rows });
 		}
 	}
@@ -388,9 +394,24 @@ export class RpcHostRuntime {
 		this.chromeStableMarked = true;
 		const cols = terminalColumns(this.output);
 		const rows = terminalRows(this.output);
-		for (const event of ["app_ready", "stable_chrome_ready"]) {
+		for (const event of [
+			// Deprecated compatibility alias for one release.
+			"app_ready",
+			"stable_chrome_ready",
+		]) {
 			logDiagnostic(event, { surface: "rpc_host", cols, rows });
 		}
+	}
+
+	/** Marks command dispatch ready after hydration and deferred actions settle. */
+	public markCommandReady(): void {
+		if (this.stopped || this.commandReadyMarked || !this.shell) return;
+		this.commandReadyMarked = true;
+		logDiagnostic("command_ready", {
+			surface: "rpc_host",
+			cols: terminalColumns(this.output),
+			rows: terminalRows(this.output),
+		});
 	}
 
 	public update(snapshot: Partial<RpcHostRuntimeSnapshot>): void {

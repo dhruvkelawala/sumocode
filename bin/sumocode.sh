@@ -180,9 +180,11 @@ DIAGNOSTICS EVENTS
       process_module_load_*  slow module imports + aggregate module-load summary
       runtime_start          process, cwd, branch, commit, terminal size
       boot_screen_frame      first retained splash/boot frame written to terminal
-      app_ready              first owned-shell render with the real session UI
-      stable_chrome_ready    same reveal point, split out for startup budgeting
-      input_ready            editor/input mounted and interactive
+      editor_ready           first retained frame painted; input can be edited
+      input_ready            deprecated one-release alias for editor_ready
+      app_ready              deprecated historical chrome-ready alias
+      stable_chrome_ready    owned-shell render with the real session UI
+      command_ready          hydration settled; commands can dispatch
       render_frame           retained render timings
       slow_frame             render frame over the slow-frame threshold
       render_patches         terminal patch count and cursor placement

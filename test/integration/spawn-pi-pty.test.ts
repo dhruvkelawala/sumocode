@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -380,6 +380,13 @@ const OPTION_CONSUMPTION_ROWS: readonly OptionConsumptionRow[] = [
 		expectedArgs: "--model sonnet --offline",
 	},
 	{
+		name: "unconditional value flag consumes -- before a later --print direct bypass",
+		args: ["--model", "--", "--print", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "--model -- --print PROMPT",
+		directBypass: true,
+	},
+	{
 		name: "unknown short option is kept and never becomes the prompt",
 		args: ["-x", "PROMPT"],
 		expectedPrompt: "PROMPT",
@@ -607,6 +614,39 @@ describe("sumocode launcher mirrors Pi option consumption (PTY RPC path)", () =>
 			expect(execLine).toBe(`exec node ${process.cwd()}/sumo-rpc-host.js ${row.expectedArgs}`);
 		});
 	}
+
+	it("task rejects a bare end-of-options delimiter without a prompt", async () => {
+		await expect(ptyDryRun(["task", "--"])).rejects.toThrow(/task requires a non-empty prompt/);
+	});
+
+	it("task rejects an empty prompt", async () => {
+		await expect(ptyDryRun(["task", ""])).rejects.toThrow(/task requires a non-empty prompt/);
+	});
+
+	it("task --prompt-file keeps the file prompt first after a preserved delimiter", async () => {
+		const root = mkdtempSync(join(tmpdir(), "sumocode-task-prompt-file-"));
+		const promptFile = join(root, "prompt.txt");
+		try {
+			writeFileSync(promptFile, "FILEPROMPT");
+			const output = await ptyDryRun(["task", "--prompt-file", promptFile, "--", "--offline"]);
+			expect(dryRunField(output, "SUMOCODE_INITIAL_PROMPT")).toBe("FILEPROMPT");
+			expect(dryRunField(output, "ARGS")).toBe("-- --offline");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("task --task-dir keeps the prompt.txt text first after a preserved delimiter", async () => {
+		const root = mkdtempSync(join(tmpdir(), "sumocode-task-dir-"));
+		try {
+			writeFileSync(join(root, "prompt.txt"), "TASKDIRPROMPT");
+			const output = await ptyDryRun(["task", "--task-dir", root, "--", "--offline"]);
+			expect(dryRunField(output, "SUMOCODE_INITIAL_PROMPT")).toBe("TASKDIRPROMPT");
+			expect(dryRunField(output, "ARGS")).toBe("-- --offline");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("sumocode launcher mode decision", () => {

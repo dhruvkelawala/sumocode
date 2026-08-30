@@ -154,3 +154,13 @@ Fixture table grown from 32 to 40 rows: four conventional single-`--` RPC regres
 
 - **Red-check**: with only the new PTY rows added, `pnpm vitest run test/integration/spawn-pi-pty.test.ts -t "mirrors Pi option consumption"` failed 8/40 selected rows: the four single-`--` post-delimiter flags routed direct Pi with empty `SUMOCODE_INITIAL_PROMPT`, and the four pre-delimiter direct-Pi rows dropped the literal `--` from `ARGS`.
 - **Gates**: `bash -n bin/sumocode.sh` clean; focused option-consumption suite 40/40; focused launcher file 55/55; `pnpm exec tsc --noEmit && pnpm build` green; `pnpm lint` green; unit one-worker 2,618/2,618; integration serial 151/151. No `dist/extension` changes.
+
+## Repair evidence (run-20260830T172321Z-56f523e4 attempt 3)
+
+P1-A/P1-B blockers fixed in the launcher only. The Pi 0.84.3 parser check for `['--model', '--', '--print', 'PROMPT']` is `model: "--"`, `print: true`, `messages: ["PROMPT"]`, `fileArgs: []`, `diagnostics: []`; the launcher now mirrors that by sharing the class-2 unconditional value-flag helper between `args_request_noninteractive_pi` and prompt extraction, so the `--` consumed by `--model` is not treated as a delimiter and the later pre-delimiter `--print` selects direct Pi.
+
+Task launch prompt validation now checks the first Pi-style positional and requires it to be non-empty, so `sumocode task --` and an empty task prompt fail the task prompt check. `--prompt-file` / `--task-dir` prompt text is inserted immediately after a real preserved `--` delimiter (with class-2 value consumption respected), so the file text remains the first post-delimiter kickoff prompt. Help now documents `--` in OPTIONS and NOTES. The double-`--` coalescing behavior is unchanged and has an explicit tradeoff comment.
+
+Fixture table grew from 40 to 41 rows with the `--model -- --print PROMPT` delimiter-agreement regression, plus four task launcher regressions for bare `task --`, empty prompt, prompt-file + `--`, and task-dir + `--`.
+
+- **Gates**: `bash -n bin/sumocode.sh` clean; focused option-consumption/task fixture `pnpm vitest run test/integration/spawn-pi-pty.test.ts -t "mirrors Pi option consumption"` 45/45 selected (15 skipped); focused launcher file 60/60; `pnpm exec tsc --noEmit && pnpm build` green; `pnpm lint` green; unit one-worker verifying run 2,618/2,618, with the previously documented load-sensitive task-manager timing flake still possible under local load and passing in isolation; integration serial 156/156. No `dist/extension` changes.

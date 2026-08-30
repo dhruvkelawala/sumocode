@@ -84,6 +84,11 @@ COMMANDS
       If name is omitted, a unique wt-<timestamp> name is generated.
 
 OPTIONS
+  --
+      End SumoCode option parsing. For run/task launches, one delimiter is
+      preserved for Pi so following dash-leading tokens are treated as
+      positionals/messages instead of SumoCode options.
+
   -d, --debug
       Enable manual-test diagnostics / flight-recorder mode.
 
@@ -219,6 +224,9 @@ NOTES
   old Sumo retained-TUI patch. Non-interactive Pi modes such as --print or
   --mode, launches where stdout is not a TTY, and --no-sumo-tui bypass the RPC
   host and execute Pi directly with the SumoCode extension loaded.
+
+  Use -- before a prompt that starts with '-' so SumoCode and Pi both treat it
+  as a message rather than an option.
 EOF
 }
 
@@ -326,6 +334,7 @@ while [[ $# -gt 0 ]]; do
 			# extraction treat --print/--mode tokens as messages. If the caller used
 			# the historical double-`--` quirk, the remaining argv already starts with
 			# the delimiter the extractor expects.
+			# Tradeoff: coalescing preserves that quirk but collapses two literal delimiters.
 			if [[ "${COMMAND}" == "run" || "${COMMAND}" == "task" ]]; then
 				if [[ "${1-}" != "--" ]]; then
 					SUMOCODE_ARGS+=("--")
@@ -347,6 +356,204 @@ while [[ $# -gt 0 ]]; do
 			;;
 	esac
 done
+
+# Pure membership test so each Pi parser consumption class reads as a table.
+_sumocode_arg_in() {
+	local candidate="$1"
+	shift
+	local item
+	for item in "$@"; do
+		[[ "${candidate}" == "${item}" ]] && return 0
+	done
+	return 1
+}
+
+# Class 2: unconditional value flags in Pi's pinned parseArgs(). Kept global so
+# mode selection and prompt extraction cannot disagree about a value-consuming
+# bare `--` token.
+SUMOCODE_PI_UNCONDITIONAL_VALUE_FLAGS=(
+	--mode --provider --model --api-key --system-prompt
+	--append-system-prompt --name -n --session --session-id --fork
+	--session-dir --models --tools -t --exclude-tools -xt --thinking
+	--export --extension -e --skill --prompt-template --theme
+)
+# Class 3: known boolean flags -- recognized BEFORE the generic unknown branch
+# so a boolean like --offline never consumes the real prompt.
+SUMOCODE_PI_BOOLEAN_FLAGS=(
+	--help -h --version -v --continue -c --resume -r --no-session
+	--no-tools -nt --no-builtin-tools -nbt --no-extensions -ne
+	--no-skills -ns --no-prompt-templates -np --no-themes
+	--no-context-files -nc --verbose --approve -a --no-approve -na
+	--offline
+)
+
+_sumocode_is_pi_unconditional_value_flag() {
+	_sumocode_arg_in "$1" "${SUMOCODE_PI_UNCONDITIONAL_VALUE_FLAGS[@]}"
+}
+
+_sumocode_is_pi_boolean_flag() {
+	_sumocode_arg_in "$1" "${SUMOCODE_PI_BOOLEAN_FLAGS[@]}"
+}
+
+_sumocode_first_pi_delimiter_index() {
+	local i=0
+	local n="${#SUMOCODE_ARGS[@]}"
+	local arg
+	while [[ "${i}" -lt "${n}" ]]; do
+		arg="${SUMOCODE_ARGS[i]}"
+		if [[ "${arg}" == "--" ]]; then
+			printf '%s\n' "${i}"
+			return 0
+		fi
+		if _sumocode_is_pi_unconditional_value_flag "${arg}" && [[ $((i + 1)) -lt "${n}" ]]; then
+			i=$((i + 2))
+			continue
+		fi
+		i=$((i + 1))
+	done
+	return 1
+}
+
+_sumocode_insert_task_prompt_text() {
+	local prompt_text="$1"
+	local delimiter_index
+	local -a before=()
+	local -a after=()
+	if delimiter_index="$(_sumocode_first_pi_delimiter_index)"; then
+		before=("${SUMOCODE_ARGS[@]:0:$((delimiter_index + 1))}")
+		after=("${SUMOCODE_ARGS[@]:$((delimiter_index + 1))}")
+		if [[ "${#after[@]}" -eq 0 ]]; then
+			SUMOCODE_ARGS=("${before[@]}" "${prompt_text}")
+		else
+			SUMOCODE_ARGS=("${before[@]}" "${prompt_text}" "${after[@]}")
+		fi
+	elif [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
+		SUMOCODE_ARGS=("${prompt_text}")
+	else
+		SUMOCODE_ARGS=("${SUMOCODE_ARGS[@]}" "${prompt_text}")
+	fi
+}
+
+_sumocode_first_positional_index() {
+	local i=0
+	local n="${#SUMOCODE_ARGS[@]}"
+	local arg next
+	while [[ "${i}" -lt "${n}" ]]; do
+		arg="${SUMOCODE_ARGS[i]}"
+
+		if [[ "${arg}" == "--" ]]; then
+			i=$((i + 1))
+			while [[ "${i}" -lt "${n}" ]]; do
+				arg="${SUMOCODE_ARGS[i]}"
+				if [[ "${arg}" != @* ]]; then
+					printf '%s\n' "${i}"
+					return 0
+				fi
+				i=$((i + 1))
+			done
+			return 1
+		fi
+
+		if [[ "${arg}" == --*=* ]]; then
+			i=$((i + 1))
+			continue
+		fi
+
+		if _sumocode_is_pi_unconditional_value_flag "${arg}"; then
+			if [[ $((i + 1)) -lt "${n}" ]]; then
+				i=$((i + 2))
+			else
+				i=$((i + 1))
+			fi
+			continue
+		fi
+
+		if _sumocode_is_pi_boolean_flag "${arg}"; then
+			i=$((i + 1))
+			continue
+		fi
+
+		if [[ "${arg}" == --print || "${arg}" == -p ]]; then
+			if [[ $((i + 1)) -lt "${n}" ]]; then
+				next="${SUMOCODE_ARGS[i+1]}"
+				if [[ "${next}" != @* && ( "${next}" != -* || "${next}" == ---* ) ]]; then
+					i=$((i + 2))
+					continue
+				fi
+			fi
+			i=$((i + 1))
+			continue
+		fi
+
+		if [[ "${arg}" == --list-models ]]; then
+			if [[ $((i + 1)) -lt "${n}" ]]; then
+				next="${SUMOCODE_ARGS[i+1]}"
+				if [[ "${next}" != -* && "${next}" != @* ]]; then
+					i=$((i + 2))
+					continue
+				fi
+			fi
+			i=$((i + 1))
+			continue
+		fi
+
+		if [[ "${arg}" == --tui-mode ]]; then
+			if [[ $((i + 1)) -lt "${n}" ]]; then
+				next="${SUMOCODE_ARGS[i+1]}"
+				if [[ "${next}" != -* ]]; then
+					i=$((i + 2))
+					continue
+				fi
+			fi
+			i=$((i + 1))
+			continue
+		fi
+
+		if [[ "${arg}" == --use-theme ]]; then
+			if [[ $((i + 1)) -lt "${n}" ]]; then
+				next="${SUMOCODE_ARGS[i+1]}"
+				if [[ "${next}" != -* ]]; then
+					i=$((i + 2))
+					continue
+				fi
+			fi
+			i=$((i + 1))
+			continue
+		fi
+
+		if [[ "${arg}" == @* ]]; then
+			i=$((i + 1))
+			continue
+		fi
+
+		if [[ "${arg}" == --* ]]; then
+			if [[ $((i + 1)) -lt "${n}" ]]; then
+				next="${SUMOCODE_ARGS[i+1]}"
+				if [[ "${next}" != -* && "${next}" != @* ]]; then
+					i=$((i + 2))
+					continue
+				fi
+			fi
+			i=$((i + 1))
+			continue
+		fi
+
+		if [[ "${arg}" == -* ]]; then
+			i=$((i + 1))
+			continue
+		fi
+
+		printf '%s\n' "${i}"
+		return 0
+	done
+	return 1
+}
+
+_sumocode_task_has_nonempty_prompt_arg() {
+	local prompt_index
+	if ! prompt_index="$(_sumocode_first_positional_index)"; then return 1; fi
+	[[ -n "${SUMOCODE_ARGS[prompt_index]}" ]]
+}
 
 if [[ "${COMMAND}" == "doctor" && "${#SUMOCODE_ARGS[@]}" -gt 0 ]]; then
 	usage_error "doctor does not accept a path argument."
@@ -387,20 +594,14 @@ if [[ "${COMMAND}" == "task" ]]; then
 		# strips a trailing newline, which is what we want — Pi treats the
 		# positional as one message.
 		#
-		# Append to SUMOCODE_ARGS so the prompt is the LAST argument when
-		# pi sees it. Pi's CLI is `pi [options] [@files...] [messages...]`,
-		# so flags forwarded by the caller (e.g. --model, --thinking) must
-		# appear before the positional message for the parser to bind them
-		# correctly.
+		# Put the file prompt where Pi will parse it as the first task message:
+		# after a real preserved `--` delimiter when one exists, otherwise after
+		# forwarded flags so their values still bind correctly.
 		prompt_text="$(<"${PROMPT_FILE}")"
-		if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
-			SUMOCODE_ARGS=("${prompt_text}")
-		else
-			SUMOCODE_ARGS=("${SUMOCODE_ARGS[@]}" "${prompt_text}")
-		fi
+		_sumocode_insert_task_prompt_text "${prompt_text}"
 	fi
-	if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
-		usage_error "task requires a prompt argument or --prompt-file <path>. Example: sumocode task \"review the diff\"."
+	if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]] || ! _sumocode_task_has_nonempty_prompt_arg; then
+		usage_error "task requires a non-empty prompt argument or --prompt-file <path>. Example: sumocode task \"review the diff\"."
 	fi
 	IS_TASK_LAUNCH=1
 	export SUMOCODE_TASK_MODE=1
@@ -456,11 +657,20 @@ fi
 
 args_request_noninteractive_pi() {
 	if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then return 1; fi
-	for arg in "${SUMOCODE_ARGS[@]}"; do
-		if [[ "${arg}" == "--" ]]; then break; fi
+	local i=0
+	local n="${#SUMOCODE_ARGS[@]}"
+	local arg
+	while [[ "${i}" -lt "${n}" ]]; do
+		arg="${SUMOCODE_ARGS[i]}"
 		case "${arg}" in
 			--print|-p|--mode|--mode=*) return 0 ;;
 		esac
+		if [[ "${arg}" == "--" ]]; then break; fi
+		if _sumocode_is_pi_unconditional_value_flag "${arg}" && [[ $((i + 1)) -lt "${n}" ]]; then
+			i=$((i + 2))
+			continue
+		fi
+		i=$((i + 1))
 	done
 	return 1
 }
@@ -565,215 +775,25 @@ args_request_noninteractive_pi() {
 # Do not infer extension flag schemas beyond args.js's generic class-6 rule:
 # Pi itself treats unknown flags opaquely, and so does this table.
 
-# Pure membership test so each consumption class below reads as a table.
-_sumocode_arg_in() {
-	local candidate="$1"
-	shift
-	local item
-	for item in "$@"; do
-		[[ "${candidate}" == "${item}" ]] && return 0
-	done
-	return 1
-}
-
 extract_first_positional() {
 	EXTRACTED_INITIAL_PROMPT=""
+	local prompt_index
+	if ! prompt_index="$(_sumocode_first_positional_index)"; then return 0; fi
+	EXTRACTED_INITIAL_PROMPT="${SUMOCODE_ARGS[prompt_index]}"
+
 	local -a kept=()
-	local found=0
 	local i=0
 	local n="${#SUMOCODE_ARGS[@]}"
-	local arg next
-
-	# Class 2: unconditional value flags (see table above for the args.js
-	# citation).
-	local -a value_flags=(
-		--mode --provider --model --api-key --system-prompt
-		--append-system-prompt --name -n --session --session-id --fork
-		--session-dir --models --tools -t --exclude-tools -xt --thinking
-		--export --extension -e --skill --prompt-template --theme
-	)
-	# Class 3: known boolean flags -- recognized BEFORE the generic unknown
-	# branch so a boolean like --offline never consumes the real prompt.
-	local -a boolean_flags=(
-		--help -h --version -v --continue -c --resume -r --no-session
-		--no-tools -nt --no-builtin-tools -nbt --no-extensions -ne
-		--no-skills -ns --no-prompt-templates -np --no-themes
-		--no-context-files -nc --verbose --approve -a --no-approve -na
-		--offline
-	)
-
 	while [[ "${i}" -lt "${n}" ]]; do
-		arg="${SUMOCODE_ARGS[i]}"
-
-		if [[ "${arg}" == "--" ]]; then
-			# Class 1: end-of-options. args.js checks `--` first: every remaining
-			# token becomes a message (or a fileArg when @-prefixed) and flag
-			# parsing stops. `--` itself stays in the forwarded argv; the first
-			# post-`--` non-@ token (possibly "") is parsed.messages[0] and is
-			# extracted below.
-			kept+=("${arg}")
-			i=$((i + 1))
-			while [[ "${i}" -lt "${n}" ]]; do
-				arg="${SUMOCODE_ARGS[i]}"
-				if [[ "${found}" -eq 0 && "${arg}" != @* ]]; then
-					EXTRACTED_INITIAL_PROMPT="${arg}"
-					found=1
-				else
-					kept+=("${arg}")
-				fi
-				i=$((i + 1))
-			done
-			break
+		if [[ "${i}" -ne "${prompt_index}" ]]; then
+			kept+=("${SUMOCODE_ARGS[i]}")
 		fi
-
-		if [[ "${arg}" == --*=* ]]; then
-			# Class 6 (equals form): already one token; consumes nothing.
-			kept+=("${arg}")
-			i=$((i + 1))
-			continue
-		fi
-
-		if _sumocode_arg_in "${arg}" "${value_flags[@]}"; then
-			# Class 2: consume the next token whenever one exists.
-			kept+=("${arg}")
-			if [[ $((i + 1)) -lt "${n}" ]]; then
-				kept+=("${SUMOCODE_ARGS[i+1]}")
-				i=$((i + 2))
-			else
-				i=$((i + 1))
-			fi
-			continue
-		fi
-
-		if _sumocode_arg_in "${arg}" "${boolean_flags[@]}"; then
-			# Class 3: booleans never consume.
-			kept+=("${arg}")
-			i=$((i + 1))
-			continue
-		fi
-
-		if [[ "${arg}" == --print || "${arg}" == -p ]]; then
-			# Class 4: --print consumes a non-@file next token only when it does
-			# not start with `-`, or starts with `---`.
-			kept+=("${arg}")
-			if [[ $((i + 1)) -lt "${n}" ]]; then
-				next="${SUMOCODE_ARGS[i+1]}"
-				if [[ "${next}" != @* && ( "${next}" != -* || "${next}" == ---* ) ]]; then
-					kept+=("${next}")
-					i=$((i + 2))
-					continue
-				fi
-			fi
-			i=$((i + 1))
-			continue
-		fi
-
-		if [[ "${arg}" == --list-models ]]; then
-			# Class 4: --list-models consumes a search pattern that starts with
-			# neither `-` nor `@`.
-			kept+=("${arg}")
-			if [[ $((i + 1)) -lt "${n}" ]]; then
-				next="${SUMOCODE_ARGS[i+1]}"
-				if [[ "${next}" != -* && "${next}" != @* ]]; then
-					kept+=("${next}")
-					i=$((i + 2))
-					continue
-				fi
-			fi
-			i=$((i + 1))
-			continue
-		fi
-
-		if [[ "${arg}" == --tui-mode ]]; then
-			# Class 4: --tui-mode consumes exactly regular/fullscreen and, like
-			# args.js, also any other non-dash value (consumed as invalid); a
-			# missing or dash-following value is not consumed.
-			kept+=("${arg}")
-			if [[ $((i + 1)) -lt "${n}" ]]; then
-				next="${SUMOCODE_ARGS[i+1]}"
-				if [[ "${next}" != -* ]]; then
-					kept+=("${next}")
-					i=$((i + 2))
-					continue
-				fi
-			fi
-			i=$((i + 1))
-			continue
-		fi
-
-		if [[ "${arg}" == --use-theme ]]; then
-			# Class 4: --use-theme consumes the next token unless it starts
-			# with `-` (@-prefixed theme names included).
-			kept+=("${arg}")
-			if [[ $((i + 1)) -lt "${n}" ]]; then
-				next="${SUMOCODE_ARGS[i+1]}"
-				if [[ "${next}" != -* ]]; then
-					kept+=("${next}")
-					i=$((i + 2))
-					continue
-				fi
-			fi
-			i=$((i + 1))
-			continue
-		fi
-
-		if [[ "${arg}" == @* ]]; then
-			# Class 5: standalone @file is a Pi fileArg, never a message.
-			kept+=("${arg}")
-			i=$((i + 1))
-			continue
-		fi
-
-		if [[ "${arg}" == --* ]]; then
-			# Class 6: unknown long option (extension flags). Consume ONE next
-			# token exactly when args.js's generic branch would: a next token
-			# exists, is not `-`-prefixed and not `@`-prefixed.
-			kept+=("${arg}")
-			if [[ $((i + 1)) -lt "${n}" ]]; then
-				next="${SUMOCODE_ARGS[i+1]}"
-				if [[ "${next}" != -* && "${next}" != @* ]]; then
-					kept+=("${next}")
-					i=$((i + 2))
-					continue
-				fi
-			fi
-			i=$((i + 1))
-			continue
-		fi
-
-		if [[ "${arg}" == -* ]]; then
-			# Class 7: unknown short option (any other single-dash token,
-			# including bare `-`). args.js only records an "Unknown option"
-			# diagnostic: the token is never a message and never consumes a
-			# following value.
-			kept+=("${arg}")
-			i=$((i + 1))
-			continue
-		fi
-
-		if [[ "${found}" -eq 0 ]]; then
-			# Class 8: first actual message -- extract it, drop it from the
-			# forwarded argv (non-dash/non-@ is guaranteed by the classes
-			# above). args.js's final branch pushes ANY token that does not
-			# start with `-`, including the empty string (a bare `""`
-			# positional is parsed.messages[0] === ""), so there is
-			# deliberately no non-empty guard here.
-			EXTRACTED_INITIAL_PROMPT="${arg}"
-			found=1
-			i=$((i + 1))
-			continue
-		fi
-
-		# Extra positionals after the first message stay in the forwarded
-		# argv (see the extraction comment above for the multi-positional
-		# limitation).
-		kept+=("${arg}")
 		i=$((i + 1))
 	done
-
-	SUMOCODE_ARGS=("${kept[@]:-}")
-	if [[ "${#SUMOCODE_ARGS[@]}" -eq 1 && -z "${SUMOCODE_ARGS[0]}" ]]; then
+	if [[ "${#kept[@]}" -eq 0 ]]; then
 		SUMOCODE_ARGS=()
+	else
+		SUMOCODE_ARGS=("${kept[@]}")
 	fi
 }
 

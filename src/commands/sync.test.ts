@@ -189,6 +189,35 @@ describe("/sumo:sync", () => {
 		stdout.mockRestore();
 	});
 
+	it("seeds the private accounts source from legacy multi-pass subscriptions", async () => {
+		const home = mkdtempSync(join(tmpdir(), "sumocode-sync-"));
+		const configRepo = join(home, ".config", "sumocode");
+		const agentDir = join(home, ".pi", "agent");
+		mkdirSync(join(configRepo, ".git"), { recursive: true });
+		mkdirSync(agentDir, { recursive: true });
+		const legacy = `${JSON.stringify({ subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] }, null, 2)}\n`;
+		writeFileSync(join(agentDir, "multi-pass.json"), legacy);
+
+		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
+		await executeSumoSync(ctx() as never, {
+			env: {},
+			homeDir: home,
+			cwd: "/repo/sumocode",
+			moduleUrl: "file:///repo/sumocode/src/commands/sync.ts",
+			exists: (path) => path === join(configRepo, ".git") || sumocodeRepoExists(path),
+			readFile: () => JSON.stringify({ name: "@dhruvkelawala/sumocode" }),
+			exec: async () => ({ stdout: "", stderr: "" }),
+		});
+
+		const source = join(configRepo, "claude-accounts.json");
+		const target = join(agentDir, "claude-accounts.json");
+		expect(readFileSync(source, "utf8")).toBe(legacy);
+		expect(lstatSync(target).isSymbolicLink()).toBe(true);
+		expect(readlinkSync(target)).toBe(source);
+		stdout.mockRestore();
+	});
+
 	it("migrates an existing regular accounts file into the private source before linking", async () => {
 		const home = mkdtempSync(join(tmpdir(), "sumocode-sync-"));
 		const configRepo = join(home, ".config", "sumocode");

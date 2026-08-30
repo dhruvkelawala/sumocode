@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -76,7 +76,9 @@ function makeCtx(options: CtxOptions) {
 }
 
 function withAgentDir(agentDir: string): AccountsCommandDeps {
-	return { agentDir };
+	// Keep private-config fallback inside the test sandbox too; otherwise an
+	// injected agentDir would still resolve ~/.config/sumocode from the host.
+	return { agentDir, homeDir: agentDir };
 }
 
 function commandContext(ctx: ReturnType<typeof makeCtx>["ctx"]): ExtensionCommandContext {
@@ -232,6 +234,45 @@ describe("saveClaudeSubscriptions symlink handling", () => {
 		expect(JSON.parse(readFileSync(source, "utf8"))).toEqual({
 			unknownFutureKey: "keep",
 			subscriptions: [{ provider: "anthropic", index: 2, label: "company" }],
+		});
+	});
+
+	it("creates the private source and managed link before /sumo:sync has run", () => {
+		const agentDir = tempAgentDir();
+		const configDir = tempAgentDir();
+		mkdirSync(join(configDir, ".git"));
+
+		saveClaudeSubscriptions([{ provider: "anthropic", index: 2, label: "company" }], {
+			agentDir,
+			env: { SUMOCODE_CONFIG_DIR: configDir },
+		});
+
+		const target = join(agentDir, "claude-accounts.json");
+		const source = join(configDir, "claude-accounts.json");
+		expect(lstatSync(target).isSymbolicLink()).toBe(true);
+		expect(readlinkSync(target)).toBe(source);
+		expect(JSON.parse(readFileSync(source, "utf8"))).toEqual({
+			subscriptions: [{ provider: "anthropic", index: 2, label: "company" }],
+		});
+	});
+
+	it("reads an existing private source before recreating a missing managed link", () => {
+		const agentDir = tempAgentDir();
+		const configDir = tempAgentDir();
+		mkdirSync(join(configDir, ".git"));
+		writeFileSync(join(configDir, "claude-accounts.json"), JSON.stringify({
+			unknownFutureKey: "keep",
+			subscriptions: [{ provider: "anthropic", index: 2, label: "company" }],
+		}));
+		const deps = { agentDir, env: { SUMOCODE_CONFIG_DIR: configDir } };
+
+		expect(loadClaudeSubscriptions(deps)).toEqual([{ provider: "anthropic", index: 2, label: "company" }]);
+		saveClaudeSubscriptions([{ provider: "anthropic", index: 2, label: "personal" }], deps);
+
+		expect(lstatSync(join(agentDir, "claude-accounts.json")).isSymbolicLink()).toBe(true);
+		expect(JSON.parse(readFileSync(join(configDir, "claude-accounts.json"), "utf8"))).toEqual({
+			unknownFutureKey: "keep",
+			subscriptions: [{ provider: "anthropic", index: 2, label: "personal" }],
 		});
 	});
 

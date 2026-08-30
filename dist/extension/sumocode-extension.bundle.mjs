@@ -7291,6 +7291,13 @@ function initialManagedConfigContent(item, target) {
     if (targetStat.isFile() && !targetStat.isSymbolicLink()) return readFileSync6(target, "utf8");
   } catch {
   }
+  const legacyPath = join6(dirname3(target), "multi-pass.json");
+  if (existsSync4(legacyPath)) {
+    try {
+      return readFileSync6(legacyPath, "utf8");
+    } catch {
+    }
+  }
   return `${JSON.stringify({ subscriptions: [] }, null, 2)}
 `;
 }
@@ -16743,7 +16750,7 @@ function registerRpcLoginCommand(pi, deps = {}) {
 
 // src/commands/accounts.ts
 import { execFile as execFile7 } from "node:child_process";
-import { existsSync as existsSync13, lstatSync as lstatSync4, mkdirSync as mkdirSync10, readFileSync as readFileSync17, readlinkSync, renameSync as renameSync7, writeFileSync as writeFileSync11 } from "node:fs";
+import { existsSync as existsSync13, lstatSync as lstatSync4, mkdirSync as mkdirSync10, readFileSync as readFileSync17, readlinkSync, renameSync as renameSync7, rmSync as rmSync4, symlinkSync as symlinkSync2, writeFileSync as writeFileSync11 } from "node:fs";
 import { homedir as homedir15 } from "node:os";
 import { dirname as dirname13, join as join21, resolve as resolve7 } from "node:path";
 import { promisify as promisify5 } from "node:util";
@@ -16757,20 +16764,43 @@ function resolveAgentDir(deps) {
 function resolveAccountsConfigPath(deps = {}) {
   return join21(resolveAgentDir(deps), ACCOUNTS_CONFIG_FILE);
 }
-function resolveAccountsWritePath(deps) {
+function resolvePrivateAccountsPath(deps) {
+  const privateConfigDir = resolve7(deps.env?.SUMOCODE_CONFIG_DIR ?? process.env.SUMOCODE_CONFIG_DIR ?? join21(deps.homeDir ?? homedir15(), ".config", "sumocode"));
+  return join21(privateConfigDir, ACCOUNTS_CONFIG_FILE);
+}
+function resolveAccountsReadPath(deps) {
   const targetPath = resolveAccountsConfigPath(deps);
+  if (existsSync13(targetPath)) return targetPath;
+  const privatePath = resolvePrivateAccountsPath(deps);
+  return existsSync13(privatePath) ? privatePath : targetPath;
+}
+function pathEntryExists(path2) {
+  try {
+    lstatSync4(path2);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function resolveAccountsWriteDestination(deps) {
+  const targetPath = resolveAccountsConfigPath(deps);
+  const managedTarget = resolvePrivateAccountsPath(deps);
+  const privateConfigDir = dirname13(managedTarget);
+  if (pathEntryExists(managedTarget) && lstatSync4(managedTarget).isSymbolicLink()) {
+    throw new Error(`Refusing to replace a symlinked private accounts source: ${managedTarget}`);
+  }
   let targetStat;
   try {
     targetStat = lstatSync4(targetPath);
   } catch {
-    return targetPath;
   }
-  if (!targetStat.isSymbolicLink()) return targetPath;
-  const linkTarget = resolve7(dirname13(targetPath), readlinkSync(targetPath));
-  const privateConfigDir = resolve7(deps.env?.SUMOCODE_CONFIG_DIR ?? process.env.SUMOCODE_CONFIG_DIR ?? join21(deps.homeDir ?? homedir15(), ".config", "sumocode"));
-  const managedTarget = join21(privateConfigDir, ACCOUNTS_CONFIG_FILE);
-  if (linkTarget !== managedTarget) throw new Error(`Refusing to write accounts through an unmanaged symlink: ${targetPath}`);
-  return managedTarget;
+  if (targetStat?.isSymbolicLink()) {
+    const linkTarget = resolve7(dirname13(targetPath), readlinkSync(targetPath));
+    if (linkTarget !== managedTarget) throw new Error(`Refusing to write accounts through an unmanaged symlink: ${targetPath}`);
+    return { writePath: managedTarget };
+  }
+  if (existsSync13(join21(privateConfigDir, ".git"))) return { writePath: managedTarget, linkPath: targetPath };
+  return { writePath: targetPath };
 }
 function resolveLegacyConfigPath(deps) {
   return join21(resolveAgentDir(deps), LEGACY_CONFIG_FILE);
@@ -16800,26 +16830,31 @@ function claudeSubscriptionsFrom(document) {
   return document.subscriptions.map(parseSubscription).filter((entry) => entry?.provider === "anthropic").sort((left, right) => left.index - right.index);
 }
 function loadClaudeSubscriptions(deps = {}) {
-  const primary = claudeSubscriptionsFrom(readDocument(resolveAccountsConfigPath(deps)));
+  const primaryPath = resolveAccountsReadPath(deps);
+  const primary = claudeSubscriptionsFrom(readDocument(primaryPath));
   if (primary.length > 0) return primary;
-  if (existsSync13(resolveAccountsConfigPath(deps))) return primary;
+  if (existsSync13(primaryPath)) return primary;
   return claudeSubscriptionsFrom(readDocument(resolveLegacyConfigPath(deps)));
 }
 function saveClaudeSubscriptions(subscriptions, deps = {}) {
-  const path2 = resolveAccountsConfigPath(deps);
-  const writePath = resolveAccountsWritePath(deps);
-  const document = readDocument(path2);
+  const destination = resolveAccountsWriteDestination(deps);
+  const document = readDocument(resolveAccountsReadPath(deps));
   const existing = Array.isArray(document.subscriptions) ? document.subscriptions : [];
   const nonClaude = existing.filter((entry) => parseSubscription(entry)?.provider !== "anthropic");
   const next = {
     ...document,
     subscriptions: [...nonClaude, ...subscriptions]
   };
-  mkdirSync10(dirname13(writePath), { recursive: true, mode: 448 });
-  const temporary = `${writePath}.${process.pid}.tmp`;
+  mkdirSync10(dirname13(destination.writePath), { recursive: true, mode: 448 });
+  const temporary = `${destination.writePath}.${process.pid}.tmp`;
   writeFileSync11(temporary, `${JSON.stringify(next, null, 2)}
 `, { encoding: "utf8", mode: 384 });
-  renameSync7(temporary, writePath);
+  renameSync7(temporary, destination.writePath);
+  if (destination.linkPath) {
+    if (pathEntryExists(destination.linkPath)) rmSync4(destination.linkPath, { force: true });
+    mkdirSync10(dirname13(destination.linkPath), { recursive: true, mode: 448 });
+    symlinkSync2(destination.writePath, destination.linkPath);
+  }
 }
 function nextIndex(subscriptions) {
   const used = new Set(subscriptions.map((entry) => entry.index));

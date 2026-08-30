@@ -144,7 +144,15 @@ function initialManagedConfigContent(item: typeof MANAGED_CONFIG_ITEMS[number], 
 		const targetStat = lstatSync(target);
 		if (targetStat.isFile() && !targetStat.isSymbolicLink()) return readFileSync(target, "utf8");
 	} catch {
-		// No regular target to migrate: initialize the adapter-native document.
+		// No regular adapter-native target to migrate; try the legacy source.
+	}
+	const legacyPath = join(dirname(target), "multi-pass.json");
+	if (existsSync(legacyPath)) {
+		try {
+			return readFileSync(legacyPath, "utf8");
+		} catch {
+			// Fall through to an empty adapter-native document.
+		}
 	}
 	return `${JSON.stringify({ subscriptions: [] }, null, 2)}\n`;
 }

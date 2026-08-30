@@ -322,6 +322,15 @@ while [[ $# -gt 0 ]]; do
 			;;
 		--)
 			shift
+			# Run/task launches need the delimiter later so mode selection and prompt
+			# extraction treat --print/--mode tokens as messages. If the caller used
+			# the historical double-`--` quirk, the remaining argv already starts with
+			# the delimiter the extractor expects.
+			if [[ "${COMMAND}" == "run" || "${COMMAND}" == "task" ]]; then
+				if [[ "${1-}" != "--" ]]; then
+					SUMOCODE_ARGS+=("--")
+				fi
+			fi
 			SUMOCODE_ARGS+=("$@")
 			break
 			;;

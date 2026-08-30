@@ -145,3 +145,12 @@ Fixture table grown from 26 to 32 rows: four post-`--` RPC regressions for `--pr
 
 - **Red-check**: with only the new PTY rows added, `pnpm vitest run test/integration/spawn-pi-pty.test.ts -t "mirrors Pi option consumption"` failed 4/32 selected rows (`--print`, `-p`, `--mode`, `--mode=*` after `--` all routed direct Pi and had no extracted prompt).
 - **Gates**: `bash -n bin/sumocode.sh` clean; focused option-consumption suite 32/32; focused launcher file 47/47; `pnpm exec tsc --noEmit && pnpm build` green; `pnpm lint` green; unit one-worker 2,618/2,618; integration serial 143/143. No `dist/extension` changes.
+
+## Repair evidence (run-20260830T172321Z-56f523e4 attempt 2)
+
+Codex P2 follow-up: the wrapper's own `--` branch consumed the conventional single delimiter before both mode selection and extraction could see it. `bin/sumocode.sh --dry-run -- --print` therefore still became raw `--print`, selected direct Pi, and dropped the kickoff prompt. For run/task launches, the wrapper now preserves one delimiter in `SUMOCODE_ARGS` after consuming its own `--`, while coalescing the historical double-`--` quirk so existing `-- -- --print` behavior stays unchanged. `args_request_noninteractive_pi` and `extract_first_positional` both see the same delimiter boundary.
+
+Fixture table grown from 32 to 40 rows: four conventional single-`--` RPC regressions for `--print`, `-p`, `--mode`, and `--mode=*`, plus four pre-delimiter direct-Pi pins that keep the literal delimiter in forwarded args.
+
+- **Red-check**: with only the new PTY rows added, `pnpm vitest run test/integration/spawn-pi-pty.test.ts -t "mirrors Pi option consumption"` failed 8/40 selected rows: the four single-`--` post-delimiter flags routed direct Pi with empty `SUMOCODE_INITIAL_PROMPT`, and the four pre-delimiter direct-Pi rows dropped the literal `--` from `ARGS`.
+- **Gates**: `bash -n bin/sumocode.sh` clean; focused option-consumption suite 40/40; focused launcher file 55/55; `pnpm exec tsc --noEmit && pnpm build` green; `pnpm lint` green; unit one-worker 2,618/2,618; integration serial 151/151. No `dist/extension` changes.

@@ -379,10 +379,6 @@ const OPTION_CONSUMPTION_ROWS: readonly OptionConsumptionRow[] = [
 		expectedPrompt: "PROMPT",
 		expectedArgs: "--model sonnet --offline",
 	},
-	// `--` rows pass TWO end-of-options tokens: the launcher's own parse loop
-	// consumes the first `--` (forwarding the rest verbatim into SUMOCODE_ARGS),
-	// so one literal `--` reaches extract_first_positional only when the
-	// invocation carries two.
 	{
 		name: "unknown short option is kept and never becomes the prompt",
 		args: ["-x", "PROMPT"],
@@ -401,6 +397,35 @@ const OPTION_CONSUMPTION_ROWS: readonly OptionConsumptionRow[] = [
 		expectedPrompt: "",
 		expectedArgs: "PROMPT",
 	},
+	// Conventional single `--`: the wrapper consumes it while parsing its own
+	// options, then preserves delimiter state for mode selection and prompt
+	// extraction.
+	{
+		name: "single end-of-options -- keeps post-delimiter --print on the RPC path",
+		args: ["--", "--print"],
+		expectedPrompt: "--print",
+		expectedArgs: "--",
+	},
+	{
+		name: "single end-of-options -- keeps post-delimiter -p on the RPC path",
+		args: ["--", "-p"],
+		expectedPrompt: "-p",
+		expectedArgs: "--",
+	},
+	{
+		name: "single end-of-options -- keeps post-delimiter --mode on the RPC path",
+		args: ["--", "--mode", "rpc"],
+		expectedPrompt: "--mode",
+		expectedArgs: "-- rpc",
+	},
+	{
+		name: "single end-of-options -- keeps post-delimiter --mode=* on the RPC path",
+		args: ["--", "--mode=rpc"],
+		expectedPrompt: "--mode=rpc",
+		expectedArgs: "--",
+	},
+	// Historical double-`--` wrapper quirk: the wrapper consumes the first
+	// delimiter and the extractor sees the second.
 	{
 		name: "end-of-options -- makes the next token the prompt",
 		args: ["--", "--", "PROMPT"],
@@ -454,6 +479,34 @@ const OPTION_CONSUMPTION_ROWS: readonly OptionConsumptionRow[] = [
 		args: ["--", "--", "", "PROMPT"],
 		expectedPrompt: "",
 		expectedArgs: "-- PROMPT",
+	},
+	{
+		name: "pre-delimiter --print keeps the direct-Pi bypass intact",
+		args: ["--print", "--", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "--print -- PROMPT",
+		directBypass: true,
+	},
+	{
+		name: "pre-delimiter -p keeps the direct-Pi bypass intact",
+		args: ["-p", "--", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "-p -- PROMPT",
+		directBypass: true,
+	},
+	{
+		name: "pre-delimiter --mode keeps the direct-Pi bypass intact",
+		args: ["--mode", "rpc", "--", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "--mode rpc -- PROMPT",
+		directBypass: true,
+	},
+	{
+		name: "pre-delimiter --mode=* keeps the direct-Pi bypass intact",
+		args: ["--mode=rpc", "--", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "--mode=rpc -- PROMPT",
+		directBypass: true,
 	},
 	{
 		name: "print keeps the --- message quirk and the direct-Pi bypass intact",

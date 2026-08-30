@@ -121,7 +121,7 @@ Cover space form, equals form, missing value, flags before/after the positional,
 
 Every Pi bump must diff the launcher's mirrored table against Pi's parser. Plan 101 adds that compatibility check to the supported-version matrix.
 
-## Repair evidence (run-20260829T190709Z-0625e26d attempt 1, commit `7ee2528`)
+## Repair evidence (run-20260829T190709Z-0625e26d attempt 1, commit `2c301b3`)
 
 Spec-review blockers against the pinned Pi 0.84.3 `dist/cli/args.js` `parseArgs()`, all three fixed in `extract_first_positional`:
 

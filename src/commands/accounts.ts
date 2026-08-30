@@ -155,7 +155,10 @@ export function isAdapterInstalled(deps: AccountsCommandDeps = {}): boolean {
 }
 
 async function defaultInstallAdapter(): Promise<void> {
-	await execFileAsync("pi", ["install", ADAPTER_PACKAGE_SOURCE], {
+	// bin/sumocode.sh exports PI_BIN for the sessions it launches; a source
+	// checkout may have no `pi` on PATH at all.
+	const command = process.env.PI_BIN?.trim() || "pi";
+	await execFileAsync(command, ["install", ADAPTER_PACKAGE_SOURCE], {
 		env: process.env,
 		timeout: 120_000,
 		maxBuffer: 1024 * 1024,
@@ -219,25 +222,6 @@ function accountRow(account: ClaudeAccount): string {
 }
 
 async function addAccount(ctx: ExtensionCommandContext, deps: AccountsCommandDeps): Promise<void> {
-	if (!isAdapterInstalled(deps)) {
-		const install = await ctx.ui.confirm(
-			"SET UP MULTI-ACCOUNT CLAUDE",
-			"/accounts needs the Claude OAuth adapter (pi-claude-oauth-adapter) to register extra accounts. Install it now?",
-		);
-		if (!install) return;
-		ctx.ui.setStatus("sumocode.accounts", "installing pi-claude-oauth-adapter…");
-		try {
-			await (deps.installAdapter ?? defaultInstallAdapter)();
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			logDiagnostic("accounts_install_adapter_failed", { errorMessage: message });
-			ctx.ui.notify(`Unable to install pi-claude-oauth-adapter: ${message}`, "error");
-			return;
-		} finally {
-			ctx.ui.setStatus("sumocode.accounts", undefined);
-		}
-	}
-
 	const subscriptions = loadClaudeSubscriptions(deps);
 	const index = nextIndex(subscriptions);
 	const suggestedLabel = index === 2 ? "company" : `Claude account ${index}`;
@@ -300,6 +284,27 @@ export async function executeAccountsCommand(pi: ExtensionAPI, ctx: ExtensionCom
 	if (ctx.mode !== "rpc" || !ctx.hasUI) {
 		ctx.ui.notify("/accounts requires the SumoCode RPC interface", "warning");
 		return;
+	}
+	// Every flow below (sign-in on migrated accounts included) needs the
+	// adapter: without it no extension registers `anthropic-N`, and the legacy
+	// multi-pass OAuth is the broken implementation this replaces.
+	if (!isAdapterInstalled(deps)) {
+		const install = await ctx.ui.confirm(
+			"SET UP MULTI-ACCOUNT CLAUDE",
+			"/accounts needs the Claude OAuth adapter (pi-claude-oauth-adapter) to register and sign in extra accounts. Install it now?",
+		);
+		if (!install) return;
+		ctx.ui.setStatus("sumocode.accounts", "installing pi-claude-oauth-adapter…");
+		try {
+			await (deps.installAdapter ?? defaultInstallAdapter)();
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			logDiagnostic("accounts_install_adapter_failed", { errorMessage: message });
+			ctx.ui.notify(`Unable to install pi-claude-oauth-adapter: ${message}`, "error");
+			return;
+		} finally {
+			ctx.ui.setStatus("sumocode.accounts", undefined);
+		}
 	}
 	const accountList = accounts(ctx, deps);
 	const rows = accountList.map(accountRow);

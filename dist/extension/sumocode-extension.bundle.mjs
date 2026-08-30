@@ -16786,7 +16786,8 @@ function isAdapterInstalled(deps = {}) {
   }
 }
 async function defaultInstallAdapter() {
-  await execFileAsync4("pi", ["install", ADAPTER_PACKAGE_SOURCE], {
+  const command = process.env.PI_BIN?.trim() || "pi";
+  await execFileAsync4(command, ["install", ADAPTER_PACKAGE_SOURCE], {
     env: process.env,
     timeout: 12e4,
     maxBuffer: 1024 * 1024
@@ -16837,24 +16838,6 @@ function accountRow(account) {
   return `${account.label} \xB7 ${accountState(account)}  ${account.providerId}`;
 }
 async function addAccount(ctx, deps) {
-  if (!isAdapterInstalled(deps)) {
-    const install = await ctx.ui.confirm(
-      "SET UP MULTI-ACCOUNT CLAUDE",
-      "/accounts needs the Claude OAuth adapter (pi-claude-oauth-adapter) to register extra accounts. Install it now?"
-    );
-    if (!install) return;
-    ctx.ui.setStatus("sumocode.accounts", "installing pi-claude-oauth-adapter\u2026");
-    try {
-      await (deps.installAdapter ?? defaultInstallAdapter)();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logDiagnostic("accounts_install_adapter_failed", { errorMessage: message });
-      ctx.ui.notify(`Unable to install pi-claude-oauth-adapter: ${message}`, "error");
-      return;
-    } finally {
-      ctx.ui.setStatus("sumocode.accounts", void 0);
-    }
-  }
   const subscriptions = loadClaudeSubscriptions(deps);
   const index = nextIndex(subscriptions);
   const suggestedLabel = index === 2 ? "company" : `Claude account ${index}`;
@@ -16913,6 +16896,24 @@ async function executeAccountsCommand(pi, ctx, deps = {}) {
   if (ctx.mode !== "rpc" || !ctx.hasUI) {
     ctx.ui.notify("/accounts requires the SumoCode RPC interface", "warning");
     return;
+  }
+  if (!isAdapterInstalled(deps)) {
+    const install = await ctx.ui.confirm(
+      "SET UP MULTI-ACCOUNT CLAUDE",
+      "/accounts needs the Claude OAuth adapter (pi-claude-oauth-adapter) to register and sign in extra accounts. Install it now?"
+    );
+    if (!install) return;
+    ctx.ui.setStatus("sumocode.accounts", "installing pi-claude-oauth-adapter\u2026");
+    try {
+      await (deps.installAdapter ?? defaultInstallAdapter)();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logDiagnostic("accounts_install_adapter_failed", { errorMessage: message });
+      ctx.ui.notify(`Unable to install pi-claude-oauth-adapter: ${message}`, "error");
+      return;
+    } finally {
+      ctx.ui.setStatus("sumocode.accounts", void 0);
+    }
   }
   const accountList = accounts(ctx, deps);
   const rows = accountList.map(accountRow);

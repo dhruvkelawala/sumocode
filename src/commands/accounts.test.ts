@@ -22,9 +22,16 @@ afterEach(() => {
 	}
 });
 
-function tempAgentDir(): string {
+const PINNED_ADAPTER_SOURCE = "git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account";
+
+function tempAgentDir(options: { adapter?: boolean } = {}): string {
 	const dir = mkdtempSync(join(tmpdir(), "sumocode-accounts-"));
 	tempDirs.push(dir);
+	// Default to the adapter being installed: most tests exercise flows past
+	// the install gate. Gate tests opt out with { adapter: false }.
+	if (options.adapter !== false) {
+		writeFileSync(join(dir, "settings.json"), JSON.stringify({ packages: [PINNED_ADAPTER_SOURCE] }), "utf8");
+	}
 	return dir;
 }
 
@@ -208,7 +215,7 @@ describe("saveClaudeSubscriptions", () => {
 
 describe("isAdapterInstalled", () => {
 	it("detects the exact pinned source in string-form packages entries", () => {
-		const agentDir = tempAgentDir();
+		const agentDir = tempAgentDir({ adapter: false });
 		writeFileSync(
 			join(agentDir, "settings.json"),
 			JSON.stringify({ packages: ["git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account"] }),
@@ -218,7 +225,7 @@ describe("isAdapterInstalled", () => {
 	});
 
 	it("detects the exact pinned source in object-form packages entries", () => {
-		const agentDir = tempAgentDir();
+		const agentDir = tempAgentDir({ adapter: false });
 		writeFileSync(
 			join(agentDir, "settings.json"),
 			JSON.stringify({ packages: [{ source: "npm:something-else" }, { source: "git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account" }] }),
@@ -228,7 +235,7 @@ describe("isAdapterInstalled", () => {
 	});
 
 	it("rejects source variants that merely contain the package name or words", () => {
-		const agentDir = tempAgentDir();
+		const agentDir = tempAgentDir({ adapter: false });
 		writeFileSync(
 			join(agentDir, "settings.json"),
 			JSON.stringify({
@@ -245,7 +252,7 @@ describe("isAdapterInstalled", () => {
 	});
 
 	it("returns false when missing, malformed, or unrelated", () => {
-		const agentDir = tempAgentDir();
+		const agentDir = tempAgentDir({ adapter: false });
 		expect(isAdapterInstalled(withAgentDir(agentDir))).toBe(false);
 		writeFileSync(join(agentDir, "settings.json"), "{bad", "utf8");
 		expect(isAdapterInstalled(withAgentDir(agentDir))).toBe(false);
@@ -380,7 +387,7 @@ describe("executeAccountsCommand", () => {
 	});
 
 	it("add flow confirms adapter install, writes config, then requests reload", async () => {
-		const agentDir = tempAgentDir();
+		const agentDir = tempAgentDir({ adapter: false });
 		const installAdapter = vi.fn(async () => {});
 		const reload = vi.fn(async () => {});
 		const { ctx, confirm, input } = makeCtx({
@@ -401,7 +408,7 @@ describe("executeAccountsCommand", () => {
 	});
 
 	it("add flow picks the next free index and migrates legacy accounts forward", async () => {
-		const agentDir = tempAgentDir();
+		const agentDir = tempAgentDir({ adapter: false });
 		writeLegacy(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });
 		const installAdapter = vi.fn(async () => {});
 		const reload = vi.fn(async () => {});
@@ -425,7 +432,7 @@ describe("executeAccountsCommand", () => {
 	});
 
 	it("add flow skips install when the adapter is already present", async () => {
-		const agentDir = tempAgentDir();
+		const agentDir = tempAgentDir({ adapter: false });
 		writeFileSync(
 			join(agentDir, "settings.json"),
 			JSON.stringify({ packages: ["git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account"] }),
@@ -447,7 +454,7 @@ describe("executeAccountsCommand", () => {
 	});
 
 	it("add flow reports installer failure visibly and writes nothing", async () => {
-		const agentDir = tempAgentDir();
+		const agentDir = tempAgentDir({ adapter: false });
 		const installAdapter = vi.fn(async () => {
 			throw new Error("network down");
 		});
@@ -481,7 +488,7 @@ describe("executeAccountsCommand", () => {
 	});
 
 	it("add flow does nothing when install is declined", async () => {
-		const agentDir = tempAgentDir();
+		const agentDir = tempAgentDir({ adapter: false });
 		const installAdapter = vi.fn(async () => {});
 		const { ctx, input } = makeCtx({
 			agentDir,

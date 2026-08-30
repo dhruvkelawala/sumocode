@@ -16758,6 +16758,7 @@ var ACCOUNTS_CONFIG_FILE = "claude-accounts.json";
 var LEGACY_CONFIG_FILE = "multi-pass.json";
 var ADAPTER_PACKAGE_SOURCE = "git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account";
 var execFileAsync4 = promisify5(execFile7);
+var sessionPendingReloadProviders = /* @__PURE__ */ new Set();
 function resolveAgentDir(deps) {
   return deps.agentDir ?? deps.env?.PI_CODING_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR ?? join21(deps.homeDir ?? homedir15(), ".pi", "agent");
 }
@@ -16929,16 +16930,14 @@ function accountState(account) {
 function accountRow(account) {
   return `${account.label} \xB7 ${accountState(account)}  ${account.providerId}`;
 }
-async function ensureAdapterInstalled(ctx, deps) {
-  if (isAdapterInstalled(deps)) return true;
-  const install = await ctx.ui.confirm(
-    "SET UP MULTI-ACCOUNT CLAUDE",
-    "/accounts needs the Claude OAuth adapter (pi-claude-oauth-adapter) to register and sign in extra accounts. Install it now?"
-  );
-  if (!install) return false;
+function pendingReloadProviders(deps) {
+  return deps.pendingReloadProviders ?? sessionPendingReloadProviders;
+}
+async function installAdapterPackage(ctx, deps) {
   ctx.ui.setStatus("sumocode.accounts", "installing pi-claude-oauth-adapter\u2026");
   try {
     await (deps.installAdapter ?? defaultInstallAdapter)();
+    return true;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logDiagnostic("accounts_install_adapter_failed", { errorMessage: message });
@@ -16947,7 +16946,14 @@ async function ensureAdapterInstalled(ctx, deps) {
   } finally {
     ctx.ui.setStatus("sumocode.accounts", void 0);
   }
-  return true;
+}
+async function ensureAdapterInstalled(ctx, deps) {
+  if (isAdapterInstalled(deps)) return true;
+  const install = await ctx.ui.confirm(
+    "SET UP MULTI-ACCOUNT CLAUDE",
+    "/accounts needs the Claude OAuth adapter (pi-claude-oauth-adapter) to register and sign in extra accounts. Install it now?"
+  );
+  return install ? installAdapterPackage(ctx, deps) : false;
 }
 async function addAccount(ctx, deps) {
   if (!await ensureAdapterInstalled(ctx, deps)) return;
@@ -16962,6 +16968,7 @@ async function addAccount(ctx, deps) {
     label: label.trim() || suggestedLabel
   };
   saveClaudeSubscriptions([...subscriptions, subscription], deps);
+  pendingReloadProviders(deps).add(`anthropic-${index}`);
   ctx.ui.notify(`Added ${subscription.label} as anthropic-${index}`, "info");
   const reload = await ctx.ui.confirm(
     "RELOAD TO ACTIVATE ACCOUNT",
@@ -17003,7 +17010,20 @@ async function accountActions(pi, ctx, account, deps) {
     }
     const providerRegistered = ctx.modelRegistry.getAll().some((model) => model.provider === account.providerId);
     if (!providerRegistered) {
-      ctx.ui.notify(`${account.providerId} is not registered in this session. Reloading SumoCode\u2026`, "info");
+      if (pendingReloadProviders(deps).has(account.providerId)) {
+        ctx.ui.notify(`${account.providerId} is not registered in this session. Reloading SumoCode\u2026`, "info");
+        await (deps.reload ?? ((reloadCtx) => executeSumoReload(reloadCtx)))(ctx);
+        return;
+      }
+      const repair = await ctx.ui.confirm(
+        "REPAIR MULTI-ACCOUNT CLAUDE",
+        `${account.providerId} failed to register during startup. Reinstall the adapter and reload?`
+      );
+      if (!repair) {
+        ctx.ui.notify(`${account.providerId} remains unavailable until the adapter is repaired`, "warning");
+        return;
+      }
+      if (!await installAdapterPackage(ctx, deps)) return;
       await (deps.reload ?? ((reloadCtx) => executeSumoReload(reloadCtx)))(ctx);
       return;
     }

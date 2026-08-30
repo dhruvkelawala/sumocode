@@ -78,7 +78,7 @@ function makeCtx(options: CtxOptions) {
 function withAgentDir(agentDir: string): AccountsCommandDeps {
 	// Keep private-config fallback inside the test sandbox too; otherwise an
 	// injected agentDir would still resolve ~/.config/sumocode from the host.
-	return { agentDir, homeDir: agentDir };
+	return { agentDir, homeDir: agentDir, pendingReloadProviders: new Set<string>() };
 }
 
 function commandContext(ctx: ReturnType<typeof makeCtx>["ctx"]): ExtensionCommandContext {
@@ -416,7 +416,7 @@ describe("executeAccountsCommand", () => {
 		expect(login).toHaveBeenCalledWith("anthropic-2", expect.anything());
 	});
 
-	it("reloads instead of offering actions when the adapter is configured but the provider is absent", async () => {
+	it("reloads a provider whose account was added after registry startup", async () => {
 		const agentDir = tempAgentDir();
 		writeAccounts(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });
 		const login = vi.fn(async () => {});
@@ -426,11 +426,51 @@ describe("executeAccountsCommand", () => {
 			auth: { anthropic: true },
 			onSelect: pickOption("company"),
 		});
-		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), login, reload });
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), {
+			...withAgentDir(agentDir),
+			login,
+			reload,
+			pendingReloadProviders: new Set(["anthropic-2"]),
+		});
 		expect(reload).toHaveBeenCalledTimes(1);
 		expect(login).not.toHaveBeenCalled();
 		expect(select).toHaveBeenCalledTimes(1);
 		expect(notify).toHaveBeenCalledWith("anthropic-2 is not registered in this session. Reloading SumoCode…", "info");
+	});
+
+	it("offers repair instead of reloading when adapter registration failed during startup", async () => {
+		const agentDir = tempAgentDir();
+		writeAccounts(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });
+		const installAdapter = vi.fn(async () => {});
+		const reload = vi.fn(async () => {});
+		const { ctx, confirm, notify } = makeCtx({
+			agentDir,
+			onSelect: pickOption("company"),
+			onConfirm: () => false,
+		});
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), installAdapter, reload });
+		expect(confirm).toHaveBeenCalledWith(
+			"REPAIR MULTI-ACCOUNT CLAUDE",
+			"anthropic-2 failed to register during startup. Reinstall the adapter and reload?",
+		);
+		expect(installAdapter).not.toHaveBeenCalled();
+		expect(reload).not.toHaveBeenCalled();
+		expect(notify).toHaveBeenCalledWith("anthropic-2 remains unavailable until the adapter is repaired", "warning");
+	});
+
+	it("reinstalls and reloads when adapter repair is accepted", async () => {
+		const agentDir = tempAgentDir();
+		writeAccounts(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });
+		const installAdapter = vi.fn(async () => {});
+		const reload = vi.fn(async () => {});
+		const { ctx } = makeCtx({
+			agentDir,
+			onSelect: pickOption("company"),
+			onConfirm: () => true,
+		});
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), installAdapter, reload });
+		expect(installAdapter).toHaveBeenCalledTimes(1);
+		expect(reload).toHaveBeenCalledTimes(1);
 	});
 
 	it("switching preserves the current model id on the target provider", async () => {
@@ -495,13 +535,19 @@ describe("executeAccountsCommand", () => {
 		const agentDir = tempAgentDir({ adapter: false });
 		const installAdapter = vi.fn(async () => {});
 		const reload = vi.fn(async () => {});
+		const pendingReloadProviders = new Set<string>();
 		const { ctx, confirm, input } = makeCtx({
 			agentDir,
 			onSelect: pickOption(ADD_LABEL),
 			onConfirm: () => true,
 			onInput: () => "company",
 		});
-		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), installAdapter, reload });
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), {
+			...withAgentDir(agentDir),
+			installAdapter,
+			reload,
+			pendingReloadProviders,
+		});
 
 		expect(installAdapter).toHaveBeenCalledTimes(1);
 		expect(confirm).toHaveBeenCalledTimes(2);
@@ -509,6 +555,7 @@ describe("executeAccountsCommand", () => {
 		expect(loadClaudeSubscriptions(withAgentDir(agentDir))).toEqual([
 			{ provider: "anthropic", index: 2, label: "company" },
 		]);
+		expect(pendingReloadProviders).toContain("anthropic-2");
 		expect(reload).toHaveBeenCalledTimes(1);
 	});
 

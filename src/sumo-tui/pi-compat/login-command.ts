@@ -170,15 +170,34 @@ function showEvent(ctx: ExtensionCommandContext, event: AuthEvent): void {
  * error identity and call site. Credentials never reach this path: only the
  * provider id, auth type, error message, and stack frames are recorded.
  */
+/**
+ * Redact credential-bearing substrings before provider errors reach the
+ * diagnostics stream. `/login` executes third-party provider code, so rejection
+ * text is not a credential-free boundary: OAuth callback URLs carry `code=`
+ * values, failures can echo bearer tokens or `sk-` keys. Applies to the message
+ * and to stack frames, which repeat the message.
+ */
+export function redactLoginErrorText(text: string): string {
+	return text
+		.replace(/([?&](?:code|access_token|refresh_token|id_token|token|api_key|apikey|state)=)[^&\s]+/gi, "$1[redacted]")
+		.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+		.replace(/\bsk-[A-Za-z0-9_-]{8,}/g, "[redacted]");
+}
+
 // oxlint-disable-next-line anti-slop/no-unknown-parameters -- caught rejection boundary: the instanceof Error checks below are the parse.
 function logLoginFailure(attempt: LoginMethod | undefined, providerRef: string, error: unknown): void {
 	const failure = error instanceof Error ? error : undefined;
-	const stack = failure?.stack ? failure.stack.split("\n").slice(0, 8).map((frame) => frame.trim()) : [];
+	const stack = failure?.stack
+		? failure.stack
+				.split("\n")
+				.slice(0, 8)
+				.map((frame) => redactLoginErrorText(frame.trim()))
+		: [];
 	logDiagnostic("rpc_login_failed", {
 		provider: attempt?.provider.id ?? providerRef,
 		authType: attempt?.authType,
 		errorName: failure?.name ?? "non_error_rejection",
-		errorMessage: failure?.message ?? String(error),
+		errorMessage: redactLoginErrorText(failure?.message ?? String(error)),
 		stack,
 	});
 }

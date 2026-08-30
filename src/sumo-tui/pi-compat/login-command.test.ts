@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { cancelActiveRpcLogin, executeRpcLogin, registerRpcLoginCommand, type RpcLoginRuntime } from "./login-command.js";
+import { cancelActiveRpcLogin, executeRpcLogin, redactLoginErrorText, registerRpcLoginCommand, type RpcLoginRuntime } from "./login-command.js";
 import { decodeAuthInputTitle, isSecretInputTitle } from "./secret-input.js";
 /* oxlint-disable anti-slop/no-chained-type-assertions -- test doubles cast minimal stub objects to Pi context types. */
 /* oxlint-disable anti-slop/require-safety-comment-for-type-assertion -- stub shape is exercised by the assertions below. */
@@ -211,5 +211,24 @@ describe("RPC /login compatibility command", () => {
 		const title = (ctx.ui.input as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
 		expect(isSecretInputTitle(title)).toBe(true);
 		expect(title).not.toContain("sk-secret");
+	});
+});
+
+describe("redactLoginErrorText", () => {
+	it("redacts credential-bearing URL query values", () => {
+		const input = "request to https://console.anthropic.com/v1/oauth/callback?code=abc-secret-123&state=s1 failed";
+		expect(redactLoginErrorText(input)).toBe(
+			"request to https://console.anthropic.com/v1/oauth/callback?code=[redacted]&state=[redacted] failed",
+		);
+	});
+
+	it("redacts bearer tokens and sk- keys", () => {
+		expect(redactLoginErrorText("auth failed for Bearer sk-ant-abcdef123456789")).toBe("auth failed for Bearer [redacted]");
+		expect(redactLoginErrorText("bad key sk-abcdef1234567890")).toBe("bad key [redacted]");
+	});
+
+	it("leaves ordinary error text untouched", () => {
+		const input = "Unknown login provider: anthropic-2";
+		expect(redactLoginErrorText(input)).toBe(input);
 	});
 });

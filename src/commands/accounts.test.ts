@@ -207,7 +207,7 @@ describe("saveClaudeSubscriptions", () => {
 
 
 describe("isAdapterInstalled", () => {
-	it("detects string-form packages entries", () => {
+	it("detects the exact pinned source in string-form packages entries", () => {
 		const agentDir = tempAgentDir();
 		writeFileSync(
 			join(agentDir, "settings.json"),
@@ -217,7 +217,7 @@ describe("isAdapterInstalled", () => {
 		expect(isAdapterInstalled(withAgentDir(agentDir))).toBe(true);
 	});
 
-	it("detects object-form packages entries", () => {
+	it("detects the exact pinned source in object-form packages entries", () => {
 		const agentDir = tempAgentDir();
 		writeFileSync(
 			join(agentDir, "settings.json"),
@@ -227,13 +227,18 @@ describe("isAdapterInstalled", () => {
 		expect(isAdapterInstalled(withAgentDir(agentDir))).toBe(true);
 	});
 
-	it("rejects upstream adapter builds without multi-account", () => {
+	it("rejects source variants that merely contain the package name or words", () => {
 		const agentDir = tempAgentDir();
-		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: ["npm:pi-claude-oauth-adapter"] }), "utf8");
-		expect(isAdapterInstalled(withAgentDir(agentDir))).toBe(false);
 		writeFileSync(
 			join(agentDir, "settings.json"),
-			JSON.stringify({ packages: [{ source: "git:github.com/minzique/pi-claude-oauth-adapter@main" }] }),
+			JSON.stringify({
+				packages: [
+					"git:github.com/dhruvkelawala/pi-claude-oauth-adapter@not-multi-account",
+					"/Users/x/code/pi-claude-oauth-adapter-multi-account-backup",
+					"npm:pi-claude-oauth-adapter",
+					{ source: "git:github.com/minzique/pi-claude-oauth-adapter@main" },
+				],
+			}),
 			"utf8",
 		);
 		expect(isAdapterInstalled(withAgentDir(agentDir))).toBe(false);

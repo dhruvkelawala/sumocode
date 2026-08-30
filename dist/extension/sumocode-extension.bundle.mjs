@@ -16612,14 +16612,17 @@ function showEvent(ctx, event) {
       ctx.ui.setStatus("sumocode.login", event.message);
   }
 }
+function redactLoginErrorText(text) {
+  return text.replace(/([?&](?:code|access_token|refresh_token|id_token|token|api_key|apikey|state)=)[^&\s]+/gi, "$1[redacted]").replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]").replace(/\bsk-[A-Za-z0-9_-]{8,}/g, "[redacted]");
+}
 function logLoginFailure(attempt, providerRef, error) {
   const failure2 = error instanceof Error ? error : void 0;
-  const stack = failure2?.stack ? failure2.stack.split("\n").slice(0, 8).map((frame) => frame.trim()) : [];
+  const stack = failure2?.stack ? failure2.stack.split("\n").slice(0, 8).map((frame) => redactLoginErrorText(frame.trim())) : [];
   logDiagnostic("rpc_login_failed", {
     provider: attempt?.provider.id ?? providerRef,
     authType: attempt?.authType,
     errorName: failure2?.name ?? "non_error_rejection",
-    errorMessage: failure2?.message ?? String(error),
+    errorMessage: redactLoginErrorText(failure2?.message ?? String(error)),
     stack
   });
 }
@@ -16700,8 +16703,6 @@ import { promisify as promisify5 } from "node:util";
 var ACCOUNTS_CONFIG_FILE = "claude-accounts.json";
 var LEGACY_CONFIG_FILE = "multi-pass.json";
 var ADAPTER_PACKAGE_SOURCE = "git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account";
-var ADAPTER_PACKAGE_MATCH = "pi-claude-oauth-adapter";
-var ADAPTER_MULTI_ACCOUNT_MATCH = "multi-account";
 var execFileAsync4 = promisify5(execFile7);
 function resolveAgentDir(deps) {
   return deps.agentDir ?? deps.env?.PI_CODING_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR ?? join21(deps.homeDir ?? homedir15(), ".pi", "agent");
@@ -16774,10 +16775,7 @@ function isAdapterInstalled(deps = {}) {
   try {
     const parsed = JSON.parse(readFileSync17(settingsPath, "utf8"));
     if (!isRecord4(parsed) || !Array.isArray(parsed.packages)) return false;
-    return parsed.packages.some((entry) => {
-      const source = packageSource(entry);
-      return source !== void 0 && source.includes(ADAPTER_PACKAGE_MATCH) === true && source.includes(ADAPTER_MULTI_ACCOUNT_MATCH) === true;
-    });
+    return parsed.packages.some((entry) => packageSource(entry) === ADAPTER_PACKAGE_SOURCE);
   } catch {
     return false;
   }

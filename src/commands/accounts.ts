@@ -13,11 +13,14 @@ import { executeRpcLogin, getRpcLoginRuntime, type RpcLoginRuntime } from "../su
 const ACCOUNTS_CONFIG_FILE = "claude-accounts.json";
 /** Legacy pi-multi-pass config, read once so existing accounts migrate forward. */
 const LEGACY_CONFIG_FILE = "multi-pass.json";
-/** The adapter registers `anthropic-N` providers with working OAuth; without it added accounts can never sign in. */
+/**
+ * The exact adapter source that registers `anthropic-N` providers with working
+ * OAuth. Verified by exact equality, not substring matching: textual variants
+ * (`@not-multi-account` refs, checkout paths that merely contain the words)
+ * would otherwise pass a substring probe while leaving added accounts unable
+ * to sign in. Unrecognized sources re-enter the install flow instead.
+ */
 const ADAPTER_PACKAGE_SOURCE = "git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account";
-const ADAPTER_PACKAGE_MATCH = "pi-claude-oauth-adapter";
-/** Only the multi-account branch registers `anthropic-N`; upstream builds leave added accounts unable to sign in. */
-const ADAPTER_MULTI_ACCOUNT_MATCH = "multi-account";
 
 const execFileAsync = promisify(execFile);
 
@@ -134,10 +137,10 @@ function packageSource(value: unknown): string | undefined {
 }
 
 /**
- * Detect the multi-account OAuth adapter in settings.json packages. Requires
- * the `multi-account` source: upstream adapter builds do not register the
- * `anthropic-N` provider ids, so added accounts could never sign in; the add
- * flow gates on this check.
+ * Detect the multi-account OAuth adapter in settings.json packages by exact
+ * source equality. Only this source registers the `anthropic-N` provider ids;
+ * anything else (upstream builds, other refs, local checkouts) re-enters the
+ * install flow rather than silently skipping it.
  */
 export function isAdapterInstalled(deps: AccountsCommandDeps = {}): boolean {
 	const settingsPath = join(resolveAgentDir(deps), "settings.json");
@@ -145,14 +148,7 @@ export function isAdapterInstalled(deps: AccountsCommandDeps = {}): boolean {
 	try {
 		const parsed: unknown = JSON.parse(readFileSync(settingsPath, "utf8"));
 		if (!isRecord(parsed) || !Array.isArray(parsed.packages)) return false;
-		return parsed.packages.some((entry) => {
-			const source = packageSource(entry);
-			return (
-				source !== undefined &&
-				source.includes(ADAPTER_PACKAGE_MATCH) === true &&
-				source.includes(ADAPTER_MULTI_ACCOUNT_MATCH) === true
-			);
-		});
+		return parsed.packages.some((entry) => packageSource(entry) === ADAPTER_PACKAGE_SOURCE);
 	} catch {
 		return false;
 	}

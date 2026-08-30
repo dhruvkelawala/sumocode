@@ -84,7 +84,7 @@ Keep explicit, documented classes in `extract_first_positional()`:
 2. known boolean flags (`--help/-h`, `--version/-v`, `--continue/-c`, `--resume/-r`, `--no-session`, `--no-tools/-nt`, `--no-builtin-tools/-nbt`, `--no-extensions/-ne`, `--no-skills/-ns`, `--no-prompt-templates/-np`, `--no-themes`, `--no-context-files/-nc`, `--verbose`, `--approve/-a`, `--no-approve/-na`, `--offline`);
 3. dedicated `--print/-p`, `--list-models`, and `--tui-mode` branches matching their distinct lookahead rules exactly, including Pi's `---` print-message exception;
 4. standalone `@file` tokens, which are kept and never extracted;
-5. unknown `--flag`: keep it and consume one following value only when Pi's generic branch would (non-empty, not `-`-prefixed, not `@`-prefixed);
+5. unknown `--flag`: keep it and consume one following value only when Pi's generic branch would (not `-`-prefixed, not `@`-prefixed; an empty-string next token IS consumed — `"".startsWith("-")` and `"".startsWith("@")` are both false);
 6. plain positional prompt extraction.
 
 `--flag=value` remains one token. Do not infer extension flag schemas beyond Pi's generic behavior. Re-read the complete pinned `parseArgs()` during implementation; if a class cannot be mirrored without changing direct-Pi routing, STOP and report.

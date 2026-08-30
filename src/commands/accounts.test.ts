@@ -304,6 +304,7 @@ describe("executeAccountsCommand", () => {
 		const { ctx, select } = makeCtx({
 			agentDir,
 			auth: { anthropic: true, "anthropic-2": true },
+			models: [{ provider: "anthropic-2", id: "claude-opus" }],
 			currentModel: { provider: "anthropic-2", id: "claude-opus" },
 			onSelect: pickOption("company"),
 		});
@@ -320,6 +321,7 @@ describe("executeAccountsCommand", () => {
 		const { ctx } = makeCtx({
 			agentDir,
 			auth: { anthropic: true },
+			models: [{ provider: "anthropic-2", id: "claude-opus" }],
 			onSelect: (title: string, options: string[]) => {
 				if (title === "CLAUDE ACCOUNTS") return options[1];
 				return options.find((option) => option === "sign in");
@@ -327,6 +329,23 @@ describe("executeAccountsCommand", () => {
 		});
 		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), login });
 		expect(login).toHaveBeenCalledWith("anthropic-2", expect.anything());
+	});
+
+	it("reloads instead of offering actions when the adapter is configured but the provider is absent", async () => {
+		const agentDir = tempAgentDir();
+		writeAccounts(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });
+		const login = vi.fn(async () => {});
+		const reload = vi.fn(async () => {});
+		const { ctx, select, notify } = makeCtx({
+			agentDir,
+			auth: { anthropic: true },
+			onSelect: pickOption("company"),
+		});
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), login, reload });
+		expect(reload).toHaveBeenCalledTimes(1);
+		expect(login).not.toHaveBeenCalled();
+		expect(select).toHaveBeenCalledTimes(1);
+		expect(notify).toHaveBeenCalledWith("anthropic-2 is not registered in this session. Reloading SumoCode…", "info");
 	});
 
 	it("switching preserves the current model id on the target provider", async () => {
@@ -378,6 +397,7 @@ describe("executeAccountsCommand", () => {
 		const { ctx, select } = makeCtx({
 			agentDir,
 			auth: { anthropic: true, "anthropic-2": false },
+			models: [{ provider: "anthropic-2", id: "claude-opus" }],
 			onSelect: pickOption("company"),
 		});
 		await executeAccountsCommand(extensionApi(), commandContext(ctx), withAgentDir(agentDir));
@@ -542,6 +562,7 @@ describe("executeAccountsCommand", () => {
 		const { ctx } = makeCtx({
 			agentDir,
 			auth: { anthropic: true },
+			models: [{ provider: "anthropic-2", id: "claude-opus" }],
 			onSelect: (title: string, options: string[]) => {
 				if (title === "CLAUDE ACCOUNTS") return options[1];
 				return options.find((option) => option === "rename account");

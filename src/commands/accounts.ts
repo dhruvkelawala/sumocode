@@ -300,11 +300,19 @@ async function accountActions(pi: ExtensionAPI, ctx: ExtensionCommandContext, ac
 	// account is built into Pi and never gated. A just-installed adapter cannot
 	// register providers into the running session, so reload before offering
 	// actions that would otherwise dead-end on an unregistered provider.
-	if (account.subscription && !isAdapterInstalled(deps)) {
-		if (!(await ensureAdapterInstalled(ctx, deps))) return;
-		ctx.ui.notify("pi-claude-oauth-adapter installed. Reload SumoCode, then re-open /accounts.", "info");
-		await (deps.reload ?? ((reloadCtx) => executeSumoReload(reloadCtx)))(ctx);
-		return;
+	if (account.subscription) {
+		if (!isAdapterInstalled(deps)) {
+			if (!(await ensureAdapterInstalled(ctx, deps))) return;
+			ctx.ui.notify("pi-claude-oauth-adapter installed. Reload SumoCode, then re-open /accounts.", "info");
+			await (deps.reload ?? ((reloadCtx) => executeSumoReload(reloadCtx)))(ctx);
+			return;
+		}
+		const providerRegistered = ctx.modelRegistry.getAll().some((model) => model.provider === account.providerId);
+		if (!providerRegistered) {
+			ctx.ui.notify(`${account.providerId} is not registered in this session. Reloading SumoCode…`, "info");
+			await (deps.reload ?? ((reloadCtx) => executeSumoReload(reloadCtx)))(ctx);
+			return;
+		}
 	}
 	const actions = [
 		...(account.configured && !account.active ? ["use this account"] : []),

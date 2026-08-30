@@ -16929,11 +16929,19 @@ async function renameAccount(ctx, account, deps) {
   ctx.ui.notify(`Renamed ${account.providerId} to ${label.trim()}`, "info");
 }
 async function accountActions(pi, ctx, account, deps) {
-  if (account.subscription && !isAdapterInstalled(deps)) {
-    if (!await ensureAdapterInstalled(ctx, deps)) return;
-    ctx.ui.notify("pi-claude-oauth-adapter installed. Reload SumoCode, then re-open /accounts.", "info");
-    await (deps.reload ?? ((reloadCtx) => executeSumoReload(reloadCtx)))(ctx);
-    return;
+  if (account.subscription) {
+    if (!isAdapterInstalled(deps)) {
+      if (!await ensureAdapterInstalled(ctx, deps)) return;
+      ctx.ui.notify("pi-claude-oauth-adapter installed. Reload SumoCode, then re-open /accounts.", "info");
+      await (deps.reload ?? ((reloadCtx) => executeSumoReload(reloadCtx)))(ctx);
+      return;
+    }
+    const providerRegistered = ctx.modelRegistry.getAll().some((model) => model.provider === account.providerId);
+    if (!providerRegistered) {
+      ctx.ui.notify(`${account.providerId} is not registered in this session. Reloading SumoCode\u2026`, "info");
+      await (deps.reload ?? ((reloadCtx) => executeSumoReload(reloadCtx)))(ctx);
+      return;
+    }
   }
   const actions = [
     ...account.configured && !account.active ? ["use this account"] : [],

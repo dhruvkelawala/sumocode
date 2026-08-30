@@ -14741,7 +14741,7 @@ var ActivityManagerBridge = class {
   takeoverRefreshFailedAttempts = 0;
   /** Current escalating gap before the next deferred takeover refresh attempt. */
   takeoverRefreshBackoffMs = TAKEOVER_REFRESH_BACKOFF_BASE_MS;
-  /** Injectable-clock reading of the last takeover refresh attempt; undefined until one runs. */
+  /** Last wall-clock refresh attempt; Date.now can move, so this is only a throttle, not a monotonic timer. */
   takeoverRefreshLastAttemptAt;
   disposed = false;
   constructor(terminalManager, subagentManager, options = {}) {
@@ -14754,11 +14754,11 @@ var ActivityManagerBridge = class {
     this.onDiagnostic = options.onDiagnostic;
     this.sessionOwnership = options.sessionOwnership ?? localSessionOwnership();
     const processStartTime = captureProcessBirthTime(process.pid);
-    const writerIdentity = options.writerIdentity ?? (processStartTime ? {
+    const writerIdentity = "writerIdentity" in options ? options.writerIdentity : processStartTime ? {
       token: this.bridgeToken,
       pid: process.pid,
       processStartTime
-    } : void 0);
+    } : void 0;
     this.writerVerifiable = writerIdentity !== void 0 || options.publisherFactory !== void 0;
     const inspectWriter = options.inspectWriter ?? inspectProcessWriter;
     const publisherOptions = {
@@ -14800,6 +14800,7 @@ var ActivityManagerBridge = class {
   /** Why activity production is blocked for owner, or undefined when it may proceed. A deferred takeover refresh (retryable failure or incomplete generation) is a transient store-read episode, not a competing live writer, so it reports its own reason instead of the live-writer block. */
   activityBlockReason(owner) {
     if (!owner || this.disposed) return ACTIVITY_BLOCK_NO_WRITER;
+    if (!this.writerVerifiable) return ACTIVITY_BLOCK_NO_WRITER;
     this.syncOwnedSessions();
     const publisher = this.publishers.get(owner);
     if (this.claimedOwners.has(owner) && publisher?.hasWriterOwnership === true) return void 0;

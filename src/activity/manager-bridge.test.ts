@@ -1222,6 +1222,25 @@ describe("ActivityManagerBridge", () => {
 		bridge.dispose();
 	});
 
+	it("reports the structural reason when local writer identity is unverifiable", () => {
+		const diagnostics: ActivityFeedDiagnostic[] = [];
+		const terminals = new FakeTerminalManager();
+		const bridge = new ActivityManagerBridge(terminals, new FakeSubagentManager(), {
+			writerIdentity: undefined,
+			onDiagnostic: (entry) => diagnostics.push(entry),
+		});
+		bridge.bindSession("session-unverifiable");
+		expect(bridge.activityBlockReason("session-unverifiable")).toBe("activity unavailable: this session has no active durable Activity feed writer");
+		expect(bridge.canProduceActivity("session-unverifiable")).toBe(false);
+		expect(terminals.refreshCount).toBe(0);
+		expect(diagnostics).toEqual([expect.objectContaining({
+			kind: "io",
+			path: "activity-writer",
+			message: "current process start identity is not verifiable; feed publication disabled",
+		})]);
+		bridge.dispose();
+	});
+
 	it.skipIf(process.platform === "win32")("allows tools through feed corruption/outage and repairs the presentation feed", () => {
 		const stateRoot = root();
 		const paths = activityPaths("session-repair", stateRoot);

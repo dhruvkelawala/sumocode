@@ -187,7 +187,7 @@ export class ActivityManagerBridge {
 	private takeoverRefreshFailedAttempts = 0;
 	/** Current escalating gap before the next deferred takeover refresh attempt. */
 	private takeoverRefreshBackoffMs = TAKEOVER_REFRESH_BACKOFF_BASE_MS;
-	/** Injectable-clock reading of the last takeover refresh attempt; undefined until one runs. */
+	/** Last wall-clock refresh attempt; Date.now can move, so this is only a throttle, not a monotonic timer. */
 	private takeoverRefreshLastAttemptAt: number | undefined;
 	private disposed = false;
 
@@ -205,7 +205,9 @@ export class ActivityManagerBridge {
 		this.onDiagnostic = options.onDiagnostic;
 		this.sessionOwnership = options.sessionOwnership ?? localSessionOwnership();
 		const processStartTime = captureProcessBirthTime(process.pid);
-		const writerIdentity = options.writerIdentity ?? (processStartTime ? {
+		// Absence means derive this process identity; explicit undefined preserves
+		// the fail-closed unverifiable-writer state.
+		const writerIdentity = "writerIdentity" in options ? options.writerIdentity : (processStartTime ? {
 			token: this.bridgeToken,
 			pid: process.pid,
 			processStartTime,
@@ -263,6 +265,7 @@ export class ActivityManagerBridge {
 	/** Why activity production is blocked for owner, or undefined when it may proceed. A deferred takeover refresh (retryable failure or incomplete generation) is a transient store-read episode, not a competing live writer, so it reports its own reason instead of the live-writer block. */
 	public activityBlockReason(owner: string | undefined): string | undefined {
 		if (!owner || this.disposed) return ACTIVITY_BLOCK_NO_WRITER;
+		if (!this.writerVerifiable) return ACTIVITY_BLOCK_NO_WRITER;
 		this.syncOwnedSessions();
 		const publisher = this.publishers.get(owner);
 		// feed.json is a repairable presentation read model. Once this process owns
@@ -429,6 +432,8 @@ export class ActivityManagerBridge {
 	/** Diagnose the deferred refresh once per episode and escalate the next backoff window — 1s base doubling to the 60s cap on the injectable clock, mirroring the manager's lazy init-retry schedule. */
 	private deferTakeoverRefresh(path: string, message: string): void {
 		this.diagnoseTakeoverRefreshFailure(path, message);
+		// One window covers all pending takeover owners because each retry is one
+		// global store refresh, not per-owner work.
 		this.takeoverRefreshFailedAttempts += 1;
 		this.takeoverRefreshBackoffMs = Math.min(
 			TAKEOVER_REFRESH_BACKOFF_BASE_MS * 2 ** Math.min(this.takeoverRefreshFailedAttempts - 1, 32),

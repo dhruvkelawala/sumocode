@@ -194,7 +194,9 @@ function logLoginFailure(attempt: LoginMethod | undefined, providerRef: string, 
 				.map((frame) => redactLoginErrorText(frame.trim()))
 		: [];
 	logDiagnostic("rpc_login_failed", {
-		provider: attempt?.provider.id ?? providerRef,
+		// The fallback is the raw /login argument (user-controlled); a failure
+		// before provider resolution would otherwise persist it verbatim.
+		provider: attempt?.provider.id ?? redactLoginErrorText(providerRef),
 		authType: attempt?.authType,
 		errorName: failure?.name ?? "non_error_rejection",
 		errorMessage: redactLoginErrorText(failure?.message ?? String(error)),

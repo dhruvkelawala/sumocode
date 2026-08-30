@@ -16619,7 +16619,9 @@ function logLoginFailure(attempt, providerRef, error) {
   const failure2 = error instanceof Error ? error : void 0;
   const stack = failure2?.stack ? failure2.stack.split("\n").slice(0, 8).map((frame) => redactLoginErrorText(frame.trim())) : [];
   logDiagnostic("rpc_login_failed", {
-    provider: attempt?.provider.id ?? providerRef,
+    // The fallback is the raw /login argument (user-controlled); a failure
+    // before provider resolution would otherwise persist it verbatim.
+    provider: attempt?.provider.id ?? redactLoginErrorText(providerRef),
     authType: attempt?.authType,
     errorName: failure2?.name ?? "non_error_rejection",
     errorMessage: redactLoginErrorText(failure2?.message ?? String(error)),

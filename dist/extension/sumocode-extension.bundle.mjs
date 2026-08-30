@@ -11955,6 +11955,19 @@ function sameTreeVerification(left, right) {
     return candidate?.pid === anchor.pid && candidate.processStartTime === anchor.processStartTime;
   });
 }
+function snapshotContentEquals(left, right) {
+  for (const pass of [left, right]) {
+    const other = pass === left ? right : left;
+    for (const key of Object.keys(pass)) {
+      if (key === "processTreeVerification") {
+        if (!sameTreeVerification(left.processTreeVerification, right.processTreeVerification)) return false;
+        continue;
+      }
+      if (pass[key] !== other[key]) return false;
+    }
+  }
+  return true;
+}
 function buildPosixScript(options) {
   return [
     "#!/usr/bin/env bash",
@@ -12502,7 +12515,18 @@ ${command}
    * nothing; the batch flag is cleared in finally and one merged fan-out
    * emits the final per-task payload per id — the latest retained snapshot at
    * fan-out time, so a fresh-then-stale v2→v1 sequence can never be observed —
-   * plus exactly one final projection.
+   * plus exactly one final projection. That drain is transactional: it runs in
+   * the same finally even when the loops throw, so whatever was collected or
+   * queued mid-batch still reaches its listeners (a parked waiter wakes
+   * promptly) and queue state never carries across refresh calls, while the
+   * throw keeps propagating to the caller and any publication reflects the
+   * current retained projection. A same-revision, same-owner content-only
+   * rewrite is adopted silently with no per-task change and no recovery side
+   * effects, but because it replaced the stored snapshot with differing
+   * content it still marks the refresh's stored state as changed, so a
+   * successful refresh emits exactly one final projection publication even
+   * when the per-task changed list is empty; a refresh whose records are all
+   * unchanged (and which prunes nothing) publishes nothing.
    */
   refreshSnapshotsFromStore() {
     if (this.detached) return { ok: false, snapshots: this.getSnapshots() };
@@ -12510,28 +12534,40 @@ ${command}
     if (!refresh.ok) return { ok: false, snapshots: this.getSnapshots() };
     this.refreshBatchDepth += 1;
     const changed = [];
+    let adoptionChangedStoredState = false;
     try {
-      this.runRefreshLoops(refresh, changed);
+      adoptionChangedStoredState = this.runRefreshLoops(refresh, changed);
     } finally {
       this.refreshBatchDepth -= 1;
+      const fanout = /* @__PURE__ */ new Map();
+      for (const snapshot of changed) fanout.set(snapshot.id, snapshot);
+      for (const [id, snapshot] of this.refreshBatchQueued) fanout.set(id, snapshot);
+      this.refreshBatchQueued.clear();
+      for (const id of fanout.keys()) {
+        const retained = this.tasks.get(id);
+        if (retained) fanout.set(id, retained);
+      }
+      if (fanout.size > 0) {
+        this.notifyChanges([...fanout.values()]);
+      } else if (adoptionChangedStoredState) {
+        this.publishProjection();
+      }
     }
-    const fanout = /* @__PURE__ */ new Map();
-    for (const snapshot of changed) fanout.set(snapshot.id, snapshot);
-    for (const [id, snapshot] of this.refreshBatchQueued) fanout.set(id, snapshot);
-    this.refreshBatchQueued.clear();
-    for (const id of fanout.keys()) {
-      const retained = this.tasks.get(id);
-      if (retained) fanout.set(id, retained);
-    }
-    this.notifyChanges([...fanout.values()]);
     return { ok: true, snapshots: this.getSnapshots() };
   }
-  /** The refresh adoption and prune loops; every notification stays inside the caller's batch. */
+  /**
+   * The refresh adoption and prune loops; every notification stays inside the
+   * caller's batch. Returns whether any adoption replaced a retained snapshot
+   * with differing content (a same-revision, same-owner content-only rewrite),
+   * so the caller can publish the projection even with an empty changed list.
+   */
   runRefreshLoops(refresh, changed) {
+    let adoptionChangedStoredState = false;
     for (const snapshot of refresh.snapshots) {
       const previous = this.tasks.get(snapshot.id);
       this.adopt(snapshot, false);
       this.onRefreshAdopt?.(snapshot.id);
+      if (previous !== void 0 && !snapshotContentEquals(previous, snapshot)) adoptionChangedStoredState = true;
       if (previous === void 0 || previous.revision !== snapshot.revision || previous.ownerSessionId !== snapshot.ownerSessionId || previous.status !== snapshot.status || previous.pid !== snapshot.pid || previous.processGroupId !== snapshot.processGroupId || previous.processStartTime !== snapshot.processStartTime) {
         this.recover(snapshot);
         this.onRefreshRecover?.(snapshot.id);
@@ -12548,6 +12584,7 @@ ${command}
       this.tasks.delete(id);
       if (pruned) changed.push(pruned);
     }
+    return adoptionChangedStoredState;
   }
   /**
    * Authoritative single indexed read of one record, bypassing the retained
@@ -13039,6 +13076,11 @@ ${command}
         }
       }
     }
+    if (this.snapshotListeners.size === 0) return;
+    this.publishProjection();
+  }
+  /** Publish the current retained projection once to snapshot listeners; observer errors cannot break lifecycle transitions. */
+  publishProjection() {
     if (this.snapshotListeners.size === 0) return;
     const snapshots = this.getSnapshots();
     for (const listener of this.snapshotListeners) {

@@ -269,6 +269,29 @@ function sameTreeVerification(left: ProcessTreeVerification | undefined, right: 
 	});
 }
 
+/**
+ * Shallow content compare of compact snapshot fields: strict equality per
+ * field in both directions, with a missing key treated as an `undefined`
+ * value (in-memory snapshots can carry explicit-`undefined` keys that a
+ * re-parse omits) and the single nested field (`processTreeVerification`)
+ * compared by its small member-anchor list. No deep JSON of large payloads —
+ * used to report adoption-only stored-state changes at the refresh boundary.
+ */
+function snapshotContentEquals(left: TerminalTaskSnapshot, right: TerminalTaskSnapshot): boolean {
+	for (const pass of [left, right] as const) {
+		const other = pass === left ? right : left;
+		// SAFETY: Object.keys of a snapshot yields exactly the interface's own property names; the cast only restores the keyof view.
+		for (const key of Object.keys(pass) as Array<keyof TerminalTaskSnapshot>) {
+			if (key === "processTreeVerification") {
+				if (!sameTreeVerification(left.processTreeVerification, right.processTreeVerification)) return false;
+				continue;
+			}
+			if (pass[key] !== other[key]) return false;
+		}
+	}
+	return true;
+}
+
 function buildPosixScript(options: {
 	readonly cwd: string;
 	readonly launchFile: string;
@@ -925,7 +948,18 @@ export class TerminalTaskManager {
 	 * nothing; the batch flag is cleared in finally and one merged fan-out
 	 * emits the final per-task payload per id — the latest retained snapshot at
 	 * fan-out time, so a fresh-then-stale v2→v1 sequence can never be observed —
-	 * plus exactly one final projection.
+	 * plus exactly one final projection. That drain is transactional: it runs in
+	 * the same finally even when the loops throw, so whatever was collected or
+	 * queued mid-batch still reaches its listeners (a parked waiter wakes
+	 * promptly) and queue state never carries across refresh calls, while the
+	 * throw keeps propagating to the caller and any publication reflects the
+	 * current retained projection. A same-revision, same-owner content-only
+	 * rewrite is adopted silently with no per-task change and no recovery side
+	 * effects, but because it replaced the stored snapshot with differing
+	 * content it still marks the refresh's stored state as changed, so a
+	 * successful refresh emits exactly one final projection publication even
+	 * when the per-task changed list is empty; a refresh whose records are all
+	 * unchanged (and which prunes nothing) publishes nothing.
 	 */
 	public refreshSnapshotsFromStore(): TerminalTaskIndexRefreshResult {
 		if (this.detached) return { ok: false, snapshots: this.getSnapshots() };
@@ -939,31 +973,48 @@ export class TerminalTaskManager {
 		// fires mid-loop into that same merged fan-out instead of publishing it.
 		this.refreshBatchDepth += 1;
 		const changed: TerminalTaskSnapshot[] = [];
+		let adoptionChangedStoredState = false;
 		try {
-			this.runRefreshLoops(refresh, changed);
+			adoptionChangedStoredState = this.runRefreshLoops(refresh, changed);
 		} finally {
 			this.refreshBatchDepth -= 1;
+			// Single merged fan-out — transactional across both the success and the
+			// throw path: fold in whatever a synchronous recovery path queued
+			// mid-batch plus everything collected before a mid-loop throw, then
+			// resolve each id to the latest retained snapshot at fan-out time.
+			// Per-task listeners receive each final payload (waiters re-evaluate
+			// completion, the delivery coordinator re-runs its claim pass), and
+			// projection listeners receive exactly one publication of the current
+			// retained projection. The queue is drained unconditionally, so batch
+			// state never carries across refresh calls.
+			const fanout = new Map<string, TerminalTaskSnapshot>();
+			for (const snapshot of changed) fanout.set(snapshot.id, snapshot);
+			for (const [id, snapshot] of this.refreshBatchQueued) fanout.set(id, snapshot);
+			this.refreshBatchQueued.clear();
+			for (const id of fanout.keys()) {
+				const retained = this.tasks.get(id);
+				if (retained) fanout.set(id, retained);
+			}
+			if (fanout.size > 0) {
+				this.notifyChanges([...fanout.values()]);
+			} else if (adoptionChangedStoredState) {
+				// A content-only rewrite replaced stored snapshots with differing
+				// content without any per-task change: publish the updated projection
+				// exactly once so subscribers do not stay stale.
+				this.publishProjection();
+			}
 		}
-		// Single merged fan-out: fold in whatever a synchronous recovery path
-		// queued mid-batch, then resolve each id to the latest retained snapshot
-		// at fan-out time. Per-task listeners receive each final payload (waiters
-		// re-evaluate completion, the delivery coordinator re-runs its claim
-		// pass), and projection listeners receive exactly one publication of that
-		// final projection.
-		const fanout = new Map<string, TerminalTaskSnapshot>();
-		for (const snapshot of changed) fanout.set(snapshot.id, snapshot);
-		for (const [id, snapshot] of this.refreshBatchQueued) fanout.set(id, snapshot);
-		this.refreshBatchQueued.clear();
-		for (const id of fanout.keys()) {
-			const retained = this.tasks.get(id);
-			if (retained) fanout.set(id, retained);
-		}
-		this.notifyChanges([...fanout.values()]);
 		return { ok: true, snapshots: this.getSnapshots() };
 	}
 
-	/** The refresh adoption and prune loops; every notification stays inside the caller's batch. */
-	private runRefreshLoops(refresh: TerminalTaskIndexRefreshResult, changed: TerminalTaskSnapshot[]): void {
+	/**
+	 * The refresh adoption and prune loops; every notification stays inside the
+	 * caller's batch. Returns whether any adoption replaced a retained snapshot
+	 * with differing content (a same-revision, same-owner content-only rewrite),
+	 * so the caller can publish the projection even with an empty changed list.
+	 */
+	private runRefreshLoops(refresh: TerminalTaskIndexRefreshResult, changed: TerminalTaskSnapshot[]): boolean {
+		let adoptionChangedStoredState = false;
 		for (const snapshot of refresh.snapshots) {
 			// Adoption is unconditional: revision equality alone must never skip a
 			// refreshed snapshot, or an external same-revision owner/content rewrite
@@ -971,6 +1022,12 @@ export class TerminalTaskManager {
 			const previous = this.tasks.get(snapshot.id);
 			this.adopt(snapshot, false);
 			this.onRefreshAdopt?.(snapshot.id);
+			// A same-revision, same-owner content-only rewrite replaced the stored
+			// snapshot object with differing content but fires no recovery gate and
+			// joins no per-task change: report it with a cheap shallow field compare
+			// (no deep JSON of large payloads) so the refresh still publishes the
+			// updated projection exactly once.
+			if (previous !== undefined && !snapshotContentEquals(previous, snapshot)) adoptionChangedStoredState = true;
 			// Recovery work is gated on recovery-relevant durable identity: a record
 			// new to this projection, or one whose revision, owner, lifecycle status,
 			// or process identity changed. Revision plus owner alone miss an external
@@ -1019,6 +1076,7 @@ export class TerminalTaskManager {
 			// silence here would park the waiter for the full timeout.
 			if (pruned) changed.push(pruned);
 		}
+		return adoptionChangedStoredState;
 	}
 
 	/**
@@ -1618,6 +1676,12 @@ export class TerminalTaskManager {
 				}
 			}
 		}
+		if (this.snapshotListeners.size === 0) return;
+		this.publishProjection();
+	}
+
+	/** Publish the current retained projection once to snapshot listeners; observer errors cannot break lifecycle transitions. */
+	private publishProjection(): void {
 		if (this.snapshotListeners.size === 0) return;
 		const snapshots = this.getSnapshots();
 		for (const listener of this.snapshotListeners) {

@@ -1168,6 +1168,144 @@ function transientFault(code: string): Error {
 		unsubscribeTasks();
 	});
 
+	it("drains queued refresh notifications and wakes a parked waiter when the refresh loops throw", async () => {
+		vi.useFakeTimers();
+		let target: TerminalTaskManager | undefined;
+		try {
+			const store = new TerminalTaskStore({ rootDir });
+			const adopted: string[] = [];
+			const recovered: string[] = [];
+			target = manager({
+				store,
+				pollIntervalMs: 60_000,
+				onRefreshAdopt: (id) => adopted.push(id),
+				onRefreshRecover: (id) => {
+					recovered.push(id);
+					if (id === "term-boom") throw new Error("injected refresh failure");
+				},
+			});
+			const task = await start(target);
+			const waiting = target.wait([task.id], "session-a", 60_000);
+			// Parked: the wait timer plus the poll interval are pending.
+			expect(vi.getTimerCount()).toBe(2);
+
+			// An external writer settles the running record at the same revision:
+			// recovery-gated, so its per-task change is collected for the fan-out.
+			const external = new TerminalTaskStore({ rootDir });
+			external.refreshIndex();
+			const durable = external.getIndexed(task.id)!;
+			const metaFile = join(dirname(task.logFile), "meta.json");
+			writeFileSync(metaFile, `${JSON.stringify({
+				...durable,
+				status: "completed",
+				updatedAt: 2_000,
+				settledAt: 2_000,
+				exitCode: 0,
+				deliveryState: "pending",
+				completionId: "completion-external",
+			})}\n`, { mode: 0o600 });
+			chmodSync(metaFile, 0o600);
+			// A second, older record is new to the projection: the store's
+			// createdAt-desc order processes it after the rewritten record, and its
+			// recovery seam throws mid-loop — after the first change was collected.
+			persistSettledTask(store, "term-boom", "session-a", 500, "boom");
+
+			expect(() => target!.refreshSnapshotsFromStore()).toThrow("injected refresh failure");
+			expect(recovered).toEqual([task.id, "term-boom"]);
+
+			// The parked waiter must wake from the thrown refresh's drain, not the
+			// clock: advancing well short of the 60s wait timeout must not be what
+			// resolves it.
+			const result = await Promise.race([
+				waiting,
+				vi.advanceTimersByTimeAsync(1_000).then(() => "timer-elapsed" as const),
+			]);
+			expect(result).not.toBe("timer-elapsed");
+			expect(result).toEqual({
+				settled: [expect.objectContaining({ task: expect.objectContaining({ id: task.id, status: "completed" }) })],
+				pendingIds: [],
+				unknownIds: [],
+				timedOut: false,
+			});
+
+			// Nothing queued leaks into the next refresh: it behaves like a clean
+			// no-change pass — both records re-adopted, nothing recovered, no
+			// per-task delivery, and no publication beyond subscribeChanges'
+			// registration replay.
+			adopted.length = 0;
+			recovered.length = 0;
+			const publications: Array<readonly TerminalTaskSnapshot[]> = [];
+			const changes: TerminalTaskSnapshot[] = [];
+			const unsubscribeProjection = target.subscribeChanges((snapshots) => publications.push(snapshots));
+			const unsubscribeTasks = target.addChangeListener((snapshot) => changes.push(snapshot));
+			expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+			expect([...adopted].sort()).toEqual([task.id, "term-boom"]);
+			expect(recovered).toEqual([]);
+			expect(publications).toHaveLength(1);
+			expect(changes).toHaveLength(0);
+
+			// And a real durable change still fans out normally. (The wait resolution
+			// above already observed the record, advancing its durable revision.)
+			external.refreshIndex();
+			const settled = external.getIndexed(task.id)!;
+			external.transition(task.id, settled.revision, (current) => ({ ...current, title: "bumped", updatedAt: 3_000 }));
+			expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+			expect(publications).toHaveLength(2);
+			expect(changes).toEqual([expect.objectContaining({ id: task.id, title: "bumped" })]);
+			unsubscribeProjection();
+			unsubscribeTasks();
+		} finally {
+			target?.detach();
+			vi.useRealTimers();
+		}
+	});
+
+	it("publishes the projection once for a same-revision content-only rewrite and stays silent on no-change refreshes", () => {
+		const reads = { scans: 0 };
+		const store = new TerminalTaskStore({
+			rootDir,
+			onRead: (kind) => { if (kind === "full-scan") reads.scans += 1; },
+		});
+		persistSettledTask(store, "term-quiet", "session-a", 1_000, "before");
+		const target = manager({ store, pollIntervalMs: 60_000 });
+		const publications: Array<readonly TerminalTaskSnapshot[]> = [];
+		const changes: TerminalTaskSnapshot[] = [];
+		const unsubscribeProjection = target.subscribeChanges((snapshots) => publications.push(snapshots));
+		const unsubscribeTasks = target.addChangeListener((snapshot) => changes.push(snapshot));
+		const scansBefore = reads.scans;
+		// subscribeChanges' registration replay is the only publication so far.
+		expect(publications).toHaveLength(1);
+
+		// A refresh with zero changes stays silent — no publication, no per-task
+		// delivery — even though every record is re-adopted (fresh object, equal
+		// content), and it costs exactly one scan.
+		expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+		expect(reads.scans - scansBefore).toBe(1);
+		expect(publications).toHaveLength(1);
+		expect(changes).toHaveLength(0);
+
+		// Same-revision, same-owner content-only rewrite: adopted into the stored
+		// snapshot with no per-task noise, but the projection publishes exactly
+		// once with the updated content — still exactly one scan, no rescan.
+		const durable = store.getIndexed("term-quiet")!;
+		const metaFile = join(dirname(durable.logFile), "meta.json");
+		writeFileSync(metaFile, `${JSON.stringify({ ...durable, title: "rewritten", updatedAt: 1_500 })}\n`, { mode: 0o600 });
+		chmodSync(metaFile, 0o600);
+		expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+		expect(reads.scans - scansBefore).toBe(2);
+		expect(publications).toHaveLength(2);
+		expect(publications.at(-1)).toEqual([expect.objectContaining({ id: "term-quiet", revision: 1, title: "rewritten", updatedAt: 1_500 })]);
+		expect(changes).toHaveLength(0);
+		expect(target.get("term-quiet", "session-a")).toMatchObject({ revision: 1, title: "rewritten" });
+
+		// A following refresh with no change is silent again.
+		expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+		expect(publications).toHaveLength(2);
+		expect(changes).toHaveLength(0);
+		unsubscribeProjection();
+		unsubscribeTasks();
+	});
+
 	it("wakes delivery when a refresh discovers a new settled record", async () => {
 		const store = new TerminalTaskStore({ rootDir });
 		const target = manager({ store, pollIntervalMs: 60_000 });

@@ -901,14 +901,26 @@ export class TerminalTaskManager {
 	 * refresh, a same-revision owner divergence still recovers, and an external
 	 * same-revision same-owner rewrite that flips status or process identity
 	 * recovers instead of leaving an active terminal unarmed behind a stale
-	 * projection. Quarantine stays logical — durable records are preserved —
-	 * and each pruned id notifies change listeners so parked waiters that
-	 * collected it as known resolve promptly instead of waiting out the clock.
+	 * projection. Quarantine stays logical — durable records are preserved.
+	 * Waiter-relevant changes — each genuinely pruned id and each retained
+	 * record whose recovery-relevant identity changed (an external rewrite
+	 * flipping e.g. running→settled at this boundary) — are collected during
+	 * the loops and fanned out once after adoption and pruning complete:
+	 * per-task listeners receive each change so parked waiters that collected
+	 * an id as known resolve promptly instead of waiting out the clock, and
+	 * projection listeners receive exactly one publication of the final
+	 * projection, so no intermediate projection that still contains a
+	 * not-yet-pruned quarantined id is ever adopted or published.
 	 */
 	public refreshSnapshotsFromStore(): TerminalTaskIndexRefreshResult {
 		if (this.detached) return { ok: false, snapshots: this.getSnapshots() };
 		const refresh = this.store.refreshIndex();
 		if (!refresh.ok) return { ok: false, snapshots: this.getSnapshots() };
+		// Waiter-relevant changes are collected across both loops and fanned out
+		// once after adoption and pruning complete, so projection listeners can
+		// never observe — or re-enter a nested refresh against — an intermediate
+		// generation that still contains a not-yet-pruned quarantined id.
+		const changed: TerminalTaskSnapshot[] = [];
 		for (const snapshot of refresh.snapshots) {
 			// Adoption is unconditional: revision equality alone must never skip a
 			// refreshed snapshot, or an external same-revision owner/content rewrite
@@ -936,6 +948,10 @@ export class TerminalTaskManager {
 			) {
 				this.recover(snapshot);
 				this.onRefreshRecover?.(snapshot.id);
+				// An external advance on a retained record is waiter-relevant: a
+				// parked wait on this id must re-evaluate against the refreshed
+				// identity (e.g. running→settled) instead of waiting out the clock.
+				if (previous !== undefined) changed.push(snapshot);
 			}
 		}
 		const refreshed = new Set(refresh.snapshots.map((snapshot) => snapshot.id));
@@ -952,11 +968,16 @@ export class TerminalTaskManager {
 			this.clearPoll(id);
 			const pruned = this.tasks.get(id);
 			this.tasks.delete(id);
-			// The prune must wake parked waiters: a known id that became unqueryable
+			// A pruned id is waiter-relevant: a known id that became unqueryable
 			// mid-wait is complete for wait purposes (it routes to unknownIds), so
 			// silence here would park the waiter for the full timeout.
-			if (pruned) this.notifyChange(pruned);
+			if (pruned) changed.push(pruned);
 		}
+		// Single fan-out: per-task listeners receive each waiter-relevant change
+		// (waiters re-evaluate completion against the final projection), and
+		// projection listeners receive exactly one publication of that final
+		// projection.
+		this.notifyChanges(changed);
 		return { ok: true, snapshots: this.getSnapshots() };
 	}
 
@@ -1530,16 +1551,23 @@ export class TerminalTaskManager {
 		this.tasks.set(snapshot.id, snapshot);
 		this.ensureRuntime(snapshot);
 		if (!notify || previous?.revision === snapshot.revision) return;
-		this.notifyChange(snapshot);
+		this.notifyChanges([snapshot]);
 	}
 
-	/** Fan one changed snapshot out to per-task and projection listeners; observer errors cannot break lifecycle transitions. */
-	private notifyChange(snapshot: TerminalTaskSnapshot): void {
-		for (const listener of this.listeners) {
-			try {
-				listener(snapshot);
-			} catch {
-				// Observers cannot break durable lifecycle transitions.
+	/**
+	 * Fan a batch of changed snapshots out: per-task listeners receive each
+	 * change, projection listeners receive exactly one publication of the final
+	 * projection. Observer errors cannot break lifecycle transitions.
+	 */
+	private notifyChanges(changed: readonly TerminalTaskSnapshot[]): void {
+		if (changed.length === 0) return;
+		for (const snapshot of changed) {
+			for (const listener of this.listeners) {
+				try {
+					listener(snapshot);
+				} catch {
+					// Observers cannot break durable lifecycle transitions.
+				}
 			}
 		}
 		if (this.snapshotListeners.size === 0) return;

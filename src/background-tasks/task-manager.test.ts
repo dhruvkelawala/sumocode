@@ -993,6 +993,83 @@ function transientFault(code: string): Error {
 		}
 	});
 
+	it("resolves a parked wait when a refresh adopts an external settlement", async () => {
+		vi.useFakeTimers();
+		let target: TerminalTaskManager | undefined;
+		try {
+			target = manager({ pollIntervalMs: 60_000 });
+			const task = await start(target);
+			const waiting = target.wait([task.id], "session-a", 60_000);
+			// Parked: the wait timer plus the poll interval are pending.
+			expect(vi.getTimerCount()).toBe(2);
+
+			// An external writer settles the running record on disk at the same
+			// revision: the refresh adopts the flipped lifecycle status (recovery-
+			// relevant identity) and must notify change listeners so the parked
+			// waiter resolves now instead of waiting out the clock.
+			const external = new TerminalTaskStore({ rootDir });
+			external.refreshIndex();
+			const durable = external.getIndexed(task.id)!;
+			const metaFile = join(dirname(task.logFile), "meta.json");
+			writeFileSync(metaFile, `${JSON.stringify({
+				...durable,
+				status: "completed",
+				updatedAt: 2_000,
+				settledAt: 2_000,
+				exitCode: 0,
+				deliveryState: "pending",
+				completionId: "completion-external",
+			})}\n`, { mode: 0o600 });
+			chmodSync(metaFile, 0o600);
+			expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+
+			// Resolution must come from the refresh adoption notification: advancing
+			// well short of the 60s wait timeout must not be what resolves it.
+			const result = await Promise.race([
+				waiting,
+				vi.advanceTimersByTimeAsync(1_000).then(() => "timer-elapsed" as const),
+			]);
+			expect(result).not.toBe("timer-elapsed");
+			expect(result).toEqual({
+				settled: [expect.objectContaining({ task: expect.objectContaining({ id: task.id, status: "completed" }) })],
+				pendingIds: [],
+				unknownIds: [],
+				timedOut: false,
+			});
+		} finally {
+			target?.detach();
+			vi.useRealTimers();
+		}
+	});
+
+	it("fans refresh changes out once through the final projection", async () => {
+		vi.useFakeTimers();
+		let target: TerminalTaskManager | undefined;
+		try {
+			const store = new TerminalTaskStore({ rootDir });
+			target = manager({ store, pollIntervalMs: 60_000 });
+			const first = await start(target);
+			const second = await start(target);
+			const publications: Array<readonly TerminalTaskSnapshot[]> = [];
+			const unsubscribe = target.subscribeChanges((snapshots) => publications.push(snapshots));
+			const baseline = publications.length;
+
+			// Two quarantined ids: the post-loop fan-out must be a single
+			// publication of the final projection — no intermediate projection that
+			// still contains a not-yet-pruned quarantined id.
+			writeFileSync(join(dirname(first.logFile), "meta.json"), "{not json", { mode: 0o600 });
+			writeFileSync(join(dirname(second.logFile), "meta.json"), "{not json", { mode: 0o600 });
+			expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+			expect(publications.length - baseline).toBe(1);
+			expect(publications.at(-1)).toEqual([]);
+			expect(target.getSnapshots()).toEqual([]);
+			unsubscribe();
+		} finally {
+			target?.detach();
+			vi.useRealTimers();
+		}
+	});
+
 	it("signals every stop target before waiting, escalates, and confirms cancellation", async () => {
 		const target = manager();
 		const first = await start(target);

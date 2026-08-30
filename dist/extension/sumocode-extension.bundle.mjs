@@ -12478,14 +12478,22 @@ ${command}
    * refresh, a same-revision owner divergence still recovers, and an external
    * same-revision same-owner rewrite that flips status or process identity
    * recovers instead of leaving an active terminal unarmed behind a stale
-   * projection. Quarantine stays logical — durable records are preserved —
-   * and each pruned id notifies change listeners so parked waiters that
-   * collected it as known resolve promptly instead of waiting out the clock.
+   * projection. Quarantine stays logical — durable records are preserved.
+   * Waiter-relevant changes — each genuinely pruned id and each retained
+   * record whose recovery-relevant identity changed (an external rewrite
+   * flipping e.g. running→settled at this boundary) — are collected during
+   * the loops and fanned out once after adoption and pruning complete:
+   * per-task listeners receive each change so parked waiters that collected
+   * an id as known resolve promptly instead of waiting out the clock, and
+   * projection listeners receive exactly one publication of the final
+   * projection, so no intermediate projection that still contains a
+   * not-yet-pruned quarantined id is ever adopted or published.
    */
   refreshSnapshotsFromStore() {
     if (this.detached) return { ok: false, snapshots: this.getSnapshots() };
     const refresh = this.store.refreshIndex();
     if (!refresh.ok) return { ok: false, snapshots: this.getSnapshots() };
+    const changed = [];
     for (const snapshot of refresh.snapshots) {
       const previous = this.tasks.get(snapshot.id);
       this.adopt(snapshot, false);
@@ -12493,6 +12501,7 @@ ${command}
       if (previous === void 0 || previous.revision !== snapshot.revision || previous.ownerSessionId !== snapshot.ownerSessionId || previous.status !== snapshot.status || previous.pid !== snapshot.pid || previous.processGroupId !== snapshot.processGroupId || previous.processStartTime !== snapshot.processStartTime) {
         this.recover(snapshot);
         this.onRefreshRecover?.(snapshot.id);
+        if (previous !== void 0) changed.push(snapshot);
       }
     }
     const refreshed = new Set(refresh.snapshots.map((snapshot) => snapshot.id));
@@ -12503,8 +12512,9 @@ ${command}
       this.clearPoll(id);
       const pruned = this.tasks.get(id);
       this.tasks.delete(id);
-      if (pruned) this.notifyChange(pruned);
+      if (pruned) changed.push(pruned);
     }
+    this.notifyChanges(changed);
     return { ok: true, snapshots: this.getSnapshots() };
   }
   /**
@@ -12976,14 +12986,21 @@ ${command}
     this.tasks.set(snapshot.id, snapshot);
     this.ensureRuntime(snapshot);
     if (!notify7 || previous?.revision === snapshot.revision) return;
-    this.notifyChange(snapshot);
+    this.notifyChanges([snapshot]);
   }
-  /** Fan one changed snapshot out to per-task and projection listeners; observer errors cannot break lifecycle transitions. */
-  notifyChange(snapshot) {
-    for (const listener of this.listeners) {
-      try {
-        listener(snapshot);
-      } catch {
+  /**
+   * Fan a batch of changed snapshots out: per-task listeners receive each
+   * change, projection listeners receive exactly one publication of the final
+   * projection. Observer errors cannot break lifecycle transitions.
+   */
+  notifyChanges(changed) {
+    if (changed.length === 0) return;
+    for (const snapshot of changed) {
+      for (const listener of this.listeners) {
+        try {
+          listener(snapshot);
+        } catch {
+        }
       }
     }
     if (this.snapshotListeners.size === 0) return;
@@ -14426,6 +14443,8 @@ var ActivityManagerBridge = class {
   terminalOutputTimer;
   retentionTimer;
   takeoverRefreshFailureDiagnosed = false;
+  /** True only while the takeover refresh call itself is on the stack. */
+  takeoverRefreshInFlight = false;
   disposed = false;
   constructor(terminalManager, subagentManager, options = {}) {
     this.terminalManager = terminalManager;
@@ -14458,6 +14477,10 @@ var ActivityManagerBridge = class {
     this.terminalUnsubscribe = terminalManager.subscribeChanges((snapshots) => {
       if (this.disposed) return;
       this.adoptTerminalSnapshots(snapshots);
+      if (this.takeoverRefreshInFlight) {
+        this.syncTerminalOutputPoll();
+        return;
+      }
       this.publishAll();
       this.syncTerminalOutputPoll();
     });
@@ -14537,11 +14560,14 @@ var ActivityManagerBridge = class {
       return;
     }
     let refresh;
+    this.takeoverRefreshInFlight = true;
     try {
       refresh = this.terminalManager.refreshSnapshotsFromStore?.();
     } catch (error) {
       this.diagnoseTakeoverRefreshFailure(takeoverOwners[0], `terminal takeover refresh failed safely; takeover retries on the next sync: ${error instanceof Error ? error.message : String(error)}`);
       return;
+    } finally {
+      this.takeoverRefreshInFlight = false;
     }
     if (refresh && !refresh.ok) {
       this.diagnoseTakeoverRefreshFailure(takeoverOwners[0], "terminal takeover refresh failed; takeover retries on the next sync");

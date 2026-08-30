@@ -171,6 +171,8 @@ export class ActivityManagerBridge {
 	private terminalOutputTimer: ReturnType<typeof setInterval> | undefined;
 	private retentionTimer: ReturnType<typeof setInterval> | undefined;
 	private takeoverRefreshFailureDiagnosed = false;
+	/** True only while the takeover refresh call itself is on the stack. */
+	private takeoverRefreshInFlight = false;
 	private disposed = false;
 
 	public constructor(
@@ -208,6 +210,17 @@ export class ActivityManagerBridge {
 		this.terminalUnsubscribe = terminalManager.subscribeChanges((snapshots) => {
 			if (this.disposed) return;
 			this.adoptTerminalSnapshots(snapshots);
+			// The manager fans projection listeners out once at the end of its own
+			// refresh. While this bridge's takeover refresh is in flight, that
+			// re-entrant listener must only adopt (and keep the output poll in
+			// step): publishing here would run syncOwnedSessions again and trigger
+			// a nested store refresh before the in-flight generation is even
+			// claimed. The sync that started the refresh claims and publishes each
+			// owner exactly once after the refresh completes.
+			if (this.takeoverRefreshInFlight) {
+				this.syncTerminalOutputPoll();
+				return;
+			}
 			this.publishAll();
 			this.syncTerminalOutputPoll();
 		});
@@ -317,6 +330,9 @@ export class ActivityManagerBridge {
 			return;
 		}
 		let refresh: TerminalTaskIndexRefreshResult | undefined;
+		// Mark the window so a projection listener fanned out during this refresh
+		// adopts without rescanning the store or publishing mid-generation.
+		this.takeoverRefreshInFlight = true;
 		try {
 			refresh = this.terminalManager.refreshSnapshotsFromStore?.();
 		} catch (error) {
@@ -326,6 +342,8 @@ export class ActivityManagerBridge {
 			// this token so the next sync retries the one global refresh.
 			this.diagnoseTakeoverRefreshFailure(takeoverOwners[0]!, `terminal takeover refresh failed safely; takeover retries on the next sync: ${error instanceof Error ? error.message : String(error)}`);
 			return;
+		} finally {
+			this.takeoverRefreshInFlight = false;
 		}
 		if (refresh && !refresh.ok) {
 			// A failed takeover refresh must not publish the death-proven owners,

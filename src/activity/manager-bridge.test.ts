@@ -173,6 +173,11 @@ class FakeTerminalManager {
 		this.refreshCount += 1;
 		if (!this.refreshOk) return { ok: false, snapshots: [] };
 		this.snapshots = this.refreshedSnapshots ?? this.snapshots;
+		// Mirror the real manager's single post-loop fan-out: the stored projection
+		// listener is invoked during refresh, so the bridge's re-entrancy guard is
+		// actually exercised instead of the coalesced-refresh assertions passing
+		// vacuously.
+		this.emit();
 		return { ok: true, snapshots: this.snapshots };
 	}
 
@@ -641,17 +646,82 @@ describe("ActivityManagerBridge", () => {
 		bridge.dispose();
 	});
 
-	it("takeover publication omits a terminal the refresh quarantined from the retained projection", () => {
+	it("a projection listener fanned out during the takeover refresh cannot rescan or double-publish", () => {
+		const stateRoot = root();
+		const owners = ["session-fanout-a", "session-fanout-b"];
+		for (const [index, owner] of owners.entries()) {
+			const incumbent = new ActivityFeedPublisher(owner, {
+				rootDir: stateRoot,
+				writerIdentity: { token: `incumbent-${index}`, pid: 101 + index, processStartTime: `incumbent-start-${index}` },
+				inspectWriter: () => "alive",
+			});
+			incumbent.publish([]);
+		}
+		let incumbentsAlive = true;
+		const terminals = new FakeTerminalManager();
+		terminals.refreshedSnapshots = [terminal("term-fanout-a", owners[0]!), terminal("term-fanout-b", owners[1]!)];
+		terminals.outputs.set("/tmp/term-fanout-a.log", "a output");
+		terminals.outputs.set("/tmp/term-fanout-b.log", "b output");
+		const publishes = new Map<string, number>();
+		const bridge = new ActivityManagerBridge(terminals, new FakeSubagentManager(), {
+			rootDir: stateRoot,
+			writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
+			inspectWriter: () => incumbentsAlive ? "alive" : "dead",
+			publisherFactory: (owner) => {
+				const publisher = new ActivityFeedPublisher(owner, {
+					rootDir: stateRoot,
+					writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
+					inspectWriter: () => incumbentsAlive ? "alive" : "dead",
+				});
+				const publish = publisher.publish.bind(publisher);
+				publisher.publish = (activities) => {
+					const wrote = publish(activities);
+					if (wrote) publishes.set(owner, (publishes.get(owner) ?? 0) + 1);
+					return wrote;
+				};
+				return publisher;
+			},
+		});
+
+		// Live incumbents authorize no refresh and no publication.
+		for (const owner of owners) bridge.bindSession(owner);
+		expect(terminals.refreshCount).toBe(0);
+		expect([...publishes.values()]).toEqual([]);
+
+		// Both writers die; the takeover refresh fans the projection listener out
+		// during refresh. The bridge must not rescan the store through that
+		// re-entrant listener, and each owner must be published exactly once from
+		// the refreshed projection.
+		incumbentsAlive = false;
+		bridge.bindSession(owners[0]!);
+		expect(terminals.refreshCount).toBe(1);
+		expect(publishes).toEqual(new Map(owners.map((owner) => [owner, 1])));
+		expect(fixturePublisher(owners[0]!, { rootDir: stateRoot }).getSnapshot()).toEqual(expect.arrayContaining([
+			expect.objectContaining({ id: "term-fanout-a", status: "running" }),
+		]));
+		expect(fixturePublisher(owners[1]!, { rootDir: stateRoot }).getSnapshot()).toEqual(expect.arrayContaining([
+			expect.objectContaining({ id: "term-fanout-b", status: "running" }),
+		]));
+		bridge.dispose();
+	});
+
+	it("takeover publication omits terminals the refresh quarantined, published once from the final projection", () => {
 		const stateRoot = root();
 		const terminalRoot = root();
-		const store = new TerminalTaskStore({ rootDir: terminalRoot });
+		const reads = { scans: 0 };
+		const store = new TerminalTaskStore({
+			rootDir: terminalRoot,
+			onRead: (kind) => { if (kind === "full-scan") reads.scans += 1; },
+		});
 		persistSettledTerminal(store, "term-keep", "session-quarantine", 1_000);
-		persistSettledTerminal(store, "term-drop", "session-quarantine", 1_100);
+		persistSettledTerminal(store, "term-drop-1", "session-quarantine", 1_100);
+		persistSettledTerminal(store, "term-drop-2", "session-quarantine", 1_200);
 		const terminals = new TerminalTaskManager({ store });
-		// The durable record becomes corrupt/unreadable after manager adoption;
-		// the takeover refresh must quarantine it, prune the retained projection,
-		// and never republish it into the durable feed.
-		writeFileSync(join(terminalRoot, "term-drop-1100", "meta.json"), "{not json", { mode: 0o600 });
+		// The durable records become corrupt/unreadable after manager adoption;
+		// the takeover refresh must quarantine both, prune the retained projection,
+		// and never republish them into the durable feed.
+		writeFileSync(join(terminalRoot, "term-drop-1-1100", "meta.json"), "{not json", { mode: 0o600 });
+		writeFileSync(join(terminalRoot, "term-drop-2-1200", "meta.json"), "{not json", { mode: 0o600 });
 		const incumbent = new ActivityFeedPublisher("session-quarantine", {
 			rootDir: stateRoot,
 			writerIdentity: { token: "incumbent", pid: 101, processStartTime: "incumbent-start" },
@@ -659,17 +729,39 @@ describe("ActivityManagerBridge", () => {
 		});
 		incumbent.publish([]);
 		let incumbentAlive = true;
+		let publications = 0;
 		const bridge = new ActivityManagerBridge(terminals, new FakeSubagentManager(), {
 			rootDir: stateRoot,
 			now: () => 2_000,
 			writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
 			inspectWriter: () => incumbentAlive ? "alive" : "dead",
+			publisherFactory: (owner) => {
+				const publisher = new ActivityFeedPublisher(owner, {
+					rootDir: stateRoot,
+					now: () => 2_000,
+					writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
+					inspectWriter: () => incumbentAlive ? "alive" : "dead",
+				});
+				const publish = publisher.publish.bind(publisher);
+				publisher.publish = (activities) => {
+					const wrote = publish(activities);
+					if (wrote) publications += 1;
+					return wrote;
+				};
+				return publisher;
+			},
 		});
 
 		bridge.bindSession("session-quarantine");
+		const scansBeforeTakeover = reads.scans;
 		incumbentAlive = false;
 		bridge.bindSession("session-quarantine");
 
+		// One coalesced refresh: no listener-triggered nested rescan while the
+		// takeover refresh prunes, and exactly one publication — of the final
+		// projection, which excludes every quarantined id.
+		expect(reads.scans - scansBeforeTakeover).toBe(1);
+		expect(publications).toBe(1);
 		expect(terminals.getSnapshots().map((task) => task.id)).toEqual(["term-keep"]);
 		expect(fixturePublisher("session-quarantine", { rootDir: stateRoot }).getSnapshot().map((activity) => activity.id)).toEqual(["term-keep"]);
 		bridge.dispose();

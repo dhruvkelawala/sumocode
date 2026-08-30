@@ -120,3 +120,19 @@ Cover space form, equals form, missing value, flags before/after the positional,
 ## Maintenance notes
 
 Every Pi bump must diff the launcher's mirrored table against Pi's parser. Plan 101 adds that compatibility check to the supported-version matrix.
+
+## Repair evidence (run-20260829T190709Z-0625e26d attempt 1, commit `7ee2528`)
+
+Spec-review blockers against the pinned Pi 0.84.3 `dist/cli/args.js` `parseArgs()`, all three fixed in `extract_first_positional`:
+
+1. **Unknown short options mis-extracted as the kickoff prompt.** args.js's final dash branch (`arg.startsWith("-") && !arg.startsWith("--")`) only records an "Unknown option" diagnostic: the token never becomes a message and never consumes a following value. The launcher had no such class, so `-x` fell through to positional extraction (`-x hello` extracted `-x` as the prompt). Added the keep-nothing unknown-short class (any other single-dash token, including bare `-`).
+2. **Empty positional messages.** args.js's final branch pushes ANY token that does not start with `-`, including the empty string (`pi "" hello` → `messages[0] === ""`, and `initial-message.js` pushes `messages[0]` whenever `messages.length > 0`). The launcher's `-n "${arg}"` guard skipped `""` and extracted the WRONG positional. Guard removed; `""` is extracted (removed from argv, `found=1`) like any other positional. Downstream, the host's `submitInitialPromptFromEnv` already treats a blank prompt as submit-nothing, matching Pi's effective behavior.
+3. **`--` end-of-options (should-fix).** args.js checks `arg === "--"` FIRST: every remaining token becomes a message (or a fileArg when `@`-prefixed) and parsing stops. The launcher had no special case, so `--` fell into the generic unknown-long class and consumed the next token as its value (`-- hello` extracted nothing). Now mirrored: parsing stops at `--`, the first post-`--` non-@ token (possibly `""`) is the prompt, `@file` stays a fileArg, `--` itself stays in the forwarded argv. (The wrapper's own parse loop consumes a caller's first `--` and forwards the rest verbatim, so one literal `--` reaches the extractor only via a double-`--` invocation — the fixture rows document this.)
+
+The class table is renumbered 1–8 to mirror the args.js branch ladder and the PI-BUMP 0.84.3 note now also covers `--`/unknown-short handling for Plan 101's per-version re-diff.
+
+Fixture table grown from 18 to 26 rows (`test/integration/spawn-pi-pty.test.ts`): unknown short option with/without following token, empty-string positional, and five `--` rows (next token as prompt, dash-leading token as message, first-only extraction after a flag, `@file` stays fileArg, empty first message).
+
+- **Red-check**: with the pre-fix extractor, 7/8 new rows failed (all but `--` keeps an @file token a fileArg, which passes before and after and pins preserved behavior); all 18 pre-existing rows stayed green.
+- **Differential**: a harness ran 29 argv cases through both the pinned `parseArgs()` and the extracted launcher function; extracted prompt matched `parsed.messages[0]` on every extraction-reachable path (`-p`/`--mode` argv is unreachable — the launcher routes it to the direct-Pi bypass before extraction).
+- **Gates**: `bash -n bin/sumocode.sh` clean; focused launcher suite 41/41; `pnpm exec tsc --noEmit && pnpm build` green; `pnpm lint` green; 137/137 `pnpm test:integration` (serial; 129 + 8 new rows); unit one-worker 2,577/2,578 — the single failure is a run-varying pre-existing load-sensitive timing test in untouched specs (host-actions/task-manager budget timeouts vary per run; a baseline HEAD run was equally red on 2 task-manager tests; every failing test passes in isolation).

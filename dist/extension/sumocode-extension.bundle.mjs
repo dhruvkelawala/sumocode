@@ -14644,6 +14644,11 @@ var DEFAULT_SUBAGENT_DEBOUNCE_MS = 50;
 var DEFAULT_TERMINAL_OUTPUT_POLL_MS = 250;
 var DEFAULT_RETENTION_POLL_MS = 60 * 60 * 1e3;
 var TERMINAL_REDACTION_CONTEXT_BYTES = 64 * 1024;
+var TAKEOVER_REFRESH_BACKOFF_BASE_MS = 1e3;
+var TAKEOVER_REFRESH_BACKOFF_MAX_MS = 6e4;
+var ACTIVITY_BLOCK_TAKEOVER_RETRYING = "activity unavailable: terminal store temporarily unreadable; takeover retrying";
+var ACTIVITY_BLOCK_LIVE_WRITER = "activity unavailable: another live Pi process owns this session's durable Activity feed";
+var ACTIVITY_BLOCK_NO_WRITER = "activity unavailable: this session has no active durable Activity feed writer";
 function ownerSessionId(ctx) {
   return ctx.sessionManager.getSessionId() || void 0;
 }
@@ -14732,6 +14737,12 @@ var ActivityManagerBridge = class {
   takeoverRefreshFailureDiagnosed = false;
   /** True only while the takeover refresh call itself is on the stack. */
   takeoverRefreshInFlight = false;
+  /** Consecutive deferred takeover refreshes; sizes the escalating backoff window. */
+  takeoverRefreshFailedAttempts = 0;
+  /** Current escalating gap before the next deferred takeover refresh attempt. */
+  takeoverRefreshBackoffMs = TAKEOVER_REFRESH_BACKOFF_BASE_MS;
+  /** Injectable-clock reading of the last takeover refresh attempt; undefined until one runs. */
+  takeoverRefreshLastAttemptAt;
   disposed = false;
   constructor(terminalManager, subagentManager, options = {}) {
     this.terminalManager = terminalManager;
@@ -14782,12 +14793,18 @@ var ActivityManagerBridge = class {
     this.publishAll();
     logDiagnostic("activity_bridge_bound", { ownerSessionId: owner ?? null, claimedOwnerSessionIds: [...this.claimedOwners] });
   }
-  /** Block execution only when another live process owns the feed writer name. */
+  /** True when this session may currently produce durable activity; activityBlockReason says why when false. */
   canProduceActivity(owner) {
-    if (!owner || this.disposed) return false;
+    return this.activityBlockReason(owner) === void 0;
+  }
+  /** Why activity production is blocked for owner, or undefined when it may proceed. A deferred takeover refresh (retryable failure or incomplete generation) is a transient store-read episode, not a competing live writer, so it reports its own reason instead of the live-writer block. */
+  activityBlockReason(owner) {
+    if (!owner || this.disposed) return ACTIVITY_BLOCK_NO_WRITER;
     this.syncOwnedSessions();
     const publisher = this.publishers.get(owner);
-    return this.claimedOwners.has(owner) && publisher?.hasWriterOwnership === true;
+    if (this.claimedOwners.has(owner) && publisher?.hasWriterOwnership === true) return void 0;
+    if (this.claimedSessionOwners.has(owner)) return ACTIVITY_BLOCK_TAKEOVER_RETRYING;
+    return ACTIVITY_BLOCK_LIVE_WRITER;
   }
   /** Publish final non-reattachable subagent truth before this factory dies. */
   shutdownSession(owner) {
@@ -14843,28 +14860,35 @@ var ActivityManagerBridge = class {
     }
     if (takeoverOwners.length === 0) {
       this.takeoverRefreshFailureDiagnosed = false;
+      this.resetTakeoverRefreshBackoff();
       return;
     }
+    const attemptAt = this.now();
+    if (this.takeoverRefreshLastAttemptAt !== void 0 && attemptAt - this.takeoverRefreshLastAttemptAt < this.takeoverRefreshBackoffMs) {
+      return;
+    }
+    this.takeoverRefreshLastAttemptAt = attemptAt;
     let refresh;
     this.takeoverRefreshInFlight = true;
     try {
       refresh = this.terminalManager.refreshSnapshotsFromStore?.();
     } catch (error) {
-      this.diagnoseTakeoverRefreshFailure(takeoverOwners[0], `terminal takeover refresh failed safely; takeover retries on the next sync: ${error instanceof Error ? error.message : String(error)}`);
+      this.deferTakeoverRefresh(takeoverOwners[0], `terminal takeover refresh failed safely; takeover retries after a backoff window: ${error instanceof Error ? error.message : String(error)}`);
       return;
     } finally {
       this.takeoverRefreshInFlight = false;
     }
     if (refresh && !refresh.ok) {
-      this.diagnoseTakeoverRefreshFailure(takeoverOwners[0], "terminal takeover refresh failed; takeover retries on the next sync");
+      this.deferTakeoverRefresh(takeoverOwners[0], "terminal takeover refresh failed; takeover retries after a backoff window");
       return;
     }
     if (refresh && !refresh.complete) {
       this.adoptTerminalSnapshots(refresh.snapshots);
-      this.diagnoseTakeoverRefreshFailure(takeoverOwners[0], "terminal takeover refresh produced an incomplete generation; takeover retries on the next sync");
+      this.deferTakeoverRefresh(takeoverOwners[0], "terminal takeover refresh produced an incomplete generation; takeover retries after a backoff window");
       return;
     }
     this.takeoverRefreshFailureDiagnosed = false;
+    this.resetTakeoverRefreshBackoff();
     if (refresh) this.adoptTerminalSnapshots(refresh.snapshots);
     for (const owner of takeoverOwners) this.claimedOwners.add(owner);
   }
@@ -14873,6 +14897,21 @@ var ActivityManagerBridge = class {
     if (this.takeoverRefreshFailureDiagnosed) return;
     this.takeoverRefreshFailureDiagnosed = true;
     this.diagnostic({ kind: "io", path: path2, message });
+  }
+  /** Diagnose the deferred refresh once per episode and escalate the next backoff window — 1s base doubling to the 60s cap on the injectable clock, mirroring the manager's lazy init-retry schedule. */
+  deferTakeoverRefresh(path2, message) {
+    this.diagnoseTakeoverRefreshFailure(path2, message);
+    this.takeoverRefreshFailedAttempts += 1;
+    this.takeoverRefreshBackoffMs = Math.min(
+      TAKEOVER_REFRESH_BACKOFF_BASE_MS * 2 ** Math.min(this.takeoverRefreshFailedAttempts - 1, 32),
+      TAKEOVER_REFRESH_BACKOFF_MAX_MS
+    );
+  }
+  /** A complete successful scan — or a pass with zero pending takeover owners — ends the episode: the escalating retry schedule resets so a later episode starts from the base again. */
+  resetTakeoverRefreshBackoff() {
+    this.takeoverRefreshFailedAttempts = 0;
+    this.takeoverRefreshBackoffMs = TAKEOVER_REFRESH_BACKOFF_BASE_MS;
+    this.takeoverRefreshLastAttemptAt = void 0;
   }
   publishAll() {
     if (this.disposed) return;
@@ -15010,11 +15049,9 @@ function installActivityManagerBridge(pi, terminalManager, subagentManager, opti
   pi.on("session_start", (_event, ctx) => bridge.bindSession(ownerSessionId(ctx)));
   pi.on("tool_call", (event, ctx) => {
     if (event.toolName !== "terminal_start" && event.toolName !== "subagent_spawn") return;
-    if (bridge.canProduceActivity(ownerSessionId(ctx))) return;
-    return {
-      block: true,
-      reason: "activity unavailable: another live Pi process owns this session's durable Activity feed"
-    };
+    const reason = bridge.activityBlockReason(ownerSessionId(ctx));
+    if (reason === void 0) return;
+    return { block: true, reason };
   });
   pi.on("session_shutdown", (_event, ctx) => bridge.shutdownSession(ownerSessionId(ctx)));
   return bridge;

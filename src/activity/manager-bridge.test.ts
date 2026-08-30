@@ -403,10 +403,12 @@ describe("ActivityManagerBridge", () => {
 		terminals.refreshOk = false;
 		terminals.refreshedSnapshots = [terminal("term-late-takeover", "session-refresh-retry")];
 		terminals.outputs.set("/tmp/term-late-takeover.log", "late output");
+		let clock = 2_000;
 		const created: ActivityFeedPublisher[] = [];
 		let successfulPublishes = 0;
 		const bridge = new ActivityManagerBridge(terminals, new FakeSubagentManager(), {
 			rootDir: stateRoot,
+			now: () => clock,
 			writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
 			inspectWriter: () => incumbentAlive ? "alive" : "dead",
 			publisherFactory: (owner) => {
@@ -444,6 +446,8 @@ describe("ActivityManagerBridge", () => {
 		// Pass 2: the retry succeeds, discovers the late terminal, and only then
 		// claims the owner; publication consumes the proof exactly once.
 		terminals.refreshOk = true;
+		// The deferred retry's 1s base backoff window has elapsed.
+		clock += 1_000;
 		expect(bridge.canProduceActivity("session-refresh-retry")).toBe(true);
 		expect(terminals.refreshCount).toBe(2);
 		bridge.bindSession("session-refresh-retry");
@@ -476,10 +480,12 @@ describe("ActivityManagerBridge", () => {
 		// read skips the durable terminal the incumbent left behind.
 		terminals.refreshComplete = false;
 		terminals.refreshedSnapshots = [];
+		let clock = 2_000;
 		const created: ActivityFeedPublisher[] = [];
 		let successfulPublishes = 0;
 		const bridge = new ActivityManagerBridge(terminals, new FakeSubagentManager(), {
 			rootDir: stateRoot,
+			now: () => clock,
 			writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
 			inspectWriter: () => incumbentAlive ? "alive" : "dead",
 			publisherFactory: (factoryOwner) => {
@@ -526,6 +532,8 @@ describe("ActivityManagerBridge", () => {
 		terminals.refreshComplete = true;
 		terminals.refreshedSnapshots = [terminal("term-skipped", owner)];
 		terminals.outputs.set("/tmp/term-skipped.log", "skipped output");
+		// The deferred retry's 1s base backoff window has elapsed.
+		clock += 1_000;
 		expect(bridge.canProduceActivity(owner)).toBe(true);
 		expect(terminals.refreshCount).toBe(2);
 		bridge.bindSession(owner);
@@ -561,11 +569,13 @@ describe("ActivityManagerBridge", () => {
 		for (const owner of owners) spawnIncumbent(owner);
 		const terminals = new FakeTerminalManager();
 		terminals.refreshComplete = false;
+		let clock = 2_000;
 		const diagnostics: ActivityFeedDiagnostic[] = [];
 		const incompleteDiagnostics = (): number => diagnostics.filter((entry) => entry.message.includes("incomplete generation")).length;
 		const { ownership } = sharedSessionOwnership(() => [...owners]);
 		const bridge = new ActivityManagerBridge(terminals, new FakeSubagentManager(), {
 			rootDir: stateRoot,
+			now: () => clock,
 			writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
 			inspectWriter: (writer) => alive.get(writer.token) ? "alive" : "dead",
 			onDiagnostic: (entry) => diagnostics.push(entry),
@@ -579,8 +589,12 @@ describe("ActivityManagerBridge", () => {
 		expect(terminals.refreshCount).toBe(1);
 		expect(incompleteDiagnostics()).toBe(1);
 
-		// Repeated incomplete syncs stay silent until a complete scan lands.
+		// Repeated incomplete syncs stay silent until a complete scan lands. Each
+		// retry crosses the escalating backoff window (1s, then 2s) to pin the
+		// dedupe holding across real refresh attempts, not skipped syncs.
+		clock += 1_000;
 		bridge.bindSession(owners[0]!);
+		clock += 2_000;
 		bridge.bindSession(owners[1]!);
 		expect(terminals.refreshCount).toBe(3);
 		expect(incompleteDiagnostics()).toBe(1);
@@ -588,6 +602,7 @@ describe("ActivityManagerBridge", () => {
 		// The complete coalesced refresh claims both owners and resets the dedupe.
 		terminals.refreshComplete = true;
 		terminals.refreshedSnapshots = [terminal("term-incomplete-dedupe-a", owners[0]!), terminal("term-incomplete-dedupe-b", owners[1]!)];
+		clock += 4_000;
 		bridge.bindSession(owners[0]!);
 		expect(terminals.refreshCount).toBe(4);
 		expect(incompleteDiagnostics()).toBe(1);
@@ -603,9 +618,12 @@ describe("ActivityManagerBridge", () => {
 		owners.push(lateOwner);
 		terminals.refreshComplete = false;
 		terminals.refreshedSnapshots = undefined;
+		// The complete scan reset the backoff, so this fresh episode refreshes
+		// immediately and re-arms from the 1s base.
 		bridge.bindSession(lateOwner);
 		expect(terminals.refreshCount).toBe(5);
 		expect(incompleteDiagnostics()).toBe(2);
+		clock += 1_000;
 		bridge.bindSession(lateOwner);
 		expect(terminals.refreshCount).toBe(6);
 		expect(incompleteDiagnostics()).toBe(2);
@@ -627,9 +645,11 @@ describe("ActivityManagerBridge", () => {
 		terminals.refreshComplete = false;
 		terminals.refreshedSnapshots = [terminal("term-ordinary", ordinaryOwner)];
 		terminals.outputs.set("/tmp/term-ordinary.log", "ordinary output");
+		let clock = 2_000;
 		const { ownership } = sharedSessionOwnership(() => [takeoverOwner, ordinaryOwner]);
 		const bridge = new ActivityManagerBridge(terminals, new FakeSubagentManager(), {
 			rootDir: stateRoot,
+			now: () => clock,
 			writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
 			inspectWriter: () => incumbentAlive ? "alive" : "dead",
 			sessionOwnership: ownership,
@@ -646,9 +666,22 @@ describe("ActivityManagerBridge", () => {
 		]));
 		expect(fixturePublisher(takeoverOwner, { rootDir: stateRoot }).getSnapshot()).toEqual([]);
 
-		// The deferred takeover completes on the next sync's complete scan.
+		// Inside the deferred window, sync passes skip the takeover rescan while
+		// the ordinary owner keeps publishing at its normal cadence.
+		clock += 250;
+		terminals.outputs.set("/tmp/term-ordinary.log", "refreshed while deferred");
+		bridge.bindSession(ordinaryOwner);
+		expect(terminals.refreshCount).toBe(1);
+		expect(fixturePublisher(ordinaryOwner, { rootDir: stateRoot }).getSnapshot()).toEqual(expect.arrayContaining([
+			expect.objectContaining({ id: "term-ordinary", outputTail: "refreshed while deferred" }),
+		]));
+		expect(fixturePublisher(takeoverOwner, { rootDir: stateRoot }).getSnapshot()).toEqual([]);
+
+		// The deferred takeover completes on the next sync's complete scan; the
+		// retry crosses its 1s base backoff window first.
 		terminals.refreshComplete = true;
 		terminals.refreshedSnapshots = [terminal("term-ordinary", ordinaryOwner), terminal("term-takeover", takeoverOwner)];
+		clock += 1_000;
 		bridge.bindSession(ordinaryOwner);
 		expect(terminals.refreshCount).toBe(2);
 		expect(fixturePublisher(takeoverOwner, { rootDir: stateRoot }).getSnapshot()).toEqual(expect.arrayContaining([
@@ -670,6 +703,7 @@ describe("ActivityManagerBridge", () => {
 		terminals.refreshedSnapshots = [terminal("term-after-throw", "session-refresh-throw")];
 		terminals.outputs.set("/tmp/term-after-throw.log", "late output");
 		const diagnostics: ActivityFeedDiagnostic[] = [];
+		let clock = 2_000;
 		const realRefresh = terminals.refreshSnapshotsFromStore.bind(terminals);
 		let refreshCalls = 0;
 		terminals.refreshSnapshotsFromStore = () => {
@@ -680,6 +714,7 @@ describe("ActivityManagerBridge", () => {
 		const created: ActivityFeedPublisher[] = [];
 		const bridge = new ActivityManagerBridge(terminals, new FakeSubagentManager(), {
 			rootDir: stateRoot,
+			now: () => clock,
 			writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
 			inspectWriter: () => incumbentAlive ? "alive" : "dead",
 			onDiagnostic: (entry) => diagnostics.push(entry),
@@ -711,7 +746,9 @@ describe("ActivityManagerBridge", () => {
 		expect(diagnostics.at(-1)).toMatchObject({ kind: "io", path: "session-refresh-throw" });
 
 		// Pass 2: the retry succeeds, discovers the late terminal, claims the
-		// owner, and publication consumes the proof exactly once.
+		// owner, and publication consumes the proof exactly once. The deferred
+		// retry's 1s base backoff window has elapsed.
+		clock += 1_000;
 		expect(bridge.canProduceActivity("session-refresh-throw")).toBe(true);
 		expect(refreshCalls).toBe(2);
 		bridge.bindSession("session-refresh-throw");
@@ -792,11 +829,13 @@ describe("ActivityManagerBridge", () => {
 		for (const owner of owners) spawnIncumbent(owner);
 		const terminals = new FakeTerminalManager();
 		terminals.refreshOk = false;
+		let clock = 2_000;
 		const diagnostics: ActivityFeedDiagnostic[] = [];
 		const { ownership } = sharedSessionOwnership(() => [...owners]);
 		const takeoverFailures = (): number => diagnostics.filter((entry) => entry.message.includes("takeover refresh failed")).length;
 		const bridge = new ActivityManagerBridge(terminals, new FakeSubagentManager(), {
 			rootDir: stateRoot,
+			now: () => clock,
 			writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
 			inspectWriter: (writer) => alive.get(writer.token) ? "alive" : "dead",
 			onDiagnostic: (entry) => diagnostics.push(entry),
@@ -809,19 +848,25 @@ describe("ActivityManagerBridge", () => {
 		bridge.bindSession(owners[0]!);
 		expect(takeoverFailures()).toBe(1);
 
-		// Repeated failed syncs stay silent until a refresh succeeds.
+		// Repeated failed syncs stay silent until a refresh succeeds. Each retry
+		// crosses the escalating backoff window (1s, then 2s) so the dedupe is
+		// pinned across real refresh attempts, not skipped syncs.
+		clock += 1_000;
 		bridge.bindSession(owners[0]!);
+		clock += 2_000;
 		bridge.bindSession(owners[1]!);
 		expect(takeoverFailures()).toBe(1);
 
 		// The successful coalesced refresh claims, publishes, and resets the
 		// failure dedupe.
 		terminals.refreshOk = true;
+		clock += 4_000;
 		bridge.bindSession(owners[0]!);
 		expect(takeoverFailures()).toBe(1);
 
 		// A later owner's takeover hits a fresh transient failure: the reset
-		// dedupe emits once more, and repeats stay silent.
+		// dedupe emits once more, and repeats stay silent. The complete scan
+		// reset the backoff, so the fresh episode refreshes immediately.
 		const lateOwner = "session-dedupe-c";
 		spawnIncumbent(lateOwner);
 		alive.set(`incumbent-${lateOwner}`, false);
@@ -829,6 +874,7 @@ describe("ActivityManagerBridge", () => {
 		terminals.refreshOk = false;
 		bridge.bindSession(lateOwner);
 		expect(takeoverFailures()).toBe(2);
+		clock += 1_000;
 		bridge.bindSession(lateOwner);
 		expect(takeoverFailures()).toBe(2);
 
@@ -841,8 +887,94 @@ describe("ActivityManagerBridge", () => {
 		owners.push(...pending);
 		bridge.bindSession(lateOwner);
 		expect(takeoverFailures()).toBe(3);
+		clock += 1_000;
 		bridge.bindSession(lateOwner);
 		expect(takeoverFailures()).toBe(3);
+		bridge.dispose();
+	});
+
+	it("skips deferred takeover rescans inside an escalating backoff window that a complete scan resets", () => {
+		const stateRoot = root();
+		const owner = "session-backoff-a";
+		const alive = new Map<string, boolean>();
+		const spawnIncumbent = (owner: string): void => {
+			const token = `incumbent-${owner}`;
+			alive.set(token, true);
+			const incumbent = new ActivityFeedPublisher(owner, {
+				rootDir: stateRoot,
+				writerIdentity: { token, pid: 101, processStartTime: `incumbent-start-${owner}` },
+				inspectWriter: (writer) => alive.get(writer.token) ? "alive" : "dead",
+			});
+			incumbent.publish([]);
+		};
+		spawnIncumbent(owner);
+		const owners = [owner];
+		let clock = 2_000;
+		const terminals = new FakeTerminalManager();
+		terminals.refreshOk = false;
+		const { ownership } = sharedSessionOwnership(() => [...owners]);
+		const bridge = new ActivityManagerBridge(terminals, new FakeSubagentManager(), {
+			rootDir: stateRoot,
+			now: () => clock,
+			writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
+			inspectWriter: (writer) => alive.get(writer.token) ? "alive" : "dead",
+			sessionOwnership: ownership,
+		});
+
+		// The bridge first sees the session while the incumbent is alive: its
+		// blocked publisher is discarded unclaimed.
+		bridge.bindSession(owner);
+		alive.set(`incumbent-${owner}`, false);
+
+		// The deferred takeover then rescans at the output poll's 250ms sync
+		// cadence: exactly one scan opens each escalating window (1s, 2s, 4s,
+		// 8s, 16s, 32s, then the 60s cap holding), and every in-window pass
+		// skips the rescan entirely while the owner stays unclaimed.
+		bridge.bindSession(owner);
+		expect(terminals.refreshCount).toBe(1);
+		for (const window of [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000]) {
+			const before = terminals.refreshCount;
+			for (let step = 1; step < window / 250; step += 1) {
+				clock += 250;
+				bridge.bindSession(owner);
+				expect(terminals.refreshCount).toBe(before);
+			}
+			clock += 250;
+			bridge.bindSession(owner);
+			expect(terminals.refreshCount).toBe(before + 1);
+		}
+		expect(fixturePublisher(owner, { rootDir: stateRoot }).getSnapshot()).toEqual([]);
+
+		// A complete scan past the last window ends the episode and resets the
+		// schedule: it claims and publishes the deferred owner, and a later
+		// owner's fresh deferred episode re-arms from the 1s base instead of the
+		// 60s cap the previous episode reached.
+		terminals.refreshOk = true;
+		terminals.refreshedSnapshots = [terminal("term-backoff-a", owner)];
+		terminals.outputs.set("/tmp/term-backoff-a.log", "late output");
+		clock += 60_000;
+		bridge.bindSession(owner);
+		expect(terminals.refreshCount).toBe(10);
+		expect(fixturePublisher(owner, { rootDir: stateRoot }).getSnapshot()).toEqual(expect.arrayContaining([
+			expect.objectContaining({ id: "term-backoff-a", status: "running", outputTail: "late output" }),
+		]));
+
+		const lateOwner = "session-backoff-b";
+		spawnIncumbent(lateOwner);
+		alive.set(`incumbent-${lateOwner}`, false);
+		owners.push(lateOwner);
+		terminals.refreshOk = false;
+		terminals.refreshedSnapshots = undefined;
+		bridge.bindSession(lateOwner);
+		expect(terminals.refreshCount).toBe(11);
+		for (let step = 0; step < 3; step += 1) {
+			clock += 250;
+			bridge.bindSession(lateOwner);
+			expect(terminals.refreshCount).toBe(11);
+		}
+		clock += 250;
+		bridge.bindSession(lateOwner);
+		expect(terminals.refreshCount).toBe(12);
 		bridge.dispose();
 	});
 
@@ -1030,14 +1162,17 @@ describe("ActivityManagerBridge", () => {
 		});
 		incumbent.publish([]);
 		let incumbentAlive = true;
+		let clock = 5_000;
 		const owners = new Set<string>();
 		const claims = new Map<string, string>();
 		const handlers = new Map<string, Array<(event: never, ctx: never) => object | void>>();
 		const pi = {
 			on: (name: string, handler: (event: never, ctx: never) => object | void) => handlers.set(name, [...handlers.get(name) ?? [], handler]),
 		} as never;
-		const bridge = installActivityManagerBridge(pi, new FakeTerminalManager() as never, new FakeSubagentManager() as never, {
+		const terminals = new FakeTerminalManager();
+		const bridge = installActivityManagerBridge(pi, terminals as never, new FakeSubagentManager() as never, {
 			rootDir: stateRoot,
+			now: () => clock,
 			writerIdentity: { token: "contender", pid: 222, processStartTime: "contender-start" },
 			inspectWriter: () => incumbentAlive ? "alive" : "dead",
 			sessionOwnership: {
@@ -1055,11 +1190,35 @@ describe("ActivityManagerBridge", () => {
 		const ctx = { sessionManager: { getSessionId: () => "session-gated" } } as never;
 		for (const handler of handlers.get("session_start") ?? []) handler({} as never, ctx);
 		const toolGate = handlers.get("tool_call")?.[0];
-		expect(toolGate?.({ toolName: "terminal_start" } as never, ctx)).toMatchObject({ block: true });
+		// A genuine live incumbent pins the live-writer block message.
+		expect(toolGate?.({ toolName: "terminal_start" } as never, ctx)).toEqual({
+			block: true,
+			reason: "activity unavailable: another live Pi process owns this session's durable Activity feed",
+		});
 		expect(toolGate?.({ toolName: "subagent_spawn" } as never, ctx)).toMatchObject({ block: true });
 
+		// A deferred takeover refresh (retryable failure) pins the transient
+		// retry message — the store is momentarily unreadable, not owned by
+		// another live writer — and stays deferred inside the backoff window.
 		incumbentAlive = false;
+		terminals.refreshOk = false;
+		expect(toolGate?.({ toolName: "terminal_start" } as never, ctx)).toEqual({
+			block: true,
+			reason: "activity unavailable: terminal store temporarily unreadable; takeover retrying",
+		});
+		expect(terminals.refreshCount).toBe(1);
+		clock += 500;
+		expect(toolGate?.({ toolName: "subagent_spawn" } as never, ctx)).toEqual({
+			block: true,
+			reason: "activity unavailable: terminal store temporarily unreadable; takeover retrying",
+		});
+		expect(terminals.refreshCount).toBe(1);
+
+		// The complete scan past the window ends the deferral and opens the gate.
+		terminals.refreshOk = true;
+		clock += 500;
 		expect(toolGate?.({ toolName: "terminal_start" } as never, ctx)).toBeUndefined();
+		expect(toolGate?.({ toolName: "subagent_spawn" } as never, ctx)).toBeUndefined();
 		bridge.dispose();
 	});
 

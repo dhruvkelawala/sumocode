@@ -1,3 +1,4 @@
+// oxlint-disable anti-slop/no-runtime-typeof -- account migration parses user-authored JSON at the sync I/O boundary.
 import { execFile as execFileCallback } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -138,6 +139,50 @@ function resolvesToSamePath(left: string, right: string): boolean {
 	}
 }
 
+interface AccountsLikeDocument {
+	readonly subscriptions?: unknown;
+}
+
+function readAccountsLikeDocument(path: string): AccountsLikeDocument | undefined {
+	if (!existsSync(path)) return undefined;
+	try {
+		const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
+		// SAFETY: only subscriptions is inspected below, with an array guard.
+		return parsed as AccountsLikeDocument;
+	} catch {
+		return undefined;
+	}
+}
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- decoded config entry; guards below are the parse boundary.
+function isClaudeSubscription(value: unknown): boolean {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	// SAFETY: object shape was checked above; both fields are validated before use.
+	const candidate = value as { provider?: unknown; index?: unknown };
+	return candidate.provider === "anthropic" && typeof candidate.index === "number" && Number.isInteger(candidate.index) && candidate.index >= 2;
+}
+
+function claudeSubscriptionsFromDocument(document: AccountsLikeDocument | undefined): unknown[] {
+	return Array.isArray(document?.subscriptions) ? document.subscriptions.filter(isClaudeSubscription) : [];
+}
+
+function seedUnmigratedPrivateAccounts(source: string, target: string): void {
+	const primary = readAccountsLikeDocument(source);
+	if (claudeSubscriptionsFromDocument(primary).length > 0) return;
+	const agentDocument = readAccountsLikeDocument(target);
+	const legacyDocument = readAccountsLikeDocument(join(dirname(target), "multi-pass.json"));
+	const incoming = claudeSubscriptionsFromDocument(agentDocument).length > 0
+		? claudeSubscriptionsFromDocument(agentDocument)
+		: claudeSubscriptionsFromDocument(legacyDocument);
+	if (incoming.length === 0) return;
+	const existing = Array.isArray(primary?.subscriptions) ? primary.subscriptions : [];
+	const next = { ...primary, subscriptions: [...existing, ...incoming] };
+	const temporary = `${source}.${process.pid}.tmp`;
+	writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+	renameSync(temporary, source);
+}
+
 function initialManagedConfigContent(item: typeof MANAGED_CONFIG_ITEMS[number], target: string): string | undefined {
 	if (item !== "claude-accounts.json") return undefined;
 	try {
@@ -171,6 +216,7 @@ function ensureConfigSymlinks(configRepo: string, agentDir: string): SyncStepRes
 			if (initialContent === undefined) continue;
 			writeFileSync(source, initialContent, { encoding: "utf8", mode: 0o600 });
 		}
+		if (item === "claude-accounts.json") seedUnmigratedPrivateAccounts(source, target);
 
 		if (pathExists(target)) {
 			if (resolvesToSamePath(source, target)) {

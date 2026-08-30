@@ -7284,6 +7284,38 @@ function resolvesToSamePath(left, right) {
     return false;
   }
 }
+function readAccountsLikeDocument(path2) {
+  if (!existsSync4(path2)) return void 0;
+  try {
+    const parsed = JSON.parse(readFileSync6(path2, "utf8"));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return void 0;
+    return parsed;
+  } catch {
+    return void 0;
+  }
+}
+function isClaudeSubscription(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const candidate = value;
+  return candidate.provider === "anthropic" && typeof candidate.index === "number" && Number.isInteger(candidate.index) && candidate.index >= 2;
+}
+function claudeSubscriptionsFromDocument(document) {
+  return Array.isArray(document?.subscriptions) ? document.subscriptions.filter(isClaudeSubscription) : [];
+}
+function seedUnmigratedPrivateAccounts(source, target) {
+  const primary = readAccountsLikeDocument(source);
+  if (claudeSubscriptionsFromDocument(primary).length > 0) return;
+  const agentDocument = readAccountsLikeDocument(target);
+  const legacyDocument = readAccountsLikeDocument(join6(dirname3(target), "multi-pass.json"));
+  const incoming = claudeSubscriptionsFromDocument(agentDocument).length > 0 ? claudeSubscriptionsFromDocument(agentDocument) : claudeSubscriptionsFromDocument(legacyDocument);
+  if (incoming.length === 0) return;
+  const existing = Array.isArray(primary?.subscriptions) ? primary.subscriptions : [];
+  const next = { ...primary, subscriptions: [...existing, ...incoming] };
+  const temporary = `${source}.${process.pid}.tmp`;
+  writeFileSync4(temporary, `${JSON.stringify(next, null, 2)}
+`, { encoding: "utf8", mode: 384 });
+  renameSync2(temporary, source);
+}
 function initialManagedConfigContent(item, target) {
   if (item !== "claude-accounts.json") return void 0;
   try {
@@ -7314,6 +7346,7 @@ function ensureConfigSymlinks(configRepo, agentDir) {
       if (initialContent === void 0) continue;
       writeFileSync4(source, initialContent, { encoding: "utf8", mode: 384 });
     }
+    if (item === "claude-accounts.json") seedUnmigratedPrivateAccounts(source, target);
     if (pathExists(target)) {
       if (resolvesToSamePath(source, target)) {
         linked += 1;

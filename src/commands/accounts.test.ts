@@ -276,6 +276,8 @@ describe("saveClaudeSubscriptions symlink handling", () => {
 		const deps = { agentDir, env: { SUMOCODE_CONFIG_DIR: configDir } };
 
 		expect(loadClaudeSubscriptions(deps)).toEqual([{ provider: "anthropic", index: 2, label: "company" }]);
+		expect(lstatSync(join(agentDir, "claude-accounts.json")).isSymbolicLink()).toBe(true);
+		expect(readlinkSync(join(agentDir, "claude-accounts.json"))).toBe(join(configDir, "claude-accounts.json"));
 		saveClaudeSubscriptions([{ provider: "anthropic", index: 2, label: "personal" }], deps);
 
 		expect(lstatSync(join(agentDir, "claude-accounts.json")).isSymbolicLink()).toBe(true);

@@ -16802,9 +16802,42 @@ function resolvePrivateAccountsPath(deps) {
   const privateConfigDir = resolve7(deps.env?.SUMOCODE_CONFIG_DIR ?? process.env.SUMOCODE_CONFIG_DIR ?? join21(deps.homeDir ?? homedir15(), ".config", "sumocode"));
   return join21(privateConfigDir, ACCOUNTS_CONFIG_FILE);
 }
+function accountPathsShareParent(targetPath, managedPath) {
+  try {
+    return realpathSync4(dirname13(targetPath)) === realpathSync4(dirname13(managedPath));
+  } catch {
+    return false;
+  }
+}
+function ensurePrivateAccountsLink(deps, privatePath) {
+  const targetPath = resolveAccountsConfigPath(deps);
+  if (accountPathsShareParent(targetPath, privatePath)) return;
+  const privateStat = lstatSync4(privatePath);
+  if (privateStat.isSymbolicLink() || !privateStat.isFile()) throw new Error(`Expected a regular private accounts source: ${privatePath}`);
+  let targetStat;
+  try {
+    targetStat = lstatSync4(targetPath);
+  } catch {
+  }
+  if (targetStat?.isSymbolicLink()) {
+    const linkTarget = resolve7(dirname13(targetPath), readlinkSync(targetPath));
+    if (linkTarget !== privatePath) throw new Error(`Refusing to replace an unmanaged accounts symlink: ${targetPath}`);
+    return;
+  }
+  if (targetStat) {
+    if (!targetStat.isFile()) throw new Error(`Expected a regular accounts file or managed symlink: ${targetPath}`);
+    const backup = `${targetPath}.pre-managed-backup-${Date.now()}`;
+    renameSync7(targetPath, backup);
+  }
+  mkdirSync10(dirname13(targetPath), { recursive: true, mode: 448 });
+  symlinkSync2(privatePath, targetPath);
+}
 function resolveAccountsReadPath(deps) {
   const privatePath = resolvePrivateAccountsPath(deps);
-  if (existsSync13(privatePath)) return privatePath;
+  if (existsSync13(privatePath)) {
+    ensurePrivateAccountsLink(deps, privatePath);
+    return privatePath;
+  }
   return resolveAccountsConfigPath(deps);
 }
 function pathEntryExists(path2) {
@@ -16819,10 +16852,7 @@ function resolveAccountsWriteDestination(deps) {
   const targetPath = resolveAccountsConfigPath(deps);
   const managedTarget = resolvePrivateAccountsPath(deps);
   const privateConfigDir = dirname13(managedTarget);
-  try {
-    if (realpathSync4(dirname13(targetPath)) === realpathSync4(privateConfigDir)) return { writePath: managedTarget };
-  } catch {
-  }
+  if (accountPathsShareParent(targetPath, managedTarget)) return { writePath: managedTarget };
   if (pathEntryExists(managedTarget) && lstatSync4(managedTarget).isSymbolicLink()) {
     throw new Error(`Refusing to replace a symlinked private accounts source: ${managedTarget}`);
   }

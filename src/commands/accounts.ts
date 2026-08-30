@@ -69,9 +69,45 @@ function resolvePrivateAccountsPath(deps: AccountsCommandDeps): string {
 	return join(privateConfigDir, ACCOUNTS_CONFIG_FILE);
 }
 
+function accountPathsShareParent(targetPath: string, managedPath: string): boolean {
+	try {
+		return realpathSync(dirname(targetPath)) === realpathSync(dirname(managedPath));
+	} catch {
+		return false;
+	}
+}
+
+function ensurePrivateAccountsLink(deps: AccountsCommandDeps, privatePath: string): void {
+	const targetPath = resolveAccountsConfigPath(deps);
+	if (accountPathsShareParent(targetPath, privatePath)) return;
+	const privateStat = lstatSync(privatePath);
+	if (privateStat.isSymbolicLink() || !privateStat.isFile()) throw new Error(`Expected a regular private accounts source: ${privatePath}`);
+	let targetStat: ReturnType<typeof lstatSync> | undefined;
+	try {
+		targetStat = lstatSync(targetPath);
+	} catch {
+		// Missing target is linked below.
+	}
+	if (targetStat?.isSymbolicLink()) {
+		const linkTarget = resolve(dirname(targetPath), readlinkSync(targetPath));
+		if (linkTarget !== privatePath) throw new Error(`Refusing to replace an unmanaged accounts symlink: ${targetPath}`);
+		return;
+	}
+	if (targetStat) {
+		if (!targetStat.isFile()) throw new Error(`Expected a regular accounts file or managed symlink: ${targetPath}`);
+		const backup = `${targetPath}.pre-managed-backup-${Date.now()}`;
+		renameSync(targetPath, backup);
+	}
+	mkdirSync(dirname(targetPath), { recursive: true, mode: 0o700 });
+	symlinkSync(privatePath, targetPath);
+}
+
 function resolveAccountsReadPath(deps: AccountsCommandDeps): string {
 	const privatePath = resolvePrivateAccountsPath(deps);
-	if (existsSync(privatePath)) return privatePath;
+	if (existsSync(privatePath)) {
+		ensurePrivateAccountsLink(deps, privatePath);
+		return privatePath;
+	}
 	return resolveAccountsConfigPath(deps);
 }
 
@@ -93,13 +129,9 @@ function resolveAccountsWriteDestination(deps: AccountsCommandDeps): AccountsWri
 	const targetPath = resolveAccountsConfigPath(deps);
 	const managedTarget = resolvePrivateAccountsPath(deps);
 	const privateConfigDir = dirname(managedTarget);
-	try {
-		// Supported canonical layout: ~/.pi/agent itself points at the private
-		// config repo, so both lexical paths name the same file already.
-		if (realpathSync(dirname(targetPath)) === realpathSync(privateConfigDir)) return { writePath: managedTarget };
-	} catch {
-		// One parent does not exist yet; normal bootstrap/link handling follows.
-	}
+	// Supported canonical layout: ~/.pi/agent itself points at the private
+	// config repo, so both lexical paths name the same file already.
+	if (accountPathsShareParent(targetPath, managedTarget)) return { writePath: managedTarget };
 	if (pathEntryExists(managedTarget) && lstatSync(managedTarget).isSymbolicLink()) {
 		throw new Error(`Refusing to replace a symlinked private accounts source: ${managedTarget}`);
 	}

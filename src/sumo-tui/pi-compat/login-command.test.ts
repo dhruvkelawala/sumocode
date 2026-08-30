@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { cancelActiveRpcLogin, executeRpcLogin, redactLoginErrorText, registerRpcLoginCommand, type RpcLoginRuntime } from "./login-command.js";
@@ -211,6 +214,33 @@ describe("RPC /login compatibility command", () => {
 		const title = (ctx.ui.input as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
 		expect(isSecretInputTitle(title)).toBe(true);
 		expect(title).not.toContain("sk-secret");
+	});
+
+	it("persists only error identity when an arbitrary API key is echoed by its provider", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "sumocode-login-diag-"));
+		const file = join(dir, "diagnostics.jsonl");
+		const previous = process.env.SUMO_TUI_DIAG_FILE;
+		process.env.SUMO_TUI_DIAG_FILE = file;
+		try {
+			const apiKeyProvider = { ...provider({ oauth: false, apiKey: true }), id: "acme", name: "Acme" };
+			const ctx = context({ inputs: ["acme_live_credential_987654321"] });
+			const runtime = runtimeFor(apiKeyProvider);
+			(runtime.login as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("rejected acme_live_credential_987654321"));
+
+			await executeRpcLogin("acme", ctx, runtime);
+
+			const trace = readFileSync(file, "utf8");
+			expect(trace).toContain('"errorName":"Error"');
+			expect(trace).toContain('"errorMessage":"[redacted: api-key provider error]"');
+			expect(trace).toContain('"stack":[]');
+			expect(trace).not.toContain("acme_live_credential_987654321");
+			expect(ctx.ui.notify).toHaveBeenCalledWith("Login failed; run sumocode -d for details", "error");
+			expect(ctx.ui.notify).not.toHaveBeenCalledWith(expect.stringContaining("acme_live_credential_987654321"), expect.anything());
+		} finally {
+			if (previous === undefined) delete process.env.SUMO_TUI_DIAG_FILE;
+			else process.env.SUMO_TUI_DIAG_FILE = previous;
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
 

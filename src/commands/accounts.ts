@@ -221,7 +221,35 @@ function accountRow(account: ClaudeAccount): string {
 	return `${account.label} · ${accountState(account)}  ${account.providerId}`;
 }
 
+/**
+ * Ensure the multi-account OAuth adapter is installed before flows that need
+ * it (adding an extra account, acting on one). The default `anthropic` account
+ * works without it, so it is never gated. Returns false when the user declines
+ * or the install fails; in both cases nothing further should run.
+ */
+async function ensureAdapterInstalled(ctx: ExtensionCommandContext, deps: AccountsCommandDeps): Promise<boolean> {
+	if (isAdapterInstalled(deps)) return true;
+	const install = await ctx.ui.confirm(
+		"SET UP MULTI-ACCOUNT CLAUDE",
+		"/accounts needs the Claude OAuth adapter (pi-claude-oauth-adapter) to register and sign in extra accounts. Install it now?",
+	);
+	if (!install) return false;
+	ctx.ui.setStatus("sumocode.accounts", "installing pi-claude-oauth-adapter…");
+	try {
+		await (deps.installAdapter ?? defaultInstallAdapter)();
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		logDiagnostic("accounts_install_adapter_failed", { errorMessage: message });
+		ctx.ui.notify(`Unable to install pi-claude-oauth-adapter: ${message}`, "error");
+		return false;
+	} finally {
+		ctx.ui.setStatus("sumocode.accounts", undefined);
+	}
+	return true;
+}
+
 async function addAccount(ctx: ExtensionCommandContext, deps: AccountsCommandDeps): Promise<void> {
+	if (!(await ensureAdapterInstalled(ctx, deps))) return;
 	const subscriptions = loadClaudeSubscriptions(deps);
 	const index = nextIndex(subscriptions);
 	const suggestedLabel = index === 2 ? "company" : `Claude account ${index}`;
@@ -268,6 +296,16 @@ async function renameAccount(ctx: ExtensionCommandContext, account: ClaudeAccoun
 }
 
 async function accountActions(pi: ExtensionAPI, ctx: ExtensionCommandContext, account: ClaudeAccount, deps: AccountsCommandDeps): Promise<void> {
+	// Acting on an extra account needs the adapter. The default `anthropic`
+	// account is built into Pi and never gated. A just-installed adapter cannot
+	// register providers into the running session, so reload before offering
+	// actions that would otherwise dead-end on an unregistered provider.
+	if (account.subscription && !isAdapterInstalled(deps)) {
+		if (!(await ensureAdapterInstalled(ctx, deps))) return;
+		ctx.ui.notify("pi-claude-oauth-adapter installed. Reload SumoCode, then re-open /accounts.", "info");
+		await (deps.reload ?? ((reloadCtx) => executeSumoReload(reloadCtx)))(ctx);
+		return;
+	}
 	const actions = [
 		...(account.configured && !account.active ? ["use this account"] : []),
 		account.configured ? "sign in again" : "sign in",
@@ -284,36 +322,6 @@ export async function executeAccountsCommand(pi: ExtensionAPI, ctx: ExtensionCom
 	if (ctx.mode !== "rpc" || !ctx.hasUI) {
 		ctx.ui.notify("/accounts requires the SumoCode RPC interface", "warning");
 		return;
-	}
-	// Every flow below (sign-in on migrated accounts included) needs the
-	// adapter: without it no extension registers `anthropic-N`, and the legacy
-	// multi-pass OAuth is the broken implementation this replaces.
-	if (!isAdapterInstalled(deps)) {
-		const install = await ctx.ui.confirm(
-			"SET UP MULTI-ACCOUNT CLAUDE",
-			"/accounts needs the Claude OAuth adapter (pi-claude-oauth-adapter) to register and sign in extra accounts. Install it now?",
-		);
-		if (!install) return;
-		ctx.ui.setStatus("sumocode.accounts", "installing pi-claude-oauth-adapter…");
-		try {
-			await (deps.installAdapter ?? defaultInstallAdapter)();
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			logDiagnostic("accounts_install_adapter_failed", { errorMessage: message });
-			ctx.ui.notify(`Unable to install pi-claude-oauth-adapter: ${message}`, "error");
-			return;
-		} finally {
-			ctx.ui.setStatus("sumocode.accounts", undefined);
-		}
-		if (loadClaudeSubscriptions(deps).length > 0) {
-			// The running session built its registry before the adapter existed,
-			// so migrated accounts can only sign in after a reload registers them.
-			ctx.ui.notify("pi-claude-oauth-adapter installed. Reloading SumoCode…", "info");
-			await (deps.reload ?? ((reloadCtx) => executeSumoReload(reloadCtx)))(ctx);
-			return;
-		}
-		// Fresh setup: fall through to the add flow — its reload registers the
-		// first new account.
 	}
 	const accountList = accounts(ctx, deps);
 	const rows = accountList.map(accountRow);

@@ -414,7 +414,7 @@ describe("executeAccountsCommand", () => {
 		const reload = vi.fn(async () => {});
 		const { ctx, input } = makeCtx({
 			agentDir,
-			onSelect: pickOption(ADD_LABEL),
+			onSelect: pickOption("company"),
 			onConfirm: () => true,
 		});
 		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), installAdapter, reload });

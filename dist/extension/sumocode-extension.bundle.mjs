@@ -16617,14 +16617,15 @@ function redactLoginErrorText(text) {
 }
 function logLoginFailure(attempt, providerRef, error) {
   const failure2 = error instanceof Error ? error : void 0;
-  const stack = failure2?.stack ? failure2.stack.split("\n").slice(0, 8).map((frame) => redactLoginErrorText(frame.trim())) : [];
+  const credentialFree = attempt?.authType === "api_key";
+  const stack = failure2?.stack && !credentialFree ? failure2.stack.split("\n").slice(0, 8).map((frame) => redactLoginErrorText(frame.trim())) : [];
   logDiagnostic("rpc_login_failed", {
     // The fallback is the raw /login argument (user-controlled); a failure
     // before provider resolution would otherwise persist it verbatim.
     provider: attempt?.provider.id ?? redactLoginErrorText(providerRef),
     authType: attempt?.authType,
     errorName: failure2?.name ?? "non_error_rejection",
-    errorMessage: redactLoginErrorText(failure2?.message ?? String(error)),
+    errorMessage: credentialFree ? "[redacted: api-key provider error]" : redactLoginErrorText(failure2?.message ?? String(error)),
     stack
   });
 }
@@ -16672,7 +16673,7 @@ async function executeRpcLogin(args, ctx, runtime) {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message !== "Login cancelled") logLoginFailure(attempt, args.trim(), error);
-    if (!loginAbort.signal.aborted && message !== "Login cancelled") ctx.ui.notify(`Login failed: ${message}`, "error");
+    if (!loginAbort.signal.aborted && message !== "Login cancelled") ctx.ui.notify("Login failed; run sumocode -d for details", "error");
   } finally {
     loginAbort.abort();
     if (activeLoginAbort === loginAbort) activeLoginAbort = void 0;
@@ -16837,7 +16838,28 @@ function accountState(account) {
 function accountRow(account) {
   return `${account.label} \xB7 ${accountState(account)}  ${account.providerId}`;
 }
+async function ensureAdapterInstalled(ctx, deps) {
+  if (isAdapterInstalled(deps)) return true;
+  const install = await ctx.ui.confirm(
+    "SET UP MULTI-ACCOUNT CLAUDE",
+    "/accounts needs the Claude OAuth adapter (pi-claude-oauth-adapter) to register and sign in extra accounts. Install it now?"
+  );
+  if (!install) return false;
+  ctx.ui.setStatus("sumocode.accounts", "installing pi-claude-oauth-adapter\u2026");
+  try {
+    await (deps.installAdapter ?? defaultInstallAdapter)();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logDiagnostic("accounts_install_adapter_failed", { errorMessage: message });
+    ctx.ui.notify(`Unable to install pi-claude-oauth-adapter: ${message}`, "error");
+    return false;
+  } finally {
+    ctx.ui.setStatus("sumocode.accounts", void 0);
+  }
+  return true;
+}
 async function addAccount(ctx, deps) {
+  if (!await ensureAdapterInstalled(ctx, deps)) return;
   const subscriptions = loadClaudeSubscriptions(deps);
   const index = nextIndex(subscriptions);
   const suggestedLabel = index === 2 ? "company" : `Claude account ${index}`;
@@ -16881,6 +16903,12 @@ async function renameAccount(ctx, account, deps) {
   ctx.ui.notify(`Renamed ${account.providerId} to ${label.trim()}`, "info");
 }
 async function accountActions(pi, ctx, account, deps) {
+  if (account.subscription && !isAdapterInstalled(deps)) {
+    if (!await ensureAdapterInstalled(ctx, deps)) return;
+    ctx.ui.notify("pi-claude-oauth-adapter installed. Reload SumoCode, then re-open /accounts.", "info");
+    await (deps.reload ?? ((reloadCtx) => executeSumoReload(reloadCtx)))(ctx);
+    return;
+  }
   const actions = [
     ...account.configured && !account.active ? ["use this account"] : [],
     account.configured ? "sign in again" : "sign in",
@@ -16896,29 +16924,6 @@ async function executeAccountsCommand(pi, ctx, deps = {}) {
   if (ctx.mode !== "rpc" || !ctx.hasUI) {
     ctx.ui.notify("/accounts requires the SumoCode RPC interface", "warning");
     return;
-  }
-  if (!isAdapterInstalled(deps)) {
-    const install = await ctx.ui.confirm(
-      "SET UP MULTI-ACCOUNT CLAUDE",
-      "/accounts needs the Claude OAuth adapter (pi-claude-oauth-adapter) to register and sign in extra accounts. Install it now?"
-    );
-    if (!install) return;
-    ctx.ui.setStatus("sumocode.accounts", "installing pi-claude-oauth-adapter\u2026");
-    try {
-      await (deps.installAdapter ?? defaultInstallAdapter)();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logDiagnostic("accounts_install_adapter_failed", { errorMessage: message });
-      ctx.ui.notify(`Unable to install pi-claude-oauth-adapter: ${message}`, "error");
-      return;
-    } finally {
-      ctx.ui.setStatus("sumocode.accounts", void 0);
-    }
-    if (loadClaudeSubscriptions(deps).length > 0) {
-      ctx.ui.notify("pi-claude-oauth-adapter installed. Reloading SumoCode\u2026", "info");
-      await (deps.reload ?? ((reloadCtx) => executeSumoReload(reloadCtx)))(ctx);
-      return;
-    }
   }
   const accountList = accounts(ctx, deps);
   const rows = accountList.map(accountRow);

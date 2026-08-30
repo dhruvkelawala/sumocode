@@ -1,0 +1,18 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`accounts modal row layout > captures the real account rows at the narrow portrait width 1`] = `
+"                                    
+       ✾  CLAUDE ACCOUNTS  ✾        
+                                    
+──────────────────────  ·  ─────────
+                                    
+     ❯   type to filter…            
+                                    
+     ❈   default account · signed in
+     ·   company · in use  anthropic
+     ·   add Claude account         
+                                    
+──────────────────────  ·  ─────────
+ ↑↓ wander    ⏎ attend    ⎋ retreat 
+                                    "
+`;

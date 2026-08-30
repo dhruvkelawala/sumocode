@@ -187,7 +187,11 @@ export function redactLoginErrorText(text: string): string {
 // oxlint-disable-next-line anti-slop/no-unknown-parameters -- caught rejection boundary: the instanceof Error checks below are the parse.
 function logLoginFailure(attempt: LoginMethod | undefined, providerRef: string, error: unknown): void {
 	const failure = error instanceof Error ? error : undefined;
-	const stack = failure?.stack
+	// API-key providers accept arbitrary key formats, so no message pattern can
+	// prove provider-controlled text credential-free. Persist error identity
+	// only for these flows; OAuth failures retain their redacted diagnostics.
+	const credentialFree = attempt?.authType === "api_key";
+	const stack = failure?.stack && !credentialFree
 		? failure.stack
 				.split("\n")
 				.slice(0, 8)
@@ -199,7 +203,7 @@ function logLoginFailure(attempt: LoginMethod | undefined, providerRef: string, 
 		provider: attempt?.provider.id ?? redactLoginErrorText(providerRef),
 		authType: attempt?.authType,
 		errorName: failure?.name ?? "non_error_rejection",
-		errorMessage: redactLoginErrorText(failure?.message ?? String(error)),
+		errorMessage: credentialFree ? "[redacted: api-key provider error]" : redactLoginErrorText(failure?.message ?? String(error)),
 		stack,
 	});
 }
@@ -248,7 +252,9 @@ export async function executeRpcLogin(args: string, ctx: ExtensionCommandContext
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		if (message !== "Login cancelled") logLoginFailure(attempt, args.trim(), error);
-		if (!loginAbort.signal.aborted && message !== "Login cancelled") ctx.ui.notify(`Login failed: ${message}`, "error");
+		// Provider-controlled rejection text may echo credentials in formats that
+		// cannot be recognized safely; keep the visible failure credential-free.
+		if (!loginAbort.signal.aborted && message !== "Login cancelled") ctx.ui.notify("Login failed; run sumocode -d for details", "error");
 	} finally {
 		loginAbort.abort();
 		if (activeLoginAbort === loginAbort) activeLoginAbort = undefined;

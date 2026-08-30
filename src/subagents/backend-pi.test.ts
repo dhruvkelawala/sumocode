@@ -45,6 +45,25 @@ describe("resolveClaudeOauthAdapterEntry", () => {
 		rmSync(agentDir, { recursive: true, force: true });
 	});
 
+	it("prefers the configured multi-account Git fork over a stale upstream npm cache", () => {
+		const agentDir = mkdtempSync(join(tmpdir(), "sumo-oauth-agent-"));
+		const gitCheckout = join(agentDir, "git", "github.com", "dhruvkelawala", "pi-claude-oauth-adapter");
+		const npmCheckout = join(agentDir, "npm", "node_modules", "pi-claude-oauth-adapter");
+		for (const [checkout, entry] of [[gitCheckout, "fork.ts"], [npmCheckout, "upstream.ts"]] as const) {
+			mkdirSync(join(checkout, "extensions"), { recursive: true });
+			writeFileSync(join(checkout, "package.json"), JSON.stringify({ pi: { extensions: [`./extensions/${entry}`] } }));
+			writeFileSync(join(checkout, "extensions", entry), "// adapter");
+		}
+		writeFileSync(
+			join(agentDir, "settings.json"),
+			JSON.stringify({ packages: ["git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account"] }),
+		);
+
+		expect(resolveClaudeOauthAdapterEntry({ PI_CODING_AGENT_DIR: agentDir }))
+			.toBe(join(gitCheckout, "extensions", "fork.ts"));
+		rmSync(agentDir, { recursive: true, force: true });
+	});
+
 	it("resolves a local-checkout path source from GLOBAL settings packages", () => {
 		const agentDir = mkdtempSync(join(tmpdir(), "sumo-oauth-agent-"));
 		// The path source must mention the package name to be considered.

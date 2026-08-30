@@ -14564,6 +14564,7 @@ var DEFAULT_BUILT_IN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "
 var PREVIEW_MAX2 = 160;
 var ERROR_MAX = 4096;
 var CLAUDE_OAUTH_ADAPTER_PACKAGE = "pi-claude-oauth-adapter";
+var MULTI_ACCOUNT_ADAPTER_SOURCE = "git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account";
 function adapterEntryFromPackageDir(packageDir) {
   try {
     const manifest = JSON.parse(readFileSync15(join18(packageDir, "package.json"), "utf8"));
@@ -14603,7 +14604,7 @@ function adapterPackageDirsFromSettings(settingsPath, agentDir) {
   try {
     const settings = JSON.parse(readFileSync15(settingsPath, "utf8"));
     if (!Array.isArray(settings.packages)) return [];
-    const sources = settings.packages.map((entry) => isString5(entry) ? entry : entry?.source).filter((source) => isString5(source) && source.includes(CLAUDE_OAUTH_ADAPTER_PACKAGE));
+    const sources = settings.packages.map((entry) => isString5(entry) ? entry : entry?.source).filter((source) => isString5(source) && source.includes(CLAUDE_OAUTH_ADAPTER_PACKAGE)).sort((left, right) => Number(right.trim() === MULTI_ACCOUNT_ADAPTER_SOURCE) - Number(left.trim() === MULTI_ACCOUNT_ADAPTER_SOURCE));
     return sources.flatMap((source) => {
       const gitDir = gitPackageDir(source, agentDir);
       if (gitDir) return [gitDir];
@@ -14628,8 +14629,10 @@ function resolveClaudeOauthAdapterEntry(env = process.env) {
   }
   const agentDir = env.PI_CODING_AGENT_DIR ?? join18(homedir14(), ".pi", "agent");
   const candidateDirs = [
-    join18(agentDir, "npm", "node_modules", CLAUDE_OAUTH_ADAPTER_PACKAGE),
-    ...adapterPackageDirsFromSettings(join18(agentDir, "settings.json"), agentDir)
+    // Configured sources reflect the active package choice and must precede a
+    // stale npm cache left behind after switching to the multi-account fork.
+    ...adapterPackageDirsFromSettings(join18(agentDir, "settings.json"), agentDir),
+    join18(agentDir, "npm", "node_modules", CLAUDE_OAUTH_ADAPTER_PACKAGE)
   ];
   for (const dir of candidateDirs) {
     const entry = adapterEntryFromPackageDir(dir);

@@ -17,6 +17,7 @@ const PREVIEW_MAX = 160;
 const ERROR_MAX = 4096;
 
 const CLAUDE_OAUTH_ADAPTER_PACKAGE = "pi-claude-oauth-adapter";
+const MULTI_ACCOUNT_ADAPTER_SOURCE = "git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account";
 
 function adapterEntryFromPackageDir(packageDir: string): string | undefined {
 	try {
@@ -68,7 +69,10 @@ function adapterPackageDirsFromSettings(settingsPath: string, agentDir: string):
 		// SAFETY: package entries may be plain strings or { source } objects.
 		const sources = settings.packages
 			.map((entry) => isString(entry) ? entry : (entry as { source?: unknown })?.source)
-			.filter((source): source is string => isString(source) && source.includes(CLAUDE_OAUTH_ADAPTER_PACKAGE));
+			.filter((source): source is string => isString(source) && source.includes(CLAUDE_OAUTH_ADAPTER_PACKAGE))
+			// The numbered-provider fork must win over stale upstream/configured
+			// variants that share the same package name.
+			.sort((left, right) => Number(right.trim() === MULTI_ACCOUNT_ADAPTER_SOURCE) - Number(left.trim() === MULTI_ACCOUNT_ADAPTER_SOURCE));
 		return sources.flatMap((source) => {
 			const gitDir = gitPackageDir(source, agentDir);
 			if (gitDir) return [gitDir];
@@ -120,8 +124,10 @@ export function resolveClaudeOauthAdapterEntry(env: NodeJS.ProcessEnv = process.
 	}
 	const agentDir = env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 	const candidateDirs = [
-		join(agentDir, "npm", "node_modules", CLAUDE_OAUTH_ADAPTER_PACKAGE),
+		// Configured sources reflect the active package choice and must precede a
+		// stale npm cache left behind after switching to the multi-account fork.
 		...adapterPackageDirsFromSettings(join(agentDir, "settings.json"), agentDir),
+		join(agentDir, "npm", "node_modules", CLAUDE_OAUTH_ADAPTER_PACKAGE),
 	];
 	for (const dir of candidateDirs) {
 		const entry = adapterEntryFromPackageDir(dir);

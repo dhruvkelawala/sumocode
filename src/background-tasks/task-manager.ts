@@ -1427,9 +1427,14 @@ export class TerminalTaskManager {
 			if (!this.indexInitialized) this.clearIndexInitRetryTimer();
 			return;
 		}
-		runtime.pollTimer = setInterval(() => this.scheduleReconcile(id), this.pollIntervalMs);
+		runtime.pollTimer = setInterval(() => this.handlePollTick(id), this.pollIntervalMs);
 		runtime.pollTimer.unref?.();
 		if (!this.indexInitialized) this.clearIndexInitRetryTimer();
+	}
+
+	private handlePollTick(id: string): void {
+		if (!this.indexInitialized) this.ensureIndexInitialized();
+		this.scheduleReconcile(id);
 	}
 
 	private scheduleReconcile(id: string): void {
@@ -2036,10 +2041,10 @@ export class TerminalTaskManager {
 
 	private clearPoll(id: string): void {
 		const runtime = this.runtime.get(id);
+		if (!this.indexInitialized) this.scheduleIndexInitRetryTimer();
 		if (!runtime?.pollTimer) return;
 		clearInterval(runtime.pollTimer);
 		runtime.pollTimer = undefined;
-		if (!this.indexInitialized) this.scheduleIndexInitRetryTimer();
 	}
 
 	private timestamp(task: TerminalTaskSnapshot): number {

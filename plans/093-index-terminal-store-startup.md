@@ -234,6 +234,13 @@ After final source edits, run `pnpm build:extension` before `pnpm test`; keep th
 - Regressions (all verified red pre-fix): a same-process startup flush that still sees an incomplete generation arms exactly one timer and, with the transient fault cleared, the timer scan makes the skipped pending completion queryable and delivered through the real `TerminalDeliveryCoordinator`; repeated incomplete timer retries escalate from the base window; complete scans and `detach()` clear the timer; and a direct entry point at the retry boundary takes over the armed timer without double-arming.
 - No store, bridge, publisher, retention, schema, layout, deletion, lease, CAS, process-identity, or security fail-closed changes; no public API growth.
 
+**Authorized review-fix addition (run `run-20260830T144535Z-e5ea2a27` attempt 3) — active-poll init retry and idle re-arm should-fixes only**:
+
+- `src/background-tasks/task-manager.ts` (P1): an active poll tick now also calls `ensureIndexInitialized()` when the index is still failed/incomplete, before reconciling the active task. This keeps the retry coalescing and escalating backoff but uses the existing active-terminal poll cadence as the wake source, so an active indexed terminal no longer suppresses all future scans for a transiently skipped durable completion.
+- `src/background-tasks/task-manager.ts` (should-fix): `clearPoll()` schedules the idle init retry before the missing-poll early return, so a stop path that cleared the poll before final settlement still re-arms the retry when the last active task becomes settled and the index remains incomplete.
+- Regressions (both verified red pre-fix): active running terminal plus a skipped pending completion, fault clears, the active poll tick performs the complete scan and the real `TerminalDeliveryCoordinator` delivers/acknowledges the completion without another entry point or active-task settlement; the same setup pins exactly one timer while running (the poll only, no redundant init timer). A last-active `terminal_stop` settlement with the skipped record still faulted pins that the init retry timer is armed after settlement even though the poll had already been cleared, and that the timer makes the skipped record queryable after the fault clears.
+- No store, bridge, publisher, retention, schema, layout, deletion, lease, CAS, process-identity, or security fail-closed changes; no public API growth.
+
 **Out of scope**:
 - Record deletion, archival, retention, schema migration, or changing task-directory layout.
 - Polling cadence/process verification (Plan 106).

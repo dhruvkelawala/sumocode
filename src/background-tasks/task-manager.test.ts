@@ -757,6 +757,117 @@ function transientFault(code: string): Error {
 		}
 	});
 
+	it("retries an incomplete startup scan from an active poll and delivers the recovered completion", async () => {
+		vi.useFakeTimers();
+		let target: TerminalTaskManager | undefined;
+		let coordinator: TerminalDeliveryCoordinator | undefined;
+		try {
+			const reads = { scans: 0, metadata: 0 };
+			const faults = new Map<string, Error>();
+			const store = new TerminalTaskStore({
+				rootDir,
+				onRead: (kind) => { reads[kind === "full-scan" ? "scans" : "metadata"] += 1; },
+				metaReadFault: (path) => faults.get(path),
+			});
+			persistRunningTask(store, "term-active-init", "session-a", 1_000);
+			const seeded = persistSettledTask(store, "term-active-skipped", "session-a", 2_000, "skipped");
+			const pending = { ...seeded, deliveryState: "pending" as const, observedAt: undefined, consumedAt: undefined };
+			const metaPath = join(dirname(seeded.logFile), "meta.json");
+			writeFileSync(metaPath, `${JSON.stringify(pending)}\n`, { mode: 0o600 });
+			chmodSync(metaPath, 0o600);
+			faults.set(metaPath, transientFault("EIO"));
+
+			target = manager({ store, pollIntervalMs: 1_000 });
+			expect(reads.scans).toBe(1);
+			expect(target.getSnapshots()).toEqual([expect.objectContaining({ id: "term-active-init", status: "running" })]);
+			expect(store.isIndexedOwner("term-active-skipped", "session-a")).toBe(false);
+			// The uninitialized manager has exactly the active poll interval; no
+			// redundant init timer is armed while a retained terminal is running.
+			expect(vi.getTimerCount()).toBe(1);
+
+			const branch: Array<{ type: "custom_message"; details: unknown }> = [];
+			const sendMessage = vi.fn((message: { details?: unknown }) => {
+				branch.push({ type: "custom_message", details: message.details });
+			});
+			const pi = { sendMessage };
+			const ctx = {
+				sessionManager: { getSessionId: () => "session-a", getBranch: () => branch },
+				isIdle: () => true,
+			};
+			// SAFETY: the double implements exactly the ExtensionAPI members the coordinator touches.
+			coordinator = new TerminalDeliveryCoordinator(pi as never, target);
+			// SAFETY: the double implements exactly the ExtensionContext members the coordinator touches.
+			coordinator.bind(ctx as never);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(sendMessage).not.toHaveBeenCalled();
+			expect(reads.scans).toBe(2);
+
+			faults.clear();
+			now += 999;
+			await vi.advanceTimersByTimeAsync(999);
+			expect(sendMessage).not.toHaveBeenCalled();
+			expect(store.isIndexedOwner("term-active-skipped", "session-a")).toBe(false);
+			expect(reads.scans).toBe(2);
+
+			now += 1;
+			await vi.advanceTimersByTimeAsync(1);
+			await vi.advanceTimersByTimeAsync(0);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(reads.scans).toBe(3);
+			expect(sendMessage).toHaveBeenCalledTimes(1);
+			expect(sendMessage.mock.calls[0][0]).toMatchObject({ customType: "terminal-result" });
+			expect(target.get("term-active-skipped", "session-a")).toMatchObject({
+				id: "term-active-skipped",
+				deliveryState: "delivered",
+			});
+			expect(durableTask("term-active-skipped")).toMatchObject({ deliveryState: "delivered" });
+			expect(target.get("term-active-init", "session-a")).toMatchObject({ status: "running" });
+		} finally {
+			coordinator?.dispose();
+			target?.detach();
+			vi.useRealTimers();
+		}
+	});
+
+	it("re-arms the init retry timer when the last active task settles after stop with an incomplete index", async () => {
+		vi.useFakeTimers();
+		let target: TerminalTaskManager | undefined;
+		try {
+			const faults = new Map<string, Error>();
+			const store = new TerminalTaskStore({
+				rootDir,
+				metaReadFault: (path) => faults.get(path),
+			});
+			persistRunningTask(store, "term-stop-active", "session-a", 1_000);
+			const seeded = persistSettledTask(store, "term-stop-skipped", "session-a", 2_000, "skipped");
+			const pending = { ...seeded, deliveryState: "pending" as const, observedAt: undefined, consumedAt: undefined };
+			const metaPath = join(dirname(seeded.logFile), "meta.json");
+			writeFileSync(metaPath, `${JSON.stringify(pending)}\n`, { mode: 0o600 });
+			chmodSync(metaPath, 0o600);
+			faults.set(metaPath, transientFault("EIO"));
+
+			target = manager({ store, pollIntervalMs: 60_000 });
+			expect(vi.getTimerCount()).toBe(1);
+			expect(target.get("term-stop-skipped", "session-a")).toBeUndefined();
+
+			const stopped = await target.stop(["term-stop-active"], "session-a");
+			expect(stopped[0]).toMatchObject({ id: "term-stop-active", outcome: "cancelled" });
+			// The poll was cleared before final settlement; final clearPoll sees no
+			// poll interval and must still arm the idle init retry.
+			expect(vi.getTimerCount()).toBe(1);
+			expect(store.isIndexedOwner("term-stop-skipped", "session-a")).toBe(false);
+
+			faults.clear();
+			now += 1_000;
+			await vi.advanceTimersByTimeAsync(1_000);
+			expect(target.get("term-stop-skipped", "session-a")).toMatchObject({ id: "term-stop-skipped" });
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			target?.detach();
+			vi.useRealTimers();
+		}
+	});
+
 	it("escalates init retry timers across consecutive incomplete attempts", async () => {
 		vi.useFakeTimers();
 		let target: TerminalTaskManager | undefined;

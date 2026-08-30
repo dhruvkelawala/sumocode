@@ -12858,9 +12858,13 @@ ${command}
       if (!this.indexInitialized) this.clearIndexInitRetryTimer();
       return;
     }
-    runtime.pollTimer = setInterval(() => this.scheduleReconcile(id), this.pollIntervalMs);
+    runtime.pollTimer = setInterval(() => this.handlePollTick(id), this.pollIntervalMs);
     runtime.pollTimer.unref?.();
     if (!this.indexInitialized) this.clearIndexInitRetryTimer();
+  }
+  handlePollTick(id) {
+    if (!this.indexInitialized) this.ensureIndexInitialized();
+    this.scheduleReconcile(id);
   }
   scheduleReconcile(id) {
     if (this.detached) return;
@@ -13351,10 +13355,10 @@ ${command}
   }
   clearPoll(id) {
     const runtime = this.runtime.get(id);
+    if (!this.indexInitialized) this.scheduleIndexInitRetryTimer();
     if (!runtime?.pollTimer) return;
     clearInterval(runtime.pollTimer);
     runtime.pollTimer = void 0;
-    if (!this.indexInitialized) this.scheduleIndexInitRetryTimer();
   }
   timestamp(task) {
     return Math.max(task.updatedAt, Math.max(1, Math.floor(this.now())));

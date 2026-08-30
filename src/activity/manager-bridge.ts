@@ -233,7 +233,8 @@ export class ActivityManagerBridge {
 		if (this.disposed) return;
 		this.subagentOwnerSessionId = owner;
 		if (owner) this.sessionOwnership.noteOwnedSession?.(owner);
-		this.syncOwnedSessions();
+		// publishAll opens with the same syncOwnedSessions pass; calling it here
+		// too would rescan a pending deferred takeover twice per bind.
 		this.publishAll();
 		logDiagnostic("activity_bridge_bound", { ownerSessionId: owner ?? null, claimedOwnerSessionIds: [...this.claimedOwners] });
 	}
@@ -354,14 +355,29 @@ export class ActivityManagerBridge {
 			this.diagnoseTakeoverRefreshFailure(takeoverOwners[0]!, "terminal takeover refresh failed; takeover retries on the next sync");
 			return;
 		}
-		// A successful refresh ends this failure episode and re-arms the
+		if (refresh && !refresh.complete) {
+			// An incomplete generation on the death-proven takeover path is exactly
+			// as retryable as the {ok:false} failure above: the partial snapshots are
+			// adopted for projection freshness, but claiming, publication, and proof
+			// consumption all defer to the next sync. Claiming here would make a
+			// transiently skipped durable record invisible indefinitely — later polls
+			// skip the claimed owner and nothing else re-scans this projection. The
+			// session claim stays pending in claimedSessionOwners, reconciliation
+			// stays unconsumed, and the next sync retries the one global refresh
+			// until a complete scan lands (the manager's lazy-retry backoff still
+			// applies via its entry points; this sync provides its own cadence).
+			this.adoptTerminalSnapshots(refresh.snapshots);
+			this.diagnoseTakeoverRefreshFailure(takeoverOwners[0]!, "terminal takeover refresh produced an incomplete generation; takeover retries on the next sync");
+			return;
+		}
+		// A successful complete refresh ends this failure episode and re-arms the
 		// once-per-episode diagnostic for the next one.
 		this.takeoverRefreshFailureDiagnosed = false;
 		if (refresh) this.adoptTerminalSnapshots(refresh.snapshots);
 		for (const owner of takeoverOwners) this.claimedOwners.add(owner);
 	}
 
-	/** Emit the expected takeover-refresh failure once per failure episode; a successful refresh resets it. */
+	/** Emit the expected takeover-refresh failure once per failure episode — explicit {ok:false}, an unexpected throw, or an incomplete generation; a complete refresh resets it. */
 	private diagnoseTakeoverRefreshFailure(path: string, message: string): void {
 		if (this.takeoverRefreshFailureDiagnosed) return;
 		this.takeoverRefreshFailureDiagnosed = true;

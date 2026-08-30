@@ -158,6 +158,8 @@ class FakeTerminalManager {
 	public refreshCount = 0;
 	/** Programmed refresh outcome: false models a transient store-read failure. */
 	public refreshOk = true;
+	/** Programmed generation completeness of an ok refresh: false models a transient read skipping an unindexed record. */
+	public refreshComplete = true;
 	public outputs = new Map<string, string>();
 	public outputBytes = new Map<string, Uint8Array>();
 	public outputReads = new Map<string, number>();
@@ -178,7 +180,7 @@ class FakeTerminalManager {
 		// actually exercised instead of the coalesced-refresh assertions passing
 		// vacuously.
 		this.emit();
-		return { ok: true, complete: true, snapshots: this.snapshots };
+		return { ok: true, complete: this.refreshComplete, snapshots: this.snapshots };
 	}
 
 	public getOutput(task: Pick<TerminalTaskSnapshot, "logFile">): string {
@@ -324,7 +326,9 @@ describe("ActivityManagerBridge", () => {
 		]));
 		// The takeover proof was real and is consumed by the first successful
 		// publication even though the feed had no abandoned running producers.
-		expect(proofAtClaim).toEqual([false, false, true]);
+		// The first entry saw the live incumbent (no proof); the death-proven
+		// sync created exactly one takeover publisher carrying the proof.
+		expect(proofAtClaim).toEqual([false, true]);
 		expect(created.at(-1)!.writerDeathProven).toBe(false);
 		bridge.bindSession("session-empty-takeover");
 		expect(terminals.refreshCount).toBe(1);
@@ -454,6 +458,202 @@ describe("ActivityManagerBridge", () => {
 		bridge.bindSession("session-refresh-retry");
 		expect(terminals.refreshCount).toBe(2);
 		expect(successfulPublishes).toBe(1);
+		bridge.dispose();
+	});
+
+	it("defers an incomplete takeover refresh and completes the takeover on the next sync", () => {
+		const stateRoot = root();
+		const owner = "session-incomplete-takeover";
+		const incumbent = new ActivityFeedPublisher(owner, {
+			rootDir: stateRoot,
+			writerIdentity: { token: "incumbent", pid: 101, processStartTime: "incumbent-start" },
+			inspectWriter: () => "alive",
+		});
+		incumbent.publish([{ id: "subagent:held", kind: "subagent", title: "held", status: "running", createdAt: 1_000 }]);
+		let incumbentAlive = true;
+		const terminals = new FakeTerminalManager();
+		// Pass 1's refresh succeeds but scans an incomplete generation: a transient
+		// read skips the durable terminal the incumbent left behind.
+		terminals.refreshComplete = false;
+		terminals.refreshedSnapshots = [];
+		const created: ActivityFeedPublisher[] = [];
+		let successfulPublishes = 0;
+		const bridge = new ActivityManagerBridge(terminals, new FakeSubagentManager(), {
+			rootDir: stateRoot,
+			writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
+			inspectWriter: () => incumbentAlive ? "alive" : "dead",
+			publisherFactory: (factoryOwner) => {
+				const publisher = new ActivityFeedPublisher(factoryOwner, {
+					rootDir: stateRoot,
+					writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
+					inspectWriter: () => incumbentAlive ? "alive" : "dead",
+				});
+				const publish = publisher.publish.bind(publisher);
+				publisher.publish = (activities) => {
+					const wrote = publish(activities);
+					if (wrote) successfulPublishes += 1;
+					return wrote;
+				};
+				created.push(publisher);
+				return publisher;
+			},
+		});
+
+		// The bridge first sees the session while the incumbent is alive: its
+		// blocked publisher is discarded unclaimed.
+		bridge.bindSession(owner);
+
+		// Pass 1: the death-proven takeover's refresh is ok but incomplete. The
+		// owner stays unclaimed and unpublished while the publisher keeps its
+		// writer lease, death proof, and abandoned reconciliation for the retry.
+		incumbentAlive = false;
+		expect(bridge.canProduceActivity(owner)).toBe(false);
+		expect(terminals.refreshCount).toBe(1);
+		const takeoverPublisher = created.at(-1)!;
+		expect(takeoverPublisher.writerDeathProven).toBe(true);
+		expect(takeoverPublisher.getAbandonedRunningIds()).toEqual(new Set(["subagent:held"]));
+		expect(successfulPublishes).toBe(0);
+		// The takeover published nothing: the incumbent's retained card is
+		// untouched (still running — reconciliation unconsumed), with no lost
+		// marking and no terminal card.
+		expect(fixturePublisher(owner, { rootDir: stateRoot }).getSnapshot()).toEqual([
+			expect.objectContaining({ id: "subagent:held", status: "running" }),
+		]);
+
+		// Pass 2: a complete scan lands. Exactly one claim and one publication;
+		// the proof is consumed once and the transiently skipped record appears
+		// in the published feed.
+		terminals.refreshComplete = true;
+		terminals.refreshedSnapshots = [terminal("term-skipped", owner)];
+		terminals.outputs.set("/tmp/term-skipped.log", "skipped output");
+		expect(bridge.canProduceActivity(owner)).toBe(true);
+		expect(terminals.refreshCount).toBe(2);
+		bridge.bindSession(owner);
+		expect(terminals.refreshCount).toBe(2);
+		expect(takeoverPublisher.writerDeathProven).toBe(false);
+		expect(successfulPublishes).toBe(1);
+		expect(takeoverPublisher.getAbandonedRunningIds()).toEqual(new Set());
+		expect(fixturePublisher(owner, { rootDir: stateRoot }).getSnapshot()).toEqual(expect.arrayContaining([
+			expect.objectContaining({ id: "term-skipped", status: "running", outputTail: "skipped output" }),
+		]));
+
+		// Settled ownership neither re-refreshes nor re-publishes.
+		bridge.bindSession(owner);
+		expect(terminals.refreshCount).toBe(2);
+		expect(successfulPublishes).toBe(1);
+		bridge.dispose();
+	});
+
+	it("logs an incomplete takeover-refresh episode once until a complete scan resets it", () => {
+		const stateRoot = root();
+		const owners = ["session-incomplete-dedupe-a", "session-incomplete-dedupe-b"];
+		const alive = new Map<string, boolean>();
+		const spawnIncumbent = (owner: string): void => {
+			const token = `incumbent-${owner}`;
+			alive.set(token, true);
+			const incumbent = new ActivityFeedPublisher(owner, {
+				rootDir: stateRoot,
+				writerIdentity: { token, pid: 101, processStartTime: `incumbent-start-${owner}` },
+				inspectWriter: (writer) => alive.get(writer.token) ? "alive" : "dead",
+			});
+			incumbent.publish([]);
+		};
+		for (const owner of owners) spawnIncumbent(owner);
+		const terminals = new FakeTerminalManager();
+		terminals.refreshComplete = false;
+		const diagnostics: ActivityFeedDiagnostic[] = [];
+		const incompleteDiagnostics = (): number => diagnostics.filter((entry) => entry.message.includes("incomplete generation")).length;
+		const { ownership } = sharedSessionOwnership(() => [...owners]);
+		const bridge = new ActivityManagerBridge(terminals, new FakeSubagentManager(), {
+			rootDir: stateRoot,
+			writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
+			inspectWriter: (writer) => alive.get(writer.token) ? "alive" : "dead",
+			onDiagnostic: (entry) => diagnostics.push(entry),
+			sessionOwnership: ownership,
+		});
+
+		// Pass 1: both owners' death-proven takeover refresh returns an incomplete
+		// generation — exactly one diagnostic for the coalesced episode.
+		for (const owner of owners) alive.set(`incumbent-${owner}`, false);
+		bridge.bindSession(owners[0]!);
+		expect(terminals.refreshCount).toBe(1);
+		expect(incompleteDiagnostics()).toBe(1);
+
+		// Repeated incomplete syncs stay silent until a complete scan lands.
+		bridge.bindSession(owners[0]!);
+		bridge.bindSession(owners[1]!);
+		expect(terminals.refreshCount).toBe(3);
+		expect(incompleteDiagnostics()).toBe(1);
+
+		// The complete coalesced refresh claims both owners and resets the dedupe.
+		terminals.refreshComplete = true;
+		terminals.refreshedSnapshots = [terminal("term-incomplete-dedupe-a", owners[0]!), terminal("term-incomplete-dedupe-b", owners[1]!)];
+		bridge.bindSession(owners[0]!);
+		expect(terminals.refreshCount).toBe(4);
+		expect(incompleteDiagnostics()).toBe(1);
+		expect(fixturePublisher(owners[0]!, { rootDir: stateRoot }).getSnapshot()).toEqual(expect.arrayContaining([
+			expect.objectContaining({ id: "term-incomplete-dedupe-a", status: "running" }),
+		]));
+
+		// A later owner's takeover hits a fresh incomplete episode: the reset
+		// dedupe emits once more, and repeats stay silent.
+		const lateOwner = "session-incomplete-dedupe-c";
+		spawnIncumbent(lateOwner);
+		alive.set(`incumbent-${lateOwner}`, false);
+		owners.push(lateOwner);
+		terminals.refreshComplete = false;
+		terminals.refreshedSnapshots = undefined;
+		bridge.bindSession(lateOwner);
+		expect(terminals.refreshCount).toBe(5);
+		expect(incompleteDiagnostics()).toBe(2);
+		bridge.bindSession(lateOwner);
+		expect(terminals.refreshCount).toBe(6);
+		expect(incompleteDiagnostics()).toBe(2);
+		bridge.dispose();
+	});
+
+	it("an incomplete takeover pass does not gate an ordinary owner's publication", () => {
+		const stateRoot = root();
+		const takeoverOwner = "session-mixed-takeover";
+		const ordinaryOwner = "session-mixed-ordinary";
+		const incumbent = new ActivityFeedPublisher(takeoverOwner, {
+			rootDir: stateRoot,
+			writerIdentity: { token: "incumbent", pid: 101, processStartTime: "incumbent-start" },
+			inspectWriter: () => "alive",
+		});
+		incumbent.publish([]);
+		let incumbentAlive = true;
+		const terminals = new FakeTerminalManager();
+		terminals.refreshComplete = false;
+		terminals.refreshedSnapshots = [terminal("term-ordinary", ordinaryOwner)];
+		terminals.outputs.set("/tmp/term-ordinary.log", "ordinary output");
+		const { ownership } = sharedSessionOwnership(() => [takeoverOwner, ordinaryOwner]);
+		const bridge = new ActivityManagerBridge(terminals, new FakeSubagentManager(), {
+			rootDir: stateRoot,
+			writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
+			inspectWriter: () => incumbentAlive ? "alive" : "dead",
+			sessionOwnership: ownership,
+		});
+
+		// One sync pass: the dead incumbent's session is a death-proven takeover
+		// (incomplete refresh → deferred) while the fresh same-process session is
+		// an ordinary claim with no proof. Completeness gates only the takeover.
+		incumbentAlive = false;
+		bridge.bindSession(ordinaryOwner);
+		expect(terminals.refreshCount).toBe(1);
+		expect(fixturePublisher(ordinaryOwner, { rootDir: stateRoot }).getSnapshot()).toEqual(expect.arrayContaining([
+			expect.objectContaining({ id: "term-ordinary", status: "running", outputTail: "ordinary output" }),
+		]));
+		expect(fixturePublisher(takeoverOwner, { rootDir: stateRoot }).getSnapshot()).toEqual([]);
+
+		// The deferred takeover completes on the next sync's complete scan.
+		terminals.refreshComplete = true;
+		terminals.refreshedSnapshots = [terminal("term-ordinary", ordinaryOwner), terminal("term-takeover", takeoverOwner)];
+		bridge.bindSession(ordinaryOwner);
+		expect(terminals.refreshCount).toBe(2);
+		expect(fixturePublisher(takeoverOwner, { rootDir: stateRoot }).getSnapshot()).toEqual(expect.arrayContaining([
+			expect.objectContaining({ id: "term-takeover", status: "running" }),
+		]));
 		bridge.dispose();
 	});
 

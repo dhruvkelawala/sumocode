@@ -14779,7 +14779,6 @@ var ActivityManagerBridge = class {
     if (this.disposed) return;
     this.subagentOwnerSessionId = owner;
     if (owner) this.sessionOwnership.noteOwnedSession?.(owner);
-    this.syncOwnedSessions();
     this.publishAll();
     logDiagnostic("activity_bridge_bound", { ownerSessionId: owner ?? null, claimedOwnerSessionIds: [...this.claimedOwners] });
   }
@@ -14860,11 +14859,16 @@ var ActivityManagerBridge = class {
       this.diagnoseTakeoverRefreshFailure(takeoverOwners[0], "terminal takeover refresh failed; takeover retries on the next sync");
       return;
     }
+    if (refresh && !refresh.complete) {
+      this.adoptTerminalSnapshots(refresh.snapshots);
+      this.diagnoseTakeoverRefreshFailure(takeoverOwners[0], "terminal takeover refresh produced an incomplete generation; takeover retries on the next sync");
+      return;
+    }
     this.takeoverRefreshFailureDiagnosed = false;
     if (refresh) this.adoptTerminalSnapshots(refresh.snapshots);
     for (const owner of takeoverOwners) this.claimedOwners.add(owner);
   }
-  /** Emit the expected takeover-refresh failure once per failure episode; a successful refresh resets it. */
+  /** Emit the expected takeover-refresh failure once per failure episode — explicit {ok:false}, an unexpected throw, or an incomplete generation; a complete refresh resets it. */
   diagnoseTakeoverRefreshFailure(path2, message) {
     if (this.takeoverRefreshFailureDiagnosed) return;
     this.takeoverRefreshFailureDiagnosed = true;

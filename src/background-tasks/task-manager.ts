@@ -623,7 +623,12 @@ export class TerminalTaskManager {
 		const knownSet = new Set(known);
 		const complete = (): boolean => known.every((id) => {
 			const task = this.get(id, ownerSessionId);
-			return task !== undefined && isTerminalTaskSettled(task.status);
+			// An id collected as known that has become unqueryable was quarantined
+			// by a concurrent refresh: it counts as complete so the waiter resolves
+			// promptly and the id routes to unknownIds below instead of parking for
+			// the full timeout.
+			if (task === undefined) return true;
+			return isTerminalTaskSettled(task.status);
 		});
 		if (!complete() && timeoutMs > 0) {
 			await new Promise<void>((resolve, reject) => {
@@ -889,11 +894,16 @@ export class TerminalTaskManager {
 	 * transiently keep their compact index entry and their retained full
 	 * snapshot: only a genuinely quarantined id is pruned. Recovery side effects
 	 * (settled log cap, launch-gate release, arm, reconcile scheduling) are
-	 * gated: only a record new to this projection or one whose meaningful
-	 * durable identity changed — a different revision or owner — pays them
-	 * again, so unchanged records are never log-capped or rescheduled per
-	 * refresh, while a same-revision owner divergence still recovers. Quarantine
-	 * stays logical — durable records are preserved.
+	 * gated: only a record new to this projection or one whose
+	 * recovery-relevant durable identity changed — revision, owner, lifecycle
+	 * status, or process identity (pid/processGroupId/processStartTime) — pays
+	 * them again, so unchanged records are never log-capped or rescheduled per
+	 * refresh, a same-revision owner divergence still recovers, and an external
+	 * same-revision same-owner rewrite that flips status or process identity
+	 * recovers instead of leaving an active terminal unarmed behind a stale
+	 * projection. Quarantine stays logical — durable records are preserved —
+	 * and each pruned id notifies change listeners so parked waiters that
+	 * collected it as known resolve promptly instead of waiting out the clock.
 	 */
 	public refreshSnapshotsFromStore(): TerminalTaskIndexRefreshResult {
 		if (this.detached) return { ok: false, snapshots: this.getSnapshots() };
@@ -906,13 +916,24 @@ export class TerminalTaskManager {
 			const previous = this.tasks.get(snapshot.id);
 			this.adopt(snapshot, false);
 			this.onRefreshAdopt?.(snapshot.id);
-			// Recovery work is gated on meaningful durable identity: a record new to
-			// this projection, or one whose revision or owner changed. Revision and
-			// owner are sufficient — a deep same-revision, same-owner content compare
-			// is deliberately avoided — so such a rewrite is adopted above with no
+			// Recovery work is gated on recovery-relevant durable identity: a record
+			// new to this projection, or one whose revision, owner, lifecycle status,
+			// or process identity changed. Revision plus owner alone miss an external
+			// same-revision, same-owner rewrite that flips status or process identity
+			// (e.g. settled retained vs running on disk), which would leave an active
+			// terminal unarmed; a deep full content compare is still avoided, so a
+			// pure same-revision, same-owner content rewrite is adopted above with no
 			// recovery side effects, and unchanged records are not capped or
 			// rescheduled again on every refresh.
-			if (previous === undefined || previous.revision !== snapshot.revision || previous.ownerSessionId !== snapshot.ownerSessionId) {
+			if (
+				previous === undefined
+				|| previous.revision !== snapshot.revision
+				|| previous.ownerSessionId !== snapshot.ownerSessionId
+				|| previous.status !== snapshot.status
+				|| previous.pid !== snapshot.pid
+				|| previous.processGroupId !== snapshot.processGroupId
+				|| previous.processStartTime !== snapshot.processStartTime
+			) {
 				this.recover(snapshot);
 				this.onRefreshRecover?.(snapshot.id);
 			}
@@ -929,7 +950,12 @@ export class TerminalTaskManager {
 			// A genuinely quarantined id stops polling: no further reconciles are
 			// scheduled for a projection entry the refreshed index no longer reports.
 			this.clearPoll(id);
+			const pruned = this.tasks.get(id);
 			this.tasks.delete(id);
+			// The prune must wake parked waiters: a known id that became unqueryable
+			// mid-wait is complete for wait purposes (it routes to unknownIds), so
+			// silence here would park the waiter for the full timeout.
+			if (pruned) this.notifyChange(pruned);
 		}
 		return { ok: true, snapshots: this.getSnapshots() };
 	}
@@ -1504,6 +1530,11 @@ export class TerminalTaskManager {
 		this.tasks.set(snapshot.id, snapshot);
 		this.ensureRuntime(snapshot);
 		if (!notify || previous?.revision === snapshot.revision) return;
+		this.notifyChange(snapshot);
+	}
+
+	/** Fan one changed snapshot out to per-task and projection listeners; observer errors cannot break lifecycle transitions. */
+	private notifyChange(snapshot: TerminalTaskSnapshot): void {
 		for (const listener of this.listeners) {
 			try {
 				listener(snapshot);

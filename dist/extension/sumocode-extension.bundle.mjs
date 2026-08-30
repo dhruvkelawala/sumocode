@@ -12233,7 +12233,8 @@ ${command}
     const knownSet = new Set(known);
     const complete2 = () => known.every((id) => {
       const task = this.get(id, ownerSessionId2);
-      return task !== void 0 && isTerminalTaskSettled(task.status);
+      if (task === void 0) return true;
+      return isTerminalTaskSettled(task.status);
     });
     if (!complete2() && timeoutMs > 0) {
       await new Promise((resolve10, reject) => {
@@ -12470,11 +12471,16 @@ ${command}
    * transiently keep their compact index entry and their retained full
    * snapshot: only a genuinely quarantined id is pruned. Recovery side effects
    * (settled log cap, launch-gate release, arm, reconcile scheduling) are
-   * gated: only a record new to this projection or one whose meaningful
-   * durable identity changed — a different revision or owner — pays them
-   * again, so unchanged records are never log-capped or rescheduled per
-   * refresh, while a same-revision owner divergence still recovers. Quarantine
-   * stays logical — durable records are preserved.
+   * gated: only a record new to this projection or one whose
+   * recovery-relevant durable identity changed — revision, owner, lifecycle
+   * status, or process identity (pid/processGroupId/processStartTime) — pays
+   * them again, so unchanged records are never log-capped or rescheduled per
+   * refresh, a same-revision owner divergence still recovers, and an external
+   * same-revision same-owner rewrite that flips status or process identity
+   * recovers instead of leaving an active terminal unarmed behind a stale
+   * projection. Quarantine stays logical — durable records are preserved —
+   * and each pruned id notifies change listeners so parked waiters that
+   * collected it as known resolve promptly instead of waiting out the clock.
    */
   refreshSnapshotsFromStore() {
     if (this.detached) return { ok: false, snapshots: this.getSnapshots() };
@@ -12484,7 +12490,7 @@ ${command}
       const previous = this.tasks.get(snapshot.id);
       this.adopt(snapshot, false);
       this.onRefreshAdopt?.(snapshot.id);
-      if (previous === void 0 || previous.revision !== snapshot.revision || previous.ownerSessionId !== snapshot.ownerSessionId) {
+      if (previous === void 0 || previous.revision !== snapshot.revision || previous.ownerSessionId !== snapshot.ownerSessionId || previous.status !== snapshot.status || previous.pid !== snapshot.pid || previous.processGroupId !== snapshot.processGroupId || previous.processStartTime !== snapshot.processStartTime) {
         this.recover(snapshot);
         this.onRefreshRecover?.(snapshot.id);
       }
@@ -12495,7 +12501,9 @@ ${command}
       if (refreshed.has(id)) continue;
       if (preserved?.has(id)) continue;
       this.clearPoll(id);
+      const pruned = this.tasks.get(id);
       this.tasks.delete(id);
+      if (pruned) this.notifyChange(pruned);
     }
     return { ok: true, snapshots: this.getSnapshots() };
   }
@@ -12968,6 +12976,10 @@ ${command}
     this.tasks.set(snapshot.id, snapshot);
     this.ensureRuntime(snapshot);
     if (!notify7 || previous?.revision === snapshot.revision) return;
+    this.notifyChange(snapshot);
+  }
+  /** Fan one changed snapshot out to per-task and projection listeners; observer errors cannot break lifecycle transitions. */
+  notifyChange(snapshot) {
     for (const listener of this.listeners) {
       try {
         listener(snapshot);

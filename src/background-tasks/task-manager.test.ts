@@ -678,6 +678,10 @@ function transientFault(code: string): Error {
 
 	it("gates refresh recovery to records that are new or durably changed", () => {
 		const store = new TerminalTaskStore({ rootDir });
+		// Recovering a running record schedules a reconcile; keep the harness from
+		// capturing fresh tree verification so the reconcile cannot mutate the
+		// record and the spy matrix below observes pure adopt/recover boundaries.
+		tree.operations.captureTreeVerification = vi.fn(() => undefined);
 		persistSettledTask(store, "term-recap", "session-a", 1_000, "before");
 		const adopted: string[] = [];
 		const recovered: string[] = [];
@@ -741,6 +745,67 @@ function transientFault(code: string): Error {
 		expect(recovered).toEqual(["term-fresh"]);
 		expect(target.list("session-a").map((task) => task.id)).not.toContain("term-fresh");
 		expect(target.list("session-b")).toEqual([expect.objectContaining({ id: "term-fresh", ownerSessionId: "session-b" })]);
+
+		// Same-revision, same-owner status flip (settled retained vs running on
+		// disk): lifecycle status is recovery-relevant, so recovery must run even
+		// though revision and owner are unchanged — the rewrite must not leave an
+		// active terminal unarmed behind a stale settled projection.
+		adopted.length = 0;
+		recovered.length = 0;
+		writeFileSync(metaFile, `${JSON.stringify({
+			...fresh,
+			revision: 2,
+			ownerSessionId: "session-b",
+			title: "bumped",
+			status: "running",
+			pid: 5_100,
+			processGroupId: 5_100,
+			processStartTime: "start-5100",
+			deliveryState: "none",
+			settledAt: undefined,
+			exitCode: undefined,
+			observedAt: undefined,
+			completionId: undefined,
+			updatedAt: 3_500,
+		})}\n`, { mode: 0o600 });
+		chmodSync(metaFile, 0o600);
+		expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+		expect(adopted).toContain("term-fresh");
+		expect(recovered).toEqual(["term-fresh"]);
+		expect(target.get("term-fresh", "session-b")).toMatchObject({ revision: 2, status: "running", pid: 5_100 });
+
+		// Same-revision, same-owner process-identity rewrite at an unchanged
+		// status: process identity is recovery-relevant too, so recovery still runs.
+		adopted.length = 0;
+		recovered.length = 0;
+		writeFileSync(metaFile, `${JSON.stringify({
+			...fresh,
+			revision: 2,
+			ownerSessionId: "session-b",
+			title: "bumped",
+			status: "running",
+			pid: 5_200,
+			processGroupId: 5_200,
+			processStartTime: "start-5200",
+			deliveryState: "none",
+			settledAt: undefined,
+			exitCode: undefined,
+			observedAt: undefined,
+			completionId: undefined,
+			updatedAt: 4_000,
+		})}\n`, { mode: 0o600 });
+		chmodSync(metaFile, 0o600);
+		expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+		expect(adopted).toContain("term-fresh");
+		expect(recovered).toEqual(["term-fresh"]);
+		expect(target.get("term-fresh", "session-b")).toMatchObject({ revision: 2, status: "running", pid: 5_200, processStartTime: "start-5200" });
+
+		// A following refresh with no durable change still skips recovery.
+		adopted.length = 0;
+		recovered.length = 0;
+		expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+		expect(adopted).toContain("term-fresh");
+		expect(recovered).toEqual([]);
 	});
 
 	it("stops polling a genuinely quarantined id after a successful refresh prune", async () => {
@@ -893,6 +958,39 @@ function transientFault(code: string): Error {
 		controller.abort();
 		await expect(waiting).rejects.toMatchObject({ name: "AbortError" });
 		expect(target.get(task.id, "session-a")?.status).toBe("running");
+	});
+
+	it("resolves a parked wait promptly when a concurrent refresh quarantines a known id", async () => {
+		vi.useFakeTimers();
+		let target: TerminalTaskManager | undefined;
+		try {
+			target = manager({ pollIntervalMs: 60_000 });
+			const task = await start(target);
+			const waiting = target.wait([task.id], "session-a", 60_000);
+			// Parked: the wait timer plus the poll interval are pending.
+			expect(vi.getTimerCount()).toBe(2);
+
+			// A corrupt record quarantined by a successful refresh prunes the id
+			// mid-wait; the prune notification must wake the waiter instead of
+			// leaving it parked for the full timeout.
+			const metaFile = join(dirname(task.logFile), "meta.json");
+			writeFileSync(metaFile, "{not json", { mode: 0o600 });
+			expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+			expect(target.get(task.id, "session-a")).toBeUndefined();
+
+			// Resolution must come from the prune notification: advancing well short
+			// of the 60s wait timeout must not be what resolves it.
+			const result = await Promise.race([
+				waiting,
+				vi.advanceTimersByTimeAsync(1_000).then(() => "timer-elapsed" as const),
+			]);
+			expect(result).not.toBe("timer-elapsed");
+			expect(result).toEqual({ settled: [], pendingIds: [], unknownIds: [task.id], timedOut: false });
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			target?.detach();
+			vi.useRealTimers();
+		}
 	});
 
 	it("signals every stop target before waiting, escalates, and confirms cancellation", async () => {

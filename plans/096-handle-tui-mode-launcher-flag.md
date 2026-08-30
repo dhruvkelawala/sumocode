@@ -136,3 +136,12 @@ Fixture table grown from 18 to 26 rows (`test/integration/spawn-pi-pty.test.ts`)
 - **Red-check**: with the pre-fix extractor, 7/8 new rows failed (all but `--` keeps an @file token a fileArg, which passes before and after and pins preserved behavior); all 18 pre-existing rows stayed green.
 - **Differential**: a harness ran 29 argv cases through both the pinned `parseArgs()` and the extracted launcher function; extracted prompt matched `parsed.messages[0]` on every extraction-reachable path (`-p`/`--mode` argv is unreachable — the launcher routes it to the direct-Pi bypass before extraction).
 - **Gates**: `bash -n bin/sumocode.sh` clean; focused launcher suite 41/41; `pnpm exec tsc --noEmit && pnpm build` green; `pnpm lint` green; 137/137 `pnpm test:integration` (serial; 129 + 8 new rows); unit one-worker 2,577/2,578 — the single failure is a run-varying pre-existing load-sensitive timing test in untouched specs (host-actions/task-manager budget timeouts vary per run; a baseline HEAD run was equally red on 2 task-manager tests; every failing test passes in isolation).
+
+## Repair evidence (run-20260830T172321Z-56f523e4)
+
+Codex P2: `args_request_noninteractive_pi` scanned every raw forwarded token, so an interactive-TTY launch like `bin/sumocode.sh --dry-run -- -- --print` selected the direct-Pi path before `extract_first_positional` could honor the `--` delimiter. The launcher mode check now stops scanning at the first bare `--`; only `--print`/`-p`/`--mode`/`--mode=*` before that delimiter request direct Pi.
+
+Fixture table grown from 26 to 32 rows: four post-`--` RPC regressions for `--print`, `-p`, `--mode`, and `--mode=*`, plus pre-delimiter direct-bypass pins for `-p` and `--mode=*`. The rows keep the wrapper double-`--` quirk explicit: the wrapper consumes the first delimiter, and the extractor sees the second one.
+
+- **Red-check**: with only the new PTY rows added, `pnpm vitest run test/integration/spawn-pi-pty.test.ts -t "mirrors Pi option consumption"` failed 4/32 selected rows (`--print`, `-p`, `--mode`, `--mode=*` after `--` all routed direct Pi and had no extracted prompt).
+- **Gates**: `bash -n bin/sumocode.sh` clean; focused option-consumption suite 32/32; focused launcher file 47/47; `pnpm exec tsc --noEmit && pnpm build` green; `pnpm lint` green; unit one-worker 2,618/2,618; integration serial 143/143. No `dist/extension` changes.

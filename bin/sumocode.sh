@@ -448,6 +448,7 @@ fi
 args_request_noninteractive_pi() {
 	if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then return 1; fi
 	for arg in "${SUMOCODE_ARGS[@]}"; do
+		if [[ "${arg}" == "--" ]]; then break; fi
 		case "${arg}" in
 			--print|-p|--mode|--mode=*) return 0 ;;
 		esac

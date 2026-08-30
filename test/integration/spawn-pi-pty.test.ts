@@ -414,6 +414,30 @@ const OPTION_CONSUMPTION_ROWS: readonly OptionConsumptionRow[] = [
 		expectedArgs: "--",
 	},
 	{
+		name: "end-of-options -- keeps post--- --print on the RPC path",
+		args: ["--", "--", "--print"],
+		expectedPrompt: "--print",
+		expectedArgs: "--",
+	},
+	{
+		name: "end-of-options -- keeps post--- -p on the RPC path",
+		args: ["--", "--", "-p"],
+		expectedPrompt: "-p",
+		expectedArgs: "--",
+	},
+	{
+		name: "end-of-options -- keeps post--- --mode on the RPC path",
+		args: ["--", "--", "--mode"],
+		expectedPrompt: "--mode",
+		expectedArgs: "--",
+	},
+	{
+		name: "end-of-options -- keeps post--- --mode=* on the RPC path",
+		args: ["--", "--", "--mode=rpc"],
+		expectedPrompt: "--mode=rpc",
+		expectedArgs: "--",
+	},
+	{
 		name: "end-of-options -- extracts only the first post--- message",
 		args: ["--offline", "--", "--", "PROMPT", "second"],
 		expectedPrompt: "PROMPT",
@@ -439,10 +463,24 @@ const OPTION_CONSUMPTION_ROWS: readonly OptionConsumptionRow[] = [
 		directBypass: true,
 	},
 	{
+		name: "short -p keeps the direct-Pi bypass intact",
+		args: ["-p", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "-p PROMPT",
+		directBypass: true,
+	},
+	{
 		name: "explicit --mode keeps the direct-Pi bypass intact",
 		args: ["--mode", "rpc", "--offline", "PROMPT"],
 		expectedPrompt: "",
 		expectedArgs: "--mode rpc --offline PROMPT",
+		directBypass: true,
+	},
+	{
+		name: "explicit --mode=* keeps the direct-Pi bypass intact",
+		args: ["--mode=rpc", "--offline", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "--mode=rpc --offline PROMPT",
 		directBypass: true,
 	},
 ];

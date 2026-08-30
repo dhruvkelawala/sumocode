@@ -978,6 +978,203 @@ describe("ActivityManagerBridge", () => {
 		bridge.dispose();
 	});
 
+	it("retries an idle deferred takeover from a timer at the backoff boundary", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(2_000);
+		const stateRoot = root();
+		const owner = "session-idle-timer";
+		const incumbent = new ActivityFeedPublisher(owner, {
+			rootDir: stateRoot,
+			writerIdentity: { token: "incumbent", pid: 101, processStartTime: "incumbent-start" },
+			inspectWriter: () => "alive",
+		});
+		incumbent.publish([]);
+		let incumbentAlive = true;
+		const terminals = new FakeTerminalManager();
+		terminals.refreshComplete = false;
+		let successfulPublishes = 0;
+		const bridge = new ActivityManagerBridge(terminals, new FakeSubagentManager(), {
+			rootDir: stateRoot,
+			now: () => Date.now(),
+			writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
+			inspectWriter: () => incumbentAlive ? "alive" : "dead",
+			publisherFactory: (factoryOwner) => {
+				const publisher = new ActivityFeedPublisher(factoryOwner, {
+					rootDir: stateRoot,
+					now: () => Date.now(),
+					writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
+					inspectWriter: () => incumbentAlive ? "alive" : "dead",
+				});
+				const publish = publisher.publish.bind(publisher);
+				publisher.publish = (activities) => {
+					const wrote = publish(activities);
+					if (wrote) successfulPublishes += 1;
+					return wrote;
+				};
+				return publisher;
+			},
+		});
+
+		bridge.bindSession(owner);
+		incumbentAlive = false;
+		expect(bridge.canProduceActivity(owner)).toBe(false);
+		expect(terminals.refreshCount).toBe(1);
+		expect(vi.getTimerCount()).toBe(2);
+
+		await vi.advanceTimersByTimeAsync(500);
+		expect(bridge.canProduceActivity(owner)).toBe(false);
+		expect(terminals.refreshCount).toBe(1);
+		expect(vi.getTimerCount()).toBe(2);
+
+		terminals.refreshComplete = true;
+		terminals.refreshedSnapshots = [terminal("term-idle-timer", owner, "completed")];
+		terminals.outputs.set("/tmp/term-idle-timer.log", "settled output");
+		await vi.advanceTimersByTimeAsync(499);
+		expect(terminals.refreshCount).toBe(1);
+		expect(successfulPublishes).toBe(0);
+		await vi.advanceTimersByTimeAsync(1);
+
+		expect(terminals.refreshCount).toBe(2);
+		expect(successfulPublishes).toBe(1);
+		expect(bridge.canProduceActivity(owner)).toBe(true);
+		expect(fixturePublisher(owner, { rootDir: stateRoot }).getSnapshot()).toEqual(expect.arrayContaining([
+			expect.objectContaining({ id: "term-idle-timer", status: "succeeded", outputTail: "settled output" }),
+		]));
+		expect(vi.getTimerCount()).toBe(1);
+		bridge.dispose();
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	it("escalates idle deferred takeover timer retries after repeated deferrals", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(10_000);
+		const stateRoot = root();
+		const owner = "session-idle-timer-backoff";
+		const incumbent = new ActivityFeedPublisher(owner, {
+			rootDir: stateRoot,
+			writerIdentity: { token: "incumbent", pid: 101, processStartTime: "incumbent-start" },
+			inspectWriter: () => "alive",
+		});
+		incumbent.publish([]);
+		const terminals = new FakeTerminalManager();
+		terminals.refreshOk = false;
+		const bridge = new ActivityManagerBridge(terminals, new FakeSubagentManager(), {
+			rootDir: stateRoot,
+			now: () => Date.now(),
+			writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
+			inspectWriter: () => "dead",
+		});
+
+		bridge.bindSession(owner);
+		expect(terminals.refreshCount).toBe(1);
+		expect(vi.getTimerCount()).toBe(2);
+		await vi.advanceTimersByTimeAsync(999);
+		expect(terminals.refreshCount).toBe(1);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(terminals.refreshCount).toBe(2);
+		expect(vi.getTimerCount()).toBe(2);
+		await vi.advanceTimersByTimeAsync(1_999);
+		expect(terminals.refreshCount).toBe(2);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(terminals.refreshCount).toBe(3);
+		expect(vi.getTimerCount()).toBe(2);
+		bridge.dispose();
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	it("clears idle deferred takeover retry timers on zero pending owners and dispose", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(20_000);
+		const stateRoot = root();
+		const owner = "session-idle-timer-empty";
+		const incumbent = new ActivityFeedPublisher(owner, {
+			rootDir: stateRoot,
+			writerIdentity: { token: "incumbent", pid: 101, processStartTime: "incumbent-start" },
+			inspectWriter: () => "alive",
+		});
+		incumbent.publish([]);
+		const owners = [owner];
+		const terminals = new FakeTerminalManager();
+		terminals.refreshOk = false;
+		const { ownership } = sharedSessionOwnership(() => [...owners]);
+		const bridge = new ActivityManagerBridge(terminals, new FakeSubagentManager(), {
+			rootDir: stateRoot,
+			now: () => Date.now(),
+			writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
+			inspectWriter: () => "dead",
+			sessionOwnership: ownership,
+		});
+
+		bridge.bindSession(owner);
+		expect(terminals.refreshCount).toBe(1);
+		expect(vi.getTimerCount()).toBe(2);
+		owners.splice(0);
+		bridge.bindSession(owner);
+		expect(vi.getTimerCount()).toBe(1);
+		vi.advanceTimersByTime(1_000);
+		expect(terminals.refreshCount).toBe(1);
+		bridge.dispose();
+		expect(vi.getTimerCount()).toBe(0);
+
+		const secondStateRoot = root();
+		const secondOwner = "session-idle-timer-dispose";
+		const secondIncumbent = new ActivityFeedPublisher(secondOwner, {
+			rootDir: secondStateRoot,
+			writerIdentity: { token: "incumbent", pid: 101, processStartTime: "incumbent-start" },
+			inspectWriter: () => "alive",
+		});
+		secondIncumbent.publish([]);
+		const secondTerminals = new FakeTerminalManager();
+		secondTerminals.refreshOk = false;
+		const secondBridge = new ActivityManagerBridge(secondTerminals, new FakeSubagentManager(), {
+			rootDir: secondStateRoot,
+			now: () => Date.now(),
+			writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
+			inspectWriter: () => "dead",
+		});
+		secondBridge.bindSession(secondOwner);
+		expect(secondTerminals.refreshCount).toBe(1);
+		expect(vi.getTimerCount()).toBe(2);
+		secondBridge.dispose();
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	it("does not arm an idle takeover retry timer while running-terminal polling retries", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(30_000);
+		const stateRoot = root();
+		const owner = "session-running-poll-retry";
+		const incumbent = new ActivityFeedPublisher(owner, {
+			rootDir: stateRoot,
+			writerIdentity: { token: "incumbent", pid: 101, processStartTime: "incumbent-start" },
+			inspectWriter: () => "alive",
+		});
+		incumbent.publish([]);
+		const terminals = new FakeTerminalManager();
+		terminals.snapshots = [terminal("term-running-poll-retry", owner)];
+		terminals.refreshOk = false;
+		const bridge = new ActivityManagerBridge(terminals, new FakeSubagentManager(), {
+			rootDir: stateRoot,
+			now: () => Date.now(),
+			terminalOutputPollMs: 250,
+			writerIdentity: { token: "contender", pid: 202, processStartTime: "contender-start" },
+			inspectWriter: () => "dead",
+		});
+		expect(vi.getTimerCount()).toBe(2);
+
+		bridge.bindSession(owner);
+		expect(terminals.refreshCount).toBe(1);
+		expect(vi.getTimerCount()).toBe(2);
+		await vi.advanceTimersByTimeAsync(999);
+		expect(terminals.refreshCount).toBe(1);
+		expect(vi.getTimerCount()).toBe(2);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(terminals.refreshCount).toBe(2);
+		expect(vi.getTimerCount()).toBe(2);
+		bridge.dispose();
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
 	it("a projection listener fanned out during the takeover refresh cannot rescan or double-publish", () => {
 		const stateRoot = root();
 		const owners = ["session-fanout-a", "session-fanout-b"];

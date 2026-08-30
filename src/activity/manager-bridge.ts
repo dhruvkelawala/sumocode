@@ -180,6 +180,8 @@ export class ActivityManagerBridge {
 	private subagentTimer: ReturnType<typeof setTimeout> | undefined;
 	private terminalOutputTimer: ReturnType<typeof setInterval> | undefined;
 	private retentionTimer: ReturnType<typeof setInterval> | undefined;
+	private takeoverRefreshRetryTimer: ReturnType<typeof setTimeout> | undefined;
+	private takeoverRefreshRetryDueAt: number | undefined;
 	private takeoverRefreshFailureDiagnosed = false;
 	/** True only while the takeover refresh call itself is on the stack. */
 	private takeoverRefreshInFlight = false;
@@ -303,6 +305,7 @@ export class ActivityManagerBridge {
 		this.terminalOutputTimer = undefined;
 		if (this.retentionTimer) clearInterval(this.retentionTimer);
 		this.retentionTimer = undefined;
+		this.clearTakeoverRefreshRetryTimer();
 		this.terminalOutputCache.clear();
 		// Release every session claim this bridge holds — published owners and
 		// owners still pending a failed takeover-refresh retry — so a replacement
@@ -369,6 +372,7 @@ export class ActivityManagerBridge {
 			// made a pending takeover cost ~4 full scans/second, the exact pathology
 			// Plan 093 removes. Pending owners stay claimed-but-unpublished and
 			// ordinary owners' claim/publication cadence in this pass is unaffected.
+			this.scheduleTakeoverRefreshRetry();
 			return;
 		}
 		this.takeoverRefreshLastAttemptAt = attemptAt;
@@ -439,6 +443,7 @@ export class ActivityManagerBridge {
 			TAKEOVER_REFRESH_BACKOFF_BASE_MS * 2 ** Math.min(this.takeoverRefreshFailedAttempts - 1, 32),
 			TAKEOVER_REFRESH_BACKOFF_MAX_MS,
 		);
+		this.scheduleTakeoverRefreshRetry();
 		// An unconsumed death proof parked here lives only in this bridge's
 		// publisher: dispose() drops the publishers, so the proof does not survive
 		// a dispose() → replacement-bridge handoff in this process (mitigated: a
@@ -446,11 +451,38 @@ export class ActivityManagerBridge {
 		// the store at construction).
 	}
 
+	/** Wake an otherwise idle deferred takeover at the end of its current backoff window; running-terminal output polling already provides that retry cadence. */
+	private scheduleTakeoverRefreshRetry(): void {
+		if (this.disposed) return;
+		if (this.terminalSnapshots.some((task) => !isTerminalTaskSettled(task.status))) {
+			this.clearTakeoverRefreshRetryTimer();
+			return;
+		}
+		if (this.takeoverRefreshLastAttemptAt === undefined) return;
+		const dueAt = this.takeoverRefreshLastAttemptAt + this.takeoverRefreshBackoffMs;
+		if (this.takeoverRefreshRetryTimer && this.takeoverRefreshRetryDueAt === dueAt) return;
+		this.clearTakeoverRefreshRetryTimer();
+		this.takeoverRefreshRetryDueAt = dueAt;
+		this.takeoverRefreshRetryTimer = setTimeout(() => {
+			this.takeoverRefreshRetryTimer = undefined;
+			this.takeoverRefreshRetryDueAt = undefined;
+			this.publishAll();
+		}, Math.max(0, dueAt - this.now()));
+		this.takeoverRefreshRetryTimer.unref?.();
+	}
+
+	private clearTakeoverRefreshRetryTimer(): void {
+		if (this.takeoverRefreshRetryTimer) clearTimeout(this.takeoverRefreshRetryTimer);
+		this.takeoverRefreshRetryTimer = undefined;
+		this.takeoverRefreshRetryDueAt = undefined;
+	}
+
 	/** A complete successful scan — or a pass with zero pending takeover owners — ends the episode: the escalating retry schedule resets so a later episode starts from the base again. */
 	private resetTakeoverRefreshBackoff(): void {
 		this.takeoverRefreshFailedAttempts = 0;
 		this.takeoverRefreshBackoffMs = TAKEOVER_REFRESH_BACKOFF_BASE_MS;
 		this.takeoverRefreshLastAttemptAt = undefined;
+		this.clearTakeoverRefreshRetryTimer();
 	}
 
 	private publishAll(): void {

@@ -14734,6 +14734,8 @@ var ActivityManagerBridge = class {
   subagentTimer;
   terminalOutputTimer;
   retentionTimer;
+  takeoverRefreshRetryTimer;
+  takeoverRefreshRetryDueAt;
   takeoverRefreshFailureDiagnosed = false;
   /** True only while the takeover refresh call itself is on the stack. */
   takeoverRefreshInFlight = false;
@@ -14829,6 +14831,7 @@ var ActivityManagerBridge = class {
     this.terminalOutputTimer = void 0;
     if (this.retentionTimer) clearInterval(this.retentionTimer);
     this.retentionTimer = void 0;
+    this.clearTakeoverRefreshRetryTimer();
     this.terminalOutputCache.clear();
     for (const owner of this.claimedSessionOwners) this.sessionOwnership.release(owner, this.bridgeToken);
     this.claimedSessionOwners.clear();
@@ -14866,6 +14869,7 @@ var ActivityManagerBridge = class {
     }
     const attemptAt = this.now();
     if (this.takeoverRefreshLastAttemptAt !== void 0 && attemptAt - this.takeoverRefreshLastAttemptAt < this.takeoverRefreshBackoffMs) {
+      this.scheduleTakeoverRefreshRetry();
       return;
     }
     this.takeoverRefreshLastAttemptAt = attemptAt;
@@ -14907,12 +14911,38 @@ var ActivityManagerBridge = class {
       TAKEOVER_REFRESH_BACKOFF_BASE_MS * 2 ** Math.min(this.takeoverRefreshFailedAttempts - 1, 32),
       TAKEOVER_REFRESH_BACKOFF_MAX_MS
     );
+    this.scheduleTakeoverRefreshRetry();
+  }
+  /** Wake an otherwise idle deferred takeover at the end of its current backoff window; running-terminal output polling already provides that retry cadence. */
+  scheduleTakeoverRefreshRetry() {
+    if (this.disposed) return;
+    if (this.terminalSnapshots.some((task) => !isTerminalTaskSettled(task.status))) {
+      this.clearTakeoverRefreshRetryTimer();
+      return;
+    }
+    if (this.takeoverRefreshLastAttemptAt === void 0) return;
+    const dueAt = this.takeoverRefreshLastAttemptAt + this.takeoverRefreshBackoffMs;
+    if (this.takeoverRefreshRetryTimer && this.takeoverRefreshRetryDueAt === dueAt) return;
+    this.clearTakeoverRefreshRetryTimer();
+    this.takeoverRefreshRetryDueAt = dueAt;
+    this.takeoverRefreshRetryTimer = setTimeout(() => {
+      this.takeoverRefreshRetryTimer = void 0;
+      this.takeoverRefreshRetryDueAt = void 0;
+      this.publishAll();
+    }, Math.max(0, dueAt - this.now()));
+    this.takeoverRefreshRetryTimer.unref?.();
+  }
+  clearTakeoverRefreshRetryTimer() {
+    if (this.takeoverRefreshRetryTimer) clearTimeout(this.takeoverRefreshRetryTimer);
+    this.takeoverRefreshRetryTimer = void 0;
+    this.takeoverRefreshRetryDueAt = void 0;
   }
   /** A complete successful scan — or a pass with zero pending takeover owners — ends the episode: the escalating retry schedule resets so a later episode starts from the base again. */
   resetTakeoverRefreshBackoff() {
     this.takeoverRefreshFailedAttempts = 0;
     this.takeoverRefreshBackoffMs = TAKEOVER_REFRESH_BACKOFF_BASE_MS;
     this.takeoverRefreshLastAttemptAt = void 0;
+    this.clearTakeoverRefreshRetryTimer();
   }
   publishAll() {
     if (this.disposed) return;

@@ -16692,11 +16692,16 @@ function registerRpcLoginCommand(pi, deps = {}) {
 }
 
 // src/commands/accounts.ts
+import { execFile as execFile7 } from "node:child_process";
 import { existsSync as existsSync13, mkdirSync as mkdirSync10, readFileSync as readFileSync17, renameSync as renameSync7, writeFileSync as writeFileSync10 } from "node:fs";
 import { homedir as homedir15 } from "node:os";
 import { dirname as dirname13, join as join21 } from "node:path";
+import { promisify as promisify5 } from "node:util";
 var ACCOUNTS_CONFIG_FILE = "claude-accounts.json";
 var LEGACY_CONFIG_FILE = "multi-pass.json";
+var ADAPTER_PACKAGE_SOURCE = "git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account";
+var ADAPTER_PACKAGE_MATCH = "pi-claude-oauth-adapter";
+var execFileAsync4 = promisify5(execFile7);
 function resolveAgentDir(deps) {
   return deps.agentDir ?? deps.env?.PI_CODING_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR ?? join21(deps.homeDir ?? homedir15(), ".pi", "agent");
 }
@@ -16757,6 +16762,29 @@ function nextIndex(subscriptions) {
   while (used.has(index)) index += 1;
   return index;
 }
+function packageSource(value) {
+  if (typeof value === "string") return value;
+  if (isRecord4(value) && typeof value.source === "string") return value.source;
+  return void 0;
+}
+function isAdapterInstalled(deps = {}) {
+  const settingsPath = join21(resolveAgentDir(deps), "settings.json");
+  if (!existsSync13(settingsPath)) return false;
+  try {
+    const parsed = JSON.parse(readFileSync17(settingsPath, "utf8"));
+    if (!isRecord4(parsed) || !Array.isArray(parsed.packages)) return false;
+    return parsed.packages.some((entry) => packageSource(entry)?.includes(ADAPTER_PACKAGE_MATCH) === true);
+  } catch {
+    return false;
+  }
+}
+async function defaultInstallAdapter() {
+  await execFileAsync4("pi", ["install", ADAPTER_PACKAGE_SOURCE], {
+    env: process.env,
+    timeout: 12e4,
+    maxBuffer: 1024 * 1024
+  });
+}
 function accountProviderId(subscription) {
   return `${subscription.provider}-${subscription.index}`;
 }
@@ -16802,6 +16830,24 @@ function accountRow(account) {
   return `${account.label} \xB7 ${accountState(account)}  ${account.providerId}`;
 }
 async function addAccount(ctx, deps) {
+  if (!isAdapterInstalled(deps)) {
+    const install = await ctx.ui.confirm(
+      "SET UP MULTI-ACCOUNT CLAUDE",
+      "/accounts needs the Claude OAuth adapter (pi-claude-oauth-adapter) to register extra accounts. Install it now?"
+    );
+    if (!install) return;
+    ctx.ui.setStatus("sumocode.accounts", "installing pi-claude-oauth-adapter\u2026");
+    try {
+      await (deps.installAdapter ?? defaultInstallAdapter)();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logDiagnostic("accounts_install_adapter_failed", { errorMessage: message });
+      ctx.ui.notify(`Unable to install pi-claude-oauth-adapter: ${message}`, "error");
+      return;
+    } finally {
+      ctx.ui.setStatus("sumocode.accounts", void 0);
+    }
+  }
   const subscriptions = loadClaudeSubscriptions(deps);
   const index = nextIndex(subscriptions);
   const suggestedLabel = index === 2 ? "company" : `Claude account ${index}`;

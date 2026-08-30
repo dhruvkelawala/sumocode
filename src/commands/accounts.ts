@@ -1,7 +1,9 @@
 // oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof, anti-slop/no-unsafe-dictionary-type -- account-config boundary parser: claude-accounts.json (and the legacy multi-pass.json it migrates from) are untrusted user-authored JSON; the typeof predicates below are the sanctioned parse and unknown keys must survive round-trips untouched.
+import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { promisify } from "node:util";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { executeSumoReload } from "./reload.js";
 import { logDiagnostic } from "../sumo-tui/runtime/diagnostics.js";
@@ -11,6 +13,11 @@ import { executeRpcLogin, getRpcLoginRuntime, type RpcLoginRuntime } from "../su
 const ACCOUNTS_CONFIG_FILE = "claude-accounts.json";
 /** Legacy pi-multi-pass config, read once so existing accounts migrate forward. */
 const LEGACY_CONFIG_FILE = "multi-pass.json";
+/** The adapter registers `anthropic-N` providers with working OAuth; without it added accounts can never sign in. */
+const ADAPTER_PACKAGE_SOURCE = "git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account";
+const ADAPTER_PACKAGE_MATCH = "pi-claude-oauth-adapter";
+
+const execFileAsync = promisify(execFile);
 
 export interface ClaudeSubscription {
 	readonly provider: string;
@@ -27,6 +34,7 @@ export interface AccountsCommandDeps {
 	readonly agentDir?: string;
 	readonly env?: NodeJS.ProcessEnv;
 	readonly homeDir?: string;
+	readonly installAdapter?: () => Promise<void>;
 	readonly login?: (providerId: string, ctx: ExtensionCommandContext) => Promise<void>;
 	readonly reload?: (ctx: ExtensionCommandContext) => Promise<void>;
 }
@@ -117,6 +125,37 @@ function nextIndex(subscriptions: readonly ClaudeSubscription[]): number {
 	return index;
 }
 
+function packageSource(value: unknown): string | undefined {
+	if (typeof value === "string") return value;
+	if (isRecord(value) && typeof value.source === "string") return value.source;
+	return undefined;
+}
+
+/**
+ * Detect the OAuth adapter in settings.json packages. Without it no extension
+ * registers the `anthropic-N` provider ids, so added accounts could never
+ * sign in; the add flow gates on this check.
+ */
+export function isAdapterInstalled(deps: AccountsCommandDeps = {}): boolean {
+	const settingsPath = join(resolveAgentDir(deps), "settings.json");
+	if (!existsSync(settingsPath)) return false;
+	try {
+		const parsed: unknown = JSON.parse(readFileSync(settingsPath, "utf8"));
+		if (!isRecord(parsed) || !Array.isArray(parsed.packages)) return false;
+		return parsed.packages.some((entry) => packageSource(entry)?.includes(ADAPTER_PACKAGE_MATCH) === true);
+	} catch {
+		return false;
+	}
+}
+
+async function defaultInstallAdapter(): Promise<void> {
+	await execFileAsync("pi", ["install", ADAPTER_PACKAGE_SOURCE], {
+		env: process.env,
+		timeout: 120_000,
+		maxBuffer: 1024 * 1024,
+	});
+}
+
 function accountProviderId(subscription: ClaudeSubscription): string {
 	return `${subscription.provider}-${subscription.index}`;
 }
@@ -174,6 +213,25 @@ function accountRow(account: ClaudeAccount): string {
 }
 
 async function addAccount(ctx: ExtensionCommandContext, deps: AccountsCommandDeps): Promise<void> {
+	if (!isAdapterInstalled(deps)) {
+		const install = await ctx.ui.confirm(
+			"SET UP MULTI-ACCOUNT CLAUDE",
+			"/accounts needs the Claude OAuth adapter (pi-claude-oauth-adapter) to register extra accounts. Install it now?",
+		);
+		if (!install) return;
+		ctx.ui.setStatus("sumocode.accounts", "installing pi-claude-oauth-adapter…");
+		try {
+			await (deps.installAdapter ?? defaultInstallAdapter)();
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			logDiagnostic("accounts_install_adapter_failed", { errorMessage: message });
+			ctx.ui.notify(`Unable to install pi-claude-oauth-adapter: ${message}`, "error");
+			return;
+		} finally {
+			ctx.ui.setStatus("sumocode.accounts", undefined);
+		}
+	}
+
 	const subscriptions = loadClaudeSubscriptions(deps);
 	const index = nextIndex(subscriptions);
 	const suggestedLabel = index === 2 ? "company" : `Claude account ${index}`;

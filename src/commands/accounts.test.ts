@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
 	executeAccountsCommand,
+	isAdapterInstalled,
 	loadClaudeSubscriptions,
 	registerAccountsCommand,
 	resolveAccountsConfigPath,
@@ -204,6 +205,38 @@ describe("saveClaudeSubscriptions", () => {
 	});
 });
 
+
+describe("isAdapterInstalled", () => {
+	it("detects string-form packages entries", () => {
+		const agentDir = tempAgentDir();
+		writeFileSync(
+			join(agentDir, "settings.json"),
+			JSON.stringify({ packages: ["git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account"] }),
+			"utf8",
+		);
+		expect(isAdapterInstalled(withAgentDir(agentDir))).toBe(true);
+	});
+
+	it("detects object-form packages entries", () => {
+		const agentDir = tempAgentDir();
+		writeFileSync(
+			join(agentDir, "settings.json"),
+			JSON.stringify({ packages: [{ source: "npm:something-else" }, { source: "git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account" }] }),
+			"utf8",
+		);
+		expect(isAdapterInstalled(withAgentDir(agentDir))).toBe(true);
+	});
+
+	it("returns false when missing, malformed, or unrelated", () => {
+		const agentDir = tempAgentDir();
+		expect(isAdapterInstalled(withAgentDir(agentDir))).toBe(false);
+		writeFileSync(join(agentDir, "settings.json"), "{bad", "utf8");
+		expect(isAdapterInstalled(withAgentDir(agentDir))).toBe(false);
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: ["npm:pi-multi-pass"] }), "utf8");
+		expect(isAdapterInstalled(withAgentDir(agentDir))).toBe(false);
+	});
+});
+
 describe("executeAccountsCommand", () => {
 	it("warns outside RPC mode", async () => {
 		const { ctx, notify, select } = makeCtx({ agentDir: tempAgentDir() });
@@ -329,17 +362,20 @@ describe("executeAccountsCommand", () => {
 		expect(actionOptions).toContain("sign in");
 	});
 
-	it("add flow prompts for a label, writes config, then requests reload", async () => {
+	it("add flow confirms adapter install, writes config, then requests reload", async () => {
 		const agentDir = tempAgentDir();
+		const installAdapter = vi.fn(async () => {});
 		const reload = vi.fn(async () => {});
-		const { ctx, input } = makeCtx({
+		const { ctx, confirm, input } = makeCtx({
 			agentDir,
 			onSelect: pickOption(ADD_LABEL),
 			onConfirm: () => true,
 			onInput: () => "company",
 		});
-		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), reload });
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), installAdapter, reload });
 
+		expect(installAdapter).toHaveBeenCalledTimes(1);
+		expect(confirm).toHaveBeenCalledTimes(2);
 		expect(input).toHaveBeenCalledWith("ACCOUNT LABEL", "company");
 		expect(loadClaudeSubscriptions(withAgentDir(agentDir))).toEqual([
 			{ provider: "anthropic", index: 2, label: "company" },
@@ -350,6 +386,7 @@ describe("executeAccountsCommand", () => {
 	it("add flow picks the next free index and migrates legacy accounts forward", async () => {
 		const agentDir = tempAgentDir();
 		writeLegacy(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });
+		const installAdapter = vi.fn(async () => {});
 		const reload = vi.fn(async () => {});
 		const { ctx, input } = makeCtx({
 			agentDir,
@@ -358,7 +395,8 @@ describe("executeAccountsCommand", () => {
 			onConfirm: () => true,
 			onInput: () => "second",
 		});
-		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), reload });
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), installAdapter, reload });
+		expect(installAdapter).toHaveBeenCalledTimes(1);
 		expect(input).toHaveBeenCalledWith("ACCOUNT LABEL", "Claude account 3");
 		expect(reload).toHaveBeenCalledTimes(1);
 		// Both the migrated legacy account and the new one now live in the adapter config.
@@ -369,17 +407,70 @@ describe("executeAccountsCommand", () => {
 		expect(existsSync(join(agentDir, "claude-accounts.json"))).toBe(true);
 	});
 
+	it("add flow skips install when the adapter is already present", async () => {
+		const agentDir = tempAgentDir();
+		writeFileSync(
+			join(agentDir, "settings.json"),
+			JSON.stringify({ packages: ["git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account"] }),
+			"utf8",
+		);
+		const installAdapter = vi.fn(async () => {});
+		const reload = vi.fn(async () => {});
+		const { ctx, confirm, input } = makeCtx({
+			agentDir,
+			onSelect: pickOption(ADD_LABEL),
+			onConfirm: () => true,
+			onInput: () => "company",
+		});
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), installAdapter, reload });
+		expect(installAdapter).not.toHaveBeenCalled();
+		expect(confirm).toHaveBeenCalledTimes(1);
+		expect(input).toHaveBeenCalledWith("ACCOUNT LABEL", "company");
+		expect(reload).toHaveBeenCalledTimes(1);
+	});
+
+	it("add flow reports installer failure visibly and writes nothing", async () => {
+		const agentDir = tempAgentDir();
+		const installAdapter = vi.fn(async () => {
+			throw new Error("network down");
+		});
+		const { ctx, notify, confirm } = makeCtx({
+			agentDir,
+			onSelect: pickOption(ADD_LABEL),
+			onConfirm: () => true,
+		});
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), installAdapter });
+
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining("Unable to install pi-claude-oauth-adapter: network down"), "error");
+		expect(confirm).toHaveBeenCalledTimes(1);
+		expect(existsSync(join(agentDir, "claude-accounts.json"))).toBe(false);
+	});
+
+	it("add flow does nothing when install is declined", async () => {
+		const agentDir = tempAgentDir();
+		const installAdapter = vi.fn(async () => {});
+		const { ctx, input } = makeCtx({
+			agentDir,
+			onSelect: pickOption(ADD_LABEL),
+			onConfirm: () => false,
+		});
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), installAdapter });
+		expect(installAdapter).not.toHaveBeenCalled();
+		expect(input).not.toHaveBeenCalled();
+		expect(existsSync(join(agentDir, "claude-accounts.json"))).toBe(false);
+	});
+
 	it("add flow does nothing when the label prompt is cancelled", async () => {
 		const agentDir = tempAgentDir();
 		const reload = vi.fn(async () => {});
-		const { ctx, confirm } = makeCtx({
+		const { ctx } = makeCtx({
 			agentDir,
 			onSelect: pickOption(ADD_LABEL),
+			onConfirm: () => true,
 			onInput: () => undefined,
 		});
 		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), reload });
 		expect(reload).not.toHaveBeenCalled();
-		expect(confirm).not.toHaveBeenCalled();
 		expect(existsSync(join(agentDir, "claude-accounts.json"))).toBe(false);
 	});
 

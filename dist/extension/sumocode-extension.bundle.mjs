@@ -14576,14 +14576,40 @@ function adapterEntryFromPackageDir(packageDir) {
     return void 0;
   }
 }
-function adapterPathSourcesFromSettings(settingsPath) {
+function gitPackageDir(source, agentDir) {
+  if (!source.startsWith("git:")) return void 0;
+  const spec = source.slice("git:".length);
+  let host;
+  let repoPath;
+  if (spec.startsWith("git@")) {
+    const separator = spec.indexOf(":");
+    if (separator < 0) return void 0;
+    host = spec.slice("git@".length, separator);
+    repoPath = spec.slice(separator + 1);
+  } else {
+    const separator = spec.indexOf("/");
+    if (separator < 0) return void 0;
+    host = spec.slice(0, separator);
+    repoPath = spec.slice(separator + 1);
+  }
+  const refSeparator = repoPath.lastIndexOf("@");
+  if (refSeparator >= 0) repoPath = repoPath.slice(0, refSeparator);
+  if (repoPath.endsWith(".git")) repoPath = repoPath.slice(0, -".git".length);
+  const segments = repoPath.split("/").filter(Boolean);
+  if (!host || host === "." || host === ".." || host.includes("\\") || segments.length < 2 || segments.some((segment) => segment === "." || segment === ".." || segment.includes("\\"))) return void 0;
+  return join18(agentDir, "git", host, ...segments);
+}
+function adapterPackageDirsFromSettings(settingsPath, agentDir) {
   try {
     const settings = JSON.parse(readFileSync15(settingsPath, "utf8"));
     if (!Array.isArray(settings.packages)) return [];
     const sources = settings.packages.map((entry) => isString5(entry) ? entry : entry?.source).filter((source) => isString5(source) && source.includes(CLAUDE_OAUTH_ADAPTER_PACKAGE));
-    return sources.filter((source) => !source.startsWith("npm:") && !source.startsWith("git:") && !source.startsWith("http")).map((source) => {
-      if (source.startsWith("~/")) return join18(homedir14(), source.slice(2));
-      return isAbsolute2(source) ? source : resolve6(dirname12(settingsPath), source);
+    return sources.flatMap((source) => {
+      const gitDir = gitPackageDir(source, agentDir);
+      if (gitDir) return [gitDir];
+      if (source.startsWith("npm:") || source.startsWith("http")) return [];
+      if (source.startsWith("~/")) return [join18(homedir14(), source.slice(2))];
+      return [isAbsolute2(source) ? source : resolve6(dirname12(settingsPath), source)];
     });
   } catch {
     return [];
@@ -14603,7 +14629,7 @@ function resolveClaudeOauthAdapterEntry(env = process.env) {
   const agentDir = env.PI_CODING_AGENT_DIR ?? join18(homedir14(), ".pi", "agent");
   const candidateDirs = [
     join18(agentDir, "npm", "node_modules", CLAUDE_OAUTH_ADAPTER_PACKAGE),
-    ...adapterPathSourcesFromSettings(join18(agentDir, "settings.json"))
+    ...adapterPackageDirsFromSettings(join18(agentDir, "settings.json"), agentDir)
   ];
   for (const dir of candidateDirs) {
     const entry = adapterEntryFromPackageDir(dir);

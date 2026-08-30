@@ -12051,7 +12051,8 @@ function isAcknowledgementMatch(task, ownerSessionId2, receiptKeys) {
   return receiptKeys.has(`${task.completionId}\0${task.deliveryClaimToken}`);
 }
 function deliveryEligibilityChanged(previous, snapshot) {
-  return previous.deliveryState !== snapshot.deliveryState || previous.completionPolicy !== snapshot.completionPolicy || previous.completionId !== snapshot.completionId || previous.deliveryClaimToken !== snapshot.deliveryClaimToken;
+  if (previous.deliveryState !== snapshot.deliveryState || previous.completionPolicy !== snapshot.completionPolicy || previous.completionId !== snapshot.completionId || previous.deliveryClaimToken !== snapshot.deliveryClaimToken) return true;
+  return previous.updatedAt !== snapshot.updatedAt && (previous.deliveryState === "claimed" || snapshot.deliveryState === "claimed");
 }
 var TerminalTaskManager = class {
   store;
@@ -12526,12 +12527,15 @@ ${command}
    * current retained projection. A same-revision, same-owner content-only
    * rewrite is adopted with no recovery side effects. When its differing
    * content touches no delivery-eligibility or receipt field (deliveryState,
-   * completionPolicy, completionId, deliveryClaimToken) it is purely cosmetic:
+   * completionPolicy, completionId, deliveryClaimToken — and, for a claimed
+   * record, updatedAt, whose move can advance lease expiry ahead of the
+   * coordinator's armed retry timer) it is purely cosmetic:
    * it joins no per-task change but still marks the refresh's stored state as
    * changed, so a successful refresh emits exactly one final projection
    * publication even when the per-task changed list is empty. When any of
    * those delivery fields differs — e.g. a delivered/suppressed settled record
-   * rewritten back to pending-eligible at the same revision — the rewrite
+   * rewritten back to pending-eligible at the same revision, or a claimed
+   * record whose updatedAt moved — the rewrite
    * instead joins the per-task fan-out so the TerminalDeliveryCoordinator,
    * which listens for per-task notifications only, wakes and schedules its
    * flush; no recovery side effect runs for such a delivery-only change

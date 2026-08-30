@@ -1449,6 +1449,115 @@ function transientFault(code: string): Error {
 		unsubscribeTasks();
 	});
 
+	it("wakes delivery when a claimed record's same-revision rewrite moves updatedAt backward and stays projection-only for non-claimed cosmetic rewrites", async () => {
+		vi.useFakeTimers();
+		let target: TerminalTaskManager | undefined;
+		try {
+			const store = new TerminalTaskStore({ rootDir });
+			const recovered: string[] = [];
+			now = 100_000;
+			// Seeded before construction so the constructor adopts the claimed record
+			// and the refresh spy below observes only the external rewrite.
+			const seeded = persistSettledTask(store, "term-lease", "session-a", 1_000, "lease");
+			// A rival coordinator claimed the completion before dying: claimed with a
+			// token and a FRESH updatedAt (store schema keeps observation timestamps
+			// cleared for claimed records).
+			const claimedFresh = {
+				...seeded,
+				deliveryState: "claimed" as const,
+				deliveryClaimToken: "claim-lease",
+				observedAt: undefined,
+				consumedAt: undefined,
+				updatedAt: 100_000,
+			};
+			const metaFile = join(dirname(seeded.logFile), "meta.json");
+			writeFileSync(metaFile, `${JSON.stringify(claimedFresh)}\n`, { mode: 0o600 });
+			chmodSync(metaFile, 0o600);
+
+			target = manager({ store, pollIntervalMs: 60_000, claimLeaseMs: 30_000, onRefreshRecover: (id) => recovered.push(id) });
+			const publications: Array<readonly TerminalTaskSnapshot[]> = [];
+			const changes: TerminalTaskSnapshot[] = [];
+			const unsubscribeProjection = target.subscribeChanges((snapshots) => publications.push(snapshots));
+			const unsubscribeTasks = target.addChangeListener((snapshot) => changes.push(snapshot));
+
+			// The double's branch models Pi's observable transcript so the
+			// coordinator's acknowledge pass can observe its own delivery receipt.
+			const branch: Array<{ type: "custom_message"; details: unknown }> = [];
+			const sendMessage = vi.fn((message: { details?: unknown }) => {
+				branch.push({ type: "custom_message", details: message.details });
+			});
+			const pi = { sendMessage };
+			const ctx = {
+				sessionManager: { getSessionId: () => "session-a", getBranch: () => branch },
+				isIdle: () => true,
+			};
+			// SAFETY: the double implements exactly the ExtensionAPI members the coordinator touches.
+			const coordinator = new TerminalDeliveryCoordinator(pi as never, target);
+			// SAFETY: the double implements exactly the ExtensionContext members the coordinator touches.
+			coordinator.bind(ctx as never);
+			await vi.advanceTimersByTimeAsync(0);
+			// The unexpired lease arms exactly one retry timer at the full
+			// claim-lease delay, and nothing delivers yet.
+			expect(sendMessage).not.toHaveBeenCalled();
+			expect(vi.getTimerCount()).toBe(1);
+
+			// An external writer rewrites the record at the SAME revision, same
+			// owner, same status, same process identity, and identical
+			// deliveryState/completionPolicy/completionId/deliveryClaimToken —
+			// moving updatedAt BACKWARD past lease expiry. isClaimable reads
+			// updatedAt, so the completion is eligible NOW, while the armed retry
+			// timer still waits out the stale remainder computed from the newer
+			// timestamp. The refresh must join a per-task change so the coordinator
+			// recalculates and delivers promptly instead of waiting out that delay.
+			const expired = { ...claimedFresh, updatedAt: 65_000 };
+			writeFileSync(metaFile, `${JSON.stringify(expired)}\n`, { mode: 0o600 });
+			chmodSync(metaFile, 0o600);
+
+			const changesBefore = changes.length;
+			const publicationsBefore = publications.length;
+			expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+			expect(changes.slice(changesBefore).map((task) => task.id)).toEqual(["term-lease"]);
+			expect(changes.at(-1)).toMatchObject({ id: "term-lease", revision: seeded.revision, status: "completed", deliveryState: "claimed", updatedAt: 65_000 });
+			expect(publications.length - publicationsBefore).toBe(1);
+			// Delivery-only change: adopted, but the recovery gate never ran.
+			expect(recovered).toEqual([]);
+
+			// The coordinator recalculates from the fresher timestamp and delivers
+			// promptly: advancing a sliver of the stale delay (the old timer needed
+			// ~29s more) suffices — fake timers pin no reliance on the old timer.
+			await vi.advanceTimersByTimeAsync(1_000);
+			expect(sendMessage).toHaveBeenCalledTimes(1);
+			expect(sendMessage.mock.calls[0][0]).toMatchObject({ customType: "terminal-result" });
+			// The flush's acknowledge settles the record as delivered on disk, and
+			// the recalculated retry timer is torn down with the lease gone.
+			await vi.advanceTimersByTimeAsync(0);
+			expect(store.getIndexed("term-lease")!.deliveryState).toBe("delivered");
+			expect(vi.getTimerCount()).toBe(0);
+
+			// A same-revision non-claimed cosmetic rewrite (title + updatedAt; the
+			// delivered record holds no lease) stays projection-only: exactly one
+			// publication, zero per-task noise, still no recovery side effect.
+			const delivered = store.getIndexed("term-lease")!;
+			writeFileSync(metaFile, `${JSON.stringify({ ...delivered, title: "cosmetic", updatedAt: 99_000 })}\n`, { mode: 0o600 });
+			chmodSync(metaFile, 0o600);
+			const changesBeforeCosmetic = changes.length;
+			const publicationsBeforeCosmetic = publications.length;
+			expect(target.refreshSnapshotsFromStore().ok).toBe(true);
+			expect(changes.length).toBe(changesBeforeCosmetic);
+			expect(publications.length - publicationsBeforeCosmetic).toBe(1);
+			expect(publications.at(-1)).toEqual([expect.objectContaining({ id: "term-lease", title: "cosmetic", updatedAt: 99_000 })]);
+			expect(recovered).toEqual([]);
+			expect(sendMessage).toHaveBeenCalledTimes(1);
+
+			coordinator.dispose();
+			unsubscribeProjection();
+			unsubscribeTasks();
+		} finally {
+			target?.detach();
+			vi.useRealTimers();
+		}
+	});
+
 	it("signals every stop target before waiting, escalates, and confirms cancellation", async () => {
 		const target = manager();
 		const first = await start(target);

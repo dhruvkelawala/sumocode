@@ -426,19 +426,28 @@ function isAcknowledgementMatch(task: DeliveryEligibility, ownerSessionId: strin
  * True when two snapshots differ in a delivery-eligibility or receipt field the
  * claim/acknowledgement predicates above read that the refresh recovery gate
  * does not already cover: deliveryState, completionPolicy, completionId, and
- * deliveryClaimToken. (Owner, status, and process identity gate recovery
- * directly; updatedAt only shifts the claim-lease clock that
- * `getClaimRetryDelay` retry timers already own, so a rewrite touching just
- * those stays projection-only.) Such a difference changes whether a completion
- * is deliverable without changing recovery-relevant identity, so it must reach
+ * deliveryClaimToken — plus `updatedAt` whenever either side is a claimed
+ * record. (Owner, status, and process identity gate recovery directly.) For a
+ * claimed record `updatedAt` IS the claim-lease clock both `isClaimable` and
+ * `getClaimRetryDelay` read: an external rewrite moving it backward advances
+ * lease expiry sooner than the coordinator's armed retry timer, which was
+ * computed from the newer timestamp and would otherwise postpone an
+ * already-eligible completion for the stale delay remainder, so any
+ * `updatedAt` change on a claimed (old or new) record must reach the per-task
+ * fan-out and let the coordinator recompute `syncLeaseRetry` from the fresher
+ * timestamp. An `updatedAt` move on a non-claimed record shifts no lease
+ * decision and stays cosmetic. Such differences change whether a completion is
+ * deliverable without changing recovery-relevant identity, so they must reach
  * the per-task fan-out: the `TerminalDeliveryCoordinator` listens for per-task
  * change notifications only.
  */
 function deliveryEligibilityChanged(previous: TerminalTaskSnapshot, snapshot: TerminalTaskSnapshot): boolean {
-	return previous.deliveryState !== snapshot.deliveryState
+	if (previous.deliveryState !== snapshot.deliveryState
 		|| previous.completionPolicy !== snapshot.completionPolicy
 		|| previous.completionId !== snapshot.completionId
-		|| previous.deliveryClaimToken !== snapshot.deliveryClaimToken;
+		|| previous.deliveryClaimToken !== snapshot.deliveryClaimToken) return true;
+	return previous.updatedAt !== snapshot.updatedAt
+		&& (previous.deliveryState === "claimed" || snapshot.deliveryState === "claimed");
 }
 
 export class TerminalTaskManager {
@@ -975,12 +984,15 @@ export class TerminalTaskManager {
 	 * current retained projection. A same-revision, same-owner content-only
 	 * rewrite is adopted with no recovery side effects. When its differing
 	 * content touches no delivery-eligibility or receipt field (deliveryState,
-	 * completionPolicy, completionId, deliveryClaimToken) it is purely cosmetic:
+	 * completionPolicy, completionId, deliveryClaimToken — and, for a claimed
+	 * record, updatedAt, whose move can advance lease expiry ahead of the
+	 * coordinator's armed retry timer) it is purely cosmetic:
 	 * it joins no per-task change but still marks the refresh's stored state as
 	 * changed, so a successful refresh emits exactly one final projection
 	 * publication even when the per-task changed list is empty. When any of
 	 * those delivery fields differs — e.g. a delivered/suppressed settled record
-	 * rewritten back to pending-eligible at the same revision — the rewrite
+	 * rewritten back to pending-eligible at the same revision, or a claimed
+	 * record whose updatedAt moved — the rewrite
 	 * instead joins the per-task fan-out so the TerminalDeliveryCoordinator,
 	 * which listens for per-task notifications only, wakes and schedules its
 	 * flush; no recovery side effect runs for such a delivery-only change

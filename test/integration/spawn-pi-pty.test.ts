@@ -379,6 +379,58 @@ const OPTION_CONSUMPTION_ROWS: readonly OptionConsumptionRow[] = [
 		expectedPrompt: "PROMPT",
 		expectedArgs: "--model sonnet --offline",
 	},
+	// `--` rows pass TWO end-of-options tokens: the launcher's own parse loop
+	// consumes the first `--` (forwarding the rest verbatim into SUMOCODE_ARGS),
+	// so one literal `--` reaches extract_first_positional only when the
+	// invocation carries two.
+	{
+		name: "unknown short option is kept and never becomes the prompt",
+		args: ["-x", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "-x",
+	},
+	{
+		name: "unknown short option with no following token extracts nothing",
+		args: ["-x"],
+		expectedPrompt: "",
+		expectedArgs: "-x",
+	},
+	{
+		name: "empty-string positional is extracted as parsed.messages[0]",
+		args: ["", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "PROMPT",
+	},
+	{
+		name: "end-of-options -- makes the next token the prompt",
+		args: ["--", "--", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--",
+	},
+	{
+		name: "end-of-options -- makes a dash-leading token a message",
+		args: ["--", "--", "--offline"],
+		expectedPrompt: "--offline",
+		expectedArgs: "--",
+	},
+	{
+		name: "end-of-options -- extracts only the first post--- message",
+		args: ["--offline", "--", "--", "PROMPT", "second"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--offline -- second",
+	},
+	{
+		name: "end-of-options -- keeps an @file token a fileArg",
+		args: ["--", "--", "@file.md", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "-- @file.md",
+	},
+	{
+		name: "end-of-options -- extracts an empty-string first message",
+		args: ["--", "--", "", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "-- PROMPT",
+	},
 	{
 		name: "print keeps the --- message quirk and the direct-Pi bypass intact",
 		args: ["--print", "---text", "PROMPT"],

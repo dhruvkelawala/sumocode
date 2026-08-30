@@ -407,10 +407,27 @@ describe("executeAccountsCommand", () => {
 		expect(reload).toHaveBeenCalledTimes(1);
 	});
 
-	it("add flow picks the next free index and migrates legacy accounts forward", async () => {
+	it("installing with migrated accounts reloads before offering actions", async () => {
 		const agentDir = tempAgentDir({ adapter: false });
 		writeLegacy(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });
 		const installAdapter = vi.fn(async () => {});
+		const reload = vi.fn(async () => {});
+		const { ctx, input } = makeCtx({
+			agentDir,
+			onSelect: pickOption(ADD_LABEL),
+			onConfirm: () => true,
+		});
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), installAdapter, reload });
+		expect(installAdapter).toHaveBeenCalledTimes(1);
+		expect(reload).toHaveBeenCalledTimes(1);
+		expect(input).not.toHaveBeenCalled();
+	});
+
+	it("add flow picks the next free index and migrates legacy accounts forward", async () => {
+		// Adapter already installed (post-reload): the legacy file still feeds
+		// the account list until the next save migrates it into the new config.
+		const agentDir = tempAgentDir();
+		writeLegacy(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });
 		const reload = vi.fn(async () => {});
 		const { ctx, input } = makeCtx({
 			agentDir,
@@ -419,8 +436,7 @@ describe("executeAccountsCommand", () => {
 			onConfirm: () => true,
 			onInput: () => "second",
 		});
-		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), installAdapter, reload });
-		expect(installAdapter).toHaveBeenCalledTimes(1);
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), reload });
 		expect(input).toHaveBeenCalledWith("ACCOUNT LABEL", "Claude account 3");
 		expect(reload).toHaveBeenCalledTimes(1);
 		// Both the migrated legacy account and the new one now live in the adapter config.

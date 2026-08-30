@@ -305,6 +305,15 @@ export async function executeAccountsCommand(pi: ExtensionAPI, ctx: ExtensionCom
 		} finally {
 			ctx.ui.setStatus("sumocode.accounts", undefined);
 		}
+		if (loadClaudeSubscriptions(deps).length > 0) {
+			// The running session built its registry before the adapter existed,
+			// so migrated accounts can only sign in after a reload registers them.
+			ctx.ui.notify("pi-claude-oauth-adapter installed. Reloading SumoCode…", "info");
+			await (deps.reload ?? ((reloadCtx) => executeSumoReload(reloadCtx)))(ctx);
+			return;
+		}
+		// Fresh setup: fall through to the add flow — its reload registers the
+		// first new account.
 	}
 	const accountList = accounts(ctx, deps);
 	const rows = accountList.map(accountRow);

@@ -16914,6 +16914,11 @@ async function executeAccountsCommand(pi, ctx, deps = {}) {
     } finally {
       ctx.ui.setStatus("sumocode.accounts", void 0);
     }
+    if (loadClaudeSubscriptions(deps).length > 0) {
+      ctx.ui.notify("pi-claude-oauth-adapter installed. Reloading SumoCode\u2026", "info");
+      await (deps.reload ?? ((reloadCtx) => executeSumoReload(reloadCtx)))(ctx);
+      return;
+    }
   }
   const accountList = accounts(ctx, deps);
   const rows = accountList.map(accountRow);

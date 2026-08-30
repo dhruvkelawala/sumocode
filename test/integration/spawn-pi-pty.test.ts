@@ -623,6 +623,21 @@ describe("sumocode launcher mirrors Pi option consumption (PTY RPC path)", () =>
 		await expect(ptyDryRun(["task", ""])).rejects.toThrow(/task requires a non-empty prompt/);
 	});
 
+	it("task rejects a whitespace-only prompt", async () => {
+		await expect(ptyDryRun(["task", "   "])).rejects.toThrow(/task requires a non-empty prompt/);
+	});
+
+	it("task rejects a whitespace-only --prompt-file", async () => {
+		const root = mkdtempSync(join(tmpdir(), "sumocode-task-ws-prompt-file-"));
+		const promptFile = join(root, "prompt.txt");
+		try {
+			writeFileSync(promptFile, "   \n\t ");
+			await expect(ptyDryRun(["task", "--prompt-file", promptFile])).rejects.toThrow(/task requires a non-empty prompt/);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("task --prompt-file keeps the file prompt first after a preserved delimiter", async () => {
 		const root = mkdtempSync(join(tmpdir(), "sumocode-task-prompt-file-"));
 		const promptFile = join(root, "prompt.txt");

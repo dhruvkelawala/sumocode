@@ -552,7 +552,9 @@ _sumocode_first_positional_index() {
 _sumocode_task_has_nonempty_prompt_arg() {
 	local prompt_index
 	if ! prompt_index="$(_sumocode_first_positional_index)"; then return 1; fi
-	[[ -n "${SUMOCODE_ARGS[prompt_index]}" ]]
+	# Match the host's trimmed-semantics check: a prompt that is only
+	# whitespace would open a task pane without starting an agent turn.
+	[[ -n "${SUMOCODE_ARGS[prompt_index]//[[:space:]]/}" ]]
 }
 
 if [[ "${COMMAND}" == "doctor" && "${#SUMOCODE_ARGS[@]}" -gt 0 ]]; then

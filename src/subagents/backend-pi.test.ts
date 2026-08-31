@@ -1,9 +1,10 @@
 import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import { createPiChildSpawner, resolveClaudeOauthAdapterEntry } from "./backend-pi.js";
+import { createPiChildSpawner, resolveClaudeOauthAdapterEntry, resolvePiBinary, resolvePiChildModelBootstrapEntry } from "./backend-pi.js";
 import type { SubagentEvent } from "./domain.js";
 
 class FakeProcess extends EventEmitter {
@@ -23,6 +24,34 @@ const collect = (events: ((emit: (event: SubagentEvent) => void) => void)): Suba
 	events((event) => collected.push(event));
 	return collected;
 };
+
+describe("resolvePiBinary", () => {
+	it("uses the launcher-selected Pi runtime and falls back to PATH", () => {
+		expect(resolvePiBinary({ PI_BIN: "/current/pi" })).toBe("/current/pi");
+		expect(resolvePiBinary({ PI_BIN: "  /current/pi  " })).toBe("/current/pi");
+		expect(resolvePiBinary({ PI_BIN: "./tools/pi" })).toBe(resolve("./tools/pi"));
+		expect(resolvePiBinary({ PI_BIN: "pi-dev" })).toBe("pi-dev");
+		expect(resolvePiBinary({})).toBe("pi");
+	});
+
+	it("resolves an explicit child model bootstrap", () => {
+		const dir = mkdtempSync(join(tmpdir(), "sumo-child-bootstrap-"));
+		const entry = join(dir, "bootstrap.ts");
+		writeFileSync(entry, "// bootstrap");
+		expect(resolvePiChildModelBootstrapEntry({ SUMOCODE_CHILD_MODEL_BOOTSTRAP: entry })).toBe(entry);
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("resolves the source bootstrap from the committed bundle layout without SUMOCODE_ROOT_DIR", () => {
+		const root = mkdtempSync(join(tmpdir(), "sumo-bundle-bootstrap-"));
+		const entry = join(root, "src", "subagents", "pi-child-model-bootstrap.ts");
+		mkdirSync(join(root, "src", "subagents"), { recursive: true });
+		writeFileSync(entry, "// bootstrap");
+		const bundleUrl = pathToFileURL(join(root, "dist", "extension", "sumocode-extension.bundle.mjs")).href;
+		expect(resolvePiChildModelBootstrapEntry({}, bundleUrl)).toBe(entry);
+		rmSync(root, { recursive: true, force: true });
+	});
+});
 
 describe("resolveClaudeOauthAdapterEntry", () => {
 	it("returns undefined when the package is not installed anywhere", () => {
@@ -124,7 +153,7 @@ describe("spawnPiChild", () => {
 		proc.stdout.emit("data", `${JSON.stringify({ type: "message_end", message: { role: "assistant", content: "hello", usage: { totalTokens: 12, cost: { total: 0.01 } } } })}\n`);
 		proc.emit("close", 0);
 
-		expect(spawn).toHaveBeenCalledWith("pi", expect.arrayContaining(["--mode", "json", "-p", "do work"]), expect.objectContaining({ cwd: "/tmp/project" }));
+		expect(spawn).toHaveBeenCalledWith(resolvePiBinary(), expect.arrayContaining(["--mode", "json", "-p", "do work"]), expect.objectContaining({ cwd: "/tmp/project" }));
 		expect(events).toEqual([
 			{ kind: "run-started" },
 			{ kind: "assistant-delta", delta: "hel" },
@@ -219,6 +248,40 @@ describe("spawnPiChild", () => {
 		expect(args).not.toContain("--append-system-prompt");
 	});
 
+	it("spawns with the launcher-selected Pi runtime", () => {
+		const proc = new FakeProcess();
+		const spawn = vi.fn(() => proc);
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(spawn as never, () => undefined, () => "/current/pi")({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: FakeProcess.events exposes the callback collector shape used by collect.
+		collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		expect(spawn).toHaveBeenCalledWith("/current/pi", expect.any(Array), expect.any(Object));
+	});
+
+	it("defers numbered Claude model selection until adapter registration", () => {
+		const proc = new FakeProcess();
+		const spawn = vi.fn(() => proc);
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(spawn as never, () => "/adapter.ts", () => "/current/pi", () => "/bootstrap.ts")({
+			prompt: "x",
+			cwd: "/tmp",
+			model: "anthropic-2/claude-haiku-4-5",
+			inherited: {},
+		});
+		// SAFETY: FakeProcess.events exposes the callback collector shape used by collect.
+		collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		// SAFETY: the typed spawn double records (command, args, options).
+		const args = (spawn.mock.calls[0] as unknown[])[1] as string[];
+		// SAFETY: the typed spawn double records SpawnOptions as its third argument.
+		const spawnOptions = (spawn.mock.calls[0] as unknown[])[2] as { env: NodeJS.ProcessEnv };
+		expect(args).not.toContain("--provider");
+		expect(args).not.toContain("--model");
+		expect(args).toEqual(expect.arrayContaining(["-e", "/adapter.ts", "-e", "/bootstrap.ts"]));
+		expect(args.at(-1)).toBe("x");
+		expect(spawnOptions.env.SUMOCODE_CHILD_MODEL_PROVIDER).toBe("anthropic-2");
+		expect(spawnOptions.env.SUMOCODE_CHILD_MODEL_ID).toBe("claude-haiku-4-5");
+	});
+
 	it("injects the claude-oauth adapter via -e when the resolver finds it", () => {
 		const proc = new FakeProcess();
 		const spawn = vi.fn(() => proc);
@@ -257,7 +320,7 @@ describe("spawnPiChild", () => {
 			const child = createPiChildSpawner(spawn as never)({ prompt: "x", cwd: "/tmp", inherited: {}, signal: controller.signal });
 			// SAFETY: the pane/pi backends always expose the callback events form here.
 			collect(child.events as (emit: (event: SubagentEvent) => void) => void);
-			expect(spawn).toHaveBeenCalledWith("pi", expect.any(Array), expect.objectContaining({ detached: true }));
+			expect(spawn).toHaveBeenCalledWith(resolvePiBinary(), expect.any(Array), expect.objectContaining({ detached: true }));
 			controller.abort();
 			// Group signal: negative pid targets the whole tree, not just pi.
 			expect(killSpy).toHaveBeenCalledWith(-4242, "SIGTERM");

@@ -16,3 +16,20 @@ exports[`accounts modal row layout > captures the real account rows at the narro
  ↑↓ wander    ⏎ attend    ⎋ retreat 
                                     "
 `;
+
+exports[`accounts modal row layout > makes a new session's no-selection state visible at portrait width 1`] = `
+"
+       ✾  CLAUDE ACCOUNTS  ✾
+
+──────────────────────  ·  ─────────
+
+     ❯   type to filter…
+
+     ❈   default account · inactive
+     ·   company · inactive  anthrop
+     ·   add Claude account
+
+──────────────────────  ·  ─────────
+ ↑↓ wander    ⏎ attend    ⎋ retreat
+"
+`;

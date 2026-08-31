@@ -422,7 +422,7 @@ describe("executeAccountsCommand", () => {
 		expect(select).not.toHaveBeenCalled();
 	});
 
-	it("lists base and extra accounts with signed-in status", async () => {
+	it("makes the no-active-Claude state explicit in a new session", async () => {
 		const agentDir = tempAgentDir();
 		writeAccounts(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });
 		const { ctx, select } = makeCtx({
@@ -431,7 +431,7 @@ describe("executeAccountsCommand", () => {
 		});
 		await executeAccountsCommand(extensionApi(), commandContext(ctx), withAgentDir(agentDir));
 		const options = selectOptionsAt(select, 0);
-		expect(options[0]).toContain("default account · signed in");
+		expect(options[0]).toContain("default account · inactive");
 		expect(options[1]).toContain("company · sign in required");
 		expect(options[1]).toContain("anthropic-2");
 	});

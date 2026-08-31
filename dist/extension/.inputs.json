@@ -88,6 +88,7 @@
     "src/subagents/layout.ts",
     "src/subagents/manager.ts",
     "src/subagents/manifest.ts",
+    "src/subagents/pi-child-model-bootstrap.ts",
     "src/subagents/prompt.ts",
     "src/subagents/roles.ts",
     "src/subagents/tools.ts",
@@ -127,6 +128,6 @@
     "src/working-indicator.ts",
     "tsconfig.json"
   ],
-  "hash": "67aac07da3cff17574657315e41eed1d38e1b5c2801a1bd03983b2006270ff0c",
-  "outputsHash": "c76aa0be9ed2289b0fa9dfad72b5a556a106521073719f24b57f35adb9b92b2d"
+  "hash": "0a8179c9ec50cf33afc95039338825d4d5691ae4275fa93f98af8cc5e307973d",
+  "outputsHash": "26d0559b8eacc84fca6148aa560a3eec69dd7b878fa5bc5abf7d69bdea865c1e"
 }

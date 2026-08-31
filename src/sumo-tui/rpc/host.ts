@@ -1825,6 +1825,10 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		if (isReloadResume) {
 			initialRuntime.adoptRetainedTerminal();
 			initialRuntime.startInput();
+			// The predecessor's retained frame is already painted. Input is now
+			// editable even though this process hydrates off-screen before its
+			// replacement paint, so publish editor readiness at this boundary.
+			initialRuntime.markEditorReady();
 			const readyFile = env.SUMOCODE_RELOAD_READY_FILE;
 			if (readyFile) {
 				try { writeFileSync(readyFile, "ready", { mode: 0o600 }); } catch {}

@@ -34,7 +34,12 @@ export class InitialHydrationActionGate {
 				}
 			}
 			this.ready = true;
-			options.onReady?.();
+			try {
+				options.onReady?.();
+			} catch {
+				// Readiness observers are advisory. A failed diagnostic must not
+				// reject submit waiters after hydration has already settled.
+			}
 		});
 	}
 

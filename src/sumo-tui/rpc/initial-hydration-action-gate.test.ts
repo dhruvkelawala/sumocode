@@ -24,6 +24,15 @@ describe("InitialHydrationActionGate", () => {
 		expect(gate.isReady).toBe(true);
 	});
 
+	it("settles submit waiters when the ready observer throws", async () => {
+		const gate = new InitialHydrationActionGate(Promise.resolve(), {
+			onReady: () => { throw new Error("diagnostic observer failed"); },
+		});
+
+		await expect(gate.whenSettled()).resolves.toBeUndefined();
+		expect(gate.isReady).toBe(true);
+	});
+
 	it("defers and coalesces child-dependent actions until hydration", async () => {
 		let release!: () => void;
 		const hydration = new Promise<void>((resolve) => { release = resolve; });

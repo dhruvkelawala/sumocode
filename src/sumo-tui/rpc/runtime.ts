@@ -197,6 +197,7 @@ export class RpcHostRuntime {
 	private started = false;
 	private inputStarted = false;
 	private stopped = false;
+	private editorReadyMarked = false;
 	private chromeStableMarked = false;
 	private commandReadyMarked = false;
 	private exitCode: number | undefined;
@@ -324,6 +325,25 @@ export class RpcHostRuntime {
 		this.input.on("data", this.handleInput);
 	}
 
+	/**
+	 * Marks input editable on the retained frame. Reload successors call this
+	 * after adopting the predecessor's painted frame; cold starts call it only
+	 * after their own first render.
+	 */
+	public markEditorReady(): void {
+		if (this.stopped || this.editorReadyMarked) return;
+		this.editorReadyMarked = true;
+		const cols = terminalColumns(this.output);
+		const rows = terminalRows(this.output);
+		for (const event of [
+			"editor_ready",
+			// Deprecated compatibility alias for one release.
+			"input_ready",
+		]) {
+			logDiagnostic(event, { surface: "rpc_host", cols, rows });
+		}
+	}
+
 	public async start(): Promise<void> {
 		if (this.started || this.stopped) return;
 		this.started = true;
@@ -375,17 +395,13 @@ export class RpcHostRuntime {
 			return;
 		}
 		this.shell = shell;
-		const cols = terminalColumns(this.output);
-		const rows = terminalRows(this.output);
 		this.render();
-		for (const event of [
-			"boot_screen_frame",
-			"editor_ready",
-			// Deprecated compatibility alias for one release.
-			"input_ready",
-		]) {
-			logDiagnostic(event, { surface: "rpc_host", cols, rows });
-		}
+		logDiagnostic("boot_screen_frame", {
+			surface: "rpc_host",
+			cols: terminalColumns(this.output),
+			rows: terminalRows(this.output),
+		});
+		this.markEditorReady();
 	}
 
 	/** Marks child-dependent chrome ready after startup hydration has reconciled. */

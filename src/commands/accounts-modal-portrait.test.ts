@@ -2,7 +2,7 @@
  * Visual evidence for the /accounts row layout (AGENTS.md: visual UI work
  * requires capture/review evidence). Captures rows produced by the real
  * command through ModalLayer at portrait and landscape widths, proving the
- * active-account state survives clipping.
+ * active-account and no-selection states survive clipping.
  */
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -27,7 +27,7 @@ function stripAnsi(line: string): string {
 	return line.replace(ANSI, "");
 }
 
-async function accountRows(): Promise<string[]> {
+async function accountRows(activeProvider: string | null = "anthropic-2"): Promise<string[]> {
 	const agentDir = mkdtempSync(join(tmpdir(), "sumocode-accounts-visual-"));
 	tempDirs.push(agentDir);
 	writeFileSync(
@@ -44,7 +44,7 @@ async function accountRows(): Promise<string[]> {
 			getProviderAuthStatus: () => ({ configured: true }),
 			getAll: () => [],
 		},
-		model: { provider: "anthropic-2", id: "claude-opus-5" },
+		model: activeProvider ? { provider: activeProvider, id: "claude-opus-5" } : undefined,
 	};
 	// SAFETY: the doubles supply every API and context member read before the
 	// intentionally cancelled first selector.
@@ -84,5 +84,12 @@ describe("accounts modal row layout", () => {
 			expect(text, `width ${width}`).toContain("default account · signed in");
 			expect(text, `width ${width}`).toContain("company · in use");
 		}
+	});
+
+	it("makes a new session's no-selection state visible at portrait width", async () => {
+		const text = renderAccountsModal(await accountRows(null), 36);
+		expect(text.split("\n").map((line) => line.trimEnd()).join("\n")).toMatchSnapshot();
+		expect(text).toContain("default account · inactive");
+		expect(text).toContain("company · inactive");
 	});
 });

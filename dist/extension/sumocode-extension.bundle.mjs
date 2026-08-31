@@ -17044,12 +17044,13 @@ async function defaultLogin(providerId, ctx) {
   logDiagnostic("accounts_login_start", { provider: providerId });
   await executeRpcLogin(providerId, ctx, runtime);
 }
-function accountState(account) {
+function accountState(account, hasActiveClaudeAccount) {
   if (account.active) return "in use";
-  return account.configured ? "signed in" : "sign in required";
+  if (!account.configured) return "sign in required";
+  return hasActiveClaudeAccount ? "signed in" : "inactive";
 }
-function accountRow(account) {
-  return `${account.label} \xB7 ${accountState(account)}  ${account.providerId}`;
+function accountRow(account, hasActiveClaudeAccount) {
+  return `${account.label} \xB7 ${accountState(account, hasActiveClaudeAccount)}  ${account.providerId}`;
 }
 function pendingReloadProviders(deps) {
   return deps.pendingReloadProviders ?? sessionPendingReloadProviders;
@@ -17166,7 +17167,8 @@ async function executeAccountsCommand(pi, ctx, deps = {}) {
     return;
   }
   const accountList = accounts(ctx, deps);
-  const rows = accountList.map(accountRow);
+  const hasActiveClaudeAccount = accountList.some((account2) => account2.active);
+  const rows = accountList.map((account2) => accountRow(account2, hasActiveClaudeAccount));
   const addLabel = "add Claude account";
   const selected = await ctx.ui.select("CLAUDE ACCOUNTS", [...rows, addLabel]);
   if (selected === addLabel) {

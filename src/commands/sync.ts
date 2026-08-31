@@ -1,10 +1,12 @@
+// oxlint-disable anti-slop/no-runtime-typeof -- account migration parses user-authored JSON at the sync I/O boundary.
 import { execFile as execFileCallback } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { CLAUDE_ACCOUNTS_MIGRATION_FIELD } from "./accounts-config.js";
 
 const execFile = promisify(execFileCallback);
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -16,6 +18,7 @@ const MANAGED_CONFIG_ITEMS = [
 	"mcp.json",
 	"models.json",
 	"sumocode.json",
+	"claude-accounts.json",
 	"xl0-pi-lovely-web.json",
 	"extensions",
 	"themes",
@@ -137,6 +140,112 @@ function resolvesToSamePath(left: string, right: string): boolean {
 	}
 }
 
+interface AccountsLikeDocument {
+	readonly subscriptions?: unknown;
+	readonly _sumocodeClaudeAccountsMigrated?: unknown;
+}
+
+function readAccountsLikeDocument(path: string): AccountsLikeDocument | undefined {
+	if (!existsSync(path)) return undefined;
+	try {
+		const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
+		// SAFETY: only subscriptions is inspected below, with an array guard.
+		return parsed as AccountsLikeDocument;
+	} catch {
+		return undefined;
+	}
+}
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- decoded subscription entry; guards produce a stable merge identity.
+function subscriptionIdentity(value: unknown): string | undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+	// SAFETY: object shape was checked above; fields are validated before interpolation.
+	const candidate = value as { provider?: unknown; index?: unknown };
+	if (typeof candidate.provider !== "string" || typeof candidate.index !== "number" || !Number.isInteger(candidate.index)) return undefined;
+	return `${candidate.provider}\u0000${candidate.index}`;
+}
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- decoded JSON entry; subscriptionIdentity parses structured rows and JSON.stringify keys the remainder.
+function subscriptionMergeKey(value: unknown): string {
+	const identity = subscriptionIdentity(value);
+	return identity ? `identity:${identity}` : `value:${JSON.stringify(value)}`;
+}
+
+function mergeSubscriptions(existing: readonly unknown[], incoming: readonly unknown[]): unknown[] {
+	const merged = [...existing];
+	const keys = new Set(existing.map(subscriptionMergeKey));
+	for (const entry of incoming) {
+		const key = subscriptionMergeKey(entry);
+		if (keys.has(key)) continue;
+		merged.push(entry);
+		keys.add(key);
+	}
+	return merged;
+}
+
+function writeAccountsMigration(source: string, document: AccountsLikeDocument): void {
+	const temporary = `${source}.${process.pid}.tmp`;
+	writeFileSync(temporary, `${JSON.stringify(document, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+	renameSync(temporary, source);
+}
+
+function requireValidSubscriptions(document: AccountsLikeDocument | undefined, path: string): void {
+	if (document?.subscriptions !== undefined && !Array.isArray(document.subscriptions)) {
+		throw new Error(`Invalid accounts subscriptions; expected an array: ${path}`);
+	}
+}
+
+function seedUnmigratedPrivateAccounts(source: string, target: string): void {
+	const primary = readAccountsLikeDocument(source);
+	if (!primary) throw new Error(`Invalid private accounts config; repair before syncing: ${source}`);
+	requireValidSubscriptions(primary, source);
+	const targetAlreadyManaged = resolvesToSamePath(source, target);
+	// The synced marker records document migration; the managed link records
+	// completion on this machine. A second machine must still merge its local
+	// agent/legacy accounts once before relinking.
+	if (primary[CLAUDE_ACCOUNTS_MIGRATION_FIELD] === true && targetAlreadyManaged) return;
+	// If target already resolves to source, reading it would merge the same
+	// document twice (notably duplicating identity-less extension entries).
+	const agentDocument = targetAlreadyManaged ? undefined : readAccountsLikeDocument(target);
+	const legacyPath = join(dirname(target), "multi-pass.json");
+	const legacyDocument = readAccountsLikeDocument(legacyPath);
+	requireValidSubscriptions(agentDocument, target);
+	requireValidSubscriptions(legacyDocument, legacyPath);
+	const privateSubscriptions = Array.isArray(primary.subscriptions) ? primary.subscriptions : [];
+	const agentSubscriptions = Array.isArray(agentDocument?.subscriptions) ? agentDocument.subscriptions : [];
+	const legacySubscriptions = Array.isArray(legacyDocument?.subscriptions) ? legacyDocument.subscriptions : [];
+	// Complete the one-time migration from every available source. Private
+	// fields/rows win conflicts, then adapter-native agent state, then legacy.
+	const next = {
+		...legacyDocument,
+		...agentDocument,
+		...primary,
+		[CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true,
+		subscriptions: mergeSubscriptions(mergeSubscriptions(privateSubscriptions, agentSubscriptions), legacySubscriptions),
+	};
+	writeAccountsMigration(source, next);
+}
+
+function initialManagedConfigContent(item: typeof MANAGED_CONFIG_ITEMS[number], target: string): string | undefined {
+	if (item !== "claude-accounts.json") return undefined;
+	try {
+		const targetStat = lstatSync(target);
+		if (targetStat.isFile() || targetStat.isSymbolicLink()) return readFileSync(target, "utf8");
+	} catch {
+		// No regular adapter-native target to migrate; try the legacy source.
+	}
+	const legacyPath = join(dirname(target), "multi-pass.json");
+	if (existsSync(legacyPath)) {
+		try {
+			return readFileSync(legacyPath, "utf8");
+		} catch {
+			// Fall through to an empty adapter-native document.
+		}
+	}
+	return `${JSON.stringify({ subscriptions: [] }, null, 2)}\n`;
+}
+
 function ensureConfigSymlinks(configRepo: string, agentDir: string): SyncStepResult {
 	mkdirSync(agentDir, { recursive: true });
 	let backupDir: string | undefined;
@@ -145,9 +254,14 @@ function ensureConfigSymlinks(configRepo: string, agentDir: string): SyncStepRes
 
 	for (const item of MANAGED_CONFIG_ITEMS) {
 		const source = join(configRepo, item);
-		if (!pathExists(source)) continue;
-
 		const target = join(agentDir, item);
+		if (!pathExists(source)) {
+			const initialContent = initialManagedConfigContent(item, target);
+			if (initialContent === undefined) continue;
+			writeFileSync(source, initialContent, { encoding: "utf8", mode: 0o600 });
+		}
+		if (item === "claude-accounts.json") seedUnmigratedPrivateAccounts(source, target);
+
 		if (pathExists(target)) {
 			if (resolvesToSamePath(source, target)) {
 				linked += 1;

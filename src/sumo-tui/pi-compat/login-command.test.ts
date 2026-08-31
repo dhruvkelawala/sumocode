@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { cancelActiveRpcLogin, executeRpcLogin, registerRpcLoginCommand, type RpcLoginRuntime } from "./login-command.js";
@@ -43,6 +46,20 @@ function runtimeFor(providerValue = provider()): RpcLoginRuntime {
 			return { type: "oauth" } as never;
 		}),
 	};
+}
+
+async function withDiagnostics(run: (file: string) => Promise<void>): Promise<void> {
+	const dir = mkdtempSync(join(tmpdir(), "sumocode-login-diag-"));
+	const file = join(dir, "diagnostics.jsonl");
+	const previous = process.env.SUMO_TUI_DIAG_FILE;
+	process.env.SUMO_TUI_DIAG_FILE = file;
+	try {
+		await run(file);
+	} finally {
+		if (previous === undefined) delete process.env.SUMO_TUI_DIAG_FILE;
+		else process.env.SUMO_TUI_DIAG_FILE = previous;
+		rmSync(dir, { recursive: true, force: true });
+	}
 }
 
 describe("RPC /login compatibility command", () => {
@@ -154,20 +171,23 @@ describe("RPC /login compatibility command", () => {
 	});
 
 	it("does not report a provider-specific abort error after cancellation", async () => {
-		const ctx = context();
-		const runtime = runtimeFor();
-		(runtime.login as ReturnType<typeof vi.fn>).mockImplementation(async (_providerId, _type, interaction) => {
-			return new Promise((_resolve, reject) => {
-				interaction.signal?.addEventListener("abort", () => reject(new DOMException("This operation was aborted", "AbortError")), { once: true });
+		await withDiagnostics(async (file) => {
+			const ctx = context();
+			const runtime = runtimeFor();
+			(runtime.login as ReturnType<typeof vi.fn>).mockImplementation(async (_providerId, _type, interaction) => {
+				return new Promise((_resolve, reject) => {
+					interaction.signal?.addEventListener("abort", () => reject(new DOMException("This operation was aborted", "AbortError")), { once: true });
+				});
 			});
+
+			const login = executeRpcLogin("anthropic", ctx, runtime);
+			await vi.waitFor(() => expect(runtime.login).toHaveBeenCalled());
+			expect(cancelActiveRpcLogin()).toBe(true);
+			await login;
+
+			expect(ctx.ui.notify).not.toHaveBeenCalledWith(expect.stringContaining("Login failed"), "error");
+			expect(readFileSync(file, "utf8")).not.toContain('"event":"rpc_login_failed"');
 		});
-
-		const login = executeRpcLogin("anthropic", ctx, runtime);
-		await vi.waitFor(() => expect(runtime.login).toHaveBeenCalled());
-		expect(cancelActiveRpcLogin()).toBe(true);
-		await login;
-
-		expect(ctx.ui.notify).not.toHaveBeenCalledWith(expect.stringContaining("Login failed"), "error");
 	});
 
 	it("cancels an authentication prompt that omits its own signal", async () => {
@@ -211,5 +231,43 @@ describe("RPC /login compatibility command", () => {
 		const title = (ctx.ui.input as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
 		expect(isSecretInputTitle(title)).toBe(true);
 		expect(title).not.toContain("sk-secret");
+	});
+
+	it("persists only a normalized identity when an OAuth provider echoes an arbitrary secret", async () => {
+		await withDiagnostics(async (file) => {
+			const oauthProvider = { ...provider(), id: "acme", name: "Acme" };
+			const ctx = context();
+			const runtime = runtimeFor(oauthProvider);
+			(runtime.login as ReturnType<typeof vi.fn>).mockRejectedValue(new TypeError("rejected acme_live_credential_987654321"));
+
+			await executeRpcLogin("acme", ctx, runtime);
+
+			const trace = readFileSync(file, "utf8");
+			const failures = trace.trim().split("\n").map((line) => JSON.parse(line) as {
+				event?: string;
+				provider?: string | null;
+				authType?: string;
+				errorName?: string;
+				errorMessage?: string;
+				stack?: string[];
+			}).filter((entry) => entry.event === "rpc_login_failed");
+			expect(failures).toHaveLength(1);
+			expect(failures[0]).toEqual(expect.objectContaining({ provider: "acme", authType: "oauth", errorName: "TypeError" }));
+			expect(failures[0]).not.toHaveProperty("errorMessage");
+			expect(failures[0]).not.toHaveProperty("stack");
+			expect(trace).not.toContain("acme_live_credential_987654321");
+			expect(ctx.ui.notify).toHaveBeenCalledWith("Login failed", "error");
+		});
+	});
+
+	it("never persists arbitrary slash-command input", async () => {
+		await withDiagnostics(async (file) => {
+			const secret = "third_party_secret_without_a_known_prefix";
+			await executeRpcLogin(secret, context(), runtimeFor());
+			const trace = readFileSync(file, "utf8");
+			expect(trace).toContain('"event":"rpc_login_methods"');
+			expect(trace).not.toContain(secret);
+			expect(trace).not.toContain('"requested"');
+		});
 	});
 });

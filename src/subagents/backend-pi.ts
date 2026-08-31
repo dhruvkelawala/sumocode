@@ -17,6 +17,7 @@ const PREVIEW_MAX = 160;
 const ERROR_MAX = 4096;
 
 const CLAUDE_OAUTH_ADAPTER_PACKAGE = "pi-claude-oauth-adapter";
+const MULTI_ACCOUNT_ADAPTER_SOURCE = "git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account";
 
 function adapterEntryFromPackageDir(packageDir: string): string | undefined {
 	try {
@@ -32,24 +33,55 @@ function adapterEntryFromPackageDir(packageDir: string): string | undefined {
 	}
 }
 
-/** Local-checkout package sources from a Pi settings file that look like the adapter. */
-function adapterPathSourcesFromSettings(settingsPath: string): string[] {
+/** Map a Pi `git:` package source to its managed global checkout. */
+function gitPackageDir(source: string, agentDir: string): string | undefined {
+	if (!source.startsWith("git:")) return undefined;
+	const spec = source.slice("git:".length);
+	let host: string;
+	let repoPath: string;
+	if (spec.startsWith("git@")) {
+		const separator = spec.indexOf(":");
+		if (separator < 0) return undefined;
+		host = spec.slice("git@".length, separator);
+		repoPath = spec.slice(separator + 1);
+	} else {
+		const separator = spec.indexOf("/");
+		if (separator < 0) return undefined;
+		host = spec.slice(0, separator);
+		repoPath = spec.slice(separator + 1);
+	}
+	// Pi checkout identity excludes the pinned ref. Refs may themselves contain
+	// slashes, so split on the final @ after host parsing rather than by segment.
+	const refSeparator = repoPath.lastIndexOf("@");
+	if (refSeparator >= 0) repoPath = repoPath.slice(0, refSeparator);
+	if (repoPath.endsWith(".git")) repoPath = repoPath.slice(0, -".git".length);
+	const segments = repoPath.split("/").filter(Boolean);
+	if (!host || host === "." || host === ".." || host.includes("\\") || segments.length < 2 || segments.some((segment) => segment === "." || segment === ".." || segment.includes("\\"))) return undefined;
+	return join(agentDir, "git", host, ...segments);
+}
+
+/** Trusted global package directories from settings that look like the adapter. */
+function adapterPackageDirsFromSettings(settingsPath: string, agentDir: string): string[] {
 	try {
 		// SAFETY: malformed settings files reject into the catch below.
 		const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as { packages?: unknown };
 		if (!Array.isArray(settings.packages)) return [];
 		// SAFETY: package entries may be plain strings or { source } objects.
 		const sources = settings.packages
-						.map((entry) => isString(entry) ? entry : (entry as { source?: unknown })?.source)
-			.filter((source): source is string => isString(source) && source.includes(CLAUDE_OAUTH_ADAPTER_PACKAGE));
-		return sources
-			.filter((source) => !source.startsWith("npm:") && !source.startsWith("git:") && !source.startsWith("http"))
-			.map((source) => {
-				if (source.startsWith("~/")) return join(homedir(), source.slice(2));
-				// Pi resolves relative package sources against the settings file's
-				// directory, not the process cwd — mirror that.
-				return isAbsolute(source) ? source : resolve(dirname(settingsPath), source);
-			});
+			.map((entry) => isString(entry) ? entry : (entry as { source?: unknown })?.source)
+			.filter((source): source is string => isString(source) && source.includes(CLAUDE_OAUTH_ADAPTER_PACKAGE))
+			// The numbered-provider fork must win over stale upstream/configured
+			// variants that share the same package name.
+			.sort((left, right) => Number(right.trim() === MULTI_ACCOUNT_ADAPTER_SOURCE) - Number(left.trim() === MULTI_ACCOUNT_ADAPTER_SOURCE));
+		return sources.flatMap((source) => {
+			const gitDir = gitPackageDir(source, agentDir);
+			if (gitDir) return [gitDir];
+			if (source.startsWith("npm:") || source.startsWith("http")) return [];
+			if (source.startsWith("~/")) return [join(homedir(), source.slice(2))];
+			// Pi resolves relative package sources against the settings file's
+			// directory, not the process cwd — mirror that.
+			return [isAbsolute(source) ? source : resolve(dirname(settingsPath), source)];
+		});
 	} catch {
 		return [];
 	}
@@ -67,7 +99,8 @@ function adapterPathSourcesFromSettings(settingsPath: string): string[] {
  * local checkout paths). Resolution probes TRUSTED-SCOPE candidates only:
  *   1. SUMOCODE_CLAUDE_OAUTH_ADAPTER env — explicit entry file or package dir
  *   2. global agent-dir cache: <agentDir>/npm/node_modules/<pkg>
- *   3. local-checkout path sources named in the GLOBAL settings packages
+ *   3. Pi-managed git checkouts named in the GLOBAL settings packages
+ *   4. local-checkout path sources named in the GLOBAL settings packages
  * Project-scoped candidates (<cwd>/.pi/...) are deliberately EXCLUDED: a
  * hostile repository could name arbitrary repo-controlled code as the adapter
  * and have children boot-load it via -e, softening the --no-extensions
@@ -91,8 +124,10 @@ export function resolveClaudeOauthAdapterEntry(env: NodeJS.ProcessEnv = process.
 	}
 	const agentDir = env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 	const candidateDirs = [
+		// Configured sources reflect the active package choice and must precede a
+		// stale npm cache left behind after switching to the multi-account fork.
+		...adapterPackageDirsFromSettings(join(agentDir, "settings.json"), agentDir),
 		join(agentDir, "npm", "node_modules", CLAUDE_OAUTH_ADAPTER_PACKAGE),
-		...adapterPathSourcesFromSettings(join(agentDir, "settings.json")),
 	];
 	for (const dir of candidateDirs) {
 		const entry = adapterEntryFromPackageDir(dir);

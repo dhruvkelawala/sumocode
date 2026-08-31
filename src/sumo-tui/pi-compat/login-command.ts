@@ -1,5 +1,6 @@
 import type { Api, AuthEvent, AuthInteraction, AuthPrompt, AuthType, Credential, Model, Provider } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { logDiagnostic } from "../runtime/diagnostics.js";
 import { authInputTitle } from "./secret-input.js";
 
 export interface RpcLoginRuntime {
@@ -162,6 +163,30 @@ function showEvent(ctx: ExtensionCommandContext, event: AuthEvent): void {
 	}
 }
 
+/**
+ * Normalize a caught rejection to an identity chosen by SumoCode. Error names,
+ * messages, and stacks are provider-controlled and can echo arbitrary secrets;
+ * none cross the diagnostics boundary.
+ */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- caught rejection boundary: instanceof checks classify the identity.
+function errorIdentity(error: unknown): string {
+	if (error instanceof DOMException) return error.name === "AbortError" ? "AbortError" : "DOMException";
+	if (error instanceof TypeError) return "TypeError";
+	if (error instanceof RangeError) return "RangeError";
+	if (error instanceof SyntaxError) return "SyntaxError";
+	if (error instanceof Error) return "Error";
+	return "non_error_rejection";
+}
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- caught rejection boundary: errorIdentity performs the parse.
+function logLoginFailure(attempt: LoginMethod | undefined, error: unknown): void {
+	logDiagnostic("rpc_login_failed", {
+		provider: attempt?.provider.id ?? null,
+		authType: attempt?.authType,
+		errorName: errorIdentity(error),
+	});
+}
+
 export async function executeRpcLogin(args: string, ctx: ExtensionCommandContext, runtime: RpcLoginRuntime): Promise<void> {
 	if (ctx.mode !== "rpc" || !ctx.hasUI) {
 		ctx.ui.notify("/login compatibility command requires SumoCode RPC mode", "warning");
@@ -173,16 +198,23 @@ export async function executeRpcLogin(args: string, ctx: ExtensionCommandContext
 	}
 	const loginAbort = new AbortController();
 	activeLoginAbort = loginAbort;
+	let attempt: LoginMethod | undefined;
 	try {
 		await runtime.getAvailable();
 		if (loginAbort.signal.aborted) throw cancelled();
 		const methods = loginMethods(runtime);
+		// Persist only provider registry data; raw slash-command input can be an
+		// arbitrary pasted credential and never crosses the diagnostics boundary.
+		logDiagnostic("rpc_login_methods", {
+			providers: methods.map((entry) => `${entry.provider.id}:${entry.authType}`),
+		});
 		if (methods.length === 0) {
 			ctx.ui.notify("No login providers available", "warning");
 			return;
 		}
 		const method = await resolveLoginMethod(args, ctx, methods, loginAbort.signal);
 		if (!method || loginAbort.signal.aborted) return;
+		attempt = method;
 		const apiKeyMethod = method.provider.auth.apiKey;
 		if (method.authType === "api_key" && !apiKeyMethod?.login) {
 			ctx.ui.notify(`${apiKeyMethod?.name ?? method.provider.name} is configured outside Pi`, "info");
@@ -196,7 +228,13 @@ export async function executeRpcLogin(args: string, ctx: ExtensionCommandContext
 		ctx.ui.notify(`Logged in to ${method.provider.name}`, "info");
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		if (!loginAbort.signal.aborted && message !== "Login cancelled") ctx.ui.notify(`Login failed: ${message}`, "error");
+		const wasCancelled = loginAbort.signal.aborted || message === "Login cancelled";
+		if (!wasCancelled) {
+			logLoginFailure(attempt, error);
+			// Provider-controlled rejection text may echo credentials in formats that
+			// cannot be recognized safely; keep the visible failure credential-free.
+			ctx.ui.notify("Login failed", "error");
+		}
 	} finally {
 		loginAbort.abort();
 		if (activeLoginAbort === loginAbort) activeLoginAbort = undefined;

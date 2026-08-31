@@ -1,7 +1,7 @@
 // src/extension.ts
-import { existsSync as existsSync14, readFileSync as readFileSync18, realpathSync as realpathSync4 } from "node:fs";
+import { existsSync as existsSync14, readFileSync as readFileSync18, realpathSync as realpathSync5 } from "node:fs";
 import { homedir as homedir16 } from "node:os";
-import { dirname as dirname14, join as join22, resolve as resolve7, sep } from "node:path";
+import { dirname as dirname14, join as join22, resolve as resolve8, sep } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 
 // src/cathedral/input-hints.ts
@@ -918,10 +918,10 @@ function refreshGitBranchAsync(ctx, runGit = defaultAsyncGitRunner) {
   });
 }
 function defaultAsyncGitRunner(args, cwd) {
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     execFile("git", args, { cwd, encoding: "utf8" }, (error, stdout) => {
       if (error) reject(error);
-      else resolve8(stdout);
+      else resolve9(stdout);
     });
   });
 }
@@ -3386,7 +3386,7 @@ var runSingleTask = async (options) => {
   }
   try {
     const args = [...applyForkSessionArgs(options.subprocessArgs, forkSession), options.subprocessPrompt];
-    const exitCode = await new Promise((resolve8) => {
+    const exitCode = await new Promise((resolve9) => {
       const proc = spawn("pi", args, {
         cwd: options.defaultCwd,
         shell: false,
@@ -3455,11 +3455,11 @@ var runSingleTask = async (options) => {
         if (buffer.trim()) processLine(buffer);
         currentResult.exitCode = code ?? 0;
         if (abortState.isAborted()) currentResult.stopReason = "aborted";
-        resolve8(code ?? 0);
+        resolve9(code ?? 0);
       });
       proc.on("error", () => {
         currentResult.exitCode = 1;
-        resolve8(1);
+        resolve9(1);
       });
     });
     currentResult.exitCode = exitCode;
@@ -5016,7 +5016,7 @@ import { writeFileSync as writeFileSync2 } from "node:fs";
 var SUMOCODE_RELOAD_EXIT_CODE = 100;
 var FLUSH_DELAY_MS = 60;
 function defaultDelay(ms) {
-  return new Promise((resolve8) => setTimeout(resolve8, ms));
+  return new Promise((resolve9) => setTimeout(resolve9, ms));
 }
 async function executeSumoReload(ctx, deps = {}) {
   const env = deps.env ?? process.env;
@@ -6115,7 +6115,7 @@ async function paneForTab(pi, tabId) {
     if (!listed.ok) return listed;
     const pane = listed.panes.find((candidate) => candidate.tab_id === tabId);
     if (pane?.pane_id) return { ok: true, pane };
-    if (attempt < 3) await new Promise((resolve8) => setTimeout(resolve8, 25));
+    if (attempt < 3) await new Promise((resolve9) => setTimeout(resolve9, 25));
   }
   return { ok: false, error: `herdr returned no pane for tab ${tabId}` };
 }
@@ -7186,11 +7186,16 @@ function registerSpinnerCommand(pi) {
 
 // src/commands/sync.ts
 import { execFile as execFileCallback } from "node:child_process";
-import { existsSync as existsSync4, lstatSync, mkdirSync as mkdirSync4, readFileSync as readFileSync6, realpathSync, renameSync as renameSync2, rmSync, symlinkSync } from "node:fs";
+import { existsSync as existsSync4, lstatSync, mkdirSync as mkdirSync4, readFileSync as readFileSync6, realpathSync, renameSync as renameSync2, rmSync, symlinkSync, writeFileSync as writeFileSync4 } from "node:fs";
 import { homedir as homedir7 } from "node:os";
 import { dirname as dirname3, join as join6, resolve as resolve2 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+
+// src/commands/accounts-config.ts
+var CLAUDE_ACCOUNTS_MIGRATION_FIELD = "_sumocodeClaudeAccountsMigrated";
+
+// src/commands/sync.ts
 var execFile2 = promisify(execFileCallback);
 var DEFAULT_TIMEOUT_MS = 12e4;
 var CONFIG_REPO_NAME = "sumocode";
@@ -7201,6 +7206,7 @@ var MANAGED_CONFIG_ITEMS = [
   "mcp.json",
   "models.json",
   "sumocode.json",
+  "claude-accounts.json",
   "xl0-pi-lovely-web.json",
   "extensions",
   "themes",
@@ -7283,6 +7289,88 @@ function resolvesToSamePath(left, right) {
     return false;
   }
 }
+function readAccountsLikeDocument(path2) {
+  if (!existsSync4(path2)) return void 0;
+  try {
+    const parsed = JSON.parse(readFileSync6(path2, "utf8"));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return void 0;
+    return parsed;
+  } catch {
+    return void 0;
+  }
+}
+function subscriptionIdentity(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
+  const candidate = value;
+  if (typeof candidate.provider !== "string" || typeof candidate.index !== "number" || !Number.isInteger(candidate.index)) return void 0;
+  return `${candidate.provider}\0${candidate.index}`;
+}
+function subscriptionMergeKey(value) {
+  const identity = subscriptionIdentity(value);
+  return identity ? `identity:${identity}` : `value:${JSON.stringify(value)}`;
+}
+function mergeSubscriptions(existing, incoming) {
+  const merged = [...existing];
+  const keys = new Set(existing.map(subscriptionMergeKey));
+  for (const entry of incoming) {
+    const key = subscriptionMergeKey(entry);
+    if (keys.has(key)) continue;
+    merged.push(entry);
+    keys.add(key);
+  }
+  return merged;
+}
+function writeAccountsMigration(source, document) {
+  const temporary = `${source}.${process.pid}.tmp`;
+  writeFileSync4(temporary, `${JSON.stringify(document, null, 2)}
+`, { encoding: "utf8", mode: 384 });
+  renameSync2(temporary, source);
+}
+function requireValidSubscriptions(document, path2) {
+  if (document?.subscriptions !== void 0 && !Array.isArray(document.subscriptions)) {
+    throw new Error(`Invalid accounts subscriptions; expected an array: ${path2}`);
+  }
+}
+function seedUnmigratedPrivateAccounts(source, target) {
+  const primary = readAccountsLikeDocument(source);
+  if (!primary) throw new Error(`Invalid private accounts config; repair before syncing: ${source}`);
+  requireValidSubscriptions(primary, source);
+  const targetAlreadyManaged = resolvesToSamePath(source, target);
+  if (primary[CLAUDE_ACCOUNTS_MIGRATION_FIELD] === true && targetAlreadyManaged) return;
+  const agentDocument = targetAlreadyManaged ? void 0 : readAccountsLikeDocument(target);
+  const legacyPath = join6(dirname3(target), "multi-pass.json");
+  const legacyDocument = readAccountsLikeDocument(legacyPath);
+  requireValidSubscriptions(agentDocument, target);
+  requireValidSubscriptions(legacyDocument, legacyPath);
+  const privateSubscriptions = Array.isArray(primary.subscriptions) ? primary.subscriptions : [];
+  const agentSubscriptions = Array.isArray(agentDocument?.subscriptions) ? agentDocument.subscriptions : [];
+  const legacySubscriptions = Array.isArray(legacyDocument?.subscriptions) ? legacyDocument.subscriptions : [];
+  const next = {
+    ...legacyDocument,
+    ...agentDocument,
+    ...primary,
+    [CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true,
+    subscriptions: mergeSubscriptions(mergeSubscriptions(privateSubscriptions, agentSubscriptions), legacySubscriptions)
+  };
+  writeAccountsMigration(source, next);
+}
+function initialManagedConfigContent(item, target) {
+  if (item !== "claude-accounts.json") return void 0;
+  try {
+    const targetStat = lstatSync(target);
+    if (targetStat.isFile() || targetStat.isSymbolicLink()) return readFileSync6(target, "utf8");
+  } catch {
+  }
+  const legacyPath = join6(dirname3(target), "multi-pass.json");
+  if (existsSync4(legacyPath)) {
+    try {
+      return readFileSync6(legacyPath, "utf8");
+    } catch {
+    }
+  }
+  return `${JSON.stringify({ subscriptions: [] }, null, 2)}
+`;
+}
 function ensureConfigSymlinks(configRepo, agentDir) {
   mkdirSync4(agentDir, { recursive: true });
   let backupDir;
@@ -7290,8 +7378,13 @@ function ensureConfigSymlinks(configRepo, agentDir) {
   let backedUp = 0;
   for (const item of MANAGED_CONFIG_ITEMS) {
     const source = join6(configRepo, item);
-    if (!pathExists(source)) continue;
     const target = join6(agentDir, item);
+    if (!pathExists(source)) {
+      const initialContent = initialManagedConfigContent(item, target);
+      if (initialContent === void 0) continue;
+      writeFileSync4(source, initialContent, { encoding: "utf8", mode: 384 });
+    }
+    if (item === "claude-accounts.json") seedUnmigratedPrivateAccounts(source, target);
     if (pathExists(target)) {
       if (resolvesToSamePath(source, target)) {
         linked += 1;
@@ -7438,7 +7531,7 @@ function registerSumoSyncCommand(pi, deps = {}) {
 }
 
 // src/commands/tabs.ts
-import { existsSync as existsSync5, readFileSync as readFileSync7, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync5, readFileSync as readFileSync7, writeFileSync as writeFileSync5 } from "node:fs";
 import { homedir as homedir8 } from "node:os";
 import { join as join7 } from "node:path";
 var TABS_LOCAL_CONFIG_KEY = "topChromeHidden";
@@ -7468,7 +7561,7 @@ function setTopChromeHidden(hidden, configPath = DEFAULT_TABS_CONFIG_PATH) {
     parsed = {};
   }
   parsed[TABS_LOCAL_CONFIG_KEY] = hidden;
-  writeFileSync4(configPath, `${JSON.stringify(parsed, null, 2)}
+  writeFileSync5(configPath, `${JSON.stringify(parsed, null, 2)}
 `);
 }
 function registerTabsCommand(pi, options = {}) {
@@ -8870,8 +8963,8 @@ var CancellableWorkerRuntime = class {
     const controller = new AbortController();
     let handle;
     let resolveResult;
-    const result = new Promise((resolve8) => {
-      resolveResult = resolve8;
+    const result = new Promise((resolve9) => {
+      resolveResult = resolve9;
     });
     const isCurrent = () => !options.exclusiveGroup || this.exclusiveWorkers.get(options.exclusiveGroup) === handle;
     handle = {
@@ -10000,8 +10093,8 @@ var CompactionStatusComponent = class {
   markComplete() {
     this.completed = true;
     this.tui.requestRender();
-    return new Promise((resolve8) => {
-      const t = setTimeout(resolve8, COMPLETE_HOLD_MS);
+    return new Promise((resolve9) => {
+      const t = setTimeout(resolve9, COMPLETE_HOLD_MS);
       t.unref?.();
     });
   }
@@ -10072,7 +10165,7 @@ import {
   openSync as openSync2,
   readFileSync as readFileSync12,
   readSync,
-  writeFileSync as writeFileSync6
+  writeFileSync as writeFileSync7
 } from "node:fs";
 import { dirname as dirname8, join as join14 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
@@ -10208,14 +10301,14 @@ var executeWindowsTaskkill = (args, callback) => {
   execFile4("taskkill.exe", [...args], (error) => callback(error));
 };
 function runWindowsTaskkill(pid, force, execute = executeWindowsTaskkill) {
-  return new Promise((resolve8) => {
+  return new Promise((resolve9) => {
     const args = ["/PID", String(pid), "/T", ...force ? ["/F"] : []];
     execute(args, (error) => {
       if (!error) {
-        resolve8({ ok: true, gone: true });
+        resolve9({ ok: true, gone: true });
         return;
       }
-      resolve8({ ok: false, gone: false, forceRequired: !force, error: error.message });
+      resolve9({ ok: false, gone: false, forceRequired: !force, error: error.message });
     });
   });
 }
@@ -10291,19 +10384,19 @@ var systemProcessTree = {
   },
   signalFreshTree: rawSystemSignal,
   waitForTreeEmpty(identity, timeoutMs, verification) {
-    return new Promise((resolve8) => {
+    return new Promise((resolve9) => {
       if (this.isTreeEmpty(identity, verification)) {
-        resolve8(true);
+        resolve9(true);
         return;
       }
       const deadline = Date.now() + Math.max(0, timeoutMs);
       const poll = () => {
         if (this.isTreeEmpty(identity, verification)) {
-          resolve8(true);
+          resolve9(true);
           return;
         }
         if (Date.now() >= deadline) {
-          resolve8(false);
+          resolve9(false);
           return;
         }
         const timer = setTimeout(poll, 25);
@@ -10365,7 +10458,7 @@ import {
   renameSync as renameSync3,
   rmSync as rmSync2,
   unlinkSync,
-  writeFileSync as writeFileSync5
+  writeFileSync as writeFileSync6
 } from "node:fs";
 import { homedir as homedir12 } from "node:os";
 import { basename as basename4, dirname as dirname6, isAbsolute, join as join12, relative, resolve as resolve4 } from "node:path";
@@ -11163,7 +11256,7 @@ function writeExclusivePrivateFile(path2, contents) {
   const descriptor = openSync(path2, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NO_FOLLOW, PRIVATE_FILE_MODE);
   try {
     fchmodSync(descriptor, PRIVATE_FILE_MODE);
-    writeFileSync5(descriptor, contents, "utf8");
+    writeFileSync6(descriptor, contents, "utf8");
     fsyncSync(descriptor);
   } finally {
     closeSync(descriptor);
@@ -11175,7 +11268,7 @@ function atomicWriteJson(path2, value) {
   try {
     descriptor = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NO_FOLLOW, PRIVATE_FILE_MODE);
     fchmodSync(descriptor, PRIVATE_FILE_MODE);
-    writeFileSync5(descriptor, `${JSON.stringify(value, null, 2)}
+    writeFileSync6(descriptor, `${JSON.stringify(value, null, 2)}
 `, "utf8");
     fsyncSync(descriptor);
     closeSync(descriptor);
@@ -11609,7 +11702,7 @@ function createPrivateFile(store, path2, contents) {
   const descriptor = openSync2(path2, constants2.O_WRONLY | constants2.O_CREAT | constants2.O_EXCL | NO_FOLLOW2, PRIVATE_FILE_MODE2);
   try {
     fchmodSync2(descriptor, PRIVATE_FILE_MODE2);
-    writeFileSync6(descriptor, contents, "utf8");
+    writeFileSync7(descriptor, contents, "utf8");
   } finally {
     closeSync2(descriptor);
   }
@@ -11694,7 +11787,7 @@ function capSettledLog(store, path2, maxBytes) {
     descriptor = openPrivateFile(store, path2, constants2.O_WRONLY);
     try {
       ftruncateSync(descriptor, 0);
-      writeFileSync6(descriptor, `${marker}${tail}`.slice(-maxBytes), "utf8");
+      writeFileSync7(descriptor, `${marker}${tail}`.slice(-maxBytes), "utf8");
     } finally {
       closeSync2(descriptor);
     }
@@ -11705,7 +11798,7 @@ function appendPrivateFile(store, path2, contents) {
   let descriptor;
   try {
     descriptor = openPrivateFile(store, path2, constants2.O_WRONLY | constants2.O_APPEND);
-    writeFileSync6(descriptor, contents, "utf8");
+    writeFileSync7(descriptor, contents, "utf8");
   } catch {
   } finally {
     if (descriptor !== void 0) closeSync2(descriptor);
@@ -11982,7 +12075,7 @@ ${command}
       return task !== void 0 && isTerminalTaskSettled(task.status);
     });
     if (!complete2() && timeoutMs > 0) {
-      await new Promise((resolve8, reject) => {
+      await new Promise((resolve9, reject) => {
         let finished = false;
         let timer;
         let unsubscribe = () => {
@@ -11994,7 +12087,7 @@ ${command}
           unsubscribe();
           signal?.removeEventListener("abort", onAbort);
           if (error) reject(error);
-          else resolve8();
+          else resolve9();
         };
         const onAbort = () => finish(abortError());
         unsubscribe = this.addChangeListener(() => {
@@ -13119,7 +13212,7 @@ import {
   realpathSync as realpathSync3,
   renameSync as renameSync4,
   unlinkSync as unlinkSync2,
-  writeFileSync as writeFileSync7
+  writeFileSync as writeFileSync8
 } from "node:fs";
 import { homedir as homedir13 } from "node:os";
 import { basename as basename5, dirname as dirname9, join as join15, resolve as resolve5 } from "node:path";
@@ -13267,7 +13360,7 @@ function writePrivateJsonExclusive(path2, value) {
   try {
     descriptor = openSync3(temporary, constants3.O_WRONLY | constants3.O_CREAT | constants3.O_EXCL | NO_FOLLOW3, PRIVATE_ACTIVITY_FILE_MODE);
     fchmodSync3(descriptor, PRIVATE_ACTIVITY_FILE_MODE);
-    writeFileSync7(descriptor, `${JSON.stringify(value, null, 2)}
+    writeFileSync8(descriptor, `${JSON.stringify(value, null, 2)}
 `, "utf8");
     fsyncSync2(descriptor);
     closeSync3(descriptor);
@@ -13298,7 +13391,7 @@ function atomicWritePrivateJson(path2, value) {
   try {
     descriptor = openSync3(temporary, constants3.O_WRONLY | constants3.O_CREAT | constants3.O_EXCL | NO_FOLLOW3, PRIVATE_ACTIVITY_FILE_MODE);
     fchmodSync3(descriptor, PRIVATE_ACTIVITY_FILE_MODE);
-    writeFileSync7(descriptor, `${JSON.stringify(value, null, 2)}
+    writeFileSync8(descriptor, `${JSON.stringify(value, null, 2)}
 `, "utf8");
     fsyncSync2(descriptor);
     closeSync3(descriptor);
@@ -14345,7 +14438,7 @@ import {
   mkdirSync as mkdirSync9,
   readFileSync as readFileSync14,
   renameSync as renameSync6,
-  writeFileSync as writeFileSync8
+  writeFileSync as writeFileSync9
 } from "node:fs";
 import { dirname as dirname11, join as join17 } from "node:path";
 var RESPONSE_POLL_INTERVAL_MS = 750;
@@ -14360,7 +14453,7 @@ var nodeFs = {
   mkdirSync: mkdirSync9,
   readFileSync: readFileSync14,
   renameSync: renameSync6,
-  writeFileSync: writeFileSync8
+  writeFileSync: writeFileSync9
 };
 var errorText2 = (error) => error instanceof Error ? error.message : String(error);
 var createPaneChildSpawner = (dependencies = {}) => (options) => {
@@ -14406,8 +14499,8 @@ ${options.prompt}` : options.prompt;
   let interrupted = false;
   let settled = false;
   let markReady = () => void 0;
-  const ready = new Promise((resolve8) => {
-    markReady = resolve8;
+  const ready = new Promise((resolve9) => {
+    markReady = resolve9;
   });
   const clearWatcher = () => {
     if (!pollTimer) return;
@@ -14481,12 +14574,12 @@ ${options.prompt}` : options.prompt;
     fs3.renameSync(`${finalPath}.tmp`, finalPath);
     const ackPollMs = dependencies.sendAckPollMs ?? SEND_ACK_POLL_MS;
     const ackTimeoutMs = dependencies.sendAckTimeoutMs ?? SEND_ACK_TIMEOUT_MS;
-    return new Promise((resolve8, reject) => {
+    return new Promise((resolve9, reject) => {
       let elapsed2 = 0;
       const ackTimer = setInterval(() => {
         if (!fs3.existsSync(finalPath)) {
           clearInterval(ackTimer);
-          resolve8();
+          resolve9();
           return;
         }
         if (fs3.existsSync(paths.exitFile) && readText(paths.exitFile).trim()) {
@@ -14564,6 +14657,7 @@ var DEFAULT_BUILT_IN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "
 var PREVIEW_MAX2 = 160;
 var ERROR_MAX = 4096;
 var CLAUDE_OAUTH_ADAPTER_PACKAGE = "pi-claude-oauth-adapter";
+var MULTI_ACCOUNT_ADAPTER_SOURCE = "git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account";
 function adapterEntryFromPackageDir(packageDir) {
   try {
     const manifest = JSON.parse(readFileSync15(join18(packageDir, "package.json"), "utf8"));
@@ -14576,14 +14670,40 @@ function adapterEntryFromPackageDir(packageDir) {
     return void 0;
   }
 }
-function adapterPathSourcesFromSettings(settingsPath) {
+function gitPackageDir(source, agentDir) {
+  if (!source.startsWith("git:")) return void 0;
+  const spec = source.slice("git:".length);
+  let host;
+  let repoPath;
+  if (spec.startsWith("git@")) {
+    const separator = spec.indexOf(":");
+    if (separator < 0) return void 0;
+    host = spec.slice("git@".length, separator);
+    repoPath = spec.slice(separator + 1);
+  } else {
+    const separator = spec.indexOf("/");
+    if (separator < 0) return void 0;
+    host = spec.slice(0, separator);
+    repoPath = spec.slice(separator + 1);
+  }
+  const refSeparator = repoPath.lastIndexOf("@");
+  if (refSeparator >= 0) repoPath = repoPath.slice(0, refSeparator);
+  if (repoPath.endsWith(".git")) repoPath = repoPath.slice(0, -".git".length);
+  const segments = repoPath.split("/").filter(Boolean);
+  if (!host || host === "." || host === ".." || host.includes("\\") || segments.length < 2 || segments.some((segment) => segment === "." || segment === ".." || segment.includes("\\"))) return void 0;
+  return join18(agentDir, "git", host, ...segments);
+}
+function adapterPackageDirsFromSettings(settingsPath, agentDir) {
   try {
     const settings = JSON.parse(readFileSync15(settingsPath, "utf8"));
     if (!Array.isArray(settings.packages)) return [];
-    const sources = settings.packages.map((entry) => isString5(entry) ? entry : entry?.source).filter((source) => isString5(source) && source.includes(CLAUDE_OAUTH_ADAPTER_PACKAGE));
-    return sources.filter((source) => !source.startsWith("npm:") && !source.startsWith("git:") && !source.startsWith("http")).map((source) => {
-      if (source.startsWith("~/")) return join18(homedir14(), source.slice(2));
-      return isAbsolute2(source) ? source : resolve6(dirname12(settingsPath), source);
+    const sources = settings.packages.map((entry) => isString5(entry) ? entry : entry?.source).filter((source) => isString5(source) && source.includes(CLAUDE_OAUTH_ADAPTER_PACKAGE)).sort((left, right) => Number(right.trim() === MULTI_ACCOUNT_ADAPTER_SOURCE) - Number(left.trim() === MULTI_ACCOUNT_ADAPTER_SOURCE));
+    return sources.flatMap((source) => {
+      const gitDir = gitPackageDir(source, agentDir);
+      if (gitDir) return [gitDir];
+      if (source.startsWith("npm:") || source.startsWith("http")) return [];
+      if (source.startsWith("~/")) return [join18(homedir14(), source.slice(2))];
+      return [isAbsolute2(source) ? source : resolve6(dirname12(settingsPath), source)];
     });
   } catch {
     return [];
@@ -14602,8 +14722,10 @@ function resolveClaudeOauthAdapterEntry(env = process.env) {
   }
   const agentDir = env.PI_CODING_AGENT_DIR ?? join18(homedir14(), ".pi", "agent");
   const candidateDirs = [
-    join18(agentDir, "npm", "node_modules", CLAUDE_OAUTH_ADAPTER_PACKAGE),
-    ...adapterPathSourcesFromSettings(join18(agentDir, "settings.json"))
+    // Configured sources reflect the active package choice and must precede a
+    // stale npm cache left behind after switching to the multi-account fork.
+    ...adapterPackageDirsFromSettings(join18(agentDir, "settings.json"), agentDir),
+    join18(agentDir, "npm", "node_modules", CLAUDE_OAUTH_ADAPTER_PACKAGE)
   ];
   for (const dir of candidateDirs) {
     const entry = adapterEntryFromPackageDir(dir);
@@ -15258,7 +15380,7 @@ var SubagentManager = class {
   }
   nextChange(signal) {
     if (signal?.aborted) return Promise.reject(new Error("Aborted"));
-    return new Promise((resolve8, reject) => {
+    return new Promise((resolve9, reject) => {
       let cleanup = () => void 0;
       const onAbort = () => {
         cleanup();
@@ -15266,7 +15388,7 @@ var SubagentManager = class {
       };
       const unsubscribe = this.addChangeListener(() => {
         cleanup();
-        resolve8();
+        resolve9();
       });
       cleanup = () => {
         unsubscribe();
@@ -15464,8 +15586,8 @@ var SubagentManager = class {
   async reserveVisibleSpawn() {
     const previous = this.visibleSpawnTail;
     let release = () => void 0;
-    this.visibleSpawnTail = new Promise((resolve8) => {
-      release = resolve8;
+    this.visibleSpawnTail = new Promise((resolve9) => {
+      release = resolve9;
     });
     await previous;
     return release;
@@ -15605,8 +15727,8 @@ var SubagentManager = class {
           startedAt: snapshot.createdAt,
           worktree: snapshot.worktree
         }).catch(() => fallback),
-        new Promise((resolve8) => {
-          timeout = setTimeout(() => resolve8(fallback), MANIFEST_TIMEOUT_MS);
+        new Promise((resolve9) => {
+          timeout = setTimeout(() => resolve9(fallback), MANIFEST_TIMEOUT_MS);
         })
       ]);
     } finally {
@@ -15615,7 +15737,7 @@ var SubagentManager = class {
   }
   waitForSettle(id, timeoutMs) {
     if (isSettled(this.snapshots.get(id))) return Promise.resolve();
-    return new Promise((resolve8, reject) => {
+    return new Promise((resolve9, reject) => {
       const timeout = setTimeout(() => {
         unsubscribe();
         reject(new Error("cancel timeout"));
@@ -15625,7 +15747,7 @@ var SubagentManager = class {
         if (snapshot && isSettled(snapshot)) {
           clearTimeout(timeout);
           unsubscribe();
-          resolve8();
+          resolve9();
         }
       });
     });
@@ -16187,7 +16309,7 @@ function installSubagents(pi, options = {}) {
 }
 
 // src/task-mode.ts
-import { appendFileSync as appendFileSync3, existsSync as existsSync12, readdirSync as readdirSync4, readFileSync as readFileSync16, unlinkSync as unlinkSync3, writeFileSync as writeFileSync9 } from "node:fs";
+import { appendFileSync as appendFileSync3, existsSync as existsSync12, readdirSync as readdirSync4, readFileSync as readFileSync16, unlinkSync as unlinkSync3, writeFileSync as writeFileSync10 } from "node:fs";
 import { join as join20 } from "node:path";
 var TASK_MARKER_ENV_KEYS = [
   "SUMOCODE_TASK_RESPONSE_FILE",
@@ -16251,7 +16373,7 @@ function persistResponse(messages) {
     return;
   }
   try {
-    writeFileSync9(file, `${text}
+    writeFileSync10(file, `${text}
 `);
     diagLog("response_written", { file, bytes: text.length });
   } catch (error) {
@@ -16264,7 +16386,7 @@ function writeTaskExitMarker(code, env = process.env) {
   const file = env.SUMOCODE_TASK_EXIT_FILE;
   if (!file) return;
   try {
-    writeFileSync9(file, `${code}
+    writeFileSync10(file, `${code}
 `);
     diagLog("exit_marker_written", { file, code });
   } catch (error) {
@@ -16277,7 +16399,7 @@ function writeTaskStartedMarker(env = process.env) {
   const file = env.SUMOCODE_TASK_STARTED_FILE;
   if (!file) return;
   try {
-    writeFileSync9(file, `${process.pid}
+    writeFileSync10(file, `${process.pid}
 `);
     diagLog("started_marker_written", { file });
   } catch (error) {
@@ -16612,6 +16734,21 @@ function showEvent(ctx, event) {
       ctx.ui.setStatus("sumocode.login", event.message);
   }
 }
+function errorIdentity(error) {
+  if (error instanceof DOMException) return error.name === "AbortError" ? "AbortError" : "DOMException";
+  if (error instanceof TypeError) return "TypeError";
+  if (error instanceof RangeError) return "RangeError";
+  if (error instanceof SyntaxError) return "SyntaxError";
+  if (error instanceof Error) return "Error";
+  return "non_error_rejection";
+}
+function logLoginFailure(attempt, error) {
+  logDiagnostic("rpc_login_failed", {
+    provider: attempt?.provider.id ?? null,
+    authType: attempt?.authType,
+    errorName: errorIdentity(error)
+  });
+}
 async function executeRpcLogin(args, ctx, runtime) {
   if (ctx.mode !== "rpc" || !ctx.hasUI) {
     ctx.ui.notify("/login compatibility command requires SumoCode RPC mode", "warning");
@@ -16623,16 +16760,21 @@ async function executeRpcLogin(args, ctx, runtime) {
   }
   const loginAbort = new AbortController();
   activeLoginAbort = loginAbort;
+  let attempt;
   try {
     await runtime.getAvailable();
     if (loginAbort.signal.aborted) throw cancelled();
     const methods = loginMethods(runtime);
+    logDiagnostic("rpc_login_methods", {
+      providers: methods.map((entry) => `${entry.provider.id}:${entry.authType}`)
+    });
     if (methods.length === 0) {
       ctx.ui.notify("No login providers available", "warning");
       return;
     }
     const method = await resolveLoginMethod(args, ctx, methods, loginAbort.signal);
     if (!method || loginAbort.signal.aborted) return;
+    attempt = method;
     const apiKeyMethod = method.provider.auth.apiKey;
     if (method.authType === "api_key" && !apiKeyMethod?.login) {
       ctx.ui.notify(`${apiKeyMethod?.name ?? method.provider.name} is configured outside Pi`, "info");
@@ -16646,7 +16788,11 @@ async function executeRpcLogin(args, ctx, runtime) {
     ctx.ui.notify(`Logged in to ${method.provider.name}`, "info");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (!loginAbort.signal.aborted && message !== "Login cancelled") ctx.ui.notify(`Login failed: ${message}`, "error");
+    const wasCancelled = loginAbort.signal.aborted || message === "Login cancelled";
+    if (!wasCancelled) {
+      logLoginFailure(attempt, error);
+      ctx.ui.notify("Login failed", "error");
+    }
   } finally {
     loginAbort.abort();
     if (activeLoginAbort === loginAbort) activeLoginAbort = void 0;
@@ -16675,17 +16821,94 @@ function registerRpcLoginCommand(pi, deps = {}) {
 
 // src/commands/accounts.ts
 import { execFile as execFile7 } from "node:child_process";
-import { existsSync as existsSync13, mkdirSync as mkdirSync10, readFileSync as readFileSync17, renameSync as renameSync7, writeFileSync as writeFileSync10 } from "node:fs";
+import { existsSync as existsSync13, lstatSync as lstatSync4, mkdirSync as mkdirSync10, readFileSync as readFileSync17, readlinkSync, realpathSync as realpathSync4, renameSync as renameSync7, rmSync as rmSync4, symlinkSync as symlinkSync2, writeFileSync as writeFileSync11 } from "node:fs";
 import { homedir as homedir15 } from "node:os";
-import { dirname as dirname13, join as join21 } from "node:path";
+import { dirname as dirname13, join as join21, resolve as resolve7 } from "node:path";
 import { promisify as promisify5 } from "node:util";
+var ACCOUNTS_CONFIG_FILE = "claude-accounts.json";
+var LEGACY_CONFIG_FILE = "multi-pass.json";
+var ADAPTER_PACKAGE_SOURCE = "git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account";
 var execFileAsync4 = promisify5(execFile7);
-var MULTI_PASS_SOURCE = "npm:pi-multi-pass";
+var sessionPendingReloadProviders = /* @__PURE__ */ new Set();
 function resolveAgentDir(deps) {
   return deps.agentDir ?? deps.env?.PI_CODING_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR ?? join21(deps.homeDir ?? homedir15(), ".pi", "agent");
 }
-function resolveMultiPassConfigPath(deps = {}) {
-  return join21(resolveAgentDir(deps), "multi-pass.json");
+function resolveAccountsConfigPath(deps = {}) {
+  return join21(resolveAgentDir(deps), ACCOUNTS_CONFIG_FILE);
+}
+function resolvePrivateAccountsPath(deps) {
+  const privateConfigDir = resolve7(deps.env?.SUMOCODE_CONFIG_DIR ?? process.env.SUMOCODE_CONFIG_DIR ?? join21(deps.homeDir ?? homedir15(), ".config", "sumocode"));
+  return join21(privateConfigDir, ACCOUNTS_CONFIG_FILE);
+}
+function accountPathsShareParent(targetPath, managedPath) {
+  try {
+    return realpathSync4(dirname13(targetPath)) === realpathSync4(dirname13(managedPath));
+  } catch {
+    return false;
+  }
+}
+function ensurePrivateAccountsLink(deps, privatePath) {
+  const targetPath = resolveAccountsConfigPath(deps);
+  if (accountPathsShareParent(targetPath, privatePath)) return;
+  const privateStat = lstatSync4(privatePath);
+  if (privateStat.isSymbolicLink() || !privateStat.isFile()) throw new Error(`Expected a regular private accounts source: ${privatePath}`);
+  let targetStat;
+  try {
+    targetStat = lstatSync4(targetPath);
+  } catch {
+  }
+  if (targetStat?.isSymbolicLink()) {
+    const linkTarget = resolve7(dirname13(targetPath), readlinkSync(targetPath));
+    if (linkTarget !== privatePath) throw new Error(`Refusing to replace an unmanaged accounts symlink: ${targetPath}`);
+    return;
+  }
+  if (targetStat) {
+    if (!targetStat.isFile()) throw new Error(`Expected a regular accounts file or managed symlink: ${targetPath}`);
+    const backup = `${targetPath}.pre-managed-backup-${Date.now()}`;
+    renameSync7(targetPath, backup);
+  }
+  mkdirSync10(dirname13(targetPath), { recursive: true, mode: 448 });
+  symlinkSync2(privatePath, targetPath);
+}
+function resolveAccountsReadPath(deps) {
+  const privatePath = resolvePrivateAccountsPath(deps);
+  if (existsSync13(privatePath)) {
+    ensurePrivateAccountsLink(deps, privatePath);
+    return privatePath;
+  }
+  return resolveAccountsConfigPath(deps);
+}
+function pathEntryExists(path2) {
+  try {
+    lstatSync4(path2);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function resolveAccountsWriteDestination(deps) {
+  const targetPath = resolveAccountsConfigPath(deps);
+  const managedTarget = resolvePrivateAccountsPath(deps);
+  const privateConfigDir = dirname13(managedTarget);
+  if (accountPathsShareParent(targetPath, managedTarget)) return { writePath: managedTarget };
+  if (pathEntryExists(managedTarget) && lstatSync4(managedTarget).isSymbolicLink()) {
+    throw new Error(`Refusing to replace a symlinked private accounts source: ${managedTarget}`);
+  }
+  let targetStat;
+  try {
+    targetStat = lstatSync4(targetPath);
+  } catch {
+  }
+  if (targetStat?.isSymbolicLink()) {
+    const linkTarget = resolve7(dirname13(targetPath), readlinkSync(targetPath));
+    if (linkTarget !== managedTarget) throw new Error(`Refusing to write accounts through an unmanaged symlink: ${targetPath}`);
+    return { writePath: managedTarget };
+  }
+  if (existsSync13(join21(privateConfigDir, ".git"))) return { writePath: managedTarget, linkPath: targetPath };
+  return { writePath: targetPath };
+}
+function resolveLegacyConfigPath(deps) {
+  return join21(resolveAgentDir(deps), LEGACY_CONFIG_FILE);
 }
 function isRecord4(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -16707,57 +16930,82 @@ function readDocument(path2) {
     return {};
   }
 }
+function readDocumentForSave(path2) {
+  if (!existsSync13(path2)) return {};
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync17(path2, "utf8"));
+  } catch {
+    throw new Error(`Invalid accounts config; repair before saving: ${path2}`);
+  }
+  if (!isRecord4(parsed)) throw new Error(`Invalid accounts config; expected an object: ${path2}`);
+  if (parsed.subscriptions !== void 0 && !Array.isArray(parsed.subscriptions)) {
+    throw new Error(`Invalid accounts config subscriptions; expected an array: ${path2}`);
+  }
+  return parsed;
+}
+function claudeSubscriptionsFrom(document) {
+  if (!Array.isArray(document.subscriptions)) return [];
+  return document.subscriptions.map(parseSubscription).filter((entry) => entry?.provider === "anthropic").sort((left, right) => left.index - right.index);
+}
 function loadClaudeSubscriptions(deps = {}) {
-  const raw = readDocument(resolveMultiPassConfigPath(deps)).subscriptions;
-  if (!Array.isArray(raw)) return [];
-  return raw.map(parseSubscription).filter((entry) => entry?.provider === "anthropic").sort((left, right) => left.index - right.index);
+  const primaryPath = resolveAccountsReadPath(deps);
+  const primary = claudeSubscriptionsFrom(readDocument(primaryPath));
+  if (primary.length > 0) return primary;
+  if (existsSync13(primaryPath)) return primary;
+  return claudeSubscriptionsFrom(readDocument(resolveLegacyConfigPath(deps)));
 }
 function saveClaudeSubscriptions(subscriptions, deps = {}) {
-  const path2 = resolveMultiPassConfigPath(deps);
-  const document = readDocument(path2);
+  const destination = resolveAccountsWriteDestination(deps);
+  const primaryPath = resolveAccountsReadPath(deps);
+  const document = readDocumentForSave(existsSync13(primaryPath) ? primaryPath : resolveLegacyConfigPath(deps));
   const existing = Array.isArray(document.subscriptions) ? document.subscriptions : [];
   const nonClaude = existing.filter((entry) => parseSubscription(entry)?.provider !== "anthropic");
   const next = {
     ...document,
-    subscriptions: [...nonClaude, ...subscriptions],
-    pools: Array.isArray(document.pools) ? document.pools : [],
-    chains: Array.isArray(document.chains) ? document.chains : [],
-    presets: Array.isArray(document.presets) ? document.presets : []
+    [CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true,
+    subscriptions: [...nonClaude, ...subscriptions]
   };
-  mkdirSync10(dirname13(path2), { recursive: true, mode: 448 });
-  const temporary = `${path2}.${process.pid}.tmp`;
-  writeFileSync10(temporary, `${JSON.stringify(next, null, 2)}
+  mkdirSync10(dirname13(destination.writePath), { recursive: true, mode: 448 });
+  const temporary = `${destination.writePath}.${process.pid}.tmp`;
+  writeFileSync11(temporary, `${JSON.stringify(next, null, 2)}
 `, { encoding: "utf8", mode: 384 });
-  renameSync7(temporary, path2);
-}
-function packageSource(value) {
-  if (typeof value === "string") return value;
-  if (isRecord4(value) && typeof value.source === "string") return value.source;
-  return void 0;
-}
-function isMultiPassInstalled(deps = {}) {
-  const settingsPath = join21(resolveAgentDir(deps), "settings.json");
-  if (!existsSync13(settingsPath)) return false;
-  try {
-    const parsed = JSON.parse(readFileSync17(settingsPath, "utf8"));
-    if (!isRecord4(parsed) || !Array.isArray(parsed.packages)) return false;
-    return parsed.packages.some((entry) => packageSource(entry)?.includes("pi-multi-pass") === true);
-  } catch {
-    return false;
+  renameSync7(temporary, destination.writePath);
+  if (destination.linkPath) {
+    if (pathEntryExists(destination.linkPath)) rmSync4(destination.linkPath, { force: true });
+    mkdirSync10(dirname13(destination.linkPath), { recursive: true, mode: 448 });
+    symlinkSync2(destination.writePath, destination.linkPath);
   }
-}
-async function defaultInstallMultiPass() {
-  await execFileAsync4("pi", ["install", MULTI_PASS_SOURCE], {
-    env: process.env,
-    timeout: 12e4,
-    maxBuffer: 1024 * 1024
-  });
 }
 function nextIndex(subscriptions) {
   const used = new Set(subscriptions.map((entry) => entry.index));
   let index = 2;
   while (used.has(index)) index += 1;
   return index;
+}
+function packageSource(value) {
+  if (typeof value === "string") return value;
+  if (isRecord4(value) && typeof value.source === "string") return value.source;
+  return void 0;
+}
+function isAdapterInstalled(deps = {}) {
+  const settingsPath = join21(resolveAgentDir(deps), "settings.json");
+  if (!existsSync13(settingsPath)) return false;
+  try {
+    const parsed = JSON.parse(readFileSync17(settingsPath, "utf8"));
+    if (!isRecord4(parsed) || !Array.isArray(parsed.packages)) return false;
+    return parsed.packages.some((entry) => packageSource(entry) === ADAPTER_PACKAGE_SOURCE);
+  } catch {
+    return false;
+  }
+}
+async function defaultInstallAdapter() {
+  const command = process.env.PI_BIN?.trim() || "pi";
+  await execFileAsync4(command, ["install", ADAPTER_PACKAGE_SOURCE], {
+    env: process.env,
+    timeout: 12e4,
+    maxBuffer: 1024 * 1024
+  });
 }
 function accountProviderId(subscription) {
   return `${subscription.provider}-${subscription.index}`;
@@ -16766,17 +17014,20 @@ function authConfigured(ctx, providerId) {
   return ctx.modelRegistry.getProviderAuthStatus(providerId).configured;
 }
 function accounts(ctx, deps) {
+  const activeProvider = ctx.model?.provider;
   return [
     {
       providerId: "anthropic",
-      label: "default Claude account",
-      configured: authConfigured(ctx, "anthropic")
+      label: "default account",
+      configured: authConfigured(ctx, "anthropic"),
+      active: activeProvider === "anthropic"
     },
     ...loadClaudeSubscriptions(deps).map((subscription) => ({
       providerId: accountProviderId(subscription),
       label: subscription.label ?? `Claude account ${subscription.index}`,
       subscription,
-      configured: authConfigured(ctx, accountProviderId(subscription))
+      configured: authConfigured(ctx, accountProviderId(subscription)),
+      active: activeProvider === accountProviderId(subscription)
     }))
   ];
 }
@@ -16786,32 +17037,47 @@ async function defaultLogin(providerId, ctx) {
     runtime = getRpcLoginRuntime(ctx);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    logDiagnostic("accounts_login_runtime_unavailable", { provider: providerId, errorMessage: message });
     ctx.ui.notify(`Sign-in unavailable: ${message}`, "error");
     return;
   }
+  logDiagnostic("accounts_login_start", { provider: providerId });
   await executeRpcLogin(providerId, ctx, runtime);
 }
+function accountState(account) {
+  if (account.active) return "in use";
+  return account.configured ? "signed in" : "sign in required";
+}
 function accountRow(account) {
-  return `${account.label}  ${account.providerId} \xB7 ${account.configured ? "signed in" : "sign in required"}`;
+  return `${account.label} \xB7 ${accountState(account)}  ${account.providerId}`;
+}
+function pendingReloadProviders(deps) {
+  return deps.pendingReloadProviders ?? sessionPendingReloadProviders;
+}
+async function installAdapterPackage(ctx, deps) {
+  ctx.ui.setStatus("sumocode.accounts", "installing pi-claude-oauth-adapter\u2026");
+  try {
+    await (deps.installAdapter ?? defaultInstallAdapter)();
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logDiagnostic("accounts_install_adapter_failed", { errorMessage: message });
+    ctx.ui.notify(`Unable to install pi-claude-oauth-adapter: ${message}`, "error");
+    return false;
+  } finally {
+    ctx.ui.setStatus("sumocode.accounts", void 0);
+  }
+}
+async function ensureAdapterInstalled(ctx, deps) {
+  if (isAdapterInstalled(deps)) return true;
+  const install = await ctx.ui.confirm(
+    "SET UP MULTI-ACCOUNT CLAUDE",
+    "/accounts needs the Claude OAuth adapter (pi-claude-oauth-adapter) to register and sign in extra accounts. Install it now?"
+  );
+  return install ? installAdapterPackage(ctx, deps) : false;
 }
 async function addAccount(ctx, deps) {
-  if (!isMultiPassInstalled(deps)) {
-    const install = await ctx.ui.confirm(
-      "SET UP MULTI-ACCOUNT CLAUDE",
-      "SumoCode uses pi-multi-pass to keep each OAuth subscription separate. Install it now?"
-    );
-    if (!install) return;
-    ctx.ui.setStatus("sumocode.accounts", "installing pi-multi-pass\u2026");
-    try {
-      await (deps.installMultiPass ?? defaultInstallMultiPass)();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      ctx.ui.notify(`Unable to install pi-multi-pass: ${message}`, "error");
-      return;
-    } finally {
-      ctx.ui.setStatus("sumocode.accounts", void 0);
-    }
-  }
+  if (!await ensureAdapterInstalled(ctx, deps)) return;
   const subscriptions = loadClaudeSubscriptions(deps);
   const index = nextIndex(subscriptions);
   const suggestedLabel = index === 2 ? "company" : `Claude account ${index}`;
@@ -16823,10 +17089,11 @@ async function addAccount(ctx, deps) {
     label: label.trim() || suggestedLabel
   };
   saveClaudeSubscriptions([...subscriptions, subscription], deps);
+  pendingReloadProviders(deps).add(`anthropic-${index}`);
   ctx.ui.notify(`Added ${subscription.label} as anthropic-${index}`, "info");
   const reload = await ctx.ui.confirm(
     "RELOAD TO ACTIVATE ACCOUNT",
-    "Reload SumoCode now? After reload, open /accounts and choose the new account to sign in."
+    "Reload SumoCode now? After reload, open /accounts and sign in to the new account."
   );
   if (reload) await (deps.reload ?? ((reloadCtx) => executeSumoReload(reloadCtx)))(ctx);
 }
@@ -16855,8 +17122,35 @@ async function renameAccount(ctx, account, deps) {
   ctx.ui.notify(`Renamed ${account.providerId} to ${label.trim()}`, "info");
 }
 async function accountActions(pi, ctx, account, deps) {
+  if (account.subscription) {
+    if (!isAdapterInstalled(deps)) {
+      if (!await ensureAdapterInstalled(ctx, deps)) return;
+      ctx.ui.notify("pi-claude-oauth-adapter installed. Reload SumoCode, then re-open /accounts.", "info");
+      await (deps.reload ?? ((reloadCtx) => executeSumoReload(reloadCtx)))(ctx);
+      return;
+    }
+    const providerRegistered = ctx.modelRegistry.getAll().some((model) => model.provider === account.providerId);
+    if (!providerRegistered) {
+      if (pendingReloadProviders(deps).has(account.providerId)) {
+        ctx.ui.notify(`${account.providerId} is not registered in this session. Reloading SumoCode\u2026`, "info");
+        await (deps.reload ?? ((reloadCtx) => executeSumoReload(reloadCtx)))(ctx);
+        return;
+      }
+      const repair = await ctx.ui.confirm(
+        "REPAIR MULTI-ACCOUNT CLAUDE",
+        `${account.providerId} failed to register during startup. Reinstall the adapter and reload?`
+      );
+      if (!repair) {
+        ctx.ui.notify(`${account.providerId} remains unavailable until the adapter is repaired`, "warning");
+        return;
+      }
+      if (!await installAdapterPackage(ctx, deps)) return;
+      await (deps.reload ?? ((reloadCtx) => executeSumoReload(reloadCtx)))(ctx);
+      return;
+    }
+  }
   const actions = [
-    ...account.configured ? ["use this account"] : [],
+    ...account.configured && !account.active ? ["use this account"] : [],
     account.configured ? "sign in again" : "sign in",
     ...account.subscription ? ["rename account"] : []
   ];
@@ -16873,7 +17167,7 @@ async function executeAccountsCommand(pi, ctx, deps = {}) {
   }
   const accountList = accounts(ctx, deps);
   const rows = accountList.map(accountRow);
-  const addLabel = "add Claude account  install/configure pi-multi-pass";
+  const addLabel = "add Claude account";
   const selected = await ctx.ui.select("CLAUDE ACCOUNTS", [...rows, addLabel]);
   if (selected === addLabel) {
     await addAccount(ctx, deps);
@@ -16900,7 +17194,7 @@ function socketEndpoint(path2) {
   return process.platform === "win32" ? `\\\\.\\pipe\\${path2}` : path2;
 }
 function sendSocketRequestAttempt(path2, request, timeoutMs) {
-  return new Promise((resolve8) => {
+  return new Promise((resolve9) => {
     let settled = false;
     let timeout;
     const socket = net.createConnection(socketEndpoint(path2));
@@ -16909,7 +17203,7 @@ function sendSocketRequestAttempt(path2, request, timeoutMs) {
       settled = true;
       if (timeout) clearTimeout(timeout);
       socket.destroy();
-      resolve8(delivered);
+      resolve9(delivered);
     };
     socket.on("error", () => finish(false));
     socket.on("connect", () => socket.write(`${JSON.stringify(request)}
@@ -17288,7 +17582,7 @@ function canonicalize(path2, realpath) {
   try {
     return realpath(path2);
   } catch {
-    return resolve7(path2);
+    return resolve8(path2);
   }
 }
 function moduleUrlToPath2(moduleUrl) {
@@ -17299,8 +17593,8 @@ function moduleUrlToPath2(moduleUrl) {
   }
 }
 function isInstalledPiAgentGitModule(moduleUrl, homeDir = homedir16()) {
-  const modulePath = resolve7(moduleUrlToPath2(moduleUrl));
-  const agentGitRoot = `${resolve7(homeDir, ".pi", "agent", "git")}${sep}`;
+  const modulePath = resolve8(moduleUrlToPath2(moduleUrl));
+  const agentGitRoot = `${resolve8(homeDir, ".pi", "agent", "git")}${sep}`;
   return modulePath.startsWith(agentGitRoot);
 }
 function packageNameAt2(dir, exists, readFile) {
@@ -17326,7 +17620,7 @@ function packageRootFromModulePath(modulePath, exists, readFile) {
 function findActiveSumoDevTree2(cwd, options = {}) {
   const exists = options.exists ?? existsSync14;
   const readFile = options.readFile ?? ((path2, encoding) => readFileSync18(path2, encoding));
-  let current = resolve7(cwd);
+  let current = resolve8(cwd);
   while (true) {
     const isSumocodePackage = packageNameAt2(current, exists, readFile) === SUMOCODE_PACKAGE_NAME;
     const hasExtensionSource = exists(join22(current, "src", "extension.ts"));
@@ -17343,7 +17637,7 @@ function shouldNoopDuplicateInstalledExtension(options = {}) {
   const env = options.env ?? process.env;
   const launcherRoot = env.SUMOCODE_ROOT_DIR;
   if (launcherRoot) {
-    const realpath = options.realpath ?? ((path2) => realpathSync4(path2));
+    const realpath = options.realpath ?? ((path2) => realpathSync5(path2));
     const exists = options.exists ?? existsSync14;
     const readFile = options.readFile ?? ((path2, encoding) => readFileSync18(path2, encoding));
     const modulePath = canonicalize(moduleUrlToPath2(moduleUrl), realpath);

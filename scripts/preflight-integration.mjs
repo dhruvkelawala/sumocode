@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { lstat, readFile, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	extensionInputManifestIsFresh,
@@ -13,23 +13,40 @@ import {
 	hostInputManifestIsFresh,
 	hostOutputsHash,
 } from "./lib/host-bundle.mjs";
+import { HARNESS_SIGNATURE, HARNESS_SIGNATURE_ENV_KEY } from "./lib/integration-harness-constants.mjs";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const HARNESS_SIGNATURE = "sumocode-verification-harness-v2";
 const HARNESS_DIR_PREFIXES = ["sumocode-harness-v2-", "sumocode-fake-pi-"];
 const RETAINED_EVIDENCE_MARKER = "evidence-retained.json";
+const PS_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+const PREFLIGHT_TERM_GRACE_MS = 300;
 
 function processRows() {
-	const output = execFileSync("ps", ["eww", "-axo", "pid=,ppid=,pgid=,command="], { encoding: "utf8" });
-	return output.split("\n").flatMap((line) => {
-		const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/);
-		return match ? [{ pid: Number(match[1]), ppid: Number(match[2]), pgid: Number(match[3]), command: match[4] }] : [];
-	});
+	try {
+		const output = execFileSync("ps", ["eww", "-axo", "pid=,ppid=,pgid=,command="], {
+			encoding: "utf8",
+			maxBuffer: PS_MAX_BUFFER_BYTES,
+		});
+		const rows = output.split("\n").flatMap((line) => {
+			const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/);
+			return match ? [{ pid: Number(match[1]), ppid: Number(match[2]), pgid: Number(match[3]), command: match[4] }] : [];
+		});
+		return { rows };
+	} catch (error) {
+		return {
+			rows: [],
+			issue: {
+				code: "process-table-unavailable",
+				message: `could not inspect processes with ps: ${String(error)}`,
+				remediation: "ensure ps is available, then rerun pnpm test:integration:preflight",
+			},
+		};
+	}
 }
 
 function isHarnessProcess(row) {
 	return row.pid !== process.pid && (
-		row.command.includes(`SUMOCODE_HARNESS_SIGNATURE=${HARNESS_SIGNATURE}`)
+		row.command.includes(`${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE}`)
 		|| /(?:^|\/)sumocode-fake-pi-[A-Za-z0-9._-]+(?:\/|\s|$)/.test(row.command)
 	);
 }
@@ -54,6 +71,7 @@ async function readOwnerPid(path) {
 }
 
 async function classifyHarnessDir(path) {
+	if (!HARNESS_DIR_PREFIXES.some((prefix) => basename(path).startsWith(prefix))) return "unrelated";
 	const ownerPid = await readOwnerPid(path);
 	if (ownerPid !== undefined && pidIsAlive(ownerPid)) return "live";
 	return existsSync(join(path, RETAINED_EVIDENCE_MARKER)) ? "retained" : "stale";
@@ -128,12 +146,13 @@ async function nodeModulesIssue(root) {
 	return undefined;
 }
 
-export async function inspectIntegrationPreflight({ root = ROOT, tempRoot = tmpdir(), rows = processRows(), env = process.env } = {}) {
-	const issues = [];
+export async function inspectIntegrationPreflight({ root = ROOT, tempRoot = tmpdir(), rows, env = process.env } = {}) {
+	const processTable = rows === undefined ? processRows() : { rows };
+	const issues = processTable.issue === undefined ? [] : [processTable.issue];
 	const notices = [];
 	const state = await harnessState(tempRoot);
 	const orphanRows = [];
-	for (const row of rows.filter(isHarnessProcess)) {
+	for (const row of processTable.rows.filter(isHarnessProcess)) {
 		if (!await belongsToLiveHarnessRun(row)) orphanRows.push(row);
 	}
 	if (orphanRows.length > 0) {
@@ -171,7 +190,10 @@ function currentProcessGroupId(rows) {
 	const ownRow = rows.find((row) => row.pid === process.pid);
 	if (ownRow !== undefined) return ownRow.pgid;
 	try {
-		return Number.parseInt(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" }).trim(), 10);
+		return Number.parseInt(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], {
+			encoding: "utf8",
+			maxBuffer: PS_MAX_BUFFER_BYTES,
+		}).trim(), 10);
 	} catch {
 		return undefined;
 	}
@@ -189,11 +211,11 @@ function groupIsHarnessOwned(pgid, rows, currentPgid) {
 
 export async function fixIntegrationPreflight(report, {
 	purgeEvidence = false,
-	rows = processRows(),
-	readRows = processRows,
+	rows = processRows().rows,
+	readRows = () => processRows().rows,
 	currentPgid = currentProcessGroupId(rows),
 	kill = process.kill.bind(process),
-	wait = () => new Promise((resolveDelay) => setTimeout(resolveDelay, 300)),
+	wait = () => new Promise((resolveDelay) => setTimeout(resolveDelay, PREFLIGHT_TERM_GRACE_MS)),
 } = {}) {
 	const orphanIssue = report.issues.find((issue) => issue.code === "orphan-harness-children");
 	const fixableRows = [];
@@ -215,6 +237,7 @@ export async function fixIntegrationPreflight(report, {
 	}
 
 	const stateIssue = report.issues.find((issue) => issue.code === "stale-harness-state");
+	// Destructive boundary: classification rechecks the harness basename; report paths alone never authorize rm.
 	for (const path of stateIssue?.paths ?? []) {
 		if (await classifyHarnessDir(path) === "stale") await rm(path, { recursive: true, force: true });
 	}

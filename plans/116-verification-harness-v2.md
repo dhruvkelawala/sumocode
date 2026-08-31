@@ -35,9 +35,10 @@ captured terminal bytes but discarded the child failure context needed to explai
   snapshot, child manifest, and evidence trees;
 - copies the package source into that root, links only this worktree's installed dependencies, and
   builds private host/extension bundles there;
-- runs the five harness-seam tests, then the unchanged 158-test integration lane serially;
+- runs the ten harness-seam tests, then the 159-test integration lane (the original 158 tests plus
+  `fixtures/focused-harness-probe.test.ts`) serially;
 - audits every registered process group and removes the namespace only after a green zero-survivor
-  audit. Failed runs retain the evidence path printed by the runner.
+  audit. Failed runs write `evidence-retained.json` and print the retained run path.
 
 ### Process supervision
 
@@ -45,8 +46,25 @@ captured terminal bytes but discarded the child failure context needed to explai
 `spawnSupervisedProcess`, which forces a new process group. `spawnPiPty` registers node-pty's
 session/process group, and the two remaining raw-PTY call sites register through the same seam.
 Cleanup targets the process group, waits after TERM, escalates to KILL, and records spawn/exit/reap
-JSONL events. The outer runner repeats that logic on suite failure or signal and fails if the audit
-found any survivor, even when escalation removed it.
+JSONL events. The supervisor stamps the shared harness signature at its boundary; PTY callers use
+the same exported key/value before spawn so the child process table remains identifiable. The outer
+runner repeats group cleanup on suite failure or signal and fails if the audit found any survivor,
+even when escalation removed it.
+
+### Focused fallback lifecycle and retained evidence
+
+A focused Vitest invocation has no outer run namespace, so importing `harness-supervisor.ts`
+registers an import-time `afterAll` audit. The first evidence or spawn call creates a
+`sumocode-harness-v2-focused-*` fallback root with `owner.json`, pins child `TMPDIR` beneath that
+root, and tracks every registered process group. The final hook performs the same TERM→KILL audit:
+a green run removes its fallback root; any observed survivor retains the root and fails the test.
+The focused fixture verifies that this lifecycle finishes before a following preflight.
+
+Timeout capture marks its containing full or focused run with `evidence-retained.json`. The outer
+runner does the same for build or lane failure. Preflight reports marked roots as retained evidence,
+plain `--fix` preserves them, and only `--fix --purge-evidence` may remove them. This keeps failure
+artifacts available without allowing a dead `owner.json` or a forged report path to authorize
+arbitrary temp-directory deletion.
 
 ### Environment isolation
 
@@ -110,7 +128,7 @@ restore can damage only that test's soon-deleted copy, never the next test or th
 | D | Timeout/early-exit evidence contains argv, captured child stream or direct stderr tail, diagnostics, raw bytes, and final replayed screen; errors print the path. |
 | E | Extensible diagnostic readiness table and `waitForReady` seam use `boot_screen_frame`, `input_ready`, and `app_ready` at this pre-094 base. |
 | F | Run-private built package plus per-case private `rpc-host-shell` copies; no sequential shared-artifact exception required. |
-| G | Five harness-seam tests plus the original 158 integration tests run green; two consecutive full-run evidence is recorded in the delivery report. |
+| G | Ten harness-seam tests plus the 159-test integration lane run green; two consecutive full-run evidence is recorded below. |
 
 ## Verification evidence
 

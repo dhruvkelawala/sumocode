@@ -5,9 +5,10 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runIntegrationPreflight } from "./preflight-integration.mjs";
+import { HARNESS_SIGNATURE, HARNESS_SIGNATURE_ENV_KEY } from "./lib/integration-harness-constants.mjs";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const REAP_GRACE_MS = 1_000;
+const RUNNER_TERM_GRACE_MS = 1_000;
 
 function groupAlive(pgid) {
 	try { process.kill(-pgid, 0); return true; } catch { return false; }
@@ -22,9 +23,9 @@ async function waitForGroupExit(pgid, timeoutMs) {
 async function reapGroup(pgid) {
 	if (!groupAlive(pgid)) return;
 	try { process.kill(-pgid, "SIGTERM"); } catch { return; }
-	if (await waitForGroupExit(pgid, REAP_GRACE_MS)) return;
+	if (await waitForGroupExit(pgid, RUNNER_TERM_GRACE_MS)) return;
 	try { process.kill(-pgid, "SIGKILL"); } catch { return; }
-	await waitForGroupExit(pgid, REAP_GRACE_MS);
+	await waitForGroupExit(pgid, RUNNER_TERM_GRACE_MS);
 }
 
 async function retainEvidence(runRoot, reason) {
@@ -116,7 +117,7 @@ async function main() {
 	Object.assign(env, {
 		SUMOCODE_INTEGRATION_RUN_ROOT: runRoot,
 		SUMOCODE_INTEGRATION_MANIFEST: manifest,
-		SUMOCODE_HARNESS_SIGNATURE: "sumocode-verification-harness-v2",
+		[HARNESS_SIGNATURE_ENV_KEY]: HARNESS_SIGNATURE,
 		NODE_COMPILE_CACHE: compileCache,
 		TMPDIR: tempRoot,
 	});

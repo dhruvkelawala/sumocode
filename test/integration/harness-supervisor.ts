@@ -4,9 +4,18 @@ import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { afterAll } from "vitest";
+import { HARNESS_SIGNATURE, HARNESS_SIGNATURE_ENV_KEY } from "../../scripts/lib/integration-harness-constants.mjs";
 
-const HARNESS_SIGNATURE = "sumocode-verification-harness-v2";
-const REAP_GRACE_MS = 750;
+export { HARNESS_SIGNATURE, HARNESS_SIGNATURE_ENV_KEY };
+
+/**
+ * Cross-file harness contract: this module and scripts/run-integration-harness.mjs write owner.json
+ * (`pid`, `startedAt`, optional `root`/`mode`) and evidence-retained.json (`ownerPid`, `retainedAt`,
+ * optional `reason`); scripts/preflight-integration.mjs consumes those files. TERM→KILL grace is
+ * owned by SUPERVISOR_TERM_GRACE_MS here, RUNNER_TERM_GRACE_MS in the runner, and
+ * PREFLIGHT_TERM_GRACE_MS in preflight.
+ */
+const SUPERVISOR_TERM_GRACE_MS = 750;
 const STDERR_TAIL_BYTES = 64 * 1024;
 
 export type ReadinessState = "boot" | "input" | "app";
@@ -100,7 +109,13 @@ export function createChildEvidenceContext(
 	env: NodeJS.ProcessEnv = process.env,
 	diagPath?: string,
 ): ChildEvidenceContext {
-	const evidenceDir = join(harnessRoot(env), "evidence", `worker-${process.pid}`, childLabel(argv));
+	const root = harnessRoot(env);
+	if (env.SUMOCODE_INTEGRATION_RUN_ROOT === undefined) {
+		const tempRoot = join(root, "tmp");
+		mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+		env.TMPDIR = tempRoot;
+	}
+	const evidenceDir = join(root, "evidence", `worker-${process.pid}`, childLabel(argv));
 	mkdirSync(evidenceDir, { recursive: true, mode: 0o700 });
 	return {
 		evidenceDir,
@@ -130,9 +145,9 @@ async function waitForGroupExit(pgid: number, timeoutMs: number): Promise<boolea
 async function terminateGroup(pgid: number): Promise<void> {
 	if (!groupIsAlive(pgid)) return;
 	try { process.kill(-pgid, "SIGTERM"); } catch { return; }
-	if (await waitForGroupExit(pgid, REAP_GRACE_MS)) return;
+	if (await waitForGroupExit(pgid, SUPERVISOR_TERM_GRACE_MS)) return;
 	try { process.kill(-pgid, "SIGKILL"); } catch { return; }
-	await waitForGroupExit(pgid, REAP_GRACE_MS);
+	await waitForGroupExit(pgid, SUPERVISOR_TERM_GRACE_MS);
 }
 
 function readTail(path: string): string {
@@ -202,7 +217,7 @@ export async function waitForDiagnosticReadiness(diagPath: string, state: Readin
 }
 
 export function spawnSupervisedProcess(command: string, args: readonly string[], options: SpawnOptions = {}): SupervisedProcess {
-	const env = { ...options.env, SUMOCODE_HARNESS_SIGNATURE: HARNESS_SIGNATURE };
+	const env = { ...options.env, [HARNESS_SIGNATURE_ENV_KEY]: HARNESS_SIGNATURE };
 	const evidence = createChildEvidenceContext([command, ...args], env);
 	const child = spawn(command, [...args], { ...options, detached: true, env });
 	if (child.pid === undefined) throw new Error(`supervised child did not publish a pid: ${command}`);
@@ -228,7 +243,7 @@ export function spawnSupervisedProcess(command: string, args: readonly string[],
 				if (child.exitCode === null && child.signalCode === null) {
 					try { child.kill("SIGKILL"); } catch { /* child exited at the boundary */ }
 				}
-				await Promise.race([exited, new Promise<void>((resolveDelay) => setTimeout(resolveDelay, REAP_GRACE_MS))]);
+				await Promise.race([exited, new Promise<void>((resolveDelay) => setTimeout(resolveDelay, SUPERVISOR_TERM_GRACE_MS))]);
 				appendManifest({ event: "reaped", pid, pgid }, env);
 			})();
 			return reaping;
@@ -242,6 +257,7 @@ export function spawnSupervisedProcess(command: string, args: readonly string[],
 export function supervisePtyProcess(pid: number, evidence: ChildEvidenceContext, env: NodeJS.ProcessEnv): Pick<SupervisedProcess, "pid" | "pgid" | "evidence" | "terminate" | "captureFailure"> {
 	const pgid = pid;
 	let reaping: Promise<void> | undefined;
+	env[HARNESS_SIGNATURE_ENV_KEY] = HARNESS_SIGNATURE;
 	appendManifest({ event: "spawn", pid, pgid, argv: evidence.argv, evidenceDir: evidence.evidenceDir, kind: "pty" }, env);
 	return {
 		pid,
@@ -261,13 +277,15 @@ export function recordPtyExit(pid: number, pgid: number, exitCode: number, signa
 	appendManifest({ event: "exit", pid, pgid, code: exitCode, signal, kind: "pty" }, env);
 }
 
+// Register at import time so every focused Vitest file that imports this seam gets a final
+// process-group audit, even when a test fails before it can register its own cleanup hook.
 afterAll(async () => {
 	if (fallbackRoot === undefined) return;
 	const root = fallbackRoot;
 	const survivors = [...focusedProcessGroups].filter(groupIsAlive);
 	for (const pgid of survivors) await terminateGroup(pgid);
 	const unreaped = survivors.filter(groupIsAlive);
-	console.log(`[focused harness] zero-survivor audit: ${survivors.length} survivors across ${focusedProcessGroups.size} registered process group(s)`);
+	process.stdout.write(`[focused harness] zero-survivor audit: ${survivors.length} survivors across ${focusedProcessGroups.size} registered process group(s)\n`);
 	if (survivors.length > 0) markRunEvidenceRetained(root);
 	if (!existsSync(join(root, "evidence-retained.json"))) rmSync(root, { recursive: true, force: true });
 	fallbackRoot = undefined;

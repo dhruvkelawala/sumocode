@@ -23,7 +23,10 @@ pnpm install                       # installs Pi peer deps
 pnpm typecheck                     # tsc --noEmit
 pnpm build                         # alias for typecheck — Pi runs TS via jiti; no emitted dist
 pnpm test                          # vitest run, src/**/*.test.ts
-pnpm test:integration              # vitest run test/integration/** — spawns real Pi via node-pty
+pnpm test:integration              # preflight → supervised namespaced PTY/RPC run → zero-survivor audit
+pnpm test:integration:preflight    # hard-fail with named poison reasons and remediation
+pnpm test:integration:preflight -- --fix                    # reap owned orphans + remove stale state
+pnpm test:integration:preflight -- --fix --purge-evidence   # also remove retained failure evidence
 pnpm vitest                        # targeted/watch Vitest runner
 pnpm render:bible                  # regenerate Visual Bible HTML/PNG targets
 pnpm visual:review                 # build V2 Bible/runtime review pack
@@ -273,6 +276,8 @@ Reference exemplar: `~/.agent/diagrams/sumocode-bg-task-final-product.html` — 
 
 ## Integration tests
 
-`test/integration/` spawns a real Pi inside a `node-pty` PTY (see `spawn-pi-pty.ts`). These tests verify things that cannot be trusted to unit tests alone: altscreen cleanup on signal, mouse scroll routing, cursor visibility, editor boundary behavior, splash centering, and slash-command dispatch.
+`pnpm test:integration` enters `scripts/run-integration-harness.mjs`: preflight hard-fails with named reasons, then a supervised namespaced run exercises real Pi PTY/RPC behavior, and a zero-survivor audit gates success. Failures retain evidence under the path printed by the runner. Use `pnpm test:integration:preflight -- --fix` for owned orphans/stale state; add `--purge-evidence` only when retained failure evidence may be deleted.
+
+New PTY/RPC spawns in `test/integration/` must go through `harness-supervisor.ts` / `spawn-pi-pty.ts` so every process group is registered and audited. These tests cover behavior that unit tests cannot trust: signal cleanup, mouse routing, cursor/editor boundaries, splash centering, and slash dispatch.
 
 Keep PTY integration tests as smoke/contract tests. Prefer unit/headless tests for detailed behavior where possible. For retained renderer behavior, use `src/sumo-tui/testing/test-backend.ts` and read `docs/SUMO_TUI_TEST_BACKEND.md`.

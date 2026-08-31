@@ -1,10 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	captureTimeoutEvidence,
+	HARNESS_SIGNATURE,
+	HARNESS_SIGNATURE_ENV_KEY,
 	spawnSupervisedProcess,
 	waitForDiagnosticReadiness,
 	type SupervisedProcess,
@@ -63,7 +65,7 @@ describe("verification harness v2 seam", () => {
 		const manifest = join(root, "children.jsonl");
 		const child = spawnSupervisedProcess(
 			process.execPath,
-			["-e", "const {spawn}=require('node:child_process'); spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}); setInterval(()=>{},1000)"],
+			[join(process.cwd(), "test/integration/fixtures/harness-process-tree.mjs")],
 			{
 				env: { ...process.env, SUMOCODE_INTEGRATION_RUN_ROOT: root, SUMOCODE_INTEGRATION_MANIFEST: manifest },
 				stdio: ["ignore", "pipe", "pipe"],
@@ -111,19 +113,25 @@ describe("verification harness v2 seam", () => {
 		const tempRoot = createRunRoot();
 		const liveRoot = join(tempRoot, "sumocode-harness-v2-live");
 		const deadRoot = join(tempRoot, "sumocode-harness-v2-dead");
+		const unrelatedRoot = join(tempRoot, "unrelated-dead");
 		mkdirSync(liveRoot);
 		mkdirSync(deadRoot);
+		mkdirSync(unrelatedRoot);
 		writeFileSync(join(liveRoot, "owner.json"), `${JSON.stringify({ pid: process.pid })}\n`);
 		writeFileSync(join(deadRoot, "owner.json"), `${JSON.stringify({ pid: 2_147_483_647 })}\n`);
+		writeFileSync(join(unrelatedRoot, "owner.json"), `${JSON.stringify({ pid: 2_147_483_647 })}\n`);
 		const rows = [{
 			pid: 50001,
 			ppid: process.pid,
 			pgid: 50001,
-			command: `SUMOCODE_INTEGRATION_RUN_ROOT=${liveRoot} SUMOCODE_HARNESS_SIGNATURE=sumocode-verification-harness-v2 node active-test.js`,
+			command: `SUMOCODE_INTEGRATION_RUN_ROOT=${liveRoot} ${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} node active-test.js`,
 		}];
 
 		const report = await inspectIntegrationPreflight({ root: process.cwd(), tempRoot, rows, env: {} });
-		expect(report.issues.find((issue) => issue.code === "stale-harness-state")?.paths).toEqual([deadRoot]);
+		const staleIssue = report.issues.find((issue) => issue.code === "stale-harness-state");
+		expect(staleIssue?.paths).toEqual([deadRoot]);
+		if (staleIssue === undefined) throw new Error("expected stale-harness-state issue");
+		staleIssue.paths.push(unrelatedRoot);
 		expect(report.issues.some((issue) => issue.code === "orphan-harness-children")).toBe(false);
 		const signals: number[] = [];
 
@@ -136,6 +144,7 @@ describe("verification harness v2 seam", () => {
 		expect(signals).toEqual([]);
 		expect(existsSync(liveRoot)).toBe(true);
 		expect(existsSync(deadRoot)).toBe(false);
+		expect(existsSync(unrelatedRoot)).toBe(true);
 	});
 
 	it("preserves retained failure evidence until --purge-evidence is explicit", async () => {
@@ -163,8 +172,8 @@ describe("verification harness v2 seam", () => {
 			{ pid: 51001, ppid: 51000, pgid: 51000, command: "node /tmp/sumocode-fake-pi-legacy/stub" },
 			{ pid: 52000, ppid: 1, pgid: 52000, command: "zsh -l" },
 			{ pid: 52001, ppid: 52000, pgid: 52000, command: "node /tmp/sumocode-fake-pi-other/stub" },
-			{ pid: 53000, ppid: 1, pgid: 53000, command: "SUMOCODE_HARNESS_SIGNATURE=sumocode-verification-harness-v2 node leader.js" },
-			{ pid: 53001, ppid: 53000, pgid: 53000, command: "SUMOCODE_HARNESS_SIGNATURE=sumocode-verification-harness-v2 node child.js" },
+			{ pid: 53000, ppid: 1, pgid: 53000, command: `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} node leader.js` },
+			{ pid: 53001, ppid: 53000, pgid: 53000, command: `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} node child.js` },
 		];
 		const report = await inspectIntegrationPreflight({ root: process.cwd(), tempRoot, rows, env: {} });
 		const signals: Array<[number, NodeJS.Signals | number]> = [];
@@ -188,8 +197,8 @@ describe("verification harness v2 seam", () => {
 	it("rechecks group ownership before escalating from TERM to KILL", async () => {
 		const tempRoot = createRunRoot();
 		const rows = [
-			{ pid: 54000, ppid: 1, pgid: 54000, command: "SUMOCODE_HARNESS_SIGNATURE=sumocode-verification-harness-v2 node leader.js" },
-			{ pid: 54001, ppid: 54000, pgid: 54000, command: "SUMOCODE_HARNESS_SIGNATURE=sumocode-verification-harness-v2 node child.js" },
+			{ pid: 54000, ppid: 1, pgid: 54000, command: `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} node leader.js` },
+			{ pid: 54001, ppid: 54000, pgid: 54000, command: `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} node child.js` },
 		];
 		const report = await inspectIntegrationPreflight({ root: process.cwd(), tempRoot, rows, env: {} });
 		const signals: Array<[number, NodeJS.Signals | number]> = [];
@@ -209,21 +218,23 @@ describe("verification harness v2 seam", () => {
 	it("leaves no focused namespace before the next preflight", () => {
 		const tempRoot = createRunRoot();
 		const env = { ...process.env, TMPDIR: tempRoot };
-		for (const key of ["SUMOCODE_INTEGRATION_RUN_ROOT", "SUMOCODE_INTEGRATION_MANIFEST", "SUMOCODE_INTEGRATION_PACKAGE_ROOT", "SUMOCODE_HARNESS_SIGNATURE"]) delete env[key];
+		for (const key of ["SUMOCODE_INTEGRATION_RUN_ROOT", "SUMOCODE_INTEGRATION_MANIFEST", "SUMOCODE_INTEGRATION_PACKAGE_ROOT", HARNESS_SIGNATURE_ENV_KEY]) delete env[key];
 		execFileSync(process.execPath, [
 			join(process.cwd(), "node_modules", "vitest", "vitest.mjs"),
 			"run",
 			"test/integration/fixtures/focused-harness-probe.test.ts",
 			"--fileParallelism=false",
-		], { cwd: process.cwd(), env, encoding: "utf8" });
+		], { cwd: process.cwd(), env, encoding: "utf8", timeout: 30_000, killSignal: "SIGKILL" });
 
-		const preflightOutput = execFileSync(process.execPath, ["scripts/preflight-integration.mjs"], {
+		execFileSync(process.execPath, ["scripts/preflight-integration.mjs"], {
 			cwd: process.cwd(),
 			env,
 			encoding: "utf8",
+			timeout: 30_000,
+			killSignal: "SIGKILL",
 		});
-		expect(preflightOutput).toContain("[integration preflight] clean");
-		expect(existsSync(tempRoot)).toBe(true);
+		const focusedNamespaces = readdirSync(tempRoot).filter((name) => name.startsWith("sumocode-harness-v2-focused-"));
+		expect(focusedNamespaces).toEqual([]);
 	});
 
 	it("writes argv, stderr, diagnostics, and the final screen on timeout", async () => {

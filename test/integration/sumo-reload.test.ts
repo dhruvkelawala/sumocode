@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { spawn, type IPty } from "node-pty";
-import { createChildEvidenceContext, recordPtyExit, supervisePtyProcess } from "./harness-supervisor.js";
+import { createChildEvidenceContext, HARNESS_SIGNATURE, HARNESS_SIGNATURE_ENV_KEY, recordPtyExit, supervisePtyProcess } from "./harness-supervisor.js";
 import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
 /**
@@ -38,7 +38,7 @@ function spawnLauncherWithMockPi(stateFile: string, extraArgs: string[] = [], en
 		...env,
 	});
 	const evidence = createChildEvidenceContext([launcher, ...args], childEnv);
-	childEnv.SUMOCODE_HARNESS_SIGNATURE = "sumocode-verification-harness-v2";
+	childEnv[HARNESS_SIGNATURE_ENV_KEY] = HARNESS_SIGNATURE;
 	const child: IPty = spawn(launcher, args, {
 		name: "xterm-256color",
 		cols: 100,

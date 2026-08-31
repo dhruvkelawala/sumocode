@@ -6,6 +6,8 @@ import xterm from "@xterm/headless";
 import { spawn, type IPty } from "node-pty";
 import {
 	createChildEvidenceContext,
+	HARNESS_SIGNATURE,
+	HARNESS_SIGNATURE_ENV_KEY,
 	recordPtyExit,
 	supervisePtyProcess,
 	waitForDiagnosticReadiness,
@@ -147,10 +149,6 @@ export function isCredentialEnvKey(key: string): boolean {
 	return PROVIDER_CREDENTIAL_PREFIX.test(key) || CREDENTIAL_SUFFIX.test(key);
 }
 
-/**
- * Builds a credential-safe child environment. Explicit overrides are applied
- * after scrubbing so tests may intentionally provide synthetic credentials.
- */
 const CHILD_ENV_ALLOWLIST = new Set([
 	"PATH",
 	"HOME",
@@ -236,7 +234,7 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 	const childEnv = buildSpawnEnv(process.env, envOverrides);
 	const evidence: ChildEvidenceContext = createChildEvidenceContext([command, ...args], childEnv, childEnv.SUMO_TUI_DIAG_FILE);
 	childEnv.SUMO_TUI_DIAG_FILE = evidence.diagPath;
-	childEnv.SUMOCODE_HARNESS_SIGNATURE = "sumocode-verification-harness-v2";
+	childEnv[HARNESS_SIGNATURE_ENV_KEY] = HARNESS_SIGNATURE;
 	const isRealPty = options.spawn === undefined;
 	let child: IPty;
 	try {

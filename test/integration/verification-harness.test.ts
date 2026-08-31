@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	captureTimeoutEvidence,
+	HARNESS_OWNER_TOKEN_ENV_KEY,
 	HARNESS_SIGNATURE,
 	HARNESS_SIGNATURE_ENV_KEY,
 	spawnSupervisedProcess,
@@ -16,6 +17,34 @@ import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
 const roots: string[] = [];
 const children: SupervisedProcess[] = [];
+
+function spawnLegacyOrphan(ignoreTerm: boolean) {
+	const fakeRoot = mkdtempSync(join(tmpdir(), "sumocode-fake-pi-legacy-orphan-"));
+	const leaderRoot = mkdtempSync(join(tmpdir(), "sumocode-preflight-group-leader-"));
+	roots.push(fakeRoot, leaderRoot);
+	const orphanScript = join(fakeRoot, "orphan.mjs");
+	const leaderScript = join(leaderRoot, "leader.mjs");
+	const pidFile = join(leaderRoot, "orphan.pid");
+	writeFileSync(orphanScript, `${ignoreTerm ? 'process.on("SIGTERM", () => {});\n' : ""}setInterval(() => {}, 1_000);\n`);
+	writeFileSync(leaderScript, [
+		'import { spawn } from "node:child_process";',
+		'import { writeFileSync } from "node:fs";',
+		`const child = spawn(process.execPath, [${JSON.stringify(orphanScript)}], { stdio: "ignore", env: { PATH: process.env.PATH } });`,
+		`writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));`,
+		"setInterval(() => {}, 1_000);",
+	].join("\n"));
+	const launcher = [
+		'const { spawn } = require("node:child_process");',
+		"const leader = spawn(process.execPath, process.argv.slice(1), { detached: true, stdio: 'ignore', env: { PATH: process.env.PATH } });",
+		"leader.unref();",
+		"process.stdout.write(String(leader.pid));",
+	].join("\n");
+	const leaderPid = Number(execFileSync(process.execPath, ["-e", launcher, leaderScript], { encoding: "utf8" }));
+	const deadline = Date.now() + 5_000;
+	while (!existsSync(pidFile) && Date.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+	if (!existsSync(pidFile)) throw new Error("legacy orphan group leader did not publish its child pid");
+	return { leaderPid, orphanPid: Number(readFileSync(pidFile, "utf8")) };
+}
 
 function createRunRoot(): string {
 	const root = mkdtempSync(join(tmpdir(), "sumocode-harness-v2-test-"));
@@ -113,10 +142,67 @@ describe("verification harness v2 seam", () => {
 		expect(JSON.stringify(report)).not.toContain("41002");
 	});
 
-	it("keeps a live-owned namespace whose run root contains spaces", async () => {
+	it("removes a stale token-owned namespace after its owner exits", async () => {
+		const tempRoot = createRunRoot();
+		const staleRoot = join(tempRoot, "sumocode-harness-v2-dead-token-owner");
+		mkdirSync(staleRoot);
+		writeFileSync(join(staleRoot, "owner.json"), `${JSON.stringify({ pid: 2_147_483_647, ownerToken: "dead-owner-token" })}\n`);
+
+		const report = await inspectIntegrationPreflight({ root: process.cwd(), tempRoot, rows: [], env: {} });
+		expect(report.issues.find((issue) => issue.code === "stale-harness-state")?.paths).toEqual([staleRoot]);
+
+		await fixIntegrationPreflight(report, {
+			rows: [],
+			readRows: () => [],
+			currentPgid: 999_999,
+			kill: () => true,
+			wait: async () => {},
+		});
+		expect(existsSync(staleRoot)).toBe(false);
+	});
+
+	it("does not trust a reused live pid without the matching owner token", async () => {
+		const tempRoot = createRunRoot();
+		const reusedRoot = join(tempRoot, "sumocode-harness-v2-reused-pid");
+		mkdirSync(reusedRoot);
+		writeFileSync(join(reusedRoot, "owner.json"), `${JSON.stringify({ pid: process.pid, ownerToken: "stale-owner-token" })}\n`);
+		const rows = [{ pid: process.pid, ppid: 1, pgid: process.pid, command: "node unrelated-live-process.js" }];
+
+		const report = await inspectIntegrationPreflight({ root: process.cwd(), tempRoot, rows, env: {} });
+		expect(report.issues.find((issue) => issue.code === "stale-harness-state")?.paths).toEqual([reusedRoot]);
+
+		await fixIntegrationPreflight(report, {
+			rows,
+			readRows: () => rows,
+			currentPgid: 999_999,
+			kill: () => true,
+			wait: async () => {},
+		});
+		expect(existsSync(reusedRoot)).toBe(false);
+	});
+
+	it("spares a live namespace when pid and owner token match", async () => {
 		const tempRoot = createRunRoot();
 		const liveRoot = join(tempRoot, "sumocode-harness-v2-live with space");
-		const deadRoot = join(tempRoot, "sumocode-harness-v2-dead");
+		mkdirSync(liveRoot);
+		writeFileSync(join(liveRoot, "owner.json"), `${JSON.stringify({ pid: process.pid, ownerToken: "live-owner-token" })}\n`);
+		const rows = [{
+			pid: process.pid,
+			ppid: 1,
+			pgid: process.pid,
+			command: `${HARNESS_OWNER_TOKEN_ENV_KEY}=live-owner-token node active-test.js`,
+		}];
+
+		const report = await inspectIntegrationPreflight({ root: process.cwd(), tempRoot, rows, env: {} });
+
+		expect(report.issues.some((issue) => issue.code === "stale-harness-state")).toBe(false);
+		expect(existsSync(liveRoot)).toBe(true);
+	});
+
+	it("keeps pid-only owner files compatible and rejects unrelated report paths", async () => {
+		const tempRoot = createRunRoot();
+		const liveRoot = join(tempRoot, "sumocode-harness-v2-legacy-live");
+		const deadRoot = join(tempRoot, "sumocode-harness-v2-legacy-dead");
 		const unrelatedRoot = join(tempRoot, "unrelated-dead");
 		mkdirSync(liveRoot);
 		mkdirSync(deadRoot);
@@ -124,28 +210,20 @@ describe("verification harness v2 seam", () => {
 		writeFileSync(join(liveRoot, "owner.json"), `${JSON.stringify({ pid: process.pid })}\n`);
 		writeFileSync(join(deadRoot, "owner.json"), `${JSON.stringify({ pid: 2_147_483_647 })}\n`);
 		writeFileSync(join(unrelatedRoot, "owner.json"), `${JSON.stringify({ pid: 2_147_483_647 })}\n`);
-		const rows = [{
-			pid: 50001,
-			ppid: process.pid,
-			pgid: 50001,
-			command: `SUMOCODE_INTEGRATION_RUN_ROOT=${liveRoot} ${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} node active-test.js`,
-		}];
 
-		const report = await inspectIntegrationPreflight({ root: process.cwd(), tempRoot, rows, env: {} });
+		const report = await inspectIntegrationPreflight({ root: process.cwd(), tempRoot, rows: [], env: {} });
 		const staleIssue = report.issues.find((issue) => issue.code === "stale-harness-state");
 		expect(staleIssue?.paths).toEqual([deadRoot]);
 		if (staleIssue === undefined) throw new Error("expected stale-harness-state issue");
 		staleIssue.paths.push(unrelatedRoot);
-		expect(report.issues.some((issue) => issue.code === "orphan-harness-children")).toBe(false);
-		const signals: number[] = [];
 
 		await fixIntegrationPreflight(report, {
-			rows,
+			rows: [],
+			readRows: () => [],
 			currentPgid: 999_999,
-			kill: (pid) => { signals.push(pid); return true; },
+			kill: () => true,
 			wait: async () => {},
 		});
-		expect(signals).toEqual([]);
 		expect(existsSync(liveRoot)).toBe(true);
 		expect(existsSync(deadRoot)).toBe(false);
 		expect(existsSync(unrelatedRoot)).toBe(true);
@@ -179,6 +257,71 @@ describe("verification harness v2 seam", () => {
 		report = await inspectIntegrationPreflight({ root: process.cwd(), tempRoot, rows: [], env: {} });
 		await fixIntegrationPreflight(report, { purgeEvidence: true, rows: [], currentPgid: 999_999, kill: () => true, wait: async () => {} });
 		expect(existsSync(evidenceRoot)).toBe(false);
+	});
+
+	for (const testCase of [
+		{ name: "TERM-compliant", ignoreTerm: false },
+		{ name: "TERM-ignoring", ignoreTerm: true },
+	]) {
+		it(`lets --fix exit zero on the first pass for a ${testCase.name} legacy orphan without group-killing`, () => {
+			const { leaderPid, orphanPid } = spawnLegacyOrphan(testCase.ignoreTerm);
+			const env = { ...process.env };
+			for (const key of ["SUMOCODE_INTEGRATION_RUN_ROOT", "SUMOCODE_INTEGRATION_MANIFEST", "SUMOCODE_INTEGRATION_PACKAGE_ROOT", HARNESS_OWNER_TOKEN_ENV_KEY, HARNESS_SIGNATURE_ENV_KEY]) delete env[key];
+
+			try {
+				expect(execFileSync(process.execPath, ["scripts/preflight-integration.mjs", "--fix"], {
+					cwd: process.cwd(),
+					env,
+					encoding: "utf8",
+					timeout: 30_000,
+					killSignal: "SIGKILL",
+				})).toContain("[integration preflight] clean");
+				expect(() => process.kill(orphanPid, 0)).toThrow();
+				expect(() => process.kill(leaderPid, 0)).not.toThrow();
+			} finally {
+				try { process.kill(orphanPid, "SIGKILL"); } catch { /* preflight reaped it */ }
+				try { process.kill(leaderPid, "SIGKILL"); } catch { /* leader exited */ }
+			}
+		});
+	}
+
+	it("waits for a TERM-compliant individually signaled orphan without escalation", async () => {
+		const tempRoot = createRunRoot();
+		const rows = [{ pid: 50901, ppid: 1, pgid: 50900, command: "node /tmp/sumocode-fake-pi-term-compliant/stub" }];
+		const report = await inspectIntegrationPreflight({ root: process.cwd(), tempRoot, rows, env: {} });
+		const signals: Array<[number, NodeJS.Signals | number]> = [];
+		let waits = 0;
+
+		await fixIntegrationPreflight(report, {
+			rows,
+			readRows: () => [],
+			currentPgid: 999_999,
+			kill: (pid, signal) => { signals.push([pid, signal ?? 0]); return true; },
+			wait: async () => { waits += 1; },
+		});
+
+		expect(waits).toBe(1);
+		expect(signals).toEqual([[50901, "SIGTERM"]]);
+	});
+
+	it("escalates a TERM-ignoring individual orphan by pid without group signals", async () => {
+		const tempRoot = createRunRoot();
+		const row = { pid: 50911, ppid: 1, pgid: 50900, command: "node /tmp/sumocode-fake-pi-term-ignoring/stub" };
+		const report = await inspectIntegrationPreflight({ root: process.cwd(), tempRoot, rows: [row], env: {} });
+		const signals: Array<[number, NodeJS.Signals | number]> = [];
+		let scans = 0;
+
+		await fixIntegrationPreflight(report, {
+			rows: [row],
+			readRows: () => { scans += 1; return scans === 1 ? [row] : []; },
+			currentPgid: 999_999,
+			kill: (pid, signal) => { signals.push([pid, signal ?? 0]); return true; },
+			wait: async () => {},
+		});
+
+		expect(scans).toBe(2);
+		expect(signals).toEqual([[50911, "SIGTERM"], [50911, "SIGKILL"]]);
+		expect(signals.every(([pid]) => pid > 0)).toBe(true);
 	});
 
 	it("never group-kills the current or a non-harness-owned process group", async () => {
@@ -255,7 +398,7 @@ describe("verification harness v2 seam", () => {
 	it("leaves no focused namespace before the next preflight", () => {
 		const tempRoot = createRunRoot();
 		const env = { ...process.env, TMPDIR: tempRoot };
-		for (const key of ["SUMOCODE_INTEGRATION_RUN_ROOT", "SUMOCODE_INTEGRATION_MANIFEST", "SUMOCODE_INTEGRATION_PACKAGE_ROOT", HARNESS_SIGNATURE_ENV_KEY]) delete env[key];
+		for (const key of ["SUMOCODE_INTEGRATION_RUN_ROOT", "SUMOCODE_INTEGRATION_MANIFEST", "SUMOCODE_INTEGRATION_PACKAGE_ROOT", HARNESS_OWNER_TOKEN_ENV_KEY, HARNESS_SIGNATURE_ENV_KEY]) delete env[key];
 		execFileSync(process.execPath, [
 			join(process.cwd(), "node_modules", "vitest", "vitest.mjs"),
 			"run",

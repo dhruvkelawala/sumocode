@@ -4,13 +4,17 @@ import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { afterAll } from "vitest";
-import { HARNESS_SIGNATURE, HARNESS_SIGNATURE_ENV_KEY } from "../../scripts/lib/integration-harness-constants.mjs";
+import {
+	HARNESS_OWNER_TOKEN_ENV_KEY,
+	HARNESS_SIGNATURE,
+	HARNESS_SIGNATURE_ENV_KEY,
+} from "../../scripts/lib/integration-harness-constants.mjs";
 
-export { HARNESS_SIGNATURE, HARNESS_SIGNATURE_ENV_KEY };
+export { HARNESS_OWNER_TOKEN_ENV_KEY, HARNESS_SIGNATURE, HARNESS_SIGNATURE_ENV_KEY };
 
 /**
  * Cross-file harness contract: this module and scripts/run-integration-harness.mjs write owner.json
- * (`pid`, `startedAt`, optional `root`/`mode`) and evidence-retained.json (`ownerPid`, `retainedAt`,
+ * (`pid`, `startedAt`, optional `ownerToken`/`root`/`mode`) and evidence-retained.json (`ownerPid`, `retainedAt`,
  * optional `reason`); scripts/preflight-integration.mjs consumes those files. TERM→KILL grace is
  * owned by SUPERVISOR_TERM_GRACE_MS here, RUNNER_TERM_GRACE_MS in the runner, and
  * PREFLIGHT_TERM_GRACE_MS in preflight.
@@ -77,7 +81,12 @@ function harnessRoot(env: NodeJS.ProcessEnv = process.env): string {
 		fallbackRoot = mkdtempSync(join(tmpdir(), "sumocode-harness-v2-focused-"));
 		writeFileSync(
 			join(fallbackRoot, "owner.json"),
-			`${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), mode: "focused" }, null, 2)}\n`,
+			`${JSON.stringify({
+				pid: process.pid,
+				startedAt: new Date().toISOString(),
+				mode: "focused",
+				ownerToken: env[HARNESS_OWNER_TOKEN_ENV_KEY],
+			}, null, 2)}\n`,
 			{ mode: 0o600 },
 		);
 	}

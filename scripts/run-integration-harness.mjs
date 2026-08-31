@@ -1,11 +1,16 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
 import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runIntegrationPreflight } from "./preflight-integration.mjs";
-import { HARNESS_SIGNATURE, HARNESS_SIGNATURE_ENV_KEY } from "./lib/integration-harness-constants.mjs";
+import {
+	HARNESS_OWNER_TOKEN_ENV_KEY,
+	HARNESS_SIGNATURE,
+	HARNESS_SIGNATURE_ENV_KEY,
+} from "./lib/integration-harness-constants.mjs";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const RUNNER_TERM_GRACE_MS = 1_000;
@@ -102,17 +107,17 @@ async function runVitest(vitestEntry, args, env) {
 	return { ...status, interrupted };
 }
 
-async function main() {
+async function main(ownerToken) {
 	if (!await runIntegrationPreflight()) return 1;
 	const runRoot = await mkdtemp(join(tmpdir(), "sumocode-harness-v2-run-"));
 	const manifest = join(runRoot, "children.jsonl");
 	const tempRoot = join(runRoot, "tmp");
 	const compileCache = join(runRoot, "node-compile-cache");
 	await Promise.all([mkdir(tempRoot, { recursive: true, mode: 0o700 }), mkdir(compileCache, { recursive: true, mode: 0o700 })]);
-	await writeFile(join(runRoot, "owner.json"), `${JSON.stringify({ pid: process.pid, root: ROOT, startedAt: new Date().toISOString() }, null, 2)}\n`, { mode: 0o600 });
+	await writeFile(join(runRoot, "owner.json"), `${JSON.stringify({ pid: process.pid, ownerToken, root: ROOT, startedAt: new Date().toISOString() }, null, 2)}\n`, { mode: 0o600 });
 	const env = { ...process.env };
 	for (const key of Object.keys(env)) {
-		if (key === "NODE_PATH" || key === "NODE_OPTIONS" || key.startsWith("HERDR_") || key.startsWith("PI_SESSION")) delete env[key];
+		if (key === HARNESS_OWNER_TOKEN_ENV_KEY || key === "NODE_PATH" || key === "NODE_OPTIONS" || key.startsWith("HERDR_") || key.startsWith("PI_SESSION")) delete env[key];
 	}
 	Object.assign(env, {
 		SUMOCODE_INTEGRATION_RUN_ROOT: runRoot,
@@ -161,4 +166,22 @@ async function main() {
 	return integrationStatus.code ?? 1;
 }
 
-process.exitCode = await main();
+async function runOwnedHarness() {
+	const ownerToken = process.env[HARNESS_OWNER_TOKEN_ENV_KEY];
+	if (ownerToken) return main(ownerToken);
+
+	const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...process.argv.slice(2)], {
+		cwd: process.cwd(),
+		env: { ...process.env, [HARNESS_OWNER_TOKEN_ENV_KEY]: randomUUID() },
+		stdio: "inherit",
+	});
+	const forward = (signal) => child.kill(signal);
+	process.once("SIGINT", forward);
+	process.once("SIGTERM", forward);
+	const code = await new Promise((resolveExit) => child.once("exit", (exitCode) => resolveExit(exitCode)));
+	process.removeListener("SIGINT", forward);
+	process.removeListener("SIGTERM", forward);
+	return code ?? 1;
+}
+
+process.exitCode = await runOwnedHarness();

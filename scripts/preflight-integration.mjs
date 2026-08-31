@@ -13,7 +13,11 @@ import {
 	hostInputManifestIsFresh,
 	hostOutputsHash,
 } from "./lib/host-bundle.mjs";
-import { HARNESS_SIGNATURE, HARNESS_SIGNATURE_ENV_KEY } from "./lib/integration-harness-constants.mjs";
+import {
+	HARNESS_OWNER_TOKEN_ENV_KEY,
+	HARNESS_SIGNATURE,
+	HARNESS_SIGNATURE_ENV_KEY,
+} from "./lib/integration-harness-constants.mjs";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const HARNESS_DIR_PREFIXES = ["sumocode-harness-v2-", "sumocode-fake-pi-"];
@@ -60,8 +64,12 @@ export function processRows(execute = execFileSync) {
 	}
 }
 
+function hasProcessMarker(row, key, value) {
+	return row.command.includes(`${key}=${value}`);
+}
+
 function hasHarnessSignature(row) {
-	return row.command.includes(`${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE}`);
+	return hasProcessMarker(row, HARNESS_SIGNATURE_ENV_KEY, HARNESS_SIGNATURE);
 }
 
 function isHarnessProcess(row) {
@@ -81,33 +89,45 @@ function pidIsAlive(pid) {
 	}
 }
 
-async function readOwnerPid(path) {
+async function readOwner(path) {
 	try {
 		const owner = JSON.parse(await readFile(join(path, "owner.json"), "utf8"));
-		return Number.isSafeInteger(owner?.pid) && owner.pid > 1 ? owner.pid : undefined;
+		if (!Number.isSafeInteger(owner?.pid) || owner.pid <= 1) return undefined;
+		return {
+			pid: owner.pid,
+			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- owner.json is untrusted state parsed at this I/O boundary
+			ownerToken: typeof owner.ownerToken === "string" && owner.ownerToken.length > 0
+				? owner.ownerToken
+				: undefined,
+		};
 	} catch {
 		return undefined;
 	}
 }
 
-async function classifyHarnessDir(path) {
+async function classifyHarnessDir(path, rowsByPid = new Map(), tokenIdentityAvailable = true) {
 	if (!HARNESS_DIR_PREFIXES.some((prefix) => basename(path).startsWith(prefix))) return "unrelated";
-	const ownerPid = await readOwnerPid(path);
-	if (ownerPid !== undefined && pidIsAlive(ownerPid)) return "live";
+	const owner = await readOwner(path);
+	if (owner !== undefined && pidIsAlive(owner.pid)) {
+		if (owner.ownerToken === undefined) return "live";
+		if (!tokenIdentityAvailable) return "live";
+		const row = rowsByPid.get(owner.pid);
+		if (row !== undefined && hasProcessMarker(row, HARNESS_OWNER_TOKEN_ENV_KEY, owner.ownerToken)) return "live";
+	}
 	return existsSync(join(path, RETAINED_EVIDENCE_MARKER)) ? "retained" : "stale";
 }
 
-async function harnessState(tempRoot) {
+async function harnessState(tempRoot, rowsByPid, tokenIdentityAvailable) {
 	let entries = [];
 	try { entries = await readdir(tempRoot, { withFileTypes: true }); } catch { return { staleDirs: [], retainedDirs: [], liveOwnerPids: [] }; }
 	const state = { staleDirs: [], retainedDirs: [], liveOwnerPids: [] };
 	for (const entry of entries) {
 		if (!entry.isDirectory() || !HARNESS_DIR_PREFIXES.some((prefix) => entry.name.startsWith(prefix))) continue;
 		const path = join(tempRoot, entry.name);
-		const classification = await classifyHarnessDir(path);
+		const classification = await classifyHarnessDir(path, rowsByPid, tokenIdentityAvailable);
 		if (classification === "live") {
-			const ownerPid = await readOwnerPid(path);
-			if (ownerPid !== undefined) state.liveOwnerPids.push(ownerPid);
+			const owner = await readOwner(path);
+			if (owner !== undefined) state.liveOwnerPids.push(owner.pid);
 		} else if (classification === "retained") state.retainedDirs.push(path);
 		else if (classification === "stale") state.staleDirs.push(path);
 	}
@@ -186,8 +206,8 @@ export async function inspectIntegrationPreflight({ root = ROOT, tempRoot = tmpd
 	const processTable = rows === undefined ? processRows() : { rows };
 	const issues = processTable.issue === undefined ? [] : [processTable.issue];
 	const notices = [];
-	const state = await harnessState(tempRoot);
 	const rowsByPid = new Map(processTable.rows.map((row) => [row.pid, row]));
+	const state = await harnessState(tempRoot, rowsByPid, processTable.issue === undefined);
 	const liveHarnessPids = new Set([
 		...state.liveOwnerPids,
 		...signedHarnessLineage(process.pid, rowsByPid),
@@ -275,24 +295,41 @@ export async function fixIntegrationPreflight(report, {
 	const harnessOwnedGroups = new Set(fixableRows
 		.map((row) => row.pgid)
 		.filter((pgid) => groupIsHarnessOwned(pgid, rows, currentPgid)));
+	const individuallySignaled = new Map(fixableRows
+		.filter((row) => !harnessOwnedGroups.has(row.pgid))
+		.map((row) => [row.pid, row]));
 	for (const pgid of harnessOwnedGroups) sendSignal(kill, -pgid, "SIGTERM");
-	for (const row of fixableRows) {
-		if (!harnessOwnedGroups.has(row.pgid)) sendSignal(kill, row.pid, "SIGTERM");
-	}
-	if (harnessOwnedGroups.size > 0) await wait();
-	const rowsBeforeKill = readRows();
+	for (const row of individuallySignaled.values()) sendSignal(kill, row.pid, "SIGTERM");
+	if (harnessOwnedGroups.size > 0 || individuallySignaled.size > 0) await wait();
+	let latestRows = readRows();
+	let escalated = false;
 	for (const pgid of harnessOwnedGroups) {
-		if (survivingGroupIsHarnessOwned(pgid, rowsBeforeKill, currentPgid)) sendSignal(kill, -pgid, "SIGKILL");
+		if (survivingGroupIsHarnessOwned(pgid, latestRows, currentPgid)) {
+			sendSignal(kill, -pgid, "SIGKILL");
+			escalated = true;
+		}
 	}
+	for (const [pid, signaledRow] of individuallySignaled) {
+		const survivor = latestRows.find((row) => row.pid === pid);
+		if (survivor !== undefined && survivor.command === signaledRow.command && isHarnessProcess(survivor)) {
+			sendSignal(kill, pid, "SIGKILL");
+			escalated = true;
+		}
+	}
+	if (escalated) {
+		await wait();
+		latestRows = readRows();
+	}
+	const latestRowsByPid = new Map(latestRows.map((row) => [row.pid, row]));
 
 	const stateIssue = report.issues.find((issue) => issue.code === "stale-harness-state");
-	// Destructive boundary: classification rechecks the harness basename; report paths alone never authorize rm.
+	// Destructive boundary: classification rechecks the harness basename and owner identity; report paths alone never authorize rm.
 	for (const path of stateIssue?.paths ?? []) {
-		if (await classifyHarnessDir(path) === "stale") await rm(path, { recursive: true, force: true });
+		if (await classifyHarnessDir(path, latestRowsByPid) === "stale") await rm(path, { recursive: true, force: true });
 	}
 	if (purgeEvidence) {
 		for (const path of report.retainedEvidence ?? []) {
-			if (await classifyHarnessDir(path) === "retained") await rm(path, { recursive: true, force: true });
+			if (await classifyHarnessDir(path, latestRowsByPid) === "retained") await rm(path, { recursive: true, force: true });
 		}
 	}
 }

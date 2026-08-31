@@ -157,18 +157,6 @@ function readAccountsLikeDocument(path: string): AccountsLikeDocument | undefine
 	}
 }
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- decoded config entry; guards below are the parse boundary.
-function isClaudeSubscription(value: unknown): boolean {
-	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-	// SAFETY: object shape was checked above; both fields are validated before use.
-	const candidate = value as { provider?: unknown; index?: unknown };
-	return candidate.provider === "anthropic" && typeof candidate.index === "number" && Number.isInteger(candidate.index) && candidate.index >= 2;
-}
-
-function claudeSubscriptionsFromDocument(document: AccountsLikeDocument | undefined): unknown[] {
-	return Array.isArray(document?.subscriptions) ? document.subscriptions.filter(isClaudeSubscription) : [];
-}
-
 // oxlint-disable-next-line anti-slop/no-unknown-parameters -- decoded subscription entry; guards produce a stable merge identity.
 function subscriptionIdentity(value: unknown): string | undefined {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
@@ -178,14 +166,20 @@ function subscriptionIdentity(value: unknown): string | undefined {
 	return `${candidate.provider}\u0000${candidate.index}`;
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- decoded JSON entry; subscriptionIdentity parses structured rows and JSON.stringify keys the remainder.
+function subscriptionMergeKey(value: unknown): string {
+	const identity = subscriptionIdentity(value);
+	return identity ? `identity:${identity}` : `value:${JSON.stringify(value)}`;
+}
+
 function mergeSubscriptions(existing: readonly unknown[], incoming: readonly unknown[]): unknown[] {
 	const merged = [...existing];
-	const identities = new Set(existing.map(subscriptionIdentity).filter((identity): identity is string => identity !== undefined));
+	const keys = new Set(existing.map(subscriptionMergeKey));
 	for (const entry of incoming) {
-		const identity = subscriptionIdentity(entry);
-		if (identity && identities.has(identity)) continue;
+		const key = subscriptionMergeKey(entry);
+		if (keys.has(key)) continue;
 		merged.push(entry);
-		if (identity) identities.add(identity);
+		keys.add(key);
 	}
 	return merged;
 }
@@ -198,26 +192,26 @@ function writeAccountsMigration(source: string, document: AccountsLikeDocument):
 
 function seedUnmigratedPrivateAccounts(source: string, target: string): void {
 	const primary = readAccountsLikeDocument(source) ?? {};
-	if (primary[CLAUDE_ACCOUNTS_MIGRATION_FIELD] === true) return;
-	if (claudeSubscriptionsFromDocument(primary).length > 0) {
-		writeAccountsMigration(source, { ...primary, [CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true });
-		return;
-	}
-	const agentDocument = readAccountsLikeDocument(target);
+	const targetAlreadyManaged = resolvesToSamePath(source, target);
+	// The synced marker records document migration; the managed link records
+	// completion on this machine. A second machine must still merge its local
+	// agent/legacy accounts once before relinking.
+	if (primary[CLAUDE_ACCOUNTS_MIGRATION_FIELD] === true && targetAlreadyManaged) return;
+	// If target already resolves to source, reading it would merge the same
+	// document twice (notably duplicating identity-less extension entries).
+	const agentDocument = targetAlreadyManaged ? undefined : readAccountsLikeDocument(target);
 	const legacyDocument = readAccountsLikeDocument(join(dirname(target), "multi-pass.json"));
-	const incomingDocument = claudeSubscriptionsFromDocument(agentDocument).length > 0
-		? agentDocument
-		: claudeSubscriptionsFromDocument(legacyDocument).length > 0 ? legacyDocument : undefined;
-	const existingSubscriptions = Array.isArray(primary.subscriptions) ? primary.subscriptions : [];
-	const incomingSubscriptions = Array.isArray(incomingDocument?.subscriptions) ? incomingDocument.subscriptions : [];
-	// Seed from the complete adapter/legacy document, not only its Claude rows:
-	// unknown top-level metadata and non-Claude subscriptions must survive.
-	// Existing private fields and provider/index rows win conflicts.
+	const privateSubscriptions = Array.isArray(primary.subscriptions) ? primary.subscriptions : [];
+	const agentSubscriptions = Array.isArray(agentDocument?.subscriptions) ? agentDocument.subscriptions : [];
+	const legacySubscriptions = Array.isArray(legacyDocument?.subscriptions) ? legacyDocument.subscriptions : [];
+	// Complete the one-time migration from every available source. Private
+	// fields/rows win conflicts, then adapter-native agent state, then legacy.
 	const next = {
-		...incomingDocument,
+		...legacyDocument,
+		...agentDocument,
 		...primary,
 		[CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true,
-		subscriptions: mergeSubscriptions(existingSubscriptions, incomingSubscriptions),
+		subscriptions: mergeSubscriptions(mergeSubscriptions(privateSubscriptions, agentSubscriptions), legacySubscriptions),
 	};
 	writeAccountsMigration(source, next);
 }

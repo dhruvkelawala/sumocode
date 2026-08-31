@@ -258,16 +258,67 @@ describe("/sumo:sync", () => {
 		stdout.mockRestore();
 	});
 
-	it("does not restore legacy accounts after a completed migration intentionally becomes empty", async () => {
+	it("merges additional agent and legacy accounts before marking a partial private source migrated", async () => {
 		const home = mkdtempSync(join(tmpdir(), "sumocode-sync-"));
 		const configRepo = join(home, ".config", "sumocode");
 		const agentDir = join(home, ".pi", "agent");
 		mkdirSync(join(configRepo, ".git"), { recursive: true });
 		mkdirSync(agentDir, { recursive: true });
 		writeFileSync(join(configRepo, "claude-accounts.json"), JSON.stringify({
+			privateNote: "keep",
+			[CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true,
+			subscriptions: [{ provider: "anthropic", index: 2, label: "private" }],
+		}));
+		writeFileSync(join(agentDir, "claude-accounts.json"), JSON.stringify({
+			agentNote: "keep",
+			subscriptions: [
+				{ provider: "anthropic", index: 2, label: "stale-duplicate" },
+				{ provider: "anthropic", index: 3, label: "agent" },
+			],
+		}));
+		writeFileSync(join(agentDir, "multi-pass.json"), JSON.stringify({
+			legacyNote: "keep",
+			subscriptions: [{ provider: "anthropic", index: 4, label: "legacy" }],
+		}));
+
+		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
+		await executeSumoSync(ctx() as never, {
+			env: {},
+			homeDir: home,
+			cwd: "/repo/sumocode",
+			moduleUrl: "file:///repo/sumocode/src/commands/sync.ts",
+			exists: (path) => path === join(configRepo, ".git") || sumocodeRepoExists(path),
+			readFile: () => JSON.stringify({ name: "@dhruvkelawala/sumocode" }),
+			exec: async () => ({ stdout: "", stderr: "" }),
+		});
+
+		expect(JSON.parse(readFileSync(join(configRepo, "claude-accounts.json"), "utf8"))).toEqual({
+			legacyNote: "keep",
+			agentNote: "keep",
+			privateNote: "keep",
+			[CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true,
+			subscriptions: [
+				{ provider: "anthropic", index: 2, label: "private" },
+				{ provider: "anthropic", index: 3, label: "agent" },
+				{ provider: "anthropic", index: 4, label: "legacy" },
+			],
+		});
+		stdout.mockRestore();
+	});
+
+	it("does not restore legacy accounts after a completed migration intentionally becomes empty", async () => {
+		const home = mkdtempSync(join(tmpdir(), "sumocode-sync-"));
+		const configRepo = join(home, ".config", "sumocode");
+		const agentDir = join(home, ".pi", "agent");
+		mkdirSync(join(configRepo, ".git"), { recursive: true });
+		mkdirSync(agentDir, { recursive: true });
+		const source = join(configRepo, "claude-accounts.json");
+		writeFileSync(source, JSON.stringify({
 			[CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true,
 			subscriptions: [],
 		}));
+		symlinkSync(source, join(agentDir, "claude-accounts.json"));
 		writeFileSync(join(agentDir, "multi-pass.json"), JSON.stringify({
 			subscriptions: [{ provider: "anthropic", index: 2, label: "company" }],
 		}));

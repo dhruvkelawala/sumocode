@@ -7299,28 +7299,24 @@ function readAccountsLikeDocument(path2) {
     return void 0;
   }
 }
-function isClaudeSubscription(value) {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const candidate = value;
-  return candidate.provider === "anthropic" && typeof candidate.index === "number" && Number.isInteger(candidate.index) && candidate.index >= 2;
-}
-function claudeSubscriptionsFromDocument(document) {
-  return Array.isArray(document?.subscriptions) ? document.subscriptions.filter(isClaudeSubscription) : [];
-}
 function subscriptionIdentity(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
   const candidate = value;
   if (typeof candidate.provider !== "string" || typeof candidate.index !== "number" || !Number.isInteger(candidate.index)) return void 0;
   return `${candidate.provider}\0${candidate.index}`;
 }
+function subscriptionMergeKey(value) {
+  const identity = subscriptionIdentity(value);
+  return identity ? `identity:${identity}` : `value:${JSON.stringify(value)}`;
+}
 function mergeSubscriptions(existing, incoming) {
   const merged = [...existing];
-  const identities = new Set(existing.map(subscriptionIdentity).filter((identity) => identity !== void 0));
+  const keys = new Set(existing.map(subscriptionMergeKey));
   for (const entry of incoming) {
-    const identity = subscriptionIdentity(entry);
-    if (identity && identities.has(identity)) continue;
+    const key = subscriptionMergeKey(entry);
+    if (keys.has(key)) continue;
     merged.push(entry);
-    if (identity) identities.add(identity);
+    keys.add(key);
   }
   return merged;
 }
@@ -7332,21 +7328,19 @@ function writeAccountsMigration(source, document) {
 }
 function seedUnmigratedPrivateAccounts(source, target) {
   const primary = readAccountsLikeDocument(source) ?? {};
-  if (primary[CLAUDE_ACCOUNTS_MIGRATION_FIELD] === true) return;
-  if (claudeSubscriptionsFromDocument(primary).length > 0) {
-    writeAccountsMigration(source, { ...primary, [CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true });
-    return;
-  }
-  const agentDocument = readAccountsLikeDocument(target);
+  const targetAlreadyManaged = resolvesToSamePath(source, target);
+  if (primary[CLAUDE_ACCOUNTS_MIGRATION_FIELD] === true && targetAlreadyManaged) return;
+  const agentDocument = targetAlreadyManaged ? void 0 : readAccountsLikeDocument(target);
   const legacyDocument = readAccountsLikeDocument(join6(dirname3(target), "multi-pass.json"));
-  const incomingDocument = claudeSubscriptionsFromDocument(agentDocument).length > 0 ? agentDocument : claudeSubscriptionsFromDocument(legacyDocument).length > 0 ? legacyDocument : void 0;
-  const existingSubscriptions = Array.isArray(primary.subscriptions) ? primary.subscriptions : [];
-  const incomingSubscriptions = Array.isArray(incomingDocument?.subscriptions) ? incomingDocument.subscriptions : [];
+  const privateSubscriptions = Array.isArray(primary.subscriptions) ? primary.subscriptions : [];
+  const agentSubscriptions = Array.isArray(agentDocument?.subscriptions) ? agentDocument.subscriptions : [];
+  const legacySubscriptions = Array.isArray(legacyDocument?.subscriptions) ? legacyDocument.subscriptions : [];
   const next = {
-    ...incomingDocument,
+    ...legacyDocument,
+    ...agentDocument,
     ...primary,
     [CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true,
-    subscriptions: mergeSubscriptions(existingSubscriptions, incomingSubscriptions)
+    subscriptions: mergeSubscriptions(mergeSubscriptions(privateSubscriptions, agentSubscriptions), legacySubscriptions)
   };
   writeAccountsMigration(source, next);
 }

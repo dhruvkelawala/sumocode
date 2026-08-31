@@ -1,5 +1,13 @@
 # Plan 047: Make the streaming token path O(1) and bound live-session pager memory
 
+> **Post-audit correction (2026-08-28)**: This completed plan removed the
+> per-token prefix content-key work and bounded retained pager nodes, but it did
+> not make the whole token path O(1). `TranscriptController.viewModel()` still
+> spreads every committed view model and refolds live tools on every delta, and
+> transcript-neutral events still publish a rebuilt snapshot. Plan 093 owns the
+> release-gated completion. Treat this plan's O(1) title/done claim as scoped to
+> diff-key computation, not total history-sized allocation.
+
 > **Executor instructions**: Follow this plan step by step. Run every
 > verification command and confirm the expected result before moving on. If a
 > STOP condition occurs, stop and report — do not improvise. SKIP updating
@@ -17,6 +25,8 @@
 - **Depends on**: plans/043-transcript-replace-semantics.md
 - **Category**: perf
 - **Planned at**: commit `86e5062`, 2026-07-07
+- **Historical result**: PARTIAL — diff/pager optimization DONE; total
+  history-independent event path superseded by Plan 093
 
 ## Why this matters
 

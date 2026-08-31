@@ -2,7 +2,7 @@
 import { existsSync as existsSync14, readFileSync as readFileSync18, realpathSync as realpathSync5 } from "node:fs";
 import { homedir as homedir16 } from "node:os";
 import { dirname as dirname14, join as join22, resolve as resolve8, sep } from "node:path";
-import { fileURLToPath as fileURLToPath4 } from "node:url";
+import { fileURLToPath as fileURLToPath5 } from "node:url";
 
 // src/cathedral/input-hints.ts
 import { visibleWidth as visibleWidth2 } from "@earendil-works/pi-tui";
@@ -14652,12 +14652,20 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { existsSync as existsSync11, readFileSync as readFileSync15, statSync } from "node:fs";
 import { homedir as homedir14 } from "node:os";
 import { dirname as dirname12, isAbsolute as isAbsolute2, join as join18, resolve as resolve6 } from "node:path";
+import { fileURLToPath as fileURLToPath4 } from "node:url";
+
+// src/subagents/pi-child-model-bootstrap.ts
+var CHILD_MODEL_PROVIDER_ENV = "SUMOCODE_CHILD_MODEL_PROVIDER";
+var CHILD_MODEL_ID_ENV = "SUMOCODE_CHILD_MODEL_ID";
+
+// src/subagents/backend-pi.ts
 var isString5 = (value) => typeof value === "string";
 var DEFAULT_BUILT_IN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 var PREVIEW_MAX2 = 160;
 var ERROR_MAX = 4096;
 var CLAUDE_OAUTH_ADAPTER_PACKAGE = "pi-claude-oauth-adapter";
 var MULTI_ACCOUNT_ADAPTER_SOURCE = "git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account";
+var NUMBERED_ANTHROPIC_PROVIDER = /^anthropic-\d+$/;
 function adapterEntryFromPackageDir(packageDir) {
   try {
     const manifest = JSON.parse(readFileSync15(join18(packageDir, "package.json"), "utf8"));
@@ -14873,7 +14881,38 @@ var attachAbortSignal2 = (proc, signal) => {
   else signal?.addEventListener("abort", interrupt, { once: true });
   return { isAborted: () => aborted, interrupt };
 };
-var createPiChildSpawner = (spawnImpl = nodeSpawn, resolveAdapterEntry = resolveClaudeOauthAdapterEntry) => (options) => {
+function resolvePiBinary(env = process.env) {
+  return env.PI_BIN?.trim() || "pi";
+}
+function resolvePiChildModelBootstrapEntry(env = process.env) {
+  const override = env.SUMOCODE_CHILD_MODEL_BOOTSTRAP?.trim();
+  const candidates = [
+    override,
+    env.SUMOCODE_ROOT_DIR ? join18(env.SUMOCODE_ROOT_DIR, "src", "subagents", "pi-child-model-bootstrap.ts") : void 0,
+    fileURLToPath4(new URL("./pi-child-model-bootstrap.ts", import.meta.url))
+  ];
+  return candidates.find((candidate) => !!candidate && existsSync11(candidate));
+}
+function childModelSelection(modelLabel) {
+  if (!modelLabel) return void 0;
+  const separator = modelLabel.indexOf("/");
+  if (separator <= 0) return void 0;
+  const provider = modelLabel.slice(0, separator);
+  const modelId = modelLabel.slice(separator + 1);
+  return NUMBERED_ANTHROPIC_PROVIDER.test(provider) && modelId ? { provider, modelId } : void 0;
+}
+function removeCliModelSelection(args) {
+  const result = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] === "--provider" || args[index] === "--model") {
+      index += 1;
+      continue;
+    }
+    result.push(args[index] ?? "");
+  }
+  return result;
+}
+var createPiChildSpawner = (spawnImpl = nodeSpawn, resolveAdapterEntry = resolveClaudeOauthAdapterEntry, resolveBinary = resolvePiBinary, resolveBootstrapEntry = resolvePiChildModelBootstrapEntry) => (options) => {
   const config = resolveTaskConfig({
     // SAFETY: options.thinking comes from the typed SpawnSubagentTask.thinking field.
     item: { prompt: options.prompt, model: options.model, thinking: options.thinking, fork: false },
@@ -14905,10 +14944,23 @@ var createPiChildSpawner = (spawnImpl = nodeSpawn, resolveAdapterEntry = resolve
   const events = (emit) => {
     emit({ kind: "run-started" });
     const adapterEntry = resolveAdapterEntry();
+    const childModel = childModelSelection(config.modelLabel);
+    const bootstrapEntry = childModel ? resolveBootstrapEntry() : void 0;
+    if (childModel && (!adapterEntry || !bootstrapEntry)) {
+      emit({
+        kind: "run-settled",
+        outcome: { kind: "failed", errorText: `Numbered Claude child startup unavailable: ${!adapterEntry ? "OAuth adapter not found" : "model bootstrap not found"}` }
+      });
+      return;
+    }
     const roleArgs = options.appendSystemPrompt ? ["--append-system-prompt", options.appendSystemPrompt] : [];
     const adapterArgs = adapterEntry ? ["-e", adapterEntry] : [];
-    const proc = spawnImpl("pi", [...config.subprocessArgs, ...roleArgs, ...adapterArgs, options.prompt], {
+    const bootstrapArgs = bootstrapEntry ? ["-e", bootstrapEntry] : [];
+    const subprocessArgs = childModel ? removeCliModelSelection(config.subprocessArgs) : config.subprocessArgs;
+    const childEnv = childModel ? { ...process.env, [CHILD_MODEL_PROVIDER_ENV]: childModel.provider, [CHILD_MODEL_ID_ENV]: childModel.modelId } : process.env;
+    const proc = spawnImpl(resolveBinary(), [...subprocessArgs, ...roleArgs, ...adapterArgs, ...bootstrapArgs, options.prompt], {
       cwd: options.cwd,
+      env: childEnv,
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
       // Own process group on POSIX so interrupt/SIGKILL can signal the
@@ -17589,7 +17641,7 @@ function canonicalize(path2, realpath) {
 }
 function moduleUrlToPath2(moduleUrl) {
   try {
-    return moduleUrl.startsWith("file:") ? fileURLToPath4(moduleUrl) : moduleUrl;
+    return moduleUrl.startsWith("file:") ? fileURLToPath5(moduleUrl) : moduleUrl;
   } catch {
     return moduleUrl;
   }

@@ -2,10 +2,12 @@ import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from "node:ch
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { SubagentEvent } from "./domain.js";
 import { safeValuePreview } from "../activity/domain.js";
 import { type BuiltInToolName, resolveTaskConfig } from "../native-task-config.js";
 import { isRecord, type TaskThinking, type ThinkingLevel } from "../native-task-params.js";
+import { CHILD_MODEL_ID_ENV, CHILD_MODEL_PROVIDER_ENV } from "./pi-child-model-bootstrap.js";
 
 /** Runtime string discriminator for decoded child-process payloads. */
 const isString = <T>(value: T): value is T & string => typeof value === "string";
@@ -18,6 +20,7 @@ const ERROR_MAX = 4096;
 
 const CLAUDE_OAUTH_ADAPTER_PACKAGE = "pi-claude-oauth-adapter";
 const MULTI_ACCOUNT_ADAPTER_SOURCE = "git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account";
+const NUMBERED_ANTHROPIC_PROVIDER = /^anthropic-\d+$/;
 
 function adapterEntryFromPackageDir(packageDir: string): string | undefined {
 	try {
@@ -337,7 +340,47 @@ const attachAbortSignal = (proc: ChildProcessWithoutNullStreams, signal: AbortSi
 	return { isAborted: () => aborted, interrupt };
 };
 
-export const createPiChildSpawner = (spawnImpl: SpawnLike = nodeSpawn, resolveAdapterEntry: () => string | undefined = resolveClaudeOauthAdapterEntry) => (options: {
+export function resolvePiBinary(env: NodeJS.ProcessEnv = process.env): string {
+	return env.PI_BIN?.trim() || "pi";
+}
+
+export function resolvePiChildModelBootstrapEntry(env: NodeJS.ProcessEnv = process.env): string | undefined {
+	const override = env.SUMOCODE_CHILD_MODEL_BOOTSTRAP?.trim();
+	const candidates = [
+		override,
+		env.SUMOCODE_ROOT_DIR ? join(env.SUMOCODE_ROOT_DIR, "src", "subagents", "pi-child-model-bootstrap.ts") : undefined,
+		fileURLToPath(new URL("./pi-child-model-bootstrap.ts", import.meta.url)),
+	];
+	return candidates.find((candidate): candidate is string => !!candidate && existsSync(candidate));
+}
+
+function childModelSelection(modelLabel: string | undefined): { provider: string; modelId: string } | undefined {
+	if (!modelLabel) return undefined;
+	const separator = modelLabel.indexOf("/");
+	if (separator <= 0) return undefined;
+	const provider = modelLabel.slice(0, separator);
+	const modelId = modelLabel.slice(separator + 1);
+	return NUMBERED_ANTHROPIC_PROVIDER.test(provider) && modelId ? { provider, modelId } : undefined;
+}
+
+function removeCliModelSelection(args: readonly string[]): string[] {
+	const result: string[] = [];
+	for (let index = 0; index < args.length; index += 1) {
+		if (args[index] === "--provider" || args[index] === "--model") {
+			index += 1;
+			continue;
+		}
+		result.push(args[index] ?? "");
+	}
+	return result;
+}
+
+export const createPiChildSpawner = (
+	spawnImpl: SpawnLike = nodeSpawn,
+	resolveAdapterEntry: () => string | undefined = resolveClaudeOauthAdapterEntry,
+	resolveBinary: () => string = resolvePiBinary,
+	resolveBootstrapEntry: () => string | undefined = resolvePiChildModelBootstrapEntry,
+) => (options: {
 	prompt: string;
 	cwd: string;
 	model?: string;
@@ -379,11 +422,26 @@ export const createPiChildSpawner = (spawnImpl: SpawnLike = nodeSpawn, resolveAd
 	const events = (emit: (event: SubagentEvent) => void): void => {
 		emit({ kind: "run-started" });
 		const adapterEntry = resolveAdapterEntry();
+		const childModel = childModelSelection(config.modelLabel);
+		const bootstrapEntry = childModel ? resolveBootstrapEntry() : undefined;
+		if (childModel && (!adapterEntry || !bootstrapEntry)) {
+			emit({
+				kind: "run-settled",
+				outcome: { kind: "failed", errorText: `Numbered Claude child startup unavailable: ${!adapterEntry ? "OAuth adapter not found" : "model bootstrap not found"}` },
+			});
+			return;
+		}
 		const roleArgs = options.appendSystemPrompt ? ["--append-system-prompt", options.appendSystemPrompt] : [];
 		const adapterArgs = adapterEntry ? ["-e", adapterEntry] : [];
+		const bootstrapArgs = bootstrapEntry ? ["-e", bootstrapEntry] : [];
+		const subprocessArgs = childModel ? removeCliModelSelection(config.subprocessArgs) : config.subprocessArgs;
+		const childEnv = childModel
+			? { ...process.env, [CHILD_MODEL_PROVIDER_ENV]: childModel.provider, [CHILD_MODEL_ID_ENV]: childModel.modelId }
+			: process.env;
 		// SAFETY: stdio is piped below, so the spawned child always has non-null streams.
-		const proc = spawnImpl("pi", [...config.subprocessArgs, ...roleArgs, ...adapterArgs, options.prompt], {
+		const proc = spawnImpl(resolveBinary(), [...subprocessArgs, ...roleArgs, ...adapterArgs, ...bootstrapArgs, options.prompt], {
 			cwd: options.cwd,
+			env: childEnv,
 			shell: false,
 			stdio: ["pipe", "pipe", "pipe"],
 			// Own process group on POSIX so interrupt/SIGKILL can signal the

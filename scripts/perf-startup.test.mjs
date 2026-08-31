@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyRpcProbeLine, readinessTimeline, summariseMeasurement } from "./perf-startup.mjs";
+import { classifyRpcProbeLine, readinessTimeline, startupTimelineComplete, summariseMeasurement } from "./perf-startup.mjs";
 
 describe("startup RPC readiness classification", () => {
 	it("accepts only a successful matching get_state response", () => {
@@ -30,6 +30,30 @@ describe("startup readiness timeline", () => {
 			{ event: "editor_ready", ts: 115 },
 			{ event: "app_ready", ts: 225 },
 		], 100)).toEqual({ editorReadyMs: 15, commandReadyMs: undefined, editorToCommandGapMs: undefined });
+	});
+});
+
+describe("startup timeline completion", () => {
+	it("settles from the permanent events without requiring one-release aliases", () => {
+		expect(startupTimelineComplete({
+			bootScreenFrameMs: 10,
+			editorReadyMs: 11,
+			commandReadyMs: 20,
+			editorToCommandGapMs: 9,
+			stableChromeMs: 19,
+			appReadyMs: undefined,
+			inputReadyMs: undefined,
+		})).toBe(true);
+	});
+
+	it("waits for every permanent readiness event", () => {
+		expect(startupTimelineComplete({
+			bootScreenFrameMs: 10,
+			editorReadyMs: 11,
+			commandReadyMs: undefined,
+			editorToCommandGapMs: undefined,
+			stableChromeMs: 19,
+		})).toBe(false);
 	});
 });
 

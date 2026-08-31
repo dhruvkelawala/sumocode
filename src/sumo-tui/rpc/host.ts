@@ -517,9 +517,14 @@ export interface EditorSubmitHandlerDependencies {
 	readonly isTreeBusy: () => boolean;
 }
 
+export interface EditorSubmitHandlers {
+	readonly fromEditor: (message: string) => Promise<void>;
+	readonly fromLaunch: (message: string) => Promise<void>;
+}
+
 /** Keeps early editing responsive while command dispatch waits for hydration. */
-export function createEditorSubmitHandler(deps: EditorSubmitHandlerDependencies): (message: string) => Promise<void> {
-	return async (message) => {
+export function createEditorSubmitHandlers(deps: EditorSubmitHandlerDependencies): EditorSubmitHandlers {
+	const submit = async (message: string, notifyWhenQueued: boolean): Promise<void> => {
 		const trimmed = message.trim();
 		if (trimmed.length === 0) return;
 		// /quit is entirely host-owned and must remain available when the child
@@ -529,7 +534,9 @@ export function createEditorSubmitHandler(deps: EditorSubmitHandlerDependencies)
 			deps.requestExit(0);
 			return;
 		}
-		if (!deps.gate.isReady) deps.notifications.notify("finishing startup · command queued", "warning");
+		if (notifyWhenQueued && !deps.gate.isReady) {
+			deps.notifications.notify("finishing startup · command queued", "warning");
+		}
 		// Wait for hydration AND for any deferred child-dependent intent (e.g. a
 		// model/thinking cycle) to fully apply, so a prompt never dispatches under
 		// state an earlier gated shortcut is still committing.
@@ -540,16 +547,19 @@ export function createEditorSubmitHandler(deps: EditorSubmitHandlerDependencies)
 		}
 		await deps.submit(message);
 	};
+	return {
+		fromEditor: (message) => submit(message, true),
+		fromLaunch: (message) => submit(message, false),
+	};
 }
 
 /**
  * Submits `SUMOCODE_INITIAL_PROMPT` (set by `bin/sumocode.sh` when a task/
  * prompt positional was destined for `pi --mode rpc`, which never reads argv
  * positionals -- only InteractiveMode does; rpc-mode.js reads only stdin JSON
- * commands) via `submit`, the SAME function the host wires as the editor's
- * `onSubmit` (see `submitFromEditor` in `runRpcHost`), so streaming state,
- * transcript, and interrupt flags all engage exactly as they would for a real
- * editor submit instead of the prompt silently vanishing.
+ * commands) through the launch member of the same submit policy that owns
+ * editor submissions, so streaming state, transcript, and interrupt flags all
+ * engage instead of the prompt silently vanishing.
  *
  * A no-op when the env var is absent or blank -- the common case for every
  * launch that isn't `sumocode <prompt>` / `sumocode task <prompt>`.
@@ -1147,7 +1157,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	 * be consumed by the pre-hydration scheduler generation. Keeping this gate
 	 * at submit (not typing) preserves early editing without dropping a prompt.
 	 */
-	const submitFromEditor = createEditorSubmitHandler({
+	const submitHandlers = createEditorSubmitHandlers({
 		gate: hydrationActionGate,
 		notifications,
 		requestExit: (code) => requestHostExit(code),
@@ -1201,7 +1211,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// app.interrupt (Escape by default, or the user's remap): replay into
 		// the interrupt tier module (see `handleAppInterrupt` above).
 		onInterrupt: () => handleAppInterrupt(),
-		onSubmit: submitFromEditor,
+		onSubmit: submitHandlers.fromEditor,
 		// app.model.cycleForward / app.model.cycleBackward / app.thinking.cycle
 		// / app.tools.expand: registered via CustomEditor's generic
 		// `onAction` map (see editor.ts's onModelCycleForward etc. doc
@@ -1212,7 +1222,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// selector `/model` with no args and the command palette's "MODEL"
 		// entry both already use. `actions` is a forward reference (assigned
 		// below, after `editor` -- same closure-captures-later-assignment
-		// pattern `submitFromEditor` above already relies on for `actions`)
+		// pattern `submitHandlers` above already relies on for `actions`)
 		// since `RpcHostActions` itself needs `editorText: editor` to
 		// construct.
 		onModelSelect: () => hydrationActionGate.run(DEFERRED_SELECTOR_ACTION_KEY, () => notifyOnError(async () => { await actions?.openModelSelector(); }, notifications)),
@@ -1929,20 +1939,9 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// worker; lock waits and durability fsyncs never run on the TUI thread.
 		scheduleChromeCacheState();
 		if (!visualFixture) {
-			// Submit the launcher's kickoff prompt (if any) only after start() +
-			// initial hydration above, so the transcript/UI are already in a
-			// normal steady state when the submit's streaming-state painting and
-			// event handling kick in -- see submitInitialPromptFromEnv's doc
-			// comment for why this reuses submitFromEditor instead of a bespoke
-			// path.
-			//
-			// Settle the gate first: releaseInitialHydration() above only resolves
-			// the promise, and the gate publishes isReady on a later microtask, so
-			// a synchronous kickoff here would still observe isReady === false and
-			// render the pre-ready "command queued" notice for a launch-seeded,
-			// never-blocked submission.
-			await hydrationActionGate.whenSettled();
-			await submitInitialPromptFromEnv(env, submitFromEditor);
+			// The launch-specific handler owns its silent readiness wait; callers
+			// identify only the source and cannot leak queue-notice policy.
+			await submitInitialPromptFromEnv(env, submitHandlers.fromLaunch);
 			await refreshStats();
 			statsTimer = setInterval(() => { void refreshStats(); }, 5_000);
 		}

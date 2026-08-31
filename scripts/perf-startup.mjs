@@ -77,6 +77,14 @@ export function readinessTimeline(events, startWallMs) {
 	};
 }
 
+export function startupTimelineComplete(snapshot) {
+	return snapshot.bootScreenFrameMs !== undefined
+		&& snapshot.editorReadyMs !== undefined
+		&& snapshot.commandReadyMs !== undefined
+		&& snapshot.editorToCommandGapMs !== undefined
+		&& snapshot.stableChromeMs !== undefined;
+}
+
 export function classifyRpcProbeLine(line) {
 	try {
 		const response = JSON.parse(line);
@@ -399,15 +407,7 @@ async function measureStartupTimeline() {
 			};
 			pollHandle = setInterval(async () => {
 				const snapshot = await collect();
-				if (
-					snapshot.bootScreenFrameMs !== undefined
-					&& snapshot.editorReadyMs !== undefined
-					&& snapshot.commandReadyMs !== undefined
-					&& snapshot.editorToCommandGapMs !== undefined
-					&& snapshot.appReadyMs !== undefined
-					&& snapshot.stableChromeMs !== undefined
-					&& snapshot.inputReadyMs !== undefined
-				) {
+				if (startupTimelineComplete(snapshot)) {
 					const { events: _events, ...timings } = snapshot;
 					await settle({ ok: true, durationMs: nowMs() - start, ...timings });
 				}

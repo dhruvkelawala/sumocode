@@ -12,7 +12,7 @@ import { RpcHostStateStore } from "./state.js";
 import {
 	activitySnapshotMatchesSession,
 	canRpcForceSteer,
-	createEditorSubmitHandler,
+	createEditorSubmitHandlers,
 	createLazyChatSink,
 	createModelCycleBackwardHandler,
 	createModelCycleForwardHandler,
@@ -129,7 +129,7 @@ describe("editor command-readiness submission", () => {
 		let ready = false;
 		const notifications = { notify: vi.fn() };
 		const submit = vi.fn(async () => undefined);
-		const handler = createEditorSubmitHandler({
+		const handlers = createEditorSubmitHandlers({
 			gate: {
 				get isReady() { return ready; },
 				whenSettled: () => settled.promise,
@@ -140,7 +140,7 @@ describe("editor command-readiness submission", () => {
 			isTreeBusy: () => false,
 		});
 
-		const pending = handler(message);
+		const pending = handlers.fromEditor(message);
 		expect(notifications.notify).toHaveBeenCalledOnce();
 		expect(notifications.notify).toHaveBeenCalledWith("finishing startup · command queued", "warning");
 		expect(submit).not.toHaveBeenCalled();
@@ -156,7 +156,7 @@ describe("editor command-readiness submission", () => {
 		const notifications = { notify: vi.fn() };
 		const requestExit = vi.fn();
 		const submit = vi.fn(async () => undefined);
-		const handler = createEditorSubmitHandler({
+		const handlers = createEditorSubmitHandlers({
 			gate: { isReady: false, whenSettled: () => new Promise<void>(() => undefined) },
 			notifications,
 			submit,
@@ -164,7 +164,7 @@ describe("editor command-readiness submission", () => {
 			isTreeBusy: () => false,
 		});
 
-		await handler("  /quit now  ");
+		await handlers.fromEditor("  /quit now  ");
 		expect(requestExit).toHaveBeenCalledWith(0);
 		expect(notifications.notify).not.toHaveBeenCalled();
 		expect(submit).not.toHaveBeenCalled();
@@ -182,7 +182,7 @@ describe("editor command-readiness submission", () => {
 		const gate = new InitialHydrationActionGate(initialHydration);
 		const notifications = { notify: vi.fn() };
 		const submit = vi.fn(async () => undefined);
-		const handler = createEditorSubmitHandler({
+		const handlers = createEditorSubmitHandlers({
 			gate,
 			notifications,
 			submit,
@@ -190,14 +190,18 @@ describe("editor command-readiness submission", () => {
 			isTreeBusy: () => false,
 		});
 
-		releaseInitialHydration();
-		// Mechanism guard: on the same tick the gate is NOT yet ready, which is
-		// exactly why the call site must settle before a silent kickoff.
+		const pending = submitInitialPromptFromEnv(
+			{ SUMOCODE_INITIAL_PROMPT: "review the diff" },
+			handlers.fromLaunch,
+		);
+		// The handler, not this caller, owns the silent wait policy for a prompt
+		// supplied at launch.
 		expect(gate.isReady).toBe(false);
+		expect(notifications.notify).not.toHaveBeenCalled();
+		expect(submit).not.toHaveBeenCalled();
 
-		await gate.whenSettled();
-		expect(gate.isReady).toBe(true);
-		await submitInitialPromptFromEnv({ SUMOCODE_INITIAL_PROMPT: "review the diff" }, handler);
+		releaseInitialHydration();
+		await pending;
 
 		expect(notifications.notify).not.toHaveBeenCalled();
 		expect(submit).toHaveBeenCalledOnce();
@@ -1307,9 +1311,9 @@ describe("submitInitialPromptFromEnv (SUMOCODE_INITIAL_PROMPT seam)", () => {
 	// bin/sumocode.sh strips a task/prompt positional out of the argv it
 	// forwards to `pi --mode rpc` (which never reads argv positionals -- only
 	// InteractiveMode does) and hands it to the host via this env var instead.
-	// runRpcHost submits it through `submitFromEditor`, the exact same function
-	// wired as the editor's onSubmit, once client.start() + initial hydration
-	// have completed.
+	// runRpcHost submits it through the launch member of the same handler policy
+	// that owns editor submission, so readiness and dispatch behavior stay shared
+	// while queue-notice policy remains source-specific.
 
 	it("submits exactly one prompt after start when SUMOCODE_INITIAL_PROMPT is set", async () => {
 		const submit = vi.fn(async (_message: string) => undefined);

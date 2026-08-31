@@ -14884,12 +14884,16 @@ var attachAbortSignal2 = (proc, signal) => {
 function resolvePiBinary(env = process.env) {
   return env.PI_BIN?.trim() || "pi";
 }
-function resolvePiChildModelBootstrapEntry(env = process.env) {
+function resolvePiChildModelBootstrapEntry(env = process.env, moduleUrl = import.meta.url) {
   const override = env.SUMOCODE_CHILD_MODEL_BOOTSTRAP?.trim();
+  const moduleDir = dirname12(fileURLToPath4(moduleUrl));
   const candidates = [
     override,
     env.SUMOCODE_ROOT_DIR ? join18(env.SUMOCODE_ROOT_DIR, "src", "subagents", "pi-child-model-bootstrap.ts") : void 0,
-    fileURLToPath4(new URL("./pi-child-model-bootstrap.ts", import.meta.url))
+    join18(moduleDir, "pi-child-model-bootstrap.ts"),
+    // The committed extension bundle lives at dist/extension/*.mjs while this
+    // child-only entry remains executable TypeScript under src/subagents.
+    resolve6(moduleDir, "..", "..", "src", "subagents", "pi-child-model-bootstrap.ts")
   ];
   return candidates.find((candidate) => !!candidate && existsSync11(candidate));
 }

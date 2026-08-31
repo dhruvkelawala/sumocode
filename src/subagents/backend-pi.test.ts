@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { createPiChildSpawner, resolveClaudeOauthAdapterEntry, resolvePiBinary, resolvePiChildModelBootstrapEntry } from "./backend-pi.js";
 import type { SubagentEvent } from "./domain.js";
@@ -37,6 +38,16 @@ describe("resolvePiBinary", () => {
 		writeFileSync(entry, "// bootstrap");
 		expect(resolvePiChildModelBootstrapEntry({ SUMOCODE_CHILD_MODEL_BOOTSTRAP: entry })).toBe(entry);
 		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("resolves the source bootstrap from the committed bundle layout without SUMOCODE_ROOT_DIR", () => {
+		const root = mkdtempSync(join(tmpdir(), "sumo-bundle-bootstrap-"));
+		const entry = join(root, "src", "subagents", "pi-child-model-bootstrap.ts");
+		mkdirSync(join(root, "src", "subagents"), { recursive: true });
+		writeFileSync(entry, "// bootstrap");
+		const bundleUrl = pathToFileURL(join(root, "dist", "extension", "sumocode-extension.bundle.mjs")).href;
+		expect(resolvePiChildModelBootstrapEntry({}, bundleUrl)).toBe(entry);
+		rmSync(root, { recursive: true, force: true });
 	});
 });
 

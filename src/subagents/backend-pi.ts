@@ -344,12 +344,19 @@ export function resolvePiBinary(env: NodeJS.ProcessEnv = process.env): string {
 	return env.PI_BIN?.trim() || "pi";
 }
 
-export function resolvePiChildModelBootstrapEntry(env: NodeJS.ProcessEnv = process.env): string | undefined {
+export function resolvePiChildModelBootstrapEntry(
+	env: NodeJS.ProcessEnv = process.env,
+	moduleUrl: string = import.meta.url,
+): string | undefined {
 	const override = env.SUMOCODE_CHILD_MODEL_BOOTSTRAP?.trim();
+	const moduleDir = dirname(fileURLToPath(moduleUrl));
 	const candidates = [
 		override,
 		env.SUMOCODE_ROOT_DIR ? join(env.SUMOCODE_ROOT_DIR, "src", "subagents", "pi-child-model-bootstrap.ts") : undefined,
-		fileURLToPath(new URL("./pi-child-model-bootstrap.ts", import.meta.url)),
+		join(moduleDir, "pi-child-model-bootstrap.ts"),
+		// The committed extension bundle lives at dist/extension/*.mjs while this
+		// child-only entry remains executable TypeScript under src/subagents.
+		resolve(moduleDir, "..", "..", "src", "subagents", "pi-child-model-bootstrap.ts"),
 	];
 	return candidates.find((candidate): candidate is string => !!candidate && existsSync(candidate));
 }

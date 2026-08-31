@@ -7327,7 +7327,8 @@ function writeAccountsMigration(source, document) {
   renameSync2(temporary, source);
 }
 function seedUnmigratedPrivateAccounts(source, target) {
-  const primary = readAccountsLikeDocument(source) ?? {};
+  const primary = readAccountsLikeDocument(source);
+  if (!primary) throw new Error(`Invalid private accounts config; repair before syncing: ${source}`);
   const targetAlreadyManaged = resolvesToSamePath(source, target);
   if (primary[CLAUDE_ACCOUNTS_MIGRATION_FIELD] === true && targetAlreadyManaged) return;
   const agentDocument = targetAlreadyManaged ? void 0 : readAccountsLikeDocument(target);

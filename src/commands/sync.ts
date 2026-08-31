@@ -191,7 +191,8 @@ function writeAccountsMigration(source: string, document: AccountsLikeDocument):
 }
 
 function seedUnmigratedPrivateAccounts(source: string, target: string): void {
-	const primary = readAccountsLikeDocument(source) ?? {};
+	const primary = readAccountsLikeDocument(source);
+	if (!primary) throw new Error(`Invalid private accounts config; repair before syncing: ${source}`);
 	const targetAlreadyManaged = resolvesToSamePath(source, target);
 	// The synced marker records document migration; the managed link records
 	// completion on this machine. A second machine must still merge its local

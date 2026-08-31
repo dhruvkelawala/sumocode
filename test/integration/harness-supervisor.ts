@@ -1,8 +1,9 @@
 import { type ChildProcess, type SpawnOptions, spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { afterAll } from "vitest";
 
 const HARNESS_SIGNATURE = "sumocode-verification-harness-v2";
 const REAP_GRACE_MS = 750;
@@ -58,12 +59,17 @@ export interface SupervisedProcess {
 
 let fallbackRoot: string | undefined;
 let childSequence = 0;
+const focusedProcessGroups = new Set<number>();
 
 function harnessRoot(env: NodeJS.ProcessEnv = process.env): string {
 	if (env.SUMOCODE_INTEGRATION_RUN_ROOT) return env.SUMOCODE_INTEGRATION_RUN_ROOT;
 	if (fallbackRoot === undefined) {
 		fallbackRoot = mkdtempSync(join(tmpdir(), "sumocode-harness-v2-focused-"));
-		process.once("exit", () => rmSync(fallbackRoot!, { recursive: true, force: true }));
+		writeFileSync(
+			join(fallbackRoot, "owner.json"),
+			`${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), mode: "focused" }, null, 2)}\n`,
+			{ mode: 0o600 },
+		);
 	}
 	return fallbackRoot;
 }
@@ -76,6 +82,7 @@ function appendManifest(event: HarnessManifestEvent, env: NodeJS.ProcessEnv = pr
 	const path = manifestPath(env);
 	mkdirSync(dirname(path), { recursive: true });
 	appendFileSync(path, `${JSON.stringify({ ts: Date.now(), ...event })}\n`, { mode: 0o600 });
+	if (env.SUMOCODE_INTEGRATION_RUN_ROOT === undefined && event.event === "spawn") focusedProcessGroups.add(event.pgid);
 }
 
 function shellArg(value: string): string {
@@ -134,6 +141,29 @@ function readTail(path: string): string {
 	return bytes.subarray(Math.max(0, bytes.length - STDERR_TAIL_BYTES)).toString("utf8");
 }
 
+function runRootForEvidence(evidenceDir: string): string | undefined {
+	let path = evidenceDir;
+	for (;;) {
+		if (basename(path) === "evidence") return dirname(path);
+		const parent = dirname(path);
+		if (parent === path) return undefined;
+		path = parent;
+	}
+}
+
+function markRunEvidenceRetained(root: string): void {
+	writeFileSync(
+		join(root, "evidence-retained.json"),
+		`${JSON.stringify({ ownerPid: process.pid, retainedAt: new Date().toISOString() }, null, 2)}\n`,
+		{ mode: 0o600 },
+	);
+}
+
+function markEvidenceRetained(evidenceDir: string): void {
+	const root = runRootForEvidence(evidenceDir);
+	if (root !== undefined) markRunEvidenceRetained(root);
+}
+
 export async function captureTimeoutEvidence(input: TimeoutEvidenceInput): Promise<string> {
 	await mkdir(input.evidenceDir, { recursive: true, mode: 0o700 });
 	await Promise.all([
@@ -145,6 +175,7 @@ export async function captureTimeoutEvidence(input: TimeoutEvidenceInput): Promi
 			? copyFile(input.diagPath, join(input.evidenceDir, "diagnostics.jsonl"))
 			: writeFile(join(input.evidenceDir, "diagnostics.jsonl"), "<no diagnostics captured>\n", { mode: 0o600 }),
 	]);
+	markEvidenceRetained(input.evidenceDir);
 	return input.evidenceDir;
 }
 
@@ -229,3 +260,19 @@ export function supervisePtyProcess(pid: number, evidence: ChildEvidenceContext,
 export function recordPtyExit(pid: number, pgid: number, exitCode: number, signal: number | undefined, env: NodeJS.ProcessEnv): void {
 	appendManifest({ event: "exit", pid, pgid, code: exitCode, signal, kind: "pty" }, env);
 }
+
+afterAll(async () => {
+	if (fallbackRoot === undefined) return;
+	const root = fallbackRoot;
+	const survivors = [...focusedProcessGroups].filter(groupIsAlive);
+	for (const pgid of survivors) await terminateGroup(pgid);
+	const unreaped = survivors.filter(groupIsAlive);
+	console.log(`[focused harness] zero-survivor audit: ${survivors.length} survivors across ${focusedProcessGroups.size} registered process group(s)`);
+	if (survivors.length > 0) markRunEvidenceRetained(root);
+	if (!existsSync(join(root, "evidence-retained.json"))) rmSync(root, { recursive: true, force: true });
+	fallbackRoot = undefined;
+	focusedProcessGroups.clear();
+	if (survivors.length > 0) {
+		throw new Error(`focused harness leaked ${survivors.length} process group(s); ${unreaped.length} remained after TERM→KILL`);
+	}
+});

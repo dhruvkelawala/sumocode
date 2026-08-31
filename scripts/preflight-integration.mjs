@@ -17,6 +17,7 @@ import {
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const HARNESS_SIGNATURE = "sumocode-verification-harness-v2";
 const HARNESS_DIR_PREFIXES = ["sumocode-harness-v2-", "sumocode-fake-pi-"];
+const RETAINED_EVIDENCE_MARKER = "evidence-retained.json";
 
 function processRows() {
 	const output = execFileSync("ps", ["eww", "-axo", "pid=,ppid=,pgid=,command="], { encoding: "utf8" });
@@ -33,28 +34,54 @@ function isHarnessProcess(row) {
 	);
 }
 
-export async function onlyHarnessScriptPackageDrift(root, manifest, manifestPath) {
-	if (!Array.isArray(manifest.inputs) || !manifest.inputs.includes("package.json")) return false;
-	let baselineCommit;
+function pidIsAlive(pid) {
+	if (!Number.isSafeInteger(pid) || pid <= 1) return false;
 	try {
-		baselineCommit = execFileSync("git", ["log", "-1", "--format=%H", "--", relative(root, manifestPath)], { cwd: root, encoding: "utf8" }).trim();
-	} catch { return false; }
-	if (!baselineCommit) return false;
-	let changed;
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return error?.code === "EPERM";
+	}
+}
+
+async function readOwnerPid(path) {
 	try {
-		changed = execFileSync("git", ["diff", "--name-only", baselineCommit, "--", ...manifest.inputs], { cwd: root, encoding: "utf8" })
-			.trim()
-			.split("\n")
-			.filter(Boolean);
-	} catch { return false; }
-	if (changed.length !== 1 || changed[0] !== "package.json") return false;
-	try {
-		const currentPackage = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
-		const baselinePackage = JSON.parse(execFileSync("git", ["show", `${baselineCommit}:package.json`], { cwd: root, encoding: "utf8" }));
-		delete currentPackage.scripts;
-		delete baselinePackage.scripts;
-		return JSON.stringify(currentPackage) === JSON.stringify(baselinePackage);
-	} catch { return false; }
+		const owner = JSON.parse(await readFile(join(path, "owner.json"), "utf8"));
+		return Number.isSafeInteger(owner?.pid) && owner.pid > 1 ? owner.pid : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+async function classifyHarnessDir(path) {
+	const ownerPid = await readOwnerPid(path);
+	if (ownerPid !== undefined && pidIsAlive(ownerPid)) return "live";
+	return existsSync(join(path, RETAINED_EVIDENCE_MARKER)) ? "retained" : "stale";
+}
+
+async function harnessState(tempRoot) {
+	let entries = [];
+	try { entries = await readdir(tempRoot, { withFileTypes: true }); } catch { return { staleDirs: [], retainedDirs: [] }; }
+	const state = { staleDirs: [], retainedDirs: [] };
+	for (const entry of entries) {
+		if (!entry.isDirectory() || !HARNESS_DIR_PREFIXES.some((prefix) => entry.name.startsWith(prefix))) continue;
+		const path = join(tempRoot, entry.name);
+		const classification = await classifyHarnessDir(path);
+		if (classification === "retained") state.retainedDirs.push(path);
+		else if (classification === "stale") state.staleDirs.push(path);
+	}
+	return state;
+}
+
+function harnessRunRootFromCommand(command) {
+	return command.match(/(?:^|\s)SUMOCODE_INTEGRATION_RUN_ROOT=([^\s]+)/)?.[1];
+}
+
+async function belongsToLiveHarnessRun(row) {
+	const runRoot = harnessRunRootFromCommand(row.command);
+	if (runRoot === undefined) return false;
+	const ownerPid = await readOwnerPid(runRoot);
+	return ownerPid !== undefined && pidIsAlive(ownerPid);
 }
 
 async function artifactIssue(root, kind) {
@@ -72,11 +99,8 @@ async function artifactIssue(root, kind) {
 		const inputsFresh = kind === "host"
 			? await hostInputManifestIsFresh(root, manifest)
 			: await extensionInputManifestIsFresh(root, manifest);
-		const harnessScriptOnlyDrift = !inputsFresh && kind === "extension"
-			? await onlyHarnessScriptPackageDrift(root, manifest, manifestPath)
-			: false;
 		const outputsHash = kind === "host" ? await hostOutputsHash(root) : await extensionOutputsHash(root);
-		if ((inputsFresh || harnessScriptOnlyDrift) && outputsHash === manifest.outputsHash) return undefined;
+		if (inputsFresh && outputsHash === manifest.outputsHash) return undefined;
 	} catch {
 		// Named below with the same deterministic remediation.
 	}
@@ -104,18 +128,14 @@ async function nodeModulesIssue(root) {
 	return undefined;
 }
 
-async function staleHarnessDirs(tempRoot) {
-	let entries = [];
-	try { entries = await readdir(tempRoot, { withFileTypes: true }); } catch { return []; }
-	return entries
-		.filter((entry) => entry.isDirectory() && HARNESS_DIR_PREFIXES.some((prefix) => entry.name.startsWith(prefix)))
-		.map((entry) => join(tempRoot, entry.name));
-}
-
 export async function inspectIntegrationPreflight({ root = ROOT, tempRoot = tmpdir(), rows = processRows(), env = process.env } = {}) {
 	const issues = [];
 	const notices = [];
-	const orphanRows = rows.filter(isHarnessProcess);
+	const state = await harnessState(tempRoot);
+	const orphanRows = [];
+	for (const row of rows.filter(isHarnessProcess)) {
+		if (!await belongsToLiveHarnessRun(row)) orphanRows.push(row);
+	}
 	if (orphanRows.length > 0) {
 		issues.push({
 			code: "orphan-harness-children",
@@ -124,15 +144,15 @@ export async function inspectIntegrationPreflight({ root = ROOT, tempRoot = tmpd
 			rows: orphanRows,
 		});
 	}
-	const staleDirs = await staleHarnessDirs(tempRoot);
-	if (staleDirs.length > 0) {
+	if (state.staleDirs.length > 0) {
 		issues.push({
 			code: "stale-harness-state",
-			message: `stale harness locks/state: ${staleDirs.join(", ")}`,
+			message: `stale harness locks/state: ${state.staleDirs.join(", ")}`,
 			remediation: "run node scripts/preflight-integration.mjs --fix",
-			paths: staleDirs,
+			paths: state.staleDirs,
 		});
 	}
+	for (const path of state.retainedDirs) notices.push(`retained-evidence: ${path}`);
 	const modules = await nodeModulesIssue(root);
 	if (modules) issues.push(modules);
 	for (const kind of ["host", "extension"]) {
@@ -144,29 +164,77 @@ export async function inspectIntegrationPreflight({ root = ROOT, tempRoot = tmpd
 	for (const key of Object.keys(env).filter((key) => key.startsWith("HERDR_") || key.startsWith("PI_SESSION"))) {
 		notices.push(`inherited ${key} will be stripped`);
 	}
-	return { issues, notices };
+	return { issues, notices, retainedEvidence: state.retainedDirs };
 }
 
-async function fixSafeIssues(report) {
+function currentProcessGroupId(rows) {
+	const ownRow = rows.find((row) => row.pid === process.pid);
+	if (ownRow !== undefined) return ownRow.pgid;
+	try {
+		return Number.parseInt(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" }).trim(), 10);
+	} catch {
+		return undefined;
+	}
+}
+
+function sendSignal(kill, pid, signal) {
+	try { kill(pid, signal); } catch {}
+}
+
+function groupIsHarnessOwned(pgid, rows, currentPgid) {
+	if (currentPgid === undefined || pgid === currentPgid) return false;
+	const leader = rows.find((row) => row.pid === pgid);
+	return leader !== undefined && isHarnessProcess(leader);
+}
+
+export async function fixIntegrationPreflight(report, {
+	purgeEvidence = false,
+	rows = processRows(),
+	readRows = processRows,
+	currentPgid = currentProcessGroupId(rows),
+	kill = process.kill.bind(process),
+	wait = () => new Promise((resolveDelay) => setTimeout(resolveDelay, 300)),
+} = {}) {
 	const orphanIssue = report.issues.find((issue) => issue.code === "orphan-harness-children");
-	for (const row of orphanIssue?.rows ?? []) {
-		try { process.kill(-row.pgid, "SIGTERM"); } catch {}
+	const fixableRows = [];
+	for (const reportedRow of orphanIssue?.rows ?? []) {
+		const row = rows.find((candidate) => candidate.pid === reportedRow.pid);
+		if (row !== undefined && isHarnessProcess(row) && !await belongsToLiveHarnessRun(row)) fixableRows.push(row);
 	}
-	if ((orphanIssue?.rows ?? []).length > 0) await new Promise((resolveDelay) => setTimeout(resolveDelay, 300));
-	for (const row of orphanIssue?.rows ?? []) {
-		try { process.kill(-row.pgid, "SIGKILL"); } catch {}
+	const harnessOwnedGroups = new Set(fixableRows
+		.map((row) => row.pgid)
+		.filter((pgid) => groupIsHarnessOwned(pgid, rows, currentPgid)));
+	for (const pgid of harnessOwnedGroups) sendSignal(kill, -pgid, "SIGTERM");
+	for (const row of fixableRows) {
+		if (!harnessOwnedGroups.has(row.pgid)) sendSignal(kill, row.pid, "SIGTERM");
 	}
+	if (harnessOwnedGroups.size > 0) await wait();
+	const rowsBeforeKill = readRows();
+	for (const pgid of harnessOwnedGroups) {
+		if (groupIsHarnessOwned(pgid, rowsBeforeKill, currentPgid)) sendSignal(kill, -pgid, "SIGKILL");
+	}
+
 	const stateIssue = report.issues.find((issue) => issue.code === "stale-harness-state");
-	for (const path of stateIssue?.paths ?? []) await rm(path, { recursive: true, force: true });
+	for (const path of stateIssue?.paths ?? []) {
+		if (await classifyHarnessDir(path) === "stale") await rm(path, { recursive: true, force: true });
+	}
+	if (purgeEvidence) {
+		for (const path of report.retainedEvidence ?? []) {
+			if (await classifyHarnessDir(path) === "retained") await rm(path, { recursive: true, force: true });
+		}
+	}
 }
 
-export async function runIntegrationPreflight({ fix = false } = {}) {
+export async function runIntegrationPreflight({ fix = false, purgeEvidence = false } = {}) {
 	let report = await inspectIntegrationPreflight();
 	if (fix) {
-		await fixSafeIssues(report);
+		await fixIntegrationPreflight(report, { purgeEvidence });
 		report = await inspectIntegrationPreflight();
 	}
-	for (const notice of report.notices) process.stdout.write(`[integration preflight] contained: ${notice}\n`);
+	for (const notice of report.notices) {
+		const prefix = notice.startsWith("retained-evidence:") ? "" : "contained: ";
+		process.stdout.write(`[integration preflight] ${prefix}${notice}\n`);
+	}
 	if (report.issues.length === 0) {
 		process.stdout.write("[integration preflight] clean\n");
 		return true;
@@ -178,11 +246,15 @@ export async function runIntegrationPreflight({ fix = false } = {}) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-	const unknown = process.argv.slice(2).filter((arg) => arg !== "--fix");
+	const args = process.argv.slice(2);
+	const unknown = args.filter((arg) => arg !== "--fix" && arg !== "--purge-evidence");
 	if (unknown.length > 0) {
 		process.stderr.write(`unknown preflight option: ${unknown.join(" ")}\n`);
 		process.exitCode = 2;
-	} else if (!await runIntegrationPreflight({ fix: process.argv.includes("--fix") })) {
+	} else if (args.includes("--purge-evidence") && !args.includes("--fix")) {
+		process.stderr.write("--purge-evidence requires --fix\n");
+		process.exitCode = 2;
+	} else if (!await runIntegrationPreflight({ fix: args.includes("--fix"), purgeEvidence: args.includes("--purge-evidence") })) {
 		process.exitCode = 1;
 	}
 }

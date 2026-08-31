@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { onlyHarnessScriptPackageDrift } from "./preflight-integration.mjs";
 import {
 	EXTENSION_ASSETS,
 	EXTENSION_INPUT_MANIFEST_VERSION,
@@ -34,17 +33,12 @@ describe("extension bundle freshness", () => {
 		for (const asset of EXTENSION_ASSETS) expect(existsSync(resolve(outDir, asset.output))).toBe(true);
 
 		const manifest = await readManifest();
-		const manifestPath = resolve(outDir, ".inputs.json");
 		const [inputsFresh, expectedOutputs] = await Promise.all([
 			extensionInputManifestIsFresh(root, manifest),
 			extensionOutputsHash(root),
 		]);
-		// Harness-only package scripts do not enter emitted extension bytes. The
-		// narrow git-backed exception keeps Plan 116 inside its no-dist scope;
-		// every other recipe/input change still fails this freshness contract.
-		const harnessScriptOnlyDrift = !inputsFresh && await onlyHarnessScriptPackageDrift(root, manifest, manifestPath);
 		// The output digest is bound into the manifest, not a separate sidecar.
-		if ((!inputsFresh && !harnessScriptOnlyDrift) || manifest.outputsHash !== expectedOutputs) {
+		if (!inputsFresh || manifest.outputsHash !== expectedOutputs) {
 			throw new Error("bundle out of date or corrupt — run pnpm build:extension");
 		}
 	});

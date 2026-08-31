@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { access, cp, mkdir, mkdtemp, readFile, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { TERMINAL_CLEANUP_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-controller.js";
 import { PI_BOOT_SEQUENCE, replayScreenRows, spawnPiPty, spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
 import { createRpcChildFixture } from "./rpc-child-fixture.js";
@@ -12,11 +12,13 @@ const CSI_U_ENTER = "\x1b[13u";
 
 let app: SpawnedPiPty | undefined;
 let artifactRoot: string;
+let suitePackageRoot: string;
+let standalonePackageRoot: string | undefined;
 const originalIntegrationPackageRoot = process.env.SUMOCODE_INTEGRATION_PACKAGE_ROOT;
 const originalCwd = process.cwd();
 
 beforeEach(async () => {
-	const sourceRoot = originalIntegrationPackageRoot ?? process.cwd();
+	const sourceRoot = suitePackageRoot;
 	artifactRoot = await mkdtemp(join(tmpdir(), "sumocode-rpc-host-artifacts-"));
 	for (const entry of ["bin", "dist", "scripts", "src", "package.json", "pnpm-lock.yaml", "tsconfig.json", "sumo-rpc-host.js"]) {
 		await cp(join(sourceRoot, entry), join(artifactRoot, entry), { recursive: true });
@@ -33,6 +35,10 @@ afterEach(async () => {
 	if (originalIntegrationPackageRoot === undefined) delete process.env.SUMOCODE_INTEGRATION_PACKAGE_ROOT;
 	else process.env.SUMOCODE_INTEGRATION_PACKAGE_ROOT = originalIntegrationPackageRoot;
 	await rm(artifactRoot, { recursive: true, force: true });
+});
+
+afterAll(async () => {
+	if (standalonePackageRoot !== undefined) await rm(standalonePackageRoot, { recursive: true, force: true });
 });
 
 function delay(ms: number): Promise<void> {
@@ -73,10 +79,19 @@ async function waitForFileText(path: string, expected: string, attempts = 200): 
 }
 
 describe("sumocode RPC host shell integration", () => {
-	beforeAll(() => {
-		if (originalIntegrationPackageRoot !== undefined) return;
-		execFileSync(process.execPath, ["scripts/build-host.mjs"], { cwd: process.cwd(), stdio: "pipe" });
-		execFileSync(process.execPath, ["scripts/build-extension.mjs"], { cwd: process.cwd(), stdio: "pipe" });
+	beforeAll(async () => {
+		if (originalIntegrationPackageRoot !== undefined) {
+			suitePackageRoot = originalIntegrationPackageRoot;
+			return;
+		}
+		standalonePackageRoot = await mkdtemp(join(tmpdir(), "sumocode-rpc-host-bootstrap-"));
+		for (const entry of ["bin", "dist", "scripts", "src", "package.json", "pnpm-lock.yaml", "tsconfig.json", "sumo-rpc-host.js"]) {
+			await cp(join(originalCwd, entry), join(standalonePackageRoot, entry), { recursive: true });
+		}
+		await symlink(join(originalCwd, "node_modules"), join(standalonePackageRoot, "node_modules"), "dir");
+		execFileSync(process.execPath, ["scripts/build-host.mjs"], { cwd: standalonePackageRoot, stdio: "pipe" });
+		execFileSync(process.execPath, ["scripts/build-extension.mjs"], { cwd: standalonePackageRoot, stdio: "pipe" });
+		suitePackageRoot = standalonePackageRoot;
 	});
 
 	async function bootWithHostMode(mode: "1" | "0"): Promise<void> {

@@ -27,6 +27,14 @@ async function reapGroup(pgid) {
 	await waitForGroupExit(pgid, REAP_GRACE_MS);
 }
 
+async function retainEvidence(runRoot, reason) {
+	await writeFile(
+		join(runRoot, "evidence-retained.json"),
+		`${JSON.stringify({ ownerPid: process.pid, retainedAt: new Date().toISOString(), reason }, null, 2)}\n`,
+		{ mode: 0o600 },
+	);
+}
+
 async function preparePackageSnapshot(runRoot, env) {
 	const packageRoot = join(runRoot, "package");
 	await mkdir(packageRoot, { recursive: true, mode: 0o700 });
@@ -116,6 +124,7 @@ async function main() {
 	try {
 		packageRoot = await preparePackageSnapshot(runRoot, env);
 	} catch (error) {
+		await retainEvidence(runRoot, "private artifact build failed");
 		process.stderr.write(`[integration harness] ${String(error)}\nEvidence retained: ${runRoot}\n`);
 		return 1;
 	}
@@ -142,7 +151,10 @@ async function main() {
 		&& !integrationStatus.interrupted
 		&& auditPassed;
 	if (passed) await rm(runRoot, { recursive: true, force: true });
-	else process.stderr.write(`[integration harness] evidence retained: ${runRoot}\n`);
+	else {
+		await retainEvidence(runRoot, "integration verification failed");
+		process.stderr.write(`[integration harness] evidence retained: ${runRoot}\n`);
+	}
 	if (passed) return 0;
 	if (seamStatus.code !== 0) return seamStatus.code ?? 1;
 	return integrationStatus.code ?? 1;

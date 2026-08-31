@@ -250,6 +250,48 @@ describe("/sumo:sync", () => {
 		stdout.mockRestore();
 	});
 
+	it("preserves the complete adapter document when seeding an existing empty private source", async () => {
+		const home = mkdtempSync(join(tmpdir(), "sumocode-sync-"));
+		const configRepo = join(home, ".config", "sumocode");
+		const agentDir = join(home, ".pi", "agent");
+		mkdirSync(join(configRepo, ".git"), { recursive: true });
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(join(configRepo, "claude-accounts.json"), JSON.stringify({ privateNote: "keep", subscriptions: [] }));
+		writeFileSync(join(agentDir, "claude-accounts.json"), JSON.stringify({
+			adapterMetadata: { revision: 3 },
+			unknownArray: ["preserve"],
+			subscriptions: [
+				{ provider: "openai", index: 4, label: "work" },
+				{ provider: "anthropic", index: 2, label: "company" },
+			],
+		}));
+
+		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
+		await executeSumoSync(ctx() as never, {
+			env: {},
+			homeDir: home,
+			cwd: "/repo/sumocode",
+			moduleUrl: "file:///repo/sumocode/src/commands/sync.ts",
+			exists: (path) => path === join(configRepo, ".git") || sumocodeRepoExists(path),
+			readFile: () => JSON.stringify({ name: "@dhruvkelawala/sumocode" }),
+			exec: async () => ({ stdout: "", stderr: "" }),
+		});
+
+		const source = join(configRepo, "claude-accounts.json");
+		expect(JSON.parse(readFileSync(source, "utf8"))).toEqual({
+			adapterMetadata: { revision: 3 },
+			unknownArray: ["preserve"],
+			privateNote: "keep",
+			subscriptions: [
+				{ provider: "openai", index: 4, label: "work" },
+				{ provider: "anthropic", index: 2, label: "company" },
+			],
+		});
+		expect(readlinkSync(join(agentDir, "claude-accounts.json"))).toBe(source);
+		stdout.mockRestore();
+	});
+
 	it("migrates readable accounts through an existing symlink before relinking", async () => {
 		const home = mkdtempSync(join(tmpdir(), "sumocode-sync-"));
 		const configRepo = join(home, ".config", "sumocode");

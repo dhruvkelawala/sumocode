@@ -172,12 +172,16 @@ function seedUnmigratedPrivateAccounts(source: string, target: string): void {
 	if (claudeSubscriptionsFromDocument(primary).length > 0) return;
 	const agentDocument = readAccountsLikeDocument(target);
 	const legacyDocument = readAccountsLikeDocument(join(dirname(target), "multi-pass.json"));
-	const incoming = claudeSubscriptionsFromDocument(agentDocument).length > 0
-		? claudeSubscriptionsFromDocument(agentDocument)
-		: claudeSubscriptionsFromDocument(legacyDocument);
-	if (incoming.length === 0) return;
-	const existing = Array.isArray(primary?.subscriptions) ? primary.subscriptions : [];
-	const next = { ...primary, subscriptions: [...existing, ...incoming] };
+	const incomingDocument = claudeSubscriptionsFromDocument(agentDocument).length > 0
+		? agentDocument
+		: claudeSubscriptionsFromDocument(legacyDocument).length > 0 ? legacyDocument : undefined;
+	if (!incomingDocument) return;
+	const existingSubscriptions = Array.isArray(primary?.subscriptions) ? primary.subscriptions : [];
+	const incomingSubscriptions = Array.isArray(incomingDocument.subscriptions) ? incomingDocument.subscriptions : [];
+	// Seed from the complete adapter/legacy document, not only its Claude rows:
+	// unknown top-level metadata and non-Claude subscriptions must survive.
+	// Existing private fields remain authoritative on key conflicts.
+	const next = { ...incomingDocument, ...primary, subscriptions: [...existingSubscriptions, ...incomingSubscriptions] };
 	const temporary = `${source}.${process.pid}.tmp`;
 	writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
 	renameSync(temporary, source);

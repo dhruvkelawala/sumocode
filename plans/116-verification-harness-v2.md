@@ -132,14 +132,15 @@ restore can damage only that test's soon-deleted copy, never the next test or th
 
 ## Verification evidence
 
-- Consecutive run 1: seam 5/5, integration 158/158, 134 process groups, zero survivors,
-  174 seconds wall clock.
-- Consecutive run 2 in the same shell: seam 5/5, integration 158/158, 134 process groups,
-  zero survivors, 213 seconds wall clock.
-- `pnpm exec tsc --noEmit`, `pnpm build`, and `pnpm lint` pass.
-- Unit assertions pass 2,618/2,618 with one worker. The default parallel command remains
-  load-sensitive at this base under high machine load, matching the existing Plan 096 ledger;
-  no unit/runtime source was changed by Plan 116.
+Measured at commit `a34c82ae4aaab1ee40b3d3a7618db11a5404e32c` with two consecutive
+`env -u NODE_PATH pnpm test:integration` runs in one shell:
+
+- Run 1: seam 10/10 in 909 ms; integration 159/159 in 167.34 seconds; 169 seconds wall
+  clock; `[integration harness] zero-orphan audit: 0 survivors across 134 registered process group(s)`.
+- Run 2: seam 10/10 in 911 ms; integration 159/159 in 162.45 seconds; 165 seconds wall
+  clock; `[integration harness] zero-orphan audit: 0 survivors across 134 registered process group(s)`.
+- `pnpm exec tsc --noEmit`, `pnpm build`, and `pnpm lint` pass. The focused review suite passes
+  78/78, and a focused fixture followed by preflight exits zero with no focused namespace left.
 
 ## Tradeoffs
 

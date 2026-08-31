@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { CLAUDE_ACCOUNTS_MIGRATION_FIELD } from "./accounts-config.js";
 
 const execFile = promisify(execFileCallback);
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -141,6 +142,7 @@ function resolvesToSamePath(left: string, right: string): boolean {
 
 interface AccountsLikeDocument {
 	readonly subscriptions?: unknown;
+	readonly _sumocodeClaudeAccountsMigrated?: unknown;
 }
 
 function readAccountsLikeDocument(path: string): AccountsLikeDocument | undefined {
@@ -167,24 +169,57 @@ function claudeSubscriptionsFromDocument(document: AccountsLikeDocument | undefi
 	return Array.isArray(document?.subscriptions) ? document.subscriptions.filter(isClaudeSubscription) : [];
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- decoded subscription entry; guards produce a stable merge identity.
+function subscriptionIdentity(value: unknown): string | undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+	// SAFETY: object shape was checked above; fields are validated before interpolation.
+	const candidate = value as { provider?: unknown; index?: unknown };
+	if (typeof candidate.provider !== "string" || typeof candidate.index !== "number" || !Number.isInteger(candidate.index)) return undefined;
+	return `${candidate.provider}\u0000${candidate.index}`;
+}
+
+function mergeSubscriptions(existing: readonly unknown[], incoming: readonly unknown[]): unknown[] {
+	const merged = [...existing];
+	const identities = new Set(existing.map(subscriptionIdentity).filter((identity): identity is string => identity !== undefined));
+	for (const entry of incoming) {
+		const identity = subscriptionIdentity(entry);
+		if (identity && identities.has(identity)) continue;
+		merged.push(entry);
+		if (identity) identities.add(identity);
+	}
+	return merged;
+}
+
+function writeAccountsMigration(source: string, document: AccountsLikeDocument): void {
+	const temporary = `${source}.${process.pid}.tmp`;
+	writeFileSync(temporary, `${JSON.stringify(document, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+	renameSync(temporary, source);
+}
+
 function seedUnmigratedPrivateAccounts(source: string, target: string): void {
-	const primary = readAccountsLikeDocument(source);
-	if (claudeSubscriptionsFromDocument(primary).length > 0) return;
+	const primary = readAccountsLikeDocument(source) ?? {};
+	if (primary[CLAUDE_ACCOUNTS_MIGRATION_FIELD] === true) return;
+	if (claudeSubscriptionsFromDocument(primary).length > 0) {
+		writeAccountsMigration(source, { ...primary, [CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true });
+		return;
+	}
 	const agentDocument = readAccountsLikeDocument(target);
 	const legacyDocument = readAccountsLikeDocument(join(dirname(target), "multi-pass.json"));
 	const incomingDocument = claudeSubscriptionsFromDocument(agentDocument).length > 0
 		? agentDocument
 		: claudeSubscriptionsFromDocument(legacyDocument).length > 0 ? legacyDocument : undefined;
-	if (!incomingDocument) return;
-	const existingSubscriptions = Array.isArray(primary?.subscriptions) ? primary.subscriptions : [];
-	const incomingSubscriptions = Array.isArray(incomingDocument.subscriptions) ? incomingDocument.subscriptions : [];
+	const existingSubscriptions = Array.isArray(primary.subscriptions) ? primary.subscriptions : [];
+	const incomingSubscriptions = Array.isArray(incomingDocument?.subscriptions) ? incomingDocument.subscriptions : [];
 	// Seed from the complete adapter/legacy document, not only its Claude rows:
 	// unknown top-level metadata and non-Claude subscriptions must survive.
-	// Existing private fields remain authoritative on key conflicts.
-	const next = { ...incomingDocument, ...primary, subscriptions: [...existingSubscriptions, ...incomingSubscriptions] };
-	const temporary = `${source}.${process.pid}.tmp`;
-	writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-	renameSync(temporary, source);
+	// Existing private fields and provider/index rows win conflicts.
+	const next = {
+		...incomingDocument,
+		...primary,
+		[CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true,
+		subscriptions: mergeSubscriptions(existingSubscriptions, incomingSubscriptions),
+	};
+	writeAccountsMigration(source, next);
 }
 
 function initialManagedConfigContent(item: typeof MANAGED_CONFIG_ITEMS[number], target: string): string | undefined {

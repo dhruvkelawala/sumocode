@@ -7191,6 +7191,11 @@ import { homedir as homedir7 } from "node:os";
 import { dirname as dirname3, join as join6, resolve as resolve2 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+
+// src/commands/accounts-config.ts
+var CLAUDE_ACCOUNTS_MIGRATION_FIELD = "_sumocodeClaudeAccountsMigrated";
+
+// src/commands/sync.ts
 var execFile2 = promisify(execFileCallback);
 var DEFAULT_TIMEOUT_MS = 12e4;
 var CONFIG_REPO_NAME = "sumocode";
@@ -7302,20 +7307,48 @@ function isClaudeSubscription(value) {
 function claudeSubscriptionsFromDocument(document) {
   return Array.isArray(document?.subscriptions) ? document.subscriptions.filter(isClaudeSubscription) : [];
 }
+function subscriptionIdentity(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
+  const candidate = value;
+  if (typeof candidate.provider !== "string" || typeof candidate.index !== "number" || !Number.isInteger(candidate.index)) return void 0;
+  return `${candidate.provider}\0${candidate.index}`;
+}
+function mergeSubscriptions(existing, incoming) {
+  const merged = [...existing];
+  const identities = new Set(existing.map(subscriptionIdentity).filter((identity) => identity !== void 0));
+  for (const entry of incoming) {
+    const identity = subscriptionIdentity(entry);
+    if (identity && identities.has(identity)) continue;
+    merged.push(entry);
+    if (identity) identities.add(identity);
+  }
+  return merged;
+}
+function writeAccountsMigration(source, document) {
+  const temporary = `${source}.${process.pid}.tmp`;
+  writeFileSync4(temporary, `${JSON.stringify(document, null, 2)}
+`, { encoding: "utf8", mode: 384 });
+  renameSync2(temporary, source);
+}
 function seedUnmigratedPrivateAccounts(source, target) {
-  const primary = readAccountsLikeDocument(source);
-  if (claudeSubscriptionsFromDocument(primary).length > 0) return;
+  const primary = readAccountsLikeDocument(source) ?? {};
+  if (primary[CLAUDE_ACCOUNTS_MIGRATION_FIELD] === true) return;
+  if (claudeSubscriptionsFromDocument(primary).length > 0) {
+    writeAccountsMigration(source, { ...primary, [CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true });
+    return;
+  }
   const agentDocument = readAccountsLikeDocument(target);
   const legacyDocument = readAccountsLikeDocument(join6(dirname3(target), "multi-pass.json"));
   const incomingDocument = claudeSubscriptionsFromDocument(agentDocument).length > 0 ? agentDocument : claudeSubscriptionsFromDocument(legacyDocument).length > 0 ? legacyDocument : void 0;
-  if (!incomingDocument) return;
-  const existingSubscriptions = Array.isArray(primary?.subscriptions) ? primary.subscriptions : [];
-  const incomingSubscriptions = Array.isArray(incomingDocument.subscriptions) ? incomingDocument.subscriptions : [];
-  const next = { ...incomingDocument, ...primary, subscriptions: [...existingSubscriptions, ...incomingSubscriptions] };
-  const temporary = `${source}.${process.pid}.tmp`;
-  writeFileSync4(temporary, `${JSON.stringify(next, null, 2)}
-`, { encoding: "utf8", mode: 384 });
-  renameSync2(temporary, source);
+  const existingSubscriptions = Array.isArray(primary.subscriptions) ? primary.subscriptions : [];
+  const incomingSubscriptions = Array.isArray(incomingDocument?.subscriptions) ? incomingDocument.subscriptions : [];
+  const next = {
+    ...incomingDocument,
+    ...primary,
+    [CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true,
+    subscriptions: mergeSubscriptions(existingSubscriptions, incomingSubscriptions)
+  };
+  writeAccountsMigration(source, next);
 }
 function initialManagedConfigContent(item, target) {
   if (item !== "claude-accounts.json") return void 0;
@@ -16911,6 +16944,7 @@ function saveClaudeSubscriptions(subscriptions, deps = {}) {
   const nonClaude = existing.filter((entry) => parseSubscription(entry)?.provider !== "anthropic");
   const next = {
     ...document,
+    [CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true,
     subscriptions: [...nonClaude, ...subscriptions]
   };
   mkdirSync10(dirname13(destination.writePath), { recursive: true, mode: 448 });

@@ -12,6 +12,7 @@ import {
 	saveClaudeSubscriptions,
 	type AccountsCommandDeps,
 } from "./accounts.js";
+import { CLAUDE_ACCOUNTS_MIGRATION_FIELD } from "./accounts-config.js";
 
 const tempDirs: string[] = [];
 
@@ -238,6 +239,7 @@ describe("saveClaudeSubscriptions symlink handling", () => {
 		expect(readlinkSync(target)).toBe(source);
 		expect(JSON.parse(readFileSync(source, "utf8"))).toEqual({
 			unknownFutureKey: "keep",
+			[CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true,
 			subscriptions: [{ provider: "anthropic", index: 2, label: "company" }],
 		});
 	});
@@ -257,6 +259,7 @@ describe("saveClaudeSubscriptions symlink handling", () => {
 		expect(lstatSync(target).isSymbolicLink()).toBe(true);
 		expect(readlinkSync(target)).toBe(source);
 		expect(JSON.parse(readFileSync(source, "utf8"))).toEqual({
+			[CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true,
 			subscriptions: [{ provider: "anthropic", index: 2, label: "company" }],
 		});
 	});
@@ -283,6 +286,7 @@ describe("saveClaudeSubscriptions symlink handling", () => {
 		expect(lstatSync(join(agentDir, "claude-accounts.json")).isSymbolicLink()).toBe(true);
 		expect(JSON.parse(readFileSync(join(configDir, "claude-accounts.json"), "utf8"))).toEqual({
 			unknownFutureKey: "keep",
+			[CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true,
 			subscriptions: [{ provider: "anthropic", index: 2, label: "personal" }],
 		});
 	});
@@ -302,9 +306,11 @@ describe("saveClaudeSubscriptions symlink handling", () => {
 		const source = join(configDir, "claude-accounts.json");
 		expect(lstatSync(source).isSymbolicLink()).toBe(false);
 		expect(JSON.parse(readFileSync(source, "utf8"))).toEqual({
+			[CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true,
 			subscriptions: [{ provider: "anthropic", index: 2, label: "company" }],
 		});
 		expect(JSON.parse(readFileSync(join(agentDir, "claude-accounts.json"), "utf8"))).toEqual({
+			[CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true,
 			subscriptions: [{ provider: "anthropic", index: 2, label: "company" }],
 		});
 	});

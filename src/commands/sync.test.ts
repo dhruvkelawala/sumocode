@@ -2,6 +2,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { CLAUDE_ACCOUNTS_MIGRATION_FIELD } from "./accounts-config.js";
 import { executeSumoBootstrap, executeSumoSync, formatSyncResults, registerSumoSyncCommand } from "./sync.js";
 
 function ctx() {
@@ -182,7 +183,10 @@ describe("/sumo:sync", () => {
 
 		const source = join(configRepo, "claude-accounts.json");
 		const target = join(agentDir, "claude-accounts.json");
-		expect(JSON.parse(readFileSync(source, "utf8"))).toEqual({ subscriptions: [] });
+		expect(JSON.parse(readFileSync(source, "utf8"))).toEqual({
+			[CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true,
+			subscriptions: [],
+		});
 		expect(statSync(source).mode & 0o777).toBe(0o600);
 		expect(lstatSync(target).isSymbolicLink()).toBe(true);
 		expect(readlinkSync(target)).toBe(source);
@@ -212,7 +216,10 @@ describe("/sumo:sync", () => {
 
 		const source = join(configRepo, "claude-accounts.json");
 		const target = join(agentDir, "claude-accounts.json");
-		expect(readFileSync(source, "utf8")).toBe(legacy);
+		expect(JSON.parse(readFileSync(source, "utf8"))).toEqual({
+			[CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true,
+			subscriptions: [{ provider: "anthropic", index: 2, label: "company" }],
+		});
 		expect(lstatSync(target).isSymbolicLink()).toBe(true);
 		expect(readlinkSync(target)).toBe(source);
 		stdout.mockRestore();
@@ -244,9 +251,43 @@ describe("/sumo:sync", () => {
 		const source = join(configRepo, "claude-accounts.json");
 		expect(JSON.parse(readFileSync(source, "utf8"))).toEqual({
 			privateNote: "keep",
+			[CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true,
 			subscriptions: [{ provider: "anthropic", index: 2, label: "company" }],
 		});
 		expect(readlinkSync(join(agentDir, "claude-accounts.json"))).toBe(source);
+		stdout.mockRestore();
+	});
+
+	it("does not restore legacy accounts after a completed migration intentionally becomes empty", async () => {
+		const home = mkdtempSync(join(tmpdir(), "sumocode-sync-"));
+		const configRepo = join(home, ".config", "sumocode");
+		const agentDir = join(home, ".pi", "agent");
+		mkdirSync(join(configRepo, ".git"), { recursive: true });
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(join(configRepo, "claude-accounts.json"), JSON.stringify({
+			[CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true,
+			subscriptions: [],
+		}));
+		writeFileSync(join(agentDir, "multi-pass.json"), JSON.stringify({
+			subscriptions: [{ provider: "anthropic", index: 2, label: "company" }],
+		}));
+
+		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
+		await executeSumoSync(ctx() as never, {
+			env: {},
+			homeDir: home,
+			cwd: "/repo/sumocode",
+			moduleUrl: "file:///repo/sumocode/src/commands/sync.ts",
+			exists: (path) => path === join(configRepo, ".git") || sumocodeRepoExists(path),
+			readFile: () => JSON.stringify({ name: "@dhruvkelawala/sumocode" }),
+			exec: async () => ({ stdout: "", stderr: "" }),
+		});
+
+		expect(JSON.parse(readFileSync(join(configRepo, "claude-accounts.json"), "utf8"))).toEqual({
+			[CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true,
+			subscriptions: [],
+		});
 		stdout.mockRestore();
 	});
 
@@ -256,7 +297,10 @@ describe("/sumo:sync", () => {
 		const agentDir = join(home, ".pi", "agent");
 		mkdirSync(join(configRepo, ".git"), { recursive: true });
 		mkdirSync(agentDir, { recursive: true });
-		writeFileSync(join(configRepo, "claude-accounts.json"), JSON.stringify({ privateNote: "keep", subscriptions: [] }));
+		writeFileSync(join(configRepo, "claude-accounts.json"), JSON.stringify({
+			privateNote: "keep",
+			subscriptions: [{ provider: "openai", index: 4, label: "private-work" }],
+		}));
 		writeFileSync(join(agentDir, "claude-accounts.json"), JSON.stringify({
 			adapterMetadata: { revision: 3 },
 			unknownArray: ["preserve"],
@@ -283,8 +327,9 @@ describe("/sumo:sync", () => {
 			adapterMetadata: { revision: 3 },
 			unknownArray: ["preserve"],
 			privateNote: "keep",
+			[CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true,
 			subscriptions: [
-				{ provider: "openai", index: 4, label: "work" },
+				{ provider: "openai", index: 4, label: "private-work" },
 				{ provider: "anthropic", index: 2, label: "company" },
 			],
 		});
@@ -318,7 +363,10 @@ describe("/sumo:sync", () => {
 
 		const source = join(configRepo, "claude-accounts.json");
 		const target = join(agentDir, "claude-accounts.json");
-		expect(readFileSync(source, "utf8")).toBe(existing);
+		expect(JSON.parse(readFileSync(source, "utf8"))).toEqual({
+			[CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true,
+			subscriptions: [{ provider: "anthropic", index: 2, label: "company" }],
+		});
 		expect(readFileSync(external, "utf8")).toBe(existing);
 		expect(lstatSync(target).isSymbolicLink()).toBe(true);
 		expect(readlinkSync(target)).toBe(source);
@@ -348,7 +396,10 @@ describe("/sumo:sync", () => {
 
 		const source = join(configRepo, "claude-accounts.json");
 		const target = join(agentDir, "claude-accounts.json");
-		expect(readFileSync(source, "utf8")).toBe(existing);
+		expect(JSON.parse(readFileSync(source, "utf8"))).toEqual({
+			[CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true,
+			subscriptions: [{ provider: "anthropic", index: 2, label: "company" }],
+		});
 		expect(lstatSync(target).isSymbolicLink()).toBe(true);
 		expect(readlinkSync(target)).toBe(source);
 		stdout.mockRestore();

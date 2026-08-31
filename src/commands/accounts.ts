@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { CLAUDE_ACCOUNTS_MIGRATION_FIELD } from "./accounts-config.js";
 import { executeSumoReload } from "./reload.js";
 import { logDiagnostic } from "../sumo-tui/runtime/diagnostics.js";
 import { executeRpcLogin, getRpcLoginRuntime, type RpcLoginRuntime } from "../sumo-tui/pi-compat/login-command.js";
@@ -207,6 +208,7 @@ export function saveClaudeSubscriptions(subscriptions: readonly ClaudeSubscripti
 	const nonClaude = existing.filter((entry) => parseSubscription(entry)?.provider !== "anthropic");
 	const next: AccountsDocument = {
 		...document,
+		[CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true,
 		subscriptions: [...nonClaude, ...subscriptions],
 	};
 	mkdirSync(dirname(destination.writePath), { recursive: true, mode: 0o700 });

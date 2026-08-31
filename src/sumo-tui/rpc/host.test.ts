@@ -35,6 +35,7 @@ import {
 	type RpcHostExitDependencies,
 	type RpcHostInterruptDependencies,
 } from "./host.js";
+import { InitialHydrationActionGate } from "./initial-hydration-action-gate.js";
 import { createRpcPromptScheduler } from "./prompt-scheduler.js";
 
 function flush(): Promise<void> {
@@ -167,6 +168,40 @@ describe("editor command-readiness submission", () => {
 		expect(requestExit).toHaveBeenCalledWith(0);
 		expect(notifications.notify).not.toHaveBeenCalled();
 		expect(submit).not.toHaveBeenCalled();
+	});
+
+	it("keeps the launch-seeded kickoff silent once the real hydration gate has settled", async () => {
+		// Regression for the env-seeded kickoff path: releaseInitialHydration()
+		// only resolves the promise; the REAL gate publishes isReady on a later
+		// microtask. runRpcHost therefore awaits whenSettled() before the kickoff
+		// submit. This test locks both halves of that contract.
+		let releaseInitialHydration: () => void = () => undefined;
+		const initialHydration = new Promise<void>((resolve) => {
+			releaseInitialHydration = resolve;
+		});
+		const gate = new InitialHydrationActionGate(initialHydration);
+		const notifications = { notify: vi.fn() };
+		const submit = vi.fn(async () => undefined);
+		const handler = createEditorSubmitHandler({
+			gate,
+			notifications,
+			submit,
+			requestExit: vi.fn(),
+			isTreeBusy: () => false,
+		});
+
+		releaseInitialHydration();
+		// Mechanism guard: on the same tick the gate is NOT yet ready, which is
+		// exactly why the call site must settle before a silent kickoff.
+		expect(gate.isReady).toBe(false);
+
+		await gate.whenSettled();
+		expect(gate.isReady).toBe(true);
+		await submitInitialPromptFromEnv({ SUMOCODE_INITIAL_PROMPT: "review the diff" }, handler);
+
+		expect(notifications.notify).not.toHaveBeenCalled();
+		expect(submit).toHaveBeenCalledOnce();
+		expect(submit).toHaveBeenCalledWith("review the diff");
 	});
 });
 

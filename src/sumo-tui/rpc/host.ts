@@ -522,11 +522,17 @@ export function createEditorSubmitHandler(deps: EditorSubmitHandlerDependencies)
 	return async (message) => {
 		const trimmed = message.trim();
 		if (trimmed.length === 0) return;
+		// /quit is entirely host-owned and must remain available when the child
+		// never completes initial hydration. Other commands/prompts retain the
+		// ownership gate because they can read or replace child session state.
 		if (/^\/quit(?:\s|$)/.test(trimmed)) {
 			deps.requestExit(0);
 			return;
 		}
 		if (!deps.gate.isReady) deps.notifications.notify("finishing startup · command queued", "warning");
+		// Wait for hydration AND for any deferred child-dependent intent (e.g. a
+		// model/thinking cycle) to fully apply, so a prompt never dispatches under
+		// state an earlier gated shortcut is still committing.
 		await deps.gate.whenSettled();
 		if (deps.isTreeBusy()) {
 			deps.notifications.notify("branch summary in progress", "warning");
@@ -1925,6 +1931,13 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			// event handling kick in -- see submitInitialPromptFromEnv's doc
 			// comment for why this reuses submitFromEditor instead of a bespoke
 			// path.
+			//
+			// Settle the gate first: releaseInitialHydration() above only resolves
+			// the promise, and the gate publishes isReady on a later microtask, so
+			// a synchronous kickoff here would still observe isReady === false and
+			// render the pre-ready "command queued" notice for a launch-seeded,
+			// never-blocked submission.
+			await hydrationActionGate.whenSettled();
 			await submitInitialPromptFromEnv(env, submitFromEditor);
 			await refreshStats();
 			statsTimer = setInterval(() => { void refreshStats(); }, 5_000);

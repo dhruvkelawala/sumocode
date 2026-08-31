@@ -1,5 +1,5 @@
 import type { Component } from "@earendil-works/pi-tui";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -666,6 +666,46 @@ describe("RPC host retained runtime frame", () => {
 			expect(renderScheduler).toHaveBeenCalledTimes(1);
 		} finally {
 			runtime.stop();
+		}
+	});
+
+	it("drops command_ready silently before start() and still emits it once after", async () => {
+		// markCommandReady guards on !this.shell: a pre-start call must neither
+		// emit nor latch commandReadyMarked, so the real post-start call still
+		// emits exactly once.
+		const previousDiagFile = process.env.SUMO_TUI_DIAG_FILE;
+		const dir = mkdtempSync(join(tmpdir(), "sumocode-rpc-runtime-preshell-"));
+		const diagFile = join(dir, "diag.jsonl");
+		process.env.SUMO_TUI_DIAG_FILE = diagFile;
+		try {
+			const output = new FakeOutput();
+			const terminal = new TerminalSessionOwner({ output });
+			const runtime = new RpcHostRuntime({
+				output,
+				input: { isTTY: false, on: () => undefined },
+				terminal,
+				initialState: state(),
+				initialTranscript: { messages: [] },
+			});
+
+			writeFileSync(diagFile, "");
+			runtime.markCommandReady();
+			expect(readFileSync(diagFile, "utf8").trim()).toBe("");
+
+			await runtime.start();
+			runtime.markChromeStable();
+			runtime.markCommandReady();
+			runtime.markCommandReady();
+			const events = readFileSync(diagFile, "utf8")
+				.trim()
+				.split("\n")
+				.map(parseDiagEvent);
+			expect(events.filter((entry) => entry.event === "command_ready")).toHaveLength(1);
+			runtime.stop();
+		} finally {
+			if (previousDiagFile === undefined) delete process.env.SUMO_TUI_DIAG_FILE;
+			else process.env.SUMO_TUI_DIAG_FILE = previousDiagFile;
+			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 

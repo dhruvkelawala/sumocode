@@ -13,6 +13,7 @@ import {
 	type SupervisedProcess,
 } from "./harness-supervisor.js";
 import { fixIntegrationPreflight, inspectIntegrationPreflight, processRows } from "../../scripts/preflight-integration.mjs";
+import { resolveHarnessExitCode } from "../../scripts/run-integration-harness.mjs";
 import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
 const roots: string[] = [];
@@ -442,6 +443,21 @@ describe("verification harness v2 seam", () => {
 		expect(readFileSync(join(evidenceDir, "diagnostics.jsonl"), "utf8")).toContain("boot_screen_frame");
 		expect(readFileSync(join(evidenceDir, "final-screen.txt"), "utf8")).toContain("final frame");
 		expect(existsSync(join(root, "evidence-retained.json"))).toBe(true);
+	});
+});
+
+describe("harness exit-code contract", () => {
+	const ok = { code: 0, interrupted: false };
+
+	it("fails the command when the zero-survivor audit fails despite green lanes", () => {
+		expect(resolveHarnessExitCode({ seamStatus: ok, integrationStatus: ok, auditPassed: false })).toBe(1);
+	});
+
+	it("propagates lane failures and passes only when lanes and audit agree", () => {
+		expect(resolveHarnessExitCode({ seamStatus: ok, integrationStatus: ok, auditPassed: true })).toBe(0);
+		expect(resolveHarnessExitCode({ seamStatus: { code: 2, interrupted: false }, integrationStatus: ok, auditPassed: true })).toBe(2);
+		expect(resolveHarnessExitCode({ seamStatus: ok, integrationStatus: { code: 3, interrupted: false }, auditPassed: true })).toBe(3);
+		expect(resolveHarnessExitCode({ seamStatus: ok, integrationStatus: { code: 0, interrupted: true }, auditPassed: true })).toBe(1);
 	});
 });
 

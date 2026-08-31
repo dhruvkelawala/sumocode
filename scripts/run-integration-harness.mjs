@@ -4,7 +4,7 @@ import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/pr
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { runIntegrationPreflight } from "./preflight-integration.mjs";
 import {
 	HARNESS_OWNER_TOKEN_ENV_KEY,
@@ -151,18 +151,32 @@ async function main(ownerToken) {
 		], env);
 	}
 	const auditPassed = await auditAndReap(manifest);
+	const exitCode = resolveHarnessExitCode({ seamStatus, integrationStatus, auditPassed });
+	if (exitCode === 0) await rm(runRoot, { recursive: true, force: true });
+	else {
+		await retainEvidence(runRoot, "integration verification failed");
+		process.stderr.write(`[integration harness] evidence retained: ${runRoot}\n`);
+	}
+	return exitCode;
+}
+
+/**
+ * One decision point for the command's exit code. A surviving registered
+ * group must fail the command even when every test lane exited 0 — otherwise
+ * CI reports the audit failure yet still gates green and the zero-survivor
+ * contract is decorative (Codex P1, PR #422).
+ */
+export function resolveHarnessExitCode({ seamStatus, integrationStatus, auditPassed }) {
 	const passed = seamStatus.code === 0
 		&& !seamStatus.interrupted
 		&& integrationStatus.code === 0
 		&& !integrationStatus.interrupted
 		&& auditPassed;
-	if (passed) await rm(runRoot, { recursive: true, force: true });
-	else {
-		await retainEvidence(runRoot, "integration verification failed");
-		process.stderr.write(`[integration harness] evidence retained: ${runRoot}\n`);
-	}
 	if (passed) return 0;
+	if (!auditPassed) return 1;
 	if (seamStatus.code !== 0) return seamStatus.code ?? 1;
+	// An interrupted lane can carry code 0; it still must not gate green.
+	if (seamStatus.interrupted || integrationStatus.interrupted) return integrationStatus.code || 1;
 	return integrationStatus.code ?? 1;
 }
 
@@ -184,4 +198,8 @@ async function runOwnedHarness() {
 	return code ?? 1;
 }
 
-process.exitCode = await runOwnedHarness();
+// Execute only when invoked as a script; importing this module (e.g. the
+// seam test importing resolveHarnessExitCode) must not launch the harness.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+	process.exitCode = await runOwnedHarness();
+}

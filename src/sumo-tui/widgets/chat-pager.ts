@@ -313,7 +313,10 @@ export class ChatPager extends SumoNode {
 		}
 		this.rebuildRenderedChildren();
 		this.scrollBox.notifyContentChanged(this.getRenderedEstimatedHeight(width), previousHeight);
-		this.reconcileFeedActivities(feedActivities, { materializeSettled: options.materializeSettledFeed });
+		this.reconcileFeedActivities(feedActivities, {
+			materializeSettled: options.materializeSettledFeed,
+			placeChronologically: true,
+		});
 		this.lastReadIndex = this.getTotalMessageCount() - 1;
 		this.scheduleRender();
 		return {
@@ -541,7 +544,7 @@ export class ChatPager extends SumoNode {
 	/** Reconcile durable feed cards by Activity identity without rebuilding chat. */
 	public reconcileFeedActivities(
 		activities: readonly ActivitySnapshot[],
-		options: { readonly materializeSettled?: boolean } = {},
+		options: { readonly materializeSettled?: boolean; readonly placeChronologically?: boolean } = {},
 	): void {
 		const previous = [...this.feedActivities.values()];
 		const previousIndex = activityCorrelationIndex(previous);
@@ -610,7 +613,10 @@ export class ChatPager extends SumoNode {
 				this.virtualizedFeedActivityIds.add(activity.id);
 				continue;
 			}
-			this.addPreparedMessage(prepareChatMessage(activityCardViewModel(activity)), this.nextFeedSourceIndex--, false, activity.id);
+			const message = this.addPreparedMessage(prepareChatMessage(activityCardViewModel(activity)), this.nextFeedSourceIndex--, false, activity.id);
+			if (options.placeChronologically === true && !isSettledActivityStatus(this.effectiveFeedStatus(activity))) {
+				this.placeFeedMessageChronologically(message, activity.createdAt);
+			}
 		}
 		for (const id of releasedFeedIds) {
 			if (!this.feedActivities.has(id)) this.touchActivityBookkeeping(id);
@@ -947,6 +953,23 @@ export class ChatPager extends SumoNode {
 
 	private activitiesFromRenderedMessages(): ActivitySnapshot[] {
 		return this.activeMessages.flatMap((message) => this.activitiesFromBlocks(message.toSnapshot().blocks ?? []));
+	}
+
+	private placeFeedMessageChronologically(message: ChatMessage, createdAt: number | undefined): void {
+		if (createdAt === undefined) return;
+		const fromIndex = this.activeMessages.indexOf(message);
+		if (fromIndex <= 0) return;
+		const toIndex = this.activeMessages.findIndex((candidate, index) =>
+			index < fromIndex && candidate.toSnapshot().timestamp.getTime() > createdAt,
+		);
+		if (toIndex === -1) return;
+		const sourceIndex = this.activeMessageSourceIndices[fromIndex];
+		if (sourceIndex === undefined) return;
+		this.activeMessageSourceIndices.splice(fromIndex, 1);
+		this.activeMessages.splice(fromIndex, 1);
+		this.activeMessages.splice(toIndex, 0, message);
+		this.activeMessageSourceIndices.splice(toIndex, 0, sourceIndex);
+		this.rebuildRenderedChildren();
 	}
 
 	private migrateFeedActivityState(existing: readonly ActivitySnapshot[], incoming: ActivitySnapshot): void {

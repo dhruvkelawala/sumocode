@@ -627,6 +627,7 @@ Width: 60% of terminal, min 50, max 80. Centered.
 **Live ownership**:
 - Terminal and subagent producers remain separate execution systems but project into one bounded `ActivitySnapshot` presentation contract.
 - Stable Activity IDs update one retained card in place; a passive transcript completion claims that same card instead of appending a duplicate.
+- Standalone live terminal feed cards use the SUMO frame role, not an orphan TOOL frame. Full transcript replacement orders unmatched feed cards by creation time so compaction cannot pin an older process to the tail.
 - Session A cards are never visible while session B is active. Resuming A rehydrates its durable feed and expansion state before first paint.
 - Feed expiry removes feed-only history, but never a transcript-owned completion. Only currently live feed cards bypass the normal transcript virtualization cap.
 

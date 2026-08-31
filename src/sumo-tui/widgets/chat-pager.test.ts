@@ -201,6 +201,96 @@ describe("ChatPager", () => {
 		root.dispose();
 	});
 
+	it("keeps a running terminal under SUMO before the compacted transcript suffix", async () => {
+		const { root, chat, buffer } = await makeChat(100, 14);
+		const running = {
+			id: "term-dashboard",
+			sourceId: "terminal-start-dashboard",
+			kind: "terminal" as const,
+			title: "campaign dashboard · http://127.0.0.1:8394",
+			status: "running" as const,
+			createdAt: 10,
+			outputTail: "campaign dashboard → http://127.0.0.1:8394",
+		};
+		chat.reconcileFeedActivities([running]);
+		chat.replaceViewModels([{
+			id: "assistant-before-compaction",
+			role: "sumo",
+			displayName: "SUMO",
+			blocks: [
+				{ type: "thinking", text: "Opening campaign dashboard" },
+				{ type: "activity", activity: running },
+			],
+		}], { materializeSettledFeed: false });
+		expect(chat.getRenderedMessages()).toHaveLength(1);
+		expect(chat.getRenderedMessages()[0]?.role).toBe("sumo");
+
+		// Compaction rehydrates only the kept transcript suffix, so the original
+		// assistant message disappears while its durable terminal remains live.
+		chat.replaceViewModels([{
+			id: "assistant-after-compaction",
+			role: "sumo",
+			displayName: "SUMO",
+			timestamp: new Date(20),
+			blocks: [{ type: "thinking", text: "Running focused tests" }],
+		}], { materializeSettledFeed: false });
+
+		const cells = buffer();
+		const frame = Array.from({ length: 14 }, (_, row) => cells.toPlainRow(row)).join("\n");
+		const messages = chat.getRenderedMessages();
+		expect(frame).not.toContain("TOOL");
+		expect(messages).toHaveLength(2);
+		expect(messages[0]?.role).toBe("sumo");
+		expect(messages[0]?.toSnapshot().blocks).toContainEqual(expect.objectContaining({
+			type: "activity",
+			activity: expect.objectContaining({ id: running.id }),
+		}));
+		expect(messages[1]?.toSnapshot().blocks).not.toContainEqual(expect.objectContaining({
+			type: "activity",
+			activity: expect.objectContaining({ id: running.id }),
+		}));
+
+		chat.reconcileFeedActivities([{ ...running, outputTail: "dashboard ready" }]);
+		expect(chat.getRenderedMessages()[0]?.text).toContain("dashboard ready");
+		chat.reconcileFeedActivities([]);
+		expect(chat.getRenderedMessages()).toHaveLength(1);
+		expect(chat.getRenderedMessages()[0]?.text).toContain("Running focused tests");
+		root.dispose();
+	});
+
+	it("renders an unmatched warm terminal chronologically under SUMO", async () => {
+		const { root, chat, buffer } = await makeChat(100, 12);
+		const running = {
+			id: "term-unmatched",
+			kind: "terminal" as const,
+			title: "preview server",
+			status: "running" as const,
+			createdAt: 10,
+			outputTail: "listening on :4173",
+		};
+		chat.reconcileFeedActivities([running]);
+
+		chat.replaceViewModels([{
+			id: "later-assistant",
+			role: "sumo",
+			displayName: "SUMO",
+			timestamp: new Date(20),
+			blocks: [{ type: "markdown", text: "Continuing current work" }],
+		}]);
+
+		const messages = chat.getRenderedMessages();
+		const cells = buffer();
+		const frame = Array.from({ length: 12 }, (_, row) => cells.toPlainRow(row)).join("\n");
+		expect(frame).not.toContain("TOOL");
+		expect(messages.map((message) => message.role)).toEqual(["sumo", "sumo"]);
+		expect(messages[0]?.toSnapshot().blocks).toContainEqual(expect.objectContaining({
+			type: "activity",
+			activity: expect.objectContaining({ id: running.id }),
+		}));
+		expect(messages[1]?.text).toContain("Continuing current work");
+		root.dispose();
+	});
+
 	it("does not resurrect settled subagent TOOL frames during cold transcript hydration", async () => {
 		const { root, chat, buffer } = await makeChat(100, 10);
 		const settled = [

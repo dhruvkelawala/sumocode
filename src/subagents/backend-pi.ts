@@ -341,7 +341,9 @@ const attachAbortSignal = (proc: ChildProcessWithoutNullStreams, signal: AbortSi
 };
 
 export function resolvePiBinary(env: NodeJS.ProcessEnv = process.env): string {
-	return env.PI_BIN?.trim() || "pi";
+	const configured = env.PI_BIN?.trim();
+	if (!configured) return "pi";
+	return configured.includes("/") || configured.includes("\\") ? resolve(configured) : configured;
 }
 
 export function resolvePiChildModelBootstrapEntry(

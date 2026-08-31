@@ -14882,7 +14882,9 @@ var attachAbortSignal2 = (proc, signal) => {
   return { isAborted: () => aborted, interrupt };
 };
 function resolvePiBinary(env = process.env) {
-  return env.PI_BIN?.trim() || "pi";
+  const configured = env.PI_BIN?.trim();
+  if (!configured) return "pi";
+  return configured.includes("/") || configured.includes("\\") ? resolve6(configured) : configured;
 }
 function resolvePiChildModelBootstrapEntry(env = process.env, moduleUrl = import.meta.url) {
   const override = env.SUMOCODE_CHILD_MODEL_BOOTSTRAP?.trim();

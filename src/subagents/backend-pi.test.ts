@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { createPiChildSpawner, resolveClaudeOauthAdapterEntry, resolvePiBinary, resolvePiChildModelBootstrapEntry } from "./backend-pi.js";
@@ -29,6 +29,8 @@ describe("resolvePiBinary", () => {
 	it("uses the launcher-selected Pi runtime and falls back to PATH", () => {
 		expect(resolvePiBinary({ PI_BIN: "/current/pi" })).toBe("/current/pi");
 		expect(resolvePiBinary({ PI_BIN: "  /current/pi  " })).toBe("/current/pi");
+		expect(resolvePiBinary({ PI_BIN: "./tools/pi" })).toBe(resolve("./tools/pi"));
+		expect(resolvePiBinary({ PI_BIN: "pi-dev" })).toBe("pi-dev");
 		expect(resolvePiBinary({})).toBe("pi");
 	});
 

@@ -17,7 +17,7 @@
 - **Planned at**: commit `b34bd79`, 2026-08-28
 - **Issue**: https://github.com/dhruvkelawala/sumocode/issues/385
 - **Gate reconciliation**: 2026-09-01 — normal workstation load uses the same-head serial adjudication now recorded in `plans/EXECUTION.md`; changed-path failures and CI failures remain blocking
-- **Execution status**: BLOCKED — exact-head focused and complete one-worker reruns are required after the branch's final restack; historical evidence from `6ef8c13` is retained below but is not evidence for the current branch
+- **Execution status**: DONE locally — implementation `01bdac8`; exact code/evidence head `73bae7d`; focused 1/1, extension file 29/29 twice, typecheck/build/lint green, default parallel failed only in four untouched load-sensitive tests, complete one-worker suite 2,560/2,560; final published-head CI pending
 
 ## Why this matters
 
@@ -96,7 +96,7 @@ Add one focused test named exactly `isolates terminal state under the temporary 
 - [x] The original environment value is restored after every test.
 - [x] Temporary roots are removed after every test.
 - [x] `pnpm vitest run src/extension.test.ts` passes twice.
-- [ ] Typecheck, build, lint, and the unit suite satisfy the formally reconciled gate on the final restacked code head; historical evidence does not discharge this checkbox.
+- [x] Typecheck, build, lint, and the unit suite satisfy the formally reconciled gate on exact code head `73bae7d`; the final report commit changes documentation only.
 - [x] `git status --porcelain -- src/ test/ scripts/ bin/ package.json pnpm-lock.yaml` shows only `src/extension.test.ts`; pre-existing unrelated dirty files are ignored, not modified.
 
 ## Historical execution outcome — 2026-08-29 (not current-head gate evidence)
@@ -109,6 +109,17 @@ TDD and verification evidence:
 - Focused green: `pnpm vitest run src/extension.test.ts -t "isolates terminal state"` passed 1/1 (Vitest 889ms, real 1.31s).
 - Stability: `pnpm vitest run src/extension.test.ts` passed 29/29 twice (Vitest 1.57s/1.44s; real 2.00s/1.88s).
 - Historical repository gates at `6ef8c13`: typecheck/build/lint passed. The default parallel unit command failed in timing-sensitive files; those files passed in isolation, and the complete suite passed 193 files/2,514 tests with one worker in 82.92s and with `--fileParallelism=false` in 72.58s. These numbers describe only `6ef8c13`; an exact-head rerun remains required after the final restack.
+
+## Reconciled exact-head evidence — 2026-09-01
+
+Evidence code head: `73bae7d422971f5d961e814586735ffbecdd2627`. This report is committed separately so the measured source/test tree remains identifiable; the report commit changes documentation only.
+
+- `pnpm vitest run src/extension.test.ts -t "isolates terminal state"`: 1/1 passed.
+- `pnpm vitest run src/extension.test.ts`: 29/29 passed twice (1.41s each).
+- `pnpm exec tsc --noEmit`, `pnpm build`, and `pnpm lint`: exit 0.
+- Default `pnpm test`: 2,556/2,560 passed; four failures were confined to untouched load-sensitive tests — three asynchronous selector assertions in `host-actions.test.ts` and one timeout in `visual-parity-contract.test.ts`.
+- No production or test file changed after that default run. On the same commit, `VITEST_MAX_WORKERS=1 pnpm test` passed all 195 files and 2,560/2,560 tests in 91.91s, satisfying every condition in `plans/EXECUTION.md`.
+- Current-head CI remains mandatory before PR `STACK_READY`; this local evidence does not replace it.
 
 ## STOP conditions
 

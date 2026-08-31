@@ -3,7 +3,7 @@
 > **Executor instructions**: Follow this plan step by step. Run every verification command and confirm the expected result before moving on. Stop on any STOP condition; do not improvise. When done, update this plan's row in `plans/README.md` unless a reviewer says they maintain the index.
 >
 > **Drift check (run first)**: `git diff --stat b34bd79..HEAD -- src/extension.test.ts src/extension.ts src/background-tasks/task-store.ts`
-> **Working-tree preflight (run at the same time)**: `git status --short -- src/extension.test.ts`. If this reports pre-existing work, STOP and preserve it.
+> **Working-tree preflight (run at the same time)**: `git status --short -- src/extension.test.ts`. If this reports pre-existing source work, STOP and preserve it. Plan/index/`plans/EXECUTION.md` bookkeeping may be dirty only while recording an explicitly authorized gate reconciliation; preserve any unrelated edits.
 > If these files changed, compare the excerpts below with live code before proceeding.
 
 ## Status
@@ -16,7 +16,8 @@
 - **Milestone**: M1 — Command-ready foundation
 - **Planned at**: commit `b34bd79`, 2026-08-28
 - **Issue**: https://github.com/dhruvkelawala/sumocode/issues/385
-- **Execution status**: DONE — implemented in `6ef8c13`; focused isolation 1/1 and extension file 29/29 twice (1.57s and 1.44s); the full unit suite passed 2,514/2,514 with one worker, while default parallel runs hit documented unrelated timing flakes; typecheck/build/lint green; CI pending
+- **Gate reconciliation**: 2026-09-01 — normal workstation load uses the same-head serial adjudication now recorded in `plans/EXECUTION.md`; changed-path failures and CI failures remain blocking
+- **Execution status**: BLOCKED — exact-head focused and complete one-worker reruns are required after the branch's final restack; historical evidence from `6ef8c13` is retained below but is not evidence for the current branch
 
 ## Why this matters
 
@@ -42,13 +43,15 @@ Match the existing test convention: temporary paths use `mkdtempSync(join(tmpdir
 |---|---|---|
 | Targeted test | `pnpm vitest run src/extension.test.ts` | all tests pass |
 | Typecheck/build | `pnpm exec tsc --noEmit && pnpm build` | exit 0 |
-| Unit suite | `pnpm test` | exit 0 |
+| Unit suite | `pnpm test` | exit 0; if only untouched timing-sensitive tests fail under expected workstation load, apply the same-head serial adjudication in `plans/EXECUTION.md` and require the complete one-worker suite to pass |
 | Lint | `pnpm lint` | exit 0 |
 
 ## Scope
 
 **In scope**:
 - `src/extension.test.ts`
+- This plan and `plans/README.md` completion evidence.
+- `plans/EXECUTION.md` only for the formally approved load-sensitive gate reconciliation; no other execution policy changes.
 
 **Out of scope**:
 - Production store-root behavior in `src/background-tasks/task-store.ts`.
@@ -79,7 +82,7 @@ Add one focused test named exactly `isolates terminal state under the temporary 
 
 ### Step 3: Run repository gates
 
-**Verify**: `pnpm exec tsc --noEmit && pnpm build && pnpm lint && pnpm test` → all commands exit 0.
+**Verify**: `pnpm exec tsc --noEmit && pnpm build && pnpm lint && pnpm test` → all commands exit 0, or the default suite fails only in untouched timing-sensitive tests and the exact same head satisfies every condition in the `plans/EXECUTION.md` serial adjudication, including a complete `VITEST_MAX_WORKERS=1 pnpm test` pass. A changed-path, deterministic assertion, or CI failure blocks completion.
 
 ## Test plan
 
@@ -93,19 +96,19 @@ Add one focused test named exactly `isolates terminal state under the temporary 
 - [x] The original environment value is restored after every test.
 - [x] Temporary roots are removed after every test.
 - [x] `pnpm vitest run src/extension.test.ts` passes twice.
-- [x] Typecheck, build, lint, and unit suite pass.
+- [ ] Typecheck, build, lint, and the unit suite satisfy the formally reconciled gate on the final restacked code head; historical evidence does not discharge this checkbox.
 - [x] `git status --porcelain -- src/ test/ scripts/ bin/ package.json pnpm-lock.yaml` shows only `src/extension.test.ts`; pre-existing unrelated dirty files are ignored, not modified.
 
-## Execution outcome — 2026-08-29
+## Historical execution outcome — 2026-08-29 (not current-head gate evidence)
 
-Implementation commit: `6ef8c13` (`test: isolate extension install state`). The top-level test lifecycle owns one fresh Pi agent directory per test, restores `PI_CODING_AGENT_DIR` with undefined fidelity, resets the process-global install latch before fallible recursive cleanup, and removes the directory in `afterEach`. The focused regression observes eager store creation through `sumocode(pi)` only; it does not start a terminal or inspect the home-directory terminal store. Keeping isolation at the suite lifecycle, rather than wrapping selected installs, ensures future full-install tests inherit it automatically. The fixture keeps its path optional so a failed temp-directory allocation cannot make teardown mask the setup error.
+Historical repair-worktree commit: `6ef8c13` (`test: isolate extension install state`). The current branch implemented the same behavior through its own commit lineage and later cleanup; because `6ef8c13` is not its ancestor, the measurements below are retained as provenance only and must not be used to mark the reconciled gate complete. The top-level test lifecycle owns one fresh Pi agent directory per test, restores `PI_CODING_AGENT_DIR` with undefined fidelity, resets the process-global install latch before fallible recursive cleanup, and removes the directory in `afterEach`. The focused regression observes eager store creation through `sumocode(pi)` only; it does not start a terminal or inspect the home-directory terminal store. Keeping isolation at the suite lifecycle, rather than wrapping selected installs, ensures future full-install tests inherit it automatically. The fixture keeps its path optional so a failed temp-directory allocation cannot make teardown mask the setup error.
 
 TDD and verification evidence:
 
 - Safe red: shell-owned `PI_CODING_AGENT_DIR` plus a distinct assertion root; focused test failed as expected (`1 failed`, Vitest 1.78s, real 3.80s) without touching the home terminal store.
 - Focused green: `pnpm vitest run src/extension.test.ts -t "isolates terminal state"` passed 1/1 (Vitest 889ms, real 1.31s).
 - Stability: `pnpm vitest run src/extension.test.ts` passed 29/29 twice (Vitest 1.57s/1.44s; real 2.00s/1.88s).
-- Repository gates: `pnpm exec tsc --noEmit && pnpm build && pnpm lint && pnpm test` passed with `VITEST_MAX_WORKERS=1` (193 files, 2,514 tests; real 82.92s). Default parallel retries exposed unrelated timing-sensitive failures in `host-actions.test.ts` (and once `native-task-tool.test.ts`/`visual-parity-contract.test.ts`); those files passed in isolation, and `pnpm exec vitest run --fileParallelism=false` passed the same 193 files/2,514 tests in 72.58s. No out-of-scope test timing changes were made.
+- Historical repository gates at `6ef8c13`: typecheck/build/lint passed. The default parallel unit command failed in timing-sensitive files; those files passed in isolation, and the complete suite passed 193 files/2,514 tests with one worker in 82.92s and with `--fileParallelism=false` in 72.58s. These numbers describe only `6ef8c13`; an exact-head rerun remains required after the final restack.
 
 ## STOP conditions
 

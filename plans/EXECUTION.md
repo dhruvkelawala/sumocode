@@ -49,11 +49,26 @@ Completion criterion: both implementation and security-review runner contract te
 
 ## 5. Verify and record
 
-Run every step gate and final command in the plan. After success:
+Run every step gate and final command in the plan under its declared expected-result contract.
+
+### Load-sensitive unit-suite adjudication
+
+Expected workstation load is not a poisoned-environment condition and does not justify waiting for an idle machine. When a plan explicitly adopts this policy, a failing default-parallel `pnpm test` may be adjudicated on the exact same head only when **all** of these conditions hold:
+
+1. The plan's changed-path focused tests, typecheck, build, and lint are green.
+2. Every default-parallel failure is confined to untouched tests and is timeout/timing-shaped or varies across retries; deterministic assertion failures are not eligible.
+3. No production or test code is changed in response to the parallel failure.
+4. Every failed file passes by itself with file parallelism disabled.
+5. The complete suite passes on the same commit with `VITEST_MAX_WORKERS=1 pnpm test` (or the repository's equivalent fully serial command).
+6. The plan and index record both the default failure and the serial evidence; they must not claim that the unqualified default command passed.
+
+A changed-path failure, a deterministic failure, or any serial failure is immediately blocking and is never eligible for this adjudication. Two bounded repair attempts may address an understood defect, but retries cannot convert an ineligible failure into a load-sensitive pass. This adjudication changes only local workstation scheduling; current-head CI must still be green before the PR can become `STACK_READY`.
+
+After success:
 
 1. Rerun required bundle builders after integration tests.
 2. Confirm no out-of-scope changes.
 3. Update the plan's row in `plans/README.md` to `DONE` with commit/test evidence.
 4. Leave issue/PR synchronization to the operator unless explicitly instructed.
 
-If a verification fails twice after a reasonable fix, preserve evidence and mark the plan `BLOCKED`; do not improvise around the gate.
+If a verification fails twice after a reasonable fix or fails the adjudication contract above, preserve evidence and mark the plan `BLOCKED`; do not improvise around the gate.

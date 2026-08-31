@@ -211,6 +211,19 @@ describe("saveClaudeSubscriptions", () => {
 		expect(existsSync(join(agentDir, "multi-pass.json"))).toBe(false);
 	});
 
+	it.each([
+		["malformed JSON", "{not json"],
+		["non-object JSON", "[]"],
+		["non-array subscriptions", JSON.stringify({ subscriptions: "broken" })],
+	])("rejects %s instead of overwriting the primary document", (_name, raw) => {
+		const agentDir = tempAgentDir();
+		const path = join(agentDir, "claude-accounts.json");
+		writeFileSync(path, raw);
+
+		expect(() => saveClaudeSubscriptions([{ provider: "anthropic", index: 2 }], withAgentDir(agentDir))).toThrow(/Invalid accounts config/);
+		expect(readFileSync(path, "utf8")).toBe(raw);
+	});
+
 	it("seeds the complete primary document from legacy without modifying legacy", () => {
 		const agentDir = tempAgentDir();
 		const legacy = {

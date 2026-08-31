@@ -180,6 +180,21 @@ function readDocument(path: string): AccountsDocument {
 	}
 }
 
+function readDocumentForSave(path: string): AccountsDocument {
+	if (!existsSync(path)) return {};
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(readFileSync(path, "utf8"));
+	} catch {
+		throw new Error(`Invalid accounts config; repair before saving: ${path}`);
+	}
+	if (!isRecord(parsed)) throw new Error(`Invalid accounts config; expected an object: ${path}`);
+	if (parsed.subscriptions !== undefined && !Array.isArray(parsed.subscriptions)) {
+		throw new Error(`Invalid accounts config subscriptions; expected an array: ${path}`);
+	}
+	return parsed;
+}
+
 function claudeSubscriptionsFrom(document: AccountsDocument): ClaudeSubscription[] {
 	if (!Array.isArray(document.subscriptions)) return [];
 	return document.subscriptions
@@ -204,7 +219,7 @@ export function loadClaudeSubscriptions(deps: AccountsCommandDeps = {}): ClaudeS
 export function saveClaudeSubscriptions(subscriptions: readonly ClaudeSubscription[], deps: AccountsCommandDeps = {}): void {
 	const destination = resolveAccountsWriteDestination(deps);
 	const primaryPath = resolveAccountsReadPath(deps);
-	const document = readDocument(existsSync(primaryPath) ? primaryPath : resolveLegacyConfigPath(deps));
+	const document = readDocumentForSave(existsSync(primaryPath) ? primaryPath : resolveLegacyConfigPath(deps));
 	const existing = Array.isArray(document.subscriptions) ? document.subscriptions : [];
 	const nonClaude = existing.filter((entry) => parseSubscription(entry)?.provider !== "anthropic");
 	const next: AccountsDocument = {

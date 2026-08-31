@@ -7326,13 +7326,22 @@ function writeAccountsMigration(source, document) {
 `, { encoding: "utf8", mode: 384 });
   renameSync2(temporary, source);
 }
+function requireValidSubscriptions(document, path2) {
+  if (document?.subscriptions !== void 0 && !Array.isArray(document.subscriptions)) {
+    throw new Error(`Invalid accounts subscriptions; expected an array: ${path2}`);
+  }
+}
 function seedUnmigratedPrivateAccounts(source, target) {
   const primary = readAccountsLikeDocument(source);
   if (!primary) throw new Error(`Invalid private accounts config; repair before syncing: ${source}`);
+  requireValidSubscriptions(primary, source);
   const targetAlreadyManaged = resolvesToSamePath(source, target);
   if (primary[CLAUDE_ACCOUNTS_MIGRATION_FIELD] === true && targetAlreadyManaged) return;
   const agentDocument = targetAlreadyManaged ? void 0 : readAccountsLikeDocument(target);
-  const legacyDocument = readAccountsLikeDocument(join6(dirname3(target), "multi-pass.json"));
+  const legacyPath = join6(dirname3(target), "multi-pass.json");
+  const legacyDocument = readAccountsLikeDocument(legacyPath);
+  requireValidSubscriptions(agentDocument, target);
+  requireValidSubscriptions(legacyDocument, legacyPath);
   const privateSubscriptions = Array.isArray(primary.subscriptions) ? primary.subscriptions : [];
   const agentSubscriptions = Array.isArray(agentDocument?.subscriptions) ? agentDocument.subscriptions : [];
   const legacySubscriptions = Array.isArray(legacyDocument?.subscriptions) ? legacyDocument.subscriptions : [];
@@ -16921,6 +16930,20 @@ function readDocument(path2) {
     return {};
   }
 }
+function readDocumentForSave(path2) {
+  if (!existsSync13(path2)) return {};
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync17(path2, "utf8"));
+  } catch {
+    throw new Error(`Invalid accounts config; repair before saving: ${path2}`);
+  }
+  if (!isRecord4(parsed)) throw new Error(`Invalid accounts config; expected an object: ${path2}`);
+  if (parsed.subscriptions !== void 0 && !Array.isArray(parsed.subscriptions)) {
+    throw new Error(`Invalid accounts config subscriptions; expected an array: ${path2}`);
+  }
+  return parsed;
+}
 function claudeSubscriptionsFrom(document) {
   if (!Array.isArray(document.subscriptions)) return [];
   return document.subscriptions.map(parseSubscription).filter((entry) => entry?.provider === "anthropic").sort((left, right) => left.index - right.index);
@@ -16935,7 +16958,7 @@ function loadClaudeSubscriptions(deps = {}) {
 function saveClaudeSubscriptions(subscriptions, deps = {}) {
   const destination = resolveAccountsWriteDestination(deps);
   const primaryPath = resolveAccountsReadPath(deps);
-  const document = readDocument(existsSync13(primaryPath) ? primaryPath : resolveLegacyConfigPath(deps));
+  const document = readDocumentForSave(existsSync13(primaryPath) ? primaryPath : resolveLegacyConfigPath(deps));
   const existing = Array.isArray(document.subscriptions) ? document.subscriptions : [];
   const nonClaude = existing.filter((entry) => parseSubscription(entry)?.provider !== "anthropic");
   const next = {

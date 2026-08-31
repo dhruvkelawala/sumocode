@@ -190,9 +190,16 @@ function writeAccountsMigration(source: string, document: AccountsLikeDocument):
 	renameSync(temporary, source);
 }
 
+function requireValidSubscriptions(document: AccountsLikeDocument | undefined, path: string): void {
+	if (document?.subscriptions !== undefined && !Array.isArray(document.subscriptions)) {
+		throw new Error(`Invalid accounts subscriptions; expected an array: ${path}`);
+	}
+}
+
 function seedUnmigratedPrivateAccounts(source: string, target: string): void {
 	const primary = readAccountsLikeDocument(source);
 	if (!primary) throw new Error(`Invalid private accounts config; repair before syncing: ${source}`);
+	requireValidSubscriptions(primary, source);
 	const targetAlreadyManaged = resolvesToSamePath(source, target);
 	// The synced marker records document migration; the managed link records
 	// completion on this machine. A second machine must still merge its local
@@ -201,7 +208,10 @@ function seedUnmigratedPrivateAccounts(source: string, target: string): void {
 	// If target already resolves to source, reading it would merge the same
 	// document twice (notably duplicating identity-less extension entries).
 	const agentDocument = targetAlreadyManaged ? undefined : readAccountsLikeDocument(target);
-	const legacyDocument = readAccountsLikeDocument(join(dirname(target), "multi-pass.json"));
+	const legacyPath = join(dirname(target), "multi-pass.json");
+	const legacyDocument = readAccountsLikeDocument(legacyPath);
+	requireValidSubscriptions(agentDocument, target);
+	requireValidSubscriptions(legacyDocument, legacyPath);
 	const privateSubscriptions = Array.isArray(primary.subscriptions) ? primary.subscriptions : [];
 	const agentSubscriptions = Array.isArray(agentDocument?.subscriptions) ? agentDocument.subscriptions : [];
 	const legacySubscriptions = Array.isArray(legacyDocument?.subscriptions) ? legacyDocument.subscriptions : [];

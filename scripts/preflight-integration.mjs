@@ -21,18 +21,34 @@ const RETAINED_EVIDENCE_MARKER = "evidence-retained.json";
 const PS_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const PREFLIGHT_TERM_GRACE_MS = 300;
 
-function processRows() {
-	try {
-		const output = execFileSync("ps", ["eww", "-axo", "pid=,ppid=,pgid=,command="], {
-			encoding: "utf8",
-			maxBuffer: PS_MAX_BUFFER_BYTES,
-		});
-		const rows = output.split("\n").flatMap((line) => {
-			const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/);
-			return match ? [{ pid: Number(match[1]), ppid: Number(match[2]), pgid: Number(match[3]), command: match[4] }] : [];
-		});
-		return { rows };
-	} catch (error) {
+// BSD ps (macOS) accepts `eww -axo`; procps (Linux) rejects mixing the BSD
+// `eww` personality with dashed `-axo` ("must set personality to get -x").
+// Try the platform-appropriate form first, then the other, so a runner with
+// either ps lineage produces a process table instead of the degraded issue.
+// On procps, `e`(env) `ww`(wide) `a`+`x`(all) `o`(format) combine dashless.
+const PS_ARG_FORMS = process.platform === "darwin"
+	? [["eww", "-axo", "pid=,ppid=,pgid=,command="], ["ewwaxo", "pid=,ppid=,pgid=,command="]]
+	: [["ewwaxo", "pid=,ppid=,pgid=,command="], ["eww", "-axo", "pid=,ppid=,pgid=,command="]];
+
+export function processRows(execute = execFileSync) {
+	let lastError;
+	for (const args of PS_ARG_FORMS) {
+		try {
+			const output = execute("ps", args, {
+				encoding: "utf8",
+				maxBuffer: PS_MAX_BUFFER_BYTES,
+			});
+			const rows = output.split("\n").flatMap((line) => {
+				const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/);
+				return match ? [{ pid: Number(match[1]), ppid: Number(match[2]), pgid: Number(match[3]), command: match[4] }] : [];
+			});
+			return { rows };
+		} catch (error) {
+			lastError = error;
+		}
+	}
+	{
+		const error = lastError;
 		return {
 			rows: [],
 			issue: {

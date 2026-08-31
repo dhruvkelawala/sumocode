@@ -11,7 +11,7 @@ import {
 	waitForDiagnosticReadiness,
 	type SupervisedProcess,
 } from "./harness-supervisor.js";
-import { fixIntegrationPreflight, inspectIntegrationPreflight } from "../../scripts/preflight-integration.mjs";
+import { fixIntegrationPreflight, inspectIntegrationPreflight, processRows } from "../../scripts/preflight-integration.mjs";
 import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
 const roots: string[] = [];
@@ -260,5 +260,38 @@ describe("verification harness v2 seam", () => {
 		expect(readFileSync(join(evidenceDir, "diagnostics.jsonl"), "utf8")).toContain("boot_screen_frame");
 		expect(readFileSync(join(evidenceDir, "final-screen.txt"), "utf8")).toContain("final frame");
 		expect(existsSync(join(root, "evidence-retained.json"))).toBe(true);
+	});
+});
+
+describe("portable process-table probe", () => {
+	const psRow = "  101   1  101 /usr/bin/some-command\n";
+
+	it("falls back to the alternate ps personality when the first form is rejected", () => {
+		const attempts: string[][] = [];
+		// SAFETY: the fake implements the single (cmd, args, options) call shape
+		// processRows uses; the assertion narrows the test double to that seam.
+		const execute = ((_cmd: string, args: string[]) => {
+			attempts.push(args);
+			// First form rejected the way procps rejects BSD `eww` + dashed `-axo`
+			// ("must set personality to get -x option") — second form succeeds.
+			if (attempts.length === 1) throw new Error("must set personality to get -x option");
+			return psRow;
+		}) as typeof execFileSync;
+
+		const result = processRows(execute);
+		expect(attempts).toHaveLength(2);
+		expect(result.issue).toBeUndefined();
+		expect(result.rows).toEqual([{ pid: 101, ppid: 1, pgid: 101, command: "/usr/bin/some-command" }]);
+	});
+
+	it("degrades to the named process-table issue only when every ps form fails", () => {
+		// SAFETY: same seam-shaped test double as above; always throws.
+		const execute = (() => {
+			throw new Error("ps unavailable");
+		}) as typeof execFileSync;
+
+		const result = processRows(execute);
+		expect(result.rows).toEqual([]);
+		expect(result.issue?.code).toBe("process-table-unavailable");
 	});
 });

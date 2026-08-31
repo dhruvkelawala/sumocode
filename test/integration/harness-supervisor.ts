@@ -63,6 +63,7 @@ export interface SupervisedProcess {
 	readonly pgid: number;
 	readonly evidence: ChildEvidenceContext;
 	terminate(): Promise<void>;
+	shouldCaptureExitFailure(hasPendingWaiters: boolean): boolean;
 	captureFailure(output?: string, finalScreen?: string): Promise<string>;
 }
 
@@ -230,12 +231,14 @@ export function spawnSupervisedProcess(command: string, args: readonly string[],
 		resolveExit();
 	}));
 	let reaping: Promise<void> | undefined;
+	let terminationExpected = false;
 	return {
 		child,
 		pid,
 		pgid,
 		evidence,
 		terminate(): Promise<void> {
+			terminationExpected = true;
 			reaping ??= (async () => {
 				// Let spawn complete its setsid before addressing the new group.
 				await new Promise<void>((resolveTurn) => setImmediate(resolveTurn));
@@ -247,6 +250,9 @@ export function spawnSupervisedProcess(command: string, args: readonly string[],
 				appendManifest({ event: "reaped", pid, pgid }, env);
 			})();
 			return reaping;
+		},
+		shouldCaptureExitFailure(hasPendingWaiters: boolean): boolean {
+			return !terminationExpected || hasPendingWaiters;
 		},
 		captureFailure(output = "", finalScreen = ""): Promise<string> {
 			return captureTimeoutEvidence({ ...evidence, output, finalScreen });

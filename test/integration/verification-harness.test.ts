@@ -73,7 +73,11 @@ describe("verification harness v2 seam", () => {
 		);
 		children.push(child);
 
-		await child.terminate();
+		expect(child.shouldCaptureExitFailure(false)).toBe(true);
+		const termination = child.terminate();
+		expect(child.shouldCaptureExitFailure(false)).toBe(false);
+		expect(child.shouldCaptureExitFailure(true)).toBe(true);
+		await termination;
 		expect(() => process.kill(-child.pgid, 0)).toThrow();
 		// SAFETY: the manifest is written by the harness in this test and only the asserted event/pid fields are consumed.
 		const events = readFileSync(manifest, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { event: string; pid: number });
@@ -109,9 +113,9 @@ describe("verification harness v2 seam", () => {
 		expect(JSON.stringify(report)).not.toContain("41002");
 	});
 
-	it("keeps live-owned namespaces while --fix removes dead-owned namespaces", async () => {
+	it("keeps a live-owned namespace whose run root contains spaces", async () => {
 		const tempRoot = createRunRoot();
-		const liveRoot = join(tempRoot, "sumocode-harness-v2-live");
+		const liveRoot = join(tempRoot, "sumocode-harness-v2-live with space");
 		const deadRoot = join(tempRoot, "sumocode-harness-v2-dead");
 		const unrelatedRoot = join(tempRoot, "unrelated-dead");
 		mkdirSync(liveRoot);
@@ -145,6 +149,18 @@ describe("verification harness v2 seam", () => {
 		expect(existsSync(liveRoot)).toBe(true);
 		expect(existsSync(deadRoot)).toBe(false);
 		expect(existsSync(unrelatedRoot)).toBe(true);
+	});
+
+	it("treats children of the current signed harness ancestor as live", async () => {
+		const tempRoot = createRunRoot();
+		const rows = [
+			{ pid: process.pid, ppid: 1, pgid: process.pid, command: `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} node preflight.js` },
+			{ pid: 50501, ppid: process.pid, pgid: 50501, command: `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} node active-test.js` },
+		];
+
+		const report = await inspectIntegrationPreflight({ root: process.cwd(), tempRoot, rows, env: {} });
+
+		expect(report.issues.some((issue) => issue.code === "orphan-harness-children")).toBe(false);
 	});
 
 	it("preserves retained failure evidence until --purge-evidence is explicit", async () => {
@@ -194,7 +210,28 @@ describe("verification harness v2 seam", () => {
 		expect(signals).toContainEqual([-53000, "SIGKILL"]);
 	});
 
-	it("rechecks group ownership before escalating from TERM to KILL", async () => {
+	it("escalates when a signed descendant survives its group leader", async () => {
+		const tempRoot = createRunRoot();
+		const rows = [
+			{ pid: 53500, ppid: 1, pgid: 53500, command: `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} node leader.js` },
+			{ pid: 53501, ppid: 53500, pgid: 53500, command: `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} node child.js` },
+		];
+		const report = await inspectIntegrationPreflight({ root: process.cwd(), tempRoot, rows, env: {} });
+		const signals: Array<[number, NodeJS.Signals | number]> = [];
+
+		await fixIntegrationPreflight(report, {
+			rows,
+			readRows: () => [rows[1]!],
+			currentPgid: 999_999,
+			kill: (pid, signal) => { signals.push([pid, signal ?? 0]); return true; },
+			wait: async () => {},
+		});
+
+		expect(signals).toContainEqual([-53500, "SIGTERM"]);
+		expect(signals).toContainEqual([-53500, "SIGKILL"]);
+	});
+
+	it("does not escalate when only an unsigned descendant survives its group leader", async () => {
 		const tempRoot = createRunRoot();
 		const rows = [
 			{ pid: 54000, ppid: 1, pgid: 54000, command: `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} node leader.js` },
@@ -205,7 +242,7 @@ describe("verification harness v2 seam", () => {
 
 		await fixIntegrationPreflight(report, {
 			rows,
-			readRows: () => [{ pid: 54000, ppid: 1, pgid: 54000, command: "zsh -l" }],
+			readRows: () => [{ pid: 54001, ppid: 1, pgid: 54000, command: "node unsigned-survivor.js" }],
 			currentPgid: 999_999,
 			kill: (pid, signal) => { signals.push([pid, signal ?? 0]); return true; },
 			wait: async () => {},
@@ -234,6 +271,8 @@ describe("verification harness v2 seam", () => {
 			killSignal: "SIGKILL",
 		});
 		const focusedNamespaces = readdirSync(tempRoot).filter((name) => name.startsWith("sumocode-harness-v2-focused-"));
+		const retainedMarkers = readdirSync(tempRoot, { recursive: true }).filter((name) => name.endsWith("evidence-retained.json"));
+		expect(retainedMarkers).toEqual([]);
 		expect(focusedNamespaces).toEqual([]);
 	});
 

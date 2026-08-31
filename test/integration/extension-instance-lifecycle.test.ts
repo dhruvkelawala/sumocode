@@ -15,8 +15,8 @@ interface RpcRequest {
 }
 
 interface RpcClient {
-	readonly child: ChildProcessWithoutNullStreams;
 	request(command: RpcRequest): Promise<any>;
+	terminate(): Promise<void>;
 }
 
 interface LifecycleEvidence {
@@ -63,6 +63,7 @@ function launch(extension: string, sessionDir: string, sessionFile: string, evid
 		waiter.resolve(value);
 	});
 	child.once("exit", (code, signal) => {
+		if (!supervised.shouldCaptureExitFailure(waiters.size > 0)) return;
 		void supervised.captureFailure().then((evidenceDir) => {
 			for (const waiter of waiters.values()) {
 				clearTimeout(waiter.timer);
@@ -73,7 +74,6 @@ function launch(extension: string, sessionDir: string, sessionFile: string, evid
 	});
 	let sequence = 0;
 	return {
-		child,
 		request(command): Promise<any> {
 			const id = `extension-lifecycle-${++sequence}`;
 			return new Promise((resolve, reject) => {
@@ -85,12 +85,10 @@ function launch(extension: string, sessionDir: string, sessionFile: string, evid
 				child.stdin.write(`${JSON.stringify({ ...command, id })}\n`);
 			});
 		},
+		terminate(): Promise<void> {
+			return supervised.terminate();
+		},
 	};
-}
-
-function waitForExit(child: ChildProcessWithoutNullStreams): Promise<void> {
-	if (child.exitCode !== null) return Promise.resolve();
-	return new Promise((resolve) => child.once("exit", () => resolve()));
 }
 
 function readEvidence(path: string): LifecycleEvidence[] {
@@ -136,8 +134,7 @@ describe("Pi 0.80.6 extension instance lifecycle", () => {
 		await client.request({ type: "new_session" });
 		await client.request({ type: "switch_session", sessionPath: sessionFile });
 		await client.request({ type: "fork", entryId: "abcd1234" });
-		client.child.kill("SIGTERM");
-		await waitForExit(client.child);
+		await client.terminate();
 
 		const evidence = readEvidence(evidenceFile);
 		expect(evidence.filter(({ kind }) => kind === "factory").map(({ instance }) => instance)).toEqual([1, 2, 3, 4]);

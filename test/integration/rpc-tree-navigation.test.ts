@@ -144,6 +144,8 @@ function launch(extension: string, fauxProvider: string, hook: string, sessionFi
 		waiter.resolve(value);
 	});
 	child.once("exit", (code, signal) => {
+		const hasPendingWaiters = responses.size > 0 || outcomeWaiters.length > 0;
+		if (!supervised.shouldCaptureExitFailure(hasPendingWaiters)) return;
 		void supervised.captureFailure().then((evidenceDir) => {
 			const error = new Error(`Pi RPC child exited (code=${String(code)}, signal=${String(signal)}). Evidence: ${evidenceDir}`);
 			for (const waiter of responses.values()) {

@@ -13,8 +13,8 @@ interface RpcRequest {
 }
 
 interface RpcClient {
-	readonly child: ChildProcessWithoutNullStreams;
 	request(command: RpcRequest): Promise<any>;
+	terminate(): Promise<void>;
 }
 
 const roots: string[] = [];
@@ -55,6 +55,7 @@ function launch(extension: string, sessionDir: string, sessionFile: string, agen
 		waiter.resolve(value);
 	});
 	child.once("exit", (code, signal) => {
+		if (!supervised.shouldCaptureExitFailure(waiters.size > 0)) return;
 		void supervised.captureFailure().then((evidenceDir) => {
 			for (const waiter of waiters.values()) {
 				clearTimeout(waiter.timer);
@@ -65,7 +66,6 @@ function launch(extension: string, sessionDir: string, sessionFile: string, agen
 	});
 	let sequence = 0;
 	return {
-		child,
 		request(command): Promise<any> {
 			const id = `terminal-fidelity-${++sequence}`;
 			return new Promise((resolve, reject) => {
@@ -77,12 +77,10 @@ function launch(extension: string, sessionDir: string, sessionFile: string, agen
 				child.stdin.write(`${JSON.stringify({ ...command, id })}\n`);
 			});
 		},
+		terminate(): Promise<void> {
+			return supervised.terminate();
+		},
 	};
-}
-
-function waitForExit(child: ChildProcessWithoutNullStreams): Promise<void> {
-	if (child.exitCode !== null) return Promise.resolve();
-	return new Promise((resolve) => child.once("exit", () => resolve()));
 }
 
 describe("terminal completion Pi fidelity", () => {
@@ -105,8 +103,7 @@ describe("terminal completion Pi fidelity", () => {
 		const first = launch(extension, sessionDir, sessionFile, agentDir);
 		await first.request({ type: "prompt", message: "/terminal-fidelity" });
 		const live = await first.request({ type: "get_messages" });
-		first.child.kill("SIGTERM");
-		await waitForExit(first.child);
+		await first.terminate();
 
 		const persistedAfterSend = readFileSync(sessionFile, "utf8");
 		expect(persistedAfterSend.match(/completion-probe/g)).toHaveLength(1);
@@ -114,8 +111,7 @@ describe("terminal completion Pi fidelity", () => {
 
 		const second = launch(extension, sessionDir, sessionFile, agentDir);
 		const hydrated = await second.request({ type: "get_messages" });
-		second.child.kill("SIGTERM");
-		await waitForExit(second.child);
+		await second.terminate();
 
 		const findProbes = (response: any) => response.data.messages.filter((message: any) => message.role === "custom" && message.customType === "terminal-result");
 		expect(findProbes(live)).toHaveLength(1);

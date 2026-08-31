@@ -60,9 +60,13 @@ export function processRows(execute = execFileSync) {
 	}
 }
 
+function hasHarnessSignature(row) {
+	return row.command.includes(`${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE}`);
+}
+
 function isHarnessProcess(row) {
 	return row.pid !== process.pid && (
-		row.command.includes(`${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE}`)
+		hasHarnessSignature(row)
 		|| /(?:^|\/)sumocode-fake-pi-[A-Za-z0-9._-]+(?:\/|\s|$)/.test(row.command)
 	);
 }
@@ -95,27 +99,43 @@ async function classifyHarnessDir(path) {
 
 async function harnessState(tempRoot) {
 	let entries = [];
-	try { entries = await readdir(tempRoot, { withFileTypes: true }); } catch { return { staleDirs: [], retainedDirs: [] }; }
-	const state = { staleDirs: [], retainedDirs: [] };
+	try { entries = await readdir(tempRoot, { withFileTypes: true }); } catch { return { staleDirs: [], retainedDirs: [], liveOwnerPids: [] }; }
+	const state = { staleDirs: [], retainedDirs: [], liveOwnerPids: [] };
 	for (const entry of entries) {
 		if (!entry.isDirectory() || !HARNESS_DIR_PREFIXES.some((prefix) => entry.name.startsWith(prefix))) continue;
 		const path = join(tempRoot, entry.name);
 		const classification = await classifyHarnessDir(path);
-		if (classification === "retained") state.retainedDirs.push(path);
+		if (classification === "live") {
+			const ownerPid = await readOwnerPid(path);
+			if (ownerPid !== undefined) state.liveOwnerPids.push(ownerPid);
+		} else if (classification === "retained") state.retainedDirs.push(path);
 		else if (classification === "stale") state.staleDirs.push(path);
 	}
 	return state;
 }
 
-function harnessRunRootFromCommand(command) {
-	return command.match(/(?:^|\s)SUMOCODE_INTEGRATION_RUN_ROOT=([^\s]+)/)?.[1];
+function signedHarnessLineage(pid, rowsByPid) {
+	const lineage = [];
+	const seen = new Set();
+	while (Number.isSafeInteger(pid) && pid > 1 && !seen.has(pid)) {
+		seen.add(pid);
+		const row = rowsByPid.get(pid);
+		if (row === undefined) break;
+		if (hasHarnessSignature(row)) lineage.push(pid);
+		pid = row.ppid;
+	}
+	return lineage;
 }
 
-async function belongsToLiveHarnessRun(row) {
-	const runRoot = harnessRunRootFromCommand(row.command);
-	if (runRoot === undefined) return false;
-	const ownerPid = await readOwnerPid(runRoot);
-	return ownerPid !== undefined && pidIsAlive(ownerPid);
+function belongsToLiveHarnessRun(row, rowsByPid, liveHarnessPids) {
+	let pid = row.pid;
+	const seen = new Set();
+	while (Number.isSafeInteger(pid) && pid > 1 && !seen.has(pid)) {
+		if (liveHarnessPids.has(pid) && pidIsAlive(pid)) return true;
+		seen.add(pid);
+		pid = rowsByPid.get(pid)?.ppid;
+	}
+	return false;
 }
 
 async function artifactIssue(root, kind) {
@@ -167,9 +187,14 @@ export async function inspectIntegrationPreflight({ root = ROOT, tempRoot = tmpd
 	const issues = processTable.issue === undefined ? [] : [processTable.issue];
 	const notices = [];
 	const state = await harnessState(tempRoot);
+	const rowsByPid = new Map(processTable.rows.map((row) => [row.pid, row]));
+	const liveHarnessPids = new Set([
+		...state.liveOwnerPids,
+		...signedHarnessLineage(process.pid, rowsByPid),
+	]);
 	const orphanRows = [];
 	for (const row of processTable.rows.filter(isHarnessProcess)) {
-		if (!await belongsToLiveHarnessRun(row)) orphanRows.push(row);
+		if (!belongsToLiveHarnessRun(row, rowsByPid, liveHarnessPids)) orphanRows.push(row);
 	}
 	if (orphanRows.length > 0) {
 		issues.push({
@@ -199,7 +224,7 @@ export async function inspectIntegrationPreflight({ root = ROOT, tempRoot = tmpd
 	for (const key of Object.keys(env).filter((key) => key.startsWith("HERDR_") || key.startsWith("PI_SESSION"))) {
 		notices.push(`inherited ${key} will be stripped`);
 	}
-	return { issues, notices, retainedEvidence: state.retainedDirs };
+	return { issues, notices, retainedEvidence: state.retainedDirs, liveHarnessPids: [...liveHarnessPids] };
 }
 
 function currentProcessGroupId(rows) {
@@ -225,6 +250,12 @@ function groupIsHarnessOwned(pgid, rows, currentPgid) {
 	return leader !== undefined && isHarnessProcess(leader);
 }
 
+function survivingGroupIsHarnessOwned(pgid, rows, currentPgid) {
+	return currentPgid !== undefined
+		&& pgid !== currentPgid
+		&& rows.some((row) => row.pgid === pgid && hasHarnessSignature(row));
+}
+
 export async function fixIntegrationPreflight(report, {
 	purgeEvidence = false,
 	rows = processRows().rows,
@@ -234,10 +265,12 @@ export async function fixIntegrationPreflight(report, {
 	wait = () => new Promise((resolveDelay) => setTimeout(resolveDelay, PREFLIGHT_TERM_GRACE_MS)),
 } = {}) {
 	const orphanIssue = report.issues.find((issue) => issue.code === "orphan-harness-children");
+	const rowsByPid = new Map(rows.map((row) => [row.pid, row]));
+	const liveHarnessPids = new Set(report.liveHarnessPids ?? []);
 	const fixableRows = [];
 	for (const reportedRow of orphanIssue?.rows ?? []) {
-		const row = rows.find((candidate) => candidate.pid === reportedRow.pid);
-		if (row !== undefined && isHarnessProcess(row) && !await belongsToLiveHarnessRun(row)) fixableRows.push(row);
+		const row = rowsByPid.get(reportedRow.pid);
+		if (row !== undefined && isHarnessProcess(row) && !belongsToLiveHarnessRun(row, rowsByPid, liveHarnessPids)) fixableRows.push(row);
 	}
 	const harnessOwnedGroups = new Set(fixableRows
 		.map((row) => row.pgid)
@@ -249,7 +282,7 @@ export async function fixIntegrationPreflight(report, {
 	if (harnessOwnedGroups.size > 0) await wait();
 	const rowsBeforeKill = readRows();
 	for (const pgid of harnessOwnedGroups) {
-		if (groupIsHarnessOwned(pgid, rowsBeforeKill, currentPgid)) sendSignal(kill, -pgid, "SIGKILL");
+		if (survivingGroupIsHarnessOwned(pgid, rowsBeforeKill, currentPgid)) sendSignal(kill, -pgid, "SIGKILL");
 	}
 
 	const stateIssue = report.issues.find((issue) => issue.code === "stale-harness-state");

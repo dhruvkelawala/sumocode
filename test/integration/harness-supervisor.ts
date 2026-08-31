@@ -1,4 +1,4 @@
-import { type ChildProcess, type SpawnOptions, spawn } from "node:child_process";
+import { type ChildProcess, type SpawnOptions, execFileSync, spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -71,6 +71,15 @@ export interface SupervisedProcess {
 	captureFailure(output?: string, finalScreen?: string): Promise<string>;
 }
 
+/** OS-reported start time of this process, or undefined when ps is unavailable. */
+function ownProcessStart(): string | undefined {
+	try {
+		return execFileSync("ps", ["-o", "lstart=", "-p", String(process.pid)], { encoding: "utf8" }).trim() || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 let fallbackRoot: string | undefined;
 let childSequence = 0;
 const focusedProcessGroups = new Set<number>();
@@ -79,6 +88,11 @@ function harnessRoot(env: NodeJS.ProcessEnv = process.env): string {
 	if (env.SUMOCODE_INTEGRATION_RUN_ROOT) return env.SUMOCODE_INTEGRATION_RUN_ROOT;
 	if (fallbackRoot === undefined) {
 		fallbackRoot = mkdtempSync(join(tmpdir(), "sumocode-harness-v2-focused-"));
+		// A focused vitest worker cannot re-exec to plant the owner token in its
+		// initial environment (ps shows exec-time env only), so tokenless focused
+		// namespaces carry the OS-reported process start time instead: a reused
+		// PID belongs to a different process with a different start time, which
+		// preflight can check without any token (Codex cycle-4, PR #422).
 		writeFileSync(
 			join(fallbackRoot, "owner.json"),
 			`${JSON.stringify({
@@ -86,6 +100,7 @@ function harnessRoot(env: NodeJS.ProcessEnv = process.env): string {
 				startedAt: new Date().toISOString(),
 				mode: "focused",
 				ownerToken: env[HARNESS_OWNER_TOKEN_ENV_KEY],
+				ownerProcessStart: ownProcessStart(),
 			}, null, 2)}\n`,
 			{ mode: 0o600 },
 		);

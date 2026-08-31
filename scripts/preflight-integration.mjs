@@ -89,6 +89,15 @@ function pidIsAlive(pid) {
 	}
 }
 
+/** OS-reported start time for a live pid, or undefined when unavailable. */
+function liveProcessStart(pid, execute = execFileSync) {
+	try {
+		return execute("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8" }).trim() || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 async function readOwner(path) {
 	try {
 		const owner = JSON.parse(await readFile(join(path, "owner.json"), "utf8"));
@@ -98,6 +107,10 @@ async function readOwner(path) {
 			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- owner.json is untrusted state parsed at this I/O boundary
 			ownerToken: typeof owner.ownerToken === "string" && owner.ownerToken.length > 0
 				? owner.ownerToken
+				: undefined,
+			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- owner.json is untrusted state parsed at this I/O boundary
+			ownerProcessStart: typeof owner.ownerProcessStart === "string" && owner.ownerProcessStart.length > 0
+				? owner.ownerProcessStart
 				: undefined,
 		};
 	} catch {
@@ -109,10 +122,21 @@ async function classifyHarnessDir(path, rowsByPid = new Map(), tokenIdentityAvai
 	if (!HARNESS_DIR_PREFIXES.some((prefix) => basename(path).startsWith(prefix))) return "unrelated";
 	const owner = await readOwner(path);
 	if (owner !== undefined && pidIsAlive(owner.pid)) {
-		if (owner.ownerToken === undefined) return "live";
-		if (!tokenIdentityAvailable) return "live";
-		const row = rowsByPid.get(owner.pid);
-		if (row !== undefined && hasProcessMarker(row, HARNESS_OWNER_TOKEN_ENV_KEY, owner.ownerToken)) return "live";
+		if (owner.ownerToken !== undefined) {
+			if (!tokenIdentityAvailable) return "live";
+			const row = rowsByPid.get(owner.pid);
+			if (row !== undefined && hasProcessMarker(row, HARNESS_OWNER_TOKEN_ENV_KEY, owner.ownerToken)) return "live";
+		} else if (owner.ownerProcessStart !== undefined) {
+			// Tokenless focused namespaces: identity = OS-reported start time of
+			// the recorded pid. A reused PID is a different process with a
+			// different start time, so the namespace classifies stale and --fix
+			// can reclaim it (Codex cycle-4, PR #422).
+			if (liveProcessStart(owner.pid) === owner.ownerProcessStart) return "live";
+		} else {
+			// Legacy namespaces with neither identity field keep the original
+			// PID-liveness behavior.
+			return "live";
+		}
 	}
 	return existsSync(join(path, RETAINED_EVIDENCE_MARKER)) ? "retained" : "stale";
 }

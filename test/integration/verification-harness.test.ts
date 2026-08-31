@@ -182,6 +182,39 @@ describe("verification harness v2 seam", () => {
 		expect(existsSync(reusedRoot)).toBe(false);
 	});
 
+	it("classifies a tokenless focused namespace stale when the pid's start time mismatches", async () => {
+		const tempRoot = createRunRoot();
+		const reusedRoot = join(tempRoot, "sumocode-harness-v2-focused-reused");
+		mkdirSync(reusedRoot);
+		// Live pid (this process) but a start time no live process can have:
+		// simulates a crashed focused worker whose PID was reused.
+		writeFileSync(join(reusedRoot, "owner.json"), `${JSON.stringify({ pid: process.pid, ownerProcessStart: "Mon Jan  1 00:00:00 2001" })}\n`);
+
+		const report = await inspectIntegrationPreflight({ root: process.cwd(), tempRoot, rows: [], env: {} });
+		expect(report.issues.find((issue) => issue.code === "stale-harness-state")?.paths).toEqual([reusedRoot]);
+
+		await fixIntegrationPreflight(report, {
+			rows: [],
+			readRows: () => [],
+			currentPgid: 999_999,
+			kill: () => true,
+			wait: async () => {},
+		});
+		expect(existsSync(reusedRoot)).toBe(false);
+	});
+
+	it("spares a tokenless focused namespace whose pid start time matches the live owner", async () => {
+		const tempRoot = createRunRoot();
+		const liveRoot = join(tempRoot, "sumocode-harness-v2-focused-live");
+		mkdirSync(liveRoot);
+		const liveStart = execFileSync("ps", ["-o", "lstart=", "-p", String(process.pid)], { encoding: "utf8" }).trim();
+		writeFileSync(join(liveRoot, "owner.json"), `${JSON.stringify({ pid: process.pid, ownerProcessStart: liveStart })}\n`);
+
+		const report = await inspectIntegrationPreflight({ root: process.cwd(), tempRoot, rows: [], env: {} });
+		expect(report.issues.some((issue) => issue.code === "stale-harness-state")).toBe(false);
+		expect(existsSync(liveRoot)).toBe(true);
+	});
+
 	it("spares a live namespace when pid and owner token match", async () => {
 		const tempRoot = createRunRoot();
 		const liveRoot = join(tempRoot, "sumocode-harness-v2-live with space");

@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-08-31T22:50:21.135Z",
-  "commit": "843cb91 fix(startup): report reload editor readiness before hydration",
+  "generatedAt": "2026-08-31T23:18:34.101Z",
+  "commit": "0baa533 fix(startup): keep launch policy behind submit handlers",
   "runs": 5,
   "measurements": [
     {
@@ -8,642 +8,642 @@
       "samples": [
         {
           "ok": true,
-          "durationMs": 34.53116703033447,
+          "durationMs": 487.1900420188904,
           "code": 0,
           "signal": null
         },
         {
           "ok": true,
-          "durationMs": 32.38337504863739,
+          "durationMs": 31.370666980743408,
           "code": 0,
           "signal": null
         },
         {
           "ok": true,
-          "durationMs": 31.444999933242798,
+          "durationMs": 30.52704107761383,
           "code": 0,
           "signal": null
         },
         {
           "ok": true,
-          "durationMs": 36.36829197406769,
+          "durationMs": 30.191833972930908,
           "code": 0,
           "signal": null
         },
         {
           "ok": true,
-          "durationMs": 35.25495803356171,
+          "durationMs": 30.651916027069092,
           "code": 0,
           "signal": null
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 34.1,
-      "minMs": 31.4,
-      "maxMs": 36.4
+      "avgMiddleMs": 30.8,
+      "minMs": 30.2,
+      "maxMs": 487.2
     },
     {
       "label": "host-import",
       "samples": [
         {
           "ok": true,
-          "durationMs": 1297
+          "durationMs": 1605
         },
         {
           "ok": true,
-          "durationMs": 1075
+          "durationMs": 1086
         },
         {
           "ok": true,
-          "durationMs": 1064
+          "durationMs": 1076
         },
         {
           "ok": true,
-          "durationMs": 1071
+          "durationMs": 1063
         },
         {
           "ok": true,
-          "durationMs": 1088
+          "durationMs": 1100
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 1078,
-      "minMs": 1064,
-      "maxMs": 1297
+      "avgMiddleMs": 1087.3,
+      "minMs": 1063,
+      "maxMs": 1605
     },
     {
       "label": "child-first-response",
       "samples": [
         {
           "ok": true,
-          "durationMs": 5812.823083043098
+          "durationMs": 4408.545459032059
         },
         {
           "ok": true,
-          "durationMs": 3268.253708958626
+          "durationMs": 3380.78024995327
         },
         {
           "ok": true,
-          "durationMs": 3358.6460839509964
+          "durationMs": 3227.4249579906464
         },
         {
           "ok": true,
-          "durationMs": 3402.800750017166
+          "durationMs": 3298.1650420427322
         },
         {
           "ok": true,
-          "durationMs": 3360.044625043869
+          "durationMs": 3262.055083990097
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 3373.8,
-      "minMs": 3268.3,
-      "maxMs": 5812.8
+      "avgMiddleMs": 3313.7,
+      "minMs": 3227.4,
+      "maxMs": 4408.5
     },
     {
       "label": "child-first-response-noext",
       "samples": [
         {
           "ok": true,
-          "durationMs": 1775.249333024025
+          "durationMs": 2027.0226250886917
         },
         {
           "ok": true,
-          "durationMs": 1973.2064579725266
+          "durationMs": 2037.069333076477
         },
         {
           "ok": true,
-          "durationMs": 1953.3050419092178
+          "durationMs": 1955.5518330335617
         },
         {
           "ok": true,
-          "durationMs": 1957.2626670598984
+          "durationMs": 2005.4347499608994
         },
         {
           "ok": true,
-          "durationMs": 2030.987666964531
+          "durationMs": 2036.275416970253
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 1961.3,
-      "minMs": 1775.2,
-      "maxMs": 2031
+      "avgMiddleMs": 2022.9,
+      "minMs": 1955.6,
+      "maxMs": 2037.1
     },
     {
       "label": "print-mode",
       "samples": [
         {
           "ok": true,
-          "durationMs": 7138.024459004402,
+          "durationMs": 4418.600166916847,
           "code": 0,
           "signal": null
         },
         {
           "ok": true,
-          "durationMs": 7518.4439170360565,
+          "durationMs": 3690.1131660938263,
           "code": 0,
           "signal": null
         },
         {
           "ok": true,
-          "durationMs": 7198.45158290863,
+          "durationMs": 4073.2430419921875,
           "code": 0,
           "signal": null
         },
         {
           "ok": true,
-          "durationMs": 8020.455749988556,
+          "durationMs": 3849.3243329524994,
           "code": 0,
           "signal": null
         },
         {
           "ok": true,
-          "durationMs": 7941.637958049774,
+          "durationMs": 3633.6269170045853,
           "code": 0,
           "signal": null
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 7552.8,
-      "minMs": 7138,
-      "maxMs": 8020.5
+      "avgMiddleMs": 3870.9,
+      "minMs": 3633.6,
+      "maxMs": 4418.6
     },
     {
       "label": "first-frame",
       "samples": [
         {
           "ok": true,
-          "durationMs": 495.36270809173584
+          "durationMs": 499.2329579591751
         },
         {
           "ok": true,
-          "durationMs": 487.2068750858307
+          "durationMs": 499.60483396053314
         },
         {
           "ok": true,
-          "durationMs": 484.59366595745087
+          "durationMs": 490.88758301734924
         },
         {
           "ok": true,
-          "durationMs": 485.8174170255661
+          "durationMs": 486.21399998664856
         },
         {
           "ok": true,
-          "durationMs": 485.1042500734329
+          "durationMs": 488.0909169912338
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 486,
-      "minMs": 484.6,
-      "maxMs": 495.4
+      "avgMiddleMs": 492.7,
+      "minMs": 486.2,
+      "maxMs": 499.6
     },
     {
       "label": "boot-screen-frame",
       "samples": [
         {
           "ok": true,
-          "durationMs": 494,
-          "bootScreenFrameMs": 494,
-          "editorReadyMs": 494,
-          "commandReadyMs": 2043,
-          "editorToCommandGapMs": 1549,
-          "appReadyMs": 2043,
-          "stableChromeMs": 2043,
-          "inputReadyMs": 494
+          "durationMs": 506,
+          "bootScreenFrameMs": 506,
+          "editorReadyMs": 506,
+          "commandReadyMs": 2105,
+          "editorToCommandGapMs": 1599,
+          "appReadyMs": 2104,
+          "stableChromeMs": 2104,
+          "inputReadyMs": 506
+        },
+        {
+          "ok": true,
+          "durationMs": 491,
+          "bootScreenFrameMs": 491,
+          "editorReadyMs": 491,
+          "commandReadyMs": 2054,
+          "editorToCommandGapMs": 1563,
+          "appReadyMs": 2053,
+          "stableChromeMs": 2053,
+          "inputReadyMs": 491
+        },
+        {
+          "ok": true,
+          "durationMs": 500,
+          "bootScreenFrameMs": 500,
+          "editorReadyMs": 500,
+          "commandReadyMs": 2047,
+          "editorToCommandGapMs": 1547,
+          "appReadyMs": 2047,
+          "stableChromeMs": 2047,
+          "inputReadyMs": 500
         },
         {
           "ok": true,
           "durationMs": 497,
           "bootScreenFrameMs": 497,
           "editorReadyMs": 497,
-          "commandReadyMs": 2047,
-          "editorToCommandGapMs": 1550,
-          "appReadyMs": 2046,
-          "stableChromeMs": 2047,
+          "commandReadyMs": 2038,
+          "editorToCommandGapMs": 1541,
+          "appReadyMs": 2038,
+          "stableChromeMs": 2038,
           "inputReadyMs": 497
-        },
-        {
-          "ok": true,
-          "durationMs": 493,
-          "bootScreenFrameMs": 493,
-          "editorReadyMs": 493,
-          "commandReadyMs": 2036,
-          "editorToCommandGapMs": 1543,
-          "appReadyMs": 2036,
-          "stableChromeMs": 2036,
-          "inputReadyMs": 494
-        },
-        {
-          "ok": true,
-          "durationMs": 490,
-          "bootScreenFrameMs": 490,
-          "editorReadyMs": 490,
-          "commandReadyMs": 1938,
-          "editorToCommandGapMs": 1448,
-          "appReadyMs": 1938,
-          "stableChromeMs": 1938,
-          "inputReadyMs": 490
         },
         {
           "ok": true,
           "durationMs": 504,
           "bootScreenFrameMs": 504,
-          "editorReadyMs": 504,
-          "commandReadyMs": 2021,
-          "editorToCommandGapMs": 1517,
-          "appReadyMs": 2021,
-          "stableChromeMs": 2021,
-          "inputReadyMs": 504
+          "editorReadyMs": 505,
+          "commandReadyMs": 2035,
+          "editorToCommandGapMs": 1530,
+          "appReadyMs": 2035,
+          "stableChromeMs": 2035,
+          "inputReadyMs": 505
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 494.7,
-      "minMs": 490,
-      "maxMs": 504
+      "avgMiddleMs": 500.3,
+      "minMs": 491,
+      "maxMs": 506
     },
     {
       "label": "editor-ready",
       "samples": [
         {
           "ok": true,
-          "durationMs": 494,
-          "bootScreenFrameMs": 494,
-          "editorReadyMs": 494,
-          "commandReadyMs": 2043,
-          "editorToCommandGapMs": 1549,
-          "appReadyMs": 2043,
-          "stableChromeMs": 2043,
-          "inputReadyMs": 494
+          "durationMs": 506,
+          "bootScreenFrameMs": 506,
+          "editorReadyMs": 506,
+          "commandReadyMs": 2105,
+          "editorToCommandGapMs": 1599,
+          "appReadyMs": 2104,
+          "stableChromeMs": 2104,
+          "inputReadyMs": 506
+        },
+        {
+          "ok": true,
+          "durationMs": 491,
+          "bootScreenFrameMs": 491,
+          "editorReadyMs": 491,
+          "commandReadyMs": 2054,
+          "editorToCommandGapMs": 1563,
+          "appReadyMs": 2053,
+          "stableChromeMs": 2053,
+          "inputReadyMs": 491
+        },
+        {
+          "ok": true,
+          "durationMs": 500,
+          "bootScreenFrameMs": 500,
+          "editorReadyMs": 500,
+          "commandReadyMs": 2047,
+          "editorToCommandGapMs": 1547,
+          "appReadyMs": 2047,
+          "stableChromeMs": 2047,
+          "inputReadyMs": 500
         },
         {
           "ok": true,
           "durationMs": 497,
           "bootScreenFrameMs": 497,
           "editorReadyMs": 497,
-          "commandReadyMs": 2047,
-          "editorToCommandGapMs": 1550,
-          "appReadyMs": 2046,
-          "stableChromeMs": 2047,
+          "commandReadyMs": 2038,
+          "editorToCommandGapMs": 1541,
+          "appReadyMs": 2038,
+          "stableChromeMs": 2038,
           "inputReadyMs": 497
         },
         {
           "ok": true,
-          "durationMs": 493,
-          "bootScreenFrameMs": 493,
-          "editorReadyMs": 493,
-          "commandReadyMs": 2036,
-          "editorToCommandGapMs": 1543,
-          "appReadyMs": 2036,
-          "stableChromeMs": 2036,
-          "inputReadyMs": 494
-        },
-        {
-          "ok": true,
-          "durationMs": 490,
-          "bootScreenFrameMs": 490,
-          "editorReadyMs": 490,
-          "commandReadyMs": 1938,
-          "editorToCommandGapMs": 1448,
-          "appReadyMs": 1938,
-          "stableChromeMs": 1938,
-          "inputReadyMs": 490
-        },
-        {
-          "ok": true,
-          "durationMs": 504,
+          "durationMs": 505,
           "bootScreenFrameMs": 504,
-          "editorReadyMs": 504,
-          "commandReadyMs": 2021,
-          "editorToCommandGapMs": 1517,
-          "appReadyMs": 2021,
-          "stableChromeMs": 2021,
-          "inputReadyMs": 504
+          "editorReadyMs": 505,
+          "commandReadyMs": 2035,
+          "editorToCommandGapMs": 1530,
+          "appReadyMs": 2035,
+          "stableChromeMs": 2035,
+          "inputReadyMs": 505
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 494.7,
-      "minMs": 490,
-      "maxMs": 504
+      "avgMiddleMs": 500.7,
+      "minMs": 491,
+      "maxMs": 506
     },
     {
       "label": "command-ready",
       "samples": [
         {
           "ok": true,
-          "durationMs": 2043,
-          "bootScreenFrameMs": 494,
-          "editorReadyMs": 494,
-          "commandReadyMs": 2043,
-          "editorToCommandGapMs": 1549,
-          "appReadyMs": 2043,
-          "stableChromeMs": 2043,
-          "inputReadyMs": 494
+          "durationMs": 2105,
+          "bootScreenFrameMs": 506,
+          "editorReadyMs": 506,
+          "commandReadyMs": 2105,
+          "editorToCommandGapMs": 1599,
+          "appReadyMs": 2104,
+          "stableChromeMs": 2104,
+          "inputReadyMs": 506
+        },
+        {
+          "ok": true,
+          "durationMs": 2054,
+          "bootScreenFrameMs": 491,
+          "editorReadyMs": 491,
+          "commandReadyMs": 2054,
+          "editorToCommandGapMs": 1563,
+          "appReadyMs": 2053,
+          "stableChromeMs": 2053,
+          "inputReadyMs": 491
         },
         {
           "ok": true,
           "durationMs": 2047,
+          "bootScreenFrameMs": 500,
+          "editorReadyMs": 500,
+          "commandReadyMs": 2047,
+          "editorToCommandGapMs": 1547,
+          "appReadyMs": 2047,
+          "stableChromeMs": 2047,
+          "inputReadyMs": 500
+        },
+        {
+          "ok": true,
+          "durationMs": 2038,
           "bootScreenFrameMs": 497,
           "editorReadyMs": 497,
-          "commandReadyMs": 2047,
-          "editorToCommandGapMs": 1550,
-          "appReadyMs": 2046,
-          "stableChromeMs": 2047,
+          "commandReadyMs": 2038,
+          "editorToCommandGapMs": 1541,
+          "appReadyMs": 2038,
+          "stableChromeMs": 2038,
           "inputReadyMs": 497
         },
         {
           "ok": true,
-          "durationMs": 2036,
-          "bootScreenFrameMs": 493,
-          "editorReadyMs": 493,
-          "commandReadyMs": 2036,
-          "editorToCommandGapMs": 1543,
-          "appReadyMs": 2036,
-          "stableChromeMs": 2036,
-          "inputReadyMs": 494
-        },
-        {
-          "ok": true,
-          "durationMs": 1938,
-          "bootScreenFrameMs": 490,
-          "editorReadyMs": 490,
-          "commandReadyMs": 1938,
-          "editorToCommandGapMs": 1448,
-          "appReadyMs": 1938,
-          "stableChromeMs": 1938,
-          "inputReadyMs": 490
-        },
-        {
-          "ok": true,
-          "durationMs": 2021,
+          "durationMs": 2035,
           "bootScreenFrameMs": 504,
-          "editorReadyMs": 504,
-          "commandReadyMs": 2021,
-          "editorToCommandGapMs": 1517,
-          "appReadyMs": 2021,
-          "stableChromeMs": 2021,
-          "inputReadyMs": 504
+          "editorReadyMs": 505,
+          "commandReadyMs": 2035,
+          "editorToCommandGapMs": 1530,
+          "appReadyMs": 2035,
+          "stableChromeMs": 2035,
+          "inputReadyMs": 505
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 2033.3,
-      "minMs": 1938,
-      "maxMs": 2047
+      "avgMiddleMs": 2046.3,
+      "minMs": 2035,
+      "maxMs": 2105
     },
     {
       "label": "editor-to-command-gap",
       "samples": [
         {
           "ok": true,
-          "durationMs": 1549,
-          "bootScreenFrameMs": 494,
-          "editorReadyMs": 494,
-          "commandReadyMs": 2043,
-          "editorToCommandGapMs": 1549,
-          "appReadyMs": 2043,
-          "stableChromeMs": 2043,
-          "inputReadyMs": 494
+          "durationMs": 1599,
+          "bootScreenFrameMs": 506,
+          "editorReadyMs": 506,
+          "commandReadyMs": 2105,
+          "editorToCommandGapMs": 1599,
+          "appReadyMs": 2104,
+          "stableChromeMs": 2104,
+          "inputReadyMs": 506
         },
         {
           "ok": true,
-          "durationMs": 1550,
+          "durationMs": 1563,
+          "bootScreenFrameMs": 491,
+          "editorReadyMs": 491,
+          "commandReadyMs": 2054,
+          "editorToCommandGapMs": 1563,
+          "appReadyMs": 2053,
+          "stableChromeMs": 2053,
+          "inputReadyMs": 491
+        },
+        {
+          "ok": true,
+          "durationMs": 1547,
+          "bootScreenFrameMs": 500,
+          "editorReadyMs": 500,
+          "commandReadyMs": 2047,
+          "editorToCommandGapMs": 1547,
+          "appReadyMs": 2047,
+          "stableChromeMs": 2047,
+          "inputReadyMs": 500
+        },
+        {
+          "ok": true,
+          "durationMs": 1541,
           "bootScreenFrameMs": 497,
           "editorReadyMs": 497,
-          "commandReadyMs": 2047,
-          "editorToCommandGapMs": 1550,
-          "appReadyMs": 2046,
-          "stableChromeMs": 2047,
+          "commandReadyMs": 2038,
+          "editorToCommandGapMs": 1541,
+          "appReadyMs": 2038,
+          "stableChromeMs": 2038,
           "inputReadyMs": 497
         },
         {
           "ok": true,
-          "durationMs": 1543,
-          "bootScreenFrameMs": 493,
-          "editorReadyMs": 493,
-          "commandReadyMs": 2036,
-          "editorToCommandGapMs": 1543,
-          "appReadyMs": 2036,
-          "stableChromeMs": 2036,
-          "inputReadyMs": 494
-        },
-        {
-          "ok": true,
-          "durationMs": 1448,
-          "bootScreenFrameMs": 490,
-          "editorReadyMs": 490,
-          "commandReadyMs": 1938,
-          "editorToCommandGapMs": 1448,
-          "appReadyMs": 1938,
-          "stableChromeMs": 1938,
-          "inputReadyMs": 490
-        },
-        {
-          "ok": true,
-          "durationMs": 1517,
+          "durationMs": 1530,
           "bootScreenFrameMs": 504,
-          "editorReadyMs": 504,
-          "commandReadyMs": 2021,
-          "editorToCommandGapMs": 1517,
-          "appReadyMs": 2021,
-          "stableChromeMs": 2021,
-          "inputReadyMs": 504
+          "editorReadyMs": 505,
+          "commandReadyMs": 2035,
+          "editorToCommandGapMs": 1530,
+          "appReadyMs": 2035,
+          "stableChromeMs": 2035,
+          "inputReadyMs": 505
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 1536.3,
-      "minMs": 1448,
-      "maxMs": 1550
+      "avgMiddleMs": 1550.3,
+      "minMs": 1530,
+      "maxMs": 1599
     },
     {
       "label": "app-ready-deprecated",
       "samples": [
         {
           "ok": true,
-          "durationMs": 2043,
-          "bootScreenFrameMs": 494,
-          "editorReadyMs": 494,
-          "commandReadyMs": 2043,
-          "editorToCommandGapMs": 1549,
-          "appReadyMs": 2043,
-          "stableChromeMs": 2043,
-          "inputReadyMs": 494
+          "durationMs": 2104,
+          "bootScreenFrameMs": 506,
+          "editorReadyMs": 506,
+          "commandReadyMs": 2105,
+          "editorToCommandGapMs": 1599,
+          "appReadyMs": 2104,
+          "stableChromeMs": 2104,
+          "inputReadyMs": 506
         },
         {
           "ok": true,
-          "durationMs": 2046,
+          "durationMs": 2053,
+          "bootScreenFrameMs": 491,
+          "editorReadyMs": 491,
+          "commandReadyMs": 2054,
+          "editorToCommandGapMs": 1563,
+          "appReadyMs": 2053,
+          "stableChromeMs": 2053,
+          "inputReadyMs": 491
+        },
+        {
+          "ok": true,
+          "durationMs": 2047,
+          "bootScreenFrameMs": 500,
+          "editorReadyMs": 500,
+          "commandReadyMs": 2047,
+          "editorToCommandGapMs": 1547,
+          "appReadyMs": 2047,
+          "stableChromeMs": 2047,
+          "inputReadyMs": 500
+        },
+        {
+          "ok": true,
+          "durationMs": 2038,
           "bootScreenFrameMs": 497,
           "editorReadyMs": 497,
-          "commandReadyMs": 2047,
-          "editorToCommandGapMs": 1550,
-          "appReadyMs": 2046,
-          "stableChromeMs": 2047,
+          "commandReadyMs": 2038,
+          "editorToCommandGapMs": 1541,
+          "appReadyMs": 2038,
+          "stableChromeMs": 2038,
           "inputReadyMs": 497
         },
         {
           "ok": true,
-          "durationMs": 2036,
-          "bootScreenFrameMs": 493,
-          "editorReadyMs": 493,
-          "commandReadyMs": 2036,
-          "editorToCommandGapMs": 1543,
-          "appReadyMs": 2036,
-          "stableChromeMs": 2036,
-          "inputReadyMs": 494
-        },
-        {
-          "ok": true,
-          "durationMs": 1938,
-          "bootScreenFrameMs": 490,
-          "editorReadyMs": 490,
-          "commandReadyMs": 1938,
-          "editorToCommandGapMs": 1448,
-          "appReadyMs": 1938,
-          "stableChromeMs": 1938,
-          "inputReadyMs": 490
-        },
-        {
-          "ok": true,
-          "durationMs": 2021,
+          "durationMs": 2035,
           "bootScreenFrameMs": 504,
-          "editorReadyMs": 504,
-          "commandReadyMs": 2021,
-          "editorToCommandGapMs": 1517,
-          "appReadyMs": 2021,
-          "stableChromeMs": 2021,
-          "inputReadyMs": 504
+          "editorReadyMs": 505,
+          "commandReadyMs": 2035,
+          "editorToCommandGapMs": 1530,
+          "appReadyMs": 2035,
+          "stableChromeMs": 2035,
+          "inputReadyMs": 505
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 2033.3,
-      "minMs": 1938,
-      "maxMs": 2046
+      "avgMiddleMs": 2046,
+      "minMs": 2035,
+      "maxMs": 2104
     },
     {
       "label": "stable-chrome",
       "samples": [
         {
           "ok": true,
-          "durationMs": 2043,
-          "bootScreenFrameMs": 494,
-          "editorReadyMs": 494,
-          "commandReadyMs": 2043,
-          "editorToCommandGapMs": 1549,
-          "appReadyMs": 2043,
-          "stableChromeMs": 2043,
-          "inputReadyMs": 494
+          "durationMs": 2104,
+          "bootScreenFrameMs": 506,
+          "editorReadyMs": 506,
+          "commandReadyMs": 2105,
+          "editorToCommandGapMs": 1599,
+          "appReadyMs": 2104,
+          "stableChromeMs": 2104,
+          "inputReadyMs": 506
+        },
+        {
+          "ok": true,
+          "durationMs": 2053,
+          "bootScreenFrameMs": 491,
+          "editorReadyMs": 491,
+          "commandReadyMs": 2054,
+          "editorToCommandGapMs": 1563,
+          "appReadyMs": 2053,
+          "stableChromeMs": 2053,
+          "inputReadyMs": 491
         },
         {
           "ok": true,
           "durationMs": 2047,
+          "bootScreenFrameMs": 500,
+          "editorReadyMs": 500,
+          "commandReadyMs": 2047,
+          "editorToCommandGapMs": 1547,
+          "appReadyMs": 2047,
+          "stableChromeMs": 2047,
+          "inputReadyMs": 500
+        },
+        {
+          "ok": true,
+          "durationMs": 2038,
           "bootScreenFrameMs": 497,
           "editorReadyMs": 497,
-          "commandReadyMs": 2047,
-          "editorToCommandGapMs": 1550,
-          "appReadyMs": 2046,
-          "stableChromeMs": 2047,
+          "commandReadyMs": 2038,
+          "editorToCommandGapMs": 1541,
+          "appReadyMs": 2038,
+          "stableChromeMs": 2038,
           "inputReadyMs": 497
         },
         {
           "ok": true,
-          "durationMs": 2036,
-          "bootScreenFrameMs": 493,
-          "editorReadyMs": 493,
-          "commandReadyMs": 2036,
-          "editorToCommandGapMs": 1543,
-          "appReadyMs": 2036,
-          "stableChromeMs": 2036,
-          "inputReadyMs": 494
-        },
-        {
-          "ok": true,
-          "durationMs": 1938,
-          "bootScreenFrameMs": 490,
-          "editorReadyMs": 490,
-          "commandReadyMs": 1938,
-          "editorToCommandGapMs": 1448,
-          "appReadyMs": 1938,
-          "stableChromeMs": 1938,
-          "inputReadyMs": 490
-        },
-        {
-          "ok": true,
-          "durationMs": 2021,
+          "durationMs": 2035,
           "bootScreenFrameMs": 504,
-          "editorReadyMs": 504,
-          "commandReadyMs": 2021,
-          "editorToCommandGapMs": 1517,
-          "appReadyMs": 2021,
-          "stableChromeMs": 2021,
-          "inputReadyMs": 504
+          "editorReadyMs": 505,
+          "commandReadyMs": 2035,
+          "editorToCommandGapMs": 1530,
+          "appReadyMs": 2035,
+          "stableChromeMs": 2035,
+          "inputReadyMs": 505
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 2033.3,
-      "minMs": 1938,
-      "maxMs": 2047
+      "avgMiddleMs": 2046,
+      "minMs": 2035,
+      "maxMs": 2104
     },
     {
       "label": "input-ready-deprecated",
       "samples": [
         {
           "ok": true,
-          "durationMs": 494,
-          "bootScreenFrameMs": 494,
-          "editorReadyMs": 494,
-          "commandReadyMs": 2043,
-          "editorToCommandGapMs": 1549,
-          "appReadyMs": 2043,
-          "stableChromeMs": 2043,
-          "inputReadyMs": 494
+          "durationMs": 506,
+          "bootScreenFrameMs": 506,
+          "editorReadyMs": 506,
+          "commandReadyMs": 2105,
+          "editorToCommandGapMs": 1599,
+          "appReadyMs": 2104,
+          "stableChromeMs": 2104,
+          "inputReadyMs": 506
+        },
+        {
+          "ok": true,
+          "durationMs": 491,
+          "bootScreenFrameMs": 491,
+          "editorReadyMs": 491,
+          "commandReadyMs": 2054,
+          "editorToCommandGapMs": 1563,
+          "appReadyMs": 2053,
+          "stableChromeMs": 2053,
+          "inputReadyMs": 491
+        },
+        {
+          "ok": true,
+          "durationMs": 500,
+          "bootScreenFrameMs": 500,
+          "editorReadyMs": 500,
+          "commandReadyMs": 2047,
+          "editorToCommandGapMs": 1547,
+          "appReadyMs": 2047,
+          "stableChromeMs": 2047,
+          "inputReadyMs": 500
         },
         {
           "ok": true,
           "durationMs": 497,
           "bootScreenFrameMs": 497,
           "editorReadyMs": 497,
-          "commandReadyMs": 2047,
-          "editorToCommandGapMs": 1550,
-          "appReadyMs": 2046,
-          "stableChromeMs": 2047,
+          "commandReadyMs": 2038,
+          "editorToCommandGapMs": 1541,
+          "appReadyMs": 2038,
+          "stableChromeMs": 2038,
           "inputReadyMs": 497
         },
         {
           "ok": true,
-          "durationMs": 494,
-          "bootScreenFrameMs": 493,
-          "editorReadyMs": 493,
-          "commandReadyMs": 2036,
-          "editorToCommandGapMs": 1543,
-          "appReadyMs": 2036,
-          "stableChromeMs": 2036,
-          "inputReadyMs": 494
-        },
-        {
-          "ok": true,
-          "durationMs": 490,
-          "bootScreenFrameMs": 490,
-          "editorReadyMs": 490,
-          "commandReadyMs": 1938,
-          "editorToCommandGapMs": 1448,
-          "appReadyMs": 1938,
-          "stableChromeMs": 1938,
-          "inputReadyMs": 490
-        },
-        {
-          "ok": true,
-          "durationMs": 504,
+          "durationMs": 505,
           "bootScreenFrameMs": 504,
-          "editorReadyMs": 504,
-          "commandReadyMs": 2021,
-          "editorToCommandGapMs": 1517,
-          "appReadyMs": 2021,
-          "stableChromeMs": 2021,
-          "inputReadyMs": 504
+          "editorReadyMs": 505,
+          "commandReadyMs": 2035,
+          "editorToCommandGapMs": 1530,
+          "appReadyMs": 2035,
+          "stableChromeMs": 2035,
+          "inputReadyMs": 505
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 495,
-      "minMs": 490,
-      "maxMs": 504
+      "avgMiddleMs": 500.7,
+      "minMs": 491,
+      "maxMs": 506
     }
   ]
 }

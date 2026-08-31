@@ -211,12 +211,31 @@ describe("saveClaudeSubscriptions", () => {
 		expect(existsSync(join(agentDir, "multi-pass.json"))).toBe(false);
 	});
 
-	it("does not modify the legacy multi-pass.json", () => {
+	it("seeds the complete primary document from legacy without modifying legacy", () => {
 		const agentDir = tempAgentDir();
-		const legacy = { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }], pools: [{ name: "pool" }] };
+		const legacy = {
+			legacyNote: "keep",
+			subscriptions: [
+				{ provider: "anthropic", index: 2, label: "company" },
+				{ provider: "openai", index: 4, label: "work" },
+				{ note: "unparseable entry" },
+			],
+			pools: [{ name: "pool" }],
+			presets: [{ name: "preset" }],
+		};
 		writeLegacy(agentDir, legacy);
 		saveClaudeSubscriptions([{ provider: "anthropic", index: 2, label: "renamed" }], withAgentDir(agentDir));
+
 		expect(JSON.parse(readFileSync(join(agentDir, "multi-pass.json"), "utf8"))).toEqual(legacy);
+		expect(JSON.parse(readFileSync(join(agentDir, "claude-accounts.json"), "utf8"))).toEqual({
+			...legacy,
+			[CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true,
+			subscriptions: [
+				{ provider: "openai", index: 4, label: "work" },
+				{ note: "unparseable entry" },
+				{ provider: "anthropic", index: 2, label: "renamed" },
+			],
+		});
 	});
 });
 

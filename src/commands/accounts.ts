@@ -203,7 +203,8 @@ export function loadClaudeSubscriptions(deps: AccountsCommandDeps = {}): ClaudeS
 
 export function saveClaudeSubscriptions(subscriptions: readonly ClaudeSubscription[], deps: AccountsCommandDeps = {}): void {
 	const destination = resolveAccountsWriteDestination(deps);
-	const document = readDocument(resolveAccountsReadPath(deps));
+	const primaryPath = resolveAccountsReadPath(deps);
+	const document = readDocument(existsSync(primaryPath) ? primaryPath : resolveLegacyConfigPath(deps));
 	const existing = Array.isArray(document.subscriptions) ? document.subscriptions : [];
 	const nonClaude = existing.filter((entry) => parseSubscription(entry)?.provider !== "anthropic");
 	const next: AccountsDocument = {

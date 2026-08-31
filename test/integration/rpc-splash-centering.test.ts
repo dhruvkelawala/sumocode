@@ -9,8 +9,8 @@ import { INPUT_FRAME_HINT_KEYBINDS } from "../../src/cathedral/input-frame.js";
 
 let app: SpawnedPiPty | undefined;
 
-afterEach(() => {
-	app?.cleanup();
+afterEach(async () => {
+	await app?.cleanupAndWait();
 	app = undefined;
 });
 

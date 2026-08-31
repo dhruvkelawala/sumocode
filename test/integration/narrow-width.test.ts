@@ -10,8 +10,8 @@ const ANSI_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|_[^\x
 
 let app: SpawnedPiPty | undefined;
 
-afterEach(() => {
-	app?.cleanup();
+afterEach(async () => {
+	await app?.cleanupAndWait();
 	app = undefined;
 });
 
@@ -56,7 +56,7 @@ async function expectNarrowBoot(cols: number, rows: number): Promise<void> {
 	const replayedRows = (await replayTerminalRows(output, cols, rows)).map((line) => stripAnsi(line));
 	for (const row of replayedRows) expect(row.length).toBeLessThanOrEqual(cols);
 
-	app.cleanup();
+	await app.cleanupAndWait();
 	app = undefined;
 }
 

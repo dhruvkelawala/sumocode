@@ -45,8 +45,8 @@ async function waitForCommandTypes(path: string, expected: readonly string[]): P
 
 let app: SpawnedPiPty | undefined;
 
-afterEach(() => {
-	app?.cleanup();
+afterEach(async () => {
+	await app?.cleanupAndWait();
 	app = undefined;
 });
 

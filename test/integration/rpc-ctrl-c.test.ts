@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { TERMINAL_CLEANUP_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-controller.js";
-import { PI_BOOT_SEQUENCE, spawnSumocodePty, waitForScreen, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { spawnSumocodePty, waitForScreen, type SpawnedPiPty } from "./spawn-pi-pty.js";
 import { createRpcChildFixture } from "./rpc-child-fixture.js";
 
 const CTRL_C = "\x1b[99;5u";
@@ -13,17 +13,15 @@ const ROWS = 30;
 
 let app: SpawnedPiPty | undefined;
 
-afterEach(() => {
-	app?.cleanup();
+afterEach(async () => {
+	await app?.cleanupAndWait();
 	app = undefined;
 });
 
 async function bootRpcHost(prefix: string): Promise<SpawnedPiPty> {
 	const agentDir = await mkdtemp(join(tmpdir(), prefix));
 	const spawned = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: COLS, rows: ROWS });
-	await spawned.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
-	await spawned.waitForOutput("DIVINE INVOCATION", 15_000);
-	await spawned.waitForOutput(/CTRL\+\/[\s\S]*COMMANDS/, 15_000);
+	await spawned.waitForReady("app", 15_000);
 	return spawned;
 }
 
@@ -37,9 +35,7 @@ async function bootRpcHostWithPiFixture(prefix: string, piBin: string): Promise<
 		cols: COLS,
 		rows: ROWS,
 	});
-	await spawned.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
-	await spawned.waitForOutput("DIVINE INVOCATION", 15_000);
-	await spawned.waitForOutput(/CTRL\+\/[\s\S]*COMMANDS/, 15_000);
+	await spawned.waitForReady("app", 15_000);
 	return spawned;
 }
 

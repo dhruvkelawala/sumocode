@@ -1,10 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawn, type IDisposable, type IEvent, type IPty } from "node-pty";
 import { describe, expect, it } from "vitest";
+import { createChildEvidenceContext, recordPtyExit, supervisePtyProcess } from "./harness-supervisor.js";
 import { buildSpawnEnv, spawnPiPty, type SpawnPiPtyOptions } from "./spawn-pi-pty.js";
 
 type PtySpawn = NonNullable<SpawnPiPtyOptions["spawn"]>;
@@ -562,20 +563,28 @@ describe("sumocode launcher mirrors Pi option consumption (PTY RPC path)", () =>
 	function ptyDryRun(args: readonly string[]): Promise<string> {
 		ensureNodePtySpawnHelperExecutableForTest();
 		return new Promise<string>((resolveRun, rejectRun) => {
-			const child = spawn(resolve(process.cwd(), "bin/sumocode.sh"), ["--dry-run", ...args], {
+			const launcher = resolve(process.cwd(), "bin/sumocode.sh");
+			const launcherArgs = ["--dry-run", ...args];
+			const childEnv = buildSpawnEnv(process.env, { PI_BIN: "/bin/echo" });
+			const evidence = createChildEvidenceContext([launcher, ...launcherArgs], childEnv);
+			childEnv.SUMOCODE_HARNESS_SIGNATURE = "sumocode-verification-harness-v2";
+			const child = spawn(launcher, launcherArgs, {
 				name: "xterm-256color",
 				cols: 80,
 				rows: 24,
 				cwd: process.cwd(),
-				env: buildSpawnEnv(process.env, { PI_BIN: "/bin/echo" }),
+				env: childEnv,
 			});
+			const supervision = supervisePtyProcess(child.pid, evidence, childEnv);
 			let output = "";
 			child.onData((data) => {
+				appendFileSync(evidence.stderrPath, data);
 				output += data;
 			});
-			child.onExit(({ exitCode }) => {
+			child.onExit(({ exitCode, signal }) => {
+				recordPtyExit(supervision.pid, supervision.pgid, exitCode, signal, childEnv);
 				if (exitCode === 0) resolveRun(output);
-				else rejectRun(new Error(`launcher dry-run exited ${exitCode}. Output:\n${output}`));
+				else rejectRun(new Error(`launcher dry-run exited ${exitCode}. Output:\n${output}\nEvidence: ${evidence.evidenceDir}`));
 			});
 		});
 	}

@@ -15871,7 +15871,7 @@ var nodeArtifactFs = {
   )
 };
 var isErrnoCode = (error, code) => typeof error === "object" && error !== null && "code" in error && error.code === code;
-var ownedByUs = (stat) => {
+var isOwnedByUs = (stat) => {
   if (typeof process.getuid !== "function") return true;
   return stat.uid === process.getuid();
 };
@@ -15881,12 +15881,12 @@ var assertPrivateDir = (fs3, path2, label) => {
   const stat = fs3.lstatSync(path2);
   if (!stat.isDirectory()) throw new Error(`${label} is not a directory: ${path2}`);
   if (!isOwnerOnly(stat)) throw new Error(`${label} is not owner-only (mode ${stat.mode.toString(8)}): ${path2}`);
-  if (!ownedByUs(stat)) throw new Error(`${label} is not owned by this user: ${path2}`);
+  if (!isOwnedByUs(stat)) throw new Error(`${label} is not owned by this user: ${path2}`);
 };
 var assertPrivateStat = (stat, path2, label) => {
   if (!stat.isFile()) throw new Error(`${label} is not a regular file: ${path2}`);
   if (!isOwnerOnly(stat)) throw new Error(`${label} is not owner-only (mode ${stat.mode.toString(8)}): ${path2}`);
-  if (!ownedByUs(stat)) throw new Error(`${label} is not owned by this user: ${path2}`);
+  if (!isOwnedByUs(stat)) throw new Error(`${label} is not owned by this user: ${path2}`);
 };
 var assertPrivateArtifact = (fs3, path2, parentDir, label) => {
   assertArtifactInsideDir(path2, parentDir, label);
@@ -15932,7 +15932,8 @@ var writeNewPrivateFile = (fs3, path2, contents) => {
 var allocatePrivateTaskDir = (fs3, root, name) => {
   const dir = resolve6(join17(root, name));
   fs3.mkdirSync(root, { recursive: true, mode: PRIVATE_DIR_MODE });
-  if (fs3.lstatSync(root).isDirectory()) {
+  const rootStat = fs3.lstatSync(root);
+  if (rootStat.isDirectory() && isOwnedByUs(rootStat)) {
     fs3.chmodSync(root, PRIVATE_DIR_MODE);
   }
   assertPrivateDir(fs3, root, "visible-subagent task root directory");

@@ -263,15 +263,20 @@ describe("SubagentManager", () => {
 		emitters.get("sa-1")?.({ kind: "message-end", role: "user", text: prior });
 		const finalText = `useful final answer${TRUNCATED_HEAD_MARKER}`;
 		emitters.get("sa-1")?.({ kind: "message-end", role: "assistant", text: finalText, replacesRetainedText: true });
+		emitters.get("sa-1")?.({ kind: "assistant-delta", delta: "later live text" });
+		emitters.get("sa-1")?.({ kind: "message-end", role: "toolResult", text: "later tool output" });
+		expect(manager.get("sa-1")).toMatchObject({ liveText: "later live text", finalText });
 		const wait = manager.waitFor(["sa-1"]);
 		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText } });
 
 		const [delivered] = await wait;
 		if (!delivered) throw new Error("missing delivered result");
 		expect(delivered.finalText).toBe(finalText);
-		expect(delivered.transcript).toMatchObject([{ role: "assistant", text: finalText }]);
-		expect(delivered.finalText).toBe(delivered.transcript.at(-1)?.text);
-		const retained = `${delivered.transcript.map((item) => item.text).join("")}${delivered.liveText}`;
+		expect(delivered.transcript).toMatchObject([
+			{ role: "assistant", text: finalText },
+			{ role: "toolResult", text: "later tool output" },
+		]);
+		const retained = delivered.transcript.map((item) => item.text).join("");
 		expect(Buffer.byteLength(retained, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
 		expect(retained.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
 	});

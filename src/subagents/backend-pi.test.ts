@@ -267,6 +267,32 @@ describe("spawnPiChild", () => {
 		expect(retained.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
 	});
 
+	it("retains later events until inherited-marker headroom is genuinely full", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+
+		emitJson(proc, { type: "message_end", message: { role: "user", content: "u".repeat(CHILD_RETAINED_RESULT_MAX_BYTES) } });
+		emitJson(proc, { type: "message_end", message: { role: "assistant", content: "small useful answer 界" } });
+		emitJson(proc, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "later delta 🧘" } });
+		emitJson(proc, { type: "tool_result_end", message: { role: "toolResult", content: "later tool output" } });
+		emitJson(proc, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "z".repeat(CHILD_RETAINED_RESULT_MAX_BYTES) } });
+		emitJson(proc, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "dropped delta" } });
+		emitJson(proc, { type: "tool_result_end", message: { role: "toolResult", content: "dropped tool output" } });
+
+		const retained = durableEventText(events);
+		expect(retained).toContain("small useful answer 界");
+		expect(retained).toContain("later delta 🧘");
+		expect(retained).toContain("later tool output");
+		expect(retained).not.toContain("dropped delta");
+		expect(retained).not.toContain("dropped tool output");
+		expect(retained).not.toContain("�");
+		expect(Buffer.byteLength(retained, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+		expect(retained.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+	});
+
 	it("keeps one marker when an interleaved message is omitted behind a truncated live stream", () => {
 		const proc = new FakeProcess();
 		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.

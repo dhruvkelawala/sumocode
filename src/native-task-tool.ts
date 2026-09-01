@@ -115,29 +115,67 @@ type SingleResult = {
 /** Owns the human-readable text retained by one child run. */
 class RunPayloadBudget {
 	private retainedBytes = 0;
+	private markerRetained = false;
+	private retainedFull = false;
 	private readonly markerBytes = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
-	public truncated = false;
 
-	public retain(text: string): string {
-		if (text.length === 0 || this.truncated) return "";
+	public get truncated(): boolean {
+		return this.markerRetained;
+	}
+
+	public get full(): boolean {
+		const markerReserve = this.markerRetained ? 0 : this.markerBytes;
+		return this.retainedFull || this.retainedBytes >= CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve;
+	}
+
+	public retain(text: string, requiresMarker = false): string {
+		if ((text.length === 0 && !requiresMarker) || this.retainedFull) return "";
 		const textBytes = Buffer.byteLength(text, "utf8");
-		// Reserve the marker so a later frame can stop retention without revisiting prior fields.
-		const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - this.markerBytes - this.retainedBytes;
+		if (requiresMarker && !this.markerRetained) {
+			const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - this.markerBytes - this.retainedBytes;
+			const retained = this.markedHead(text, Math.max(0, contentBytesLeft));
+			this.retainedBytes += Buffer.byteLength(retained, "utf8");
+			this.markerRetained = true;
+			this.retainedFull = textBytes > contentBytesLeft;
+			return retained;
+		}
+
+		const markerReserve = this.markerRetained ? 0 : this.markerBytes;
+		const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve - this.retainedBytes;
 		if (textBytes <= contentBytesLeft) {
 			this.retainedBytes += textBytes;
 			return text;
 		}
 
-		const retained = boundRetainedResult(text, Math.max(this.markerBytes, CHILD_RETAINED_RESULT_MAX_BYTES - this.retainedBytes));
+		const retained = this.markerRetained
+			? this.unmarkedHead(text, Math.max(0, contentBytesLeft))
+			: boundRetainedResult(text, Math.max(this.markerBytes, CHILD_RETAINED_RESULT_MAX_BYTES - this.retainedBytes));
 		this.retainedBytes += Buffer.byteLength(retained, "utf8");
-		this.truncated = true;
+		this.markerRetained = true;
+		this.retainedFull = true;
 		return retained;
 	}
 
 	public replace(previous: string | undefined, next: string): string | undefined {
-		if (this.truncated) return previous;
+		if (this.retainedFull) return previous;
 		if (previous !== undefined) this.retainedBytes -= Buffer.byteLength(previous, "utf8");
 		return this.retain(next);
+	}
+
+	public reclaimForAssistant(): void {
+		this.retainedBytes = 0;
+		this.markerRetained = false;
+		this.retainedFull = false;
+	}
+
+	private markedHead(text: string, contentBytes: number): string {
+		const head = new BoundedUtf8Head(contentBytes + this.markerBytes);
+		head.append(text);
+		return head.append(TRUNCATED_HEAD_MARKER);
+	}
+
+	private unmarkedHead(text: string, contentBytes: number): string {
+		return this.markedHead(text, contentBytes).slice(0, -TRUNCATED_HEAD_MARKER.length);
 	}
 }
 
@@ -338,7 +376,11 @@ const getFinalOutput = (messages: Message[]): string => {
 };
 
 const getFinalResultOutput = (result: SingleResult): string => {
-	return getFinalOutput(result.messages) || (result.payloadTruncated ? TRUNCATED_HEAD_MARKER.trim() : "");
+	const output = getFinalOutput(result.messages);
+	if (!output) return result.payloadTruncated ? TRUNCATED_HEAD_MARKER.trim() : "";
+	return result.payloadTruncated && !output.includes(TRUNCATED_HEAD_MARKER)
+		? `${output}${TRUNCATED_HEAD_MARKER}`
+		: output;
 };
 
 const indentLine = (text: string, indent: number): string => `${" ".repeat(indent)}${text}`;
@@ -661,6 +703,32 @@ const applyAssistantUsage = (result: SingleResult, message: AssistantMessage): v
 	result.usage.contextTokens = usage.totalTokens ?? 0;
 };
 
+const clearRetainedHumanText = (result: SingleResult): void => {
+	result.messages = result.messages.map((message): Message => {
+		if (message.role === "user") {
+			return {
+				...message,
+				content: typeof message.content === "string"
+					? ""
+					: message.content.map((part) => part.type === "text" ? { ...part, text: "" } : part),
+			};
+		}
+		if (message.role === "toolResult") {
+			return {
+				...message,
+				content: message.content.map((part) => part.type === "text" ? { ...part, text: "" } : part),
+			};
+		}
+		return {
+			...message,
+			content: message.content.map((part) => part.type === "text" ? { ...part, text: "" } : part),
+			errorMessage: undefined,
+		};
+	});
+	result.toolEvents = result.toolEvents.map((event) => ({ ...event, output: undefined }));
+	result.errorMessage = undefined;
+};
+
 const handleEventMessage = (result: SingleResult, message: Message): void => {
 	const budget = getRunPayloadBudget(result);
 	if (message.role === "user") {
@@ -681,11 +749,20 @@ const handleEventMessage = (result: SingleResult, message: Message): void => {
 		result.payloadTruncated = budget.truncated || undefined;
 		return;
 	}
-	const retained: AssistantMessage = {
-		...message,
-		content: message.content.map((part) => part.type === "text" ? { ...part, text: budget.retain(part.text) } : part),
-		errorMessage: message.errorMessage ? budget.retain(message.errorMessage) : undefined,
+	let requiresMarker = budget.full;
+	if (requiresMarker) {
+		clearRetainedHumanText(result);
+		budget.reclaimForAssistant();
+	}
+	const retainAssistantText = (text: string): string => {
+		const retained = budget.retain(text, requiresMarker);
+		requiresMarker = false;
+		return retained;
 	};
+	let content = message.content.map((part) => part.type === "text" ? { ...part, text: retainAssistantText(part.text) } : part);
+	const errorMessage = message.errorMessage ? retainAssistantText(message.errorMessage) : undefined;
+	if (requiresMarker) content = [...content, { type: "text", text: retainAssistantText("") }];
+	const retained: AssistantMessage = { ...message, content, errorMessage };
 	result.messages.push(retained);
 	result.payloadTruncated = budget.truncated || undefined;
 	applyAssistantUsage(result, retained);

@@ -262,21 +262,27 @@ interface RetainedMessageText {
 class PiRunPayloadBudget {
 	private retainedBytes = 0;
 	private liveBytes = 0;
-	private retainedTruncated = false;
+	private markerRetained = false;
+	private retainedFull = false;
+	private liveMarker = false;
 	private liveTruncated = false;
 	private omissionBehindLive = false;
 	private readonly markerBytes = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
 
 	public appendLive(delta: string): string {
-		if (delta.length === 0 || this.retainedTruncated || this.liveTruncated) return "";
+		if (delta.length === 0 || this.retainedFull || this.liveTruncated) return "";
 		const deltaBytes = Buffer.byteLength(delta, "utf8");
-		const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - this.markerBytes - this.retainedBytes - this.liveBytes;
+		const markerReserve = this.markerRetained || this.liveMarker ? 0 : this.markerBytes;
+		const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve - this.retainedBytes - this.liveBytes;
 		if (deltaBytes <= contentBytesLeft) {
 			this.liveBytes += deltaBytes;
 			return delta;
 		}
-		const retained = this.markedHead(delta, Math.max(0, contentBytesLeft));
+		const retained = this.markerRetained
+			? this.unmarkedHead(delta, Math.max(0, contentBytesLeft))
+			: this.markedHead(delta, Math.max(0, contentBytesLeft));
 		this.liveBytes += Buffer.byteLength(retained, "utf8");
+		this.liveMarker = !this.markerRetained;
 		this.liveTruncated = true;
 		return retained;
 	}
@@ -288,33 +294,48 @@ class PiRunPayloadBudget {
 		// assistant message, so reclaim those provisional bytes at that boundary.
 		if (role === "assistant") {
 			this.liveBytes = 0;
+			this.liveMarker = false;
 			this.liveTruncated = false;
 			requiresMarker = this.omissionBehindLive;
 			this.omissionBehindLive = false;
 			// The parent-facing result wins once prior completed text has exhausted
 			// the cap. Replace that transcript text rather than silently dropping the
 			// latest assistant result; one marker represents everything reclaimed.
-			if (this.retainedTruncated) {
+			const markerReserve = this.markerRetained ? 0 : this.markerBytes;
+			if (this.retainedFull || this.retainedBytes >= CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve) {
 				this.retainedBytes = 0;
-				this.retainedTruncated = false;
+				this.markerRetained = false;
+				this.retainedFull = false;
 				replacesRetainedText = true;
 				requiresMarker = true;
 			}
 		}
 		if (text.length === 0 && !requiresMarker) return { text: "" };
-		if (this.retainedTruncated) return { text: "" };
+		if (this.retainedFull) return { text: "" };
 		if (this.liveTruncated) {
 			this.omissionBehindLive = text.length > 0;
 			return { text: "" };
 		}
 		const textBytes = Buffer.byteLength(text, "utf8");
-		const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - this.markerBytes - this.retainedBytes - this.liveBytes;
+		if (requiresMarker && !this.markerRetained) {
+			const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - this.markerBytes - this.retainedBytes - this.liveBytes;
+			const retained = this.markedHead(text, Math.max(0, contentBytesLeft));
+			this.retainedBytes += Buffer.byteLength(retained, "utf8");
+			this.markerRetained = true;
+			this.retainedFull = textBytes > contentBytesLeft;
+			return replacesRetainedText ? { text: retained, replacesRetainedText: true } : { text: retained };
+		}
+		const markerReserve = this.markerRetained ? 0 : this.markerBytes;
+		const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve - this.retainedBytes - this.liveBytes;
 		let retained: string;
-		if (requiresMarker || textBytes > contentBytesLeft) {
-			retained = this.markedHead(text, Math.max(0, contentBytesLeft));
-			this.retainedTruncated = true;
-		} else {
+		if (textBytes <= contentBytesLeft) {
 			retained = text;
+		} else {
+			retained = this.markerRetained
+				? this.unmarkedHead(text, Math.max(0, contentBytesLeft))
+				: this.markedHead(text, Math.max(0, contentBytesLeft));
+			this.markerRetained = true;
+			this.retainedFull = true;
 		}
 		this.retainedBytes += Buffer.byteLength(retained, "utf8");
 		return replacesRetainedText ? { text: retained, replacesRetainedText: true } : { text: retained };
@@ -323,8 +344,11 @@ class PiRunPayloadBudget {
 	private markedHead(text: string, contentBytes: number): string {
 		const head = new BoundedUtf8Head(contentBytes + this.markerBytes);
 		head.append(text);
-		// Force the marker even when the omitted suffix is shorter than the marker.
 		return head.append(TRUNCATED_HEAD_MARKER);
+	}
+
+	private unmarkedHead(text: string, contentBytes: number): string {
+		return this.markedHead(text, contentBytes).slice(0, -TRUNCATED_HEAD_MARKER.length);
 	}
 }
 

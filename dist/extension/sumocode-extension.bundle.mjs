@@ -3136,25 +3136,56 @@ var applyPromptPatches = (prompt, patches) => {
 };
 var RunPayloadBudget = class {
   retainedBytes = 0;
+  markerRetained = false;
+  retainedFull = false;
   markerBytes = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
-  truncated = false;
-  retain(text) {
-    if (text.length === 0 || this.truncated) return "";
+  get truncated() {
+    return this.markerRetained;
+  }
+  get full() {
+    const markerReserve = this.markerRetained ? 0 : this.markerBytes;
+    return this.retainedFull || this.retainedBytes >= CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve;
+  }
+  retain(text, requiresMarker = false) {
+    if (text.length === 0 && !requiresMarker || this.retainedFull) return "";
     const textBytes = Buffer.byteLength(text, "utf8");
-    const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - this.markerBytes - this.retainedBytes;
+    if (requiresMarker && !this.markerRetained) {
+      const contentBytesLeft2 = CHILD_RETAINED_RESULT_MAX_BYTES - this.markerBytes - this.retainedBytes;
+      const retained2 = this.markedHead(text, Math.max(0, contentBytesLeft2));
+      this.retainedBytes += Buffer.byteLength(retained2, "utf8");
+      this.markerRetained = true;
+      this.retainedFull = textBytes > contentBytesLeft2;
+      return retained2;
+    }
+    const markerReserve = this.markerRetained ? 0 : this.markerBytes;
+    const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve - this.retainedBytes;
     if (textBytes <= contentBytesLeft) {
       this.retainedBytes += textBytes;
       return text;
     }
-    const retained = boundRetainedResult(text, Math.max(this.markerBytes, CHILD_RETAINED_RESULT_MAX_BYTES - this.retainedBytes));
+    const retained = this.markerRetained ? this.unmarkedHead(text, Math.max(0, contentBytesLeft)) : boundRetainedResult(text, Math.max(this.markerBytes, CHILD_RETAINED_RESULT_MAX_BYTES - this.retainedBytes));
     this.retainedBytes += Buffer.byteLength(retained, "utf8");
-    this.truncated = true;
+    this.markerRetained = true;
+    this.retainedFull = true;
     return retained;
   }
   replace(previous, next) {
-    if (this.truncated) return previous;
+    if (this.retainedFull) return previous;
     if (previous !== void 0) this.retainedBytes -= Buffer.byteLength(previous, "utf8");
     return this.retain(next);
+  }
+  reclaimForAssistant() {
+    this.retainedBytes = 0;
+    this.markerRetained = false;
+    this.retainedFull = false;
+  }
+  markedHead(text, contentBytes) {
+    const head = new BoundedUtf8Head(contentBytes + this.markerBytes);
+    head.append(text);
+    return head.append(TRUNCATED_HEAD_MARKER);
+  }
+  unmarkedHead(text, contentBytes) {
+    return this.markedHead(text, contentBytes).slice(0, -TRUNCATED_HEAD_MARKER.length);
   }
 };
 var runPayloadBudgets = /* @__PURE__ */ new WeakMap();
@@ -3285,7 +3316,9 @@ var getFinalOutput = (messages) => {
   return "";
 };
 var getFinalResultOutput = (result) => {
-  return getFinalOutput(result.messages) || (result.payloadTruncated ? TRUNCATED_HEAD_MARKER.trim() : "");
+  const output = getFinalOutput(result.messages);
+  if (!output) return result.payloadTruncated ? TRUNCATED_HEAD_MARKER.trim() : "";
+  return result.payloadTruncated && !output.includes(TRUNCATED_HEAD_MARKER) ? `${output}${TRUNCATED_HEAD_MARKER}` : output;
 };
 var indentLine = (text, indent) => `${" ".repeat(indent)}${text}`;
 var indentText = (text, indent) => {
@@ -3552,6 +3585,29 @@ var applyAssistantUsage = (result, message) => {
   result.usage.cost += usage.cost?.total ?? 0;
   result.usage.contextTokens = usage.totalTokens ?? 0;
 };
+var clearRetainedHumanText = (result) => {
+  result.messages = result.messages.map((message) => {
+    if (message.role === "user") {
+      return {
+        ...message,
+        content: typeof message.content === "string" ? "" : message.content.map((part) => part.type === "text" ? { ...part, text: "" } : part)
+      };
+    }
+    if (message.role === "toolResult") {
+      return {
+        ...message,
+        content: message.content.map((part) => part.type === "text" ? { ...part, text: "" } : part)
+      };
+    }
+    return {
+      ...message,
+      content: message.content.map((part) => part.type === "text" ? { ...part, text: "" } : part),
+      errorMessage: void 0
+    };
+  });
+  result.toolEvents = result.toolEvents.map((event) => ({ ...event, output: void 0 }));
+  result.errorMessage = void 0;
+};
 var handleEventMessage = (result, message) => {
   const budget = getRunPayloadBudget(result);
   if (message.role === "user") {
@@ -3570,11 +3626,20 @@ var handleEventMessage = (result, message) => {
     result.payloadTruncated = budget.truncated || void 0;
     return;
   }
-  const retained = {
-    ...message,
-    content: message.content.map((part) => part.type === "text" ? { ...part, text: budget.retain(part.text) } : part),
-    errorMessage: message.errorMessage ? budget.retain(message.errorMessage) : void 0
+  let requiresMarker = budget.full;
+  if (requiresMarker) {
+    clearRetainedHumanText(result);
+    budget.reclaimForAssistant();
+  }
+  const retainAssistantText = (text) => {
+    const retained2 = budget.retain(text, requiresMarker);
+    requiresMarker = false;
+    return retained2;
   };
+  let content = message.content.map((part) => part.type === "text" ? { ...part, text: retainAssistantText(part.text) } : part);
+  const errorMessage2 = message.errorMessage ? retainAssistantText(message.errorMessage) : void 0;
+  if (requiresMarker) content = [...content, { type: "text", text: retainAssistantText("") }];
+  const retained = { ...message, content, errorMessage: errorMessage2 };
   result.messages.push(retained);
   result.payloadTruncated = budget.truncated || void 0;
   applyAssistantUsage(result, retained);
@@ -15886,20 +15951,24 @@ var messageText2 = (message) => {
 var PiRunPayloadBudget = class {
   retainedBytes = 0;
   liveBytes = 0;
-  retainedTruncated = false;
+  markerRetained = false;
+  retainedFull = false;
+  liveMarker = false;
   liveTruncated = false;
   omissionBehindLive = false;
   markerBytes = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
   appendLive(delta) {
-    if (delta.length === 0 || this.retainedTruncated || this.liveTruncated) return "";
+    if (delta.length === 0 || this.retainedFull || this.liveTruncated) return "";
     const deltaBytes = Buffer.byteLength(delta, "utf8");
-    const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - this.markerBytes - this.retainedBytes - this.liveBytes;
+    const markerReserve = this.markerRetained || this.liveMarker ? 0 : this.markerBytes;
+    const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve - this.retainedBytes - this.liveBytes;
     if (deltaBytes <= contentBytesLeft) {
       this.liveBytes += deltaBytes;
       return delta;
     }
-    const retained = this.markedHead(delta, Math.max(0, contentBytesLeft));
+    const retained = this.markerRetained ? this.unmarkedHead(delta, Math.max(0, contentBytesLeft)) : this.markedHead(delta, Math.max(0, contentBytesLeft));
     this.liveBytes += Buffer.byteLength(retained, "utf8");
+    this.liveMarker = !this.markerRetained;
     this.liveTruncated = true;
     return retained;
   }
@@ -15908,30 +15977,43 @@ var PiRunPayloadBudget = class {
     let requiresMarker = false;
     if (role === "assistant") {
       this.liveBytes = 0;
+      this.liveMarker = false;
       this.liveTruncated = false;
       requiresMarker = this.omissionBehindLive;
       this.omissionBehindLive = false;
-      if (this.retainedTruncated) {
+      const markerReserve2 = this.markerRetained ? 0 : this.markerBytes;
+      if (this.retainedFull || this.retainedBytes >= CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve2) {
         this.retainedBytes = 0;
-        this.retainedTruncated = false;
+        this.markerRetained = false;
+        this.retainedFull = false;
         replacesRetainedText = true;
         requiresMarker = true;
       }
     }
     if (text.length === 0 && !requiresMarker) return { text: "" };
-    if (this.retainedTruncated) return { text: "" };
+    if (this.retainedFull) return { text: "" };
     if (this.liveTruncated) {
       this.omissionBehindLive = text.length > 0;
       return { text: "" };
     }
     const textBytes = Buffer.byteLength(text, "utf8");
-    const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - this.markerBytes - this.retainedBytes - this.liveBytes;
+    if (requiresMarker && !this.markerRetained) {
+      const contentBytesLeft2 = CHILD_RETAINED_RESULT_MAX_BYTES - this.markerBytes - this.retainedBytes - this.liveBytes;
+      const retained2 = this.markedHead(text, Math.max(0, contentBytesLeft2));
+      this.retainedBytes += Buffer.byteLength(retained2, "utf8");
+      this.markerRetained = true;
+      this.retainedFull = textBytes > contentBytesLeft2;
+      return replacesRetainedText ? { text: retained2, replacesRetainedText: true } : { text: retained2 };
+    }
+    const markerReserve = this.markerRetained ? 0 : this.markerBytes;
+    const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve - this.retainedBytes - this.liveBytes;
     let retained;
-    if (requiresMarker || textBytes > contentBytesLeft) {
-      retained = this.markedHead(text, Math.max(0, contentBytesLeft));
-      this.retainedTruncated = true;
-    } else {
+    if (textBytes <= contentBytesLeft) {
       retained = text;
+    } else {
+      retained = this.markerRetained ? this.unmarkedHead(text, Math.max(0, contentBytesLeft)) : this.markedHead(text, Math.max(0, contentBytesLeft));
+      this.markerRetained = true;
+      this.retainedFull = true;
     }
     this.retainedBytes += Buffer.byteLength(retained, "utf8");
     return replacesRetainedText ? { text: retained, replacesRetainedText: true } : { text: retained };
@@ -15940,6 +16022,9 @@ var PiRunPayloadBudget = class {
     const head = new BoundedUtf8Head(contentBytes + this.markerBytes);
     head.append(text);
     return head.append(TRUNCATED_HEAD_MARKER);
+  }
+  unmarkedHead(text, contentBytes) {
+    return this.markedHead(text, contentBytes).slice(0, -TRUNCATED_HEAD_MARKER.length);
   }
 };
 var mapPiEvent = (event) => {

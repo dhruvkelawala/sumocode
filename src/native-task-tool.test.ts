@@ -453,6 +453,79 @@ describe("native task tool", () => {
 		]);
 	});
 
+	it("prioritizes a useful marked final answer and reclaims exhausted prior text", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		const usage = { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, totalTokens: 10, cost: { total: 0.01 } };
+		const finalText = `FINAL:${"界".repeat(64)}`;
+
+		emitTaskEvent(proc, {
+			type: "message_end",
+			message: { role: "user", content: "u".repeat(CHILD_RETAINED_RESULT_MAX_BYTES), timestamp: 1 },
+		});
+		emitTaskEvent(proc, {
+			type: "tool_execution_end",
+			toolCallId: "early-tool",
+			toolName: "read",
+			args: { path: "large" },
+			result: "omitted tool output",
+			isError: false,
+		});
+		emitTaskEvent(proc, {
+			type: "message_end",
+			message: {
+				role: "assistant",
+				content: [{ type: "text", text: finalText }],
+				usage,
+				model: "test-model",
+				stopReason: "stop",
+				timestamp: 2,
+			},
+		});
+		proc.emit("close", 0);
+
+		const toolResult = await running;
+		const result = toolResult.details?.results?.[0];
+		if (!result) throw new Error("task result is missing");
+		const payload = retainedPayloadText(result);
+		const firstMessage = result.messages?.[0];
+		expect(toolResult.content[0]?.text).toContain(finalText);
+		expect(toolResult.content[0]?.text).toContain(TRUNCATED_HEAD_MARKER);
+		expect(payload.reduce((bytes, value) => bytes + Buffer.byteLength(value, "utf8"), 0)).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+		expect(payload.join("").split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+		expect(Array.isArray(firstMessage?.content) ? firstMessage.content[0]?.text : firstMessage?.content).toBe("");
+		expect(result.toolEvents?.[0]).toMatchObject({ id: "early-tool", status: "success", output: undefined });
+		expect(result.usage?.turns).toBe(1);
+	});
+
+	it("uses remaining headroom for turns after a priority replacement", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		const usage = { input: 0, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 1, cost: { total: 0 } };
+
+		emitTaskEvent(proc, { type: "message_end", message: { role: "user", content: "u".repeat(CHILD_RETAINED_RESULT_MAX_BYTES) } });
+		emitTaskEvent(proc, { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "first answer" }], usage } });
+		emitTaskEvent(proc, {
+			type: "tool_result_end",
+			message: { role: "toolResult", toolCallId: "later-tool", toolName: "read", content: [{ type: "text", text: "later tool output" }] },
+		});
+		emitTaskEvent(proc, { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "second answer" }], usage } });
+		proc.emit("close", 0);
+
+		const toolResult = await running;
+		const result = toolResult.details?.results?.[0];
+		if (!result) throw new Error("task result is missing");
+		const payload = retainedPayloadText(result).join("");
+		expect(payload).toContain("first answer");
+		expect(payload).toContain("later tool output");
+		expect(payload).toContain("second answer");
+		expect(payload.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+		expect(Buffer.byteLength(payload, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+		expect(toolResult.content[0]?.text).toContain("second answer");
+		expect(toolResult.content[0]?.text).toContain(TRUNCATED_HEAD_MARKER);
+		expect(result.usage?.turns).toBe(2);
+	});
+
 	it("preserves cancellation and clears its force-kill timer on close", async () => {
 		vi.useFakeTimers();
 		try {

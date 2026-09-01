@@ -2716,6 +2716,159 @@ import {
 import { Text as Text2 } from "@earendil-works/pi-tui";
 import { Type as Type2 } from "typebox";
 
+// src/child-protocol.ts
+var MEBIBYTE = 1024 * 1024;
+var CHILD_JSON_FRAME_MAX_BYTES = 8 * MEBIBYTE;
+var CHILD_UNTERMINATED_MAX_BYTES = 8 * MEBIBYTE;
+var CHILD_STDERR_TAIL_MAX_BYTES = 64 * 1024;
+var CHILD_RETAINED_RESULT_MAX_BYTES = 4 * MEBIBYTE;
+var TRUNCATED_TAIL_MARKER = "[earlier output truncated]\n";
+var TRUNCATED_HEAD_MARKER = "\n[output truncated]";
+function bytesFrom(chunk) {
+  return typeof chunk === "string" ? Buffer.from(chunk, "utf8") : Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+}
+function isUtf8Continuation(byte) {
+  return byte !== void 0 && (byte & 192) === 128;
+}
+function decodeUtf8Tail(bytes) {
+  let value = bytes;
+  while (isUtf8Continuation(value[0])) value = value.subarray(1);
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  for (let trim = 0; trim <= Math.min(3, value.byteLength); trim += 1) {
+    try {
+      return decoder.decode(trim === 0 ? value : value.subarray(0, value.byteLength - trim));
+    } catch {
+    }
+  }
+  return new TextDecoder("utf-8").decode(value);
+}
+function decodeUtf8Head(bytes) {
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  for (let trim = 0; trim <= Math.min(3, bytes.byteLength); trim += 1) {
+    try {
+      return decoder.decode(trim === 0 ? bytes : bytes.subarray(0, bytes.byteLength - trim));
+    } catch {
+    }
+  }
+  return new TextDecoder("utf-8").decode(bytes);
+}
+function boundRetainedResult(text, maxBytes = CHILD_RETAINED_RESULT_MAX_BYTES) {
+  const bytes = Buffer.from(text, "utf8");
+  if (bytes.byteLength <= maxBytes) return text;
+  const markerBytes = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
+  if (maxBytes < markerBytes) throw new Error("retained-result limit is smaller than its truncation marker");
+  const head = decodeUtf8Head(bytes.subarray(0, maxBytes - markerBytes));
+  return `${head}${TRUNCATED_HEAD_MARKER}`;
+}
+var BoundedUtf8Tail = class {
+  constructor(maxBytes = CHILD_STDERR_TAIL_MAX_BYTES) {
+    this.maxBytes = maxBytes;
+    const markerBytes = Buffer.byteLength(TRUNCATED_TAIL_MARKER, "utf8");
+    if (maxBytes < markerBytes) throw new Error("tail limit is smaller than its truncation marker");
+    this.contentMaxBytes = maxBytes - markerBytes;
+  }
+  maxBytes;
+  bytes = Buffer.alloc(0);
+  truncated = false;
+  contentMaxBytes;
+  append(chunk) {
+    const incoming = bytesFrom(chunk);
+    const allowed = this.truncated ? this.contentMaxBytes : this.maxBytes;
+    if (this.bytes.byteLength + incoming.byteLength <= allowed) {
+      this.bytes = Buffer.concat([this.bytes, incoming], this.bytes.byteLength + incoming.byteLength);
+      return;
+    }
+    this.truncated = true;
+    if (incoming.byteLength >= this.contentMaxBytes) {
+      this.bytes = Buffer.from(incoming.subarray(incoming.byteLength - this.contentMaxBytes));
+      return;
+    }
+    const oldBytes = Math.min(this.bytes.byteLength, this.contentMaxBytes - incoming.byteLength);
+    this.bytes = Buffer.concat(
+      [this.bytes.subarray(this.bytes.byteLength - oldBytes), incoming],
+      oldBytes + incoming.byteLength
+    );
+  }
+  toString() {
+    const tail = decodeUtf8Tail(this.bytes);
+    return this.truncated ? `${TRUNCATED_TAIL_MARKER}${tail}` : tail;
+  }
+};
+var ChildProtocolLimitError = class extends Error {
+  constructor(kind, limitBytes, receivedBytes) {
+    super(`Child protocol ${kind} exceeded ${limitBytes} bytes (received at least ${receivedBytes} bytes)`);
+    this.kind = kind;
+    this.limitBytes = limitBytes;
+    this.receivedBytes = receivedBytes;
+    this.name = "ChildProtocolLimitError";
+  }
+  kind;
+  limitBytes;
+  receivedBytes;
+};
+var JsonLineDecoder = class {
+  constructor(options) {
+    this.options = options;
+    this.maxFrameBytes = options.maxFrameBytes ?? CHILD_JSON_FRAME_MAX_BYTES;
+    this.maxUnterminatedBytes = options.maxUnterminatedBytes ?? CHILD_UNTERMINATED_MAX_BYTES;
+  }
+  options;
+  buffer;
+  bytes = 0;
+  stopped = false;
+  maxFrameBytes;
+  maxUnterminatedBytes;
+  get bufferedBytes() {
+    return this.bytes;
+  }
+  write(chunk) {
+    if (this.stopped) return;
+    const incoming = bytesFrom(chunk);
+    let offset = 0;
+    while (offset < incoming.byteLength) {
+      const newline = incoming.indexOf(10, offset);
+      if (newline === -1) {
+        this.append(incoming.subarray(offset), false);
+        return;
+      }
+      if (!this.append(incoming.subarray(offset, newline), true)) return;
+      this.emitLine();
+      offset = newline + 1;
+    }
+  }
+  /** Emit one final non-empty frame when the producer closes without a newline. */
+  end() {
+    if (this.stopped) return;
+    if (this.bytes > 0) this.emitLine();
+    this.stopped = true;
+  }
+  append(chunk, terminated) {
+    const nextBytes = this.bytes + chunk.byteLength;
+    if (nextBytes > this.maxFrameBytes) return this.fail("frame", this.maxFrameBytes, nextBytes);
+    if (!terminated && nextBytes > this.maxUnterminatedBytes) {
+      return this.fail("unterminated", this.maxUnterminatedBytes, nextBytes);
+    }
+    if (chunk.byteLength > 0) {
+      this.buffer ??= Buffer.allocUnsafe(this.maxFrameBytes);
+      Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength).copy(this.buffer, this.bytes);
+    }
+    this.bytes = nextBytes;
+    return true;
+  }
+  emitLine() {
+    const line = decodeUtf8Head(this.buffer?.subarray(0, this.bytes) ?? Buffer.alloc(0));
+    this.bytes = 0;
+    this.options.onLine(line);
+  }
+  fail(kind, limit, received) {
+    this.stopped = true;
+    this.buffer = void 0;
+    this.bytes = 0;
+    this.options.onError(new ChildProtocolLimitError(kind, limit, received));
+    return false;
+  }
+};
+
 // src/native-task-params.ts
 var MAX_PARALLEL_TASKS = 8;
 var VALID_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -3243,17 +3396,39 @@ var getTaskErrorText = (result) => {
 };
 var attachAbortSignal = (proc, signal) => {
   let aborted = false;
-  if (!signal) return { isAborted: () => aborted };
-  const killProcess = () => {
-    aborted = true;
-    proc.kill("SIGTERM");
-    setTimeout(() => {
-      if (!proc.killed) proc.kill("SIGKILL");
-    }, 5e3);
+  let closed = false;
+  let forceKill;
+  const onClose = () => {
+    closed = true;
+    if (forceKill) clearTimeout(forceKill);
+    forceKill = void 0;
   };
-  if (signal.aborted) killProcess();
-  else signal.addEventListener("abort", killProcess, { once: true });
-  return { isAborted: () => aborted };
+  proc.once("close", onClose);
+  const terminate = () => {
+    if (closed || forceKill) return;
+    proc.kill("SIGTERM");
+    forceKill = setTimeout(() => {
+      if (!closed) proc.kill("SIGKILL");
+    }, 5e3);
+    forceKill.unref?.();
+  };
+  const interrupt = () => {
+    aborted = true;
+    terminate();
+  };
+  if (signal?.aborted) interrupt();
+  else signal?.addEventListener("abort", interrupt, { once: true });
+  return {
+    isAborted: () => aborted,
+    terminate,
+    dispose: (keepTerminationTimer = false) => {
+      signal?.removeEventListener("abort", interrupt);
+      if (keepTerminationTimer) return;
+      proc.removeListener("close", onClose);
+      if (forceKill) clearTimeout(forceKill);
+      forceKill = void 0;
+    }
+  };
 };
 var parseJsonLine = (line) => {
   if (!line.trim()) return void 0;
@@ -3280,12 +3455,20 @@ var applyAssistantUsage = (result, message) => {
   result.usage.contextTokens = usage.totalTokens ?? 0;
 };
 var handleEventMessage = (result, message) => {
-  result.messages.push(message);
-  if (message.role !== "assistant") return;
-  applyAssistantUsage(result, message);
-  if (!result.model && message.model) result.model = message.model;
-  if (message.stopReason) result.stopReason = message.stopReason;
-  if (message.errorMessage) result.errorMessage = message.errorMessage;
+  if (message.role !== "assistant") {
+    result.messages.push(message);
+    return;
+  }
+  const retained = {
+    ...message,
+    content: message.content.map((part) => part.type === "text" ? { ...part, text: boundRetainedResult(part.text) } : part),
+    errorMessage: message.errorMessage ? boundRetainedResult(message.errorMessage) : void 0
+  };
+  result.messages.push(retained);
+  applyAssistantUsage(result, retained);
+  if (!result.model && retained.model) result.model = retained.model;
+  if (retained.stopReason) result.stopReason = retained.stopReason;
+  if (retained.errorMessage) result.errorMessage = retained.errorMessage;
 };
 var prepareTaskExecutions = (options) => {
   const executions = [];
@@ -3387,14 +3570,13 @@ var runSingleTask = async (options) => {
   try {
     const args = [...applyForkSessionArgs(options.subprocessArgs, forkSession), options.subprocessPrompt];
     const exitCode = await new Promise((resolve10) => {
-      const proc = spawn("pi", args, {
+      const proc = options.spawnImpl("pi", args, {
         cwd: options.defaultCwd,
         shell: false,
         stdio: ["pipe", "pipe", "pipe"]
       });
       proc.stdin.end();
       const abortState = attachAbortSignal(proc, options.signal);
-      let buffer = "";
       const processLine = (line) => {
         const event = parseJsonLine(line);
         if (!event) return;
@@ -3403,7 +3585,7 @@ var runSingleTask = async (options) => {
         if (typeText === "message_update") {
           const assistantEvent = isRecord(event.assistantMessageEvent) ? event.assistantMessageEvent : void 0;
           if (assistantEvent?.type === "text_delta" && typeof assistantEvent.delta === "string") {
-            currentResult.streamingText = `${currentResult.streamingText ?? ""}${assistantEvent.delta}`;
+            currentResult.streamingText = boundRetainedResult(`${currentResult.streamingText ?? ""}${assistantEvent.delta}`);
             emitUpdate();
           }
         }
@@ -3442,24 +3624,44 @@ var runSingleTask = async (options) => {
           emitUpdate();
         }
       };
-      proc.stdout.on("data", (data) => {
-        buffer += data.toString();
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) processLine(line);
+      const stderr = new BoundedUtf8Tail();
+      let settled = false;
+      const stdout = new JsonLineDecoder({
+        onLine: processLine,
+        onError: (error) => {
+          currentResult.errorMessage = error.message;
+          abortState.terminate();
+          finish(1, true);
+        }
       });
-      proc.stderr.on("data", (data) => {
-        currentResult.stderr += data.toString();
-      });
-      proc.on("close", (code) => {
-        if (buffer.trim()) processLine(buffer);
-        currentResult.exitCode = code ?? 0;
+      const onStdout = (data) => stdout.write(data);
+      const onStderr = (data) => {
+        stderr.append(data);
+        currentResult.stderr = stderr.toString();
+      };
+      const cleanup = (keepTerminationTimer = false) => {
+        proc.stdout.removeListener("data", onStdout);
+        proc.stderr.removeListener("data", onStderr);
+        abortState.dispose(keepTerminationTimer);
+      };
+      const finish = (code, keepTerminationTimer = false) => {
+        if (settled) return;
+        settled = true;
+        currentResult.exitCode = code;
         if (abortState.isAborted()) currentResult.stopReason = "aborted";
-        resolve10(code ?? 0);
+        cleanup(keepTerminationTimer);
+        resolve10(code);
+      };
+      proc.stdout.on("data", onStdout);
+      proc.stderr.on("data", onStderr);
+      proc.once("close", (code) => {
+        stdout.end();
+        finish(code ?? 0);
       });
-      proc.on("error", () => {
-        currentResult.exitCode = 1;
-        resolve10(1);
+      proc.once("error", (error) => {
+        if (settled) return;
+        currentResult.errorMessage = boundRetainedResult(error.message);
+        finish(1);
       });
     });
     currentResult.exitCode = exitCode;
@@ -3540,7 +3742,7 @@ var renderChainResult = (results, _expanded, theme) => {
   }
   return new Text2(lines.join("\n"), 0, 0);
 };
-var taskTool = (options = DEFAULT_OPTIONS) => (pi) => {
+var taskTool = (options = DEFAULT_OPTIONS, spawnImpl = spawn) => (pi) => {
   const merged = { ...DEFAULT_OPTIONS, ...options };
   pi.registerTool({
     name: merged.name,
@@ -3633,7 +3835,8 @@ Available skills: ${available.text}${suffix}` }],
           fork: execution.task.item.fork,
           sessionFile,
           signal,
-          onResultUpdate: emitSingleUpdate
+          onResultUpdate: emitSingleUpdate,
+          spawnImpl
         });
         const error = isTaskError(result);
         if (error) {
@@ -3716,7 +3919,8 @@ Available skills: ${available.text}${suffix}` }],
             fork: stepItem.fork,
             sessionFile,
             signal,
-            onResultUpdate: chainUpdate
+            onResultUpdate: chainUpdate,
+            spawnImpl
           });
           results2[index] = result;
           if (onUpdate) {
@@ -3803,7 +4007,8 @@ Available skills: ${available.text}${suffix}` }],
             onResultUpdate: (partial) => {
               allResults[index] = partial;
               emitParallelUpdate();
-            }
+            },
+            spawnImpl
           });
           allResults[index] = result;
           emitParallelUpdate();
@@ -15554,12 +15759,13 @@ var isMessage2 = (value) => {
   return isRecord(value) && (value.role === "assistant" || value.role === "user" || value.role === "toolResult");
 };
 var messageText2 = (message) => {
-  if (isString5(message.text)) return message.text;
-  if (isString5(message.content)) return message.content;
-  if (Array.isArray(message.content)) {
-    return message.content.map((part) => isRecord(part) && isString5(part.text) ? part.text : "").join("");
+  let text = "";
+  if (isString5(message.text)) text = message.text;
+  else if (isString5(message.content)) text = message.content;
+  else if (Array.isArray(message.content)) {
+    text = message.content.map((part) => isRecord(part) && isString5(part.text) ? part.text : "").join("");
   }
-  return "";
+  return boundRetainedResult(text);
 };
 var mapPiEvent = (event) => {
   const typeText = isString5(event.type) ? event.type : "";
@@ -15626,19 +15832,39 @@ var signalGroup = (proc, signal) => {
 var attachAbortSignal2 = (proc, signal) => {
   let aborted = false;
   let exited = false;
-  proc.once("close", () => {
+  let forceKill;
+  const onClose = () => {
     exited = true;
-  });
+    if (forceKill) clearTimeout(forceKill);
+    forceKill = void 0;
+  };
+  proc.once("close", onClose);
+  const terminate = () => {
+    if (exited || forceKill) return;
+    signalGroup(proc, "SIGTERM");
+    forceKill = setTimeout(() => {
+      if (!exited) signalGroup(proc, "SIGKILL");
+    }, 5e3);
+    forceKill.unref?.();
+  };
   const interrupt = () => {
     aborted = true;
-    signalGroup(proc, "SIGTERM");
-    setTimeout(() => {
-      if (!exited) signalGroup(proc, "SIGKILL");
-    }, 5e3).unref?.();
+    terminate();
   };
   if (signal?.aborted) interrupt();
   else signal?.addEventListener("abort", interrupt, { once: true });
-  return { isAborted: () => aborted, interrupt };
+  return {
+    isAborted: () => aborted,
+    interrupt,
+    terminate,
+    dispose: (keepTerminationTimer = false) => {
+      signal?.removeEventListener("abort", interrupt);
+      if (keepTerminationTimer) return;
+      proc.removeListener("close", onClose);
+      if (forceKill) clearTimeout(forceKill);
+      forceKill = void 0;
+    }
+  };
 };
 function resolvePiBinary(env = process.env) {
   const configured = env.PI_BIN?.trim();
@@ -15735,11 +15961,16 @@ var createPiChildSpawner = (spawnImpl = nodeSpawn, resolveAdapterEntry = resolve
     proc.stdin.end();
     const abortState = attachAbortSignal2(proc, options.signal);
     interrupt = abortState.interrupt;
-    let stdoutBuffer = "";
-    let stderr = "";
+    const stderr = new BoundedUtf8Tail();
     let finalAssistantText = "";
     let stopReason;
     let errorMessage2;
+    let settled = false;
+    const settle = (outcome) => {
+      if (settled) return;
+      settled = true;
+      emit({ kind: "run-settled", outcome });
+    };
     const processLine = (line) => {
       const parsed = parseJsonLine2(line);
       if (!parsed) return;
@@ -15750,39 +15981,44 @@ var createPiChildSpawner = (spawnImpl = nodeSpawn, resolveAdapterEntry = resolve
       const messageValue = parsed.message;
       if (isMessage2(messageValue) && messageValue.role === "assistant") {
         if (isString5(messageValue.stopReason)) stopReason = messageValue.stopReason;
-        if (isString5(messageValue.errorMessage)) errorMessage2 = messageValue.errorMessage;
+        if (isString5(messageValue.errorMessage)) errorMessage2 = boundRetainedResult(messageValue.errorMessage, ERROR_MAX);
       }
     };
-    proc.stdout.on("data", (data) => {
-      stdoutBuffer += data.toString();
-      const lines = stdoutBuffer.split("\n");
-      stdoutBuffer = lines.pop() ?? "";
-      for (const line of lines) processLine(line);
+    const stdout = new JsonLineDecoder({
+      onLine: processLine,
+      onError: (error) => {
+        abortState.terminate();
+        cleanup(true);
+        settle({ kind: "failed", errorText: error.message, partialText: finalAssistantText || void 0 });
+      }
     });
-    proc.stderr.on("data", (data) => {
-      stderr += data.toString();
-    });
-    proc.on("close", (code, closeSignal) => {
-      if (stdoutBuffer.trim()) processLine(stdoutBuffer);
+    const onStdout = (data) => stdout.write(data);
+    const onStderr = (data) => stderr.append(data);
+    const cleanup = (keepTerminationTimer = false) => {
+      proc.stdout.removeListener("data", onStdout);
+      proc.stderr.removeListener("data", onStderr);
+      abortState.dispose(keepTerminationTimer);
+    };
+    proc.stdout.on("data", onStdout);
+    proc.stderr.on("data", onStderr);
+    proc.once("close", (code, closeSignal) => {
+      stdout.end();
       if (abortState.isAborted()) {
-        emit({ kind: "run-settled", outcome: { kind: "interrupted", partialText: finalAssistantText || void 0 } });
-        return;
-      }
-      if (code === 0 && stopReason !== "error" && stopReason !== "aborted") {
-        emit({ kind: "run-settled", outcome: { kind: "completed", finalText: finalAssistantText } });
-        return;
-      }
-      emit({
-        kind: "run-settled",
-        outcome: {
+        settle({ kind: "interrupted", partialText: finalAssistantText || void 0 });
+      } else if (code === 0 && stopReason !== "error" && stopReason !== "aborted") {
+        settle({ kind: "completed", finalText: finalAssistantText });
+      } else {
+        settle({
           kind: "failed",
-          errorText: (errorMessage2 || stderr || (closeSignal ? `pi killed by ${closeSignal}` : `pi exited with code ${code ?? "unknown"}`)).slice(0, ERROR_MAX),
+          errorText: errorMessage2 || stderr.toString() || (closeSignal ? `pi killed by ${closeSignal}` : `pi exited with code ${code ?? "unknown"}`),
           partialText: finalAssistantText || void 0
-        }
-      });
+        });
+      }
+      cleanup();
     });
-    proc.on("error", (error) => {
-      emit({ kind: "run-settled", outcome: { kind: "failed", errorText: error.message.slice(0, ERROR_MAX), partialText: finalAssistantText || void 0 } });
+    proc.once("error", (error) => {
+      settle({ kind: "failed", errorText: boundRetainedResult(error.message, ERROR_MAX), partialText: finalAssistantText || void 0 });
+      cleanup();
     });
   };
   return { events, interrupt: () => interrupt() };

@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SubagentEvent } from "./domain.js";
 import { safeValuePreview } from "../activity/domain.js";
+import { BoundedUtf8Tail, JsonLineDecoder, boundRetainedResult } from "../child-protocol.js";
 import { type BuiltInToolName, resolveTaskConfig } from "../native-task-config.js";
 import { isRecord, type TaskThinking, type ThinkingLevel } from "../native-task-params.js";
 import { CHILD_MODEL_ID_ENV, CHILD_MODEL_PROVIDER_ENV } from "./pi-child-model-bootstrap.js";
@@ -235,14 +236,15 @@ const isMessage = <T>(value: T): value is T & Message => {
 };
 
 const messageText = (message: Message): string => {
-	if (isString(message.text)) return message.text;
-	if (isString(message.content)) return message.content;
-	if (Array.isArray(message.content)) {
-		return message.content
+	let text = "";
+	if (isString(message.text)) text = message.text;
+	else if (isString(message.content)) text = message.content;
+	else if (Array.isArray(message.content)) {
+		text = message.content
 			.map((part) => isRecord(part) && isString(part.text) ? part.text : "")
 			.join("");
 	}
-	return "";
+	return boundRetainedResult(text);
 };
 
 const mapPiEvent = (event: ParsedJsonLine): SubagentEvent[] => {
@@ -322,27 +324,46 @@ const signalGroup = (proc: ChildProcessWithoutNullStreams, signal: NodeJS.Signal
 interface AbortState {
 	isAborted: () => boolean;
 	interrupt: () => void;
+	terminate: () => void;
+	dispose: (keepTerminationTimer?: boolean) => void;
 }
 
 const attachAbortSignal = (proc: ChildProcessWithoutNullStreams, signal: AbortSignal | undefined): AbortState => {
 	let aborted = false;
-	// `proc.killed` only means a signal was successfully SENT, not that the
-	// process exited — gating SIGKILL on it means a child that ignores SIGTERM
-	// is never force-killed. Track real exit via the close event instead.
 	let exited = false;
-	proc.once("close", () => {
+	let forceKill: ReturnType<typeof setTimeout> | undefined;
+	const onClose = () => {
 		exited = true;
-	});
+		if (forceKill) clearTimeout(forceKill);
+		forceKill = undefined;
+	};
+	proc.once("close", onClose);
+	const terminate = () => {
+		if (exited || forceKill) return;
+		signalGroup(proc, "SIGTERM");
+		forceKill = setTimeout(() => {
+			if (!exited) signalGroup(proc, "SIGKILL");
+		}, 5000);
+		forceKill.unref?.();
+	};
 	const interrupt = () => {
 		aborted = true;
-		signalGroup(proc, "SIGTERM");
-		setTimeout(() => {
-			if (!exited) signalGroup(proc, "SIGKILL");
-		}, 5000).unref?.();
+		terminate();
 	};
 	if (signal?.aborted) interrupt();
 	else signal?.addEventListener("abort", interrupt, { once: true });
-	return { isAborted: () => aborted, interrupt };
+	return {
+		isAborted: () => aborted,
+		interrupt,
+		terminate,
+		dispose: (keepTerminationTimer = false) => {
+			signal?.removeEventListener("abort", interrupt);
+			if (keepTerminationTimer) return;
+			proc.removeListener("close", onClose);
+			if (forceKill) clearTimeout(forceKill);
+			forceKill = undefined;
+		},
+	};
 };
 
 export function resolvePiBinary(env: NodeJS.ProcessEnv = process.env): string {
@@ -465,11 +486,16 @@ export const createPiChildSpawner = (
 		proc.stdin.end();
 		const abortState = attachAbortSignal(proc, options.signal);
 		interrupt = abortState.interrupt;
-		let stdoutBuffer = "";
-		let stderr = "";
+		const stderr = new BoundedUtf8Tail();
 		let finalAssistantText = "";
 		let stopReason: string | undefined;
 		let errorMessage: string | undefined;
+		let settled = false;
+		const settle = (outcome: Extract<SubagentEvent, { kind: "run-settled" }>["outcome"]): void => {
+			if (settled) return;
+			settled = true;
+			emit({ kind: "run-settled", outcome });
+		};
 		const processLine = (line: string) => {
 			const parsed = parseJsonLine(line);
 			if (!parsed) return;
@@ -479,45 +505,45 @@ export const createPiChildSpawner = (
 			}
 			const messageValue = parsed.message;
 			if (isMessage(messageValue) && messageValue.role === "assistant") {
-								if (isString(messageValue.stopReason)) stopReason = messageValue.stopReason;
-				if (isString(messageValue.errorMessage)) errorMessage = messageValue.errorMessage;
+				if (isString(messageValue.stopReason)) stopReason = messageValue.stopReason;
+				if (isString(messageValue.errorMessage)) errorMessage = boundRetainedResult(messageValue.errorMessage, ERROR_MAX);
 			}
 		};
-		proc.stdout.on("data", (data) => {
-			stdoutBuffer += data.toString();
-			const lines = stdoutBuffer.split("\n");
-			stdoutBuffer = lines.pop() ?? "";
-			for (const line of lines) processLine(line);
+		const stdout = new JsonLineDecoder({
+			onLine: processLine,
+			onError: (error) => {
+				abortState.terminate();
+				cleanup(true);
+				settle({ kind: "failed", errorText: error.message, partialText: finalAssistantText || undefined });
+			},
 		});
-		proc.stderr.on("data", (data) => {
-			stderr += data.toString();
-		});
-		proc.on("close", (code, closeSignal) => {
-			if (stdoutBuffer.trim()) processLine(stdoutBuffer);
+		const onStdout = (data: string | Uint8Array) => stdout.write(data);
+		const onStderr = (data: string | Uint8Array) => stderr.append(data);
+		const cleanup = (keepTerminationTimer = false) => {
+			proc.stdout.removeListener("data", onStdout);
+			proc.stderr.removeListener("data", onStderr);
+			abortState.dispose(keepTerminationTimer);
+		};
+		proc.stdout.on("data", onStdout);
+		proc.stderr.on("data", onStderr);
+		proc.once("close", (code, closeSignal) => {
+			stdout.end();
 			if (abortState.isAborted()) {
-				emit({ kind: "run-settled", outcome: { kind: "interrupted", partialText: finalAssistantText || undefined } });
-				return;
-			}
-			// Success gates on exit code + stop reason, matching native-task-tool's
-			// isTaskError semantics. Empty final text at exit 0 is a successful run
-			// with empty output, not a failure. Strictly `code === 0`: a null code
-			// means the child was killed by an EXTERNAL signal (operator kill,
-			// host cleanup) — that must never fold as completed.
-			if (code === 0 && stopReason !== "error" && stopReason !== "aborted") {
-				emit({ kind: "run-settled", outcome: { kind: "completed", finalText: finalAssistantText } });
-				return;
-			}
-			emit({
-				kind: "run-settled",
-				outcome: {
+				settle({ kind: "interrupted", partialText: finalAssistantText || undefined });
+			} else if (code === 0 && stopReason !== "error" && stopReason !== "aborted") {
+				settle({ kind: "completed", finalText: finalAssistantText });
+			} else {
+				settle({
 					kind: "failed",
-					errorText: (errorMessage || stderr || (closeSignal ? `pi killed by ${closeSignal}` : `pi exited with code ${code ?? "unknown"}`)).slice(0, ERROR_MAX),
+					errorText: errorMessage || stderr.toString() || (closeSignal ? `pi killed by ${closeSignal}` : `pi exited with code ${code ?? "unknown"}`),
 					partialText: finalAssistantText || undefined,
-				},
-			});
+				});
+			}
+			cleanup();
 		});
-		proc.on("error", (error) => {
-			emit({ kind: "run-settled", outcome: { kind: "failed", errorText: error.message.slice(0, ERROR_MAX), partialText: finalAssistantText || undefined } });
+		proc.once("error", (error) => {
+			settle({ kind: "failed", errorText: boundRetainedResult(error.message, ERROR_MAX), partialText: finalAssistantText || undefined });
+			cleanup();
 		});
 	};
 	return { events, interrupt: () => interrupt() };

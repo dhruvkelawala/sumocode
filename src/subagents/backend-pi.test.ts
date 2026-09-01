@@ -4,6 +4,13 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import {
+	CHILD_JSON_FRAME_MAX_BYTES,
+	CHILD_RETAINED_RESULT_MAX_BYTES,
+	CHILD_STDERR_TAIL_MAX_BYTES,
+	TRUNCATED_HEAD_MARKER,
+	TRUNCATED_TAIL_MARKER,
+} from "../child-protocol.js";
 import { createPiChildSpawner, resolveClaudeOauthAdapterEntry, resolvePiBinary, resolvePiChildModelBootstrapEntry } from "./backend-pi.js";
 import type { SubagentEvent } from "./domain.js";
 
@@ -214,6 +221,60 @@ describe("spawnPiChild", () => {
 		proc.stderr.emit("data", "boom");
 		proc.emit("close", 2);
 		expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "failed", errorText: "boom", partialText: undefined } });
+	});
+
+	it("fails an oversized JSON frame once without exposing producer content", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+
+		proc.stdout.emit("data", Buffer.concat([
+			Buffer.alloc(CHILD_JSON_FRAME_MAX_BYTES + 1, 0x73),
+			Buffer.from("\n"),
+		]));
+		proc.emit("error", new Error("late spawn error"));
+		proc.emit("close", 1);
+
+		const settled = events.filter((event) => event.kind === "run-settled");
+		expect(settled).toHaveLength(1);
+		expect(settled[0]).toMatchObject({ outcome: { kind: "failed", errorText: expect.stringContaining(`exceeded ${CHILD_JSON_FRAME_MAX_BYTES} bytes`) } });
+		expect(JSON.stringify(settled[0])).not.toContain("ssss");
+		expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+	});
+
+	it("bounds stderr and retained final text with explicit markers", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		proc.stderr.emit("data", Buffer.alloc(CHILD_STDERR_TAIL_MAX_BYTES + 1, 0x65));
+		const finalText = "r".repeat(CHILD_RETAINED_RESULT_MAX_BYTES + 1);
+		proc.stdout.emit("data", JSON.stringify({ type: "message_end", message: { role: "assistant", content: finalText } }));
+		proc.emit("close", 2);
+
+		const message = events.find((event) => event.kind === "message-end");
+		expect(message).toMatchObject({ kind: "message-end", text: expect.stringContaining(TRUNCATED_HEAD_MARKER) });
+		if (message?.kind !== "message-end") throw new Error("missing message-end");
+		expect(Buffer.byteLength(message.text)).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+		const settled = events.at(-1);
+		expect(settled).toMatchObject({ outcome: { kind: "failed", errorText: expect.stringContaining(TRUNCATED_TAIL_MARKER) } });
+		if (settled?.kind !== "run-settled" || settled.outcome.kind !== "failed") throw new Error("missing failed outcome");
+		expect(Buffer.byteLength(settled.outcome.errorText)).toBeLessThanOrEqual(CHILD_STDERR_TAIL_MAX_BYTES);
+	});
+
+	it("processes a final partial JSON line on close", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		proc.stdout.emit("data", JSON.stringify({ type: "message_end", message: { role: "assistant", content: "final partial" } }));
+		proc.emit("close", 0);
+
+		expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "completed", finalText: "final partial" } });
 	});
 
 	it("appends role system instructions after task args and before the prompt", () => {

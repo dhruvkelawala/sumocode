@@ -17,6 +17,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { BoundedUtf8Tail, JsonLineDecoder, boundRetainedResult } from "./child-protocol.js";
 import { type BuiltInToolName, getBuiltInToolsFromActiveTools, resolveTaskConfig } from "./native-task-config.js";
 import {
 	isRecord,
@@ -535,27 +536,50 @@ const getTaskErrorText = (result: SingleResult): string => {
 	return result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
 };
 
-type AbortGuard = { isAborted: () => boolean };
+type AbortGuard = {
+	isAborted: () => boolean;
+	terminate: () => void;
+	dispose: (keepTerminationTimer?: boolean) => void;
+};
 
 const attachAbortSignal = (
 	proc: ChildProcessWithoutNullStreams,
 	signal: AbortSignal | undefined,
 ): AbortGuard => {
 	let aborted = false;
-	if (!signal) return { isAborted: () => aborted };
-
-	const killProcess = () => {
-		aborted = true;
-		proc.kill("SIGTERM");
-		setTimeout(() => {
-			if (!proc.killed) proc.kill("SIGKILL");
-		}, 5000);
+	let closed = false;
+	let forceKill: ReturnType<typeof setTimeout> | undefined;
+	const onClose = () => {
+		closed = true;
+		if (forceKill) clearTimeout(forceKill);
+		forceKill = undefined;
 	};
-
-	if (signal.aborted) killProcess();
-	else signal.addEventListener("abort", killProcess, { once: true });
-
-	return { isAborted: () => aborted };
+	proc.once("close", onClose);
+	const terminate = () => {
+		if (closed || forceKill) return;
+		proc.kill("SIGTERM");
+		forceKill = setTimeout(() => {
+			if (!closed) proc.kill("SIGKILL");
+		}, 5000);
+		forceKill.unref?.();
+	};
+	const interrupt = () => {
+		aborted = true;
+		terminate();
+	};
+	if (signal?.aborted) interrupt();
+	else signal?.addEventListener("abort", interrupt, { once: true });
+	return {
+		isAborted: () => aborted,
+		terminate,
+		dispose: (keepTerminationTimer = false) => {
+			signal?.removeEventListener("abort", interrupt);
+			if (keepTerminationTimer) return;
+			proc.removeListener("close", onClose);
+			if (forceKill) clearTimeout(forceKill);
+			forceKill = undefined;
+		},
+	};
 };
 
 const parseJsonLine = (line: string): Record<string, unknown> | undefined => {
@@ -587,14 +611,20 @@ const applyAssistantUsage = (result: SingleResult, message: AssistantMessage): v
 };
 
 const handleEventMessage = (result: SingleResult, message: Message): void => {
-	result.messages.push(message);
-
-	if (message.role !== "assistant") return;
-
-	applyAssistantUsage(result, message);
-	if (!result.model && message.model) result.model = message.model;
-	if (message.stopReason) result.stopReason = message.stopReason;
-	if (message.errorMessage) result.errorMessage = message.errorMessage;
+	if (message.role !== "assistant") {
+		result.messages.push(message);
+		return;
+	}
+	const retained: AssistantMessage = {
+		...message,
+		content: message.content.map((part) => part.type === "text" ? { ...part, text: boundRetainedResult(part.text) } : part),
+		errorMessage: message.errorMessage ? boundRetainedResult(message.errorMessage) : undefined,
+	};
+	result.messages.push(retained);
+	applyAssistantUsage(result, retained);
+	if (!result.model && retained.model) result.model = retained.model;
+	if (retained.stopReason) result.stopReason = retained.stopReason;
+	if (retained.errorMessage) result.errorMessage = retained.errorMessage;
 };
 
 const prepareTaskExecutions = (options: {
@@ -696,6 +726,7 @@ const runSingleTask = async (options: {
 	sessionFile: string | undefined;
 	signal: AbortSignal | undefined;
 	onResultUpdate: ((result: SingleResult) => void) | undefined;
+	spawnImpl: typeof spawn;
 }): Promise<SingleResult> => {
 	const currentResult: SingleResult = {
 		prompt: options.item.prompt,
@@ -735,7 +766,7 @@ const runSingleTask = async (options: {
 		const args = [...applyForkSessionArgs(options.subprocessArgs, forkSession), options.subprocessPrompt];
 
 		const exitCode = await new Promise<number>((resolve) => {
-			const proc = spawn("pi", args, {
+			const proc = options.spawnImpl("pi", args, {
 				cwd: options.defaultCwd,
 				shell: false,
 				stdio: ["pipe", "pipe", "pipe"],
@@ -745,7 +776,6 @@ const runSingleTask = async (options: {
 
 			const abortState = attachAbortSignal(proc, options.signal);
 
-			let buffer = "";
 			const processLine = (line: string) => {
 				const event = parseJsonLine(line);
 				if (!event) return;
@@ -754,7 +784,7 @@ const runSingleTask = async (options: {
 				if (typeText === "message_update") {
 					const assistantEvent = isRecord(event.assistantMessageEvent) ? event.assistantMessageEvent : undefined;
 					if (assistantEvent?.type === "text_delta" && typeof assistantEvent.delta === "string") {
-						currentResult.streamingText = `${currentResult.streamingText ?? ""}${assistantEvent.delta}`;
+						currentResult.streamingText = boundRetainedResult(`${currentResult.streamingText ?? ""}${assistantEvent.delta}`);
 						emitUpdate();
 					}
 				}
@@ -794,27 +824,44 @@ const runSingleTask = async (options: {
 				}
 			};
 
-			proc.stdout.on("data", (data) => {
-				buffer += data.toString();
-				const lines = buffer.split("\n");
-				buffer = lines.pop() ?? "";
-				for (const line of lines) processLine(line);
+			const stderr = new BoundedUtf8Tail();
+			let settled = false;
+			const stdout = new JsonLineDecoder({
+				onLine: processLine,
+				onError: (error) => {
+					currentResult.errorMessage = error.message;
+					abortState.terminate();
+					finish(1, true);
+				},
 			});
-
-			proc.stderr.on("data", (data) => {
-				currentResult.stderr += data.toString();
-			});
-
-			proc.on("close", (code) => {
-				if (buffer.trim()) processLine(buffer);
-				currentResult.exitCode = code ?? 0;
+			const onStdout = (data: string | Uint8Array) => stdout.write(data);
+			const onStderr = (data: string | Uint8Array) => {
+				stderr.append(data);
+				currentResult.stderr = stderr.toString();
+			};
+			const cleanup = (keepTerminationTimer = false) => {
+				proc.stdout.removeListener("data", onStdout);
+				proc.stderr.removeListener("data", onStderr);
+				abortState.dispose(keepTerminationTimer);
+			};
+			const finish = (code: number, keepTerminationTimer = false) => {
+				if (settled) return;
+				settled = true;
+				currentResult.exitCode = code;
 				if (abortState.isAborted()) currentResult.stopReason = "aborted";
-				resolve(code ?? 0);
+				cleanup(keepTerminationTimer);
+				resolve(code);
+			};
+			proc.stdout.on("data", onStdout);
+			proc.stderr.on("data", onStderr);
+			proc.once("close", (code) => {
+				stdout.end();
+				finish(code ?? 0);
 			});
-
-			proc.on("error", () => {
-				currentResult.exitCode = 1;
-				resolve(1);
+			proc.once("error", (error) => {
+				if (settled) return;
+				currentResult.errorMessage = boundRetainedResult(error.message);
+				finish(1);
 			});
 		});
 
@@ -910,7 +957,7 @@ const renderChainResult = (results: SingleResult[], _expanded: boolean, theme: T
 	return new Text(lines.join("\n"), 0, 0);
 };
 
-export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS) => (pi: ExtensionAPI) => {
+export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS, spawnImpl: typeof spawn = spawn) => (pi: ExtensionAPI) => {
 	const merged = { ...DEFAULT_OPTIONS, ...options };
 
 	pi.registerTool({
@@ -1012,6 +1059,7 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS) => (pi: Ext
 					sessionFile,
 					signal,
 					onResultUpdate: emitSingleUpdate,
+					spawnImpl,
 				});
 
 				const error = isTaskError(result);
@@ -1106,6 +1154,7 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS) => (pi: Ext
 						sessionFile,
 						signal,
 						onResultUpdate: chainUpdate,
+						spawnImpl,
 					});
 					results[index] = result;
 					if (onUpdate) {
@@ -1201,6 +1250,7 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS) => (pi: Ext
 							allResults[index] = partial;
 							emitParallelUpdate();
 						},
+						spawnImpl,
 					});
 					allResults[index] = result;
 					emitParallelUpdate();

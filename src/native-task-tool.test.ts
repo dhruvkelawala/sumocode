@@ -1,7 +1,15 @@
+import { EventEmitter } from "node:events";
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import {
+	CHILD_JSON_FRAME_MAX_BYTES,
+	CHILD_RETAINED_RESULT_MAX_BYTES,
+	CHILD_STDERR_TAIL_MAX_BYTES,
+	TRUNCATED_HEAD_MARKER,
+	TRUNCATED_TAIL_MARKER,
+} from "./child-protocol.js";
 import { taskTool } from "./native-task-tool.js";
 
 interface TaskUpdate {
@@ -12,7 +20,42 @@ interface TaskUpdate {
 interface TaskToolResult {
 	isError?: boolean;
 	content: Array<{ type: string; text: string }>;
-	details?: { mode?: string; results?: unknown[] };
+	details?: { mode?: string; results?: Array<{ stderr?: string }> };
+}
+
+class FakeTaskProcess extends EventEmitter {
+	public readonly stdin = { end: vi.fn() };
+	public readonly stdout = new EventEmitter();
+	public readonly stderr = new EventEmitter();
+	public killed = false;
+	public readonly kill = vi.fn(() => {
+		this.killed = true;
+		return true;
+	});
+}
+
+function registeredTask(spawned: FakeTaskProcess) {
+	let definition: { execute: (...args: unknown[]) => Promise<TaskToolResult> } | undefined;
+	const pi = {
+		registerTool: vi.fn((toolDefinition) => {
+			// SAFETY: the registration double stores the task definition consumed below.
+			definition = toolDefinition as typeof definition;
+		}),
+		on: vi.fn(),
+		getThinkingLevel: vi.fn(() => "low"),
+		getActiveTools: vi.fn(() => ["read"]),
+	};
+	// SAFETY: the Pi double exposes every taskTool registration/runtime method used here.
+	taskTool(undefined, vi.fn(() => spawned) as never)(pi as never);
+	const execute = (signal?: AbortSignal) => definition!.execute(
+		"bounded-task",
+		{ type: "single", tasks: [{ prompt: "bounded child", fork: false }] },
+		signal,
+		undefined,
+		// SAFETY: the context double supplies the task execution surface.
+		{ cwd: process.cwd(), model: undefined, sessionManager: { getSessionFile: () => undefined } } as never,
+	);
+	return { execute };
 }
 
 function resultExitCodes(update: TaskUpdate): number[] {
@@ -137,6 +180,76 @@ describe("native task tool", () => {
 		expect(result.isError).toBe(true);
 		expect(result.content[0]?.text).toContain("Unknown skill: __missing_plan_082_skill__");
 		expect(result.details?.mode).toBe(mode);
+	});
+
+	it("fails an oversized JSON frame once without exposing child content", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		proc.stdout.emit("data", Buffer.concat([
+			Buffer.alloc(CHILD_JSON_FRAME_MAX_BYTES + 1, 0x71),
+			Buffer.from("\n"),
+		]));
+		proc.emit("error", new Error("late child error"));
+		proc.emit("close", 1);
+
+		const result = await running;
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain(`exceeded ${CHILD_JSON_FRAME_MAX_BYTES} bytes`);
+		expect(result.content[0]?.text).not.toContain("qqqq");
+		expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+	});
+
+	it("bounds stderr and final results while processing a final partial line", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		proc.stderr.emit("data", Buffer.alloc(CHILD_STDERR_TAIL_MAX_BYTES + 1, 0x65));
+		const finalText = "r".repeat(CHILD_RETAINED_RESULT_MAX_BYTES + 1);
+		proc.stdout.emit("data", JSON.stringify({
+			type: "message_end",
+			message: {
+				role: "assistant",
+				content: [{ type: "text", text: finalText }],
+				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { total: 0 } },
+			},
+		}));
+		proc.emit("close", 0);
+
+		const result = await running;
+		expect(result.isError).toBeUndefined();
+		expect(result.content[0]?.text).toContain(TRUNCATED_HEAD_MARKER);
+		expect(Buffer.byteLength(result.content[0]?.text ?? "")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+	});
+
+	it("preserves cancellation and clears its force-kill timer on close", async () => {
+		vi.useFakeTimers();
+		try {
+			const proc = new FakeTaskProcess();
+			const controller = new AbortController();
+			const running = registeredTask(proc).execute(controller.signal);
+			controller.abort();
+			expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+			expect(vi.getTimerCount()).toBe(1);
+			proc.emit("close", null);
+
+			const result = await running;
+			expect(result.isError).toBe(true);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps a marked, byte-bounded stderr tail on failure", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		proc.stderr.emit("data", Buffer.alloc(CHILD_STDERR_TAIL_MAX_BYTES + 1, 0x7a));
+		proc.emit("close", 2);
+
+		const result = await running;
+		const stderr = result.details?.results?.[0]?.stderr ?? "";
+		expect(result.isError).toBe(true);
+		expect(stderr).toContain(TRUNCATED_TAIL_MARKER);
+		expect(Buffer.byteLength(stderr)).toBeLessThanOrEqual(CHILD_STDERR_TAIL_MAX_BYTES);
 	});
 
 	it("marks single-task setup failures as tool errors", async () => {

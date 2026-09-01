@@ -31,6 +31,7 @@
     "src/cathedral/input-hints.ts",
     "src/cathedral/multiline-paste.ts",
     "src/cathedral/scriptorium-chrome.ts",
+    "src/child-protocol.ts",
     "src/command-palette.ts",
     "src/commands/accounts-config.ts",
     "src/commands/accounts.ts",
@@ -128,6 +129,6 @@
     "src/working-indicator.ts",
     "tsconfig.json"
   ],
-  "hash": "6f949db4ec77adca2714f8fd1c389c4f67f473af107c01098d2ed387d5656f2f",
-  "outputsHash": "8878fd9d24fc850505dbeaf13e4e6bf41b73b7121fe5064ca1c0ae81e2ef94a3"
+  "hash": "a06a6cf29e19d42b54d761d54cf9ad16f62143d064ce7839ea4dc27209ef96aa",
+  "outputsHash": "433402ba8a4225dc4ab0eb8125fb239de0138e3914aee68afb7a16849f043045"
 }

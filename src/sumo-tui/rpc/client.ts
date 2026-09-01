@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
+import { BoundedUtf8Tail, JsonLineDecoder, boundRetainedResult } from "../../child-protocol.js";
 import type {
 	AgentSessionEvent,
 	RpcCommand,
@@ -65,14 +66,13 @@ export interface SumoRpcClientOptions {
 }
 
 const MAX_CONSECUTIVE_PROTOCOL_ERRORS = 3;
-const MAX_STDERR_BUFFER_LENGTH = 64 * 1024;
 const CHILD_STOP_GRACE_MS = 2_000;
 const CHILD_CLOSE_GRACE_MS = 1_000;
 const PRESPAWN_ERROR = Symbol.for("sumocode.rpc.preSpawnError");
 /**
  * Notification-facing messages (toasts, modal text) must stay terse -- the
- * full stderr buffer (up to MAX_STDERR_BUFFER_LENGTH = 64 KiB) is fine for the
- * process-exit stderr dump written straight to the real stderr stream, but
+ * bounded stderr tail is fine for the process-exit dump written straight to
+ * the real stderr stream, but
  * embedding that much text in a rendered notification would blow out the UI.
  */
 export const NOTIFICATION_STDERR_LIMIT = 500;
@@ -96,10 +96,9 @@ function waitForChildClose(child: ChildProcessWithoutNullStreams): Promise<void>
 	});
 }
 
-/** Truncates a message's tail to a bounded length for user-facing surfaces (notifications, toasts). */
+/** Truncates a message for user-facing surfaces (notifications, toasts). */
 export function truncateForNotification(message: string, limit = NOTIFICATION_STDERR_LIMIT): string {
-	if (message.length <= limit) return message;
-	return `${message.slice(0, limit)}…`;
+	return boundRetainedResult(message, limit);
 }
 
 type RpcMessageLike = { type?: string | undefined; id?: string | undefined };
@@ -123,8 +122,10 @@ function isExtensionUiRequest(value: RpcMessageLike): value is RpcExtensionUIReq
 
 export class SumoRpcClient {
 	private child: ChildProcessWithoutNullStreams | undefined;
-	private stdoutBuffer = "";
-	private stderrBuffer = "";
+	private stdoutFrames: JsonLineDecoder | undefined;
+	private stderrTail = new BoundedUtf8Tail();
+	private stdoutDataListener: ((chunk: string | Uint8Array) => void) | undefined;
+	private stderrDataListener: ((chunk: string | Uint8Array) => void) | undefined;
 	private nextRequestId = 0;
 	private consecutiveProtocolErrors = 0;
 	private exited = false;
@@ -146,7 +147,7 @@ export class SumoRpcClient {
 	}
 
 	public get stderr(): string {
-		return this.stderrBuffer;
+		return this.stderrTail.toString();
 	}
 
 	public onEvent(listener: RpcEventListener): () => void {
@@ -184,15 +185,18 @@ export class SumoRpcClient {
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 		this.child = child;
-		child.stdout.setEncoding("utf8");
-		child.stdout.on("data", (chunk: string) => this.handleStdout(chunk));
-		child.stderr.setEncoding("utf8");
-		child.stderr.on("data", (chunk: string) => {
-			this.stderrBuffer += chunk;
-			if (this.stderrBuffer.length > MAX_STDERR_BUFFER_LENGTH) {
-				this.stderrBuffer = this.stderrBuffer.slice(-MAX_STDERR_BUFFER_LENGTH);
-			}
+		this.stderrTail = new BoundedUtf8Tail();
+		this.stdoutFrames = new JsonLineDecoder({
+			onLine: (line) => {
+				const trimmed = line.trim();
+				if (trimmed) this.handleLine(trimmed);
+			},
+			onError: (error) => this.handleExit(error),
 		});
+		this.stdoutDataListener = (chunk) => this.stdoutFrames?.write(chunk);
+		this.stderrDataListener = (chunk) => this.stderrTail.append(chunk);
+		child.stdout.on("data", this.stdoutDataListener);
+		child.stderr.on("data", this.stderrDataListener);
 		// Without this listener, an EPIPE on the kernel pipe (child closed stdin,
 		// or died in the window before Node's 'exit' event lands) is an unhandled
 		// 'error' event on the stdin stream, which Node treats as fatal and
@@ -207,7 +211,8 @@ export class SumoRpcClient {
 		});
 		child.once("error", (error) => this.handleExit(toError(error)));
 		child.once("exit", (code, signal) => {
-			this.handleExit(new RpcChildExitError(`RPC child exited code=${code ?? "null"} signal=${signal ?? "null"}. stderr=${this.stderrBuffer}`, { code, signal }));
+			if (!this.exitNotified) this.stdoutFrames?.end();
+			this.handleExit(new RpcChildExitError(`RPC child exited code=${code ?? "null"} signal=${signal ?? "null"}. stderr=${this.stderr}`, { code, signal }));
 		});
 
 		// A pre-spawned child can fail or exit while the host module is still
@@ -223,7 +228,7 @@ export class SumoRpcClient {
 			adoptionError = toError(preSpawnError);
 		} else if (child.exitCode !== null || child.signalCode !== null) {
 			adoptionError = new RpcChildExitError(
-				`RPC child exited before host adoption code=${child.exitCode ?? "null"} signal=${child.signalCode ?? "null"}. stderr=${this.stderrBuffer}`,
+				`RPC child exited before host adoption code=${child.exitCode ?? "null"} signal=${child.signalCode ?? "null"}. stderr=${this.stderr}`,
 				{ code: child.exitCode, signal: child.signalCode },
 			);
 		}
@@ -257,7 +262,7 @@ export class SumoRpcClient {
 			child.once("error", settle);
 			child.once("exit", settle);
 		});
-		if (this.exited) throw new Error(`RPC child exited during startup. stderr=${this.stderrBuffer}`);
+		if (this.exited) throw new Error(`RPC child exited during startup. stderr=${this.stderr}`);
 	}
 
 	public async stop(): Promise<void> {
@@ -282,21 +287,20 @@ export class SumoRpcClient {
 		// `close` follows all stdio closure. Removing listeners after the bounded
 		// fallback also prevents any pipe-holding descendant from dispatching a
 		// late RPC response after stop() resolves.
-		child.stdout.removeAllListeners("data");
-		child.stderr.removeAllListeners("data");
+		this.detachChildStreams(child);
 		this.exited = true;
 		this.child = undefined;
 		this.rejectPending(new Error("RPC child stopped"));
 	}
 
 	public async send(command: RpcCommand, timeoutMs = this.options.requestTimeoutMs ?? 30_000): Promise<RpcResponse> {
-		if (!this.child || this.exited) throw new Error(`RPC child is not running. stderr=${this.stderrBuffer}`);
+		if (!this.child || this.exited) throw new Error(`RPC child is not running. stderr=${this.stderr}`);
 		const id = command.id ?? `sumocode_rpc_${++this.nextRequestId}_${randomUUID()}`;
 		const request = { ...command, id } satisfies RpcCommand;
 		return await new Promise<RpcResponse>((resolve, reject) => {
 			const timeout = setTimeout(() => {
 				this.pending.delete(id);
-				reject(new Error(`Timed out waiting for ${command.type} response after ${timeoutMs}ms. stderr=${this.stderrBuffer}`));
+				reject(new Error(`Timed out waiting for ${command.type} response after ${timeoutMs}ms. stderr=${this.stderr}`));
 			}, timeoutMs);
 			this.pending.set(id, { resolve, reject, timeout });
 			this.child!.stdin.write(`${JSON.stringify(request)}\n`, (error) => {
@@ -326,29 +330,19 @@ export class SumoRpcClient {
 		});
 	}
 
-	private handleStdout(chunk: string): void {
-		this.stdoutBuffer += chunk;
-		while (true) {
-			const newlineIndex = this.stdoutBuffer.indexOf("\n");
-			if (newlineIndex === -1) return;
-			const line = this.stdoutBuffer.slice(0, newlineIndex).trim();
-			this.stdoutBuffer = this.stdoutBuffer.slice(newlineIndex + 1);
-			if (line.length > 0) this.handleLine(line);
-		}
-	}
-
 	private handleLine(line: string): void {
 		let parsed: RpcMessageLike;
 		try {
 			// SAFETY: stdout lines are untyped JSON by definition; every consumer
 			// below validates shape via isResponse/isExtensionUiRequest first.
 			parsed = JSON.parse(line) as RpcMessageLike;
-		} catch (error) {
-			const parseError = toError(error);
+		} catch {
+			const parseError = new Error("Invalid JSON protocol frame");
 			this.consecutiveProtocolErrors += 1;
-			this.options.onProtocolError?.(line, parseError);
+			const frameSummary = `[invalid protocol frame: ${Buffer.byteLength(line, "utf8")} bytes]`;
+			this.options.onProtocolError?.(frameSummary, parseError);
 			if (this.consecutiveProtocolErrors >= MAX_CONSECUTIVE_PROTOCOL_ERRORS) {
-				this.handleExit(new Error(`Failed to parse ${MAX_CONSECUTIVE_PROTOCOL_ERRORS} consecutive RPC lines: ${parseError.message}. line=${line}`));
+				this.handleExit(new Error(`Failed to parse ${MAX_CONSECUTIVE_PROTOCOL_ERRORS} consecutive RPC lines. ${frameSummary}`));
 			}
 			return;
 		}
@@ -379,8 +373,8 @@ export class SumoRpcClient {
 
 	/**
 	 * Runs each event listener in its own try/catch: this is a synchronous
-	 * dispatch loop invoked straight from the child's stdout 'data' handler
-	 * (via handleStdout -> handleLine), and the host's own client.onEvent
+	 * dispatch loop invoked straight from the child's decoded stdout frame, and
+	 * the host's own client.onEvent
 	 * listener synchronously runs transcript ingestion + a full render. A
 	 * throw partway through the loop -- from a bad event shape, a rendering
 	 * bug, whatever -- would otherwise propagate out of the 'data' event
@@ -427,11 +421,21 @@ export class SumoRpcClient {
 			return;
 		}
 		const child = this.child;
-		if (child) this.terminateChild(child);
+		if (child) {
+			this.detachChildStreams(child);
+			this.terminateChild(child);
+		}
 		this.child = undefined;
 		this.rejectPending(error);
 		this.exitNotified = true;
 		for (const listener of this.exitListeners) listener(error);
+	}
+
+	private detachChildStreams(child: ChildProcessWithoutNullStreams): void {
+		if (this.stdoutDataListener) child.stdout.removeListener("data", this.stdoutDataListener);
+		if (this.stderrDataListener) child.stderr.removeListener("data", this.stderrDataListener);
+		this.stdoutDataListener = undefined;
+		this.stderrDataListener = undefined;
 	}
 
 	private terminateChild(child: ChildProcessWithoutNullStreams): void {

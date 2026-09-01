@@ -111,8 +111,11 @@ function sanitizeTaskMarkers(markers: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 	if (!taskDir) {
 		const refused = TASK_MARKER_ENV_KEYS.filter((key) => markers[key] !== undefined && key !== "SUMOCODE_TASK_CONTROL_DIR");
 		for (const key of refused) {
-			diagLog("marker_refused", { file: markers[key], message: `${key} set without SUMOCODE_TASK_CONTROL_DIR` });
+			// Quarantine before logging: a refused DIAG marker must not receive its
+			// own refusal diagnostic.
+			const file = markers[key];
 			delete markers[key];
+			diagLog("marker_refused", { file, message: `${key} set without SUMOCODE_TASK_CONTROL_DIR` });
 		}
 		return markers;
 	}
@@ -194,14 +197,21 @@ function diagLog(event: string, detail?: DiagDetail): void {
 	const file = capturedMarkerEnv?.SUMOCODE_TASK_DIAG_FILE;
 	if (!file) return;
 	try {
+		// The sink goes through the same boundary as every other artifact: an
+		// absent entry is created exclusively (no-follow), an existing entry must
+		// still be a private regular file, and anything tampered drops the line.
+		// Confinement was capture-checked; per-append this is identity re-check.
+		const stat = validatedArtifactStat(artifactFs, file, dirname(file), "task diag artifact");
+		if (stat === undefined) {
+			writeFileSync(file, "", { mode: PRIVATE_FILE_MODE, flag: "wx" });
+		}
 		appendFileSync(
 			file,
 			`${JSON.stringify({ t: Date.now(), pid: process.pid, event, ...(detail ?? undefined) })}\n`,
-			// Owner-only at creation: the diag trail names task artifact paths.
 			{ mode: PRIVATE_FILE_MODE },
 		);
 	} catch {
-		// diagnostics must never crash the extension
+		// diagnostics must never crash the extension — a refused sink drops the line
 	}
 }
 
@@ -440,17 +450,34 @@ function installControlWatcher(
 	// relative/trailing-separator control-dir spelling cannot merge a bucket key
 	// while diverging member paths.
 	const canonicalControlDir = resolve(controlDir);
-	// The control channel is a private parent-child contract. A missing or
-	// tampered directory (replaced by a symlink, group/other-readable, or owned
-	// by someone else) fails closed: no steering is consumed and no close is
-	// honored through an untrusted path.
-	try {
-		assertPrivateDir(artifactFs, canonicalControlDir, "task control directory");
-	} catch (error) {
-		diagLog("control_dir_refused", {
-			file: canonicalControlDir,
-			message: error instanceof Error ? error.message : String(error),
-		});
+	// The control channel is a private parent-child contract. A tampered
+	// directory (replaced by a symlink, group/other-readable, or owned by
+	// someone else) fails closed permanently; a not-yet-created one is the
+	// documented boot ordering and is retried on later ticks.
+	let controlDirValidated = false;
+	let controlDirRefusalLogged = false;
+	const ensureControlDirValidated = (): boolean => {
+		if (controlDirValidated) return true;
+		try {
+			assertPrivateDir(artifactFs, canonicalControlDir, "task control directory");
+			controlDirValidated = true;
+			return true;
+		} catch (error) {
+			if (!isErrnoCode(error, "ENOENT") && !controlDirRefusalLogged) {
+				controlDirRefusalLogged = true;
+				diagLog("control_dir_refused", {
+					file: canonicalControlDir,
+					message: error instanceof Error ? error.message : String(error),
+				});
+			}
+			return false;
+		}
+	};
+	// Absent at install is the documented boot ordering: keep the watcher alive
+	// so a later-created control dir is picked up on the next tick. An existing
+	// dir that failed validation is permanent tamper — disable the watcher.
+	const controlDirReady = ensureControlDirValidated();
+	if (!controlDirReady && existsSync(canonicalControlDir)) {
 		return () => undefined;
 	}
 	// Submission ownership lives in the process-wide submitted-controls registry,
@@ -559,6 +586,7 @@ function installControlWatcher(
 	const tick = (): void => {
 		try {
 			const ctx = hooks.getLatestCtx();
+			if (!ensureControlDirValidated()) return;
 			// Gate EVERY control action on a captured context. Its absence means
 			// session_start has not fired, i.e. the extension runtime is still
 			// loading — and both `sendUserMessage` and `shutdown` throw during

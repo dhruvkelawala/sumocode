@@ -181,7 +181,9 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		`__sumo_exit_file=${shellEscape(paths.exitFile)}`,
 		// The marker subshell writes owner-only so the parent's private-artifact
 		// validation accepts it; the agent process itself keeps the user's umask.
-		`__sumo_finish() { [ -f "$__sumo_exit_file" ] || ( umask 077; printf '%s' "$1" > "$__sumo_exit_file" ); }`,
+		// noclobber makes the redirection exclusive (O_EXCL), so a dangling
+		// symlink planted at the marker path is never followed.
+		`__sumo_finish() { [ -f "$__sumo_exit_file" ] || ( umask 077; set -C; printf '%s' "$1" > "$__sumo_exit_file" ) 2> /dev/null || :; }`,
 		`trap '__sumo_finish "$?"' EXIT`,
 		`trap '__sumo_finish 129' HUP`,
 		`trap '__sumo_finish 143' TERM`,

@@ -1031,6 +1031,52 @@ describe("control watcher", () => {
 		expect(ctx.shutdown).not.toHaveBeenCalled();
 	});
 
+	it("consumes controls created after the watcher boots (late control dir)", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const controlDir = join(workDir, "control");
+		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
+		installTaskModeAutoExit(pi as never, {
+			env: { SUMOCODE_TASK_MODE: "1", SUMOCODE_TASK_CONTROL_DIR: controlDir },
+			graceMs: 10_000,
+		});
+		handlers.get("session_start")?.[0]?.({}, buildCtxStub());
+		vi.advanceTimersByTime(500);
+		expect(pi.sendUserMessage).not.toHaveBeenCalled();
+
+		// The orchestrator creates the control dir after the child booted.
+		makeControlDir(controlDir);
+		writeControl(join(controlDir, "steer-1.txt"), "late dir steer");
+		vi.advanceTimersByTime(500);
+		expect(pi.sendUserMessage).toHaveBeenCalledWith("late dir steer", { deliverAs: "steer" });
+	});
+
+	it("drops diag lines through an in-task-dir symlinked sink without following it", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
+		makeControlDir(join(workDir, "control"));
+		const outside = mkdtempSync(join(tmpdir(), "sumocode-task-escape-"));
+		const victimDiag = join(outside, "diag.jsonl");
+		const diagFile = join(workDir, "diag.jsonl");
+		symlinkSync(victimDiag, diagFile);
+		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
+		installTaskModeAutoExit(pi as never, {
+			env: {
+				SUMOCODE_TASK_MODE: "1",
+				SUMOCODE_TASK_CONTROL_DIR: join(workDir, "control"),
+				SUMOCODE_TASK_DIAG_FILE: diagFile,
+			},
+			graceMs: 10_000,
+		});
+		handlers.get("session_start")?.[0]?.({}, buildCtxStub());
+		vi.advanceTimersByTime(500);
+		// The sink was tampered after a legitimate-looking capture: the line is
+		// dropped, and the symlink target is never created.
+		expect(existsSync(victimDiag)).toBe(false);
+		expect(lstatSync(diagFile).isSymbolicLink()).toBe(true);
+		expect(pi.sendUserMessage).not.toHaveBeenCalled();
+	});
+
 	it("refuses a control dir that is a symlink and consumes nothing", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
 		const realDir = join(workDir, "elsewhere");

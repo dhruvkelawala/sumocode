@@ -168,7 +168,7 @@ describe("pane subagent backend", () => {
 			expect(script).toMatch(/trap '__sumo_finish "\$\?"' EXIT.*trap '__sumo_finish 129' HUP/s);
 			// Owner-only marker creation is scoped to the guard subshell: the
 			// agent process keeps the user's umask.
-			expect(script).toContain("( umask 077; printf");
+			expect(script).toContain("( umask 077; set -C; printf");
 			expect(script).not.toMatch(/^umask 077$/m);
 			harness.fs.files.set(harness.paths.responseFile, "final answer\n");
 			harness.fs.files.set(harness.paths.exitFile, "0\n");
@@ -416,7 +416,7 @@ describe("pane subagent backend", () => {
 	it("exit guard writes the marker when the wrapper dies before sumocode does (real bash)", async () => {
 		const { execFile } = await import("node:child_process");
 		const { promisify } = await import("node:util");
-		const { mkdtempSync, existsSync: realExists, readFileSync: realRead, rmSync } = await import("node:fs");
+		const { mkdtempSync, mkdirSync: realMkdirSync, existsSync: realExists, lstatSync: realLstatSync, readFileSync: realRead, rmSync } = await import("node:fs");
 		const { tmpdir } = await import("node:os");
 		const { dirname, join: joinPath } = await import("node:path");
 		const run = promisify(execFile);
@@ -456,6 +456,41 @@ describe("pane subagent backend", () => {
 			const exitFile = joinPath(dirname(scriptFile), "exit.code");
 			expect(realExists(exitFile)).toBe(true);
 			expect(realRead(exitFile, "utf8")).toBe("1");
+			// A dangling symlink planted at the marker path must not be followed:
+			// noclobber refuses the exclusive create and nothing lands outside.
+			const second = mkdtempSync(joinPath(tmpdir(), "sumo-exit-guard-nofollow-"));
+			const { spawnPaneChild: spawnAgain } = await import("./backend-pane.js");
+			const { symlinkSync: realSymlink, rmSync: realRm } = await import("node:fs");
+			const escapeTarget = joinPath(second, "outside", "exit.code");
+			realMkdirSync(joinPath(second, "outside"), { recursive: true });
+			try {
+				// SAFETY: the double covers every TerminalHost member this flow touches.
+				const child2 = spawnAgain({
+					id: "sa-guard-nofollow",
+					prompt: "irrelevant",
+					cwd: joinPath(second, "missing-checkout"),
+					signal: controller.signal,
+					title: "guard-nofollow",
+					placement: { kind: "tab", tabId: "w1:t1", direction: "right" },
+					// SAFETY: pi.exec is the only member the pane backend uses on this object.
+					pi: { exec: vi.fn() } as never,
+					host,
+				} as never);
+				if (!(Symbol.asyncIterator in child2.events)) child2.events(() => {});
+				else throw new Error("pane backend must use callback events");
+				await flushPromises();
+				// SAFETY: startAgentPane records a StartAgentPaneOptions object as its second argument.
+				const started2 = (host.startAgentPane as ReturnType<typeof vi.fn>).mock.calls[1]?.[1] as { shellCommand: string };
+				const script2 = [...(started2.shellCommand.match(/^exec '([^']+)'$/) ?? [])][1]!;
+				const exit2 = joinPath(dirname(script2), "exit.code");
+				realSymlink(escapeTarget, exit2);
+				await run("bash", ["-c", started2.shellCommand]).catch(() => {});
+				expect(realExists(escapeTarget)).toBe(false);
+				expect(realLstatSync(exit2).isSymbolicLink()).toBe(true);
+				child2.interrupt();
+			} finally {
+				realRm(second, { recursive: true, force: true });
+			}
 			// The guard subshell wrote the marker owner-only; the rest of the
 			// script (and the agent it launches) keeps the ambient umask.
 			const { statSync: realStat } = await import("node:fs");

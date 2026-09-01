@@ -231,6 +231,36 @@ describe("SubagentManager", () => {
 		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
 	});
 
+	it("contains async iterator rejection", async () => {
+		const unhandled: unknown[] = [];
+		const onUnhandled = (error: unknown): void => { unhandled.push(error); };
+		process.on("unhandledRejection", onUnhandled);
+		try {
+			const manager = new SubagentManager((task) => ({
+				events: (async function* (): AsyncGenerator<SubagentEvent> {
+					yield { kind: "assistant-delta", delta: "partial" };
+					if (task.id === "sa-1") throw new Error("event stream failed");
+					await new Promise(() => undefined);
+				})(),
+				interrupt: () => undefined,
+			}), { captureGitContext: async () => ({ baseRef: "base-ref" }), buildCompletionManifest: fakeManifestBuilder });
+
+			for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await manager.spawn(makeTask(`worker-${index}`));
+			await vi.waitFor(() => expect(manager.get("sa-1")).toMatchObject({
+				status: "error",
+				errorText: "subagent event stream failed: event stream failed",
+				finalText: "partial",
+			}));
+
+			await expect(manager.spawn(makeTask("replacement"))).resolves.toMatchObject({ id: firstQueuedId, status: "running" });
+			await expect(manager.cancel(["sa-1"])).resolves.toEqual(["sa-1 was already settled"]);
+			await Promise.resolve();
+			expect(unhandled).toEqual([]);
+		} finally {
+			process.off("unhandledRejection", onUnhandled);
+		}
+	});
+
 	it("folds events into immutable snapshots", async () => {
 		const { manager, emitters } = deferredBackend();
 		const spawned = await manager.spawn(makeTask("fold"));

@@ -684,6 +684,35 @@ describe("spawnPiChild", () => {
 		}
 	});
 
+	it("keeps an interrupted run owned when the child errors before close", () => {
+		vi.useFakeTimers();
+		const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+		try {
+			const proc = new FakeProcess();
+			const controller = new AbortController();
+			// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+			const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {}, signal: controller.signal });
+			// SAFETY: the pane/pi backends always expose the callback events form here.
+			const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+
+			controller.abort();
+			proc.emit("error", new Error("termination failed"));
+			expect(events.filter((event) => event.kind === "run-settled")).toEqual([]);
+			expect(vi.getTimerCount()).toBe(1);
+
+			vi.advanceTimersByTime(5001);
+			expect(killSpy).toHaveBeenCalledWith(-4242, "SIGKILL");
+			expect(events.filter((event) => event.kind === "run-settled")).toEqual([]);
+
+			proc.emit("close", null, "SIGKILL");
+			expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "interrupted", partialText: undefined } });
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			killSpy.mockRestore();
+			vi.useRealTimers();
+		}
+	});
+
 	it("does not SIGKILL a child that exited after SIGTERM", () => {
 		vi.useFakeTimers();
 		try {

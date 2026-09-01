@@ -1194,7 +1194,7 @@ const runSingleTask = async (options: {
 				finish(protocolFailed ? 1 : code ?? 0);
 			});
 			proc.once("error", (error) => {
-				if (settled || protocolFailed) return;
+				if (settled || protocolFailed || abortState.isAborted()) return;
 				currentResult.errorMessage = boundRetainedResult(error.message);
 				finish(1);
 			});

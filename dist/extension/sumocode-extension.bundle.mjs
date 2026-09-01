@@ -4005,7 +4005,7 @@ var runSingleTask = async (options) => {
         finish(protocolFailed ? 1 : code ?? 0);
       });
       proc.once("error", (error) => {
-        if (settled || protocolFailed) return;
+        if (settled || protocolFailed || abortState.isAborted()) return;
         currentResult.errorMessage = boundRetainedResult(error.message);
         finish(1);
       });
@@ -16453,7 +16453,7 @@ var createPiChildSpawner = (spawnImpl = nodeSpawn, resolveAdapterEntry = resolve
       cleanup();
     });
     proc.once("error", (error) => {
-      if (protocolError) return;
+      if (protocolError || abortState.isAborted()) return;
       settle({ kind: "failed", errorText: boundRetainedResult(error.message, ERROR_MAX), partialText: finalAssistantText || void 0 });
       cleanup();
     });

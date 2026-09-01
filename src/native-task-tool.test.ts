@@ -39,6 +39,7 @@ type RetainedMessage = {
 };
 type RetainedTaskResult = {
 	exitCode: number;
+	stopReason?: string;
 	messages?: RetainedMessage[];
 	toolEvents?: Array<{ id?: string; name?: string; args?: object | string; status: string; output?: string }>;
 	stderr?: string;
@@ -841,6 +842,39 @@ describe("native task tool", () => {
 
 			const result = await running;
 			expect(result.isError).toBe(true);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps an aborted task owned when the child errors before close", async () => {
+		vi.useFakeTimers();
+		try {
+			const proc = new FakeTaskProcess();
+			const controller = new AbortController();
+			let resolved = false;
+			const running = registeredTask(proc).execute(controller.signal).then((result) => {
+				resolved = true;
+				return result;
+			});
+
+			controller.abort();
+			proc.emit("error", new Error("termination failed"));
+			await Promise.resolve();
+			await Promise.resolve();
+			expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+			expect(resolved).toBe(false);
+			expect(vi.getTimerCount()).toBe(1);
+
+			vi.advanceTimersByTime(5001);
+			expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
+			expect(resolved).toBe(false);
+
+			proc.emit("close", null, "SIGKILL");
+			const result = await running;
+			expect(result.isError).toBe(true);
+			expect(result.details?.results?.[0]?.stopReason).toBe("aborted");
 			expect(vi.getTimerCount()).toBe(0);
 		} finally {
 			vi.useRealTimers();

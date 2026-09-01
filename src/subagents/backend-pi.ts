@@ -667,7 +667,7 @@ export const createPiChildSpawner = (
 			cleanup();
 		});
 		proc.once("error", (error) => {
-			if (protocolError) return;
+			if (protocolError || abortState.isAborted()) return;
 			settle({ kind: "failed", errorText: boundRetainedResult(error.message, ERROR_MAX), partialText: finalAssistantText || undefined });
 			cleanup();
 		});

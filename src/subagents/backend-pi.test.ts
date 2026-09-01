@@ -42,6 +42,20 @@ const retainedEventText = (events: readonly SubagentEvent[]): string[] => events
 	return [];
 });
 
+const durableEventText = (events: readonly SubagentEvent[]): string => {
+	let transcript: string[] = [];
+	let liveText = "";
+	for (const event of events) {
+		if (event.kind === "assistant-delta") liveText += event.delta;
+		if (event.kind === "message-end") {
+			if (event.replacesRetainedText) transcript = [];
+			transcript.push(event.text);
+			if (event.role === "assistant") liveText = "";
+		}
+	}
+	return `${transcript.join("")}${liveText}`;
+};
+
 describe("resolvePiBinary", () => {
 	it("uses the launcher-selected Pi runtime and falls back to PATH", () => {
 		expect(resolvePiBinary({ PI_BIN: "/current/pi" })).toBe("/current/pi");
@@ -232,6 +246,61 @@ describe("spawnPiChild", () => {
 		const completed = events.filter((event): event is Extract<SubagentEvent, { kind: "message-end" }> => event.kind === "message-end");
 		expect(completed.map((event) => event.text)).toEqual([assistantText, userText]);
 		expect(completed.map((event) => event.text).join("")).not.toContain(TRUNCATED_HEAD_MARKER);
+	});
+
+	it("preserves a bounded final assistant result after earlier messages exhaust the run budget", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+
+		emitJson(proc, { type: "message_end", message: { role: "user", content: "u".repeat(CHILD_RETAINED_RESULT_MAX_BYTES) } });
+		emitJson(proc, { type: "message_end", message: { role: "assistant", content: "useful final answer" } });
+		proc.emit("close", 0);
+
+		const finalMessage = events.filter((event) => event.kind === "message-end" && event.role === "assistant").at(-1);
+		expect(finalMessage).toMatchObject({ text: expect.stringContaining("useful final answer"), replacesRetainedText: true });
+		expect(events.at(-1)).toMatchObject({ outcome: { kind: "completed", finalText: expect.stringContaining("useful final answer") } });
+		const retained = durableEventText(events);
+		expect(Buffer.byteLength(retained, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+		expect(retained.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+	});
+
+	it("keeps one marker when an interleaved message is omitted behind a truncated live stream", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+
+		emitJson(proc, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "s".repeat(CHILD_RETAINED_RESULT_MAX_BYTES) } });
+		emitJson(proc, { type: "tool_result_end", message: { role: "toolResult", content: "omitted tool output" } });
+		emitJson(proc, { type: "message_end", message: { role: "assistant", content: "completed answer" } });
+
+		const retained = durableEventText(events);
+		expect(retained).toContain("completed answer");
+		expect(retained.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+		expect(Buffer.byteLength(retained, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+	});
+
+	it("does not double-charge provisional or final-result aliases against the run budget", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		const finalText = "f".repeat(CHILD_RETAINED_RESULT_MAX_BYTES);
+
+		emitJson(proc, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "p".repeat(3 * 1024 * 1024) } });
+		emitJson(proc, { type: "message_end", message: { role: "assistant", content: finalText } });
+		proc.emit("close", 0);
+
+		const finalMessage = events.filter((event) => event.kind === "message-end" && event.role === "assistant").at(-1);
+		const settled = events.at(-1);
+		if (finalMessage?.kind !== "message-end" || settled?.kind !== "run-settled" || settled.outcome.kind !== "completed") throw new Error("missing completed result");
+		expect(settled.outcome.finalText).toBe(finalMessage.text);
+		expect(Buffer.byteLength(durableEventText(events), "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
 	});
 
 	it("redacts nested tool argument secrets before producing a bounded preview", () => {

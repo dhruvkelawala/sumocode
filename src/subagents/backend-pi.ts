@@ -253,12 +253,18 @@ const messageText = (message: Message): string => {
 	return "";
 };
 
+interface RetainedMessageText {
+	readonly text: string;
+	readonly replacesRetainedText?: true;
+}
+
 /** Owns all human-readable event text emitted for one Pi child run. */
 class PiRunPayloadBudget {
 	private retainedBytes = 0;
 	private liveBytes = 0;
 	private retainedTruncated = false;
 	private liveTruncated = false;
+	private omissionBehindLive = false;
 	private readonly markerBytes = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
 
 	public appendLive(delta: string): string {
@@ -275,27 +281,43 @@ class PiRunPayloadBudget {
 		return retained;
 	}
 
-	public retainMessage(role: Message["role"], text: string): string {
+	public retainMessage(role: Message["role"], text: string): RetainedMessageText {
+		let replacesRetainedText = false;
+		let requiresMarker = false;
 		// SubagentManager replaces liveText only at the corresponding completed
 		// assistant message, so reclaim those provisional bytes at that boundary.
 		if (role === "assistant") {
 			this.liveBytes = 0;
 			this.liveTruncated = false;
+			requiresMarker = this.omissionBehindLive;
+			this.omissionBehindLive = false;
+			// The parent-facing result wins once prior completed text has exhausted
+			// the cap. Replace that transcript text rather than silently dropping the
+			// latest assistant result; one marker represents everything reclaimed.
+			if (this.retainedTruncated) {
+				this.retainedBytes = 0;
+				this.retainedTruncated = false;
+				replacesRetainedText = true;
+				requiresMarker = true;
+			}
 		}
-		if (text.length === 0 || this.retainedTruncated) return "";
+		if (text.length === 0 && !requiresMarker) return { text: "" };
+		if (this.retainedTruncated) return { text: "" };
+		if (this.liveTruncated) {
+			this.omissionBehindLive = text.length > 0;
+			return { text: "" };
+		}
 		const textBytes = Buffer.byteLength(text, "utf8");
 		const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - this.markerBytes - this.retainedBytes - this.liveBytes;
-		if (textBytes <= contentBytesLeft) {
-			this.retainedBytes += textBytes;
-			return text;
+		let retained: string;
+		if (requiresMarker || textBytes > contentBytesLeft) {
+			retained = this.markedHead(text, Math.max(0, contentBytesLeft));
+			this.retainedTruncated = true;
+		} else {
+			retained = text;
 		}
-		// A live marker already records the only possible protocol-interleaving
-		// omission without adding a second marker to retained state.
-		if (this.liveTruncated) return "";
-		const retained = this.markedHead(text, Math.max(0, contentBytesLeft));
 		this.retainedBytes += Buffer.byteLength(retained, "utf8");
-		this.retainedTruncated = true;
-		return retained;
+		return replacesRetainedText ? { text: retained, replacesRetainedText: true } : { text: retained };
 	}
 
 	private markedHead(text: string, contentBytes: number): string {
@@ -566,7 +588,7 @@ export const createPiChildSpawner = (
 					continue;
 				}
 				if (event.kind === "message-end") {
-					const retained = { ...event, text: payloadBudget.retainMessage(event.role, event.text) };
+					const retained = { ...event, ...payloadBudget.retainMessage(event.role, event.text) };
 					if (retained.role === "assistant") finalAssistantText = retained.text;
 					emit(retained);
 					continue;

@@ -15888,6 +15888,7 @@ var PiRunPayloadBudget = class {
   liveBytes = 0;
   retainedTruncated = false;
   liveTruncated = false;
+  omissionBehindLive = false;
   markerBytes = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
   appendLive(delta) {
     if (delta.length === 0 || this.retainedTruncated || this.liveTruncated) return "";
@@ -15903,22 +15904,37 @@ var PiRunPayloadBudget = class {
     return retained;
   }
   retainMessage(role, text) {
+    let replacesRetainedText = false;
+    let requiresMarker = false;
     if (role === "assistant") {
       this.liveBytes = 0;
       this.liveTruncated = false;
+      requiresMarker = this.omissionBehindLive;
+      this.omissionBehindLive = false;
+      if (this.retainedTruncated) {
+        this.retainedBytes = 0;
+        this.retainedTruncated = false;
+        replacesRetainedText = true;
+        requiresMarker = true;
+      }
     }
-    if (text.length === 0 || this.retainedTruncated) return "";
+    if (text.length === 0 && !requiresMarker) return { text: "" };
+    if (this.retainedTruncated) return { text: "" };
+    if (this.liveTruncated) {
+      this.omissionBehindLive = text.length > 0;
+      return { text: "" };
+    }
     const textBytes = Buffer.byteLength(text, "utf8");
     const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - this.markerBytes - this.retainedBytes - this.liveBytes;
-    if (textBytes <= contentBytesLeft) {
-      this.retainedBytes += textBytes;
-      return text;
+    let retained;
+    if (requiresMarker || textBytes > contentBytesLeft) {
+      retained = this.markedHead(text, Math.max(0, contentBytesLeft));
+      this.retainedTruncated = true;
+    } else {
+      retained = text;
     }
-    if (this.liveTruncated) return "";
-    const retained = this.markedHead(text, Math.max(0, contentBytesLeft));
     this.retainedBytes += Buffer.byteLength(retained, "utf8");
-    this.retainedTruncated = true;
-    return retained;
+    return replacesRetainedText ? { text: retained, replacesRetainedText: true } : { text: retained };
   }
   markedHead(text, contentBytes) {
     const head = new BoundedUtf8Head(contentBytes + this.markerBytes);
@@ -16141,7 +16157,7 @@ var createPiChildSpawner = (spawnImpl = nodeSpawn, resolveAdapterEntry = resolve
           continue;
         }
         if (event.kind === "message-end") {
-          const retained = { ...event, text: payloadBudget.retainMessage(event.role, event.text) };
+          const retained = { ...event, ...payloadBudget.retainMessage(event.role, event.text) };
           if (retained.role === "assistant") finalAssistantText = retained.text;
           emit(retained);
           continue;
@@ -16871,7 +16887,7 @@ var SubagentManager = class {
     else if (event.kind === "tool-end") next = { ...current, liveTools: upsertTool(current.liveTools, { id: event.toolId, name: event.name, outputPreview: event.outputPreview, done: true, isError: event.isError }) };
     else if (event.kind === "message-end") next = {
       ...current,
-      transcript: [...current.transcript, { role: event.role, text: event.text, createdAt: Date.now() }],
+      transcript: [...event.replacesRetainedText ? [] : current.transcript, { role: event.role, text: event.text, createdAt: Date.now() }],
       liveText: event.role === "assistant" ? "" : current.liveText,
       finalText: event.role === "assistant" ? event.text : current.finalText,
       usage: event.role === "assistant" ? { ...current.usage, turns: current.usage.turns + 1 } : current.usage

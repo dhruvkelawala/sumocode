@@ -14,7 +14,9 @@ export type SubagentEvent =
 	| { kind: "tool-start"; toolId: string; name: string; argsPreview?: string }
 	| { kind: "tool-update"; toolId: string; outputPreview?: string }
 	| { kind: "tool-end"; toolId: string; name: string; isError: boolean; outputPreview?: string }
-	| { kind: "message-end"; role: "user" | "assistant" | "toolResult"; text: string }
+	// A bounded backend may reclaim prior transcript text so the final assistant
+	// result survives; the replacement text carries the run's sole marker.
+	| { kind: "message-end"; role: "user" | "assistant" | "toolResult"; text: string; replacesRetainedText?: true }
 	| { kind: "usage"; tokens?: number; contextWindow?: number; costUsd?: number }
 	| { kind: "run-settled"; outcome: RunOutcome };
 

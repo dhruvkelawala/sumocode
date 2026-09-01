@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { SubagentManager, type SpawnSubagentTask } from "./manager.js";
 import { SUBAGENT_MAX_QUEUED, SUBAGENT_MAX_RUNNING, type SubagentEvent } from "./domain.js";
 import type { CompletionManifest, CompletionManifestEvidence } from "./manifest.js";
+import { CHILD_RETAINED_RESULT_MAX_BYTES, TRUNCATED_HEAD_MARKER } from "../child-protocol.js";
 import type { TerminalHost } from "../terminal-host/types.js";
 
 /** Spawned-child double: only visible children get send/requestClose. */
@@ -253,6 +254,26 @@ describe("SubagentManager", () => {
 		await expect(wait).resolves.toMatchObject([{ id: "sa-1", status: "done" }]);
 		expect(pending).toEqual([["sa-1"]]);
 		expect(manager.consumedIds.has("sa-1")).toBe(true);
+	});
+
+	it("delivers a replacement final result without retaining or charging the replaced transcript", async () => {
+		const { manager, emitters } = deferredBackend();
+		await manager.spawn(makeTask("bounded delivery"));
+		const prior = `${"u".repeat(CHILD_RETAINED_RESULT_MAX_BYTES - Buffer.byteLength(TRUNCATED_HEAD_MARKER))}${TRUNCATED_HEAD_MARKER}`;
+		emitters.get("sa-1")?.({ kind: "message-end", role: "user", text: prior });
+		const finalText = `useful final answer${TRUNCATED_HEAD_MARKER}`;
+		emitters.get("sa-1")?.({ kind: "message-end", role: "assistant", text: finalText, replacesRetainedText: true });
+		const wait = manager.waitFor(["sa-1"]);
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText } });
+
+		const [delivered] = await wait;
+		if (!delivered) throw new Error("missing delivered result");
+		expect(delivered.finalText).toBe(finalText);
+		expect(delivered.transcript).toMatchObject([{ role: "assistant", text: finalText }]);
+		expect(delivered.finalText).toBe(delivered.transcript.at(-1)?.text);
+		const retained = `${delivered.transcript.map((item) => item.text).join("")}${delivered.liveText}`;
+		expect(Buffer.byteLength(retained, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+		expect(retained.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
 	});
 
 	it("stores the manifest before completion listeners are notified", async () => {

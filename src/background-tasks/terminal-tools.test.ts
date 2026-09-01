@@ -257,6 +257,7 @@ describe("installTerminalTools", () => {
 		const settled = task({ status: "completed", settledAt: 2_000, exitCode: 0, deliveryState: "suppressed" });
 		const harness = createHarness([settled]);
 		harness.manager.check.mockReturnValue({ task: settled, output: "x".repeat(16 * 1024) });
+		harness.manager.getOutputTailBytes.mockReturnValue({ bytes: Buffer.from("x".repeat(64 * 1024)), truncated: true });
 
 		const checked = await execute(harness.tool("terminal_check"), { id: settled.id }, harness.ctx());
 

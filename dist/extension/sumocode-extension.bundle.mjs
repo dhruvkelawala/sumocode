@@ -14811,14 +14811,14 @@ function redactCapturedOutput(output, maxBytes) {
     truncatedLineReplacement: "[truncated line redacted]"
   });
 }
-function sessionObservation(observation) {
-  return { task: sessionTask(observation.task), output: redactCapturedOutput(observation.output, 16 * 1024) };
+function sessionObservation(manager, observation) {
+  return { task: sessionTask(observation.task), output: readRedactedOutputTail(manager, observation.task, 16 * 1024) };
 }
-function sessionStopResult(result) {
+function sessionStopResult(manager, result) {
   return {
     ...result,
     task: result.task ? sessionTask(result.task) : void 0,
-    output: result.output === void 0 ? void 0 : redactCapturedOutput(result.output, COMPLETION_OUTPUT_BYTES),
+    output: result.output === void 0 ? void 0 : result.task ? readRedactedOutputTail(manager, result.task, COMPLETION_OUTPUT_BYTES) : redactCapturedOutput(result.output, COMPLETION_OUTPUT_BYTES),
     message: redactActivitySecrets(result.message)
   };
 }
@@ -15035,7 +15035,7 @@ function installTerminalTools(pi, manager) {
       coordinator.touch(ctx);
       const observation = manager.check(params.id, sessionId(ctx));
       if (!observation) return makeToolResult(`Unknown terminal ${params.id}.`, { id: params.id, status: "unknown" });
-      const visible = sessionObservation(observation);
+      const visible = sessionObservation(manager, observation);
       return makeToolResult(buildObservationResult({ task: observation.task, output: visible.output }), {
         ...visible,
         activity: sessionActivity(observation.task, visible.output)
@@ -15055,7 +15055,7 @@ function installTerminalTools(pi, manager) {
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       coordinator.touch(ctx);
       const result = await manager.wait(params.ids, sessionId(ctx), params.timeout_ms ?? DEFAULT_WAIT_TIMEOUT_MS, signal);
-      const settled = result.settled.map(sessionObservation);
+      const settled = result.settled.map((observation) => sessionObservation(manager, observation));
       return makeToolResult(buildWaitResult({ ...result, settled: settled.map((observation, index) => ({ task: result.settled[index].task, output: observation.output })) }), {
         settled,
         pendingIds: result.pendingIds,
@@ -15077,7 +15077,7 @@ function installTerminalTools(pi, manager) {
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       coordinator.touch(ctx);
       const results = await manager.stop(params.ids, sessionId(ctx));
-      const visible = results.map(sessionStopResult);
+      const visible = results.map((result) => sessionStopResult(manager, result));
       return makeToolResult(buildStopResult(visible), {
         results: visible,
         activities: results.map((result) => terminalActivityFromStopResult(manager, result)).filter((activity) => activity !== void 0)

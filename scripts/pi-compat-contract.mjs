@@ -6,11 +6,11 @@ export const EXPECTED_HOST_COMMANDS = Object.freeze([
 	"settings", "login", "model", "thinking", "theme", "sumo:theme", "compact", "new", "clone", "fork", "sessions", "resume",
 	"tree", "session", "name", "copy", "export", "quit", "sumo:memory", "sumo:theme-check", "sumo:palette", "hotkeys", "lovely-web", "changelog",
 ]);
-export const PI_MIRRORED_HOST_COMMANDS = Object.freeze([
+const PI_MIRRORED_HOST_COMMANDS = Object.freeze([
 	"settings", "login", "model", "thinking", "compact", "new", "clone", "fork", "resume", "tree", "session", "name", "copy", "export", "quit", "hotkeys", "changelog",
 ]);
-export const HOST_OWNED_COMMANDS = Object.freeze(EXPECTED_HOST_COMMANDS.filter((name) => !PI_MIRRORED_HOST_COMMANDS.includes(name)));
-export const EXPECTED_ROUTED_CHILD_COMMANDS = Object.freeze(["mcp", "mcp-auth"]);
+const HOST_OWNED_COMMANDS = Object.freeze(["theme", "sumo:theme", "sessions", "sumo:memory", "sumo:theme-check", "sumo:palette", "lovely-web"]);
+const EXPECTED_ROUTED_CHILD_COMMANDS = Object.freeze(["mcp", "mcp-auth"]);
 export const EXPECTED_SUMOCODE_EXTENSION_COMMANDS = Object.freeze([
 	"login", "sumo:login-cancel", "sumo:rpc-tree-navigate", "fast", "answer", "reload", "sumo:roles", "accounts", "sumo:cursor", "sumo:diff",
 	"sumo:query", "exit", "slate", "sumo:persona", "sumo:review", "sumo:ship", "sumo:spinner", "sumo:sync", "sumo:bootstrap", "sumo:tabs",
@@ -19,7 +19,11 @@ export const EXPECTED_SUMOCODE_EXTENSION_COMMANDS = Object.freeze([
 export const REQUIRED_RPC_COMMANDS = Object.freeze([
 	"prompt", "abort", "new_session", "get_state", "set_model", "cycle_model", "get_available_models", "set_thinking_level", "cycle_thinking_level",
 	"get_available_thinking_levels", "compact", "set_auto_compaction", "set_auto_retry", "get_session_stats", "export_html", "switch_session", "fork", "clone",
-	"get_fork_messages", "get_entries", "get_last_assistant_text", "set_session_name", "get_commands",
+	"get_fork_messages", "get_entries", "get_last_assistant_text", "set_session_name", "get_commands", "get_messages",
+]);
+export const REQUIRED_EVENTS = Object.freeze([
+	"agent_start", "agent_end", "turn_end", "message_start", "message_update", "message_end", "tool_execution_start", "tool_execution_update",
+	"tool_execution_end", "agent_settled", "queue_update", "compaction_start", "compaction_end", "session_info_changed", "thinking_level_changed",
 ]);
 const REQUIRED_UI_METHODS = Object.freeze(["select", "confirm", "input", "editor", "notify", "setStatus", "setWidget", "setTitle", "set_editor_text"]);
 const REQUIRED_TOOLS = Object.freeze([
@@ -32,7 +36,7 @@ function uniqueSorted(values) {
 	return [...new Set(values)].sort();
 }
 
-function inventoryError(label, expected, actual) {
+function assertInventory(label, expected, actual) {
 	const missing = expected.filter((name) => !actual.includes(name));
 	const extra = actual.filter((name) => !expected.includes(name));
 	if (missing.length === 0 && extra.length === 0) return;
@@ -42,6 +46,14 @@ function inventoryError(label, expected, actual) {
 
 function stringLiterals(text, property) {
 	return uniqueSorted([...text.matchAll(new RegExp(`\\b${property}\\s*:\\s*["']([^"']+)["']`, "g"))].map((match) => match[1]));
+}
+
+function typeDeclaration(text, name) {
+	const start = text.indexOf(`export type ${name} =`);
+	if (start < 0) return "";
+	const rest = text.slice(start);
+	const next = rest.slice(1).search(/\nexport (?:type|interface|declare)\s/);
+	return next < 0 ? rest : rest.slice(0, next + 1);
 }
 
 function extractHostCommands(source) {
@@ -75,20 +87,28 @@ export function assertCompatibilityContract(input) {
 	if (versions.length !== 3 || new Set(versions).size !== 1) throw new Error("expected aligned Pi package versions");
 
 	const rpcTypes = input.rpcTypesText ?? "";
-	const commandMembers = stringLiterals(rpcTypes, "type").filter((name) => REQUIRED_RPC_COMMANDS.includes(name));
-	const responseMembers = stringLiterals(rpcTypes, "command").filter((name) => REQUIRED_RPC_COMMANDS.includes(name));
+	const commandMembers = stringLiterals(typeDeclaration(rpcTypes, "RpcCommand"), "type").filter((name) => REQUIRED_RPC_COMMANDS.includes(name));
+	const responseMembers = stringLiterals(typeDeclaration(rpcTypes, "RpcResponse"), "command").filter((name) => REQUIRED_RPC_COMMANDS.includes(name));
 	const missingCommands = REQUIRED_RPC_COMMANDS.filter((name) => !commandMembers.includes(name) || !responseMembers.includes(name));
 	if (missingCommands.length) throw new Error(`missing RPC commands: ${missingCommands.join(", ")}`);
-	const uiMethods = stringLiterals(rpcTypes, "method");
+	const uiMethods = stringLiterals(typeDeclaration(rpcTypes, "RpcExtensionUIRequest"), "method");
 	const missingUi = REQUIRED_UI_METHODS.filter((name) => !uiMethods.includes(name));
-	if (missingUi.length || !rpcTypes.includes('type: "extension_ui_response"')) {
+	if (missingUi.length || !typeDeclaration(rpcTypes, "RpcExtensionUIResponse").includes('type: "extension_ui_response"')) {
 		throw new Error(`missing RPC extension UI members: ${missingUi.join(", ") || "extension_ui_response"}`);
 	}
+	const events = uniqueSorted([
+		...stringLiterals(typeDeclaration(input.agentCoreTypesText ?? "", "AgentEvent"), "type"),
+		...stringLiterals(typeDeclaration(input.agentSessionTypesText ?? "", "AgentSessionEvent"), "type"),
+	]);
+	const missingEvents = REQUIRED_EVENTS.filter((name) => !events.includes(name));
+	if (missingEvents.length) throw new Error(`missing Pi events: ${missingEvents.join(", ")}`);
 
-	inventoryError("host command inventory", EXPECTED_HOST_COMMANDS, extractHostCommands(input.hostActionsSource ?? ""));
-	inventoryError("routed child command inventory", EXPECTED_ROUTED_CHILD_COMMANDS, extractRoutedCommands(input.hostActionsSource ?? ""));
+	assertInventory("host command inventory", EXPECTED_HOST_COMMANDS, extractHostCommands(input.hostActionsSource ?? ""));
+	assertInventory("host command ownership classification", EXPECTED_HOST_COMMANDS, [...PI_MIRRORED_HOST_COMMANDS, ...HOST_OWNED_COMMANDS]);
+	if (PI_MIRRORED_HOST_COMMANDS.some((name) => HOST_OWNED_COMMANDS.includes(name))) throw new Error("host command ownership classification overlaps");
+	assertInventory("routed child command inventory", EXPECTED_ROUTED_CHILD_COMMANDS, extractRoutedCommands(input.hostActionsSource ?? ""));
 	const builtinNames = uniqueSorted((input.builtinCommands ?? []).map((entry) => entry.name).filter((name) => PI_MIRRORED_HOST_COMMANDS.includes(name)));
-	inventoryError("Pi-mirrored built-in command inventory", PI_MIRRORED_HOST_COMMANDS, builtinNames);
+	assertInventory("Pi-mirrored built-in command inventory", PI_MIRRORED_HOST_COMMANDS, builtinNames);
 
 	const rpcCommands = input.rpcCommands ?? [];
 	const sumocodeCommands = rpcCommands
@@ -98,7 +118,7 @@ export function assertCompatibilityContract(input) {
 		const sources = uniqueSorted(rpcCommands.filter((entry) => entry.source === "extension").map((entry) => `${entry.name}@${entry.sourceInfo?.path ?? "unknown"}`));
 		throw new Error(`SumoCode extension command inventory unavailable (extension commands: ${sources.join(", ") || "none"})`);
 	}
-	inventoryError("SumoCode extension command inventory", EXPECTED_SUMOCODE_EXTENSION_COMMANDS, sumocodeCommands);
+	assertInventory("SumoCode extension command inventory", EXPECTED_SUMOCODE_EXTENSION_COMMANDS, sumocodeCommands);
 	const extensionNames = uniqueSorted(rpcCommands.filter((entry) => entry.source === "extension").map((entry) => entry.name));
 	const missingRouted = EXPECTED_ROUTED_CHILD_COMMANDS.filter((name) => !extensionNames.includes(name));
 	if (missingRouted.length) throw new Error(`routed child command inventory drift (missing: ${missingRouted.join(", ")})`);
@@ -116,20 +136,22 @@ export function assertCompatibilityContract(input) {
 
 function parseVersion(version) {
 	const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
-	if (!match) throw new Error(`unsupported semantic version: ${version}`);
-	return match.slice(1).map(Number);
+	return match ? match.slice(1).map(Number) : undefined;
 }
 
 function satisfiesTilde(version, range) {
 	const match = /^~(\d+)\.(\d+)\.(\d+)$/.exec(range);
 	if (!match) throw new Error(`unsupported peer range: ${range}`);
-	const [major, minor, patch] = parseVersion(version);
+	const parsed = parseVersion(version);
+	if (!parsed) return false;
+	const [major, minor, patch] = parsed;
 	return major === Number(match[1]) && minor === Number(match[2]) && patch >= Number(match[3]);
 }
 
 function compareVersions(left, right) {
 	const a = parseVersion(left);
 	const b = parseVersion(right);
+	if (!a || !b) return left.localeCompare(right);
 	return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
 }
 
@@ -149,7 +171,7 @@ export function assertWorkflowContract(text) {
 	}
 	const invocationCount = text.split("scripts/smoke-pi-versions.sh --supported-matrix").length - 1;
 	if (invocationCount !== 1) throw new Error(`workflow must contain one canonical matrix invocation, found ${invocationCount}`);
-	for (const path of ["package.json", "bin/sumocode.sh", "src/sumo-tui/rpc/**", "src/extension.ts", "scripts/smoke-pi-versions.sh", "scripts/pi-compat-contract.mjs", ".github/workflows/pi-compat.yml"]) {
+	for (const path of ["package.json", "bin/sumocode.sh", "sumo-rpc-host.js", "src/extension-entry.ts", "src/sumo-tui/rpc/**", "src/extension.ts", "src/interaction-registry.ts", "scripts/smoke-pi-versions.sh", "scripts/pi-compat-contract.mjs", "scripts/pi-compat-contract.test.mjs", ".github/workflows/pi-compat.yml"]) {
 		if (!text.includes(path)) throw new Error(`workflow PR paths are missing ${path}`);
 	}
 	return true;

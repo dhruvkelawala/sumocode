@@ -1,34 +1,33 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
+import { dirname } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	assertCompatibilityContract,
 	assertWorkflowContract,
+	EXPECTED_HOST_COMMANDS as HOST_COMMANDS,
+	EXPECTED_SUMOCODE_EXTENSION_COMMANDS as SUMO_COMMANDS,
+	REQUIRED_EVENTS as EVENTS,
+	REQUIRED_RPC_COMMANDS as RPC_COMMANDS,
 	resolveSupportedMatrix,
 } from "./pi-compat-contract.mjs";
 
-const HOST_COMMANDS = [
-	"settings", "login", "model", "thinking", "theme", "sumo:theme", "compact", "new", "clone", "fork", "sessions", "resume",
-	"tree", "session", "name", "copy", "export", "quit", "sumo:memory", "sumo:theme-check", "sumo:palette", "hotkeys", "lovely-web", "changelog",
-];
-const SUMO_COMMANDS = [
-	"login", "sumo:login-cancel", "sumo:rpc-tree-navigate", "fast", "answer", "reload", "sumo:roles", "accounts", "sumo:cursor", "sumo:diff",
-	"sumo:query", "exit", "slate", "sumo:persona", "sumo:review", "sumo:ship", "sumo:spinner", "sumo:sync", "sumo:bootstrap", "sumo:tabs",
-	"sumo:theme", "sumo:theme-check", "sumo:worktree", "sumo:memory",
-];
 const PI_BUILTINS = [
 	"settings", "model", "tree", "thinking", "export", "copy", "name", "session", "changelog", "hotkeys", "fork", "clone", "login", "new", "compact", "resume", "quit",
 ];
-const RPC_COMMANDS = [
-	"prompt", "abort", "new_session", "get_state", "set_model", "cycle_model", "get_available_models", "set_thinking_level", "cycle_thinking_level",
-	"get_available_thinking_levels", "compact", "set_auto_compaction", "set_auto_retry", "get_session_stats", "export_html", "switch_session", "fork", "clone",
-	"get_fork_messages", "get_entries", "get_last_assistant_text", "set_session_name", "get_commands",
-];
-
 function rpcTypes(commands = RPC_COMMANDS) {
 	return `export type RpcCommand = ${commands.map((name) => `{ type: "${name}" }`).join(" | ")};\n`
 		+ `export type RpcResponse = ${commands.map((name) => `{ command: "${name}" }`).join(" | ")};\n`
 		+ `export type RpcExtensionUIRequest = { method: "select" } | { method: "confirm" } | { method: "input" } | { method: "editor" } | { method: "notify" } | { method: "setStatus" } | { method: "setWidget" } | { method: "setTitle" } | { method: "set_editor_text" };\n`
 		+ `export type RpcExtensionUIResponse = { type: "extension_ui_response"; value: string } | { type: "extension_ui_response"; confirmed: boolean } | { type: "extension_ui_response"; cancelled: true };`;
+}
+
+function eventTypes(events = EVENTS) {
+	const core = events.filter((name) => !["agent_settled", "queue_update", "compaction_start", "compaction_end", "session_info_changed", "thinking_level_changed"].includes(name));
+	const session = events.filter((name) => !core.includes(name));
+	return {
+		agentCoreTypesText: `export type AgentEvent = ${core.map((name) => `{ type: "${name}" }`).join(" | ")};`,
+		agentSessionTypesText: `export type AgentSessionEvent = AgentEvent | ${session.map((name) => `{ type: "${name}" }`).join(" | ")};`,
+	};
 }
 
 function hostSource(commands = HOST_COMMANDS) {
@@ -44,6 +43,7 @@ function validInput() {
 	return {
 		versions: { ai: "0.84.4", codingAgent: "0.84.4", tui: "0.84.4" },
 		rpcTypesText: rpcTypes(),
+		...eventTypes(),
 		builtinCommands: PI_BUILTINS.map((name) => ({ name })),
 		hostActionsSource: hostSource(),
 		extensionSource: "installFastMode(pi); // dormant: installApprovalGate\n",
@@ -78,7 +78,10 @@ describe("Pi compatibility contract", () => {
 
 	it("accepts the current repository and installed Pi contract surfaces", () => {
 		const input = validInput();
-		input.rpcTypesText = readFileSync("node_modules/@earendil-works/pi-coding-agent/dist/modes/rpc/rpc-types.d.ts", "utf8");
+		const piRoot = realpathSync("node_modules/@earendil-works/pi-coding-agent");
+		input.rpcTypesText = readFileSync(`${piRoot}/dist/modes/rpc/rpc-types.d.ts`, "utf8");
+		input.agentSessionTypesText = readFileSync(`${piRoot}/dist/core/agent-session.d.ts`, "utf8");
+		input.agentCoreTypesText = readFileSync(`${dirname(piRoot)}/pi-agent-core/dist/types.d.ts`, "utf8");
 		input.builtinCommands = [...readFileSync("node_modules/@earendil-works/pi-coding-agent/dist/core/slash-commands.js", "utf8").matchAll(/\bname:\s*"([^"]+)"/g)]
 			.map((match) => ({ name: match[1] }));
 		input.hostActionsSource = readFileSync("src/sumo-tui/rpc/host-actions.ts", "utf8");
@@ -93,16 +96,24 @@ describe("Pi compatibility contract", () => {
 		expect(() => assertCompatibilityContract(input)).toThrow("aligned Pi package versions");
 	});
 
-	it("reports a removed RPC member by name", () => {
-		const input = validInput();
-		input.rpcTypesText = rpcTypes(RPC_COMMANDS.filter((name) => name !== "get_commands"));
-		expect(() => assertCompatibilityContract(input)).toThrow("missing RPC commands: get_commands");
+	it("reports removed RPC and event members by name", () => {
+		const rpc = validInput();
+		rpc.rpcTypesText = rpcTypes(RPC_COMMANDS.filter((name) => name !== "get_messages"));
+		expect(() => assertCompatibilityContract(rpc)).toThrow("missing RPC commands: get_messages");
+
+		const event = validInput();
+		Object.assign(event, eventTypes(EVENTS.filter((name) => name !== "agent_settled")));
+		expect(() => assertCompatibilityContract(event)).toThrow("missing Pi events: agent_settled");
 	});
 
-	it("reports host and extension inventory drift by member name", () => {
+	it("reports host, Pi built-in, and extension inventory drift by member name", () => {
 		const host = validInput();
 		host.hostActionsSource = hostSource(HOST_COMMANDS.filter((name) => name !== "hotkeys"));
 		expect(() => assertCompatibilityContract(host)).toThrow(/host command inventory.*hotkeys/);
+
+		const builtin = validInput();
+		builtin.builtinCommands = builtin.builtinCommands.filter((entry) => entry.name !== "login");
+		expect(() => assertCompatibilityContract(builtin)).toThrow(/Pi-mirrored built-in command inventory.*login/);
 
 		const extension = validInput();
 		extension.rpcCommands = extension.rpcCommands.filter((entry) => entry.name !== "accounts");
@@ -135,7 +146,7 @@ describe("supported matrix resolution", () => {
 	it("returns every satisfying published patch in semantic order", () => {
 		expect(resolveSupportedMatrix(
 			{ ai: "~0.84.3", codingAgent: "~0.84.3", tui: "~0.84.3" },
-			{ ai: ["0.84.4", "0.84.3", "0.85.0"], codingAgent: ["0.84.3", "0.84.4"], tui: ["0.84.4", "0.84.3"] },
+			{ ai: ["0.84.4", "0.84.3", "0.85.0-beta.1", "0.85.0"], codingAgent: ["0.84.3", "0.84.4", "0.85.0-beta.1"], tui: ["0.84.4", "0.84.3", "0.85.0-beta.1"] },
 		)).toEqual(["0.84.3", "0.84.4"]);
 	});
 
@@ -156,7 +167,7 @@ describe("supported matrix resolution", () => {
 });
 
 describe("workflow contract", () => {
-	const workflow = `on:\n  pull_request:\n    paths: [package.json, bin/sumocode.sh, src/sumo-tui/rpc/**, src/extension.ts, scripts/smoke-pi-versions.sh, scripts/pi-compat-contract.mjs, .github/workflows/pi-compat.yml]\n  schedule:\n    - cron: "17 4 * * *"\n  workflow_dispatch:\njobs:\n  pi-compat:\n    timeout-minutes: 20\n    steps:\n      - run: scripts/smoke-pi-versions.sh --supported-matrix\n`;
+	const workflow = `on:\n  pull_request:\n    paths: [package.json, bin/sumocode.sh, sumo-rpc-host.js, src/extension-entry.ts, src/sumo-tui/rpc/**, src/extension.ts, src/interaction-registry.ts, scripts/smoke-pi-versions.sh, scripts/pi-compat-contract.mjs, scripts/pi-compat-contract.test.mjs, .github/workflows/pi-compat.yml]\n  schedule:\n    - cron: "17 4 * * *"\n  workflow_dispatch:\njobs:\n  pi-compat:\n    timeout-minutes: 20\n    steps:\n      - run: scripts/smoke-pi-versions.sh --supported-matrix\n`;
 
 	it("requires qualifying PR paths, daily/manual triggers, timeout, and one canonical invocation", () => {
 		expect(assertWorkflowContract(workflow)).toBe(true);

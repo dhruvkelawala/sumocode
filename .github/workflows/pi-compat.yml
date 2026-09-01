@@ -8,6 +8,8 @@ on:
     paths:
       - package.json
       - bin/sumocode.sh
+      - sumo-rpc-host.js
+      - src/extension-entry.ts
       - src/extension.ts
       - src/interaction-registry.ts
       - src/sumo-tui/rpc/**
@@ -53,7 +55,7 @@ jobs:
           exit "$status"
 
       - name: Upload bounded failure log
-        if: failure() && steps.compatibility.outcome == 'failure'
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: pi-compat-failure-${{ github.run_id }}

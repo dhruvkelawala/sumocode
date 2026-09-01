@@ -88,7 +88,7 @@ describe("subagent roles", () => {
 		expect(loaded.warnings).toEqual([
 			{ scope: "role", roleId: "research", message: "role research has an invalid thinking level; entry skipped" },
 			{ scope: "role", roleId: "review", message: "role review ignores invalid tool mcp" },
-			{ scope: "file", message: "roles[2] must be an object; entry skipped" },
+			{ scope: "file", blocksOverlays: false, message: "roles[2] must be an object; entry skipped" },
 		]);
 	});
 
@@ -117,7 +117,7 @@ describe("subagent roles", () => {
 		expect(oversized.warnings[0]?.message).toContain("exceeds 256 KB");
 		expect(oversized.warnings[0]?.scope).toBe("file");
 		expect(unreadable.roles).toEqual(BUILT_IN_ROLES);
-		expect(unreadable.warnings).toEqual([{ scope: "file", message: "unable to read roles.json: permission denied" }]);
+		expect(unreadable.warnings).toEqual([{ scope: "file", blocksOverlays: true, message: "unable to read roles.json: permission denied" }]);
 	});
 
 	it("falls back without warning when roles.json does not exist", () => {

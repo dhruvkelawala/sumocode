@@ -186,6 +186,21 @@ describe("herdrTerminalHost", () => {
 		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["tab", "create", "--workspace", "w1K", "--cwd", "/repo", "--label", "subagents", "--no-focus"], { timeout: 5000 });
 	});
 
+	it("cleans a failed command split start", async () => {
+		process.env.HERDR_ENV = "1";
+		process.env.HERDR_PANE_ID = "w7:p3";
+		const exec = vi.fn(async (_bin: string, args: string[]) => {
+			if (args[1] === "split") return { stdout: JSON.stringify({ result: { pane: { pane_id: "w7:p9", workspace_id: "w7", tab_id: "w7:t2" } } }), stderr: "", code: 0, killed: false };
+			if (args[1] === "run") return { stdout: "", stderr: "start denied", code: 1, killed: false };
+			return { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false };
+		});
+
+		// SAFETY: test double only exercises the members this test asserts on.
+		await expect(herdrTerminalHost.openCommandInSplit({ exec } as never, "right", { cwd: "/repo", shellCommand: "run child" }))
+			.resolves.toEqual({ ok: false, error: "start denied" });
+		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "close", "w7:p9"], { timeout: 5000 });
+	});
+
 	it("cleans failed child start for a new-tab root pane", async () => {
 		const exec = vi.fn(async (_bin: string, args: string[]) => {
 			if (args[0] === "tab") return { stdout: JSON.stringify({ result: { root_pane: { pane_id: "w5:p9", workspace_id: "w5", tab_id: "w5:t8" } } }), stderr: "", code: 0, killed: false };

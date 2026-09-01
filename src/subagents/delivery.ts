@@ -41,6 +41,8 @@ export function createDeferredResultDelivery(): DeferredResultDelivery {
 		flush(send): void {
 			for (const [id, payload] of pending) {
 				send(payload);
+				// Map iteration safely advances after deleting the current entry. A
+				// thrown send leaves this id and every later payload in FIFO order.
 				pending.delete(id);
 			}
 		},

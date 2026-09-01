@@ -167,16 +167,23 @@ describe("subagent tools", () => {
 		expect(textOf(invalidResult)).toContain("invalid thinking level");
 		expect(invalidResult).toMatchObject({ details: { status: "invalid_role_config", warnings: roleWarnings } });
 
-		const fileWarnings: RoleWarning[] = [{ scope: "file", message: "invalid roles.json: unexpected token" }];
+		const fileWarnings: RoleWarning[] = [{ scope: "file", blocksOverlays: true, message: "invalid roles.json: unexpected token" }];
 		const fallback = createHarness("herdr", [research], fileWarnings);
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		const fallbackResult = await fallback.tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker", role: "research" }, undefined, undefined, fallback.ctx as never);
 		expect(textOf(fallbackResult)).toContain("Started sa-1");
+
+		const audit: SubagentRole = { id: "audit", label: "Audit", description: "audit", systemPrompt: "audit" };
+		const siblingWarning: RoleWarning[] = [{ scope: "file", blocksOverlays: false, message: "roles[2] must be an object; entry skipped" }];
+		const custom = createHarness("herdr", [research, audit], siblingWarning);
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const customResult = await custom.tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker", role: "audit" }, undefined, undefined, custom.ctx as never);
+		expect(textOf(customResult)).toContain("Started sa-1");
 	});
 
 	it("keeps role-loader warnings out of role-free spawns", async () => {
 		const role: SubagentRole = { id: "audit", label: "Audit", description: "use for audits", systemPrompt: "audit carefully" };
-		const { tool, ctx, manager } = createHarness("herdr", [role], [{ scope: "file", message: "invalid optional role overlay" }]);
+		const { tool, ctx, manager } = createHarness("herdr", [role], [{ scope: "file", blocksOverlays: true, message: "invalid optional role overlay" }]);
 
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		const result = await tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker" }, undefined, undefined, ctx as never);

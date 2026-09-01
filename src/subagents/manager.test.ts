@@ -241,6 +241,11 @@ describe("SubagentManager", () => {
 				events: (async function* (): AsyncGenerator<SubagentEvent> {
 					yield { kind: "assistant-delta", delta: "partial" };
 					if (task.id === "sa-1") throw new Error("event stream failed");
+					if (task.id === "sa-2") {
+						yield { kind: "run-settled", outcome: { kind: "completed", finalText: "complete" } };
+						await new Promise<void>((resolve) => setTimeout(resolve, 0));
+						throw new Error("late event stream failure");
+					}
 					await new Promise(() => undefined);
 				})(),
 				interrupt: () => undefined,
@@ -252,6 +257,7 @@ describe("SubagentManager", () => {
 				errorText: "subagent event stream failed: event stream failed",
 				finalText: "partial",
 			}));
+			await vi.waitFor(() => expect(manager.get("sa-2")).toMatchObject({ status: "done", finalText: "complete" }));
 
 			await expect(manager.spawn(makeTask("replacement"))).resolves.toMatchObject({ id: firstQueuedId, status: "running" });
 			await expect(manager.cancel(["sa-1"])).resolves.toEqual(["sa-1 was already settled"]);

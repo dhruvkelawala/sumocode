@@ -215,11 +215,12 @@ async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): P
 		target = await createTabPane(pi, options.cwd, options.placement.label);
 	}
 	if (!target.ok) return target;
+	const paneId = target.pane.pane_id;
+	if (!paneId) return { ok: false, error: "herdr child target has no pane_id; cleanup skipped" };
 	const started = await runPaneCommand(pi, target.pane, options.shellCommand);
-	if (!started.ok) return cleanFailedChildStart(pi, target.pane.pane_id!, started.error, recoveryShell);
+	if (!started.ok) return cleanFailedChildStart(pi, paneId, started.error, recoveryShell);
 
 	const agentName = uniqueHerdrAgentName(options.name);
-	const paneId = target.pane.pane_id!;
 	const workspaceId = target.pane.workspace_id ?? (options.placement.kind === "workspace" ? options.placement.workspaceId : undefined);
 	const tabId = target.pane.tab_id ?? (options.placement.kind === "tab" ? options.placement.tabId : undefined);
 	await pi.exec("herdr", ["pane", "rename", paneId, options.name], { timeout: 5000 }).catch(() => undefined);
@@ -260,9 +261,10 @@ export const herdrTerminalHost = {
 			? await splitPane(pi, { kind: "current" }, direction, options.cwd)
 			: await createTabPane(pi, options.cwd, "sumocode");
 		if (!target.ok) return target;
+		const paneId = target.pane.pane_id;
+		if (!paneId) return { ok: false, error: "herdr child target has no pane_id; cleanup skipped" };
 		const started = await runPaneCommand(pi, target.pane, options.shellCommand);
-		if (!started.ok) return started;
-		const paneId = target.pane.pane_id!;
+		if (!started.ok) return cleanFailedChildStart(pi, paneId, started.error);
 		return { ok: true, pane: { host: "herdr", paneId, workspaceId: target.pane.workspace_id } };
 	},
 	async openWorktreeWorkspace(pi: PiExecLike, options: { branch: string; baseRef: string; path: string; label: string; shellCommand: string; sourceCwd: string; focus?: boolean }) {

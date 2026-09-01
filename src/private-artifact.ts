@@ -48,7 +48,7 @@ export const isErrnoCode = (error: unknown, code: string): boolean =>
 // oxlint-enable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof
 
 /** True when the entry belongs to this process's user. Windows has no uid. */
-const ownedByUs = (stat: PrivateArtifactStat): boolean => {
+export const isOwnedByUs = (stat: PrivateArtifactStat): boolean => {
 	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- platform capability probe: `getuid` is absent on Windows, which is the documented skip condition.
 	if (typeof process.getuid !== "function") return true;
 	return stat.uid === process.getuid();
@@ -70,7 +70,7 @@ export const assertPrivateDir = (fs: PrivateArtifactFs, path: string, label: str
 	const stat = fs.lstatSync(path);
 	if (!stat.isDirectory()) throw new Error(`${label} is not a directory: ${path}`);
 	if (!isOwnerOnly(stat)) throw new Error(`${label} is not owner-only (mode ${stat.mode.toString(8)}): ${path}`);
-	if (!ownedByUs(stat)) throw new Error(`${label} is not owned by this user: ${path}`);
+	if (!isOwnedByUs(stat)) throw new Error(`${label} is not owned by this user: ${path}`);
 };
 
 /**
@@ -80,7 +80,7 @@ export const assertPrivateDir = (fs: PrivateArtifactFs, path: string, label: str
 const assertPrivateStat = (stat: PrivateArtifactStat, path: string, label: string): void => {
 	if (!stat.isFile()) throw new Error(`${label} is not a regular file: ${path}`);
 	if (!isOwnerOnly(stat)) throw new Error(`${label} is not owner-only (mode ${stat.mode.toString(8)}): ${path}`);
-	if (!ownedByUs(stat)) throw new Error(`${label} is not owned by this user: ${path}`);
+	if (!isOwnedByUs(stat)) throw new Error(`${label} is not owned by this user: ${path}`);
 };
 
 /**
@@ -118,6 +118,10 @@ export const validatedArtifactStat = (fs: PrivateArtifactFs, path: string, paren
  * file; use `assertPrivateArtifact` when the entry must already exist.
  */
 export const assertArtifactInsideDir = (path: string, parentDir: string, label: string): void => {
+	// Confinement is lexical direct-child identity. It does not resolve the
+	// parent's own ancestor symlinks: replacing the (owner-only, 0700) task or
+	// control directory itself requires owner access, so a symlinked ancestor is
+	// outside this boundary's threat model — documented as a deliberate ceiling.
 	if (dirname(path) !== parentDir) {
 		throw new Error(`${label} is not a direct child of ${parentDir}: ${path}`);
 	}

@@ -23,6 +23,7 @@ import {
 	assertPrivateArtifact,
 	assertPrivateDir,
 	isErrnoCode,
+	isOwnedByUs,
 	type PrivateArtifactFs,
 	nodeArtifactFs,
 	validatedArtifactStat,
@@ -109,8 +110,10 @@ const allocatePrivateTaskDir = (fs: PaneBackendFs, root: string, name: string): 
 	// Older builds could leave the shared root at a wider mode (recursive mkdir
 	// never re-modes an existing directory). Tighten an owned real directory so
 	// the upgrade does not brick every spawn; symlinked or foreign roots are
-	// left untouched and still fail closed in the validation below.
-	if (fs.lstatSync(root).isDirectory()) {
+	// left untouched and still fail closed in the validation below. Ownership is
+	// checked first: running as root must never chmod another user's directory.
+	const rootStat = fs.lstatSync(root);
+	if (rootStat.isDirectory() && isOwnedByUs(rootStat)) {
 		fs.chmodSync(root, PRIVATE_DIR_MODE);
 	}
 	assertPrivateDir(fs, root, "visible-subagent task root directory");

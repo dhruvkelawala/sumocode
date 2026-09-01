@@ -15,6 +15,8 @@ class FakeFs {
 	readonly symlinks = new Set<string>();
 	/** Adversarial fixture: paths whose lstat reports a widened (group/other) mode. */
 	readonly widenedModes = new Set<string>();
+	/** Adversarial fixture: paths whose lstat reports foreign ownership. */
+	readonly foreignUids = new Set<string>();
 
 	existsSync(path: string): boolean {
 		return this.files.has(path) || this.dirs.has(path) || this.symlinks.has(path);
@@ -27,7 +29,8 @@ class FakeFs {
 		}
 		if (this.dirs.has(path)) {
 			const mode = this.dirModes.get(path) ?? 0o700;
-			return { isFile: () => false, isDirectory: () => true, mode, uid: process.getuid?.() ?? 0 };
+			const uid = this.foreignUids.has(path) ? (process.getuid?.() ?? 0) + 1 : (process.getuid?.() ?? 0);
+			return { isFile: () => false, isDirectory: () => true, mode, uid };
 		}
 		if (this.files.has(path)) {
 			const mode = this.widenedModes.has(path) ? 0o644 : (this.fileModes.get(path) ?? 0o600);
@@ -311,6 +314,17 @@ describe("pane subagent backend", () => {
 		// SAFETY: the spawn fails on allocation before any host/pi member is touched, so empty doubles suffice.
 		expect(() => spawn({ prompt: "p", name: "worker", cwd: "/repo", id: "sa-1", host: {} as never, pi: { exec: vi.fn() } as never, placement: { kind: "tab", tabId: "t", direction: "right" } })).not.toThrow();
 		expect(fs.dirModes.get("/tmp/subagents")).toBe(0o700);
+	});
+
+	it("never chmods a foreign-owned task root, even with filesystem capability", () => {
+		const fs = new FakeFs();
+		fs.mkdirSync("/tmp/subagents", { recursive: true, mode: 0o755 });
+		fs.foreignUids.add("/tmp/subagents");
+		const spawn = createPaneChildSpawner({ fs, now: () => 1234, baseDir: "/tmp/subagents" });
+		// SAFETY: the spawn must fail on allocation before any host/pi member is touched, so empty doubles suffice.
+		expect(() => spawn({ prompt: "p", name: "worker", cwd: "/repo", id: "sa-1", host: {} as never, pi: { exec: vi.fn() } as never, placement: { kind: "tab", tabId: "t", direction: "right" } })).toThrow(/task root directory/);
+		// Ownership is checked before chmod: a foreign dir must never be re-moded.
+		expect(fs.dirModes.get("/tmp/subagents")).toBe(0o755);
 	});
 
 	it("fails closed when the task root is a symlinked directory", () => {

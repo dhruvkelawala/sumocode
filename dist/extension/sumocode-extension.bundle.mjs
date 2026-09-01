@@ -16127,6 +16127,7 @@ ${options.prompt}` : options.prompt;
       writeNewPrivateFile(fs3, join17(paths.controlDir, CLOSE_REQUEST_FILE), "1");
     } catch (error) {
       if (!isEexist(error)) throw error;
+      assertPrivateArtifact(fs3, join17(paths.controlDir, CLOSE_REQUEST_FILE), paths.controlDir, "close control");
     }
   };
   const events = (emit) => {
@@ -18098,8 +18099,8 @@ function sanitizeTaskMarkers(markers) {
       assertArtifactInsideDir(resolve8(value), taskDir, key);
       markers[key] = resolve8(value);
     } catch (error) {
-      diagLog("marker_refused", { file: value, message: error instanceof Error ? error.message : String(error) });
       delete markers[key];
+      diagLog("marker_refused", { file: value, message: error instanceof Error ? error.message : String(error) });
     }
   }
   return markers;

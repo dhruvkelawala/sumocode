@@ -237,6 +237,7 @@ describe("SubagentManager", () => {
 		const onUnhandled = (error: unknown): void => { unhandled.push(error); };
 		process.on("unhandledRejection", onUnhandled);
 		try {
+			const interrupts = new Map<string, ReturnType<typeof vi.fn>>();
 			const manager = new SubagentManager((task) => ({
 				events: (async function* (): AsyncGenerator<SubagentEvent> {
 					yield { kind: "assistant-delta", delta: "partial" };
@@ -248,7 +249,11 @@ describe("SubagentManager", () => {
 					}
 					await new Promise(() => undefined);
 				})(),
-				interrupt: () => undefined,
+				interrupt: (() => {
+					const interrupt = vi.fn();
+					interrupts.set(task.id, interrupt);
+					return interrupt;
+				})(),
 			}), { captureGitContext: async () => ({ baseRef: "base-ref" }), buildCompletionManifest: fakeManifestBuilder });
 
 			for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await manager.spawn(makeTask(`worker-${index}`));
@@ -258,6 +263,8 @@ describe("SubagentManager", () => {
 				finalText: "partial",
 			}));
 			await vi.waitFor(() => expect(manager.get("sa-2")).toMatchObject({ status: "done", finalText: "complete" }));
+			expect(interrupts.get("sa-1")).toHaveBeenCalledOnce();
+			expect(interrupts.get("sa-2")).not.toHaveBeenCalled();
 
 			await expect(manager.spawn(makeTask("replacement"))).resolves.toMatchObject({ id: firstQueuedId, status: "running" });
 			await expect(manager.cancel(["sa-1"])).resolves.toEqual(["sa-1 was already settled"]);

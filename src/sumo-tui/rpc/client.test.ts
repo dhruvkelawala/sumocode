@@ -658,6 +658,27 @@ describe("SumoRpcClient", () => {
 		await expect(response).resolves.toMatchObject({ success: true, data: { sessionId: "final-partial" } });
 	});
 
+	it("bounds an unexpected exit when stdio close never arrives", async () => {
+		vi.useFakeTimers();
+		const child = new FakeRpcChild();
+		const exits: Error[] = [];
+		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
+		client.onExit((error) => exits.push(error));
+		try {
+			await client.start();
+			child.exitCode = 1;
+			child.emit("exit", 1, null);
+			await vi.advanceTimersByTimeAsync(1_000);
+
+			expect(exits).toHaveLength(1);
+			expect(exits[0]).toBeInstanceOf(RpcChildExitError);
+			expect(child.stdout.listenerCount("data")).toBe(0);
+		} finally {
+			child.emit("close", 1, null);
+			vi.useRealTimers();
+		}
+	});
+
 	it("keeps only the stderr tail up to 64 KiB", async () => {
 		const client = nodeRpcClient(`
 			process.stderr.write("a".repeat(1000));

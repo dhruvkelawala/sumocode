@@ -15876,13 +15876,55 @@ var isMessage2 = (value) => {
   return isRecord(value) && (value.role === "assistant" || value.role === "user" || value.role === "toolResult");
 };
 var messageText2 = (message) => {
-  let text = "";
-  if (isString5(message.text)) text = message.text;
-  else if (isString5(message.content)) text = message.content;
-  else if (Array.isArray(message.content)) {
-    text = message.content.map((part) => isRecord(part) && isString5(part.text) ? part.text : "").join("");
+  if (isString5(message.text)) return message.text;
+  if (isString5(message.content)) return message.content;
+  if (Array.isArray(message.content)) {
+    return message.content.map((part) => isRecord(part) && isString5(part.text) ? part.text : "").join("");
   }
-  return boundRetainedResult(text);
+  return "";
+};
+var PiRunPayloadBudget = class {
+  retainedBytes = 0;
+  liveBytes = 0;
+  retainedTruncated = false;
+  liveTruncated = false;
+  markerBytes = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
+  appendLive(delta) {
+    if (delta.length === 0 || this.retainedTruncated || this.liveTruncated) return "";
+    const deltaBytes = Buffer.byteLength(delta, "utf8");
+    const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - this.markerBytes - this.retainedBytes - this.liveBytes;
+    if (deltaBytes <= contentBytesLeft) {
+      this.liveBytes += deltaBytes;
+      return delta;
+    }
+    const retained = this.markedHead(delta, Math.max(0, contentBytesLeft));
+    this.liveBytes += Buffer.byteLength(retained, "utf8");
+    this.liveTruncated = true;
+    return retained;
+  }
+  retainMessage(role, text) {
+    if (role === "assistant") {
+      this.liveBytes = 0;
+      this.liveTruncated = false;
+    }
+    if (text.length === 0 || this.retainedTruncated) return "";
+    const textBytes = Buffer.byteLength(text, "utf8");
+    const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - this.markerBytes - this.retainedBytes - this.liveBytes;
+    if (textBytes <= contentBytesLeft) {
+      this.retainedBytes += textBytes;
+      return text;
+    }
+    if (this.liveTruncated) return "";
+    const retained = this.markedHead(text, Math.max(0, contentBytesLeft));
+    this.retainedBytes += Buffer.byteLength(retained, "utf8");
+    this.retainedTruncated = true;
+    return retained;
+  }
+  markedHead(text, contentBytes) {
+    const head = new BoundedUtf8Head(contentBytes + this.markerBytes);
+    head.append(text);
+    return head.append(TRUNCATED_HEAD_MARKER);
+  }
 };
 var mapPiEvent = (event) => {
   const typeText = isString5(event.type) ? event.type : "";
@@ -16078,6 +16120,7 @@ var createPiChildSpawner = (spawnImpl = nodeSpawn, resolveAdapterEntry = resolve
     const abortState = attachAbortSignal2(proc, options.signal);
     interrupt = abortState.interrupt;
     const stderr = new BoundedUtf8Tail();
+    const payloadBudget = new PiRunPayloadBudget();
     let finalAssistantText = "";
     let stopReason;
     let errorMessage2;
@@ -16092,7 +16135,17 @@ var createPiChildSpawner = (spawnImpl = nodeSpawn, resolveAdapterEntry = resolve
       const parsed = parseJsonLine2(line);
       if (!parsed) return;
       for (const event of mapPiEvent(parsed)) {
-        if (event.kind === "message-end" && event.role === "assistant") finalAssistantText = event.text;
+        if (event.kind === "assistant-delta") {
+          const delta = payloadBudget.appendLive(event.delta);
+          if (delta) emit({ ...event, delta });
+          continue;
+        }
+        if (event.kind === "message-end") {
+          const retained = { ...event, text: payloadBudget.retainMessage(event.role, event.text) };
+          if (retained.role === "assistant") finalAssistantText = retained.text;
+          emit(retained);
+          continue;
+        }
         emit(event);
       }
       const messageValue = parsed.message;

@@ -32,6 +32,16 @@ const collect = (events: ((emit: (event: SubagentEvent) => void) => void)): Suba
 	return collected;
 };
 
+const emitJson = <TEvent extends object>(proc: FakeProcess, event: TEvent): void => {
+	proc.stdout.emit("data", `${JSON.stringify(event)}\n`);
+};
+
+const retainedEventText = (events: readonly SubagentEvent[]): string[] => events.flatMap((event) => {
+	if (event.kind === "assistant-delta") return [event.delta];
+	if (event.kind === "message-end") return [event.text];
+	return [];
+});
+
 describe("resolvePiBinary", () => {
 	it("uses the launcher-selected Pi runtime and falls back to PATH", () => {
 		expect(resolvePiBinary({ PI_BIN: "/current/pi" })).toBe("/current/pi");
@@ -171,6 +181,57 @@ describe("spawnPiChild", () => {
 			{ kind: "usage", tokens: 12, contextWindow: undefined, costUsd: 0.01 },
 			{ kind: "run-settled", outcome: { kind: "completed", finalText: "hello" } },
 		]);
+	});
+
+	it("bounds live assistant deltas without waiting for message_end", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+
+		for (let index = 0; index < 5; index += 1) {
+			emitJson(proc, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "x".repeat(1024 * 1024) } });
+		}
+
+		const retained = retainedEventText(events).join("");
+		expect(Buffer.byteLength(retained, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+		expect(retained.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+	});
+
+	it("shares one retained-text budget across completed message roles", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		const text = "m".repeat(2 * 1024 * 1024);
+
+		emitJson(proc, { type: "message_end", message: { role: "user", content: text } });
+		emitJson(proc, { type: "message_end", message: { role: "assistant", content: text } });
+		emitJson(proc, { type: "tool_result_end", message: { role: "toolResult", content: text } });
+
+		const retained = retainedEventText(events).join("");
+		expect(Buffer.byteLength(retained, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+		expect(retained.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+	});
+
+	it("reclaims streamed assistant text when its completed message replaces it", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		const assistantText = "a".repeat(2 * 1024 * 1024);
+		const userText = "u".repeat(1024 * 1024);
+
+		emitJson(proc, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: assistantText } });
+		emitJson(proc, { type: "message_end", message: { role: "assistant", content: assistantText } });
+		emitJson(proc, { type: "message_end", message: { role: "user", content: userText } });
+
+		const completed = events.filter((event): event is Extract<SubagentEvent, { kind: "message-end" }> => event.kind === "message-end");
+		expect(completed.map((event) => event.text)).toEqual([assistantText, userText]);
+		expect(completed.map((event) => event.text).join("")).not.toContain(TRUNCATED_HEAD_MARKER);
 	});
 
 	it("redacts nested tool argument secrets before producing a bounded preview", () => {

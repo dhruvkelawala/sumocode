@@ -5,7 +5,14 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SubagentEvent } from "./domain.js";
 import { safeValuePreview } from "../activity/domain.js";
-import { BoundedUtf8Tail, JsonLineDecoder, boundRetainedResult } from "../child-protocol.js";
+import {
+	BoundedUtf8Head,
+	BoundedUtf8Tail,
+	CHILD_RETAINED_RESULT_MAX_BYTES,
+	JsonLineDecoder,
+	TRUNCATED_HEAD_MARKER,
+	boundRetainedResult,
+} from "../child-protocol.js";
 import { type BuiltInToolName, resolveTaskConfig } from "../native-task-config.js";
 import { isRecord, type TaskThinking, type ThinkingLevel } from "../native-task-params.js";
 import { CHILD_MODEL_ID_ENV, CHILD_MODEL_PROVIDER_ENV } from "./pi-child-model-bootstrap.js";
@@ -236,16 +243,68 @@ const isMessage = <T>(value: T): value is T & Message => {
 };
 
 const messageText = (message: Message): string => {
-	let text = "";
-	if (isString(message.text)) text = message.text;
-	else if (isString(message.content)) text = message.content;
-	else if (Array.isArray(message.content)) {
-		text = message.content
+	if (isString(message.text)) return message.text;
+	if (isString(message.content)) return message.content;
+	if (Array.isArray(message.content)) {
+		return message.content
 			.map((part) => isRecord(part) && isString(part.text) ? part.text : "")
 			.join("");
 	}
-	return boundRetainedResult(text);
+	return "";
 };
+
+/** Owns all human-readable event text emitted for one Pi child run. */
+class PiRunPayloadBudget {
+	private retainedBytes = 0;
+	private liveBytes = 0;
+	private retainedTruncated = false;
+	private liveTruncated = false;
+	private readonly markerBytes = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
+
+	public appendLive(delta: string): string {
+		if (delta.length === 0 || this.retainedTruncated || this.liveTruncated) return "";
+		const deltaBytes = Buffer.byteLength(delta, "utf8");
+		const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - this.markerBytes - this.retainedBytes - this.liveBytes;
+		if (deltaBytes <= contentBytesLeft) {
+			this.liveBytes += deltaBytes;
+			return delta;
+		}
+		const retained = this.markedHead(delta, Math.max(0, contentBytesLeft));
+		this.liveBytes += Buffer.byteLength(retained, "utf8");
+		this.liveTruncated = true;
+		return retained;
+	}
+
+	public retainMessage(role: Message["role"], text: string): string {
+		// SubagentManager replaces liveText only at the corresponding completed
+		// assistant message, so reclaim those provisional bytes at that boundary.
+		if (role === "assistant") {
+			this.liveBytes = 0;
+			this.liveTruncated = false;
+		}
+		if (text.length === 0 || this.retainedTruncated) return "";
+		const textBytes = Buffer.byteLength(text, "utf8");
+		const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - this.markerBytes - this.retainedBytes - this.liveBytes;
+		if (textBytes <= contentBytesLeft) {
+			this.retainedBytes += textBytes;
+			return text;
+		}
+		// A live marker already records the only possible protocol-interleaving
+		// omission without adding a second marker to retained state.
+		if (this.liveTruncated) return "";
+		const retained = this.markedHead(text, Math.max(0, contentBytesLeft));
+		this.retainedBytes += Buffer.byteLength(retained, "utf8");
+		this.retainedTruncated = true;
+		return retained;
+	}
+
+	private markedHead(text: string, contentBytes: number): string {
+		const head = new BoundedUtf8Head(contentBytes + this.markerBytes);
+		head.append(text);
+		// Force the marker even when the omitted suffix is shorter than the marker.
+		return head.append(TRUNCATED_HEAD_MARKER);
+	}
+}
 
 const mapPiEvent = (event: ParsedJsonLine): SubagentEvent[] => {
 	const typeText = isString(event.type) ? event.type : "";
@@ -486,6 +545,7 @@ export const createPiChildSpawner = (
 		const abortState = attachAbortSignal(proc, options.signal);
 		interrupt = abortState.interrupt;
 		const stderr = new BoundedUtf8Tail();
+		const payloadBudget = new PiRunPayloadBudget();
 		let finalAssistantText = "";
 		let stopReason: string | undefined;
 		let errorMessage: string | undefined;
@@ -500,7 +560,17 @@ export const createPiChildSpawner = (
 			const parsed = parseJsonLine(line);
 			if (!parsed) return;
 			for (const event of mapPiEvent(parsed)) {
-				if (event.kind === "message-end" && event.role === "assistant") finalAssistantText = event.text;
+				if (event.kind === "assistant-delta") {
+					const delta = payloadBudget.appendLive(event.delta);
+					if (delta) emit({ ...event, delta });
+					continue;
+				}
+				if (event.kind === "message-end") {
+					const retained = { ...event, text: payloadBudget.retainMessage(event.role, event.text) };
+					if (retained.role === "assistant") finalAssistantText = retained.text;
+					emit(retained);
+					continue;
+				}
 				emit(event);
 			}
 			const messageValue = parsed.message;

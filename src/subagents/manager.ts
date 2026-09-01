@@ -677,7 +677,16 @@ export class SubagentManager {
 		}
 		void (async () => {
 			for await (const event of events) emit(event);
-		})();
+		})().catch((error: unknown) => {
+			const current = this.snapshots.get(id);
+			if (!current || isSettled(current)) return;
+			const message = error instanceof Error ? error.message : String(error);
+			void this.startSettle(id, {
+				kind: "failed",
+				errorText: `subagent event stream failed: ${message}`,
+				partialText: current.finalText || current.liveText || undefined,
+			});
+		});
 	}
 
 	private fold(id: string, event: SubagentEvent): void {

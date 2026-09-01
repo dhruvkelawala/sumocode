@@ -18090,9 +18090,9 @@ function sanitizeTaskMarkers(markers) {
   const taskDir = taskDirFromMarkers(markers);
   if (!taskDir) {
     const refused = TASK_MARKER_ENV_KEYS.filter((key) => markers[key] !== void 0 && key !== "SUMOCODE_TASK_CONTROL_DIR");
-    for (const key of refused) {
-      const file = markers[key];
-      delete markers[key];
+    const refusedMarkers = refused.map((key) => ({ key, file: markers[key] }));
+    for (const { key } of refusedMarkers) delete markers[key];
+    for (const { key, file } of refusedMarkers) {
       diagLog("marker_refused", { file, message: `${key} set without SUMOCODE_TASK_CONTROL_DIR` });
     }
     return markers;
@@ -18284,9 +18284,6 @@ function installControlWatcher(pi, controlDir, hooks, unlinkControl) {
       return false;
     }
   };
-  if (!ensureControlDirValidated() && existsSync12(canonicalControlDir)) {
-    return () => void 0;
-  }
   const stop = () => {
     stopped = true;
     if (timer) {

@@ -87,9 +87,12 @@ function sessionStopResult(result: TerminalStopResult) {
 	};
 }
 
-function terminalActivityFromStopResult(result: TerminalStopResult) {
+function terminalActivityFromStopResult(manager: TerminalTaskManager, result: TerminalStopResult) {
 	if (!result.task) return undefined;
-	return sessionActivity(result.task, result.output === undefined ? "" : redactCapturedOutput(result.output, COMPLETION_OUTPUT_BYTES));
+	const output = result.output === undefined
+		? readRedactedOutputTail(manager, result.task, COMPLETION_OUTPUT_BYTES)
+		: redactCapturedOutput(result.output, COMPLETION_OUTPUT_BYTES);
+	return sessionActivity(result.task, output);
 }
 
 function sessionId(ctx: ExtensionContext): string {
@@ -408,7 +411,7 @@ export function installTerminalTools(
 			const visible = results.map(sessionStopResult);
 			return makeToolResult(buildStopResult(visible), {
 				results: visible,
-				activities: results.map(terminalActivityFromStopResult)
+				activities: results.map((result) => terminalActivityFromStopResult(manager, result))
 					.filter((activity): activity is NonNullable<typeof activity> => activity !== undefined),
 			});
 		},

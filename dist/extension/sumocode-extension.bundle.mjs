@@ -14819,9 +14819,10 @@ function sessionStopResult(result) {
     message: redactActivitySecrets(result.message)
   };
 }
-function terminalActivityFromStopResult(result) {
+function terminalActivityFromStopResult(manager, result) {
   if (!result.task) return void 0;
-  return sessionActivity(result.task, result.output === void 0 ? "" : redactCapturedOutput(result.output, COMPLETION_OUTPUT_BYTES));
+  const output = result.output === void 0 ? readRedactedOutputTail(manager, result.task, COMPLETION_OUTPUT_BYTES) : redactCapturedOutput(result.output, COMPLETION_OUTPUT_BYTES);
+  return sessionActivity(result.task, output);
 }
 function sessionId(ctx) {
   const id = ctx.sessionManager.getSessionId();
@@ -15074,7 +15075,7 @@ function installTerminalTools(pi, manager) {
       const visible = results.map(sessionStopResult);
       return makeToolResult(buildStopResult(visible), {
         results: visible,
-        activities: results.map(terminalActivityFromStopResult).filter((activity) => activity !== void 0)
+        activities: results.map((result) => terminalActivityFromStopResult(manager, result)).filter((activity) => activity !== void 0)
       });
     }
   });

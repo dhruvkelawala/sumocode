@@ -2718,6 +2718,8 @@ import { Type as Type2 } from "typebox";
 
 // src/child-protocol.ts
 var MEBIBYTE = 1024 * 1024;
+var JSON_LINE_INITIAL_CAPACITY = 1024;
+var JSON_LINE_RETAINED_CAPACITY = 64 * 1024;
 var CHILD_JSON_FRAME_MAX_BYTES = 8 * MEBIBYTE;
 var CHILD_UNTERMINATED_MAX_BYTES = 8 * MEBIBYTE;
 var CHILD_STDERR_TAIL_MAX_BYTES = 64 * 1024;
@@ -2760,6 +2762,46 @@ function boundRetainedResult(text, maxBytes = CHILD_RETAINED_RESULT_MAX_BYTES) {
   const head = decodeUtf8Head(bytes.subarray(0, maxBytes - markerBytes));
   return `${head}${TRUNCATED_HEAD_MARKER}`;
 }
+var BoundedUtf8Head = class {
+  constructor(maxBytes = CHILD_RETAINED_RESULT_MAX_BYTES) {
+    this.maxBytes = maxBytes;
+    const markerBytes = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
+    if (maxBytes < markerBytes) throw new Error("head limit is smaller than its truncation marker");
+    this.contentMaxBytes = maxBytes - markerBytes;
+  }
+  maxBytes;
+  value = "";
+  bytes = 0;
+  truncated = false;
+  contentMaxBytes;
+  get retainedBytes() {
+    return this.bytes;
+  }
+  append(chunk) {
+    if (this.truncated || chunk.length === 0) return this.value;
+    const chunkBytes = Buffer.byteLength(chunk, "utf8");
+    if (this.bytes + chunkBytes <= this.maxBytes) {
+      this.value += chunk;
+      this.bytes += chunkBytes;
+      return this.value;
+    }
+    let head;
+    if (this.bytes >= this.contentMaxBytes) {
+      const current = Buffer.from(this.value, "utf8");
+      head = decodeUtf8Head(current.subarray(0, this.contentMaxBytes));
+    } else {
+      const incoming = Buffer.from(chunk, "utf8");
+      head = this.value + decodeUtf8Head(incoming.subarray(0, this.contentMaxBytes - this.bytes));
+    }
+    this.value = `${head}${TRUNCATED_HEAD_MARKER}`;
+    this.bytes = Buffer.byteLength(this.value, "utf8");
+    this.truncated = true;
+    return this.value;
+  }
+  toString() {
+    return this.value;
+  }
+};
 var BoundedUtf8Tail = class {
   constructor(maxBytes = CHILD_STDERR_TAIL_MAX_BYTES) {
     this.maxBytes = maxBytes;
@@ -2821,6 +2863,10 @@ var JsonLineDecoder = class {
   get bufferedBytes() {
     return this.bytes;
   }
+  /** Report capacity without exposing the mutable buffer. */
+  get retainedCapacityBytes() {
+    return this.buffer?.byteLength ?? 0;
+  }
   write(chunk) {
     if (this.stopped) return;
     const incoming = bytesFrom(chunk);
@@ -2839,8 +2885,13 @@ var JsonLineDecoder = class {
   /** Emit one final non-empty frame when the producer closes without a newline. */
   end() {
     if (this.stopped) return;
-    if (this.bytes > 0) this.emitLine();
-    this.stopped = true;
+    try {
+      if (this.bytes > 0) this.emitLine();
+    } finally {
+      this.stopped = true;
+      this.buffer = void 0;
+      this.bytes = 0;
+    }
   }
   append(chunk, terminated) {
     const nextBytes = this.bytes + chunk.byteLength;
@@ -2849,15 +2900,25 @@ var JsonLineDecoder = class {
       return this.fail("unterminated", this.maxUnterminatedBytes, nextBytes);
     }
     if (chunk.byteLength > 0) {
-      this.buffer ??= Buffer.allocUnsafe(this.maxFrameBytes);
-      Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength).copy(this.buffer, this.bytes);
+      const target = this.growBuffer(nextBytes);
+      Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength).copy(target, this.bytes);
     }
     this.bytes = nextBytes;
     return true;
   }
+  growBuffer(requiredBytes) {
+    if (this.buffer && this.buffer.byteLength >= requiredBytes) return this.buffer;
+    let capacity = this.buffer?.byteLength ?? Math.min(JSON_LINE_INITIAL_CAPACITY, this.maxFrameBytes);
+    while (capacity < requiredBytes) capacity = Math.min(this.maxFrameBytes, capacity * 2);
+    const next = Buffer.allocUnsafe(capacity);
+    if (this.buffer && this.bytes > 0) this.buffer.copy(next, 0, 0, this.bytes);
+    this.buffer = next;
+    return next;
+  }
   emitLine() {
     const line = decodeUtf8Head(this.buffer?.subarray(0, this.bytes) ?? Buffer.alloc(0));
     this.bytes = 0;
+    if ((this.buffer?.byteLength ?? 0) > JSON_LINE_RETAINED_CAPACITY) this.buffer = void 0;
     this.options.onLine(line);
   }
   fail(kind, limit, received) {
@@ -3549,8 +3610,12 @@ var runSingleTask = async (options) => {
     thinking: options.thinking,
     fork: options.fork
   };
+  const streamingText = new BoundedUtf8Head();
+  const stderr = new BoundedUtf8Tail();
   const emitUpdate = () => {
-    options.onResultUpdate?.(currentResult);
+    if (!options.onResultUpdate) return;
+    currentResult.stderr = stderr.toString();
+    options.onResultUpdate(currentResult);
   };
   let forkSession;
   if (options.fork) {
@@ -3585,7 +3650,7 @@ var runSingleTask = async (options) => {
         if (typeText === "message_update") {
           const assistantEvent = isRecord(event.assistantMessageEvent) ? event.assistantMessageEvent : void 0;
           if (assistantEvent?.type === "text_delta" && typeof assistantEvent.delta === "string") {
-            currentResult.streamingText = boundRetainedResult(`${currentResult.streamingText ?? ""}${assistantEvent.delta}`);
+            currentResult.streamingText = streamingText.append(assistantEvent.delta);
             emitUpdate();
           }
         }
@@ -3624,7 +3689,6 @@ var runSingleTask = async (options) => {
           emitUpdate();
         }
       };
-      const stderr = new BoundedUtf8Tail();
       let settled = false;
       const stdout = new JsonLineDecoder({
         onLine: processLine,
@@ -3635,10 +3699,7 @@ var runSingleTask = async (options) => {
         }
       });
       const onStdout = (data) => stdout.write(data);
-      const onStderr = (data) => {
-        stderr.append(data);
-        currentResult.stderr = stderr.toString();
-      };
+      const onStderr = (data) => stderr.append(data);
       const cleanup = (keepTerminationTimer = false) => {
         proc.stdout.removeListener("data", onStdout);
         proc.stderr.removeListener("data", onStderr);
@@ -3648,6 +3709,7 @@ var runSingleTask = async (options) => {
         if (settled) return;
         settled = true;
         currentResult.exitCode = code;
+        currentResult.stderr = stderr.toString();
         if (abortState.isAborted()) currentResult.stopReason = "aborted";
         cleanup(keepTerminationTimer);
         resolve10(code);
@@ -3816,14 +3878,11 @@ Available skills: ${available.text}${suffix}` }],
           execution.config.thinkingLevel,
           execution.config.modelLabel
         );
-        const emitSingleUpdate = (result2) => {
-          if (!onUpdate) return;
-          onUpdate({
-            content: [{ type: "text", text: getFinalOutput(result2.messages) || "(running...)" }],
-            details: makeDetails([result2])
-          });
-        };
-        emitSingleUpdate(initial);
+        const emitSingleUpdate = onUpdate ? (result2) => onUpdate({
+          content: [{ type: "text", text: getFinalOutput(result2.messages) || "(running...)" }],
+          details: makeDetails([result2])
+        }) : void 0;
+        emitSingleUpdate?.(initial);
         const result = await runSingleTask({
           defaultCwd: ctx.cwd,
           item: execution.task.item,
@@ -4004,10 +4063,10 @@ Available skills: ${available.text}${suffix}` }],
             fork: execution.task.item.fork,
             sessionFile,
             signal,
-            onResultUpdate: (partial) => {
+            onResultUpdate: onUpdate ? (partial) => {
               allResults[index] = partial;
               emitParallelUpdate();
-            },
+            } : void 0,
             spawnImpl
           });
           allResults[index] = result;
@@ -16010,7 +16069,10 @@ var createPiChildSpawner = (spawnImpl = nodeSpawn, resolveAdapterEntry = resolve
       } else {
         settle({
           kind: "failed",
-          errorText: errorMessage2 || stderr.toString() || (closeSignal ? `pi killed by ${closeSignal}` : `pi exited with code ${code ?? "unknown"}`),
+          errorText: boundRetainedResult(
+            errorMessage2 || stderr.toString() || (closeSignal ? `pi killed by ${closeSignal}` : `pi exited with code ${code ?? "unknown"}`),
+            ERROR_MAX
+          ),
           partialText: finalAssistantText || void 0
         });
       }

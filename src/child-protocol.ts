@@ -1,5 +1,7 @@
 // oxlint-disable anti-slop/no-runtime-typeof -- stream chunks cross Node's string/byte I/O boundary here.
 const MEBIBYTE = 1024 * 1024;
+const JSON_LINE_INITIAL_CAPACITY = 1024;
+const JSON_LINE_RETAINED_CAPACITY = 64 * 1024;
 
 /** Largest newline-delimited JSON payload accepted from a child process. */
 export const CHILD_JSON_FRAME_MAX_BYTES = 8 * MEBIBYTE;
@@ -57,6 +59,51 @@ export function boundRetainedResult(text: string, maxBytes = CHILD_RETAINED_RESU
 	if (maxBytes < markerBytes) throw new Error("retained-result limit is smaller than its truncation marker");
 	const head = decodeUtf8Head(bytes.subarray(0, maxBytes - markerBytes));
 	return `${head}${TRUNCATED_HEAD_MARKER}`;
+}
+
+/** Keep the start of streamed text within a UTF-8 byte cap. */
+export class BoundedUtf8Head {
+	private value = "";
+	private bytes = 0;
+	private truncated = false;
+	private readonly contentMaxBytes: number;
+
+	public constructor(private readonly maxBytes = CHILD_RETAINED_RESULT_MAX_BYTES) {
+		const markerBytes = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
+		if (maxBytes < markerBytes) throw new Error("head limit is smaller than its truncation marker");
+		this.contentMaxBytes = maxBytes - markerBytes;
+	}
+
+	public get retainedBytes(): number {
+		return this.bytes;
+	}
+
+	public append(chunk: string): string {
+		if (this.truncated || chunk.length === 0) return this.value;
+		const chunkBytes = Buffer.byteLength(chunk, "utf8");
+		if (this.bytes + chunkBytes <= this.maxBytes) {
+			this.value += chunk;
+			this.bytes += chunkBytes;
+			return this.value;
+		}
+
+		let head: string;
+		if (this.bytes >= this.contentMaxBytes) {
+			const current = Buffer.from(this.value, "utf8");
+			head = decodeUtf8Head(current.subarray(0, this.contentMaxBytes));
+		} else {
+			const incoming = Buffer.from(chunk, "utf8");
+			head = this.value + decodeUtf8Head(incoming.subarray(0, this.contentMaxBytes - this.bytes));
+		}
+		this.value = `${head}${TRUNCATED_HEAD_MARKER}`;
+		this.bytes = Buffer.byteLength(this.value, "utf8");
+		this.truncated = true;
+		return this.value;
+	}
+
+	public toString(): string {
+		return this.value;
+	}
 }
 
 /** Retain only the newest stderr bytes without ever splitting a UTF-8 codepoint. */
@@ -135,6 +182,11 @@ export class JsonLineDecoder {
 		return this.bytes;
 	}
 
+	/** Report capacity without exposing the mutable buffer. */
+	public get retainedCapacityBytes(): number {
+		return this.buffer?.byteLength ?? 0;
+	}
+
 	public write(chunk: Chunk): void {
 		if (this.stopped) return;
 		const incoming = bytesFrom(chunk);
@@ -154,8 +206,13 @@ export class JsonLineDecoder {
 	/** Emit one final non-empty frame when the producer closes without a newline. */
 	public end(): void {
 		if (this.stopped) return;
-		if (this.bytes > 0) this.emitLine();
-		this.stopped = true;
+		try {
+			if (this.bytes > 0) this.emitLine();
+		} finally {
+			this.stopped = true;
+			this.buffer = undefined;
+			this.bytes = 0;
+		}
 	}
 
 	private append(chunk: Uint8Array, terminated: boolean): boolean {
@@ -165,16 +222,27 @@ export class JsonLineDecoder {
 			return this.fail("unterminated", this.maxUnterminatedBytes, nextBytes);
 		}
 		if (chunk.byteLength > 0) {
-			this.buffer ??= Buffer.allocUnsafe(this.maxFrameBytes);
-			Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength).copy(this.buffer, this.bytes);
+			const target = this.growBuffer(nextBytes);
+			Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength).copy(target, this.bytes);
 		}
 		this.bytes = nextBytes;
 		return true;
 	}
 
+	private growBuffer(requiredBytes: number): Buffer {
+		if (this.buffer && this.buffer.byteLength >= requiredBytes) return this.buffer;
+		let capacity = this.buffer?.byteLength ?? Math.min(JSON_LINE_INITIAL_CAPACITY, this.maxFrameBytes);
+		while (capacity < requiredBytes) capacity = Math.min(this.maxFrameBytes, capacity * 2);
+		const next = Buffer.allocUnsafe(capacity);
+		if (this.buffer && this.bytes > 0) this.buffer.copy(next, 0, 0, this.bytes);
+		this.buffer = next;
+		return next;
+	}
+
 	private emitLine(): void {
 		const line = decodeUtf8Head(this.buffer?.subarray(0, this.bytes) ?? Buffer.alloc(0));
 		this.bytes = 0;
+		if ((this.buffer?.byteLength ?? 0) > JSON_LINE_RETAINED_CAPACITY) this.buffer = undefined;
 		this.options.onLine(line);
 	}
 

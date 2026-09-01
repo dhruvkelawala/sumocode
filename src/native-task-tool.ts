@@ -17,7 +17,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { BoundedUtf8Tail, JsonLineDecoder, boundRetainedResult } from "./child-protocol.js";
+import { BoundedUtf8Head, BoundedUtf8Tail, JsonLineDecoder, boundRetainedResult } from "./child-protocol.js";
 import { type BuiltInToolName, getBuiltInToolsFromActiveTools, resolveTaskConfig } from "./native-task-config.js";
 import {
 	isRecord,
@@ -742,8 +742,12 @@ const runSingleTask = async (options: {
 		fork: options.fork,
 	};
 
+	const streamingText = new BoundedUtf8Head();
+	const stderr = new BoundedUtf8Tail();
 	const emitUpdate = () => {
-		options.onResultUpdate?.(currentResult);
+		if (!options.onResultUpdate) return;
+		currentResult.stderr = stderr.toString();
+		options.onResultUpdate(currentResult);
 	};
 
 	let forkSession: ForkSession | undefined;
@@ -784,7 +788,7 @@ const runSingleTask = async (options: {
 				if (typeText === "message_update") {
 					const assistantEvent = isRecord(event.assistantMessageEvent) ? event.assistantMessageEvent : undefined;
 					if (assistantEvent?.type === "text_delta" && typeof assistantEvent.delta === "string") {
-						currentResult.streamingText = boundRetainedResult(`${currentResult.streamingText ?? ""}${assistantEvent.delta}`);
+						currentResult.streamingText = streamingText.append(assistantEvent.delta);
 						emitUpdate();
 					}
 				}
@@ -824,7 +828,6 @@ const runSingleTask = async (options: {
 				}
 			};
 
-			const stderr = new BoundedUtf8Tail();
 			let settled = false;
 			const stdout = new JsonLineDecoder({
 				onLine: processLine,
@@ -835,10 +838,7 @@ const runSingleTask = async (options: {
 				},
 			});
 			const onStdout = (data: string | Uint8Array) => stdout.write(data);
-			const onStderr = (data: string | Uint8Array) => {
-				stderr.append(data);
-				currentResult.stderr = stderr.toString();
-			};
+			const onStderr = (data: string | Uint8Array) => stderr.append(data);
 			const cleanup = (keepTerminationTimer = false) => {
 				proc.stdout.removeListener("data", onStdout);
 				proc.stderr.removeListener("data", onStderr);
@@ -848,6 +848,7 @@ const runSingleTask = async (options: {
 				if (settled) return;
 				settled = true;
 				currentResult.exitCode = code;
+				currentResult.stderr = stderr.toString();
 				if (abortState.isAborted()) currentResult.stopReason = "aborted";
 				cleanup(keepTerminationTimer);
 				resolve(code);
@@ -1038,14 +1039,13 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS, spawnImpl: 
 					execution.config.thinkingLevel,
 					execution.config.modelLabel,
 				);
-				const emitSingleUpdate = (result: SingleResult) => {
-					if (!onUpdate) return;
-					onUpdate({
-						content: [{ type: "text", text: getFinalOutput(result.messages) || "(running...)" }],
-						details: makeDetails([result]),
-					});
-				};
-				emitSingleUpdate(initial);
+				const emitSingleUpdate = onUpdate
+					? (result: SingleResult) => onUpdate({
+							content: [{ type: "text", text: getFinalOutput(result.messages) || "(running...)" }],
+							details: makeDetails([result]),
+						})
+					: undefined;
+				emitSingleUpdate?.(initial);
 
 				const result = await runSingleTask({
 					defaultCwd: ctx.cwd,
@@ -1246,10 +1246,12 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS, spawnImpl: 
 						fork: execution.task.item.fork,
 						sessionFile,
 						signal,
-						onResultUpdate: (partial) => {
-							allResults[index] = partial;
-							emitParallelUpdate();
-						},
+						onResultUpdate: onUpdate
+							? (partial) => {
+									allResults[index] = partial;
+									emitParallelUpdate();
+								}
+							: undefined,
 						spawnImpl,
 					});
 					allResults[index] = result;

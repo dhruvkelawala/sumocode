@@ -535,7 +535,10 @@ export const createPiChildSpawner = (
 			} else {
 				settle({
 					kind: "failed",
-					errorText: errorMessage || stderr.toString() || (closeSignal ? `pi killed by ${closeSignal}` : `pi exited with code ${code ?? "unknown"}`),
+					errorText: boundRetainedResult(
+						errorMessage || stderr.toString() || (closeSignal ? `pi killed by ${closeSignal}` : `pi exited with code ${code ?? "unknown"}`),
+						ERROR_MAX,
+					),
 					partialText: finalAssistantText || undefined,
 				});
 			}

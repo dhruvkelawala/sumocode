@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+	BoundedUtf8Tail,
 	CHILD_JSON_FRAME_MAX_BYTES,
 	CHILD_RETAINED_RESULT_MAX_BYTES,
 	CHILD_STDERR_TAIL_MAX_BYTES,
@@ -14,7 +15,7 @@ import { taskTool } from "./native-task-tool.js";
 
 interface TaskUpdate {
 	content?: Array<{ type: string; text: string }>;
-	details: { results: Array<{ exitCode: number }> };
+	details: { results: Array<{ exitCode: number; stderr?: string; streamingText?: string }> };
 }
 
 interface TaskToolResult {
@@ -47,11 +48,11 @@ function registeredTask(spawned: FakeTaskProcess) {
 	};
 	// SAFETY: the Pi double exposes every taskTool registration/runtime method used here.
 	taskTool(undefined, vi.fn(() => spawned) as never)(pi as never);
-	const execute = (signal?: AbortSignal) => definition!.execute(
+	const execute = (signal?: AbortSignal, onUpdate?: (update: TaskUpdate) => void) => definition!.execute(
 		"bounded-task",
 		{ type: "single", tasks: [{ prompt: "bounded child", fork: false }] },
 		signal,
-		undefined,
+		onUpdate,
 		// SAFETY: the context double supplies the task execution surface.
 		{ cwd: process.cwd(), model: undefined, sessionManager: { getSessionFile: () => undefined } } as never,
 	);
@@ -250,6 +251,59 @@ describe("native task tool", () => {
 		expect(result.isError).toBe(true);
 		expect(stderr).toContain(TRUNCATED_TAIL_MARKER);
 		expect(Buffer.byteLength(stderr)).toBeLessThanOrEqual(CHILD_STDERR_TAIL_MAX_BYTES);
+	});
+
+	it("materializes stderr only when publishing an update or finishing", async () => {
+		const proc = new FakeTaskProcess();
+		const updates: TaskUpdate[] = [];
+		const materialize = vi.spyOn(BoundedUtf8Tail.prototype, "toString");
+		try {
+			const running = registeredTask(proc).execute(undefined, (update) => updates.push(update));
+
+			for (let index = 0; index < 100; index += 1) proc.stderr.emit("data", "diagnostic");
+			expect(materialize).not.toHaveBeenCalled();
+
+			proc.stdout.emit("data", `${JSON.stringify({ type: "tool_execution_start", toolCallId: "1", toolName: "read", args: {} })}\n`);
+			expect(materialize).toHaveBeenCalledTimes(1);
+			expect(updates.at(-1)?.details.results[0]?.stderr).toContain("diagnostic");
+
+			proc.emit("close", 2);
+			await running;
+			expect(materialize).toHaveBeenCalledTimes(2);
+		} finally {
+			materialize.mockRestore();
+		}
+	});
+
+	it("does not materialize stderr when updates have no reader", async () => {
+		const proc = new FakeTaskProcess();
+		const materialize = vi.spyOn(BoundedUtf8Tail.prototype, "toString");
+		try {
+			const running = registeredTask(proc).execute();
+			proc.stderr.emit("data", "diagnostic");
+			proc.stdout.emit("data", `${JSON.stringify({ type: "tool_execution_start", toolCallId: "1", toolName: "read", args: {} })}\n`);
+			expect(materialize).not.toHaveBeenCalled();
+
+			proc.emit("close", 2);
+			await running;
+			expect(materialize).toHaveBeenCalledOnce();
+		} finally {
+			materialize.mockRestore();
+		}
+	});
+
+	it("accumulates many multibyte streaming deltas exactly", async () => {
+		const proc = new FakeTaskProcess();
+		const updates: TaskUpdate[] = [];
+		const running = registeredTask(proc).execute(undefined, (update) => updates.push(update));
+
+		for (let index = 0; index < 1000; index += 1) {
+			proc.stdout.emit("data", `${JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "🧘" } })}\n`);
+		}
+		expect(updates.at(-1)?.details.results[0]?.streamingText).toBe("🧘".repeat(1000));
+
+		proc.emit("close", 0);
+		await running;
 	});
 
 	it("marks single-task setup failures as tool errors", async () => {

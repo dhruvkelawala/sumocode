@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+	BoundedUtf8Head,
 	BoundedUtf8Tail,
 	CHILD_JSON_FRAME_MAX_BYTES,
 	CHILD_RETAINED_RESULT_MAX_BYTES,
@@ -85,6 +86,66 @@ describe("JsonLineDecoder", () => {
 
 		expect(onError).toHaveBeenCalledOnce();
 		expect(onLine).not.toHaveBeenCalled();
+	});
+
+	it("grows retained storage from a small buffer and releases it at end", () => {
+		const stream = decoder({ frame: 1024 * 1024, unterminated: 1024 * 1024 });
+		expect(stream.value.retainedCapacityBytes).toBe(0);
+
+		stream.value.write("x");
+		expect(stream.value.retainedCapacityBytes).toBe(1024);
+		expect(stream.value.retainedCapacityBytes).toBeLessThan(1024 * 1024);
+
+		stream.value.write(Buffer.alloc(2000, 0x79));
+		expect(stream.value.retainedCapacityBytes).toBe(2048);
+		stream.value.end();
+		expect(stream.value.retainedCapacityBytes).toBe(0);
+	});
+
+	it("drops oversized frame capacity after emitting a line", () => {
+		const stream = decoder({ frame: 1024 * 1024, unterminated: 1024 * 1024 });
+		stream.value.write(Buffer.concat([Buffer.alloc(128 * 1024, 0x7a), Buffer.from("\n")]));
+
+		expect(stream.lines).toHaveLength(1);
+		expect(stream.value.retainedCapacityBytes).toBe(0);
+		stream.value.write("next");
+		expect(stream.value.retainedCapacityBytes).toBe(1024);
+	});
+});
+
+describe("BoundedUtf8Head", () => {
+	it("accounts for each multibyte delta once instead of rescanning retained text", () => {
+		const head = new BoundedUtf8Head();
+		const byteLength = vi.spyOn(Buffer, "byteLength");
+		try {
+			for (let index = 0; index < 5000; index += 1) head.append("🧘");
+
+			expect(head.retainedBytes).toBe(20_000);
+			expect(byteLength).toHaveBeenCalledTimes(5000);
+			expect(byteLength.mock.calls.every(([value]) => value === "🧘")).toBe(true);
+		} finally {
+			byteLength.mockRestore();
+		}
+	});
+
+	it("caps split multibyte deltas without breaking a codepoint", () => {
+		const head = new BoundedUtf8Head(40);
+		head.append("a".repeat(20));
+		head.append("🧘".repeat(10));
+
+		const value = head.toString();
+		expect(Buffer.byteLength(value)).toBeLessThanOrEqual(40);
+		expect(value).toContain(TRUNCATED_HEAD_MARKER);
+		expect(value).not.toContain("�");
+	});
+
+	it("applies the retained-result cap and marker across many deltas", () => {
+		const head = new BoundedUtf8Head();
+		for (let index = 0; index < 5; index += 1) head.append("x".repeat(1024 * 1024));
+
+		const value = head.toString();
+		expect(Buffer.byteLength(value)).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+		expect(value).toContain(TRUNCATED_HEAD_MARKER);
 	});
 });
 

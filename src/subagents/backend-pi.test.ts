@@ -262,7 +262,8 @@ describe("spawnPiChild", () => {
 		const settled = events.at(-1);
 		expect(settled).toMatchObject({ outcome: { kind: "failed", errorText: expect.stringContaining(TRUNCATED_TAIL_MARKER) } });
 		if (settled?.kind !== "run-settled" || settled.outcome.kind !== "failed") throw new Error("missing failed outcome");
-		expect(Buffer.byteLength(settled.outcome.errorText)).toBeLessThanOrEqual(CHILD_STDERR_TAIL_MAX_BYTES);
+		expect(settled.outcome.errorText).toContain(TRUNCATED_HEAD_MARKER);
+		expect(Buffer.byteLength(settled.outcome.errorText)).toBeLessThanOrEqual(4096);
 	});
 
 	it("processes a final partial JSON line on close", () => {

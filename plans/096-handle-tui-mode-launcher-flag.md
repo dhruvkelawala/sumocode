@@ -121,7 +121,7 @@ Cover space form, equals form, missing value, flags before/after the positional,
 
 Every Pi bump must diff the launcher's mirrored table against Pi's parser. Plan 101 adds that compatibility check to the supported-version matrix.
 
-## Repair evidence (run-20260829T190709Z-0625e26d attempt 1, commit `d26e92c`)
+## Repair evidence (run-20260829T190709Z-0625e26d attempt 1, commit `d0d5023`)
 
 Spec-review blockers against the pinned Pi 0.84.3 `dist/cli/args.js` `parseArgs()`, all three fixed in `extract_first_positional`:
 
@@ -168,7 +168,7 @@ Fixture table grew from 40 to 41 rows with the `--model -- --print PROMPT` delim
 
 ## Repair evidence (run-20260830T172321Z-56f523e4, whitespace task prompt)
 
-`f441079` rejects whitespace-only inline and `--prompt-file` task prompts by
+`0ba8e27` rejects whitespace-only inline and `--prompt-file` task prompts by
 stripping `[[:space:]]` before the non-empty check, matching the host's
 `submitRpcPrompt` trim-emptiness gate for ASCII whitespace. Launcher 62/62,
 integration 158/158, tsc/build/lint green.

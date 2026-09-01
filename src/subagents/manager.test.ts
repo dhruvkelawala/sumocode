@@ -281,6 +281,22 @@ describe("SubagentManager", () => {
 		expect(retained.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
 	});
 
+	it("moves a prior omission marker to the latest finalText", async () => {
+		const { manager, emitters } = deferredBackend();
+		await manager.spawn(makeTask("latest delivery"));
+		emitters.get("sa-1")?.({ kind: "message-end", role: "assistant", text: `first${TRUNCATED_HEAD_MARKER}`, replacesRetainedText: true });
+		emitters.get("sa-1")?.({ kind: "message-end", role: "user", text: "later context" });
+		const latest = `latest useful answer${TRUNCATED_HEAD_MARKER}`;
+		emitters.get("sa-1")?.({ kind: "message-end", role: "assistant", text: latest, replacesRetainedText: true });
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: latest } });
+
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
+		const snapshot = manager.get("sa-1");
+		expect(snapshot?.finalText).toBe(latest);
+		expect(snapshot?.transcript).toMatchObject([{ role: "assistant", text: latest }]);
+		expect(snapshot?.transcript.map((item) => item.text).join("").split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+	});
+
 	it("stores the manifest before completion listeners are notified", async () => {
 		let emitFn: ((event: SubagentEvent) => void) | undefined;
 		let resolveManifest: (manifest: CompletionManifest) => void = () => undefined;

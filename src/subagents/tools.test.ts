@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { TRUNCATED_HEAD_MARKER } from "../child-protocol.js";
 import { registerSubagentTools } from "./tools.js";
 import { SubagentManager, type SpawnSubagentTask } from "./manager.js";
 import { SUBAGENT_MAX_RUNNING, type SubagentEvent, type SubagentSnapshot } from "./domain.js";
@@ -375,6 +376,35 @@ describe("subagent tools", () => {
 		expect(text).toContain("partial progress");
 		expect(text).toContain("shared checkout · base base-re · +0 checkout commits · changed paths suppressed · checkout clean");
 		expect(waited).toMatchObject({ details: { activity: [{ id: `subagent:${id}`, status: "failed", result: { error: "provider exploded" } }] } });
+	});
+
+	it("keeps the omission marker through per-agent and aggregate wait projections", async () => {
+		const { tool, ctx, emitters, manager } = createHarness();
+		const ids: string[] = [];
+		for (let index = 0; index < 4; index += 1) {
+			// SAFETY: the ctx double carries only the fields the tool handlers read.
+			const spawned = await tool("subagent_spawn").execute(`spawn-${index}`, { prompt: "do", name: `worker-${index}` }, undefined, undefined, ctx as never);
+			// SAFETY: spawn results always expose details.subagent.id.
+			const id = (spawned as { details: { subagent: { id: string } } }).details.subagent.id;
+			ids.push(id);
+			const prefix = index === 3 ? "FOURTH-USEFUL:" : `RESULT-${index}:`;
+			const finalText = `${prefix}${"x".repeat((index === 3 ? 20 : 15) * 1024)}${index === 3 ? TRUNCATED_HEAD_MARKER : ""}`;
+			emitters.get(id)?.({ kind: "message-end", role: "assistant", text: finalText });
+			emitters.get(id)?.({ kind: "run-settled", outcome: { kind: "completed", finalText } });
+		}
+		await vi.waitFor(() => expect(ids.every((id) => manager.get(id)?.status === "done")).toBe(true));
+
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const one = await tool("subagent_wait").execute("wait-one", { ids: [ids[3]] }, undefined, undefined, ctx as never);
+		expect(Buffer.byteLength(textOf(one), "utf8")).toBeLessThanOrEqual(16 * 1024);
+		expect(textOf(one)).toContain("FOURTH-USEFUL:");
+		expect(textOf(one).split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const all = await tool("subagent_wait").execute("wait-all", { ids }, undefined, undefined, ctx as never);
+		expect(Buffer.byteLength(textOf(all), "utf8")).toBeLessThanOrEqual(48 * 1024);
+		expect(textOf(all)).toContain("FOURTH-USEFUL:");
+		expect(textOf(all).split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
 	});
 
 	it("cancel returns bounded metadata and Activity updates without raw snapshots", async () => {

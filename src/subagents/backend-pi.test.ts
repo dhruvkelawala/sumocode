@@ -293,6 +293,47 @@ describe("spawnPiChild", () => {
 		expect(retained.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
 	});
 
+	it("moves the sole marker onto a later clipped assistant completion", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+
+		emitJson(proc, { type: "message_end", message: { role: "user", content: "u".repeat(CHILD_RETAINED_RESULT_MAX_BYTES) } });
+		emitJson(proc, { type: "message_end", message: { role: "assistant", content: "first marked answer" } });
+		emitJson(proc, { type: "message_end", message: { role: "user", content: "later user context" } });
+		emitJson(proc, { type: "tool_result_end", message: { role: "toolResult", content: "later tool output" } });
+		emitJson(proc, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "later live delta" } });
+		emitJson(proc, { type: "message_end", message: { role: "assistant", content: `LATEST:${"界".repeat(CHILD_RETAINED_RESULT_MAX_BYTES / 2)}` } });
+		proc.emit("close", 0);
+
+		const finalMessage = events.filter((event) => event.kind === "message-end" && event.role === "assistant").at(-1);
+		const settled = events.at(-1);
+		expect(finalMessage).toMatchObject({ text: expect.stringMatching(/^LATEST:/), replacesRetainedText: true });
+		if (finalMessage?.kind !== "message-end" || settled?.kind !== "run-settled" || settled.outcome.kind !== "completed") throw new Error("missing completed result");
+		expect(finalMessage.text).toContain(TRUNCATED_HEAD_MARKER);
+		expect(settled.outcome.finalText).toBe(finalMessage.text);
+		expect(durableEventText(events).split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+		expect(Buffer.byteLength(durableEventText(events), "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+	});
+
+	it("propagates a clipped live stream marker to its completed assistant message", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+
+		emitJson(proc, { type: "message_end", message: { role: "user", content: "prior context" } });
+		emitJson(proc, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "s".repeat(CHILD_RETAINED_RESULT_MAX_BYTES) } });
+		emitJson(proc, { type: "message_end", message: { role: "assistant", content: "completed answer" } });
+
+		const finalMessage = events.filter((event) => event.kind === "message-end" && event.role === "assistant").at(-1);
+		expect(finalMessage).toMatchObject({ text: `completed answer${TRUNCATED_HEAD_MARKER}`, replacesRetainedText: true });
+		expect(durableEventText(events).split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+	});
+
 	it("keeps one marker when an interleaved message is omitted behind a truncated live stream", () => {
 		const proc = new FakeProcess();
 		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.

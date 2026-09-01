@@ -293,16 +293,20 @@ class PiRunPayloadBudget {
 		// SubagentManager replaces liveText only at the corresponding completed
 		// assistant message, so reclaim those provisional bytes at that boundary.
 		if (role === "assistant") {
+			const liveOmitted = this.liveTruncated || this.omissionBehindLive;
 			this.liveBytes = 0;
 			this.liveMarker = false;
 			this.liveTruncated = false;
-			requiresMarker = this.omissionBehindLive;
 			this.omissionBehindLive = false;
-			// The parent-facing result wins once prior completed text has exhausted
-			// the cap. Replace that transcript text rather than silently dropping the
-			// latest assistant result; one marker represents everything reclaimed.
+			// Any prior omission belongs on the newest real assistant answer. Reclaim
+			// earlier readable text so the marker and remaining cap move together.
 			const markerReserve = this.markerRetained ? 0 : this.markerBytes;
-			if (this.retainedFull || this.retainedBytes >= CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve) {
+			if (text.length > 0 && (
+				this.markerRetained ||
+				liveOmitted ||
+				this.retainedFull ||
+				this.retainedBytes >= CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve
+			)) {
 				this.retainedBytes = 0;
 				this.markerRetained = false;
 				this.retainedFull = false;
@@ -310,7 +314,7 @@ class PiRunPayloadBudget {
 				requiresMarker = true;
 			}
 		}
-		if (text.length === 0 && !requiresMarker) return { text: "" };
+		if (text.length === 0) return { text: "" };
 		if (this.retainedFull) return { text: "" };
 		if (this.liveTruncated) {
 			this.omissionBehindLive = text.length > 0;

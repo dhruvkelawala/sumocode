@@ -3136,53 +3136,80 @@ var applyPromptPatches = (prompt, patches) => {
 };
 var RunPayloadBudget = class {
   retainedBytes = 0;
+  liveBytes = 0;
   markerRetained = false;
-  retainedFull = false;
+  liveMarker = false;
+  liveTruncated = false;
   markerBytes = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
   get truncated() {
-    return this.markerRetained;
+    return this.markerRetained || this.liveMarker;
   }
   get full() {
-    const markerReserve = this.markerRetained ? 0 : this.markerBytes;
-    return this.retainedFull || this.retainedBytes >= CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve;
+    const markerReserve = this.truncated ? 0 : this.markerBytes;
+    return this.retainedBytes + this.liveBytes >= CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve;
   }
   retain(text, requiresMarker = false) {
-    if (text.length === 0 && !requiresMarker || this.retainedFull) return "";
+    if (text.length === 0) return "";
     const textBytes = Buffer.byteLength(text, "utf8");
-    if (requiresMarker && !this.markerRetained) {
-      const contentBytesLeft2 = CHILD_RETAINED_RESULT_MAX_BYTES - this.markerBytes - this.retainedBytes;
-      const retained2 = this.markedHead(text, Math.max(0, contentBytesLeft2));
-      this.retainedBytes += Buffer.byteLength(retained2, "utf8");
-      this.markerRetained = true;
-      this.retainedFull = textBytes > contentBytesLeft2;
-      return retained2;
-    }
-    const markerReserve = this.markerRetained ? 0 : this.markerBytes;
-    const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve - this.retainedBytes;
-    if (textBytes <= contentBytesLeft) {
+    const markerPresent = this.truncated;
+    const markerReserve = markerPresent ? 0 : this.markerBytes;
+    const contentBytesLeft = Math.max(0, CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve - this.retainedBytes - this.liveBytes);
+    if (!requiresMarker && textBytes <= contentBytesLeft) {
       this.retainedBytes += textBytes;
       return text;
     }
-    const retained = this.markerRetained ? this.unmarkedHead(text, Math.max(0, contentBytesLeft)) : boundRetainedResult(text, Math.max(this.markerBytes, CHILD_RETAINED_RESULT_MAX_BYTES - this.retainedBytes));
+    const retained = markerPresent ? this.unmarkedHead(text, contentBytesLeft) : this.markedHead(text, contentBytesLeft);
     this.retainedBytes += Buffer.byteLength(retained, "utf8");
-    this.markerRetained = true;
-    this.retainedFull = true;
+    if (!markerPresent) this.markerRetained = true;
     return retained;
   }
-  replace(previous, next) {
-    if (this.retainedFull) return previous;
-    if (previous !== void 0) this.retainedBytes -= Buffer.byteLength(previous, "utf8");
-    return this.retain(next);
+  replaceMany(previous, next) {
+    const hadMarker = previous.some((text) => text?.includes(TRUNCATED_HEAD_MARKER));
+    for (const text of previous) if (text !== void 0) this.release(text);
+    let needsMarker = hadMarker && !this.truncated;
+    return next.map((text) => {
+      if (text === void 0) return void 0;
+      const retained = this.retain(text, needsMarker);
+      if (retained.includes(TRUNCATED_HEAD_MARKER)) needsMarker = false;
+      return retained;
+    });
+  }
+  appendLive(delta) {
+    if (delta.length === 0 || this.liveTruncated) return "";
+    const deltaBytes = Buffer.byteLength(delta, "utf8");
+    const markerPresent = this.truncated;
+    const markerReserve = markerPresent ? 0 : this.markerBytes;
+    const contentBytesLeft = Math.max(0, CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve - this.retainedBytes - this.liveBytes);
+    if (deltaBytes <= contentBytesLeft) {
+      this.liveBytes += deltaBytes;
+      return delta;
+    }
+    const retained = markerPresent ? this.unmarkedHead(delta, contentBytesLeft) : this.markedHead(delta, contentBytesLeft);
+    this.liveBytes += Buffer.byteLength(retained, "utf8");
+    this.liveMarker = !markerPresent;
+    this.liveTruncated = true;
+    return retained;
+  }
+  releaseLive() {
+    const omitted = this.liveTruncated;
+    this.liveBytes = 0;
+    this.liveMarker = false;
+    this.liveTruncated = false;
+    return omitted;
   }
   reclaimForAssistant() {
     this.retainedBytes = 0;
+    this.liveBytes = 0;
     this.markerRetained = false;
-    this.retainedFull = false;
+    this.liveMarker = false;
+    this.liveTruncated = false;
+  }
+  release(text) {
+    this.retainedBytes = Math.max(0, this.retainedBytes - Buffer.byteLength(text, "utf8"));
+    if (text.includes(TRUNCATED_HEAD_MARKER)) this.markerRetained = false;
   }
   markedHead(text, contentBytes) {
-    const head = new BoundedUtf8Head(contentBytes + this.markerBytes);
-    head.append(text);
-    return head.append(TRUNCATED_HEAD_MARKER);
+    return boundRetainedResult(`${text}${TRUNCATED_HEAD_MARKER}`, contentBytes + this.markerBytes);
   }
   unmarkedHead(text, contentBytes) {
     return this.markedHead(text, contentBytes).slice(0, -TRUNCATED_HEAD_MARKER.length);
@@ -3257,6 +3284,10 @@ var stripYamlFrontmatter = (content) => {
   return normalized.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
 };
 var formatToolCall = (toolName, args, themeFg) => {
+  if (typeof args === "string") {
+    const preview2 = args.length > 60 ? `${args.slice(0, 60)}...` : args;
+    return themeFg("accent", toolName) + themeFg("dim", ` ${preview2}`);
+  }
   if (toolName === "bash") {
     const command = typeof args.command === "string" ? args.command : "...";
     const preview2 = command.length > 60 ? `${command.slice(0, 60)}...` : command;
@@ -3307,17 +3338,15 @@ var formatToolCall = (toolName, args, themeFg) => {
 var getFinalOutput = (messages) => {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
-    if (message.role === "assistant") {
-      for (const part of message.content) {
-        if (part.type === "text") return part.text;
-      }
-    }
+    if (message.role !== "assistant") continue;
+    const text = message.content.flatMap((part) => part.type === "text" ? [part.text] : []).join("");
+    if (text) return text;
   }
   return "";
 };
 var getFinalResultOutput = (result) => {
   const output = getFinalOutput(result.messages);
-  if (!output) return result.payloadTruncated ? TRUNCATED_HEAD_MARKER.trim() : "";
+  if (!output) return "";
   return result.payloadTruncated && !output.includes(TRUNCATED_HEAD_MARKER) ? `${output}${TRUNCATED_HEAD_MARKER}` : output;
 };
 var indentLine = (text, indent) => `${" ".repeat(indent)}${text}`;
@@ -3605,10 +3634,10 @@ var clearRetainedHumanText = (result) => {
       errorMessage: void 0
     };
   });
-  result.toolEvents = result.toolEvents.map((event) => ({ ...event, output: void 0 }));
+  result.toolEvents = result.toolEvents.map((event) => ({ ...event, args: {}, output: void 0 }));
   result.errorMessage = void 0;
 };
-var handleEventMessage = (result, message) => {
+var handleEventMessage = (result, message, liveOmitted = false) => {
   const budget = getRunPayloadBudget(result);
   if (message.role === "user") {
     result.messages.push({
@@ -3626,19 +3655,20 @@ var handleEventMessage = (result, message) => {
     result.payloadTruncated = budget.truncated || void 0;
     return;
   }
-  let requiresMarker = budget.full;
+  const hasAssistantText = message.content.some((part) => part.type === "text" && part.text.length > 0) || (message.errorMessage?.length ?? 0) > 0;
+  let requiresMarker = hasAssistantText && (budget.truncated || budget.full || liveOmitted);
   if (requiresMarker) {
     clearRetainedHumanText(result);
     budget.reclaimForAssistant();
   }
   const retainAssistantText = (text) => {
+    if (text.length === 0) return "";
     const retained2 = budget.retain(text, requiresMarker);
-    requiresMarker = false;
+    if (retained2.length > 0) requiresMarker = false;
     return retained2;
   };
-  let content = message.content.map((part) => part.type === "text" ? { ...part, text: retainAssistantText(part.text) } : part);
+  const content = message.content.map((part) => part.type === "text" ? { ...part, text: retainAssistantText(part.text) } : part);
   const errorMessage2 = message.errorMessage ? retainAssistantText(message.errorMessage) : void 0;
-  if (requiresMarker) content = [...content, { type: "text", text: retainAssistantText("") }];
   const retained = { ...message, content, errorMessage: errorMessage2 };
   result.messages.push(retained);
   result.payloadTruncated = budget.truncated || void 0;
@@ -3688,13 +3718,21 @@ var stringifyToolOutput = (value) => {
     return String(value);
   }
 };
+var toolArgsText = (args) => typeof args === "string" ? args : JSON.stringify(args);
 var upsertToolEvent = (result, event) => {
-  const key = event.id ?? `${event.name}:${JSON.stringify(event.args)}`;
-  const index = result.toolEvents.findIndex((item) => (item.id ?? `${item.name}:${JSON.stringify(item.args)}`) === key);
+  const key = event.id ?? `${event.name}:${JSON.stringify(event.args ?? {})}`;
+  const index = result.toolEvents.findIndex((item) => (item.id ?? `${item.name}:${toolArgsText(item.args)}`) === key);
   const previous = index === -1 ? void 0 : result.toolEvents[index];
+  const rawArgs = event.args ?? previous?.args ?? {};
+  const nextArgsText = toolArgsText(rawArgs);
+  const nextOutput = event.output === void 0 ? previous?.output : event.output;
   const budget = getRunPayloadBudget(result);
-  const output = event.output === void 0 ? previous?.output : budget.replace(previous?.output, event.output);
-  const retained = { ...previous, ...event, output };
+  const [argsText = "", output] = budget.replaceMany(
+    [previous ? toolArgsText(previous.args) : void 0, previous?.output],
+    [nextArgsText, nextOutput]
+  );
+  const args = typeof rawArgs !== "string" && argsText === nextArgsText ? rawArgs : argsText;
+  const retained = { ...previous, ...event, args, output };
   if (index === -1) result.toolEvents.push(retained);
   else result.toolEvents[index] = retained;
   result.payloadTruncated = budget.truncated || void 0;
@@ -3728,7 +3766,6 @@ var runSingleTask = async (options) => {
     thinking: options.thinking,
     fork: options.fork
   };
-  let streamingText = new BoundedUtf8Head();
   const stderr = new BoundedUtf8Tail();
   const emitUpdate = () => {
     if (!options.onResultUpdate) return;
@@ -3768,7 +3805,10 @@ var runSingleTask = async (options) => {
         if (typeText === "message_update") {
           const assistantEvent = isRecord(event.assistantMessageEvent) ? event.assistantMessageEvent : void 0;
           if (assistantEvent?.type === "text_delta" && typeof assistantEvent.delta === "string") {
-            currentResult.streamingText = streamingText.append(assistantEvent.delta);
+            const budget = getRunPayloadBudget(currentResult);
+            const retained = budget.appendLive(assistantEvent.delta);
+            if (retained) currentResult.streamingText = `${currentResult.streamingText ?? ""}${retained}`;
+            currentResult.payloadTruncated = budget.truncated || void 0;
             emitUpdate();
           }
         }
@@ -3776,7 +3816,7 @@ var runSingleTask = async (options) => {
           upsertToolEvent(currentResult, {
             id: typeof event.toolCallId === "string" ? event.toolCallId : void 0,
             name: typeof event.toolName === "string" ? event.toolName : "tool",
-            args: isRecord(event.args) ? event.args : {},
+            args: isRecord(event.args) ? event.args : void 0,
             status: "running"
           });
           emitUpdate();
@@ -3785,7 +3825,7 @@ var runSingleTask = async (options) => {
           upsertToolEvent(currentResult, {
             id: typeof event.toolCallId === "string" ? event.toolCallId : void 0,
             name: typeof event.toolName === "string" ? event.toolName : "tool",
-            args: isRecord(event.args) ? event.args : {},
+            args: isRecord(event.args) ? event.args : void 0,
             status: "running",
             output: stringifyToolOutput(event.partialResult)
           });
@@ -3795,7 +3835,7 @@ var runSingleTask = async (options) => {
           upsertToolEvent(currentResult, {
             id: typeof event.toolCallId === "string" ? event.toolCallId : void 0,
             name: typeof event.toolName === "string" ? event.toolName : "tool",
-            args: isRecord(event.args) ? event.args : {},
+            args: isRecord(event.args) ? event.args : void 0,
             status: event.isError === true ? "error" : "success",
             output: stringifyToolOutput(event.result)
           });
@@ -3803,11 +3843,12 @@ var runSingleTask = async (options) => {
         }
         const messageValue = event.message;
         if ((typeText === "message_end" || typeText === "tool_result_end") && isMessage(messageValue)) {
+          let liveOmitted = false;
           if (messageValue.role === "assistant") {
-            streamingText = new BoundedUtf8Head();
+            liveOmitted = getRunPayloadBudget(currentResult).releaseLive();
             currentResult.streamingText = void 0;
           }
-          handleEventMessage(currentResult, messageValue);
+          handleEventMessage(currentResult, messageValue, liveOmitted);
           emitUpdate();
         }
       };
@@ -15976,13 +16017,13 @@ var PiRunPayloadBudget = class {
     let replacesRetainedText = false;
     let requiresMarker = false;
     if (role === "assistant") {
+      const liveOmitted = this.liveTruncated || this.omissionBehindLive;
       this.liveBytes = 0;
       this.liveMarker = false;
       this.liveTruncated = false;
-      requiresMarker = this.omissionBehindLive;
       this.omissionBehindLive = false;
       const markerReserve2 = this.markerRetained ? 0 : this.markerBytes;
-      if (this.retainedFull || this.retainedBytes >= CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve2) {
+      if (text.length > 0 && (this.markerRetained || liveOmitted || this.retainedFull || this.retainedBytes >= CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve2)) {
         this.retainedBytes = 0;
         this.markerRetained = false;
         this.retainedFull = false;
@@ -15990,7 +16031,7 @@ var PiRunPayloadBudget = class {
         requiresMarker = true;
       }
     }
-    if (text.length === 0 && !requiresMarker) return { text: "" };
+    if (text.length === 0) return { text: "" };
     if (this.retainedFull) return { text: "" };
     if (this.liveTruncated) {
       this.omissionBehindLive = text.length > 0;
@@ -17210,21 +17251,42 @@ var formatSnapshotLine = (snapshot, includeBranch = false) => {
   return `${snapshot.id} [${snapshot.status}] "${snapshot.title}" (${identity}, ${formatDuration(Date.now() - snapshot.createdAt)}, ${snapshot.cwd})${branch}${pane}`;
 };
 var manifestSummary = (snapshot) => snapshot.manifest ? formatCompletionManifestSummary(snapshot.manifest) : void 0;
+var WAIT_AGENT_MAX_BYTES = 16 * 1024;
+var WAIT_TOTAL_MAX_BYTES = 48 * 1024;
+var WAIT_SEPARATOR = "\n\n---\n\n";
+var WAIT_MARKER_BYTES = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
+var boundWaitChunk = (text, maxBytes) => {
+  const hadMarker = text.includes(TRUNCATED_HEAD_MARKER);
+  const clean = hadMarker ? text.split(TRUNCATED_HEAD_MARKER).join("") : text;
+  return boundRetainedResult(hadMarker ? `${clean}${TRUNCATED_HEAD_MARKER}` : clean, maxBytes);
+};
 var boundedWaitText = (snapshots) => {
-  let remaining = 48 * 1024;
   const chunks = [];
+  let bytes = 0;
   for (const snapshot of snapshots) {
     const errorLine = snapshot.status === "error" && snapshot.errorText ? `error: ${snapshot.errorText}
 ` : "";
     const body = `${errorLine}${latestText(snapshot) || (errorLine ? "" : snapshot.errorText || "(no output)")}`;
-    const perAgent = body.slice(0, 16 * 1024);
-    const chunk = [`${snapshot.id} [${snapshot.status}] ${snapshot.title}`, manifestSummary(snapshot), perAgent].filter((line) => line !== void 0).join("\n");
-    const bounded2 = chunk.slice(0, remaining);
-    chunks.push(bounded2);
-    remaining -= bounded2.length;
-    if (remaining <= 0) break;
+    const raw = [`${snapshot.id} [${snapshot.status}] ${snapshot.title}`, manifestSummary(snapshot), body].filter((line) => line !== void 0).join("\n");
+    const chunk = boundWaitChunk(raw, WAIT_AGENT_MAX_BYTES);
+    const separatorBytes = chunks.length === 0 ? 0 : Buffer.byteLength(WAIT_SEPARATOR, "utf8");
+    const remaining = WAIT_TOTAL_MAX_BYTES - bytes - separatorBytes;
+    if (remaining <= WAIT_MARKER_BYTES) {
+      const last = chunks.at(-1);
+      if (last) {
+        chunks[chunks.length - 1] = boundWaitChunk(
+          `${last}${TRUNCATED_HEAD_MARKER}`,
+          Buffer.byteLength(last, "utf8")
+        );
+      }
+      break;
+    }
+    const retained = Buffer.byteLength(chunk, "utf8") <= remaining ? chunk : boundWaitChunk(chunk, remaining);
+    chunks.push(retained);
+    bytes += separatorBytes + Buffer.byteLength(retained, "utf8");
+    if (bytes >= WAIT_TOTAL_MAX_BYTES) break;
   }
-  return chunks.join("\n\n---\n\n");
+  return chunks.join(WAIT_SEPARATOR);
 };
 function registerSubagentTools(pi, manager, delivery, host = getTerminalHost(), roleLoader = loadRoles) {
   const registeredRoles = roleLoader().roles;

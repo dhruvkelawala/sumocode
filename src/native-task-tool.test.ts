@@ -1,3 +1,4 @@
+// oxlint-disable anti-slop/no-runtime-typeof -- retained args are object-shaped until the budget replaces them with a string preview.
 import { EventEmitter } from "node:events";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, promises as fsPromises, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -33,7 +34,7 @@ type RetainedMessage = {
 type RetainedTaskResult = {
 	exitCode: number;
 	messages?: RetainedMessage[];
-	toolEvents?: Array<{ id?: string; status: string; output?: string }>;
+	toolEvents?: Array<{ id?: string; name?: string; args?: object | string; status: string; output?: string }>;
 	stderr?: string;
 	streamingText?: string;
 	usage?: { turns: number };
@@ -107,7 +108,11 @@ function retainedPayloadText(result: RetainedTaskResult): string[] {
 		}
 		if (message.errorMessage !== undefined) text.push(message.errorMessage);
 	}
-	for (const event of result.toolEvents ?? []) if (event.output !== undefined) text.push(event.output);
+	for (const event of result.toolEvents ?? []) {
+		if (event.args !== undefined) text.push(typeof event.args === "string" ? event.args : JSON.stringify(event.args));
+		if (event.output !== undefined) text.push(event.output);
+	}
+	if (result.streamingText !== undefined) text.push(result.streamingText);
 	return text;
 }
 
@@ -453,6 +458,40 @@ describe("native task tool", () => {
 		]);
 	});
 
+	it("bounds large native tool args and replaces repeated updates without double charging", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		const largeArgs = (suffix: string) => ({ path: `file-${suffix}.txt`, content: `${suffix}:${"x".repeat(1024 * 1024)}` });
+
+		for (let index = 0; index < 6; index += 1) {
+			emitTaskEvent(proc, {
+				type: "tool_execution_start",
+				toolCallId: `write-${index}`,
+				toolName: "write",
+				args: largeArgs(`start-${index}`),
+			});
+		}
+		for (const suffix of ["update-a", "update-b", "latest"]) {
+			emitTaskEvent(proc, {
+				type: "tool_execution_update",
+				toolCallId: "write-0",
+				toolName: "write",
+				args: largeArgs(suffix),
+			});
+		}
+		proc.emit("close", 0);
+
+		const toolResult = await running;
+		const result = toolResult.details?.results?.[0];
+		if (!result) throw new Error("task result is missing");
+		const payload = retainedPayloadText(result).join("");
+		expect(Buffer.byteLength(payload, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+		expect(payload.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+		expect(result.toolEvents).toHaveLength(6);
+		expect(result.toolEvents?.[0]).toMatchObject({ id: "write-0", name: "write", status: "running" });
+		expect(payload).toContain("latest");
+	});
+
 	it("prioritizes a useful marked final answer and reclaims exhausted prior text", async () => {
 		const proc = new FakeTaskProcess();
 		const running = registeredTask(proc).execute();
@@ -467,7 +506,7 @@ describe("native task tool", () => {
 			type: "tool_execution_end",
 			toolCallId: "early-tool",
 			toolName: "read",
-			args: { path: "large" },
+			args: { path: "large", content: "x".repeat(CHILD_RETAINED_RESULT_MAX_BYTES) },
 			result: "omitted tool output",
 			isError: false,
 		});
@@ -494,11 +533,11 @@ describe("native task tool", () => {
 		expect(payload.reduce((bytes, value) => bytes + Buffer.byteLength(value, "utf8"), 0)).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
 		expect(payload.join("").split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
 		expect(Array.isArray(firstMessage?.content) ? firstMessage.content[0]?.text : firstMessage?.content).toBe("");
-		expect(result.toolEvents?.[0]).toMatchObject({ id: "early-tool", status: "success", output: undefined });
+		expect(result.toolEvents?.[0]).toMatchObject({ id: "early-tool", status: "success", args: {}, output: undefined });
 		expect(result.usage?.turns).toBe(1);
 	});
 
-	it("uses remaining headroom for turns after a priority replacement", async () => {
+	it("lets intervening events use headroom before moving the marker to the next assistant", async () => {
 		const proc = new FakeTaskProcess();
 		const running = registeredTask(proc).execute();
 		const usage = { input: 0, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 1, cost: { total: 0 } };
@@ -516,14 +555,89 @@ describe("native task tool", () => {
 		const result = toolResult.details?.results?.[0];
 		if (!result) throw new Error("task result is missing");
 		const payload = retainedPayloadText(result).join("");
-		expect(payload).toContain("first answer");
-		expect(payload).toContain("later tool output");
+		expect(payload).not.toContain("first answer");
+		expect(payload).not.toContain("later tool output");
 		expect(payload).toContain("second answer");
 		expect(payload.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
 		expect(Buffer.byteLength(payload, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
 		expect(toolResult.content[0]?.text).toContain("second answer");
 		expect(toolResult.content[0]?.text).toContain(TRUNCATED_HEAD_MARKER);
 		expect(result.usage?.turns).toBe(2);
+	});
+
+	it("shares the run budget with a live stream on mid-stream close", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		const usage = { input: 0, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 1, cost: { total: 0 } };
+
+		emitTaskEvent(proc, { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "prior:" + "p".repeat(1024 * 1024) }], usage } });
+		emitTaskEvent(proc, {
+			type: "tool_execution_end",
+			toolCallId: "mid-stream-write",
+			toolName: "write",
+			args: { path: "large.txt", content: "a".repeat(256 * 1024) },
+			result: "o".repeat(256 * 1024),
+			isError: false,
+		});
+		for (let index = 0; index < 4; index += 1) {
+			emitTaskEvent(proc, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "s".repeat(1024 * 1024) } });
+		}
+		proc.emit("close", 0);
+
+		const toolResult = await running;
+		const result = toolResult.details?.results?.[0];
+		if (!result) throw new Error("task result is missing");
+		const payload = retainedPayloadText(result).join("");
+		expect(Buffer.byteLength(payload, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+		expect(payload.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+		expect(result.streamingText).toContain(TRUNCATED_HEAD_MARKER);
+	});
+
+	it("moves a clipped provisional stream marker to the durable final output", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		const usage = { input: 0, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 1, cost: { total: 0 } };
+
+		emitTaskEvent(proc, { type: "message_end", message: { role: "user", content: "prior:" + "p".repeat(1024 * 1024) } });
+		for (let index = 0; index < 4; index += 1) {
+			emitTaskEvent(proc, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "s".repeat(1024 * 1024) } });
+		}
+		emitTaskEvent(proc, { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "FINAL:" + "f".repeat(3 * 1024 * 1024) }], usage } });
+		proc.emit("close", 0);
+
+		const toolResult = await running;
+		const result = toolResult.details?.results?.[0];
+		if (!result) throw new Error("task result is missing");
+		const payload = retainedPayloadText(result).join("");
+		expect(result.streamingText).toBeUndefined();
+		expect(toolResult.content[0]?.text).toMatch(/^FINAL:/);
+		expect(toolResult.content[0]?.text).toContain(TRUNCATED_HEAD_MARKER);
+		expect(payload.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+		expect(Buffer.byteLength(payload, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+	});
+
+	it("keeps multi-part and later empty assistant messages useful and UTF-8 clean", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		const usage = { input: 0, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 1, cost: { total: 0 } };
+
+		emitTaskEvent(proc, { type: "message_end", message: { role: "user", content: "u".repeat(CHILD_RETAINED_RESULT_MAX_BYTES) } });
+		emitTaskEvent(proc, {
+			type: "message_end",
+			message: { role: "assistant", content: [{ type: "text", text: "" }, { type: "text", text: `FINAL:${"界".repeat(CHILD_RETAINED_RESULT_MAX_BYTES / 2)}` }], usage },
+		});
+		emitTaskEvent(proc, { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "" }], usage } });
+		proc.emit("close", 0);
+
+		const toolResult = await running;
+		const result = toolResult.details?.results?.[0];
+		if (!result) throw new Error("task result is missing");
+		const payload = retainedPayloadText(result).join("");
+		expect(toolResult.content[0]?.text).toMatch(/^FINAL:/);
+		expect(toolResult.content[0]?.text).not.toBe(TRUNCATED_HEAD_MARKER.trim());
+		expect(payload.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+		expect(payload).not.toContain("�");
+		expect(Buffer.byteLength(payload, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
 	});
 
 	it("preserves cancellation and clears its force-kill timer on close", async () => {

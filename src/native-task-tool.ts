@@ -18,7 +18,6 @@ import {
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
-	BoundedUtf8Head,
 	BoundedUtf8Tail,
 	CHILD_RETAINED_RESULT_MAX_BYTES,
 	JsonLineDecoder,
@@ -112,66 +111,97 @@ type SingleResult = {
 	index?: number;
 };
 
-/** Owns the human-readable text retained by one child run. */
+/** Owns durable and provisional human-readable text for one child run. */
 class RunPayloadBudget {
 	private retainedBytes = 0;
+	private liveBytes = 0;
 	private markerRetained = false;
-	private retainedFull = false;
+	private liveMarker = false;
+	private liveTruncated = false;
 	private readonly markerBytes = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
 
 	public get truncated(): boolean {
-		return this.markerRetained;
+		return this.markerRetained || this.liveMarker;
 	}
 
 	public get full(): boolean {
-		const markerReserve = this.markerRetained ? 0 : this.markerBytes;
-		return this.retainedFull || this.retainedBytes >= CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve;
+		const markerReserve = this.truncated ? 0 : this.markerBytes;
+		return this.retainedBytes + this.liveBytes >= CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve;
 	}
 
 	public retain(text: string, requiresMarker = false): string {
-		if ((text.length === 0 && !requiresMarker) || this.retainedFull) return "";
+		if (text.length === 0) return "";
 		const textBytes = Buffer.byteLength(text, "utf8");
-		if (requiresMarker && !this.markerRetained) {
-			const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - this.markerBytes - this.retainedBytes;
-			const retained = this.markedHead(text, Math.max(0, contentBytesLeft));
-			this.retainedBytes += Buffer.byteLength(retained, "utf8");
-			this.markerRetained = true;
-			this.retainedFull = textBytes > contentBytesLeft;
-			return retained;
-		}
-
-		const markerReserve = this.markerRetained ? 0 : this.markerBytes;
-		const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve - this.retainedBytes;
-		if (textBytes <= contentBytesLeft) {
+		const markerPresent = this.truncated;
+		const markerReserve = markerPresent ? 0 : this.markerBytes;
+		const contentBytesLeft = Math.max(0, CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve - this.retainedBytes - this.liveBytes);
+		if (!requiresMarker && textBytes <= contentBytesLeft) {
 			this.retainedBytes += textBytes;
 			return text;
 		}
 
-		const retained = this.markerRetained
-			? this.unmarkedHead(text, Math.max(0, contentBytesLeft))
-			: boundRetainedResult(text, Math.max(this.markerBytes, CHILD_RETAINED_RESULT_MAX_BYTES - this.retainedBytes));
+		const retained = markerPresent
+			? this.unmarkedHead(text, contentBytesLeft)
+			: this.markedHead(text, contentBytesLeft);
 		this.retainedBytes += Buffer.byteLength(retained, "utf8");
-		this.markerRetained = true;
-		this.retainedFull = true;
+		if (!markerPresent) this.markerRetained = true;
 		return retained;
 	}
 
-	public replace(previous: string | undefined, next: string): string | undefined {
-		if (this.retainedFull) return previous;
-		if (previous !== undefined) this.retainedBytes -= Buffer.byteLength(previous, "utf8");
-		return this.retain(next);
+	public replaceMany(previous: readonly (string | undefined)[], next: readonly (string | undefined)[]): Array<string | undefined> {
+		const hadMarker = previous.some((text) => text?.includes(TRUNCATED_HEAD_MARKER));
+		for (const text of previous) if (text !== undefined) this.release(text);
+		let needsMarker = hadMarker && !this.truncated;
+		return next.map((text) => {
+			if (text === undefined) return undefined;
+			const retained = this.retain(text, needsMarker);
+			if (retained.includes(TRUNCATED_HEAD_MARKER)) needsMarker = false;
+			return retained;
+		});
+	}
+
+	public appendLive(delta: string): string {
+		if (delta.length === 0 || this.liveTruncated) return "";
+		const deltaBytes = Buffer.byteLength(delta, "utf8");
+		const markerPresent = this.truncated;
+		const markerReserve = markerPresent ? 0 : this.markerBytes;
+		const contentBytesLeft = Math.max(0, CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve - this.retainedBytes - this.liveBytes);
+		if (deltaBytes <= contentBytesLeft) {
+			this.liveBytes += deltaBytes;
+			return delta;
+		}
+		const retained = markerPresent
+			? this.unmarkedHead(delta, contentBytesLeft)
+			: this.markedHead(delta, contentBytesLeft);
+		this.liveBytes += Buffer.byteLength(retained, "utf8");
+		this.liveMarker = !markerPresent;
+		this.liveTruncated = true;
+		return retained;
+	}
+
+	public releaseLive(): boolean {
+		const omitted = this.liveTruncated;
+		this.liveBytes = 0;
+		this.liveMarker = false;
+		this.liveTruncated = false;
+		return omitted;
 	}
 
 	public reclaimForAssistant(): void {
 		this.retainedBytes = 0;
+		this.liveBytes = 0;
 		this.markerRetained = false;
-		this.retainedFull = false;
+		this.liveMarker = false;
+		this.liveTruncated = false;
+	}
+
+	private release(text: string): void {
+		this.retainedBytes = Math.max(0, this.retainedBytes - Buffer.byteLength(text, "utf8"));
+		if (text.includes(TRUNCATED_HEAD_MARKER)) this.markerRetained = false;
 	}
 
 	private markedHead(text: string, contentBytes: number): string {
-		const head = new BoundedUtf8Head(contentBytes + this.markerBytes);
-		head.append(text);
-		return head.append(TRUNCATED_HEAD_MARKER);
+		return boundRetainedResult(`${text}${TRUNCATED_HEAD_MARKER}`, contentBytes + this.markerBytes);
 	}
 
 	private unmarkedHead(text: string, contentBytes: number): string {
@@ -204,10 +234,12 @@ type OverallStatus = "Running" | "Done" | "Failed";
 type ToolCallItem = {
 	id?: string;
 	name: string;
-	args: Record<string, unknown>;
+	args: Record<string, unknown> | string;
 	status: "pending" | "running" | "success" | "error" | "cancelled";
 	output?: string;
 };
+
+type ToolCallUpdate = Omit<ToolCallItem, "args"> & { args?: Record<string, unknown> };
 
 type PreparedTask = {
 	item: TaskWorkItem;
@@ -300,9 +332,13 @@ const stripYamlFrontmatter = (content: string): string => {
 
 const formatToolCall = (
 	toolName: string,
-	args: Record<string, unknown>,
+	args: Record<string, unknown> | string,
 	themeFg: (color: ThemeColor, text: string) => string,
 ): string => {
+	if (typeof args === "string") {
+		const preview = args.length > 60 ? `${args.slice(0, 60)}...` : args;
+		return themeFg("accent", toolName) + themeFg("dim", ` ${preview}`);
+	}
 	if (toolName === "bash") {
 		const command = typeof args.command === "string" ? args.command : "...";
 		const preview = command.length > 60 ? `${command.slice(0, 60)}...` : command;
@@ -366,18 +402,16 @@ const formatToolCall = (
 const getFinalOutput = (messages: Message[]): string => {
 	for (let index = messages.length - 1; index >= 0; index--) {
 		const message = messages[index];
-		if (message.role === "assistant") {
-			for (const part of message.content) {
-				if (part.type === "text") return part.text;
-			}
-		}
+		if (message.role !== "assistant") continue;
+		const text = message.content.flatMap((part) => part.type === "text" ? [part.text] : []).join("");
+		if (text) return text;
 	}
 	return "";
 };
 
 const getFinalResultOutput = (result: SingleResult): string => {
 	const output = getFinalOutput(result.messages);
-	if (!output) return result.payloadTruncated ? TRUNCATED_HEAD_MARKER.trim() : "";
+	if (!output) return "";
 	return result.payloadTruncated && !output.includes(TRUNCATED_HEAD_MARKER)
 		? `${output}${TRUNCATED_HEAD_MARKER}`
 		: output;
@@ -725,11 +759,11 @@ const clearRetainedHumanText = (result: SingleResult): void => {
 			errorMessage: undefined,
 		};
 	});
-	result.toolEvents = result.toolEvents.map((event) => ({ ...event, output: undefined }));
+	result.toolEvents = result.toolEvents.map((event) => ({ ...event, args: {}, output: undefined }));
 	result.errorMessage = undefined;
 };
 
-const handleEventMessage = (result: SingleResult, message: Message): void => {
+const handleEventMessage = (result: SingleResult, message: Message, liveOmitted = false): void => {
 	const budget = getRunPayloadBudget(result);
 	if (message.role === "user") {
 		result.messages.push({
@@ -749,19 +783,21 @@ const handleEventMessage = (result: SingleResult, message: Message): void => {
 		result.payloadTruncated = budget.truncated || undefined;
 		return;
 	}
-	let requiresMarker = budget.full;
+	const hasAssistantText = message.content.some((part) => part.type === "text" && part.text.length > 0)
+		|| (message.errorMessage?.length ?? 0) > 0;
+	let requiresMarker = hasAssistantText && (budget.truncated || budget.full || liveOmitted);
 	if (requiresMarker) {
 		clearRetainedHumanText(result);
 		budget.reclaimForAssistant();
 	}
 	const retainAssistantText = (text: string): string => {
+		if (text.length === 0) return "";
 		const retained = budget.retain(text, requiresMarker);
-		requiresMarker = false;
+		if (retained.length > 0) requiresMarker = false;
 		return retained;
 	};
-	let content = message.content.map((part) => part.type === "text" ? { ...part, text: retainAssistantText(part.text) } : part);
+	const content = message.content.map((part) => part.type === "text" ? { ...part, text: retainAssistantText(part.text) } : part);
 	const errorMessage = message.errorMessage ? retainAssistantText(message.errorMessage) : undefined;
-	if (requiresMarker) content = [...content, { type: "text", text: retainAssistantText("") }];
 	const retained: AssistantMessage = { ...message, content, errorMessage };
 	result.messages.push(retained);
 	result.payloadTruncated = budget.truncated || undefined;
@@ -826,13 +862,22 @@ const stringifyToolOutput = (value: unknown): string | undefined => {
 	}
 };
 
-const upsertToolEvent = (result: SingleResult, event: ToolCallItem): void => {
-	const key = event.id ?? `${event.name}:${JSON.stringify(event.args)}`;
-	const index = result.toolEvents.findIndex((item) => (item.id ?? `${item.name}:${JSON.stringify(item.args)}`) === key);
+const toolArgsText = (args: ToolCallItem["args"]): string => typeof args === "string" ? args : JSON.stringify(args);
+
+const upsertToolEvent = (result: SingleResult, event: ToolCallUpdate): void => {
+	const key = event.id ?? `${event.name}:${JSON.stringify(event.args ?? {})}`;
+	const index = result.toolEvents.findIndex((item) => (item.id ?? `${item.name}:${toolArgsText(item.args)}`) === key);
 	const previous = index === -1 ? undefined : result.toolEvents[index];
+	const rawArgs = event.args ?? previous?.args ?? {};
+	const nextArgsText = toolArgsText(rawArgs);
+	const nextOutput = event.output === undefined ? previous?.output : event.output;
 	const budget = getRunPayloadBudget(result);
-	const output = event.output === undefined ? previous?.output : budget.replace(previous?.output, event.output);
-	const retained = { ...previous, ...event, output };
+	const [argsText = "", output] = budget.replaceMany(
+		[previous ? toolArgsText(previous.args) : undefined, previous?.output],
+		[nextArgsText, nextOutput],
+	);
+	const args = typeof rawArgs !== "string" && argsText === nextArgsText ? rawArgs : argsText;
+	const retained: ToolCallItem = { ...previous, ...event, args, output };
 	if (index === -1) result.toolEvents.push(retained);
 	else result.toolEvents[index] = retained;
 	result.payloadTruncated = budget.truncated || undefined;
@@ -888,7 +933,6 @@ const runSingleTask = async (options: {
 		fork: options.fork,
 	};
 
-	let streamingText = new BoundedUtf8Head();
 	const stderr = new BoundedUtf8Tail();
 	const emitUpdate = () => {
 		if (!options.onResultUpdate) return;
@@ -934,7 +978,10 @@ const runSingleTask = async (options: {
 				if (typeText === "message_update") {
 					const assistantEvent = isRecord(event.assistantMessageEvent) ? event.assistantMessageEvent : undefined;
 					if (assistantEvent?.type === "text_delta" && typeof assistantEvent.delta === "string") {
-						currentResult.streamingText = streamingText.append(assistantEvent.delta);
+						const budget = getRunPayloadBudget(currentResult);
+						const retained = budget.appendLive(assistantEvent.delta);
+						if (retained) currentResult.streamingText = `${currentResult.streamingText ?? ""}${retained}`;
+						currentResult.payloadTruncated = budget.truncated || undefined;
 						emitUpdate();
 					}
 				}
@@ -942,7 +989,7 @@ const runSingleTask = async (options: {
 					upsertToolEvent(currentResult, {
 						id: typeof event.toolCallId === "string" ? event.toolCallId : undefined,
 						name: typeof event.toolName === "string" ? event.toolName : "tool",
-						args: isRecord(event.args) ? event.args : {},
+						args: isRecord(event.args) ? event.args : undefined,
 						status: "running",
 					});
 					emitUpdate();
@@ -951,7 +998,7 @@ const runSingleTask = async (options: {
 					upsertToolEvent(currentResult, {
 						id: typeof event.toolCallId === "string" ? event.toolCallId : undefined,
 						name: typeof event.toolName === "string" ? event.toolName : "tool",
-						args: isRecord(event.args) ? event.args : {},
+						args: isRecord(event.args) ? event.args : undefined,
 						status: "running",
 						output: stringifyToolOutput(event.partialResult),
 					});
@@ -961,7 +1008,7 @@ const runSingleTask = async (options: {
 					upsertToolEvent(currentResult, {
 						id: typeof event.toolCallId === "string" ? event.toolCallId : undefined,
 						name: typeof event.toolName === "string" ? event.toolName : "tool",
-						args: isRecord(event.args) ? event.args : {},
+						args: isRecord(event.args) ? event.args : undefined,
 						status: event.isError === true ? "error" : "success",
 						output: stringifyToolOutput(event.result),
 					});
@@ -969,11 +1016,12 @@ const runSingleTask = async (options: {
 				}
 				const messageValue = event.message;
 				if ((typeText === "message_end" || typeText === "tool_result_end") && isMessage(messageValue)) {
+					let liveOmitted = false;
 					if (messageValue.role === "assistant") {
-						streamingText = new BoundedUtf8Head();
+						liveOmitted = getRunPayloadBudget(currentResult).releaseLive();
 						currentResult.streamingText = undefined;
 					}
-					handleEventMessage(currentResult, messageValue);
+					handleEventMessage(currentResult, messageValue, liveOmitted);
 					emitUpdate();
 				}
 			};

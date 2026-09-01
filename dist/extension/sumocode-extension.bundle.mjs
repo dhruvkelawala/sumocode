@@ -16039,7 +16039,18 @@ ${options.prompt}` : options.prompt;
     }
   };
   const poll = () => {
-    if (settled || interrupted || !fs3.existsSync(paths.exitFile)) return;
+    if (settled || interrupted) return;
+    let exitStat;
+    try {
+      exitStat = fs3.lstatSync(paths.exitFile);
+    } catch {
+      exitStat = void 0;
+    }
+    if (!exitStat) return;
+    if (!exitStat.isFile()) {
+      settle({ kind: "run-settled", outcome: { kind: "failed", errorText: "visible child exit marker replaced by a non-regular entry" } });
+      return;
+    }
     const marker = readText(paths.exitFile, "exit marker");
     if (!marker.trim()) return;
     const exitCode = readExitCodeFromFile(marker);
@@ -18257,13 +18268,10 @@ function installControlWatcher(pi, controlDir, hooks, unlinkControl) {
   let stopped = false;
   let timer;
   const canonicalControlDir = resolve8(controlDir);
-  let controlDirValidated = false;
   let controlDirRefusalLogged = false;
   const ensureControlDirValidated = () => {
-    if (controlDirValidated) return true;
     try {
       assertPrivateDir(artifactFs, canonicalControlDir, "task control directory");
-      controlDirValidated = true;
       return true;
     } catch (error) {
       if (!isErrnoCode(error, "ENOENT") && !controlDirRefusalLogged) {
@@ -18276,8 +18284,7 @@ function installControlWatcher(pi, controlDir, hooks, unlinkControl) {
       return false;
     }
   };
-  const controlDirReady = ensureControlDirValidated();
-  if (!controlDirReady && existsSync12(canonicalControlDir)) {
+  if (!ensureControlDirValidated() && existsSync12(canonicalControlDir)) {
     return () => void 0;
   }
   const stop = () => {

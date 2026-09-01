@@ -17,6 +17,7 @@ export { SubagentManager } from "./manager.js";
 export type { AtCapacityDetails, SpawnSubagentTask } from "./manager.js";
 
 const SUBAGENT_STATUS_WIDGET_KEY = "sumocode-subagents";
+const SUBAGENT_DELIVERY_ERROR_MAX = 4_096;
 
 /** Delivery `details` contract for a settled subagent result. */
 interface SettledSubagentDetails {
@@ -206,17 +207,23 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 	};
 
 	const flush = (): void => {
-		delivery.flush((payload) => {
-			pi.sendMessage(
-				{
-					customType: "subagent-result",
-					content: payload.content,
-					display: true,
-					details: payload.details,
-				},
-				{ deliverAs: "followUp", triggerTurn: true },
-			);
-		});
+		try {
+			delivery.flush((payload) => {
+				pi.sendMessage(
+					{
+						customType: "subagent-result",
+						content: payload.content,
+						display: true,
+						details: payload.details,
+					},
+					{ deliverAs: "followUp", triggerTurn: true },
+				);
+			});
+		// oxlint-disable-next-line anti-slop/no-unknown-parameters -- ExtensionAPI.sendMessage may throw any JavaScript value at this effect boundary.
+		} catch (error: unknown) {
+			const message = (error instanceof Error ? error.message : String(error)).slice(0, SUBAGENT_DELIVERY_ERROR_MAX);
+			logDiagnostic("subagent_delivery_failed", { message });
+		}
 	};
 
 	const onManagerChange = (): void => {

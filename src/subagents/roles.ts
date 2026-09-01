@@ -75,7 +75,12 @@ export interface LoadRolesDependencies {
 }
 
 export type RoleWarning =
-	| { readonly scope: "file"; readonly blocksOverlays: boolean; readonly message: string }
+	| {
+		readonly scope: "file";
+		/** True only when the file could not be loaded, so custom overlays are unavailable. */
+		readonly blocksOverlays: boolean;
+		readonly message: string;
+	}
 	| { readonly scope: "role"; readonly roleId: string; readonly message: string };
 
 export interface LoadedRoles {

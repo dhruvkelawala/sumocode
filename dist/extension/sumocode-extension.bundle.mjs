@@ -17913,6 +17913,7 @@ ${boundedWaitText(settled)}` : lines.join("\n");
 
 // src/subagents/index.ts
 var SUBAGENT_STATUS_WIDGET_KEY = "sumocode-subagents";
+var SUBAGENT_DELIVERY_ERROR_MAX = 4096;
 var settledPayload = (snapshot) => {
   const result = buildSubagentResultMessage({
     id: snapshot.id,
@@ -18045,17 +18046,22 @@ function installSubagents(pi, options = {}) {
     statusWidgetVisible = false;
   };
   const flush = () => {
-    delivery.flush((payload) => {
-      pi.sendMessage(
-        {
-          customType: "subagent-result",
-          content: payload.content,
-          display: true,
-          details: payload.details
-        },
-        { deliverAs: "followUp", triggerTurn: true }
-      );
-    });
+    try {
+      delivery.flush((payload) => {
+        pi.sendMessage(
+          {
+            customType: "subagent-result",
+            content: payload.content,
+            display: true,
+            details: payload.details
+          },
+          { deliverAs: "followUp", triggerTurn: true }
+        );
+      });
+    } catch (error) {
+      const message = (error instanceof Error ? error.message : String(error)).slice(0, SUBAGENT_DELIVERY_ERROR_MAX);
+      logDiagnostic("subagent_delivery_failed", { message });
+    }
   };
   const onManagerChange = () => {
     for (const snapshot of manager.list()) {

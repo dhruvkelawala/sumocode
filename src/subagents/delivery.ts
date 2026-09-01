@@ -17,6 +17,11 @@ export interface DeferredResultDelivery {
 	 * agent_end instead of being silently lost.
 	 */
 	forget(id: string): void;
+	/**
+	 * Send pending payloads in FIFO order, acknowledging each only after send
+	 * returns. A throw preserves that payload for at-least-once retry, so an
+	 * ambiguous send failure may be observed again by the receiver.
+	 */
 	flush(send: (payload: DeliveryPayload) => void): void;
 	clear(): void;
 	readonly size: number;

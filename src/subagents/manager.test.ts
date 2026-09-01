@@ -233,6 +233,7 @@ describe("SubagentManager", () => {
 
 	it("contains async iterator rejection", async () => {
 		const unhandled: unknown[] = [];
+		// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Node's unhandledRejection event exposes arbitrary rejection values.
 		const onUnhandled = (error: unknown): void => { unhandled.push(error); };
 		process.on("unhandledRejection", onUnhandled);
 		try {

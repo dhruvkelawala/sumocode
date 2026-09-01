@@ -683,9 +683,11 @@ export class SubagentManager {
 			events(emit);
 			return;
 		}
-		void (async () => {
+		const consume = async (): Promise<void> => {
 			for await (const event of events) emit(event);
-		})().catch((error: unknown) => {
+		};
+		// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Promise rejection boundary: backend async iterators may reject with any JavaScript value.
+		void consume().catch((error: unknown) => {
 			const current = this.snapshots.get(id);
 			if (!current || isSettled(current)) return;
 			const message = error instanceof Error ? error.message : String(error);

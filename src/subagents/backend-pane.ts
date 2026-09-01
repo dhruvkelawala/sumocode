@@ -392,8 +392,12 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 			writeNewPrivateFile(fs, join(paths.controlDir, CLOSE_REQUEST_FILE), "1");
 		} catch (error) {
 			// A repeat close request for an unconsumed control is idempotent, not an
-			// error: the request is already published. Anything else propagates.
+			// error: the request is already published. A planted entry raising the
+			// same EEXIST is not: it must still pass the private-artifact check or
+			// the error propagates (the manager surfaces it per id) instead of the
+			// close being reported as requested through an untrusted path.
 			if (!isEexist(error)) throw error;
+			assertPrivateArtifact(fs, join(paths.controlDir, CLOSE_REQUEST_FILE), paths.controlDir, "close control");
 		}
 	};
 

@@ -136,8 +136,11 @@ function sanitizeTaskMarkers(markers: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 			assertArtifactInsideDir(resolve(value), taskDir, key);
 			markers[key] = resolve(value);
 		} catch (error) {
-			diagLog("marker_refused", { file: value, message: error instanceof Error ? error.message : String(error) });
+			// Quarantine the refused marker BEFORE logging: when the refused key is
+			// the diag sink itself, the refusal must not be appended through the
+			// very path that just failed validation.
 			delete markers[key];
+			diagLog("marker_refused", { file: value, message: error instanceof Error ? error.message : String(error) });
 		}
 	}
 	return markers;

@@ -1174,6 +1174,33 @@ describe("control watcher", () => {
 		expect(readFileSync(victim, "utf8")).toBe("do not remove");
 	});
 
+	it("does not write a refusal through a refused diag path", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
+		makeControlDir(join(workDir, "control"));
+		const outside = mkdtempSync(join(tmpdir(), "sumocode-task-escape-"));
+		const outsideDiag = join(outside, "diag.jsonl");
+		const responseFile = join(workDir, "response.md");
+		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
+		installTaskModeAutoExit(pi as never, {
+			env: {
+				SUMOCODE_TASK_MODE: "1",
+				SUMOCODE_TASK_RESPONSE_FILE: responseFile,
+				SUMOCODE_TASK_CONTROL_DIR: join(workDir, "control"),
+				SUMOCODE_TASK_DIAG_FILE: outsideDiag,
+			},
+			graceMs: 10_000,
+		});
+		handlers.get("agent_end")?.[0]?.(
+			{ messages: [{ role: "assistant", content: [{ type: "text", text: "harvested" }] }] },
+			buildCtxStub(),
+		);
+		// The escaped diag file is quarantined before its own refusal is logged,
+		// so nothing is ever appended to it; the valid response still persists.
+		expect(existsSync(outsideDiag)).toBe(false);
+		expect(existsSync(responseFile)).toBe(true);
+	});
+
 	it("refuses to create a response artifact through a dangling symlink", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
 		makeControlDir(join(workDir, "control"));

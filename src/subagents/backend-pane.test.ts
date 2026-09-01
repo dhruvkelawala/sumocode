@@ -80,7 +80,7 @@ class FakeFs {
 	}
 
 	writeFileSync(path: string, contents: string, options?: { mode?: number; flag?: string }): void {
-		if (options?.flag === "wx" && (this.files.has(path) || this.dirs.has(path))) {
+		if (options?.flag === "wx" && (this.files.has(path) || this.dirs.has(path) || this.symlinks.has(path))) {
 			// SAFETY: Node reports open EEXIST as an ErrnoException; the double reproduces that shape for isEexist.
 			const error = new Error(`EEXIST: file already exists, open '${path}'`) as Error & { code?: string };
 			error.code = "EEXIST";
@@ -735,6 +735,16 @@ describe("pane subagent steering and close", () => {
 		const harness = createHarness();
 		harness.child.requestClose?.();
 		expect(harness.fs.files.get(`${harness.paths.controlDir}/close.request`)).toBe("1");
+		harness.child.interrupt();
+	});
+
+	it("propagates a planted close control instead of treating it as a repeat", () => {
+		const harness = createHarness();
+		harness.fs.symlinks.add(`${harness.paths.controlDir}/close.request`);
+		// A symlinked close.request raises EEXIST like a repeat, but it is not a
+		// published control: the error must propagate so the manager surfaces the
+		// refusal instead of reporting close as requested.
+		expect(() => harness.child.requestClose?.()).toThrow(/not a regular file/);
 		harness.child.interrupt();
 	});
 

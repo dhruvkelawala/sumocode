@@ -5724,43 +5724,46 @@ var hasOwn = (record, key) => Object.prototype.hasOwnProperty.call(record, key);
 var isThinking = (value) => THINKING_LEVELS.includes(value);
 function normalizedOverlay(value, index, builtIn, warnings) {
   if (!isRecord2(value)) {
-    warnings.push(`roles[${index}] must be an object; entry skipped`);
+    warnings.push({ scope: "file", message: `roles[${index}] must be an object; entry skipped` });
     return void 0;
   }
   const id = typeof value.id === "string" ? value.id.trim() : "";
   if (!id || !/^[a-z0-9][a-z0-9-]*$/.test(id)) {
-    warnings.push(`roles[${index}] has an invalid id; entry skipped`);
+    warnings.push({ scope: "file", message: `roles[${index}] has an invalid id; entry skipped` });
     return void 0;
   }
+  const warn = (message) => {
+    warnings.push({ scope: "role", roleId: id, message });
+  };
   if (!builtIn && (typeof value.label !== "string" || !value.label.trim() || typeof value.systemPrompt !== "string" || !value.systemPrompt.trim())) {
-    warnings.push(`role ${id} is new and requires label and systemPrompt; entry skipped`);
+    warn(`role ${id} is new and requires label and systemPrompt; entry skipped`);
     return void 0;
   }
   for (const field of Object.keys(value)) {
-    if (!ROLE_FIELDS.has(field)) warnings.push(`role ${id} ignores unknown field ${field}`);
+    if (!ROLE_FIELDS.has(field)) warn(`role ${id} ignores unknown field ${field}`);
   }
   for (const field of ["label", "description", "systemPrompt"]) {
     if (hasOwn(value, field) && (typeof value[field] !== "string" || !value[field].trim())) {
-      warnings.push(`role ${id} has an invalid ${field}; entry skipped`);
+      warn(`role ${id} has an invalid ${field}; entry skipped`);
       return void 0;
     }
   }
   if (hasOwn(value, "model") && (typeof value.model !== "string" || !value.model.trim())) {
-    warnings.push(`role ${id} has an invalid model; entry skipped`);
+    warn(`role ${id} has an invalid model; entry skipped`);
     return void 0;
   }
   if (hasOwn(value, "thinking") && (typeof value.thinking !== "string" || value.thinking !== "inherit" && !isThinking(value.thinking))) {
-    warnings.push(`role ${id} has an invalid thinking level; entry skipped`);
+    warn(`role ${id} has an invalid thinking level; entry skipped`);
     return void 0;
   }
   for (const field of ["defaultWorktree", "defaultVisible"]) {
     if (hasOwn(value, field) && typeof value[field] !== "boolean" && value[field] !== "inherit") {
-      warnings.push(`role ${id} has an invalid ${field}; entry skipped`);
+      warn(`role ${id} has an invalid ${field}; entry skipped`);
       return void 0;
     }
   }
   if (hasOwn(value, "tools") && !Array.isArray(value.tools) && value.tools !== "inherit") {
-    warnings.push(`role ${id} has an invalid tools list; entry skipped`);
+    warn(`role ${id} has an invalid tools list; entry skipped`);
     return void 0;
   }
   const overlay = { id };
@@ -5776,7 +5779,7 @@ function normalizedOverlay(value, index, builtIn, warnings) {
     const tools = [];
     for (const tool of value.tools) {
       if (typeof tool !== "string" || !BUILT_IN_TOOLS.includes(tool)) {
-        warnings.push(`role ${id} ignores invalid tool ${String(tool)}`);
+        warn(`role ${id} ignores invalid tool ${String(tool)}`);
         continue;
       }
       if (!tools.includes(tool)) tools.push(tool);
@@ -5793,19 +5796,19 @@ function loadRoles(dependencies = {}) {
     contents = readFile(path2, "utf8");
   } catch (error) {
     const code = isRecord2(error) && typeof error.code === "string" ? error.code : void 0;
-    return code === "ENOENT" ? { roles: BUILT_IN_ROLES, warnings: [] } : { roles: BUILT_IN_ROLES, warnings: [`unable to read roles.json: ${error instanceof Error ? error.message : String(error)}`] };
+    return code === "ENOENT" ? { roles: BUILT_IN_ROLES, warnings: [] } : { roles: BUILT_IN_ROLES, warnings: [{ scope: "file", message: `unable to read roles.json: ${error instanceof Error ? error.message : String(error)}` }] };
   }
   if (Buffer.byteLength(contents, "utf8") > MAX_ROLES_FILE_BYTES) {
-    return { roles: BUILT_IN_ROLES, warnings: ["roles.json exceeds 256 KB; using built-in roles"] };
+    return { roles: BUILT_IN_ROLES, warnings: [{ scope: "file", message: "roles.json exceeds 256 KB; using built-in roles" }] };
   }
   let parsed;
   try {
     parsed = JSON.parse(contents);
   } catch (error) {
-    return { roles: BUILT_IN_ROLES, warnings: [`invalid roles.json: ${error instanceof Error ? error.message : String(error)}`] };
+    return { roles: BUILT_IN_ROLES, warnings: [{ scope: "file", message: `invalid roles.json: ${error instanceof Error ? error.message : String(error)}` }] };
   }
   if (!isRecord2(parsed) || !Array.isArray(parsed.roles)) {
-    return { roles: BUILT_IN_ROLES, warnings: ["roles.json must contain a roles array; using built-in roles"] };
+    return { roles: BUILT_IN_ROLES, warnings: [{ scope: "file", message: "roles.json must contain a roles array; using built-in roles" }] };
   }
   const warnings = [];
   const roles = BUILT_IN_ROLES.map((role) => ({ ...role }));
@@ -6666,6 +6669,7 @@ function parseHerdrError(result) {
   return void 0;
 }
 var HERDR_AGENT_PROMPT_TIMEOUT_MS = 1e4;
+var CHILD_CLEANUP_ERROR_MAX = 1024;
 var hasHerdrCaller = (env = process.env) => env.HERDR_ENV === "1" && Boolean(env.HERDR_PANE_ID);
 function workspaceIdFromPaneEnv(env) {
   const paneId2 = env.HERDR_PANE_ID;
@@ -6753,8 +6757,24 @@ async function runPaneCommand(pi, pane, command) {
   const result = await pi.exec("herdr", ["pane", "run", pane.pane_id, command], { timeout: 5e3 });
   return result.code === 0 ? { ok: true } : execFailure("herdr pane run", result);
 }
+async function cleanFailedChildStart(pi, paneId2, primaryError, recoveryShell) {
+  let error = primaryError;
+  if (recoveryShell) error += `. Recovery shell preserved at pane ${recoveryShell.paneId} in workspace ${recoveryShell.workspaceId}.`;
+  try {
+    const cleanup = await pi.exec("herdr", ["pane", "close", paneId2], { timeout: 5e3 });
+    if (cleanup.code !== 0) {
+      const context = (cleanup.stderr || cleanup.stdout || `herdr pane close exited ${cleanup.code}`).slice(0, CHILD_CLEANUP_ERROR_MAX);
+      error += `${error.endsWith(".") ? "" : "."} Child cleanup failed: ${context}`;
+    }
+  } catch (cleanupError) {
+    const context = (cleanupError instanceof Error ? cleanupError.message : String(cleanupError)).slice(0, CHILD_CLEANUP_ERROR_MAX);
+    error += `${error.endsWith(".") ? "" : "."} Child cleanup failed: ${context}`;
+  }
+  return { ok: false, error };
+}
 async function startAgentPane(pi, options) {
   let target;
+  let recoveryShell;
   if (options.placement.kind === "workspace") {
     let anchorPaneId = options.placement.paneId;
     if (!anchorPaneId) {
@@ -6765,6 +6785,7 @@ async function startAgentPane(pi, options) {
     if (!anchorPaneId) return { ok: false, error: `herdr returned no pane for workspace ${options.placement.workspaceId}` };
     target = await splitPane(pi, { kind: "id", paneId: anchorPaneId }, "right", options.cwd);
     if (target.ok) {
+      recoveryShell = { paneId: anchorPaneId, workspaceId: options.placement.workspaceId };
       await pi.exec("herdr", ["pane", "move", anchorPaneId, "--new-tab", "--workspace", options.placement.workspaceId, "--label", "shell", "--no-focus"], { timeout: 5e3 }).catch(() => void 0);
     }
   } else if (options.placement.kind === "tab") {
@@ -6775,7 +6796,7 @@ async function startAgentPane(pi, options) {
   }
   if (!target.ok) return target;
   const started = await runPaneCommand(pi, target.pane, options.shellCommand);
-  if (!started.ok) return started;
+  if (!started.ok) return cleanFailedChildStart(pi, target.pane.pane_id, started.error, recoveryShell);
   const agentName = uniqueHerdrAgentName(options.name);
   const paneId2 = target.pane.pane_id;
   const workspaceId = target.pane.workspace_id ?? (options.placement.kind === "workspace" ? options.placement.workspaceId : void 0);
@@ -16721,10 +16742,11 @@ function createDeferredResultDelivery() {
     forget(id) {
       consumed.delete(id);
     },
-    drain() {
-      const payloads = [...pending.values()];
-      pending.clear();
-      return payloads;
+    flush(send) {
+      for (const [id, payload] of pending) {
+        send(payload);
+        pending.delete(id);
+      }
     },
     clear() {
       pending.clear();
@@ -16891,6 +16913,7 @@ var SubagentManager = class {
     this.terminalHost = dependencies.terminalHost;
     this.pi = dependencies.pi;
     this.initialVisibleTabId = dependencies.initialVisibleTabId;
+    this.onDiagnostic = dependencies.onDiagnostic;
     this.subagentsTabId = this.initialVisibleTabId;
   }
   backendFactory;
@@ -16908,6 +16931,7 @@ var SubagentManager = class {
   terminalHost;
   pi;
   initialVisibleTabId;
+  onDiagnostic;
   subagentsTabId;
   visibleSpawnTail = Promise.resolve();
   dequeueTail = Promise.resolve();
@@ -17346,7 +17370,16 @@ var SubagentManager = class {
     }
     void (async () => {
       for await (const event of events) emit(event);
-    })();
+    })().catch((error) => {
+      const current = this.snapshots.get(id);
+      if (!current || isSettled(current)) return;
+      const message = error instanceof Error ? error.message : String(error);
+      void this.startSettle(id, {
+        kind: "failed",
+        errorText: `subagent event stream failed: ${message}`,
+        partialText: current.finalText || current.liveText || void 0
+      });
+    });
   }
   fold(id, event) {
     if (event.kind === "run-settled") {
@@ -17487,7 +17520,17 @@ var SubagentManager = class {
     });
   }
   notify() {
-    for (const listener of this.listeners) listener();
+    for (const listener of this.listeners) {
+      try {
+        listener();
+      } catch (error) {
+        const message = (error instanceof Error ? error.message : String(error)).slice(0, ERROR_TEXT_MAX2);
+        try {
+          this.onDiagnostic?.({ kind: "listener", message });
+        } catch {
+        }
+      }
+    }
   }
   prune() {
     const pruneable = this.list().filter((snapshot) => isSettled(snapshot) && !this.waitInterest.has(snapshot.id));
@@ -17671,16 +17714,18 @@ function registerSubagentTools(pi, manager, delivery, host = getTerminalHost(), 
     async execute(toolCallId, params, _signal, _onUpdate, ctx) {
       const loaded = roleLoader();
       const loadedRoles = loaded.roles;
-      if (params.role && loaded.warnings.length > 0) {
+      const role = params.role ? loadedRoles.find((candidate) => candidate.id === params.role) : void 0;
+      const selectedIsBuiltIn = params.role ? BUILT_IN_ROLES.some((candidate) => candidate.id === params.role) : false;
+      const relevantWarnings = params.role ? loaded.warnings.filter((warning) => warning.scope === "role" ? warning.roleId === params.role : !selectedIsBuiltIn) : [];
+      if (params.role && relevantWarnings.length > 0) {
         return makeToolResult2(`Unable to spawn role ${params.role}: roles.json has invalid configuration:
-${loaded.warnings.map((warning) => `- ${warning}`).join("\n")}`, {
+${relevantWarnings.map((warning) => `- ${warning.message}`).join("\n")}`, {
           action: "spawn",
           status: "invalid_role_config",
           role: params.role,
-          warnings: loaded.warnings
+          warnings: relevantWarnings
         });
       }
-      const role = params.role ? loadedRoles.find((candidate) => candidate.id === params.role) : void 0;
       if (params.role && !role) {
         const knownRoles = loadedRoles.map((candidate) => candidate.id);
         return makeToolResult2(`Unknown subagent role: ${params.role}. Known roles: ${knownRoles.join(", ") || "(none)"}.`, {
@@ -17996,7 +18041,7 @@ function installSubagents(pi, options = {}) {
     statusWidgetVisible = false;
   };
   const flush = () => {
-    for (const payload of delivery.drain()) {
+    delivery.flush((payload) => {
       pi.sendMessage(
         {
           customType: "subagent-result",
@@ -18006,7 +18051,7 @@ function installSubagents(pi, options = {}) {
         },
         { deliverAs: "followUp", triggerTurn: true }
       );
-    }
+    });
   };
   const onManagerChange = () => {
     for (const snapshot of manager.list()) {

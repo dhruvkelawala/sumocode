@@ -107,13 +107,13 @@ Cover successful state transition, transition just before timeout, no transition
 
 ## Done criteria
 
-- [ ] `pnpm vitest run scripts/test-wait-classification.test.mjs` proves every retained cited wait has a recognized causal classification; positive proxy sleeps are removed.
-- [ ] Intentional timing tests and negative-observation contracts remain explicit.
-- [ ] Targeted tests pass repeatedly without timeout inflation.
-- [ ] Failure messages show the unmet predicate/last output.
-- [ ] Full gates pass.
-- [ ] `git status --short` contains only files listed in Scope plus this plan/index bookkeeping.
-- [ ] Plan 103's `plans/README.md` row is updated to `DONE` with completion evidence.
+- [x] `pnpm vitest run scripts/test-wait-classification.test.mjs` proves every retained cited wait has a recognized causal classification; positive proxy sleeps are removed.
+- [x] Intentional timing tests and negative-observation contracts remain explicit.
+- [x] Targeted tests pass repeatedly without timeout inflation.
+- [x] Failure messages show the unmet predicate/last output.
+- [x] Full gates pass.
+- [x] `git status --short` contains only files listed in Scope plus this plan/index bookkeeping.
+- [x] Plan 103's `plans/README.md` row is updated to `DONE` with completion evidence.
 
 ## STOP conditions
 
@@ -126,3 +126,108 @@ Cover successful state transition, transition just before timeout, no transition
 ## Maintenance notes
 
 New PTY tests should default to output/state predicates. A bare sleep requires a comment naming the timing behavior it intentionally tests.
+
+`scripts/test-wait-classification.test.mjs` enforces this for the files listed
+in its `CANDIDATE_FILES`. Add new timing-sensitive suites to that list. Every
+retained real or fake timer in a listed file — `setTimeout`, `setInterval`,
+`setImmediate`, `vi.advanceTimersByTime(Async)`, `vi.advanceTimersToNextTimer(Async)`,
+`vi.runAllTimers(Async)`, `vi.runOnlyPendingTimers(Async)` — needs an adjacent
+`// WAIT-CLASS: <negative-observation|clock-contract|fixture-delay|poll-interval> — <reason>`
+marker; anything else must wait for observable state instead.
+
+It also flags numeric-literal sleep helpers (`delay(50)`, `sleep(...)`,
+`pause(...)`, `wait(...)`) whether directly awaited, promise-chained, used in a
+combinator, or accidentally left unawaited. Classifying only a helper's
+definition would leave every call site unchecked.
+
+The gate parses each candidate with the repository's existing TypeScript
+compiler dependency. Timer calls come from the AST; marker text and executable
+line boundaries come from compiler-owned token and comment ranges. This avoids
+maintaining a second JavaScript/TypeScript lexer and correctly handles strings,
+regexes, template interpolation, generic calls, escaped lines, and comments
+between a callee and its arguments. Templates passed to `writeFile` or
+`writeFileSync` directly or through a local identifier are parsed recursively
+because the audited integration tests execute them as fixture modules;
+display/assertion templates and ordinary quoted strings remain opaque.
+
+A marker must begin the normalized comment content (allowing the leading `*` in
+a formatted block comment); prose that merely mentions `WAIT-CLASS` does not
+classify anything. On the timer's own line a trailing marker is valid. Above
+it, only a contiguous comment-only block counts: a marker sharing a line with executable code
+annotates that statement rather than the timer below it. Split calls are
+reported on the line holding their callee identifier.
+
+This parser replaced a string-prefix matcher and then a hand-rolled tokenizer
+after review repeatedly found valid syntax that bypassed them. The retained
+regression cases remain as the gate's behavioral contract.
+
+The check is AST-based but still intentionally file-scoped. It recognizes
+direct timer calls, Vitest timer controls, and numeric-literal
+`delay`/`sleep`/`pause`/`wait` calls. A wait reached through a differently named
+helper or arbitrary indirection remains invisible; add that helper's module to
+`CANDIDATE_FILES` so at least its definition is classified.
+
+## Completion notes
+
+- `flushIO()` (fixed 20ms) is replaced by `waitForInlineSelector(inlineSelectors, title)`, a `vi.waitFor` on the selector the command actually publishes. The title also disambiguates chained selector-to-selector transitions (`Session tree` → `Summarize branch?` → back), which `getActiveKind()` alone cannot.
+- The two 100ms sleeps in the 6,001-entry `/tree` + `/fork` test became the same waiter.
+- `rpc-activity-cards.test.ts`'s 100ms pre-typing pause and 10ms-per-character pacing became per-character waits on the inline selector's echoed search row.
+- Everything else retained is a real contract: poll intervals inside bounded re-read loops, fixture-owned delays (`holdOpenMs`, the 8s provider hold), and the negative-observation windows in `rpc-queued-message-undo.test.ts`. None of the prohibited sends has a causal completion event to wait on — the bounded window IS the contract — so each is documented in place rather than weakened into an immediate read.
+
+### Stale-state hazard
+
+Escaping BACK to an already-open selector title is a degenerate predicate: had
+the forward hop never happened, the waiter would resolve on its first poll and
+assert nothing. Both back-hop sites therefore wait for `Summarize branch?`
+*before* the Esc, so the return is proven. Red-checked by replacing the opening
+Enter with a no-op key: the test now fails with
+`inline selector "SUMMARIZE BRANCH?" never opened (active kind: select, rendered: "✦ SESSION TREE ✦ …")`
+where it previously passed. `INLINE_SELECTOR_TIMEOUT_MS` is 4s, under Vitest's
+5s default, so that diagnostic wins the race instead of a bare
+`Test timed out in 5000ms`.
+
+### Coverage against the plan's test list
+
+| Case | Where |
+|---|---|
+| Successful state transition | every migrated `/resume` and `/tree` site |
+| Transition just before timeout | Approximated by "resolves on a transition that lands after the wait has started". A true wall-clock near-timeout boundary would need fake timers, which `vi.waitFor` does not use; forcing one would only add a flake. |
+| No transition | "times out naming the unmet predicate when no selector ever opens" |
+| Stale output that must not satisfy a new wait | "is not satisfied by a stale selector that closed before the wait", plus the two forward-hop guards |
+| Wrong state satisfying the wait | "times out naming the wrong selector when a different one stays open" |
+| Child early exit / cleanup with pending waiter | N/A — no PTY waiter was added or changed; `spawnPiPty` already owns child-exit and cleanup semantics for `waitForOutput`/`waitForScreen` |
+
+### Scope deviation: `src/sumo-tui/rpc/client.test.ts`
+
+"keeps only the stderr tail up to 64 KiB" failed roughly 1 run in 3 under the
+fully parallel `pnpm test`, and passed 30/30 in isolation every time. It is not
+a cited file, but it is the exact failure mode this plan exists to remove, and
+"Full gates pass" cannot be met while it flakes.
+
+Cause: the waiter was `waitFor(() => client.stderr.length === 65536)` — a
+count-only proxy for the state the test then asserts. stderr arrives in chunks
+and the trimmed ring buffer transiently hits 64 KiB before the truncation
+marker is prepended or the final `b` chunk lands, so the waiter resolved on an
+intermediate state and the marker assertion failed.
+
+Fix: wait for the full asserted state (byte count **and** leading marker **and**
+trailing `b`). Strictly strengthening, test-only, one predicate. No production
+code, no timeout constant, and no assertion changed. `client.test.ts` was NOT
+added to `CANDIDATE_FILES` — its remaining timers have not been audited, and
+listing it would assert a classification this plan did not perform.
+
+After the fix it survived 7 consecutive fully parallel `pnpm test` runs, having
+failed 2 of 4 before.
+
+### Residual pre-existing flakes (not addressed)
+
+Two load-sensitive tests in specs this plan does not touch still fail
+occasionally under a fully parallel `pnpm test` (1 run in ~7 here), and each
+passes in isolation — the same behaviour already recorded against Plan 096 in
+`plans/README.md`:
+
+- `src/background-tasks/task-manager.test.ts` — "does not cap terminal execution to the feed presentation budget" starts 257 real terminals against a 20s test timeout. It exceeds the budget because the work is heavy, not because a sleep stands in for state, and its subject IS a budget constant. Out of scope per "Product timeout/backoff constants" and "Tests whose subject is elapsed time".
+- `src/sumo-tui/rpc/editor.test.ts` — "opens file mention autocomplete when the RPC host types @ without an explicit fd path".
+
+Both predate this branch and neither is a cited candidate. Fixing them means
+auditing two more files, which is a follow-up, not this plan.

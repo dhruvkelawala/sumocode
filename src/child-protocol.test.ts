@@ -175,6 +175,19 @@ describe("BoundedUtf8Tail", () => {
 		expect(value).not.toContain("�");
 	});
 
+	it("does not recopy the retained tail for every small append after truncation", () => {
+		const tail = new BoundedUtf8Tail();
+		tail.append(Buffer.alloc(CHILD_STDERR_TAIL_MAX_BYTES + 1, 0x78));
+		const concat = vi.spyOn(Buffer, "concat");
+		try {
+			for (let index = 0; index < 16; index += 1) tail.append(Buffer.from("y"));
+			expect(concat).not.toHaveBeenCalled();
+			expect(tail.toString()).toContain(TRUNCATED_TAIL_MARKER);
+		} finally {
+			concat.mockRestore();
+		}
+	});
+
 	it("caps replacement characters from malformed bytes while keeping a useful valid suffix", () => {
 		const suffix = "useful stderr suffix";
 		const suffixBytes = Buffer.from(suffix, "utf8");

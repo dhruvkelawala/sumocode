@@ -108,7 +108,9 @@ export class BoundedUtf8Head {
 
 /** Retain only the newest stderr bytes without ever splitting a UTF-8 codepoint. */
 export class BoundedUtf8Tail {
-	private bytes = Buffer.alloc(0);
+	private readonly buffer: Buffer;
+	private start = 0;
+	private length = 0;
 	private truncated = false;
 	private readonly contentMaxBytes: number;
 
@@ -116,30 +118,39 @@ export class BoundedUtf8Tail {
 		const markerBytes = Buffer.byteLength(TRUNCATED_TAIL_MARKER, "utf8");
 		if (maxBytes < markerBytes) throw new Error("tail limit is smaller than its truncation marker");
 		this.contentMaxBytes = maxBytes - markerBytes;
+		this.buffer = Buffer.allocUnsafe(maxBytes);
 	}
 
 	public append(chunk: Chunk): void {
 		const incoming = bytesFrom(chunk);
-		const allowed = this.truncated ? this.contentMaxBytes : this.maxBytes;
-		if (this.bytes.byteLength + incoming.byteLength <= allowed) {
-			this.bytes = Buffer.concat([this.bytes, incoming], this.bytes.byteLength + incoming.byteLength);
+		if (incoming.byteLength === 0) return;
+		const limit = this.truncated || this.length + incoming.byteLength > this.maxBytes
+			? this.contentMaxBytes
+			: this.maxBytes;
+		if (limit === this.contentMaxBytes) this.truncated = true;
+		if (incoming.byteLength >= limit) {
+			incoming.copy(this.buffer, 0, incoming.byteLength - limit);
+			this.start = 0;
+			this.length = limit;
 			return;
 		}
 
-		this.truncated = true;
-		if (incoming.byteLength >= this.contentMaxBytes) {
-			this.bytes = Buffer.from(incoming.subarray(incoming.byteLength - this.contentMaxBytes));
-			return;
-		}
-		const oldBytes = Math.min(this.bytes.byteLength, this.contentMaxBytes - incoming.byteLength);
-		this.bytes = Buffer.concat(
-			[this.bytes.subarray(this.bytes.byteLength - oldBytes), incoming],
-			oldBytes + incoming.byteLength,
-		);
+		const dropped = Math.max(0, this.length + incoming.byteLength - limit);
+		this.start = (this.start + dropped) % this.maxBytes;
+		this.length -= dropped;
+		const writeAt = (this.start + this.length) % this.maxBytes;
+		const firstBytes = Math.min(incoming.byteLength, this.maxBytes - writeAt);
+		incoming.copy(this.buffer, writeAt, 0, firstBytes);
+		if (firstBytes < incoming.byteLength) incoming.copy(this.buffer, 0, firstBytes);
+		this.length += incoming.byteLength;
 	}
 
 	public toString(): string {
-		const tail = decodeUtf8Tail(this.bytes);
+		const bytes = Buffer.allocUnsafe(this.length);
+		const firstBytes = Math.min(this.length, this.maxBytes - this.start);
+		this.buffer.copy(bytes, 0, this.start, this.start + firstBytes);
+		if (firstBytes < this.length) this.buffer.copy(bytes, firstBytes, 0, this.length - firstBytes);
+		const tail = decodeUtf8Tail(bytes);
 		const decoded = Buffer.from(tail, "utf8");
 		if (!this.truncated && decoded.byteLength <= this.maxBytes) return tail;
 		const start = Math.max(0, decoded.byteLength - this.contentMaxBytes);

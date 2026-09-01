@@ -2808,31 +2808,40 @@ var BoundedUtf8Tail = class {
     const markerBytes = Buffer.byteLength(TRUNCATED_TAIL_MARKER, "utf8");
     if (maxBytes < markerBytes) throw new Error("tail limit is smaller than its truncation marker");
     this.contentMaxBytes = maxBytes - markerBytes;
+    this.buffer = Buffer.allocUnsafe(maxBytes);
   }
   maxBytes;
-  bytes = Buffer.alloc(0);
+  buffer;
+  start = 0;
+  length = 0;
   truncated = false;
   contentMaxBytes;
   append(chunk) {
     const incoming = bytesFrom(chunk);
-    const allowed = this.truncated ? this.contentMaxBytes : this.maxBytes;
-    if (this.bytes.byteLength + incoming.byteLength <= allowed) {
-      this.bytes = Buffer.concat([this.bytes, incoming], this.bytes.byteLength + incoming.byteLength);
+    if (incoming.byteLength === 0) return;
+    const limit = this.truncated || this.length + incoming.byteLength > this.maxBytes ? this.contentMaxBytes : this.maxBytes;
+    if (limit === this.contentMaxBytes) this.truncated = true;
+    if (incoming.byteLength >= limit) {
+      incoming.copy(this.buffer, 0, incoming.byteLength - limit);
+      this.start = 0;
+      this.length = limit;
       return;
     }
-    this.truncated = true;
-    if (incoming.byteLength >= this.contentMaxBytes) {
-      this.bytes = Buffer.from(incoming.subarray(incoming.byteLength - this.contentMaxBytes));
-      return;
-    }
-    const oldBytes = Math.min(this.bytes.byteLength, this.contentMaxBytes - incoming.byteLength);
-    this.bytes = Buffer.concat(
-      [this.bytes.subarray(this.bytes.byteLength - oldBytes), incoming],
-      oldBytes + incoming.byteLength
-    );
+    const dropped = Math.max(0, this.length + incoming.byteLength - limit);
+    this.start = (this.start + dropped) % this.maxBytes;
+    this.length -= dropped;
+    const writeAt = (this.start + this.length) % this.maxBytes;
+    const firstBytes = Math.min(incoming.byteLength, this.maxBytes - writeAt);
+    incoming.copy(this.buffer, writeAt, 0, firstBytes);
+    if (firstBytes < incoming.byteLength) incoming.copy(this.buffer, 0, firstBytes);
+    this.length += incoming.byteLength;
   }
   toString() {
-    const tail = decodeUtf8Tail(this.bytes);
+    const bytes = Buffer.allocUnsafe(this.length);
+    const firstBytes = Math.min(this.length, this.maxBytes - this.start);
+    this.buffer.copy(bytes, 0, this.start, this.start + firstBytes);
+    if (firstBytes < this.length) this.buffer.copy(bytes, firstBytes, 0, this.length - firstBytes);
+    const tail = decodeUtf8Tail(bytes);
     const decoded = Buffer.from(tail, "utf8");
     if (!this.truncated && decoded.byteLength <= this.maxBytes) return tail;
     const start = Math.max(0, decoded.byteLength - this.contentMaxBytes);
@@ -3138,6 +3147,7 @@ var RunPayloadBudget = class {
   retainedBytes = 0;
   liveBytes = 0;
   markerRetained = false;
+  markerOwner;
   liveMarker = false;
   liveTruncated = false;
   markerBytes = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
@@ -3148,7 +3158,7 @@ var RunPayloadBudget = class {
     const markerReserve = this.truncated ? 0 : this.markerBytes;
     return this.retainedBytes + this.liveBytes >= CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve;
   }
-  retain(text, requiresMarker = false) {
+  retain(text, requiresMarker = false, owner) {
     if (text.length === 0) return "";
     const textBytes = Buffer.byteLength(text, "utf8");
     const markerPresent = this.truncated;
@@ -3160,15 +3170,24 @@ var RunPayloadBudget = class {
     }
     const retained = markerPresent ? this.unmarkedHead(text, contentBytesLeft) : this.markedHead(text, contentBytesLeft);
     this.retainedBytes += Buffer.byteLength(retained, "utf8");
-    if (!markerPresent) this.markerRetained = true;
+    if (!markerPresent) {
+      this.markerRetained = true;
+      this.markerOwner = owner;
+    }
     return retained;
   }
-  replaceMany(previous, next) {
-    const hadMarker = previous.some((text) => text?.includes(TRUNCATED_HEAD_MARKER));
-    for (const text of previous) if (text !== void 0) this.release(text);
-    const normalized = next.map((text) => text?.split(TRUNCATED_HEAD_MARKER).join(""));
-    let markerIndex = next.findIndex((text) => text?.includes(TRUNCATED_HEAD_MARKER));
-    if (markerIndex === -1 && hadMarker) {
+  replaceMany(owners, previous, next, reusesPrevious) {
+    const ownedMarkerIndex = owners.findIndex((owner) => owner === this.markerOwner);
+    for (let index = 0; index < previous.length; index += 1) {
+      const text = previous[index];
+      if (text !== void 0) this.release(text, owners[index]);
+    }
+    const normalized = next.map((text, index) => {
+      if (text === void 0 || index !== ownedMarkerIndex || !reusesPrevious[index] || !text.endsWith(TRUNCATED_HEAD_MARKER)) return text;
+      return text.slice(0, -TRUNCATED_HEAD_MARKER.length);
+    });
+    let markerIndex = -1;
+    if (ownedMarkerIndex !== -1) {
       for (let index = normalized.length - 1; index >= 0; index -= 1) {
         if (normalized[index] !== void 0) {
           markerIndex = index;
@@ -3178,7 +3197,7 @@ var RunPayloadBudget = class {
     }
     return normalized.map((text, index) => {
       if (text === void 0) return void 0;
-      return this.retain(text, index === markerIndex && !this.truncated);
+      return this.retain(text, index === markerIndex && !this.truncated, owners[index]);
     });
   }
   appendLive(delta) {
@@ -3208,12 +3227,16 @@ var RunPayloadBudget = class {
     this.retainedBytes = 0;
     this.liveBytes = 0;
     this.markerRetained = false;
+    this.markerOwner = void 0;
     this.liveMarker = false;
     this.liveTruncated = false;
   }
-  release(text) {
+  release(text, owner) {
     this.retainedBytes = Math.max(0, this.retainedBytes - Buffer.byteLength(text, "utf8"));
-    if (text.includes(TRUNCATED_HEAD_MARKER)) this.markerRetained = false;
+    if (owner === this.markerOwner) {
+      this.markerRetained = false;
+      this.markerOwner = void 0;
+    }
   }
   markedHead(text, contentBytes) {
     return boundRetainedResult(`${text}${TRUNCATED_HEAD_MARKER}`, contentBytes + this.markerBytes);
@@ -3844,8 +3867,10 @@ var upsertToolEvent = (result, event) => {
   const nextOutput = event.output === void 0 ? previous?.output : event.output;
   const budget = getRunPayloadBudget(result);
   const [argsText = "", output] = budget.replaceMany(
+    [`${key}:args`, `${key}:output`],
     [previous ? toolArgsText(previous.args) : void 0, previous?.output],
-    [nextArgsText, nextOutput]
+    [nextArgsText, nextOutput],
+    [event.args === void 0 && previous !== void 0, event.output === void 0 && previous !== void 0]
   );
   const args = typeof rawArgs !== "string" && argsText === nextArgsText ? rawArgs : argsText;
   const retained = {
@@ -17382,11 +17407,7 @@ var WAIT_AGENT_MAX_BYTES = 16 * 1024;
 var WAIT_TOTAL_MAX_BYTES = 48 * 1024;
 var WAIT_SEPARATOR = "\n\n---\n\n";
 var WAIT_MARKER_BYTES = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
-var boundWaitChunk = (text, maxBytes) => {
-  const hadMarker = text.includes(TRUNCATED_HEAD_MARKER);
-  const clean = hadMarker ? text.split(TRUNCATED_HEAD_MARKER).join("") : text;
-  return boundRetainedResult(hadMarker ? `${clean}${TRUNCATED_HEAD_MARKER}` : clean, maxBytes);
-};
+var boundWaitChunk = (text, maxBytes) => boundRetainedResult(text, maxBytes);
 var boundedWaitText = (snapshots) => {
   const chunks = [];
   let bytes = 0;

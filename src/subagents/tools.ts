@@ -89,11 +89,7 @@ const WAIT_TOTAL_MAX_BYTES = 48 * 1024;
 const WAIT_SEPARATOR = "\n\n---\n\n";
 const WAIT_MARKER_BYTES = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
 
-const boundWaitChunk = (text: string, maxBytes: number): string => {
-	const hadMarker = text.includes(TRUNCATED_HEAD_MARKER);
-	const clean = hadMarker ? text.split(TRUNCATED_HEAD_MARKER).join("") : text;
-	return boundRetainedResult(hadMarker ? `${clean}${TRUNCATED_HEAD_MARKER}` : clean, maxBytes);
-};
+const boundWaitChunk = (text: string, maxBytes: number): string => boundRetainedResult(text, maxBytes);
 
 const boundedWaitText = (snapshots: readonly SubagentSnapshot[]): string => {
 	const chunks: string[] = [];

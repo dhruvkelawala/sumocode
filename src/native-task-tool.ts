@@ -117,6 +117,7 @@ class RunPayloadBudget {
 	private retainedBytes = 0;
 	private liveBytes = 0;
 	private markerRetained = false;
+	private markerOwner: string | undefined;
 	private liveMarker = false;
 	private liveTruncated = false;
 	private readonly markerBytes = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
@@ -130,7 +131,7 @@ class RunPayloadBudget {
 		return this.retainedBytes + this.liveBytes >= CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve;
 	}
 
-	public retain(text: string, requiresMarker = false): string {
+	public retain(text: string, requiresMarker = false, owner?: string): string {
 		if (text.length === 0) return "";
 		const textBytes = Buffer.byteLength(text, "utf8");
 		const markerPresent = this.truncated;
@@ -145,16 +146,30 @@ class RunPayloadBudget {
 			? this.unmarkedHead(text, contentBytesLeft)
 			: this.markedHead(text, contentBytesLeft);
 		this.retainedBytes += Buffer.byteLength(retained, "utf8");
-		if (!markerPresent) this.markerRetained = true;
+		if (!markerPresent) {
+			this.markerRetained = true;
+			this.markerOwner = owner;
+		}
 		return retained;
 	}
 
-	public replaceMany(previous: readonly (string | undefined)[], next: readonly (string | undefined)[]): Array<string | undefined> {
-		const hadMarker = previous.some((text) => text?.includes(TRUNCATED_HEAD_MARKER));
-		for (const text of previous) if (text !== undefined) this.release(text);
-		const normalized = next.map((text) => text?.split(TRUNCATED_HEAD_MARKER).join(""));
-		let markerIndex = next.findIndex((text) => text?.includes(TRUNCATED_HEAD_MARKER));
-		if (markerIndex === -1 && hadMarker) {
+	public replaceMany(
+		owners: readonly string[],
+		previous: readonly (string | undefined)[],
+		next: readonly (string | undefined)[],
+		reusesPrevious: readonly boolean[],
+	): Array<string | undefined> {
+		const ownedMarkerIndex = owners.findIndex((owner) => owner === this.markerOwner);
+		for (let index = 0; index < previous.length; index += 1) {
+			const text = previous[index];
+			if (text !== undefined) this.release(text, owners[index]);
+		}
+		const normalized = next.map((text, index) => {
+			if (text === undefined || index !== ownedMarkerIndex || !reusesPrevious[index] || !text.endsWith(TRUNCATED_HEAD_MARKER)) return text;
+			return text.slice(0, -TRUNCATED_HEAD_MARKER.length);
+		});
+		let markerIndex = -1;
+		if (ownedMarkerIndex !== -1) {
 			for (let index = normalized.length - 1; index >= 0; index -= 1) {
 				if (normalized[index] !== undefined) {
 					markerIndex = index;
@@ -164,7 +179,7 @@ class RunPayloadBudget {
 		}
 		return normalized.map((text, index) => {
 			if (text === undefined) return undefined;
-			return this.retain(text, index === markerIndex && !this.truncated);
+			return this.retain(text, index === markerIndex && !this.truncated, owners[index]);
 		});
 	}
 
@@ -199,13 +214,17 @@ class RunPayloadBudget {
 		this.retainedBytes = 0;
 		this.liveBytes = 0;
 		this.markerRetained = false;
+		this.markerOwner = undefined;
 		this.liveMarker = false;
 		this.liveTruncated = false;
 	}
 
-	private release(text: string): void {
+	private release(text: string, owner?: string): void {
 		this.retainedBytes = Math.max(0, this.retainedBytes - Buffer.byteLength(text, "utf8"));
-		if (text.includes(TRUNCATED_HEAD_MARKER)) this.markerRetained = false;
+		if (owner === this.markerOwner) {
+			this.markerRetained = false;
+			this.markerOwner = undefined;
+		}
 	}
 
 	private markedHead(text: string, contentBytes: number): string {
@@ -1003,8 +1022,10 @@ const upsertToolEvent = (result: SingleResult, event: ToolCallUpdate): void => {
 	const nextOutput = event.output === undefined ? previous?.output : event.output;
 	const budget = getRunPayloadBudget(result);
 	const [argsText = "", output] = budget.replaceMany(
+		[`${key}:args`, `${key}:output`],
 		[previous ? toolArgsText(previous.args) : undefined, previous?.output],
 		[nextArgsText, nextOutput],
+		[event.args === undefined && previous !== undefined, event.output === undefined && previous !== undefined],
 	);
 	const args = typeof rawArgs !== "string" && argsText === nextArgsText ? rawArgs : argsText;
 	const retained: ToolCallItem = {

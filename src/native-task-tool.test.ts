@@ -700,6 +700,22 @@ describe("native task tool", () => {
 		expect(Buffer.byteLength(events[0]?.name ?? "", "utf8")).toBeLessThanOrEqual(256);
 	});
 
+	it("preserves literal truncation-marker text when a tool update reuses output", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		const literal = `before${TRUNCATED_HEAD_MARKER}after`;
+
+		emitTaskEvent(proc, { type: "tool_execution_start", toolCallId: "marker-tool", toolName: "read", args: { path: "README.md" } });
+		emitTaskEvent(proc, { type: "tool_execution_update", toolCallId: "marker-tool", toolName: "read", partialResult: literal });
+		emitTaskEvent(proc, { type: "tool_execution_update", toolCallId: "marker-tool", toolName: "read" });
+		proc.emit("close", 0);
+
+		const toolResult = await running;
+		const events = toolResult.details?.results?.[0]?.toolEvents ?? [];
+		expect(events).toHaveLength(1);
+		expect(events[0]?.output).toBe(literal);
+	});
+
 	it("prioritizes a useful marked final answer and reclaims exhausted prior text", async () => {
 		const proc = new FakeTaskProcess();
 		const running = registeredTask(proc).execute();

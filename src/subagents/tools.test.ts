@@ -378,6 +378,21 @@ describe("subagent tools", () => {
 		expect(waited).toMatchObject({ details: { activity: [{ id: `subagent:${id}`, status: "failed", result: { error: "provider exploded" } }] } });
 	});
 
+	it("preserves literal truncation-marker text in untruncated wait results", async () => {
+		const { tool, emitters, ctx } = createHarness();
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const spawned = await tool("subagent_spawn").execute("spawn-literal", { prompt: "do", name: "marker reviewer" }, undefined, undefined, ctx as never);
+		// SAFETY: spawn results always expose details.subagent.id.
+		const id = (spawned as { details: { subagent: { id: string } } }).details.subagent.id;
+		const finalText = `before${TRUNCATED_HEAD_MARKER}after`;
+		emitters.get(id)?.({ kind: "message-end", role: "assistant", text: finalText });
+		emitters.get(id)?.({ kind: "run-settled", outcome: { kind: "completed", finalText } });
+
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const waited = await tool("subagent_wait").execute("wait-literal", { ids: [id] }, undefined, undefined, ctx as never);
+		expect(textOf(waited)).toContain(finalText);
+	});
+
 	it("keeps the omission marker through per-agent and aggregate wait projections", async () => {
 		const { tool, ctx, emitters, manager } = createHarness();
 		const ids: string[] = [];

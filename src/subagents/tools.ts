@@ -108,14 +108,7 @@ const boundedWaitText = (snapshots: readonly SubagentSnapshot[]): string => {
 		const separatorBytes = chunks.length === 0 ? 0 : Buffer.byteLength(WAIT_SEPARATOR, "utf8");
 		const remaining = WAIT_TOTAL_MAX_BYTES - bytes - separatorBytes;
 		if (remaining <= WAIT_MARKER_BYTES) {
-			const last = chunks.at(-1);
-			if (last) {
-				chunks[chunks.length - 1] = boundWaitChunk(
-					`${last}${TRUNCATED_HEAD_MARKER}`,
-					Buffer.byteLength(last, "utf8"),
-				);
-			}
-			break;
+			return boundWaitChunk(`${chunks.join(WAIT_SEPARATOR)}${TRUNCATED_HEAD_MARKER}`, WAIT_TOTAL_MAX_BYTES);
 		}
 		const retained = Buffer.byteLength(chunk, "utf8") <= remaining ? chunk : boundWaitChunk(chunk, remaining);
 		chunks.push(retained);

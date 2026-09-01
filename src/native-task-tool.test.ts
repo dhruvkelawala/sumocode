@@ -492,6 +492,37 @@ describe("native task tool", () => {
 		expect(payload).toContain("latest");
 	});
 
+	it("does not duplicate a retained marker when tool updates omit output", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		const args = { path: "large.txt" };
+
+		emitTaskEvent(proc, {
+			type: "tool_execution_update",
+			toolCallId: "write-1",
+			toolName: "write",
+			args,
+			partialResult: "x".repeat(CHILD_RETAINED_RESULT_MAX_BYTES + 1024),
+		});
+		for (let index = 0; index < 3; index += 1) {
+			emitTaskEvent(proc, {
+				type: "tool_execution_update",
+				toolCallId: "write-1",
+				toolName: "write",
+			});
+		}
+		proc.emit("close", 0);
+
+		const toolResult = await running;
+		const result = toolResult.details?.results?.[0];
+		if (!result) throw new Error("task result is missing");
+		const payload = retainedPayloadText(result).join("");
+		expect(Buffer.byteLength(payload, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+		expect(payload.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+		expect(result.toolEvents).toHaveLength(1);
+		expect(result.toolEvents?.[0]).toMatchObject({ id: "write-1", name: "write", status: "running" });
+	});
+
 	it("prioritizes a useful marked final answer and reclaims exhausted prior text", async () => {
 		const proc = new FakeTaskProcess();
 		const running = registeredTask(proc).execute();

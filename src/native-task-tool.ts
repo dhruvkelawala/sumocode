@@ -151,12 +151,19 @@ class RunPayloadBudget {
 	public replaceMany(previous: readonly (string | undefined)[], next: readonly (string | undefined)[]): Array<string | undefined> {
 		const hadMarker = previous.some((text) => text?.includes(TRUNCATED_HEAD_MARKER));
 		for (const text of previous) if (text !== undefined) this.release(text);
-		let needsMarker = hadMarker && !this.truncated;
-		return next.map((text) => {
+		const normalized = next.map((text) => text?.split(TRUNCATED_HEAD_MARKER).join(""));
+		let markerIndex = next.findIndex((text) => text?.includes(TRUNCATED_HEAD_MARKER));
+		if (markerIndex === -1 && hadMarker) {
+			for (let index = normalized.length - 1; index >= 0; index -= 1) {
+				if (normalized[index] !== undefined) {
+					markerIndex = index;
+					break;
+				}
+			}
+		}
+		return normalized.map((text, index) => {
 			if (text === undefined) return undefined;
-			const retained = this.retain(text, needsMarker);
-			if (retained.includes(TRUNCATED_HEAD_MARKER)) needsMarker = false;
-			return retained;
+			return this.retain(text, index === markerIndex && !this.truncated);
 		});
 	}
 

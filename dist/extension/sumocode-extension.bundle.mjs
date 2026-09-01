@@ -3166,12 +3166,19 @@ var RunPayloadBudget = class {
   replaceMany(previous, next) {
     const hadMarker = previous.some((text) => text?.includes(TRUNCATED_HEAD_MARKER));
     for (const text of previous) if (text !== void 0) this.release(text);
-    let needsMarker = hadMarker && !this.truncated;
-    return next.map((text) => {
+    const normalized = next.map((text) => text?.split(TRUNCATED_HEAD_MARKER).join(""));
+    let markerIndex = next.findIndex((text) => text?.includes(TRUNCATED_HEAD_MARKER));
+    if (markerIndex === -1 && hadMarker) {
+      for (let index = normalized.length - 1; index >= 0; index -= 1) {
+        if (normalized[index] !== void 0) {
+          markerIndex = index;
+          break;
+        }
+      }
+    }
+    return normalized.map((text, index) => {
       if (text === void 0) return void 0;
-      const retained = this.retain(text, needsMarker);
-      if (retained.includes(TRUNCATED_HEAD_MARKER)) needsMarker = false;
-      return retained;
+      return this.retain(text, index === markerIndex && !this.truncated);
     });
   }
   appendLive(delta) {
@@ -17272,14 +17279,7 @@ var boundedWaitText = (snapshots) => {
     const separatorBytes = chunks.length === 0 ? 0 : Buffer.byteLength(WAIT_SEPARATOR, "utf8");
     const remaining = WAIT_TOTAL_MAX_BYTES - bytes - separatorBytes;
     if (remaining <= WAIT_MARKER_BYTES) {
-      const last = chunks.at(-1);
-      if (last) {
-        chunks[chunks.length - 1] = boundWaitChunk(
-          `${last}${TRUNCATED_HEAD_MARKER}`,
-          Buffer.byteLength(last, "utf8")
-        );
-      }
-      break;
+      return boundWaitChunk(`${chunks.join(WAIT_SEPARATOR)}${TRUNCATED_HEAD_MARKER}`, WAIT_TOTAL_MAX_BYTES);
     }
     const retained = Buffer.byteLength(chunk, "utf8") <= remaining ? chunk : boundWaitChunk(chunk, remaining);
     chunks.push(retained);

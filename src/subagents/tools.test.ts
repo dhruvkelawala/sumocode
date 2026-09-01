@@ -407,6 +407,44 @@ describe("subagent tools", () => {
 		expect(textOf(all).split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
 	});
 
+	it("marks aggregate omission when the last retained chunk is shorter than the marker", async () => {
+		const lengths = [16_371, 16_371, 16_313, 1, 1];
+		const snapshots: SubagentSnapshot[] = lengths.map((length, index) => ({
+			id: `sa-${index + 1}`,
+			title: "",
+			prompt: "work",
+			cwd: "/tmp/project",
+			baseRef: "base-ref",
+			status: "done",
+			createdAt: 1_000,
+			settledAt: 2_000,
+			usage: { turns: 1 },
+			transcript: [],
+			liveText: "",
+			liveTools: [],
+			finalText: "x".repeat(length),
+		}));
+		const registered: Array<{ name: string; execute: (...args: unknown[]) => Promise<ToolResult> }> = [];
+		const manager = {
+			waitFor: vi.fn(async () => snapshots),
+			get: vi.fn((id: string) => snapshots.find((snapshot) => snapshot.id === id)),
+		};
+		const delivery = { consume: vi.fn() };
+		// SAFETY: doubles cover exactly the members registerSubagentTools touches on each object.
+		registerSubagentTools({
+			registerTool: (tool: { name: string; execute: (...args: unknown[]) => Promise<ToolResult> }) => registered.push(tool),
+			getThinkingLevel: () => "medium",
+			getActiveTools: () => ["read"],
+		} as never, manager as never, delivery, { kind: "none" } as never);
+		const wait = registered.find((entry) => entry.name === "subagent_wait")!;
+
+		const result = await wait.execute("wait-short-tail", { ids: snapshots.map((snapshot) => snapshot.id) }, undefined, undefined);
+		const text = textOf(result);
+		expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(48 * 1024);
+		expect(text.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+		expect(delivery.consume).toHaveBeenCalledTimes(5);
+	});
+
 	it("cancel returns bounded metadata and Activity updates without raw snapshots", async () => {
 		const { tool, ctx, emitters } = createHarness();
 		// SAFETY: the ctx double carries only the fields the tool handlers read.

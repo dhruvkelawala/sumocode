@@ -46,8 +46,8 @@ function createHarness(initial: TerminalTaskSnapshot[] = []) {
 	let onSend: (() => void) | undefined;
 	let claimSequence = 0;
 	const manager = {
-		start: vi.fn(async (options: { ownerSessionId: string; sourceId?: string; completionPolicy: "passive" | "wake" }) => {
-			const started = task({ ownerSessionId: options.ownerSessionId, sourceId: options.sourceId, completionPolicy: options.completionPolicy });
+		start: vi.fn(async (options: { ownerSessionId: string; sourceId?: string; completionPolicy: "passive" | "wake"; command: string; cwd: string; title: string }) => {
+			const started = task({ ownerSessionId: options.ownerSessionId, sourceId: options.sourceId, completionPolicy: options.completionPolicy, command: options.command, cwd: options.cwd, title: options.title });
 			tasks.set(started.id, started);
 			return started;
 		}),
@@ -94,6 +94,7 @@ function createHarness(initial: TerminalTaskSnapshot[] = []) {
 			return entry?.ownerSessionId === owner ? entry : undefined;
 		}),
 		getOutput: vi.fn(() => "bounded output"),
+		getOutputTailBytes: vi.fn(() => ({ bytes: Buffer.from("bounded output"), truncated: false })),
 		claimPending: vi.fn((owner: string, includeWake: boolean) => {
 			const claimed: TerminalTaskSnapshot[] = [];
 			for (const [id, entry] of tasks) {
@@ -205,6 +206,44 @@ describe("installTerminalTools", () => {
 		expect(result.content[0]?.text).toContain("Started terminal term-a");
 		expect(result.content[0]?.text).toContain("stdin: unavailable");
 		expect(result.details).toMatchObject({ activity: { id: "term-a", sourceId: "call-1" } });
+	});
+
+	it("redacts terminal session projections without changing owner-only task state", async () => {
+		const secret = "credential-value-that-must-not-persist";
+		const settled = task({
+			command: `deploy --token ${secret}`,
+			cwd: `/repo/API_KEY=${secret}`,
+			title: `password=${secret}`,
+			logFile: `/tmp/token=${secret}/output.log`,
+			status: "completed",
+			settledAt: 2_000,
+			exitCode: 0,
+			deliveryState: "pending",
+			completionId: "completion-secret",
+		});
+		const harness = createHarness([settled]);
+		harness.manager.getOutputTailBytes.mockReturnValue({
+			bytes: Buffer.from(`${secret}\nAPI_KEY=${secret}\nbenign diagnostic`),
+			truncated: true,
+		});
+
+		const started = await execute(harness.tool("terminal_start"), {
+			command: `deploy --token ${secret}`,
+			title: `password=${secret}`,
+			working_dir: `/repo/API_KEY=${secret}`,
+		}, harness.ctx());
+		harness.tasks.set(settled.id, settled);
+		await harness.fire("session_start");
+		const checked = await execute(harness.tool("terminal_check"), { id: settled.id }, harness.ctx());
+		const waited = await execute(harness.tool("terminal_wait"), { ids: [settled.id], timeout_ms: 5 }, harness.ctx());
+		const stopped = await execute(harness.tool("terminal_stop"), { ids: [settled.id] }, harness.ctx());
+		const listed = await execute(harness.tool("terminal_list"), {}, harness.ctx());
+
+		const published = JSON.stringify({ started, checked, waited, stopped, listed, messages: harness.sendMessage.mock.calls });
+		expect(published).not.toContain(secret);
+		expect(published).not.toContain("deploy --token");
+		expect(published).toContain("benign diagnostic");
+		expect(harness.tasks.get(settled.id)?.command).toContain(secret);
 	});
 
 	it("uses current session ownership at every check, wait, stop, and list boundary", async () => {

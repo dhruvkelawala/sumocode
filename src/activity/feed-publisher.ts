@@ -272,6 +272,20 @@ export function redactActivitySecrets(text: string): string {
 		.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/giu, "$1[REDACTED]@");
 }
 
+export function redactActivityOutputTail(
+	input: string | Uint8Array,
+	options: { readonly maxBytes: number; readonly contextBytes: number; readonly truncated?: boolean },
+): string {
+	let raw = boundedOutputTail(input, { maxBytes: options.contextBytes, maxLines: Number.MAX_SAFE_INTEGER });
+	if (options.truncated) {
+		// A tail can begin after the credential label. Drop that unclassifiable
+		// partial row; a newline-free truncated tail is therefore intentionally empty.
+		const newline = raw.indexOf("\n");
+		raw = newline === -1 ? "" : raw.slice(newline + 1);
+	}
+	return boundedOutputTail(redactActivitySecrets(raw), { maxBytes: options.maxBytes });
+}
+
 function boundedHead(text: string, maxChars: number): string {
 	return Array.from(sanitizeActivityText(text)).slice(0, maxChars).join("");
 }

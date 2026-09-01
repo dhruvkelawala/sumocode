@@ -1,4 +1,4 @@
-import { sanitizeActivityText } from "../activity/domain.js";
+import { redactActivitySecrets } from "../activity/feed-publisher.js";
 import type { TerminalStopResult, TerminalTaskObservation, TerminalTaskSnapshot, TerminalWaitResult } from "./task-types.js";
 
 export const TERMINAL_TOOL_GUIDELINES = [
@@ -17,7 +17,7 @@ export const TERMINAL_TOOL_DESCRIPTIONS = {
 } as const;
 
 function bounded(value: string, maxChars: number): string {
-	const clean = sanitizeActivityText(value).trimEnd();
+	const clean = redactActivitySecrets(value).trimEnd();
 	if (clean.length <= maxChars) return clean;
 	return `[output tail truncated]\n${clean.slice(-maxChars)}`;
 }
@@ -33,24 +33,24 @@ function elapsed(task: TerminalTaskSnapshot, currentTime = Date.now()): string {
 
 export function describeTerminal(task: TerminalTaskSnapshot): string {
 	const exit = task.exitCode === undefined ? "" : ` · exit ${task.exitCode ?? "unknown"}`;
-	return `${task.id} · ${task.status}${exit} · ${task.deliveryState} · ${elapsed(task)} · ${sanitizeActivityText(task.title)}`;
+	return `${task.id} · ${task.status}${exit} · ${task.deliveryState} · ${elapsed(task)} · ${redactActivitySecrets(task.title)}`;
 }
 
 export function buildStartResult(task: TerminalTaskSnapshot): string {
 	return [
-		`Started terminal ${task.id} · ${sanitizeActivityText(task.title)}.`,
+		`Started terminal ${task.id} · ${redactActivitySecrets(task.title)}.`,
 		`status: ${task.status} · completion: ${task.completionPolicy} · pid: ${task.pid ?? "pending"}`,
-		`cwd: ${sanitizeActivityText(task.cwd)}`,
+		`cwd: ${redactActivitySecrets(task.cwd)}`,
 		"stdin: unavailable — interactive commands will not work",
-		`Full log: ${task.logFile}`,
+		`Full log: ${redactActivitySecrets(task.logFile)}`,
 	].join("\n");
 }
 
 export function buildObservationResult(observation: TerminalTaskObservation): string {
 	return [
 		describeTerminal(observation.task),
-		`cwd: ${sanitizeActivityText(observation.task.cwd)}`,
-		`Full log: ${observation.task.logFile}`,
+		`cwd: ${redactActivitySecrets(observation.task.cwd)}`,
+		`Full log: ${redactActivitySecrets(observation.task.logFile)}`,
 		"",
 		"Output tail:",
 		bounded(observation.output, 16 * 1024) || "(no output)",
@@ -71,18 +71,18 @@ export function buildWaitResult(result: TerminalWaitResult): string {
 export function buildStopResult(results: readonly TerminalStopResult[]): string {
 	return results.map((result) => {
 		const output = result.output ? `\n${bounded(result.output, 8 * 1024)}` : "";
-		return `${result.message}${output}`;
+		return `${redactActivitySecrets(result.message)}${output}`;
 	}).join("\n\n");
 }
 
 export function buildTerminalResultMessage(task: TerminalTaskSnapshot, output: string): string {
 	return [
-		`Terminal ${task.id} "${sanitizeActivityText(task.title)}" ${task.status}.`,
-		`exit: ${task.exitCode ?? "unknown"} · elapsed: ${elapsed(task)} · cwd: ${sanitizeActivityText(task.cwd)}`,
+		`Terminal ${task.id} "${redactActivitySecrets(task.title)}" ${task.status}.`,
+		`exit: ${task.exitCode ?? "unknown"} · elapsed: ${elapsed(task)} · cwd: ${redactActivitySecrets(task.cwd)}`,
 		"",
 		"Final output tail:",
 		bounded(output, 8 * 1024) || "(no output)",
 		"",
-		`Full log: ${task.logFile}`,
+		`Full log: ${redactActivitySecrets(task.logFile)}`,
 	].join("\n");
 }

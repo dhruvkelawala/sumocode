@@ -17,13 +17,14 @@ import {
 	ACTIVITY_SETTLED_RETENTION_COUNT,
 	ACTIVITY_SETTLED_RETENTION_MS,
 	ActivityFeedPublisher,
+	redactActivityOutputTail,
 	redactActivitySecrets,
 	type ActivityFeedDiagnostic,
 	type ActivityFeedPublisherOptions,
 	type ActivityFeedWriterIdentity,
 	type ActivityFeedWriterState,
 } from "./feed-publisher.js";
-import { boundedOutputTail } from "./output-tail.js";
+import { ACTIVITY_OUTPUT_MAX_BYTES, boundedOutputTail } from "./output-tail.js";
 import { activityFromSubagentSnapshot } from "./subagent-adapter.js";
 
 const DEFAULT_SUBAGENT_DEBOUNCE_MS = 50;
@@ -529,17 +530,11 @@ export class ActivityManagerBridge {
 					if (this.terminalManager.getOutputTailBytes || this.terminalManager.getOutputBytes) {
 						const tail = this.terminalManager.getOutputTailBytes?.(task, TERMINAL_REDACTION_CONTEXT_BYTES);
 						const bytes = tail?.bytes ?? this.terminalManager.getOutputBytes!(task, TERMINAL_REDACTION_CONTEXT_BYTES);
-						let raw = boundedOutputTail(bytes, {
-							maxBytes: TERMINAL_REDACTION_CONTEXT_BYTES,
-							maxLines: Number.MAX_SAFE_INTEGER,
+						output = redactActivityOutputTail(bytes, {
+							maxBytes: ACTIVITY_OUTPUT_MAX_BYTES,
+							contextBytes: TERMINAL_REDACTION_CONTEXT_BYTES,
+							truncated: tail?.truncated,
 						});
-						if (tail?.truncated) {
-							// The first retained row may have lost a credential label. Discard
-							// that partial row rather than persist an unclassifiable value.
-							const newline = raw.indexOf("\n");
-							raw = newline === -1 ? "" : raw.slice(newline + 1);
-						}
-						output = boundedOutputTail(redactActivitySecrets(raw));
 					} else {
 						output = boundedOutputTail(redactActivitySecrets(this.terminalManager.getOutput(task)));
 					}

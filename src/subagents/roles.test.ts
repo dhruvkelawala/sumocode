@@ -50,7 +50,7 @@ describe("subagent roles", () => {
 		const loaded = fromJson({ roles: [{ id: "research", systemPrompt: "   " }] });
 		const role = loaded.roles.find((candidate) => candidate.id === "research");
 		expect(role?.systemPrompt).toContain("read-only investigator");
-		expect(loaded.warnings).toEqual(["role research has an invalid systemPrompt; entry skipped"]);
+		expect(loaded.warnings).toEqual([{ scope: "role", roleId: "research", message: "role research has an invalid systemPrompt; entry skipped" }]);
 	});
 
 	it("accepts complete new roles and rejects incomplete ones", () => {
@@ -60,7 +60,7 @@ describe("subagent roles", () => {
 		] });
 		expect(loaded.roles.find((role) => role.id === "security")).toMatchObject({ label: "Security", systemPrompt: "audit security" });
 		expect(loaded.roles.some((role) => role.id === "missing-prompt")).toBe(false);
-		expect(loaded.warnings.join("\n")).toContain("requires label and systemPrompt");
+		expect(loaded.warnings.map((warning) => warning.message).join("\n")).toContain("requires label and systemPrompt");
 	});
 
 	it("skips invalid entries, ignores unknown fields, and drops invalid tools", () => {
@@ -71,10 +71,25 @@ describe("subagent roles", () => {
 		] });
 		expect(loaded.roles.find((role) => role.id === "research")?.thinking).toBeUndefined();
 		expect(loaded.roles.find((role) => role.id === "review")?.tools).toEqual(["read"]);
-		expect(loaded.warnings.join("\n")).toContain("invalid thinking");
-		expect(loaded.warnings.join("\n")).toContain("unknown field futureField");
-		expect(loaded.warnings.join("\n")).toContain("invalid tool mcp");
-		expect(loaded.warnings.join("\n")).toContain("must be an object");
+		const warningText = loaded.warnings.map((warning) => warning.message).join("\n");
+		expect(warningText).toContain("invalid thinking");
+		expect(warningText).toContain("unknown field futureField");
+		expect(warningText).toContain("invalid tool mcp");
+		expect(warningText).toContain("must be an object");
+	});
+
+	it("scopes role warnings to an affected role or the whole file", () => {
+		const loaded = fromJson({ roles: [
+			{ id: "research", thinking: "enormous" },
+			{ id: "review", tools: ["read", "mcp"] },
+			"invalid",
+		] });
+
+		expect(loaded.warnings).toEqual([
+			{ scope: "role", roleId: "research", message: "role research has an invalid thinking level; entry skipped" },
+			{ scope: "role", roleId: "review", message: "role review ignores invalid tool mcp" },
+			{ scope: "file", message: "roles[2] must be an object; entry skipped" },
+		]);
 	});
 
 	it("normalizes explicit inheritance sentinels over built-in defaults", () => {
@@ -91,13 +106,18 @@ describe("subagent roles", () => {
 		expect(loaded.warnings).toEqual([]);
 	});
 
-	it("falls back to built-ins for bad json and oversized files", () => {
+	it("falls back to built-ins for bad json, oversized files, and read failures", () => {
 		const bad = loadRoles({ readFile: () => "{", env: {} });
 		const oversized = loadRoles({ readFile: () => "x".repeat(256 * 1024 + 1), env: {} });
+		const unreadable = loadRoles({ readFile: () => { throw new Error("permission denied"); }, env: {} });
 		expect(bad.roles).toEqual(BUILT_IN_ROLES);
-		expect(bad.warnings[0]).toContain("invalid roles.json");
+		expect(bad.warnings[0]?.message).toContain("invalid roles.json");
+		expect(bad.warnings[0]?.scope).toBe("file");
 		expect(oversized.roles).toEqual(BUILT_IN_ROLES);
-		expect(oversized.warnings[0]).toContain("exceeds 256 KB");
+		expect(oversized.warnings[0]?.message).toContain("exceeds 256 KB");
+		expect(oversized.warnings[0]?.scope).toBe("file");
+		expect(unreadable.roles).toEqual(BUILT_IN_ROLES);
+		expect(unreadable.warnings).toEqual([{ scope: "file", message: "unable to read roles.json: permission denied" }]);
 	});
 
 	it("falls back without warning when roles.json does not exist", () => {

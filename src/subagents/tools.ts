@@ -8,7 +8,7 @@ import type { TerminalHost } from "../terminal-host/types.js";
 import { latestText, type SubagentSnapshot } from "./domain.js";
 import { type AtCapacityDetails, SubagentManager } from "./manager.js";
 import { formatCompletionManifestSummary, SUBAGENT_PROMPT_GUIDELINES, SUBAGENT_PROMPT_SNIPPET, SUBAGENT_TOOL_DESCRIPTIONS } from "./prompt.js";
-import { loadRoles } from "./roles.js";
+import { BUILT_IN_ROLES, loadRoles } from "./roles.js";
 
 const StringEnum = <T extends readonly string[]>(values: T, options?: { description?: string }) => {
 	const schema = { type: "string" as const, enum: [...values] };
@@ -151,15 +151,19 @@ export function registerSubagentTools(
 		async execute(toolCallId, params, _signal, _onUpdate, ctx) {
 			const loaded = roleLoader();
 			const loadedRoles = loaded.roles;
-			if (params.role && loaded.warnings.length > 0) {
-				return makeToolResult(`Unable to spawn role ${params.role}: roles.json has invalid configuration:\n${loaded.warnings.map((warning) => `- ${warning}`).join("\n")}`, {
+			const role = params.role ? loadedRoles.find((candidate) => candidate.id === params.role) : undefined;
+			const selectedIsBuiltIn = params.role ? BUILT_IN_ROLES.some((candidate) => candidate.id === params.role) : false;
+			const relevantWarnings = params.role
+				? loaded.warnings.filter((warning) => warning.scope === "role" ? warning.roleId === params.role : !selectedIsBuiltIn)
+				: [];
+			if (params.role && relevantWarnings.length > 0) {
+				return makeToolResult(`Unable to spawn role ${params.role}: roles.json has invalid configuration:\n${relevantWarnings.map((warning) => `- ${warning.message}`).join("\n")}`, {
 					action: "spawn",
 					status: "invalid_role_config",
 					role: params.role,
-					warnings: loaded.warnings,
+					warnings: relevantWarnings,
 				});
 			}
-			const role = params.role ? loadedRoles.find((candidate) => candidate.id === params.role) : undefined;
 			if (params.role && !role) {
 				const knownRoles = loadedRoles.map((candidate) => candidate.id);
 				return makeToolResult(`Unknown subagent role: ${params.role}. Known roles: ${knownRoles.join(", ") || "(none)"}.`, {

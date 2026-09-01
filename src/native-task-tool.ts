@@ -1096,9 +1096,13 @@ const runSingleTask = async (options: {
 	};
 
 	const stderr = new BoundedUtf8Tail();
+	let stderrChanged = false;
 	const emitUpdate = () => {
 		if (!options.onResultUpdate) return;
-		currentResult.stderr = stderr.toString();
+		if (stderrChanged) {
+			currentResult.stderr = stderr.toString();
+			stderrChanged = false;
+		}
 		options.onResultUpdate(currentResult);
 	};
 
@@ -1200,7 +1204,10 @@ const runSingleTask = async (options: {
 				},
 			});
 			const onStdout = (data: string | Uint8Array) => stdout.write(data);
-			const onStderr = (data: string | Uint8Array) => stderr.append(data);
+			const onStderr = (data: string | Uint8Array) => {
+				stderr.append(data);
+				stderrChanged = true;
+			};
 			const cleanup = () => {
 				proc.stdout.removeListener("data", onStdout);
 				proc.stderr.removeListener("data", onStderr);

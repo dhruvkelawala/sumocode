@@ -3925,9 +3925,13 @@ var runSingleTask = async (options) => {
     fork: options.fork
   };
   const stderr = new BoundedUtf8Tail();
+  let stderrChanged = false;
   const emitUpdate = () => {
     if (!options.onResultUpdate) return;
-    currentResult.stderr = stderr.toString();
+    if (stderrChanged) {
+      currentResult.stderr = stderr.toString();
+      stderrChanged = false;
+    }
     options.onResultUpdate(currentResult);
   };
   let forkSession;
@@ -4021,7 +4025,10 @@ var runSingleTask = async (options) => {
         }
       });
       const onStdout = (data) => stdout.write(data);
-      const onStderr = (data) => stderr.append(data);
+      const onStderr = (data) => {
+        stderr.append(data);
+        stderrChanged = true;
+      };
       const cleanup = () => {
         proc.stdout.removeListener("data", onStdout);
         proc.stderr.removeListener("data", onStderr);

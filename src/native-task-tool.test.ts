@@ -951,7 +951,7 @@ describe("native task tool", () => {
 		expect(Buffer.byteLength(stderr)).toBeLessThanOrEqual(CHILD_STDERR_TAIL_MAX_BYTES);
 	});
 
-	it("materializes stderr only when publishing an update or finishing", async () => {
+	it("materializes stderr only after it changes or when finishing", async () => {
 		const proc = new FakeTaskProcess();
 		const updates: TaskUpdate[] = [];
 		const materialize = vi.spyOn(BoundedUtf8Tail.prototype, "toString");
@@ -965,9 +965,17 @@ describe("native task tool", () => {
 			expect(materialize).toHaveBeenCalledTimes(1);
 			expect(updates.at(-1)?.details.results[0]?.stderr).toContain("diagnostic");
 
+			for (let index = 0; index < 100; index += 1) {
+				proc.stdout.emit("data", `${JSON.stringify({ type: "tool_execution_update", toolCallId: "1", partialResult: index })}\n`);
+			}
+			expect(materialize).toHaveBeenCalledTimes(1);
+			proc.stderr.emit("data", "new diagnostic");
+			proc.stdout.emit("data", `${JSON.stringify({ type: "tool_execution_update", toolCallId: "1", partialResult: "changed" })}\n`);
+			expect(materialize).toHaveBeenCalledTimes(2);
+
 			proc.emit("close", 2);
 			await running;
-			expect(materialize).toHaveBeenCalledTimes(2);
+			expect(materialize).toHaveBeenCalledTimes(3);
 		} finally {
 			materialize.mockRestore();
 		}

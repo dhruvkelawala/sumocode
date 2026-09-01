@@ -1,5 +1,4 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -13,6 +12,7 @@ import {
 	JsonLineDecoder,
 	TRUNCATED_HEAD_MARKER,
 	boundRetainedResult,
+	boundStableIdentifier,
 } from "../child-protocol.js";
 import { type BuiltInToolName, resolveTaskConfig } from "../native-task-config.js";
 import { isRecord, type TaskThinking, type ThinkingLevel } from "../native-task-params.js";
@@ -30,9 +30,7 @@ const ERROR_MAX = 4096;
 
 const boundedToolIdentifier = <T>(value: T, fallback = "tool"): string => {
 	const identifier = isString(value) && value ? value : fallback;
-	if (Buffer.byteLength(identifier, "utf8") <= TOOL_IDENTIFIER_MAX_BYTES) return identifier;
-	const hashSuffix = `#${createHash("sha256").update(identifier, "utf8").digest("hex")}`;
-	return `${boundRetainedResult(identifier, TOOL_IDENTIFIER_MAX_BYTES - Buffer.byteLength(hashSuffix, "utf8"))}${hashSuffix}`;
+	return boundStableIdentifier(identifier, TOOL_IDENTIFIER_MAX_BYTES);
 };
 
 const CLAUDE_OAUTH_ADAPTER_PACKAGE = "pi-claude-oauth-adapter";

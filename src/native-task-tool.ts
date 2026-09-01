@@ -24,6 +24,7 @@ import {
 	JsonLineDecoder,
 	TRUNCATED_HEAD_MARKER,
 	boundRetainedResult,
+	boundStableIdentifier,
 } from "./child-protocol.js";
 import { type BuiltInToolName, getBuiltInToolsFromActiveTools, resolveTaskConfig } from "./native-task-config.js";
 import {
@@ -786,6 +787,10 @@ const boundedMetadataText = (value: unknown, maxBytes = RETAINED_METADATA_MAX_BY
 	return head.append(value);
 };
 
+const boundedIdentifierText = (value: unknown, maxBytes = RETAINED_NAME_MAX_BYTES): string => (
+	typeof value === "string" && value.length > 0 ? boundStableIdentifier(value, maxBytes) : ""
+);
+
 const finiteNumber = (value: unknown): number => typeof value === "number" && Number.isFinite(value) ? value : 0;
 
 const retainedUsage = (value: unknown): AssistantMessage["usage"] => {
@@ -874,7 +879,7 @@ const handleEventMessage = (result: SingleResult, message: Message, liveOmitted 
 		const content = retainMultimodalContent(budget, rawContent);
 		const retained: Extract<Message, { role: "toolResult" }> = {
 			role: "toolResult",
-			toolCallId: boundedMetadataText(message.toolCallId, RETAINED_NAME_MAX_BYTES),
+			toolCallId: boundedIdentifierText(message.toolCallId),
 			toolName: boundedMetadataText(message.toolName, RETAINED_NAME_MAX_BYTES),
 			content,
 			details: message.details === undefined ? undefined : retainStructured(budget, message.details),
@@ -924,7 +929,7 @@ const handleEventMessage = (result: SingleResult, message: Message, liveOmitted 
 		else if (part.type === "thinking") content.push({ type: "thinking", thinking: retainAssistantText(part.thinking), redacted: part.redacted === true });
 		else if (part.type === "toolCall") content.push({
 			type: "toolCall",
-			id: boundedMetadataText(part.id, RETAINED_NAME_MAX_BYTES),
+			id: boundedIdentifierText(part.id),
 			name: boundedMetadataText(part.name, RETAINED_NAME_MAX_BYTES),
 			arguments: retainAssistantRecord(part.arguments),
 			namespace: boundedMetadataText(part.namespace, RETAINED_NAME_MAX_BYTES) || undefined,
@@ -1012,7 +1017,7 @@ const stringifyToolOutput = (value: unknown): string | undefined => {
 const toolArgsText = (args: ToolCallItem["args"]): string => typeof args === "string" ? args : JSON.stringify(args);
 
 const upsertToolEvent = (result: SingleResult, event: ToolCallUpdate): void => {
-	const id = boundedMetadataText(event.id, RETAINED_NAME_MAX_BYTES) || undefined;
+	const id = boundedIdentifierText(event.id) || undefined;
 	const name = boundedMetadataText(event.name, RETAINED_NAME_MAX_BYTES) || "tool";
 	const key = id ?? `${name}:${JSON.stringify(event.args ?? {})}`;
 	const index = result.toolEvents.findIndex((item) => (item.id ?? `${item.name}:${toolArgsText(item.args)}`) === key);

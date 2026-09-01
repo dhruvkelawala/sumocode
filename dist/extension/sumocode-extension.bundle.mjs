@@ -2717,6 +2717,7 @@ import { Text as Text2 } from "@earendil-works/pi-tui";
 import { Type as Type2 } from "typebox";
 
 // src/child-protocol.ts
+import { createHash } from "node:crypto";
 var MEBIBYTE = 1024 * 1024;
 var JSON_LINE_INITIAL_CAPACITY = 1024;
 var JSON_LINE_RETAINED_CAPACITY = 64 * 1024;
@@ -2761,6 +2762,11 @@ function boundRetainedResult(text, maxBytes = CHILD_RETAINED_RESULT_MAX_BYTES) {
   if (maxBytes < markerBytes) throw new Error("retained-result limit is smaller than its truncation marker");
   const head = decodeUtf8Head(bytes.subarray(0, maxBytes - markerBytes));
   return `${head}${TRUNCATED_HEAD_MARKER}`;
+}
+function boundStableIdentifier(identifier, maxBytes) {
+  if (Buffer.byteLength(identifier, "utf8") <= maxBytes) return identifier;
+  const hashSuffix = `#${createHash("sha256").update(identifier, "utf8").digest("hex")}`;
+  return `${boundRetainedResult(identifier, maxBytes - Buffer.byteLength(hashSuffix, "utf8"))}${hashSuffix}`;
 }
 var BoundedUtf8Head = class {
   constructor(maxBytes = CHILD_RETAINED_RESULT_MAX_BYTES) {
@@ -3663,6 +3669,7 @@ var boundedMetadataText = (value, maxBytes = RETAINED_METADATA_MAX_BYTES) => {
   const head = new BoundedUtf8Head(maxBytes);
   return head.append(value);
 };
+var boundedIdentifierText = (value, maxBytes = RETAINED_NAME_MAX_BYTES) => typeof value === "string" && value.length > 0 ? boundStableIdentifier(value, maxBytes) : "";
 var finiteNumber = (value) => typeof value === "number" && Number.isFinite(value) ? value : 0;
 var retainedUsage = (value) => {
   const usage = isRecord(value) ? value : {};
@@ -3740,7 +3747,7 @@ var handleEventMessage = (result, message, liveOmitted = false) => {
     const content2 = retainMultimodalContent(budget, rawContent2);
     const retained2 = {
       role: "toolResult",
-      toolCallId: boundedMetadataText(message.toolCallId, RETAINED_NAME_MAX_BYTES),
+      toolCallId: boundedIdentifierText(message.toolCallId),
       toolName: boundedMetadataText(message.toolName, RETAINED_NAME_MAX_BYTES),
       content: content2,
       details: message.details === void 0 ? void 0 : retainStructured(budget, message.details),
@@ -3785,7 +3792,7 @@ var handleEventMessage = (result, message, liveOmitted = false) => {
     else if (part.type === "thinking") content.push({ type: "thinking", thinking: retainAssistantText(part.thinking), redacted: part.redacted === true });
     else if (part.type === "toolCall") content.push({
       type: "toolCall",
-      id: boundedMetadataText(part.id, RETAINED_NAME_MAX_BYTES),
+      id: boundedIdentifierText(part.id),
       name: boundedMetadataText(part.name, RETAINED_NAME_MAX_BYTES),
       arguments: retainAssistantRecord(part.arguments),
       namespace: boundedMetadataText(part.namespace, RETAINED_NAME_MAX_BYTES) || void 0
@@ -3857,7 +3864,7 @@ var stringifyToolOutput = (value) => {
 };
 var toolArgsText = (args) => typeof args === "string" ? args : JSON.stringify(args);
 var upsertToolEvent = (result, event) => {
-  const id = boundedMetadataText(event.id, RETAINED_NAME_MAX_BYTES) || void 0;
+  const id = boundedIdentifierText(event.id) || void 0;
   const name = boundedMetadataText(event.name, RETAINED_NAME_MAX_BYTES) || "tool";
   const key = id ?? `${name}:${JSON.stringify(event.args ?? {})}`;
   const index = result.toolEvents.findIndex((item) => (item.id ?? `${item.name}:${toolArgsText(item.args)}`) === key);
@@ -14387,7 +14394,7 @@ function installTerminalTools(pi, manager) {
 }
 
 // src/activity/manager-bridge.ts
-import { createHash as createHash2, randomUUID as randomUUID5 } from "node:crypto";
+import { createHash as createHash3, randomUUID as randomUUID5 } from "node:crypto";
 
 // src/activity/feed-publisher.ts
 import { randomUUID as randomUUID4 } from "node:crypto";
@@ -14395,7 +14402,7 @@ import { existsSync as existsSync9, linkSync as linkSync2, readdirSync as readdi
 import { basename as basename6, dirname as dirname10, join as join16 } from "node:path";
 
 // src/activity/persistence.ts
-import { createHash, randomUUID as randomUUID3 } from "node:crypto";
+import { createHash as createHash2, randomUUID as randomUUID3 } from "node:crypto";
 import {
   chmodSync as chmodSync3,
   closeSync as closeSync3,
@@ -14514,7 +14521,7 @@ function ensurePrivateSumocodeDirectory(segments, rootDir = defaultActivityState
   return root;
 }
 function hashedSessionId(ownerSessionId2) {
-  return createHash("sha256").update(ownerSessionId2, "utf8").digest("hex");
+  return createHash2("sha256").update(ownerSessionId2, "utf8").digest("hex");
 }
 function ensureActivityRoot(rootDir = defaultActivityStateRoot()) {
   return ensurePrivateSumocodeDirectory(["activity", "v1"], rootDir);
@@ -15328,7 +15335,7 @@ function durableSubagentActivity(snapshot, retained) {
   if (established) return { ...activity, id: established.id };
   const reused = retained.find((candidate) => candidate.id === activity.id && (candidate.createdAt !== void 0 && candidate.createdAt !== activity.createdAt || candidate.sourceId !== void 0 && activity.sourceId !== void 0 && candidate.sourceId !== activity.sourceId));
   if (!reused) return activity;
-  const durableSuffix = activity.sourceId ? createHash2("sha256").update(activity.sourceId, "utf8").digest("hex").slice(0, 12) : Math.max(1, Math.floor(snapshot.createdAt)).toString(36);
+  const durableSuffix = activity.sourceId ? createHash3("sha256").update(activity.sourceId, "utf8").digest("hex").slice(0, 12) : Math.max(1, Math.floor(snapshot.createdAt)).toString(36);
   return { ...activity, id: `${activity.id}:${durableSuffix}` };
 }
 function lostActivity(activity, message, now) {
@@ -15983,7 +15990,6 @@ var spawnPaneChild = createPaneChildSpawner();
 
 // src/subagents/backend-pi.ts
 import { spawn as nodeSpawn } from "node:child_process";
-import { createHash as createHash3 } from "node:crypto";
 import { existsSync as existsSync11, readFileSync as readFileSync15, statSync } from "node:fs";
 import { homedir as homedir14 } from "node:os";
 import { dirname as dirname12, isAbsolute as isAbsolute2, join as join18, resolve as resolve6 } from "node:path";
@@ -16001,9 +16007,7 @@ var TOOL_IDENTIFIER_MAX_BYTES = 256;
 var ERROR_MAX = 4096;
 var boundedToolIdentifier = (value, fallback = "tool") => {
   const identifier = isString5(value) && value ? value : fallback;
-  if (Buffer.byteLength(identifier, "utf8") <= TOOL_IDENTIFIER_MAX_BYTES) return identifier;
-  const hashSuffix = `#${createHash3("sha256").update(identifier, "utf8").digest("hex")}`;
-  return `${boundRetainedResult(identifier, TOOL_IDENTIFIER_MAX_BYTES - Buffer.byteLength(hashSuffix, "utf8"))}${hashSuffix}`;
+  return boundStableIdentifier(identifier, TOOL_IDENTIFIER_MAX_BYTES);
 };
 var CLAUDE_OAUTH_ADAPTER_PACKAGE = "pi-claude-oauth-adapter";
 var MULTI_ACCOUNT_ADAPTER_SOURCE = "git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account";

@@ -1,4 +1,5 @@
 // oxlint-disable anti-slop/no-runtime-typeof -- stream chunks cross Node's string/byte I/O boundary here.
+import { createHash } from "node:crypto";
 const MEBIBYTE = 1024 * 1024;
 const JSON_LINE_INITIAL_CAPACITY = 1024;
 const JSON_LINE_RETAINED_CAPACITY = 64 * 1024;
@@ -59,6 +60,13 @@ export function boundRetainedResult(text: string, maxBytes = CHILD_RETAINED_RESU
 	if (maxBytes < markerBytes) throw new Error("retained-result limit is smaller than its truncation marker");
 	const head = decodeUtf8Head(bytes.subarray(0, maxBytes - markerBytes));
 	return `${head}${TRUNCATED_HEAD_MARKER}`;
+}
+
+/** Keep a producer identifier bounded while preserving stable identity across shared prefixes. */
+export function boundStableIdentifier(identifier: string, maxBytes: number): string {
+	if (Buffer.byteLength(identifier, "utf8") <= maxBytes) return identifier;
+	const hashSuffix = `#${createHash("sha256").update(identifier, "utf8").digest("hex")}`;
+	return `${boundRetainedResult(identifier, maxBytes - Buffer.byteLength(hashSuffix, "utf8"))}${hashSuffix}`;
 }
 
 /** Keep the start of streamed text within a UTF-8 byte cap. */

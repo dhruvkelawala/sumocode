@@ -700,6 +700,28 @@ describe("native task tool", () => {
 		expect(Buffer.byteLength(events[0]?.name ?? "", "utf8")).toBeLessThanOrEqual(256);
 	});
 
+	it("keeps bounded native tool identifiers distinct when their prefixes match", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		const sharedPrefix = "i".repeat(300);
+
+		for (const toolCallId of [`${sharedPrefix}a`, `${sharedPrefix}b`]) {
+			emitTaskEvent(proc, { type: "tool_execution_start", toolCallId, toolName: "read", args: {} });
+			emitTaskEvent(proc, { type: "tool_execution_update", toolCallId, toolName: "read", partialResult: "working" });
+			emitTaskEvent(proc, { type: "tool_execution_end", toolCallId, toolName: "read", result: "done", isError: false });
+		}
+		proc.emit("close", 0);
+
+		const toolResult = await running;
+		const events = toolResult.details?.results?.[0]?.toolEvents ?? [];
+		expect(events).toHaveLength(2);
+		expect(new Set(events.map((event) => event.id)).size).toBe(2);
+		for (const event of events) {
+			expect(event).toMatchObject({ status: "success", output: "done" });
+			expect(Buffer.byteLength(event.id ?? "", "utf8")).toBeLessThanOrEqual(256);
+		}
+	});
+
 	it("preserves literal truncation-marker text when a tool update reuses output", async () => {
 		const proc = new FakeTaskProcess();
 		const running = registeredTask(proc).execute();

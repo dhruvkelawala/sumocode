@@ -17368,9 +17368,10 @@ var SubagentManager = class {
       events(emit);
       return;
     }
-    void (async () => {
+    const consume = async () => {
       for await (const event of events) emit(event);
-    })().catch((error) => {
+    };
+    void consume().catch((error) => {
       const current = this.snapshots.get(id);
       if (!current || isSettled(current)) return;
       const message = error instanceof Error ? error.message : String(error);

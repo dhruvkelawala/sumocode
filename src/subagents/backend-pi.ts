@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -28,8 +29,10 @@ const TOOL_IDENTIFIER_MAX_BYTES = 256;
 const ERROR_MAX = 4096;
 
 const boundedToolIdentifier = <T>(value: T, fallback = "tool"): string => {
-	const head = new BoundedUtf8Head(TOOL_IDENTIFIER_MAX_BYTES);
-	return head.append(isString(value) ? value : fallback) || fallback;
+	const identifier = isString(value) && value ? value : fallback;
+	if (Buffer.byteLength(identifier, "utf8") <= TOOL_IDENTIFIER_MAX_BYTES) return identifier;
+	const hashSuffix = `#${createHash("sha256").update(identifier, "utf8").digest("hex")}`;
+	return `${boundRetainedResult(identifier, TOOL_IDENTIFIER_MAX_BYTES - Buffer.byteLength(hashSuffix, "utf8"))}${hashSuffix}`;
 };
 
 const CLAUDE_OAUTH_ADAPTER_PACKAGE = "pi-claude-oauth-adapter";

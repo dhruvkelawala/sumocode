@@ -15983,6 +15983,7 @@ var spawnPaneChild = createPaneChildSpawner();
 
 // src/subagents/backend-pi.ts
 import { spawn as nodeSpawn } from "node:child_process";
+import { createHash as createHash3 } from "node:crypto";
 import { existsSync as existsSync11, readFileSync as readFileSync15, statSync } from "node:fs";
 import { homedir as homedir14 } from "node:os";
 import { dirname as dirname12, isAbsolute as isAbsolute2, join as join18, resolve as resolve6 } from "node:path";
@@ -15999,8 +16000,10 @@ var PREVIEW_MAX2 = 160;
 var TOOL_IDENTIFIER_MAX_BYTES = 256;
 var ERROR_MAX = 4096;
 var boundedToolIdentifier = (value, fallback = "tool") => {
-  const head = new BoundedUtf8Head(TOOL_IDENTIFIER_MAX_BYTES);
-  return head.append(isString5(value) ? value : fallback) || fallback;
+  const identifier = isString5(value) && value ? value : fallback;
+  if (Buffer.byteLength(identifier, "utf8") <= TOOL_IDENTIFIER_MAX_BYTES) return identifier;
+  const hashSuffix = `#${createHash3("sha256").update(identifier, "utf8").digest("hex")}`;
+  return `${boundRetainedResult(identifier, TOOL_IDENTIFIER_MAX_BYTES - Buffer.byteLength(hashSuffix, "utf8"))}${hashSuffix}`;
 };
 var CLAUDE_OAUTH_ADAPTER_PACKAGE = "pi-claude-oauth-adapter";
 var MULTI_ACCOUNT_ADAPTER_SOURCE = "git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account";

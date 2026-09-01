@@ -219,6 +219,29 @@ describe("spawnPiChild", () => {
 		}
 	});
 
+	it("keeps bounded tool-event identifiers distinct when their prefixes match", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		const sharedPrefix = "i".repeat(300);
+		const firstId = `${sharedPrefix}a`;
+		const secondId = `${sharedPrefix}b`;
+
+		for (const toolCallId of [firstId, secondId]) {
+			emitJson(proc, { type: "tool_execution_start", toolCallId, toolName: "read", args: {} });
+			emitJson(proc, { type: "tool_execution_update", toolCallId, partialResult: "working" });
+			emitJson(proc, { type: "tool_execution_end", toolCallId, toolName: "read", result: "done", isError: false });
+		}
+
+		const toolIds = events.flatMap((event) => event.kind === "tool-start" || event.kind === "tool-update" || event.kind === "tool-end" ? [event.toolId] : []);
+		expect(new Set(toolIds).size).toBe(2);
+		expect(toolIds.slice(0, 3)).toEqual([toolIds[0], toolIds[0], toolIds[0]]);
+		expect(toolIds.slice(3)).toEqual([toolIds[3], toolIds[3], toolIds[3]]);
+		for (const toolId of toolIds) expect(Buffer.byteLength(toolId, "utf8")).toBeLessThanOrEqual(256);
+	});
+
 	it("bounds live assistant deltas without waiting for message_end", () => {
 		const proc = new FakeProcess();
 		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.

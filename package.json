@@ -61,6 +61,7 @@
     "test": "vitest run",
     "test:integration": "node scripts/run-integration-harness.mjs",
     "test:integration:preflight": "node scripts/preflight-integration.mjs",
+    "test:pi-compat": "scripts/smoke-pi-versions.sh --supported-matrix",
     "perf:resume": "vitest run src/sumo-tui/runtime/resume-flow.perf.test.ts",
     "perf:resume:report": "node scripts/measure-resume-perf.mjs",
     "perf:startup": "node scripts/perf-startup.mjs",

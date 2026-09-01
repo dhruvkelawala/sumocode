@@ -2,10 +2,10 @@
 
 > **Executor instructions**: Follow this plan step by step and run every verification command. Build a version matrix from the declared peer range, not guessed versions. Keep all three Pi packages aligned. Run installs only in disposable temporary directories. Stop if supported versions expose incompatible public RPC contracts. When done, update this plan's row in `plans/README.md` unless a reviewer says they own the index.
 >
-> **Drift check (run first)**: `git diff --stat 23c010a..HEAD -- package.json scripts/smoke-pi-versions.sh scripts/pi-compat-contract.mjs scripts/pi-compat-contract.test.mjs .github/workflows/ci.yml .github/workflows/pi-compat.yml`
+> **Drift check (run first)**: `git diff --stat 17de30f..HEAD -- package.json scripts/smoke-pi-versions.sh scripts/pi-compat-contract.mjs scripts/pi-compat-contract.test.mjs .github/workflows/ci.yml .github/workflows/pi-compat.yml`
 > **Working-tree preflight (run at the same time)**: `git status --short -- dist/host dist/extension package.json scripts/smoke-pi-versions.sh scripts/pi-compat-contract.mjs scripts/pi-compat-contract.test.mjs .github/workflows/ci.yml .github/workflows/pi-compat.yml`. If this reports pre-existing work, STOP and preserve it.
-> If the drift check reports an in-scope change, compare the Current state excerpts and assumptions with live code. If behavior or signatures differ, STOP and request plan reconciliation. Commit `23c010a` is the recorded Pi-0.84.3/accounts-command reconciliation baseline; do not revert to the original `b34bd79` audit point for execution drift.
-> **Read-only contract-reference check**: `git diff --stat 23c010a..HEAD -- bin/sumocode.sh src/sumo-tui/rpc/host-actions.ts src/sumo-tui/rpc/host-actions.test.ts src/sumo-tui/rpc/editor.ts src/extension.ts src/interaction-registry.ts`. These are reference surfaces, not files this plan may modify. If their named contracts changed after the reconciled baseline, STOP and reconcile the fixture expectations.
+> If the drift check reports an in-scope change, compare the Current state excerpts and assumptions with live code. If behavior or signatures differ, STOP and request plan reconciliation. Commit `17de30f` (PR #428 head) is the execution baseline; it includes the completed Plan 096 launcher parser and subsequent delimiter/readiness fixes.
+> **Read-only contract-reference check**: `git diff --stat 17de30f..HEAD -- bin/sumocode.sh src/sumo-tui/rpc/host-actions.ts src/sumo-tui/rpc/host-actions.test.ts src/sumo-tui/rpc/editor.ts src/extension.ts src/interaction-registry.ts`. These are reference surfaces, not files this plan may modify. If their named contracts changed after the reconciled baseline, STOP and reconcile the fixture expectations.
 > **Dependency check**: Confirm every plan named in **Depends on** is `DONE` in `plans/README.md`. If any is not DONE, STOP; do not recreate or assume its APIs.
 
 ## Status
@@ -17,7 +17,7 @@
 - **Category**: migration
 - **Milestone**: M3 — Lifecycle reliability
 - **Planned at**: commit `b34bd79`, 2026-08-28
-- **Reconciled at**: commit `23c010a`, 2026-08-28 (Pi 0.84.3 baseline)
+- **Reconciled at**: commit `17de30f`, 2026-09-01 (PR #428 head; Pi 0.84.3 + completed Plan 096 launcher contract)
 - **Issue**: https://github.com/dhruvkelawala/sumocode/issues/395
 
 ## Why this matters
@@ -26,11 +26,11 @@
 
 ## Current state
 
-`package.json:27-39` declares peer ranges `~0.84.3` and pins dev dependencies to `0.84.3`. `scripts/smoke-pi-versions.sh` defaults to one version, creates a fixed `/tmp/sumo-pi-${VERSION}` directory, installs only coding-agent plus SumoCode, checks `pi --version`, and tests direct-Pi dry-run bypass. `.github/workflows/ci.yml` has no Pi compatibility job.
+`package.json:27-39` declares peer ranges `~0.84.3` and pins dev dependencies to `0.84.3`; its integration script now runs the verification harness added before PR #428. `scripts/smoke-pi-versions.sh` still defaults to one version, creates a fixed `/tmp/sumo-pi-${VERSION}` directory, installs only coding-agent plus SumoCode, checks `pi --version`, and tests direct-Pi dry-run bypass. No workflow runs a Pi compatibility matrix.
 
 AGENTS.md requires every Pi bump to re-verify the RPC declaration contract, hardcoded built-in slash inventory, tool-bypass/security behavior, and direct-Pi modes. Candidate Pi owns two different command surfaces: `dist/core/slash-commands.js` exports `BUILTIN_SLASH_COMMANDS`, while RPC `get_commands` returns registered extension, prompt-template, and skill commands—not built-ins. `buildRpcAutocompleteCommands()` in `src/sumo-tui/rpc/editor.ts:99-121` deliberately unions those child-reported commands with the host inventory.
 
-The installed RPC declaration is under the candidate package root at `dist/modes/rpc/rpc-types.d.ts`; it is not a tracked SumoCode source file. SumoCode's host and routed-child inventories are `RPC_HOST_SLASH_COMMANDS` and `RPC_HOST_ROUTED_CHILD_COMMANDS` in `src/sumo-tui/rpc/host-actions.ts:154-185`, plus `isTreeNavigationBlockedCommand()` around lines 694-711. `src/sumo-tui/rpc/host-actions.test.ts:1779-1805` already checks SumoCode's table-to-dispatch correspondence but does not compare different installed Pi versions. The reconciled `23c010a` extension inventory includes `registerAccountsCommand(pi)` in both RPC-child and normal profiles; `accounts` must be present in the expected SumoCode extension-command fixture.
+The installed RPC declaration is under the candidate package root at `dist/modes/rpc/rpc-types.d.ts`; it is not a tracked SumoCode source file. SumoCode's host and routed-child inventories are `RPC_HOST_SLASH_COMMANDS` and `RPC_HOST_ROUTED_CHILD_COMMANDS` in `src/sumo-tui/rpc/host-actions.ts:154-185`, plus `isTreeNavigationBlockedCommand()` around lines 694-711. `src/sumo-tui/rpc/host-actions.test.ts:1779-1805` already checks SumoCode's table-to-dispatch correspondence but does not compare different installed Pi versions. The `17de30f` extension inventory includes `registerAccountsCommand(pi)` in both RPC-child and normal profiles; `accounts` must be present in the expected SumoCode extension-command fixture. The launcher fixture must exercise Plan 096's final option-consumption contract: `--tui-mode fullscreen` is forwarded while the first positional becomes `SUMOCODE_INITIAL_PROMPT`; direct-mode detection stops at the Pi-owned `--` delimiter.
 
 Plan 076 intentionally retired the *active registration* while retaining dormant `src/approval-modal.ts`, `src/commands/approval.ts`, and their tests. The compatibility fixture must assert `installApprovalGate` is not imported/called by `src/extension.ts`, `registerApprovalCommand` is not installed by `src/interaction-registry.ts`, and no `sumo:approval`/approval-overlay RPC route is active. Do not delete the dormant modules or flag generic confirmations/modals and the `approval` color token.
 
@@ -122,14 +122,14 @@ Exercise a published range with minimum/intermediate/latest patches, a range wit
 
 ## Done criteria
 
-- [ ] CI tests every published version allowed by all Pi peer ranges on qualifying PRs and on a daily registry-freshness schedule, with manual dispatch available.
-- [ ] All Pi packages are version-aligned in each fixture.
-- [ ] RPC, ownership-separated Pi built-in/host/extension command inventories, tool boundary, and direct-Pi bypass are checked.
-- [ ] Temporary installs cannot collide and are cleaned.
-- [ ] `pnpm vitest run scripts/pi-compat-contract.test.mjs` and `scripts/smoke-pi-versions.sh --supported-matrix` pass.
-- [ ] Full local gates pass.
-- [ ] `git status --short` contains only files listed in Scope plus this plan/index bookkeeping.
-- [ ] Plan 101's `plans/README.md` row is updated to `DONE` with completion evidence.
+- [x] CI tests every published version allowed by all Pi peer ranges on qualifying PRs and on a daily registry-freshness schedule, with manual dispatch available.
+- [x] All Pi packages are version-aligned in each fixture.
+- [x] RPC, ownership-separated Pi built-in/host/extension command inventories, tool boundary, and direct-Pi bypass are checked.
+- [x] Temporary installs cannot collide and are cleaned.
+- [x] `pnpm vitest run scripts/pi-compat-contract.test.mjs` and `scripts/smoke-pi-versions.sh --supported-matrix` pass.
+- [x] Full local gates pass.
+- [x] `git status --short` contains only files listed in Scope plus this plan/index bookkeeping.
+- [x] Plan 101's `plans/README.md` row is updated to `DONE` with completion evidence.
 
 ## STOP conditions
 

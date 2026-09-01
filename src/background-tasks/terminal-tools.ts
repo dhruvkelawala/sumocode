@@ -125,7 +125,12 @@ export class TerminalDeliveryCoordinator {
 
 	public bind(ctx: ExtensionContext): void {
 		this.active = { ownerSessionId: sessionId(ctx), ctx };
-		this.safeReconcile(ctx);
+		// The queued flush is the sole startup pass: acknowledge visible receipts,
+		// reclaim eligible completions, preserve passive-before-wake ordering, and
+		// schedule any remaining lease retry from one manager projection.
+		// Flush is idle-dependent: it returns without delivering while ctx.isIdle()
+		// is false, and agent_end/agent_settled re-run flushWhenIdle so a busy
+		// startup still converges once the session settles.
 		this.requestFlush();
 	}
 
@@ -154,12 +159,12 @@ export class TerminalDeliveryCoordinator {
 
 	public reconcile(ctx: ExtensionContext): void {
 		const ownerSessionId = sessionId(ctx);
+		this.acknowledgeObservable(ctx, ownerSessionId);
+		this.syncLeaseRetry(ownerSessionId);
+	}
+
+	private acknowledgeObservable(ctx: ExtensionContext, ownerSessionId: string): void {
 		this.manager.acknowledge(ownerSessionId, completionsFromContext(ctx).receipts);
-		const retryDelay = this.manager.getClaimRetryDelay(ownerSessionId);
-		if (retryDelay === undefined && this.retryTimer) {
-			clearTimeout(this.retryTimer);
-			this.retryTimer = undefined;
-		}
 	}
 
 	private safeReconcile(ctx: ExtensionContext): void {
@@ -192,16 +197,19 @@ export class TerminalDeliveryCoordinator {
 		if (!active || this.flushing || !active.ctx.isIdle()) return;
 		this.flushing = true;
 		try {
-			this.reconcile(active.ctx);
+			this.acknowledgeObservable(active.ctx, active.ownerSessionId);
+			let sentMessage = false;
 			const claimed = this.manager.claimPending(active.ownerSessionId, true, 1)
 				.sort((left, right) => Number(left.completionPolicy === "wake") - Number(right.completionPolicy === "wake"));
 			for (const task of claimed) {
-				// An explicit observer or an expired concurrent claimant can take
-				// ownership before this stack reaches send. The unique claim token,
-				// not completionId alone, decides which coordinator may publish.
-				const current = this.manager.get(task.id, active.ownerSessionId);
+				// Authoritative pre-send read, scoped to this session's owner: a
+				// different process may have reclaimed the claim token after our
+				// selection, which the retained projection cannot see. The unique claim
+				// token, not completionId alone, decides which coordinator may publish.
+				const current = this.manager.readIndexed(task.id, active.ownerSessionId);
+				if (!current) continue;
 				if (
-					current?.deliveryState !== "claimed" || !current.deliveryClaimToken ||
+					current.deliveryState !== "claimed" || !current.deliveryClaimToken ||
 					current.completionId !== task.completionId || current.deliveryClaimToken !== task.deliveryClaimToken
 				) continue;
 				const observable = completionsFromContext(active.ctx);
@@ -225,17 +233,29 @@ export class TerminalDeliveryCoordinator {
 					},
 					{ deliverAs: "followUp", triggerTurn: current.completionPolicy === "wake" },
 				);
+				sentMessage = true;
 				if (current.completionPolicy === "wake") break;
 			}
-			queueMicrotask(() => {
-				if (this.active?.ownerSessionId !== active.ownerSessionId) return;
-				this.safeReconcile(this.active.ctx);
-			});
-			const retryDelay = this.manager.getClaimRetryDelay(active.ownerSessionId);
-			if (retryDelay !== undefined) this.scheduleLeaseRetry(retryDelay);
+			if (sentMessage) {
+				queueMicrotask(() => {
+					if (this.active?.ownerSessionId !== active.ownerSessionId) return;
+					this.safeReconcile(this.active.ctx);
+				});
+			}
+			this.syncLeaseRetry(active.ownerSessionId);
 		} finally {
 			this.flushing = false;
 		}
+	}
+
+	private syncLeaseRetry(ownerSessionId: string): void {
+		const retryDelay = this.manager.getClaimRetryDelay(ownerSessionId);
+		if (retryDelay !== undefined) {
+			this.scheduleLeaseRetry(retryDelay);
+			return;
+		}
+		if (this.retryTimer) clearTimeout(this.retryTimer);
+		this.retryTimer = undefined;
 	}
 
 	private scheduleLeaseRetry(delayMs: number): void {

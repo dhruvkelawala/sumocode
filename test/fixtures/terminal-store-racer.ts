@@ -5,7 +5,7 @@ const [rootDir, id, gate, ready] = process.argv.slice(2);
 if (!rootDir || !id || !gate || !ready) throw new Error("usage: terminal-store-racer <root> <id> <gate> <ready>");
 
 const store = new TerminalTaskStore({ rootDir });
-store.loadAll();
+store.refreshIndex();
 writeFileSync(ready, "ready\n", { mode: 0o600 });
 chmodSync(ready, 0o600);
 while (!existsSync(gate)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);

@@ -89,6 +89,10 @@ function createHarness(initial: TerminalTaskSnapshot[] = []) {
 			const entry = tasks.get(id);
 			return entry?.ownerSessionId === owner ? entry : undefined;
 		}),
+		readIndexed: vi.fn((id: string, owner: string) => {
+			const entry = tasks.get(id);
+			return entry?.ownerSessionId === owner ? entry : undefined;
+		}),
 		getOutput: vi.fn(() => "bounded output"),
 		claimPending: vi.fn((owner: string, includeWake: boolean) => {
 			const claimed: TerminalTaskSnapshot[] = [];
@@ -232,6 +236,16 @@ describe("installTerminalTools", () => {
 		expect(harness.manager.list).toHaveBeenCalledWith("session-a");
 		expect(harness.manager.acknowledge).not.toHaveBeenCalled();
 		expect(harness.manager.getClaimRetryDelay).not.toHaveBeenCalled();
+	});
+
+	it("performs one startup reconciliation over the retained projection", async () => {
+		const harness = createHarness();
+
+		await harness.fire("session_start");
+
+		expect(harness.manager.acknowledge).toHaveBeenCalledOnce();
+		expect(harness.manager.claimPending).toHaveBeenCalledOnce();
+		expect(harness.manager.getClaimRetryDelay).toHaveBeenCalledOnce();
 	});
 
 	it("does not arm lease retries when no completion was claimed", async () => {

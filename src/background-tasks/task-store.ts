@@ -38,14 +38,64 @@ export interface TerminalTaskStoreDiagnostic {
 	readonly message: string;
 }
 
+export type TerminalTaskStoreReadKind = "full-scan" | "metadata";
+
+/** Explicit outcome of one full validated index pass. */
+export interface TerminalTaskIndexRefreshResult {
+	/** false when the store directory could not be read; the last good index generation is preserved. */
+	readonly ok: boolean;
+	/**
+	 * Generation completeness. False when the directory read failed, or when any
+	 * transient per-file read or transient task-directory validation prevented a
+	 * candidate from being freshly read — including a known record whose prior
+	 * compact entry is preserved through `preservedIds`. Corrupt, duplicate, and
+	 * legacy quarantines are terminal decisions that never make a generation
+	 * incomplete. Callers that must guarantee eventual visibility of every durable
+	 * record — the manager's index initialization — keep retrying until a complete
+	 * scan lands.
+	 */
+	readonly complete: boolean;
+	readonly snapshots: readonly TerminalTaskSnapshot[];
+	/**
+	 * Ids whose metadata read or task-directory validation failed transiently but
+	 * whose prior path and compact index entry were retained. Snapshot consumers
+	 * that prune stale entries (the manager's retained projection) must keep their
+	 * retained full snapshot for these ids in this successful generation instead
+	 * of pruning them.
+	 */
+	readonly preservedIds?: readonly string[];
+}
+
 export interface TerminalTaskStoreOptions {
 	readonly rootDir?: string;
 	readonly onDiagnostic?: (diagnostic: TerminalTaskStoreDiagnostic) => void;
 	readonly lockTimeoutMs?: number;
 	readonly lockPollMs?: number;
+	/** Test seam for deterministic projection scan/read assertions. */
+	readonly onRead?: (kind: TerminalTaskStoreReadKind) => void;
 	/** Test seam for deterministic stale-lock replacement races. */
 	readonly beforeAbandonedLockRename?: () => void;
+	/** Test seam for deterministic per-file metadata-read faults inside the index scan. */
+	readonly metaReadFault?: (path: string) => Error | undefined;
+	/** Test seam for deterministic task-directory validation faults inside the index scan. */
+	readonly directoryAssertFault?: (path: string) => Error | undefined;
 }
+
+/** Compact derived selection state. Durable metadata remains authoritative. */
+export interface IndexedTerminalTask {
+	readonly id: string;
+	readonly ownerSessionId: string;
+	readonly revision: number;
+	readonly status: TerminalTaskStatus;
+	readonly completionPolicy: TerminalCompletionPolicy;
+	readonly createdAt: number;
+	readonly updatedAt: number;
+	readonly deliveryState: TerminalDeliveryState;
+	readonly completionId?: string;
+	readonly deliveryClaimToken?: string;
+}
+
+type MutableIndexedTerminalTask = { -readonly [K in keyof IndexedTerminalTask]: IndexedTerminalTask[K] };
 
 export class StaleTerminalTaskRevisionError extends Error {
 	public constructor(
@@ -71,6 +121,8 @@ const DEFAULT_LOCK_TIMEOUT_MS = 5_000;
 const DEFAULT_LOCK_POLL_MS = 10;
 const NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
 const LOCK_SLEEP = new Int32Array(new SharedArrayBuffer(4));
+/** Transient per-file read errnos that must never quarantine an indexed record. */
+const TRANSIENT_READ_ERRNOS = new Set(["EACCES", "EIO", "EMFILE", "ENFILE", "EAGAIN"]);
 const KNOWN_ARTIFACT_NAMES = ["output.log", "exit.code", "launch.ready", "run.sh", "run.cmd"] as const;
 
 interface LockOwner {
@@ -151,6 +203,10 @@ function errorCode(error: Error): string | undefined {
 	return code === undefined || code === null ? undefined : String(code);
 }
 
+function isTransientReadError(error: unknown): boolean {
+	return causeIsError(error) && TRANSIENT_READ_ERRNOS.has(errorCode(error) ?? "");
+}
+
 function errorMatches(cause: unknown, code: string): boolean {
 	return causeIsError(cause) && errorCode(cause) === code;
 }
@@ -169,6 +225,11 @@ function sleepSync(milliseconds: number): void {
 
 export function isValidTerminalTaskId(id: string): boolean {
 	return TERMINAL_ID_PATTERN.test(id) && !id.includes("..");
+}
+
+/** Single canonical terminal ordering: newest createdAt first. */
+function terminalCreatedAtDesc(left: Readonly<{ createdAt: number }>, right: Readonly<{ createdAt: number }>): number {
+	return right.createdAt - left.createdAt;
 }
 
 function isStatusValue(value: unknown): value is TerminalTaskStatus {
@@ -397,11 +458,30 @@ function processProvesOwnerGone(owner: LockOwner): boolean {
 export class TerminalTaskStore {
 	public readonly rootDir: string;
 	private readonly metaPathById = new Map<string, string>();
+	private readonly indexedById = new Map<string, IndexedTerminalTask>();
+	private readonly indexedIdsByOwner = new Map<string, Set<string>>();
+	/**
+	 * Store-instance-lifetime identity reservation: id → canonical metadata
+	 * path, kept separate from the active query index above. One validated
+	 * adoption or create reserves the id; refresh quarantine may drop the id
+	 * from the active index but never releases or migrates this binding, so no
+	 * other path can adopt the id and create cannot resurrect it in this
+	 * process. Bounded security state by design: compact canonical paths only,
+	 * never full snapshots, so a Plan 106 bound on retained manager snapshots
+	 * leaves this reservation as O(ids) paths without becoming a second durable
+	 * authority.
+	 */
+	private readonly reservedPathById = new Map<string, string>();
 	private readonly onDiagnostic?: (diagnostic: TerminalTaskStoreDiagnostic) => void;
+	private readonly onRead?: (kind: TerminalTaskStoreReadKind) => void;
 	private readonly lockTimeoutMs: number;
 	private readonly lockPollMs: number;
 	private readonly processStartTime: string | undefined;
 	private readonly beforeAbandonedLockRename?: () => void;
+	private readonly metaReadFault?: (path: string) => Error | undefined;
+	private readonly directoryAssertFault?: (path: string) => Error | undefined;
+	/** Consecutive refreshIndex scan failures are diagnosed once per episode; the first successful scan resets the dedupe. */
+	private refreshFailureDiagnosed = false;
 
 	public constructor(options: TerminalTaskStoreOptions = {}) {
 		const requestedRoot = resolve(options.rootDir ?? defaultTerminalStoreRoot());
@@ -421,22 +501,63 @@ export class TerminalTaskStore {
 		this.rootDir = realpathSync(requestedRoot);
 		assertPrivateDirectory(this.rootDir);
 		this.onDiagnostic = options.onDiagnostic;
+		this.onRead = options.onRead;
 		this.lockTimeoutMs = Math.max(1, options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS);
 		this.lockPollMs = Math.max(1, options.lockPollMs ?? DEFAULT_LOCK_POLL_MS);
 		this.processStartTime = captureProcessStartTime(process.pid);
 		this.beforeAbandonedLockRename = options.beforeAbandonedLockRename;
+		this.metaReadFault = options.metaReadFault;
+		this.directoryAssertFault = options.directoryAssertFault;
 	}
 
-	public loadAll(): TerminalTaskSnapshot[] {
-		this.metaPathById.clear();
+	/** Rebuild every derived path/selection bucket from one validated disk pass. */
+	public refreshIndex(): TerminalTaskIndexRefreshResult {
+		this.onRead?.("full-scan");
 		let entries: Dirent[];
 		try {
 			entries = readdirSync(this.rootDir, { withFileTypes: true });
 		} catch (error) {
-			this.diagnostic("io", this.rootDir, error);
-			return [];
+			// A transient scan failure (EACCES, EMFILE, ...) must never replace the
+			// last good generation with an empty index. The failure is reported
+			// explicitly so freshness-boundary callers can distinguish an unreadable
+			// store from a successfully refreshed empty one. An initial failure
+			// naturally leaves the fresh empty index in place.
+			// Consecutive scan failures are diagnosed once per episode: a manager's
+			// lazy initialization retries share one episode with the constructor
+			// scan, so a persistently unreadable store does not repeat the
+			// store-level I/O diagnostic behind the caller's own deduped episode
+			// diagnostic. The first successful scan resets the dedupe.
+			if (!this.refreshFailureDiagnosed) {
+				this.refreshFailureDiagnosed = true;
+				this.diagnostic("io", this.rootDir, error);
+			}
+			return { ok: false, complete: false, snapshots: [] };
 		}
+		// The prior path→id reverse index is built lazily on the first transient
+		// read: a scan without transient failures never pays the O(index) build,
+		// and duplicate identity never depends on it because the persistent
+		// reservation map answers those decisions with one O(1) lookup.
+		let priorIdByPath: Map<string, string> | undefined;
+		const priorIdForPath = (path: string): string | undefined => {
+			let reverse = priorIdByPath;
+			if (!reverse) {
+				reverse = new Map();
+				for (const [id, priorPath] of this.metaPathById) reverse.set(priorPath, id);
+				priorIdByPath = reverse;
+			}
+			return reverse.get(path);
+		};
 		const snapshots: TerminalTaskSnapshot[] = [];
+		const paths = new Map<string, string>();
+		// Whether this successful scan freshly read every candidate it could have: a
+		// transient per-record failure skips the fresh read, so the generation is
+		// reported incomplete and freshness-boundary callers keep retrying until a
+		// scan reads it. Known records still preserve their prior compact entry for
+		// availability, but preservation is not complete freshness.
+		let generationComplete = true;
+		// Prior compact entries must be captured during the scan: replaceIndex
+		// clears the derived maps before the retained entries are re-applied.
+		const preservedEntries: IndexedTerminalTask[] = [];
 		for (const entry of entries) {
 			const taskDirectory = join(this.rootDir, entry.name);
 			if (entry.isSymbolicLink()) {
@@ -444,30 +565,97 @@ export class TerminalTaskStore {
 				continue;
 			}
 			if (!entry.isDirectory()) continue;
+			const metaPath = join(taskDirectory, "meta.json");
 			try {
+				const fault = this.directoryAssertFault?.(taskDirectory);
+				if (fault) throw fault;
 				this.assertTaskDirectory(taskDirectory);
 			} catch (error) {
+				// A transient directory-assert failure (an lstat/realpath errno from
+				// assertPrivateDirectory/realpathSync) is the directory-level twin of
+				// the transient per-file read below: a known id keeps its prior path
+				// and compact entry for availability, while any such transient leaves
+				// the generation incomplete so freshness-boundary callers keep retrying
+				// until the durable record is freshly read. Genuine validation failures
+				// still quarantine the directory as corrupt without arming retries.
+				if (isTransientReadError(error)) {
+					this.diagnostic("io", taskDirectory, error);
+					const priorId = priorIdForPath(metaPath);
+					const priorEntry = priorId === undefined ? undefined : this.indexedById.get(priorId);
+					if (priorEntry && !paths.has(priorEntry.id)) {
+						preservedEntries.push(priorEntry);
+						paths.set(priorEntry.id, metaPath);
+					}
+					generationComplete = false;
+					continue;
+				}
 				this.diagnostic("corrupt", taskDirectory, error);
 				continue;
 			}
-			const metaPath = join(taskDirectory, "meta.json");
 			if (!pathExists(metaPath)) continue;
-			const snapshot = this.readCandidate(metaPath);
-			if (!snapshot) continue;
-			if (this.metaPathById.has(snapshot.id)) {
-				this.diagnostic("duplicate", metaPath, `duplicate terminal id ${snapshot.id}`);
+			const read = this.readCandidate(metaPath);
+			if (read.kind === "transient") {
+				// A transient per-file read failure must not quarantine a record the
+				// last good index already knows. Retain its prior path and compact
+				// entry, and report the id so the manager preserves its retained full
+				// snapshot in this successful generation instead of pruning it. The
+				// generation is still incomplete: takeover and lazy-init callers must
+				// retry until the durable record is freshly read.
+				const priorId = priorIdForPath(metaPath);
+				const priorEntry = priorId === undefined ? undefined : this.indexedById.get(priorId);
+				if (priorEntry && !paths.has(priorEntry.id)) {
+					preservedEntries.push(priorEntry);
+					paths.set(priorEntry.id, metaPath);
+				}
+				generationComplete = false;
 				continue;
 			}
-			this.metaPathById.set(snapshot.id, metaPath);
-			snapshots.push(snapshot);
+			if (read.kind === "invalid") continue;
+			// Known-path reservation: a parsed id whose reserved path differs is a
+			// duplicate of that prior record no matter where it sorts in this scan —
+			// and even if the prior path later fails transiently, is corrupt, has
+			// disappeared by the time it is visited, or was already quarantined out
+			// of the active index by a previous refresh. The reservation is
+			// store-instance lifetime: the known path owns the identity; a duplicate
+			// never takes it over.
+			const reservedPath = this.reservedPathById.get(read.snapshot.id);
+			if (reservedPath !== undefined && reservedPath !== metaPath) {
+				this.diagnostic("duplicate", metaPath, `duplicate terminal id ${read.snapshot.id}`);
+				continue;
+			}
+			if (paths.has(read.snapshot.id)) {
+				this.diagnostic("duplicate", metaPath, `duplicate terminal id ${read.snapshot.id}`);
+				continue;
+			}
+			paths.set(read.snapshot.id, metaPath);
+			snapshots.push(read.snapshot);
 		}
-		return snapshots;
+		this.replaceIndex(snapshots, paths);
+		for (const priorEntry of preservedEntries) {
+			this.metaPathById.set(priorEntry.id, paths.get(priorEntry.id)!);
+			this.indexedById.set(priorEntry.id, priorEntry);
+			this.ownerMembership(priorEntry).add(priorEntry.id);
+		}
+		// A successful scan ends the failure episode: the next failure is
+		// diagnosed again.
+		this.refreshFailureDiagnosed = false;
+		return { ok: true, complete: generationComplete, snapshots, preservedIds: preservedEntries.map((entry) => entry.id) };
 	}
 
-	public listOwned(ownerSessionId: string): TerminalTaskSnapshot[] {
-		return this.loadAll()
-			.filter((task) => task.ownerSessionId === ownerSessionId)
-			.sort((left, right) => right.createdAt - left.createdAt);
+	/** O(1) no-I/O owner membership check against the compact index. */
+	public isIndexedOwner(id: string, ownerSessionId: string): boolean {
+		return this.indexedById.get(id)?.ownerSessionId === ownerSessionId;
+	}
+
+	public listOwnedIndexed(ownerSessionId: string): readonly IndexedTerminalTask[] {
+		const ids = this.indexedIdsByOwner.get(ownerSessionId);
+		if (!ids || ids.size === 0) return [];
+		return [...ids]
+			.flatMap((id) => {
+				const indexed = this.indexedById.get(id);
+				return indexed ? [indexed] : [];
+			})
+			.sort(terminalCreatedAtDesc);
 	}
 
 	public create(snapshot: TerminalTaskSnapshot, metaPath: string): TerminalTaskSnapshot {
@@ -478,25 +666,28 @@ export class TerminalTaskStore {
 		this.assertSnapshotPath(snapshot, resolvedMetaPath);
 		return this.withTaskLock(resolvedMetaPath, () => {
 			if (pathExists(resolvedMetaPath)) throw new Error(`Terminal metadata already exists: ${resolvedMetaPath}`);
+			// A reserved id must be rejected before the durable write or index
+			// replacement — even when an earlier refresh already quarantined the
+			// reserved record out of the active index — or a new record could hijack
+			// the reserved identity and leak across owner buckets. The reservation
+			// check is one O(1) map lookup: no scan, no metadata read.
+			const reservedPath = this.reservedPathById.get(snapshot.id);
+			if (reservedPath !== undefined) {
+				throw new Error(`Terminal id ${snapshot.id} is already reserved at ${reservedPath}`);
+			}
 			atomicWriteJson(resolvedMetaPath, snapshot);
+			this.reservedPathById.set(snapshot.id, resolvedMetaPath);
 			this.metaPathById.set(snapshot.id, resolvedMetaPath);
+			this.replaceIndexedEntry(snapshot);
 			return snapshot;
 		});
 	}
 
-	public get(id: string): TerminalTaskSnapshot | undefined {
-		let path = this.metaPathById.get(id);
-		if (!path) {
-			this.loadAll();
-			path = this.metaPathById.get(id);
-		}
+	/** Read one known indexed record without falling back to a directory scan. */
+	public getIndexed(id: string): TerminalTaskSnapshot | undefined {
+		const path = this.metaPathById.get(id);
 		if (!path) return undefined;
 		return this.readCurrent(path);
-	}
-
-	public getOwned(id: string, ownerSessionId: string): TerminalTaskSnapshot | undefined {
-		const snapshot = this.get(id);
-		return snapshot?.ownerSessionId === ownerSessionId ? snapshot : undefined;
 	}
 
 	/** Verify a direct child directory before creating or opening task artifacts. */
@@ -523,31 +714,103 @@ export class TerminalTaskStore {
 		return openPrivateExistingFile(resolvedPath, flags);
 	}
 
+	/**
+	 * CAS one durable transition under the record's task lock. `update` runs
+	 * against the authoritative snapshot just read under that lock — never a
+	 * retained projection — so eligibility predicates decide on disk truth.
+	 * Returning `undefined` records a no-op: the lock is honored, nothing is
+	 * written, and the current snapshot is returned unchanged. A revision
+	 * mismatch still fails with StaleTerminalTaskRevisionError before `update`
+	 * runs, so a changed record is retried against freshly loaded state.
+	 */
 	public transition(
 		id: string,
 		expectedRevision: number,
-		update: (current: TerminalTaskSnapshot) => Omit<TerminalTaskSnapshot, "revision">,
+		update: (current: TerminalTaskSnapshot) => Omit<TerminalTaskSnapshot, "revision"> | undefined,
 	): TerminalTaskSnapshot {
-		let path = this.metaPathById.get(id);
-		if (!path) {
-			this.loadAll();
-			path = this.metaPathById.get(id);
-		}
+		const path = this.metaPathById.get(id);
 		if (!path) throw new Error(`Unknown terminal task ${id}`);
 		return this.withTaskLock(path, () => {
-			const current = this.readCurrent(path!);
+			const current = this.readCurrent(path);
 			if (!current) throw new CorruptTerminalTaskRecordError(`Terminal record ${id} is corrupt or unreadable`);
 			if (current.revision !== expectedRevision) {
 				throw new StaleTerminalTaskRevisionError(id, expectedRevision, current.revision);
 			}
-			const next = { ...update(current), revision: current.revision + 1 } satisfies TerminalTaskSnapshot;
+			const decided = update(current);
+			if (!decided) {
+				// The locked snapshot is authoritative even for a no-op decision:
+				// refresh this record's compact entry from it so later candidate
+				// selection (claim/acknowledgement/retry-delay) sees state an external
+				// writer already advanced, instead of looping on reread/retry until the
+				// next explicit refreshIndex boundary.
+				this.replaceIndexedEntry(current);
+				return current;
+			}
+			const next = { ...decided, revision: current.revision + 1 } satisfies TerminalTaskSnapshot;
 			if (next.id !== current.id || next.ownerSessionId !== current.ownerSessionId || next.schemaVersion !== current.schemaVersion || next.createdAt !== current.createdAt || next.logFile !== current.logFile) {
 				throw new Error("Terminal task identity fields are immutable");
 			}
-			this.assertSnapshotPath(next, path!);
-			atomicWriteJson(path!, next);
+			this.assertSnapshotPath(next, path);
+			atomicWriteJson(path, next);
+			this.replaceIndexedEntry(next);
 			return next;
 		});
+	}
+
+	private replaceIndex(snapshots: readonly TerminalTaskSnapshot[], paths: ReadonlyMap<string, string>): void {
+		this.metaPathById.clear();
+		this.indexedById.clear();
+		this.indexedIdsByOwner.clear();
+		for (const snapshot of snapshots) {
+			const path = paths.get(snapshot.id);
+			if (!path) continue;
+			this.reservedPathById.set(snapshot.id, path);
+			this.metaPathById.set(snapshot.id, path);
+			this.indexedById.set(snapshot.id, this.compact(snapshot));
+			this.ownerMembership(snapshot).add(snapshot.id);
+		}
+	}
+
+	private replaceIndexedEntry(snapshot: TerminalTaskSnapshot): void {
+		const previous = this.indexedById.get(snapshot.id);
+		if (previous && previous.ownerSessionId !== snapshot.ownerSessionId) {
+			// A locked no-op against an externally rewritten record must migrate the
+			// id out of the stale owner bucket before adding the new one, so the id
+			// never answers in two owners' lists; emptied buckets are removed.
+			const staleIds = this.indexedIdsByOwner.get(previous.ownerSessionId);
+			if (staleIds) {
+				staleIds.delete(snapshot.id);
+				if (staleIds.size === 0) this.indexedIdsByOwner.delete(previous.ownerSessionId);
+			}
+		}
+		this.indexedById.set(snapshot.id, this.compact(snapshot));
+		this.ownerMembership(snapshot).add(snapshot.id);
+	}
+
+	/** O(1) owner membership; createdAt-desc ordering is applied lazily by listOwnedIndexed. */
+	private ownerMembership(record: Readonly<{ ownerSessionId: string }>): Set<string> {
+		let ids = this.indexedIdsByOwner.get(record.ownerSessionId);
+		if (!ids) {
+			ids = new Set<string>();
+			this.indexedIdsByOwner.set(record.ownerSessionId, ids);
+		}
+		return ids;
+	}
+
+	private compact(snapshot: TerminalTaskSnapshot): IndexedTerminalTask {
+		const indexed: MutableIndexedTerminalTask = {
+			id: snapshot.id,
+			ownerSessionId: snapshot.ownerSessionId,
+			revision: snapshot.revision,
+			status: snapshot.status,
+			completionPolicy: snapshot.completionPolicy,
+			createdAt: snapshot.createdAt,
+			updatedAt: snapshot.updatedAt,
+			deliveryState: snapshot.deliveryState,
+		};
+		if (snapshot.completionId !== undefined) indexed.completionId = snapshot.completionId;
+		if (snapshot.deliveryClaimToken !== undefined) indexed.deliveryClaimToken = snapshot.deliveryClaimToken;
+		return Object.freeze(indexed);
 	}
 
 	private assertStoreMetaPath(path: string): string {
@@ -577,35 +840,48 @@ export class TerminalTaskStore {
 		assertPrivateFile(snapshot.logFile);
 	}
 
-	private readCandidate(path: string): TerminalTaskSnapshot | undefined {
+	/** One indexed candidate read outcome: a validated snapshot, a transient I/O failure, or an invalid record. */
+	private readCandidate(path: string): { kind: "ok"; snapshot: TerminalTaskSnapshot } | { kind: "transient" } | { kind: "invalid" } {
 		let value: unknown;
 		try {
+			this.onRead?.("metadata");
+			const fault = this.metaReadFault?.(path);
+			if (fault) throw fault;
 			value = JSON.parse(readFileNoFollow(path));
 		} catch (error) {
+			if (isTransientReadError(error)) {
+				this.diagnostic("io", path, error);
+				return { kind: "transient" };
+			}
 			this.diagnostic("corrupt", path, error);
-			return undefined;
+			return { kind: "invalid" };
 		}
 		const version = schemaVersionOf(value);
 		if (version === 2 || version === 3) {
 			this.diagnostic("legacy", path, `legacy schema v${version} retained for diagnostics only`);
-			return undefined;
+			return { kind: "invalid" };
 		}
 		const snapshot = parseTerminalTaskSnapshot(value);
 		if (!snapshot) {
 			this.diagnostic("corrupt", path, `invalid or unsupported terminal record schema ${String(version)}`);
-			return undefined;
+			return { kind: "invalid" };
 		}
 		try {
 			this.assertSnapshotPath(snapshot, path);
 		} catch (error) {
+			if (isTransientReadError(error)) {
+				this.diagnostic("io", path, error);
+				return { kind: "transient" };
+			}
 			this.diagnostic("corrupt", path, error);
-			return undefined;
+			return { kind: "invalid" };
 		}
-		return snapshot;
+		return { kind: "ok", snapshot };
 	}
 
 	private readCurrent(path: string): TerminalTaskSnapshot | undefined {
-		return this.readCandidate(path);
+		const read = this.readCandidate(path);
+		return read.kind === "ok" ? read.snapshot : undefined;
 	}
 
 	private withTaskLock<T>(metaPath: string, operation: () => T): T {

@@ -11087,6 +11087,7 @@ var DEFAULT_LOCK_TIMEOUT_MS = 5e3;
 var DEFAULT_LOCK_POLL_MS = 10;
 var NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
 var LOCK_SLEEP = new Int32Array(new SharedArrayBuffer(4));
+var TRANSIENT_READ_ERRNOS = /* @__PURE__ */ new Set(["EACCES", "EIO", "EMFILE", "ENFILE", "EAGAIN"]);
 var KNOWN_ARTIFACT_NAMES = ["output.log", "exit.code", "launch.ready", "run.sh", "run.cmd"];
 function isSafeInteger(value) {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
@@ -11142,6 +11143,9 @@ function errorCode2(error) {
   const code = error.code;
   return code === void 0 || code === null ? void 0 : String(code);
 }
+function isTransientReadError(error) {
+  return causeIsError(error) && TRANSIENT_READ_ERRNOS.has(errorCode2(error) ?? "");
+}
 function errorMatches(cause, code) {
   return causeIsError(cause) && errorCode2(cause) === code;
 }
@@ -11156,6 +11160,9 @@ function sleepSync(milliseconds) {
 }
 function isValidTerminalTaskId(id) {
   return TERMINAL_ID_PATTERN.test(id) && !id.includes("..");
+}
+function terminalCreatedAtDesc(left, right) {
+  return right.createdAt - left.createdAt;
 }
 function isStatusValue(value) {
   return typeof value === "string" && STATUSES.has(value);
@@ -11319,11 +11326,30 @@ function processProvesOwnerGone(owner) {
 var TerminalTaskStore = class {
   rootDir;
   metaPathById = /* @__PURE__ */ new Map();
+  indexedById = /* @__PURE__ */ new Map();
+  indexedIdsByOwner = /* @__PURE__ */ new Map();
+  /**
+   * Store-instance-lifetime identity reservation: id → canonical metadata
+   * path, kept separate from the active query index above. One validated
+   * adoption or create reserves the id; refresh quarantine may drop the id
+   * from the active index but never releases or migrates this binding, so no
+   * other path can adopt the id and create cannot resurrect it in this
+   * process. Bounded security state by design: compact canonical paths only,
+   * never full snapshots, so a Plan 106 bound on retained manager snapshots
+   * leaves this reservation as O(ids) paths without becoming a second durable
+   * authority.
+   */
+  reservedPathById = /* @__PURE__ */ new Map();
   onDiagnostic;
+  onRead;
   lockTimeoutMs;
   lockPollMs;
   processStartTime;
   beforeAbandonedLockRename;
+  metaReadFault;
+  directoryAssertFault;
+  /** Consecutive refreshIndex scan failures are diagnosed once per episode; the first successful scan resets the dedupe. */
+  refreshFailureDiagnosed = false;
   constructor(options = {}) {
     const requestedRoot = resolve4(options.rootDir ?? defaultTerminalStoreRoot());
     const uid = process.getuid?.();
@@ -11341,21 +11367,41 @@ var TerminalTaskStore = class {
     this.rootDir = realpathSync2(requestedRoot);
     assertPrivateDirectory(this.rootDir);
     this.onDiagnostic = options.onDiagnostic;
+    this.onRead = options.onRead;
     this.lockTimeoutMs = Math.max(1, options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS);
     this.lockPollMs = Math.max(1, options.lockPollMs ?? DEFAULT_LOCK_POLL_MS);
     this.processStartTime = captureProcessStartTime(process.pid);
     this.beforeAbandonedLockRename = options.beforeAbandonedLockRename;
+    this.metaReadFault = options.metaReadFault;
+    this.directoryAssertFault = options.directoryAssertFault;
   }
-  loadAll() {
-    this.metaPathById.clear();
+  /** Rebuild every derived path/selection bucket from one validated disk pass. */
+  refreshIndex() {
+    this.onRead?.("full-scan");
     let entries;
     try {
       entries = readdirSync(this.rootDir, { withFileTypes: true });
     } catch (error) {
-      this.diagnostic("io", this.rootDir, error);
-      return [];
+      if (!this.refreshFailureDiagnosed) {
+        this.refreshFailureDiagnosed = true;
+        this.diagnostic("io", this.rootDir, error);
+      }
+      return { ok: false, complete: false, snapshots: [] };
     }
+    let priorIdByPath;
+    const priorIdForPath = (path2) => {
+      let reverse = priorIdByPath;
+      if (!reverse) {
+        reverse = /* @__PURE__ */ new Map();
+        for (const [id, priorPath] of this.metaPathById) reverse.set(priorPath, id);
+        priorIdByPath = reverse;
+      }
+      return reverse.get(path2);
+    };
     const snapshots = [];
+    const paths = /* @__PURE__ */ new Map();
+    let generationComplete = true;
+    const preservedEntries = [];
     for (const entry of entries) {
       const taskDirectory = join12(this.rootDir, entry.name);
       if (entry.isSymbolicLink()) {
@@ -11363,27 +11409,71 @@ var TerminalTaskStore = class {
         continue;
       }
       if (!entry.isDirectory()) continue;
+      const metaPath = join12(taskDirectory, "meta.json");
       try {
+        const fault = this.directoryAssertFault?.(taskDirectory);
+        if (fault) throw fault;
         this.assertTaskDirectory(taskDirectory);
       } catch (error) {
+        if (isTransientReadError(error)) {
+          this.diagnostic("io", taskDirectory, error);
+          const priorId = priorIdForPath(metaPath);
+          const priorEntry = priorId === void 0 ? void 0 : this.indexedById.get(priorId);
+          if (priorEntry && !paths.has(priorEntry.id)) {
+            preservedEntries.push(priorEntry);
+            paths.set(priorEntry.id, metaPath);
+          }
+          generationComplete = false;
+          continue;
+        }
         this.diagnostic("corrupt", taskDirectory, error);
         continue;
       }
-      const metaPath = join12(taskDirectory, "meta.json");
       if (!pathExists2(metaPath)) continue;
-      const snapshot = this.readCandidate(metaPath);
-      if (!snapshot) continue;
-      if (this.metaPathById.has(snapshot.id)) {
-        this.diagnostic("duplicate", metaPath, `duplicate terminal id ${snapshot.id}`);
+      const read = this.readCandidate(metaPath);
+      if (read.kind === "transient") {
+        const priorId = priorIdForPath(metaPath);
+        const priorEntry = priorId === void 0 ? void 0 : this.indexedById.get(priorId);
+        if (priorEntry && !paths.has(priorEntry.id)) {
+          preservedEntries.push(priorEntry);
+          paths.set(priorEntry.id, metaPath);
+        }
+        generationComplete = false;
         continue;
       }
-      this.metaPathById.set(snapshot.id, metaPath);
-      snapshots.push(snapshot);
+      if (read.kind === "invalid") continue;
+      const reservedPath = this.reservedPathById.get(read.snapshot.id);
+      if (reservedPath !== void 0 && reservedPath !== metaPath) {
+        this.diagnostic("duplicate", metaPath, `duplicate terminal id ${read.snapshot.id}`);
+        continue;
+      }
+      if (paths.has(read.snapshot.id)) {
+        this.diagnostic("duplicate", metaPath, `duplicate terminal id ${read.snapshot.id}`);
+        continue;
+      }
+      paths.set(read.snapshot.id, metaPath);
+      snapshots.push(read.snapshot);
     }
-    return snapshots;
+    this.replaceIndex(snapshots, paths);
+    for (const priorEntry of preservedEntries) {
+      this.metaPathById.set(priorEntry.id, paths.get(priorEntry.id));
+      this.indexedById.set(priorEntry.id, priorEntry);
+      this.ownerMembership(priorEntry).add(priorEntry.id);
+    }
+    this.refreshFailureDiagnosed = false;
+    return { ok: true, complete: generationComplete, snapshots, preservedIds: preservedEntries.map((entry) => entry.id) };
   }
-  listOwned(ownerSessionId2) {
-    return this.loadAll().filter((task) => task.ownerSessionId === ownerSessionId2).sort((left, right) => right.createdAt - left.createdAt);
+  /** O(1) no-I/O owner membership check against the compact index. */
+  isIndexedOwner(id, ownerSessionId2) {
+    return this.indexedById.get(id)?.ownerSessionId === ownerSessionId2;
+  }
+  listOwnedIndexed(ownerSessionId2) {
+    const ids = this.indexedIdsByOwner.get(ownerSessionId2);
+    if (!ids || ids.size === 0) return [];
+    return [...ids].flatMap((id) => {
+      const indexed = this.indexedById.get(id);
+      return indexed ? [indexed] : [];
+    }).sort(terminalCreatedAtDesc);
   }
   create(snapshot, metaPath) {
     if (snapshot.schemaVersion !== TERMINAL_TASK_SCHEMA_VERSION || snapshot.revision !== 1) {
@@ -11393,23 +11483,22 @@ var TerminalTaskStore = class {
     this.assertSnapshotPath(snapshot, resolvedMetaPath);
     return this.withTaskLock(resolvedMetaPath, () => {
       if (pathExists2(resolvedMetaPath)) throw new Error(`Terminal metadata already exists: ${resolvedMetaPath}`);
+      const reservedPath = this.reservedPathById.get(snapshot.id);
+      if (reservedPath !== void 0) {
+        throw new Error(`Terminal id ${snapshot.id} is already reserved at ${reservedPath}`);
+      }
       atomicWriteJson(resolvedMetaPath, snapshot);
+      this.reservedPathById.set(snapshot.id, resolvedMetaPath);
       this.metaPathById.set(snapshot.id, resolvedMetaPath);
+      this.replaceIndexedEntry(snapshot);
       return snapshot;
     });
   }
-  get(id) {
-    let path2 = this.metaPathById.get(id);
-    if (!path2) {
-      this.loadAll();
-      path2 = this.metaPathById.get(id);
-    }
+  /** Read one known indexed record without falling back to a directory scan. */
+  getIndexed(id) {
+    const path2 = this.metaPathById.get(id);
     if (!path2) return void 0;
     return this.readCurrent(path2);
-  }
-  getOwned(id, ownerSessionId2) {
-    const snapshot = this.get(id);
-    return snapshot?.ownerSessionId === ownerSessionId2 ? snapshot : void 0;
   }
   /** Verify a direct child directory before creating or opening task artifacts. */
   assertTaskDirectory(path2) {
@@ -11433,12 +11522,17 @@ var TerminalTaskStore = class {
     }
     return openPrivateExistingFile(resolvedPath, flags);
   }
+  /**
+   * CAS one durable transition under the record's task lock. `update` runs
+   * against the authoritative snapshot just read under that lock — never a
+   * retained projection — so eligibility predicates decide on disk truth.
+   * Returning `undefined` records a no-op: the lock is honored, nothing is
+   * written, and the current snapshot is returned unchanged. A revision
+   * mismatch still fails with StaleTerminalTaskRevisionError before `update`
+   * runs, so a changed record is retried against freshly loaded state.
+   */
   transition(id, expectedRevision, update) {
-    let path2 = this.metaPathById.get(id);
-    if (!path2) {
-      this.loadAll();
-      path2 = this.metaPathById.get(id);
-    }
+    const path2 = this.metaPathById.get(id);
     if (!path2) throw new Error(`Unknown terminal task ${id}`);
     return this.withTaskLock(path2, () => {
       const current = this.readCurrent(path2);
@@ -11446,14 +11540,69 @@ var TerminalTaskStore = class {
       if (current.revision !== expectedRevision) {
         throw new StaleTerminalTaskRevisionError(id, expectedRevision, current.revision);
       }
-      const next = { ...update(current), revision: current.revision + 1 };
+      const decided = update(current);
+      if (!decided) {
+        this.replaceIndexedEntry(current);
+        return current;
+      }
+      const next = { ...decided, revision: current.revision + 1 };
       if (next.id !== current.id || next.ownerSessionId !== current.ownerSessionId || next.schemaVersion !== current.schemaVersion || next.createdAt !== current.createdAt || next.logFile !== current.logFile) {
         throw new Error("Terminal task identity fields are immutable");
       }
       this.assertSnapshotPath(next, path2);
       atomicWriteJson(path2, next);
+      this.replaceIndexedEntry(next);
       return next;
     });
+  }
+  replaceIndex(snapshots, paths) {
+    this.metaPathById.clear();
+    this.indexedById.clear();
+    this.indexedIdsByOwner.clear();
+    for (const snapshot of snapshots) {
+      const path2 = paths.get(snapshot.id);
+      if (!path2) continue;
+      this.reservedPathById.set(snapshot.id, path2);
+      this.metaPathById.set(snapshot.id, path2);
+      this.indexedById.set(snapshot.id, this.compact(snapshot));
+      this.ownerMembership(snapshot).add(snapshot.id);
+    }
+  }
+  replaceIndexedEntry(snapshot) {
+    const previous = this.indexedById.get(snapshot.id);
+    if (previous && previous.ownerSessionId !== snapshot.ownerSessionId) {
+      const staleIds = this.indexedIdsByOwner.get(previous.ownerSessionId);
+      if (staleIds) {
+        staleIds.delete(snapshot.id);
+        if (staleIds.size === 0) this.indexedIdsByOwner.delete(previous.ownerSessionId);
+      }
+    }
+    this.indexedById.set(snapshot.id, this.compact(snapshot));
+    this.ownerMembership(snapshot).add(snapshot.id);
+  }
+  /** O(1) owner membership; createdAt-desc ordering is applied lazily by listOwnedIndexed. */
+  ownerMembership(record) {
+    let ids = this.indexedIdsByOwner.get(record.ownerSessionId);
+    if (!ids) {
+      ids = /* @__PURE__ */ new Set();
+      this.indexedIdsByOwner.set(record.ownerSessionId, ids);
+    }
+    return ids;
+  }
+  compact(snapshot) {
+    const indexed = {
+      id: snapshot.id,
+      ownerSessionId: snapshot.ownerSessionId,
+      revision: snapshot.revision,
+      status: snapshot.status,
+      completionPolicy: snapshot.completionPolicy,
+      createdAt: snapshot.createdAt,
+      updatedAt: snapshot.updatedAt,
+      deliveryState: snapshot.deliveryState
+    };
+    if (snapshot.completionId !== void 0) indexed.completionId = snapshot.completionId;
+    if (snapshot.deliveryClaimToken !== void 0) indexed.deliveryClaimToken = snapshot.deliveryClaimToken;
+    return Object.freeze(indexed);
   }
   assertStoreMetaPath(path2) {
     const resolvedPath = resolve4(path2);
@@ -11480,34 +11629,47 @@ var TerminalTaskStore = class {
     }
     assertPrivateFile(snapshot.logFile);
   }
+  /** One indexed candidate read outcome: a validated snapshot, a transient I/O failure, or an invalid record. */
   readCandidate(path2) {
     let value;
     try {
+      this.onRead?.("metadata");
+      const fault = this.metaReadFault?.(path2);
+      if (fault) throw fault;
       value = JSON.parse(readFileNoFollow(path2));
     } catch (error) {
+      if (isTransientReadError(error)) {
+        this.diagnostic("io", path2, error);
+        return { kind: "transient" };
+      }
       this.diagnostic("corrupt", path2, error);
-      return void 0;
+      return { kind: "invalid" };
     }
     const version = schemaVersionOf(value);
     if (version === 2 || version === 3) {
       this.diagnostic("legacy", path2, `legacy schema v${version} retained for diagnostics only`);
-      return void 0;
+      return { kind: "invalid" };
     }
     const snapshot = parseTerminalTaskSnapshot(value);
     if (!snapshot) {
       this.diagnostic("corrupt", path2, `invalid or unsupported terminal record schema ${String(version)}`);
-      return void 0;
+      return { kind: "invalid" };
     }
     try {
       this.assertSnapshotPath(snapshot, path2);
     } catch (error) {
+      if (isTransientReadError(error)) {
+        this.diagnostic("io", path2, error);
+        return { kind: "transient" };
+      }
       this.diagnostic("corrupt", path2, error);
-      return void 0;
+      return { kind: "invalid" };
     }
-    return snapshot;
+    return { kind: "ok", snapshot };
   }
   readCurrent(path2) {
-    return this.readCandidate(path2);
+    const read = this.readCandidate(path2);
+    return read.kind === "ok" ? read.snapshot : void 0;
   }
   withTaskLock(metaPath, operation) {
     const lockPath = join12(dirname6(metaPath), ".meta.lock");
@@ -11677,6 +11839,8 @@ var PRIVATE_FILE_MODE2 = 384;
 var PRIVATE_DIRECTORY_MODE2 = 448;
 var NO_FOLLOW2 = constants2.O_NOFOLLOW ?? 0;
 var MAX_TRANSITION_RETRIES = 16;
+var INDEX_INIT_RETRY_BACKOFF_MS = 1e3;
+var INDEX_INIT_RETRY_BACKOFF_MAX_MS = 6e4;
 function normalizePositive(value, fallback) {
   return value !== void 0 && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
 }
@@ -11816,6 +11980,19 @@ function sameTreeVerification(left, right) {
     return candidate?.pid === anchor.pid && candidate.processStartTime === anchor.processStartTime;
   });
 }
+function snapshotContentEquals(left, right) {
+  for (const pass of [left, right]) {
+    const other = pass === left ? right : left;
+    for (const key of Object.keys(pass)) {
+      if (key === "processTreeVerification") {
+        if (!sameTreeVerification(left.processTreeVerification, right.processTreeVerification)) return false;
+        continue;
+      }
+      if (pass[key] !== other[key]) return false;
+    }
+  }
+  return true;
+}
 function buildPosixScript(options) {
   return [
     "#!/usr/bin/env bash",
@@ -11884,6 +12061,27 @@ function abortError() {
   error.name = "AbortError";
   return error;
 }
+function isClaimable(task, ownerSessionId2, includeWake, wakeClaimsUsed, maxWake, now, claimLeaseMs) {
+  if (task.ownerSessionId !== ownerSessionId2) return false;
+  if (!isTerminalTaskSettled(task.status)) return false;
+  const claimLeaseExpired = task.deliveryState === "claimed" && now - task.updatedAt >= claimLeaseMs;
+  if (task.deliveryState !== "pending" && !claimLeaseExpired) return false;
+  if (task.completionPolicy === "wake" && (!includeWake || wakeClaimsUsed >= maxWake)) return false;
+  return true;
+}
+function isAcknowledgementMatch(task, ownerSessionId2, receiptKeys) {
+  if (task.ownerSessionId !== ownerSessionId2) return false;
+  if (task.deliveryState !== "claimed") return false;
+  if (task.completionId === void 0 || task.deliveryClaimToken === void 0) return false;
+  return receiptKeys.has(`${task.completionId}\0${task.deliveryClaimToken}`);
+}
+function deliveryEligibilityChanged(previous, snapshot) {
+  if (previous.deliveryState !== snapshot.deliveryState || previous.completionPolicy !== snapshot.completionPolicy || previous.completionId !== snapshot.completionId || previous.deliveryClaimToken !== snapshot.deliveryClaimToken) return true;
+  return previous.updatedAt !== snapshot.updatedAt && (previous.deliveryState === "claimed" || snapshot.deliveryState === "claimed");
+}
+function recoveryRelevantAdoption(previous, snapshot) {
+  return previous === void 0 || previous.revision !== snapshot.revision || previous.ownerSessionId !== snapshot.ownerSessionId || previous.status !== snapshot.status || previous.pid !== snapshot.pid || previous.processGroupId !== snapshot.processGroupId || previous.processStartTime !== snapshot.processStartTime;
+}
 var TerminalTaskManager = class {
   store;
   processTree;
@@ -11899,11 +12097,45 @@ var TerminalTaskManager = class {
   claimLeaseMs;
   startingRecoveryGraceMs;
   onDiagnostic;
+  onRefreshAdopt;
+  onRefreshRecover;
   tasks = /* @__PURE__ */ new Map();
   runtime = /* @__PURE__ */ new Map();
   listeners = /* @__PURE__ */ new Set();
   snapshotListeners = /* @__PURE__ */ new Set();
+  /** Open while a refresh batch is running: notifyChanges queues instead of publishing. */
+  refreshBatchDepth = 0;
+  /** Per-task changes queued while a refresh batch is open, deduped to the latest snapshot per id. */
+  refreshBatchQueued = /* @__PURE__ */ new Map();
+  /**
+   * Set when publishProjection is called while a refresh batch is open: the
+   * publication defers to the batch close, whose single fan-out supersedes any
+   * intermediate projection. No current in-batch path publishes directly, so
+   * this is batch-safety future-proofing for sync-in-batch mutation paths.
+   */
+  projectionPublishDeferred = false;
   detached = false;
+  /**
+   * False until one complete successful scan seeds the retained projection
+   * generation. An incomplete successful scan (a candidate unknown to the
+   * prior index hit a transient read) serves its indexed generation
+   * immediately but keeps this false so init retries stay armed until a
+   * complete scan lands.
+   */
+  indexInitialized = false;
+  /** True while the lazy seeding scan runs, so a listener fanned out by it cannot re-enter. */
+  indexInitInFlight = false;
+  /** Injectable-clock stamp of the last lazy init retry; further attempts back off. */
+  indexInitLastAttemptAt = Number.NEGATIVE_INFINITY;
+  /** Consecutive lazy init retries that left the index incomplete or failed; drives the doubling. */
+  indexInitFailedAttempts = 0;
+  /** Backoff the next lazy init retry must wait since the last attempt; reset by a complete scan. */
+  indexInitBackoffMs = INDEX_INIT_RETRY_BACKOFF_MS;
+  /** Init-scan failures are diagnosed once per episode kind; a failed⇄incomplete transition re-diagnoses once and the first complete scan resets the dedupe. */
+  indexInitDiagnosedKind;
+  /** One idle retry that wakes an uninitialized index at the current backoff boundary. */
+  indexInitRetryTimer;
+  indexInitRetryDueAt;
   constructor(options = {}) {
     this.store = options.store ?? new TerminalTaskStore({ onDiagnostic: options.onDiagnostic });
     this.processTree = options.processTree ?? systemProcessTree;
@@ -11919,9 +12151,23 @@ var TerminalTaskManager = class {
     this.claimLeaseMs = normalizePositive(options.claimLeaseMs, DEFAULT_CLAIM_LEASE_MS);
     this.startingRecoveryGraceMs = normalizePositive(options.startingRecoveryGraceMs, DEFAULT_STARTING_RECOVERY_GRACE_MS);
     this.onDiagnostic = options.onDiagnostic;
-    for (const snapshot of this.store.loadAll()) {
-      this.adopt(snapshot, false);
-      this.recover(snapshot);
+    this.onRefreshAdopt = options.onRefreshAdopt;
+    this.onRefreshRecover = options.onRefreshRecover;
+    const initializationAttemptAt = Math.max(1, Math.floor(this.now()));
+    const initialization = this.store.refreshIndex();
+    if (initialization.ok) {
+      this.indexInitialized = initialization.complete;
+      for (const snapshot of initialization.snapshots) {
+        this.adopt(snapshot, false);
+        this.recover(snapshot);
+      }
+      if (!initialization.complete) {
+        this.diagnoseIndexInitFailure(true);
+        this.scheduleIndexInitRetryTimer(initializationAttemptAt);
+      }
+    } else {
+      this.diagnoseIndexInitFailure();
+      this.scheduleIndexInitRetryTimer(initializationAttemptAt);
     }
   }
   async start(options) {
@@ -12048,31 +12294,40 @@ ${command}
     this.arm(id);
     return running.snapshot;
   }
-  /** Pure inventory read: no recovery, delivery reconciliation, observation, or listener notification. */
+  /** Owner-ordered inventory: the store's owner index joins retained full snapshots. */
   list(ownerSessionId2) {
-    return this.store.listOwned(ownerSessionId2);
+    this.ensureIndexInitialized();
+    return this.store.listOwnedIndexed(ownerSessionId2).flatMap((indexed) => {
+      const task = this.tasks.get(indexed.id);
+      return task ? [task] : [];
+    });
   }
   get(id, ownerSessionId2) {
-    const task = this.store.getOwned(id, ownerSessionId2);
-    if (!task) return void 0;
-    this.adopt(task, false);
+    this.ensureIndexInitialized();
+    if (!this.store.isIndexedOwner(id, ownerSessionId2)) return void 0;
+    const retained = this.tasks.get(id);
+    const task = retained ?? this.store.getIndexed(id);
+    if (!task || task.ownerSessionId !== ownerSessionId2) return void 0;
+    if (!retained) this.adopt(task, false);
     if (!isTerminalTaskSettled(task.status)) this.arm(id);
     return task;
   }
   check(id, ownerSessionId2) {
+    this.ensureIndexInitialized();
     const current = this.get(id, ownerSessionId2);
     if (!current) return void 0;
     const task = isTerminalTaskSettled(current.status) ? this.observe(current.id, false) : current;
     return { task, output: this.getOutput(task, CHECK_OUTPUT_BYTES) };
   }
   async wait(ids, ownerSessionId2, timeoutMs, signal) {
+    this.ensureIndexInitialized();
     const uniqueIds = [...new Set(ids)];
     const known = uniqueIds.filter((id) => this.get(id, ownerSessionId2) !== void 0);
     const knownSet = new Set(known);
-    const unknownIds = uniqueIds.filter((id) => !knownSet.has(id));
     const complete2 = () => known.every((id) => {
       const task = this.get(id, ownerSessionId2);
-      return task !== void 0 && isTerminalTaskSettled(task.status);
+      if (task === void 0) return true;
+      return isTerminalTaskSettled(task.status);
     });
     if (!complete2() && timeoutMs > 0) {
       await new Promise((resolve10, reject) => {
@@ -12105,8 +12360,13 @@ ${command}
     }
     const settled = [];
     const pendingIds = [];
+    const quarantined = /* @__PURE__ */ new Set();
     for (const id of known) {
       const current = this.get(id, ownerSessionId2);
+      if (!current) {
+        quarantined.add(id);
+        continue;
+      }
       if (!isTerminalTaskSettled(current.status)) {
         pendingIds.push(id);
         continue;
@@ -12114,9 +12374,15 @@ ${command}
       const task = this.observe(id, true);
       settled.push({ task, output: this.getOutput(task, WAIT_OUTPUT_BYTES) });
     }
-    return { settled, pendingIds, unknownIds, timedOut: pendingIds.length > 0 };
+    return {
+      settled,
+      pendingIds,
+      unknownIds: uniqueIds.filter((id) => !knownSet.has(id) || quarantined.has(id)),
+      timedOut: pendingIds.length > 0
+    };
   }
   async stop(ids, ownerSessionId2) {
+    this.ensureIndexInitialized();
     const uniqueIds = [...new Set(ids)];
     const results = /* @__PURE__ */ new Map();
     const targets = [];
@@ -12228,21 +12494,18 @@ ${command}
     }
     const termSignals = await Promise.all(targets.map(({ identity, verification, naturalExitCode }) => this.safeVerifiedSignal(identity, naturalExitCode === void 0 ? "SIGTERM" : "SIGKILL", verification)));
     await Promise.all(targets.map(async ({ task, identity, verification, naturalExitCode }, index) => {
-      results.set(task.id, naturalExitCode === void 0 ? await this.finishStop(task.id, identity, termSignals[index], true, verification) : await this.finishNaturalStop(task.id, identity, naturalExitCode, termSignals[index], verification));
+      results.set(task.id, naturalExitCode === void 0 ? await this.finishStop(task.id, ownerSessionId2, identity, termSignals[index], true, verification) : await this.finishNaturalStop(task.id, ownerSessionId2, identity, naturalExitCode, termSignals[index], verification));
     }));
     return uniqueIds.map((id) => results.get(id));
   }
   claimPending(ownerSessionId2, includeWake, maxWake = 1) {
+    this.ensureIndexInitialized();
     const claimed = [];
     let claimedWake = 0;
-    for (const candidate of this.store.listOwned(ownerSessionId2)) {
-      if (!isTerminalTaskSettled(candidate.status)) continue;
-      if (candidate.completionPolicy === "wake" && (!includeWake || claimedWake >= maxWake)) continue;
+    for (const candidate of this.store.listOwnedIndexed(ownerSessionId2)) {
+      if (!isClaimable(candidate, ownerSessionId2, includeWake, claimedWake, maxWake, this.now(), this.claimLeaseMs)) continue;
       const result = this.mutate(candidate.id, (current) => {
-        if (current.ownerSessionId !== ownerSessionId2 || !isTerminalTaskSettled(current.status)) return void 0;
-        const expiredClaim = current.deliveryState === "claimed" && this.now() - current.updatedAt >= this.claimLeaseMs;
-        if (current.deliveryState !== "pending" && !expiredClaim) return void 0;
-        if (current.completionPolicy === "wake" && (!includeWake || claimedWake >= maxWake)) return void 0;
+        if (!isClaimable(current, ownerSessionId2, includeWake, claimedWake, maxWake, this.now(), this.claimLeaseMs)) return void 0;
         return {
           ...current,
           deliveryState: "claimed",
@@ -12257,12 +12520,13 @@ ${command}
     return claimed;
   }
   acknowledge(ownerSessionId2, receipts) {
+    this.ensureIndexInitialized();
     const receiptKeys = new Set(receipts.map(({ completionId, claimToken }) => `${completionId}\0${claimToken}`));
     const acknowledged = [];
-    for (const candidate of this.store.listOwned(ownerSessionId2)) {
-      if (!candidate.completionId || !candidate.deliveryClaimToken || !receiptKeys.has(`${candidate.completionId}\0${candidate.deliveryClaimToken}`)) continue;
+    for (const candidate of this.store.listOwnedIndexed(ownerSessionId2)) {
+      if (!isAcknowledgementMatch(candidate, ownerSessionId2, receiptKeys)) continue;
       const result = this.mutate(candidate.id, (current) => {
-        if (current.ownerSessionId !== ownerSessionId2 || current.deliveryState !== "claimed" || !current.completionId || !current.deliveryClaimToken || !receiptKeys.has(`${current.completionId}\0${current.deliveryClaimToken}`)) return void 0;
+        if (!isAcknowledgementMatch(current, ownerSessionId2, receiptKeys)) return void 0;
         return { ...current, deliveryState: "delivered", deliveryClaimToken: void 0, updatedAt: this.timestamp(current) };
       });
       if (result.changed) acknowledged.push(result.snapshot);
@@ -12270,7 +12534,8 @@ ${command}
     return acknowledged;
   }
   getClaimRetryDelay(ownerSessionId2) {
-    const delays = this.store.listOwned(ownerSessionId2).filter((task) => task.deliveryState === "claimed").map((task) => Math.max(0, this.claimLeaseMs - (this.now() - task.updatedAt)));
+    this.ensureIndexInitialized();
+    const delays = this.store.listOwnedIndexed(ownerSessionId2).filter((task) => task.deliveryState === "claimed").map((task) => Math.max(0, this.claimLeaseMs - (this.now() - task.updatedAt)));
     return delays.length > 0 ? Math.min(...delays) : void 0;
   }
   addChangeListener(listener) {
@@ -12287,16 +12552,231 @@ ${command}
    * Adopt records created or advanced by another process after this manager was
    * constructed. Recovery re-verifies durable process identity before any
    * lifecycle transition; callers receive the refreshed immutable projection.
+   * `ok` is false when the store directory could not be read or when this
+   * manager is detached (no scan, therefore no provable freshness): the
+   * previous projection generation stays authoritative and callers must treat
+   * freshness as unproven instead of adopting the returned snapshots, and
+   * takeover callers keep their death proof unconsumed. `complete` is false
+   * when even the successful scan hit a transient per-record metadata read or
+   * directory-validation failure: that scan still replaces the projection with
+   * its indexed generation and preserves last-good snapshots for `preservedIds`,
+   * but this manager keeps its lazy index-init retry armed (one deduped episode
+   * diagnostic) until a later complete scan freshly reads every candidate. On
+   * success every fresh valid snapshot is adopted — including one whose revision equals the
+   * retained entry, so an external same-revision owner or content divergence
+   * at this proven freshness boundary updates the full projection and owner
+   * lists — and the retained projection is replaced to match exactly the
+   * refreshed index generation: ids the scan quarantined or no longer reports are dropped from
+   * `tasks` and `getSnapshots()` so stale retained snapshots cannot be
+   * republished, and their poll timers are cleared while the separate runtime
+   * child/process bookkeeping stays preserved. Ids whose metadata read failed
+   * transiently keep their compact index entry and their retained full
+   * snapshot: only a genuinely quarantined id is pruned. Recovery side effects
+   * (settled log cap, launch-gate release, arm, reconcile scheduling) are
+   * gated: only a record new to this projection or one whose
+   * recovery-relevant durable identity changed — revision, owner, lifecycle
+   * status, or process identity (pid/processGroupId/processStartTime) — pays
+   * them again, so unchanged records are never log-capped or rescheduled per
+   * refresh, a same-revision owner divergence still recovers, and an external
+   * same-revision same-owner rewrite that flips status or process identity
+   * recovers instead of leaving an active terminal unarmed behind a stale
+   * projection. Quarantine stays logical — durable records are preserved.
+   * Waiter- and delivery-relevant changes — each genuinely pruned id and each
+   * recovery-gated adopted record (one new to the projection, or a retained
+   * record whose recovery-relevant identity changed, e.g. an external rewrite
+   * flipping running→settled at this boundary) — are collected during the
+   * loops and fanned out once after adoption and pruning complete: per-task
+   * listeners receive each change so parked waiters that collected an id as
+   * known resolve promptly instead of waiting out the clock and a takeover
+   * retry that discovers an already-settled pending completion wakes the
+   * delivery coordinator, and projection listeners receive exactly one
+   * publication of the final projection, so no intermediate projection that
+   * still contains a not-yet-pruned quarantined id is ever adopted or
+   * published. The whole fan-out runs inside a notification batch: recovery
+   * work below can synchronously reach mutate()→adopt(…, true) — reconcile's
+   * async body runs to its first await when scheduled here, including its
+   * tree-verification mutation and starting/lost settlement — so any
+   * notification fired mid-batch queues its per-task changes and publishes
+   * nothing; the batch flag is cleared in finally and one merged fan-out
+   * emits the final per-task payload per id — the latest retained snapshot at
+   * fan-out time, so a fresh-then-stale v2→v1 sequence can never be observed —
+   * plus exactly one final projection. That drain is transactional: it runs in
+   * the same finally even when the loops throw, so whatever was collected or
+   * queued mid-batch still reaches its listeners (a parked waiter wakes
+   * promptly) and queue state never carries across refresh calls, while the
+   * throw keeps propagating to the caller and any publication reflects the
+   * current retained projection. A same-revision, same-owner content-only
+   * rewrite is adopted with no recovery side effects. When its differing
+   * content touches no delivery-eligibility or receipt field (deliveryState,
+   * completionPolicy, completionId, deliveryClaimToken — and, for a claimed
+   * record, updatedAt, whose move can advance lease expiry ahead of the
+   * coordinator's armed retry timer) it is purely cosmetic:
+   * it joins no per-task change but still marks the refresh's stored state as
+   * changed, so a successful refresh emits exactly one final projection
+   * publication even when the per-task changed list is empty. When any of
+   * those delivery fields differs — e.g. a delivered/suppressed settled record
+   * rewritten back to pending-eligible at the same revision, or a claimed
+   * record whose updatedAt moved — the rewrite
+   * instead joins the per-task fan-out so the TerminalDeliveryCoordinator,
+   * which listens for per-task notifications only, wakes and schedules its
+   * flush; no recovery side effect runs for such a delivery-only change
+   * because status and process identity are unchanged. A refresh whose records
+   * are all unchanged (and which prunes nothing) publishes nothing.
    */
   refreshSnapshotsFromStore() {
-    if (this.detached) return this.getSnapshots();
-    for (const snapshot of this.store.loadAll()) {
-      const previous = this.tasks.get(snapshot.id);
-      if (previous?.revision === snapshot.revision) continue;
-      this.adopt(snapshot, false);
-      this.recover(snapshot);
+    if (this.detached) return { ok: false, complete: false, snapshots: this.getSnapshots() };
+    const refresh = this.store.refreshIndex();
+    if (!refresh.ok) return { ok: false, complete: false, snapshots: this.getSnapshots() };
+    this.indexInitialized = refresh.complete;
+    if (refresh.complete) {
+      this.resetIndexInitEpisode();
+    } else this.diagnoseIndexInitFailure(true);
+    this.refreshBatchDepth += 1;
+    const changed = [];
+    let adoptionChangedStoredState = false;
+    try {
+      adoptionChangedStoredState = this.runRefreshLoops(refresh, changed);
+    } finally {
+      this.refreshBatchDepth -= 1;
+      this.drainRefreshBatch(changed, adoptionChangedStoredState);
     }
-    return this.getSnapshots();
+    return { ok: true, complete: refresh.complete, snapshots: this.getSnapshots() };
+  }
+  /**
+   * Coalesced lazy retry of the constructor's failed or incomplete
+   * initialization scan. The first complete retry seeds the generation exactly
+   * like a successful refresh (adopt, recover, single batched fan-out, no
+   * intermediate projections) and the zero-scan query guarantee resumes; an
+   * incomplete retry still serves its indexed generation but keeps the backoff
+   * armed. Until initialization completes, every query/mutation entry point
+   * pays at most one scan attempt per entry. A minimal in-flight guard keeps a
+   * listener fanned out by the seeding scan from re-entering it, and an
+   * escalating injectable-clock backoff keeps a persistently unreadable or
+   * incomplete store from being rescanned by every following entry.
+   */
+  ensureIndexInitialized() {
+    if (this.indexInitialized || this.detached) {
+      this.clearIndexInitRetryTimer();
+      return;
+    }
+    if (this.indexInitInFlight) return;
+    const attemptAt = Math.max(1, Math.floor(this.now()));
+    if (attemptAt - this.indexInitLastAttemptAt < this.indexInitBackoffMs) {
+      this.scheduleIndexInitRetryTimer();
+      return;
+    }
+    this.clearIndexInitRetryTimer();
+    this.indexInitLastAttemptAt = attemptAt;
+    this.indexInitInFlight = true;
+    try {
+      if (!this.refreshSnapshotsFromStore().ok) this.diagnoseIndexInitFailure();
+      if (!this.indexInitialized) {
+        this.indexInitFailedAttempts += 1;
+        this.indexInitBackoffMs = Math.min(
+          INDEX_INIT_RETRY_BACKOFF_MS * 2 ** Math.min(this.indexInitFailedAttempts - 1, 32),
+          INDEX_INIT_RETRY_BACKOFF_MAX_MS
+        );
+        this.scheduleIndexInitRetryTimer(attemptAt);
+      }
+    } finally {
+      this.indexInitInFlight = false;
+    }
+  }
+  /**
+   * Init-scan failures and incomplete generations are diagnosed once per
+   * episode kind — a failed⇄incomplete transition re-diagnoses once so the
+   * message matches the store state — and the first complete successful scan
+   * resets the dedupe.
+   */
+  diagnoseIndexInitFailure(incomplete = false) {
+    const kind = incomplete ? "incomplete" : "failed";
+    if (this.indexInitDiagnosedKind === kind) return;
+    this.indexInitDiagnosedKind = kind;
+    this.onDiagnostic?.({ kind: "manager", message: incomplete ? "terminal store scan indexed an incomplete generation; entry points retry lazily until a complete scan" : "terminal store scan failed before the projection was seeded; entry points retry lazily until the first successful scan" });
+  }
+  /** A complete scan ends the episode: the diagnostic dedupe and the escalating retry schedule both reset. */
+  resetIndexInitEpisode() {
+    this.indexInitDiagnosedKind = void 0;
+    this.indexInitFailedAttempts = 0;
+    this.indexInitBackoffMs = INDEX_INIT_RETRY_BACKOFF_MS;
+    this.clearIndexInitRetryTimer();
+  }
+  scheduleIndexInitRetryTimer(baseAt = Number.isFinite(this.indexInitLastAttemptAt) ? this.indexInitLastAttemptAt : Math.max(1, Math.floor(this.now()))) {
+    if (this.indexInitialized || this.detached || this.hasActiveTasks()) {
+      this.clearIndexInitRetryTimer();
+      return;
+    }
+    const dueAt = baseAt + this.indexInitBackoffMs;
+    if (this.indexInitRetryTimer && this.indexInitRetryDueAt === dueAt) return;
+    this.clearIndexInitRetryTimer();
+    this.indexInitRetryDueAt = dueAt;
+    this.indexInitRetryTimer = setTimeout(() => {
+      this.indexInitRetryTimer = void 0;
+      this.indexInitRetryDueAt = void 0;
+      this.ensureIndexInitialized();
+    }, Math.max(0, dueAt - this.now()));
+    this.indexInitRetryTimer.unref?.();
+  }
+  clearIndexInitRetryTimer() {
+    if (this.indexInitRetryTimer) clearTimeout(this.indexInitRetryTimer);
+    this.indexInitRetryTimer = void 0;
+    this.indexInitRetryDueAt = void 0;
+  }
+  hasActiveTasks() {
+    for (const task of this.tasks.values()) {
+      if (!isTerminalTaskSettled(task.status)) return true;
+    }
+    return false;
+  }
+  /**
+   * The refresh adoption and prune loops; every notification stays inside the
+   * caller's batch. Returns whether any adoption replaced a retained snapshot
+   * with differing content without joining the per-task fan-out (a cosmetic
+   * same-revision, same-owner content-only rewrite), so the caller can publish
+   * the projection even with an empty changed list.
+   */
+  runRefreshLoops(refresh, changed) {
+    let adoptionChangedStoredState = false;
+    for (const snapshot of refresh.snapshots) {
+      const previous = this.tasks.get(snapshot.id);
+      this.adopt(snapshot, false);
+      this.onRefreshAdopt?.(snapshot.id);
+      if (previous !== void 0 && !snapshotContentEquals(previous, snapshot)) adoptionChangedStoredState = true;
+      if (recoveryRelevantAdoption(previous, snapshot)) {
+        this.recover(snapshot);
+        this.onRefreshRecover?.(snapshot.id);
+        changed.push(snapshot);
+      } else if (previous !== void 0 && deliveryEligibilityChanged(previous, snapshot)) {
+        changed.push(snapshot);
+      }
+    }
+    const refreshed = new Set(refresh.snapshots.map((snapshot) => snapshot.id));
+    const preserved = refresh.preservedIds === void 0 ? void 0 : new Set(refresh.preservedIds);
+    for (const id of Array.from(this.tasks.keys())) {
+      if (refreshed.has(id)) continue;
+      if (preserved?.has(id)) continue;
+      this.clearPoll(id);
+      const pruned = this.tasks.get(id);
+      this.tasks.delete(id);
+      if (pruned) changed.push(pruned);
+    }
+    return adoptionChangedStoredState;
+  }
+  /**
+   * Authoritative single indexed read of one record, bypassing the retained
+   * projection. Owner-isolated: another session's record reads as `undefined`.
+   * The owner precheck runs against the compact index with no I/O, so a foreign
+   * or unknown id costs zero metadata reads and a matching id costs exactly
+   * one. The owner check is re-verified against the freshly read snapshot at no
+   * extra cost, so a compact entry gone stale relative to disk cannot leak
+   * another session's record. Narrow surface for pre-send/pre-publication
+   * freshness checks; never scans the store and only resolves indexed ids.
+   */
+  readIndexed(id, ownerSessionId2) {
+    if (!this.store.isIndexedOwner(id, ownerSessionId2)) return void 0;
+    const snapshot = this.store.getIndexed(id);
+    if (snapshot && snapshot.ownerSessionId !== ownerSessionId2) return void 0;
+    return snapshot;
   }
   getSnapshots() {
     const snapshots = [...this.tasks.values()];
@@ -12324,12 +12804,13 @@ ${command}
     return this.getOutputTailBytes(task, maxBytes).bytes;
   }
   async stopOwned(ownerSessionId2) {
-    const running = this.store.listOwned(ownerSessionId2).filter((task) => !isTerminalTaskSettled(task.status));
+    const running = this.list(ownerSessionId2).filter((task) => !isTerminalTaskSettled(task.status));
     return this.stop(running.map((task) => task.id), ownerSessionId2);
   }
   detach() {
     if (this.detached) return;
     this.detached = true;
+    this.clearIndexInitRetryTimer();
     for (const runtime of this.runtime.values()) {
       if (runtime.pollTimer) clearInterval(runtime.pollTimer);
       runtime.pollTimer = void 0;
@@ -12370,16 +12851,24 @@ ${command}
   }
   arm(id) {
     if (this.detached) return;
-    const task = this.tasks.get(id) ?? this.store.get(id);
+    const task = this.tasks.get(id) ?? this.store.getIndexed(id);
     if (!task || isTerminalTaskSettled(task.status)) return;
     const runtime = this.ensureRuntime(task);
-    if (runtime.pollTimer) return;
-    runtime.pollTimer = setInterval(() => this.scheduleReconcile(id), this.pollIntervalMs);
+    if (runtime.pollTimer) {
+      if (!this.indexInitialized) this.clearIndexInitRetryTimer();
+      return;
+    }
+    runtime.pollTimer = setInterval(() => this.handlePollTick(id), this.pollIntervalMs);
     runtime.pollTimer.unref?.();
+    if (!this.indexInitialized) this.clearIndexInitRetryTimer();
+  }
+  handlePollTick(id) {
+    if (!this.indexInitialized) this.ensureIndexInitialized();
+    this.scheduleReconcile(id);
   }
   scheduleReconcile(id) {
     if (this.detached) return;
-    const task = this.tasks.get(id) ?? this.store.get(id);
+    const task = this.tasks.get(id) ?? this.store.getIndexed(id);
     if (!task) return;
     const runtime = this.ensureRuntime(task);
     if (runtime.reconcilePromise) return;
@@ -12389,7 +12878,7 @@ ${command}
   }
   async reconcile(id) {
     if (this.detached) return;
-    const current = this.store.get(id);
+    const current = this.store.getIndexed(id);
     if (!current) return;
     this.adopt(current, true);
     if (isTerminalTaskSettled(current.status)) {
@@ -12427,10 +12916,10 @@ ${command}
       return;
     }
     const identityStatus = this.processTree.identityMatches(identity);
-    if (identityStatus === "different" && this.store.get(id)?.status === "running") this.settleLost(id, null, false);
+    if (identityStatus === "different" && this.store.getIndexed(id)?.status === "running") this.settleLost(id, null, false);
   }
   async finishNaturalCompletion(id, identity, exitCode) {
-    let current = this.store.get(id);
+    let current = this.store.getIndexed(id);
     if (current?.status !== "running") return;
     if (this.processTree.isTreeEmpty(identity, current.processTreeVerification)) {
       this.settleNatural(id, exitCode);
@@ -12465,7 +12954,7 @@ ${command}
     const killed = await this.safeVerifiedSignal(identity, "SIGKILL", verification);
     const gone = killed.gone || killed.ok && await this.processTree.waitForTreeEmpty(identity, this.killGraceMs, verification);
     if (killed.ok && gone) {
-      if (this.store.get(id)?.status === "running") this.settleNatural(id, exitCode);
+      if (this.store.getIndexed(id)?.status === "running") this.settleNatural(id, exitCode);
       return;
     }
     if (killed.identityStatus === "different" && this.processTree.isTreeEmpty(identity, verification)) {
@@ -12475,7 +12964,8 @@ ${command}
     this.diagnostic(id, `natural completion tree disposition unproven; refusing settlement: ${killed.error ?? "tree did not become empty"}`);
   }
   async recoverStopping(id, identity) {
-    const current = this.store.get(id);
+    const current = this.store.getIndexed(id);
+    const ownerSessionId2 = current?.ownerSessionId;
     if (this.processTree.isTreeEmpty(identity, current?.processTreeVerification)) {
       this.settleDisposedStop(id);
       return;
@@ -12506,7 +12996,7 @@ ${command}
       }
     }
     const term = await this.safeVerifiedSignal(identity, "SIGTERM", verification);
-    await this.finishStop(id, identity, term, false, verification);
+    await this.finishStop(id, ownerSessionId2, identity, term, false, verification);
   }
   settleNatural(id, exitCode) {
     return this.settle(id, exitCode === 0 ? "completed" : "failed", exitCode, false);
@@ -12577,10 +13067,15 @@ ${command}
       };
     }).snapshot;
   }
-  async finishNaturalStop(id, identity, exitCode, signal, verification) {
+  /** True when a concurrent successful refresh quarantined this id out of the compact index. */
+  isQuarantined(id, ownerSessionId2) {
+    return ownerSessionId2 === void 0 || !this.store.isIndexedOwner(id, ownerSessionId2);
+  }
+  async finishNaturalStop(id, ownerSessionId2, identity, exitCode, signal, verification) {
     const gone = signal.gone || signal.ok && await this.processTree.waitForTreeEmpty(identity, this.killGraceMs, verification);
+    if (this.isQuarantined(id, ownerSessionId2)) return { id, outcome: "unknown", message: `Unknown terminal ${id}.` };
     if (!signal.ok || !gone) {
-      if (!this.processTree.isTreeEmpty(identity, verification)) return this.handleStopSignalFailure(id, signal, false, true);
+      if (!this.processTree.isTreeEmpty(identity, verification)) return this.handleStopSignalFailure(id, ownerSessionId2, signal, false, true);
     }
     const settled = this.settleNatural(id, exitCode);
     const observed = this.observe(id, false);
@@ -12593,7 +13088,7 @@ ${command}
     };
   }
   settleDisposedStop(id) {
-    const current = this.store.get(id);
+    const current = this.store.getIndexed(id);
     if (!current) return { id, outcome: "failed", message: `Failed to settle terminal ${id}: durable record unavailable.` };
     const exitCode = readExitCode(this.store, taskPaths(this.store, current.id, current.createdAt).exitFile);
     if (exitCode !== void 0) {
@@ -12616,40 +13111,44 @@ ${command}
       message: `Cancelled terminal ${id}.`
     };
   }
-  async finishStop(id, identity, termSignal, restoreOnFailure, verification) {
-    if (!termSignal.ok && !termSignal.forceRequired) return this.handleStopSignalFailure(id, termSignal, restoreOnFailure);
+  async finishStop(id, ownerSessionId2, identity, termSignal, restoreOnFailure, verification) {
+    if (!termSignal.ok && !termSignal.forceRequired) return this.handleStopSignalFailure(id, ownerSessionId2, termSignal, restoreOnFailure);
     let empty = termSignal.ok && (termSignal.gone || await this.processTree.waitForTreeEmpty(identity, this.termGraceMs, verification));
     if (!empty) {
       const kill = await this.safeVerifiedSignal(identity, "SIGKILL", verification);
-      if (!kill.ok) return this.handleStopSignalFailure(id, kill, false);
+      if (this.isQuarantined(id, ownerSessionId2)) return { id, outcome: "unknown", message: `Unknown terminal ${id}.` };
+      if (!kill.ok) return this.handleStopSignalFailure(id, ownerSessionId2, kill, false);
       empty = kill.gone || await this.processTree.waitForTreeEmpty(identity, this.killGraceMs, verification);
     }
-    if (!empty) return this.failedStop(id, "process tree remains alive after SIGKILL", false);
+    if (!empty) return this.failedStop(id, ownerSessionId2, "process tree remains alive after SIGKILL", false);
+    if (this.isQuarantined(id, ownerSessionId2)) return { id, outcome: "unknown", message: `Unknown terminal ${id}.` };
     return this.settleDisposedStop(id);
   }
-  handleStopSignalFailure(id, signal, restoreOnFailure, suppressOnSettlement = restoreOnFailure) {
-    const current = this.store.get(id);
+  handleStopSignalFailure(id, ownerSessionId2, signal, restoreOnFailure, suppressOnSettlement = restoreOnFailure) {
+    if (this.isQuarantined(id, ownerSessionId2)) return { id, outcome: "unknown", message: `Unknown terminal ${id}.` };
+    const current = this.store.getIndexed(id);
     const identity = current ? identityOf(current) : void 0;
     if (identity && this.processTree.isTreeEmpty(identity, current?.processTreeVerification)) {
       return this.settleDisposedStop(id);
     }
     if (signal.identityStatus === "different") {
       this.settleLost(id, null, false);
-      const lost = suppressOnSettlement ? this.observe(id, false) : this.store.get(id);
+      const lost = suppressOnSettlement ? this.observe(id, false) : this.store.getIndexed(id);
       return { id, outcome: "failed", task: lost, message: `Terminal ${id} process identity changed; recorded lost without signalling.` };
     }
     const reason = signal.identityStatus === "unknown" ? "process identity could not be verified; refusing to signal" : signal.error ?? "process-tree signal failed";
-    return this.failedStop(id, reason, restoreOnFailure);
+    return this.failedStop(id, ownerSessionId2, reason, restoreOnFailure);
   }
-  failedStop(id, reason, restore) {
-    const result = restore ? this.mutate(id, (task) => task.status === "stopping" ? { ...task, status: "running", updatedAt: this.timestamp(task) } : void 0).snapshot : this.store.get(id);
+  failedStop(id, ownerSessionId2, reason, restore) {
+    if (this.isQuarantined(id, ownerSessionId2)) return { id, outcome: "unknown", message: `Unknown terminal ${id}.` };
+    const result = restore ? this.mutate(id, (task) => task.status === "stopping" ? { ...task, status: "running", updatedAt: this.timestamp(task) } : void 0).snapshot : this.store.getIndexed(id);
     if (result && !isTerminalTaskSettled(result.status)) this.arm(id);
     if (!restore) this.diagnostic(id, `persisted stop remains pending: ${reason}`);
     return { id, outcome: "failed", task: result, message: `Failed to stop terminal ${id}: ${reason}.` };
   }
   failUnlaunched(id, cause) {
     this.settleFailedLaunch(id);
-    const current = this.store.get(id);
+    const current = this.store.getIndexed(id);
     if (current) appendPrivateFile(this.store, current.logFile, `
 [spawn error] ${cause instanceof Error ? cause.message : String(cause)}
 `);
@@ -12675,7 +13174,7 @@ ${command}
   }
   async handleChildError(id, error) {
     if (this.detached) return;
-    const current = this.store.get(id);
+    const current = this.store.getIndexed(id);
     if (!current || isTerminalTaskSettled(current.status)) return;
     this.adopt(current, false);
     const identity = identityOf(current);
@@ -12697,26 +13196,43 @@ ${command}
     }
     this.failUnlaunched(id, error);
   }
+  /**
+   * One authoritative decision per mutation: the update closure runs inside
+   * the store's task lock against the just-read durable snapshot, so claim/ack
+   * predicates can never fire on retained state that disk has already moved
+   * past (including a same-revision content change the revision CAS alone
+   * would accept). A stale expected revision is retried against freshly
+   * loaded state up to MAX_TRANSITION_RETRIES times.
+   */
   mutate(id, update) {
-    let latest = this.store.get(id);
+    const retainedBeforeMutation = this.tasks.get(id);
+    let latest = retainedBeforeMutation ?? this.store.getIndexed(id);
     if (!latest) throw new Error(`Unknown terminal task ${id}`);
     for (let attempt = 0; attempt < MAX_TRANSITION_RETRIES; attempt += 1) {
       this.adopt(latest, false);
-      const next = update(latest);
-      if (!next) return { snapshot: latest, changed: false };
+      let changed = false;
       try {
-        const transitioned = this.store.transition(id, latest.revision, () => next);
+        const transitioned = this.store.transition(id, latest.revision, (current2) => {
+          const next = update(current2);
+          if (!next) return void 0;
+          changed = true;
+          return next;
+        });
+        if (!changed) {
+          this.adoptLockedNoOpSnapshot(transitioned, retainedBeforeMutation);
+          return { snapshot: transitioned, changed: false };
+        }
         this.adopt(transitioned, true);
         return { snapshot: transitioned, changed: true };
       } catch (error) {
         if (!(error instanceof StaleTerminalTaskRevisionError)) throw error;
-        const reloaded = this.store.get(id);
+        const reloaded = this.store.getIndexed(id);
         if (!reloaded) throw new Error(`Terminal task ${id} disappeared during transition`);
         latest = reloaded;
       }
     }
     this.diagnostic(id, "abandoned transition after repeated stale revisions");
-    const current = this.store.get(id) ?? latest;
+    const current = this.store.getIndexed(id) ?? latest;
     this.adopt(current, false);
     return { snapshot: current, changed: false };
   }
@@ -12725,11 +13241,108 @@ ${command}
     this.tasks.set(snapshot.id, snapshot);
     this.ensureRuntime(snapshot);
     if (!notify7 || previous?.revision === snapshot.revision) return;
-    for (const listener of this.listeners) {
+    this.notifyChanges([snapshot]);
+  }
+  /**
+   * Classification for the locked no-op adoption site, applying the same gates
+   * the refresh loops apply at their proven freshness boundary to the
+   * authoritative locked snapshot. The classification baseline is the snapshot
+   * retained when the enclosing mutation started, not the map state at adoption
+   * time: stale-revision retries adopt each reloaded authoritative snapshot
+   * silently on the way to a no-op, so the map would hold the reloaded snapshot
+   * itself and a revision-bumped divergence (retained settled v1 vs running v2
+   * on disk) would classify against itself and recover, notify, and publish
+   * nothing. A recovery-relevant divergence (record new to the projection, or
+   * changed revision/owner/lifecycle status/process identity) triggers the
+   * recover-equivalent side effects (settled log cap, launch-gate release,
+   * arm, reconcile scheduling) and joins a per-task notification; a
+   * delivery-eligibility/receipt change raises only the per-task notification
+   * that wakes the TerminalDeliveryCoordinator; a content-only divergence
+   * publishes the projection once. A cosmetic no-op adoption (identical
+   * content) stays quiet as before. The recovery branch fans out through the
+   * refresh's notification batch and its dedupe-to-latest close: recovery can
+   * synchronously mutate and publish a newer revision (reconcile's
+   * tree-verification mutation, settlement), and notifying the original locked
+   * snapshot after it would reintroduce a newer-then-stale per-task sequence
+   * and duplicate projection fan-out — the batch folds everything into one
+   * final per-task payload per id and exactly one final publication.
+   */
+  adoptLockedNoOpSnapshot(snapshot, classificationBaseline) {
+    this.adopt(snapshot, false);
+    if (recoveryRelevantAdoption(classificationBaseline, snapshot)) {
+      this.refreshBatchDepth += 1;
       try {
-        listener(snapshot);
-      } catch {
+        this.recover(snapshot);
+        this.notifyChanges([snapshot]);
+      } finally {
+        this.refreshBatchDepth -= 1;
+        this.drainRefreshBatch([snapshot], false);
       }
+      return;
+    }
+    if (classificationBaseline !== void 0 && deliveryEligibilityChanged(classificationBaseline, snapshot)) {
+      this.notifyChanges([snapshot]);
+      return;
+    }
+    if (classificationBaseline !== void 0 && !snapshotContentEquals(classificationBaseline, snapshot)) this.publishProjection();
+  }
+  /**
+   * Fan a batch of changed snapshots out: per-task listeners receive each
+   * change, projection listeners receive exactly one publication of the final
+   * projection. Observer errors cannot break lifecycle transitions.
+   */
+  notifyChanges(changed) {
+    if (changed.length === 0) return;
+    if (this.refreshBatchDepth > 0) {
+      for (const snapshot of changed) this.refreshBatchQueued.set(snapshot.id, snapshot);
+      return;
+    }
+    for (const snapshot of changed) {
+      for (const listener of this.listeners) {
+        try {
+          listener(snapshot);
+        } catch {
+        }
+      }
+    }
+    if (this.snapshotListeners.size === 0) return;
+    this.publishProjection();
+  }
+  /**
+   * One merged fan-out that closes a notification batch — transactional across
+   * the success and the throw path: fold in whatever a synchronous recovery
+   * path queued mid-batch plus everything the caller collected, then resolve
+   * each id to the latest retained snapshot at fan-out time (a fresh-then-stale
+   * v2→v1 per-task sequence can never be observed). Per-task listeners receive
+   * each final payload (waiters re-evaluate completion, the delivery
+   * coordinator re-runs its claim pass), and projection listeners receive
+   * exactly one publication of the current retained projection — a publication
+   * a sync-in-batch path deferred through publishProjection's batch guard is
+   * superseded by it. The queue is drained unconditionally, so batch state
+   * never carries across refresh calls.
+   */
+  drainRefreshBatch(changed, adoptionChangedStoredState) {
+    const fanout = /* @__PURE__ */ new Map();
+    for (const snapshot of changed) fanout.set(snapshot.id, snapshot);
+    for (const [id, snapshot] of this.refreshBatchQueued) fanout.set(id, snapshot);
+    this.refreshBatchQueued.clear();
+    for (const id of fanout.keys()) {
+      const retained = this.tasks.get(id);
+      if (retained) fanout.set(id, retained);
+    }
+    const deferredProjection = this.projectionPublishDeferred;
+    this.projectionPublishDeferred = false;
+    if (fanout.size > 0) {
+      this.notifyChanges([...fanout.values()]);
+    } else if (adoptionChangedStoredState || deferredProjection) {
+      this.publishProjection();
+    }
+  }
+  /** Publish the current retained projection once to snapshot listeners; observer errors cannot break lifecycle transitions. */
+  publishProjection() {
+    if (this.refreshBatchDepth > 0) {
+      this.projectionPublishDeferred = true;
+      return;
     }
     if (this.snapshotListeners.size === 0) return;
     const snapshots = this.getSnapshots();
@@ -12742,6 +13355,7 @@ ${command}
   }
   clearPoll(id) {
     const runtime = this.runtime.get(id);
+    if (!this.indexInitialized) this.scheduleIndexInitRetryTimer();
     if (!runtime?.pollTimer) return;
     clearInterval(runtime.pollTimer);
     runtime.pollTimer = void 0;
@@ -12973,7 +13587,6 @@ var TerminalDeliveryCoordinator = class {
   flushing = false;
   bind(ctx) {
     this.active = { ownerSessionId: sessionId(ctx), ctx };
-    this.safeReconcile(ctx);
     this.requestFlush();
   }
   touch(ctx) {
@@ -12997,12 +13610,11 @@ var TerminalDeliveryCoordinator = class {
   }
   reconcile(ctx) {
     const ownerSessionId2 = sessionId(ctx);
+    this.acknowledgeObservable(ctx, ownerSessionId2);
+    this.syncLeaseRetry(ownerSessionId2);
+  }
+  acknowledgeObservable(ctx, ownerSessionId2) {
     this.manager.acknowledge(ownerSessionId2, completionsFromContext(ctx).receipts);
-    const retryDelay = this.manager.getClaimRetryDelay(ownerSessionId2);
-    if (retryDelay === void 0 && this.retryTimer) {
-      clearTimeout(this.retryTimer);
-      this.retryTimer = void 0;
-    }
   }
   safeReconcile(ctx) {
     try {
@@ -13028,11 +13640,13 @@ var TerminalDeliveryCoordinator = class {
     if (!active || this.flushing || !active.ctx.isIdle()) return;
     this.flushing = true;
     try {
-      this.reconcile(active.ctx);
+      this.acknowledgeObservable(active.ctx, active.ownerSessionId);
+      let sentMessage = false;
       const claimed = this.manager.claimPending(active.ownerSessionId, true, 1).sort((left, right) => Number(left.completionPolicy === "wake") - Number(right.completionPolicy === "wake"));
       for (const task of claimed) {
-        const current = this.manager.get(task.id, active.ownerSessionId);
-        if (current?.deliveryState !== "claimed" || !current.deliveryClaimToken || current.completionId !== task.completionId || current.deliveryClaimToken !== task.deliveryClaimToken) continue;
+        const current = this.manager.readIndexed(task.id, active.ownerSessionId);
+        if (!current) continue;
+        if (current.deliveryState !== "claimed" || !current.deliveryClaimToken || current.completionId !== task.completionId || current.deliveryClaimToken !== task.deliveryClaimToken) continue;
         const observable = completionsFromContext(active.ctx);
         if (current.completionId && observable.ids.has(current.completionId)) {
           this.manager.acknowledge(active.ownerSessionId, [{
@@ -13051,17 +13665,28 @@ var TerminalDeliveryCoordinator = class {
           },
           { deliverAs: "followUp", triggerTurn: current.completionPolicy === "wake" }
         );
+        sentMessage = true;
         if (current.completionPolicy === "wake") break;
       }
-      queueMicrotask(() => {
-        if (this.active?.ownerSessionId !== active.ownerSessionId) return;
-        this.safeReconcile(this.active.ctx);
-      });
-      const retryDelay = this.manager.getClaimRetryDelay(active.ownerSessionId);
-      if (retryDelay !== void 0) this.scheduleLeaseRetry(retryDelay);
+      if (sentMessage) {
+        queueMicrotask(() => {
+          if (this.active?.ownerSessionId !== active.ownerSessionId) return;
+          this.safeReconcile(this.active.ctx);
+        });
+      }
+      this.syncLeaseRetry(active.ownerSessionId);
     } finally {
       this.flushing = false;
     }
+  }
+  syncLeaseRetry(ownerSessionId2) {
+    const retryDelay = this.manager.getClaimRetryDelay(ownerSessionId2);
+    if (retryDelay !== void 0) {
+      this.scheduleLeaseRetry(retryDelay);
+      return;
+    }
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = void 0;
   }
   scheduleLeaseRetry(delayMs) {
     if (this.retryTimer) clearTimeout(this.retryTimer);
@@ -13708,12 +14333,12 @@ var ActivityFeedPublisher = class {
     if (this.writerIdentity) {
       const claim = claimWriter(this.writerFile, this.writerIdentity, options.inspectWriter ?? (() => "unknown"));
       this.writerOwned = claim.owned;
-      this.writerDeathProven = claim.writerDeathProven;
+      this.writerDeathProof = claim.writerDeathProven;
     } else {
       this.writerOwned = this.unleasedWriterForTests && !existsSync9(this.writerFile);
     }
     this.load();
-    if (this.writerOwned && this.writerDeathProven) {
+    if (this.writerOwned && this.writerDeathProof) {
       for (const activity of this.activities) {
         if (activity.status === "queued" || activity.status === "running") this.abandonedRunningIds.add(activity.id);
       }
@@ -13728,7 +14353,7 @@ var ActivityFeedPublisher = class {
   writerIdentity;
   unleasedWriterForTests;
   writerOwned;
-  writerDeathProven = false;
+  writerDeathProof = false;
   abandonedRunningIds = /* @__PURE__ */ new Set();
   revision = 0;
   activities = [];
@@ -13739,9 +14364,15 @@ var ActivityFeedPublisher = class {
   get canPublish() {
     return this.writerOwned;
   }
-  /** Missing running records may be reconciled only after the former writer is proven dead. */
-  get canReconcileAbandonedActivities() {
-    return this.writerOwned && this.abandonedRunningIds.size > 0;
+  /**
+   * The exact claim-time proof that a previous writer died. This is the sole
+   * authorization bit for one cross-process terminal-index refresh; it stays
+   * readable until completeAbandonedReconciliation consumes it. The bridge
+   * consumes it after the takeover's first successful publication — including
+   * empty feeds, where there are no abandoned running producers to reconcile.
+   */
+  get writerDeathProven() {
+    return this.writerDeathProof;
   }
   getAbandonedRunningIds() {
     return new Set(this.abandonedRunningIds);
@@ -13749,7 +14380,7 @@ var ActivityFeedPublisher = class {
   /** Consume former-writer death proof only after replacement publication succeeds. */
   completeAbandonedReconciliation() {
     this.abandonedRunningIds.clear();
-    this.writerDeathProven = false;
+    this.writerDeathProof = false;
   }
   getSnapshot() {
     return this.activities.map((activity) => activity);
@@ -14068,6 +14699,11 @@ var DEFAULT_SUBAGENT_DEBOUNCE_MS = 50;
 var DEFAULT_TERMINAL_OUTPUT_POLL_MS = 250;
 var DEFAULT_RETENTION_POLL_MS = 60 * 60 * 1e3;
 var TERMINAL_REDACTION_CONTEXT_BYTES = 64 * 1024;
+var TAKEOVER_REFRESH_BACKOFF_BASE_MS = 1e3;
+var TAKEOVER_REFRESH_BACKOFF_MAX_MS = 6e4;
+var ACTIVITY_BLOCK_TAKEOVER_RETRYING = "activity unavailable: terminal store temporarily unreadable; takeover retrying";
+var ACTIVITY_BLOCK_LIVE_WRITER = "activity unavailable: another live Pi process owns this session's durable Activity feed";
+var ACTIVITY_BLOCK_NO_WRITER = "activity unavailable: this session has no active durable Activity feed writer";
 function ownerSessionId(ctx) {
   return ctx.sessionManager.getSessionId() || void 0;
 }
@@ -14142,6 +14778,8 @@ var ActivityManagerBridge = class {
   writerVerifiable;
   bridgeToken = randomUUID5();
   claimedOwners = /* @__PURE__ */ new Set();
+  /** Every owner whose process-global session claim currently belongs to this bridge token. */
+  claimedSessionOwners = /* @__PURE__ */ new Set();
   publishers = /* @__PURE__ */ new Map();
   terminalSnapshots = [];
   terminalOutputCache = /* @__PURE__ */ new Map();
@@ -14151,6 +14789,17 @@ var ActivityManagerBridge = class {
   subagentTimer;
   terminalOutputTimer;
   retentionTimer;
+  takeoverRefreshRetryTimer;
+  takeoverRefreshRetryDueAt;
+  takeoverRefreshFailureDiagnosed = false;
+  /** True only while the takeover refresh call itself is on the stack. */
+  takeoverRefreshInFlight = false;
+  /** Consecutive deferred takeover refreshes; sizes the escalating backoff window. */
+  takeoverRefreshFailedAttempts = 0;
+  /** Current escalating gap before the next deferred takeover refresh attempt. */
+  takeoverRefreshBackoffMs = TAKEOVER_REFRESH_BACKOFF_BASE_MS;
+  /** Last wall-clock refresh attempt; Date.now can move, so this is only a throttle, not a monotonic timer. */
+  takeoverRefreshLastAttemptAt;
   disposed = false;
   constructor(terminalManager, subagentManager, options = {}) {
     this.terminalManager = terminalManager;
@@ -14162,18 +14811,19 @@ var ActivityManagerBridge = class {
     this.onDiagnostic = options.onDiagnostic;
     this.sessionOwnership = options.sessionOwnership ?? localSessionOwnership();
     const processStartTime = captureProcessBirthTime(process.pid);
-    const writerIdentity = options.writerIdentity ?? (processStartTime ? {
+    const writerIdentity = "writerIdentity" in options ? options.writerIdentity : processStartTime ? {
       token: this.bridgeToken,
       pid: process.pid,
       processStartTime
-    } : void 0);
+    } : void 0;
     this.writerVerifiable = writerIdentity !== void 0 || options.publisherFactory !== void 0;
+    const inspectWriter = options.inspectWriter ?? inspectProcessWriter;
     const publisherOptions = {
       rootDir: options.rootDir,
       now: this.now,
       onDiagnostic: options.onDiagnostic,
       writerIdentity,
-      inspectWriter: options.inspectWriter ?? inspectProcessWriter
+      inspectWriter
     };
     this.publisherFactory = options.publisherFactory ?? ((owner) => new ActivityFeedPublisher(owner, publisherOptions));
     if (!writerIdentity && !options.publisherFactory) {
@@ -14182,6 +14832,10 @@ var ActivityManagerBridge = class {
     this.terminalUnsubscribe = terminalManager.subscribeChanges((snapshots) => {
       if (this.disposed) return;
       this.adoptTerminalSnapshots(snapshots);
+      if (this.takeoverRefreshInFlight) {
+        this.syncTerminalOutputPoll();
+        return;
+      }
       this.publishAll();
       this.syncTerminalOutputPoll();
     });
@@ -14193,16 +14847,22 @@ var ActivityManagerBridge = class {
     if (this.disposed) return;
     this.subagentOwnerSessionId = owner;
     if (owner) this.sessionOwnership.noteOwnedSession?.(owner);
-    this.syncOwnedSessions();
     this.publishAll();
     logDiagnostic("activity_bridge_bound", { ownerSessionId: owner ?? null, claimedOwnerSessionIds: [...this.claimedOwners] });
   }
-  /** Block execution only when another live process owns the feed writer name. */
+  /** True when this session may currently produce durable activity; activityBlockReason says why when false. */
   canProduceActivity(owner) {
-    if (!owner || this.disposed) return false;
+    return this.activityBlockReason(owner) === void 0;
+  }
+  /** Why activity production is blocked for owner, or undefined when it may proceed. A deferred takeover refresh (retryable failure or incomplete generation) is a transient store-read episode, not a competing live writer, so it reports its own reason instead of the live-writer block. */
+  activityBlockReason(owner) {
+    if (!owner || this.disposed) return ACTIVITY_BLOCK_NO_WRITER;
+    if (!this.writerVerifiable) return ACTIVITY_BLOCK_NO_WRITER;
     this.syncOwnedSessions();
     const publisher = this.publishers.get(owner);
-    return this.claimedOwners.has(owner) && publisher?.hasWriterOwnership === true;
+    if (this.claimedOwners.has(owner) && publisher?.hasWriterOwnership === true) return void 0;
+    if (this.claimedSessionOwners.has(owner)) return ACTIVITY_BLOCK_TAKEOVER_RETRYING;
+    return ACTIVITY_BLOCK_LIVE_WRITER;
   }
   /** Publish final non-reattachable subagent truth before this factory dies. */
   shutdownSession(owner) {
@@ -14226,8 +14886,10 @@ var ActivityManagerBridge = class {
     this.terminalOutputTimer = void 0;
     if (this.retentionTimer) clearInterval(this.retentionTimer);
     this.retentionTimer = void 0;
+    this.clearTakeoverRefreshRetryTimer();
     this.terminalOutputCache.clear();
-    for (const owner of this.claimedOwners) this.sessionOwnership.release(owner, this.bridgeToken);
+    for (const owner of this.claimedSessionOwners) this.sessionOwnership.release(owner, this.bridgeToken);
+    this.claimedSessionOwners.clear();
     this.claimedOwners.clear();
   }
   publisher(owner) {
@@ -14240,23 +14902,102 @@ var ActivityManagerBridge = class {
   }
   syncOwnedSessions() {
     if (!this.writerVerifiable) return;
+    const takeoverOwners = [];
     for (const owner of this.sessionOwnership.ownedSessionIds()) {
       if (this.claimedOwners.has(owner)) continue;
       if (!this.sessionOwnership.claim(owner, this.bridgeToken)) continue;
+      this.claimedSessionOwners.add(owner);
       const publisher = this.publisher(owner);
       if (publisher.hasWriterOwnership) {
-        try {
-          const refreshed = this.terminalManager.refreshSnapshotsFromStore?.();
-          if (refreshed) this.adoptTerminalSnapshots(refreshed);
-        } catch (error) {
-          this.diagnostic({ kind: "io", path: owner, message: `terminal takeover refresh failed: ${error instanceof Error ? error.message : String(error)}` });
-        }
-        this.claimedOwners.add(owner);
+        if (publisher.writerDeathProven) takeoverOwners.push(owner);
+        else this.claimedOwners.add(owner);
       } else {
         this.publishers.delete(owner);
         this.sessionOwnership.release(owner, this.bridgeToken);
+        this.claimedSessionOwners.delete(owner);
       }
     }
+    if (takeoverOwners.length === 0) {
+      this.takeoverRefreshFailureDiagnosed = false;
+      this.resetTakeoverRefreshBackoff();
+      return;
+    }
+    const attemptAt = this.now();
+    if (this.takeoverRefreshLastAttemptAt !== void 0 && attemptAt - this.takeoverRefreshLastAttemptAt < this.takeoverRefreshBackoffMs) {
+      this.scheduleTakeoverRefreshRetry();
+      return;
+    }
+    this.takeoverRefreshLastAttemptAt = attemptAt;
+    let refresh;
+    this.takeoverRefreshInFlight = true;
+    try {
+      refresh = this.terminalManager.refreshSnapshotsFromStore?.();
+    } catch (error) {
+      this.deferTakeoverRefresh(takeoverOwners[0], `terminal takeover refresh failed safely; takeover retries after a backoff window: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    } finally {
+      this.takeoverRefreshInFlight = false;
+    }
+    if (refresh && !refresh.ok) {
+      this.deferTakeoverRefresh(takeoverOwners[0], "terminal takeover refresh failed; takeover retries after a backoff window");
+      return;
+    }
+    if (refresh && !refresh.complete) {
+      this.adoptTerminalSnapshots(refresh.snapshots);
+      this.deferTakeoverRefresh(takeoverOwners[0], "terminal takeover refresh produced an incomplete generation; takeover retries after a backoff window");
+      return;
+    }
+    this.takeoverRefreshFailureDiagnosed = false;
+    this.resetTakeoverRefreshBackoff();
+    if (refresh) this.adoptTerminalSnapshots(refresh.snapshots);
+    for (const owner of takeoverOwners) this.claimedOwners.add(owner);
+  }
+  /** Emit the expected takeover-refresh failure once per failure episode — explicit {ok:false}, an unexpected throw, or an incomplete generation; a complete refresh resets it. */
+  diagnoseTakeoverRefreshFailure(path2, message) {
+    if (this.takeoverRefreshFailureDiagnosed) return;
+    this.takeoverRefreshFailureDiagnosed = true;
+    this.diagnostic({ kind: "io", path: path2, message });
+  }
+  /** Diagnose the deferred refresh once per episode and escalate the next backoff window — 1s base doubling to the 60s cap on the injectable clock, mirroring the manager's lazy init-retry schedule. */
+  deferTakeoverRefresh(path2, message) {
+    this.diagnoseTakeoverRefreshFailure(path2, message);
+    this.takeoverRefreshFailedAttempts += 1;
+    this.takeoverRefreshBackoffMs = Math.min(
+      TAKEOVER_REFRESH_BACKOFF_BASE_MS * 2 ** Math.min(this.takeoverRefreshFailedAttempts - 1, 32),
+      TAKEOVER_REFRESH_BACKOFF_MAX_MS
+    );
+    this.scheduleTakeoverRefreshRetry();
+  }
+  /** Wake an otherwise idle deferred takeover at the end of its current backoff window; running-terminal output polling already provides that retry cadence. */
+  scheduleTakeoverRefreshRetry() {
+    if (this.disposed) return;
+    if (this.terminalSnapshots.some((task) => !isTerminalTaskSettled(task.status))) {
+      this.clearTakeoverRefreshRetryTimer();
+      return;
+    }
+    if (this.takeoverRefreshLastAttemptAt === void 0) return;
+    const dueAt = this.takeoverRefreshLastAttemptAt + this.takeoverRefreshBackoffMs;
+    if (this.takeoverRefreshRetryTimer && this.takeoverRefreshRetryDueAt === dueAt) return;
+    this.clearTakeoverRefreshRetryTimer();
+    this.takeoverRefreshRetryDueAt = dueAt;
+    this.takeoverRefreshRetryTimer = setTimeout(() => {
+      this.takeoverRefreshRetryTimer = void 0;
+      this.takeoverRefreshRetryDueAt = void 0;
+      this.publishAll();
+    }, Math.max(0, dueAt - this.now()));
+    this.takeoverRefreshRetryTimer.unref?.();
+  }
+  clearTakeoverRefreshRetryTimer() {
+    if (this.takeoverRefreshRetryTimer) clearTimeout(this.takeoverRefreshRetryTimer);
+    this.takeoverRefreshRetryTimer = void 0;
+    this.takeoverRefreshRetryDueAt = void 0;
+  }
+  /** A complete successful scan — or a pass with zero pending takeover owners — ends the episode: the escalating retry schedule resets so a later episode starts from the base again. */
+  resetTakeoverRefreshBackoff() {
+    this.takeoverRefreshFailedAttempts = 0;
+    this.takeoverRefreshBackoffMs = TAKEOVER_REFRESH_BACKOFF_BASE_MS;
+    this.takeoverRefreshLastAttemptAt = void 0;
+    this.clearTakeoverRefreshRetryTimer();
   }
   publishAll() {
     if (this.disposed) return;
@@ -14276,6 +15017,7 @@ var ActivityManagerBridge = class {
       this.claimedOwners.delete(owner);
       this.publishers.delete(owner);
       this.sessionOwnership.release(owner, this.bridgeToken);
+      this.claimedSessionOwners.delete(owner);
       return;
     }
     const retained = publisher.getSnapshot();
@@ -14338,12 +15080,13 @@ var ActivityManagerBridge = class {
     }
     try {
       publisher.publish(merged);
-      if (abandonedRunningIds.size > 0) publisher.completeAbandonedReconciliation();
+      publisher.completeAbandonedReconciliation();
     } catch (error) {
       if (!publisher.hasWriterOwnership) {
         this.claimedOwners.delete(owner);
         this.publishers.delete(owner);
         this.sessionOwnership.release(owner, this.bridgeToken);
+        this.claimedSessionOwners.delete(owner);
       }
       this.diagnostic({ kind: "io", path: owner, message: error instanceof Error ? error.message : String(error) });
     }
@@ -14354,6 +15097,7 @@ var ActivityManagerBridge = class {
     for (const key of this.terminalOutputCache.keys()) {
       if (!retainedKeys.has(key)) this.terminalOutputCache.delete(key);
     }
+    this.syncTerminalOutputPoll();
   }
   terminalCacheKey(task) {
     return `${task.ownerSessionId}\0${task.id}`;
@@ -14392,11 +15136,9 @@ function installActivityManagerBridge(pi, terminalManager, subagentManager, opti
   pi.on("session_start", (_event, ctx) => bridge.bindSession(ownerSessionId(ctx)));
   pi.on("tool_call", (event, ctx) => {
     if (event.toolName !== "terminal_start" && event.toolName !== "subagent_spawn") return;
-    if (bridge.canProduceActivity(ownerSessionId(ctx))) return;
-    return {
-      block: true,
-      reason: "activity unavailable: another live Pi process owns this session's durable Activity feed"
-    };
+    const reason = bridge.activityBlockReason(ownerSessionId(ctx));
+    if (reason === void 0) return;
+    return { block: true, reason };
   });
   pi.on("session_shutdown", (_event, ctx) => bridge.shutdownSession(ownerSessionId(ctx)));
   return bridge;

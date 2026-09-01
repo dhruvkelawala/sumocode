@@ -5724,12 +5724,12 @@ var hasOwn = (record, key) => Object.prototype.hasOwnProperty.call(record, key);
 var isThinking = (value) => THINKING_LEVELS.includes(value);
 function normalizedOverlay(value, index, builtIn, warnings) {
   if (!isRecord2(value)) {
-    warnings.push({ scope: "file", message: `roles[${index}] must be an object; entry skipped` });
+    warnings.push({ scope: "file", blocksOverlays: false, message: `roles[${index}] must be an object; entry skipped` });
     return void 0;
   }
   const id = typeof value.id === "string" ? value.id.trim() : "";
   if (!id || !/^[a-z0-9][a-z0-9-]*$/.test(id)) {
-    warnings.push({ scope: "file", message: `roles[${index}] has an invalid id; entry skipped` });
+    warnings.push({ scope: "file", blocksOverlays: false, message: `roles[${index}] has an invalid id; entry skipped` });
     return void 0;
   }
   const warn = (message) => {
@@ -5796,19 +5796,19 @@ function loadRoles(dependencies = {}) {
     contents = readFile(path2, "utf8");
   } catch (error) {
     const code = isRecord2(error) && typeof error.code === "string" ? error.code : void 0;
-    return code === "ENOENT" ? { roles: BUILT_IN_ROLES, warnings: [] } : { roles: BUILT_IN_ROLES, warnings: [{ scope: "file", message: `unable to read roles.json: ${error instanceof Error ? error.message : String(error)}` }] };
+    return code === "ENOENT" ? { roles: BUILT_IN_ROLES, warnings: [] } : { roles: BUILT_IN_ROLES, warnings: [{ scope: "file", blocksOverlays: true, message: `unable to read roles.json: ${error instanceof Error ? error.message : String(error)}` }] };
   }
   if (Buffer.byteLength(contents, "utf8") > MAX_ROLES_FILE_BYTES) {
-    return { roles: BUILT_IN_ROLES, warnings: [{ scope: "file", message: "roles.json exceeds 256 KB; using built-in roles" }] };
+    return { roles: BUILT_IN_ROLES, warnings: [{ scope: "file", blocksOverlays: true, message: "roles.json exceeds 256 KB; using built-in roles" }] };
   }
   let parsed;
   try {
     parsed = JSON.parse(contents);
   } catch (error) {
-    return { roles: BUILT_IN_ROLES, warnings: [{ scope: "file", message: `invalid roles.json: ${error instanceof Error ? error.message : String(error)}` }] };
+    return { roles: BUILT_IN_ROLES, warnings: [{ scope: "file", blocksOverlays: true, message: `invalid roles.json: ${error instanceof Error ? error.message : String(error)}` }] };
   }
   if (!isRecord2(parsed) || !Array.isArray(parsed.roles)) {
-    return { roles: BUILT_IN_ROLES, warnings: [{ scope: "file", message: "roles.json must contain a roles array; using built-in roles" }] };
+    return { roles: BUILT_IN_ROLES, warnings: [{ scope: "file", blocksOverlays: true, message: "roles.json must contain a roles array; using built-in roles" }] };
   }
   const warnings = [];
   const roles = BUILT_IN_ROLES.map((role) => ({ ...role }));
@@ -6795,10 +6795,11 @@ async function startAgentPane(pi, options) {
     target = await createTabPane(pi, options.cwd, options.placement.label);
   }
   if (!target.ok) return target;
-  const started = await runPaneCommand(pi, target.pane, options.shellCommand);
-  if (!started.ok) return cleanFailedChildStart(pi, target.pane.pane_id, started.error, recoveryShell);
-  const agentName = uniqueHerdrAgentName(options.name);
   const paneId2 = target.pane.pane_id;
+  if (!paneId2) return { ok: false, error: "herdr child target has no pane_id; cleanup skipped" };
+  const started = await runPaneCommand(pi, target.pane, options.shellCommand);
+  if (!started.ok) return cleanFailedChildStart(pi, paneId2, started.error, recoveryShell);
+  const agentName = uniqueHerdrAgentName(options.name);
   const workspaceId = target.pane.workspace_id ?? (options.placement.kind === "workspace" ? options.placement.workspaceId : void 0);
   const tabId = target.pane.tab_id ?? (options.placement.kind === "tab" ? options.placement.tabId : void 0);
   await pi.exec("herdr", ["pane", "rename", paneId2, options.name], { timeout: 5e3 }).catch(() => void 0);
@@ -6830,9 +6831,10 @@ var herdrTerminalHost = {
   async openCommandInSplit(pi, direction, options) {
     const target = hasHerdrCaller() ? await splitPane(pi, { kind: "current" }, direction, options.cwd) : await createTabPane(pi, options.cwd, "sumocode");
     if (!target.ok) return target;
-    const started = await runPaneCommand(pi, target.pane, options.shellCommand);
-    if (!started.ok) return started;
     const paneId2 = target.pane.pane_id;
+    if (!paneId2) return { ok: false, error: "herdr child target has no pane_id; cleanup skipped" };
+    const started = await runPaneCommand(pi, target.pane, options.shellCommand);
+    if (!started.ok) return cleanFailedChildStart(pi, paneId2, started.error);
     return { ok: true, pane: { host: "herdr", paneId: paneId2, workspaceId: target.pane.workspace_id } };
   },
   async openWorktreeWorkspace(pi, options) {
@@ -17717,14 +17719,14 @@ function registerSubagentTools(pi, manager, delivery, host = getTerminalHost(), 
       const loadedRoles = loaded.roles;
       const role = params.role ? loadedRoles.find((candidate) => candidate.id === params.role) : void 0;
       const selectedIsBuiltIn = params.role ? BUILT_IN_ROLES.some((candidate) => candidate.id === params.role) : false;
-      const relevantWarnings = params.role ? loaded.warnings.filter((warning) => warning.scope === "role" ? warning.roleId === params.role : !selectedIsBuiltIn) : [];
-      if (params.role && relevantWarnings.length > 0) {
+      const warningsBlockingRole = params.role ? loaded.warnings.filter((warning) => warning.scope === "role" ? warning.roleId === params.role : warning.blocksOverlays && !selectedIsBuiltIn) : [];
+      if (params.role && warningsBlockingRole.length > 0) {
         return makeToolResult2(`Unable to spawn role ${params.role}: roles.json has invalid configuration:
-${relevantWarnings.map((warning) => `- ${warning.message}`).join("\n")}`, {
+${warningsBlockingRole.map((warning) => `- ${warning.message}`).join("\n")}`, {
           action: "spawn",
           status: "invalid_role_config",
           role: params.role,
-          warnings: relevantWarnings
+          warnings: warningsBlockingRole
         });
       }
       if (params.role && !role) {
@@ -17990,6 +17992,7 @@ function installSubagents(pi, options = {}) {
     // with it so the first child is actually beside the operator instead of
     // disappearing into a background `subagents` tab.
     initialVisibleTabId: host.kind === "herdr" ? process.env.HERDR_TAB_ID : void 0,
+    onDiagnostic: (diagnostic) => logDiagnostic("subagent_manager_diagnostic", { ...diagnostic }),
     ...options.managerDependencies
   });
   const delivery = createDeferredResultDelivery();

@@ -153,15 +153,17 @@ export function registerSubagentTools(
 			const loadedRoles = loaded.roles;
 			const role = params.role ? loadedRoles.find((candidate) => candidate.id === params.role) : undefined;
 			const selectedIsBuiltIn = params.role ? BUILT_IN_ROLES.some((candidate) => candidate.id === params.role) : false;
-			const relevantWarnings = params.role
-				? loaded.warnings.filter((warning) => warning.scope === "role" ? warning.roleId === params.role : !selectedIsBuiltIn)
+			// Entry-local warnings block only their role. Fatal file failures block
+			// custom overlays because only the built-in fallback is trustworthy.
+			const warningsBlockingRole = params.role
+				? loaded.warnings.filter((warning) => warning.scope === "role" ? warning.roleId === params.role : warning.blocksOverlays && !selectedIsBuiltIn)
 				: [];
-			if (params.role && relevantWarnings.length > 0) {
-				return makeToolResult(`Unable to spawn role ${params.role}: roles.json has invalid configuration:\n${relevantWarnings.map((warning) => `- ${warning.message}`).join("\n")}`, {
+			if (params.role && warningsBlockingRole.length > 0) {
+				return makeToolResult(`Unable to spawn role ${params.role}: roles.json has invalid configuration:\n${warningsBlockingRole.map((warning) => `- ${warning.message}`).join("\n")}`, {
 					action: "spawn",
 					status: "invalid_role_config",
 					role: params.role,
-					warnings: relevantWarnings,
+					warnings: warningsBlockingRole,
 				});
 			}
 			if (params.role && !role) {

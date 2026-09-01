@@ -75,7 +75,7 @@ export interface LoadRolesDependencies {
 }
 
 export type RoleWarning =
-	| { readonly scope: "file"; readonly message: string }
+	| { readonly scope: "file"; readonly blocksOverlays: boolean; readonly message: string }
 	| { readonly scope: "role"; readonly roleId: string; readonly message: string };
 
 export interface LoadedRoles {
@@ -106,12 +106,12 @@ interface MutableRoleOverlay {
 
 function normalizedOverlay(value: unknown, index: number, builtIn: boolean, warnings: RoleWarning[]): MutableRoleOverlay | undefined {
 	if (!isRecord(value)) {
-		warnings.push({ scope: "file", message: `roles[${index}] must be an object; entry skipped` });
+		warnings.push({ scope: "file", blocksOverlays: false, message: `roles[${index}] must be an object; entry skipped` });
 		return undefined;
 	}
 	const id = typeof value.id === "string" ? value.id.trim() : "";
 	if (!id || !/^[a-z0-9][a-z0-9-]*$/.test(id)) {
-		warnings.push({ scope: "file", message: `roles[${index}] has an invalid id; entry skipped` });
+		warnings.push({ scope: "file", blocksOverlays: false, message: `roles[${index}] has an invalid id; entry skipped` });
 		return undefined;
 	}
 	const warn = (message: string): void => { warnings.push({ scope: "role", roleId: id, message }); };
@@ -180,19 +180,19 @@ export function loadRoles(dependencies: LoadRolesDependencies = {}): LoadedRoles
 		const code = isRecord(error) && typeof error.code === "string" ? error.code : undefined;
 		return code === "ENOENT"
 			? { roles: BUILT_IN_ROLES, warnings: [] }
-			: { roles: BUILT_IN_ROLES, warnings: [{ scope: "file", message: `unable to read roles.json: ${error instanceof Error ? error.message : String(error)}` }] };
+			: { roles: BUILT_IN_ROLES, warnings: [{ scope: "file", blocksOverlays: true, message: `unable to read roles.json: ${error instanceof Error ? error.message : String(error)}` }] };
 	}
 	if (Buffer.byteLength(contents, "utf8") > MAX_ROLES_FILE_BYTES) {
-		return { roles: BUILT_IN_ROLES, warnings: [{ scope: "file", message: "roles.json exceeds 256 KB; using built-in roles" }] };
+		return { roles: BUILT_IN_ROLES, warnings: [{ scope: "file", blocksOverlays: true, message: "roles.json exceeds 256 KB; using built-in roles" }] };
 	}
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(contents) as unknown;
 	} catch (error) {
-		return { roles: BUILT_IN_ROLES, warnings: [{ scope: "file", message: `invalid roles.json: ${error instanceof Error ? error.message : String(error)}` }] };
+		return { roles: BUILT_IN_ROLES, warnings: [{ scope: "file", blocksOverlays: true, message: `invalid roles.json: ${error instanceof Error ? error.message : String(error)}` }] };
 	}
 	if (!isRecord(parsed) || !Array.isArray(parsed.roles)) {
-		return { roles: BUILT_IN_ROLES, warnings: [{ scope: "file", message: "roles.json must contain a roles array; using built-in roles" }] };
+		return { roles: BUILT_IN_ROLES, warnings: [{ scope: "file", blocksOverlays: true, message: "roles.json must contain a roles array; using built-in roles" }] };
 	}
 
 	const warnings: RoleWarning[] = [];

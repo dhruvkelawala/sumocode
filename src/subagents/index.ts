@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activityFromSubagentSnapshot } from "../activity/subagent-adapter.js";
 import { renderSubagentStatusRow, type SubagentStatusRunningEntry } from "../subagent-status-row.js";
+import { logDiagnostic } from "../sumo-tui/runtime/diagnostics.js";
 import { BUILT_IN_TOOLS, getBuiltInToolsFromActiveTools } from "../native-task-config.js";
 import { getTerminalHost } from "../terminal-host/index.js";
 import type { TerminalHost } from "../terminal-host/types.js";
@@ -133,6 +134,7 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 		// with it so the first child is actually beside the operator instead of
 		// disappearing into a background `subagents` tab.
 		initialVisibleTabId: host.kind === "herdr" ? process.env.HERDR_TAB_ID : undefined,
+		onDiagnostic: (diagnostic) => logDiagnostic("subagent_manager_diagnostic", { ...diagnostic }),
 		...options.managerDependencies,
 	});
 	const delivery = createDeferredResultDelivery();

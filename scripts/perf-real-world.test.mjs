@@ -1,5 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { publicProbeError } from "./perf-real-world.mjs";
+import { publicProbeError, selectReadinessEvent } from "./perf-real-world.mjs";
+
+describe("real-world readiness event selection", () => {
+	it("prefers truthful readiness events and uses aliases only for old streams", () => {
+		const current = [
+			{ event: "editor_ready", ts: 10 },
+			{ event: "input_ready", ts: 11 },
+			{ event: "app_ready", ts: 20 },
+			{ event: "command_ready", ts: 30 },
+		];
+		expect(selectReadinessEvent(current, "editor_ready", "input_ready", 1)).toEqual(current[0]);
+		expect(selectReadinessEvent(current, "command_ready", "app_ready", 1)).toEqual(current[3]);
+		expect(selectReadinessEvent(current.slice(0, 3), "command_ready", "app_ready", 1)).toBeUndefined();
+
+		const legacy = [{ event: "input_ready", ts: 11 }, { event: "app_ready", ts: 20 }];
+		expect(selectReadinessEvent(legacy, "editor_ready", "input_ready", 1)).toEqual(legacy[0]);
+		expect(selectReadinessEvent(legacy, "command_ready", "app_ready", 1)).toEqual(legacy[1]);
+	});
+});
 
 describe("real-world perf report sanitization", () => {
 	it("never exposes Herdr stderr through a command error message", () => {

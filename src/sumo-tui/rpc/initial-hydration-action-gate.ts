@@ -1,5 +1,9 @@
 export type DeferredHydrationAction = () => void | Promise<void>;
 
+export interface InitialHydrationActionGateOptions {
+	readonly onReady?: () => void;
+}
+
 /**
  * Keeps child-dependent shortcuts inert while initial RPC hydration owns the
  * state/transcript event buffer. One latest intent per action key is retained;
@@ -14,7 +18,7 @@ export class InitialHydrationActionGate {
 	private readonly pending = new Map<string, DeferredHydrationAction>();
 	private readonly settled: Promise<void>;
 
-	public constructor(initialHydration: Promise<void>) {
+	public constructor(initialHydration: Promise<void>, options: InitialHydrationActionGateOptions = {}) {
 		this.settled = initialHydration.then(async () => {
 			// Re-drain anything queued while an earlier intent awaited so a late
 			// pre-ready shortcut is never dropped, then open the immediate path.
@@ -30,7 +34,18 @@ export class InitialHydrationActionGate {
 				}
 			}
 			this.ready = true;
+			try {
+				options.onReady?.();
+			} catch {
+				// Readiness observers are advisory. A failed diagnostic must not
+				// reject submit waiters after hydration has already settled.
+			}
 		});
+	}
+
+	/** True only after hydration and every retained action have settled. */
+	public get isReady(): boolean {
+		return this.ready;
 	}
 
 	public run(key: string, action: DeferredHydrationAction): void {

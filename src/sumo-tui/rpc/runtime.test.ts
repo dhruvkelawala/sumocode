@@ -1,5 +1,5 @@
 import type { Component } from "@earendil-works/pi-tui";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -669,6 +669,46 @@ describe("RPC host retained runtime frame", () => {
 		}
 	});
 
+	it("drops command_ready silently before start() and still emits it once after", async () => {
+		// markCommandReady guards on !this.shell: a pre-start call must neither
+		// emit nor latch commandReadyMarked, so the real post-start call still
+		// emits exactly once.
+		const previousDiagFile = process.env.SUMO_TUI_DIAG_FILE;
+		const dir = mkdtempSync(join(tmpdir(), "sumocode-rpc-runtime-preshell-"));
+		const diagFile = join(dir, "diag.jsonl");
+		process.env.SUMO_TUI_DIAG_FILE = diagFile;
+		try {
+			const output = new FakeOutput();
+			const terminal = new TerminalSessionOwner({ output });
+			const runtime = new RpcHostRuntime({
+				output,
+				input: { isTTY: false, on: () => undefined },
+				terminal,
+				initialState: state(),
+				initialTranscript: { messages: [] },
+			});
+
+			writeFileSync(diagFile, "");
+			runtime.markCommandReady();
+			expect(readFileSync(diagFile, "utf8").trim()).toBe("");
+
+			await runtime.start();
+			runtime.markChromeStable();
+			runtime.markCommandReady();
+			runtime.markCommandReady();
+			const events = readFileSync(diagFile, "utf8")
+				.trim()
+				.split("\n")
+				.map(parseDiagEvent);
+			expect(events.filter((entry) => entry.event === "command_ready")).toHaveLength(1);
+			runtime.stop();
+		} finally {
+			if (previousDiagFile === undefined) delete process.env.SUMO_TUI_DIAG_FILE;
+			else process.env.SUMO_TUI_DIAG_FILE = previousDiagFile;
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("emits startup readiness diagnostics after the first retained render", async () => {
 		const previousDiagFile = process.env.SUMO_TUI_DIAG_FILE;
 		const dir = mkdtempSync(join(tmpdir(), "sumocode-rpc-runtime-diag-"));
@@ -691,7 +731,8 @@ describe("RPC host retained runtime frame", () => {
 				.trim()
 				.split("\n")
 				.map(parseDiagEvent);
-			for (const event of ["boot_screen_frame", "input_ready"]) {
+			for (const event of ["boot_screen_frame", "editor_ready", "input_ready"]) {
+				expect(startupEvents.filter((entry) => entry.event === event)).toHaveLength(1);
 				expect(startupEvents).toContainEqual(expect.objectContaining({
 					event,
 					surface: "rpc_host",
@@ -699,12 +740,13 @@ describe("RPC host retained runtime frame", () => {
 					rows: 24,
 				}));
 			}
-			expect(startupEvents).not.toContainEqual(expect.objectContaining({ event: "app_ready" }));
-			expect(startupEvents).not.toContainEqual(expect.objectContaining({ event: "stable_chrome_ready" }));
+			for (const event of ["app_ready", "stable_chrome_ready", "command_ready"]) {
+				expect(startupEvents).not.toContainEqual(expect.objectContaining({ event }));
+			}
 
 			runtime.markChromeStable();
 			runtime.markChromeStable();
-			const stableEvents = readFileSync(diagFile, "utf8")
+			let stableEvents = readFileSync(diagFile, "utf8")
 				.trim()
 				.split("\n")
 				.map(parseDiagEvent);
@@ -717,8 +759,18 @@ describe("RPC host retained runtime frame", () => {
 					rows: 24,
 				}));
 			}
+			expect(stableEvents).not.toContainEqual(expect.objectContaining({ event: "command_ready" }));
+
+			runtime.markCommandReady();
+			runtime.markCommandReady();
+			stableEvents = readFileSync(diagFile, "utf8")
+				.trim()
+				.split("\n")
+				.map(parseDiagEvent);
+			expect(stableEvents.filter((entry) => entry.event === "command_ready")).toHaveLength(1);
 			runtime.stop();
 			runtime.markChromeStable();
+			runtime.markCommandReady();
 		} finally {
 			if (previousDiagFile === undefined) delete process.env.SUMO_TUI_DIAG_FILE;
 			else process.env.SUMO_TUI_DIAG_FILE = previousDiagFile;
@@ -776,6 +828,44 @@ describe("RPC host retained runtime frame", () => {
 		const outputAfterStop = [...output.chunks];
 		await runtime.start();
 		expect(output.chunks).toEqual(outputAfterStop);
+	});
+
+	it("marks the retained reload editor ready before hydration and emits readiness once", async () => {
+		const previousDiagFile = process.env.SUMO_TUI_DIAG_FILE;
+		const dir = mkdtempSync(join(tmpdir(), "sumocode-rpc-runtime-reload-ready-"));
+		const diagFile = join(dir, "diag.jsonl");
+		process.env.SUMO_TUI_DIAG_FILE = diagFile;
+		try {
+			const output = new FakeOutput();
+			const input = new FakeInput();
+			const runtime = new RpcHostRuntime({
+				output,
+				input,
+				initialState: state(),
+				initialTranscript: { messages: [] },
+			});
+
+			writeFileSync(diagFile, "");
+			runtime.startInput();
+			runtime.markEditorReady();
+			expect(output.chunks).toEqual([]);
+
+			let events = readFileSync(diagFile, "utf8").trim().split("\n").map(parseDiagEvent);
+			expect(events.filter((entry) => entry.event === "editor_ready")).toHaveLength(1);
+			expect(events.filter((entry) => entry.event === "input_ready")).toHaveLength(1);
+			expect(events.some((entry) => entry.event === "boot_screen_frame")).toBe(false);
+
+			await runtime.start();
+			events = readFileSync(diagFile, "utf8").trim().split("\n").map(parseDiagEvent);
+			expect(events.filter((entry) => entry.event === "editor_ready")).toHaveLength(1);
+			expect(events.filter((entry) => entry.event === "input_ready")).toHaveLength(1);
+			expect(events.filter((entry) => entry.event === "boot_screen_frame")).toHaveLength(1);
+			runtime.stop();
+		} finally {
+			if (previousDiagFile === undefined) delete process.env.SUMO_TUI_DIAG_FILE;
+			else process.env.SUMO_TUI_DIAG_FILE = previousDiagFile;
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("keeps raw mode enabled while handing the terminal to a reload successor", async () => {

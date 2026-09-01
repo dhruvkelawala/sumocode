@@ -2,6 +2,37 @@ import { describe, expect, it, vi } from "vitest";
 import { InitialHydrationActionGate } from "./initial-hydration-action-gate.js";
 
 describe("InitialHydrationActionGate", () => {
+	it("publishes readiness after the deferred drain and before submit waiters resume", async () => {
+		let release!: () => void;
+		const hydration = new Promise<void>((resolve) => { release = resolve; });
+		const order: string[] = [];
+		let gate!: InitialHydrationActionGate;
+		gate = new InitialHydrationActionGate(hydration, {
+			onReady: () => {
+				expect(gate.isReady).toBe(true);
+				order.push("ready");
+			},
+		});
+		expect(gate.isReady).toBe(false);
+		gate.run("model", () => { order.push("deferred"); });
+		const submitWaiter = gate.whenSettled().then(() => { order.push("submit"); });
+
+		release();
+		await submitWaiter;
+
+		expect(order).toEqual(["deferred", "ready", "submit"]);
+		expect(gate.isReady).toBe(true);
+	});
+
+	it("settles submit waiters when the ready observer throws", async () => {
+		const gate = new InitialHydrationActionGate(Promise.resolve(), {
+			onReady: () => { throw new Error("diagnostic observer failed"); },
+		});
+
+		await expect(gate.whenSettled()).resolves.toBeUndefined();
+		expect(gate.isReady).toBe(true);
+	});
+
 	it("defers and coalesces child-dependent actions until hydration", async () => {
 		let release!: () => void;
 		const hydration = new Promise<void>((resolve) => { release = resolve; });

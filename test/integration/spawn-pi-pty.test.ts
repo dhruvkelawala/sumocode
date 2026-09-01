@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { IDisposable, IEvent, IPty } from "node-pty";
+import { dirname, join, resolve } from "node:path";
+import { spawn, type IDisposable, type IEvent, type IPty } from "node-pty";
 import { describe, expect, it } from "vitest";
 import { buildSpawnEnv, spawnPiPty, type SpawnPiPtyOptions } from "./spawn-pi-pty.js";
 
@@ -253,6 +254,412 @@ describe("spawnPiPty agent state isolation", () => {
 			expect(existsSync(generatedRoot)).toBe(false);
 		} finally {
 			rmSync(generatedRoot, { recursive: true, force: true });
+		}
+	});
+});
+
+/**
+ * Plan 096 fixture table: one row per option-consumption class pinned to
+ * @earendil-works/pi-coding-agent 0.84.3 `dist/cli/args.js` `parseArgs()`.
+ * Each row runs `bin/sumocode.sh --dry-run <args>` under a real PTY so the
+ * launcher selects its RPC path and exercises `extract_first_positional`
+ * (the execFile-based dry-run tests above are non-TTY and never extract).
+ *
+ * Plan 101 (Pi compatibility matrix) reruns this table per supported Pi
+ * version: bump the pinned version here alongside the class table in
+ * `bin/sumocode.sh`, re-read the new `parseArgs()`, and adjust expectations.
+ * The prompt values are asserted literally under current behavior; Plan 097
+ * replaces them with redacted presence/length assertions.
+ */
+interface OptionConsumptionRow {
+	readonly name: string;
+	readonly args: readonly string[];
+	/** Literal extracted kickoff prompt; empty when nothing may be extracted. */
+	readonly expectedPrompt: string;
+	/** Space-joined argv forwarded to the child after extraction. */
+	readonly expectedArgs: string;
+	/** `--print` / `--mode` rows must keep the direct-Pi bypass (no RPC host, no extraction). */
+	readonly directBypass?: boolean;
+}
+
+const OPTION_CONSUMPTION_ROWS: readonly OptionConsumptionRow[] = [
+	{
+		name: "tui-mode consumes `regular` and extracts the real positional prompt",
+		args: ["--tui-mode", "regular", "review the diff"],
+		expectedPrompt: "review the diff",
+		expectedArgs: "--tui-mode regular",
+	},
+	{
+		name: "tui-mode equals form stays a single token",
+		args: ["--tui-mode=regular", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--tui-mode=regular",
+	},
+	{
+		name: "tui-mode with a missing value consumes nothing",
+		args: ["--tui-mode"],
+		expectedPrompt: "",
+		expectedArgs: "--tui-mode",
+	},
+	{
+		name: "tui-mode does not consume a dash-following value",
+		args: ["--tui-mode", "--offline", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--tui-mode --offline",
+	},
+	{
+		name: "tui-mode consumes an invalid plain value like Pi",
+		args: ["--tui-mode", "bogus", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--tui-mode bogus",
+	},
+	{
+		name: "tui-mode consumes an @file value as invalid like Pi",
+		args: ["--tui-mode", "@mode.txt", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--tui-mode @mode.txt",
+	},
+	{
+		name: "standalone @file stays a Pi fileArg and is never the prompt",
+		args: ["@notes.md", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "@notes.md",
+	},
+	{
+		name: "use-theme consumes an @-prefixed theme name",
+		args: ["--use-theme", "@cathedral/dark", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--use-theme @cathedral/dark",
+	},
+	{
+		name: "use-theme does not consume a dash-following value",
+		args: ["--use-theme", "--offline", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--use-theme --offline",
+	},
+	{
+		name: "known boolean --offline never consumes the prompt",
+		args: ["--offline", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--offline",
+	},
+	{
+		name: "unknown extension flag consumes one dash-free value",
+		args: ["--plan", "active", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--plan active",
+	},
+	{
+		name: "boolean-style unknown extension flag does not consume a following flag",
+		args: ["--plan", "--offline", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--plan --offline",
+	},
+	{
+		name: "unknown extension flag equals form stays a single token",
+		args: ["--plan=strict", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--plan=strict",
+	},
+	{
+		name: "list-models consumes a dash-free search pattern",
+		args: ["--list-models", "sonnet", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--list-models sonnet",
+	},
+	{
+		name: "list-models refuses an @file search pattern",
+		args: ["--list-models", "@models.txt", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--list-models @models.txt",
+	},
+	{
+		name: "unconditional value flags bind before and after the positional",
+		args: ["--model", "sonnet", "PROMPT", "--offline"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--model sonnet --offline",
+	},
+	{
+		name: "unconditional value flag consumes -- before a later --print direct bypass",
+		args: ["--model", "--", "--print", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "--model -- --print PROMPT",
+		directBypass: true,
+	},
+	{
+		name: "unknown short option is kept and never becomes the prompt",
+		args: ["-x", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "-x",
+	},
+	{
+		name: "unknown short option with no following token extracts nothing",
+		args: ["-x"],
+		expectedPrompt: "",
+		expectedArgs: "-x",
+	},
+	{
+		name: "empty-string positional is extracted as parsed.messages[0]",
+		args: ["", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "PROMPT",
+	},
+	// Conventional single `--`: the wrapper consumes it while parsing its own
+	// options, then preserves delimiter state for mode selection and prompt
+	// extraction.
+	{
+		name: "single end-of-options -- keeps post-delimiter --print on the RPC path",
+		args: ["--", "--print"],
+		expectedPrompt: "--print",
+		expectedArgs: "--",
+	},
+	{
+		name: "single end-of-options -- keeps post-delimiter -p on the RPC path",
+		args: ["--", "-p"],
+		expectedPrompt: "-p",
+		expectedArgs: "--",
+	},
+	{
+		name: "single end-of-options -- keeps post-delimiter --mode on the RPC path",
+		args: ["--", "--mode", "rpc"],
+		expectedPrompt: "--mode",
+		expectedArgs: "-- rpc",
+	},
+	{
+		name: "single end-of-options -- keeps post-delimiter --mode=* on the RPC path",
+		args: ["--", "--mode=rpc"],
+		expectedPrompt: "--mode=rpc",
+		expectedArgs: "--",
+	},
+	// Historical double-`--` wrapper quirk: the wrapper consumes the first
+	// delimiter and the extractor sees the second.
+	{
+		name: "end-of-options -- makes the next token the prompt",
+		args: ["--", "--", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--",
+	},
+	{
+		name: "end-of-options -- makes a dash-leading token a message",
+		args: ["--", "--", "--offline"],
+		expectedPrompt: "--offline",
+		expectedArgs: "--",
+	},
+	{
+		name: "end-of-options -- keeps post--- --print on the RPC path",
+		args: ["--", "--", "--print"],
+		expectedPrompt: "--print",
+		expectedArgs: "--",
+	},
+	{
+		name: "end-of-options -- keeps post--- -p on the RPC path",
+		args: ["--", "--", "-p"],
+		expectedPrompt: "-p",
+		expectedArgs: "--",
+	},
+	{
+		name: "end-of-options -- keeps post--- --mode on the RPC path",
+		args: ["--", "--", "--mode"],
+		expectedPrompt: "--mode",
+		expectedArgs: "--",
+	},
+	{
+		name: "end-of-options -- keeps post--- --mode=* on the RPC path",
+		args: ["--", "--", "--mode=rpc"],
+		expectedPrompt: "--mode=rpc",
+		expectedArgs: "--",
+	},
+	{
+		name: "end-of-options -- extracts only the first post--- message",
+		args: ["--offline", "--", "--", "PROMPT", "second"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--offline -- second",
+	},
+	{
+		name: "end-of-options -- keeps an @file token a fileArg",
+		args: ["--", "--", "@file.md", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "-- @file.md",
+	},
+	{
+		name: "end-of-options -- extracts an empty-string first message",
+		args: ["--", "--", "", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "-- PROMPT",
+	},
+	{
+		name: "pre-delimiter --print keeps the direct-Pi bypass intact",
+		args: ["--print", "--", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "--print -- PROMPT",
+		directBypass: true,
+	},
+	{
+		name: "pre-delimiter -p keeps the direct-Pi bypass intact",
+		args: ["-p", "--", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "-p -- PROMPT",
+		directBypass: true,
+	},
+	{
+		name: "pre-delimiter --mode keeps the direct-Pi bypass intact",
+		args: ["--mode", "rpc", "--", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "--mode rpc -- PROMPT",
+		directBypass: true,
+	},
+	{
+		name: "pre-delimiter --mode=* keeps the direct-Pi bypass intact",
+		args: ["--mode=rpc", "--", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "--mode=rpc -- PROMPT",
+		directBypass: true,
+	},
+	{
+		name: "print keeps the --- message quirk and the direct-Pi bypass intact",
+		args: ["--print", "---text", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "--print ---text PROMPT",
+		directBypass: true,
+	},
+	{
+		name: "short -p keeps the direct-Pi bypass intact",
+		args: ["-p", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "-p PROMPT",
+		directBypass: true,
+	},
+	{
+		name: "explicit --mode keeps the direct-Pi bypass intact",
+		args: ["--mode", "rpc", "--offline", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "--mode rpc --offline PROMPT",
+		directBypass: true,
+	},
+	{
+		name: "explicit --mode=* keeps the direct-Pi bypass intact",
+		args: ["--mode=rpc", "--offline", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "--mode=rpc --offline PROMPT",
+		directBypass: true,
+	},
+];
+
+describe("sumocode launcher mirrors Pi option consumption (PTY RPC path)", () => {
+	/** macOS node-pty needs its spawn-helper executable; mirror spawn-pi-pty's ensure step. */
+	function ensureNodePtySpawnHelperExecutableForTest(): void {
+		try {
+			const require = createRequire(import.meta.url);
+			const nodePtyMain = require.resolve("node-pty");
+			const spawnHelper = join(dirname(nodePtyMain), "..", "prebuilds", `${process.platform}-${process.arch}`, "spawn-helper");
+			if (existsSync(spawnHelper)) chmodSync(spawnHelper, 0o755);
+		} catch {
+			// Resolution differences surface as a real spawn error below.
+		}
+	}
+
+	/** Runs `bin/sumocode.sh --dry-run <args>` with stdout on a real PTY (RPC path). */
+	function ptyDryRun(args: readonly string[]): Promise<string> {
+		ensureNodePtySpawnHelperExecutableForTest();
+		return new Promise<string>((resolveRun, rejectRun) => {
+			const child = spawn(resolve(process.cwd(), "bin/sumocode.sh"), ["--dry-run", ...args], {
+				name: "xterm-256color",
+				cols: 80,
+				rows: 24,
+				cwd: process.cwd(),
+				env: buildSpawnEnv(process.env, { PI_BIN: "/bin/echo" }),
+			});
+			let output = "";
+			child.onData((data) => {
+				output += data;
+			});
+			child.onExit(({ exitCode }) => {
+				if (exitCode === 0) resolveRun(output);
+				else rejectRun(new Error(`launcher dry-run exited ${exitCode}. Output:\n${output}`));
+			});
+		});
+	}
+
+	function dryRunField(output: string, field: string): string {
+		const line = output.split(/\r?\n/).find((candidate) => candidate.startsWith(`${field}=`));
+		if (line === undefined) throw new Error(`dry-run output missing ${field}. Output:\n${output}`);
+		return line.slice(field.length + 1);
+	}
+
+	for (const row of OPTION_CONSUMPTION_ROWS) {
+		it(row.name, async () => {
+			const output = await ptyDryRun(row.args);
+			const prompt = dryRunField(output, "SUMOCODE_INITIAL_PROMPT");
+			const forwardedArgs = dryRunField(output, "ARGS");
+			const execLine = output.split(/\r?\n/).find((candidate) => candidate.startsWith("exec "));
+			if (execLine === undefined) throw new Error(`dry-run output missing exec line. Output:\n${output}`);
+
+			if (row.directBypass === true) {
+				// Direct-Pi bypass stays byte-for-byte: no RPC host, no extraction,
+				// argv forwarded exactly as typed (including `---`-prefixed print
+				// messages Pi would consume).
+				expect(prompt).toBe("");
+				expect(forwardedArgs).toBe(row.expectedArgs);
+				expect(execLine.startsWith("exec /bin/echo -e ")).toBe(true);
+				expect(execLine).toContain("/src/extension-entry.ts");
+				expect(execLine.endsWith(` ${row.expectedArgs}`)).toBe(true);
+				expect(execLine).not.toContain("sumo-rpc-host.js");
+				return;
+			}
+
+			// RPC path: flags/values stay in the forwarded argv; only the first
+			// actual message moves to the kickoff-prompt side channel.
+			expect(prompt).toBe(row.expectedPrompt);
+			expect(forwardedArgs).toBe(row.expectedArgs);
+			expect(execLine).toBe(`exec node ${process.cwd()}/sumo-rpc-host.js ${row.expectedArgs}`);
+		});
+	}
+
+	it("task rejects a bare end-of-options delimiter without a prompt", async () => {
+		await expect(ptyDryRun(["task", "--"])).rejects.toThrow(/task requires a non-empty prompt/);
+	});
+
+	it("task rejects an empty prompt", async () => {
+		await expect(ptyDryRun(["task", ""])).rejects.toThrow(/task requires a non-empty prompt/);
+	});
+
+	it("task rejects a whitespace-only prompt", async () => {
+		await expect(ptyDryRun(["task", "   "])).rejects.toThrow(/task requires a non-empty prompt/);
+	});
+
+	it("task rejects a whitespace-only --prompt-file", async () => {
+		const root = mkdtempSync(join(tmpdir(), "sumocode-task-ws-prompt-file-"));
+		const promptFile = join(root, "prompt.txt");
+		try {
+			writeFileSync(promptFile, "   \n\t ");
+			await expect(ptyDryRun(["task", "--prompt-file", promptFile])).rejects.toThrow(/task requires a non-empty prompt/);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("task --prompt-file keeps the file prompt first after a preserved delimiter", async () => {
+		const root = mkdtempSync(join(tmpdir(), "sumocode-task-prompt-file-"));
+		const promptFile = join(root, "prompt.txt");
+		try {
+			writeFileSync(promptFile, "FILEPROMPT");
+			const output = await ptyDryRun(["task", "--prompt-file", promptFile, "--", "--offline"]);
+			expect(dryRunField(output, "SUMOCODE_INITIAL_PROMPT")).toBe("FILEPROMPT");
+			expect(dryRunField(output, "ARGS")).toBe("-- --offline");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("task --task-dir keeps the prompt.txt text first after a preserved delimiter", async () => {
+		const root = mkdtempSync(join(tmpdir(), "sumocode-task-dir-"));
+		try {
+			writeFileSync(join(root, "prompt.txt"), "TASKDIRPROMPT");
+			const output = await ptyDryRun(["task", "--task-dir", root, "--", "--offline"]);
+			expect(dryRunField(output, "SUMOCODE_INITIAL_PROMPT")).toBe("TASKDIRPROMPT");
+			expect(dryRunField(output, "ARGS")).toBe("-- --offline");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
 		}
 	});
 });

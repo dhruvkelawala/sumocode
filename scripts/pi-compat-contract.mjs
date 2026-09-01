@@ -166,7 +166,7 @@ export function resolveSupportedMatrix(ranges, published) {
 }
 
 export function assertWorkflowContract(text) {
-	for (const required of ["pull_request:", "schedule:", "cron:", "workflow_dispatch:", "timeout-minutes:", "scripts/smoke-pi-versions.sh --supported-matrix"]) {
+	for (const required of ["pull_request:", "schedule:", "cron:", "workflow_dispatch:", "timeout-minutes:", "pnpm install --frozen-lockfile", "scripts/smoke-pi-versions.sh --supported-matrix"]) {
 		if (!text.includes(required)) throw new Error(`workflow is missing ${required}`);
 	}
 	const invocationCount = text.split("scripts/smoke-pi-versions.sh --supported-matrix").length - 1;

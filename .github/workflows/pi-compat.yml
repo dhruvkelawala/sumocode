@@ -44,6 +44,9 @@ jobs:
         with:
           node-version: 24
 
+      - name: Install repository dependencies
+        run: pnpm install --frozen-lockfile
+
       - name: Test every published supported Pi patch
         id: compatibility
         shell: bash

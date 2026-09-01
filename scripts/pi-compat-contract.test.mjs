@@ -167,7 +167,7 @@ describe("supported matrix resolution", () => {
 });
 
 describe("workflow contract", () => {
-	const workflow = `on:\n  pull_request:\n    paths: [package.json, bin/sumocode.sh, sumo-rpc-host.js, src/extension-entry.ts, src/sumo-tui/rpc/**, src/extension.ts, src/interaction-registry.ts, scripts/smoke-pi-versions.sh, scripts/pi-compat-contract.mjs, scripts/pi-compat-contract.test.mjs, .github/workflows/pi-compat.yml]\n  schedule:\n    - cron: "17 4 * * *"\n  workflow_dispatch:\njobs:\n  pi-compat:\n    timeout-minutes: 20\n    steps:\n      - run: scripts/smoke-pi-versions.sh --supported-matrix\n`;
+	const workflow = `on:\n  pull_request:\n    paths: [package.json, bin/sumocode.sh, sumo-rpc-host.js, src/extension-entry.ts, src/sumo-tui/rpc/**, src/extension.ts, src/interaction-registry.ts, scripts/smoke-pi-versions.sh, scripts/pi-compat-contract.mjs, scripts/pi-compat-contract.test.mjs, .github/workflows/pi-compat.yml]\n  schedule:\n    - cron: "17 4 * * *"\n  workflow_dispatch:\njobs:\n  pi-compat:\n    timeout-minutes: 20\n    steps:\n      - run: pnpm install --frozen-lockfile\n      - run: scripts/smoke-pi-versions.sh --supported-matrix\n`;
 
 	it("requires qualifying PR paths, daily/manual triggers, timeout, and one canonical invocation", () => {
 		expect(assertWorkflowContract(workflow)).toBe(true);

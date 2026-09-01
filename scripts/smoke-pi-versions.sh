@@ -97,7 +97,8 @@ JSON
 
 		SUMO_ROOT="${WORK_DIR}/node_modules/@dhruvkelawala/sumocode"
 		PI_ROOT="${WORK_DIR}/node_modules/@earendil-works/pi-coding-agent"
-		PI_CORE_TYPES="$(dirname "$(realpath "${PI_ROOT}")")/pi-agent-core/dist/types.d.ts"
+		PI_CORE_ROOT="$(dirname "$(realpath "${PI_ROOT}")")/pi-agent-core"
+		PI_CORE_TYPES="${PI_CORE_ROOT}/dist/types.d.ts"
 		PI_BIN="${WORK_DIR}/node_modules/.bin/pi"
 		SUMO_BIN="${WORK_DIR}/node_modules/.bin/sumocode"
 		EXTENSION_ENTRY="${SUMO_ROOT}/src/extension-entry.ts"
@@ -106,6 +107,44 @@ JSON
 		actual_version="$("${PI_BIN}" --version)"
 		if [[ "${actual_version}" != "${VERSION}" ]]; then
 			echo "pi --version returned ${actual_version}, expected ${VERSION}" >&2
+			exit 1
+		fi
+
+		# Compile production source against this candidate's declarations so request
+		# fields and consumed response payloads are checked, not only discriminants.
+		node --input-type=commonjs - \
+			"${WORK_DIR}/candidate-tsconfig.json" "${ROOT_DIR}" "${PI_ROOT}" \
+			"${WORK_DIR}/node_modules/@earendil-works/pi-ai" "${WORK_DIR}/node_modules/@earendil-works/pi-tui" "${PI_CORE_ROOT}" <<'NODE'
+const { readdirSync, writeFileSync } = require("node:fs");
+const { join } = require("node:path");
+const [output, sumoRoot, codingAgentRoot, aiRoot, tuiRoot, agentCoreRoot] = process.argv.slice(2);
+function productionTypeScriptFiles(directory) {
+	return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+		const path = join(directory, entry.name);
+		return entry.isDirectory() ? productionTypeScriptFiles(path) : entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts") ? [path] : [];
+	});
+}
+writeFileSync(output, JSON.stringify({
+	extends: `${sumoRoot}/tsconfig.json`,
+	compilerOptions: {
+		paths: {
+			"@earendil-works/pi-coding-agent": [`${codingAgentRoot}/dist/index.d.ts`],
+			"@earendil-works/pi-coding-agent/*": [`${codingAgentRoot}/*`],
+			"@earendil-works/pi-ai": [`${aiRoot}/dist/index.d.ts`],
+			"@earendil-works/pi-ai/*": [`${aiRoot}/*`],
+			"@earendil-works/pi-tui": [`${tuiRoot}/dist/index.d.ts`],
+			"@earendil-works/pi-tui/*": [`${tuiRoot}/*`],
+			"@earendil-works/pi-agent-core": [`${agentCoreRoot}/dist/index.d.ts`],
+			"@earendil-works/pi-agent-core/*": [`${agentCoreRoot}/*`],
+		},
+	},
+	files: productionTypeScriptFiles(`${sumoRoot}/src`),
+	include: [],
+	exclude: [],
+}));
+NODE
+		if ! "${ROOT_DIR}/node_modules/.bin/tsc" --project candidate-tsconfig.json --pretty false; then
+			echo "Pi compatibility contract ${VERSION}: candidate typecheck failed" >&2
 			exit 1
 		fi
 

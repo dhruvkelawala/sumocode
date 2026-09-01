@@ -23,7 +23,7 @@ import {
 	type ActivityFeedWriterIdentity,
 	type ActivityFeedWriterState,
 } from "./feed-publisher.js";
-import { ACTIVITY_OUTPUT_MAX_BYTES } from "./output-tail.js";
+import { ACTIVITY_OUTPUT_MAX_BYTES, ACTIVITY_OUTPUT_MAX_LINES } from "./output-tail.js";
 import { activityFromSubagentSnapshot } from "./subagent-adapter.js";
 
 const DEFAULT_SUBAGENT_DEBOUNCE_MS = 50;
@@ -532,6 +532,7 @@ export class ActivityManagerBridge {
 						output = redactActivityOutputTail(bytes, {
 							maxBytes: ACTIVITY_OUTPUT_MAX_BYTES,
 							contextBytes: TERMINAL_REDACTION_CONTEXT_BYTES,
+							maxLines: ACTIVITY_OUTPUT_MAX_LINES,
 							truncated: tail?.truncated,
 						});
 					} else {

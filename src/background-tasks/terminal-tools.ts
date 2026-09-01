@@ -57,6 +57,7 @@ function readRedactedOutputTail(manager: TerminalTaskManager, task: TerminalTask
 			maxBytes,
 			contextBytes: REDACTION_CONTEXT_BYTES,
 			truncated: tail.truncated,
+			truncatedLineReplacement: "[truncated line redacted]",
 		});
 	} catch {
 		return "";
@@ -69,6 +70,7 @@ function redactCapturedOutput(output: string, maxBytes: number): string {
 		contextBytes: maxBytes,
 		// A full captured window may begin after its credential label.
 		truncated: Buffer.byteLength(output, "utf8") >= maxBytes,
+		truncatedLineReplacement: "[truncated line redacted]",
 	});
 }
 

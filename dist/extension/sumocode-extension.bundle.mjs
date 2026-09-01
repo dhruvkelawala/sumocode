@@ -14404,9 +14404,12 @@ function redactActivityOutputTail(input, options) {
   let raw = boundedOutputTail(input, { maxBytes: options.contextBytes, maxLines: Number.MAX_SAFE_INTEGER });
   if (options.truncated) {
     const newline = raw.indexOf("\n");
-    raw = newline === -1 ? "" : raw.slice(newline + 1);
+    raw = newline === -1 ? options.truncatedLineReplacement ?? "" : raw.slice(newline + 1);
   }
-  return boundedOutputTail(redactActivitySecrets(raw), { maxBytes: options.maxBytes });
+  return boundedOutputTail(redactActivitySecrets(raw), {
+    maxBytes: options.maxBytes,
+    maxLines: options.maxLines ?? Number.MAX_SAFE_INTEGER
+  });
 }
 function boundedHead(text, maxChars) {
   return Array.from(sanitizeActivityText(text)).slice(0, maxChars).join("");
@@ -14789,7 +14792,8 @@ function readRedactedOutputTail(manager, task, maxBytes) {
     return redactActivityOutputTail(tail.bytes, {
       maxBytes,
       contextBytes: REDACTION_CONTEXT_BYTES,
-      truncated: tail.truncated
+      truncated: tail.truncated,
+      truncatedLineReplacement: "[truncated line redacted]"
     });
   } catch {
     return "";
@@ -14800,7 +14804,8 @@ function redactCapturedOutput(output, maxBytes) {
     maxBytes,
     contextBytes: maxBytes,
     // A full captured window may begin after its credential label.
-    truncated: Buffer.byteLength(output, "utf8") >= maxBytes
+    truncated: Buffer.byteLength(output, "utf8") >= maxBytes,
+    truncatedLineReplacement: "[truncated line redacted]"
   });
 }
 function sessionObservation(observation) {
@@ -15702,6 +15707,7 @@ var ActivityManagerBridge = class {
             output = redactActivityOutputTail(bytes, {
               maxBytes: ACTIVITY_OUTPUT_MAX_BYTES,
               contextBytes: TERMINAL_REDACTION_CONTEXT_BYTES,
+              maxLines: ACTIVITY_OUTPUT_MAX_LINES,
               truncated: tail?.truncated
             });
           } else {

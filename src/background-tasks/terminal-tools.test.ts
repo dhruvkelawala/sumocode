@@ -253,6 +253,17 @@ describe("installTerminalTools", () => {
 		expect(harness.tasks.get(settled.id)?.command).toContain(secret);
 	});
 
+	it("reports a safe marker for a truncated newline-free output tail", async () => {
+		const settled = task({ status: "completed", settledAt: 2_000, exitCode: 0, deliveryState: "suppressed" });
+		const harness = createHarness([settled]);
+		harness.manager.check.mockReturnValue({ task: settled, output: "x".repeat(16 * 1024) });
+
+		const checked = await execute(harness.tool("terminal_check"), { id: settled.id }, harness.ctx());
+
+		expect(checked.content[0]?.text).toContain("[truncated line redacted]");
+		expect(checked.content[0]?.text).not.toContain("(no output)");
+	});
+
 	it("uses current session ownership at every check, wait, stop, and list boundary", async () => {
 		const settled = task({ status: "completed", settledAt: 2_000, exitCode: 0, deliveryState: "suppressed", completionId: "completion-a" });
 		const harness = createHarness([settled]);

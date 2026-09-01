@@ -10,6 +10,7 @@ import {
 	ACTIVITY_SETTLED_RETENTION_MS,
 	ActivityFeedPublisher,
 	parseActivityFeedDocument,
+	redactActivityOutputTail,
 	type ActivityFeedPublisherOptions,
 } from "./feed-publisher.js";
 import { ACTIVITY_OUTPUT_MAX_BYTES, ACTIVITY_OUTPUT_MAX_LINES } from "./output-tail.js";
@@ -108,6 +109,21 @@ function waitForExit(child: ChildProcessWithoutNullStreams): Promise<void> {
 function fixturePublisher(ownerSessionId: string, options: ActivityFeedPublisherOptions = {}): ActivityFeedPublisher {
 	return new ActivityFeedPublisher(ownerSessionId, { ...options, allowUnleasedWritesForTests: true });
 }
+
+describe("redactActivityOutputTail", () => {
+	it("preserves caller-selected line budgets", () => {
+		const output = Array.from({ length: 40 }, (_, index) => `line ${index}`).join("\n");
+		expect(redactActivityOutputTail(output, {
+			maxBytes: 16 * 1024,
+			contextBytes: 16 * 1024,
+		}).split("\n")).toHaveLength(40);
+		expect(redactActivityOutputTail(output, {
+			maxBytes: 16 * 1024,
+			contextBytes: 16 * 1024,
+			maxLines: 25,
+		}).split("\n")).toHaveLength(25);
+	});
+});
 
 describe("ActivityFeedPublisher", () => {
 	it("uses a hashed private path and atomically publishes one owner feed", () => {

@@ -226,6 +226,13 @@ describe("installTerminalTools", () => {
 			bytes: Buffer.from(`${secret}\nAPI_KEY=${secret}\nbenign diagnostic`),
 			truncated: true,
 		});
+		const stop = harness.manager.stop.getMockImplementation()!;
+		harness.manager.stop.mockImplementation(async (ids: string[], owner: string) => {
+			const results = await stop(ids, owner);
+			return results.map((result) => result.task
+				? { ...result, output: `${secret}${"x".repeat(8 * 1024)}\nAPI_KEY=${secret}\nbenign stop diagnostic` }
+				: result);
+		});
 
 		const started = await execute(harness.tool("terminal_start"), {
 			command: `deploy --token ${secret}`,

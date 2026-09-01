@@ -68,7 +68,7 @@ export function buildWaitResult(result: TerminalWaitResult): string {
 	return [summary, ...sections].join("\n\n---\n\n");
 }
 
-export function buildStopResult(results: readonly TerminalStopResult[]): string {
+export function buildStopResult(results: readonly Pick<TerminalStopResult, "message" | "output">[]): string {
 	return results.map((result) => {
 		const output = result.output ? `\n${bounded(result.output, 8 * 1024)}` : "";
 		return `${redactActivitySecrets(result.message)}${output}`;

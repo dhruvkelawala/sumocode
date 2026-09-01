@@ -18,13 +18,12 @@ import {
 	ACTIVITY_SETTLED_RETENTION_MS,
 	ActivityFeedPublisher,
 	redactActivityOutputTail,
-	redactActivitySecrets,
 	type ActivityFeedDiagnostic,
 	type ActivityFeedPublisherOptions,
 	type ActivityFeedWriterIdentity,
 	type ActivityFeedWriterState,
 } from "./feed-publisher.js";
-import { ACTIVITY_OUTPUT_MAX_BYTES, boundedOutputTail } from "./output-tail.js";
+import { ACTIVITY_OUTPUT_MAX_BYTES } from "./output-tail.js";
 import { activityFromSubagentSnapshot } from "./subagent-adapter.js";
 
 const DEFAULT_SUBAGENT_DEBOUNCE_MS = 50;
@@ -536,7 +535,9 @@ export class ActivityManagerBridge {
 							truncated: tail?.truncated,
 						});
 					} else {
-						output = boundedOutputTail(redactActivitySecrets(this.terminalManager.getOutput(task)));
+						// Legacy adapters cannot prove whether their pre-truncated string starts
+						// after a credential label. Publish no tail rather than retain a leak.
+						output = "";
 					}
 					this.terminalOutputCache.set(cacheKey, { revision: task.revision, output });
 				} catch (error) {

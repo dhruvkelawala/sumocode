@@ -14783,7 +14783,7 @@ function sessionTask(task) {
     logFile: redactActivitySecrets(task.logFile)
   };
 }
-function sessionOutput(manager, task, maxBytes) {
+function readRedactedOutputTail(manager, task, maxBytes) {
   try {
     const tail = manager.getOutputTailBytes(task, REDACTION_CONTEXT_BYTES);
     return redactActivityOutputTail(tail.bytes, {
@@ -14795,20 +14795,28 @@ function sessionOutput(manager, task, maxBytes) {
     return "";
   }
 }
-function sessionObservation(manager, observation) {
-  return { task: sessionTask(observation.task), output: sessionOutput(manager, observation.task, 16 * 1024) };
+function redactCapturedOutput(output, maxBytes) {
+  return redactActivityOutputTail(output, {
+    maxBytes,
+    contextBytes: maxBytes,
+    // A full captured window may begin after its credential label.
+    truncated: Buffer.byteLength(output, "utf8") >= maxBytes
+  });
 }
-function sessionStopResult(manager, result) {
+function sessionObservation(observation) {
+  return { task: sessionTask(observation.task), output: redactCapturedOutput(observation.output, 16 * 1024) };
+}
+function sessionStopResult(result) {
   return {
     ...result,
     task: result.task ? sessionTask(result.task) : void 0,
-    output: result.output === void 0 ? void 0 : result.task ? sessionOutput(manager, result.task, COMPLETION_OUTPUT_BYTES) : redactActivitySecrets(result.output),
+    output: result.output === void 0 ? void 0 : redactCapturedOutput(result.output, COMPLETION_OUTPUT_BYTES),
     message: redactActivitySecrets(result.message)
   };
 }
-function terminalActivityFromStopResult(manager, result) {
+function terminalActivityFromStopResult(result) {
   if (!result.task) return void 0;
-  return sessionActivity(result.task, sessionOutput(manager, result.task, COMPLETION_OUTPUT_BYTES));
+  return sessionActivity(result.task, result.output === void 0 ? "" : redactCapturedOutput(result.output, COMPLETION_OUTPUT_BYTES));
 }
 function sessionId(ctx) {
   const id = ctx.sessionManager.getSessionId();
@@ -14845,7 +14853,7 @@ function completionsFromContext(ctx) {
   return { ids, receipts };
 }
 function completionDetails(manager, task) {
-  const output = sessionOutput(manager, task, COMPLETION_OUTPUT_BYTES);
+  const output = readRedactedOutputTail(manager, task, COMPLETION_OUTPUT_BYTES);
   return {
     completionId: task.completionId,
     deliveryClaimToken: task.deliveryClaimToken,
@@ -14942,7 +14950,7 @@ var TerminalDeliveryCoordinator = class {
         this.pi.sendMessage(
           {
             customType: "terminal-result",
-            content: buildTerminalResultMessage(current, sessionOutput(this.manager, current, COMPLETION_OUTPUT_BYTES)),
+            content: buildTerminalResultMessage(current, readRedactedOutputTail(this.manager, current, COMPLETION_OUTPUT_BYTES)),
             display: true,
             details
           },
@@ -15018,7 +15026,7 @@ function installTerminalTools(pi, manager) {
       coordinator.touch(ctx);
       const observation = manager.check(params.id, sessionId(ctx));
       if (!observation) return makeToolResult(`Unknown terminal ${params.id}.`, { id: params.id, status: "unknown" });
-      const visible = sessionObservation(manager, observation);
+      const visible = sessionObservation(observation);
       return makeToolResult(buildObservationResult({ task: observation.task, output: visible.output }), {
         ...visible,
         activity: sessionActivity(observation.task, visible.output)
@@ -15038,7 +15046,7 @@ function installTerminalTools(pi, manager) {
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       coordinator.touch(ctx);
       const result = await manager.wait(params.ids, sessionId(ctx), params.timeout_ms ?? DEFAULT_WAIT_TIMEOUT_MS, signal);
-      const settled = result.settled.map((observation) => sessionObservation(manager, observation));
+      const settled = result.settled.map(sessionObservation);
       return makeToolResult(buildWaitResult({ ...result, settled: settled.map((observation, index) => ({ task: result.settled[index].task, output: observation.output })) }), {
         ...result,
         settled,
@@ -15058,10 +15066,10 @@ function installTerminalTools(pi, manager) {
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       coordinator.touch(ctx);
       const results = await manager.stop(params.ids, sessionId(ctx));
-      const visible = results.map((result) => sessionStopResult(manager, result));
-      return makeToolResult(buildStopResult(results), {
+      const visible = results.map(sessionStopResult);
+      return makeToolResult(buildStopResult(visible), {
         results: visible,
-        activities: results.map((result) => terminalActivityFromStopResult(manager, result)).filter((activity) => activity !== void 0)
+        activities: results.map(terminalActivityFromStopResult).filter((activity) => activity !== void 0)
       });
     }
   });
@@ -15697,7 +15705,7 @@ var ActivityManagerBridge = class {
               truncated: tail?.truncated
             });
           } else {
-            output = boundedOutputTail(redactActivitySecrets(this.terminalManager.getOutput(task)));
+            output = "";
           }
           this.terminalOutputCache.set(cacheKey2, { revision: task.revision, output });
         } catch (error) {

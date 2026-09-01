@@ -3622,6 +3622,9 @@ var applyAssistantUsage = (result, message) => {
   result.usage.contextTokens = usage.totalTokens ?? 0;
 };
 var RETAINED_PREVIEW_KEY = "__sumocodeRetainedPreview";
+var RETAINED_METADATA_MAX_BYTES = 512;
+var RETAINED_NAME_MAX_BYTES = 256;
+var RETAINED_NAME_LIST_MAX = 64;
 var retainStructured = (budget, value, requiresMarker = false) => {
   let serialized;
   try {
@@ -3631,6 +3634,30 @@ var retainStructured = (budget, value, requiresMarker = false) => {
   }
   const retained = budget.retain(serialized, requiresMarker);
   return retained === serialized ? value : retained ? { [RETAINED_PREVIEW_KEY]: retained } : {};
+};
+var boundedMetadataText = (value, maxBytes = RETAINED_METADATA_MAX_BYTES) => {
+  if (typeof value !== "string" || value.length === 0) return "";
+  const head = new BoundedUtf8Head(maxBytes);
+  return head.append(value);
+};
+var finiteNumber = (value) => typeof value === "number" && Number.isFinite(value) ? value : 0;
+var retainedUsage = (value) => {
+  const usage = isRecord(value) ? value : {};
+  const cost = isRecord(usage.cost) ? usage.cost : {};
+  return {
+    input: finiteNumber(usage.input),
+    output: finiteNumber(usage.output),
+    cacheRead: finiteNumber(usage.cacheRead),
+    cacheWrite: finiteNumber(usage.cacheWrite),
+    totalTokens: finiteNumber(usage.totalTokens),
+    cost: {
+      input: finiteNumber(cost.input),
+      output: finiteNumber(cost.output),
+      cacheRead: finiteNumber(cost.cacheRead),
+      cacheWrite: finiteNumber(cost.cacheWrite),
+      total: finiteNumber(cost.total)
+    }
+  };
 };
 var clearRetainedHumanText = (result) => {
   result.messages = result.messages.map((message) => {
@@ -3662,53 +3689,101 @@ var clearRetainedHumanText = (result) => {
   result.toolEvents = result.toolEvents.map((event) => ({ ...event, args: {}, output: void 0 }));
   result.errorMessage = void 0;
 };
+var retainMultimodalContent = (budget, rawContent) => {
+  const content = [];
+  if (!Array.isArray(rawContent)) return content;
+  for (const part of rawContent) {
+    if (!isRecord(part)) continue;
+    if (part.type === "text") content.push({ type: "text", text: budget.retain(typeof part.text === "string" ? part.text : "") });
+    else if (part.type === "image") content.push({
+      type: "image",
+      data: budget.retain(typeof part.data === "string" ? part.data : ""),
+      mimeType: boundedMetadataText(part.mimeType, RETAINED_NAME_MAX_BYTES)
+    });
+  }
+  return content;
+};
 var handleEventMessage = (result, message, liveOmitted = false) => {
   const budget = getRunPayloadBudget(result);
   if (message.role === "user") {
-    result.messages.push({
-      ...message,
-      content: typeof message.content === "string" ? budget.retain(message.content) : message.content.map((part) => part.type === "text" ? { ...part, text: budget.retain(part.text) } : { ...part, data: budget.retain(part.data) })
-    });
+    const rawContent2 = message.content;
+    const content2 = typeof rawContent2 === "string" ? budget.retain(rawContent2) : retainMultimodalContent(budget, rawContent2);
+    result.messages.push({ role: "user", content: content2, timestamp: finiteNumber(message.timestamp) });
     result.payloadTruncated = budget.truncated || void 0;
     return;
   }
   if (message.role === "toolResult") {
-    result.messages.push({
-      ...message,
-      content: message.content.map((part) => part.type === "text" ? { ...part, text: budget.retain(part.text) } : { ...part, data: budget.retain(part.data) }),
-      details: message.details === void 0 ? void 0 : retainStructured(budget, message.details)
-    });
+    const rawContent2 = message.content;
+    const content2 = retainMultimodalContent(budget, rawContent2);
+    const retained2 = {
+      role: "toolResult",
+      toolCallId: boundedMetadataText(message.toolCallId, RETAINED_NAME_MAX_BYTES),
+      toolName: boundedMetadataText(message.toolName, RETAINED_NAME_MAX_BYTES),
+      content: content2,
+      details: message.details === void 0 ? void 0 : retainStructured(budget, message.details),
+      usage: message.usage === void 0 ? void 0 : retainedUsage(message.usage),
+      addedToolNames: Array.isArray(message.addedToolNames) ? message.addedToolNames.slice(0, RETAINED_NAME_LIST_MAX).map((name) => boundedMetadataText(name, RETAINED_NAME_MAX_BYTES)) : void 0,
+      isError: message.isError === true,
+      timestamp: finiteNumber(message.timestamp)
+    };
+    result.messages.push(retained2);
     result.payloadTruncated = budget.truncated || void 0;
     return;
   }
-  const hasAssistantPayload = message.content.some((part) => {
-    if (part.type === "text") return part.text.length > 0;
-    if (part.type === "thinking") return part.thinking.length > 0;
-    return true;
-  }) || (message.errorMessage?.length ?? 0) > 0;
-  let requiresMarker = hasAssistantPayload && (budget.truncated || budget.full || liveOmitted);
-  if (requiresMarker) {
+  const rawContent = message.content;
+  const parts = Array.isArray(rawContent) ? rawContent.filter(isRecord) : [];
+  const hasDeliverableText = parts.some((part) => part.type === "text" && typeof part.text === "string" && part.text.length > 0) || typeof message.errorMessage === "string" && message.errorMessage.length > 0;
+  const hasAssistantPayload = parts.some((part) => {
+    if (part.type === "text") return typeof part.text === "string" && part.text.length > 0;
+    if (part.type === "thinking") return typeof part.thinking === "string" && part.thinking.length > 0;
+    return part.type === "toolCall";
+  }) || hasDeliverableText;
+  const hasPriorDeliverableText = getFinalOutput(result.messages).length > 0;
+  const replaceForPayload = hasAssistantPayload && (hasDeliverableText || !hasPriorDeliverableText) && (budget.truncated || budget.full || liveOmitted);
+  let requiresMarker = replaceForPayload || hasAssistantPayload && liveOmitted && !budget.truncated;
+  if (replaceForPayload) {
     clearRetainedHumanText(result);
     budget.reclaimForAssistant();
   }
   const retainAssistantText = (text) => {
-    if (text.length === 0) return "";
+    if (typeof text !== "string" || text.length === 0) return "";
     const retained2 = budget.retain(text, requiresMarker);
     if (retained2.length > 0) requiresMarker = false;
     return retained2;
   };
   const retainAssistantRecord = (value) => {
-    const retained2 = retainStructured(budget, value, requiresMarker);
+    const retained2 = retainStructured(budget, isRecord(value) ? value : {}, requiresMarker);
     if (Object.keys(retained2).length > 0) requiresMarker = false;
     return retained2;
   };
-  const content = message.content.map((part) => {
-    if (part.type === "text") return { ...part, text: retainAssistantText(part.text), textSignature: void 0 };
-    if (part.type === "thinking") return { ...part, thinking: retainAssistantText(part.thinking), thinkingSignature: void 0 };
-    return { ...part, arguments: retainAssistantRecord(part.arguments), thoughtSignature: void 0 };
-  });
-  const errorMessage2 = message.errorMessage ? retainAssistantText(message.errorMessage) : void 0;
-  const retained = { ...message, content, diagnostics: void 0, deferred: void 0, errorMessage: errorMessage2 };
+  const content = [];
+  for (const part of parts) {
+    if (part.type === "text") content.push({ type: "text", text: retainAssistantText(part.text) });
+    else if (part.type === "thinking") content.push({ type: "thinking", thinking: retainAssistantText(part.thinking), redacted: part.redacted === true });
+    else if (part.type === "toolCall") content.push({
+      type: "toolCall",
+      id: boundedMetadataText(part.id, RETAINED_NAME_MAX_BYTES),
+      name: boundedMetadataText(part.name, RETAINED_NAME_MAX_BYTES),
+      arguments: retainAssistantRecord(part.arguments),
+      namespace: boundedMetadataText(part.namespace, RETAINED_NAME_MAX_BYTES) || void 0
+    });
+  }
+  const errorMessage2 = retainAssistantText(message.errorMessage) || void 0;
+  const retained = {
+    role: "assistant",
+    content,
+    api: boundedMetadataText(message.api, RETAINED_NAME_MAX_BYTES),
+    provider: boundedMetadataText(message.provider, RETAINED_NAME_MAX_BYTES),
+    model: boundedMetadataText(message.model, RETAINED_NAME_MAX_BYTES),
+    responseModel: boundedMetadataText(message.responseModel, RETAINED_NAME_MAX_BYTES) || void 0,
+    responseId: boundedMetadataText(message.responseId) || void 0,
+    usage: retainedUsage(message.usage),
+    stopReason: boundedMetadataText(message.stopReason, RETAINED_NAME_MAX_BYTES),
+    errorMessage: errorMessage2,
+    rawStopReason: boundedMetadataText(message.rawStopReason, RETAINED_NAME_MAX_BYTES) || void 0,
+    endTurn: typeof message.endTurn === "boolean" ? message.endTurn : void 0,
+    timestamp: finiteNumber(message.timestamp)
+  };
   result.messages.push(retained);
   result.payloadTruncated = budget.truncated || void 0;
   applyAssistantUsage(result, retained);
@@ -3771,7 +3846,13 @@ var upsertToolEvent = (result, event) => {
     [nextArgsText, nextOutput]
   );
   const args = typeof rawArgs !== "string" && argsText === nextArgsText ? rawArgs : argsText;
-  const retained = { ...previous, ...event, args, output };
+  const retained = {
+    id: boundedMetadataText(event.id ?? previous?.id, RETAINED_NAME_MAX_BYTES) || void 0,
+    name: boundedMetadataText(event.name || previous?.name, RETAINED_NAME_MAX_BYTES) || "tool",
+    args,
+    status: event.status,
+    output
+  };
   if (index === -1) result.toolEvents.push(retained);
   else result.toolEvents[index] = retained;
   result.payloadTruncated = budget.truncated || void 0;

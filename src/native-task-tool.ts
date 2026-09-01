@@ -18,6 +18,7 @@ import {
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
+	BoundedUtf8Head,
 	BoundedUtf8Tail,
 	CHILD_RETAINED_RESULT_MAX_BYTES,
 	JsonLineDecoder,
@@ -745,6 +746,9 @@ const applyAssistantUsage = (result: SingleResult, message: AssistantMessage): v
 };
 
 const RETAINED_PREVIEW_KEY = "__sumocodeRetainedPreview";
+const RETAINED_METADATA_MAX_BYTES = 512;
+const RETAINED_NAME_MAX_BYTES = 256;
+const RETAINED_NAME_LIST_MAX = 64;
 
 const retainStructured = <T>(budget: RunPayloadBudget, value: T, requiresMarker = false): T | Record<string, string> => {
 	let serialized: string;
@@ -755,6 +759,33 @@ const retainStructured = <T>(budget: RunPayloadBudget, value: T, requiresMarker 
 	}
 	const retained = budget.retain(serialized, requiresMarker);
 	return retained === serialized ? value : retained ? { [RETAINED_PREVIEW_KEY]: retained } : {};
+};
+
+const boundedMetadataText = (value: unknown, maxBytes = RETAINED_METADATA_MAX_BYTES): string => {
+	if (typeof value !== "string" || value.length === 0) return "";
+	const head = new BoundedUtf8Head(maxBytes);
+	return head.append(value);
+};
+
+const finiteNumber = (value: unknown): number => typeof value === "number" && Number.isFinite(value) ? value : 0;
+
+const retainedUsage = (value: unknown): AssistantMessage["usage"] => {
+	const usage = isRecord(value) ? value : {};
+	const cost = isRecord(usage.cost) ? usage.cost : {};
+	return {
+		input: finiteNumber(usage.input),
+		output: finiteNumber(usage.output),
+		cacheRead: finiteNumber(usage.cacheRead),
+		cacheWrite: finiteNumber(usage.cacheWrite),
+		totalTokens: finiteNumber(usage.totalTokens),
+		cost: {
+			input: finiteNumber(cost.input),
+			output: finiteNumber(cost.output),
+			cacheRead: finiteNumber(cost.cacheRead),
+			cacheWrite: finiteNumber(cost.cacheWrite),
+			total: finiteNumber(cost.total),
+		},
+	};
 };
 
 const clearRetainedHumanText = (result: SingleResult): void => {
@@ -790,59 +821,112 @@ const clearRetainedHumanText = (result: SingleResult): void => {
 	result.errorMessage = undefined;
 };
 
+const retainMultimodalContent = (
+	budget: RunPayloadBudget,
+	rawContent: unknown,
+): Extract<Message, { role: "toolResult" }>["content"] => {
+	const content: Extract<Message, { role: "toolResult" }>["content"] = [];
+	if (!Array.isArray(rawContent)) return content;
+	for (const part of rawContent) {
+		if (!isRecord(part)) continue;
+		if (part.type === "text") content.push({ type: "text", text: budget.retain(typeof part.text === "string" ? part.text : "") });
+		else if (part.type === "image") content.push({
+			type: "image",
+			data: budget.retain(typeof part.data === "string" ? part.data : ""),
+			mimeType: boundedMetadataText(part.mimeType, RETAINED_NAME_MAX_BYTES),
+		});
+	}
+	return content;
+};
+
 const handleEventMessage = (result: SingleResult, message: Message, liveOmitted = false): void => {
 	const budget = getRunPayloadBudget(result);
 	if (message.role === "user") {
-		result.messages.push({
-			...message,
-			content: typeof message.content === "string"
-				? budget.retain(message.content)
-				: message.content.map((part) => part.type === "text"
-					? { ...part, text: budget.retain(part.text) }
-					: { ...part, data: budget.retain(part.data) }),
-		});
+		const rawContent: unknown = message.content;
+		const content: Extract<Message, { role: "user" }>["content"] = typeof rawContent === "string"
+			? budget.retain(rawContent)
+			: retainMultimodalContent(budget, rawContent);
+		result.messages.push({ role: "user", content, timestamp: finiteNumber(message.timestamp) });
 		result.payloadTruncated = budget.truncated || undefined;
 		return;
 	}
 	if (message.role === "toolResult") {
-		result.messages.push({
-			...message,
-			content: message.content.map((part) => part.type === "text"
-				? { ...part, text: budget.retain(part.text) }
-				: { ...part, data: budget.retain(part.data) }),
+		const rawContent: unknown = message.content;
+		const content = retainMultimodalContent(budget, rawContent);
+		const retained: Extract<Message, { role: "toolResult" }> = {
+			role: "toolResult",
+			toolCallId: boundedMetadataText(message.toolCallId, RETAINED_NAME_MAX_BYTES),
+			toolName: boundedMetadataText(message.toolName, RETAINED_NAME_MAX_BYTES),
+			content,
 			details: message.details === undefined ? undefined : retainStructured(budget, message.details),
-		});
+			usage: message.usage === undefined ? undefined : retainedUsage(message.usage),
+			addedToolNames: Array.isArray(message.addedToolNames)
+				? message.addedToolNames.slice(0, RETAINED_NAME_LIST_MAX).map((name) => boundedMetadataText(name, RETAINED_NAME_MAX_BYTES))
+				: undefined,
+			isError: message.isError === true,
+			timestamp: finiteNumber(message.timestamp),
+		};
+		result.messages.push(retained);
 		result.payloadTruncated = budget.truncated || undefined;
 		return;
 	}
-	const hasAssistantPayload = message.content.some((part) => {
-		if (part.type === "text") return part.text.length > 0;
-		if (part.type === "thinking") return part.thinking.length > 0;
-		return true;
-	}) || (message.errorMessage?.length ?? 0) > 0;
-	let requiresMarker = hasAssistantPayload && (budget.truncated || budget.full || liveOmitted);
-	if (requiresMarker) {
+	const rawContent: unknown = message.content;
+	const parts = Array.isArray(rawContent) ? rawContent.filter(isRecord) : [];
+	const hasDeliverableText = parts.some((part) => part.type === "text" && typeof part.text === "string" && part.text.length > 0)
+		|| (typeof message.errorMessage === "string" && message.errorMessage.length > 0);
+	const hasAssistantPayload = parts.some((part) => {
+		if (part.type === "text") return typeof part.text === "string" && part.text.length > 0;
+		if (part.type === "thinking") return typeof part.thinking === "string" && part.thinking.length > 0;
+		return part.type === "toolCall";
+	}) || hasDeliverableText;
+	const hasPriorDeliverableText = getFinalOutput(result.messages).length > 0;
+	const replaceForPayload = hasAssistantPayload
+		&& (hasDeliverableText || !hasPriorDeliverableText)
+		&& (budget.truncated || budget.full || liveOmitted);
+	let requiresMarker = replaceForPayload || (hasAssistantPayload && liveOmitted && !budget.truncated);
+	if (replaceForPayload) {
 		clearRetainedHumanText(result);
 		budget.reclaimForAssistant();
 	}
-	const retainAssistantText = (text: string): string => {
-		if (text.length === 0) return "";
+	const retainAssistantText = (text: unknown): string => {
+		if (typeof text !== "string" || text.length === 0) return "";
 		const retained = budget.retain(text, requiresMarker);
 		if (retained.length > 0) requiresMarker = false;
 		return retained;
 	};
-	const retainAssistantRecord = (value: Record<string, unknown>): Record<string, unknown> => {
-		const retained = retainStructured(budget, value, requiresMarker);
+	const retainAssistantRecord = (value: unknown): Record<string, unknown> => {
+		const retained = retainStructured(budget, isRecord(value) ? value : {}, requiresMarker);
 		if (Object.keys(retained).length > 0) requiresMarker = false;
 		return retained;
 	};
-	const content = message.content.map((part) => {
-		if (part.type === "text") return { ...part, text: retainAssistantText(part.text), textSignature: undefined };
-		if (part.type === "thinking") return { ...part, thinking: retainAssistantText(part.thinking), thinkingSignature: undefined };
-		return { ...part, arguments: retainAssistantRecord(part.arguments), thoughtSignature: undefined };
-	});
-	const errorMessage = message.errorMessage ? retainAssistantText(message.errorMessage) : undefined;
-	const retained: AssistantMessage = { ...message, content, diagnostics: undefined, deferred: undefined, errorMessage };
+	const content: AssistantMessage["content"] = [];
+	for (const part of parts) {
+		if (part.type === "text") content.push({ type: "text", text: retainAssistantText(part.text) });
+		else if (part.type === "thinking") content.push({ type: "thinking", thinking: retainAssistantText(part.thinking), redacted: part.redacted === true });
+		else if (part.type === "toolCall") content.push({
+			type: "toolCall",
+			id: boundedMetadataText(part.id, RETAINED_NAME_MAX_BYTES),
+			name: boundedMetadataText(part.name, RETAINED_NAME_MAX_BYTES),
+			arguments: retainAssistantRecord(part.arguments),
+			namespace: boundedMetadataText(part.namespace, RETAINED_NAME_MAX_BYTES) || undefined,
+		});
+	}
+	const errorMessage = retainAssistantText(message.errorMessage) || undefined;
+	const retained: AssistantMessage = {
+		role: "assistant",
+		content,
+		api: boundedMetadataText(message.api, RETAINED_NAME_MAX_BYTES) as AssistantMessage["api"],
+		provider: boundedMetadataText(message.provider, RETAINED_NAME_MAX_BYTES) as AssistantMessage["provider"],
+		model: boundedMetadataText(message.model, RETAINED_NAME_MAX_BYTES),
+		responseModel: boundedMetadataText(message.responseModel, RETAINED_NAME_MAX_BYTES) || undefined,
+		responseId: boundedMetadataText(message.responseId) || undefined,
+		usage: retainedUsage(message.usage),
+		stopReason: boundedMetadataText(message.stopReason, RETAINED_NAME_MAX_BYTES) as AssistantMessage["stopReason"],
+		errorMessage,
+		rawStopReason: boundedMetadataText(message.rawStopReason, RETAINED_NAME_MAX_BYTES) || undefined,
+		endTurn: typeof message.endTurn === "boolean" ? message.endTurn : undefined,
+		timestamp: finiteNumber(message.timestamp),
+	};
 	result.messages.push(retained);
 	result.payloadTruncated = budget.truncated || undefined;
 	applyAssistantUsage(result, retained);
@@ -921,7 +1005,13 @@ const upsertToolEvent = (result: SingleResult, event: ToolCallUpdate): void => {
 		[nextArgsText, nextOutput],
 	);
 	const args = typeof rawArgs !== "string" && argsText === nextArgsText ? rawArgs : argsText;
-	const retained: ToolCallItem = { ...previous, ...event, args, output };
+	const retained: ToolCallItem = {
+		id: boundedMetadataText(event.id ?? previous?.id, RETAINED_NAME_MAX_BYTES) || undefined,
+		name: boundedMetadataText(event.name || previous?.name, RETAINED_NAME_MAX_BYTES) || "tool",
+		args,
+		status: event.status,
+		output,
+	};
 	if (index === -1) result.toolEvents.push(retained);
 	else result.toolEvents[index] = retained;
 	result.payloadTruncated = budget.truncated || undefined;

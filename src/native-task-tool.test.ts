@@ -31,6 +31,8 @@ type RetainedMessage = {
 	role: string;
 	content: string | RetainedContentPart[];
 	toolCallId?: string;
+	toolName?: string;
+	addedToolNames?: string[];
 	details?: RetainedPayloadValue;
 	errorMessage?: string;
 	usage?: { input: number; output: number };
@@ -593,14 +595,89 @@ describe("native task tool", () => {
 		expect(result.messages?.[0]?.content).toMatchObject([{ type: "image", data: "", mimeType: "image/png" }]);
 		expect(result.messages?.[1]).toMatchObject({ role: "toolResult", details: undefined, content: [{ type: "image", data: "" }] });
 		expect(result.messages?.[2]?.content).toMatchObject([
-			{ type: "thinking", thinking: "", thinkingSignature: undefined },
-			{ type: "toolCall", id: "first-tool", arguments: {}, thoughtSignature: undefined },
+			{ type: "thinking", thinking: "" },
+			{ type: "toolCall", id: "first-tool", arguments: {} },
 		]);
 		expect(result.messages?.[3]?.content).toMatchObject([
-			{ type: "thinking", thinking: expect.stringContaining("FINAL_THINKING"), thinkingSignature: undefined },
-			{ type: "toolCall", id: "final-tool", thoughtSignature: undefined },
+			{ type: "thinking", thinking: expect.stringContaining("FINAL_THINKING") },
+			{ type: "toolCall", id: "final-tool" },
 		]);
+		expect(JSON.stringify(result.messages)).not.toContain("SIGNATURE");
 		expect(result.usage?.turns).toBe(2);
+	});
+
+	it("keeps the useful final answer when later assistant frames have no text", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		const usage = { input: 0, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 1, cost: { total: 0 } };
+
+		emitTaskEvent(proc, { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "x".repeat(5 * 1024 * 1024) }], usage } });
+		emitTaskEvent(proc, { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "THE USEFUL ANSWER: 42" }], usage } });
+		emitTaskEvent(proc, { type: "message_end", message: { role: "assistant", content: [{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "README.md" } }], usage } });
+		emitTaskEvent(proc, { type: "message_end", message: { role: "assistant", content: [{ type: "thinking", thinking: "hmm" }], usage } });
+		proc.emit("close", 0);
+
+		const toolResult = await running;
+		const result = toolResult.details?.results?.[0];
+		if (!result) throw new Error("task result is missing");
+		const delivered = toolResult.content[0]?.text ?? "";
+		const payload = retainedPayloadText(result).join("");
+		expect(delivered).toContain("THE USEFUL ANSWER: 42");
+		expect(delivered).toContain(TRUNCATED_HEAD_MARKER);
+		expect(delivered).not.toBe("(no output)");
+		expect(Buffer.byteLength(payload, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+		expect(payload.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+	});
+
+	it("drops malformed non-text fields without throwing the task event loop", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		const usage = { input: 0, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 1, cost: { total: 0 } };
+
+		expect(() => emitTaskEvent(proc, {
+			type: "message_end",
+			message: { role: "user", content: [{ type: "image", mimeType: "image/png" }] },
+		})).not.toThrow();
+		expect(() => emitTaskEvent(proc, {
+			type: "message_end",
+			message: { role: "assistant", content: [{ type: "toolCall", id: "write-1", name: "write" }], usage },
+		})).not.toThrow();
+		emitTaskEvent(proc, { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "safe final" }], usage } });
+		proc.emit("close", 0);
+
+		const toolResult = await running;
+		expect(toolResult.content[0]?.text).toContain("safe final");
+		expect(toolResult.details?.results?.[0]?.messages?.[0]?.content).toMatchObject([{ type: "image", data: "" }]);
+	});
+
+	it("caps producer-controlled structural metadata", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		const huge = "m".repeat(2 * 1024 * 1024);
+
+		for (let index = 0; index < 8; index += 1) {
+			emitTaskEvent(proc, {
+				type: "tool_result_end",
+				message: {
+					role: "toolResult",
+					toolCallId: `tool-${index}`,
+					toolName: huge,
+					addedToolNames: [huge],
+					content: [],
+					isError: false,
+				},
+			});
+		}
+		proc.emit("close", 0);
+
+		const toolResult = await running;
+		const result = toolResult.details?.results?.[0];
+		if (!result) throw new Error("task result is missing");
+		const serialized = JSON.stringify(result.messages);
+		expect(Buffer.byteLength(serialized, "utf8")).toBeLessThan(64 * 1024);
+		expect(result.messages).toHaveLength(8);
+		expect(result.messages?.[0]?.toolName?.length).toBeLessThanOrEqual(256);
+		expect(result.messages?.[0]?.addedToolNames?.[0]?.length).toBeLessThanOrEqual(256);
 	});
 
 	it("prioritizes a useful marked final answer and reclaims exhausted prior text", async () => {

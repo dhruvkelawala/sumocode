@@ -1,9 +1,10 @@
-import { ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it } from "vitest";
+import { spawnSupervisedProcess, type SupervisedProcess } from "./harness-supervisor.js";
 import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
 interface RpcEntry {
@@ -44,7 +45,7 @@ interface RpcClient {
 }
 
 const roots: string[] = [];
-const children: ChildProcessWithoutNullStreams[] = [];
+const children: SupervisedProcess[] = [];
 const requestId = "019f8a78-b4f5-7b7b-b774-2d2e4bce9001";
 const RPC_TEST_TIMEOUT_MS = 60_000;
 
@@ -57,19 +58,6 @@ function isolatedChildEnv(agentDir: string, evidence: string, diagFile?: string)
 
 function isString(value: string | undefined): value is string {
 	return typeof value === "string";
-}
-
-function waitForExit(child: ChildProcessWithoutNullStreams): Promise<void> {
-	if (child.exitCode !== null) return Promise.resolve();
-	return new Promise((resolveExit) => child.once("exit", () => resolveExit()));
-}
-
-async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
-	if (child.exitCode !== null) return;
-	child.kill("SIGTERM");
-	await Promise.race([waitForExit(child), new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 2_000))]);
-	if (child.exitCode === null) child.kill("SIGKILL");
-	await Promise.race([waitForExit(child), new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 2_000))]);
 }
 
 async function createSession(root: string): Promise<{ file: string; id: string }> {
@@ -106,7 +94,7 @@ export default function install(pi) {
 }
 
 function launch(extension: string, fauxProvider: string, hook: string, sessionFile: string, agentDir: string, evidence: string, diagFile?: string): RpcClient {
-	const child = spawn(join(process.cwd(), "node_modules", ".bin", "pi"), [
+	const supervised = spawnSupervisedProcess(join(process.cwd(), "node_modules", ".bin", "pi"), [
 		"--mode", "rpc", "--offline", "--approve", "--no-extensions",
 		"-e", extension,
 		"-e", fauxProvider,
@@ -118,7 +106,9 @@ function launch(extension: string, fauxProvider: string, hook: string, sessionFi
 		env: isolatedChildEnv(agentDir, evidence, diagFile),
 		stdio: ["pipe", "pipe", "pipe"],
 	});
-	children.push(child);
+	// SAFETY: launch fixes all three stdio channels to `pipe`, so Node provides non-null streams.
+	const child = supervised.child as ChildProcessWithoutNullStreams;
+	children.push(supervised);
 	// Always drain stderr: Pi can emit diagnostics while stdout remains the RPC
 	// protocol. A full stderr pipe must never make a tree request look hung.
 	child.stderr.on("data", () => undefined);
@@ -154,16 +144,20 @@ function launch(extension: string, fauxProvider: string, hook: string, sessionFi
 		waiter.resolve(value);
 	});
 	child.once("exit", (code, signal) => {
-		const error = new Error(`Pi RPC child exited (code=${String(code)}, signal=${String(signal)})`);
-		for (const waiter of responses.values()) {
-			clearTimeout(waiter.timer);
-			waiter.reject(error);
-		}
-		responses.clear();
-		for (const waiter of outcomeWaiters.splice(0)) {
-			clearTimeout(waiter.timer);
-			waiter.reject(error);
-		}
+		const hasPendingWaiters = responses.size > 0 || outcomeWaiters.length > 0;
+		if (!supervised.shouldCaptureExitFailure(hasPendingWaiters)) return;
+		void supervised.captureFailure().then((evidenceDir) => {
+			const error = new Error(`Pi RPC child exited (code=${String(code)}, signal=${String(signal)}). Evidence: ${evidenceDir}`);
+			for (const waiter of responses.values()) {
+				clearTimeout(waiter.timer);
+				waiter.reject(error);
+			}
+			responses.clear();
+			for (const waiter of outcomeWaiters.splice(0)) {
+				clearTimeout(waiter.timer);
+				waiter.reject(error);
+			}
+		});
 	});
 	return {
 		child,
@@ -173,7 +167,7 @@ function launch(extension: string, fauxProvider: string, hook: string, sessionFi
 			return new Promise((resolveResponse, rejectResponse) => {
 				const timer = setTimeout(() => {
 					responses.delete(id);
-					rejectResponse(new Error(`Timed out waiting for ${String(command.type)}`));
+					void supervised.captureFailure().then((evidenceDir) => rejectResponse(new Error(`Timed out waiting for ${String(command.type)}. Evidence: ${evidenceDir}`)));
 				}, RPC_TEST_TIMEOUT_MS);
 				responses.set(id, { resolve: resolveResponse, reject: rejectResponse, timer });
 				child.stdin.write(`${JSON.stringify({ ...command, id })}\n`);
@@ -183,7 +177,9 @@ function launch(extension: string, fauxProvider: string, hook: string, sessionFi
 			const immediate = outcomes.shift();
 			if (immediate) return Promise.resolve(immediate);
 			return new Promise((resolveOutcome, rejectOutcome) => {
-				const timer = setTimeout(() => rejectOutcome(new Error("Timed out waiting for tree navigation outcome")), RPC_TEST_TIMEOUT_MS);
+				const timer = setTimeout(() => {
+					void supervised.captureFailure().then((evidenceDir) => rejectOutcome(new Error(`Timed out waiting for tree navigation outcome. Evidence: ${evidenceDir}`)));
+				}, RPC_TEST_TIMEOUT_MS);
 				outcomeWaiters.push({ resolve: resolveOutcome, reject: rejectOutcome, timer });
 			});
 		},
@@ -192,7 +188,7 @@ function launch(extension: string, fauxProvider: string, hook: string, sessionFi
 
 afterEach(async () => {
 	const running = children.splice(0);
-	await Promise.all(running.map(stopChild));
+	await Promise.all(running.map((child) => child.terminate()));
 	for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
 

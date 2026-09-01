@@ -7,8 +7,8 @@ import { PI_BOOT_SEQUENCE, spawnPiPty, type SpawnedPiPty } from "./spawn-pi-pty.
 
 let app: SpawnedPiPty | undefined;
 
-afterEach(() => {
-	app?.cleanup();
+afterEach(async () => {
+	await app?.cleanupAndWait();
 	app = undefined;
 });
 

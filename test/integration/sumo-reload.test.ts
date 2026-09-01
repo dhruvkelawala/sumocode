@@ -1,9 +1,10 @@
 import { mkdtemp, rm } from "node:fs/promises";
-import { existsSync, unlinkSync } from "node:fs";
+import { appendFileSync, existsSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { spawn, type IPty } from "node-pty";
+import { createChildEvidenceContext, HARNESS_SIGNATURE, HARNESS_SIGNATURE_ENV_KEY, recordPtyExit, supervisePtyProcess } from "./harness-supervisor.js";
 import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
 /**
@@ -23,38 +24,47 @@ interface PtySession {
 	readonly child: IPty;
 	getOutput(): string;
 	exit: Promise<{ exitCode: number; signal?: number }>;
-	cleanup(): void;
+	cleanup(): Promise<void>;
 }
 
 function spawnLauncherWithMockPi(stateFile: string, extraArgs: string[] = [], env: NodeJS.ProcessEnv = {}): PtySession {
 	const launcher = resolve(process.cwd(), "bin/sumocode.sh");
 	const mockPi = resolve(process.cwd(), "test/integration/fixtures/mock-pi-reload.sh");
-	const child: IPty = spawn(launcher, ["--no-sumo-tui", ...extraArgs], {
+	const args = ["--no-sumo-tui", ...extraArgs];
+	const childEnv = buildSpawnEnv(process.env, {
+		PI_BIN: mockPi,
+		SUMO_TUI: "0",
+		SUMOCODE_RELOAD_TEST_STATE: stateFile,
+		...env,
+	});
+	const evidence = createChildEvidenceContext([launcher, ...args], childEnv);
+	childEnv[HARNESS_SIGNATURE_ENV_KEY] = HARNESS_SIGNATURE;
+	const child: IPty = spawn(launcher, args, {
 		name: "xterm-256color",
 		cols: 100,
 		rows: 30,
 		cwd: process.cwd(),
-		env: buildSpawnEnv(process.env, {
-			PI_BIN: mockPi,
-			SUMO_TUI: "0",
-			SUMOCODE_RELOAD_TEST_STATE: stateFile,
-			...env,
-		}),
+		env: childEnv,
 	});
+	const supervision = supervisePtyProcess(child.pid, evidence, childEnv);
 	let output = "";
 	child.onData((data) => {
+		appendFileSync(evidence.stderrPath, data);
 		output += data;
 		if (output.length > 200_000) output = output.slice(-100_000);
 	});
 	const exit = new Promise<{ exitCode: number; signal?: number }>((resolveExit) => {
-		child.onExit((event) => resolveExit(event));
+		child.onExit((event) => {
+			recordPtyExit(child.pid, child.pid, event.exitCode, event.signal, childEnv);
+			resolveExit(event);
+		});
 	});
 	return {
 		child,
 		getOutput: () => output,
 		exit,
-		cleanup(): void {
-			try { child.kill("SIGKILL"); } catch { /* already gone */ }
+		cleanup(): Promise<void> {
+			return supervision.terminate();
 		},
 	};
 }
@@ -63,7 +73,7 @@ let session: PtySession | undefined;
 let stateFile: string | undefined;
 
 afterEach(async () => {
-	session?.cleanup();
+	await session?.cleanup();
 	session = undefined;
 	if (stateFile && existsSync(stateFile)) {
 		try { unlinkSync(stateFile); } catch { /* swallow */ }

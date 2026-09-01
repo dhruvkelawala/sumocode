@@ -2,7 +2,7 @@ import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { PI_BOOT_SEQUENCE, spawnSumocodePty, waitForScreen, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { spawnSumocodePty, waitForScreen, type SpawnedPiPty } from "./spawn-pi-pty.js";
 import { createRpcChildFixture } from "./rpc-child-fixture.js";
 
 const CSI_U_ENTER = "\x1b[13u";
@@ -13,8 +13,8 @@ const ROWS = 30;
 
 let app: SpawnedPiPty | undefined;
 
-afterEach(() => {
-	app?.cleanup();
+afterEach(async () => {
+	await app?.cleanupAndWait();
 	app = undefined;
 });
 
@@ -83,9 +83,7 @@ async function bootRpcHost(prefix: string, piBin: string, logPath: string): Prom
 		cols: COLS,
 		rows: ROWS,
 	});
-	await spawned.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
-	await spawned.waitForOutput("DIVINE INVOCATION", 15_000);
-	await spawned.waitForOutput(/CTRL\+\/[\s\S]*COMMANDS/, 15_000);
+	await spawned.waitForReady("app", 15_000);
 	return spawned;
 }
 
@@ -387,9 +385,7 @@ describe("RPC queued message undo", () => {
 			cols: COLS,
 			rows: ROWS,
 		});
-		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
-		await app.waitForOutput("DIVINE INVOCATION", 15_000);
-		await app.waitForOutput(/CTRL\+\/[\s\S]*COMMANDS/, 15_000);
+		await app.waitForReady("app", 15_000);
 
 		app.sendInput(`prompt A${CSI_U_ENTER}`);
 		await waitForEvidence(evidencePath, (events) => events.some((event) => event.type === "tool_execution_start"));

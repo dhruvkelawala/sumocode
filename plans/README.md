@@ -657,6 +657,7 @@ startup-speed claim.
 | 113 | [Worktree result disposition loop](113-worktree-result-disposition-loop.md) | P2 | L | M5 | 109, 112 | TODO | [#407](https://github.com/dhruvkelawala/sumocode/issues/407) |
 | 114 | [Subagent budgets and stall visibility](114-subagent-budgets-and-stall-visibility.md) | P3 | L | M5 | 109, 112 | TODO | [#408](https://github.com/dhruvkelawala/sumocode/issues/408) |
 | 115 | [Reconcile active documentation](115-reconcile-active-documentation.md) | P2 | L | M6 | 094, 101 + final-wave gate | TODO | [#409](https://github.com/dhruvkelawala/sumocode/issues/409) |
+| 116 | [Verification harness v2](116-verification-harness-v2.md) | P0 | M | — | 092 | DONE locally — supervised process groups, isolated run/package state, preflight + timeout evidence, 158/158 twice; final-head CI pending before STACK_READY | — |
 
 ### Dependency waves
 

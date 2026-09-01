@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createRpcChildFixture } from "./rpc-child-fixture.js";
-import { PI_BOOT_SEQUENCE, spawnSumocodePty, waitForScreen, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { spawnSumocodePty, waitForScreen, type SpawnedPiPty } from "./spawn-pi-pty.js";
 
 const COLS = 100;
 const ROWS = 30;
@@ -12,7 +12,7 @@ let app: SpawnedPiPty | undefined;
 let agentDir: string | undefined;
 
 afterEach(async () => {
-	app?.cleanup();
+	await app?.cleanupAndWait();
 	app = undefined;
 	if (agentDir) await rm(agentDir, { recursive: true, force: true });
 	agentDir = undefined;
@@ -37,9 +37,7 @@ describe("RPC subagent status strip", () => {
 			rows: ROWS,
 		});
 
-		await app.waitForOutput(PI_BOOT_SEQUENCE, 10_000);
-		await app.waitForOutput("DIVINE INVOCATION", 10_000);
-		await app.waitForOutput(/CTRL\+\/[\s\S]*COMMANDS/, 10_000);
+		await app.waitForReady("app", 10_000);
 		app.sendInput("show active shell");
 		await app.waitForOutput("show active shell", 5_000);
 		app.sendInput(CSI_U_ENTER);

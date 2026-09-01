@@ -1,9 +1,10 @@
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it } from "vitest";
+import { spawnSupervisedProcess, type SupervisedProcess } from "./harness-supervisor.js";
 import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
 interface RpcRequest {
@@ -12,23 +13,20 @@ interface RpcRequest {
 }
 
 interface RpcClient {
-	readonly child: ChildProcessWithoutNullStreams;
 	request(command: RpcRequest): Promise<any>;
+	terminate(): Promise<void>;
 }
 
 const roots: string[] = [];
-const children: ChildProcessWithoutNullStreams[] = [];
+const children: SupervisedProcess[] = [];
 
 afterEach(async () => {
-	for (const child of children.splice(0)) {
-		if (child.exitCode === null) child.kill("SIGTERM");
-		await waitForExit(child);
-	}
+	for (const child of children.splice(0)) await child.terminate();
 	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 function launch(extension: string, sessionDir: string, sessionFile: string, agentDir: string): RpcClient {
-	const child = spawn(process.env.PI_BIN ?? "pi", [
+	const supervised = spawnSupervisedProcess(process.env.PI_BIN ?? "pi", [
 		"--mode", "rpc",
 		"--offline",
 		"--approve",
@@ -41,7 +39,9 @@ function launch(extension: string, sessionDir: string, sessionFile: string, agen
 		env: buildSpawnEnv(process.env, { PI_CODING_AGENT_DIR: agentDir }),
 		stdio: ["pipe", "pipe", "pipe"],
 	});
-	children.push(child);
+	// SAFETY: launch fixes all three stdio channels to `pipe`, so Node provides non-null streams.
+	const child = supervised.child as ChildProcessWithoutNullStreams;
+	children.push(supervised);
 	const waiters = new Map<string, { resolve: (value: any) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
 	createInterface({ input: child.stdout }).on("line", (line) => {
 		// SAFETY: every RPC reply frame is a JSON object with an id field matching
@@ -55,32 +55,32 @@ function launch(extension: string, sessionDir: string, sessionFile: string, agen
 		waiter.resolve(value);
 	});
 	child.once("exit", (code, signal) => {
-		for (const waiter of waiters.values()) {
-			clearTimeout(waiter.timer);
-			waiter.reject(new Error(`Pi RPC child exited early (code=${String(code)}, signal=${String(signal)})`));
-		}
-		waiters.clear();
+		if (!supervised.shouldCaptureExitFailure(waiters.size > 0)) return;
+		void supervised.captureFailure().then((evidenceDir) => {
+			for (const waiter of waiters.values()) {
+				clearTimeout(waiter.timer);
+				waiter.reject(new Error(`Pi RPC child exited early (code=${String(code)}, signal=${String(signal)}). Evidence: ${evidenceDir}`));
+			}
+			waiters.clear();
+		});
 	});
 	let sequence = 0;
 	return {
-		child,
 		request(command): Promise<any> {
 			const id = `terminal-fidelity-${++sequence}`;
 			return new Promise((resolve, reject) => {
 				const timer = setTimeout(() => {
 					waiters.delete(id);
-					reject(new Error(`Timed out waiting for ${String(command.type)}`));
+					void supervised.captureFailure().then((evidenceDir) => reject(new Error(`Timed out waiting for ${String(command.type)}. Evidence: ${evidenceDir}`)));
 				}, 5_000);
 				waiters.set(id, { resolve, reject, timer });
 				child.stdin.write(`${JSON.stringify({ ...command, id })}\n`);
 			});
 		},
+		terminate(): Promise<void> {
+			return supervised.terminate();
+		},
 	};
-}
-
-function waitForExit(child: ChildProcessWithoutNullStreams): Promise<void> {
-	if (child.exitCode !== null) return Promise.resolve();
-	return new Promise((resolve) => child.once("exit", () => resolve()));
 }
 
 describe("terminal completion Pi fidelity", () => {
@@ -103,8 +103,7 @@ describe("terminal completion Pi fidelity", () => {
 		const first = launch(extension, sessionDir, sessionFile, agentDir);
 		await first.request({ type: "prompt", message: "/terminal-fidelity" });
 		const live = await first.request({ type: "get_messages" });
-		first.child.kill("SIGTERM");
-		await waitForExit(first.child);
+		await first.terminate();
 
 		const persistedAfterSend = readFileSync(sessionFile, "utf8");
 		expect(persistedAfterSend.match(/completion-probe/g)).toHaveLength(1);
@@ -112,8 +111,7 @@ describe("terminal completion Pi fidelity", () => {
 
 		const second = launch(extension, sessionDir, sessionFile, agentDir);
 		const hydrated = await second.request({ type: "get_messages" });
-		second.child.kill("SIGTERM");
-		await waitForExit(second.child);
+		await second.terminate();
 
 		const findProbes = (response: any) => response.data.messages.filter((message: any) => message.role === "custom" && message.customType === "terminal-result");
 		expect(findProbes(live)).toHaveLength(1);

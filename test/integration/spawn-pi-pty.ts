@@ -1,9 +1,19 @@
-import { chmodSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import xterm from "@xterm/headless";
 import { spawn, type IPty } from "node-pty";
+import {
+	createChildEvidenceContext,
+	HARNESS_SIGNATURE,
+	HARNESS_SIGNATURE_ENV_KEY,
+	recordPtyExit,
+	supervisePtyProcess,
+	waitForDiagnosticReadiness,
+	type ChildEvidenceContext,
+	type ReadinessState,
+} from "./harness-supervisor.js";
 import { ALTSCREEN_ENTER_SEQUENCE, MOUSE_SGR_DISABLE_SEQUENCE, MOUSE_SGR_ENABLE_SEQUENCE, TERMINAL_CLEANUP_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-controller.js";
 
 export interface TerminalStateProbe {
@@ -29,10 +39,14 @@ export interface SpawnPiPtyOptions {
 export interface SpawnedPiPty {
 	sendInput(data: string): void;
 	waitForOutput(pattern: string | RegExp, timeoutMs?: number): Promise<string>;
+	waitForReady(state: ReadinessState, timeoutMs?: number): Promise<void>;
 	sendSignal(signal: NodeJS.Signals): void;
 	getCurrentTerminalState(): TerminalStateProbe;
 	getOutput(): string;
+	getEvidenceDir(): string;
+	captureEvidence(finalScreen?: string): Promise<string>;
 	cleanup(): void;
+	cleanupAndWait(): Promise<void>;
 }
 
 interface Waiter {
@@ -135,22 +149,57 @@ export function isCredentialEnvKey(key: string): boolean {
 	return PROVIDER_CREDENTIAL_PREFIX.test(key) || CREDENTIAL_SUFFIX.test(key);
 }
 
+const CHILD_ENV_ALLOWLIST = new Set([
+	"PATH",
+	"HOME",
+	"USER",
+	"LOGNAME",
+	"SHELL",
+	"LANG",
+	"LC_ALL",
+	"LC_CTYPE",
+	"TZ",
+	"EDITOR",
+	"VISUAL",
+	"COLORTERM",
+	"CI",
+	"NO_COLOR",
+	"FORCE_COLOR",
+	"PI_BIN",
+	"SUMOCODE_INTEGRATION_RUN_ROOT",
+	"SUMOCODE_INTEGRATION_MANIFEST",
+	"SUMOCODE_INTEGRATION_PACKAGE_ROOT",
+]);
+
 /**
- * Builds a credential-safe child environment. Explicit overrides are applied
- * after scrubbing so tests may intentionally provide synthetic credentials.
+ * Constructs test-child environments from a small allowlist, then applies
+ * explicit synthetic overrides. Run-scoped cache and temp paths are pinned
+ * last so neither the developer shell nor a test can escape the namespace.
  */
 export function buildSpawnEnv(parent: NodeJS.ProcessEnv, overrides: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
-	const scrubbed: NodeJS.ProcessEnv = { ...parent };
-	for (const key of Object.keys(scrubbed)) {
-		if (isCredentialEnvKey(key)) delete scrubbed[key];
+	const allowed: NodeJS.ProcessEnv = {};
+	for (const [key, value] of Object.entries(parent)) {
+		if (value !== undefined && CHILD_ENV_ALLOWLIST.has(key) && !isCredentialEnvKey(key)) allowed[key] = value;
 	}
-	for (const key of SUMO_DEBUG_ENV_KEYS) delete scrubbed[key];
-	return {
-		...scrubbed,
+	for (const key of SUMO_DEBUG_ENV_KEYS) delete allowed[key];
+	const env: NodeJS.ProcessEnv = {
+		...allowed,
 		...overrides,
 		PI_OFFLINE: "1",
 		TERM: "xterm-256color",
 	};
+	const runRoot = parent.SUMOCODE_INTEGRATION_RUN_ROOT;
+	if (runRoot !== undefined) {
+		const tempRoot = join(runRoot, "tmp");
+		const compileCache = join(runRoot, "node-compile-cache");
+		mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+		mkdirSync(compileCache, { recursive: true, mode: 0o700 });
+		env.SUMOCODE_INTEGRATION_RUN_ROOT = runRoot;
+		env.TMPDIR = tempRoot;
+		env.NODE_COMPILE_CACHE = compileCache;
+		delete env.NODE_PATH;
+	}
+	return env;
 }
 
 function removeOwnedAgentDir(agentDir: string | undefined): void {
@@ -182,6 +231,11 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 	const spawnPty = options.spawn ?? spawn;
 	const ownedAgentDir = options.env?.PI_CODING_AGENT_DIR === undefined ? createOwnedAgentDir() : undefined;
 	const envOverrides = ownedAgentDir === undefined ? options.env : { ...options.env, PI_CODING_AGENT_DIR: ownedAgentDir };
+	const childEnv = buildSpawnEnv(process.env, envOverrides);
+	const evidence: ChildEvidenceContext = createChildEvidenceContext([command, ...args], childEnv, childEnv.SUMO_TUI_DIAG_FILE);
+	childEnv.SUMO_TUI_DIAG_FILE = evidence.diagPath;
+	childEnv[HARNESS_SIGNATURE_ENV_KEY] = HARNESS_SIGNATURE;
+	const isRealPty = options.spawn === undefined;
 	let child: IPty;
 	try {
 		child = spawnPty(command, args, {
@@ -189,12 +243,13 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 			cols: options.cols ?? 100,
 			rows: options.rows ?? 30,
 			cwd,
-			env: buildSpawnEnv(process.env, envOverrides),
+			env: childEnv,
 		});
 	} catch (error) {
 		removeOwnedAgentDir(ownedAgentDir);
 		throw error;
 	}
+	const supervision = isRealPty ? supervisePtyProcess(child.pid, evidence, childEnv) : undefined;
 
 	let output = "";
 	const waiters: Waiter[] = [];
@@ -210,6 +265,7 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 	}
 
 	child.onData((data) => {
+		if (isRealPty) appendFileSync(evidence.stderrPath, data);
 		output += data;
 		settleWaiters();
 		// Retained frames are ANSI-heavy. Keep enough history for a waiter that
@@ -217,20 +273,52 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 		if (output.length > 1_000_000) output = output.slice(-500_000);
 	});
 
-	child.onExit(({ exitCode, signal }) => {
-		try {
-			for (const waiter of waiters.splice(0)) {
-				clearTimeout(waiter.timer);
-				if (matches(output, waiter.pattern)) {
-					waiter.resolve(output);
-				} else {
-					waiter.reject(new Error(`pi pty exited before output matched ${String(waiter.pattern)} (exitCode=${exitCode}, signal=${signal})`));
-				}
+	let resolveExit: (() => void) | undefined;
+	const exited = new Promise<void>((resolveChildExit) => { resolveExit = resolveChildExit; });
+
+	async function capture(finalScreen?: string): Promise<string> {
+		let screen = finalScreen;
+		if (screen === undefined) {
+			try {
+				screen = (await replayScreenRows(output, options.cols ?? 100, options.rows ?? 30)).join("\n");
+			} catch (error) {
+				screen = `<screen replay failed: ${String(error)}>`;
 			}
-		} finally {
-			removeOwnedAgentDir(ownedAgentDir);
 		}
+		return supervision?.captureFailure(output, screen) ?? evidence.evidenceDir;
+	}
+
+	child.onExit(({ exitCode, signal }) => {
+		if (supervision) recordPtyExit(supervision.pid, supervision.pgid, exitCode, signal, childEnv);
+		resolveExit?.();
+		void (async () => {
+			try {
+				for (const waiter of waiters.splice(0)) {
+					clearTimeout(waiter.timer);
+					if (matches(output, waiter.pattern)) {
+						waiter.resolve(output);
+					} else {
+						const evidenceDir = await capture();
+						waiter.reject(new Error(`pi pty exited before output matched ${String(waiter.pattern)} (exitCode=${exitCode}, signal=${signal}). Evidence: ${evidenceDir}`));
+					}
+				}
+			} finally {
+				removeOwnedAgentDir(ownedAgentDir);
+			}
+		})();
 	});
+
+	function requestCleanup(): void {
+		for (const waiter of waiters.splice(0)) {
+			clearTimeout(waiter.timer);
+			waiter.reject(new Error("pi pty cleaned up before matcher completed"));
+		}
+		if (supervision) {
+			void supervision.terminate();
+			return;
+		}
+		try { child.kill("SIGTERM"); } catch { /* Child may have already exited. */ }
+	}
 
 	return {
 		sendInput(data: string): void {
@@ -246,11 +334,19 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 					timer: setTimeout(() => {
 						const index = waiters.indexOf(waiter);
 						if (index >= 0) waiters.splice(index, 1);
-						rejectWaiter(new Error(`Timed out waiting for ${String(pattern)}. Last output: ${JSON.stringify(output.slice(-1000))}`));
+						void capture().then((evidenceDir) => rejectWaiter(new Error(`Timed out waiting for ${String(pattern)}. Evidence: ${evidenceDir}`)));
 					}, timeoutMs),
 				};
 				waiters.push(waiter);
 			});
+		},
+		async waitForReady(state: ReadinessState, timeoutMs = 15_000): Promise<void> {
+			try {
+				await waitForDiagnosticReadiness(evidence.diagPath, state, timeoutMs);
+			} catch (error) {
+				const evidenceDir = await capture();
+				throw new Error(`${String(error)}. Evidence: ${evidenceDir}`);
+			}
 		},
 		sendSignal(signal: NodeJS.Signals): void {
 			child.kill(signal);
@@ -263,16 +359,25 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 		getOutput(): string {
 			return output;
 		},
+		getEvidenceDir(): string {
+			return evidence.evidenceDir;
+		},
+		captureEvidence(finalScreen?: string): Promise<string> {
+			return capture(finalScreen);
+		},
 		cleanup(): void {
+			requestCleanup();
+		},
+		async cleanupAndWait(): Promise<void> {
 			for (const waiter of waiters.splice(0)) {
 				clearTimeout(waiter.timer);
 				waiter.reject(new Error("pi pty cleaned up before matcher completed"));
 			}
-			try {
-				child.kill("SIGTERM");
-			} catch {
-				// Child may have already exited.
+			if (supervision) await supervision.terminate();
+			else {
+				try { child.kill("SIGTERM"); } catch { /* Child may have already exited. */ }
 			}
+			await Promise.race([exited, new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 1_500))]);
 		},
 	};
 }
@@ -280,9 +385,10 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 export const PI_BOOT_SEQUENCE = ALTSCREEN_ENTER_SEQUENCE;
 
 export function spawnSumocodePty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
+	const packageRoot = process.env.SUMOCODE_INTEGRATION_PACKAGE_ROOT ?? process.cwd();
 	return spawnPiPty({
 		...options,
-		command: options.command ?? resolve(process.cwd(), "bin/sumocode.sh"),
+		command: options.command ?? resolve(packageRoot, "bin/sumocode.sh"),
 		args: options.args ?? ["--offline", "--no-extensions", "--no-session", "--approve"],
 		env: options.env,
 	});
@@ -306,8 +412,8 @@ export interface WaitForScreenOptions {
 export class WaitForScreenTimeoutError extends Error {
 	public override readonly name = "WaitForScreenTimeoutError";
 
-	public constructor(timeoutMs: number, lastScreen: string) {
-		super(`waitForScreen: predicate did not hold for two consecutive polls within ${timeoutMs}ms. Last screen:\n${lastScreen}`);
+	public constructor(timeoutMs: number, evidenceDir: string) {
+		super(`waitForScreen: predicate did not hold for two consecutive observations within ${timeoutMs}ms. Evidence: ${evidenceDir}`);
 	}
 }
 
@@ -353,7 +459,10 @@ export async function waitForScreen(
 		} else {
 			consecutive = 0;
 		}
-		if (Date.now() >= deadline) throw new WaitForScreenTimeoutError(timeoutMs, snapshot.text);
+		if (Date.now() >= deadline) {
+			const evidenceDir = await pty.captureEvidence(snapshot.text);
+			throw new WaitForScreenTimeoutError(timeoutMs, evidenceDir);
+		}
 		await new Promise<void>((resolve) => setTimeout(resolve, pollIntervalMs));
 	}
 }

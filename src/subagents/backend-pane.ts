@@ -1,4 +1,5 @@
 import {
+	chmodSync,
 	existsSync,
 	mkdirSync,
 	readFileSync,
@@ -43,6 +44,7 @@ const ERROR_TEXT_MAX = 4096;
 
 interface PaneBackendFs extends PrivateArtifactFs {
 	existsSync(path: string): boolean;
+	chmodSync(path: string, mode: number): void;
 	mkdirSync(path: string, options?: { recursive?: boolean; mode?: number }): void;
 	readFileSync(path: string, encoding: "utf8"): string;
 	renameSync(source: string, target: string): void;
@@ -78,6 +80,7 @@ export interface PaneBackendDependencies {
 const nodeFs: PaneBackendFs = {
 	...nodeArtifactFs,
 	existsSync,
+	chmodSync: chmodSync,
 	mkdirSync,
 	readFileSync,
 	renameSync,
@@ -86,7 +89,7 @@ const nodeFs: PaneBackendFs = {
 
 const errorText = <T>(error: T): string => error instanceof Error ? error.message : String(error);
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- boundary predicate: fs rejections arrive as `unknown` from catch clauses; isRecord is the sanctioned parse before the errno check.
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- boundary predicate: fs rejections arrive as `unknown` from catch clauses; isErrnoCode is the sanctioned parse before the errno check.
 const isEexist = (error: unknown): boolean => isErrnoCode(error, "EEXIST");
 
 /** Exclusive, no-follow creation for a new owner-only artifact. */
@@ -103,6 +106,13 @@ const writeNewPrivateFile = (fs: PaneBackendFs, path: string, contents: string):
 const allocatePrivateTaskDir = (fs: PaneBackendFs, root: string, name: string): string => {
 	const dir = resolve(join(root, name));
 	fs.mkdirSync(root, { recursive: true, mode: PRIVATE_DIR_MODE });
+	// Older builds could leave the shared root at a wider mode (recursive mkdir
+	// never re-modes an existing directory). Tighten an owned real directory so
+	// the upgrade does not brick every spawn; symlinked or foreign roots are
+	// left untouched and still fail closed in the validation below.
+	if (fs.lstatSync(root).isDirectory()) {
+		fs.chmodSync(root, PRIVATE_DIR_MODE);
+	}
 	assertPrivateDir(fs, root, "visible-subagent task root directory");
 	try {
 		fs.mkdirSync(dir, { mode: PRIVATE_DIR_MODE });

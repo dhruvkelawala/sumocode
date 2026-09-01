@@ -39,6 +39,15 @@ class FakeFs {
 		throw error;
 	}
 
+	chmodSync(path: string, mode: number): void {
+		// chmod follows symlinks in node; the production code only chmods
+		// entries it has already lstat-validated as real directories.
+		if (!this.dirs.has(path) && !this.files.has(path)) {
+			throw new Error(`ENOENT: no such file or directory, chmod '${path}'`);
+		}
+		this.dirModes.set(path, mode);
+	}
+
 	mkdirSync(path?: string, options?: { recursive?: boolean; mode?: number }): void {
 		if (path === undefined) return;
 		if (!options?.recursive && (this.dirs.has(path) || this.files.has(path))) {
@@ -293,13 +302,25 @@ describe("pane subagent backend", () => {
 		}
 	});
 
-	it("fails closed when the task root is not a private directory", () => {
+	it("self-heals a widened task root left by an older build", () => {
 		const fs = new FakeFs();
-		// Simulate a pre-existing, group-accessible root (e.g. hand-created).
+		// Simulate a pre-existing, group-accessible root (recursive mkdir from an
+		// older build never re-modes an existing directory).
 		fs.mkdirSync("/tmp/subagents", { recursive: true, mode: 0o755 });
 		const spawn = createPaneChildSpawner({ fs, now: () => 1234, baseDir: "/tmp/subagents" });
+		// SAFETY: the spawn fails on allocation before any host/pi member is touched, so empty doubles suffice.
+		expect(() => spawn({ prompt: "p", name: "worker", cwd: "/repo", id: "sa-1", host: {} as never, pi: { exec: vi.fn() } as never, placement: { kind: "tab", tabId: "t", direction: "right" } })).not.toThrow();
+		expect(fs.dirModes.get("/tmp/subagents")).toBe(0o700);
+	});
+
+	it("fails closed when the task root is a symlinked directory", () => {
+		const fs = new FakeFs();
+		// SAFETY: the spawn fails on allocation before any host/pi member is touched, so empty doubles suffice.
+		const spawn = createPaneChildSpawner({ fs, now: () => 1234, baseDir: "/tmp/subagents" });
+		fs.dirs.add("/tmp/subagents");
+		fs.symlinks.add("/tmp/subagents");
 		// SAFETY: the spawn must fail on allocation before any host/pi member is touched, so empty doubles suffice.
-		expect(() => spawn({ prompt: "p", name: "worker", cwd: "/repo", id: "sa-1", host: {} as never, pi: { exec: vi.fn() } as never, placement: { kind: "tab", tabId: "t", direction: "right" } })).toThrow(/task root directory is not owner-only/);
+		expect(() => spawn({ prompt: "p", name: "worker", cwd: "/repo", id: "sa-1", host: {} as never, pi: { exec: vi.fn() } as never, placement: { kind: "tab", tabId: "t", direction: "right" } })).toThrow(/task root directory is not a directory/);
 	});
 
 	it("fails closed when the predicted task directory already exists", () => {

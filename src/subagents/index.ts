@@ -204,7 +204,7 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 	};
 
 	const flush = (): void => {
-		for (const payload of delivery.drain()) {
+		delivery.flush((payload) => {
 			pi.sendMessage(
 				{
 					customType: "subagent-result",
@@ -214,7 +214,7 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 				},
 				{ deliverAs: "followUp", triggerTurn: true },
 			);
-		}
+		});
 	};
 
 	const onManagerChange = (): void => {

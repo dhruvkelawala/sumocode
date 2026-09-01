@@ -17,7 +17,7 @@ export interface DeferredResultDelivery {
 	 * agent_end instead of being silently lost.
 	 */
 	forget(id: string): void;
-	drain(): DeliveryPayload[];
+	flush(send: (payload: DeliveryPayload) => void): void;
 	clear(): void;
 	readonly size: number;
 }
@@ -38,10 +38,11 @@ export function createDeferredResultDelivery(): DeferredResultDelivery {
 		forget(id): void {
 			consumed.delete(id);
 		},
-		drain(): DeliveryPayload[] {
-			const payloads = [...pending.values()];
-			pending.clear();
-			return payloads;
+		flush(send): void {
+			for (const [id, payload] of pending) {
+				send(payload);
+				pending.delete(id);
+			}
 		},
 		clear(): void {
 			pending.clear();

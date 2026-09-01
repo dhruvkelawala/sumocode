@@ -10,13 +10,15 @@ const payload = (id: string): DeliveryPayload => ({
 });
 
 describe("deferred result delivery", () => {
-	it("defers payloads until drain, then clears them", () => {
+	it("defers payloads until flush, then acknowledges them", () => {
 		const delivery = createDeferredResultDelivery();
+		const sent: DeliveryPayload[] = [];
 		delivery.defer("sa-1", () => payload("sa-1"));
 		delivery.defer("sa-2", () => payload("sa-2"));
 
 		expect(delivery.size).toBe(2);
-		expect(delivery.drain()).toEqual([payload("sa-1"), payload("sa-2")]);
+		delivery.flush((item) => sent.push(item));
+		expect(sent).toEqual([payload("sa-1"), payload("sa-2")]);
 		expect(delivery.size).toBe(0);
 	});
 
@@ -28,7 +30,9 @@ describe("deferred result delivery", () => {
 		delivery.defer("sa-1", build);
 
 		expect(build).not.toHaveBeenCalled();
-		expect(delivery.drain()).toEqual([]);
+		const sent = vi.fn();
+		delivery.flush(sent);
+		expect(sent).not.toHaveBeenCalled();
 	});
 
 	it("removes a deferred payload when it is consumed", () => {
@@ -38,15 +42,32 @@ describe("deferred result delivery", () => {
 		delivery.consume("sa-1");
 
 		expect(delivery.size).toBe(0);
-		expect(delivery.drain()).toEqual([]);
+		const sent = vi.fn();
+		delivery.flush(sent);
+		expect(sent).not.toHaveBeenCalled();
 	});
 
-	it("returns an empty array when drained twice", () => {
+	it("retries deferred delivery in FIFO order after the first send throws", () => {
 		const delivery = createDeferredResultDelivery();
 		delivery.defer("sa-1", () => payload("sa-1"));
+		delivery.defer("sa-2", () => payload("sa-2"));
+		expect(() => delivery.flush(() => { throw new Error("send failed"); })).toThrow("send failed");
 
-		expect(delivery.drain()).toHaveLength(1);
-		expect(delivery.drain()).toEqual([]);
+		const sent: string[] = [];
+		delivery.flush((item) => sent.push(item.id));
+
+		expect(sent).toEqual(["sa-1", "sa-2"]);
+	});
+
+	it("does not resend acknowledged payloads", () => {
+		const delivery = createDeferredResultDelivery();
+		const sent = vi.fn();
+		delivery.defer("sa-1", () => payload("sa-1"));
+
+		delivery.flush(sent);
+		delivery.flush(sent);
+
+		expect(sent).toHaveBeenCalledOnce();
 	});
 
 	it("forget drops consumed tracking but preserves undelivered pending payloads", () => {
@@ -58,7 +79,9 @@ describe("deferred result delivery", () => {
 		// The pending sa-1 payload survives the prune and still flushes later —
 		// a busy parent must not silently lose results to MAX_TRACKED pruning.
 		expect(delivery.size).toBe(1);
-		expect(delivery.drain().map((payload) => payload.id)).toEqual(["sa-1"]);
+		const sent: string[] = [];
+		delivery.flush((item) => sent.push(item.id));
+		expect(sent).toEqual(["sa-1"]);
 		// After forget, a fresh defer for the previously-consumed id is accepted.
 		delivery.defer("sa-2", () => ({ id: "sa-2", title: "t", status: "done", content: "c", details: {} }));
 		expect(delivery.size).toBe(1);

@@ -132,7 +132,7 @@ restore can damage only that test's soon-deleted copy, never the next test or th
 
 ## Verification evidence
 
-Measured at commit `a34c82ae4aaab1ee40b3d3a7618db11a5404e32c` with two consecutive
+Measured at commit `eb96534bce1a6baa36221b655d030c3ee1710ea0` with two consecutive
 `env -u NODE_PATH pnpm test:integration` runs in one shell:
 
 - Run 1: seam 10/10 in 909 ms; integration 159/159 in 167.34 seconds; 169 seconds wall

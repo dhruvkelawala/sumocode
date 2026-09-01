@@ -1099,6 +1099,25 @@ describe("control watcher", () => {
 		expect(handlers.has("session_start")).toBe(true);
 	});
 
+	it("re-validates the control dir on every tick after a later swap", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const { pi, controlDir } = installWithControlDir();
+		writeControl(join(controlDir, "steer-1.txt"), "first");
+		vi.advanceTimersByTime(500);
+		expect(pi.sendUserMessage).toHaveBeenCalledWith("first", { deliverAs: "steer" });
+
+		// Swap the validated control dir for a symlink to another private dir
+		// carrying a planted control: the next tick must re-validate and refuse.
+		const realDir = join(workDir!, "elsewhere");
+		makeControlDir(realDir);
+		writeControl(join(realDir, "steer-2.txt"), "sneaky");
+		rmSync(controlDir, { recursive: true, force: true });
+		symlinkSync(realDir, controlDir);
+		vi.advanceTimersByTime(500);
+		expect(pi.sendUserMessage).not.toHaveBeenCalledWith("sneaky", { deliverAs: "steer" });
+		expect(existsSync(join(realDir, "steer-2.txt"))).toBe(true);
+	});
+
 	it("refuses a group-readable control dir", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
 		const controlDir = join(workDir, "control");

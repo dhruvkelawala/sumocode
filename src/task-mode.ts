@@ -454,13 +454,14 @@ function installControlWatcher(
 	// directory (replaced by a symlink, group/other-readable, or owned by
 	// someone else) fails closed permanently; a not-yet-created one is the
 	// documented boot ordering and is retried on later ticks.
-	let controlDirValidated = false;
+	// No successful-validation cache: the directory is re-validated on every
+	// tick so a symlink or widened mode swapped in after the first validation is
+	// never traversed. ENOENT (not yet created) is retried; any other refusal is
+	// logged once and fails closed.
 	let controlDirRefusalLogged = false;
 	const ensureControlDirValidated = (): boolean => {
-		if (controlDirValidated) return true;
 		try {
 			assertPrivateDir(artifactFs, canonicalControlDir, "task control directory");
-			controlDirValidated = true;
 			return true;
 		} catch (error) {
 			if (!isErrnoCode(error, "ENOENT") && !controlDirRefusalLogged) {
@@ -476,8 +477,7 @@ function installControlWatcher(
 	// Absent at install is the documented boot ordering: keep the watcher alive
 	// so a later-created control dir is picked up on the next tick. An existing
 	// dir that failed validation is permanent tamper — disable the watcher.
-	const controlDirReady = ensureControlDirValidated();
-	if (!controlDirReady && existsSync(canonicalControlDir)) {
+	if (!ensureControlDirValidated() && existsSync(canonicalControlDir)) {
 		return () => undefined;
 	}
 	// Submission ownership lives in the process-wide submitted-controls registry,

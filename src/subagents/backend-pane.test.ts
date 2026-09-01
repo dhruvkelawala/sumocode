@@ -359,7 +359,9 @@ describe("pane subagent backend", () => {
 			await vi.advanceTimersByTimeAsync(750);
 			const settled = settledEvents(harness.events);
 			expect(settled).toHaveLength(1);
-			expect(settled[0].outcome).toMatchObject({ kind: "failed", errorText: expect.stringContaining("not a regular file") });
+			// lstat (not existsSync) detects the replacement: a dangling symlink
+			// must settle failed, not read as "not yet written" and pin the child.
+			expect(settled[0].outcome).toMatchObject({ kind: "failed", errorText: expect.stringContaining("non-regular entry") });
 		} finally {
 			vi.useRealTimers();
 		}

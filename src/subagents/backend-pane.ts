@@ -269,7 +269,22 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	};
 
 	const poll = (): void => {
-		if (settled || interrupted || !fs.existsSync(paths.exitFile)) return;
+		if (settled || interrupted) return;
+		// lstat, not existsSync: existsSync follows symlinks, so a dangling
+		// symlink swapped in for the exit marker would read as "not yet written"
+		// and pin the child running forever. A non-regular entry is tamper and
+		// settles failed; a truly absent entry is the normal not-ready state.
+		let exitStat: ReturnType<PaneBackendFs["lstatSync"]> | undefined;
+		try {
+			exitStat = fs.lstatSync(paths.exitFile);
+		} catch {
+			exitStat = undefined;
+		}
+		if (!exitStat) return;
+		if (!exitStat.isFile()) {
+			settle({ kind: "run-settled", outcome: { kind: "failed", errorText: "visible child exit marker replaced by a non-regular entry" } });
+			return;
+		}
 		const marker = readText(paths.exitFile, "exit marker");
 		// The producer opens with truncate-before-write. An observed empty file is
 		// a transient not-ready state, not evidence of a failed child.

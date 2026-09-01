@@ -389,8 +389,10 @@ export function installTerminalTools(
 			const result = await manager.wait(params.ids, sessionId(ctx), params.timeout_ms ?? DEFAULT_WAIT_TIMEOUT_MS, signal);
 			const settled = result.settled.map(sessionObservation);
 			return makeToolResult(buildWaitResult({ ...result, settled: settled.map((observation, index) => ({ task: result.settled[index]!.task, output: observation.output })) }), {
-				...result,
 				settled,
+				pendingIds: result.pendingIds,
+				unknownIds: result.unknownIds,
+				timedOut: result.timedOut,
 				activities: result.settled.map(({ task }, index) => sessionActivity(task, settled[index]!.output)),
 			});
 		},

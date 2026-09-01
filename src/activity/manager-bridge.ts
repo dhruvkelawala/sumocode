@@ -533,7 +533,7 @@ export class ActivityManagerBridge {
 							maxBytes: ACTIVITY_OUTPUT_MAX_BYTES,
 							contextBytes: TERMINAL_REDACTION_CONTEXT_BYTES,
 							maxLines: ACTIVITY_OUTPUT_MAX_LINES,
-							truncated: tail?.truncated,
+							truncated: tail?.truncated ?? true,
 						});
 					} else {
 						// Legacy adapters cannot prove whether their pre-truncated string starts

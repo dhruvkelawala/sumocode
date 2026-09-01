@@ -10,6 +10,7 @@ import {
 	TRUNCATED_HEAD_MARKER,
 	TRUNCATED_TAIL_MARKER,
 	boundRetainedResult,
+	boundStableIdentifier,
 } from "./child-protocol.js";
 
 function decoder(options: { frame?: number; unterminated?: number } = {}) {
@@ -201,6 +202,19 @@ describe("BoundedUtf8Tail", () => {
 		expect(Buffer.byteLength(value, "utf8")).toBeLessThanOrEqual(CHILD_STDERR_TAIL_MAX_BYTES);
 		expect(value.split(TRUNCATED_TAIL_MARKER)).toHaveLength(2);
 		expect(value.endsWith(suffix)).toBe(true);
+	});
+});
+
+describe("boundStableIdentifier", () => {
+	it("keeps long identifiers distinct from their literal bounded representation", () => {
+		const longIdentifier = "i".repeat(300);
+		const bounded = boundStableIdentifier(longIdentifier, 256);
+		const literalBounded = boundStableIdentifier(bounded, 256);
+
+		expect(boundStableIdentifier("t1", 256)).toBe("t1");
+		expect(literalBounded).not.toBe(bounded);
+		expect(Buffer.byteLength(bounded, "utf8")).toBeLessThanOrEqual(256);
+		expect(Buffer.byteLength(literalBounded, "utf8")).toBeLessThanOrEqual(256);
 	});
 });
 

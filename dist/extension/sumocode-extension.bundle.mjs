@@ -2764,9 +2764,13 @@ function boundRetainedResult(text, maxBytes = CHILD_RETAINED_RESULT_MAX_BYTES) {
   return `${head}${TRUNCATED_HEAD_MARKER}`;
 }
 function boundStableIdentifier(identifier, maxBytes) {
-  if (Buffer.byteLength(identifier, "utf8") <= maxBytes) return identifier;
+  const hashedPrefix = "h:";
+  const rawEscapePrefix = "r:";
+  const raw = identifier.startsWith(hashedPrefix) || identifier.startsWith(rawEscapePrefix) ? `${rawEscapePrefix}${identifier}` : identifier;
+  if (Buffer.byteLength(raw, "utf8") <= maxBytes) return raw;
   const hashSuffix = `#${createHash("sha256").update(identifier, "utf8").digest("hex")}`;
-  return `${boundRetainedResult(identifier, maxBytes - Buffer.byteLength(hashSuffix, "utf8"))}${hashSuffix}`;
+  const contentMaxBytes = maxBytes - Buffer.byteLength(`${hashedPrefix}${hashSuffix}`, "utf8");
+  return `${hashedPrefix}${boundRetainedResult(identifier, contentMaxBytes)}${hashSuffix}`;
 }
 var BoundedUtf8Head = class {
   constructor(maxBytes = CHILD_RETAINED_RESULT_MAX_BYTES) {

@@ -64,9 +64,15 @@ export function boundRetainedResult(text: string, maxBytes = CHILD_RETAINED_RESU
 
 /** Keep a producer identifier bounded while preserving stable identity across shared prefixes. */
 export function boundStableIdentifier(identifier: string, maxBytes: number): string {
-	if (Buffer.byteLength(identifier, "utf8") <= maxBytes) return identifier;
+	const hashedPrefix = "h:";
+	const rawEscapePrefix = "r:";
+	const raw = identifier.startsWith(hashedPrefix) || identifier.startsWith(rawEscapePrefix)
+		? `${rawEscapePrefix}${identifier}`
+		: identifier;
+	if (Buffer.byteLength(raw, "utf8") <= maxBytes) return raw;
 	const hashSuffix = `#${createHash("sha256").update(identifier, "utf8").digest("hex")}`;
-	return `${boundRetainedResult(identifier, maxBytes - Buffer.byteLength(hashSuffix, "utf8"))}${hashSuffix}`;
+	const contentMaxBytes = maxBytes - Buffer.byteLength(`${hashedPrefix}${hashSuffix}`, "utf8");
+	return `${hashedPrefix}${boundRetainedResult(identifier, contentMaxBytes)}${hashSuffix}`;
 }
 
 /** Keep the start of streamed text within a UTF-8 byte cap. */

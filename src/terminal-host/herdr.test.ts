@@ -186,6 +186,70 @@ describe("herdrTerminalHost", () => {
 		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["tab", "create", "--workspace", "w1K", "--cwd", "/repo", "--label", "subagents", "--no-focus"], { timeout: 5000 });
 	});
 
+	it("cleans failed child start for a new-tab root pane", async () => {
+		const exec = vi.fn(async (_bin: string, args: string[]) => {
+			if (args[0] === "tab") return { stdout: JSON.stringify({ result: { root_pane: { pane_id: "w5:p9", workspace_id: "w5", tab_id: "w5:t8" } } }), stderr: "", code: 0, killed: false };
+			if (args[1] === "run") return { stdout: "", stderr: "start denied", code: 1, killed: false };
+			return { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false };
+		});
+
+		// SAFETY: test double only exercises the members this test asserts on.
+		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
+			name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "new-tab", label: "subagents" },
+		})).resolves.toEqual({ ok: false, error: "start denied" });
+		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "close", "w5:p9"], { timeout: 5000 });
+	});
+
+	it("cleans failed child start without closing an existing tab anchor", async () => {
+		const exec = vi.fn(async (_bin: string, args: string[]) => {
+			if (args[1] === "list") return { stdout: JSON.stringify({ result: { panes: [{ pane_id: "w3:p2", workspace_id: "w3", tab_id: "w3:t2" }] } }), stderr: "", code: 0, killed: false };
+			if (args[1] === "split") return { stdout: JSON.stringify({ result: { pane: { pane_id: "w3:p4", workspace_id: "w3", tab_id: "w3:t2" } } }), stderr: "", code: 0, killed: false };
+			if (args[1] === "run") return { stdout: "", stderr: "start denied", code: 1, killed: false };
+			return { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false };
+		});
+
+		// SAFETY: test double only exercises the members this test asserts on.
+		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
+			name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "tab", tabId: "w3:t2", direction: "down" },
+		})).resolves.toEqual({ ok: false, error: "start denied" });
+		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "close", "w3:p4"], { timeout: 5000 });
+		expect(exec).not.toHaveBeenCalledWith("herdr", ["pane", "close", "w3:p2"], expect.anything());
+	});
+
+	it("cleans failed child start and names the preserved workspace shell", async () => {
+		const exec = vi.fn(async (_bin: string, args: string[]) => {
+			if (args[1] === "split") return { stdout: JSON.stringify({ result: { pane: { pane_id: "w9:p2", workspace_id: "w9", tab_id: "w9:t1" } } }), stderr: "", code: 0, killed: false };
+			if (args[1] === "run") return { stdout: "", stderr: "start denied", code: 1, killed: false };
+			return { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false };
+		});
+
+		// SAFETY: test double only exercises the members this test asserts on.
+		const result = await herdrTerminalHost.startAgentPane({ exec } as never, {
+			name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
+		});
+		expect(result).toEqual({ ok: false, error: "start denied. Recovery shell preserved at pane w9:p1 in workspace w9." });
+		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "close", "w9:p2"], { timeout: 5000 });
+		expect(exec).not.toHaveBeenCalledWith("herdr", ["pane", "close", "w9:p1"], expect.anything());
+	});
+
+	it("cleans failed child start while retaining bounded cleanup failure context", async () => {
+		const exec = vi.fn(async (_bin: string, args: string[]) => {
+			if (args[0] === "tab") return { stdout: JSON.stringify({ result: { root_pane: { pane_id: "w5:p9", workspace_id: "w5", tab_id: "w5:t8" } } }), stderr: "", code: 0, killed: false };
+			if (args[1] === "run") return { stdout: "", stderr: "start denied", code: 1, killed: false };
+			if (args[1] === "close") return { stdout: "", stderr: `close denied ${"x".repeat(2_000)}`, code: 1, killed: false };
+			return { stdout: "", stderr: "", code: 0, killed: false };
+		});
+
+		// SAFETY: test double only exercises the members this test asserts on.
+		const result = await herdrTerminalHost.startAgentPane({ exec } as never, {
+			name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "new-tab", label: "subagents" },
+		});
+		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error("expected failed start");
+		expect(result.error).toMatch(/^start denied\. Child cleanup failed: close denied x+/);
+		expect(result.error.length).toBeLessThan(1_100);
+	});
+
 	it("keeps a running child when pane rename fails", async () => {
 		const exec = vi.fn(async (_bin: string, args: string[]) => {
 			if (args[1] === "list") return { stdout: JSON.stringify({ result: { panes: [{ pane_id: "w1:p6", workspace_id: "w1", tab_id: "w1:t1" }] } }), stderr: "", code: 0, killed: false };

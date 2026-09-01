@@ -46,6 +46,7 @@ function parseHerdrError(result: { stderr: string; stdout: string }): { code?: s
 }
 
 const HERDR_AGENT_PROMPT_TIMEOUT_MS = 10_000;
+const CHILD_CLEANUP_ERROR_MAX = 1_024;
 
 const hasHerdrCaller = (env: NodeJS.ProcessEnv = process.env): boolean => env.HERDR_ENV === "1" && Boolean(env.HERDR_PANE_ID);
 
@@ -165,8 +166,30 @@ async function runPaneCommand(pi: PiExecLike, pane: HerdrPaneInfo, command: stri
 	return result.code === 0 ? { ok: true } : execFailure("herdr pane run", result);
 }
 
+async function cleanFailedChildStart(
+	pi: PiExecLike,
+	paneId: string,
+	primaryError: string,
+	recoveryShell?: { paneId: string; workspaceId: string },
+): Promise<HostResult<never>> {
+	let error = primaryError;
+	if (recoveryShell) error += `. Recovery shell preserved at pane ${recoveryShell.paneId} in workspace ${recoveryShell.workspaceId}.`;
+	try {
+		const cleanup = await pi.exec("herdr", ["pane", "close", paneId], { timeout: 5000 });
+		if (cleanup.code !== 0) {
+			const context = (cleanup.stderr || cleanup.stdout || `herdr pane close exited ${cleanup.code}`).slice(0, CHILD_CLEANUP_ERROR_MAX);
+			error += `${error.endsWith(".") ? "" : "."} Child cleanup failed: ${context}`;
+		}
+	} catch (cleanupError) {
+		const context = (cleanupError instanceof Error ? cleanupError.message : String(cleanupError)).slice(0, CHILD_CLEANUP_ERROR_MAX);
+		error += `${error.endsWith(".") ? "" : "."} Child cleanup failed: ${context}`;
+	}
+	return { ok: false, error };
+}
+
 async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): Promise<HostResult<StartedAgentPane>> {
 	let target: HostResult<{ pane: HerdrPaneInfo }>;
+	let recoveryShell: { paneId: string; workspaceId: string } | undefined;
 	if (options.placement.kind === "workspace") {
 		let anchorPaneId = options.placement.paneId;
 		if (!anchorPaneId) {
@@ -177,6 +200,7 @@ async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): P
 		if (!anchorPaneId) return { ok: false, error: `herdr returned no pane for workspace ${options.placement.workspaceId}` };
 		target = await splitPane(pi, { kind: "id", paneId: anchorPaneId }, "right", options.cwd);
 		if (target.ok) {
+			recoveryShell = { paneId: anchorPaneId, workspaceId: options.placement.workspaceId };
 			// Keep a shell alive after the child exits so Herdr preserves the
 			// worktree workspace for inspection. Moving it is cosmetic; if the move
 			// fails, the shell stays beside the child and still keeps the workspace.
@@ -192,7 +216,7 @@ async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): P
 	}
 	if (!target.ok) return target;
 	const started = await runPaneCommand(pi, target.pane, options.shellCommand);
-	if (!started.ok) return started;
+	if (!started.ok) return cleanFailedChildStart(pi, target.pane.pane_id!, started.error, recoveryShell);
 
 	const agentName = uniqueHerdrAgentName(options.name);
 	const paneId = target.pane.pane_id!;

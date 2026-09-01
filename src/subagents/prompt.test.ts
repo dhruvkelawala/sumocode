@@ -34,15 +34,21 @@ describe("subagent prompt guidance", () => {
 		expect(guidance).toContain("completion manifest");
 	});
 
-	it("documents steering delivery and the close/auto-close lifecycle", () => {
+	it("documents steering acknowledgement bounds and the close/auto-close lifecycle", () => {
 		const guidance = SUBAGENT_PROMPT_GUIDELINES.join("\n");
 		expect(guidance).toContain("Use subagent_send to steer a running visible child");
-		expect(guidance).toContain("delivered as a Pi steering message after the child's current turn");
+		// Bounded success claim: consumption + synchronous submission, nothing more.
+		expect(guidance).toContain("consumed the control and synchronously submitted it to Pi");
+		expect(guidance).toContain("exposes no post-acceptance acknowledgement");
+		// The delivery claim appears only inside an explicit negation, never as a
+		// bare promise.
+		expect(guidance).toMatch(/does not prove the text was delivered as a Pi steering message/);
 		expect(guidance).toContain("not typed into its terminal");
 		expect(guidance).toContain("Headless or settled children cannot receive input");
 		expect(guidance).toContain("visible children stay open while active and auto-close after 30s of silence");
 		expect(guidance).toContain("use subagent_close to end one deliberately");
-		expect(SUBAGENT_TOOL_DESCRIPTIONS.send).toContain("steering message");
+		expect(SUBAGENT_TOOL_DESCRIPTIONS.send).toContain("control consumption and synchronous submission");
+		expect(SUBAGENT_TOOL_DESCRIPTIONS.send).toContain("not model-turn acceptance");
 		expect(SUBAGENT_TOOL_DESCRIPTIONS.send).toContain("not typed into its terminal");
 		expect(SUBAGENT_TOOL_DESCRIPTIONS.close).toContain("Gracefully close visible subagents");
 		expect(SUBAGENT_TOOL_DESCRIPTIONS.close).toContain("Use subagent_cancel only to abort work");

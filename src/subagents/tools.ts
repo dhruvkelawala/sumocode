@@ -218,11 +218,17 @@ export function registerSubagentTools(
 		promptGuidelines: SUBAGENT_PROMPT_GUIDELINES,
 		parameters: Type.Object({
 			id: Type.String({ description: "Running visible subagent id, e.g. sa-1." }),
-			text: Type.String({ description: "Steering text to deliver to the child." }),
+			text: Type.String({ minLength: 1, description: "Non-blank steering text to submit to the child runtime." }),
 		}),
 		async execute(_toolCallId, params) {
+			// Schema minLength plus an explicit trim guard: blank steering would be
+			// consumed by the child without ever reaching Pi while the tool still
+			// reported success.
+			if (!params.text.trim()) {
+				throw new Error("subagent_send text is required: blank or whitespace-only steering is rejected before submission");
+			}
 			const snapshot = await manager.sendTo(params.id, params.text);
-			return makeToolResult(`Sent steering input to ${params.id} (${snapshot.title}). It is delivered after the child's current turn — no ack beyond delivery-to-child is possible.`, { action: "send", id: params.id, pane: snapshot.pane });
+			return makeToolResult(`Steering submitted to the child runtime for ${params.id} (${snapshot.title}); Pi exposes no post-acceptance acknowledgement.`, { action: "send", id: params.id, pane: snapshot.pane });
 		},
 	});
 

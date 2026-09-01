@@ -23,9 +23,9 @@ import type { SubagentEvent } from "./domain.js";
 
 const RESPONSE_POLL_INTERVAL_MS = 750;
 const SEND_ACK_POLL_MS = 250;
-// Generous on purpose: the ack cannot land until the child's extension runtime
-// has finished loading, which on a cold child takes seconds. A tight budget
-// reports a DELIVERED steer as a failure.
+// Generous on purpose: consumption cannot be observed until the child's
+// extension runtime has finished loading, which on a cold child takes seconds.
+// A tight budget reports an ambiguous pending control as a failure.
 const SEND_ACK_TIMEOUT_MS = 30_000;
 /** Task and control dirs hold prompt/steer text; keep them owner-only. */
 const PRIVATE_DIR_MODE = 0o700;
@@ -61,9 +61,9 @@ export interface PaneBackendDependencies {
 	now?: () => number;
 	baseDir?: string;
 	pollIntervalMs?: number;
-	/** Steer-ack poll interval (design contract: 250ms). */
+	/** Steer-consumption poll interval (design contract: 250ms). */
 	sendAckPollMs?: number;
-	/** Steer-ack total budget (design contract: 5s). */
+	/** Steer-consumption acknowledgement budget. */
 	sendAckTimeoutMs?: number;
 }
 
@@ -147,8 +147,14 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	let pollTimer: ReturnType<typeof setInterval> | undefined;
 	let interrupted = false;
 	let settled = false;
+	let steerSeq = 0;
 	let markReady = (): void => undefined;
 	const ready = new Promise<void>((resolve) => { markReady = resolve; });
+	const pendingSteeringAcks = new Map<string, {
+		readonly timer: ReturnType<typeof setInterval>;
+		readonly resolve: () => void;
+		readonly reject: (error: Error) => void;
+	}>();
 
 	const clearWatcher = (): void => {
 		if (!pollTimer) return;
@@ -156,10 +162,36 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		pollTimer = undefined;
 	};
 
+	const steeringSettlementError = (): Error => new Error(
+		`visible subagent ${options.id} has settled before steering consumption was acknowledged`,
+	);
+
+	const finishPendingSteeringAck = (path: string, error?: Error): void => {
+		const pending = pendingSteeringAcks.get(path);
+		if (!pending) return;
+		pendingSteeringAcks.delete(path);
+		clearInterval(pending.timer);
+		if (error) pending.reject(error);
+		else pending.resolve();
+	};
+
+	// Settlement and interrupt honor the consumption boundary: an absent control
+	// file proves the child watcher consumed it and synchronously submitted to
+	// Pi, so that waiter resolves even when settlement wins the race against the
+	// next ack tick. Only controls still on disk are ambiguous and rejected with
+	// the settled error shape. finishPendingSteeringAck keeps exactly-once
+	// timer/map cleanup for both outcomes.
+	const settlePendingSteeringAcks = (): void => {
+		for (const path of pendingSteeringAcks.keys()) {
+			finishPendingSteeringAck(path, fs.existsSync(path) ? steeringSettlementError() : undefined);
+		}
+	};
+
 	const settle = (event: Extract<SubagentEvent, { kind: "run-settled" }>): void => {
 		if (settled) return;
 		settled = true;
 		clearWatcher();
+		settlePendingSteeringAcks();
 		options.signal?.removeEventListener("abort", interrupt);
 		emitEvent?.(event);
 	};
@@ -216,22 +248,24 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		if (settled || interrupted) return;
 		interrupted = true;
 		clearWatcher();
+		// Cancellation starts settlement asynchronously through pane close. Parent
+		// senders must stop waiting now rather than lingering until their timeout:
+		// consumed controls resolve, controls still on disk reject.
+		settlePendingSteeringAcks();
 		void closeInterruptedPane();
 	}
 
-	let steerSeq = 0;
-
 	/**
-	 * Deliver steering text via the task-dir control channel: write
-	 * `steer-<seq>.txt.tmp`, rename into place (atomic publish), then wait for
-	 * the child's watcher to unlink it — unlink is the ack. Rejects when the
-	 * child exits before consuming the file or the ack poll times out (the
-	 * file remains and a later-booting child may still consume it).
+	 * Publish steering text through the task-dir control channel, then wait for
+	 * the child watcher to remove the file. Removal proves only that the watcher
+	 * consumed the control and synchronously called Pi's void sendUserMessage API;
+	 * Pi exposes no post-acceptance acknowledgement to extensions.
+	 *
+	 * A timeout preserves the file because ownership is ambiguous and retrying
+	 * could duplicate steering that Pi already owns.
 	 */
 	const send = (text: string): Promise<void> => {
-		if (settled || interrupted) {
-			return Promise.reject(new Error(`visible subagent ${options.id} has settled; input was not delivered`));
-		}
+		if (settled || interrupted) return Promise.reject(steeringSettlementError());
 		const seq = ++steerSeq;
 		const finalPath = join(paths.controlDir, `steer-${seq}.txt`);
 		// 0600 on the temp file: rename preserves the mode, so the published file
@@ -244,21 +278,30 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 			let elapsed = 0;
 			const ackTimer = setInterval(() => {
 				if (!fs.existsSync(finalPath)) {
-					clearInterval(ackTimer);
-					resolve();
+					finishPendingSteeringAck(finalPath);
 					return;
 				}
-				if (fs.existsSync(paths.exitFile) && readText(paths.exitFile).trim()) {
-					clearInterval(ackTimer);
-					reject(new Error(`${options.id} exited before receiving input`));
-					return;
-				}
+				// The budget advances on EVERY tick, before any branch: poll() can hit
+				// the producer's truncate-before-write window and re-read the exit
+				// marker as empty, returning without settling. A budget that only grew
+				// on the fallback branch would then never fire and the waiter would
+				// hang past its acknowledgement timeout.
 				elapsed += ackPollMs;
-				if (elapsed >= ackTimeoutMs) {
-					clearInterval(ackTimer);
-					reject(new Error(`steer input to ${options.id} was not acknowledged within ${ackTimeoutMs}ms — the file remains and the child may still consume it`));
+				if (fs.existsSync(paths.exitFile) && readText(paths.exitFile).trim()) {
+					// Reuse the normal settlement path so every concurrent waiter and the
+					// response watcher are cleaned up exactly once.
+					poll();
+				}
+				// Guard on map presence: if poll() settled, this waiter was already
+				// finished exactly once with the child-settled error.
+				if (elapsed >= ackTimeoutMs && pendingSteeringAcks.has(finalPath)) {
+					finishPendingSteeringAck(
+						finalPath,
+						new Error(`steering consumption was not acknowledged within ${ackTimeoutMs}ms for ${options.id} — the file remains and the child may still consume it`),
+					);
 				}
 			}, ackPollMs);
+			pendingSteeringAcks.set(finalPath, { timer: ackTimer, resolve, reject });
 			ackTimer.unref?.();
 		});
 	};

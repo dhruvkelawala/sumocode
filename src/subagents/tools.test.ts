@@ -246,10 +246,28 @@ describe("subagent tools", () => {
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		const result = await tool("subagent_send").execute("tc", { id: "sa-1", text: "continue with tests" }, undefined, undefined, ctx as never);
 
-		expect(textOf(result)).toBe("Sent steering input to sa-1 (worker). It is delivered after the child's current turn — no ack beyond delivery-to-child is possible.");
+		expect(textOf(result)).toBe("Steering submitted to the child runtime for sa-1 (worker); Pi exposes no post-acceptance acknowledgement.");
+		expect(textOf(result)).not.toMatch(/(?:was|is) (?:delivered|accepted)|delivery-to-child/);
 		expect(childSends.get("sa-1")).toHaveBeenCalledWith("continue with tests");
 		expect(sendPaneText).not.toHaveBeenCalled();
 		expect(result).toMatchObject({ details: { action: "send", id: "sa-1", pane: { paneId: "w1:p2" } } });
+	});
+
+	it("rejects blank and whitespace steering before the manager or child sees it", async () => {
+		const { tool, ctx, childSends } = createHarness();
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		await tool("subagent_spawn").execute("tc", { prompt: "watch", name: "worker", visible: true }, undefined, undefined, ctx as never);
+		// SAFETY: visible harness children always register a send double in childSends.
+		const send = childSends.get("sa-1") as ReturnType<typeof vi.fn>;
+
+		for (const blank of ["", "   ", "\n\t "]) {
+			// SAFETY: the ctx double carries only the fields the tool handlers read.
+			await expect(tool("subagent_send").execute("tc", { id: "sa-1", text: blank }, undefined, undefined, ctx as never))
+				.rejects.toThrow("blank or whitespace-only steering is rejected before submission");
+		}
+		expect(send).not.toHaveBeenCalled();
+		// The schema carries minLength so the model-facing contract rejects blanks too.
+		expect(JSON.stringify(tool("subagent_send").parameters)).toContain('"minLength":1');
 	});
 
 	it("reports subagent_send error taxonomy", async () => {

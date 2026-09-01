@@ -1002,11 +1002,21 @@ describe("SubagentManager steering and close", () => {
 			await expect(manager.sendTo("sa-1", "hi")).rejects.toThrow("headless children cannot receive input — respawn with visible: true");
 		});
 
-		it("delivers text through the child's send and returns the snapshot", async () => {
+		it("waits for the child's consumption acknowledgement and returns the snapshot", async () => {
 			const { manager, sends } = steerableBackend();
 			const id = await spawnVisible(manager, "steered");
 			await expect(manager.sendTo(id, "focus the tests")).resolves.toMatchObject({ id, status: "running" });
 			expect(sends.get(id)).toHaveBeenCalledWith("focus the tests");
+		});
+
+		it("propagates a child consumption or settlement failure", async () => {
+			const { manager, sends } = steerableBackend();
+			const id = await spawnVisible(manager, "settling");
+			// SAFETY: visible spawns always register a send double.
+			(sends.get(id) as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("visible subagent sa-1 has settled before steering consumption was acknowledged"));
+
+			await expect(manager.sendTo(id, "too late")).rejects.toThrow("has settled before steering consumption was acknowledged");
+			expect(sends.get(id)).toHaveBeenCalledWith("too late");
 		});
 	});
 

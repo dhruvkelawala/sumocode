@@ -25,7 +25,7 @@
  */
 
 import { appendFileSync, existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 /**
@@ -205,6 +205,17 @@ function errorMessage<T>(error: T): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- boundary predicate: fs rejections arrive as `unknown` from catch clauses; the instanceof guard is the sanctioned parse.
+function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
+	return error instanceof Error;
+}
+
+/** True when a failed unlink reports the control file is already absent. */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- catch clauses hand this predicate `unknown`; the isErrnoException guard call is the sanctioned parse before the errno check.
+function isEnoent(error: unknown): boolean {
+	return isErrnoException(error) && error.code === "ENOENT";
+}
+
 function installTaskExitMarker(env: NodeJS.ProcessEnv = process.env): void {
 	if (!env.SUMOCODE_TASK_EXIT_FILE) return;
 	process.once("exit", (code) => writeTaskExitMarker(isNumber(code) ? code : 0, env));
@@ -220,6 +231,11 @@ const STEER_FILE_PATTERN = /^steer-(\d+)\.txt$/;
 export interface TaskModeAutoExitOptions {
 	readonly env?: NodeJS.ProcessEnv;
 	readonly graceMs?: number;
+	/**
+	 * Ack-unlink seam (dependency injection for tests): defaults to the real
+	 * unlinkSync. The watcher only ever unlinks control files with it.
+	 */
+	readonly unlink?: (path: string) => void;
 }
 
 /** True when task mode is active. Mirrors `isTaskMode` in extension.ts. */
@@ -244,17 +260,99 @@ interface TaskModeControlHooks {
 	requestShutdown(ctx: ExtensionContext): void;
 }
 
+const SUBMITTED_CONTROLS_REGISTRY = Symbol.for("sumocode.task-mode.submittedControls");
+
+type SubmittedControlsScope = { [SUBMITTED_CONTROLS_REGISTRY]?: Map<string, Set<string>> };
+
+function globalSubmittedControlsScope(): SubmittedControlsScope {
+	// SAFETY: SubmittedControlsScope only adds an optional module-private symbol
+	// key to globalThis, which no other module reads or writes under that symbol.
+	return globalThis as SubmittedControlsScope;
+}
+
+/**
+ * Process-wide registry of controls whose synchronous Pi submission already
+ * succeeded, keyed by canonical control directory. It lives on globalThis
+ * behind a `Symbol.for` key — the same pattern as the process-install latch in
+ * `extension.ts` — because ONE process can hold distinct SumoCode module
+ * instances at once (source checkout plus committed bundle, or several entry
+ * paths). A per-module-instance Map would let a second instance's watcher
+ * resubmit a control the first instance's watcher already handed to Pi.
+ * Lifetime is exactly the process: Pi recreates the extension API in the SAME
+ * process for `/new`, `/resume`, and `/fork`, and this registry spans all of
+ * those, but a child process restart loses it — resubmission after a restart
+ * remains an upstream/durable-protocol ambiguity this in-process registry does
+ * not solve. Entries are removed when the ack unlink finally succeeds (or the
+ * control is already absent), and empty directory buckets are deleted, so
+ * ordinary watcher stops neither clear nor leak pending ownership.
+ */
+function submittedControlsRegistry(): Map<string, Set<string>> {
+	const scope = globalSubmittedControlsScope();
+	return scope[SUBMITTED_CONTROLS_REGISTRY] ??= new Map<string, Set<string>>();
+}
+
+const submittedControlsFor = (canonicalControlDir: string): Set<string> => {
+	const registry = submittedControlsRegistry();
+	let bucket = registry.get(canonicalControlDir);
+	if (!bucket) {
+		bucket = new Set();
+		registry.set(canonicalControlDir, bucket);
+	}
+	return bucket;
+};
+
+/** Drop a submitted entry after its consumption acknowledgement is complete. */
+const clearSubmittedControl = (canonicalControlDir: string, file: string): void => {
+	const registry = submittedControlsRegistry();
+	const bucket = registry.get(canonicalControlDir);
+	if (!bucket?.delete(file)) return;
+	if (bucket.size === 0) registry.delete(canonicalControlDir);
+};
+
+const isControlSubmitted = (canonicalControlDir: string, file: string): boolean =>
+	submittedControlsRegistry().get(canonicalControlDir)?.has(file) ?? false;
+
+/**
+ * Test seam: a cloned read-only snapshot of the process-wide submitted-control
+ * registry. Cloning keeps the live Map/Sets private — mutating the snapshot
+ * can never touch (or leak) real ownership state.
+ */
+export function submittedControlsForTests(): ReadonlyMap<string, ReadonlySet<string>> {
+	return new Map([...submittedControlsRegistry()].map(([dir, files]) => [dir, new Set(files)]));
+}
+
+/** Test-only: clear the process-wide submitted-control registry (same pattern as `resetSumocodeProcessInstallLatchForTests` in `extension.ts`) so it cannot leak across tests or files. */
+export function resetSubmittedControlsForTests(): void {
+	delete globalSubmittedControlsScope()[SUBMITTED_CONTROLS_REGISTRY];
+}
+
 /**
  * Poll `<controlDir>` for orchestrator control files (the parent-side writer
- * lives in `src/subagents/backend-pane.ts`). Steer files are injected as real
- * Pi steering messages mid-run; `close.request` shuts the child down. The
+ * lives in `src/subagents/backend-pane.ts`). Steer files are consumed and
+ * synchronously submitted to Pi; `close.request` shuts the child down. The
  * watcher is independent of the auto-exit countdown: it also runs for
  * keep-open sessions, because close is explicit while auto-exit is silence.
  */
-function installControlWatcher(pi: ExtensionAPI, controlDir: string | undefined, hooks: TaskModeControlHooks): () => void {
+function installControlWatcher(
+	pi: ExtensionAPI,
+	controlDir: string | undefined,
+	hooks: TaskModeControlHooks,
+	unlinkControl: (path: string) => void,
+): () => void {
 	if (!controlDir) return () => undefined;
 	let stopped = false;
 	let timer: ReturnType<typeof setInterval> | undefined;
+	// Canonicalize exactly once: the registry key, readdir, and every
+	// close/steer member path share this one spelling, so an equivalent
+	// relative/trailing-separator control-dir spelling cannot merge a bucket key
+	// while diverging member paths.
+	const canonicalControlDir = resolve(controlDir);
+	// Submission ownership lives in the process-wide submitted-controls registry,
+	// so watcher recreation and sibling module instances keep it. Ordinary stops
+	// deliberately clear nothing here: clearing would let a recreated watcher
+	// resubmit a control Pi already owns when only the ack unlink was still
+	// failing.
+
 	const stop = (): void => {
 		stopped = true;
 		if (timer) {
@@ -263,7 +361,32 @@ function installControlWatcher(pi: ExtensionAPI, controlDir: string | undefined,
 		}
 	};
 
-	const injectSteer = (file: string): void => {
+	/** Acknowledgement cleanup: unlink the consumed control, never resubmit. */
+	const discardSubmittedControl = (file: string): void => {
+		try {
+			unlinkControl(file);
+			clearSubmittedControl(canonicalControlDir, file);
+			diagLog("steer_ack_unlinked", { file });
+		} catch (error) {
+			if (isEnoent(error)) {
+				// The control is already absent: the consumption acknowledgement is
+				// complete. Ownership clears and nothing is retained or retried.
+				clearSubmittedControl(canonicalControlDir, file);
+				diagLog("steer_ack_already_unlinked", { file });
+				return;
+			}
+			// Truthful ack-cleanup diagnostic — the submission itself succeeded and
+			// must not be retried; only the unlink is pending.
+			diagLog("steer_ack_unlink_failed", { file, message: errorMessage(error) });
+		}
+	};
+
+	const submitSteer = (file: string): void => {
+		if (isControlSubmitted(canonicalControlDir, file)) {
+			// Submission already handed this control to Pi. Retry the unlink only.
+			discardSubmittedControl(file);
+			return;
+		}
 		let text: string;
 		try {
 			text = readFileSync(file, "utf8");
@@ -272,26 +395,49 @@ function installControlWatcher(pi: ExtensionAPI, controlDir: string | undefined,
 			return;
 		}
 		if (!text.trim()) {
-			// Empty writes carry nothing to inject; deleting them still acks the
-			// orchestrator's poll so it does not wait out its full budget.
+			// Legacy blank control: nothing to submit, so no Pi call and no
+			// submission diagnostic. Deletion still records consumption so the
+			// orchestrator does not wait out its full budget.
 			try {
-				unlinkSync(file);
+				unlinkControl(file);
+				diagLog("steer_blank_consumed", { file });
 			} catch {
 				// nothing to salvage from an unreadable empty file
 			}
 			return;
 		}
+		hooks.cancelCountdown();
 		try {
-			hooks.cancelCountdown();
-			// The pinned Pi triggers a turn on its own when idle; while streaming
-			// the steer queues for delivery after the current turn's tool calls.
+			// ExtensionAPI.sendUserMessage returns void (unlike the internal
+			// ReplacedSessionContext method). A true acceptance ACK requires an
+			// upstream awaitable result or callback; this call can observe only a
+			// synchronous throw. Do not add a cosmetic await here.
 			pi.sendUserMessage(text, { deliverAs: "steer" });
-			// Unlink is the ack the orchestrator's send poll waits for.
-			unlinkSync(file);
-			diagLog("steer_injected", { file, bytes: text.length });
 		} catch (error) {
-			// One bad file must not wedge the watcher; the next tick retries.
-			diagLog("steer_inject_failed", { file, message: errorMessage(error) });
+			// A synchronous throw means Pi does not own the request: preserve the
+			// file so a later poll can retry the submission.
+			diagLog("steer_submit_failed", { file, message: errorMessage(error) });
+			return;
+		}
+		// Submission succeeded — record ownership process-wide so no watcher in
+		// any module instance ever resubmits it, even across session recreation
+		// while the ack unlink keeps failing.
+		submittedControlsFor(canonicalControlDir).add(file);
+		try {
+			// Unlink tells the parent that the watcher consumed the control and the
+			// synchronous submission did not throw. It is not model-turn delivery.
+			unlinkControl(file);
+			clearSubmittedControl(canonicalControlDir, file);
+			diagLog("steer_submitted", { file, bytes: text.length });
+		} catch (error) {
+			if (isEnoent(error)) {
+				// Removed between the read and this unlink: the consumption
+				// acknowledgement is already complete; ownership clears, nothing retries.
+				clearSubmittedControl(canonicalControlDir, file);
+				diagLog("steer_ack_already_unlinked", { file, bytes: text.length });
+				return;
+			}
+			diagLog("steer_ack_unlink_failed", { file, message: errorMessage(error) });
 		}
 	};
 
@@ -302,11 +448,10 @@ function installControlWatcher(pi: ExtensionAPI, controlDir: string | undefined,
 			// session_start has not fired, i.e. the extension runtime is still
 			// loading — and both `sendUserMessage` and `shutdown` throw during
 			// loading ("Extension runtime not initialized"). Ticking anyway burns
-			// the steer file's first delivery attempt and pushes the real
-			// injection past the orchestrator's ack budget, so a delivered steer
-			// gets reported to the parent as a failure. Retry next tick instead.
+			// the first submission attempt and can push control consumption past the
+			// parent's acknowledgement budget. Retry next tick instead.
 			if (!ctx) return;
-			if (existsSync(join(controlDir, CLOSE_REQUEST_FILE))) {
+			if (existsSync(join(canonicalControlDir, CLOSE_REQUEST_FILE))) {
 				diagLog("close_requested");
 				hooks.cancelCountdown();
 				stop();
@@ -315,7 +460,7 @@ function installControlWatcher(pi: ExtensionAPI, controlDir: string | undefined,
 			}
 			let entries: string[];
 			try {
-				entries = readdirSync(controlDir);
+				entries = readdirSync(canonicalControlDir);
 			} catch {
 				// The parent creates the dir at spawn, but the child can boot
 				// first — tolerate a missing dir until it appears.
@@ -323,7 +468,7 @@ function installControlWatcher(pi: ExtensionAPI, controlDir: string | undefined,
 			}
 			const seqOf = (name: string): number => Number(name.match(STEER_FILE_PATTERN)?.[1] ?? Number.MAX_SAFE_INTEGER);
 			const steerFiles = entries.filter((entry) => STEER_FILE_PATTERN.test(entry)).sort((a, b) => seqOf(a) - seqOf(b));
-			for (const name of steerFiles) injectSteer(join(controlDir, name));
+			for (const name of steerFiles) submitSteer(join(canonicalControlDir, name));
 		} catch (error) {
 			diagLog("control_poll_failed", { message: errorMessage(error) });
 		}
@@ -425,7 +570,7 @@ export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoE
 			}
 			shutdownNow(ctx);
 		},
-	});
+	}, options.unlink ?? unlinkSync);
 
 	pi.on("session_start", (_event, ctx) => {
 		latestCtx = ctx;

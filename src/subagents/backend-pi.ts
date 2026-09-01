@@ -24,7 +24,13 @@ const isString = <T>(value: T): value is T & string => typeof value === "string"
 // SAFETY: every entry is a literal from the BuiltInToolName union.
 const DEFAULT_BUILT_IN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const satisfies readonly BuiltInToolName[];
 const PREVIEW_MAX = 160;
+const TOOL_IDENTIFIER_MAX_BYTES = 256;
 const ERROR_MAX = 4096;
+
+const boundedToolIdentifier = <T>(value: T, fallback = "tool"): string => {
+	const head = new BoundedUtf8Head(TOOL_IDENTIFIER_MAX_BYTES);
+	return head.append(isString(value) ? value : fallback) || fallback;
+};
 
 const CLAUDE_OAUTH_ADAPTER_PACKAGE = "pi-claude-oauth-adapter";
 const MULTI_ACCOUNT_ADAPTER_SOURCE = "git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account";
@@ -367,23 +373,23 @@ const mapPiEvent = (event: ParsedJsonLine): SubagentEvent[] => {
 	if (typeText === "tool_execution_start") {
 		return [{
 			kind: "tool-start",
-			toolId: isString(event.toolCallId) ? event.toolCallId : `${event.toolName ?? "tool"}`,
-			name: isString(event.toolName) ? event.toolName : "tool",
+			toolId: boundedToolIdentifier(event.toolCallId, boundedToolIdentifier(event.toolName)),
+			name: boundedToolIdentifier(event.toolName),
 			argsPreview: safeToolArgumentsPreview(event.args),
 		}];
 	}
 	if (typeText === "tool_execution_update") {
 		return [{
 			kind: "tool-update",
-			toolId: isString(event.toolCallId) ? event.toolCallId : `${event.toolName ?? "tool"}`,
+			toolId: boundedToolIdentifier(event.toolCallId, boundedToolIdentifier(event.toolName)),
 			outputPreview: sanitizePreview(stringifyToolOutput(event.partialResult)),
 		}];
 	}
 	if (typeText === "tool_execution_end") {
 		return [{
 			kind: "tool-end",
-			toolId: isString(event.toolCallId) ? event.toolCallId : `${event.toolName ?? "tool"}`,
-			name: isString(event.toolName) ? event.toolName : "tool",
+			toolId: boundedToolIdentifier(event.toolCallId, boundedToolIdentifier(event.toolName)),
+			name: boundedToolIdentifier(event.toolName),
 			isError: event.isError === true,
 			outputPreview: sanitizePreview(stringifyToolOutput(event.result)),
 		}];

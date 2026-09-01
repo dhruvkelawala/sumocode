@@ -993,7 +993,9 @@ const stringifyToolOutput = (value: unknown): string | undefined => {
 const toolArgsText = (args: ToolCallItem["args"]): string => typeof args === "string" ? args : JSON.stringify(args);
 
 const upsertToolEvent = (result: SingleResult, event: ToolCallUpdate): void => {
-	const key = event.id ?? `${event.name}:${JSON.stringify(event.args ?? {})}`;
+	const id = boundedMetadataText(event.id, RETAINED_NAME_MAX_BYTES) || undefined;
+	const name = boundedMetadataText(event.name, RETAINED_NAME_MAX_BYTES) || "tool";
+	const key = id ?? `${name}:${JSON.stringify(event.args ?? {})}`;
 	const index = result.toolEvents.findIndex((item) => (item.id ?? `${item.name}:${toolArgsText(item.args)}`) === key);
 	const previous = index === -1 ? undefined : result.toolEvents[index];
 	const rawArgs = event.args ?? previous?.args ?? {};
@@ -1006,8 +1008,8 @@ const upsertToolEvent = (result: SingleResult, event: ToolCallUpdate): void => {
 	);
 	const args = typeof rawArgs !== "string" && argsText === nextArgsText ? rawArgs : argsText;
 	const retained: ToolCallItem = {
-		id: boundedMetadataText(event.id ?? previous?.id, RETAINED_NAME_MAX_BYTES) || undefined,
-		name: boundedMetadataText(event.name || previous?.name, RETAINED_NAME_MAX_BYTES) || "tool",
+		id: id ?? previous?.id,
+		name,
 		args,
 		status: event.status,
 		output,

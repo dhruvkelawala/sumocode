@@ -3834,7 +3834,9 @@ var stringifyToolOutput = (value) => {
 };
 var toolArgsText = (args) => typeof args === "string" ? args : JSON.stringify(args);
 var upsertToolEvent = (result, event) => {
-  const key = event.id ?? `${event.name}:${JSON.stringify(event.args ?? {})}`;
+  const id = boundedMetadataText(event.id, RETAINED_NAME_MAX_BYTES) || void 0;
+  const name = boundedMetadataText(event.name, RETAINED_NAME_MAX_BYTES) || "tool";
+  const key = id ?? `${name}:${JSON.stringify(event.args ?? {})}`;
   const index = result.toolEvents.findIndex((item) => (item.id ?? `${item.name}:${toolArgsText(item.args)}`) === key);
   const previous = index === -1 ? void 0 : result.toolEvents[index];
   const rawArgs = event.args ?? previous?.args ?? {};
@@ -3847,8 +3849,8 @@ var upsertToolEvent = (result, event) => {
   );
   const args = typeof rawArgs !== "string" && argsText === nextArgsText ? rawArgs : argsText;
   const retained = {
-    id: boundedMetadataText(event.id ?? previous?.id, RETAINED_NAME_MAX_BYTES) || void 0,
-    name: boundedMetadataText(event.name || previous?.name, RETAINED_NAME_MAX_BYTES) || "tool",
+    id: id ?? previous?.id,
+    name,
     args,
     status: event.status,
     output
@@ -15969,7 +15971,12 @@ var CHILD_MODEL_ID_ENV = "SUMOCODE_CHILD_MODEL_ID";
 var isString5 = (value) => typeof value === "string";
 var DEFAULT_BUILT_IN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 var PREVIEW_MAX2 = 160;
+var TOOL_IDENTIFIER_MAX_BYTES = 256;
 var ERROR_MAX = 4096;
+var boundedToolIdentifier = (value, fallback = "tool") => {
+  const head = new BoundedUtf8Head(TOOL_IDENTIFIER_MAX_BYTES);
+  return head.append(isString5(value) ? value : fallback) || fallback;
+};
 var CLAUDE_OAUTH_ADAPTER_PACKAGE = "pi-claude-oauth-adapter";
 var MULTI_ACCOUNT_ADAPTER_SOURCE = "git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account";
 var NUMBERED_ANTHROPIC_PROVIDER = /^anthropic-\d+$/;
@@ -16199,23 +16206,23 @@ var mapPiEvent = (event) => {
   if (typeText === "tool_execution_start") {
     return [{
       kind: "tool-start",
-      toolId: isString5(event.toolCallId) ? event.toolCallId : `${event.toolName ?? "tool"}`,
-      name: isString5(event.toolName) ? event.toolName : "tool",
+      toolId: boundedToolIdentifier(event.toolCallId, boundedToolIdentifier(event.toolName)),
+      name: boundedToolIdentifier(event.toolName),
       argsPreview: safeToolArgumentsPreview(event.args)
     }];
   }
   if (typeText === "tool_execution_update") {
     return [{
       kind: "tool-update",
-      toolId: isString5(event.toolCallId) ? event.toolCallId : `${event.toolName ?? "tool"}`,
+      toolId: boundedToolIdentifier(event.toolCallId, boundedToolIdentifier(event.toolName)),
       outputPreview: sanitizePreview(stringifyToolOutput2(event.partialResult))
     }];
   }
   if (typeText === "tool_execution_end") {
     return [{
       kind: "tool-end",
-      toolId: isString5(event.toolCallId) ? event.toolCallId : `${event.toolName ?? "tool"}`,
-      name: isString5(event.toolName) ? event.toolName : "tool",
+      toolId: boundedToolIdentifier(event.toolCallId, boundedToolIdentifier(event.toolName)),
+      name: boundedToolIdentifier(event.toolName),
       isError: event.isError === true,
       outputPreview: sanitizePreview(stringifyToolOutput2(event.result))
     }];

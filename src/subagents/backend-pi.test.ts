@@ -197,6 +197,28 @@ describe("spawnPiChild", () => {
 		]);
 	});
 
+	it("bounds tool-event identifiers before manager retention", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		const hugeId = "i".repeat(1024 * 1024);
+		const hugeName = "n".repeat(1024 * 1024);
+
+		emitJson(proc, { type: "tool_execution_start", toolCallId: hugeId, toolName: hugeName, args: { path: "README.md" } });
+		emitJson(proc, { type: "tool_execution_update", toolCallId: hugeId, toolName: hugeName, partialResult: "working" });
+		emitJson(proc, { type: "tool_execution_end", toolCallId: hugeId, toolName: hugeName, result: "done", isError: false });
+
+		const toolEvents = events.filter((event) => event.kind === "tool-start" || event.kind === "tool-update" || event.kind === "tool-end");
+		expect(toolEvents).toHaveLength(3);
+		expect(new Set(toolEvents.map((event) => event.toolId)).size).toBe(1);
+		for (const event of toolEvents) expect(Buffer.byteLength(event.toolId, "utf8")).toBeLessThanOrEqual(256);
+		for (const event of toolEvents) {
+			if (event.kind !== "tool-update") expect(Buffer.byteLength(event.name, "utf8")).toBeLessThanOrEqual(256);
+		}
+	});
+
 	it("bounds live assistant deltas without waiting for message_end", () => {
 		const proc = new FakeProcess();
 		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.

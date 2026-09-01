@@ -681,6 +681,25 @@ describe("native task tool", () => {
 		expect(result.messages?.[0]?.addedToolNames?.[0]?.length).toBeLessThanOrEqual(256);
 	});
 
+	it("uses bounded tool identifiers as stable update keys", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		const hugeId = "i".repeat(1024 * 1024);
+		const hugeName = "n".repeat(1024 * 1024);
+
+		emitTaskEvent(proc, { type: "tool_execution_start", toolCallId: hugeId, toolName: hugeName, args: { path: "README.md" } });
+		emitTaskEvent(proc, { type: "tool_execution_update", toolCallId: hugeId, toolName: hugeName, partialResult: "working" });
+		emitTaskEvent(proc, { type: "tool_execution_end", toolCallId: hugeId, toolName: hugeName, result: "done", isError: false });
+		proc.emit("close", 0);
+
+		const toolResult = await running;
+		const events = toolResult.details?.results?.[0]?.toolEvents ?? [];
+		expect(events).toHaveLength(1);
+		expect(events[0]).toMatchObject({ status: "success", output: "done" });
+		expect(Buffer.byteLength(events[0]?.id ?? "", "utf8")).toBeLessThanOrEqual(256);
+		expect(Buffer.byteLength(events[0]?.name ?? "", "utf8")).toBeLessThanOrEqual(256);
+	});
+
 	it("prioritizes a useful marked final answer and reclaims exhausted prior text", async () => {
 		const proc = new FakeTaskProcess();
 		const running = registeredTask(proc).execute();

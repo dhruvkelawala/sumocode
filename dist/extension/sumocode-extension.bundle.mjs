@@ -3131,6 +3131,38 @@ var loadSkillDiscovery = (cwd) => {
 var applyPromptPatches = (prompt, patches) => {
   return patches.reduce((value, patch) => value.replace(patch.match, patch.replace), prompt);
 };
+var RunPayloadBudget = class {
+  retainedBytes = 0;
+  markerBytes = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
+  truncated = false;
+  retain(text) {
+    if (text.length === 0 || this.truncated) return "";
+    const textBytes = Buffer.byteLength(text, "utf8");
+    const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - this.markerBytes - this.retainedBytes;
+    if (textBytes <= contentBytesLeft) {
+      this.retainedBytes += textBytes;
+      return text;
+    }
+    const retained = boundRetainedResult(text, Math.max(this.markerBytes, CHILD_RETAINED_RESULT_MAX_BYTES - this.retainedBytes));
+    this.retainedBytes += Buffer.byteLength(retained, "utf8");
+    this.truncated = true;
+    return retained;
+  }
+  replace(previous, next) {
+    if (this.truncated) return previous;
+    if (previous !== void 0) this.retainedBytes -= Buffer.byteLength(previous, "utf8");
+    return this.retain(next);
+  }
+};
+var runPayloadBudgets = /* @__PURE__ */ new WeakMap();
+var getRunPayloadBudget = (result) => {
+  let budget = runPayloadBudgets.get(result);
+  if (!budget) {
+    budget = new RunPayloadBudget();
+    runPayloadBudgets.set(result, budget);
+  }
+  return budget;
+};
 var createForkSession = async (sessionFile) => {
   const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-task-tool-"));
   const seedPath = path.join(tmpDir, "seed.jsonl");
@@ -3249,6 +3281,9 @@ var getFinalOutput = (messages) => {
   }
   return "";
 };
+var getFinalResultOutput = (result) => {
+  return getFinalOutput(result.messages) || (result.payloadTruncated ? TRUNCATED_HEAD_MARKER.trim() : "");
+};
 var indentLine = (text, indent) => `${" ".repeat(indent)}${text}`;
 var indentText = (text, indent) => {
   return text.split("\n").map((line) => indentLine(line, indent)).join("\n");
@@ -3310,7 +3345,7 @@ var getToolCallLines = (result, theme) => {
 };
 var getTaskOutputText = (result) => {
   if (isTaskError(result)) return getTaskErrorText(result);
-  return getFinalOutput(result.messages);
+  return getFinalResultOutput(result);
 };
 var formatFinalOutputText = (result) => {
   const output = getTaskOutputText(result).trim();
@@ -3453,7 +3488,7 @@ var isTaskError = (result) => {
   return result.exitCode > 0 || result.stopReason === "error" || result.stopReason === "aborted";
 };
 var getTaskErrorText = (result) => {
-  return result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
+  return result.errorMessage || result.stderr || getFinalResultOutput(result) || "(no output)";
 };
 var attachAbortSignal = (proc, signal) => {
   let aborted = false;
@@ -3516,16 +3551,30 @@ var applyAssistantUsage = (result, message) => {
   result.usage.contextTokens = usage.totalTokens ?? 0;
 };
 var handleEventMessage = (result, message) => {
-  if (message.role !== "assistant") {
-    result.messages.push(message);
+  const budget = getRunPayloadBudget(result);
+  if (message.role === "user") {
+    result.messages.push({
+      ...message,
+      content: typeof message.content === "string" ? budget.retain(message.content) : message.content.map((part) => part.type === "text" ? { ...part, text: budget.retain(part.text) } : part)
+    });
+    result.payloadTruncated = budget.truncated || void 0;
+    return;
+  }
+  if (message.role === "toolResult") {
+    result.messages.push({
+      ...message,
+      content: message.content.map((part) => part.type === "text" ? { ...part, text: budget.retain(part.text) } : part)
+    });
+    result.payloadTruncated = budget.truncated || void 0;
     return;
   }
   const retained = {
     ...message,
-    content: message.content.map((part) => part.type === "text" ? { ...part, text: boundRetainedResult(part.text) } : part),
-    errorMessage: message.errorMessage ? boundRetainedResult(message.errorMessage) : void 0
+    content: message.content.map((part) => part.type === "text" ? { ...part, text: budget.retain(part.text) } : part),
+    errorMessage: message.errorMessage ? budget.retain(message.errorMessage) : void 0
   };
   result.messages.push(retained);
+  result.payloadTruncated = budget.truncated || void 0;
   applyAssistantUsage(result, retained);
   if (!result.model && retained.model) result.model = retained.model;
   if (retained.stopReason) result.stopReason = retained.stopReason;
@@ -3575,11 +3624,13 @@ var stringifyToolOutput = (value) => {
 var upsertToolEvent = (result, event) => {
   const key = event.id ?? `${event.name}:${JSON.stringify(event.args)}`;
   const index = result.toolEvents.findIndex((item) => (item.id ?? `${item.name}:${JSON.stringify(item.args)}`) === key);
-  if (index === -1) {
-    result.toolEvents.push(event);
-    return;
-  }
-  result.toolEvents[index] = { ...result.toolEvents[index], ...event };
+  const previous = index === -1 ? void 0 : result.toolEvents[index];
+  const budget = getRunPayloadBudget(result);
+  const output = event.output === void 0 ? previous?.output : budget.replace(previous?.output, event.output);
+  const retained = { ...previous, ...event, output };
+  if (index === -1) result.toolEvents.push(retained);
+  else result.toolEvents[index] = retained;
+  result.payloadTruncated = budget.truncated || void 0;
 };
 var mapWithConcurrencyLimit = async (items, concurrency, fn) => {
   if (items.length === 0) return [];
@@ -3610,7 +3661,7 @@ var runSingleTask = async (options) => {
     thinking: options.thinking,
     fork: options.fork
   };
-  const streamingText = new BoundedUtf8Head();
+  let streamingText = new BoundedUtf8Head();
   const stderr = new BoundedUtf8Tail();
   const emitUpdate = () => {
     if (!options.onResultUpdate) return;
@@ -3685,6 +3736,10 @@ var runSingleTask = async (options) => {
         }
         const messageValue = event.message;
         if ((typeText === "message_end" || typeText === "tool_result_end") && isMessage(messageValue)) {
+          if (messageValue.role === "assistant") {
+            streamingText = new BoundedUtf8Head();
+            currentResult.streamingText = void 0;
+          }
           handleEventMessage(currentResult, messageValue);
           emitUpdate();
         }
@@ -3879,7 +3934,7 @@ Available skills: ${available.text}${suffix}` }],
           execution.config.modelLabel
         );
         const emitSingleUpdate = onUpdate ? (result2) => onUpdate({
-          content: [{ type: "text", text: getFinalOutput(result2.messages) || "(running...)" }],
+          content: [{ type: "text", text: getFinalResultOutput(result2) || "(running...)" }],
           details: makeDetails([result2])
         }) : void 0;
         emitSingleUpdate?.(initial);
@@ -3906,7 +3961,7 @@ Available skills: ${available.text}${suffix}` }],
           };
         }
         return {
-          content: [{ type: "text", text: getFinalOutput(result.messages) || "(no output)" }],
+          content: [{ type: "text", text: getFinalResultOutput(result) || "(no output)" }],
           details: makeDetails([result])
         };
       }
@@ -3963,7 +4018,7 @@ Available skills: ${available.text}${suffix}` }],
           const chainUpdate = onUpdate ? (partial) => {
             results2[index] = partial;
             onUpdate({
-              content: [{ type: "text", text: getFinalOutput(partial.messages) || "(running...)" }],
+              content: [{ type: "text", text: getFinalResultOutput(partial) || "(running...)" }],
               details: makeDetails([...results2])
             });
           } : void 0;
@@ -3984,7 +4039,7 @@ Available skills: ${available.text}${suffix}` }],
           results2[index] = result;
           if (onUpdate) {
             onUpdate({
-              content: [{ type: "text", text: getFinalOutput(result.messages) || "(no output)" }],
+              content: [{ type: "text", text: getFinalResultOutput(result) || "(no output)" }],
               details: makeDetails([...results2])
             });
           }
@@ -3997,11 +4052,11 @@ Available skills: ${available.text}${suffix}` }],
               isError: true
             };
           }
-          previousOutput = getFinalOutput(result.messages);
+          previousOutput = getFinalResultOutput(result);
         }
         const last = results2[results2.length - 1];
         return {
-          content: [{ type: "text", text: getFinalOutput(last.messages) || "(no output)" }],
+          content: [{ type: "text", text: getFinalResultOutput(last) || "(no output)" }],
           details: makeDetails([...results2])
         };
       }
@@ -4076,7 +4131,7 @@ Available skills: ${available.text}${suffix}` }],
       );
       const successCount = results.filter((result) => !isTaskError(result)).length;
       const summaries = results.map((result) => {
-        const output = getFinalOutput(result.messages);
+        const output = getFinalResultOutput(result);
         const preview = output.slice(0, 100) + (output.length > 100 ? "..." : "");
         return `[${getTaskSummaryLabel(result)}] ${isTaskError(result) ? "failed" : "completed"}: ${preview || "(no output)"}`;
       });

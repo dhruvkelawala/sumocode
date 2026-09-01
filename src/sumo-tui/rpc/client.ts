@@ -18,7 +18,8 @@ type PendingRequest = {
 
 export type RpcEventListener = (event: AgentSessionEvent) => void;
 export type RpcUiRequestHandler = (request: RpcExtensionUIRequest, client: SumoRpcClient) => RpcExtensionUIResponse | void | Promise<RpcExtensionUIResponse | void>;
-export type RpcProtocolErrorHandler = (line: string, error: Error) => void;
+/** Receives a size-only frame summary and a bounded, payload-safe parse error. */
+export type RpcProtocolErrorHandler = (frameSummary: string, error: Error) => void;
 
 /**
  * The RPC child's process exit code/signal, structurally exposed alongside
@@ -66,6 +67,7 @@ export interface SumoRpcClientOptions {
 }
 
 const MAX_CONSECUTIVE_PROTOCOL_ERRORS = 3;
+const JSON_PARSE_REASON_MAX_BYTES = 500;
 const CHILD_STOP_GRACE_MS = 2_000;
 const CHILD_CLOSE_GRACE_MS = 1_000;
 const PRESPAWN_ERROR = Symbol.for("sumocode.rpc.preSpawnError");
@@ -79,6 +81,16 @@ export const NOTIFICATION_STDERR_LIMIT = 500;
 
 function toError(cause: unknown): Error {
 	return cause instanceof Error ? cause : new Error(String(cause));
+}
+
+function safeJsonParseReason(cause: unknown): string {
+	const message = toError(cause).message;
+	if (message.startsWith("Unexpected token")) {
+		const location = message.match(/ at position \d+(?: \(line \d+ column \d+\))?$/)?.[0] ?? "";
+		return `Unexpected token in JSON${location}`;
+	}
+	if (message.includes(" is not valid JSON")) return "Invalid JSON syntax";
+	return boundRetainedResult(message, JSON_PARSE_REASON_MAX_BYTES);
 }
 
 function waitForChildClose(child: ChildProcessWithoutNullStreams): Promise<void> {
@@ -336,13 +348,13 @@ export class SumoRpcClient {
 			// SAFETY: stdout lines are untyped JSON by definition; every consumer
 			// below validates shape via isResponse/isExtensionUiRequest first.
 			parsed = JSON.parse(line) as RpcMessageLike;
-		} catch {
-			const parseError = new Error("Invalid JSON protocol frame");
+		} catch (cause) {
+			const parseError = new Error(`Invalid JSON protocol frame: ${safeJsonParseReason(cause)}`);
 			this.consecutiveProtocolErrors += 1;
 			const frameSummary = `[invalid protocol frame: ${Buffer.byteLength(line, "utf8")} bytes]`;
 			this.options.onProtocolError?.(frameSummary, parseError);
 			if (this.consecutiveProtocolErrors >= MAX_CONSECUTIVE_PROTOCOL_ERRORS) {
-				this.handleExit(new Error(`Failed to parse ${MAX_CONSECUTIVE_PROTOCOL_ERRORS} consecutive RPC lines. ${frameSummary}`));
+				this.handleExit(new Error(`Failed to parse ${MAX_CONSECUTIVE_PROTOCOL_ERRORS} consecutive RPC lines. ${frameSummary}. ${parseError.message}`));
 			}
 			return;
 		}

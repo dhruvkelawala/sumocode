@@ -13,15 +13,41 @@ import {
 } from "./child-protocol.js";
 import { taskTool } from "./native-task-tool.js";
 
+type RetainedContentPart = {
+	type: string;
+	text?: string;
+	data?: string;
+	mimeType?: string;
+	id?: string;
+	name?: string;
+	arguments?: { path: string };
+};
+type RetainedMessage = {
+	role: string;
+	content: string | RetainedContentPart[];
+	toolCallId?: string;
+	details?: { page: number };
+	errorMessage?: string;
+	usage?: { input: number; output: number };
+};
+type RetainedTaskResult = {
+	exitCode: number;
+	messages?: RetainedMessage[];
+	toolEvents?: Array<{ id?: string; status: string; output?: string }>;
+	stderr?: string;
+	streamingText?: string;
+	usage?: { turns: number };
+};
+
 interface TaskUpdate {
 	content?: Array<{ type: string; text: string }>;
-	details: { results: Array<{ exitCode: number; stderr?: string; streamingText?: string }> };
+	details: { results: RetainedTaskResult[] };
 }
 
 interface TaskToolResult {
 	isError?: boolean;
 	content: Array<{ type: string; text: string }>;
-	details?: { mode?: string; results?: Array<{ stderr?: string }> };
+	details?: { mode?: string; results?: RetainedTaskResult[] };
 }
 
 class FakeTaskProcess extends EventEmitter {
@@ -61,6 +87,24 @@ function registeredTask(spawned: FakeTaskProcess) {
 
 function resultExitCodes(update: TaskUpdate): number[] {
 	return update.details.results.map((result) => result.exitCode);
+}
+
+function emitTaskEvent<TEvent extends object>(proc: FakeTaskProcess, event: TEvent): void {
+	proc.stdout.emit("data", `${JSON.stringify(event)}\n`);
+}
+
+function retainedPayloadText(result: RetainedTaskResult): string[] {
+	const text: string[] = [];
+	for (const message of result.messages ?? []) {
+		if (Array.isArray(message.content)) {
+			for (const part of message.content) if (part.type === "text" && part.text !== undefined) text.push(part.text);
+		} else {
+			text.push(message.content);
+		}
+		if (message.errorMessage !== undefined) text.push(message.errorMessage);
+	}
+	for (const event of result.toolEvents ?? []) if (event.output !== undefined) text.push(event.output);
+	return text;
 }
 
 describe("native task tool", () => {
@@ -219,6 +263,115 @@ describe("native task tool", () => {
 		expect(result.isError).toBeUndefined();
 		expect(result.content[0]?.text).toContain(TRUNCATED_HEAD_MARKER);
 		expect(Buffer.byteLength(result.content[0]?.text ?? "")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+	});
+
+	it("shares one UTF-8 payload budget across retained messages and tool updates", async () => {
+		const proc = new FakeTaskProcess();
+		const updates: TaskUpdate[] = [];
+		const running = registeredTask(proc).execute(undefined, (update) => updates.push(update));
+		const multibyteChunk = "界".repeat(100_000);
+		const usage = { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, totalTokens: 10, cost: { total: 0.01 } };
+
+		for (let index = 0; index < 4; index += 1) {
+			emitTaskEvent(proc, {
+				type: "message_end",
+				message: {
+					role: "user",
+					content: [{ type: "text", text: multibyteChunk }, { type: "image", data: `image-${index}`, mimeType: "image/png" }],
+					timestamp: index,
+				},
+			});
+			emitTaskEvent(proc, {
+				type: "tool_result_end",
+				message: {
+					role: "toolResult",
+					toolCallId: `message-tool-${index}`,
+					toolName: "read",
+					content: [{ type: "text", text: multibyteChunk }],
+					details: { page: index },
+					isError: false,
+					timestamp: index,
+				},
+			});
+			emitTaskEvent(proc, {
+				type: "message_end",
+				message: {
+					role: "assistant",
+					content: [
+						{ type: "text", text: multibyteChunk },
+						{ type: "toolCall", id: `assistant-tool-${index}`, name: "read", arguments: { path: `file-${index}` } },
+					],
+					usage,
+					model: "test-model",
+					stopReason: "toolUse",
+					timestamp: index,
+				},
+			});
+		}
+
+		for (let index = 0; index < 3; index += 1) {
+			emitTaskEvent(proc, {
+				type: "tool_execution_update",
+				toolCallId: "event-tool-a",
+				toolName: "read",
+				args: { path: "large-a" },
+				partialResult: "a".repeat(200_000 + index),
+			});
+		}
+		emitTaskEvent(proc, {
+			type: "tool_execution_end",
+			toolCallId: "event-tool-a",
+			toolName: "read",
+			args: { path: "large-a" },
+			result: "a".repeat(200_003),
+			isError: false,
+		});
+		emitTaskEvent(proc, {
+			type: "tool_execution_end",
+			toolCallId: "event-tool-b",
+			toolName: "bash",
+			args: { command: "true" },
+			result: "b".repeat(100_000),
+			isError: false,
+		});
+		emitTaskEvent(proc, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "transient" } });
+		expect(updates.at(-1)?.details.results[0]?.streamingText).toBe("transient");
+		emitTaskEvent(proc, {
+			type: "message_end",
+			message: {
+				role: "assistant",
+				content: [{ type: "text", text: `FINAL:${multibyteChunk}` }],
+				usage,
+				model: "test-model",
+				stopReason: "stop",
+				timestamp: 99,
+			},
+		});
+		proc.emit("close", 0);
+
+		const toolResult = await running;
+		const result = toolResult.details?.results?.[0];
+		expect(result).toBeDefined();
+		if (!result) throw new Error("task result is missing");
+		const payload = retainedPayloadText(result);
+		expect(payload.reduce((bytes, value) => bytes + Buffer.byteLength(value, "utf8"), 0)).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+		expect(payload.join("").split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+		expect(payload.join("")).not.toContain("�");
+		expect(toolResult.content[0]?.text).toMatch(/^FINAL:/);
+		expect(toolResult.content[0]?.text).toContain(TRUNCATED_HEAD_MARKER);
+		expect(result.streamingText).toBeUndefined();
+		expect(result.usage?.turns).toBe(5);
+		const firstMessage = result.messages?.[0];
+		expect(firstMessage?.role).toBe("user");
+		expect(Array.isArray(firstMessage?.content) ? firstMessage.content[1] : undefined).toMatchObject({ type: "image", data: "image-0" });
+		expect(result.messages?.find((message) => message.role === "toolResult")).toMatchObject({
+			toolCallId: "message-tool-0",
+			details: { page: 0 },
+		});
+		expect(result.toolEvents).toMatchObject([
+			{ id: "event-tool-a", status: "success" },
+			{ id: "event-tool-b", status: "success" },
+		]);
 	});
 
 	it("preserves cancellation and clears its force-kill timer on close", async () => {

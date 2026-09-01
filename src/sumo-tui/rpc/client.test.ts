@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
-import { CHILD_JSON_FRAME_MAX_BYTES } from "../../child-protocol.js";
+import { CHILD_JSON_FRAME_MAX_BYTES, TRUNCATED_HEAD_MARKER } from "../../child-protocol.js";
 import { RpcChildExitError, SumoRpcClient, type SumoRpcClientOptions } from "./client.js";
 
 function nodeRpcClient(script: string, options: Partial<Omit<SumoRpcClientOptions, "command" | "args">> = {}): SumoRpcClient {
@@ -503,8 +503,8 @@ describe("SumoRpcClient", () => {
 		expect(() => process.kill(pid!, 0)).toThrow();
 	});
 
-	it("tolerates one malformed protocol line between valid responses", async () => {
-		const protocolErrors: Array<{ line: string; message: string }> = [];
+	it("reports a size-only malformed-frame summary with a safe parse reason", async () => {
+		const protocolErrors: Array<{ summary: string; message: string }> = [];
 		const script = `
 			const readline = require("node:readline");
 			const rl = readline.createInterface({ input: process.stdin });
@@ -527,7 +527,7 @@ describe("SumoRpcClient", () => {
 			});
 		`;
 		const client = nodeRpcClient(script, {
-			onProtocolError: (line, error) => protocolErrors.push({ line, message: error.message }),
+			onProtocolError: (frameSummary, error) => protocolErrors.push({ summary: frameSummary, message: error.message }),
 		});
 		try {
 			await client.start();
@@ -535,12 +535,61 @@ describe("SumoRpcClient", () => {
 
 			expect(response).toMatchObject({ command: "get_state", success: true });
 			expect(protocolErrors).toHaveLength(1);
-			expect(protocolErrors[0]?.line).toBe("[invalid protocol frame: 21 bytes]");
-			expect(protocolErrors[0]?.line).not.toContain("stray extension noise");
-			expect(protocolErrors[0]?.message).toBe("Invalid JSON protocol frame");
+			expect(protocolErrors[0]?.summary).toBe("[invalid protocol frame: 21 bytes]");
+			expect(protocolErrors[0]?.summary).not.toContain("stray extension noise");
+			expect(protocolErrors[0]?.message).toBe("Invalid JSON protocol frame: Unexpected token in JSON");
+			expect(protocolErrors[0]?.message).not.toContain("stray extension noise");
 		} finally {
 			await client.stop();
 		}
+	});
+
+	it("bounds the JSON parse reason retained in protocol errors", async () => {
+		const child = new FakeRpcChild();
+		const errors: Error[] = [];
+		const client = new SumoRpcClient({
+			command: "unused",
+			args: [],
+			preSpawnedChild: asPreSpawnedChild(child),
+			onProtocolError: (_frameSummary, error) => errors.push(error),
+		});
+		await client.start();
+		const parse = vi.spyOn(JSON, "parse").mockImplementationOnce(() => {
+			throw new SyntaxError(`synthetic reason ${"x".repeat(1_000)}`);
+		});
+		try {
+			child.stdout.emit("data", "malformed\n");
+		} finally {
+			parse.mockRestore();
+		}
+
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.message).toContain(TRUNCATED_HEAD_MARKER);
+		expect(Buffer.byteLength(errors[0]?.message ?? "", "utf8")).toBeLessThanOrEqual(
+			Buffer.byteLength("Invalid JSON protocol frame: ", "utf8") + 500,
+		);
+		await client.stop();
+	});
+
+	it("never echoes malformed producer content in protocol diagnostics", async () => {
+		const child = new FakeRpcChild();
+		const protocolErrors: Array<{ summary: string; message: string }> = [];
+		const client = new SumoRpcClient({
+			command: "unused",
+			args: [],
+			preSpawnedChild: asPreSpawnedChild(child),
+			onProtocolError: (frameSummary, error) => protocolErrors.push({ summary: frameSummary, message: error.message }),
+		});
+		await client.start();
+
+		child.stdout.emit("data", "TOP_SECRET_payload_is_not_json\n");
+
+		expect(protocolErrors).toEqual([{
+			summary: "[invalid protocol frame: 30 bytes]",
+			message: "Invalid JSON protocol frame: Unexpected token in JSON",
+		}]);
+		expect(JSON.stringify(protocolErrors)).not.toContain("TOP_SECRET");
+		await client.stop();
 	});
 
 	it("kills the child after three consecutive malformed protocol lines", async () => {
@@ -559,7 +608,9 @@ describe("SumoRpcClient", () => {
 		const child = clientChild(client);
 		const killSpy = vi.spyOn(child, "kill");
 
-		await expect(client.send({ type: "get_state" })).rejects.toThrow("Failed to parse 3 consecutive RPC lines");
+		await expect(client.send({ type: "get_state" })).rejects.toThrow(
+			"Failed to parse 3 consecutive RPC lines. [invalid protocol frame: 9 bytes]. Invalid JSON protocol frame: Unexpected token in JSON",
+		);
 		expect(killSpy).toHaveBeenCalledWith("SIGTERM");
 		await waitFor(() => child.exitCode !== null || child.signalCode !== null);
 	});

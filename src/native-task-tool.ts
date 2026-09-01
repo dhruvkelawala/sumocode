@@ -17,7 +17,14 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { BoundedUtf8Head, BoundedUtf8Tail, JsonLineDecoder, boundRetainedResult } from "./child-protocol.js";
+import {
+	BoundedUtf8Head,
+	BoundedUtf8Tail,
+	CHILD_RETAINED_RESULT_MAX_BYTES,
+	JsonLineDecoder,
+	TRUNCATED_HEAD_MARKER,
+	boundRetainedResult,
+} from "./child-protocol.js";
 import { type BuiltInToolName, getBuiltInToolsFromActiveTools, resolveTaskConfig } from "./native-task-config.js";
 import {
 	isRecord,
@@ -101,7 +108,48 @@ type SingleResult = {
 	fork?: boolean;
 	stopReason?: string;
 	errorMessage?: string;
+	payloadTruncated?: boolean;
 	index?: number;
+};
+
+/** Owns the human-readable text retained by one child run. */
+class RunPayloadBudget {
+	private retainedBytes = 0;
+	private readonly markerBytes = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
+	public truncated = false;
+
+	public retain(text: string): string {
+		if (text.length === 0 || this.truncated) return "";
+		const textBytes = Buffer.byteLength(text, "utf8");
+		// Reserve the marker so a later frame can stop retention without revisiting prior fields.
+		const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - this.markerBytes - this.retainedBytes;
+		if (textBytes <= contentBytesLeft) {
+			this.retainedBytes += textBytes;
+			return text;
+		}
+
+		const retained = boundRetainedResult(text, Math.max(this.markerBytes, CHILD_RETAINED_RESULT_MAX_BYTES - this.retainedBytes));
+		this.retainedBytes += Buffer.byteLength(retained, "utf8");
+		this.truncated = true;
+		return retained;
+	}
+
+	public replace(previous: string | undefined, next: string): string | undefined {
+		if (this.truncated) return previous;
+		if (previous !== undefined) this.retainedBytes -= Buffer.byteLength(previous, "utf8");
+		return this.retain(next);
+	}
+}
+
+const runPayloadBudgets = new WeakMap<SingleResult, RunPayloadBudget>();
+
+const getRunPayloadBudget = (result: SingleResult): RunPayloadBudget => {
+	let budget = runPayloadBudgets.get(result);
+	if (!budget) {
+		budget = new RunPayloadBudget();
+		runPayloadBudgets.set(result, budget);
+	}
+	return budget;
 };
 
 type TaskToolDetails = {
@@ -289,6 +337,10 @@ const getFinalOutput = (messages: Message[]): string => {
 	return "";
 };
 
+const getFinalResultOutput = (result: SingleResult): string => {
+	return getFinalOutput(result.messages) || (result.payloadTruncated ? TRUNCATED_HEAD_MARKER.trim() : "");
+};
+
 const indentLine = (text: string, indent: number): string => `${" ".repeat(indent)}${text}`;
 
 const indentText = (text: string, indent: number): string => {
@@ -360,7 +412,7 @@ const getToolCallLines = (result: SingleResult, theme: Theme): string[] => {
 
 const getTaskOutputText = (result: SingleResult): string => {
 	if (isTaskError(result)) return getTaskErrorText(result);
-	return getFinalOutput(result.messages);
+	return getFinalResultOutput(result);
 };
 
 const formatFinalOutputText = (result: SingleResult): string => {
@@ -533,7 +585,7 @@ const isTaskError = (result: SingleResult): boolean => {
 };
 
 const getTaskErrorText = (result: SingleResult): string => {
-	return result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
+	return result.errorMessage || result.stderr || getFinalResultOutput(result) || "(no output)";
 };
 
 type AbortGuard = {
@@ -611,16 +663,32 @@ const applyAssistantUsage = (result: SingleResult, message: AssistantMessage): v
 };
 
 const handleEventMessage = (result: SingleResult, message: Message): void => {
-	if (message.role !== "assistant") {
-		result.messages.push(message);
+	const budget = getRunPayloadBudget(result);
+	if (message.role === "user") {
+		result.messages.push({
+			...message,
+			content: typeof message.content === "string"
+				? budget.retain(message.content)
+				: message.content.map((part) => part.type === "text" ? { ...part, text: budget.retain(part.text) } : part),
+		});
+		result.payloadTruncated = budget.truncated || undefined;
+		return;
+	}
+	if (message.role === "toolResult") {
+		result.messages.push({
+			...message,
+			content: message.content.map((part) => part.type === "text" ? { ...part, text: budget.retain(part.text) } : part),
+		});
+		result.payloadTruncated = budget.truncated || undefined;
 		return;
 	}
 	const retained: AssistantMessage = {
 		...message,
-		content: message.content.map((part) => part.type === "text" ? { ...part, text: boundRetainedResult(part.text) } : part),
-		errorMessage: message.errorMessage ? boundRetainedResult(message.errorMessage) : undefined,
+		content: message.content.map((part) => part.type === "text" ? { ...part, text: budget.retain(part.text) } : part),
+		errorMessage: message.errorMessage ? budget.retain(message.errorMessage) : undefined,
 	};
 	result.messages.push(retained);
+	result.payloadTruncated = budget.truncated || undefined;
 	applyAssistantUsage(result, retained);
 	if (!result.model && retained.model) result.model = retained.model;
 	if (retained.stopReason) result.stopReason = retained.stopReason;
@@ -685,11 +753,13 @@ const stringifyToolOutput = (value: unknown): string | undefined => {
 const upsertToolEvent = (result: SingleResult, event: ToolCallItem): void => {
 	const key = event.id ?? `${event.name}:${JSON.stringify(event.args)}`;
 	const index = result.toolEvents.findIndex((item) => (item.id ?? `${item.name}:${JSON.stringify(item.args)}`) === key);
-	if (index === -1) {
-		result.toolEvents.push(event);
-		return;
-	}
-	result.toolEvents[index] = { ...result.toolEvents[index], ...event };
+	const previous = index === -1 ? undefined : result.toolEvents[index];
+	const budget = getRunPayloadBudget(result);
+	const output = event.output === undefined ? previous?.output : budget.replace(previous?.output, event.output);
+	const retained = { ...previous, ...event, output };
+	if (index === -1) result.toolEvents.push(retained);
+	else result.toolEvents[index] = retained;
+	result.payloadTruncated = budget.truncated || undefined;
 };
 
 const mapWithConcurrencyLimit = async <TIn, TOut>(
@@ -742,7 +812,7 @@ const runSingleTask = async (options: {
 		fork: options.fork,
 	};
 
-	const streamingText = new BoundedUtf8Head();
+	let streamingText = new BoundedUtf8Head();
 	const stderr = new BoundedUtf8Tail();
 	const emitUpdate = () => {
 		if (!options.onResultUpdate) return;
@@ -823,6 +893,10 @@ const runSingleTask = async (options: {
 				}
 				const messageValue = event.message;
 				if ((typeText === "message_end" || typeText === "tool_result_end") && isMessage(messageValue)) {
+					if (messageValue.role === "assistant") {
+						streamingText = new BoundedUtf8Head();
+						currentResult.streamingText = undefined;
+					}
 					handleEventMessage(currentResult, messageValue);
 					emitUpdate();
 				}
@@ -1041,7 +1115,7 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS, spawnImpl: 
 				);
 				const emitSingleUpdate = onUpdate
 					? (result: SingleResult) => onUpdate({
-							content: [{ type: "text", text: getFinalOutput(result.messages) || "(running...)" }],
+							content: [{ type: "text", text: getFinalResultOutput(result) || "(running...)" }],
 							details: makeDetails([result]),
 						})
 					: undefined;
@@ -1072,7 +1146,7 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS, spawnImpl: 
 				}
 
 				return {
-					content: [{ type: "text", text: getFinalOutput(result.messages) || "(no output)" }],
+					content: [{ type: "text", text: getFinalResultOutput(result) || "(no output)" }],
 					details: makeDetails([result]),
 				};
 			}
@@ -1136,7 +1210,7 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS, spawnImpl: 
 						? (partial: SingleResult) => {
 								results[index] = partial;
 								onUpdate({
-									content: [{ type: "text", text: getFinalOutput(partial.messages) || "(running...)" }],
+									content: [{ type: "text", text: getFinalResultOutput(partial) || "(running...)" }],
 									details: makeDetails([...results]),
 								});
 							}
@@ -1159,7 +1233,7 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS, spawnImpl: 
 					results[index] = result;
 					if (onUpdate) {
 						onUpdate({
-							content: [{ type: "text", text: getFinalOutput(result.messages) || "(no output)" }],
+							content: [{ type: "text", text: getFinalResultOutput(result) || "(no output)" }],
 							details: makeDetails([...results]),
 						});
 					}
@@ -1174,12 +1248,12 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS, spawnImpl: 
 						};
 					}
 
-					previousOutput = getFinalOutput(result.messages);
+					previousOutput = getFinalResultOutput(result);
 				}
 
 				const last = results[results.length - 1];
 				return {
-					content: [{ type: "text", text: getFinalOutput(last.messages) || "(no output)" }],
+					content: [{ type: "text", text: getFinalResultOutput(last) || "(no output)" }],
 					details: makeDetails([...results]),
 				};
 			}
@@ -1262,7 +1336,7 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS, spawnImpl: 
 
 			const successCount = results.filter((result) => !isTaskError(result)).length;
 			const summaries = results.map((result) => {
-				const output = getFinalOutput(result.messages);
+				const output = getFinalResultOutput(result);
 				const preview = output.slice(0, 100) + (output.length > 100 ? "..." : "");
 				return `[${getTaskSummaryLabel(result)}] ${isTaskError(result) ? "failed" : "completed"}: ${preview || "(no output)"}`;
 			});

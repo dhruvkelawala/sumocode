@@ -17,7 +17,7 @@
 - **Milestone**: M1 — Command-ready foundation
 - **Planned at**: commit `b34bd79`, 2026-08-28
 - **Issue**: https://github.com/dhruvkelawala/sumocode/issues/388
-- **Execution**: STOPPED after local implementation at the user's request; no review, push, PR, CI watch, or merge
+- **Execution**: DONE locally on final restacked source head `d96ea75`; exact-head publication CI/Codex and PR creation remain pending; no merge
 
 ## Why this matters
 
@@ -126,27 +126,26 @@ Measure and report `editorReadyMs`, `commandReadyMs`, and their gap. Update `scr
 
 Cover cold start, reload hydration, deferred model/thinking action, pre-ready ordinary prompt, pre-ready slash command, `/quit`, duplicate `markChromeStable`, and shutdown before readiness.
 
-## Local execution evidence (stopped before review/publication)
+## Local execution evidence (final restacked source head `d96ea75`)
 
-The user confirmed that Plan 093's `STACK_READY` PR #418, already contained by exact predecessor PR #419 at `0a00886674342d182b55f1581bdb841cee5d39f7`, satisfies this unmerged campaign dependency despite the root index retaining `REVIEWING`. Implementation used `openai-codex/gpt-5.6-sol` at `xhigh` with fast mode requested; the separate `gpt-5.5` xhigh fast scout stayed read-only at the exact base.
+Current predecessor PR #419 at `7abfc128610a1a68ca66104834230cf34e9e57b1` contains Plan 093's final-restack PR #418 head `69f734c7b632f06c2179cac7a2ea905c48a0e3d0`; the root index now records Plan 093 `DONE locally` with publication CI pending. Implementation used `openai-codex/gpt-5.6-sol` at `xhigh` with fast mode requested; the separate `gpt-5.5` xhigh fast scout stayed read-only at the exact base.
 
-- Focused runtime/gate/host/perf suites: 195/195 passed.
-- `pnpm perf:startup`: passed 5/5 samples; `editor-ready` 516.3ms, `command-ready` 1069.3ms, gap 550.3ms on the stripped `--offline --no-extensions --no-session` lane.
-- Typecheck, build, lint, and `bash -n bin/sumocode.sh`: passed.
-- Default parallel unit run: 2622/2625, with three load-sensitive unrelated failures; all three passed independently and the serial full run passed 2625/2625.
-- `pnpm test:integration`: 145/158 twice, with the same 13 known PTY/load-sensitive failures; this required gate is not green.
-- `pnpm visual:ci`: exited 0 for all 29 scenarios after copying the existing approved, ignored Bible inputs into the isolated worktree; no golden was changed or promoted. Final `pnpm build:host` passed.
+- Focused runtime/gate/host/perf suites: 201/201 passed on the final restacked source tree.
+- `pnpm perf:startup`: passed 5/5 samples; `editor-ready` 573.7ms, `command-ready` 1190.3ms, gap 608.3ms on the stripped `--offline --no-extensions --no-session` lane. `docs/perf/startup.{md,json}` stamp exact code head `d96ea75`.
+- Final combined top-of-stack verification at report head `7324663`: changed-seam suites 464/464; full one-worker unit suite 2,677/2,677; typecheck, build, lint, and `bash -n bin/sumocode.sh` passed.
+- Verification-harness v2 passed 25/25 seam tests and 159/159 integration tests, then proved zero survivors across 134 registered process groups.
+- `pnpm visual:ci` exited 0 across all 29 scenarios; no golden was changed or promoted. Final extension and host bundle rebuilds were deterministic and left the worktree clean.
 - The configured Herdr real-world probe and `docs/perf/real-world.md` regeneration were not run. The parser's new-event preference and alias fallback are covered by unit tests.
-- Review-ready, local Codex review, APR, push, PR creation, CI, GitHub Codex, and PR gate were intentionally not run after the user stopped the plan.
+- Stack-wide exact-head review found all source patches byte-identical to their previously reviewed forms, linear ancestry, clean merge trees, fresh generated artifacts, and correct startup provenance. Publication CI/Codex and PR creation remain pending.
 
 ## Done criteria
 
-- [ ] First paint emits `editor_ready` exactly once.
-- [ ] Command dispatch capability emits `command_ready` exactly once after gate settlement.
-- [ ] Pre-ready Enter provides immediate truthful feedback and dispatches once later.
-- [ ] Startup report includes the editor-to-command gap.
-- [ ] Early paint, typing, interrupt, and `/quit` behavior are preserved.
-- [ ] Required tests, integration, and visual CI gates pass.
+- [x] First paint emits `editor_ready` exactly once.
+- [x] Command dispatch capability emits `command_ready` exactly once after gate settlement.
+- [x] Pre-ready Enter provides immediate truthful feedback and dispatches once later.
+- [x] Startup report includes the editor-to-command gap.
+- [x] Early paint, typing, interrupt, and `/quit` behavior are preserved.
+- [x] Required tests, integration, and visual CI gates pass.
 
 ## STOP conditions
 

@@ -60,7 +60,7 @@ interface SpawnGitContext {
 }
 
 export interface SubagentManagerDiagnostic {
-	readonly kind: "listener";
+	readonly kind: "listener" | "interrupt";
 	readonly message: string;
 }
 
@@ -691,11 +691,22 @@ export class SubagentManager {
 			const current = this.snapshots.get(id);
 			if (!current || isSettled(current)) return;
 			const message = error instanceof Error ? error.message : String(error);
+			const child = this.children.get(id)?.child;
 			void this.startSettle(id, {
 				kind: "failed",
 				errorText: `subagent event stream failed: ${message}`,
 				partialText: current.finalText || current.liveText || undefined,
 			});
+			try {
+				child?.interrupt();
+			} catch (interruptError) {
+				const interruptMessage = (interruptError instanceof Error ? interruptError.message : String(interruptError)).slice(0, ERROR_TEXT_MAX);
+				try {
+					this.onDiagnostic?.({ kind: "interrupt", message: interruptMessage });
+				} catch {
+					// Diagnostics must not reopen a contained backend failure.
+				}
+			}
 		});
 	}
 

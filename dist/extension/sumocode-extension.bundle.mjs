@@ -17377,11 +17377,21 @@ var SubagentManager = class {
       const current = this.snapshots.get(id);
       if (!current || isSettled(current)) return;
       const message = error instanceof Error ? error.message : String(error);
+      const child = this.children.get(id)?.child;
       void this.startSettle(id, {
         kind: "failed",
         errorText: `subagent event stream failed: ${message}`,
         partialText: current.finalText || current.liveText || void 0
       });
+      try {
+        child?.interrupt();
+      } catch (interruptError) {
+        const interruptMessage = (interruptError instanceof Error ? interruptError.message : String(interruptError)).slice(0, ERROR_TEXT_MAX2);
+        try {
+          this.onDiagnostic?.({ kind: "interrupt", message: interruptMessage });
+        } catch {
+        }
+      }
     });
   }
   fold(id, event) {

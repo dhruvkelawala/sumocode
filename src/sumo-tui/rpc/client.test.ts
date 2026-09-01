@@ -704,7 +704,15 @@ describe("SumoRpcClient", () => {
 		`);
 		try {
 			await client.start();
-			await waitFor(() => client.stderr.length === 65536);
+			// Wait for the whole asserted state, not just the byte count: stderr
+			// arrives in chunks, and the trimmed buffer transiently reaches 64 KiB
+			// before the truncation marker is prepended or the last `b` chunk lands.
+			// A count-only predicate is satisfied by that intermediate state.
+			await waitFor(() => (
+				Buffer.byteLength(client.stderr) === 65536
+				&& client.stderr.startsWith("[earlier output truncated]\n")
+				&& client.stderr.endsWith("b")
+			));
 
 			expect(Buffer.byteLength(client.stderr)).toBe(65536);
 			expect(client.stderr).toMatch(/^\[earlier output truncated\]\n/);

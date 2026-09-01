@@ -55,6 +55,8 @@ async function waitForPromptMessages(path: string, expected: readonly string[], 
 	while (Date.now() - started < timeoutMs) {
 		const prompts = await readPromptCommands(path);
 		if (JSON.stringify(prompts.map((command) => command.message)) === JSON.stringify(expected)) return;
+		// WAIT-CLASS: poll-interval — gap between bounded re-reads of the prompt
+		// log; the loop exits on the observed prompt list, not on elapsed time.
 		await new Promise((resolve) => setTimeout(resolve, 50));
 	}
 	const prompts = await readPromptCommands(path);
@@ -66,6 +68,8 @@ async function waitForPromptPrefix(path: string, expected: readonly string[], ti
 	while (Date.now() - started < timeoutMs) {
 		const prompts = await readPromptCommands(path);
 		if (JSON.stringify(prompts.slice(0, expected.length).map((command) => command.message)) === JSON.stringify(expected)) return;
+		// WAIT-CLASS: poll-interval — gap between bounded re-reads of the prompt
+		// log; the loop exits on the observed prompt prefix, not on elapsed time.
 		await new Promise((resolve) => setTimeout(resolve, 50));
 	}
 	const prompts = await readPromptCommands(path);
@@ -143,6 +147,8 @@ function record(type, event) {
 
 function waitForRelease() {
   return new Promise((resolve) => {
+    // WAIT-CLASS: poll-interval — gap between existsSync checks for the
+    // release marker the test writes; the poll exits on the file, not on time.
     const poll = () => existsSync(releaseB) ? resolve() : setTimeout(poll, 10);
     poll();
   });
@@ -158,6 +164,8 @@ export default function install(pi) {
     description: "Hold the current turn open for the steering boundary test.",
     parameters: Type.Object({}),
     async execute() {
+      // WAIT-CLASS: fixture-delay — the fake tool holds A's turn open so the
+      // test can steer B while A is provably still running.
       await new Promise((resolve) => setTimeout(resolve, holdOpenMs));
       return { content: [{ type: "text", text: "held open" }] };
     },
@@ -215,6 +223,8 @@ async function waitForEvidence(path: string, predicate: (events: readonly Eviden
 	while (Date.now() - started < timeoutMs) {
 		const events = await readEvidence(path);
 		if (predicate(events)) return events;
+		// WAIT-CLASS: poll-interval — gap between bounded re-reads of the evidence
+		// log; the loop exits on the observed predicate, not on elapsed time.
 		await new Promise((resolve) => setTimeout(resolve, 50));
 	}
 	const events = await readEvidence(path);
@@ -258,6 +268,9 @@ describe("RPC queued message undo", () => {
 			(screen) => screen.text.includes("QUEUED (1)") && screen.text.includes("prompt B edited"),
 			{ cols: COLS, rows: ROWS, timeoutMs: 5_000 },
 		);
+		// WAIT-CLASS: negative-observation — an edited queue entry must never be
+		// sent while A streams. No later event marks "B would have been sent by
+		// now", so this bounded window is the observation contract itself.
 		await new Promise((resolve) => setTimeout(resolve, 300));
 		prompts = await readPromptCommands(logPath);
 		expect(prompts.map((command) => command.message)).toEqual(["prompt A"]);
@@ -290,6 +303,9 @@ describe("RPC queued message undo", () => {
 
 		app.sendInput(SUPER_ENTER);
 		await waitForPromptMessages(logPath, ["prompt A", "prompt B"]);
+		// WAIT-CLASS: negative-observation — force-send must release exactly one
+		// queued prompt. No later event marks "C would have been sent by now", so
+		// this bounded window is the observation contract itself.
 		await new Promise((resolve) => setTimeout(resolve, 300));
 		let prompts = await readPromptCommands(logPath);
 		expect(prompts.map((command) => command.message)).toEqual(["prompt A", "prompt B"]);
@@ -339,6 +355,9 @@ describe("RPC queued message undo", () => {
 			(screen) => screen.text.includes("QUEUED (1)") && screen.text.includes("prompt C"),
 			{ cols: COLS, rows: ROWS, timeoutMs: 5_000 },
 		);
+		// WAIT-CLASS: negative-observation — C must stay host-owned while B's
+		// disposition is unknown. No later event marks "C would have been sent by
+		// now", so this bounded window is the observation contract itself.
 		await new Promise((resolve) => setTimeout(resolve, 300));
 		let prompts = await readPromptCommands(logPath);
 		expect(prompts.map((command) => command.message)).toEqual(["prompt A", "prompt B"]);
@@ -347,6 +366,9 @@ describe("RPC queued message undo", () => {
 		// No queue_update or B lifecycle means Pi's disposition is unclear.
 		// A settling must not cause the host to guess and send C.
 		await app.waitForOutput("fixture response complete: prompt A", 5_000);
+		// WAIT-CLASS: negative-observation — A's settle must not drain C. The
+		// causal boundary (A settled) is awaited above; this bounded window covers
+		// the send that must never follow it.
 		await new Promise((resolve) => setTimeout(resolve, 300));
 		prompts = await readPromptCommands(logPath);
 		expect(prompts.map((command) => command.message)).toEqual(["prompt A", "prompt B"]);
@@ -426,6 +448,9 @@ describe("RPC queued message undo", () => {
 		expect(realPrompts[1]).toMatchObject({ message: "prompt B", streamingBehavior: "steer" });
 		// B's provider request is held open. C must remain host-owned until the
 		// steered B lifecycle emits agent_settled.
+		// WAIT-CLASS: negative-observation — B never settles here, so no later
+		// event marks "C would have been sent by now"; this bounded window is the
+		// observation contract itself.
 		await new Promise((resolve) => setTimeout(resolve, 300));
 		realPrompts = await readPromptCommands(commandLogPath);
 		expect(realPrompts.map((command) => command.message)).toEqual(["prompt A", "prompt B"]);
@@ -466,6 +491,10 @@ describe("RPC queued message undo", () => {
 		);
 
 		await app.waitForOutput("fixture response complete: prompt A", 5_000);
+		// WAIT-CLASS: negative-observation — agent_end alone must not drain B. The
+		// causal boundary (A's response completed) is awaited above; this window
+		// stays strictly inside the fixture's 700ms settleDelayMs so a drain here
+		// could only come from agent_end.
 		await new Promise((resolve) => setTimeout(resolve, 250));
 		let prompts = await readPromptCommands(logPath);
 		expect(prompts.map((command) => command.message)).toEqual(["prompt A"]);
@@ -505,6 +534,9 @@ describe("RPC queued message undo", () => {
 		);
 
 		await waitForPromptMessages(logPath, ["prompt B"]);
+		// WAIT-CLASS: negative-observation — compaction_end must release exactly
+		// one queued prompt. No later event marks "C would have been sent by now",
+		// so this bounded window is the observation contract itself.
 		await new Promise((resolve) => setTimeout(resolve, 300));
 		let prompts = await readPromptCommands(logPath);
 		expect(prompts.map((command) => command.message)).toEqual(["prompt B"]);

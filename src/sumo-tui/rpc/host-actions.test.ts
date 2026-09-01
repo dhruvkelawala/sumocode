@@ -11,7 +11,7 @@ interface FixturePayload {
 	[key: string]: FixtureValue;
 }
 import { Key } from "@earendil-works/pi-tui";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MemoryFact, MemoryStatus, RemnicMemoryClient } from "../../memory.js";
 import { getActiveTheme, resetThemeRegistryForTests } from "../../themes/index.js";
 import type { EditorTextController } from "../pi-compat/extension-ui-adapter.js";
@@ -277,16 +277,49 @@ function flush(): Promise<void> {
 	return Promise.resolve().then(() => Promise.resolve());
 }
 
+function inlineSelectorLines(inlineSelectors: InlineSelectorHost, width = 120): string[] {
+	return inlineSelectors.render(width).map((line) => line.replace(/\u001b\[[0-9;]*m/g, ""));
+}
+
+function inlineSelectorText(inlineSelectors: InlineSelectorHost, width = 120): string {
+	return inlineSelectorLines(inlineSelectors, width).join("\n");
+}
+
 /**
- * `/resume` reads the session directory off real disk (`node:fs/promises`
- * `readdir`, then a `readline` stream per fixture file), which resolves via
- * libuv's thread pool across several chained async hops -- more than
- * `flush()`'s two `Promise.resolve()` microtask hops (or a single
- * `setImmediate`) reliably drains. A short real-time wait is simplest here
- * given how small the fixture files are.
+ * Wait until the command under test has published the inline selector titled
+ * `title`.
+ *
+ * `/resume` and `/tree` read the session directory off real disk
+ * (`node:fs/promises` `readdir`, then a `readline` stream per fixture file),
+ * resolving via libuv's thread pool across several chained async hops -- more
+ * than `flush()`'s two `Promise.resolve()` microtask hops reliably drains.
+ * The published selector is the observable completion boundary, so wait for it
+ * instead of for a guessed delay. The title also distinguishes chained
+ * forward transitions (`Session tree` -> `Summarize branch?`) that
+ * `getActiveKind()` alone cannot. Escaping BACK to an already-seen title is a
+ * degenerate predicate on its own; those sites are sound only because
+ * `InlineSelectorHost.handleInput` resolves the closing selector synchronously,
+ * so the awaited state is the re-published one.
  */
-function flushIO(): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, 20));
+// Deliberately under Vitest's 5s default test timeout so the waiter's own
+// diagnostic wins the race and names the unmet predicate.
+const INLINE_SELECTOR_TIMEOUT_MS = 4_000;
+
+async function waitForInlineSelector(inlineSelectors: InlineSelectorHost, title: string, timeoutMs = INLINE_SELECTOR_TIMEOUT_MS): Promise<void> {
+	const wanted = title.toUpperCase();
+	await vi.waitFor(
+		() => {
+			const kind = inlineSelectors.getActiveKind();
+			const lines = inlineSelectorLines(inlineSelectors);
+			const rendered = lines.join("\n");
+			if (kind === "select" && lines[1]?.includes(`✦  ${wanted}  ✦`)) return;
+			// Collapse the panel's padding so the diagnostic leads with the title
+			// and options rather than with the centring whitespace around them.
+			const summary = rendered.replace(/\s+/g, " ").trim().slice(0, 200);
+			throw new Error(`inline selector "${wanted}" never opened (active kind: ${kind ?? "none"}, rendered: ${JSON.stringify(summary)})`);
+		},
+		{ timeout: timeoutMs, interval: 1 },
+	);
 }
 
 function renderOverlayText(overlays: RpcHostOverlayManager, width = 100): string {
@@ -464,13 +497,13 @@ describe("RpcHostActions", () => {
 		const model = actions.handleSubmittedText("/model");
 		await flush();
 		expect(inlineSelectors.getActiveKind()).toBe("select");
-		let rendered = inlineSelectors.render(100).join("\n").replace(/\u001b\[[0-9;]*m/g, "");
+		let rendered = inlineSelectorText(inlineSelectors, 100);
 		expect(rendered).toContain("ENABLED");
 		expect(rendered).toContain("ALL");
 		expect(rendered).not.toContain("disabled/outside-scope");
 
 		inlineSelectors.handleInput(SELECTOR_TAB);
-		rendered = inlineSelectors.render(100).join("\n").replace(/\u001b\[[0-9;]*m/g, "");
+		rendered = inlineSelectorText(inlineSelectors, 100);
 		expect(rendered).toContain("disabled/outside-scope");
 
 		inlineSelectors.handleInput(SELECTOR_ENTER);
@@ -926,7 +959,7 @@ describe("RpcHostActions", () => {
 				const { actions, controls, inlineSelectors, rehydrateCalls } = setup({ sessionFile: currentFile });
 
 				const resumePromise = actions.handleSubmittedText("/resume");
-				await flushIO();
+				await waitForInlineSelector(inlineSelectors, "Resume session");
 				expect(inlineSelectors.getActiveKind()).toBe("select");
 				inlineSelectors.handleInput(SELECTOR_DOWN); // move to the older session
 				inlineSelectors.handleInput(SELECTOR_ENTER);
@@ -947,9 +980,9 @@ describe("RpcHostActions", () => {
 				const { actions, inlineSelectors } = setup({ sessionFile });
 
 				const resumePromise = actions.handleSubmittedText("/resume");
-				await flushIO();
+				await waitForInlineSelector(inlineSelectors, "Resume session");
 				expect(inlineSelectors.getActiveKind()).toBe("select");
-				const rendered = inlineSelectors.render(120).join("\n").replace(/\u001b\[[0-9;]*m/g, "");
+				const rendered = inlineSelectorText(inlineSelectors);
 				// Identifier block: short id · floor-marked count · relative age.
 				expect(rendered).toContain("1+ msgs");
 				expect(rendered).toContain("large ·");
@@ -968,7 +1001,7 @@ describe("RpcHostActions", () => {
 				const { actions, controls, inlineSelectors, rehydrateCalls } = setup({ sessionFile: newerPath });
 
 				const resumePromise = actions.handleSubmittedText("/resume");
-				await flushIO();
+				await waitForInlineSelector(inlineSelectors, "Resume session");
 				expect(inlineSelectors.getActiveKind()).toBe("select");
 				inlineSelectors.handleInput(SELECTOR_DOWN);
 				inlineSelectors.handleInput(SELECTOR_ENTER);
@@ -1004,6 +1037,88 @@ describe("RpcHostActions", () => {
 				rmSync(dir, { recursive: true, force: true });
 			}
 		});
+
+		it("times out naming the unmet predicate when no selector ever opens", async () => {
+			const { inlineSelectors } = setup();
+
+			await expect(waitForInlineSelector(inlineSelectors, "Session tree", 25)).rejects.toThrow(
+				/inline selector "SESSION TREE" never opened \(active kind: none/,
+			);
+		});
+
+		// A true near-timeout boundary would need fake timers, which `vi.waitFor`
+		// does not use; landing the selector at a real wall-clock deadline would
+		// only add a flake. This covers the reachable half: the waiter is already
+		// polling when the transition happens, and must not have given up.
+		it("resolves on a transition that lands after the wait has started", async () => {
+			const dir = mkdtempSync(join(tmpdir(), "sumocode-wait-selector-late-test-"));
+			try {
+				const sessionFile = writeFixtureSession(dir, "2026-07-02T20-00-00-000Z_current.jsonl", "current", "2026-07-02T20:00:00.000Z", "current session first message");
+				const { actions, inlineSelectors } = setup({ sessionFile });
+
+				const waiter = waitForInlineSelector(inlineSelectors, "Resume session", 1_000);
+				const resumePromise = actions.handleSubmittedText("/resume");
+				await waiter;
+
+				inlineSelectors.handleInput(SELECTOR_ESCAPE);
+				await resumePromise;
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		});
+
+		it("is not satisfied by a stale selector that closed before the wait", async () => {
+			const dir = mkdtempSync(join(tmpdir(), "sumocode-wait-selector-stale-test-"));
+			try {
+				const sessionFile = writeFixtureSession(dir, "2026-07-02T20-00-00-000Z_current.jsonl", "current", "2026-07-02T20:00:00.000Z", "current session first message");
+				const { actions, inlineSelectors } = setup({ sessionFile });
+
+				const resumePromise = actions.handleSubmittedText("/resume");
+				await waitForInlineSelector(inlineSelectors, "Resume session");
+				inlineSelectors.handleInput(SELECTOR_ESCAPE);
+				await resumePromise;
+
+				// The selector's rendered output is gone with it, so a later waiter on
+				// the same title cannot be satisfied by what it printed.
+				await expect(waitForInlineSelector(inlineSelectors, "Resume session", 25)).rejects.toThrow(
+					/inline selector "RESUME SESSION" never opened \(active kind: none/,
+				);
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		});
+
+		it("is not satisfied when the wanted title appears only in an option", async () => {
+			const { inlineSelectors } = setup();
+			const selection = inlineSelectors.select("Resume session", ["Summarize branch?"]);
+
+			await expect(waitForInlineSelector(inlineSelectors, "Summarize branch?", 25)).rejects.toThrow(
+				/inline selector "SUMMARIZE BRANCH\?" never opened .*RESUME SESSION/s,
+			);
+
+			inlineSelectors.close();
+			await selection;
+		});
+
+		it("times out naming the wrong selector when a different one stays open", async () => {
+			const dir = mkdtempSync(join(tmpdir(), "sumocode-wait-selector-test-"));
+			try {
+				const sessionFile = writeFixtureSession(dir, "2026-07-02T20-00-00-000Z_current.jsonl", "current", "2026-07-02T20:00:00.000Z", "current session first message");
+				const { actions, inlineSelectors } = setup({ sessionFile });
+
+				const resumePromise = actions.handleSubmittedText("/resume");
+				await waitForInlineSelector(inlineSelectors, "Resume session");
+
+				await expect(waitForInlineSelector(inlineSelectors, "Session tree", 25)).rejects.toThrow(
+					/inline selector "SESSION TREE" never opened \(active kind: select, rendered: .*RESUME SESSION/s,
+				);
+
+				inlineSelectors.handleInput(SELECTOR_ESCAPE);
+				await resumePromise;
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		});
 	});
 
 	describe("/tree", () => {
@@ -1029,12 +1144,12 @@ describe("RpcHostActions", () => {
 				const { actions, controls, inlineSelectors, editorText, rehydrateCalls } = setup({ sessionFile });
 
 				const treePromise = actions.handleSubmittedText("/tree");
-				await flushIO();
+				await waitForInlineSelector(inlineSelectors, "Session tree");
 				expect(inlineSelectors.getActiveKind()).toBe("select");
 
 				// Latest node (child-b) is preselected — Enter opens Pi's summary choice.
 				inlineSelectors.handleInput(SELECTOR_ENTER);
-				await flushIO();
+				await waitForInlineSelector(inlineSelectors, "Summarize branch?");
 				expect(inlineSelectors.getActiveKind()).toBe("select");
 				inlineSelectors.handleInput(SELECTOR_ENTER);
 				await treePromise;
@@ -1063,8 +1178,8 @@ describe("RpcHostActions", () => {
 				const { actions, inlineSelectors } = setup({ sessionFile });
 
 				const treePromise = actions.handleSubmittedText("/tree");
-				await flushIO();
-				const rendered = inlineSelectors.render(120).join("\n").replace(/\u001b\[[0-9;]*m/g, "");
+				await waitForInlineSelector(inlineSelectors, "Session tree");
+				const rendered = inlineSelectorText(inlineSelectors);
 
 				expect(rendered).toContain("▷ real prompt with newline");
 				expect(rendered).toContain("✦ assistant reply");
@@ -1100,12 +1215,12 @@ describe("RpcHostActions", () => {
 				const { actions, controls, inlineSelectors } = setup({ sessionFile });
 
 				const treePromise = actions.handleSubmittedText("/tree");
-				await flushIO();
+				await waitForInlineSelector(inlineSelectors, "Session tree");
 				expect(inlineSelectors.getActiveKind()).toBe("select");
 				// Preselected on child-b (latest) — Enter must navigate by entryId even
 				// though child-a renders the identical summary text.
 				inlineSelectors.handleInput(SELECTOR_ENTER);
-				await flushIO();
+				await waitForInlineSelector(inlineSelectors, "Summarize branch?");
 				inlineSelectors.handleInput(SELECTOR_ENTER);
 				await treePromise;
 
@@ -1122,8 +1237,8 @@ describe("RpcHostActions", () => {
 				const { actions, inlineSelectors } = setup({ sessionFile });
 
 				const treePromise = actions.handleSubmittedText("/tree");
-				await flushIO();
-				const rendered = inlineSelectors.render(100).join("\n").replace(/\[[0-9;]*m/g, "");
+				await waitForInlineSelector(inlineSelectors, "Session tree");
+				const rendered = inlineSelectorText(inlineSelectors, 100);
 				expect(rendered).toContain("SESSION TREE");
 				// root has two children — each branch head gets a box-drawing
 				// connector: first branch ├─, last branch └─.
@@ -1151,9 +1266,9 @@ describe("RpcHostActions", () => {
 				const sessionFile = writeBranchedFixture(dir);
 				const { actions, controls, inlineSelectors, modals } = setup({ sessionFile });
 				const treePromise = actions.handleSubmittedText("/tree");
-				await flushIO();
+				await waitForInlineSelector(inlineSelectors, "Session tree");
 				inlineSelectors.handleInput(SELECTOR_ENTER);
-				await flushIO();
+				await waitForInlineSelector(inlineSelectors, "Summarize branch?");
 				for (let index = 0; index < choiceIndex; index += 1) inlineSelectors.handleInput(SELECTOR_DOWN);
 				inlineSelectors.handleInput(SELECTOR_ENTER);
 				if (customInstructions !== undefined) {
@@ -1179,7 +1294,7 @@ describe("RpcHostActions", () => {
 				const { actions, controls, inlineSelectors, notifications } = setup({ sessionFile });
 				controls.leafId = "child-b";
 				const treePromise = actions.handleSubmittedText("/tree");
-				await flushIO();
+				await waitForInlineSelector(inlineSelectors, "Session tree");
 				inlineSelectors.handleInput(SELECTOR_ENTER);
 				await treePromise;
 				expect(controls.treeRequests).toHaveLength(0);
@@ -1195,11 +1310,13 @@ describe("RpcHostActions", () => {
 				const sessionFile = writeBranchedFixture(dir);
 				const { actions, controls, inlineSelectors } = setup({ sessionFile });
 				const treePromise = actions.handleSubmittedText("/tree");
-				await flushIO();
+				await waitForInlineSelector(inlineSelectors, "Session tree");
 				inlineSelectors.handleInput(SELECTOR_ENTER);
-				await flush();
+				// Prove the forward hop first: escaping back to a title that was never
+				// left would satisfy the waiter on its first poll and assert nothing.
+				await waitForInlineSelector(inlineSelectors, "Summarize branch?");
 				inlineSelectors.handleInput(SELECTOR_ESCAPE);
-				await flushIO();
+				await waitForInlineSelector(inlineSelectors, "Session tree");
 				expect(inlineSelectors.getActiveKind()).toBe("select");
 				expect(inlineSelectors.render(120).join("\n")).toContain("second branch reply");
 				inlineSelectors.handleInput(SELECTOR_ESCAPE);
@@ -1216,7 +1333,7 @@ describe("RpcHostActions", () => {
 				const sessionFile = writeBranchedFixture(dir);
 				const { actions, controls, inlineSelectors, modals } = setup({ sessionFile });
 				const treePromise = actions.handleSubmittedText("/tree");
-				await flushIO();
+				await waitForInlineSelector(inlineSelectors, "Session tree");
 				inlineSelectors.handleInput(SELECTOR_ENTER);
 				await flush();
 				inlineSelectors.handleInput(SELECTOR_DOWN);
@@ -1227,9 +1344,12 @@ describe("RpcHostActions", () => {
 				modals.handleInput(SELECTOR_ESCAPE);
 				await flush();
 				expect(modals.getActiveKind()).toBeUndefined();
-				expect(inlineSelectors.getActiveKind()).toBe("select");
+				// The named behaviour: the custom editor returns to the SUMMARY
+				// selector, not the tree. Proving that title here also stops the next
+				// back-hop waiter from being satisfied by a tree selector never left.
+				await waitForInlineSelector(inlineSelectors, "Summarize branch?");
 				inlineSelectors.handleInput(SELECTOR_ESCAPE);
-				await flushIO();
+				await waitForInlineSelector(inlineSelectors, "Session tree");
 				inlineSelectors.handleInput(SELECTOR_ESCAPE);
 				await treePromise;
 				expect(controls.treeRequests).toHaveLength(0);
@@ -1250,7 +1370,7 @@ describe("RpcHostActions", () => {
 					setTreeNavigationBusy: (busy) => { order.push(`busy:${String(busy)}`); },
 				});
 				const treePromise = actions.handleSubmittedText("/tree");
-				await flushIO();
+				await waitForInlineSelector(inlineSelectors, "Session tree");
 				inlineSelectors.handleInput(SELECTOR_ENTER);
 				await flush();
 				inlineSelectors.handleInput(SELECTOR_ENTER);
@@ -1289,7 +1409,7 @@ describe("RpcHostActions", () => {
 				});
 				controls.treeNavigationError = new Error("ambiguous tree command timeout");
 				const treePromise = actions.handleSubmittedText("/tree");
-				await flushIO();
+				await waitForInlineSelector(inlineSelectors, "Session tree");
 				inlineSelectors.handleInput(SELECTOR_ENTER);
 				await flush();
 				inlineSelectors.handleInput(SELECTOR_ENTER);
@@ -1321,14 +1441,14 @@ describe("RpcHostActions", () => {
 				const { actions, controls, inlineSelectors } = setup({ sessionFile });
 				controls.leafId = "long-6000";
 				const treePromise = actions.handleSubmittedText("/tree");
-				await new Promise<void>((resolve) => setTimeout(resolve, 100));
+				await waitForInlineSelector(inlineSelectors, "Session tree");
 				expect(inlineSelectors.render(120).join("\n")).toContain("long prompt 6000");
 				inlineSelectors.handleInput(SELECTOR_ESCAPE);
 				await treePromise;
 
 				controls.forkMessages = entries.map((entry) => ({ entryId: entry.id, text: entry.message.content }));
 				const forkPromise = actions.handleSubmittedText("/fork");
-				await new Promise<void>((resolve) => setTimeout(resolve, 100));
+				await waitForInlineSelector(inlineSelectors, "Fork from message");
 				expect(inlineSelectors.render(120).join("\n")).toContain("long prompt 6000");
 				inlineSelectors.handleInput(SELECTOR_ENTER);
 				await forkPromise;
@@ -1348,7 +1468,7 @@ describe("RpcHostActions", () => {
 					const sessionFile = writeBranchedFixture(dir);
 					const { actions, inlineSelectors } = setup({ sessionFile });
 					const treePromise = actions.handleSubmittedText("/tree");
-					await flushIO();
+					await waitForInlineSelector(inlineSelectors, "Session tree");
 					inlineSelectors.handleInput(SELECTOR_ESCAPE);
 					await treePromise;
 					const diagnostics = await readFile(diagFile, "utf8");

@@ -59,6 +59,11 @@ interface SpawnGitContext {
 	readonly baseRef?: string;
 }
 
+export interface SubagentManagerDiagnostic {
+	readonly kind: "listener";
+	readonly message: string;
+}
+
 export interface SubagentManagerDependencies {
 	readonly createWorktree?: WorktreeCreator;
 	readonly resolveWorktreeBaseRef?: WorktreeBaseRefResolver;
@@ -68,6 +73,7 @@ export interface SubagentManagerDependencies {
 	readonly pi?: PiExecLike;
 	/** Parent Herdr tab injected into the RPC child; first visible pane splits here. */
 	readonly initialVisibleTabId?: string;
+	readonly onDiagnostic?: (diagnostic: SubagentManagerDiagnostic) => void;
 }
 
 async function gitRead(cwd: string, args: readonly string[]): Promise<string | undefined> {
@@ -149,6 +155,7 @@ export class SubagentManager {
 	private readonly terminalHost?: TerminalHost;
 	private readonly pi?: PiExecLike;
 	private readonly initialVisibleTabId?: string;
+	private readonly onDiagnostic?: (diagnostic: SubagentManagerDiagnostic) => void;
 	private subagentsTabId?: string;
 	private visibleSpawnTail: Promise<void> = Promise.resolve();
 	private dequeueTail: Promise<void> = Promise.resolve();
@@ -169,6 +176,7 @@ export class SubagentManager {
 		this.terminalHost = dependencies.terminalHost;
 		this.pi = dependencies.pi;
 		this.initialVisibleTabId = dependencies.initialVisibleTabId;
+		this.onDiagnostic = dependencies.onDiagnostic;
 		this.subagentsTabId = this.initialVisibleTabId;
 	}
 
@@ -859,7 +867,18 @@ export class SubagentManager {
 	}
 
 	private notify(): void {
-		for (const listener of this.listeners) listener();
+		for (const listener of this.listeners) {
+			try {
+				listener();
+			} catch (error) {
+				const message = (error instanceof Error ? error.message : String(error)).slice(0, ERROR_TEXT_MAX);
+				try {
+					this.onDiagnostic?.({ kind: "listener", message });
+				} catch {
+					// Diagnostics must not break later listeners.
+				}
+			}
+		}
 	}
 
 	private prune(): void {

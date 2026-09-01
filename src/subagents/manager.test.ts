@@ -327,6 +327,22 @@ describe("SubagentManager", () => {
 		expect(snapshot?.transcript.map((item) => item.text).join("").split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
 	});
 
+	it("isolates listener failure", async () => {
+		const diagnostics: Array<{ kind: string; message: string }> = [];
+		const manager = new SubagentManager(() => ({ events: () => undefined, interrupt: () => undefined }), {
+			captureGitContext: async () => ({ baseRef: "base-ref" }),
+			onDiagnostic: (diagnostic: { kind: string; message: string }) => diagnostics.push(diagnostic),
+		});
+		const laterListener = vi.fn();
+		manager.addChangeListener(() => { throw new Error("listener exploded"); });
+		manager.addChangeListener(laterListener);
+
+		await expect(manager.spawn(makeTask("notify"))).resolves.toMatchObject({ status: "running" });
+
+		expect(laterListener).toHaveBeenCalledOnce();
+		expect(diagnostics).toEqual([{ kind: "listener", message: "listener exploded" }]);
+	});
+
 	it("stores the manifest before completion listeners are notified", async () => {
 		let emitFn: ((event: SubagentEvent) => void) | undefined;
 		let resolveManifest: (manifest: CompletionManifest) => void = () => undefined;

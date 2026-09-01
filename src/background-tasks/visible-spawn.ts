@@ -7,7 +7,9 @@
 
 import { dirname, join } from "node:path";
 
-interface VisibleTaskPaths {
+export interface VisibleTaskPaths {
+	/** The task directory itself; artifact confinement is relative to it. */
+	dir: string;
 	logFile: string;
 	exitFile: string;
 	markerFile: string;
@@ -34,10 +36,9 @@ interface VisibleAgentCommandOptions {
 	tools?: readonly string[];
 }
 
-export function buildVisibleTaskPaths(taskId: string, startedAtMs: number, baseDir?: string): VisibleTaskPaths {
-	const root = baseDir ?? join(process.env.TMPDIR ?? "/tmp", "sumocode-bg");
-	const dir = join(root, `${taskId}-${startedAtMs}`);
+export function visibleTaskPathsInDir(dir: string): VisibleTaskPaths {
 	return {
+		dir,
 		logFile: join(dir, "output.log"),
 		exitFile: join(dir, "exit.code"),
 		markerFile: join(dir, "started.marker"),
@@ -48,6 +49,11 @@ export function buildVisibleTaskPaths(taskId: string, startedAtMs: number, baseD
 		diagFile: join(dir, "diag.jsonl"),
 		controlDir: join(dir, "control"),
 	};
+}
+
+export function buildVisibleTaskPaths(taskId: string, startedAtMs: number, baseDir?: string): VisibleTaskPaths {
+	const root = baseDir ?? join(process.env.TMPDIR ?? "/tmp", "sumocode-bg");
+	return visibleTaskPathsInDir(join(root, `${taskId}-${startedAtMs}`));
 }
 
 export function shellEscape(value: string): string {

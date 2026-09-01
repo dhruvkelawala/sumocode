@@ -25,7 +25,17 @@
  */
 
 import { appendFileSync, existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import {
+	assertArtifactInsideDir,
+	assertPrivateArtifact,
+	assertPrivateDir,
+	isErrnoCode,
+	type PrivateArtifactFs,
+	nodeArtifactFs,
+	validatedArtifactStat,
+	PRIVATE_FILE_MODE,
+} from "./private-artifact.js";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 /**
@@ -77,6 +87,85 @@ export function resetTaskMarkerEnvForTests(): void {
 	capturedMarkerEnv = undefined;
 }
 
+const artifactFs: PrivateArtifactFs = nodeArtifactFs;
+
+/**
+ * The task directory that owns the given marker env snapshot, when known.
+ * Confinement is only checkable against it.
+ */
+const taskDirFromMarkers = (markers: NodeJS.ProcessEnv | undefined): string | undefined => {
+	const controlDir = markers?.SUMOCODE_TASK_CONTROL_DIR;
+	return controlDir ? dirname(resolve(controlDir)) : undefined;
+};
+
+/**
+ * Marker paths are a private contract between the orchestrating parent and
+ * THIS process, delivered through the trusted launch env. Capture time
+ * confines every marker to the task directory that owns the control dir and
+ * normalizes it to that resolved spelling, so relative or `..`-decorated
+ * marker values cannot diverge between validation and the writers. Markers
+ * outside the task dir are dropped (fail closed) with a diagnostic.
+ */
+function sanitizeTaskMarkers(markers: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+	const taskDir = taskDirFromMarkers(markers);
+	if (!taskDir) {
+		const refused = TASK_MARKER_ENV_KEYS.filter((key) => markers[key] !== undefined && key !== "SUMOCODE_TASK_CONTROL_DIR");
+		for (const key of refused) {
+			diagLog("marker_refused", { file: markers[key], message: `${key} set without SUMOCODE_TASK_CONTROL_DIR` });
+			delete markers[key];
+		}
+		return markers;
+	}
+	// DIAG and CONTROL first: diagLog consumes the snapshot being mutated, so
+	// the diag path must already be validated before refusals are logged for
+	// the remaining markers.
+	const orderedKeys = [
+		"SUMOCODE_TASK_CONTROL_DIR",
+		"SUMOCODE_TASK_DIAG_FILE",
+		...TASK_MARKER_ENV_KEYS.filter((key) => key !== "SUMOCODE_TASK_CONTROL_DIR" && key !== "SUMOCODE_TASK_DIAG_FILE"),
+	] as const;
+	for (const key of orderedKeys) {
+		const value = markers[key];
+		if (value === undefined) continue;
+		if (key === "SUMOCODE_TASK_CONTROL_DIR") {
+			// The anchor itself: confinement is relative to its own parent dir.
+			markers[key] = resolve(value);
+			continue;
+		}
+		try {
+			assertArtifactInsideDir(resolve(value), taskDir, key);
+			markers[key] = resolve(value);
+		} catch (error) {
+			diagLog("marker_refused", { file: value, message: error instanceof Error ? error.message : String(error) });
+			delete markers[key];
+		}
+	}
+	return markers;
+}
+
+/**
+ * Validate-then-write a task artifact the child itself owns. A valid existing
+ * entry is overwritten in place (response.md is rewritten every turn); an
+ * absent entry is created with an exclusive, no-follow create. Anything else
+ * — including a dangling symlink planted at the artifact path — throws, and
+ * the caller's catch records a truthful diagnostic instead of writing through
+ * the replaced path. When the owning task dir is known, the entry is also
+ * re-checked for direct-child confinement at write time.
+ */
+function writeOwnedTaskArtifact(file: string, contents: string, label: string, taskDir?: string): void {
+	const parentDir = taskDir ?? dirname(file);
+	const existing = validatedArtifactStat(artifactFs, file, parentDir, label);
+	if (existing === undefined) {
+		writeFileSync(file, contents, { mode: PRIVATE_FILE_MODE, flag: "wx" });
+		return;
+	}
+	// ponytail: overwrite window between validate and write is not closeable
+	// portably (O_NOFOLLOW is POSIX-only and untyped here); closing it needs an
+	// openat seam, which waits for an upstream need. Exploiting the window
+	// already requires owner access to the 0700 task dir.
+	writeFileSync(file, contents, { mode: PRIVATE_FILE_MODE });
+}
+
 interface DiagDetail {
 	readonly reason?: string;
 	readonly file?: string;
@@ -92,17 +181,21 @@ interface DiagDetail {
 }
 
 /**
- * Env-gated diagnostic logging. Set `SUMOCODE_TASK_DIAG_FILE=/tmp/xxx.jsonl`
- * to capture every lifecycle event the auto-exit goes through.
- * No-op when the env var is unset (production default).
+ * Env-gated diagnostic logging. The spawn pipeline points
+ * `SUMOCODE_TASK_DIAG_FILE` at `diag.jsonl` inside the private task dir; the
+ * capture-time sanitizer confines it there (and drops it otherwise), since the
+ * trail names task artifact paths. No-op when the env var is unset.
  */
 function diagLog(event: string, detail?: DiagDetail): void {
-	const file = capturedMarkerEnv?.SUMOCODE_TASK_DIAG_FILE ?? process.env.SUMOCODE_TASK_DIAG_FILE;
+	// The sanitized capture is the only marker source — same as persistResponse.
+	const file = capturedMarkerEnv?.SUMOCODE_TASK_DIAG_FILE;
 	if (!file) return;
 	try {
 		appendFileSync(
 			file,
 			`${JSON.stringify({ t: Date.now(), pid: process.pid, event, ...(detail ?? undefined) })}\n`,
+			// Owner-only at creation: the diag trail names task artifact paths.
+			{ mode: PRIVATE_FILE_MODE },
 		);
 	} catch {
 		// diagnostics must never crash the extension
@@ -151,7 +244,9 @@ export function extractFinalAssistantText(messages: unknown[]): string {
  * so a multi-turn pane always exposes its latest assistant response.
  */
 function persistResponse(messages: unknown[]): void {
-	const file = capturedMarkerEnv?.SUMOCODE_TASK_RESPONSE_FILE ?? process.env.SUMOCODE_TASK_RESPONSE_FILE;
+	// The sanitized capture is the only marker source: a raw process.env probe
+	// here would bypass capture-time confinement.
+	const file = capturedMarkerEnv?.SUMOCODE_TASK_RESPONSE_FILE;
 	if (!file) {
 		diagLog("response_skipped", { reason: "no_env" });
 		return;
@@ -162,7 +257,7 @@ function persistResponse(messages: unknown[]): void {
 		return;
 	}
 	try {
-		writeFileSync(file, `${text}\n`);
+		writeOwnedTaskArtifact(file, `${text}\n`, "task response artifact", taskDirFromMarkers(capturedMarkerEnv));
 		diagLog("response_written", { file, bytes: text.length });
 	} catch (error) {
 		diagLog("response_write_failed", {
@@ -175,7 +270,7 @@ export function writeTaskExitMarker(code: number, env: NodeJS.ProcessEnv = proce
 	const file = env.SUMOCODE_TASK_EXIT_FILE;
 	if (!file) return;
 	try {
-		writeFileSync(file, `${code}\n`);
+		writeOwnedTaskArtifact(file, `${code}\n`, "task exit marker", taskDirFromMarkers(env));
 		diagLog("exit_marker_written", { file, code });
 	} catch (error) {
 		diagLog("exit_marker_write_failed", {
@@ -188,7 +283,7 @@ export function writeTaskStartedMarker(env: NodeJS.ProcessEnv = process.env): vo
 	const file = env.SUMOCODE_TASK_STARTED_FILE;
 	if (!file) return;
 	try {
-		writeFileSync(file, `${process.pid}\n`);
+		writeOwnedTaskArtifact(file, `${process.pid}\n`, "task started marker", taskDirFromMarkers(env));
 		diagLog("started_marker_written", { file });
 	} catch (error) {
 		diagLog("started_marker_write_failed", {
@@ -205,15 +300,10 @@ function errorMessage<T>(error: T): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- boundary predicate: fs rejections arrive as `unknown` from catch clauses; the instanceof guard is the sanctioned parse.
-function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
-	return error instanceof Error;
-}
-
 /** True when a failed unlink reports the control file is already absent. */
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- catch clauses hand this predicate `unknown`; the isErrnoException guard call is the sanctioned parse before the errno check.
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- boundary predicate: fs rejections arrive as `unknown` from catch clauses; isErrnoCode is the sanctioned parse before the errno check.
 function isEnoent(error: unknown): boolean {
-	return isErrnoException(error) && error.code === "ENOENT";
+	return isErrnoCode(error, "ENOENT");
 }
 
 function installTaskExitMarker(env: NodeJS.ProcessEnv = process.env): void {
@@ -347,6 +437,19 @@ function installControlWatcher(
 	// relative/trailing-separator control-dir spelling cannot merge a bucket key
 	// while diverging member paths.
 	const canonicalControlDir = resolve(controlDir);
+	// The control channel is a private parent-child contract. A missing or
+	// tampered directory (replaced by a symlink, group/other-readable, or owned
+	// by someone else) fails closed: no steering is consumed and no close is
+	// honored through an untrusted path.
+	try {
+		assertPrivateDir(artifactFs, canonicalControlDir, "task control directory");
+	} catch (error) {
+		diagLog("control_dir_refused", {
+			file: canonicalControlDir,
+			message: error instanceof Error ? error.message : String(error),
+		});
+		return () => undefined;
+	}
 	// Submission ownership lives in the process-wide submitted-controls registry,
 	// so watcher recreation and sibling module instances keep it. Ordinary stops
 	// deliberately clear nothing here: clearing would let a recreated watcher
@@ -364,6 +467,10 @@ function installControlWatcher(
 	/** Acknowledgement cleanup: unlink the consumed control, never resubmit. */
 	const discardSubmittedControl = (file: string): void => {
 		try {
+			// The entry must still be our private artifact before removal; a
+			// replaced path stays on disk (the parent's send then stays ambiguous
+			// and recoverable) and ownership is retained so it is never resubmitted.
+			assertPrivateArtifact(artifactFs, file, canonicalControlDir, "steer control");
 			unlinkControl(file);
 			clearSubmittedControl(canonicalControlDir, file);
 			diagLog("steer_ack_unlinked", { file });
@@ -389,6 +496,11 @@ function installControlWatcher(
 		}
 		let text: string;
 		try {
+			// Only consume controls that are still private regular artifacts of this
+			// control dir. A replaced or redirected path fails closed: the file
+			// remains so the parent's send budget resolves as an ambiguous timeout,
+			// which the existing protocol treats as recoverable.
+			assertPrivateArtifact(artifactFs, file, canonicalControlDir, "steer control");
 			text = readFileSync(file, "utf8");
 		} catch (error) {
 			diagLog("steer_read_failed", { file, message: errorMessage(error) });
@@ -451,12 +563,21 @@ function installControlWatcher(
 			// the first submission attempt and can push control consumption past the
 			// parent's acknowledgement budget. Retry next tick instead.
 			if (!ctx) return;
-			if (existsSync(join(canonicalControlDir, CLOSE_REQUEST_FILE))) {
-				diagLog("close_requested");
-				hooks.cancelCountdown();
-				stop();
-				hooks.requestShutdown(ctx);
-				return;
+			const closePath = join(canonicalControlDir, CLOSE_REQUEST_FILE);
+			if (existsSync(closePath)) {
+				try {
+					// A replaced or symlinked close control is not ours: refuse it and
+					// keep polling (steering stays live) rather than shutting down
+					// through an untrusted path.
+					assertPrivateArtifact(artifactFs, closePath, canonicalControlDir, "close control");
+					diagLog("close_requested");
+					hooks.cancelCountdown();
+					stop();
+					hooks.requestShutdown(ctx);
+					return;
+				} catch (error) {
+					diagLog("close_refused", { file: closePath, message: errorMessage(error) });
+				}
 			}
 			let entries: string[];
 			try {
@@ -501,7 +622,10 @@ export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoE
 
 	// Capture marker paths, then scrub them from the env so subprocesses
 	// spawned by this agent cannot clobber the orchestrator's marker files.
-	const markers = captureAndScrubTaskMarkerEnv(env);
+	// Sanitization confines every marker to the task directory that owns the
+	// control dir; refused markers are dropped before any downstream writer or
+	// the control watcher can touch them.
+	const markers = sanitizeTaskMarkers(captureAndScrubTaskMarkerEnv(env));
 	writeTaskStartedMarker(markers);
 	installTaskExitMarker(markers);
 

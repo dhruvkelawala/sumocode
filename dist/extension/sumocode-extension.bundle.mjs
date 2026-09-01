@@ -15973,7 +15973,9 @@ ${options.prompt}` : options.prompt;
     `__sumo_exit_file=${shellEscape2(paths.exitFile)}`,
     // The marker subshell writes owner-only so the parent's private-artifact
     // validation accepts it; the agent process itself keeps the user's umask.
-    `__sumo_finish() { [ -f "$__sumo_exit_file" ] || ( umask 077; printf '%s' "$1" > "$__sumo_exit_file" ); }`,
+    // noclobber makes the redirection exclusive (O_EXCL), so a dangling
+    // symlink planted at the marker path is never followed.
+    `__sumo_finish() { [ -f "$__sumo_exit_file" ] || ( umask 077; set -C; printf '%s' "$1" > "$__sumo_exit_file" ) 2> /dev/null || :; }`,
     `trap '__sumo_finish "$?"' EXIT`,
     `trap '__sumo_finish 129' HUP`,
     `trap '__sumo_finish 143' TERM`,
@@ -18078,8 +18080,9 @@ function sanitizeTaskMarkers(markers) {
   if (!taskDir) {
     const refused = TASK_MARKER_ENV_KEYS.filter((key) => markers[key] !== void 0 && key !== "SUMOCODE_TASK_CONTROL_DIR");
     for (const key of refused) {
-      diagLog("marker_refused", { file: markers[key], message: `${key} set without SUMOCODE_TASK_CONTROL_DIR` });
+      const file = markers[key];
       delete markers[key];
+      diagLog("marker_refused", { file, message: `${key} set without SUMOCODE_TASK_CONTROL_DIR` });
     }
     return markers;
   }
@@ -18118,11 +18121,14 @@ function diagLog(event, detail) {
   const file = capturedMarkerEnv?.SUMOCODE_TASK_DIAG_FILE;
   if (!file) return;
   try {
+    const stat = validatedArtifactStat(artifactFs, file, dirname13(file), "task diag artifact");
+    if (stat === void 0) {
+      writeFileSync10(file, "", { mode: PRIVATE_FILE_MODE3, flag: "wx" });
+    }
     appendFileSync3(
       file,
       `${JSON.stringify({ t: Date.now(), pid: process.pid, event, ...detail ?? void 0 })}
 `,
-      // Owner-only at creation: the diag trail names task artifact paths.
       { mode: PRIVATE_FILE_MODE3 }
     );
   } catch {
@@ -18251,13 +18257,27 @@ function installControlWatcher(pi, controlDir, hooks, unlinkControl) {
   let stopped = false;
   let timer;
   const canonicalControlDir = resolve8(controlDir);
-  try {
-    assertPrivateDir(artifactFs, canonicalControlDir, "task control directory");
-  } catch (error) {
-    diagLog("control_dir_refused", {
-      file: canonicalControlDir,
-      message: error instanceof Error ? error.message : String(error)
-    });
+  let controlDirValidated = false;
+  let controlDirRefusalLogged = false;
+  const ensureControlDirValidated = () => {
+    if (controlDirValidated) return true;
+    try {
+      assertPrivateDir(artifactFs, canonicalControlDir, "task control directory");
+      controlDirValidated = true;
+      return true;
+    } catch (error) {
+      if (!isErrnoCode(error, "ENOENT") && !controlDirRefusalLogged) {
+        controlDirRefusalLogged = true;
+        diagLog("control_dir_refused", {
+          file: canonicalControlDir,
+          message: error instanceof Error ? error.message : String(error)
+        });
+      }
+      return false;
+    }
+  };
+  const controlDirReady = ensureControlDirValidated();
+  if (!controlDirReady && existsSync12(canonicalControlDir)) {
     return () => void 0;
   }
   const stop = () => {
@@ -18327,6 +18347,7 @@ function installControlWatcher(pi, controlDir, hooks, unlinkControl) {
   const tick = () => {
     try {
       const ctx = hooks.getLatestCtx();
+      if (!ensureControlDirValidated()) return;
       if (!ctx) return;
       const closePath = join20(canonicalControlDir, CLOSE_REQUEST_FILE2);
       if (existsSync12(closePath)) {

@@ -637,13 +637,15 @@ describe("SumoRpcClient", () => {
 		expect(child.kill).toHaveBeenCalledWith("SIGTERM");
 	});
 
-	it("parses a final response line when the child exits without a newline", async () => {
+	it("drains a final response between unexpected exit and stdio close", async () => {
 		const child = new FakeRpcChild();
 		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
 		await client.start();
 		const response = client.send({ type: "get_state" });
 		// SAFETY: the client writes one JSON command per line.
 		const request = JSON.parse(String(child.stdin.write.mock.calls.at(-1)?.[0])) as { id: string };
+		child.exitCode = 0;
+		child.emit("exit", 0, null);
 		child.stdout.emit("data", JSON.stringify({
 			type: "response",
 			id: request.id,
@@ -651,8 +653,7 @@ describe("SumoRpcClient", () => {
 			success: true,
 			data: { sessionId: "final-partial" },
 		}));
-		child.exitCode = 0;
-		child.emit("exit", 0, null);
+		child.emit("close", 0, null);
 
 		await expect(response).resolves.toMatchObject({ success: true, data: { sessionId: "final-partial" } });
 	});

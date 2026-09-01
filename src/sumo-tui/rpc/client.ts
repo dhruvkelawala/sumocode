@@ -222,9 +222,19 @@ export class SumoRpcClient {
 			console.error(`[sumocode-rpc] child stdin error: ${toError(error).message}`);
 		});
 		child.once("error", (error) => this.handleExit(toError(error)));
+		let exitError: RpcChildExitError | undefined;
 		child.once("exit", (code, signal) => {
-			if (!this.exitNotified) this.stdoutFrames?.end();
-			this.handleExit(new RpcChildExitError(`RPC child exited code=${code ?? "null"} signal=${signal ?? "null"}. stderr=${this.stderr}`, { code, signal }));
+			// `exit` can precede the final stdout data events. Refuse new sends now,
+			// but retain pending requests and stream listeners until stdio closes.
+			this.exited = true;
+			exitError = new RpcChildExitError(`RPC child exited code=${code ?? "null"} signal=${signal ?? "null"}. stderr=${this.stderr}`, { code, signal });
+		});
+		child.once("close", (code, signal) => {
+			// `close` follows stdio drain, so this is the only safe boundary for
+			// flushing a final partial JSONL frame and rejecting true leftovers.
+			this.stdoutFrames?.end();
+			if (this.exitNotified) return;
+			this.handleExit(exitError ?? new RpcChildExitError(`RPC child closed code=${code ?? "null"} signal=${signal ?? "null"}. stderr=${this.stderr}`, { code, signal }));
 		});
 
 		// A pre-spawned child can fail or exit while the host module is still

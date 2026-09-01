@@ -110,11 +110,12 @@ function sanitizeTaskMarkers(markers: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 	const taskDir = taskDirFromMarkers(markers);
 	if (!taskDir) {
 		const refused = TASK_MARKER_ENV_KEYS.filter((key) => markers[key] !== undefined && key !== "SUMOCODE_TASK_CONTROL_DIR");
-		for (const key of refused) {
-			// Quarantine before logging: a refused DIAG marker must not receive its
-			// own refusal diagnostic.
-			const file = markers[key];
-			delete markers[key];
+		// Two-phase: quarantine EVERY refused marker (including the diag sink)
+		// before logging any of them, so no refusal is ever appended through an
+		// unvalidated diagnostic path.
+		const refusedMarkers = refused.map((key) => ({ key, file: markers[key] }));
+		for (const { key } of refusedMarkers) delete markers[key];
+		for (const { key, file } of refusedMarkers) {
 			diagLog("marker_refused", { file, message: `${key} set without SUMOCODE_TASK_CONTROL_DIR` });
 		}
 		return markers;
@@ -474,12 +475,10 @@ function installControlWatcher(
 			return false;
 		}
 	};
-	// Absent at install is the documented boot ordering: keep the watcher alive
-	// so a later-created control dir is picked up on the next tick. An existing
-	// dir that failed validation is permanent tamper — disable the watcher.
-	if (!ensureControlDirValidated() && existsSync(canonicalControlDir)) {
-		return () => undefined;
-	}
+	// The watcher always installs: the per-tick gate re-validates the directory
+	// before consuming anything, so a tampered dir fails closed without a
+	// disable race, an absent dir is the documented boot ordering, and a dir
+	// fixed (or created) later starts being consumed on the next poll.
 	// Submission ownership lives in the process-wide submitted-controls registry,
 	// so watcher recreation and sibling module instances keep it. Ordinary stops
 	// deliberately clear nothing here: clearing would let a recreated watcher

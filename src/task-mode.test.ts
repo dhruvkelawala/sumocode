@@ -1239,6 +1239,28 @@ describe("control watcher", () => {
 		expect(readFileSync(victim, "utf8")).toBe("do not remove");
 	});
 
+	it("quarantines all markers before logging refusals when no control dir is set", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
+		const outside = mkdtempSync(join(tmpdir(), "sumocode-task-escape-"));
+		const outsideDiag = join(outside, "diag.jsonl");
+		const responseFile = join(workDir, "response.md");
+		const { pi } = buildPiStub();
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
+		installTaskModeAutoExit(pi as never, {
+			env: {
+				SUMOCODE_TASK_MODE: "1",
+				SUMOCODE_TASK_RESPONSE_FILE: responseFile,
+				SUMOCODE_TASK_DIAG_FILE: outsideDiag,
+			},
+			graceMs: 10_000,
+		});
+		// Without a control dir, both markers are refused; the diag sink must be
+		// quarantined before the response refusal is logged, so nothing is ever
+		// appended to the unvalidated diag path.
+		expect(existsSync(outsideDiag)).toBe(false);
+		expect(existsSync(responseFile)).toBe(false);
+	});
+
 	it("does not write a refusal through a refused diag path", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
 		makeControlDir(join(workDir, "control"));

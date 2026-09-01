@@ -1,0 +1,149 @@
+# Plan 095: Make visible steering acknowledgements settlement-aware and honest about Pi's boundary
+
+> **Executor instructions**: Do not add `await` to a void-returning API or mock a Promise that production cannot return. Preserve the task-directory control protocol. Improve only the guarantees SumoCode can actually observe, and clean parent waiters promptly when the child settles.
+>
+> **Drift check (run first)**: `git diff --stat ca0c62b..HEAD -- src/task-mode.ts src/task-mode.test.ts src/subagents/backend-pane.ts src/subagents/backend-pane.test.ts src/subagents/backend-pi.ts src/subagents/backend-pi.test.ts src/subagents/prompt.ts src/subagents/prompt.test.ts src/subagents/manager.ts src/subagents/manager.test.ts src/subagents/tools.ts src/subagents/tools.test.ts`
+> **Working-tree preflight (run at the same time)**: `git status --short -- dist/extension src/task-mode.ts src/task-mode.test.ts src/subagents/backend-pane.ts src/subagents/backend-pane.test.ts src/subagents/backend-pi.ts src/subagents/backend-pi.test.ts src/subagents/prompt.ts src/subagents/prompt.test.ts src/subagents/manager.ts src/subagents/manager.test.ts src/subagents/tools.ts src/subagents/tools.test.ts`. If this reports pre-existing work, STOP and preserve it.
+> If the drift check reports an in-scope change, compare the Current state excerpts and assumptions with live code. If behavior or signatures differ, STOP and request plan reconciliation.
+> **Dependency check**: Confirm every plan named in **Depends on** is `DONE` in `plans/README.md`. If any is not DONE, STOP; do not recreate or assume its APIs.
+
+## Status
+
+- **Priority**: P1
+- **Effort**: M
+- **Risk**: LOW
+- **Depends on**: `plans/issues/092.md` (sanitized public dependency; full security executor plan is local-only)
+- **Category**: bug
+- **Milestone**: M1 — Command-ready foundation
+- **Planned at**: commit `b34bd79`, 2026-08-28
+- **Reconciled at**: commit `ca0c62b`, 2026-09-01 — prompt guidance and current backend provenance are now explicit drift/scope surfaces
+- **Issue**: https://github.com/dhruvkelawala/sumocode/issues/389
+
+## Why this matters
+
+The parent currently treats deletion of a steering control file as a delivery acknowledgement and tells the caller input was delivered to the child. The pinned Pi `ExtensionAPI.sendUserMessage` returns `void`; Pi starts its asynchronous send internally and reports later rejection through its own runtime error channel. SumoCode therefore cannot observe Pi acceptance. It must name deletion as “control consumed/submission attempted,” avoid fake Promise-based tests, and promptly reject any parent ACK waiters when the child settles.
+
+## Current state
+
+`src/task-mode.ts` receives `pi: ExtensionAPI`. The pinned public extension type declares:
+
+```ts
+sendUserMessage(content: string | (TextContent | ImageContent)[], options?: {
+	deliverAs?: "steer" | "followUp";
+}): void;
+```
+
+A different `Promise<void>` method exists on `ReplacedSessionContext`; the task-mode watcher does not receive that interface. Pi's extension loader invokes the asynchronous runtime send internally and catches/reports rejection without returning a handle to the extension.
+
+The watcher currently calls `pi.sendUserMessage(...)`, unlinks the file, and logs `steer_injected`. This proves only that the watcher synchronously handed the request to Pi without a synchronous throw.
+
+`src/subagents/backend-pane.ts` creates one interval per `send()`. `settle()` clears only the response poll timer; outstanding send-ACK intervals can wait until timeout after child exit/cancel. `SubagentManager.sendTo()` awaits that Promise, and tool copy currently speaks in stronger delivery language than the boundary proves.
+
+## Commands you will need
+
+| Purpose | Command | Expected |
+|---|---|---|
+| Child watcher | `pnpm vitest run src/task-mode.test.ts` | all pass |
+| Pane/manager/tools/prompt (after Step 2) | `pnpm vitest run src/subagents/backend-pane.test.ts src/subagents/manager.test.ts src/subagents/tools.test.ts src/subagents/prompt.test.ts` | all pass; prompt assertions reject claims that consumption proves delivery |
+| Full gates | `pnpm exec tsc --noEmit && pnpm build && pnpm lint && VITEST_MAX_WORKERS=1 pnpm test` | exit 0 |
+| Integration | `pnpm test:integration` | exit 0 after required Plan 092 is DONE |
+
+Full unit runs under `VITEST_MAX_WORKERS=1` because the default-parallel `pnpm test` is locally load-sensitive: pre-existing timing flakes in untouched files make it non-deterministic on this machine (the base is likewise not green under default parallel; the failing files vary by run and each passes in isolation). Default-parallel runs are informational only; CI remains the authoritative full-unit gate. This replaces the original locally-unreliable `pnpm test` exit-0 gate after execution evidence, an explicit audited-plan reconciliation rather than a gate loosening.
+
+## Committed bundle freshness
+
+After final source edits, run `pnpm build:extension` before `pnpm test`; keep the generated `dist/extension/**` changes in this plan. Integration tests may rebuild the bundle, so rerun `pnpm build:extension` afterward and verify no additional unexpected generated drift.
+
+## Scope
+
+**In scope**:
+- `dist/extension/**` generated by `pnpm build:extension`.
+- `src/task-mode.ts`, `src/task-mode.test.ts`
+- `src/subagents/backend-pane.ts`, `src/subagents/backend-pane.test.ts`
+- `src/subagents/backend-pi.ts` (wording-only `SpawnedChild.send` doc comment; Plan 108 owns the later executable-resolver seam after this plan is DONE)
+- `src/subagents/prompt.ts`, `src/subagents/prompt.test.ts` (wording-only prompt guidance and tool-description text)
+- `src/subagents/manager.ts`, `src/subagents/manager.test.ts`
+- `src/subagents/tools.ts`, `src/subagents/tools.test.ts`
+
+**Out of scope**:
+- Editing `src/subagents/backend-pi.test.ts`; it is a read-only drift surface for the Plan 095/108 ownership boundary.
+- Pretending `ExtensionAPI.sendUserMessage` is awaitable.
+- Patching Pi or vendoring a private acknowledgement API.
+- Replacing control files with PTY typing or a new RPC protocol.
+- Conversational-child Plan 090 behavior.
+- Changing silence timeout, cancellation, or timed-out-file preservation.
+
+**Execution deviation (reconciled)**: Step 2's truthful-boundary rewording also changes steering copy in `src/subagents/prompt.ts` and `src/subagents/prompt.test.ts` plus one `SpawnedChild.send` doc comment in `src/subagents/backend-pi.ts`. These wording-only edits are implemented and reviewed in stacked PR #417 but had been omitted from this baseline plan's drift/preflight and scope lists; the lists now name them. No behavioral scope expansion.
+
+## Git workflow
+
+- Branch: `advisor/095-honest-visible-steering-acks`
+- Commit: `fix(subagents): clarify and settle steering acknowledgements`
+- Do not push or open a PR unless instructed.
+
+## Steps
+
+### Step 1: Pin the real public API contract
+
+Add a compile-time/runtime-adapter test that uses the real `ExtensionAPI` method shape: `sendUserMessage` returns `void`. Keep synchronous-throw coverage, but do not create a rejecting-Promise fake. Add a comment distinguishing it from `ReplacedSessionContext.sendUserMessage(): Promise<void>`.
+
+Plan 092 must already be DONE and its integration suite green. Before edits, run the targeted steering suites; do not create a rejecting-Promise fake for the void API.
+
+**Verify**: `pnpm vitest run src/task-mode.test.ts` passes with a void-returning fake and no Promise-acceptance assertion.
+
+### Step 2: Rename the observable acknowledgement boundary
+
+Keep atomic write→rename and watcher unlink semantics, but name them accurately in code, diagnostics, docs, and tool output:
+- file exists: pending control request;
+- file removed: child watcher consumed it and synchronously submitted to Pi;
+- this is not proof that Pi delivered it into the model turn.
+
+Change success text to a bounded statement such as `steering submitted to the child runtime; Pi exposes no post-acceptance acknowledgement`. Preserve timed-out files because their state remains ambiguous.
+
+**Verify**: tool/task-mode tests reject language claiming delivery/acceptance and assert the new boundary wording.
+
+### Step 3: Track and settle parent ACK waiters
+
+Store every ACK timer/reject callback by sequence/path. On child `settle()` or `interrupt()`, clear and reject each waiter immediately with the existing child-settled error shape. On normal unlink or timeout, remove it exactly once. Timed-out files remain on disk.
+
+Use fake timers. Cover multiple simultaneous sends and races between unlink, settle, and timeout.
+
+**Verify**: pane tests show zero pending timers after normal consume, timeout, exit, cancel, close, and interrupt.
+
+### Step 4: Document the upstream capability gap
+
+Add a maintenance note or non-filed upstream issue draft stating the minimal public Pi capability required for a true ACK: an awaitable extension `sendUserMessage` result or an acceptance/failure callback. Do not file it without maintainer approval and do not block the settlement cleanup/copy correction on upstream work.
+
+**Verify**: no production code contains a cosmetic `await pi.sendUserMessage(...)` and no test models Promise rejection from `ExtensionAPI`.
+
+### Step 5: Run gates
+
+Run targeted, full unit, and integration gates after regenerating the committed extension bundle. Plan 092 is a hard dependency, so the expected integration result is exit 0; any failure blocks completion.
+
+**Verify**: every command-table gate exits 0.
+
+## Test plan
+
+Cover synchronous submit success/throw, file consumed, file timeout, child exit before consume, child settle during consume poll, cancel/close/interrupt, multiple sends, timer cleanup, user-facing tool wording, and the injected parent prompt/tool-description guidance. Explicitly assert that guidance distinguishes consumed/submitted from delivered and that no Promise-rejection fixture exists for `ExtensionAPI`.
+
+## Done criteria
+
+- [ ] Code/tests state that file deletion proves control consumption/synchronous submission only.
+- [ ] No cosmetic await or impossible Promise-rejection test is introduced.
+- [ ] Child settlement clears/rejects all parent ACK waiters promptly.
+- [ ] Timed-out ambiguous files remain preserved.
+- [ ] Tool output and injected parent guidance do not claim post-acceptance delivery.
+- [ ] Unit and integration gates exit 0.
+
+## STOP conditions
+
+- The live `ExtensionAPI` becomes awaitable or gains an acknowledgement callback; stop and reconcile this plan to use the new contract.
+- A proposed retry can duplicate a request Pi may already own.
+- Correctness requires a private Pi patch or guessing from timing/log text.
+- Integration shows a new steering regression after two bounded attempts.
+
+## Maintenance notes
+
+A true delivery acknowledgement remains upstream-blocked in Pi 0.84.3. If a future Pi release adds it, Plan 101's compatibility matrix must gate the version and this protocol can be upgraded from “consumed/submitted” to “accepted.”
+
+Submitted-control ownership for the task-mode control watcher lives in a process-global registry (`Symbol.for` key on `globalThis`). It survives same-process watcher recreation (`/new`, `/resume`, `/fork`) and coexisting module instances (source checkout plus committed bundle), but it is lost when the Pi child process restarts. Durable post-restart exactly-once submission would require an upstream awaitable-ack/idempotency capability or a disk-backed ownership protocol and remains out of scope.

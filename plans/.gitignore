@@ -1,0 +1,8 @@
+# Full security executor plans stay local because this repository is public.
+# Publish/commit only their sanitized counterparts under plans/issues/.
+092-credential-safe-pty-harness.md
+097-remove-prompts-from-process-metadata.md
+098-harden-visible-task-directories.md
+099-bound-child-protocol-buffers.md
+100-redact-terminal-session-payloads.md
+102-remediate-reachable-dependency-advisories.md

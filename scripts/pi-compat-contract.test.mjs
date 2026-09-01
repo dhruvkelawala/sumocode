@@ -12,7 +12,8 @@ import {
 } from "./pi-compat-contract.mjs";
 
 const PI_BUILTINS = [
-	"settings", "model", "tree", "thinking", "export", "copy", "name", "session", "changelog", "hotkeys", "fork", "clone", "login", "new", "compact", "resume", "quit",
+	"settings", "model", "tree", "thinking", "scoped-models", "export", "import", "share", "copy", "name", "session", "changelog", "hotkeys",
+	"fork", "clone", "trust", "login", "logout", "new", "compact", "resume", "reload", "quit",
 ];
 function rpcTypes(commands = RPC_COMMANDS) {
 	return `export type RpcCommand = ${commands.map((name) => `{ type: "${name}" }`).join(" | ")};\n`
@@ -63,6 +64,7 @@ function validInput() {
 			tuiModePositional: true,
 			rpcState: true,
 			rpcCommands: true,
+			toolBypass: true,
 			toolNames: [
 				"terminal_start", "terminal_check", "terminal_wait", "terminal_stop", "terminal_list",
 				"subagent_spawn", "subagent_send", "subagent_check", "subagent_wait", "subagent_cancel", "subagent_close", "subagent_list",
@@ -113,7 +115,7 @@ describe("Pi compatibility contract", () => {
 
 		const builtin = validInput();
 		builtin.builtinCommands = builtin.builtinCommands.filter((entry) => entry.name !== "login");
-		expect(() => assertCompatibilityContract(builtin)).toThrow(/Pi-mirrored built-in command inventory.*login/);
+		expect(() => assertCompatibilityContract(builtin)).toThrow(/Pi built-in command inventory.*login/);
 
 		const extension = validInput();
 		extension.rpcCommands = extension.rpcCommands.filter((entry) => entry.name !== "accounts");
@@ -124,6 +126,9 @@ describe("Pi compatibility contract", () => {
 		const rpc = validInput();
 		rpc.runtime.rpcState = false;
 		expect(() => assertCompatibilityContract(rpc)).toThrow("runtime check failed: rpcState");
+		const bypass = validInput();
+		bypass.runtime.toolBypass = false;
+		expect(() => assertCompatibilityContract(bypass)).toThrow("runtime check failed: toolBypass");
 		const tools = validInput();
 		tools.runtime.toolNames = tools.runtime.toolNames.filter((name) => name !== "subagent_spawn");
 		expect(() => assertCompatibilityContract(tools)).toThrow("missing SumoCode tools: subagent_spawn");

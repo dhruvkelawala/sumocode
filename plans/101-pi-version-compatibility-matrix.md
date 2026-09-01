@@ -132,7 +132,7 @@ Exercise a published range with minimum/intermediate/latest patches, a range wit
 - [x] `git status --short` contains only files listed in Scope plus this plan/index bookkeeping.
 - [x] Plan 101's `plans/README.md` row is updated to `DONE` with completion evidence.
 
-Completion evidence after rebasing onto PR #429 head `4f79b14`: the supported matrix passed for 0.84.3 and 0.84.4, including production-source typechecks against each candidate's request and response declarations; contract fixtures passed 12/12; typecheck, build, and lint passed; the default-parallel unit suite passed 2,754/2,754.
+Completion evidence after rebasing onto PR #429 head `4f79b14`: the supported matrix passed for 0.84.3 and 0.84.4, including production-source typechecks against each candidate's request/response declarations, complete Pi built-in drift checks, and dangerous bash calls dispatched end-to-end through each candidate RPC child; contract fixtures passed 12/12; typecheck, build, and lint passed; the default-parallel unit suite passed 2,754/2,754.
 
 ## STOP conditions
 

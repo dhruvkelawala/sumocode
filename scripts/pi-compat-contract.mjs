@@ -6,6 +6,10 @@ export const EXPECTED_HOST_COMMANDS = Object.freeze([
 	"settings", "login", "model", "thinking", "theme", "sumo:theme", "compact", "new", "clone", "fork", "sessions", "resume",
 	"tree", "session", "name", "copy", "export", "quit", "sumo:memory", "sumo:theme-check", "sumo:palette", "hotkeys", "lovely-web", "changelog",
 ]);
+const EXPECTED_PI_BUILTIN_COMMANDS = Object.freeze([
+	"settings", "model", "tree", "thinking", "scoped-models", "export", "import", "share", "copy", "name", "session", "changelog", "hotkeys",
+	"fork", "clone", "trust", "login", "logout", "new", "compact", "resume", "reload", "quit",
+]);
 const PI_MIRRORED_HOST_COMMANDS = Object.freeze([
 	"settings", "login", "model", "thinking", "compact", "new", "clone", "fork", "resume", "tree", "session", "name", "copy", "export", "quit", "hotkeys", "changelog",
 ]);
@@ -30,7 +34,7 @@ const REQUIRED_TOOLS = Object.freeze([
 	"terminal_start", "terminal_check", "terminal_wait", "terminal_stop", "terminal_list",
 	"subagent_spawn", "subagent_send", "subagent_check", "subagent_wait", "subagent_cancel", "subagent_close", "subagent_list",
 ]);
-const REQUIRED_RUNTIME_RECORDS = Object.freeze(["printBypass", "modeBypass", "nonTtyBypass", "tuiModePositional", "rpcState", "rpcCommands"]);
+const REQUIRED_RUNTIME_RECORDS = Object.freeze(["printBypass", "modeBypass", "nonTtyBypass", "tuiModePositional", "rpcState", "rpcCommands", "toolBypass"]);
 
 function uniqueSorted(values) {
 	return [...new Set(values)].sort();
@@ -107,8 +111,10 @@ export function assertCompatibilityContract(input) {
 	assertInventory("host command ownership classification", EXPECTED_HOST_COMMANDS, [...PI_MIRRORED_HOST_COMMANDS, ...HOST_OWNED_COMMANDS]);
 	if (PI_MIRRORED_HOST_COMMANDS.some((name) => HOST_OWNED_COMMANDS.includes(name))) throw new Error("host command ownership classification overlaps");
 	assertInventory("routed child command inventory", EXPECTED_ROUTED_CHILD_COMMANDS, extractRoutedCommands(input.hostActionsSource ?? ""));
-	const builtinNames = uniqueSorted((input.builtinCommands ?? []).map((entry) => entry.name).filter((name) => PI_MIRRORED_HOST_COMMANDS.includes(name)));
-	assertInventory("Pi-mirrored built-in command inventory", PI_MIRRORED_HOST_COMMANDS, builtinNames);
+	const candidateBuiltinNames = uniqueSorted((input.builtinCommands ?? []).map((entry) => entry.name));
+	assertInventory("Pi built-in command inventory", EXPECTED_PI_BUILTIN_COMMANDS, candidateBuiltinNames);
+	const mirroredBuiltinNames = candidateBuiltinNames.filter((name) => PI_MIRRORED_HOST_COMMANDS.includes(name));
+	assertInventory("Pi-mirrored built-in command inventory", PI_MIRRORED_HOST_COMMANDS, mirroredBuiltinNames);
 
 	const rpcCommands = input.rpcCommands ?? [];
 	const sumocodeCommands = rpcCommands

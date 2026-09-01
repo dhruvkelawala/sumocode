@@ -168,7 +168,51 @@ PY
 		tr -d '\r' <tui-mode.txt >tui-mode-clean.txt
 
 		cat >compat-probe.mjs <<'PROBE'
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+
+let turn = 0;
+function streamCompatibilityModel(model) {
+	const stream = createAssistantMessageEventStream();
+	queueMicrotask(() => {
+		const output = {
+			role: "assistant",
+			content: [],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+			stopReason: "pending",
+			timestamp: Date.now(),
+		};
+		stream.push({ type: "start", partial: output });
+		if (turn++ === 0) {
+			const toolCall = { type: "toolCall", id: "compat-bash", name: "bash", arguments: { command: 'rm -rf /tmp/sumocode-compat-never && printf candidate-bypass > "$HOME/tool-bypass.txt"' } };
+			output.content.push(toolCall);
+			stream.push({ type: "toolcall_start", contentIndex: 0, partial: output });
+			stream.push({ type: "toolcall_end", contentIndex: 0, toolCall, partial: output });
+			output.stopReason = "toolUse";
+		} else {
+			output.content.push({ type: "text", text: "done" });
+			stream.push({ type: "text_start", contentIndex: 0, partial: output });
+			stream.push({ type: "text_delta", contentIndex: 0, delta: "done", partial: output });
+			stream.push({ type: "text_end", contentIndex: 0, content: "done", partial: output });
+			output.stopReason = "stop";
+		}
+		stream.push({ type: "done", reason: output.stopReason, message: output });
+		stream.end();
+	});
+	return stream;
+}
+
 export default function compatibilityProbe(pi) {
+	pi.registerProvider("sumocode-compat", {
+		name: "SumoCode compatibility probe",
+		baseUrl: "http://127.0.0.1",
+		apiKey: "compat",
+		api: "sumocode-compat",
+		models: [{ id: "tool-bypass", name: "Tool bypass", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 4096, maxTokens: 256 }],
+		streamSimple: streamCompatibilityModel,
+	});
 	pi.registerCommand("sumo:compat-tools", {
 		description: "compatibility probe",
 		handler: async (_args, ctx) => ctx.ui.setStatus("sumocode.compat-tools", JSON.stringify(pi.getActiveTools())),
@@ -177,21 +221,30 @@ export default function compatibilityProbe(pi) {
 PROBE
 		cat >rpc-probe.mjs <<'NODE'
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 const [pi, extension, mcpExtension, probe, output, home] = process.argv.slice(2);
-const child = spawn(pi, ["--mode", "rpc", "-e", extension, "-e", mcpExtension, "-e", probe, "--offline", "--no-session", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files"], {
+const child = spawn(pi, ["--mode", "rpc", "-e", probe, "-e", extension, "-e", mcpExtension, "--offline", "--no-session", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files"], {
 	env: { ...process.env, HOME: home, SUMOCODE_RPC_CHILD: "1", SUMOCODE_NATIVE_TASK: "1" },
 	stdio: ["pipe", "pipe", "pipe"],
 });
 let stdout = "";
 let stderr = "";
+let closing = false;
 child.stdout.setEncoding("utf8");
 child.stderr.setEncoding("utf8");
-child.stdout.on("data", (chunk) => { stdout += chunk; });
+child.stdout.on("data", (chunk) => {
+	stdout += chunk;
+	if (!closing && stdout.includes('"type":"tool_execution_end"') && stdout.includes('"id":"state"') && stdout.includes('"id":"commands"')) {
+		closing = true;
+		child.stdin.end();
+	}
+});
 child.stderr.on("data", (chunk) => { stderr += chunk; });
 const timer = setTimeout(() => child.kill("SIGKILL"), 20_000);
-child.stdin.end([
+child.stdin.write([
 	JSON.stringify({ id: "tools", type: "prompt", message: "/sumo:compat-tools" }),
+	JSON.stringify({ id: "model", type: "set_model", provider: "sumocode-compat", modelId: "tool-bypass" }),
+	JSON.stringify({ id: "tool-bypass", type: "prompt", message: "run the compatibility tool" }),
 	JSON.stringify({ id: "state", type: "get_state" }),
 	JSON.stringify({ id: "commands", type: "get_commands" }),
 ].join("\n") + "\n");
@@ -202,8 +255,14 @@ const messages = stdout.split("\n").filter(Boolean).map((line) => JSON.parse(lin
 const state = messages.find((message) => message.id === "state" && message.command === "get_state" && message.success === true);
 const commands = messages.find((message) => message.id === "commands" && message.command === "get_commands" && message.success === true);
 const tools = messages.find((message) => message.type === "extension_ui_request" && message.method === "setStatus" && message.statusKey === "sumocode.compat-tools");
-if (!state || !commands || !tools) throw new Error(`RPC probe responses incomplete: ${stdout.slice(-4000)}`);
-writeFileSync(output, JSON.stringify({ state, commands: commands.data.commands, toolNames: JSON.parse(tools.statusText) }));
+const toolExecution = messages.find((message) => message.type === "tool_execution_end" && message.toolCallId === "compat-bash" && message.toolName === "bash");
+if (!state || !commands || !tools || !toolExecution) throw new Error(`RPC probe responses incomplete: ${stdout.slice(-4000)}`);
+writeFileSync(output, JSON.stringify({
+	state,
+	commands: commands.data.commands,
+	toolNames: JSON.parse(tools.statusText),
+	toolBypass: readFileSync(`${home}/tool-bypass.txt`, "utf8") === "candidate-bypass" && toolExecution.isError === false,
+}));
 NODE
 		mkdir -m 700 rpc-home
 		if ! node rpc-probe.mjs "${PI_BIN}" "${EXTENSION_ENTRY}" "${MCP_EXTENSION}" "${WORK_DIR}/compat-probe.mjs" "${WORK_DIR}/rpc-result.json" "${WORK_DIR}/rpc-home" >rpc-probe.log 2>&1; then
@@ -245,6 +304,7 @@ writeFileSync(outputPath, JSON.stringify({
 		tuiModePositional: tuiModeText.includes("SUMOCODE_INITIAL_PROMPT=compat prompt") && /exec node .*sumo-rpc-host\.js .*--tui-mode fullscreen/.test(tuiModeText),
 		rpcState: rpc.state?.success === true && rpc.state.command === "get_state",
 		rpcCommands: Array.isArray(rpc.commands),
+		toolBypass: rpc.toolBypass === true,
 		toolNames: rpc.toolNames,
 	},
 }));

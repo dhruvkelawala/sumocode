@@ -257,6 +257,35 @@ describe("spawnPiChild", () => {
 		}
 	});
 
+	it("keeps protocol failure ownership when the child errors before close", () => {
+		vi.useFakeTimers();
+		const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+		try {
+			const proc = new FakeProcess();
+			// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+			const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+			// SAFETY: this backend exposes the callback event form collected by the test.
+			const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+
+			proc.stdout.emit("data", Buffer.concat([
+				Buffer.alloc(CHILD_JSON_FRAME_MAX_BYTES + 1, 0x73),
+				Buffer.from("\n"),
+			]));
+			proc.emit("error", new Error("termination failed"));
+			expect(killSpy).toHaveBeenCalledWith(-4242, "SIGTERM");
+			expect(events.filter((event) => event.kind === "run-settled")).toEqual([]);
+
+			proc.emit("close", null, "SIGTERM");
+			const settled = events.filter((event) => event.kind === "run-settled");
+			expect(settled).toHaveLength(1);
+			expect(settled[0]).toMatchObject({ outcome: { kind: "failed", errorText: expect.stringContaining(`exceeded ${CHILD_JSON_FRAME_MAX_BYTES} bytes`) } });
+			expect(JSON.stringify(settled[0])).not.toContain("termination failed");
+		} finally {
+			killSpy.mockRestore();
+			vi.useRealTimers();
+		}
+	});
+
 	it("settles a no-child spawn error without waiting for close", () => {
 		const proc = new FakeProcess();
 		proc.pid = undefined;

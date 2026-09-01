@@ -282,6 +282,37 @@ describe("native task tool", () => {
 		}
 	});
 
+	it("keeps protocol failure ownership when the child errors before close", async () => {
+		vi.useFakeTimers();
+		try {
+			const proc = new FakeTaskProcess();
+			const task = registeredTask(proc);
+			let resolved = false;
+			const running = task.execute().then((result) => {
+				resolved = true;
+				return result;
+			});
+			await vi.waitFor(() => expect(task.spawn).toHaveBeenCalledOnce());
+
+			proc.stdout.emit("data", Buffer.concat([
+				Buffer.alloc(CHILD_JSON_FRAME_MAX_BYTES + 1, 0x71),
+				Buffer.from("\n"),
+			]));
+			proc.emit("error", new Error("termination failed"));
+			await Promise.resolve();
+			await Promise.resolve();
+			expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+			expect(resolved).toBe(false);
+
+			proc.emit("close", null, "SIGTERM");
+			const result = await running;
+			expect(result.content[0]?.text).toContain(`exceeded ${CHILD_JSON_FRAME_MAX_BYTES} bytes`);
+			expect(result.content[0]?.text).not.toContain("termination failed");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("settles a no-child spawn error without waiting for close", async () => {
 		const proc = new FakeTaskProcess();
 		const running = registeredTask(proc).execute();

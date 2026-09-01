@@ -186,7 +186,7 @@ describe("herdrTerminalHost", () => {
 		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["tab", "create", "--workspace", "w1K", "--cwd", "/repo", "--label", "subagents", "--no-focus"], { timeout: 5000 });
 	});
 
-	it("cleans a failed command split start", async () => {
+	it("cleans failed child start for a command split", async () => {
 		process.env.HERDR_ENV = "1";
 		process.env.HERDR_PANE_ID = "w7:p3";
 		const exec = vi.fn(async (_bin: string, args: string[]) => {

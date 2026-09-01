@@ -274,7 +274,7 @@ describe("subagent result delivery", () => {
 			.mockImplementation(() => undefined);
 		harness.setIdle(true);
 
-		expect(() => harness.fire("agent_end")).toThrow("send failed");
+		expect(() => harness.fire("agent_end")).not.toThrow();
 		expect(() => harness.fire("agent_end")).not.toThrow();
 
 		const deliveredIds = harness.sendMessage.mock.calls.map((call) => {

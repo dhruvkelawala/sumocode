@@ -3621,23 +3621,41 @@ var applyAssistantUsage = (result, message) => {
   result.usage.cost += usage.cost?.total ?? 0;
   result.usage.contextTokens = usage.totalTokens ?? 0;
 };
+var RETAINED_PREVIEW_KEY = "__sumocodeRetainedPreview";
+var retainStructured = (budget, value, requiresMarker = false) => {
+  let serialized;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    serialized = String(value);
+  }
+  const retained = budget.retain(serialized, requiresMarker);
+  return retained === serialized ? value : retained ? { [RETAINED_PREVIEW_KEY]: retained } : {};
+};
 var clearRetainedHumanText = (result) => {
   result.messages = result.messages.map((message) => {
     if (message.role === "user") {
       return {
         ...message,
-        content: typeof message.content === "string" ? "" : message.content.map((part) => part.type === "text" ? { ...part, text: "" } : part)
+        content: typeof message.content === "string" ? "" : message.content.map((part) => part.type === "text" ? { ...part, text: "" } : { ...part, data: "" })
       };
     }
     if (message.role === "toolResult") {
       return {
         ...message,
-        content: message.content.map((part) => part.type === "text" ? { ...part, text: "" } : part)
+        content: message.content.map((part) => part.type === "text" ? { ...part, text: "" } : { ...part, data: "" }),
+        details: void 0
       };
     }
     return {
       ...message,
-      content: message.content.map((part) => part.type === "text" ? { ...part, text: "" } : part),
+      content: message.content.map((part) => {
+        if (part.type === "text") return { ...part, text: "", textSignature: void 0 };
+        if (part.type === "thinking") return { ...part, thinking: "", thinkingSignature: void 0 };
+        return { ...part, arguments: {}, thoughtSignature: void 0 };
+      }),
+      diagnostics: void 0,
+      deferred: void 0,
       errorMessage: void 0
     };
   });
@@ -3649,7 +3667,7 @@ var handleEventMessage = (result, message, liveOmitted = false) => {
   if (message.role === "user") {
     result.messages.push({
       ...message,
-      content: typeof message.content === "string" ? budget.retain(message.content) : message.content.map((part) => part.type === "text" ? { ...part, text: budget.retain(part.text) } : part)
+      content: typeof message.content === "string" ? budget.retain(message.content) : message.content.map((part) => part.type === "text" ? { ...part, text: budget.retain(part.text) } : { ...part, data: budget.retain(part.data) })
     });
     result.payloadTruncated = budget.truncated || void 0;
     return;
@@ -3657,13 +3675,18 @@ var handleEventMessage = (result, message, liveOmitted = false) => {
   if (message.role === "toolResult") {
     result.messages.push({
       ...message,
-      content: message.content.map((part) => part.type === "text" ? { ...part, text: budget.retain(part.text) } : part)
+      content: message.content.map((part) => part.type === "text" ? { ...part, text: budget.retain(part.text) } : { ...part, data: budget.retain(part.data) }),
+      details: message.details === void 0 ? void 0 : retainStructured(budget, message.details)
     });
     result.payloadTruncated = budget.truncated || void 0;
     return;
   }
-  const hasAssistantText = message.content.some((part) => part.type === "text" && part.text.length > 0) || (message.errorMessage?.length ?? 0) > 0;
-  let requiresMarker = hasAssistantText && (budget.truncated || budget.full || liveOmitted);
+  const hasAssistantPayload = message.content.some((part) => {
+    if (part.type === "text") return part.text.length > 0;
+    if (part.type === "thinking") return part.thinking.length > 0;
+    return true;
+  }) || (message.errorMessage?.length ?? 0) > 0;
+  let requiresMarker = hasAssistantPayload && (budget.truncated || budget.full || liveOmitted);
   if (requiresMarker) {
     clearRetainedHumanText(result);
     budget.reclaimForAssistant();
@@ -3674,9 +3697,18 @@ var handleEventMessage = (result, message, liveOmitted = false) => {
     if (retained2.length > 0) requiresMarker = false;
     return retained2;
   };
-  const content = message.content.map((part) => part.type === "text" ? { ...part, text: retainAssistantText(part.text) } : part);
+  const retainAssistantRecord = (value) => {
+    const retained2 = retainStructured(budget, value, requiresMarker);
+    if (Object.keys(retained2).length > 0) requiresMarker = false;
+    return retained2;
+  };
+  const content = message.content.map((part) => {
+    if (part.type === "text") return { ...part, text: retainAssistantText(part.text), textSignature: void 0 };
+    if (part.type === "thinking") return { ...part, thinking: retainAssistantText(part.thinking), thinkingSignature: void 0 };
+    return { ...part, arguments: retainAssistantRecord(part.arguments), thoughtSignature: void 0 };
+  });
   const errorMessage2 = message.errorMessage ? retainAssistantText(message.errorMessage) : void 0;
-  const retained = { ...message, content, errorMessage: errorMessage2 };
+  const retained = { ...message, content, diagnostics: void 0, deferred: void 0, errorMessage: errorMessage2 };
   result.messages.push(retained);
   result.payloadTruncated = budget.truncated || void 0;
   applyAssistantUsage(result, retained);

@@ -14,20 +14,24 @@ import {
 } from "./child-protocol.js";
 import { taskTool } from "./native-task-tool.js";
 
+type RetainedPayloadValue = string | number | boolean | null | RetainedPayloadValue[] | RetainedPayloadObject;
+type RetainedPayloadObject = { [key: string]: RetainedPayloadValue };
+
 type RetainedContentPart = {
 	type: string;
 	text?: string;
+	thinking?: string;
 	data?: string;
 	mimeType?: string;
 	id?: string;
 	name?: string;
-	arguments?: { path: string };
+	arguments?: RetainedPayloadObject;
 };
 type RetainedMessage = {
 	role: string;
 	content: string | RetainedContentPart[];
 	toolCallId?: string;
-	details?: { page: number };
+	details?: RetainedPayloadValue;
 	errorMessage?: string;
 	usage?: { input: number; output: number };
 };
@@ -98,14 +102,34 @@ function emitTaskEvent<TEvent extends object>(proc: FakeTaskProcess, event: TEve
 	proc.stdout.emit("data", `${JSON.stringify(event)}\n`);
 }
 
+function collectPayloadStrings(value: RetainedPayloadValue | undefined, into: string[]): void {
+	if (typeof value === "string") {
+		into.push(value);
+		return;
+	}
+	if (Array.isArray(value)) {
+		for (const item of value) collectPayloadStrings(item, into);
+		return;
+	}
+	if (value && typeof value === "object") {
+		for (const item of Object.values(value)) collectPayloadStrings(item, into);
+	}
+}
+
 function retainedPayloadText(result: RetainedTaskResult): string[] {
 	const text: string[] = [];
 	for (const message of result.messages ?? []) {
 		if (Array.isArray(message.content)) {
-			for (const part of message.content) if (part.type === "text" && part.text !== undefined) text.push(part.text);
+			for (const part of message.content) {
+				if (part.text !== undefined) text.push(part.text);
+				if (part.thinking !== undefined) text.push(part.thinking);
+				if (part.data !== undefined) text.push(part.data);
+				if (part.arguments !== undefined) collectPayloadStrings(part.arguments, text);
+			}
 		} else {
 			text.push(message.content);
 		}
+		if (message.details !== undefined) collectPayloadStrings(message.details, text);
 		if (message.errorMessage !== undefined) text.push(message.errorMessage);
 	}
 	for (const event of result.toolEvents ?? []) {
@@ -521,6 +545,62 @@ describe("native task tool", () => {
 		expect(payload.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
 		expect(result.toolEvents).toHaveLength(1);
 		expect(result.toolEvents?.[0]).toMatchObject({ id: "write-1", name: "write", status: "running" });
+	});
+
+	it("bounds non-text message payloads inside the shared run budget", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		const usage = { input: 0, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 1, cost: { total: 0 } };
+		const huge = (label: string, mebibytes: number) => `${label}:${"x".repeat(mebibytes * 1024 * 1024)}`;
+
+		emitTaskEvent(proc, {
+			type: "message_end",
+			message: { role: "user", content: [{ type: "image", mimeType: "image/png", data: huge("USER_IMAGE", 2) }] },
+		});
+		emitTaskEvent(proc, {
+			type: "tool_result_end",
+			message: {
+				role: "toolResult",
+				toolCallId: "image-tool",
+				toolName: "read",
+				content: [{ type: "image", mimeType: "image/png", data: huge("TOOL_IMAGE", 2) }],
+				details: { blob: huge("TOOL_DETAILS", 2) },
+			},
+		});
+		for (const turn of ["FIRST", "FINAL"]) {
+			emitTaskEvent(proc, {
+				type: "message_end",
+				message: {
+					role: "assistant",
+					content: [
+						{ type: "thinking", thinking: huge(`${turn}_THINKING`, 1), thinkingSignature: huge("SIGNATURE", 1) },
+						{ type: "toolCall", id: `${turn.toLowerCase()}-tool`, name: "write", arguments: { content: huge(`${turn}_ARGUMENTS`, 4) }, thoughtSignature: huge("THOUGHT_SIGNATURE", 1) },
+					],
+					usage,
+				},
+			});
+		}
+		proc.emit("close", 0);
+
+		const toolResult = await running;
+		const result = toolResult.details?.results?.[0];
+		if (!result) throw new Error("task result is missing");
+		const payload = retainedPayloadText(result).join("");
+		expect(Buffer.byteLength(payload, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+		expect(payload.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+		expect(payload).not.toContain("FIRST_ARGUMENTS");
+		expect(payload).toContain("FINAL_THINKING");
+		expect(result.messages?.[0]?.content).toMatchObject([{ type: "image", data: "", mimeType: "image/png" }]);
+		expect(result.messages?.[1]).toMatchObject({ role: "toolResult", details: undefined, content: [{ type: "image", data: "" }] });
+		expect(result.messages?.[2]?.content).toMatchObject([
+			{ type: "thinking", thinking: "", thinkingSignature: undefined },
+			{ type: "toolCall", id: "first-tool", arguments: {}, thoughtSignature: undefined },
+		]);
+		expect(result.messages?.[3]?.content).toMatchObject([
+			{ type: "thinking", thinking: expect.stringContaining("FINAL_THINKING"), thinkingSignature: undefined },
+			{ type: "toolCall", id: "final-tool", thoughtSignature: undefined },
+		]);
+		expect(result.usage?.turns).toBe(2);
 	});
 
 	it("prioritizes a useful marked final answer and reclaims exhausted prior text", async () => {

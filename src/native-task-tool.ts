@@ -744,6 +744,19 @@ const applyAssistantUsage = (result: SingleResult, message: AssistantMessage): v
 	result.usage.contextTokens = usage.totalTokens ?? 0;
 };
 
+const RETAINED_PREVIEW_KEY = "__sumocodeRetainedPreview";
+
+const retainStructured = <T>(budget: RunPayloadBudget, value: T, requiresMarker = false): T | Record<string, string> => {
+	let serialized: string;
+	try {
+		serialized = JSON.stringify(value);
+	} catch {
+		serialized = String(value);
+	}
+	const retained = budget.retain(serialized, requiresMarker);
+	return retained === serialized ? value : retained ? { [RETAINED_PREVIEW_KEY]: retained } : {};
+};
+
 const clearRetainedHumanText = (result: SingleResult): void => {
 	result.messages = result.messages.map((message): Message => {
 		if (message.role === "user") {
@@ -751,18 +764,25 @@ const clearRetainedHumanText = (result: SingleResult): void => {
 				...message,
 				content: typeof message.content === "string"
 					? ""
-					: message.content.map((part) => part.type === "text" ? { ...part, text: "" } : part),
+					: message.content.map((part) => part.type === "text" ? { ...part, text: "" } : { ...part, data: "" }),
 			};
 		}
 		if (message.role === "toolResult") {
 			return {
 				...message,
-				content: message.content.map((part) => part.type === "text" ? { ...part, text: "" } : part),
+				content: message.content.map((part) => part.type === "text" ? { ...part, text: "" } : { ...part, data: "" }),
+				details: undefined,
 			};
 		}
 		return {
 			...message,
-			content: message.content.map((part) => part.type === "text" ? { ...part, text: "" } : part),
+			content: message.content.map((part) => {
+				if (part.type === "text") return { ...part, text: "", textSignature: undefined };
+				if (part.type === "thinking") return { ...part, thinking: "", thinkingSignature: undefined };
+				return { ...part, arguments: {}, thoughtSignature: undefined };
+			}),
+			diagnostics: undefined,
+			deferred: undefined,
 			errorMessage: undefined,
 		};
 	});
@@ -777,7 +797,9 @@ const handleEventMessage = (result: SingleResult, message: Message, liveOmitted 
 			...message,
 			content: typeof message.content === "string"
 				? budget.retain(message.content)
-				: message.content.map((part) => part.type === "text" ? { ...part, text: budget.retain(part.text) } : part),
+				: message.content.map((part) => part.type === "text"
+					? { ...part, text: budget.retain(part.text) }
+					: { ...part, data: budget.retain(part.data) }),
 		});
 		result.payloadTruncated = budget.truncated || undefined;
 		return;
@@ -785,14 +807,20 @@ const handleEventMessage = (result: SingleResult, message: Message, liveOmitted 
 	if (message.role === "toolResult") {
 		result.messages.push({
 			...message,
-			content: message.content.map((part) => part.type === "text" ? { ...part, text: budget.retain(part.text) } : part),
+			content: message.content.map((part) => part.type === "text"
+				? { ...part, text: budget.retain(part.text) }
+				: { ...part, data: budget.retain(part.data) }),
+			details: message.details === undefined ? undefined : retainStructured(budget, message.details),
 		});
 		result.payloadTruncated = budget.truncated || undefined;
 		return;
 	}
-	const hasAssistantText = message.content.some((part) => part.type === "text" && part.text.length > 0)
-		|| (message.errorMessage?.length ?? 0) > 0;
-	let requiresMarker = hasAssistantText && (budget.truncated || budget.full || liveOmitted);
+	const hasAssistantPayload = message.content.some((part) => {
+		if (part.type === "text") return part.text.length > 0;
+		if (part.type === "thinking") return part.thinking.length > 0;
+		return true;
+	}) || (message.errorMessage?.length ?? 0) > 0;
+	let requiresMarker = hasAssistantPayload && (budget.truncated || budget.full || liveOmitted);
 	if (requiresMarker) {
 		clearRetainedHumanText(result);
 		budget.reclaimForAssistant();
@@ -803,9 +831,18 @@ const handleEventMessage = (result: SingleResult, message: Message, liveOmitted 
 		if (retained.length > 0) requiresMarker = false;
 		return retained;
 	};
-	const content = message.content.map((part) => part.type === "text" ? { ...part, text: retainAssistantText(part.text) } : part);
+	const retainAssistantRecord = (value: Record<string, unknown>): Record<string, unknown> => {
+		const retained = retainStructured(budget, value, requiresMarker);
+		if (Object.keys(retained).length > 0) requiresMarker = false;
+		return retained;
+	};
+	const content = message.content.map((part) => {
+		if (part.type === "text") return { ...part, text: retainAssistantText(part.text), textSignature: undefined };
+		if (part.type === "thinking") return { ...part, thinking: retainAssistantText(part.thinking), thinkingSignature: undefined };
+		return { ...part, arguments: retainAssistantRecord(part.arguments), thoughtSignature: undefined };
+	});
 	const errorMessage = message.errorMessage ? retainAssistantText(message.errorMessage) : undefined;
-	const retained: AssistantMessage = { ...message, content, errorMessage };
+	const retained: AssistantMessage = { ...message, content, diagnostics: undefined, deferred: undefined, errorMessage };
 	result.messages.push(retained);
 	result.payloadTruncated = budget.truncated || undefined;
 	applyAssistantUsage(result, retained);

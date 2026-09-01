@@ -14694,8 +14694,11 @@ var TERMINAL_TOOL_DESCRIPTIONS = {
   stop: "Signal every requested running terminal process tree, escalate after the grace period, and report cancellation only after each whole tree is gone.",
   list: "List current-session managed terminals newest first, including completion disposition, without observing or consuming them."
 };
+function redacted(value) {
+  return redactActivitySecrets(sanitizeActivityText(value));
+}
 function bounded(value, maxChars) {
-  const clean = redactActivitySecrets(value).trimEnd();
+  const clean = redacted(value).trimEnd();
   if (clean.length <= maxChars) return clean;
   return `[output tail truncated]
 ${clean.slice(-maxChars)}`;
@@ -14710,22 +14713,22 @@ function elapsed(task, currentTime = Date.now()) {
 }
 function describeTerminal(task) {
   const exit = task.exitCode === void 0 ? "" : ` \xB7 exit ${task.exitCode ?? "unknown"}`;
-  return `${task.id} \xB7 ${task.status}${exit} \xB7 ${task.deliveryState} \xB7 ${elapsed(task)} \xB7 ${redactActivitySecrets(task.title)}`;
+  return `${task.id} \xB7 ${task.status}${exit} \xB7 ${task.deliveryState} \xB7 ${elapsed(task)} \xB7 ${redacted(task.title)}`;
 }
 function buildStartResult(task) {
   return [
-    `Started terminal ${task.id} \xB7 ${redactActivitySecrets(task.title)}.`,
+    `Started terminal ${task.id} \xB7 ${redacted(task.title)}.`,
     `status: ${task.status} \xB7 completion: ${task.completionPolicy} \xB7 pid: ${task.pid ?? "pending"}`,
-    `cwd: ${redactActivitySecrets(task.cwd)}`,
+    `cwd: ${redacted(task.cwd)}`,
     "stdin: unavailable \u2014 interactive commands will not work",
-    `Full log: ${redactActivitySecrets(task.logFile)}`
+    `Full log: ${redacted(task.logFile)}`
   ].join("\n");
 }
 function buildObservationResult(observation) {
   return [
     describeTerminal(observation.task),
-    `cwd: ${redactActivitySecrets(observation.task.cwd)}`,
-    `Full log: ${redactActivitySecrets(observation.task.logFile)}`,
+    `cwd: ${redacted(observation.task.cwd)}`,
+    `Full log: ${redacted(observation.task.logFile)}`,
     "",
     "Output tail:",
     bounded(observation.output, 16 * 1024) || "(no output)"
@@ -14745,18 +14748,18 @@ function buildStopResult(results) {
   return results.map((result) => {
     const output = result.output ? `
 ${bounded(result.output, 8 * 1024)}` : "";
-    return `${redactActivitySecrets(result.message)}${output}`;
+    return `${redacted(result.message)}${output}`;
   }).join("\n\n");
 }
 function buildTerminalResultMessage(task, output) {
   return [
-    `Terminal ${task.id} "${redactActivitySecrets(task.title)}" ${task.status}.`,
-    `exit: ${task.exitCode ?? "unknown"} \xB7 elapsed: ${elapsed(task)} \xB7 cwd: ${redactActivitySecrets(task.cwd)}`,
+    `Terminal ${task.id} "${redacted(task.title)}" ${task.status}.`,
+    `exit: ${task.exitCode ?? "unknown"} \xB7 elapsed: ${elapsed(task)} \xB7 cwd: ${redacted(task.cwd)}`,
     "",
     "Final output tail:",
     bounded(output, 8 * 1024) || "(no output)",
     "",
-    `Full log: ${redactActivitySecrets(task.logFile)}`
+    `Full log: ${redacted(task.logFile)}`
   ].join("\n");
 }
 

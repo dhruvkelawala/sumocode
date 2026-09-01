@@ -350,6 +350,25 @@ describe("SubagentManager", () => {
 		expect(diagnostics).toEqual([{ kind: "listener", message: "listener exploded" }]);
 	});
 
+	it("isolates listener failure after an earlier listener succeeds", async () => {
+		const diagnostics: Array<{ kind: string; message: string }> = [];
+		const manager = new SubagentManager(() => ({ events: () => undefined, interrupt: () => undefined }), {
+			captureGitContext: async () => ({ baseRef: "base-ref" }),
+			onDiagnostic: (diagnostic: { kind: string; message: string }) => diagnostics.push(diagnostic),
+		});
+		const firstListener = vi.fn();
+		const lastListener = vi.fn();
+		manager.addChangeListener(firstListener);
+		manager.addChangeListener(() => { throw new Error("second listener exploded"); });
+		manager.addChangeListener(lastListener);
+
+		await expect(manager.spawn(makeTask("notify middle"))).resolves.toMatchObject({ status: "running" });
+
+		expect(firstListener).toHaveBeenCalledOnce();
+		expect(lastListener).toHaveBeenCalledOnce();
+		expect(diagnostics).toEqual([{ kind: "listener", message: "second listener exploded" }]);
+	});
+
 	it("stores the manifest before completion listeners are notified", async () => {
 		let emitFn: ((event: SubagentEvent) => void) | undefined;
 		let resolveManifest: (manifest: CompletionManifest) => void = () => undefined;

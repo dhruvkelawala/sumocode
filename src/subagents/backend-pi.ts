@@ -325,7 +325,7 @@ interface AbortState {
 	isAborted: () => boolean;
 	interrupt: () => void;
 	terminate: () => void;
-	dispose: (keepTerminationTimer?: boolean) => void;
+	dispose: () => void;
 }
 
 const attachAbortSignal = (proc: ChildProcessWithoutNullStreams, signal: AbortSignal | undefined): AbortState => {
@@ -356,9 +356,8 @@ const attachAbortSignal = (proc: ChildProcessWithoutNullStreams, signal: AbortSi
 		isAborted: () => aborted,
 		interrupt,
 		terminate,
-		dispose: (keepTerminationTimer = false) => {
+		dispose: () => {
 			signal?.removeEventListener("abort", interrupt);
-			if (keepTerminationTimer) return;
 			proc.removeListener("close", onClose);
 			if (forceKill) clearTimeout(forceKill);
 			forceKill = undefined;
@@ -490,6 +489,7 @@ export const createPiChildSpawner = (
 		let finalAssistantText = "";
 		let stopReason: string | undefined;
 		let errorMessage: string | undefined;
+		let protocolError: string | undefined;
 		let settled = false;
 		const settle = (outcome: Extract<SubagentEvent, { kind: "run-settled" }>["outcome"]): void => {
 			if (settled) return;
@@ -512,23 +512,25 @@ export const createPiChildSpawner = (
 		const stdout = new JsonLineDecoder({
 			onLine: processLine,
 			onError: (error) => {
+				protocolError = error.message;
+				// TERM starts shutdown; close remains the terminal boundary while the child exists.
 				abortState.terminate();
-				cleanup(true);
-				settle({ kind: "failed", errorText: error.message, partialText: finalAssistantText || undefined });
 			},
 		});
 		const onStdout = (data: string | Uint8Array) => stdout.write(data);
 		const onStderr = (data: string | Uint8Array) => stderr.append(data);
-		const cleanup = (keepTerminationTimer = false) => {
+		const cleanup = () => {
 			proc.stdout.removeListener("data", onStdout);
 			proc.stderr.removeListener("data", onStderr);
-			abortState.dispose(keepTerminationTimer);
+			abortState.dispose();
 		};
 		proc.stdout.on("data", onStdout);
 		proc.stderr.on("data", onStderr);
 		proc.once("close", (code, closeSignal) => {
 			stdout.end();
-			if (abortState.isAborted()) {
+			if (protocolError) {
+				settle({ kind: "failed", errorText: protocolError, partialText: finalAssistantText || undefined });
+			} else if (abortState.isAborted()) {
 				settle({ kind: "interrupted", partialText: finalAssistantText || undefined });
 			} else if (code === 0 && stopReason !== "error" && stopReason !== "aborted") {
 				settle({ kind: "completed", finalText: finalAssistantText });
@@ -545,6 +547,7 @@ export const createPiChildSpawner = (
 			cleanup();
 		});
 		proc.once("error", (error) => {
+			if (protocolError) return;
 			settle({ kind: "failed", errorText: boundRetainedResult(error.message, ERROR_MAX), partialText: finalAssistantText || undefined });
 			cleanup();
 		});

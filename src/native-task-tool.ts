@@ -591,7 +591,7 @@ const getTaskErrorText = (result: SingleResult): string => {
 type AbortGuard = {
 	isAborted: () => boolean;
 	terminate: () => void;
-	dispose: (keepTerminationTimer?: boolean) => void;
+	dispose: () => void;
 };
 
 const attachAbortSignal = (
@@ -624,9 +624,8 @@ const attachAbortSignal = (
 	return {
 		isAborted: () => aborted,
 		terminate,
-		dispose: (keepTerminationTimer = false) => {
+		dispose: () => {
 			signal?.removeEventListener("abort", interrupt);
-			if (keepTerminationTimer) return;
 			proc.removeListener("close", onClose);
 			if (forceKill) clearTimeout(forceKill);
 			forceKill = undefined;
@@ -903,38 +902,40 @@ const runSingleTask = async (options: {
 			};
 
 			let settled = false;
+			let protocolFailed = false;
 			const stdout = new JsonLineDecoder({
 				onLine: processLine,
 				onError: (error) => {
+					protocolFailed = true;
 					currentResult.errorMessage = error.message;
+					// TERM starts shutdown; close remains the terminal boundary while the child exists.
 					abortState.terminate();
-					finish(1, true);
 				},
 			});
 			const onStdout = (data: string | Uint8Array) => stdout.write(data);
 			const onStderr = (data: string | Uint8Array) => stderr.append(data);
-			const cleanup = (keepTerminationTimer = false) => {
+			const cleanup = () => {
 				proc.stdout.removeListener("data", onStdout);
 				proc.stderr.removeListener("data", onStderr);
-				abortState.dispose(keepTerminationTimer);
+				abortState.dispose();
 			};
-			const finish = (code: number, keepTerminationTimer = false) => {
+			const finish = (code: number) => {
 				if (settled) return;
 				settled = true;
 				currentResult.exitCode = code;
 				currentResult.stderr = stderr.toString();
 				if (abortState.isAborted()) currentResult.stopReason = "aborted";
-				cleanup(keepTerminationTimer);
+				cleanup();
 				resolve(code);
 			};
 			proc.stdout.on("data", onStdout);
 			proc.stderr.on("data", onStderr);
 			proc.once("close", (code) => {
 				stdout.end();
-				finish(code ?? 0);
+				finish(protocolFailed ? 1 : code ?? 0);
 			});
 			proc.once("error", (error) => {
-				if (settled) return;
+				if (settled || protocolFailed) return;
 				currentResult.errorMessage = boundRetainedResult(error.message);
 				finish(1);
 			});

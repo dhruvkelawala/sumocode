@@ -174,6 +174,21 @@ describe("BoundedUtf8Tail", () => {
 		expect(value).toContain("🧘new");
 		expect(value).not.toContain("�");
 	});
+
+	it("caps replacement characters from malformed bytes while keeping a useful valid suffix", () => {
+		const suffix = "useful stderr suffix";
+		const suffixBytes = Buffer.from(suffix, "utf8");
+		const tail = new BoundedUtf8Tail();
+		tail.append(Buffer.concat([
+			Buffer.alloc(CHILD_STDERR_TAIL_MAX_BYTES - suffixBytes.byteLength, 0xff),
+			suffixBytes,
+		]));
+
+		const value = tail.toString();
+		expect(Buffer.byteLength(value, "utf8")).toBeLessThanOrEqual(CHILD_STDERR_TAIL_MAX_BYTES);
+		expect(value.split(TRUNCATED_TAIL_MARKER)).toHaveLength(2);
+		expect(value.endsWith(suffix)).toBe(true);
+	});
 });
 
 describe("boundRetainedResult", () => {

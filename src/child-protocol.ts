@@ -140,7 +140,10 @@ export class BoundedUtf8Tail {
 
 	public toString(): string {
 		const tail = decodeUtf8Tail(this.bytes);
-		return this.truncated ? `${TRUNCATED_TAIL_MARKER}${tail}` : tail;
+		const decoded = Buffer.from(tail, "utf8");
+		if (!this.truncated && decoded.byteLength <= this.maxBytes) return tail;
+		const start = Math.max(0, decoded.byteLength - this.contentMaxBytes);
+		return `${TRUNCATED_TAIL_MARKER}${decodeUtf8Tail(decoded.subarray(start))}`;
 	}
 }
 

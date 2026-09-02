@@ -231,7 +231,23 @@ function defaultSampleEnvironment(checkout, agentDir, diagFile) {
 	};
 }
 
-async function runSampleProcess({ checkout, agentDir, diagFile }, spawnPtyFn = spawnPty) {
+function signalPtyTree(child, signal) {
+	if (process.platform !== "win32" && Number.isInteger(child.pid)) process.kill(-child.pid, signal);
+	else child.kill(signal);
+}
+
+function ptyTreeAlive(child, leaderExited) {
+	if (process.platform === "win32" || !Number.isInteger(child.pid)) return !leaderExited;
+	try { process.kill(-child.pid, 0); return true; } catch { return false; }
+}
+
+async function waitForTreeExit(isAlive, timeoutMs) {
+	const deadline = Date.now() + timeoutMs;
+	while (isAlive() && Date.now() < deadline) await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+}
+
+async function runSampleProcess({ checkout, agentDir, diagFile }, boundaries = {}) {
+	const spawnPtyFn = boundaries.spawnPty ?? spawnPty;
 	const child = spawnPtyFn(join(checkout, "bin", "sumocode.sh"), [...FLAGS], {
 		name: "xterm-256color",
 		cols: 100,
@@ -242,12 +258,13 @@ async function runSampleProcess({ checkout, agentDir, diagFile }, spawnPtyFn = s
 	let exited = false;
 	let exitCode;
 	let signal;
-	const exitedPromise = new Promise((resolveExit) => child.onExit((event) => {
+	child.onExit((event) => {
 		exited = true;
 		exitCode = event.exitCode;
 		signal = event.signal;
-		resolveExit();
-	}));
+	});
+	const signalTree = boundaries.signalTree ?? signalPtyTree;
+	const treeAlive = () => (boundaries.treeAlive ?? ptyTreeAlive)(child, exited);
 	const deadline = Date.now() + SAMPLE_TIMEOUT_MS;
 	let events = [];
 	while (!exited && Date.now() < deadline) {
@@ -261,19 +278,19 @@ async function runSampleProcess({ checkout, agentDir, diagFile }, spawnPtyFn = s
 	events = await readEvents(diagFile);
 	const exitedBeforeShutdown = exited;
 	const observedAllEvents = REQUIRED_EVENTS.every((name) => events.some((event) => event.event === name));
-	if (!exited) {
-		try { child.kill("SIGINT"); } catch {}
-		await Promise.race([exitedPromise, new Promise((resolveWait) => setTimeout(resolveWait, 750))]);
+	if (treeAlive()) {
+		try { signalTree(child, "SIGINT"); } catch {}
+		await waitForTreeExit(treeAlive, 750);
 	}
-	if (!exited) {
-		try { child.kill("SIGTERM"); } catch {}
-		await Promise.race([exitedPromise, new Promise((resolveWait) => setTimeout(resolveWait, 250))]);
+	if (treeAlive()) {
+		try { signalTree(child, "SIGTERM"); } catch {}
+		await waitForTreeExit(treeAlive, 250);
 	}
-	if (!exited) {
-		try { child.kill("SIGKILL"); } catch {}
-		await Promise.race([exitedPromise, new Promise((resolveWait) => setTimeout(resolveWait, 250))]);
+	if (treeAlive()) {
+		try { signalTree(child, "SIGKILL"); } catch {}
+		await waitForTreeExit(treeAlive, 250);
 	}
-	const failure = !exited
+	const failure = treeAlive()
 		? "shutdown-failed"
 		: exitedBeforeShutdown
 			? "process-failed"
@@ -416,11 +433,16 @@ export async function runStartupComparison(options, dependencies = {}) {
 	const resolveRef = dependencies.resolveRevision ?? ((ref) => resolveRevision(callerRoot, ref));
 	const assertCheckoutClean = dependencies.assertClean ?? assertClean;
 	const makeWorktrees = dependencies.prepareWorktrees ?? prepareWorktrees;
-	const sampleRunner = dependencies.runSample ?? ((sample) => runSampleProcess(sample, dependencies.spawnSamplePty ?? spawnPty));
+	const sampleRunner = dependencies.runSample ?? ((sample) => runSampleProcess(sample, {
+		spawnPty: dependencies.spawnSamplePty,
+		signalTree: dependencies.signalSampleTree,
+		treeAlive: dependencies.sampleTreeAlive,
+	}));
 	const machineMetadata = dependencies.machineMetadata ?? (() => ({ platform: platform(), arch: arch(), nodeVersion: process.version, cpuCount: cpus().length }));
 	const now = dependencies.now ?? (() => new Date());
 	let worktrees;
 	let dependenciesUnlinked = false;
+	let retainedForLiveProcess = false;
 	try {
 		await assertCheckoutClean(callerRoot);
 		const [baselineSha, candidateSha] = await Promise.all([resolveRef(options.baseRef), resolveRef(options.candidateRef ?? "HEAD")]);
@@ -448,12 +470,17 @@ export async function runStartupComparison(options, dependencies = {}) {
 			armSamples[arm].push(sample);
 			// Never mutate the shared fixture or launch another process while an
 			// owned PTY may still be alive.
-			if (sample.failure === "shutdown-failed") break;
+			if (sample.failure === "shutdown-failed") {
+				retainedForLiveProcess = true;
+				break;
+			}
 		}
-		await worktrees.unlinkDependencies?.();
-		dependenciesUnlinked = true;
-		await assertCheckoutClean(worktrees.baselineDir);
-		await assertCheckoutClean(worktrees.candidateDir);
+		if (!retainedForLiveProcess) {
+			await worktrees.unlinkDependencies?.();
+			dependenciesUnlinked = true;
+			await assertCheckoutClean(worktrees.baselineDir);
+			await assertCheckoutClean(worktrees.candidateDir);
+		}
 		const metrics = METRICS.map((definition) => metricComparison(definition, armSamples.baseline, armSamples.candidate));
 		const successfulSamples = {
 			baseline: armSamples.baseline.filter((sample) => sample.ok).length,
@@ -467,7 +494,7 @@ export async function runStartupComparison(options, dependencies = {}) {
 			baselineSha,
 			candidateSha,
 			samplesPerArm: options.samples,
-			fixture: { recordCount: options.fixtureCount, retained: options.keepFixture === true },
+			fixture: { recordCount: options.fixtureCount, retained: options.keepFixture === true || retainedForLiveProcess },
 			runtime: machineMetadata(),
 			flags: [...FLAGS],
 			bundleMode: { host: "source", extension: "source" },
@@ -490,11 +517,14 @@ export async function runStartupComparison(options, dependencies = {}) {
 		return report;
 	} finally {
 		const cleanupSteps = [];
-		if (!dependenciesUnlinked && worktrees?.unlinkDependencies) cleanupSteps.push(() => worktrees.unlinkDependencies());
-		if (worktrees?.cleanup) cleanupSteps.push(() => worktrees.cleanup());
-		if (options.keepFixture === true) {
+		if (retainedForLiveProcess) {
 			cleanupSteps.push(async () => { dependencies.onFixtureRetained?.(campaignDir); });
-		} else cleanupSteps.push(() => rm(campaignDir, { recursive: true, force: true }));
+		} else {
+			if (!dependenciesUnlinked && worktrees?.unlinkDependencies) cleanupSteps.push(() => worktrees.unlinkDependencies());
+			if (worktrees?.cleanup) cleanupSteps.push(() => worktrees.cleanup());
+			if (options.keepFixture === true) cleanupSteps.push(async () => { dependencies.onFixtureRetained?.(campaignDir); });
+			else cleanupSteps.push(() => rm(campaignDir, { recursive: true, force: true }));
+		}
 		cleanupSteps.push(() => assertCheckoutClean(callerRoot));
 		await runCleanupSteps(cleanupSteps, "startup comparison cleanup failed");
 	}

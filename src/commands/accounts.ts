@@ -321,10 +321,15 @@ async function defaultLogin(providerId: string, ctx: ExtensionCommandContext): P
 	await executeRpcLogin(providerId, ctx, runtime);
 }
 
-function accountState(account: ClaudeAccount, hasActiveClaudeAccount: boolean): string {
+/**
+ * A signed-in account reads "signed in" regardless of which provider the
+ * session's current model uses. Fresh sessions start on the settings default
+ * (often a non-Claude provider), and an earlier "inactive" label for that
+ * state read as "sign in required" and sent users through needless re-auth.
+ */
+function accountState(account: ClaudeAccount): string {
 	if (account.active) return "in use";
-	if (!account.configured) return "sign in required";
-	return hasActiveClaudeAccount ? "signed in" : "inactive";
+	return account.configured ? "signed in" : "sign in required";
 }
 
 /**
@@ -333,8 +338,8 @@ function accountState(account: ClaudeAccount, hasActiveClaudeAccount: boolean): 
  * two-space seam and the provider id — derivable from the label — is what
  * gets truncated instead.
  */
-function accountRow(account: ClaudeAccount, hasActiveClaudeAccount: boolean): string {
-	return `${account.label} · ${accountState(account, hasActiveClaudeAccount)}  ${account.providerId}`;
+function accountRow(account: ClaudeAccount): string {
+	return `${account.label} · ${accountState(account)}  ${account.providerId}`;
 }
 
 /**
@@ -469,8 +474,7 @@ export async function executeAccountsCommand(pi: ExtensionAPI, ctx: ExtensionCom
 		return;
 	}
 	const accountList = accounts(ctx, deps);
-	const hasActiveClaudeAccount = accountList.some((account) => account.active);
-	const rows = accountList.map((account) => accountRow(account, hasActiveClaudeAccount));
+	const rows = accountList.map(accountRow);
 	const addLabel = "add Claude account";
 	const selected = await ctx.ui.select("CLAUDE ACCOUNTS", [...rows, addLabel]);
 	if (selected === addLabel) {

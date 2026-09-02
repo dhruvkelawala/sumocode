@@ -1407,6 +1407,9 @@ while :; do
 	# The host already consumed (unlinked) the transport file; clear the path
 	# so the exit trap has nothing to clean and a reload can never re-export it.
 	RPC_INITIAL_PROMPT_FILE=""
+	# Same one-shot rule for the headless stdin transport: iteration one's
+	# prompt must never ride a reload respawn's stdin.
+	DIRECT_PI_STDIN_PROMPT=""
 	# After the kickoff turn has fired, do NOT re-pass the task prompt on
 	# `/reload`. The reload loop adds `--continue` to resume the existing
 	# session, and re-injecting the original prompt would send it again as a

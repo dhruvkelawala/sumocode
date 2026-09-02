@@ -222,29 +222,34 @@ export class SumoRpcClient {
 			console.error(`[sumocode-rpc] child stdin error: ${toError(error).message}`);
 		});
 		child.once("error", (error) => this.handleExit(toError(error)));
-		let exitError: RpcChildExitError | undefined;
+		let exitInfo: RpcChildExitInfo | undefined;
 		let closeFallback: NodeJS.Timeout | undefined;
-		const finishAfterStdio = (fallbackError: RpcChildExitError) => {
+		const finishAfterStdio = (fallbackInfo: RpcChildExitInfo) => {
 			if (closeFallback) clearTimeout(closeFallback);
 			closeFallback = undefined;
 			this.stdoutFrames?.end();
 			if (this.exitNotified) return;
-			this.handleExit(exitError ?? fallbackError);
+			const info = exitInfo ?? fallbackInfo;
+			const boundary = exitInfo ? "exited" : "closed";
+			this.handleExit(new RpcChildExitError(
+				`RPC child ${boundary} code=${info.code ?? "null"} signal=${info.signal ?? "null"}. stderr=${this.stderr}`,
+				info,
+			));
 		};
 		child.once("exit", (code, signal) => {
 			// `exit` can precede the final stdout data events. Refuse new sends now,
 			// but retain pending requests and stream listeners until stdio closes.
 			this.exited = true;
 			if (this.exitNotified) return;
-			const error = new RpcChildExitError(`RPC child exited code=${code ?? "null"} signal=${signal ?? "null"}. stderr=${this.stderr}`, { code, signal });
-			exitError = error;
-			closeFallback = setTimeout(() => finishAfterStdio(error), CHILD_CLOSE_GRACE_MS);
+			const info = { code, signal };
+			exitInfo = info;
+			closeFallback = setTimeout(() => finishAfterStdio(info), CHILD_CLOSE_GRACE_MS);
 			closeFallback.unref?.();
 		});
 		child.once("close", (code, signal) => {
 			// `close` follows stdio drain. A bounded fallback covers descendants
 			// that inherit the pipe and prevent this event indefinitely.
-			finishAfterStdio(new RpcChildExitError(`RPC child closed code=${code ?? "null"} signal=${signal ?? "null"}. stderr=${this.stderr}`, { code, signal }));
+			finishAfterStdio({ code, signal });
 		});
 
 		// A pre-spawned child can fail or exit while the host module is still

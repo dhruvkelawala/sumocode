@@ -658,6 +658,23 @@ describe("SumoRpcClient", () => {
 		await expect(response).resolves.toMatchObject({ success: true, data: { sessionId: "final-partial" } });
 	});
 
+	it("includes stderr drained between exit and close in the exit error", async () => {
+		const child = new FakeRpcChild();
+		const exits: Error[] = [];
+		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
+		client.onExit((error) => exits.push(error));
+		await client.start();
+
+		child.exitCode = 1;
+		child.emit("exit", 1, null);
+		child.stderr.emit("data", "final diagnostic");
+		child.emit("close", 1, null);
+
+		expect(exits).toHaveLength(1);
+		expect(exits[0]).toMatchObject({ code: 1, signal: null });
+		expect(exits[0]?.message).toContain("final diagnostic");
+	});
+
 	it("bounds an unexpected exit when stdio close never arrives", async () => {
 		vi.useFakeTimers();
 		const child = new FakeRpcChild();

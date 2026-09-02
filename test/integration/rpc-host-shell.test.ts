@@ -350,13 +350,17 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		await bootWithExtensionMode(mode);
 	}, 30_000);
 
-	it.each(["bundle", "source"] as const)("loads %s from a peer-only package copy with no local node_modules", async (mode) => {
+	// "absent" is the git-package install shape: the repository never commits
+	// dist/**, so a consumer checkout has no bundle and no override, and the
+	// stable entry must select source on its own.
+	it.each(["bundle", "source", "absent"] as const)("loads %s from a peer-only package copy with no local node_modules", async (mode) => {
 		const packageRoot = await mkdtemp(join(tmpdir(), `sumocode-peer-only-${mode}-package-`));
-		await mkdir(join(packageRoot, "dist"), { recursive: true });
 		await mkdir(join(packageRoot, "scripts", "lib"), { recursive: true });
 		await Promise.all([
 			cp(join(process.cwd(), "src"), join(packageRoot, "src"), { recursive: true }),
-			cp(join(process.cwd(), "dist", "extension"), join(packageRoot, "dist", "extension"), { recursive: true }),
+			mode === "absent"
+				? Promise.resolve()
+				: cp(join(process.cwd(), "dist", "extension"), join(packageRoot, "dist", "extension"), { recursive: true }),
 			cp(join(process.cwd(), "scripts", "build-extension.mjs"), join(packageRoot, "scripts", "build-extension.mjs")),
 			cp(join(process.cwd(), "scripts", "lib", "extension-bundle.mjs"), join(packageRoot, "scripts", "lib", "extension-bundle.mjs")),
 			cp(join(process.cwd(), "package.json"), join(packageRoot, "package.json")),
@@ -364,6 +368,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		]);
 		await expect(access(join(packageRoot, "node_modules"))).rejects.toThrow();
 		await expect(access(join(packageRoot, "pnpm-lock.yaml"))).rejects.toThrow();
+		if (mode === "absent") await expect(access(join(packageRoot, "dist"))).rejects.toThrow();
 		const agentDir = await mkdtemp(join(tmpdir(), `sumocode-peer-only-${mode}-agent-`));
 		const env: NodeJS.ProcessEnv = { PI_CODING_AGENT_DIR: agentDir };
 		if (mode === "source") env.SUMOCODE_EXTENSION_BUNDLE = "0";

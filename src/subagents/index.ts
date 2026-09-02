@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activityFromSubagentSnapshot } from "../activity/subagent-adapter.js";
 import { renderSubagentStatusRow, type SubagentStatusRunningEntry } from "../subagent-status-row.js";
+import { logDiagnostic } from "../sumo-tui/runtime/diagnostics.js";
 import { BUILT_IN_TOOLS, getBuiltInToolsFromActiveTools } from "../native-task-config.js";
 import { getTerminalHost } from "../terminal-host/index.js";
 import type { TerminalHost } from "../terminal-host/types.js";
@@ -16,6 +17,7 @@ export { SubagentManager } from "./manager.js";
 export type { AtCapacityDetails, SpawnSubagentTask } from "./manager.js";
 
 const SUBAGENT_STATUS_WIDGET_KEY = "sumocode-subagents";
+const SUBAGENT_DELIVERY_ERROR_MAX = 4_096;
 
 /** Delivery `details` contract for a settled subagent result. */
 interface SettledSubagentDetails {
@@ -133,6 +135,7 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 		// with it so the first child is actually beside the operator instead of
 		// disappearing into a background `subagents` tab.
 		initialVisibleTabId: host.kind === "herdr" ? process.env.HERDR_TAB_ID : undefined,
+		onDiagnostic: (diagnostic) => logDiagnostic("subagent_manager_diagnostic", { ...diagnostic }),
 		...options.managerDependencies,
 	});
 	const delivery = createDeferredResultDelivery();
@@ -203,17 +206,24 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 		statusWidgetVisible = false;
 	};
 
-	const flush = (): void => {
-		for (const payload of delivery.drain()) {
-			pi.sendMessage(
-				{
-					customType: "subagent-result",
-					content: payload.content,
-					display: true,
-					details: payload.details,
-				},
-				{ deliverAs: "followUp", triggerTurn: true },
-			);
+	const flush = (mayRetry = true): void => {
+		try {
+			delivery.flush((payload) => {
+				pi.sendMessage(
+					{
+						customType: "subagent-result",
+						content: payload.content,
+						display: true,
+						details: payload.details,
+					},
+					{ deliverAs: "followUp", triggerTurn: true },
+				);
+			});
+		// oxlint-disable-next-line anti-slop/no-unknown-parameters -- ExtensionAPI.sendMessage may throw any JavaScript value at this effect boundary.
+		} catch (error: unknown) {
+			const message = (error instanceof Error ? error.message : String(error)).slice(0, SUBAGENT_DELIVERY_ERROR_MAX);
+			logDiagnostic("subagent_delivery_failed", { message });
+			if (mayRetry) queueMicrotask(() => { flush(false); });
 		}
 	};
 

@@ -259,6 +259,31 @@ describe("subagent result delivery", () => {
 		expect(harness.sendMessage).toHaveBeenCalledOnce();
 	});
 
+	it("retries deferred delivery without duplicating successful earlier results", async () => {
+		const harness = createHarness();
+		harness.setIdle(false);
+		harness.fire("agent_start");
+		for (const title of ["first", "second", "third"]) await spawn(harness.manager, title);
+		for (let index = 0; index < 3; index += 1) {
+			backend.emitters[index]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: `result-${index + 1}` } });
+		}
+		await vi.waitFor(() => expect(harness.manager.list().every((snapshot) => snapshot.status === "done")).toBe(true));
+		harness.sendMessage
+			.mockImplementationOnce(() => undefined)
+			.mockImplementationOnce(() => { throw new Error("send failed"); })
+			.mockImplementation(() => undefined);
+		harness.setIdle(true);
+
+		expect(() => harness.fire("agent_end")).not.toThrow();
+		await vi.waitFor(() => expect(harness.sendMessage).toHaveBeenCalledTimes(4));
+
+		const deliveredIds = harness.sendMessage.mock.calls.map((call) => {
+			// SAFETY: subagent delivery always sends a message with settled-subagent details.
+			return ((call as unknown[])[0] as { details: { id: string } }).details.id;
+		});
+		expect(deliveredIds).toEqual(["sa-1", "sa-2", "sa-2", "sa-3"]);
+	});
+
 	it("routes visible children through the pane backend and delivers one pane-referenced card", async () => {
 		const harness = createHarness();
 		harness.setIdle(false);

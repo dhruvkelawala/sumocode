@@ -4,7 +4,7 @@ import { registerSubagentTools } from "./tools.js";
 import { SubagentManager, type SpawnSubagentTask } from "./manager.js";
 import { SUBAGENT_MAX_RUNNING, type SubagentEvent, type SubagentSnapshot } from "./domain.js";
 import type { TerminalHost, TerminalHostKind } from "../terminal-host/types.js";
-import { loadRoles, type SubagentRole } from "./roles.js";
+import { loadRoles, type RoleWarning, type SubagentRole } from "./roles.js";
 
 /** Tool result shape returned by every subagent tool. */
 interface ToolResult {
@@ -20,7 +20,7 @@ type FakeSpawnedChild = {
 	requestClose?: () => void;
 };
 
-const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly SubagentRole[], roleWarnings: readonly string[] = []) => {
+const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly SubagentRole[], roleWarnings: readonly RoleWarning[] = []) => {
 	const registered: Array<{ name: string; parameters?: unknown; execute: (...args: unknown[]) => Promise<ToolResult> }> = [];
 	const emitters = new Map<string, (event: SubagentEvent) => void>();
 	const childSends = new Map<string, ReturnType<typeof vi.fn>>();
@@ -140,7 +140,7 @@ describe("subagent tools", () => {
 
 	it("fails closed before spawning a role when roles.json has loader warnings", async () => {
 		const role: SubagentRole = { id: "audit", label: "Audit", description: "use for audits", systemPrompt: "audit carefully" };
-		const { tool, ctx, manager } = createHarness("herdr", [role], ["role audit has an invalid thinking level; entry skipped"]);
+		const { tool, ctx, manager } = createHarness("herdr", [role], [{ scope: "role", roleId: "audit", blocksRole: true, message: "role audit has an invalid thinking level; entry skipped" }]);
 
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		const result = await tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker", role: "audit" }, undefined, undefined, ctx as never);
@@ -151,9 +151,51 @@ describe("subagent tools", () => {
 		expect(manager.list()).toEqual([]);
 	});
 
+	it("scopes role warnings to the selected role while keeping built-ins available", async () => {
+		const research: SubagentRole = { id: "research", label: "Research", description: "read only", systemPrompt: "research" };
+		const roleWarnings: RoleWarning[] = [
+			{ scope: "role", roleId: "audit", blocksRole: true, message: "role audit has an invalid thinking level; entry skipped" },
+		];
+		const valid = createHarness("herdr", [research], roleWarnings);
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const validResult = await valid.tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker", role: "research" }, undefined, undefined, valid.ctx as never);
+		expect(textOf(validResult)).toContain("Started sa-1");
+
+		const invalid = createHarness("herdr", [research], roleWarnings);
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const invalidResult = await invalid.tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker", role: "audit" }, undefined, undefined, invalid.ctx as never);
+		expect(textOf(invalidResult)).toContain("invalid thinking level");
+		expect(invalidResult).toMatchObject({ details: { status: "invalid_role_config", warnings: roleWarnings } });
+
+		const fileWarnings: RoleWarning[] = [{ scope: "file", blocksOverlays: true, message: "invalid roles.json: unexpected token" }];
+		const fallback = createHarness("herdr", [research], fileWarnings);
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const fallbackResult = await fallback.tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker", role: "research" }, undefined, undefined, fallback.ctx as never);
+		expect(textOf(fallbackResult)).toContain("Started sa-1");
+
+		const audit: SubagentRole = { id: "audit", label: "Audit", description: "audit", systemPrompt: "audit" };
+		const siblingWarning: RoleWarning[] = [{ scope: "file", blocksOverlays: false, message: "roles[2] must be an object; entry skipped" }];
+		const custom = createHarness("herdr", [research, audit], siblingWarning);
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const customResult = await custom.tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker", role: "audit" }, undefined, undefined, custom.ctx as never);
+		expect(textOf(customResult)).toContain("Started sa-1");
+	});
+
+	it("allows a role whose warnings are advisory", async () => {
+		const role: SubagentRole = { id: "audit", label: "Audit", description: "use for audits", systemPrompt: "audit carefully" };
+		const roleWarnings: RoleWarning[] = [{ scope: "role", roleId: "audit", blocksRole: false, message: "role audit ignores unknown field futureField" }];
+		const { tool, ctx, manager } = createHarness("herdr", [role], roleWarnings);
+
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const result = await tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker", role: "audit" }, undefined, undefined, ctx as never);
+
+		expect(textOf(result)).toContain("Started sa-1");
+		expect(manager.get("sa-1")?.roleId).toBe("audit");
+	});
+
 	it("keeps role-loader warnings out of role-free spawns", async () => {
 		const role: SubagentRole = { id: "audit", label: "Audit", description: "use for audits", systemPrompt: "audit carefully" };
-		const { tool, ctx, manager } = createHarness("herdr", [role], ["invalid optional role overlay"]);
+		const { tool, ctx, manager } = createHarness("herdr", [role], [{ scope: "file", blocksOverlays: true, message: "invalid optional role overlay" }]);
 
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		const result = await tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker" }, undefined, undefined, ctx as never);

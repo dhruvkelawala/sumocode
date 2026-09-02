@@ -17,7 +17,12 @@ export interface DeferredResultDelivery {
 	 * agent_end instead of being silently lost.
 	 */
 	forget(id: string): void;
-	drain(): DeliveryPayload[];
+	/**
+	 * Send pending payloads in FIFO order, acknowledging each only after send
+	 * returns. A throw preserves that payload for at-least-once retry, so an
+	 * ambiguous send failure may be observed again by the receiver.
+	 */
+	flush(send: (payload: DeliveryPayload) => void): void;
 	clear(): void;
 	readonly size: number;
 }
@@ -38,10 +43,13 @@ export function createDeferredResultDelivery(): DeferredResultDelivery {
 		forget(id): void {
 			consumed.delete(id);
 		},
-		drain(): DeliveryPayload[] {
-			const payloads = [...pending.values()];
-			pending.clear();
-			return payloads;
+		flush(send): void {
+			for (const [id, payload] of pending) {
+				send(payload);
+				// Map iteration safely advances after deleting the current entry. A
+				// thrown send leaves this id and every later payload in FIFO order.
+				pending.delete(id);
+			}
 		},
 		clear(): void {
 			pending.clear();

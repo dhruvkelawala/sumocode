@@ -74,9 +74,18 @@ export interface LoadRolesDependencies {
 	readonly env?: NodeJS.ProcessEnv;
 }
 
+export type RoleWarning =
+	| {
+		readonly scope: "file";
+		/** True only when the file could not be loaded, so custom overlays are unavailable. */
+		readonly blocksOverlays: boolean;
+		readonly message: string;
+	}
+	| { readonly scope: "role"; readonly roleId: string; readonly blocksRole: boolean; readonly message: string };
+
 export interface LoadedRoles {
 	readonly roles: readonly SubagentRole[];
-	readonly warnings: readonly string[];
+	readonly warnings: readonly RoleWarning[];
 }
 
 export function resolveRolesPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -100,45 +109,46 @@ interface MutableRoleOverlay {
 	defaultVisible?: boolean;
 }
 
-function normalizedOverlay(value: unknown, index: number, builtIn: boolean, warnings: string[]): MutableRoleOverlay | undefined {
+function normalizedOverlay(value: unknown, index: number, builtIn: boolean, warnings: RoleWarning[]): MutableRoleOverlay | undefined {
 	if (!isRecord(value)) {
-		warnings.push(`roles[${index}] must be an object; entry skipped`);
+		warnings.push({ scope: "file", blocksOverlays: false, message: `roles[${index}] must be an object; entry skipped` });
 		return undefined;
 	}
 	const id = typeof value.id === "string" ? value.id.trim() : "";
 	if (!id || !/^[a-z0-9][a-z0-9-]*$/.test(id)) {
-		warnings.push(`roles[${index}] has an invalid id; entry skipped`);
+		warnings.push({ scope: "file", blocksOverlays: false, message: `roles[${index}] has an invalid id; entry skipped` });
 		return undefined;
 	}
+	const warn = (message: string, blocksRole = true): void => { warnings.push({ scope: "role", roleId: id, blocksRole, message }); };
 	if (!builtIn && (typeof value.label !== "string" || !value.label.trim() || typeof value.systemPrompt !== "string" || !value.systemPrompt.trim())) {
-		warnings.push(`role ${id} is new and requires label and systemPrompt; entry skipped`);
+		warn(`role ${id} is new and requires label and systemPrompt; entry skipped`);
 		return undefined;
 	}
 	for (const field of Object.keys(value)) {
-		if (!ROLE_FIELDS.has(field)) warnings.push(`role ${id} ignores unknown field ${field}`);
+		if (!ROLE_FIELDS.has(field)) warn(`role ${id} ignores unknown field ${field}`, false);
 	}
 	for (const field of ["label", "description", "systemPrompt"] as const) {
 		if (hasOwn(value, field) && (typeof value[field] !== "string" || !value[field].trim())) {
-			warnings.push(`role ${id} has an invalid ${field}; entry skipped`);
+			warn(`role ${id} has an invalid ${field}; entry skipped`);
 			return undefined;
 		}
 	}
 	if (hasOwn(value, "model") && (typeof value.model !== "string" || !value.model.trim())) {
-		warnings.push(`role ${id} has an invalid model; entry skipped`);
+		warn(`role ${id} has an invalid model; entry skipped`);
 		return undefined;
 	}
 	if (hasOwn(value, "thinking") && (typeof value.thinking !== "string" || (value.thinking !== "inherit" && !isThinking(value.thinking)))) {
-		warnings.push(`role ${id} has an invalid thinking level; entry skipped`);
+		warn(`role ${id} has an invalid thinking level; entry skipped`);
 		return undefined;
 	}
 	for (const field of ["defaultWorktree", "defaultVisible"] as const) {
 		if (hasOwn(value, field) && typeof value[field] !== "boolean" && value[field] !== "inherit") {
-			warnings.push(`role ${id} has an invalid ${field}; entry skipped`);
+			warn(`role ${id} has an invalid ${field}; entry skipped`);
 			return undefined;
 		}
 	}
 	if (hasOwn(value, "tools") && !Array.isArray(value.tools) && value.tools !== "inherit") {
-		warnings.push(`role ${id} has an invalid tools list; entry skipped`);
+		warn(`role ${id} has an invalid tools list; entry skipped`);
 		return undefined;
 	}
 
@@ -155,7 +165,7 @@ function normalizedOverlay(value: unknown, index: number, builtIn: boolean, warn
 		const tools: string[] = [];
 		for (const tool of value.tools) {
 			if (typeof tool !== "string" || !(BUILT_IN_TOOLS as readonly string[]).includes(tool)) {
-				warnings.push(`role ${id} ignores invalid tool ${String(tool)}`);
+				warn(`role ${id} ignores invalid tool ${String(tool)}`, false);
 				continue;
 			}
 			if (!tools.includes(tool)) tools.push(tool);
@@ -175,22 +185,22 @@ export function loadRoles(dependencies: LoadRolesDependencies = {}): LoadedRoles
 		const code = isRecord(error) && typeof error.code === "string" ? error.code : undefined;
 		return code === "ENOENT"
 			? { roles: BUILT_IN_ROLES, warnings: [] }
-			: { roles: BUILT_IN_ROLES, warnings: [`unable to read roles.json: ${error instanceof Error ? error.message : String(error)}`] };
+			: { roles: BUILT_IN_ROLES, warnings: [{ scope: "file", blocksOverlays: true, message: `unable to read roles.json: ${error instanceof Error ? error.message : String(error)}` }] };
 	}
 	if (Buffer.byteLength(contents, "utf8") > MAX_ROLES_FILE_BYTES) {
-		return { roles: BUILT_IN_ROLES, warnings: ["roles.json exceeds 256 KB; using built-in roles"] };
+		return { roles: BUILT_IN_ROLES, warnings: [{ scope: "file", blocksOverlays: true, message: "roles.json exceeds 256 KB; using built-in roles" }] };
 	}
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(contents) as unknown;
 	} catch (error) {
-		return { roles: BUILT_IN_ROLES, warnings: [`invalid roles.json: ${error instanceof Error ? error.message : String(error)}`] };
+		return { roles: BUILT_IN_ROLES, warnings: [{ scope: "file", blocksOverlays: true, message: `invalid roles.json: ${error instanceof Error ? error.message : String(error)}` }] };
 	}
 	if (!isRecord(parsed) || !Array.isArray(parsed.roles)) {
-		return { roles: BUILT_IN_ROLES, warnings: ["roles.json must contain a roles array; using built-in roles"] };
+		return { roles: BUILT_IN_ROLES, warnings: [{ scope: "file", blocksOverlays: true, message: "roles.json must contain a roles array; using built-in roles" }] };
 	}
 
-	const warnings: string[] = [];
+	const warnings: RoleWarning[] = [];
 	const roles = BUILT_IN_ROLES.map((role) => ({ ...role }));
 	for (let index = 0; index < parsed.roles.length; index += 1) {
 		const raw = parsed.roles[index];

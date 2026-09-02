@@ -231,6 +231,50 @@ describe("SubagentManager", () => {
 		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
 	});
 
+	it("contains async iterator rejection", async () => {
+		const unhandled: unknown[] = [];
+		// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Node's unhandledRejection event exposes arbitrary rejection values.
+		const onUnhandled = (error: unknown): void => { unhandled.push(error); };
+		process.on("unhandledRejection", onUnhandled);
+		try {
+			const interrupts = new Map<string, ReturnType<typeof vi.fn>>();
+			const manager = new SubagentManager((task) => ({
+				events: (async function* (): AsyncGenerator<SubagentEvent> {
+					yield { kind: "assistant-delta", delta: "partial" };
+					if (task.id === "sa-1") throw new Error("event stream failed");
+					if (task.id === "sa-2") {
+						yield { kind: "run-settled", outcome: { kind: "completed", finalText: "complete" } };
+						await new Promise<void>((resolve) => setTimeout(resolve, 0));
+						throw new Error("late event stream failure");
+					}
+					await new Promise(() => undefined);
+				})(),
+				interrupt: (() => {
+					const interrupt = vi.fn();
+					interrupts.set(task.id, interrupt);
+					return interrupt;
+				})(),
+			}), { captureGitContext: async () => ({ baseRef: "base-ref" }), buildCompletionManifest: fakeManifestBuilder });
+
+			for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await manager.spawn(makeTask(`worker-${index}`));
+			await vi.waitFor(() => expect(manager.get("sa-1")).toMatchObject({
+				status: "error",
+				errorText: "subagent event stream failed: event stream failed",
+				finalText: "partial",
+			}));
+			await vi.waitFor(() => expect(manager.get("sa-2")).toMatchObject({ status: "done", finalText: "complete" }));
+			expect(interrupts.get("sa-1")).toHaveBeenCalledOnce();
+			expect(interrupts.get("sa-2")).not.toHaveBeenCalled();
+
+			await expect(manager.spawn(makeTask("replacement"))).resolves.toMatchObject({ id: firstQueuedId, status: "running" });
+			await expect(manager.cancel(["sa-1"])).resolves.toEqual(["sa-1 was already settled"]);
+			await Promise.resolve();
+			expect(unhandled).toEqual([]);
+		} finally {
+			process.off("unhandledRejection", onUnhandled);
+		}
+	});
+
 	it("folds events into immutable snapshots", async () => {
 		const { manager, emitters } = deferredBackend();
 		const spawned = await manager.spawn(makeTask("fold"));
@@ -295,6 +339,41 @@ describe("SubagentManager", () => {
 		expect(snapshot?.finalText).toBe(latest);
 		expect(snapshot?.transcript).toMatchObject([{ role: "assistant", text: latest }]);
 		expect(snapshot?.transcript.map((item) => item.text).join("").split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+	});
+
+	it("isolates listener failure", async () => {
+		const diagnostics: Array<{ kind: string; message: string }> = [];
+		const manager = new SubagentManager(() => ({ events: () => undefined, interrupt: () => undefined }), {
+			captureGitContext: async () => ({ baseRef: "base-ref" }),
+			onDiagnostic: (diagnostic: { kind: string; message: string }) => diagnostics.push(diagnostic),
+		});
+		const laterListener = vi.fn();
+		manager.addChangeListener(() => { throw new Error("listener exploded"); });
+		manager.addChangeListener(laterListener);
+
+		await expect(manager.spawn(makeTask("notify"))).resolves.toMatchObject({ status: "running" });
+
+		expect(laterListener).toHaveBeenCalledOnce();
+		expect(diagnostics).toEqual([{ kind: "listener", message: "listener exploded" }]);
+	});
+
+	it("isolates listener failure after an earlier listener succeeds", async () => {
+		const diagnostics: Array<{ kind: string; message: string }> = [];
+		const manager = new SubagentManager(() => ({ events: () => undefined, interrupt: () => undefined }), {
+			captureGitContext: async () => ({ baseRef: "base-ref" }),
+			onDiagnostic: (diagnostic: { kind: string; message: string }) => diagnostics.push(diagnostic),
+		});
+		const firstListener = vi.fn();
+		const lastListener = vi.fn();
+		manager.addChangeListener(firstListener);
+		manager.addChangeListener(() => { throw new Error("second listener exploded"); });
+		manager.addChangeListener(lastListener);
+
+		await expect(manager.spawn(makeTask("notify middle"))).resolves.toMatchObject({ status: "running" });
+
+		expect(firstListener).toHaveBeenCalledOnce();
+		expect(lastListener).toHaveBeenCalledOnce();
+		expect(diagnostics).toEqual([{ kind: "listener", message: "second listener exploded" }]);
 	});
 
 	it("stores the manifest before completion listeners are notified", async () => {

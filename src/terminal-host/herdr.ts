@@ -46,6 +46,7 @@ function parseHerdrError(result: { stderr: string; stdout: string }): { code?: s
 }
 
 const HERDR_AGENT_PROMPT_TIMEOUT_MS = 10_000;
+const CHILD_CLEANUP_ERROR_MAX = 1_024;
 
 const hasHerdrCaller = (env: NodeJS.ProcessEnv = process.env): boolean => env.HERDR_ENV === "1" && Boolean(env.HERDR_PANE_ID);
 
@@ -161,12 +162,38 @@ async function createTabPane(pi: PiExecLike, cwd: string, label: string): Promis
 
 async function runPaneCommand(pi: PiExecLike, pane: HerdrPaneInfo, command: string): Promise<HostResult<{}>> {
 	if (!pane.pane_id) return { ok: false, error: "herdr pane has no pane_id" };
-	const result = await pi.exec("herdr", ["pane", "run", pane.pane_id, command], { timeout: 5000 });
-	return result.code === 0 ? { ok: true } : execFailure("herdr pane run", result);
+	try {
+		const result = await pi.exec("herdr", ["pane", "run", pane.pane_id, command], { timeout: 5000 });
+		return result.code === 0 ? { ok: true } : execFailure("herdr pane run", result);
+	} catch (error) {
+		return { ok: false, error: error instanceof Error ? error.message : String(error) };
+	}
+}
+
+async function cleanFailedChildStart(
+	pi: PiExecLike,
+	paneId: string,
+	primaryError: string,
+	recoveryShell?: { paneId: string; workspaceId: string },
+): Promise<HostResult<never>> {
+	let error = primaryError;
+	if (recoveryShell) error += `. Recovery shell preserved at pane ${recoveryShell.paneId} in workspace ${recoveryShell.workspaceId}.`;
+	try {
+		const cleanup = await pi.exec("herdr", ["pane", "close", paneId], { timeout: 5000 });
+		if (cleanup.code !== 0) {
+			const context = (cleanup.stderr || cleanup.stdout || `herdr pane close exited ${cleanup.code}`).slice(0, CHILD_CLEANUP_ERROR_MAX);
+			error += `${error.endsWith(".") ? "" : "."} Child cleanup failed: ${context}`;
+		}
+	} catch (cleanupError) {
+		const context = (cleanupError instanceof Error ? cleanupError.message : String(cleanupError)).slice(0, CHILD_CLEANUP_ERROR_MAX);
+		error += `${error.endsWith(".") ? "" : "."} Child cleanup failed: ${context}`;
+	}
+	return { ok: false, error };
 }
 
 async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): Promise<HostResult<StartedAgentPane>> {
 	let target: HostResult<{ pane: HerdrPaneInfo }>;
+	let recoveryShell: { paneId: string; workspaceId: string } | undefined;
 	if (options.placement.kind === "workspace") {
 		let anchorPaneId = options.placement.paneId;
 		if (!anchorPaneId) {
@@ -177,6 +204,7 @@ async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): P
 		if (!anchorPaneId) return { ok: false, error: `herdr returned no pane for workspace ${options.placement.workspaceId}` };
 		target = await splitPane(pi, { kind: "id", paneId: anchorPaneId }, "right", options.cwd);
 		if (target.ok) {
+			recoveryShell = { paneId: anchorPaneId, workspaceId: options.placement.workspaceId };
 			// Keep a shell alive after the child exits so Herdr preserves the
 			// worktree workspace for inspection. Moving it is cosmetic; if the move
 			// fails, the shell stays beside the child and still keeps the workspace.
@@ -191,11 +219,12 @@ async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): P
 		target = await createTabPane(pi, options.cwd, options.placement.label);
 	}
 	if (!target.ok) return target;
+	const paneId = target.pane.pane_id;
+	if (!paneId) return { ok: false, error: "herdr child target has no pane_id; cleanup skipped" };
 	const started = await runPaneCommand(pi, target.pane, options.shellCommand);
-	if (!started.ok) return started;
+	if (!started.ok) return cleanFailedChildStart(pi, paneId, started.error, recoveryShell);
 
 	const agentName = uniqueHerdrAgentName(options.name);
-	const paneId = target.pane.pane_id!;
 	const workspaceId = target.pane.workspace_id ?? (options.placement.kind === "workspace" ? options.placement.workspaceId : undefined);
 	const tabId = target.pane.tab_id ?? (options.placement.kind === "tab" ? options.placement.tabId : undefined);
 	await pi.exec("herdr", ["pane", "rename", paneId, options.name], { timeout: 5000 }).catch(() => undefined);
@@ -236,9 +265,10 @@ export const herdrTerminalHost = {
 			? await splitPane(pi, { kind: "current" }, direction, options.cwd)
 			: await createTabPane(pi, options.cwd, "sumocode");
 		if (!target.ok) return target;
+		const paneId = target.pane.pane_id;
+		if (!paneId) return { ok: false, error: "herdr child target has no pane_id; cleanup skipped" };
 		const started = await runPaneCommand(pi, target.pane, options.shellCommand);
-		if (!started.ok) return started;
-		const paneId = target.pane.pane_id!;
+		if (!started.ok) return cleanFailedChildStart(pi, paneId, started.error);
 		return { ok: true, pane: { host: "herdr", paneId, workspaceId: target.pane.workspace_id } };
 	},
 	async openWorktreeWorkspace(pi: PiExecLike, options: { branch: string; baseRef: string; path: string; label: string; shellCommand: string; sourceCwd: string; focus?: boolean }) {

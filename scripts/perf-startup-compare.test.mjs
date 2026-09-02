@@ -298,10 +298,14 @@ describe("startup comparison CLI", () => {
 		expect((await execFileAsync("git", ["status", "--porcelain"], { cwd: callerRoot })).stdout).toBe("");
 	});
 
-	it("keeps single-sample smoke results inconclusive", async () => {
-		const { report } = await harness({ samples: 1, fixtureCount: 1 });
+	it("keeps single-sample smoke results inconclusive and explains the sample floor", async () => {
+		const { report, outDir } = await harness({ samples: 1, fixtureCount: 1 });
 		expect(report.metrics.every((metric) => metric.verdict === "inconclusive")).toBe(true);
-		expect(report.overall.verdict).toBe("INCONCLUSIVE");
+		expect(report.overall).toEqual({
+			verdict: "INCONCLUSIVE",
+			reason: "fewer than 3 successful samples per arm",
+		});
+		expect(await readFile(join(outDir, "startup-compare.md"), "utf8")).toContain("at least 3 successful samples per arm");
 	});
 
 	it("requires non-overlapping evidence in one direction for an overall claim", async () => {

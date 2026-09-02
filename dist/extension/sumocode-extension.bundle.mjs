@@ -14037,390 +14037,6 @@ function installBackgroundTasks(pi, managerOptions = {}) {
 // src/background-tasks/terminal-tools.ts
 import { Type as Type4 } from "typebox";
 
-// src/background-tasks/terminal-prompt.ts
-var TERMINAL_TOOL_GUIDELINES = [
-  "Use terminal_start for servers, watchers, long builds, and other non-interactive shell commands that should continue while you work; use bash for quick commands.",
-  "terminal_start completion is passive by default and never triggers an agent turn. Use completion: wake only when the terminal result must resume work automatically.",
-  "Use terminal_check for a non-blocking snapshot, terminal_wait for explicit bounded waiting, terminal_stop to cancel process trees, and terminal_list for a side-effect-free inventory.",
-  "Managed terminals receive no stdin. Never use terminal_start for interactive commands, prompts, or terminal user interfaces."
-];
-var TERMINAL_TOOL_DESCRIPTIONS = {
-  start: "Start a non-interactive shell command in a durable managed terminal and return its stable id immediately. Completion is passive unless completion is set to wake.",
-  check: "Return one current or final immutable terminal snapshot and a bounded output tail without blocking. Observing settlement suppresses an unclaimed wake.",
-  wait: "Wait for all requested terminal ids, or return settled and pending ids normally when the bounded timeout expires. Aborting cancels only this wait.",
-  stop: "Signal every requested running terminal process tree, escalate after the grace period, and report cancellation only after each whole tree is gone.",
-  list: "List current-session managed terminals newest first, including completion disposition, without observing or consuming them."
-};
-function bounded(value, maxChars) {
-  const clean = sanitizeActivityText(value).trimEnd();
-  if (clean.length <= maxChars) return clean;
-  return `[output tail truncated]
-${clean.slice(-maxChars)}`;
-}
-function elapsed(task, currentTime = Date.now()) {
-  const end = task.settledAt ?? Math.max(task.updatedAt, currentTime);
-  const milliseconds = Math.max(0, end - task.createdAt);
-  if (milliseconds < 1e3) return `${milliseconds}ms`;
-  const seconds = Math.floor(milliseconds / 1e3);
-  if (seconds < 60) return `${seconds}s`;
-  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-}
-function describeTerminal(task) {
-  const exit = task.exitCode === void 0 ? "" : ` \xB7 exit ${task.exitCode ?? "unknown"}`;
-  return `${task.id} \xB7 ${task.status}${exit} \xB7 ${task.deliveryState} \xB7 ${elapsed(task)} \xB7 ${sanitizeActivityText(task.title)}`;
-}
-function buildStartResult(task) {
-  return [
-    `Started terminal ${task.id} \xB7 ${sanitizeActivityText(task.title)}.`,
-    `status: ${task.status} \xB7 completion: ${task.completionPolicy} \xB7 pid: ${task.pid ?? "pending"}`,
-    `cwd: ${sanitizeActivityText(task.cwd)}`,
-    "stdin: unavailable \u2014 interactive commands will not work",
-    `Full log: ${task.logFile}`
-  ].join("\n");
-}
-function buildObservationResult(observation) {
-  return [
-    describeTerminal(observation.task),
-    `cwd: ${sanitizeActivityText(observation.task.cwd)}`,
-    `Full log: ${observation.task.logFile}`,
-    "",
-    "Output tail:",
-    bounded(observation.output, 16 * 1024) || "(no output)"
-  ].join("\n");
-}
-function buildWaitResult(result) {
-  const sections = result.settled.map(buildObservationResult);
-  const summary = [
-    `settled: ${result.settled.map(({ task }) => task.id).join(", ") || "none"}`,
-    `pending: ${result.pendingIds.join(", ") || "none"}`,
-    `unknown: ${result.unknownIds.join(", ") || "none"}`,
-    `timed out: ${result.timedOut ? "yes" : "no"}`
-  ].join("\n");
-  return [summary, ...sections].join("\n\n---\n\n");
-}
-function buildStopResult(results) {
-  return results.map((result) => {
-    const output = result.output ? `
-${bounded(result.output, 8 * 1024)}` : "";
-    return `${result.message}${output}`;
-  }).join("\n\n");
-}
-function buildTerminalResultMessage(task, output) {
-  return [
-    `Terminal ${task.id} "${sanitizeActivityText(task.title)}" ${task.status}.`,
-    `exit: ${task.exitCode ?? "unknown"} \xB7 elapsed: ${elapsed(task)} \xB7 cwd: ${sanitizeActivityText(task.cwd)}`,
-    "",
-    "Final output tail:",
-    bounded(output, 8 * 1024) || "(no output)",
-    "",
-    `Full log: ${task.logFile}`
-  ].join("\n");
-}
-
-// src/background-tasks/terminal-tools.ts
-var DEFAULT_WAIT_TIMEOUT_MS = 3e4;
-var MAX_WAIT_TIMEOUT_MS = 3e5;
-var MAX_TERMINAL_IDS = 64;
-var COMPLETION_OUTPUT_BYTES = 8 * 1024;
-var StringEnum = (values, options) => {
-  const schema = { type: "string", enum: [...values] };
-  if (options?.description !== void 0) schema.description = options.description;
-  return Type4.Unsafe(schema);
-};
-function makeToolResult(text, details) {
-  return { content: [{ type: "text", text }], details };
-}
-function terminalActivityFromStopResult(manager, result) {
-  if (!result.task) return void 0;
-  return terminalActivitySnapshot(result.task, result.output ?? manager.getOutput(result.task, COMPLETION_OUTPUT_BYTES));
-}
-function sessionId(ctx) {
-  const id = ctx.sessionManager.getSessionId();
-  if (!id) throw new Error("Current Pi session has no stable session id");
-  return id;
-}
-function isPayloadObject(value) {
-  return typeof value === "object" && value !== null;
-}
-function isPayloadString(value) {
-  return typeof value === "string";
-}
-function branchDetails(record) {
-  return record.details ?? null;
-}
-function completionsFromContext(ctx) {
-  const ids = /* @__PURE__ */ new Set();
-  const receipts = [];
-  for (const entry of ctx.sessionManager.getBranch()) {
-    if (!isPayloadObject(entry)) continue;
-    let details;
-    if (entry.type === "custom_message") details = branchDetails(entry);
-    else if (entry.type === "message") {
-      const message = entry.message;
-      details = isPayloadObject(message) && message.role === "custom" ? branchDetails(message) : null;
-    } else details = null;
-    if (!isPayloadObject(details)) continue;
-    const completionId = details.completionId;
-    const claimToken = details.deliveryClaimToken;
-    if (!isPayloadString(completionId)) continue;
-    ids.add(completionId);
-    if (isPayloadString(claimToken)) receipts.push({ completionId, claimToken });
-  }
-  return { ids, receipts };
-}
-function completionDetails(manager, task) {
-  const output = sanitizeActivityText(manager.getOutput(task, COMPLETION_OUTPUT_BYTES)).slice(-COMPLETION_OUTPUT_BYTES);
-  return {
-    completionId: task.completionId,
-    deliveryClaimToken: task.deliveryClaimToken,
-    ownerSessionId: task.ownerSessionId,
-    activity: terminalActivitySnapshot(task, output)
-  };
-}
-var TerminalDeliveryCoordinator = class {
-  constructor(pi, manager) {
-    this.pi = pi;
-    this.manager = manager;
-    this.unsubscribe = manager.addChangeListener((task) => {
-      if (task.ownerSessionId === this.active?.ownerSessionId) this.requestFlush();
-    });
-  }
-  pi;
-  manager;
-  active;
-  unsubscribe;
-  retryTimer;
-  flushQueued = false;
-  flushing = false;
-  bind(ctx) {
-    this.active = { ownerSessionId: sessionId(ctx), ctx };
-    this.requestFlush();
-  }
-  touch(ctx) {
-    if (this.active?.ownerSessionId !== sessionId(ctx)) return;
-    this.active = { ownerSessionId: this.active.ownerSessionId, ctx };
-    this.safeReconcile(ctx);
-  }
-  flushWhenIdle(ctx) {
-    this.touch(ctx);
-    if (this.active?.ownerSessionId === sessionId(ctx) && ctx.isIdle()) this.requestFlush();
-  }
-  unbind() {
-    this.active = void 0;
-    if (this.retryTimer) clearTimeout(this.retryTimer);
-    this.retryTimer = void 0;
-  }
-  dispose() {
-    this.unbind();
-    this.unsubscribe?.();
-    this.unsubscribe = void 0;
-  }
-  reconcile(ctx) {
-    const ownerSessionId2 = sessionId(ctx);
-    this.acknowledgeObservable(ctx, ownerSessionId2);
-    this.syncLeaseRetry(ownerSessionId2);
-  }
-  acknowledgeObservable(ctx, ownerSessionId2) {
-    this.manager.acknowledge(ownerSessionId2, completionsFromContext(ctx).receipts);
-  }
-  safeReconcile(ctx) {
-    try {
-      this.reconcile(ctx);
-    } catch {
-      this.scheduleLeaseRetry(50);
-    }
-  }
-  requestFlush() {
-    if (this.flushQueued) return;
-    this.flushQueued = true;
-    queueMicrotask(() => {
-      this.flushQueued = false;
-      try {
-        this.flush();
-      } catch {
-        this.scheduleLeaseRetry(50);
-      }
-    });
-  }
-  flush() {
-    const active = this.active;
-    if (!active || this.flushing || !active.ctx.isIdle()) return;
-    this.flushing = true;
-    try {
-      this.acknowledgeObservable(active.ctx, active.ownerSessionId);
-      let sentMessage = false;
-      const claimed = this.manager.claimPending(active.ownerSessionId, true, 1).sort((left, right) => Number(left.completionPolicy === "wake") - Number(right.completionPolicy === "wake"));
-      for (const task of claimed) {
-        const current = this.manager.readIndexed(task.id, active.ownerSessionId);
-        if (!current) continue;
-        if (current.deliveryState !== "claimed" || !current.deliveryClaimToken || current.completionId !== task.completionId || current.deliveryClaimToken !== task.deliveryClaimToken) continue;
-        const observable = completionsFromContext(active.ctx);
-        if (current.completionId && observable.ids.has(current.completionId)) {
-          this.manager.acknowledge(active.ownerSessionId, [{
-            completionId: current.completionId,
-            claimToken: current.deliveryClaimToken
-          }]);
-          continue;
-        }
-        const details = completionDetails(this.manager, current);
-        this.pi.sendMessage(
-          {
-            customType: "terminal-result",
-            content: buildTerminalResultMessage(current, this.manager.getOutput(current, COMPLETION_OUTPUT_BYTES)),
-            display: true,
-            details
-          },
-          { deliverAs: "followUp", triggerTurn: current.completionPolicy === "wake" }
-        );
-        sentMessage = true;
-        if (current.completionPolicy === "wake") break;
-      }
-      if (sentMessage) {
-        queueMicrotask(() => {
-          if (this.active?.ownerSessionId !== active.ownerSessionId) return;
-          this.safeReconcile(this.active.ctx);
-        });
-      }
-      this.syncLeaseRetry(active.ownerSessionId);
-    } finally {
-      this.flushing = false;
-    }
-  }
-  syncLeaseRetry(ownerSessionId2) {
-    const retryDelay = this.manager.getClaimRetryDelay(ownerSessionId2);
-    if (retryDelay !== void 0) {
-      this.scheduleLeaseRetry(retryDelay);
-      return;
-    }
-    if (this.retryTimer) clearTimeout(this.retryTimer);
-    this.retryTimer = void 0;
-  }
-  scheduleLeaseRetry(delayMs) {
-    if (this.retryTimer) clearTimeout(this.retryTimer);
-    this.retryTimer = setTimeout(() => {
-      this.retryTimer = void 0;
-      this.requestFlush();
-    }, Math.max(0, delayMs) + 10);
-    this.retryTimer.unref?.();
-  }
-};
-function installTerminalTools(pi, manager) {
-  const coordinator = new TerminalDeliveryCoordinator(pi, manager);
-  pi.registerTool({
-    name: "terminal_start",
-    label: "Terminal Start",
-    description: TERMINAL_TOOL_DESCRIPTIONS.start,
-    promptSnippet: "Start a durable non-interactive shell terminal that runs independently.",
-    promptGuidelines: [...TERMINAL_TOOL_GUIDELINES],
-    parameters: Type4.Object({
-      command: Type4.String({ description: "Shell command to run without stdin." }),
-      title: Type4.String({ description: "Short human-readable terminal title." }),
-      working_dir: Type4.Optional(Type4.String({ description: "Working directory. Defaults to the current project directory." })),
-      completion: Type4.Optional(StringEnum(["passive", "wake"], { description: "Completion disposition. Defaults to passive." }))
-    }),
-    async execute(toolCallId, params, _signal, _onUpdate, ctx) {
-      coordinator.touch(ctx);
-      const task = await manager.start({
-        ownerSessionId: sessionId(ctx),
-        sourceId: toolCallId,
-        command: params.command,
-        cwd: params.working_dir ?? ctx.cwd,
-        title: params.title,
-        completionPolicy: params.completion ?? "passive"
-      });
-      return makeToolResult(buildStartResult(task), { task, activity: terminalActivitySnapshot(task, "") });
-    }
-  });
-  pi.registerTool({
-    name: "terminal_check",
-    label: "Terminal Check",
-    description: TERMINAL_TOOL_DESCRIPTIONS.check,
-    promptSnippet: "Inspect one managed terminal without blocking.",
-    promptGuidelines: [...TERMINAL_TOOL_GUIDELINES],
-    parameters: Type4.Object({ id: Type4.String({ description: "Terminal id returned by terminal_start." }) }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      coordinator.touch(ctx);
-      const observation = manager.check(params.id, sessionId(ctx));
-      if (!observation) return makeToolResult(`Unknown terminal ${params.id}.`, { id: params.id, status: "unknown" });
-      return makeToolResult(buildObservationResult(observation), {
-        task: observation.task,
-        activity: terminalActivitySnapshot(observation.task, observation.output)
-      });
-    }
-  });
-  pi.registerTool({
-    name: "terminal_wait",
-    label: "Terminal Wait",
-    description: TERMINAL_TOOL_DESCRIPTIONS.wait,
-    promptSnippet: "Wait for managed terminals with a bounded normal timeout result.",
-    promptGuidelines: [...TERMINAL_TOOL_GUIDELINES],
-    parameters: Type4.Object({
-      ids: Type4.Array(Type4.String(), { minItems: 1, maxItems: MAX_TERMINAL_IDS, description: "Terminal ids to wait for." }),
-      timeout_ms: Type4.Optional(Type4.Integer({ minimum: 0, maximum: MAX_WAIT_TIMEOUT_MS, description: "Wait timeout in milliseconds. Defaults to 30000." }))
-    }),
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      coordinator.touch(ctx);
-      const result = await manager.wait(params.ids, sessionId(ctx), params.timeout_ms ?? DEFAULT_WAIT_TIMEOUT_MS, signal);
-      return makeToolResult(buildWaitResult(result), {
-        ...result,
-        activities: result.settled.map(({ task, output }) => terminalActivitySnapshot(task, output))
-      });
-    }
-  });
-  pi.registerTool({
-    name: "terminal_stop",
-    label: "Terminal Stop",
-    description: TERMINAL_TOOL_DESCRIPTIONS.stop,
-    promptSnippet: "Stop one or more complete managed terminal process trees.",
-    promptGuidelines: [...TERMINAL_TOOL_GUIDELINES],
-    parameters: Type4.Object({
-      ids: Type4.Array(Type4.String(), { minItems: 1, maxItems: MAX_TERMINAL_IDS, description: "Terminal ids to stop." })
-    }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      coordinator.touch(ctx);
-      const results = await manager.stop(params.ids, sessionId(ctx));
-      return makeToolResult(buildStopResult(results), {
-        results,
-        activities: results.map((result) => terminalActivityFromStopResult(manager, result)).filter((activity) => activity !== void 0)
-      });
-    }
-  });
-  pi.registerTool({
-    name: "terminal_list",
-    label: "Terminal List",
-    description: TERMINAL_TOOL_DESCRIPTIONS.list,
-    promptSnippet: "List current-session durable managed terminals and completion disposition.",
-    promptGuidelines: [...TERMINAL_TOOL_GUIDELINES],
-    parameters: Type4.Object({}),
-    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-      const tasks = manager.list(sessionId(ctx));
-      return makeToolResult(
-        tasks.length > 0 ? tasks.map(describeTerminal).join("\n") : "No terminals tracked for this session.",
-        { tasks }
-      );
-    }
-  });
-  pi.on("session_start", (_event, ctx) => coordinator.bind(ctx));
-  pi.on("agent_start", (_event, ctx) => coordinator.touch(ctx));
-  pi.on("agent_end", (_event, ctx) => coordinator.flushWhenIdle(ctx));
-  pi.on("agent_settled", (_event, ctx) => coordinator.flushWhenIdle(ctx));
-  pi.on("message_end", (event, ctx) => {
-    if (event.message.role !== "custom") return;
-    try {
-      coordinator.reconcile(ctx);
-    } catch {
-    }
-  });
-  pi.on("session_shutdown", (event) => {
-    if (event.reason === "quit") coordinator.dispose();
-    else coordinator.unbind();
-  });
-  return coordinator;
-}
-
-// src/activity/manager-bridge.ts
-import { createHash as createHash4, randomUUID as randomUUID5 } from "node:crypto";
-
 // src/activity/feed-publisher.ts
 import { randomUUID as randomUUID4 } from "node:crypto";
 import { existsSync as existsSync9, linkSync as linkSync2, readdirSync as readdirSync3, renameSync as renameSync5, rmSync as rmSync3 } from "node:fs";
@@ -14784,6 +14400,17 @@ function claimWriter(writerFile, candidate, inspectWriter) {
 function redactActivitySecrets(text) {
   return sanitizeActivityText(text).replace(/-----BEGIN [^-\n]+PRIVATE KEY-----[\s\S]*?-----END [^-\n]+PRIVATE KEY-----/giu, "[REDACTED PRIVATE KEY]").replace(/(?:^|\n)(?:(?:[A-Za-z0-9+/]{40,}={0,2})\n?){2,}/gu, "\n[REDACTED KEY MATERIAL]\n").replace(/\b((?:proxy-)?authorization\s*:)[^\n\r]*/giu, "$1 [REDACTED]").replace(/\b((?:set-cookie|cookie|[A-Za-z0-9-]*(?:api-key|token|secret|credential)[A-Za-z0-9-]*)\s*:)[^\n\r]*/giu, "$1 [REDACTED]").replace(/\b(?:bearer|basic)\s+[^\s"',;]+/giu, "[REDACTED AUTH]").replace(/\b((?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|access[_-]?key[_-]?id|access[_-]?token|auth[_-]?token|token|password|passwd|passphrase|credential|secret|private[_-]?key|client[_-]?secret|database[_-]?url|aws[_-]?secret[_-]?access[_-]?key)["']?\s*[:=]\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s,;]+)/giu, "$1[REDACTED]").replace(/(\bcurl\b[^\n]*?(?:\s-u|\s--user))(?:\s+|=)(?:"[^"\n]*"|'[^'\n]*'|[^\s,;]+)/giu, "$1 [REDACTED]").replace(/(--(?:api[-_]?key|access[-_]?token|auth[-_]?token|token|password|passphrase|secret|credential|client[-_]?secret|private[-_]?key))(?:\s+|=)(?:"[^"\n]*"|'[^'\n]*'|[^\s,;]+)/giu, "$1 [REDACTED]").replace(/\b((?:(?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|access[_-]?token|auth[_-]?token|token|password|passwd|passphrase|credential|secret|private[_-]?key|client[_-]?secret)|api\s+key|access\s+token|auth\s+token|client\s+secret|private\s+key))\s+(?:is\s+)?(?:"[^"\n]*"|'[^'\n]*'|[^\s,;]+)/giu, "$1 [REDACTED]").replace(/\b([A-Z][A-Z0-9_]{2,}\s*=\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s,;]+)/gu, "$1[REDACTED]").replace(/\b(?:AKIA[0-9A-Z]{16}|sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[baprs]-[A-Za-z0-9-]{10,}|npm_[A-Za-z0-9]{16,}|glpat-[A-Za-z0-9_-]{16,}|(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}|AIza[A-Za-z0-9_-]{35}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})\b/gu, "[REDACTED]").replace(/(?<![A-Za-z0-9/+=])(?=[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=]))(?=[A-Za-z0-9/+=]*[a-z])(?=[A-Za-z0-9/+=]*[A-Z])(?=[A-Za-z0-9/+=]*[0-9])[A-Za-z0-9/+=]{40}/gu, "[REDACTED POSSIBLE SECRET]").replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/giu, "$1[REDACTED]@");
 }
+function redactActivityOutputTail(input, options) {
+  let raw = boundedOutputTail(input, { maxBytes: options.contextBytes, maxLines: Number.MAX_SAFE_INTEGER });
+  if (options.truncated) {
+    const newline = raw.indexOf("\n");
+    raw = newline === -1 ? options.truncatedLineReplacement ?? "" : raw.slice(newline + 1);
+  }
+  return boundedOutputTail(redactActivitySecrets(raw), {
+    maxBytes: options.maxBytes,
+    maxLines: options.maxLines ?? Number.MAX_SAFE_INTEGER
+  });
+}
 function boundedHead(text, maxChars) {
   return Array.from(sanitizeActivityText(text)).slice(0, maxChars).join("");
 }
@@ -15052,6 +14679,446 @@ var ActivityFeedPublisher = class {
     this.onDiagnostic?.({ kind, path: this.path, message });
   }
 };
+
+// src/background-tasks/terminal-prompt.ts
+var TERMINAL_TOOL_GUIDELINES = [
+  "Use terminal_start for servers, watchers, long builds, and other non-interactive shell commands that should continue while you work; use bash for quick commands.",
+  "terminal_start completion is passive by default and never triggers an agent turn. Use completion: wake only when the terminal result must resume work automatically.",
+  "Use terminal_check for a non-blocking snapshot, terminal_wait for explicit bounded waiting, terminal_stop to cancel process trees, and terminal_list for a side-effect-free inventory.",
+  "Managed terminals receive no stdin. Never use terminal_start for interactive commands, prompts, or terminal user interfaces."
+];
+var TERMINAL_TOOL_DESCRIPTIONS = {
+  start: "Start a non-interactive shell command in a durable managed terminal and return its stable id immediately. Completion is passive unless completion is set to wake.",
+  check: "Return one current or final immutable terminal snapshot and a bounded output tail without blocking. Observing settlement suppresses an unclaimed wake.",
+  wait: "Wait for all requested terminal ids, or return settled and pending ids normally when the bounded timeout expires. Aborting cancels only this wait.",
+  stop: "Signal every requested running terminal process tree, escalate after the grace period, and report cancellation only after each whole tree is gone.",
+  list: "List current-session managed terminals newest first, including completion disposition, without observing or consuming them."
+};
+function redacted(value) {
+  return redactActivitySecrets(sanitizeActivityText(value));
+}
+function bounded(value, maxChars) {
+  const clean = redacted(value).trimEnd();
+  if (clean.length <= maxChars) return clean;
+  return `[output tail truncated]
+${clean.slice(-maxChars)}`;
+}
+function elapsed(task, currentTime = Date.now()) {
+  const end = task.settledAt ?? Math.max(task.updatedAt, currentTime);
+  const milliseconds = Math.max(0, end - task.createdAt);
+  if (milliseconds < 1e3) return `${milliseconds}ms`;
+  const seconds = Math.floor(milliseconds / 1e3);
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+function describeTerminal(task) {
+  const exit = task.exitCode === void 0 ? "" : ` \xB7 exit ${task.exitCode ?? "unknown"}`;
+  return `${task.id} \xB7 ${task.status}${exit} \xB7 ${task.deliveryState} \xB7 ${elapsed(task)} \xB7 ${redacted(task.title)}`;
+}
+function buildStartResult(task) {
+  return [
+    `Started terminal ${task.id} \xB7 ${redacted(task.title)}.`,
+    `status: ${task.status} \xB7 completion: ${task.completionPolicy} \xB7 pid: ${task.pid ?? "pending"}`,
+    `cwd: ${redacted(task.cwd)}`,
+    "stdin: unavailable \u2014 interactive commands will not work",
+    `Full log: ${redacted(task.logFile)}`
+  ].join("\n");
+}
+function buildObservationResult(observation) {
+  return [
+    describeTerminal(observation.task),
+    `cwd: ${redacted(observation.task.cwd)}`,
+    `Full log: ${redacted(observation.task.logFile)}`,
+    "",
+    "Output tail:",
+    bounded(observation.output, 16 * 1024) || "(no output)"
+  ].join("\n");
+}
+function buildWaitResult(result) {
+  const sections = result.settled.map(buildObservationResult);
+  const summary = [
+    `settled: ${result.settled.map(({ task }) => task.id).join(", ") || "none"}`,
+    `pending: ${result.pendingIds.join(", ") || "none"}`,
+    `unknown: ${result.unknownIds.join(", ") || "none"}`,
+    `timed out: ${result.timedOut ? "yes" : "no"}`
+  ].join("\n");
+  return [summary, ...sections].join("\n\n---\n\n");
+}
+function buildStopResult(results) {
+  return results.map((result) => {
+    const output = result.output ? `
+${bounded(result.output, 8 * 1024)}` : "";
+    return `${redacted(result.message)}${output}`;
+  }).join("\n\n");
+}
+function buildTerminalResultMessage(task, output) {
+  return [
+    `Terminal ${task.id} "${redacted(task.title)}" ${task.status}.`,
+    `exit: ${task.exitCode ?? "unknown"} \xB7 elapsed: ${elapsed(task)} \xB7 cwd: ${redacted(task.cwd)}`,
+    "",
+    "Final output tail:",
+    bounded(output, 8 * 1024) || "(no output)",
+    "",
+    `Full log: ${redacted(task.logFile)}`
+  ].join("\n");
+}
+
+// src/background-tasks/terminal-tools.ts
+var DEFAULT_WAIT_TIMEOUT_MS = 3e4;
+var MAX_WAIT_TIMEOUT_MS = 3e5;
+var MAX_TERMINAL_IDS = 64;
+var COMPLETION_OUTPUT_BYTES = 8 * 1024;
+var REDACTION_CONTEXT_BYTES = 64 * 1024;
+var StringEnum = (values, options) => {
+  const schema = { type: "string", enum: [...values] };
+  if (options?.description !== void 0) schema.description = options.description;
+  return Type4.Unsafe(schema);
+};
+function makeToolResult(text, details) {
+  return { content: [{ type: "text", text }], details };
+}
+function sessionActivity(task, output) {
+  return sanitizeActivityForFeed(terminalActivitySnapshot(task, output), task.ownerSessionId);
+}
+function sessionTask(task) {
+  const { command: _omitted, ...visible } = task;
+  return {
+    ...visible,
+    title: redactActivitySecrets(task.title),
+    cwd: redactActivitySecrets(task.cwd),
+    logFile: redactActivitySecrets(task.logFile)
+  };
+}
+function readRedactedOutputTail(manager, task, maxBytes) {
+  try {
+    const tail = manager.getOutputTailBytes(task, REDACTION_CONTEXT_BYTES);
+    return redactActivityOutputTail(tail.bytes, {
+      maxBytes,
+      contextBytes: REDACTION_CONTEXT_BYTES,
+      truncated: tail.truncated,
+      truncatedLineReplacement: "[truncated line redacted]"
+    });
+  } catch {
+    return "";
+  }
+}
+function redactCapturedOutput(output, maxBytes) {
+  return redactActivityOutputTail(output, {
+    maxBytes,
+    contextBytes: maxBytes,
+    // A full captured window may begin after its credential label.
+    truncated: Buffer.byteLength(output, "utf8") >= maxBytes,
+    truncatedLineReplacement: "[truncated line redacted]"
+  });
+}
+function sessionObservation(manager, observation) {
+  return { task: sessionTask(observation.task), output: readRedactedOutputTail(manager, observation.task, 16 * 1024) };
+}
+function sessionStopResult(manager, result) {
+  return {
+    ...result,
+    task: result.task ? sessionTask(result.task) : void 0,
+    output: result.output === void 0 ? void 0 : result.task ? readRedactedOutputTail(manager, result.task, COMPLETION_OUTPUT_BYTES) : redactCapturedOutput(result.output, COMPLETION_OUTPUT_BYTES),
+    message: redactActivitySecrets(result.message)
+  };
+}
+function terminalActivityFromStopResult(manager, result) {
+  if (!result.task) return void 0;
+  const output = result.output === void 0 ? readRedactedOutputTail(manager, result.task, COMPLETION_OUTPUT_BYTES) : redactCapturedOutput(result.output, COMPLETION_OUTPUT_BYTES);
+  return sessionActivity(result.task, output);
+}
+function sessionId(ctx) {
+  const id = ctx.sessionManager.getSessionId();
+  if (!id) throw new Error("Current Pi session has no stable session id");
+  return id;
+}
+function isPayloadObject(value) {
+  return typeof value === "object" && value !== null;
+}
+function isPayloadString(value) {
+  return typeof value === "string";
+}
+function branchDetails(record) {
+  return record.details ?? null;
+}
+function completionsFromContext(ctx) {
+  const ids = /* @__PURE__ */ new Set();
+  const receipts = [];
+  for (const entry of ctx.sessionManager.getBranch()) {
+    if (!isPayloadObject(entry)) continue;
+    let details;
+    if (entry.type === "custom_message") details = branchDetails(entry);
+    else if (entry.type === "message") {
+      const message = entry.message;
+      details = isPayloadObject(message) && message.role === "custom" ? branchDetails(message) : null;
+    } else details = null;
+    if (!isPayloadObject(details)) continue;
+    const completionId = details.completionId;
+    const claimToken = details.deliveryClaimToken;
+    if (!isPayloadString(completionId)) continue;
+    ids.add(completionId);
+    if (isPayloadString(claimToken)) receipts.push({ completionId, claimToken });
+  }
+  return { ids, receipts };
+}
+function completionDetails(manager, task) {
+  const output = readRedactedOutputTail(manager, task, COMPLETION_OUTPUT_BYTES);
+  return {
+    completionId: task.completionId,
+    deliveryClaimToken: task.deliveryClaimToken,
+    ownerSessionId: task.ownerSessionId,
+    activity: sessionActivity(task, output)
+  };
+}
+var TerminalDeliveryCoordinator = class {
+  constructor(pi, manager) {
+    this.pi = pi;
+    this.manager = manager;
+    this.unsubscribe = manager.addChangeListener((task) => {
+      if (task.ownerSessionId === this.active?.ownerSessionId) this.requestFlush();
+    });
+  }
+  pi;
+  manager;
+  active;
+  unsubscribe;
+  retryTimer;
+  flushQueued = false;
+  flushing = false;
+  bind(ctx) {
+    this.active = { ownerSessionId: sessionId(ctx), ctx };
+    this.requestFlush();
+  }
+  touch(ctx) {
+    if (this.active?.ownerSessionId !== sessionId(ctx)) return;
+    this.active = { ownerSessionId: this.active.ownerSessionId, ctx };
+    this.safeReconcile(ctx);
+  }
+  flushWhenIdle(ctx) {
+    this.touch(ctx);
+    if (this.active?.ownerSessionId === sessionId(ctx) && ctx.isIdle()) this.requestFlush();
+  }
+  unbind() {
+    this.active = void 0;
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = void 0;
+  }
+  dispose() {
+    this.unbind();
+    this.unsubscribe?.();
+    this.unsubscribe = void 0;
+  }
+  reconcile(ctx) {
+    const ownerSessionId2 = sessionId(ctx);
+    this.acknowledgeObservable(ctx, ownerSessionId2);
+    this.syncLeaseRetry(ownerSessionId2);
+  }
+  acknowledgeObservable(ctx, ownerSessionId2) {
+    this.manager.acknowledge(ownerSessionId2, completionsFromContext(ctx).receipts);
+  }
+  safeReconcile(ctx) {
+    try {
+      this.reconcile(ctx);
+    } catch {
+      this.scheduleLeaseRetry(50);
+    }
+  }
+  requestFlush() {
+    if (this.flushQueued) return;
+    this.flushQueued = true;
+    queueMicrotask(() => {
+      this.flushQueued = false;
+      try {
+        this.flush();
+      } catch {
+        this.scheduleLeaseRetry(50);
+      }
+    });
+  }
+  flush() {
+    const active = this.active;
+    if (!active || this.flushing || !active.ctx.isIdle()) return;
+    this.flushing = true;
+    try {
+      this.acknowledgeObservable(active.ctx, active.ownerSessionId);
+      let sentMessage = false;
+      const claimed = this.manager.claimPending(active.ownerSessionId, true, 1).sort((left, right) => Number(left.completionPolicy === "wake") - Number(right.completionPolicy === "wake"));
+      for (const task of claimed) {
+        const current = this.manager.readIndexed(task.id, active.ownerSessionId);
+        if (!current) continue;
+        if (current.deliveryState !== "claimed" || !current.deliveryClaimToken || current.completionId !== task.completionId || current.deliveryClaimToken !== task.deliveryClaimToken) continue;
+        const observable = completionsFromContext(active.ctx);
+        if (current.completionId && observable.ids.has(current.completionId)) {
+          this.manager.acknowledge(active.ownerSessionId, [{
+            completionId: current.completionId,
+            claimToken: current.deliveryClaimToken
+          }]);
+          continue;
+        }
+        const details = completionDetails(this.manager, current);
+        this.pi.sendMessage(
+          {
+            customType: "terminal-result",
+            content: buildTerminalResultMessage(current, readRedactedOutputTail(this.manager, current, COMPLETION_OUTPUT_BYTES)),
+            display: true,
+            details
+          },
+          { deliverAs: "followUp", triggerTurn: current.completionPolicy === "wake" }
+        );
+        sentMessage = true;
+        if (current.completionPolicy === "wake") break;
+      }
+      if (sentMessage) {
+        queueMicrotask(() => {
+          if (this.active?.ownerSessionId !== active.ownerSessionId) return;
+          this.safeReconcile(this.active.ctx);
+        });
+      }
+      this.syncLeaseRetry(active.ownerSessionId);
+    } finally {
+      this.flushing = false;
+    }
+  }
+  syncLeaseRetry(ownerSessionId2) {
+    const retryDelay = this.manager.getClaimRetryDelay(ownerSessionId2);
+    if (retryDelay !== void 0) {
+      this.scheduleLeaseRetry(retryDelay);
+      return;
+    }
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = void 0;
+  }
+  scheduleLeaseRetry(delayMs) {
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = void 0;
+      this.requestFlush();
+    }, Math.max(0, delayMs) + 10);
+    this.retryTimer.unref?.();
+  }
+};
+function installTerminalTools(pi, manager) {
+  const coordinator = new TerminalDeliveryCoordinator(pi, manager);
+  pi.registerTool({
+    name: "terminal_start",
+    label: "Terminal Start",
+    description: TERMINAL_TOOL_DESCRIPTIONS.start,
+    promptSnippet: "Start a durable non-interactive shell terminal that runs independently.",
+    promptGuidelines: [...TERMINAL_TOOL_GUIDELINES],
+    parameters: Type4.Object({
+      command: Type4.String({ description: "Shell command to run without stdin." }),
+      title: Type4.String({ description: "Short human-readable terminal title." }),
+      working_dir: Type4.Optional(Type4.String({ description: "Working directory. Defaults to the current project directory." })),
+      completion: Type4.Optional(StringEnum(["passive", "wake"], { description: "Completion disposition. Defaults to passive." }))
+    }),
+    async execute(toolCallId, params, _signal, _onUpdate, ctx) {
+      coordinator.touch(ctx);
+      const task = await manager.start({
+        ownerSessionId: sessionId(ctx),
+        sourceId: toolCallId,
+        command: params.command,
+        cwd: params.working_dir ?? ctx.cwd,
+        title: params.title,
+        completionPolicy: params.completion ?? "passive"
+      });
+      return makeToolResult(buildStartResult(task), { task: sessionTask(task), activity: sessionActivity(task, "") });
+    }
+  });
+  pi.registerTool({
+    name: "terminal_check",
+    label: "Terminal Check",
+    description: TERMINAL_TOOL_DESCRIPTIONS.check,
+    promptSnippet: "Inspect one managed terminal without blocking.",
+    promptGuidelines: [...TERMINAL_TOOL_GUIDELINES],
+    parameters: Type4.Object({ id: Type4.String({ description: "Terminal id returned by terminal_start." }) }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      coordinator.touch(ctx);
+      const observation = manager.check(params.id, sessionId(ctx));
+      if (!observation) return makeToolResult(`Unknown terminal ${params.id}.`, { id: params.id, status: "unknown" });
+      const visible = sessionObservation(manager, observation);
+      return makeToolResult(buildObservationResult({ task: observation.task, output: visible.output }), {
+        ...visible,
+        activity: sessionActivity(observation.task, visible.output)
+      });
+    }
+  });
+  pi.registerTool({
+    name: "terminal_wait",
+    label: "Terminal Wait",
+    description: TERMINAL_TOOL_DESCRIPTIONS.wait,
+    promptSnippet: "Wait for managed terminals with a bounded normal timeout result.",
+    promptGuidelines: [...TERMINAL_TOOL_GUIDELINES],
+    parameters: Type4.Object({
+      ids: Type4.Array(Type4.String(), { minItems: 1, maxItems: MAX_TERMINAL_IDS, description: "Terminal ids to wait for." }),
+      timeout_ms: Type4.Optional(Type4.Integer({ minimum: 0, maximum: MAX_WAIT_TIMEOUT_MS, description: "Wait timeout in milliseconds. Defaults to 30000." }))
+    }),
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      coordinator.touch(ctx);
+      const result = await manager.wait(params.ids, sessionId(ctx), params.timeout_ms ?? DEFAULT_WAIT_TIMEOUT_MS, signal);
+      const settled = result.settled.map((observation) => sessionObservation(manager, observation));
+      return makeToolResult(buildWaitResult({ ...result, settled: settled.map((observation, index) => ({ task: result.settled[index].task, output: observation.output })) }), {
+        settled,
+        pendingIds: result.pendingIds,
+        unknownIds: result.unknownIds,
+        timedOut: result.timedOut,
+        activities: result.settled.map(({ task }, index) => sessionActivity(task, settled[index].output))
+      });
+    }
+  });
+  pi.registerTool({
+    name: "terminal_stop",
+    label: "Terminal Stop",
+    description: TERMINAL_TOOL_DESCRIPTIONS.stop,
+    promptSnippet: "Stop one or more complete managed terminal process trees.",
+    promptGuidelines: [...TERMINAL_TOOL_GUIDELINES],
+    parameters: Type4.Object({
+      ids: Type4.Array(Type4.String(), { minItems: 1, maxItems: MAX_TERMINAL_IDS, description: "Terminal ids to stop." })
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      coordinator.touch(ctx);
+      const results = await manager.stop(params.ids, sessionId(ctx));
+      const visible = results.map((result) => sessionStopResult(manager, result));
+      return makeToolResult(buildStopResult(visible), {
+        results: visible,
+        activities: results.map((result) => terminalActivityFromStopResult(manager, result)).filter((activity) => activity !== void 0)
+      });
+    }
+  });
+  pi.registerTool({
+    name: "terminal_list",
+    label: "Terminal List",
+    description: TERMINAL_TOOL_DESCRIPTIONS.list,
+    promptSnippet: "List current-session durable managed terminals and completion disposition.",
+    promptGuidelines: [...TERMINAL_TOOL_GUIDELINES],
+    parameters: Type4.Object({}),
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      const tasks = manager.list(sessionId(ctx));
+      return makeToolResult(
+        tasks.length > 0 ? tasks.map(describeTerminal).join("\n") : "No terminals tracked for this session.",
+        { tasks: tasks.map(sessionTask) }
+      );
+    }
+  });
+  pi.on("session_start", (_event, ctx) => coordinator.bind(ctx));
+  pi.on("agent_start", (_event, ctx) => coordinator.touch(ctx));
+  pi.on("agent_end", (_event, ctx) => coordinator.flushWhenIdle(ctx));
+  pi.on("agent_settled", (_event, ctx) => coordinator.flushWhenIdle(ctx));
+  pi.on("message_end", (event, ctx) => {
+    if (event.message.role !== "custom") return;
+    try {
+      coordinator.reconcile(ctx);
+    } catch {
+    }
+  });
+  pi.on("session_shutdown", (event) => {
+    if (event.reason === "quit") coordinator.dispose();
+    else coordinator.unbind();
+  });
+  return coordinator;
+}
+
+// src/activity/manager-bridge.ts
+import { createHash as createHash4, randomUUID as randomUUID5 } from "node:crypto";
 
 // src/activity/adapter-bounds.ts
 function createAdapterTraversalBudget(options) {
@@ -15643,17 +15710,14 @@ var ActivityManagerBridge = class {
           if (this.terminalManager.getOutputTailBytes || this.terminalManager.getOutputBytes) {
             const tail = this.terminalManager.getOutputTailBytes?.(task, TERMINAL_REDACTION_CONTEXT_BYTES);
             const bytes = tail?.bytes ?? this.terminalManager.getOutputBytes(task, TERMINAL_REDACTION_CONTEXT_BYTES);
-            let raw = boundedOutputTail(bytes, {
-              maxBytes: TERMINAL_REDACTION_CONTEXT_BYTES,
-              maxLines: Number.MAX_SAFE_INTEGER
+            output = redactActivityOutputTail(bytes, {
+              maxBytes: ACTIVITY_OUTPUT_MAX_BYTES,
+              contextBytes: TERMINAL_REDACTION_CONTEXT_BYTES,
+              maxLines: ACTIVITY_OUTPUT_MAX_LINES,
+              truncated: tail?.truncated ?? true
             });
-            if (tail?.truncated) {
-              const newline = raw.indexOf("\n");
-              raw = newline === -1 ? "" : raw.slice(newline + 1);
-            }
-            output = boundedOutputTail(redactActivitySecrets(raw));
           } else {
-            output = boundedOutputTail(redactActivitySecrets(this.terminalManager.getOutput(task)));
+            output = "";
           }
           this.terminalOutputCache.set(cacheKey2, { revision: task.revision, output });
         } catch (error) {

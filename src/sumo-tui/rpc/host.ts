@@ -1804,6 +1804,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// the entry owns the child reap and process exit.
 		if (options.shouldAbortAdoption?.()) return requestedHostExitCode ?? 0;
 		await client.start(adoptChildAndArmHostSignals);
+		logDiagnostic("rpc_child_ready", { surface: "rpc_host" });
 		const postAdoptionDelayMs = env.NODE_ENV === "test"
 			? Number.parseInt(env.SUMOCODE_TEST_POST_ADOPTION_DELAY_MS ?? "0", 10)
 			: 0;
@@ -1942,6 +1943,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			});
 		}
 		deferActivityRuntimeUpdate = false;
+		logDiagnostic("hydration_committed", { surface: "rpc_host" });
 		// A reload predecessor deliberately leaves its retained frame and terminal
 		// modes in place. Hydrate off-screen, then atomically replace that frame;
 		// never flash the cold-start splash for a session we already know exists.

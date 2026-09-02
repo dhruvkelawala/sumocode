@@ -212,6 +212,7 @@ export function isRpcChildProfile(options: TaskModeOptions = {}): boolean {
 
 function installOrchestrationTools(pi: ExtensionAPI) {
 	const terminalTaskManager = installBackgroundTasks(pi);
+	logDiagnostic("terminal_index_ready", { surface: "rpc_child" });
 	installTerminalTools(pi, terminalTaskManager);
 	const subagentManager = installSubagents(pi);
 	const activityBridge = installActivityManagerBridge(pi, terminalTaskManager, subagentManager);

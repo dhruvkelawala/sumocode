@@ -4,7 +4,8 @@ const { performance } = require('node:perf_hooks');
 
 const diagFile = process.env.SUMO_TUI_DIAG_FILE;
 const entrypoint = process.argv[1] || "";
-const shouldInstrument = entrypoint.includes("pi-coding-agent") || entrypoint.endsWith("/pi") || entrypoint.endsWith("/pi.js");
+const role = entrypoint.endsWith("/sumo-rpc-host.js") ? "host" : "rpc-child";
+const shouldInstrument = role === "host" || entrypoint.includes("pi-coding-agent") || entrypoint.endsWith("/pi") || entrypoint.endsWith("/pi.js");
 if (diagFile && shouldInstrument && !global.__sumocodeStartupDiagnosticsInstalled) {
 	global.__sumocodeStartupDiagnosticsInstalled = true;
 	const startedAt = performance.now();
@@ -30,7 +31,7 @@ if (diagFile && shouldInstrument && !global.__sumocodeStartupDiagnosticsInstalle
 		} catch {}
 	}
 
-	log('process_preload_start', { pid: process.pid, cwd: process.cwd(), argv: process.argv.slice(0, 6) });
+	log('process_preload_start', { role, pid: process.pid, cwd: process.cwd(), argv: process.argv.slice(0, 6) });
 
 	Module._load = function sumocodeInstrumentedModuleLoad(request, parent, isMain) {
 		const start = performance.now();

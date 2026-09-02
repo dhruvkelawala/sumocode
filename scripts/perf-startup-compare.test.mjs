@@ -1,6 +1,8 @@
-import { mkdtemp, mkdir, readFile, rm, stat } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	runStartupComparison,
@@ -8,6 +10,7 @@ import {
 } from "./perf-startup-compare.mjs";
 
 const roots = [];
+const execFileAsync = promisify(execFile);
 
 afterEach(async () => {
 	await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -91,6 +94,22 @@ async function harness(options = {}) {
 }
 
 describe("startup comparison CLI", () => {
+	it("marks the host process at preload with a public role discriminator", async () => {
+		const root = await temporaryRoot("sumocode-startup-preload-test-");
+		const entry = join(root, "sumo-rpc-host.js");
+		const diag = join(root, "diag.jsonl");
+		await writeFile(entry, "");
+		await execFileAsync(process.execPath, [entry], {
+			env: {
+				...process.env,
+				SUMO_TUI_DIAG_FILE: diag,
+				NODE_OPTIONS: `--require "${resolve("scripts/startup-diagnostics-preload.cjs")}"`,
+			},
+		});
+		const event = JSON.parse((await readFile(diag, "utf8")).trim().split("\n")[0]);
+		expect(event).toMatchObject({ event: "process_preload_start", role: "host" });
+	});
+
 	it("defaults to 15 samples and an approximately 1,800-record disposable fixture", () => {
 		expect(startupCompareOptions(["--base", "HEAD~1"])).toMatchObject({
 			baseRef: "HEAD~1",

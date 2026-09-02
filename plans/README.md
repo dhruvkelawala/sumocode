@@ -2,6 +2,8 @@
 
 Executor-grade, self-contained implementation plans for SumoCode. Four independent tracks:
 
+> Repository policy for every plan and layer: generated `dist/**` outputs are build artifacts and are never committed. Do not add or update bundle, source-map, or `.inputs.json` files in a plan PR; the stable extension entry falls back to source, and the verification harness builds its own private artifacts.
+
 - **Track A — Pi RPC migration (001–006)**: migrate off the Pi `dist/main.js` InteractiveMode
   patch onto Pi's native `--mode rpc`, with SumoCode as the host. Gated; advisory.
 - **Track B — Pi parity fixes (007–013)**: close rendering/affordance gaps where SumoCode's

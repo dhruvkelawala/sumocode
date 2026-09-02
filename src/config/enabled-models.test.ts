@@ -2,8 +2,14 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { RpcModelOption } from "./controls.js";
 import { filterToEnabled, readEnabledModelPatterns } from "./enabled-models.js";
+
+interface RpcModelOption {
+	readonly provider: string;
+	readonly id: string;
+	readonly label: string;
+	readonly active: boolean;
+}
 
 function option(provider: string, id: string, active = false): RpcModelOption {
 	return {

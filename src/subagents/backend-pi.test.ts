@@ -270,7 +270,7 @@ describe("spawnPiChild", () => {
 		emitJson(proc, { type: "message_end", message: { role: "assistant", content: text } });
 		emitJson(proc, { type: "tool_result_end", message: { role: "toolResult", content: text } });
 
-		const retained = retainedEventText(events).join("");
+		const retained = durableEventText(events);
 		expect(Buffer.byteLength(retained, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
 		expect(retained.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
 	});
@@ -394,6 +394,30 @@ describe("spawnPiChild", () => {
 		expect(retained).toContain("completed answer");
 		expect(retained.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
 		expect(Buffer.byteLength(retained, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+	});
+
+	it("reclaims prior completed text when the next answer would overflow", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		const finalText = `FINAL:${"f".repeat(3 * 1024 * 1024)}`;
+
+		emitJson(proc, { type: "message_end", message: { role: "assistant", content: "p".repeat(3 * 1024 * 1024) } });
+		emitJson(proc, { type: "message_end", message: { role: "assistant", content: finalText } });
+		proc.emit("close", 0);
+
+		const finalMessage = events.filter((event) => event.kind === "message-end" && event.role === "assistant").at(-1);
+		const settled = events.at(-1);
+		if (finalMessage?.kind !== "message-end") throw new Error("missing final message");
+		expect(finalMessage).toMatchObject({ replacesRetainedText: true });
+		expect(finalMessage.text).toMatch(/^FINAL:/);
+		expect(Buffer.byteLength(finalMessage.text, "utf8")).toBeGreaterThanOrEqual(Buffer.byteLength(finalText, "utf8"));
+		expect(durableEventText(events)).not.toContain("pppp");
+		expect(durableEventText(events).split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+		if (settled?.kind !== "run-settled" || settled.outcome.kind !== "completed") throw new Error("missing completed result");
+		expect(settled.outcome.finalText).toBe(finalMessage.text);
 	});
 
 	it("does not double-charge provisional or final-result aliases against the run budget", () => {

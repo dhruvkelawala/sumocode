@@ -297,6 +297,7 @@ class PiRunPayloadBudget {
 	public retainMessage(role: Message["role"], text: string): RetainedMessageText {
 		let replacesRetainedText = false;
 		let requiresMarker = false;
+		const textBytes = Buffer.byteLength(text, "utf8");
 		// SubagentManager replaces liveText only at the corresponding completed
 		// assistant message, so reclaim those provisional bytes at that boundary.
 		if (role === "assistant") {
@@ -312,7 +313,7 @@ class PiRunPayloadBudget {
 				this.markerRetained ||
 				liveOmitted ||
 				this.retainedFull ||
-				this.retainedBytes >= CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve
+				textBytes > CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve - this.retainedBytes
 			)) {
 				this.retainedBytes = 0;
 				this.markerRetained = false;
@@ -327,7 +328,6 @@ class PiRunPayloadBudget {
 			this.omissionBehindLive = text.length > 0;
 			return { text: "" };
 		}
-		const textBytes = Buffer.byteLength(text, "utf8");
 		if (requiresMarker && !this.markerRetained) {
 			const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - this.markerBytes - this.retainedBytes - this.liveBytes;
 			const retained = this.markedHead(text, Math.max(0, contentBytesLeft));

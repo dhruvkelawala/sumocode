@@ -3168,6 +3168,10 @@ var RunPayloadBudget = class {
     const markerReserve = this.truncated ? 0 : this.markerBytes;
     return this.retainedBytes + this.liveBytes >= CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve;
   }
+  wouldOverflow(bytes) {
+    const markerReserve = this.truncated ? 0 : this.markerBytes;
+    return bytes > CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve - this.retainedBytes - this.liveBytes;
+  }
   retain(text, requiresMarker = false, owner) {
     if (text.length === 0) return "";
     const textBytes = Buffer.byteLength(text, "utf8");
@@ -3766,14 +3770,15 @@ var handleEventMessage = (result, message, liveOmitted = false) => {
   }
   const rawContent = message.content;
   const parts = Array.isArray(rawContent) ? rawContent.filter(isRecord) : [];
-  const hasDeliverableText = parts.some((part) => part.type === "text" && typeof part.text === "string" && part.text.length > 0) || typeof message.errorMessage === "string" && message.errorMessage.length > 0;
+  const deliverableTextBytes = parts.reduce((bytes, part) => part.type === "text" && typeof part.text === "string" ? bytes + Buffer.byteLength(part.text, "utf8") : bytes, typeof message.errorMessage === "string" ? Buffer.byteLength(message.errorMessage, "utf8") : 0);
+  const hasDeliverableText = deliverableTextBytes > 0;
   const hasAssistantPayload = parts.some((part) => {
     if (part.type === "text") return typeof part.text === "string" && part.text.length > 0;
     if (part.type === "thinking") return typeof part.thinking === "string" && part.thinking.length > 0;
     return part.type === "toolCall";
   }) || hasDeliverableText;
   const hasPriorDeliverableText = getFinalOutput(result.messages).length > 0;
-  const replaceForPayload = hasAssistantPayload && (hasDeliverableText || !hasPriorDeliverableText) && (budget.truncated || budget.full || liveOmitted);
+  const replaceForPayload = hasAssistantPayload && (hasDeliverableText || !hasPriorDeliverableText) && (budget.truncated || budget.full || liveOmitted || budget.wouldOverflow(deliverableTextBytes));
   let requiresMarker = replaceForPayload || hasAssistantPayload && liveOmitted && !budget.truncated;
   if (replaceForPayload) {
     clearRetainedHumanText(result);
@@ -16186,6 +16191,7 @@ var PiRunPayloadBudget = class {
   retainMessage(role, text) {
     let replacesRetainedText = false;
     let requiresMarker = false;
+    const textBytes = Buffer.byteLength(text, "utf8");
     if (role === "assistant") {
       const liveOmitted = this.liveTruncated || this.omissionBehindLive;
       this.liveBytes = 0;
@@ -16193,7 +16199,7 @@ var PiRunPayloadBudget = class {
       this.liveTruncated = false;
       this.omissionBehindLive = false;
       const markerReserve2 = this.markerRetained ? 0 : this.markerBytes;
-      if (text.length > 0 && (this.markerRetained || liveOmitted || this.retainedFull || this.retainedBytes >= CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve2)) {
+      if (text.length > 0 && (this.markerRetained || liveOmitted || this.retainedFull || textBytes > CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve2 - this.retainedBytes)) {
         this.retainedBytes = 0;
         this.markerRetained = false;
         this.retainedFull = false;
@@ -16207,7 +16213,6 @@ var PiRunPayloadBudget = class {
       this.omissionBehindLive = text.length > 0;
       return { text: "" };
     }
-    const textBytes = Buffer.byteLength(text, "utf8");
     if (requiresMarker && !this.markerRetained) {
       const contentBytesLeft2 = CHILD_RETAINED_RESULT_MAX_BYTES - this.markerBytes - this.retainedBytes - this.liveBytes;
       const retained2 = this.markedHead(text, Math.max(0, contentBytesLeft2));
@@ -17429,7 +17434,8 @@ var boundWaitChunk = (text, maxBytes) => boundRetainedResult(text, maxBytes);
 var boundedWaitText = (snapshots) => {
   const chunks = [];
   let bytes = 0;
-  for (const snapshot of snapshots) {
+  for (let index = 0; index < snapshots.length; index += 1) {
+    const snapshot = snapshots[index];
     const errorLine = snapshot.status === "error" && snapshot.errorText ? `error: ${snapshot.errorText}
 ` : "";
     const body = `${errorLine}${latestText(snapshot) || (errorLine ? "" : snapshot.errorText || "(no output)")}`;
@@ -17443,7 +17449,10 @@ var boundedWaitText = (snapshots) => {
     const retained = Buffer.byteLength(chunk, "utf8") <= remaining ? chunk : boundWaitChunk(chunk, remaining);
     chunks.push(retained);
     bytes += separatorBytes + Buffer.byteLength(retained, "utf8");
-    if (bytes >= WAIT_TOTAL_MAX_BYTES) break;
+    if (bytes >= WAIT_TOTAL_MAX_BYTES) {
+      if (index < snapshots.length - 1) return boundWaitChunk(`${chunks.join(WAIT_SEPARATOR)}${TRUNCATED_HEAD_MARKER}`, WAIT_TOTAL_MAX_BYTES);
+      break;
+    }
   }
   return chunks.join(WAIT_SEPARATOR);
 };

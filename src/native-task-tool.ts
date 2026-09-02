@@ -132,6 +132,11 @@ class RunPayloadBudget {
 		return this.retainedBytes + this.liveBytes >= CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve;
 	}
 
+	public wouldOverflow(bytes: number): boolean {
+		const markerReserve = this.truncated ? 0 : this.markerBytes;
+		return bytes > CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve - this.retainedBytes - this.liveBytes;
+	}
+
 	public retain(text: string, requiresMarker = false, owner?: string): string {
 		if (text.length === 0) return "";
 		const textBytes = Buffer.byteLength(text, "utf8");
@@ -896,8 +901,10 @@ const handleEventMessage = (result: SingleResult, message: Message, liveOmitted 
 	}
 	const rawContent: unknown = message.content;
 	const parts = Array.isArray(rawContent) ? rawContent.filter(isRecord) : [];
-	const hasDeliverableText = parts.some((part) => part.type === "text" && typeof part.text === "string" && part.text.length > 0)
-		|| (typeof message.errorMessage === "string" && message.errorMessage.length > 0);
+	const deliverableTextBytes = parts.reduce((bytes, part) => (
+		part.type === "text" && typeof part.text === "string" ? bytes + Buffer.byteLength(part.text, "utf8") : bytes
+	), typeof message.errorMessage === "string" ? Buffer.byteLength(message.errorMessage, "utf8") : 0);
+	const hasDeliverableText = deliverableTextBytes > 0;
 	const hasAssistantPayload = parts.some((part) => {
 		if (part.type === "text") return typeof part.text === "string" && part.text.length > 0;
 		if (part.type === "thinking") return typeof part.thinking === "string" && part.thinking.length > 0;
@@ -906,7 +913,7 @@ const handleEventMessage = (result: SingleResult, message: Message, liveOmitted 
 	const hasPriorDeliverableText = getFinalOutput(result.messages).length > 0;
 	const replaceForPayload = hasAssistantPayload
 		&& (hasDeliverableText || !hasPriorDeliverableText)
-		&& (budget.truncated || budget.full || liveOmitted);
+		&& (budget.truncated || budget.full || liveOmitted || budget.wouldOverflow(deliverableTextBytes));
 	let requiresMarker = replaceForPayload || (hasAssistantPayload && liveOmitted && !budget.truncated);
 	if (replaceForPayload) {
 		clearRetainedHumanText(result);

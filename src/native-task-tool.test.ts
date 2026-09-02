@@ -474,11 +474,10 @@ describe("native task tool", () => {
 		expect(result.usage?.turns).toBe(5);
 		const firstMessage = result.messages?.[0];
 		expect(firstMessage?.role).toBe("user");
-		expect(Array.isArray(firstMessage?.content) ? firstMessage.content[1] : undefined).toMatchObject({ type: "image", data: "image-0" });
-		expect(result.messages?.find((message) => message.role === "toolResult")).toMatchObject({
-			toolCallId: "message-tool-0",
-			details: { page: 0 },
-		});
+		expect(Array.isArray(firstMessage?.content) ? firstMessage.content[1] : undefined).toMatchObject({ type: "image", data: "", mimeType: "image/png" });
+		const firstToolResult = result.messages?.find((message) => message.role === "toolResult");
+		expect(firstToolResult).toMatchObject({ toolCallId: "message-tool-0" });
+		expect(firstToolResult?.role === "toolResult" ? firstToolResult.details : undefined).toBeUndefined();
 		expect(result.toolEvents).toMatchObject([
 			{ id: "event-tool-a", status: "success" },
 			{ id: "event-tool-b", status: "success" },
@@ -736,6 +735,27 @@ describe("native task tool", () => {
 		const events = toolResult.details?.results?.[0]?.toolEvents ?? [];
 		expect(events).toHaveLength(1);
 		expect(events[0]?.output).toBe(literal);
+	});
+
+	it("reclaims prior assistant text when the next answer would overflow", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		const usage = { input: 0, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 1, cost: { total: 0 } };
+		const finalText = `FINAL:${"f".repeat(3 * 1024 * 1024)}`;
+
+		emitTaskEvent(proc, { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "p".repeat(3 * 1024 * 1024) }], usage } });
+		emitTaskEvent(proc, { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: finalText }], usage } });
+		proc.emit("close", 0);
+
+		const toolResult = await running;
+		const result = toolResult.details?.results?.[0];
+		if (!result) throw new Error("task result is missing");
+		const payload = retainedPayloadText(result).join("");
+		expect(toolResult.content[0]?.text).toMatch(/^FINAL:/);
+		expect(Buffer.byteLength(toolResult.content[0]?.text ?? "", "utf8")).toBeGreaterThanOrEqual(Buffer.byteLength(finalText, "utf8"));
+		expect(payload).not.toContain("pppp");
+		expect(payload.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+		expect(Buffer.byteLength(payload, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
 	});
 
 	it("prioritizes a useful marked final answer and reclaims exhausted prior text", async () => {

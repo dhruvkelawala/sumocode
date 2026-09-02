@@ -422,8 +422,10 @@ describe("subagent tools", () => {
 		expect(textOf(all).split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
 	});
 
-	it("marks aggregate omission when the last retained chunk is shorter than the marker", async () => {
-		const lengths = [16_371, 16_371, 16_313, 1, 1];
+	it.each([
+		["when the last retained chunk is shorter than the marker", [16_371, 16_371, 16_313, 1, 1]],
+		["when retained chunks exactly fill the aggregate cap", [12_270, 12_270, 12_270, 12_269, 1]],
+	] as const)("marks aggregate omission %s", async (_label, lengths) => {
 		const snapshots: SubagentSnapshot[] = lengths.map((length, index) => ({
 			id: `sa-${index + 1}`,
 			title: "",
@@ -457,7 +459,7 @@ describe("subagent tools", () => {
 		const text = textOf(result);
 		expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(48 * 1024);
 		expect(text.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
-		expect(delivery.consume).toHaveBeenCalledTimes(5);
+		expect(delivery.consume).toHaveBeenCalledTimes(lengths.length);
 	});
 
 	it("cancel returns bounded metadata and Activity updates without raw snapshots", async () => {

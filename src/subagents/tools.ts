@@ -94,7 +94,8 @@ const boundWaitChunk = (text: string, maxBytes: number): string => boundRetained
 const boundedWaitText = (snapshots: readonly SubagentSnapshot[]): string => {
 	const chunks: string[] = [];
 	let bytes = 0;
-	for (const snapshot of snapshots) {
+	for (let index = 0; index < snapshots.length; index += 1) {
+		const snapshot = snapshots[index]!;
 		// A failed child with partial text must still surface WHY it failed —
 		// partial output alone is easy to misread as a successful result.
 		const errorLine = snapshot.status === "error" && snapshot.errorText ? `error: ${snapshot.errorText}\n` : "";
@@ -109,7 +110,10 @@ const boundedWaitText = (snapshots: readonly SubagentSnapshot[]): string => {
 		const retained = Buffer.byteLength(chunk, "utf8") <= remaining ? chunk : boundWaitChunk(chunk, remaining);
 		chunks.push(retained);
 		bytes += separatorBytes + Buffer.byteLength(retained, "utf8");
-		if (bytes >= WAIT_TOTAL_MAX_BYTES) break;
+		if (bytes >= WAIT_TOTAL_MAX_BYTES) {
+			if (index < snapshots.length - 1) return boundWaitChunk(`${chunks.join(WAIT_SEPARATOR)}${TRUNCATED_HEAD_MARKER}`, WAIT_TOTAL_MAX_BYTES);
+			break;
+		}
 	}
 	return chunks.join(WAIT_SEPARATOR);
 };

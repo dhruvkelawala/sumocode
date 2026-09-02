@@ -204,6 +204,7 @@ function defaultSampleEnvironment(checkout, agentDir, diagFile) {
 		SUMOCODE_STATE_DIR: join(agentDir, "sumocode-state"),
 		SUMOCODE_CONFIG_DIR: join(agentDir, "config"),
 		SUMO_TUI_DIAG_FILE: diagFile,
+		SUMOCODE_PUBLIC_STARTUP_DIAGNOSTICS: "1",
 		SUMOCODE_HOST_BUNDLE: "0",
 		SUMOCODE_EXTENSION_BUNDLE: "0",
 		SUMO_TUI_DEBUG: "0",
@@ -215,8 +216,8 @@ function defaultSampleEnvironment(checkout, agentDir, diagFile) {
 	};
 }
 
-async function runSampleProcess({ checkout, agentDir, diagFile }) {
-	const child = spawnPty(join(checkout, "bin", "sumocode.sh"), [...FLAGS], {
+async function runSampleProcess({ checkout, agentDir, diagFile }, spawnPtyFn = spawnPty) {
+	const child = spawnPtyFn(join(checkout, "bin", "sumocode.sh"), [...FLAGS], {
 		name: "xterm-256color",
 		cols: 100,
 		rows: 30,
@@ -239,19 +240,26 @@ async function runSampleProcess({ checkout, agentDir, diagFile }) {
 		if (REQUIRED_EVENTS.every((name) => events.some((event) => event.event === name))) break;
 		await new Promise((resolveWait) => setTimeout(resolveWait, 20));
 	}
-	try { child.kill("SIGINT"); } catch {}
-	if (!exited) await Promise.race([exitedPromise, new Promise((resolveWait) => setTimeout(resolveWait, 750))]);
+	// Capture natural exit before the harness begins its own bounded shutdown.
+	// One final read closes the race between the child's last diagnostic append
+	// and node-pty's exit callback.
+	const exitedBeforeShutdown = exited;
+	events = await readEvents(diagFile);
+	const observedAllEvents = REQUIRED_EVENTS.every((name) => events.some((event) => event.event === name));
+	if (!exited) {
+		try { child.kill("SIGINT"); } catch {}
+		await Promise.race([exitedPromise, new Promise((resolveWait) => setTimeout(resolveWait, 750))]);
+	}
 	if (!exited) {
 		try { child.kill("SIGTERM"); } catch {}
 		await Promise.race([exitedPromise, new Promise((resolveWait) => setTimeout(resolveWait, 250))]);
 	}
-	const failure = exited ? "process-failed" : "missing-events";
 	if (!exited) {
 		try { child.kill("SIGKILL"); } catch {}
 		await Promise.race([exitedPromise, new Promise((resolveWait) => setTimeout(resolveWait, 250))]);
 	}
-	const ok = REQUIRED_EVENTS.every((name) => events.some((event) => event.event === name));
-	return { ok, failure: ok ? undefined : failure, events, exitCode, signal };
+	const failure = exitedBeforeShutdown ? "process-failed" : observedAllEvents ? undefined : "missing-events";
+	return { ok: failure === undefined, failure, events, exitCode, signal };
 }
 
 function eventTimestamp(event) {
@@ -373,22 +381,24 @@ export async function runStartupComparison(options, dependencies = {}) {
 	if (pathInside(callerRoot, outDir)) throw new Error("--out must be outside the compared checkout");
 	const campaignDir = await mkdtemp(join(tmpdir(), "sumocode-startup-compare-"));
 	const resolveRef = dependencies.resolveRevision ?? ((ref) => resolveRevision(callerRoot, ref));
-	const clean = dependencies.assertClean ?? assertClean;
+	const assertCheckoutClean = dependencies.assertClean ?? assertClean;
 	const makeWorktrees = dependencies.prepareWorktrees ?? prepareWorktrees;
-	const sampleRunner = dependencies.runSample ?? runSampleProcess;
+	const sampleRunner = dependencies.runSample ?? ((sample) => runSampleProcess(sample, dependencies.spawnSamplePty ?? spawnPty));
 	const machineMetadata = dependencies.machineMetadata ?? (() => ({ platform: platform(), arch: arch(), nodeVersion: process.version, cpuCount: cpus().length }));
 	const now = dependencies.now ?? (() => new Date());
 	let worktrees;
 	let finalized = false;
 	try {
-		await clean(callerRoot);
+		await assertCheckoutClean(callerRoot);
 		const [baselineSha, candidateSha] = await Promise.all([resolveRef(options.baseRef), resolveRef(options.candidateRef ?? "HEAD")]);
 		worktrees = await makeWorktrees({ callerRoot, campaignDir, baselineSha, candidateSha });
 		const armSamples = { baseline: [], candidate: [] };
 		const schedule = executionSchedule(options.samples);
 		for (const { arm, index } of schedule) {
 			const checkout = arm === "baseline" ? worktrees.baselineDir : worktrees.candidateDir;
-			const agentDir = join(campaignDir, "agents", arm);
+			// One absolute path makes every generated meta.json byte-identical;
+			// resetFixture rebuilds it before each timed launch.
+			const agentDir = join(campaignDir, "agent");
 			await resetFixture(agentDir, options.fixtureCount);
 			const diagFile = join(agentDir, "startup.jsonl");
 			await writePrivate(diagFile, "");
@@ -403,8 +413,8 @@ export async function runStartupComparison(options, dependencies = {}) {
 		}
 		await worktrees.finalize?.();
 		finalized = true;
-		await clean(worktrees.baselineDir);
-		await clean(worktrees.candidateDir);
+		await assertCheckoutClean(worktrees.baselineDir);
+		await assertCheckoutClean(worktrees.candidateDir);
 		const metrics = METRICS.map((definition) => metricComparison(definition, armSamples.baseline, armSamples.candidate));
 		const report = {
 			schemaVersion: 1,
@@ -433,7 +443,7 @@ export async function runStartupComparison(options, dependencies = {}) {
 		await worktrees?.cleanup?.().catch(() => undefined);
 		if (options.keepFixture === true) dependencies.onFixtureRetained?.(campaignDir);
 		else await rm(campaignDir, { recursive: true, force: true });
-		await clean(callerRoot);
+		await assertCheckoutClean(callerRoot);
 	}
 }
 

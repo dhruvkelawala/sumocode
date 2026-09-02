@@ -4,6 +4,14 @@ type DiagnosticValue = string | number | boolean | null | undefined | Diagnostic
 type DiagnosticFields = { readonly [key: string]: DiagnosticValue };
 
 const PREVIEW_MAX = 160;
+const PUBLIC_STARTUP_EVENTS = new Set([
+	"rpc_child_ready",
+	"terminal_index_start",
+	"terminal_index_ready",
+	"editor_ready",
+	"hydration_committed",
+	"command_ready",
+]);
 
 function diagnosticsFile(): string | undefined {
 	const file = process.env.SUMO_TUI_DIAG_FILE;
@@ -37,10 +45,14 @@ let lastMark = diagnosticsStart;
 export function logDiagnostic(event: string, fields: DiagnosticFields = {}): void {
 	const file = diagnosticsFile();
 	if (!file) return;
+	const publicStartupDiagnostics = process.env.SUMOCODE_PUBLIC_STARTUP_DIAGNOSTICS === "1";
+	if (publicStartupDiagnostics && !PUBLIC_STARTUP_EVENTS.has(event)) return;
 	try {
 		const now = performance.now();
 		const sanitized: Record<string, DiagnosticValue> = {};
-		for (const [key, value] of Object.entries(fields)) sanitized[key] = sanitizeDiagnosticValue(value);
+		if (!publicStartupDiagnostics) {
+			for (const [key, value] of Object.entries(fields)) sanitized[key] = sanitizeDiagnosticValue(value);
+		}
 		// `mode` only applies when the append creates the file: the trace carries
 		// low-level input events, so it must be readable by its owner only.
 		appendFileSync(file, `${JSON.stringify({ ts: Date.now(), event, sinceDiagnosticsMs: Math.round((now - diagnosticsStart) * 100) / 100, deltaMs: Math.round((now - lastMark) * 100) / 100, ...sanitized })}\n`, { encoding: "utf8", mode: 0o600 });

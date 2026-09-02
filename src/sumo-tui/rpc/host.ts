@@ -971,6 +971,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		cwd: spawnPlan.cwd,
 		env: spawnPlan.env,
 		preSpawnedChild: options.preSpawnedChild,
+		onRpcReady: () => logDiagnostic("rpc_child_ready"),
 	});
 	let runtime: RpcHostRuntime | undefined;
 	// The B9 diffing chat sink: `TranscriptController` (owned by
@@ -1804,7 +1805,6 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// the entry owns the child reap and process exit.
 		if (options.shouldAbortAdoption?.()) return requestedHostExitCode ?? 0;
 		await client.start(adoptChildAndArmHostSignals);
-		logDiagnostic("rpc_child_ready", { surface: "rpc_host" });
 		const postAdoptionDelayMs = env.NODE_ENV === "test"
 			? Number.parseInt(env.SUMOCODE_TEST_POST_ADOPTION_DELAY_MS ?? "0", 10)
 			: 0;

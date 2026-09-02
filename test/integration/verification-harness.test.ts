@@ -143,6 +143,23 @@ describe("verification harness v2 seam", () => {
 		expect(JSON.stringify(report)).not.toContain("41002");
 	});
 
+	it("treats a missing generated artifact as source fallback, not a preflight failure", async () => {
+		const tempRoot = createRunRoot();
+		const packageRoot = createRunRoot();
+		const report = await inspectIntegrationPreflight({ root: packageRoot, tempRoot, rows: [], env: {} });
+		expect(report.issues.map((issue) => issue.code)).not.toContain("stale-dist-extension");
+		expect(report.issues.map((issue) => issue.code)).not.toContain("stale-dist-host");
+	});
+
+	it("still rejects a generated artifact whose manifest no longer matches", async () => {
+		const tempRoot = createRunRoot();
+		const packageRoot = createRunRoot();
+		mkdirSync(join(packageRoot, "dist", "extension"), { recursive: true });
+		writeFileSync(join(packageRoot, "dist", "extension", ".inputs.json"), `${JSON.stringify({ version: 0, inputs: [], hash: "build-in-progress" })}\n`);
+		const report = await inspectIntegrationPreflight({ root: packageRoot, tempRoot, rows: [], env: {} });
+		expect(report.issues).toContainEqual(expect.objectContaining({ code: "stale-dist-extension", remediation: "run pnpm build:extension" }));
+	});
+
 	it("removes a stale token-owned namespace after its owner exits", async () => {
 		const tempRoot = createRunRoot();
 		const staleRoot = join(tempRoot, "sumocode-harness-v2-dead-token-owner");

@@ -182,16 +182,13 @@ function belongsToLiveHarnessRun(row, rowsByPid, liveHarnessPids) {
 	return false;
 }
 
+// dist/** is generated and never committed, so an absent artifact is the
+// normal source-fallback state. Only a present-but-mismatched artifact is a
+// preflight failure: it would be rejected at runtime and mask what the run
+// actually exercised.
 async function artifactIssue(root, kind) {
 	const manifestPath = join(root, "dist", kind, ".inputs.json");
-	if (!existsSync(manifestPath)) {
-		if (kind === "host") return undefined;
-		return {
-			code: "stale-dist-extension",
-			message: "dist/extension has no .inputs.json manifest",
-			remediation: "run pnpm build:extension",
-		};
-	}
+	if (!existsSync(manifestPath)) return undefined;
 	try {
 		const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 		const inputsFresh = kind === "host"

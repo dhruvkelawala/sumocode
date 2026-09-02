@@ -15,7 +15,7 @@ import { createPiChildSpawner, resolveClaudeOauthAdapterEntry, resolvePiBinary, 
 import type { SubagentEvent } from "./domain.js";
 
 class FakeProcess extends EventEmitter {
-	public readonly stdin = { end: vi.fn() };
+	public readonly stdin = { on: vi.fn(), write: vi.fn(), end: vi.fn() };
 	public readonly stdout = new EventEmitter();
 	public readonly stderr = new EventEmitter();
 	public pid: number | undefined = 4242;
@@ -165,9 +165,44 @@ describe("resolveClaudeOauthAdapterEntry", () => {
 });
 
 describe("spawnPiChild", () => {
+	it("delivers the delegated prompt via stdin and keeps it out of child argv", () => {
+		// Issue 391: delegated prompts can carry sensitive material. Pinned Pi
+		// (0.84.x) print mode reads piped stdin as the initial message
+		// (interior multiline/Unicode bytes are exact; Pi itself trims
+		// leading/trailing whitespace), so the prompt must travel through
+		// stdin -- never argv, where any local process can read it.
+		const proc = new FakeProcess();
+		const spawn = vi.fn((_command: string, _args: readonly string[]) => proc);
+		const prompt = "SENTINEL-kickoff\n第二行 — ünïcode ✓";
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(spawn as never)({
+			prompt,
+			cwd: "/tmp/project",
+			inherited: { thinking: "low" },
+		});
+		// SAFETY: the pane/pi backends always expose the callback events form here.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+
+		proc.stdout.emit("data", `${JSON.stringify({ type: "message_end", message: { role: "assistant", content: "done", usage: { totalTokens: 1, cost: { total: 0 } } } })}\n`);
+		proc.emit("close", 0);
+
+		const argv = spawn.mock.calls[0]?.[1] ?? [];
+		for (const arg of argv) expect(arg).not.toContain("SENTINEL");
+		expect(proc.stdin.write).toHaveBeenCalledTimes(1);
+		expect(proc.stdin.write).toHaveBeenCalledWith(prompt);
+		expect(proc.stdin.end).toHaveBeenCalled();
+		// A child that dies without draining a >pipe-buffer prompt must not
+		// surface the pending write as an uncaughtException EPIPE.
+		expect(proc.stdin.on).toHaveBeenCalledWith("error", expect.any(Function));
+		// SAFETY: the fake records the registered handler; invoking it with a
+		// synthetic EPIPE proves the guard swallows the failure in-process.
+		expect(() => (proc.stdin.on as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.(new Error("write EPIPE"))).not.toThrow();
+		expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+	});
+
 	it("translates pi json-line events", () => {
 		const proc = new FakeProcess();
-		const spawn = vi.fn(() => proc);
+		const spawn = vi.fn((_command: string, _args: readonly string[]) => proc);
 		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
 		const child = createPiChildSpawner(spawn as never)({
 			prompt: "do work",
@@ -184,7 +219,10 @@ describe("spawnPiChild", () => {
 		proc.stdout.emit("data", `${JSON.stringify({ type: "message_end", message: { role: "assistant", content: "hello", usage: { totalTokens: 12, cost: { total: 0.01 } } } })}\n`);
 		proc.emit("close", 0);
 
-		expect(spawn).toHaveBeenCalledWith(resolvePiBinary(), expect.arrayContaining(["--mode", "json", "-p", "do work"]), expect.objectContaining({ cwd: "/tmp/project" }));
+		const argv = spawn.mock.calls[0]?.[1] ?? [];
+		expect(argv).not.toContain("do work");
+		expect(spawn).toHaveBeenCalledWith(resolvePiBinary(), expect.arrayContaining(["--mode", "json", "-p"]), expect.objectContaining({ cwd: "/tmp/project" }));
+
 		expect(events).toEqual([
 			{ kind: "run-started" },
 			{ kind: "assistant-delta", delta: "hel" },
@@ -598,7 +636,7 @@ describe("spawnPiChild", () => {
 		expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "completed", finalText: "final partial" } });
 	});
 
-	it("appends role system instructions after task args and before the prompt", () => {
+	it("appends role system instructions after task args and delivers the prompt on stdin", () => {
 		const proc = new FakeProcess();
 		const spawn = vi.fn(() => proc);
 		// SAFETY: the spawn double only needs to return a FakeProcess; the spawner reads no other spawn surface.
@@ -615,7 +653,9 @@ describe("spawnPiChild", () => {
 		const appendIndex = args.indexOf("--append-system-prompt");
 		expect(appendIndex).toBeGreaterThan(args.indexOf("--tools"));
 		expect(args[appendIndex + 1]).toBe("review carefully");
-		expect(args.at(-1)).toBe("do work");
+		expect(args).not.toContain("do work");
+		expect(proc.stdin.write).toHaveBeenCalledWith("do work");
+		expect(proc.stdin.end).toHaveBeenCalled();
 	});
 
 	it("omits role system instructions when none are configured", () => {
@@ -659,7 +699,8 @@ describe("spawnPiChild", () => {
 		expect(args).not.toContain("--provider");
 		expect(args).not.toContain("--model");
 		expect(args).toEqual(expect.arrayContaining(["-e", "/adapter.ts", "-e", "/bootstrap.ts"]));
-		expect(args.at(-1)).toBe("x");
+		expect(args).not.toContain("x");
+		expect(proc.stdin.write).toHaveBeenCalledWith("x");
 		expect(spawnOptions.env.SUMOCODE_CHILD_MODEL_PROVIDER).toBe("anthropic-2");
 		expect(spawnOptions.env.SUMOCODE_CHILD_MODEL_ID).toBe("claude-haiku-4-5");
 	});
@@ -676,8 +717,9 @@ describe("spawnPiChild", () => {
 		const eIndex = args.indexOf("-e");
 		expect(eIndex).toBeGreaterThan(-1);
 		expect(args[eIndex + 1]).toBe("/fake/adapter/extensions/index.ts");
-		// The prompt must remain the trailing positional after the adapter args.
-		expect(args[args.length - 1]).toBe("x");
+		// The prompt must arrive on stdin, never as a trailing positional.
+		expect(args).not.toContain("x");
+		expect(proc.stdin.write).toHaveBeenCalledWith("x");
 	});
 
 	it("omits the -e flag when no adapter is installed", () => {

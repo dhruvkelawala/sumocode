@@ -179,7 +179,7 @@ DIAGNOSTICS EVENTS
       process_preload_start  Node preload + argv baseline for startup traces
       process_module_load_*  slow module imports + aggregate module-load summary
       host_import_ready      selected host source/bundle imported
-      rpc_child_ready        RPC child process adopted by the host
+      rpc_child_ready        first correlated RPC response received
       terminal_index_*       initial terminal-store index phase
       runtime_start          process, cwd, branch, commit, terminal size
       boot_screen_frame      first retained splash/boot frame written to terminal

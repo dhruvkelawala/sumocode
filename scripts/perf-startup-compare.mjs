@@ -88,6 +88,14 @@ async function assertClean(path) {
 	if (await runGit(path, ["status", "--porcelain", "--untracked-files=all"])) throw new Error("startup comparison requires clean source checkouts");
 }
 
+async function runCleanupSteps(steps, message) {
+	const failures = [];
+	for (const step of steps) {
+		try { await step(); } catch (error) { failures.push(error); }
+	}
+	if (failures.length > 0) throw new AggregateError(failures, message);
+}
+
 async function prepareWorktrees({ callerRoot, campaignDir, baselineSha, candidateSha }) {
 	const baselineDir = join(campaignDir, "baseline");
 	const candidateDir = join(campaignDir, "candidate");
@@ -105,19 +113,25 @@ async function prepareWorktrees({ callerRoot, campaignDir, baselineSha, candidat
 			links.push(link);
 		}
 	} catch (error) {
-		for (const link of links.reverse()) await unlink(link).catch(() => undefined);
-		for (const path of added.reverse()) await runGit(callerRoot, ["worktree", "remove", "--force", path]).catch(() => undefined);
+		const setupCleanup = [
+			...links.splice(0).reverse().map((link) => () => unlink(link)),
+			...added.splice(0).reverse().map((path) => () => runGit(callerRoot, ["worktree", "remove", "--force", path])),
+		];
+		try { await runCleanupSteps(setupCleanup, "startup comparison setup cleanup failed"); }
+		catch (cleanupError) { throw new AggregateError([error, cleanupError], "startup comparison setup and cleanup failed"); }
 		throw error;
 	}
 	return {
 		baselineDir,
 		candidateDir,
-		unlinkDependencies: async () => {
-			for (const link of links.splice(0).reverse()) await unlink(link).catch(() => undefined);
-		},
-		cleanup: async () => {
-			for (const path of added.splice(0).reverse()) await runGit(callerRoot, ["worktree", "remove", "--force", path]).catch(() => undefined);
-		},
+		unlinkDependencies: () => runCleanupSteps(
+			links.splice(0).reverse().map((link) => () => unlink(link)),
+			"failed to unlink comparison dependencies",
+		),
+		cleanup: () => runCleanupSteps(
+			added.splice(0).reverse().map((path) => () => runGit(callerRoot, ["worktree", "remove", "--force", path])),
+			"failed to remove detached comparison worktrees",
+		),
 	};
 }
 
@@ -447,11 +461,14 @@ export async function runStartupComparison(options, dependencies = {}) {
 		await writeFile(join(outDir, "startup-compare.md"), markdown(report));
 		return report;
 	} finally {
-		if (!dependenciesUnlinked) await worktrees?.unlinkDependencies?.().catch(() => undefined);
-		await worktrees?.cleanup?.().catch(() => undefined);
-		if (options.keepFixture === true) dependencies.onFixtureRetained?.(campaignDir);
-		else await rm(campaignDir, { recursive: true, force: true });
-		await assertCheckoutClean(callerRoot);
+		const cleanupSteps = [];
+		if (!dependenciesUnlinked && worktrees?.unlinkDependencies) cleanupSteps.push(() => worktrees.unlinkDependencies());
+		if (worktrees?.cleanup) cleanupSteps.push(() => worktrees.cleanup());
+		if (options.keepFixture === true) {
+			cleanupSteps.push(async () => { dependencies.onFixtureRetained?.(campaignDir); });
+		} else cleanupSteps.push(() => rm(campaignDir, { recursive: true, force: true }));
+		cleanupSteps.push(() => assertCheckoutClean(callerRoot));
+		await runCleanupSteps(cleanupSteps, "startup comparison cleanup failed");
 	}
 }
 

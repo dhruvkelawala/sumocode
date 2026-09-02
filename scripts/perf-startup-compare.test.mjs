@@ -60,7 +60,10 @@ async function harness(options = {}) {
 		prepareWorktrees: async () => ({
 			baselineDir,
 			candidateDir,
-			cleanup: async () => { cleanedWorktrees = true; },
+			cleanup: async () => {
+				cleanedWorktrees = true;
+				if (options.cleanupFails) throw new Error("worktree cleanup failed");
+			},
 		}),
 		runSample: async ({ arm, index, startWallMs, agentDir }) => {
 			if (options.failAllSpawns) throw new Error("posix_spawnp failed");
@@ -180,6 +183,11 @@ describe("startup comparison CLI", () => {
 		expect(result.cleanedWorktrees).toBe(true);
 		expect(result.cleanChecks).toEqual([resolve("."), join(result.root, "baseline"), join(result.root, "candidate"), resolve(".")]);
 		expect(await stat(result.fixtureAgentDir).catch(() => undefined)).toBeUndefined();
+	});
+
+	it("fails the comparison when detached worktree cleanup fails", async () => {
+		await expect(harness({ cleanupFails: true, samples: 1, fixtureCount: 1 }))
+			.rejects.toThrow("startup comparison cleanup failed");
 	});
 
 	it("rejects the public CLI when neither arm collects a successful sample", async () => {

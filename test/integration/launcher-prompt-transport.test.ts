@@ -1,12 +1,16 @@
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createRpcChildFixture } from "./rpc-child-fixture.js";
 import { spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
 
 const LAUNCHER = resolve(process.env.SUMOCODE_INTEGRATION_PACKAGE_ROOT ?? process.cwd(), "bin/sumocode.sh");
+// The launcher resolves ROOT_DIR from its own location, so under the
+// integration harness (which may point SUMOCODE_INTEGRATION_PACKAGE_ROOT at
+// a staged package) the extension entry path must be derived from LAUNCHER.
+const EXTENSION_ENTRY = resolve(dirname(LAUNCHER), "..", "src/extension-entry.ts");
 const PROMPT = "SENTINEL-kickoff\n第二行 — ünïcode ✓";
 
 let app: SpawnedPiPty | undefined;
@@ -145,7 +149,7 @@ describe("launcher prompt transport (issue 391)", () => {
 			const observed = JSON.parse(readFileSync(stubOut, "utf8")) as { argv: string[]; stdin: string };
 			expect(observed.argv).toEqual([
 				"-e",
-				resolve(process.cwd(), "src/extension-entry.ts"),
+				EXTENSION_ENTRY,
 				"-p",
 				"first message",
 				"second message",

@@ -211,6 +211,7 @@ export function isRpcChildProfile(options: TaskModeOptions = {}): boolean {
 }
 
 function installOrchestrationTools(pi: ExtensionAPI) {
+	logDiagnostic("terminal_index_start", { surface: "rpc_child" });
 	const terminalTaskManager = installBackgroundTasks(pi);
 	logDiagnostic("terminal_index_ready", { surface: "rpc_child" });
 	installTerminalTools(pi, terminalTaskManager);

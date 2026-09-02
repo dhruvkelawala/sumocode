@@ -16,6 +16,7 @@ const REQUIRED_EVENTS = Object.freeze([
 	"process_preload_start",
 	"host_import_ready",
 	"rpc_child_ready",
+	"terminal_index_start",
 	"terminal_index_ready",
 	"editor_ready",
 	"hydration_committed",
@@ -207,7 +208,7 @@ function defaultSampleEnvironment(checkout, agentDir, diagFile) {
 		SUMOCODE_EXTENSION_BUNDLE: "0",
 		SUMO_TUI_DEBUG: "0",
 		NODE_COMPILE_CACHE: join(agentDir, "compile-cache"),
-		NODE_OPTIONS: `--require "${join(checkout, "scripts", "startup-diagnostics-preload.cjs")}"`,
+		NODE_OPTIONS: `--require "${join(ROOT, "scripts", "startup-diagnostics-preload.cjs")}"`,
 		PI_BIN: join(checkout, "node_modules", ".bin", "pi"),
 		TMPDIR: join(agentDir, "tmp"),
 		TERM: "xterm-256color",
@@ -269,6 +270,7 @@ function publicSample(raw, index, startWallMs) {
 	const hostStart = eventTimestamp(byName.get("process_preload_start"));
 	const hostImport = eventTimestamp(byName.get("host_import_ready"));
 	const rpcChild = eventTimestamp(byName.get("rpc_child_ready"));
+	const terminalIndexStart = eventTimestamp(byName.get("terminal_index_start"));
 	const terminalIndex = eventTimestamp(byName.get("terminal_index_ready"));
 	const editor = eventTimestamp(byName.get("editor_ready"));
 	const hydration = eventTimestamp(byName.get("hydration_committed"));
@@ -278,9 +280,9 @@ function publicSample(raw, index, startWallMs) {
 		ok: true,
 		phases: {
 			launcherMs: hostStart - startWallMs,
-			hostImportMs: hostImport - startWallMs,
+			hostImportMs: Math.max(0, hostImport - hostStart),
 			rpcChildReadyMs: rpcChild - startWallMs,
-			terminalIndexReadyMs: terminalIndex - startWallMs,
+			terminalIndexReadyMs: Math.max(0, terminalIndex - terminalIndexStart),
 			editorReadyMs: editor - startWallMs,
 			hydrationCommittedMs: hydration - startWallMs,
 			commandReadyMs: command - startWallMs,

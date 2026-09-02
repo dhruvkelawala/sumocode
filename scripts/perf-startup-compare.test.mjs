@@ -28,7 +28,8 @@ function diagnostics(startWallMs, arm, index, options = {}) {
 		{ event: "process_preload_start", role: "host", ts: startWallMs + (arm === "baseline" ? 5 : 3), cwd: "/Users/operator/private" },
 		{ event: "host_import_ready", mode: "source", ts: startWallMs + offset },
 		{ event: "rpc_child_ready", ts: startWallMs + offset + 10 },
-		{ event: "terminal_index_ready", ts: startWallMs + offset + 20 },
+		{ event: "terminal_index_start", ts: startWallMs + offset + 12 },
+		{ event: "terminal_index_ready", ts: startWallMs + offset + (arm === "baseline" ? 20 : 18) },
 		{ event: "editor_ready", ts: startWallMs + offset + 30 },
 		{ event: "hydration_committed", ts: startWallMs + offset + 40 },
 		{ event: "command_ready", ts: startWallMs + offset + (arm === "baseline" ? 50 : 48) },
@@ -135,6 +136,7 @@ describe("startup comparison CLI", () => {
 		});
 		expect(report.executionOrder).toEqual(["baseline", "candidate", "candidate", "baseline"]);
 		expect(report.arms.baseline.samples).toHaveLength(2);
+		expect(report.arms.baseline.samples[0].phases).toMatchObject({ hostImportMs: 95, terminalIndexReadyMs: 8 });
 		expect(report.arms.candidate.samples).toHaveLength(2);
 		expect(report.arms.candidate.samples[1]).toMatchObject({
 			ok: false,

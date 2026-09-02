@@ -737,6 +737,23 @@ describe("native task tool", () => {
 		expect(events[0]?.output).toBe(literal);
 	});
 
+	it("keeps id-less tool updates bounded and correlated by large raw arguments", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		const args = { content: "x".repeat(CHILD_RETAINED_RESULT_MAX_BYTES + 1) };
+
+		emitTaskEvent(proc, { type: "tool_execution_start", toolName: "write", args });
+		emitTaskEvent(proc, { type: "tool_execution_end", toolName: "write", args, result: "done", isError: false });
+		proc.emit("close", 0);
+
+		const toolResult = await running;
+		const events = toolResult.details?.results?.[0]?.toolEvents ?? [];
+		expect(events).toHaveLength(1);
+		expect(events[0]).toMatchObject({ status: "success" });
+		expect(events[0]?.id).toMatch(/^h:[0-9a-f]{64}$/);
+		expect(Buffer.byteLength(events[0]?.id ?? "", "utf8")).toBeLessThanOrEqual(256);
+	});
+
 	it("reclaims prior assistant text when the next answer would overflow", async () => {
 		const proc = new FakeTaskProcess();
 		const running = registeredTask(proc).execute();
@@ -754,6 +771,32 @@ describe("native task tool", () => {
 		expect(toolResult.content[0]?.text).toMatch(/^FINAL:/);
 		expect(Buffer.byteLength(toolResult.content[0]?.text ?? "", "utf8")).toBeGreaterThanOrEqual(Buffer.byteLength(finalText, "utf8"));
 		expect(payload).not.toContain("pppp");
+		expect(payload.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+		expect(Buffer.byteLength(payload, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+	});
+
+	it("reclaims prior text when the latest non-text assistant payload would overflow", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		const usage = { input: 0, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 1, cost: { total: 0 } };
+
+		emitTaskEvent(proc, { type: "message_end", message: { role: "user", content: "p".repeat(3 * 1024 * 1024) } });
+		emitTaskEvent(proc, {
+			type: "message_end",
+			message: {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "final-tool", name: "write", arguments: { content: "a".repeat(3 * 1024 * 1024) } }],
+				usage,
+			},
+		});
+		proc.emit("close", 0);
+
+		const toolResult = await running;
+		const result = toolResult.details?.results?.[0];
+		if (!result) throw new Error("task result is missing");
+		const payload = retainedPayloadText(result).join("");
+		expect(payload).not.toContain("pppp");
+		expect(payload).toContain("aaaa");
 		expect(payload.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
 		expect(Buffer.byteLength(payload, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
 	});

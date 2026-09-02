@@ -2705,6 +2705,7 @@ ${formatted}` }],
 
 // src/native-task-tool.ts
 import { spawn } from "node:child_process";
+import { createHash as createHash2 } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -3662,13 +3663,15 @@ var RETAINED_PREVIEW_KEY = "__sumocodeRetainedPreview";
 var RETAINED_METADATA_MAX_BYTES = 512;
 var RETAINED_NAME_MAX_BYTES = 256;
 var RETAINED_NAME_LIST_MAX = 64;
-var retainStructured = (budget, value, requiresMarker = false) => {
-  let serialized;
+var serializeStructured = (value) => {
   try {
-    serialized = JSON.stringify(value);
+    return JSON.stringify(value) ?? String(value);
   } catch {
-    serialized = String(value);
+    return String(value);
   }
+};
+var retainStructured = (budget, value, requiresMarker = false) => {
+  const serialized = serializeStructured(value);
   const retained = budget.retain(serialized, requiresMarker);
   return retained === serialized ? value : retained ? { [RETAINED_PREVIEW_KEY]: retained } : {};
 };
@@ -3771,6 +3774,12 @@ var handleEventMessage = (result, message, liveOmitted = false) => {
   const rawContent = message.content;
   const parts = Array.isArray(rawContent) ? rawContent.filter(isRecord) : [];
   const deliverableTextBytes = parts.reduce((bytes, part) => part.type === "text" && typeof part.text === "string" ? bytes + Buffer.byteLength(part.text, "utf8") : bytes, typeof message.errorMessage === "string" ? Buffer.byteLength(message.errorMessage, "utf8") : 0);
+  const assistantPayloadBytes = parts.reduce((bytes, part) => {
+    if (part.type === "text" && typeof part.text === "string") return bytes + Buffer.byteLength(part.text, "utf8");
+    if (part.type === "thinking" && typeof part.thinking === "string") return bytes + Buffer.byteLength(part.thinking, "utf8");
+    if (part.type === "toolCall") return bytes + Buffer.byteLength(serializeStructured(isRecord(part.arguments) ? part.arguments : {}), "utf8");
+    return bytes;
+  }, typeof message.errorMessage === "string" ? Buffer.byteLength(message.errorMessage, "utf8") : 0);
   const hasDeliverableText = deliverableTextBytes > 0;
   const hasAssistantPayload = parts.some((part) => {
     if (part.type === "text") return typeof part.text === "string" && part.text.length > 0;
@@ -3778,7 +3787,7 @@ var handleEventMessage = (result, message, liveOmitted = false) => {
     return part.type === "toolCall";
   }) || hasDeliverableText;
   const hasPriorDeliverableText = getFinalOutput(result.messages).length > 0;
-  const replaceForPayload = hasAssistantPayload && (hasDeliverableText || !hasPriorDeliverableText) && (budget.truncated || budget.full || liveOmitted || budget.wouldOverflow(deliverableTextBytes));
+  const replaceForPayload = hasAssistantPayload && (hasDeliverableText || !hasPriorDeliverableText) && (budget.truncated || budget.full || liveOmitted || budget.wouldOverflow(assistantPayloadBytes));
   let requiresMarker = replaceForPayload || hasAssistantPayload && liveOmitted && !budget.truncated;
   if (replaceForPayload) {
     clearRetainedHumanText(result);
@@ -3873,10 +3882,10 @@ var stringifyToolOutput = (value) => {
 };
 var toolArgsText = (args) => typeof args === "string" ? args : JSON.stringify(args);
 var upsertToolEvent = (result, event) => {
-  const id = boundedIdentifierText(event.id) || void 0;
   const name = boundedMetadataText(event.name, RETAINED_NAME_MAX_BYTES) || "tool";
-  const key = id ?? `${name}:${JSON.stringify(event.args ?? {})}`;
-  const index = result.toolEvents.findIndex((item) => (item.id ?? `${item.name}:${toolArgsText(item.args)}`) === key);
+  const id = boundedIdentifierText(event.id) || `h:${createHash2("sha256").update(`${name}:${serializeStructured(event.args ?? {})}`, "utf8").digest("hex")}`;
+  const key = id;
+  const index = result.toolEvents.findIndex((item) => item.id === key);
   const previous = index === -1 ? void 0 : result.toolEvents[index];
   const rawArgs = event.args ?? previous?.args ?? {};
   const nextArgsText = toolArgsText(rawArgs);
@@ -3890,7 +3899,7 @@ var upsertToolEvent = (result, event) => {
   );
   const args = typeof rawArgs !== "string" && argsText === nextArgsText ? rawArgs : argsText;
   const retained = {
-    id: id ?? previous?.id,
+    id,
     name,
     args,
     status: event.status,
@@ -14410,7 +14419,7 @@ function installTerminalTools(pi, manager) {
 }
 
 // src/activity/manager-bridge.ts
-import { createHash as createHash3, randomUUID as randomUUID5 } from "node:crypto";
+import { createHash as createHash4, randomUUID as randomUUID5 } from "node:crypto";
 
 // src/activity/feed-publisher.ts
 import { randomUUID as randomUUID4 } from "node:crypto";
@@ -14418,7 +14427,7 @@ import { existsSync as existsSync9, linkSync as linkSync2, readdirSync as readdi
 import { basename as basename6, dirname as dirname10, join as join16 } from "node:path";
 
 // src/activity/persistence.ts
-import { createHash as createHash2, randomUUID as randomUUID3 } from "node:crypto";
+import { createHash as createHash3, randomUUID as randomUUID3 } from "node:crypto";
 import {
   chmodSync as chmodSync3,
   closeSync as closeSync3,
@@ -14537,7 +14546,7 @@ function ensurePrivateSumocodeDirectory(segments, rootDir = defaultActivityState
   return root;
 }
 function hashedSessionId(ownerSessionId2) {
-  return createHash2("sha256").update(ownerSessionId2, "utf8").digest("hex");
+  return createHash3("sha256").update(ownerSessionId2, "utf8").digest("hex");
 }
 function ensureActivityRoot(rootDir = defaultActivityStateRoot()) {
   return ensurePrivateSumocodeDirectory(["activity", "v1"], rootDir);
@@ -15351,7 +15360,7 @@ function durableSubagentActivity(snapshot, retained) {
   if (established) return { ...activity, id: established.id };
   const reused = retained.find((candidate) => candidate.id === activity.id && (candidate.createdAt !== void 0 && candidate.createdAt !== activity.createdAt || candidate.sourceId !== void 0 && activity.sourceId !== void 0 && candidate.sourceId !== activity.sourceId));
   if (!reused) return activity;
-  const durableSuffix = activity.sourceId ? createHash3("sha256").update(activity.sourceId, "utf8").digest("hex").slice(0, 12) : Math.max(1, Math.floor(snapshot.createdAt)).toString(36);
+  const durableSuffix = activity.sourceId ? createHash4("sha256").update(activity.sourceId, "utf8").digest("hex").slice(0, 12) : Math.max(1, Math.floor(snapshot.createdAt)).toString(36);
   return { ...activity, id: `${activity.id}:${durableSuffix}` };
 }
 function lostActivity(activity, message, now) {

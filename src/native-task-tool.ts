@@ -2,6 +2,7 @@
 // as untrusted data, so runtime typeof decoding guards, open arg records, unknown-typed
 // parse predicates, and parse-site assertions are this module's decoding contract.
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -775,13 +776,16 @@ const RETAINED_METADATA_MAX_BYTES = 512;
 const RETAINED_NAME_MAX_BYTES = 256;
 const RETAINED_NAME_LIST_MAX = 64;
 
-const retainStructured = <T>(budget: RunPayloadBudget, value: T, requiresMarker = false): T | Record<string, string> => {
-	let serialized: string;
+const serializeStructured = (value: unknown): string => {
 	try {
-		serialized = JSON.stringify(value);
+		return JSON.stringify(value) ?? String(value);
 	} catch {
-		serialized = String(value);
+		return String(value);
 	}
+};
+
+const retainStructured = <T>(budget: RunPayloadBudget, value: T, requiresMarker = false): T | Record<string, string> => {
+	const serialized = serializeStructured(value);
 	const retained = budget.retain(serialized, requiresMarker);
 	return retained === serialized ? value : retained ? { [RETAINED_PREVIEW_KEY]: retained } : {};
 };
@@ -904,6 +908,12 @@ const handleEventMessage = (result: SingleResult, message: Message, liveOmitted 
 	const deliverableTextBytes = parts.reduce((bytes, part) => (
 		part.type === "text" && typeof part.text === "string" ? bytes + Buffer.byteLength(part.text, "utf8") : bytes
 	), typeof message.errorMessage === "string" ? Buffer.byteLength(message.errorMessage, "utf8") : 0);
+	const assistantPayloadBytes = parts.reduce((bytes, part) => {
+		if (part.type === "text" && typeof part.text === "string") return bytes + Buffer.byteLength(part.text, "utf8");
+		if (part.type === "thinking" && typeof part.thinking === "string") return bytes + Buffer.byteLength(part.thinking, "utf8");
+		if (part.type === "toolCall") return bytes + Buffer.byteLength(serializeStructured(isRecord(part.arguments) ? part.arguments : {}), "utf8");
+		return bytes;
+	}, typeof message.errorMessage === "string" ? Buffer.byteLength(message.errorMessage, "utf8") : 0);
 	const hasDeliverableText = deliverableTextBytes > 0;
 	const hasAssistantPayload = parts.some((part) => {
 		if (part.type === "text") return typeof part.text === "string" && part.text.length > 0;
@@ -913,7 +923,7 @@ const handleEventMessage = (result: SingleResult, message: Message, liveOmitted 
 	const hasPriorDeliverableText = getFinalOutput(result.messages).length > 0;
 	const replaceForPayload = hasAssistantPayload
 		&& (hasDeliverableText || !hasPriorDeliverableText)
-		&& (budget.truncated || budget.full || liveOmitted || budget.wouldOverflow(deliverableTextBytes));
+		&& (budget.truncated || budget.full || liveOmitted || budget.wouldOverflow(assistantPayloadBytes));
 	let requiresMarker = replaceForPayload || (hasAssistantPayload && liveOmitted && !budget.truncated);
 	if (replaceForPayload) {
 		clearRetainedHumanText(result);
@@ -1024,10 +1034,11 @@ const stringifyToolOutput = (value: unknown): string | undefined => {
 const toolArgsText = (args: ToolCallItem["args"]): string => typeof args === "string" ? args : JSON.stringify(args);
 
 const upsertToolEvent = (result: SingleResult, event: ToolCallUpdate): void => {
-	const id = boundedIdentifierText(event.id) || undefined;
 	const name = boundedMetadataText(event.name, RETAINED_NAME_MAX_BYTES) || "tool";
-	const key = id ?? `${name}:${JSON.stringify(event.args ?? {})}`;
-	const index = result.toolEvents.findIndex((item) => (item.id ?? `${item.name}:${toolArgsText(item.args)}`) === key);
+	const id = boundedIdentifierText(event.id)
+		|| `h:${createHash("sha256").update(`${name}:${serializeStructured(event.args ?? {})}`, "utf8").digest("hex")}`;
+	const key = id;
+	const index = result.toolEvents.findIndex((item) => item.id === key);
 	const previous = index === -1 ? undefined : result.toolEvents[index];
 	const rawArgs = event.args ?? previous?.args ?? {};
 	const nextArgsText = toolArgsText(rawArgs);
@@ -1041,7 +1052,7 @@ const upsertToolEvent = (result: SingleResult, event: ToolCallUpdate): void => {
 	);
 	const args = typeof rawArgs !== "string" && argsText === nextArgsText ? rawArgs : argsText;
 	const retained: ToolCallItem = {
-		id: id ?? previous?.id,
+		id,
 		name,
 		args,
 		status: event.status,

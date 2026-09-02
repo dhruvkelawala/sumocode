@@ -192,7 +192,7 @@ describe("startup comparison CLI", () => {
 
 	it("rejects the public CLI when neither arm collects a successful sample", async () => {
 		await expect(harness({ publicCli: true, failAllSpawns: true, samples: 1, fixtureCount: 1 }))
-			.rejects.toThrow("no successful samples");
+			.rejects.toThrow("startup comparison collection failed");
 	});
 
 	it("reports a process that exits naturally after every event as failed", async () => {
@@ -229,6 +229,36 @@ describe("startup comparison CLI", () => {
 
 		expect(report.arms.baseline.samples[0]).toMatchObject({ ok: false, failure: "process-failed" });
 		expect(report.arms.candidate.samples[0]).toMatchObject({ ok: false, failure: "process-failed" });
+	});
+
+	it("fails a sample and collection when the PTY survives every shutdown signal", async () => {
+		const root = await temporaryRoot("sumocode-startup-shutdown-failure-");
+		const baselineDir = join(root, "baseline");
+		const candidateDir = join(root, "candidate");
+		const outDir = await temporaryRoot("sumocode-startup-shutdown-failure-report-");
+		await Promise.all([mkdir(baselineDir), mkdir(candidateDir)]);
+		const report = await runStartupComparison({
+			callerRoot: root,
+			baseRef: "base",
+			candidateRef: "candidate",
+			samples: 1,
+			fixtureCount: 1,
+			outDir,
+		}, {
+			resolveRevision: async (ref) => ref === "base" ? "1".repeat(40) : "2".repeat(40),
+			assertClean: async () => undefined,
+			prepareWorktrees: async () => ({ baselineDir, candidateDir, cleanup: async () => undefined }),
+			spawnSamplePty: (_command, _args, options) => {
+				const events = diagnostics(Date.now(), "baseline", 0);
+				writeFileSync(options.env.SUMO_TUI_DIAG_FILE, `${events.map((event) => JSON.stringify(event)).join("\n")}\n`);
+				return { onExit: () => undefined, kill: () => undefined };
+			},
+			machineMetadata: () => ({ platform: "test", arch: "test", nodeVersion: "v-test", cpuCount: 1 }),
+		});
+
+		expect(report.arms.baseline.samples[0]).toMatchObject({ ok: false, failure: "shutdown-failed" });
+		expect(report.arms.candidate.samples[0]).toMatchObject({ ok: false, failure: "shutdown-failed" });
+		expect(report.collection.succeeded).toBe(false);
 	});
 
 	it("smoke-compares two distinct exact local revisions in detached worktrees", async () => {

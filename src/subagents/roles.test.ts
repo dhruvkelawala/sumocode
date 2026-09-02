@@ -50,7 +50,7 @@ describe("subagent roles", () => {
 		const loaded = fromJson({ roles: [{ id: "research", systemPrompt: "   " }] });
 		const role = loaded.roles.find((candidate) => candidate.id === "research");
 		expect(role?.systemPrompt).toContain("read-only investigator");
-		expect(loaded.warnings).toEqual([{ scope: "role", roleId: "research", message: "role research has an invalid systemPrompt; entry skipped" }]);
+		expect(loaded.warnings).toEqual([{ scope: "role", roleId: "research", blocksRole: true, message: "role research has an invalid systemPrompt; entry skipped" }]);
 	});
 
 	it("accepts complete new roles and rejects incomplete ones", () => {
@@ -86,8 +86,8 @@ describe("subagent roles", () => {
 		] });
 
 		expect(loaded.warnings).toEqual([
-			{ scope: "role", roleId: "research", message: "role research has an invalid thinking level; entry skipped" },
-			{ scope: "role", roleId: "review", message: "role review ignores invalid tool mcp" },
+			{ scope: "role", roleId: "research", blocksRole: true, message: "role research has an invalid thinking level; entry skipped" },
+			{ scope: "role", roleId: "review", blocksRole: false, message: "role review ignores invalid tool mcp" },
 			{ scope: "file", blocksOverlays: false, message: "roles[2] must be an object; entry skipped" },
 		]);
 	});

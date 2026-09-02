@@ -275,7 +275,7 @@ describe("subagent result delivery", () => {
 		harness.setIdle(true);
 
 		expect(() => harness.fire("agent_end")).not.toThrow();
-		expect(() => harness.fire("agent_end")).not.toThrow();
+		await vi.waitFor(() => expect(harness.sendMessage).toHaveBeenCalledTimes(4));
 
 		const deliveredIds = harness.sendMessage.mock.calls.map((call) => {
 			// SAFETY: subagent delivery always sends a message with settled-subagent details.

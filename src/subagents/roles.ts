@@ -81,7 +81,7 @@ export type RoleWarning =
 		readonly blocksOverlays: boolean;
 		readonly message: string;
 	}
-	| { readonly scope: "role"; readonly roleId: string; readonly message: string };
+	| { readonly scope: "role"; readonly roleId: string; readonly blocksRole: boolean; readonly message: string };
 
 export interface LoadedRoles {
 	readonly roles: readonly SubagentRole[];
@@ -119,13 +119,13 @@ function normalizedOverlay(value: unknown, index: number, builtIn: boolean, warn
 		warnings.push({ scope: "file", blocksOverlays: false, message: `roles[${index}] has an invalid id; entry skipped` });
 		return undefined;
 	}
-	const warn = (message: string): void => { warnings.push({ scope: "role", roleId: id, message }); };
+	const warn = (message: string, blocksRole = true): void => { warnings.push({ scope: "role", roleId: id, blocksRole, message }); };
 	if (!builtIn && (typeof value.label !== "string" || !value.label.trim() || typeof value.systemPrompt !== "string" || !value.systemPrompt.trim())) {
 		warn(`role ${id} is new and requires label and systemPrompt; entry skipped`);
 		return undefined;
 	}
 	for (const field of Object.keys(value)) {
-		if (!ROLE_FIELDS.has(field)) warn(`role ${id} ignores unknown field ${field}`);
+		if (!ROLE_FIELDS.has(field)) warn(`role ${id} ignores unknown field ${field}`, false);
 	}
 	for (const field of ["label", "description", "systemPrompt"] as const) {
 		if (hasOwn(value, field) && (typeof value[field] !== "string" || !value[field].trim())) {
@@ -165,7 +165,7 @@ function normalizedOverlay(value: unknown, index: number, builtIn: boolean, warn
 		const tools: string[] = [];
 		for (const tool of value.tools) {
 			if (typeof tool !== "string" || !(BUILT_IN_TOOLS as readonly string[]).includes(tool)) {
-				warn(`role ${id} ignores invalid tool ${String(tool)}`);
+				warn(`role ${id} ignores invalid tool ${String(tool)}`, false);
 				continue;
 			}
 			if (!tools.includes(tool)) tools.push(tool);

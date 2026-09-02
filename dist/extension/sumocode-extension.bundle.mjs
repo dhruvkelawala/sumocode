@@ -5732,15 +5732,15 @@ function normalizedOverlay(value, index, builtIn, warnings) {
     warnings.push({ scope: "file", blocksOverlays: false, message: `roles[${index}] has an invalid id; entry skipped` });
     return void 0;
   }
-  const warn = (message) => {
-    warnings.push({ scope: "role", roleId: id, message });
+  const warn = (message, blocksRole = true) => {
+    warnings.push({ scope: "role", roleId: id, blocksRole, message });
   };
   if (!builtIn && (typeof value.label !== "string" || !value.label.trim() || typeof value.systemPrompt !== "string" || !value.systemPrompt.trim())) {
     warn(`role ${id} is new and requires label and systemPrompt; entry skipped`);
     return void 0;
   }
   for (const field of Object.keys(value)) {
-    if (!ROLE_FIELDS.has(field)) warn(`role ${id} ignores unknown field ${field}`);
+    if (!ROLE_FIELDS.has(field)) warn(`role ${id} ignores unknown field ${field}`, false);
   }
   for (const field of ["label", "description", "systemPrompt"]) {
     if (hasOwn(value, field) && (typeof value[field] !== "string" || !value[field].trim())) {
@@ -5779,7 +5779,7 @@ function normalizedOverlay(value, index, builtIn, warnings) {
     const tools = [];
     for (const tool of value.tools) {
       if (typeof tool !== "string" || !BUILT_IN_TOOLS.includes(tool)) {
-        warn(`role ${id} ignores invalid tool ${String(tool)}`);
+        warn(`role ${id} ignores invalid tool ${String(tool)}`, false);
         continue;
       }
       if (!tools.includes(tool)) tools.push(tool);
@@ -17733,7 +17733,7 @@ function registerSubagentTools(pi, manager, delivery, host = getTerminalHost(), 
       const loadedRoles = loaded.roles;
       const role = params.role ? loadedRoles.find((candidate) => candidate.id === params.role) : void 0;
       const selectedIsBuiltIn = params.role ? BUILT_IN_ROLES.some((candidate) => candidate.id === params.role) : false;
-      const warningsBlockingRole = params.role ? loaded.warnings.filter((warning) => warning.scope === "role" ? warning.roleId === params.role : warning.blocksOverlays && !selectedIsBuiltIn) : [];
+      const warningsBlockingRole = params.role ? loaded.warnings.filter((warning) => warning.scope === "role" ? warning.roleId === params.role && warning.blocksRole : warning.blocksOverlays && !selectedIsBuiltIn) : [];
       if (params.role && warningsBlockingRole.length > 0) {
         return makeToolResult2(`Unable to spawn role ${params.role}: roles.json has invalid configuration:
 ${warningsBlockingRole.map((warning) => `- ${warning.message}`).join("\n")}`, {
@@ -18059,7 +18059,7 @@ function installSubagents(pi, options = {}) {
     }
     statusWidgetVisible = false;
   };
-  const flush = () => {
+  const flush = (mayRetry = true) => {
     try {
       delivery.flush((payload) => {
         pi.sendMessage(
@@ -18075,6 +18075,9 @@ function installSubagents(pi, options = {}) {
     } catch (error) {
       const message = (error instanceof Error ? error.message : String(error)).slice(0, SUBAGENT_DELIVERY_ERROR_MAX);
       logDiagnostic("subagent_delivery_failed", { message });
+      if (mayRetry) queueMicrotask(() => {
+        flush(false);
+      });
     }
   };
   const onManagerChange = () => {

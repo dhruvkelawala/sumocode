@@ -298,7 +298,7 @@ writeFileSync(outputPath, JSON.stringify({
 	rpcCommands: rpc.commands,
 	sumocodeExtensionPath: rpc.commands.find((command) => command.source === "extension" && command.name === "accounts")?.sourceInfo?.path ?? realpathSync(extensionEntry),
 	runtime: {
-		printBypass: /exec .*node_modules\/\.bin\/pi -e .*src\/extension-entry\.ts .*--print hello/.test(printText) && !printText.includes("sumo-rpc-host.js"),
+		printBypass: /exec .*node_modules\/\.bin\/pi -e .*src\/extension-entry\.ts .*--print \[redacted\]/.test(printText) && !printText.includes("hello") && !printText.includes("sumo-rpc-host.js"),
 		modeBypass: /exec .*node_modules\/\.bin\/pi -e .*src\/extension-entry\.ts --mode rpc/.test(modeText) && !modeText.includes("sumo-rpc-host.js"),
 		nonTtyBypass: /exec .*node_modules\/\.bin\/pi -e .*src\/extension-entry\.ts --offline/.test(nonTtyText) && !nonTtyText.includes("sumo-rpc-host.js"),
 		tuiModePositional: tuiModeText.includes("KICKOFF_PROMPT_TRANSPORT=one-shot-file") && /exec node .*sumo-rpc-host\.js .*--tui-mode fullscreen/.test(tuiModeText),

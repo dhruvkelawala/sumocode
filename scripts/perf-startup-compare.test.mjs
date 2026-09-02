@@ -237,11 +237,12 @@ describe("startup comparison CLI", () => {
 		const candidateDir = join(root, "candidate");
 		const outDir = await temporaryRoot("sumocode-startup-shutdown-failure-report-");
 		await Promise.all([mkdir(baselineDir), mkdir(candidateDir)]);
+		let spawnCount = 0;
 		const report = await runStartupComparison({
 			callerRoot: root,
 			baseRef: "base",
 			candidateRef: "candidate",
-			samples: 1,
+			samples: 2,
 			fixtureCount: 1,
 			outDir,
 		}, {
@@ -249,6 +250,7 @@ describe("startup comparison CLI", () => {
 			assertClean: async () => undefined,
 			prepareWorktrees: async () => ({ baselineDir, candidateDir, cleanup: async () => undefined }),
 			spawnSamplePty: (_command, _args, options) => {
+				spawnCount += 1;
 				const events = diagnostics(Date.now(), "baseline", 0);
 				writeFileSync(options.env.SUMO_TUI_DIAG_FILE, `${events.map((event) => JSON.stringify(event)).join("\n")}\n`);
 				return { onExit: () => undefined, kill: () => undefined };
@@ -257,7 +259,8 @@ describe("startup comparison CLI", () => {
 		});
 
 		expect(report.arms.baseline.samples[0]).toMatchObject({ ok: false, failure: "shutdown-failed" });
-		expect(report.arms.candidate.samples[0]).toMatchObject({ ok: false, failure: "shutdown-failed" });
+		expect(report.arms.candidate.samples).toEqual([]);
+		expect(spawnCount).toBe(1);
 		expect(report.collection.succeeded).toBe(false);
 	});
 

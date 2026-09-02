@@ -17289,7 +17289,7 @@ function preferredAccountModel(ctx, account, deps) {
     const sameModel = models.find((model) => model.id === current.id);
     if (sameModel) return sameModel;
   }
-  const enabled = filterToEnabled(ctx.modelRegistry.getAll(), readEnabledModelPatterns({ PI_CODING_AGENT_DIR: resolveAgentDir(deps) }));
+  const enabled = filterToEnabled(ctx.modelRegistry.getAvailable(), readEnabledModelPatterns({ PI_CODING_AGENT_DIR: resolveAgentDir(deps) }));
   return enabled.find((model) => model.provider === account.providerId) ?? models[0];
 }
 async function switchAccount(pi, ctx, account, deps) {

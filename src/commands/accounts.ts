@@ -420,10 +420,12 @@ function preferredAccountModel(ctx: ExtensionCommandContext, account: ClaudeAcco
 		const sameModel = models.find((model) => model.id === current.id);
 		if (sameModel) return sameModel;
 	}
-	// Resolve the patterns against the whole registry, exactly as the cycle
-	// ring and /model picker do, so an id that is ambiguous there cannot be
-	// disambiguated here by having narrowed to one provider first.
-	const enabled = filterToEnabled(ctx.modelRegistry.getAll(), readEnabledModelPatterns({ PI_CODING_AGENT_DIR: resolveAgentDir(deps) }));
+	// Resolve the patterns over the same set the cycle ring and /model picker
+	// use — models whose provider has credentials — so a pattern means the
+	// same thing here as it does there. Resolving over one provider's models
+	// would disambiguate an id the picker rejects; resolving over every
+	// registered model would treat an unreachable provider as a collision.
+	const enabled = filterToEnabled(ctx.modelRegistry.getAvailable(), readEnabledModelPatterns({ PI_CODING_AGENT_DIR: resolveAgentDir(deps) }));
 	return enabled.find((model) => model.provider === account.providerId) ?? models[0];
 }
 

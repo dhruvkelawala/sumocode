@@ -4,8 +4,10 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathS
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { CLAUDE_ACCOUNTS_MIGRATION_FIELD } from "./accounts-config.js";
+import { CLAUDE_ACCOUNTS_MIGRATION_FIELD, CLAUDE_BASE_PROVIDER, claudeAccountProviderId, isClaudeAccountProvider } from "./accounts-config.js";
+import { filterToEnabled, readEnabledModelPatterns } from "../sumo-tui/rpc/enabled-models.js";
 import { executeSumoReload } from "./reload.js";
 import { logDiagnostic } from "../sumo-tui/runtime/diagnostics.js";
 import { executeRpcLogin, getRpcLoginRuntime, type RpcLoginRuntime } from "../sumo-tui/pi-compat/login-command.js";
@@ -281,7 +283,7 @@ async function defaultInstallAdapter(): Promise<void> {
 }
 
 function accountProviderId(subscription: ClaudeSubscription): string {
-	return `${subscription.provider}-${subscription.index}`;
+	return claudeAccountProviderId(subscription.index);
 }
 
 function authConfigured(ctx: ExtensionCommandContext, providerId: string): boolean {
@@ -398,13 +400,36 @@ async function addAccount(ctx: ExtensionCommandContext, deps: AccountsCommandDep
 	if (reload) await (deps.reload ?? ((reloadCtx) => executeSumoReload(reloadCtx)))(ctx);
 }
 
-async function switchAccount(pi: ExtensionAPI, ctx: ExtensionCommandContext, account: ClaudeAccount): Promise<void> {
+function isClaudeProvider(providerId: string): boolean {
+	return providerId === CLAUDE_BASE_PROVIDER || isClaudeAccountProvider(providerId);
+}
+
+/**
+ * Model to select when switching onto `account`. Keep the current model id
+ * when the session is already on a Claude account, so switching accounts
+ * never silently changes the model. Otherwise (fresh sessions start on the
+ * settings default provider) pick the first model the user has enabled for
+ * the base anthropic provider, since those patterns mirror onto every
+ * account, and only then fall back to the provider's first model.
+ */
+function preferredAccountModel(ctx: ExtensionCommandContext, account: ClaudeAccount, deps: AccountsCommandDeps): Model<Api> | undefined {
+	const models = ctx.modelRegistry.getAll().filter((model) => model.provider === account.providerId);
+	const current = ctx.model;
+	if (current && isClaudeProvider(current.provider)) {
+		const sameModel = models.find((model) => model.id === current.id);
+		if (sameModel) return sameModel;
+	}
+	const options = models.map((model) => ({ provider: model.provider, id: model.id, label: `${model.provider}/${model.id}`, active: false }));
+	const enabled = filterToEnabled(options, readEnabledModelPatterns({ PI_CODING_AGENT_DIR: resolveAgentDir(deps) }))[0];
+	return (enabled && models.find((model) => model.id === enabled.id)) ?? models[0];
+}
+
+async function switchAccount(pi: ExtensionAPI, ctx: ExtensionCommandContext, account: ClaudeAccount, deps: AccountsCommandDeps): Promise<void> {
 	if (!account.configured) {
 		ctx.ui.notify(`${account.label} must be signed in before it can be selected`, "warning");
 		return;
 	}
-	const models = ctx.modelRegistry.getAll().filter((model) => model.provider === account.providerId);
-	const target = models.find((model) => model.id === ctx.model?.id) ?? models[0];
+	const target = preferredAccountModel(ctx, account, deps);
 	if (!target) {
 		ctx.ui.notify(`${account.providerId} is not active; reload SumoCode after adding the account`, "warning");
 		return;
@@ -462,7 +487,7 @@ async function accountActions(pi: ExtensionAPI, ctx: ExtensionCommandContext, ac
 		...(account.subscription ? ["rename account"] : []),
 	];
 	const action = await ctx.ui.select(`${account.label.toUpperCase()} · ${account.providerId}`, actions);
-	if (action === "use this account") await switchAccount(pi, ctx, account);
+	if (action === "use this account") await switchAccount(pi, ctx, account, deps);
 	else if (action === "sign in" || action === "sign in again") {
 		await (deps.login ?? defaultLogin)(account.providerId, ctx);
 	} else if (action === "rename account") await renameAccount(ctx, account, deps);

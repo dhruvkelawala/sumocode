@@ -407,7 +407,7 @@ export async function runStartupComparison(options, dependencies = {}) {
 			try {
 				raw = await sampleRunner({ arm, index, checkout, agentDir, diagFile, startWallMs, flags: FLAGS });
 			} catch {
-				raw = { ok: false, events: [] };
+				raw = { ok: false, failure: "process-failed", events: [] };
 			}
 			armSamples[arm].push(publicSample(raw, index, startWallMs));
 		}
@@ -416,6 +416,10 @@ export async function runStartupComparison(options, dependencies = {}) {
 		await assertCheckoutClean(worktrees.baselineDir);
 		await assertCheckoutClean(worktrees.candidateDir);
 		const metrics = METRICS.map((definition) => metricComparison(definition, armSamples.baseline, armSamples.candidate));
+		const successfulSamples = {
+			baseline: armSamples.baseline.filter((sample) => sample.ok).length,
+			candidate: armSamples.candidate.filter((sample) => sample.ok).length,
+		};
 		const report = {
 			schemaVersion: 1,
 			generatedAt: now().toISOString(),
@@ -427,6 +431,10 @@ export async function runStartupComparison(options, dependencies = {}) {
 			flags: [...FLAGS],
 			bundleMode: { host: "source", extension: "source" },
 			executionOrder: schedule.map(({ arm }) => arm),
+			collection: {
+				succeeded: successfulSamples.baseline > 0 && successfulSamples.candidate > 0,
+				successfulSamples,
+			},
 			arms: {
 				baseline: { sha: baselineSha, samples: armSamples.baseline },
 				candidate: { sha: candidateSha, samples: armSamples.candidate },
@@ -458,8 +466,9 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
 		...dependencies,
 		onFixtureRetained: dependencies.onFixtureRetained ?? ((path) => console.error(`fixture retained: ${path}`)),
 	});
-	console.log(markdown(report));
 	console.error(`startup comparison reports written to: ${outDir}`);
+	if (!report.collection.succeeded) throw new Error("startup comparison collected no successful samples for one or both arms");
+	console.log(markdown(report));
 	return report;
 }
 

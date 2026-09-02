@@ -63,6 +63,7 @@ async function harness(options = {}) {
 			cleanup: async () => { cleanedWorktrees = true; },
 		}),
 		runSample: async ({ arm, index, startWallMs, agentDir }) => {
+			if (options.failAllSpawns) throw new Error("posix_spawnp failed");
 			fixtureAgentDir = agentDir;
 			execution.push(`${arm}:${index}`);
 			const store = join(agentDir, "state", "sumocode-terminals");
@@ -179,6 +180,11 @@ describe("startup comparison CLI", () => {
 		expect(result.cleanedWorktrees).toBe(true);
 		expect(result.cleanChecks).toEqual([resolve("."), join(result.root, "baseline"), join(result.root, "candidate"), resolve(".")]);
 		expect(await stat(result.fixtureAgentDir).catch(() => undefined)).toBeUndefined();
+	});
+
+	it("rejects the public CLI when neither arm collects a successful sample", async () => {
+		await expect(harness({ publicCli: true, failAllSpawns: true, samples: 1, fixtureCount: 1 }))
+			.rejects.toThrow("no successful samples");
 	});
 
 	it("reports a process that exits naturally after every event as failed", async () => {

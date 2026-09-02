@@ -6754,8 +6754,12 @@ async function createTabPane(pi, cwd, label) {
 }
 async function runPaneCommand(pi, pane, command) {
   if (!pane.pane_id) return { ok: false, error: "herdr pane has no pane_id" };
-  const result = await pi.exec("herdr", ["pane", "run", pane.pane_id, command], { timeout: 5e3 });
-  return result.code === 0 ? { ok: true } : execFailure("herdr pane run", result);
+  try {
+    const result = await pi.exec("herdr", ["pane", "run", pane.pane_id, command], { timeout: 5e3 });
+    return result.code === 0 ? { ok: true } : execFailure("herdr pane run", result);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 async function cleanFailedChildStart(pi, paneId2, primaryError, recoveryShell) {
   let error = primaryError;

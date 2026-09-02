@@ -231,6 +231,20 @@ describe("herdrTerminalHost", () => {
 		expect(exec).not.toHaveBeenCalledWith("herdr", ["pane", "close", "w3:p2"], expect.anything());
 	});
 
+	it("cleans the new pane when pane run rejects", async () => {
+		const exec = vi.fn(async (_bin: string, args: string[]) => {
+			if (args[0] === "tab") return { stdout: JSON.stringify({ result: { root_pane: { pane_id: "w5:p9", workspace_id: "w5", tab_id: "w5:t8" } } }), stderr: "", code: 0, killed: false };
+			if (args[1] === "run") throw new Error("daemon unavailable");
+			return { stdout: "", stderr: "", code: 0, killed: false };
+		});
+
+		// SAFETY: test double only exercises the members this test asserts on.
+		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
+			name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "new-tab", label: "subagents" },
+		})).resolves.toEqual({ ok: false, error: "daemon unavailable" });
+		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "close", "w5:p9"], { timeout: 5000 });
+	});
+
 	it("cleans failed child start and names the preserved workspace shell", async () => {
 		const exec = vi.fn(async (_bin: string, args: string[]) => {
 			if (args[1] === "split") return { stdout: JSON.stringify({ result: { pane: { pane_id: "w9:p2", workspace_id: "w9", tab_id: "w9:t1" } } }), stderr: "", code: 0, killed: false };

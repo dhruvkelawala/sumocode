@@ -6,7 +6,8 @@ import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { CLAUDE_ACCOUNTS_MIGRATION_FIELD, CLAUDE_BASE_PROVIDER, claudeAccountProviderId, isClaudeAccountProvider } from "./accounts-config.js";
+import { CLAUDE_ACCOUNTS_MIGRATION_FIELD } from "./accounts-config.js";
+import { CLAUDE_BASE_PROVIDER, claudeAccountProviderId, isClaudeAccountProvider } from "../config/claude-providers.js";
 import { filterToEnabled, readEnabledModelPatterns } from "../config/enabled-models.js";
 import { executeSumoReload } from "./reload.js";
 import { logDiagnostic } from "../sumo-tui/runtime/diagnostics.js";
@@ -419,7 +420,11 @@ function preferredAccountModel(ctx: ExtensionCommandContext, account: ClaudeAcco
 		const sameModel = models.find((model) => model.id === current.id);
 		if (sameModel) return sameModel;
 	}
-	return filterToEnabled(models, readEnabledModelPatterns({ PI_CODING_AGENT_DIR: resolveAgentDir(deps) }))[0] ?? models[0];
+	// Resolve the patterns against the whole registry, exactly as the cycle
+	// ring and /model picker do, so an id that is ambiguous there cannot be
+	// disambiguated here by having narrowed to one provider first.
+	const enabled = filterToEnabled(ctx.modelRegistry.getAll(), readEnabledModelPatterns({ PI_CODING_AGENT_DIR: resolveAgentDir(deps) }));
+	return enabled.find((model) => model.provider === account.providerId) ?? models[0];
 }
 
 async function switchAccount(pi: ExtensionAPI, ctx: ExtensionCommandContext, account: ClaudeAccount, deps: AccountsCommandDeps): Promise<void> {

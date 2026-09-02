@@ -154,6 +154,54 @@ describe("launcher prompt transport (issue 391)", () => {
 		}
 	});
 
+	it("keeps sole-positional headless kickoffs on stdin even with no other flags", () => {
+		const dir = mkdtempSync(join(tmpdir(), "sumocode-headless-sole-"));
+		const { piBin, stubOut } = makePiStub(dir);
+		try {
+			// Extraction empties SUMOCODE_ARGS here; the stdin branch must still
+			// win over the bare no-args launch branch or the prompt vanishes.
+			const result = spawnSync("bash", [LAUNCHER, "--no-sumo-tui", "solo prompt"], {
+				input: "",
+				encoding: "utf8",
+				env: { ...process.env, PI_BIN: piBin },
+				timeout: 30_000,
+			});
+			expect(result.status).toBe(0);
+
+			// SAFETY: the stub writes exactly one JSON document with argv+stdin
+			// keys (see makePiStub above).
+			const observed = JSON.parse(readFileSync(stubOut, "utf8")) as { argv: string[]; stdin: string };
+			expect(observed.argv).toEqual(["-e", EXTENSION_ENTRY]);
+			expect(observed.stdin).toBe("solo prompt");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps argv and stdin untouched for explicit --mode headless launches", () => {
+		const dir = mkdtempSync(join(tmpdir(), "sumocode-headless-mode-"));
+		const { piBin, stubOut } = makePiStub(dir);
+		try {
+			// rpc/json mode reads stdin as a protocol channel; piping prompt text
+			// there would corrupt it. Argv transport, exactly as typed.
+			const result = spawnSync("bash", [LAUNCHER, "--no-sumo-tui", "--mode", "rpc", "--offline", "mode prompt"], {
+				input: "",
+				encoding: "utf8",
+				env: { ...process.env, PI_BIN: piBin },
+				timeout: 30_000,
+			});
+			expect(result.status).toBe(0);
+
+			// SAFETY: the stub writes exactly one JSON document with argv+stdin
+			// keys (see makePiStub above).
+			const observed = JSON.parse(readFileSync(stubOut, "utf8")) as { argv: string[]; stdin: string };
+			expect(observed.argv).toEqual(["-e", EXTENSION_ENTRY, "--mode", "rpc", "--offline", "mode prompt"]);
+			expect(observed.stdin).toBe("");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("keeps argv transport for multi-positional headless launches so Pi's multi-message semantics survive", () => {
 		const dir = mkdtempSync(join(tmpdir(), "sumocode-headless-multipos-"));
 		const { piBin, stubOut } = makePiStub(dir);

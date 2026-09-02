@@ -1169,10 +1169,12 @@ if [[ "${USE_RPC_HOST}" -eq 0 && ! -t 0 ]]; then
 	DIRECT_PI_STDIN_PROMPT="${EXTRACTED_INITIAL_PROMPT:-}"
 	# Fall back to the argv transport when extra message-bearing tokens
 	# remain: a leftover positional (Pi print mode loops over every message
-	# and buildInitialMessage would concatenate stdin with messages[0]) or a
-	# `-p/--print` flag with its own message value (prompt bytes already ride
-	# argv as Pi's own flag value). Restoring the extracted prompt keeps Pi's
-	# parsing semantics byte-identical to the pre-stdin behavior.
+	# and buildInitialMessage would concatenate stdin with messages[0]), a
+	# `-p/--print` flag with its own message value, or an explicit `--mode`
+	# (rpc/json read stdin as a protocol/command channel, never as a message
+	# — piping prompt text there corrupts the stream). Restoring the
+	# extracted prompt keeps Pi's parsing semantics byte-identical to the
+	# pre-stdin behavior.
 	if [[ -n "${DIRECT_PI_STDIN_PROMPT}" ]]; then
 		direct_fallback=0
 		if _sumocode_first_positional_index >/dev/null 2>&1; then
@@ -1180,7 +1182,7 @@ if [[ "${USE_RPC_HOST}" -eq 0 && ! -t 0 ]]; then
 		elif [[ "${#SUMOCODE_ARGS[@]}" -gt 0 ]]; then
 			for direct_arg in "${SUMOCODE_ARGS[@]}"; do
 				case "${direct_arg}" in
-					-p|--print|--print=*) direct_fallback=1; break ;;
+					-p|--print|--print=*|--mode|--mode=*) direct_fallback=1; break ;;
 				esac
 			done
 		fi
@@ -1381,8 +1383,6 @@ while :; do
 		wait_for_child_exit "${RPC_CHILD_PID}"
 		code="$(read_child_exit_code_file "${SUMOCODE_EXIT_CODE_FILE}" "${WAIT_FOR_CHILD_EXIT_STATUS}")"
 		RPC_CHILD_PID=""
-	elif [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
-		env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" || code=$?
 	elif [[ -n "${DIRECT_PI_STDIN_PROMPT}" ]]; then
 		# Headless kickoff: the prompt rides stdin (Pi print mode reads it as
 		# the initial message); argv keeps only flags. The caller's own piped
@@ -1390,8 +1390,15 @@ while :; do
 		# the message — stays byte-identical to the pre-stdin behavior, and the
 		# upstream producer keeps its reader instead of taking SIGPIPE.
 		# Pipeline exit status is Pi's, so the reload/exit handling below is
-		# unchanged.
-		{ cat; printf '%s' "${DIRECT_PI_STDIN_PROMPT}"; } | env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" "${SUMOCODE_ARGS[@]}" || code=$?
+		# unchanged. Must precede the empty-argv branch: a sole prompt
+		# positional empties SUMOCODE_ARGS during extraction.
+		if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
+			{ cat; printf '%s' "${DIRECT_PI_STDIN_PROMPT}"; } | env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" || code=$?
+		else
+			{ cat; printf '%s' "${DIRECT_PI_STDIN_PROMPT}"; } | env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" "${SUMOCODE_ARGS[@]}" || code=$?
+		fi
+	elif [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
+		env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" || code=$?
 	else
 		env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" "${SUMOCODE_ARGS[@]}" || code=$?
 	fi
@@ -1410,6 +1417,11 @@ while :; do
 	RPC_INITIAL_PROMPT=""
 	# The host already consumed (unlinked) the transport file; clear the path
 	# so the exit trap has nothing to clean and a reload can never re-export it.
+	# Cleared ONLY here, on the reload-respawn path: code 100 means the host
+	# served a live session, so it already consumed (unlinked) the transport
+	# file. Every other exit reaches `exit "${code}"` below with the path
+	# still set, keeping the EXIT trap as the cleanup backstop for hosts that
+	# die before reading it.
 	RPC_INITIAL_PROMPT_FILE=""
 	# Same one-shot rule for the headless stdin transport: iteration one's
 	# prompt must never ride a reload respawn's stdin.

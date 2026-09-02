@@ -1,0 +1,66 @@
+name: Pi compatibility
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  pull_request:
+    paths:
+      - package.json
+      - bin/sumocode.sh
+      - sumo-rpc-host.js
+      - src/extension-entry.ts
+      - src/extension.ts
+      - src/interaction-registry.ts
+      - src/sumo-tui/rpc/**
+      - scripts/smoke-pi-versions.sh
+      - scripts/pi-compat-contract.mjs
+      - scripts/pi-compat-contract.test.mjs
+      - .github/workflows/pi-compat.yml
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: pi-compat-${{ github.event_name }}-${{ github.event_name == 'schedule' && github.run_id || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pi-compat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.29.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install repository dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test every published supported Pi patch
+        id: compatibility
+        shell: bash
+        run: |
+          set +e
+          scripts/smoke-pi-versions.sh --supported-matrix 2>&1 | tee /tmp/pi-compat-full.log
+          status=${PIPESTATUS[0]}
+          tail -c 200000 /tmp/pi-compat-full.log > pi-compat-failure.log
+          exit "$status"
+
+      - name: Upload bounded failure log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-compat-failure-${{ github.run_id }}
+          path: pi-compat-failure.log
+          retention-days: 3

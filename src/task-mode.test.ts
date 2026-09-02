@@ -1,4 +1,16 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+
+/**
+ * Valid private-control fixtures: the orchestrator writes the control dir
+ * owner-only and every control file 0600, and the child watcher refuses
+ * anything else. These helpers mirror that producer contract.
+ */
+const makeControlDir = (dir: string): void => {
+	mkdirSync(dir, { recursive: true, mode: 0o700 });
+};
+const writeControl = (path: string, text: string): void => {
+	writeFileSync(path, text, { mode: 0o600 });
+};
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -153,6 +165,9 @@ describe("installTaskModeAutoExit", () => {
 		else process.env.SUMOCODE_TASK_EXIT_FILE = originalExitFile;
 		if (originalStartedFile === undefined) delete process.env.SUMOCODE_TASK_STARTED_FILE;
 		else process.env.SUMOCODE_TASK_STARTED_FILE = originalStartedFile;
+		// The captured marker snapshot is process-global; stale control dirs from
+		// one test must not confine another test's markers.
+		resetTaskMarkerEnvForTests();
 		if (workDir) rmSync(workDir, { recursive: true, force: true });
 	});
 
@@ -166,7 +181,7 @@ describe("installTaskModeAutoExit", () => {
 	it("skips countdown wiring when keep-open is set but still installs the control watcher", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
 		const controlDir = join(workDir, "control");
-		mkdirSync(controlDir, { recursive: true });
+		makeControlDir(controlDir);
 		const { pi, handlers } = buildPiStub();
 		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
 		installTaskModeAutoExit(pi as never, {
@@ -187,7 +202,7 @@ describe("installTaskModeAutoExit", () => {
 		expect(ctx.shutdown).not.toHaveBeenCalled();
 
 		// Close is explicit, not silence-based — it works under keep-open.
-		writeFileSync(join(controlDir, "close.request"), "1");
+		writeControl(join(controlDir, "close.request"), "1");
 		vi.advanceTimersByTime(500);
 		expect(ctx.shutdown).toHaveBeenCalledTimes(1);
 	});
@@ -312,11 +327,18 @@ describe("installTaskModeAutoExit", () => {
 	it("writes response.md with final assistant text on first agent_end", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
 		const responseFile = join(workDir, "response.md");
-		process.env.SUMOCODE_TASK_RESPONSE_FILE = responseFile;
+		makeControlDir(join(workDir, "control"));
 
 		const { pi, handlers } = buildPiStub();
 		// SAFETY: the pi double supplies the on/exec surfaces installTaskModeAutoExit reads.
-		installTaskModeAutoExit(pi as never, { env: { SUMOCODE_TASK_MODE: "1" }, graceMs: 10_000 });
+		installTaskModeAutoExit(pi as never, {
+			env: {
+				SUMOCODE_TASK_MODE: "1",
+				SUMOCODE_TASK_RESPONSE_FILE: responseFile,
+				SUMOCODE_TASK_CONTROL_DIR: join(workDir, "control"),
+			},
+			graceMs: 10_000,
+		});
 
 		const ctx = buildCtxStub();
 		handlers.get("agent_end")?.[0]?.(
@@ -336,11 +358,18 @@ describe("installTaskModeAutoExit", () => {
 	it("updates response.md on later agent_end events while re-arming the countdown", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
 		const responseFile = join(workDir, "response.md");
-		process.env.SUMOCODE_TASK_RESPONSE_FILE = responseFile;
+		makeControlDir(join(workDir, "control"));
 
 		const { pi, handlers } = buildPiStub();
 		// SAFETY: the pi double supplies the on/exec surfaces installTaskModeAutoExit reads.
-		installTaskModeAutoExit(pi as never, { env: { SUMOCODE_TASK_MODE: "1" }, graceMs: 10_000 });
+		installTaskModeAutoExit(pi as never, {
+			env: {
+				SUMOCODE_TASK_MODE: "1",
+				SUMOCODE_TASK_RESPONSE_FILE: responseFile,
+				SUMOCODE_TASK_CONTROL_DIR: join(workDir, "control"),
+			},
+			graceMs: 10_000,
+		});
 
 		const ctx = buildCtxStub();
 		const onAgentEnd = handlers.get("agent_end")?.[0];
@@ -369,11 +398,16 @@ describe("installTaskModeAutoExit", () => {
 	it("writes a task-started marker during task-mode install", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
 		const startedFile = join(workDir, "started.marker");
+		makeControlDir(join(workDir, "control"));
 		const { pi } = buildPiStub();
 
 		// SAFETY: the pi double supplies the on/exec surfaces installTaskModeAutoExit reads.
 		installTaskModeAutoExit(pi as never, {
-			env: { SUMOCODE_TASK_MODE: "1", SUMOCODE_TASK_STARTED_FILE: startedFile },
+			env: {
+				SUMOCODE_TASK_MODE: "1",
+				SUMOCODE_TASK_STARTED_FILE: startedFile,
+				SUMOCODE_TASK_CONTROL_DIR: join(workDir, "control"),
+			},
 			graceMs: 10_000,
 		});
 
@@ -395,12 +429,14 @@ describe("installTaskModeAutoExit", () => {
 		const responseFile = join(workDir, "response.md");
 		const { pi, handlers } = buildPiStub();
 
+		makeControlDir(join(workDir, "control"));
 		const env: NodeJS.ProcessEnv = {
 			SUMOCODE_TASK_MODE: "1",
 			SUMOCODE_TASK_STARTED_FILE: startedFile,
 			SUMOCODE_TASK_RESPONSE_FILE: responseFile,
 			SUMOCODE_TASK_EXIT_FILE: join(workDir, "exit.code"),
 			SUMOCODE_TASK_DIAG_FILE: join(workDir, "diag.jsonl"),
+			SUMOCODE_TASK_CONTROL_DIR: join(workDir, "control"),
 		};
 		try {
 			// SAFETY: the pi double supplies the on/exec surfaces installTaskModeAutoExit reads.
@@ -474,7 +510,7 @@ describe("control watcher", () => {
 	/** Install task mode with a control dir inside a fresh temp workdir. */
 	const installWithControlDir = (keepOpen = false, diagFile?: string, unlink?: (path: string) => void) => {
 		const controlDir = join(workDir!, "control");
-		mkdirSync(controlDir, { recursive: true });
+		makeControlDir(controlDir);
 		const { pi, handlers } = buildPiStub();
 		const env: NodeJS.ProcessEnv = {
 			SUMOCODE_TASK_MODE: "1",
@@ -509,7 +545,7 @@ describe("control watcher", () => {
 		const diagFile = join(workDir, "diag.jsonl");
 		const { pi, controlDir } = installWithControlDir(false, diagFile);
 		const steerPath = join(controlDir, "steer-1.txt");
-		writeFileSync(steerPath, "focus on the failing tests");
+		writeControl(steerPath, "focus on the failing tests");
 
 		vi.advanceTimersByTime(500);
 
@@ -536,7 +572,7 @@ describe("control watcher", () => {
 			unlinkSync(path);
 		});
 		const steerPath = join(controlDir, "steer-1.txt");
-		writeFileSync(steerPath, "submit exactly once");
+		writeControl(steerPath, "submit exactly once");
 
 		vi.advanceTimersByTime(500);
 
@@ -564,9 +600,9 @@ describe("control watcher", () => {
 	it("keeps submitted ownership across watcher recreation; the replacement retries the unlink only", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
 		const controlDir = join(workDir!, "control");
-		mkdirSync(controlDir, { recursive: true });
+		makeControlDir(controlDir);
 		const steerPath = join(controlDir, "steer-1.txt");
-		writeFileSync(steerPath, "owned across recreation");
+		writeControl(steerPath, "owned across recreation");
 		// Pi recreates the extension API in the SAME process for /new, /resume,
 		// and /fork, so both installs see this one (progressively scrubbed) env.
 		const env: NodeJS.ProcessEnv = { SUMOCODE_TASK_MODE: "1", SUMOCODE_TASK_CONTROL_DIR: controlDir };
@@ -609,7 +645,7 @@ describe("control watcher", () => {
 		expect(submittedControlsForTests().get(resolve(controlDir))).toBeUndefined();
 
 		// A genuinely new control submits normally.
-		writeFileSync(join(controlDir, "steer-2.txt"), "fresh steer");
+		writeControl(join(controlDir, "steer-2.txt"), "fresh steer");
 		vi.advanceTimersByTime(500);
 		expect(second.pi.sendUserMessage).toHaveBeenCalledTimes(1);
 		expect(second.pi.sendUserMessage).toHaveBeenCalledWith("fresh steer", { deliverAs: "steer" });
@@ -636,7 +672,7 @@ describe("control watcher", () => {
 			throw enoent;
 		});
 		const steerPath = join(controlDir, "steer-1.txt");
-		writeFileSync(steerPath, "acked by removal");
+		writeControl(steerPath, "acked by removal");
 
 		vi.advanceTimersByTime(500);
 		expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
@@ -653,7 +689,7 @@ describe("control watcher", () => {
 		expect([...submittedControlsForTests().keys()].filter((key) => key.startsWith(workDir!))).toEqual([]);
 
 		// No leak, no duplicate: a genuinely new control submits normally.
-		writeFileSync(join(controlDir, "steer-2.txt"), "after the race");
+		writeControl(join(controlDir, "steer-2.txt"), "after the race");
 		vi.advanceTimersByTime(500);
 		expect(pi.sendUserMessage).toHaveBeenCalledTimes(2);
 		expect(pi.sendUserMessage).toHaveBeenCalledWith("after the race", { deliverAs: "steer" });
@@ -663,10 +699,10 @@ describe("control watcher", () => {
 	it("canonicalizes the control dir once: equivalent spellings share one bucket with canonical member paths", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
 		const controlDir = join(workDir, "control");
-		mkdirSync(controlDir, { recursive: true });
+		makeControlDir(controlDir);
 		const canonicalControlDir = resolve(controlDir);
 		const steerPath = join(canonicalControlDir, "steer-1.txt");
-		writeFileSync(steerPath, "one canonical spelling");
+		writeControl(steerPath, "one canonical spelling");
 
 		let failUnlink = true;
 		const unlink = (path: string): void => {
@@ -714,9 +750,9 @@ describe("control watcher", () => {
 	it("shares submitted ownership across distinct module instances in the same process", async () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
 		const controlDir = join(workDir, "control");
-		mkdirSync(controlDir, { recursive: true });
+		makeControlDir(controlDir);
 		const steerPath = join(controlDir, "steer-1.txt");
-		writeFileSync(steerPath, "owned process-wide");
+		writeControl(steerPath, "owned process-wide");
 		const env: NodeJS.ProcessEnv = { SUMOCODE_TASK_MODE: "1", SUMOCODE_TASK_CONTROL_DIR: controlDir };
 		let failUnlink = true;
 		const unlink = (path: string): void => {
@@ -762,7 +798,7 @@ describe("control watcher", () => {
 			throw new Error("EBUSY: ack unlink raced a reader");
 		});
 		const steerPath = join(controlDir, "steer-1.txt");
-		writeFileSync(steerPath, "snapshot safety");
+		writeControl(steerPath, "snapshot safety");
 
 		vi.advanceTimersByTime(500);
 		expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
@@ -784,7 +820,7 @@ describe("control watcher", () => {
 			throw new Error("EBUSY: ack unlink raced a reader");
 		});
 		const steerPath = join(controlDir, "steer-1.txt");
-		writeFileSync(steerPath, "reset clears ownership");
+		writeControl(steerPath, "reset clears ownership");
 
 		vi.advanceTimersByTime(500);
 		expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
@@ -799,7 +835,7 @@ describe("control watcher", () => {
 		const diagFile = join(workDir, "diag.jsonl");
 		const { pi, controlDir } = installWithControlDir(false, diagFile);
 		const steerPath = join(controlDir, "steer-1.txt");
-		writeFileSync(steerPath, "retry after sync failure");
+		writeControl(steerPath, "retry after sync failure");
 		pi.sendUserMessage.mockImplementationOnce(() => {
 			throw new Error("runtime not ready");
 		});
@@ -818,8 +854,8 @@ describe("control watcher", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
 		const { pi, controlDir } = installWithControlDir();
 		// Written out of order on purpose: consumption must sort by seq.
-		writeFileSync(join(controlDir, "steer-2.txt"), "second");
-		writeFileSync(join(controlDir, "steer-1.txt"), "first");
+		writeControl(join(controlDir, "steer-2.txt"), "second");
+		writeControl(join(controlDir, "steer-1.txt"), "first");
 
 		vi.advanceTimersByTime(500);
 
@@ -830,7 +866,7 @@ describe("control watcher", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
 		const { pi, controlDir } = installWithControlDir();
 		const tmpPath = join(controlDir, "steer-1.txt.tmp");
-		writeFileSync(tmpPath, "half written");
+		writeControl(tmpPath, "half written");
 
 		vi.advanceTimersByTime(1_500);
 
@@ -843,7 +879,7 @@ describe("control watcher", () => {
 		const diagFile = join(workDir, "diag.jsonl");
 		const { pi, controlDir } = installWithControlDir(false, diagFile);
 		const emptyPath = join(controlDir, "steer-3.txt");
-		writeFileSync(emptyPath, "");
+		writeControl(emptyPath, "");
 
 		vi.advanceTimersByTime(500);
 
@@ -859,13 +895,13 @@ describe("control watcher", () => {
 	it("close.request shuts the child down and stops the watcher", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
 		const { pi, controlDir, ctx } = installWithControlDir();
-		writeFileSync(join(controlDir, "close.request"), "1");
+		writeControl(join(controlDir, "close.request"), "1");
 
 		vi.advanceTimersByTime(500);
 		expect(ctx.shutdown).toHaveBeenCalledTimes(1);
 
 		// The watcher is stopped — later ticks must not re-fire shutdown.
-		writeFileSync(join(controlDir, "steer-1.txt"), "late steer");
+		writeControl(join(controlDir, "steer-1.txt"), "late steer");
 		vi.advanceTimersByTime(2_000);
 		expect(ctx.shutdown).toHaveBeenCalledTimes(1);
 		expect(pi.sendUserMessage).not.toHaveBeenCalled();
@@ -882,7 +918,7 @@ describe("control watcher", () => {
 	it("holds steer submission until the extension runtime is initialized", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
 		const controlDir = join(workDir, "control");
-		mkdirSync(controlDir, { recursive: true });
+		makeControlDir(controlDir);
 		const { pi, handlers } = buildPiStub();
 		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
 		installTaskModeAutoExit(pi as never, {
@@ -890,7 +926,7 @@ describe("control watcher", () => {
 			graceMs: 10_000,
 		});
 		const steerPath = join(controlDir, "steer-1.txt");
-		writeFileSync(steerPath, "steer before boot");
+		writeControl(steerPath, "steer before boot");
 
 		// No session_start yet: sendUserMessage would throw "Extension runtime not
 		// initialized", burning the submission and pushing control consumption
@@ -909,7 +945,7 @@ describe("control watcher", () => {
 	it("defers a mid-turn close until agent_end has persisted the response", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
 		const controlDir = join(workDir, "control");
-		mkdirSync(controlDir, { recursive: true });
+		makeControlDir(controlDir);
 		const responseFile = join(workDir, "response.md");
 		const { pi, handlers } = buildPiStub();
 		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
@@ -926,7 +962,7 @@ describe("control watcher", () => {
 
 		// A turn is streaming when the orchestrator asks to close.
 		handlers.get("agent_start")?.[0]?.({}, ctx);
-		writeFileSync(join(controlDir, "close.request"), "1");
+		writeControl(join(controlDir, "close.request"), "1");
 		vi.advanceTimersByTime(1_500);
 
 		// Exiting here would settle the parent on an empty response.md while
@@ -947,7 +983,7 @@ describe("control watcher", () => {
 	it("closes immediately when no turn is active", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
 		const { controlDir, ctx } = installWithControlDir();
-		writeFileSync(join(controlDir, "close.request"), "1");
+		writeControl(join(controlDir, "close.request"), "1");
 
 		vi.advanceTimersByTime(500);
 
@@ -957,7 +993,7 @@ describe("control watcher", () => {
 	it("keeps steering alive across session recreation (/new, /resume, /fork)", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
 		const controlDir = join(workDir, "control");
-		mkdirSync(controlDir, { recursive: true });
+		makeControlDir(controlDir);
 		// Pi recreates the extension API in the SAME process, so the second
 		// install sees an env the first one already scrubbed.
 		const env: NodeJS.ProcessEnv = { SUMOCODE_TASK_MODE: "1", SUMOCODE_TASK_CONTROL_DIR: controlDir };
@@ -973,7 +1009,7 @@ describe("control watcher", () => {
 		installTaskModeAutoExit(second.pi as never, { env, graceMs: 10_000 });
 		second.handlers.get("session_start")?.[0]?.({}, buildCtxStub());
 		const steerPath = join(controlDir, "steer-1.txt");
-		writeFileSync(steerPath, "steer after resume");
+		writeControl(steerPath, "steer after resume");
 		vi.advanceTimersByTime(500);
 
 		expect(second.pi.sendUserMessage).toHaveBeenCalledWith("steer after resume", { deliverAs: "steer" });
@@ -984,7 +1020,7 @@ describe("control watcher", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
 		const { pi, handlers, controlDir, ctx } = installWithControlDir();
 		handlers.get("agent_end")?.[0]?.({ messages: [] }, ctx);
-		writeFileSync(join(controlDir, "steer-1.txt"), "steer mid-countdown");
+		writeControl(join(controlDir, "steer-1.txt"), "steer mid-countdown");
 
 		vi.advanceTimersByTime(500);
 		expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
@@ -995,6 +1031,334 @@ describe("control watcher", () => {
 		expect(ctx.shutdown).not.toHaveBeenCalled();
 	});
 
+	it("consumes controls created after the watcher boots (late control dir)", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const controlDir = join(workDir, "control");
+		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
+		installTaskModeAutoExit(pi as never, {
+			env: { SUMOCODE_TASK_MODE: "1", SUMOCODE_TASK_CONTROL_DIR: controlDir },
+			graceMs: 10_000,
+		});
+		handlers.get("session_start")?.[0]?.({}, buildCtxStub());
+		vi.advanceTimersByTime(500);
+		expect(pi.sendUserMessage).not.toHaveBeenCalled();
+
+		// The orchestrator creates the control dir after the child booted.
+		makeControlDir(controlDir);
+		writeControl(join(controlDir, "steer-1.txt"), "late dir steer");
+		vi.advanceTimersByTime(500);
+		expect(pi.sendUserMessage).toHaveBeenCalledWith("late dir steer", { deliverAs: "steer" });
+	});
+
+	it("drops diag lines through an in-task-dir symlinked sink without following it", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
+		makeControlDir(join(workDir, "control"));
+		const outside = mkdtempSync(join(tmpdir(), "sumocode-task-escape-"));
+		const victimDiag = join(outside, "diag.jsonl");
+		const diagFile = join(workDir, "diag.jsonl");
+		symlinkSync(victimDiag, diagFile);
+		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
+		installTaskModeAutoExit(pi as never, {
+			env: {
+				SUMOCODE_TASK_MODE: "1",
+				SUMOCODE_TASK_CONTROL_DIR: join(workDir, "control"),
+				SUMOCODE_TASK_DIAG_FILE: diagFile,
+			},
+			graceMs: 10_000,
+		});
+		handlers.get("session_start")?.[0]?.({}, buildCtxStub());
+		vi.advanceTimersByTime(500);
+		// The sink was tampered after a legitimate-looking capture: the line is
+		// dropped, and the symlink target is never created.
+		expect(existsSync(victimDiag)).toBe(false);
+		expect(lstatSync(diagFile).isSymbolicLink()).toBe(true);
+		expect(pi.sendUserMessage).not.toHaveBeenCalled();
+	});
+
+	it("refuses a control dir that is a symlink and consumes nothing", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const realDir = join(workDir, "elsewhere");
+		makeControlDir(realDir);
+		const controlDir = join(workDir, "control");
+		symlinkSync(realDir, controlDir);
+		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
+		installTaskModeAutoExit(pi as never, {
+			env: { SUMOCODE_TASK_MODE: "1", SUMOCODE_TASK_CONTROL_DIR: controlDir },
+			graceMs: 10_000,
+		});
+		handlers.get("session_start")?.[0]?.({}, buildCtxStub());
+		writeControl(join(realDir, "steer-1.txt"), "sneaky");
+		vi.advanceTimersByTime(1_000);
+		// The watcher is live (a session context is captured) but refuses the
+		// redirected control dir, so the steer is never consumed.
+		expect(pi.sendUserMessage).not.toHaveBeenCalled();
+		expect(existsSync(join(realDir, "steer-1.txt"))).toBe(true);
+		expect(handlers.has("session_start")).toBe(true);
+	});
+
+	it("re-validates the control dir on every tick after a later swap", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const { pi, controlDir } = installWithControlDir();
+		writeControl(join(controlDir, "steer-1.txt"), "first");
+		vi.advanceTimersByTime(500);
+		expect(pi.sendUserMessage).toHaveBeenCalledWith("first", { deliverAs: "steer" });
+
+		// Swap the validated control dir for a symlink to another private dir
+		// carrying a planted control: the next tick must re-validate and refuse.
+		const realDir = join(workDir!, "elsewhere");
+		makeControlDir(realDir);
+		writeControl(join(realDir, "steer-2.txt"), "sneaky");
+		rmSync(controlDir, { recursive: true, force: true });
+		symlinkSync(realDir, controlDir);
+		vi.advanceTimersByTime(500);
+		expect(pi.sendUserMessage).not.toHaveBeenCalledWith("sneaky", { deliverAs: "steer" });
+		expect(existsSync(join(realDir, "steer-2.txt"))).toBe(true);
+	});
+
+	it("refuses a group-readable control dir", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const controlDir = join(workDir, "control");
+		mkdirSync(controlDir, { recursive: true, mode: 0o755 });
+		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
+		installTaskModeAutoExit(pi as never, {
+			env: { SUMOCODE_TASK_MODE: "1", SUMOCODE_TASK_CONTROL_DIR: controlDir },
+			graceMs: 10_000,
+		});
+		const ctx = buildCtxStub();
+		handlers.get("session_start")?.[0]?.({}, ctx);
+		writeControl(join(controlDir, "steer-1.txt"), "wide open");
+		writeControl(join(controlDir, "close.request"), "1");
+		vi.advanceTimersByTime(1_000);
+		// The watcher is live (a session context is captured) but the widened
+		// directory fails closed: no steering is consumed and no close honored.
+		expect(pi.sendUserMessage).not.toHaveBeenCalled();
+		expect(ctx.shutdown).not.toHaveBeenCalled();
+	});
+
+	it("refuses a symlinked steer control, leaves it in place, and never submits it", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const { pi, controlDir } = installWithControlDir();
+		const victim = join(workDir, "victim.txt");
+		writeFileSync(victim, "do not read", { mode: 0o600 });
+		const steerPath = join(controlDir, "steer-1.txt");
+		symlinkSync(victim, steerPath);
+
+		vi.advanceTimersByTime(1_000);
+
+		expect(pi.sendUserMessage).not.toHaveBeenCalled();
+		// The replaced control stays on disk: the parent's send budget then ends
+		// in an ambiguous timeout, which the existing protocol treats as
+		// recoverable rather than acknowledging a control we refused to read.
+		expect(existsSync(steerPath)).toBe(true);
+		expect(readFileSync(victim, "utf8")).toBe("do not read");
+	});
+
+	it("refuses a response marker redirected outside the task dir", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
+		makeControlDir(join(workDir, "control"));
+		const outside = mkdtempSync(join(tmpdir(), "sumocode-task-escape-"));
+		const responseFile = join(outside, "response.md");
+		const diagFile = join(workDir, "diag.jsonl");
+		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
+		installTaskModeAutoExit(pi as never, {
+			env: {
+				SUMOCODE_TASK_MODE: "1",
+				SUMOCODE_TASK_RESPONSE_FILE: responseFile,
+				SUMOCODE_TASK_CONTROL_DIR: join(workDir, "control"),
+				SUMOCODE_TASK_DIAG_FILE: diagFile,
+			},
+			graceMs: 10_000,
+		});
+		const ctx = buildCtxStub();
+		handlers.get("agent_end")?.[0]?.(
+			{ messages: [{ role: "assistant", content: [{ type: "text", text: "harvested" }] }] },
+			ctx,
+		);
+		expect(existsSync(responseFile)).toBe(false);
+		expect(readFileSync(diagFile, "utf8")).toContain("marker_refused");
+	});
+
+	it("refuses to overwrite a response artifact replaced by a symlink", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
+		makeControlDir(join(workDir, "control"));
+		const responseFile = join(workDir, "response.md");
+		const victim = join(workDir, "victim.md");
+		writeFileSync(victim, "keep me", { mode: 0o600 });
+		symlinkSync(victim, responseFile);
+		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
+		installTaskModeAutoExit(pi as never, {
+			env: {
+				SUMOCODE_TASK_MODE: "1",
+				SUMOCODE_TASK_RESPONSE_FILE: responseFile,
+				SUMOCODE_TASK_CONTROL_DIR: join(workDir, "control"),
+			},
+			graceMs: 10_000,
+		});
+		handlers.get("agent_end")?.[0]?.(
+			{ messages: [{ role: "assistant", content: [{ type: "text", text: "harvested" }] }] },
+			buildCtxStub(),
+		);
+		expect(readFileSync(victim, "utf8")).toBe("keep me");
+		expect(existsSync(responseFile)).toBe(true);
+		expect(readFileSync(responseFile, "utf8")).toBe("keep me");
+	});
+
+	it("refuses to unlink a submitted control that was replaced before the ack", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const victim = join(workDir, "victim.txt");
+		writeFileSync(victim, "do not remove", { mode: 0o600 });
+		let attempts = 0;
+		const replaceWithSymlinkThenFail = (path: string): void => {
+			attempts += 1;
+			if (attempts === 1) {
+				// The ack unlink fails once (raced reader), and an adversary replaces
+				// the control with a symlink before the retry.
+				unlinkSync(path);
+				symlinkSync(victim, path);
+				throw new Error("EBUSY: ack unlink raced a reader");
+			}
+			// Guard must refuse: a later retry never removes the replacement.
+			throw new Error("retry must not reach unlink through the replaced path");
+		};
+		const { pi, controlDir } = installWithControlDir(false, undefined, replaceWithSymlinkThenFail);
+		const steerPath = join(controlDir, "steer-1.txt");
+		writeControl(steerPath, "submitted then swapped");
+
+		vi.advanceTimersByTime(2_000);
+
+		// Submission happened exactly once; the replacement was never unlinked.
+		expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
+		expect(attempts).toBe(1);
+		expect(existsSync(steerPath)).toBe(true);
+		expect(readFileSync(victim, "utf8")).toBe("do not remove");
+	});
+
+	it("quarantines all markers before logging refusals when no control dir is set", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
+		const outside = mkdtempSync(join(tmpdir(), "sumocode-task-escape-"));
+		const outsideDiag = join(outside, "diag.jsonl");
+		const responseFile = join(workDir, "response.md");
+		const { pi } = buildPiStub();
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
+		installTaskModeAutoExit(pi as never, {
+			env: {
+				SUMOCODE_TASK_MODE: "1",
+				SUMOCODE_TASK_RESPONSE_FILE: responseFile,
+				SUMOCODE_TASK_DIAG_FILE: outsideDiag,
+			},
+			graceMs: 10_000,
+		});
+		// Without a control dir, both markers are refused; the diag sink must be
+		// quarantined before the response refusal is logged, so nothing is ever
+		// appended to the unvalidated diag path.
+		expect(existsSync(outsideDiag)).toBe(false);
+		expect(existsSync(responseFile)).toBe(false);
+	});
+
+	it("does not write a refusal through a refused diag path", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
+		makeControlDir(join(workDir, "control"));
+		const outside = mkdtempSync(join(tmpdir(), "sumocode-task-escape-"));
+		const outsideDiag = join(outside, "diag.jsonl");
+		const responseFile = join(workDir, "response.md");
+		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
+		installTaskModeAutoExit(pi as never, {
+			env: {
+				SUMOCODE_TASK_MODE: "1",
+				SUMOCODE_TASK_RESPONSE_FILE: responseFile,
+				SUMOCODE_TASK_CONTROL_DIR: join(workDir, "control"),
+				SUMOCODE_TASK_DIAG_FILE: outsideDiag,
+			},
+			graceMs: 10_000,
+		});
+		handlers.get("agent_end")?.[0]?.(
+			{ messages: [{ role: "assistant", content: [{ type: "text", text: "harvested" }] }] },
+			buildCtxStub(),
+		);
+		// The escaped diag file is quarantined before its own refusal is logged,
+		// so nothing is ever appended to it; the valid response still persists.
+		expect(existsSync(outsideDiag)).toBe(false);
+		expect(existsSync(responseFile)).toBe(true);
+	});
+
+	it("refuses to create a response artifact through a dangling symlink", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
+		makeControlDir(join(workDir, "control"));
+		const responseFile = join(workDir, "response.md");
+		const outside = mkdtempSync(join(tmpdir(), "sumocode-task-escape-"));
+		const victim = join(outside, "response.md");
+		symlinkSync(victim, responseFile);
+		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
+		installTaskModeAutoExit(pi as never, {
+			env: {
+				SUMOCODE_TASK_MODE: "1",
+				SUMOCODE_TASK_RESPONSE_FILE: responseFile,
+				SUMOCODE_TASK_CONTROL_DIR: join(workDir, "control"),
+			},
+			graceMs: 10_000,
+		});
+		handlers.get("agent_end")?.[0]?.(
+			{ messages: [{ role: "assistant", content: [{ type: "text", text: "harvested" }] }] },
+			buildCtxStub(),
+		);
+		// The dangling link was not followed: no target file was created and no
+		// response landed outside the task dir.
+		expect(existsSync(victim)).toBe(false);
+		expect(lstatSync(responseFile).isSymbolicLink()).toBe(true);
+	});
+
+	it("honors a `..`-decorated marker by writing to its resolved task-dir path", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
+		makeControlDir(join(workDir, "control"));
+		const responseFile = join(workDir, "sub", "..", "response.md");
+		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
+		installTaskModeAutoExit(pi as never, {
+			env: {
+				SUMOCODE_TASK_MODE: "1",
+				SUMOCODE_TASK_RESPONSE_FILE: responseFile,
+				SUMOCODE_TASK_CONTROL_DIR: join(workDir, "control"),
+			},
+			graceMs: 10_000,
+		});
+		handlers.get("agent_end")?.[0]?.(
+			{ messages: [{ role: "assistant", content: [{ type: "text", text: "resolved" }] }] },
+			buildCtxStub(),
+		);
+		// Capture normalized the spelling: the artifact exists once, at the
+		// resolved direct-child path.
+		expect(existsSync(join(workDir, "response.md"))).toBe(true);
+		expect(readFileSync(join(workDir, "response.md"), "utf8").trim()).toBe("resolved");
+	});
+
+	it("refuses a symlinked close control and keeps steering live", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
+		const victim = join(workDir, "victim.txt");
+		writeFileSync(victim, "not a close control", { mode: 0o600 });
+		const { pi, controlDir } = installWithControlDir();
+		symlinkSync(victim, join(controlDir, "close.request"));
+		const ctx = buildCtxStub();
+		// Re-capture the context the way installWithControlDir does (its ctx is
+		// already captured); close.request arrives on the first tick.
+		vi.advanceTimersByTime(500);
+		expect(ctx.shutdown).not.toHaveBeenCalled();
+
+		// The control channel is still live: a valid steer is consumed.
+		writeControl(join(controlDir, "steer-1.txt"), "still steering");
+		vi.advanceTimersByTime(500);
+		expect(pi.sendUserMessage).toHaveBeenCalledWith("still steering", { deliverAs: "steer" });
+		// The replacement was never removed.
+		expect(existsSync(join(controlDir, "close.request"))).toBe(true);
+	});
+
 	it("keeps a steer file readable after a read failure on a later tick", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
 		const { pi, controlDir } = installWithControlDir();
@@ -1002,7 +1366,7 @@ describe("control watcher", () => {
 		mkdirSync(join(controlDir, "steer-9.txt"));
 
 		expect(() => vi.advanceTimersByTime(1_000)).not.toThrow();
-		writeFileSync(join(controlDir, "steer-1.txt"), "still works");
+		writeControl(join(controlDir, "steer-1.txt"), "still works");
 		vi.advanceTimersByTime(500);
 		expect(pi.sendUserMessage).toHaveBeenCalledWith("still works", { deliverAs: "steer" });
 	});

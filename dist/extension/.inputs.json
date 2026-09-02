@@ -72,6 +72,7 @@
     "src/native-task-config.ts",
     "src/native-task-params.ts",
     "src/native-task-tool.ts",
+    "src/private-artifact.ts",
     "src/question-tool.ts",
     "src/render-diagnostics.ts",
     "src/session-cache.ts",
@@ -129,6 +130,6 @@
     "src/working-indicator.ts",
     "tsconfig.json"
   ],
-  "hash": "625df40287d01547d61cc7ff46f8307dce37b6ba59d5735098b751ac6557329e",
-  "outputsHash": "95ce5d20852dce5dbc762bd382a6f3e978a8b39e558c524afbebd6cf572440ab"
+  "hash": "d5990b2627176dd3858bba0d443bcedef85371493201dd824d765b142fbc4e7f",
+  "outputsHash": "76ca4d070416c09ce45d3325a1defc3a63909b903a1a2520dce892cc70c4463c"
 }

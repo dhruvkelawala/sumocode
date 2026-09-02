@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildVisibleTaskPaths } from "../background-tasks/visible-spawn.js";
 import type { TerminalHost } from "../terminal-host/types.js";
+import { type PrivateArtifactStat } from "../private-artifact.js";
 import { createPaneChildSpawner } from "./backend-pane.js";
 import type { SubagentEvent } from "./domain.js";
 
@@ -9,13 +10,60 @@ class FakeFs {
 	/** Recorded creation modes so permission expectations are assertable. */
 	readonly dirModes = new Map<string, number | undefined>();
 	readonly fileModes = new Map<string, number | undefined>();
+	readonly dirs = new Set<string>();
+	/** Adversarial fixture: paths whose lstat reports a symlink instead of a regular file. */
+	readonly symlinks = new Set<string>();
+	/** Adversarial fixture: paths whose lstat reports a widened (group/other) mode. */
+	readonly widenedModes = new Set<string>();
+	/** Adversarial fixture: paths whose lstat reports foreign ownership. */
+	readonly foreignUids = new Set<string>();
 
 	existsSync(path: string): boolean {
-		return this.files.has(path);
+		return this.files.has(path) || this.dirs.has(path) || this.symlinks.has(path);
 	}
 
-	mkdirSync(path?: string, options?: { recursive: true; mode?: number }): void {
-		if (path !== undefined) this.dirModes.set(path, options?.mode);
+	lstatSync(path: string): PrivateArtifactStat {
+		// SAFETY: the returned literals satisfy the PrivateArtifactStat subset the validators consume.
+		if (this.symlinks.has(path)) {
+			return { isFile: () => false, isDirectory: () => false, mode: 0o777, uid: process.getuid?.() ?? 0 };
+		}
+		if (this.dirs.has(path)) {
+			const mode = this.dirModes.get(path) ?? 0o700;
+			const uid = this.foreignUids.has(path) ? (process.getuid?.() ?? 0) + 1 : (process.getuid?.() ?? 0);
+			return { isFile: () => false, isDirectory: () => true, mode, uid };
+		}
+		if (this.files.has(path)) {
+			const mode = this.widenedModes.has(path) ? 0o644 : (this.fileModes.get(path) ?? 0o600);
+			return { isFile: () => true, isDirectory: () => false, mode, uid: process.getuid?.() ?? 0 };
+		}
+		// SAFETY: Node reports lstat ENOENT as an ErrnoException; the double reproduces that shape for isEnoent.
+		const error = new Error(`ENOENT: no such file or directory, lstat '${path}'`) as Error & { code?: string };
+		error.code = "ENOENT";
+		throw error;
+	}
+
+	chmodSync(path: string, mode: number): void {
+		// chmod follows symlinks in node; the production code only chmods
+		// entries it has already lstat-validated as real directories.
+		if (!this.dirs.has(path) && !this.files.has(path)) {
+			throw new Error(`ENOENT: no such file or directory, chmod '${path}'`);
+		}
+		this.dirModes.set(path, mode);
+	}
+
+	mkdirSync(path?: string, options?: { recursive?: boolean; mode?: number }): void {
+		if (path === undefined) return;
+		if (!options?.recursive && (this.dirs.has(path) || this.files.has(path))) {
+			// SAFETY: Node reports mkdir EEXIST as an ErrnoException; the double reproduces that shape for isEexist.
+			const error = new Error(`EEXIST: file already exists, mkdir '${path}'`) as Error & { code?: string };
+			error.code = "EEXIST";
+			throw error;
+		}
+		// A real recursive mkdir creates missing components with the given mode
+		// but never re-modes an existing directory — record only the first mode.
+		const created = !this.dirs.has(path);
+		this.dirs.add(path);
+		if (created) this.dirModes.set(path, options?.mode);
 	}
 
 	readFileSync(path: string): string {
@@ -34,7 +82,13 @@ class FakeFs {
 		this.fileModes.delete(source);
 	}
 
-	writeFileSync(path: string, contents: string, options?: { mode?: number }): void {
+	writeFileSync(path: string, contents: string, options?: { mode?: number; flag?: string }): void {
+		if (options?.flag === "wx" && (this.files.has(path) || this.dirs.has(path) || this.symlinks.has(path))) {
+			// SAFETY: Node reports open EEXIST as an ErrnoException; the double reproduces that shape for isEexist.
+			const error = new Error(`EEXIST: file already exists, open '${path}'`) as Error & { code?: string };
+			error.code = "EEXIST";
+			throw error;
+		}
 		this.files.set(path, contents);
 		this.fileModes.set(path, options?.mode);
 	}
@@ -115,6 +169,10 @@ describe("pane subagent backend", () => {
 			expect(script).toContain("2>> '/tmp/subagents/sa-1-1234/output.log'");
 			// The private script guarantees the exit marker on any process death.
 			expect(script).toMatch(/trap '__sumo_finish "\$\?"' EXIT.*trap '__sumo_finish 129' HUP/s);
+			// Owner-only marker creation is scoped to the guard subshell: the
+			// agent process keeps the user's umask.
+			expect(script).toContain("( umask 077; set -C; printf");
+			expect(script).not.toMatch(/^umask 077$/m);
 			harness.fs.files.set(harness.paths.responseFile, "final answer\n");
 			harness.fs.files.set(harness.paths.exitFile, "0\n");
 
@@ -247,10 +305,134 @@ describe("pane subagent backend", () => {
 		}
 	});
 
+	it("self-heals a widened task root left by an older build", () => {
+		const fs = new FakeFs();
+		// Simulate a pre-existing, group-accessible root (recursive mkdir from an
+		// older build never re-modes an existing directory).
+		fs.mkdirSync("/tmp/subagents", { recursive: true, mode: 0o755 });
+		const spawn = createPaneChildSpawner({ fs, now: () => 1234, baseDir: "/tmp/subagents" });
+		// SAFETY: the spawn fails on allocation before any host/pi member is touched, so empty doubles suffice.
+		expect(() => spawn({ prompt: "p", name: "worker", cwd: "/repo", id: "sa-1", host: {} as never, pi: { exec: vi.fn() } as never, placement: { kind: "tab", tabId: "t", direction: "right" } })).not.toThrow();
+		expect(fs.dirModes.get("/tmp/subagents")).toBe(0o700);
+	});
+
+	it("never chmods a foreign-owned task root, even with filesystem capability", () => {
+		const fs = new FakeFs();
+		fs.mkdirSync("/tmp/subagents", { recursive: true, mode: 0o755 });
+		fs.foreignUids.add("/tmp/subagents");
+		const spawn = createPaneChildSpawner({ fs, now: () => 1234, baseDir: "/tmp/subagents" });
+		// SAFETY: the spawn must fail on allocation before any host/pi member is touched, so empty doubles suffice.
+		expect(() => spawn({ prompt: "p", name: "worker", cwd: "/repo", id: "sa-1", host: {} as never, pi: { exec: vi.fn() } as never, placement: { kind: "tab", tabId: "t", direction: "right" } })).toThrow(/task root directory/);
+		// Ownership is checked before chmod: a foreign dir must never be re-moded.
+		expect(fs.dirModes.get("/tmp/subagents")).toBe(0o755);
+	});
+
+	it("fails closed when the task root is a symlinked directory", () => {
+		const fs = new FakeFs();
+		// SAFETY: the spawn fails on allocation before any host/pi member is touched, so empty doubles suffice.
+		const spawn = createPaneChildSpawner({ fs, now: () => 1234, baseDir: "/tmp/subagents" });
+		fs.dirs.add("/tmp/subagents");
+		fs.symlinks.add("/tmp/subagents");
+		// SAFETY: the spawn must fail on allocation before any host/pi member is touched, so empty doubles suffice.
+		expect(() => spawn({ prompt: "p", name: "worker", cwd: "/repo", id: "sa-1", host: {} as never, pi: { exec: vi.fn() } as never, placement: { kind: "tab", tabId: "t", direction: "right" } })).toThrow(/task root directory is not a directory/);
+	});
+
+	it("fails closed when the predicted task directory already exists", () => {
+		const fs = new FakeFs();
+		fs.dirs.add("/tmp/subagents/sa-1-1234");
+		const spawn = createPaneChildSpawner({ fs, now: () => 1234, baseDir: "/tmp/subagents" });
+		// SAFETY: the spawn must fail on allocation before any host/pi member is touched, so empty doubles suffice.
+		expect(() => spawn({ prompt: "p", name: "worker", cwd: "/repo", id: "sa-1", host: {} as never, pi: { exec: vi.fn() } as never, placement: { kind: "tab", tabId: "t", direction: "right" } })).toThrow(/refusing to reuse/);
+		// Nothing was written into the pre-existing directory.
+		expect([...fs.files.keys()].filter((path) => path.startsWith("/tmp/subagents/sa-1-1234"))).toEqual([]);
+	});
+
+	it("exclusive creates never overwrite an existing steer temp file", async () => {
+		vi.useFakeTimers();
+		try {
+			const harness = createHarness();
+			await flushPromises();
+			const tmpPath = `${harness.paths.controlDir}/steer-1.txt.tmp`;
+			harness.fs.files.set(tmpPath, "planted");
+			// The exclusive create throws before publication: the planted temp is
+			// left byte-for-byte intact.
+			expect(() => harness.child.send!("replacement")).toThrow(/EEXIST/);
+			expect(harness.fs.files.get(tmpPath)).toBe("planted");
+			expect(harness.fs.files.has(`${harness.paths.controlDir}/steer-1.txt`)).toBe(false);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("settles failed when the exit marker is replaced by a symlink", async () => {
+		vi.useFakeTimers();
+		try {
+			const harness = createHarness();
+			await flushPromises();
+			harness.fs.symlinks.add(harness.paths.exitFile);
+			await vi.advanceTimersByTimeAsync(750);
+			const settled = settledEvents(harness.events);
+			expect(settled).toHaveLength(1);
+			// lstat (not existsSync) detects the replacement: a dangling symlink
+			// must settle failed, not read as "not yet written" and pin the child.
+			expect(settled[0].outcome).toMatchObject({ kind: "failed", errorText: expect.stringContaining("non-regular entry") });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("completes with an empty response when the child wrote no response artifact", async () => {
+		vi.useFakeTimers();
+		try {
+			const harness = createHarness();
+			await flushPromises();
+			// Exit 0 with no response.md is a legitimate empty completion.
+			harness.fs.files.set(harness.paths.exitFile, "0");
+			await vi.advanceTimersByTimeAsync(750);
+			expect(settledEvents(harness.events)).toEqual([
+				{ kind: "run-settled", outcome: { kind: "completed", finalText: "" } },
+			]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("settles failed when a completed child's response artifact was replaced", async () => {
+		vi.useFakeTimers();
+		try {
+			const harness = createHarness();
+			await flushPromises();
+			harness.fs.symlinks.add(harness.paths.responseFile);
+			harness.fs.files.set(harness.paths.exitFile, "0");
+			await vi.advanceTimersByTimeAsync(750);
+			// A missing response is a legitimate empty completion, but a replaced
+			// response artifact must not surface as a normal result.
+			expect(settledEvents(harness.events)).toEqual([
+				{ kind: "run-settled", outcome: { kind: "failed", errorText: expect.stringContaining("response artifact refused") } },
+			]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("refuses to harvest from a widened exit marker", async () => {
+		vi.useFakeTimers();
+		try {
+			const harness = createHarness();
+			await flushPromises();
+			harness.fs.widenedModes.add(harness.paths.exitFile);
+			harness.fs.files.set(harness.paths.exitFile, "0");
+			await vi.advanceTimersByTimeAsync(750);
+			expect(settledEvents(harness.events)[0].outcome.kind).toBe("failed");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("exit guard writes the marker when the wrapper dies before sumocode does (real bash)", async () => {
 		const { execFile } = await import("node:child_process");
 		const { promisify } = await import("node:util");
-		const { mkdtempSync, existsSync: realExists, readFileSync: realRead, rmSync } = await import("node:fs");
+		const { mkdtempSync, mkdirSync: realMkdirSync, existsSync: realExists, lstatSync: realLstatSync, readFileSync: realRead, rmSync } = await import("node:fs");
 		const { tmpdir } = await import("node:os");
 		const { dirname, join: joinPath } = await import("node:path");
 		const run = promisify(execFile);
@@ -290,6 +472,45 @@ describe("pane subagent backend", () => {
 			const exitFile = joinPath(dirname(scriptFile), "exit.code");
 			expect(realExists(exitFile)).toBe(true);
 			expect(realRead(exitFile, "utf8")).toBe("1");
+			// A dangling symlink planted at the marker path must not be followed:
+			// noclobber refuses the exclusive create and nothing lands outside.
+			const second = mkdtempSync(joinPath(tmpdir(), "sumo-exit-guard-nofollow-"));
+			const { spawnPaneChild: spawnAgain } = await import("./backend-pane.js");
+			const { symlinkSync: realSymlink, rmSync: realRm } = await import("node:fs");
+			const escapeTarget = joinPath(second, "outside", "exit.code");
+			realMkdirSync(joinPath(second, "outside"), { recursive: true });
+			try {
+				// SAFETY: the double covers every TerminalHost member this flow touches.
+				const child2 = spawnAgain({
+					id: "sa-guard-nofollow",
+					prompt: "irrelevant",
+					cwd: joinPath(second, "missing-checkout"),
+					signal: controller.signal,
+					title: "guard-nofollow",
+					placement: { kind: "tab", tabId: "w1:t1", direction: "right" },
+					// SAFETY: pi.exec is the only member the pane backend uses on this object.
+					pi: { exec: vi.fn() } as never,
+					host,
+				} as never);
+				if (!(Symbol.asyncIterator in child2.events)) child2.events(() => {});
+				else throw new Error("pane backend must use callback events");
+				await flushPromises();
+				// SAFETY: startAgentPane records a StartAgentPaneOptions object as its second argument.
+				const started2 = (host.startAgentPane as ReturnType<typeof vi.fn>).mock.calls[1]?.[1] as { shellCommand: string };
+				const script2 = [...(started2.shellCommand.match(/^exec '([^']+)'$/) ?? [])][1]!;
+				const exit2 = joinPath(dirname(script2), "exit.code");
+				realSymlink(escapeTarget, exit2);
+				await run("bash", ["-c", started2.shellCommand]).catch(() => {});
+				expect(realExists(escapeTarget)).toBe(false);
+				expect(realLstatSync(exit2).isSymbolicLink()).toBe(true);
+				child2.interrupt();
+			} finally {
+				realRm(second, { recursive: true, force: true });
+			}
+			// The guard subshell wrote the marker owner-only; the rest of the
+			// script (and the agent it launches) keeps the ambient umask.
+			const { statSync: realStat } = await import("node:fs");
+			expect(realStat(exitFile).mode & 0o777).toBe(0o600);
 			child.interrupt();
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
@@ -563,6 +784,24 @@ describe("pane subagent steering and close", () => {
 
 	it("requestClose writes the close.request control file", () => {
 		const harness = createHarness();
+		harness.child.requestClose?.();
+		expect(harness.fs.files.get(`${harness.paths.controlDir}/close.request`)).toBe("1");
+		harness.child.interrupt();
+	});
+
+	it("propagates a planted close control instead of treating it as a repeat", () => {
+		const harness = createHarness();
+		harness.fs.symlinks.add(`${harness.paths.controlDir}/close.request`);
+		// A symlinked close.request raises EEXIST like a repeat, but it is not a
+		// published control: the error must propagate so the manager surfaces the
+		// refusal instead of reporting close as requested.
+		expect(() => harness.child.requestClose?.()).toThrow(/not a regular file/);
+		harness.child.interrupt();
+	});
+
+	it("requestClose is idempotent and never overwrites a published control", () => {
+		const harness = createHarness();
+		harness.child.requestClose?.();
 		harness.child.requestClose?.();
 		expect(harness.fs.files.get(`${harness.paths.controlDir}/close.request`)).toBe("1");
 		harness.child.interrupt();

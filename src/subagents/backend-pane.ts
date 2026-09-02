@@ -1,23 +1,35 @@
 import {
+	chmodSync,
 	existsSync,
 	mkdirSync,
 	readFileSync,
 	renameSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
-import {
-	buildVisibleAgentCommand,
-	buildVisibleTaskPaths,
-	readExitCodeFromFile,
-	shellEscape,
-} from "../background-tasks/visible-spawn.js";
+import { join, resolve } from "node:path";
 import type {
 	AgentPanePlacement,
 	PaneRef,
 	PiExecLike,
 	TerminalHost,
 } from "../terminal-host/types.js";
+import {
+	buildVisibleAgentCommand,
+	readExitCodeFromFile,
+	shellEscape,
+	visibleTaskPathsInDir,
+} from "../background-tasks/visible-spawn.js";
+import {
+	assertPrivateArtifact,
+	assertPrivateDir,
+	isErrnoCode,
+	isOwnedByUs,
+	type PrivateArtifactFs,
+	nodeArtifactFs,
+	validatedArtifactStat,
+	PRIVATE_DIR_MODE,
+	PRIVATE_FILE_MODE,
+} from "../private-artifact.js";
 import type { SpawnedChild } from "./backend-pi.js";
 import type { SubagentEvent } from "./domain.js";
 
@@ -28,17 +40,16 @@ const SEND_ACK_POLL_MS = 250;
 // A tight budget reports an ambiguous pending control as a failure.
 const SEND_ACK_TIMEOUT_MS = 30_000;
 /** Task and control dirs hold prompt/steer text; keep them owner-only. */
-const PRIVATE_DIR_MODE = 0o700;
-const PRIVATE_FILE_MODE = 0o600;
 const CLOSE_REQUEST_FILE = "close.request";
 const ERROR_TEXT_MAX = 4096;
 
-interface PaneBackendFs {
+interface PaneBackendFs extends PrivateArtifactFs {
 	existsSync(path: string): boolean;
-	mkdirSync(path: string, options: { recursive: true; mode?: number }): void;
+	chmodSync(path: string, mode: number): void;
+	mkdirSync(path: string, options?: { recursive?: boolean; mode?: number }): void;
 	readFileSync(path: string, encoding: "utf8"): string;
 	renameSync(source: string, target: string): void;
-	writeFileSync(path: string, contents: string, options?: { mode?: number }): void;
+	writeFileSync(path: string, contents: string, options?: { mode?: number; flag?: string }): void;
 }
 
 export interface PaneChildOptions {
@@ -68,7 +79,9 @@ export interface PaneBackendDependencies {
 }
 
 const nodeFs: PaneBackendFs = {
+	...nodeArtifactFs,
 	existsSync,
+	chmodSync: chmodSync,
 	mkdirSync,
 	readFileSync,
 	renameSync,
@@ -77,27 +90,72 @@ const nodeFs: PaneBackendFs = {
 
 const errorText = <T>(error: T): string => error instanceof Error ? error.message : String(error);
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- boundary predicate: fs rejections arrive as `unknown` from catch clauses; isErrnoCode is the sanctioned parse before the errno check.
+const isEexist = (error: unknown): boolean => isErrnoCode(error, "EEXIST");
+
+/** Exclusive, no-follow creation for a new owner-only artifact. */
+const writeNewPrivateFile = (fs: PaneBackendFs, path: string, contents: string): void => {
+	fs.writeFileSync(path, contents, { mode: PRIVATE_FILE_MODE, flag: "wx" });
+};
+
+/**
+ * Allocate this child's private task directory and return its canonical
+ * spelling. Creation is exclusive, so a pre-existing entry at the predicted
+ * `id-timestamp` path — including an adversarial symlink — fails closed
+ * instead of sharing or redirecting the task directory.
+ */
+const allocatePrivateTaskDir = (fs: PaneBackendFs, root: string, name: string): string => {
+	const dir = resolve(join(root, name));
+	fs.mkdirSync(root, { recursive: true, mode: PRIVATE_DIR_MODE });
+	// Older builds could leave the shared root at a wider mode (recursive mkdir
+	// never re-modes an existing directory). Tighten an owned real directory so
+	// the upgrade does not brick every spawn; symlinked or foreign roots are
+	// left untouched and still fail closed in the validation below. Ownership is
+	// checked first: running as root must never chmod another user's directory.
+	const rootStat = fs.lstatSync(root);
+	if (rootStat.isDirectory() && isOwnedByUs(rootStat)) {
+		fs.chmodSync(root, PRIVATE_DIR_MODE);
+	}
+	assertPrivateDir(fs, root, "visible-subagent task root directory");
+	try {
+		fs.mkdirSync(dir, { mode: PRIVATE_DIR_MODE });
+	} catch (error) {
+		if (isEexist(error)) {
+			throw new Error(`refusing to reuse an existing visible-subagent task directory: ${dir}`);
+		}
+		throw error;
+	}
+	assertPrivateDir(fs, dir, "visible-subagent task directory");
+	return dir;
+};
+
 export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {}) => (options: PaneChildOptions): SpawnedChild => {
 	const fs = dependencies.fs ?? nodeFs;
 	const now = dependencies.now ?? Date.now;
-	const baseDir = dependencies.baseDir ?? join(process.env.TMPDIR ?? "/tmp", "sumocode-subagents");
-	const paths = buildVisibleTaskPaths(options.id, now(), baseDir);
+	const baseDir = resolve(dependencies.baseDir ?? join(process.env.TMPDIR ?? "/tmp", "sumocode-subagents"));
+	// Owner-only allocation with an exclusive create: the task dir carries the
+	// prompt and every steering message, and a pre-existing or symlinked path
+	// must fail closed rather than be reused.
+	const taskDir = allocatePrivateTaskDir(fs, baseDir, `${options.id}-${now()}`);
+	const paths = visibleTaskPathsInDir(taskDir);
 	// Owner-only: these directories carry the prompt and every steering message,
 	// which routinely contain source snippets. Default /tmp modes (0755) would
 	// expose them to other local users, and a timed-out send deliberately leaves
 	// its steer file behind.
-	fs.mkdirSync(dirname(paths.promptFile), { recursive: true, mode: PRIVATE_DIR_MODE });
+	fs.mkdirSync(paths.controlDir, { recursive: true, mode: PRIVATE_DIR_MODE });
+	assertPrivateDir(fs, paths.controlDir, "visible-subagent control directory");
 	// The control dir is the steering/close channel shared with the child's
 	// task-mode watcher; it must exist before the orchestrator writes to it.
-	fs.mkdirSync(paths.controlDir, { recursive: true, mode: PRIVATE_DIR_MODE });
 	// Headless children receive a true appended system prompt. The visible task
 	// wrapper has no equivalent flag yet, so preserve the role contract as a
 	// prompt-file preamble until that wrapper seam is added.
 	const prompt = options.appendSystemPrompt
 		? `role instructions (follow these for this entire session):\n${options.appendSystemPrompt}\n---\n${options.prompt}`
 		: options.prompt;
-	fs.writeFileSync(paths.promptFile, prompt, { mode: 0o600 });
-	fs.writeFileSync(paths.logFile, "");
+	// Exclusive, no-follow creation (`wx`): an entry planted at an artifact path
+	// fails closed instead of being followed or clobbered.
+	writeNewPrivateFile(fs, paths.promptFile, prompt);
+	writeNewPrivateFile(fs, paths.logFile, "");
 	const commandOptions = {
 		cwd: options.cwd,
 		paths,
@@ -124,7 +182,11 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	// here: it is legitimately running and subagent_cancel owns that decision.
 	const exitGuard = [
 		`__sumo_exit_file=${shellEscape(paths.exitFile)}`,
-		`__sumo_finish() { [ -f "$__sumo_exit_file" ] || printf '%s' "$1" > "$__sumo_exit_file"; }`,
+		// The marker subshell writes owner-only so the parent's private-artifact
+		// validation accepts it; the agent process itself keeps the user's umask.
+		// noclobber makes the redirection exclusive (O_EXCL), so a dangling
+		// symlink planted at the marker path is never followed.
+		`__sumo_finish() { [ -f "$__sumo_exit_file" ] || ( umask 077; set -C; printf '%s' "$1" > "$__sumo_exit_file" ) 2> /dev/null || :; }`,
 		`trap '__sumo_finish "$?"' EXIT`,
 		`trap '__sumo_finish 129' HUP`,
 		`trap '__sumo_finish 143' TERM`,
@@ -139,7 +201,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		exitGuard,
 		`( ${agentCommand} ) 2>> ${shellEscape(paths.logFile)}`,
 	].join("\n");
-	fs.writeFileSync(paths.scriptFile, script, { mode: 0o700 });
+	fs.writeFileSync(paths.scriptFile, script, { mode: 0o700, flag: "wx" });
 	const shellCommand = `exec ${shellEscape(paths.scriptFile)}`;
 
 	let emitEvent: ((event: SubagentEvent) => void) | undefined;
@@ -196,17 +258,37 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		emitEvent?.(event);
 	};
 
-	const readText = (path: string): string => {
+	const readText = (path: string, label: string): string => {
 		try {
-			return fs.existsSync(path) ? fs.readFileSync(path, "utf8") : "";
+			if (!fs.existsSync(path)) return "";
+			// Child-produced evidence (exit marker, response, log) is only trusted
+			// when it is still a private regular artifact of this task dir; a
+			// replaced or redirected path fails closed into the error marker below.
+			assertPrivateArtifact(fs, path, taskDir, label);
+			return fs.readFileSync(path, "utf8");
 		} catch (error) {
 			return `[unable to read ${path}: ${errorText(error)}]`;
 		}
 	};
 
 	const poll = (): void => {
-		if (settled || interrupted || !fs.existsSync(paths.exitFile)) return;
-		const marker = readText(paths.exitFile);
+		if (settled || interrupted) return;
+		// lstat, not existsSync: existsSync follows symlinks, so a dangling
+		// symlink swapped in for the exit marker would read as "not yet written"
+		// and pin the child running forever. A non-regular entry is tamper and
+		// settles failed; a truly absent entry is the normal not-ready state.
+		let exitStat: ReturnType<PaneBackendFs["lstatSync"]> | undefined;
+		try {
+			exitStat = fs.lstatSync(paths.exitFile);
+		} catch {
+			exitStat = undefined;
+		}
+		if (!exitStat) return;
+		if (!exitStat.isFile()) {
+			settle({ kind: "run-settled", outcome: { kind: "failed", errorText: "visible child exit marker replaced by a non-regular entry" } });
+			return;
+		}
+		const marker = readText(paths.exitFile, "exit marker");
 		// The producer opens with truncate-before-write. An observed empty file is
 		// a transient not-ready state, not evidence of a failed child.
 		if (!marker.trim()) return;
@@ -216,16 +298,33 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 			return;
 		}
 		if (exitCode === 0) {
-			settle({ kind: "run-settled", outcome: { kind: "completed", finalText: readText(paths.responseFile) } });
+			// An absent response is a legitimate empty completion; a replaced
+			// (non-private) response artifact must not pass as a normal result.
+			try {
+				const stat = validatedArtifactStat(fs, paths.responseFile, taskDir, "visible-subagent response artifact");
+				const finalText = stat ? fs.readFileSync(paths.responseFile, "utf8") : "";
+				settle({ kind: "run-settled", outcome: { kind: "completed", finalText } });
+			} catch (error) {
+				settle({ kind: "run-settled", outcome: { kind: "failed", errorText: `visible-subagent response artifact refused: ${errorText(error)}` } });
+			}
 			return;
 		}
-		const logTail = readText(paths.logFile).slice(-ERROR_TEXT_MAX).trim();
+		const logTail = readText(paths.logFile, "output log").slice(-ERROR_TEXT_MAX).trim();
+		// A replaced response artifact is not the child's partial answer: only a
+		// still-private response is surfaced as partial text.
+		let partialText: string | undefined;
+		try {
+			const stat = validatedArtifactStat(fs, paths.responseFile, taskDir, "visible-subagent response artifact");
+			partialText = stat ? fs.readFileSync(paths.responseFile, "utf8") || undefined : undefined;
+		} catch {
+			partialText = undefined;
+		}
 		settle({
 			kind: "run-settled",
 			outcome: {
 				kind: "failed",
 				errorText: logTail || `visible child exited with code ${exitCode}`,
-				partialText: readText(paths.responseFile) || undefined,
+				partialText,
 			},
 		});
 	};
@@ -269,8 +368,9 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		const seq = ++steerSeq;
 		const finalPath = join(paths.controlDir, `steer-${seq}.txt`);
 		// 0600 on the temp file: rename preserves the mode, so the published file
-		// is never briefly world-readable.
-		fs.writeFileSync(`${finalPath}.tmp`, text, { mode: PRIVATE_FILE_MODE });
+		// is never briefly world-readable. Exclusive create keeps a planted entry
+		// from being followed or overwritten.
+		writeNewPrivateFile(fs, `${finalPath}.tmp`, text);
 		fs.renameSync(`${finalPath}.tmp`, finalPath);
 		const ackPollMs = dependencies.sendAckPollMs ?? SEND_ACK_POLL_MS;
 		const ackTimeoutMs = dependencies.sendAckTimeoutMs ?? SEND_ACK_TIMEOUT_MS;
@@ -287,7 +387,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 				// on the fallback branch would then never fire and the waiter would
 				// hang past its acknowledgement timeout.
 				elapsed += ackPollMs;
-				if (fs.existsSync(paths.exitFile) && readText(paths.exitFile).trim()) {
+				if (fs.existsSync(paths.exitFile) && readText(paths.exitFile, "exit marker").trim()) {
 					// Reuse the normal settlement path so every concurrent waiter and the
 					// response watcher are cleaned up exactly once.
 					poll();
@@ -308,7 +408,17 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 
 	/** Ask the child's task-mode watcher to persist its response and exit. */
 	const requestClose = (): void => {
-		fs.writeFileSync(join(paths.controlDir, CLOSE_REQUEST_FILE), "1", { mode: PRIVATE_FILE_MODE });
+		try {
+			writeNewPrivateFile(fs, join(paths.controlDir, CLOSE_REQUEST_FILE), "1");
+		} catch (error) {
+			// A repeat close request for an unconsumed control is idempotent, not an
+			// error: the request is already published. A planted entry raising the
+			// same EEXIST is not: it must still pass the private-artifact check or
+			// the error propagates (the manager surfaces it per id) instead of the
+			// close being reported as requested through an untrusted path.
+			if (!isEexist(error)) throw error;
+			assertPrivateArtifact(fs, join(paths.controlDir, CLOSE_REQUEST_FILE), paths.controlDir, "close control");
+		}
 	};
 
 	const events = (emit: (event: SubagentEvent) => void): void => {

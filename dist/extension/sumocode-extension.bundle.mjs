@@ -1,7 +1,7 @@
 // src/extension.ts
 import { existsSync as existsSync14, readFileSync as readFileSync18, realpathSync as realpathSync5 } from "node:fs";
 import { homedir as homedir16 } from "node:os";
-import { dirname as dirname14, join as join22, resolve as resolve9, sep } from "node:path";
+import { dirname as dirname15, join as join22, resolve as resolve10, sep } from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 
 // src/cathedral/input-hints.ts
@@ -918,10 +918,10 @@ function refreshGitBranchAsync(ctx, runGit = defaultAsyncGitRunner) {
   });
 }
 function defaultAsyncGitRunner(args, cwd) {
-  return new Promise((resolve10, reject) => {
+  return new Promise((resolve11, reject) => {
     execFile("git", args, { cwd, encoding: "utf8" }, (error, stdout) => {
       if (error) reject(error);
-      else resolve10(stdout);
+      else resolve11(stdout);
     });
   });
 }
@@ -3965,7 +3965,7 @@ var runSingleTask = async (options) => {
   }
   try {
     const args = [...applyForkSessionArgs(options.subprocessArgs, forkSession), options.subprocessPrompt];
-    const exitCode = await new Promise((resolve10) => {
+    const exitCode = await new Promise((resolve11) => {
       const proc = options.spawnImpl("pi", args, {
         cwd: options.defaultCwd,
         shell: false,
@@ -4055,7 +4055,7 @@ var runSingleTask = async (options) => {
         currentResult.stderr = stderr.toString();
         if (abortState.isAborted()) currentResult.stopReason = "aborted";
         cleanup();
-        resolve10(code);
+        resolve11(code);
       };
       proc.stdout.on("data", onStdout);
       proc.stderr.on("data", onStderr);
@@ -5623,7 +5623,7 @@ import { writeFileSync as writeFileSync2 } from "node:fs";
 var SUMOCODE_RELOAD_EXIT_CODE = 100;
 var FLUSH_DELAY_MS = 60;
 function defaultDelay(ms) {
-  return new Promise((resolve10) => setTimeout(resolve10, ms));
+  return new Promise((resolve11) => setTimeout(resolve11, ms));
 }
 async function executeSumoReload(ctx, deps = {}) {
   const env = deps.env ?? process.env;
@@ -6722,7 +6722,7 @@ async function paneForTab(pi, tabId) {
     if (!listed.ok) return listed;
     const pane = listed.panes.find((candidate) => candidate.tab_id === tabId);
     if (pane?.pane_id) return { ok: true, pane };
-    if (attempt < 3) await new Promise((resolve10) => setTimeout(resolve10, 25));
+    if (attempt < 3) await new Promise((resolve11) => setTimeout(resolve11, 25));
   }
   return { ok: false, error: `herdr returned no pane for tab ${tabId}` };
 }
@@ -9570,8 +9570,8 @@ var CancellableWorkerRuntime = class {
     const controller = new AbortController();
     let handle;
     let resolveResult;
-    const result = new Promise((resolve10) => {
-      resolveResult = resolve10;
+    const result = new Promise((resolve11) => {
+      resolveResult = resolve11;
     });
     const isCurrent = () => !options.exclusiveGroup || this.exclusiveWorkers.get(options.exclusiveGroup) === handle;
     handle = {
@@ -10700,8 +10700,8 @@ var CompactionStatusComponent = class {
   markComplete() {
     this.completed = true;
     this.tui.requestRender();
-    return new Promise((resolve10) => {
-      const t = setTimeout(resolve10, COMPLETE_HOLD_MS);
+    return new Promise((resolve11) => {
+      const t = setTimeout(resolve11, COMPLETE_HOLD_MS);
       t.unref?.();
     });
   }
@@ -10908,14 +10908,14 @@ var executeWindowsTaskkill = (args, callback) => {
   execFile4("taskkill.exe", [...args], (error) => callback(error));
 };
 function runWindowsTaskkill(pid, force, execute = executeWindowsTaskkill) {
-  return new Promise((resolve10) => {
+  return new Promise((resolve11) => {
     const args = ["/PID", String(pid), "/T", ...force ? ["/F"] : []];
     execute(args, (error) => {
       if (!error) {
-        resolve10({ ok: true, gone: true });
+        resolve11({ ok: true, gone: true });
         return;
       }
-      resolve10({ ok: false, gone: false, forceRequired: !force, error: error.message });
+      resolve11({ ok: false, gone: false, forceRequired: !force, error: error.message });
     });
   });
 }
@@ -10991,19 +10991,19 @@ var systemProcessTree = {
   },
   signalFreshTree: rawSystemSignal,
   waitForTreeEmpty(identity, timeoutMs, verification) {
-    return new Promise((resolve10) => {
+    return new Promise((resolve11) => {
       if (this.isTreeEmpty(identity, verification)) {
-        resolve10(true);
+        resolve11(true);
         return;
       }
       const deadline = Date.now() + Math.max(0, timeoutMs);
       const poll = () => {
         if (this.isTreeEmpty(identity, verification)) {
-          resolve10(true);
+          resolve11(true);
           return;
         }
         if (Date.now() >= deadline) {
-          resolve10(false);
+          resolve11(false);
           return;
         }
         const timer = setTimeout(poll, 25);
@@ -12390,10 +12390,9 @@ var TerminalTaskStore = class {
 
 // src/background-tasks/visible-spawn.ts
 import { dirname as dirname7, join as join13 } from "node:path";
-function buildVisibleTaskPaths(taskId, startedAtMs, baseDir) {
-  const root = baseDir ?? join13(process.env.TMPDIR ?? "/tmp", "sumocode-bg");
-  const dir = join13(root, `${taskId}-${startedAtMs}`);
+function visibleTaskPathsInDir(dir) {
   return {
+    dir,
     logFile: join13(dir, "output.log"),
     exitFile: join13(dir, "exit.code"),
     markerFile: join13(dir, "started.marker"),
@@ -12404,6 +12403,10 @@ function buildVisibleTaskPaths(taskId, startedAtMs, baseDir) {
     diagFile: join13(dir, "diag.jsonl"),
     controlDir: join13(dir, "control")
   };
+}
+function buildVisibleTaskPaths(taskId, startedAtMs, baseDir) {
+  const root = baseDir ?? join13(process.env.TMPDIR ?? "/tmp", "sumocode-bg");
+  return visibleTaskPathsInDir(join13(root, `${taskId}-${startedAtMs}`));
 }
 function shellEscape2(value) {
   return `'${value.replace(/'/g, `'\\''`)}'`;
@@ -12937,7 +12940,7 @@ ${command}
       return isTerminalTaskSettled(task.status);
     });
     if (!complete2() && timeoutMs > 0) {
-      await new Promise((resolve10, reject) => {
+      await new Promise((resolve11, reject) => {
         let finished = false;
         let timer;
         let unsubscribe = () => {
@@ -12949,7 +12952,7 @@ ${command}
           unsubscribe();
           signal?.removeEventListener("abort", onAbort);
           if (error) reject(error);
-          else resolve10();
+          else resolve11();
         };
         const onAbort = () => finish(abortError());
         unsubscribe = this.addChangeListener(() => {
@@ -15847,41 +15850,118 @@ function renderSubagentStatusRow(options) {
 
 // src/subagents/backend-pane.ts
 import {
+  chmodSync as chmodSync4,
   existsSync as existsSync10,
   mkdirSync as mkdirSync9,
   readFileSync as readFileSync14,
   renameSync as renameSync6,
   writeFileSync as writeFileSync9
 } from "node:fs";
-import { dirname as dirname11, join as join17 } from "node:path";
+import { join as join17, resolve as resolve6 } from "node:path";
+
+// src/private-artifact.ts
+import { lstatSync as lstatSync4 } from "node:fs";
+import { dirname as dirname11 } from "node:path";
+var PRIVATE_DIR_MODE = 448;
+var PRIVATE_FILE_MODE3 = 384;
+var nodeArtifactFs = {
+  lstatSync: (path2) => (
+    // SAFETY: node's Stats satisfies the structural PrivateArtifactStat subset by construction.
+    lstatSync4(path2)
+  )
+};
+var isErrnoCode = (error, code) => typeof error === "object" && error !== null && "code" in error && error.code === code;
+var isOwnedByUs = (stat) => {
+  if (typeof process.getuid !== "function") return true;
+  return stat.uid === process.getuid();
+};
+var isEnoent = (error) => isErrnoCode(error, "ENOENT");
+var isOwnerOnly = (stat) => (stat.mode & 63) === 0;
+var assertPrivateDir = (fs3, path2, label) => {
+  const stat = fs3.lstatSync(path2);
+  if (!stat.isDirectory()) throw new Error(`${label} is not a directory: ${path2}`);
+  if (!isOwnerOnly(stat)) throw new Error(`${label} is not owner-only (mode ${stat.mode.toString(8)}): ${path2}`);
+  if (!isOwnedByUs(stat)) throw new Error(`${label} is not owned by this user: ${path2}`);
+};
+var assertPrivateStat = (stat, path2, label) => {
+  if (!stat.isFile()) throw new Error(`${label} is not a regular file: ${path2}`);
+  if (!isOwnerOnly(stat)) throw new Error(`${label} is not owner-only (mode ${stat.mode.toString(8)}): ${path2}`);
+  if (!isOwnedByUs(stat)) throw new Error(`${label} is not owned by this user: ${path2}`);
+};
+var assertPrivateArtifact = (fs3, path2, parentDir, label) => {
+  assertArtifactInsideDir(path2, parentDir, label);
+  assertPrivateStat(fs3.lstatSync(path2), path2, label);
+};
+var validatedArtifactStat = (fs3, path2, parentDir, label) => {
+  assertArtifactInsideDir(path2, parentDir, label);
+  try {
+    const stat = fs3.lstatSync(path2);
+    assertPrivateStat(stat, path2, label);
+    return stat;
+  } catch (error) {
+    if (isEnoent(error)) return void 0;
+    throw error;
+  }
+};
+var assertArtifactInsideDir = (path2, parentDir, label) => {
+  if (dirname11(path2) !== parentDir) {
+    throw new Error(`${label} is not a direct child of ${parentDir}: ${path2}`);
+  }
+};
+
+// src/subagents/backend-pane.ts
 var RESPONSE_POLL_INTERVAL_MS = 750;
 var SEND_ACK_POLL_MS = 250;
 var SEND_ACK_TIMEOUT_MS = 3e4;
-var PRIVATE_DIR_MODE = 448;
-var PRIVATE_FILE_MODE3 = 384;
 var CLOSE_REQUEST_FILE = "close.request";
 var ERROR_TEXT_MAX = 4096;
 var nodeFs = {
+  ...nodeArtifactFs,
   existsSync: existsSync10,
+  chmodSync: chmodSync4,
   mkdirSync: mkdirSync9,
   readFileSync: readFileSync14,
   renameSync: renameSync6,
   writeFileSync: writeFileSync9
 };
 var errorText2 = (error) => error instanceof Error ? error.message : String(error);
+var isEexist = (error) => isErrnoCode(error, "EEXIST");
+var writeNewPrivateFile = (fs3, path2, contents) => {
+  fs3.writeFileSync(path2, contents, { mode: PRIVATE_FILE_MODE3, flag: "wx" });
+};
+var allocatePrivateTaskDir = (fs3, root, name) => {
+  const dir = resolve6(join17(root, name));
+  fs3.mkdirSync(root, { recursive: true, mode: PRIVATE_DIR_MODE });
+  const rootStat = fs3.lstatSync(root);
+  if (rootStat.isDirectory() && isOwnedByUs(rootStat)) {
+    fs3.chmodSync(root, PRIVATE_DIR_MODE);
+  }
+  assertPrivateDir(fs3, root, "visible-subagent task root directory");
+  try {
+    fs3.mkdirSync(dir, { mode: PRIVATE_DIR_MODE });
+  } catch (error) {
+    if (isEexist(error)) {
+      throw new Error(`refusing to reuse an existing visible-subagent task directory: ${dir}`);
+    }
+    throw error;
+  }
+  assertPrivateDir(fs3, dir, "visible-subagent task directory");
+  return dir;
+};
 var createPaneChildSpawner = (dependencies = {}) => (options) => {
   const fs3 = dependencies.fs ?? nodeFs;
   const now = dependencies.now ?? Date.now;
-  const baseDir = dependencies.baseDir ?? join17(process.env.TMPDIR ?? "/tmp", "sumocode-subagents");
-  const paths = buildVisibleTaskPaths(options.id, now(), baseDir);
-  fs3.mkdirSync(dirname11(paths.promptFile), { recursive: true, mode: PRIVATE_DIR_MODE });
+  const baseDir = resolve6(dependencies.baseDir ?? join17(process.env.TMPDIR ?? "/tmp", "sumocode-subagents"));
+  const taskDir = allocatePrivateTaskDir(fs3, baseDir, `${options.id}-${now()}`);
+  const paths = visibleTaskPathsInDir(taskDir);
   fs3.mkdirSync(paths.controlDir, { recursive: true, mode: PRIVATE_DIR_MODE });
+  assertPrivateDir(fs3, paths.controlDir, "visible-subagent control directory");
   const prompt = options.appendSystemPrompt ? `role instructions (follow these for this entire session):
 ${options.appendSystemPrompt}
 ---
 ${options.prompt}` : options.prompt;
-  fs3.writeFileSync(paths.promptFile, prompt, { mode: 384 });
-  fs3.writeFileSync(paths.logFile, "");
+  writeNewPrivateFile(fs3, paths.promptFile, prompt);
+  writeNewPrivateFile(fs3, paths.logFile, "");
   const commandOptions = {
     cwd: options.cwd,
     paths,
@@ -15892,7 +15972,11 @@ ${options.prompt}` : options.prompt;
   const agentCommand = buildVisibleAgentCommand(commandOptions);
   const exitGuard = [
     `__sumo_exit_file=${shellEscape2(paths.exitFile)}`,
-    `__sumo_finish() { [ -f "$__sumo_exit_file" ] || printf '%s' "$1" > "$__sumo_exit_file"; }`,
+    // The marker subshell writes owner-only so the parent's private-artifact
+    // validation accepts it; the agent process itself keeps the user's umask.
+    // noclobber makes the redirection exclusive (O_EXCL), so a dangling
+    // symlink planted at the marker path is never followed.
+    `__sumo_finish() { [ -f "$__sumo_exit_file" ] || ( umask 077; set -C; printf '%s' "$1" > "$__sumo_exit_file" ) 2> /dev/null || :; }`,
     `trap '__sumo_finish "$?"' EXIT`,
     `trap '__sumo_finish 129' HUP`,
     `trap '__sumo_finish 143' TERM`,
@@ -15904,7 +15988,7 @@ ${options.prompt}` : options.prompt;
     exitGuard,
     `( ${agentCommand} ) 2>> ${shellEscape2(paths.logFile)}`
   ].join("\n");
-  fs3.writeFileSync(paths.scriptFile, script, { mode: 448 });
+  fs3.writeFileSync(paths.scriptFile, script, { mode: 448, flag: "wx" });
   const shellCommand = `exec ${shellEscape2(paths.scriptFile)}`;
   let emitEvent;
   let pane;
@@ -15913,8 +15997,8 @@ ${options.prompt}` : options.prompt;
   let settled = false;
   let steerSeq = 0;
   let markReady = () => void 0;
-  const ready = new Promise((resolve10) => {
-    markReady = resolve10;
+  const ready = new Promise((resolve11) => {
+    markReady = resolve11;
   });
   const pendingSteeringAcks = /* @__PURE__ */ new Map();
   const clearWatcher = () => {
@@ -15946,16 +16030,29 @@ ${options.prompt}` : options.prompt;
     options.signal?.removeEventListener("abort", interrupt);
     emitEvent?.(event);
   };
-  const readText = (path2) => {
+  const readText = (path2, label) => {
     try {
-      return fs3.existsSync(path2) ? fs3.readFileSync(path2, "utf8") : "";
+      if (!fs3.existsSync(path2)) return "";
+      assertPrivateArtifact(fs3, path2, taskDir, label);
+      return fs3.readFileSync(path2, "utf8");
     } catch (error) {
       return `[unable to read ${path2}: ${errorText2(error)}]`;
     }
   };
   const poll = () => {
-    if (settled || interrupted || !fs3.existsSync(paths.exitFile)) return;
-    const marker = readText(paths.exitFile);
+    if (settled || interrupted) return;
+    let exitStat;
+    try {
+      exitStat = fs3.lstatSync(paths.exitFile);
+    } catch {
+      exitStat = void 0;
+    }
+    if (!exitStat) return;
+    if (!exitStat.isFile()) {
+      settle({ kind: "run-settled", outcome: { kind: "failed", errorText: "visible child exit marker replaced by a non-regular entry" } });
+      return;
+    }
+    const marker = readText(paths.exitFile, "exit marker");
     if (!marker.trim()) return;
     const exitCode = readExitCodeFromFile(marker);
     if (exitCode === null) {
@@ -15963,16 +16060,29 @@ ${options.prompt}` : options.prompt;
       return;
     }
     if (exitCode === 0) {
-      settle({ kind: "run-settled", outcome: { kind: "completed", finalText: readText(paths.responseFile) } });
+      try {
+        const stat = validatedArtifactStat(fs3, paths.responseFile, taskDir, "visible-subagent response artifact");
+        const finalText = stat ? fs3.readFileSync(paths.responseFile, "utf8") : "";
+        settle({ kind: "run-settled", outcome: { kind: "completed", finalText } });
+      } catch (error) {
+        settle({ kind: "run-settled", outcome: { kind: "failed", errorText: `visible-subagent response artifact refused: ${errorText2(error)}` } });
+      }
       return;
     }
-    const logTail = readText(paths.logFile).slice(-ERROR_TEXT_MAX).trim();
+    const logTail = readText(paths.logFile, "output log").slice(-ERROR_TEXT_MAX).trim();
+    let partialText;
+    try {
+      const stat = validatedArtifactStat(fs3, paths.responseFile, taskDir, "visible-subagent response artifact");
+      partialText = stat ? fs3.readFileSync(paths.responseFile, "utf8") || void 0 : void 0;
+    } catch {
+      partialText = void 0;
+    }
     settle({
       kind: "run-settled",
       outcome: {
         kind: "failed",
         errorText: logTail || `visible child exited with code ${exitCode}`,
-        partialText: readText(paths.responseFile) || void 0
+        partialText
       }
     });
   };
@@ -16000,11 +16110,11 @@ ${options.prompt}` : options.prompt;
     if (settled || interrupted) return Promise.reject(steeringSettlementError());
     const seq = ++steerSeq;
     const finalPath = join17(paths.controlDir, `steer-${seq}.txt`);
-    fs3.writeFileSync(`${finalPath}.tmp`, text, { mode: PRIVATE_FILE_MODE3 });
+    writeNewPrivateFile(fs3, `${finalPath}.tmp`, text);
     fs3.renameSync(`${finalPath}.tmp`, finalPath);
     const ackPollMs = dependencies.sendAckPollMs ?? SEND_ACK_POLL_MS;
     const ackTimeoutMs = dependencies.sendAckTimeoutMs ?? SEND_ACK_TIMEOUT_MS;
-    return new Promise((resolve10, reject) => {
+    return new Promise((resolve11, reject) => {
       let elapsed2 = 0;
       const ackTimer = setInterval(() => {
         if (!fs3.existsSync(finalPath)) {
@@ -16012,7 +16122,7 @@ ${options.prompt}` : options.prompt;
           return;
         }
         elapsed2 += ackPollMs;
-        if (fs3.existsSync(paths.exitFile) && readText(paths.exitFile).trim()) {
+        if (fs3.existsSync(paths.exitFile) && readText(paths.exitFile, "exit marker").trim()) {
           poll();
         }
         if (elapsed2 >= ackTimeoutMs && pendingSteeringAcks.has(finalPath)) {
@@ -16022,12 +16132,17 @@ ${options.prompt}` : options.prompt;
           );
         }
       }, ackPollMs);
-      pendingSteeringAcks.set(finalPath, { timer: ackTimer, resolve: resolve10, reject });
+      pendingSteeringAcks.set(finalPath, { timer: ackTimer, resolve: resolve11, reject });
       ackTimer.unref?.();
     });
   };
   const requestClose = () => {
-    fs3.writeFileSync(join17(paths.controlDir, CLOSE_REQUEST_FILE), "1", { mode: PRIVATE_FILE_MODE3 });
+    try {
+      writeNewPrivateFile(fs3, join17(paths.controlDir, CLOSE_REQUEST_FILE), "1");
+    } catch (error) {
+      if (!isEexist(error)) throw error;
+      assertPrivateArtifact(fs3, join17(paths.controlDir, CLOSE_REQUEST_FILE), paths.controlDir, "close control");
+    }
   };
   const events = (emit) => {
     emitEvent = emit;
@@ -16081,7 +16196,7 @@ var spawnPaneChild = createPaneChildSpawner();
 import { spawn as nodeSpawn } from "node:child_process";
 import { existsSync as existsSync11, readFileSync as readFileSync15, statSync } from "node:fs";
 import { homedir as homedir14 } from "node:os";
-import { dirname as dirname12, isAbsolute as isAbsolute2, join as join18, resolve as resolve6 } from "node:path";
+import { dirname as dirname12, isAbsolute as isAbsolute2, join as join18, resolve as resolve7 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 
 // src/subagents/pi-child-model-bootstrap.ts
@@ -16146,7 +16261,7 @@ function adapterPackageDirsFromSettings(settingsPath, agentDir) {
       if (gitDir) return [gitDir];
       if (source.startsWith("npm:") || source.startsWith("http")) return [];
       if (source.startsWith("~/")) return [join18(homedir14(), source.slice(2))];
-      return [isAbsolute2(source) ? source : resolve6(dirname12(settingsPath), source)];
+      return [isAbsolute2(source) ? source : resolve7(dirname12(settingsPath), source)];
     });
   } catch {
     return [];
@@ -16417,7 +16532,7 @@ var attachAbortSignal2 = (proc, signal) => {
 function resolvePiBinary(env = process.env) {
   const configured = env.PI_BIN?.trim();
   if (!configured) return "pi";
-  return configured.includes("/") || configured.includes("\\") ? resolve6(configured) : configured;
+  return configured.includes("/") || configured.includes("\\") ? resolve7(configured) : configured;
 }
 function resolvePiChildModelBootstrapEntry(env = process.env, moduleUrl = import.meta.url) {
   const override = env.SUMOCODE_CHILD_MODEL_BOOTSTRAP?.trim();
@@ -16428,7 +16543,7 @@ function resolvePiChildModelBootstrapEntry(env = process.env, moduleUrl = import
     join18(moduleDir, "pi-child-model-bootstrap.ts"),
     // The committed extension bundle lives at dist/extension/*.mjs while this
     // child-only entry remains executable TypeScript under src/subagents.
-    resolve6(moduleDir, "..", "..", "src", "subagents", "pi-child-model-bootstrap.ts")
+    resolve7(moduleDir, "..", "..", "src", "subagents", "pi-child-model-bootstrap.ts")
   ];
   return candidates.find((candidate) => !!candidate && existsSync11(candidate));
 }
@@ -16998,7 +17113,7 @@ var SubagentManager = class {
   }
   nextChange(signal) {
     if (signal?.aborted) return Promise.reject(new Error("Aborted"));
-    return new Promise((resolve10, reject) => {
+    return new Promise((resolve11, reject) => {
       let cleanup = () => void 0;
       const onAbort = () => {
         cleanup();
@@ -17006,7 +17121,7 @@ var SubagentManager = class {
       };
       const unsubscribe = this.addChangeListener(() => {
         cleanup();
-        resolve10();
+        resolve11();
       });
       cleanup = () => {
         unsubscribe();
@@ -17205,8 +17320,8 @@ var SubagentManager = class {
   async reserveVisibleSpawn() {
     const previous = this.visibleSpawnTail;
     let release = () => void 0;
-    this.visibleSpawnTail = new Promise((resolve10) => {
-      release = resolve10;
+    this.visibleSpawnTail = new Promise((resolve11) => {
+      release = resolve11;
     });
     await previous;
     return release;
@@ -17346,8 +17461,8 @@ var SubagentManager = class {
           startedAt: snapshot.createdAt,
           worktree: snapshot.worktree
         }).catch(() => fallback),
-        new Promise((resolve10) => {
-          timeout = setTimeout(() => resolve10(fallback), MANIFEST_TIMEOUT_MS);
+        new Promise((resolve11) => {
+          timeout = setTimeout(() => resolve11(fallback), MANIFEST_TIMEOUT_MS);
         })
       ]);
     } finally {
@@ -17356,7 +17471,7 @@ var SubagentManager = class {
   }
   waitForSettle(id, timeoutMs) {
     if (isSettled(this.snapshots.get(id))) return Promise.resolve();
-    return new Promise((resolve10, reject) => {
+    return new Promise((resolve11, reject) => {
       const timeout = setTimeout(() => {
         unsubscribe();
         reject(new Error("cancel timeout"));
@@ -17366,7 +17481,7 @@ var SubagentManager = class {
         if (snapshot && isSettled(snapshot)) {
           clearTimeout(timeout);
           unsubscribe();
-          resolve10();
+          resolve11();
         }
       });
     });
@@ -17946,7 +18061,7 @@ function installSubagents(pi, options = {}) {
 
 // src/task-mode.ts
 import { appendFileSync as appendFileSync3, existsSync as existsSync12, readdirSync as readdirSync4, readFileSync as readFileSync16, unlinkSync as unlinkSync3, writeFileSync as writeFileSync10 } from "node:fs";
-import { join as join20, resolve as resolve7 } from "node:path";
+import { dirname as dirname13, join as join20, resolve as resolve8 } from "node:path";
 var TASK_MARKER_ENV_KEYS = [
   "SUMOCODE_TASK_RESPONSE_FILE",
   "SUMOCODE_TASK_EXIT_FILE",
@@ -17967,14 +18082,66 @@ function captureAndScrubTaskMarkerEnv(env = process.env) {
   capturedMarkerEnv = snapshot;
   return snapshot;
 }
+var artifactFs = nodeArtifactFs;
+var taskDirFromMarkers = (markers) => {
+  const controlDir = markers?.SUMOCODE_TASK_CONTROL_DIR;
+  return controlDir ? dirname13(resolve8(controlDir)) : void 0;
+};
+function sanitizeTaskMarkers(markers) {
+  const taskDir = taskDirFromMarkers(markers);
+  if (!taskDir) {
+    const refused = TASK_MARKER_ENV_KEYS.filter((key) => markers[key] !== void 0 && key !== "SUMOCODE_TASK_CONTROL_DIR");
+    const refusedMarkers = refused.map((key) => ({ key, file: markers[key] }));
+    for (const { key } of refusedMarkers) delete markers[key];
+    for (const { key, file } of refusedMarkers) {
+      diagLog("marker_refused", { file, message: `${key} set without SUMOCODE_TASK_CONTROL_DIR` });
+    }
+    return markers;
+  }
+  const orderedKeys = [
+    "SUMOCODE_TASK_CONTROL_DIR",
+    "SUMOCODE_TASK_DIAG_FILE",
+    ...TASK_MARKER_ENV_KEYS.filter((key) => key !== "SUMOCODE_TASK_CONTROL_DIR" && key !== "SUMOCODE_TASK_DIAG_FILE")
+  ];
+  for (const key of orderedKeys) {
+    const value = markers[key];
+    if (value === void 0) continue;
+    if (key === "SUMOCODE_TASK_CONTROL_DIR") {
+      markers[key] = resolve8(value);
+      continue;
+    }
+    try {
+      assertArtifactInsideDir(resolve8(value), taskDir, key);
+      markers[key] = resolve8(value);
+    } catch (error) {
+      delete markers[key];
+      diagLog("marker_refused", { file: value, message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return markers;
+}
+function writeOwnedTaskArtifact(file, contents, label, taskDir) {
+  const parentDir = taskDir ?? dirname13(file);
+  const existing = validatedArtifactStat(artifactFs, file, parentDir, label);
+  if (existing === void 0) {
+    writeFileSync10(file, contents, { mode: PRIVATE_FILE_MODE3, flag: "wx" });
+    return;
+  }
+  writeFileSync10(file, contents, { mode: PRIVATE_FILE_MODE3 });
+}
 function diagLog(event, detail) {
-  const file = capturedMarkerEnv?.SUMOCODE_TASK_DIAG_FILE ?? process.env.SUMOCODE_TASK_DIAG_FILE;
+  const file = capturedMarkerEnv?.SUMOCODE_TASK_DIAG_FILE;
   if (!file) return;
   try {
+    const stat = validatedArtifactStat(artifactFs, file, dirname13(file), "task diag artifact");
+    if (stat === void 0) {
+      writeFileSync10(file, "", { mode: PRIVATE_FILE_MODE3, flag: "wx" });
+    }
     appendFileSync3(
       file,
       `${JSON.stringify({ t: Date.now(), pid: process.pid, event, ...detail ?? void 0 })}
-`
+`,
+      { mode: PRIVATE_FILE_MODE3 }
     );
   } catch {
   }
@@ -17998,7 +18165,7 @@ function extractFinalAssistantText(messages) {
   return "";
 }
 function persistResponse(messages) {
-  const file = capturedMarkerEnv?.SUMOCODE_TASK_RESPONSE_FILE ?? process.env.SUMOCODE_TASK_RESPONSE_FILE;
+  const file = capturedMarkerEnv?.SUMOCODE_TASK_RESPONSE_FILE;
   if (!file) {
     diagLog("response_skipped", { reason: "no_env" });
     return;
@@ -18009,8 +18176,8 @@ function persistResponse(messages) {
     return;
   }
   try {
-    writeFileSync10(file, `${text}
-`);
+    writeOwnedTaskArtifact(file, `${text}
+`, "task response artifact", taskDirFromMarkers(capturedMarkerEnv));
     diagLog("response_written", { file, bytes: text.length });
   } catch (error) {
     diagLog("response_write_failed", {
@@ -18022,8 +18189,8 @@ function writeTaskExitMarker(code, env = process.env) {
   const file = env.SUMOCODE_TASK_EXIT_FILE;
   if (!file) return;
   try {
-    writeFileSync10(file, `${code}
-`);
+    writeOwnedTaskArtifact(file, `${code}
+`, "task exit marker", taskDirFromMarkers(env));
     diagLog("exit_marker_written", { file, code });
   } catch (error) {
     diagLog("exit_marker_write_failed", {
@@ -18035,8 +18202,8 @@ function writeTaskStartedMarker(env = process.env) {
   const file = env.SUMOCODE_TASK_STARTED_FILE;
   if (!file) return;
   try {
-    writeFileSync10(file, `${process.pid}
-`);
+    writeOwnedTaskArtifact(file, `${process.pid}
+`, "task started marker", taskDirFromMarkers(env));
     diagLog("started_marker_written", { file });
   } catch (error) {
     diagLog("started_marker_write_failed", {
@@ -18050,11 +18217,8 @@ function isNumber2(value) {
 function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
-function isErrnoException(error) {
-  return error instanceof Error;
-}
-function isEnoent(error) {
-  return isErrnoException(error) && error.code === "ENOENT";
+function isEnoent2(error) {
+  return isErrnoCode(error, "ENOENT");
 }
 function installTaskExitMarker(env = process.env) {
   if (!env.SUMOCODE_TASK_EXIT_FILE) return;
@@ -18104,7 +18268,23 @@ function installControlWatcher(pi, controlDir, hooks, unlinkControl) {
   if (!controlDir) return () => void 0;
   let stopped = false;
   let timer;
-  const canonicalControlDir = resolve7(controlDir);
+  const canonicalControlDir = resolve8(controlDir);
+  let controlDirRefusalLogged = false;
+  const ensureControlDirValidated = () => {
+    try {
+      assertPrivateDir(artifactFs, canonicalControlDir, "task control directory");
+      return true;
+    } catch (error) {
+      if (!isErrnoCode(error, "ENOENT") && !controlDirRefusalLogged) {
+        controlDirRefusalLogged = true;
+        diagLog("control_dir_refused", {
+          file: canonicalControlDir,
+          message: error instanceof Error ? error.message : String(error)
+        });
+      }
+      return false;
+    }
+  };
   const stop = () => {
     stopped = true;
     if (timer) {
@@ -18114,11 +18294,12 @@ function installControlWatcher(pi, controlDir, hooks, unlinkControl) {
   };
   const discardSubmittedControl = (file) => {
     try {
+      assertPrivateArtifact(artifactFs, file, canonicalControlDir, "steer control");
       unlinkControl(file);
       clearSubmittedControl(canonicalControlDir, file);
       diagLog("steer_ack_unlinked", { file });
     } catch (error) {
-      if (isEnoent(error)) {
+      if (isEnoent2(error)) {
         clearSubmittedControl(canonicalControlDir, file);
         diagLog("steer_ack_already_unlinked", { file });
         return;
@@ -18133,6 +18314,7 @@ function installControlWatcher(pi, controlDir, hooks, unlinkControl) {
     }
     let text;
     try {
+      assertPrivateArtifact(artifactFs, file, canonicalControlDir, "steer control");
       text = readFileSync16(file, "utf8");
     } catch (error) {
       diagLog("steer_read_failed", { file, message: errorMessage(error) });
@@ -18159,7 +18341,7 @@ function installControlWatcher(pi, controlDir, hooks, unlinkControl) {
       clearSubmittedControl(canonicalControlDir, file);
       diagLog("steer_submitted", { file, bytes: text.length });
     } catch (error) {
-      if (isEnoent(error)) {
+      if (isEnoent2(error)) {
         clearSubmittedControl(canonicalControlDir, file);
         diagLog("steer_ack_already_unlinked", { file, bytes: text.length });
         return;
@@ -18170,13 +18352,20 @@ function installControlWatcher(pi, controlDir, hooks, unlinkControl) {
   const tick = () => {
     try {
       const ctx = hooks.getLatestCtx();
+      if (!ensureControlDirValidated()) return;
       if (!ctx) return;
-      if (existsSync12(join20(canonicalControlDir, CLOSE_REQUEST_FILE2))) {
-        diagLog("close_requested");
-        hooks.cancelCountdown();
-        stop();
-        hooks.requestShutdown(ctx);
-        return;
+      const closePath = join20(canonicalControlDir, CLOSE_REQUEST_FILE2);
+      if (existsSync12(closePath)) {
+        try {
+          assertPrivateArtifact(artifactFs, closePath, canonicalControlDir, "close control");
+          diagLog("close_requested");
+          hooks.cancelCountdown();
+          stop();
+          hooks.requestShutdown(ctx);
+          return;
+        } catch (error) {
+          diagLog("close_refused", { file: closePath, message: errorMessage(error) });
+        }
       }
       let entries;
       try {
@@ -18206,7 +18395,7 @@ function installTaskModeAutoExit(pi, options = {}) {
     });
     return;
   }
-  const markers = captureAndScrubTaskMarkerEnv(env);
+  const markers = sanitizeTaskMarkers(captureAndScrubTaskMarkerEnv(env));
   writeTaskStartedMarker(markers);
   installTaskExitMarker(markers);
   const countdownEnabled = shouldInstallTaskModeAutoExit(options);
@@ -18519,9 +18708,9 @@ function registerRpcLoginCommand(pi, deps = {}) {
 
 // src/commands/accounts.ts
 import { execFile as execFile7 } from "node:child_process";
-import { existsSync as existsSync13, lstatSync as lstatSync4, mkdirSync as mkdirSync10, readFileSync as readFileSync17, readlinkSync, realpathSync as realpathSync4, renameSync as renameSync7, rmSync as rmSync4, symlinkSync as symlinkSync2, writeFileSync as writeFileSync11 } from "node:fs";
+import { existsSync as existsSync13, lstatSync as lstatSync5, mkdirSync as mkdirSync10, readFileSync as readFileSync17, readlinkSync, realpathSync as realpathSync4, renameSync as renameSync7, rmSync as rmSync4, symlinkSync as symlinkSync2, writeFileSync as writeFileSync11 } from "node:fs";
 import { homedir as homedir15 } from "node:os";
-import { dirname as dirname13, join as join21, resolve as resolve8 } from "node:path";
+import { dirname as dirname14, join as join21, resolve as resolve9 } from "node:path";
 import { promisify as promisify5 } from "node:util";
 var ACCOUNTS_CONFIG_FILE = "claude-accounts.json";
 var LEGACY_CONFIG_FILE = "multi-pass.json";
@@ -18535,12 +18724,12 @@ function resolveAccountsConfigPath(deps = {}) {
   return join21(resolveAgentDir(deps), ACCOUNTS_CONFIG_FILE);
 }
 function resolvePrivateAccountsPath(deps) {
-  const privateConfigDir = resolve8(deps.env?.SUMOCODE_CONFIG_DIR ?? process.env.SUMOCODE_CONFIG_DIR ?? join21(deps.homeDir ?? homedir15(), ".config", "sumocode"));
+  const privateConfigDir = resolve9(deps.env?.SUMOCODE_CONFIG_DIR ?? process.env.SUMOCODE_CONFIG_DIR ?? join21(deps.homeDir ?? homedir15(), ".config", "sumocode"));
   return join21(privateConfigDir, ACCOUNTS_CONFIG_FILE);
 }
 function accountPathsShareParent(targetPath, managedPath) {
   try {
-    return realpathSync4(dirname13(targetPath)) === realpathSync4(dirname13(managedPath));
+    return realpathSync4(dirname14(targetPath)) === realpathSync4(dirname14(managedPath));
   } catch {
     return false;
   }
@@ -18548,15 +18737,15 @@ function accountPathsShareParent(targetPath, managedPath) {
 function ensurePrivateAccountsLink(deps, privatePath) {
   const targetPath = resolveAccountsConfigPath(deps);
   if (accountPathsShareParent(targetPath, privatePath)) return;
-  const privateStat = lstatSync4(privatePath);
+  const privateStat = lstatSync5(privatePath);
   if (privateStat.isSymbolicLink() || !privateStat.isFile()) throw new Error(`Expected a regular private accounts source: ${privatePath}`);
   let targetStat;
   try {
-    targetStat = lstatSync4(targetPath);
+    targetStat = lstatSync5(targetPath);
   } catch {
   }
   if (targetStat?.isSymbolicLink()) {
-    const linkTarget = resolve8(dirname13(targetPath), readlinkSync(targetPath));
+    const linkTarget = resolve9(dirname14(targetPath), readlinkSync(targetPath));
     if (linkTarget !== privatePath) throw new Error(`Refusing to replace an unmanaged accounts symlink: ${targetPath}`);
     return;
   }
@@ -18565,7 +18754,7 @@ function ensurePrivateAccountsLink(deps, privatePath) {
     const backup = `${targetPath}.pre-managed-backup-${Date.now()}`;
     renameSync7(targetPath, backup);
   }
-  mkdirSync10(dirname13(targetPath), { recursive: true, mode: 448 });
+  mkdirSync10(dirname14(targetPath), { recursive: true, mode: 448 });
   symlinkSync2(privatePath, targetPath);
 }
 function resolveAccountsReadPath(deps) {
@@ -18578,7 +18767,7 @@ function resolveAccountsReadPath(deps) {
 }
 function pathEntryExists(path2) {
   try {
-    lstatSync4(path2);
+    lstatSync5(path2);
     return true;
   } catch {
     return false;
@@ -18587,18 +18776,18 @@ function pathEntryExists(path2) {
 function resolveAccountsWriteDestination(deps) {
   const targetPath = resolveAccountsConfigPath(deps);
   const managedTarget = resolvePrivateAccountsPath(deps);
-  const privateConfigDir = dirname13(managedTarget);
+  const privateConfigDir = dirname14(managedTarget);
   if (accountPathsShareParent(targetPath, managedTarget)) return { writePath: managedTarget };
-  if (pathEntryExists(managedTarget) && lstatSync4(managedTarget).isSymbolicLink()) {
+  if (pathEntryExists(managedTarget) && lstatSync5(managedTarget).isSymbolicLink()) {
     throw new Error(`Refusing to replace a symlinked private accounts source: ${managedTarget}`);
   }
   let targetStat;
   try {
-    targetStat = lstatSync4(targetPath);
+    targetStat = lstatSync5(targetPath);
   } catch {
   }
   if (targetStat?.isSymbolicLink()) {
-    const linkTarget = resolve8(dirname13(targetPath), readlinkSync(targetPath));
+    const linkTarget = resolve9(dirname14(targetPath), readlinkSync(targetPath));
     if (linkTarget !== managedTarget) throw new Error(`Refusing to write accounts through an unmanaged symlink: ${targetPath}`);
     return { writePath: managedTarget };
   }
@@ -18664,14 +18853,14 @@ function saveClaudeSubscriptions(subscriptions, deps = {}) {
     [CLAUDE_ACCOUNTS_MIGRATION_FIELD]: true,
     subscriptions: [...nonClaude, ...subscriptions]
   };
-  mkdirSync10(dirname13(destination.writePath), { recursive: true, mode: 448 });
+  mkdirSync10(dirname14(destination.writePath), { recursive: true, mode: 448 });
   const temporary = `${destination.writePath}.${process.pid}.tmp`;
   writeFileSync11(temporary, `${JSON.stringify(next, null, 2)}
 `, { encoding: "utf8", mode: 384 });
   renameSync7(temporary, destination.writePath);
   if (destination.linkPath) {
     if (pathEntryExists(destination.linkPath)) rmSync4(destination.linkPath, { force: true });
-    mkdirSync10(dirname13(destination.linkPath), { recursive: true, mode: 448 });
+    mkdirSync10(dirname14(destination.linkPath), { recursive: true, mode: 448 });
     symlinkSync2(destination.writePath, destination.linkPath);
   }
 }
@@ -18894,7 +19083,7 @@ function socketEndpoint(path2) {
   return process.platform === "win32" ? `\\\\.\\pipe\\${path2}` : path2;
 }
 function sendSocketRequestAttempt(path2, request, timeoutMs) {
-  return new Promise((resolve10) => {
+  return new Promise((resolve11) => {
     let settled = false;
     let timeout;
     const socket = net.createConnection(socketEndpoint(path2));
@@ -18903,7 +19092,7 @@ function sendSocketRequestAttempt(path2, request, timeoutMs) {
       settled = true;
       if (timeout) clearTimeout(timeout);
       socket.destroy();
-      resolve10(delivered);
+      resolve11(delivered);
     };
     socket.on("error", () => finish(false));
     socket.on("connect", () => socket.write(`${JSON.stringify(request)}
@@ -19282,7 +19471,7 @@ function canonicalize(path2, realpath) {
   try {
     return realpath(path2);
   } catch {
-    return resolve9(path2);
+    return resolve10(path2);
   }
 }
 function moduleUrlToPath2(moduleUrl) {
@@ -19293,8 +19482,8 @@ function moduleUrlToPath2(moduleUrl) {
   }
 }
 function isInstalledPiAgentGitModule(moduleUrl, homeDir = homedir16()) {
-  const modulePath = resolve9(moduleUrlToPath2(moduleUrl));
-  const agentGitRoot = `${resolve9(homeDir, ".pi", "agent", "git")}${sep}`;
+  const modulePath = resolve10(moduleUrlToPath2(moduleUrl));
+  const agentGitRoot = `${resolve10(homeDir, ".pi", "agent", "git")}${sep}`;
   return modulePath.startsWith(agentGitRoot);
 }
 function packageNameAt2(dir, exists, readFile) {
@@ -19308,10 +19497,10 @@ function packageNameAt2(dir, exists, readFile) {
   }
 }
 function packageRootFromModulePath(modulePath, exists, readFile) {
-  let current = dirname14(modulePath);
+  let current = dirname15(modulePath);
   for (let level = 0; level < 5; level += 1) {
     if (packageNameAt2(current, exists, readFile) === SUMOCODE_PACKAGE_NAME) return current;
-    const parent = dirname14(current);
+    const parent = dirname15(current);
     if (parent === current) return void 0;
     current = parent;
   }
@@ -19320,13 +19509,13 @@ function packageRootFromModulePath(modulePath, exists, readFile) {
 function findActiveSumoDevTree2(cwd, options = {}) {
   const exists = options.exists ?? existsSync14;
   const readFile = options.readFile ?? ((path2, encoding) => readFileSync18(path2, encoding));
-  let current = resolve9(cwd);
+  let current = resolve10(cwd);
   while (true) {
     const isSumocodePackage = packageNameAt2(current, exists, readFile) === SUMOCODE_PACKAGE_NAME;
     const hasExtensionSource = exists(join22(current, "src", "extension.ts"));
     const hasGitMetadata = exists(join22(current, ".git"));
     if (isSumocodePackage && hasExtensionSource && hasGitMetadata) return current;
-    const parent = dirname14(current);
+    const parent = dirname15(current);
     if (parent === current) return void 0;
     current = parent;
   }
@@ -19344,8 +19533,8 @@ function shouldNoopDuplicateInstalledExtension(options = {}) {
     const packageRoot = packageRootFromModulePath(modulePath, exists, readFile);
     const canonicalLauncherRoot = canonicalize(launcherRoot, realpath);
     if (packageRoot !== void 0 && canonicalize(packageRoot, realpath) === canonicalLauncherRoot) return false;
-    const moduleDir = dirname14(modulePath);
-    const grandparent = dirname14(moduleDir);
+    const moduleDir = dirname15(modulePath);
+    const grandparent = dirname15(moduleDir);
     if (grandparent === canonicalLauncherRoot) return false;
     return true;
   }

@@ -277,8 +277,9 @@ async function runSampleProcess({ checkout, agentDir, diagFile }, boundaries = {
 	// immediately before the harness begins its own bounded shutdown.
 	events = await readEvents(diagFile);
 	const exitedBeforeShutdown = exited;
+	const treeAliveBeforeShutdown = treeAlive();
 	const observedAllEvents = REQUIRED_EVENTS.every((name) => events.some((event) => event.event === name));
-	if (treeAlive()) {
+	if (treeAliveBeforeShutdown) {
 		try { signalTree(child, "SIGINT"); } catch {}
 		await waitForTreeExit(treeAlive, 750);
 	}
@@ -292,7 +293,7 @@ async function runSampleProcess({ checkout, agentDir, diagFile }, boundaries = {
 	}
 	const failure = treeAlive()
 		? "shutdown-failed"
-		: exitedBeforeShutdown
+		: !treeAliveBeforeShutdown || exitedBeforeShutdown
 			? "process-failed"
 			: observedAllEvents ? undefined : "missing-events";
 	return { ok: failure === undefined, failure, events, exitCode, signal };

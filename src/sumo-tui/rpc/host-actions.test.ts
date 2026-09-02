@@ -277,8 +277,12 @@ function flush(): Promise<void> {
 	return Promise.resolve().then(() => Promise.resolve());
 }
 
+function inlineSelectorLines(inlineSelectors: InlineSelectorHost, width = 120): string[] {
+	return inlineSelectors.render(width).map((line) => line.replace(/\u001b\[[0-9;]*m/g, ""));
+}
+
 function inlineSelectorText(inlineSelectors: InlineSelectorHost, width = 120): string {
-	return inlineSelectors.render(width).join("\n").replace(/\u001b\[[0-9;]*m/g, "");
+	return inlineSelectorLines(inlineSelectors, width).join("\n");
 }
 
 /**
@@ -306,8 +310,9 @@ async function waitForInlineSelector(inlineSelectors: InlineSelectorHost, title:
 	await vi.waitFor(
 		() => {
 			const kind = inlineSelectors.getActiveKind();
-			const rendered = inlineSelectorText(inlineSelectors);
-			if (kind === "select" && rendered.includes(wanted)) return;
+			const lines = inlineSelectorLines(inlineSelectors);
+			const rendered = lines.join("\n");
+			if (kind === "select" && lines[1]?.includes(`✦  ${wanted}  ✦`)) return;
 			// Collapse the panel's padding so the diagnostic leads with the title
 			// and options rather than with the centring whitespace around them.
 			const summary = rendered.replace(/\s+/g, " ").trim().slice(0, 200);
@@ -1081,6 +1086,18 @@ describe("RpcHostActions", () => {
 			} finally {
 				rmSync(dir, { recursive: true, force: true });
 			}
+		});
+
+		it("is not satisfied when the wanted title appears only in an option", async () => {
+			const { inlineSelectors } = setup();
+			const selection = inlineSelectors.select("Resume session", ["Summarize branch?"]);
+
+			await expect(waitForInlineSelector(inlineSelectors, "Summarize branch?", 25)).rejects.toThrow(
+				/inline selector "SUMMARIZE BRANCH\?" never opened .*RESUME SESSION/s,
+			);
+
+			inlineSelectors.close();
+			await selection;
 		});
 
 		it("times out naming the wrong selector when a different one stays open", async () => {

@@ -145,16 +145,18 @@ compiler dependency. Timer calls come from the AST; marker text and executable
 line boundaries come from compiler-owned token and comment ranges. This avoids
 maintaining a second JavaScript/TypeScript lexer and correctly handles strings,
 regexes, template interpolation, generic calls, escaped lines, and comments
-between a callee and its arguments. Templates passed to `writeFile` or
-`writeFileSync` directly or through a local identifier are parsed recursively
-because the audited integration tests execute them as fixture modules;
-display/assertion templates and ordinary quoted strings remain opaque.
+between a callee and its arguments. Text passed to `writeFile` or
+`writeFileSync` is statically evaluated through source-ordered, symbol-resolved
+local `=`/`+=` assignments, aliases, template interpolation, and string
+concatenation, then parsed as one fixture module. Dynamic pieces become
+non-joining placeholders; display/assertion values and arbitrary runtime string
+construction remain opaque.
 
 A marker must begin the normalized comment content (allowing the leading `*` in
 a formatted block comment); prose that merely mentions `WAIT-CLASS` does not
 classify anything. On the timer's own line a trailing marker is valid. Above
-it, only a contiguous comment-only block counts: a marker sharing a line with executable code
-annotates that statement rather than the timer below it. Split calls are
+it, only a contiguous comment-only block counts: a marker sharing a line with
+executable code annotates that statement rather than the timer below it. Split calls are
 reported on the line holding their callee identifier.
 
 This parser replaced a string-prefix matcher and then a hand-rolled tokenizer

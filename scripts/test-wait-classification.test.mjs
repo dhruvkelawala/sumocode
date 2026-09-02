@@ -57,7 +57,7 @@ const MARKER_BODY = /^\s*([A-Za-z-]+)\s*(?:—|--)\s*(.*)$/;
  * @returns {Array<{ line: number; text: string; problem: string }>}
  */
 function findWaitClassificationViolations(source) {
-	const sourceFile = ts.createSourceFile("candidate.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+	const { sourceFile, checker } = parseSource(source);
 	const lines = source.split("\n");
 	const info = analyzeSource(source, sourceFile);
 	const violations = [];
@@ -82,7 +82,7 @@ function findWaitClassificationViolations(source) {
 			violations.push({ line: index + 1, text: text.trim(), problem: `WAIT-CLASS "${className}" has an empty reason` });
 		}
 	}
-	for (const fragment of findExecutableFixtureTemplateFragments(sourceFile)) {
+	for (const fragment of findExecutableFixtureSources(sourceFile, checker)) {
 		for (const violation of findWaitClassificationViolations(fragment.source)) {
 			const line = fragment.firstLine + violation.line;
 			violations.push({ ...violation, line, text: lines[line - 1]?.trim() ?? violation.text });
@@ -92,47 +92,93 @@ function findWaitClassificationViolations(source) {
 }
 
 /**
- * Templates that flow into `writeFile`/`writeFileSync` are executable fixture
- * source in the audited files. Parse their fragments recursively;
- * interpolation expressions already belong to the outer AST.
+ * @param {string} source
+ * @returns {{ sourceFile: import("typescript").SourceFile; checker: import("typescript").TypeChecker }}
+ */
+function parseSource(source) {
+	const fileName = "/candidate.ts";
+	const options = { target: ts.ScriptTarget.Latest, module: ts.ModuleKind.ESNext, noLib: true, noResolve: true };
+	const sourceFile = ts.createSourceFile(fileName, source, options.target, true, ts.ScriptKind.TS);
+	const host = ts.createCompilerHost(options);
+	host.fileExists = (path) => path === fileName;
+	host.readFile = (path) => path === fileName ? source : undefined;
+	host.getSourceFile = (path) => path === fileName ? sourceFile : undefined;
+	const program = ts.createProgram([fileName], options, host);
+	return { sourceFile, checker: program.getTypeChecker() };
+}
+
+/**
+ * Statically evaluate text flowing into `writeFile`/`writeFileSync`, then parse
+ * each generated fixture as one source. Dynamic pieces become non-joining
+ * placeholders; arbitrary runtime string construction remains out of scope.
  *
  * @param {import("typescript").SourceFile} sourceFile
+ * @param {import("typescript").TypeChecker} checker
  * @returns {Array<{ source: string; firstLine: number }>}
  */
-function findExecutableFixtureTemplateFragments(sourceFile) {
-	const directTemplates = new Set();
-	const writtenIdentifiers = new Set();
-	const collectWrites = (node) => {
+function findExecutableFixtureSources(sourceFile, checker) {
+	const assignments = new Map();
+	const writes = [];
+	const assign = (identifier, value, operator) => {
+		const binding = checker.getSymbolAtLocation(identifier);
+		if (binding === undefined) return;
+		const values = assignments.get(binding) ?? [];
+		values.push({ value, operator, position: value.getStart(sourceFile) });
+		assignments.set(binding, values);
+	};
+	const collect = (node) => {
+		if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer !== undefined) {
+			assign(node.name, node.initializer, ts.SyntaxKind.EqualsToken);
+		} else if (
+			ts.isBinaryExpression(node)
+			&& (node.operatorToken.kind === ts.SyntaxKind.EqualsToken || node.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken)
+			&& ts.isIdentifier(node.left)
+		) {
+			assign(node.left, node.right, node.operatorToken.kind);
+		}
 		if (ts.isCallExpression(node) && ["writeFile", "writeFileSync"].includes(staticCalleeName(ts.skipOuterExpressions(node.expression)))) {
-			const data = node.arguments[1] === undefined ? undefined : ts.skipOuterExpressions(node.arguments[1]);
-			if (data !== undefined && (ts.isNoSubstitutionTemplateLiteral(data) || ts.isTemplateExpression(data))) directTemplates.add(data);
-			else if (data !== undefined && ts.isIdentifier(data)) writtenIdentifiers.add(data.text);
+			if (node.arguments[1] !== undefined) writes.push({ value: node.arguments[1], position: node.getStart(sourceFile) });
 		}
-		ts.forEachChild(node, collectWrites);
+		ts.forEachChild(node, collect);
 	};
-	collectWrites(sourceFile);
+	collect(sourceFile);
 
-	const fragments = [];
-	const add = (text, start) => {
-		if (text.length > 0) fragments.push({ source: text, firstLine: sourceFile.getLineAndCharacterOfPosition(start).line });
-	};
-	const visit = (node) => {
-		const declaration = node.parent;
-		const assignedThenWritten = declaration !== undefined
-			&& ts.isVariableDeclaration(declaration)
-			&& declaration.initializer === node
-			&& ts.isIdentifier(declaration.name)
-			&& writtenIdentifiers.has(declaration.name.text);
-		if ((directTemplates.has(node) || assignedThenWritten) && ts.isNoSubstitutionTemplateLiteral(node)) {
-			add(node.text, node.getStart(sourceFile) + 1);
-		} else if ((directTemplates.has(node) || assignedThenWritten) && ts.isTemplateExpression(node)) {
-			add(node.head.text, node.head.getStart(sourceFile) + 1);
-			for (const span of node.templateSpans) add(span.literal.text, span.literal.getStart(sourceFile) + 1);
+	const evaluate = (expression, before, visiting) => {
+		const node = ts.skipOuterExpressions(expression);
+		if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
+		if (ts.isTemplateExpression(node)) {
+			let text = node.head.text;
+			for (const span of node.templateSpans) {
+				text += evaluate(span.expression, before, visiting) ?? " __fixture_value__ ";
+				text += span.literal.text;
+			}
+			return text;
 		}
-		ts.forEachChild(node, visit);
+		if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+			const left = evaluate(node.left, before, visiting);
+			const right = evaluate(node.right, before, visiting);
+			if (left === undefined && right === undefined) return undefined;
+			return `${left ?? " __fixture_value__ "}${right ?? " __fixture_value__ "}`;
+		}
+		if (!ts.isIdentifier(node)) return undefined;
+		const binding = checker.getSymbolAtLocation(node);
+		if (binding === undefined || visiting.has(binding)) return undefined;
+		visiting.add(binding);
+		let result;
+		for (const assignment of (assignments.get(binding) ?? []).filter((candidate) => candidate.position < before).sort((left, right) => left.position - right.position)) {
+			const value = evaluate(assignment.value, assignment.position, visiting);
+			if (assignment.operator === ts.SyntaxKind.EqualsToken) result = value;
+			else if (value !== undefined) result = `${result ?? ""}${value}`;
+		}
+		visiting.delete(binding);
+		return result;
 	};
-	visit(sourceFile);
-	return fragments;
+
+	return writes.flatMap((write) => {
+		const source = evaluate(write.value, write.position, new Set());
+		if (source === undefined) return [];
+		return [{ source, firstLine: sourceFile.getLineAndCharacterOfPosition(write.value.getStart(sourceFile)).line }];
+	});
 }
 
 /**
@@ -471,6 +517,14 @@ describe("test wait classification", () => {
 	it.each([
 		["a directly written template", "writeFile(path, `\nsetTimeout(run, 8000);\n`, 'utf8');"],
 		["an indirectly written template", "const source = `\nsetTimeout(run, 8000);\n`; writeFile(path, source, 'utf8');"],
+		["a wrapped indirect template", "const source = (`setTimeout(run, 8000);` as string); writeFile(path, source);"],
+		["a reassigned written template", "let source = ''; source = `setTimeout(run, 8000);`; writeFile(path, source);"],
+		["a wrapped reassigned template", "let source = ''; source = (`setTimeout(run, 8000);` as string); writeFile(path, source);"],
+		["a compound-assigned template", "let source = ''; source += `setTimeout(run, 8000);`; writeFile(path, source);"],
+		["a concatenated direct template", "writeFile(path, `setTimeout(run, 8000);` + suffix);"],
+		["a timer split across templates", "writeFile(path, `setTime` + `out(run, 8000);`);"],
+		["a concatenated aliased template", "const part = `setTimeout(run, 8000);`; const source = part + suffix; writeFile(path, source);"],
+		["a statically interpolated template", "const part = `setTimeout(run, 8000);`; writeFile(path, `${part}`);"],
 		["a written template fragment after interpolation", "writeFile(path, `const value = ${fixtureValue};\nsetTimeout(run, 8000);`);"],
 		["escaped written template text", "writeFile(path, `// fixture header\\nsetTimeout(run, 8000);`);"],
 	])("gates a timer inside generated source in %s", (_label, source) => {
@@ -479,6 +533,9 @@ describe("test wait classification", () => {
 
 	it.each([
 		["a display template", "expect(rendered).toContain(`setTimeout(run, 50);`);"],
+		["a shadowed display template", "function write(source) { writeFile(path, source); } function display() { const source = `setTimeout(run, 50);`; expect(rendered).toContain(source); }"],
+		["a template assigned after the write", "let source = `export {};`; writeFile(path, source); source = `setTimeout(run, 50);`;"],
+		["a template overwritten before the write", "let source = `setTimeout(run, 50);`; source = `export {};`; writeFile(path, source);"],
 		["a double-quoted string", 'const plugin = "await new Promise((r) => setTimeout(r, 8000));";'],
 		["a comment", "// historical note: this used to call setTimeout(resolve, 20)"],
 	])("does not gate a timer that is only %s", (_label, source) => {

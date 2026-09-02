@@ -255,11 +255,11 @@ async function runSampleProcess({ checkout, agentDir, diagFile }, spawnPtyFn = s
 		if (REQUIRED_EVENTS.every((name) => events.some((event) => event.event === name))) break;
 		await new Promise((resolveWait) => setTimeout(resolveWait, 20));
 	}
-	// Capture natural exit before the harness begins its own bounded shutdown.
 	// One final read closes the race between the child's last diagnostic append
-	// and node-pty's exit callback.
-	const exitedBeforeShutdown = exited;
+	// and node-pty's exit callback. Snapshot natural exit only after that await,
+	// immediately before the harness begins its own bounded shutdown.
 	events = await readEvents(diagFile);
+	const exitedBeforeShutdown = exited;
 	const observedAllEvents = REQUIRED_EVENTS.every((name) => events.some((event) => event.event === name));
 	if (!exited) {
 		try { child.kill("SIGINT"); } catch {}
@@ -421,7 +421,9 @@ export async function runStartupComparison(options, dependencies = {}) {
 		worktrees = await makeWorktrees({ callerRoot, campaignDir, baselineSha, candidateSha });
 		const armSamples = { baseline: [], candidate: [] };
 		const schedule = executionSchedule(options.samples);
+		const executedOrder = [];
 		for (const { arm, index } of schedule) {
+			executedOrder.push(arm);
 			const checkout = arm === "baseline" ? worktrees.baselineDir : worktrees.candidateDir;
 			// One absolute path makes every generated meta.json byte-identical;
 			// resetFixture rebuilds it before each timed launch.
@@ -436,7 +438,11 @@ export async function runStartupComparison(options, dependencies = {}) {
 			} catch {
 				raw = { ok: false, failure: "process-failed", events: [] };
 			}
-			armSamples[arm].push(publicSample(raw, index, startWallMs));
+			const sample = publicSample(raw, index, startWallMs);
+			armSamples[arm].push(sample);
+			// Never mutate the shared fixture or launch another process while an
+			// owned PTY may still be alive.
+			if (sample.failure === "shutdown-failed") break;
 		}
 		await worktrees.unlinkDependencies?.();
 		dependenciesUnlinked = true;
@@ -459,7 +465,7 @@ export async function runStartupComparison(options, dependencies = {}) {
 			runtime: machineMetadata(),
 			flags: [...FLAGS],
 			bundleMode: { host: "source", extension: "source" },
-			executionOrder: schedule.map(({ arm }) => arm),
+			executionOrder: executedOrder,
 			collection: {
 				succeeded: successfulSamples.baseline > 0 && successfulSamples.candidate > 0 && shutdownFailures === 0,
 				successfulSamples,

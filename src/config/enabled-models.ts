@@ -2,7 +2,7 @@ import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { CLAUDE_BASE_PROVIDER, isClaudeAccountProvider } from "../commands/accounts-config.js";
+import { CLAUDE_BASE_PROVIDER, isClaudeAccountProvider } from "./claude-providers.js";
 
 /** Any model-like record: Pi's `Model`, the host's option rows, or a test fixture. */
 interface EnabledModelCandidate {

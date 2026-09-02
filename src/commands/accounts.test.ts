@@ -590,6 +590,34 @@ describe("executeAccountsCommand", () => {
 		expect(setModel).toHaveBeenCalledWith(models[2]);
 	});
 
+	it("switching does not resolve a bare model id the model picker treats as ambiguous", async () => {
+		const agentDir = tempAgentDir();
+		writeFileSync(
+			join(agentDir, "settings.json"),
+			JSON.stringify({ packages: [PINNED_ADAPTER_SOURCE], enabledModels: ["claude-opus"] }),
+			"utf8",
+		);
+		writeAccounts(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });
+		const models = [
+			{ provider: "cursor", id: "grok" },
+			{ provider: "openrouter", id: "claude-opus" },
+			{ provider: "anthropic-2", id: "claude-sonnet" },
+			{ provider: "anthropic-2", id: "claude-opus" },
+		];
+		const { ctx, setModel } = makeCtx({
+			agentDir,
+			auth: { anthropic: true, "anthropic-2": true },
+			models,
+			currentModel: { provider: "cursor", id: "grok" },
+			onSelect: (title: string, options: string[]) => {
+				if (title === "CLAUDE ACCOUNTS") return options[1];
+				return options.find((option) => option === "use this account");
+			},
+		});
+		await executeAccountsCommand(extensionApi(setModel), commandContext(ctx), withAgentDir(agentDir));
+		expect(setModel).toHaveBeenCalledWith(models[2]);
+	});
+
 	it("switching falls back to the first model of the provider", async () => {
 		const agentDir = tempAgentDir();
 		writeAccounts(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });

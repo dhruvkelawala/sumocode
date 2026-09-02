@@ -7194,13 +7194,6 @@ import { promisify } from "node:util";
 
 // src/commands/accounts-config.ts
 var CLAUDE_ACCOUNTS_MIGRATION_FIELD = "_sumocodeClaudeAccountsMigrated";
-var CLAUDE_BASE_PROVIDER = "anthropic";
-function claudeAccountProviderId(index) {
-  return `${CLAUDE_BASE_PROVIDER}-${index}`;
-}
-function isClaudeAccountProvider(providerId) {
-  return /^anthropic-[1-9]\d*$/.test(providerId);
-}
 
 // src/commands/sync.ts
 var execFile2 = promisify(execFileCallback);
@@ -16891,6 +16884,15 @@ import { homedir as homedir16 } from "node:os";
 import { dirname as dirname13, join as join22, resolve as resolve7 } from "node:path";
 import { promisify as promisify5 } from "node:util";
 
+// src/config/claude-providers.ts
+var CLAUDE_BASE_PROVIDER = "anthropic";
+function claudeAccountProviderId(index) {
+  return `${CLAUDE_BASE_PROVIDER}-${index}`;
+}
+function isClaudeAccountProvider(providerId) {
+  return /^anthropic-[1-9]\d*$/.test(providerId);
+}
+
 // src/config/enabled-models.ts
 import { readFileSync as readFileSync17 } from "node:fs";
 import { homedir as homedir15 } from "node:os";
@@ -17287,7 +17289,8 @@ function preferredAccountModel(ctx, account, deps) {
     const sameModel = models.find((model) => model.id === current.id);
     if (sameModel) return sameModel;
   }
-  return filterToEnabled(models, readEnabledModelPatterns({ PI_CODING_AGENT_DIR: resolveAgentDir(deps) }))[0] ?? models[0];
+  const enabled = filterToEnabled(ctx.modelRegistry.getAll(), readEnabledModelPatterns({ PI_CODING_AGENT_DIR: resolveAgentDir(deps) }));
+  return enabled.find((model) => model.provider === account.providerId) ?? models[0];
 }
 async function switchAccount(pi, ctx, account, deps) {
   if (!account.configured) {

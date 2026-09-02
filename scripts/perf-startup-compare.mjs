@@ -112,7 +112,7 @@ async function prepareWorktrees({ callerRoot, campaignDir, baselineSha, candidat
 	return {
 		baselineDir,
 		candidateDir,
-		finalize: async () => {
+		unlinkDependencies: async () => {
 			for (const link of links.splice(0).reverse()) await unlink(link).catch(() => undefined);
 		},
 		cleanup: async () => {
@@ -387,7 +387,7 @@ export async function runStartupComparison(options, dependencies = {}) {
 	const machineMetadata = dependencies.machineMetadata ?? (() => ({ platform: platform(), arch: arch(), nodeVersion: process.version, cpuCount: cpus().length }));
 	const now = dependencies.now ?? (() => new Date());
 	let worktrees;
-	let finalized = false;
+	let dependenciesUnlinked = false;
 	try {
 		await assertCheckoutClean(callerRoot);
 		const [baselineSha, candidateSha] = await Promise.all([resolveRef(options.baseRef), resolveRef(options.candidateRef ?? "HEAD")]);
@@ -411,8 +411,8 @@ export async function runStartupComparison(options, dependencies = {}) {
 			}
 			armSamples[arm].push(publicSample(raw, index, startWallMs));
 		}
-		await worktrees.finalize?.();
-		finalized = true;
+		await worktrees.unlinkDependencies?.();
+		dependenciesUnlinked = true;
 		await assertCheckoutClean(worktrees.baselineDir);
 		await assertCheckoutClean(worktrees.candidateDir);
 		const metrics = METRICS.map((definition) => metricComparison(definition, armSamples.baseline, armSamples.candidate));
@@ -439,7 +439,7 @@ export async function runStartupComparison(options, dependencies = {}) {
 		await writeFile(join(outDir, "startup-compare.md"), markdown(report));
 		return report;
 	} finally {
-		if (!finalized) await worktrees?.finalize?.().catch(() => undefined);
+		if (!dependenciesUnlinked) await worktrees?.unlinkDependencies?.().catch(() => undefined);
 		await worktrees?.cleanup?.().catch(() => undefined);
 		if (options.keepFixture === true) dependencies.onFixtureRetained?.(campaignDir);
 		else await rm(campaignDir, { recursive: true, force: true });

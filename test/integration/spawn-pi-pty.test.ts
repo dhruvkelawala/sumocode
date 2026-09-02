@@ -384,7 +384,7 @@ const OPTION_CONSUMPTION_ROWS: readonly OptionConsumptionRow[] = [
 		name: "unconditional value flag consumes -- before a later --print direct bypass",
 		args: ["--model", "--", "--print", "PROMPT"],
 		expectedPrompt: "",
-		expectedArgs: "--model -- --print PROMPT",
+		expectedArgs: "--model -- --print [redacted]",
 		directBypass: true,
 	},
 	{
@@ -492,56 +492,56 @@ const OPTION_CONSUMPTION_ROWS: readonly OptionConsumptionRow[] = [
 		name: "pre-delimiter --print keeps the direct-Pi bypass intact",
 		args: ["--print", "--", "PROMPT"],
 		expectedPrompt: "",
-		expectedArgs: "--print -- PROMPT",
+		expectedArgs: "--print -- [redacted]",
 		directBypass: true,
 	},
 	{
 		name: "pre-delimiter -p keeps the direct-Pi bypass intact",
 		args: ["-p", "--", "PROMPT"],
 		expectedPrompt: "",
-		expectedArgs: "-p -- PROMPT",
+		expectedArgs: "-p -- [redacted]",
 		directBypass: true,
 	},
 	{
 		name: "pre-delimiter --mode keeps the direct-Pi bypass intact",
 		args: ["--mode", "rpc", "--", "PROMPT"],
 		expectedPrompt: "",
-		expectedArgs: "--mode rpc -- PROMPT",
+		expectedArgs: "--mode rpc -- [redacted]",
 		directBypass: true,
 	},
 	{
 		name: "pre-delimiter --mode=* keeps the direct-Pi bypass intact",
 		args: ["--mode=rpc", "--", "PROMPT"],
 		expectedPrompt: "",
-		expectedArgs: "--mode=rpc -- PROMPT",
+		expectedArgs: "--mode=rpc -- [redacted]",
 		directBypass: true,
 	},
 	{
 		name: "print keeps the --- message quirk and the direct-Pi bypass intact",
 		args: ["--print", "---text", "PROMPT"],
 		expectedPrompt: "",
-		expectedArgs: "--print ---text PROMPT",
+		expectedArgs: "--print [redacted] [redacted]",
 		directBypass: true,
 	},
 	{
 		name: "short -p keeps the direct-Pi bypass intact",
 		args: ["-p", "PROMPT"],
 		expectedPrompt: "",
-		expectedArgs: "-p PROMPT",
+		expectedArgs: "-p [redacted]",
 		directBypass: true,
 	},
 	{
 		name: "explicit --mode keeps the direct-Pi bypass intact",
 		args: ["--mode", "rpc", "--offline", "PROMPT"],
 		expectedPrompt: "",
-		expectedArgs: "--mode rpc --offline PROMPT",
+		expectedArgs: "--mode rpc --offline [redacted]",
 		directBypass: true,
 	},
 	{
 		name: "explicit --mode=* keeps the direct-Pi bypass intact",
 		args: ["--mode=rpc", "--offline", "PROMPT"],
 		expectedPrompt: "",
-		expectedArgs: "--mode=rpc --offline PROMPT",
+		expectedArgs: "--mode=rpc --offline [redacted]",
 		directBypass: true,
 	},
 ];
@@ -598,16 +598,17 @@ describe("sumocode launcher mirrors Pi option consumption (PTY RPC path)", () =>
 	for (const row of OPTION_CONSUMPTION_ROWS) {
 		it(row.name, async () => {
 			const output = await ptyDryRun(row.args);
-			const prompt = dryRunField(output, "SUMOCODE_INITIAL_PROMPT");
+			const transport = dryRunField(output, "KICKOFF_PROMPT_TRANSPORT");
 			const forwardedArgs = dryRunField(output, "ARGS");
 			const execLine = output.split(/\r?\n/).find((candidate) => candidate.startsWith("exec "));
 			if (execLine === undefined) throw new Error(`dry-run output missing exec line. Output:\n${output}`);
 
 			if (row.directBypass === true) {
-				// Direct-Pi bypass stays byte-for-byte: no RPC host, no extraction,
-				// argv forwarded exactly as typed (including `---`-prefixed print
-				// messages Pi would consume).
-				expect(prompt).toBe("");
+				// Direct-Pi bypass keeps no kickoff side channel. The prompt
+				// positional and -p/--print's consumed message show redacted in
+				// the forwarded argv display — dry-run is diagnostics and never
+				// carries prompt bytes (issue 391).
+				expect(transport).toBe("(none)");
 				expect(forwardedArgs).toBe(row.expectedArgs);
 				expect(execLine.startsWith("exec /bin/echo -e ")).toBe(true);
 				expect(execLine).toContain("/src/extension-entry.ts");
@@ -617,8 +618,14 @@ describe("sumocode launcher mirrors Pi option consumption (PTY RPC path)", () =>
 			}
 
 			// RPC path: flags/values stay in the forwarded argv; only the first
-			// actual message moves to the kickoff-prompt side channel.
-			expect(prompt).toBe(row.expectedPrompt);
+			// actual message moves to the kickoff-prompt side channel, whose
+			// dry-run display shows presence only — prompt bytes never appear
+			// in ARGS or the exec line (issue 391).
+			expect(transport).toBe(row.expectedPrompt === "" ? "(none)" : "one-shot-file");
+			if (row.expectedPrompt !== "") {
+				expect(forwardedArgs).not.toContain(row.expectedPrompt);
+				expect(execLine).not.toContain(row.expectedPrompt);
+			}
 			expect(forwardedArgs).toBe(row.expectedArgs);
 			expect(execLine).toBe(`exec node ${process.cwd()}/sumo-rpc-host.js ${row.expectedArgs}`);
 		});
@@ -653,7 +660,8 @@ describe("sumocode launcher mirrors Pi option consumption (PTY RPC path)", () =>
 		try {
 			writeFileSync(promptFile, "FILEPROMPT");
 			const output = await ptyDryRun(["task", "--prompt-file", promptFile, "--", "--offline"]);
-			expect(dryRunField(output, "SUMOCODE_INITIAL_PROMPT")).toBe("FILEPROMPT");
+			expect(dryRunField(output, "KICKOFF_PROMPT_TRANSPORT")).toBe("one-shot-file");
+			expect(output).not.toContain("FILEPROMPT");
 			expect(dryRunField(output, "ARGS")).toBe("-- --offline");
 		} finally {
 			rmSync(root, { recursive: true, force: true });
@@ -665,7 +673,8 @@ describe("sumocode launcher mirrors Pi option consumption (PTY RPC path)", () =>
 		try {
 			writeFileSync(join(root, "prompt.txt"), "TASKDIRPROMPT");
 			const output = await ptyDryRun(["task", "--task-dir", root, "--", "--offline"]);
-			expect(dryRunField(output, "SUMOCODE_INITIAL_PROMPT")).toBe("TASKDIRPROMPT");
+			expect(dryRunField(output, "KICKOFF_PROMPT_TRANSPORT")).toBe("one-shot-file");
+			expect(output).not.toContain("TASKDIRPROMPT");
 			expect(dryRunField(output, "ARGS")).toBe("-- --offline");
 		} finally {
 			rmSync(root, { recursive: true, force: true });
@@ -696,7 +705,9 @@ describe("sumocode launcher mode decision", () => {
 		const output = dryRun(["--offline", "--no-extensions", "--no-session", "--print", "hello"]);
 		expect(output).toContain("SUMO_TUI=0");
 		expect(output).toContain("SUMO_RPC=");
-		expect(output).toContain("--print hello");
+		expect(output).toContain("--print [redacted]");
+		// Issue 391: the print message is prompt bytes and never shows.
+		expect(output).not.toContain("hello");
 		expect(output).toContain("/src/extension-entry.ts");
 		expect(output).not.toContain("sumo-rpc-host.js");
 	});

@@ -301,7 +301,7 @@ writeFileSync(outputPath, JSON.stringify({
 		printBypass: /exec .*node_modules\/\.bin\/pi -e .*src\/extension-entry\.ts .*--print hello/.test(printText) && !printText.includes("sumo-rpc-host.js"),
 		modeBypass: /exec .*node_modules\/\.bin\/pi -e .*src\/extension-entry\.ts --mode rpc/.test(modeText) && !modeText.includes("sumo-rpc-host.js"),
 		nonTtyBypass: /exec .*node_modules\/\.bin\/pi -e .*src\/extension-entry\.ts --offline/.test(nonTtyText) && !nonTtyText.includes("sumo-rpc-host.js"),
-		tuiModePositional: tuiModeText.includes("SUMOCODE_INITIAL_PROMPT=compat prompt") && /exec node .*sumo-rpc-host\.js .*--tui-mode fullscreen/.test(tuiModeText),
+		tuiModePositional: tuiModeText.includes("KICKOFF_PROMPT_TRANSPORT=one-shot-file") && /exec node .*sumo-rpc-host\.js .*--tui-mode fullscreen/.test(tuiModeText),
 		rpcState: rpc.state?.success === true && rpc.state.command === "get_state",
 		rpcCommands: Array.isArray(rpc.commands),
 		toolBypass: rpc.toolBypass === true,

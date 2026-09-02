@@ -559,6 +559,67 @@ _sumocode_task_has_nonempty_prompt_arg() {
 	[[ -n "${SUMOCODE_ARGS[prompt_index]//[[:space:]]/}" ]]
 }
 
+# Prints SUMOCODE_ARGS with prompt bytes and sensitive option values replaced
+# by [redacted] (issue 391: --dry-run output is diagnostics and must never
+# carry prompt content or secrets). Pass "1" to also redact the first plain
+# positional (direct-Pi path, where the prompt positional still sits in the
+# forwarded argv); pass "0" when extraction already removed it (RPC path) so
+# a real forwarded message is not mistaken for the prompt. Mirrors
+# _sumocode_first_positional_index's class table; -p/--print's consumed
+# message and --api-key/--system-prompt/--append-system-prompt values are
+# prompt/secret bytes too. Display only -- never mutates SUMOCODE_ARGS.
+redact_sensitive_args() {
+	local redact_positional="${1:-1}"
+	local prompt_index=-1
+	if [[ "${redact_positional}" == "1" ]]; then
+		prompt_index="$(_sumocode_first_positional_index 2>/dev/null || echo -1)"
+	fi
+	local -a out=()
+	local i=0
+	local n="${#SUMOCODE_ARGS[@]}"
+	local arg next
+	while [[ "${i}" -lt "${n}" ]]; do
+		arg="${SUMOCODE_ARGS[i]}"
+		if [[ "${i}" -eq "${prompt_index}" ]]; then
+			out+=("[redacted]")
+			i=$((i + 1))
+			continue
+		fi
+		case "${arg}" in
+			--api-key|--system-prompt|--append-system-prompt)
+				out+=("${arg}" "[redacted]")
+				i=$((i + 2))
+				continue
+				;;
+			--api-key=*|--system-prompt=*|--append-system-prompt=*)
+				out+=("${arg%%=*}=[redacted]")
+				i=$((i + 1))
+				continue
+				;;
+			--print|-p)
+				out+=("${arg}")
+				if [[ $((i + 1)) -lt "${n}" ]]; then
+					next="${SUMOCODE_ARGS[i+1]}"
+					if [[ "${next}" != @* && ( "${next}" != -* || "${next}" == ---* ) ]]; then
+						out+=("[redacted]")
+						i=$((i + 2))
+						continue
+					fi
+				fi
+				i=$((i + 1))
+				continue
+				;;
+		esac
+		out+=("${arg}")
+		i=$((i + 1))
+	done
+	if [[ "${#out[@]}" -eq 0 ]]; then
+		printf ''
+	else
+		printf '%s' "${out[*]}"
+	fi
+}
+
 if [[ "${COMMAND}" == "doctor" && "${#SUMOCODE_ARGS[@]}" -gt 0 ]]; then
 	usage_error "doctor does not accept a path argument."
 fi
@@ -1019,12 +1080,24 @@ fi
 if [[ "${DRY_RUN}" == "1" ]]; then
 	# Mirror the real RPC-path argv rewrite (see extract_first_positional and
 	# its call site below) so --dry-run output shows exactly what will be
-	# forwarded to the RPC host/child, including the SUMOCODE_INITIAL_PROMPT
-	# side channel, instead of the pre-extraction argv.
+	# forwarded to the RPC host/child, including the one-shot transport side
+	# channel, instead of the pre-extraction argv. Prompt bytes NEVER appear:
+	# the side channel shows presence only, and ARGS/exec go through
+	# redact_sensitive_args (issue 391).
 	DRY_RUN_INITIAL_PROMPT=""
 	if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
 		extract_first_positional
 		DRY_RUN_INITIAL_PROMPT="${EXTRACTED_INITIAL_PROMPT}"
+	fi
+	if [[ "${USE_RPC_HOST}" -eq 1 && -n "${DRY_RUN_INITIAL_PROMPT}" ]]; then
+		KICKOFF_PROMPT_TRANSPORT="one-shot-file"
+	else
+		KICKOFF_PROMPT_TRANSPORT="(none)"
+	fi
+	if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
+		REDACTED_ARGS="$(redact_sensitive_args 0)"
+	else
+		REDACTED_ARGS="$(redact_sensitive_args 1)"
 	fi
 	cat <<EOF
 sumocode dry run
@@ -1035,9 +1108,9 @@ SUMO_RPC=${SUMO_RPC:-}
 SUMO_TUI_DIAG_FILE=${SUMO_TUI_DIAG_FILE:-}
 SUMO_TUI_DEBUG=${SUMO_TUI_DEBUG:-}
 COMMAND=${COMMAND}
-ARGS=${SUMOCODE_ARGS[*]:-}
-SUMOCODE_INITIAL_PROMPT=${DRY_RUN_INITIAL_PROMPT}
-exec $(if [[ "${USE_RPC_HOST}" -eq 1 ]]; then printf 'node %s' "${ROOT_DIR}/sumo-rpc-host.js"; else printf '%s -e %s/src/extension-entry.ts' "${PI_BIN}" "${ROOT_DIR}"; fi) ${SUMOCODE_ARGS[*]:-}
+ARGS=${REDACTED_ARGS}
+KICKOFF_PROMPT_TRANSPORT=${KICKOFF_PROMPT_TRANSPORT}
+exec $(if [[ "${USE_RPC_HOST}" -eq 1 ]]; then printf 'node %s' "${ROOT_DIR}/sumo-rpc-host.js"; else printf '%s -e %s/src/extension-entry.ts' "${PI_BIN}" "${ROOT_DIR}"; fi) ${REDACTED_ARGS}
 EOF
 	exit 0
 fi

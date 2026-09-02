@@ -1,7 +1,7 @@
 // src/extension.ts
-import { existsSync as existsSync14, readFileSync as readFileSync18, realpathSync as realpathSync5 } from "node:fs";
-import { homedir as homedir16 } from "node:os";
-import { dirname as dirname14, join as join22, resolve as resolve8, sep } from "node:path";
+import { existsSync as existsSync14, readFileSync as readFileSync19, realpathSync as realpathSync5 } from "node:fs";
+import { homedir as homedir17 } from "node:os";
+import { dirname as dirname14, join as join23, resolve as resolve8, sep } from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 
 // src/cathedral/input-hints.ts
@@ -132,10 +132,10 @@ function createFastModeStream(config, streamers) {
 function describeFastMode(state, model) {
   const stateText = state.enabled ? "ON" : "OFF";
   if (!model) return `Fast mode ${stateText}. No model selected.`;
-  const modelKey = `${model.provider}/${model.id}`;
-  if (shouldApplyFastMode(state, model)) return `Fast mode ${stateText}. Applying ${SERVICE_TIER} service tier to ${modelKey}.`;
-  if (state.enabled && !isConfiguredFastModel(state, model)) return `Fast mode ${stateText}, inactive for unsupported model ${modelKey}.`;
-  return `Fast mode ${stateText}. Current model: ${modelKey}.`;
+  const modelKey2 = `${model.provider}/${model.id}`;
+  if (shouldApplyFastMode(state, model)) return `Fast mode ${stateText}. Applying ${SERVICE_TIER} service tier to ${modelKey2}.`;
+  if (state.enabled && !isConfiguredFastModel(state, model)) return `Fast mode ${stateText}, inactive for unsupported model ${modelKey2}.`;
+  return `Fast mode ${stateText}. Current model: ${modelKey2}.`;
 }
 function notify(ctx, message, level) {
   if (ctx.hasUI) ctx.ui.notify(message, level);
@@ -16879,24 +16879,148 @@ function registerRpcLoginCommand(pi, deps = {}) {
 
 // src/commands/accounts.ts
 import { execFile as execFile7 } from "node:child_process";
-import { existsSync as existsSync13, lstatSync as lstatSync4, mkdirSync as mkdirSync10, readFileSync as readFileSync17, readlinkSync, realpathSync as realpathSync4, renameSync as renameSync7, rmSync as rmSync4, symlinkSync as symlinkSync2, writeFileSync as writeFileSync11 } from "node:fs";
-import { homedir as homedir15 } from "node:os";
-import { dirname as dirname13, join as join21, resolve as resolve7 } from "node:path";
+import { existsSync as existsSync13, lstatSync as lstatSync4, mkdirSync as mkdirSync10, readFileSync as readFileSync18, readlinkSync, realpathSync as realpathSync4, renameSync as renameSync7, rmSync as rmSync4, symlinkSync as symlinkSync2, writeFileSync as writeFileSync11 } from "node:fs";
+import { homedir as homedir16 } from "node:os";
+import { dirname as dirname13, join as join22, resolve as resolve7 } from "node:path";
 import { promisify as promisify5 } from "node:util";
+
+// src/config/claude-providers.ts
+var CLAUDE_BASE_PROVIDER = "anthropic";
+function claudeAccountProviderId(index) {
+  return `${CLAUDE_BASE_PROVIDER}-${index}`;
+}
+function isClaudeAccountProvider(providerId) {
+  return /^anthropic-[1-9]\d*$/.test(providerId);
+}
+
+// src/config/enabled-models.ts
+import { readFileSync as readFileSync17 } from "node:fs";
+import { homedir as homedir15 } from "node:os";
+import { join as join21 } from "node:path";
+var THINKING_LEVELS3 = {
+  off: true,
+  minimal: true,
+  low: true,
+  medium: true,
+  high: true,
+  xhigh: true,
+  max: true
+};
+function resolvePiAgentDir3(env = process.env) {
+  return env.PI_CODING_AGENT_DIR ?? join21(homedir15(), ".pi", "agent");
+}
+function isString6(entry) {
+  return typeof entry === "string";
+}
+function isStringArray(value) {
+  return Array.isArray(value) && value.length > 0 && value.every(isString6);
+}
+function readEnabledModelPatterns(env = process.env) {
+  try {
+    const settings = JSON.parse(readFileSync17(join21(resolvePiAgentDir3(env), "settings.json"), "utf8"));
+    return isStringArray(settings.enabledModels) ? settings.enabledModels : [];
+  } catch {
+    return [];
+  }
+}
+function stripThinkingSuffix(pattern) {
+  const colonIndex = pattern.lastIndexOf(":");
+  if (colonIndex === -1) return pattern;
+  const suffix = pattern.slice(colonIndex + 1).toLowerCase();
+  return Object.hasOwn(THINKING_LEVELS3, suffix) ? pattern.slice(0, colonIndex) : pattern;
+}
+function modelKey(model) {
+  return `${model.provider}/${model.id}`.toLowerCase();
+}
+function baseProviderKey(model) {
+  return isClaudeAccountProvider(model.provider) ? `${CLAUDE_BASE_PROVIDER}/${model.id}`.toLowerCase() : void 0;
+}
+function escapeRegexChar(char) {
+  return /[\\^$.*+?()[\]{}|]/.test(char) ? `\\${char}` : char;
+}
+function globToRegExp(pattern) {
+  let source = "^";
+  for (let i = 0; i < pattern.length; i += 1) {
+    const char = pattern[i];
+    if (char === "*") {
+      source += ".*";
+      continue;
+    }
+    if (char === "?") {
+      source += ".";
+      continue;
+    }
+    if (char === "[") {
+      const closeIndex = pattern.indexOf("]", i + 1);
+      if (closeIndex === -1) {
+        source += "\\[";
+        continue;
+      }
+      const content = pattern.slice(i + 1, closeIndex).replace(/\\/g, "\\\\");
+      source += `[${content}]`;
+      i = closeIndex;
+      continue;
+    }
+    source += escapeRegexChar(char);
+  }
+  return new RegExp(`${source}$`, "i");
+}
+function findExactModels(pattern, models) {
+  const normalized = pattern.trim().toLowerCase();
+  if (!normalized) return [];
+  const canonicalMatches = models.filter((model) => modelKey(model) === normalized);
+  if (canonicalMatches.length > 1) return [];
+  const slashIndex = normalized.indexOf("/");
+  if (slashIndex !== -1) {
+    return [...canonicalMatches, ...models.filter((model) => baseProviderKey(model) === normalized)];
+  }
+  const idMatches = models.filter((model) => model.id.toLowerCase() === normalized);
+  const logicalKeys = new Set(idMatches.map((model) => baseProviderKey(model) ?? modelKey(model)));
+  return logicalKeys.size === 1 ? idMatches : [];
+}
+function appendIfNew(result, seen, model) {
+  const key = modelKey(model);
+  if (seen.has(key)) return;
+  seen.add(key);
+  result.push(model);
+}
+function filterToEnabled(models, patterns) {
+  if (patterns.length === 0) return [...models];
+  const result = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const rawPattern of patterns) {
+    const pattern = stripThinkingSuffix(rawPattern.trim());
+    if (!pattern) continue;
+    if (pattern.includes("*") || pattern.includes("?") || pattern.includes("[")) {
+      const regex = globToRegExp(pattern);
+      for (const model of models) {
+        const baseKey = baseProviderKey(model);
+        if (regex.test(modelKey(model)) || regex.test(model.id) || baseKey !== void 0 && regex.test(baseKey)) {
+          appendIfNew(result, seen, model);
+        }
+      }
+      continue;
+    }
+    for (const model of findExactModels(pattern, models)) appendIfNew(result, seen, model);
+  }
+  return result;
+}
+
+// src/commands/accounts.ts
 var ACCOUNTS_CONFIG_FILE = "claude-accounts.json";
 var LEGACY_CONFIG_FILE = "multi-pass.json";
 var ADAPTER_PACKAGE_SOURCE = "git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account";
 var execFileAsync4 = promisify5(execFile7);
 var sessionPendingReloadProviders = /* @__PURE__ */ new Set();
 function resolveAgentDir(deps) {
-  return deps.agentDir ?? deps.env?.PI_CODING_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR ?? join21(deps.homeDir ?? homedir15(), ".pi", "agent");
+  return deps.agentDir ?? deps.env?.PI_CODING_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR ?? join22(deps.homeDir ?? homedir16(), ".pi", "agent");
 }
 function resolveAccountsConfigPath(deps = {}) {
-  return join21(resolveAgentDir(deps), ACCOUNTS_CONFIG_FILE);
+  return join22(resolveAgentDir(deps), ACCOUNTS_CONFIG_FILE);
 }
 function resolvePrivateAccountsPath(deps) {
-  const privateConfigDir = resolve7(deps.env?.SUMOCODE_CONFIG_DIR ?? process.env.SUMOCODE_CONFIG_DIR ?? join21(deps.homeDir ?? homedir15(), ".config", "sumocode"));
-  return join21(privateConfigDir, ACCOUNTS_CONFIG_FILE);
+  const privateConfigDir = resolve7(deps.env?.SUMOCODE_CONFIG_DIR ?? process.env.SUMOCODE_CONFIG_DIR ?? join22(deps.homeDir ?? homedir16(), ".config", "sumocode"));
+  return join22(privateConfigDir, ACCOUNTS_CONFIG_FILE);
 }
 function accountPathsShareParent(targetPath, managedPath) {
   try {
@@ -16962,11 +17086,11 @@ function resolveAccountsWriteDestination(deps) {
     if (linkTarget !== managedTarget) throw new Error(`Refusing to write accounts through an unmanaged symlink: ${targetPath}`);
     return { writePath: managedTarget };
   }
-  if (existsSync13(join21(privateConfigDir, ".git"))) return { writePath: managedTarget, linkPath: targetPath };
+  if (existsSync13(join22(privateConfigDir, ".git"))) return { writePath: managedTarget, linkPath: targetPath };
   return { writePath: targetPath };
 }
 function resolveLegacyConfigPath(deps) {
-  return join21(resolveAgentDir(deps), LEGACY_CONFIG_FILE);
+  return join22(resolveAgentDir(deps), LEGACY_CONFIG_FILE);
 }
 function isRecord4(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -16982,7 +17106,7 @@ function parseSubscription(value) {
 function readDocument(path2) {
   if (!existsSync13(path2)) return {};
   try {
-    const parsed = JSON.parse(readFileSync17(path2, "utf8"));
+    const parsed = JSON.parse(readFileSync18(path2, "utf8"));
     return isRecord4(parsed) ? parsed : {};
   } catch {
     return {};
@@ -16992,7 +17116,7 @@ function readDocumentForSave(path2) {
   if (!existsSync13(path2)) return {};
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync17(path2, "utf8"));
+    parsed = JSON.parse(readFileSync18(path2, "utf8"));
   } catch {
     throw new Error(`Invalid accounts config; repair before saving: ${path2}`);
   }
@@ -17047,10 +17171,10 @@ function packageSource(value) {
   return void 0;
 }
 function isAdapterInstalled(deps = {}) {
-  const settingsPath = join21(resolveAgentDir(deps), "settings.json");
+  const settingsPath = join22(resolveAgentDir(deps), "settings.json");
   if (!existsSync13(settingsPath)) return false;
   try {
-    const parsed = JSON.parse(readFileSync17(settingsPath, "utf8"));
+    const parsed = JSON.parse(readFileSync18(settingsPath, "utf8"));
     if (!isRecord4(parsed) || !Array.isArray(parsed.packages)) return false;
     return parsed.packages.some((entry) => packageSource(entry) === ADAPTER_PACKAGE_SOURCE);
   } catch {
@@ -17066,7 +17190,7 @@ async function defaultInstallAdapter() {
   });
 }
 function accountProviderId(subscription) {
-  return `${subscription.provider}-${subscription.index}`;
+  return claudeAccountProviderId(subscription.index);
 }
 function authConfigured(ctx, providerId) {
   return ctx.modelRegistry.getProviderAuthStatus(providerId).configured;
@@ -17102,13 +17226,12 @@ async function defaultLogin(providerId, ctx) {
   logDiagnostic("accounts_login_start", { provider: providerId });
   await executeRpcLogin(providerId, ctx, runtime);
 }
-function accountState(account, hasActiveClaudeAccount) {
+function accountState(account) {
   if (account.active) return "in use";
-  if (!account.configured) return "sign in required";
-  return hasActiveClaudeAccount ? "signed in" : "inactive";
+  return account.configured ? "signed in" : "sign in required";
 }
-function accountRow(account, hasActiveClaudeAccount) {
-  return `${account.label} \xB7 ${accountState(account, hasActiveClaudeAccount)}  ${account.providerId}`;
+function accountRow(account) {
+  return `${account.label} \xB7 ${accountState(account)}  ${account.providerId}`;
 }
 function pendingReloadProviders(deps) {
   return deps.pendingReloadProviders ?? sessionPendingReloadProviders;
@@ -17156,13 +17279,25 @@ async function addAccount(ctx, deps) {
   );
   if (reload) await (deps.reload ?? ((reloadCtx) => executeSumoReload(reloadCtx)))(ctx);
 }
-async function switchAccount(pi, ctx, account) {
+function isClaudeProvider(providerId) {
+  return providerId === CLAUDE_BASE_PROVIDER || isClaudeAccountProvider(providerId);
+}
+function preferredAccountModel(ctx, account, deps) {
+  const models = ctx.modelRegistry.getAll().filter((model) => model.provider === account.providerId);
+  const current = ctx.model;
+  if (current && isClaudeProvider(current.provider)) {
+    const sameModel = models.find((model) => model.id === current.id);
+    if (sameModel) return sameModel;
+  }
+  const enabled = filterToEnabled(ctx.modelRegistry.getAvailable(), readEnabledModelPatterns({ PI_CODING_AGENT_DIR: resolveAgentDir(deps) }));
+  return enabled.find((model) => model.provider === account.providerId) ?? models[0];
+}
+async function switchAccount(pi, ctx, account, deps) {
   if (!account.configured) {
     ctx.ui.notify(`${account.label} must be signed in before it can be selected`, "warning");
     return;
   }
-  const models = ctx.modelRegistry.getAll().filter((model) => model.provider === account.providerId);
-  const target = models.find((model) => model.id === ctx.model?.id) ?? models[0];
+  const target = preferredAccountModel(ctx, account, deps);
   if (!target) {
     ctx.ui.notify(`${account.providerId} is not active; reload SumoCode after adding the account`, "warning");
     return;
@@ -17214,7 +17349,7 @@ async function accountActions(pi, ctx, account, deps) {
     ...account.subscription ? ["rename account"] : []
   ];
   const action = await ctx.ui.select(`${account.label.toUpperCase()} \xB7 ${account.providerId}`, actions);
-  if (action === "use this account") await switchAccount(pi, ctx, account);
+  if (action === "use this account") await switchAccount(pi, ctx, account, deps);
   else if (action === "sign in" || action === "sign in again") {
     await (deps.login ?? defaultLogin)(account.providerId, ctx);
   } else if (action === "rename account") await renameAccount(ctx, account, deps);
@@ -17225,8 +17360,7 @@ async function executeAccountsCommand(pi, ctx, deps = {}) {
     return;
   }
   const accountList = accounts(ctx, deps);
-  const hasActiveClaudeAccount = accountList.some((account2) => account2.active);
-  const rows = accountList.map((account2) => accountRow(account2, hasActiveClaudeAccount));
+  const rows = accountList.map(accountRow);
   const addLabel = "add Claude account";
   const selected = await ctx.ui.select("CLAUDE ACCOUNTS", [...rows, addLabel]);
   if (selected === addLabel) {
@@ -17475,7 +17609,7 @@ function installHerdrRpcBridge(pi, options = {}) {
 function isPayloadObject2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function isString6(value) {
+function isString7(value) {
   return typeof value === "string";
 }
 var RPC_TREE_NAVIGATION_COMMAND = "sumo:rpc-tree-navigate";
@@ -17534,7 +17668,7 @@ function parseRequestJson(decoded) {
   }
   if (!isPayloadObject2(parsed)) throw new Error("tree navigation payload must be an object");
   validateRpcTreeNavigationRequest(parsed);
-  if (isString6(parsed.customInstructions)) {
+  if (isString7(parsed.customInstructions)) {
     return { requestId: parsed.requestId, targetId: parsed.targetId.trim(), summarize: parsed.summarize, customInstructions: parsed.customInstructions };
   }
   return { requestId: parsed.requestId, targetId: parsed.targetId.trim(), summarize: parsed.summarize };
@@ -17572,10 +17706,10 @@ function entryEditorText(entry) {
   return void 0;
 }
 function isTextBlock(value) {
-  return isPayloadObject2(value) && value.type === "text" && isString6(value.text);
+  return isPayloadObject2(value) && value.type === "text" && isString7(value.text);
 }
 function contentText(content) {
-  if (isString6(content)) return content;
+  if (isString7(content)) return content;
   if (!Array.isArray(content)) return "";
   return content.filter(isTextBlock).map((block) => block.text).join("");
 }
@@ -17637,7 +17771,7 @@ function registerRpcTreeNavigationCommand(pi) {
 
 // src/extension.ts
 var SUMOCODE_PACKAGE_NAME = "@dhruvkelawala/sumocode";
-var LEGACY_TASK_TOOL_EXTENSION_PATH = join22(".pi", "agent", "extensions", "task-tool", "index.ts");
+var LEGACY_TASK_TOOL_EXTENSION_PATH = join23(".pi", "agent", "extensions", "task-tool", "index.ts");
 function canonicalize(path2, realpath) {
   try {
     return realpath(path2);
@@ -17652,13 +17786,13 @@ function moduleUrlToPath2(moduleUrl) {
     return moduleUrl;
   }
 }
-function isInstalledPiAgentGitModule(moduleUrl, homeDir = homedir16()) {
+function isInstalledPiAgentGitModule(moduleUrl, homeDir = homedir17()) {
   const modulePath = resolve8(moduleUrlToPath2(moduleUrl));
   const agentGitRoot = `${resolve8(homeDir, ".pi", "agent", "git")}${sep}`;
   return modulePath.startsWith(agentGitRoot);
 }
 function packageNameAt2(dir, exists, readFile) {
-  const packagePath = join22(dir, "package.json");
+  const packagePath = join23(dir, "package.json");
   if (!exists(packagePath)) return void 0;
   try {
     const parsed = JSON.parse(readFile(packagePath, "utf8"));
@@ -17679,12 +17813,12 @@ function packageRootFromModulePath(modulePath, exists, readFile) {
 }
 function findActiveSumoDevTree2(cwd, options = {}) {
   const exists = options.exists ?? existsSync14;
-  const readFile = options.readFile ?? ((path2, encoding) => readFileSync18(path2, encoding));
+  const readFile = options.readFile ?? ((path2, encoding) => readFileSync19(path2, encoding));
   let current = resolve8(cwd);
   while (true) {
     const isSumocodePackage = packageNameAt2(current, exists, readFile) === SUMOCODE_PACKAGE_NAME;
-    const hasExtensionSource = exists(join22(current, "src", "extension.ts"));
-    const hasGitMetadata = exists(join22(current, ".git"));
+    const hasExtensionSource = exists(join23(current, "src", "extension.ts"));
+    const hasGitMetadata = exists(join23(current, ".git"));
     if (isSumocodePackage && hasExtensionSource && hasGitMetadata) return current;
     const parent = dirname14(current);
     if (parent === current) return void 0;
@@ -17693,13 +17827,13 @@ function findActiveSumoDevTree2(cwd, options = {}) {
 }
 function shouldNoopDuplicateInstalledExtension(options = {}) {
   const moduleUrl = options.moduleUrl ?? import.meta.url;
-  if (!isInstalledPiAgentGitModule(moduleUrl, options.homeDir ?? homedir16())) return false;
+  if (!isInstalledPiAgentGitModule(moduleUrl, options.homeDir ?? homedir17())) return false;
   const env = options.env ?? process.env;
   const launcherRoot = env.SUMOCODE_ROOT_DIR;
   if (launcherRoot) {
     const realpath = options.realpath ?? ((path2) => realpathSync5(path2));
     const exists = options.exists ?? existsSync14;
-    const readFile = options.readFile ?? ((path2, encoding) => readFileSync18(path2, encoding));
+    const readFile = options.readFile ?? ((path2, encoding) => readFileSync19(path2, encoding));
     const modulePath = canonicalize(moduleUrlToPath2(moduleUrl), realpath);
     const packageRoot = packageRootFromModulePath(modulePath, exists, readFile);
     const canonicalLauncherRoot = canonicalize(launcherRoot, realpath);
@@ -17714,7 +17848,7 @@ function shouldNoopDuplicateInstalledExtension(options = {}) {
 }
 function hasLegacyTaskToolExtension(options = {}) {
   const exists = options.exists ?? existsSync14;
-  return exists(join22(options.homeDir ?? homedir16(), LEGACY_TASK_TOOL_EXTENSION_PATH));
+  return exists(join23(options.homeDir ?? homedir17(), LEGACY_TASK_TOOL_EXTENSION_PATH));
 }
 function shouldInstallNativeTaskTool(options = {}) {
   if (options.force === "1" || options.force === "true") return true;

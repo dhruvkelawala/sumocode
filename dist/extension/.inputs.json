@@ -54,6 +54,8 @@
     "src/compaction-indicator.ts",
     "src/compaction-state.ts",
     "src/compaction-status-row.ts",
+    "src/config/claude-providers.ts",
+    "src/config/enabled-models.ts",
     "src/config/sumocode-config.ts",
     "src/divine-query.ts",
     "src/extension.ts",
@@ -128,6 +130,6 @@
     "src/working-indicator.ts",
     "tsconfig.json"
   ],
-  "hash": "0a8179c9ec50cf33afc95039338825d4d5691ae4275fa93f98af8cc5e307973d",
-  "outputsHash": "26d0559b8eacc84fca6148aa560a3eec69dd7b878fa5bc5abf7d69bdea865c1e"
+  "hash": "1998e4039c0e90a42c72b9b74d80fe4be1331062c9e9c1fcaa478bb91543f5e9",
+  "outputsHash": "1656178fddcd3ff1f6c8f9a902961f7d6d0881df2a7838f28814ab163580ba3d"
 }

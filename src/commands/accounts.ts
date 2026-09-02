@@ -4,8 +4,11 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathS
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { CLAUDE_ACCOUNTS_MIGRATION_FIELD } from "./accounts-config.js";
+import { CLAUDE_BASE_PROVIDER, claudeAccountProviderId, isClaudeAccountProvider } from "../config/claude-providers.js";
+import { filterToEnabled, readEnabledModelPatterns } from "../config/enabled-models.js";
 import { executeSumoReload } from "./reload.js";
 import { logDiagnostic } from "../sumo-tui/runtime/diagnostics.js";
 import { executeRpcLogin, getRpcLoginRuntime, type RpcLoginRuntime } from "../sumo-tui/pi-compat/login-command.js";
@@ -281,7 +284,7 @@ async function defaultInstallAdapter(): Promise<void> {
 }
 
 function accountProviderId(subscription: ClaudeSubscription): string {
-	return `${subscription.provider}-${subscription.index}`;
+	return claudeAccountProviderId(subscription.index);
 }
 
 function authConfigured(ctx: ExtensionCommandContext, providerId: string): boolean {
@@ -321,10 +324,15 @@ async function defaultLogin(providerId: string, ctx: ExtensionCommandContext): P
 	await executeRpcLogin(providerId, ctx, runtime);
 }
 
-function accountState(account: ClaudeAccount, hasActiveClaudeAccount: boolean): string {
+/**
+ * A signed-in account reads "signed in" regardless of which provider the
+ * session's current model uses. Fresh sessions start on the settings default
+ * (often a non-Claude provider), and an earlier "inactive" label for that
+ * state read as "sign in required" and sent users through needless re-auth.
+ */
+function accountState(account: ClaudeAccount): string {
 	if (account.active) return "in use";
-	if (!account.configured) return "sign in required";
-	return hasActiveClaudeAccount ? "signed in" : "inactive";
+	return account.configured ? "signed in" : "sign in required";
 }
 
 /**
@@ -333,8 +341,8 @@ function accountState(account: ClaudeAccount, hasActiveClaudeAccount: boolean): 
  * two-space seam and the provider id — derivable from the label — is what
  * gets truncated instead.
  */
-function accountRow(account: ClaudeAccount, hasActiveClaudeAccount: boolean): string {
-	return `${account.label} · ${accountState(account, hasActiveClaudeAccount)}  ${account.providerId}`;
+function accountRow(account: ClaudeAccount): string {
+	return `${account.label} · ${accountState(account)}  ${account.providerId}`;
 }
 
 /**
@@ -393,13 +401,40 @@ async function addAccount(ctx: ExtensionCommandContext, deps: AccountsCommandDep
 	if (reload) await (deps.reload ?? ((reloadCtx) => executeSumoReload(reloadCtx)))(ctx);
 }
 
-async function switchAccount(pi: ExtensionAPI, ctx: ExtensionCommandContext, account: ClaudeAccount): Promise<void> {
+function isClaudeProvider(providerId: string): boolean {
+	return providerId === CLAUDE_BASE_PROVIDER || isClaudeAccountProvider(providerId);
+}
+
+/**
+ * Model to select when switching onto `account`. Keep the current model id
+ * when the session is already on a Claude account, so switching accounts
+ * never silently changes the model. Otherwise (fresh sessions start on the
+ * settings default provider) pick the first model the user has enabled for
+ * the base anthropic provider, since those patterns mirror onto every
+ * account, and only then fall back to the provider's first model.
+ */
+function preferredAccountModel(ctx: ExtensionCommandContext, account: ClaudeAccount, deps: AccountsCommandDeps): Model<Api> | undefined {
+	const models = ctx.modelRegistry.getAll().filter((model) => model.provider === account.providerId);
+	const current = ctx.model;
+	if (current && isClaudeProvider(current.provider)) {
+		const sameModel = models.find((model) => model.id === current.id);
+		if (sameModel) return sameModel;
+	}
+	// Resolve the patterns over the same set the cycle ring and /model picker
+	// use — models whose provider has credentials — so a pattern means the
+	// same thing here as it does there. Resolving over one provider's models
+	// would disambiguate an id the picker rejects; resolving over every
+	// registered model would treat an unreachable provider as a collision.
+	const enabled = filterToEnabled(ctx.modelRegistry.getAvailable(), readEnabledModelPatterns({ PI_CODING_AGENT_DIR: resolveAgentDir(deps) }));
+	return enabled.find((model) => model.provider === account.providerId) ?? models[0];
+}
+
+async function switchAccount(pi: ExtensionAPI, ctx: ExtensionCommandContext, account: ClaudeAccount, deps: AccountsCommandDeps): Promise<void> {
 	if (!account.configured) {
 		ctx.ui.notify(`${account.label} must be signed in before it can be selected`, "warning");
 		return;
 	}
-	const models = ctx.modelRegistry.getAll().filter((model) => model.provider === account.providerId);
-	const target = models.find((model) => model.id === ctx.model?.id) ?? models[0];
+	const target = preferredAccountModel(ctx, account, deps);
 	if (!target) {
 		ctx.ui.notify(`${account.providerId} is not active; reload SumoCode after adding the account`, "warning");
 		return;
@@ -457,7 +492,7 @@ async function accountActions(pi: ExtensionAPI, ctx: ExtensionCommandContext, ac
 		...(account.subscription ? ["rename account"] : []),
 	];
 	const action = await ctx.ui.select(`${account.label.toUpperCase()} · ${account.providerId}`, actions);
-	if (action === "use this account") await switchAccount(pi, ctx, account);
+	if (action === "use this account") await switchAccount(pi, ctx, account, deps);
 	else if (action === "sign in" || action === "sign in again") {
 		await (deps.login ?? defaultLogin)(account.providerId, ctx);
 	} else if (action === "rename account") await renameAccount(ctx, account, deps);
@@ -469,8 +504,7 @@ export async function executeAccountsCommand(pi: ExtensionAPI, ctx: ExtensionCom
 		return;
 	}
 	const accountList = accounts(ctx, deps);
-	const hasActiveClaudeAccount = accountList.some((account) => account.active);
-	const rows = accountList.map((account) => accountRow(account, hasActiveClaudeAccount));
+	const rows = accountList.map(accountRow);
 	const addLabel = "add Claude account";
 	const selected = await ctx.ui.select("CLAUDE ACCOUNTS", [...rows, addLabel]);
 	if (selected === addLabel) {

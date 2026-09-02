@@ -1,7 +1,7 @@
 import type { RpcCommand, RpcResponse, RpcSessionState } from "@earendil-works/pi-coding-agent";
 import { encodeRpcTreeNavigationPayload, type RpcTreeNavigationOutcome, type RpcTreeNavigationOutcomeBroker, type RpcTreeNavigationRequest } from "../pi-compat/tree-navigation-command.js";
 import { responseData, type RpcResponseData } from "./response.js";
-import { filterToEnabled, readEnabledModelPatterns } from "./enabled-models.js";
+import { filterToEnabled, readEnabledModelPatterns } from "../../config/enabled-models.js";
 import { RpcHostStateStore, type RpcHostChromeState } from "./state.js";
 
 export interface RpcCommandClient {

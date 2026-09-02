@@ -206,7 +206,7 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 		statusWidgetVisible = false;
 	};
 
-	const flush = (): void => {
+	const flush = (mayRetry = true): void => {
 		try {
 			delivery.flush((payload) => {
 				pi.sendMessage(
@@ -223,6 +223,7 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 		} catch (error: unknown) {
 			const message = (error instanceof Error ? error.message : String(error)).slice(0, SUBAGENT_DELIVERY_ERROR_MAX);
 			logDiagnostic("subagent_delivery_failed", { message });
+			if (mayRetry) queueMicrotask(() => { flush(false); });
 		}
 	};
 

@@ -245,8 +245,13 @@ async function runSampleProcess({ checkout, agentDir, diagFile }) {
 		try { child.kill("SIGTERM"); } catch {}
 		await Promise.race([exitedPromise, new Promise((resolveWait) => setTimeout(resolveWait, 250))]);
 	}
-	if (!exited) try { child.kill("SIGKILL"); } catch {}
-	return { ok: REQUIRED_EVENTS.every((name) => events.some((event) => event.event === name)), events, exitCode, signal };
+	const failure = exited ? "process-failed" : "missing-events";
+	if (!exited) {
+		try { child.kill("SIGKILL"); } catch {}
+		await Promise.race([exitedPromise, new Promise((resolveWait) => setTimeout(resolveWait, 250))]);
+	}
+	const ok = REQUIRED_EVENTS.every((name) => events.some((event) => event.event === name));
+	return { ok, failure: ok ? undefined : failure, events, exitCode, signal };
 }
 
 function eventTimestamp(event) {
@@ -264,8 +269,9 @@ function publicSample(raw, index, startWallMs) {
 		if (!byName.has(event.event)) byName.set(event.event, event);
 	}
 	const missingEvents = REQUIRED_EVENTS.filter((name) => eventTimestamp(byName.get(name)) === undefined);
-	if (raw?.ok !== true) return { index, ok: false, failure: "process-failed", missingEvents };
+	if (raw?.failure === "process-failed") return { index, ok: false, failure: "process-failed", missingEvents };
 	if (missingEvents.length > 0) return { index, ok: false, failure: "missing-events", missingEvents };
+	if (raw?.ok !== true) return { index, ok: false, failure: "process-failed", missingEvents };
 	if (byName.get("host_import_ready")?.mode !== "source") return { index, ok: false, failure: "mode-mismatch", missingEvents: [] };
 	const hostStart = eventTimestamp(byName.get("process_preload_start"));
 	const hostImport = eventTimestamp(byName.get("host_import_ready"));

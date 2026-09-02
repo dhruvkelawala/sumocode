@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -71,7 +71,7 @@ async function harness(options = {}) {
 			fixtureAgentDir = agentDir;
 			execution.push(`${arm}:${index}`);
 			const store = join(agentDir, "state", "sumocode-terminals");
-			const records = await (await import("node:fs/promises")).readdir(store);
+			const records = await readdir(store);
 			expect(records).toHaveLength(options.fixtureCount ?? 3);
 			const firstMeta = JSON.parse(await readFile(join(store, records[0], "meta.json"), "utf8"));
 			expect(firstMeta).toMatchObject({

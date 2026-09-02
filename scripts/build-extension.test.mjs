@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -26,6 +27,16 @@ afterEach(async () => {
 async function readManifest() {
 	return JSON.parse(await readFile(resolve(outDir, ".inputs.json"), "utf8"));
 }
+
+describe("generated dist outputs", () => {
+	it("are build artifacts: ignored by git and never tracked", () => {
+		const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+		expect(git("ls-files", "--", "dist")).toBe("");
+		for (const path of ["dist/extension/sumocode-extension.bundle.mjs", "dist/extension/.inputs.json", "dist/host/sumo-rpc-host.bundle.mjs"]) {
+			expect(git("check-ignore", "--no-index", path)).toBe(path);
+		}
+	});
+});
 
 describe("extension bundle freshness", () => {
 	it("matches the committed bundle to its recorded input graph and copied assets", async () => {

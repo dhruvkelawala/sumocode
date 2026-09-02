@@ -591,7 +591,7 @@ redact_sensitive_args() {
 				i=$((i + 2))
 				continue
 				;;
-			--api-key=*|--system-prompt=*|--append-system-prompt=*)
+			--api-key=*|--system-prompt=*|--append-system-prompt=*|--print=*|-p=*)
 				out+=("${arg%%=*}=[redacted]")
 				i=$((i + 1))
 				continue
@@ -1385,9 +1385,13 @@ while :; do
 		env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" || code=$?
 	elif [[ -n "${DIRECT_PI_STDIN_PROMPT}" ]]; then
 		# Headless kickoff: the prompt rides stdin (Pi print mode reads it as
-		# the initial message); argv keeps only flags. Pipeline exit
-		# status is Pi's, so the reload/exit handling below is unchanged.
-		printf '%s' "${DIRECT_PI_STDIN_PROMPT}" | env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" "${SUMOCODE_ARGS[@]}" || code=$?
+		# the initial message); argv keeps only flags. The caller's own piped
+		# stdin is streamed first (cat), so Pi's composition — stdin bytes then
+		# the message — stays byte-identical to the pre-stdin behavior, and the
+		# upstream producer keeps its reader instead of taking SIGPIPE.
+		# Pipeline exit status is Pi's, so the reload/exit handling below is
+		# unchanged.
+		{ cat; printf '%s' "${DIRECT_PI_STDIN_PROMPT}"; } | env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" "${SUMOCODE_ARGS[@]}" || code=$?
 	else
 		env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" "${SUMOCODE_ARGS[@]}" || code=$?
 	fi

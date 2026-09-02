@@ -712,6 +712,14 @@ describe("sumocode launcher mode decision", () => {
 		expect(output).not.toContain("sumo-rpc-host.js");
 	});
 
+	it("redacts equals-form print messages from dry-run output", () => {
+		// Issue 391: --print=<message> carries prompt bytes in a single token;
+		// the fallback scan and the redaction walk must agree on that.
+		const output = dryRun(["--offline", "--print=secret-prompt-bytes"]);
+		expect(output).toContain("--print=[redacted]");
+		expect(output).not.toContain("secret-prompt-bytes");
+	});
+
 	it("bypasses the RPC host for explicit Pi mode", () => {
 		const output = dryRun(["--mode", "rpc", "--offline", "--no-extensions", "--no-session"]);
 		expect(output).toContain("SUMO_TUI=0");

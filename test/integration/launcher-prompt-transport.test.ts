@@ -129,6 +129,31 @@ describe("launcher prompt transport (issue 391)", () => {
 		}
 	});
 
+	it("preserves caller-piped stdin ahead of the headless kickoff prompt", () => {
+		const dir = mkdtempSync(join(tmpdir(), "sumocode-headless-piped-"));
+		const { piBin, stubOut } = makePiStub(dir);
+		try {
+			// Pi composes the initial message as stdinContent + messages[0] with
+			// no separator, so the launcher must stream the caller's pipe BEFORE
+			// the prompt bytes — pre-stdin behavior, byte for byte.
+			const result = spawnSync("bash", [LAUNCHER, "--no-sumo-tui", "--no-session", "review this"], {
+				input: "DIFF BYTES\n",
+				encoding: "utf8",
+				env: { ...process.env, PI_BIN: piBin },
+				timeout: 30_000,
+			});
+			expect(result.status).toBe(0);
+
+			// SAFETY: the stub writes exactly one JSON document with argv+stdin
+			// keys (see makePiStub above).
+			const observed = JSON.parse(readFileSync(stubOut, "utf8")) as { argv: string[]; stdin: string };
+			expect(observed.stdin).toBe("DIFF BYTES\nreview this");
+			for (const arg of observed.argv) expect(arg).not.toContain("review this");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("keeps argv transport for multi-positional headless launches so Pi's multi-message semantics survive", () => {
 		const dir = mkdtempSync(join(tmpdir(), "sumocode-headless-multipos-"));
 		const { piBin, stubOut } = makePiStub(dir);

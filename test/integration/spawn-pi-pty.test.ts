@@ -403,7 +403,7 @@ const OPTION_CONSUMPTION_ROWS: readonly OptionConsumptionRow[] = [
 		name: "empty-string positional is extracted as parsed.messages[0]",
 		args: ["", "PROMPT"],
 		expectedPrompt: "",
-		expectedArgs: "PROMPT",
+		expectedArgs: "[redacted]",
 	},
 	// Conventional single `--`: the wrapper consumes it while parsing its own
 	// options, then preserves delimiter state for mode selection and prompt
@@ -424,7 +424,7 @@ const OPTION_CONSUMPTION_ROWS: readonly OptionConsumptionRow[] = [
 		name: "single end-of-options -- keeps post-delimiter --mode on the RPC path",
 		args: ["--", "--mode", "rpc"],
 		expectedPrompt: "--mode",
-		expectedArgs: "-- rpc",
+		expectedArgs: "-- [redacted]",
 	},
 	{
 		name: "single end-of-options -- keeps post-delimiter --mode=* on the RPC path",
@@ -474,7 +474,7 @@ const OPTION_CONSUMPTION_ROWS: readonly OptionConsumptionRow[] = [
 		name: "end-of-options -- extracts only the first post--- message",
 		args: ["--offline", "--", "--", "PROMPT", "second"],
 		expectedPrompt: "PROMPT",
-		expectedArgs: "--offline -- second",
+		expectedArgs: "--offline -- [redacted]",
 	},
 	{
 		name: "end-of-options -- keeps an @file token a fileArg",
@@ -486,7 +486,7 @@ const OPTION_CONSUMPTION_ROWS: readonly OptionConsumptionRow[] = [
 		name: "end-of-options -- extracts an empty-string first message",
 		args: ["--", "--", "", "PROMPT"],
 		expectedPrompt: "",
-		expectedArgs: "-- PROMPT",
+		expectedArgs: "-- [redacted]",
 	},
 	{
 		name: "pre-delimiter --print keeps the direct-Pi bypass intact",
@@ -662,7 +662,7 @@ describe("sumocode launcher mirrors Pi option consumption (PTY RPC path)", () =>
 			const output = await ptyDryRun(["task", "--prompt-file", promptFile, "--", "--offline"]);
 			expect(dryRunField(output, "KICKOFF_PROMPT_TRANSPORT")).toBe("one-shot-file");
 			expect(output).not.toContain("FILEPROMPT");
-			expect(dryRunField(output, "ARGS")).toBe("-- --offline");
+			expect(dryRunField(output, "ARGS")).toBe("-- [redacted]");
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
@@ -675,7 +675,7 @@ describe("sumocode launcher mirrors Pi option consumption (PTY RPC path)", () =>
 			const output = await ptyDryRun(["task", "--task-dir", root, "--", "--offline"]);
 			expect(dryRunField(output, "KICKOFF_PROMPT_TRANSPORT")).toBe("one-shot-file");
 			expect(output).not.toContain("TASKDIRPROMPT");
-			expect(dryRunField(output, "ARGS")).toBe("-- --offline");
+			expect(dryRunField(output, "ARGS")).toBe("-- [redacted]");
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

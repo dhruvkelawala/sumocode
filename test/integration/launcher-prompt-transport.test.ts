@@ -206,9 +206,10 @@ describe("launcher prompt transport (issue 391)", () => {
 		const dir = mkdtempSync(join(tmpdir(), "sumocode-headless-multipos-"));
 		const { piBin, stubOut } = makePiStub(dir);
 		try {
-			// Pi print mode loops over every positional message; piping the first
-			// while extras stay in argv would concatenate them onto the stdin
-			// bytes. The launcher must fall back to the argv transport.
+			// Pi print mode prompts the -p value first, then every positional.
+			// The -p value (the sole print message) moves to stdin; the
+			// positional stays in argv — sequence preserved, one message fewer
+			// in argv.
 			const result = spawnSync("bash", [LAUNCHER, "--no-sumo-tui", "-p", "first message", "second message"], {
 				input: "",
 				encoding: "utf8",
@@ -224,10 +225,9 @@ describe("launcher prompt transport (issue 391)", () => {
 				"-e",
 				EXTENSION_ENTRY,
 				"-p",
-				"first message",
 				"second message",
 			]);
-			expect(observed.stdin).toBe("");
+			expect(observed.stdin).toBe("first message");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

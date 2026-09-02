@@ -559,41 +559,41 @@ _sumocode_task_has_nonempty_prompt_arg() {
 	[[ -n "${SUMOCODE_ARGS[prompt_index]//[[:space:]]/}" ]]
 }
 
-# Prints SUMOCODE_ARGS with prompt bytes and sensitive option values replaced
-# by [redacted] (issue 391: --dry-run output is diagnostics and must never
-# carry prompt content or secrets). Pass "1" to also redact the first plain
-# positional (direct-Pi path, where the prompt positional still sits in the
-# forwarded argv); pass "0" when extraction already removed it (RPC path) so
-# a real forwarded message is not mistaken for the prompt. Mirrors
-# _sumocode_first_positional_index's class table; -p/--print's consumed
-# message and --api-key/--system-prompt/--append-system-prompt values are
-# prompt/secret bytes too. Display only -- never mutates SUMOCODE_ARGS.
+# Prints SUMOCODE_ARGS with every message token and sensitive option value
+# replaced by [redacted] (issue 391: --dry-run output is diagnostics and must
+# never carry prompt or secret bytes). Message tokens are classified with the
+# same option classes as _sumocode_first_positional_index: every plain
+# positional, everything after a `--` delimiter, and -p/--print's consumed
+# message. --api-key/--system-prompt/--append-system-prompt values are secret
+# bytes too. Display only -- never mutates SUMOCODE_ARGS.
 redact_sensitive_args() {
-	local redact_positional="${1:-1}"
-	local prompt_index=-1
-	if [[ "${redact_positional}" == "1" ]]; then
-		prompt_index="$(_sumocode_first_positional_index 2>/dev/null || echo -1)"
-	fi
 	local -a out=()
 	local i=0
 	local n="${#SUMOCODE_ARGS[@]}"
 	local arg next
+	local in_delimiter=0
 	while [[ "${i}" -lt "${n}" ]]; do
 		arg="${SUMOCODE_ARGS[i]}"
-		if [[ "${i}" -eq "${prompt_index}" ]]; then
-			out+=("[redacted]")
+		if [[ "${in_delimiter}" -eq 1 ]]; then
+			if [[ "${arg}" != @* ]]; then out+=("[redacted]"); else out+=("${arg}"); fi
+			i=$((i + 1))
+			continue
+		fi
+		if [[ "${arg}" == "--" ]]; then
+			in_delimiter=1
+			out+=("${arg}")
 			i=$((i + 1))
 			continue
 		fi
 		case "${arg}" in
-			--api-key|--system-prompt|--append-system-prompt)
-				out+=("${arg}" "[redacted]")
-				i=$((i + 2))
-				continue
-				;;
 			--api-key=*|--system-prompt=*|--append-system-prompt=*|--print=*|-p=*)
 				out+=("${arg%%=*}=[redacted]")
 				i=$((i + 1))
+				continue
+				;;
+			--api-key|--system-prompt|--append-system-prompt)
+				out+=("${arg}" "[redacted]")
+				i=$((i + 2))
 				continue
 				;;
 			--print|-p)
@@ -610,7 +610,40 @@ redact_sensitive_args() {
 				continue
 				;;
 		esac
-		out+=("${arg}")
+		if _sumocode_is_pi_unconditional_value_flag "${arg}"; then
+			out+=("${arg}")
+			if [[ $((i + 1)) -lt "${n}" ]]; then out+=("${SUMOCODE_ARGS[i+1]}"); i=$((i + 2)); else i=$((i + 1)); fi
+			continue
+		fi
+		if _sumocode_is_pi_boolean_flag "${arg}"; then
+			out+=("${arg}")
+			i=$((i + 1))
+			continue
+		fi
+		if [[ "${arg}" == @* ]]; then
+			out+=("${arg}")
+			i=$((i + 1))
+			continue
+		fi
+		if [[ "${arg}" == --* ]]; then
+			out+=("${arg}")
+			if [[ $((i + 1)) -lt "${n}" ]]; then
+				next="${SUMOCODE_ARGS[i+1]}"
+				if [[ "${next}" != -* && "${next}" != @* ]]; then
+					out+=("${next}")
+					i=$((i + 2))
+					continue
+				fi
+			fi
+			i=$((i + 1))
+			continue
+		fi
+		if [[ "${arg}" == -* ]]; then
+			out+=("${arg}")
+			i=$((i + 1))
+			continue
+		fi
+		out+=("[redacted]")
 		i=$((i + 1))
 	done
 	if [[ "${#out[@]}" -eq 0 ]]; then
@@ -619,7 +652,6 @@ redact_sensitive_args() {
 		printf '%s' "${out[*]}"
 	fi
 }
-
 if [[ "${COMMAND}" == "doctor" && "${#SUMOCODE_ARGS[@]}" -gt 0 ]]; then
 	usage_error "doctor does not accept a path argument."
 fi
@@ -1094,11 +1126,7 @@ if [[ "${DRY_RUN}" == "1" ]]; then
 	else
 		KICKOFF_PROMPT_TRANSPORT="(none)"
 	fi
-	if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
-		REDACTED_ARGS="$(redact_sensitive_args 0)"
-	else
-		REDACTED_ARGS="$(redact_sensitive_args 1)"
-	fi
+	REDACTED_ARGS="$(redact_sensitive_args)"
 	cat <<EOF
 sumocode dry run
 PI_BIN=${PI_BIN}
@@ -1200,6 +1228,63 @@ if [[ "${USE_RPC_HOST}" -eq 0 && ! -t 0 ]]; then
 			fi
 			SUMOCODE_ARGS=("${reinserted[@]}")
 			DIRECT_PI_STDIN_PROMPT=""
+		fi
+		# Pi's own print-message form: a `-p/--print <msg>` (or `--print=<msg>`)
+		# token carries the prompt as a flag value. When that message is the
+		# ONLY message token (no other positional, no second print message, no
+		# --mode), move it to stdin -- keeping the print flag for space form --
+		# so argv carries only non-message flags, matching the positional
+		# kickoff path above.
+		if [[ -z "${DIRECT_PI_STDIN_PROMPT}" && "${#SUMOCODE_ARGS[@]}" -ge 1 ]]; then
+			direct_print_value=""
+			direct_print_tokens=0
+			direct_print_remove_index=-1
+			direct_has_mode=0
+			i=0
+			while [[ "${i}" -lt "${#SUMOCODE_ARGS[@]}" ]]; do
+				arg="${SUMOCODE_ARGS[i]}"
+				case "${arg}" in
+					--mode|--mode=*) direct_has_mode=1 ;;
+					--print=*|-p=*)
+						direct_print_tokens=$((direct_print_tokens + 1))
+						if [[ -z "${direct_print_value}" ]]; then
+							direct_print_value="${arg#*=}"
+							direct_print_remove_index="${i}"
+						fi
+						;;
+					--print|-p)
+						if [[ $((i + 1)) -lt "${#SUMOCODE_ARGS[@]}" ]]; then
+							next="${SUMOCODE_ARGS[i+1]}"
+							if [[ "${next}" != @* && ( "${next}" != -* || "${next}" == ---* ) ]]; then
+								direct_print_tokens=$((direct_print_tokens + 1))
+								if [[ -z "${direct_print_value}" ]]; then
+									direct_print_value="${next}"
+									direct_print_remove_index=$((i + 1))
+								fi
+							fi
+						fi
+						;;
+				esac
+				i=$((i + 1))
+			done
+			if [[ "${direct_has_mode}" -eq 0 && "${direct_print_tokens}" -eq 1 && -n "${direct_print_value}" && "${direct_print_remove_index}" -ge 0 ]]; then
+				direct_kept=()
+				i=0
+				while [[ "${i}" -lt "${#SUMOCODE_ARGS[@]}" ]]; do
+					if [[ "${i}" -ne "${direct_print_remove_index}" ]]; then direct_kept+=("${SUMOCODE_ARGS[i]}"); fi
+					i=$((i + 1))
+				done
+				direct_saved_args=()
+				if [[ "${#SUMOCODE_ARGS[@]}" -gt 0 ]]; then direct_saved_args=("${SUMOCODE_ARGS[@]}"); fi
+				if [[ "${#direct_kept[@]}" -eq 0 ]]; then SUMOCODE_ARGS=(); else SUMOCODE_ARGS=("${direct_kept[@]}"); fi
+				if _sumocode_first_positional_index >/dev/null 2>&1; then
+					# Removing the print message would leave another message
+					# behind; argv stays byte-identical to pre-stdin behavior.
+					if [[ "${#direct_saved_args[@]}" -gt 0 ]]; then SUMOCODE_ARGS=("${direct_saved_args[@]}"); else SUMOCODE_ARGS=(); fi
+				else
+					DIRECT_PI_STDIN_PROMPT="${direct_print_value}"
+				fi
+			fi
 		fi
 	fi
 fi

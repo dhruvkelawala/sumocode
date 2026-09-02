@@ -195,7 +195,7 @@ describe("startup comparison CLI", () => {
 			.rejects.toThrow("startup comparison collection failed");
 	});
 
-	it("reports a process that exits naturally after every event as failed", async () => {
+	it("reports an OS-level natural exit before the PTY callback as failed", async () => {
 		const root = await temporaryRoot("sumocode-startup-process-failure-");
 		const baselineDir = join(root, "baseline");
 		const candidateDir = join(root, "candidate");
@@ -213,17 +213,11 @@ describe("startup comparison CLI", () => {
 			assertClean: async () => undefined,
 			prepareWorktrees: async () => ({ baselineDir, candidateDir, cleanup: async () => undefined }),
 			spawnSamplePty: (_command, _args, options) => {
-				const listeners = [];
-				queueMicrotask(() => {
-					const events = diagnostics(Date.now(), "baseline", 0);
-					writeFileSync(options.env.SUMO_TUI_DIAG_FILE, `${events.map((event) => JSON.stringify(event)).join("\n")}\n`);
-					for (const listener of listeners) listener({ exitCode: 7, signal: 0 });
-				});
-				return {
-					onExit: (listener) => { listeners.push(listener); },
-					kill: () => undefined,
-				};
+				const events = diagnostics(Date.now(), "baseline", 0);
+				writeFileSync(options.env.SUMO_TUI_DIAG_FILE, `${events.map((event) => JSON.stringify(event)).join("\n")}\n`);
+				return { onExit: () => undefined, kill: () => undefined };
 			},
+			sampleTreeAlive: () => false,
 			machineMetadata: () => ({ platform: "test", arch: "test", nodeVersion: "v-test", cpuCount: 1 }),
 		});
 

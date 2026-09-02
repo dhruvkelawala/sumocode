@@ -101,6 +101,7 @@
     "src/sumo-tui/pi-compat/tree-navigation-command.ts",
     "src/sumo-tui/render/cell.ts",
     "src/sumo-tui/render/primitives.ts",
+    "src/sumo-tui/rpc/enabled-models.ts",
     "src/sumo-tui/runtime/diagnostics.ts",
     "src/sumo-tui/runtime/frame-scheduler.ts",
     "src/sumo-tui/runtime/lifecycle.ts",
@@ -128,6 +129,6 @@
     "src/working-indicator.ts",
     "tsconfig.json"
   ],
-  "hash": "0a8179c9ec50cf33afc95039338825d4d5691ae4275fa93f98af8cc5e307973d",
-  "outputsHash": "26d0559b8eacc84fca6148aa560a3eec69dd7b878fa5bc5abf7d69bdea865c1e"
+  "hash": "308ef6f21a713a007010628bd3dd0b7fe2bf75e488131c7fe4e8e2f775460b0c",
+  "outputsHash": "c3c760add53970a84eeda1a7e12de04e3051146aa2f8a2954307ab68a62caa45"
 }

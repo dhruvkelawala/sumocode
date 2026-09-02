@@ -370,6 +370,12 @@ function metricComparison(definition, baselineSamples, candidateSamples) {
 }
 
 function overallVerdict(metrics) {
+	if (metrics.some((metric) => metric.baseline.failures > 0 || metric.candidate.failures > 0)) {
+		return { verdict: "INCONCLUSIVE", reason: "one or more samples failed" };
+	}
+	if (metrics.some((metric) => metric.baseline.samples.length < MIN_DIRECTIONAL_SAMPLES || metric.candidate.samples.length < MIN_DIRECTIONAL_SAMPLES)) {
+		return { verdict: "INCONCLUSIVE", reason: `fewer than ${MIN_DIRECTIONAL_SAMPLES} successful samples per arm` };
+	}
 	if (metrics.every((metric) => metric.verdict === "improved")) return { verdict: "IMPROVED", reason: "all measured intervals moved lower" };
 	if (metrics.every((metric) => metric.verdict === "regressed")) return { verdict: "REGRESSED", reason: "all measured intervals moved higher" };
 	return { verdict: "INCONCLUSIVE", reason: "phase signals conflict or intervals overlap" };
@@ -385,7 +391,7 @@ function markdown(report) {
 			`| ${metric.label} | ${formatNumber(metric.baseline.medianMs)} | ${formatNumber(metric.candidate.medianMs)} | ${formatNumber(metric.deltaMs)} | ${formatNumber(metric.deltaPercent, "%")} | ${metric.baseline.spread.madMs ?? "—"}ms | ${metric.candidate.spread.madMs ?? "—"}ms | ${metric.baseline.failures}/${metric.candidate.failures} | ${metric.verdict} |`);
 		return `## ${title}\n\n${description}\n\n| Metric | Baseline | Candidate | Delta | Delta % | Baseline MAD | Candidate MAD | Failures B/C | Verdict |\n| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n${rows.join("\n")}\n`;
 	};
-	return `# SumoCode startup comparison\n\n- baseline: \`${report.baselineSha}\`\n- candidate: \`${report.candidateSha}\`\n- samples per arm: ${report.samplesPerArm}\n- fixture records: ${report.fixture.recordCount} (${report.fixture.retained ? "retained by explicit request" : "deleted after collection"})\n- execution: alternating baseline/candidate arms\n- mode: host source, extension source\n\n${section("Targeted phases", "targeted", "Terminal index readiness is the Plan 093-targeted signal. It does not by itself establish faster aggregate startup.")}\n${section("Attributed startup phases", "attributed", "Launcher, host import, and RPC child readiness localize startup movement without claiming end-to-end improvement.")}\n${section("Aggregate startup", "aggregate", "Editor and command readiness are user-facing aggregate milestones; hydration is the committed-state boundary between them.")}\nOverall startup: **${report.overall.verdict}** — ${report.overall.reason}.\n\nVerdicts require non-overlapping median ± MAD intervals and zero failed samples. Any overlap, missing event, failed sample, or conflicting phase direction makes the overall result inconclusive.\n`;
+	return `# SumoCode startup comparison\n\n- baseline: \`${report.baselineSha}\`\n- candidate: \`${report.candidateSha}\`\n- samples per arm: ${report.samplesPerArm}\n- fixture records: ${report.fixture.recordCount} (${report.fixture.retained ? "retained by explicit request" : "deleted after collection"})\n- execution: alternating baseline/candidate arms\n- mode: host source, extension source\n\n${section("Targeted phases", "targeted", "Terminal index readiness is the Plan 093-targeted signal. It does not by itself establish faster aggregate startup.")}\n${section("Attributed startup phases", "attributed", "Launcher, host import, and RPC child readiness localize startup movement without claiming end-to-end improvement.")}\n${section("Aggregate startup", "aggregate", "Editor and command readiness are user-facing aggregate milestones; hydration is the committed-state boundary between them.")}\nOverall startup: **${report.overall.verdict}** — ${report.overall.reason}.\n\nVerdicts require at least ${MIN_DIRECTIONAL_SAMPLES} successful samples per arm, non-overlapping median ± MAD intervals, and zero failed samples. Smaller runs, any overlap, missing event, failed sample, or conflicting phase direction make the overall result inconclusive.\n`;
 }
 
 function executionSchedule(samples) {

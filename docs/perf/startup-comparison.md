@@ -39,7 +39,7 @@ Terminal index duration can establish that the targeted indexing work improved. 
 
 For each metric the report includes successful samples, failed count, median, median absolute deviation (MAD), median ± MAD interval, absolute/percentage delta, and `improved`, `regressed`, or `inconclusive`.
 
-A directional verdict requires zero failed samples and non-overlapping intervals. Any missing event, failed process, interval overlap, or conflicting metric direction makes overall startup **INCONCLUSIVE**. Reports retain every failed sample. The CLI exits nonzero after writing its artifacts when either arm collected no successful samples or a PTY survived the bounded SIGINT/SIGTERM/SIGKILL shutdown, because collection did not complete safely. These are report-only measurements, not CI wall-clock gates.
+A directional verdict requires at least three successful samples per arm, zero failed samples, and non-overlapping intervals. Smaller smoke runs still report measurements but remain inconclusive. Any missing event, failed process, interval overlap, or conflicting metric direction makes overall startup **INCONCLUSIVE**. Reports retain every failed sample. The CLI exits nonzero after writing its artifacts when either arm collected no successful samples or a PTY survived the bounded SIGINT/SIGTERM/SIGKILL shutdown, because collection did not complete safely. These are report-only measurements, not CI wall-clock gates.
 
 A revision that predates a required public-safe phase mark remains a failed sample; the harness does not invent or backfill readiness. Compare revisions that contain the phase diagnostics when making attributed claims.
 

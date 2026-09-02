@@ -11,6 +11,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_SAMPLES = 15;
 const DEFAULT_FIXTURE_COUNT = 1_800;
 const SAMPLE_TIMEOUT_MS = 30_000;
+const MIN_DIRECTIONAL_SAMPLES = 3;
 const FLAGS = Object.freeze(["--offline", "--no-extensions", "--no-session"]);
 const REQUIRED_EVENTS = Object.freeze([
 	"process_preload_start",
@@ -352,7 +353,14 @@ function metricComparison(definition, baselineSamples, candidateSamples) {
 	const baseline = statistics(baselineSamples, definition.name);
 	const candidate = statistics(candidateSamples, definition.name);
 	let verdict = "inconclusive";
-	if (baseline.failures === 0 && candidate.failures === 0 && baseline.intervalMs && candidate.intervalMs) {
+	if (
+		baseline.failures === 0
+		&& candidate.failures === 0
+		&& baseline.samples.length >= MIN_DIRECTIONAL_SAMPLES
+		&& candidate.samples.length >= MIN_DIRECTIONAL_SAMPLES
+		&& baseline.intervalMs
+		&& candidate.intervalMs
+	) {
 		if (candidate.intervalMs[1] < baseline.intervalMs[0]) verdict = "improved";
 		else if (candidate.intervalMs[0] > baseline.intervalMs[1]) verdict = "regressed";
 	}

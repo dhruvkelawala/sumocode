@@ -79,7 +79,17 @@ describe("filterToEnabled with extra Claude accounts", () => {
 		]);
 	});
 
-	it("does not mirror bare model ids onto account providers", () => {
+	it("keeps a bare Claude model id resolvable across the base and account providers", () => {
+		expect(filterToEnabled(ACCOUNT_MODELS, ["claude-opus-4"]).map((m) => m.label)).toEqual([
+			"anthropic/claude-opus-4",
+			"anthropic-2/claude-opus-4",
+			"anthropic-3/claude-opus-4",
+		]);
+	});
+
+	it("still treats a bare id shared by unrelated providers as ambiguous", () => {
+		const models = [...ACCOUNT_MODELS, option("openrouter", "claude-opus-4")];
+		expect(filterToEnabled(models, ["claude-opus-4"])).toEqual([]);
 		expect(filterToEnabled(ACCOUNT_MODELS, ["gpt-5"]).map((m) => m.label)).toEqual(["openai/gpt-5"]);
 	});
 });

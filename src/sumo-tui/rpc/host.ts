@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { defaultActivityStateRoot } from "../../activity/persistence.js";
 import { FileActivityStore, type ActivityStoreSnapshot } from "../../activity/store.js";
@@ -554,18 +554,34 @@ export function createEditorSubmitHandlers(deps: EditorSubmitHandlerDependencies
 }
 
 /**
- * Submits `SUMOCODE_INITIAL_PROMPT` (set by `bin/sumocode.sh` when a task/
- * prompt positional was destined for `pi --mode rpc`, which never reads argv
- * positionals -- only InteractiveMode does; rpc-mode.js reads only stdin JSON
- * commands) through the launch member of the same submit policy that owns
- * editor submissions, so streaming state, transcript, and interrupt flags all
- * engage instead of the prompt silently vanishing.
+ * Submits the kickoff prompt transported by `bin/sumocode.sh` in the
+ * owner-only one-shot file named by `SUMOCODE_INITIAL_PROMPT_FILE` (the
+ * launcher strips the task/prompt positional because `pi --mode rpc` never
+ * reads argv positionals -- only InteractiveMode does; rpc-mode.js reads only
+ * stdin JSON commands). The file replaces the earlier SUMOCODE_INITIAL_PROMPT
+ * env-var channel so prompt bytes never sit in process metadata that is
+ * inherited by the RPC child (issue 391).
  *
- * A no-op when the env var is absent or blank -- the common case for every
- * launch that isn't `sumocode <prompt>` / `sumocode task <prompt>`.
+ * The file is unlinked BEFORE submitting through the launch member of the
+ * same submit policy that owns editor submissions: one-shot by construction,
+ * so a failed submit can never replay on a later /reload.
+ *
+ * A no-op when the env var is absent, the file is missing, or the contents
+ * are empty -- the common case for every launch that isn't
+ * `sumocode <prompt>` / `sumocode task <prompt>`.
  */
-export async function submitInitialPromptFromEnv(env: NodeJS.ProcessEnv, submit: (message: string) => Promise<void>): Promise<void> {
-	const message = env.SUMOCODE_INITIAL_PROMPT;
+export async function submitInitialPromptFromFile(env: NodeJS.ProcessEnv, submit: (message: string) => Promise<void>): Promise<void> {
+	const path = env.SUMOCODE_INITIAL_PROMPT_FILE;
+	if (!path) return;
+	let message: string;
+	try {
+		message = readFileSync(path, "utf8");
+	} catch {
+		// Missing/unreadable transport file: nothing to submit. The launcher's
+		// own cleanup path owns any leftover artifact in this case.
+		return;
+	}
+	rmSync(path, { force: true });
 	if (!message) return;
 	await submit(message);
 }
@@ -1941,7 +1957,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		if (!visualFixture) {
 			// The launch-specific handler owns its silent readiness wait; callers
 			// identify only the source and cannot leak queue-notice policy.
-			await submitInitialPromptFromEnv(env, submitHandlers.fromLaunch);
+			await submitInitialPromptFromFile(env, submitHandlers.fromLaunch);
 			await refreshStats();
 			statsTimer = setInterval(() => { void refreshStats(); }, 5_000);
 		}

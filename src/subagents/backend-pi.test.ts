@@ -73,7 +73,7 @@ describe("resolvePiBinary", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("resolves the source bootstrap from the committed bundle layout without SUMOCODE_ROOT_DIR", () => {
+	it("resolves the source bootstrap from the generated bundle layout without SUMOCODE_ROOT_DIR", () => {
 		const root = mkdtempSync(join(tmpdir(), "sumo-bundle-bootstrap-"));
 		const entry = join(root, "src", "subagents", "pi-child-model-bootstrap.ts");
 		mkdirSync(join(root, "src", "subagents"), { recursive: true });

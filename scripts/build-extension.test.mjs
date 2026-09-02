@@ -4,7 +4,7 @@ import { cp, mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from "no
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
 	EXTENSION_ASSETS,
 	EXTENSION_INPUT_MANIFEST_VERSION,
@@ -23,6 +23,11 @@ afterEach(async () => {
 	await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
+afterAll(async () => {
+	const build = await isolatedBuild?.catch(() => undefined);
+	if (build) await rm(build.packageRoot, { recursive: true, force: true });
+});
+
 describe("generated dist outputs", () => {
 	it("are build artifacts: ignored by git and never tracked", () => {
 		const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
@@ -33,9 +38,16 @@ describe("generated dist outputs", () => {
 	});
 });
 
-async function buildIsolatedPackage() {
+let isolatedBuild;
+
+// One real build per file: every freshness assertion inspects this artifact.
+function buildIsolatedPackage() {
+	isolatedBuild ??= buildIsolatedPackageOnce();
+	return isolatedBuild;
+}
+
+async function buildIsolatedPackageOnce() {
 	const packageRoot = await mkdtemp(join(tmpdir(), "sumocode-extension-build-"));
-	temporaryDirectories.push(packageRoot);
 	for (const entry of ["src", "scripts", "package.json", "tsconfig.json"]) {
 		await cp(resolve(root, entry), join(packageRoot, entry), { recursive: true });
 	}

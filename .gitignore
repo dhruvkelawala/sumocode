@@ -1,7 +1,7 @@
 node_modules/
 # Generated build/release artifacts (pnpm build:bundles). Never commit dist/**;
 # git-package installs use the source fallback in src/extension-entry.ts.
-dist/
+/dist/
 .DS_Store
 *.log
 logs/

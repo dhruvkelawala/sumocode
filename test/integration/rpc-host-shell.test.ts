@@ -85,7 +85,8 @@ describe("sumocode RPC host shell integration", () => {
 			return;
 		}
 		standalonePackageRoot = await mkdtemp(join(tmpdir(), "sumocode-rpc-host-bootstrap-"));
-		for (const entry of ["bin", "dist", "scripts", "src", "package.json", "pnpm-lock.yaml", "tsconfig.json", "sumo-rpc-host.js"]) {
+		// The checkout carries no dist/**; the builds below generate it privately.
+		for (const entry of ["bin", "scripts", "src", "package.json", "pnpm-lock.yaml", "tsconfig.json", "sumo-rpc-host.js"]) {
 			await cp(join(originalCwd, entry), join(standalonePackageRoot, entry), { recursive: true });
 		}
 		await symlink(join(originalCwd, "node_modules"), join(standalonePackageRoot, "node_modules"), "dir");

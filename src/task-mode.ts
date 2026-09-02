@@ -379,7 +379,7 @@ function globalSubmittedControlsScope(): SubmittedControlsScope {
  * succeeded, keyed by canonical control directory. It lives on globalThis
  * behind a `Symbol.for` key — the same pattern as the process-install latch in
  * `extension.ts` — because ONE process can hold distinct SumoCode module
- * instances at once (source checkout plus committed bundle, or several entry
+ * instances at once (source checkout plus generated bundle, or several entry
  * paths). A per-module-instance Map would let a second instance's watcher
  * resubmit a control the first instance's watcher already handed to Pi.
  * Lifetime is exactly the process: Pi recreates the extension API in the SAME

@@ -18,7 +18,7 @@ function childEnv(env) {
 
 function extensionEntry(root, env) {
 	if (env.SUMOCODE_EXTENSION_BUNDLE === "0") return resolve(root, "src/extension.ts");
-	// Route through the stable shim even when the committed bundle is fresh.
+	// Route through the stable shim even when a generated bundle is fresh.
 	// The shim validates content, imports the bundle, and can retry source when
 	// native resolution of an external peer fails inside the actual Pi child.
 	return resolve(root, "src/extension-entry.ts");

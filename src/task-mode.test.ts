@@ -766,7 +766,7 @@ describe("control watcher", () => {
 		vi.advanceTimersByTime(500);
 
 		// Re-evaluating the SAME source models the distinct module instance a
-		// committed bundle or second entry path creates. Its registry view must
+		// generated bundle or second entry path creates. Its registry view must
 		// show the first instance's submission — the registry is process-wide.
 		vi.resetModules();
 		const freshInstance = await import("./task-mode.js");

@@ -497,7 +497,7 @@ export function resolvePiChildModelBootstrapEntry(
 		override,
 		env.SUMOCODE_ROOT_DIR ? join(env.SUMOCODE_ROOT_DIR, "src", "subagents", "pi-child-model-bootstrap.ts") : undefined,
 		join(moduleDir, "pi-child-model-bootstrap.ts"),
-		// The committed extension bundle lives at dist/extension/*.mjs while this
+		// A generated extension bundle lives at dist/extension/*.mjs while this
 		// child-only entry remains executable TypeScript under src/subagents.
 		resolve(moduleDir, "..", "..", "src", "subagents", "pi-child-model-bootstrap.ts"),
 	];

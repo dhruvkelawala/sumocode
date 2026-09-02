@@ -1,6 +1,6 @@
 # Extension freshness hashes working-tree bytes. Pin every hashed text input
-# and generated runtime output to LF so Windows autocrlf checkouts compute the
-# same sidecars as the build machine.
+# to LF so Windows autocrlf checkouts compute the same manifest as the build
+# machine. Generated dist/** outputs are untracked, so they need no attribute.
 src/*.ts text eol=lf
 src/**/*.ts text eol=lf
 src/assets/sumo-face.ans text eol=lf
@@ -10,4 +10,3 @@ scripts/lib/extension-bundle.mjs text eol=lf
 tsconfig.json text eol=lf
 package.json text eol=lf
 pnpm-lock.yaml text eol=lf
-dist/extension/** text eol=lf

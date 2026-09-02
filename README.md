@@ -170,7 +170,9 @@ Then map `U+E900–U+E904` to the installed `icomoon` font in the terminal and s
 
 ## Development
 
-Pi executes TypeScript through jiti; there is no emitted application build required for the normal source loop. SumoCode also supports committed host and extension bundles with source fallback. A committed extension bundle is self-verifying: `dist/extension/.inputs.json` binds the input-graph hash to the `outputsHash` of the published bytes, `pnpm build:extension` reproduces both deterministically, and the runtime rejects stale inputs or a mismatched artifact.
+Pi executes TypeScript through jiti; there is no emitted application build required for the normal source loop. Generated `dist/**` outputs are build/release artifacts and are never committed: `pnpm build:host`, `pnpm build:extension`, and `pnpm build:bundles` exist for CI, the integration harness, local diagnostics, and future release packaging, and their outputs stay ignored. A generated extension bundle is self-verifying: `dist/extension/.inputs.json` binds the input-graph hash to the `outputsHash` of the published bytes, `pnpm build:extension` reproduces both deterministically, and the runtime rejects stale inputs or a mismatched artifact and falls back to source.
+
+Distribution policy: Pi git-package installs run from source through the stable entry (`src/extension-entry.ts` → `src/extension.ts` via jiti) and need no bundle. A future npm/package release may build bundles during `prepack` without committing them. Never add `dist/**` files to a feature PR.
 
 ```bash
 pnpm install

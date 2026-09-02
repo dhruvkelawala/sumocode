@@ -18,14 +18,14 @@ import {
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const temporaryDirectories = [];
+const isolatedPackageRoots = [];
 
 afterEach(async () => {
 	await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
 afterAll(async () => {
-	const build = await isolatedBuild?.catch(() => undefined);
-	if (build) await rm(build.packageRoot, { recursive: true, force: true });
+	await Promise.all(isolatedPackageRoots.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
 describe("generated dist outputs", () => {
@@ -48,6 +48,7 @@ function buildIsolatedPackage() {
 
 async function buildIsolatedPackageOnce() {
 	const packageRoot = await mkdtemp(join(tmpdir(), "sumocode-extension-build-"));
+	isolatedPackageRoots.push(packageRoot);
 	for (const entry of ["src", "scripts", "package.json", "tsconfig.json"]) {
 		await cp(resolve(root, entry), join(packageRoot, entry), { recursive: true });
 	}

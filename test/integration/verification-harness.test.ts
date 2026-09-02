@@ -12,6 +12,12 @@ import {
 	waitForDiagnosticReadiness,
 	type SupervisedProcess,
 } from "./harness-supervisor.js";
+import {
+	EXTENSION_INPUT_MANIFEST_VERSION,
+	EXTENSION_RUNTIME_OUTPUTS,
+	extensionInputsHashFromManifest,
+	extensionOutputsHash,
+} from "../../scripts/lib/extension-bundle.mjs";
 import { fixIntegrationPreflight, inspectIntegrationPreflight, processRows } from "../../scripts/preflight-integration.mjs";
 import { resolveHarnessExitCode } from "../../scripts/run-integration-harness.mjs";
 import { buildSpawnEnv } from "./spawn-pi-pty.js";
@@ -147,17 +153,33 @@ describe("verification harness v2 seam", () => {
 		const tempRoot = createRunRoot();
 		const packageRoot = createRunRoot();
 		const report = await inspectIntegrationPreflight({ root: packageRoot, tempRoot, rows: [], env: {} });
-		expect(report.issues.map((issue) => issue.code)).not.toContain("stale-dist-extension");
-		expect(report.issues.map((issue) => issue.code)).not.toContain("stale-dist-host");
+		expect(JSON.stringify(report)).not.toContain("stale-dist-");
 	});
 
-	it("still rejects a generated artifact whose manifest no longer matches", async () => {
+	it("notices, without blocking, a checkout artifact whose inputs drifted from its manifest", async () => {
 		const tempRoot = createRunRoot();
 		const packageRoot = createRunRoot();
-		mkdirSync(join(packageRoot, "dist", "extension"), { recursive: true });
-		writeFileSync(join(packageRoot, "dist", "extension", ".inputs.json"), `${JSON.stringify({ version: 0, inputs: [], hash: "build-in-progress" })}\n`);
-		const report = await inspectIntegrationPreflight({ root: packageRoot, tempRoot, rows: [], env: {} });
-		expect(report.issues).toContainEqual(expect.objectContaining({ code: "stale-dist-extension", remediation: "run pnpm build:extension" }));
+		const outDir = join(packageRoot, "dist", "extension");
+		mkdirSync(join(packageRoot, "src"), { recursive: true });
+		mkdirSync(join(outDir, "assets"), { recursive: true });
+		writeFileSync(join(packageRoot, "src", "extension.ts"), "export default {};\n");
+		for (const output of EXTENSION_RUNTIME_OUTPUTS) writeFileSync(join(outDir, output), `// ${output}\n`);
+		const inputs = ["src/extension.ts"];
+		const manifest = {
+			version: EXTENSION_INPUT_MANIFEST_VERSION,
+			inputs,
+			hash: await extensionInputsHashFromManifest(packageRoot, inputs),
+			outputsHash: await extensionOutputsHash(packageRoot),
+		};
+		writeFileSync(join(outDir, ".inputs.json"), `${JSON.stringify(manifest)}\n`);
+
+		const fresh = await inspectIntegrationPreflight({ root: packageRoot, tempRoot, rows: [], env: {} });
+		expect(JSON.stringify(fresh)).not.toContain("stale-dist-");
+
+		writeFileSync(join(packageRoot, "src", "extension.ts"), "export default { drifted: true };\n");
+		const drifted = await inspectIntegrationPreflight({ root: packageRoot, tempRoot, rows: [], env: {} });
+		expect(drifted.notices).toContainEqual(expect.stringMatching(/^stale-dist-extension: .*pnpm build:extension/));
+		expect(JSON.stringify(drifted.issues)).not.toContain("stale-dist-");
 	});
 
 	it("removes a stale token-owned namespace after its owner exits", async () => {

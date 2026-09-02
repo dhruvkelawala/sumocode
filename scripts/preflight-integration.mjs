@@ -182,11 +182,12 @@ function belongsToLiveHarnessRun(row, rowsByPid, liveHarnessPids) {
 	return false;
 }
 
-// dist/** is generated and never committed, so an absent artifact is the
-// normal source-fallback state. Only a present-but-mismatched artifact is a
-// preflight failure: it would be rejected at runtime and mask what the run
-// actually exercised.
-async function artifactIssue(root, kind) {
+// dist/** is generated and never committed, so an absent checkout artifact is
+// the normal source-fallback state. The harness builds its own private
+// artifacts and never runs the checkout's, so a stale one here cannot affect
+// the run; it is surfaced as a notice because local launches will silently
+// fall back to source until it is rebuilt.
+async function staleArtifactNotice(root, kind) {
 	const manifestPath = join(root, "dist", kind, ".inputs.json");
 	if (!existsSync(manifestPath)) return undefined;
 	try {
@@ -199,11 +200,7 @@ async function artifactIssue(root, kind) {
 	} catch {
 		// Named below with the same deterministic remediation.
 	}
-	return {
-		code: `stale-dist-${kind}`,
-		message: `dist/${kind} does not match its .inputs.json manifest`,
-		remediation: `run pnpm build:${kind}`,
-	};
+	return `stale-dist-${kind}: dist/${kind} does not match its .inputs.json manifest; local launches use source until you run pnpm build:${kind}`;
 }
 
 async function nodeModulesIssue(root) {
@@ -257,8 +254,8 @@ export async function inspectIntegrationPreflight({ root = ROOT, tempRoot = tmpd
 	const modules = await nodeModulesIssue(root);
 	if (modules) issues.push(modules);
 	for (const kind of ["host", "extension"]) {
-		const issue = await artifactIssue(root, kind);
-		if (issue) issues.push(issue);
+		const notice = await staleArtifactNotice(root, kind);
+		if (notice) notices.push(notice);
 	}
 	if (env.NODE_PATH) notices.push(`inherited NODE_PATH will be stripped: ${env.NODE_PATH}`);
 	if (env.NODE_COMPILE_CACHE) notices.push(`inherited NODE_COMPILE_CACHE will be replaced: ${env.NODE_COMPILE_CACHE}`);

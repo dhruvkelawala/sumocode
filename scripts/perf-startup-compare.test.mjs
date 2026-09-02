@@ -231,13 +231,15 @@ describe("startup comparison CLI", () => {
 		expect(report.arms.candidate.samples[0]).toMatchObject({ ok: false, failure: "process-failed" });
 	});
 
-	it("fails a sample and collection when the PTY survives every shutdown signal", async () => {
+	it("retains the campaign and stops when the PTY tree survives every signal", async () => {
 		const root = await temporaryRoot("sumocode-startup-shutdown-failure-");
 		const baselineDir = join(root, "baseline");
 		const candidateDir = join(root, "candidate");
 		const outDir = await temporaryRoot("sumocode-startup-shutdown-failure-report-");
 		await Promise.all([mkdir(baselineDir), mkdir(candidateDir)]);
 		let spawnCount = 0;
+		let cleanupCalled = false;
+		let retainedCampaign;
 		const report = await runStartupComparison({
 			callerRoot: root,
 			baseRef: "base",
@@ -248,7 +250,11 @@ describe("startup comparison CLI", () => {
 		}, {
 			resolveRevision: async (ref) => ref === "base" ? "1".repeat(40) : "2".repeat(40),
 			assertClean: async () => undefined,
-			prepareWorktrees: async () => ({ baselineDir, candidateDir, cleanup: async () => undefined }),
+			prepareWorktrees: async () => ({
+				baselineDir,
+				candidateDir,
+				cleanup: async () => { cleanupCalled = true; },
+			}),
 			spawnSamplePty: (_command, _args, options) => {
 				spawnCount += 1;
 				const events = diagnostics(Date.now(), "baseline", 0);
@@ -256,11 +262,18 @@ describe("startup comparison CLI", () => {
 				return { onExit: () => undefined, kill: () => undefined };
 			},
 			machineMetadata: () => ({ platform: "test", arch: "test", nodeVersion: "v-test", cpuCount: 1 }),
+			onFixtureRetained: (path) => {
+				retainedCampaign = path;
+				roots.push(path);
+			},
 		});
 
 		expect(report.arms.baseline.samples[0]).toMatchObject({ ok: false, failure: "shutdown-failed" });
 		expect(report.arms.candidate.samples).toEqual([]);
+		expect(report.fixture.retained).toBe(true);
 		expect(spawnCount).toBe(1);
+		expect(cleanupCalled).toBe(false);
+		expect(retainedCampaign).toEqual(expect.any(String));
 		expect(report.collection.succeeded).toBe(false);
 	});
 

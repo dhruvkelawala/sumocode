@@ -1142,8 +1142,12 @@ const runSingleTask = async (options: {
 
 	try {
 		// The prompt is NOT part of argv: pinned Pi print mode reads piped stdin
-		// as the initial message verbatim, and argv is world-readable process
-		// metadata. See issue 391.
+		// as the initial message (interior multiline/Unicode bytes are exact;
+		// Pi itself trims leading/trailing whitespace), and argv is
+		// world-readable process metadata. See issue 391. The error listener
+		// keeps a child that dies before draining a >pipe-buffer prompt from
+		// turning the pending write into an uncaughtException EPIPE — the
+		// child's failure settles through the close/error handlers below.
 		const args = [...applyForkSessionArgs(options.subprocessArgs, forkSession)];
 
 		const exitCode = await new Promise<number>((resolve) => {
@@ -1153,6 +1157,7 @@ const runSingleTask = async (options: {
 				stdio: ["pipe", "pipe", "pipe"],
 			});
 
+			proc.stdin.on("error", () => undefined);
 			proc.stdin.write(options.subprocessPrompt);
 			proc.stdin.end();
 

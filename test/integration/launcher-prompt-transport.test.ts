@@ -34,6 +34,32 @@ function readFixtureLog(path: string): FixtureLogEntry[] {
 		);
 }
 
+interface PiStub {
+	readonly piBin: string;
+	readonly stubOut: string;
+}
+
+function makePiStub(dir: string): PiStub {
+	const stubOut = join(dir, "stub.json");
+	const piBin = join(dir, "pi-stub.sh");
+	writeFileSync(
+		piBin,
+		`#!/usr/bin/env bash
+node -e '
+	const fs = require("node:fs");
+	let stdin = "";
+	process.stdin.setEncoding("utf8");
+	process.stdin.on("data", (chunk) => { stdin += chunk; });
+	process.stdin.on("end", () => {
+		fs.writeFileSync(process.argv[1], JSON.stringify({ argv: process.argv.slice(2), stdin }));
+	});
+' "${stubOut}" "$@"
+`,
+	);
+	chmodSync(piBin, 0o755);
+	return { piBin, stubOut };
+}
+
 describe("launcher prompt transport (issue 391)", () => {
 	it("keeps a task kickoff prompt out of the RPC child's argv and environment and delivers it exactly once", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "sumocode-kickoff-transport-"));
@@ -79,25 +105,9 @@ describe("launcher prompt transport (issue 391)", () => {
 
 	it("pipes a headless kickoff prompt to direct-Pi stdin instead of argv", () => {
 		const dir = mkdtempSync(join(tmpdir(), "sumocode-headless-stdin-"));
-		const stubOut = join(dir, "stub.json");
-		const piBin = join(dir, "pi-stub.sh");
-		writeFileSync(
-			piBin,
-			`#!/usr/bin/env bash
-node -e '
-	const fs = require("node:fs");
-	let stdin = "";
-	process.stdin.setEncoding("utf8");
-	process.stdin.on("data", (chunk) => { stdin += chunk; });
-	process.stdin.on("end", () => {
-		fs.writeFileSync(process.argv[1], JSON.stringify({ argv: process.argv.slice(2), stdin }));
-	});
-' "${stubOut}"
-`,
-		);
-		chmodSync(piBin, 0o755);
+		const { piBin, stubOut } = makePiStub(dir);
 		try {
-			const result = spawnSync("bash", [LAUNCHER, "--no-sumo-tui", "-p", "--no-session", PROMPT], {
+			const result = spawnSync("bash", [LAUNCHER, "--no-sumo-tui", "--no-session", PROMPT], {
 				input: "",
 				encoding: "utf8",
 				env: { ...process.env, PI_BIN: piBin },
@@ -106,10 +116,41 @@ node -e '
 			expect(result.status).toBe(0);
 
 			// SAFETY: the stub writes exactly one JSON document with argv+stdin
-			// keys (see the pi-stub.sh script above).
+			// keys (see makePiStub above).
 			const observed = JSON.parse(readFileSync(stubOut, "utf8")) as { argv: string[]; stdin: string };
 			for (const arg of observed.argv) expect(arg).not.toContain("SENTINEL");
 			expect(observed.stdin).toBe(PROMPT);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps argv transport for multi-positional headless launches so Pi's multi-message semantics survive", () => {
+		const dir = mkdtempSync(join(tmpdir(), "sumocode-headless-multipos-"));
+		const { piBin, stubOut } = makePiStub(dir);
+		try {
+			// Pi print mode loops over every positional message; piping the first
+			// while extras stay in argv would concatenate them onto the stdin
+			// bytes. The launcher must fall back to the argv transport.
+			const result = spawnSync("bash", [LAUNCHER, "--no-sumo-tui", "-p", "first message", "second message"], {
+				input: "",
+				encoding: "utf8",
+				env: { ...process.env, PI_BIN: piBin },
+				timeout: 30_000,
+			});
+			expect(result.status).toBe(0);
+
+			// SAFETY: the stub writes exactly one JSON document with argv+stdin
+			// keys (see makePiStub above).
+			const observed = JSON.parse(readFileSync(stubOut, "utf8")) as { argv: string[]; stdin: string };
+			expect(observed.argv).toEqual([
+				"-e",
+				resolve(process.cwd(), "src/extension-entry.ts"),
+				"-p",
+				"first message",
+				"second message",
+			]);
+			expect(observed.stdin).toBe("");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

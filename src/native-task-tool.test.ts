@@ -59,7 +59,7 @@ interface TaskToolResult {
 }
 
 class FakeTaskProcess extends EventEmitter {
-	public readonly stdin = { write: vi.fn(), end: vi.fn() };
+	public readonly stdin = { on: vi.fn(), write: vi.fn(), end: vi.fn() };
 	public readonly stdout = new EventEmitter();
 	public readonly stderr = new EventEmitter();
 	public killed = false;
@@ -370,6 +370,12 @@ describe("native task tool", () => {
 		expect(proc.stdin.write).toHaveBeenCalledTimes(1);
 		expect(proc.stdin.write).toHaveBeenCalledWith("bounded child");
 		expect(proc.stdin.end).toHaveBeenCalled();
+		// A child that dies without draining a >pipe-buffer prompt must not
+		// surface the pending write as an uncaughtException EPIPE.
+		expect(proc.stdin.on).toHaveBeenCalledWith("error", expect.any(Function));
+		// SAFETY: the fake records the registered handler; invoking it with a
+		// synthetic EPIPE proves the guard swallows the failure in-process.
+		expect(() => (proc.stdin.on as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.(new Error("write EPIPE"))).not.toThrow();
 	});
 
 	it("settles a no-child spawn error without waiting for close", async () => {

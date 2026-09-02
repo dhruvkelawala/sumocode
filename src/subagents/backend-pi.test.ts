@@ -15,7 +15,7 @@ import { createPiChildSpawner, resolveClaudeOauthAdapterEntry, resolvePiBinary, 
 import type { SubagentEvent } from "./domain.js";
 
 class FakeProcess extends EventEmitter {
-	public readonly stdin = { write: vi.fn(), end: vi.fn() };
+	public readonly stdin = { on: vi.fn(), write: vi.fn(), end: vi.fn() };
 	public readonly stdout = new EventEmitter();
 	public readonly stderr = new EventEmitter();
 	public pid: number | undefined = 4242;
@@ -167,10 +167,10 @@ describe("resolveClaudeOauthAdapterEntry", () => {
 describe("spawnPiChild", () => {
 	it("delivers the delegated prompt via stdin and keeps it out of child argv", () => {
 		// Issue 391: delegated prompts can carry sensitive material. Pinned Pi
-		// (0.84.x) print mode reads piped stdin as the initial message verbatim
-		// (buildInitialMessage joins stdinContent with no separator), so the
-		// prompt must travel through stdin -- never argv, where any local
-		// process can read it. Multiline/Unicode bytes must survive exactly.
+		// (0.84.x) print mode reads piped stdin as the initial message
+		// (interior multiline/Unicode bytes are exact; Pi itself trims
+		// leading/trailing whitespace), so the prompt must travel through
+		// stdin -- never argv, where any local process can read it.
 		const proc = new FakeProcess();
 		const spawn = vi.fn((_command: string, _args: readonly string[]) => proc);
 		const prompt = "SENTINEL-kickoff\n第二行 — ünïcode ✓";
@@ -191,6 +191,12 @@ describe("spawnPiChild", () => {
 		expect(proc.stdin.write).toHaveBeenCalledTimes(1);
 		expect(proc.stdin.write).toHaveBeenCalledWith(prompt);
 		expect(proc.stdin.end).toHaveBeenCalled();
+		// A child that dies without draining a >pipe-buffer prompt must not
+		// surface the pending write as an uncaughtException EPIPE.
+		expect(proc.stdin.on).toHaveBeenCalledWith("error", expect.any(Function));
+		// SAFETY: the fake records the registered handler; invoking it with a
+		// synthetic EPIPE proves the guard swallows the failure in-process.
+		expect(() => (proc.stdin.on as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.(new Error("write EPIPE"))).not.toThrow();
 		expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
 	});
 

@@ -1164,8 +1164,42 @@ fi
 # exists -- an explicit prompt argument is authoritative over piped content.
 DIRECT_PI_STDIN_PROMPT=""
 if [[ "${USE_RPC_HOST}" -eq 0 && ! -t 0 ]]; then
+	direct_prompt_index="$(_sumocode_first_positional_index 2>/dev/null || true)"
 	extract_first_positional
 	DIRECT_PI_STDIN_PROMPT="${EXTRACTED_INITIAL_PROMPT:-}"
+	# Fall back to the argv transport when extra message-bearing tokens
+	# remain: a leftover positional (Pi print mode loops over every message
+	# and buildInitialMessage would concatenate stdin with messages[0]) or a
+	# `-p/--print` flag with its own message value (prompt bytes already ride
+	# argv as Pi's own flag value). Restoring the extracted prompt keeps Pi's
+	# parsing semantics byte-identical to the pre-stdin behavior.
+	if [[ -n "${DIRECT_PI_STDIN_PROMPT}" ]]; then
+		direct_fallback=0
+		if _sumocode_first_positional_index >/dev/null 2>&1; then
+			direct_fallback=1
+		elif [[ "${#SUMOCODE_ARGS[@]}" -gt 0 ]]; then
+			for direct_arg in "${SUMOCODE_ARGS[@]}"; do
+				case "${direct_arg}" in
+					-p|--print|--print=*) direct_fallback=1; break ;;
+				esac
+			done
+		fi
+		if [[ "${direct_fallback}" -eq 1 ]]; then
+			reinserted=()
+			n="${#SUMOCODE_ARGS[@]}"
+			for ((j = 0; j < n; j++)); do
+				if [[ "${j}" -eq "${direct_prompt_index}" ]]; then
+					reinserted+=("${DIRECT_PI_STDIN_PROMPT}")
+				fi
+				reinserted+=("${SUMOCODE_ARGS[j]}")
+			done
+			if [[ "${direct_prompt_index}" -ge "${n}" ]]; then
+				reinserted+=("${DIRECT_PI_STDIN_PROMPT}")
+			fi
+			SUMOCODE_ARGS=("${reinserted[@]}")
+			DIRECT_PI_STDIN_PROMPT=""
+		fi
+	fi
 fi
 
 # The RPC host previously ran via `exec`, which replaced this shell's own pid
@@ -1351,7 +1385,7 @@ while :; do
 		env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" || code=$?
 	elif [[ -n "${DIRECT_PI_STDIN_PROMPT}" ]]; then
 		# Headless kickoff: the prompt rides stdin (Pi print mode reads it as
-		# the initial message verbatim); argv keeps only flags. Pipeline exit
+		# the initial message); argv keeps only flags. Pipeline exit
 		# status is Pi's, so the reload/exit handling below is unchanged.
 		printf '%s' "${DIRECT_PI_STDIN_PROMPT}" | env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" "${SUMOCODE_ARGS[@]}" || code=$?
 	else

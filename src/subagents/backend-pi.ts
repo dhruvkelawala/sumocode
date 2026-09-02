@@ -599,9 +599,14 @@ export const createPiChildSpawner = (
 			detached: process.platform !== "win32",
 }) as ChildProcessWithoutNullStreams;
 		// The prompt travels on stdin, never argv: pinned Pi print mode reads
-		// piped stdin as the initial message verbatim (buildInitialMessage joins
-		// stdinContent with no separator), while argv is world-readable process
-		// metadata. See issue 391.
+		// piped stdin as the initial message (interior multiline/Unicode bytes
+		// are exact; Pi itself trims leading/trailing whitespace, same as any
+		// `echo | pi -p`), while argv is world-readable process metadata. See
+		// issue 391. The error listener keeps a child that dies before draining
+		// a >pipe-buffer prompt from turning the pending write into an
+		// uncaughtException EPIPE — the child's failure settles through the
+		// close/error handlers below.
+		proc.stdin.on("error", () => undefined);
 		proc.stdin.write(options.prompt);
 		proc.stdin.end();
 		const abortState = attachAbortSignal(proc, options.signal);

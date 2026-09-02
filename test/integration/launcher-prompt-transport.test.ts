@@ -27,7 +27,11 @@ function readFixtureLog(path: string): FixtureLogEntry[] {
 		.trim()
 		.split("\n")
 		.filter(Boolean)
-		.map((line) => JSON.parse(line) as FixtureLogEntry);
+		.map((line) =>
+			// SAFETY: the fixture writes one JSON object per line with a `type`
+			// field (see rpc-child-fixture.ts logCommand/_fixture_process).
+			JSON.parse(line) as FixtureLogEntry,
+		);
 }
 
 describe("launcher prompt transport (issue 391)", () => {
@@ -101,6 +105,8 @@ node -e '
 			});
 			expect(result.status).toBe(0);
 
+			// SAFETY: the stub writes exactly one JSON document with argv+stdin
+			// keys (see the pi-stub.sh script above).
 			const observed = JSON.parse(readFileSync(stubOut, "utf8")) as { argv: string[]; stdin: string };
 			for (const arg of observed.argv) expect(arg).not.toContain("SENTINEL");
 			expect(observed.stdin).toBe(PROMPT);

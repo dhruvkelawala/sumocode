@@ -36,6 +36,48 @@ function writeSettings(dir: string, content: string): void {
 	writeFileSync(join(dir, "settings.json"), content);
 }
 
+describe("filterToEnabled with extra Claude accounts", () => {
+	const ACCOUNT_MODELS: RpcModelOption[] = [
+		option("anthropic", "claude-opus-4"),
+		option("anthropic", "claude-sonnet-4"),
+		option("anthropic-2", "claude-opus-4"),
+		option("anthropic-2", "claude-sonnet-4"),
+		option("anthropic-3", "claude-opus-4"),
+		option("openai", "gpt-5"),
+	];
+
+	it("mirrors an exact base anthropic pattern onto every account provider", () => {
+		expect(filterToEnabled(ACCOUNT_MODELS, ["anthropic/claude-opus-4"]).map((m) => m.label)).toEqual([
+			"anthropic/claude-opus-4",
+			"anthropic-2/claude-opus-4",
+			"anthropic-3/claude-opus-4",
+		]);
+	});
+
+	it("mirrors a base anthropic glob onto account providers", () => {
+		expect(filterToEnabled(ACCOUNT_MODELS, ["anthropic/claude-sonnet-*"]).map((m) => m.label)).toEqual([
+			"anthropic/claude-sonnet-4",
+			"anthropic-2/claude-sonnet-4",
+		]);
+	});
+
+	it("keeps explicit account patterns scoped to that account", () => {
+		expect(filterToEnabled(ACCOUNT_MODELS, ["anthropic-2/claude-opus-4"]).map((m) => m.label)).toEqual(["anthropic-2/claude-opus-4"]);
+	});
+
+	it("does not duplicate a model named by both a base and an explicit account pattern", () => {
+		expect(filterToEnabled(ACCOUNT_MODELS, ["anthropic-2/claude-opus-4", "anthropic/claude-opus-4"]).map((m) => m.label)).toEqual([
+			"anthropic-2/claude-opus-4",
+			"anthropic/claude-opus-4",
+			"anthropic-3/claude-opus-4",
+		]);
+	});
+
+	it("does not mirror bare model ids onto account providers", () => {
+		expect(filterToEnabled(ACCOUNT_MODELS, ["gpt-5"]).map((m) => m.label)).toEqual(["openai/gpt-5"]);
+	});
+});
+
 describe("filterToEnabled", () => {
 	it("selects exact provider/id entries in enabledModels order", () => {
 		expect(filterToEnabled(MODELS, ["google/gemini-3", "openai/gpt-5"])).toEqual([

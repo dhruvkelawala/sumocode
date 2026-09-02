@@ -22,10 +22,6 @@ import { createRpcChildFixture } from "./rpc-child-fixture.js";
 const CSI_U_ENTER = "\x1b[13u";
 const CTRL_O = "\x0f";
 
-function delay(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 async function waitForCommandTypes(path: string, expected: readonly string[]): Promise<string[]> {
 	for (let attempt = 0; attempt < 100; attempt += 1) {
 		try {
@@ -38,7 +34,9 @@ async function waitForCommandTypes(path: string, expected: readonly string[]): P
 				.map((line) => (JSON.parse(line) as { type: string }).type);
 			if (expected.every((type) => types.includes(type))) return types;
 		} catch {}
-		await delay(50);
+		// WAIT-CLASS: poll-interval — gap between bounded re-reads of the fixture
+		// command log; the loop exits on the observed types, not on elapsed time.
+		await new Promise((resolve) => setTimeout(resolve, 50));
 	}
 	throw new Error(`timed out waiting for fixture commands: ${expected.join(", ")}`);
 }
@@ -112,6 +110,8 @@ export default function install(pi) {
       completion: "passive",
     }, { id: "terminal-call-real" }), { stopReason: "toolUse" }),
     async () => {
+      // WAIT-CLASS: fixture-delay — the fake provider holds the turn open long
+      // enough for the real terminal to run and complete under observation.
       await new Promise((resolve) => setTimeout(resolve, 8000));
       return fauxAssistantMessage("terminal lifecycle observed", { stopReason: "stop" });
     },
@@ -316,10 +316,15 @@ describe("RPC durable Activity cards", () => {
 
 		app.sendInput(`/sessions${CSI_U_ENTER}`);
 		await waitForScreen(app, ({ text }) => text.includes("SESSION CONTROLS"), { cols, rows, timeoutMs: 5_000 });
-		await delay(100);
+		// The inline selector only filters on single-byte keypresses, so type one
+		// character at a time and wait for its search row to echo the accumulated
+		// query before sending the next one.
+		let typed = "";
 		for (const char of "switch") {
 			app.sendInput(char);
-			await delay(10);
+			typed += char;
+			const echoed = `❯  ${typed}`;
+			await waitForScreen(app, ({ text }) => text.includes(echoed), { cols, rows, timeoutMs: 5_000 });
 		}
 		await waitForScreen(app, ({ text }) => text.includes("❈   Switch session by path"), { cols, rows, timeoutMs: 5_000 });
 		app.sendInput(CSI_U_ENTER);

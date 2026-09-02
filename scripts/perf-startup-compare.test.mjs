@@ -295,6 +295,12 @@ describe("startup comparison CLI", () => {
 		expect((await execFileAsync("git", ["status", "--porcelain"], { cwd: callerRoot })).stdout).toBe("");
 	});
 
+	it("keeps single-sample smoke results inconclusive", async () => {
+		const { report } = await harness({ samples: 1, fixtureCount: 1 });
+		expect(report.metrics.every((metric) => metric.verdict === "inconclusive")).toBe(true);
+		expect(report.overall.verdict).toBe("INCONCLUSIVE");
+	});
+
 	it("requires non-overlapping evidence in one direction for an overall claim", async () => {
 		const improved = await harness({ samples: 3, fixtureCount: 1 });
 		expect(improved.report.metrics.every((metric) => metric.verdict === "improved")).toBe(true);

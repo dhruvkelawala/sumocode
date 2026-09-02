@@ -272,7 +272,11 @@ async function runSampleProcess({ checkout, agentDir, diagFile }, spawnPtyFn = s
 		try { child.kill("SIGKILL"); } catch {}
 		await Promise.race([exitedPromise, new Promise((resolveWait) => setTimeout(resolveWait, 250))]);
 	}
-	const failure = exitedBeforeShutdown ? "process-failed" : observedAllEvents ? undefined : "missing-events";
+	const failure = !exited
+		? "shutdown-failed"
+		: exitedBeforeShutdown
+			? "process-failed"
+			: observedAllEvents ? undefined : "missing-events";
 	return { ok: failure === undefined, failure, events, exitCode, signal };
 }
 
@@ -291,6 +295,7 @@ function publicSample(raw, index, startWallMs) {
 		if (!byName.has(event.event)) byName.set(event.event, event);
 	}
 	const missingEvents = REQUIRED_EVENTS.filter((name) => eventTimestamp(byName.get(name)) === undefined);
+	if (raw?.failure === "shutdown-failed") return { index, ok: false, failure: "shutdown-failed", missingEvents };
 	if (raw?.failure === "process-failed") return { index, ok: false, failure: "process-failed", missingEvents };
 	if (missingEvents.length > 0) return { index, ok: false, failure: "missing-events", missingEvents };
 	if (raw?.ok !== true) return { index, ok: false, failure: "process-failed", missingEvents };
@@ -434,6 +439,8 @@ export async function runStartupComparison(options, dependencies = {}) {
 			baseline: armSamples.baseline.filter((sample) => sample.ok).length,
 			candidate: armSamples.candidate.filter((sample) => sample.ok).length,
 		};
+		const shutdownFailures = armSamples.baseline.concat(armSamples.candidate)
+			.filter((sample) => sample.failure === "shutdown-failed").length;
 		const report = {
 			schemaVersion: 1,
 			generatedAt: now().toISOString(),
@@ -446,8 +453,9 @@ export async function runStartupComparison(options, dependencies = {}) {
 			bundleMode: { host: "source", extension: "source" },
 			executionOrder: schedule.map(({ arm }) => arm),
 			collection: {
-				succeeded: successfulSamples.baseline > 0 && successfulSamples.candidate > 0,
+				succeeded: successfulSamples.baseline > 0 && successfulSamples.candidate > 0 && shutdownFailures === 0,
 				successfulSamples,
+				shutdownFailures,
 			},
 			arms: {
 				baseline: { sha: baselineSha, samples: armSamples.baseline },
@@ -484,7 +492,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
 		onFixtureRetained: dependencies.onFixtureRetained ?? ((path) => console.error(`fixture retained: ${path}`)),
 	});
 	console.error(`startup comparison reports written to: ${outDir}`);
-	if (!report.collection.succeeded) throw new Error("startup comparison collected no successful samples for one or both arms");
+	if (!report.collection.succeeded) throw new Error("startup comparison collection failed; inspect the written report");
 	console.log(markdown(report));
 	return report;
 }

@@ -2705,6 +2705,7 @@ ${formatted}` }],
 
 // src/native-task-tool.ts
 import { spawn } from "node:child_process";
+import { createHash as createHash2 } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -2715,6 +2716,242 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text as Text2 } from "@earendil-works/pi-tui";
 import { Type as Type2 } from "typebox";
+
+// src/child-protocol.ts
+import { createHash } from "node:crypto";
+var MEBIBYTE = 1024 * 1024;
+var JSON_LINE_INITIAL_CAPACITY = 1024;
+var JSON_LINE_RETAINED_CAPACITY = 64 * 1024;
+var CHILD_JSON_FRAME_MAX_BYTES = 8 * MEBIBYTE;
+var CHILD_UNTERMINATED_MAX_BYTES = 8 * MEBIBYTE;
+var CHILD_STDERR_TAIL_MAX_BYTES = 64 * 1024;
+var CHILD_RETAINED_RESULT_MAX_BYTES = 4 * MEBIBYTE;
+var TRUNCATED_TAIL_MARKER = "[earlier output truncated]\n";
+var TRUNCATED_HEAD_MARKER = "\n[output truncated]";
+function bytesFrom(chunk) {
+  return typeof chunk === "string" ? Buffer.from(chunk, "utf8") : Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+}
+function isUtf8Continuation(byte) {
+  return byte !== void 0 && (byte & 192) === 128;
+}
+function decodeUtf8Tail(bytes) {
+  let value = bytes;
+  while (isUtf8Continuation(value[0])) value = value.subarray(1);
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  for (let trim = 0; trim <= Math.min(3, value.byteLength); trim += 1) {
+    try {
+      return decoder.decode(trim === 0 ? value : value.subarray(0, value.byteLength - trim));
+    } catch {
+    }
+  }
+  return new TextDecoder("utf-8").decode(value);
+}
+function decodeUtf8Head(bytes) {
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  for (let trim = 0; trim <= Math.min(3, bytes.byteLength); trim += 1) {
+    try {
+      return decoder.decode(trim === 0 ? bytes : bytes.subarray(0, bytes.byteLength - trim));
+    } catch {
+    }
+  }
+  return new TextDecoder("utf-8").decode(bytes);
+}
+function boundRetainedResult(text, maxBytes = CHILD_RETAINED_RESULT_MAX_BYTES) {
+  const bytes = Buffer.from(text, "utf8");
+  if (bytes.byteLength <= maxBytes) return text;
+  const markerBytes = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
+  if (maxBytes < markerBytes) throw new Error("retained-result limit is smaller than its truncation marker");
+  const head = decodeUtf8Head(bytes.subarray(0, maxBytes - markerBytes));
+  return `${head}${TRUNCATED_HEAD_MARKER}`;
+}
+function boundStableIdentifier(identifier, maxBytes) {
+  const hashedPrefix = "h:";
+  const rawEscapePrefix = "r:";
+  const raw = identifier.startsWith(hashedPrefix) || identifier.startsWith(rawEscapePrefix) ? `${rawEscapePrefix}${identifier}` : identifier;
+  if (Buffer.byteLength(raw, "utf8") <= maxBytes) return raw;
+  const hashSuffix = `#${createHash("sha256").update(identifier, "utf8").digest("hex")}`;
+  const contentMaxBytes = maxBytes - Buffer.byteLength(`${hashedPrefix}${hashSuffix}`, "utf8");
+  return `${hashedPrefix}${boundRetainedResult(identifier, contentMaxBytes)}${hashSuffix}`;
+}
+var BoundedUtf8Head = class {
+  constructor(maxBytes = CHILD_RETAINED_RESULT_MAX_BYTES) {
+    this.maxBytes = maxBytes;
+    const markerBytes = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
+    if (maxBytes < markerBytes) throw new Error("head limit is smaller than its truncation marker");
+    this.contentMaxBytes = maxBytes - markerBytes;
+  }
+  maxBytes;
+  value = "";
+  bytes = 0;
+  truncated = false;
+  contentMaxBytes;
+  get retainedBytes() {
+    return this.bytes;
+  }
+  append(chunk) {
+    if (this.truncated || chunk.length === 0) return this.value;
+    const chunkBytes = Buffer.byteLength(chunk, "utf8");
+    if (this.bytes + chunkBytes <= this.maxBytes) {
+      this.value += chunk;
+      this.bytes += chunkBytes;
+      return this.value;
+    }
+    let head;
+    if (this.bytes >= this.contentMaxBytes) {
+      const current = Buffer.from(this.value, "utf8");
+      head = decodeUtf8Head(current.subarray(0, this.contentMaxBytes));
+    } else {
+      const incoming = Buffer.from(chunk, "utf8");
+      head = this.value + decodeUtf8Head(incoming.subarray(0, this.contentMaxBytes - this.bytes));
+    }
+    this.value = `${head}${TRUNCATED_HEAD_MARKER}`;
+    this.bytes = Buffer.byteLength(this.value, "utf8");
+    this.truncated = true;
+    return this.value;
+  }
+  toString() {
+    return this.value;
+  }
+};
+var BoundedUtf8Tail = class {
+  constructor(maxBytes = CHILD_STDERR_TAIL_MAX_BYTES) {
+    this.maxBytes = maxBytes;
+    const markerBytes = Buffer.byteLength(TRUNCATED_TAIL_MARKER, "utf8");
+    if (maxBytes < markerBytes) throw new Error("tail limit is smaller than its truncation marker");
+    this.contentMaxBytes = maxBytes - markerBytes;
+    this.buffer = Buffer.allocUnsafe(maxBytes);
+  }
+  maxBytes;
+  buffer;
+  start = 0;
+  length = 0;
+  truncated = false;
+  contentMaxBytes;
+  append(chunk) {
+    const incoming = bytesFrom(chunk);
+    if (incoming.byteLength === 0) return;
+    const limit = this.truncated || this.length + incoming.byteLength > this.maxBytes ? this.contentMaxBytes : this.maxBytes;
+    if (limit === this.contentMaxBytes) this.truncated = true;
+    if (incoming.byteLength >= limit) {
+      incoming.copy(this.buffer, 0, incoming.byteLength - limit);
+      this.start = 0;
+      this.length = limit;
+      return;
+    }
+    const dropped = Math.max(0, this.length + incoming.byteLength - limit);
+    this.start = (this.start + dropped) % this.maxBytes;
+    this.length -= dropped;
+    const writeAt = (this.start + this.length) % this.maxBytes;
+    const firstBytes = Math.min(incoming.byteLength, this.maxBytes - writeAt);
+    incoming.copy(this.buffer, writeAt, 0, firstBytes);
+    if (firstBytes < incoming.byteLength) incoming.copy(this.buffer, 0, firstBytes);
+    this.length += incoming.byteLength;
+  }
+  toString() {
+    const bytes = Buffer.allocUnsafe(this.length);
+    const firstBytes = Math.min(this.length, this.maxBytes - this.start);
+    this.buffer.copy(bytes, 0, this.start, this.start + firstBytes);
+    if (firstBytes < this.length) this.buffer.copy(bytes, firstBytes, 0, this.length - firstBytes);
+    const tail = decodeUtf8Tail(bytes);
+    const decoded = Buffer.from(tail, "utf8");
+    if (!this.truncated && decoded.byteLength <= this.maxBytes) return tail;
+    const start = Math.max(0, decoded.byteLength - this.contentMaxBytes);
+    return `${TRUNCATED_TAIL_MARKER}${decodeUtf8Tail(decoded.subarray(start))}`;
+  }
+};
+var ChildProtocolLimitError = class extends Error {
+  constructor(kind, limitBytes, receivedBytes) {
+    super(`Child protocol ${kind} exceeded ${limitBytes} bytes (received at least ${receivedBytes} bytes)`);
+    this.kind = kind;
+    this.limitBytes = limitBytes;
+    this.receivedBytes = receivedBytes;
+    this.name = "ChildProtocolLimitError";
+  }
+  kind;
+  limitBytes;
+  receivedBytes;
+};
+var JsonLineDecoder = class {
+  constructor(options) {
+    this.options = options;
+    this.maxFrameBytes = options.maxFrameBytes ?? CHILD_JSON_FRAME_MAX_BYTES;
+    this.maxUnterminatedBytes = options.maxUnterminatedBytes ?? CHILD_UNTERMINATED_MAX_BYTES;
+  }
+  options;
+  buffer;
+  bytes = 0;
+  stopped = false;
+  maxFrameBytes;
+  maxUnterminatedBytes;
+  get bufferedBytes() {
+    return this.bytes;
+  }
+  /** Report capacity without exposing the mutable buffer. */
+  get retainedCapacityBytes() {
+    return this.buffer?.byteLength ?? 0;
+  }
+  write(chunk) {
+    if (this.stopped) return;
+    const incoming = bytesFrom(chunk);
+    let offset = 0;
+    while (offset < incoming.byteLength) {
+      const newline = incoming.indexOf(10, offset);
+      if (newline === -1) {
+        this.append(incoming.subarray(offset), false);
+        return;
+      }
+      if (!this.append(incoming.subarray(offset, newline), true)) return;
+      this.emitLine();
+      offset = newline + 1;
+    }
+  }
+  /** Emit one final non-empty frame when the producer closes without a newline. */
+  end() {
+    if (this.stopped) return;
+    try {
+      if (this.bytes > 0) this.emitLine();
+    } finally {
+      this.stopped = true;
+      this.buffer = void 0;
+      this.bytes = 0;
+    }
+  }
+  append(chunk, terminated) {
+    const nextBytes = this.bytes + chunk.byteLength;
+    if (nextBytes > this.maxFrameBytes) return this.fail("frame", this.maxFrameBytes, nextBytes);
+    if (!terminated && nextBytes > this.maxUnterminatedBytes) {
+      return this.fail("unterminated", this.maxUnterminatedBytes, nextBytes);
+    }
+    if (chunk.byteLength > 0) {
+      const target = this.growBuffer(nextBytes);
+      Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength).copy(target, this.bytes);
+    }
+    this.bytes = nextBytes;
+    return true;
+  }
+  growBuffer(requiredBytes) {
+    if (this.buffer && this.buffer.byteLength >= requiredBytes) return this.buffer;
+    let capacity = this.buffer?.byteLength ?? Math.min(JSON_LINE_INITIAL_CAPACITY, this.maxFrameBytes);
+    while (capacity < requiredBytes) capacity = Math.min(this.maxFrameBytes, capacity * 2);
+    const next = Buffer.allocUnsafe(capacity);
+    if (this.buffer && this.bytes > 0) this.buffer.copy(next, 0, 0, this.bytes);
+    this.buffer = next;
+    return next;
+  }
+  emitLine() {
+    const line = decodeUtf8Head(this.buffer?.subarray(0, this.bytes) ?? Buffer.alloc(0));
+    this.bytes = 0;
+    if ((this.buffer?.byteLength ?? 0) > JSON_LINE_RETAINED_CAPACITY) this.buffer = void 0;
+    this.options.onLine(line);
+  }
+  fail(kind, limit, received) {
+    this.stopped = true;
+    this.buffer = void 0;
+    this.bytes = 0;
+    this.options.onError(new ChildProtocolLimitError(kind, limit, received));
+    return false;
+  }
+};
 
 // src/native-task-params.ts
 var MAX_PARALLEL_TASKS = 8;
@@ -2917,6 +3154,121 @@ var loadSkillDiscovery = (cwd) => {
 var applyPromptPatches = (prompt, patches) => {
   return patches.reduce((value, patch) => value.replace(patch.match, patch.replace), prompt);
 };
+var RunPayloadBudget = class {
+  retainedBytes = 0;
+  liveBytes = 0;
+  markerRetained = false;
+  markerOwner;
+  liveMarker = false;
+  liveTruncated = false;
+  markerBytes = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
+  get truncated() {
+    return this.markerRetained || this.liveMarker;
+  }
+  get full() {
+    const markerReserve = this.truncated ? 0 : this.markerBytes;
+    return this.retainedBytes + this.liveBytes >= CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve;
+  }
+  wouldOverflow(bytes) {
+    const markerReserve = this.truncated ? 0 : this.markerBytes;
+    return bytes > CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve - this.retainedBytes - this.liveBytes;
+  }
+  retain(text, requiresMarker = false, owner) {
+    if (text.length === 0) return "";
+    const textBytes = Buffer.byteLength(text, "utf8");
+    const markerPresent = this.truncated;
+    const markerReserve = markerPresent ? 0 : this.markerBytes;
+    const contentBytesLeft = Math.max(0, CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve - this.retainedBytes - this.liveBytes);
+    if (!requiresMarker && textBytes <= contentBytesLeft) {
+      this.retainedBytes += textBytes;
+      return text;
+    }
+    const retained = markerPresent ? this.unmarkedHead(text, contentBytesLeft) : this.markedHead(text, contentBytesLeft);
+    this.retainedBytes += Buffer.byteLength(retained, "utf8");
+    if (!markerPresent) {
+      this.markerRetained = true;
+      this.markerOwner = owner;
+    }
+    return retained;
+  }
+  replaceMany(owners, previous, next, reusesPrevious) {
+    const ownedMarkerIndex = owners.findIndex((owner) => owner === this.markerOwner);
+    for (let index = 0; index < previous.length; index += 1) {
+      const text = previous[index];
+      if (text !== void 0) this.release(text, owners[index]);
+    }
+    const normalized = next.map((text, index) => {
+      if (text === void 0 || index !== ownedMarkerIndex || !reusesPrevious[index] || !text.endsWith(TRUNCATED_HEAD_MARKER)) return text;
+      return text.slice(0, -TRUNCATED_HEAD_MARKER.length);
+    });
+    let markerIndex = -1;
+    if (ownedMarkerIndex !== -1) {
+      for (let index = normalized.length - 1; index >= 0; index -= 1) {
+        if (normalized[index] !== void 0) {
+          markerIndex = index;
+          break;
+        }
+      }
+    }
+    return normalized.map((text, index) => {
+      if (text === void 0) return void 0;
+      return this.retain(text, index === markerIndex && !this.truncated, owners[index]);
+    });
+  }
+  appendLive(delta) {
+    if (delta.length === 0 || this.liveTruncated) return "";
+    const deltaBytes = Buffer.byteLength(delta, "utf8");
+    const markerPresent = this.truncated;
+    const markerReserve = markerPresent ? 0 : this.markerBytes;
+    const contentBytesLeft = Math.max(0, CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve - this.retainedBytes - this.liveBytes);
+    if (deltaBytes <= contentBytesLeft) {
+      this.liveBytes += deltaBytes;
+      return delta;
+    }
+    const retained = markerPresent ? this.unmarkedHead(delta, contentBytesLeft) : this.markedHead(delta, contentBytesLeft);
+    this.liveBytes += Buffer.byteLength(retained, "utf8");
+    this.liveMarker = !markerPresent;
+    this.liveTruncated = true;
+    return retained;
+  }
+  releaseLive() {
+    const omitted = this.liveTruncated;
+    this.liveBytes = 0;
+    this.liveMarker = false;
+    this.liveTruncated = false;
+    return omitted;
+  }
+  reclaimForAssistant() {
+    this.retainedBytes = 0;
+    this.liveBytes = 0;
+    this.markerRetained = false;
+    this.markerOwner = void 0;
+    this.liveMarker = false;
+    this.liveTruncated = false;
+  }
+  release(text, owner) {
+    this.retainedBytes = Math.max(0, this.retainedBytes - Buffer.byteLength(text, "utf8"));
+    if (owner === this.markerOwner) {
+      this.markerRetained = false;
+      this.markerOwner = void 0;
+    }
+  }
+  markedHead(text, contentBytes) {
+    return boundRetainedResult(`${text}${TRUNCATED_HEAD_MARKER}`, contentBytes + this.markerBytes);
+  }
+  unmarkedHead(text, contentBytes) {
+    return this.markedHead(text, contentBytes).slice(0, -TRUNCATED_HEAD_MARKER.length);
+  }
+};
+var runPayloadBudgets = /* @__PURE__ */ new WeakMap();
+var getRunPayloadBudget = (result) => {
+  let budget = runPayloadBudgets.get(result);
+  if (!budget) {
+    budget = new RunPayloadBudget();
+    runPayloadBudgets.set(result, budget);
+  }
+  return budget;
+};
 var createForkSession = async (sessionFile) => {
   const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-task-tool-"));
   const seedPath = path.join(tmpDir, "seed.jsonl");
@@ -2977,6 +3329,10 @@ var stripYamlFrontmatter = (content) => {
   return normalized.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
 };
 var formatToolCall = (toolName, args, themeFg) => {
+  if (typeof args === "string") {
+    const preview2 = args.length > 60 ? `${args.slice(0, 60)}...` : args;
+    return themeFg("accent", toolName) + themeFg("dim", ` ${preview2}`);
+  }
   if (toolName === "bash") {
     const command = typeof args.command === "string" ? args.command : "...";
     const preview2 = command.length > 60 ? `${command.slice(0, 60)}...` : command;
@@ -3027,13 +3383,16 @@ var formatToolCall = (toolName, args, themeFg) => {
 var getFinalOutput = (messages) => {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
-    if (message.role === "assistant") {
-      for (const part of message.content) {
-        if (part.type === "text") return part.text;
-      }
-    }
+    if (message.role !== "assistant") continue;
+    const text = message.content.flatMap((part) => part.type === "text" ? [part.text] : []).join("");
+    if (text) return text;
   }
   return "";
+};
+var getFinalResultOutput = (result) => {
+  const output = getFinalOutput(result.messages);
+  if (!output) return "";
+  return result.payloadTruncated && !output.includes(TRUNCATED_HEAD_MARKER) ? `${output}${TRUNCATED_HEAD_MARKER}` : output;
 };
 var indentLine = (text, indent) => `${" ".repeat(indent)}${text}`;
 var indentText = (text, indent) => {
@@ -3096,7 +3455,7 @@ var getToolCallLines = (result, theme) => {
 };
 var getTaskOutputText = (result) => {
   if (isTaskError(result)) return getTaskErrorText(result);
-  return getFinalOutput(result.messages);
+  return getFinalResultOutput(result);
 };
 var formatFinalOutputText = (result) => {
   const output = getTaskOutputText(result).trim();
@@ -3239,21 +3598,42 @@ var isTaskError = (result) => {
   return result.exitCode > 0 || result.stopReason === "error" || result.stopReason === "aborted";
 };
 var getTaskErrorText = (result) => {
-  return result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
+  return result.errorMessage || result.stderr || getFinalResultOutput(result) || "(no output)";
 };
 var attachAbortSignal = (proc, signal) => {
   let aborted = false;
-  if (!signal) return { isAborted: () => aborted };
-  const killProcess = () => {
-    aborted = true;
-    proc.kill("SIGTERM");
-    setTimeout(() => {
-      if (!proc.killed) proc.kill("SIGKILL");
-    }, 5e3);
+  let closed = false;
+  let forceKill;
+  const onClose = () => {
+    closed = true;
+    if (forceKill) clearTimeout(forceKill);
+    forceKill = void 0;
   };
-  if (signal.aborted) killProcess();
-  else signal.addEventListener("abort", killProcess, { once: true });
-  return { isAborted: () => aborted };
+  proc.once("close", onClose);
+  const terminate = () => {
+    if (closed || forceKill) return;
+    proc.kill("SIGTERM");
+    forceKill = setTimeout(() => {
+      if (!closed) proc.kill("SIGKILL");
+    }, 5e3);
+    forceKill.unref?.();
+  };
+  const interrupt = () => {
+    aborted = true;
+    terminate();
+  };
+  if (signal?.aborted) interrupt();
+  else signal?.addEventListener("abort", interrupt, { once: true });
+  return {
+    isAborted: () => aborted,
+    terminate,
+    dispose: () => {
+      signal?.removeEventListener("abort", interrupt);
+      proc.removeListener("close", onClose);
+      if (forceKill) clearTimeout(forceKill);
+      forceKill = void 0;
+    }
+  };
 };
 var parseJsonLine = (line) => {
   if (!line.trim()) return void 0;
@@ -3279,13 +3659,185 @@ var applyAssistantUsage = (result, message) => {
   result.usage.cost += usage.cost?.total ?? 0;
   result.usage.contextTokens = usage.totalTokens ?? 0;
 };
-var handleEventMessage = (result, message) => {
-  result.messages.push(message);
-  if (message.role !== "assistant") return;
-  applyAssistantUsage(result, message);
-  if (!result.model && message.model) result.model = message.model;
-  if (message.stopReason) result.stopReason = message.stopReason;
-  if (message.errorMessage) result.errorMessage = message.errorMessage;
+var RETAINED_PREVIEW_KEY = "__sumocodeRetainedPreview";
+var RETAINED_METADATA_MAX_BYTES = 512;
+var RETAINED_NAME_MAX_BYTES = 256;
+var RETAINED_NAME_LIST_MAX = 64;
+var serializeStructured = (value) => {
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+};
+var retainStructured = (budget, value, requiresMarker = false) => {
+  const serialized = serializeStructured(value);
+  const retained = budget.retain(serialized, requiresMarker);
+  return retained === serialized ? value : retained ? { [RETAINED_PREVIEW_KEY]: retained } : {};
+};
+var boundedMetadataText = (value, maxBytes = RETAINED_METADATA_MAX_BYTES) => {
+  if (typeof value !== "string" || value.length === 0) return "";
+  const head = new BoundedUtf8Head(maxBytes);
+  return head.append(value);
+};
+var boundedIdentifierText = (value, maxBytes = RETAINED_NAME_MAX_BYTES) => typeof value === "string" && value.length > 0 ? boundStableIdentifier(value, maxBytes) : "";
+var finiteNumber = (value) => typeof value === "number" && Number.isFinite(value) ? value : 0;
+var retainedUsage = (value) => {
+  const usage = isRecord(value) ? value : {};
+  const cost = isRecord(usage.cost) ? usage.cost : {};
+  return {
+    input: finiteNumber(usage.input),
+    output: finiteNumber(usage.output),
+    cacheRead: finiteNumber(usage.cacheRead),
+    cacheWrite: finiteNumber(usage.cacheWrite),
+    totalTokens: finiteNumber(usage.totalTokens),
+    cost: {
+      input: finiteNumber(cost.input),
+      output: finiteNumber(cost.output),
+      cacheRead: finiteNumber(cost.cacheRead),
+      cacheWrite: finiteNumber(cost.cacheWrite),
+      total: finiteNumber(cost.total)
+    }
+  };
+};
+var clearRetainedHumanText = (result) => {
+  result.messages = result.messages.map((message) => {
+    if (message.role === "user") {
+      return {
+        ...message,
+        content: typeof message.content === "string" ? "" : message.content.map((part) => part.type === "text" ? { ...part, text: "" } : { ...part, data: "" })
+      };
+    }
+    if (message.role === "toolResult") {
+      return {
+        ...message,
+        content: message.content.map((part) => part.type === "text" ? { ...part, text: "" } : { ...part, data: "" }),
+        details: void 0
+      };
+    }
+    return {
+      ...message,
+      content: message.content.map((part) => {
+        if (part.type === "text") return { ...part, text: "", textSignature: void 0 };
+        if (part.type === "thinking") return { ...part, thinking: "", thinkingSignature: void 0 };
+        return { ...part, arguments: {}, thoughtSignature: void 0 };
+      }),
+      diagnostics: void 0,
+      deferred: void 0,
+      errorMessage: void 0
+    };
+  });
+  result.toolEvents = result.toolEvents.map((event) => ({ ...event, args: {}, output: void 0 }));
+  result.errorMessage = void 0;
+};
+var retainMultimodalContent = (budget, rawContent) => {
+  const content = [];
+  if (!Array.isArray(rawContent)) return content;
+  for (const part of rawContent) {
+    if (!isRecord(part)) continue;
+    if (part.type === "text") content.push({ type: "text", text: budget.retain(typeof part.text === "string" ? part.text : "") });
+    else if (part.type === "image") content.push({
+      type: "image",
+      data: budget.retain(typeof part.data === "string" ? part.data : ""),
+      mimeType: boundedMetadataText(part.mimeType, RETAINED_NAME_MAX_BYTES)
+    });
+  }
+  return content;
+};
+var handleEventMessage = (result, message, liveOmitted = false) => {
+  const budget = getRunPayloadBudget(result);
+  if (message.role === "user") {
+    const rawContent2 = message.content;
+    const content2 = typeof rawContent2 === "string" ? budget.retain(rawContent2) : retainMultimodalContent(budget, rawContent2);
+    result.messages.push({ role: "user", content: content2, timestamp: finiteNumber(message.timestamp) });
+    result.payloadTruncated = budget.truncated || void 0;
+    return;
+  }
+  if (message.role === "toolResult") {
+    const rawContent2 = message.content;
+    const content2 = retainMultimodalContent(budget, rawContent2);
+    const retained2 = {
+      role: "toolResult",
+      toolCallId: boundedIdentifierText(message.toolCallId),
+      toolName: boundedMetadataText(message.toolName, RETAINED_NAME_MAX_BYTES),
+      content: content2,
+      details: message.details === void 0 ? void 0 : retainStructured(budget, message.details),
+      usage: message.usage === void 0 ? void 0 : retainedUsage(message.usage),
+      addedToolNames: Array.isArray(message.addedToolNames) ? message.addedToolNames.slice(0, RETAINED_NAME_LIST_MAX).map((name) => boundedMetadataText(name, RETAINED_NAME_MAX_BYTES)) : void 0,
+      isError: message.isError === true,
+      timestamp: finiteNumber(message.timestamp)
+    };
+    result.messages.push(retained2);
+    result.payloadTruncated = budget.truncated || void 0;
+    return;
+  }
+  const rawContent = message.content;
+  const parts = Array.isArray(rawContent) ? rawContent.filter(isRecord) : [];
+  const deliverableTextBytes = parts.reduce((bytes, part) => part.type === "text" && typeof part.text === "string" ? bytes + Buffer.byteLength(part.text, "utf8") : bytes, typeof message.errorMessage === "string" ? Buffer.byteLength(message.errorMessage, "utf8") : 0);
+  const assistantPayloadBytes = parts.reduce((bytes, part) => {
+    if (part.type === "text" && typeof part.text === "string") return bytes + Buffer.byteLength(part.text, "utf8");
+    if (part.type === "thinking" && typeof part.thinking === "string") return bytes + Buffer.byteLength(part.thinking, "utf8");
+    if (part.type === "toolCall") return bytes + Buffer.byteLength(serializeStructured(isRecord(part.arguments) ? part.arguments : {}), "utf8");
+    return bytes;
+  }, typeof message.errorMessage === "string" ? Buffer.byteLength(message.errorMessage, "utf8") : 0);
+  const hasDeliverableText = deliverableTextBytes > 0;
+  const hasAssistantPayload = parts.some((part) => {
+    if (part.type === "text") return typeof part.text === "string" && part.text.length > 0;
+    if (part.type === "thinking") return typeof part.thinking === "string" && part.thinking.length > 0;
+    return part.type === "toolCall";
+  }) || hasDeliverableText;
+  const hasPriorDeliverableText = getFinalOutput(result.messages).length > 0;
+  const replaceForPayload = hasAssistantPayload && (hasDeliverableText || !hasPriorDeliverableText) && (budget.truncated || budget.full || liveOmitted || budget.wouldOverflow(assistantPayloadBytes));
+  let requiresMarker = replaceForPayload || hasAssistantPayload && liveOmitted && !budget.truncated;
+  if (replaceForPayload) {
+    clearRetainedHumanText(result);
+    budget.reclaimForAssistant();
+  }
+  const retainAssistantText = (text) => {
+    if (typeof text !== "string" || text.length === 0) return "";
+    const retained2 = budget.retain(text, requiresMarker);
+    if (retained2.length > 0) requiresMarker = false;
+    return retained2;
+  };
+  const retainAssistantRecord = (value) => {
+    const retained2 = retainStructured(budget, isRecord(value) ? value : {}, requiresMarker);
+    if (Object.keys(retained2).length > 0) requiresMarker = false;
+    return retained2;
+  };
+  const content = [];
+  for (const part of parts) {
+    if (part.type === "text") content.push({ type: "text", text: retainAssistantText(part.text) });
+    else if (part.type === "thinking") content.push({ type: "thinking", thinking: retainAssistantText(part.thinking), redacted: part.redacted === true });
+    else if (part.type === "toolCall") content.push({
+      type: "toolCall",
+      id: boundedIdentifierText(part.id),
+      name: boundedMetadataText(part.name, RETAINED_NAME_MAX_BYTES),
+      arguments: retainAssistantRecord(part.arguments),
+      namespace: boundedMetadataText(part.namespace, RETAINED_NAME_MAX_BYTES) || void 0
+    });
+  }
+  const errorMessage2 = retainAssistantText(message.errorMessage) || void 0;
+  const retained = {
+    role: "assistant",
+    content,
+    api: boundedMetadataText(message.api, RETAINED_NAME_MAX_BYTES),
+    provider: boundedMetadataText(message.provider, RETAINED_NAME_MAX_BYTES),
+    model: boundedMetadataText(message.model, RETAINED_NAME_MAX_BYTES),
+    responseModel: boundedMetadataText(message.responseModel, RETAINED_NAME_MAX_BYTES) || void 0,
+    responseId: boundedMetadataText(message.responseId) || void 0,
+    usage: retainedUsage(message.usage),
+    stopReason: boundedMetadataText(message.stopReason, RETAINED_NAME_MAX_BYTES),
+    errorMessage: errorMessage2,
+    rawStopReason: boundedMetadataText(message.rawStopReason, RETAINED_NAME_MAX_BYTES) || void 0,
+    endTurn: typeof message.endTurn === "boolean" ? message.endTurn : void 0,
+    timestamp: finiteNumber(message.timestamp)
+  };
+  result.messages.push(retained);
+  result.payloadTruncated = budget.truncated || void 0;
+  applyAssistantUsage(result, retained);
+  if (!result.model && retained.model) result.model = retained.model;
+  if (retained.stopReason) result.stopReason = retained.stopReason;
+  if (retained.errorMessage) result.errorMessage = retained.errorMessage;
 };
 var prepareTaskExecutions = (options) => {
   const executions = [];
@@ -3328,14 +3880,34 @@ var stringifyToolOutput = (value) => {
     return String(value);
   }
 };
+var toolArgsText = (args) => typeof args === "string" ? args : JSON.stringify(args);
 var upsertToolEvent = (result, event) => {
-  const key = event.id ?? `${event.name}:${JSON.stringify(event.args)}`;
-  const index = result.toolEvents.findIndex((item) => (item.id ?? `${item.name}:${JSON.stringify(item.args)}`) === key);
-  if (index === -1) {
-    result.toolEvents.push(event);
-    return;
-  }
-  result.toolEvents[index] = { ...result.toolEvents[index], ...event };
+  const name = boundedMetadataText(event.name, RETAINED_NAME_MAX_BYTES) || "tool";
+  const id = boundedIdentifierText(event.id) || `h:${createHash2("sha256").update(`${name}:${serializeStructured(event.args ?? {})}`, "utf8").digest("hex")}`;
+  const key = id;
+  const index = result.toolEvents.findIndex((item) => item.id === key);
+  const previous = index === -1 ? void 0 : result.toolEvents[index];
+  const rawArgs = event.args ?? previous?.args ?? {};
+  const nextArgsText = toolArgsText(rawArgs);
+  const nextOutput = event.output === void 0 ? previous?.output : event.output;
+  const budget = getRunPayloadBudget(result);
+  const [argsText = "", output] = budget.replaceMany(
+    [`${key}:args`, `${key}:output`],
+    [previous ? toolArgsText(previous.args) : void 0, previous?.output],
+    [nextArgsText, nextOutput],
+    [event.args === void 0 && previous !== void 0, event.output === void 0 && previous !== void 0]
+  );
+  const args = typeof rawArgs !== "string" && argsText === nextArgsText ? rawArgs : argsText;
+  const retained = {
+    id,
+    name,
+    args,
+    status: event.status,
+    output
+  };
+  if (index === -1) result.toolEvents.push(retained);
+  else result.toolEvents[index] = retained;
+  result.payloadTruncated = budget.truncated || void 0;
 };
 var mapWithConcurrencyLimit = async (items, concurrency, fn) => {
   if (items.length === 0) return [];
@@ -3366,8 +3938,15 @@ var runSingleTask = async (options) => {
     thinking: options.thinking,
     fork: options.fork
   };
+  const stderr = new BoundedUtf8Tail();
+  let stderrChanged = false;
   const emitUpdate = () => {
-    options.onResultUpdate?.(currentResult);
+    if (!options.onResultUpdate) return;
+    if (stderrChanged) {
+      currentResult.stderr = stderr.toString();
+      stderrChanged = false;
+    }
+    options.onResultUpdate(currentResult);
   };
   let forkSession;
   if (options.fork) {
@@ -3387,14 +3966,13 @@ var runSingleTask = async (options) => {
   try {
     const args = [...applyForkSessionArgs(options.subprocessArgs, forkSession), options.subprocessPrompt];
     const exitCode = await new Promise((resolve10) => {
-      const proc = spawn("pi", args, {
+      const proc = options.spawnImpl("pi", args, {
         cwd: options.defaultCwd,
         shell: false,
         stdio: ["pipe", "pipe", "pipe"]
       });
       proc.stdin.end();
       const abortState = attachAbortSignal(proc, options.signal);
-      let buffer = "";
       const processLine = (line) => {
         const event = parseJsonLine(line);
         if (!event) return;
@@ -3403,7 +3981,10 @@ var runSingleTask = async (options) => {
         if (typeText === "message_update") {
           const assistantEvent = isRecord(event.assistantMessageEvent) ? event.assistantMessageEvent : void 0;
           if (assistantEvent?.type === "text_delta" && typeof assistantEvent.delta === "string") {
-            currentResult.streamingText = `${currentResult.streamingText ?? ""}${assistantEvent.delta}`;
+            const budget = getRunPayloadBudget(currentResult);
+            const retained = budget.appendLive(assistantEvent.delta);
+            if (retained) currentResult.streamingText = `${currentResult.streamingText ?? ""}${retained}`;
+            currentResult.payloadTruncated = budget.truncated || void 0;
             emitUpdate();
           }
         }
@@ -3411,7 +3992,7 @@ var runSingleTask = async (options) => {
           upsertToolEvent(currentResult, {
             id: typeof event.toolCallId === "string" ? event.toolCallId : void 0,
             name: typeof event.toolName === "string" ? event.toolName : "tool",
-            args: isRecord(event.args) ? event.args : {},
+            args: isRecord(event.args) ? event.args : void 0,
             status: "running"
           });
           emitUpdate();
@@ -3420,7 +4001,7 @@ var runSingleTask = async (options) => {
           upsertToolEvent(currentResult, {
             id: typeof event.toolCallId === "string" ? event.toolCallId : void 0,
             name: typeof event.toolName === "string" ? event.toolName : "tool",
-            args: isRecord(event.args) ? event.args : {},
+            args: isRecord(event.args) ? event.args : void 0,
             status: "running",
             output: stringifyToolOutput(event.partialResult)
           });
@@ -3430,7 +4011,7 @@ var runSingleTask = async (options) => {
           upsertToolEvent(currentResult, {
             id: typeof event.toolCallId === "string" ? event.toolCallId : void 0,
             name: typeof event.toolName === "string" ? event.toolName : "tool",
-            args: isRecord(event.args) ? event.args : {},
+            args: isRecord(event.args) ? event.args : void 0,
             status: event.isError === true ? "error" : "success",
             output: stringifyToolOutput(event.result)
           });
@@ -3438,28 +4019,54 @@ var runSingleTask = async (options) => {
         }
         const messageValue = event.message;
         if ((typeText === "message_end" || typeText === "tool_result_end") && isMessage(messageValue)) {
-          handleEventMessage(currentResult, messageValue);
+          let liveOmitted = false;
+          if (messageValue.role === "assistant") {
+            liveOmitted = getRunPayloadBudget(currentResult).releaseLive();
+            currentResult.streamingText = void 0;
+          }
+          handleEventMessage(currentResult, messageValue, liveOmitted);
           emitUpdate();
         }
       };
-      proc.stdout.on("data", (data) => {
-        buffer += data.toString();
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) processLine(line);
+      let settled = false;
+      let protocolFailed = false;
+      const stdout = new JsonLineDecoder({
+        onLine: processLine,
+        onError: (error) => {
+          protocolFailed = true;
+          currentResult.errorMessage = error.message;
+          abortState.terminate();
+        }
       });
-      proc.stderr.on("data", (data) => {
-        currentResult.stderr += data.toString();
-      });
-      proc.on("close", (code) => {
-        if (buffer.trim()) processLine(buffer);
-        currentResult.exitCode = code ?? 0;
+      const onStdout = (data) => stdout.write(data);
+      const onStderr = (data) => {
+        stderr.append(data);
+        stderrChanged = true;
+      };
+      const cleanup = () => {
+        proc.stdout.removeListener("data", onStdout);
+        proc.stderr.removeListener("data", onStderr);
+        abortState.dispose();
+      };
+      const finish = (code) => {
+        if (settled) return;
+        settled = true;
+        currentResult.exitCode = code;
+        currentResult.stderr = stderr.toString();
         if (abortState.isAborted()) currentResult.stopReason = "aborted";
-        resolve10(code ?? 0);
+        cleanup();
+        resolve10(code);
+      };
+      proc.stdout.on("data", onStdout);
+      proc.stderr.on("data", onStderr);
+      proc.once("close", (code) => {
+        stdout.end();
+        finish(protocolFailed ? 1 : code ?? 0);
       });
-      proc.on("error", () => {
-        currentResult.exitCode = 1;
-        resolve10(1);
+      proc.once("error", (error) => {
+        if (settled || protocolFailed || abortState.isAborted()) return;
+        currentResult.errorMessage = boundRetainedResult(error.message);
+        finish(1);
       });
     });
     currentResult.exitCode = exitCode;
@@ -3540,7 +4147,7 @@ var renderChainResult = (results, _expanded, theme) => {
   }
   return new Text2(lines.join("\n"), 0, 0);
 };
-var taskTool = (options = DEFAULT_OPTIONS) => (pi) => {
+var taskTool = (options = DEFAULT_OPTIONS, spawnImpl = spawn) => (pi) => {
   const merged = { ...DEFAULT_OPTIONS, ...options };
   pi.registerTool({
     name: merged.name,
@@ -3614,14 +4221,11 @@ Available skills: ${available.text}${suffix}` }],
           execution.config.thinkingLevel,
           execution.config.modelLabel
         );
-        const emitSingleUpdate = (result2) => {
-          if (!onUpdate) return;
-          onUpdate({
-            content: [{ type: "text", text: getFinalOutput(result2.messages) || "(running...)" }],
-            details: makeDetails([result2])
-          });
-        };
-        emitSingleUpdate(initial);
+        const emitSingleUpdate = onUpdate ? (result2) => onUpdate({
+          content: [{ type: "text", text: getFinalResultOutput(result2) || "(running...)" }],
+          details: makeDetails([result2])
+        }) : void 0;
+        emitSingleUpdate?.(initial);
         const result = await runSingleTask({
           defaultCwd: ctx.cwd,
           item: execution.task.item,
@@ -3633,7 +4237,8 @@ Available skills: ${available.text}${suffix}` }],
           fork: execution.task.item.fork,
           sessionFile,
           signal,
-          onResultUpdate: emitSingleUpdate
+          onResultUpdate: emitSingleUpdate,
+          spawnImpl
         });
         const error = isTaskError(result);
         if (error) {
@@ -3644,7 +4249,7 @@ Available skills: ${available.text}${suffix}` }],
           };
         }
         return {
-          content: [{ type: "text", text: getFinalOutput(result.messages) || "(no output)" }],
+          content: [{ type: "text", text: getFinalResultOutput(result) || "(no output)" }],
           details: makeDetails([result])
         };
       }
@@ -3701,7 +4306,7 @@ Available skills: ${available.text}${suffix}` }],
           const chainUpdate = onUpdate ? (partial) => {
             results2[index] = partial;
             onUpdate({
-              content: [{ type: "text", text: getFinalOutput(partial.messages) || "(running...)" }],
+              content: [{ type: "text", text: getFinalResultOutput(partial) || "(running...)" }],
               details: makeDetails([...results2])
             });
           } : void 0;
@@ -3716,12 +4321,13 @@ Available skills: ${available.text}${suffix}` }],
             fork: stepItem.fork,
             sessionFile,
             signal,
-            onResultUpdate: chainUpdate
+            onResultUpdate: chainUpdate,
+            spawnImpl
           });
           results2[index] = result;
           if (onUpdate) {
             onUpdate({
-              content: [{ type: "text", text: getFinalOutput(result.messages) || "(no output)" }],
+              content: [{ type: "text", text: getFinalResultOutput(result) || "(no output)" }],
               details: makeDetails([...results2])
             });
           }
@@ -3734,11 +4340,11 @@ Available skills: ${available.text}${suffix}` }],
               isError: true
             };
           }
-          previousOutput = getFinalOutput(result.messages);
+          previousOutput = getFinalResultOutput(result);
         }
         const last = results2[results2.length - 1];
         return {
-          content: [{ type: "text", text: getFinalOutput(last.messages) || "(no output)" }],
+          content: [{ type: "text", text: getFinalResultOutput(last) || "(no output)" }],
           details: makeDetails([...results2])
         };
       }
@@ -3800,10 +4406,11 @@ Available skills: ${available.text}${suffix}` }],
             fork: execution.task.item.fork,
             sessionFile,
             signal,
-            onResultUpdate: (partial) => {
+            onResultUpdate: onUpdate ? (partial) => {
               allResults[index] = partial;
               emitParallelUpdate();
-            }
+            } : void 0,
+            spawnImpl
           });
           allResults[index] = result;
           emitParallelUpdate();
@@ -3812,7 +4419,7 @@ Available skills: ${available.text}${suffix}` }],
       );
       const successCount = results.filter((result) => !isTaskError(result)).length;
       const summaries = results.map((result) => {
-        const output = getFinalOutput(result.messages);
+        const output = getFinalResultOutput(result);
         const preview = output.slice(0, 100) + (output.length > 100 ? "..." : "");
         return `[${getTaskSummaryLabel(result)}] ${isTaskError(result) ? "failed" : "completed"}: ${preview || "(no output)"}`;
       });
@@ -13812,7 +14419,7 @@ function installTerminalTools(pi, manager) {
 }
 
 // src/activity/manager-bridge.ts
-import { createHash as createHash2, randomUUID as randomUUID5 } from "node:crypto";
+import { createHash as createHash4, randomUUID as randomUUID5 } from "node:crypto";
 
 // src/activity/feed-publisher.ts
 import { randomUUID as randomUUID4 } from "node:crypto";
@@ -13820,7 +14427,7 @@ import { existsSync as existsSync9, linkSync as linkSync2, readdirSync as readdi
 import { basename as basename6, dirname as dirname10, join as join16 } from "node:path";
 
 // src/activity/persistence.ts
-import { createHash, randomUUID as randomUUID3 } from "node:crypto";
+import { createHash as createHash3, randomUUID as randomUUID3 } from "node:crypto";
 import {
   chmodSync as chmodSync3,
   closeSync as closeSync3,
@@ -13939,7 +14546,7 @@ function ensurePrivateSumocodeDirectory(segments, rootDir = defaultActivityState
   return root;
 }
 function hashedSessionId(ownerSessionId2) {
-  return createHash("sha256").update(ownerSessionId2, "utf8").digest("hex");
+  return createHash3("sha256").update(ownerSessionId2, "utf8").digest("hex");
 }
 function ensureActivityRoot(rootDir = defaultActivityStateRoot()) {
   return ensurePrivateSumocodeDirectory(["activity", "v1"], rootDir);
@@ -14753,7 +15360,7 @@ function durableSubagentActivity(snapshot, retained) {
   if (established) return { ...activity, id: established.id };
   const reused = retained.find((candidate) => candidate.id === activity.id && (candidate.createdAt !== void 0 && candidate.createdAt !== activity.createdAt || candidate.sourceId !== void 0 && activity.sourceId !== void 0 && candidate.sourceId !== activity.sourceId));
   if (!reused) return activity;
-  const durableSuffix = activity.sourceId ? createHash2("sha256").update(activity.sourceId, "utf8").digest("hex").slice(0, 12) : Math.max(1, Math.floor(snapshot.createdAt)).toString(36);
+  const durableSuffix = activity.sourceId ? createHash4("sha256").update(activity.sourceId, "utf8").digest("hex").slice(0, 12) : Math.max(1, Math.floor(snapshot.createdAt)).toString(36);
   return { ...activity, id: `${activity.id}:${durableSuffix}` };
 }
 function lostActivity(activity, message, now) {
@@ -15421,7 +16028,12 @@ var CHILD_MODEL_ID_ENV = "SUMOCODE_CHILD_MODEL_ID";
 var isString5 = (value) => typeof value === "string";
 var DEFAULT_BUILT_IN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 var PREVIEW_MAX2 = 160;
+var TOOL_IDENTIFIER_MAX_BYTES = 256;
 var ERROR_MAX = 4096;
+var boundedToolIdentifier = (value, fallback = "tool") => {
+  const identifier = isString5(value) && value ? value : fallback;
+  return boundStableIdentifier(identifier, TOOL_IDENTIFIER_MAX_BYTES);
+};
 var CLAUDE_OAUTH_ADAPTER_PACKAGE = "pi-claude-oauth-adapter";
 var MULTI_ACCOUNT_ADAPTER_SOURCE = "git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account";
 var NUMBERED_ANTHROPIC_PROVIDER = /^anthropic-\d+$/;
@@ -15561,6 +16173,85 @@ var messageText2 = (message) => {
   }
   return "";
 };
+var PiRunPayloadBudget = class {
+  retainedBytes = 0;
+  liveBytes = 0;
+  markerRetained = false;
+  retainedFull = false;
+  liveMarker = false;
+  liveTruncated = false;
+  omissionBehindLive = false;
+  markerBytes = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
+  appendLive(delta) {
+    if (delta.length === 0 || this.retainedFull || this.liveTruncated) return "";
+    const deltaBytes = Buffer.byteLength(delta, "utf8");
+    const markerReserve = this.markerRetained || this.liveMarker ? 0 : this.markerBytes;
+    const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve - this.retainedBytes - this.liveBytes;
+    if (deltaBytes <= contentBytesLeft) {
+      this.liveBytes += deltaBytes;
+      return delta;
+    }
+    const retained = this.markerRetained ? this.unmarkedHead(delta, Math.max(0, contentBytesLeft)) : this.markedHead(delta, Math.max(0, contentBytesLeft));
+    this.liveBytes += Buffer.byteLength(retained, "utf8");
+    this.liveMarker = !this.markerRetained;
+    this.liveTruncated = true;
+    return retained;
+  }
+  retainMessage(role, text) {
+    let replacesRetainedText = false;
+    let requiresMarker = false;
+    const textBytes = Buffer.byteLength(text, "utf8");
+    if (role === "assistant") {
+      const liveOmitted = this.liveTruncated || this.omissionBehindLive;
+      this.liveBytes = 0;
+      this.liveMarker = false;
+      this.liveTruncated = false;
+      this.omissionBehindLive = false;
+      const markerReserve2 = this.markerRetained ? 0 : this.markerBytes;
+      if (text.length > 0 && (this.markerRetained || liveOmitted || this.retainedFull || textBytes > CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve2 - this.retainedBytes)) {
+        this.retainedBytes = 0;
+        this.markerRetained = false;
+        this.retainedFull = false;
+        replacesRetainedText = true;
+        requiresMarker = true;
+      }
+    }
+    if (text.length === 0) return { text: "" };
+    if (this.retainedFull) return { text: "" };
+    if (this.liveTruncated) {
+      this.omissionBehindLive = text.length > 0;
+      return { text: "" };
+    }
+    if (requiresMarker && !this.markerRetained) {
+      const contentBytesLeft2 = CHILD_RETAINED_RESULT_MAX_BYTES - this.markerBytes - this.retainedBytes - this.liveBytes;
+      const retained2 = this.markedHead(text, Math.max(0, contentBytesLeft2));
+      this.retainedBytes += Buffer.byteLength(retained2, "utf8");
+      this.markerRetained = true;
+      this.retainedFull = textBytes > contentBytesLeft2;
+      return replacesRetainedText ? { text: retained2, replacesRetainedText: true } : { text: retained2 };
+    }
+    const markerReserve = this.markerRetained ? 0 : this.markerBytes;
+    const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve - this.retainedBytes - this.liveBytes;
+    let retained;
+    if (textBytes <= contentBytesLeft) {
+      retained = text;
+    } else {
+      retained = this.markerRetained ? this.unmarkedHead(text, Math.max(0, contentBytesLeft)) : this.markedHead(text, Math.max(0, contentBytesLeft));
+      this.markerRetained = true;
+      this.retainedFull = true;
+    }
+    this.retainedBytes += Buffer.byteLength(retained, "utf8");
+    return replacesRetainedText ? { text: retained, replacesRetainedText: true } : { text: retained };
+  }
+  markedHead(text, contentBytes) {
+    const head = new BoundedUtf8Head(contentBytes + this.markerBytes);
+    head.append(text);
+    return head.append(TRUNCATED_HEAD_MARKER);
+  }
+  unmarkedHead(text, contentBytes) {
+    return this.markedHead(text, contentBytes).slice(0, -TRUNCATED_HEAD_MARKER.length);
+  }
+};
 var mapPiEvent = (event) => {
   const typeText = isString5(event.type) ? event.type : "";
   if (typeText === "message_update") {
@@ -15572,23 +16263,23 @@ var mapPiEvent = (event) => {
   if (typeText === "tool_execution_start") {
     return [{
       kind: "tool-start",
-      toolId: isString5(event.toolCallId) ? event.toolCallId : `${event.toolName ?? "tool"}`,
-      name: isString5(event.toolName) ? event.toolName : "tool",
+      toolId: boundedToolIdentifier(event.toolCallId, boundedToolIdentifier(event.toolName)),
+      name: boundedToolIdentifier(event.toolName),
       argsPreview: safeToolArgumentsPreview(event.args)
     }];
   }
   if (typeText === "tool_execution_update") {
     return [{
       kind: "tool-update",
-      toolId: isString5(event.toolCallId) ? event.toolCallId : `${event.toolName ?? "tool"}`,
+      toolId: boundedToolIdentifier(event.toolCallId, boundedToolIdentifier(event.toolName)),
       outputPreview: sanitizePreview(stringifyToolOutput2(event.partialResult))
     }];
   }
   if (typeText === "tool_execution_end") {
     return [{
       kind: "tool-end",
-      toolId: isString5(event.toolCallId) ? event.toolCallId : `${event.toolName ?? "tool"}`,
-      name: isString5(event.toolName) ? event.toolName : "tool",
+      toolId: boundedToolIdentifier(event.toolCallId, boundedToolIdentifier(event.toolName)),
+      name: boundedToolIdentifier(event.toolName),
       isError: event.isError === true,
       outputPreview: sanitizePreview(stringifyToolOutput2(event.result))
     }];
@@ -15626,19 +16317,38 @@ var signalGroup = (proc, signal) => {
 var attachAbortSignal2 = (proc, signal) => {
   let aborted = false;
   let exited = false;
-  proc.once("close", () => {
+  let forceKill;
+  const onClose = () => {
     exited = true;
-  });
+    if (forceKill) clearTimeout(forceKill);
+    forceKill = void 0;
+  };
+  proc.once("close", onClose);
+  const terminate = () => {
+    if (exited || forceKill) return;
+    signalGroup(proc, "SIGTERM");
+    forceKill = setTimeout(() => {
+      if (!exited) signalGroup(proc, "SIGKILL");
+    }, 5e3);
+    forceKill.unref?.();
+  };
   const interrupt = () => {
     aborted = true;
-    signalGroup(proc, "SIGTERM");
-    setTimeout(() => {
-      if (!exited) signalGroup(proc, "SIGKILL");
-    }, 5e3).unref?.();
+    terminate();
   };
   if (signal?.aborted) interrupt();
   else signal?.addEventListener("abort", interrupt, { once: true });
-  return { isAborted: () => aborted, interrupt };
+  return {
+    isAborted: () => aborted,
+    interrupt,
+    terminate,
+    dispose: () => {
+      signal?.removeEventListener("abort", interrupt);
+      proc.removeListener("close", onClose);
+      if (forceKill) clearTimeout(forceKill);
+      forceKill = void 0;
+    }
+  };
 };
 function resolvePiBinary(env = process.env) {
   const configured = env.PI_BIN?.trim();
@@ -15735,54 +16445,81 @@ var createPiChildSpawner = (spawnImpl = nodeSpawn, resolveAdapterEntry = resolve
     proc.stdin.end();
     const abortState = attachAbortSignal2(proc, options.signal);
     interrupt = abortState.interrupt;
-    let stdoutBuffer = "";
-    let stderr = "";
+    const stderr = new BoundedUtf8Tail();
+    const payloadBudget = new PiRunPayloadBudget();
     let finalAssistantText = "";
     let stopReason;
     let errorMessage2;
+    let protocolError;
+    let settled = false;
+    const settle = (outcome) => {
+      if (settled) return;
+      settled = true;
+      emit({ kind: "run-settled", outcome });
+    };
     const processLine = (line) => {
       const parsed = parseJsonLine2(line);
       if (!parsed) return;
       for (const event of mapPiEvent(parsed)) {
-        if (event.kind === "message-end" && event.role === "assistant") finalAssistantText = event.text;
+        if (event.kind === "assistant-delta") {
+          const delta = payloadBudget.appendLive(event.delta);
+          if (delta) emit({ ...event, delta });
+          continue;
+        }
+        if (event.kind === "message-end") {
+          const retained = { ...event, ...payloadBudget.retainMessage(event.role, event.text) };
+          if (retained.role === "assistant") finalAssistantText = retained.text;
+          emit(retained);
+          continue;
+        }
         emit(event);
       }
       const messageValue = parsed.message;
       if (isMessage2(messageValue) && messageValue.role === "assistant") {
         if (isString5(messageValue.stopReason)) stopReason = messageValue.stopReason;
-        if (isString5(messageValue.errorMessage)) errorMessage2 = messageValue.errorMessage;
+        if (isString5(messageValue.errorMessage)) errorMessage2 = boundRetainedResult(messageValue.errorMessage, ERROR_MAX);
       }
     };
-    proc.stdout.on("data", (data) => {
-      stdoutBuffer += data.toString();
-      const lines = stdoutBuffer.split("\n");
-      stdoutBuffer = lines.pop() ?? "";
-      for (const line of lines) processLine(line);
-    });
-    proc.stderr.on("data", (data) => {
-      stderr += data.toString();
-    });
-    proc.on("close", (code, closeSignal) => {
-      if (stdoutBuffer.trim()) processLine(stdoutBuffer);
-      if (abortState.isAborted()) {
-        emit({ kind: "run-settled", outcome: { kind: "interrupted", partialText: finalAssistantText || void 0 } });
-        return;
+    const stdout = new JsonLineDecoder({
+      onLine: processLine,
+      onError: (error) => {
+        protocolError = error.message;
+        abortState.terminate();
       }
-      if (code === 0 && stopReason !== "error" && stopReason !== "aborted") {
-        emit({ kind: "run-settled", outcome: { kind: "completed", finalText: finalAssistantText } });
-        return;
-      }
-      emit({
-        kind: "run-settled",
-        outcome: {
+    });
+    const onStdout = (data) => stdout.write(data);
+    const onStderr = (data) => stderr.append(data);
+    const cleanup = () => {
+      proc.stdout.removeListener("data", onStdout);
+      proc.stderr.removeListener("data", onStderr);
+      abortState.dispose();
+    };
+    proc.stdout.on("data", onStdout);
+    proc.stderr.on("data", onStderr);
+    proc.once("close", (code, closeSignal) => {
+      stdout.end();
+      if (protocolError) {
+        settle({ kind: "failed", errorText: protocolError, partialText: finalAssistantText || void 0 });
+      } else if (abortState.isAborted()) {
+        settle({ kind: "interrupted", partialText: finalAssistantText || void 0 });
+      } else if (code === 0 && stopReason !== "error" && stopReason !== "aborted") {
+        settle({ kind: "completed", finalText: finalAssistantText });
+      } else {
+        settle({
           kind: "failed",
-          errorText: (errorMessage2 || stderr || (closeSignal ? `pi killed by ${closeSignal}` : `pi exited with code ${code ?? "unknown"}`)).slice(0, ERROR_MAX),
+          errorText: boundRetainedResult(
+            errorMessage2 || stderr.toString() || (closeSignal ? `pi killed by ${closeSignal}` : `pi exited with code ${code ?? "unknown"}`),
+            ERROR_MAX
+          ),
           partialText: finalAssistantText || void 0
-        }
-      });
+        });
+      }
+      cleanup();
     });
-    proc.on("error", (error) => {
-      emit({ kind: "run-settled", outcome: { kind: "failed", errorText: error.message.slice(0, ERROR_MAX), partialText: finalAssistantText || void 0 } });
+    proc.once("error", (error) => {
+      if (protocolError || abortState.isAborted()) return;
+      settle({ kind: "failed", errorText: boundRetainedResult(error.message, ERROR_MAX), partialText: finalAssistantText || void 0 });
+      cleanup();
     });
   };
   return { events, interrupt: () => interrupt() };
@@ -16460,7 +17197,7 @@ var SubagentManager = class {
     else if (event.kind === "tool-end") next = { ...current, liveTools: upsertTool(current.liveTools, { id: event.toolId, name: event.name, outputPreview: event.outputPreview, done: true, isError: event.isError }) };
     else if (event.kind === "message-end") next = {
       ...current,
-      transcript: [...current.transcript, { role: event.role, text: event.text, createdAt: Date.now() }],
+      transcript: [...event.replacesRetainedText ? [] : current.transcript, { role: event.role, text: event.text, createdAt: Date.now() }],
       liveText: event.role === "assistant" ? "" : current.liveText,
       finalText: event.role === "assistant" ? event.text : current.finalText,
       usage: event.role === "assistant" ? { ...current.usage, turns: current.usage.turns + 1 } : current.usage
@@ -16698,21 +17435,35 @@ var formatSnapshotLine = (snapshot, includeBranch = false) => {
   return `${snapshot.id} [${snapshot.status}] "${snapshot.title}" (${identity}, ${formatDuration(Date.now() - snapshot.createdAt)}, ${snapshot.cwd})${branch}${pane}`;
 };
 var manifestSummary = (snapshot) => snapshot.manifest ? formatCompletionManifestSummary(snapshot.manifest) : void 0;
+var WAIT_AGENT_MAX_BYTES = 16 * 1024;
+var WAIT_TOTAL_MAX_BYTES = 48 * 1024;
+var WAIT_SEPARATOR = "\n\n---\n\n";
+var WAIT_MARKER_BYTES = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
+var boundWaitChunk = (text, maxBytes) => boundRetainedResult(text, maxBytes);
 var boundedWaitText = (snapshots) => {
-  let remaining = 48 * 1024;
   const chunks = [];
-  for (const snapshot of snapshots) {
+  let bytes = 0;
+  for (let index = 0; index < snapshots.length; index += 1) {
+    const snapshot = snapshots[index];
     const errorLine = snapshot.status === "error" && snapshot.errorText ? `error: ${snapshot.errorText}
 ` : "";
     const body = `${errorLine}${latestText(snapshot) || (errorLine ? "" : snapshot.errorText || "(no output)")}`;
-    const perAgent = body.slice(0, 16 * 1024);
-    const chunk = [`${snapshot.id} [${snapshot.status}] ${snapshot.title}`, manifestSummary(snapshot), perAgent].filter((line) => line !== void 0).join("\n");
-    const bounded2 = chunk.slice(0, remaining);
-    chunks.push(bounded2);
-    remaining -= bounded2.length;
-    if (remaining <= 0) break;
+    const raw = [`${snapshot.id} [${snapshot.status}] ${snapshot.title}`, manifestSummary(snapshot), body].filter((line) => line !== void 0).join("\n");
+    const chunk = boundWaitChunk(raw, WAIT_AGENT_MAX_BYTES);
+    const separatorBytes = chunks.length === 0 ? 0 : Buffer.byteLength(WAIT_SEPARATOR, "utf8");
+    const remaining = WAIT_TOTAL_MAX_BYTES - bytes - separatorBytes;
+    if (remaining <= WAIT_MARKER_BYTES) {
+      return boundWaitChunk(`${chunks.join(WAIT_SEPARATOR)}${TRUNCATED_HEAD_MARKER}`, WAIT_TOTAL_MAX_BYTES);
+    }
+    const retained = Buffer.byteLength(chunk, "utf8") <= remaining ? chunk : boundWaitChunk(chunk, remaining);
+    chunks.push(retained);
+    bytes += separatorBytes + Buffer.byteLength(retained, "utf8");
+    if (bytes >= WAIT_TOTAL_MAX_BYTES) {
+      if (index < snapshots.length - 1) return boundWaitChunk(`${chunks.join(WAIT_SEPARATOR)}${TRUNCATED_HEAD_MARKER}`, WAIT_TOTAL_MAX_BYTES);
+      break;
+    }
   }
-  return chunks.join("\n\n---\n\n");
+  return chunks.join(WAIT_SEPARATOR);
 };
 function registerSubagentTools(pi, manager, delivery, host = getTerminalHost(), roleLoader = loadRoles) {
   const registeredRoles = roleLoader().roles;

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { TRUNCATED_HEAD_MARKER } from "../child-protocol.js";
 import { registerSubagentTools } from "./tools.js";
 import { SubagentManager, type SpawnSubagentTask } from "./manager.js";
 import { SUBAGENT_MAX_RUNNING, type SubagentEvent, type SubagentSnapshot } from "./domain.js";
@@ -375,6 +376,90 @@ describe("subagent tools", () => {
 		expect(text).toContain("partial progress");
 		expect(text).toContain("shared checkout · base base-re · +0 checkout commits · changed paths suppressed · checkout clean");
 		expect(waited).toMatchObject({ details: { activity: [{ id: `subagent:${id}`, status: "failed", result: { error: "provider exploded" } }] } });
+	});
+
+	it("preserves literal truncation-marker text in untruncated wait results", async () => {
+		const { tool, emitters, ctx } = createHarness();
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const spawned = await tool("subagent_spawn").execute("spawn-literal", { prompt: "do", name: "marker reviewer" }, undefined, undefined, ctx as never);
+		// SAFETY: spawn results always expose details.subagent.id.
+		const id = (spawned as { details: { subagent: { id: string } } }).details.subagent.id;
+		const finalText = `before${TRUNCATED_HEAD_MARKER}after`;
+		emitters.get(id)?.({ kind: "message-end", role: "assistant", text: finalText });
+		emitters.get(id)?.({ kind: "run-settled", outcome: { kind: "completed", finalText } });
+
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const waited = await tool("subagent_wait").execute("wait-literal", { ids: [id] }, undefined, undefined, ctx as never);
+		expect(textOf(waited)).toContain(finalText);
+	});
+
+	it("keeps the omission marker through per-agent and aggregate wait projections", async () => {
+		const { tool, ctx, emitters, manager } = createHarness();
+		const ids: string[] = [];
+		for (let index = 0; index < 4; index += 1) {
+			// SAFETY: the ctx double carries only the fields the tool handlers read.
+			const spawned = await tool("subagent_spawn").execute(`spawn-${index}`, { prompt: "do", name: `worker-${index}` }, undefined, undefined, ctx as never);
+			// SAFETY: spawn results always expose details.subagent.id.
+			const id = (spawned as { details: { subagent: { id: string } } }).details.subagent.id;
+			ids.push(id);
+			const prefix = index === 3 ? "FOURTH-USEFUL:" : `RESULT-${index}:`;
+			const finalText = `${prefix}${"x".repeat((index === 3 ? 20 : 15) * 1024)}${index === 3 ? TRUNCATED_HEAD_MARKER : ""}`;
+			emitters.get(id)?.({ kind: "message-end", role: "assistant", text: finalText });
+			emitters.get(id)?.({ kind: "run-settled", outcome: { kind: "completed", finalText } });
+		}
+		await vi.waitFor(() => expect(ids.every((id) => manager.get(id)?.status === "done")).toBe(true));
+
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const one = await tool("subagent_wait").execute("wait-one", { ids: [ids[3]] }, undefined, undefined, ctx as never);
+		expect(Buffer.byteLength(textOf(one), "utf8")).toBeLessThanOrEqual(16 * 1024);
+		expect(textOf(one)).toContain("FOURTH-USEFUL:");
+		expect(textOf(one).split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const all = await tool("subagent_wait").execute("wait-all", { ids }, undefined, undefined, ctx as never);
+		expect(Buffer.byteLength(textOf(all), "utf8")).toBeLessThanOrEqual(48 * 1024);
+		expect(textOf(all)).toContain("FOURTH-USEFUL:");
+		expect(textOf(all).split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+	});
+
+	it.each([
+		["when the last retained chunk is shorter than the marker", [16_371, 16_371, 16_313, 1, 1]],
+		["when retained chunks exactly fill the aggregate cap", [12_270, 12_270, 12_270, 12_269, 1]],
+	] as const)("marks aggregate omission %s", async (_label, lengths) => {
+		const snapshots: SubagentSnapshot[] = lengths.map((length, index) => ({
+			id: `sa-${index + 1}`,
+			title: "",
+			prompt: "work",
+			cwd: "/tmp/project",
+			baseRef: "base-ref",
+			status: "done",
+			createdAt: 1_000,
+			settledAt: 2_000,
+			usage: { turns: 1 },
+			transcript: [],
+			liveText: "",
+			liveTools: [],
+			finalText: "x".repeat(length),
+		}));
+		const registered: Array<{ name: string; execute: (...args: unknown[]) => Promise<ToolResult> }> = [];
+		const manager = {
+			waitFor: vi.fn(async () => snapshots),
+			get: vi.fn((id: string) => snapshots.find((snapshot) => snapshot.id === id)),
+		};
+		const delivery = { consume: vi.fn() };
+		// SAFETY: doubles cover exactly the members registerSubagentTools touches on each object.
+		registerSubagentTools({
+			registerTool: (tool: { name: string; execute: (...args: unknown[]) => Promise<ToolResult> }) => registered.push(tool),
+			getThinkingLevel: () => "medium",
+			getActiveTools: () => ["read"],
+		} as never, manager as never, delivery, { kind: "none" } as never);
+		const wait = registered.find((entry) => entry.name === "subagent_wait")!;
+
+		const result = await wait.execute("wait-short-tail", { ids: snapshots.map((snapshot) => snapshot.id) }, undefined, undefined);
+		const text = textOf(result);
+		expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(48 * 1024);
+		expect(text.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+		expect(delivery.consume).toHaveBeenCalledTimes(lengths.length);
 	});
 
 	it("cancel returns bounded metadata and Activity updates without raw snapshots", async () => {

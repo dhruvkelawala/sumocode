@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
+import { CHILD_JSON_FRAME_MAX_BYTES, TRUNCATED_HEAD_MARKER } from "../../child-protocol.js";
 import { RpcChildExitError, SumoRpcClient, type SumoRpcClientOptions } from "./client.js";
 
 function nodeRpcClient(script: string, options: Partial<Omit<SumoRpcClientOptions, "command" | "args">> = {}): SumoRpcClient {
@@ -502,14 +503,15 @@ describe("SumoRpcClient", () => {
 		expect(() => process.kill(pid!, 0)).toThrow();
 	});
 
-	it("tolerates one malformed protocol line between valid responses", async () => {
-		const protocolErrors: Array<{ line: string; message: string }> = [];
+	it("reports a size-only malformed-frame summary with a safe parse reason", async () => {
+		const protocolErrors: Array<{ summary: string; message: string }> = [];
 		const script = `
 			const readline = require("node:readline");
 			const rl = readline.createInterface({ input: process.stdin });
 			rl.on("line", (line) => {
 				const command = JSON.parse(line);
 				if (command.type !== "get_state") return;
+				process.stdout.write("\\n");
 				process.stdout.write("stray extension noise\\n");
 				process.stdout.write(JSON.stringify({ type: "response", id: command.id, command: "get_state", success: true, data: {
 					thinkingLevel: "minimal",
@@ -525,7 +527,7 @@ describe("SumoRpcClient", () => {
 			});
 		`;
 		const client = nodeRpcClient(script, {
-			onProtocolError: (line, error) => protocolErrors.push({ line, message: error.message }),
+			onProtocolError: (frameSummary, error) => protocolErrors.push({ summary: frameSummary, message: error.message }),
 		});
 		try {
 			await client.start();
@@ -533,11 +535,61 @@ describe("SumoRpcClient", () => {
 
 			expect(response).toMatchObject({ command: "get_state", success: true });
 			expect(protocolErrors).toHaveLength(1);
-			expect(protocolErrors[0]?.line).toBe("stray extension noise");
-			expect(protocolErrors[0]?.message).toContain("Unexpected token");
+			expect(protocolErrors[0]?.summary).toBe("[invalid protocol frame: 21 bytes]");
+			expect(protocolErrors[0]?.summary).not.toContain("stray extension noise");
+			expect(protocolErrors[0]?.message).toBe("Invalid JSON protocol frame: Unexpected token in JSON");
+			expect(protocolErrors[0]?.message).not.toContain("stray extension noise");
 		} finally {
 			await client.stop();
 		}
+	});
+
+	it("bounds the JSON parse reason retained in protocol errors", async () => {
+		const child = new FakeRpcChild();
+		const errors: Error[] = [];
+		const client = new SumoRpcClient({
+			command: "unused",
+			args: [],
+			preSpawnedChild: asPreSpawnedChild(child),
+			onProtocolError: (_frameSummary, error) => errors.push(error),
+		});
+		await client.start();
+		const parse = vi.spyOn(JSON, "parse").mockImplementationOnce(() => {
+			throw new SyntaxError(`synthetic reason ${"x".repeat(1_000)}`);
+		});
+		try {
+			child.stdout.emit("data", "malformed\n");
+		} finally {
+			parse.mockRestore();
+		}
+
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.message).toContain(TRUNCATED_HEAD_MARKER);
+		expect(Buffer.byteLength(errors[0]?.message ?? "", "utf8")).toBeLessThanOrEqual(
+			Buffer.byteLength("Invalid JSON protocol frame: ", "utf8") + 500,
+		);
+		await client.stop();
+	});
+
+	it("never echoes malformed producer content in protocol diagnostics", async () => {
+		const child = new FakeRpcChild();
+		const protocolErrors: Array<{ summary: string; message: string }> = [];
+		const client = new SumoRpcClient({
+			command: "unused",
+			args: [],
+			preSpawnedChild: asPreSpawnedChild(child),
+			onProtocolError: (frameSummary, error) => protocolErrors.push({ summary: frameSummary, message: error.message }),
+		});
+		await client.start();
+
+		child.stdout.emit("data", "TOP_SECRET_payload_is_not_json\n");
+
+		expect(protocolErrors).toEqual([{
+			summary: "[invalid protocol frame: 30 bytes]",
+			message: "Invalid JSON protocol frame: Unexpected token in JSON",
+		}]);
+		expect(JSON.stringify(protocolErrors)).not.toContain("TOP_SECRET");
+		await client.stop();
 	});
 
 	it("kills the child after three consecutive malformed protocol lines", async () => {
@@ -556,9 +608,92 @@ describe("SumoRpcClient", () => {
 		const child = clientChild(client);
 		const killSpy = vi.spyOn(child, "kill");
 
-		await expect(client.send({ type: "get_state" })).rejects.toThrow("Failed to parse 3 consecutive RPC lines");
+		await expect(client.send({ type: "get_state" })).rejects.toThrow(
+			"Failed to parse 3 consecutive RPC lines. [invalid protocol frame: 9 bytes]. Invalid JSON protocol frame: Unexpected token in JSON",
+		);
 		expect(killSpy).toHaveBeenCalledWith("SIGTERM");
 		await waitFor(() => child.exitCode !== null || child.signalCode !== null);
+	});
+
+	it("fails the producer on an oversized JSON frame without echoing or parsing it", async () => {
+		const child = new FakeRpcChild();
+		const exits: Error[] = [];
+		const events: unknown[] = [];
+		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
+		client.onExit((error) => exits.push(error));
+		client.onEvent((event) => events.push(event));
+		await client.start();
+		const response = client.send({ type: "get_state" });
+
+		child.stdout.emit("data", Buffer.concat([
+			Buffer.alloc(CHILD_JSON_FRAME_MAX_BYTES + 1, 0x78),
+			Buffer.from("\n"),
+		]));
+
+		await expect(response).rejects.toThrow(`exceeded ${CHILD_JSON_FRAME_MAX_BYTES} bytes`);
+		expect(events).toEqual([]);
+		expect(exits).toHaveLength(1);
+		expect(exits[0]?.message).not.toContain("xxxx");
+		expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+	});
+
+	it("drains a final response between unexpected exit and stdio close", async () => {
+		const child = new FakeRpcChild();
+		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
+		await client.start();
+		const response = client.send({ type: "get_state" });
+		// SAFETY: the client writes one JSON command per line.
+		const request = JSON.parse(String(child.stdin.write.mock.calls.at(-1)?.[0])) as { id: string };
+		child.exitCode = 0;
+		child.emit("exit", 0, null);
+		child.stdout.emit("data", JSON.stringify({
+			type: "response",
+			id: request.id,
+			command: "get_state",
+			success: true,
+			data: { sessionId: "final-partial" },
+		}));
+		child.emit("close", 0, null);
+
+		await expect(response).resolves.toMatchObject({ success: true, data: { sessionId: "final-partial" } });
+	});
+
+	it("includes stderr drained between exit and close in the exit error", async () => {
+		const child = new FakeRpcChild();
+		const exits: Error[] = [];
+		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
+		client.onExit((error) => exits.push(error));
+		await client.start();
+
+		child.exitCode = 1;
+		child.emit("exit", 1, null);
+		child.stderr.emit("data", "final diagnostic");
+		child.emit("close", 1, null);
+
+		expect(exits).toHaveLength(1);
+		expect(exits[0]).toMatchObject({ code: 1, signal: null });
+		expect(exits[0]?.message).toContain("final diagnostic");
+	});
+
+	it("bounds an unexpected exit when stdio close never arrives", async () => {
+		vi.useFakeTimers();
+		const child = new FakeRpcChild();
+		const exits: Error[] = [];
+		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
+		client.onExit((error) => exits.push(error));
+		try {
+			await client.start();
+			child.exitCode = 1;
+			child.emit("exit", 1, null);
+			await vi.advanceTimersByTimeAsync(1_000);
+
+			expect(exits).toHaveLength(1);
+			expect(exits[0]).toBeInstanceOf(RpcChildExitError);
+			expect(child.stdout.listenerCount("data")).toBe(0);
+		} finally {
+			child.emit("close", 1, null);
+			vi.useRealTimers();
+		}
 	});
 
 	it("keeps only the stderr tail up to 64 KiB", async () => {
@@ -571,8 +706,9 @@ describe("SumoRpcClient", () => {
 			await client.start();
 			await waitFor(() => client.stderr.length === 65536);
 
-			expect(client.stderr).toHaveLength(65536);
-			expect(client.stderr).toBe("b".repeat(65536));
+			expect(Buffer.byteLength(client.stderr)).toBe(65536);
+			expect(client.stderr).toMatch(/^\[earlier output truncated\]\n/);
+			expect(client.stderr).toMatch(/b+$/);
 		} finally {
 			await client.stop();
 		}

@@ -5,6 +5,15 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SubagentEvent } from "./domain.js";
 import { safeValuePreview } from "../activity/domain.js";
+import {
+	BoundedUtf8Head,
+	BoundedUtf8Tail,
+	CHILD_RETAINED_RESULT_MAX_BYTES,
+	JsonLineDecoder,
+	TRUNCATED_HEAD_MARKER,
+	boundRetainedResult,
+	boundStableIdentifier,
+} from "../child-protocol.js";
 import { type BuiltInToolName, resolveTaskConfig } from "../native-task-config.js";
 import { isRecord, type TaskThinking, type ThinkingLevel } from "../native-task-params.js";
 import { CHILD_MODEL_ID_ENV, CHILD_MODEL_PROVIDER_ENV } from "./pi-child-model-bootstrap.js";
@@ -16,7 +25,13 @@ const isString = <T>(value: T): value is T & string => typeof value === "string"
 // SAFETY: every entry is a literal from the BuiltInToolName union.
 const DEFAULT_BUILT_IN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const satisfies readonly BuiltInToolName[];
 const PREVIEW_MAX = 160;
+const TOOL_IDENTIFIER_MAX_BYTES = 256;
 const ERROR_MAX = 4096;
+
+const boundedToolIdentifier = <T>(value: T, fallback = "tool"): string => {
+	const identifier = isString(value) && value ? value : fallback;
+	return boundStableIdentifier(identifier, TOOL_IDENTIFIER_MAX_BYTES);
+};
 
 const CLAUDE_OAUTH_ADAPTER_PACKAGE = "pi-claude-oauth-adapter";
 const MULTI_ACCOUNT_ADAPTER_SOURCE = "git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account";
@@ -245,6 +260,109 @@ const messageText = (message: Message): string => {
 	return "";
 };
 
+interface RetainedMessageText {
+	readonly text: string;
+	readonly replacesRetainedText?: true;
+}
+
+/** Owns all human-readable event text emitted for one Pi child run. */
+class PiRunPayloadBudget {
+	private retainedBytes = 0;
+	private liveBytes = 0;
+	private markerRetained = false;
+	private retainedFull = false;
+	private liveMarker = false;
+	private liveTruncated = false;
+	private omissionBehindLive = false;
+	private readonly markerBytes = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
+
+	public appendLive(delta: string): string {
+		if (delta.length === 0 || this.retainedFull || this.liveTruncated) return "";
+		const deltaBytes = Buffer.byteLength(delta, "utf8");
+		const markerReserve = this.markerRetained || this.liveMarker ? 0 : this.markerBytes;
+		const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve - this.retainedBytes - this.liveBytes;
+		if (deltaBytes <= contentBytesLeft) {
+			this.liveBytes += deltaBytes;
+			return delta;
+		}
+		const retained = this.markerRetained
+			? this.unmarkedHead(delta, Math.max(0, contentBytesLeft))
+			: this.markedHead(delta, Math.max(0, contentBytesLeft));
+		this.liveBytes += Buffer.byteLength(retained, "utf8");
+		this.liveMarker = !this.markerRetained;
+		this.liveTruncated = true;
+		return retained;
+	}
+
+	public retainMessage(role: Message["role"], text: string): RetainedMessageText {
+		let replacesRetainedText = false;
+		let requiresMarker = false;
+		const textBytes = Buffer.byteLength(text, "utf8");
+		// SubagentManager replaces liveText only at the corresponding completed
+		// assistant message, so reclaim those provisional bytes at that boundary.
+		if (role === "assistant") {
+			const liveOmitted = this.liveTruncated || this.omissionBehindLive;
+			this.liveBytes = 0;
+			this.liveMarker = false;
+			this.liveTruncated = false;
+			this.omissionBehindLive = false;
+			// Any prior omission belongs on the newest real assistant answer. Reclaim
+			// earlier readable text so the marker and remaining cap move together.
+			const markerReserve = this.markerRetained ? 0 : this.markerBytes;
+			if (text.length > 0 && (
+				this.markerRetained ||
+				liveOmitted ||
+				this.retainedFull ||
+				textBytes > CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve - this.retainedBytes
+			)) {
+				this.retainedBytes = 0;
+				this.markerRetained = false;
+				this.retainedFull = false;
+				replacesRetainedText = true;
+				requiresMarker = true;
+			}
+		}
+		if (text.length === 0) return { text: "" };
+		if (this.retainedFull) return { text: "" };
+		if (this.liveTruncated) {
+			this.omissionBehindLive = text.length > 0;
+			return { text: "" };
+		}
+		if (requiresMarker && !this.markerRetained) {
+			const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - this.markerBytes - this.retainedBytes - this.liveBytes;
+			const retained = this.markedHead(text, Math.max(0, contentBytesLeft));
+			this.retainedBytes += Buffer.byteLength(retained, "utf8");
+			this.markerRetained = true;
+			this.retainedFull = textBytes > contentBytesLeft;
+			return replacesRetainedText ? { text: retained, replacesRetainedText: true } : { text: retained };
+		}
+		const markerReserve = this.markerRetained ? 0 : this.markerBytes;
+		const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve - this.retainedBytes - this.liveBytes;
+		let retained: string;
+		if (textBytes <= contentBytesLeft) {
+			retained = text;
+		} else {
+			retained = this.markerRetained
+				? this.unmarkedHead(text, Math.max(0, contentBytesLeft))
+				: this.markedHead(text, Math.max(0, contentBytesLeft));
+			this.markerRetained = true;
+			this.retainedFull = true;
+		}
+		this.retainedBytes += Buffer.byteLength(retained, "utf8");
+		return replacesRetainedText ? { text: retained, replacesRetainedText: true } : { text: retained };
+	}
+
+	private markedHead(text: string, contentBytes: number): string {
+		const head = new BoundedUtf8Head(contentBytes + this.markerBytes);
+		head.append(text);
+		return head.append(TRUNCATED_HEAD_MARKER);
+	}
+
+	private unmarkedHead(text: string, contentBytes: number): string {
+		return this.markedHead(text, contentBytes).slice(0, -TRUNCATED_HEAD_MARKER.length);
+	}
+}
+
 const mapPiEvent = (event: ParsedJsonLine): SubagentEvent[] => {
 	const typeText = isString(event.type) ? event.type : "";
 	if (typeText === "message_update") {
@@ -256,23 +374,23 @@ const mapPiEvent = (event: ParsedJsonLine): SubagentEvent[] => {
 	if (typeText === "tool_execution_start") {
 		return [{
 			kind: "tool-start",
-			toolId: isString(event.toolCallId) ? event.toolCallId : `${event.toolName ?? "tool"}`,
-			name: isString(event.toolName) ? event.toolName : "tool",
+			toolId: boundedToolIdentifier(event.toolCallId, boundedToolIdentifier(event.toolName)),
+			name: boundedToolIdentifier(event.toolName),
 			argsPreview: safeToolArgumentsPreview(event.args),
 		}];
 	}
 	if (typeText === "tool_execution_update") {
 		return [{
 			kind: "tool-update",
-			toolId: isString(event.toolCallId) ? event.toolCallId : `${event.toolName ?? "tool"}`,
+			toolId: boundedToolIdentifier(event.toolCallId, boundedToolIdentifier(event.toolName)),
 			outputPreview: sanitizePreview(stringifyToolOutput(event.partialResult)),
 		}];
 	}
 	if (typeText === "tool_execution_end") {
 		return [{
 			kind: "tool-end",
-			toolId: isString(event.toolCallId) ? event.toolCallId : `${event.toolName ?? "tool"}`,
-			name: isString(event.toolName) ? event.toolName : "tool",
+			toolId: boundedToolIdentifier(event.toolCallId, boundedToolIdentifier(event.toolName)),
+			name: boundedToolIdentifier(event.toolName),
 			isError: event.isError === true,
 			outputPreview: sanitizePreview(stringifyToolOutput(event.result)),
 		}];
@@ -322,27 +440,45 @@ const signalGroup = (proc: ChildProcessWithoutNullStreams, signal: NodeJS.Signal
 interface AbortState {
 	isAborted: () => boolean;
 	interrupt: () => void;
+	terminate: () => void;
+	dispose: () => void;
 }
 
 const attachAbortSignal = (proc: ChildProcessWithoutNullStreams, signal: AbortSignal | undefined): AbortState => {
 	let aborted = false;
-	// `proc.killed` only means a signal was successfully SENT, not that the
-	// process exited — gating SIGKILL on it means a child that ignores SIGTERM
-	// is never force-killed. Track real exit via the close event instead.
 	let exited = false;
-	proc.once("close", () => {
+	let forceKill: ReturnType<typeof setTimeout> | undefined;
+	const onClose = () => {
 		exited = true;
-	});
+		if (forceKill) clearTimeout(forceKill);
+		forceKill = undefined;
+	};
+	proc.once("close", onClose);
+	const terminate = () => {
+		if (exited || forceKill) return;
+		signalGroup(proc, "SIGTERM");
+		forceKill = setTimeout(() => {
+			if (!exited) signalGroup(proc, "SIGKILL");
+		}, 5000);
+		forceKill.unref?.();
+	};
 	const interrupt = () => {
 		aborted = true;
-		signalGroup(proc, "SIGTERM");
-		setTimeout(() => {
-			if (!exited) signalGroup(proc, "SIGKILL");
-		}, 5000).unref?.();
+		terminate();
 	};
 	if (signal?.aborted) interrupt();
 	else signal?.addEventListener("abort", interrupt, { once: true });
-	return { isAborted: () => aborted, interrupt };
+	return {
+		isAborted: () => aborted,
+		interrupt,
+		terminate,
+		dispose: () => {
+			signal?.removeEventListener("abort", interrupt);
+			proc.removeListener("close", onClose);
+			if (forceKill) clearTimeout(forceKill);
+			forceKill = undefined;
+		},
+	};
 };
 
 export function resolvePiBinary(env: NodeJS.ProcessEnv = process.env): string {
@@ -465,59 +601,82 @@ export const createPiChildSpawner = (
 		proc.stdin.end();
 		const abortState = attachAbortSignal(proc, options.signal);
 		interrupt = abortState.interrupt;
-		let stdoutBuffer = "";
-		let stderr = "";
+		const stderr = new BoundedUtf8Tail();
+		const payloadBudget = new PiRunPayloadBudget();
 		let finalAssistantText = "";
 		let stopReason: string | undefined;
 		let errorMessage: string | undefined;
+		let protocolError: string | undefined;
+		let settled = false;
+		const settle = (outcome: Extract<SubagentEvent, { kind: "run-settled" }>["outcome"]): void => {
+			if (settled) return;
+			settled = true;
+			emit({ kind: "run-settled", outcome });
+		};
 		const processLine = (line: string) => {
 			const parsed = parseJsonLine(line);
 			if (!parsed) return;
 			for (const event of mapPiEvent(parsed)) {
-				if (event.kind === "message-end" && event.role === "assistant") finalAssistantText = event.text;
+				if (event.kind === "assistant-delta") {
+					const delta = payloadBudget.appendLive(event.delta);
+					if (delta) emit({ ...event, delta });
+					continue;
+				}
+				if (event.kind === "message-end") {
+					const retained = { ...event, ...payloadBudget.retainMessage(event.role, event.text) };
+					if (retained.role === "assistant") finalAssistantText = retained.text;
+					emit(retained);
+					continue;
+				}
 				emit(event);
 			}
 			const messageValue = parsed.message;
 			if (isMessage(messageValue) && messageValue.role === "assistant") {
-								if (isString(messageValue.stopReason)) stopReason = messageValue.stopReason;
-				if (isString(messageValue.errorMessage)) errorMessage = messageValue.errorMessage;
+				if (isString(messageValue.stopReason)) stopReason = messageValue.stopReason;
+				if (isString(messageValue.errorMessage)) errorMessage = boundRetainedResult(messageValue.errorMessage, ERROR_MAX);
 			}
 		};
-		proc.stdout.on("data", (data) => {
-			stdoutBuffer += data.toString();
-			const lines = stdoutBuffer.split("\n");
-			stdoutBuffer = lines.pop() ?? "";
-			for (const line of lines) processLine(line);
+		const stdout = new JsonLineDecoder({
+			onLine: processLine,
+			onError: (error) => {
+				protocolError = error.message;
+				// TERM starts shutdown; close remains the terminal boundary while the child exists.
+				abortState.terminate();
+			},
 		});
-		proc.stderr.on("data", (data) => {
-			stderr += data.toString();
-		});
-		proc.on("close", (code, closeSignal) => {
-			if (stdoutBuffer.trim()) processLine(stdoutBuffer);
-			if (abortState.isAborted()) {
-				emit({ kind: "run-settled", outcome: { kind: "interrupted", partialText: finalAssistantText || undefined } });
-				return;
-			}
-			// Success gates on exit code + stop reason, matching native-task-tool's
-			// isTaskError semantics. Empty final text at exit 0 is a successful run
-			// with empty output, not a failure. Strictly `code === 0`: a null code
-			// means the child was killed by an EXTERNAL signal (operator kill,
-			// host cleanup) — that must never fold as completed.
-			if (code === 0 && stopReason !== "error" && stopReason !== "aborted") {
-				emit({ kind: "run-settled", outcome: { kind: "completed", finalText: finalAssistantText } });
-				return;
-			}
-			emit({
-				kind: "run-settled",
-				outcome: {
+		const onStdout = (data: string | Uint8Array) => stdout.write(data);
+		const onStderr = (data: string | Uint8Array) => stderr.append(data);
+		const cleanup = () => {
+			proc.stdout.removeListener("data", onStdout);
+			proc.stderr.removeListener("data", onStderr);
+			abortState.dispose();
+		};
+		proc.stdout.on("data", onStdout);
+		proc.stderr.on("data", onStderr);
+		proc.once("close", (code, closeSignal) => {
+			stdout.end();
+			if (protocolError) {
+				settle({ kind: "failed", errorText: protocolError, partialText: finalAssistantText || undefined });
+			} else if (abortState.isAborted()) {
+				settle({ kind: "interrupted", partialText: finalAssistantText || undefined });
+			} else if (code === 0 && stopReason !== "error" && stopReason !== "aborted") {
+				settle({ kind: "completed", finalText: finalAssistantText });
+			} else {
+				settle({
 					kind: "failed",
-					errorText: (errorMessage || stderr || (closeSignal ? `pi killed by ${closeSignal}` : `pi exited with code ${code ?? "unknown"}`)).slice(0, ERROR_MAX),
+					errorText: boundRetainedResult(
+						errorMessage || stderr.toString() || (closeSignal ? `pi killed by ${closeSignal}` : `pi exited with code ${code ?? "unknown"}`),
+						ERROR_MAX,
+					),
 					partialText: finalAssistantText || undefined,
-				},
-			});
+				});
+			}
+			cleanup();
 		});
-		proc.on("error", (error) => {
-			emit({ kind: "run-settled", outcome: { kind: "failed", errorText: error.message.slice(0, ERROR_MAX), partialText: finalAssistantText || undefined } });
+		proc.once("error", (error) => {
+			if (protocolError || abortState.isAborted()) return;
+			settle({ kind: "failed", errorText: boundRetainedResult(error.message, ERROR_MAX), partialText: finalAssistantText || undefined });
+			cleanup();
 		});
 	};
 	return { events, interrupt: () => interrupt() };

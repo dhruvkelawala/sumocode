@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { TRUNCATED_HEAD_MARKER, boundRetainedResult } from "../child-protocol.js";
 import type { DeferredResultDelivery } from "./delivery.js";
 import { activityFromSubagentSnapshot } from "../activity/subagent-adapter.js";
 import { getTerminalHost } from "../terminal-host/index.js";
@@ -83,22 +84,38 @@ const manifestSummary = (snapshot: SubagentSnapshot): string | undefined => snap
 	? formatCompletionManifestSummary(snapshot.manifest)
 	: undefined;
 
+const WAIT_AGENT_MAX_BYTES = 16 * 1024;
+const WAIT_TOTAL_MAX_BYTES = 48 * 1024;
+const WAIT_SEPARATOR = "\n\n---\n\n";
+const WAIT_MARKER_BYTES = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
+
+const boundWaitChunk = (text: string, maxBytes: number): string => boundRetainedResult(text, maxBytes);
+
 const boundedWaitText = (snapshots: readonly SubagentSnapshot[]): string => {
-	let remaining = 48 * 1024;
 	const chunks: string[] = [];
-	for (const snapshot of snapshots) {
+	let bytes = 0;
+	for (let index = 0; index < snapshots.length; index += 1) {
+		const snapshot = snapshots[index]!;
 		// A failed child with partial text must still surface WHY it failed —
 		// partial output alone is easy to misread as a successful result.
 		const errorLine = snapshot.status === "error" && snapshot.errorText ? `error: ${snapshot.errorText}\n` : "";
 		const body = `${errorLine}${latestText(snapshot) || (errorLine ? "" : snapshot.errorText || "(no output)")}`;
-		const perAgent = body.slice(0, 16 * 1024);
-		const chunk = [`${snapshot.id} [${snapshot.status}] ${snapshot.title}`, manifestSummary(snapshot), perAgent].filter((line): line is string => line !== undefined).join("\n");
-		const bounded = chunk.slice(0, remaining);
-		chunks.push(bounded);
-		remaining -= bounded.length;
-		if (remaining <= 0) break;
+		const raw = [`${snapshot.id} [${snapshot.status}] ${snapshot.title}`, manifestSummary(snapshot), body].filter((line): line is string => line !== undefined).join("\n");
+		const chunk = boundWaitChunk(raw, WAIT_AGENT_MAX_BYTES);
+		const separatorBytes = chunks.length === 0 ? 0 : Buffer.byteLength(WAIT_SEPARATOR, "utf8");
+		const remaining = WAIT_TOTAL_MAX_BYTES - bytes - separatorBytes;
+		if (remaining <= WAIT_MARKER_BYTES) {
+			return boundWaitChunk(`${chunks.join(WAIT_SEPARATOR)}${TRUNCATED_HEAD_MARKER}`, WAIT_TOTAL_MAX_BYTES);
+		}
+		const retained = Buffer.byteLength(chunk, "utf8") <= remaining ? chunk : boundWaitChunk(chunk, remaining);
+		chunks.push(retained);
+		bytes += separatorBytes + Buffer.byteLength(retained, "utf8");
+		if (bytes >= WAIT_TOTAL_MAX_BYTES) {
+			if (index < snapshots.length - 1) return boundWaitChunk(`${chunks.join(WAIT_SEPARATOR)}${TRUNCATED_HEAD_MARKER}`, WAIT_TOTAL_MAX_BYTES);
+			break;
+		}
 	}
-	return chunks.join("\n\n---\n\n");
+	return chunks.join(WAIT_SEPARATOR);
 };
 
 export function registerSubagentTools(

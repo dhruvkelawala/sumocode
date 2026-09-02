@@ -726,7 +726,7 @@ export class SubagentManager {
 		else if (event.kind === "tool-end") next = { ...current, liveTools: upsertTool(current.liveTools, { id: event.toolId, name: event.name, outputPreview: event.outputPreview, done: true, isError: event.isError }) };
 		else if (event.kind === "message-end") next = {
 			...current,
-			transcript: [...current.transcript, { role: event.role, text: event.text, createdAt: Date.now() }],
+			transcript: [...(event.replacesRetainedText ? [] : current.transcript), { role: event.role, text: event.text, createdAt: Date.now() }],
 			liveText: event.role === "assistant" ? "" : current.liveText,
 			finalText: event.role === "assistant" ? event.text : current.finalText,
 			usage: event.role === "assistant" ? { ...current.usage, turns: current.usage.turns + 1 } : current.usage,

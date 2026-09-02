@@ -16973,7 +16973,8 @@ function findExactModels(pattern, models) {
     return [...canonicalMatches, ...models.filter((model) => baseProviderKey(model) === normalized)];
   }
   const idMatches = models.filter((model) => model.id.toLowerCase() === normalized);
-  return idMatches.length === 1 ? idMatches : [];
+  const logicalKeys = new Set(idMatches.map((model) => baseProviderKey(model) ?? modelKey(model)));
+  return logicalKeys.size === 1 ? idMatches : [];
 }
 function appendIfNew(result, seen, model) {
   const key = modelKey(model);

@@ -109,8 +109,11 @@ function findExactModels<T extends EnabledModelCandidate>(pattern: string, model
 	if (slashIndex !== -1) {
 		return [...canonicalMatches, ...models.filter((model) => baseProviderKey(model) === normalized)];
 	}
+	// A bare id is ambiguous across unrelated providers, but the base
+	// anthropic provider and its account clones are one logical model.
 	const idMatches = models.filter((model) => model.id.toLowerCase() === normalized);
-	return idMatches.length === 1 ? idMatches : [];
+	const logicalKeys = new Set(idMatches.map((model) => baseProviderKey(model) ?? modelKey(model)));
+	return logicalKeys.size === 1 ? idMatches : [];
 }
 
 function appendIfNew<T extends EnabledModelCandidate>(result: T[], seen: Set<string>, model: T): void {

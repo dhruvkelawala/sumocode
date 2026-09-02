@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { CLAUDE_ACCOUNTS_MIGRATION_FIELD, CLAUDE_BASE_PROVIDER, claudeAccountProviderId, isClaudeAccountProvider } from "./accounts-config.js";
-import { filterToEnabled, readEnabledModelPatterns } from "../sumo-tui/rpc/enabled-models.js";
+import { filterToEnabled, readEnabledModelPatterns } from "../config/enabled-models.js";
 import { executeSumoReload } from "./reload.js";
 import { logDiagnostic } from "../sumo-tui/runtime/diagnostics.js";
 import { executeRpcLogin, getRpcLoginRuntime, type RpcLoginRuntime } from "../sumo-tui/pi-compat/login-command.js";
@@ -419,9 +419,7 @@ function preferredAccountModel(ctx: ExtensionCommandContext, account: ClaudeAcco
 		const sameModel = models.find((model) => model.id === current.id);
 		if (sameModel) return sameModel;
 	}
-	const options = models.map((model) => ({ provider: model.provider, id: model.id, label: `${model.provider}/${model.id}`, active: false }));
-	const enabled = filterToEnabled(options, readEnabledModelPatterns({ PI_CODING_AGENT_DIR: resolveAgentDir(deps) }))[0];
-	return (enabled && models.find((model) => model.id === enabled.id)) ?? models[0];
+	return filterToEnabled(models, readEnabledModelPatterns({ PI_CODING_AGENT_DIR: resolveAgentDir(deps) }))[0] ?? models[0];
 }
 
 async function switchAccount(pi: ExtensionAPI, ctx: ExtensionCommandContext, account: ClaudeAccount, deps: AccountsCommandDeps): Promise<void> {

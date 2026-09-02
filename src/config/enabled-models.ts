@@ -2,8 +2,13 @@ import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { RpcModelOption } from "./controls.js";
-import { CLAUDE_BASE_PROVIDER, isClaudeAccountProvider } from "../../commands/accounts-config.js";
+import { CLAUDE_BASE_PROVIDER, isClaudeAccountProvider } from "../commands/accounts-config.js";
+
+/** Any model-like record: Pi's `Model`, the host's option rows, or a test fixture. */
+interface EnabledModelCandidate {
+	readonly provider: string;
+	readonly id: string;
+}
 
 const THINKING_LEVELS = {
 	off: true,
@@ -47,7 +52,7 @@ function stripThinkingSuffix(pattern: string): string {
 	return Object.hasOwn(THINKING_LEVELS, suffix) ? pattern.slice(0, colonIndex) : pattern;
 }
 
-function modelKey(model: Pick<RpcModelOption, "provider" | "id">): string {
+function modelKey(model: EnabledModelCandidate): string {
 	return `${model.provider}/${model.id}`.toLowerCase();
 }
 
@@ -58,7 +63,7 @@ function modelKey(model: Pick<RpcModelOption, "provider" | "id">): string {
  * is the key such a pattern matches; explicit `anthropic-N/...` patterns keep
  * matching only their own account through `modelKey`.
  */
-function baseProviderKey(model: Pick<RpcModelOption, "provider" | "id">): string | undefined {
+function baseProviderKey(model: EnabledModelCandidate): string | undefined {
 	return isClaudeAccountProvider(model.provider) ? `${CLAUDE_BASE_PROVIDER}/${model.id}`.toLowerCase() : undefined;
 }
 
@@ -95,7 +100,7 @@ function globToRegExp(pattern: string): RegExp {
 }
 
 
-function findExactModels(pattern: string, models: readonly RpcModelOption[]): RpcModelOption[] {
+function findExactModels<T extends EnabledModelCandidate>(pattern: string, models: readonly T[]): T[] {
 	const normalized = pattern.trim().toLowerCase();
 	if (!normalized) return [];
 	const canonicalMatches = models.filter((model) => modelKey(model) === normalized);
@@ -108,16 +113,16 @@ function findExactModels(pattern: string, models: readonly RpcModelOption[]): Rp
 	return idMatches.length === 1 ? idMatches : [];
 }
 
-function appendIfNew(result: RpcModelOption[], seen: Set<string>, model: RpcModelOption): void {
+function appendIfNew<T extends EnabledModelCandidate>(result: T[], seen: Set<string>, model: T): void {
 	const key = modelKey(model);
 	if (seen.has(key)) return;
 	seen.add(key);
 	result.push(model);
 }
 
-export function filterToEnabled(models: readonly RpcModelOption[], patterns: readonly string[]): RpcModelOption[] {
+export function filterToEnabled<T extends EnabledModelCandidate>(models: readonly T[], patterns: readonly string[]): T[] {
 	if (patterns.length === 0) return [...models];
-	const result: RpcModelOption[] = [];
+	const result: T[] = [];
 	const seen = new Set<string>();
 	for (const rawPattern of patterns) {
 		const pattern = stripThinkingSuffix(rawPattern.trim());

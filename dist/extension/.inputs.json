@@ -54,6 +54,7 @@
     "src/compaction-indicator.ts",
     "src/compaction-state.ts",
     "src/compaction-status-row.ts",
+    "src/config/enabled-models.ts",
     "src/config/sumocode-config.ts",
     "src/divine-query.ts",
     "src/extension.ts",
@@ -101,7 +102,6 @@
     "src/sumo-tui/pi-compat/tree-navigation-command.ts",
     "src/sumo-tui/render/cell.ts",
     "src/sumo-tui/render/primitives.ts",
-    "src/sumo-tui/rpc/enabled-models.ts",
     "src/sumo-tui/runtime/diagnostics.ts",
     "src/sumo-tui/runtime/frame-scheduler.ts",
     "src/sumo-tui/runtime/lifecycle.ts",
@@ -129,6 +129,6 @@
     "src/working-indicator.ts",
     "tsconfig.json"
   ],
-  "hash": "308ef6f21a713a007010628bd3dd0b7fe2bf75e488131c7fe4e8e2f775460b0c",
-  "outputsHash": "c3c760add53970a84eeda1a7e12de04e3051146aa2f8a2954307ab68a62caa45"
+  "hash": "7e5a3683692d5b5655b023eac81a834d6ac1809faeb307fa217f450034061d7a",
+  "outputsHash": "5b6113bc31f7e753a95134554e5c2a6cd315d0d442d522e0aee5e422be10dece"
 }

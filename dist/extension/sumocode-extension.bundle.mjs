@@ -16891,7 +16891,7 @@ import { homedir as homedir16 } from "node:os";
 import { dirname as dirname13, join as join22, resolve as resolve7 } from "node:path";
 import { promisify as promisify5 } from "node:util";
 
-// src/sumo-tui/rpc/enabled-models.ts
+// src/config/enabled-models.ts
 import { readFileSync as readFileSync17 } from "node:fs";
 import { homedir as homedir15 } from "node:os";
 import { join as join21 } from "node:path";
@@ -17286,9 +17286,7 @@ function preferredAccountModel(ctx, account, deps) {
     const sameModel = models.find((model) => model.id === current.id);
     if (sameModel) return sameModel;
   }
-  const options = models.map((model) => ({ provider: model.provider, id: model.id, label: `${model.provider}/${model.id}`, active: false }));
-  const enabled = filterToEnabled(options, readEnabledModelPatterns({ PI_CODING_AGENT_DIR: resolveAgentDir(deps) }))[0];
-  return (enabled && models.find((model) => model.id === enabled.id)) ?? models[0];
+  return filterToEnabled(models, readEnabledModelPatterns({ PI_CODING_AGENT_DIR: resolveAgentDir(deps) }))[0] ?? models[0];
 }
 async function switchAccount(pi, ctx, account, deps) {
   if (!account.configured) {

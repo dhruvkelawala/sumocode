@@ -1141,7 +1141,10 @@ const runSingleTask = async (options: {
 	}
 
 	try {
-		const args = [...applyForkSessionArgs(options.subprocessArgs, forkSession), options.subprocessPrompt];
+		// The prompt is NOT part of argv: pinned Pi print mode reads piped stdin
+		// as the initial message verbatim, and argv is world-readable process
+		// metadata. See issue 391.
+		const args = [...applyForkSessionArgs(options.subprocessArgs, forkSession)];
 
 		const exitCode = await new Promise<number>((resolve) => {
 			const proc = options.spawnImpl("pi", args, {
@@ -1150,6 +1153,7 @@ const runSingleTask = async (options: {
 				stdio: ["pipe", "pipe", "pipe"],
 			});
 
+			proc.stdin.write(options.subprocessPrompt);
 			proc.stdin.end();
 
 			const abortState = attachAbortSignal(proc, options.signal);

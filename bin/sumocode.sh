@@ -1073,6 +1073,28 @@ fi
 
 RPC_INITIAL_PROMPT="${EXTRACTED_INITIAL_PROMPT:-}"
 
+# Owner-only one-shot transport for the kickoff prompt (issue 391): the
+# prompt bytes go into an 0600 mktemp file that sumo-rpc-host.js reads and
+# unlinks BEFORE submitting, so no child's inherited environment ever
+# carries prompt content. Empty when there is no kickoff prompt.
+RPC_INITIAL_PROMPT_FILE=""
+if [[ -n "${RPC_INITIAL_PROMPT}" ]]; then
+	RPC_INITIAL_PROMPT_FILE="$(mktemp "${TMPDIR:-/tmp}/sumocode-kickoff.XXXXXX")"
+	printf '%s' "${RPC_INITIAL_PROMPT}" >"${RPC_INITIAL_PROMPT_FILE}"
+fi
+
+# Headless direct-Pi launches (non-TTY stdin => Pi print mode) read piped
+# stdin as the initial message, so the kickoff/task prompt travels through
+# stdin instead of argv (issue 391). Interactive direct-Pi keeps the
+# positional: Pi's interactive mode reads only argv, and its stdin is the
+# live TTY. Caller-piped stdin is overridden only when an extracted prompt
+# exists -- an explicit prompt argument is authoritative over piped content.
+DIRECT_PI_STDIN_PROMPT=""
+if [[ "${USE_RPC_HOST}" -eq 0 && ! -t 0 ]]; then
+	extract_first_positional
+	DIRECT_PI_STDIN_PROMPT="${EXTRACTED_INITIAL_PROMPT:-}"
+fi
+
 # The RPC host previously ran via `exec`, which replaced this shell's own pid
 # outright -- the child WAS this script's pid, so a real terminal's Ctrl-C/
 # SIGTERM (kernel/tty-driver-level, delivered to the whole foreground process
@@ -1112,6 +1134,11 @@ forward_signal_to_rpc_child() {
 }
 trap 'forward_signal_to_rpc_child INT' INT
 trap 'forward_signal_to_rpc_child TERM' TERM
+# Success, failure, cancellation (INT/TERM exits), and reload all funnel
+# through process exit: the transport file is normally already consumed
+# (unlinked) by the host, and this trap is the backstop for crashes/signal
+# landings before the host ever read it.
+trap 'rm -f "${RPC_INITIAL_PROMPT_FILE:-}" 2>/dev/null || true' EXIT
 
 # `wait` on a backgrounded job can return as soon as the trap handler above
 # runs (bash reports the interrupted `wait` itself, not necessarily the
@@ -1239,9 +1266,9 @@ while :; do
 		# iteration's exit code.
 		SUMOCODE_EXIT_CODE_FILE="$(mktemp "${TMPDIR:-/tmp}/sumocode-exit-code.XXXXXX")"
 		if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
-			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" SUMOCODE_RELOAD="${IS_RELOAD_RESPAWN}" SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" <&0 &
+			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT_FILE="${RPC_INITIAL_PROMPT_FILE}" SUMOCODE_RELOAD="${IS_RELOAD_RESPAWN}" SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" <&0 &
 		else
-			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" SUMOCODE_RELOAD="${IS_RELOAD_RESPAWN}" SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" "${SUMOCODE_ARGS[@]}" <&0 &
+			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT_FILE="${RPC_INITIAL_PROMPT_FILE}" SUMOCODE_RELOAD="${IS_RELOAD_RESPAWN}" SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" "${SUMOCODE_ARGS[@]}" <&0 &
 		fi
 		RPC_CHILD_PID=$!
 		wait_for_child_exit "${RPC_CHILD_PID}"
@@ -1249,6 +1276,11 @@ while :; do
 		RPC_CHILD_PID=""
 	elif [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
 		env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" || code=$?
+	elif [[ -n "${DIRECT_PI_STDIN_PROMPT}" ]]; then
+		# Headless kickoff: the prompt rides stdin (Pi print mode reads it as
+		# the initial message verbatim); argv keeps only flags. Pipeline exit
+		# status is Pi's, so the reload/exit handling below is unchanged.
+		printf '%s' "${DIRECT_PI_STDIN_PROMPT}" | env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" "${SUMOCODE_ARGS[@]}" || code=$?
 	else
 		env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" "${SUMOCODE_ARGS[@]}" || code=$?
 	fi
@@ -1265,6 +1297,9 @@ while :; do
 	# a reload respawn resumes the existing session via --continue below and
 	# must not re-submit it as a new message.
 	RPC_INITIAL_PROMPT=""
+	# The host already consumed (unlinked) the transport file; clear the path
+	# so the exit trap has nothing to clean and a reload can never re-export it.
+	RPC_INITIAL_PROMPT_FILE=""
 	# After the kickoff turn has fired, do NOT re-pass the task prompt on
 	# `/reload`. The reload loop adds `--continue` to resume the existing
 	# session, and re-injecting the original prompt would send it again as a

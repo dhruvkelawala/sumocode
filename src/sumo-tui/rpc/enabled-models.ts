@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { RpcModelOption } from "./controls.js";
+import { CLAUDE_BASE_PROVIDER, isClaudeAccountProvider } from "../../commands/accounts-config.js";
 
 const THINKING_LEVELS = {
 	off: true,
@@ -50,6 +51,17 @@ function modelKey(model: Pick<RpcModelOption, "provider" | "id">): string {
 	return `${model.provider}/${model.id}`.toLowerCase();
 }
 
+/**
+ * Extra Claude accounts (`anthropic-N`) clone the base provider's model list,
+ * so a base-provider pattern such as `anthropic/claude-opus-5` should enable
+ * that model on every account without the user hand-listing each one. This
+ * is the key such a pattern matches; explicit `anthropic-N/...` patterns keep
+ * matching only their own account through `modelKey`.
+ */
+function baseProviderKey(model: Pick<RpcModelOption, "provider" | "id">): string | undefined {
+	return isClaudeAccountProvider(model.provider) ? `${CLAUDE_BASE_PROVIDER}/${model.id}`.toLowerCase() : undefined;
+}
+
 function escapeRegexChar(char: string): string {
 	return /[\\^$.*+?()[\]{}|]/.test(char) ? `\\${char}` : char;
 }
@@ -83,16 +95,17 @@ function globToRegExp(pattern: string): RegExp {
 }
 
 
-function findExactModel(pattern: string, models: readonly RpcModelOption[]): RpcModelOption | undefined {
+function findExactModels(pattern: string, models: readonly RpcModelOption[]): RpcModelOption[] {
 	const normalized = pattern.trim().toLowerCase();
-	if (!normalized) return undefined;
+	if (!normalized) return [];
 	const canonicalMatches = models.filter((model) => modelKey(model) === normalized);
-	if (canonicalMatches.length === 1) return canonicalMatches[0];
-	if (canonicalMatches.length > 1) return undefined;
+	if (canonicalMatches.length > 1) return [];
 	const slashIndex = normalized.indexOf("/");
-	if (slashIndex !== -1) return undefined;
+	if (slashIndex !== -1) {
+		return [...canonicalMatches, ...models.filter((model) => baseProviderKey(model) === normalized)];
+	}
 	const idMatches = models.filter((model) => model.id.toLowerCase() === normalized);
-	return idMatches.length === 1 ? idMatches[0] : undefined;
+	return idMatches.length === 1 ? idMatches : [];
 }
 
 function appendIfNew(result: RpcModelOption[], seen: Set<string>, model: RpcModelOption): void {
@@ -112,12 +125,14 @@ export function filterToEnabled(models: readonly RpcModelOption[], patterns: rea
 		if (pattern.includes("*") || pattern.includes("?") || pattern.includes("[")) {
 			const regex = globToRegExp(pattern);
 			for (const model of models) {
-				if (regex.test(modelKey(model)) || regex.test(model.id)) appendIfNew(result, seen, model);
+				const baseKey = baseProviderKey(model);
+				if (regex.test(modelKey(model)) || regex.test(model.id) || (baseKey !== undefined && regex.test(baseKey))) {
+					appendIfNew(result, seen, model);
+				}
 			}
 			continue;
 		}
-		const model = findExactModel(pattern, models);
-		if (model) appendIfNew(result, seen, model);
+		for (const model of findExactModels(pattern, models)) appendIfNew(result, seen, model);
 	}
 	return result;
 }

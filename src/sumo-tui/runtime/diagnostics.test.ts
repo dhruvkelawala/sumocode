@@ -7,6 +7,7 @@ import { logDiagnostic, logRuntimeStart } from "./diagnostics.js";
 const previousDiagFile = process.env.SUMO_TUI_DIAG_FILE;
 const previousBranch = process.env.SUMOCODE_DEBUG_BRANCH;
 const previousCommit = process.env.SUMOCODE_DEBUG_COMMIT;
+const previousPublicStartupDiagnostics = process.env.SUMOCODE_PUBLIC_STARTUP_DIAGNOSTICS;
 let tempDir: string | undefined;
 
 afterEach(() => {
@@ -16,6 +17,8 @@ afterEach(() => {
 	else process.env.SUMOCODE_DEBUG_BRANCH = previousBranch;
 	if (previousCommit === undefined) delete process.env.SUMOCODE_DEBUG_COMMIT;
 	else process.env.SUMOCODE_DEBUG_COMMIT = previousCommit;
+	if (previousPublicStartupDiagnostics === undefined) delete process.env.SUMOCODE_PUBLIC_STARTUP_DIAGNOSTICS;
+	else process.env.SUMOCODE_PUBLIC_STARTUP_DIAGNOSTICS = previousPublicStartupDiagnostics;
 	if (tempDir) rmSync(tempDir, { recursive: true, force: true });
 	tempDir = undefined;
 });
@@ -58,6 +61,19 @@ describe("diagnostics", () => {
 		logDiagnostic("ignored", { value: 1 });
 
 		expect(existsSync(file)).toBe(false);
+	});
+
+	it("whitelists public startup events and strips diagnostic fields", () => {
+		const file = useDiagFile();
+		process.env.SUMOCODE_PUBLIC_STARTUP_DIAGNOSTICS = "1";
+
+		logDiagnostic("runtime_start", { cwd: "/Users/operator/project" });
+		logDiagnostic("rpc_child_ready", { surface: "rpc_host", cwd: "/Users/operator/project" });
+
+		const events = readFileSync(file, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+		expect(events).toEqual([expect.objectContaining({ event: "rpc_child_ready" })]);
+		expect(events[0]).not.toHaveProperty("cwd");
+		expect(events[0]).not.toHaveProperty("surface");
 	});
 
 	it("records runtime branch and commit metadata", () => {

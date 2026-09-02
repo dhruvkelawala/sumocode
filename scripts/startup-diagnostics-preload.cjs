@@ -5,8 +5,16 @@ const { performance } = require('node:perf_hooks');
 const diagFile = process.env.SUMO_TUI_DIAG_FILE;
 const entrypoint = process.argv[1] || "";
 const role = entrypoint.endsWith("/sumo-rpc-host.js") ? "host" : "rpc-child";
-const shouldInstrument = role === "host" || entrypoint.includes("pi-coding-agent") || entrypoint.endsWith("/pi") || entrypoint.endsWith("/pi.js");
-if (diagFile && shouldInstrument && !global.__sumocodeStartupDiagnosticsInstalled) {
+const publicStartupDiagnostics = process.env.SUMOCODE_PUBLIC_STARTUP_DIAGNOSTICS === "1";
+const shouldInstrument = entrypoint.includes("pi-coding-agent") || entrypoint.endsWith("/pi") || entrypoint.endsWith("/pi.js");
+
+if (diagFile && publicStartupDiagnostics) {
+	if (role === "host") {
+		try {
+			appendFileSync(diagFile, `${JSON.stringify({ ts: Date.now(), event: "process_preload_start", role })}\n`, { encoding: "utf8", mode: 0o600 });
+		} catch {}
+	}
+} else if (diagFile && shouldInstrument && !global.__sumocodeStartupDiagnosticsInstalled) {
 	global.__sumocodeStartupDiagnosticsInstalled = true;
 	const startedAt = performance.now();
 	let lastMark = startedAt;

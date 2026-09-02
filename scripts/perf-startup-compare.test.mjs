@@ -1,10 +1,12 @@
 import { execFile } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+	main,
 	runStartupComparison,
 	startupCompareOptions,
 } from "./perf-startup-compare.mjs";
@@ -48,18 +50,11 @@ async function harness(options = {}) {
 	const outDir = join(root, "report");
 	await Promise.all([mkdir(callerRoot), mkdir(baselineDir), mkdir(candidateDir)]);
 	const execution = [];
+	const fixtureMetadata = { baseline: [], candidate: [] };
 	let fixtureAgentDir;
 	const cleanChecks = [];
 	let cleanedWorktrees = false;
-	const report = await runStartupComparison({
-		callerRoot,
-		baseRef: "base-ref",
-		candidateRef: "candidate-ref",
-		samples: options.samples ?? 2,
-		fixtureCount: options.fixtureCount ?? 3,
-		outDir,
-		keepFixture: options.keepFixture ?? false,
-	}, {
+	const dependencies = {
 		resolveRevision: async (ref) => ref === "base-ref" ? "a".repeat(40) : "b".repeat(40),
 		assertClean: async (path) => { cleanChecks.push(path); },
 		prepareWorktrees: async () => ({
@@ -73,7 +68,9 @@ async function harness(options = {}) {
 			const store = join(agentDir, "state", "sumocode-terminals");
 			const records = await readdir(store);
 			expect(records).toHaveLength(options.fixtureCount ?? 3);
-			const firstMeta = JSON.parse(await readFile(join(store, records[0], "meta.json"), "utf8"));
+			const firstMetadata = await readFile(join(store, records[0], "meta.json"), "utf8");
+			fixtureMetadata[arm].push(firstMetadata);
+			const firstMeta = JSON.parse(firstMetadata);
 			expect(firstMeta).toMatchObject({
 				ownerSessionId: "fixture-owner",
 				command: "printf fixture",
@@ -90,8 +87,26 @@ async function harness(options = {}) {
 		},
 		machineMetadata: () => ({ platform: "test", arch: "test", nodeVersion: "v-test", cpuCount: 1 }),
 		now: () => new Date("2026-01-01T00:00:00.000Z"),
-	});
-	return { report, root, callerRoot, outDir, execution, cleanChecks, cleanedWorktrees, fixtureAgentDir };
+	};
+	const comparisonOptions = {
+		callerRoot,
+		baseRef: "base-ref",
+		candidateRef: "candidate-ref",
+		samples: options.samples ?? 2,
+		fixtureCount: options.fixtureCount ?? 3,
+		outDir,
+		keepFixture: options.keepFixture ?? false,
+	};
+	const report = options.publicCli
+		? await main([
+			"--base", comparisonOptions.baseRef,
+			"--candidate", comparisonOptions.candidateRef,
+			"--samples", String(comparisonOptions.samples),
+			"--fixture-count", String(comparisonOptions.fixtureCount),
+			"--out", outDir,
+		], dependencies)
+		: await runStartupComparison(comparisonOptions, dependencies);
+	return { report, root, callerRoot, outDir, execution, fixtureMetadata, cleanChecks, cleanedWorktrees, fixtureAgentDir };
 }
 
 describe("startup comparison CLI", () => {
@@ -104,11 +119,14 @@ describe("startup comparison CLI", () => {
 			env: {
 				...process.env,
 				SUMO_TUI_DIAG_FILE: diag,
+				SUMOCODE_PUBLIC_STARTUP_DIAGNOSTICS: "1",
 				NODE_OPTIONS: `--require "${resolve("scripts/startup-diagnostics-preload.cjs")}"`,
 			},
 		});
 		const event = JSON.parse((await readFile(diag, "utf8")).trim().split("\n")[0]);
-		expect(event).toMatchObject({ event: "process_preload_start", role: "host" });
+		expect(event).toEqual(expect.objectContaining({ event: "process_preload_start", role: "host" }));
+		expect(event).not.toHaveProperty("cwd");
+		expect(event).not.toHaveProperty("argv");
 	});
 
 	it("defaults to 15 samples and an approximately 1,800-record disposable fixture", () => {
@@ -121,7 +139,7 @@ describe("startup comparison CLI", () => {
 	});
 
 	it("compares exact revisions in alternating order and emits only public-safe report data", async () => {
-		const result = await harness({ failCandidate: true });
+		const result = await harness({ failCandidate: true, publicCli: true });
 		const { report } = result;
 
 		expect(result.execution).toEqual(["baseline:0", "candidate:0", "candidate:1", "baseline:1"]);
@@ -135,6 +153,7 @@ describe("startup comparison CLI", () => {
 			runtime: { platform: "test", arch: "test", nodeVersion: "v-test", cpuCount: 1 },
 		});
 		expect(report.executionOrder).toEqual(["baseline", "candidate", "candidate", "baseline"]);
+		expect(result.fixtureMetadata.baseline).toEqual(result.fixtureMetadata.candidate);
 		expect(report.arms.baseline.samples).toHaveLength(2);
 		expect(report.arms.baseline.samples[0].phases).toMatchObject({ hostImportMs: 95, terminalIndexReadyMs: 8 });
 		expect(report.arms.candidate.samples).toHaveLength(2);
@@ -158,8 +177,78 @@ describe("startup comparison CLI", () => {
 		expect(markdown).toContain("Aggregate startup");
 		expect(markdown).toContain("Overall startup: **INCONCLUSIVE**");
 		expect(result.cleanedWorktrees).toBe(true);
-		expect(result.cleanChecks).toEqual([result.callerRoot, join(result.root, "baseline"), join(result.root, "candidate"), result.callerRoot]);
+		expect(result.cleanChecks).toEqual([resolve("."), join(result.root, "baseline"), join(result.root, "candidate"), resolve(".")]);
 		expect(await stat(result.fixtureAgentDir).catch(() => undefined)).toBeUndefined();
+	});
+
+	it("reports a process that exits naturally after every event as failed", async () => {
+		const root = await temporaryRoot("sumocode-startup-process-failure-");
+		const baselineDir = join(root, "baseline");
+		const candidateDir = join(root, "candidate");
+		const outDir = await temporaryRoot("sumocode-startup-process-failure-report-");
+		await Promise.all([mkdir(baselineDir), mkdir(candidateDir)]);
+		const report = await runStartupComparison({
+			callerRoot: root,
+			baseRef: "base",
+			candidateRef: "candidate",
+			samples: 1,
+			fixtureCount: 1,
+			outDir,
+		}, {
+			resolveRevision: async (ref) => ref === "base" ? "e".repeat(40) : "f".repeat(40),
+			assertClean: async () => undefined,
+			prepareWorktrees: async () => ({ baselineDir, candidateDir, cleanup: async () => undefined }),
+			spawnSamplePty: (_command, _args, options) => {
+				const listeners = [];
+				queueMicrotask(() => {
+					const events = diagnostics(Date.now(), "baseline", 0);
+					writeFileSync(options.env.SUMO_TUI_DIAG_FILE, `${events.map((event) => JSON.stringify(event)).join("\n")}\n`);
+					for (const listener of listeners) listener({ exitCode: 7, signal: 0 });
+				});
+				return {
+					onExit: (listener) => { listeners.push(listener); },
+					kill: () => undefined,
+				};
+			},
+			machineMetadata: () => ({ platform: "test", arch: "test", nodeVersion: "v-test", cpuCount: 1 }),
+		});
+
+		expect(report.arms.baseline.samples[0]).toMatchObject({ ok: false, failure: "process-failed" });
+		expect(report.arms.candidate.samples[0]).toMatchObject({ ok: false, failure: "process-failed" });
+	});
+
+	it("smoke-compares two distinct exact local revisions in detached worktrees", async () => {
+		const root = await temporaryRoot("sumocode-startup-revision-smoke-");
+		const callerRoot = join(root, "repo");
+		const outDir = await temporaryRoot("sumocode-startup-revision-report-");
+		await mkdir(join(callerRoot, "node_modules"), { recursive: true });
+		await execFileAsync("git", ["init", "-q"], { cwd: callerRoot });
+		await writeFile(join(callerRoot, "revision.txt"), "baseline\n");
+		await execFileAsync("git", ["add", "revision.txt"], { cwd: callerRoot });
+		await execFileAsync("git", ["-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "baseline"], { cwd: callerRoot });
+		const { stdout: baselineStdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: callerRoot });
+		const baselineSha = baselineStdout.trim();
+		await writeFile(join(callerRoot, "revision.txt"), "candidate\n");
+		await execFileAsync("git", ["add", "revision.txt"], { cwd: callerRoot });
+		await execFileAsync("git", ["-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "candidate"], { cwd: callerRoot });
+
+		const report = await runStartupComparison({
+			callerRoot,
+			baseRef: baselineSha,
+			candidateRef: "HEAD",
+			samples: 1,
+			fixtureCount: 1,
+			outDir,
+		}, {
+			runSample: async ({ arm, index, startWallMs }) => ({ ok: true, events: diagnostics(startWallMs, arm, index) }),
+			machineMetadata: () => ({ platform: "test", arch: "test", nodeVersion: "v-test", cpuCount: 1 }),
+		});
+
+		expect(report.baselineSha).toBe(baselineSha);
+		expect(report.candidateSha).not.toBe(baselineSha);
+		expect(report.arms.baseline.samples[0].ok).toBe(true);
+		expect(report.arms.candidate.samples[0].ok).toBe(true);
+		expect((await execFileAsync("git", ["status", "--porcelain"], { cwd: callerRoot })).stdout).toBe("");
 	});
 
 	it("requires non-overlapping evidence in one direction for an overall claim", async () => {

@@ -45,6 +45,7 @@ interface NativePtySession {
 	getDiagPath(): string;
 	waitForOutput(pattern: string | RegExp, timeoutMs?: number): Promise<string>;
 	waitForReady(state: ReadinessState, timeoutMs?: number): Promise<void>;
+	sendInput(input: string): void;
 	signal(signal: NodeJS.Signals): void;
 	cleanup(): Promise<void>;
 }
@@ -115,6 +116,9 @@ function spawnNativePty(
 		},
 		waitForReady(state, timeoutMs = 30_000) {
 			return waitForDiagnosticReadiness(evidence.diagPath, state, timeoutMs).then(() => undefined);
+		},
+		sendInput(input) {
+			child.write(input);
 		},
 		signal(signal) {
 			child.kill(signal);
@@ -366,7 +370,7 @@ nativeDescribe("native executable contract", () => {
 		}, 30_000);
 	}
 
-	it("orders editor readiness before hydrated command readiness and renders the splash sidecar", async () => {
+	it("renders static slash completion between editor and hydrated command readiness", async () => {
 		const agentDir = tempRoot("sumocode-native-agent-");
 		const cwd = tempRoot("sumocode-native-project-");
 		const session = spawnNativePty(["--offline", "--no-extensions", "--no-session", "--approve"], {
@@ -374,14 +378,19 @@ nativeDescribe("native executable contract", () => {
 		});
 		await session.waitForReady("input");
 		await session.waitForOutput("DIVINE INVOCATION");
+		session.sendInput("/resume");
+		await waitForDiagEvent(session.getDiagPath(), "slash_ready");
 		await waitForDiagEvent(session.getDiagPath(), "command_ready");
 		const events = readDiagEvents(session.getDiagPath());
 		const editorIndex = events.findIndex((event) => event.event === "editor_ready");
+		const slashIndex = events.findIndex((event) => event.event === "slash_ready");
 		const commandIndex = events.findIndex((event) => event.event === "command_ready");
 		expect(editorIndex).toBeGreaterThanOrEqual(0);
-		expect(commandIndex).toBeGreaterThan(editorIndex);
+		expect(slashIndex).toBeGreaterThan(editorIndex);
+		expect(commandIndex).toBeGreaterThan(slashIndex);
 		const screen = (await replayScreenRows(session.getOutput(), 100, 30)).join("\n");
 		expect(screen).toContain("DIVINE INVOCATION");
+		expect(screen).toContain("Resume a previous session");
 		expect(screen).toContain("█");
 		session.signal("SIGTERM");
 		expect((await waitForExit(session)).exitCode).toBe(0);

@@ -30,6 +30,7 @@ const PUBLIC_STARTUP_EVENTS = new Set([
 	"terminal_index_start",
 	"terminal_index_ready",
 	"editor_ready",
+	"slash_ready",
 	"hydration_committed",
 	"command_ready",
 ]);

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { writeFileSync } from "node:fs";
-import { mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { link, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -241,6 +241,32 @@ describe("startup comparison CLI", () => {
 			},
 		})).rejects.toThrow("refusing to write through symlink");
 		expect(await readFile(victim, "utf8")).toBe("do not truncate\n");
+	});
+
+	it("refuses to write reports through a hard-linked tracked file", async () => {
+		const root = await temporaryRoot("sumocode-startup-report-hardlink-");
+		const callerRoot = join(root, "caller");
+		const outDir = join(root, "out");
+		const victim = join(root, "victim.txt");
+		await mkdir(callerRoot, { recursive: true });
+		await mkdir(outDir, { recursive: true });
+		await writeFile(victim, "ORIGINAL\n");
+		await link(victim, join(outDir, "startup-compare.json"));
+		await expect(runStartupComparison({
+			callerRoot,
+			baseRef: "base",
+			samples: 1,
+			fixtureCount: 1,
+			outDir,
+		}, {
+			resolveRevision: async () => "a".repeat(40),
+			assertClean: async () => undefined,
+			prepareWorktrees: async () => ({ baselineDir: join(root, "b"), candidateDir: join(root, "c"), cleanup: async () => undefined }),
+			runSample: async () => {
+				throw new Error("no process");
+			},
+		})).rejects.toThrow("refusing to overwrite multi-linked file");
+		expect(await readFile(victim, "utf8")).toBe("ORIGINAL\n");
 	});
 
 	it("rejects the public CLI when neither arm collects a successful sample", async () => {

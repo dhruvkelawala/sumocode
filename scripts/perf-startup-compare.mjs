@@ -442,14 +442,24 @@ function executionSchedule(samples) {
 	return schedule;
 }
 
+// O_NOFOLLOW is undefined on Windows, where the flag is unsupported.
+const REPORT_OPEN_FLAGS = fsConstants.O_NOFOLLOW === undefined
+	? fsConstants.O_WRONLY | fsConstants.O_CREAT
+	: fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_NOFOLLOW;
+
 /** Report writes must never follow a pre-existing symlink at the leaf. */
 async function writeReportFile(path, contents) {
 	if ((await lstat(path).catch(() => undefined))?.isSymbolicLink()) throw new Error(`refusing to write through symlink: ${path}`);
-	// O_NOFOLLOW keeps the no-symlink guarantee at the syscall boundary, closing
-	// the lstat/write TOCTOU window (undefined on Windows, where the flag is
-	// unsupported).
-	const handle = await open(path, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | (fsConstants.O_NOFOLLOW ?? 0), 0o600);
-	try { await handle.writeFile(contents); } finally { await handle.close(); }
+	// Open WITHOUT truncating, then verify the exact inode before any write:
+	// O_NOFOLLOW keeps symlinks out at the syscall boundary, and the nlink
+	// check refuses hard links to other files (e.g. tracked checkout files)
+	// on the same opened handle, closing the lstat/write TOCTOU window.
+	const handle = await open(path, REPORT_OPEN_FLAGS, 0o600);
+	try {
+		if ((await handle.stat()).nlink > 1) throw new Error(`refusing to overwrite multi-linked file: ${path}`);
+		await handle.truncate(0);
+		await handle.writeFile(contents);
+	} finally { await handle.close(); }
 }
 
 /**

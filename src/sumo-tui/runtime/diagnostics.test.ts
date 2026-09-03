@@ -69,7 +69,7 @@ describe("diagnostics", () => {
 
 		logDiagnostic("runtime_start", { cwd: "/Users/operator/project" });
 		logDiagnostic("rpc_child_ready", { surface: "rpc_host", cwd: "/Users/operator/project" });
-		logDiagnostic("terminal_index_ready", { durationMs: 0.08, cwd: "/Users/operator/project", snapshotCount: 1800 });
+		logDiagnostic("terminal_index_ready", { durationMs: 0.08, snapshotCount: 1800, cwd: "/Users/operator/project" });
 
 		const events = readFileSync(file, "utf8").trim().split("\n").map((line) => JSON.parse(line));
 		expect(events).toEqual([
@@ -79,7 +79,7 @@ describe("diagnostics", () => {
 		expect(events[0]).not.toHaveProperty("cwd");
 		expect(events[0]).not.toHaveProperty("surface");
 		expect(events[1]).not.toHaveProperty("cwd");
-		expect(events[1]).not.toHaveProperty("snapshotCount");
+		expect(events[1]).toHaveProperty("snapshotCount", 1800);
 	});
 
 	it("records runtime branch and commit metadata", () => {

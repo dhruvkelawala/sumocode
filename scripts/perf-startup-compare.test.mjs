@@ -27,12 +27,13 @@ async function temporaryRoot(label) {
 
 function diagnostics(startWallMs, arm, index, options = {}) {
 	const offset = arm === "baseline" ? 100 : 80;
+	const snapshotCount = options.snapshotCount ?? options.fixtureCount;
 	const events = [
 		{ event: "process_preload_start", role: "host", ts: startWallMs + (arm === "baseline" ? 5 : 3), cwd: "/Users/operator/private" },
 		{ event: "host_import_ready", mode: "source", ts: startWallMs + offset },
 		{ event: "rpc_child_ready", ts: startWallMs + offset + 10 },
 		{ event: "terminal_index_start", ts: startWallMs + offset + 12 },
-		{ event: "terminal_index_ready", durationMs: arm === "baseline" ? 8.5 : 6.5, ts: startWallMs + offset + (arm === "baseline" ? 20 : 18) },
+		{ event: "terminal_index_ready", durationMs: arm === "baseline" ? 8.5 : 6.5, snapshotCount, ts: startWallMs + offset + (arm === "baseline" ? 20 : 18) },
 		{ event: "editor_ready", ts: startWallMs + offset + 30 },
 		{ event: "hydration_committed", ts: startWallMs + offset + 40 },
 		{ event: "command_ready", ts: startWallMs + offset + (arm === "baseline" ? 50 : 48) },
@@ -81,11 +82,13 @@ async function harness(options = {}) {
 				command: "printf fixture",
 				title: "fixture terminal",
 			});
+			const eventOptions = options.failCandidate && arm === "candidate" && index === 1
+				? { missingCommand: true }
+				: undefined;
+			const snapshotCount = (options.fixtureCount ?? 3) - (options.fixtureMismatch && arm === "candidate" ? 1 : 0);
 			return {
 				ok: true,
-				events: diagnostics(startWallMs, arm, index, options.failCandidate && arm === "candidate" && index === 1
-					? { missingCommand: true }
-					: undefined),
+				events: diagnostics(startWallMs, arm, index, { ...eventOptions, snapshotCount }),
 				stderr: "provider private/provider in /Users/operator/.pi",
 				output: "operator prompt and session-secret",
 			};
@@ -250,6 +253,13 @@ async function harness(options = {}) {
 	it("fails the comparison when detached worktree cleanup fails", async () => {
 		await expect(harness({ cleanupFails: true, samples: 1, fixtureCount: 1 }))
 			.rejects.toThrow("startup comparison cleanup failed");
+	});
+
+	it("fails samples whose accepted snapshot count mismatches the fixture", async () => {
+		const { report } = await harness({ fixtureMismatch: true, samples: 1, fixtureCount: 3 });
+		expect(report.arms.baseline.samples[0]).toMatchObject({ ok: true });
+		expect(report.arms.candidate.samples[0]).toMatchObject({ ok: false, failure: "fixture-mismatch" });
+		expect(report.overall.verdict).toBe("INCONCLUSIVE");
 	});
 
 	it("rejects --out that resolves inside the compared checkout", async () => {

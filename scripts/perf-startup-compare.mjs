@@ -379,20 +379,20 @@ function publicSample(raw, index, startWallMs, fixtureCount) {
 	// corrupt/duplicate/unsupported records timed a different workload than the
 	// baseline, and an instrumented revision that omits the count cannot prove
 	// its workload either, so both must fail instead of entering a median.
-	const readySnapshotCount = byName.get("terminal_index_ready")?.snapshotCount;
+	const readySnapshotCount = terminalIndexReady?.snapshotCount;
 	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- parsed diagnostics JSONL boundary
 	if (typeof readySnapshotCount !== "number" || !Number.isFinite(readySnapshotCount) || readySnapshotCount !== fixtureCount) {
+		return { index, ok: false, failure: "fixture-mismatch", missingEvents };
+	}
+	const scanDurationMs = terminalIndexReady?.durationMs;
+	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- parsed diagnostics JSONL boundary
+	if (typeof scanDurationMs !== "number" || !Number.isFinite(scanDurationMs) || scanDurationMs < 0) {
 		return { index, ok: false, failure: "fixture-mismatch", missingEvents };
 	}
 	const hostStart = eventTimestamp(byName.get("process_preload_start"));
 	const hostImport = eventTimestamp(byName.get("host_import_ready"));
 	const rpcChild = eventTimestamp(byName.get("rpc_child_ready"));
-	const terminalIndexStart = eventTimestamp(byName.get("terminal_index_start"));
-	const terminalIndex = eventTimestamp(byName.get("terminal_index_ready"));
-	// The ready mark carries the store's own high-resolution scan duration;
-	// prefer it over integer wall-clock subtraction, which quantizes
-	// sub-millisecond scans to 0/1ms.
-	const scanDurationMs = byName.get("terminal_index_ready")?.durationMs;
+	const terminalIndexReady = byName.get("terminal_index_ready");
 	const editor = eventTimestamp(byName.get("editor_ready"));
 	const hydration = eventTimestamp(byName.get("hydration_committed"));
 	const command = eventTimestamp(byName.get("command_ready"));
@@ -404,9 +404,7 @@ function publicSample(raw, index, startWallMs, fixtureCount) {
 			hostImportMs: Math.max(0, hostImport - hostStart),
 			rpcChildReadyMs: rpcChild - startWallMs,
 			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- parsed diagnostics JSONL boundary: durationMs is validated before use.
-			terminalIndexReadyMs: typeof scanDurationMs === "number" && Number.isFinite(scanDurationMs) && scanDurationMs >= 0
-				? round(scanDurationMs)
-				: Math.max(0, terminalIndex - terminalIndexStart),
+			terminalIndexReadyMs: round(scanDurationMs),
 			editorReadyMs: editor - startWallMs,
 			hydrationCommittedMs: hydration - startWallMs,
 			commandReadyMs: command - startWallMs,

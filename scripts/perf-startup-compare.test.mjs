@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+	defaultSampleEnvironment,
 	main,
 	runStartupComparison,
 	startupCompareOptions,
@@ -145,6 +146,20 @@ describe("startup comparison CLI", () => {
 	it("rejects oversized sample counts instead of accepting Infinity", () => {
 		expect(() => startupCompareOptions(["--base", "HEAD", "--samples", "9".repeat(400)]))
 			.toThrow("--samples requires a positive integer");
+	});
+
+	it("strips inherited Herdr and launcher state from sample environments", () => {
+		const env = defaultSampleEnvironment("/checkout", "/agent", "/agent/startup.jsonl", {
+			HERDR_ENV: "1",
+			HERDR_SOCKET_PATH: "/operator/herdr.sock",
+			HERDR_PANE_ID: "w1:p1",
+			SUMOCODE_RPC_CHILD: "1",
+			SUMO_TUI_DEBUG: "1",
+			PATH: "/usr/bin",
+		});
+		expect(Object.keys(env).filter((key) => key.startsWith("HERDR_") || key.startsWith("SUMOCODE_") || key.startsWith("SUMO_TUI"))).toEqual([]);
+		expect(env.PATH).toBe("/usr/bin");
+		expect(env.PI_CODING_AGENT_DIR).toBe("/agent");
 	});
 
 	it("compares exact revisions in alternating order and emits only public-safe report data", async () => {

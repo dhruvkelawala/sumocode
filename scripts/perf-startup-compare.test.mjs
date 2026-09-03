@@ -125,6 +125,31 @@ async function harness(options = {}) {
 }
 
 	describe("startup comparison CLI", () => {
+
+	it("does not claim report paths when setup fails before reports exist", async () => {
+		const root = await temporaryRoot("sumocode-startup-stale-report-");
+		const callerRoot = join(root, "caller");
+		const outDir = join(root, "out");
+		await mkdir(callerRoot, { recursive: true });
+		await mkdir(outDir, { recursive: true });
+		await writeFile(join(outDir, "startup-compare.json"), JSON.stringify({ stale: true }));
+		const errors = [];
+		const originalError = console.error;
+		console.error = (...args) => errors.push(args.join(" "));
+		try {
+			await expect(main(["--base", "base", "--out", outDir], {
+				resolveRevision: async () => "a".repeat(40),
+				assertClean: async () => undefined,
+				prepareWorktrees: async () => {
+					throw new Error("worktree add failed");
+				},
+			})).rejects.toThrow("worktree add failed");
+		} finally {
+			console.error = originalError;
+		}
+		expect(errors.join("\n")).not.toContain("reports written to");
+		expect(await readFile(join(outDir, "startup-compare.json"), "utf8")).toContain("stale");
+	});
 	it("classifies backslash entrypoints as the host", async () => {
 		const root = await temporaryRoot("sumocode-startup-preload-win-");
 		const diag = join(root, "diag.jsonl");

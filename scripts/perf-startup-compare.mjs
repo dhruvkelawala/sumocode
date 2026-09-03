@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
 import { chmod, lstat, mkdir, mkdtemp, open, readFile, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
-import { constants as fsConstants, existsSync } from "node:fs";
+import { constants as fsConstants } from "node:fs";
 import { cpus, platform, arch, tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -665,6 +665,7 @@ export async function runStartupComparison(options, dependencies = {}) {
 		await mkdir(outDir, { recursive: true });
 		await writeReportFile(join(outDir, "startup-compare.json"), `${JSON.stringify(report, null, 2)}\n`);
 		await writeReportFile(join(outDir, "startup-compare.md"), markdown(report));
+		dependencies.onReportsWritten?.();
 		if (auditError) throw auditError;
 	} catch (error) {
 		bodyError = error;
@@ -739,14 +740,18 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
 	}
 	const outDir = options.outDir ?? await defaultReportDir();
 	let report;
+	let reportsWritten = false;
 	try {
 		report = await runStartupComparison({ ...options, callerRoot: ROOT, outDir }, {
 			...dependencies,
 			onFixtureRetained: dependencies.onFixtureRetained ?? ((path) => console.error(`fixture retained: ${path}`)),
+			onReportsWritten: () => { reportsWritten = true; },
 		});
 	} finally {
-		// The path is the only way to find retained evidence after a failure.
-		if (existsSync(join(outDir, "startup-compare.json"))) console.error(`startup comparison reports written to: ${outDir}`);
+		// The path is the only way to find retained evidence after a failure, but
+		// only claim it when THIS invocation actually wrote reports: a reused --out
+		// can still contain files from an earlier run.
+		if (reportsWritten) console.error(`startup comparison reports written to: ${outDir}`);
 	}
 	if (!report.collection.succeeded) throw new Error("startup comparison collection failed; inspect the written report");
 	console.log(markdown(report));

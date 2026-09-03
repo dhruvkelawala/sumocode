@@ -94,6 +94,7 @@ describe("TerminalTaskManager", () => {
 			now: () => now,
 			createId: () => ids.shift() ?? `term-${children.length}`,
 			createCompletionId: () => `completion-${children.length}`,
+			scheduleIndexInitialization: (initialize) => initialize(),
 			pollIntervalMs: 10,
 			termGraceMs: 10,
 			killGraceMs: 10,
@@ -200,6 +201,96 @@ function transientFault(code: string): Error {
 		chmodSync(metaFile, 0o600);
 		return snapshot;
 	}
+
+	it("defers the full validated startup scan until after constructor activation", () => {
+		const sequence = ["before-construction"];
+		const scheduled: Array<() => void> = [];
+		class SlowCountingStore extends TerminalTaskStore {
+			public scans = 0;
+			public override refreshIndex(): TerminalTaskIndexRefreshResult {
+				this.scans += 1;
+				sequence.push("scan-start");
+				Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+				const result = super.refreshIndex();
+				sequence.push("scan-end");
+				return result;
+			}
+		}
+		const store = new SlowCountingStore({ rootDir });
+
+		const target = manager({ store, scheduleIndexInitialization: (initialize) => scheduled.push(initialize) });
+		sequence.push("after-construction");
+
+		expect(store.scans).toBe(0);
+		expect(sequence).toEqual(["before-construction", "after-construction"]);
+		expect(target.isIndexReady()).toBe(false);
+		scheduled[0]!();
+		expect(store.scans).toBe(1);
+		expect(sequence).toEqual(["before-construction", "after-construction", "scan-start", "scan-end"]);
+		expect(target.isIndexReady()).toBe(true);
+		expect(target.getSnapshots()).toEqual([]);
+	});
+
+	it("characterizes a retained wake completion as delivered exactly once on first idle", async () => {
+		const store = new TerminalTaskStore({ rootDir });
+		const settled = persistSettledTask(store, "term-wake", "session-a", 1_000, "wake");
+		const metaFile = join(dirname(settled.logFile), "meta.json");
+		writeFileSync(metaFile, `${JSON.stringify({
+			...settled,
+			completionPolicy: "wake",
+			deliveryState: "pending",
+			observedAt: undefined,
+			consumedAt: undefined,
+		})}\n`, { mode: 0o600 });
+		const scheduled: Array<() => void> = [];
+		const target = manager({ store, scheduleIndexInitialization: (initialize) => scheduled.push(initialize) });
+		const idle = true;
+		const branch: Array<{ type: "custom_message"; details: unknown }> = [];
+		const sendMessage = vi.fn((message: { details?: unknown }) => {
+			branch.push({ type: "custom_message", details: message.details });
+		});
+		// SAFETY: the double implements exactly the ExtensionAPI member the coordinator touches.
+		const coordinator = new TerminalDeliveryCoordinator({ sendMessage } as never, target);
+		// SAFETY: the double implements exactly the ExtensionContext members the coordinator touches.
+		const ctx = {
+			isIdle: () => idle,
+			sessionManager: { getSessionId: () => "session-a", getBranch: () => branch },
+		} as never;
+
+		coordinator.bind(ctx);
+		await Promise.resolve();
+		expect(sendMessage).not.toHaveBeenCalled();
+		scheduled[0]!();
+		await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+		coordinator.flushWhenIdle(ctx);
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(sendMessage).toHaveBeenCalledTimes(1);
+		coordinator.dispose();
+	});
+
+	it("characterizes recovered running terminals as polled through durable exit", async () => {
+		vi.useFakeTimers();
+		try {
+			const store = new TerminalTaskStore({ rootDir });
+			const running = persistRunningTask(store, "term-recovered", "session-a", 1_000);
+			writeFileSync(exitFile(running), "", { mode: 0o600 });
+			const scheduled: Array<() => void> = [];
+			const target = manager({ store, pollIntervalMs: 20, scheduleIndexInitialization: (initialize) => scheduled.push(initialize) });
+
+			expect(vi.getTimerCount()).toBe(0);
+			scheduled[0]!();
+			expect(vi.getTimerCount()).toBe(1);
+			writeFileSync(exitFile(running), "0", { mode: 0o600 });
+			await vi.advanceTimersByTimeAsync(20);
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(target.get(running.id, "session-a")).toMatchObject({ status: "completed", exitCode: 0 });
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 
 	it("persists spawn identity before releasing a detached terminal", async () => {
 		const target = manager();
@@ -801,20 +892,22 @@ function transientFault(code: string): Error {
 			coordinator.bind(ctx as never);
 			await vi.advanceTimersByTimeAsync(0);
 			expect(sendMessage).not.toHaveBeenCalled();
-			expect(reads.scans).toBe(2);
+			// Delivery stays fail-closed and does not force a scan while the
+			// startup index is incomplete; the active poll owns the retry.
+			expect(reads.scans).toBe(1);
 
 			faults.clear();
 			now += 999;
 			await vi.advanceTimersByTimeAsync(999);
 			expect(sendMessage).not.toHaveBeenCalled();
 			expect(store.isIndexedOwner("term-active-skipped", "session-a")).toBe(false);
-			expect(reads.scans).toBe(2);
+			expect(reads.scans).toBe(1);
 
 			now += 1;
 			await vi.advanceTimersByTimeAsync(1);
 			await vi.advanceTimersByTimeAsync(0);
 			await vi.advanceTimersByTimeAsync(0);
-			expect(reads.scans).toBe(3);
+			expect(reads.scans).toBe(2);
 			expect(sendMessage).toHaveBeenCalledTimes(1);
 			expect(sendMessage.mock.calls[0][0]).toMatchObject({ customType: "terminal-result" });
 			expect(target.get("term-active-skipped", "session-a")).toMatchObject({

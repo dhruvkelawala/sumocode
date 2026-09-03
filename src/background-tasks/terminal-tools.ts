@@ -251,7 +251,7 @@ export class TerminalDeliveryCoordinator {
 
 	private flush(): void {
 		const active = this.active;
-		if (!active || this.flushing || !active.ctx.isIdle()) return;
+		if (!active || this.flushing || !active.ctx.isIdle() || !this.manager.isIndexReady()) return;
 		this.flushing = true;
 		try {
 			this.acknowledgeObservable(active.ctx, active.ownerSessionId);

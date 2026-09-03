@@ -886,6 +886,8 @@ async function runRpcBranch(parsed: ParsedLaunch): Promise<void> {
 	process.env.SUMOCODE_RELOAD_READY_FILE = process.env.SUMOCODE_RELOAD === "1" ? makePrivateTempFile("sumocode-reload-ready") : "";
 	process.env.PI_BIN = PI_BIN;
 	process.env.SUMOCODE_EXIT_CODE_FILE = freshExitCodeFile();
+	process.env.SUMOCODE_TERMINAL_INDEX_GATE = makePrivateTempFile("sumocode-terminal-index");
+	rmSync(process.env.SUMOCODE_TERMINAL_INDEX_GATE, { force: true });
 
 	// Pre-spawn the Pi child before importing the host; own early signals from
 	// before the spawn so the child cannot publish its PID while default signal

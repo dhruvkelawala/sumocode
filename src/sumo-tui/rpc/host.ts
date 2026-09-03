@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { defaultActivityStateRoot } from "../../activity/persistence.js";
@@ -937,6 +938,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const cwd = hostCwd(env);
 	const settingsManager = SettingsManager.create(cwd);
 	const stateRoot = defaultActivityStateRoot(env);
+	const terminalIndexGate = env.SUMOCODE_TERMINAL_INDEX_GATE
+		?? resolve(stateRoot, `.terminal-index-${process.pid}-${randomUUID()}`);
 	const chromeCacheTestDelayMs = env.NODE_ENV === "test"
 		? Number.parseInt(env.SUMOCODE_TEST_CHROME_CACHE_DELAY_MS ?? "0", 10)
 		: 0;
@@ -959,7 +962,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		command: spawnPlan.command,
 		args: spawnPlan.args,
 		cwd: spawnPlan.cwd,
-		env: spawnPlan.env,
+		env: { ...spawnPlan.env, SUMOCODE_TERMINAL_INDEX_GATE: terminalIndexGate },
 		preSpawnedChild: options.preSpawnedChild,
 		onRpcReady: () => logDiagnostic("rpc_child_ready"),
 	});
@@ -1155,7 +1158,12 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		releaseInitialHydration = resolve;
 	});
 	const hydrationActionGate = new InitialHydrationActionGate(initialHydration, {
-		onReady: () => runtime?.markCommandReady(),
+		onReady: () => {
+			runtime?.markCommandReady();
+			// The RPC child polls this private gate without touching the Pi command
+			// stream; wrappers inherit the path and cannot swallow the readiness cue.
+			try { writeFileSync(terminalIndexGate, "ready\n", { flag: "wx", mode: 0o600 }); } catch {}
+		},
 	});
 	/**
 	 * The retained editor can accept text as soon as the splash paints, but a
@@ -1713,6 +1721,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			// quiesce before the final cache snapshot is flushed. Persistent guarded
 			// host signal listeners cover both bounded shutdown phases.
 			await client.stop().catch(() => undefined);
+			rmSync(terminalIndexGate, { force: true });
 			await new Promise<void>((resolveTurn) => setImmediate(resolveTurn));
 			await drainChromeCacheForShutdown(
 				flushChromeCacheState,

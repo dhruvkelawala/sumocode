@@ -381,13 +381,16 @@ nativeDescribe("native executable contract", () => {
 		session.sendInput("/resume");
 		await waitForDiagEvent(session.getDiagPath(), "slash_ready");
 		await waitForDiagEvent(session.getDiagPath(), "command_ready");
+		await waitForDiagEvent(session.getDiagPath(), "terminal_index_ready");
 		const events = readDiagEvents(session.getDiagPath());
 		const editorIndex = events.findIndex((event) => event.event === "editor_ready");
 		const slashIndex = events.findIndex((event) => event.event === "slash_ready");
 		const commandIndex = events.findIndex((event) => event.event === "command_ready");
+		const terminalIndex = events.findIndex((event) => event.event === "terminal_index_start");
 		expect(editorIndex).toBeGreaterThanOrEqual(0);
 		expect(slashIndex).toBeGreaterThan(editorIndex);
 		expect(commandIndex).toBeGreaterThan(slashIndex);
+		expect(terminalIndex).toBeGreaterThan(commandIndex);
 		const screen = (await replayScreenRows(session.getOutput(), 100, 30)).join("\n");
 		expect(screen).toContain("DIVINE INVOCATION");
 		expect(screen).toContain("Resume a previous session");

@@ -39,6 +39,7 @@ function createHarness(initial: TerminalTaskSnapshot[] = []) {
 	const listeners = new Set<(snapshot: TerminalTaskSnapshot) => void>();
 	let activeSessionId = "session-a";
 	let idle = true;
+	let indexReady = true;
 	// SAFETY: the fake session branch intentionally stores loose fixture records; the coordinator re-parses them.
 	// oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- fixture records are deliberately open.
 	const branch = [] as Array<Record<string, unknown>>;
@@ -122,6 +123,7 @@ function createHarness(initial: TerminalTaskSnapshot[] = []) {
 			return values;
 		}),
 		getClaimRetryDelay: vi.fn((owner: string) => [...tasks.values()].some((entry) => entry.ownerSessionId === owner && entry.deliveryState === "claimed") ? 10 : undefined),
+		isIndexReady: vi.fn(() => indexReady),
 		addChangeListener: vi.fn((listener: (snapshot: TerminalTaskSnapshot) => void) => {
 			listeners.add(listener);
 			return () => listeners.delete(listener);
@@ -164,6 +166,7 @@ function createHarness(initial: TerminalTaskSnapshot[] = []) {
 		setRecordSentMessage: (value: boolean) => { recordSentMessage = value; },
 		setOnSend: (value: (() => void) | undefined) => { onSend = value; },
 		setIdle: (value: boolean) => { idle = value; },
+		setIndexReady: (value: boolean) => { indexReady = value; },
 		setSession: (value: string) => { activeSessionId = value; },
 		emit: (snapshot: TerminalTaskSnapshot) => { for (const listener of listeners) listener(snapshot); },
 	};
@@ -304,6 +307,23 @@ describe("installTerminalTools", () => {
 		expect(harness.manager.acknowledge).toHaveBeenCalledOnce();
 		expect(harness.manager.claimPending).toHaveBeenCalledOnce();
 		expect(harness.manager.getClaimRetryDelay).toHaveBeenCalledOnce();
+	});
+
+	it("keeps completion delivery closed until the terminal index is authoritative", async () => {
+		const settled = task({ status: "completed", settledAt: 2_000, exitCode: 0, deliveryState: "pending", completionId: "completion-a" });
+		const harness = createHarness([settled]);
+		harness.setIndexReady(false);
+
+		await harness.fire("session_start");
+		expect(harness.manager.acknowledge).not.toHaveBeenCalled();
+		expect(harness.manager.claimPending).not.toHaveBeenCalled();
+		expect(harness.sendMessage).not.toHaveBeenCalled();
+
+		harness.setIndexReady(true);
+		harness.emit(settled);
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(harness.sendMessage).toHaveBeenCalledOnce();
 	});
 
 	it("does not arm lease retries when no completion was claimed", async () => {

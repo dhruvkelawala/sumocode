@@ -77,13 +77,28 @@ function pathInside(parent, child) {
 	return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== "..");
 }
 
+async function realpathNearestExisting(path) {
+	let current = resolve(path);
+	for (;;) {
+		try {
+			return await realpath(current);
+		} catch (error) {
+			if (error?.code !== "ENOENT") throw error;
+			const parent = dirname(current);
+			if (parent === current) return current;
+			current = parent;
+		}
+	}
+}
+
 async function assertOutOutsideCheckout(callerRoot, outDir) {
-	// Create the user-requested report directory first, then compare real paths:
-	// a --out that is (or points through a symlink at) the checkout must fail
-	// before any report write can dirty it.
+	// Containment is checked against the nearest EXISTING ancestor before any
+	// directory is created: a --out inside the checkout must be rejected
+	// without leaving an untracked directory behind. Any symlink component
+	// already exists, so the ancestor walk still resolves through it.
+	const [callerReal, outAncestorReal] = await Promise.all([realpath(callerRoot), realpathNearestExisting(outDir)]);
+	if (pathInside(callerReal, outAncestorReal)) throw new Error("--out must be outside the compared checkout");
 	await mkdir(outDir, { recursive: true });
-	const [callerReal, outReal] = await Promise.all([realpath(callerRoot), realpath(outDir)]);
-	if (pathInside(callerReal, outReal)) throw new Error("--out must be outside the compared checkout");
 }
 
 async function runGit(cwd, args) {
@@ -493,11 +508,19 @@ export async function runStartupComparison(options, dependencies = {}) {
 	let dependenciesUnlinked = false;
 	let retainedForLiveProcess = false;
 	let retainedForAuditFailure = false;
+	let retainedForSetupFailure = false;
 	let auditError;
 	try {
 		await assertCheckoutClean(callerRoot);
 		const [baselineSha, candidateSha] = await Promise.all([resolveRef(options.baseRef), resolveRef(options.candidateRef ?? "HEAD")]);
-		worktrees = await makeWorktrees({ callerRoot, campaignDir, baselineSha, candidateSha });
+		try {
+			worktrees = await makeWorktrees({ callerRoot, campaignDir, baselineSha, candidateSha });
+		} catch (error) {
+			// Partial setup state (half-created worktrees) may hold the only
+			// evidence of why setup failed: retain the campaign, never rm -rf it.
+			retainedForSetupFailure = true;
+			throw error;
+		}
 		const armSamples = { baseline: [], candidate: [] };
 		const schedule = executionSchedule(options.samples);
 		const executedOrder = [];
@@ -581,7 +604,7 @@ export async function runStartupComparison(options, dependencies = {}) {
 		return report;
 	} finally {
 		const cleanupSteps = [];
-		if (retainedForLiveProcess || retainedForAuditFailure) {
+		if (retainedForLiveProcess || retainedForAuditFailure || retainedForSetupFailure) {
 			cleanupSteps.push(async () => { dependencies.onFixtureRetained?.(campaignDir); });
 		} else {
 			if (!dependenciesUnlinked && worktrees?.unlinkDependencies) cleanupSteps.push(() => worktrees.unlinkDependencies());

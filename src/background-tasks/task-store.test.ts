@@ -22,7 +22,6 @@ function privateWrite(path: string, contents: string): void {
 // Deterministic scan-order seam: refreshIndex must reach the same ownership
 // decision no matter which duplicate directory readdirSync visits first.
 const scanOrderOverride = vi.hoisted(() => new Map<string, Dirent[]>());
-const directoryReadCounts = vi.hoisted(() => new Map<string, number>());
 // oxlint-disable-next-line anti-slop/no-module-mocking -- readdir order is not controllable through the real fs and the store deliberately has no injection seam for it; this wrapper only substitutes a seeded Dirent array for one exact path and passes every other call through to the real fs.
 vi.mock("node:fs", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:fs")>();
@@ -30,7 +29,6 @@ vi.mock("node:fs", async (importOriginal) => {
 	// exact scanned path; every other call passes through to the real fs.
 	const realReaddir = actual.readdirSync as (path: string, options?: { withFileTypes?: boolean }) => string[] | Dirent[];
 	const readdirSync = (path: string, options?: { withFileTypes?: boolean }): string[] | Dirent[] => {
-		directoryReadCounts.set(path, (directoryReadCounts.get(path) ?? 0) + 1);
 		const seeded = scanOrderOverride.get(path);
 		return seeded ?? realReaddir(path, options);
 	};
@@ -116,19 +114,7 @@ describe("TerminalTaskStore", () => {
 
 	afterEach(() => {
 		scanOrderOverride.clear();
-		directoryReadCounts.clear();
 		rmSync(rootDir, { recursive: true, force: true });
-	});
-
-	it("lists each task directory once while validating known artifacts", () => {
-		const store = new TerminalTaskStore({ rootDir });
-		const record = snapshot(store, "term-artifact-list");
-		const directory = dirname(record.logFile);
-		privateWrite(join(directory, "run.sh"), "exit 0\n");
-		privateWrite(join(directory, "meta.json"), `${JSON.stringify(record)}\n`);
-
-		expect(store.refreshIndex().snapshots).toEqual([record]);
-		expect(directoryReadCounts.get(directory)).toBe(1);
 	});
 
 	it("places the default durable store in the current user's Pi agent directory", () => {

@@ -852,10 +852,9 @@ export class TerminalTaskStore {
 		if (basename(taskDirectory) !== `${snapshot.id}-${snapshot.createdAt}`) throw new Error("Terminal task directory does not match id and creation time");
 		const expectedLogFile = join(taskDirectory, "output.log");
 		if (snapshot.logFile !== expectedLogFile) throw new Error("Terminal log path must be canonical and store-confined");
-		const artifactNames = new Set(readdirSync(taskDirectory));
 		for (const name of KNOWN_ARTIFACT_NAMES) {
-			if (!artifactNames.has(name)) continue;
 			const artifact = join(taskDirectory, name);
+			if (!pathExists(artifact)) continue;
 			assertPrivateFile(artifact);
 			if (realpathSync(artifact) !== artifact) throw new Error(`Terminal artifact must not escape its task directory: ${artifact}`);
 		}

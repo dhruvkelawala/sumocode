@@ -63,7 +63,7 @@ export function startupCompareOptions(argv) {
 			case "--base": options.baseRef = value; index += 1; break;
 			case "--candidate": options.candidateRef = value; index += 1; break;
 			case "--samples": options.samples = positiveInteger(value, arg); index += 1; break;
-			case "--fixture-count": options.fixtureCount = positiveInteger(value, arg); index += 1; break;
+			case "--fixture-count": options.fixtureCount = value === "0" ? 0 : positiveInteger(value, arg); index += 1; break;
 			case "--out": options.outDir = resolve(value); index += 1; break;
 			default: throw new Error(`unknown option: ${arg}`);
 		}

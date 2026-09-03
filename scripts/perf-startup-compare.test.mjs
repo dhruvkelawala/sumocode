@@ -195,6 +195,10 @@ async function harness(options = {}) {
 		});
 	});
 
+	it("accepts an empty terminal fixture to isolate fixed startup cost", () => {
+		expect(startupCompareOptions(["--base", "HEAD", "--fixture-count", "0"]).fixtureCount).toBe(0);
+	});
+
 	it("rejects oversized sample counts instead of accepting Infinity", () => {
 		expect(() => startupCompareOptions(["--base", "HEAD", "--samples", "9".repeat(400)]))
 			.toThrow("--samples requires a positive integer");

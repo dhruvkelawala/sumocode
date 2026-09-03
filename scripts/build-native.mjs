@@ -12,7 +12,7 @@
 // Nothing produced here is ever committed: dist/** is git-ignored (#439).
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -22,7 +22,9 @@ const root = resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
 
 const BUN_PIN = readFileSync(resolve(root, ".bun-version"), "utf8").trim();
+const PI_PIN = "0.84.3";
 const { version } = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
+const BEDROCK_ENTRY_BLOCK = 'globalThis.__sumocodeStartupMark("bedrock_import_start");\nawait import("./register-bedrock.js");\nglobalThis.__sumocodeStartupMark("after_bedrock_import");\n';
 
 function fail(message) {
 	console.error(`[sumocode] build:native: ${message}`);
@@ -115,6 +117,33 @@ async function buildExtensionBundle(outPath) {
 	console.log(`[sumocode] extension bundle: ${outPath} (${output.text.length} bytes, externals: ${[...bareImports].join(", ") || "none"})`);
 }
 
+function makeNativePiBuildCopy(piPkg) {
+	const piVersion = JSON.parse(readFileSync(join(piPkg, "package.json"), "utf8")).version;
+	if (piVersion !== PI_PIN) fail(`Bedrock-free child patch expects Pi ${PI_PIN}, found ${piVersion}`);
+
+	const buildDir = resolve(root, "dist/native/.pi-build");
+	rmSync(buildDir, { recursive: true, force: true });
+	mkdirSync(buildDir, { recursive: true });
+	cpSync(join(piPkg, "dist"), join(buildDir, "dist"), { recursive: true });
+	copyFileSync(join(piPkg, "package.json"), join(buildDir, "package.json"));
+
+	const cliPath = join(buildDir, "dist/bun/cli.js");
+	const cliSource = readFileSync(cliPath, "utf8");
+	const matches = cliSource.split(BEDROCK_ENTRY_BLOCK).length - 1;
+	if (matches !== 1) fail(`Pi ${PI_PIN} Bedrock patch expected one entry block, found ${matches}`);
+	writeFileSync(cliPath, cliSource.replace(BEDROCK_ENTRY_BLOCK, ""));
+	return buildDir;
+}
+
+function bedrockInputs(metafilePath) {
+	const metafile = JSON.parse(readFileSync(metafilePath, "utf8"));
+	return Object.keys(metafile.inputs).filter((path) =>
+		path.includes("register-bedrock")
+		|| path.includes("bedrock-provider")
+		|| path.includes("@aws-sdk/client-bedrock-runtime"),
+	);
+}
+
 async function main() {
 	await import("./instrument-pi-startup.mjs");
 	const bunBin = resolveBun();
@@ -139,15 +168,22 @@ async function main() {
 	const piPkg = resolve(dirname(piMainEntry), "..");
 	if (!existsSync(join(piPkg, "package.json"))) fail(`cannot locate installed Pi package root at ${piPkg}`);
 	const piRequire = createRequire(pathToFileURL(piMainEntry));
+	const piBuildDir = makeNativePiBuildCopy(piPkg);
+	const piMetafile = resolve(root, "dist/native/sumocode-pi.metafile.json");
 	run(bunBin, [
 		"build",
 		"--compile",
 		"--no-compile-autoload-bunfig",
 		"--no-compile-autoload-dotenv",
+		`--metafile=${piMetafile}`,
 		"--outfile", join(binDir, "sumocode-pi"),
-		join(piPkg, "dist/bun/cli.js"),
-		join(piPkg, "dist/utils/image-resize-worker.js"),
+		join(piBuildDir, "dist/bun/cli.js"),
+		join(piBuildDir, "dist/utils/image-resize-worker.js"),
 	]);
+	rmSync(piBuildDir, { recursive: true, force: true });
+	const includedBedrockInputs = bedrockInputs(piMetafile);
+	if (includedBedrockInputs.length > 0) fail(`compiled Pi child still includes Bedrock: ${includedBedrockInputs.join(", ")}`);
+	console.log(`[sumocode] compiled Pi child excludes Bedrock registration (${piMetafile})`);
 	const piDist = join(piPkg, "dist");
 	// Pi sidecars must sit BESIDE bin/sumocode-pi: a compiled Pi resolves its
 	// package dir as dirname(process.execPath) (getPackageDir/getThemesDir in

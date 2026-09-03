@@ -237,22 +237,28 @@ async function readEvents(path) {
 	}
 }
 
+// The only inherited keys an offline benchmark child may need: lookup paths
+// and locale/timezone, plus the Windows runtime keys Node requires. Everything
+// else (credentials, sockets, provider state) stays process-local.
+const INHERITED_SAMPLE_ENV_KEYS = Object.freeze([
+	"PATH",
+	"LANG",
+	"LC_ALL",
+	"TZ",
+	"SHELL",
+	"SystemRoot",
+	"SystemDrive",
+	"windir",
+	"COMSPEC",
+	"PATHEXT",
+]);
+
 /** Build one sample's isolated, operator-free environment. */
 export function defaultSampleEnvironment(checkout, agentDir, diagFile, inheritedEnv = process.env) {
-	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- ProcessEnv values are string | undefined at the child-process boundary
-	const env = Object.fromEntries(Object.entries(inheritedEnv).filter(([, value]) => typeof value === "string"));
-	for (const key of Object.keys(env)) {
-		// SUMOCODE_/SUMO_TUI: launcher/runtime policy. HERDR_: inherited Herdr pane
-		// state would activate the child's Herdr bridge and attach it to the
-		// operator's socket (same strip list as the integration preflight).
-		// Credential-shaped keys (API keys, tokens, secrets, passwords) never
-		// belong in an offline benchmark child.
-		if (
-			key.startsWith("SUMOCODE_")
-			|| key.startsWith("SUMO_TUI")
-			|| key.startsWith("HERDR_")
-			|| /(?:API_?KEY|SECRET|TOKEN|PASSWORD|CREDENTIALS?)/i.test(key)
-		) delete env[key];
+	const env = {};
+	for (const key of INHERITED_SAMPLE_ENV_KEYS) {
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- ProcessEnv values are string | undefined at the child-process boundary
+		if (typeof inheritedEnv[key] === "string") env[key] = inheritedEnv[key];
 	}
 	return {
 		...env,

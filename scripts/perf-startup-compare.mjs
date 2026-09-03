@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { cpus, platform, arch, tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -441,6 +441,12 @@ function executionSchedule(samples) {
 	return schedule;
 }
 
+/** Report writes must never follow a pre-existing symlink at the leaf. */
+async function writeReportFile(path, contents) {
+	if ((await lstat(path).catch(() => undefined))?.isSymbolicLink()) throw new Error(`refusing to write through symlink: ${path}`);
+	await writeFile(path, contents);
+}
+
 /**
  * Compare two exact revisions. This owns fixture, worktree, sampling, privacy,
  * statistics, verdict, report, and cleanup policy; injected dependencies are
@@ -537,8 +543,8 @@ export async function runStartupComparison(options, dependencies = {}) {
 			overall: overallVerdict(metrics),
 		};
 		await mkdir(outDir, { recursive: true });
-		await writeFile(join(outDir, "startup-compare.json"), `${JSON.stringify(report, null, 2)}\n`);
-		await writeFile(join(outDir, "startup-compare.md"), markdown(report));
+		await writeReportFile(join(outDir, "startup-compare.json"), `${JSON.stringify(report, null, 2)}\n`);
+		await writeReportFile(join(outDir, "startup-compare.md"), markdown(report));
 		return report;
 	} finally {
 		const cleanupSteps = [];

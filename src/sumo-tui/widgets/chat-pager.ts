@@ -170,6 +170,7 @@ export class ChatPager extends SumoNode {
 	private readonly pendingRenderedActivityIds = new Set<string>();
 	private defaultActivityExpansionOverride: boolean | undefined;
 	private protectedActivityId: string | undefined;
+	private virtualArchiveIsPrefix = true;
 	private placeholder: ChatMessage | undefined;
 	private virtualArchivedCount = 0;
 	private sourceMessageCount = 0;
@@ -295,6 +296,7 @@ export class ChatPager extends SumoNode {
 		}
 		this.archivedMessages = [];
 		this.virtualArchivedCount = Math.max(0, acceptedMessages - renderedWindow.length);
+		this.virtualArchiveIsPrefix = true;
 		this.sourceMessageCount = messages.length;
 		this.placeholder = undefined;
 		this.unreadCount = 0;
@@ -413,8 +415,6 @@ export class ChatPager extends SumoNode {
 		this.activityExpansionStates.set(id, expanded);
 		const persistenceKey = this.activityExpansionPersistenceKeys.get(id) ?? id;
 		this.setPersistedActivityExpansion(persistenceKey, expanded);
-		this.protectedActivityId = id;
-		this.materializeVirtualizedActivity(id);
 		this.applyActivityExpansion(id, expanded);
 		this.onActivityExpansionChange?.(persistenceKey, expanded);
 	}
@@ -449,6 +449,14 @@ export class ChatPager extends SumoNode {
 
 	public getKnownActivityIds(): readonly string[] {
 		return [...this.currentActivityIds()];
+	}
+
+	/** Materialize one feed Activity for direct navigation without changing expansion state. */
+	public revealActivity(id: string): boolean {
+		if (!this.currentActivityIds().has(id)) return false;
+		this.protectedActivityId = id;
+		this.materializeVirtualizedActivity(id);
+		return this.activeMessages.some((message) => this.feedOwnedActivityIds.get(message)?.has(id));
 	}
 
 	public toggleActivityExpansion(id?: string): boolean {
@@ -533,6 +541,7 @@ export class ChatPager extends SumoNode {
 		this.virtualizedTranscriptClaimIds.clear();
 		this.defaultActivityExpansionOverride = undefined;
 		this.protectedActivityId = undefined;
+		this.virtualArchiveIsPrefix = true;
 		this.placeholder = undefined;
 		this.unreadCount = 0;
 		this.lastReadIndex = -1;
@@ -871,26 +880,42 @@ export class ChatPager extends SumoNode {
 		});
 	}
 
-	private addChatMessage(message: ChatMessage, sourceIndex = this.sourceMessageCount, transcriptOwned = true, feedActivityId?: string): ChatMessage {
+	private addChatMessage(
+		message: ChatMessage,
+		sourceIndex = this.sourceMessageCount,
+		transcriptOwned = true,
+		feedActivityId?: string,
+		activeIndex = this.activeMessages.length,
+		countAsNew = true,
+	): ChatMessage {
 		const wasReadingHistory = this.isReadingHistory();
 		const addedLines = message.getEstimatedHeight(this.scrollBox.getComputedWidth());
-		this.activeMessages.push(message);
-		this.activeMessageSourceIndices.push(sourceIndex);
+		const insertionIndex = Math.max(0, Math.min(this.activeMessages.length, activeIndex));
+		this.activeMessages.splice(insertionIndex, 0, message);
+		this.activeMessageSourceIndices.splice(insertionIndex, 0, sourceIndex);
 		if (transcriptOwned) {
 			this.transcriptOwnedMessages.add(message);
 			this.sourceMessageCount = Math.max(this.sourceMessageCount, sourceIndex + 1);
 		}
 		if (feedActivityId) this.addFeedOwnership(message, feedActivityId);
-		this.scrollBox.addChild(message);
+		if (insertionIndex === this.activeMessages.length - 1) this.scrollBox.addChild(message);
+		else this.rebuildRenderedChildren();
 		const virtualized = this.virtualizeIfNeeded();
-		if (wasReadingHistory) this.unreadCount += 1;
+		if (wasReadingHistory && countAsNew) this.unreadCount += 1;
 		this.scrollBox.notifyContentChanged(addedLines + virtualized.addedLines, virtualized.removedLines);
 		this.scheduleRender();
 		return message;
 	}
 
-	private addPreparedMessage(message: PreparedChatMessage, sourceIndex?: number, transcriptOwned = true, feedActivityId?: string): ChatMessage {
-		return this.addChatMessage(this.createChatMessage(message), sourceIndex, transcriptOwned, feedActivityId);
+	private addPreparedMessage(
+		message: PreparedChatMessage,
+		sourceIndex?: number,
+		transcriptOwned = true,
+		feedActivityId?: string,
+		activeIndex?: number,
+		countAsNew?: boolean,
+	): ChatMessage {
+		return this.addChatMessage(this.createChatMessage(message), sourceIndex, transcriptOwned, feedActivityId, activeIndex, countAsNew);
 	}
 
 	private createChatMessage(message: PreparedChatMessage): ChatMessage {
@@ -1217,8 +1242,45 @@ export class ChatPager extends SumoNode {
 		const transcriptOwned = this.virtualizedTranscriptFeedActivityIds.has(id);
 		const removedLines = this.releaseVirtualizedFeedActivity(id);
 		if (transcriptOwned) this.materializedArchivedTranscriptFeedActivityIds.add(id);
-		this.addPreparedMessage(prepareChatMessage(activityCardViewModel(activity)), this.nextFeedSourceIndex--, false, id);
+		this.addPreparedMessage(
+			prepareChatMessage(activityCardViewModel(activity)),
+			this.nextFeedSourceIndex--,
+			false,
+			id,
+			this.feedInsertionIndex(id),
+			false,
+		);
 		if (removedLines > 0) this.scrollBox.notifyContentChanged(0, removedLines);
+	}
+
+	private feedInsertionIndex(id: string): number {
+		const order = new Map([...this.feedActivities.keys()].map((activityId, index) => [activityId, index]));
+		const targetOrder = order.get(id);
+		if (targetOrder === undefined) return this.activeMessages.length;
+		const laterIndex = this.activeMessages.findIndex((message) => {
+			if (this.transcriptOwnedMessages.has(message)) return false;
+			return [...this.feedOwnedActivityIds.get(message) ?? []]
+				.some((activityId) => (order.get(activityId) ?? -1) > targetOrder);
+		});
+		return laterIndex === -1 ? this.activeMessages.length : laterIndex;
+	}
+
+	private isLiveFeedCard(message: ChatMessage): boolean {
+		const renderedActivities = this.activitiesFromBlocks(message.toSnapshot().blocks ?? []);
+		for (const id of this.feedOwnedActivityIds.get(message) ?? []) {
+			const feedActivity = this.feedActivities.get(id);
+			const renderedActivity = renderedActivities.find((activity) =>
+				activity.id === id || (feedActivity !== undefined && sameActivity(activity, feedActivity))
+			);
+			const status = renderedActivity?.status ?? (feedActivity ? this.effectiveFeedStatus(feedActivity) : undefined);
+			if (status !== undefined && !isSettledActivityStatus(status)) return true;
+		}
+		return false;
+	}
+
+	private canVirtualizeMessage(message: ChatMessage): boolean {
+		if (this.messageOwnsProtectedActivity(message)) return false;
+		return !this.transcriptOwnedMessages.has(message) || !this.isLiveFeedCard(message);
 	}
 
 	private messageOwnsProtectedActivity(message: ChatMessage): boolean {
@@ -1238,16 +1300,17 @@ export class ChatPager extends SumoNode {
 		const width = this.scrollBox.getComputedWidth();
 		while (this.activeMessages.length > this.maxRenderedMessages) {
 			let archivedIndex = this.activeMessages.findIndex((message) =>
-				!this.messageOwnsProtectedActivity(message) && !this.messageIntersectsViewport(message)
+				this.canVirtualizeMessage(message) && !this.messageIntersectsViewport(message)
 			);
 			if (archivedIndex === -1) {
-				archivedIndex = this.activeMessages.findIndex((message) => !this.messageOwnsProtectedActivity(message));
+				archivedIndex = this.activeMessages.findIndex((message) => this.canVirtualizeMessage(message));
 			}
 			if (archivedIndex === -1) break;
 			const [archived] = this.activeMessages.splice(archivedIndex, 1);
 			this.activeMessageSourceIndices.splice(archivedIndex, 1);
 			if (!archived) break;
-			removedLines += archived.getEstimatedHeight(width);
+			if (archivedIndex === 0) removedLines += archived.getEstimatedHeight(width);
+			else this.virtualArchiveIsPrefix = false;
 			if (archived.parent === this.scrollBox) this.scrollBox.removeChild(archived);
 			const transcriptOwned = this.transcriptOwnedMessages.has(archived);
 			if (transcriptOwned) {
@@ -1290,7 +1353,8 @@ export class ChatPager extends SumoNode {
 	}
 
 	private placeholderText(): string {
-		return `── ${this.getArchivedMessageCount()} earlier messages ──`;
+		const label = this.virtualArchiveIsPrefix ? "earlier" : "hidden";
+		return `── ${this.getArchivedMessageCount()} ${label} messages ──`;
 	}
 
 	private getRenderedEstimatedHeight(width: number): number {

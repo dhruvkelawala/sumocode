@@ -789,6 +789,36 @@ describe("ChatPager", () => {
 		root.dispose();
 	});
 
+	it("does not use expansion state as Activity navigation", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 1 });
+		chat.reconcileFeedActivities([
+			{ id: "older", kind: "terminal", title: "older", status: "running", createdAt: 1 },
+			{ id: "newer", kind: "terminal", title: "newer", status: "running", createdAt: 2 },
+		]);
+
+		chat.setActivityExpansion("older", false);
+
+		expect(chat.getRenderedMessages()[0]?.text).toContain("newer");
+		expect(chat.getActivityExpansion("older")).toBe(false);
+		root.dispose();
+	});
+
+	it("keeps a transcript-owned live Activity node until source data can reconstruct it", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 1 });
+		const live = { id: "owned-live", kind: "terminal" as const, title: "owned live", status: "running" as const };
+		chat.reconcileFeedActivities([live]);
+		chat.addViewModel({ id: "completion", role: "system", displayName: "SYSTEM", blocks: [{ type: "activity", activity: live }] }, 0);
+
+		chat.addMessage("sumo", "later");
+
+		expect(chat.getRenderedMessages().some((message) => message.text.includes("owned live"))).toBe(true);
+		root.dispose();
+	});
+
 	it("bounds live feed cards with transcript virtualization and removes expired ownership", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());

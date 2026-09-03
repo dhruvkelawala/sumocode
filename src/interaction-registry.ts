@@ -120,16 +120,16 @@ export class InteractionRegistry {
 export interface InstallSumoInteractionsOptions {
 	readonly reporter?: InteractionDiagnosticReporter;
 	readonly subagentManager?: SubagentManager;
-	readonly installUiSurfaces?: (registry: InteractionRegistry) => void;
+	readonly installUiSurfaces: ((registry: InteractionRegistry) => void) | false;
 }
 
 export function createInteractionRegistry(pi: ExtensionAPI, reporter?: InteractionDiagnosticReporter): InteractionRegistry {
 	return new InteractionRegistry(pi, reporter);
 }
 
-export function installSumoInteractions(pi: ExtensionAPI, options: InstallSumoInteractionsOptions = {}): InteractionRegistrySnapshot {
+export function installSumoInteractions(pi: ExtensionAPI, options: InstallSumoInteractionsOptions): InteractionRegistrySnapshot {
 	const registry = createInteractionRegistry(pi, options.reporter);
-	options.installUiSurfaces?.(registry);
+	if (options.installUiSurfaces) options.installUiSurfaces(registry);
 	registry.install("commands.cursor", registerCursorCommand);
 	registry.install("commands.diff", registerDiffCommand);
 	registry.install("commands.divine-query", registerDivineQueryCommand);

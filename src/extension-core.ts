@@ -146,5 +146,5 @@ export function installRpcChildProfile(pi: ExtensionAPI): void {
 	registerSumoReloadCommand(pi);
 	registerRolesCommand(pi);
 	registerAccountsCommand(pi);
-	installSumoInteractions(pi, { subagentManager });
+	installSumoInteractions(pi, { subagentManager, installUiSurfaces: false });
 }

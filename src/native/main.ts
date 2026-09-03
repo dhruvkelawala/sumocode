@@ -896,11 +896,13 @@ async function runRpcBranch(parsed: ParsedLaunch): Promise<void> {
 			process.on("SIGINT", handleEarlySigint);
 			process.on("SIGTERM", handleEarlySigterm);
 			try {
+				writeStartupMark("child_spawn_start", { mode: "native" });
 				preSpawnedChild = spawn(plan.command, [...plan.args], {
 					cwd: plan.cwd,
 					env: plan.env,
 					stdio: ["pipe", "pipe", "pipe"],
 				});
+				writeStartupMark("child_spawned", { mode: "native" });
 				preSpawnedChild.once("error", (error) => {
 					if (preSpawnedChild !== undefined) Reflect.set(preSpawnedChild, preSpawnErrorSymbol, error);
 				});

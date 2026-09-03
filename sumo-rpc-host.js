@@ -183,11 +183,13 @@ if (process.stdout.isTTY === true) {
 		process.on("SIGINT", handleEarlySigint);
 		process.on("SIGTERM", handleEarlySigterm);
 		try {
+			writeStartupMark("child_spawn_start", { mode: "node-bundle" });
 			preSpawnedChild = spawn(plan.command, [...plan.args], {
 				cwd: plan.cwd,
 				env: plan.env,
 				stdio: ["pipe", "pipe", "pipe"],
 			});
+			writeStartupMark("child_spawned", { mode: "node-bundle" });
 			// Spawn failures arrive asynchronously. Own the error immediately so it
 			// cannot become an unhandled EventEmitter error while the host imports;
 			// SumoRpcClient adopts and reports the saved error in start().

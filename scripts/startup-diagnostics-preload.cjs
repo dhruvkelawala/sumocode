@@ -10,11 +10,12 @@ const publicStartupDiagnostics = process.env.SUMOCODE_PUBLIC_STARTUP_DIAGNOSTICS
 const shouldInstrument = entrypoint.includes("pi-coding-agent") || entrypoint.endsWith("/pi") || entrypoint.endsWith("/pi.js");
 
 if (diagFile && publicStartupDiagnostics) {
-	if (role === "host") {
+	global.__sumocodeStartupMark = (event, fields = {}) => {
 		try {
-			appendFileSync(diagFile, `${JSON.stringify({ ts: Date.now(), event: "process_preload_start", role })}\n`, { encoding: "utf8", mode: 0o600 });
+			appendFileSync(diagFile, `${JSON.stringify({ ts: Date.now(), event, pid: process.pid, ...fields })}\n`, { encoding: "utf8", mode: 0o600 });
 		} catch {}
-	}
+	};
+	global.__sumocodeStartupMark(role === "host" ? "process_preload_start" : "child_entry", { role });
 } else if (diagFile && shouldInstrument && !global.__sumocodeStartupDiagnosticsInstalled) {
 	global.__sumocodeStartupDiagnosticsInstalled = true;
 	const startedAt = performance.now();

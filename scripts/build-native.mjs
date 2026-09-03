@@ -116,6 +116,7 @@ async function buildExtensionBundle(outPath) {
 }
 
 async function main() {
+	await import("./instrument-pi-startup.mjs");
 	const bunBin = resolveBun();
 	const tag = platformTag();
 	const outDir = resolve(root, "dist/native", `sumocode-${version}-${tag}`);

@@ -47,9 +47,9 @@ describe("buildChildSpawnPlan extension entry", () => {
 		expect(result?.env).toMatchObject({ SUMOCODE_RPC_CHILD: "1", SUMO_TUI: "0" });
 	});
 
-	it("uses source directly for the explicit bundle override", () => {
+	it("uses the RPC-only source entry for the explicit bundle override", () => {
 		const root = makeRoot();
-		expect(plan(root, { SUMOCODE_EXTENSION_BUNDLE: "0" })?.args[3]).toBe(join(root, "src", "extension.ts"));
+		expect(plan(root, { SUMOCODE_EXTENSION_BUNDLE: "0" })?.args[3]).toBe(join(root, "src", "rpc-child-extension.ts"));
 	});
 
 	it("returns no plan when PI_BIN is absent", () => {

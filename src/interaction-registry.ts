@@ -1,6 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { SubagentManager } from "./subagents/manager.js";
-import { installCommandPalette } from "./command-palette.js";
 import { registerCursorCommand } from "./commands/cursor.js";
 import { registerDiffCommand } from "./commands/diff.js";
 import { registerDivineQueryCommand } from "./commands/divine-query.js";
@@ -16,7 +15,6 @@ import { registerThemeCommand } from "./commands/theme.js";
 import { registerThemeCheckCommand } from "./commands/theme-check.js";
 import { registerWorktreeCommand } from "./commands/worktree.js";
 import { registerMemoryCommand } from "./memory-editor.js";
-import { installSidebar } from "./sidebar.js";
 
 export type InteractionKind = "command" | "shortcut";
 export type InteractionConflictAction = "skipped";
@@ -122,7 +120,7 @@ export class InteractionRegistry {
 export interface InstallSumoInteractionsOptions {
 	readonly reporter?: InteractionDiagnosticReporter;
 	readonly subagentManager?: SubagentManager;
-	readonly includeUiSurfaces?: boolean;
+	readonly installUiSurfaces?: (registry: InteractionRegistry) => void;
 }
 
 export function createInteractionRegistry(pi: ExtensionAPI, reporter?: InteractionDiagnosticReporter): InteractionRegistry {
@@ -131,10 +129,7 @@ export function createInteractionRegistry(pi: ExtensionAPI, reporter?: Interacti
 
 export function installSumoInteractions(pi: ExtensionAPI, options: InstallSumoInteractionsOptions = {}): InteractionRegistrySnapshot {
 	const registry = createInteractionRegistry(pi, options.reporter);
-	if (options.includeUiSurfaces !== false) {
-		registry.install("command-palette", installCommandPalette);
-		registry.install("sidebar", installSidebar);
-	}
+	options.installUiSurfaces?.(registry);
 	registry.install("commands.cursor", registerCursorCommand);
 	registry.install("commands.diff", registerDiffCommand);
 	registry.install("commands.divine-query", registerDivineQueryCommand);

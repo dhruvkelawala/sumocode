@@ -1,39 +1,8 @@
 import { createRequire } from "node:module";
 import { Worker } from "node:worker_threads";
+import { isNativeRuntime } from "../../native/paths.js";
 import type { CachedChrome } from "./chrome-cache.js";
-
-const WORKER_SOURCE = String.raw`
-const { parentPort, workerData } = require("node:worker_threads");
-const { pathToFileURL } = require("node:url");
-
-(async () => {
-	const importedJiti = await import(pathToFileURL(workerData.jitiPath).href);
-	const jiti = importedJiti.createJiti(workerData.modulePath, {
-		moduleCache: true,
-		tryNative: false,
-	});
-	const cache = await jiti.import(workerData.modulePath);
-	let operations = Promise.resolve();
-	parentPort.on("message", (request) => {
-		operations = operations.then(async () => {
-			try {
-				if (workerData.operationDelayMs > 0) {
-					await new Promise((resolve) => setTimeout(resolve, workerData.operationDelayMs));
-				}
-				const options = { stateRoot: workerData.stateRoot };
-				const value = request.operation === "read"
-					? cache.readCachedChrome(request.cwd, options)
-					: (cache.writeCachedChrome(request.cwd, request.chrome, options), true);
-				parentPort.postMessage({ id: request.id, value });
-			} catch (error) {
-				parentPort.postMessage({ id: request.id, error: error instanceof Error ? error.message : String(error) });
-			}
-		});
-	});
-})().catch((error) => {
-	parentPort.postMessage({ fatal: error instanceof Error ? error.message : String(error) });
-});
-`;
+import { CHROME_CACHE_WORKER_EVAL_SOURCE } from "./chrome-cache-worker.js";
 
 /** Payload the worker posts back for a completed request (reads: chrome; writes: ack). */
 interface ChromeCacheReadValue extends CachedChrome {}
@@ -149,16 +118,29 @@ export class ChromeCacheWorkerClient {
 
 	private ensureWorker(): Worker {
 		if (this.worker) return this.worker;
-		const require = createRequire(import.meta.url);
-		const worker = new Worker(WORKER_SOURCE, {
-			eval: true,
-			workerData: {
-				stateRoot: this.options.stateRoot,
-				modulePath: this.options.modulePath,
-				jitiPath: require.resolve("jiti"),
-				operationDelayMs: Math.max(0, this.options.operationDelayMs ?? 0),
-			},
-		});
+		// Plan 117 seam 2: dev/Node keeps the eval'd jiti bootstrap verbatim;
+		// native starts the embedded compiled worker entry (no jiti on disk).
+		let worker: Worker;
+		if (isNativeRuntime()) {
+			worker = new Worker(new URL("./chrome-cache-worker.ts", import.meta.url), {
+				workerData: {
+					stateRoot: this.options.stateRoot,
+					modulePath: this.options.modulePath,
+					operationDelayMs: Math.max(0, this.options.operationDelayMs ?? 0),
+				},
+			});
+		} else {
+			const require = createRequire(import.meta.url);
+			worker = new Worker(CHROME_CACHE_WORKER_EVAL_SOURCE, {
+				eval: true,
+				workerData: {
+					stateRoot: this.options.stateRoot,
+					modulePath: this.options.modulePath,
+					jitiPath: require.resolve("jiti"),
+					operationDelayMs: Math.max(0, this.options.operationDelayMs ?? 0),
+				},
+			});
+		}
 		worker.unref();
 		worker.on("message", (reply: ChromeCacheWorkerReply) => {
 			if (reply.fatal !== undefined) {

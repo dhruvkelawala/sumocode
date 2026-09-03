@@ -22,6 +22,7 @@ import {
 	markSumocodeInstalledInProcess,
 	resetSumocodeProcessInstallLatchForTests,
 	shouldInstallNativeTaskTool,
+	shouldNoopHelperSubprocess,
 } from "./extension-core.js";
 import { installFastMode } from "./fast-mode.js";
 import { installFooter } from "./footer.js";
@@ -45,7 +46,9 @@ export {
 	markSumocodeInstalledInProcess,
 	resetSumocodeProcessInstallLatchForTests,
 	shouldInstallNativeTaskTool,
+	shouldNoopHelperSubprocess,
 };
+export type { HelperSubprocessGuardOptions } from "./extension-core.js";
 
 const SUMOCODE_PACKAGE_NAME = "@dhruvkelawala/sumocode";
 
@@ -151,21 +154,6 @@ export function shouldNoopDuplicateInstalledExtension(options: DuplicateInstalle
 	}
 	if (env.SUMOCODE_LAUNCHER) return true;
 	return findActiveSumoDevTree(options.cwd ?? process.cwd(), options) !== undefined;
-}
-
-export interface HelperSubprocessGuardOptions {
-	readonly env?: NodeJS.ProcessEnv;
-}
-
-/**
- * Bail out of SumoCode installation when a background-terminal shell wrapper
- * launches a helper process that could otherwise inherit the extension via
- * `-e`. Loading the full Cathedral UI inside it wastes startup time and risks
- * recursive tool registration.
- */
-export function shouldNoopHelperSubprocess(options: HelperSubprocessGuardOptions = {}): boolean {
-	const env = options.env ?? process.env;
-	return env.SUMOCODE_BG_CHILD === "1";
 }
 
 export interface TaskModeOptions {

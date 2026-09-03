@@ -3,6 +3,7 @@ import {
 	claimSumocodeRuntime,
 	installRpcChildProfile,
 	shouldInstallNativeTaskTool,
+	shouldNoopHelperSubprocess,
 } from "./extension-core.js";
 import { logDiagnostic } from "./sumo-tui/runtime/diagnostics.js";
 import { applyStartupTheme } from "./themes/index.js";
@@ -18,6 +19,7 @@ export default function rpcChildSumocode(pi: ExtensionAPI): void {
 		sumoTui: process.env.SUMO_TUI ?? null,
 		launcher: process.env.SUMOCODE_LAUNCHER ?? null,
 	});
+	if (shouldNoopHelperSubprocess()) return;
 	if (!claimSumocodeRuntime(pi)) return;
 	applyStartupTheme();
 	installRpcChildProfile(pi);

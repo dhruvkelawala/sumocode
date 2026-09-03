@@ -381,6 +381,18 @@ describe("rpc child profile", () => {
 		}
 	});
 
+	it("keeps background helper subprocesses inert through the source-only entry", () => {
+		process.env.SUMOCODE_BG_CHILD = "1";
+		const { pi } = buildPiStub();
+		// SAFETY: the pi double supplies the register*/on surfaces the source entry would install on.
+		rpcChildSumocode(pi as never);
+
+		expect(pi.registerCommand).not.toHaveBeenCalled();
+		expect(pi.registerTool).not.toHaveBeenCalled();
+		expect(pi.on).not.toHaveBeenCalled();
+		expect(isSumocodeAlreadyInstalledInProcess(pi)).toBe(false);
+	});
+
 	it("keeps tools and commands and skips retained chrome", async () => {
 		const previousRpc = process.env.SUMOCODE_RPC_CHILD;
 		const previousTask = process.env.SUMOCODE_NATIVE_TASK;

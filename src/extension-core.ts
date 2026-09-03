@@ -28,6 +28,15 @@ const PROCESS_INSTALL_LATCH = Symbol.for("sumocode.extension.processInstallLatch
 type ExistsFn = (path: string) => boolean;
 type LatchScope = { [PROCESS_INSTALL_LATCH]?: WeakSet<object> };
 
+export interface HelperSubprocessGuardOptions {
+	readonly env?: NodeJS.ProcessEnv;
+}
+
+/** Keep background-terminal helpers from recursively installing SumoCode. */
+export function shouldNoopHelperSubprocess(options: HelperSubprocessGuardOptions = {}): boolean {
+	return (options.env ?? process.env).SUMOCODE_BG_CHILD === "1";
+}
+
 export function hasLegacyTaskToolExtension(options: { readonly homeDir?: string; readonly exists?: ExistsFn } = {}): boolean {
 	const exists = options.exists ?? existsSync;
 	return exists(join(options.homeDir ?? homedir(), LEGACY_TASK_TOOL_EXTENSION_PATH));

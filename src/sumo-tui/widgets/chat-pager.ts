@@ -175,6 +175,7 @@ export class ChatPager extends SumoNode {
 	private placeholder: ChatMessage | undefined;
 	private virtualArchivedCount = 0;
 	private sourceMessageCount = 0;
+	private suppressSettledManagedResults = false;
 	private unreadCount = 0;
 	private lastReadIndex = -1;
 	private previousManualScroll = false;
@@ -239,7 +240,8 @@ export class ChatPager extends SumoNode {
 		const previousHeight = this.scrollBox.scrollHeight;
 		const feedActivities = [...this.feedActivities.values()];
 		const feedIndex = activityCorrelationIndex(feedActivities);
-		const messages = options.materializeSettledFeed === false
+		this.suppressSettledManagedResults = options.materializeSettledFeed === false;
+		const messages = this.suppressSettledManagedResults
 			? sourceMessages.map((message) => suppressColdSettledManagedResult(message, feedIndex))
 			: sourceMessages;
 		this.transcriptClaimedActivityStatuses.clear();
@@ -378,13 +380,16 @@ export class ChatPager extends SumoNode {
 	/** Update one rendered transcript node without resetting pager-wide state. */
 	public replaceViewModelAt(index: number, message: ChatMessageViewModel): boolean {
 		const sourceIndex = Math.floor(index);
+		const effectiveSourceMessage = this.suppressSettledManagedResults
+			? suppressColdSettledManagedResult(message, activityCorrelationIndex([...this.feedActivities.values()]))
+			: message;
 		const activeIndex = this.activeMessageSourceIndices.indexOf(sourceIndex);
 		const target = this.activeMessages[activeIndex];
 		if (!target) {
 			const previous = this.virtualizedTranscriptMessages.get(sourceIndex);
 			if (!previous) return false;
 			const previousActivities = this.activitiesFromBlocks(previous.blocks);
-			const nextActivities = this.activitiesFromBlocks(message.blocks);
+			const nextActivities = this.activitiesFromBlocks(effectiveSourceMessage.blocks);
 			this.migrateCorrelatedActivityState(previousActivities, nextActivities);
 			for (const activity of previousActivities) {
 				this.virtualizedTranscriptClaimIds.delete(activity.id);
@@ -392,19 +397,21 @@ export class ChatPager extends SumoNode {
 				if (replacement && replacement.id !== activity.id) this.transferVirtualizedFeedIdentity(activity.id, replacement.id);
 				else if (!replacement && !this.feedActivities.has(activity.id)) this.releaseVirtualizedFeedActivity(activity.id);
 			}
-			this.virtualizedTranscriptMessages.set(sourceIndex, message);
+			this.virtualizedTranscriptMessages.set(sourceIndex, effectiveSourceMessage);
 			for (const activity of nextActivities) this.noteVirtualizedTranscriptActivity(activity);
 			this.discardActivitiesRemovedByRewrite(previousActivities);
 			return true;
 		}
 		const previousBlocks = target.toSnapshot().blocks ?? [];
 		const feedIds = this.feedOwnedActivityIds.get(target) ?? new Set<string>();
-		let nextBlocks = [...message.blocks];
+		let nextBlocks = [...effectiveSourceMessage.blocks];
 		for (const id of feedIds) {
 			const activity = this.feedActivities.get(id);
 			if (activity) nextBlocks = upsertActivityBlock(nextBlocks, { type: "activity", activity });
 		}
-		const effectiveMessage = nextBlocks === message.blocks ? message : { ...message, blocks: nextBlocks };
+		const effectiveMessage = nextBlocks === effectiveSourceMessage.blocks
+			? effectiveSourceMessage
+			: { ...effectiveSourceMessage, blocks: nextBlocks };
 		const prepared = prepareChatMessage(effectiveMessage);
 		const previousActivities = this.activitiesFromBlocks(previousBlocks);
 		this.migrateCorrelatedActivityState(previousActivities, this.activitiesFromBlocks(nextBlocks));
@@ -550,6 +557,7 @@ export class ChatPager extends SumoNode {
 		this.archivedMessages = [];
 		this.virtualArchivedCount = 0;
 		this.sourceMessageCount = 0;
+		this.suppressSettledManagedResults = false;
 		this.activityExpansionOverrides.clear();
 		this.persistedActivityExpansionOverrides.clear();
 		this.activityExpansionPersistenceKeys.clear();

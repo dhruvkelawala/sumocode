@@ -225,6 +225,28 @@ describe("ChatPager", () => {
 		root.dispose();
 	});
 
+	it("keeps cold settled managed Activities suppressed during indexed replacement", async () => {
+		const { root, chat } = await makeChat(100, 10);
+		const settled = { id: "terminal-settled", kind: "terminal" as const, title: "old terminal", status: "failed" as const };
+		const message = {
+			id: "mixed",
+			role: "sumo" as const,
+			displayName: "SUMO",
+			blocks: [
+				{ type: "markdown" as const, text: "keep answer" },
+				{ type: "activity" as const, activity: settled },
+			],
+		};
+		chat.reconcileFeedActivities([settled], { materializeSettled: false });
+		chat.replaceViewModels([message], { materializeSettledFeed: false });
+
+		expect(chat.replaceViewModelAt(0, message)).toBe(true);
+
+		expect(chat.getRenderedMessages()[0]?.text).toContain("keep answer");
+		expect(chat.getRenderedMessages()[0]?.toSnapshot().blocks?.some((block) => block.type === "activity")).toBe(false);
+		root.dispose();
+	});
+
 	it("streaming while scrolled up preserves the visible position (EC-2.5)", async () => {
 		const { root, chat, buffer } = await makeChat(36, 5);
 		for (let index = 0; index < 12; index += 1) chat.addMessage("sumo", `message ${index}`);

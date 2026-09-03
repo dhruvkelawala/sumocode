@@ -170,6 +170,43 @@ describe("indexed Activity folding", () => {
 		expect(messages[0]?.blocks[0]).toMatchObject({ type: "activity", activity: { sourceId: "spawn-0", status: "succeeded" } });
 	});
 
+	it("folds a subagent update that first gains createdAt", () => {
+		const messages: ChatMessageViewModel[] = [{
+			id: "subagent-message",
+			role: "sumo",
+			displayName: "SUMO",
+			blocks: [{ type: "activity", activity: { id: "subagent:worker", kind: "subagent", title: "worker", status: "running" } }],
+		}];
+		const cursor = createFoldableBlockCursor(indexFoldableBlocks(messages));
+
+		foldBlockIntoIndexedMessages(messages, {
+			type: "activity",
+			activity: { id: "subagent:worker", kind: "subagent", title: "worker", status: "succeeded", createdAt: 10 },
+		}, cursor, { requireMatch: true });
+
+		expect(messages).toHaveLength(1);
+		expect(messages[0]?.blocks[0]).toMatchObject({ type: "activity", activity: { status: "succeeded", createdAt: 10 } });
+	});
+
+	it("keeps bare repeated subagent completion lookup constant", () => {
+		const messages: ChatMessageViewModel[] = Array.from({ length: 10_000 }, (_, index) => ({
+			id: `subagent-message-${index}`,
+			role: "sumo",
+			displayName: "SUMO",
+			blocks: [{ type: "activity", activity: { id: "subagent:worker", kind: "subagent", title: `worker ${index}`, status: "running" } }],
+		}));
+		const cursor = createFoldableBlockCursor(indexFoldableBlocks(messages));
+		resetActivityFoldOperationCountsForTests();
+
+		foldBlockIntoIndexedMessages(messages, {
+			type: "activity",
+			activity: { id: "subagent:worker", kind: "subagent", title: "complete", status: "succeeded" },
+		}, cursor, { requireMatch: true });
+
+		expect(getActivityFoldOperationCountsForTests().indexedCandidateVisits).toBe(1);
+		expect(messages.at(-1)?.blocks[0]).toMatchObject({ type: "activity", activity: { status: "succeeded" } });
+	});
+
 	it("uses createdAt directly when canonical subagent IDs repeat without source IDs", () => {
 		const messages: ChatMessageViewModel[] = Array.from({ length: 10_000 }, (_, index) => ({
 			id: `subagent-message-${index}`,

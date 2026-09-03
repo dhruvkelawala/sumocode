@@ -193,8 +193,9 @@ function foldableIndexKeys(block: FoldableBlock): string[] {
 	}
 	const keys = [...new Set([block.activity.id, block.activity.sourceId].filter((value): value is string => value !== undefined))]
 		.map((value) => `activity:${value}`);
-	if (block.activity.kind === "subagent" && block.activity.sourceId === undefined && block.activity.createdAt !== undefined) {
-		keys.push(`activity:${block.activity.id}:created:${block.activity.createdAt}`);
+	if (block.activity.kind === "subagent" && block.activity.sourceId === undefined) {
+		keys.push(`activity:${block.activity.id}:latest`);
+		if (block.activity.createdAt !== undefined) keys.push(`activity:${block.activity.id}:created:${block.activity.createdAt}`);
 	}
 	return keys;
 }
@@ -212,8 +213,13 @@ function foldableLookupKeys(block: FoldableBlock): FoldableLookupKeys {
 		};
 	}
 	const sourceId = block.activity.sourceId;
-	if (block.activity.kind === "subagent" && sourceId === undefined && block.activity.createdAt !== undefined) {
-		return { preferred: [`activity:${block.activity.id}:created:${block.activity.createdAt}`], fallback: [] };
+	if (block.activity.kind === "subagent" && sourceId === undefined) {
+		return block.activity.createdAt === undefined
+			? { preferred: [`activity:${block.activity.id}:latest`], fallback: [] }
+			: {
+				preferred: [`activity:${block.activity.id}:created:${block.activity.createdAt}`],
+				fallback: [`activity:${block.activity.id}:latest`],
+			};
 	}
 	return sourceId && sourceId !== block.activity.id
 		? {
@@ -230,6 +236,14 @@ function addIndexedLocation(
 ): void {
 	for (const key of foldableIndexKeys(block)) {
 		const locations = locationsByIdentity.get(key) ?? [];
+		if (key.endsWith(":latest")) {
+			const current = locations[0];
+			if (!current || location.messageIndex > current.messageIndex
+				|| (location.messageIndex === current.messageIndex && location.blockIndex < current.blockIndex)) {
+				locationsByIdentity.set(key, [location]);
+			}
+			continue;
+		}
 		if (!locations.some((candidate) => candidate.messageIndex === location.messageIndex && candidate.blockIndex === location.blockIndex)) {
 			locations.push(location);
 			locationsByIdentity.set(key, locations);

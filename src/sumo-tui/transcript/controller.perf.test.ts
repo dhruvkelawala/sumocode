@@ -4,7 +4,9 @@ import {
 	resetActivityFoldOperationCountsForTests,
 } from "./activity-fold.js";
 import {
+	getMessageContentKeyCacheMissesForTests,
 	getTranscriptSnapshotEnvelopeCopiesForTests,
+	resetMessageContentKeyCacheForTests,
 	resetTranscriptSnapshotEnvelopeCopiesForTests,
 	TranscriptController,
 } from "./controller.js";
@@ -25,10 +27,11 @@ function longHistory(messageCount: number): unknown[] {
 }
 
 describe("TranscriptController streaming operation bounds", () => {
-	it.fails.each([100, 1_000, 10_000])("characterizes live update operations: %i committed messages", (messageCount) => {
+	it.each([100, 1_000, 10_000])("characterizes live update operations: %i committed messages", (messageCount) => {
 		const controller = new TranscriptController();
 		const before = controller.replaceFromMessages(longHistory(messageCount));
 		resetActivityFoldOperationCountsForTests();
+		resetMessageContentKeyCacheForTests();
 		resetTranscriptSnapshotEnvelopeCopiesForTests();
 
 		const after = controller.handleAgentEvent({
@@ -44,12 +47,13 @@ describe("TranscriptController streaming operation bounds", () => {
 			messageEnvelopeCopies: 0,
 		});
 		expect(getTranscriptSnapshotEnvelopeCopiesForTests()).toBe(1);
+		expect(getMessageContentKeyCacheMissesForTests()).toBeLessThanOrEqual(2);
 		expect(after.messages).not.toBe(before.messages);
 		expect(after.messages[0]).not.toBe(before.messages[0]);
 		expect(after.messages[1]).toBe(before.messages[1]);
 		expect(before.messages[0]?.blocks[0]).toMatchObject({
 			type: "activity",
-			activity: { id: "read-live", status: "running" },
+			activity: { id: "read-live", status: "queued" },
 		});
 		expect(after.messages[0]?.blocks[0]).toMatchObject({
 			type: "activity",

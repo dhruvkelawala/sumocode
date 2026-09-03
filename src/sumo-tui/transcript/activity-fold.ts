@@ -144,6 +144,188 @@ function foldableBlockId(block: FoldableBlock): string {
 	return block.delegation.id ?? block.delegation.title;
 }
 
+interface FoldableBlockLocation {
+	readonly messageIndex: number;
+	readonly blockIndex: number;
+}
+
+export interface FoldableBlockIndex {
+	readonly locationsByIdentity: ReadonlyMap<string, readonly FoldableBlockLocation[]>;
+	readonly lastSumoMessageIndex: number;
+}
+
+export interface FoldableBlockCursor {
+	readonly base: FoldableBlockIndex;
+	readonly addedLocationsByIdentity: Map<string, FoldableBlockLocation[]>;
+	lastSumoMessageIndex: number;
+}
+
+function foldableIdentityKeys(block: FoldableBlock): string[] {
+	if (block.type === "delegation") {
+		return block.delegation.id ? [`delegation:${block.delegation.id}`] : ["delegation:pending"];
+	}
+	return [...new Set([block.activity.id, block.activity.sourceId].filter((value): value is string => value !== undefined))]
+		.map((value) => `activity:${value}`);
+}
+
+function addIndexedLocation(
+	locationsByIdentity: Map<string, FoldableBlockLocation[]>,
+	block: FoldableBlock,
+	location: FoldableBlockLocation,
+): void {
+	for (const key of foldableIdentityKeys(block)) {
+		const locations = locationsByIdentity.get(key) ?? [];
+		if (!locations.some((candidate) => candidate.messageIndex === location.messageIndex && candidate.blockIndex === location.blockIndex)) {
+			locations.push(location);
+			locationsByIdentity.set(key, locations);
+		}
+	}
+}
+
+export function indexFoldableBlocks(messages: readonly ChatMessageViewModel[]): FoldableBlockIndex {
+	const locationsByIdentity = new Map<string, FoldableBlockLocation[]>();
+	let lastSumoMessageIndex = -1;
+	for (let messageIndex = 0; messageIndex < messages.length; messageIndex += 1) {
+		const message = messages[messageIndex]!;
+		if (message.role === "sumo") lastSumoMessageIndex = messageIndex;
+		if (!canOwnFoldableUpdates(message)) continue;
+		for (let blockIndex = 0; blockIndex < message.blocks.length; blockIndex += 1) {
+			const block = message.blocks[blockIndex];
+			if (block && isFoldableBlock(block)) addIndexedLocation(locationsByIdentity, block, { messageIndex, blockIndex });
+		}
+	}
+	return { locationsByIdentity, lastSumoMessageIndex };
+}
+
+export function createFoldableBlockCursor(base: FoldableBlockIndex): FoldableBlockCursor {
+	return {
+		base,
+		addedLocationsByIdentity: new Map(),
+		lastSumoMessageIndex: base.lastSumoMessageIndex,
+	};
+}
+
+function indexedMatchingLocation(
+	messages: readonly ChatMessageViewModel[],
+	incoming: FoldableBlock,
+	cursor: FoldableBlockCursor,
+): FoldableBlockLocation | undefined {
+	const candidates = new Map<string, FoldableBlockLocation>();
+	for (const key of foldableIdentityKeys(incoming)) {
+		for (const location of cursor.base.locationsByIdentity.get(key) ?? []) {
+			candidates.set(`${location.messageIndex}:${location.blockIndex}`, location);
+		}
+		for (const location of cursor.addedLocationsByIdentity.get(key) ?? []) {
+			candidates.set(`${location.messageIndex}:${location.blockIndex}`, location);
+		}
+	}
+	return [...candidates.values()]
+		.sort((left, right) => right.messageIndex - left.messageIndex || right.blockIndex - left.blockIndex)
+		.find((location) => {
+			const message = messages[location.messageIndex];
+			return message !== undefined
+				&& canOwnFoldableUpdates(message)
+				&& matchingFoldableBlockIndex([message.blocks[location.blockIndex]!], incoming) === 0;
+		});
+}
+
+function recordIndexedBlock(
+	message: ChatMessageViewModel,
+	messageIndex: number,
+	incoming: FoldableBlock,
+	cursor: FoldableBlockCursor,
+): void {
+	const blockIndex = matchingFoldableBlockIndex(message.blocks, incoming);
+	if (blockIndex !== -1) addIndexedLocation(cursor.addedLocationsByIdentity, incoming, { messageIndex, blockIndex });
+}
+
+export interface IndexedFoldResult {
+	readonly folded: boolean;
+	readonly messageIndex?: number;
+}
+
+export function foldBlockIntoIndexedMessages(
+	messages: ChatMessageViewModel[],
+	incoming: FoldableBlock,
+	cursor: FoldableBlockCursor,
+	options: { readonly requireMatch: boolean },
+): IndexedFoldResult {
+	const matchingLocation = indexedMatchingLocation(messages, incoming, cursor);
+	const targetIndex = matchingLocation?.messageIndex ?? (options.requireMatch ? -1 : cursor.lastSumoMessageIndex);
+	if (targetIndex === -1) {
+		if (options.requireMatch) return { folded: false };
+		const created: ChatMessageViewModel = {
+			id: `live-foldable-${foldableBlockId(incoming)}`,
+			role: "sumo",
+			displayName: "SUMO",
+			blocks: [incoming],
+		};
+		messages.push(created);
+		cursor.lastSumoMessageIndex = messages.length - 1;
+		recordIndexedBlock(created, messages.length - 1, incoming, cursor);
+		return { folded: true, messageIndex: messages.length - 1 };
+	}
+	const target = messages[targetIndex];
+	if (!target) return { folded: false };
+	const updated = { ...target, blocks: upsertFoldableBlock(target.blocks, incoming) };
+	messages[targetIndex] = updated;
+	recordIndexedBlock(updated, targetIndex, incoming, cursor);
+	return { folded: true, messageIndex: targetIndex };
+}
+
+export interface IndexedAppendResult {
+	readonly changedMessageIndices: readonly number[];
+}
+
+export function appendOrFoldTranscriptMessageIndexed(
+	messages: ChatMessageViewModel[],
+	message: ChatMessageViewModel,
+	cursor: FoldableBlockCursor,
+): IndexedAppendResult {
+	const changedMessageIndices = new Set<number>();
+	if (message.role === "system" && isFoldableResultViewModel(message)) {
+		const unmatched: FoldableBlock[] = [];
+		let targetIndex = -1;
+		for (const block of message.blocks.filter(isFoldableBlock)) {
+			const result = foldBlockIntoIndexedMessages(messages, block, cursor, { requireMatch: true });
+			if (result.folded) {
+				targetIndex = Math.max(targetIndex, result.messageIndex ?? -1);
+				if (result.messageIndex !== undefined) changedMessageIndices.add(result.messageIndex);
+			}
+			else unmatched.push(block);
+		}
+		if (targetIndex !== -1) {
+			const images = message.blocks.filter((block): block is Extract<ChatBlock, { type: "image" }> => block.type === "image");
+			const target = messages[targetIndex];
+			if (target && images.length > 0) messages[targetIndex] = { ...target, blocks: upsertFoldableImages(target.blocks, images) };
+			if (unmatched.length === 0) return { changedMessageIndices: [...changedMessageIndices] };
+			message = { ...message, blocks: unmatched };
+		}
+	}
+	messages.push(message);
+	changedMessageIndices.add(messages.length - 1);
+	if (message.role === "sumo") cursor.lastSumoMessageIndex = messages.length - 1;
+	for (const block of message.blocks) {
+		if (isFoldableBlock(block)) recordIndexedBlock(message, messages.length - 1, block, cursor);
+	}
+	return { changedMessageIndices: [...changedMessageIndices] };
+}
+
+function upsertFoldableImages(
+	blocks: readonly ChatBlock[],
+	images: readonly Extract<ChatBlock, { type: "image" }>[],
+): ChatBlock[] {
+	const keys = new Set(blocks
+		.filter((block): block is Extract<ChatBlock, { type: "image" }> => block.type === "image")
+		.map(imageBlockKey));
+	return [...blocks, ...images.filter((image) => {
+		const key = imageBlockKey(image);
+		if (keys.has(key)) return false;
+		keys.add(key);
+		return true;
+	})];
+}
+
 export interface FoldResult {
 	messages: ChatMessageViewModel[];
 	folded: boolean;

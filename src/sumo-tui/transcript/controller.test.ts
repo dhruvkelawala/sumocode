@@ -8,7 +8,11 @@ import {
 	resetMessageContentKeyCacheForTests,
 	type TranscriptControllerChatSink,
 } from "./controller.js";
-import { chatMessageViewModelToPlainText, type ChatMessageViewModel } from "./view-model.js";
+import {
+	chatMessageViewModelToPlainText,
+	createTranscriptViewModelMapper,
+	type ChatMessageViewModel,
+} from "./view-model.js";
 /* oxlint-disable anti-slop/no-chained-type-assertions -- test doubles cast minimal stub objects to Pi context types. */
 /* oxlint-disable anti-slop/require-safety-comment-for-type-assertion -- stub shape is exercised by the assertions below. */
 
@@ -201,6 +205,44 @@ describe("TranscriptController agent_end reconciliation", () => {
 });
 
 describe("TranscriptController Activity folding", () => {
+	it("replays task metadata after a structural committed change", () => {
+		const delegate = createTranscriptViewModelMapper();
+		const mapper = {
+			reset: vi.fn(() => delegate.reset()),
+			messageFromPiMessage: vi.fn(delegate.messageFromPiMessage.bind(delegate)),
+			transcriptFromSessionContext: delegate.transcriptFromSessionContext.bind(delegate),
+		};
+		const controller = new TranscriptController({ mapper });
+		const taskCall = {
+			id: "task-owner",
+			role: "assistant",
+			content: [{ type: "toolCall", id: "task-1", name: "task", arguments: {
+				type: "single",
+				tasks: [{ prompt: "## Indexed task\n\nDo work.", model: "openai-codex/gpt-5.5", thinking: "high" }],
+			} }],
+		};
+		controller.replaceFromMessages([taskCall]);
+		mapper.reset.mockClear();
+		mapper.messageFromPiMessage.mockClear();
+
+		const transcript = controller.handleAgentEvent({
+			type: "message_end",
+			message: {
+				role: "toolResult",
+				toolCallId: "task-1",
+				toolName: "task",
+				content: [{ type: "text", text: "done" }],
+			},
+		});
+
+		expect(mapper.reset).toHaveBeenCalledTimes(1);
+		expect(mapper.messageFromPiMessage).toHaveBeenCalledTimes(2);
+		expect(transcript.messages[0]?.blocks[0]).toMatchObject({
+			type: "activity",
+			activity: { id: "task-1", title: "Indexed task", model: "openai-codex/gpt-5.5", status: "succeeded" },
+		});
+	});
+
 	it("keeps simultaneous same-name tools distinct and folds each result by stable ID", () => {
 		const controller = new TranscriptController();
 		const transcript = controller.replaceFromMessages([

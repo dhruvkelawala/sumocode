@@ -64,6 +64,28 @@ describe("ChatPager live-card retention bounds", () => {
 		root.dispose();
 	});
 
+	it("keeps manual scroll at transcript top while page-up rehydrates Activity history", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		root.width = 80;
+		root.height = 8;
+		root.flexDirection = FLEX_DIRECTION_COLUMN;
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 5 });
+		chat.reconcileFeedActivities(liveActivities(10));
+		root.yogaNode.calculateLayout(80, 8, DIRECTION_LTR);
+		composite(root, new CellBuffer(8, 80));
+		chat.scrollBox.scrollTo(0);
+		expect(chat.scrollBox.manualScroll).toBe(true);
+
+		chat.handleKey({ key: "PageUp" });
+		root.yogaNode.calculateLayout(80, 8, DIRECTION_LTR);
+		composite(root, new CellBuffer(8, 80));
+
+		expect(chat.scrollBox.manualScroll).toBe(true);
+		expect(chat.scrollBox.scrollOffset).toBe(0);
+		root.dispose();
+	});
+
 	it("rehydrates a live card in logical order with its latest output", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());

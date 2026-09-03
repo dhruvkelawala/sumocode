@@ -819,12 +819,61 @@ describe("ChatPager", () => {
 		chat.addMessage("sumo", "later");
 
 		expect(chat.getRenderedMessages().some((message) => message.text === "later")).toBe(true);
+		expect(chat.getRenderedMessages().some((message) => message.text.includes("owned live"))).toBe(true);
 		expect(chat.revealActivity("owned-live")).toBe(true);
 		expect(chat.getRenderedMessages().some((message) => message.text.includes("owned live"))).toBe(true);
 		root.dispose();
 	});
 
-	it("page-up restores Activity history after replies evict all live cards", async () => {
+	it("inserts newly discovered older feed Activities in logical order", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 5 });
+		chat.reconcileFeedActivities([{ id: "later", kind: "terminal", title: "later", status: "running", createdAt: 2 }]);
+		chat.reconcileFeedActivities([
+			{ id: "earlier", kind: "terminal", title: "earlier", status: "running", createdAt: 1 },
+			{ id: "later", kind: "terminal", title: "later", status: "running", createdAt: 2 },
+		]);
+
+		expect(chat.getRenderedMessages().map((message) => message.text.includes("earlier") ? "earlier" : "later"))
+			.toEqual(["earlier", "later"]);
+		root.dispose();
+	});
+
+	it("updates a virtualized transcript Activity without replacing the pager", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 1 });
+		const controller = new TranscriptController({ chat });
+		controller.replaceFromMessages([
+			{
+				id: "tool-owner",
+				role: "assistant",
+				content: [{ type: "toolCall", id: "read-old", name: "read", arguments: { path: "old.ts" } }],
+			},
+			{ id: "later", role: "user", content: "later" },
+		]);
+		chat.reconcileFeedActivities([{ id: "read-old", kind: "tool", title: "read", status: "running" }]);
+		const replace = vi.spyOn(chat, "replaceViewModels");
+
+		controller.handleAgentEvent({
+			type: "tool_execution_update",
+			toolCallId: "read-old",
+			toolName: "read",
+			args: { path: "old.ts" },
+			partialResult: { content: [{ type: "text", text: "latest output" }] },
+		});
+		chat.reconcileFeedActivities([{ id: "read-old", kind: "tool", title: "read", status: "running", outputTail: "latest output" }]);
+
+		expect(replace).not.toHaveBeenCalled();
+		expect(chat.revealActivity("read-old")).toBe(true);
+		expect(chat.getRenderedMessages().flatMap((message) => message.toSnapshot().blocks ?? [])).toContainEqual(
+			expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "read-old", outputTail: "latest output" }) }),
+		);
+		root.dispose();
+	});
+
+	it("page-up restores older Activity history while the newest live card stays protected", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());
 		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 2 });
@@ -835,11 +884,12 @@ describe("ChatPager", () => {
 		]);
 		chat.addMessage("sumo", "reply 1");
 		chat.addMessage("sumo", "reply 2");
-		expect(chat.getRenderedMessages().every((message) => !message.text.includes("activity"))).toBe(true);
+		expect(chat.getRenderedMessages().some((message) => message.text.includes("activity 3"))).toBe(true);
+		expect(chat.getRenderedMessages().some((message) => message.text.includes("activity 2"))).toBe(false);
 
 		chat.handleKey({ key: "PageUp" });
 
-		expect(chat.getRenderedMessages().some((message) => message.text.includes("activity 3"))).toBe(true);
+		expect(chat.getRenderedMessages().some((message) => message.text.includes("activity 2"))).toBe(true);
 		root.dispose();
 	});
 

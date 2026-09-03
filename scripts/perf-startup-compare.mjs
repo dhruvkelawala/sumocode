@@ -492,6 +492,8 @@ export async function runStartupComparison(options, dependencies = {}) {
 	let worktrees;
 	let dependenciesUnlinked = false;
 	let retainedForLiveProcess = false;
+	let retainedForAuditFailure = false;
+	let auditError;
 	try {
 		await assertCheckoutClean(callerRoot);
 		const [baselineSha, candidateSha] = await Promise.all([resolveRef(options.baseRef), resolveRef(options.candidateRef ?? "HEAD")]);
@@ -527,8 +529,16 @@ export async function runStartupComparison(options, dependencies = {}) {
 		if (!retainedForLiveProcess) {
 			await worktrees.unlinkDependencies?.();
 			dependenciesUnlinked = true;
-			await assertCheckoutClean(worktrees.baselineDir);
-			await assertCheckoutClean(worktrees.candidateDir);
+			// A revision that dirtied its own detached checkout must not have that
+			// evidence force-removed: retain the worktrees. The audit error is
+			// rethrown after the reports are safely written.
+			try {
+				await assertCheckoutClean(worktrees.baselineDir);
+				await assertCheckoutClean(worktrees.candidateDir);
+			} catch (error) {
+				retainedForAuditFailure = true;
+				auditError = error;
+			}
 		}
 		const metrics = METRICS.map((definition) => metricComparison(definition, armSamples.baseline, armSamples.candidate));
 		const successfulSamples = {
@@ -545,8 +555,8 @@ export async function runStartupComparison(options, dependencies = {}) {
 			samplesPerArm: options.samples,
 			fixture: {
 				recordCount: options.fixtureCount,
-				retained: options.keepFixture === true || retainedForLiveProcess,
-				reason: retainedForLiveProcess ? "live-process" : options.keepFixture === true ? "explicit" : undefined,
+				retained: options.keepFixture === true || retainedForLiveProcess || retainedForAuditFailure,
+				reason: retainedForLiveProcess ? "live-process" : retainedForAuditFailure ? "audit-failure" : options.keepFixture === true ? "explicit" : undefined,
 			},
 			runtime: machineMetadata(),
 			flags: [...FLAGS],
@@ -567,10 +577,11 @@ export async function runStartupComparison(options, dependencies = {}) {
 		await mkdir(outDir, { recursive: true });
 		await writeReportFile(join(outDir, "startup-compare.json"), `${JSON.stringify(report, null, 2)}\n`);
 		await writeReportFile(join(outDir, "startup-compare.md"), markdown(report));
+		if (auditError) throw auditError;
 		return report;
 	} finally {
 		const cleanupSteps = [];
-		if (retainedForLiveProcess) {
+		if (retainedForLiveProcess || retainedForAuditFailure) {
 			cleanupSteps.push(async () => { dependencies.onFixtureRetained?.(campaignDir); });
 		} else {
 			if (!dependenciesUnlinked && worktrees?.unlinkDependencies) cleanupSteps.push(() => worktrees.unlinkDependencies());

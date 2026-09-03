@@ -479,7 +479,9 @@ function markdown(report) {
 			? "retained because a live benchmark process prevented safe cleanup"
 			: report.fixture.reason === "audit-failure"
 				? "retained because a revision dirtied its checkout"
-				: "retained by explicit request"
+				: report.fixture.reason === "unlink-failure"
+					? "retained because harness teardown could not complete"
+					: "retained by explicit request"
 		: "deleted after collection";
 	const section = (title, group, description) => {
 		const rows = report.metrics.filter((metric) => metric.group === group).map((metric) =>
@@ -627,7 +629,7 @@ export async function runStartupComparison(options, dependencies = {}) {
 			fixture: {
 				recordCount: options.fixtureCount,
 				retained: options.keepFixture === true || retainedForLiveProcess || retainedForAuditFailure || retainedForUnlinkFailure,
-				reason: retainedForLiveProcess ? "live-process" : retainedForAuditFailure || retainedForUnlinkFailure ? "audit-failure" : options.keepFixture === true ? "explicit" : undefined,
+				reason: retainedForLiveProcess ? "live-process" : retainedForAuditFailure ? "audit-failure" : retainedForUnlinkFailure ? "unlink-failure" : options.keepFixture === true ? "explicit" : undefined,
 			},
 			runtime: machineMetadata(),
 			flags: [...FLAGS],

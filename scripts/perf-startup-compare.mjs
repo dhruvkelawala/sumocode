@@ -237,11 +237,15 @@ async function readEvents(path) {
 	}
 }
 
-function defaultSampleEnvironment(checkout, agentDir, diagFile) {
+/** Build one sample's isolated, operator-free environment. */
+export function defaultSampleEnvironment(checkout, agentDir, diagFile, inheritedEnv = process.env) {
 	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- ProcessEnv values are string | undefined at the child-process boundary
-	const env = Object.fromEntries(Object.entries(process.env).filter(([, value]) => typeof value === "string"));
+	const env = Object.fromEntries(Object.entries(inheritedEnv).filter(([, value]) => typeof value === "string"));
 	for (const key of Object.keys(env)) {
-		if (key.startsWith("SUMOCODE_") || key.startsWith("SUMO_TUI")) delete env[key];
+		// SUMOCODE_/SUMO_TUI: launcher/runtime policy. HERDR_: inherited Herdr pane
+		// state would activate the child's Herdr bridge and attach it to the
+		// operator's socket (same strip list as the integration preflight).
+		if (key.startsWith("SUMOCODE_") || key.startsWith("SUMO_TUI") || key.startsWith("HERDR_")) delete env[key];
 	}
 	return {
 		...env,

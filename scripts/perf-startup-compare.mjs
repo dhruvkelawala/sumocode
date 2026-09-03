@@ -40,8 +40,10 @@ function usage() {
 }
 
 function positiveInteger(value, flag) {
-	if (!/^\d+$/.test(value ?? "") || Number(value) < 1) throw new Error(`${flag} requires a positive integer`);
-	return Number(value);
+	if (!/^\d+$/.test(value ?? "")) throw new Error(`${flag} requires a positive integer`);
+	const parsed = Number(value);
+	if (!Number.isSafeInteger(parsed) || parsed < 1) throw new Error(`${flag} requires a positive integer`);
+	return parsed;
 }
 
 /** Parse the public comparison CLI without consulting repository or operator state. */
@@ -72,6 +74,15 @@ export function startupCompareOptions(argv) {
 function pathInside(parent, child) {
 	const rel = relative(resolve(parent), resolve(child));
 	return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== "..");
+}
+
+async function assertOutOutsideCheckout(callerRoot, outDir) {
+	// Create the user-requested report directory first, then compare real paths:
+	// a --out that is (or points through a symlink at) the checkout must fail
+	// before any report write can dirty it.
+	await mkdir(outDir, { recursive: true });
+	const [callerReal, outReal] = await Promise.all([realpath(callerRoot), realpath(outDir)]);
+	if (pathInside(callerReal, outReal)) throw new Error("--out must be outside the compared checkout");
 }
 
 async function runGit(cwd, args) {
@@ -276,11 +287,15 @@ async function runSampleProcess({ checkout, agentDir, diagFile }, boundaries = {
 	// and node-pty's exit callback. Snapshot natural exit only after that await,
 	// immediately before the harness begins its own bounded shutdown.
 	events = await readEvents(diagFile);
-	const exitedBeforeShutdown = exited;
+	let exitedBeforeShutdown = exited;
 	const treeAliveBeforeShutdown = treeAlive();
 	const observedAllEvents = REQUIRED_EVENTS.every((name) => events.some((event) => event.event === name));
 	if (treeAliveBeforeShutdown) {
-		try { signalTree(child, "SIGINT"); } catch {}
+		try { signalTree(child, "SIGINT"); } catch (error) {
+			// ESRCH here means the tree vanished before any harness signal could
+			// land: a natural exit, never attributable to an orderly shutdown.
+			if (error?.code === "ESRCH") exitedBeforeShutdown = true;
+		}
 		await waitForTreeExit(treeAlive, 750);
 	}
 	if (treeAlive()) {
@@ -404,12 +419,17 @@ function formatNumber(value, suffix = "ms") {
 }
 
 function markdown(report) {
+	const fixtureNote = report.fixture.retained
+		? report.fixture.reason === "live-process"
+			? "retained because a live benchmark process prevented safe cleanup"
+			: "retained by explicit request"
+		: "deleted after collection";
 	const section = (title, group, description) => {
 		const rows = report.metrics.filter((metric) => metric.group === group).map((metric) =>
 			`| ${metric.label} | ${formatNumber(metric.baseline.medianMs)} | ${formatNumber(metric.candidate.medianMs)} | ${formatNumber(metric.deltaMs)} | ${formatNumber(metric.deltaPercent, "%")} | ${metric.baseline.spread.madMs ?? "—"}ms | ${metric.candidate.spread.madMs ?? "—"}ms | ${metric.baseline.failures}/${metric.candidate.failures} | ${metric.verdict} |`);
 		return `## ${title}\n\n${description}\n\n| Metric | Baseline | Candidate | Delta | Delta % | Baseline MAD | Candidate MAD | Failures B/C | Verdict |\n| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n${rows.join("\n")}\n`;
 	};
-	return `# SumoCode startup comparison\n\n- baseline: \`${report.baselineSha}\`\n- candidate: \`${report.candidateSha}\`\n- samples per arm: ${report.samplesPerArm}\n- fixture records: ${report.fixture.recordCount} (${report.fixture.retained ? "retained by explicit request" : "deleted after collection"})\n- execution: alternating baseline/candidate arms\n- mode: host source, extension source\n\n${section("Targeted phases", "targeted", "Terminal index readiness is the Plan 093-targeted signal. It does not by itself establish faster aggregate startup.")}\n${section("Attributed startup phases", "attributed", "Launcher, host import, and RPC child readiness localize startup movement without claiming end-to-end improvement.")}\n${section("Aggregate startup", "aggregate", "Editor and command readiness are user-facing aggregate milestones; hydration is the committed-state boundary between them.")}\nOverall startup: **${report.overall.verdict}** — ${report.overall.reason}.\n\nVerdicts require at least ${MIN_DIRECTIONAL_SAMPLES} successful samples per arm, non-overlapping median ± MAD intervals, and zero failed samples. Smaller runs, any overlap, missing event, failed sample, or conflicting phase direction make the overall result inconclusive.\n`;
+	return `# SumoCode startup comparison\n\n- baseline: \`${report.baselineSha}\`\n- candidate: \`${report.candidateSha}\`\n- samples per arm: ${report.samplesPerArm}\n- fixture records: ${report.fixture.recordCount} (${fixtureNote})\n- execution: alternating baseline/candidate arms\n- mode: host source, extension source\n\n${section("Targeted phases", "targeted", "Terminal index readiness is the Plan 093-targeted signal. It does not by itself establish faster aggregate startup.")}\n${section("Attributed startup phases", "attributed", "Launcher, host import, and RPC child readiness localize startup movement without claiming end-to-end improvement.")}\n${section("Aggregate startup", "aggregate", "Editor and command readiness are user-facing aggregate milestones; hydration is the committed-state boundary between them.")}\nOverall startup: **${report.overall.verdict}** — ${report.overall.reason}.\n\nVerdicts require at least ${MIN_DIRECTIONAL_SAMPLES} successful samples per arm, non-overlapping median ± MAD intervals, and zero failed samples. Smaller runs, any overlap, missing event, failed sample, or conflicting phase direction make the overall result inconclusive.\n`;
 }
 
 function executionSchedule(samples) {
@@ -429,7 +449,7 @@ function executionSchedule(samples) {
 export async function runStartupComparison(options, dependencies = {}) {
 	const callerRoot = resolve(options.callerRoot ?? ROOT);
 	const outDir = resolve(options.outDir);
-	if (pathInside(callerRoot, outDir)) throw new Error("--out must be outside the compared checkout");
+	await assertOutOutsideCheckout(callerRoot, outDir);
 	const campaignDir = await mkdtemp(join(tmpdir(), "sumocode-startup-compare-"));
 	const resolveRef = dependencies.resolveRevision ?? ((ref) => resolveRevision(callerRoot, ref));
 	const assertCheckoutClean = dependencies.assertClean ?? assertClean;
@@ -495,7 +515,11 @@ export async function runStartupComparison(options, dependencies = {}) {
 			baselineSha,
 			candidateSha,
 			samplesPerArm: options.samples,
-			fixture: { recordCount: options.fixtureCount, retained: options.keepFixture === true || retainedForLiveProcess },
+			fixture: {
+				recordCount: options.fixtureCount,
+				retained: options.keepFixture === true || retainedForLiveProcess,
+				reason: retainedForLiveProcess ? "live-process" : options.keepFixture === true ? "explicit" : undefined,
+			},
 			runtime: machineMetadata(),
 			flags: [...FLAGS],
 			bundleMode: { host: "source", extension: "source" },

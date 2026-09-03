@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { writeFileSync } from "node:fs";
-import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -142,6 +142,11 @@ describe("startup comparison CLI", () => {
 		});
 	});
 
+	it("rejects oversized sample counts instead of accepting Infinity", () => {
+		expect(() => startupCompareOptions(["--base", "HEAD", "--samples", "9".repeat(400)]))
+			.toThrow("--samples requires a positive integer");
+	});
+
 	it("compares exact revisions in alternating order and emits only public-safe report data", async () => {
 		const result = await harness({ failCandidate: true, publicCli: true });
 		const { report } = result;
@@ -190,6 +195,28 @@ describe("startup comparison CLI", () => {
 			.rejects.toThrow("startup comparison cleanup failed");
 	});
 
+	it("rejects --out that resolves inside the compared checkout", async () => {
+		const root = await temporaryRoot("sumocode-startup-out-symlink-");
+		const callerRoot = join(root, "caller");
+		const inside = join(callerRoot, "docs");
+		const outLink = join(root, "report-link");
+		await mkdir(inside, { recursive: true });
+		await symlink(inside, outLink);
+		await expect(runStartupComparison({
+			callerRoot,
+			baseRef: "base",
+			samples: 1,
+			fixtureCount: 1,
+			outDir: outLink,
+		}, {
+			resolveRevision: async () => "a".repeat(40),
+			assertClean: async () => undefined,
+			prepareWorktrees: async () => ({ baselineDir: join(root, "baseline"), candidateDir: join(root, "candidate"), cleanup: async () => undefined }),
+		})).rejects.toThrow("--out must be outside the compared checkout");
+		expect((await execFileAsync("git", ["status", "--porcelain"], { cwd: callerRoot }).catch(() => ({ stdout: "" }))).stdout).toBe("");
+		expect(await readdir(inside)).toEqual([]);
+	});
+
 	it("rejects the public CLI when neither arm collects a successful sample", async () => {
 		await expect(harness({ publicCli: true, failAllSpawns: true, samples: 1, fixtureCount: 1 }))
 			.rejects.toThrow("startup comparison collection failed");
@@ -221,6 +248,42 @@ describe("startup comparison CLI", () => {
 			machineMetadata: () => ({ platform: "test", arch: "test", nodeVersion: "v-test", cpuCount: 1 }),
 		});
 
+		expect(report.arms.baseline.samples[0]).toMatchObject({ ok: false, failure: "process-failed" });
+		expect(report.arms.candidate.samples[0]).toMatchObject({ ok: false, failure: "process-failed" });
+	});
+
+	it("reports ESRCH during harness SIGINT as a failed process, not a pass", async () => {
+		const root = await temporaryRoot("sumocode-startup-esrch-");
+		const baselineDir = join(root, "baseline");
+		const candidateDir = join(root, "candidate");
+		const outDir = await temporaryRoot("sumocode-startup-esrch-report-");
+		await Promise.all([mkdir(baselineDir), mkdir(candidateDir)]);
+		let alive = true;
+		const report = await runStartupComparison({
+			callerRoot: root,
+			baseRef: "base",
+			candidateRef: "candidate",
+			samples: 1,
+			fixtureCount: 1,
+			outDir,
+		}, {
+			resolveRevision: async (ref) => ref === "base" ? "3".repeat(40) : "4".repeat(40),
+			assertClean: async () => undefined,
+			prepareWorktrees: async () => ({ baselineDir, candidateDir, cleanup: async () => undefined }),
+			spawnSamplePty: (_command, _args, options) => {
+				const events = diagnostics(Date.now(), "baseline", 0);
+				writeFileSync(options.env.SUMO_TUI_DIAG_FILE, `${events.map((event) => JSON.stringify(event)).join("\n")}\n`);
+				return { onExit: () => undefined, kill: () => undefined };
+			},
+			sampleTreeAlive: () => alive,
+			signalSampleTree: () => {
+				alive = false;
+				const error = new Error("ESRCH");
+				error.code = "ESRCH";
+				throw error;
+			},
+			machineMetadata: () => ({ platform: "test", arch: "test", nodeVersion: "v-test", cpuCount: 1 }),
+		});
 		expect(report.arms.baseline.samples[0]).toMatchObject({ ok: false, failure: "process-failed" });
 		expect(report.arms.candidate.samples[0]).toMatchObject({ ok: false, failure: "process-failed" });
 	});
@@ -265,10 +328,12 @@ describe("startup comparison CLI", () => {
 		expect(report.arms.baseline.samples[0]).toMatchObject({ ok: false, failure: "shutdown-failed" });
 		expect(report.arms.candidate.samples).toEqual([]);
 		expect(report.fixture.retained).toBe(true);
+		expect(report.fixture.reason).toBe("live-process");
 		expect(spawnCount).toBe(1);
 		expect(cleanupCalled).toBe(false);
 		expect(retainedCampaign).toEqual(expect.any(String));
 		expect(report.collection.succeeded).toBe(false);
+		expect(await readFile(join(outDir, "startup-compare.md"), "utf8")).not.toContain("retained by explicit request");
 	});
 
 	it("smoke-compares two distinct exact local revisions in detached worktrees", async () => {

@@ -9,8 +9,8 @@ import { logDiagnostic } from "./sumo-tui/runtime/diagnostics.js";
 import { applyStartupTheme } from "./themes/index.js";
 
 /**
- * Source-mode RPC entry: load only the headless child profile, not classic UI.
- * The installed-copy guard stays in the canonical entry; this launcher-owned
+ * Source-mode RPC entry: load the child profile without the canonical entry's
+ * eager classic surfaces. The installed-copy guard stays there; this launcher-owned
  * entry must install, while the shared process latch still blocks duplicates.
  */
 export default function rpcChildSumocode(pi: ExtensionAPI): void {

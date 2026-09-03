@@ -946,6 +946,35 @@ describe("ChatPager", () => {
 		root.dispose();
 	});
 
+	it("reveals a virtualized canonical Activity ID transition through its old feed identity", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 1 });
+		const original = { id: "call-1", kind: "tool" as const, title: "subagent_spawn", status: "running" as const };
+		chat.reconcileFeedActivities([original]);
+		chat.replaceViewModels([
+			{ id: "spawn", role: "system", displayName: "SYSTEM", blocks: [{ type: "activity", activity: original }] },
+			{ id: "later", role: "user", displayName: "YOU", blocks: [{ type: "markdown", text: "later" }] },
+		]);
+		expect(chat.replaceViewModelAt(0, {
+			id: "spawn",
+			role: "system",
+			displayName: "SYSTEM",
+			blocks: [{
+				type: "activity",
+				activity: { id: "worker-1", sourceId: "call-1", kind: "subagent", title: "worker", status: "running" },
+			}],
+		})).toBe(true);
+
+		expect(chat.revealActivity("worker-1")).toBe(true);
+
+		const activities = chat.getRenderedMessages().flatMap((message) => message.toSnapshot().blocks ?? [])
+			.filter((block) => block.type === "activity");
+		expect(activities).toHaveLength(1);
+		expect(activities[0]).toMatchObject({ activity: { id: "worker-1", sourceId: "call-1", status: "running" } });
+		root.dispose();
+	});
+
 	it("drops superseded identities when a virtualized transcript message is replaced", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());

@@ -1357,15 +1357,19 @@ export class ChatPager extends SumoNode {
 
 	private materializeVirtualizedActivity(id: string): void {
 		if (!this.virtualizedFeedActivityIds.has(id)) return;
-		const activity = this.feedActivities.get(id);
-		if (!activity) return;
 		const transcriptEntry = [...this.virtualizedTranscriptMessages].find(([, message]) =>
-			this.activitiesFromBlocks(message.blocks).some((candidate) => sameActivity(candidate, activity))
+			this.activitiesFromBlocks(message.blocks).some((candidate) => candidate.id === id || candidate.sourceId === id)
 		);
+		const transcriptActivity = transcriptEntry
+			? this.activitiesFromBlocks(transcriptEntry[1].blocks).find((candidate) => candidate.id === id || candidate.sourceId === id)
+			: undefined;
+		const feedIndex = activityCorrelationIndex([...this.feedActivities.values()]);
+		const activity = this.feedActivities.get(id) ?? (transcriptActivity ? correlatedActivity(feedIndex, transcriptActivity) : undefined);
+		if (!activity && !transcriptEntry) return;
 		if (transcriptEntry) {
 			const [sourceIndex, message] = transcriptEntry;
-			const feedIndex = activityCorrelationIndex([...this.feedActivities.values()]);
 			const feedIds = new Set<string>([id]);
+			if (activity) feedIds.add(activity.id);
 			const blocks = message.blocks.map((block) => {
 				if (block.type !== "activity") return block;
 				this.virtualizedTranscriptClaimIds.delete(block.activity.id);
@@ -1398,6 +1402,7 @@ export class ChatPager extends SumoNode {
 			if (removedLines > 0) this.scrollBox.notifyContentChanged(0, removedLines);
 			return;
 		}
+		if (!activity) return;
 		const removedLines = this.releaseVirtualizedFeedActivity(id);
 		this.addPreparedMessage(
 			prepareChatMessage(activityCardViewModel(activity)),

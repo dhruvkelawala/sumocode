@@ -27,7 +27,7 @@ Samples alternate `baseline, candidate`, then `candidate, baseline`, with equal 
 - **launcher**: process spawn to host preload.
 - **host import**: host preload to selected source-host import completion.
 - **RPC child ready**: launch to the first correlated RPC response, proving that the child can answer requests rather than merely that its process spawned.
-- **terminal index ready**: the duration of the `TerminalTaskStore.refreshIndex()` scan, measured with `performance.now()` inside the store and carried as `durationMs` on the `terminal_index_ready` mark. This is the targeted Plan 093 metric; it isolates the scan itself rather than manager construction. A revision predating the store-emitted duration falls back to integer wall-clock mark subtraction and loses sub-millisecond resolution.
+- **terminal index ready**: the duration of the `TerminalTaskStore.refreshIndex()` scan, measured with `performance.now()` inside the store and carried as `durationMs` plus the accepted-record `snapshotCount` on the `terminal_index_ready` mark. This is the targeted Plan 093 metric; it isolates the scan itself rather than manager construction. A mark whose count does not match the fixture, or whose duration is missing, fails the sample as `fixture-mismatch` — earlier revisions cannot be timed for this phase.
 - **editor ready**: launch to the first editable retained frame.
 - **hydration committed**: launch to the authoritative initial state/transcript commit.
 - **command ready**: launch to hydrated command dispatch readiness.

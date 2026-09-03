@@ -500,6 +500,9 @@ export async function runStartupComparison(options, dependencies = {}) {
 	const callerRoot = resolve(options.callerRoot ?? ROOT);
 	const outDir = resolve(options.outDir);
 	await assertOutOutsideCheckout(callerRoot, outDir);
+	// The campaign (fixtures + detached worktrees) also lives under TMPDIR;
+	// validate the root before mkdtemp creates anything inside the checkout.
+	await assertPathOutsideCheckout(callerRoot, tmpdir());
 	const campaignDir = await mkdtemp(join(tmpdir(), "sumocode-startup-compare-"));
 	const resolveRef = dependencies.resolveRevision ?? ((ref) => resolveRevision(callerRoot, ref));
 	const assertCheckoutClean = dependencies.assertClean ?? assertClean;

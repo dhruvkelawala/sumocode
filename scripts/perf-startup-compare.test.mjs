@@ -388,6 +388,35 @@ describe("startup comparison CLI", () => {
 		await expect(stat(insideTmp).catch(() => undefined)).resolves.toBeUndefined();
 	});
 
+	it("validates the campaign TMPDIR root without creating it inside the checkout", async () => {
+		const root = await temporaryRoot("sumocode-startup-campaign-tmpdir-");
+		const callerRoot = join(root, "caller");
+		const outDir = join(root, "report");
+		await mkdir(callerRoot, { recursive: true });
+		const previousTmpDir = process.env.TMPDIR;
+		process.env.TMPDIR = join(callerRoot, "tmp-inside");
+		try {
+			await expect(runStartupComparison({
+				callerRoot,
+				baseRef: "base",
+				samples: 1,
+				fixtureCount: 1,
+				outDir,
+			}, {
+				resolveRevision: async () => "a".repeat(40),
+				assertClean: async () => undefined,
+				prepareWorktrees: async () => ({ baselineDir: join(root, "b"), candidateDir: join(root, "c"), cleanup: async () => undefined }),
+				runSample: async () => {
+					throw new Error("must not run");
+				},
+			})).rejects.toThrow("--out must be outside the compared checkout");
+		} finally {
+			if (previousTmpDir === undefined) delete process.env.TMPDIR;
+			else process.env.TMPDIR = previousTmpDir;
+		}
+		expect(await readdir(callerRoot)).toEqual([]);
+	});
+
 	it("rejects the public CLI when neither arm collects a successful sample", async () => {
 		await expect(harness({ publicCli: true, failAllSpawns: true, samples: 1, fixtureCount: 1 }))
 			.rejects.toThrow("startup comparison collection failed");

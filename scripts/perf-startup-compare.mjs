@@ -655,24 +655,44 @@ export async function runStartupComparison(options, dependencies = {}) {
 		bodyError = error;
 		throw error;
 	} finally {
-		const cleanupSteps = [];
-		if (retainedForLiveProcess || retainedForAuditFailure || retainedForSetupFailure || retainedForUnlinkFailure) {
-			cleanupSteps.push(async () => { dependencies.onFixtureRetained?.(campaignDir); });
-		} else {
-			if (!dependenciesUnlinked && worktrees?.unlinkDependencies) cleanupSteps.push(() => worktrees.unlinkDependencies());
-			if (worktrees?.cleanup) cleanupSteps.push(() => worktrees.cleanup());
-			if (options.keepFixture === true) cleanupSteps.push(async () => { dependencies.onFixtureRetained?.(campaignDir); });
-			else cleanupSteps.push(() => rm(campaignDir, { recursive: true, force: true }));
-		}
-		cleanupSteps.push(() => assertCheckoutClean(callerRoot));
 		try {
+			const cleanupSteps = [];
+			if (retainedForLiveProcess || retainedForAuditFailure || retainedForSetupFailure || retainedForUnlinkFailure) {
+				cleanupSteps.push(async () => { dependencies.onFixtureRetained?.(campaignDir); });
+			} else {
+				// Worktree teardown short-circuits on the first failure: a failed
+				// unlink may mean the tree is still owned, so neither the worktree
+				// removal nor the campaign removal may run afterwards. Retain instead.
+				const teardownSteps = [];
+				if (!dependenciesUnlinked && worktrees?.unlinkDependencies) teardownSteps.push(() => worktrees.unlinkDependencies());
+				if (worktrees?.cleanup) teardownSteps.push(() => worktrees.cleanup());
+				let teardownFailed = false;
+				for (const step of teardownSteps) {
+					try {
+						await step();
+					} catch (error) {
+						teardownFailed = true;
+						if (bodyError === undefined) cleanupError = cleanupError ?? new AggregateError([error], "startup comparison teardown failed");
+						else console.error(`[startup-compare] teardown also failed: ${error.message}`);
+						break;
+					}
+				}
+				if (teardownFailed) {
+					cleanupSteps.push(async () => { dependencies.onFixtureRetained?.(campaignDir); });
+				} else if (options.keepFixture === true) {
+					cleanupSteps.push(async () => { dependencies.onFixtureRetained?.(campaignDir); });
+				} else {
+					cleanupSteps.push(() => rm(campaignDir, { recursive: true, force: true }));
+				}
+			}
+			cleanupSteps.push(() => assertCheckoutClean(callerRoot));
 			await runCleanupSteps(cleanupSteps, "startup comparison cleanup failed");
 		} catch (error) {
 			// The primary failure (dirty caller, failed audit, lost revision) is the
 			// useful diagnostic; never mask it with the generic cleanup error. The
 			// recorded cleanup error is rethrown after this block on the success path.
 			if (bodyError !== undefined) console.error(`[startup-compare] cleanup also failed: ${error.message}`);
-			else cleanupError = error;
+			else if (cleanupError === undefined) cleanupError = error;
 		}
 	}
 	if (cleanupError) throw cleanupError;

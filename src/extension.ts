@@ -25,6 +25,7 @@ import { installWorkingIndicator } from "./working-indicator.js";
 import { installCompactionIndicator } from "./compaction-indicator.js";
 import { installFastMode } from "./fast-mode.js";
 import { installBackgroundTasks, installTerminalTools } from "./background-tasks/index.js";
+import type { TerminalTaskManagerOptions } from "./background-tasks/task-manager.js";
 import { installActivityManagerBridge } from "./activity/manager-bridge.js";
 import { installSubagents } from "./subagents/index.js";
 import { installTaskModeAutoExit } from "./task-mode.js";
@@ -212,9 +213,20 @@ export function isRpcChildProfile(options: TaskModeOptions = {}): boolean {
 
 function installOrchestrationTools(pi: ExtensionAPI) {
 	const rpcChild = isRpcChildProfile();
-	if (rpcChild) logDiagnostic("terminal_index_start", { surface: "rpc_child" });
-	const terminalTaskManager = installBackgroundTasks(pi);
-	if (rpcChild) logDiagnostic("terminal_index_ready", { surface: "rpc_child" });
+	// The store owns the scan boundary and measures it with performance.now();
+	// the marks are emitted from its index-scan diagnostic so the targeted
+	// metric isolates the scan itself (not manager construction or extension
+	// wiring) and keeps sub-millisecond resolution.
+	const managerOptions: TerminalTaskManagerOptions | undefined = rpcChild
+		? {
+				onDiagnostic: (diagnostic) => {
+					if (diagnostic.kind !== "index-scan") return;
+					logDiagnostic("terminal_index_start", {});
+					logDiagnostic("terminal_index_ready", { durationMs: diagnostic.durationMs });
+				},
+			}
+		: undefined;
+	const terminalTaskManager = installBackgroundTasks(pi, managerOptions);
 	installTerminalTools(pi, terminalTaskManager);
 	const subagentManager = installSubagents(pi);
 	const activityBridge = installActivityManagerBridge(pi, terminalTaskManager, subagentManager);

@@ -85,6 +85,26 @@ function runRacer(rootDir: string, id: string, gate: string, ready: string): Pro
 }
 
 describe("TerminalTaskStore", () => {
+	it("emits a high-resolution index-scan diagnostic from refreshIndex", () => {
+		const diagnostics: TerminalTaskStoreDiagnostic[] = [];
+		const store = new TerminalTaskStore({ rootDir, onDiagnostic: (entry) => diagnostics.push(entry) });
+		const initial = snapshot(store, "term-scan-a");
+		store.create(initial, join(dirname(initial.logFile), "meta.json"));
+
+		const result = store.refreshIndex();
+
+		expect(result.ok).toBe(true);
+		const scan = diagnostics.filter((entry) => entry.kind === "index-scan");
+		expect(scan).toHaveLength(1);
+		expect(scan[0]).toMatchObject({
+			complete: true,
+			snapshotCount: 1,
+		});
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- asserting the emitted diagnostic contract carries a numeric duration.
+		expect(typeof scan[0].durationMs).toBe("number");
+		expect(scan[0].durationMs).toBeGreaterThanOrEqual(0);
+	});
+
 	let rootDir: string;
 
 	beforeEach(() => {
@@ -325,7 +345,7 @@ describe("TerminalTaskStore", () => {
 			const failed = store.refreshIndex();
 			expect(failed.ok).toBe(false);
 			expect(failed.snapshots).toEqual([]);
-			expect(diagnostics.at(-1)).toMatchObject({ kind: "io", path: store.rootDir });
+			expect(diagnostics.find((entry) => entry.kind === "io")).toMatchObject({ kind: "io", path: store.rootDir });
 			// The failed refresh must not replace the last good generation.
 			expect(store.listOwnedIndexed("session-a").map((task) => task.id)).toEqual(["term-transient"]);
 			expect(fresh.refreshIndex().ok).toBe(false);
@@ -367,7 +387,7 @@ describe("TerminalTaskStore", () => {
 		expect(failed.snapshots.map((task) => task.id)).toEqual(["term-healthy"]);
 		expect(failed.preservedIds).toEqual(["term-transient-read"]);
 		// The transient read is diagnosed as I/O, not corruption.
-		expect(diagnostics.at(-1)).toMatchObject({ kind: "io", path: metaPath });
+		expect(diagnostics.find((entry) => entry.kind === "io")).toMatchObject({ kind: "io", path: metaPath });
 		// The prior path and compact entry are retained for the owner.
 		expect(store.listOwnedIndexed("session-a")).toEqual([expect.objectContaining({ id: "term-transient-read" })]);
 		expect(store.isIndexedOwner("term-transient-read", "session-a")).toBe(true);
@@ -567,7 +587,7 @@ describe("TerminalTaskStore", () => {
 		expect(store.listOwnedIndexed("session-a")).toEqual([expect.objectContaining({ id: "term-fresh-good" })]);
 		expect(store.getIndexed("term-fresh-fault")).toBeUndefined();
 		expect(store.isIndexedOwner("term-fresh-fault", "session-a")).toBe(false);
-		expect(diagnostics.at(-1)).toMatchObject({ kind: "io", path: faultedMetaPath });
+		expect(diagnostics.find((entry) => entry.kind === "io")).toMatchObject({ kind: "io", path: faultedMetaPath });
 
 		// Once the fault clears, the next refresh adopts the record normally and
 		// reports a complete generation.
@@ -600,7 +620,7 @@ describe("TerminalTaskStore", () => {
 		expect(knownFaulted.complete).toBe(false);
 		expect(knownFaulted.snapshots).toEqual([]);
 		expect(knownFaulted.preservedIds).toEqual(["term-dir-known"]);
-		expect(diagnostics.at(-1)).toMatchObject({ kind: "io", path: knownDirectory });
+		expect(diagnostics.find((entry) => entry.kind === "io")).toMatchObject({ kind: "io", path: knownDirectory });
 		expect(store.listOwnedIndexed("session-a")).toEqual([expect.objectContaining({ id: "term-dir-known" })]);
 		faults.clear();
 		// The retained path still resolves the durable record without a rescan.
@@ -618,7 +638,7 @@ describe("TerminalTaskStore", () => {
 		expect(unknownFaulted.complete).toBe(false);
 		expect(unknownFaulted.snapshots.map((task) => task.id)).toEqual(["term-dir-known"]);
 		expect(unknownFaulted.preservedIds).toEqual([]);
-		expect(diagnostics.at(-1)).toMatchObject({ kind: "io", path: unknownDirectory });
+		expect(diagnostics.filter((entry) => entry.kind === "io").at(-1)).toMatchObject({ kind: "io", path: unknownDirectory });
 		expect(store.listOwnedIndexed("session-b")).toEqual([]);
 		// The fault clears: the next refresh adopts the record and the generation
 		// is complete again.
@@ -635,7 +655,7 @@ describe("TerminalTaskStore", () => {
 		expect(corrupt.ok).toBe(true);
 		expect(corrupt.complete).toBe(true);
 		expect(corrupt.snapshots.map((task) => task.id)).toEqual(["term-dir-known"]);
-		expect(diagnostics.at(-1)).toMatchObject({ kind: "corrupt", path: unknownDirectory });
+		expect(diagnostics.filter((entry) => entry.kind === "corrupt").at(-1)).toMatchObject({ kind: "corrupt", path: unknownDirectory });
 		expect(store.listOwnedIndexed("session-b")).toEqual([]);
 	});
 

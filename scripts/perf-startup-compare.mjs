@@ -188,7 +188,7 @@ async function writePrivate(path, contents) {
 }
 
 /** Rebuild one deterministic, operator-free terminal store before each timed launch. */
-async function resetFixture(agentDir, recordCount) {
+export async function resetFixture(agentDir, recordCount) {
 	await rm(agentDir, { recursive: true, force: true });
 	const store = join(agentDir, "state", "sumocode-terminals");
 	await Promise.all([
@@ -199,12 +199,16 @@ async function resetFixture(agentDir, recordCount) {
 		privateDirectory(join(agentDir, "tmp")),
 		privateDirectory(join(agentDir, "project")),
 	]);
+	// The store validates logFile against its canonical (realpath) root, which
+	// differs from the raw temp path on macOS (/var → /private/var); write the
+	// canonical form so every record is accepted by the real scan.
+	const canonicalStore = await realpath(store);
 	for (let index = 0; index < recordCount; index += 1) {
 		const suffix = String(index).padStart(6, "0");
 		const id = `term-fixture-${suffix}`;
 		const createdAt = 1_700_000_000_000 + index;
 		const directory = join(store, `${id}-${createdAt}`);
-		const logFile = join(directory, "output.log");
+		const logFile = join(canonicalStore, `${id}-${createdAt}`, "output.log");
 		await privateDirectory(directory);
 		await Promise.all([
 			writePrivate(logFile, "fixture output\n"),

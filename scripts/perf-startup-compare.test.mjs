@@ -8,9 +8,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
 	defaultSampleEnvironment,
 	main,
+	resetFixture,
 	runStartupComparison,
 	startupCompareOptions,
 } from "./perf-startup-compare.mjs";
+import { TerminalTaskStore } from "../src/background-tasks/task-store.js";
 
 const roots = [];
 const execFileAsync = promisify(execFile);
@@ -337,6 +339,17 @@ async function harness(options = {}) {
 		expect(cleanupCalled).toBe(false);
 		expect(retainedCampaign).toEqual(expect.any(String));
 		await expect(stat(retainedCampaign)).resolves.toBeTruthy();
+	});
+
+	it("writes fixture records the real store accepts as complete", async () => {
+		const root = await temporaryRoot("sumocode-startup-fixture-store-");
+		const agentDir = join(root, "agent");
+		await resetFixture(agentDir, 2);
+		const store = new TerminalTaskStore({ rootDir: join(agentDir, "state", "sumocode-terminals") });
+		const result = store.refreshIndex();
+		expect(result.ok).toBe(true);
+		expect(result.complete).toBe(true);
+		expect(result.snapshots.length).toBe(2);
 	});
 
 	it("fails samples whose accepted snapshot count mismatches the fixture", async () => {

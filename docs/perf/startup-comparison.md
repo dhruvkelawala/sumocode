@@ -27,7 +27,7 @@ Samples alternate `baseline, candidate`, then `candidate, baseline`, with equal 
 - **launcher**: process spawn to host preload.
 - **host import**: host preload to selected source-host import completion.
 - **RPC child ready**: launch to the first correlated RPC response, proving that the child can answer requests rather than merely that its process spawned.
-- **terminal index ready**: `TerminalTaskManager` initial index start to completion. This is the targeted Plan 093 metric.
+- **terminal index ready**: `TerminalTaskManager` initial index start to completion. This is the targeted Plan 093 metric. The initial scan runs synchronously inside manager construction (`TerminalTaskStore.refreshIndex()`), so the marks bracket the real scan; a revision that defers initialization asynchronously must move the ready mark to the scan-completion point or the phase loses meaning.
 - **editor ready**: launch to the first editable retained frame.
 - **hydration committed**: launch to the authoritative initial state/transcript commit.
 - **command ready**: launch to hydrated command dispatch readiness.

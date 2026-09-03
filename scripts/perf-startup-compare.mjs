@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
 import { chmod, lstat, mkdir, mkdtemp, open, readFile, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, existsSync } from "node:fs";
 import { cpus, platform, arch, tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -746,7 +746,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
 		});
 	} finally {
 		// The path is the only way to find retained evidence after a failure.
-		console.error(`startup comparison reports written to: ${outDir}`);
+		if (existsSync(join(outDir, "startup-compare.json"))) console.error(`startup comparison reports written to: ${outDir}`);
 	}
 	if (!report.collection.succeeded) throw new Error("startup comparison collection failed; inspect the written report");
 	console.log(markdown(report));

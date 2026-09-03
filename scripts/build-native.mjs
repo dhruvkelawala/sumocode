@@ -54,13 +54,11 @@ function run(command, args) {
 	}
 }
 
-function copyDir(source, destination, includePattern) {
+function copyMatchingFiles(source, destination, includePattern) {
 	mkdirSync(destination, { recursive: true });
 	for (const entry of readdirSync(source, { withFileTypes: true })) {
-		const from = join(source, entry.name);
-		const to = join(destination, entry.name);
-		if (entry.isDirectory()) copyDir(from, to, includePattern);
-		else if (includePattern === undefined || new RegExp(includePattern).test(relative(source, from))) copyFileSync(from, to);
+		if (!entry.isFile() || !includePattern.test(entry.name)) continue;
+		copyFileSync(join(source, entry.name), join(destination, entry.name));
 	}
 }
 
@@ -156,16 +154,20 @@ async function main() {
 	// child crashes in getBuiltinThemes() and --version falls back to 0.0.0.
 	// File sets mirror Pi's copy-binary-assets exactly (json/png/templates
 	// + vendor js only, no build sources).
-	copyDir(join(piDist, "modes/interactive/theme"), join(binDir, "theme"), "\.json$");
-	copyDir(join(piDist, "modes/interactive/assets"), join(binDir, "assets"), "\.png$");
-	copyDir(join(piDist, "core/export-html"), join(binDir, "export-html"), "(template\.html|template\.css|template\.js|vendor/.*\.js)$");
+	copyMatchingFiles(join(piDist, "modes/interactive/theme"), join(binDir, "theme"), /\.json$/);
+	copyMatchingFiles(join(piDist, "modes/interactive/assets"), join(binDir, "assets"), /\.png$/);
+	const exportHtmlSource = join(piDist, "core/export-html");
+	copyMatchingFiles(exportHtmlSource, join(binDir, "export-html"), /^template\.(html|css|js)$/);
+	copyMatchingFiles(join(exportHtmlSource, "vendor"), join(binDir, "export-html/vendor"), /\.js$/);
 	const photonPkgDir = dirname(piRequire.resolve("@silvia-odwyer/photon-node"));
 	const photonWasm = join(photonPkgDir, "photon_rs_bg.wasm");
 	if (!existsSync(photonWasm)) fail(`photon wasm missing at ${photonWasm}`);
 	copyFileSync(photonWasm, join(binDir, "photon_rs_bg.wasm"));
 	copyFileSync(join(piPkg, "package.json"), join(binDir, "package.json"));
 
-	// 3. Bun-compiled host executable from the native entry.
+	// 3. Bun-compiled host executable from the native entry, with the
+	// chrome-cache worker embedded as its own entrypoint (started by the worker
+	// client via new Worker(new URL(...)) inside the binary).
 	run(bunBin, [
 		"build",
 		"--compile",
@@ -174,6 +176,7 @@ async function main() {
 		"--define", `__SUMOCODE_VERSION__=${JSON.stringify(version)}`,
 		"--outfile", join(binDir, "sumocode"),
 		join(root, "src/native/main.ts"),
+		join(root, "src/sumo-tui/rpc/chrome-cache-worker.ts"),
 	]);
 
 	// 4. Host sidecar assets under share/.

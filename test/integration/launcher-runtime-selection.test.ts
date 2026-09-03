@@ -5,7 +5,7 @@
  * change forces both launchers to move together.
  */
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -42,7 +42,7 @@ function ensureNodePtySpawnHelperExecutable(): void {
 /** Runs `bin/sumocode.sh --dry-run <args>` with stdout on a real PTY. */
 function ptyDryRun(args: readonly string[]): Promise<DryRunObservation> {
 	ensureNodePtySpawnHelperExecutable();
-	return new Promise<DryRunObservation>((resolveRun, rejectRun) => {
+	return new Promise<DryRunObservation>((resolveRun) => {
 		const launcherArgs = ["--dry-run", ...args];
 		const childEnv = buildSpawnEnv(process.env, { PI_BIN: STUB_PI });
 		const child = spawn(LAUNCHER, launcherArgs, {
@@ -119,6 +119,12 @@ describe("launcher runtime selection (plan 117 shared contract)", () => {
 	});
 });
 
+interface CommandResult {
+	readonly status: number;
+	readonly stdout: string;
+	readonly stderr: string;
+}
+
 describe("launcher subcommands (plan 117 shared contract)", () => {
 	const diagDir = mkdtempSync(join(tmpdir(), "sumocode-runtime-contract-diag-"));
 	const diagFile = join(diagDir, "diag.jsonl");
@@ -127,7 +133,7 @@ describe("launcher subcommands (plan 117 shared contract)", () => {
 		rmSync(diagDir, { recursive: true, force: true });
 	});
 
-	function runCommand(args: readonly string[]): { status: number; stdout: string; stderr: string } {
+	function runCommand(args: readonly string[]): CommandResult {
 		try {
 			const stdout = execFileSync("bash", [LAUNCHER, ...args], {
 				cwd: process.cwd(),
@@ -138,7 +144,9 @@ describe("launcher subcommands (plan 117 shared contract)", () => {
 			});
 			return { status: 0, stdout, stderr: "" };
 		} catch (error) {
-			const err = error as { status?: number; stdout?: string; stderr?: string };
+			// SAFETY: execFileSync augments thrown process errors with numeric status
+			// and captured stdout/stderr when encoding is utf8.
+			const err = error as Partial<CommandResult>;
 			return { status: err.status ?? -1, stdout: err.stdout ?? "", stderr: err.stderr ?? "" };
 		}
 	}

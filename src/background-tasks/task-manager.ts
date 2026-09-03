@@ -63,10 +63,7 @@ const BOUNDED_TERMINAL_RUNNER_FILE = fileURLToPath(new URL("./bounded-terminal-r
  * native binary embeds the runner behind the `--sumocode-terminal-runner`
  * argv role (handled by src/native/main.ts before anything else).
  */
-export function resolveTerminalRunnerInvocation(env: NodeJS.ProcessEnv = process.env): {
-	readonly command: string;
-	readonly args: readonly string[];
-} {
+export function resolveTerminalRunnerInvocation(env: NodeJS.ProcessEnv = process.env) {
 	if (isNativeRuntime(env)) {
 		return { command: process.execPath, args: ["--sumocode-terminal-runner"] };
 	}

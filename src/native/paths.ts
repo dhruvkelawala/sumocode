@@ -33,18 +33,18 @@ export function isNativeRuntime(env: NodeJS.ProcessEnv = process.env): boolean {
 
 /**
  * Resolution order for sidecar assets: explicit env override dir → native
- * archive `share/` dir → caller-supplied dev/source path. `devPath` may be a
- * thunk so Node-only resolution (require.resolve on package paths that do not
- * exist inside the compiled binary) never runs in native mode.
+ * archive `share/` dir → caller-supplied dev/source path thunk. Keeping the
+ * fallback lazy means Node-only resolution (require.resolve on package paths
+ * that do not exist inside the compiled binary) never runs in native mode.
  */
 export function resolveAsset(
 	name: string,
-	devPath: string | (() => string),
+	devPath: () => string,
 	env: NodeJS.ProcessEnv = process.env,
 ): string {
 	const override = env[ASSET_DIR_OVERRIDE_ENV_KEY];
 	if (override !== undefined && override.trim() !== "") return join(override, name);
 	const nativeDir = resolveNativeDir(env);
 	if (nativeDir !== null) return join(nativeDir, "share", name);
-	return typeof devPath === "function" ? devPath() : devPath;
+	return devPath();
 }

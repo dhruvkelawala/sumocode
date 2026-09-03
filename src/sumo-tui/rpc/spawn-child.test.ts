@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 type ChildSpawnPlan = {
+	readonly command: string;
 	readonly args: readonly string[];
 	readonly cwd: string;
 	readonly env: NodeJS.ProcessEnv;
@@ -14,7 +15,7 @@ const require = createRequire(import.meta.url);
 // SAFETY: spawn-child.mjs is this package's own module; the export shape is
 // exercised directly by these tests.
 const { buildChildSpawnPlan } = require("./spawn-child.mjs") as {
-	buildChildSpawnPlan(env: NodeJS.ProcessEnv, argv: readonly string[]): ChildSpawnPlan | undefined;
+	buildChildSpawnPlan(env: NodeJS.ProcessEnv, argv: readonly string[], defaultPiBin?: string): ChildSpawnPlan | undefined;
 };
 
 const roots: string[] = [];
@@ -29,13 +30,13 @@ function makeRoot(): string {
 	return root;
 }
 
-function plan(root: string, extra: NodeJS.ProcessEnv = {}) {
+function plan(root: string, extra: NodeJS.ProcessEnv = {}, argv: readonly string[] = ["--offline"]) {
 	return buildChildSpawnPlan({
 		PI_BIN: "/usr/local/bin/pi",
 		SUMOCODE_ROOT_DIR: root,
 		SUMOCODE_PROJECT_CWD: join(root, "project"),
 		...extra,
-	}, ["--offline"]);
+	}, argv);
 }
 
 describe("buildChildSpawnPlan extension entry", () => {
@@ -52,7 +53,18 @@ describe("buildChildSpawnPlan extension entry", () => {
 		expect(plan(root, { SUMOCODE_EXTENSION_BUNDLE: "0" })?.args[3]).toBe(join(root, "src", "rpc-child-extension.ts"));
 	});
 
+	it("resolves the archive extension bundle on the native runtime", () => {
+		const root = makeRoot();
+		expect(plan(root, { SUMOCODE_NATIVE_DIR: root })?.args[3]).toBe(join(root, "extension", "sumocode-extension.bundle.mjs"));
+	});
+
 	it("returns no plan when PI_BIN is absent", () => {
 		expect(buildChildSpawnPlan({}, [])).toBeUndefined();
+	});
+
+	it("falls back to the provided default Pi binary when PI_BIN is unset", () => {
+		const root = makeRoot();
+		const result = buildChildSpawnPlan({ SUMOCODE_ROOT_DIR: root }, [], "/opt/sumocode/bin/sumocode-pi");
+		expect(result?.command).toBe("/opt/sumocode/bin/sumocode-pi");
 	});
 });

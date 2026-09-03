@@ -3,13 +3,13 @@ import { resolve } from "node:path";
 import { defaultActivityStateRoot } from "../../activity/persistence.js";
 import { FileActivityStore, type ActivityStoreSnapshot } from "../../activity/store.js";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { createRequire } from "node:module";
 import { SettingsManager, type AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { getCapabilities, setCapabilities } from "@earendil-works/pi-tui";
 import { SUMOCODE_RELOAD_EXIT_CODE } from "../../commands/reload.js";
 import { containsCtrlCToken, isEscapeInput } from "../input/shared-input-router.js";
 import { createOsc52Sequence } from "../input/selection.js";
 import { loadYoga } from "../layout/yoga.js";
+import { buildChildSpawnPlan } from "./spawn-child.mjs";
 import { applyStartupTheme } from "../../themes/index.js";
 import { ExtensionStatusPublication, RegionRegistry } from "../pi-compat/region-registry.js";
 import type { TranscriptControllerChatSink } from "../transcript/controller.js";
@@ -271,19 +271,9 @@ function piBinary(env: NodeJS.ProcessEnv): string {
 	return pi;
 }
 
-type ChildSpawnPlan = {
-	readonly command: string;
-	readonly args: readonly string[];
-	readonly cwd: string;
-	readonly env: NodeJS.ProcessEnv;
-};
-
-const requireFromRuntime = createRequire(import.meta.url);
-// SAFETY: spawn-child.mjs is this package's own compiled module; its export
-// signature is pinned by host-spawn-plan.test.ts.
-const { buildChildSpawnPlan } = requireFromRuntime("./spawn-child.mjs") as {
-	buildChildSpawnPlan(env: NodeJS.ProcessEnv, argv: readonly string[], defaultPiBin?: string): ChildSpawnPlan | undefined;
-};
+// Static import above lets Bun inline the helper in the native executable;
+// the Node host bundle still copies the same .mjs sibling for its existing
+// runtime path.
 
 /**
  * Writes this host process's final exit code to the out-of-band file

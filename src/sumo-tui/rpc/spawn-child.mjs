@@ -16,7 +16,18 @@ function childEnv(env) {
 	};
 }
 
+function isNativeRuntime(env) {
+	// Set by the compiled binary's entry (src/native/main.ts) before any host
+	// code loads; src/native/paths.ts shares this exact marker.
+	return Boolean(env.SUMOCODE_NATIVE_DIR);
+}
+
 function extensionEntry(root, env) {
+	if (isNativeRuntime(env)) {
+		// The native archive is immutable: the inlined child bundle is the only
+		// extension entry (no source tree exists beside it).
+		return resolve(root, "extension/sumocode-extension.bundle.mjs");
+	}
 	if (env.SUMOCODE_EXTENSION_BUNDLE === "0") return resolve(root, "src/rpc-child-extension.ts");
 	// Route through the stable shim even when a generated bundle is fresh.
 	// The shim validates content, imports the bundle, and can retry source when

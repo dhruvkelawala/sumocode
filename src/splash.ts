@@ -87,7 +87,7 @@ export const SUMOCODE_WORDMARK: readonly string[] = (() => {
 })();
 
 // Plan 117 seam 4: native archive share/sumo-face.ans, else src/assets/.
-const FACE_PATH = resolveAsset("sumo-face.ans", resolve(dirname(fileURLToPath(import.meta.url)), "assets", "sumo-face.ans"));
+const FACE_PATH = resolveAsset("sumo-face.ans", () => resolve(dirname(fileURLToPath(import.meta.url)), "assets", "sumo-face.ans"));
 
 /**
  * Sumo BSH cat face (24×14 cells). Generated via:

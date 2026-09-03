@@ -83,6 +83,8 @@ async function loadCacheModule(data: ChromeCacheWorkerData): Promise<ChromeCache
 			moduleCache: true,
 			tryNative: false,
 		});
+		// SAFETY: modulePath is the host-owned chrome-cache.ts path; its exported
+		// shape is exercised by the existing worker round-trip tests.
 		return await jiti.import(data.modulePath) as ChromeCacheModule;
 	}
 	// Native: the cache module is bundled into this worker entry.
@@ -103,10 +105,14 @@ export async function runChromeCacheWorker(
 					await new Promise((resolve) => setTimeout(resolve, data.operationDelayMs));
 				}
 				const options = { stateRoot: data.stateRoot };
-				const value = request.operation === "read"
-					? cache.readCachedChrome(request.cwd, options)
-					: (cache.writeCachedChrome(request.cwd, request.chrome!, options), true);
-				port.postMessage({ id: request.id, value });
+				if (request.operation === "read") {
+					port.postMessage({ id: request.id, value: cache.readCachedChrome(request.cwd, options) });
+					return;
+				}
+				const chrome = request.chrome;
+				if (chrome === undefined) throw new Error("chrome-cache write request is missing chrome state");
+				cache.writeCachedChrome(request.cwd, chrome, options);
+				port.postMessage({ id: request.id, value: true });
 			} catch (error) {
 				port.postMessage({ id: request.id, error: error instanceof Error ? error.message : String(error) });
 			}
@@ -117,6 +123,8 @@ export async function runChromeCacheWorker(
 // Entry-point guard: this module runs as a compiled worker only; importing it
 // from the host (for the eval source) leaves parentPort null on both runtimes.
 if (parentPort !== null && workerData !== undefined) {
+	// SAFETY: only ChromeCacheWorkerClient starts this compiled entry and it
+	// supplies exactly ChromeCacheWorkerData as workerData.
 	void runChromeCacheWorker(parentPort, workerData as ChromeCacheWorkerData).catch((error) => {
 		parentPort!.postMessage({ fatal: error instanceof Error ? error.message : String(error) });
 	});

@@ -20,16 +20,16 @@ describe("native paths seam", () => {
 			SUMOCODE_NATIVE_DIR: "/opt/sumocode",
 			[ASSET_DIR_OVERRIDE_ENV_KEY]: "/tmp/assets",
 		};
-		expect(resolveAsset("yoga.wasm", "/dev/source/yoga.wasm", env)).toBe("/tmp/assets/yoga.wasm");
+		expect(resolveAsset("yoga.wasm", () => "/dev/source/yoga.wasm", env)).toBe("/tmp/assets/yoga.wasm");
 	});
 
 	it("resolves assets under share/ of the native dir", () => {
 		const env = { SUMOCODE_NATIVE_DIR: "/opt/sumocode" };
-		expect(resolveAsset("sumo-face.ans", "/dev/source/assets/sumo-face.ans", env)).toBe("/opt/sumocode/share/sumo-face.ans");
+		expect(resolveAsset("sumo-face.ans", () => "/dev/source/assets/sumo-face.ans", env)).toBe("/opt/sumocode/share/sumo-face.ans");
 	});
 
 	it("falls back to the dev path off the native runtime, supporting lazy thunks", () => {
-		expect(resolveAsset("yoga.wasm", "/dev/source/yoga.wasm", {})).toBe("/dev/source/yoga.wasm");
+		expect(resolveAsset("yoga.wasm", () => "/dev/source/yoga.wasm", {})).toBe("/dev/source/yoga.wasm");
 		let called = 0;
 		expect(resolveAsset("yoga.wasm", () => {
 			called += 1;

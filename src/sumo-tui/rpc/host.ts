@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { defaultActivityStateRoot } from "../../activity/persistence.js";
 import { FileActivityStore, type ActivityStoreSnapshot } from "../../activity/store.js";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
@@ -1162,7 +1162,12 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			runtime?.markCommandReady();
 			// The RPC child polls this private gate without touching the Pi command
 			// stream; wrappers inherit the path and cannot swallow the readiness cue.
-			try { writeFileSync(terminalIndexGate, "ready\n", { flag: "wx", mode: 0o600 }); } catch {}
+			// The state root is not guaranteed to exist yet on source-mode runs, and
+			// a silently failed write would strand the child on its 30s fallback.
+			try {
+				mkdirSync(dirname(terminalIndexGate), { recursive: true });
+				writeFileSync(terminalIndexGate, "ready\n", { flag: "wx", mode: 0o600 });
+			} catch {}
 		},
 	});
 	/**

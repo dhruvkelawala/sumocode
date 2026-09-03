@@ -8,7 +8,6 @@ import {
 	KeybindingsManager as PiTuiKeybindingsManager,
 	TUI_KEYBINDINGS,
 	type AutocompleteItem,
-	type AutocompleteProvider,
 	type Component,
 	type EditorTheme,
 	type KeybindingDefinitions,
@@ -358,10 +357,6 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 			fdPath: this.fdPath,
 			env: this.env,
 		}));
-	}
-
-	public setAutocompleteProvider(provider: AutocompleteProvider): void {
-		this.editor.setAutocompleteProvider(provider);
 	}
 
 	public focus(): Component {

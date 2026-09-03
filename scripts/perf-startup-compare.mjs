@@ -245,7 +245,14 @@ export function defaultSampleEnvironment(checkout, agentDir, diagFile, inherited
 		// SUMOCODE_/SUMO_TUI: launcher/runtime policy. HERDR_: inherited Herdr pane
 		// state would activate the child's Herdr bridge and attach it to the
 		// operator's socket (same strip list as the integration preflight).
-		if (key.startsWith("SUMOCODE_") || key.startsWith("SUMO_TUI") || key.startsWith("HERDR_")) delete env[key];
+		// Credential-shaped keys (API keys, tokens, secrets, passwords) never
+		// belong in an offline benchmark child.
+		if (
+			key.startsWith("SUMOCODE_")
+			|| key.startsWith("SUMO_TUI")
+			|| key.startsWith("HERDR_")
+			|| /(?:API_?KEY|SECRET|TOKEN|PASSWORD|CREDENTIALS?)/i.test(key)
+		) delete env[key];
 	}
 	return {
 		...env,

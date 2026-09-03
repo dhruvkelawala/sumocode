@@ -172,6 +172,11 @@ async function harness(options = {}) {
 			HERDR_PANE_ID: "w1:p1",
 			SUMOCODE_RPC_CHILD: "1",
 			SUMO_TUI_DEBUG: "1",
+			OPENAI_API_KEY: "sk-operator",
+			AWS_SECRET_ACCESS_KEY: "aws-secret",
+			GITHUB_TOKEN: "gh-token",
+			DEPLOY_PASSWORD: "pw",
+			SERVICE_CREDENTIALS: "creds",
 			PATH: "/usr/bin",
 		});
 		expect(env.HERDR_ENV).toBeUndefined();
@@ -181,6 +186,11 @@ async function harness(options = {}) {
 		expect(env.SUMOCODE_RPC_CHILD).toBeUndefined();
 		expect(env.SUMO_TUI_DEBUG).toBe("0");
 		expect(env.SUMO_TUI_DIAG_FILE).toBe("/agent/startup.jsonl");
+		expect(env.OPENAI_API_KEY).toBeUndefined();
+		expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+		expect(env.GITHUB_TOKEN).toBeUndefined();
+		expect(env.DEPLOY_PASSWORD).toBeUndefined();
+		expect(env.SERVICE_CREDENTIALS).toBeUndefined();
 		expect(env.SUMOCODE_STATE_DIR).toBe(join("/agent", "sumocode-state"));
 		expect(env.PATH).toBe("/usr/bin");
 		expect(env.PI_CODING_AGENT_DIR).toBe("/agent");

@@ -377,10 +377,11 @@ function publicSample(raw, index, startWallMs, fixtureCount) {
 	if (byName.get("host_import_ready")?.mode !== "source") return { index, ok: false, failure: "mode-mismatch", missingEvents: [] };
 	// The ready mark carries the accepted-record count: a scan that skipped
 	// corrupt/duplicate/unsupported records timed a different workload than the
-	// baseline, so the sample must fail instead of entering a median.
+	// baseline, and an instrumented revision that omits the count cannot prove
+	// its workload either, so both must fail instead of entering a median.
 	const readySnapshotCount = byName.get("terminal_index_ready")?.snapshotCount;
 	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- parsed diagnostics JSONL boundary
-	if (typeof readySnapshotCount === "number" && readySnapshotCount !== fixtureCount) {
+	if (typeof readySnapshotCount !== "number" || !Number.isFinite(readySnapshotCount) || readySnapshotCount !== fixtureCount) {
 		return { index, ok: false, failure: "fixture-mismatch", missingEvents };
 	}
 	const hostStart = eventTimestamp(byName.get("process_preload_start"));

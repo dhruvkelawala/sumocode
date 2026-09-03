@@ -348,6 +348,26 @@ describe("startup comparison CLI", () => {
 		await expect(stat(retainedCampaign)).resolves.toBeTruthy();
 	});
 
+	it("reports a dirty caller checkout as the primary failure, not cleanup", async () => {
+		const root = await temporaryRoot("sumocode-startup-dirty-caller-");
+		const callerRoot = join(root, "caller");
+		const outDir = await temporaryRoot("sumocode-startup-dirty-caller-report-");
+		await mkdir(callerRoot, { recursive: true });
+		await expect(runStartupComparison({
+			callerRoot,
+			baseRef: "base",
+			samples: 1,
+			fixtureCount: 1,
+			outDir,
+		}, {
+			resolveRevision: async () => "a".repeat(40),
+			assertClean: async (path) => {
+				if (path === callerRoot) throw new Error("startup comparison requires clean source checkouts");
+			},
+			prepareWorktrees: async () => ({ baselineDir: join(root, "b"), candidateDir: join(root, "c"), cleanup: async () => undefined }),
+		})).rejects.toThrow("startup comparison requires clean source checkouts");
+	});
+
 	it("rejects the public CLI when neither arm collects a successful sample", async () => {
 		await expect(harness({ publicCli: true, failAllSpawns: true, samples: 1, fixtureCount: 1 }))
 			.rejects.toThrow("startup comparison collection failed");

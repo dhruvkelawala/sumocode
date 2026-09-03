@@ -873,6 +873,52 @@ describe("ChatPager", () => {
 		root.dispose();
 	});
 
+	it("reveals current feed state for every Activity in one archived transcript message", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 1 });
+		const first = { id: "multi-a", kind: "terminal" as const, title: "first", status: "running" as const, outputTail: "old a" };
+		const second = { id: "multi-b", kind: "terminal" as const, title: "second", status: "running" as const, outputTail: "old b" };
+		chat.reconcileFeedActivities([first, second]);
+		chat.replaceViewModels([
+			{ id: "both", role: "system", displayName: "SYSTEM", blocks: [{ type: "activity", activity: first }, { type: "activity", activity: second }] },
+			{ id: "later", role: "user", displayName: "YOU", blocks: [{ type: "markdown", text: "later" }] },
+		]);
+		chat.reconcileFeedActivities([
+			{ ...first, status: "succeeded", outputTail: "new a" },
+			{ ...second, outputTail: "new b" },
+		]);
+
+		expect(chat.revealActivity("multi-a")).toBe(true);
+
+		const activities = chat.getRenderedMessages().flatMap((message) => message.toSnapshot().blocks ?? [])
+			.filter((block) => block.type === "activity")
+			.map((block) => block.activity);
+		expect(activities).toEqual([
+			expect.objectContaining({ id: "multi-a", status: "succeeded", outputTail: "new a" }),
+			expect.objectContaining({ id: "multi-b", status: "running", outputTail: "new b" }),
+		]);
+		expect(chat.revealActivity("multi-b")).toBe(true);
+		expect(chat.getRenderedMessages().flatMap((message) => message.toSnapshot().blocks ?? []).filter((block) => block.type === "activity")).toHaveLength(2);
+		root.dispose();
+	});
+
+	it("drops superseded identities when a virtualized transcript message is replaced", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 1 });
+		chat.replaceViewModels([
+			activityViewModel("old-id", "old.ts", "running"),
+			{ id: "later", role: "user", displayName: "YOU", blocks: [{ type: "markdown", text: "later" }] },
+		]);
+
+		expect(chat.replaceViewModelAt(0, activityViewModel("new-id", "new.ts", "running"))).toBe(true);
+
+		expect(chat.getKnownActivityIds()).toContain("new-id");
+		expect(chat.getKnownActivityIds()).not.toContain("old-id");
+		root.dispose();
+	});
+
 	it("page-up restores older Activity history while the newest live card stays protected", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());

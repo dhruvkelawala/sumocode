@@ -184,12 +184,21 @@ export interface FoldableBlockCursor {
 	lastSumoMessageIndex: number;
 }
 
-function foldableIdentityKeys(block: FoldableBlock): string[] {
+function foldableIndexKeys(block: FoldableBlock): string[] {
 	if (block.type === "delegation") {
-		return block.delegation.id ? [`delegation:${block.delegation.id}`] : ["delegation:pending"];
+		const keys = block.delegation.id ? [`delegation:${block.delegation.id}`] : [];
+		if (block.delegation.status === "queued" || block.delegation.status === "running") keys.push("delegation:pending");
+		return keys;
 	}
 	return [...new Set([block.activity.id, block.activity.sourceId].filter((value): value is string => value !== undefined))]
 		.map((value) => `activity:${value}`);
+}
+
+function foldableLookupKeys(block: FoldableBlock): string[] {
+	if (block.type === "delegation") {
+		return block.delegation.id ? [`delegation:${block.delegation.id}`] : ["delegation:pending"];
+	}
+	return [`activity:${block.activity.sourceId ?? block.activity.id}`];
 }
 
 function addIndexedLocation(
@@ -197,7 +206,7 @@ function addIndexedLocation(
 	block: FoldableBlock,
 	location: FoldableBlockLocation,
 ): void {
-	for (const key of foldableIdentityKeys(block)) {
+	for (const key of foldableIndexKeys(block)) {
 		const locations = locationsByIdentity.get(key) ?? [];
 		if (!locations.some((candidate) => candidate.messageIndex === location.messageIndex && candidate.blockIndex === location.blockIndex)) {
 			locations.push(location);
@@ -236,7 +245,7 @@ function indexedMatchingLocation(
 ): FoldableBlockLocation | undefined {
 	indexedIdentityLookups += 1;
 	const candidates = new Map<string, FoldableBlockLocation>();
-	for (const key of foldableIdentityKeys(incoming)) {
+	for (const key of foldableLookupKeys(incoming)) {
 		for (const location of cursor.base.locationsByIdentity.get(key) ?? []) {
 			candidates.set(`${location.messageIndex}:${location.blockIndex}`, location);
 		}
@@ -245,7 +254,7 @@ function indexedMatchingLocation(
 		}
 	}
 	return [...candidates.values()]
-		.sort((left, right) => right.messageIndex - left.messageIndex || right.blockIndex - left.blockIndex)
+		.sort((left, right) => right.messageIndex - left.messageIndex || left.blockIndex - right.blockIndex)
 		.find((location) => {
 			indexedCandidateVisits += 1;
 			const message = messages[location.messageIndex];

@@ -381,9 +381,20 @@ export class ChatPager extends SumoNode {
 		const activeIndex = this.activeMessageSourceIndices.indexOf(sourceIndex);
 		const target = this.activeMessages[activeIndex];
 		if (!target) {
-			if (!this.virtualizedTranscriptMessages.has(sourceIndex)) return false;
+			const previous = this.virtualizedTranscriptMessages.get(sourceIndex);
+			if (!previous) return false;
+			const previousActivities = this.activitiesFromBlocks(previous.blocks);
+			const nextActivities = this.activitiesFromBlocks(message.blocks);
+			this.migrateCorrelatedActivityState(previousActivities, nextActivities);
+			for (const activity of previousActivities) {
+				this.virtualizedTranscriptClaimIds.delete(activity.id);
+				const replacement = nextActivities.find((candidate) => sameActivity(activity, candidate));
+				if (replacement && replacement.id !== activity.id) this.transferVirtualizedFeedIdentity(activity.id, replacement.id);
+				else if (!replacement && !this.feedActivities.has(activity.id)) this.releaseVirtualizedFeedActivity(activity.id);
+			}
 			this.virtualizedTranscriptMessages.set(sourceIndex, message);
-			for (const activity of this.activitiesFromBlocks(message.blocks)) this.noteVirtualizedTranscriptActivity(activity);
+			for (const activity of nextActivities) this.noteVirtualizedTranscriptActivity(activity);
+			this.discardActivitiesRemovedByRewrite(previousActivities);
 			return true;
 		}
 		const previousBlocks = target.toSnapshot().blocks ?? [];
@@ -1315,16 +1326,30 @@ export class ChatPager extends SumoNode {
 		);
 		if (transcriptEntry) {
 			const [sourceIndex, message] = transcriptEntry;
+			const feedIndex = activityCorrelationIndex([...this.feedActivities.values()]);
+			const feedIds = new Set<string>([id]);
+			const blocks = message.blocks.map((block) => {
+				if (block.type !== "activity") return block;
+				this.virtualizedTranscriptClaimIds.delete(block.activity.id);
+				const current = correlatedActivity(feedIndex, block.activity);
+				if (!current) return block;
+				feedIds.add(current.id);
+				return { type: "activity" as const, activity: mergeActivitySnapshot(block.activity, current) };
+			});
+			const restored = { ...message, blocks };
 			this.virtualizedTranscriptMessages.delete(sourceIndex);
-			const removedLines = this.releaseVirtualizedFeedActivity(id) + this.releaseOneTranscriptArchive();
-			this.addPreparedMessage(
-				prepareChatMessage(message),
+			let removedLines = this.releaseOneTranscriptArchive();
+			for (const feedId of feedIds) removedLines += this.releaseVirtualizedFeedActivity(feedId);
+			const [primaryFeedId, ...otherFeedIds] = [...feedIds];
+			const restoredNode = this.addPreparedMessage(
+				prepareChatMessage(restored),
 				sourceIndex,
 				true,
-				id,
+				primaryFeedId,
 				this.transcriptInsertionIndex(sourceIndex),
 				false,
 			);
+			for (const feedId of otherFeedIds) this.addFeedOwnership(restoredNode, feedId);
 			if (removedLines > 0) this.scrollBox.notifyContentChanged(0, removedLines);
 			return;
 		}

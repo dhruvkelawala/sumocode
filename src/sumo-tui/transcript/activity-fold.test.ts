@@ -3,7 +3,9 @@ import {
 	appendOrFoldTranscriptMessageIndexed,
 	createFoldableBlockCursor,
 	foldBlockIntoIndexedMessages,
+	getActivityFoldOperationCountsForTests,
 	indexFoldableBlocks,
+	resetActivityFoldOperationCountsForTests,
 } from "./activity-fold.js";
 import type { ChatMessageViewModel } from "./view-model.js";
 
@@ -81,6 +83,47 @@ describe("indexed Activity folding", () => {
 			expect.objectContaining({ type: "delegation", delegation: expect.objectContaining({ status: "success", summary: "done" }) }),
 			{ type: "image", mime: "image/png", data: "image-data" },
 		]);
+	});
+
+	it("matches a no-ID result to the first queued delegation even when it has an ID", () => {
+		const messages: ChatMessageViewModel[] = [{
+			id: "delegations",
+			role: "sumo",
+			displayName: "SUMO",
+			blocks: [
+				{ type: "delegation", delegation: { id: "first", title: "first", status: "running" } },
+				{ type: "delegation", delegation: { id: "second", title: "second", status: "running" } },
+			],
+		}];
+		const cursor = createFoldableBlockCursor(indexFoldableBlocks(messages));
+
+		foldBlockIntoIndexedMessages(messages, {
+			type: "delegation",
+			delegation: { title: "complete", status: "success" },
+		}, cursor, { requireMatch: true });
+
+		expect(messages[0]?.blocks[0]).toMatchObject({ type: "delegation", delegation: { id: "first", status: "success" } });
+		expect(messages[0]?.blocks[1]).toMatchObject({ type: "delegation", delegation: { id: "second", status: "running" } });
+	});
+
+	it("uses the source alias directly when canonical IDs repeat", () => {
+		const messages = Array.from({ length: 10_000 }, (_, index) => subagentMessage("subagent:worker", `spawn-${index}`));
+		const cursor = createFoldableBlockCursor(indexFoldableBlocks(messages));
+		resetActivityFoldOperationCountsForTests();
+
+		foldBlockIntoIndexedMessages(messages, {
+			type: "activity",
+			activity: {
+				id: "subagent:worker",
+				sourceId: "spawn-0",
+				kind: "subagent",
+				title: "first complete",
+				status: "succeeded",
+			},
+		}, cursor, { requireMatch: true });
+
+		expect(getActivityFoldOperationCountsForTests().indexedCandidateVisits).toBe(1);
+		expect(messages[0]?.blocks[0]).toMatchObject({ type: "activity", activity: { sourceId: "spawn-0", status: "succeeded" } });
 	});
 
 	it("updates the exact source identity when canonical IDs repeat", () => {

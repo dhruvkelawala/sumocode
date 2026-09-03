@@ -965,6 +965,9 @@ describe("ChatPager", () => {
 				activity: { id: "worker-1", sourceId: "call-1", kind: "subagent", title: "worker", status: "running" },
 			}],
 		})).toBe(true);
+		chat.reconcileFeedActivities([original]);
+		expect(chat.getRenderedMessages().flatMap((message) => message.toSnapshot().blocks ?? [])
+			.some((block) => block.type === "activity" && block.activity.id === "call-1")).toBe(false);
 
 		expect(chat.revealActivity("worker-1")).toBe(true);
 

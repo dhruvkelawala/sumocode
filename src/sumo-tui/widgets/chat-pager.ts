@@ -397,8 +397,13 @@ export class ChatPager extends SumoNode {
 				this.virtualizedTranscriptClaimIds.delete(activity.id);
 				this.freshVirtualTranscriptActivityIds.delete(activity.id);
 				const replacement = nextActivities.find((candidate) => sameActivity(activity, candidate));
-				if (replacement && replacement.id !== activity.id) this.transferVirtualizedFeedIdentity(activity.id, replacement.id);
-				else if (!replacement && !this.feedActivities.has(activity.id)) this.releaseVirtualizedFeedActivity(activity.id);
+				if (replacement && replacement.id !== activity.id) {
+					this.transferVirtualizedFeedIdentity(activity.id, replacement.id);
+					if (this.feedActivities.has(activity.id)) {
+						this.virtualizedFeedActivityIds.add(activity.id);
+						this.virtualizedTranscriptFeedActivityIds.add(activity.id);
+					}
+				} else if (!replacement && !this.feedActivities.has(activity.id)) this.releaseVirtualizedFeedActivity(activity.id);
 			}
 			if (prepareChatMessage(effectiveSourceMessage).text.length === 0) {
 				this.virtualizedTranscriptMessages.delete(sourceIndex);

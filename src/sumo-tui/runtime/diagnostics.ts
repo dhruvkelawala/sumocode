@@ -50,7 +50,14 @@ export function logDiagnostic(event: string, fields: DiagnosticFields = {}): voi
 	try {
 		const now = performance.now();
 		const sanitized: Record<string, DiagnosticValue> = {};
-		if (!publicStartupDiagnostics) {
+		if (publicStartupDiagnostics) {
+			// Only the scan's high-resolution duration is public-safe; every other
+			// field (cwd, counts, surfaces) stays process-local.
+			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- diagnostics-file boundary: durationMs arrives from a caller-supplied DiagnosticFields record, not a parsed domain value.
+			if (event === "terminal_index_ready" && typeof fields.durationMs === "number" && Number.isFinite(fields.durationMs)) {
+				sanitized.durationMs = fields.durationMs;
+			}
+		} else {
 			for (const [key, value] of Object.entries(fields)) sanitized[key] = sanitizeDiagnosticValue(value);
 		}
 		// `mode` only applies when the append creates the file: the trace carries

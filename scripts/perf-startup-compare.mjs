@@ -340,6 +340,10 @@ function publicSample(raw, index, startWallMs) {
 	const rpcChild = eventTimestamp(byName.get("rpc_child_ready"));
 	const terminalIndexStart = eventTimestamp(byName.get("terminal_index_start"));
 	const terminalIndex = eventTimestamp(byName.get("terminal_index_ready"));
+	// The ready mark carries the store's own high-resolution scan duration;
+	// prefer it over integer wall-clock subtraction, which quantizes
+	// sub-millisecond scans to 0/1ms.
+	const scanDurationMs = byName.get("terminal_index_ready")?.durationMs;
 	const editor = eventTimestamp(byName.get("editor_ready"));
 	const hydration = eventTimestamp(byName.get("hydration_committed"));
 	const command = eventTimestamp(byName.get("command_ready"));
@@ -350,7 +354,10 @@ function publicSample(raw, index, startWallMs) {
 			launcherMs: hostStart - startWallMs,
 			hostImportMs: Math.max(0, hostImport - hostStart),
 			rpcChildReadyMs: rpcChild - startWallMs,
-			terminalIndexReadyMs: Math.max(0, terminalIndex - terminalIndexStart),
+			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- parsed diagnostics JSONL boundary: durationMs is validated before use.
+			terminalIndexReadyMs: typeof scanDurationMs === "number" && Number.isFinite(scanDurationMs) && scanDurationMs >= 0
+				? round(scanDurationMs)
+				: Math.max(0, terminalIndex - terminalIndexStart),
 			editorReadyMs: editor - startWallMs,
 			hydrationCommittedMs: hydration - startWallMs,
 			commandReadyMs: command - startWallMs,

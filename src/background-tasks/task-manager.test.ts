@@ -1156,22 +1156,25 @@ function transientFault(code: string): Error {
 		});
 		try {
 			// The failed constructor scan is diagnosed once at each level: one store
-			// io entry plus one deduped manager episode entry.
+			// io entry plus one deduped manager episode entry, plus the store's own
+			// index-scan telemetry for the scan itself.
 			expect(reads.scans).toBe(1);
 			expect(diagnostics.filter((entry) => entry.kind === "io")).toHaveLength(1);
 			expect(diagnostics.filter((entry) => entry.kind === "manager")).toHaveLength(1);
+			expect(diagnostics.filter((entry) => entry.kind === "index-scan")).toHaveLength(1);
 
 			// The first lazy retry fails too and stays quiet at both levels.
 			expect(target.get("term-quiet-io", "session-a")).toBeUndefined();
 			expect(reads.scans).toBe(2);
 			expect(diagnostics.filter((entry) => entry.kind === "io")).toHaveLength(1);
 			expect(diagnostics.filter((entry) => entry.kind === "manager")).toHaveLength(1);
+			expect(diagnostics.filter((entry) => entry.kind === "index-scan")).toHaveLength(2);
 
 			// Further entries at the same clock reading coalesce into the backoff.
 			target.list("session-a");
 			expect(target.get("term-quiet-io", "session-a")).toBeUndefined();
 			expect(reads.scans).toBe(2);
-			expect(diagnostics).toHaveLength(2);
+			expect(diagnostics).toHaveLength(4);
 
 			// Each later escalated-backoff retry fails silently: the store-level
 			// refresh-failure diagnostic stays deduped for the whole episode, and
@@ -1185,7 +1188,7 @@ function transientFault(code: string): Error {
 			now += 1_000;
 			expect(target.list("session-a")).toEqual([]);
 			expect(reads.scans).toBe(4);
-			expect(diagnostics).toHaveLength(2);
+			expect(diagnostics).toHaveLength(6);
 
 			// The first successful scan ends the episode silently and resets both
 			// dedupes and the backoff schedule.
@@ -1193,7 +1196,7 @@ function transientFault(code: string): Error {
 			now += 4_000;
 			expect(target.get("term-quiet-io", "session-a")).toMatchObject({ id: "term-quiet-io" });
 			expect(reads.scans).toBe(5);
-			expect(diagnostics).toHaveLength(2);
+			expect(diagnostics).toHaveLength(7);
 
 			// A failure after the reset is diagnosed again.
 			chmodSync(rootDir, 0o000);
@@ -1202,6 +1205,7 @@ function transientFault(code: string): Error {
 			expect(reads.scans).toBe(6);
 			expect(diagnostics.filter((entry) => entry.kind === "io")).toHaveLength(2);
 			expect(diagnostics.filter((entry) => entry.kind === "manager")).toHaveLength(1);
+			expect(diagnostics.filter((entry) => entry.kind === "index-scan")).toHaveLength(6);
 		} finally {
 			chmodSync(rootDir, 0o700);
 		}

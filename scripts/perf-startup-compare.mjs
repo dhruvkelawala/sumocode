@@ -510,6 +510,9 @@ export async function runStartupComparison(options, dependencies = {}) {
 	let retainedForAuditFailure = false;
 	let retainedForSetupFailure = false;
 	let auditError;
+	let bodyError;
+	let cleanupError;
+	let report;
 	try {
 		await assertCheckoutClean(callerRoot);
 		const [baselineSha, candidateSha] = await Promise.all([resolveRef(options.baseRef), resolveRef(options.candidateRef ?? "HEAD")]);
@@ -570,7 +573,7 @@ export async function runStartupComparison(options, dependencies = {}) {
 		};
 		const shutdownFailures = armSamples.baseline.concat(armSamples.candidate)
 			.filter((sample) => sample.failure === "shutdown-failed").length;
-		const report = {
+		report = {
 			schemaVersion: 1,
 			generatedAt: now().toISOString(),
 			baselineSha,
@@ -601,7 +604,9 @@ export async function runStartupComparison(options, dependencies = {}) {
 		await writeReportFile(join(outDir, "startup-compare.json"), `${JSON.stringify(report, null, 2)}\n`);
 		await writeReportFile(join(outDir, "startup-compare.md"), markdown(report));
 		if (auditError) throw auditError;
-		return report;
+	} catch (error) {
+		bodyError = error;
+		throw error;
 	} finally {
 		const cleanupSteps = [];
 		if (retainedForLiveProcess || retainedForAuditFailure || retainedForSetupFailure) {
@@ -613,8 +618,18 @@ export async function runStartupComparison(options, dependencies = {}) {
 			else cleanupSteps.push(() => rm(campaignDir, { recursive: true, force: true }));
 		}
 		cleanupSteps.push(() => assertCheckoutClean(callerRoot));
-		await runCleanupSteps(cleanupSteps, "startup comparison cleanup failed");
+		try {
+			await runCleanupSteps(cleanupSteps, "startup comparison cleanup failed");
+		} catch (error) {
+			// The primary failure (dirty caller, failed audit, lost revision) is the
+			// useful diagnostic; never mask it with the generic cleanup error. The
+			// recorded cleanup error is rethrown after this block on the success path.
+			if (bodyError !== undefined) console.error(`[startup-compare] cleanup also failed: ${error.message}`);
+			else cleanupError = error;
+		}
 	}
+	if (cleanupError) throw cleanupError;
+	return report;
 }
 
 export async function main(argv = process.argv.slice(2), dependencies = {}) {

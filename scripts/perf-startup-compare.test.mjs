@@ -161,7 +161,7 @@ describe("startup comparison CLI", () => {
 		expect(env.HERDR_SOCKET_PATH).toBeUndefined();
 		expect(env.HERDR_PANE_ID).toBeUndefined();
 		expect(env.SUMOCODE_RPC_CHILD).toBeUndefined();
-		expect(env.SUMO_TUI_DEBUG).toBeUndefined();
+		expect(env.SUMO_TUI_DEBUG).toBe("0");
 		expect(env.SUMO_TUI_DIAG_FILE).toBe("/agent/startup.jsonl");
 		expect(env.SUMOCODE_STATE_DIR).toBe(join("/agent", "sumocode-state"));
 		expect(env.PATH).toBe("/usr/bin");

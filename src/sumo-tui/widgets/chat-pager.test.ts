@@ -875,7 +875,7 @@ describe("ChatPager", () => {
 			},
 			{ id: "later", role: "user", content: "later" },
 		]);
-		chat.reconcileFeedActivities([{ id: "read-old", kind: "tool", title: "read", status: "running" }]);
+		chat.reconcileFeedActivities([{ id: "read-old", kind: "tool", title: "read", status: "running", outputTail: "old output" }]);
 		const replace = vi.spyOn(chat, "replaceViewModels");
 
 		controller.handleAgentEvent({
@@ -885,7 +885,6 @@ describe("ChatPager", () => {
 			args: { path: "old.ts" },
 			partialResult: { content: [{ type: "text", text: "latest output" }] },
 		});
-		chat.reconcileFeedActivities([{ id: "read-old", kind: "tool", title: "read", status: "running", outputTail: "latest output" }]);
 
 		expect(replace).not.toHaveBeenCalled();
 		expect(chat.revealActivity("read-old")).toBe(true);
@@ -922,6 +921,28 @@ describe("ChatPager", () => {
 		]);
 		expect(chat.revealActivity("multi-b")).toBe(true);
 		expect(chat.getRenderedMessages().flatMap((message) => message.toSnapshot().blocks ?? []).filter((block) => block.type === "activity")).toHaveLength(2);
+		root.dispose();
+	});
+
+	it("removes an empty virtualized transcript replacement from archive counts", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 1 });
+		chat.replaceViewModels([
+			activityViewModel("removed", "old.ts", "running"),
+			{ id: "later", role: "user", displayName: "YOU", blocks: [{ type: "markdown", text: "later" }] },
+		]);
+		expect(chat.getArchivedMessageCount()).toBe(1);
+
+		expect(chat.replaceViewModelAt(0, {
+			id: "removed",
+			role: "sumo",
+			displayName: "SUMO",
+			blocks: [{ type: "markdown", text: "" }],
+		})).toBe(true);
+
+		expect(chat.getArchivedMessageCount()).toBe(0);
+		expect(chat.getKnownActivityIds()).not.toContain("removed");
 		root.dispose();
 	});
 

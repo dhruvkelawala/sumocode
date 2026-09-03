@@ -162,6 +162,7 @@ export class ChatPager extends SumoNode {
 	/** Claim index proportional to the retained transcript, not optional expansion bookkeeping. */
 	private readonly virtualizedTranscriptClaimIds = new Set<string>();
 	private readonly virtualizedTranscriptMessages = new Map<number, ChatMessageViewModel>();
+	private readonly freshVirtualTranscriptActivityIds = new Set<string>();
 	private nextFeedSourceIndex = -1;
 	private readonly activityExpansionOverrides = new Map<string, boolean>();
 	private readonly persistedActivityExpansionOverrides = new Map<string, boolean>();
@@ -290,6 +291,7 @@ export class ChatPager extends SumoNode {
 		this.materializedArchivedTranscriptFeedActivityIds.clear();
 		this.virtualizedTranscriptClaimIds.clear();
 		this.virtualizedTranscriptMessages.clear();
+		this.freshVirtualTranscriptActivityIds.clear();
 		for (let sourceIndex = 0; sourceIndex < messages.length; sourceIndex += 1) {
 			if (renderedSourceIndices.has(sourceIndex)) continue;
 			const message = messages[sourceIndex];
@@ -393,12 +395,24 @@ export class ChatPager extends SumoNode {
 			this.migrateCorrelatedActivityState(previousActivities, nextActivities);
 			for (const activity of previousActivities) {
 				this.virtualizedTranscriptClaimIds.delete(activity.id);
+				this.freshVirtualTranscriptActivityIds.delete(activity.id);
 				const replacement = nextActivities.find((candidate) => sameActivity(activity, candidate));
 				if (replacement && replacement.id !== activity.id) this.transferVirtualizedFeedIdentity(activity.id, replacement.id);
 				else if (!replacement && !this.feedActivities.has(activity.id)) this.releaseVirtualizedFeedActivity(activity.id);
 			}
+			if (prepareChatMessage(effectiveSourceMessage).text.length === 0) {
+				this.virtualizedTranscriptMessages.delete(sourceIndex);
+				const removedLines = this.releaseOneTranscriptArchive();
+				if (removedLines > 0) this.scrollBox.notifyContentChanged(0, removedLines);
+				this.discardActivitiesRemovedByRewrite(previousActivities);
+				this.scheduleRender();
+				return true;
+			}
 			this.virtualizedTranscriptMessages.set(sourceIndex, effectiveSourceMessage);
-			for (const activity of nextActivities) this.noteVirtualizedTranscriptActivity(activity);
+			for (const activity of nextActivities) {
+				this.freshVirtualTranscriptActivityIds.add(activity.id);
+				this.noteVirtualizedTranscriptActivity(activity);
+			}
 			this.discardActivitiesRemovedByRewrite(previousActivities);
 			return true;
 		}
@@ -575,6 +589,7 @@ export class ChatPager extends SumoNode {
 		this.materializedArchivedTranscriptFeedActivityIds.clear();
 		this.virtualizedTranscriptClaimIds.clear();
 		this.virtualizedTranscriptMessages.clear();
+		this.freshVirtualTranscriptActivityIds.clear();
 		this.defaultActivityExpansionOverride = undefined;
 		this.protectedActivityId = undefined;
 		this.placeholder = undefined;
@@ -1354,10 +1369,17 @@ export class ChatPager extends SumoNode {
 			const blocks = message.blocks.map((block) => {
 				if (block.type !== "activity") return block;
 				this.virtualizedTranscriptClaimIds.delete(block.activity.id);
+				const transcriptIsFresh = this.freshVirtualTranscriptActivityIds.delete(block.activity.id);
 				const current = correlatedActivity(feedIndex, block.activity);
 				if (!current) return block;
 				feedIds.add(current.id);
-				return { type: "activity" as const, activity: mergeActivitySnapshot(block.activity, current) };
+				this.freshVirtualTranscriptActivityIds.delete(current.id);
+				return {
+					type: "activity" as const,
+					activity: transcriptIsFresh
+						? mergeActivitySnapshot(current, block.activity)
+						: mergeActivitySnapshot(block.activity, current),
+				};
 			});
 			const restored = { ...message, blocks };
 			this.virtualizedTranscriptMessages.delete(sourceIndex);

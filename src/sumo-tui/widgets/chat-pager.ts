@@ -616,6 +616,10 @@ export class ChatPager extends SumoNode {
 				this.virtualizedFeedActivityIds.add(activity.id);
 				this.virtualizedTranscriptFeedActivityIds.add(activity.id);
 				this.transcriptClaimedActivityStatuses.set(activity.id, activity.status);
+				if (activity.status === "failed") {
+					this.protectedActivityId = activity.id;
+					this.materializeVirtualizedActivity(activity.id);
+				}
 				continue;
 			}
 			const virtualized = previousActivity && this.virtualizedFeedActivityIds.has(previousActivity.id);
@@ -634,7 +638,11 @@ export class ChatPager extends SumoNode {
 					this.migrateFeedActivityState([previousActivity], activity);
 				}
 				// Feed truth remains current while its Yoga node stays count-only.
-				// Explicit expansion rematerializes the card when the user navigates to it.
+				// Explicit expansion or a high-priority failure rematerializes it.
+				if (activity.status === "failed") {
+					this.protectedActivityId = activity.id;
+					this.materializeVirtualizedActivity(activity.id);
+				}
 				continue;
 			}
 			if (previousActivity && previousActivity.id !== activity.id) {

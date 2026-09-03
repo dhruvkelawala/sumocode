@@ -208,7 +208,10 @@ function foldableLookupKeys(block: FoldableBlock): FoldableLookupKeys {
 	}
 	const sourceId = block.activity.sourceId;
 	return sourceId && sourceId !== block.activity.id
-		? { preferred: [`activity:${sourceId}`], fallback: [`activity:${block.activity.id}`] }
+		? {
+			preferred: [`activity:${sourceId}`],
+			fallback: block.activity.kind === "subagent" ? [] : [`activity:${block.activity.id}`],
+		}
 		: { preferred: [`activity:${block.activity.id}`], fallback: [] };
 }
 

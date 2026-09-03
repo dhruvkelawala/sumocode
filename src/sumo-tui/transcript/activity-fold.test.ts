@@ -146,6 +146,26 @@ describe("indexed Activity folding", () => {
 		expect(messages[0]?.blocks[0]).toMatchObject({ type: "activity", activity: { sourceId: "spawn-0", status: "succeeded" } });
 	});
 
+	it("does not scan repeated canonical subagent IDs for an unseen source", () => {
+		const messages = Array.from({ length: 10_000 }, (_, index) => subagentMessage("subagent:worker", `spawn-${index}`));
+		const cursor = createFoldableBlockCursor(indexFoldableBlocks(messages));
+		resetActivityFoldOperationCountsForTests();
+
+		const result = foldBlockIntoIndexedMessages(messages, {
+			type: "activity",
+			activity: {
+				id: "subagent:worker",
+				sourceId: "spawn-new",
+				kind: "subagent",
+				title: "new generation",
+				status: "succeeded",
+			},
+		}, cursor, { requireMatch: true });
+
+		expect(result.folded).toBe(false);
+		expect(getActivityFoldOperationCountsForTests().indexedCandidateVisits).toBe(0);
+	});
+
 	it("updates the exact source identity when canonical IDs repeat", () => {
 		const first = subagentMessage("subagent:worker", "spawn-first");
 		const second = subagentMessage("subagent:worker", "spawn-second");

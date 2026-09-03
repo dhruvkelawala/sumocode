@@ -1,0 +1,67 @@
+name: Native release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-native:
+    name: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform: macos-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.29.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Setup pinned Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build native archive directory
+        run: pnpm build:native
+
+      - name: Verify and package checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          release_dir="dist/native/sumocode-${version}-${{ matrix.platform }}"
+          test -d "${release_dir}"
+          (cd "${release_dir}" && shasum -a 256 -c SHA256SUMS)
+          archive="${release_dir}.tar.gz"
+          tar -C dist/native -czf "${archive}" "$(basename "${release_dir}")"
+          (cd dist/native && shasum -a 256 "$(basename "${archive}")" > SHA256SUMS)
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          archive="dist/native/sumocode-${version}-${{ matrix.platform }}.tar.gz"
+          gh release upload "${GITHUB_REF_NAME}" "${archive}" dist/native/SHA256SUMS --clobber

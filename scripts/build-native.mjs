@@ -179,9 +179,10 @@ async function main() {
 		join(root, "src/sumo-tui/rpc/chrome-cache-worker.ts"),
 	]);
 
-	// 4. Host sidecar assets under share/.
+	// 4. Host sidecar assets and installer.
 	copyFileSync(require.resolve("yoga-wasm-web/dist/yoga.wasm"), join(shareDir, "yoga.wasm"));
 	copyFileSync(resolve(root, "src/assets/sumo-face.ans"), join(shareDir, "sumo-face.ans"));
+	copyFileSync(resolve(root, "install.sh"), join(outDir, "install.sh"));
 
 	// 5. SHA256SUMS over the archive contents.
 	const checksumLines = [];

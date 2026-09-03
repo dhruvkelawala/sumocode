@@ -35,6 +35,7 @@ pnpm visual:promote                # promote runtime crop status/golden; require
 pnpm test:visual:real-runtime      # legacy real-runtime smoke harness
 
 pi -e .                            # ephemeral install of THIS checkout — classic Pi extension dev loop
+pnpm dev                           # source-mode SumoCode launcher (bin/sumocode.sh)
 bin/sumocode.sh                    # local SumoCode CLI wrapper (RPC host by default)
 bin/sumocode.sh -h                 # full CLI help
 bin/sumocode.sh -d .               # debug/diagnostics mode for manual testing
@@ -72,7 +73,7 @@ pnpm visual:ci
 
 The canonical workflow lives in `DEV_LOOP.md`.
 
-Short version: edit in this checkout → `pi -e .` for classic extension-only checks or `bin/sumocode.sh` / globally linked `sumocode` for RPC-host SumoCode checks → commit → for releases bump `package.json` version + `VERSION` in `src/extension.ts`, tag, push tags, then `pi update git:github.com/dhruvkelawala/sumocode` on consumer machines. Tagged releases are the only thing that propagates; pushes to `main` do not.
+Short version: edit in this checkout → `pi -e .` for classic extension-only checks or `pnpm dev` / `bin/sumocode.sh` for source-mode RPC-host checks → commit → for releases bump `package.json` version + `VERSION` in `src/extension.ts`, tag, and let `.github/workflows/release.yml` build the native archive. Tagged releases are the only thing that propagates; pushes to `main` do not.
 
 Never edit `~/.pi/agent/git/github.com/dhruvkelawala/sumocode/` — that is the installed clone, not the source of truth.
 
@@ -109,7 +110,7 @@ The user-facing wrapper is `bin/sumocode.sh` and, when linked/installed, the `su
 
 Manual-test diagnostics are opt-in via `sumocode -d` / `bin/sumocode.sh -d`. Debug mode writes JSONL to `/tmp/sumocode-manual.jsonl` by default, or to `--diag-file <path>` / `SUMO_TUI_DIAG_FILE`. The launcher clears the diagnostics file at startup unless `--no-clear-diag` is set. Use `sumocode diag` or `node scripts/diag-summary.mjs /tmp/sumocode-manual.jsonl` to summarize a run. Diagnostics must stay no-op unless `SUMO_TUI_DIAG_FILE` is set.
 
-Do not casually change the launcher runtime selection, `SUMO_RPC`, `SUMO_TUI`, or `sumo-rpc-host.js`. Pi version bumps must re-verify the RPC contract (`rpc-types.d.ts`), re-check the hardcoded builtin slash list, rerun the tool-bypass/security regression test, and preserve the direct-Pi bypass for `--print`, explicit `--mode`, and non-TTY stdout.
+Do not casually change the launcher runtime selection, `SUMO_RPC`, `SUMO_TUI`, or `sumo-rpc-host.js`. Pi version bumps must recompile `bin/sumocode-pi`, rerun the native extension-bundle external guard and `pnpm test:native`, re-verify the RPC contract (`rpc-types.d.ts`), re-check the hardcoded builtin slash list, rerun the tool-bypass/security regression test, and preserve the direct-Pi bypass for `--print`, explicit `--mode`, and non-TTY stdout.
 
 ### Pi ↔ SumoCode tool boundary
 

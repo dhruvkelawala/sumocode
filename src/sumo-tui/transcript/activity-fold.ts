@@ -4,6 +4,44 @@ import type { ChatBlock, ChatMessageViewModel } from "./view-model.js";
 export type ActivityBlock = Extract<ChatBlock, { type: "activity" }>;
 export type FoldableBlock = Extract<ChatBlock, { type: "activity" | "delegation" }>;
 
+export interface ActivityFoldOperationCounts {
+	readonly historyMessageVisits: number;
+	readonly messageEnvelopeCopies: number;
+}
+
+let historyMessageVisits = 0;
+let messageEnvelopeCopies = 0;
+
+export function resetActivityFoldOperationCountsForTests(): void {
+	historyMessageVisits = 0;
+	messageEnvelopeCopies = 0;
+}
+
+export function getActivityFoldOperationCountsForTests(): ActivityFoldOperationCounts {
+	return { historyMessageVisits, messageEnvelopeCopies };
+}
+
+function copyMessages(messages: readonly ChatMessageViewModel[]): ChatMessageViewModel[] {
+	messageEnvelopeCopies += 1;
+	return [...messages];
+}
+
+function copyAndAppendMessage(
+	messages: readonly ChatMessageViewModel[],
+	message: ChatMessageViewModel,
+): ChatMessageViewModel[] {
+	messageEnvelopeCopies += 1;
+	return [...messages, message];
+}
+
+function mapMessages(
+	messages: readonly ChatMessageViewModel[],
+	map: (message: ChatMessageViewModel, index: number) => ChatMessageViewModel,
+): ChatMessageViewModel[] {
+	messageEnvelopeCopies += 1;
+	return messages.map(map);
+}
+
 export function isActivityBlock(block: ChatBlock): block is ActivityBlock {
 	return block.type === "activity";
 }
@@ -95,6 +133,7 @@ function findLastMessageIndex(
 	predicate: (message: ChatMessageViewModel) => boolean,
 ): number {
 	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		historyMessageVisits += 1;
 		if (predicate(messages[index]!)) return index;
 	}
 	return -1;
@@ -125,17 +164,17 @@ export function foldBlockIntoMessages(
 	const fallbackIndex = options.requireMatch ? -1 : findLastMessageIndex(messages, (message) => message.role === "sumo");
 	const targetIndex = matchingMessageIndex !== -1 ? matchingMessageIndex : fallbackIndex;
 	if (targetIndex === -1) {
-		if (options.requireMatch) return { messages: [...messages], folded: false };
+		if (options.requireMatch) return { messages: copyMessages(messages), folded: false };
 		const created: ChatMessageViewModel = {
 			id: `live-foldable-${foldableBlockId(incoming)}`,
 			role: "sumo",
 			displayName: "SUMO",
 			blocks: [incoming],
 		};
-		return { messages: [...messages, created], folded: true };
+		return { messages: copyAndAppendMessage(messages, created), folded: true };
 	}
 	return {
-		messages: messages.map((message, index) => (
+		messages: mapMessages(messages, (message, index) => (
 			index === targetIndex ? { ...message, blocks: upsertFoldableBlock(message.blocks, incoming) } : message
 		)),
 		folded: true,
@@ -147,7 +186,7 @@ export function foldBlocksIntoMessages(
 	blocks: readonly FoldableBlock[],
 	options: { readonly requireMatch: boolean },
 ): FoldedBlocksResult {
-	let next = [...messages];
+	let next = copyMessages(messages);
 	let foldedAny = false;
 	const unmatched: FoldableBlock[] = [];
 	for (const block of blocks) {
@@ -170,12 +209,12 @@ export function foldResultViewModelIntoMessages(
 	messages: readonly ChatMessageViewModel[],
 	message: ChatMessageViewModel,
 ) {
-	if (!isFoldableResultViewModel(message)) return { messages: [...messages], folded: false };
+	if (!isFoldableResultViewModel(message)) return { messages: copyMessages(messages), folded: false };
 	const foldable = message.blocks.filter(isFoldableBlock);
 	const targetIndices = foldable.map((block) => findLastMessageIndex(messages, (candidate) => (
 		canOwnFoldableUpdates(candidate) && matchingFoldableBlockIndex(candidate.blocks, block) !== -1
 	))).filter((index) => index !== -1);
-	if (targetIndices.length === 0) return { messages: [...messages], folded: false };
+	if (targetIndices.length === 0) return { messages: copyMessages(messages), folded: false };
 	const folded = foldBlocksIntoMessages(messages, foldable, { requireMatch: true });
 	const targetIndex = Math.max(...targetIndices);
 	const images = message.blocks.filter((block): block is Extract<ChatBlock, { type: "image" }> => block.type === "image");
@@ -193,7 +232,7 @@ export function foldResultViewModelIntoMessages(
 		return uniqueImages.length > 0 ? { ...candidate, blocks: [...candidate.blocks, ...uniqueImages] } : candidate;
 	});
 	if (folded.unmatched.length > 0) {
-		next = [...next, { ...message, blocks: folded.unmatched }];
+		next = copyAndAppendMessage(next, { ...message, blocks: folded.unmatched });
 	}
 	return { messages: next, folded: true };
 }
@@ -207,5 +246,5 @@ export function appendOrFoldTranscriptMessage(
 		const folded = foldResultViewModelIntoMessages(messages, message);
 		if (folded.folded) return folded.messages;
 	}
-	return [...messages, message];
+	return copyAndAppendMessage(messages, message);
 }

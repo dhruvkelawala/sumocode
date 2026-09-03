@@ -293,6 +293,7 @@ type ChatDiffHint = "incremental" | "rewrite";
 
 let messageContentKeyCache = new WeakMap<ChatMessageViewModel, string>();
 let messageContentKeyCacheMisses = 0;
+let transcriptSnapshotEnvelopeCopies = 0;
 
 export function resetMessageContentKeyCacheForTests(): void {
 	messageContentKeyCache = new WeakMap<ChatMessageViewModel, string>();
@@ -301,6 +302,14 @@ export function resetMessageContentKeyCacheForTests(): void {
 
 export function getMessageContentKeyCacheMissesForTests(): number {
 	return messageContentKeyCacheMisses;
+}
+
+export function resetTranscriptSnapshotEnvelopeCopiesForTests(): void {
+	transcriptSnapshotEnvelopeCopies = 0;
+}
+
+export function getTranscriptSnapshotEnvelopeCopiesForTests(): number {
+	return transcriptSnapshotEnvelopeCopies;
 }
 
 export class TranscriptController {
@@ -531,6 +540,7 @@ export class TranscriptController {
 	}
 
 	public viewModel(): TranscriptViewModel {
+		transcriptSnapshotEnvelopeCopies += 1;
 		let messages = [...this.ensureCommittedViewModels()];
 		if (this.draftMessage !== undefined) {
 			const message = this.mapper.messageFromPiMessage(this.draftMessage, messages.length, {

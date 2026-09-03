@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
-import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, open, readFile, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import { cpus, platform, arch, tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -444,7 +445,11 @@ function executionSchedule(samples) {
 /** Report writes must never follow a pre-existing symlink at the leaf. */
 async function writeReportFile(path, contents) {
 	if ((await lstat(path).catch(() => undefined))?.isSymbolicLink()) throw new Error(`refusing to write through symlink: ${path}`);
-	await writeFile(path, contents);
+	// O_NOFOLLOW keeps the no-symlink guarantee at the syscall boundary, closing
+	// the lstat/write TOCTOU window (undefined on Windows, where the flag is
+	// unsupported).
+	const handle = await open(path, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | (fsConstants.O_NOFOLLOW ?? 0), 0o600);
+	try { await handle.writeFile(contents); } finally { await handle.close(); }
 }
 
 /**

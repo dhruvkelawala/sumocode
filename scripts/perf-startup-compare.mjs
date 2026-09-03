@@ -450,7 +450,9 @@ function markdown(report) {
 	const fixtureNote = report.fixture.retained
 		? report.fixture.reason === "live-process"
 			? "retained because a live benchmark process prevented safe cleanup"
-			: "retained by explicit request"
+			: report.fixture.reason === "audit-failure"
+				? "retained because a revision dirtied its checkout"
+				: "retained by explicit request"
 		: "deleted after collection";
 	const section = (title, group, description) => {
 		const rows = report.metrics.filter((metric) => metric.group === group).map((metric) =>

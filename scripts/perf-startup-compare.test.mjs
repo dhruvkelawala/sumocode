@@ -290,6 +290,8 @@ async function harness(options = {}) {
 				roots.push(path);
 			},
 		})).rejects.toThrow("failed to unlink comparison dependencies");
+		const written = JSON.parse(await readFile(join(outDir, "startup-compare.json"), "utf8"));
+		expect(written.fixture.reason).toBe("unlink-failure");
 		expect(retainedCampaign).toEqual(expect.any(String));
 		await expect(stat(retainedCampaign)).resolves.toBeTruthy();
 	});

@@ -644,8 +644,8 @@ export class ChatPager extends SumoNode {
 					this.migrateFeedActivityState([previousActivity], activity);
 				}
 				// Feed truth remains current while its Yoga node stays count-only.
-				// Explicit expansion or a high-priority failure rematerializes it.
-				if (activity.status === "failed") {
+				// Explicit expansion or a newly failed high-priority Activity rematerializes it.
+				if (previousActivity.status !== "failed" && activity.status === "failed") {
 					this.protectedActivityId = activity.id;
 					this.materializeVirtualizedActivity(activity.id);
 				}

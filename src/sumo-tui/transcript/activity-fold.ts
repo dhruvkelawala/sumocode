@@ -181,6 +181,7 @@ export interface FoldableBlockIndex {
 export interface FoldableBlockCursor {
 	readonly base: FoldableBlockIndex;
 	readonly addedLocationsByIdentity: Map<string, FoldableBlockLocation[]>;
+	pendingDelegationOffset: number;
 	lastSumoMessageIndex: number;
 }
 
@@ -190,8 +191,12 @@ function foldableIndexKeys(block: FoldableBlock): string[] {
 		if (block.delegation.status === "queued" || block.delegation.status === "running") keys.push("delegation:pending");
 		return keys;
 	}
-	return [...new Set([block.activity.id, block.activity.sourceId].filter((value): value is string => value !== undefined))]
+	const keys = [...new Set([block.activity.id, block.activity.sourceId].filter((value): value is string => value !== undefined))]
 		.map((value) => `activity:${value}`);
+	if (block.activity.kind === "subagent" && block.activity.sourceId === undefined && block.activity.createdAt !== undefined) {
+		keys.push(`activity:${block.activity.id}:created:${block.activity.createdAt}`);
+	}
+	return keys;
 }
 
 interface FoldableLookupKeys {
@@ -207,6 +212,9 @@ function foldableLookupKeys(block: FoldableBlock): FoldableLookupKeys {
 		};
 	}
 	const sourceId = block.activity.sourceId;
+	if (block.activity.kind === "subagent" && sourceId === undefined && block.activity.createdAt !== undefined) {
+		return { preferred: [`activity:${block.activity.id}:created:${block.activity.createdAt}`], fallback: [] };
+	}
 	return sourceId && sourceId !== block.activity.id
 		? {
 			preferred: [`activity:${sourceId}`],
@@ -222,14 +230,6 @@ function addIndexedLocation(
 ): void {
 	for (const key of foldableIndexKeys(block)) {
 		const locations = locationsByIdentity.get(key) ?? [];
-		if (key === "delegation:pending") {
-			const current = locations[0];
-			if (!current || location.messageIndex > current.messageIndex
-				|| (location.messageIndex === current.messageIndex && location.blockIndex < current.blockIndex)) {
-				locationsByIdentity.set(key, [location]);
-			}
-			continue;
-		}
 		if (!locations.some((candidate) => candidate.messageIndex === location.messageIndex && candidate.blockIndex === location.blockIndex)) {
 			locations.push(location);
 			locationsByIdentity.set(key, locations);
@@ -249,6 +249,9 @@ export function indexFoldableBlocks(messages: readonly ChatMessageViewModel[]): 
 			if (block && isFoldableBlock(block)) addIndexedLocation(locationsByIdentity, block, { messageIndex, blockIndex });
 		}
 	}
+	locationsByIdentity.get("delegation:pending")?.sort((left, right) =>
+		right.messageIndex - left.messageIndex || left.blockIndex - right.blockIndex
+	);
 	return { locationsByIdentity, lastSumoMessageIndex };
 }
 
@@ -256,6 +259,7 @@ export function createFoldableBlockCursor(base: FoldableBlockIndex): FoldableBlo
 	return {
 		base,
 		addedLocationsByIdentity: new Map(),
+		pendingDelegationOffset: 0,
 		lastSumoMessageIndex: base.lastSumoMessageIndex,
 	};
 }
@@ -266,6 +270,26 @@ function indexedMatchingLocation(
 	cursor: FoldableBlockCursor,
 ): FoldableBlockLocation | undefined {
 	indexedIdentityLookups += 1;
+	const matches = (location: FoldableBlockLocation): boolean => {
+		indexedCandidateVisits += 1;
+		const message = messages[location.messageIndex];
+		return message !== undefined
+			&& canOwnFoldableUpdates(message)
+			&& matchingFoldableBlockIndex([message.blocks[location.blockIndex]!], incoming) === 0;
+	};
+	if (incoming.type === "delegation" && incoming.delegation.id === undefined) {
+		const added = [...cursor.addedLocationsByIdentity.get("delegation:pending") ?? []]
+			.sort((left, right) => right.messageIndex - left.messageIndex || left.blockIndex - right.blockIndex);
+		const addedMatch = added.find(matches);
+		if (addedMatch) return addedMatch;
+		const pending = cursor.base.locationsByIdentity.get("delegation:pending") ?? [];
+		while (cursor.pendingDelegationOffset < pending.length) {
+			const location = pending[cursor.pendingDelegationOffset]!;
+			if (matches(location)) return location;
+			cursor.pendingDelegationOffset += 1;
+		}
+		return undefined;
+	}
 	const lookup = (keys: readonly string[]): FoldableBlockLocation | undefined => {
 		const candidates = new Map<string, FoldableBlockLocation>();
 		for (const key of keys) {
@@ -278,13 +302,7 @@ function indexedMatchingLocation(
 		}
 		return [...candidates.values()]
 			.sort((left, right) => right.messageIndex - left.messageIndex || left.blockIndex - right.blockIndex)
-			.find((location) => {
-				indexedCandidateVisits += 1;
-				const message = messages[location.messageIndex];
-				return message !== undefined
-					&& canOwnFoldableUpdates(message)
-					&& matchingFoldableBlockIndex([message.blocks[location.blockIndex]!], incoming) === 0;
-			});
+			.find(matches);
 	};
 	const keys = foldableLookupKeys(incoming);
 	return lookup(keys.preferred) ?? lookup(keys.fallback);

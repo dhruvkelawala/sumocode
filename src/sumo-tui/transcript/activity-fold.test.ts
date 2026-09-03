@@ -104,6 +104,11 @@ describe("indexed Activity folding", () => {
 
 		expect(messages[0]?.blocks[0]).toMatchObject({ type: "delegation", delegation: { id: "first", status: "success" } });
 		expect(messages[0]?.blocks[1]).toMatchObject({ type: "delegation", delegation: { id: "second", status: "running" } });
+		foldBlockIntoIndexedMessages(messages, {
+			type: "delegation",
+			delegation: { title: "second complete", status: "success" },
+		}, cursor, { requireMatch: true });
+		expect(messages[0]?.blocks[1]).toMatchObject({ type: "delegation", delegation: { id: "second", status: "success" } });
 	});
 
 	it("keeps no-ID delegation lookup constant across long history", () => {
@@ -163,6 +168,28 @@ describe("indexed Activity folding", () => {
 
 		expect(getActivityFoldOperationCountsForTests().indexedCandidateVisits).toBe(1);
 		expect(messages[0]?.blocks[0]).toMatchObject({ type: "activity", activity: { sourceId: "spawn-0", status: "succeeded" } });
+	});
+
+	it("uses createdAt directly when canonical subagent IDs repeat without source IDs", () => {
+		const messages: ChatMessageViewModel[] = Array.from({ length: 10_000 }, (_, index) => ({
+			id: `subagent-message-${index}`,
+			role: "sumo",
+			displayName: "SUMO",
+			blocks: [{
+				type: "activity",
+				activity: { id: "subagent:worker", kind: "subagent", title: `worker ${index}`, status: "running", createdAt: index },
+			}],
+		}));
+		const cursor = createFoldableBlockCursor(indexFoldableBlocks(messages));
+		resetActivityFoldOperationCountsForTests();
+
+		foldBlockIntoIndexedMessages(messages, {
+			type: "activity",
+			activity: { id: "subagent:worker", kind: "subagent", title: "first complete", status: "succeeded", createdAt: 0 },
+		}, cursor, { requireMatch: true });
+
+		expect(getActivityFoldOperationCountsForTests().indexedCandidateVisits).toBe(1);
+		expect(messages[0]?.blocks[0]).toMatchObject({ type: "activity", activity: { createdAt: 0, status: "succeeded" } });
 	});
 
 	it("does not scan repeated canonical subagent IDs for an unseen source", () => {

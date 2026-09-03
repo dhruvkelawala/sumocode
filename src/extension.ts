@@ -220,7 +220,10 @@ function installOrchestrationTools(pi: ExtensionAPI) {
 	const managerOptions: TerminalTaskManagerOptions | undefined = rpcChild
 		? {
 				onDiagnostic: (diagnostic) => {
-					if (diagnostic.kind !== "index-scan") return;
+					// An incomplete scan (transient read failure) is a degraded index:
+					// emit nothing so the harness observes missing events and fails the
+					// sample explicitly instead of timing a partial scan as ready.
+					if (diagnostic.kind !== "index-scan" || diagnostic.complete !== true) return;
 					logDiagnostic("terminal_index_start", {});
 					logDiagnostic("terminal_index_ready", { durationMs: diagnostic.durationMs });
 				},

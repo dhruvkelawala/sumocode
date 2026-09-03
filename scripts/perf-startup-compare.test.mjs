@@ -62,6 +62,9 @@ async function harness(options = {}) {
 		prepareWorktrees: async () => ({
 			baselineDir,
 			candidateDir,
+			unlinkDependencies: async () => {
+				if (options.unlinkFails) throw new Error("failed to unlink comparison dependencies");
+			},
 			cleanup: async () => {
 				cleanedWorktrees = true;
 				if (options.cleanupFails) throw new Error("worktree cleanup failed");
@@ -255,6 +258,40 @@ async function harness(options = {}) {
 	it("fails the comparison when detached worktree cleanup fails", async () => {
 		await expect(harness({ cleanupFails: true, samples: 1, fixtureCount: 1 }))
 			.rejects.toThrow("startup comparison cleanup failed");
+	});
+
+	it("retains the campaign when dependency unlinking fails", async () => {
+		const root = await temporaryRoot("sumocode-startup-unlink-failure-");
+		const callerRoot = join(root, "caller");
+		const baselineDir = join(root, "baseline");
+		const candidateDir = join(root, "candidate");
+		const outDir = await temporaryRoot("sumocode-startup-unlink-failure-report-");
+		await Promise.all([mkdir(baselineDir), mkdir(candidateDir), mkdir(callerRoot)]);
+		let retainedCampaign;
+		await expect(runStartupComparison({
+			callerRoot,
+			baseRef: "base",
+			samples: 1,
+			fixtureCount: 1,
+			outDir,
+		}, {
+			resolveRevision: async () => "a".repeat(40),
+			assertClean: async () => undefined,
+			prepareWorktrees: async () => ({
+				baselineDir,
+				candidateDir,
+				unlinkDependencies: async () => { throw new Error("failed to unlink comparison dependencies"); },
+				cleanup: async () => undefined,
+			}),
+			runSample: async ({ arm, startWallMs }) => ({ ok: true, events: diagnostics(startWallMs, arm, 0, { fixtureCount: 1 }) }),
+			machineMetadata: () => ({ platform: "test", arch: "test", nodeVersion: "v-test", cpuCount: 1 }),
+			onFixtureRetained: (path) => {
+				retainedCampaign = path;
+				roots.push(path);
+			},
+		})).rejects.toThrow("failed to unlink comparison dependencies");
+		expect(retainedCampaign).toEqual(expect.any(String));
+		await expect(stat(retainedCampaign)).resolves.toBeTruthy();
 	});
 
 	it("fails samples whose accepted snapshot count mismatches the fixture", async () => {

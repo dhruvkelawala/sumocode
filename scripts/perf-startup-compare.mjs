@@ -546,6 +546,7 @@ export async function runStartupComparison(options, dependencies = {}) {
 	let retainedForLiveProcess = false;
 	let retainedForAuditFailure = false;
 	let retainedForSetupFailure = false;
+	let retainedForUnlinkFailure = false;
 	let auditError;
 	let bodyError;
 	let cleanupError;
@@ -590,8 +591,15 @@ export async function runStartupComparison(options, dependencies = {}) {
 			}
 		}
 		if (!retainedForLiveProcess) {
-			await worktrees.unlinkDependencies?.();
-			dependenciesUnlinked = true;
+			try {
+				await worktrees.unlinkDependencies?.();
+				dependenciesUnlinked = true;
+			} catch (error) {
+				// A symlink that could not be unlinked may still be owned by a live
+				// mount/permission condition: retain the campaign like other failures.
+				retainedForUnlinkFailure = true;
+				auditError = auditError ?? error;
+			}
 			// A revision that dirtied its own detached checkout must not have that
 			// evidence force-removed: retain the worktrees. The audit error is
 			// rethrown after the reports are safely written.
@@ -600,7 +608,7 @@ export async function runStartupComparison(options, dependencies = {}) {
 				await assertCheckoutClean(worktrees.candidateDir);
 			} catch (error) {
 				retainedForAuditFailure = true;
-				auditError = error;
+				auditError = auditError ?? error;
 			}
 		}
 		const metrics = METRICS.map((definition) => metricComparison(definition, armSamples.baseline, armSamples.candidate));
@@ -618,8 +626,8 @@ export async function runStartupComparison(options, dependencies = {}) {
 			samplesPerArm: options.samples,
 			fixture: {
 				recordCount: options.fixtureCount,
-				retained: options.keepFixture === true || retainedForLiveProcess || retainedForAuditFailure,
-				reason: retainedForLiveProcess ? "live-process" : retainedForAuditFailure ? "audit-failure" : options.keepFixture === true ? "explicit" : undefined,
+				retained: options.keepFixture === true || retainedForLiveProcess || retainedForAuditFailure || retainedForUnlinkFailure,
+				reason: retainedForLiveProcess ? "live-process" : retainedForAuditFailure || retainedForUnlinkFailure ? "audit-failure" : options.keepFixture === true ? "explicit" : undefined,
 			},
 			runtime: machineMetadata(),
 			flags: [...FLAGS],
@@ -646,7 +654,7 @@ export async function runStartupComparison(options, dependencies = {}) {
 		throw error;
 	} finally {
 		const cleanupSteps = [];
-		if (retainedForLiveProcess || retainedForAuditFailure || retainedForSetupFailure) {
+		if (retainedForLiveProcess || retainedForAuditFailure || retainedForSetupFailure || retainedForUnlinkFailure) {
 			cleanupSteps.push(async () => { dependencies.onFixtureRetained?.(campaignDir); });
 		} else {
 			if (!dependenciesUnlinked && worktrees?.unlinkDependencies) cleanupSteps.push(() => worktrees.unlinkDependencies());

@@ -269,6 +269,47 @@ describe("startup comparison CLI", () => {
 		expect(await readFile(victim, "utf8")).toBe("ORIGINAL\n");
 	});
 
+	it("retains worktrees and reports the audit error when a revision dirties its checkout", async () => {
+		const root = await temporaryRoot("sumocode-startup-audit-failure-");
+		const callerRoot = join(root, "caller");
+		const baselineDir = join(root, "baseline");
+		const candidateDir = join(root, "candidate");
+		const outDir = await temporaryRoot("sumocode-startup-audit-failure-report-");
+		await Promise.all([mkdir(baselineDir), mkdir(candidateDir), mkdir(callerRoot)]);
+		let cleanupCalled = false;
+		let retainedCampaign;
+		const report = await runStartupComparison({
+			callerRoot,
+			baseRef: "base",
+			candidateRef: "candidate",
+			samples: 1,
+			fixtureCount: 1,
+			outDir,
+		}, {
+			resolveRevision: async (ref) => ref === "base" ? "5".repeat(40) : "6".repeat(40),
+			assertClean: async (path) => {
+				if (path === candidateDir) throw new Error("startup comparison requires clean source checkouts");
+			},
+			prepareWorktrees: async () => ({
+				baselineDir,
+				candidateDir,
+				cleanup: async () => { cleanupCalled = true; },
+			}),
+			runSample: async ({ arm, startWallMs }) => ({ ok: true, events: diagnostics(startWallMs, arm, 0) }),
+			machineMetadata: () => ({ platform: "test", arch: "test", nodeVersion: "v-test", cpuCount: 1 }),
+			onFixtureRetained: (path) => {
+				retainedCampaign = path;
+				roots.push(path);
+			},
+		}).catch((error) => ({ auditError: error }));
+
+		expect(report.auditError).toBeDefined();
+		expect(report.auditError.message).toBe("startup comparison requires clean source checkouts");
+		expect(cleanupCalled).toBe(false);
+		expect(retainedCampaign).toEqual(expect.any(String));
+		expect(await readFile(join(outDir, "startup-compare.json"), "utf8")).toContain("audit-failure");
+	});
+
 	it("rejects the public CLI when neither arm collects a successful sample", async () => {
 		await expect(harness({ publicCli: true, failAllSpawns: true, samples: 1, fixtureCount: 1 }))
 			.rejects.toThrow("startup comparison collection failed");

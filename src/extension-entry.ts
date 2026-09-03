@@ -2,12 +2,15 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { importExtensionEntry, sourceExtensionFile } from "./extension-entry-loader.js";
+import { canonicalizeExtensionPath, importExtensionEntry, sourceExtensionFile } from "./extension-entry-loader.js";
 
 const INPUT_MANIFEST_VERSION = 2;
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const rpcChildSource = process.env.SUMOCODE_RPC_CHILD === "1";
-const sourcePath = join(root, "src", sourceExtensionFile(rpcChildSource));
+const launcherRoot = process.env.SUMOCODE_ROOT_DIR;
+const launcherOwned = launcherRoot !== undefined
+	&& canonicalizeExtensionPath(root) === canonicalizeExtensionPath(launcherRoot);
+const sourceFile = sourceExtensionFile(process.env.SUMOCODE_RPC_CHILD === "1", launcherOwned);
+const sourcePath = join(root, "src", sourceFile);
 const bundlePath = join(root, "dist", "extension", "sumocode-extension.bundle.mjs");
 const inputManifestPath = join(root, "dist", "extension", ".inputs.json");
 const extensionOutputs = [
@@ -104,7 +107,7 @@ function hasFreshBundle(): boolean {
 // resolution, peer aliases, and shared module singletons. A nested Jiti would
 // lose those loader aliases. The peer-only forced-source integration case locks
 // this contract with neither local node_modules nor pnpm-lock.yaml available.
-const importSourceThroughPiJiti = () => rpcChildSource
+const importSourceThroughPiJiti = () => sourceFile === "rpc-child-extension.ts"
 	? import("./rpc-child-extension.js")
 	: import("./extension.js");
 

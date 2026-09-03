@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,7 @@ import { installCompactionIndicator } from "./compaction-indicator.js";
 import { registerAccountsCommand } from "./commands/accounts.js";
 import { registerSumoReloadCommand } from "./commands/reload.js";
 import { registerRolesCommand } from "./commands/roles.js";
+import { canonicalizeExtensionPath, type RealpathFn } from "./extension-entry-loader.js";
 import {
 	claimSumocodeRuntime,
 	hasLegacyTaskToolExtension,
@@ -50,7 +51,6 @@ const SUMOCODE_PACKAGE_NAME = "@dhruvkelawala/sumocode";
 
 type ExistsFn = (path: string) => boolean;
 type ReadFileFn = (path: string, encoding: BufferEncoding) => string;
-type RealpathFn = (path: string) => string;
 
 export interface DuplicateInstalledExtensionOptions {
 	readonly moduleUrl?: string;
@@ -60,21 +60,6 @@ export interface DuplicateInstalledExtensionOptions {
 	readonly readFile?: ReadFileFn;
 	readonly env?: NodeJS.ProcessEnv;
 	readonly realpath?: RealpathFn;
-}
-
-/**
- * Resolves a path to its canonical form, following symlinks, so two
- * differently-spelled paths to the same file (e.g. a `~/.pi/agent/git/...`
- * path that is actually a symlink straight back into a dev checkout) compare
- * equal. Falls back to plain `resolve()` when the path does not exist on disk
- * (e.g. in unit tests against a fake filesystem) instead of throwing.
- */
-function canonicalize(path: string, realpath: RealpathFn): string {
-	try {
-		return realpath(path);
-	} catch {
-		return resolve(path);
-	}
 }
 
 function moduleUrlToPath(moduleUrl: string): string {
@@ -148,13 +133,13 @@ export function shouldNoopDuplicateInstalledExtension(options: DuplicateInstalle
 		// NOT noop (an unconditional noop here would skip the launcher's own RPC
 		// child profile). Compare realpath-canonicalized paths on both sides so
 		// symlinks can't fool either direction of this check.
-		const realpath = options.realpath ?? ((path: string) => realpathSync(path));
+		const realpath = options.realpath;
 		const exists = options.exists ?? existsSync;
 		const readFile = options.readFile ?? ((path, encoding) => readFileSync(path, encoding));
-		const modulePath = canonicalize(moduleUrlToPath(moduleUrl), realpath);
+		const modulePath = canonicalizeExtensionPath(moduleUrlToPath(moduleUrl), realpath);
 		const packageRoot = packageRootFromModulePath(modulePath, exists, readFile);
-		const canonicalLauncherRoot = canonicalize(launcherRoot, realpath);
-		if (packageRoot !== undefined && canonicalize(packageRoot, realpath) === canonicalLauncherRoot) return false;
+		const canonicalLauncherRoot = canonicalizeExtensionPath(launcherRoot, realpath);
+		if (packageRoot !== undefined && canonicalizeExtensionPath(packageRoot, realpath) === canonicalLauncherRoot) return false;
 
 		// Defensive fallback for an entry whose package metadata cannot be read.
 		// Preserve the old <root>/src/extension.ts derivation if the walk above

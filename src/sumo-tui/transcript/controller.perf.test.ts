@@ -79,6 +79,7 @@ describe("TranscriptController streaming operation bounds", () => {
 			messageEnvelopeCopies: 0,
 			indexedIdentityLookups: 1,
 			indexedCandidateVisits: 1,
+			targetBlockVisits: 6,
 			changedMessagePaths: 1,
 		});
 		expect(getTranscriptSnapshotEnvelopeCopiesForTests()).toBe(1);

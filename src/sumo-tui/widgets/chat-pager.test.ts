@@ -789,7 +789,7 @@ describe("ChatPager", () => {
 		root.dispose();
 	});
 
-	it("does not use expansion state as Activity navigation", async () => {
+	it("keeps collapsed Activity state off-screen and reveals explicit expansion", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());
 		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 1 });
@@ -802,6 +802,9 @@ describe("ChatPager", () => {
 
 		expect(chat.getRenderedMessages()[0]?.text).toContain("newer");
 		expect(chat.getActivityExpansion("older")).toBe(false);
+		chat.setActivityExpansion("older", true);
+		expect(chat.getRenderedMessages().some((message) => message.text.includes("older"))).toBe(true);
+		expect(chat.getActivityExpansion("older")).toBe(true);
 		root.dispose();
 	});
 
@@ -818,6 +821,25 @@ describe("ChatPager", () => {
 		expect(chat.getRenderedMessages().some((message) => message.text === "later")).toBe(true);
 		expect(chat.revealActivity("owned-live")).toBe(true);
 		expect(chat.getRenderedMessages().some((message) => message.text.includes("owned live"))).toBe(true);
+		root.dispose();
+	});
+
+	it("page-up restores Activity history after replies evict all live cards", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 2 });
+		chat.reconcileFeedActivities([
+			{ id: "activity-1", kind: "terminal", title: "activity 1", status: "running", createdAt: 1 },
+			{ id: "activity-2", kind: "terminal", title: "activity 2", status: "running", createdAt: 2 },
+			{ id: "activity-3", kind: "terminal", title: "activity 3", status: "running", createdAt: 3 },
+		]);
+		chat.addMessage("sumo", "reply 1");
+		chat.addMessage("sumo", "reply 2");
+		expect(chat.getRenderedMessages().every((message) => !message.text.includes("activity"))).toBe(true);
+
+		chat.handleKey({ key: "PageUp" });
+
+		expect(chat.getRenderedMessages().some((message) => message.text.includes("activity 3"))).toBe(true);
 		root.dispose();
 	});
 
@@ -872,7 +894,7 @@ describe("ChatPager", () => {
 		const first = { id: "term-virtual-first", kind: "terminal" as const, title: "first", status: "succeeded" as const, settledAt: 10 };
 		const second = { id: "term-virtual-second", kind: "terminal" as const, title: "second", status: "succeeded" as const, settledAt: 20 };
 		chat.reconcileFeedActivities([first, second]);
-		expect(chat.getArchivedMessageCount()).toBe(1);
+		expect(chat.getArchivedMessageCount()).toBe(0);
 
 		chat.addViewModel({
 			id: "first-completion",
@@ -880,7 +902,7 @@ describe("ChatPager", () => {
 			displayName: "SYSTEM",
 			blocks: [{ type: "activity", activity: first }],
 		}, 0);
-		expect(chat.getArchivedMessageCount()).toBe(1);
+		expect(chat.getArchivedMessageCount()).toBe(0);
 		expect(chat.getRenderedMessages()).toHaveLength(1);
 		expect(chat.getRenderedMessages()[0]?.text).toContain("first");
 		chat.reconcileFeedActivities([]);
@@ -990,7 +1012,7 @@ describe("ChatPager", () => {
 		root.dispose();
 	});
 
-	it("removes virtual archive bookkeeping when a feed-only card expires", async () => {
+	it("removes hidden feed bookkeeping when a feed-only card expires", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());
 		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 1 });
@@ -998,11 +1020,11 @@ describe("ChatPager", () => {
 		const second = { id: "term-second", kind: "terminal" as const, title: "second", status: "succeeded" as const, createdAt: 30, settledAt: 40 };
 
 		chat.reconcileFeedActivities([first, second]);
-		expect(chat.getArchivedMessageCount()).toBe(1);
+		expect(chat.getArchivedMessageCount()).toBe(0);
 		expect(chat.getRenderedMessages()).toHaveLength(1);
 
 		chat.reconcileFeedActivities([{ ...first, outputTail: "updated while archived" }, second]);
-		expect(chat.getArchivedMessageCount()).toBe(1);
+		expect(chat.getArchivedMessageCount()).toBe(0);
 		expect(chat.getRenderedMessages()[0]?.text).toContain("second");
 		expect(chat.getRenderedMessages()[0]?.text).not.toContain("updated while archived");
 

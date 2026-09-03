@@ -171,7 +171,6 @@ export class ChatPager extends SumoNode {
 	private readonly pendingRenderedActivityIds = new Set<string>();
 	private defaultActivityExpansionOverride: boolean | undefined;
 	private protectedActivityId: string | undefined;
-	private virtualArchiveIsPrefix = true;
 	private placeholder: ChatMessage | undefined;
 	private virtualArchivedCount = 0;
 	private sourceMessageCount = 0;
@@ -297,7 +296,6 @@ export class ChatPager extends SumoNode {
 		}
 		this.archivedMessages = [];
 		this.virtualArchivedCount = Math.max(0, acceptedMessages - renderedWindow.length);
-		this.virtualArchiveIsPrefix = true;
 		this.sourceMessageCount = messages.length;
 		this.placeholder = undefined;
 		this.unreadCount = 0;
@@ -416,6 +414,8 @@ export class ChatPager extends SumoNode {
 		this.activityExpansionStates.set(id, expanded);
 		const persistenceKey = this.activityExpansionPersistenceKeys.get(id) ?? id;
 		this.setPersistedActivityExpansion(persistenceKey, expanded);
+		this.protectedActivityId = id;
+		if (expanded) this.materializeVirtualizedActivity(id);
 		this.applyActivityExpansion(id, expanded);
 		this.onActivityExpansionChange?.(persistenceKey, expanded);
 	}
@@ -547,7 +547,6 @@ export class ChatPager extends SumoNode {
 		this.virtualizedTranscriptClaimIds.clear();
 		this.defaultActivityExpansionOverride = undefined;
 		this.protectedActivityId = undefined;
-		this.virtualArchiveIsPrefix = true;
 		this.placeholder = undefined;
 		this.unreadCount = 0;
 		this.lastReadIndex = -1;
@@ -727,8 +726,9 @@ export class ChatPager extends SumoNode {
 			for (const id of ids) rendered.add(id);
 		}
 		const firstRenderedIndex = order.findIndex((id) => rendered.has(id));
-		if (firstRenderedIndex <= 0) return;
-		for (let index = firstRenderedIndex - 1; index >= 0; index -= 1) {
+		if (firstRenderedIndex === 0) return;
+		const startIndex = firstRenderedIndex === -1 ? order.length - 1 : firstRenderedIndex - 1;
+		for (let index = startIndex; index >= 0; index -= 1) {
 			const id = order[index];
 			if (id && this.virtualizedFeedActivityIds.has(id)) {
 				this.revealActivity(id);
@@ -892,18 +892,8 @@ export class ChatPager extends SumoNode {
 		this.virtualizedFeedActivityIds.delete(id);
 		this.virtualizedTranscriptFeedActivityIds.delete(id);
 		this.materializedArchivedTranscriptFeedActivityIds.delete(id);
-		if (!this.virtualizedFeedOnlyActivityIds.delete(id)) return 0;
-		this.virtualArchivedCount = Math.max(0, this.virtualArchivedCount - 1);
-		if (this.getArchivedMessageCount() > 0) {
-			if (this.placeholder) this.placeholder.setText(this.placeholderText());
-			return 0;
-		}
-		if (!this.placeholder) return 0;
-		const removedLines = this.placeholder.getEstimatedHeight(this.scrollBox.getComputedWidth());
-		if (this.placeholder.parent === this.scrollBox) this.scrollBox.removeChild(this.placeholder);
-		this.placeholder.dispose();
-		this.placeholder = undefined;
-		return removedLines;
+		this.virtualizedFeedOnlyActivityIds.delete(id);
+		return 0;
 	}
 
 	private replaceBlocksAtSourceIndex(sourceIndex: number, blocks: readonly ChatBlock[]): boolean {
@@ -1334,8 +1324,9 @@ export class ChatPager extends SumoNode {
 			const [archived] = this.activeMessages.splice(archivedIndex, 1);
 			this.activeMessageSourceIndices.splice(archivedIndex, 1);
 			if (!archived) break;
-			if (archivedIndex === 0) removedLines += archived.getEstimatedHeight(width);
-			else this.virtualArchiveIsPrefix = false;
+			const archivedHeight = archived.getEstimatedHeight(width);
+			const archivedAboveViewport = archived.getComputedTop() + archived.getComputedHeight() <= this.scrollBox.scrollOffset;
+			if (archivedIndex === 0 || archivedAboveViewport) removedLines += archivedHeight;
 			if (archived.parent === this.scrollBox) this.scrollBox.removeChild(archived);
 			const transcriptOwned = this.transcriptOwnedMessages.has(archived);
 			if (transcriptOwned) {
@@ -1348,10 +1339,11 @@ export class ChatPager extends SumoNode {
 				if (transcriptOwned) this.virtualizedTranscriptFeedActivityIds.add(id);
 				else this.virtualizedFeedOnlyActivityIds.add(id);
 			}
+			const feedOnly = !transcriptOwned && this.feedOwnedActivityIds.has(archived);
 			this.feedOwnedActivityIds.delete(archived);
 			this.transcriptOwnedMessages.delete(archived);
 			archived.dispose();
-			this.virtualArchivedCount += 1;
+			if (!feedOnly) this.virtualArchivedCount += 1;
 			archivedAny = true;
 		}
 
@@ -1378,8 +1370,7 @@ export class ChatPager extends SumoNode {
 	}
 
 	private placeholderText(): string {
-		const label = this.virtualArchiveIsPrefix ? "earlier" : "hidden";
-		return `── ${this.getArchivedMessageCount()} ${label} messages ──`;
+		return `── ${this.getArchivedMessageCount()} earlier messages ──`;
 	}
 
 	private getRenderedEstimatedHeight(width: number): number {

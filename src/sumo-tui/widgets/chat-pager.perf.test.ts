@@ -25,8 +25,8 @@ describe("ChatPager live-card retention bounds", () => {
 		chat.reconcileFeedActivities(liveActivities(100));
 
 		expect(chat.getRenderedMessages().length).toBeLessThanOrEqual(5);
-		expect(chat.getArchivedMessageCount()).toBe(95);
-		expect(chat.scrollBox.children.length).toBeLessThanOrEqual(6);
+		expect(chat.getArchivedMessageCount()).toBe(0);
+		expect(chat.scrollBox.children.length).toBeLessThanOrEqual(5);
 		expect(chat.getKnownActivityIds()).toHaveLength(100);
 
 		for (const activity of liveActivities(100)) {
@@ -42,19 +42,24 @@ describe("ChatPager live-card retention bounds", () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());
 		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 5 });
-		chat.reconcileFeedActivities(liveActivities(100));
-		const observed = new Set<string>();
+		const activities = liveActivities(100);
+		chat.reconcileFeedActivities(activities);
+		chat.reconcileFeedActivities(activities.map((activity, index) => index === 0
+			? { ...activity, outputTail: "latest output" }
+			: activity));
+		const observed = new Map<string, string | undefined>();
 
 		for (let step = 0; step < 100; step += 1) {
 			for (const message of chat.getRenderedMessages()) {
 				for (const block of message.toSnapshot().blocks ?? []) {
-					if (block.type === "activity") observed.add(block.activity.id);
+					if (block.type === "activity") observed.set(block.activity.id, block.activity.outputTail);
 				}
 			}
 			chat.handleKey({ key: "PageUp" });
 		}
 
 		expect(observed.size).toBe(100);
+		expect(observed.get("terminal-0")).toBe("latest output");
 		expect(chat.getRenderedMessages().length).toBeLessThanOrEqual(6);
 		root.dispose();
 	});
@@ -76,7 +81,7 @@ describe("ChatPager live-card retention bounds", () => {
 		);
 		expect(renderedIds).toEqual(["terminal-0", "terminal-96", "terminal-97", "terminal-98", "terminal-99"]);
 		expect(chat.getRenderedMessages()[0]?.text).toContain("latest output");
-		expect(chat.scrollBox.children[0]).toMatchObject({ text: "── 95 hidden messages ──" });
+		expect(chat.getArchivedMessageCount()).toBe(0);
 		root.dispose();
 	});
 

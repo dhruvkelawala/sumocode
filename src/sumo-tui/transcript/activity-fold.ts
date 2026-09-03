@@ -9,6 +9,7 @@ export interface ActivityFoldOperationCounts {
 	readonly messageEnvelopeCopies: number;
 	readonly indexedIdentityLookups: number;
 	readonly indexedCandidateVisits: number;
+	readonly targetBlockVisits: number;
 	readonly changedMessagePaths: number;
 }
 
@@ -16,6 +17,7 @@ let historyMessageVisits = 0;
 let messageEnvelopeCopies = 0;
 let indexedIdentityLookups = 0;
 let indexedCandidateVisits = 0;
+let targetBlockVisits = 0;
 let changedMessagePaths = 0;
 
 export function resetActivityFoldOperationCountsForTests(): void {
@@ -23,11 +25,12 @@ export function resetActivityFoldOperationCountsForTests(): void {
 	messageEnvelopeCopies = 0;
 	indexedIdentityLookups = 0;
 	indexedCandidateVisits = 0;
+	targetBlockVisits = 0;
 	changedMessagePaths = 0;
 }
 
 export function getActivityFoldOperationCountsForTests(): ActivityFoldOperationCounts {
-	return { historyMessageVisits, messageEnvelopeCopies, indexedIdentityLookups, indexedCandidateVisits, changedMessagePaths };
+	return { historyMessageVisits, messageEnvelopeCopies, indexedIdentityLookups, indexedCandidateVisits, targetBlockVisits, changedMessagePaths };
 }
 
 function copyMessages(messages: readonly ChatMessageViewModel[]): ChatMessageViewModel[] {
@@ -69,7 +72,12 @@ export function canOwnFoldableUpdates(message: ChatMessageViewModel): boolean {
 }
 
 export function matchingActivityBlockIndex(blocks: readonly ChatBlock[], incoming: ActivityBlock): number {
-	return blocks.findIndex((block) => block.type === "activity" && sameActivity(block.activity, incoming.activity));
+	for (let index = 0; index < blocks.length; index += 1) {
+		targetBlockVisits += 1;
+		const block = blocks[index];
+		if (block?.type === "activity" && sameActivity(block.activity, incoming.activity)) return index;
+	}
+	return -1;
 }
 
 export function mergeActivityBlock(existing: ActivityBlock, incoming: ActivityBlock): ActivityBlock {
@@ -79,9 +87,10 @@ export function mergeActivityBlock(existing: ActivityBlock, incoming: ActivityBl
 export function upsertActivityBlock(blocks: readonly ChatBlock[], incoming: ActivityBlock): ChatBlock[] {
 	const index = matchingActivityBlockIndex(blocks, incoming);
 	if (index === -1) return [...blocks, incoming];
-	return blocks.map((block, blockIndex) => (
-		blockIndex === index && block.type === "activity" ? mergeActivityBlock(block, incoming) : block
-	));
+	return blocks.map((block, blockIndex) => {
+		targetBlockVisits += 1;
+		return blockIndex === index && block.type === "activity" ? mergeActivityBlock(block, incoming) : block;
+	});
 }
 
 function matchingDelegationBlockIndex(
@@ -89,8 +98,13 @@ function matchingDelegationBlockIndex(
 	incoming: Extract<ChatBlock, { type: "delegation" }>,
 ): number {
 	const incomingId = incoming.delegation.id;
-	if (incomingId) return blocks.findIndex((block) => block.type === "delegation" && block.delegation.id === incomingId);
-	return blocks.findIndex((block) => block.type === "delegation" && (block.delegation.status === "queued" || block.delegation.status === "running"));
+	for (let index = 0; index < blocks.length; index += 1) {
+		targetBlockVisits += 1;
+		const block = blocks[index];
+		if (block?.type !== "delegation") continue;
+		if (incomingId ? block.delegation.id === incomingId : block.delegation.status === "queued" || block.delegation.status === "running") return index;
+	}
+	return -1;
 }
 
 function mergeDelegationBlock(
@@ -126,9 +140,10 @@ export function upsertFoldableBlock(blocks: readonly ChatBlock[], incoming: Chat
 	if (incoming.type === "delegation") {
 		const index = matchingDelegationBlockIndex(blocks, incoming);
 		if (index === -1) return [...blocks, incoming];
-		return blocks.map((block, blockIndex) => (
-			blockIndex === index && block.type === "delegation" ? mergeDelegationBlock(block, incoming) : block
-		));
+		return blocks.map((block, blockIndex) => {
+			targetBlockVisits += 1;
+			return blockIndex === index && block.type === "delegation" ? mergeDelegationBlock(block, incoming) : block;
+		});
 	}
 	if (incoming.type === "image") {
 		const key = imageBlockKey(incoming);

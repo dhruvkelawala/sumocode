@@ -257,7 +257,7 @@ async function harness(options = {}) {
 
 	it("fails the comparison when detached worktree cleanup fails", async () => {
 		await expect(harness({ cleanupFails: true, samples: 1, fixtureCount: 1 }))
-			.rejects.toThrow("startup comparison cleanup failed");
+			.rejects.toThrow("startup comparison teardown failed");
 	});
 
 	it("retains the campaign when dependency unlinking fails", async () => {
@@ -281,7 +281,7 @@ async function harness(options = {}) {
 				baselineDir,
 				candidateDir,
 				unlinkDependencies: async () => { throw new Error("failed to unlink comparison dependencies"); },
-				cleanup: async () => undefined,
+				cleanup: async () => { cleanupCalled = true; },
 			}),
 			runSample: async ({ arm, startWallMs }) => ({ ok: true, events: diagnostics(startWallMs, arm, 0, { fixtureCount: 1 }) }),
 			machineMetadata: () => ({ platform: "test", arch: "test", nodeVersion: "v-test", cpuCount: 1 }),
@@ -292,6 +292,49 @@ async function harness(options = {}) {
 		})).rejects.toThrow("failed to unlink comparison dependencies");
 		const written = JSON.parse(await readFile(join(outDir, "startup-compare.json"), "utf8"));
 		expect(written.fixture.reason).toBe("unlink-failure");
+		expect(retainedCampaign).toEqual(expect.any(String));
+		await expect(stat(retainedCampaign)).resolves.toBeTruthy();
+	});
+
+	it("retains worktrees when the caller fails after worktree setup", async () => {
+		const root = await temporaryRoot("sumocode-startup-body-fail-");
+		const callerRoot = join(root, "caller");
+		const baselineDir = join(root, "baseline");
+		const candidateDir = join(root, "candidate");
+		const outDir = await temporaryRoot("sumocode-startup-body-fail-report-");
+		await Promise.all([mkdir(baselineDir), mkdir(candidateDir), mkdir(callerRoot)]);
+		let retainedCampaign;
+		let cleanupCalled = false;
+		let callerChecks = 0;
+		await expect(runStartupComparison({
+			callerRoot,
+			baseRef: "base",
+			samples: 1,
+			fixtureCount: 1,
+			outDir,
+		}, {
+			resolveRevision: async () => "a".repeat(40),
+			assertClean: async (path) => {
+				// The first caller check (pre-flight) passes so setup and collection
+				// run; the finally-cleanup check fails, and the primary failure must
+				// still win over the secondary cleanup error.
+				if (path === callerRoot) {
+					callerChecks += 1;
+					if (callerChecks > 1) throw new Error("startup comparison requires clean source checkouts");
+				}
+			},
+			prepareWorktrees: async () => ({
+				baselineDir,
+				candidateDir,
+				unlinkDependencies: async () => { throw new Error("failed to unlink comparison dependencies"); },
+				cleanup: async () => { cleanupCalled = true; },
+			}),
+			onFixtureRetained: (path) => {
+				retainedCampaign = path;
+				roots.push(path);
+			},
+		})).rejects.toThrow("failed to unlink comparison dependencies");
+		expect(cleanupCalled).toBe(false);
 		expect(retainedCampaign).toEqual(expect.any(String));
 		await expect(stat(retainedCampaign)).resolves.toBeTruthy();
 	});

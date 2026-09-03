@@ -129,6 +129,15 @@ async function runCleanupSteps(steps, message) {
 	if (failures.length > 0) throw new AggregateError(failures, message);
 }
 
+/** Ordered teardown: stop at the first failure because later steps may only be safe once earlier ones succeeded. */
+async function runTeardownSteps(steps, message) {
+	try {
+		for (const step of steps) await step();
+	} catch (error) {
+		throw new AggregateError([error], message);
+	}
+}
+
 async function prepareWorktrees({ callerRoot, campaignDir, baselineSha, candidateSha }) {
 	const baselineDir = join(campaignDir, "baseline");
 	const candidateDir = join(campaignDir, "candidate");
@@ -150,18 +159,18 @@ async function prepareWorktrees({ callerRoot, campaignDir, baselineSha, candidat
 			...links.splice(0).reverse().map((link) => () => unlink(link)),
 			...added.splice(0).reverse().map((path) => () => runGit(callerRoot, ["worktree", "remove", "--force", path])),
 		];
-		try { await runCleanupSteps(setupCleanup, "startup comparison setup cleanup failed"); }
+		try { await runTeardownSteps(setupCleanup, "startup comparison setup cleanup failed"); }
 		catch (cleanupError) { throw new AggregateError([error, cleanupError], "startup comparison setup and cleanup failed"); }
 		throw error;
 	}
 	return {
 		baselineDir,
 		candidateDir,
-		unlinkDependencies: () => runCleanupSteps(
+		unlinkDependencies: () => runTeardownSteps(
 			links.splice(0).reverse().map((link) => () => unlink(link)),
 			"failed to unlink comparison dependencies",
 		),
-		cleanup: () => runCleanupSteps(
+		cleanup: () => runTeardownSteps(
 			added.splice(0).reverse().map((path) => () => runGit(callerRoot, ["worktree", "remove", "--force", path])),
 			"failed to remove detached comparison worktrees",
 		),
@@ -481,7 +490,9 @@ function markdown(report) {
 				? "retained because a revision dirtied its checkout"
 				: report.fixture.reason === "unlink-failure"
 					? "retained because harness teardown could not complete"
-					: "retained by explicit request"
+					: report.fixture.reason === "teardown-failure"
+						? "retained because harness teardown failed after collection"
+						: "retained by explicit request"
 		: "deleted after collection";
 	const section = (title, group, description) => {
 		const rows = report.metrics.filter((metric) => metric.group === group).map((metric) =>
@@ -679,6 +690,16 @@ export async function runStartupComparison(options, dependencies = {}) {
 				}
 				if (teardownFailed) {
 					cleanupSteps.push(async () => { dependencies.onFixtureRetained?.(campaignDir); });
+					// Reports were already written saying the fixture was deleted;
+					// rewrite them so preserved evidence describes its true retention.
+					if (report) {
+						report.fixture.retained = true;
+						report.fixture.reason = "teardown-failure";
+						cleanupSteps.push(async () => {
+							await writeReportFile(join(outDir, "startup-compare.json"), `${JSON.stringify(report, null, 2)}\n`);
+							await writeReportFile(join(outDir, "startup-compare.md"), markdown(report));
+						});
+					}
 				} else if (options.keepFixture === true) {
 					cleanupSteps.push(async () => { dependencies.onFixtureRetained?.(campaignDir); });
 				} else {
@@ -713,11 +734,16 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
 		return undefined;
 	}
 	const outDir = options.outDir ?? await defaultReportDir();
-	const report = await runStartupComparison({ ...options, callerRoot: ROOT, outDir }, {
-		...dependencies,
-		onFixtureRetained: dependencies.onFixtureRetained ?? ((path) => console.error(`fixture retained: ${path}`)),
-	});
-	console.error(`startup comparison reports written to: ${outDir}`);
+	let report;
+	try {
+		report = await runStartupComparison({ ...options, callerRoot: ROOT, outDir }, {
+			...dependencies,
+			onFixtureRetained: dependencies.onFixtureRetained ?? ((path) => console.error(`fixture retained: ${path}`)),
+		});
+	} finally {
+		// The path is the only way to find retained evidence after a failure.
+		console.error(`startup comparison reports written to: ${outDir}`);
+	}
 	if (!report.collection.succeeded) throw new Error("startup comparison collection failed; inspect the written report");
 	console.log(markdown(report));
 	return report;

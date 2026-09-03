@@ -215,7 +215,7 @@ function redactSensitiveArgs(args: readonly string[]): string {
 			out.push(arg);
 			continue;
 		}
-		if (/^--(api-key|system-prompt|append-system-prompt|print|p)=/.test(arg)) {
+		if (/^(?:--(?:api-key|system-prompt|append-system-prompt|print|p)|-p)=/.test(arg)) {
 			out.push(`${arg.slice(0, arg.indexOf("="))}=[redacted]`);
 			continue;
 		}

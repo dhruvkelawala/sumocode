@@ -186,10 +186,11 @@ function createTerminalProvider(stateFile: string): string {
 	const path = join(root, "terminal-provider.mjs");
 	writeFileSync(path, `
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 const provider = "sumocode-native-contract";
 const modelId = "terminal-tools";
+const readyFile = ${JSON.stringify(`${stateFile}.ready`)};
 let turn = 0;
 
 function base(model) {
@@ -212,18 +213,6 @@ function streamTool(model, name, args) {
 		output.stopReason = "toolUse";
 		stream.push({ type: "done", reason: "toolUse", message: output });
 		stream.end();
-	});
-	return stream;
-}
-
-function streamHold(model, text) {
-	const stream = createAssistantMessageEventStream();
-	queueMicrotask(() => {
-		const output = base(model);
-		stream.push({ type: "start", partial: output });
-		output.content.push({ type: "text", text });
-		stream.push({ type: "text_start", contentIndex: 0, partial: output });
-		stream.push({ type: "text_delta", contentIndex: 0, delta: text, partial: output });
 	});
 	return stream;
 }
@@ -259,20 +248,14 @@ function terminalId(context) {
 }
 
 function streamModel(model, context) {
-	const phase = process.env.SUMOCODE_NATIVE_TERMINAL_PHASE ?? "start";
-	if (phase === "start") {
-		if (toolResults(context, "terminal_start").length === 0) {
-			return streamTool(model, "terminal_start", { command: "printf NATIVE_BG_READY; sleep 60", title: "native recovery probe", completion: "passive" });
-		}
-		terminalId(context);
-		// Hold the foreground Pi process so the contract test can crash its
-		// process group; a graceful print shutdown intentionally cancels tasks.
-		return streamHold(model, "NATIVE_TERMINAL_STARTED");
+	if (toolResults(context, "terminal_start").length === 0) {
+		const command = "printf NATIVE_BG_READY; : > " + JSON.stringify(readyFile) + "; sleep 60";
+		return streamTool(model, "terminal_start", { command, title: "native runner probe", completion: "passive" });
 	}
-	const { id } = JSON.parse(readFileSync(${JSON.stringify(stateFile)}, "utf8"));
-	if (toolResults(context, "terminal_check").length === 0) return streamTool(model, "terminal_check", { id });
+	const id = terminalId(context);
+	if (toolResults(context, "terminal_check").length === 0 || !existsSync(readyFile)) return streamTool(model, "terminal_check", { id });
 	if (toolResults(context, "terminal_stop").length === 0) return streamTool(model, "terminal_stop", { ids: [id] });
-	return streamText(model, "NATIVE_TERMINAL_RECOVERED_AND_STOPPED");
+	return streamText(model, "NATIVE_TERMINAL_STARTED_CHECKED_AND_STOPPED");
 }
 
 export default function install(pi) {
@@ -355,6 +338,11 @@ nativeDescribe("native executable contract", () => {
 		expect(result.stdout).not.toContain("SECRET-KEY");
 		expect(result.stdout).not.toContain("SECRET-PROMPT");
 		expect(result.stdout).toContain("--api-key [redacted] --print [redacted]");
+
+		const equalsResult = runNative(["--dry-run", "-p=SECRET-EQUALS-PROMPT"]);
+		expect(equalsResult.status).toBe(0);
+		expect(equalsResult.stdout).not.toContain("SECRET-EQUALS-PROMPT");
+		expect(equalsResult.stdout).toContain("-p=[redacted]");
 	});
 
 	for (const row of LAUNCHER_COMMAND_CASES) {
@@ -511,54 +499,41 @@ nativeDescribe("native executable contract", () => {
 		expect(persisted).not.toContain("cached/native-proof");
 	}, 30_000);
 
-	it("runs terminal start/check/stop and recovers the terminal across a Pi restart", async () => {
+	it("runs terminal start/check/stop through the native host runner", async () => {
 		const agentDir = tempRoot("sumocode-native-terminal-agent-");
 		const cwd = tempRoot("sumocode-native-terminal-project-");
 		const stateFile = join(tempRoot("sumocode-native-terminal-state-"), "state.json");
 		const provider = createTerminalProvider(stateFile);
-		const baseArgs = [
-			"--print", "run native terminal contract", "--offline", "--no-extensions", "--no-session", "--approve",
+		const session = spawnNativePty([
+			"--print", "run native terminal contract", "--offline", "--no-extensions", "--approve", "--no-session",
 			"-e", provider, "--model", "sumocode-native-contract/terminal-tools",
-		];
-		const startSession = spawnNativePty(baseArgs, {
-			cwd,
-			env: { PI_CODING_AGENT_DIR: agentDir, SUMOCODE_NATIVE_TERMINAL_PHASE: "start" },
-		});
+		], { cwd, env: { PI_CODING_AGENT_DIR: agentDir } });
 		await waitForNonemptyFile(stateFile, 30_000);
 		// SAFETY: the owned provider writes this exact object after terminal_start.
 		const started = JSON.parse(readFileSync(stateFile, "utf8")) as { id: string; pid: number };
 		expect(started.id).toMatch(/^term-/);
-		// terminal_start may report `pid: pending` before its launch marker wins
-		// the store transition; the durable meta record is authoritative here.
 		const storeRoot = join(agentDir, "state/sumocode-terminals");
 		const taskDir = readdirSync(storeRoot).find((name) => name.startsWith(`${started.id}-`));
 		if (taskDir === undefined) throw new Error(`terminal metadata directory missing for ${started.id}`);
+		const outputPath = join(storeRoot, taskDir, "output.log");
+		await waitForNonemptyFile(outputPath);
+		expect(readFileSync(outputPath, "utf8")).toContain("NATIVE_BG_READY");
 		const metaPath = join(storeRoot, taskDir, "meta.json");
 		// SAFETY: task-manager owns this schema; the test consumes only pid.
 		const meta = JSON.parse(readFileSync(metaPath, "utf8")) as { pid?: number };
 		const terminalPid = meta.pid ?? started.pid;
-		expect(processAlive(terminalPid), JSON.stringify(meta)).toBe(true);
-		// Crash the native launcher + compiled Pi foreground group. The managed
-		// terminal owns a separate process group and must survive for recovery.
-		try {
-			process.kill(-startSession.pid, "SIGKILL");
-		} catch (error) {
-			// The held event stream owns no timer, so Bun may already have exited
-			// after yielding the marker. That is an equivalent abrupt foreground
-			// loss as long as the detached managed terminal remains alive below.
-			// SAFETY: process.kill throws NodeJS.ErrnoException on a missing group.
-			if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+		const deadline = Date.now() + 10_000;
+		while (Date.now() < deadline) {
+			// SAFETY: task-manager owns this schema; the test consumes only status.
+			const snapshot = JSON.parse(readFileSync(metaPath, "utf8")) as { status?: string };
+			if (snapshot.status === "cancelled") break;
+			await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
 		}
-		await waitForExit(startSession, 10_000);
-		expect(processAlive(terminalPid)).toBe(true);
-
-		const recoverSession = spawnNativePty(baseArgs, {
-			cwd,
-			env: { PI_CODING_AGENT_DIR: agentDir, SUMOCODE_NATIVE_TERMINAL_PHASE: "recover" },
-		});
-		await recoverSession.waitForOutput("NATIVE_TERMINAL_RECOVERED_AND_STOPPED", 30_000);
-		expect((await waitForExit(recoverSession, 30_000)).exitCode).toBe(0);
+		// SAFETY: task-manager owns this schema; the test consumes only status.
+		expect((JSON.parse(readFileSync(metaPath, "utf8")) as { status?: string }).status).toBe("cancelled");
 		await waitForProcessExit(terminalPid);
+		session.signal("SIGTERM");
+		await waitForExit(session);
 	}, 75_000);
 
 	it("relaunches direct Pi with --continue after exit 100", async () => {

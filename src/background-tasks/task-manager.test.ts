@@ -3285,9 +3285,9 @@ describe("terminal runner invocation (plan 117 seam)", () => {
 		expect(invocation.args).toEqual([fileURLToPath(new URL("./bounded-terminal-runner.mjs", import.meta.url))]);
 	});
 
-	it("launches self via the --sumocode-terminal-runner role on the native runtime", () => {
+	it("launches the host executable's --sumocode-terminal-runner role on the native runtime", () => {
 		const invocation = resolveTerminalRunnerInvocation({ SUMOCODE_NATIVE_DIR: "/opt/sumocode" });
-		expect(invocation.command).toBe(process.execPath);
+		expect(invocation.command).toBe("/opt/sumocode/bin/sumocode");
 		expect(invocation.args).toEqual(["--sumocode-terminal-runner"]);
 	});
 });

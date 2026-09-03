@@ -15,7 +15,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isNativeRuntime } from "../native/paths.js";
+import { resolveNativeDir } from "../native/paths.js";
 import {
 	signalVerifiedProcessTree,
 	systemProcessTree,
@@ -60,12 +60,13 @@ const BOUNDED_TERMINAL_RUNNER_FILE = fileURLToPath(new URL("./bounded-terminal-r
 /**
  * Plan 117 seam 3: how the generated script launches the bounded terminal
  * runner. Dev keeps `node + bounded-terminal-runner.mjs` byte-for-byte; the
- * native binary embeds the runner behind the `--sumocode-terminal-runner`
+ * native host embeds the runner behind the `--sumocode-terminal-runner`
  * argv role (handled by src/native/main.ts before anything else).
  */
 export function resolveTerminalRunnerInvocation(env: NodeJS.ProcessEnv = process.env) {
-	if (isNativeRuntime(env)) {
-		return { command: process.execPath, args: ["--sumocode-terminal-runner"] };
+	const nativeDir = resolveNativeDir(env);
+	if (nativeDir !== null) {
+		return { command: join(nativeDir, "bin", "sumocode"), args: ["--sumocode-terminal-runner"] };
 	}
 	return { command: process.execPath, args: [BOUNDED_TERMINAL_RUNNER_FILE] };
 }

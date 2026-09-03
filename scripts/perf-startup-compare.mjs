@@ -91,13 +91,18 @@ async function realpathNearestExisting(path) {
 	}
 }
 
+async function assertPathOutsideCheckout(callerRoot, target) {
+	// Two complementary checks: lexical containment catches nonexistent paths
+	// whose leaf would land inside the checkout (e.g. TMPDIR=$PWD), and the
+	// nearest-existing-ancestor realpath catches symlink indirection. Any
+	// symlink component already exists, so the ancestor walk resolves it.
+	if (pathInside(callerRoot, target)) throw new Error("--out must be outside the compared checkout");
+	const [callerReal, targetAncestorReal] = await Promise.all([realpath(callerRoot), realpathNearestExisting(target)]);
+	if (pathInside(callerReal, targetAncestorReal)) throw new Error("--out must be outside the compared checkout");
+}
+
 async function assertOutOutsideCheckout(callerRoot, outDir) {
-	// Containment is checked against the nearest EXISTING ancestor before any
-	// directory is created: a --out inside the checkout must be rejected
-	// without leaving an untracked directory behind. Any symlink component
-	// already exists, so the ancestor walk still resolves through it.
-	const [callerReal, outAncestorReal] = await Promise.all([realpath(callerRoot), realpathNearestExisting(outDir)]);
-	if (pathInside(callerReal, outAncestorReal)) throw new Error("--out must be outside the compared checkout");
+	await assertPathOutsideCheckout(callerRoot, outDir);
 	await mkdir(outDir, { recursive: true });
 }
 
@@ -632,13 +637,20 @@ export async function runStartupComparison(options, dependencies = {}) {
 	return report;
 }
 
+async function defaultReportDir() {
+	// TMPDIR can point inside the checkout in hermetic environments: validate
+	// containment before mkdtemp creates anything there.
+	await assertPathOutsideCheckout(ROOT, tmpdir());
+	return mkdtemp(join(tmpdir(), "sumocode-startup-report-"));
+}
+
 export async function main(argv = process.argv.slice(2), dependencies = {}) {
 	const options = startupCompareOptions(argv);
 	if (options.help) {
 		console.log(usage());
 		return undefined;
 	}
-	const outDir = options.outDir ?? await mkdtemp(join(tmpdir(), "sumocode-startup-report-"));
+	const outDir = options.outDir ?? await defaultReportDir();
 	const report = await runStartupComparison({ ...options, callerRoot: ROOT, outDir }, {
 		...dependencies,
 		onFixtureRetained: dependencies.onFixtureRetained ?? ((path) => console.error(`fixture retained: ${path}`)),

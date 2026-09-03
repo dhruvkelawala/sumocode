@@ -368,6 +368,26 @@ describe("startup comparison CLI", () => {
 		})).rejects.toThrow("startup comparison requires clean source checkouts");
 	});
 
+	it("validates the default TMPDIR report root without creating it", async () => {
+		const insideTmp = resolve("tmp-inside-the-checkout");
+		const previousTmpDir = process.env.TMPDIR;
+		process.env.TMPDIR = insideTmp;
+		try {
+			await expect(main(["--base", "base"], {
+				resolveRevision: async () => "a".repeat(40),
+				assertClean: async () => undefined,
+				prepareWorktrees: async () => ({ baselineDir: join(insideTmp, "b"), candidateDir: join(insideTmp, "c"), cleanup: async () => undefined }),
+				runSample: async () => {
+					throw new Error("must not run");
+				},
+			})).rejects.toThrow("--out must be outside the compared checkout");
+		} finally {
+			if (previousTmpDir === undefined) delete process.env.TMPDIR;
+			else process.env.TMPDIR = previousTmpDir;
+		}
+		await expect(stat(insideTmp).catch(() => undefined)).resolves.toBeUndefined();
+	});
+
 	it("rejects the public CLI when neither arm collects a successful sample", async () => {
 		await expect(harness({ publicCli: true, failAllSpawns: true, samples: 1, fixtureCount: 1 }))
 			.rejects.toThrow("startup comparison collection failed");

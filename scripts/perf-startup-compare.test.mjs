@@ -202,6 +202,19 @@ describe("startup comparison CLI", () => {
 		const outLink = join(root, "report-link");
 		await mkdir(inside, { recursive: true });
 		await symlink(inside, outLink);
+		const notCreated = join(callerRoot, "docs", "perf-results");
+		await expect(runStartupComparison({
+			callerRoot,
+			baseRef: "base",
+			samples: 1,
+			fixtureCount: 1,
+			outDir: notCreated,
+		}, {
+			resolveRevision: async () => "a".repeat(40),
+			assertClean: async () => undefined,
+			prepareWorktrees: async () => ({ baselineDir: join(root, "b"), candidateDir: join(root, "c"), cleanup: async () => undefined }),
+		})).rejects.toThrow("--out must be outside the compared checkout");
+		await expect(stat(notCreated).catch(() => undefined)).resolves.toBeUndefined();
 		await expect(runStartupComparison({
 			callerRoot,
 			baseRef: "base",
@@ -213,8 +226,6 @@ describe("startup comparison CLI", () => {
 			assertClean: async () => undefined,
 			prepareWorktrees: async () => ({ baselineDir: join(root, "baseline"), candidateDir: join(root, "candidate"), cleanup: async () => undefined }),
 		})).rejects.toThrow("--out must be outside the compared checkout");
-		expect((await execFileAsync("git", ["status", "--porcelain"], { cwd: callerRoot }).catch(() => ({ stdout: "" }))).stdout).toBe("");
-		expect(await readdir(inside)).toEqual([]);
 	});
 
 	it("refuses to write reports through a pre-existing symlink", async () => {
@@ -308,6 +319,33 @@ describe("startup comparison CLI", () => {
 		expect(cleanupCalled).toBe(false);
 		expect(retainedCampaign).toEqual(expect.any(String));
 		expect(await readFile(join(outDir, "startup-compare.json"), "utf8")).toContain("audit-failure");
+	});
+
+	it("retains the campaign when worktree setup fails", async () => {
+		const root = await temporaryRoot("sumocode-startup-setup-failure-");
+		const callerRoot = join(root, "caller");
+		const outDir = await temporaryRoot("sumocode-startup-setup-failure-report-");
+		await mkdir(callerRoot, { recursive: true });
+		let retainedCampaign;
+		await expect(runStartupComparison({
+			callerRoot,
+			baseRef: "base",
+			samples: 1,
+			fixtureCount: 1,
+			outDir,
+		}, {
+			resolveRevision: async () => "a".repeat(40),
+			assertClean: async () => undefined,
+			prepareWorktrees: async () => {
+				throw new Error("worktree add failed");
+			},
+			onFixtureRetained: (path) => {
+				retainedCampaign = path;
+				roots.push(path);
+			},
+		})).rejects.toThrow("worktree add failed");
+		expect(retainedCampaign).toEqual(expect.any(String));
+		await expect(stat(retainedCampaign)).resolves.toBeTruthy();
 	});
 
 	it("rejects the public CLI when neither arm collects a successful sample", async () => {

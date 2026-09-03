@@ -379,6 +379,7 @@ function publicSample(raw, index, startWallMs, fixtureCount) {
 	// corrupt/duplicate/unsupported records timed a different workload than the
 	// baseline, and an instrumented revision that omits the count cannot prove
 	// its workload either, so both must fail instead of entering a median.
+	const terminalIndexReady = byName.get("terminal_index_ready");
 	const readySnapshotCount = terminalIndexReady?.snapshotCount;
 	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- parsed diagnostics JSONL boundary
 	if (typeof readySnapshotCount !== "number" || !Number.isFinite(readySnapshotCount) || readySnapshotCount !== fixtureCount) {
@@ -392,7 +393,6 @@ function publicSample(raw, index, startWallMs, fixtureCount) {
 	const hostStart = eventTimestamp(byName.get("process_preload_start"));
 	const hostImport = eventTimestamp(byName.get("host_import_ready"));
 	const rpcChild = eventTimestamp(byName.get("rpc_child_ready"));
-	const terminalIndexReady = byName.get("terminal_index_ready");
 	const editor = eventTimestamp(byName.get("editor_ready"));
 	const hydration = eventTimestamp(byName.get("hydration_committed"));
 	const command = eventTimestamp(byName.get("command_ready"));

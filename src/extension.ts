@@ -224,8 +224,10 @@ function installOrchestrationTools(pi: ExtensionAPI) {
 					// emit nothing so the harness observes missing events and fails the
 					// sample explicitly instead of timing a partial scan as ready.
 					if (diagnostic.kind !== "index-scan" || diagnostic.complete !== true) return;
+					// snapshotCount lets the harness verify every fixture record was
+					// accepted (complete scans still skip corrupt/duplicate records).
 					logDiagnostic("terminal_index_start", {});
-					logDiagnostic("terminal_index_ready", { durationMs: diagnostic.durationMs });
+					logDiagnostic("terminal_index_ready", { durationMs: diagnostic.durationMs, snapshotCount: diagnostic.snapshotCount });
 				},
 			}
 		: undefined;

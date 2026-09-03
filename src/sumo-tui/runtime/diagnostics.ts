@@ -51,11 +51,16 @@ export function logDiagnostic(event: string, fields: DiagnosticFields = {}): voi
 		const now = performance.now();
 		const sanitized: Record<string, DiagnosticValue> = {};
 		if (publicStartupDiagnostics) {
-			// Only the scan's high-resolution duration is public-safe; every other
-			// field (cwd, counts, surfaces) stays process-local.
-			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- diagnostics-file boundary: durationMs arrives from a caller-supplied DiagnosticFields record, not a parsed domain value.
-			if (event === "terminal_index_ready" && typeof fields.durationMs === "number" && Number.isFinite(fields.durationMs)) {
+			// Only the scan's high-resolution duration and accepted-record count are
+			// public-safe; every other field stays process-local.
+			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- diagnostics-file boundary: fields arrive from a caller-supplied DiagnosticFields record, not a parsed domain value.
+			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- diagnostics-file boundary: fields arrive from a caller-supplied DiagnosticFields record, not a parsed domain value.
+			const durationMsValid = typeof fields.durationMs === "number" && Number.isFinite(fields.durationMs);
+			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- same boundary as above for the accepted-record count.
+			const snapshotCountValid = typeof fields.snapshotCount === "number" && Number.isFinite(fields.snapshotCount);
+			if (event === "terminal_index_ready" && durationMsValid && snapshotCountValid) {
 				sanitized.durationMs = fields.durationMs;
+				sanitized.snapshotCount = fields.snapshotCount;
 			}
 		} else {
 			for (const [key, value] of Object.entries(fields)) sanitized[key] = sanitizeDiagnosticValue(value);

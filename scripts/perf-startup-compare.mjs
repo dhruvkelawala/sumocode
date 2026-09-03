@@ -361,7 +361,7 @@ function eventTimestamp(event) {
 }
 
 /** Convert raw local diagnostics to the only sample shape allowed into public reports. */
-function publicSample(raw, index, startWallMs) {
+function publicSample(raw, index, startWallMs, fixtureCount) {
 	const events = Array.isArray(raw?.events) ? raw.events : [];
 	const byName = new Map();
 	for (const event of events) {
@@ -375,6 +375,14 @@ function publicSample(raw, index, startWallMs) {
 	if (missingEvents.length > 0) return { index, ok: false, failure: "missing-events", missingEvents };
 	if (raw?.ok !== true) return { index, ok: false, failure: "process-failed", missingEvents };
 	if (byName.get("host_import_ready")?.mode !== "source") return { index, ok: false, failure: "mode-mismatch", missingEvents: [] };
+	// The ready mark carries the accepted-record count: a scan that skipped
+	// corrupt/duplicate/unsupported records timed a different workload than the
+	// baseline, so the sample must fail instead of entering a median.
+	const readySnapshotCount = byName.get("terminal_index_ready")?.snapshotCount;
+	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- parsed diagnostics JSONL boundary
+	if (typeof readySnapshotCount === "number" && readySnapshotCount !== fixtureCount) {
+		return { index, ok: false, failure: "fixture-mismatch", missingEvents };
+	}
 	const hostStart = eventTimestamp(byName.get("process_preload_start"));
 	const hostImport = eventTimestamp(byName.get("host_import_ready"));
 	const rpcChild = eventTimestamp(byName.get("rpc_child_ready"));
@@ -573,7 +581,7 @@ export async function runStartupComparison(options, dependencies = {}) {
 			} catch {
 				raw = { ok: false, failure: "process-failed", events: [] };
 			}
-			const sample = publicSample(raw, index, startWallMs);
+			const sample = publicSample(raw, index, startWallMs, options.fixtureCount);
 			armSamples[arm].push(sample);
 			// Never mutate the shared fixture or launch another process while an
 			// owned PTY may still be alive.

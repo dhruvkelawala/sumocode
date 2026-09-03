@@ -243,6 +243,47 @@ describe("TranscriptController Activity folding", () => {
 		});
 	});
 
+	it("resets mapper state and rebuilds the fold index after compaction insertion", () => {
+		const delegate = createTranscriptViewModelMapper();
+		const mapper = {
+			reset: vi.fn(() => delegate.reset()),
+			messageFromPiMessage: vi.fn(delegate.messageFromPiMessage.bind(delegate)),
+			transcriptFromSessionContext: delegate.transcriptFromSessionContext.bind(delegate),
+		};
+		const controller = new TranscriptController({ mapper });
+		controller.replaceFromMessages([{
+			id: "tool-owner",
+			role: "assistant",
+			content: [{ type: "toolCall", id: "read-before-compaction", name: "read", arguments: { path: "before.ts" } }],
+		}]);
+		mapper.reset.mockClear();
+		mapper.messageFromPiMessage.mockClear();
+
+		const compacted = controller.handleAgentEvent({
+			type: "compaction_end",
+			result: { summary: "Earlier context", tokensBefore: 10_000 },
+		});
+
+		expect(mapper.reset).toHaveBeenCalledTimes(1);
+		expect(mapper.messageFromPiMessage).toHaveBeenCalledTimes(2);
+		expect(compacted.messages).toHaveLength(2);
+		mapper.reset.mockClear();
+		mapper.messageFromPiMessage.mockClear();
+		const updated = controller.handleAgentEvent({
+			type: "tool_execution_update",
+			toolCallId: "read-before-compaction",
+			toolName: "read",
+			args: { path: "before.ts" },
+			partialResult: { content: [{ type: "text", text: "current" }] },
+		});
+		expect(mapper.reset).not.toHaveBeenCalled();
+		expect(mapper.messageFromPiMessage).not.toHaveBeenCalled();
+		expect(updated.messages[0]?.blocks[0]).toMatchObject({
+			type: "activity",
+			activity: { id: "read-before-compaction", outputTail: "current" },
+		});
+	});
+
 	it("keeps simultaneous same-name tools distinct and folds each result by stable ID", () => {
 		const controller = new TranscriptController();
 		const transcript = controller.replaceFromMessages([

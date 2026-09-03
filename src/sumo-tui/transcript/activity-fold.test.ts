@@ -106,6 +106,26 @@ describe("indexed Activity folding", () => {
 		expect(messages[0]?.blocks[1]).toMatchObject({ type: "delegation", delegation: { id: "second", status: "running" } });
 	});
 
+	it("falls back to equal Activity ID when a non-subagent update gains a source ID", () => {
+		const messages: ChatMessageViewModel[] = [{
+			id: "tool-owner",
+			role: "sumo",
+			displayName: "SUMO",
+			blocks: [{ type: "activity", activity: { id: "terminal-1", kind: "terminal", title: "build", status: "running" } }],
+		}];
+		const cursor = createFoldableBlockCursor(indexFoldableBlocks(messages));
+
+		foldBlockIntoIndexedMessages(messages, {
+			type: "activity",
+			activity: { id: "terminal-1", sourceId: "start-1", kind: "terminal", title: "build", status: "succeeded" },
+		}, cursor, { requireMatch: true });
+
+		expect(messages).toHaveLength(1);
+		expect(messages[0]?.blocks).toEqual([
+			expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "terminal-1", sourceId: "start-1", status: "succeeded" }) }),
+		]);
+	});
+
 	it("uses the source alias directly when canonical IDs repeat", () => {
 		const messages = Array.from({ length: 10_000 }, (_, index) => subagentMessage("subagent:worker", `spawn-${index}`));
 		const cursor = createFoldableBlockCursor(indexFoldableBlocks(messages));

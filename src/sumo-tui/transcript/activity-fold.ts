@@ -194,11 +194,22 @@ function foldableIndexKeys(block: FoldableBlock): string[] {
 		.map((value) => `activity:${value}`);
 }
 
-function foldableLookupKeys(block: FoldableBlock): string[] {
+interface FoldableLookupKeys {
+	readonly preferred: readonly string[];
+	readonly fallback: readonly string[];
+}
+
+function foldableLookupKeys(block: FoldableBlock): FoldableLookupKeys {
 	if (block.type === "delegation") {
-		return block.delegation.id ? [`delegation:${block.delegation.id}`] : ["delegation:pending"];
+		return {
+			preferred: block.delegation.id ? [`delegation:${block.delegation.id}`] : ["delegation:pending"],
+			fallback: [],
+		};
 	}
-	return [`activity:${block.activity.sourceId ?? block.activity.id}`];
+	const sourceId = block.activity.sourceId;
+	return sourceId && sourceId !== block.activity.id
+		? { preferred: [`activity:${sourceId}`], fallback: [`activity:${block.activity.id}`] }
+		: { preferred: [`activity:${block.activity.id}`], fallback: [] };
 }
 
 function addIndexedLocation(
@@ -244,24 +255,28 @@ function indexedMatchingLocation(
 	cursor: FoldableBlockCursor,
 ): FoldableBlockLocation | undefined {
 	indexedIdentityLookups += 1;
-	const candidates = new Map<string, FoldableBlockLocation>();
-	for (const key of foldableLookupKeys(incoming)) {
-		for (const location of cursor.base.locationsByIdentity.get(key) ?? []) {
-			candidates.set(`${location.messageIndex}:${location.blockIndex}`, location);
+	const lookup = (keys: readonly string[]): FoldableBlockLocation | undefined => {
+		const candidates = new Map<string, FoldableBlockLocation>();
+		for (const key of keys) {
+			for (const location of cursor.base.locationsByIdentity.get(key) ?? []) {
+				candidates.set(`${location.messageIndex}:${location.blockIndex}`, location);
+			}
+			for (const location of cursor.addedLocationsByIdentity.get(key) ?? []) {
+				candidates.set(`${location.messageIndex}:${location.blockIndex}`, location);
+			}
 		}
-		for (const location of cursor.addedLocationsByIdentity.get(key) ?? []) {
-			candidates.set(`${location.messageIndex}:${location.blockIndex}`, location);
-		}
-	}
-	return [...candidates.values()]
-		.sort((left, right) => right.messageIndex - left.messageIndex || left.blockIndex - right.blockIndex)
-		.find((location) => {
-			indexedCandidateVisits += 1;
-			const message = messages[location.messageIndex];
-			return message !== undefined
-				&& canOwnFoldableUpdates(message)
-				&& matchingFoldableBlockIndex([message.blocks[location.blockIndex]!], incoming) === 0;
-		});
+		return [...candidates.values()]
+			.sort((left, right) => right.messageIndex - left.messageIndex || left.blockIndex - right.blockIndex)
+			.find((location) => {
+				indexedCandidateVisits += 1;
+				const message = messages[location.messageIndex];
+				return message !== undefined
+					&& canOwnFoldableUpdates(message)
+					&& matchingFoldableBlockIndex([message.blocks[location.blockIndex]!], incoming) === 0;
+			});
+	};
+	const keys = foldableLookupKeys(incoming);
+	return lookup(keys.preferred) ?? lookup(keys.fallback);
 }
 
 function recordIndexedBlock(

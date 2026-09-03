@@ -559,11 +559,12 @@ function spawnDirectPi(args: readonly string[], stdinPrompt: string, reloadReady
 		// Pi composes stdin + messages[0] with no separator.
 		const childStdin = child.stdin;
 		if (childStdin !== null) {
-			process.stdin.pipe(childStdin);
-			process.stdin.on("end", () => {
-				childStdin.write(stdinPrompt);
-				childStdin.end();
+			// Keep the writable open after caller stdin reaches EOF so the prompt
+			// can follow it, matching `{ cat; printf prompt; } | pi` exactly.
+			process.stdin.once("end", () => {
+				childStdin.end(stdinPrompt);
 			});
+			process.stdin.pipe(childStdin, { end: false });
 		}
 	}
 	const forwarding = (signal: NodeJS.Signals): void => {

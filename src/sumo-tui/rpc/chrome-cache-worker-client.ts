@@ -122,7 +122,11 @@ export class ChromeCacheWorkerClient {
 		// native starts the embedded compiled worker entry (no jiti on disk).
 		let worker: Worker;
 		if (isNativeRuntime()) {
-			worker = new Worker(new URL("./chrome-cache-worker.ts", import.meta.url), {
+			// Bun 1.4.0 embeds secondary compile entries under
+			// `$bunfs/root/<root-relative-without-src>.js`; import.meta.url for the
+			// compiled main is `$bunfs/root/sumocode`. This relative URL reaches the
+			// embedded worker without a Bun API or disk path.
+			worker = new Worker(new URL("sumo-tui/rpc/chrome-cache-worker.js", import.meta.url), {
 				workerData: {
 					stateRoot: this.options.stateRoot,
 					modulePath: this.options.modulePath,

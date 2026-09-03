@@ -217,6 +217,32 @@ describe("startup comparison CLI", () => {
 		expect(await readdir(inside)).toEqual([]);
 	});
 
+	it("refuses to write reports through a pre-existing symlink", async () => {
+		const root = await temporaryRoot("sumocode-startup-report-symlink-");
+		const callerRoot = join(root, "caller");
+		const outDir = join(root, "out");
+		const victim = join(root, "victim.txt");
+		await mkdir(callerRoot, { recursive: true });
+		await mkdir(outDir, { recursive: true });
+		await writeFile(victim, "do not truncate\n");
+		await symlink(victim, join(outDir, "startup-compare.json"));
+		await expect(runStartupComparison({
+			callerRoot,
+			baseRef: "base",
+			samples: 1,
+			fixtureCount: 1,
+			outDir,
+		}, {
+			resolveRevision: async () => "a".repeat(40),
+			assertClean: async () => undefined,
+			prepareWorktrees: async () => ({ baselineDir: join(root, "b"), candidateDir: join(root, "c"), cleanup: async () => undefined }),
+			runSample: async () => {
+				throw new Error("no process");
+			},
+		})).rejects.toThrow("refusing to write through symlink");
+		expect(await readFile(victim, "utf8")).toBe("do not truncate\n");
+	});
+
 	it("rejects the public CLI when neither arm collects a successful sample", async () => {
 		await expect(harness({ publicCli: true, failAllSpawns: true, samples: 1, fixtureCount: 1 }))
 			.rejects.toThrow("startup comparison collection failed");

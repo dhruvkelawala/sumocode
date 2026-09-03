@@ -7,18 +7,27 @@ export type FoldableBlock = Extract<ChatBlock, { type: "activity" | "delegation"
 export interface ActivityFoldOperationCounts {
 	readonly historyMessageVisits: number;
 	readonly messageEnvelopeCopies: number;
+	readonly indexedIdentityLookups: number;
+	readonly indexedCandidateVisits: number;
+	readonly changedMessagePaths: number;
 }
 
 let historyMessageVisits = 0;
 let messageEnvelopeCopies = 0;
+let indexedIdentityLookups = 0;
+let indexedCandidateVisits = 0;
+let changedMessagePaths = 0;
 
 export function resetActivityFoldOperationCountsForTests(): void {
 	historyMessageVisits = 0;
 	messageEnvelopeCopies = 0;
+	indexedIdentityLookups = 0;
+	indexedCandidateVisits = 0;
+	changedMessagePaths = 0;
 }
 
 export function getActivityFoldOperationCountsForTests(): ActivityFoldOperationCounts {
-	return { historyMessageVisits, messageEnvelopeCopies };
+	return { historyMessageVisits, messageEnvelopeCopies, indexedIdentityLookups, indexedCandidateVisits, changedMessagePaths };
 }
 
 function copyMessages(messages: readonly ChatMessageViewModel[]): ChatMessageViewModel[] {
@@ -210,6 +219,7 @@ function indexedMatchingLocation(
 	incoming: FoldableBlock,
 	cursor: FoldableBlockCursor,
 ): FoldableBlockLocation | undefined {
+	indexedIdentityLookups += 1;
 	const candidates = new Map<string, FoldableBlockLocation>();
 	for (const key of foldableIdentityKeys(incoming)) {
 		for (const location of cursor.base.locationsByIdentity.get(key) ?? []) {
@@ -222,6 +232,7 @@ function indexedMatchingLocation(
 	return [...candidates.values()]
 		.sort((left, right) => right.messageIndex - left.messageIndex || right.blockIndex - left.blockIndex)
 		.find((location) => {
+			indexedCandidateVisits += 1;
 			const message = messages[location.messageIndex];
 			return message !== undefined
 				&& canOwnFoldableUpdates(message)
@@ -267,6 +278,7 @@ export function foldBlockIntoIndexedMessages(
 	}
 	const target = messages[targetIndex];
 	if (!target) return { folded: false };
+	changedMessagePaths += 1;
 	const updated = { ...target, blocks: upsertFoldableBlock(target.blocks, incoming) };
 	messages[targetIndex] = updated;
 	recordIndexedBlock(updated, targetIndex, incoming, cursor);

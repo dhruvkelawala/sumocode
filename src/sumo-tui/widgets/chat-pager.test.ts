@@ -805,7 +805,7 @@ describe("ChatPager", () => {
 		root.dispose();
 	});
 
-	it("keeps a transcript-owned live Activity node until source data can reconstruct it", async () => {
+	it("keeps a new reply visible when transcript-owned live Activities fill the budget", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());
 		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 1 });
@@ -815,6 +815,8 @@ describe("ChatPager", () => {
 
 		chat.addMessage("sumo", "later");
 
+		expect(chat.getRenderedMessages().some((message) => message.text === "later")).toBe(true);
+		expect(chat.revealActivity("owned-live")).toBe(true);
 		expect(chat.getRenderedMessages().some((message) => message.text.includes("owned live"))).toBe(true);
 		root.dispose();
 	});
@@ -835,6 +837,31 @@ describe("ChatPager", () => {
 		expect(chat.getArchivedMessageCount()).toBe(1);
 		chat.reconcileFeedActivities([]);
 		expect(chat.getRenderedMessages().some((message) => message.toSnapshot().blocks?.some((block) => block.type === "activity" && block.activity.id === "term-live"))).toBe(false);
+		root.dispose();
+	});
+
+	it("does not double-count feed Activities that arrive after transcript virtualization", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 5 });
+		const activities = Array.from({ length: 20 }, (_, index) => ({
+			id: `late-feed-${index}`,
+			kind: "terminal" as const,
+			title: `late feed ${index}`,
+			status: "running" as const,
+		}));
+		chat.replaceViewModels(activities.map((activity, index) => ({
+			id: `activity-message-${index}`,
+			role: "system" as const,
+			displayName: "SYSTEM",
+			blocks: [{ type: "activity" as const, activity }],
+		})));
+
+		expect(chat.getArchivedMessageCount()).toBe(15);
+		chat.reconcileFeedActivities(activities);
+
+		expect(chat.getArchivedMessageCount()).toBe(15);
+		expect(chat.getKnownActivityIds()).toHaveLength(20);
 		root.dispose();
 	});
 

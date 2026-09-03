@@ -9,6 +9,7 @@ import {
 	foldBlockIntoIndexedMessages,
 	indexFoldableBlocks,
 	isFoldableBlock,
+	type FoldableBlockCursor,
 	type FoldableBlockIndex,
 } from "./activity-fold.js";
 import {
@@ -321,6 +322,13 @@ export class TranscriptController {
 	private committedMessages: SessionValue[] = [];
 	private committedViewModelCache: ChatMessageViewModel[] | undefined;
 	private committedFoldableBlockIndex: FoldableBlockIndex | undefined;
+	private liveProjectionCache: {
+		readonly committedMessages: readonly ChatMessageViewModel[];
+		readonly draftMessage: SessionValue | undefined;
+		readonly messages: readonly ChatMessageViewModel[];
+		readonly foldCursor: FoldableBlockCursor;
+	} | undefined;
+	private pendingLiveToolProjection: LiveToolExecution | undefined;
 	private draftMessage: SessionValue | undefined;
 	private readonly taskPartials = new Map<string, TaskPartialUpdate>();
 	private readonly liveTools = new Map<string, LiveToolExecution>();
@@ -393,6 +401,7 @@ export class TranscriptController {
 	public handleAgentEvent<T>(event: T): TranscriptViewModel {
 		this.pendingChatOp = undefined;
 		this.pendingIndexedChatIndices = undefined;
+		this.pendingLiveToolProjection = undefined;
 		// SAFETY: T forwards the caller's raw agent event verbatim; asRecord plus
 		// the string check below re-validate shape at runtime.
 		const record = asRecord(event as SessionValue);
@@ -406,6 +415,7 @@ export class TranscriptController {
 			const existing = this.liveTools.get(liveTool.toolCallId);
 			if (!existing || existing.status === "running" || liveTool.status !== "running") {
 				this.liveTools.set(liveTool.toolCallId, liveTool);
+				this.pendingLiveToolProjection = liveTool;
 			}
 		}
 
@@ -515,6 +525,7 @@ export class TranscriptController {
 				this.currentRunStartIndex = undefined;
 				this.draftMessage = undefined;
 				this.liveTools.clear();
+				this.liveProjectionCache = undefined;
 				this.taskPartials.clear();
 				break;
 			}
@@ -552,10 +563,14 @@ export class TranscriptController {
 
 	public viewModel(): TranscriptViewModel {
 		const committedMessages = this.ensureCommittedViewModels();
-		const foldCursor = createFoldableBlockCursor(this.committedFoldableBlockIndex ?? indexFoldableBlocks(committedMessages));
+		const cached = this.liveProjectionCache;
+		const canReuseProjection = cached?.committedMessages === committedMessages && cached.draftMessage === this.draftMessage;
+		const foldCursor = canReuseProjection
+			? cached.foldCursor
+			: createFoldableBlockCursor(this.committedFoldableBlockIndex ?? indexFoldableBlocks(committedMessages));
 		transcriptSnapshotEnvelopeCopies += 1;
-		const messages = [...committedMessages];
-		if (this.draftMessage !== undefined) {
+		const messages = [...(canReuseProjection ? cached.messages : committedMessages)];
+		if (!canReuseProjection && this.draftMessage !== undefined) {
 			const message = this.mapper.messageFromPiMessage(this.draftMessage, messages.length, {
 				includeOpenMermaidFence: true,
 			});
@@ -565,13 +580,18 @@ export class TranscriptController {
 			}
 		}
 
-		for (const liveTool of this.liveTools.values()) {
+		const liveTools = canReuseProjection
+			? this.pendingLiveToolProjection ? [this.pendingLiveToolProjection] : []
+			: this.liveTools.values();
+		for (const liveTool of liveTools) {
 			const liveMessage = chatMessageViewModelFromPiMessage(liveToolPiMessage(liveTool));
 			for (const block of liveMessage?.blocks.filter(isFoldableBlock) ?? []) {
 				const result = foldBlockIntoIndexedMessages(messages, block, foldCursor, { requireMatch: false });
 				if (result.messageIndex !== undefined) this.pendingIndexedChatIndices?.add(result.messageIndex);
 			}
 		}
+		this.liveProjectionCache = { committedMessages, draftMessage: this.draftMessage, messages, foldCursor };
+		this.pendingLiveToolProjection = undefined;
 		return { messages };
 	}
 
@@ -615,6 +635,7 @@ export class TranscriptController {
 	private invalidateCommittedCache(): void {
 		this.committedViewModelCache = undefined;
 		this.committedFoldableBlockIndex = undefined;
+		this.liveProjectionCache = undefined;
 	}
 
 	private ensureCommittedViewModels(): readonly ChatMessageViewModel[] {

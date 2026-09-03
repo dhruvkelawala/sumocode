@@ -38,6 +38,27 @@ describe("ChatPager live-card retention bounds", () => {
 		root.dispose();
 	});
 
+	it("programmatic page-up visits all 100 live Activity IDs", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 5 });
+		chat.reconcileFeedActivities(liveActivities(100));
+		const observed = new Set<string>();
+
+		for (let step = 0; step < 100; step += 1) {
+			for (const message of chat.getRenderedMessages()) {
+				for (const block of message.toSnapshot().blocks ?? []) {
+					if (block.type === "activity") observed.add(block.activity.id);
+				}
+			}
+			chat.handleKey({ key: "PageUp" });
+		}
+
+		expect(observed.size).toBe(100);
+		expect(chat.getRenderedMessages().length).toBeLessThanOrEqual(6);
+		root.dispose();
+	});
+
 	it("rehydrates a live card in logical order with its latest output", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());
@@ -95,6 +116,36 @@ describe("ChatPager live-card retention bounds", () => {
 		root.dispose();
 	});
 
+	it("preserves the visible scroll anchor during non-prefix eviction", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		root.width = 80;
+		root.height = 8;
+		root.flexDirection = FLEX_DIRECTION_COLUMN;
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 3 });
+		chat.reconcileFeedActivities(liveActivities(6));
+		root.yogaNode.calculateLayout(80, 8, DIRECTION_LTR);
+		composite(root, new CellBuffer(8, 80));
+		chat.scrollBox.scrollTo(5);
+		expect(chat.revealActivity("terminal-3")).toBe(true);
+		root.yogaNode.calculateLayout(80, 8, DIRECTION_LTR);
+		const before = new CellBuffer(8, 80);
+		composite(root, before);
+		const beforeRows = Array.from({ length: 8 }, (_, row) => before.toPlainRow(row));
+		const anchorRow = beforeRows.findIndex((row) => row.includes("terminal"));
+		expect(anchorRow).toBeGreaterThanOrEqual(0);
+		const anchor = beforeRows[anchorRow]!;
+
+		chat.addMessage("sumo", "new reply");
+		root.yogaNode.calculateLayout(80, 8, DIRECTION_LTR);
+		const after = new CellBuffer(8, 80);
+		composite(root, after);
+
+		expect(after.toPlainRow(anchorRow)).toBe(anchor);
+		expect(chat.getRenderedMessages().some((message) => message.text === "new reply")).toBe(true);
+		root.dispose();
+	});
+
 	it("settles virtualized card without dropping order or current output", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());
@@ -121,7 +172,7 @@ describe("ChatPager live-card retention bounds", () => {
 			type: "activity",
 			activity: { id: "terminal-0", status: "succeeded", outputTail: "complete" },
 		});
-		expect(new Set(chat.getKnownActivityIds())).toEqual(new Set(knownOrder));
+		expect(chat.getKnownActivityIds()).toEqual(knownOrder);
 		expect(chat.getRenderedMessages().length).toBeLessThanOrEqual(5);
 		root.dispose();
 	});

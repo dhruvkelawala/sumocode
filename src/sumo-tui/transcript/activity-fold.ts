@@ -329,7 +329,21 @@ function recordIndexedBlock(
 	cursor: FoldableBlockCursor,
 ): void {
 	const blockIndex = matchingFoldableBlockIndex(message.blocks, incoming);
-	if (blockIndex !== -1) addIndexedLocation(cursor.addedLocationsByIdentity, incoming, { messageIndex, blockIndex });
+	if (blockIndex === -1) return;
+	const location = { messageIndex, blockIndex };
+	addIndexedLocation(cursor.addedLocationsByIdentity, incoming, location);
+	if (incoming.type === "delegation" && (incoming.delegation.status === "queued" || incoming.delegation.status === "running")) {
+		const alreadyInBase = cursor.base.locationsByIdentity.get("delegation:pending")?.some((candidate) =>
+			candidate.messageIndex === messageIndex && candidate.blockIndex === blockIndex
+		) ?? false;
+		if (alreadyInBase) {
+			const added = cursor.addedLocationsByIdentity.get("delegation:pending")?.filter((candidate) =>
+				candidate.messageIndex !== messageIndex || candidate.blockIndex !== blockIndex
+		);
+			if (added?.length) cursor.addedLocationsByIdentity.set("delegation:pending", added);
+			else cursor.addedLocationsByIdentity.delete("delegation:pending");
+		}
+	}
 }
 
 export interface IndexedFoldResult {

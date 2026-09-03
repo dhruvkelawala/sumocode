@@ -111,6 +111,36 @@ describe("indexed Activity folding", () => {
 		expect(messages[0]?.blocks[1]).toMatchObject({ type: "delegation", delegation: { id: "second", status: "success" } });
 	});
 
+	it("keeps newest anonymous delegation ownership after an older ID update", () => {
+		const messages: ChatMessageViewModel[] = [
+			{
+				id: "older-message",
+				role: "sumo",
+				displayName: "SUMO",
+				blocks: [{ type: "delegation", delegation: { id: "older", title: "older", status: "running" } }],
+			},
+			{
+				id: "newer-message",
+				role: "sumo",
+				displayName: "SUMO",
+				blocks: [{ type: "delegation", delegation: { id: "newer", title: "newer", status: "running" } }],
+			},
+		];
+		const cursor = createFoldableBlockCursor(indexFoldableBlocks(messages));
+		foldBlockIntoIndexedMessages(messages, {
+			type: "delegation",
+			delegation: { id: "older", title: "older updated", status: "running" },
+		}, cursor, { requireMatch: true });
+
+		foldBlockIntoIndexedMessages(messages, {
+			type: "delegation",
+			delegation: { title: "anonymous result", status: "success" },
+		}, cursor, { requireMatch: true });
+
+		expect(messages[0]?.blocks[0]).toMatchObject({ type: "delegation", delegation: { id: "older", status: "running" } });
+		expect(messages[1]?.blocks[0]).toMatchObject({ type: "delegation", delegation: { id: "newer", status: "success" } });
+	});
+
 	it("keeps no-ID delegation lookup constant across long history", () => {
 		const messages: ChatMessageViewModel[] = Array.from({ length: 10_000 }, (_, index) => ({
 			id: `delegation-message-${index}`,

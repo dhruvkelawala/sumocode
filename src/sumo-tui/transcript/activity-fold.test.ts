@@ -111,6 +111,33 @@ describe("indexed Activity folding", () => {
 		expect(messages[0]?.blocks[1]).toMatchObject({ type: "delegation", delegation: { id: "second", status: "success" } });
 	});
 
+	it("indexes each pending delegation when one appended message owns several", () => {
+		const messages: ChatMessageViewModel[] = [];
+		const cursor = createFoldableBlockCursor(indexFoldableBlocks(messages));
+		appendOrFoldTranscriptMessageIndexed(messages, {
+			id: "delegation-owner",
+			role: "sumo",
+			displayName: "SUMO",
+			blocks: [
+				{ type: "delegation", delegation: { id: "first", title: "first", status: "running" } },
+				{ type: "delegation", delegation: { id: "second", title: "second", status: "running" } },
+			],
+		}, cursor);
+
+		for (const title of ["first complete", "second complete"]) {
+			foldBlockIntoIndexedMessages(messages, {
+				type: "delegation",
+				delegation: { title, status: "success" },
+			}, cursor, { requireMatch: true });
+		}
+
+		expect(messages).toHaveLength(1);
+		expect(messages[0]?.blocks).toEqual([
+			expect.objectContaining({ type: "delegation", delegation: expect.objectContaining({ id: "first", status: "success" }) }),
+			expect.objectContaining({ type: "delegation", delegation: expect.objectContaining({ id: "second", status: "success" }) }),
+		]);
+	});
+
 	it("keeps newest anonymous delegation ownership after an older ID update", () => {
 		const messages: ChatMessageViewModel[] = [
 			{

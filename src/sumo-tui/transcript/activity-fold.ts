@@ -327,8 +327,9 @@ function recordIndexedBlock(
 	messageIndex: number,
 	incoming: FoldableBlock,
 	cursor: FoldableBlockCursor,
+	knownBlockIndex?: number,
 ): void {
-	const blockIndex = matchingFoldableBlockIndex(message.blocks, incoming);
+	const blockIndex = knownBlockIndex ?? matchingFoldableBlockIndex(message.blocks, incoming);
 	if (blockIndex === -1) return;
 	const location = { messageIndex, blockIndex };
 	addIndexedLocation(cursor.addedLocationsByIdentity, incoming, location);
@@ -413,8 +414,9 @@ export function appendOrFoldTranscriptMessageIndexed(
 	messages.push(message);
 	changedMessageIndices.add(messages.length - 1);
 	if (message.role === "sumo") cursor.lastSumoMessageIndex = messages.length - 1;
-	for (const block of message.blocks) {
-		if (isFoldableBlock(block)) recordIndexedBlock(message, messages.length - 1, block, cursor);
+	for (let blockIndex = 0; blockIndex < message.blocks.length; blockIndex += 1) {
+		const block = message.blocks[blockIndex];
+		if (block && isFoldableBlock(block)) recordIndexedBlock(message, messages.length - 1, block, cursor, blockIndex);
 	}
 	return { changedMessageIndices: [...changedMessageIndices] };
 }

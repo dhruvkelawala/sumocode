@@ -958,6 +958,37 @@ describe("ChatPager", () => {
 		root.dispose();
 	});
 
+	it("correlates a late feed Activity to archived transcript state by source ID", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 1 });
+		const transcriptActivity = {
+			id: "subagent:worker",
+			sourceId: "spawn-worker",
+			kind: "subagent" as const,
+			title: "worker",
+			status: "running" as const,
+		};
+		chat.replaceViewModels([
+			{ id: "worker-message", role: "system", displayName: "SYSTEM", blocks: [{ type: "activity", activity: transcriptActivity }] },
+			{ id: "later", role: "user", displayName: "YOU", blocks: [{ type: "markdown", text: "later" }] },
+		]);
+		chat.reconcileFeedActivities([{
+			...transcriptActivity,
+			id: "subagent:worker:durable",
+			outputTail: "current",
+		}]);
+
+		expect(chat.getArchivedMessageCount()).toBe(1);
+		expect(chat.getRenderedMessages()).toHaveLength(1);
+		expect(chat.revealActivity("subagent:worker:durable")).toBe(true);
+		const activities = chat.getRenderedMessages().flatMap((message) => message.toSnapshot().blocks ?? [])
+			.filter((block) => block.type === "activity");
+		expect(activities).toHaveLength(1);
+		expect(activities[0]).toMatchObject({ activity: { id: "subagent:worker:durable", sourceId: "spawn-worker", outputTail: "current" } });
+		root.dispose();
+	});
+
 	it("does not double-count feed Activities that arrive after transcript virtualization", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());

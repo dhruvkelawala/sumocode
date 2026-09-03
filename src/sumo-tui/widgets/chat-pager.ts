@@ -607,8 +607,14 @@ export class ChatPager extends SumoNode {
 		for (const activity of ordered) this.feedActivities.set(activity.id, activity);
 		for (const activity of ordered) {
 			const previousActivity = correlatedActivity(previousIndex, activity);
+			const archivedTranscriptActivity = previousActivity === undefined
+				? [...this.virtualizedTranscriptMessages.values()]
+					.flatMap((message) => this.activitiesFromBlocks(message.blocks))
+					.find((candidate) => sameActivity(candidate, activity))
+				: undefined;
 			const archivedTranscriptId = previousActivity === undefined
-				? [activity.id, activity.sourceId].find((id) => id !== undefined && this.virtualizedTranscriptClaimIds.has(id))
+				? [activity.id, activity.sourceId, archivedTranscriptActivity?.id]
+					.find((id) => id !== undefined && this.virtualizedTranscriptClaimIds.has(id))
 				: undefined;
 			if (archivedTranscriptId) {
 				this.virtualizedTranscriptClaimIds.delete(archivedTranscriptId);
@@ -667,6 +673,7 @@ export class ChatPager extends SumoNode {
 				this.virtualizedFeedActivityIds.add(activity.id);
 				continue;
 			}
+			if (activity.status === "failed") this.protectedActivityId = activity.id;
 			this.addPreparedMessage(
 				prepareChatMessage(activityCardViewModel(activity)),
 				this.nextFeedSourceIndex--,

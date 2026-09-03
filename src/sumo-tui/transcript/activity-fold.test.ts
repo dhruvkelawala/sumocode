@@ -106,6 +106,25 @@ describe("indexed Activity folding", () => {
 		expect(messages[0]?.blocks[1]).toMatchObject({ type: "delegation", delegation: { id: "second", status: "running" } });
 	});
 
+	it("keeps no-ID delegation lookup constant across long history", () => {
+		const messages: ChatMessageViewModel[] = Array.from({ length: 10_000 }, (_, index) => ({
+			id: `delegation-message-${index}`,
+			role: "sumo",
+			displayName: "SUMO",
+			blocks: [{ type: "delegation", delegation: { id: `delegation-${index}`, title: `worker ${index}`, status: "running" } }],
+		}));
+		const cursor = createFoldableBlockCursor(indexFoldableBlocks(messages));
+		resetActivityFoldOperationCountsForTests();
+
+		foldBlockIntoIndexedMessages(messages, {
+			type: "delegation",
+			delegation: { title: "complete", status: "success" },
+		}, cursor, { requireMatch: true });
+
+		expect(getActivityFoldOperationCountsForTests().indexedCandidateVisits).toBe(1);
+		expect(messages.at(-1)?.blocks[0]).toMatchObject({ type: "delegation", delegation: { id: "delegation-9999", status: "success" } });
+	});
+
 	it("falls back to equal Activity ID when a non-subagent update gains a source ID", () => {
 		const messages: ChatMessageViewModel[] = [{
 			id: "tool-owner",

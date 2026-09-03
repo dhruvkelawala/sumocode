@@ -222,6 +222,14 @@ function addIndexedLocation(
 ): void {
 	for (const key of foldableIndexKeys(block)) {
 		const locations = locationsByIdentity.get(key) ?? [];
+		if (key === "delegation:pending") {
+			const current = locations[0];
+			if (!current || location.messageIndex > current.messageIndex
+				|| (location.messageIndex === current.messageIndex && location.blockIndex < current.blockIndex)) {
+				locationsByIdentity.set(key, [location]);
+			}
+			continue;
+		}
 		if (!locations.some((candidate) => candidate.messageIndex === location.messageIndex && candidate.blockIndex === location.blockIndex)) {
 			locations.push(location);
 			locationsByIdentity.set(key, locations);

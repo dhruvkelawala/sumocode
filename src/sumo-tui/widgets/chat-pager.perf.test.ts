@@ -173,6 +173,23 @@ describe("ChatPager live-card retention bounds", () => {
 		root.dispose();
 	});
 
+	it("protects a first-seen older failed Activity in a large batch", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 5 });
+		const activities = liveActivities(100).map((activity, index) => index === 0
+			? { ...activity, status: "failed" as const, result: { error: "boom" } }
+			: activity);
+
+		chat.reconcileFeedActivities(activities);
+
+		expect(chat.getRenderedMessages().flatMap((message) => message.toSnapshot().blocks ?? [])).toContainEqual(
+			expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "terminal-0", status: "failed" }) }),
+		);
+		expect(chat.getRenderedMessages().length).toBeLessThanOrEqual(6);
+		root.dispose();
+	});
+
 	it("surfaces an older virtualized Activity when it fails", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());

@@ -2,10 +2,11 @@ import { EventEmitter } from "node:events";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChildProcess } from "node:child_process";
 import type { ProcessTreeIdentity, ProcessTreeOperations } from "./process-tree.js";
-import { TerminalTaskManager } from "./task-manager.js";
+import { resolveTerminalRunnerInvocation, TerminalTaskManager } from "./task-manager.js";
 import { TerminalTaskStore, type TerminalTaskIndexRefreshResult, type TerminalTaskStoreDiagnostic } from "./task-store.js";
 import { TerminalDeliveryCoordinator } from "./terminal-tools.js";
 import { TERMINAL_TASK_SCHEMA_VERSION, type TerminalTaskSnapshot } from "./task-types.js";
@@ -3181,5 +3182,19 @@ function transientFault(code: string): Error {
 			completionId: retried.completionId!,
 			claimToken: retried.deliveryClaimToken!,
 		}])[0]).toMatchObject({ deliveryState: "delivered" });
+	});
+});
+
+describe("terminal runner invocation (plan 117 seam)", () => {
+	it("launches node + the .mjs runner off the native runtime", () => {
+		const invocation = resolveTerminalRunnerInvocation({});
+		expect(invocation.command).toBe(process.execPath);
+		expect(invocation.args).toEqual([fileURLToPath(new URL("./bounded-terminal-runner.mjs", import.meta.url))]);
+	});
+
+	it("launches self via the --sumocode-terminal-runner role on the native runtime", () => {
+		const invocation = resolveTerminalRunnerInvocation({ SUMOCODE_NATIVE_DIR: "/opt/sumocode" });
+		expect(invocation.command).toBe(process.execPath);
+		expect(invocation.args).toEqual(["--sumocode-terminal-runner"]);
 	});
 });

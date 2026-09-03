@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isNativeRuntime } from "../native/paths.js";
 import {
 	signalVerifiedProcessTree,
 	systemProcessTree,
@@ -55,6 +56,22 @@ const DEFAULT_CLAIM_LEASE_MS = 30_000;
 const DEFAULT_STARTING_RECOVERY_GRACE_MS = 30_000;
 const MAX_REPLAYED_SETTLED_TERMINALS = 64;
 const BOUNDED_TERMINAL_RUNNER_FILE = fileURLToPath(new URL("./bounded-terminal-runner.mjs", import.meta.url));
+
+/**
+ * Plan 117 seam 3: how the generated script launches the bounded terminal
+ * runner. Dev keeps `node + bounded-terminal-runner.mjs` byte-for-byte; the
+ * native binary embeds the runner behind the `--sumocode-terminal-runner`
+ * argv role (handled by src/native/main.ts before anything else).
+ */
+export function resolveTerminalRunnerInvocation(env: NodeJS.ProcessEnv = process.env): {
+	readonly command: string;
+	readonly args: readonly string[];
+} {
+	if (isNativeRuntime(env)) {
+		return { command: process.execPath, args: ["--sumocode-terminal-runner"] };
+	}
+	return { command: process.execPath, args: [BOUNDED_TERMINAL_RUNNER_FILE] };
+}
 
 export interface TerminalOutputTail {
 	readonly bytes: Uint8Array;
@@ -311,6 +328,10 @@ function buildPosixScript(options: {
 	readonly exitFile: string;
 	readonly logMaxBytes: number;
 }): string {
+	// Plan 117 seam 3: dev resolves to node + bounded-terminal-runner.mjs
+	// (byte-identical to the pre-seam script); native to <self>
+	// --sumocode-terminal-runner.
+	const runner = resolveTerminalRunnerInvocation();
 	return [
 		"#!/usr/bin/env bash",
 		"umask 077",
@@ -330,7 +351,7 @@ function buildPosixScript(options: {
 		"  code=1",
 		"else",
 		"  export SUMOCODE_BG_CHILD=1",
-		`  ${shellEscape(process.execPath)} ${shellEscape(BOUNDED_TERMINAL_RUNNER_FILE)} posix ${shellEscape(options.commandFile)} ${shellEscape(options.logFile)} ${options.logMaxBytes}`,
+		`  ${shellEscape(runner.command)} ${runner.args.map(shellEscape).join(" ")} posix ${shellEscape(options.commandFile)} ${shellEscape(options.logFile)} ${options.logMaxBytes}`,
 		"  code=$?",
 		"fi",
 		`printf '%s' "$code" > ${shellEscape(options.exitFile)}`,

@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { importExtensionEntry } from "./extension-entry-loader.js";
+import { importExtensionEntry, sourceExtensionFile } from "./extension-entry-loader.js";
+
+describe("sourceExtensionFile", () => {
+	it("uses the source-only entry for RPC children", () => {
+		expect(sourceExtensionFile(true)).toBe("rpc-child-extension.ts");
+		expect(sourceExtensionFile(false)).toBe("extension.ts");
+	});
+});
 
 describe("importExtensionEntry", () => {
 	it("falls back through the dedicated source importer when a fresh bundle cannot resolve", async () => {

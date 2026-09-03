@@ -1,3 +1,7 @@
+export function sourceExtensionFile(rpcChild: boolean): "extension.ts" | "rpc-child-extension.ts" {
+	return rpcChild ? "rpc-child-extension.ts" : "extension.ts";
+}
+
 export interface ExtensionEntryImportOptions<T> {
 	readonly bundlePath: string;
 	readonly sourcePath: string;

@@ -56,6 +56,16 @@ export function markSumocodeInstalledInProcess<T extends object>(runtime: T, sco
 	processInstallLatch(scope).add(runtime);
 }
 
+export function claimSumocodeRuntime<T extends object>(runtime: T): boolean {
+	if (!isSumocodeAlreadyInstalledInProcess(runtime)) {
+		markSumocodeInstalledInProcess(runtime);
+		return true;
+	}
+	console.warn("[sumocode] Skipping duplicate SumoCode entry: this Pi runtime already installed SumoCode via another entry path.");
+	logDiagnostic("extension_activate_skipped_duplicate_process_entry", {});
+	return false;
+}
+
 /** Test-only: clear the process latch so installation paths can be re-exercised. */
 export function resetSumocodeProcessInstallLatchForTests(scope: LatchScope = globalLatchScope()): void {
 	delete scope[PROCESS_INSTALL_LATCH];

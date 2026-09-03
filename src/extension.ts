@@ -12,6 +12,7 @@ import { registerAccountsCommand } from "./commands/accounts.js";
 import { registerSumoReloadCommand } from "./commands/reload.js";
 import { registerRolesCommand } from "./commands/roles.js";
 import {
+	claimSumocodeRuntime,
 	hasLegacyTaskToolExtension,
 	installConfiguredNativeTaskTool,
 	installOrchestrationTools,
@@ -238,19 +239,14 @@ export default function sumocode(pi: ExtensionAPI): void {
 		console.warn("[sumocode] Skipping installed SumoCode extension because this session is already inside an active SumoCode dev checkout.");
 		return;
 	}
-	if (isSumocodeAlreadyInstalledInProcess(pi)) {
-		// The same SumoCode tree can reach one Pi runtime through several entry
-		// paths at once — launcher shim, installed package, and npm-link global.
-		// Distinct bundle/source modules share this Symbol.for-backed WeakSet, so
-		// the first entry wins for one ExtensionAPI object. Pi intentionally
-		// creates a NEW ExtensionAPI when /new, /resume, or /fork recreates
-		// extension factories; that identity must install again rather than being
-		// blocked by a permanent process boolean.
-		console.warn("[sumocode] Skipping duplicate SumoCode entry: this Pi runtime already installed SumoCode via another entry path.");
-		logDiagnostic("extension_activate_skipped_duplicate_process_entry", {});
-		return;
-	}
-	markSumocodeInstalledInProcess(pi);
+	// The same SumoCode tree can reach one Pi runtime through several entry
+	// paths at once — launcher shim, installed package, and npm-link global.
+	// Distinct bundle/source modules share this Symbol.for-backed WeakSet, so
+	// the first entry wins for one ExtensionAPI object. Pi intentionally
+	// creates a NEW ExtensionAPI when /new, /resume, or /fork recreates
+	// extension factories; that identity must install again rather than being
+	// blocked by a permanent process boolean.
+	if (!claimSumocodeRuntime(pi)) return;
 
 	// Restore the persisted runtime theme before installing any UI surfaces so
 	// first paint uses the chosen palette. Registry default stays Cathedral for

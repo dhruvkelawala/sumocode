@@ -249,7 +249,10 @@ export function defaultSampleEnvironment(checkout, agentDir, diagFile, inherited
 	}
 	return {
 		...env,
+		// Windows resolves os.homedir() from USERPROFILE, not HOME; point both at
+		// the isolated fixture home so roster/homedir candidates cannot leak.
 		HOME: join(agentDir, "home"),
+		USERPROFILE: join(agentDir, "home"),
 		XDG_CONFIG_HOME: join(agentDir, "config"),
 		PI_CODING_AGENT_DIR: agentDir,
 		SUMOCODE_STATE_DIR: join(agentDir, "sumocode-state"),

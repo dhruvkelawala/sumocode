@@ -157,7 +157,13 @@ describe("startup comparison CLI", () => {
 			SUMO_TUI_DEBUG: "1",
 			PATH: "/usr/bin",
 		});
-		expect(Object.keys(env).filter((key) => key.startsWith("HERDR_") || key.startsWith("SUMOCODE_") || key.startsWith("SUMO_TUI"))).toEqual([]);
+		expect(env.HERDR_ENV).toBeUndefined();
+		expect(env.HERDR_SOCKET_PATH).toBeUndefined();
+		expect(env.HERDR_PANE_ID).toBeUndefined();
+		expect(env.SUMOCODE_RPC_CHILD).toBeUndefined();
+		expect(env.SUMO_TUI_DEBUG).toBeUndefined();
+		expect(env.SUMO_TUI_DIAG_FILE).toBe("/agent/startup.jsonl");
+		expect(env.SUMOCODE_STATE_DIR).toBe(join("/agent", "sumocode-state"));
 		expect(env.PATH).toBe("/usr/bin");
 		expect(env.PI_CODING_AGENT_DIR).toBe("/agent");
 	});

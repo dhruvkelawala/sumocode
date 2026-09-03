@@ -163,6 +163,9 @@ export class ChatPager extends SumoNode {
 	private readonly virtualizedTranscriptClaimIds = new Set<string>();
 	private readonly virtualizedTranscriptMessages = new Map<number, ChatMessageViewModel>();
 	private readonly freshVirtualTranscriptActivityIds = new Set<string>();
+	// ponytail: single slot per id/sourceId key; duplicate archived identities degrade to a
+	// duplicate card on late feed correlation — same ceiling as the id-keyed claim set.
+	private readonly archivedTranscriptActivityIndex = new Map<string, ActivitySnapshot>();
 	private nextFeedSourceIndex = -1;
 	private readonly activityExpansionOverrides = new Map<string, boolean>();
 	private readonly persistedActivityExpansionOverrides = new Map<string, boolean>();
@@ -292,10 +295,11 @@ export class ChatPager extends SumoNode {
 		this.virtualizedTranscriptClaimIds.clear();
 		this.virtualizedTranscriptMessages.clear();
 		this.freshVirtualTranscriptActivityIds.clear();
+		this.archivedTranscriptActivityIndex.clear();
 		for (let sourceIndex = 0; sourceIndex < messages.length; sourceIndex += 1) {
 			if (renderedSourceIndices.has(sourceIndex)) continue;
 			const message = messages[sourceIndex];
-			if (!message || prepareChatMessage(message).text.length === 0) continue;
+			if (!message) continue;
 			this.virtualizedTranscriptMessages.set(sourceIndex, message);
 			for (const activity of this.activitiesFromBlocks(message.blocks)) this.noteVirtualizedTranscriptActivity(activity);
 		}
@@ -396,6 +400,7 @@ export class ChatPager extends SumoNode {
 			for (const activity of previousActivities) {
 				this.virtualizedTranscriptClaimIds.delete(activity.id);
 				this.freshVirtualTranscriptActivityIds.delete(activity.id);
+				this.unindexArchivedTranscriptActivity(activity);
 				const replacement = nextActivities.find((candidate) => sameActivity(activity, candidate));
 				if (replacement && replacement.id !== activity.id) {
 					this.transferVirtualizedFeedIdentity(activity.id, replacement.id);
@@ -569,6 +574,7 @@ export class ChatPager extends SumoNode {
 	}
 
 	public clearMessages(): void {
+		this.archivedTranscriptActivityIndex.clear();
 		const previousHeight = this.scrollBox.scrollHeight;
 		this.disposeMessageNodes();
 		this.activeMessages.length = 0;
@@ -636,9 +642,7 @@ export class ChatPager extends SumoNode {
 		for (const activity of ordered) {
 			const previousActivity = correlatedActivity(previousIndex, activity);
 			const archivedTranscriptActivity = previousActivity === undefined
-				? [...this.virtualizedTranscriptMessages.values()]
-					.flatMap((message) => this.activitiesFromBlocks(message.blocks))
-					.find((candidate) => sameActivity(candidate, activity))
+				? this.lookupArchivedTranscriptActivity(activity)
 				: undefined;
 			const archivedTranscriptId = previousActivity === undefined
 				? [activity.id, activity.sourceId, archivedTranscriptActivity?.id]
@@ -1178,6 +1182,8 @@ export class ChatPager extends SumoNode {
 	}
 
 	private noteVirtualizedTranscriptActivity(activity: ActivitySnapshot): void {
+		this.archivedTranscriptActivityIndex.set(activity.id, activity);
+		if (activity.sourceId !== undefined) this.archivedTranscriptActivityIndex.set(activity.sourceId, activity);
 		const id = activity.id;
 		this.virtualizedTranscriptClaimIds.delete(id);
 		this.virtualizedTranscriptClaimIds.add(id);
@@ -1378,6 +1384,7 @@ export class ChatPager extends SumoNode {
 			const blocks = message.blocks.map((block) => {
 				if (block.type !== "activity") return block;
 				this.virtualizedTranscriptClaimIds.delete(block.activity.id);
+				this.unindexArchivedTranscriptActivity(block.activity);
 				const transcriptIsFresh = this.freshVirtualTranscriptActivityIds.delete(block.activity.id);
 				const current = correlatedActivity(feedIndex, block.activity);
 				if (!current) return block;
@@ -1418,6 +1425,22 @@ export class ChatPager extends SumoNode {
 			false,
 		);
 		if (removedLines > 0) this.scrollBox.notifyContentChanged(0, removedLines);
+	}
+
+	private lookupArchivedTranscriptActivity(activity: ActivitySnapshot): ActivitySnapshot | undefined {
+		for (const key of [activity.id, activity.sourceId]) {
+			if (key === undefined) continue;
+			const candidate = this.archivedTranscriptActivityIndex.get(key);
+			if (candidate && sameActivity(candidate, activity)) return candidate;
+		}
+		return undefined;
+	}
+
+	private unindexArchivedTranscriptActivity(activity: ActivitySnapshot): void {
+		if (this.archivedTranscriptActivityIndex.get(activity.id) === activity) this.archivedTranscriptActivityIndex.delete(activity.id);
+		if (activity.sourceId !== undefined && this.archivedTranscriptActivityIndex.get(activity.sourceId) === activity) {
+			this.archivedTranscriptActivityIndex.delete(activity.sourceId);
+		}
 	}
 
 	private releaseOneTranscriptArchive(): number {

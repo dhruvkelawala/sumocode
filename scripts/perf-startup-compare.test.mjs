@@ -177,6 +177,10 @@ async function harness(options = {}) {
 			GITHUB_TOKEN: "gh-token",
 			DEPLOY_PASSWORD: "pw",
 			SERVICE_CREDENTIALS: "creds",
+			DATABASE_URL: "postgres://user:pw@db",
+			DOCKER_AUTH_CONFIG: "{...}",
+			SSH_AUTH_SOCK: "/operator/agent.sock",
+			LANG: "en_US.UTF-8",
 			PATH: "/usr/bin",
 		});
 		expect(env.HERDR_ENV).toBeUndefined();
@@ -191,6 +195,10 @@ async function harness(options = {}) {
 		expect(env.GITHUB_TOKEN).toBeUndefined();
 		expect(env.DEPLOY_PASSWORD).toBeUndefined();
 		expect(env.SERVICE_CREDENTIALS).toBeUndefined();
+		expect(env.DATABASE_URL).toBeUndefined();
+		expect(env.DOCKER_AUTH_CONFIG).toBeUndefined();
+		expect(env.SSH_AUTH_SOCK).toBeUndefined();
+		expect(env.LANG).toBe("en_US.UTF-8");
 		expect(env.SUMOCODE_STATE_DIR).toBe(join("/agent", "sumocode-state"));
 		expect(env.PATH).toBe("/usr/bin");
 		expect(env.PI_CODING_AGENT_DIR).toBe("/agent");

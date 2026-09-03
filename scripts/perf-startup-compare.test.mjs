@@ -85,7 +85,9 @@ async function harness(options = {}) {
 			const eventOptions = options.failCandidate && arm === "candidate" && index === 1
 				? { missingCommand: true }
 				: undefined;
-			const snapshotCount = (options.fixtureCount ?? 3) - (options.fixtureMismatch && arm === "candidate" ? 1 : 0);
+			const snapshotCount = options.omitSnapshotCount
+				? undefined
+				: (options.fixtureCount ?? 3) - (options.fixtureMismatch && arm === "candidate" ? 1 : 0);
 			return {
 				ok: true,
 				events: diagnostics(startWallMs, arm, index, { ...eventOptions, snapshotCount }),
@@ -259,6 +261,12 @@ async function harness(options = {}) {
 		const { report } = await harness({ fixtureMismatch: true, samples: 1, fixtureCount: 3 });
 		expect(report.arms.baseline.samples[0]).toMatchObject({ ok: true });
 		expect(report.arms.candidate.samples[0]).toMatchObject({ ok: false, failure: "fixture-mismatch" });
+		expect(report.overall.verdict).toBe("INCONCLUSIVE");
+	});
+
+	it("fails samples whose ready mark omits the accepted count", async () => {
+		const { report } = await harness({ omitSnapshotCount: true, samples: 1, fixtureCount: 3 });
+		expect(report.arms.baseline.samples[0]).toMatchObject({ ok: false, failure: "fixture-mismatch" });
 		expect(report.overall.verdict).toBe("INCONCLUSIVE");
 	});
 
@@ -626,7 +634,7 @@ async function harness(options = {}) {
 			fixtureCount: 1,
 			outDir,
 		}, {
-			runSample: async ({ arm, index, startWallMs }) => ({ ok: true, events: diagnostics(startWallMs, arm, index) }),
+			runSample: async ({ arm, index, startWallMs }) => ({ ok: true, events: diagnostics(startWallMs, arm, index, { fixtureCount: 1 }) }),
 			machineMetadata: () => ({ platform: "test", arch: "test", nodeVersion: "v-test", cpuCount: 1 }),
 		});
 
@@ -663,7 +671,7 @@ async function harness(options = {}) {
 			assertClean: async () => undefined,
 			prepareWorktrees: async () => ({ baselineDir, candidateDir, cleanup: async () => undefined }),
 			runSample: async ({ arm, index, startWallMs }) => {
-				const events = diagnostics(startWallMs, arm, index);
+				const events = diagnostics(startWallMs, arm, index, { fixtureCount: 1 });
 				if (arm === "candidate") {
 					for (const event of events) {
 						if (["hydration_committed", "command_ready"].includes(event.event)) event.ts += 60;

@@ -114,7 +114,24 @@ async function harness(options = {}) {
 	return { report, root, callerRoot, outDir, execution, fixtureMetadata, cleanChecks, cleanedWorktrees, fixtureAgentDir };
 }
 
-describe("startup comparison CLI", () => {
+	describe("startup comparison CLI", () => {
+	it("classifies backslash entrypoints as the host", async () => {
+		const root = await temporaryRoot("sumocode-startup-preload-win-");
+		const diag = join(root, "diag.jsonl");
+		const entry = join(root, "\\sumo-rpc-host.js");
+		await writeFile(entry, "");
+		await execFileAsync(process.execPath, [entry], {
+			env: {
+				...process.env,
+				SUMO_TUI_DIAG_FILE: diag,
+				SUMOCODE_PUBLIC_STARTUP_DIAGNOSTICS: "1",
+				NODE_OPTIONS: `--require "${resolve("scripts/startup-diagnostics-preload.cjs")}"`,
+			},
+		});
+		const event = JSON.parse((await readFile(diag, "utf8")).trim().split("\n")[0]);
+		expect(event).toMatchObject({ event: "process_preload_start", role: "host" });
+	});
+
 	it("marks the host process at preload with a public role discriminator", async () => {
 		const root = await temporaryRoot("sumocode-startup-preload-test-");
 		const entry = join(root, "sumo-rpc-host.js");
@@ -160,6 +177,7 @@ describe("startup comparison CLI", () => {
 		expect(env.HERDR_ENV).toBeUndefined();
 		expect(env.HERDR_SOCKET_PATH).toBeUndefined();
 		expect(env.HERDR_PANE_ID).toBeUndefined();
+		expect(env.USERPROFILE).toBe(join("/agent", "home"));
 		expect(env.SUMOCODE_RPC_CHILD).toBeUndefined();
 		expect(env.SUMO_TUI_DEBUG).toBe("0");
 		expect(env.SUMO_TUI_DIAG_FILE).toBe("/agent/startup.jsonl");

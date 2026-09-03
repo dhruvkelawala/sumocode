@@ -789,15 +789,16 @@ describe("ChatPager", () => {
 		root.dispose();
 	});
 
-	it("removes an expired feed-only card but exempts only live feed cards from transcript virtualization", async () => {
+	it("bounds live feed cards with transcript virtualization and removes expired ownership", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());
 		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 2 });
 		chat.addMessage("sumo", "one");
 		chat.addMessage("sumo", "two");
 		chat.reconcileFeedActivities([{ id: "term-live", kind: "terminal", title: "live", status: "running", createdAt: 10 }]);
-		expect(chat.getRenderedMessages()).toHaveLength(3);
-		expect(chat.getRenderedMessages().map((message) => message.text)).toEqual(expect.arrayContaining(["one", "two"]));
+		expect(chat.getRenderedMessages()).toHaveLength(2);
+		expect(chat.getRenderedMessages().map((message) => message.text)).toEqual(expect.arrayContaining(["two"]));
+		expect(chat.getRenderedMessages().some((message) => message.text.includes("live"))).toBe(true);
 
 		chat.reconcileFeedActivities([{ id: "term-live", kind: "terminal", title: "live", status: "succeeded", createdAt: 10, settledAt: 20 }]);
 		expect(chat.getRenderedMessages()).toHaveLength(2);

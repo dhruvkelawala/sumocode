@@ -169,6 +169,7 @@ export class ChatPager extends SumoNode {
 	private readonly activityBookkeepingLru = new Map<string, true>();
 	private readonly pendingRenderedActivityIds = new Set<string>();
 	private defaultActivityExpansionOverride: boolean | undefined;
+	private protectedActivityId: string | undefined;
 	private placeholder: ChatMessage | undefined;
 	private virtualArchivedCount = 0;
 	private sourceMessageCount = 0;
@@ -412,6 +413,8 @@ export class ChatPager extends SumoNode {
 		this.activityExpansionStates.set(id, expanded);
 		const persistenceKey = this.activityExpansionPersistenceKeys.get(id) ?? id;
 		this.setPersistedActivityExpansion(persistenceKey, expanded);
+		this.protectedActivityId = id;
+		this.materializeVirtualizedActivity(id);
 		this.applyActivityExpansion(id, expanded);
 		this.onActivityExpansionChange?.(persistenceKey, expanded);
 	}
@@ -529,6 +532,7 @@ export class ChatPager extends SumoNode {
 		this.materializedArchivedTranscriptFeedActivityIds.clear();
 		this.virtualizedTranscriptClaimIds.clear();
 		this.defaultActivityExpansionOverride = undefined;
+		this.protectedActivityId = undefined;
 		this.placeholder = undefined;
 		this.unreadCount = 0;
 		this.lastReadIndex = -1;
@@ -577,14 +581,13 @@ export class ChatPager extends SumoNode {
 				this.returnMaterializedCardToTranscriptArchive(activity);
 				continue;
 			}
-			const rematerializingArchivedTranscript = previousActivity && virtualized && this.virtualizedTranscriptFeedActivityIds.has(previousActivity.id);
-			if (virtualized && isSettledActivityStatus(this.effectiveFeedStatus(activity))) {
+			if (virtualized) {
 				if (previousActivity.id !== activity.id) {
 					this.transferVirtualizedFeedIdentity(previousActivity.id, activity.id);
 					this.migrateFeedActivityState([previousActivity], activity);
 				}
-				// Settled cards remain count-only history even when their cached feed
-				// snapshot changes. Only a transition back to live may rematerialize.
+				// Feed truth remains current while its Yoga node stays count-only.
+				// Explicit expansion rematerializes the card when the user navigates to it.
 				continue;
 			}
 			if (previousActivity && previousActivity.id !== activity.id) {
@@ -593,10 +596,9 @@ export class ChatPager extends SumoNode {
 				this.migrateFeedActivityState([previousActivity], activity);
 			}
 			removedVirtualLines += this.releaseVirtualizedFeedActivity(activity.id);
-			if (rematerializingArchivedTranscript) this.materializedArchivedTranscriptFeedActivityIds.add(activity.id);
 			const renderedActivity = correlatedActivity(renderedIndex, activity);
 			const target = renderedActivity ? renderedActivityMessages.get(renderedActivity) : undefined;
-			if (target) {
+			if (target && this.activeMessages.includes(target)) {
 				this.addFeedOwnership(target, activity.id);
 				this.updateActivityInMessage(target, activity);
 				continue;
@@ -787,6 +789,7 @@ export class ChatPager extends SumoNode {
 
 	private removeFeedOwnership(id: string): number {
 		this.feedActivities.delete(id);
+		if (this.protectedActivityId === id) this.protectedActivityId = undefined;
 		this.transcriptClaimedActivityStatuses.delete(id);
 		const removedVirtualLines = this.releaseVirtualizedFeedActivity(id);
 		for (const [message, ids] of this.feedOwnedActivityIds) {
@@ -806,6 +809,7 @@ export class ChatPager extends SumoNode {
 
 	private transferVirtualizedFeedIdentity(previousId: string, nextId: string): void {
 		this.transferTranscriptClaimedStatus(previousId, nextId);
+		if (this.protectedActivityId === previousId) this.protectedActivityId = nextId;
 		if (this.virtualizedFeedActivityIds.delete(previousId)) this.virtualizedFeedActivityIds.add(nextId);
 		if (this.virtualizedFeedOnlyActivityIds.delete(previousId)) this.virtualizedFeedOnlyActivityIds.add(nextId);
 		if (this.virtualizedTranscriptFeedActivityIds.delete(previousId)) this.virtualizedTranscriptFeedActivityIds.add(nextId);
@@ -1206,13 +1210,39 @@ export class ChatPager extends SumoNode {
 		this.scheduleRender();
 	}
 
+	private materializeVirtualizedActivity(id: string): void {
+		if (!this.virtualizedFeedActivityIds.has(id)) return;
+		const activity = this.feedActivities.get(id);
+		if (!activity) return;
+		const transcriptOwned = this.virtualizedTranscriptFeedActivityIds.has(id);
+		const removedLines = this.releaseVirtualizedFeedActivity(id);
+		if (transcriptOwned) this.materializedArchivedTranscriptFeedActivityIds.add(id);
+		this.addPreparedMessage(prepareChatMessage(activityCardViewModel(activity)), this.nextFeedSourceIndex--, false, id);
+		if (removedLines > 0) this.scrollBox.notifyContentChanged(0, removedLines);
+	}
+
+	private messageOwnsProtectedActivity(message: ChatMessage): boolean {
+		const protectedId = this.protectedActivityId;
+		return protectedId !== undefined && (this.feedOwnedActivityIds.get(message)?.has(protectedId) ?? false);
+	}
+
+	private messageIntersectsViewport(message: ChatMessage): boolean {
+		const viewportTop = this.scrollBox.scrollOffset;
+		return this.nodeIntersectsViewport(message, viewportTop, viewportTop + this.scrollBox.viewportHeight);
+	}
+
 	private virtualizeIfNeeded() {
 		let removedLines = 0;
 		let addedLines = 0;
 		let archivedAny = false;
 		const width = this.scrollBox.getComputedWidth();
-		while (this.activeMessages.filter((message) => !this.isLiveFeedCard(message)).length > this.maxRenderedMessages) {
-			const archivedIndex = this.activeMessages.findIndex((message) => !this.isLiveFeedCard(message));
+		while (this.activeMessages.length > this.maxRenderedMessages) {
+			let archivedIndex = this.activeMessages.findIndex((message) =>
+				!this.messageOwnsProtectedActivity(message) && !this.messageIntersectsViewport(message)
+			);
+			if (archivedIndex === -1) {
+				archivedIndex = this.activeMessages.findIndex((message) => !this.messageOwnsProtectedActivity(message));
+			}
 			if (archivedIndex === -1) break;
 			const [archived] = this.activeMessages.splice(archivedIndex, 1);
 			this.activeMessageSourceIndices.splice(archivedIndex, 1);
@@ -1253,19 +1283,6 @@ export class ChatPager extends SumoNode {
 
 	private effectiveFeedStatus(activity: ActivitySnapshot): ActivitySnapshot["status"] {
 		return this.transcriptClaimedActivityStatuses.get(activity.id) ?? activity.status;
-	}
-
-	private isLiveFeedCard(message: ChatMessage): boolean {
-		const renderedActivities = this.activitiesFromBlocks(message.toSnapshot().blocks ?? []);
-		for (const id of this.feedOwnedActivityIds.get(message) ?? []) {
-			const feedActivity = this.feedActivities.get(id);
-			const renderedActivity = renderedActivities.find((activity) =>
-				activity.id === id || (feedActivity !== undefined && sameActivity(activity, feedActivity))
-			);
-			const status = renderedActivity?.status ?? (feedActivity ? this.effectiveFeedStatus(feedActivity) : undefined);
-			if (status !== undefined && !isSettledActivityStatus(status)) return true;
-		}
-		return false;
 	}
 
 	private createPlaceholder(): ChatMessage {

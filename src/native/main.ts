@@ -475,24 +475,26 @@ interface DirectPiInvocation {
 function resolveDirectPiStdinPrompt(args: string[]): DirectPiInvocation {
 	if (process.stdin.isTTY) return { args, stdinPrompt: "" };
 	const promptIndex = firstPositionalIndex(args);
-	if (promptIndex < 0) return { args, stdinPrompt: "" };
-	let stdinPrompt = extractFirstPositional(args);
-	if (stdinPrompt === "") return { args, stdinPrompt: "" };
+	let stdinPrompt = "";
+	if (promptIndex >= 0) {
+		stdinPrompt = extractFirstPositional(args);
+		if (stdinPrompt === "") return { args, stdinPrompt: "" };
 
-	let fallback = false;
-	if (firstPositionalIndex(args) >= 0) {
-		fallback = true;
-	} else if (args.length > 0) {
-		for (const arg of args) {
-			if (arg === "-p" || arg === "--print" || arg.startsWith("--print=") || arg === "--mode" || arg.startsWith("--mode=")) {
-				fallback = true;
-				break;
+		let fallback = false;
+		if (firstPositionalIndex(args) >= 0) {
+			fallback = true;
+		} else if (args.length > 0) {
+			for (const arg of args) {
+				if (arg === "-p" || arg === "--print" || arg.startsWith("--print=") || arg.startsWith("-p=") || arg === "--mode" || arg.startsWith("--mode=")) {
+					fallback = true;
+					break;
+				}
 			}
 		}
-	}
-	if (fallback) {
-		args.splice(promptIndex, 0, stdinPrompt);
-		return { args, stdinPrompt: "" };
+		if (fallback) {
+			args.splice(promptIndex, 0, stdinPrompt);
+			return { args, stdinPrompt: "" };
+		}
 	}
 
 	// Pi's own print-message form: a sole -p/--print value (no other message

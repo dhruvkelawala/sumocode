@@ -418,17 +418,23 @@ nativeDescribe("native executable contract", () => {
 		expect(result.stdout).not.toContain('"name":"reload"');
 	});
 
-	it("preserves direct-Pi stdin prompt transport", () => {
-		const stubOut = join(tempRoot("sumocode-native-direct-pi-"), "stub.json");
-		const piStub = createExecutable("pi-stub", `#!/bin/bash\nnode -e 'const fs=require("node:fs"); let s=""; process.stdin.setEncoding("utf8"); process.stdin.on("data",c=>s+=c); process.stdin.on("end",()=>fs.writeFileSync(process.argv[1],JSON.stringify({argv:process.argv.slice(2),stdin:s})))' ${JSON.stringify(stubOut)} -- "$@"\n`);
-		const result = runNative(["--no-sumo-tui", "--no-session", "SENTINEL-native-prompt"], { env: { PI_BIN: piStub } });
-		expect(result.status).toBe(0);
-		// SAFETY: the owned stub writes this exact object shape.
-		const observed = JSON.parse(readFileSync(stubOut, "utf8")) as { argv: string[]; stdin: string };
-		expect(observed.argv).toContain(NATIVE_EXTENSION);
-		expect(observed.argv).not.toContain("SENTINEL-native-prompt");
-		expect(observed.stdin).toBe("SENTINEL-native-prompt");
-	});
+	for (const row of [
+		{ name: "positional prompt", argv: ["--no-session", "SENTINEL-positional"], prompt: "SENTINEL-positional" },
+		{ name: "--print prompt", argv: ["--no-session", "--print", "SENTINEL-print"], prompt: "SENTINEL-print" },
+		{ name: "-p= prompt", argv: ["--no-session", "-p=SENTINEL-equals"], prompt: "SENTINEL-equals" },
+	] as const) {
+		it(`moves ${row.name} from direct-Pi argv to stdin`, () => {
+			const stubOut = join(tempRoot("sumocode-native-direct-pi-"), "stub.json");
+			const piStub = createExecutable("pi-stub", `#!/bin/bash\nnode -e 'const fs=require("node:fs"); let s=""; process.stdin.setEncoding("utf8"); process.stdin.on("data",c=>s+=c); process.stdin.on("end",()=>fs.writeFileSync(process.argv[1],JSON.stringify({argv:process.argv.slice(2),stdin:s})))' ${JSON.stringify(stubOut)} -- "$@"\n`);
+			const result = runNative(["--no-sumo-tui", ...row.argv], { env: { PI_BIN: piStub } });
+			expect(result.status).toBe(0);
+			// SAFETY: the owned stub writes this exact object shape.
+			const observed = JSON.parse(readFileSync(stubOut, "utf8")) as { argv: string[]; stdin: string };
+			expect(observed.argv).toContain(NATIVE_EXTENSION);
+			expect(observed.argv.join(" ")).not.toContain(row.prompt);
+			expect(observed.stdin).toBe(row.prompt);
+		});
+	}
 
 	for (const { signal, expected } of [{ signal: "SIGTERM", expected: 0 }, { signal: "SIGINT", expected: 130 }] as const) {
 		it(`owns ${signal} before child adoption`, async () => {

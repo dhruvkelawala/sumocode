@@ -44,7 +44,12 @@ interface IndexAttemptMarker {
 	readonly ready: boolean;
 }
 
+interface ToolResultMarker {
+	readonly content: readonly [{ readonly type: "text"; readonly text: string }];
+}
+
 const SESSION_A = "019f8a78-b4f5-7b7b-b774-2d2e4bce9001";
+const SESSION_B = "019f8a78-b4f5-7b7b-b774-2d2e4bce9002";
 const FIXTURE = resolve("test/fixtures/terminal-delivery-extension.ts");
 const roots: string[] = [];
 const children: SupervisedProcess[] = [];
@@ -208,15 +213,20 @@ function createCorruptRecord(paths: TestRoot): void {
 	writeFileSync(join(directory, "meta.json"), "{malformed\n", { mode: 0o600 });
 }
 
-async function seedPendingCompletion(paths: TestRoot, sessionFile: string): Promise<TerminalTaskSnapshot> {
+async function startBusyPendingCompletion(paths: TestRoot, sessionFile: string): Promise<{ readonly client: RpcClient; readonly pending: TerminalTaskSnapshot }> {
 	writeFileSync(join(paths.markerDir, "busy"), "busy\n", { mode: 0o600 });
-	const first = launch(paths, sessionFile);
-	const start = await first.request("prompt", { message: "/terminal-recovery-start passive" });
+	const client = launch(paths, sessionFile);
+	const start = await client.request("prompt", { message: "/terminal-recovery-start passive" });
 	expect(start.success).toBe(true);
 	await waitForMarker(paths, "started.json");
 	const { id } = readMarker<StartMarker>(paths, "started.json");
 	const pending = await waitForSnapshot(paths, id, (snapshot) => snapshot.deliveryState === "pending");
-	await first.terminate();
+	return { client, pending };
+}
+
+async function seedPendingCompletion(paths: TestRoot, sessionFile: string): Promise<TerminalTaskSnapshot> {
+	const { client, pending } = await startBusyPendingCompletion(paths, sessionFile);
+	await client.terminate();
 	rmSync(join(paths.markerDir, "busy"), { force: true });
 	resetIndexMarkers(paths);
 	return pending;
@@ -232,7 +242,7 @@ describe("terminal completion delivery recovery", () => {
 	it("delivers a passive terminal once through the real coordinator", async () => {
 		const paths = createRoot();
 		const sessionFile = createSession(paths, "session-a", SESSION_A);
-		const first = launch(paths, sessionFile);
+		const first = launch(paths, sessionFile, { SUMOCODE_TEST_TERMINAL_LARGE_OUTPUT: "1" });
 
 		const start = await first.request("prompt", { message: "/terminal-recovery-start passive" });
 		expect(start.success).toBe(true);
@@ -243,7 +253,9 @@ describe("terminal completion delivery recovery", () => {
 
 		expect(delivered).toMatchObject({ ownerSessionId: SESSION_A, status: "completed", exitCode: 0, completionPolicy: "passive" });
 		expect(delivered.completionId).toEqual(expect.any(String));
-		expect(terminalMessages(live, delivered.completionId!)).toHaveLength(1);
+		const liveMessages = terminalMessages(live, delivered.completionId!);
+		expect(liveMessages).toHaveLength(1);
+		expect(Buffer.byteLength(JSON.stringify(liveMessages[0]), "utf8")).toBeLessThan(30 * 1024);
 		expect(persistedTerminalMessages(sessionFile, delivered.completionId!)).toHaveLength(1);
 		expect(JSON.stringify(live)).not.toContain("terminal-secret-value");
 		expect(JSON.stringify(live)).toContain("benign completion");
@@ -331,5 +343,94 @@ describe("terminal completion delivery recovery", () => {
 		expect(delivered.completionId).toBe(pending.completionId);
 		expect(terminalMessages(await replacement.request("get_messages"), delivered.completionId!)).toHaveLength(1);
 		expect(persistedTerminalMessages(sessionFile, delivered.completionId!)).toHaveLength(1);
+	});
+
+	it("holds a wake completion for its busy owner session while another session is active", async () => {
+		const paths = createRoot();
+		const sessionA = createSession(paths, "session-a", SESSION_A);
+		const sessionB = createSession(paths, "session-b", SESSION_B);
+		const first = launch(paths, sessionA, {
+			SUMOCODE_TEST_TERMINAL_HOLD: "1",
+			SUMOCODE_TEST_TERMINAL_CRASH_AFTER_START: "1",
+		});
+		const startRequest = first.request("prompt", { message: "/terminal-recovery-start wake" });
+		await waitForMarker(paths, "started.json");
+		await first.waitForExit();
+		await startRequest.catch(() => undefined);
+		const { id } = readMarker<StartMarker>(paths, "started.json");
+		expect(readSnapshot(paths, id)).toMatchObject({ ownerSessionId: SESSION_A, status: "running", completionPolicy: "wake" });
+
+		resetIndexMarkers(paths);
+		const wrongOwner = launch(paths, sessionB);
+		writeFileSync(join(paths.markerDir, "terminal-release"), "release\n", { mode: 0o600 });
+		const pending = await waitForSnapshot(paths, id, (snapshot) => snapshot.deliveryState === "pending");
+		expect(terminalMessages(await wrongOwner.request("get_messages"), pending.completionId!)).toHaveLength(0);
+		await wrongOwner.terminate();
+
+		writeFileSync(join(paths.markerDir, "busy"), "busy\n", { mode: 0o600 });
+		resetIndexMarkers(paths);
+		const owner = launch(paths, sessionA);
+		await waitForMarker(paths, "index-attempt.json");
+		expect(terminalMessages(await owner.request("get_messages"), pending.completionId!)).toHaveLength(0);
+		rmSync(join(paths.markerDir, "busy"));
+		await owner.request("prompt", { message: "/terminal-recovery-settle" });
+
+		const delivered = await waitForSnapshot(paths, id, (snapshot) => snapshot.deliveryState === "delivered");
+		expect(terminalMessages(await owner.request("get_messages"), delivered.completionId!)).toHaveLength(1);
+		expect(persistedTerminalMessages(sessionB, delivered.completionId!)).toHaveLength(0);
+		expect(persistedTerminalMessages(sessionA, delivered.completionId!)).toHaveLength(1);
+	});
+
+	it("lets terminal_check win an observation race without a duplicate completion", async () => {
+		const paths = createRoot();
+		const sessionFile = createSession(paths, "session-a", SESSION_A);
+		const { client, pending } = await startBusyPendingCompletion(paths, sessionFile);
+
+		await client.request("prompt", { message: "/terminal-recovery-check" });
+		await waitForMarker(paths, "checked.json");
+		const checked = readMarker<ToolResultMarker>(paths, "checked.json");
+		expect(checked.content).toHaveLength(1);
+		expect(checked.content[0].text).toContain("benign completion");
+		expect(readSnapshot(paths, pending.id)).toMatchObject({ deliveryState: "suppressed", observedAt: expect.any(Number) });
+		rmSync(join(paths.markerDir, "busy"));
+		await client.request("prompt", { message: "/terminal-recovery-settle" });
+		expect(persistedTerminalMessages(sessionFile, pending.completionId!)).toHaveLength(0);
+	});
+
+	it("lets terminal_wait win an observation race without a duplicate completion", async () => {
+		const paths = createRoot();
+		const sessionFile = createSession(paths, "session-a", SESSION_A);
+		const { client, pending } = await startBusyPendingCompletion(paths, sessionFile);
+
+		await client.request("prompt", { message: "/terminal-recovery-wait" });
+		await waitForMarker(paths, "waited.json");
+		const waited = readMarker<ToolResultMarker>(paths, "waited.json");
+		expect(waited.content).toHaveLength(1);
+		expect(waited.content[0].text).toContain("benign completion");
+		expect(readSnapshot(paths, pending.id)).toMatchObject({ deliveryState: "suppressed", consumedAt: expect.any(Number) });
+		rmSync(join(paths.markerDir, "busy"));
+		await client.request("prompt", { message: "/terminal-recovery-settle" });
+		expect(persistedTerminalMessages(sessionFile, pending.completionId!)).toHaveLength(0);
+	});
+
+	it("cancels a real terminal child through terminal_stop and cleans its process tree", async () => {
+		const paths = createRoot();
+		const sessionFile = createSession(paths, "session-a", SESSION_A);
+		const client = launch(paths, sessionFile, { SUMOCODE_TEST_TERMINAL_HOLD: "1" });
+		await client.request("prompt", { message: "/terminal-recovery-start passive" });
+		await waitForMarker(paths, "started.json");
+		const { id } = readMarker<StartMarker>(paths, "started.json");
+		const running = await waitForSnapshot(paths, id, (snapshot) => snapshot.status === "running");
+
+		await client.request("prompt", { message: "/terminal-recovery-stop" });
+		await waitForMarker(paths, "stopped.json");
+		const cancelled = await waitForSnapshot(paths, id, (snapshot) => snapshot.status === "cancelled");
+		expect(cancelled).toMatchObject({ deliveryState: "suppressed", completionId: expect.any(String) });
+		await vi.waitFor(() => {
+			let alive = true;
+			try { process.kill(running.pid!, 0); } catch { alive = false; }
+			expect(alive).toBe(false);
+		}, { timeout: 10_000, interval: 20 });
+		expect(persistedTerminalMessages(sessionFile, cancelled.completionId!)).toHaveLength(0);
 	});
 });

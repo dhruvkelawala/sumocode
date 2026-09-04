@@ -18,6 +18,10 @@ function requiredEnv(name: string): string {
 	return value;
 }
 
+function shellQuote(value: string): string {
+	return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
 function transientIoError(): NodeJS.ErrnoException {
 	// SAFETY: Node filesystem errors expose their stable errno discriminator through this optional field.
 	const error = new Error("injected transient terminal metadata read") as NodeJS.ErrnoException;
@@ -88,6 +92,8 @@ export default function terminalDeliveryFixture(pi: ExtensionAPI): void {
 		store,
 		claimLeaseMs: Number(process.env.SUMOCODE_TEST_TERMINAL_LEASE_MS ?? 150),
 		pollIntervalMs: 20,
+		termGraceMs: 100,
+		killGraceMs: 100,
 		scheduleIndexInitialization: (initialize) => {
 			const run = (): void => {
 				if (indexMode === "held" && !existsSync(releaseMarker)) {
@@ -117,8 +123,13 @@ export default function terminalDeliveryFixture(pi: ExtensionAPI): void {
 			const completion = args.trim() === "wake" ? "wake" : "passive";
 			const tool = tools.get("terminal_start");
 			if (!tool) throw new Error("terminal_start was not registered");
+			const filler = process.env.SUMOCODE_TEST_TERMINAL_LARGE_OUTPUT === "1" ? "head -c 20000 /dev/zero | tr '\\0' x; " : "";
+			const completionCommand = `printf 'API_KEY=terminal-secret-value\\n'; ${filler}printf '\\nbenign completion\\n'`;
+			const command = process.env.SUMOCODE_TEST_TERMINAL_HOLD === "1"
+				? `while [ ! -f ${shellQuote(join(markerDir, "terminal-release"))} ]; do sleep 0.01; done; ${completionCommand}`
+				: completionCommand;
 			await tool.execute("terminal-recovery-call", {
-				command: "printf 'API_KEY=terminal-secret-value\\nbenign completion\\n'",
+				command,
 				title: "terminal recovery fixture",
 				working_dir: ctx.cwd,
 				completion,
@@ -126,6 +137,7 @@ export default function terminalDeliveryFixture(pi: ExtensionAPI): void {
 			const started = manager.list(ctx.sessionManager.getSessionId() ?? "")[0];
 			if (!started) throw new Error("terminal fixture did not start a task");
 			writeFileSync(join(markerDir, "started.json"), `${JSON.stringify({ id: started.id, completionPolicy: started.completionPolicy })}\n`, { mode: 0o600 });
+			if (process.env.SUMOCODE_TEST_TERMINAL_CRASH_AFTER_START === "1") process.kill(process.pid, "SIGKILL");
 		},
 	});
 
@@ -144,6 +156,15 @@ export default function terminalDeliveryFixture(pi: ExtensionAPI): void {
 			const id = JSON.parse(readFileSync(join(markerDir, "started.json"), "utf8")) as { readonly id: string };
 			const result = await tools.get("terminal_wait")!.execute("terminal-recovery-wait", { ids: [id.id], timeout_ms: 5_000 }, undefined, undefined, context(ctx));
 			writeFileSync(join(markerDir, "waited.json"), `${JSON.stringify(result)}\n`, { mode: 0o600 });
+		},
+	});
+
+	pi.registerCommand("terminal-recovery-stop", {
+		handler: async (_args, ctx) => {
+			// SAFETY: terminal-recovery-start owns this marker and always writes its string id.
+			const id = JSON.parse(readFileSync(join(markerDir, "started.json"), "utf8")) as { readonly id: string };
+			const result = await tools.get("terminal_stop")!.execute("terminal-recovery-stop", { ids: [id.id] }, undefined, undefined, context(ctx));
+			writeFileSync(join(markerDir, "stopped.json"), `${JSON.stringify(result)}\n`, { mode: 0o600 });
 		},
 	});
 

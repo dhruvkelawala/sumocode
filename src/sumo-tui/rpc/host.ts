@@ -70,6 +70,8 @@ export interface RpcHostMainOptions {
 	readonly stdout?: NodeJS.WriteStream;
 	readonly stdin?: NodeJS.ReadStream;
 	readonly stderr?: Pick<NodeJS.WriteStream, "write">;
+	/** Override process exit for an owning launcher supervisor. */
+	readonly exit?: (code: number) => void;
 	readonly treeNavigationQuietTiming?: RpcTreeNavigationQuietTiming;
 }
 
@@ -925,9 +927,12 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	// Wraps process.exit itself (rather than being threaded through each
 	// dependency-injection object below) so this is the single place that can
 	// never be bypassed by a new exit call site added later.
+	let requestedHostExitCode: number | undefined;
 	const exitProcess = (code: number): void => {
+		requestedHostExitCode = code;
 		writeExitCodeFile(env, code);
-		process.exit(code);
+		if (options.exit) options.exit(code);
+		else process.exit(code);
 	};
 	if (stdout.isTTY !== true) {
 		writeExitCodeFile(env, 70);
@@ -1651,7 +1656,6 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	let statsInFlight = false;
 	let stopWatchingGitBranch: (() => void) | undefined;
 	let stopPromise: Promise<void> | undefined;
-	let requestedHostExitCode: number | undefined;
 
 	client.onEvent((event) => {
 		if (visualFixture) return;

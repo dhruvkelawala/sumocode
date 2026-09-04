@@ -19,7 +19,7 @@
  */
 declare const __SUMOCODE_VERSION__: string | undefined;
 
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, openSync, realpathSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { buildChildSpawnPlan } from "../sumo-tui/rpc/spawn-child.mjs";
@@ -752,9 +752,6 @@ function shellQuote(value: string): string {
 
 // ── reload respawn handoff ─────────────────────────────────────────────────
 
-let currentForwardedArgs: readonly string[] = [];
-let reloadRespawned = false;
-
 function stripOneShotMessages(forwarded: readonly string[]): string[] {
 	const kept = [...forwarded];
 	for (let i = 0; i < kept.length;) {
@@ -783,36 +780,6 @@ function reloadSuccessorArgs(forwarded: readonly string[]): string[] {
 	const kept = stripOneShotMessages(forwarded).filter((arg) => arg !== "--resume" && arg !== "-r");
 	const haveContinue = kept.some((arg) => arg === "--continue" || arg === "-c" || arg === "--no-session");
 	return haveContinue ? kept : ["--continue", ...kept];
-}
-
-/**
- * Reload respawn (exit 100): the host calls process.exit(100) internally on
- * `/reload`, so the respawn rides this process' exit handler — the same
- * handoff bin/sumocode.sh's loop performs. The successor re-execs THIS
- * binary synchronously and its exit code becomes ours.
- */
-function installReloadRespawnHandler(): void {
-	process.on("exit", (code) => {
-		if (code !== RELOAD_EXIT_CODE || reloadRespawned) return;
-		reloadRespawned = true;
-		const readyFile = makePrivateTempFile("sumocode-reload-ready");
-		try {
-			writeFileSync(readyFile, "", { mode: 0o600 });
-		} catch {}
-		const successorEnv: NodeJS.ProcessEnv = {
-			...process.env,
-			SUMOCODE_RELOAD: "1",
-			SUMOCODE_RELOAD_READY_FILE: readyFile,
-			SUMOCODE_INITIAL_PROMPT_FILE: "",
-		};
-		delete successorEnv.SUMOCODE_TASK_MODE;
-		const result = spawnSync(process.execPath, reloadSuccessorArgs(currentForwardedArgs), {
-			stdio: "inherit",
-			env: successorEnv,
-		});
-		const successorCode = result.status ?? (result.signal !== null ? childExitCode(null, result.signal) : 1);
-		process.exit(successorCode);
-	});
 }
 
 // ── main launcher flow ─────────────────────────────────────────────────────
@@ -872,9 +839,24 @@ function freshExitCodeFile(): string {
 }
 
 async function runRpcBranch(parsed: ParsedLaunch): Promise<void> {
-	// Extract the kickoff prompt ONCE; a reload respawn must never re-submit it.
+	for (;;) {
+		const code = await runRpcBranchOnce(parsed);
+		if (code !== RELOAD_EXIT_CODE) {
+			process.exitCode = code;
+			return;
+		}
+		parsed.forwardedArgs = reloadSuccessorArgs(parsed.forwardedArgs);
+		delete process.env.SUMOCODE_TASK_MODE;
+		process.env.SUMOCODE_RELOAD = "1";
+	}
+}
+
+async function runRpcBranchOnce(parsed: ParsedLaunch): Promise<number> {
+	preSpawnedChild = undefined;
+	relayingEarlySignal = false;
+	earlyCleanupPromise = Promise.resolve();
+	// Extract the kickoff prompt ONCE; a reload must never re-submit it.
 	const rpcInitialPrompt = extractFirstPositional(parsed.forwardedArgs);
-	currentForwardedArgs = parsed.forwardedArgs;
 
 	let kickoffPromptFile = "";
 	if (rpcInitialPrompt !== "") {
@@ -919,8 +901,6 @@ async function runRpcBranch(parsed: ParsedLaunch): Promise<void> {
 		process.removeListener("SIGINT", handleEarlySigint);
 		process.removeListener("SIGTERM", handleEarlySigterm);
 	}
-
-	installReloadRespawnHandler();
 
 	process.env.SUMOCODE_PROJECT_CWD = process.env.SUMOCODE_PROJECT_CWD ?? process.cwd();
 	process.env.SUMOCODE_INITIAL_PROMPT_FILE = kickoffPromptFile;
@@ -972,7 +952,7 @@ async function runRpcBranch(parsed: ParsedLaunch): Promise<void> {
 	// adopt or enter the retained runtime once cleanup started.
 	if (relayingEarlySignal) {
 		await earlyCleanupPromise;
-		return;
+		return 0;
 	}
 
 	const preMainDelayMs = process.env.NODE_ENV === "test"
@@ -986,6 +966,7 @@ async function runRpcBranch(parsed: ParsedLaunch): Promise<void> {
 	try {
 		code = await host.runRpcHost({
 			argv: parsed.forwardedArgs,
+			exit: () => undefined,
 			preSpawnedChild,
 			onPreSpawnedChildAdopted: () => {
 				releasePreAdoptionSignalHandlers();
@@ -998,16 +979,16 @@ async function runRpcBranch(parsed: ParsedLaunch): Promise<void> {
 		await terminateUnadoptedChild();
 		if (!relayingEarlySignal) restoreFailedReloadTerminal();
 		cleanupKickoffFile();
+		process.removeListener("exit", cleanupKickoffFile);
 		throw error;
 	}
 
-	// Reload/crash exits funnel through process.exit inside the host, which
-	// triggers installReloadRespawnHandler; natural returns land here.
 	try {
 		writeFileSync(process.env.SUMOCODE_EXIT_CODE_FILE ?? "", String(code), { mode: 0o600 });
 	} catch {}
 	cleanupKickoffFile();
-	process.exitCode = code;
+	process.removeListener("exit", cleanupKickoffFile);
+	return code;
 }
 
 async function runDirectPiBranch(parsed: ParsedLaunch): Promise<void> {
@@ -1015,7 +996,6 @@ async function runDirectPiBranch(parsed: ParsedLaunch): Promise<void> {
 		const isReload = process.env.SUMOCODE_RELOAD === "1";
 		const readyFile = isReload ? makePrivateTempFile("sumocode-reload-ready") : "";
 		const { args, stdinPrompt } = resolveDirectPiStdinPrompt([...parsed.forwardedArgs]);
-		currentForwardedArgs = args;
 		process.env.SUMOCODE_RELOAD_READY_FILE = readyFile;
 		process.env.PI_BIN = PI_BIN;
 		const code = await spawnDirectPi(args, stdinPrompt, readyFile);

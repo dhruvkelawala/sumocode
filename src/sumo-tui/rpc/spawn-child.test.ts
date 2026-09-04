@@ -55,7 +55,7 @@ describe("buildChildSpawnPlan extension entry", () => {
 
 	it("resolves the archive extension bundle on the native runtime", () => {
 		const root = makeRoot();
-		expect(plan(root, { SUMOCODE_NATIVE_DIR: root })?.args[3]).toBe(join(root, "extension", "sumocode-extension.bundle.mjs"));
+		expect(plan(root, { SUMOCODE_NATIVE_DIR: root })?.args[3]).toBe(join(root, "extension", "sumocode-rpc-extension.bundle.mjs"));
 	});
 
 	it("returns no plan when PI_BIN is absent", () => {

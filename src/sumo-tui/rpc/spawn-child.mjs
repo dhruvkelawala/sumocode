@@ -24,9 +24,9 @@ function isNativeRuntime(env) {
 
 function extensionEntry(root, env) {
 	if (isNativeRuntime(env)) {
-		// The native archive is immutable: the inlined child bundle is the only
-		// extension entry (no source tree exists beside it).
-		return resolve(root, "extension/sumocode-extension.bundle.mjs");
+		// The native archive is immutable and ships a dedicated lean child entry;
+		// direct Pi uses the separate canonical bundle.
+		return resolve(root, "extension/sumocode-rpc-extension.bundle.mjs");
 	}
 	if (env.SUMOCODE_EXTENSION_BUNDLE === "0") return resolve(root, "src/rpc-child-extension.ts");
 	// Route through the stable shim even when a generated bundle is fresh.

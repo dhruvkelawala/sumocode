@@ -65,15 +65,15 @@ function copyMatchingFiles(source, destination, includePattern) {
 }
 
 /**
- * Builds the child extension bundle with Pi's virtual modules as the ONLY
- * externals and guards against any other surviving bare import. Pi's extension
+ * Builds an extension bundle with Pi's virtual modules as the ONLY externals
+ * and guards against any other surviving bare import. Pi's extension
  * loader resolves @earendil-works/* and typebox itself; everything else must be
  * inlined or the compiled child cannot load it.
  */
-async function buildExtensionBundle(outPath) {
+async function buildExtensionBundle(entryPoint, outPath) {
 	const result = await build({
 		absWorkingDir: root,
-		entryPoints: ["src/rpc-child-extension.ts"],
+		entryPoints: [entryPoint],
 		outfile: outPath,
 		bundle: true,
 		format: "esm",
@@ -157,8 +157,9 @@ async function main() {
 	mkdirSync(shareDir, { recursive: true });
 	mkdirSync(extensionDir, { recursive: true });
 
-	// 1. Child extension bundle (deps inlined; Pi virtual modules external).
-	await buildExtensionBundle(join(extensionDir, "sumocode-extension.bundle.mjs"));
+	// 1. Canonical direct-Pi + lean RPC-child extension bundles.
+	await buildExtensionBundle("src/extension.ts", join(extensionDir, "sumocode-extension.bundle.mjs"));
+	await buildExtensionBundle("src/rpc-child-extension.ts", join(extensionDir, "sumocode-rpc-extension.bundle.mjs"));
 
 	// 2. Bun-compiled Pi child + its sidecar assets (copy-binary-assets set).
 	// Pi's exports map does not expose ./package.json, so resolve its dist main

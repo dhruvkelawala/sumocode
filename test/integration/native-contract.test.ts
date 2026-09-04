@@ -31,6 +31,7 @@ const ARCHIVE = join(ROOT, "dist/native", `sumocode-${PACKAGE_VERSION}-${PLATFOR
 const NATIVE_BIN = join(ARCHIVE, "bin/sumocode");
 const NATIVE_PI = join(ARCHIVE, "bin/sumocode-pi");
 const NATIVE_EXTENSION = join(ARCHIVE, "extension/sumocode-extension.bundle.mjs");
+const NATIVE_RPC_EXTENSION = join(ARCHIVE, "extension/sumocode-rpc-extension.bundle.mjs");
 const CLEANUP_SEQUENCE = "\x1b[?1049l";
 
 interface PtyExit {
@@ -306,6 +307,7 @@ nativeDescribe("native executable contract", () => {
 		expect(existsSync(NATIVE_BIN)).toBe(true);
 		expect(existsSync(NATIVE_PI)).toBe(true);
 		expect(existsSync(NATIVE_EXTENSION)).toBe(true);
+		expect(existsSync(NATIVE_RPC_EXTENSION)).toBe(true);
 		expect(readFileSync(NATIVE_PI).includes("register-bedrock")).toBe(false);
 		expect(readFileSync(join(ROOT, "node_modules/@earendil-works/pi-coding-agent/dist/bun/cli.js"), "utf8")).toContain('import("./register-bedrock.js")');
 		expect(runNative(["--version"]).stdout).toContain(`sumocode ${PACKAGE_VERSION}`);
@@ -328,9 +330,23 @@ nativeDescribe("native executable contract", () => {
 			expect(dryRunField(output, "SUMO_RPC")).toBe(row.branch === "rpc-host" ? "1" : "");
 			const execLine = dryRunExecLine(output);
 			expect(execLine).toContain("bin/sumocode-pi");
-			expect(execLine).toContain("extension/sumocode-extension.bundle.mjs");
+			expect(execLine).toContain(row.branch === "rpc-host" ? NATIVE_RPC_EXTENSION : NATIVE_EXTENSION);
 		});
 	}
+
+	it("parses equals-form native launcher paths", () => {
+		const root = tempRoot("sumocode-native-equals-options-");
+		const diagFile = join(root, "diag.jsonl");
+		const promptFile = join(root, "prompt.txt");
+		writeFileSync(promptFile, "review native equals options\n");
+		const diagResult = runNative(["--dry-run", `--diag-file=${diagFile}`]);
+		expect(diagResult.status).toBe(0);
+		expect(dryRunField(diagResult.stdout, "SUMO_TUI_DIAG_FILE")).toBe(diagFile);
+		for (const arg of [`--prompt-file=${promptFile}`, `--task-dir=${root}`]) {
+			const result = runNative(["--dry-run", "task", arg]);
+			expect(result.status, result.stderr).toBe(0);
+		}
+	});
 
 	it("redacts prompt and secret bytes from native dry-run diagnostics", () => {
 		const result = runNative(["--dry-run", "--api-key", "SECRET-KEY", "--print", "SECRET-PROMPT"]);
@@ -447,12 +463,13 @@ nativeDescribe("native executable contract", () => {
 	] as const) {
 		it(`moves ${row.name} from direct-Pi argv to stdin`, () => {
 			const stubOut = join(tempRoot("sumocode-native-direct-pi-"), "stub.json");
-			const piStub = createExecutable("pi-stub", `#!/bin/bash\nnode -e 'const fs=require("node:fs"); let s=""; process.stdin.setEncoding("utf8"); process.stdin.on("data",c=>s+=c); process.stdin.on("end",()=>fs.writeFileSync(process.argv[1],JSON.stringify({argv:process.argv.slice(2),stdin:s})))' ${JSON.stringify(stubOut)} -- "$@"\n`);
+			const piStub = createExecutable("pi-stub", `#!/bin/bash\nnode -e 'const fs=require("node:fs"); let s=""; process.stdin.setEncoding("utf8"); process.stdin.on("data",c=>s+=c); process.stdin.on("end",()=>fs.writeFileSync(process.argv[1],JSON.stringify({argv:process.argv.slice(2),stdin:s,launcher:process.env.SUMOCODE_LAUNCHER})))' ${JSON.stringify(stubOut)} -- "$@"\n`);
 			const result = runNative(["--no-sumo-tui", ...row.argv], { env: { PI_BIN: piStub } });
 			expect(result.status).toBe(0);
 			// SAFETY: the owned stub writes this exact object shape.
-			const observed = JSON.parse(readFileSync(stubOut, "utf8")) as { argv: string[]; stdin: string };
+			const observed = JSON.parse(readFileSync(stubOut, "utf8")) as { argv: string[]; stdin: string; launcher: string };
 			expect(observed.argv).toContain(NATIVE_EXTENSION);
+			expect(observed.launcher).toBe(NATIVE_BIN);
 			expect(observed.argv.join(" ")).not.toContain(row.prompt);
 			expect(observed.stdin).toBe(row.prompt);
 		});

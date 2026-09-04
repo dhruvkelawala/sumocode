@@ -47,9 +47,11 @@ const EXEC_DIR = dirname(realpathSync(process.execPath));
 const NATIVE_DIR = dirname(EXEC_DIR);
 process.env.SUMOCODE_NATIVE_DIR = NATIVE_DIR;
 process.env.SUMOCODE_ROOT_DIR = NATIVE_DIR;
+process.env.SUMOCODE_LAUNCHER = process.execPath;
 
 const PI_BIN = resolveProcessPiBin();
 const EXTENSION_ENTRY = join(NATIVE_DIR, "extension/sumocode-extension.bundle.mjs");
+const RPC_EXTENSION_ENTRY = join(NATIVE_DIR, "extension/sumocode-rpc-extension.bundle.mjs");
 
 function resolveProcessPiBin(): string {
 	const fromEnv = process.env.PI_BIN;
@@ -307,6 +309,22 @@ function parseLauncherArgv(argv: readonly string[]): ParsedLaunch {
 	const args = [...argv];
 	while (args.length > 0) {
 		const arg = args.shift()!;
+		if (arg.startsWith("--diag-file=")) {
+			parsed.diagFile = arg.slice("--diag-file=".length);
+			if (parsed.diagFile === "") usageError("--diag-file requires a path.");
+			parsed.debugMode = true;
+			continue;
+		}
+		if (arg.startsWith("--prompt-file=")) {
+			parsed.promptFile = arg.slice("--prompt-file=".length);
+			if (parsed.promptFile === "") usageError("--prompt-file requires a path.");
+			continue;
+		}
+		if (arg.startsWith("--task-dir=")) {
+			parsed.taskDir = arg.slice("--task-dir=".length);
+			if (parsed.taskDir === "") usageError("--task-dir requires a path.");
+			continue;
+		}
 		switch (arg) {
 			case "doctor":
 			case "diag":
@@ -419,6 +437,7 @@ function runDoctor(parsed: ParsedLaunch): never {
 	check(true, `Runtime: native (${process.platform}-${process.arch}, bun ${process.versions.bun ?? "?"})`, "Runtime: native");
 	check(existsSync(PI_BIN), `Pi binary: ${PI_BIN}`, "Pi binary: not found or not executable");
 	check(existsSync(EXTENSION_ENTRY), `Extension bundle: ${EXTENSION_ENTRY}`, "Extension bundle: missing");
+	check(existsSync(RPC_EXTENSION_ENTRY), `RPC extension bundle: ${RPC_EXTENSION_ENTRY}`, "RPC extension bundle: missing");
 	const yogaWasm = join(NATIVE_DIR, "share/yoga.wasm");
 	check(existsSync(yogaWasm), `Yoga wasm: ${yogaWasm}`, "Yoga wasm: missing");
 	const diagPath = parsed.diagFile !== "" ? parsed.diagFile : process.env.SUMO_TUI_DIAG_FILE ?? "/tmp/sumocode-manual.jsonl";
@@ -730,6 +749,7 @@ function writeDryRun(parsed: ParsedLaunch, useRpcHost: boolean): never {
 	const transport = useRpcHost && initialPrompt !== "" ? "one-shot-file" : "(none)";
 	const redacted = redactSensitiveArgs(parsed.forwardedArgs);
 	const piArg = useRpcHost ? `--mode rpc -e` : `-e`;
+	const extensionEntry = useRpcHost ? RPC_EXTENSION_ENTRY : EXTENSION_ENTRY;
 	process.stdout.write(`sumocode dry run
 PI_BIN=${PI_BIN}
 ROOT_DIR=${NATIVE_DIR}
@@ -741,7 +761,7 @@ SUMO_TUI_DEBUG=${process.env.SUMO_TUI_DEBUG ?? ""}
 COMMAND=${parsed.command}
 ARGS=${redacted}
 KICKOFF_PROMPT_TRANSPORT=${transport}
-exec ${shellQuote(PI_BIN)} ${piArg} ${shellQuote(EXTENSION_ENTRY)}${redacted !== "" ? ` ${redacted}` : ""}
+exec ${shellQuote(PI_BIN)} ${piArg} ${shellQuote(extensionEntry)}${redacted !== "" ? ` ${redacted}` : ""}
 `);
 	process.exit(0);
 }

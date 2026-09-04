@@ -1,15 +1,30 @@
 #!/usr/bin/env node
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
-function argument(name) {
+function argument(name, fallback) {
 	const index = process.argv.indexOf(name);
-	if (index === -1 || !process.argv[index + 1]) throw new Error(`missing ${name}`);
+	if (index === -1) return fallback;
+	if (!process.argv[index + 1]) throw new Error(`missing ${name}`);
 	return process.argv[index + 1];
 }
 
+function readAudit() {
+	const path = argument("--audit");
+	if (path) return JSON.parse(readFileSync(path, "utf8"));
+	const result = spawnSync("pnpm", ["audit", "--json"], { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
+	if (result.status !== 0 && result.status !== 1) {
+		throw new Error(`pnpm audit failed: ${result.stderr.trim() || `exit ${result.status}`}`);
+	}
+	return JSON.parse(result.stdout);
+}
+
 try {
-	const audit = JSON.parse(readFileSync(argument("--audit"), "utf8"));
-	const policy = JSON.parse(readFileSync(argument("--policy"), "utf8"));
+	const audit = readAudit();
+	const policyPath = argument("--policy", join(import.meta.dirname, "dependency-audit-policy.json"));
+	const policy = JSON.parse(readFileSync(policyPath, "utf8"));
+	if (policy.schemaVersion !== 1) throw new Error(`unsupported policy schema ${policy.schemaVersion}`);
 	const records = new Map();
 	for (const record of policy.records) {
 		for (const advisory of record.advisories) {
@@ -46,7 +61,9 @@ try {
 		if (Date.parse(`${record.expires}T00:00:00Z`) <= Date.now()) throw new Error(`expired policy advisory ${finding.id}`);
 	}
 
-	console.log(`dependency audit policy passed; consumer-runtime upstream-blocked: ${findings.length}`);
+	console.log(
+		`dependency audit policy passed; consumer-runtime upstream-blocked: ${findings.length}; local-development high/critical: 0`,
+	);
 } catch (error) {
 	console.error(error instanceof Error ? error.message : String(error));
 	process.exitCode = 1;

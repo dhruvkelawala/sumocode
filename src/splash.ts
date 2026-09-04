@@ -22,6 +22,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { Component } from "@earendil-works/pi-tui";
 import { sessionHasMessages as cachedSessionHasMessages } from "./session-cache.js";
+import { resolveAsset } from "./native/paths.js";
 import { activeThemeColors } from "./themes/index.js";
 
 const RESET = "\u001b[0m";
@@ -85,8 +86,8 @@ export const SUMOCODE_WORDMARK: readonly string[] = (() => {
 	return rows;
 })();
 
-const ASSET_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "assets");
-const FACE_PATH = resolve(ASSET_DIR, "sumo-face.ans");
+// Plan 117 seam 4: native archive share/sumo-face.ans, else src/assets/.
+const FACE_PATH = resolveAsset("sumo-face.ans", () => resolve(dirname(fileURLToPath(import.meta.url)), "assets", "sumo-face.ans"));
 
 /**
  * Sumo BSH cat face (24×14 cells). Generated via:

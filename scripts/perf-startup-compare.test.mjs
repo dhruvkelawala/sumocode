@@ -186,6 +186,23 @@ async function harness(options = {}) {
 		expect(event).not.toHaveProperty("argv");
 	});
 
+	it("marks an RPC child at preload", async () => {
+		const root = await temporaryRoot("sumocode-child-preload-test-");
+		const entry = join(root, "cli.js");
+		const diag = join(root, "diag.jsonl");
+		await writeFile(entry, "");
+		await execFileAsync(process.execPath, [entry], {
+			env: {
+				...process.env,
+				SUMO_TUI_DIAG_FILE: diag,
+				SUMOCODE_PUBLIC_STARTUP_DIAGNOSTICS: "1",
+				NODE_OPTIONS: `--require "${resolve("scripts/startup-diagnostics-preload.cjs")}"`,
+			},
+		});
+		const event = JSON.parse((await readFile(diag, "utf8")).trim());
+		expect(event).toEqual(expect.objectContaining({ event: "child_entry", role: "rpc-child", pid: expect.any(Number) }));
+	});
+
 	it("defaults to 15 samples and an approximately 1,800-record disposable fixture", () => {
 		expect(startupCompareOptions(["--base", "HEAD~1"])).toMatchObject({
 			baseRef: "HEAD~1",

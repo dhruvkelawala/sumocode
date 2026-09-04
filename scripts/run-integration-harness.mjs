@@ -109,6 +109,7 @@ async function runVitest(vitestEntry, args, env) {
 
 async function main(ownerToken) {
 	if (!await runIntegrationPreflight()) return 1;
+	const nativeOnly = process.argv.includes("--native-only");
 	const runRoot = await mkdtemp(join(tmpdir(), "sumocode-harness-v2-run-"));
 	const manifest = join(runRoot, "children.jsonl");
 	const tempRoot = join(runRoot, "tmp");
@@ -126,29 +127,40 @@ async function main(ownerToken) {
 		NODE_COMPILE_CACHE: compileCache,
 		TMPDIR: tempRoot,
 	});
-	let packageRoot;
-	try {
-		packageRoot = await preparePackageSnapshot(runRoot, env);
-	} catch (error) {
-		await retainEvidence(runRoot, "private artifact build failed");
-		process.stderr.write(`[integration harness] ${String(error)}\nEvidence retained: ${runRoot}\n`);
-		return 1;
-	}
-	env.SUMOCODE_INTEGRATION_PACKAGE_ROOT = packageRoot;
-
-	const vitestEntry = join(ROOT, "node_modules", "vitest", "vitest.mjs");
-	process.stdout.write("[integration harness] seam tests\n");
-	const seamStatus = await runVitest(vitestEntry, ["run", "test/integration/verification-harness.test.ts", "--fileParallelism=false"], env);
+	let seamStatus = { code: 0, signal: null, interrupted: false };
 	let integrationStatus = { code: 1, signal: null, interrupted: false };
-	if (seamStatus.code === 0 && !seamStatus.interrupted) {
-		process.stdout.write("[integration harness] integration tests\n");
+	const vitestEntry = join(ROOT, "node_modules", "vitest", "vitest.mjs");
+	if (nativeOnly) {
+		env.SUMOCODE_INTEGRATION_PACKAGE_ROOT = ROOT;
+		env.SUMOCODE_NATIVE_CONTRACT = "1";
+		process.stdout.write("[integration harness] native contract tests\n");
 		integrationStatus = await runVitest(vitestEntry, [
 			"run",
-			"test/integration/",
+			"test/integration/native-",
 			"--fileParallelism=false",
-			"--exclude",
-			"test/integration/verification-harness.test.ts",
 		], env);
+	} else {
+		let packageRoot;
+		try {
+			packageRoot = await preparePackageSnapshot(runRoot, env);
+		} catch (error) {
+			await retainEvidence(runRoot, "private artifact build failed");
+			process.stderr.write(`[integration harness] ${String(error)}\nEvidence retained: ${runRoot}\n`);
+			return 1;
+		}
+		env.SUMOCODE_INTEGRATION_PACKAGE_ROOT = packageRoot;
+		process.stdout.write("[integration harness] seam tests\n");
+		seamStatus = await runVitest(vitestEntry, ["run", "test/integration/verification-harness.test.ts", "--fileParallelism=false"], env);
+		if (seamStatus.code === 0 && !seamStatus.interrupted) {
+			process.stdout.write("[integration harness] integration tests\n");
+			integrationStatus = await runVitest(vitestEntry, [
+				"run",
+				"test/integration/",
+				"--fileParallelism=false",
+				"--exclude",
+				"test/integration/verification-harness.test.ts",
+			], env);
+		}
 	}
 	const auditPassed = await auditAndReap(manifest);
 	const exitCode = resolveHarnessExitCode({ seamStatus, integrationStatus, auditPassed });

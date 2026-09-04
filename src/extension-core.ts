@@ -109,14 +109,35 @@ export function installOrchestrationTools(pi: ExtensionAPI, rpcChild = false) {
 	// wiring) and keeps sub-millisecond resolution.
 	const managerOptions: TerminalTaskManagerOptions | undefined = rpcChild
 		? {
+				// Pi constructs extensions before entering its RPC input loop, so a
+				// generic next turn still blocks child readiness. The host creates this
+				// private gate only after command readiness; wrappers inherit its path.
+				scheduleIndexInitialization: (initialize) => {
+					const gate = process.env.SUMOCODE_TERMINAL_INDEX_GATE;
+					if (!gate) {
+						setImmediate(initialize);
+						return;
+					}
+					const fallbackAt = Date.now() + 30_000;
+					const waitForGate = (): void => {
+						// A failed host write may delay startup delivery, but it cannot leave
+						// the durable index unopened for the process lifetime.
+						if (existsSync(gate) || Date.now() >= fallbackAt) {
+							initialize();
+							return;
+						}
+						const timer = setTimeout(waitForGate, 10);
+						timer.unref?.();
+					};
+					setImmediate(waitForGate);
+				},
+				onIndexInitializationStart: () => logDiagnostic("terminal_index_start", {}),
 				onDiagnostic: (diagnostic) => {
 					// An incomplete scan (transient read failure) is a degraded index:
-					// emit nothing so the harness observes missing events and fails the
-					// sample explicitly instead of timing a partial scan as ready.
+					// emit no ready mark so the harness fails the sample explicitly.
 					if (diagnostic.kind !== "index-scan" || diagnostic.complete !== true) return;
 					// snapshotCount lets the harness verify every fixture record was
 					// accepted (complete scans still skip corrupt/duplicate records).
-					logDiagnostic("terminal_index_start", {});
 					logDiagnostic("terminal_index_ready", { durationMs: diagnostic.durationMs, snapshotCount: diagnostic.snapshotCount });
 				},
 			}

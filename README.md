@@ -6,8 +6,8 @@
 SumoTUI owns the foreground experience; Pi runs behind it over RPC.
 
 [![MIT License](https://img.shields.io/badge/license-MIT-2D211A?style=flat-square)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-0.4.0-B974FF?style=flat-square)](./CHANGELOG.md)
-[![Pi](https://img.shields.io/badge/Pi-0.84.1-75E8FF?style=flat-square)](https://github.com/earendil-works/pi)
+[![Version](https://img.shields.io/badge/version-0.4.1-B974FF?style=flat-square)](./CHANGELOG.md)
+[![Pi](https://img.shields.io/badge/Pi-0.84.3-75E8FF?style=flat-square)](https://github.com/earendil-works/pi)
 [![Node](https://img.shields.io/badge/Node-%3E%3D22.19-87B58E?style=flat-square)](./package.json)
 
 <br>
@@ -20,7 +20,7 @@ SumoTUI owns the foreground experience; Pi runs behind it over RPC.
 
 SumoCode is the terminal UX layer I daily-drive on top of Pi. Pi remains the agent runtime: it owns models, the agent loop, tools, sessions, MCP, skills, authentication, and provider integrations. SumoCode owns the screen around it: rendering, input, transcript presentation, overlays, themes, activity, orchestration surfaces, and terminal lifecycle.
 
-The normal interactive path is now **RPC-first**. [`bin/sumocode.sh`](./bin/sumocode.sh) starts a foreground Node host, the host launches Pi with `--mode rpc`, and the two processes communicate over Pi's JSONL RPC protocol. SumoCode no longer depends on a private Pi constructor patch.
+The installed interactive path is **native and RPC-first**. The release's `bin/sumocode` is a Bun-compiled foreground host; it launches the bundled `bin/sumocode-pi` child with `--mode rpc`, and the two processes communicate over Pi's JSONL RPC protocol. Contributors keep [`bin/sumocode.sh`](./bin/sumocode.sh) as the source/Jiti development path. SumoCode no longer depends on a private Pi constructor patch.
 
 > [!NOTE]
 > This is a personal, opinionated project rather than a polished general-purpose distribution. The code is public and MIT licensed; the maintainer's persona, memory, settings, MCP configuration, and skills live in a separate private repository.
@@ -39,15 +39,15 @@ The normal interactive path is now **RPC-first**. [`bin/sumocode.sh`](./bin/sumo
 ```text
 ┌──────────────────────────── terminal ────────────────────────────┐
 │                                                                  │
-│  bin/sumocode.sh                                                 │
+│  bin/sumocode · native executable                               │
 │          │                                                       │
 │          ▼                                                       │
-│  foreground SumoCode host                                       │
+│  in-process foreground SumoCode host                            │
 │  SumoTUI · editor · transcript · chrome · overlays · input      │
 │          │                                                       │
 │          │ Pi JSONL RPC over stdio                              │
 │          ▼                                                       │
-│  Pi child: pi --mode rpc -e src/extension-entry.ts              │
+│  Pi child: sumocode-pi --mode rpc -e extension/*.bundle.mjs     │
 │  agent loop · providers · tools · sessions · MCP · skills       │
 │                                                                  │
 └──────────────────────────────────────────────────────────────────┘
@@ -70,43 +70,46 @@ The process boundary is intentional:
 
 The runtime contract and historical migration notes live in [`docs/SUMO_TUI_PI_PATCH_STRATEGY.md`](./docs/SUMO_TUI_PI_PATCH_STRATEGY.md).
 
-## Run it
+## Install
 
-### Prerequisites
+### Native release (recommended)
 
-- Node.js 22.19 or newer
-- [`@earendil-works/pi-coding-agent`](https://github.com/earendil-works/pi)
-- pnpm
+macOS arm64 releases contain the compiled SumoCode host, compiled Pi child, extension bundle, and required sidecar assets. Node, pnpm, and a separate Pi install are not required.
 
-### From a checkout
+```bash
+VERSION=0.4.1
+curl -LO "https://github.com/dhruvkelawala/sumocode/releases/download/v${VERSION}/sumocode-${VERSION}-macos-arm64.tar.gz"
+curl -LO "https://github.com/dhruvkelawala/sumocode/releases/download/v${VERSION}/SHA256SUMS"
+shasum -a 256 -c SHA256SUMS
+tar -xzf "sumocode-${VERSION}-macos-arm64.tar.gz"
+./sumocode-${VERSION}-macos-arm64/install.sh
+~/.local/bin/sumocode
+```
+
+`install.sh` copies the immutable release under `~/.local/lib/sumocode/` and symlinks `~/.local/bin/sumocode`. Set `SUMOCODE_INSTALL_PREFIX` to choose another prefix. If macOS Gatekeeper blocks an unsigned download, remove its quarantine attribute explicitly:
+
+```bash
+xattr -dr com.apple.quarantine ~/.local/lib/sumocode/sumocode-${VERSION}-macos-arm64
+```
+
+### From source (contributors)
+
+The development loop requires Node.js 22.19 or newer, pnpm, and the Pi peer dependencies installed by pnpm:
 
 ```bash
 git clone https://github.com/dhruvkelawala/sumocode.git
 cd sumocode
 pnpm install
-./bin/sumocode.sh
+pnpm dev /path/to/project
 ```
 
-Open a particular project by passing its path:
-
-```bash
-./bin/sumocode.sh /path/to/project
-```
-
-For a global `sumocode` command while developing:
-
-```bash
-pnpm link --global
-sumocode .
-```
-
-Pi can also install the repository as an extension package:
+`pnpm dev` is an alias for [`bin/sumocode.sh`](./bin/sumocode.sh); it intentionally keeps the source/Jiti launcher for checkout development. `pi -e .` remains the classic extension-only loop. Pi can also install the repository as an extension package for source testing:
 
 ```bash
 pi install git:github.com/dhruvkelawala/sumocode
 ```
 
-The full RPC-first experience is launched through the `sumocode` wrapper; plain `pi` remains Pi's own entry point.
+The full installed RPC-first experience uses the native `sumocode` executable; plain `pi` remains Pi's own entry point.
 
 ### Useful launcher commands
 
@@ -158,8 +161,9 @@ Then map `U+E900–U+E904` to the installed `icomoon` font in the terminal and s
 
 | Path | Responsibility |
 |---|---|
-| [`bin/sumocode.sh`](./bin/sumocode.sh) | User-facing launcher, routing, diagnostics, task mode, and reload loop |
-| [`sumo-rpc-host.js`](./sumo-rpc-host.js) | Stable host entry with bundle validation and source fallback |
+| [`src/native/main.ts`](./src/native/main.ts) | Compiled installed launcher, argv roles, direct-Pi bypass, and in-process RPC host |
+| [`bin/sumocode.sh`](./bin/sumocode.sh) | Source-mode contributor launcher, routing, diagnostics, task mode, and reload loop |
+| [`sumo-rpc-host.js`](./sumo-rpc-host.js) | Source-mode host entry with bundle validation and Jiti fallback |
 | [`src/sumo-tui/rpc/`](./src/sumo-tui/rpc/) | Pi RPC client, host state, hydration, editor, controls, selectors, and overlays |
 | [`src/sumo-tui/`](./src/sumo-tui/) | Retained renderer, layout, input, transcript, runtime, and test backend |
 | [`src/activity/`](./src/activity/) | Shared live/durable activity contract and producer adapters |
@@ -170,9 +174,9 @@ Then map `U+E900–U+E904` to the installed `icomoon` font in the terminal and s
 
 ## Development
 
-Pi executes TypeScript through jiti; there is no emitted application build required for the normal source loop. Generated `dist/**` outputs are build/release artifacts and are never committed: `pnpm build:host`, `pnpm build:extension`, and `pnpm build:bundles` exist for CI, the integration harness, local diagnostics, and future release packaging, and their outputs stay ignored. A generated extension bundle is self-verifying: `dist/extension/.inputs.json` binds the input-graph hash to the `outputsHash` of the published bytes, `pnpm build:extension` reproduces both deterministically, and the runtime rejects stale inputs or a mismatched artifact and falls back to source.
+Pi executes TypeScript through jiti in the contributor loop; there is no emitted application build required for `pnpm dev` or `pi -e .`. Generated `dist/**` outputs are build/release artifacts and are never committed: `pnpm build:host`, `pnpm build:extension`, `pnpm build:bundles`, and `pnpm build:native` exist for CI, the integration harness, local diagnostics, and tagged releases, and their outputs stay ignored. A generated source-mode extension bundle is self-verifying: `dist/extension/.inputs.json` binds the input-graph hash to the `outputsHash` of the published bytes, `pnpm build:extension` reproduces both deterministically, and the source runtime rejects stale inputs or a mismatched artifact and falls back to source.
 
-Distribution policy: Pi git-package installs run from source through the stable entry (`src/extension-entry.ts` → `src/extension.ts` via jiti) and need no bundle. A future npm/package release may build bundles during `prepack` without committing them. Never add `dist/**` files to a feature PR.
+Distribution policy: tagged releases build the precompiled native archive in CI. Pi git-package installs remain a contributor/source path through the stable entry (`src/extension-entry.ts` → `src/extension.ts` via jiti) and need no committed bundle. Never add `dist/**` files or binaries to a feature PR.
 
 ```bash
 pnpm install

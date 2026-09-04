@@ -1,0 +1,1 @@
+dist/native/sumocode-0.4.1-macos-arm64/bin/sumocode

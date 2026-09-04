@@ -473,6 +473,44 @@ describe("RPC editor controller", () => {
 		expect(controls.getCommands).toHaveBeenCalledTimes(1);
 	});
 
+	it("keeps static slash commands ready while child commands hydrate and refreshes an open menu", async () => {
+		let resolveCommands: ((commands: RpcSlashCommand[]) => void) | undefined;
+		const getCommands = vi.fn(() => new Promise<RpcSlashCommand[]>((resolve) => {
+			resolveCommands = resolve;
+		}));
+		const controls: RpcEditorAutocompleteControls = {
+			getCommands,
+			getAvailableModels: vi.fn(async () => []),
+		};
+		const controller = new RpcHostEditorController({
+			controls,
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: fakeKeybindings(),
+			cwd: process.cwd(),
+			fdPath: null,
+		});
+		const expectStaticSuggestion = async (command: string, description: string): Promise<void> => {
+			controller.handleInput("\x1b");
+			controller.setText("");
+			for (const character of command) controller.handleInput(character);
+			expect(await waitForRenderedText(controller, description)).toContain(description);
+		};
+
+		await expectStaticSuggestion("/resume", "Resume a previous session from this project");
+		await expectStaticSuggestion("/model", "Select model or set provider/model");
+		expect(getCommands).not.toHaveBeenCalled();
+
+		const configured = controller.configureAutocomplete();
+		expect(getCommands).toHaveBeenCalledTimes(1);
+		resolveCommands?.([rpcCommand("model-child", "Hydrated child command")]);
+		await configured;
+		expect(await waitForRenderedText(controller, "Hydrated child command")).toContain("Hydrated child command");
+
+		await expectStaticSuggestion("/resume", "Resume a previous session from this project");
+		await expectStaticSuggestion("/model", "Select model or set provider/model");
+	});
+
 	it("reports isAutocompleteOpen() while the slash-command dropdown is visible and false once dismissed", async () => {
 		const controls = controlsFor({ commands: [rpcCommand("deploy", "Deploy current workspace")] });
 		const controller = await createRpcHostEditorController({

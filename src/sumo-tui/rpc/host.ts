@@ -1,15 +1,16 @@
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { defaultActivityStateRoot } from "../../activity/persistence.js";
 import { FileActivityStore, type ActivityStoreSnapshot } from "../../activity/store.js";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { createRequire } from "node:module";
 import { SettingsManager, type AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { getCapabilities, setCapabilities } from "@earendil-works/pi-tui";
 import { SUMOCODE_RELOAD_EXIT_CODE } from "../../commands/reload.js";
 import { containsCtrlCToken, isEscapeInput } from "../input/shared-input-router.js";
 import { createOsc52Sequence } from "../input/selection.js";
 import { loadYoga } from "../layout/yoga.js";
+import { buildChildSpawnPlan } from "./spawn-child.mjs";
 import { applyStartupTheme } from "../../themes/index.js";
 import { ExtensionStatusPublication, RegionRegistry } from "../pi-compat/region-registry.js";
 import type { TranscriptControllerChatSink } from "../transcript/controller.js";
@@ -69,6 +70,8 @@ export interface RpcHostMainOptions {
 	readonly stdout?: NodeJS.WriteStream;
 	readonly stdin?: NodeJS.ReadStream;
 	readonly stderr?: Pick<NodeJS.WriteStream, "write">;
+	/** Override process exit for an owning launcher supervisor. */
+	readonly exit?: (code: number) => void;
 	readonly treeNavigationQuietTiming?: RpcTreeNavigationQuietTiming;
 }
 
@@ -271,19 +274,9 @@ function piBinary(env: NodeJS.ProcessEnv): string {
 	return pi;
 }
 
-type ChildSpawnPlan = {
-	readonly command: string;
-	readonly args: readonly string[];
-	readonly cwd: string;
-	readonly env: NodeJS.ProcessEnv;
-};
-
-const requireFromRuntime = createRequire(import.meta.url);
-// SAFETY: spawn-child.mjs is this package's own compiled module; its export
-// signature is pinned by host-spawn-plan.test.ts.
-const { buildChildSpawnPlan } = requireFromRuntime("./spawn-child.mjs") as {
-	buildChildSpawnPlan(env: NodeJS.ProcessEnv, argv: readonly string[], defaultPiBin?: string): ChildSpawnPlan | undefined;
-};
+// Static import above lets Bun inline the helper in the native executable;
+// the Node host bundle still copies the same .mjs sibling for its existing
+// runtime path.
 
 /**
  * Writes this host process's final exit code to the out-of-band file
@@ -934,9 +927,12 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	// Wraps process.exit itself (rather than being threaded through each
 	// dependency-injection object below) so this is the single place that can
 	// never be bypassed by a new exit call site added later.
+	let requestedHostExitCode: number | undefined;
 	const exitProcess = (code: number): void => {
+		requestedHostExitCode = code;
 		writeExitCodeFile(env, code);
-		process.exit(code);
+		if (options.exit) options.exit(code);
+		else process.exit(code);
 	};
 	if (stdout.isTTY !== true) {
 		writeExitCodeFile(env, 70);
@@ -947,6 +943,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const cwd = hostCwd(env);
 	const settingsManager = SettingsManager.create(cwd);
 	const stateRoot = defaultActivityStateRoot(env);
+	const terminalIndexGate = env.SUMOCODE_TERMINAL_INDEX_GATE
+		?? resolve(stateRoot, `.terminal-index-${process.pid}-${randomUUID()}`);
 	const chromeCacheTestDelayMs = env.NODE_ENV === "test"
 		? Number.parseInt(env.SUMOCODE_TEST_CHROME_CACHE_DELAY_MS ?? "0", 10)
 		: 0;
@@ -969,7 +967,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		command: spawnPlan.command,
 		args: spawnPlan.args,
 		cwd: spawnPlan.cwd,
-		env: spawnPlan.env,
+		env: { ...spawnPlan.env, SUMOCODE_TERMINAL_INDEX_GATE: terminalIndexGate },
 		preSpawnedChild: options.preSpawnedChild,
 		onRpcReady: () => logDiagnostic("rpc_child_ready"),
 	});
@@ -1165,7 +1163,17 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		releaseInitialHydration = resolve;
 	});
 	const hydrationActionGate = new InitialHydrationActionGate(initialHydration, {
-		onReady: () => runtime?.markCommandReady(),
+		onReady: () => {
+			runtime?.markCommandReady();
+			// The RPC child polls this private gate without touching the Pi command
+			// stream; wrappers inherit the path and cannot swallow the readiness cue.
+			// The state root is not guaranteed to exist yet on source-mode runs, and
+			// a silently failed write would strand the child on its 30s fallback.
+			try {
+				mkdirSync(dirname(terminalIndexGate), { recursive: true });
+				writeFileSync(terminalIndexGate, "ready\n", { flag: "wx", mode: 0o600 });
+			} catch {}
+		},
 	});
 	/**
 	 * The retained editor can accept text as soon as the splash paints, but a
@@ -1648,7 +1656,6 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	let statsInFlight = false;
 	let stopWatchingGitBranch: (() => void) | undefined;
 	let stopPromise: Promise<void> | undefined;
-	let requestedHostExitCode: number | undefined;
 
 	client.onEvent((event) => {
 		if (visualFixture) return;
@@ -1723,6 +1730,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			// quiesce before the final cache snapshot is flushed. Persistent guarded
 			// host signal listeners cover both bounded shutdown phases.
 			await client.stop().catch(() => undefined);
+			rmSync(terminalIndexGate, { force: true });
 			await new Promise<void>((resolveTurn) => setImmediate(resolveTurn));
 			await drainChromeCacheForShutdown(
 				flushChromeCacheState,

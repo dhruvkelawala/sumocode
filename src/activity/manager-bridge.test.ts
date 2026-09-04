@@ -592,6 +592,7 @@ describe("ActivityManagerBridge", () => {
 				store,
 				processTree: terminalProcessTree(),
 				now: () => clock,
+				scheduleIndexInitialization: (initialize) => initialize(),
 				pollIntervalMs: 10,
 			});
 			expect(reads.scans).toBe(1);

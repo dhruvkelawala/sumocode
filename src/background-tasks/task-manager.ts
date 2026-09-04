@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveNativeDir } from "../native/paths.js";
 import {
 	signalVerifiedProcessTree,
 	systemProcessTree,
@@ -55,6 +56,20 @@ const DEFAULT_CLAIM_LEASE_MS = 30_000;
 const DEFAULT_STARTING_RECOVERY_GRACE_MS = 30_000;
 const MAX_REPLAYED_SETTLED_TERMINALS = 64;
 const BOUNDED_TERMINAL_RUNNER_FILE = fileURLToPath(new URL("./bounded-terminal-runner.mjs", import.meta.url));
+
+/**
+ * Plan 117 seam 3: how the generated script launches the bounded terminal
+ * runner. Dev keeps `node + bounded-terminal-runner.mjs` byte-for-byte; the
+ * native host embeds the runner behind the `--sumocode-terminal-runner`
+ * argv role (handled by src/native/main.ts before anything else).
+ */
+export function resolveTerminalRunnerInvocation(env: NodeJS.ProcessEnv = process.env) {
+	const nativeDir = resolveNativeDir(env);
+	if (nativeDir !== null) {
+		return { command: join(nativeDir, "bin", "sumocode"), args: ["--sumocode-terminal-runner"] };
+	}
+	return { command: process.execPath, args: [BOUNDED_TERMINAL_RUNNER_FILE] };
+}
 
 export interface TerminalOutputTail {
 	readonly bytes: Uint8Array;
@@ -113,6 +128,8 @@ export interface TerminalTaskManagerOptions {
 	readonly killGraceMs?: number;
 	readonly claimLeaseMs?: number;
 	readonly startingRecoveryGraceMs?: number;
+	readonly scheduleIndexInitialization?: (initialize: () => void) => void;
+	readonly onIndexInitializationStart?: () => void;
 	readonly onDiagnostic?: (diagnostic: TerminalTaskStoreDiagnostic | { kind: "manager"; message: string; id?: string }) => void;
 	/** Test-only spy: invoked once per fresh snapshot `refreshSnapshotsFromStore` adopts. */
 	readonly onRefreshAdopt?: (id: string) => void;
@@ -311,6 +328,10 @@ function buildPosixScript(options: {
 	readonly exitFile: string;
 	readonly logMaxBytes: number;
 }): string {
+	// Plan 117 seam 3: dev resolves to node + bounded-terminal-runner.mjs
+	// (byte-identical to the pre-seam script); native to <self>
+	// --sumocode-terminal-runner.
+	const runner = resolveTerminalRunnerInvocation();
 	return [
 		"#!/usr/bin/env bash",
 		"umask 077",
@@ -330,7 +351,7 @@ function buildPosixScript(options: {
 		"  code=1",
 		"else",
 		"  export SUMOCODE_BG_CHILD=1",
-		`  ${shellEscape(process.execPath)} ${shellEscape(BOUNDED_TERMINAL_RUNNER_FILE)} posix ${shellEscape(options.commandFile)} ${shellEscape(options.logFile)} ${options.logMaxBytes}`,
+		`  ${shellEscape(runner.command)} ${runner.args.map(shellEscape).join(" ")} posix ${shellEscape(options.commandFile)} ${shellEscape(options.logFile)} ${options.logMaxBytes}`,
 		"  code=$?",
 		"fi",
 		`printf '%s' "$code" > ${shellEscape(options.exitFile)}`,
@@ -497,6 +518,8 @@ export class TerminalTaskManager {
 	private readonly killGraceMs: number;
 	private readonly claimLeaseMs: number;
 	private readonly startingRecoveryGraceMs: number;
+	private readonly scheduleIndexInitialization: (initialize: () => void) => void;
+	private readonly onIndexInitializationStart?: () => void;
 	private readonly onDiagnostic?: TerminalTaskManagerOptions["onDiagnostic"];
 	private readonly onRefreshAdopt?: (id: string) => void;
 	private readonly onRefreshRecover?: (id: string) => void;
@@ -552,6 +575,8 @@ export class TerminalTaskManager {
 		this.killGraceMs = normalizePositive(options.killGraceMs, DEFAULT_KILL_GRACE_MS);
 		this.claimLeaseMs = normalizePositive(options.claimLeaseMs, DEFAULT_CLAIM_LEASE_MS);
 		this.startingRecoveryGraceMs = normalizePositive(options.startingRecoveryGraceMs, DEFAULT_STARTING_RECOVERY_GRACE_MS);
+		this.scheduleIndexInitialization = options.scheduleIndexInitialization ?? ((initialize) => { setImmediate(initialize); });
+		this.onIndexInitializationStart = options.onIndexInitializationStart;
 		this.onDiagnostic = options.onDiagnostic;
 		this.onRefreshAdopt = options.onRefreshAdopt;
 		this.onRefreshRecover = options.onRefreshRecover;
@@ -559,31 +584,7 @@ export class TerminalTaskManager {
 		// deletion/cleanup without human approval. Do not revive the legacy
 		// recovery-time artifact pruning here: retention/GC needs its own approved
 		// policy that cannot erase pending, claimed, or still-queryable results.
-		const initializationAttemptAt = Math.max(1, Math.floor(this.now()));
-		const initialization = this.store.refreshIndex();
-		if (initialization.ok) {
-			// An incomplete successful scan — any candidate hit a transient read or
-			// directory-validation failure — seeds and serves the indexed generation
-			// immediately but keeps init-retry state armed so a later complete scan
-			// freshly reads the skipped/preserved record; only a complete scan starts
-			// fully initialized and stops the retries.
-			this.indexInitialized = initialization.complete;
-			for (const snapshot of initialization.snapshots) {
-				this.adopt(snapshot, false);
-				this.recover(snapshot);
-			}
-			if (!initialization.complete) {
-				this.diagnoseIndexInitFailure(true);
-				this.scheduleIndexInitRetryTimer(initializationAttemptAt);
-			}
-		} else {
-			// A transient scan failure must not permanently seed an empty generation:
-			// the projection stays uninitialized and query/mutation entry points
-			// retry the scan lazily (ensureIndexInitialized) until the first success
-			// seeds it exactly like a successful refresh.
-			this.diagnoseIndexInitFailure();
-			this.scheduleIndexInitRetryTimer(initializationAttemptAt);
-		}
+		this.scheduleIndexInitialization(() => this.initializeIndex());
 	}
 
 	public async start(options: StartTerminalTaskOptions): Promise<TerminalTaskSnapshot> {
@@ -598,6 +599,7 @@ export class TerminalTaskManager {
 		if (!ownerSessionId) throw new Error("owner session id is required");
 		if (sourceId && sourceId.length > 512) throw new Error("source id is too long");
 		if (!cwd) throw new Error("working directory is required");
+		this.ensureIndexInitialized();
 
 		const createdAt = Math.max(1, Math.floor(this.now()));
 		let id: string | undefined;
@@ -1017,6 +1019,10 @@ export class TerminalTaskManager {
 		return delays.length > 0 ? Math.min(...delays) : undefined;
 	}
 
+	public isIndexReady(): boolean {
+		return this.indexInitialized;
+	}
+
 	public addChangeListener(listener: TerminalTaskChangeListener): () => void {
 		this.listeners.add(listener);
 		return () => this.listeners.delete(listener);
@@ -1155,6 +1161,41 @@ export class TerminalTaskManager {
 	 * escalating injectable-clock backoff keeps a persistently unreadable or
 	 * incomplete store from being rescanned by every following entry.
 	 */
+	private initializeIndex(): void {
+		if (this.indexInitialized || this.detached || this.indexInitInFlight) return;
+		const attemptAt = Math.max(1, Math.floor(this.now()));
+		this.indexInitInFlight = true;
+		this.onIndexInitializationStart?.();
+		try {
+			const initialization = this.store.refreshIndex();
+			if (!initialization.ok) {
+				this.diagnoseIndexInitFailure();
+				this.scheduleIndexInitRetryTimer(attemptAt);
+				return;
+			}
+			this.indexInitialized = initialization.complete;
+			this.refreshBatchDepth += 1;
+			const changed: TerminalTaskSnapshot[] = [];
+			try {
+				for (const snapshot of initialization.snapshots) {
+					this.adopt(snapshot, false);
+					this.recover(snapshot);
+					changed.push(snapshot);
+				}
+			} finally {
+				this.refreshBatchDepth -= 1;
+				this.drainRefreshBatch(changed, false);
+			}
+			if (initialization.complete) this.resetIndexInitEpisode();
+			else {
+				this.diagnoseIndexInitFailure(true);
+				this.scheduleIndexInitRetryTimer(attemptAt);
+			}
+		} finally {
+			this.indexInitInFlight = false;
+		}
+	}
+
 	private ensureIndexInitialized(): void {
 		if (this.indexInitialized || this.detached) {
 			this.clearIndexInitRetryTimer();
@@ -1172,6 +1213,7 @@ export class TerminalTaskManager {
 		this.clearIndexInitRetryTimer();
 		this.indexInitLastAttemptAt = attemptAt;
 		this.indexInitInFlight = true;
+		this.onIndexInitializationStart?.();
 		try {
 			if (!this.refreshSnapshotsFromStore().ok) this.diagnoseIndexInitFailure();
 			// A failed or incomplete attempt leaves initialization open: escalate
@@ -1367,6 +1409,7 @@ export class TerminalTaskManager {
 	}
 
 	public async stopOwned(ownerSessionId: string): Promise<TerminalStopResult[]> {
+		this.ensureIndexInitialized();
 		const running = this.list(ownerSessionId).filter((task) => !isTerminalTaskSettled(task.status));
 		return this.stop(running.map((task) => task.id), ownerSessionId);
 	}

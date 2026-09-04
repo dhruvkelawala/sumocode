@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import initYoga from "yoga-wasm-web";
+import { resolveAsset } from "../../native/paths.js";
 import type {
 	Align,
 	Edge,
@@ -84,8 +85,10 @@ let yogaPromise: Promise<Yoga> | undefined;
  */
 export function loadYoga(): Promise<Yoga> {
 	if (!yogaPromise) {
-		const require = createRequire(import.meta.url);
-		const wasmPath = require.resolve("yoga-wasm-web/dist/yoga.wasm");
+		// Resolution seam (plan 117): native archive share/yoga.wasm, else the
+		// Node-resolved package asset. The thunk keeps require.resolve off the
+		// compiled binary, where the package path does not exist.
+		const wasmPath = resolveAsset("yoga.wasm", () => createRequire(import.meta.url).resolve("yoga-wasm-web/dist/yoga.wasm"));
 		yogaPromise = readFile(wasmPath).then((wasm) => initYoga(wasm));
 	}
 	return yogaPromise;

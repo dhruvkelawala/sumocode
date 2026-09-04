@@ -445,11 +445,17 @@ function runDoctor(parsed: ParsedLaunch): never {
 	const yogaWasm = join(NATIVE_DIR, "share/yoga.wasm");
 	check(existsSync(yogaWasm), `Yoga wasm: ${yogaWasm}`, "Yoga wasm: missing");
 	const diagPath = parsed.diagFile !== "" ? parsed.diagFile : process.env.SUMO_TUI_DIAG_FILE ?? "/tmp/sumocode-manual.jsonl";
+	const diagProbe = join(dirname(diagPath), `.sumocode-doctor-${process.pid}-${Math.random().toString(36).slice(2, 10)}`);
 	let diagWritable = false;
+	let diagProbeFd: number | undefined;
 	try {
-		diagWritable = statSync(dirname(diagPath)).isDirectory();
+		diagProbeFd = openSync(diagProbe, "wx", 0o600);
+		diagWritable = true;
 	} catch {
 		diagWritable = false;
+	} finally {
+		if (diagProbeFd !== undefined) closeSync(diagProbeFd);
+		rmSync(diagProbe, { force: true });
 	}
 	check(diagWritable, `diagnostics path writable: ${diagPath}`, `diagnostics directory not writable: ${diagPath}`);
 	if (process.stdout.isTTY) {
@@ -660,18 +666,18 @@ async function terminateUnadoptedChild(): Promise<void> {
 
 function restoreFailedReloadTerminal(): void {
 	if (process.env.SUMOCODE_RELOAD !== "1" || process.stdout.isTTY !== true) return;
+	const readyFile = process.env.SUMOCODE_RELOAD_READY_FILE;
+	if (readyFile) {
+		try {
+			if (readFileSync(readyFile, "utf8").trim() === "ready") return;
+		} catch {}
+	}
 	try {
 		process.stdin.setRawMode?.(false);
 	} catch {}
 	try {
 		process.stdout.write(RELOAD_FALLBACK_TERMINAL_CLEANUP);
 	} catch {}
-	const readyFile = process.env.SUMOCODE_RELOAD_READY_FILE;
-	if (readyFile) {
-		try {
-			writeFileSync(readyFile, "ready", { mode: 0o600 });
-		} catch {}
-	}
 }
 
 // ── debug/dry-run/runtime selection ────────────────────────────────────────
@@ -1026,9 +1032,12 @@ async function runDirectPiBranch(parsed: ParsedLaunch): Promise<void> {
 		process.env.PI_BIN = PI_BIN;
 		const code = await spawnDirectPi(args, stdinPrompt, readyFile);
 		if (code !== RELOAD_EXIT_CODE) {
+			restoreFailedReloadTerminal();
+			rmSync(readyFile, { force: true });
 			process.exitCode = code;
 			return;
 		}
+		rmSync(readyFile, { force: true });
 		// Reload: the first launch consumed its prompt; retain only flags.
 		parsed.forwardedArgs = reloadSuccessorArgs(args);
 		delete process.env.SUMOCODE_TASK_MODE;

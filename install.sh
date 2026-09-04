@@ -30,7 +30,7 @@ else
 	source_root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 fi
 
-for required in bin/sumocode bin/sumocode-pi extension/sumocode-extension.bundle.mjs share/yoga.wasm share/sumo-face.ans; do
+for required in bin/sumocode bin/sumocode-pi extension/sumocode-extension.bundle.mjs extension/sumocode-rpc-extension.bundle.mjs share/yoga.wasm share/sumo-face.ans; do
 	[ -f "${source_root}/${required}" ] || { printf >&2 '[sumocode] incomplete release: missing %s\n' "${required}"; exit 65; }
 done
 [ -x "${source_root}/bin/sumocode" ] || { printf >&2 '%s\n' '[sumocode] bin/sumocode is not executable'; exit 65; }

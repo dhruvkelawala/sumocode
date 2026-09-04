@@ -314,6 +314,22 @@ nativeDescribe("native executable contract", () => {
 		expect(spawnSync(NATIVE_PI, ["--version"], { encoding: "utf8" }).stdout.trim()).toBe("0.84.3");
 	});
 
+	it("rejects an install missing the RPC extension bundle", () => {
+		const root = tempRoot("sumocode-native-incomplete-install-");
+		for (const directory of ["bin", "extension", "share"]) mkdirSync(join(root, directory));
+		for (const file of ["bin/sumocode", "bin/sumocode-pi", "extension/sumocode-extension.bundle.mjs", "share/yoga.wasm", "share/sumo-face.ans"]) {
+			writeFileSync(join(root, file), "");
+		}
+		chmodSync(join(root, "bin/sumocode"), 0o755);
+		const installer = join(root, "install.sh");
+		writeFileSync(installer, readFileSync(join(ROOT, "install.sh")), { mode: 0o755 });
+		const result = spawnSync("sh", [installer], {
+			env: { ...process.env, SUMOCODE_INSTALL_PREFIX: join(root, "prefix") }, encoding: "utf8",
+		});
+		expect(result.status).toBe(65);
+		expect(result.stderr).toContain("extension/sumocode-rpc-extension.bundle.mjs");
+	});
+
 	for (const row of RUNTIME_SELECTION_CASES) {
 		it(`shares launcher selection: ${row.name}`, async () => {
 			let output: string;
@@ -407,6 +423,18 @@ nativeDescribe("native executable contract", () => {
 		expect(result.status).toBe(0);
 		expect(result.stdout).toContain("Event counts");
 		expect(existsSync(marker)).toBe(false);
+	});
+
+	it("doctor fails when the diagnostics directory is not writable", () => {
+		const root = tempRoot("sumocode-native-unwritable-diag-");
+		chmodSync(root, 0o555);
+		try {
+			const result = runNative(["doctor", "--diag-file", join(root, "diag.jsonl")]);
+			expect(result.status).toBe(70);
+			expect(result.stdout).toContain("diagnostics directory not writable");
+		} finally {
+			chmodSync(root, 0o700);
+		}
 	});
 
 	it("tightens a retained diagnostics file to owner-only", () => {
@@ -619,9 +647,10 @@ nativeDescribe("native executable contract", () => {
 	}, 75_000);
 
 	it("relaunches direct Pi with --continue without replaying its prompt", async () => {
-		const state = join(tempRoot("sumocode-native-reload-"), "count");
+		const root = tempRoot("sumocode-native-reload-");
+		const state = join(root, "count");
 		const pi = createExecutable("pi-reload", `#!/bin/bash\ncount=0; [ ! -f ${JSON.stringify(state)} ] || count=$(cat ${JSON.stringify(state)}); count=$((count+1)); printf '%s' "$count" > ${JSON.stringify(state)}; printf 'RUN-%s %s\\n' "$count" "$*"; [ "$count" -eq 1 ] && exit 100; exit 0\n`);
-		const session = spawnNativePty(["--no-sumo-tui", "RELOAD-ONCE-PROMPT"], { env: { PI_BIN: pi } });
+		const session = spawnNativePty(["--no-sumo-tui", "RELOAD-ONCE-PROMPT"], { env: { PI_BIN: pi, TMPDIR: root } });
 		await session.waitForOutput("RUN-2");
 		expect((await waitForExit(session)).exitCode).toBe(0);
 		const runs = session.getOutput().split(/\r?\n/).filter((line) => line.includes("RUN-"));
@@ -630,6 +659,8 @@ nativeDescribe("native executable contract", () => {
 		expect(runTwo).toContain("--continue");
 		expect(runTwo).not.toContain("RELOAD-ONCE-PROMPT");
 		expect(readFileSync(state, "utf8")).toBe("2");
+		expect(session.getOutput()).toContain(CLEANUP_SEQUENCE);
+		expect(readdirSync(root).filter((name) => name.startsWith("sumocode-reload-ready."))).toEqual([]);
 	}, 20_000);
 
 	it("reloads RPC children without nesting native host processes", async () => {

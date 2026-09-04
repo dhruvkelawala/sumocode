@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createInteractionRegistry, installSumoInteractions, type InteractionConflictDiagnostic } from "./interaction-registry.js";
+import { installSumoUiSurfaces } from "./interaction-ui-surfaces.js";
 
 function buildPiStub() {
 	return {
@@ -78,7 +79,10 @@ describe("InteractionRegistry", () => {
 		const pi = buildPiStub();
 		const diagnostics: InteractionConflictDiagnostic[] = [];
 		// SAFETY: the stub implements the on/register* surface the installer reads.
-		const snapshot = installSumoInteractions(pi as never, { reporter: (next) => diagnostics.push(...next) });
+		const snapshot = installSumoInteractions(pi as never, {
+			reporter: (next) => diagnostics.push(...next),
+			installUiSurfaces: installSumoUiSurfaces,
+		});
 
 		expect(diagnostics).toEqual([]);
 		expect(snapshot.diagnostics).toEqual([]);

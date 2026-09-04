@@ -78,11 +78,13 @@ Never edit `~/.pi/agent/git/github.com/dhruvkelawala/sumocode/` — that is the 
 
 ## Architecture
 
-### Extension entry point
+### Extension entry points
 
-`src/extension.ts` exports a default `(pi: ExtensionAPI) => void` that wires every feature module via its `installX(pi)` / `registerXCommand(pi)` function. The order in that file is the load order — keep it intentional. `package.json#pi.extensions` lists what Pi loads.
+`src/extension.ts` is the canonical entry. It exports a default `(pi: ExtensionAPI) => void` that wires every feature module via its `installX(pi)` / `registerXCommand(pi)` function. The order in that file is the load order — keep it intentional. `package.json#pi.extensions` lists what Pi loads.
 
-`shouldNoopDuplicateInstalledExtension()` runs first: if the installed-from-git copy is loading while the user is inside a SumoCode dev tree, the installed copy bails so the dev tree wins. Do not break this — it is how `pi -e .` coexists with the always-installed copy.
+`src/rpc-child-extension.ts` is the source-mode RPC child entry. It installs the canonical entry's headless profile without importing the canonical entry and its eagerly loaded UI surfaces. Commands shared with the retained host may still import UI-backed handlers. `src/sumo-tui/rpc/spawn-child.mjs` selects it for forced source mode; `src/extension-entry.ts` selects it when a launcher-owned RPC child falls back from a missing or stale bundle. Keep the shared profile in `src/extension-core.ts` and the source entry shallow.
+
+In the canonical entry, `shouldNoopDuplicateInstalledExtension()` runs before the process latch and feature installation: if the installed-from-git copy is loading while the user is inside a SumoCode dev tree, the installed copy bails so the dev tree wins. The launcher-owned RPC source entry intentionally omits that installed-copy guard; both entries share the process latch. Preserve this split so `pi -e .` coexists with the always-installed copy.
 
 ### Two rendering paths
 

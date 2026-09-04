@@ -1,3 +1,21 @@
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
+
+export type RealpathFn = (path: string) => string;
+
+/** Follow symlinks when possible; keep nonexistent test paths comparable. */
+export function canonicalizeExtensionPath(path: string, realpath: RealpathFn = realpathSync): string {
+	try {
+		return realpath(path);
+	} catch {
+		return resolve(path);
+	}
+}
+
+export function sourceExtensionFile(rpcChild: boolean, launcherOwned: boolean): "extension.ts" | "rpc-child-extension.ts" {
+	return rpcChild && launcherOwned ? "rpc-child-extension.ts" : "extension.ts";
+}
+
 export interface ExtensionEntryImportOptions<T> {
 	readonly bundlePath: string;
 	readonly sourcePath: string;

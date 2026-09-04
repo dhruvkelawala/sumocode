@@ -14,6 +14,7 @@ import sumocode, {
 	shouldNoopDuplicateInstalledExtension,
 	shouldNoopHelperSubprocess,
 } from "./extension.js";
+import rpcChildSumocode from "./rpc-child-extension.js";
 
 type Handler = (...args: unknown[]) => void;
 
@@ -347,6 +348,49 @@ describe("rpc child profile", () => {
 		expect(isRpcChildProfile({ env: { SUMOCODE_RPC_CHILD: "1" } })).toBe(true);
 		expect(isRpcChildProfile({ env: {} })).toBe(false);
 		expect(isRpcChildProfile({ env: { SUMOCODE_RPC_CHILD: "0" } })).toBe(false);
+	});
+
+	it("loads the same headless profile through the source-only entry", async () => {
+		const previousRpc = process.env.SUMOCODE_RPC_CHILD;
+		const previousTask = process.env.SUMOCODE_NATIVE_TASK;
+		process.env.SUMOCODE_RPC_CHILD = "1";
+		process.env.SUMOCODE_NATIVE_TASK = "1";
+		try {
+			const { pi, handlers } = buildPiStub();
+			// SAFETY: the pi double supplies the register*/on surfaces the source entry installs on.
+			rpcChildSumocode(pi as never);
+
+			const commandNames = pi.registerCommand.mock.calls.map((call) => call[0]);
+			// SAFETY: registerTool records definitions carrying a name field; the cast reads only that field.
+			const toolNames = pi.registerTool.mock.calls.map((call) => (call[0] as { name: string }).name);
+			expect(commandNames).toContain("sumo:review");
+			expect(toolNames).toEqual(expect.arrayContaining(["task", "question", "terminal_start", "subagent_spawn"]));
+
+			const ctx = { ...buildCtxStub(), mode: "rpc" };
+			for (const handler of handlers.get("session_start") ?? []) {
+				// SAFETY: the ctx double supplies the UI surface the session_start handlers read.
+				await handler({ type: "session_start" }, ctx as never);
+			}
+			expect(ctx.ui.setFooter).not.toHaveBeenCalled();
+			expect(ctx.ui.setHeader).not.toHaveBeenCalled();
+		} finally {
+			if (previousRpc === undefined) delete process.env.SUMOCODE_RPC_CHILD;
+			else process.env.SUMOCODE_RPC_CHILD = previousRpc;
+			if (previousTask === undefined) delete process.env.SUMOCODE_NATIVE_TASK;
+			else process.env.SUMOCODE_NATIVE_TASK = previousTask;
+		}
+	});
+
+	it("keeps background helper subprocesses inert through the source-only entry", () => {
+		process.env.SUMOCODE_BG_CHILD = "1";
+		const { pi } = buildPiStub();
+		// SAFETY: the pi double supplies the register*/on surfaces the source entry would install on.
+		rpcChildSumocode(pi as never);
+
+		expect(pi.registerCommand).not.toHaveBeenCalled();
+		expect(pi.registerTool).not.toHaveBeenCalled();
+		expect(pi.on).not.toHaveBeenCalled();
+		expect(isSumocodeAlreadyInstalledInProcess(pi)).toBe(false);
 	});
 
 	it("keeps tools and commands and skips retained chrome", async () => {

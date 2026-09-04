@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -57,6 +57,14 @@ function writeBootstrapDiagnostic(message) {
 	// keeps these diagnostics; reload failures still surface through the thrown
 	// error after the fallback restores the terminal.
 	if (!isReload) process.stderr.write(message);
+}
+
+function writeStartupMark(event, fields = {}) {
+	const file = process.env.SUMO_TUI_DIAG_FILE;
+	if (!file) return;
+	try {
+		appendFileSync(file, `${JSON.stringify({ ts: Date.now(), event, ...fields })}\n`, { encoding: "utf8", mode: 0o600 });
+	} catch {}
 }
 
 const PRE_ADOPTION_KILL_GRACE_MS = 250;
@@ -210,6 +218,7 @@ if (useBundle && bundleExists && !forceBundle && !bundleFresh) {
 }
 
 let mod;
+let hostMode = "source";
 try {
 	if (forceBundle && !bundleExists) {
 		throw new Error(`[sumocode] forced host bundle is missing: ${bundlePath}`);
@@ -230,6 +239,7 @@ try {
 				throw new Error("host bundle changed during import");
 			}
 			mod = bundledModule;
+			hostMode = "bundle";
 		} catch (error) {
 			if (forceBundle) {
 				throw new Error(`[sumocode] forced host bundle failed to import: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
@@ -246,6 +256,7 @@ try {
 	restoreFailedReloadTerminal();
 	throw error;
 }
+writeStartupMark("host_import_ready", { mode: hostMode });
 
 // Integration-only seam that widens the otherwise sub-millisecond import-tail
 // window so a PTY signal can land between import and adoption; inert in prod.

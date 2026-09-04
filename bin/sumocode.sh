@@ -178,10 +178,14 @@ DIAGNOSTICS EVENTS
   Debug mode may record events such as:
       process_preload_start  Node preload + argv baseline for startup traces
       process_module_load_*  slow module imports + aggregate module-load summary
+      host_import_ready      selected host source/bundle imported
+      rpc_child_ready        first correlated RPC response received
+      terminal_index_*       initial terminal-store index phase
       runtime_start          process, cwd, branch, commit, terminal size
       boot_screen_frame      first retained splash/boot frame written to terminal
       editor_ready           first retained frame painted; input can be edited
       input_ready            deprecated one-release alias for editor_ready
+      hydration_committed    authoritative initial state/transcript applied
       app_ready              deprecated historical chrome-ready alias
       stable_chrome_ready    owned-shell render with the real session UI
       command_ready          hydration settled; commands can dispatch

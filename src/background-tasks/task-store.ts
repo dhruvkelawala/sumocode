@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
+import { performance } from "node:perf_hooks";
 import {
 	chmodSync,
 	closeSync,
@@ -30,12 +31,18 @@ import {
 	type TerminalTaskStatus,
 } from "./task-types.js";
 
-export type TerminalTaskStoreDiagnosticKind = "corrupt" | "legacy" | "duplicate" | "io";
+export type TerminalTaskStoreDiagnosticKind = "corrupt" | "legacy" | "duplicate" | "io" | "index-scan";
 
 export interface TerminalTaskStoreDiagnostic {
 	readonly kind: TerminalTaskStoreDiagnosticKind;
 	readonly path: string;
 	readonly message: string;
+	/** Only on "index-scan": high-resolution wall duration of one full validated scan. */
+	readonly durationMs?: number;
+	/** Only on "index-scan": whether the scan freshly read every candidate. */
+	readonly complete?: boolean;
+	/** Only on "index-scan": snapshots produced by the scan. */
+	readonly snapshotCount?: number;
 }
 
 export type TerminalTaskStoreReadKind = "full-scan" | "metadata";
@@ -512,6 +519,20 @@ export class TerminalTaskStore {
 
 	/** Rebuild every derived path/selection bucket from one validated disk pass. */
 	public refreshIndex(): TerminalTaskIndexRefreshResult {
+		const scanStartedAt = performance.now();
+		const result = this.refreshIndexScanning();
+		this.onDiagnostic?.({
+			kind: "index-scan",
+			path: this.rootDir,
+			message: "terminal index scan",
+			durationMs: Math.round((performance.now() - scanStartedAt) * 100) / 100,
+			complete: result.complete,
+			snapshotCount: result.snapshots.length,
+		});
+		return result;
+	}
+
+	private refreshIndexScanning(): TerminalTaskIndexRefreshResult {
 		this.onRead?.("full-scan");
 		let entries: Dirent[];
 		try {

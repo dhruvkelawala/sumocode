@@ -64,6 +64,8 @@ export interface SumoRpcClientOptions {
 	readonly env?: NodeJS.ProcessEnv;
 	readonly requestTimeoutMs?: number;
 	readonly onProtocolError?: RpcProtocolErrorHandler;
+	/** Called once after the first correlated RPC response proves child readiness. */
+	readonly onRpcReady?: () => void;
 }
 
 const MAX_CONSECUTIVE_PROTOCOL_ERRORS = 3;
@@ -146,6 +148,7 @@ export class SumoRpcClient {
 	private readonly exitListeners = new Set<RpcExitListener>();
 	private uiRequestHandler: RpcUiRequestHandler | undefined;
 	private exitNotified = false;
+	private rpcReadyNotified = false;
 
 	public constructor(private readonly options: SumoRpcClientOptions) {}
 
@@ -190,6 +193,7 @@ export class SumoRpcClient {
 		if (this.child) throw new Error("RPC child already started");
 		this.exited = false;
 		this.exitNotified = false;
+		this.rpcReadyNotified = false;
 		const spawnChild = this.options.spawnFn ?? spawn;
 		const child = this.options.preSpawnedChild ?? spawnChild(this.options.command, [...this.options.args], {
 			cwd: this.options.cwd,
@@ -394,6 +398,10 @@ export class SumoRpcClient {
 			if (!pending) return;
 			this.pending.delete(parsed.id!);
 			clearTimeout(pending.timeout);
+			if (!this.rpcReadyNotified) {
+				this.rpcReadyNotified = true;
+				try { this.options.onRpcReady?.(); } catch {}
+			}
 			pending.resolve(parsed);
 			return;
 		}

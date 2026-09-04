@@ -3,9 +3,19 @@ const Module = require('node:module');
 const { performance } = require('node:perf_hooks');
 
 const diagFile = process.env.SUMO_TUI_DIAG_FILE;
-const entrypoint = process.argv[1] || "";
+// Windows argv paths use backslashes; normalize before role matching.
+const entrypoint = (process.argv[1] || "").replace(/\\/g, "/");
+const role = entrypoint.endsWith("/sumo-rpc-host.js") ? "host" : "rpc-child";
+const publicStartupDiagnostics = process.env.SUMOCODE_PUBLIC_STARTUP_DIAGNOSTICS === "1";
 const shouldInstrument = entrypoint.includes("pi-coding-agent") || entrypoint.endsWith("/pi") || entrypoint.endsWith("/pi.js");
-if (diagFile && shouldInstrument && !global.__sumocodeStartupDiagnosticsInstalled) {
+
+if (diagFile && publicStartupDiagnostics) {
+	if (role === "host") {
+		try {
+			appendFileSync(diagFile, `${JSON.stringify({ ts: Date.now(), event: "process_preload_start", role })}\n`, { encoding: "utf8", mode: 0o600 });
+		} catch {}
+	}
+} else if (diagFile && shouldInstrument && !global.__sumocodeStartupDiagnosticsInstalled) {
 	global.__sumocodeStartupDiagnosticsInstalled = true;
 	const startedAt = performance.now();
 	let lastMark = startedAt;
@@ -30,7 +40,7 @@ if (diagFile && shouldInstrument && !global.__sumocodeStartupDiagnosticsInstalle
 		} catch {}
 	}
 
-	log('process_preload_start', { pid: process.pid, cwd: process.cwd(), argv: process.argv.slice(0, 6) });
+	log('process_preload_start', { role, pid: process.pid, cwd: process.cwd(), argv: process.argv.slice(0, 6) });
 
 	Module._load = function sumocodeInstrumentedModuleLoad(request, parent, isMain) {
 		const start = performance.now();

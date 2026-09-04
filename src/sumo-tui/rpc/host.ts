@@ -971,6 +971,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		cwd: spawnPlan.cwd,
 		env: spawnPlan.env,
 		preSpawnedChild: options.preSpawnedChild,
+		onRpcReady: () => logDiagnostic("rpc_child_ready"),
 	});
 	let runtime: RpcHostRuntime | undefined;
 	// The B9 diffing chat sink: `TranscriptController` (owned by
@@ -1942,6 +1943,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			});
 		}
 		deferActivityRuntimeUpdate = false;
+		logDiagnostic("hydration_committed", { surface: "rpc_host" });
 		// A reload predecessor deliberately leaves its retained frame and terminal
 		// modes in place. Hydrate off-screen, then atomically replace that frame;
 		// never flash the cold-start splash for a session we already know exists.

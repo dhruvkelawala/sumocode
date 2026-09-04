@@ -25,6 +25,7 @@ import { installWorkingIndicator } from "./working-indicator.js";
 import { installCompactionIndicator } from "./compaction-indicator.js";
 import { installFastMode } from "./fast-mode.js";
 import { installBackgroundTasks, installTerminalTools } from "./background-tasks/index.js";
+import type { TerminalTaskManagerOptions } from "./background-tasks/task-manager.js";
 import { installActivityManagerBridge } from "./activity/manager-bridge.js";
 import { installSubagents } from "./subagents/index.js";
 import { installTaskModeAutoExit } from "./task-mode.js";
@@ -211,7 +212,26 @@ export function isRpcChildProfile(options: TaskModeOptions = {}): boolean {
 }
 
 function installOrchestrationTools(pi: ExtensionAPI) {
-	const terminalTaskManager = installBackgroundTasks(pi);
+	const rpcChild = isRpcChildProfile();
+	// The store owns the scan boundary and measures it with performance.now();
+	// the marks are emitted from its index-scan diagnostic so the targeted
+	// metric isolates the scan itself (not manager construction or extension
+	// wiring) and keeps sub-millisecond resolution.
+	const managerOptions: TerminalTaskManagerOptions | undefined = rpcChild
+		? {
+				onDiagnostic: (diagnostic) => {
+					// An incomplete scan (transient read failure) is a degraded index:
+					// emit nothing so the harness observes missing events and fails the
+					// sample explicitly instead of timing a partial scan as ready.
+					if (diagnostic.kind !== "index-scan" || diagnostic.complete !== true) return;
+					// snapshotCount lets the harness verify every fixture record was
+					// accepted (complete scans still skip corrupt/duplicate records).
+					logDiagnostic("terminal_index_start", {});
+					logDiagnostic("terminal_index_ready", { durationMs: diagnostic.durationMs, snapshotCount: diagnostic.snapshotCount });
+				},
+			}
+		: undefined;
+	const terminalTaskManager = installBackgroundTasks(pi, managerOptions);
 	installTerminalTools(pi, terminalTaskManager);
 	const subagentManager = installSubagents(pi);
 	const activityBridge = installActivityManagerBridge(pi, terminalTaskManager, subagentManager);

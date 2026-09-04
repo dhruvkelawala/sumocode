@@ -197,6 +197,33 @@ describe("SumoRpcClient", () => {
 		expect(client.pid).toBeUndefined();
 	});
 
+	it("reports RPC readiness only after the first correlated response", async () => {
+		const child = new FakeRpcChild();
+		const onRpcReady = vi.fn();
+		const client = new SumoRpcClient({
+			command: "unused",
+			args: [],
+			preSpawnedChild: asPreSpawnedChild(child),
+			onRpcReady,
+		});
+		await client.start();
+		expect(onRpcReady).not.toHaveBeenCalled();
+
+		const response = client.send({ type: "get_state" });
+		const request: { id: string } = JSON.parse(String(child.stdin.write.mock.calls.at(-1)?.[0]));
+		child.stdout.emit("data", `${JSON.stringify({
+			type: "response",
+			id: request.id,
+			command: "get_state",
+			success: true,
+			data: {},
+		})}\n`);
+
+		await expect(response).resolves.toMatchObject({ success: true });
+		expect(onRpcReady).toHaveBeenCalledOnce();
+		await client.stop();
+	});
+
 	it("correlates JSONL responses by request id while streaming events", async () => {
 		const script = `
 			const readline = require("node:readline");

@@ -6,17 +6,21 @@ import { describe, expect, it } from "vitest";
 
 const checker = join(import.meta.dirname, "check-dependency-audit.mjs");
 
-function runChecker(audit, records, schemaVersion = 1) {
+function runCheckerPayload(audit, records, schemaVersion = 1) {
 	const directory = mkdtempSync(join(tmpdir(), "sumocode-audit-test-"));
 	const auditPath = join(directory, "audit.json");
 	const policyPath = join(directory, "policy.json");
-	writeFileSync(auditPath, JSON.stringify({ advisories: audit }));
+	writeFileSync(auditPath, JSON.stringify(audit));
 	writeFileSync(policyPath, JSON.stringify({ schemaVersion, records }));
 	const result = spawnSync(process.execPath, [checker, "--audit", auditPath, "--policy", policyPath], {
 		encoding: "utf8",
 	});
 	rmSync(directory, { recursive: true, force: true });
 	return result;
+}
+
+function runChecker(advisories, records, schemaVersion = 1) {
+	return runCheckerPayload({ advisories }, records, schemaVersion);
 }
 
 function advisory(id, severity = "high", path = ".>@earendil-works/pi-ai>example") {
@@ -57,6 +61,12 @@ describe("dependency audit policy", () => {
 	it("runs in the required CI lane", () => {
 		const workflow = readFileSync(join(import.meta.dirname, "../.github/workflows/ci.yml"), "utf8");
 		expect(workflow).toContain("run: node scripts/check-dependency-audit.mjs");
+	});
+
+	it("rejects registry error payloads", () => {
+		const result = runCheckerPayload({ error: { code: "E403", summary: "forbidden" } }, []);
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("pnpm audit error: forbidden");
 	});
 
 	it("rejects unknown policy schemas", () => {

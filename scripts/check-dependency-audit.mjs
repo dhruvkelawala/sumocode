@@ -22,6 +22,13 @@ function readAudit() {
 
 try {
 	const audit = readAudit();
+	if (audit.error) {
+		const message = audit.error.summary ?? audit.error.message ?? audit.error.code ?? String(audit.error);
+		throw new Error(`pnpm audit error: ${message}`);
+	}
+	if (audit.advisories?.constructor !== Object) {
+		throw new Error("pnpm audit response is missing advisories");
+	}
 	const policyPath = argument("--policy", join(import.meta.dirname, "dependency-audit-policy.json"));
 	const policy = JSON.parse(readFileSync(policyPath, "utf8"));
 	if (policy.schemaVersion !== 1) throw new Error(`unsupported policy schema ${policy.schemaVersion}`);

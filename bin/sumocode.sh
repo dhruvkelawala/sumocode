@@ -801,7 +801,7 @@ args_request_noninteractive_pi() {
 #
 # OPTION-CONSUMPTION CLASS TABLE -- mirrors
 # node_modules/@earendil-works/pi-coding-agent/dist/cli/args.js parseArgs()
-# (pi-coding-agent 0.84.3) EXACTLY, so that this wrapper skips a flag's value
+# (pi-coding-agent 0.84.4) EXACTLY, so that this wrapper skips a flag's value
 # together with the flag itself instead of mistaking the value for the first
 # actual message. Every flag/value token stays in the forwarded argv; only
 # the first real positional message is extracted. This is the same reason the
@@ -811,7 +811,7 @@ args_request_noninteractive_pi() {
 # flags need a table here, since extension flags reach Pi through args.js's
 # generic unknown-long-option branch, which is mirrored as class 6 below.
 #
-# PI-BUMP NOTE (pinned: pi-coding-agent 0.84.3, dist/cli/args.js): if
+# PI-BUMP NOTE (pinned: pi-coding-agent 0.84.4, dist/cli/args.js): if
 # @earendil-works/pi-coding-agent is upgraded, re-read parseArgs() in the NEW
 # dist/cli/args.js and re-diff every consumption class below (`git diff` the
 # file, or just re-read it) -- any newly added value-taking flag, changed

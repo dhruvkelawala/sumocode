@@ -1,0 +1,123 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { describe, expect, it } from "vitest";
+
+const checker = join(import.meta.dirname, "check-dependency-audit.mjs");
+
+function runCheckerPayload(audit, records, schemaVersion = 1) {
+	const directory = mkdtempSync(join(tmpdir(), "sumocode-audit-test-"));
+	const auditPath = join(directory, "audit.json");
+	const policyPath = join(directory, "policy.json");
+	writeFileSync(auditPath, JSON.stringify(audit));
+	writeFileSync(policyPath, JSON.stringify({ schemaVersion, records }));
+	const result = spawnSync(process.execPath, [checker, "--audit", auditPath, "--policy", policyPath], {
+		encoding: "utf8",
+	});
+	rmSync(directory, { recursive: true, force: true });
+	return result;
+}
+
+function runChecker(advisories, records, schemaVersion = 1) {
+	return runCheckerPayload({ advisories }, records, schemaVersion);
+}
+
+function advisory(id, severity = "high", paths = [".>@earendil-works/pi-ai>example"]) {
+	return {
+		id,
+		module_name: "example",
+		severity,
+		patched_versions: ">=1.0.1",
+		findings: [{ version: "1.0.0", paths }],
+	};
+}
+
+function record(advisory = 101) {
+	return {
+		advisory,
+		package: "example",
+		paths: [".>@earendil-works/pi-ai>example"],
+		upstream: "@earendil-works/pi-ai",
+		fixedVersion: ">=1.0.1",
+		scope: "consumer-runtime",
+		status: "upstream-blocked",
+		owner: "maintainer",
+		expires: "2999-01-01",
+	};
+}
+
+describe("dependency audit policy", () => {
+	it("enforces the aligned fixed Pi minimum", () => {
+		const packageJson = JSON.parse(readFileSync(join(import.meta.dirname, "../package.json"), "utf8"));
+		for (const name of ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"]) {
+			expect(packageJson.peerDependencies[name]).toBe("~0.84.4");
+			expect(packageJson.devDependencies[name]).toBe("0.84.4");
+		}
+		expect(readFileSync(join(import.meta.dirname, "build-native.mjs"), "utf8")).toContain('const PI_PIN = "0.84.4"');
+		expect(readFileSync(join(import.meta.dirname, "smoke-pi-versions.sh"), "utf8")).toContain('VERSIONS=("0.84.4")');
+	});
+
+	it("runs in the required CI lane", () => {
+		const workflow = readFileSync(join(import.meta.dirname, "../.github/workflows/ci.yml"), "utf8");
+		expect(workflow).toContain("run: node scripts/check-dependency-audit.mjs");
+	});
+
+	it("rejects registry error payloads", () => {
+		const result = runCheckerPayload({ error: { code: "E403", summary: "forbidden" } }, []);
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("pnpm audit error: forbidden");
+	});
+
+	it("rejects unknown policy schemas", () => {
+		const result = runChecker({}, [], 2);
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("unsupported policy schema 2");
+	});
+
+	it("requires every high or critical advisory to be explicitly upstream-blocked", () => {
+		const finding = advisory(101);
+		const unclassified = runChecker({ 101: finding }, []);
+		expect(unclassified.status).toBe(1);
+		expect(unclassified.stderr).toContain("unclassified high advisory 101");
+
+		const classified = runChecker({ 101: finding }, [record()]);
+		expect(classified.status).toBe(0);
+		expect(classified.stdout).toContain("consumer-runtime upstream-blocked: 1");
+		expect(classified.stdout).toContain("local-development high/critical: 0");
+	});
+
+	it("matches every dependency chain for a classified advisory", () => {
+		const paths = [
+			".>@earendil-works/pi-ai>example",
+			".>@earendil-works/pi-coding-agent>@earendil-works/pi-ai>example",
+		];
+		const result = runChecker({ 101: advisory(101, "high", paths) }, [{ ...record(), paths: [...paths].reverse() }]);
+		expect(result.status).toBe(0);
+	});
+
+	it.each([
+		["stale", {}, [record()], "stale policy advisory 101"],
+		["expired", { 101: advisory(101) }, [{ ...record(), expires: "2000-01-01" }], "expired policy advisory 101"],
+		["unremediated", { 101: advisory(101) }, [{ ...record(), status: "accepted-risk" }], "unremediated high advisory 101"],
+	])("rejects %s policy records", (_name, audit, records, message) => {
+		const result = runChecker(audit, records);
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain(message);
+	});
+
+	it.each([
+		["ownerless", advisory(101), [{ ...record(), owner: "" }], "missing owner for advisory 101"],
+		["invalid expiry", advisory(101), [{ ...record(), expires: "later" }], "invalid expiry for advisory 101"],
+		["wrong package", advisory(101), [{ ...record(), package: "other" }], "package mismatch for advisory 101"],
+		["wrong fixed version", advisory(101), [{ ...record(), fixedVersion: ">=2.0.0" }], "fixed version mismatch for advisory 101"],
+		["wrong upstream", advisory(101), [{ ...record(), upstream: "@earendil-works/pi-tui" }], "upstream mismatch for advisory 101"],
+		["missing chain", advisory(101), [{ ...record(), paths: [".>@earendil-works/pi-ai>other"] }], "dependency chain mismatch for advisory 101"],
+		["local path", advisory(101, "high", [".>vitest>vite"]), [record()], "non-consumer path for advisory 101"],
+		["duplicate", advisory(101), [record(), record()], "duplicate policy advisory 101"],
+	])("rejects %s upstream-blocked records", (_name, finding, records, message) => {
+		const result = runChecker({ 101: finding }, records);
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain(message);
+	});
+});

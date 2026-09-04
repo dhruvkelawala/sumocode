@@ -313,7 +313,7 @@ nativeDescribe("native executable contract", () => {
 		expect(readFileSync(NATIVE_PI).includes("register-bedrock")).toBe(false);
 		expect(readFileSync(join(ROOT, "node_modules/@earendil-works/pi-coding-agent/dist/bun/cli.js"), "utf8")).toContain('import("./register-bedrock.js")');
 		expect(runNative(["--version"]).stdout).toContain(`sumocode ${PACKAGE_VERSION}`);
-		expect(spawnSync(NATIVE_PI, ["--version"], { encoding: "utf8" }).stdout.trim()).toBe("0.84.3");
+		expect(spawnSync(NATIVE_PI, ["--version"], { encoding: "utf8" }).stdout.trim()).toBe("0.84.4");
 	});
 
 	it("forwards Pi option values that collide with launcher subcommands", () => {

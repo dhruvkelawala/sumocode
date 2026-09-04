@@ -22,7 +22,7 @@ const root = resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
 
 const BUN_PIN = readFileSync(resolve(root, ".bun-version"), "utf8").trim();
-const PI_PIN = "0.84.3";
+const PI_PIN = "0.84.4";
 const { version } = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
 const BEDROCK_ENTRY_BLOCK = 'globalThis.__sumocodeStartupMark("bedrock_import_start");\nawait import("./register-bedrock.js");\nglobalThis.__sumocodeStartupMark("after_bedrock_import");\n';
 

@@ -261,7 +261,7 @@ describe("spawnPiPty agent state isolation", () => {
 
 /**
  * Plan 096 fixture table: one row per option-consumption class pinned to
- * @earendil-works/pi-coding-agent 0.84.3 `dist/cli/args.js` `parseArgs()`.
+ * @earendil-works/pi-coding-agent 0.84.4 `dist/cli/args.js` `parseArgs()`.
  * Each row runs `bin/sumocode.sh --dry-run <args>` under a real PTY so the
  * launcher selects its RPC path and exercises `extract_first_positional`
  * (the execFile-based dry-run tests above are non-TTY and never extract).

@@ -110,6 +110,27 @@ JSON
 			exit 1
 		fi
 
+		cat >nested-provenance-probe.mjs <<'NODE'
+import { writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { join } from "node:path";
+const [sourceRoot, installedRoot, output, version, jitiEntry] = process.argv.slice(2);
+const { createJiti } = createRequire(import.meta.url)(jitiEntry);
+const parent = { pi: `/parent-selected/pi-${version}`, sumocode: "/parent-selected/sumocode" };
+const pathGlobal = { pi: "/path-global/pi", sumocode: "/path-global/sumocode" };
+async function observe(root) {
+	const jiti = createJiti(import.meta.url, { moduleCache: false, tryNative: false });
+	const { resolveExecutableProvenance } = await jiti.import(join(root, "src/executable-provenance.ts"));
+	return {
+		inherited: resolveExecutableProvenance({ env: { PI_BIN: parent.pi, SUMOCODE_LAUNCHER: parent.sumocode } }),
+		fallback: resolveExecutableProvenance({ env: { PATH: "/path-global" } }),
+	};
+}
+writeFileSync(output, JSON.stringify({ parent, pathGlobal, source: await observe(sourceRoot), installed: await observe(installedRoot) }));
+NODE
+		node nested-provenance-probe.mjs "${ROOT_DIR}" "${SUMO_ROOT}" nested-provenance.json "${VERSION}" "$(node -p "require.resolve('jiti')")"
+		node "${CONTRACT_CHECKER}" --check-provenance nested-provenance.json
+
 		# Compile production source against this candidate's declarations so request
 		# fields and consumed response payloads are checked, not only discriminants.
 		node --input-type=commonjs - \

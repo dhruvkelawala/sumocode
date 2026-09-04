@@ -353,10 +353,10 @@ describe("terminal completion delivery recovery", () => {
 			SUMOCODE_TEST_TERMINAL_HOLD: "1",
 			SUMOCODE_TEST_TERMINAL_CRASH_AFTER_START: "1",
 		});
-		const startRequest = first.request("prompt", { message: "/terminal-recovery-start wake" });
+		const startRequest = first.request("prompt", { message: "/terminal-recovery-start wake" }).catch(() => undefined);
 		await waitForMarker(paths, "started.json");
 		await first.waitForExit();
-		await startRequest.catch(() => undefined);
+		await startRequest;
 		const { id } = readMarker<StartMarker>(paths, "started.json");
 		expect(readSnapshot(paths, id)).toMatchObject({ ownerSessionId: SESSION_A, status: "running", completionPolicy: "wake" });
 

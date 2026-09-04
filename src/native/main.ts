@@ -21,7 +21,7 @@ declare const __SUMOCODE_VERSION__: string | undefined;
 
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, openSync, realpathSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { buildChildSpawnPlan } from "../sumo-tui/rpc/spawn-child.mjs";
 
 const RELOAD_EXIT_CODE = 100;
@@ -443,18 +443,19 @@ function runDoctor(parsed: ParsedLaunch): never {
 	process.exit(70);
 }
 
-function runDiag(file: string): void {
+async function runDiag(file: string): Promise<never> {
 	// diag-summary.mjs reads process.argv[2] at module evaluation, prints the
 	// summary, and (unlike the missing-file path) does not exit by itself.
 	process.argv = [process.argv[0]!, "diag-summary", file];
-	// SAFETY: this literal cast only suppresses missing declarations for the
-	// side-effect-only .mjs summary; Bun resolves and embeds the literal module.
-	void import("../../scripts/diag-summary.mjs" as string)
-		.then(() => process.exit(process.exitCode ?? 0))
-		.catch((error) => {
-			process.stderr.write(`[sumocode] diag failed: ${error instanceof Error ? error.message : String(error)}\n`);
-			process.exit(1);
-		});
+	try {
+		// SAFETY: this literal cast only suppresses missing declarations for the
+		// side-effect-only .mjs summary; Bun resolves and embeds the literal module.
+		await import("../../scripts/diag-summary.mjs" as string);
+		process.exit(process.exitCode ?? 0);
+	} catch (error) {
+		process.stderr.write(`[sumocode] diag failed: ${error instanceof Error ? error.message : String(error)}\n`);
+		process.exit(1);
+	}
 }
 
 // ── direct-Pi + reload plumbing (launcher loop) ────────────────────────────
@@ -732,6 +733,7 @@ function writeDryRun(parsed: ParsedLaunch, useRpcHost: boolean): never {
 	process.stdout.write(`sumocode dry run
 PI_BIN=${PI_BIN}
 ROOT_DIR=${NATIVE_DIR}
+PROJECT_CWD=${process.cwd()}
 SUMO_TUI=${process.env.SUMO_TUI ?? ""}
 SUMO_RPC=${process.env.SUMO_RPC ?? ""}
 SUMO_TUI_DIAG_FILE=${process.env.SUMO_TUI_DIAG_FILE ?? ""}
@@ -753,10 +755,32 @@ function shellQuote(value: string): string {
 let currentForwardedArgs: readonly string[] = [];
 let reloadRespawned = false;
 
+function stripOneShotMessages(forwarded: readonly string[]): string[] {
+	const kept = [...forwarded];
+	for (let i = 0; i < kept.length;) {
+		const arg = kept[i]!;
+		if (arg.startsWith("--print=") || arg.startsWith("-p=")) {
+			kept.splice(i, 1);
+			continue;
+		}
+		if (arg === "--print" || arg === "-p") {
+			const value = kept[i + 1];
+			const consumesValue = value !== undefined && !value.startsWith("@") && (!value.startsWith("-") || value.startsWith("---"));
+			kept.splice(i, consumesValue ? 2 : 1);
+			continue;
+		}
+		i += 1;
+	}
+	for (;;) {
+		const index = firstPositionalIndex(kept);
+		if (index < 0) return kept;
+		kept.splice(index, 1);
+	}
+}
+
 function reloadSuccessorArgs(forwarded: readonly string[]): string[] {
-	// Strip one-shot pickers, inject --continue; never re-submit the kickoff
-	// prompt (the transport env is cleared for the successor).
-	const kept = forwarded.filter((arg) => arg !== "--resume" && arg !== "-r");
+	// Strip one-shot pickers and messages, then resume the existing session.
+	const kept = stripOneShotMessages(forwarded).filter((arg) => arg !== "--resume" && arg !== "-r");
 	const haveContinue = kept.some((arg) => arg === "--continue" || arg === "-c" || arg === "--no-session");
 	return haveContinue ? kept : ["--continue", ...kept];
 }
@@ -793,6 +817,21 @@ function installReloadRespawnHandler(): void {
 
 // ── main launcher flow ─────────────────────────────────────────────────────
 
+function enterProjectDirectory(args: string[]): void {
+	const index = firstPositionalIndex(args);
+	if (index < 0) return;
+	const candidate = resolve(process.cwd(), args[index]!);
+	try {
+		if (!statSync(candidate).isDirectory()) return;
+		const projectCwd = realpathSync(candidate);
+		process.chdir(projectCwd);
+		args.splice(index, 1);
+		process.env.SUMOCODE_PROJECT_CWD = projectCwd;
+	} catch {
+		// A non-directory positional remains a Pi prompt.
+	}
+}
+
 async function launcherFlow(): Promise<void> {
 	const parsed = parseLauncherArgv(process.argv.slice(2));
 
@@ -807,7 +846,8 @@ async function launcherFlow(): Promise<void> {
 	applyDebugMode(parsed);
 
 	if (parsed.command === "doctor") runDoctor(parsed);
-	if (parsed.command === "diag") runDiag(parsed.forwardedArgs[0] ?? "/tmp/sumocode-manual.jsonl");
+	if (parsed.command === "diag") await runDiag(parsed.forwardedArgs[0] ?? "/tmp/sumocode-manual.jsonl");
+	if (parsed.command === "run") enterProjectDirectory(parsed.forwardedArgs);
 
 	const useRpcHost = !parsed.forceDirectPi
 		&& process.stdout.isTTY === true
@@ -983,8 +1023,8 @@ async function runDirectPiBranch(parsed: ParsedLaunch): Promise<void> {
 			process.exitCode = code;
 			return;
 		}
-		// Reload: strip one-shot pickers, inject --continue.
-		parsed.forwardedArgs = reloadSuccessorArgs(parsed.forwardedArgs);
+		// Reload: the first launch consumed its prompt; retain only flags.
+		parsed.forwardedArgs = reloadSuccessorArgs(args);
 		delete process.env.SUMOCODE_TASK_MODE;
 		process.env.SUMOCODE_RELOAD = "1";
 	}

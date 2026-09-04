@@ -358,6 +358,28 @@ nativeDescribe("native executable contract", () => {
 		}, 30_000);
 	}
 
+	it("enters an explicit project directory instead of submitting it as a prompt", () => {
+		const caller = tempRoot("sumocode-native-project-caller-");
+		const project = realpathSync(tempRoot("sumocode-native-explicit-project-"));
+		const result = runNative(["--dry-run", project], { cwd: caller });
+		expect(result.status).toBe(0);
+		expect(dryRunField(result.stdout, "PROJECT_CWD")).toBe(project);
+		expect(dryRunField(result.stdout, "ARGS")).toBe("");
+		expect(dryRunField(result.stdout, "KICKOFF_PROMPT_TRANSPORT")).toBe("(none)");
+	});
+
+	it("runs diag without starting a Pi runtime", () => {
+		const root = tempRoot("sumocode-native-diag-only-");
+		const marker = join(root, "pi-started");
+		const pi = createExecutable("pi-diag-probe", `#!/bin/bash\nprintf started > ${JSON.stringify(marker)}\n`);
+		const diagFile = join(root, "diag.jsonl");
+		writeFileSync(diagFile, `${JSON.stringify({ event: "boot_screen_frame" })}\n`);
+		const result = runNative(["diag", diagFile], { env: { PI_BIN: pi } });
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("Event counts");
+		expect(existsSync(marker)).toBe(false);
+	});
+
 	it("renders static slash completion between editor and hydrated command readiness", async () => {
 		const agentDir = tempRoot("sumocode-native-agent-");
 		const cwd = tempRoot("sumocode-native-project-");
@@ -542,14 +564,17 @@ nativeDescribe("native executable contract", () => {
 		await waitForExit(session);
 	}, 75_000);
 
-	it("relaunches direct Pi with --continue after exit 100", async () => {
+	it("relaunches direct Pi with --continue without replaying its prompt", async () => {
 		const state = join(tempRoot("sumocode-native-reload-"), "count");
 		const pi = createExecutable("pi-reload", `#!/bin/bash\ncount=0; [ ! -f ${JSON.stringify(state)} ] || count=$(cat ${JSON.stringify(state)}); count=$((count+1)); printf '%s' "$count" > ${JSON.stringify(state)}; printf 'RUN-%s %s\\n' "$count" "$*"; [ "$count" -eq 1 ] && exit 100; exit 0\n`);
-		const session = spawnNativePty(["--no-sumo-tui"], { env: { PI_BIN: pi } });
+		const session = spawnNativePty(["--no-sumo-tui", "RELOAD-ONCE-PROMPT"], { env: { PI_BIN: pi } });
 		await session.waitForOutput("RUN-2");
 		expect((await waitForExit(session)).exitCode).toBe(0);
-		const runTwo = session.getOutput().split(/\r?\n/).find((line) => line.includes("RUN-2"));
+		const runs = session.getOutput().split(/\r?\n/).filter((line) => line.includes("RUN-"));
+		expect(runs.find((line) => line.includes("RUN-1"))).toContain("RELOAD-ONCE-PROMPT");
+		const runTwo = runs.find((line) => line.includes("RUN-2"));
 		expect(runTwo).toContain("--continue");
+		expect(runTwo).not.toContain("RELOAD-ONCE-PROMPT");
 		expect(readFileSync(state, "utf8")).toBe("2");
 	}, 20_000);
 });

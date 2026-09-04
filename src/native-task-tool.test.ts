@@ -71,7 +71,7 @@ class FakeTaskProcess extends EventEmitter {
 
 function registeredTask(
 	spawned: FakeTaskProcess,
-	options: { fork?: boolean; sessionFile?: string } = {},
+	options: { fork?: boolean; sessionFile?: string; piBinary?: string } = {},
 ) {
 	let definition: { execute: (...args: unknown[]) => Promise<TaskToolResult> } | undefined;
 	const pi = {
@@ -85,7 +85,7 @@ function registeredTask(
 	};
 	const spawn = vi.fn((_command: string, _args: readonly string[]) => spawned);
 	// SAFETY: the Pi double exposes every taskTool registration/runtime method used here.
-	taskTool(undefined, spawn as never)(pi as never);
+	taskTool(undefined, spawn as never, () => options.piBinary ?? "pi")(pi as never);
 	const execute = (signal?: AbortSignal, onUpdate?: (update: TaskUpdate) => void) => definition!.execute(
 		"bounded-task",
 		{ type: "single", tasks: [{ prompt: "bounded child", fork: options.fork ?? false }] },
@@ -144,6 +144,16 @@ function retainedPayloadText(result: RetainedTaskResult): string[] {
 }
 
 describe("native task tool", () => {
+	it("uses injected Pi provenance without rebinding through PATH", async () => {
+		const proc = new FakeTaskProcess();
+		const task = registeredTask(proc, { piBinary: "/parent tools/pi" });
+		const result = task.execute();
+		await vi.waitFor(() => expect(task.spawn).toHaveBeenCalledOnce());
+		expect(task.spawn).toHaveBeenCalledWith("/parent tools/pi", expect.any(Array), expect.objectContaining({ shell: false }));
+		proc.emit("close", 0);
+		await result;
+	});
+
 	it("reports unscheduled parallel workers queued until their existing slot starts", async () => {
 		let definition: { execute: (...args: unknown[]) => Promise<TaskToolResult> } | undefined;
 		// SAFETY: the registerTool double forwards the definition to the local slot;
@@ -168,7 +178,7 @@ describe("native task tool", () => {
 			collapsedItemCount: 10,
 			skillListLimit: 30,
 			systemPromptPatches: [],
-		})(pi as never);
+		}, undefined, () => "pi")(pi as never);
 
 		// Faithful subprocess double: a fake `pi` executable that stays alive
 		// until a per-pid close file appears, then exits 0. The tool resolves

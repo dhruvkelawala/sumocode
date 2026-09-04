@@ -27,6 +27,7 @@ import {
 	boundRetainedResult,
 	boundStableIdentifier,
 } from "./child-protocol.js";
+import { resolveExecutableProvenance } from "./executable-provenance.js";
 import { type BuiltInToolName, getBuiltInToolsFromActiveTools, resolveTaskConfig } from "./native-task-config.js";
 import {
 	isRecord,
@@ -1098,6 +1099,7 @@ const runSingleTask = async (options: {
 	signal: AbortSignal | undefined;
 	onResultUpdate: ((result: SingleResult) => void) | undefined;
 	spawnImpl: typeof spawn;
+	piBinary: string;
 }): Promise<SingleResult> => {
 	const currentResult: SingleResult = {
 		prompt: options.item.prompt,
@@ -1151,7 +1153,7 @@ const runSingleTask = async (options: {
 		const args = [...applyForkSessionArgs(options.subprocessArgs, forkSession)];
 
 		const exitCode = await new Promise<number>((resolve) => {
-			const proc = options.spawnImpl("pi", args, {
+			const proc = options.spawnImpl(options.piBinary, args, {
 				cwd: options.defaultCwd,
 				shell: false,
 				stdio: ["pipe", "pipe", "pipe"],
@@ -1354,7 +1356,11 @@ const renderChainResult = (results: SingleResult[], _expanded: boolean, theme: T
 	return new Text(lines.join("\n"), 0, 0);
 };
 
-export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS, spawnImpl: typeof spawn = spawn) => (pi: ExtensionAPI) => {
+export const taskTool = (
+	options: TaskToolOptions = DEFAULT_OPTIONS,
+	spawnImpl: typeof spawn = spawn,
+	resolveBinary: () => string = () => resolveExecutableProvenance().pi,
+) => (pi: ExtensionAPI) => {
 	const merged = { ...DEFAULT_OPTIONS, ...options };
 
 	pi.registerTool({
@@ -1382,6 +1388,7 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS, spawnImpl: 
 			const inheritedThinking = pi.getThinkingLevel();
 			const builtInTools = getBuiltInToolsFromActiveTools(pi.getActiveTools());
 			const ctxModel = ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined;
+			const piBinary = resolveBinary();
 
 			const taskStartedAt = Date.now();
 			const makeDetails = (results: SingleResult[]): TaskToolDetails => {
@@ -1456,6 +1463,7 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS, spawnImpl: 
 					signal,
 					onResultUpdate: emitSingleUpdate,
 					spawnImpl,
+					piBinary,
 				});
 
 				const error = isTaskError(result);
@@ -1551,6 +1559,7 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS, spawnImpl: 
 						signal,
 						onResultUpdate: chainUpdate,
 						spawnImpl,
+						piBinary,
 					});
 					results[index] = result;
 					if (onUpdate) {
@@ -1649,6 +1658,7 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS, spawnImpl: 
 								}
 							: undefined,
 						spawnImpl,
+						piBinary,
 					});
 					allResults[index] = result;
 					emitParallelUpdate();

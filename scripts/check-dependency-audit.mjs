@@ -27,11 +27,9 @@ try {
 	if (policy.schemaVersion !== 1) throw new Error(`unsupported policy schema ${policy.schemaVersion}`);
 	const records = new Map();
 	for (const record of policy.records) {
-		for (const advisory of record.advisories) {
-			const id = String(advisory);
-			if (records.has(id)) throw new Error(`duplicate policy advisory ${id}`);
-			records.set(id, record);
-		}
+		const id = String(record.advisory);
+		if (records.has(id)) throw new Error(`duplicate policy advisory ${id}`);
+		records.set(id, record);
 	}
 	const findings = Object.values(audit.advisories ?? {}).filter(({ severity }) =>
 		severity === "high" || severity === "critical"
@@ -51,9 +49,18 @@ try {
 		if (record.package !== finding.module_name) {
 			throw new Error(`package mismatch for advisory ${finding.id}`);
 		}
+		if (record.fixedVersion !== finding.patched_versions) {
+			throw new Error(`fixed version mismatch for advisory ${finding.id}`);
+		}
 		const paths = finding.findings?.flatMap(({ paths: findingPaths }) => findingPaths) ?? [];
 		if (paths.length === 0 || paths.some((path) => !path.startsWith(".>@earendil-works/pi-"))) {
 			throw new Error(`non-consumer path for advisory ${finding.id}`);
+		}
+		if (paths.some((path) => path !== record.path)) {
+			throw new Error(`dependency chain mismatch for advisory ${finding.id}`);
+		}
+		if (!record.path.startsWith(`.>${record.upstream}>`)) {
+			throw new Error(`upstream mismatch for advisory ${finding.id}`);
 		}
 		if (!/^\d{4}-\d{2}-\d{2}$/.test(record.expires) || Number.isNaN(Date.parse(`${record.expires}T00:00:00Z`))) {
 			throw new Error(`invalid expiry for advisory ${finding.id}`);

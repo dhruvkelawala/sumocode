@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -12,9 +12,11 @@ function runChecker(audit, records, schemaVersion = 1) {
 	const policyPath = join(directory, "policy.json");
 	writeFileSync(auditPath, JSON.stringify({ advisories: audit }));
 	writeFileSync(policyPath, JSON.stringify({ schemaVersion, records }));
-	return spawnSync(process.execPath, [checker, "--audit", auditPath, "--policy", policyPath], {
+	const result = spawnSync(process.execPath, [checker, "--audit", auditPath, "--policy", policyPath], {
 		encoding: "utf8",
 	});
+	rmSync(directory, { recursive: true, force: true });
+	return result;
 }
 
 function advisory(id, severity = "high", path = ".>@earendil-works/pi-ai>example") {
@@ -22,14 +24,18 @@ function advisory(id, severity = "high", path = ".>@earendil-works/pi-ai>example
 		id,
 		module_name: "example",
 		severity,
+		patched_versions: ">=1.0.1",
 		findings: [{ version: "1.0.0", paths: [path] }],
 	};
 }
 
-function record(advisories = [101]) {
+function record(advisory = 101) {
 	return {
-		advisories,
+		advisory,
 		package: "example",
+		path: ".>@earendil-works/pi-ai>example",
+		upstream: "@earendil-works/pi-ai",
+		fixedVersion: ">=1.0.1",
 		scope: "consumer-runtime",
 		status: "upstream-blocked",
 		owner: "maintainer",
@@ -75,6 +81,8 @@ describe("dependency audit policy", () => {
 		["ownerless", advisory(101), [{ ...record(), owner: "" }], "missing owner for advisory 101"],
 		["invalid expiry", advisory(101), [{ ...record(), expires: "later" }], "invalid expiry for advisory 101"],
 		["wrong package", advisory(101), [{ ...record(), package: "other" }], "package mismatch for advisory 101"],
+		["wrong fixed version", advisory(101), [{ ...record(), fixedVersion: ">=2.0.0" }], "fixed version mismatch for advisory 101"],
+		["wrong upstream", advisory(101), [{ ...record(), upstream: "@earendil-works/pi-tui" }], "upstream mismatch for advisory 101"],
 		["local path", advisory(101, "high", ".>vitest>vite"), [record()], "non-consumer path for advisory 101"],
 		["duplicate", advisory(101), [record(), record()], "duplicate policy advisory 101"],
 	])("rejects %s upstream-blocked records", (_name, finding, records, message) => {

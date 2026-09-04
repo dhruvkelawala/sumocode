@@ -1,5 +1,5 @@
 import type { RpcCommand, RpcResponse, RpcSessionState } from "@earendil-works/pi-coding-agent";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -30,7 +30,7 @@ import {
 	createToolsExpandToggleHandler,
 	createUnhandledRejectionHandler,
 	hydrateSameSessionTreeNavigation,
-	submitInitialPromptFromEnv,
+	submitInitialPromptFromFile,
 	writeExitCodeFile,
 	type RpcHostExitDependencies,
 	type RpcHostInterruptDependencies,
@@ -190,8 +190,12 @@ describe("editor command-readiness submission", () => {
 			isTreeBusy: () => false,
 		});
 
-		const pending = submitInitialPromptFromEnv(
-			{ SUMOCODE_INITIAL_PROMPT: "review the diff" },
+		const transportDir = mkdtempSync(join(tmpdir(), "sumo-kickoff-"));
+		const transportFile = join(transportDir, "prompt.txt");
+		writeFileSync(transportFile, "review the diff");
+
+		const pending = submitInitialPromptFromFile(
+			{ SUMOCODE_INITIAL_PROMPT_FILE: transportFile },
 			handlers.fromLaunch,
 		);
 		// The handler, not this caller, owns the silent wait policy for a prompt
@@ -206,6 +210,8 @@ describe("editor command-readiness submission", () => {
 		expect(notifications.notify).not.toHaveBeenCalled();
 		expect(submit).toHaveBeenCalledOnce();
 		expect(submit).toHaveBeenCalledWith("review the diff");
+		expect(existsSync(transportFile)).toBe(false);
+		rmSync(transportDir, { recursive: true, force: true });
 	});
 });
 
@@ -1307,45 +1313,71 @@ describe("createLazyChatSink (B9 host wiring)", () => {
 	});
 });
 
-describe("submitInitialPromptFromEnv (SUMOCODE_INITIAL_PROMPT seam)", () => {
+describe("submitInitialPromptFromFile (SUMOCODE_INITIAL_PROMPT_FILE one-shot seam)", () => {
 	// bin/sumocode.sh strips a task/prompt positional out of the argv it
 	// forwards to `pi --mode rpc` (which never reads argv positionals -- only
-	// InteractiveMode does) and hands it to the host via this env var instead.
-	// runRpcHost submits it through the launch member of the same handler policy
-	// that owns editor submission, so readiness and dispatch behavior stay shared
-	// while queue-notice policy remains source-specific.
+	// InteractiveMode does) and hands it to the host through an owner-only
+	// one-shot transport file instead of an env var, so prompt bytes never sit
+	// in process metadata inherited by child processes (issue 391). The host
+	// unlinks the file BEFORE submitting: one-shot by construction, so a
+	// failed submit can never replay on a later /reload and the launcher's
+	// cleanup trap has nothing left to race.
 
-	it("submits exactly one prompt after start when SUMOCODE_INITIAL_PROMPT is set", async () => {
+	it("submits the transport file contents exactly once and deletes the file", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "sumo-prompt-transport-"));
+		const file = join(dir, "prompt.txt");
+		const prompt = "review the diff\n第二行 — ünïcode ✓";
+		writeFileSync(file, prompt);
 		const submit = vi.fn(async (_message: string) => undefined);
 
-		await submitInitialPromptFromEnv({ SUMOCODE_INITIAL_PROMPT: "review the diff" }, submit);
+		await submitInitialPromptFromFile({ SUMOCODE_INITIAL_PROMPT_FILE: file }, submit);
 
 		expect(submit).toHaveBeenCalledOnce();
-		expect(submit).toHaveBeenCalledWith("review the diff");
+		expect(submit).toHaveBeenCalledWith(prompt);
+		expect(existsSync(file)).toBe(false);
+		rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("submits nothing when SUMOCODE_INITIAL_PROMPT is absent", async () => {
+	it("submits nothing when the transport env var is absent", async () => {
 		const submit = vi.fn(async (_message: string) => undefined);
 
-		await submitInitialPromptFromEnv({}, submit);
+		await submitInitialPromptFromFile({}, submit);
 
 		expect(submit).not.toHaveBeenCalled();
 	});
 
-	it("submits nothing when SUMOCODE_INITIAL_PROMPT is blank", async () => {
+	it("submits nothing when the transport file is missing", async () => {
 		const submit = vi.fn(async (_message: string) => undefined);
 
-		await submitInitialPromptFromEnv({ SUMOCODE_INITIAL_PROMPT: "" }, submit);
+		await submitInitialPromptFromFile({ SUMOCODE_INITIAL_PROMPT_FILE: "/nonexistent/prompt.txt" }, submit);
 
 		expect(submit).not.toHaveBeenCalled();
 	});
 
-	it("propagates a submit failure instead of swallowing it", async () => {
+	it("submits nothing for an empty transport file and still deletes it", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "sumo-prompt-transport-"));
+		const file = join(dir, "prompt.txt");
+		writeFileSync(file, "");
+		const submit = vi.fn(async (_message: string) => undefined);
+
+		await submitInitialPromptFromFile({ SUMOCODE_INITIAL_PROMPT_FILE: file }, submit);
+
+		expect(submit).not.toHaveBeenCalled();
+		expect(existsSync(file)).toBe(false);
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("deletes the transport file even when the submit fails, so a reload cannot replay it", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "sumo-prompt-transport-"));
+		const file = join(dir, "prompt.txt");
+		writeFileSync(file, "review the diff");
 		const submit = vi.fn(async (_message: string) => {
 			throw new Error("child not ready");
 		});
 
-		await expect(submitInitialPromptFromEnv({ SUMOCODE_INITIAL_PROMPT: "review the diff" }, submit)).rejects.toThrow("child not ready");
+		await expect(submitInitialPromptFromFile({ SUMOCODE_INITIAL_PROMPT_FILE: file }, submit)).rejects.toThrow("child not ready");
+		expect(existsSync(file)).toBe(false);
+		rmSync(dir, { recursive: true, force: true });
 	});
 });
 

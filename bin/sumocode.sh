@@ -563,6 +563,99 @@ _sumocode_task_has_nonempty_prompt_arg() {
 	[[ -n "${SUMOCODE_ARGS[prompt_index]//[[:space:]]/}" ]]
 }
 
+# Prints SUMOCODE_ARGS with every message token and sensitive option value
+# replaced by [redacted] (issue 391: --dry-run output is diagnostics and must
+# never carry prompt or secret bytes). Message tokens are classified with the
+# same option classes as _sumocode_first_positional_index: every plain
+# positional, everything after a `--` delimiter, and -p/--print's consumed
+# message. --api-key/--system-prompt/--append-system-prompt values are secret
+# bytes too. Display only -- never mutates SUMOCODE_ARGS.
+redact_sensitive_args() {
+	local -a out=()
+	local i=0
+	local n="${#SUMOCODE_ARGS[@]}"
+	local arg next
+	local in_delimiter=0
+	while [[ "${i}" -lt "${n}" ]]; do
+		arg="${SUMOCODE_ARGS[i]}"
+		if [[ "${in_delimiter}" -eq 1 ]]; then
+			if [[ "${arg}" != @* ]]; then out+=("[redacted]"); else out+=("${arg}"); fi
+			i=$((i + 1))
+			continue
+		fi
+		if [[ "${arg}" == "--" ]]; then
+			in_delimiter=1
+			out+=("${arg}")
+			i=$((i + 1))
+			continue
+		fi
+		case "${arg}" in
+			--api-key=*|--system-prompt=*|--append-system-prompt=*|--print=*|-p=*)
+				out+=("${arg%%=*}=[redacted]")
+				i=$((i + 1))
+				continue
+				;;
+			--api-key|--system-prompt|--append-system-prompt)
+				out+=("${arg}" "[redacted]")
+				i=$((i + 2))
+				continue
+				;;
+			--print|-p)
+				out+=("${arg}")
+				if [[ $((i + 1)) -lt "${n}" ]]; then
+					next="${SUMOCODE_ARGS[i+1]}"
+					if [[ "${next}" != @* && ( "${next}" != -* || "${next}" == ---* ) ]]; then
+						out+=("[redacted]")
+						i=$((i + 2))
+						continue
+					fi
+				fi
+				i=$((i + 1))
+				continue
+				;;
+		esac
+		if _sumocode_is_pi_unconditional_value_flag "${arg}"; then
+			out+=("${arg}")
+			if [[ $((i + 1)) -lt "${n}" ]]; then out+=("${SUMOCODE_ARGS[i+1]}"); i=$((i + 2)); else i=$((i + 1)); fi
+			continue
+		fi
+		if _sumocode_is_pi_boolean_flag "${arg}"; then
+			out+=("${arg}")
+			i=$((i + 1))
+			continue
+		fi
+		if [[ "${arg}" == @* ]]; then
+			out+=("${arg}")
+			i=$((i + 1))
+			continue
+		fi
+		if [[ "${arg}" == --* ]]; then
+			out+=("${arg}")
+			if [[ $((i + 1)) -lt "${n}" ]]; then
+				next="${SUMOCODE_ARGS[i+1]}"
+				if [[ "${next}" != -* && "${next}" != @* ]]; then
+					out+=("${next}")
+					i=$((i + 2))
+					continue
+				fi
+			fi
+			i=$((i + 1))
+			continue
+		fi
+		if [[ "${arg}" == -* ]]; then
+			out+=("${arg}")
+			i=$((i + 1))
+			continue
+		fi
+		out+=("[redacted]")
+		i=$((i + 1))
+	done
+	if [[ "${#out[@]}" -eq 0 ]]; then
+		printf ''
+	else
+		printf '%s' "${out[*]}"
+	fi
+}
 if [[ "${COMMAND}" == "doctor" && "${#SUMOCODE_ARGS[@]}" -gt 0 ]]; then
 	usage_error "doctor does not accept a path argument."
 fi
@@ -1023,13 +1116,21 @@ fi
 if [[ "${DRY_RUN}" == "1" ]]; then
 	# Mirror the real RPC-path argv rewrite (see extract_first_positional and
 	# its call site below) so --dry-run output shows exactly what will be
-	# forwarded to the RPC host/child, including the SUMOCODE_INITIAL_PROMPT
-	# side channel, instead of the pre-extraction argv.
+	# forwarded to the RPC host/child, including the one-shot transport side
+	# channel, instead of the pre-extraction argv. Prompt bytes NEVER appear:
+	# the side channel shows presence only, and ARGS/exec go through
+	# redact_sensitive_args (issue 391).
 	DRY_RUN_INITIAL_PROMPT=""
 	if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
 		extract_first_positional
 		DRY_RUN_INITIAL_PROMPT="${EXTRACTED_INITIAL_PROMPT}"
 	fi
+	if [[ "${USE_RPC_HOST}" -eq 1 && -n "${DRY_RUN_INITIAL_PROMPT}" ]]; then
+		KICKOFF_PROMPT_TRANSPORT="one-shot-file"
+	else
+		KICKOFF_PROMPT_TRANSPORT="(none)"
+	fi
+	REDACTED_ARGS="$(redact_sensitive_args)"
 	cat <<EOF
 sumocode dry run
 PI_BIN=${PI_BIN}
@@ -1039,9 +1140,9 @@ SUMO_RPC=${SUMO_RPC:-}
 SUMO_TUI_DIAG_FILE=${SUMO_TUI_DIAG_FILE:-}
 SUMO_TUI_DEBUG=${SUMO_TUI_DEBUG:-}
 COMMAND=${COMMAND}
-ARGS=${SUMOCODE_ARGS[*]:-}
-SUMOCODE_INITIAL_PROMPT=${DRY_RUN_INITIAL_PROMPT}
-exec $(if [[ "${USE_RPC_HOST}" -eq 1 ]]; then printf 'node %s' "${ROOT_DIR}/sumo-rpc-host.js"; else printf '%s -e %s/src/extension-entry.ts' "${PI_BIN}" "${ROOT_DIR}"; fi) ${SUMOCODE_ARGS[*]:-}
+ARGS=${REDACTED_ARGS}
+KICKOFF_PROMPT_TRANSPORT=${KICKOFF_PROMPT_TRANSPORT}
+exec $(if [[ "${USE_RPC_HOST}" -eq 1 ]]; then printf 'node %s' "${ROOT_DIR}/sumo-rpc-host.js"; else printf '%s -e %s/src/extension-entry.ts' "${PI_BIN}" "${ROOT_DIR}"; fi) ${REDACTED_ARGS}
 EOF
 	exit 0
 fi
@@ -1076,6 +1177,121 @@ if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
 fi
 
 RPC_INITIAL_PROMPT="${EXTRACTED_INITIAL_PROMPT:-}"
+
+# Owner-only one-shot transport for the kickoff prompt (issue 391): the
+# prompt bytes go into an 0600 mktemp file that sumo-rpc-host.js reads and
+# unlinks BEFORE submitting, so no child's inherited environment ever
+# carries prompt content. Empty when there is no kickoff prompt.
+RPC_INITIAL_PROMPT_FILE=""
+if [[ -n "${RPC_INITIAL_PROMPT}" ]]; then
+	RPC_INITIAL_PROMPT_FILE="$(mktemp "${TMPDIR:-/tmp}/sumocode-kickoff.XXXXXX")"
+	printf '%s' "${RPC_INITIAL_PROMPT}" >"${RPC_INITIAL_PROMPT_FILE}"
+fi
+
+# Headless direct-Pi launches (non-TTY stdin => Pi print mode) read piped
+# stdin as the initial message, so the kickoff/task prompt travels through
+# stdin instead of argv (issue 391). Interactive direct-Pi keeps the
+# positional: Pi's interactive mode reads only argv, and its stdin is the
+# live TTY. Caller-piped stdin is overridden only when an extracted prompt
+# exists -- an explicit prompt argument is authoritative over piped content.
+DIRECT_PI_STDIN_PROMPT=""
+if [[ "${USE_RPC_HOST}" -eq 0 && ! -t 0 ]]; then
+	direct_prompt_index="$(_sumocode_first_positional_index 2>/dev/null || true)"
+	extract_first_positional
+	DIRECT_PI_STDIN_PROMPT="${EXTRACTED_INITIAL_PROMPT:-}"
+	# Fall back to the argv transport when extra message-bearing tokens
+	# remain: a leftover positional (Pi print mode loops over every message
+	# and buildInitialMessage would concatenate stdin with messages[0]), a
+	# `-p/--print` flag with its own message value, or an explicit `--mode`
+	# (rpc/json read stdin as a protocol/command channel, never as a message
+	# — piping prompt text there corrupts the stream). Restoring the
+	# extracted prompt keeps Pi's parsing semantics byte-identical to the
+	# pre-stdin behavior.
+	if [[ -n "${DIRECT_PI_STDIN_PROMPT}" ]]; then
+		direct_fallback=0
+		if _sumocode_first_positional_index >/dev/null 2>&1; then
+			direct_fallback=1
+		elif [[ "${#SUMOCODE_ARGS[@]}" -gt 0 ]]; then
+			for direct_arg in "${SUMOCODE_ARGS[@]}"; do
+				case "${direct_arg}" in
+					-p|--print|--print=*|--mode|--mode=*) direct_fallback=1; break ;;
+				esac
+			done
+		fi
+		if [[ "${direct_fallback}" -eq 1 ]]; then
+			reinserted=()
+			n="${#SUMOCODE_ARGS[@]}"
+			for ((j = 0; j < n; j++)); do
+				if [[ "${j}" -eq "${direct_prompt_index}" ]]; then
+					reinserted+=("${DIRECT_PI_STDIN_PROMPT}")
+				fi
+				reinserted+=("${SUMOCODE_ARGS[j]}")
+			done
+			if [[ "${direct_prompt_index}" -ge "${n}" ]]; then
+				reinserted+=("${DIRECT_PI_STDIN_PROMPT}")
+			fi
+			SUMOCODE_ARGS=("${reinserted[@]}")
+			DIRECT_PI_STDIN_PROMPT=""
+		fi
+		# Pi's own print-message form: a `-p/--print <msg>` (or `--print=<msg>`)
+		# token carries the prompt as a flag value. When that message is the
+		# ONLY message token (no other positional, no second print message, no
+		# --mode), move it to stdin -- keeping the print flag for space form --
+		# so argv carries only non-message flags, matching the positional
+		# kickoff path above.
+		if [[ -z "${DIRECT_PI_STDIN_PROMPT}" && "${#SUMOCODE_ARGS[@]}" -ge 1 ]]; then
+			direct_print_value=""
+			direct_print_tokens=0
+			direct_print_remove_index=-1
+			direct_has_mode=0
+			i=0
+			while [[ "${i}" -lt "${#SUMOCODE_ARGS[@]}" ]]; do
+				arg="${SUMOCODE_ARGS[i]}"
+				case "${arg}" in
+					--mode|--mode=*) direct_has_mode=1 ;;
+					--print=*|-p=*)
+						direct_print_tokens=$((direct_print_tokens + 1))
+						if [[ -z "${direct_print_value}" ]]; then
+							direct_print_value="${arg#*=}"
+							direct_print_remove_index="${i}"
+						fi
+						;;
+					--print|-p)
+						if [[ $((i + 1)) -lt "${#SUMOCODE_ARGS[@]}" ]]; then
+							next="${SUMOCODE_ARGS[i+1]}"
+							if [[ "${next}" != @* && ( "${next}" != -* || "${next}" == ---* ) ]]; then
+								direct_print_tokens=$((direct_print_tokens + 1))
+								if [[ -z "${direct_print_value}" ]]; then
+									direct_print_value="${next}"
+									direct_print_remove_index=$((i + 1))
+								fi
+							fi
+						fi
+						;;
+				esac
+				i=$((i + 1))
+			done
+			if [[ "${direct_has_mode}" -eq 0 && "${direct_print_tokens}" -eq 1 && -n "${direct_print_value}" && "${direct_print_remove_index}" -ge 0 ]]; then
+				direct_kept=()
+				i=0
+				while [[ "${i}" -lt "${#SUMOCODE_ARGS[@]}" ]]; do
+					if [[ "${i}" -ne "${direct_print_remove_index}" ]]; then direct_kept+=("${SUMOCODE_ARGS[i]}"); fi
+					i=$((i + 1))
+				done
+				direct_saved_args=()
+				if [[ "${#SUMOCODE_ARGS[@]}" -gt 0 ]]; then direct_saved_args=("${SUMOCODE_ARGS[@]}"); fi
+				if [[ "${#direct_kept[@]}" -eq 0 ]]; then SUMOCODE_ARGS=(); else SUMOCODE_ARGS=("${direct_kept[@]}"); fi
+				if _sumocode_first_positional_index >/dev/null 2>&1; then
+					# Removing the print message would leave another message
+					# behind; argv stays byte-identical to pre-stdin behavior.
+					if [[ "${#direct_saved_args[@]}" -gt 0 ]]; then SUMOCODE_ARGS=("${direct_saved_args[@]}"); else SUMOCODE_ARGS=(); fi
+				else
+					DIRECT_PI_STDIN_PROMPT="${direct_print_value}"
+				fi
+			fi
+		fi
+	fi
+fi
 
 # The RPC host previously ran via `exec`, which replaced this shell's own pid
 # outright -- the child WAS this script's pid, so a real terminal's Ctrl-C/
@@ -1116,6 +1332,11 @@ forward_signal_to_rpc_child() {
 }
 trap 'forward_signal_to_rpc_child INT' INT
 trap 'forward_signal_to_rpc_child TERM' TERM
+# Success, failure, cancellation (INT/TERM exits), and reload all funnel
+# through process exit: the transport file is normally already consumed
+# (unlinked) by the host, and this trap is the backstop for crashes/signal
+# landings before the host ever read it.
+trap 'rm -f "${RPC_INITIAL_PROMPT_FILE:-}" 2>/dev/null || true' EXIT
 
 # `wait` on a backgrounded job can return as soon as the trap handler above
 # runs (bash reports the interrupted `wait` itself, not necessarily the
@@ -1243,14 +1464,28 @@ while :; do
 		# iteration's exit code.
 		SUMOCODE_EXIT_CODE_FILE="$(mktemp "${TMPDIR:-/tmp}/sumocode-exit-code.XXXXXX")"
 		if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
-			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" SUMOCODE_RELOAD="${IS_RELOAD_RESPAWN}" SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" <&0 &
+			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT_FILE="${RPC_INITIAL_PROMPT_FILE}" SUMOCODE_RELOAD="${IS_RELOAD_RESPAWN}" SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" <&0 &
 		else
-			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" SUMOCODE_RELOAD="${IS_RELOAD_RESPAWN}" SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" "${SUMOCODE_ARGS[@]}" <&0 &
+			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT_FILE="${RPC_INITIAL_PROMPT_FILE}" SUMOCODE_RELOAD="${IS_RELOAD_RESPAWN}" SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" "${SUMOCODE_ARGS[@]}" <&0 &
 		fi
 		RPC_CHILD_PID=$!
 		wait_for_child_exit "${RPC_CHILD_PID}"
 		code="$(read_child_exit_code_file "${SUMOCODE_EXIT_CODE_FILE}" "${WAIT_FOR_CHILD_EXIT_STATUS}")"
 		RPC_CHILD_PID=""
+	elif [[ -n "${DIRECT_PI_STDIN_PROMPT}" ]]; then
+		# Headless kickoff: the prompt rides stdin (Pi print mode reads it as
+		# the initial message); argv keeps only flags. The caller's own piped
+		# stdin is streamed first (cat), so Pi's composition — stdin bytes then
+		# the message — stays byte-identical to the pre-stdin behavior, and the
+		# upstream producer keeps its reader instead of taking SIGPIPE.
+		# Pipeline exit status is Pi's, so the reload/exit handling below is
+		# unchanged. Must precede the empty-argv branch: a sole prompt
+		# positional empties SUMOCODE_ARGS during extraction.
+		if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
+			{ cat; printf '%s' "${DIRECT_PI_STDIN_PROMPT}"; } | env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" || code=$?
+		else
+			{ cat; printf '%s' "${DIRECT_PI_STDIN_PROMPT}"; } | env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" "${SUMOCODE_ARGS[@]}" || code=$?
+		fi
 	elif [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
 		env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" || code=$?
 	else
@@ -1269,6 +1504,17 @@ while :; do
 	# a reload respawn resumes the existing session via --continue below and
 	# must not re-submit it as a new message.
 	RPC_INITIAL_PROMPT=""
+	# The host already consumed (unlinked) the transport file; clear the path
+	# so the exit trap has nothing to clean and a reload can never re-export it.
+	# Cleared ONLY here, on the reload-respawn path: code 100 means the host
+	# served a live session, so it already consumed (unlinked) the transport
+	# file. Every other exit reaches `exit "${code}"` below with the path
+	# still set, keeping the EXIT trap as the cleanup backstop for hosts that
+	# die before reading it.
+	RPC_INITIAL_PROMPT_FILE=""
+	# Same one-shot rule for the headless stdin transport: iteration one's
+	# prompt must never ride a reload respawn's stdin.
+	DIRECT_PI_STDIN_PROMPT=""
 	# After the kickoff turn has fired, do NOT re-pass the task prompt on
 	# `/reload`. The reload loop adds `--continue` to resume the existing
 	# session, and re-injecting the original prompt would send it again as a

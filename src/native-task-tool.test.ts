@@ -59,7 +59,7 @@ interface TaskToolResult {
 }
 
 class FakeTaskProcess extends EventEmitter {
-	public readonly stdin = { end: vi.fn() };
+	public readonly stdin = { on: vi.fn(), write: vi.fn(), end: vi.fn() };
 	public readonly stdout = new EventEmitter();
 	public readonly stderr = new EventEmitter();
 	public killed = false;
@@ -343,6 +343,39 @@ describe("native task tool", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it("delivers the delegated prompt via stdin and keeps it out of child argv", async () => {
+		// Issue 391: same contract as the subagent backend — pinned Pi print mode
+		// reads piped stdin verbatim, so the prompt never appears in argv.
+		const proc = new FakeTaskProcess();
+		const task = registeredTask(proc);
+		const running = task.execute();
+		await vi.waitFor(() => expect(task.spawn).toHaveBeenCalledOnce());
+		const argv = task.spawn.mock.calls[0]?.[1] ?? [];
+		expect(argv).not.toContain("bounded child");
+
+		proc.stdout.emit("data", JSON.stringify({
+			type: "message_end",
+			message: {
+				role: "assistant",
+				content: [{ type: "text", text: "done" }],
+				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { total: 0 } },
+			},
+		}));
+		proc.emit("close", 0);
+
+		const result = await running;
+		expect(result.isError).toBeUndefined();
+		expect(proc.stdin.write).toHaveBeenCalledTimes(1);
+		expect(proc.stdin.write).toHaveBeenCalledWith("bounded child");
+		expect(proc.stdin.end).toHaveBeenCalled();
+		// A child that dies without draining a >pipe-buffer prompt must not
+		// surface the pending write as an uncaughtException EPIPE.
+		expect(proc.stdin.on).toHaveBeenCalledWith("error", expect.any(Function));
+		// SAFETY: the fake records the registered handler; invoking it with a
+		// synthetic EPIPE proves the guard swallows the failure in-process.
+		expect(() => (proc.stdin.on as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.(new Error("write EPIPE"))).not.toThrow();
 	});
 
 	it("settles a no-child spawn error without waiting for close", async () => {

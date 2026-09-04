@@ -16,10 +16,19 @@ try {
 	const findings = Object.values(audit.advisories ?? {}).filter(({ severity }) =>
 		severity === "high" || severity === "critical"
 	);
+	const findingsById = new Map(findings.map((finding) => [String(finding.id), finding]));
 
+	for (const id of records.keys()) {
+		if (!findingsById.has(id)) throw new Error(`stale policy advisory ${id}`);
+	}
 	for (const finding of findings) {
-		if (!records.has(String(finding.id))) {
-			throw new Error(`unclassified ${finding.severity} advisory ${finding.id}`);
+		const record = records.get(String(finding.id));
+		if (!record) throw new Error(`unclassified ${finding.severity} advisory ${finding.id}`);
+		if (record.status !== "upstream-blocked") {
+			throw new Error(`unremediated ${finding.severity} advisory ${finding.id}`);
+		}
+		if (Date.parse(`${record.expires}T00:00:00Z`) <= Date.now()) {
+			throw new Error(`expired policy advisory ${finding.id}`);
 		}
 	}
 

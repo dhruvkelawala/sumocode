@@ -525,7 +525,7 @@ nativeDescribe("native executable contract", () => {
 		}
 	});
 
-	it("tightens a retained diagnostics file to owner-only", () => {
+	it("tightens the positional diag file to owner-only in debug mode", () => {
 		const diagFile = join(tempRoot("sumocode-native-private-diag-"), "diag.jsonl");
 		writeFileSync(diagFile, `${JSON.stringify({ event: "boot_screen_frame" })}\n`, { mode: 0o644 });
 		const result = runNative(["-d", "--no-clear-diag", "diag", diagFile]);

@@ -697,7 +697,8 @@ function restoreFailedReloadTerminal(): void {
 
 function applyDebugMode(parsed: ParsedLaunch): void {
 	if (!parsed.debugMode) return;
-	const diagPath = parsed.diagFile !== "" ? parsed.diagFile : "/tmp/sumocode-manual.jsonl";
+	const retainedDiag = parsed.command === "diag" && !parsed.clearDiag ? parsed.forwardedArgs[0] : undefined;
+	const diagPath = parsed.diagFile || retainedDiag || "/tmp/sumocode-manual.jsonl";
 	if (parsed.clearDiag && !parsed.dryRun) {
 		try {
 			rmSync(diagPath, { force: true });

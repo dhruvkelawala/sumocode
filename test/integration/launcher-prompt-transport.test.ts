@@ -80,6 +80,7 @@ describe("launcher prompt transport (issue 391)", () => {
 				timeout: 30_000,
 			});
 			expect(result.status).toBe(0);
+			// SAFETY: makePiStub writes this exact provenance-bearing JSON shape.
 			const observed = JSON.parse(readFileSync(stubOut, "utf8")) as { piBin: string; launcher: string };
 			expect(observed.piBin).toBe(piBin);
 			expect(observed.launcher).toBe(LAUNCHER);
@@ -106,6 +107,7 @@ describe("launcher prompt transport (issue 391)", () => {
 		try {
 			const result = spawnSync("bash", [copiedLauncher, "--no-sumo-tui", project], { encoding: "utf8", env, timeout: 30_000 });
 			expect(result.status).toBe(0);
+			// SAFETY: makePiStub writes this exact provenance-bearing JSON shape.
 			const observed = JSON.parse(readFileSync(stubOut, "utf8")) as { piBin: string; launcher: string };
 			expect(observed).toMatchObject({ piBin, launcher: copiedLauncher });
 		} finally {

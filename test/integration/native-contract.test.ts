@@ -447,19 +447,22 @@ nativeDescribe("native executable contract", () => {
 		}
 		const proc = new FakeProcess();
 		const spawnTask = vi.fn(() => proc);
-		let definition: { execute: (...args: never[]) => Promise<unknown> } | undefined;
+		let definition: { execute: (...args: never[]) => Promise<object> } | undefined;
 		const pi = {
-			registerTool: vi.fn((tool) => { definition = tool; }),
+			registerTool: vi.fn((tool: NonNullable<typeof definition>) => { definition = tool; }),
 			on: vi.fn(),
 			getThinkingLevel: vi.fn(() => "low"),
 			getActiveTools: vi.fn(() => ["read"]),
 		};
+		// SAFETY: the spawn and Pi doubles implement only the task registration and child-process surfaces exercised here.
 		taskTool(undefined, spawnTask as never, () => provenance.pi)(pi as never);
-		const taskResult = definition!.execute("native-provenance", { type: "single", tasks: [{ prompt: "probe", fork: false }] }, undefined, undefined, {
+		const context = {
 			cwd: ROOT,
 			model: undefined,
 			sessionManager: { getSessionFile: () => undefined },
-		} as never);
+		};
+		// SAFETY: the captured definition and context expose the exact task execute surface used by this fixture.
+		const taskResult = definition!.execute("native-provenance", { type: "single", tasks: [{ prompt: "probe", fork: false }] }, undefined, undefined, context as never);
 		await vi.waitFor(() => expect(spawnTask).toHaveBeenCalledOnce(), { timeout: 5_000 });
 		expect(spawnTask).toHaveBeenCalledWith(provenance.pi, expect.any(Array), expect.objectContaining({ shell: false }));
 		proc.emit("close", 0);
@@ -473,6 +476,7 @@ nativeDescribe("native executable contract", () => {
 		expect(visible).toContain(`exec '${NATIVE_BIN}' 'task'`);
 
 		const openWorkspace = vi.fn(async () => ({ ok: true as const, pane: { host: "herdr" as const, paneId: "p1" } }));
+		// SAFETY: these minimal Pi and stream doubles implement only the methods openWorktree calls.
 		const code = await openWorktree("nested", {
 			cwd: ROOT,
 			env: { SUMOCODE_LAUNCHER: provenance.sumocode, SUMOCODE_WORKTREE_SETUP: "" },

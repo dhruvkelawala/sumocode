@@ -3,7 +3,7 @@ set -euo pipefail
 
 SOURCE="${BASH_SOURCE[0]}"
 while [[ -L "${SOURCE}" ]]; do
-	SOURCE_DIR="$(cd "$(dirname "${SOURCE}")" && pwd)"
+	SOURCE_DIR="$(CDPATH= cd -- "$(dirname "${SOURCE}")" && pwd)"
 	TARGET="$(readlink "${SOURCE}")"
 	if [[ "${TARGET}" == /* ]]; then
 		SOURCE="${TARGET}"
@@ -11,9 +11,9 @@ while [[ -L "${SOURCE}" ]]; do
 		SOURCE="${SOURCE_DIR}/${TARGET}"
 	fi
 done
-SCRIPT_DIR="$(cd "$(dirname "${SOURCE}")" && pwd)"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "${SOURCE}")" && pwd)"
 SOURCE="${SCRIPT_DIR}/$(basename "${SOURCE}")"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ROOT_DIR="$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)"
 
 # The RPC host owns the interactive foreground. Direct Pi launches keep the
 # extension loaded for non-interactive modes and diagnostics, but never ask Pi
@@ -757,7 +757,7 @@ if [[ ! -x "${PI_BIN}" ]]; then
 	PI_BIN="$(command -v pi || true)"
 fi
 if [[ "${PI_BIN}" == */* ]]; then
-	PI_BIN_DIR="$(cd "$(dirname "${PI_BIN}")" && pwd)"
+	PI_BIN_DIR="$(CDPATH= cd -- "$(dirname "${PI_BIN}")" && pwd)"
 	PI_BIN="${PI_BIN_DIR}/$(basename "${PI_BIN}")"
 fi
 export PI_BIN
@@ -939,7 +939,7 @@ pi_main_file() {
 	cli_target="$(grep -Eo '([^"[:space:]]+/)?@earendil-works/pi-coding-agent/dist/cli\.js' "${resolved}" | head -n 1 || true)"
 	[[ -n "${cli_target}" ]] || return 1
 	cli_target="${cli_target#\$basedir/}"
-	cli_path="$(cd "${dir}" && realpath "${cli_target}" 2>/dev/null || true)"
+	cli_path="$(CDPATH= cd -- "${dir}" && realpath "${cli_target}" 2>/dev/null || true)"
 	[[ -n "${cli_path}" ]] || return 1
 	main_file="${cli_path%/cli.js}/main.js"
 	[[ -f "${main_file}" ]] || return 1

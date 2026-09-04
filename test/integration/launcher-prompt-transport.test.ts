@@ -71,12 +71,13 @@ describe("launcher prompt transport (issue 391)", () => {
 		const tools = join(caller, "tools");
 		mkdirSync(project);
 		mkdirSync(tools);
+		mkdirSync(join(project, "tools"));
 		const { piBin, stubOut } = makePiStub(tools);
 		try {
 			const result = spawnSync("bash", [relative(caller, LAUNCHER), "--no-sumo-tui", project], {
 				cwd: caller,
 				encoding: "utf8",
-				env: { ...process.env, PI_BIN: relative(caller, piBin) },
+				env: { ...process.env, CDPATH: project, PI_BIN: relative(caller, piBin) },
 				timeout: 30_000,
 			});
 			expect(result.status).toBe(0);

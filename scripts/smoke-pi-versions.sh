@@ -111,24 +111,49 @@ JSON
 		fi
 
 		cat >nested-provenance-probe.mjs <<'NODE'
-import { writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join } from "node:path";
-const [sourceRoot, installedRoot, output, version, jitiEntry] = process.argv.slice(2);
+import { dirname, join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+const [sourceRoot, installedRoot, installedLauncher, output, version, jitiEntry] = process.argv.slice(2);
 const { createJiti } = createRequire(import.meta.url)(jitiEntry);
-const parent = { pi: `/parent-selected/pi-${version}`, sumocode: "/parent-selected/sumocode" };
-const pathGlobal = { pi: "/path-global/pi", sumocode: "/path-global/sumocode" };
-async function observe(root) {
+const parent = { pi: join(process.cwd(), `parent-selected-pi-${version}`) };
+const globalDir = join(process.cwd(), "path-global");
+const pathGlobal = { pi: join(globalDir, "pi"), sumocode: join(globalDir, "sumocode") };
+mkdirSync(globalDir);
+writeFileSync(parent.pi, `#!/bin/sh\nnode -e 'require("node:fs").writeFileSync(process.env.PROVENANCE_OUTPUT, JSON.stringify({PI_BIN:process.env.PI_BIN,SUMOCODE_LAUNCHER:process.env.SUMOCODE_LAUNCHER}))'\n`);
+writeFileSync(pathGlobal.pi, "#!/bin/sh\nprintf PATH_PI\n");
+writeFileSync(pathGlobal.sumocode, "#!/bin/sh\nprintf PATH_SUMOCODE\n");
+for (const executable of [parent.pi, pathGlobal.pi, pathGlobal.sumocode]) chmodSync(executable, 0o755);
+async function observe(root, launcher, name) {
 	const jiti = createJiti(import.meta.url, { moduleCache: false, tryNative: false });
 	const { resolveExecutableProvenance } = await jiti.import(join(root, "src/executable-provenance.ts"));
+	const childOutput = join(process.cwd(), `${name}-child.json`);
+	const project = join(process.cwd(), `${name}-project`);
+	mkdirSync(project);
+	const invocation = launcher.endsWith(".sh") ? ["bash", [launcher, "--no-sumo-tui", project]] : [launcher, ["--no-sumo-tui", project]];
+	const launched = spawnSync(invocation[0], invocation[1], { env: { ...process.env, PI_BIN: parent.pi, SUMOCODE_LAUNCHER: pathGlobal.sumocode, PROVENANCE_OUTPUT: childOutput }, encoding: "utf8" });
+	if (launched.status !== 0) throw new Error(`${name} launcher exited ${launched.status}: ${launched.stderr}`);
+	const childEnv = JSON.parse(readFileSync(childOutput, "utf8"));
+	const fallback = resolveExecutableProvenance({ env: { PATH: globalDir } });
 	return {
-		inherited: resolveExecutableProvenance({ env: { PI_BIN: parent.pi, SUMOCODE_LAUNCHER: parent.sumocode } }),
-		fallback: resolveExecutableProvenance({ env: { PATH: "/path-global" } }),
+		launcher: resolve(root, "bin/sumocode.sh"),
+		inherited: resolveExecutableProvenance({ env: childEnv }),
+		fallback,
+		pathExecutables: {
+			pi: spawnSync(fallback.pi, [], { env: { PATH: dirname(pathGlobal.pi) }, encoding: "utf8" }).stdout,
+			sumocode: spawnSync(fallback.sumocode, [], { env: { PATH: dirname(pathGlobal.sumocode) }, encoding: "utf8" }).stdout,
+		},
 	};
 }
-writeFileSync(output, JSON.stringify({ parent, pathGlobal, source: await observe(sourceRoot), installed: await observe(installedRoot) }));
+writeFileSync(output, JSON.stringify({
+	parent,
+	pathGlobal,
+	source: await observe(sourceRoot, join(sourceRoot, "bin/sumocode.sh"), "source"),
+	installed: await observe(installedRoot, installedLauncher, "installed"),
+}));
 NODE
-		node nested-provenance-probe.mjs "${ROOT_DIR}" "${SUMO_ROOT}" nested-provenance.json "${VERSION}" "$(node -p "require.resolve('jiti')")"
+		node nested-provenance-probe.mjs "${ROOT_DIR}" "${SUMO_ROOT}" "${SUMO_BIN}" nested-provenance.json "${VERSION}" "$(node -p "require.resolve('jiti')")"
 		node "${CONTRACT_CHECKER}" --check-provenance nested-provenance.json
 
 		# Compile production source against this candidate's declarations so request

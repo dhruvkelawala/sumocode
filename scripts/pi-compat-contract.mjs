@@ -164,14 +164,15 @@ function compareVersions(left, right) {
 export function assertNestedExecutableProvenance(input) {
 	for (const layoutName of ["source", "installed"]) {
 		const layout = input[layoutName];
+		if (layout?.inherited?.pi !== input.parent?.pi || layout.inherited.pi === input.pathGlobal?.pi) {
+			throw new Error(`${layoutName} Pi provenance rebound through PATH`);
+		}
+		if (layout?.inherited?.sumocode !== layout?.launcher || layout.inherited.sumocode === input.pathGlobal?.sumocode) {
+			throw new Error(`${layoutName} SumoCode provenance rebound through PATH (expected ${layout?.launcher}, received ${layout?.inherited?.sumocode})`);
+		}
 		for (const executable of ["pi", "sumocode"]) {
-			if (layout?.inherited?.[executable] !== input.parent?.[executable]
-				|| layout.inherited[executable] === input.pathGlobal?.[executable]) {
-				throw new Error(`${layoutName} ${executable === "pi" ? "Pi" : "SumoCode"} provenance rebound through PATH`);
-			}
-			if (layout?.fallback?.[executable] !== executable) {
-				throw new Error(`${layoutName} ${executable} fallback drift`);
-			}
+			if (layout?.fallback?.[executable] !== executable) throw new Error(`${layoutName} ${executable} fallback drift`);
+			if (layout?.pathExecutables?.[executable] !== `PATH_${executable.toUpperCase()}`) throw new Error(`${layoutName} PATH ${executable} fallback did not execute`);
 		}
 	}
 	return true;

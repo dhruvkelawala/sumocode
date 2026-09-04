@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { EventEmitter } from "node:events";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { spawn, type IPty } from "node-pty";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -20,10 +20,6 @@ import {
 	LAUNCHER_COMMAND_CASES,
 	RUNTIME_SELECTION_CASES,
 } from "./launcher-runtime-contract.js";
-import { buildVisibleAgentCommand, buildVisibleTaskPaths } from "../../src/background-tasks/visible-spawn.js";
-import { openWorktree } from "../../src/cli/open-worktree.js";
-import { resolveExecutableProvenance } from "../../src/executable-provenance.js";
-import { taskTool } from "../../src/native-task-tool.js";
 import { createRpcChildFixture } from "./rpc-child-fixture.js";
 import { buildSpawnEnv, replayScreenRows } from "./spawn-pi-pty.js";
 
@@ -432,69 +428,76 @@ nativeDescribe("native executable contract", () => {
 	});
 
 	it("threads compiled parent provenance into nested child launch plans", async () => {
-		const parentPi = createExecutable("parent-selected-pi", "#!/bin/bash\nexit 0\n");
+		const root = tempRoot("sumocode-native-provenance-");
+		const taskLog = join(root, "task.json");
+		const parentPi = createExecutable("parent-selected-pi", `#!/bin/bash\nnode -e 'const fs=require("node:fs"); fs.writeFileSync(process.env.PROVENANCE_TASK_LOG, JSON.stringify({argv:process.argv.slice(1),pi:process.env.PI_BIN,launcher:process.env.SUMOCODE_LAUNCHER})); console.log(JSON.stringify({type:"message_end",message:{role:"assistant",content:"done"}}))' -- "$@"\n`);
 		const dryRun = runNative(["--dry-run"], { env: { PI_BIN: parentPi } });
 		expect(dryRun.status).toBe(0);
-		const provenance = resolveExecutableProvenance({
-			env: { PI_BIN: dryRunField(dryRun.stdout, "PI_BIN"), SUMOCODE_LAUNCHER: NATIVE_BIN },
+		const piBinary = dryRunField(dryRun.stdout, "PI_BIN");
+		const previousEnv = { ...process.env };
+		Object.assign(process.env, {
+			PI_BIN: piBinary,
+			SUMOCODE_LAUNCHER: NATIVE_BIN,
+			SUMOCODE_RPC_CHILD: "1",
+			SUMOCODE_NATIVE_TASK: "1",
+			PI_CODING_AGENT_DIR: join(root, "agent"),
+			TMPDIR: root,
+			PROVENANCE_TASK_LOG: taskLog,
+			HERDR_ENV: "1",
+			HERDR_PANE_ID: "w1:p1",
 		});
-
-		class FakeProcess extends EventEmitter {
-			readonly stdin = { on: vi.fn(), write: vi.fn(), end: vi.fn() };
-			readonly stdout = new EventEmitter();
-			readonly stderr = new EventEmitter();
-			readonly kill = vi.fn(() => true);
-		}
-		const proc = new FakeProcess();
-		const spawnTask = vi.fn(() => proc);
-		let definition: { execute: (...args: never[]) => Promise<object> } | undefined;
+		mkdirSync(process.env.PI_CODING_AGENT_DIR!);
+		const tools = new Map<string, { execute: (...args: never[]) => Promise<object> }>();
+		const commands = new Map<string, { handler: (...args: never[]) => Promise<void> }>();
+		const paneRuns: string[] = [];
+		const exec = vi.fn(async (_command: string, args: string[]) => {
+			if (args[0] === "pane" && args[1] === "current") return { code: 0, stdout: JSON.stringify({ result: { pane: { pane_id: "w1:p1", workspace_id: "w1", tab_id: "w1:t1" } } }), stderr: "" };
+			if (args[0] === "pane" && args[1] === "list") return { code: 0, stdout: JSON.stringify({ result: { panes: [{ pane_id: args[3] === "w2" ? "w2:p1" : "w1:p1", workspace_id: args[3] ?? "w1", tab_id: "w1:t1" }] } }), stderr: "" };
+			if (args[0] === "pane" && args[1] === "split") return { code: 0, stdout: JSON.stringify({ result: { pane: { pane_id: "w1:p2", workspace_id: "w1", tab_id: "w1:t1" } } }), stderr: "" };
+			if (args[0] === "pane" && args[1] === "run") { paneRuns.push(args[3] ?? ""); return { code: 0, stdout: "", stderr: "" }; }
+			if (args[0] === "pane" && (args[1] === "close" || args[1] === "move")) return { code: 0, stdout: "", stderr: "" };
+			if (args[0] === "worktree" && args[1] === "create") return { code: 0, stdout: JSON.stringify({ result: { workspace: { workspace_id: "w2" } } }), stderr: "" };
+			return { code: 1, stdout: "", stderr: `unexpected herdr call: ${args.join(" ")}` };
+		});
 		const pi = {
-			registerTool: vi.fn((tool: NonNullable<typeof definition>) => { definition = tool; }),
 			on: vi.fn(),
+			registerCommand: vi.fn((name: string, definition: { handler: (...args: never[]) => Promise<void> }) => commands.set(name, definition)),
+			registerShortcut: vi.fn(),
+			registerTool: vi.fn((definition: { name: string; execute: (...args: never[]) => Promise<object> }) => tools.set(definition.name, definition)),
+			registerProvider: vi.fn(),
+			registerMessageRenderer: vi.fn(),
+			sendMessage: vi.fn(),
 			getThinkingLevel: vi.fn(() => "low"),
 			getActiveTools: vi.fn(() => ["read"]),
+			exec,
 		};
-		// SAFETY: the spawn and Pi doubles implement only the task registration and child-process surfaces exercised here.
-		taskTool(undefined, spawnTask as never, () => provenance.pi)(pi as never);
-		const context = {
-			cwd: ROOT,
-			model: undefined,
-			sessionManager: { getSessionFile: () => undefined },
-		};
-		// SAFETY: the captured definition and context expose the exact task execute surface used by this fixture.
-		const taskResult = definition!.execute("native-provenance", { type: "single", tasks: [{ prompt: "probe", fork: false }] }, undefined, undefined, context as never);
-		await vi.waitFor(() => expect(spawnTask).toHaveBeenCalledOnce(), { timeout: 5_000 });
-		expect(spawnTask).toHaveBeenCalledWith(provenance.pi, expect.any(Array), expect.objectContaining({ shell: false }));
-		proc.emit("close", 0);
-		await taskResult;
+		try {
+			const extension = await import(`${pathToFileURL(NATIVE_RPC_EXTENSION).href}?provenance=${Date.now()}`);
+			extension.resetSumocodeProcessInstallLatchForTests?.();
+			// SAFETY: the Pi double implements the registration/runtime surface used by the compiled RPC extension.
+			extension.default(pi as never);
+			const context = { cwd: ROOT, model: undefined, hasUI: true, ui: { notify: vi.fn() }, sessionManager: { getSessionFile: () => undefined, getBranch: () => [{ type: "message" }] } };
+			// SAFETY: the compiled task definition and context expose the exact Pi tool execution surface used here.
+			await tools.get("task")!.execute("native-provenance", { type: "single", tasks: [{ prompt: "probe", fork: false }] }, undefined, undefined, context as never);
+			// SAFETY: the fake parent Pi writes this exact provenance record.
+			const observed = JSON.parse(readFileSync(taskLog, "utf8")) as { pi: string; launcher: string };
+			expect(observed).toMatchObject({ pi: piBinary, launcher: NATIVE_BIN });
 
-		const visible = buildVisibleAgentCommand({
-			cwd: ROOT,
-			paths: buildVisibleTaskPaths("native-provenance", 1, tempRoot("sumocode-native-provenance-")),
-			launcher: provenance.sumocode,
-		});
-		expect(visible).toContain(`exec '${NATIVE_BIN}' 'task'`);
+			// SAFETY: the compiled subagent tool uses the same caller-facing execute seam.
+			await tools.get("subagent_spawn")!.execute("visible-provenance", { prompt: "watch", name: "worker", visible: true }, undefined, undefined, context as never);
+			const visibleScript = readdirSync(root, { recursive: true, encoding: "utf8" }).find((path) => path.endsWith("run.sh"));
+			expect(visibleScript).toBeDefined();
+			expect(readFileSync(join(root, visibleScript!), "utf8")).toContain(`exec '${NATIVE_BIN}' 'task'`);
 
-		const openWorkspace = vi.fn(async () => ({ ok: true as const, pane: { host: "herdr" as const, paneId: "p1" } }));
-		// SAFETY: these minimal Pi and stream doubles implement only the methods openWorktree calls.
-		const code = await openWorktree("nested", {
-			cwd: ROOT,
-			env: { SUMOCODE_LAUNCHER: provenance.sumocode, SUMOCODE_WORKTREE_SETUP: "" },
-			terminalHost: {
-				kind: "herdr",
-				openWorktreeWorkspace: openWorkspace,
-				openCommandInSplit: vi.fn(),
-				closePane: vi.fn(),
-				notify: vi.fn(),
-			},
-			create: vi.fn(),
-			pi: { exec: vi.fn() } as never,
-			stdout: { write: vi.fn(() => true) } as never,
-			stderr: { write: vi.fn(() => true) } as never,
-		});
-		expect(code).toBe(0);
-		expect(openWorkspace).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ shellCommand: `exec '${NATIVE_BIN}'` }));
-	});
+			// SAFETY: the compiled command definition and context expose the registered slash-command handler seam.
+			await commands.get("sumo:worktree")!.handler("new provenance", context as never);
+			expect(paneRuns).toHaveLength(1);
+			expect(paneRuns[0]).toBe(`pnpm install && exec '${NATIVE_BIN}'`);
+		} finally {
+			for (const key of Object.keys(process.env)) if (!(key in previousEnv)) delete process.env[key];
+			Object.assign(process.env, previousEnv);
+		}
+	}, 20_000);
 
 	it("runs diag without starting a Pi runtime", () => {
 		const root = tempRoot("sumocode-native-diag-only-");

@@ -150,15 +150,20 @@ describe("Pi compatibility contract", () => {
 
 describe("nested executable provenance", () => {
 	it("preserves nested executable provenance", () => {
-		const parent = { pi: "/parent/pi-0.84.4", sumocode: "/parent/sumocode-0.4.1" };
+		const parent = { pi: "/parent/pi-0.84.4" };
 		const pathGlobal = { pi: "/global/pi-0.84.3", sumocode: "/global/sumocode-0.3.0" };
-		const layout = { inherited: parent, fallback: { pi: "pi", sumocode: "sumocode" } };
-		expect(assertNestedExecutableProvenance({ parent, pathGlobal, source: layout, installed: layout })).toBe(true);
+		const layout = (launcher) => ({
+			launcher,
+			inherited: { pi: parent.pi, sumocode: launcher },
+			fallback: { pi: "pi", sumocode: "sumocode" },
+			pathExecutables: { pi: "PATH_PI", sumocode: "PATH_SUMOCODE" },
+		});
+		expect(assertNestedExecutableProvenance({ parent, pathGlobal, source: layout("/source/sumocode"), installed: layout("/installed/sumocode") })).toBe(true);
 		expect(() => assertNestedExecutableProvenance({
 			parent,
 			pathGlobal,
-			source: layout,
-			installed: { ...layout, inherited: pathGlobal },
+			source: layout("/source/sumocode"),
+			installed: { ...layout("/installed/sumocode"), inherited: { pi: pathGlobal.pi, sumocode: "/installed/sumocode" } },
 		})).toThrow("installed Pi provenance");
 	});
 });

@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -38,6 +38,11 @@ function record(advisories = [101]) {
 }
 
 describe("dependency audit policy", () => {
+	it("runs in the required CI lane", () => {
+		const workflow = readFileSync(join(import.meta.dirname, "../.github/workflows/ci.yml"), "utf8");
+		expect(workflow).toContain("run: node scripts/check-dependency-audit.mjs");
+	});
+
 	it("rejects unknown policy schemas", () => {
 		const result = runChecker({}, [], 2);
 		expect(result.status).toBe(1);

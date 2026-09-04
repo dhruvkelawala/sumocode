@@ -29,6 +29,7 @@ import {
 } from "./child-protocol.js";
 import { resolveExecutableProvenance } from "./executable-provenance.js";
 import { type BuiltInToolName, getBuiltInToolsFromActiveTools, resolveTaskConfig } from "./native-task-config.js";
+import { logDiagnostic } from "./sumo-tui/runtime/diagnostics.js";
 import {
 	isRecord,
 	MAX_PARALLEL_TASKS,
@@ -1389,6 +1390,7 @@ export const taskTool = (
 			const builtInTools = getBuiltInToolsFromActiveTools(pi.getActiveTools());
 			const ctxModel = ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined;
 			const piBinary = resolveBinary();
+			logDiagnostic("native_task_child_provenance", { piBinary });
 
 			const taskStartedAt = Date.now();
 			const makeDetails = (results: SingleResult[]): TaskToolDetails => {

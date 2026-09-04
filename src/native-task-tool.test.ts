@@ -1,6 +1,6 @@
 // oxlint-disable anti-slop/no-runtime-typeof -- retained args are object-shaped until the budget replaces them with a string preview.
 import { EventEmitter } from "node:events";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, promises as fsPromises, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, promises as fsPromises, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -152,6 +152,30 @@ describe("native task tool", () => {
 		expect(task.spawn).toHaveBeenCalledWith("/parent tools/pi", expect.any(Array), expect.objectContaining({ shell: false }));
 		proc.emit("close", 0);
 		await result;
+	});
+
+	it("records bounded Pi provenance without prompt content in diagnostics", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "sumocode-task-provenance-diag-"));
+		const diagFile = join(dir, "diag.jsonl");
+		const previousDiag = process.env.SUMO_TUI_DIAG_FILE;
+		process.env.SUMO_TUI_DIAG_FILE = diagFile;
+		const piBinary = `/parent/${"x".repeat(300)}/pi`;
+		try {
+			const proc = new FakeTaskProcess();
+			const task = registeredTask(proc, { piBinary });
+			const result = task.execute();
+			await vi.waitFor(() => expect(task.spawn).toHaveBeenCalledOnce());
+			const diagnostic = readFileSync(diagFile, "utf8");
+			expect(diagnostic).toContain('"event":"native_task_child_provenance"');
+			expect(diagnostic).toContain(`${piBinary.slice(0, 160)}…`);
+			expect(diagnostic).not.toContain("bounded child");
+			proc.emit("close", 0);
+			await result;
+		} finally {
+			if (previousDiag === undefined) delete process.env.SUMO_TUI_DIAG_FILE;
+			else process.env.SUMO_TUI_DIAG_FILE = previousDiag;
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("reports unscheduled parallel workers queued until their existing slot starts", async () => {

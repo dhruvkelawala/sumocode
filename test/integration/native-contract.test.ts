@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn, type IPty } from "node-pty";
@@ -396,6 +396,14 @@ nativeDescribe("native executable contract", () => {
 		expect(existsSync(marker)).toBe(false);
 	});
 
+	it("tightens a retained diagnostics file to owner-only", () => {
+		const diagFile = join(tempRoot("sumocode-native-private-diag-"), "diag.jsonl");
+		writeFileSync(diagFile, `${JSON.stringify({ event: "boot_screen_frame" })}\n`, { mode: 0o644 });
+		const result = runNative(["-d", "--no-clear-diag", "diag", diagFile]);
+		expect(result.status).toBe(0);
+		expect(statSync(diagFile).mode & 0o777).toBe(0o600);
+	});
+
 	it("renders static slash completion between editor and hydrated command readiness", async () => {
 		const agentDir = tempRoot("sumocode-native-agent-");
 		const cwd = tempRoot("sumocode-native-project-");
@@ -454,6 +462,12 @@ nativeDescribe("native executable contract", () => {
 		});
 		expect(result.status).toBe(0);
 		expect(result.stdout).not.toContain('"name":"reload"');
+	});
+
+	it("preserves the direct Pi child's signal exit code", () => {
+		const pi = createExecutable("pi-sigkill", "#!/bin/bash\nkill -KILL $$\n");
+		const result = runNative(["--no-sumo-tui"], { env: { PI_BIN: pi } });
+		expect(result.status).toBe(137);
 	});
 
 	for (const row of [
@@ -600,10 +614,11 @@ nativeDescribe("native executable contract", () => {
 		const state = join(root, "count");
 		const log = join(root, "children.log");
 		const pi = createExecutable("pi-rpc-reload", `#!/bin/bash\ncount=0; [ ! -f ${JSON.stringify(state)} ] || count=$(cat ${JSON.stringify(state)}); count=$((count+1)); printf '%s' "$count" > ${JSON.stringify(state)}; printf '%s %s\\n' "$count" "$PPID" >> ${JSON.stringify(log)}; [ "$count" -lt 3 ] && exit 100; exit 42\n`);
-		const session = spawnNativePty(["--offline", "--no-extensions", "--no-session", "--approve"], { env: { PI_BIN: pi } });
+		const session = spawnNativePty(["--offline", "--no-extensions", "--no-session", "--approve"], { env: { PI_BIN: pi, TMPDIR: root } });
 		expect((await waitForExit(session, 20_000)).exitCode).not.toBe(0);
 		const parentPids = readFileSync(log, "utf8").trim().split("\n").map((line) => Number(line.split(" ")[1]));
 		expect(parentPids).toHaveLength(3);
 		expect(new Set(parentPids)).toEqual(new Set([session.pid]));
+		expect(readdirSync(root).filter((name) => name.startsWith("sumocode-exit-code.") || name.startsWith("sumocode-reload-ready."))).toEqual([]);
 	}, 25_000);
 });

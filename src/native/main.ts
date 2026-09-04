@@ -20,7 +20,8 @@
 declare const __SUMOCODE_VERSION__: string | undefined;
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, openSync, realpathSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fchmodSync, openSync, realpathSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { constants as osConstants } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { buildChildSpawnPlan } from "../sumo-tui/rpc/spawn-child.mjs";
 
@@ -560,10 +561,10 @@ function resolveDirectPiStdinPrompt(args: string[]): DirectPiInvocation {
 	return { args, stdinPrompt };
 }
 
-function childExitCode(code: number | null, signal: string | null): number {
-	if (signal === "SIGINT") return 130;
-	if (signal !== null) return 143;
-	return code ?? 1;
+function childExitCode(code: number | null, signal: NodeJS.Signals | null): number {
+	if (signal === null) return code ?? 1;
+	const signalNumber = osConstants.signals[signal];
+	return signalNumber === undefined ? 1 : 128 + signalNumber;
 }
 
 function spawnDirectPi(args: readonly string[], stdinPrompt: string, reloadReadyFile: string): Promise<number> {
@@ -680,9 +681,13 @@ function applyDebugMode(parsed: ParsedLaunch): void {
 	}
 	if (!parsed.dryRun) {
 		try {
-			// Pre-create owner-only; append keeps --no-clear-diag content intact.
+			// Append mode preserves content; fchmod also tightens a retained file.
 			const fd = openSync(diagPath, "a", 0o600);
-			closeSync(fd);
+			try {
+				fchmodSync(fd, 0o600);
+			} finally {
+				closeSync(fd);
+			}
 		} catch {}
 	}
 	process.env.SUMO_TUI_DIAG_FILE = diagPath;
@@ -854,10 +859,6 @@ async function launcherFlow(): Promise<void> {
 	else await runDirectPiBranch(parsed);
 }
 
-function freshExitCodeFile(): string {
-	return makePrivateTempFile("sumocode-exit-code");
-}
-
 async function runRpcBranch(parsed: ParsedLaunch): Promise<void> {
 	for (;;) {
 		const code = await runRpcBranchOnce(parsed);
@@ -925,9 +926,10 @@ async function runRpcBranchOnce(parsed: ParsedLaunch): Promise<number> {
 	process.env.SUMOCODE_PROJECT_CWD = process.env.SUMOCODE_PROJECT_CWD ?? process.cwd();
 	process.env.SUMOCODE_INITIAL_PROMPT_FILE = kickoffPromptFile;
 	process.env.SUMOCODE_RELOAD = process.env.SUMOCODE_RELOAD === "1" ? "1" : "0";
-	process.env.SUMOCODE_RELOAD_READY_FILE = process.env.SUMOCODE_RELOAD === "1" ? makePrivateTempFile("sumocode-reload-ready") : "";
+	const reloadReadyFile = process.env.SUMOCODE_RELOAD === "1" ? makePrivateTempFile("sumocode-reload-ready") : "";
+	process.env.SUMOCODE_RELOAD_READY_FILE = reloadReadyFile;
 	process.env.PI_BIN = PI_BIN;
-	process.env.SUMOCODE_EXIT_CODE_FILE = freshExitCodeFile();
+	delete process.env.SUMOCODE_EXIT_CODE_FILE;
 	process.env.SUMOCODE_TERMINAL_INDEX_GATE = makePrivateTempFile("sumocode-terminal-index");
 	rmSync(process.env.SUMOCODE_TERMINAL_INDEX_GATE, { force: true });
 
@@ -999,14 +1001,13 @@ async function runRpcBranchOnce(parsed: ParsedLaunch): Promise<number> {
 		await terminateUnadoptedChild();
 		if (!relayingEarlySignal) restoreFailedReloadTerminal();
 		cleanupKickoffFile();
+		rmSync(reloadReadyFile, { force: true });
 		process.removeListener("exit", cleanupKickoffFile);
 		throw error;
 	}
 
-	try {
-		writeFileSync(process.env.SUMOCODE_EXIT_CODE_FILE ?? "", String(code), { mode: 0o600 });
-	} catch {}
 	cleanupKickoffFile();
+	rmSync(reloadReadyFile, { force: true });
 	process.removeListener("exit", cleanupKickoffFile);
 	return code;
 }

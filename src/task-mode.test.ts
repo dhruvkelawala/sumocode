@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 
 /**
  * Valid private-control fixtures: the orchestrator writes the control dir
@@ -1122,6 +1122,7 @@ describe("control watcher", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-control-"));
 		const controlDir = join(workDir, "control");
 		mkdirSync(controlDir, { recursive: true, mode: 0o755 });
+		chmodSync(controlDir, 0o755);
 		const { pi, handlers } = buildPiStub();
 		// SAFETY: the pi double supplies the on/sendUserMessage surfaces installTaskModeAutoExit reads.
 		installTaskModeAutoExit(pi as never, {

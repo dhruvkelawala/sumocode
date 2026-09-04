@@ -1,4 +1,4 @@
-import { lstatSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -37,6 +37,7 @@ describe("private artifact boundary", () => {
 		const dir = freshDir("mode");
 		const open = join(dir, "open");
 		mkdirSync(open, { mode: 0o755 });
+		chmodSync(open, 0o755);
 		expect(() => assertPrivateDir(nodeFs, open, "control dir")).toThrow(/not owner-only/);
 	});
 
@@ -76,6 +77,7 @@ describe("private artifact boundary", () => {
 		const dir = freshDir("file-mode");
 		const file = join(dir, "exit.code");
 		writeFileSync(file, "0", { mode: 0o644 });
+		chmodSync(file, 0o644);
 		expect(() => assertPrivateArtifact(nodeFs, file, dir, "exit marker")).toThrow(/not owner-only/);
 	});
 

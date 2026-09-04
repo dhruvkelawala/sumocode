@@ -2,7 +2,7 @@
 // Diagnostic-only Plan 117 instrumentation. Pi is installed as generated JS, so
 // the smallest way to compare its bundled Node entry with its Bun entry is to
 // add identical no-op-unless-diagnostics marks to the installed artifacts.
-import { readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
@@ -13,7 +13,7 @@ function replaceOnce(relativePath, needle, replacement) {
 	const source = readFileSync(path, "utf8");
 	if (source.includes(replacement)) return;
 	const count = source.split(needle).length - 1;
-	if (count !== 1) throw new Error(`Pi 0.84.3 instrumentation expected one match in ${relativePath}, found ${count}`);
+	if (count !== 1) throw new Error(`Pi 0.84.4 instrumentation expected one match in ${relativePath}, found ${count}`);
 	writeFileSync(path, source.replace(needle, replacement));
 }
 
@@ -55,10 +55,17 @@ replaceOnce("modes/rpc/rpc-mode.js",
 	"case \"get_state\": {\n                const state =",
 	'case "get_state": {\n                globalThis.__sumocodeStartupMark?.("first_get_state_received");\n                const state =');
 
-const chunk = "bundle/chunks/chunk-E5KXRMZK.js";
-replaceOnce(chunk,
-	"async function main(args,options){resetTimings();",
-	'async function main(args,options){resetTimings();globalThis.__sumocodeStartupMark?.("main_enter");');
+const bundleChunkNeedle = "async function main(args,options){resetTimings();";
+const bundleChunkReplacement = 'async function main(args,options){resetTimings();globalThis.__sumocodeStartupMark?.("main_enter");';
+const chunkMatches = readdirSync(join(piDist, "bundle/chunks"))
+	.filter((name) => name.endsWith(".js"))
+	.filter((name) => {
+		const source = readFileSync(join(piDist, "bundle/chunks", name), "utf8");
+		return source.includes(bundleChunkNeedle) || source.includes(bundleChunkReplacement);
+	});
+if (chunkMatches.length !== 1) throw new Error(`Pi 0.84.4 instrumentation expected one main bundle chunk, found ${chunkMatches.length}`);
+const chunk = join("bundle/chunks", chunkMatches[0]);
+replaceOnce(chunk, bundleChunkNeedle, bundleChunkReplacement);
 replaceOnce(chunk,
 	"static async create(options={}){let credentials=",
 	'static async create(options={}){globalThis.__sumocodeStartupMark?.("model_runtime_create_start");let credentials=');

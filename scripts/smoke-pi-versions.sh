@@ -50,7 +50,7 @@ case "${1:-}" in
 			"${ROOT_DIR}/package.json" "${REGISTRY_DIR}/pi-ai.json" "${REGISTRY_DIR}/pi-coding-agent.json" "${REGISTRY_DIR}/pi-tui.json")
 		;;
 	"")
-		VERSIONS=("0.84.3")
+		VERSIONS=("0.84.4")
 		;;
 	*)
 		VERSIONS=("$@")

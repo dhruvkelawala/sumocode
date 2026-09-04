@@ -50,6 +50,8 @@ describe("dependency audit policy", () => {
 			expect(packageJson.peerDependencies[name]).toBe("~0.84.4");
 			expect(packageJson.devDependencies[name]).toBe("0.84.4");
 		}
+		expect(readFileSync(join(import.meta.dirname, "build-native.mjs"), "utf8")).toContain('const PI_PIN = "0.84.4"');
+		expect(readFileSync(join(import.meta.dirname, "smoke-pi-versions.sh"), "utf8")).toContain('VERSIONS=("0.84.4")');
 	});
 
 	it("runs in the required CI lane", () => {

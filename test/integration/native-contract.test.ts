@@ -435,6 +435,7 @@ nativeDescribe("native executable contract", () => {
 		expect(dryRun.status).toBe(0);
 		const piBinary = dryRunField(dryRun.stdout, "PI_BIN");
 		const previousEnv = { ...process.env };
+		delete process.env.SUMOCODE_BG_CHILD;
 		Object.assign(process.env, {
 			PI_BIN: piBinary,
 			SUMOCODE_LAUNCHER: NATIVE_BIN,
@@ -476,6 +477,7 @@ nativeDescribe("native executable contract", () => {
 			extension.resetSumocodeProcessInstallLatchForTests?.();
 			// SAFETY: the Pi double implements the registration/runtime surface used by the compiled RPC extension.
 			extension.default(pi as never);
+			expect([...tools.keys()]).toEqual(expect.arrayContaining(["task", "subagent_spawn"]));
 			const context = { cwd: ROOT, model: undefined, hasUI: true, ui: { notify: vi.fn() }, sessionManager: { getSessionFile: () => undefined, getBranch: () => [{ type: "message" }] } };
 			// SAFETY: the compiled task definition and context expose the exact Pi tool execution surface used here.
 			await tools.get("task")!.execute("native-provenance", { type: "single", tasks: [{ prompt: "probe", fork: false }] }, undefined, undefined, context as never);

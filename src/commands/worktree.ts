@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { resolveExecutableProvenance } from "../executable-provenance.js";
 import { getTerminalHost, type SplitDirection, type TerminalHost } from "../terminal-host/index.js";
 import { buildShellCommand, shellEscape } from "../terminal-host/shell-command.js";
 import { chooseDiffSplitDirection, type TerminalSize } from "./diff.js";
@@ -25,6 +26,7 @@ export interface WorktreeCommandOptions {
 	readonly pathExists?: (path: string) => boolean;
 	readonly terminalSize?: () => TerminalSize;
 	readonly setupAction?: string;
+	readonly resolveLauncher?: () => string;
 }
 
 export interface ParsedWorktreeArgs {
@@ -67,16 +69,20 @@ function notify(_pi: Pick<ExtensionAPI, "sendMessage">, ctx: ExtensionContext, m
 	process.stdout.write(`${message}\n`);
 }
 
-function commandForWorktree(task: string, setupAction: string): string {
-	const setup = setupAction.trim();
-	const setupPrefix = setup ? `${setup} && ` : "";
-	return `${setupPrefix}SUMOCODE_TASK_KEEP_OPEN=1 exec sumocode task ${shellEscape(task)}`;
+function launcherCommand(launcher: string): string {
+	return launcher === "sumocode" ? launcher : shellEscape(launcher);
 }
 
-function commandForFreshWorktree(setupAction: string): string {
+function commandForWorktree(task: string, setupAction: string, launcher: string): string {
 	const setup = setupAction.trim();
 	const setupPrefix = setup ? `${setup} && ` : "";
-	return `${setupPrefix}exec sumocode`;
+	return `${setupPrefix}SUMOCODE_TASK_KEEP_OPEN=1 exec ${launcherCommand(launcher)} task ${shellEscape(task)}`;
+}
+
+function commandForFreshWorktree(setupAction: string, launcher: string): string {
+	const setup = setupAction.trim();
+	const setupPrefix = setup ? `${setup} && ` : "";
+	return `${setupPrefix}exec ${launcherCommand(launcher)}`;
 }
 
 function worktreeWorkspaceLabel(branch: string): string {
@@ -134,6 +140,7 @@ export function registerWorktreeCommand(pi: ExtensionAPI, options: WorktreeComma
 	const pathExists = options.pathExists ?? existsSync;
 	const getTerminalSize = options.terminalSize ?? terminalSize;
 	const setupAction = options.setupAction ?? process.env.SUMOCODE_WORKTREE_SETUP ?? DEFAULT_SETUP_ACTION;
+	const resolveLauncher = options.resolveLauncher ?? (() => resolveExecutableProvenance().sumocode);
 
 	pi.registerCommand("sumo:worktree", {
 		description: "Open a fresh worktree session, reopen one with open <target>, delegate <task>, or prune [target]; fresh/delegate accept --base <ref>",
@@ -182,7 +189,7 @@ export function registerWorktreeCommand(pi: ExtensionAPI, options: WorktreeComma
 						);
 						return;
 					}
-					const paneCommand = commandForFreshWorktree(setupAction);
+					const paneCommand = commandForFreshWorktree(setupAction, resolveLauncher());
 					const label = worktreeWorkspaceLabel(match.branch ?? match.path);
 					if (terminalHost.openExistingWorktreeWorkspace) {
 						const opened = await terminalHost.openExistingWorktreeWorkspace(pi, { path: match.path, label, shellCommand: paneCommand, sourceCwd: ctx.cwd });
@@ -205,7 +212,8 @@ export function registerWorktreeCommand(pi: ExtensionAPI, options: WorktreeComma
 
 				const task = parsed.mode === "fresh" ? (parsed.value || `wt-${Date.now().toString(36)}`) : parsed.value;
 				const resolved = resolveCreateOptions({ repoRoot: ctx.cwd, task, baseRef: parsed.baseRef ?? "HEAD" });
-				const paneCommand = parsed.mode === "fresh" ? commandForFreshWorktree(setupAction) : commandForWorktree(parsed.value, setupAction);
+				const launcher = resolveLauncher();
+				const paneCommand = parsed.mode === "fresh" ? commandForFreshWorktree(setupAction, launcher) : commandForWorktree(parsed.value, setupAction, launcher);
 				const label = worktreeWorkspaceLabel(resolved.branch);
 				let created: CreateWorktreeResult | undefined;
 				if (terminalHost.openWorktreeWorkspace) {

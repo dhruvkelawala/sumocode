@@ -112,7 +112,7 @@ const createHarness = (
 	startResult: typeof startedPane | { ok: false; error: string } = startedPane,
 	placement: { kind: "tab"; tabId: string; direction: "right" } | { kind: "workspace"; workspaceId: string; paneId: string } = { kind: "tab", tabId: "w1:t1", direction: "right" },
 	appendSystemPrompt?: string,
-	spawnerDependencies?: { sendAckPollMs?: number; sendAckTimeoutMs?: number },
+	spawnerDependencies?: { sendAckPollMs?: number; sendAckTimeoutMs?: number; resolveLauncher?: () => string },
 ) => {
 	const fs = new FakeFs();
 	const closePane = vi.fn(async () => ({ ok: true as const }));
@@ -124,7 +124,7 @@ const createHarness = (
 		closePane,
 		notify: vi.fn(async () => undefined),
 	};
-	const spawn = createPaneChildSpawner({ fs, now: () => 1234, baseDir: "/tmp/subagents", pollIntervalMs: 750, ...spawnerDependencies });
+	const spawn = createPaneChildSpawner({ fs, now: () => 1234, baseDir: "/tmp/subagents", pollIntervalMs: 750, resolveLauncher: () => "sumocode", ...spawnerDependencies });
 	const child = spawn({
 		prompt: "do the work",
 		name: "worker",
@@ -147,6 +147,13 @@ const createHarness = (
 const settledEvents = (events: readonly SubagentEvent[]) => events.filter((event): event is Extract<SubagentEvent, { kind: "run-settled" }> => event.kind === "run-settled");
 
 describe("pane subagent backend", () => {
+	it("threads launcher provenance into the visible child command", () => {
+		const harness = createHarness(startedPane, undefined, undefined, { resolveLauncher: () => "/parent tools/sumocode" });
+		const script = harness.fs.files.get(harness.paths.scriptFile) ?? "";
+		expect(script).toContain("exec '/parent tools/sumocode' 'task'");
+		harness.child.interrupt();
+	});
+
 	it("harvests a completed child from response and exit files exactly once", async () => {
 		vi.useFakeTimers();
 		try {

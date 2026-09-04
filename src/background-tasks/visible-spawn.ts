@@ -31,6 +31,7 @@ interface VisibleTaskCommandOptions {
 interface VisibleAgentCommandOptions {
 	cwd: string;
 	paths: VisibleTaskPaths;
+	launcher?: string;
 	model?: string;
 	thinking?: string;
 	tools?: readonly string[];
@@ -107,7 +108,7 @@ export function buildVisibleAgentCommand(options: VisibleAgentCommandOptions): s
 		shellEscape(options.cwd),
 		"&&",
 		"exec",
-		"sumocode",
+		options.launcher && options.launcher !== "sumocode" ? shellEscape(options.launcher) : "sumocode",
 		...buildVisibleAgentArgs(options).map(shellEscape),
 	].join(" ");
 }

@@ -39,6 +39,10 @@ interface StartMarker {
 	readonly completionPolicy: "passive" | "wake";
 }
 
+interface IndexAttemptMarker {
+	readonly ready: boolean;
+}
+
 const SESSION_A = "019f8a78-b4f5-7b7b-b774-2d2e4bce9001";
 const FIXTURE = resolve("test/fixtures/terminal-delivery-extension.ts");
 const roots: string[] = [];
@@ -142,8 +146,13 @@ function readSnapshot(paths: TestRoot, id: string): TerminalTaskSnapshot | undef
 		if (!entry.isDirectory()) continue;
 		const meta = join(paths.storeDir, entry.name, "meta.json");
 		if (!existsSync(meta)) continue;
-		// SAFETY: production writes terminal metadata from TerminalTaskSnapshot after schema validation.
-		const value = JSON.parse(readFileSync(meta, "utf8")) as TerminalTaskSnapshot;
+		let value: TerminalTaskSnapshot;
+		try {
+			// SAFETY: valid production metadata is a TerminalTaskSnapshot; malformed unrelated fixtures are skipped.
+			value = JSON.parse(readFileSync(meta, "utf8")) as TerminalTaskSnapshot;
+		} catch {
+			continue;
+		}
 		if (value.id === id) return value;
 	}
 	return undefined;
@@ -184,6 +193,32 @@ function persistedTerminalMessages(sessionFile: string, completionId: string): A
 		.flatMap((line) => terminalMessages(JSON.parse(line), completionId));
 }
 
+function resetIndexMarkers(paths: TestRoot): void {
+	for (const name of ["index-attempt.json", "index-scheduled", "index-release", "index-diagnostics.jsonl"]) {
+		rmSync(join(paths.markerDir, name), { force: true });
+	}
+}
+
+function createCorruptRecord(paths: TestRoot): void {
+	const directory = join(paths.storeDir, "term-corrupt-1");
+	mkdirSync(directory, { mode: 0o700 });
+	writeFileSync(join(directory, "meta.json"), "{malformed\n", { mode: 0o600 });
+}
+
+async function seedPendingCompletion(paths: TestRoot, sessionFile: string): Promise<TerminalTaskSnapshot> {
+	writeFileSync(join(paths.markerDir, "busy"), "busy\n", { mode: 0o600 });
+	const first = launch(paths, sessionFile);
+	const start = await first.request("prompt", { message: "/terminal-recovery-start passive" });
+	expect(start.success).toBe(true);
+	await waitForMarker(paths, "started.json");
+	const { id } = readMarker<StartMarker>(paths, "started.json");
+	const pending = await waitForSnapshot(paths, id, (snapshot) => snapshot.deliveryState === "pending");
+	await first.terminate();
+	rmSync(join(paths.markerDir, "busy"), { force: true });
+	resetIndexMarkers(paths);
+	return pending;
+}
+
 afterEach(async () => {
 	for (const child of children.splice(0)) await child.terminate();
 	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -214,6 +249,46 @@ describe("terminal completion delivery recovery", () => {
 		const replacement = launch(paths, sessionFile);
 		const hydrated = await replacement.request("get_messages");
 		expect(terminalMessages(hydrated, delivered.completionId!)).toHaveLength(1);
+		expect(persistedTerminalMessages(sessionFile, delivered.completionId!)).toHaveLength(1);
+	});
+
+	it("defers replacement delivery until the terminal index is ready", async () => {
+		const paths = createRoot();
+		const sessionFile = createSession(paths, "session-a", SESSION_A);
+		const pending = await seedPendingCompletion(paths, sessionFile);
+		createCorruptRecord(paths);
+		const replacement = launch(paths, sessionFile, { SUMOCODE_TEST_TERMINAL_INDEX: "held" });
+
+		await waitForMarker(paths, "index-scheduled");
+		expect(readSnapshot(paths, pending.id)).toMatchObject({ deliveryState: "pending" });
+		expect(terminalMessages(await replacement.request("get_messages"), pending.completionId!)).toHaveLength(0);
+		writeFileSync(join(paths.markerDir, "index-release"), "release\n", { mode: 0o600 });
+
+		const delivered = await waitForSnapshot(paths, pending.id, (snapshot) => snapshot.deliveryState === "delivered");
+		expect(readMarker<IndexAttemptMarker>(paths, "index-attempt.json")).toEqual({ ready: true });
+		expect(terminalMessages(await replacement.request("get_messages"), delivered.completionId!)).toHaveLength(1);
+		await replacement.request("prompt", { message: "/terminal-recovery-settle" });
+		expect(persistedTerminalMessages(sessionFile, delivered.completionId!)).toHaveLength(1);
+	});
+
+	it("defers delivery for an incomplete terminal index", async () => {
+		const paths = createRoot();
+		const sessionFile = createSession(paths, "session-a", SESSION_A);
+		const pending = await seedPendingCompletion(paths, sessionFile);
+		writeFileSync(join(paths.markerDir, "index-fault"), "fault\n", { mode: 0o600 });
+		const replacement = launch(paths, sessionFile);
+
+		await waitForMarker(paths, "index-attempt.json");
+		expect(readMarker<IndexAttemptMarker>(paths, "index-attempt.json")).toEqual({ ready: false });
+		expect(readSnapshot(paths, pending.id)).toMatchObject({ deliveryState: "pending" });
+		expect(terminalMessages(await replacement.request("get_messages"), pending.completionId!)).toHaveLength(0);
+		rmSync(join(paths.markerDir, "index-fault"));
+
+		const delivered = await waitForSnapshot(paths, pending.id, (snapshot) => snapshot.deliveryState === "delivered");
+		const diagnostics = readFileSync(join(paths.markerDir, "index-diagnostics.jsonl"), "utf8");
+		expect(diagnostics).toContain('"complete":false');
+		expect(diagnostics).toContain('"complete":true');
+		expect(terminalMessages(await replacement.request("get_messages"), delivered.completionId!)).toHaveLength(1);
 		expect(persistedTerminalMessages(sessionFile, delivered.completionId!)).toHaveLength(1);
 	});
 });

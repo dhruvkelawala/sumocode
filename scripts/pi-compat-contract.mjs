@@ -161,6 +161,23 @@ function compareVersions(left, right) {
 	return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
 }
 
+export function assertNestedExecutableProvenance(input) {
+	for (const layoutName of ["source", "installed"]) {
+		const layout = input[layoutName];
+		if (layout?.inherited?.pi !== input.parent?.pi || layout.inherited.pi === input.pathGlobal?.pi) {
+			throw new Error(`${layoutName} Pi provenance rebound through PATH`);
+		}
+		if (layout?.inherited?.sumocode !== layout?.launcher || layout.inherited.sumocode === input.pathGlobal?.sumocode) {
+			throw new Error(`${layoutName} SumoCode provenance rebound through PATH (expected ${layout?.launcher}, received ${layout?.inherited?.sumocode})`);
+		}
+		for (const executable of ["pi", "sumocode"]) {
+			if (layout?.fallback?.[executable] !== executable) throw new Error(`${layoutName} ${executable} fallback drift`);
+			if (layout?.pathExecutables?.[executable] !== `PATH_${executable.toUpperCase()}`) throw new Error(`${layoutName} PATH ${executable} fallback did not execute`);
+		}
+	}
+	return true;
+}
+
 export function resolveSupportedMatrix(ranges, published) {
 	const rangeValues = Object.values(ranges);
 	if (rangeValues.length !== 3 || new Set(rangeValues).size !== 1) throw new Error("Pi peer ranges diverge");
@@ -177,7 +194,15 @@ export function assertWorkflowContract(text) {
 	}
 	const invocationCount = text.split("scripts/smoke-pi-versions.sh --supported-matrix").length - 1;
 	if (invocationCount !== 1) throw new Error(`workflow must contain one canonical matrix invocation, found ${invocationCount}`);
-	for (const path of ["package.json", "bin/sumocode.sh", "sumo-rpc-host.js", "src/extension-entry.ts", "src/sumo-tui/rpc/**", "src/extension.ts", "src/interaction-registry.ts", "scripts/smoke-pi-versions.sh", "scripts/pi-compat-contract.mjs", "scripts/pi-compat-contract.test.mjs", ".github/workflows/pi-compat.yml"]) {
+	for (const path of [
+		"package.json", "bin/sumocode.sh", "sumo-rpc-host.js", "src/extension-entry.ts", "src/sumo-tui/rpc/**", "src/extension.ts", "src/interaction-registry.ts",
+		"src/executable-provenance.ts", "src/executable-provenance.test.ts", "src/subagents/backend-pi.ts", "src/subagents/backend-pi.test.ts",
+		"src/subagents/backend-pane.ts", "src/subagents/backend-pane.test.ts", "src/native-task-tool.ts", "src/native-task-tool.test.ts",
+		"src/background-tasks/visible-spawn.ts", "src/background-tasks/visible-spawn.test.ts", "src/commands/worktree.ts", "src/commands/worktree.test.ts",
+		"src/cli/open-worktree.ts", "src/cli/open-worktree.test.ts", "test/integration/launcher-runtime-selection.test.ts",
+		"test/integration/launcher-prompt-transport.test.ts", "test/integration/native-contract.test.ts", "scripts/smoke-pi-versions.sh",
+		"scripts/pi-compat-contract.mjs", "scripts/pi-compat-contract.test.mjs", ".github/workflows/pi-compat.yml",
+	]) {
 		if (!text.includes(path)) throw new Error(`workflow PR paths are missing ${path}`);
 	}
 	return true;
@@ -198,6 +223,11 @@ async function main(args) {
 		};
 		const matrix = resolveSupportedMatrix(ranges, { ai: readJson(aiPath), codingAgent: readJson(codingPath), tui: readJson(tuiPath) });
 		process.stdout.write(`${matrix.join("\n")}\n`);
+		return;
+	}
+	if (args[0] === "--check-provenance") {
+		assertNestedExecutableProvenance(readJson(args[1]));
+		process.stdout.write("Nested executable provenance: PASS\n");
 		return;
 	}
 	if (args[0] === "--check-workflow") {

@@ -19,6 +19,7 @@ import {
 	shellEscape,
 	visibleTaskPathsInDir,
 } from "../background-tasks/visible-spawn.js";
+import { resolveExecutableProvenance } from "../executable-provenance.js";
 import {
 	assertPrivateArtifact,
 	assertPrivateDir,
@@ -76,6 +77,7 @@ export interface PaneBackendDependencies {
 	sendAckPollMs?: number;
 	/** Steer-consumption acknowledgement budget. */
 	sendAckTimeoutMs?: number;
+	resolveLauncher?: () => string;
 }
 
 const nodeFs: PaneBackendFs = {
@@ -159,6 +161,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	const commandOptions = {
 		cwd: options.cwd,
 		paths,
+		launcher: (dependencies.resolveLauncher ?? (() => resolveExecutableProvenance().sumocode))(),
 		model: options.model,
 		thinking: options.thinking,
 		tools: options.tools,

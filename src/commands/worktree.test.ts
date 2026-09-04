@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { parseWorktreeArgs, registerWorktreeCommand } from "./worktree.js";
+import { parseWorktreeArgs, registerWorktreeCommand as registerWorktreeCommandWithDefaults } from "./worktree.js";
 import type {
 	ExistingWorktreeWorkspaceOptions,
 	WorktreeWorkspaceOptions,
@@ -8,6 +8,9 @@ import type {
 	TerminalHost,
 	TerminalHostKind,
 } from "../terminal-host/types.js";
+const registerWorktreeCommand: typeof registerWorktreeCommandWithDefaults = (pi, options = {}) =>
+	registerWorktreeCommandWithDefaults(pi, { resolveLauncher: () => "sumocode", ...options });
+
 type SplitResult = { ok: true } | { ok: false; error: string };
 type NativePaneResult = { ok: true; pane: { host: "herdr"; paneId: string } } | { ok: false; error: string };
 
@@ -111,6 +114,7 @@ describe("/sumo:worktree", () => {
 			terminalHost: makeTerminalHost(openSplit),
 			terminalSize: () => ({ columns: 80, rows: 120 }),
 			setupAction: "pnpm install",
+			resolveLauncher: () => "/parent tools/sumocode",
 		});
 
 		await handler()?.("ship v0.4", { hasUI: true, cwd: "/repo", ui: { notify } });
@@ -120,7 +124,7 @@ describe("/sumo:worktree", () => {
 		expect(openSplit).toHaveBeenCalledWith(pi, "down", expect.stringMatching(/^bash -lc /));
 		const openedCommand = openSplit.mock.calls[0]?.[2];
 		expect(openedCommand).toContain("/repo.wt/sumo__task");
-		expect(openedCommand).toContain("pnpm install && SUMOCODE_TASK_KEEP_OPEN=1 exec sumocode task");
+		expect(openedCommand).toContain("pnpm install && SUMOCODE_TASK_KEEP_OPEN=1 exec '\\''/parent tools/sumocode'\\'' task");
 		expect(openedCommand).toContain("ship v0.4");
 		expect(sendMessage).not.toHaveBeenCalled();
 		expect(notify).toHaveBeenCalledWith(expect.stringContaining("opened sumo/task in down split"), "info");

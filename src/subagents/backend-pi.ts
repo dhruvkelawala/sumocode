@@ -14,6 +14,7 @@ import {
 	boundRetainedResult,
 	boundStableIdentifier,
 } from "../child-protocol.js";
+import { resolveExecutableProvenance } from "../executable-provenance.js";
 import { type BuiltInToolName, resolveTaskConfig } from "../native-task-config.js";
 import { isRecord, type TaskThinking, type ThinkingLevel } from "../native-task-params.js";
 import { CHILD_MODEL_ID_ENV, CHILD_MODEL_PROVIDER_ENV } from "./pi-child-model-bootstrap.js";
@@ -482,9 +483,7 @@ const attachAbortSignal = (proc: ChildProcessWithoutNullStreams, signal: AbortSi
 };
 
 export function resolvePiBinary(env: NodeJS.ProcessEnv = process.env): string {
-	const configured = env.PI_BIN?.trim();
-	if (!configured) return "pi";
-	return configured.includes("/") || configured.includes("\\") ? resolve(configured) : configured;
+	return resolveExecutableProvenance({ env }).pi;
 }
 
 export function resolvePiChildModelBootstrapEntry(

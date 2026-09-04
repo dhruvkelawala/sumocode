@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	assertCompatibilityContract,
+	assertNestedExecutableProvenance,
 	assertWorkflowContract,
 	EXPECTED_HOST_COMMANDS as HOST_COMMANDS,
 	EXPECTED_SUMOCODE_EXTENSION_COMMANDS as SUMO_COMMANDS,
@@ -147,6 +148,26 @@ describe("Pi compatibility contract", () => {
 	});
 });
 
+describe("nested executable provenance", () => {
+	it("preserves nested executable provenance", () => {
+		const parent = { pi: "/parent/pi-0.84.4" };
+		const pathGlobal = { pi: "/global/pi-0.84.3", sumocode: "/global/sumocode-0.3.0" };
+		const layout = (launcher) => ({
+			launcher,
+			inherited: { pi: parent.pi, sumocode: launcher },
+			fallback: { pi: "pi", sumocode: "sumocode" },
+			pathExecutables: { pi: "PATH_PI", sumocode: "PATH_SUMOCODE" },
+		});
+		expect(assertNestedExecutableProvenance({ parent, pathGlobal, source: layout("/source/sumocode"), installed: layout("/installed/sumocode") })).toBe(true);
+		expect(() => assertNestedExecutableProvenance({
+			parent,
+			pathGlobal,
+			source: layout("/source/sumocode"),
+			installed: { ...layout("/installed/sumocode"), inherited: { pi: pathGlobal.pi, sumocode: "/installed/sumocode" } },
+		})).toThrow("installed Pi provenance");
+	});
+});
+
 describe("supported matrix resolution", () => {
 	it("returns every satisfying published patch in semantic order", () => {
 		expect(resolveSupportedMatrix(
@@ -172,7 +193,7 @@ describe("supported matrix resolution", () => {
 });
 
 describe("workflow contract", () => {
-	const workflow = `on:\n  pull_request:\n    paths: [package.json, bin/sumocode.sh, sumo-rpc-host.js, src/extension-entry.ts, src/sumo-tui/rpc/**, src/extension.ts, src/interaction-registry.ts, scripts/smoke-pi-versions.sh, scripts/pi-compat-contract.mjs, scripts/pi-compat-contract.test.mjs, .github/workflows/pi-compat.yml]\n  schedule:\n    - cron: "17 4 * * *"\n  workflow_dispatch:\njobs:\n  pi-compat:\n    timeout-minutes: 20\n    steps:\n      - run: pnpm install --frozen-lockfile\n      - run: scripts/smoke-pi-versions.sh --supported-matrix\n`;
+	const workflow = `on:\n  pull_request:\n    paths: [package.json, bin/sumocode.sh, sumo-rpc-host.js, src/extension-entry.ts, src/sumo-tui/rpc/**, src/extension.ts, src/interaction-registry.ts, src/executable-provenance.ts, src/executable-provenance.test.ts, src/subagents/backend-pi.ts, src/subagents/backend-pi.test.ts, src/subagents/backend-pane.ts, src/subagents/backend-pane.test.ts, src/native-task-tool.ts, src/native-task-tool.test.ts, src/background-tasks/visible-spawn.ts, src/background-tasks/visible-spawn.test.ts, src/commands/worktree.ts, src/commands/worktree.test.ts, src/cli/open-worktree.ts, src/cli/open-worktree.test.ts, test/integration/launcher-runtime-selection.test.ts, test/integration/launcher-prompt-transport.test.ts, test/integration/native-contract.test.ts, scripts/smoke-pi-versions.sh, scripts/pi-compat-contract.mjs, scripts/pi-compat-contract.test.mjs, .github/workflows/pi-compat.yml]\n  schedule:\n    - cron: "17 4 * * *"\n  workflow_dispatch:\njobs:\n  pi-compat:\n    timeout-minutes: 20\n    steps:\n      - run: pnpm install --frozen-lockfile\n      - run: scripts/smoke-pi-versions.sh --supported-matrix\n`;
 
 	it("requires qualifying PR paths, daily/manual triggers, timeout, and one canonical invocation", () => {
 		expect(assertWorkflowContract(workflow)).toBe(true);

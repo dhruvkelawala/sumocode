@@ -113,15 +113,15 @@ Cover explicit absolute binary, PATH command resolution, blank fallback, relativ
 
 ## Done criteria
 
-- [ ] Source and native parents expose stable launcher/Pi provenance after nested `cd`; direct-Pi source children inherit the already-selected `PI_BIN`.
-- [ ] Existing nested-subagent `PI_BIN` behavior remains intact, and native-task Pi children use the same parent-selected binary when available.
-- [ ] Visible and `/sumo:worktree` children use the parent-selected SumoCode launcher when available.
-- [ ] Standalone fallback remains functional and explicit.
-- [ ] Paths are shell-safe and diagnostics contain no prompts/secrets.
-- [ ] Exact pure and package-boundary provenance fixtures run by default in every published supported-version row, and provenance-source pull requests trigger the matrix before merge; no opt-in or “targeted tests or matrix” escape route remains.
-- [ ] Full gates pass.
-- [ ] `git status --short` contains only files listed in Scope plus this plan/index bookkeeping.
-- [ ] Plan 108's `plans/README.md` row is updated to `DONE` with completion evidence.
+- [x] Source and native parents expose stable launcher/Pi provenance after nested `cd`; direct-Pi source children inherit the already-selected `PI_BIN`.
+- [x] Existing nested-subagent `PI_BIN` behavior remains intact, and native-task Pi children use the same parent-selected binary when available.
+- [x] Visible and `/sumo:worktree` children use the parent-selected SumoCode launcher when available.
+- [x] Standalone fallback remains functional and explicit.
+- [x] Paths are shell-safe and diagnostics contain no prompts/secrets.
+- [x] Exact pure and package-boundary provenance fixtures run by default in every published supported-version row, and provenance-source pull requests trigger the matrix before merge; no opt-in or “targeted tests or matrix” escape route remains.
+- [x] Full gates pass.
+- [x] `git status --short` contains only files listed in Scope plus explicitly authorized deterministic security-fixture repairs and this plan/index bookkeeping.
+- [x] Plan 108's `plans/README.md` row is updated to `DONE` with completion evidence.
 
 ## STOP conditions
 

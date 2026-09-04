@@ -4,8 +4,13 @@ import type { ChatMessage } from "../widgets/chat-message.js";
 import type { ChatPagerReplaceStats } from "../widgets/chat-pager.js";
 import {
 	appendOrFoldTranscriptMessage,
-	foldBlocksIntoMessages,
+	appendOrFoldTranscriptMessageIndexed,
+	createFoldableBlockCursor,
+	foldBlockIntoIndexedMessages,
+	indexFoldableBlocks,
 	isFoldableBlock,
+	type FoldableBlockCursor,
+	type FoldableBlockIndex,
 } from "./activity-fold.js";
 import {
 	chatMessageViewModelFromPiMessage,
@@ -293,6 +298,7 @@ type ChatDiffHint = "incremental" | "rewrite";
 
 let messageContentKeyCache = new WeakMap<ChatMessageViewModel, string>();
 let messageContentKeyCacheMisses = 0;
+let transcriptSnapshotEnvelopeCopies = 0;
 
 export function resetMessageContentKeyCacheForTests(): void {
 	messageContentKeyCache = new WeakMap<ChatMessageViewModel, string>();
@@ -303,10 +309,26 @@ export function getMessageContentKeyCacheMissesForTests(): number {
 	return messageContentKeyCacheMisses;
 }
 
+export function resetTranscriptSnapshotEnvelopeCopiesForTests(): void {
+	transcriptSnapshotEnvelopeCopies = 0;
+}
+
+export function getTranscriptSnapshotEnvelopeCopiesForTests(): number {
+	return transcriptSnapshotEnvelopeCopies;
+}
+
 export class TranscriptController {
 	private readonly mapper: TranscriptViewModelMapper;
 	private committedMessages: SessionValue[] = [];
 	private committedViewModelCache: ChatMessageViewModel[] | undefined;
+	private committedFoldableBlockIndex: FoldableBlockIndex | undefined;
+	private liveProjectionCache: {
+		readonly committedMessages: readonly ChatMessageViewModel[];
+		readonly draftMessage: SessionValue | undefined;
+		readonly messages: readonly ChatMessageViewModel[];
+		readonly foldCursor: FoldableBlockCursor;
+	} | undefined;
+	private pendingLiveToolProjection: LiveToolExecution | undefined;
 	private draftMessage: SessionValue | undefined;
 	private readonly taskPartials = new Map<string, TaskPartialUpdate>();
 	private readonly liveTools = new Map<string, LiveToolExecution>();
@@ -332,6 +354,7 @@ export class TranscriptController {
 	 */
 	private lastPublishedToChat: readonly ChatMessageViewModel[] | undefined;
 	private pendingChatOp: ChatDiffHint | undefined;
+	private pendingIndexedChatIndices: Set<number> | undefined;
 	/**
 	 * Bumped on every `publish`/`publishFullReplace`, i.e. every time
 	 * `lastTranscript` changes. A consumer that also receives the raw
@@ -377,6 +400,8 @@ export class TranscriptController {
 
 	public handleAgentEvent<T>(event: T): TranscriptViewModel {
 		this.pendingChatOp = undefined;
+		this.pendingIndexedChatIndices = undefined;
+		this.pendingLiveToolProjection = undefined;
 		// SAFETY: T forwards the caller's raw agent event verbatim; asRecord plus
 		// the string check below re-validate shape at runtime.
 		const record = asRecord(event as SessionValue);
@@ -385,9 +410,12 @@ export class TranscriptController {
 		if (taskPartial) this.taskPartials.set(taskPartial.toolCallId, taskPartial);
 		const liveTool = liveToolExecutionFromEvent(record);
 		if (liveTool) {
+			this.pendingChatOp = "incremental";
+			this.pendingIndexedChatIndices = new Set();
 			const existing = this.liveTools.get(liveTool.toolCallId);
 			if (!existing || existing.status === "running" || liveTool.status !== "running") {
 				this.liveTools.set(liveTool.toolCallId, liveTool);
+				this.pendingLiveToolProjection = liveTool;
 			}
 		}
 
@@ -398,6 +426,7 @@ export class TranscriptController {
 			case "message_start":
 			case "message_update": {
 				this.pendingChatOp = "incremental";
+				this.pendingIndexedChatIndices ??= new Set();
 				const message = eventMessage(record);
 				if (message === undefined && record.type === "message_update") {
 					// RPC streaming delta (no cumulative snapshot on the wire): fold it
@@ -415,6 +444,7 @@ export class TranscriptController {
 					if (messageProgressScore(message) >= messageProgressScore(this.committedMessages[hydratedIndex])) {
 						this.committedMessages[hydratedIndex] = message;
 						this.invalidateCommittedCache();
+						this.pendingIndexedChatIndices = undefined;
 					}
 					this.draftMessage = undefined;
 				} else {
@@ -495,6 +525,7 @@ export class TranscriptController {
 				this.currentRunStartIndex = undefined;
 				this.draftMessage = undefined;
 				this.liveTools.clear();
+				this.liveProjectionCache = undefined;
 				this.taskPartials.clear();
 				break;
 			}
@@ -531,20 +562,36 @@ export class TranscriptController {
 	}
 
 	public viewModel(): TranscriptViewModel {
-		let messages = [...this.ensureCommittedViewModels()];
-		if (this.draftMessage !== undefined) {
+		const committedMessages = this.ensureCommittedViewModels();
+		const cached = this.liveProjectionCache;
+		const canReuseProjection = cached?.committedMessages === committedMessages && cached.draftMessage === this.draftMessage;
+		const foldCursor = canReuseProjection
+			? cached.foldCursor
+			: createFoldableBlockCursor(this.committedFoldableBlockIndex ?? indexFoldableBlocks(committedMessages));
+		transcriptSnapshotEnvelopeCopies += 1;
+		const messages = [...(canReuseProjection ? cached.messages : committedMessages)];
+		if (!canReuseProjection && this.draftMessage !== undefined) {
 			const message = this.mapper.messageFromPiMessage(this.draftMessage, messages.length, {
 				includeOpenMermaidFence: true,
 			});
-			if (message) messages = appendOrFoldTranscriptMessage(messages, message);
+			if (message) {
+				const result = appendOrFoldTranscriptMessageIndexed(messages, message, foldCursor);
+				for (const index of result.changedMessageIndices) this.pendingIndexedChatIndices?.add(index);
+			}
 		}
 
-		for (const liveTool of this.liveTools.values()) {
+		const liveTools = canReuseProjection
+			? this.pendingLiveToolProjection ? [this.pendingLiveToolProjection] : []
+			: this.liveTools.values();
+		for (const liveTool of liveTools) {
 			const liveMessage = chatMessageViewModelFromPiMessage(liveToolPiMessage(liveTool));
-			const blocks = liveMessage?.blocks.filter(isFoldableBlock) ?? [];
-			const folded = foldBlocksIntoMessages(messages, blocks, { requireMatch: false });
-			messages = folded.messages;
+			for (const block of liveMessage?.blocks.filter(isFoldableBlock) ?? []) {
+				const result = foldBlockIntoIndexedMessages(messages, block, foldCursor, { requireMatch: false });
+				if (result.messageIndex !== undefined) this.pendingIndexedChatIndices?.add(result.messageIndex);
+			}
 		}
+		this.liveProjectionCache = { committedMessages, draftMessage: this.draftMessage, messages, foldCursor };
+		this.pendingLiveToolProjection = undefined;
 		return { messages };
 	}
 
@@ -587,6 +634,8 @@ export class TranscriptController {
 
 	private invalidateCommittedCache(): void {
 		this.committedViewModelCache = undefined;
+		this.committedFoldableBlockIndex = undefined;
+		this.liveProjectionCache = undefined;
 	}
 
 	private ensureCommittedViewModels(): readonly ChatMessageViewModel[] {
@@ -599,6 +648,7 @@ export class TranscriptController {
 			messages = appendOrFoldTranscriptMessage(messages, message);
 		}
 		this.committedViewModelCache = messages;
+		this.committedFoldableBlockIndex = indexFoldableBlocks(messages);
 		return this.committedViewModelCache;
 	}
 
@@ -676,10 +726,14 @@ export class TranscriptController {
 			return;
 		}
 		const previous = this.lastPublishedToChat;
+		const indexedIndices = this.pendingIndexedChatIndices;
+		this.pendingIndexedChatIndices = undefined;
 		const operations = previous
-			? hint === "incremental"
-				? planHintedIncrementalChatDiff(previous, next) ?? planChatDiff(previous, next)
-				: planChatDiff(previous, next)
+			? indexedIndices
+				? planIndexedChatDiff(previous, next, indexedIndices)
+				: hint === "incremental"
+					? planHintedIncrementalChatDiff(previous, next) ?? planChatDiff(previous, next)
+					: planChatDiff(previous, next)
 			: undefined;
 		if (!operations) {
 			chat.replaceViewModels(next, { materializeSettledFeed: false });
@@ -709,6 +763,29 @@ export type ChatDiffOperation =
 	| { readonly kind: "replace"; readonly index: number; readonly message: ChatMessageViewModel }
 	| { readonly kind: "replace-last"; readonly index: number; readonly message: ChatMessageViewModel }
 	| { readonly kind: "append"; readonly index: number; readonly message: ChatMessageViewModel };
+
+function planIndexedChatDiff(
+	previous: readonly ChatMessageViewModel[],
+	next: readonly ChatMessageViewModel[],
+	changedIndices: ReadonlySet<number>,
+): ChatDiffOperation[] | undefined {
+	if (next.length !== previous.length && next.length !== previous.length + 1) return undefined;
+	const operations: ChatDiffOperation[] = [];
+	for (const index of [...changedIndices].sort((left, right) => left - right)) {
+		if (index === previous.length && next.length === previous.length + 1) continue;
+		const before = previous[index];
+		const after = next[index];
+		if (!before || !after || before.id !== after.id) return undefined;
+		if (messageContentKey(before) === messageContentKey(after)) continue;
+		operations.push(index === next.length - 1
+			? { kind: "replace-last", index, message: after }
+			: { kind: "replace", index, message: after });
+	}
+	if (next.length === previous.length + 1) {
+		operations.push({ kind: "append", index: previous.length, message: next[previous.length]! });
+	}
+	return operations;
+}
 
 function planHintedIncrementalChatDiff(
 	previous: readonly ChatMessageViewModel[],

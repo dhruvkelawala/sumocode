@@ -220,6 +220,8 @@ async function main() {
 	// 4. Host sidecar assets and installer.
 	copyFileSync(require.resolve("yoga-wasm-web/dist/yoga.wasm"), join(shareDir, "yoga.wasm"));
 	copyFileSync(resolve(root, "src/assets/sumo-face.ans"), join(shareDir, "sumo-face.ans"));
+	// /changelog reads CHANGELOG.md from the archive root in native launches.
+	copyFileSync(resolve(root, "CHANGELOG.md"), join(outDir, "CHANGELOG.md"));
 	copyFileSync(resolve(root, "install.sh"), join(outDir, "install.sh"));
 
 	// 5. SHA256SUMS over the archive contents.

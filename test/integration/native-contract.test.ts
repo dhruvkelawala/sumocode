@@ -308,10 +308,23 @@ nativeDescribe("native executable contract", () => {
 		expect(existsSync(NATIVE_PI)).toBe(true);
 		expect(existsSync(NATIVE_EXTENSION)).toBe(true);
 		expect(existsSync(NATIVE_RPC_EXTENSION)).toBe(true);
+		expect(existsSync(join(ARCHIVE, "CHANGELOG.md"))).toBe(true);
 		expect(readFileSync(NATIVE_PI).includes("register-bedrock")).toBe(false);
 		expect(readFileSync(join(ROOT, "node_modules/@earendil-works/pi-coding-agent/dist/bun/cli.js"), "utf8")).toContain('import("./register-bedrock.js")');
 		expect(runNative(["--version"]).stdout).toContain(`sumocode ${PACKAGE_VERSION}`);
 		expect(spawnSync(NATIVE_PI, ["--version"], { encoding: "utf8" }).stdout.trim()).toBe("0.84.3");
+	});
+
+	it("forwards Pi option values that collide with launcher subcommands", () => {
+		const nameValue = runNative(["--dry-run", "--name", "task"]);
+		expect(nameValue.status).toBe(0);
+		expect(dryRunField(nameValue.stdout, "COMMAND")).toBe("run");
+		expect(dryRunField(nameValue.stdout, "ARGS")).toBe("--name task");
+		for (const argv of [["--dry-run", "--model", "diag"], ["--dry-run", "-p", "doctor says hi"]]) {
+			const result = runNative(argv);
+			expect(result.status).toBe(0);
+			expect(dryRunField(result.stdout, "COMMAND")).toBe("run");
+		}
 	});
 
 	it("rejects an install missing the RPC extension bundle", () => {

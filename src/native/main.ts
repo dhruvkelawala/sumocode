@@ -387,10 +387,23 @@ function parseLauncherArgv(argv: readonly string[]): ParsedLaunch {
 				args.length = 0;
 				continue;
 			}
-			default:
-				// Unknown flags belong to Pi; everything forwards.
+			default: {
+				// Unknown flags belong to Pi; everything forwards. A value flag's
+				// value is consumed atomically so it can never be stolen as a
+				// launcher subcommand (`--name task` must stay a Pi argv pair).
 				parsed.forwardedArgs.push(arg);
+				const next = args[0];
+				if (next === undefined) continue;
+				if (isUnconditionalValueFlag(arg) || arg === "--print" || arg === "-p") {
+					const consumes = arg === "--print" || arg === "-p"
+						? !next.startsWith("@") && (!next.startsWith("-") || next.startsWith("---"))
+						: true;
+					if (consumes) parsed.forwardedArgs.push(args.shift()!);
+				} else if ((arg === "--list-models" || arg === "--tui-mode" || arg === "--use-theme") && !next.startsWith("-")) {
+					parsed.forwardedArgs.push(args.shift()!);
+				}
 				continue;
+			}
 		}
 	}
 	return parsed;

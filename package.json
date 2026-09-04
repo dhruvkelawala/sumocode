@@ -25,18 +25,18 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "~0.84.3",
-    "@earendil-works/pi-coding-agent": "~0.84.3",
-    "@earendil-works/pi-tui": "~0.84.3",
+    "@earendil-works/pi-ai": "~0.84.4",
+    "@earendil-works/pi-coding-agent": "~0.84.4",
+    "@earendil-works/pi-tui": "~0.84.4",
     "typebox": "*"
   },
   "engines": {
     "node": ">=22.19.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.84.3",
-    "@earendil-works/pi-coding-agent": "0.84.3",
-    "@earendil-works/pi-tui": "0.84.3",
+    "@earendil-works/pi-ai": "0.84.4",
+    "@earendil-works/pi-coding-agent": "0.84.4",
+    "@earendil-works/pi-tui": "0.84.4",
     "@oxlint/plugins": "1.80.0",
     "@types/node": "^25.6.0",
     "@xterm/headless": "^6.0.0",
@@ -95,6 +95,9 @@
       "node-pty"
     ],
     "overrides": {
+      "@google/genai>protobufjs": "7.6.5",
+      "@google/genai>ws": "8.21.0",
+      "minimatch>brace-expansion": "5.0.9",
       "vite>postcss": "8.5.23",
       "postcss>nanoid": "3.3.18"
     }

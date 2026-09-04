@@ -44,6 +44,14 @@ function record(advisory = 101) {
 }
 
 describe("dependency audit policy", () => {
+	it("enforces the aligned fixed Pi minimum", () => {
+		const packageJson = JSON.parse(readFileSync(join(import.meta.dirname, "../package.json"), "utf8"));
+		for (const name of ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"]) {
+			expect(packageJson.peerDependencies[name]).toBe("~0.84.4");
+			expect(packageJson.devDependencies[name]).toBe("0.84.4");
+		}
+	});
+
 	it("runs in the required CI lane", () => {
 		const workflow = readFileSync(join(import.meta.dirname, "../.github/workflows/ci.yml"), "utf8");
 		expect(workflow).toContain("run: node scripts/check-dependency-audit.mjs");

@@ -59,14 +59,15 @@ try {
 		if (record.fixedVersion !== finding.patched_versions) {
 			throw new Error(`fixed version mismatch for advisory ${finding.id}`);
 		}
-		const paths = finding.findings?.flatMap(({ paths: findingPaths }) => findingPaths) ?? [];
+		const paths = [...new Set(finding.findings?.flatMap(({ paths: findingPaths }) => findingPaths) ?? [])];
 		if (paths.length === 0 || paths.some((path) => !path.startsWith(".>@earendil-works/pi-"))) {
 			throw new Error(`non-consumer path for advisory ${finding.id}`);
 		}
-		if (paths.some((path) => path !== record.path)) {
+		const policyPaths = Array.isArray(record.paths) ? [...new Set(record.paths)] : [];
+		if (policyPaths.length !== record.paths?.length || policyPaths.length !== paths.length || policyPaths.some((path) => !paths.includes(path))) {
 			throw new Error(`dependency chain mismatch for advisory ${finding.id}`);
 		}
-		if (!record.path.startsWith(`.>${record.upstream}>`)) {
+		if (policyPaths.some((path) => !path.includes(`>${record.upstream}>`))) {
 			throw new Error(`upstream mismatch for advisory ${finding.id}`);
 		}
 		if (!/^\d{4}-\d{2}-\d{2}$/.test(record.expires) || Number.isNaN(Date.parse(`${record.expires}T00:00:00Z`))) {

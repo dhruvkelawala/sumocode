@@ -23,13 +23,13 @@ function runChecker(advisories, records, schemaVersion = 1) {
 	return runCheckerPayload({ advisories }, records, schemaVersion);
 }
 
-function advisory(id, severity = "high", path = ".>@earendil-works/pi-ai>example") {
+function advisory(id, severity = "high", paths = [".>@earendil-works/pi-ai>example"]) {
 	return {
 		id,
 		module_name: "example",
 		severity,
 		patched_versions: ">=1.0.1",
-		findings: [{ version: "1.0.0", paths: [path] }],
+		findings: [{ version: "1.0.0", paths }],
 	};
 }
 
@@ -37,7 +37,7 @@ function record(advisory = 101) {
 	return {
 		advisory,
 		package: "example",
-		path: ".>@earendil-works/pi-ai>example",
+		paths: [".>@earendil-works/pi-ai>example"],
 		upstream: "@earendil-works/pi-ai",
 		fixedVersion: ">=1.0.1",
 		scope: "consumer-runtime",
@@ -87,6 +87,15 @@ describe("dependency audit policy", () => {
 		expect(classified.stdout).toContain("local-development high/critical: 0");
 	});
 
+	it("matches every dependency chain for a classified advisory", () => {
+		const paths = [
+			".>@earendil-works/pi-ai>example",
+			".>@earendil-works/pi-coding-agent>@earendil-works/pi-ai>example",
+		];
+		const result = runChecker({ 101: advisory(101, "high", paths) }, [{ ...record(), paths: [...paths].reverse() }]);
+		expect(result.status).toBe(0);
+	});
+
 	it.each([
 		["stale", {}, [record()], "stale policy advisory 101"],
 		["expired", { 101: advisory(101) }, [{ ...record(), expires: "2000-01-01" }], "expired policy advisory 101"],
@@ -103,7 +112,8 @@ describe("dependency audit policy", () => {
 		["wrong package", advisory(101), [{ ...record(), package: "other" }], "package mismatch for advisory 101"],
 		["wrong fixed version", advisory(101), [{ ...record(), fixedVersion: ">=2.0.0" }], "fixed version mismatch for advisory 101"],
 		["wrong upstream", advisory(101), [{ ...record(), upstream: "@earendil-works/pi-tui" }], "upstream mismatch for advisory 101"],
-		["local path", advisory(101, "high", ".>vitest>vite"), [record()], "non-consumer path for advisory 101"],
+		["missing chain", advisory(101), [{ ...record(), paths: [".>@earendil-works/pi-ai>other"] }], "dependency chain mismatch for advisory 101"],
+		["local path", advisory(101, "high", [".>vitest>vite"]), [record()], "non-consumer path for advisory 101"],
 		["duplicate", advisory(101), [record(), record()], "duplicate policy advisory 101"],
 	])("rejects %s upstream-blocked records", (_name, finding, records, message) => {
 		const result = runChecker({ 101: finding }, records);

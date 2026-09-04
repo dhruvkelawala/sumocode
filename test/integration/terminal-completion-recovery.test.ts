@@ -22,6 +22,7 @@ interface RpcFields {
 
 interface RpcClient {
 	request(type: string, fields?: RpcFields): Promise<RpcResponse>;
+	waitForExit(): Promise<void>;
 	terminate(): Promise<void>;
 }
 
@@ -98,6 +99,7 @@ function launch(paths: TestRoot, sessionFile: string, overrides: NodeJS.ProcessE
 	// SAFETY: launch fixes all three stdio channels to pipes.
 	const child = supervised.child as ChildProcessWithoutNullStreams;
 	const waiters = new Map<string, { resolve: (response: RpcResponse) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+	const exited = new Promise<void>((resolveExit) => child.once("exit", () => resolveExit()));
 	createInterface({ input: child.stdout }).on("line", (line) => {
 		let response: unknown;
 		try { response = JSON.parse(line); } catch { return; }
@@ -132,6 +134,7 @@ function launch(paths: TestRoot, sessionFile: string, overrides: NodeJS.ProcessE
 				child.stdin.write(`${JSON.stringify({ type, id, ...fields })}\n`);
 			});
 		},
+		waitForExit: () => exited,
 		terminate: () => supervised.terminate(),
 	};
 }
@@ -288,6 +291,44 @@ describe("terminal completion delivery recovery", () => {
 		const diagnostics = readFileSync(join(paths.markerDir, "index-diagnostics.jsonl"), "utf8");
 		expect(diagnostics).toContain('"complete":false');
 		expect(diagnostics).toContain('"complete":true');
+		expect(terminalMessages(await replacement.request("get_messages"), delivered.completionId!)).toHaveLength(1);
+		expect(persistedTerminalMessages(sessionFile, delivered.completionId!)).toHaveLength(1);
+	});
+
+	it("reclaims a claim stopped before branch observability", async () => {
+		const paths = createRoot();
+		const sessionFile = createSession(paths, "session-a", SESSION_A);
+		const pending = await seedPendingCompletion(paths, sessionFile);
+		const crashing = launch(paths, sessionFile, { SUMOCODE_TEST_TERMINAL_CRASH: "claim" });
+
+		await waitForMarker(paths, "crashed-after-claim");
+		await crashing.waitForExit();
+		expect(readSnapshot(paths, pending.id)).toMatchObject({ deliveryState: "claimed", completionId: pending.completionId });
+		expect(persistedTerminalMessages(sessionFile, pending.completionId!)).toHaveLength(0);
+
+		resetIndexMarkers(paths);
+		const replacement = launch(paths, sessionFile);
+		const delivered = await waitForSnapshot(paths, pending.id, (snapshot) => snapshot.deliveryState === "delivered");
+		expect(delivered.completionId).toBe(pending.completionId);
+		expect(terminalMessages(await replacement.request("get_messages"), delivered.completionId!)).toHaveLength(1);
+		expect(persistedTerminalMessages(sessionFile, delivered.completionId!)).toHaveLength(1);
+	});
+
+	it("acknowledges an observable completion without reinserting after replacement", async () => {
+		const paths = createRoot();
+		const sessionFile = createSession(paths, "session-a", SESSION_A);
+		const pending = await seedPendingCompletion(paths, sessionFile);
+		const crashing = launch(paths, sessionFile, { SUMOCODE_TEST_TERMINAL_CRASH: "send" });
+
+		await waitForMarker(paths, "crashed-after-send");
+		await crashing.waitForExit();
+		expect(readSnapshot(paths, pending.id)).toMatchObject({ deliveryState: "claimed", completionId: pending.completionId });
+		expect(persistedTerminalMessages(sessionFile, pending.completionId!)).toHaveLength(1);
+
+		resetIndexMarkers(paths);
+		const replacement = launch(paths, sessionFile);
+		const delivered = await waitForSnapshot(paths, pending.id, (snapshot) => snapshot.deliveryState === "delivered");
+		expect(delivered.completionId).toBe(pending.completionId);
 		expect(terminalMessages(await replacement.request("get_messages"), delivered.completionId!)).toHaveLength(1);
 		expect(persistedTerminalMessages(sessionFile, delivered.completionId!)).toHaveLength(1);
 	});

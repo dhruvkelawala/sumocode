@@ -12,6 +12,7 @@ while [[ -L "${SOURCE}" ]]; do
 	fi
 done
 SCRIPT_DIR="$(cd "$(dirname "${SOURCE}")" && pwd)"
+SOURCE="${SCRIPT_DIR}/$(basename "${SOURCE}")"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # The RPC host owns the interactive foreground. Direct Pi launches keep the
@@ -755,6 +756,11 @@ fi
 if [[ ! -x "${PI_BIN}" ]]; then
 	PI_BIN="$(command -v pi || true)"
 fi
+if [[ "${PI_BIN}" == */* ]]; then
+	PI_BIN_DIR="$(cd "$(dirname "${PI_BIN}")" && pwd)"
+	PI_BIN="${PI_BIN_DIR}/$(basename "${PI_BIN}")"
+fi
+export PI_BIN
 
 args_request_noninteractive_pi() {
 	if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then return 1; fi

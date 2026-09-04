@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createRpcChildFixture } from "./rpc-child-fixture.js";
 import { spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
@@ -55,7 +55,7 @@ node -e '
 	process.stdin.setEncoding("utf8");
 	process.stdin.on("data", (chunk) => { stdin += chunk; });
 	process.stdin.on("end", () => {
-		fs.writeFileSync(process.argv[1], JSON.stringify({ argv: process.argv.slice(2), stdin }));
+		fs.writeFileSync(process.argv[1], JSON.stringify({ argv: process.argv.slice(2), stdin, piBin: process.env.PI_BIN, launcher: process.env.SUMOCODE_LAUNCHER }));
 	});
 ' "${stubOut}" "$@"
 `,
@@ -65,6 +65,54 @@ node -e '
 }
 
 describe("launcher prompt transport (issue 391)", () => {
+	it("keeps relative parent executables stable after entering a project", () => {
+		const caller = realpathSync(mkdtempSync(join(tmpdir(), "sumocode-parent-provenance-")));
+		const project = join(caller, "project");
+		const tools = join(caller, "tools");
+		mkdirSync(project);
+		mkdirSync(tools);
+		const { piBin, stubOut } = makePiStub(tools);
+		try {
+			const result = spawnSync("bash", [relative(caller, LAUNCHER), "--no-sumo-tui", project], {
+				cwd: caller,
+				encoding: "utf8",
+				env: { ...process.env, PI_BIN: relative(caller, piBin) },
+				timeout: 30_000,
+			});
+			expect(result.status).toBe(0);
+			const observed = JSON.parse(readFileSync(stubOut, "utf8")) as { piBin: string; launcher: string };
+			expect(observed.piBin).toBe(piBin);
+			expect(observed.launcher).toBe(LAUNCHER);
+		} finally {
+			rmSync(caller, { recursive: true, force: true });
+		}
+	});
+
+	it("exports the Pi binary selected from the source package", () => {
+		const root = realpathSync(mkdtempSync(join(tmpdir(), "sumocode-source-provenance-")));
+		const binDir = join(root, "bin");
+		const tools = join(root, "node_modules", ".bin");
+		const project = join(root, "project");
+		mkdirSync(binDir);
+		mkdirSync(tools, { recursive: true });
+		mkdirSync(project);
+		const copiedLauncher = join(binDir, "sumocode.sh");
+		copyFileSync(LAUNCHER, copiedLauncher);
+		const { piBin: stub, stubOut } = makePiStub(tools);
+		const piBin = join(tools, "pi");
+		renameSync(stub, piBin);
+		const env = { ...process.env };
+		delete env.PI_BIN;
+		try {
+			const result = spawnSync("bash", [copiedLauncher, "--no-sumo-tui", project], { encoding: "utf8", env, timeout: 30_000 });
+			expect(result.status).toBe(0);
+			const observed = JSON.parse(readFileSync(stubOut, "utf8")) as { piBin: string; launcher: string };
+			expect(observed).toMatchObject({ piBin, launcher: copiedLauncher });
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("keeps a task kickoff prompt out of the RPC child's argv and environment and delivers it exactly once", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "sumocode-kickoff-transport-"));
 		const logPath = join(dir, "commands.jsonl");

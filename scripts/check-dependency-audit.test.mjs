@@ -58,4 +58,16 @@ describe("dependency audit policy", () => {
 		expect(result.status).toBe(1);
 		expect(result.stderr).toContain(message);
 	});
+
+	it.each([
+		["ownerless", advisory(101), [{ ...record(), owner: "" }], "missing owner for advisory 101"],
+		["invalid expiry", advisory(101), [{ ...record(), expires: "later" }], "invalid expiry for advisory 101"],
+		["wrong package", advisory(101), [{ ...record(), package: "other" }], "package mismatch for advisory 101"],
+		["local path", advisory(101, "high", ".>vitest>vite"), [record()], "non-consumer path for advisory 101"],
+		["duplicate", advisory(101), [record(), record()], "duplicate policy advisory 101"],
+	])("rejects %s upstream-blocked records", (_name, finding, records, message) => {
+		const result = runChecker({ 101: finding }, records);
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain(message);
+	});
 });

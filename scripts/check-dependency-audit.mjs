@@ -10,9 +10,14 @@ function argument(name) {
 try {
 	const audit = JSON.parse(readFileSync(argument("--audit"), "utf8"));
 	const policy = JSON.parse(readFileSync(argument("--policy"), "utf8"));
-	const records = new Map(
-		policy.records.flatMap((record) => record.advisories.map((id) => [String(id), record])),
-	);
+	const records = new Map();
+	for (const record of policy.records) {
+		for (const advisory of record.advisories) {
+			const id = String(advisory);
+			if (records.has(id)) throw new Error(`duplicate policy advisory ${id}`);
+			records.set(id, record);
+		}
+	}
 	const findings = Object.values(audit.advisories ?? {}).filter(({ severity }) =>
 		severity === "high" || severity === "critical"
 	);
@@ -24,12 +29,21 @@ try {
 	for (const finding of findings) {
 		const record = records.get(String(finding.id));
 		if (!record) throw new Error(`unclassified ${finding.severity} advisory ${finding.id}`);
-		if (record.status !== "upstream-blocked") {
+		if (record.status !== "upstream-blocked" || record.scope !== "consumer-runtime") {
 			throw new Error(`unremediated ${finding.severity} advisory ${finding.id}`);
 		}
-		if (Date.parse(`${record.expires}T00:00:00Z`) <= Date.now()) {
-			throw new Error(`expired policy advisory ${finding.id}`);
+		if (!record.owner?.trim()) throw new Error(`missing owner for advisory ${finding.id}`);
+		if (record.package !== finding.module_name) {
+			throw new Error(`package mismatch for advisory ${finding.id}`);
 		}
+		const paths = finding.findings?.flatMap(({ paths: findingPaths }) => findingPaths) ?? [];
+		if (paths.length === 0 || paths.some((path) => !path.startsWith(".>@earendil-works/pi-"))) {
+			throw new Error(`non-consumer path for advisory ${finding.id}`);
+		}
+		if (!/^\d{4}-\d{2}-\d{2}$/.test(record.expires) || Number.isNaN(Date.parse(`${record.expires}T00:00:00Z`))) {
+			throw new Error(`invalid expiry for advisory ${finding.id}`);
+		}
+		if (Date.parse(`${record.expires}T00:00:00Z`) <= Date.now()) throw new Error(`expired policy advisory ${finding.id}`);
 	}
 
 	console.log(`dependency audit policy passed; consumer-runtime upstream-blocked: ${findings.length}`);

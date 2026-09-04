@@ -384,6 +384,19 @@ nativeDescribe("native executable contract", () => {
 		expect(dryRunField(result.stdout, "KICKOFF_PROMPT_TRANSPORT")).toBe("(none)");
 	});
 
+	it("keeps a relative PI_BIN bound to the caller before entering a project", () => {
+		const caller = tempRoot("sumocode-native-relative-pi-caller-");
+		const project = tempRoot("sumocode-native-relative-pi-project-");
+		mkdirSync(join(caller, "tools"));
+		mkdirSync(join(project, "tools"));
+		writeFileSync(join(caller, "tools/pi"), "#!/bin/bash\nprintf SAFE_PI\n", { mode: 0o755 });
+		writeFileSync(join(project, "tools/pi"), "#!/bin/bash\nprintf PROJECT_PI\n", { mode: 0o755 });
+		const result = runNative(["--no-sumo-tui", project], { cwd: caller, env: { PI_BIN: "./tools/pi" } });
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("SAFE_PI");
+		expect(result.stdout).not.toContain("PROJECT_PI");
+	});
+
 	it("runs diag without starting a Pi runtime", () => {
 		const root = tempRoot("sumocode-native-diag-only-");
 		const marker = join(root, "pi-started");
@@ -488,6 +501,16 @@ nativeDescribe("native executable contract", () => {
 			expect(observed.stdin).toBe(row.prompt);
 		});
 	}
+
+	it("forwards SIGINT unchanged to a direct Pi child", async () => {
+		const pi = createExecutable("pi-signal", "#!/bin/bash\ntrap 'printf GOT_SIGINT; exit 130' INT\ntrap 'printf GOT_SIGTERM; exit 143' TERM\nprintf READY\nwhile :; do sleep 1; done\n");
+		const session = spawnNativePty(["--no-sumo-tui"], { env: { PI_BIN: pi } });
+		await session.waitForOutput("READY");
+		session.signal("SIGINT");
+		await session.waitForOutput("GOT_SIGINT");
+		expect((await waitForExit(session)).exitCode).toBe(130);
+		expect(session.getOutput()).not.toContain("GOT_SIGTERM");
+	});
 
 	for (const { signal, expected } of [{ signal: "SIGTERM", expected: 0 }, { signal: "SIGINT", expected: 130 }] as const) {
 		it(`owns ${signal} before child adoption`, async () => {

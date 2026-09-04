@@ -56,7 +56,10 @@ const RPC_EXTENSION_ENTRY = join(NATIVE_DIR, "extension/sumocode-rpc-extension.b
 
 function resolveProcessPiBin(): string {
 	const fromEnv = process.env.PI_BIN;
-	if (fromEnv !== undefined && fromEnv.trim() !== "" && existsSync(fromEnv)) return fromEnv;
+	if (fromEnv !== undefined && fromEnv.trim() !== "") {
+		const candidate = resolve(fromEnv);
+		if (existsSync(candidate)) return realpathSync(candidate);
+	}
 	return join(NATIVE_DIR, "bin", "sumocode-pi");
 }
 
@@ -597,13 +600,15 @@ function spawnDirectPi(args: readonly string[], stdinPrompt: string, reloadReady
 			// Child may have already exited.
 		}
 	};
-	process.on("SIGINT", forwarding);
-	process.on("SIGTERM", forwarding);
+	const forwardSigint = (): void => forwarding("SIGINT");
+	const forwardSigterm = (): void => forwarding("SIGTERM");
+	process.on("SIGINT", forwardSigint);
+	process.on("SIGTERM", forwardSigterm);
 	return new Promise<number>((resolveCode) => {
 		child.on("error", () => resolveCode(70));
 		child.on("close", (code, signal) => {
-			process.off("SIGINT", forwarding);
-			process.off("SIGTERM", forwarding);
+			process.off("SIGINT", forwardSigint);
+			process.off("SIGTERM", forwardSigterm);
 			resolveCode(childExitCode(code, signal));
 		});
 	});

@@ -1,0 +1,219 @@
+import { type ChildProcessWithoutNullStreams } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { createInterface } from "node:readline";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { TerminalTaskSnapshot } from "../../src/background-tasks/task-types.js";
+import { spawnSupervisedProcess, type SupervisedProcess } from "./harness-supervisor.js";
+import { buildSpawnEnv } from "./spawn-pi-pty.js";
+
+type JsonValue = string | number | boolean | null | undefined | readonly JsonValue[] | { readonly [key: string]: JsonValue };
+
+interface RpcResponse {
+	readonly success?: boolean;
+	readonly data?: JsonValue;
+	readonly error?: string;
+}
+
+interface RpcFields {
+	readonly message?: string;
+}
+
+interface RpcClient {
+	request(type: string, fields?: RpcFields): Promise<RpcResponse>;
+	terminate(): Promise<void>;
+}
+
+interface TestRoot {
+	readonly root: string;
+	readonly agentDir: string;
+	readonly sessionDir: string;
+	readonly storeDir: string;
+	readonly markerDir: string;
+	readonly workspace: string;
+}
+
+interface StartMarker {
+	readonly id: string;
+	readonly completionPolicy: "passive" | "wake";
+}
+
+const SESSION_A = "019f8a78-b4f5-7b7b-b774-2d2e4bce9001";
+const FIXTURE = resolve("test/fixtures/terminal-delivery-extension.ts");
+const roots: string[] = [];
+const children: SupervisedProcess[] = [];
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof -- parser for untrusted Pi RPC JSON.
+function isRecord(value: unknown): value is { readonly [key: string]: JsonValue } {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function createRoot(): TestRoot {
+	const root = mkdtempSync(join(tmpdir(), "sumocode-terminal-recovery-"));
+	roots.push(root);
+	const paths = {
+		root,
+		agentDir: join(root, "agent"),
+		sessionDir: join(root, "sessions"),
+		storeDir: join(root, "terminals"),
+		markerDir: join(root, "markers"),
+		workspace: join(root, "workspace"),
+	};
+	for (const path of Object.values(paths).slice(1)) mkdirSync(path, { recursive: true, mode: 0o700 });
+	return paths;
+}
+
+function createSession(paths: TestRoot, name: string, id: string): string {
+	const file = join(paths.sessionDir, `${name}.jsonl`);
+	writeFileSync(file, [
+		JSON.stringify({ type: "session", version: 3, id, timestamp: "2026-09-04T12:00:00.000Z", cwd: paths.workspace }),
+		JSON.stringify({ type: "message", id: `${name}-seed`, parentId: null, timestamp: "2026-09-04T12:00:01.000Z", message: { role: "assistant", content: [{ type: "text", text: "seed" }], api: "openai-codex-responses", provider: "openai-codex", model: "gpt-5.6-sol", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop", timestamp: 1_788_523_201_000 } }),
+		"",
+	].join("\n"), { mode: 0o600 });
+	return file;
+}
+
+function launch(paths: TestRoot, sessionFile: string, overrides: NodeJS.ProcessEnv = {}): RpcClient {
+	const env = buildSpawnEnv(process.env, {
+		PI_CODING_AGENT_DIR: paths.agentDir,
+		SUMOCODE_TEST_TERMINAL_ROOT: paths.storeDir,
+		SUMOCODE_TEST_TERMINAL_MARKERS: paths.markerDir,
+		...overrides,
+	});
+	const supervised = spawnSupervisedProcess(process.env.PI_BIN ?? "pi", [
+		"--mode", "rpc",
+		"--offline",
+		"--approve",
+		"--no-extensions",
+		"-e", FIXTURE,
+		"--session-dir", paths.sessionDir,
+		"--session", sessionFile,
+	], { cwd: process.cwd(), env, stdio: ["pipe", "pipe", "pipe"] });
+	children.push(supervised);
+	// SAFETY: launch fixes all three stdio channels to pipes.
+	const child = supervised.child as ChildProcessWithoutNullStreams;
+	const waiters = new Map<string, { resolve: (response: RpcResponse) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+	createInterface({ input: child.stdout }).on("line", (line) => {
+		let response: unknown;
+		try { response = JSON.parse(line); } catch { return; }
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- parser validates the RPC correlation discriminator.
+		if (!isRecord(response) || typeof response.id !== "string") return;
+		const waiter = waiters.get(response.id);
+		if (!waiter) return;
+		waiters.delete(response.id);
+		clearTimeout(waiter.timer);
+		waiter.resolve(response);
+	});
+	child.once("exit", (code, signal) => {
+		if (waiters.size === 0) return;
+		void supervised.captureFailure().then((evidenceDir) => {
+			for (const waiter of waiters.values()) {
+				clearTimeout(waiter.timer);
+				waiter.reject(new Error(`Pi RPC child exited early (code=${String(code)}, signal=${String(signal)}). Evidence: ${evidenceDir}`));
+			}
+			waiters.clear();
+		});
+	});
+	let sequence = 0;
+	return {
+		request(type, fields = {}): Promise<RpcResponse> {
+			const id = `terminal-recovery-${++sequence}`;
+			return new Promise((resolveRequest, rejectRequest) => {
+				const timer = setTimeout(() => {
+					waiters.delete(id);
+					void supervised.captureFailure().then((evidenceDir) => rejectRequest(new Error(`Timed out waiting for ${type}. Evidence: ${evidenceDir}`)));
+				}, 10_000);
+				waiters.set(id, { resolve: resolveRequest, reject: rejectRequest, timer });
+				child.stdin.write(`${JSON.stringify({ type, id, ...fields })}\n`);
+			});
+		},
+		terminate: () => supervised.terminate(),
+	};
+}
+
+function readMarker<T>(paths: TestRoot, name: string): T {
+	// SAFETY: fixture-owned marker files are written from the corresponding named interface.
+	return JSON.parse(readFileSync(join(paths.markerDir, name), "utf8")) as T;
+}
+
+function readSnapshot(paths: TestRoot, id: string): TerminalTaskSnapshot | undefined {
+	for (const entry of readdirSync(paths.storeDir, { withFileTypes: true })) {
+		if (!entry.isDirectory()) continue;
+		const meta = join(paths.storeDir, entry.name, "meta.json");
+		if (!existsSync(meta)) continue;
+		// SAFETY: production writes terminal metadata from TerminalTaskSnapshot after schema validation.
+		const value = JSON.parse(readFileSync(meta, "utf8")) as TerminalTaskSnapshot;
+		if (value.id === id) return value;
+	}
+	return undefined;
+}
+
+async function waitForMarker(paths: TestRoot, name: string): Promise<void> {
+	await vi.waitFor(() => expect(existsSync(join(paths.markerDir, name))).toBe(true), { timeout: 10_000, interval: 20 });
+}
+
+async function waitForSnapshot(paths: TestRoot, id: string, predicate: (snapshot: TerminalTaskSnapshot) => boolean): Promise<TerminalTaskSnapshot> {
+	let snapshot: TerminalTaskSnapshot | undefined;
+	await vi.waitFor(() => {
+		snapshot = readSnapshot(paths, id);
+		expect(snapshot && predicate(snapshot)).toBe(true);
+	}, { timeout: 10_000, interval: 20 });
+	// SAFETY: vi.waitFor returns only after assigning a snapshot accepted by the predicate.
+	return snapshot!;
+}
+
+function terminalMessages(value: JsonValue, completionId: string): Array<{ readonly [key: string]: JsonValue }> {
+	const matches: Array<{ readonly [key: string]: JsonValue }> = [];
+	const visit = (candidate: JsonValue): void => {
+		if (Array.isArray(candidate)) {
+			for (const item of candidate) visit(item);
+			return;
+		}
+		if (!isRecord(candidate)) return;
+		const details = candidate.details;
+		if (candidate.customType === "terminal-result" && isRecord(details) && details.completionId === completionId) matches.push(candidate);
+		for (const nested of Object.values(candidate)) visit(nested);
+	};
+	visit(value);
+	return matches;
+}
+
+function persistedTerminalMessages(sessionFile: string, completionId: string): Array<{ readonly [key: string]: JsonValue }> {
+	return readFileSync(sessionFile, "utf8").trim().split("\n")
+		.flatMap((line) => terminalMessages(JSON.parse(line), completionId));
+}
+
+afterEach(async () => {
+	for (const child of children.splice(0)) await child.terminate();
+	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+// The child fixture constructs the real TerminalTaskManager and TerminalDeliveryCoordinator through the production installers.
+describe("terminal completion delivery recovery", () => {
+	it("delivers a passive terminal once through the real coordinator", async () => {
+		const paths = createRoot();
+		const sessionFile = createSession(paths, "session-a", SESSION_A);
+		const first = launch(paths, sessionFile);
+
+		const start = await first.request("prompt", { message: "/terminal-recovery-start passive" });
+		expect(start.success).toBe(true);
+		await waitForMarker(paths, "started.json");
+		const { id } = readMarker<StartMarker>(paths, "started.json");
+		const delivered = await waitForSnapshot(paths, id, (snapshot) => snapshot.deliveryState === "delivered");
+		const live = await first.request("get_messages");
+
+		expect(delivered).toMatchObject({ ownerSessionId: SESSION_A, status: "completed", exitCode: 0, completionPolicy: "passive" });
+		expect(delivered.completionId).toEqual(expect.any(String));
+		expect(terminalMessages(live, delivered.completionId!)).toHaveLength(1);
+		expect(persistedTerminalMessages(sessionFile, delivered.completionId!)).toHaveLength(1);
+		expect(JSON.stringify(live)).not.toContain("terminal-secret-value");
+		expect(JSON.stringify(live)).toContain("benign completion");
+
+		await first.terminate();
+		const replacement = launch(paths, sessionFile);
+		const hydrated = await replacement.request("get_messages");
+		expect(terminalMessages(hydrated, delivered.completionId!)).toHaveLength(1);
+		expect(persistedTerminalMessages(sessionFile, delivered.completionId!)).toHaveLength(1);
+	});
+});

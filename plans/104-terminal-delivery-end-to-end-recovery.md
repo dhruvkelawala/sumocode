@@ -2,9 +2,12 @@
 
 > **Executor instructions**: Follow this plan step by step and run every verification command. Build tests before changing production behavior. Use isolated Pi/session/terminal roots and no credentials. Exercise the real `TerminalTaskManager` and `TerminalDeliveryCoordinator`; a fixture that calls `sendMessage` directly does not satisfy this plan. When done, update this plan's row in `plans/README.md` unless a reviewer says they own the index.
 >
-> **Drift check (run first)**: `git diff --stat b34bd79..HEAD -- test/integration/terminal-completion-fidelity.test.ts src/background-tasks/terminal-tools.ts src/background-tasks/task-manager.ts src/activity/manager-bridge.ts test/integration/spawn-pi-pty.ts`
-> **Working-tree preflight (run at the same time)**: `git status --short -- dist/extension test/integration/terminal-completion-fidelity.test.ts test/integration/terminal-completion-recovery.test.ts test/integration/spawn-pi-pty.ts test/fixtures src/background-tasks/terminal-tools.ts src/background-tasks/task-manager.ts src/activity/manager-bridge.ts`. If this reports pre-existing work, STOP and preserve it.
-> If the drift check reports an in-scope change, compare the Current state excerpts and assumptions with live code. If behavior or signatures differ, STOP and request plan reconciliation.
+> **Reconciled baseline (2026-09-04):** `9ef92fa1` (PR #449 / Plan 117). Terminal-index initialization is now deferred until after command readiness, mutations initialize synchronously on demand, and `TerminalDeliveryCoordinator.flush()` remains fail-closed while `manager.isIndexReady()` is false. Tests must preserve and exercise that boundary; never restore a blocking constructor scan to make recovery fixtures easier.
+>
+> **Drift check (run first)**: `git diff --stat 9ef92fa1..HEAD -- test/integration/terminal-completion-fidelity.test.ts test/integration/terminal-completion-recovery.test.ts test/integration/spawn-pi-pty.ts test/fixtures src/background-tasks/terminal-tools.ts src/background-tasks/task-manager.ts`
+> **Working-tree preflight (run at the same time)**: run `git status --short` and STOP if it reports pre-existing work. Generated `dist/**` is ignored and must not be committed.
+> If the drift check reports an in-scope change, compare the Current state excerpts and assumptions with live code. If behavior or signatures differ, STOP and request plan reconciliation. At dispatch, create the branch from the exact current stack top; `9ef92fa1` remains the Plan 117 semantic baseline so intervening in-scope drift stays visible.
+> **Read-only runtime check**: `git diff --stat 9ef92fa1..HEAD -- src/activity/manager-bridge.ts src/extension-core.ts src/sumo-tui/rpc/host.ts src/native/main.ts src/sumo-tui/rpc/spawn-child.mjs sumo-rpc-host.js test/integration/harness-supervisor.ts test/integration/native-contract.test.ts scripts/run-integration-harness.mjs`. These own Activity takeover, the deferred startup gate, native runtime selection, and process supervision. If their contracts change in a way this plan must edit, STOP and reconcile rather than widening a coverage plan.
 > **Dependency check**: Confirm every plan named in **Depends on** is `DONE` in `plans/README.md`. If any is not DONE, STOP; do not recreate or assume its APIs.
 
 ## Status
@@ -15,7 +18,7 @@
 - **Depends on**: `plans/issues/092.md`, `plans/093-index-terminal-store-startup.md`, `plans/issues/100.md` (security dependencies are sanitized publicly; full executor plans stay local)
 - **Category**: tests
 - **Milestone**: M3 — Lifecycle reliability
-- **Planned at**: commit `b34bd79`, 2026-08-28
+- **Planned at**: commit `b34bd79`, 2026-08-28; reconciled to `9ef92fa1`, 2026-09-04
 - **Issue**: https://github.com/dhruvkelawala/sumocode/issues/398
 
 ## Why this matters
@@ -27,7 +30,9 @@ Unit tests cover delivery claims and retries with a fake manager, while the exis
 - `test/integration/terminal-completion-fidelity.test.ts` launches Pi RPC with a fixture extension whose command directly calls `pi.sendMessage`; it never starts `TerminalTaskManager` or `TerminalDeliveryCoordinator`.
 - `src/background-tasks/terminal-tools.test.ts` thoroughly models claim/retry/idempotency using a fake in-memory manager.
 - Production delivery in `terminal-tools.ts` uses durable completion IDs, claim tokens, leases, active-session ownership, and post-send branch observability.
+- Plan 117 moved `TerminalTaskManager` index initialization off the command-ready path. `isIndexReady()` is false until a complete validated scan lands; mutations call `ensureIndexInitialized()` on demand; the coordinator returns before claiming/sending while the index is unavailable and is woken through the existing task-change notification when initialization completes.
 - `ActivityManagerBridge` adds a separate durable feed writer/takeover lease.
+- `test/integration/native-contract.test.ts` proves compiled terminal start/check/stop and the post-command index mark, but it does not cover passive/wake completion publication, coordinator replacement, lease recovery, or session ownership. This plan remains necessary and keeps `pnpm test:native` as a regression gate without widening its implementation scope.
 
 ## Commands you will need
 
@@ -35,20 +40,24 @@ Unit tests cover delivery claims and retries with a fake manager, while the exis
 |---|---|---|
 | New integration | `pnpm vitest run test/integration/terminal-completion-recovery.test.ts --fileParallelism=false` | pass |
 | Existing fidelity | `pnpm vitest run test/integration/terminal-completion-fidelity.test.ts --fileParallelism=false` | pass |
-| Full gates | `pnpm exec tsc --noEmit && pnpm build && pnpm lint && pnpm test && pnpm test:integration` | exit 0 |
+| Delivery units | `pnpm vitest run src/background-tasks/task-manager.test.ts src/background-tasks/terminal-tools.test.ts src/activity/manager-bridge.test.ts --fileParallelism=false` | pass |
+| Full gates | `pnpm exec tsc --noEmit && pnpm build && pnpm lint && pnpm test && pnpm test:integration && BUN_BIN=${BUN_BIN:-bun} pnpm test:native` | exit 0 |
 
-## Committed bundle freshness
+## Generated bundle policy
 
-If the plan adds any production test seam under `src/`, run `pnpm build:extension` before `pnpm test` and keep `dist/extension/**` in scope. If implementation remains integration-fixture-only, the bundle must stay byte-identical.
+PR #439 superseded committed-bundle instructions: `dist/**` and native archives are generated and ignored. Build them for verification, but never commit generated output.
 
 ## Scope
 
 **In scope**:
-- `dist/extension/**` only when a production extension seam changes.
 - `test/integration/terminal-completion-recovery.test.ts` (create).
 - Test fixtures/extensions under `test/fixtures/`.
 - Minimal test seams in terminal manager/coordinator only if needed for deterministic crash points.
 - Existing fidelity test may be renamed/clarified but remains as Pi details serialization coverage.
+
+**Read-only regression surface**:
+- `src/activity/manager-bridge.ts` and its existing tests. Host replacement in this plan means manager/coordinator replacement for session-message delivery; Activity writer-death/takeover remains its separate tested contract.
+- Plan 117's host/native startup-gate files and `test/integration/native-contract.test.ts`; exercise them through existing gates, do not add compiled-only scope unless a real gap forces a plan stop.
 
 **Out of scope**:
 - Changing delivery policy to make tests easier.
@@ -73,22 +82,25 @@ Name the first test `delivers a passive terminal once through the real coordinat
 
 **Verify**: `pnpm vitest run test/integration/terminal-completion-recovery.test.ts --fileParallelism=false -t "delivers a passive terminal once through the real coordinator"` → one pass; `rg -n "TerminalTaskManager|TerminalDeliveryCoordinator" test/integration/terminal-completion-recovery.test.ts` → both production class names are present in imports/construction.
 
-### Step 2: Test exact-once normal delivery
+### Step 2: Test index readiness and exact-once normal delivery
 
-Assert:
+Start and settle a real terminal through an initial manager, then replace the manager/coordinator while holding the replacement manager's injected scheduled index initialization at a deterministic marker. While `manager.isIndexReady()` is false, assert that the replacement coordinator neither claims nor publishes the durable completion. Release the scan, observe the existing change notification, and then assert:
 - correct owner session only;
 - stable completion ID/details survive RPC replay and session hydration;
 - acknowledgement occurs only after the message is observable;
 - a later idle/agent-settled event does not insert a duplicate;
-- session-facing output is redacted/bounded per Plan 100.
+- session-facing output is redacted/bounded per Plan 100;
+- the replacement path does not add a constructor-time scan or bypass the deferred scheduler.
 
-**Verify**: `pnpm vitest run test/integration/terminal-completion-recovery.test.ts --fileParallelism=false -t "delivers a passive terminal once through the real coordinator"` → pass; the test parses the session JSONL and asserts exactly one message with the captured completion ID before and after a later settled event.
+Add a separate incomplete-generation case using the existing deterministic store read-fault seam: let initialization run but return `ok:true, complete:false` because an unknown durable record was skipped transiently. Assert no claim/publication while incomplete; clear the fault, run the scheduled retry, and assert the newly indexed completion is delivered once. Do not conflate “callback has not run” with “scan ran but coverage is incomplete.”
+
+**Verify**: `pnpm vitest run test/integration/terminal-completion-recovery.test.ts --fileParallelism=false -t "delivers a passive terminal once through the real coordinator|defers delivery for an incomplete terminal index"` → pass; the test parses the session JSONL and asserts exactly one message with the captured completion ID before and after a later settled event.
 
 ### Step 3: Test crash/replacement recovery
 
-Introduce a deterministic stop after durable claim but before branch observability, then start a replacement coordinator after lease expiry. Assert it reclaims and inserts once. Also test stop after insertion but before acknowledgement: replacement sees the stable completion ID and acknowledges without a second insertion.
+Introduce two fixture-level crash points without adding production callbacks. For claim-before-send, subscribe to the real manager after coordinator construction, wait until the durable snapshot first enters `deliveryState:"claimed"`, write a marker, and terminate the fixture process before `pi.sendMessage`. For send-before-ack, wrap the real fixture `pi.sendMessage`, await the real call, write a marker, and terminate before the coordinator's queued reconciliation/acknowledgement runs. Start a replacement manager/coordinator after lease expiry: the first case reclaims and inserts once; the second observes the stable completion ID and acknowledges without reinserting.
 
-Use explicit marker files/events, not sleeps.
+Use explicit marker files/events and supervised process exits, not sleeps, `dispose()`, or a fake manager.
 
 Name the crash tests `reclaims a claim stopped before branch observability` and `acknowledges an observable completion without reinserting after replacement`.
 
@@ -110,11 +122,12 @@ Ensure every child and temporary root is cleaned in `afterEach`, including failu
 
 ## Test plan
 
-Required scenarios: passive, wake, busy owner, wrong active session, check race, wait race, crash-before-send, crash-after-send, lease expiry, persisted replay, malformed/corrupt unrelated record, child cancellation, and cleanup.
+Required scenarios: deferred-not-started index, transient `complete:false` index, passive, wake, busy owner, wrong active session, check race, wait race, crash-before-send, crash-after-send, lease expiry, persisted replay, malformed/corrupt unrelated record, child cancellation, and cleanup. The full native suite remains a regression gate, but this plan's new crash-point fixture stays source-driven unless a compiled-only behavior gap is discovered and separately reconciled.
 
 ## Done criteria
 
 - [ ] Tests exercise real manager/store/coordinator code.
+- [ ] Both deferred-not-started and transiently incomplete index states prove fail-closed publication and wake delivery exactly once after a complete validated scan.
 - [ ] Normal and both crash windows prove exact-once observable delivery.
 - [ ] Session ownership and observer races are covered.
 - [ ] Existing direct-send fidelity test remains as serialization coverage only.
@@ -127,6 +140,7 @@ Required scenarios: passive, wake, busy owner, wrong active session, check race,
 ## STOP conditions
 
 - The drift check changes a Current state behavior/signature, any verification fails twice after a reasonable fix, or completion requires an out-of-scope file.
+- Passing the fixture would require a synchronous constructor scan, publishing before `isIndexReady()`, or weakening Plan 117's post-command reconciliation contract.
 - Determinism requires editing or deleting the user's terminal store.
 - Pi offers no observable boundary for one crash window and no safe test seam can expose it.
 - The test discovers a production duplication/loss bug; stop and split a corrective plan before weakening assertions.

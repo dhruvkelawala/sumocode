@@ -2,10 +2,12 @@
 
 > **Executor instructions**: Follow this plan step by step and run every verification command. Reuse and consolidate the existing `resolvePiBinary`/`createPiChildSpawner` provenance seam; do not wrap it in a second competing resolver. Thread resolved executables through explicit dependencies. Preserve PATH fallback only when no parent provenance exists. Test with fake binaries; do not invoke a developer's global Pi/SumoCode installation. When done, update this plan's row in `plans/README.md` unless a reviewer says they own the index.
 >
-> **Drift check (run first)**: `git diff --stat ca0c62b..HEAD -- dist/host dist/extension src/executable-provenance.ts src/executable-provenance.test.ts src/subagents/backend-pi.ts src/subagents/backend-pi.test.ts src/native-task-tool.ts src/native-task-tool.test.ts src/background-tasks/visible-spawn.ts src/background-tasks/visible-spawn.test.ts scripts/smoke-pi-versions.sh scripts/pi-compat-contract.mjs scripts/pi-compat-contract.test.mjs .github/workflows/ci.yml .github/workflows/pi-compat.yml`
-> **Working-tree preflight (run at the same time)**: `git status --short -- dist/host dist/extension src/executable-provenance.ts src/executable-provenance.test.ts src/subagents/backend-pi.ts src/subagents/backend-pi.test.ts src/native-task-tool.ts src/native-task-tool.test.ts src/background-tasks/visible-spawn.ts src/background-tasks/visible-spawn.test.ts scripts/smoke-pi-versions.sh scripts/pi-compat-contract.mjs scripts/pi-compat-contract.test.mjs .github/workflows/ci.yml .github/workflows/pi-compat.yml`. If this reports pre-existing work, STOP and preserve it.
+> **Reconciled baseline (2026-09-04):** `9ef92fa1` (PR #449 / Plan 117). The native launcher now canonicalizes `PI_BIN`, exports `SUMOCODE_LAUNCHER=process.execPath`, and resolves its own terminal-runner role. Preserve those contracts; this plan owns the remaining nested Pi/SumoCode launchers, not the native host's runtime selection.
+>
+> **Drift check (run first)**: `git diff --stat 9ef92fa1..HEAD -- bin/sumocode.sh src/executable-provenance.ts src/executable-provenance.test.ts src/subagents/backend-pi.ts src/subagents/backend-pi.test.ts src/subagents/backend-pane.ts src/subagents/backend-pane.test.ts src/native-task-tool.ts src/native-task-tool.test.ts src/background-tasks/visible-spawn.ts src/background-tasks/visible-spawn.test.ts src/commands/worktree.ts src/commands/worktree.test.ts src/cli/open-worktree.ts src/cli/open-worktree.test.ts scripts/smoke-pi-versions.sh scripts/pi-compat-contract.mjs scripts/pi-compat-contract.test.mjs .github/workflows/ci.yml .github/workflows/pi-compat.yml test/integration/launcher-runtime-selection.test.ts test/integration/launcher-prompt-transport.test.ts test/integration/native-contract.test.ts`
+> **Working-tree preflight (run at the same time)**: run `git status --short` and STOP if it reports pre-existing work. Generated `dist/**` is ignored and must not be committed.
 > If commit-range drift changes a Current state provenance assumption, STOP and request plan reconciliation.
-> **Read-only launcher check**: `git diff --stat ca0c62b..HEAD -- bin/sumocode.sh src/sumo-tui/rpc/spawn-child.mjs src/sumo-tui/rpc/spawn-child.test.ts test/integration/spawn-pi-pty.test.ts`. These already carry parent environment provenance and are regression surfaces, not modification targets; if that reconciled contract changes again, STOP and reconcile before proceeding.
+> **Read-only native launcher check**: `git diff --stat 9ef92fa1..HEAD -- src/native/main.ts src/native/paths.ts src/sumo-tui/rpc/spawn-child.mjs src/sumo-tui/rpc/spawn-child.test.ts scripts/build-native.mjs`. These define native runtime selection and are regression surfaces, not modification targets; if they change again, STOP and reconcile before proceeding. The source launcher is in scope only for canonical export/propagation of its already-selected executables.
 > **Dependency check**: Confirm every plan named in **Depends on** is `DONE` in `plans/README.md`. If any is not DONE, STOP; do not recreate or assume its APIs.
 
 ## Status
@@ -17,40 +19,41 @@
 - **Category**: tech-debt
 - **Milestone**: M3 — Lifecycle reliability
 - **Planned at**: commit `b34bd79`, 2026-08-28
-- **Reconciled at**: commit `ca0c62b`, 2026-09-01 — existing `PI_BIN` support in `backend-pi` is now the starting seam, not work to recreate
+- **Reconciled at**: commit `9ef92fa1`, 2026-09-04 — native `sumocode` now exports canonical `PI_BIN` and `SUMOCODE_LAUNCHER`; existing `backend-pi` support remains the starting seam, not work to recreate
 - **Issue**: https://github.com/dhruvkelawala/sumocode/issues/402
 
 ## Why this matters
 
-The launcher resolves a concrete `PI_BIN`, and the RPC child uses it. Headless subagents now also honor that value through `resolvePiBinary`, but native tasks still spawn literal `pi` and visible children still run literal `sumocode` through a login-shell PATH. Those remaining paths can execute a different version/install/configuration than the parent or fail when only the parent-resolved executable exists. Plan 108 must consolidate the partial implementation rather than recreate it.
+Both source and native launchers resolve a concrete `PI_BIN`, and the native launcher exports its own canonical executable as `SUMOCODE_LAUNCHER`. The RPC child and headless subagents honor Pi provenance, but native tasks still spawn literal `pi`; visible subagents and interactive worktree commands still render literal `sumocode` through shell PATH. Those remaining paths can execute a different version/install/configuration than the parent or fail when only the parent-resolved executable exists. Plan 108 must consolidate the partial implementation rather than recreate it.
 
 ## Current state
 
-- `bin/sumocode.sh:429-445` resolves `PI_BIN` and passes it in the launcher invocation environment. Direct `pi -e .`/classic contexts may have no `PI_BIN`, so their explicit fallback remains the command name `pi`.
-- `src/sumo-tui/rpc/spawn-child.mjs:24-42` uses `env.PI_BIN` for the main child.
-- `src/subagents/backend-pi.ts:343-346` already defines `resolvePiBinary(env)`, normalizing `PI_BIN` with a `pi` fallback; `createPiChildSpawner(..., resolveBinary = resolvePiBinary)` injects that dependency and uses it at spawn time. `src/subagents/backend-pi.test.ts:28-35` pins the environment, relative-path, command-name, and fallback cases. Preserve this contract.
-- `src/native-task-tool.ts:738` still calls `spawn("pi", ...)` and is the missing headless Pi path.
-- `src/background-tasks/visible-spawn.ts:98-108` still builds `exec sumocode task ...` and is the missing SumoCode path.
-- Production injection patterns already exist: backend-pi accepts a spawn/resolver implementation and managers accept dependencies. `native-task-tool.ts` imports `spawn` directly and therefore needs an explicit injectable spawn/executable dependency seam. For launcher shell escaping, copy the existing `src/cli/open-worktree.ts:26-27` pattern that resolves `SUMOCODE_LAUNCHER` then passes it through `shellEscape`.
+- `bin/sumocode.sh` resolves `PI_BIN`, but exports raw `BASH_SOURCE[0]` as `SUMOCODE_LAUNCHER` and does not pass `PI_BIN` into direct-Pi children. A relative source-launcher path can therefore become invalid after a nested `cd`, and direct-Pi extension code can rebind to PATH. This plan must canonicalize/export the already-selected source paths without changing runtime selection or argument parsing. `src/native/main.ts` already canonicalizes the caller's Pi path before `chdir`, otherwise selects the archive's `bin/sumocode-pi`, then exports both values before starting the host.
+- `src/sumo-tui/rpc/spawn-child.mjs` uses `env.PI_BIN` (or the native caller's explicit default) for the main child. `src/background-tasks/task-manager.ts` already selects the native executable's internal terminal-runner role; do not rework either seam here.
+- `src/subagents/backend-pi.ts` defines `resolvePiBinary(env)`, normalizing `PI_BIN` with a `pi` fallback; `createPiChildSpawner(..., resolveBinary = resolvePiBinary)` injects that dependency and uses it at spawn time. Preserve its relative-path, command-name, and fallback behavior.
+- `src/native-task-tool.ts` still calls `spawn("pi", ...)` and is the missing headless Pi path.
+- `src/background-tasks/visible-spawn.ts` still builds `exec sumocode task ...`; `src/subagents/backend-pane.ts` does not inject a launcher. `src/commands/worktree.ts` also emits bare `exec sumocode` for interactive/delegated worktree sessions. These are the remaining SumoCode paths.
+- Production injection patterns already exist: backend-pi accepts a spawn/resolver implementation, pane backends accept dependencies, and `src/cli/open-worktree.ts` already resolves `SUMOCODE_LAUNCHER` and shell-escapes it. Reuse those patterns; do not introduce a global mutable resolver.
 
 ## Commands you will need
 
 | Purpose | Command | Expected |
 |---|---|---|
-| Child tests | `pnpm vitest run src/subagents/backend-pi.test.ts src/native-task-tool.test.ts src/background-tasks/visible-spawn.test.ts` | pass |
-| Launcher/RPC | `pnpm vitest run src/sumo-tui/rpc/spawn-child.test.ts test/integration/spawn-pi-pty.test.ts` | pass |
-| Full gates | `pnpm exec tsc --noEmit && pnpm build && pnpm lint && pnpm test && pnpm test:integration` | exit 0 |
+| Child tests | `pnpm vitest run src/executable-provenance.test.ts src/subagents/backend-pi.test.ts src/native-task-tool.test.ts src/background-tasks/visible-spawn.test.ts src/subagents/backend-pane.test.ts src/commands/worktree.test.ts src/cli/open-worktree.test.ts` | pass |
+| Launcher/RPC | `bash -n bin/sumocode.sh scripts/smoke-pi-versions.sh && pnpm vitest run src/sumo-tui/rpc/spawn-child.test.ts test/integration/launcher-runtime-selection.test.ts test/integration/launcher-prompt-transport.test.ts` | pass |
+| Full gates | `pnpm exec tsc --noEmit && pnpm build && pnpm lint && pnpm test && pnpm test:integration && BUN_BIN=${BUN_BIN:-bun} pnpm test:native` | exit 0 |
 
-## Committed bundle freshness
+## Generated bundle policy
 
-After final source edits, run `pnpm build:host && pnpm build:extension` before `pnpm test`; keep `dist/host/**` and `dist/extension/**` generated changes in scope. Rerun both builders after integration and verify no additional unexpected generated drift.
+PR #439 superseded committed-bundle instructions: `dist/**` and native archives are generated and ignored. Build them for verification, but never commit bundle, source-map, manifest, archive, or executable output.
 
 ## Scope
 
 **In scope**:
-- `dist/host/**` and `dist/extension/**` generated by the committed bundle builders.
 - `src/executable-provenance.ts` and `src/executable-provenance.test.ts` (create): immutable per-spawn resolution contract.
-- `src/subagents/backend-pi.ts`, `src/native-task-tool.ts`, and `src/background-tasks/visible-spawn.ts`, with colocated tests. Plan 095 must be DONE first; its `backend-pi.ts` ownership is limited to the `SpawnedChild.send` wording, while this plan owns only executable-resolver consolidation. Do not alter the steering acknowledgement wording.
+- `bin/sumocode.sh` only to canonicalize/export `SUMOCODE_LAUNCHER` and propagate the selected `PI_BIN` into direct-Pi children; runtime selection, parsing, prompt transport, and redaction stay unchanged.
+- `src/subagents/backend-pi.ts`, `src/subagents/backend-pane.ts`, `src/native-task-tool.ts`, `src/background-tasks/visible-spawn.ts`, `src/commands/worktree.ts`, and `src/cli/open-worktree.ts`, with colocated tests. Plan 095 is complete; do not alter steering acknowledgement wording.
+- `test/integration/launcher-runtime-selection.test.ts`, `test/integration/launcher-prompt-transport.test.ts`, and `test/integration/native-contract.test.ts` for source and compiled parent→nested-child provenance coverage. `src/native/main.ts`, `src/native/paths.ts`, and `src/sumo-tui/rpc/spawn-child.mjs` are read-only authorities unless a newly discovered correctness bug forces a plan stop.
 - Plan-101 `scripts/smoke-pi-versions.sh`, `scripts/pi-compat-contract.mjs`, and test for package-boundary provenance coverage.
 - The existing Plan-101 compatibility workflow (`.github/workflows/pi-compat.yml`, or `.github/workflows/ci.yml` if that is where the job landed) only to add provenance-source paths to its pull-request trigger.
 
@@ -73,12 +76,12 @@ After final source edits, run `pnpm build:host && pnpm build:extension` before `
 
 Promote the existing `resolvePiBinary` behavior into the shared provenance seam rather than layering a second resolver around `backend-pi`. A behavior-preserving move/re-export is acceptable so existing imports and tests remain valid. Add the corresponding SumoCode launcher resolution. The shared immutable per-spawn config contains resolved Pi and SumoCode commands, with this resolution order:
 1. explicit injected option;
-2. parent-provided `PI_BIN`/`SUMOCODE_LAUNCHER` validated as executable;
-3. current PATH fallback for standalone/classic contexts.
+2. nonblank parent-provided `PI_BIN`/`SUMOCODE_LAUNCHER` (path-like values normalized exactly as `resolvePiBinary` does; command names retained);
+3. current PATH command fallback for standalone/classic contexts.
 
-Do not resolve once at module import if tests/session reload can change the injected environment. Preserve the already-shipped `PI_BIN` whitespace, relative-path, command-name, and fallback cases before adding stricter validation; if validation would break one of those cases, STOP and reconcile the contract instead of silently changing it.
+Do not resolve once at module import if tests/session reload can change the injected environment. Do not probe or silently replace an explicit parent value: launch-time failure is more truthful than rebinding to a different installation. Preserve the already-shipped whitespace, relative-path, command-name, and fallback cases.
 
-**Verify**: `pnpm vitest run src/executable-provenance.test.ts src/subagents/backend-pi.test.ts` → existing `resolvePiBinary` cases still pass, plus absolute executable, command-name fallback, missing/non-executable override, explicit injection, environment injection, SumoCode launcher, and per-call environment changes, without executing a binary.
+**Verify**: `pnpm vitest run src/executable-provenance.test.ts src/subagents/backend-pi.test.ts` → existing `resolvePiBinary` cases still pass, plus absolute path, command-name, explicit injection, environment injection, SumoCode launcher, blank-value fallback, and per-call environment changes, without executing a binary.
 
 ### Step 2: Finish Pi provenance in the remaining headless path
 
@@ -88,13 +91,13 @@ Keep `createPiChildSpawner` on the existing injected resolver (or its behavior-p
 
 ### Step 3: Thread SumoCode launcher through visible commands
 
-Pass a shell-escaped resolved launcher path into `buildVisibleAgentCommand`. Keep login-shell PATH available for child tools, but do not use PATH to select the top-level SumoCode binary when the parent path is known.
+Pass a shell-escaped resolved launcher path through the pane backend into `buildVisibleAgentCommand`, and use the same resolver for interactive/delegated `/sumo:worktree` commands and the existing CLI worktree command builder. Keep shell PATH available for child tools, but do not use PATH to select the top-level SumoCode binary when the parent path is known. The native parent already exports `SUMOCODE_LAUNCHER=process.execPath`; consume it rather than detecting Bun or reconstructing archive paths. This does not add a top-level `sumocode worktree` subcommand to the native executable.
 
-**Verify**: `pnpm vitest run src/background-tasks/visible-spawn.test.ts -t "uses injected SumoCode launcher provenance"` → space/metacharacter paths are shell-escaped once, exactly one launcher invocation appears, and fallback uses `sumocode` only without provenance.
+**Verify**: `pnpm vitest run src/background-tasks/visible-spawn.test.ts src/subagents/backend-pane.test.ts src/commands/worktree.test.ts -t "launcher provenance"` → space/metacharacter paths are shell-escaped once, exactly one launcher invocation appears, native/source parent paths are preserved, and fallback uses `sumocode` only without provenance.
 
 ### Step 4: Add package-boundary matrix coverage
 
-Extend the exact Plan-101 helpers. First add a pure `preserves nested executable provenance` fixture to `scripts/pi-compat-contract.test.mjs` using two synthetic executable paths representing parent-selected and PATH-global versions. Then extend the default `scripts/smoke-pi-versions.sh --supported-matrix` path so every disposable installed-package row runs nested provenance through source and installed layouts, explicit `PI_BIN`, explicit `SUMOCODE_LAUNCHER`, and PATH-only fallback. Do not hide this behind an opt-in flag: Plan 101's existing pull-request, daily scheduled, and manual workflow invocation must remain the literal `scripts/smoke-pi-versions.sh --supported-matrix` and automatically gain this check. Expand that workflow's pull-request path filter to include `src/executable-provenance.ts`, `src/subagents/backend-pi.ts`, `src/native-task-tool.ts`, `src/background-tasks/visible-spawn.ts`, and their relevant tests so provenance regressions gate before merge rather than waiting for the daily run.
+Extend the exact Plan-101 helpers. First add a pure `preserves nested executable provenance` fixture to `scripts/pi-compat-contract.test.mjs` using two synthetic executable paths representing parent-selected and PATH-global versions. Then extend the default `scripts/smoke-pi-versions.sh --supported-matrix` path so every disposable installed-package row runs nested provenance through source and installed layouts, explicit `PI_BIN`, explicit `SUMOCODE_LAUNCHER`, and PATH-only fallback. Do not hide this behind an opt-in flag: Plan 101's existing pull-request, daily scheduled, and manual workflow invocation must remain the literal `scripts/smoke-pi-versions.sh --supported-matrix` and automatically gain this check. Expand that workflow's pull-request path filter to include every changed provenance source/test so regressions gate before merge rather than waiting for the daily run. Add a compiled native-contract row proving that a fake parent-selected Pi path and the archive's canonical `SUMOCODE_LAUNCHER` reach native-task, visible-subagent, and worktree child launch plans without invoking a developer-global installation.
 
 This package-boundary command requires registry/network access for disposable installs. If unavailable, run the pure/local tests and STOP with Plan 108 marked `BLOCKED — package-boundary matrix unavailable`; do not claim completion. If Plan 101 is `DONE` but its named `--supported-matrix`/contract helper or scheduled workflow invocation is absent, STOP for reconciliation rather than inventing another fixture.
 
@@ -106,12 +109,13 @@ This package-boundary command requires registry/network access for disposable in
 
 ## Test plan
 
-Cover explicit absolute binary, PATH command resolution, path with spaces, invalid override, visible/headless/native-task paths, reload, and installed package layout. Assert no recursive second UI is introduced.
+Cover explicit absolute binary, PATH command resolution, blank fallback, relative/path-with-spaces values, visible/headless/native-task/worktree paths, reload, installed package layout, source direct-Pi propagation, and the compiled native parent. Assert no recursive second UI is introduced and the native internal terminal-runner role remains unchanged.
 
 ## Done criteria
 
+- [ ] Source and native parents expose stable launcher/Pi provenance after nested `cd`; direct-Pi source children inherit the already-selected `PI_BIN`.
 - [ ] Existing nested-subagent `PI_BIN` behavior remains intact, and native-task Pi children use the same parent-selected binary when available.
-- [ ] Visible children use the parent-selected SumoCode launcher when available.
+- [ ] Visible and `/sumo:worktree` children use the parent-selected SumoCode launcher when available.
 - [ ] Standalone fallback remains functional and explicit.
 - [ ] Paths are shell-safe and diagnostics contain no prompts/secrets.
 - [ ] Exact pure and package-boundary provenance fixtures run by default in every published supported-version row, and provenance-source pull requests trigger the matrix before merge; no opt-in or “targeted tests or matrix” escape route remains.
@@ -122,8 +126,8 @@ Cover explicit absolute binary, PATH command resolution, path with spaces, inval
 ## STOP conditions
 
 - Plan 095, 097, or 101 is not `DONE`, or Plan 101's named compatibility helper/`--supported-matrix` contract is absent.
-- Commit-range/working-tree preflight changes a reconciled provenance assumption (especially `resolvePiBinary` or its injected `createPiChildSpawner` seam), any verification fails twice after a reasonable fix, or completion requires an out-of-scope file.
-- Parent provenance cannot be validated without invoking the binary.
+- Commit-range/working-tree preflight changes a reconciled provenance assumption (especially `resolvePiBinary`, native `PI_BIN`/`SUMOCODE_LAUNCHER` export, or the injected `createPiChildSpawner` seam), any verification fails twice after a reasonable fix, or completion requires changing native runtime selection.
+- Preserving parent provenance would require probing it or silently falling back to another installation.
 - Fix requires a global mutable singleton shared across unrelated sessions.
 - Visible launch loses its recursion guard or TTY selection.
 

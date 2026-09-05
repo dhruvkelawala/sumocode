@@ -85,7 +85,7 @@ Adding the Effect devDependency changes `package.json`/`pnpm-lock.yaml`, which a
 
 ## Git workflow
 
-- Branch: `advisor/110-effect-subagent-pilot`
+- Future spike starting point, only when Dhruv resumes this deferred work: `spike/404-effect-subagent-pilot`. Base any new working branch on that preserved pilot, not the former `advisor/110-effect-subagent-pilot` target. Reconcile the retained steps and drift checks with its existing code and evidence before continuing; do not restart or publish the old pilot.
 - Commit: `spike(effect): evaluate subagent lifecycle`
 - A NO-GO result is valid; do not force adoption to justify the spike.
 

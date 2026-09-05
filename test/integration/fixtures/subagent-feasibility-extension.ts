@@ -9,11 +9,18 @@ import { installTaskModeAutoExit } from "../../../src/task-mode.js";
 export default function install(pi: ExtensionAPI): void {
 	const root = process.env.PLAN112_ROOT!;
 	const role = process.env.PLAN112_ROLE!;
+	pi.on("session_start", () => { process.title = `plan112-${process.env.PLAN112_PROCESS_NONCE!}`; });
 	const append = <T>(name: string, value: T): void => appendFileSync(join(root, name), `${JSON.stringify(value)}\n`, { mode: 0o600 });
 	if (role === "parent") {
 		const generation = randomUUID();
 		pi.on("session_start", (event) => append("parents.jsonl", { event: "start", reason: event.reason, pid: process.pid, generation }));
-		pi.on("session_shutdown", (event) => append("parents.jsonl", { event: "shutdown", reason: event.reason, pid: process.pid, generation }));
+		let cleanupGate = false;
+		pi.on("session_shutdown", async (event) => {
+			append("parents.jsonl", { event: "shutdown", reason: event.reason, pid: process.pid, generation });
+			if (!cleanupGate) return;
+			writeFileSync(join(root, "quit-ready"), String(process.pid), { mode: 0o600 });
+			while (!existsSync(join(root, "quit-release"))) await new Promise((done) => setTimeout(done, 10));
+		});
 		pi.registerCommand("proof-control", {
 			handler: async (action) => append("requests.jsonl", { generation, pid: process.pid, action }),
 		});
@@ -21,6 +28,7 @@ export default function install(pi: ExtensionAPI): void {
 			handler: async () => append("recovered.jsonl", { generation, pid: process.pid, events: readFileSync(join(root, "events.jsonl"), "utf8") }),
 		});
 		pi.registerCommand("proof-quit", { handler: async (_args, ctx) => ctx.shutdown() });
+		pi.registerCommand("proof-quit-gated", { handler: async (_args, ctx) => { cleanupGate = true; ctx.shutdown(); } });
 		return;
 	}
 	pi.registerProvider("plan112-fixture", {
@@ -34,9 +42,15 @@ export default function install(pi: ExtensionAPI): void {
 				stopReason: "pending", timestamp: Date.now(),
 			};
 			queueMicrotask(() => {
-				stream.push({ type: "start", partial: output });
 				writeFileSync(join(root, "stream-ready"), String(process.pid), { mode: 0o600 });
+				let started = false;
 				const poll = setInterval(() => {
+					if (!existsSync(join(root, "identity-release"))) return;
+					if (!started) {
+						started = true;
+						writeFileSync(join(root, "work-started"), String(process.pid), { mode: 0o600 });
+						stream.push({ type: "start", partial: output });
+					}
 					if (!options?.signal?.aborted && !existsSync(join(root, "release"))) return;
 					clearInterval(poll);
 					if (options?.signal?.aborted) {

@@ -1,28 +1,29 @@
 import { type ChildProcessWithoutNullStreams, type spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPiChildSpawner, type SpawnedChild } from "../../src/subagents/backend-pi.js";
 import { createPaneChildSpawner } from "../../src/subagents/backend-pane.js";
 import type { SubagentEvent } from "../../src/subagents/domain.js";
-import { systemProcessTree, terminateProcessTree, signalVerifiedProcessTree, type ProcessTreeIdentity, type ProcessTreeVerification } from "../../src/background-tasks/process-tree.js";
+import { systemProcessTree, terminateProcessTree, signalVerifiedProcessTree, type ProcessTreeOperations } from "../../src/background-tasks/process-tree.js";
 import { shellEscape } from "../../src/background-tasks/visible-spawn.js";
 import { JsonLineDecoder } from "../../src/child-protocol.js";
-import { spawnSupervisedProcess, type SupervisedProcess } from "./harness-supervisor.js";
-import { spawnPiPty, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { spawnSupervisedProcess } from "./harness-supervisor.js";
+import { spawnPiPty } from "./spawn-pi-pty.js";
+import { cleanupOwnedTree, type OwnedTree } from "./fixtures/subagent-feasibility-cleanup.js";
 
 const PI = resolve("node_modules/.bin/pi");
+const supervisorMode = process.env.PLAN112_SUPERVISOR;
+const selectedCell = process.env.PLAN112_CELL;
 const EXTENSION = resolve("test/integration/fixtures/subagent-feasibility-extension.ts");
 const replacements = ["factory replacement", "host-Pi reload", "parent crash-restart"] as const;
 const backends = ["headless", "visible"] as const;
 interface ParentEvent { event: string; reason: string; pid: number; generation: string }
 interface Request { generation: string; pid: number; action: string }
-interface OwnedTree { identity: ProcessTreeIdentity; verification: ProcessTreeVerification }
 const owned: OwnedTree[] = [];
-const processes: SupervisedProcess[] = [];
-const ptys: SpawnedPiPty[] = [];
-const handles: SpawnedChild[] = [];
+const supervisorRoots: string[] = [];
 let root = "";
 
 function append<T>(name: string, value: T): void {
@@ -59,7 +60,7 @@ function privateEnv(role: string): NodeJS.ProcessEnv {
 	return {
 		PATH: `${resolve("node_modules/.bin")}:/usr/bin:/bin:/usr/sbin:/sbin:${resolve(process.execPath, "..")}`,
 		HOME: join(root, "home"), TMPDIR: join(root, "tmp"), PI_CODING_AGENT_DIR: join(root, "agent"),
-		PI_OFFLINE: "1", TERM: "xterm-256color", PLAN112_ROOT: root, PLAN112_ROLE: role,
+		PI_OFFLINE: "1", TERM: "xterm-256color", PLAN112_ROOT: root, PLAN112_ROLE: role, PLAN112_PROCESS_NONCE: randomUUID(),
 		SUMOCODE_INTEGRATION_RUN_ROOT: process.env.SUMOCODE_INTEGRATION_RUN_ROOT,
 		SUMOCODE_INTEGRATION_MANIFEST: process.env.SUMOCODE_INTEGRATION_MANIFEST,
 	};
@@ -68,7 +69,6 @@ function parent() {
 	const proc = spawnSupervisedProcess(PI, ["--mode", "rpc", "--offline", "--approve", "--no-extensions", "--no-skills", "--no-prompt-templates", "-e", EXTENSION, "--session-dir", join(root, "sessions")], {
 		cwd: join(root, "workspace"), env: privateEnv("parent"), stdio: ["pipe", "pipe", "pipe"],
 	});
-	processes.push(proc);
 	// SAFETY: parent() explicitly pipes all three streams.
 	const child = proc.child as ChildProcessWithoutNullStreams;
 	const replies = new Map<string, { success: boolean; error?: string }>();
@@ -90,9 +90,8 @@ function parent() {
 	};
 }
 
-// This test process is the independent, tracked feasibility supervisor. It owns
-// the existing backend handles, not a Pi session context. Production adoption is
-// deliberately absent: the experiment asks whether public Pi transport suffices.
+// The gated fixture supervisor retains the backend handles. The outer test
+// persists the supervisor identity and audits its death boundary; no production adoption.
 function broker(child: SpawnedChild, tree: OwnedTree) {
 	let owner: ParentEvent | undefined;
 	let lastSequence = 0;
@@ -137,7 +136,6 @@ async function launch(backend: typeof backends[number], workerRoot = root): Prom
 			const proc = spawnSupervisedProcess(command, [...args, "--offline", "--no-skills", "--no-prompt-templates", "-e", EXTENSION], {
 				cwd: join(root, "workspace"), env: { ...privateEnv("headless"), PLAN112_ROOT: workerRoot }, stdio: ["pipe", "pipe", "pipe"],
 			});
-			processes.push(proc);
 			pid = proc.pid;
 			return proc.child;
 		}) as typeof spawn;
@@ -151,8 +149,7 @@ async function launch(backend: typeof backends[number], workerRoot = root): Prom
 			host: {
 				kind: "herdr",
 				async startAgentPane(_pi, options) {
-					const pty = spawnPiPty({ command: "/bin/bash", args: ["-c", `umask 077; printf '%s' "$$" > ${shellEscape(join(root, "pane.pid"))}; ${options.shellCommand}`], cwd: options.cwd, env: privateEnv("visible") });
-					ptys.push(pty);
+					spawnPiPty({ command: "/bin/bash", args: ["-c", `umask 077; printf '%s' "$$" > ${shellEscape(join(root, "pane.pid"))}; ${options.shellCommand}`], cwd: options.cwd, env: privateEnv("visible") });
 					pid = Number(await waitFor("pane pid", () => existsSync(join(root, "pane.pid")) && readFileSync(join(root, "pane.pid"), "utf8")));
 					return { ok: true, pane: { host: "herdr", paneId: String(pid) }, agentName: "proof", paneId: String(pid) };
 				},
@@ -162,35 +159,161 @@ async function launch(backend: typeof backends[number], workerRoot = root): Prom
 			},
 		});
 	}
-	handles.push(child);
 	const events: SubagentEvent[] = [];
 	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- the backend API explicitly permits callback or AsyncIterable subscriptions.
 	if (typeof child.events !== "function") throw new Error("expected callback backend");
 	child.events((event) => { events.push(event); append("events.jsonl", event); });
 	await waitFor("real provider stream", () => existsSync(join(workerRoot, "stream-ready")));
-	return { child, tree: capture(pid), events };
+	const tree = capture(pid);
+	expect(existsSync(join(workerRoot, "work-started"))).toBe(false);
+	writeFileSync(join(workerRoot, "identity-release"), "identity persisted", { mode: 0o600 });
+	await waitFor("work released after durable identity", () => existsSync(join(workerRoot, "work-started")));
+	return { child, tree, events };
+}
+
+async function supervisedCell(backend: typeof backends[number], replacement: typeof replacements[number], caseRoot: string, mode: string): Promise<void> {
+	supervisorRoots.push(caseRoot);
+	const harness = join(caseRoot, "harness");
+	mkdirSync(harness, { mode: 0o700 });
+	const proc = spawnSupervisedProcess(process.execPath, [
+		`--title=plan112-${caseRoot}`, resolve("node_modules/vitest/vitest.mjs"),
+		"run", "test/integration/subagent-recovery.test.ts", "--pool=threads", "--maxWorkers=1", "--fileParallelism=false", "-t", "feasibility:",
+	], { cwd: process.cwd(), env: {
+		PATH: process.env.PATH, HOME: caseRoot, TMPDIR: caseRoot,
+		PLAN112_SUPERVISOR: mode, PLAN112_CELL: `${backend}/${replacement}`, PLAN112_ROOT: caseRoot,
+		SUMOCODE_INTEGRATION_RUN_ROOT: harness, SUMOCODE_INTEGRATION_MANIFEST: join(harness, "children.jsonl"),
+	}, stdio: ["ignore", "pipe", "pipe"] });
+	proc.child.stdout!.on("data", (chunk) => appendFileSync(join(caseRoot, "supervisor-output.log"), chunk, { mode: 0o600 }));
+	await waitFor("supervisor start gate", () => existsSync(join(caseRoot, "supervisor-ready")));
+	expect(Number(readFileSync(join(caseRoot, "supervisor-ready"), "utf8"))).toBe(proc.pid);
+	const supervisor = capture(proc.pid);
+	expect(supervisor.identity.processStartTime).toContain(caseRoot);
+	writeFileSync(join(caseRoot, "supervisor.json"), `${JSON.stringify(supervisor)}\n`, { mode: 0o600, flag: "wx" });
+	if (mode !== "before-release") writeFileSync(join(caseRoot, "supervisor-release"), "tracked", { mode: 0o600 });
+	if (mode === "recover") {
+		await waitFor("supervisor completed", () => proc.child.exitCode !== null || proc.child.signalCode !== null);
+		expect(proc.child.exitCode, `supervisor output retained at ${caseRoot}`).toBe(0);
+	} else {
+		if (mode === "running") await waitFor("tracked children before supervisor death", () => existsSync(join(caseRoot, "supervisor-running")));
+		else expect(existsSync(join(caseRoot, "identities.jsonl"))).toBe(caseRoot === root);
+		expect((await signalVerifiedProcessTree(systemProcessTree, supervisor.identity, "SIGKILL", supervisor.verification)).ok).toBe(true);
+		await waitFor("dead supervisor tree empty", () => systemProcessTree.isTreeEmpty(supervisor.identity, supervisor.verification));
+		append("supervisor-failure.jsonl", { backend, mode, supervisor, empty: true, outcome: mode === "running" ? "lost backend handle; verified cleanup only, not adoption" : "no child released" });
+	}
 }
 
 afterEach(async () => {
-	// Do not call harness PID-only termination on a live tree. On unsafe identity,
-	// fail and retain all roots; harness audit is the separate last-resort owner.
-	for (const tree of owned) {
-		if (systemProcessTree.isTreeEmpty(tree.identity, tree.verification)) continue;
-		if (!await terminateProcessTree(systemProcessTree, tree.identity, { termGraceMs: 500, killGraceMs: 2000 })) throw new Error(`unsafe cleanup; retained ${root}`);
-		expect(systemProcessTree.isTreeEmpty(tree.identity, tree.verification)).toBe(true);
+	const trees = owned.splice(0);
+	const roots = supervisorRoots.splice(0);
+	if (!root) return;
+	const failures: unknown[] = [];
+	for (const tree of trees) {
+		if (!await cleanupOwnedTree(systemProcessTree, tree, (value) => append("cleanup.jsonl", value))) failures.push(tree);
 	}
-	for (const proc of processes) await proc.terminate();
-	for (const pty of ptys) await pty.cleanupAndWait();
-	// All live processes are gone before clearing any backend polling resources.
-	for (const handle of handles) handle.interrupt();
-	append("audit.jsonl", { zeroSurvivors: true, trees: owned.length });
-	owned.length = processes.length = ptys.length = handles.length = 0;
+	// Freeze supervisors before reading their last committed child identities.
+	// This also runs after assertion/timeouts, not just the happy-path return.
+	for (const caseRoot of roots) {
+		const supervisorFile = join(caseRoot, "supervisor.json");
+		// SAFETY: the outer fixture exclusively writes this private identity file.
+		const supervisor = existsSync(supervisorFile) ? JSON.parse(readFileSync(supervisorFile, "utf8")) as OwnedTree : undefined;
+		if (!supervisor || !systemProcessTree.isTreeEmpty(supervisor.identity, supervisor.verification)) {
+			failures.push({ unfrozenSupervisor: caseRoot });
+			continue;
+		}
+		const identityFile = join(caseRoot, "identities.jsonl");
+		// SAFETY: the stopped supervisor wrote complete OwnedTree lines synchronously.
+		const persisted: OwnedTree[] = existsSync(identityFile) ? readFileSync(identityFile, "utf8").trim().split("\n").map((line) => JSON.parse(line) as OwnedTree) : [];
+		for (const tree of persisted) {
+			if (trees.some((entry) => entry.identity.pid === tree.identity.pid)) continue;
+			trees.push(tree);
+			if (!await cleanupOwnedTree(systemProcessTree, tree, (value) => append("cleanup.jsonl", value))) failures.push(tree);
+		}
+		// SAFETY: the harness owns this private journal; only spawn event/PID are read.
+		const manifest = readFileSync(join(caseRoot, "harness", "children.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as { event: string; pid: number });
+		for (const entry of manifest.filter((event) => event.event === "spawn")) {
+			if (!trees.some((tree) => tree.identity.pid === entry.pid)) failures.push({ untrackedSpawn: entry, caseRoot });
+		}
+	}
+	const finalTrees = trees.map((tree) => ({ ...tree, empty: systemProcessTree.isTreeEmpty(tree.identity, tree.verification) }));
+	failures.push(...finalTrees.filter((tree) => !tree.empty));
+	append("audit.jsonl", { zeroSurvivors: failures.length === 0, trees: trees.length, failures, finalTrees });
+	if (failures.length) throw new Error(`unsafe cleanup; retained ${root}: ${JSON.stringify(failures)}`);
+	// Do not call the harness's PID-only termination, even after an empty
+	// observation: a reused numeric PGID must never turn into cleanup authority.
+	if (!supervisorMode && rows<{ supervisorBoundary?: boolean }>("observation.jsonl").at(-1)?.supervisorBoundary) {
+		append("verdict.jsonl", { classification: "recoverable", contract: "tracked retained supervisor; not production adoption or supervisor-death recovery", zeroSurvivors: true, trees: trees.length });
+	}
+	root = "";
 }, 30_000);
+
+describe("cleanup ownership regression", () => {
+	const tree: OwnedTree = { identity: { pid: 123, processGroupId: 123, processStartTime: "unique-launch" }, verification: { members: [{ pid: 124, processStartTime: "child-birth" }] } };
+	function operations(): ProcessTreeOperations {
+		return {
+			captureStartTime: () => undefined,
+			identityMatches: () => "unknown",
+			captureTreeVerification: () => undefined,
+			verificationMatches: () => "same",
+			isTreeEmpty: () => false,
+			signalTree: vi.fn(async () => ({ ok: true, gone: false })),
+			waitForTreeEmpty: async () => true,
+		};
+	}
+	it("cleanup: old recapture loses durable descendant authority; retained anchors succeed", async () => {
+		const ops = operations();
+		expect(await terminateProcessTree(ops, tree.identity, { termGraceMs: 0, killGraceMs: 0 })).toBe(false);
+		expect(ops.signalTree).not.toHaveBeenCalled();
+		expect(await cleanupOwnedTree(ops, tree, () => {})).toBe(true);
+		expect(ops.signalTree).toHaveBeenCalledExactlyOnceWith(tree.identity, "SIGTERM", tree.verification);
+	});
+	it("cleanup: concurrent graceful exit is success only after empty-tree proof", async () => {
+		const ops = operations();
+		ops.identityMatches = () => "different";
+		ops.isTreeEmpty = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
+		expect(await cleanupOwnedTree(ops, tree, () => {})).toBe(true);
+		expect(ops.signalTree).not.toHaveBeenCalled();
+	});
+	for (const status of ["different", "unknown"] as const) it(`cleanup: ${status} nonempty tree fails closed without signalling`, async () => {
+		const ops = operations();
+		ops.identityMatches = () => status;
+		ops.verificationMatches = () => status;
+		expect(await cleanupOwnedTree(ops, tree, () => {})).toBe(false);
+		expect(ops.signalTree).not.toHaveBeenCalled();
+	});
+	it("cleanup: refusal inside the system signal boundary cannot become success while nonempty", async () => {
+		const ops = operations();
+		ops.signalTree = vi.fn(async () => ({ ok: false, gone: false, identityStatus: "different" as const }));
+		expect(await cleanupOwnedTree(ops, tree, () => {})).toBe(false);
+		expect(ops.signalTree).toHaveBeenCalledTimes(1);
+	});
+});
 
 describe("Plan112 supervised feasibility (not production adoption)", () => {
 	for (const backend of backends) for (const replacement of replacements) {
+		if (supervisorMode && selectedCell !== `${backend}/${replacement}`) continue;
 		it(`feasibility: ${backend} across ${replacement}`, async () => {
-			root = mkdtempSync(join(tmpdir(), "sumocode-plan112-proof-"));
+			if (!supervisorMode) {
+				root = mkdtempSync(join(tmpdir(), "sumocode-plan112-proof-"));
+				await supervisedCell(backend, replacement, root, "recover");
+				if (replacement === "parent crash-restart") {
+					for (const boundary of ["before-release", "running"] as const) {
+						const probe = join(root, `supervisor-death-${boundary}`);
+						mkdirSync(probe, { mode: 0o700 });
+						await supervisedCell(backend, replacement, probe, boundary);
+					}
+				}
+				append("observation.jsonl", { backend, replacement, supervisorBoundary: true, cleanupPending: true });
+				console.log(`[Plan112] ${backend} / ${replacement}: supervised observations complete; evidence ${root}`);
+				return;
+			}
+			root = process.env.PLAN112_ROOT!;
+			writeFileSync(join(root, "supervisor-ready"), String(process.pid), { mode: 0o600 });
+			await waitFor("durable supervisor release", () => existsSync(join(root, "supervisor-release")));
+			// SAFETY: the outer fixture writes this private file before releasing us.
+			const supervisor = JSON.parse(readFileSync(join(root, "supervisor.json"), "utf8")) as OwnedTree;
+			expect(supervisor.identity.pid).toBe(process.pid);
+			expect(systemProcessTree.identityMatches(supervisor.identity)).toBe("same");
+			append("supervisor-boundary.jsonl", { event: "released", pid: process.pid, identityVerified: true });
 			for (const dir of ["home", "tmp", "agent", "workspace", "sessions"]) mkdirSync(join(root, dir), { mode: 0o700 });
 			expect(JSON.parse(readFileSync(resolve("node_modules/@earendil-works/pi-coding-agent/package.json"), "utf8")).version).toBe("0.84.4");
 			let controller = parent();
@@ -200,6 +323,10 @@ describe("Plan112 supervised feasibility (not production adoption)", () => {
 			const cancelRoot = join(root, "cancel-probe");
 			mkdirSync(cancelRoot, { mode: 0o700 });
 			const controlled = backend === "headless" ? await launch(backend, cancelRoot) : run;
+			if (supervisorMode === "running") {
+				writeFileSync(join(root, "supervisor-running"), "children tracked and held", { mode: 0o600 });
+				await waitFor("intentional supervisor death", () => false);
+			}
 			const control = broker(controlled.child, controlled.tree);
 			expect(control.adopt(initial)).toBe(true);
 			// A real second Pi controller cannot steal a live owner's handle.
@@ -253,10 +380,22 @@ describe("Plan112 supervised feasibility (not production adoption)", () => {
 			const recovered = rows<{ generation: string; events: string }>("recovered.jsonl").at(-1)!;
 			expect(recovered.generation).toBe(next.generation);
 			expect(JSON.parse(recovered.events.trim().split("\n").at(-1)!)).toEqual(settled);
-			await controller.request("prompt", "/proof-quit");
+			// Deterministically schedule the old cleanup's check/signal race using
+			// a public shutdown hook, without changing any process API.
+			await controller.request("prompt", "/proof-quit-gated");
+			await waitFor("quit gate", () => existsSync(join(root, "quit-ready")));
+			const quitting = owned.find((tree) => tree.identity.pid === controller.proc.pid)!;
+			expect(systemProcessTree.isTreeEmpty(quitting.identity, quitting.verification)).toBe(false);
+			writeFileSync(join(root, "quit-release"), "graceful exit between check and signal", { mode: 0o600 });
+			await waitFor("graceful exit before signal verification", () => systemProcessTree.isTreeEmpty(quitting.identity, quitting.verification));
+			const oldCleanup = await terminateProcessTree(systemProcessTree, quitting.identity, { termGraceMs: 500, killGraceMs: 2000 });
+			expect(oldCleanup).toBe(false);
+			const safeCleanup = await cleanupOwnedTree(systemProcessTree, quitting, (value) => append("cleanup-repro.jsonl", value));
+			expect(safeCleanup).toBe(true);
+			append("cleanup-repro.jsonl", { oldCleanup, safeCleanup, interleaving: "nonempty check; graceful exit; recapture/identity refusal; independent empty-tree proof" });
 			// This observation precedes afterEach: it is NOT a cleanup/gate verdict.
 			append("observation.jsonl", { backend, replacement, recoveredResult: true, contract: "independent supervisor retains backend handle; Pi parent replacement only", pi: "0.84.4" });
 			console.log(`[Plan112] ${backend} / ${replacement}: result recovered; cleanup verdict still pending; evidence ${root}`);
-		}, 60_000);
+		}, supervisorMode ? 60_000 : 180_000);
 	}
 });

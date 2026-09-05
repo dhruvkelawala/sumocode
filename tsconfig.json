@@ -13,6 +13,8 @@
     "resolveJsonModule": true,
     "allowImportingTsExtensions": false,
     "noEmit": true,
+    "incremental": true,
+    "tsBuildInfoFile": ".local/tsc/tsbuildinfo",
     "isolatedModules": true,
     "lib": ["ES2022"]
   },

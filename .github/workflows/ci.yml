@@ -37,8 +37,8 @@ jobs:
       - name: Dependency audit policy
         run: node scripts/check-dependency-audit.mjs
 
-      - name: Typecheck
-        run: pnpm exec tsc --noEmit
+      - name: Typecheck (full pass with instantiation budget)
+        run: node scripts/check-tsc-budget.mjs
 
       - name: Lint (anti-slop oxlint)
         run: pnpm lint

@@ -1,5 +1,17 @@
 # Plan 110: Evaluate an Effect v4 implementation of the subagent lifecycle
 
+> **Status: DEFERRED outside the current campaign (owner reversal, 2026-09-05); no GO/NO-GO
+> verdict recorded.**
+> Effect is removed from the current plan wave. This plan is **NOT DONE**, and no GO/NO-GO
+> verdict has been recorded: no production Effect dependency or migration is authorized now,
+> and the audit campaign does not wait on an Effect verdict. Dhruv will run a separate, deeper
+> Effect integration spike later. The pilot code, evidence, and provisional report are preserved
+> — untouched and unpublished — on `spike/404-effect-subagent-pilot`, and the draft staged
+> adoption-doc revisions stay on `sumo/draft-staged-effect-adoption-plan-revisions`, for that
+> future spike. Do not execute this plan inside the current campaign; the steps below — including
+> the provisional-recommendation and human GO/NO-GO verdict requirements — are retained as the
+> specification for that future spike.
+
 > **Executor instructions**: Follow this plan step by step and run every verification command. This is a contained spike, not authorization for a broad rewrite. Keep production `SubagentManager` as the reference implementation. Use stable Effect core APIs only, pin the tested RC exactly as a devDependency, and produce evidence plus a provisional recommendation for human review. Do not switch production in this plan. When evidence is complete, update this plan's row in `plans/README.md` unless a reviewer says they own the index.
 >
 > **Drift check (run first)**: `git diff --stat b34bd79..HEAD -- dist/host dist/extension package.json pnpm-lock.yaml src/subagents/manager.test.ts src/spike/effect-subagents docs/research/effect-subagent-pilot.md`
@@ -15,7 +27,7 @@
 - **Risk**: MED
 - **Depends on**: `plans/109-contain-subagent-lifecycle-failures.md` (defines the reference lifecycle/failure contract the pilot must match)
 - **Category**: direction
-- **Milestone**: M4 — Effect adoption
+- **Milestone**: M4 — Lifecycle
 - **Planned at**: commit `b34bd79`, 2026-08-28
 - **Issue**: https://github.com/dhruvkelawala/sumocode/issues/404
 
@@ -73,7 +85,7 @@ Adding the Effect devDependency changes `package.json`/`pnpm-lock.yaml`, which a
 
 ## Git workflow
 
-- Branch: `advisor/110-effect-subagent-pilot`
+- Future spike starting point, only when Dhruv resumes this deferred work: `spike/404-effect-subagent-pilot`. Base any new working branch on that preserved pilot, not the former `advisor/110-effect-subagent-pilot` target. Reconcile the retained steps and drift checks with its existing code and evidence before continuing; do not restart or publish the old pilot.
 - Commit: `spike(effect): evaluate subagent lifecycle`
 - A NO-GO result is valid; do not force adoption to justify the spike.
 

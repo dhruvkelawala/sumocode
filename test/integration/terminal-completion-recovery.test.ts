@@ -290,6 +290,19 @@ function resetIndexMarkers(paths: TestRoot): void {
 	}
 }
 
+async function switchToFreshFixture(client: RpcClient, paths: TestRoot, sessionFile: string): Promise<void> {
+	// Only fixture construction writes this marker, after both production installers return.
+	// Resetting it proves a new generation even when Pi reloads the extension module.
+	rmSync(join(paths.markerDir, "production-constructors.json"));
+	const switched = await client.request("switch_session", { sessionPath: sessionFile });
+	expect(switched.success).toBe(true);
+	await waitForMarker(paths, "production-constructors.json");
+	expect(readMarker<ProductionConstructorsMarker>(paths, "production-constructors.json")).toEqual({
+		manager: TerminalTaskManager.name,
+		coordinator: TerminalDeliveryCoordinator.name,
+	});
+}
+
 function createCorruptRecord(paths: TestRoot): void {
 	const directory = join(paths.storeDir, "term-corrupt-1");
 	mkdirSync(directory, { mode: 0o700 });
@@ -380,7 +393,7 @@ describe("terminal completion delivery recovery", () => {
 		resetIndexMarkers(paths);
 		writeFileSync(join(paths.markerDir, "index-hold"), "hold\n", { mode: 0o600 });
 		// Pi rebuilds the extension on a same-session switch, giving us a real replacement without another OS process.
-		await client.request("switch_session", { sessionPath: sessionFile });
+		await switchToFreshFixture(client, paths, sessionFile);
 
 		await waitForMarker(paths, "index-scheduled");
 		expect(readSnapshot(paths, pending.id)).toMatchObject({ deliveryState: "pending" });
@@ -409,7 +422,7 @@ describe("terminal completion delivery recovery", () => {
 		expect(persistedTerminalMessages(sessionFile, delivered.completionId!)).toHaveLength(1);
 
 		// Switch once more so a fresh extension generation hydrates the delivered session record.
-		await client.request("switch_session", { sessionPath: sessionFile });
+		await switchToFreshFixture(client, paths, sessionFile);
 		const hydratedMessages = terminalMessages(await client.request("get_messages"), delivered.completionId!);
 		expect(hydratedMessages).toHaveLength(1);
 		expect(hydratedMessages[0]?.details).toEqual(liveMessages[0]?.details);

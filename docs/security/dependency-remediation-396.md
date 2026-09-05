@@ -1,9 +1,10 @@
-# Remediated dependency advisory inventory — issue #396 / Plan 102
+# Dependency advisory remediation inventory — issue #396 / Plan 102
 
-**Status:** public evidence record for [issue #396](https://github.com/dhruvkelawala/sumocode/issues/396)
+**Status:** public evidence record for [issue #396](https://github.com/dhruvkelawala/sumocode/issues/396). **Local development graph remediated; consumer-runtime graph still upstream-blocked** (correction notice below and §9).
 **Commit range:** baseline `397be093` → candidate `514da877` ([PR #453](https://github.com/dhruvkelawala/sumocode/pull/453), branch `fix/396-dependency-audit-policy`)
 **Tail repair:** spec finding SA123 — the per-advisory public map required by issue #396 was not present in the published PR #453 diff/body, which described remediation only in aggregate. This file supplies that map.
-**Sources:** issue body/comments, committed lockfiles and commit diffs, CI logs, GHSA/npm primary advisory metadata. No policy change, no new exceptions.
+**Correction:** the first published version of this map (head `7519bab9`, PR #467) presented the nine consumer-runtime advisories as remediated by the Pi `0.84.4` peer floor. Codex P1 (PR #467 discussion 3941838506) correctly rejected that framing: the floor does not enforce the patched transitives in consumer graphs, the empty local policy `records[]` describes only this repository's own overridden graph, and this repo's CI does not audit consumer graphs. This page corrects those claims, keeps the valid 15-advisory map and the historical counts, marks Plan 102 **incomplete / consumer-upstream-blocked** on its consumer-runtime criterion, and adds explicit user-facing remediation guidance (§10). A proper consumer-graph gate is a separate implementation queued by the coordinating parent; **this documentation correction is not the security fix**.
+**Sources:** issue body/comments, committed lockfiles and commit diffs, CI logs, GHSA/npm primary advisory metadata. No policy change, no new exceptions, no restored or invented upstream-blocked records.
 
 ## 1. What issue #396 required in public scope
 
@@ -11,7 +12,7 @@ Issue #396's first public-scope bullet:
 
 > Map each high advisory to dependency chain, runtime/dev role, fixed version, and verification owner.
 
-This document is that map for the remediation published in PR #453. It is written from public sources only and introduces no dependency/security policy change and no exceptions.
+This document is that map for the remediation published in PR #453. The chain/role/fix columns are accurate for **this repository's graph**: the map records what PR #453 changed in SumoCode's own lock and why (§4 scope note). It is written from public sources only and introduces no dependency/security policy change and no exceptions. After the correction notice above, the map no longer implies that the consumer-runtime rows are enforced-clean in consumer installs (§6, §9, §10).
 
 ## 2. Baseline and candidate
 
@@ -44,9 +45,11 @@ Findings and limits:
 - All 15 high-advisory publication dates (2026-05-12 → 2026-09-01, see §4) precede the last PR #453 commit (`514da877`, 2026-09-04 18:43Z), so the set was knowable at remediation time; advisory-database propagation lag to the npm audit endpoint is not recorded and remains an annotated unknown.
 - Severity is **as of evidence**: every advisory is GHSA-reviewed `high` at publication and still `high` on 2026-09-05. Advisory databases may re-rate later; re-verify before relying on this record past that date.
 
-## 4. Remediated high advisories (the required map)
+## 4. High advisories and the local fixes (the required map)
 
-Installed module version is the version resolved in the baseline lock `397be093`. `first patched` is the first version that clears the vulnerable range reported by pnpm for that installed version. Fixed version is what the candidate lock `514da877` resolves. Audit paths are pnpm's `findings[].paths` strings (`.` = root importer). Role semantics are defined in §7. Parenthesized scores in the severity column are the GHSA-reported CVSS base (v4 where published, else v3) as of 2026-09-05; GHSA severity class is `high` for all rows.
+Installed module version is the version resolved in the baseline lock `397be093`. `first patched` is the first version that clears the vulnerable range reported by pnpm for that installed version. Fixed version is what the candidate lock `514da877` resolves **for this repository**. Audit paths are pnpm's `findings[].paths` strings (`.` = root importer). Role semantics are defined in §7.
+
+**Scope of the tables:** installed/fixed are SumoCode's own baseline/candidate lock resolutions. For a consumer install, `first patched` is the actionable bound — the consumer's own lock must resolve at or above it (§6, §10). The `fix` lines name the local override/pin that reaches the fixed version in SumoCode's lock; for consumer-runtime rows those overrides do **not** propagate to consumers. Parenthesized scores in the severity column are the GHSA-reported CVSS base (v4 where published, else v3) as of 2026-09-05; GHSA severity class is `high` for all rows.
 
 ### 4.1 `protobufjs` `7.5.5` → `7.6.5` (5 advisories)
 
@@ -141,16 +144,17 @@ Resolved-version deltas between the two committed lockfiles (`pnpm-lock.yaml` at
 
 Two distinct remediation surfaces, per the issue's public scope:
 
-1. **Consumer runtime (parent).** The peer (and dev) floor for the Pi trio rose from `~0.84.3`/`0.84.3` to `~0.84.4`/`0.84.4` (`eb85b169`, aligned by `b918cdef` across native build, launcher, smoke default, diagnostics instrumenter, and tests; README badge updated). `0.84.4` is the Plan 101 matrix-verified release. Precise scope of what the peer floor can and cannot do:
-   - `@earendil-works/pi-ai@0.84.3` and `0.84.4` publish identical declared dependencies (`@google/genai 1.52.0`, exact), and `pi-coding-agent@0.84.3`/`0.84.4` both pin `minimatch 10.2.5`. Raising the floor does not by itself re-resolve those transitives.
-   - Consumer cleanliness therefore rests on **fresh resolution within the published ranges** of genai/minimatch (fixed patches `7.6.5`, `8.21.0`, `5.0.9` are all in range, §4). PR #453 verified this with a fresh consumer Pi `0.84.4` graph reporting zero high/critical findings; SumoCode's own `pnpm.overrides` never propagate to consumers, matching the issue requirement to never claim consumers inherit local overrides.
+1. **Consumer runtime (parent): version-compatibility alignment, not an enforced security constraint.** The peer (and dev) floor for the Pi trio rose from `~0.84.3`/`0.84.3` to `~0.84.4`/`0.84.4` (`eb85b169`, aligned by `b918cdef` across native build, launcher, smoke default, diagnostics instrumenter, and tests; README badge updated). `0.84.4` is the Plan 101 matrix-verified release. Precise scope of what the peer floor can and cannot do:
+   - `@earendil-works/pi-ai@0.84.3` and `0.84.4` publish identical declared dependencies (`@google/genai 1.52.0`, exact), and `pi-coding-agent@0.84.3`/`0.84.4` both pin `minimatch 10.2.5`. `genai@1.52.0` declares `protobufjs ^7.5.4` and `ws ^8.18.0`; `minimatch@10.2.5` declares `brace-expansion ^5.0.5`. The vulnerable versions this PR removed from SumoCode's own lock (`7.5.5`, `8.20.0`, `5.0.5`) are **inside those declared ranges**, so raising the floor neither forces re-resolution nor constrains the transitive versions in a consumer install. The floor is a compatibility statement, **not a security constraint** on those transitives.
+   - A consumer upgrading Pi **while preserving an existing lockfile** keeps whichever vulnerable transitives that lock pinned — all nine consumer-runtime advisories can remain installed after the upgrade. SumoCode's own `pnpm.overrides` never propagate to consumers (matching the issue requirement to never claim consumers inherit local overrides), so they do not repair consumer locks either.
+   - A **fresh** consumer resolution selects the fixed patches only because the registry currently resolves each range to its highest in-range version (`7.6.5`, `8.21.0`, `5.0.9` are all in range, §4). PR #453 reported such a fresh-consumer Pi `0.84.4` graph with zero high/critical findings. That is a **historical, resolution-time observation**: it was not re-executed for this correction, it is not enforced by the floor, and it does not cover consumers who install or refresh from a retained lock. This repository's CI does not audit consumer graphs (§8). See §10 for user-facing remediation guidance; the remaining consumer blocker is stated in §9 and §11.
 2. **Local development graph.** The five `pnpm.overrides` plus the `vite` devDependency pin force the fixed patches into SumoCode's own lock deterministically (overriding a stale lock that predated the fixed releases) rather than relying on a future lock refresh. These are development-graph-only.
 
 ## 7. Runtime/dev role semantics
 
 The audit policy's classification rule (see `scripts/check-dependency-audit.mjs`) is: any finding whose chain starts `.>@earendil-works/pi-` is a **consumer-runtime** chain (it exists inside consumer-provided Pi and its dependencies); anything else is a **local-development** chain.
 
-- **Consumer-runtime (this PR: 9 advisories):** protobufjs, ws (via `@earendil-works/pi-ai` → `@google/genai`, the optional Gemini provider library), brace-expansion (via `@earendil-works/pi-coding-agent` → `minimatch`). These exist in a consumer's Pi install regardless of SumoCode's own devDependencies. Reachability here is dependency-presence (pnpm audit path), not an exploitability assessment of each provider path.
+- **Consumer-runtime (this PR: 9 advisories):** protobufjs, ws (via `@earendil-works/pi-ai` → `@google/genai`, the optional Gemini provider library), brace-expansion (via `@earendil-works/pi-coding-agent` → `minimatch`). These exist in a consumer's Pi install regardless of SumoCode's own devDependencies, and they **remain installed** in any consumer lock that resolves the vulnerable versions, because the declared ranges still permit them (§6). Reachability here is dependency-presence (pnpm audit path), not an exploitability assessment of each provider path.
 - **Local-development (this PR: 6 advisories):** vite, postcss, nanoid, reachable only through SumoCode's vitest toolchain. SumoCode ships a native binary and Pi extension source; its `node_modules` dev toolchain is not delivered to consumers.
 
 ## 8. Verification owner and CI evidence
@@ -159,10 +163,10 @@ The verification owner is the **automated gate**, not a human assignment:
 
 - **Policy module:** `scripts/check-dependency-audit.mjs` — fail-closed CLI. It rejects unclassified, stale, expired, package/fixed-version/upstream/dependency-chain-mismatched, duplicate, local-path, and unremediated high/critical records, and hard-fails on audit errors (registry/network), not just findings (`83231ad6`, `514da877`).
 - **Tests:** `scripts/check-dependency-audit.test.mjs` — 17 cases including multi-chain matching and local-path rejection added by the final commit.
-- **CI gate:** `.github/workflows/ci.yml`, job `typecheck-and-test`, step `Dependency audit policy` (`node scripts/check-dependency-audit.mjs`) runs after `pnpm install --frozen-lockfile` on every pull request and `main` push. CI evidence: run [33907877057](https://github.com/dhruvkelawala/sumocode/actions/runs/33907877057) (head `514da877`, 2026-09-04) logs `dependency audit policy passed; consumer-runtime upstream-blocked: 0; local-development high/critical: 0` and the 17-test focused file green. The separate `Pi compatibility` workflow run [33907877078](https://github.com/dhruvkelawala/sumocode/actions/runs/33907877078) on the same head covers the Plan 101 matrix gate for the `0.84.4` floor.
-- **Human-touch fields:** the only owner/expiry fields in the policy schema belong to upstream-blocked records; none exist in the final policy (§9), so no human expiry obligation is outstanding.
+- **CI gate:** `.github/workflows/ci.yml`, job `typecheck-and-test`, step `Dependency audit policy` (`node scripts/check-dependency-audit.mjs`) runs after `pnpm install --frozen-lockfile` on every pull request and `main` push. **The audited graph is this repository's own** — the frozen lock with its local overrides applied. CI evidence: run [33907877057](https://github.com/dhruvkelawala/sumocode/actions/runs/33907877057) (head `514da877`, 2026-09-04) logs `dependency audit policy passed; consumer-runtime upstream-blocked: 0; local-development high/critical: 0` and the 17-test focused file green. That log counts high/critical findings in the **local** audit only; with the overridden local graph clean it reports `0`, and it says nothing about any consumer graph. The separate `Pi compatibility` workflow run [33907877078](https://github.com/dhruvkelawala/sumocode/actions/runs/33907877078) on the same head covers the Plan 101 matrix gate for the `0.84.4` floor — a compatibility gate, not a consumer-security gate.
+- **Human-touch fields:** the only owner/expiry fields in the policy schema belong to upstream-blocked records; none exist in the final policy (§9). That means no expiry obligation for this repository's own policy. It does **not** mean the consumer-side finding is resolved: the local policy cannot represent a finding absent from its audited (local) graph — a re-added upstream-blocked record would fail the gate's own stale-record check — so the consumer blocker is recorded here as status only (§9), with no invented owner or expiry. Real consumer-side records with owner/expiry belong to the separately queued consumer-graph gate.
 
-## 9. Policy state — zero accepted exceptions
+## 9. Policy state — empty local record set, and what it does and does not mean
 
 `scripts/dependency-audit-policy.json` at `514da877`:
 
@@ -170,20 +174,47 @@ The verification owner is the **automated gate**, not a human assignment:
 { "schemaVersion": 1, "records": [] }
 ```
 
-No high/critical finding is waived, blocked, or accepted — the empty record set is the correct zero-accepted-exceptions end state for issue #396. Historical trace for transparency: from `f5151994` until `eb85b169` the policy carried three `upstream-blocked` consumer-runtime records (snapshots at `6936cb64`/`cf3a658a` show the same nine) — protobufjs advisories `1118641 1118928 1118930 1118932 1123488` (upstream `@earendil-works/pi-ai`), ws `1123259` (upstream `@earendil-works/pi-ai`), brace-expansion `1123898 1130591 1130734` (upstream `@earendil-works/pi-coding-agent`), owner `dhruvkelawala`, expiry `2026-10-04` — removed by `eb85b169` once the Pi `0.84.4` floor and the local overrides covered those chains. That intermediate record set is also the committed corroboration that the reproduced consumer-runtime advisory ids above match what the executor observed. This inventory adds no new exceptions and does not restore any record.
+**What the empty set means (accurate):** for this repository's own overridden graph, no high/critical finding is waived, blocked, or accepted. The five overrides plus the `vite` pin make SumoCode's own frozen-lock audit return zero high/critical findings, so the local policy legitimately has nothing to record.
 
-## 10. Unknowns and remaining verification
+**What the empty set does not mean (the correction):** it is **not** consumer remediation, and it is not by itself the issue #396 end state. Issue #396's consumer-runtime acceptance criterion is *consumer-runtime findings are fixed by an enforced upstream Pi minimum, or recorded as upstream-blocked with owner/expiry*. Neither arm is satisfied on the consumer side by PR #453:
+
+- the `~0.84.4` peer floor is not an *enforced* upstream minimum for the patched transitives — the Pi-declared ranges still permit the vulnerable versions (§6); and
+- the empty local `records[]` is not an upstream-blocked record with owner/expiry, and the local gate cannot carry one for a finding absent from its audited graph.
+
+The nine consumer-runtime advisories — protobufjs `1118641 1118928 1118930 1118932 1123488` and ws `1123259` (upstream `@earendil-works/pi-ai`), brace-expansion `1123898 1130591 1130734` (upstream `@earendil-works/pi-coding-agent`) — therefore remain **open high-severity findings for any consumer whose lock resolves the vulnerable versions**. This page records that status as consumer-upstream-blocked with **no false owner assignment and no waiver**; it does not invent an expiry. Plan 102 is **implementation incomplete / consumer-upstream-blocked** on its consumer-runtime criterion pending a proper consumer-graph gate (separate implementation queued by the coordinating parent).
+
+Historical trace (preserved for transparency): from `f5151994` until `eb85b169` the policy carried three `upstream-blocked` consumer-runtime records (snapshots at `6936cb64`/`cf3a658a` show the same nine), owner `dhruvkelawala`, expiry `2026-10-04`. Those records were removed by `eb85b169` **because the audited (overridden) local graph became clean** — not because the floor or the overrides covered consumer chains. That intermediate record set remains the committed corroboration that the reproduced consumer-runtime advisory ids match what the executor observed. This correction adds no new exceptions and does not restore any record.
+
+## 10. Consumer remediation guidance (user-facing)
+
+The fixed patches already exist inside the declared ranges of the Pi packages consumers install, so an affected consumer can clear these nine advisories **without waiting for a new Pi release** — but only by refreshing and then verifying **their own** lockfile. Pi (and Pi extensions such as SumoCode) is a peer dependency installed by the consumer; no change published to this repository can rewrite a consumer's lock, and nothing on this page should be read as doing so.
+
+If you maintain a project that installs `@earendil-works/pi-*` directly or via an extension such as SumoCode:
+
+1. **Audit your existing installation — not a hypothetical fresh one.** Run the audit against the lockfile your project actually installs from (pnpm: `pnpm audit`; npm: `npm audit`; yarn: `yarn npm audit`). Look for `protobufjs` `<=7.5.5` (GHSA-66ff-xgx4-vchm, -75px-5xx7-5xc7, -jvwf-75h9-cwgg, -685m-2w69-288q; `<=7.6.0` for GHSA-wcpc-wj8m-hjx6), `ws` `<8.21.0` (GHSA-96hv-2xvq-fx4p), and `brace-expansion` `<5.0.9` (GHSA-3jxr-9vmj-r5cp, -mh99-v99m-4gvg, -rgw5-rvv9-x895). A lockfile created before those patches published keeps the vulnerable versions even after upgrading Pi to `0.84.4`, because Pi's declared ranges still permit them (§6).
+2. **Refresh the vulnerable transitives to the fixed patches in your own project.** The fix is a re-resolution inside already-permitted ranges, so prefer narrow, exact overrides/resolutions over any blanket change:
+   - pnpm: add to your own `package.json` → `pnpm.overrides`: `"@google/genai>protobufjs": "7.6.5"`, `"@google/genai>ws": "8.21.0"`, `"minimatch>brace-expansion": "5.0.9"` (keyed to the upstream versions your lock nests under if they differ), then `pnpm install` and re-run `pnpm audit`.
+   - npm/yarn equivalents: `overrides` (npm) / `resolutions` (yarn).
+   - If your lockfile merely predates the patches, an ordinary no-version-change refresh (`pnpm install` / `npm install`) re-resolves in-range versions and will usually pick the patches up — but **verify afterwards**, because "usually" is resolution-time behavior, not an enforced guarantee.
+3. **Do not substitute destructive or blanket commands for verifying your own lock.** In particular: do not run `npm audit fix --force` (it applies breaking upgrades outside the declared ranges), do not treat global reinstall/upgrade of Pi or other packages as a remediation step, and do not move every dependency to `latest`. Those change versions the Pi packages did not declare and can break the install in ways an audit will not surface.
+4. **Re-run the audit after every refresh and keep the result.** A passing audit against *your* lockfile is the only consumer-side evidence that clears these advisories. If your lock still reports any of the nine after refresh, you remain affected; a change on the SumoCode side does not cover you.
+
+Maintainer-side remedy (not delivered here): the durable fix is an upstream Pi release whose declared constraints exclude the vulnerable transitives, plus a consumer-graph audit gate that continuously verifies consumer locks instead of relying on resolution-time coincidence. That work is queued separately by the coordinating parent. Until it lands, this repository can only keep its own local graph fixed and document the consumer blocker honestly — which this page now does. **This documentation correction is not the security fix for consumer installations.**
+
+## 11. Unknowns and remaining verification
 
 - **Historical audit counts are not reset and are not fully known.** No contemporaneous `pnpm audit` output was committed; only the nine consumer-runtime ids above are corroborated verbatim by committed history. Reproduced counts (15 high / 11 moderate at baseline, 0 at candidate, as of 2026-09-05) are the operative evidence for this diff.
 - **Moderate advisories** (11 at baseline: protobufjs family incl. `@protobufjs/utf8`, ws, brace-expansion, postcss, vite) were not part of the issue's high/critical gate; they also fell to zero at the candidate lock. Exact historical moderate ids are not archived beyond this reproduction.
 - **Severity drift:** all 15 are GHSA-reviewed `high` as of 2026-09-05; re-check before relying past that date.
 - **Consumer-runtime reachability** is dependency-presence based (§7); this inventory does not assert exploitability of any optional provider path.
-- **Not re-run here:** the fresh-consumer Pi `0.84.4` graph verification (claimed in PR #453) was not re-executed during this docs-only tail (no heavy installs while the Plan 112 lane is active). The CI gate re-runs the policy against the frozen lock on every future PR/`main` push and will fail on any new high/critical finding without an exact owned upstream-blocked record.
+- **Fresh-consumer observation is historical and non-enforcing.** The fresh-consumer Pi `0.84.4` graph verification claimed in PR #453 was not re-executed for this correction (no heavy installs while the Plan 112 lane is active). Even re-run at zero findings, a fresh resolution would not clear retained consumer locks (§6); only a consumer-graph gate can enforce that, and it is queued separately.
+- **Remaining consumer security blocker.** Until an upstream Pi release constrains the patched transitives or a consumer-graph gate is in place, consumers on retained locks can still carry the nine high advisories (§9). This repository's gate re-runs only against its own frozen (overridden) lock on every PR/`main` push and fails on any new high/critical finding in that graph; it does not measure consumer graphs. Keep issue #396 open and the Codex thread unresolved until the consumer-side remedy is evidenced.
 
-## 11. Sources
+## 12. Sources
 
 - Issue: https://github.com/dhruvkelawala/sumocode/issues/396 (public scope, acceptance criteria)
 - PR: https://github.com/dhruvkelawala/sumocode/pull/453 (body, commit list `c50ea0f7`→`514da877`)
+- Correction: [PR #467](https://github.com/dhruvkelawala/sumocode/pull/467) Codex P1 review discussion 3941838506 against head `7519bab9`, accepted and applied by the correction commit on top of `7519bab9` on branch `sumo/reconcile-plan102-public-advisory-remediation-ma`
 - Commits: `397be093`, `f5151994`, `eb85b169`, `b918cdef`, `926f98eb`, `6936cb64`, `83231ad6`, `514da877` (diffs to `package.json`, `pnpm-lock.yaml`, `.github/workflows/ci.yml`, `scripts/check-dependency-audit.mjs`, `scripts/check-dependency-audit.test.mjs`, `scripts/dependency-audit-policy.json`, launcher/native/tests)
 - Lockfiles: `pnpm-lock.yaml` @ `397be093` and @ `514da877`
 - CI logs: runs 33907877057 (`ci`), 33907877078 (`Pi compatibility`)

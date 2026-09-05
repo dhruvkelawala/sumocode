@@ -80,7 +80,7 @@ export default function terminalDeliveryFixture(pi: ExtensionAPI): void {
 					const result = target.sendMessage(...args);
 					const message = args[0];
 					if (message.customType === "terminal-result") {
-						appendFileSync(deliveryTrace, `${JSON.stringify({ event: "observable", completionId: message.details?.completionId })}\n`, { mode: 0o600 });
+						appendFileSync(deliveryTrace, `${JSON.stringify({ event: "observable", completionId: message.details?.completionId, triggerTurn: args[1]?.triggerTurn })}\n`, { mode: 0o600 });
 					}
 					if (crashPoint === "send" && message.customType === "terminal-result") {
 						writeFileSync(join(markerDir, "crashed-after-send"), "sent\n", { mode: 0o600 });

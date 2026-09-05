@@ -578,6 +578,8 @@ describe("terminal completion delivery recovery", () => {
 		expect(terminalMessages(await owner.request("get_messages"), delivered.completionId!)).toHaveLength(1);
 		expect(persistedTerminalMessages(sessionB, delivered.completionId!)).toHaveLength(0);
 		expect(persistedTerminalMessages(sessionA, delivered.completionId!)).toHaveLength(1);
+		expect(readFileSync(join(paths.markerDir, "delivery-trace.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line)))
+			.toContainEqual({ event: "observable", completionId: delivered.completionId, triggerTurn: true });
 	});
 
 	it("lets terminal_check win an observation race without a duplicate completion", async () => {
@@ -620,15 +622,16 @@ describe("terminal completion delivery recovery", () => {
 		await waitForMarker(paths, "started.json");
 		const { id } = readMarker<StartMarker>(paths, "started.json");
 		const running = await waitForSnapshot(paths, id, (snapshot) => snapshot.status === "running");
+		const tree = ownedTree(running);
+		expect(tree).toBeDefined();
+		const verification = tree!.verification ?? systemProcessTree.captureTreeVerification?.(tree!.identity);
 
 		await client.request("prompt", { message: "/terminal-recovery-stop" });
 		await waitForMarker(paths, "stopped.json");
 		const cancelled = await waitForSnapshot(paths, id, (snapshot) => snapshot.status === "cancelled");
 		expect(cancelled).toMatchObject({ deliveryState: "suppressed", completionId: expect.any(String) });
 		await vi.waitFor(() => {
-			let alive = true;
-			try { process.kill(running.pid!, 0); } catch { alive = false; }
-			expect(alive).toBe(false);
+			expect(systemProcessTree.isTreeEmpty(tree!.identity, verification)).toBe(true);
 		}, { timeout: 10_000, interval: 20 });
 		expect(persistedTerminalMessages(sessionFile, cancelled.completionId!)).toHaveLength(0);
 	});

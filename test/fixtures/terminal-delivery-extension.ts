@@ -142,8 +142,11 @@ export default function terminalDeliveryFixture(pi: ExtensionAPI): void {
 			const completion = args.trim() === "wake" ? "wake" : "passive";
 			const tool = tools.get("terminal_start");
 			if (!tool) throw new Error("terminal_start was not registered");
-			const filler = process.env.SUMOCODE_TEST_TERMINAL_LARGE_OUTPUT === "1" ? "head -c 20000 /dev/zero | tr '\\0' x; " : "";
-			const completionCommand = `printf 'API_KEY=terminal-secret-value\\n'; ${filler}printf '\\nbenign completion\\n'`;
+			const filler = process.env.SUMOCODE_TEST_TERMINAL_LARGE_OUTPUT === "1" ? "x ".repeat(16 * 1024) : "";
+			const output = `omitted producer prefix\n${filler}\nAPI_KEY=terminal-secret-value\nbenign completion\n`;
+			const producerFile = join(markerDir, "producer-output.txt");
+			writeFileSync(producerFile, output, { mode: 0o600 });
+			const completionCommand = `cat ${shellQuote(producerFile)}`;
 			const command = process.env.SUMOCODE_TEST_TERMINAL_HOLD === "1"
 				? `while [ ! -f ${shellQuote(join(markerDir, "terminal-release"))} ]; do sleep 0.01; done; ${completionCommand}`
 				: completionCommand;

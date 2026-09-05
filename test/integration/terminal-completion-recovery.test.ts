@@ -284,6 +284,30 @@ function persistedTerminalMessages(sessionFile: string, completionId: string): A
 		.flatMap((line) => terminalMessages(JSON.parse(line), completionId));
 }
 
+function expectBoundedCompletion(paths: TestRoot, task: TerminalTaskSnapshot, message: { readonly [key: string]: JsonValue }): void {
+	const raw = readFileSync(join(paths.markerDir, "producer-output.txt"));
+	expect(raw.byteLength).toBeGreaterThan(30 * 1024);
+	expect(readFileSync(task.logFile)).toEqual(raw);
+	const redacted = raw.toString("utf8").replace("terminal-secret-value", "[REDACTED]");
+	// ASCII fixture: the production 8 KiB UTF-8 tail also fits the prompt's separate character cap.
+	const expectedTail = Buffer.from(redacted).subarray(-8 * 1024).toString("utf8");
+	expect(Buffer.byteLength(expectedTail)).toBe(8 * 1024);
+	expect(isRecord(message.details)).toBe(true);
+	if (!isRecord(message.details)) throw new Error("missing completion details");
+	const activity = message.details.activity;
+	expect(isRecord(activity)).toBe(true);
+	if (!isRecord(activity)) throw new Error("missing completion activity");
+	expect(activity.outputTail).toBe(expectedTail);
+	expect(message.content).toContain(expectedTail.trimEnd());
+	const serialized = JSON.stringify(message);
+	expect(Buffer.byteLength(serialized, "utf8")).toBeLessThan(30 * 1024);
+	expect(serialized).not.toContain("omitted producer prefix");
+	expect(serialized).not.toContain("terminal-secret-value");
+	expect(serialized).toContain("API_KEY=[REDACTED]");
+	expect(serialized).toContain("benign completion");
+	console.info(`terminal projection: producer=${raw.byteLength} bytes, outputTail=${Buffer.byteLength(expectedTail)} bytes, message=${Buffer.byteLength(serialized)} bytes`);
+}
+
 function resetIndexMarkers(paths: TestRoot): void {
 	for (const name of ["index-attempt.json", "index-scheduled", "index-release", "index-diagnostics.jsonl"]) {
 		rmSync(join(paths.markerDir, name), { force: true });
@@ -309,9 +333,9 @@ function createCorruptRecord(paths: TestRoot): void {
 	writeFileSync(join(directory, "meta.json"), "{malformed\n", { mode: 0o600 });
 }
 
-async function startBusyPendingCompletion(paths: TestRoot, sessionFile: string): Promise<{ readonly client: RpcClient; readonly pending: TerminalTaskSnapshot }> {
+async function startBusyPendingCompletion(paths: TestRoot, sessionFile: string, overrides: NodeJS.ProcessEnv = {}): Promise<{ readonly client: RpcClient; readonly pending: TerminalTaskSnapshot }> {
 	writeFileSync(join(paths.markerDir, "busy"), "busy\n", { mode: 0o600 });
-	const client = launch(paths, sessionFile);
+	const client = launch(paths, sessionFile, overrides);
 	const start = await client.request("prompt", { message: "/terminal-recovery-start passive" });
 	expect(start.success).toBe(true);
 	await waitForMarker(paths, "started.json");
@@ -371,7 +395,7 @@ describe("terminal completion delivery recovery", () => {
 		expect(delivered.completionId).toEqual(expect.any(String));
 		const liveMessages = terminalMessages(live, delivered.completionId!);
 		expect(liveMessages).toHaveLength(1);
-		expect(Buffer.byteLength(JSON.stringify(liveMessages[0]), "utf8")).toBeLessThan(30 * 1024);
+		expectBoundedCompletion(paths, delivered, liveMessages[0]!);
 		expect(persistedTerminalMessages(sessionFile, delivered.completionId!)).toHaveLength(1);
 		expect(JSON.stringify(live)).not.toContain("terminal-secret-value");
 		expect(JSON.stringify(live)).toContain("benign completion");
@@ -382,13 +406,14 @@ describe("terminal completion delivery recovery", () => {
 		const hydratedMessages = terminalMessages(hydrated, delivered.completionId!);
 		expect(hydratedMessages).toHaveLength(1);
 		expect(hydratedMessages[0]?.details).toEqual(liveMessages[0]?.details);
+		expect(hydratedMessages[0]?.content).toEqual(liveMessages[0]?.content);
 		expect(persistedTerminalMessages(sessionFile, delivered.completionId!)).toHaveLength(1);
 	});
 
 	it("defers replacement delivery until the terminal index is ready", async () => {
 		const paths = createRoot();
 		const sessionFile = createSession(paths, "session-a", SESSION_A);
-		const { client, pending } = await startBusyPendingCompletion(paths, sessionFile);
+		const { client, pending } = await startBusyPendingCompletion(paths, sessionFile, { SUMOCODE_TEST_TERMINAL_LARGE_OUTPUT: "1" });
 		createCorruptRecord(paths);
 		resetIndexMarkers(paths);
 		writeFileSync(join(paths.markerDir, "index-hold"), "hold\n", { mode: 0o600 });
@@ -408,7 +433,7 @@ describe("terminal completion delivery recovery", () => {
 		const live = await client.request("get_messages");
 		const liveMessages = terminalMessages(live, delivered.completionId!);
 		expect(liveMessages).toHaveLength(1);
-		expect(Buffer.byteLength(JSON.stringify(liveMessages[0]), "utf8")).toBeLessThan(30 * 1024);
+		expectBoundedCompletion(paths, delivered, liveMessages[0]!);
 		expect(JSON.stringify(live)).not.toContain("terminal-secret-value");
 		expect(JSON.stringify(live)).toContain("benign completion");
 		// SAFETY: the fixture writes each delivery trace row from the DeliveryTrace event vocabulary above.
@@ -426,6 +451,7 @@ describe("terminal completion delivery recovery", () => {
 		const hydratedMessages = terminalMessages(await client.request("get_messages"), delivered.completionId!);
 		expect(hydratedMessages).toHaveLength(1);
 		expect(hydratedMessages[0]?.details).toEqual(liveMessages[0]?.details);
+		expect(hydratedMessages[0]?.content).toEqual(liveMessages[0]?.content);
 		expect(persistedTerminalMessages(sessionFile, delivered.completionId!)).toHaveLength(1);
 	});
 

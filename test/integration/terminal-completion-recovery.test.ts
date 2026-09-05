@@ -22,6 +22,7 @@ interface RpcResponse {
 
 interface RpcFields {
 	readonly message?: string;
+	readonly sessionPath?: string;
 }
 
 interface RpcClient {
@@ -374,20 +375,24 @@ describe("terminal completion delivery recovery", () => {
 	it("defers replacement delivery until the terminal index is ready", async () => {
 		const paths = createRoot();
 		const sessionFile = createSession(paths, "session-a", SESSION_A);
-		const pending = await seedPendingCompletion(paths, sessionFile);
+		const { client, pending } = await startBusyPendingCompletion(paths, sessionFile);
 		createCorruptRecord(paths);
-		const replacement = launch(paths, sessionFile, { SUMOCODE_TEST_TERMINAL_INDEX: "held" });
+		resetIndexMarkers(paths);
+		writeFileSync(join(paths.markerDir, "index-hold"), "hold\n", { mode: 0o600 });
+		// Pi rebuilds the extension on a same-session switch, giving us a real replacement without another OS process.
+		await client.request("switch_session", { sessionPath: sessionFile });
 
 		await waitForMarker(paths, "index-scheduled");
 		expect(readSnapshot(paths, pending.id)).toMatchObject({ deliveryState: "pending" });
-		expect(terminalMessages(await replacement.request("get_messages"), pending.completionId!)).toHaveLength(0);
+		expect(terminalMessages(await client.request("get_messages"), pending.completionId!)).toHaveLength(0);
 		expect(existsSync(join(paths.markerDir, "index-attempt.json"))).toBe(false);
+		rmSync(join(paths.markerDir, "busy"), { force: true });
 		writeFileSync(join(paths.markerDir, "index-release"), "release\n", { mode: 0o600 });
 
 		const delivered = await waitForSnapshot(paths, pending.id, (snapshot) => snapshot.deliveryState === "delivered");
 		expect(delivered).toMatchObject({ ownerSessionId: SESSION_A, completionId: pending.completionId });
 		expect(readMarker<IndexAttemptMarker>(paths, "index-attempt.json")).toEqual({ ready: true });
-		const live = await replacement.request("get_messages");
+		const live = await client.request("get_messages");
 		const liveMessages = terminalMessages(live, delivered.completionId!);
 		expect(liveMessages).toHaveLength(1);
 		expect(Buffer.byteLength(JSON.stringify(liveMessages[0]), "utf8")).toBeLessThan(30 * 1024);
@@ -399,13 +404,13 @@ describe("terminal completion delivery recovery", () => {
 			.filter((event) => event.completionId === delivered.completionId);
 		expect(trace.map((event) => event.event)).toEqual(["observable", "acknowledged"]);
 
-		await replacement.request("prompt", { message: "/terminal-recovery-settle" });
-		expect(terminalMessages(await replacement.request("get_messages"), delivered.completionId!)).toHaveLength(1);
+		await client.request("prompt", { message: "/terminal-recovery-settle" });
+		expect(terminalMessages(await client.request("get_messages"), delivered.completionId!)).toHaveLength(1);
 		expect(persistedTerminalMessages(sessionFile, delivered.completionId!)).toHaveLength(1);
-		await replacement.terminate();
 
-		const hydrated = launch(paths, sessionFile);
-		const hydratedMessages = terminalMessages(await hydrated.request("get_messages"), delivered.completionId!);
+		// Switch once more so a fresh extension generation hydrates the delivered session record.
+		await client.request("switch_session", { sessionPath: sessionFile });
+		const hydratedMessages = terminalMessages(await client.request("get_messages"), delivered.completionId!);
 		expect(hydratedMessages).toHaveLength(1);
 		expect(hydratedMessages[0]?.details).toEqual(liveMessages[0]?.details);
 		expect(persistedTerminalMessages(sessionFile, delivered.completionId!)).toHaveLength(1);

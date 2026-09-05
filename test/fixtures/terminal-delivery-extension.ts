@@ -33,6 +33,7 @@ export default function terminalDeliveryFixture(pi: ExtensionAPI): void {
 	const rootDir = requiredEnv("SUMOCODE_TEST_TERMINAL_ROOT");
 	const markerDir = requiredEnv("SUMOCODE_TEST_TERMINAL_MARKERS");
 	const faultMarker = join(markerDir, "index-fault");
+	const holdMarker = join(markerDir, "index-hold");
 	const releaseMarker = join(markerDir, "index-release");
 	const busyMarker = join(markerDir, "busy");
 	const raceIdleMarker = join(markerDir, "race-idle");
@@ -41,7 +42,6 @@ export default function terminalDeliveryFixture(pi: ExtensionAPI): void {
 	const crashPoint = process.env.SUMOCODE_TEST_TERMINAL_CRASH;
 	const expectedCrashToken = process.env.SUMOCODE_TEST_TERMINAL_EXPECTED_CRASH_TOKEN;
 	const expectedCrashMarker = expectedCrashToken ? join(markerDir, `expected-crash-${expectedCrashToken}`) : undefined;
-	const indexMode = process.env.SUMOCODE_TEST_TERMINAL_INDEX ?? "normal";
 	const tools = new Map<string, RegisteredTool>();
 	let manager: TerminalTaskManager;
 
@@ -107,7 +107,7 @@ export default function terminalDeliveryFixture(pi: ExtensionAPI): void {
 		killGraceMs: 100,
 		scheduleIndexInitialization: (initialize) => {
 			const run = (): void => {
-				if (indexMode === "held" && !existsSync(releaseMarker)) {
+				if (existsSync(holdMarker) && !existsSync(releaseMarker)) {
 					setTimeout(run, 10).unref?.();
 					return;
 				}

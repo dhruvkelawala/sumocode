@@ -382,6 +382,66 @@ function transientFault(code: string): Error {
 		}
 	});
 
+	it.each(["wait", "delivery"])("active poll adopts same-revision settlement and wakes %s without another event", async (consumer) => {
+		vi.useFakeTimers();
+		let coordinator: TerminalDeliveryCoordinator | undefined;
+		try {
+			const reads = { scans: 0, metadata: 0 };
+			const store = new TerminalTaskStore({ rootDir, onRead: (kind) => { reads[kind === "full-scan" ? "scans" : "metadata"] += 1; } });
+			const target = manager({ store, pollIntervalMs: 250 });
+			const task = await start(target);
+			await vi.advanceTimersByTimeAsync(500);
+			const branch: Array<{ type: "custom_message"; details: unknown }> = [];
+			const sendMessage = vi.fn((message: { details?: unknown }) => {
+				branch.push({ type: "custom_message", details: message.details });
+			});
+			// SAFETY: the double implements the coordinator's ExtensionAPI member.
+			coordinator = new TerminalDeliveryCoordinator({ sendMessage } as never, target);
+			// SAFETY: the double implements the coordinator's ExtensionContext members.
+			coordinator.bind({
+				isIdle: () => true,
+				sessionManager: { getSessionId: () => "session-a", getBranch: () => branch },
+			} as never);
+			await vi.advanceTimersByTimeAsync(0);
+			const resolved = vi.fn();
+			const waiting = consumer === "wait" ? target.wait([task.id], "session-a", 30_000).then(resolved) : undefined;
+			if (consumer === "wait") coordinator.unbind();
+			const changes: TerminalTaskSnapshot[] = [];
+			target.addChangeListener((snapshot) => changes.push(snapshot));
+			const publications: Array<readonly TerminalTaskSnapshot[]> = [];
+			target.subscribeChanges((snapshots) => publications.push(snapshots));
+			publications.length = 0;
+			const fresh = store.getIndexed(task.id)!;
+			const stamp = store.getIndexedStamp(task.id);
+			writeFileSync(join(dirname(task.logFile), "meta.json"), JSON.stringify({
+				...fresh, status: "completed", deliveryState: "pending", exitCode: 0,
+				settledAt: now, completionId: "completion-external-poll",
+			}));
+			expect(store.getIndexedStamp(task.id)).not.toBe(stamp);
+			reads.metadata = 0;
+			vi.advanceTimersByTime(250);
+			expect(reads).toEqual({ scans: 1, metadata: 1 });
+			expect(changes).toEqual([expect.objectContaining({ revision: fresh.revision, status: "completed", deliveryState: "pending" })]);
+			expect(publications).toHaveLength(1);
+			await vi.advanceTimersByTimeAsync(0);
+			if (consumer === "wait") {
+				expect(resolved).toHaveBeenCalledWith(expect.objectContaining({ timedOut: false, pendingIds: [], settled: [expect.objectContaining({ task: expect.objectContaining({ id: task.id, status: "completed" }) })] }));
+				await waiting;
+				expect(sendMessage).not.toHaveBeenCalled();
+			} else {
+				expect(sendMessage).toHaveBeenCalledTimes(1);
+				expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ customType: "terminal-result" }), expect.anything());
+				expect(target.get(task.id, "session-a")?.deliveryState).toBe("delivered");
+			}
+			expect(reads).toEqual({ scans: 1, metadata: consumer === "wait" ? 2 : 4 });
+			expect(target.getSupervisionStats()).toMatchObject({ runtime: 0, callbacks: 3 });
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			coordinator?.dispose();
+			vi.useRealTimers();
+		}
+	});
+
 	it("refuses cached disposition when active metadata becomes corrupt", async () => {
 		vi.useFakeTimers();
 		try {
@@ -405,26 +465,51 @@ function transientFault(code: string): Error {
 		}
 	});
 
-	it("retains pending and claimed completions outside the settled replay budget until observation or acknowledgement", () => {
+	it.each(["initialization", "refresh", "lookup"])("retains pending and claimed completions in projection outside the settled replay budget via %s", (adoption) => {
 		const store = new TerminalTaskStore({ rootDir });
+		const tasks: TerminalTaskSnapshot[] = [];
 		for (let index = 0; index < 70; index += 1) {
 			const task = persistSettledTask(store, `term-budget-${index}`, "owner", index + 1);
-			if (index > 1) continue;
+			tasks.push(task);
+			writeFileSync(join(dirname(task.logFile), "meta.json"), JSON.stringify({ ...task, deliveryState: "delivered" }));
+		}
+		const target = adoption === "initialization" ? undefined : manager({ store });
+		for (let index = 0; index < 2; index += 1) {
+			const task = tasks[index]!;
 			writeFileSync(join(dirname(task.logFile), "meta.json"), JSON.stringify({
 				...task, observedAt: undefined,
 				deliveryState: index === 0 ? "pending" : "claimed",
 				deliveryClaimToken: index === 1 ? "claim-old" : undefined,
 			}));
 		}
-		const target = manager({ store });
-		expect(target.getSupervisionStats()).toMatchObject({ snapshots: 66, runtime: 0 });
-		expect(target.list("owner")).toHaveLength(66);
-		expect(target.check("term-budget-0", "owner")?.task.deliveryState).toBe("suppressed");
-		expect(target.getSupervisionStats().snapshots).toBe(65);
-		expect(target.acknowledge("owner", [{ completionId: "completion-term-budget-1", claimToken: "claim-old" }])).toHaveLength(1);
-		expect(target.getSupervisionStats().snapshots).toBe(64);
-		expect(target.get("term-budget-1", "owner")?.deliveryState).toBe("delivered");
-		expect(target.getSupervisionStats().snapshots).toBe(64);
+		const retained = target ?? manager({ store });
+		if (adoption === "refresh") retained.refreshSnapshotsFromStore();
+		if (adoption === "lookup") {
+			retained.get("term-budget-0", "owner");
+			retained.get("term-budget-1", "owner");
+		}
+		expect(retained.getSupervisionStats()).toMatchObject({ snapshots: 66, runtime: 0 });
+		expect(retained.list("owner")).toHaveLength(66);
+		const snapshots = retained.getSnapshots();
+		expect(snapshots).toHaveLength(66);
+		expect(snapshots.slice(0, 2)).toEqual([
+			expect.objectContaining({ id: "term-budget-0", deliveryState: "pending" }),
+			expect.objectContaining({ id: "term-budget-1", deliveryState: "claimed" }),
+		]);
+		expect(snapshots.filter((task) => task.deliveryState === "delivered")).toHaveLength(64);
+		expect(snapshots[2]?.id).toBe("term-budget-6");
+		const replay = vi.fn();
+		const unsubscribe = retained.subscribeChanges(replay);
+		expect(replay).toHaveBeenCalledExactlyOnceWith(snapshots);
+		unsubscribe();
+		expect(retained.check("term-budget-0", "owner")?.task.deliveryState).toBe("suppressed");
+		expect(retained.getSupervisionStats().snapshots).toBe(65);
+		expect(retained.getSnapshots()).toHaveLength(65);
+		expect(retained.acknowledge("owner", [{ completionId: "completion-term-budget-1", claimToken: "claim-old" }])).toHaveLength(1);
+		expect(retained.getSupervisionStats().snapshots).toBe(64);
+		expect(retained.get("term-budget-1", "owner")?.deliveryState).toBe("delivered");
+		expect(retained.getSupervisionStats().snapshots).toBe(64);
+		expect(retained.getSnapshots()).toHaveLength(64);
 		expect(store.listOwnedIndexed("owner")).toHaveLength(70);
 	});
 

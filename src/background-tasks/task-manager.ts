@@ -1394,21 +1394,9 @@ export class TerminalTaskManager {
 	}
 
 	public getSnapshots(): readonly TerminalTaskSnapshot[] {
-		const snapshots = [...this.tasks.values()];
-		const replayed = snapshots.filter((snapshot) => !isTerminalTaskSettled(snapshot.status));
-		const settledByOwner = new Map<string, TerminalTaskSnapshot[]>();
-		for (const snapshot of snapshots) {
-			if (!isTerminalTaskSettled(snapshot.status)) continue;
-			const owned = settledByOwner.get(snapshot.ownerSessionId) ?? [];
-			owned.push(snapshot);
-			settledByOwner.set(snapshot.ownerSessionId, owned);
-		}
-		for (const owned of settledByOwner.values()) {
-			replayed.push(...owned
-				.sort((left, right) => (right.settledAt ?? right.updatedAt) - (left.settledAt ?? left.updatedAt))
-				.slice(0, MAX_REPLAYED_SETTLED_TERMINALS));
-		}
-		return replayed
+		// Adoption already bounds disposable history per owner. Replay every retained
+		// task so pending/claimed completions never compete for that history budget.
+		return [...this.tasks.values()]
 			.sort((left, right) => left.createdAt - right.createdAt)
 			.map(immutableTerminalSnapshot);
 	}
@@ -1986,8 +1974,12 @@ export class TerminalTaskManager {
 			this.releaseSettledRuntime(snapshot.id);
 			this.retainSettledReplay(snapshot);
 		}
-		if (!notify || previous?.revision === snapshot.revision) return;
-		this.notifyChanges([snapshot]);
+		if (!notify) return;
+		// Validated poll reads can reveal same-revision lifecycle or delivery changes.
+		// The caller owns recovery; adoption only fans out the semantic change.
+		if (recoveryRelevantAdoption(previous, snapshot) || (previous !== undefined && deliveryEligibilityChanged(previous, snapshot))) {
+			this.notifyChanges([snapshot]);
+		} else if (previous !== undefined && !snapshotContentEquals(previous, snapshot)) this.publishProjection();
 	}
 
 	private removeFromReplay(snapshot: TerminalTaskSnapshot): void {

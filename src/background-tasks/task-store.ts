@@ -708,7 +708,10 @@ export class TerminalTaskStore {
 	public getIndexed(id: string): TerminalTaskSnapshot | undefined {
 		const path = this.metaPathById.get(id);
 		if (!path) return undefined;
-		return this.readCurrent(path);
+		const snapshot = this.readCurrent(path);
+		// Keep candidate selection in step with validated poll/pre-send reads.
+		if (snapshot) this.replaceIndexedEntry(snapshot);
+		return snapshot;
 	}
 
 	/** Change hint only: never authority for validation, transitions, or process signals. */

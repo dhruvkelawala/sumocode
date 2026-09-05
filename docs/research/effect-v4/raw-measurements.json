@@ -1,0 +1,263 @@
+{
+  "meta": {
+    "generatedAt": "2026-09-05T17:15:53.111Z",
+    "machine": "Apple M4 (10 core), 16 GB, macOS Darwin 25.5.0 arm64, Mac mini",
+    "caveat": "SumoCode's quoted 182ms/732ms budget was measured on an M3 Max; this host is an M4 Mac mini. Treat absolute ms as same-order, not identical.",
+    "node": "v25.6.1",
+    "bun": "1.4.0",
+    "esbuild": "0.28.2",
+    "typescript": "6.0.3",
+    "effect": "4.0.0-rc.112",
+    "sampleCounts": {
+      "importTimes": 11,
+      "bunSpawn": 15,
+      "micro": 7,
+      "rss": 7,
+      "tsc": 3
+    }
+  },
+  "bundleBytes": {
+    "baseline": {
+      "externalized": 977,
+      "bundled": 977,
+      "bundledMinified": 456
+    },
+    "effect-core": {
+      "externalized": 2975,
+      "bundled": 504557,
+      "bundledMinified": 190517
+    },
+    "effect-schema": {
+      "externalized": 3678,
+      "bundled": 829347,
+      "bundledMinified": 330528
+    },
+    "effect-stream": {
+      "externalized": 3896,
+      "bundled": 1012338,
+      "bundledMinified": 398720
+    }
+  },
+  "binaryBytes": {
+    "baseline": {
+      "plain": 63910514,
+      "minified": 63910514
+    },
+    "effect-core": {
+      "plain": 64174706,
+      "minified": 64026098
+    },
+    "effect-schema": {
+      "plain": 64587506,
+      "minified": 64224242
+    },
+    "effect-stream": {
+      "plain": 64769138,
+      "minified": 64290290
+    }
+  },
+  "nodeImportMs": {
+    "externalized": {
+      "baseline": {
+        "medianMs": 28.28,
+        "p90Ms": 30.11,
+        "deltaVsBaselineMs": 0
+      },
+      "effect-core": {
+        "medianMs": 119.19,
+        "p90Ms": 135.91,
+        "deltaVsBaselineMs": 90.92
+      },
+      "effect-schema": {
+        "medianMs": 114,
+        "p90Ms": 115.96,
+        "deltaVsBaselineMs": 85.73
+      },
+      "effect-stream": {
+        "medianMs": 113.93,
+        "p90Ms": 122.78,
+        "deltaVsBaselineMs": 85.65
+      }
+    },
+    "bundled": {
+      "baseline": {
+        "medianMs": 29.5,
+        "p90Ms": 32.4,
+        "deltaVsBaselineMs": 0
+      },
+      "effect-core": {
+        "medianMs": 66.39,
+        "p90Ms": 67.77,
+        "deltaVsBaselineMs": 36.88
+      },
+      "effect-schema": {
+        "medianMs": 72.42,
+        "p90Ms": 74.87,
+        "deltaVsBaselineMs": 42.91
+      },
+      "effect-stream": {
+        "medianMs": 79.27,
+        "p90Ms": 83.67,
+        "deltaVsBaselineMs": 49.77
+      }
+    }
+  },
+  "bunSpawnMs": {
+    "plain": {
+      "baseline": {
+        "medianMs": 6.47,
+        "p90Ms": 8.27,
+        "minMs": 6.24,
+        "deltaVsBaselineMs": 0
+      },
+      "effect-core": {
+        "medianMs": 14.33,
+        "p90Ms": 20.9,
+        "minMs": 13.23,
+        "deltaVsBaselineMs": 7.86
+      },
+      "effect-schema": {
+        "medianMs": 22.54,
+        "p90Ms": 27.44,
+        "minMs": 21.42,
+        "deltaVsBaselineMs": 16.07
+      },
+      "effect-stream": {
+        "medianMs": 25.75,
+        "p90Ms": 28.11,
+        "minMs": 24.61,
+        "deltaVsBaselineMs": 19.28
+      }
+    },
+    "minified": {
+      "baseline.min": {
+        "medianMs": 6.93,
+        "p90Ms": 8.84,
+        "minMs": 6.74,
+        "deltaVsBaselineMs": 0
+      },
+      "effect-core.min": {
+        "medianMs": 13.32,
+        "p90Ms": 16.72,
+        "minMs": 12.88,
+        "deltaVsBaselineMs": 6.39
+      },
+      "effect-schema.min": {
+        "medianMs": 22.26,
+        "p90Ms": 24.43,
+        "minMs": 20.28,
+        "deltaVsBaselineMs": 15.33
+      },
+      "effect-stream.min": {
+        "medianMs": 23.98,
+        "p90Ms": 26.9,
+        "minMs": 22.93,
+        "deltaVsBaselineMs": 17.06
+      }
+    }
+  },
+  "rss": {
+    "node": {
+      "afterImportMB": 58.17,
+      "afterRuntimeMB": 58.31,
+      "after1000IdleFibersMB": 62.77,
+      "perFiberBytes": 4784
+    },
+    "bunCompiled": {
+      "afterImportMB": 16.95,
+      "afterRuntimeMB": 18.69,
+      "after1000IdleFibersMB": 29.09,
+      "perFiberBytes": 11026
+    },
+    "baselineMB": {
+      "node": 45.05,
+      "bunCompiled": 12.25
+    },
+    "bunBinaryProgramRssMB": {
+      "baseline": 12.25,
+      "effect-core": 23.42,
+      "effect-schema": 28.94,
+      "effect-stream": 30.17
+    }
+  },
+  "micro": {
+    "node": {
+      "plain_async_3awaits": 75.68,
+      "effect_gen_runPromise_per_iter": 793.7,
+      "effect_gen_single_run": 62.04,
+      "schema_decode_10field": 710.27,
+      "handwritten_guard_10field": 4.21
+    },
+    "node_dceDefeated": {
+      "schema_decode_10field_ns": 742.12,
+      "handwritten_guard_10field_ns": 8.66,
+      "ratio": 85.7
+    },
+    "bun": {
+      "plain_async_3awaits": 49.59,
+      "effect_gen_runPromise_per_iter": 410.18,
+      "effect_gen_single_run": 82.79,
+      "schema_decode_10field": 541.32,
+      "handwritten_guard_10field": 0.25
+    },
+    "bun_dceDefeated": {
+      "schema_decode_10field_ns": 546.26,
+      "handwritten_guard_10field_ns": 4.85,
+      "ratio": 112.6
+    },
+    "note": "handwritten_guard in the first pass was partially eliminated by the JIT (Bun reported 0.25 ns/op, below one clock cycle). The *_dceDefeated numbers use a 256-object pool and an observed sink and are the trustworthy ones."
+  },
+  "tsc": {
+    "skipLibCheckFalse": {
+      "baseline1FileMs": [
+        914,
+        798,
+        814
+      ],
+      "effect2FilesMs": [
+        1454,
+        1355,
+        1363
+      ],
+      "medianDeltaMs": 549
+    },
+    "skipLibCheckTrue": {
+      "baseline1FileMs": [
+        286,
+        241,
+        231
+      ],
+      "effect2FilesMs": [
+        529,
+        499,
+        479
+      ],
+      "effect8FilesMs": [
+        604,
+        507,
+        507
+      ],
+      "medianDeltaMs": 258,
+      "marginalPerExtraEffectFileMs": 1.33
+    },
+    "note": "Effect's type-check cost is a ~258ms FIXED cost (loading its .d.ts graph), not per-file: 2 Effect files 499ms vs 8 Effect files 507ms."
+  },
+  "platformBundle": {
+    "barrelImportMinifiedBytes": 1388469,
+    "subpathImportMinifiedBytes": 172864,
+    "note": "import { NodeFileSystem } from \"@effect/platform-node\" inlines undici+mime; import { layer } from \"@effect/platform-node/NodeFileSystem\" does not."
+  },
+  "treeShaking": {
+    "fastCheckInProductionBundle": false,
+    "msgpackrInProductionBundle": false,
+    "evidence": "0 matches for pure-rand/prand/xoroshiro in effect-schema.bundle.mjs; 0 matches for fast-check in the minified bundle; msgpackr absent from all bundles. fast-check is reachable ONLY via effect/testing/FastCheck; internal/schema/toArbitrary.js takes `fc` as an injected parameter and does not import it."
+  },
+  "rpcProbe": {
+    "minimalRpcGroupMinifiedBytes": 306981,
+    "rpcSerializationOnlyMinifiedBytes": 116686,
+    "ndjsonOnlyMinifiedBytes": 116684,
+    "msgpackrInlinedWhenImportingRpcSerialization": true,
+    "bunCompiledBinaryDeltaBytes": 264192,
+    "note": "effect/unstable/rpc/RpcSerialization statically imports msgpackr, so choosing ndjson does NOT tree-shake msgpackr away (ndjson bundle 116684 B vs msgpack 116686 B). msgpackr's inlined code contains a try/catch-guarded dynamic require of the native addon 'msgpackr-extract'; it is guarded so it degrades gracefully, and a bun --compile binary built from it runs cleanly (verified, exit 0)."
+  }
+}

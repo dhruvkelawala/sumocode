@@ -171,6 +171,12 @@ export interface SpawnedChild {
 	requestClose?(): void;
 }
 
+/** Synchronous authority checks; a refusal holds the pipe, it is not an exit or cleanup permission. */
+export interface HeadlessLaunchGate {
+	beforeSpawn(): void;
+	beforePrompt(pid: number): void;
+}
+
 type SpawnLike = typeof nodeSpawn;
 
 interface Message {
@@ -538,6 +544,7 @@ export const createPiChildSpawner = (
 	builtInTools?: readonly BuiltInToolName[];
 	appendSystemPrompt?: string;
 	signal?: AbortSignal;
+	launchGate?: HeadlessLaunchGate;
 }): SpawnedChild => {
 	const config = resolveTaskConfig({
 		// SAFETY: options.thinking comes from the typed SpawnSubagentTask.thinking field.
@@ -567,13 +574,25 @@ export const createPiChildSpawner = (
 		};
 	}
 
+	let markReady = (): void => undefined;
+	let refuseReady = (_error: Error): void => undefined;
+	const ready = options.launchGate ? new Promise<void>((resolve, reject) => {
+		markReady = resolve;
+		refuseReady = reject;
+	}) : undefined;
+	// The owner may attach its ready waiter after subscribing to events.
+	void ready?.catch(() => undefined);
+	let subscribed = false;
 	let interrupt: () => void = () => undefined;
 	const events = (emit: (event: SubagentEvent) => void): void => {
+		if (options.launchGate && subscribed) throw new Error("retained backend already subscribed");
+		subscribed = true;
 		emit({ kind: "run-started" });
 		const adapterEntry = resolveAdapterEntry();
 		const childModel = childModelSelection(config.modelLabel);
 		const bootstrapEntry = childModel ? resolveBootstrapEntry() : undefined;
 		if (childModel && (!adapterEntry || !bootstrapEntry)) {
+			refuseReady(new Error("numbered child startup unavailable"));
 			emit({
 				kind: "run-settled",
 				outcome: { kind: "failed", errorText: `Numbered Claude child startup unavailable: ${!adapterEntry ? "OAuth adapter not found" : "model bootstrap not found"}` },
@@ -587,8 +606,11 @@ export const createPiChildSpawner = (
 		const childEnv = childModel
 			? { ...process.env, [CHILD_MODEL_PROVIDER_ENV]: childModel.provider, [CHILD_MODEL_ID_ENV]: childModel.modelId }
 			: process.env;
+		const binary = resolveBinary();
+		if (options.launchGate && !isAbsolute(binary)) throw new Error("retained launch requires absolute Pi provenance");
+		options.launchGate?.beforeSpawn();
 		// SAFETY: stdio is piped below, so the spawned child always has non-null streams.
-		const proc = spawnImpl(resolveBinary(), [...subprocessArgs, ...roleArgs, ...adapterArgs, ...bootstrapArgs], {
+		const proc = spawnImpl(binary, [...subprocessArgs, ...roleArgs, ...adapterArgs, ...bootstrapArgs], {
 			cwd: options.cwd,
 			env: childEnv,
 			shell: false,
@@ -606,8 +628,10 @@ export const createPiChildSpawner = (
 		// uncaughtException EPIPE — the child's failure settles through the
 		// close/error handlers below.
 		proc.stdin.on("error", () => undefined);
-		proc.stdin.write(options.prompt);
-		proc.stdin.end();
+		if (!options.launchGate) {
+			proc.stdin.write(options.prompt);
+			proc.stdin.end();
+		}
 		const abortState = attachAbortSignal(proc, options.signal);
 		interrupt = abortState.interrupt;
 		const stderr = new BoundedUtf8Tail();
@@ -620,6 +644,7 @@ export const createPiChildSpawner = (
 		const settle = (outcome: Extract<SubagentEvent, { kind: "run-settled" }>["outcome"]): void => {
 			if (settled) return;
 			settled = true;
+			refuseReady(new Error("child settled before prompt release"));
 			emit({ kind: "run-settled", outcome });
 		};
 		const processLine = (line: string) => {
@@ -682,13 +707,36 @@ export const createPiChildSpawner = (
 			}
 			cleanup();
 		});
+		if (options.launchGate) proc.once("spawn", () => {
+			try {
+				if (settled || abortState.isAborted() || proc.pid === undefined) throw new Error("child unavailable before prompt release");
+				options.launchGate!.beforePrompt(proc.pid);
+				proc.stdin.write(options.prompt);
+				proc.stdin.end();
+				markReady();
+			} catch (error) {
+				// Keep the handle/parser and held stdin. Closing stdin or signalling here
+				// would create an unfenced effect after authority was refused.
+				refuseReady(error instanceof Error ? error : new Error(String(error)));
+			}
+		});
 		proc.once("error", (error) => {
 			if (protocolError || abortState.isAborted()) return;
 			settle({ kind: "failed", errorText: boundRetainedResult(error.message, ERROR_MAX), partialText: finalAssistantText || undefined });
 			cleanup();
 		});
 	};
-	return { events, interrupt: () => interrupt() };
+	return {
+		events: (emit) => {
+			try { events(emit); }
+			catch (error) {
+				refuseReady(error instanceof Error ? error : new Error(String(error)));
+				throw error;
+			}
+		},
+		interrupt: () => interrupt(),
+		ready,
+	};
 };
 
 export const spawnPiChild = createPiChildSpawner();

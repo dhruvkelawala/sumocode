@@ -13,6 +13,7 @@ import {
 } from "../child-protocol.js";
 import { createPiChildSpawner, resolveClaudeOauthAdapterEntry, resolvePiBinary, resolvePiChildModelBootstrapEntry } from "./backend-pi.js";
 import type { SubagentEvent } from "./domain.js";
+import type { SpawnedChild } from "./backend-pi.js";
 
 class FakeProcess extends EventEmitter {
 	public readonly stdin = { on: vi.fn(), write: vi.fn(), end: vi.fn() };
@@ -26,7 +27,9 @@ class FakeProcess extends EventEmitter {
 	});
 }
 
-const collect = (events: ((emit: (event: SubagentEvent) => void) => void)): SubagentEvent[] => {
+const collect = (events: SpawnedChild["events"]): SubagentEvent[] => {
+	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- backend subscriptions explicitly support callback or AsyncIterable forms.
+	if (typeof events !== "function") throw new Error("expected callback backend");
 	const collected: SubagentEvent[] = [];
 	events((event) => collected.push(event));
 	return collected;
@@ -55,6 +58,93 @@ const durableEventText = (events: readonly SubagentEvent[]): string => {
 	}
 	return `${transcript.join("")}${liveText}`;
 };
+
+describe("retained headless launch gate", () => {
+	it("refuses PATH Pi for retained launches", async () => {
+		const spawn = vi.fn();
+		const beforeSpawn = vi.fn();
+		// SAFETY: provenance refusal must happen before this fake spawn.
+		const child = createPiChildSpawner(spawn as never, () => undefined, () => "pi")({
+			prompt: "private", cwd: "/workspace", inherited: {}, launchGate: { beforeSpawn, beforePrompt: vi.fn() },
+		});
+		expect(() => collect(child.events)).toThrow(/absolute Pi/);
+		await expect(child.ready).rejects.toThrow(/absolute Pi/);
+		expect(beforeSpawn).not.toHaveBeenCalled();
+		expect(spawn).not.toHaveBeenCalled();
+	});
+
+	it("refuses a stale spawn with zero process effects and a rejected ready", async () => {
+		const spawn = vi.fn();
+		// SAFETY: this refused launch never reaches the fake spawn.
+		const child = createPiChildSpawner(spawn as never, () => undefined, () => "/selected/pi")({
+			prompt: "private", cwd: "/workspace", inherited: {},
+			launchGate: { beforeSpawn: () => { throw new Error("stale"); }, beforePrompt: vi.fn() },
+		});
+		expect(() => collect(child.events)).toThrow("stale");
+		expect(spawn).not.toHaveBeenCalled();
+		await expect(child.ready).rejects.toThrow("stale");
+	}, 1000);
+
+	it("refuses prompt release without closing stdin, signalling, or fabricating settlement", async () => {
+		const proc = new FakeProcess();
+		const spawn = vi.fn(() => proc);
+		const beforePrompt = vi.fn(() => { throw new Error("expired"); });
+		// SAFETY: FakeProcess implements this backend's piped process surface.
+		const child = createPiChildSpawner(spawn as never, () => undefined, () => "/selected/pi")({
+			prompt: "private", cwd: "/workspace", inherited: {}, launchGate: { beforeSpawn: vi.fn(), beforePrompt },
+		});
+		const events = collect(child.events);
+		proc.emit("spawn");
+		await expect(child.ready).rejects.toThrow("expired");
+		expect(proc.stdin.write).not.toHaveBeenCalled();
+		expect(proc.stdin.end).not.toHaveBeenCalled();
+		expect(proc.kill).not.toHaveBeenCalled();
+		expect(events).toEqual([{ kind: "run-started" }]);
+		expect(() => collect(child.events)).toThrow(/already subscribed/);
+		expect(spawn).toHaveBeenCalledTimes(1);
+		proc.emit("close", 1);
+		expect(events.at(-1)?.kind).toBe("run-settled");
+	});
+
+	it("does not release a child that settles before its spawn callback", async () => {
+		const proc = new FakeProcess();
+		const beforePrompt = vi.fn();
+		// SAFETY: FakeProcess implements this backend's piped process surface.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never, () => undefined, () => "/selected/pi")({
+			prompt: "private", cwd: "/workspace", inherited: {}, launchGate: { beforeSpawn: vi.fn(), beforePrompt },
+		});
+		collect(child.events);
+		proc.emit("close", 1);
+		proc.emit("spawn");
+		await expect(child.ready).rejects.toThrow(/settled/);
+		expect(beforePrompt).not.toHaveBeenCalled();
+		expect(proc.stdin.write).not.toHaveBeenCalled();
+	});
+
+	it("holds stdin until spawn identity is authorized without changing argv", async () => {
+		const proc = new FakeProcess();
+		const spawn = vi.fn(() => proc);
+		const beforeSpawn = vi.fn();
+		const beforePrompt = vi.fn((pid: number) => {
+			expect(pid).toBe(4242);
+			expect(proc.stdin.write).not.toHaveBeenCalled();
+		});
+		// SAFETY: FakeProcess implements the piped process surface used by this backend.
+		const child = createPiChildSpawner(spawn as never, () => undefined, () => "/selected/pi")({
+			prompt: "private\nλ prompt", cwd: "/workspace", inherited: {}, launchGate: { beforeSpawn, beforePrompt },
+		});
+		collect(child.events);
+		expect(beforeSpawn).toHaveBeenCalledTimes(1);
+		expect(proc.stdin.write).not.toHaveBeenCalled();
+		proc.emit("spawn");
+		await child.ready;
+		expect(beforePrompt).toHaveBeenCalledTimes(1);
+		expect(proc.stdin.write).toHaveBeenCalledExactlyOnceWith("private\nλ prompt");
+		expect(proc.stdin.end).toHaveBeenCalledTimes(1);
+		expect(JSON.stringify(spawn.mock.calls)).not.toContain("private");
+		proc.emit("close", 0);
+	});
+});
 
 describe("resolvePiBinary", () => {
 	it("uses the launcher-selected Pi runtime and falls back to PATH", () => {

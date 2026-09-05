@@ -24,7 +24,7 @@
   enter normal startup" becomes a permanent CI assertion in Wave 0.
 - **Category**: direction
 - **Milestone**: M7 — Effect adoption
-- **Issue**: to be created; reuse #404 for the direction discussion
+- **Issue**: https://github.com/dhruvkelawala/sumocode/issues/459 (supersedes #404); live bugs filed as #460 and #461
 
 ## 1. Decision
 

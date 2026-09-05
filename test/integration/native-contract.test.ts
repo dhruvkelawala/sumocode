@@ -529,14 +529,16 @@ nativeDescribe("native executable contract", () => {
 		const root = tempRoot("sumocode-native-private-diag-");
 		const input = join(root, "summary-input.jsonl");
 		const output = join(root, "debug-output.jsonl");
+		const originalInput = `${JSON.stringify({ event: "boot_screen_frame" })}\n`;
 		const retained = `${JSON.stringify({ event: "retained_output" })}\n`;
-		writeFileSync(input, `${JSON.stringify({ event: "boot_screen_frame" })}\n`, { mode: 0o644 });
+		writeFileSync(input, originalInput, { mode: 0o644 });
 		writeFileSync(output, retained, { mode: 0o644 });
 		const result = runNative(["-d", "--no-clear-diag", "--diag-file", output, "diag", input]);
 		expect(result.status).toBe(0);
 		expect(result.stdout).toContain(`Diagnostics: ${input}`);
 		expect(readFileSync(output, "utf8")).toBe(retained);
 		expect(statSync(output).mode & 0o777).toBe(0o600);
+		expect(readFileSync(input, "utf8")).toBe(originalInput);
 		expect(statSync(input).mode & 0o777).toBe(0o644);
 	});
 
@@ -545,7 +547,8 @@ nativeDescribe("native executable contract", () => {
 		const input = join(root, "summary-input.jsonl");
 		const inherited = join(root, "inherited-output.jsonl");
 		const explicit = join(root, "explicit-output.jsonl");
-		writeFileSync(input, `${JSON.stringify({ event: "boot_screen_frame" })}\n`, { mode: 0o644 });
+		const originalInput = `${JSON.stringify({ event: "boot_screen_frame" })}\n`;
+		writeFileSync(input, originalInput, { mode: 0o644 });
 		writeFileSync(inherited, "inherited\n", { mode: 0o644 });
 		writeFileSync(explicit, "explicit\n", { mode: 0o644 });
 
@@ -556,6 +559,7 @@ nativeDescribe("native executable contract", () => {
 		expect(inheritedResult.stdout).toContain(`Diagnostics: ${input}`);
 		expect(readFileSync(inherited, "utf8")).toBe("inherited\n");
 		expect(statSync(inherited).mode & 0o777).toBe(0o600);
+		expect(readFileSync(input, "utf8")).toBe(originalInput);
 		expect(statSync(input).mode & 0o777).toBe(0o644);
 
 		chmodSync(inherited, 0o644);
@@ -568,6 +572,8 @@ nativeDescribe("native executable contract", () => {
 		expect(statSync(explicit).mode & 0o777).toBe(0o600);
 		expect(readFileSync(inherited, "utf8")).toBe("inherited\n");
 		expect(statSync(inherited).mode & 0o777).toBe(0o644);
+		expect(readFileSync(input, "utf8")).toBe(originalInput);
+		expect(statSync(input).mode & 0o777).toBe(0o644);
 	});
 
 	it("renders static slash completion between editor and hydrated command readiness", async () => {

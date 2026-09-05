@@ -129,6 +129,7 @@ export class SumoRpcClient {
 	private exited = false;
 	private childClosed = false;
 	private stopPromise: Promise<void> | undefined;
+	private detachChildLifecycle: (() => void) | undefined;
 	private readonly pending = new Map<string, PendingRequest>();
 	private readonly eventListeners = new Set<RpcEventListener>();
 	private readonly exitListeners = new Set<RpcExitListener>();
@@ -183,6 +184,7 @@ export class SumoRpcClient {
 		this.exited = false;
 		this.exitNotified = false;
 		this.rpcReadyNotified = false;
+		this.consecutiveProtocolErrors = 0;
 		const spawnChild = this.options.spawnFn ?? spawn;
 		const child = this.options.preSpawnedChild ?? spawnChild(this.options.command, [...this.options.args], {
 			cwd: this.options.cwd,
@@ -190,16 +192,18 @@ export class SumoRpcClient {
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 		this.child = child;
+		const isCurrentChild = () => this.child === child;
 		this.stderrTail = new BoundedUtf8Tail();
 		this.stdoutFrames = new JsonLineDecoder({
 			onLine: (line) => {
+				if (!isCurrentChild()) return;
 				const trimmed = line.trim();
 				if (trimmed) this.handleLine(trimmed);
 			},
-			onError: (error) => this.handleExit(error),
+			onError: (error) => { if (isCurrentChild()) this.handleExit(error); },
 		});
-		this.stdoutDataListener = (chunk) => this.stdoutFrames?.write(chunk);
-		this.stderrDataListener = (chunk) => this.stderrTail.append(chunk);
+		this.stdoutDataListener = (chunk) => { if (isCurrentChild()) this.stdoutFrames?.write(chunk); };
+		this.stderrDataListener = (chunk) => { if (isCurrentChild()) this.stderrTail.append(chunk); };
 		child.stdout.on("data", this.stdoutDataListener);
 		child.stderr.on("data", this.stderrDataListener);
 		// Without this listener, an EPIPE on the kernel pipe (child closed stdin,
@@ -212,14 +216,16 @@ export class SumoRpcClient {
 		// the child's 'exit'/'error' event (handleExit) is what actually notifies
 		// the rest of the host.
 		child.stdin.on("error", (error) => {
-			console.error(`[sumocode-rpc] child stdin error: ${toError(error).message}`);
+			if (isCurrentChild()) console.error(`[sumocode-rpc] child stdin error: ${toError(error).message}`);
 		});
-		child.once("error", (error) => this.handleExit(toError(error)));
+		// Keep an error sink on retired children: late/repeated errors must not throw.
+		child.on("error", (error) => { if (isCurrentChild()) this.handleExit(toError(error)); });
 		let exitInfo: RpcChildExitInfo | undefined;
 		let closeFallback: NodeJS.Timeout | undefined;
 		const finishAfterStdio = (fallbackInfo: RpcChildExitInfo) => {
 			if (closeFallback) clearTimeout(closeFallback);
 			closeFallback = undefined;
+			if (!isCurrentChild()) return;
 			this.stdoutFrames?.end();
 			if (this.exitNotified) return;
 			const info = exitInfo ?? fallbackInfo;
@@ -229,7 +235,8 @@ export class SumoRpcClient {
 				info,
 			));
 		};
-		child.once("exit", (code, signal) => {
+		const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+			if (!isCurrentChild()) return;
 			// `exit` can precede the final stdout data events. Refuse new sends now,
 			// but retain pending requests and stream listeners until stdio closes.
 			this.exited = true;
@@ -238,13 +245,21 @@ export class SumoRpcClient {
 			exitInfo = info;
 			closeFallback = setTimeout(() => finishAfterStdio(info), CHILD_CLOSE_GRACE_MS);
 			closeFallback.unref?.();
-		});
-		child.once("close", (code, signal) => {
+		};
+		const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
+			if (!isCurrentChild()) return;
 			this.childClosed = true;
 			// `close` follows stdio drain. A bounded fallback covers descendants
 			// that inherit the pipe and prevent this event indefinitely.
 			finishAfterStdio({ code, signal });
-		});
+		};
+		child.once("exit", onExit);
+		child.once("close", onClose);
+		this.detachChildLifecycle = () => {
+			if (closeFallback) clearTimeout(closeFallback);
+			child.removeListener("exit", onExit);
+			child.removeListener("close", onClose);
+		};
 
 		// A pre-spawned child can fail or exit while the host module is still
 		// importing, before the lifecycle listeners above exist. The entry file
@@ -284,11 +299,14 @@ export class SumoRpcClient {
 				resolve();
 				return;
 			}
-			const timer = setTimeout(resolve, 50);
 			const settle = () => {
 				clearTimeout(timer);
+				child.removeListener("spawn", settle);
+				child.removeListener("error", settle);
+				child.removeListener("exit", settle);
 				resolve();
 			};
+			const timer = setTimeout(settle, 50);
 			child.once("spawn", settle);
 			child.once("error", settle);
 			child.once("exit", settle);
@@ -296,10 +314,11 @@ export class SumoRpcClient {
 		if (this.exited) throw new Error(`RPC child exited during startup. stderr=${this.stderr}`);
 	}
 
-	public async stop(): Promise<void> {
+	/** Concurrent calls share one attempt; after rejection, stop() retries the retained child. */
+	public stop(): Promise<void> {
 		if (this.stopPromise) return this.stopPromise;
 		const child = this.child;
-		if (!child) return;
+		if (!child) return Promise.resolve();
 		// A deliberate stop() must not also fire onExit: the child's own
 		// once("exit", ...) listener registered in start() still runs and calls
 		// handleExit for this same exit, and without this guard that would fire
@@ -307,16 +326,24 @@ export class SumoRpcClient {
 		// what is actually an intentional shutdown (SIGINT/SIGTERM/normal quit).
 		this.exitNotified = true;
 		this.exited = true;
-		this.stopPromise = this.reapChild(child).finally(() => {
-			this.detachChildStreams(child);
+		this.stopPromise = this.reapChild(child).then(() => {
+			this.detachChildLifecycle?.();
+			this.detachChildLifecycle = undefined;
 			this.child = undefined;
+		}, (error: Error) => {
+			// Failure is not a reap. Keep ownership, but allow an explicit retry.
+			this.stopPromise = undefined;
+			throw error;
+		}).finally(() => {
+			this.detachChildStreams(child);
 			this.rejectPending(new Error("RPC child stopped"));
 		});
-		await this.stopPromise;
+		return this.stopPromise;
 	}
 
 	public async send(command: RpcCommand, timeoutMs = this.options.requestTimeoutMs ?? 30_000): Promise<RpcResponse> {
 		if (!this.child || this.exited) throw new Error(`RPC child is not running. stderr=${this.stderr}`);
+		const child = this.child;
 		const id = command.id ?? `sumocode_rpc_${++this.nextRequestId}_${randomUUID()}`;
 		const request = { ...command, id } satisfies RpcCommand;
 		return await new Promise<RpcResponse>((resolve, reject) => {
@@ -325,8 +352,8 @@ export class SumoRpcClient {
 				reject(new Error(`Timed out waiting for ${command.type} response after ${timeoutMs}ms. stderr=${this.stderr}`));
 			}, timeoutMs);
 			this.pending.set(id, { resolve, reject, timeout });
-			this.child!.stdin.write(`${JSON.stringify(request)}\n`, (error) => {
-				if (!error) return;
+			child.stdin.write(`${JSON.stringify(request)}\n`, (error) => {
+				if (!error || this.child !== child) return;
 				const pending = this.pending.get(id);
 				if (pending) {
 					this.pending.delete(id);
@@ -421,6 +448,7 @@ export class SumoRpcClient {
 	}
 
 	private async handleUiRequest(request: RpcExtensionUIRequest): Promise<void> {
+		const child = this.child;
 		try {
 			const response = await this.uiRequestHandler?.(request, this);
 			// No handler installed, or the handler produced no response object: this covers
@@ -431,10 +459,10 @@ export class SumoRpcClient {
 			// ids it has no pending request for (pendingExtensionRequests.get(...) returns
 			// undefined -> early return, no error), and it unwedges any dialog-style request that
 			// would otherwise block the child forever.
-			this.sendUiResponse(response ?? { type: "extension_ui_response", id: request.id, cancelled: true });
+			if (this.child === child) this.sendUiResponse(response ?? { type: "extension_ui_response", id: request.id, cancelled: true });
 		} catch (error) {
 			console.error(`[sumocode-rpc] extension_ui handler failed for method "${request.method}": ${truncateForNotification(toError(error).message)}`);
-			this.sendUiResponse({ type: "extension_ui_response", id: request.id, cancelled: true });
+			if (this.child === child) this.sendUiResponse({ type: "extension_ui_response", id: request.id, cancelled: true });
 		}
 	}
 
@@ -450,7 +478,10 @@ export class SumoRpcClient {
 		if (child) {
 			this.detachChildStreams(child);
 			// Keep child ownership and the shared reap promise until stop finishes.
-			void this.stop();
+			// Observe the automatic attempt without hiding rejection from stop() callers.
+			void this.stop().catch((cause: Error) => {
+				console.error(`[sumocode-rpc] child reap failed: ${cause.message}`);
+			});
 		}
 		this.rejectPending(error);
 		this.exitNotified = true;
@@ -466,8 +497,12 @@ export class SumoRpcClient {
 
 	private reapChild(child: ChildProcessWithoutNullStreams): Promise<void> {
 		if (this.childClosed) return Promise.resolve();
-		return new Promise((resolve) => {
+		return new Promise((resolve, reject) => {
 			const alive = () => child.exitCode === null && child.signalCode === null;
+			let signalError: Error | undefined;
+			const kill = (signal: NodeJS.Signals) => {
+				try { child.kill(signal); } catch (error) { signalError = toError(error); }
+			};
 			const onExit = () => {
 				clearTimeout(forceKill);
 				clearTimeout(deadline);
@@ -478,21 +513,20 @@ export class SumoRpcClient {
 				clearTimeout(deadline);
 				child.removeListener("exit", onExit);
 				child.removeListener("close", finish);
-				resolve();
+				if (alive()) reject(new Error("RPC child still alive after SIGTERM/SIGKILL deadline", { cause: signalError }));
+				else resolve();
 			};
 			// Keep these timers referenced: the host must not exit before reaping.
 			const forceKill = setTimeout(() => {
-				if (alive()) child.kill("SIGKILL");
+				if (alive()) kill("SIGKILL");
 			}, CHILD_STOP_GRACE_MS);
-			// Bound inherited stdio, not process exit: a sent SIGKILL is not a reap.
-			let deadline = setTimeout(() => {
-				if (!alive()) finish();
-			}, CHILD_STOP_GRACE_MS + CHILD_CLOSE_GRACE_MS);
+			// A signal result (including false) is not proof of life or death.
+			let deadline = setTimeout(finish, CHILD_STOP_GRACE_MS + CHILD_CLOSE_GRACE_MS);
 			child.once("exit", onExit);
 			child.once("close", finish);
 			if (alive()) {
 				child.stdin.end();
-				child.kill("SIGTERM");
+				kill("SIGTERM");
 			}
 		});
 	}

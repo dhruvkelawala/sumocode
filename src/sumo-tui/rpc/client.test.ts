@@ -100,6 +100,61 @@ describe("SumoRpcClient", () => {
 		await client.stop();
 	});
 
+	it("retains the post-adoption protocol-failure reap until SIGKILL and close", async () => {
+		vi.useFakeTimers();
+		try {
+			const child = new FakeRpcChild();
+			child.kill.mockImplementation(() => true);
+			const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
+			const exited = vi.fn();
+			client.onExit(exited);
+			await client.start();
+			child.stdout.emit("data", "invalid\ninvalid\ninvalid\n");
+			expect(exited).toHaveBeenCalledOnce();
+			expect(client.pid).toBeUndefined();
+			await vi.advanceTimersByTimeAsync(750);
+			const stopped = vi.fn();
+			const first = client.stop().then(stopped);
+			const second = client.stop().then(stopped);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(stopped).not.toHaveBeenCalled();
+			await vi.advanceTimersByTimeAsync(1_250);
+			expect(child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+			child.signalCode = "SIGKILL";
+			child.emit("exit", null, "SIGKILL");
+			await vi.advanceTimersByTimeAsync(0);
+			expect(stopped).not.toHaveBeenCalled();
+			child.emit("close", null, "SIGKILL");
+			await Promise.all([first, second]);
+			expect(stopped).toHaveBeenCalledTimes(2);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("bounds the shared reap when an exited child's stdio never closes", async () => {
+		vi.useFakeTimers();
+		try {
+			const child = new FakeRpcChild();
+			const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
+			await client.start();
+			child.exitCode = 1;
+			child.emit("exit", 1, null);
+			const stopped = vi.fn();
+			const stopping = client.stop().then(stopped);
+			await vi.advanceTimersByTimeAsync(2_999);
+			expect(stopped).not.toHaveBeenCalled();
+			await vi.advanceTimersByTimeAsync(1);
+			await stopping;
+			expect(child.kill).not.toHaveBeenCalled();
+			expect(child.stdout.listenerCount("data")).toBe(0);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("does not resolve deliberate stop until child stdio closes", async () => {
 		const child = new FakeRpcChild();
 		child.kill.mockImplementation(() => {

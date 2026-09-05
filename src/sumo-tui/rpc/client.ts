@@ -1,6 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { once } from "node:events";
 import { BoundedUtf8Tail, JsonLineDecoder, boundRetainedResult } from "../../child-protocol.js";
 import type {
 	AgentSessionEvent,
@@ -95,21 +94,6 @@ function safeJsonParseReason(cause: unknown): string {
 	return boundRetainedResult(message, JSON_PARSE_REASON_MAX_BYTES);
 }
 
-function waitForChildClose(child: ChildProcessWithoutNullStreams): Promise<void> {
-	return new Promise((resolve) => {
-		let settled = false;
-		const finish = () => {
-			if (settled) return;
-			settled = true;
-			clearTimeout(timer);
-			child.removeListener("close", finish);
-			resolve();
-		};
-		const timer = setTimeout(finish, CHILD_STOP_GRACE_MS + CHILD_CLOSE_GRACE_MS);
-		child.once("close", finish);
-	});
-}
-
 /** Truncates a message for user-facing surfaces (notifications, toasts). */
 export function truncateForNotification(message: string, limit = NOTIFICATION_STDERR_LIMIT): string {
 	return boundRetainedResult(message, limit);
@@ -143,6 +127,8 @@ export class SumoRpcClient {
 	private nextRequestId = 0;
 	private consecutiveProtocolErrors = 0;
 	private exited = false;
+	private childClosed = false;
+	private stopPromise: Promise<void> | undefined;
 	private readonly pending = new Map<string, PendingRequest>();
 	private readonly eventListeners = new Set<RpcEventListener>();
 	private readonly exitListeners = new Set<RpcExitListener>();
@@ -191,6 +177,9 @@ export class SumoRpcClient {
 
 	public async start(onAdopted?: () => void): Promise<void> {
 		if (this.child) throw new Error("RPC child already started");
+		if (this.stopPromise) await this.stopPromise;
+		this.stopPromise = undefined;
+		this.childClosed = false;
 		this.exited = false;
 		this.exitNotified = false;
 		this.rpcReadyNotified = false;
@@ -251,6 +240,7 @@ export class SumoRpcClient {
 			closeFallback.unref?.();
 		});
 		child.once("close", (code, signal) => {
+			this.childClosed = true;
 			// `close` follows stdio drain. A bounded fallback covers descendants
 			// that inherit the pipe and prevent this event indefinitely.
 			finishAfterStdio({ code, signal });
@@ -307,31 +297,22 @@ export class SumoRpcClient {
 	}
 
 	public async stop(): Promise<void> {
+		if (this.stopPromise) return this.stopPromise;
 		const child = this.child;
-		if (!child || this.exited) return;
+		if (!child) return;
 		// A deliberate stop() must not also fire onExit: the child's own
 		// once("exit", ...) listener registered in start() still runs and calls
 		// handleExit for this same exit, and without this guard that would fire
 		// a spurious "child crashed" notification (and duplicate teardown) for
 		// what is actually an intentional shutdown (SIGINT/SIGTERM/normal quit).
 		this.exitNotified = true;
-		const childClosed = waitForChildClose(child);
-		const childExited = once(child, "exit");
-		child.stdin.end();
-		child.kill("SIGTERM");
-		await Promise.race([
-			childExited,
-			new Promise((resolve) => setTimeout(resolve, CHILD_STOP_GRACE_MS)),
-		]);
-		if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-		await childClosed;
-		// `close` follows all stdio closure. Removing listeners after the bounded
-		// fallback also prevents any pipe-holding descendant from dispatching a
-		// late RPC response after stop() resolves.
-		this.detachChildStreams(child);
 		this.exited = true;
-		this.child = undefined;
-		this.rejectPending(new Error("RPC child stopped"));
+		this.stopPromise = this.reapChild(child).finally(() => {
+			this.detachChildStreams(child);
+			this.child = undefined;
+			this.rejectPending(new Error("RPC child stopped"));
+		});
+		await this.stopPromise;
 	}
 
 	public async send(command: RpcCommand, timeoutMs = this.options.requestTimeoutMs ?? 30_000): Promise<RpcResponse> {
@@ -468,7 +449,9 @@ export class SumoRpcClient {
 		const child = this.child;
 		if (child) {
 			this.detachChildStreams(child);
-			this.terminateChild(child);
+			// stop retains the reap promise even after transport ownership is gone.
+			// Every host exit path must await the same TERM/KILL/close boundary.
+			void this.stop();
 		}
 		this.child = undefined;
 		this.rejectPending(error);
@@ -483,12 +466,30 @@ export class SumoRpcClient {
 		this.stderrDataListener = undefined;
 	}
 
-	private terminateChild(child: ChildProcessWithoutNullStreams): void {
-		if (child.exitCode !== null || child.signalCode !== null) return;
-		child.kill("SIGTERM");
-		const forceKill = setTimeout(() => child.kill("SIGKILL"), CHILD_STOP_GRACE_MS);
-		forceKill.unref?.();
-		child.once("exit", () => clearTimeout(forceKill));
+	private reapChild(child: ChildProcessWithoutNullStreams): Promise<void> {
+		if (this.childClosed) return Promise.resolve();
+		return new Promise((resolve) => {
+			const alive = () => child.exitCode === null && child.signalCode === null;
+			const onExit = () => clearTimeout(forceKill);
+			const finish = () => {
+				clearTimeout(forceKill);
+				clearTimeout(deadline);
+				child.removeListener("exit", onExit);
+				child.removeListener("close", finish);
+				resolve();
+			};
+			// Keep these timers referenced: the host must not exit before reaping.
+			const forceKill = setTimeout(() => {
+				if (alive()) child.kill("SIGKILL");
+			}, CHILD_STOP_GRACE_MS);
+			const deadline = setTimeout(finish, CHILD_STOP_GRACE_MS + CHILD_CLOSE_GRACE_MS);
+			child.once("exit", onExit);
+			child.once("close", finish);
+			if (alive()) {
+				child.stdin.end();
+				child.kill("SIGTERM");
+			}
+		});
 	}
 
 	private rejectPending(error: Error): void {

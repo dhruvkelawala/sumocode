@@ -1,12 +1,13 @@
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TerminalTaskManager } from "../../src/background-tasks/task-manager.js";
-import { systemProcessTree, terminateProcessTree, type ProcessTreeIdentity, type ProcessTreeVerification } from "../../src/background-tasks/process-tree.js";
+import { systemProcessTree, type ProcessTreeIdentity, type ProcessTreeVerification } from "../../src/background-tasks/process-tree.js";
+import { cleanupOwnedTree, type OwnedTree } from "./fixtures/terminal-recovery-boundaries.js";
 import { isTerminalTaskSettled, type TerminalTaskSnapshot } from "../../src/background-tasks/task-types.js";
 import { TerminalDeliveryCoordinator } from "../../src/background-tasks/terminal-tools.js";
 import { spawnSupervisedProcess, type SupervisedProcess } from "./harness-supervisor.js";
@@ -233,13 +234,18 @@ async function stopOwnedTerminalTrees(paths: TestRoot): Promise<OwnedTerminalTre
 	}
 	const verifiedTrees: OwnedTerminalTree[] = [];
 	for (const tree of trees) {
-		const verification = tree.verification ?? systemProcessTree.captureTreeVerification?.(tree.identity);
-		const verifiedTree = verification ? { ...tree, verification } : tree;
-		if (!systemProcessTree.isTreeEmpty(tree.identity, verification)) {
-			const stopped = await terminateProcessTree(systemProcessTree, tree.identity, { termGraceMs: 100, killGraceMs: 2_000 });
-			if (!stopped || !systemProcessTree.isTreeEmpty(tree.identity, verification)) {
-				throw new Error(`could not safely stop terminal ${tree.id}; retained owned root ${paths.root}`);
-			}
+		const anchorMarker = `owned-tree-${tree.id}.json`;
+		const anchored = existsSync(join(paths.markerDir, anchorMarker)) ? readMarker<OwnedTree>(paths, anchorMarker) : tree;
+		if (anchored.identity.pid !== tree.identity.pid || anchored.identity.processGroupId !== tree.identity.processGroupId
+			|| anchored.identity.processStartTime !== tree.identity.processStartTime) {
+			throw new Error(`terminal anchor mismatch for ${tree.id}; retained owned root ${paths.root}`);
+		}
+		const verifiedTree = { ...tree, verification: anchored.verification };
+		const stopped = await cleanupOwnedTree(systemProcessTree, verifiedTree, (observation) => {
+			appendFileSync(join(paths.root, "cleanup.jsonl"), `${JSON.stringify(observation)}\n`, { mode: 0o600 });
+		});
+		if (!stopped || !systemProcessTree.isTreeEmpty(verifiedTree.identity, verifiedTree.verification)) {
+			throw new Error(`could not safely stop terminal ${tree.id}; retained owned root ${paths.root}`);
 		}
 		verifiedTrees.push(verifiedTree);
 	}
@@ -355,7 +361,7 @@ async function seedPendingCompletion(paths: TestRoot, sessionFile: string): Prom
 	return pending;
 }
 
-afterEach(async () => {
+afterEach(async (context) => {
 	const errors: Error[] = [];
 	for (const child of children.splice(0)) {
 		try {
@@ -367,7 +373,8 @@ afterEach(async () => {
 	for (const paths of roots.splice(0)) {
 		try {
 			await stopOwnedTerminalTrees(paths);
-			rmSync(paths.root, { recursive: true, force: true });
+			if (context.task.result?.state === "fail") console.error(`terminal recovery failure evidence retained: ${paths.root}`);
+			else rmSync(paths.root, { recursive: true, force: true });
 		} catch (error) {
 			errors.push(error instanceof Error ? error : new Error(String(error)));
 		}
@@ -536,6 +543,9 @@ describe("terminal completion delivery recovery", { timeout: 30_000 }, () => {
 		await crashing.waitForExit();
 		await startRequest;
 		expect(existsSync(join(paths.markerDir, "terminal-release"))).toBe(false);
+		const anchored = readMarker<OwnedTree>(paths, `owned-tree-${id}.json`);
+		expect(anchored.identity).toEqual(ownedTree(running)!.identity);
+		expect(anchored.verification?.members.length).toBeGreaterThan(0);
 		expect(existsSync(join(crashing.getEvidenceDir(), "argv.txt"))).toBe(false);
 
 		const trees = await stopOwnedTerminalTrees(paths);

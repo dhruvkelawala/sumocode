@@ -6,6 +6,8 @@ import { installBackgroundTasks } from "../../src/background-tasks/background-ta
 import { installTerminalTools } from "../../src/background-tasks/terminal-tools.js";
 import { TerminalTaskStore } from "../../src/background-tasks/task-store.js";
 import type { TerminalTaskManager } from "../../src/background-tasks/task-manager.js";
+import { systemProcessTree } from "../../src/background-tasks/process-tree.js";
+import { publishMarker } from "../integration/fixtures/terminal-recovery-boundaries.js";
 
 // oxlint-disable anti-slop/no-explicit-any -- Pi's generic tool/event definitions are captured and replayed through their real runtime arguments.
 type RegisteredTool = { readonly execute: (...args: any[]) => Promise<object> };
@@ -112,7 +114,7 @@ export default function terminalDeliveryFixture(pi: ExtensionAPI): void {
 					return;
 				}
 				initialize();
-				queueMicrotask(() => writeFileSync(join(markerDir, "index-attempt.json"), `${JSON.stringify({ ready: manager.isIndexReady() })}\n`, { mode: 0o600 }));
+				queueMicrotask(() => publishMarker(join(markerDir, "index-attempt.json"), { ready: manager.isIndexReady() }));
 			};
 			writeFileSync(join(markerDir, "index-scheduled"), "scheduled\n", { mode: 0o600 });
 			setImmediate(run);
@@ -120,10 +122,10 @@ export default function terminalDeliveryFixture(pi: ExtensionAPI): void {
 		onDiagnostic: (diagnostic) => appendFileSync(diagnostics, `${JSON.stringify(diagnostic)}\n`, { mode: 0o600 }),
 	});
 	const coordinator = installTerminalTools(fixturePi, manager);
-	writeFileSync(join(markerDir, "production-constructors.json"), `${JSON.stringify({
+	publishMarker(join(markerDir, "production-constructors.json"), {
 		manager: manager.constructor.name,
 		coordinator: coordinator.constructor.name,
-	})}\n`, { mode: 0o600 });
+	});
 	manager.addChangeListener((snapshot) => {
 		if (snapshot.deliveryState !== "delivered") return;
 		appendFileSync(deliveryTrace, `${JSON.stringify({ event: "acknowledged", completionId: snapshot.completionId })}\n`, { mode: 0o600 });
@@ -158,8 +160,17 @@ export default function terminalDeliveryFixture(pi: ExtensionAPI): void {
 			}, undefined, undefined, context(ctx));
 			const started = manager.list(ctx.sessionManager.getSessionId() ?? "")[0];
 			if (!started) throw new Error("terminal fixture did not start a task");
-			writeFileSync(join(markerDir, "started.json"), `${JSON.stringify({ id: started.id, completionPolicy: started.completionPolicy })}\n`, { mode: 0o600 });
-			if (process.env.SUMOCODE_TEST_TERMINAL_CRASH_AFTER_START === "1") crash();
+			const crashAfterStart = process.env.SUMOCODE_TEST_TERMINAL_CRASH_AFTER_START === "1";
+			if (crashAfterStart) {
+				const { pid, processGroupId, processStartTime } = started;
+				if (!pid || !processGroupId || !processStartTime) throw new Error("missing terminal ownership before fixture crash");
+				const identity = { pid, processGroupId, processStartTime };
+				const verification = systemProcessTree.captureTreeVerification?.(identity);
+				if (!verification) throw new Error("cannot anchor terminal before fixture crash");
+				publishMarker(join(markerDir, `owned-tree-${started.id}.json`), { identity, verification });
+			}
+			publishMarker(join(markerDir, "started.json"), { id: started.id, completionPolicy: started.completionPolicy });
+			if (crashAfterStart) crash();
 		},
 	});
 
@@ -176,7 +187,7 @@ export default function terminalDeliveryFixture(pi: ExtensionAPI): void {
 			// SAFETY: terminal-recovery-start owns this marker and always writes its string id.
 			const id = JSON.parse(readFileSync(join(markerDir, "started.json"), "utf8")) as { readonly id: string };
 			const result = await tools.get("terminal_check")!.execute("terminal-recovery-check", { id: id.id }, undefined, undefined, context(ctx));
-			writeFileSync(join(markerDir, "checked.json"), `${JSON.stringify(result)}\n`, { mode: 0o600 });
+			publishMarker(join(markerDir, "checked.json"), result);
 		},
 	});
 
@@ -187,7 +198,7 @@ export default function terminalDeliveryFixture(pi: ExtensionAPI): void {
 			// SAFETY: terminal-recovery-start owns this marker and always writes its string id.
 			const id = JSON.parse(readFileSync(join(markerDir, "started.json"), "utf8")) as { readonly id: string };
 			const result = await tools.get("terminal_wait")!.execute("terminal-recovery-wait", { ids: [id.id], timeout_ms: 5_000 }, undefined, undefined, context(ctx));
-			writeFileSync(join(markerDir, "waited.json"), `${JSON.stringify(result)}\n`, { mode: 0o600 });
+			publishMarker(join(markerDir, "waited.json"), result);
 		},
 	});
 
@@ -196,7 +207,7 @@ export default function terminalDeliveryFixture(pi: ExtensionAPI): void {
 			// SAFETY: terminal-recovery-start owns this marker and always writes its string id.
 			const id = JSON.parse(readFileSync(join(markerDir, "started.json"), "utf8")) as { readonly id: string };
 			const result = await tools.get("terminal_stop")!.execute("terminal-recovery-stop", { ids: [id.id] }, undefined, undefined, context(ctx));
-			writeFileSync(join(markerDir, "stopped.json"), `${JSON.stringify(result)}\n`, { mode: 0o600 });
+			publishMarker(join(markerDir, "stopped.json"), result);
 		},
 	});
 

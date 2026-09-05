@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { lstatSync, mkdirSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import { lstatSync, mkdirSync, readdirSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { atomicWritePrivateJson, readPrivateJson, withPrivateFileLock, writePrivateJsonExclusive } from "../activity/persistence.js";
 import { captureProcessBirthTime, type ProcessTreeIdentity, type ProcessTreeVerification } from "../background-tasks/process-tree.js";
 import { assertPrivateArtifact, assertPrivateDir, isErrnoCode, nodeArtifactFs } from "../private-artifact.js";
-import type { SubagentPaneRef, SubagentWorktreeRef } from "./domain.js";
+import type { RunOutcome, SubagentPaneRef, SubagentWorktreeRef } from "./domain.js";
 
 export interface RegistryProcess {
 	readonly identity: ProcessTreeIdentity;
@@ -44,6 +45,7 @@ export interface SubagentRecord {
 	readonly updatedAt: number;
 	readonly settledAt: number | null;
 	readonly completionId: string | null;
+	readonly outcome: RunOutcome["kind"] | null;
 	readonly delivery: {
 		readonly state: "none" | "pending" | "claimed" | "delivered" | "suppressed";
 		readonly claim: RegistryWriterLease | null;
@@ -79,14 +81,16 @@ function sameWriter(left: RegistryWriter, right: RegistryWriter): boolean {
 
 const MAX_RECORD_BYTES = 256 * 1024;
 const MAX_RESULT_BYTES = 4 * 1024 * 1024;
-const RECORD_KEYS = "schemaVersion revision id ownerSessionId backend status taskDir child supervisor pane worktree sessionFilePath modelLabel roleId createdAt updatedAt settledAt completionId delivery result manifest writerLease";
+const RECORD_KEYS = "schemaVersion revision id ownerSessionId backend status taskDir child supervisor pane worktree sessionFilePath modelLabel roleId createdAt updatedAt settledAt completionId outcome delivery result manifest writerLease";
 
 // oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type -- registry records are untrusted JSON; validate every field and reject unknown metadata (including prompt content).
 function object(value: unknown, required: string, optional = ""): value is Record<string, unknown> {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const prototype = Object.getPrototypeOf(value);
+	if (prototype !== Object.prototype && prototype !== null) return false;
 	const keys = Object.keys(value);
 	const requiredKeys = required.split(" ");
-	const allowed = new Set([...requiredKeys, ...optional.split(" ")]);
+	const allowed = new Set([...requiredKeys, ...(optional ? optional.split(" ") : [])]);
 	return requiredKeys.every((key) => keys.includes(key)) && keys.every((key) => allowed.has(key));
 }
 function text(value: unknown): value is string {
@@ -129,31 +133,34 @@ function validRecord(value: unknown): value is SubagentRecord {
 	if (!object(value, RECORD_KEYS)) return false;
 	const r = value;
 	if (r.schemaVersion !== 1 || !positive(r.revision) || !text(r.id) || !/^sa-[A-Za-z0-9_-]{1,128}$/u.test(r.id)
-		|| !text(r.ownerSessionId) || !["headless", "visible"].includes(String(r.backend))
-		|| !["queued", "starting", "running", "settling", "settled", "lost", "ambiguous"].includes(String(r.status))
+		|| !text(r.ownerSessionId) || !text(r.backend) || !["headless", "visible"].includes(r.backend)
+		|| !text(r.status) || !["queued", "starting", "running", "settling", "settled", "lost", "ambiguous"].includes(r.status)
 		|| !pathValue(r.taskDir) || !processEvidence(r.child) || !processEvidence(r.supervisor)
 		|| !(r.sessionFilePath === null || pathValue(r.sessionFilePath))
 		|| !(r.modelLabel === null || text(r.modelLabel)) || !(r.roleId === null || text(r.roleId))
 		|| !integer(r.createdAt) || !integer(r.updatedAt) || r.updatedAt < r.createdAt
 		|| !(r.settledAt === null || (integer(r.settledAt) && r.settledAt >= r.createdAt && r.settledAt <= r.updatedAt))
 		|| !(r.completionId === null || text(r.completionId))
+		|| !(r.outcome === null || (text(r.outcome) && ["completed", "failed", "interrupted"].includes(r.outcome)))
 		|| !pointer(r.result, "result.json") || !pointer(r.manifest, "manifest.json")
 		|| !(r.writerLease === null || (lease(r.writerLease) && r.writerLease.renewedAt <= r.updatedAt && r.writerLease.renewedAt >= r.createdAt))) return false;
 	if (r.pane !== null && (!object(r.pane, "agentName", "workspaceId tabId paneId") || !Object.values(r.pane).every(text))) return false;
 	if (r.backend === "headless" && r.pane !== null) return false;
 	if (r.worktree !== null && (!object(r.worktree, "path branch baseRef repoRoot") || !pathValue(r.worktree.path)
 		|| !pathValue(r.worktree.repoRoot) || !text(r.worktree.branch) || !text(r.worktree.baseRef))) return false;
-	if (!object(r.delivery, "state claim") || !["none", "pending", "claimed", "delivered", "suppressed"].includes(String(r.delivery.state))) return false;
-	if (r.delivery.state === "claimed" ? !lease(r.delivery.claim) : r.delivery.claim !== null) return false;
-	if (["running", "settling"].includes(String(r.status)) && (r.child === null || r.supervisor === null || r.writerLease === null)) return false;
+	if (!object(r.delivery, "state claim") || !text(r.delivery.state) || !["none", "pending", "claimed", "delivered", "suppressed"].includes(r.delivery.state)) return false;
+	if (r.delivery.state === "claimed" ? !(lease(r.delivery.claim) && r.delivery.claim.renewedAt >= r.createdAt && r.delivery.claim.renewedAt <= r.updatedAt) : r.delivery.claim !== null) return false;
+	if (["running", "settling"].includes(r.status) && (r.child === null || r.supervisor === null || r.writerLease === null)) return false;
 	if (r.status === "queued" && (r.child !== null || r.supervisor !== null)) return false;
 	if (r.status === "settled") {
 		if (r.settledAt === null || r.completionId === null || r.delivery.state === "none") return false;
-	} else if (["queued", "starting", "running", "settling"].includes(String(r.status))) {
+	} else if (["queued", "starting", "running", "settling"].includes(r.status)) {
 		if (r.settledAt !== null || r.completionId !== null || r.delivery.state !== "none") return false;
 	}
 	// Lost/ambiguous describe recovery evidence, not a fabricated successful exit.
 	if ((r.completionId === null) !== (r.delivery.state === "none")) return false;
+	if (r.completionId !== null && (r.settledAt === null || r.outcome === null)) return false;
+	if (r.outcome !== null && !["settling", "settled", "lost", "ambiguous"].includes(r.status)) return false;
 	return true;
 }
 // oxlint-enable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type
@@ -170,7 +177,7 @@ export class SubagentRegistry {
 
 	public constructor(private readonly directory: string, private readonly ownerSessionId: string, private readonly options: SubagentRegistryOptions = {}) {
 		if (!pathValue(directory) || !text(ownerSessionId)) throw new Error("invalid registry path or owner");
-		if (realpathSync(dirname(directory)) !== dirname(directory)) throw new Error("registry parent must be canonical");
+		assertDirectory(dirname(directory));
 		try { mkdirSync(directory, { mode: 0o700 }); } catch (error) { if (!isErrnoCode(error, "EEXIST")) throw error; }
 		assertDirectory(directory);
 		this.directoryIdentity = lstatSync(directory);
@@ -178,9 +185,9 @@ export class SubagentRegistry {
 
 	public create(record: SubagentRecord): SubagentRecord {
 		this.validate(record);
-		if (record.revision !== 1 || record.writerLease !== null || !["starting", "queued"].includes(record.status)) throw new Error("new registry record must be unlaunched at revision 1");
+		if (record.revision !== 1 || record.writerLease !== null || record.child !== null || record.supervisor !== null || record.result !== null || record.manifest !== null || !["starting", "queued"].includes(record.status)) throw new Error("new registry record must be unlaunched at revision 1");
 		const path = this.recordPath(record.id);
-		return withPrivateFileLock(`${path}.lock`, () => {
+		return this.withLock(path, () => {
 			this.validate(record);
 			writePrivateJsonExclusive(path, record);
 			return structuredClone(record);
@@ -217,10 +224,10 @@ export class SubagentRegistry {
 			this.assertWriter(current, generation, now);
 			const next = update(structuredClone(current));
 			for (const key of ["schemaVersion", "id", "ownerSessionId", "backend", "taskDir", "createdAt", "writerLease"] as const) {
-				if (JSON.stringify(next[key]) !== JSON.stringify(current[key])) throw new Error(`immutable registry field: ${key}`);
+				if (!isDeepStrictEqual(next[key], current[key])) throw new Error(`immutable registry field: ${key}`);
 			}
-			for (const key of ["child", "supervisor", "pane", "worktree", "sessionFilePath", "completionId", "settledAt", "result", "manifest"] as const) {
-				if (current[key] !== null && JSON.stringify(next[key]) !== JSON.stringify(current[key])) throw new Error(`registry evidence must be preserved: ${key}`);
+			for (const key of ["child", "supervisor", "pane", "worktree", "sessionFilePath", "completionId", "outcome", "settledAt", "result", "manifest"] as const) {
+				if (current[key] !== null && !isDeepStrictEqual(next[key], current[key])) throw new Error(`registry evidence must be preserved: ${key}`);
 			}
 			this.assertWriter(current, generation, this.clock(current));
 			return next;
@@ -229,7 +236,7 @@ export class SubagentRegistry {
 
 	private change(id: string, expectedRevision: number, update: (current: SubagentRecord, now: number) => SubagentRecord): SubagentRecord {
 		const path = this.recordPath(id);
-		return withPrivateFileLock(`${path}.lock`, () => {
+		return this.withLock(path, () => {
 			const current = this.get(id);
 			if (!current) throw new Error("missing subagent record");
 			if (current.revision !== expectedRevision) throw new SubagentRevisionConflict(`subagent revision conflict: expected ${expectedRevision}, found ${current.revision}`);
@@ -238,6 +245,23 @@ export class SubagentRegistry {
 			atomicWritePrivateJson(path, next);
 			return structuredClone(next);
 		});
+	}
+
+	private withLock<T>(path: string, operation: () => T): T {
+		const lock = `${path}.lock`;
+		// The shared lock handles stale-reader/rename races. Check ownership here too:
+		// its JSON reader checks inode/mode, but deliberately does not check uid.
+		for (const name of readdirSync(this.directory)) {
+			if (name !== basename(lock) && !name.startsWith(`${basename(lock)}.takeover-`)) continue;
+			const candidate = join(this.directory, name);
+			try {
+				assertPrivateArtifact(nodeArtifactFs, candidate, this.directory, "subagent registry lock");
+				const owner = readPrivateJson(candidate, 16 * 1024);
+				if (!object(owner, "schemaVersion token pid", "processStartTime") || owner.schemaVersion !== 1 || !text(owner.token)
+					|| !positive(owner.pid) || !(owner.processStartTime === undefined || text(owner.processStartTime))) throw new Error("corrupt subagent registry lock");
+			} catch (error) { if (!isErrnoCode(error, "ENOENT")) throw error; }
+		}
+		return withPrivateFileLock(lock, operation);
 	}
 
 	private ownWriter(): RegistryWriter {
@@ -266,6 +290,7 @@ export class SubagentRegistry {
 
 	private recordPath(id: string): string {
 		if (!/^sa-[A-Za-z0-9_-]{1,128}$/u.test(id)) throw new Error("invalid subagent id");
+		assertDirectory(dirname(this.directory));
 		assertDirectory(this.directory);
 		const current = lstatSync(this.directory);
 		if (current.dev !== this.directoryIdentity.dev || current.ino !== this.directoryIdentity.ino) throw new Error("registry directory replaced");
@@ -273,7 +298,7 @@ export class SubagentRegistry {
 	}
 
 	private validate(record: SubagentRecord): void {
-		if (!validRecord(record) || Buffer.byteLength(JSON.stringify(record)) > MAX_RECORD_BYTES) throw new Error("invalid subagent record schema");
+		if (!validRecord(record) || Buffer.byteLength(`${JSON.stringify(record, null, 2)}\n`) > MAX_RECORD_BYTES) throw new Error("invalid subagent record schema");
 		if (record.ownerSessionId !== this.ownerSessionId) throw new Error("subagent owner mismatch");
 		this.recordPath(record.id);
 		try { assertDirectory(record.taskDir); }

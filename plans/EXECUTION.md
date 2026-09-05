@@ -1,12 +1,12 @@
 # Plan execution contract
 
-Use this contract when implementing plans 091–115. The plan file is the execution authority; the linked GitHub issue is coordination metadata.
+Use this contract when implementing plans 091–115. The plan file is the execution authority; the linked GitHub issue is coordination metadata. Plan 110 (Effect pilot) is **deferred outside this campaign** (owner reversal, 2026-09-05): it is not implemented here, carries no campaign GO/NO-GO gate, and does not block any plan; see its row in `plans/README.md`.
 
 ## 1. Select only ready work
 
 1. Read the plan completely.
 2. Confirm every **Depends on** row is `DONE` in `plans/README.md`.
-3. For Plan 115, additionally confirm every non-rejected Plan 091–114 row is `DONE`; this final-wave gate is mandatory even when the plan's direct API dependencies are complete.
+3. For Plan 115, additionally confirm every **accepted non-deferred** Plan 091–114 row is `DONE`; Plan 105 is rejected and Plan 110 is deferred outside the active campaign, so neither counts against this final-wave gate. The gate is mandatory even when the plan's direct API dependencies are complete.
 4. Run the plan's commit-range drift check and working-tree preflight before editing.
 5. If either preflight or a dependency/final-wave contract fails, mark the row `BLOCKED` with evidence. Do not recreate dependency APIs.
 
@@ -25,8 +25,10 @@ Completion criterion: `git status --short` contains only scoped implementation, 
 The 2026-08-28 Plan-105 trial used `zai/glm-5.3-flash` in an isolated worktree. It stayed in scope, produced a coherent regression, passed targeted/type/build/lint checks, reproduced unrelated suite failures against pristine baseline, and stopped instead of weakening gates. It also proved Plan 105's expected red premise false: Vitest already filters the integration invocation to 30 integration-only files. Plan 105 is therefore rejected, and the trial does **not** justify cheap execution across this backlog.
 
 - **Cheap implementation with smart review:** Plans 103 and 115 only. The cheap child may produce a bounded candidate branch; a smart reviewer must verify wait semantics or documentation authority before integration.
-- **Smart implementation:** Plans 091–102, 104, and 106–114. This includes every P0/P1, security, persistence, lifecycle, Git mutation, retained-renderer, RPC-host, and Effect plan.
-- **Human gate:** visual golden promotion, dependency-security disposition, worktree apply/prune, final Effect GO/NO-GO, push, and PR publication.
+- **Smart implementation:** Plans 091–102, 104, 106–109, and 111–114. This includes every P0/P1, security, persistence, lifecycle, Git mutation, retained-renderer, and RPC-host plan. Plan 110 is deferred outside this campaign (see its `plans/README.md` row) and is not implemented here.
+- **Human gate:** visual golden promotion, dependency-security disposition, worktree apply/prune, push, and PR publication.
+
+The historical final Effect GO/NO-GO human gate is removed from the current campaign: Plan 110 is deferred outside it, and the pilot's requirements/evidence remain preserved (NOT DONE, recorded NO-GO for campaign closure) for a future separate deeper Effect spike.
 
 A cheap child may still perform a precisely scoped mechanical subtask inside smart-owned work, but it does not own the plan verdict, scope changes, or final integration.
 

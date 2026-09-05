@@ -1,4 +1,6 @@
 import type { Component } from "@earendil-works/pi-tui";
+import { InputRecoveryNotice } from "../widgets/input-recovery-notice.js";
+import type { NotificationCenter } from "../widgets/notification.js";
 import { createRequire } from "node:module";
 import { activeThemeColors, onThemeChanged, type Theme } from "../../themes/index.js";
 import type { CellBuffer } from "../render/buffer.js";
@@ -62,7 +64,7 @@ export interface RpcHostRuntimeOptions {
 	readonly editor?: Component;
 	readonly modal?: Component & { getActiveKind?(): string | undefined; isSecretInputActive?(): boolean };
 	readonly overlay?: Component & { getActiveKind?(): string | undefined };
-	readonly notifications?: Component;
+	readonly notifications?: Component & Partial<Pick<NotificationCenter, "notify">>;
 	readonly extensionRegions?: {
 		readonly aboveEditor?: Component;
 		readonly belowEditor?: Component;
@@ -174,7 +176,8 @@ export class RpcHostRuntime {
 	private readonly editor: Component | undefined;
 	private readonly modal: (Component & { getActiveKind?(): string | undefined; isSecretInputActive?(): boolean }) | undefined;
 	private readonly overlay: (Component & { getActiveKind?(): string | undefined }) | undefined;
-	private readonly notifications: Component | undefined;
+	private readonly notifications: NonNullable<RpcHostRuntimeOptions["notifications"]>;
+	private readonly inputNotice = new InputRecoveryNotice();
 	private readonly extensionRegions: RpcHostRuntimeOptions["extensionRegions"];
 	private readonly extensionStatuses: RpcHostRuntimeOptions["extensionStatuses"];
 	private readonly inputHandler: RpcHostInputHandler | undefined;
@@ -215,23 +218,7 @@ export class RpcHostRuntime {
 		// across two Buffers), since toString('utf8') per-chunk cannot
 		// reassemble a split sequence.
 		const text = Buffer.isBuffer(data) ? data.toString("utf8") : data;
-		// A session-changing RPC has been sent but authoritative ownership is not
-		// rebound. Drop prompts rather than dispatch an A draft into B; retain a
-		// direct Ctrl-C escape hatch so a failed rebind can always terminate.
-		if (this.sessionReplacementDepth > 0 || this.sessionInputBlocked) {
-			if (containsCtrlCToken(text)) this.requestExit(130);
-			return;
-		}
-		// Match pi-tui's Apple Terminal path: Apple Terminal reports both Enter
-		// and Shift+Enter as bare \r, so Pi polls its native modifier helper at
-		// the moment that bare Enter arrives and rewrites only when Shift is down.
-		const isAppleTerminalEnter = this.isAppleTerminal && text === "\r";
-		const normalized = normalizeAppleTerminalInput(
-			text,
-			isAppleTerminalEnter,
-			isAppleTerminalEnter && readNativeModifier(this.nativeModifierProbe ??= resolvePiNativeModifierProbe(), "shift"),
-		);
-		this.inputRouter.handleInput(normalized);
+		this.inputRouter.handleInput(text);
 	};
 
 	public constructor(options: RpcHostRuntimeOptions = {}) {
@@ -252,7 +239,11 @@ export class RpcHostRuntime {
 		this.editor = options.editor;
 		this.modal = options.modal;
 		this.overlay = options.overlay;
-		this.notifications = options.notifications;
+		this.notifications = {
+			render: (width) => [...(options.notifications?.render(width) ?? []), ...this.inputNotice.render(width)],
+			invalidate: () => { options.notifications?.invalidate(); this.inputNotice.invalidate(); },
+			notify: (message, level, timeout) => options.notifications?.notify?.(message, level, timeout) ?? 0,
+		};
 		this.extensionRegions = options.extensionRegions;
 		this.extensionStatuses = options.extensionStatuses;
 		this.inputHandler = options.inputHandler;
@@ -260,6 +251,20 @@ export class RpcHostRuntime {
 		this.nativeModifierProbe = options.nativeModifierProbe;
 		this.renderScheduler = options.renderScheduler ?? queueMicrotask;
 		this.inputRouter = new SharedInputRouter({
+			setInputNotice: (message) => this.inputNotice.setMessage(message),
+			normalizeKeyInput: (data) => {
+				// Probe only real Enter events, never a CR in a fragmented paste.
+				const appleEnter = this.isAppleTerminal && data === "\r";
+				return normalizeAppleTerminalInput(data, appleEnter,
+					appleEnter && readNativeModifier(this.nativeModifierProbe ??= resolvePiNativeModifierProbe(), "shift"));
+			},
+			handleInputGate: (data) => {
+				// Keep stream ownership in the router even while a session rebind
+				// blocks actions. A late pasted Ctrl-C is not an escape hatch.
+				if (this.sessionReplacementDepth === 0 && !this.sessionInputBlocked) return false;
+				if (containsCtrlCToken(data)) this.requestExit(130);
+				return true;
+			},
 			openCommandPalette: () => {
 				if (this.inputHandler?.openCommandPalette) {
 					void this.inputHandler.openCommandPalette();
@@ -301,7 +306,7 @@ export class RpcHostRuntime {
 				return true;
 			},
 			handleUnhandledInput: (data) => {
-				if (data.includes("q") || isEscapeInput(data)) {
+				if (data === "q" || isEscapeInput(data)) {
 					this.requestExit(0);
 					return true;
 				}
@@ -523,6 +528,7 @@ export class RpcHostRuntime {
 	public stop(code = 0, options: { readonly preserveTerminal?: boolean } = {}): void {
 		if (this.stopped) return;
 		this.stopped = true;
+		this.inputRouter.dispose();
 		this.exitCode = code;
 		// Raw mode is terminal state, not process-local state. Keep it enabled
 		// while a reload successor hydrates so typed keys cannot echo over the

@@ -8,7 +8,7 @@ import { INPUT_FRAME_PLACEHOLDER } from "../../cathedral/input-frame.js";
 import { activeThemeColors, resetThemeRegistryForTests, setActiveTheme } from "../../themes/index.js";
 import { SharedInputRouter } from "../input/shared-input-router.js";
 import { TerminalSessionOwner } from "../runtime/terminal-controller.js";
-import { RpcHostEditorController } from "./editor.js";
+import { createRpcKeybindingsManager, RpcHostEditorController } from "./editor.js";
 import { submitRpcPrompt } from "./host.js";
 import { renderRpcHostFrameForTest, RpcHostRuntime } from "./runtime.js";
 import { RpcShellAdapter } from "./shell-adapter.js";
@@ -1061,6 +1061,68 @@ describe("RPC host retained runtime frame", () => {
 
 		await expect(runtime.waitForExit()).resolves.toBe(130);
 		expect(modal.inputs).toEqual([]);
+	});
+
+	it("keeps late paste controls out of Pi CustomEditor actions until the actual end", () => {
+		vi.useFakeTimers();
+		const input = new FakeInput();
+		const output = new FakeOutput();
+		const onExit = vi.fn();
+		const editor = new RpcHostEditorController({ keybindings: createRpcKeybindingsManager({ env: {} }), onExit });
+		const runtime = new RpcHostRuntime({ input, output, editor, terminal: new TerminalSessionOwner({ output }) });
+		try {
+			runtime.startInput();
+			input.emit("\x1b[200~");
+			vi.advanceTimersByTime(1_000);
+			input.emit("\x04\x1b[<1z\x1b[<0;1;1M");
+			expect(onExit).not.toHaveBeenCalled();
+			expect(editor.getText()).toBe("");
+			input.emit("\x1b[20");
+			input.emit("1~");
+			expect(editor.getText()).not.toBe("");
+			expect(onExit).not.toHaveBeenCalled();
+			editor.setText("");
+			input.emit("\x04");
+			expect(onExit).toHaveBeenCalledTimes(1);
+		} finally { runtime.stop(); vi.useRealTimers(); }
+	});
+
+	it("keeps paste stream ownership while the session input gate is closed", () => {
+		vi.useFakeTimers();
+		const input = new FakeInput();
+		const output = new FakeOutput();
+		const editor = new FakeEditor();
+		const runtime = new RpcHostRuntime({ input, output, editor, terminal: new TerminalSessionOwner({ output }) });
+		try {
+			runtime.startInput();
+			input.emit("\x1b[200~draft");
+			vi.advanceTimersByTime(1_000);
+			runtime.beginSessionReplacement();
+			input.emit("\x03\x04");
+			expect(input.pauseCount).toBe(0);
+			expect(editor.inputs).toEqual([]);
+			runtime.endSessionReplacement();
+			input.emit("\x1b[201~");
+			expect(editor.inputs).toEqual(["\x1b[200~draft\x03\x04\x1b[201~"]);
+			input.emit("\x03");
+			expect(input.pauseCount).toBe(1);
+		} finally { runtime.stop(); vi.useRealTimers(); }
+	});
+
+	it("does not apply Apple Terminal Shift-Enter rewriting inside a late paste tail", () => {
+		const input = new FakeInput();
+		const output = new FakeOutput();
+		const editor = new FakeEditor();
+		const nativeModifierProbe = vi.fn(() => true);
+		const runtime = new RpcHostRuntime({ input, output, editor, env: { TERM_PROGRAM: "Apple_Terminal" }, nativeModifierProbe, terminal: new TerminalSessionOwner({ output }) });
+		try {
+			runtime.startInput();
+			input.emit("\x1b[200~draft");
+			input.emit("\r");
+			input.emit("\x1b[201~");
+			expect(editor.inputs).toEqual(["\x1b[200~draft\r\x1b[201~"]);
+			expect(nativeModifierProbe).not.toHaveBeenCalled();
+		} finally { runtime.stop(); }
 	});
 
 	it("does not dispatch initial bare ESC when buffering split SGR mouse input", () => {

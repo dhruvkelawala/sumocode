@@ -20,6 +20,7 @@ import { SIDEBAR_MIN_TERMINAL_WIDTH, SIDEBAR_WIDTH } from "../../sidebar.js";
 import { sidebarGutterWidth } from "../../sidebar-placement.js";
 import { setCompactionReason, type CompactionReason } from "../../compaction-state.js";
 import { SharedInputRouter } from "../input/shared-input-router.js";
+import { InputRecoveryNotice } from "../widgets/input-recovery-notice.js";
 
 const CHAT_VIEWPORT_BRIDGE_INSTALLED = Symbol("sumo-tui.chat-viewport-bridge-installed");
 const PORTRAIT_STATUS_MIN_WIDTH = 80;
@@ -287,6 +288,8 @@ export class ChatViewportController {
 	private renderRevision = 0;
 	private readonly bashMirror: BashExecutionMirror;
 	private readonly inputRouter: SharedInputRouter;
+	private readonly inputNotice = new InputRecoveryNotice();
+	private readonly restoreInputNotice: (() => void) | undefined;
 	private readonly viewModelMapper = createTranscriptViewModelMapper();
 	private redispatchingDelayedInput = false;
 	private cachedRender: { revision: number; requestedWidth: number; chatTop: number; chatWidth: number; chatHeight: number; terminalRows: number; lines: string[] } | undefined;
@@ -300,7 +303,15 @@ export class ChatViewportController {
 			requestRender: () => this.runtime.requestRender(),
 			markRenderDirty: () => this.markRenderDirty(),
 		});
+		const editorContainer = host.editorContainer;
+		if (editorContainer) {
+			const render = editorContainer.render;
+			editorContainer.render = (width) => [...this.inputNotice.render(width), ...render.call(editorContainer, width)];
+			this.restoreInputNotice = () => { editorContainer.render = render; };
+		}
 		this.inputRouter = new SharedInputRouter({
+			setInputNotice: (message) => this.inputNotice.setMessage(message),
+			requestRender: () => { this.markRenderDirty(); this.runtime.requestRender(); },
 			handleMouseEvent: (event) => this.handleMouse(event, { deferRender: true }),
 			scheduleMouseRender: () => this.scheduleMouseChatViewportRender(),
 			handleChatScrollKey: (event) => {
@@ -771,6 +782,8 @@ export class ChatViewportController {
 	}
 
 	public dispose(): void {
+		this.inputRouter.dispose();
+		this.restoreInputNotice?.();
 		if (this.pendingMouseRender) clearTimeout(this.pendingMouseRender);
 		this.pendingMouseRender = undefined;
 	}

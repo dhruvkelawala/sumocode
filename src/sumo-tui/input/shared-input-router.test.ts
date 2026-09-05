@@ -39,6 +39,36 @@ it("redacts sensitive modal keystrokes from diagnostics", () => {
 	}
 });
 
+it("never logs paste payloads, including late tails after sensitive focus changes", () => {
+	const path = join(tmpdir(), `sumocode-paste-input-${process.pid}-${Date.now()}.jsonl`);
+	const previous = process.env.SUMO_TUI_DIAG_FILE;
+	vi.useFakeTimers();
+	try {
+		process.env.SUMO_TUI_DIAG_FILE = path;
+		let sensitive = true;
+		const router = new SharedInputRouter({ isSensitiveInputFocused: () => sensitive, forwardToEditor: () => true });
+		router.handleInput("\x1b[20");
+		router.handleInput("0~private-prefix");
+		vi.advanceTimersByTime(1_000);
+		sensitive = false;
+		router.handleInput("private-tail");
+		router.handleInput("\x1b[201~");
+		router.handleInput("\x1b[200~ordinary-paste\x1b[201~");
+		const diagnostics = readFileSync(path, "utf8");
+		for (const payload of ["private-prefix", "private-tail", "ordinary-paste"]) {
+			expect(diagnostics).not.toContain(payload);
+			expect(diagnostics).not.toContain(Buffer.from(payload).toString("hex"));
+		}
+		expect(diagnostics).toContain("[redacted]");
+		router.dispose();
+	} finally {
+		if (previous === undefined) delete process.env.SUMO_TUI_DIAG_FILE;
+		else process.env.SUMO_TUI_DIAG_FILE = previous;
+		vi.useRealTimers();
+		rmSync(path, { force: true });
+	}
+});
+
 describe("SharedInputRouter coalesced commands", () => {
 	it("defers the palette and independently dispatches Ctrl-D during stalled hydration", () => {
 		const events: string[] = [];
@@ -134,13 +164,130 @@ describe("SharedInputRouter coalesced commands", () => {
 		expect(scheduleMouseRender).toHaveBeenCalledTimes(1);
 	});
 
-	it("clears unfinished paste state along with pending mouse input", () => {
-		const forwardToEditor = vi.fn((_data: string) => true);
-		const router = new SharedInputRouter({ forwardToEditor });
+	it("reports retained text not inserted when the application blocks a completed paste", () => {
+		const forwardToEditor = vi.fn(() => true);
+		const setInputNotice = vi.fn();
+		const router = new SharedInputRouter({ forwardToEditor, setInputNotice, handleInputGate: () => true });
+		router.handleInput("\x1b[200~draft\x1b[201~");
+		expect(forwardToEditor).not.toHaveBeenCalled();
+		expect(setInputNotice).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("5 retained bytes not inserted"));
+	});
+
+	it("keeps unfinished paste ownership across clear and focus changes", () => {
+		const forwardToEditor = vi.fn(() => true);
+		let sensitive = true;
+		const router = new SharedInputRouter({ forwardToEditor, isSensitiveInputFocused: () => sensitive });
 		router.handleInput("\x1b[200~unfinished");
 		router.clearPendingMouseInput();
-		router.handleInput("x");
-		expect(forwardToEditor).toHaveBeenCalledExactlyOnceWith("x");
+		sensitive = false;
+		router.handleInput("x\x04");
+		expect(forwardToEditor).not.toHaveBeenCalled();
+		router.handleInput("\x1b[201~");
+		expect(forwardToEditor).toHaveBeenCalledExactlyOnceWith("\x1b[200~unfinishedx\x04\x1b[201~");
+	});
+
+	it("pauses incomplete paste once on idle, retains text and resumes only at the actual fragmented end", () => {
+		vi.useFakeTimers();
+		try {
+			const forwardToEditor = vi.fn(() => true);
+			const setInputNotice = vi.fn();
+			const handleMouseEvent = vi.fn();
+			const router = new SharedInputRouter({ forwardToEditor, setInputNotice, handleMouseEvent });
+			router.handleInput("\x1b[200~draft");
+			vi.advanceTimersByTime(1_000);
+			expect(setInputNotice).toHaveBeenCalledTimes(1);
+			expect(setInputNotice).toHaveBeenLastCalledWith(expect.stringContaining("INPUT PAUSED"));
+			vi.advanceTimersByTime(20_000);
+			expect(setInputNotice).toHaveBeenCalledTimes(1);
+			router.handleInput("\x04\x1b[<1z\x1b[<0;1;1M\x1b[20");
+			expect(forwardToEditor).not.toHaveBeenCalled();
+			expect(handleMouseEvent).not.toHaveBeenCalled();
+			router.handleInput("1~\x04");
+			expect(forwardToEditor.mock.calls).toEqual([
+				["\x1b[200~draft\x04\x1b[<1z\x1b[<0;1;1M\x1b[201~"], ["\x04"],
+			]);
+			expect(setInputNotice).toHaveBeenLastCalledWith(expect.stringContaining("input resumed"));
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.useRealTimers(); }
+	});
+
+	it("retains only a 64 KiB UTF-8 prefix, never executing overflow controls", () => {
+		const forwardToEditor = vi.fn(() => true);
+		const setInputNotice = vi.fn();
+		const handleMouseEvent = vi.fn();
+		const router = new SharedInputRouter({ forwardToEditor, setInputNotice, handleMouseEvent });
+		const prefix = "😀".repeat(16_383) + "abc";
+		router.handleInput("\x1b[200~" + prefix + "😀");
+		expect(setInputNotice).toHaveBeenLastCalledWith(expect.stringContaining("65535/65536"));
+		router.handleInput("\x04\x1b[<1z\x1b[<0;1;1M");
+		expect(forwardToEditor).not.toHaveBeenCalled();
+		expect(handleMouseEvent).not.toHaveBeenCalled();
+		router.handleInput("\x1b[201~\x04");
+		expect(forwardToEditor.mock.calls).toEqual([["\x1b[200~" + prefix + "\x1b[201~"], ["\x04"]]);
+		expect(setInputNotice).toHaveBeenLastCalledWith("input resumed — paste complete; 65535/65536 bytes retained; 19 bytes truncated");
+	});
+
+	it.each(["\x1b[200~", "\x1b[20"])("recognizes paste ownership after malformed CSI before forwarding its payload (%j)", (start) => {
+		const forwardToEditor = vi.fn(() => true);
+		const router = new SharedInputRouter({ forwardToEditor });
+		router.handleInput("\x1b[12;\x04" + start);
+		if (start === "\x1b[20") router.handleInput("0~");
+		router.handleInput("secret\x04");
+		expect(forwardToEditor.mock.calls).toEqual([["\x1b[12;\x04"]]);
+		router.handleInput("\x1b[201~");
+		expect(forwardToEditor.mock.calls.at(-1)).toEqual(["\x1b[200~secret\x04\x1b[201~"]);
+	});
+
+	it("does not let raw CR normalization hide a fragmented paste after malformed CSI", () => {
+		const forwardToEditor = vi.fn(() => true);
+		const router = new SharedInputRouter({ forwardToEditor });
+		router.handleInput("\x1b[12;\r\x1b[20");
+		router.handleInput("0~secret\x04");
+		expect(forwardToEditor.mock.calls).toEqual([["\x1b[12;\r"]]);
+		router.handleInput("\x1b[201~");
+		expect(forwardToEditor.mock.calls.at(-1)).toEqual(["\x1b[200~secret\x04\x1b[201~"]);
+	});
+
+	it.each(["draft\r", "draft\n"])("keeps a raw multiline draft atomic without hiding a following paste opener (%j)", (draft) => {
+		const forwardToEditor = vi.fn(() => true);
+		const router = new SharedInputRouter({ forwardToEditor });
+		router.handleInput(draft + "\x1b[20");
+		router.handleInput("0~secret\x04");
+		expect(forwardToEditor.mock.calls).toEqual([["draft\n"]]);
+		router.handleInput("\x1b[201~");
+		expect(forwardToEditor.mock.calls.at(-1)).toEqual(["\x1b[200~secret\x04\x1b[201~"]);
+	});
+
+	it("keeps prefix storage bounded across tiny Unicode chunks and false end prefixes", () => {
+		const forwardToEditor = vi.fn(() => true);
+		const router = new SharedInputRouter({ forwardToEditor });
+		router.handleInput("\x1b[200~");
+		for (let index = 0; index < 16_385; index += 1) {
+			router.handleInput("\ud83d");
+			router.handleInput("\ude00");
+		}
+		router.handleInput("\x1b[201x\x1b[201\x1b[20");
+		expect(forwardToEditor).not.toHaveBeenCalled();
+		router.handleInput("1~");
+		expect(forwardToEditor).toHaveBeenCalledExactlyOnceWith("\x1b[200~" + "😀".repeat(16_384) + "\x1b[201~");
+	});
+
+	it.each(["\x1b", "\x1b[12;", "\x1b[200~draft"])("disposes %j timers once and never routes late input", (prefix) => {
+		vi.useFakeTimers();
+		try {
+			const forwardToEditor = vi.fn(() => true);
+			const setInputNotice = vi.fn();
+			const router = new SharedInputRouter({ forwardToEditor, setInputNotice });
+			router.handleInput(prefix);
+			router.dispose();
+			router.dispose();
+			router.clearPendingMouseInput();
+			router.handleInput("\x1b[201~\x04");
+			vi.advanceTimersByTime(2_000);
+			expect(forwardToEditor).not.toHaveBeenCalled();
+			expect(setInputNotice).not.toHaveBeenCalled();
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.useRealTimers(); }
 	});
 
 	it("expires incomplete CSI atomically through delayed dispatch", () => {

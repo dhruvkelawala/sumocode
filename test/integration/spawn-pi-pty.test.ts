@@ -622,10 +622,8 @@ describe("sumocode launcher mirrors Pi option consumption (PTY RPC path)", () =>
 			// dry-run display shows presence only — prompt bytes never appear
 			// in ARGS or the exec line (issue 391).
 			expect(transport).toBe(row.expectedPrompt === "" ? "(none)" : "one-shot-file");
-			if (row.expectedPrompt !== "") {
-				expect(forwardedArgs).not.toContain(row.expectedPrompt);
-				expect(execLine).not.toContain(row.expectedPrompt);
-			}
+			// Exact forwarded argv assertions catch prompt leaks without treating
+			// prompt-like fragments in the checkout path as argv tokens.
 			expect(forwardedArgs).toBe(row.expectedArgs);
 			expect(execLine).toBe(`exec node ${process.cwd()}/sumo-rpc-host.js ${row.expectedArgs}`);
 		});

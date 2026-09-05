@@ -54,7 +54,7 @@ class HistoryStore extends TerminalTaskStore {
 		return this.records[Number(id.slice(5))]?.ownerSessionId === owner;
 	}
 	public override listOwnedIndexed(owner: string) {
-		return this.records.filter((record) => record.ownerSessionId === owner).toReversed();
+		return this.records.filter((record) => record.ownerSessionId === owner).reverse();
 	}
 }
 
@@ -76,9 +76,19 @@ it.each([0, 1, 100])("characterizes supervision work: %i active tasks use one su
 	await vi.advanceTimersByTimeAsync(250);
 	expect(store.scans).toBe(1);
 	expect(manager.getSnapshots()).toHaveLength(active);
+	expect(manager.getSupervisionStats().callbacks).toBe(active === 0 ? 0 : 1);
 	manager.detach();
 	const reads = store.reads;
 	await vi.advanceTimersByTimeAsync(1_000);
 	expect(store.reads).toBe(reads);
+	expect(vi.getTimerCount()).toBe(0);
+});
+
+it("characterizes supervision work: bounds heavyweight settled state for 10000 records", () => {
+	const { manager, store } = fixture(0, 10_000);
+	expect(manager.getSupervisionStats()).toEqual({ snapshots: 64, runtime: 0, callbacks: 0 });
+	expect(manager.list("owner")).toHaveLength(64);
+	expect(store.records).toHaveLength(10_000);
+	expect(store.scans).toBe(1);
 	expect(vi.getTimerCount()).toBe(0);
 });

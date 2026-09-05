@@ -332,7 +332,30 @@ function transientFault(code: string): Error {
 		unsubscribe();
 	});
 
-	it("builds one index and joins 1500 retained owner snapshots across owners without further metadata reads", () => {
+	it("retains pending and claimed completions outside the settled replay budget until observation or acknowledgement", () => {
+		const store = new TerminalTaskStore({ rootDir });
+		for (let index = 0; index < 70; index += 1) {
+			const task = persistSettledTask(store, `term-budget-${index}`, "owner", index + 1);
+			if (index > 1) continue;
+			writeFileSync(join(dirname(task.logFile), "meta.json"), JSON.stringify({
+				...task, observedAt: undefined,
+				deliveryState: index === 0 ? "pending" : "claimed",
+				deliveryClaimToken: index === 1 ? "claim-old" : undefined,
+			}));
+		}
+		const target = manager({ store });
+		expect(target.getSupervisionStats()).toMatchObject({ snapshots: 66, runtime: 0 });
+		expect(target.list("owner")).toHaveLength(66);
+		expect(target.check("term-budget-0", "owner")?.task.deliveryState).toBe("suppressed");
+		expect(target.getSupervisionStats().snapshots).toBe(65);
+		expect(target.acknowledge("owner", [{ completionId: "completion-term-budget-1", claimToken: "claim-old" }])).toHaveLength(1);
+		expect(target.getSupervisionStats().snapshots).toBe(64);
+		expect(target.get("term-budget-1", "owner")?.deliveryState).toBe("delivered");
+		expect(target.getSupervisionStats().snapshots).toBe(64);
+		expect(store.listOwnedIndexed("owner")).toHaveLength(70);
+	});
+
+	it("builds one complete 1500-record index and serves bounded owner replay without further metadata reads", () => {
 		const reads = { scans: 0, metadata: 0 };
 		const store = new TerminalTaskStore({
 			rootDir,
@@ -349,11 +372,11 @@ function transientFault(code: string): Error {
 		reads.metadata = 0;
 
 		const owned = target.list("session-indexed");
-		expect(owned).toHaveLength(750);
+		expect(owned).toHaveLength(64);
 		expect(owned.every((task) => task.ownerSessionId === "session-indexed")).toBe(true);
 		expect(owned[0]!.id).toBe("term-retained-1498");
-		expect(owned.map((task) => task.createdAt)).toEqual(Array.from({ length: 750 }, (_, position) => 2_498 - position * 2));
-		expect(target.list("session-other")).toHaveLength(750);
+		expect(owned.map((task) => task.createdAt)).toEqual(Array.from({ length: 64 }, (_, position) => 2_498 - position * 2));
+		expect(target.list("session-other")).toHaveLength(64);
 		expect(target.list("session-unknown")).toEqual([]);
 		expect(target.claimPending("session-indexed", true)).toEqual([]);
 		expect(target.acknowledge("session-indexed", [])).toEqual([]);
@@ -362,6 +385,13 @@ function transientFault(code: string): Error {
 		expect(target.get("term-retained-1499", "session-indexed")).toBeUndefined();
 		expect(target.get("term-missing", "session-indexed")).toBeUndefined();
 		expect(reads).toEqual({ scans: 0, metadata: 0 });
+		expect(target.getSupervisionStats()).toMatchObject({ snapshots: 128, runtime: 0 });
+		// An evicted ID uses the complete compact index, without growing replay.
+		expect(target.get("term-retained-0", "session-indexed")?.id).toBe("term-retained-0");
+		expect(reads).toEqual({ scans: 0, metadata: 1 });
+		expect(target.getSupervisionStats().snapshots).toBe(128);
+		expect(store.listOwnedIndexed("session-indexed")).toHaveLength(750);
+		expect(existsSync(join(rootDir, "term-retained-0-1000", "meta.json"))).toBe(true);
 	}, 120_000);
 
 	it("binds the real coordinator with one full scan and one selected read per delivery step", async () => {

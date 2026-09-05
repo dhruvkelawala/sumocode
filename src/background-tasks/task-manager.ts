@@ -525,6 +525,7 @@ export class TerminalTaskManager {
 	private readonly onRefreshRecover?: (id: string) => void;
 	private readonly tasks = new Map<string, TerminalTaskSnapshot>();
 	private readonly runtime = new Map<string, RuntimeTask>();
+	private readonly settledReplay = new Map<string, Set<string>>();
 	private readonly listeners = new Set<TerminalTaskChangeListener>();
 	private readonly snapshotListeners = new Set<TerminalTaskSnapshotListener>();
 	/** Open while a refresh batch is running: notifyChanges queues instead of publishing. */
@@ -721,13 +722,12 @@ export class TerminalTaskManager {
 		return running.snapshot;
 	}
 
-	/** Owner-ordered inventory: the store's owner index joins retained full snapshots. */
+	/** Bounded owner inventory; explicit older IDs remain directly queryable. */
 	public list(ownerSessionId: string): TerminalTaskSnapshot[] {
 		this.ensureIndexInitialized();
-		return this.store.listOwnedIndexed(ownerSessionId).flatMap((indexed) => {
-			const task = this.tasks.get(indexed.id);
-			return task ? [task] : [];
-		});
+		return [...this.tasks.values()]
+			.filter((task) => task.ownerSessionId === ownerSessionId && this.store.isIndexedOwner(task.id, ownerSessionId))
+			.sort((left, right) => right.createdAt - left.createdAt);
 	}
 
 	public get(id: string, ownerSessionId: string): TerminalTaskSnapshot | undefined {
@@ -1352,6 +1352,7 @@ export class TerminalTaskManager {
 			// scheduled for a projection entry the refreshed index no longer reports.
 			this.clearPoll(id);
 			const pruned = this.tasks.get(id);
+			if (pruned) this.removeFromReplay(pruned);
 			this.tasks.delete(id);
 			// A pruned id is waiter-relevant: a known id that became unqueryable
 			// mid-wait is complete for wait purposes (it routes to unknownIds), so
@@ -1376,6 +1377,11 @@ export class TerminalTaskManager {
 		const snapshot = this.store.getIndexed(id);
 		if (snapshot && snapshot.ownerSessionId !== ownerSessionId) return undefined;
 		return snapshot;
+	}
+
+	/** Deterministic supervision counters; no disk reads or process probes. */
+	public getSupervisionStats() {
+		return { snapshots: this.tasks.size, runtime: this.runtime.size, callbacks: this.supervisor.callbacks };
 	}
 
 	public getSnapshots(): readonly TerminalTaskSnapshot[] {
@@ -1480,6 +1486,7 @@ export class TerminalTaskManager {
 			.catch((error) => this.diagnostic(id, `reconciliation failed safely: ${error instanceof Error ? error.message : String(error)}`))
 			.finally(() => {
 				runtime.reconcilePromise = undefined;
+				this.releaseSettledRuntime(id);
 			});
 	}
 
@@ -1939,10 +1946,46 @@ export class TerminalTaskManager {
 
 	private adopt(snapshot: TerminalTaskSnapshot, notify: boolean): void {
 		const previous = this.tasks.get(snapshot.id);
+		if (previous) this.removeFromReplay(previous);
 		this.tasks.set(snapshot.id, snapshot);
-		this.ensureRuntime(snapshot);
+		if (!isTerminalTaskSettled(snapshot.status)) this.ensureRuntime(snapshot);
+		else {
+			this.supervisor.delete(snapshot.id);
+			this.releaseSettledRuntime(snapshot.id);
+			this.retainSettledReplay(snapshot);
+		}
 		if (!notify || previous?.revision === snapshot.revision) return;
 		this.notifyChanges([snapshot]);
+	}
+
+	private removeFromReplay(snapshot: TerminalTaskSnapshot): void {
+		const owned = this.settledReplay.get(snapshot.ownerSessionId);
+		if (!owned) return;
+		owned.delete(snapshot.id);
+		if (owned.size === 0) this.settledReplay.delete(snapshot.ownerSessionId);
+	}
+
+	private retainSettledReplay(snapshot: TerminalTaskSnapshot): void {
+		// Undelivered completions are retained independently of the replay budget.
+		if (snapshot.deliveryState === "pending" || snapshot.deliveryState === "claimed") return;
+		let owned = this.settledReplay.get(snapshot.ownerSessionId);
+		if (!owned) {
+			owned = new Set();
+			this.settledReplay.set(snapshot.ownerSessionId, owned);
+		}
+		owned.add(snapshot.id);
+		if (owned.size <= MAX_REPLAYED_SETTLED_TERMINALS) return;
+		const oldest = [...owned].map((id) => this.tasks.get(id)!)
+			.sort((left, right) => (left.settledAt ?? left.updatedAt) - (right.settledAt ?? right.updatedAt))[0]!;
+		owned.delete(oldest.id);
+		this.tasks.delete(oldest.id);
+	}
+
+	private releaseSettledRuntime(id: string): void {
+		const task = this.tasks.get(id);
+		if (task && !isTerminalTaskSettled(task.status)) return;
+		// In-flight disposal retains its anchors until its promise finishes.
+		if (!this.runtime.get(id)?.reconcilePromise) this.runtime.delete(id);
 	}
 
 	/**
@@ -2074,6 +2117,7 @@ export class TerminalTaskManager {
 
 	private clearPoll(id: string): void {
 		this.supervisor.delete(id);
+		this.releaseSettledRuntime(id);
 		if (!this.indexInitialized) this.scheduleIndexInitRetryTimer();
 	}
 

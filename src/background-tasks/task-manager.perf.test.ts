@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { TerminalTaskManager } from "./task-manager.js";
 import { TerminalTaskStore } from "./task-store.js";
-import type { TerminalTaskSnapshot } from "./task-types.js";
+import { TERMINAL_TASK_SCHEMA_VERSION, type TerminalTaskSnapshot } from "./task-types.js";
 
 const roots: string[] = [];
 const managers: TerminalTaskManager[] = [];
@@ -24,8 +24,8 @@ class HistoryStore extends TerminalTaskStore {
 		const rootDir = mkdtempSync(join(tmpdir(), "terminal-scale-"));
 		roots.push(rootDir);
 		super({ rootDir });
-		this.records = Array.from({ length: active + settled }, (_, index) => ({
-			schemaVersion: 4,
+		this.records = Array.from({ length: active + settled }, (_, index): TerminalTaskSnapshot => ({
+			schemaVersion: TERMINAL_TASK_SCHEMA_VERSION,
 			revision: 1,
 			id: `term-${index}`,
 			ownerSessionId: "owner",
@@ -50,6 +50,9 @@ class HistoryStore extends TerminalTaskStore {
 		this.reads += 1;
 		return this.records[Number(id.slice(5))];
 	}
+	public override getIndexedStamp(id: string) {
+		return String(this.records[Number(id.slice(5))]?.revision);
+	}
 	public override isIndexedOwner(id: string, owner: string) {
 		return this.records[Number(id.slice(5))]?.ownerSessionId === owner;
 	}
@@ -68,20 +71,34 @@ function fixture(active: number, settled = 0) {
 	return { manager, store };
 }
 
-it.each([0, 1, 100])("characterizes supervision work: %i active tasks use one supervision scheduler", async (active) => {
-	const { manager, store } = fixture(active);
+it.each([0, 1, 100])("characterizes supervision work: %i active tasks plus 10000 settled use one supervision scheduler", async (active) => {
+	const { manager, store } = fixture(active, 10_000);
 	await vi.advanceTimersByTimeAsync(0);
 	store.reads = 0;
 	expect(vi.getTimerCount()).toBe(active === 0 ? 0 : 1);
 	await vi.advanceTimersByTimeAsync(250);
 	expect(store.scans).toBe(1);
-	expect(manager.getSnapshots()).toHaveLength(active);
+	expect(store.reads).toBe(0);
+	expect(manager.getSnapshots()).toHaveLength(active + 64);
+	expect(manager.getSupervisionStats()).toMatchObject({ snapshots: active + 64, runtime: active });
 	expect(manager.getSupervisionStats().callbacks).toBe(active === 0 ? 0 : 1);
 	manager.detach();
 	const reads = store.reads;
 	await vi.advanceTimersByTimeAsync(1_000);
 	expect(store.reads).toBe(reads);
 	expect(vi.getTimerCount()).toBe(0);
+});
+
+it("queries an evicted old ID directly without retaining it or scanning history", () => {
+	const { manager, store } = fixture(0, 10_000);
+	store.reads = 0;
+	expect(manager.get("term-0", "foreign-owner")).toBeUndefined();
+	expect(store.reads).toBe(0);
+	expect(manager.get("term-0", "owner")?.id).toBe("term-0");
+	expect(store.reads).toBe(1);
+	expect(store.scans).toBe(1);
+	expect(manager.getSupervisionStats()).toEqual({ snapshots: 64, runtime: 0, callbacks: 0 });
+	expect(store.listOwnedIndexed("owner")).toHaveLength(10_000);
 });
 
 it("characterizes supervision work: bounds heavyweight settled state for 10000 records", () => {

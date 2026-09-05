@@ -82,7 +82,7 @@ When the parent grants the heavy lane, rebuild ignored extension artifacts for v
 
 After the dependency row is `DONE`, require the exact downstream API Plan 093 owns. Do not substitute `loadAll()`/`listOwned()` fallbacks.
 
-**Verify**: `rg -n "refreshIndex\(|getIndexed\(|listOwnedIndexed\(" src/background-tasks/task-store.ts` → all three public methods are present; `pnpm vitest run src/background-tasks/task-store.test.ts -t "selects 1500 owned candidates with zero metadata reads|serves an old indexed ID with one metadata read and zero full scans"` → two passes. If either check fails, STOP for Plan 093 reconciliation.
+**Verify**: `rg -n "refreshIndex\(|getIndexed\(|listOwnedIndexed\(" src/background-tasks/task-store.ts` → all three public methods are present; `pnpm vitest run src/background-tasks/task-store.test.ts -t "selects 1500 owned candidates across owners with zero metadata reads|serves an old indexed ID with one metadata read and zero full scans"` → two passes. If either check fails, STOP for Plan 093 reconciliation.
 
 ### Step 1: Characterize work and memory shape
 
@@ -146,6 +146,17 @@ Cover large settled history, many active tasks, pending/claimed settled retentio
 - Notification-based design has no periodic correctness fallback.
 - Optimization requires weakening PID/start/tree verification.
 - Old IDs become unqueryable, or querying an evicted ID falls back to `loadAll()`.
+
+## Implementation handoff (focused evidence only)
+
+- `039a9e1d`: one active scheduler. Red: 100 active tasks allocated 100 timers instead of one. Green: lazy one-timer membership, periodic fallback without notifications, last-member teardown, detach, and reactivation.
+- `8f46ff33`: bounded settled mirror. Red: 10,000 settled snapshots also retained 10,000 runtimes. Green: 64 replay snapshots per owner, zero settled runtimes, independently retained pending/claimed state, observation/acknowledgement releasing that protection, and real 1,500-record multi-owner indexed lookup with one read for an evicted ID and no scans.
+- Metadata-cache slice: red normal tick performed one full metadata read instead of zero. Green: stat change hints, cached immutable paths, immediate external-revision reads, periodic full validation at the unchanged 5s tree-verification cadence, missed-hint fallback, missing-notification natural completion, and refusal to dispose from corrupt metadata. A preserved transient read invalidates the cache. An added red/green quarantine race pins that an in-flight reconcile finishing after quarantine must retain unknown process bookkeeping, not mistake it for settled state.
+- Latest focused runs: manager 89/89, characterization/indexed-query 5/5, supervisor 1/1; store 28/28 and terminal-tools 19/19 passed in preceding focused runs with their current source. No broad tests, builds, lint, integration, native/visual gates, or timing/RSS benchmarks were run in the parent's reserved heavy lane.
+
+Tradeoffs: no filesystem watchers are needed; periodic polling is the fallback itself. Normal ticks stat metadata and safely open the exit marker, while each active record still pays full validation every 5s or on a changed/unavailable hint. Stop/CAS/pre-send paths remain authoritative reads, never stamp-authorized signals. The retained bound excludes undelivered completions and quarantined unknown-process bookkeeping intentionally; neither is disposable settled history. The 10,000-record fixture replaces only the store boundary to measure deterministic manager heap shape without 10,000 filesystem records; actual durable index/no-scan/no-deletion behavior is checked by real store/manager fixtures. Explicit full refresh still reads durable history and can transiently hold that generation; this is not record GC or incremental startup scanning.
+
+Parent follow-up: both review axes, exact-top integration, `pnpm exec tsc --noEmit && pnpm build`, lint, full unit/integration, ignored extension rebuild, native/visual gates as required by the campaign, and non-gating event-loop/RSS samples (0/10/100 active plus 10,000 settled). No goldens were changed. Keep Plan 106 TODO until the parent completes these gates and owns publication/index closure. Public additions are `TerminalTaskStore.getIndexedStamp()` (change hint only) and `TerminalTaskManager.getSupervisionStats()` (read-only counters); existing caller signatures and Plan 111/112 files are unchanged. No shared-interface edit is requested.
 
 ## Maintenance notes
 

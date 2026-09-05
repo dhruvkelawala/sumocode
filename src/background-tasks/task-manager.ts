@@ -100,6 +100,10 @@ interface RuntimeTask {
 	reconcilePromise?: Promise<void>;
 	treeVerification?: ProcessTreeVerification;
 	lastTreeVerificationAt: number;
+	metadataStamp?: string;
+	lastMetadataReadAt: number;
+	readonly paths: ReturnType<typeof taskPaths>;
+	settled: boolean;
 }
 
 interface MutationResult {
@@ -572,7 +576,7 @@ export class TerminalTaskManager {
 		this.createClaimToken = options.createClaimToken ?? (() => `claim-${randomUUID()}`);
 		this.supervisor = new TerminalSupervisor(normalizePositive(options.pollIntervalMs, DEFAULT_POLL_INTERVAL_MS), (ids) => {
 			if (!this.indexInitialized) this.ensureIndexInitialized();
-			for (const id of ids) this.scheduleReconcile(id);
+			for (const id of ids) this.scheduleReconcile(id, true);
 		});
 		this.logMaxBytes = normalizePositive(options.logMaxBytes, DEFAULT_LOG_MAX_BYTES);
 		this.termGraceMs = normalizePositive(options.termGraceMs, DEFAULT_TERM_GRACE_MS);
@@ -1347,7 +1351,12 @@ export class TerminalTaskManager {
 			// A transient per-file metadata read failure retained the record's
 			// compact index entry, so its retained full snapshot stays authoritative
 			// for this generation instead of being pruned like a quarantined id.
-			if (preserved?.has(id)) continue;
+			if (preserved?.has(id)) {
+				// A failed validated read overrides an unchanged stat hint.
+				const runtime = this.runtime.get(id);
+				if (runtime) runtime.metadataStamp = undefined;
+				continue;
+			}
 			// A genuinely quarantined id stops polling: no further reconciles are
 			// scheduled for a projection entry the refreshed index no longer reports.
 			this.clearPoll(id);
@@ -1461,7 +1470,12 @@ export class TerminalTaskManager {
 	private ensureRuntime(task: TerminalTaskSnapshot): RuntimeTask {
 		let runtime = this.runtime.get(task.id);
 		if (!runtime) {
-			runtime = { lastTreeVerificationAt: Number.NEGATIVE_INFINITY };
+			runtime = {
+				lastTreeVerificationAt: Number.NEGATIVE_INFINITY,
+				lastMetadataReadAt: Number.NEGATIVE_INFINITY,
+				paths: taskPaths(this.store, task.id, task.createdAt),
+				settled: isTerminalTaskSettled(task.status),
+			};
 			this.runtime.set(task.id, runtime);
 		}
 		return runtime;
@@ -1476,13 +1490,13 @@ export class TerminalTaskManager {
 		if (!this.indexInitialized) this.clearIndexInitRetryTimer();
 	}
 
-	private scheduleReconcile(id: string): void {
+	private scheduleReconcile(id: string, allowCached = false): void {
 		if (this.detached) return;
 		const task = this.tasks.get(id) ?? this.store.getIndexed(id);
 		if (!task) return;
 		const runtime = this.ensureRuntime(task);
 		if (runtime.reconcilePromise) return;
-		runtime.reconcilePromise = this.reconcile(id)
+		runtime.reconcilePromise = this.reconcile(id, allowCached)
 			.catch((error) => this.diagnostic(id, `reconciliation failed safely: ${error instanceof Error ? error.message : String(error)}`))
 			.finally(() => {
 				runtime.reconcilePromise = undefined;
@@ -1490,11 +1504,28 @@ export class TerminalTaskManager {
 			});
 	}
 
-	private async reconcile(id: string): Promise<void> {
+	private async reconcile(id: string, allowCached: boolean): Promise<void> {
 		if (this.detached) return;
-		const current = this.store.getIndexed(id);
-		if (!current) return;
-		this.adopt(current, true);
+		const retained = this.tasks.get(id);
+		const cached = this.runtime.get(id);
+		const stamp = this.store.getIndexedStamp(id);
+		// Stat is only a change hint. Revalidate periodically even if it misses a
+		// rewrite; event-driven recovery and every mutation still read disk truth.
+		const unchanged = allowCached && retained && cached && stamp !== undefined
+			&& stamp === cached.metadataStamp
+			&& this.now() - cached.lastMetadataReadAt < TREE_VERIFICATION_REFRESH_MS;
+		const current = unchanged ? retained : this.store.getIndexed(id);
+		if (!current) {
+			if (cached) cached.metadataStamp = undefined;
+			return;
+		}
+		if (!unchanged) {
+			this.adopt(current, true);
+			if (cached) {
+				cached.metadataStamp = stamp;
+				cached.lastMetadataReadAt = this.now();
+			}
+		}
 		if (isTerminalTaskSettled(current.status)) {
 			this.clearPoll(id);
 			return;
@@ -1516,8 +1547,7 @@ export class TerminalTaskManager {
 		// Check the cheap durable exit marker before any process-table probe. Long-
 		// running terminals otherwise spawned several synchronous `ps` commands on
 		// every 250ms poll, blocking the interactive event loop per active task.
-		const paths = taskPaths(this.store, current.id, current.createdAt);
-		const exitCode = readExitCode(this.store, paths.exitFile);
+		const exitCode = readExitCode(this.store, runtime.paths.exitFile);
 		if (exitCode !== undefined) {
 			await this.finishNaturalCompletion(id, identity, exitCode);
 			return;
@@ -1948,6 +1978,8 @@ export class TerminalTaskManager {
 		const previous = this.tasks.get(snapshot.id);
 		if (previous) this.removeFromReplay(previous);
 		this.tasks.set(snapshot.id, snapshot);
+		const runtime = this.runtime.get(snapshot.id);
+		if (runtime) runtime.settled = isTerminalTaskSettled(snapshot.status);
 		if (!isTerminalTaskSettled(snapshot.status)) this.ensureRuntime(snapshot);
 		else {
 			this.supervisor.delete(snapshot.id);
@@ -1982,10 +2014,11 @@ export class TerminalTaskManager {
 	}
 
 	private releaseSettledRuntime(id: string): void {
-		const task = this.tasks.get(id);
-		if (task && !isTerminalTaskSettled(task.status)) return;
-		// In-flight disposal retains its anchors until its promise finishes.
-		if (!this.runtime.get(id)?.reconcilePromise) this.runtime.delete(id);
+		const runtime = this.runtime.get(id);
+		// Quarantine is not settlement. Keep unknown process bookkeeping, and
+		// keep settled in-flight anchors until their promise finishes, even if
+		// the settled snapshot has already left the replay window.
+		if (runtime?.settled && !runtime.reconcilePromise) this.runtime.delete(id);
 	}
 
 	/**

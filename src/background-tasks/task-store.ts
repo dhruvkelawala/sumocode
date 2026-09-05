@@ -711,6 +711,19 @@ export class TerminalTaskStore {
 		return this.readCurrent(path);
 	}
 
+	/** Change hint only: never authority for validation, transitions, or process signals. */
+	public getIndexedStamp(id: string): string | undefined {
+		const path = this.metaPathById.get(id);
+		if (!path) return undefined;
+		try {
+			const stat = lstatSync(path, { bigint: true });
+			if (!stat.isFile() || stat.isSymbolicLink()) return undefined;
+			return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}:${stat.mode}:${stat.uid}`;
+		} catch {
+			return undefined;
+		}
+	}
+
 	/** Verify a direct child directory before creating or opening task artifacts. */
 	public assertTaskDirectory(path: string): string {
 		const resolvedPath = resolve(path);

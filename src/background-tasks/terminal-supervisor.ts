@@ -3,7 +3,9 @@ export class TerminalSupervisor {
 	private readonly active = new Set<string>();
 	private timer: ReturnType<typeof setInterval> | undefined;
 	private disposed = false;
-	public callbacks = 0;
+	private callbackCount = 0;
+
+	public get callbacks(): number { return this.callbackCount; }
 
 	public constructor(private readonly intervalMs: number, private readonly tick: (ids: readonly string[]) => void) {}
 
@@ -12,7 +14,7 @@ export class TerminalSupervisor {
 		this.active.add(id);
 		if (this.timer) return;
 		this.timer = setInterval(() => {
-			this.callbacks += 1;
+			this.callbackCount += 1;
 			this.tick([...this.active]);
 		}, this.intervalMs);
 		this.timer.unref?.();

@@ -332,6 +332,79 @@ function transientFault(code: string): Error {
 		unsubscribe();
 	});
 
+	it("unchanged active tick avoids full metadata reads but polls exit evidence and refreshes external revisions", async () => {
+		vi.useFakeTimers();
+		try {
+			const reads = { scans: 0, metadata: 0 };
+			const store = new TerminalTaskStore({ rootDir, onRead: (kind) => { reads[kind === "full-scan" ? "scans" : "metadata"] += 1; } });
+			const open = vi.spyOn(store, "openArtifact");
+			const target = manager({ store, pollIntervalMs: 250 });
+			const task = await start(target);
+			await vi.advanceTimersByTimeAsync(500);
+			reads.metadata = 0;
+			open.mockClear();
+			const probes = vi.mocked(tree.operations.captureTreeVerification!).mock.calls.length;
+			await vi.advanceTimersByTimeAsync(250);
+			expect(reads).toEqual({ scans: 1, metadata: 0 });
+			expect(open.mock.calls.filter(([path]) => path.endsWith("exit.code"))).toHaveLength(1);
+			expect(tree.operations.captureTreeVerification).toHaveBeenCalledTimes(probes);
+
+			const metaFile = join(dirname(task.logFile), "meta.json");
+			const fresh = store.getIndexed(task.id)!;
+			writeFileSync(metaFile, JSON.stringify({ ...fresh, revision: fresh.revision + 1, title: "external revision" }));
+			reads.metadata = 0;
+			await vi.advanceTimersByTimeAsync(250);
+			expect(reads.metadata).toBe(1);
+			expect(target.get(task.id, "session-a")?.title).toBe("external revision");
+
+			// Simulate a missed change hint as well as absent filesystem notifications.
+			const stamp = store.getIndexedStamp(task.id);
+			vi.spyOn(store, "getIndexedStamp").mockReturnValue(stamp);
+			writeFileSync(metaFile, JSON.stringify({ ...store.getIndexed(task.id)!, title: "missed hint" }));
+			reads.metadata = 0;
+			await vi.advanceTimersByTimeAsync(250);
+			expect(reads.metadata).toBe(0);
+			expect(target.get(task.id, "session-a")?.title).toBe("external revision");
+			now += 5_000;
+			await vi.advanceTimersByTimeAsync(250);
+			expect(reads.metadata).toBe(1);
+			expect(tree.operations.captureTreeVerification).toHaveBeenCalledTimes(probes + 1);
+			expect(target.get(task.id, "session-a")?.title).toBe("missed hint");
+			// No child close event or filesystem notification: periodic exit polling must suffice.
+			writeFileSync(exitFile(task), "0");
+			await vi.advanceTimersByTimeAsync(250);
+			expect(target.get(task.id, "session-a")?.status).toBe("completed");
+			expect(target.getSupervisionStats().runtime).toBe(0);
+			target.detach();
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("refuses cached disposition when active metadata becomes corrupt", async () => {
+		vi.useFakeTimers();
+		try {
+			const store = new TerminalTaskStore({ rootDir });
+			const target = manager({ store, pollIntervalMs: 250 });
+			const task = await start(target);
+			await vi.advanceTimersByTimeAsync(500);
+			const metaFile = join(dirname(task.logFile), "meta.json");
+			const valid = readFileSync(metaFile, "utf8");
+			writeFileSync(metaFile, "{corrupt");
+			writeFileSync(exitFile(task), "0");
+			await vi.advanceTimersByTimeAsync(500);
+			expect(tree.calls).toEqual([]);
+			expect(target.get(task.id, "session-a")?.status).toBe("running");
+			writeFileSync(metaFile, valid);
+			await vi.advanceTimersByTimeAsync(250);
+			expect(target.get(task.id, "session-a")?.status).toBe("completed");
+			target.detach();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("retains pending and claimed completions outside the settled replay budget until observation or acknowledgement", () => {
 		const store = new TerminalTaskStore({ rootDir });
 		for (let index = 0; index < 70; index += 1) {
@@ -1784,6 +1857,8 @@ function transientFault(code: string): Error {
 			// Exactly one pending timer: the task's poll interval.
 			expect(vi.getTimerCount()).toBe(1);
 
+			// Leave a reconciliation promise pending across the quarantine boundary.
+			children[0]?.emit("close");
 			// The durable record becomes corrupt; the next successful refresh
 			// quarantines it, prunes the retained projection, and clears its poll
 			// timer so no further reconciles are scheduled for the id.
@@ -1796,6 +1871,8 @@ function transientFault(code: string): Error {
 			const drained = reads.metadata;
 			await vi.advanceTimersByTimeAsync(50);
 			expect(reads.metadata).toBe(drained);
+			// Unknown is not settled: retain child/process bookkeeping without polling.
+			expect(target.getSupervisionStats().runtime).toBe(1);
 			// Quarantine stays logical: the corrupt durable record is untouched.
 			expect(readFileSync(metaFile, "utf8")).toBe("{not json");
 		} finally {

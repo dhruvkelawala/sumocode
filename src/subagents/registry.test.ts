@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathS
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SubagentRegistry, type SubagentRecord, type RegistryWriter } from "./registry.js";
+import { SubagentRegistry, type SubagentRecord, type RegistryWriter, type RegistryControlAuthority } from "./registry.js";
 
 // oxlint-disable-next-line anti-slop/no-module-mocking -- OS fault seam: private fixtures use real fs except explicitly injected ownership/rename failures.
 vi.mock("node:fs", async (original) => ({ ...await original<typeof import("node:fs")>() }));
@@ -27,15 +27,258 @@ function fixture() {
 	mkdirSync(taskDir, { mode: 0o700 });
 	const directory = join(root, "registry");
 	const record: SubagentRecord = {
-		schemaVersion: 1, revision: 1, id: "sa-proof", ownerSessionId: "session-a",
+		schemaVersion: 2, revision: 1, id: "sa-proof", ownerSessionId: "session-a",
 		backend: "headless", status: "starting", taskDir,
 		child: null, supervisor: null, pane: null, worktree: null, sessionFilePath: null,
 		modelLabel: null, roleId: null, createdAt: 1000, updatedAt: 1000, settledAt: null,
 		completionId: null, outcome: null, delivery: { state: "none", claim: null },
-		result: null, manifest: null, writerLease: null,
+		result: null, manifest: null, writerLease: null, controlLease: null, controlHead: 0,
 	};
 	return { root, directory, record };
 }
+
+function control(record: SubagentRecord): RegistryControlAuthority {
+	return { id: record.id, ownerSessionId: record.ownerSessionId, generation: record.controlLease!.generation, owner: record.controlLease!.owner, head: record.controlHead };
+}
+
+describe("SubagentRegistry control authority", () => {
+	it("does not let two same-session observers race into live control, even after expiry", () => {
+		const { directory, record } = fixture();
+		let now = 1000;
+		let former: "alive" | "dead" | "unknown" = "alive";
+		const options = { now: () => now, inspectWriter: (owner: RegistryWriter) => owner.token === writerB.token ? former : "alive" as const };
+		const supervisor = new SubagentRegistry(directory, "session-a", { ...options, writerIdentity: writerA });
+		const c = { token: "observer-c", pid: 103, processStartTime: "birth-c" };
+		const bObserver = new SubagentRegistry(directory, "session-a", { ...options, writerIdentity: writerB });
+		const cObserver = new SubagentRegistry(directory, "session-a", { ...options, writerIdentity: c });
+		supervisor.create(record);
+		supervisor.acquireWriter(record.id, 1, 1000);
+		for (const observer of [bObserver, cObserver]) expect(() => observer.acquireControl(record.id, 2, 1, 0, c, 100)).toThrow(/lease/);
+		const granted = supervisor.acquireControl(record.id, 2, 1, 0, writerB, 100);
+		expect(() => supervisor.acquireControl(record.id, 2, 1, 0, c, 100)).toThrow(/revision/);
+		expect(() => supervisor.acquireControl(record.id, 3, 1, 0, c, 100)).toThrow(/head/);
+		former = "dead";
+		expect(() => supervisor.acquireControl(record.id, 3, 1, 1, c, 100)).toThrow(/lease/);
+		now = 1100;
+		for (const state of ["alive", "unknown"] as const) {
+			former = state;
+			expect(() => supervisor.acquireControl(record.id, 3, 1, 1, c, 100)).toThrow(/lease/);
+			expect(() => bObserver.reserveControl(3, control(granted), "sa-proof:2")).toThrow(/control/);
+		}
+		former = "dead";
+		const adopted = supervisor.acquireControl(record.id, 3, 1, 1, c, 100);
+		expect(adopted).toMatchObject({ controlHead: 2, controlLease: { generation: 2, owner: c }, writerLease: { generation: 1, owner: writerA } });
+		expect(supervisor.inspectControl(control(granted))).toBe(false);
+		expect(cObserver.reserveControl(4, control(adopted), "sa-proof:3").controlHead).toBe(3);
+	});
+
+	it("keeps post-ack authority through ordinary persistence heartbeats, not control changes", async () => {
+		const { directory, record } = fixture();
+		let now = 1000;
+		const options = { now: () => now, inspectWriter: () => "alive" as const };
+		const supervisor = new SubagentRegistry(directory, "session-a", { ...options, writerIdentity: writerA });
+		const observer = new SubagentRegistry(directory, "session-a", { ...options, writerIdentity: writerB });
+		supervisor.create(record);
+		supervisor.acquireWriter(record.id, 1, 100);
+		const granted = supervisor.acquireControl(record.id, 2, 1, 0, writerB, 1000);
+		const reservation = observer.reserveControl(3, control(granted), "sa-proof:2");
+		const ackFence = control(reservation);
+		now = 1050;
+		supervisor.acquireWriter(record.id, 4, 1000);
+		supervisor.transition(record.id, 5, 2, (r) => ({ ...r, roleId: "persist-only" }));
+		await Promise.resolve();
+		expect(supervisor.inspectControl(ackFence)).toBe(true);
+		expect(() => observer.reserveControl(4, ackFence, "sa-proof:3")).toThrow(/revision/);
+		supervisor.releaseControl(6, 2, ackFence);
+		expect(supervisor.inspectControl(ackFence)).toBe(false);
+	});
+
+	it("binds session, record, generation, token, PID and birth; null or missing control is never authority", () => {
+		const { directory, record } = fixture();
+		const options = { now: () => 1000, inspectWriter: () => "alive" as const, writerIdentity: writerA };
+		const registry = new SubagentRegistry(directory, "session-a", options);
+		registry.create(record);
+		registry.acquireWriter(record.id, 1, 100);
+		const guessed = { id: record.id, ownerSessionId: "session-a", head: 0, generation: 1, owner: writerA };
+		expect(registry.inspectControl(guessed)).toBe(false);
+		expect(() => registry.reserveControl(2, guessed, "sa-proof:1")).toThrow(/control/);
+		const granted = registry.acquireControl(record.id, 2, 1, 0, writerA, 100);
+		const authority = control(granted);
+		for (const changed of [
+			{ ownerSessionId: "session-b" }, { id: "sa-other" }, { generation: 2 }, { head: 0 },
+			{ owner: { ...writerA, token: "other" } }, { owner: { ...writerA, pid: 103 } },
+			{ owner: { ...writerA, processStartTime: "reused" } },
+		]) {
+			expect(registry.inspectControl({ ...authority, ...changed })).toBe(false);
+			expect(() => registry.reserveControl(3, { ...authority, ...changed }, "sa-proof:2")).toThrow();
+		}
+		const wrongSession = new SubagentRegistry(directory, "session-b", options);
+		expect(() => wrongSession.reserveControl(3, authority, "sa-proof:2")).toThrow(/owner/);
+		for (const patch of [{ controlLease: undefined }, { controlHead: undefined }, { controlHead: -1 }, { controlHead: 0 }]) {
+			writeFileSync(join(directory, "sa-proof.json"), JSON.stringify({ ...granted, ...patch }));
+			expect(() => registry.inspectControl(authority)).toThrow(/corrupt/);
+			expect(() => registry.reserveControl(3, authority, "sa-proof:2")).toThrow(/corrupt/);
+		}
+	});
+
+	it("refuses expiry during control identity inspection before reserving an effect", () => {
+		const { directory, record } = fixture();
+		let now = 1000;
+		let slow = false;
+		const registry = new SubagentRegistry(directory, "session-a", {
+			now: () => now, writerIdentity: writerA,
+			inspectWriter: () => { if (slow) now = 1100; return "alive"; },
+		});
+		registry.create(record);
+		registry.acquireWriter(record.id, 1, 1000);
+		const granted = registry.acquireControl(record.id, 2, 1, 0, writerA, 100);
+		slow = true;
+		expect(() => registry.reserveControl(3, control(granted), "sa-proof:2")).toThrow(/control/);
+		expect(registry.get(record.id)).toEqual(granted);
+	});
+
+	it("refuses a grant if inspection outlives its grantor or proposed deadline", () => {
+		const { directory, record } = fixture();
+		let now = 1000;
+		let slow = false;
+		const registry = new SubagentRegistry(directory, "session-a", {
+			now: () => now, writerIdentity: writerA,
+			inspectWriter: (owner) => { if (slow && owner.token === writerB.token) now = 1100; return "alive"; },
+		});
+		registry.create(record);
+		registry.acquireWriter(record.id, 1, 100);
+		slow = true;
+		expect(() => registry.acquireControl(record.id, 2, 1, 0, writerB, 1000)).toThrow(/lease/);
+		expect(registry.get(record.id)?.controlHead).toBe(0);
+		now = 1000;
+		registry.acquireWriter(record.id, 2, 1000);
+		expect(() => registry.acquireControl(record.id, 3, 2, 0, writerB, 100)).toThrow(/lease/);
+		expect(registry.get(record.id)?.controlHead).toBe(0);
+	});
+
+	it("reserves synchronously with no child effect under CAS, including competing instances and lost returns", () => {
+		const { directory, record } = fixture();
+		const options = { now: () => 1000, writerIdentity: writerA, inspectWriter: () => "alive" as const };
+		const registry = new SubagentRegistry(directory, "session-a", options);
+		const competitor = new SubagentRegistry(directory, "session-a", options);
+		registry.create(record);
+		registry.acquireWriter(record.id, 1, 100);
+		const granted = registry.acquireControl(record.id, 2, 1, 0, writerA, 100);
+		const authority = control(granted);
+		const signal = vi.spyOn(process, "kill");
+		const effect = vi.fn(() => {
+			expect(readdirSync(directory)).not.toContain("sa-proof.json.lock");
+			expect(registry.get(record.id)?.controlHead).toBe(2);
+		});
+		const rename = fs.renameSync;
+		vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+			if (to !== join(directory, "sa-proof.json")) return rename(from, to);
+			expect(effect).not.toHaveBeenCalled();
+			expect(() => competitor.reserveControl(3, authority, "sa-proof:2")).toThrow(/lock/);
+			return rename(from, to);
+		});
+		const reserved = registry.reserveControl(3, authority, "sa-proof:2");
+		expect(reserved).not.toBeInstanceOf(Promise);
+		// Signal 0 is the shared lock's read-only liveness probe, not a child effect.
+		expect(signal.mock.calls.every(([, kind]) => kind === 0)).toBe(true);
+		effect();
+		expect(() => competitor.reserveControl(3, authority, "sa-proof:2")).toThrow(/revision/);
+		vi.mocked(fs.renameSync).mockImplementation((from, to) => {
+			rename(from, to);
+			if (to === join(directory, "sa-proof.json")) throw new Error("lost return after committed rename");
+		});
+		expect(() => registry.reserveControl(4, control(reserved), "sa-proof:3")).toThrow(/lost return/);
+		const reopened = competitor.get(record.id)!;
+		expect(reopened.controlHead).toBe(3);
+		expect(() => competitor.reserveControl(5, control(reopened), "sa-proof:3")).toThrow(/request/);
+		expect(effect).toHaveBeenCalledTimes(1);
+	});
+
+	it("fails closed on head exhaustion rather than wrapping generations", () => {
+		const { directory, record } = fixture();
+		const registry = new SubagentRegistry(directory, "session-a", { now: () => 1000, writerIdentity: writerA, inspectWriter: () => "alive" });
+		registry.create(record);
+		registry.acquireWriter(record.id, 1, 100);
+		const granted = registry.acquireControl(record.id, 2, 1, 0, writerA, 100);
+		const exhausted = { ...granted, controlHead: Number.MAX_SAFE_INTEGER };
+		writeFileSync(join(directory, "sa-proof.json"), JSON.stringify(exhausted));
+		expect(() => registry.reserveControl(3, control(exhausted), "sa-proof:9007199254740992")).toThrow(/schema/);
+		expect(() => registry.releaseControl(3, 1, control(exhausted))).toThrow(/schema/);
+		expect(() => registry.acquireControl(record.id, 3, 1, exhausted.controlHead, writerA, 100)).toThrow(/schema/);
+		expect(registry.get(record.id)).toEqual(exhausted);
+	});
+
+	it("keeps control fields immutable to ordinary writer transitions", () => {
+		const { directory, record } = fixture();
+		const registry = new SubagentRegistry(directory, "session-a", { now: () => 1000, writerIdentity: writerA, inspectWriter: () => "alive" });
+		registry.create(record);
+		registry.acquireWriter(record.id, 1, 100);
+		const granted = registry.acquireControl(record.id, 2, 1, 0, writerA, 100);
+		for (const patch of [{ controlLease: null }, { controlHead: 0 }]) {
+			expect(() => registry.transition(record.id, 3, 1, (r) => ({ ...r, ...patch }))).toThrow(/immutable/);
+		}
+		expect(registry.get(record.id)).toEqual(granted);
+	});
+
+	it("requires explicit writer revocation and never resets generations on release/reacquire", () => {
+		const { directory, record } = fixture();
+		const options = { now: () => 1000, inspectWriter: () => "alive" as const };
+		const supervisor = new SubagentRegistry(directory, "session-a", { ...options, writerIdentity: writerA });
+		const observer = new SubagentRegistry(directory, "session-a", { ...options, writerIdentity: writerB });
+		supervisor.create(record);
+		supervisor.acquireWriter(record.id, 1, 100);
+		const first = control(supervisor.acquireControl(record.id, 2, 1, 0, writerB, 100));
+		expect(() => observer.releaseControl(3, 1, first)).toThrow(/lease/);
+		expect(() => supervisor.releaseControl(3, 1, { ...first, head: 0 })).toThrow(/control/);
+		const released = supervisor.releaseControl(3, 1, first);
+		expect(released).toMatchObject({ controlLease: null, controlHead: 2, writerLease: { owner: writerA, generation: 1 } });
+		expect(supervisor.inspectControl({ ...first, head: 2 })).toBe(false);
+		expect(() => observer.reserveControl(4, { ...first, head: 2 }, "sa-proof:3")).toThrow(/control/);
+		const reacquired = supervisor.acquireControl(record.id, 4, 1, 2, writerB, 100);
+		expect(reacquired.controlLease?.generation).toBe(3);
+		expect(supervisor.inspectControl({ ...first, head: 3 })).toBe(false);
+		expect(() => observer.reserveControl(5, { ...first, head: 3 }, "sa-proof:4")).toThrow(/control/);
+		expect(() => supervisor.releaseControl(5, 1, { ...first, head: 3 })).toThrow(/control/);
+		expect(observer.reserveControl(5, control(reacquired), "sa-proof:4").controlHead).toBe(4);
+	});
+
+	it("consumes a structural request slot before effects and fences replay without a receipt history", () => {
+		const { directory, record } = fixture();
+		const options = { now: () => 1000, inspectWriter: () => "alive" as const };
+		const supervisor = new SubagentRegistry(directory, "session-a", { ...options, writerIdentity: writerA });
+		const observer = new SubagentRegistry(directory, "session-a", { ...options, writerIdentity: writerB });
+		supervisor.create(record);
+		supervisor.acquireWriter(record.id, 1, 100);
+		const authority = control(supervisor.acquireControl(record.id, 2, 1, 0, writerB, 100));
+		expect(() => supervisor.reserveControl(3, authority, "sa-proof:2")).toThrow(/lease/);
+		expect(() => observer.reserveControl(2, authority, "sa-proof:2")).toThrow(/revision/);
+		expect(() => observer.reserveControl(3, { ...authority, head: 0 }, "sa-proof:1")).toThrow(/control/);
+		expect(() => observer.reserveControl(3, authority, "private prompt text")).toThrow(/request/);
+		const reserved = observer.reserveControl(3, authority, "sa-proof:2");
+		expect(reserved).toMatchObject({ revision: 4, controlHead: 2, controlLease: { generation: 1 } });
+		expect(supervisor.inspectControl(control(reserved))).toBe(true);
+		expect(supervisor.inspectControl(authority)).toBe(false);
+		expect(() => observer.reserveControl(4, authority, "sa-proof:2")).toThrow(/control/);
+		expect(() => observer.reserveControl(4, control(reserved), "sa-proof:2")).toThrow(/request/);
+		const next = observer.reserveControl(4, control(reserved), "sa-proof:3");
+		expect(() => observer.reserveControl(5, control(next), "sa-proof:2")).toThrow(/request/);
+		expect(readFileSync(join(directory, "sa-proof.json"), "utf8")).not.toContain("private prompt text");
+	});
+
+	it("bootstraps unowned, then lets only the acquired writer explicitly grant separate control", () => {
+		const { directory, record } = fixture();
+		const options = { now: () => 1000, inspectWriter: () => "alive" as const };
+		const parent = new SubagentRegistry(directory, "session-a", { ...options, writerIdentity: writerB });
+		const controller = new SubagentRegistry(directory, "session-a", { ...options, writerIdentity: writerA });
+		expect(parent.create(record)).toMatchObject({ writerLease: null, supervisor: null, child: null, controlLease: null, controlHead: 0 });
+		expect(() => parent.acquireControl(record.id, 1, 1, 0, writerB, 100)).toThrow(/lease/);
+		controller.acquireWriter(record.id, 1, 100);
+		expect(() => parent.acquireControl(record.id, 2, 1, 0, writerB, 100)).toThrow(/lease/);
+		const granted = controller.acquireControl(record.id, 2, 1, 0, writerB, 100);
+		expect(granted).toMatchObject({ revision: 3, writerLease: { owner: writerA }, controlLease: { owner: writerB, generation: 1 }, controlHead: 1 });
+		expect(() => parent.transition(record.id, 3, 1, (r) => r)).toThrow(/lease/);
+	});
+});
 
 describe("SubagentRegistry writer CAS", () => {
 	it("uses epoch deadlines, refuses rollback and fences old generations after renewal", () => {
@@ -157,6 +400,18 @@ describe("SubagentRegistry writer CAS", () => {
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe("SubagentRegistry private records", () => {
+	it("preserves schema1 experiment files and explicitly refuses unsupported authority upgrades", () => {
+		const { directory, record } = fixture();
+		const registry = new SubagentRegistry(directory, "session-a");
+		registry.create(record);
+		const path = join(directory, "sa-proof.json");
+		const legacy = JSON.stringify({ ...record, schemaVersion: 1, controlLease: undefined, controlHead: undefined });
+		writeFileSync(path, legacy);
+		expect(() => registry.get(record.id)).toThrow(/unsupported.*version/);
+		expect(() => registry.acquireControl(record.id, 1, 1, 0, writerA, 100)).toThrow(/unsupported.*version/);
+		expect(readFileSync(path, "utf8")).toBe(legacy);
+	});
+
 	it("refuses launched evidence at creation and completion claims without an observed outcome", () => {
 		const { directory, record } = fixture();
 		const registry = new SubagentRegistry(directory, "session-a", { writerIdentity: writerA, now: () => 1000, inspectWriter: () => "alive" });
@@ -169,7 +424,7 @@ describe("SubagentRegistry private records", () => {
 	});
 
 	it.each([
-		{ schemaVersion: 2 }, { revision: 0 }, { revision: 1.5 }, { id: "sa-other" },
+		{ schemaVersion: 1 }, { revision: 0 }, { revision: 1.5 }, { id: "sa-other" },
 		{ prompt: "private prompt must not be metadata" }, { "": "hidden payload" }, { status: "done" },
 		{ backend: {} }, { createdAt: -1 }, { updatedAt: 999 }, { completionId: "fake" },
 		{ delivery: { state: "claimed", claim: null } }, { child: { identity: { pid: 2 } } },

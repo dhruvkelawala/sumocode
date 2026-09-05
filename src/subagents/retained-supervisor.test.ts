@@ -31,12 +31,12 @@ function fixture() {
 		inspectWriter: () => "alive",
 	});
 	const record: SubagentRecord = {
-		schemaVersion: 1, revision: 1, id: "sa-proof", ownerSessionId: "session-a",
+		schemaVersion: 2, revision: 1, id: "sa-proof", ownerSessionId: "session-a",
 		backend: "headless", status: "starting", taskDir,
 		child: null, supervisor: null, pane: null, worktree: null, sessionFilePath: null,
 		modelLabel: null, roleId: null, createdAt: 1000, updatedAt: 1000, settledAt: null,
 		completionId: null, outcome: null, delivery: { state: "none", claim: null },
-		result: null, manifest: null, writerLease: null,
+		result: null, manifest: null, writerLease: null, controlLease: null, controlHead: 0,
 	};
 	const operations: ProcessTreeOperations = {
 		captureStartTime: vi.fn(() => "child-command"),

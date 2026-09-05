@@ -26,8 +26,17 @@ export interface RegistryWriterLease {
 	readonly expiresAt: number;
 }
 
+/** A read snapshot, not a bearer credential. Reservation also checks the calling identity. */
+export interface RegistryControlAuthority {
+	readonly id: string;
+	readonly ownerSessionId: string;
+	readonly generation: number;
+	readonly owner: RegistryWriter;
+	readonly head: number;
+}
+
 export interface SubagentRecord {
-	readonly schemaVersion: 1;
+	readonly schemaVersion: 2;
 	readonly revision: number;
 	readonly id: string;
 	readonly ownerSessionId: string;
@@ -54,6 +63,9 @@ export interface SubagentRecord {
 	readonly result: { readonly file: "result.json"; readonly bytes: number } | null;
 	readonly manifest: { readonly file: "manifest.json"; readonly bytes: number } | null;
 	readonly writerLease: RegistryWriterLease | null;
+	readonly controlLease: RegistryWriterLease | null;
+	/** Advances on grants, revocations and reservations; never reset, even with no lease. */
+	readonly controlHead: number;
 }
 
 export interface SubagentRegistryOptions {
@@ -81,7 +93,7 @@ function sameWriter(left: RegistryWriter, right: RegistryWriter): boolean {
 
 const MAX_RECORD_BYTES = 256 * 1024;
 const MAX_RESULT_BYTES = 4 * 1024 * 1024;
-const RECORD_KEYS = "schemaVersion revision id ownerSessionId backend status taskDir child supervisor pane worktree sessionFilePath modelLabel roleId createdAt updatedAt settledAt completionId outcome delivery result manifest writerLease";
+const RECORD_KEYS = "schemaVersion revision id ownerSessionId backend status taskDir child supervisor pane worktree sessionFilePath modelLabel roleId createdAt updatedAt settledAt completionId outcome delivery result manifest writerLease controlLease controlHead";
 
 // oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type -- registry records are untrusted JSON; validate every field and reject unknown metadata (including prompt content).
 function object(value: unknown, required: string, optional = ""): value is Record<string, unknown> {
@@ -132,7 +144,7 @@ function pointer(value: unknown, file: string): boolean {
 function validRecord(value: unknown): value is SubagentRecord {
 	if (!object(value, RECORD_KEYS)) return false;
 	const r = value;
-	if (r.schemaVersion !== 1 || !positive(r.revision) || !text(r.id) || !/^sa-[A-Za-z0-9_-]{1,128}$/u.test(r.id)
+	if (r.schemaVersion !== 2 || !positive(r.revision) || !text(r.id) || !/^sa-[A-Za-z0-9_-]{1,128}$/u.test(r.id)
 		|| !text(r.ownerSessionId) || !text(r.backend) || !["headless", "visible"].includes(r.backend)
 		|| !text(r.status) || !["queued", "starting", "running", "settling", "settled", "lost", "ambiguous"].includes(r.status)
 		|| !pathValue(r.taskDir) || !processEvidence(r.child) || !processEvidence(r.supervisor)
@@ -143,6 +155,9 @@ function validRecord(value: unknown): value is SubagentRecord {
 		|| !(r.completionId === null || text(r.completionId))
 		|| !(r.outcome === null || (text(r.outcome) && ["completed", "failed", "interrupted"].includes(r.outcome)))
 		|| !pointer(r.result, "result.json") || !pointer(r.manifest, "manifest.json")
+		|| !integer(r.controlHead)
+		|| !(r.controlLease === null || (lease(r.controlLease) && r.controlLease.generation <= r.controlHead
+			&& r.controlLease.renewedAt >= r.createdAt && r.controlLease.renewedAt <= r.updatedAt))
 		|| !(r.writerLease === null || (lease(r.writerLease) && r.writerLease.renewedAt <= r.updatedAt && r.writerLease.renewedAt >= r.createdAt))) return false;
 	if (r.pane !== null && (!object(r.pane, "agentName", "workspaceId tabId paneId") || !Object.values(r.pane).every(text))) return false;
 	if (r.backend === "headless" && r.pane !== null) return false;
@@ -165,6 +180,13 @@ function validRecord(value: unknown): value is SubagentRecord {
 }
 // oxlint-enable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type
 
+function matchesControlIdentity(current: SubagentRecord, authority: RegistryControlAuthority): boolean {
+	const held = current.controlLease;
+	return held !== null && authority.id === current.id && authority.ownerSessionId === current.ownerSessionId
+		&& authority.generation === held.generation && authority.head === current.controlHead
+		&& writer(authority.owner) && sameWriter(authority.owner, held.owner);
+}
+
 function assertDirectory(path: string): void {
 	assertPrivateDir(nodeArtifactFs, path, "subagent registry directory");
 	if ((lstatSync(path).mode & 0o777) !== 0o700 || realpathSync(path) !== path) throw new Error("subagent directory must be canonical and 0700");
@@ -185,7 +207,7 @@ export class SubagentRegistry {
 
 	public create(record: SubagentRecord): SubagentRecord {
 		this.validate(record);
-		if (record.revision !== 1 || record.writerLease !== null || record.child !== null || record.supervisor !== null || record.result !== null || record.manifest !== null || !["starting", "queued"].includes(record.status)) throw new Error("new registry record must be unlaunched at revision 1");
+		if (record.revision !== 1 || record.controlLease !== null || record.controlHead !== 0 || record.writerLease !== null || record.child !== null || record.supervisor !== null || record.result !== null || record.manifest !== null || !["starting", "queued"].includes(record.status)) throw new Error("new registry record must be unlaunched at revision 1");
 		const path = this.recordPath(record.id);
 		return this.withLock(path, () => {
 			this.validate(record);
@@ -199,6 +221,8 @@ export class SubagentRegistry {
 		try { assertPrivateArtifact(nodeArtifactFs, path, this.directory, "subagent record"); }
 		catch (error) { if (isErrnoCode(error, "ENOENT")) return undefined; throw error; }
 		const record = readPrivateJson(path, MAX_RECORD_BYTES);
+		// Experimental v1 files are preserved, never silently upgraded into control authority.
+		if (object(record, "schemaVersion", RECORD_KEYS) && record.schemaVersion !== 2) throw new Error("unsupported subagent record version");
 		if (!validRecord(record) || record.id !== id) throw new Error("corrupt subagent record");
 		this.validate(record);
 		return record;
@@ -218,12 +242,83 @@ export class SubagentRegistry {
 		});
 	}
 
+	/**
+	 * Only the live persistence writer grants control to an explicitly selected live
+	 * identity. Session membership is not permission to self-grant. Bootstrap the
+	 * writer in the controller, never in its spawning observer. This is same-user
+	 * cooperative fencing, not authentication against a process that can edit disk.
+	 * A live holder cannot be replaced without a separate explicit revocation.
+	 */
+	public acquireControl(id: string, expectedRevision: number, writerGeneration: number, expectedHead: number, owner: RegistryWriter, durationMs: number): SubagentRecord {
+		if (!writer(owner) || !positive(durationMs) || durationMs > 60_000) throw new Error("invalid control lease candidate or duration");
+		return this.change(id, expectedRevision, (current, now) => {
+			this.assertWriter(current, writerGeneration, now);
+			if (current.controlHead !== expectedHead) throw new SubagentLeaseConflict("stale control head");
+			const inspect = this.options.inspectWriter ?? inspectWriter;
+			if (inspect(owner) !== "alive") throw new SubagentLeaseConflict("candidate control lease identity is not live");
+			const previous = current.controlLease;
+			if (previous && !sameWriter(previous.owner, owner)
+				&& (now < previous.expiresAt || inspect(previous.owner) !== "dead")) throw new SubagentLeaseConflict("control lease is held or owner death is unproven");
+			this.assertWriter(current, writerGeneration, this.clock(current));
+			if (this.clock(current) >= now + durationMs) throw new SubagentLeaseConflict("proposed control lease expired during inspection");
+			const head = current.controlHead + 1;
+			return { ...current, controlHead: head, controlLease: { owner: structuredClone(owner), generation: head, renewedAt: now, expiresAt: now + durationMs } };
+		});
+	}
+
+	/** Only the current live writer may explicitly revoke, including an expired lease. */
+	public releaseControl(expectedRevision: number, writerGeneration: number, authority: RegistryControlAuthority): SubagentRecord {
+		return this.change(authority.id, expectedRevision, (current, now) => {
+			this.assertWriter(current, writerGeneration, now);
+			if (!matchesControlIdentity(current, authority)) throw new SubagentLeaseConflict("stale or absent control authority");
+			this.assertWriter(current, writerGeneration, this.clock(current));
+			return { ...current, controlLease: null, controlHead: current.controlHead + 1 };
+		});
+	}
+
+	/**
+	 * Request IDs are exactly `${record.id}:${expectedHead + 1}`. Consuming the
+	 * monotonically increasing slot makes that ID permanently unreservable again,
+	 * including across restart/regrant. No payload or receipt history is stored.
+	 * The later private request-file protocol MUST durably bind each logical request
+	 * and its payload to this original session/record/slot before submission; it must
+	 * never rebase a retry onto a fresh head. This cannot deduplicate renamed requests.
+	 * Returns only after publication, BEFORE any caller effect. Lost return/ack is
+	 * ambiguous, not permission to retry. No exactly-once effect guarantee.
+	 */
+	public reserveControl(expectedRevision: number, authority: RegistryControlAuthority, requestId: string): SubagentRecord {
+		return this.change(authority.id, expectedRevision, (current, now) => {
+			const owner = this.ownWriter();
+			if (!this.matchesControl(current, authority, now)) throw new SubagentLeaseConflict("stale or absent control authority");
+			if (!sameWriter(current.controlLease!.owner, owner)) throw new SubagentLeaseConflict("control lease is not owned");
+			if (requestId !== `${current.id}:${current.controlHead + 1}`) throw new SubagentLeaseConflict("control request does not identify the next slot");
+			return { ...current, controlHead: current.controlHead + 1 };
+		});
+	}
+
+	/**
+	 * Read-only effect/post-ack fence. Ordinary writer heartbeat revisions do not
+	 * invalidate it; control changes, expiry and unproven liveness do. A true result
+	 * is a point-in-time observation, not a lock spanning OS effects or an async ack.
+	 * Use the reservation's resulting head, not the pre-reservation snapshot.
+	 */
+	public inspectControl(authority: RegistryControlAuthority): boolean {
+		const current = this.get(authority.id);
+		return current !== undefined && this.matchesControl(current, authority, this.clock(current));
+	}
+
+	private matchesControl(current: SubagentRecord, authority: RegistryControlAuthority, now: number): boolean {
+		const held = current.controlLease;
+		return held !== null && matchesControlIdentity(current, authority) && now < held.expiresAt
+			&& (this.options.inspectWriter ?? inspectWriter)(held.owner) === "alive" && this.clock(current) < held.expiresAt;
+	}
+
 	/** The callback only decides metadata. It must not signal, launch, deliver, or return a promise. */
 	public transition(id: string, expectedRevision: number, generation: number, update: (current: SubagentRecord) => SubagentRecord): SubagentRecord {
 		return this.change(id, expectedRevision, (current, now) => {
 			this.assertWriter(current, generation, now);
 			const next = update(structuredClone(current));
-			for (const key of ["schemaVersion", "id", "ownerSessionId", "backend", "taskDir", "createdAt", "writerLease"] as const) {
+			for (const key of ["schemaVersion", "id", "ownerSessionId", "backend", "taskDir", "createdAt", "writerLease", "controlLease", "controlHead"] as const) {
 				if (!isDeepStrictEqual(next[key], current[key])) throw new Error(`immutable registry field: ${key}`);
 			}
 			for (const key of ["child", "supervisor", "pane", "worktree", "sessionFilePath", "completionId", "outcome", "settledAt", "result", "manifest"] as const) {
@@ -277,7 +372,7 @@ export class SubagentRegistry {
 		const held = record.writerLease;
 		const owner = this.ownWriter();
 		if (!held || held.generation !== generation || !sameWriter(held.owner, owner) || now >= held.expiresAt
-			|| (this.options.inspectWriter ?? inspectWriter)(owner) !== "alive") throw new SubagentLeaseConflict("writer lease is stale, expired, or not owned");
+			|| (this.options.inspectWriter ?? inspectWriter)(owner) !== "alive" || this.clock(record) >= held.expiresAt) throw new SubagentLeaseConflict("writer lease is stale, expired, or not owned");
 	}
 
 	private clock(record: SubagentRecord): number {

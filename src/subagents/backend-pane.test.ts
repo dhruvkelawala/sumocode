@@ -113,6 +113,7 @@ const createHarness = (
 	placement: { kind: "tab"; tabId: string; direction: "right" } | { kind: "workspace"; workspaceId: string; paneId: string } = { kind: "tab", tabId: "w1:t1", direction: "right" },
 	appendSystemPrompt?: string,
 	spawnerDependencies?: { sendAckPollMs?: number; sendAckTimeoutMs?: number; resolveLauncher?: () => string },
+	onEvent?: (event: SubagentEvent) => void,
 ) => {
 	const fs = new FakeFs();
 	const closePane = vi.fn(async () => ({ ok: true as const }));
@@ -139,7 +140,10 @@ const createHarness = (
 		placement,
 	});
 	const events: SubagentEvent[] = [];
-	if (!(Symbol.asyncIterator in child.events)) child.events((event: SubagentEvent) => events.push(event));
+	if (!(Symbol.asyncIterator in child.events)) child.events((event: SubagentEvent) => {
+		events.push(event);
+		onEvent?.(event);
+	});
 	else throw new Error("pane backend must use callback events");
 	return { fs, host, closePane, child, events, paths: buildVisibleTaskPaths("sa-1", 1234, "/tmp/subagents") };
 };
@@ -147,6 +151,40 @@ const createHarness = (
 const settledEvents = (events: readonly SubagentEvent[]) => events.filter((event): event is Extract<SubagentEvent, { kind: "run-settled" }> => event.kind === "run-settled");
 
 describe("pane subagent backend", () => {
+	it("retains the control and result watcher while replacing a same-process event observer", async () => {
+		vi.useFakeTimers();
+		const oldEvents: SubagentEvent[] = [];
+		const newEvents: SubagentEvent[] = [];
+		let observer = (event: SubagentEvent): void => { oldEvents.push(event); };
+		const harness = createHarness(startedPane, undefined, undefined, undefined, (event) => observer(event));
+		try {
+			await harness.child.ready;
+			observer = (event) => { newEvents.push(event); };
+			const ack = harness.child.send!("continue after replacement");
+			const control = `${harness.paths.controlDir}/steer-1.txt`;
+			expect(harness.fs.files.get(control)).toBe("continue after replacement");
+			// This simulates task-mode consumption, not Pi/model acceptance or real recovery.
+			harness.fs.files.delete(control);
+			await vi.advanceTimersByTimeAsync(250);
+			await ack;
+			harness.fs.writeFileSync(harness.paths.responseFile, "after replacement", { mode: 0o600 });
+			harness.fs.writeFileSync(harness.paths.exitFile, "0", { mode: 0o600 });
+			await vi.advanceTimersByTimeAsync(750);
+			expect(harness.host.startAgentPane).toHaveBeenCalledTimes(1);
+			expect(harness.closePane).not.toHaveBeenCalled();
+			expect(settledEvents(oldEvents)).toEqual([]);
+			expect(newEvents).toEqual([{
+				kind: "run-settled",
+				outcome: { kind: "completed", finalText: "after replacement" },
+			}]);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			harness.child.interrupt();
+			await flushPromises();
+			vi.useRealTimers();
+		}
+	});
+
 	it("threads launcher provenance into the visible child command", () => {
 		const harness = createHarness(startedPane, undefined, undefined, { resolveLauncher: () => "/parent tools/sumocode" });
 		const script = harness.fs.files.get(harness.paths.scriptFile) ?? "";

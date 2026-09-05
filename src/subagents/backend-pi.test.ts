@@ -165,6 +165,45 @@ describe("resolveClaudeOauthAdapterEntry", () => {
 });
 
 describe("spawnPiChild", () => {
+	it("retains the pipe owner while replacing a same-process event observer", () => {
+		const proc = new FakeProcess();
+		// No fake PID may reach the operating system through interrupt().
+		proc.pid = undefined;
+		const spawn = vi.fn(() => proc);
+		// SAFETY: FakeProcess implements the piped process members used by this backend.
+		const child = createPiChildSpawner(spawn as never, () => undefined, () => "/selected/pi")({
+			prompt: "private kickoff",
+			cwd: "/repo",
+			inherited: {},
+		});
+		const oldEvents: SubagentEvent[] = [];
+		const newEvents: SubagentEvent[] = [];
+		let observer = (event: SubagentEvent): void => { oldEvents.push(event); };
+		if (Symbol.asyncIterator in child.events) throw new Error("expected callback backend");
+		// The owner subscribes once; replacing a UI/session observer must not call events again.
+		child.events((event) => observer(event));
+		emitJson(proc, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "before" } });
+		observer = (event) => { newEvents.push(event); };
+		emitJson(proc, { type: "message_end", message: { role: "assistant", content: "after replacement" } });
+		try {
+			child.interrupt();
+			expect(proc.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+		} finally {
+			proc.emit("close", null, "SIGTERM");
+		}
+		expect(spawn).toHaveBeenCalledTimes(1);
+		expect(proc.stdin.write).toHaveBeenCalledExactlyOnceWith("private kickoff");
+		expect(oldEvents).toEqual([
+			{ kind: "run-started" },
+			{ kind: "assistant-delta", delta: "before" },
+		]);
+		expect(newEvents.at(-1)).toEqual({
+			kind: "run-settled",
+			outcome: { kind: "interrupted", partialText: "after replacement" },
+		});
+		expect(proc.stdout.listenerCount("data")).toBe(0);
+	});
+
 	it("delivers the delegated prompt via stdin and keeps it out of child argv", () => {
 		// Issue 391: delegated prompts can carry sensitive material. Pinned Pi
 		// (0.84.x) print mode reads piped stdin as the initial message

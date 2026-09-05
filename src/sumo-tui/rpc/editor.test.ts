@@ -1,5 +1,6 @@
 import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
+import { EventEmitter, once } from "node:events";
 import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter as pathDelimiter, join } from "node:path";
@@ -40,7 +41,7 @@ import type { RpcSessionStats } from "./controls.js";
 // oxlint-disable-next-line no-control-regex -- intentional ESC byte match for ANSI stripping in frame assertions
 const ANSI_PATTERN = /\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[()][A-Za-z0-9]/g;
 
-function fakeTui(requestRender = vi.fn()): TUI {
+function fakeTui(requestRender: () => void = vi.fn()): TUI {
 	// SAFETY: tests only read columns/rows/setTitle off the terminal stub; the
 	// intersection keeps the conversion a legal narrowing.
 	const stubTerminal = { columns: 80, rows: 24, setTitle: vi.fn() };
@@ -127,12 +128,38 @@ function foregroundSgr(hex: string): string {
 	return `\x1b[38;2;${red};${green};${blue}m`;
 }
 
-async function waitForRenderedText(controller: RpcHostEditorController, text: string, width = 64): Promise<string> {
-	let rendered = "";
-	for (let attempt = 0; attempt < 50; attempt += 1) {
+interface RenderHarness {
+	readonly tui: TUI;
+	wait(signal: AbortSignal): Promise<void>;
+}
+
+function createRenderHarness(): RenderHarness {
+	const renders = new EventEmitter();
+	return {
+		tui: fakeTui(() => {
+			renders.emit("render");
+		}),
+		wait: async (signal) => {
+			await once(renders, "render", { signal });
+		},
+	};
+}
+
+async function waitForRenderedText(
+	controller: RpcHostEditorController,
+	text: string,
+	rendering: RenderHarness,
+	signal: AbortSignal,
+	width = 64,
+): Promise<string> {
+	let rendered = controller.render(width).map(stripAnsi).join("\n");
+	while (!rendered.includes(text)) {
+		try {
+			await rendering.wait(signal);
+		} catch (error) {
+			throw new Error(`Editor did not render "${text}" before the test deadline. Last render:\n${rendered}`, { cause: error });
+		}
 		rendered = controller.render(width).map(stripAnsi).join("\n");
-		if (rendered.includes(text)) return rendered;
-		await new Promise((resolve) => setTimeout(resolve, 10));
 	}
 	return rendered;
 }
@@ -256,11 +283,12 @@ describe("RPC editor controller", () => {
 		expect(controller.getText()).toBe("");
 	});
 
-	it("accepts slash autocomplete before submitting standalone CSI-u Enter", async () => {
+	it("accepts slash autocomplete before submitting standalone CSI-u Enter", async ({ signal }) => {
 		const submitted: string[] = [];
+		const rendering = createRenderHarness();
 		const controller = await createRpcHostEditorController({
 			controls: controlsFor(),
-			tui: fakeTui(),
+			tui: rendering.tui,
 			theme: fakeEditorTheme(),
 			keybindings: fakeKeybindings(),
 			cwd: process.cwd(),
@@ -273,7 +301,7 @@ describe("RPC editor controller", () => {
 		controller.handleInput("m");
 		controller.handleInput("o");
 		controller.handleInput("d");
-		await waitForRenderedText(controller, "model");
+		await waitForRenderedText(controller, "model", rendering, signal);
 		controller.handleInput("\x1b[13u");
 
 		expect(submitted).toEqual(["/model"]);
@@ -316,11 +344,12 @@ describe("RPC editor controller", () => {
 		expect(submitted).toEqual([]);
 	});
 
-	it("opens the slash menu mid-sentence and accepts without submitting", async () => {
+	it("opens the slash menu mid-sentence and accepts without submitting", async ({ signal }) => {
 		const submitted: string[] = [];
+		const rendering = createRenderHarness();
 		const controller = await createRpcHostEditorController({
 			controls: controlsFor(),
-			tui: fakeTui(),
+			tui: rendering.tui,
 			theme: fakeEditorTheme(),
 			keybindings: fakeKeybindings(),
 			cwd: process.cwd(),
@@ -332,7 +361,7 @@ describe("RPC editor controller", () => {
 		for (const char of "check ") controller.handleInput(char);
 		controller.handleInput("/");
 		for (const char of "mod") controller.handleInput(char);
-		await waitForRenderedText(controller, "model");
+		await waitForRenderedText(controller, "model", rendering, signal);
 		controller.handleInput("\x1b[13u");
 
 		// Accepting a MID-sentence command completes the token in place —
@@ -400,7 +429,7 @@ describe("RPC editor controller", () => {
 		expect(controller.getText()).toBe("");
 	});
 
-	it.skipIf(process.platform === "win32")("opens file mention autocomplete when the RPC host types @ without an explicit fd path", async () => {
+	it.skipIf(process.platform === "win32")("opens file mention autocomplete when the RPC host types @ without an explicit fd path", async ({ signal }) => {
 		const root = mkdtempSync(join(tmpdir(), "sumocode-rpc-file-mention-test-"));
 		const cwd = join(root, "workspace");
 		const binDir = join(root, "bin");
@@ -409,23 +438,25 @@ describe("RPC editor controller", () => {
 			mkdirSync(binDir);
 			writeFileSync(join(cwd, "mention-target.txt"), "target\n", "utf8");
 			const fakeFdPath = join(binDir, "fd");
-			writeFileSync(fakeFdPath, "#!/bin/sh\nprintf 'mention-target.txt\\n'\n", "utf8");
+			// Completion must follow Pi's render notification, not a short polling window.
+			writeFileSync(fakeFdPath, "#!/bin/sh\nsleep 1\nprintf 'mention-target.txt\\n'\n", "utf8");
 			chmodSync(fakeFdPath, 0o755);
 			const env = {
 				...process.env,
 				PATH: `${binDir}${pathDelimiter}${process.env.PATH ?? ""}`,
 				PI_CODING_AGENT_DIR: join(root, "empty-agent-dir"),
 			};
+			const rendering = createRenderHarness();
 			const controller = await createRpcHostEditorController({
 				controls: controlsFor(),
-				tui: fakeTui(),
+				tui: rendering.tui,
 				keybindings: fakeKeybindings(),
 				cwd,
 				env,
 			});
 
 			controller.handleInput("@");
-			const rendered = await waitForRenderedText(controller, "mention-target.txt");
+			const rendered = await waitForRenderedText(controller, "mention-target.txt", rendering, signal);
 
 			expect(controller.isAutocompleteOpen()).toBe(true);
 			expect(rendered).toContain("mention-target.txt");
@@ -437,27 +468,29 @@ describe("RPC editor controller", () => {
 		}
 	});
 
-	it("renders the selected autocomplete item in the active theme accent", async () => {
+	it("renders the selected autocomplete item in the active theme accent", async ({ signal }) => {
+		const rendering = createRenderHarness();
 		const controller = await createRpcHostEditorController({
 			controls: controlsFor({ commands: [rpcCommand("deploy", "Deploy current workspace")] }),
-			tui: fakeTui(),
+			tui: rendering.tui,
 			keybindings: fakeKeybindings(),
 			cwd: process.cwd(),
 			fdPath: null,
 		});
 
 		for (const character of "/dep") controller.handleInput(character);
-		await waitForRenderedText(controller, "deploy");
+		await waitForRenderedText(controller, "deploy", rendering, signal);
 		const rendered = controller.render(64).join("\n");
 
 		expect(rendered).toContain(`${foregroundSgr(activeThemeColors().accent)}→ deploy`);
 	});
 
-	it("renders command autocomplete suggestions from host commands and RPC commands", async () => {
+	it("renders command autocomplete suggestions from host commands and RPC commands", async ({ signal }) => {
 		const controls = controlsFor({ commands: [rpcCommand("deploy", "Deploy current workspace")] });
+		const rendering = createRenderHarness();
 		const controller = await createRpcHostEditorController({
 			controls,
-			tui: fakeTui(),
+			tui: rendering.tui,
 			theme: fakeEditorTheme(),
 			keybindings: fakeKeybindings(),
 			cwd: process.cwd(),
@@ -467,13 +500,13 @@ describe("RPC editor controller", () => {
 		controller.handleInput("d");
 		controller.handleInput("e");
 
-		const rendered = await waitForRenderedText(controller, "deploy");
+		const rendered = await waitForRenderedText(controller, "deploy", rendering, signal);
 
 		expect(rendered).toContain("deploy");
 		expect(controls.getCommands).toHaveBeenCalledTimes(1);
 	});
 
-	it("keeps static slash commands ready while child commands hydrate and refreshes an open menu", async () => {
+	it("keeps static slash commands ready while child commands hydrate and refreshes an open menu", async ({ signal }) => {
 		let resolveCommands: ((commands: RpcSlashCommand[]) => void) | undefined;
 		const getCommands = vi.fn(() => new Promise<RpcSlashCommand[]>((resolve) => {
 			resolveCommands = resolve;
@@ -482,9 +515,10 @@ describe("RPC editor controller", () => {
 			getCommands,
 			getAvailableModels: vi.fn(async () => []),
 		};
+		const rendering = createRenderHarness();
 		const controller = new RpcHostEditorController({
 			controls,
-			tui: fakeTui(),
+			tui: rendering.tui,
 			theme: fakeEditorTheme(),
 			keybindings: fakeKeybindings(),
 			cwd: process.cwd(),
@@ -494,7 +528,7 @@ describe("RPC editor controller", () => {
 			controller.handleInput("\x1b");
 			controller.setText("");
 			for (const character of command) controller.handleInput(character);
-			expect(await waitForRenderedText(controller, description)).toContain(description);
+			expect(await waitForRenderedText(controller, description, rendering, signal)).toContain(description);
 		};
 
 		await expectStaticSuggestion("/resume", "Resume a previous session from this project");
@@ -505,17 +539,18 @@ describe("RPC editor controller", () => {
 		expect(getCommands).toHaveBeenCalledTimes(1);
 		resolveCommands?.([rpcCommand("model-child", "Hydrated child command")]);
 		await configured;
-		expect(await waitForRenderedText(controller, "Hydrated child command")).toContain("Hydrated child command");
+		expect(await waitForRenderedText(controller, "Hydrated child command", rendering, signal)).toContain("Hydrated child command");
 
 		await expectStaticSuggestion("/resume", "Resume a previous session from this project");
 		await expectStaticSuggestion("/model", "Select model or set provider/model");
 	});
 
-	it("reports isAutocompleteOpen() while the slash-command dropdown is visible and false once dismissed", async () => {
+	it("reports isAutocompleteOpen() while the slash-command dropdown is visible and false once dismissed", async ({ signal }) => {
 		const controls = controlsFor({ commands: [rpcCommand("deploy", "Deploy current workspace")] });
+		const rendering = createRenderHarness();
 		const controller = await createRpcHostEditorController({
 			controls,
-			tui: fakeTui(),
+			tui: rendering.tui,
 			theme: fakeEditorTheme(),
 			keybindings: fakeKeybindings(),
 			cwd: process.cwd(),
@@ -526,7 +561,7 @@ describe("RPC editor controller", () => {
 		controller.handleInput("/");
 		controller.handleInput("d");
 		controller.handleInput("e");
-		await waitForRenderedText(controller, "deploy");
+		await waitForRenderedText(controller, "deploy", rendering, signal);
 
 		expect(controller.isAutocompleteOpen()).toBe(true);
 
@@ -1051,12 +1086,13 @@ describe("RPC editor controller app-level action wiring", () => {
 		expect(onInterrupt).toHaveBeenCalledTimes(1);
 	});
 
-	it("does not invoke onInterrupt via Escape while the autocomplete dropdown is open", async () => {
+	it("does not invoke onInterrupt via Escape while the autocomplete dropdown is open", async ({ signal }) => {
 		const onInterrupt = vi.fn();
 		const controls = controlsFor({ commands: [rpcCommand("deploy", "Deploy current workspace")] });
+		const rendering = createRenderHarness();
 		const controller = await createRpcHostEditorController({
 			controls,
-			tui: fakeTui(),
+			tui: rendering.tui,
 			theme: fakeEditorTheme(),
 			keybindings: createRpcKeybindingsManager({ env: {} }),
 			cwd: process.cwd(),
@@ -1066,7 +1102,7 @@ describe("RPC editor controller app-level action wiring", () => {
 		controller.handleInput("/");
 		controller.handleInput("d");
 		controller.handleInput("e");
-		await waitForRenderedText(controller, "deploy");
+		await waitForRenderedText(controller, "deploy", rendering, signal);
 		expect(controller.isAutocompleteOpen()).toBe(true);
 
 		controller.handleInput("\x1b");

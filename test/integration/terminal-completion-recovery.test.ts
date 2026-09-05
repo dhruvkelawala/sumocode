@@ -1,11 +1,13 @@
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TerminalTaskManager } from "../../src/background-tasks/task-manager.js";
-import type { TerminalTaskSnapshot } from "../../src/background-tasks/task-types.js";
+import { systemProcessTree, terminateProcessTree, type ProcessTreeIdentity, type ProcessTreeVerification } from "../../src/background-tasks/process-tree.js";
+import { isTerminalTaskSettled, type TerminalTaskSnapshot } from "../../src/background-tasks/task-types.js";
 import { TerminalDeliveryCoordinator } from "../../src/background-tasks/terminal-tools.js";
 import { spawnSupervisedProcess, type SupervisedProcess } from "./harness-supervisor.js";
 import { buildSpawnEnv } from "./spawn-pi-pty.js";
@@ -26,6 +28,7 @@ interface RpcClient {
 	request(type: string, fields?: RpcFields): Promise<RpcResponse>;
 	waitForExit(): Promise<void>;
 	terminate(): Promise<void>;
+	getEvidenceDir(): string;
 }
 
 interface TestRoot {
@@ -55,10 +58,21 @@ interface ProductionConstructorsMarker {
 	readonly coordinator: string;
 }
 
+interface DeliveryTrace {
+	readonly event: "observable" | "acknowledged";
+	readonly completionId?: string;
+}
+
+interface OwnedTerminalTree {
+	readonly id: string;
+	readonly identity: ProcessTreeIdentity;
+	readonly verification?: ProcessTreeVerification;
+}
+
 const SESSION_A = "019f8a78-b4f5-7b7b-b774-2d2e4bce9001";
 const SESSION_B = "019f8a78-b4f5-7b7b-b774-2d2e4bce9002";
 const FIXTURE = resolve("test/fixtures/terminal-delivery-extension.ts");
-const roots: string[] = [];
+const roots: TestRoot[] = [];
 const children: SupervisedProcess[] = [];
 
 // oxlint-disable-next-line anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof -- parser for untrusted Pi RPC JSON.
@@ -68,7 +82,6 @@ function isRecord(value: unknown): value is { readonly [key: string]: JsonValue 
 
 function createRoot(): TestRoot {
 	const root = mkdtempSync(join(tmpdir(), "sumocode-terminal-recovery-"));
-	roots.push(root);
 	const paths = {
 		root,
 		agentDir: join(root, "agent"),
@@ -77,6 +90,7 @@ function createRoot(): TestRoot {
 		markerDir: join(root, "markers"),
 		workspace: join(root, "workspace"),
 	};
+	roots.push(paths);
 	for (const path of Object.values(paths).slice(1)) mkdirSync(path, { recursive: true, mode: 0o700 });
 	return paths;
 }
@@ -92,11 +106,17 @@ function createSession(paths: TestRoot, name: string, id: string): string {
 }
 
 function launch(paths: TestRoot, sessionFile: string, overrides: NodeJS.ProcessEnv = {}): RpcClient {
+	const expectsCrash = overrides.SUMOCODE_TEST_TERMINAL_CRASH === "claim"
+		|| overrides.SUMOCODE_TEST_TERMINAL_CRASH === "send"
+		|| overrides.SUMOCODE_TEST_TERMINAL_CRASH_AFTER_START === "1";
+	const expectedCrashToken = expectsCrash ? randomUUID() : undefined;
+	const expectedCrashMarker = expectedCrashToken ? join(paths.markerDir, `expected-crash-${expectedCrashToken}`) : undefined;
 	const env = buildSpawnEnv(process.env, {
 		PI_CODING_AGENT_DIR: paths.agentDir,
 		SUMOCODE_TEST_TERMINAL_ROOT: paths.storeDir,
 		SUMOCODE_TEST_TERMINAL_MARKERS: paths.markerDir,
 		...overrides,
+		SUMOCODE_TEST_TERMINAL_EXPECTED_CRASH_TOKEN: expectedCrashToken,
 	});
 	const supervised = spawnSupervisedProcess(process.env.PI_BIN ?? "pi", [
 		"--mode", "rpc",
@@ -124,13 +144,20 @@ function launch(paths: TestRoot, sessionFile: string, overrides: NodeJS.ProcessE
 		waiter.resolve(response);
 	});
 	child.once("exit", (code, signal) => {
-		if (waiters.size === 0) return;
-		void supervised.captureFailure().then((evidenceDir) => {
-			for (const waiter of waiters.values()) {
-				clearTimeout(waiter.timer);
-				waiter.reject(new Error(`Pi RPC child exited early (code=${String(code)}, signal=${String(signal)}). Evidence: ${evidenceDir}`));
-			}
-			waiters.clear();
+		const pending = [...waiters.values()];
+		waiters.clear();
+		for (const waiter of pending) clearTimeout(waiter.timer);
+		if (pending.length === 0) return;
+		const exit = `Pi RPC child exited early (code=${String(code)}, signal=${String(signal)})`;
+		if (expectedCrashMarker && existsSync(expectedCrashMarker)) {
+			for (const waiter of pending) waiter.reject(new Error(`${exit} at expected fixture crash`));
+			return;
+		}
+		void supervised.captureFailure().then(
+			(evidenceDir) => `${exit}. Evidence: ${evidenceDir}`,
+			(error) => `${exit}. Evidence capture failed: ${error instanceof Error ? error.message : String(error)}`,
+		).then((message) => {
+			for (const waiter of pending) waiter.reject(new Error(message));
 		});
 	});
 	let sequence = 0;
@@ -148,6 +175,7 @@ function launch(paths: TestRoot, sessionFile: string, overrides: NodeJS.ProcessE
 		},
 		waitForExit: () => exited,
 		terminate: () => supervised.terminate(),
+		getEvidenceDir: () => supervised.evidence.evidenceDir,
 	};
 }
 
@@ -156,21 +184,62 @@ function readMarker<T>(paths: TestRoot, name: string): T {
 	return JSON.parse(readFileSync(join(paths.markerDir, name), "utf8")) as T;
 }
 
-function readSnapshot(paths: TestRoot, id: string): TerminalTaskSnapshot | undefined {
+function readSnapshots(paths: TestRoot): TerminalTaskSnapshot[] {
+	const snapshots: TerminalTaskSnapshot[] = [];
 	for (const entry of readdirSync(paths.storeDir, { withFileTypes: true })) {
 		if (!entry.isDirectory()) continue;
 		const meta = join(paths.storeDir, entry.name, "meta.json");
 		if (!existsSync(meta)) continue;
-		let value: TerminalTaskSnapshot;
 		try {
 			// SAFETY: valid production metadata is a TerminalTaskSnapshot; malformed unrelated fixtures are skipped.
-			value = JSON.parse(readFileSync(meta, "utf8")) as TerminalTaskSnapshot;
+			snapshots.push(JSON.parse(readFileSync(meta, "utf8")) as TerminalTaskSnapshot);
 		} catch {
-			continue;
+			// Malformed records cannot provide a verified process identity.
 		}
-		if (value.id === id) return value;
 	}
-	return undefined;
+	return snapshots;
+}
+
+function readSnapshot(paths: TestRoot, id: string): TerminalTaskSnapshot | undefined {
+	return readSnapshots(paths).find((snapshot) => snapshot.id === id);
+}
+
+function ownedTree(snapshot: TerminalTaskSnapshot): OwnedTerminalTree | undefined {
+	const { pid, processGroupId, processStartTime } = snapshot;
+	if (
+		pid === undefined || !Number.isSafeInteger(pid) || pid <= 1
+		|| processGroupId === undefined || !Number.isSafeInteger(processGroupId) || processGroupId <= 1
+		|| processStartTime === undefined || processStartTime.length === 0
+	) return undefined;
+	return {
+		id: snapshot.id,
+		identity: { pid, processGroupId, processStartTime },
+		verification: snapshot.processTreeVerification,
+	};
+}
+
+async function stopOwnedTerminalTrees(paths: TestRoot): Promise<OwnedTerminalTree[]> {
+	const trees: OwnedTerminalTree[] = [];
+	for (const snapshot of readSnapshots(paths)) {
+		const tree = ownedTree(snapshot);
+		if (tree) trees.push(tree);
+		else if (!isTerminalTaskSettled(snapshot.status)) {
+			throw new Error(`cannot verify live terminal ${snapshot.id}; retained owned root ${paths.root}`);
+		}
+	}
+	const verifiedTrees: OwnedTerminalTree[] = [];
+	for (const tree of trees) {
+		const verification = tree.verification ?? systemProcessTree.captureTreeVerification?.(tree.identity);
+		const verifiedTree = verification ? { ...tree, verification } : tree;
+		if (!systemProcessTree.isTreeEmpty(tree.identity, verification)) {
+			const stopped = await terminateProcessTree(systemProcessTree, tree.identity, { termGraceMs: 100, killGraceMs: 2_000 });
+			if (!stopped || !systemProcessTree.isTreeEmpty(tree.identity, verification)) {
+				throw new Error(`could not safely stop terminal ${tree.id}; retained owned root ${paths.root}`);
+			}
+		}
+		verifiedTrees.push(verifiedTree);
+	}
+	return verifiedTrees;
 }
 
 async function waitForMarker(paths: TestRoot, name: string): Promise<void> {
@@ -246,8 +315,23 @@ async function seedPendingCompletion(paths: TestRoot, sessionFile: string): Prom
 }
 
 afterEach(async () => {
-	for (const child of children.splice(0)) await child.terminate();
-	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+	const errors: Error[] = [];
+	for (const child of children.splice(0)) {
+		try {
+			await child.terminate();
+		} catch (error) {
+			errors.push(error instanceof Error ? error : new Error(String(error)));
+		}
+	}
+	for (const paths of roots.splice(0)) {
+		try {
+			await stopOwnedTerminalTrees(paths);
+			rmSync(paths.root, { recursive: true, force: true });
+		} catch (error) {
+			errors.push(error instanceof Error ? error : new Error(String(error)));
+		}
+	}
+	if (errors.length > 0) throw new AggregateError(errors, "terminal recovery cleanup failed; owned roots retained");
 });
 
 // The child fixture constructs the real TerminalTaskManager and TerminalDeliveryCoordinator through the production installers.
@@ -297,12 +381,33 @@ describe("terminal completion delivery recovery", () => {
 		await waitForMarker(paths, "index-scheduled");
 		expect(readSnapshot(paths, pending.id)).toMatchObject({ deliveryState: "pending" });
 		expect(terminalMessages(await replacement.request("get_messages"), pending.completionId!)).toHaveLength(0);
+		expect(existsSync(join(paths.markerDir, "index-attempt.json"))).toBe(false);
 		writeFileSync(join(paths.markerDir, "index-release"), "release\n", { mode: 0o600 });
 
 		const delivered = await waitForSnapshot(paths, pending.id, (snapshot) => snapshot.deliveryState === "delivered");
+		expect(delivered).toMatchObject({ ownerSessionId: SESSION_A, completionId: pending.completionId });
 		expect(readMarker<IndexAttemptMarker>(paths, "index-attempt.json")).toEqual({ ready: true });
-		expect(terminalMessages(await replacement.request("get_messages"), delivered.completionId!)).toHaveLength(1);
+		const live = await replacement.request("get_messages");
+		const liveMessages = terminalMessages(live, delivered.completionId!);
+		expect(liveMessages).toHaveLength(1);
+		expect(Buffer.byteLength(JSON.stringify(liveMessages[0]), "utf8")).toBeLessThan(30 * 1024);
+		expect(JSON.stringify(live)).not.toContain("terminal-secret-value");
+		expect(JSON.stringify(live)).toContain("benign completion");
+		// SAFETY: the fixture writes each delivery trace row from the DeliveryTrace event vocabulary above.
+		const trace = readFileSync(join(paths.markerDir, "delivery-trace.jsonl"), "utf8").trim().split("\n")
+			.map((line) => JSON.parse(line) as DeliveryTrace)
+			.filter((event) => event.completionId === delivered.completionId);
+		expect(trace.map((event) => event.event)).toEqual(["observable", "acknowledged"]);
+
 		await replacement.request("prompt", { message: "/terminal-recovery-settle" });
+		expect(terminalMessages(await replacement.request("get_messages"), delivered.completionId!)).toHaveLength(1);
+		expect(persistedTerminalMessages(sessionFile, delivered.completionId!)).toHaveLength(1);
+		await replacement.terminate();
+
+		const hydrated = launch(paths, sessionFile);
+		const hydratedMessages = terminalMessages(await hydrated.request("get_messages"), delivered.completionId!);
+		expect(hydratedMessages).toHaveLength(1);
+		expect(hydratedMessages[0]?.details).toEqual(liveMessages[0]?.details);
 		expect(persistedTerminalMessages(sessionFile, delivered.completionId!)).toHaveLength(1);
 	});
 
@@ -367,6 +472,29 @@ describe("terminal completion delivery recovery", () => {
 		expect(delivered.completionId).toBe(pending.completionId);
 		expect(terminalMessages(await replacement.request("get_messages"), delivered.completionId!)).toHaveLength(1);
 		expect(persistedTerminalMessages(sessionFile, delivered.completionId!)).toHaveLength(1);
+	});
+
+	it("cleans a held terminal after its expected fixture crash", async () => {
+		const paths = createRoot();
+		const sessionFile = createSession(paths, "session-a", SESSION_A);
+		const crashing = launch(paths, sessionFile, {
+			SUMOCODE_TEST_TERMINAL_HOLD: "1",
+			SUMOCODE_TEST_TERMINAL_CRASH_AFTER_START: "1",
+		});
+		const startRequest = expect(crashing.request("prompt", { message: "/terminal-recovery-start passive" }))
+			.rejects.toThrow("expected fixture crash");
+		await waitForMarker(paths, "started.json");
+		const { id } = readMarker<StartMarker>(paths, "started.json");
+		const running = await waitForSnapshot(paths, id, (snapshot) => snapshot.status === "running");
+		await crashing.waitForExit();
+		await startRequest;
+		expect(existsSync(join(paths.markerDir, "terminal-release"))).toBe(false);
+		expect(existsSync(join(crashing.getEvidenceDir(), "argv.txt"))).toBe(false);
+
+		const trees = await stopOwnedTerminalTrees(paths);
+		const held = trees.find((tree) => tree.id === running.id);
+		expect(held).toBeDefined();
+		expect(systemProcessTree.isTreeEmpty(held!.identity, held!.verification)).toBe(true);
 	});
 
 	it("holds a wake completion for its busy owner session while another session is active", async () => {

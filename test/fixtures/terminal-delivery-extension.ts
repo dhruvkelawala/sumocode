@@ -37,7 +37,10 @@ export default function terminalDeliveryFixture(pi: ExtensionAPI): void {
 	const busyMarker = join(markerDir, "busy");
 	const raceIdleMarker = join(markerDir, "race-idle");
 	const diagnostics = join(markerDir, "index-diagnostics.jsonl");
+	const deliveryTrace = join(markerDir, "delivery-trace.jsonl");
 	const crashPoint = process.env.SUMOCODE_TEST_TERMINAL_CRASH;
+	const expectedCrashToken = process.env.SUMOCODE_TEST_TERMINAL_EXPECTED_CRASH_TOKEN;
+	const expectedCrashMarker = expectedCrashToken ? join(markerDir, `expected-crash-${expectedCrashToken}`) : undefined;
 	const indexMode = process.env.SUMOCODE_TEST_TERMINAL_INDEX ?? "normal";
 	const tools = new Map<string, RegisteredTool>();
 	let manager: TerminalTaskManager;
@@ -48,6 +51,12 @@ export default function terminalDeliveryFixture(pi: ExtensionAPI): void {
 			return Reflect.get(target, property, receiver);
 		},
 	});
+
+	const crash = (): never => {
+		if (expectedCrashMarker) writeFileSync(expectedCrashMarker, "expected\n", { mode: 0o600 });
+		process.kill(process.pid, "SIGKILL");
+		throw new Error("SIGKILL returned unexpectedly");
+	};
 
 	// SAFETY: the resulting Proxy preserves ExtensionAPI and only wraps methods with contract-compatible delegates.
 	const fixturePi = new Proxy(pi, {
@@ -70,9 +79,12 @@ export default function terminalDeliveryFixture(pi: ExtensionAPI): void {
 				return (...args: Parameters<ExtensionAPI["sendMessage"]>) => {
 					const result = target.sendMessage(...args);
 					const message = args[0];
+					if (message.customType === "terminal-result") {
+						appendFileSync(deliveryTrace, `${JSON.stringify({ event: "observable", completionId: message.details?.completionId })}\n`, { mode: 0o600 });
+					}
 					if (crashPoint === "send" && message.customType === "terminal-result") {
 						writeFileSync(join(markerDir, "crashed-after-send"), "sent\n", { mode: 0o600 });
-						process.kill(process.pid, "SIGKILL");
+						crash();
 					}
 					return result;
 				};
@@ -112,12 +124,16 @@ export default function terminalDeliveryFixture(pi: ExtensionAPI): void {
 		manager: manager.constructor.name,
 		coordinator: coordinator.constructor.name,
 	})}\n`, { mode: 0o600 });
+	manager.addChangeListener((snapshot) => {
+		if (snapshot.deliveryState !== "delivered") return;
+		appendFileSync(deliveryTrace, `${JSON.stringify({ event: "acknowledged", completionId: snapshot.completionId })}\n`, { mode: 0o600 });
+	});
 
 	if (crashPoint === "claim") {
 		manager.addChangeListener((snapshot) => {
 			if (snapshot.deliveryState !== "claimed" || existsSync(join(markerDir, "crashed-after-claim"))) return;
 			writeFileSync(join(markerDir, "crashed-after-claim"), `${snapshot.completionId ?? ""}\n`, { mode: 0o600 });
-			process.kill(process.pid, "SIGKILL");
+			crash();
 		});
 	}
 
@@ -140,7 +156,7 @@ export default function terminalDeliveryFixture(pi: ExtensionAPI): void {
 			const started = manager.list(ctx.sessionManager.getSessionId() ?? "")[0];
 			if (!started) throw new Error("terminal fixture did not start a task");
 			writeFileSync(join(markerDir, "started.json"), `${JSON.stringify({ id: started.id, completionPolicy: started.completionPolicy })}\n`, { mode: 0o600 });
-			if (process.env.SUMOCODE_TEST_TERMINAL_CRASH_AFTER_START === "1") process.kill(process.pid, "SIGKILL");
+			if (process.env.SUMOCODE_TEST_TERMINAL_CRASH_AFTER_START === "1") crash();
 		},
 	});
 

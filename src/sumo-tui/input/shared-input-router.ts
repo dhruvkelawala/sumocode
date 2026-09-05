@@ -3,7 +3,7 @@ import { normalizeRawMultilinePasteInput } from "../../cathedral/multiline-paste
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import { chatScrollCommandFromInput } from "../widgets/chat-scroll-command.js";
 import type { KeyEvent } from "./key-router.js";
-import { parseSgrMouseStream, type MouseEvent } from "./mouse.js";
+import { parseSgrMouseEvent, type MouseEvent } from "./mouse.js";
 
 export interface SharedInputRouterResult {
 	readonly consume?: boolean;
@@ -275,12 +275,10 @@ export class SharedInputRouter {
 		const mouseEvents: MouseEvent[] = [];
 		const leftovers: string[] = [];
 		for (const token of parsed.tokens) {
-			if (token.startsWith("\x1b[<")) {
-				const mouse = parseSgrMouseStream(token);
-				mouseEvents.push(...mouse.events);
-				for (const event of mouse.events) {
-					mouseViewportDirty = this.callbacks.handleMouseEvent?.(event) === true || mouseViewportDirty;
-				}
+			const mouse = parseSgrMouseEvent(token);
+			if (mouse) {
+				mouseEvents.push(mouse);
+				mouseViewportDirty = this.callbacks.handleMouseEvent?.(mouse) === true || mouseViewportDirty;
 				consumed = true;
 				continue;
 			}

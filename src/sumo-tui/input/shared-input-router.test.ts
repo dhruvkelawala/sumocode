@@ -112,6 +112,15 @@ describe("SharedInputRouter coalesced commands", () => {
 		}
 	});
 
+	it.each(["\x1b[<1z", "\x1b[<1;0;5M"])("forwards unrecognized complete CSI %j intact", (sequence) => {
+		const forwardToEditor = vi.fn((_data: string) => true);
+		const handleMouseEvent = vi.fn();
+		const router = new SharedInputRouter({ forwardToEditor, handleMouseEvent });
+		router.handleInput(sequence + "x");
+		expect(forwardToEditor.mock.calls).toEqual([[sequence], ["x"]]);
+		expect(handleMouseEvent).not.toHaveBeenCalled();
+	});
+
 	it("keeps mouse and keyboard actions in stream order while batching mouse renders", () => {
 		const events: string[] = [];
 		const scheduleMouseRender = vi.fn();

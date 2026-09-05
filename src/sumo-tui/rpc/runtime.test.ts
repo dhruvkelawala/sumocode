@@ -805,6 +805,28 @@ describe("RPC host retained runtime frame", () => {
 		expect(terminal.getState()).toMatchObject({ restored: true });
 	});
 
+	it.each([
+		["bracketed paste", "\x1b[200~one\r\n\x1f\x04\x03\x1b[<1z\x1b[201~", "\x1b[200~one\r\n\x1f\x04\x03\x1b[<1z\x1b[201~"],
+		["multiline draft", "one\ntwo", "one\ntwo"],
+		["CRLF draft", "one\r\ntwo", "one\ntwo"],
+	])("delivers %s atomically to a custom runtime editor", (_name, chunk, expected) => {
+		const input = new FakeInput();
+		const editor = new FakeEditor();
+		const runtime = new RpcHostRuntime({
+			output: new FakeOutput(), input, editor,
+			initialState: state(), initialTranscript: { messages: [] },
+		});
+		try {
+			runtime.startInput();
+			input.emit(chunk);
+			expect(editor.inputs).toEqual([expected]);
+			input.emit("x");
+			expect(editor.inputs).toEqual([expected, "x"]);
+		} finally {
+			runtime.stop();
+		}
+	});
+
 	it("accepts interrupts and drafts before a reload's first paint", async () => {
 		const output = new FakeOutput();
 		const input = new FakeInput();
@@ -819,6 +841,7 @@ describe("RPC host retained runtime frame", () => {
 
 		runtime.startInput();
 		input.emit("draft");
+		// Ordinary text may arrive per grapheme; paste/newline chunks must stay atomic (above).
 		expect(editor.inputs.join("")).toBe("draft");
 		expect(input.rawModes).toEqual([true]);
 		expect(output.chunks).toEqual([]);

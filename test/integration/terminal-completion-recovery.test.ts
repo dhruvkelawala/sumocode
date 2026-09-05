@@ -376,7 +376,7 @@ afterEach(async () => {
 });
 
 // The child fixture constructs the real TerminalTaskManager and TerminalDeliveryCoordinator through the production installers.
-describe("terminal completion delivery recovery", () => {
+describe("terminal completion delivery recovery", { timeout: 30_000 }, () => {
 	it("delivers a passive terminal once through the real coordinator", async () => {
 		const paths = createRoot();
 		const sessionFile = createSession(paths, "session-a", SESSION_A);

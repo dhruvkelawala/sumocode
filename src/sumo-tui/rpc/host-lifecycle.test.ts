@@ -243,7 +243,7 @@ describe("RpcHostLifecycle", () => {
 		expect(f.trace).toEqual(["activity:dispose"]);
 	});
 
-	it("retains listeners and waits for the child before cache disposal and exit", async () => {
+	it.each(["SIGTERM", "SIGINT", "unhandledRejection", "uncaughtException", "child-exit", "natural"])("%s waits for child reap before cache disposal and exit", async (reason) => {
 		const f = fixture();
 		let releaseChild!: () => void;
 		const childStopped = new Promise<void>((resolve) => { releaseChild = resolve; });
@@ -251,16 +251,20 @@ describe("RpcHostLifecycle", () => {
 			f.lifecycle.ownClient({ stop: () => childStopped, stderr: "" });
 			f.lifecycle.ownCache({ write: async () => undefined, dispose: async () => { f.trace.push("cache:dispose"); } }, ".");
 			f.lifecycle.childAdopted();
-			return f.lifecycle.waitForExit();
+			return reason === "natural" ? 0 : f.lifecycle.waitForExit();
 		});
-		f.signals.emit("SIGTERM");
-		f.signals.emit("SIGINT");
+		const code = reason === "SIGINT" ? 130 : ["unhandledRejection", "uncaughtException", "child-exit"].includes(reason) ? 1 : 0;
+		if (reason === "child-exit") void f.lifecycle.stop(code, reason).then(() => f.lifecycle.exit(code));
+		else if (reason !== "natural") f.signals.emit(reason, new Error("fatal"));
+		await Promise.resolve();
+		if (reason !== "natural") f.signals.emit("SIGTERM");
 		await Promise.resolve();
 		expect(f.trace).toEqual([]);
 		expect(f.signals.listenerCount("SIGTERM")).toBe(1);
 		releaseChild();
-		expect(await running).toBe(0);
-		expect(f.trace).toEqual(["cache:dispose", "exit:0"]);
+		expect(await running).toBe(code);
+		expect(f.trace).toEqual(reason === "natural" ? ["cache:dispose"] : ["cache:dispose", `exit:${code}`]);
+		expect(f.signals.eventNames()).toEqual([]);
 	});
 
 	it.each([0, 130, 100])("characterizes lifecycle order: normal/quit/reload exit %i", async (code) => {
@@ -295,6 +299,7 @@ describe("RpcHostLifecycle", () => {
 			f.lifecycle.ownResource("activity", { dispose: () => { f.trace.push("activity:dispose"); } });
 			await setup;
 			return 0;
+		// oxlint-disable-next-line anti-slop/no-unknown-parameters -- assert the exact rejection value crosses back to the entry owner.
 		}).catch((error: unknown) => { rejected = error; });
 		try {
 			f.signals.emit(event, cause);

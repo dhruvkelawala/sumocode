@@ -31,6 +31,7 @@ import {
 	createUnhandledRejectionHandler,
 	hydrateSameSessionTreeNavigation,
 	submitInitialPromptFromFile,
+	main,
 	writeExitCodeFile,
 	type RpcHostExitDependencies,
 	type RpcHostInterruptDependencies,
@@ -770,10 +771,7 @@ describe("RPC host unhandled rejection shutdown", () => {
 	});
 
 	it("runs the same stop()-then-exit(1) path for a sync throw (uncaughtException) as for a rejection", async () => {
-		// runRpcHost wires this exact handler instance to both process.on("unhandledRejection", ...)
-		// and process.once("uncaughtException", ...) -- a sync throw from the event -> render path
-		// must restore the terminal via the same stopHost() cleanup an unhandled rejection uses, not
-		// fall through with no handler at all (the pre-fix state: only unhandledRejection was wired).
+		// RpcHostLifecycle routes both adopted fatal events through this handler.
 		const writes: string[] = [];
 		const cleanup = vi.fn(async (_code: number) => undefined);
 		const exit = vi.fn((_code: number) => undefined);
@@ -1382,13 +1380,34 @@ describe("submitInitialPromptFromFile (SUMOCODE_INITIAL_PROMPT_FILE one-shot sea
 });
 
 describe("writeExitCodeFile (SUMOCODE_EXIT_CODE_FILE out-of-band exit-code channel)", () => {
+	it("main natural return publishes only to options.env", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "sumocode-exit-env-"));
+		const file = join(dir, "provided");
+		const ambient = join(dir, "ambient");
+		const previousCode = process.exitCode;
+		vi.stubEnv("SUMOCODE_EXIT_CODE_FILE", ambient);
+		try {
+			await main({
+				env: { SUMOCODE_EXIT_CODE_FILE: file },
+				stdout: asNever({ isTTY: false }),
+				stderr: asNever({ write: () => true }),
+			});
+			expect(readFileSync(file, "utf8")).toBe("70");
+			expect(existsSync(ambient)).toBe(false);
+			expect(process.exitCode).toBe(70);
+		} finally {
+			process.exitCode = previousCode;
+			vi.unstubAllEnvs();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 	// bin/sumocode.sh's wait_for_child_exit was verified unreliable under macOS
 	// bash 3.2: a SIGTERM-graceful shutdown that the host resolves as exit 0
 	// can surface to the launcher as 143 via bash's own `wait` status. This is
 	// the single choke point every host exit path (SIGINT/SIGTERM,
 	// unhandledRejection/uncaughtException, createRpcExitHandler's reload/crash
 	// paths, and main()'s natural-return path) funnels through -- see
-	// runRpcHost's `exitProcess` and main() for the call sites.
+	// RpcHostLifecycle.exit(), its natural-return path, and main() for callers.
 
 	it("writes the exit code to the path given by SUMOCODE_EXIT_CODE_FILE", () => {
 		const dir = mkdtempSync(join(tmpdir(), "sumocode-exit-code-"));

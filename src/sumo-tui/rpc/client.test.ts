@@ -100,7 +100,7 @@ describe("SumoRpcClient", () => {
 		await client.stop();
 	});
 
-	it("retains the post-adoption protocol-failure reap until SIGKILL and close", async () => {
+	it.each(["parse", "frame", "error"] as const)("retains the post-adoption %s failure child and reap until SIGKILL and close", async (failure) => {
 		vi.useFakeTimers();
 		try {
 			const child = new FakeRpcChild();
@@ -109,8 +109,11 @@ describe("SumoRpcClient", () => {
 			const exited = vi.fn();
 			client.onExit(exited);
 			await client.start();
-			child.stdout.emit("data", "invalid\ninvalid\ninvalid\n");
+			if (failure === "parse") child.stdout.emit("data", "invalid\ninvalid\ninvalid\n");
+			else if (failure === "frame") child.stdout.emit("data", "x".repeat(CHILD_JSON_FRAME_MAX_BYTES + 1));
+			else child.emit("error", new Error("child transport failed"));
 			expect(exited).toHaveBeenCalledOnce();
+			expect(client.adoptedChild).toBe(child);
 			expect(client.pid).toBeUndefined();
 			await vi.advanceTimersByTimeAsync(750);
 			const stopped = vi.fn();
@@ -120,12 +123,17 @@ describe("SumoRpcClient", () => {
 			expect(stopped).not.toHaveBeenCalled();
 			await vi.advanceTimersByTimeAsync(1_250);
 			expect(child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(stopped).not.toHaveBeenCalled();
+			expect(client.adoptedChild).toBe(child);
 			child.signalCode = "SIGKILL";
 			child.emit("exit", null, "SIGKILL");
 			await vi.advanceTimersByTimeAsync(0);
 			expect(stopped).not.toHaveBeenCalled();
 			child.emit("close", null, "SIGKILL");
 			await Promise.all([first, second]);
+			expect(client.adoptedChild).toBeUndefined();
+			expect(exited).toHaveBeenCalledOnce();
 			expect(stopped).toHaveBeenCalledTimes(2);
 			expect(vi.getTimerCount()).toBe(0);
 		} finally {
@@ -219,6 +227,17 @@ describe("SumoRpcClient", () => {
 		expect(resolved).toBe(false);
 		await started;
 		await client.stop();
+	});
+
+	it.each(["setup", "adoption"] as const)("reaps partial client startup after %s rejection", async (failure) => {
+		const child = new FakeRpcChild();
+		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
+		if (failure === "setup") vi.spyOn(child.stdout, "on").mockImplementationOnce(() => { throw new Error("setup failed"); });
+		await expect(client.start(() => { throw new Error("adoption failed"); })).rejects.toThrow(`${failure} failed`);
+		expect(client.adoptedChild).toBe(child);
+		await Promise.all([client.stop(), client.stop()]);
+		expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+		expect(client.adoptedChild).toBeUndefined();
 	});
 
 	it("reports a pre-spawn error captured before host adoption", async () => {

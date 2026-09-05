@@ -144,7 +144,7 @@ export class SumoRpcClient {
 	}
 
 	public get pid(): number | undefined {
-		return this.child?.pid;
+		return this.exited ? undefined : this.child?.pid;
 	}
 
 	public get stderr(): string {
@@ -449,11 +449,9 @@ export class SumoRpcClient {
 		const child = this.child;
 		if (child) {
 			this.detachChildStreams(child);
-			// stop retains the reap promise even after transport ownership is gone.
-			// Every host exit path must await the same TERM/KILL/close boundary.
+			// Keep child ownership and the shared reap promise until stop finishes.
 			void this.stop();
 		}
-		this.child = undefined;
 		this.rejectPending(error);
 		this.exitNotified = true;
 		for (const listener of this.exitListeners) listener(error);
@@ -470,7 +468,11 @@ export class SumoRpcClient {
 		if (this.childClosed) return Promise.resolve();
 		return new Promise((resolve) => {
 			const alive = () => child.exitCode === null && child.signalCode === null;
-			const onExit = () => clearTimeout(forceKill);
+			const onExit = () => {
+				clearTimeout(forceKill);
+				clearTimeout(deadline);
+				deadline = setTimeout(finish, CHILD_CLOSE_GRACE_MS);
+			};
 			const finish = () => {
 				clearTimeout(forceKill);
 				clearTimeout(deadline);
@@ -482,7 +484,10 @@ export class SumoRpcClient {
 			const forceKill = setTimeout(() => {
 				if (alive()) child.kill("SIGKILL");
 			}, CHILD_STOP_GRACE_MS);
-			const deadline = setTimeout(finish, CHILD_STOP_GRACE_MS + CHILD_CLOSE_GRACE_MS);
+			// Bound inherited stdio, not process exit: a sent SIGKILL is not a reap.
+			let deadline = setTimeout(() => {
+				if (!alive()) finish();
+			}, CHILD_STOP_GRACE_MS + CHILD_CLOSE_GRACE_MS);
 			child.once("exit", onExit);
 			child.once("close", finish);
 			if (alive()) {

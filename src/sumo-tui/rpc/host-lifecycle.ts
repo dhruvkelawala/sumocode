@@ -16,7 +16,7 @@ type TimerName = "session-hydration" | "child-exit";
 
 interface RpcHostLifecycleOptions {
 	readonly env: NodeJS.ProcessEnv;
-	readonly input: { setRawMode?(enabled: boolean): unknown };
+	readonly input: { setRawMode?(enabled: boolean): void };
 	readonly stderr: Pick<NodeJS.WriteStream, "write">;
 	readonly exit?: (code: number) => void;
 	readonly onChildAdopted?: () => void;
@@ -269,6 +269,7 @@ export class RpcHostLifecycle {
 		try { finalizer.run(); } catch (error) { this.report(finalizer.name, error); }
 	}
 
+	// oxlint-disable-next-line anti-slop/no-unknown-parameters -- finalizers can throw any value; this sink bounds its string form for diagnostics.
 	private report(name: string, error: unknown): void {
 		try { this.options.stderr.write(`[sumocode-rpc] ${name} cleanup failed: ${boundRetainedResult(String(error), 500)}\n`); } catch {}
 	}

@@ -1,5 +1,5 @@
 /* oxlint-disable anti-slop/no-reflect-get -- the fixture Proxy forwards the complete Pi API while intercepting three runtime seams. */
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { installBackgroundTasks } from "../../src/background-tasks/background-task-tool.js";
@@ -35,16 +35,16 @@ export default function terminalDeliveryFixture(pi: ExtensionAPI): void {
 	const faultMarker = join(markerDir, "index-fault");
 	const releaseMarker = join(markerDir, "index-release");
 	const busyMarker = join(markerDir, "busy");
+	const raceIdleMarker = join(markerDir, "race-idle");
 	const diagnostics = join(markerDir, "index-diagnostics.jsonl");
 	const crashPoint = process.env.SUMOCODE_TEST_TERMINAL_CRASH;
 	const indexMode = process.env.SUMOCODE_TEST_TERMINAL_INDEX ?? "normal";
 	const tools = new Map<string, RegisteredTool>();
-	const eventHandlers = new Map<string, EventHandler[]>();
 	let manager: TerminalTaskManager;
 
 	const context = (ctx: ExtensionContext): ExtensionContext => new Proxy(ctx, {
 		get(target, property, receiver) {
-			if (property === "isIdle") return () => !existsSync(busyMarker) && target.isIdle();
+			if (property === "isIdle") return () => existsSync(raceIdleMarker) || (!existsSync(busyMarker) && target.isIdle());
 			return Reflect.get(target, property, receiver);
 		},
 	});
@@ -61,7 +61,6 @@ export default function terminalDeliveryFixture(pi: ExtensionAPI): void {
 			}
 			if (property === "on") {
 				return (event: string, handler: EventHandler) => {
-					eventHandlers.set(event, [...(eventHandlers.get(event) ?? []), handler]);
 					// SAFETY: the wrapper preserves each Pi event payload and only substitutes an ExtensionContext-compatible Proxy.
 					// oxlint-disable-next-line anti-slop/no-explicit-any -- Pi owns each event payload's concrete type.
 					return target.on(event as never, ((value: any, ctx: ExtensionContext) => handler(value, context(ctx))) as never);
@@ -109,6 +108,10 @@ export default function terminalDeliveryFixture(pi: ExtensionAPI): void {
 		onDiagnostic: (diagnostic) => appendFileSync(diagnostics, `${JSON.stringify(diagnostic)}\n`, { mode: 0o600 }),
 	});
 	const coordinator = installTerminalTools(fixturePi, manager);
+	writeFileSync(join(markerDir, "production-constructors.json"), `${JSON.stringify({
+		manager: manager.constructor.name,
+		coordinator: coordinator.constructor.name,
+	})}\n`, { mode: 0o600 });
 
 	if (crashPoint === "claim") {
 		manager.addChangeListener((snapshot) => {
@@ -141,8 +144,16 @@ export default function terminalDeliveryFixture(pi: ExtensionAPI): void {
 		},
 	});
 
+	const beginObservationRace = (ctx: ExtensionContext): void => {
+		rmSync(busyMarker, { force: true });
+		writeFileSync(raceIdleMarker, "idle\n", { mode: 0o600 });
+		coordinator.flushWhenIdle(context(ctx));
+	};
+
 	pi.registerCommand("terminal-recovery-check", {
 		handler: async (_args, ctx) => {
+			// Queue real coordinator delivery at the same idle boundary where the explicit observation starts.
+			beginObservationRace(ctx);
 			// SAFETY: terminal-recovery-start owns this marker and always writes its string id.
 			const id = JSON.parse(readFileSync(join(markerDir, "started.json"), "utf8")) as { readonly id: string };
 			const result = await tools.get("terminal_check")!.execute("terminal-recovery-check", { id: id.id }, undefined, undefined, context(ctx));
@@ -152,6 +163,8 @@ export default function terminalDeliveryFixture(pi: ExtensionAPI): void {
 
 	pi.registerCommand("terminal-recovery-wait", {
 		handler: async (_args, ctx) => {
+			// Queue real coordinator delivery at the same idle boundary where the explicit observation starts.
+			beginObservationRace(ctx);
 			// SAFETY: terminal-recovery-start owns this marker and always writes its string id.
 			const id = JSON.parse(readFileSync(join(markerDir, "started.json"), "utf8")) as { readonly id: string };
 			const result = await tools.get("terminal_wait")!.execute("terminal-recovery-wait", { ids: [id.id], timeout_ms: 5_000 }, undefined, undefined, context(ctx));

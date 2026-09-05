@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { TerminalTaskManager } from "../../src/background-tasks/task-manager.js";
 import type { TerminalTaskSnapshot } from "../../src/background-tasks/task-types.js";
+import { TerminalDeliveryCoordinator } from "../../src/background-tasks/terminal-tools.js";
 import { spawnSupervisedProcess, type SupervisedProcess } from "./harness-supervisor.js";
 import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
@@ -46,6 +48,11 @@ interface IndexAttemptMarker {
 
 interface ToolResultMarker {
 	readonly content: readonly [{ readonly type: "text"; readonly text: string }];
+}
+
+interface ProductionConstructorsMarker {
+	readonly manager: string;
+	readonly coordinator: string;
 }
 
 const SESSION_A = "019f8a78-b4f5-7b7b-b774-2d2e4bce9001";
@@ -180,6 +187,12 @@ async function waitForSnapshot(paths: TestRoot, id: string, predicate: (snapshot
 	return snapshot!;
 }
 
+async function waitForClaimLeaseExpiry(paths: TestRoot, id: string, leaseMs = 150): Promise<TerminalTaskSnapshot> {
+	const claimed = await waitForSnapshot(paths, id, (snapshot) => snapshot.deliveryState === "claimed");
+	await vi.waitFor(() => expect(Date.now() - claimed.updatedAt).toBeGreaterThanOrEqual(leaseMs), { timeout: 10_000, interval: 20 });
+	return claimed;
+}
+
 function terminalMessages(value: JsonValue, completionId: string): Array<{ readonly [key: string]: JsonValue }> {
 	const matches: Array<{ readonly [key: string]: JsonValue }> = [];
 	const visit = (candidate: JsonValue): void => {
@@ -244,6 +257,11 @@ describe("terminal completion delivery recovery", () => {
 		const sessionFile = createSession(paths, "session-a", SESSION_A);
 		const first = launch(paths, sessionFile, { SUMOCODE_TEST_TERMINAL_LARGE_OUTPUT: "1" });
 
+		await waitForMarker(paths, "production-constructors.json");
+		expect(readMarker<ProductionConstructorsMarker>(paths, "production-constructors.json")).toEqual({
+			manager: TerminalTaskManager.name,
+			coordinator: TerminalDeliveryCoordinator.name,
+		});
 		const start = await first.request("prompt", { message: "/terminal-recovery-start passive" });
 		expect(start.success).toBe(true);
 		await waitForMarker(paths, "started.json");
@@ -263,7 +281,9 @@ describe("terminal completion delivery recovery", () => {
 		await first.terminate();
 		const replacement = launch(paths, sessionFile);
 		const hydrated = await replacement.request("get_messages");
-		expect(terminalMessages(hydrated, delivered.completionId!)).toHaveLength(1);
+		const hydratedMessages = terminalMessages(hydrated, delivered.completionId!);
+		expect(hydratedMessages).toHaveLength(1);
+		expect(hydratedMessages[0]?.details).toEqual(liveMessages[0]?.details);
 		expect(persistedTerminalMessages(sessionFile, delivered.completionId!)).toHaveLength(1);
 	});
 
@@ -317,6 +337,8 @@ describe("terminal completion delivery recovery", () => {
 		await crashing.waitForExit();
 		expect(readSnapshot(paths, pending.id)).toMatchObject({ deliveryState: "claimed", completionId: pending.completionId });
 		expect(persistedTerminalMessages(sessionFile, pending.completionId!)).toHaveLength(0);
+		await waitForClaimLeaseExpiry(paths, pending.id);
+		expect(readSnapshot(paths, pending.id)).toMatchObject({ deliveryState: "claimed", completionId: pending.completionId });
 
 		resetIndexMarkers(paths);
 		const replacement = launch(paths, sessionFile);
@@ -336,6 +358,8 @@ describe("terminal completion delivery recovery", () => {
 		await crashing.waitForExit();
 		expect(readSnapshot(paths, pending.id)).toMatchObject({ deliveryState: "claimed", completionId: pending.completionId });
 		expect(persistedTerminalMessages(sessionFile, pending.completionId!)).toHaveLength(1);
+		await waitForClaimLeaseExpiry(paths, pending.id);
+		expect(readSnapshot(paths, pending.id)).toMatchObject({ deliveryState: "claimed", completionId: pending.completionId });
 
 		resetIndexMarkers(paths);
 		const replacement = launch(paths, sessionFile);
@@ -392,8 +416,8 @@ describe("terminal completion delivery recovery", () => {
 		expect(checked.content).toHaveLength(1);
 		expect(checked.content[0].text).toContain("benign completion");
 		expect(readSnapshot(paths, pending.id)).toMatchObject({ deliveryState: "suppressed", observedAt: expect.any(Number) });
-		rmSync(join(paths.markerDir, "busy"));
-		await client.request("prompt", { message: "/terminal-recovery-settle" });
+		expect(existsSync(join(paths.markerDir, "race-idle"))).toBe(true);
+		expect(terminalMessages(await client.request("get_messages"), pending.completionId!)).toHaveLength(0);
 		expect(persistedTerminalMessages(sessionFile, pending.completionId!)).toHaveLength(0);
 	});
 
@@ -408,8 +432,8 @@ describe("terminal completion delivery recovery", () => {
 		expect(waited.content).toHaveLength(1);
 		expect(waited.content[0].text).toContain("benign completion");
 		expect(readSnapshot(paths, pending.id)).toMatchObject({ deliveryState: "suppressed", consumedAt: expect.any(Number) });
-		rmSync(join(paths.markerDir, "busy"));
-		await client.request("prompt", { message: "/terminal-recovery-settle" });
+		expect(existsSync(join(paths.markerDir, "race-idle"))).toBe(true);
+		expect(terminalMessages(await client.request("get_messages"), pending.completionId!)).toHaveLength(0);
 		expect(persistedTerminalMessages(sessionFile, pending.completionId!)).toHaveLength(0);
 	});
 

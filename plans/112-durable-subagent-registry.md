@@ -211,6 +211,68 @@ Before adoption work, settle these interfaces with the coordinating owner:
 
 Real feasibility, transition crash tests, registry, adoption, delivery, Activity fixture, bundle/native/full/integration/visual verification, final top integration, and parent review remain pending. Do not mark this plan DONE. If experiments establish that full running-headless recovery requires a private Pi patch, stop that scope and request the explicit visible-plus-queued v1 decision; absence of an existing durable transport is not such evidence.
 
+## Execution checkpoint: real-process experiment stopped, not a gate pass
+
+Continued from `94b93134` with the heavy lane assigned. No production file changed. Added `test/integration/subagent-recovery.test.ts` and its synthetic provider/parent extension under `test/integration/fixtures/`.
+
+### Experiment boundary and tradeoffs
+
+The Vitest process acts as an independent execution supervisor and retains the **real** `createPiChildSpawner` / `createPaneChildSpawner` handles. Separate, supervised local Pi **0.84.4** processes act as replaceable controllers. The controller uses public `session_start` / `session_shutdown`, RPC `new_session`, and a fixture shutdown command. Reload here means **graceful Pi process exit and fresh process startup**, not a claim about the SumoCode host's `/reload` path. Crash uses `signalVerifiedProcessTree(..., "SIGKILL")`, followed by tree-emptiness proof before restart.
+
+The visible terminal host is a supervised node-pty adapter, not an operator Herdr workspace. The real pane backend creates its private task files; an isolated launcher runs explicit local Pi TUI with the real `installTaskModeAutoExit`. This proves its PTY/task-mode transport, not external Herdr pane discovery or the retained SumoCode host launcher. The synthetic provider holds its stream until a private release artifact appears; no provider network or operator config is needed. Every test has private HOME/agent/workspace/session paths. The backend spawn injection preserves its public JSON parser and stdin prompt transport but intentionally replaces provider/provenance discovery with the explicit fixture.
+
+The supervisor journals backend events; a replacement Pi controller reads that journal from disk. A single broker fences control by controller generation and checks the child's OS start/command identity. A live contender and stale queued request are refused. Headless cells use two already-running children: one is cancelled through the adopted backend handle, the other completes **after** replacement. Visible cells observe actual task-mode steering consumption, the steered response, then graceful close and backend settlement. Wrong-start signalling is rejected without harming the real child.
+
+**Limits:** this broker is a test-local single writer, not the durable registry/lease protocol. Supervisor death, birth identity for the supervisor itself, disk CAS/lease expiry, launch cut points, bounded journal rotation, exact-once session insertion, and real host/pane adoption remain unproved. Backend handles remain in the independent supervisor; there is no claim that closed pipes can be reopened by PID. No private Pi patch is indicated by these results.
+
+### Reconciled six-cell matrix
+
+Second supervised invocation: **4 passed, 2 failed**, all six executed. The classifications below apply **only to the demonstrated retained-supervisor contract**, not to current production support. `unsupported` means this candidate failed its safety gate, **not** that Pi makes recovery impossible. No `queued-only` narrowing was selected or proved.
+
+1. **Headless / factory replacement — unsupported (gate failure).** Real `new_session`, fenced takeover, cancellation and post-replacement completed-result recovery succeeded. `afterEach` then failed closed with `unsafe cleanup`. Evidence suffix `wkleJM`.
+2. **Headless / host-Pi reload — recoverable at the experimental seam.** Graceful former-controller exit, verified empty former tree, fresh controller, stale/live contender rejection, actual cancellation of one preserved child and result recovery from the other passed. Evidence suffix `jNiqos`.
+3. **Headless / parent crash-restart — recoverable at the experimental seam.** Verified SIGKILL/empty former tree, fresh controller, exclusive control, cancellation, later completed result and cleanup passed. Evidence suffix `Gmi7U2`.
+4. **Visible / factory replacement — recoverable at the experimental seam.** Real `new_session`, unchanged verified PTY tree, fenced steering, `recovered-steered-result` from real task mode, graceful close, replay and cleanup passed. Evidence suffix `P0t1kN`.
+5. **Visible / host-Pi reload — unsupported (gate failure).** Cross-process control/result recovery succeeded, then `afterEach` failed closed with `unsafe cleanup`. Evidence suffix `102vBE`.
+6. **Visible / parent crash-restart — recoverable at the experimental seam.** Verified controller SIGKILL/restart, unchanged PTY identity, exclusive steering/close, recovered result and cleanup passed. Evidence suffix `i05tdE`.
+
+The two cleanup failures do **not** include enough per-tree diagnostics to prove why `terminateProcessTree` refused. A graceful-exit race between the emptiness check and signal verification is a hypothesis, not a diagnosis. Do not weaken identity checks or treat refusal as success. Failed cleanup also leaves the fixture's shared tracking arrays for the following cell; this must be fixed/isolated before trusting a subsequent all-green matrix.
+
+### Exact local evidence and verification
+
+Evidence root: `/tmp/sumocode-plan112-lane-nsUbtM/`. Per-cell directories are `sumocode-plan112-proof-<suffix>/`; each contains `parents.jsonl`, `identities.jsonl`, `requests.jsonl`, `ownership.jsonl`, `controls.jsonl`, `events.jsonl`, `recovered.jsonl`, and task artifacts where applicable. Successful cleanup writes `audit.jsonl`. **Historical `verdict.jsonl` files were written before cleanup and are not authoritative verdicts.** The checked-in fixture now calls this output `observation.jsonl` and explicitly says cleanup is pending; this reporting-only correction has static verification but no third heavy run.
+
+- `preflight.log`: initial shared-TMP preflight was blocked by stale state and a cross-worktree `node_modules` symlink. Preserved the symlink in the private lane root and installed locked dependencies locally. Fresh-private-TMP preflight passed; no shared evidence was purged.
+- `feasibility-1.log`: command below executed all six, 3 passed / 3 visible failed because the fixture omitted task-mode's response trailing newline. Harness: **zero survivors across 22 groups**.
+- `feasibility-2.log`: after the newline correction and added headless cancellation proof, 4 passed / 2 cleanup failures as above. Harness: **zero survivors across 25 groups**.
+- `final-tree-audit.json`: read-only recheck of **all 47 recorded process trees from both runs: zero nonempty trees**. No PID-only signal was used by that audit. Both failed roots remain retained.
+- `lightweight.log`: **139 passed**, one real-bash case deliberately unselected, covering both backends and task mode.
+- `build-final.log`: `pnpm exec tsc --noEmit && pnpm build` passed. The private `tsconfig-proof.json` additionally typechecks both integration files (the repo tsconfig normally includes only `src`); passed.
+- `lint-full.log`: `pnpm lint` passed. Focused fixture lint and `git diff --check` passed.
+- Full unit/integration/bundle/native/visual gates: **not run** after the Step 1 STOP. No UI change or golden promotion. Plan remains **not DONE**.
+
+Heavy command (both invocations, logs numbered above):
+
+```sh
+env -u NODE_PATH -u NODE_COMPILE_CACHE TMPDIR=/tmp/sumocode-plan112-lane-nsUbtM \
+  pnpm vitest run test/integration/subagent-recovery.test.ts --fileParallelism=false -t 'feasibility:'
+```
+
+### STOP and next authorized scope
+
+The same feasibility command failed twice following a reasonable fixture correction. Per this plan's STOP rule, do not proceed to registry/adoption and do not schedule another heavy retry without the coordinating owner's decision. This is **not** the private-Pi-protocol STOP and does not justify a visible-plus-queued v1 narrowing.
+
+Next bounded slice: give cleanup failures exact tree/status evidence, isolate per-cell tracking even on failure while preserving roots, distinguish a proven concurrent graceful exit from unsafe identity, and keep the final matrix verdict after cleanup. Then obtain a fresh heavy lane and rerun all six. Promote the independent supervisor from a test-process role to a tracked SumoCode-owned fixture with its own durable identity/control journal and failure boundary before treating this as the complete Step 1 gate.
+
+Interfaces for follow-up (no Plan106/111 file edits):
+
+- **Lifecycle:** existing public Pi shutdown reason/start reason and new-session RPC suffice for this experiment. `/resume`, `/fork`, actual host `/reload`, and host death still need their later acceptance cases; request a Plan111 boundary only if existing events prove insufficient.
+- **Processes:** consume `ProcessTreeIdentity`, `captureTreeVerification`, `identityMatches`, `signalVerifiedProcessTree`, `terminateProcessTree`, and `isTreeEmpty` as-is. No terminal manager/store/API changes.
+- **Supervisor/protocol:** persist supervisor + child identity before release; retain the existing backend handle/parser; generation-fence control at effect time; recover bounded append-only events/results. Prove what happens when the supervisor, not just the Pi controller, dies.
+- **Registry/delivery:** only after the gate passes, implement versioned private records, revision CAS/writer lease, adoption and completion-ID insertion acknowledgement. The fixture's generation broker is not a replacement for those interfaces.
+
+Review-ready gate: loaded the bundled `review-ready/contract.md`; changed seam is test-only Pi-controller replacement against retained production backends. Trace: session event → fenced broker → backend control → real Pi/task-mode result → private journal replay → verified cleanup. Caller-knowledge/deletion/ownership/test-surface checks found the explicit prototype limitations above; kept the two-file fixture rather than introducing production abstractions. Simplification/static checks completed. **Blocked, not review-ready:** full feasibility and cleanup isolation remain red; no publication requested.
+
 ## Maintenance notes
 
 Recovery capability must be stated per backend and replacement type. Do not generalize visible-pane evidence into a claim that pipe-based headless runs are recoverable.

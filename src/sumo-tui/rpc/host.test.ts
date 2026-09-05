@@ -1,12 +1,16 @@
 import type { RpcCommand, RpcResponse, RpcSessionState } from "@earendil-works/pi-coding-agent";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { PassThrough } from "node:stream";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatMessageViewModel } from "../transcript/view-model.js";
 import { SUMOCODE_RELOAD_EXIT_CODE } from "../../commands/reload.js";
-import { RpcChildExitError } from "./client.js";
+import { RpcChildExitError, SumoRpcClient } from "./client.js";
 import { RpcHostOverlayManager } from "./host-overlays.js";
+import { RpcHostLifecycle } from "./host-lifecycle.js";
 import { RpcHostControls, type RpcAvailableModel } from "./controls.js";
 import { RpcHostStateStore } from "./state.js";
 import {
@@ -802,6 +806,7 @@ function exitDeps(overrides: Partial<RpcHostExitDependencies> = {}): RpcHostExit
 		stateStore: { getSnapshot: () => asNever({ isStreaming: true, isCompacting: true }) },
 		notifications: { notify: vi.fn() },
 		requestRender: vi.fn(),
+		recordExitCode: vi.fn(),
 		stopHost: vi.fn(async () => undefined),
 		exit: vi.fn(),
 		updateRuntimeState: vi.fn(),
@@ -1111,6 +1116,103 @@ describe("createToolsExpandToggleHandler (app.tools.expand)", () => {
 });
 
 describe("RPC host client-exit shutdown", () => {
+	it.each(["quit", "SIGTERM", "SIGINT", "reload", "runtime-return", "natural-return", "delay"])("retains an observed crash across %s during the notification delay", async (request) => {
+		vi.useFakeTimers();
+		try {
+			const signals = new EventEmitter();
+			const exit = vi.fn();
+			const childStop = vi.fn(async () => undefined);
+			const lifecycle = new RpcHostLifecycle({ env: {}, signals, input: {}, stderr: { write: () => true }, exit });
+			let finish!: (code: number) => void;
+			const returned = new Promise<number>((resolve) => { finish = resolve; });
+			let runtimeExit!: (code: number) => void;
+			const runtimeReturned = new Promise<number>((resolve) => { runtimeExit = resolve; });
+			const runtimeStop = vi.fn((code = 0) => runtimeExit(code));
+			const running = lifecycle.start(async () => {
+				lifecycle.ownClient({ stop: childStop, stderr: "" });
+				lifecycle.childAdopted();
+				lifecycle.ownRuntime({
+					start: async () => undefined, stop: runtimeStop, waitForExit: () => runtimeReturned,
+					adoptRetainedTerminal: vi.fn(), startInput: vi.fn(), markEditorReady: vi.fn(), markCommandReady: vi.fn(),
+				});
+				return returned;
+			});
+			const handle = createRpcExitHandler(exitDeps({
+				modals: { close: () => { expect(lifecycle.exitCode).toBe(1); } },
+				recordExitCode: (code) => lifecycle.recordExitCode(code),
+				stopHost: (code) => lifecycle.stop(code, "child-exit"),
+				exit: (code) => lifecycle.exit(code),
+				// SAFETY: the handler passes only a zero-argument callback and delay, as in host wiring.
+				setTimeout: ((callback: () => void, delay: number) => lifecycle.scheduleTimeout("child-exit", callback, delay)) as typeof setTimeout,
+				shutdownDelayMs: 750,
+			}));
+			handle(new RpcChildExitError("crash", { code: 2, signal: null }));
+			expect(childStop).not.toHaveBeenCalled();
+			if (request === "SIGTERM" || request === "SIGINT") signals.emit(request);
+			else if (request === "reload") handle(new RpcChildExitError("reload", { code: 100, signal: null }));
+			else if (request === "delay") {
+				await vi.advanceTimersByTimeAsync(749);
+				expect(childStop).not.toHaveBeenCalled();
+			} else if (request === "natural-return") finish(0);
+			else if (request === "runtime-return") runtimeExit(0);
+			else void lifecycle.stop(0, request);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(childStop).toHaveBeenCalledOnce();
+			expect(runtimeStop).toHaveBeenCalledExactlyOnceWith(1, { preserveTerminal: false });
+			await vi.advanceTimersByTimeAsync(1);
+			expect(await running).toBe(1);
+			expect(await lifecycle.waitForExit()).toBe(1);
+			lifecycle.exit(0);
+			expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+			await vi.advanceTimersByTimeAsync(750);
+			expect(exit).toHaveBeenCalledOnce();
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.useRealTimers(); }
+	});
+
+	it.each([0, 130, 100])("keeps deliberate shutdown %i from becoming a crash through the real client", async (code) => {
+		vi.useFakeTimers();
+		try {
+			// SAFETY: nullable Node exit fields begin live and change when the fake child exits.
+			const child = Object.assign(new EventEmitter(), {
+				pid: 1234, exitCode: null as number | null, signalCode: null as NodeJS.Signals | null,
+				stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
+				kill: vi.fn(() => {
+					queueMicrotask(() => {
+						child.signalCode = "SIGTERM";
+						child.emit("exit", null, "SIGTERM");
+						child.emit("close", null, "SIGTERM");
+					});
+					return true;
+				}),
+			});
+			// SAFETY: this event/stream fake implements the child surface consumed by SumoRpcClient.
+			const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: child as ChildProcessWithoutNullStreams & typeof child });
+			const exit = vi.fn();
+			const lifecycle = new RpcHostLifecycle({ env: {}, signals: new EventEmitter(), input: {}, stderr: { write: () => true }, exit });
+			const notifications = { notify: vi.fn() };
+			const handle = createRpcExitHandler(exitDeps({
+				notifications,
+				recordExitCode: (value) => lifecycle.recordExitCode(value),
+				stopHost: (value) => lifecycle.stop(value, "child-exit"),
+				exit: (value) => lifecycle.exit(value),
+			}));
+			const onExit = vi.fn(handle);
+			lifecycle.ownSubscription("client-exit", client.onExit(onExit));
+			lifecycle.ownClient(client);
+			await client.start(() => lifecycle.childAdopted());
+			if (code === 100) handle(new RpcChildExitError("reload", { code: 100, signal: null }));
+			else void lifecycle.stop(code, "request");
+			await vi.advanceTimersByTimeAsync(1);
+			expect(await lifecycle.waitForExit()).toBe(code);
+			lifecycle.exit(0);
+			expect(exit).toHaveBeenCalledExactlyOnceWith(code);
+			expect(onExit).not.toHaveBeenCalled();
+			expect(notifications.notify).not.toHaveBeenCalled();
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.useRealTimers(); }
+	});
+
 	it("closes modals, drains overlays without promotion, clears streaming state, and notifies with a bounded message", async () => {
 		const modals = { close: vi.fn() };
 		const overlays = new RpcHostOverlayManager();

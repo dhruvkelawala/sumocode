@@ -209,10 +209,13 @@ export class RpcHostLifecycle {
 
 	public waitForExit(): Promise<number> { return this.exitPromise; }
 
+	/** First root intent wins, even when notification visibility delays cleanup. */
+	public recordExitCode(code: number): void { this.code ??= code; }
+
 	public stop(code = 0, reason = "exit"): Promise<void> {
 		if (this.stopPromise) return this.stopPromise;
-		logDiagnostic("rpc_host_stop", { code, reason, phase: this.currentPhase });
-		this.code = code;
+		this.recordExitCode(code);
+		logDiagnostic("rpc_host_stop", { code: this.code, reason, phase: this.currentPhase });
 		this.currentPhase = "stopping";
 		// Publish idempotency before runtime.stop can resolve waiters or re-enter.
 		let resolveStop!: () => void;

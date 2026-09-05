@@ -592,6 +592,7 @@ export interface RpcHostExitDependencies {
 	readonly stateStore: Pick<RpcHostStateStore, "getSnapshot">;
 	readonly notifications: Pick<NotificationCenter, "notify">;
 	readonly requestRender: () => void;
+	readonly recordExitCode: (code: number) => void;
 	readonly stopHost: (code: number) => Promise<void>;
 	readonly exit: (code: number) => void;
 	readonly updateRuntimeState: (state: RpcHostChromeState) => void;
@@ -616,8 +617,9 @@ export interface RpcHostExitDependencies {
  * must propagate that same code and skip the scary "exited unexpectedly"
  * notification, which would otherwise flash on every routine reload.
  *
- * For any other exit, the runtime is stopped with a nonzero exit code after a
- * short delay so the terse notification is actually visible before the
+ * For any other exit, record the nonzero root exit code immediately. Only
+ * cleanup waits for the notification delay; urgent shutdown may cut it short
+ * without losing the failure. The terse notification stays visible before the
  * terminal is restored -- a zombie shell with a dead child behind it cannot
  * do anything useful, so keeping it alive indefinitely is not an option.
  */
@@ -627,6 +629,7 @@ export function createRpcExitHandler(deps: RpcHostExitDependencies): (error: Err
 	const exitCode = deps.exitCode ?? 1;
 	return (error: Error): void => {
 		const reloadCode = error instanceof RpcChildExitError && error.code === SUMOCODE_RELOAD_EXIT_CODE ? error.code : undefined;
+		deps.recordExitCode(reloadCode ?? exitCode);
 		deps.modals.close();
 		deps.overlays.drain();
 		deps.selector?.close();
@@ -1557,6 +1560,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		stateStore,
 		notifications,
 		requestRender,
+		recordExitCode: (code) => lifecycle.recordExitCode(code),
 		stopHost: (code) => lifecycle.stop(code, "child-exit"),
 		exit: (code) => lifecycle.exit(code),
 		// SAFETY: createRpcExitHandler only calls this private adapter with a

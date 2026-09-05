@@ -1,17 +1,21 @@
+import { randomUUID } from "node:crypto";
 import {
 	chmodSync,
 	existsSync,
 	mkdirSync,
 	readFileSync,
+	realpathSync,
 	renameSync,
 	writeFileSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
+import { systemProcessTree, type ProcessTreeOperations, type ProcessTreeIdentity, type ProcessTreeVerification } from "../background-tasks/process-tree.js";
 import type {
 	AgentPanePlacement,
 	PaneRef,
 	PiExecLike,
 	TerminalHost,
+	StartedAgentPane,
 } from "../terminal-host/types.js";
 import {
 	buildVisibleAgentCommand,
@@ -49,8 +53,28 @@ interface PaneBackendFs extends PrivateArtifactFs {
 	chmodSync(path: string, mode: number): void;
 	mkdirSync(path: string, options?: { recursive?: boolean; mode?: number }): void;
 	readFileSync(path: string, encoding: "utf8"): string;
+	realpathSync(path: string): string;
 	renameSync(source: string, target: string): void;
 	writeFileSync(path: string, contents: string, options?: { mode?: number; flag?: string }): void;
+}
+
+export interface VisibleLaunchEvidence {
+	readonly taskDir: string;
+	readonly nonce: string;
+	readonly process: { readonly identity: ProcessTreeIdentity; readonly verification: ProcessTreeVerification };
+	readonly pane: StartedAgentPane;
+}
+
+/** Synchronous durable fences; the retained owner keeps the handle even if ready rejects. */
+export interface VisibleLaunchGate {
+	/** Persist starting, task path and supervisor/lease authority before pane creation. */
+	beforeSpawn(launch: { readonly taskDir: string; readonly nonce: string }): void;
+	/** Persist wrapper tree + pane references while the launcher is still held. */
+	wrapperBorn(evidence: VisibleLaunchEvidence): void;
+	/** Recheck durable authority after OS inspection, immediately before release. */
+	beforeRelease(): void;
+	/** Retained owner owns verified cancellation; pane IDs never authorize a signal. */
+	interrupt(): void;
 }
 
 export interface PaneChildOptions {
@@ -66,6 +90,7 @@ export interface PaneChildOptions {
 	placement: AgentPanePlacement;
 	readonly tools?: readonly string[];
 	readonly appendSystemPrompt?: string;
+	readonly launchGate?: VisibleLaunchGate;
 }
 
 export interface PaneBackendDependencies {
@@ -78,6 +103,7 @@ export interface PaneBackendDependencies {
 	/** Steer-consumption acknowledgement budget. */
 	sendAckTimeoutMs?: number;
 	resolveLauncher?: () => string;
+	processTree?: ProcessTreeOperations;
 }
 
 const nodeFs: PaneBackendFs = {
@@ -86,6 +112,7 @@ const nodeFs: PaneBackendFs = {
 	chmodSync: chmodSync,
 	mkdirSync,
 	readFileSync,
+	realpathSync,
 	renameSync,
 	writeFileSync,
 };
@@ -101,7 +128,7 @@ const writeNewPrivateFile = (fs: PaneBackendFs, path: string, contents: string):
 };
 
 /**
- * Allocate this child's private task directory and return its canonical
+ * Allocate this child's private task directory and return its absolute
  * spelling. Creation is exclusive, so a pre-existing entry at the predicted
  * `id-timestamp` path — including an adversarial symlink — fails closed
  * instead of sharing or redirecting the task directory.
@@ -138,7 +165,9 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	// Owner-only allocation with an exclusive create: the task dir carries the
 	// prompt and every steering message, and a pre-existing or symlinked path
 	// must fail closed rather than be reused.
-	const taskDir = allocatePrivateTaskDir(fs, baseDir, `${options.id}-${now()}`);
+	const allocatedDir = allocatePrivateTaskDir(fs, baseDir, `${options.id}-${now()}`);
+	// Registry paths must have their real spelling (not macOS's /tmp alias).
+	const taskDir = options.launchGate ? fs.realpathSync(allocatedDir) : allocatedDir;
 	const paths = visibleTaskPathsInDir(taskDir);
 	// Owner-only: these directories carry the prompt and every steering message,
 	// which routinely contain source snippets. Default /tmp modes (0755) would
@@ -166,6 +195,13 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		thinking: options.thinking,
 		tools: options.tools,
 	};
+	const gate = options.launchGate;
+	if (gate && (!isAbsolute(commandOptions.launcher) || !["darwin", "linux"].includes(process.platform))) {
+		throw new Error("visible launch gate requires absolute SumoCode provenance and a POSIX wrapper");
+	}
+	const nonce = gate ? randomUUID() : "";
+	const bornFile = join(taskDir, "launch.born");
+	const releaseFile = join(taskDir, "launch.release");
 	const agentCommand = buildVisibleAgentCommand(commandOptions);
 	// Keep stdout attached directly to the pane PTY. Piping combined output
 	// through `tee` makes `sumocode` observe non-TTY stdout and select its direct,
@@ -199,13 +235,14 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	// clipped by the host or shell editor, and they expose task internals in the
 	// visible pane. Herdr only receives this short script path.
 	const script = [
-		"#!/usr/bin/env bash",
+		gate ? "#!/bin/bash" : "#!/usr/bin/env bash",
 		"set -u",
+		...(gate ? visibleWrapperGate(taskDir, nonce, bornFile, releaseFile) : []),
 		exitGuard,
 		`( ${agentCommand} ) 2>> ${shellEscape(paths.logFile)}`,
 	].join("\n");
 	fs.writeFileSync(paths.scriptFile, script, { mode: 0o700, flag: "wx" });
-	const shellCommand = `exec ${shellEscape(paths.scriptFile)}`;
+	const shellCommand = `exec ${shellEscape(paths.scriptFile)}${gate ? ` ${shellEscape(nonce)}` : ""}`;
 
 	let emitEvent: ((event: SubagentEvent) => void) | undefined;
 	let pane: PaneRef | undefined;
@@ -214,7 +251,21 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	let settled = false;
 	let steerSeq = 0;
 	let markReady = (): void => undefined;
-	const ready = new Promise<void>((resolve) => { markReady = resolve; });
+	let refuseReady = (_error: Error): void => undefined;
+	const ready = new Promise<void>((resolve, reject) => { markReady = resolve; refuseReady = reject; });
+	void ready.catch(() => undefined);
+	let subscribed = false;
+	let released = !gate;
+	let launchBlocked = false;
+	let launchTimer: ReturnType<typeof setInterval> | undefined;
+	let startedPane: StartedAgentPane | undefined;
+	const operations = dependencies.processTree ?? systemProcessTree;
+	const blockLaunch = (error: Error): void => {
+		launchBlocked = true;
+		if (launchTimer) clearInterval(launchTimer);
+		launchTimer = undefined;
+		refuseReady(error);
+	};
 	const pendingSteeringAcks = new Map<string, {
 		readonly timer: ReturnType<typeof setInterval>;
 		readonly resolve: () => void;
@@ -347,6 +398,11 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	};
 
 	function interrupt(): void {
+		if (gate) {
+			if (!released) blockLaunch(new Error("visible launch interrupted before release"));
+			gate.interrupt();
+			return;
+		}
 		if (settled || interrupted) return;
 		interrupted = true;
 		clearWatcher();
@@ -368,6 +424,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	 */
 	const send = (text: string): Promise<void> => {
 		if (settled || interrupted) return Promise.reject(steeringSettlementError());
+		if (!released) return Promise.reject(new Error("visible launch has not been released"));
 		const seq = ++steerSeq;
 		const finalPath = join(paths.controlDir, `steer-${seq}.txt`);
 		// 0600 on the temp file: rename preserves the mode, so the published file
@@ -411,6 +468,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 
 	/** Ask the child's task-mode watcher to persist its response and exit. */
 	const requestClose = (): void => {
+		if (!released) throw new Error("visible launch has not been released");
 		try {
 			writeNewPrivateFile(fs, join(paths.controlDir, CLOSE_REQUEST_FILE), "1");
 		} catch (error) {
@@ -424,16 +482,74 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		}
 	};
 
+	const watchLaunchGate = (launchGate: VisibleLaunchGate): void => {
+		let elapsed = 0;
+		launchTimer = setInterval(() => {
+			elapsed += 50;
+			try {
+				if (elapsed >= 30_000) throw new Error("visible wrapper birth/release timed out; tracking evidence retained");
+				if (!startedPane) return;
+				const stat = validatedArtifactStat(fs, bornFile, taskDir, "wrapper birth");
+				if (!stat) return;
+				assertPrivateDir(fs, taskDir, "visible launch directory");
+				const birth = fs.readFileSync(bornFile, "utf8");
+				if (!birth) return;
+				const fields = birth.split("\n");
+				const [token, pidText, groupText, birthTime, end] = fields;
+				const pid = Number(pidText);
+				if (birth.length > 4096 || token !== nonce || !/^[1-9]\d*$/.test(pidText ?? "")
+					|| !Number.isSafeInteger(pid) || groupText?.trim() !== pidText || !birthTime?.trim() || end !== ""
+					|| fields.length !== 5) throw new Error("invalid visible wrapper birth/nonce");
+				const processStartTime = operations.captureStartTime(pid);
+				if (!processStartTime?.includes(paths.scriptFile) || !processStartTime.includes(nonce)) throw new Error("visible wrapper command identity refused");
+				const identity = { pid, processGroupId: pid, processStartTime };
+				const verification = operations.captureTreeVerification?.(identity);
+				if (!verification?.members.some((member) => member.pid === pid && member.processStartTime === birthTime.trim())) throw new Error("visible wrapper birth identity refused");
+				const assertLive = (): void => {
+					if (operations.identityMatches(identity) !== "same" || operations.verificationMatches?.(identity, verification) !== "same") throw new Error("visible wrapper identity is ambiguous");
+				};
+				assertLive();
+				if (validatedArtifactStat(fs, releaseFile, taskDir, "wrapper release")) throw new Error("visible wrapper release already exists");
+				launchGate.wrapperBorn({ taskDir, nonce, process: { identity, verification }, pane: structuredClone(startedPane) });
+				if (launchBlocked || options.signal?.aborted) throw new Error("visible launch interrupted before release");
+				assertLive();
+				assertPrivateDir(fs, taskDir, "visible launch directory");
+				assertPrivateArtifact(fs, bornFile, taskDir, "wrapper birth");
+				if (fs.readFileSync(bornFile, "utf8") !== birth) throw new Error("visible wrapper birth changed before release");
+				launchGate.beforeRelease();
+				if (launchBlocked || options.signal?.aborted) throw new Error("visible launch interrupted before release");
+				writeNewPrivateFile(fs, releaseFile, nonce);
+				released = true;
+				clearInterval(launchTimer);
+				launchTimer = undefined;
+				markReady();
+				pollTimer = setInterval(poll, dependencies.pollIntervalMs ?? RESPONSE_POLL_INTERVAL_MS);
+				pollTimer.unref?.();
+				poll();
+			} catch (error) { blockLaunch(new Error(errorText(error))); }
+		}, 50);
+		launchTimer.unref?.();
+	};
+
 	const events = (emit: (event: SubagentEvent) => void): void => {
+		if (gate && subscribed) throw new Error("retained backend already subscribed");
+		subscribed = true;
 		emitEvent = emit;
 		emit({ kind: "run-started" });
 		void (async () => {
 			const startAgentPane = options.host.startAgentPane;
 			if (!startAgentPane) {
+				if (gate) { blockLaunch(new Error("terminal host does not support visible agent panes")); return; }
 				settle({ kind: "run-settled", outcome: { kind: "failed", errorText: `terminal host ${options.host.kind} does not support visible agent panes` } });
 				return;
 			}
 			try {
+				if (gate) {
+					if (launchBlocked || options.signal?.aborted) throw new Error("visible launch interrupted before spawn");
+					gate.beforeSpawn({ taskDir, nonce });
+					if (launchBlocked || options.signal?.aborted) throw new Error("visible launch interrupted before spawn");
+					watchLaunchGate(gate);
+				}
 				const result = await startAgentPane.call(options.host, options.pi, {
 					name: options.name,
 					cwd: options.cwd,
@@ -441,10 +557,12 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 					placement: options.placement,
 				});
 				if (!result.ok) {
+					if (gate) { blockLaunch(new Error(result.error)); return; }
 					settle({ kind: "run-settled", outcome: { kind: "failed", errorText: result.error } });
 					return;
 				}
 				pane = result.pane;
+				startedPane = result;
 				emit({
 					kind: "pane-attached",
 					pane: {
@@ -454,6 +572,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 						paneId: result.paneId,
 					},
 				});
+				if (gate) return;
 				if (interrupted) {
 					await closeInterruptedPane();
 					return;
@@ -462,9 +581,10 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 				pollTimer.unref?.();
 				poll();
 			} catch (error) {
+				if (gate) { blockLaunch(new Error(errorText(error))); return; }
 				settle({ kind: "run-settled", outcome: { kind: "failed", errorText: errorText(error) } });
 			}
-		})().finally(markReady);
+		})().finally(() => { if (!gate) markReady(); });
 	};
 
 	if (options.signal?.aborted) interrupted = true;
@@ -472,5 +592,34 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 
 	return { events, interrupt, ready, send, requestClose };
 };
+
+// The wrapper, not Pi/provider initialization, is the first born process. Its
+// dedicated group stays anchored in bash while the launcher runs as a child.
+// Gate failure precedes exit traps: timeout is NOT a task result or death proof.
+function visibleWrapperGate(taskDir: string, nonce: string, bornFile: string, releaseFile: string): string[] {
+	const statArgs = process.platform === "darwin" ? "-f '%Lp'" : "-c '%a'";
+	return [
+		`[ "\${1-}" = ${shellEscape(nonce)} ] || exit 125`,
+		`__sumo_private() { [ ! -L "$1" ] && [ -O "$1" ] && [ "$(/usr/bin/stat ${statArgs} "$1")" = "$2" ]; }`,
+		`[ -d ${shellEscape(taskDir)} ] && __sumo_private ${shellEscape(taskDir)} 700 || exit 125`,
+		`__sumo_birth=$(/bin/ps -p "$$" -o lstart=) || exit 125`,
+		`__sumo_group=$(/bin/ps -p "$$" -o pgid=) || exit 125`,
+		`( umask 077; set -C; printf '%s\\n' "$1" "$$" "$__sumo_group" "$__sumo_birth" > ${shellEscape(bornFile)} ) || exit 125`,
+		`__sumo_released=0`,
+		`for ((__sumo_wait=0; __sumo_wait<300; __sumo_wait++)); do`,
+		`  [ -d ${shellEscape(taskDir)} ] && __sumo_private ${shellEscape(taskDir)} 700 || exit 125`,
+		`  if [ -e ${shellEscape(releaseFile)} ] || [ -L ${shellEscape(releaseFile)} ]; then`,
+		`    [ -f ${shellEscape(releaseFile)} ] && __sumo_private ${shellEscape(releaseFile)} 600 || exit 125`,
+		`    __sumo_release=$(< ${shellEscape(releaseFile)})`,
+		`    if [ -n "$__sumo_release" ]; then`,
+		`      [ "$__sumo_release" = "$1" ] || exit 125`,
+		`      __sumo_released=1; break`,
+		`    fi`,
+		`  fi`,
+		`  /bin/sleep 0.1`,
+		`done`,
+		`[ "$__sumo_released" = 1 ] || exit 125`,
+	];
+}
 
 export const spawnPaneChild = createPaneChildSpawner();

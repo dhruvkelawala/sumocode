@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { buildVisibleTaskPaths } from "../background-tasks/visible-spawn.js";
 import type { TerminalHost } from "../terminal-host/types.js";
 import { type PrivateArtifactStat } from "../private-artifact.js";
-import { createPaneChildSpawner } from "./backend-pane.js";
+import { createPaneChildSpawner, type VisibleLaunchEvidence, type VisibleLaunchGate } from "./backend-pane.js";
+import type { ProcessTreeOperations } from "../background-tasks/process-tree.js";
 import type { SubagentEvent } from "./domain.js";
 
 class FakeFs {
@@ -21,6 +22,8 @@ class FakeFs {
 	existsSync(path: string): boolean {
 		return this.files.has(path) || this.dirs.has(path) || this.symlinks.has(path);
 	}
+
+	realpathSync(path: string): string { return path; }
 
 	lstatSync(path: string): PrivateArtifactStat {
 		// SAFETY: the returned literals satisfy the PrivateArtifactStat subset the validators consume.
@@ -149,6 +152,312 @@ const createHarness = (
 };
 
 const settledEvents = (events: readonly SubagentEvent[]) => events.filter((event): event is Extract<SubagentEvent, { kind: "run-settled" }> => event.kind === "run-settled");
+
+const createGateHarness = () => {
+	const fs = new FakeFs();
+	const taskDir = "/tmp/subagents/sa-gate-1234";
+	const bornFile = `${taskDir}/launch.born`;
+	const releaseFile = `${taskDir}/launch.release`;
+	let nonce = "";
+	const evidence: VisibleLaunchEvidence[] = [];
+	const operations: ProcessTreeOperations = {
+		captureStartTime: () => `birth /bin/bash ${taskDir}/run.sh ${nonce}`,
+		identityMatches: () => "same",
+		captureTreeVerification: () => ({ members: [{ pid: 4242, processStartTime: "birth" }] }),
+		verificationMatches: () => "same",
+		isTreeEmpty: () => false,
+		signalTree: vi.fn(),
+		waitForTreeEmpty: vi.fn(),
+	};
+	const gate: VisibleLaunchGate = {
+		beforeSpawn(launch) { nonce = launch.nonce; },
+		wrapperBorn(value) { evidence.push(value); },
+		beforeRelease: vi.fn(),
+		interrupt: vi.fn(),
+	};
+	const host: TerminalHost = {
+		kind: "herdr",
+		startAgentPane: vi.fn(async () => startedPane),
+		closePane: vi.fn(), openCommandInSplit: vi.fn(), notify: vi.fn(),
+	};
+	const spawn = createPaneChildSpawner({ fs, now: () => 1234, baseDir: "/tmp/subagents", resolveLauncher: () => "/parent tools/sumocode", processTree: operations });
+	const options = {
+		id: "sa-gate", name: "worker", prompt: "private task prompt", cwd: "/repo", host,
+		pi: { exec: vi.fn() }, placement: { kind: "tab" as const, tabId: "t", direction: "right" as const }, launchGate: gate,
+	};
+	const child = spawn(options);
+	const events: SubagentEvent[] = [];
+	const subscribe = (): void => {
+		if (Symbol.asyncIterator in child.events) throw new Error("expected callback backend");
+		child.events((event) => events.push(event));
+	};
+	const born = (): void => { fs.writeFileSync(bornFile, `${nonce}\n4242\n4242\nbirth\n`, { mode: 0o600 }); };
+	return { fs, taskDir, bornFile, releaseFile, gate, operations, host, child, events, evidence, subscribe, born, options, get nonce() { return nonce; } };
+};
+
+describe("visible launch gate", () => {
+	it("refuses a planted release symlink before the persistence callback", async () => {
+		vi.useFakeTimers();
+		try {
+			const h = createGateHarness();
+			h.subscribe(); h.born();
+			h.fs.symlinks.add(h.releaseFile);
+			const refused = expect(h.child.ready).rejects.toThrow();
+			await vi.advanceTimersByTimeAsync(50);
+			await refused;
+			expect(h.evidence).toEqual([]);
+			expect(h.host.closePane).not.toHaveBeenCalled();
+			expect(settledEvents(h.events)).toEqual([]);
+			expect(h.fs.symlinks.has(h.releaseFile)).toBe(true);
+		} finally { vi.clearAllTimers(); vi.useRealTimers(); }
+	});
+
+	for (const refusal of ["nonce", "birth", "symlink", "mode", "owner", "shared group", "command", "unknown identity", "missing anchors", "extra fields"] as const) {
+		it(`holds launcher release on forged ${refusal} evidence without signalling or settlement`, async () => {
+			vi.useFakeTimers();
+			try {
+				const h = createGateHarness();
+				h.subscribe(); h.born();
+				switch (refusal) {
+					case "nonce": h.fs.files.set(h.bornFile, "forged\n4242\n4242\nbirth\n"); break;
+					case "birth": h.fs.files.set(h.bornFile, `${h.nonce}\n4242\n4242\nreused-pid-birth\n`); break;
+					case "symlink": h.fs.symlinks.add(h.bornFile); break;
+					case "mode": h.fs.widenedModes.add(h.bornFile); break;
+					case "owner": h.fs.foreignUids.add(h.taskDir); break;
+					case "shared group": h.fs.files.set(h.bornFile, `${h.nonce}\n4242\n9999\nbirth\n`); break;
+					case "command": h.operations.captureStartTime = () => "birth unrelated-command"; break;
+					case "unknown identity": h.operations.identityMatches = () => "unknown"; break;
+					case "missing anchors": h.operations.captureTreeVerification = () => undefined; break;
+					case "extra fields": h.fs.files.set(h.bornFile, `${h.nonce}\n4242\n4242\nbirth\nextra\n`); break;
+				}
+				const refused = expect(h.child.ready).rejects.toThrow();
+				await vi.advanceTimersByTimeAsync(50);
+				await refused;
+				expect(h.evidence).toEqual([]);
+				expect(h.fs.files.has(h.releaseFile)).toBe(false);
+				expect(h.fs.files.has(h.bornFile)).toBe(true);
+				expect(h.operations.signalTree).not.toHaveBeenCalled();
+				expect(h.host.closePane).not.toHaveBeenCalled();
+				expect(settledEvents(h.events)).toEqual([]);
+				expect(vi.getTimerCount()).toBe(0);
+			} finally { vi.clearAllTimers(); vi.useRealTimers(); }
+		});
+	}
+
+	it("rejects ready on the bounded birth wait, keeps late pane evidence and never retries release", async () => {
+		vi.useFakeTimers();
+		try {
+			const h = createGateHarness();
+			let finishPane = (_pane: typeof startedPane): void => {};
+			h.host.startAgentPane = () => new Promise((resolve) => { finishPane = resolve; });
+			h.subscribe();
+			const refused = expect(h.child.ready).rejects.toThrow(/timed out.*evidence retained/);
+			await vi.advanceTimersByTimeAsync(30_000);
+			await refused;
+			finishPane(startedPane); h.born();
+			await vi.advanceTimersByTimeAsync(60_000);
+			expect(h.events).toContainEqual({ kind: "pane-attached", pane: { agentName: "worker-abc", workspaceId: "w1", tabId: "w1:t1", paneId: "w1:p2" } });
+			expect(h.evidence).toEqual([]);
+			expect(h.fs.files.has(h.releaseFile)).toBe(false);
+			expect(h.fs.files.get(`${h.taskDir}/prompt.txt`)).toBe("private task prompt");
+			expect(h.host.closePane).not.toHaveBeenCalled();
+			expect(settledEvents(h.events)).toEqual([]);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.clearAllTimers(); vi.useRealTimers(); }
+	});
+
+	it("retains captured evidence if final birth verification refuses release", async () => {
+		vi.useFakeTimers();
+		try {
+			const h = createGateHarness();
+			h.gate.wrapperBorn = (evidence) => {
+				h.evidence.push(evidence);
+				h.operations.identityMatches = () => "different";
+			};
+			h.subscribe(); h.born();
+			const refused = expect(h.child.ready).rejects.toThrow("identity is ambiguous");
+			await vi.advanceTimersByTimeAsync(50);
+			await refused;
+			expect(h.evidence).toHaveLength(1);
+			expect(h.fs.files.has(h.bornFile)).toBe(true);
+			expect(h.fs.files.has(h.releaseFile)).toBe(false);
+			h.child.interrupt();
+			expect(h.gate.interrupt).toHaveBeenCalledOnce();
+			expect(h.operations.signalTree).not.toHaveBeenCalled();
+			expect(h.host.closePane).not.toHaveBeenCalled();
+			expect(settledEvents(h.events)).toEqual([]);
+		} finally { vi.clearAllTimers(); vi.useRealTimers(); }
+	});
+
+	for (const cut of ["wrapper persistence", "release fence"] as const) {
+		it(`refuses ${cut} without dropping the handle or inventing process death`, async () => {
+			vi.useFakeTimers();
+			try {
+				const h = createGateHarness();
+				const refuse = (): void => { throw new Error("lease expired"); };
+				if (cut === "wrapper persistence") h.gate.wrapperBorn = refuse;
+				else h.gate.beforeRelease = refuse;
+				h.subscribe(); h.born();
+				const rejected = expect(h.child.ready).rejects.toThrow("lease expired");
+				await vi.advanceTimersByTimeAsync(50);
+				await rejected;
+				expect(h.fs.files.has(h.releaseFile)).toBe(false);
+				expect(h.fs.files.has(h.bornFile)).toBe(true);
+				expect(h.evidence).toHaveLength(cut === "wrapper persistence" ? 0 : 1);
+				h.child.interrupt();
+				expect(h.gate.interrupt).toHaveBeenCalledOnce();
+				expect(h.host.closePane).not.toHaveBeenCalled();
+				expect(settledEvents(h.events)).toEqual([]);
+			} finally { vi.clearAllTimers(); vi.useRealTimers(); }
+		});
+	}
+
+	it("retains task-mode control and result watching after release and delegates cancel without fake settlement", async () => {
+		vi.useFakeTimers();
+		try {
+			const h = createGateHarness();
+			h.subscribe(); h.born();
+			await vi.advanceTimersByTimeAsync(50);
+			await h.child.ready;
+			const send = h.child.send!("next task");
+			const steer = `${h.taskDir}/control/steer-1.txt`;
+			expect(h.fs.files.get(steer)).toBe("next task");
+			h.fs.files.delete(steer);
+			await vi.advanceTimersByTimeAsync(250);
+			await send;
+			h.child.requestClose!();
+			expect(h.fs.files.get(`${h.taskDir}/control/close.request`)).toBe("1");
+			h.child.interrupt();
+			expect(h.gate.interrupt).toHaveBeenCalledOnce();
+			expect(h.host.closePane).not.toHaveBeenCalled();
+			expect(settledEvents(h.events)).toEqual([]);
+			h.fs.writeFileSync(`${h.taskDir}/response.md`, "done", { mode: 0o600 });
+			h.fs.writeFileSync(`${h.taskDir}/exit.code`, "0", { mode: 0o600 });
+			await vi.advanceTimersByTimeAsync(750);
+			expect(settledEvents(h.events)).toEqual([{ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } }]);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.clearAllTimers(); vi.useRealTimers(); }
+	});
+
+	it("refuses spawn on the starting fence and prevents resubscription or early controls", async () => {
+		const h = createGateHarness();
+		h.gate.beforeSpawn = () => { throw new Error("starting lease refused"); };
+		h.subscribe();
+		await expect(h.child.ready).rejects.toThrow("starting lease refused");
+		expect(h.host.startAgentPane).not.toHaveBeenCalled();
+		expect(h.subscribe).toThrow("already subscribed");
+		await expect(h.child.send!("secret steer")).rejects.toThrow("not been released");
+		expect(() => h.child.requestClose!()).toThrow("not been released");
+		expect([...h.fs.files.keys()].some((path) => path.includes("/control/"))).toBe(false);
+		expect(settledEvents(h.events)).toEqual([]);
+	});
+
+	it("does not create a pane when cancellation arrives during the starting fence", async () => {
+		const h = createGateHarness();
+		h.gate.beforeSpawn = () => h.child.interrupt();
+		h.subscribe();
+		await expect(h.child.ready).rejects.toThrow("interrupted before release");
+		expect(h.host.startAgentPane).not.toHaveBeenCalled();
+		expect(h.gate.interrupt).toHaveBeenCalledOnce();
+	});
+
+	it("delegates pre-release cancellation to the retained owner without closing a pane or releasing work", async () => {
+		vi.useFakeTimers();
+		try {
+			const h = createGateHarness();
+			h.subscribe(); h.born();
+			h.child.interrupt();
+			await expect(h.child.ready).rejects.toThrow("interrupted before release");
+			await vi.advanceTimersByTimeAsync(100);
+			expect(h.gate.interrupt).toHaveBeenCalledOnce();
+			expect(h.host.closePane).not.toHaveBeenCalled();
+			expect(h.evidence).toEqual([]);
+			expect(h.fs.files.has(h.releaseFile)).toBe(false);
+			expect(settledEvents(h.events)).toEqual([]);
+		} finally { vi.clearAllTimers(); vi.useRealTimers(); }
+	});
+
+	it("places the bounded private wait before all launcher/model/task work and preserves PTY stdout", () => {
+		const h = createGateHarness();
+		const script = h.fs.files.get(`${h.taskDir}/run.sh`)!;
+		expect(script).toContain("__sumo_wait<300");
+		expect(script).toContain("[ ! -L \"$1\" ] && [ -O \"$1\" ]");
+		expect(script).toContain("set -C; printf");
+		expect(script).toContain("__sumo_private '/tmp/subagents/sa-gate-1234/launch.release' 600 || exit 125");
+		const hold = script.indexOf('[ "$__sumo_released" = 1 ] || exit 125');
+		const launch = script.indexOf("exec '/parent tools/sumocode' 'task'");
+		expect(hold).toBeGreaterThan(0);
+		expect(launch).toBeGreaterThan(hold);
+		expect(script.indexOf("trap '__sumo_finish")).toBeGreaterThan(hold);
+		expect(script).toContain("'--task-dir' '/tmp/subagents/sa-gate-1234'");
+		expect(script).not.toContain("private task prompt");
+		expect(script).not.toContain("tee");
+		expect(script).toContain("2>> '/tmp/subagents/sa-gate-1234/output.log'");
+	});
+
+	it("gives the durable gate a canonical task path rather than an ancestor alias", async () => {
+		const h = createGateHarness();
+		const fs = new FakeFs();
+		fs.realpathSync = (path) => {
+			const canonical = path.replace("/tmp/", "/private/tmp/");
+			fs.dirs.add(canonical);
+			fs.dirModes.set(canonical, 0o700);
+			return canonical;
+		};
+		const gate = { ...h.gate, beforeSpawn: vi.fn(() => { throw new Error("recorded path"); }) };
+		const child = createPaneChildSpawner({ fs, now: () => 1234, baseDir: "/tmp/subagents", resolveLauncher: () => "/parent/sumocode" })({ ...h.options, launchGate: gate });
+		if (Symbol.asyncIterator in child.events) throw new Error("expected callback backend");
+		child.events(() => {});
+		await expect(child.ready).rejects.toThrow("recorded path");
+		expect(gate.beforeSpawn).toHaveBeenCalledWith({ taskDir: "/private/tmp/subagents/sa-gate-1234", nonce: expect.any(String) });
+		expect(fs.files.has("/private/tmp/subagents/sa-gate-1234/prompt.txt")).toBe(true);
+	});
+
+	it("rejects PATH launcher fallback for gated launches", () => {
+		const h = createGateHarness();
+		const spawn = createPaneChildSpawner({ fs: new FakeFs(), now: () => 1234, baseDir: "/tmp/subagents", resolveLauncher: () => "sumocode" });
+		expect(() => spawn(h.options)).toThrow("absolute SumoCode provenance");
+		expect(h.host.startAgentPane).not.toHaveBeenCalled();
+	});
+
+	it("records before pane spawn and persists verified wrapper and pane references before private release", async () => {
+		vi.useFakeTimers();
+		try {
+			const h = createGateHarness();
+			h.host.startAgentPane = vi.fn(async () => {
+				expect(h.nonce).toMatch(/^[a-f0-9-]{36}$/);
+				expect(h.fs.files.has(h.releaseFile)).toBe(false);
+				return startedPane;
+			});
+			h.gate.wrapperBorn = (evidence) => {
+				expect(h.fs.files.has(h.releaseFile)).toBe(false);
+				expect(evidence.process).toEqual({
+					identity: { pid: 4242, processGroupId: 4242, processStartTime: `birth /bin/bash ${h.taskDir}/run.sh ${h.nonce}` },
+					verification: { members: [{ pid: 4242, processStartTime: "birth" }] },
+				});
+				expect(evidence.pane).toEqual(startedPane);
+				h.evidence.push(evidence);
+			};
+			h.gate.beforeRelease = () => {
+				expect(h.evidence).toHaveLength(1);
+				// No slow OS recapture may run after the final lease fence.
+				h.operations.identityMatches = () => { throw new Error("OS inspection after fence"); };
+			};
+			h.subscribe();
+			await flushPromises();
+			expect(h.evidence).toEqual([]);
+			h.born();
+			await vi.advanceTimersByTimeAsync(50);
+			await h.child.ready;
+			expect(h.evidence).toHaveLength(1);
+			expect(h.fs.files.get(h.releaseFile)).toBe(h.nonce);
+			expect(h.operations.signalTree).not.toHaveBeenCalled();
+		} finally {
+			vi.clearAllTimers();
+			vi.useRealTimers();
+		}
+	});
+});
 
 describe("pane subagent backend", () => {
 	it("retains the control and result watcher while replacing a same-process event observer", async () => {

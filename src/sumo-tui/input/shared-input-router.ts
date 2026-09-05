@@ -44,7 +44,10 @@ interface MouseInputDiagnosticsFields {
 const BRACKETED_PASTE_BLOCK_PATTERN = /\x1b\[200~[\s\S]*?\x1b\[201~/g;
 // Keep CSI (including Kitty and SGR mouse) and SS3 sequences whole.
 // oxlint-disable-next-line no-control-regex -- intentional ESC byte match for ANSI input parsing
-const CSI_OR_SS3_SEQUENCE_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|O[A-Za-z])/g;
+const CSI_OR_SS3_SEQUENCE_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|O[A-Za-z])/y;
+// oxlint-disable-next-line no-control-regex -- validates an unfinished CSI prefix
+const INCOMPLETE_CSI_PATTERN = /^\x1b\[[0-?]*[ -/]*$/;
+const MAX_PENDING_CSI_BYTES = 256;
 const inputGraphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 /** Split complete chunks without breaking paste blocks, escape sequences or graphemes. */
@@ -86,9 +89,15 @@ function parseInputTokens(data: string) {
 				index += escMatch[0].length;
 				continue;
 			}
-			if (remaining.startsWith("\x1b[") || remaining === "\x1bO") {
-				return { tokens, pending: remaining };
+			if (remaining.startsWith("\x1b[")) {
+				if (Buffer.byteLength(remaining, "utf8") <= MAX_PENDING_CSI_BYTES && INCOMPLETE_CSI_PATTERN.test(remaining)) {
+					return { tokens, pending: remaining };
+				}
+				// A failed prefix is one opaque event, not fresh keys from its interior.
+				tokens.push(remaining);
+				return { tokens, pending: "" };
 			}
+			if (remaining === "\x1bO") return { tokens, pending: remaining };
 			const meta = graphemes.containing(index + 1)?.segment;
 			if (meta) {
 				tokens.push("\x1b" + meta);
@@ -268,7 +277,8 @@ export class SharedInputRouter {
 			? { tokens: [normalized], pending: "" }
 			: parseInputTokens(source);
 		this.pendingInput = parsed.pending;
-		if (parsed.pending === "\x1b") this.armBareEscapeTimer();
+		this.clearPendingBareEscapeTimer();
+		if (parsed.pending) this.armBareEscapeTimer();
 		let consumed = parsed.pending.length > 0;
 		let forwarded = false;
 		let mouseViewportDirty = false;
@@ -334,9 +344,10 @@ export class SharedInputRouter {
 		this.clearPendingBareEscapeTimer();
 		this.pendingBareEscapeTimer = setTimeout(() => {
 			this.pendingBareEscapeTimer = undefined;
-			if (this.pendingInput !== "\x1b") return;
+			if (!this.pendingInput || this.pendingInput.startsWith("\x1b[200~")) return;
+			const pending = this.pendingInput;
 			this.pendingInput = "";
-			this.dispatchDeferredInput("\x1b");
+			this.dispatchDeferredInput(pending);
 		}, BARE_ESCAPE_DISPATCH_DELAY_MS);
 		this.pendingBareEscapeTimer.unref?.();
 	}

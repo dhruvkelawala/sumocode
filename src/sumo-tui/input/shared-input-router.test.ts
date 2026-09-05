@@ -143,6 +143,26 @@ describe("SharedInputRouter coalesced commands", () => {
 		expect(forwardToEditor).toHaveBeenCalledExactlyOnceWith("x");
 	});
 
+	it("expires incomplete CSI atomically through delayed dispatch", () => {
+		vi.useFakeTimers();
+		try {
+			const dispatchDelayedInput = vi.fn(() => true);
+			const router = new SharedInputRouter({ dispatchDelayedInput });
+			router.handleInput("\x1b[12;");
+			vi.advanceTimersByTime(25);
+			expect(dispatchDelayedInput).toHaveBeenCalledExactlyOnceWith("\x1b[12;");
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.useRealTimers(); }
+	});
+
+	it.each(["\x1b[12;\x04", "\x1b[ 1\x04", "\x1b[" + "1".repeat(300) + "\x04"])("forwards failed CSI %j without executing its interior", (data) => {
+		const forwardToEditor = vi.fn(() => true);
+		const router = new SharedInputRouter({ forwardToEditor });
+		router.handleInput(data);
+		expect(forwardToEditor).toHaveBeenCalledExactlyOnceWith(data);
+		router.clearPendingMouseInput();
+	});
+
 	it("redispatches unclaimed classic Pi tokens in order without returning duplicates", () => {
 		const dispatchDelayedInput = vi.fn((_data: string) => true);
 		const router = new SharedInputRouter({ dispatchDelayedInput });

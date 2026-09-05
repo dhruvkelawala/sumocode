@@ -13,7 +13,8 @@ import {
 } from "../child-protocol.js";
 import { createPiChildSpawner, resolveClaudeOauthAdapterEntry, resolvePiBinary, resolvePiChildModelBootstrapEntry } from "./backend-pi.js";
 import type { SubagentEvent } from "./domain.js";
-import type { SpawnedChild } from "./backend-pi.js";
+import type { SpawnedChild, HeadlessLaunchGate } from "./backend-pi.js";
+import type { ProcessTreeOperations } from "../background-tasks/process-tree.js";
 
 class FakeProcess extends EventEmitter {
 	public readonly stdin = { on: vi.fn(), write: vi.fn(), end: vi.fn() };
@@ -59,13 +60,19 @@ const durableEventText = (events: readonly SubagentEvent[]): string => {
 	return `${transcript.join("")}${liveText}`;
 };
 
+const passiveFences = {
+	beforeStdin: (): void => undefined,
+	beforeSignal: (): never => { throw new Error("no signal authority"); },
+	onRefused: (): void => undefined,
+};
+
 describe("retained headless launch gate", () => {
 	it("refuses PATH Pi for retained launches", async () => {
 		const spawn = vi.fn();
 		const beforeSpawn = vi.fn();
 		// SAFETY: provenance refusal must happen before this fake spawn.
 		const child = createPiChildSpawner(spawn as never, () => undefined, () => "pi")({
-			prompt: "private", cwd: "/workspace", inherited: {}, launchGate: { beforeSpawn, beforePrompt: vi.fn() },
+			prompt: "private", cwd: "/workspace", inherited: {}, launchGate: { ...passiveFences, beforeSpawn, beforePrompt: vi.fn() },
 		});
 		expect(() => collect(child.events)).toThrow(/absolute Pi/);
 		await expect(child.ready).rejects.toThrow(/absolute Pi/);
@@ -78,7 +85,7 @@ describe("retained headless launch gate", () => {
 		// SAFETY: this refused launch never reaches the fake spawn.
 		const child = createPiChildSpawner(spawn as never, () => undefined, () => "/selected/pi")({
 			prompt: "private", cwd: "/workspace", inherited: {},
-			launchGate: { beforeSpawn: () => { throw new Error("stale"); }, beforePrompt: vi.fn() },
+			launchGate: { ...passiveFences, beforeSpawn: () => { throw new Error("stale"); }, beforePrompt: vi.fn() },
 		});
 		expect(() => collect(child.events)).toThrow("stale");
 		expect(spawn).not.toHaveBeenCalled();
@@ -91,7 +98,7 @@ describe("retained headless launch gate", () => {
 		const beforePrompt = vi.fn(() => { throw new Error("expired"); });
 		// SAFETY: FakeProcess implements this backend's piped process surface.
 		const child = createPiChildSpawner(spawn as never, () => undefined, () => "/selected/pi")({
-			prompt: "private", cwd: "/workspace", inherited: {}, launchGate: { beforeSpawn: vi.fn(), beforePrompt },
+			prompt: "private", cwd: "/workspace", inherited: {}, launchGate: { ...passiveFences, beforeSpawn: vi.fn(), beforePrompt },
 		});
 		const events = collect(child.events);
 		proc.emit("spawn");
@@ -102,8 +109,13 @@ describe("retained headless launch gate", () => {
 		expect(events).toEqual([{ kind: "run-started" }]);
 		expect(() => collect(child.events)).toThrow(/already subscribed/);
 		expect(spawn).toHaveBeenCalledTimes(1);
-		proc.emit("close", 1);
-		expect(events.at(-1)?.kind).toBe("run-settled");
+		const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+		try {
+			child.interrupt();
+			proc.emit("close", 0);
+			expect(kill).not.toHaveBeenCalled();
+			expect(events).toEqual([{ kind: "run-started" }]);
+		} finally { kill.mockRestore(); }
 	});
 
 	it("does not release a child that settles before its spawn callback", async () => {
@@ -111,7 +123,7 @@ describe("retained headless launch gate", () => {
 		const beforePrompt = vi.fn();
 		// SAFETY: FakeProcess implements this backend's piped process surface.
 		const child = createPiChildSpawner(vi.fn(() => proc) as never, () => undefined, () => "/selected/pi")({
-			prompt: "private", cwd: "/workspace", inherited: {}, launchGate: { beforeSpawn: vi.fn(), beforePrompt },
+			prompt: "private", cwd: "/workspace", inherited: {}, launchGate: { ...passiveFences, beforeSpawn: vi.fn(), beforePrompt },
 		});
 		collect(child.events);
 		proc.emit("close", 1);
@@ -131,7 +143,7 @@ describe("retained headless launch gate", () => {
 		});
 		// SAFETY: FakeProcess implements the piped process surface used by this backend.
 		const child = createPiChildSpawner(spawn as never, () => undefined, () => "/selected/pi")({
-			prompt: "private\nλ prompt", cwd: "/workspace", inherited: {}, launchGate: { beforeSpawn, beforePrompt },
+			prompt: "private\nλ prompt", cwd: "/workspace", inherited: {}, launchGate: { ...passiveFences, beforeSpawn, beforePrompt },
 		});
 		collect(child.events);
 		expect(beforeSpawn).toHaveBeenCalledTimes(1);
@@ -143,6 +155,124 @@ describe("retained headless launch gate", () => {
 		expect(proc.stdin.end).toHaveBeenCalledTimes(1);
 		expect(JSON.stringify(spawn.mock.calls)).not.toContain("private");
 		proc.emit("close", 0);
+	});
+});
+
+function effectFixture() {
+	const proc = new FakeProcess();
+	const controller = new AbortController();
+	const tree = {
+		identity: { pid: 4242, processGroupId: 4242, processStartTime: "original-command" },
+		verification: { members: [{ pid: 4242, processStartTime: "original-birth" }] },
+	};
+	let live = true;
+	const fence = (): void => { if (!live) throw new Error("writer lost"); };
+	const refused = vi.fn();
+	const gate: HeadlessLaunchGate = {
+		beforeSpawn: fence, beforePrompt: fence, beforeStdin: fence,
+		beforeSignal: () => { fence(); return tree; }, onRefused: refused,
+	};
+	const signals: string[] = [];
+	let finishWait!: (empty: boolean) => void;
+	const operations: ProcessTreeOperations = {
+		captureStartTime: () => { throw new Error("must not recapture birth"); },
+		captureTreeVerification: () => { throw new Error("must not recapture anchors"); },
+		identityMatches: vi.fn<ProcessTreeOperations["identityMatches"]>(() => "same"),
+		verificationMatches: () => "same", isTreeEmpty: () => false,
+		signalTree: async (identity, signal, verification) => {
+			expect(identity).toEqual(tree.identity);
+			expect(verification).toEqual(tree.verification);
+			signals.push(signal);
+			return { ok: true, gone: signal === "SIGKILL" };
+		},
+		waitForTreeEmpty: () => new Promise<boolean>((resolve) => { finishWait = resolve; }),
+	};
+	// SAFETY: fake piped child and process operations; no OS process is spawned/signalled.
+	const child = createPiChildSpawner(vi.fn(() => proc) as never, () => undefined, () => "/selected/pi", () => undefined, operations)({
+		prompt: "private", cwd: "/workspace", inherited: {}, signal: controller.signal, launchGate: gate,
+	});
+	const events = collect(child.events);
+	return { proc, controller, child, events, signals, refused, operations,
+		lose: () => { live = false; }, revive: () => { live = true; }, finishWait: (empty = false) => finishWait(empty) };
+}
+
+describe("retained headless effect fencing", () => {
+	for (const trigger of ["abort", "protocol", "timeout"] as const) {
+		it(`refuses ${trigger} cleanup after writer loss without later cancellation or success`, async () => {
+			vi.useFakeTimers();
+			try {
+				const f = effectFixture();
+				if (trigger !== "timeout") { f.proc.emit("spawn"); await f.child.ready; }
+				f.lose();
+				if (trigger === "abort") f.controller.abort();
+				else if (trigger === "protocol") f.proc.stdout.emit("data", Buffer.alloc(CHILD_JSON_FRAME_MAX_BYTES + 1, 0x73));
+				else await vi.advanceTimersByTimeAsync(10_000);
+				await Promise.resolve();
+				expect(f.signals).toEqual([]);
+				expect(f.refused).toHaveBeenCalledTimes(1);
+				f.revive();
+				f.child.interrupt();
+				f.proc.emit("spawn");
+				f.proc.emit("close", 0);
+				f.proc.emit("error", new Error("late"));
+				await vi.advanceTimersByTimeAsync(20_000);
+				expect(f.signals).toEqual([]);
+				expect(f.events).toEqual([{ kind: "run-started" }]);
+				expect(f.proc.stdin.write).toHaveBeenCalledTimes(trigger === "timeout" ? 0 : 1);
+				expect(vi.getTimerCount()).toBe(0);
+			} finally { vi.useRealTimers(); }
+		});
+	}
+
+	for (const cut of ["lost", "closed", "closed-empty", "normal", "recycled", "rejected"] as const) {
+		it(`handles ${cut} between TERM and KILL using original anchors only`, async () => {
+			const f = effectFixture();
+			f.proc.emit("spawn");
+			await f.child.ready;
+			f.controller.abort();
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(f.signals).toEqual(["SIGTERM"]);
+			if (cut === "lost") f.lose();
+			if (cut === "closed" || cut === "closed-empty") f.proc.emit("close", null, "SIGTERM");
+			if (cut === "recycled") vi.mocked(f.operations.identityMatches).mockReturnValue("different");
+			if (cut === "rejected") f.operations.signalTree = async () => { throw new Error("OS refused"); };
+			f.finishWait(cut === "closed-empty");
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(f.signals).toEqual(cut === "normal" ? ["SIGTERM", "SIGKILL"] : ["SIGTERM"]);
+			if (cut !== "closed" && cut !== "closed-empty") f.proc.emit("close", null, "SIGKILL");
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			const settled = f.events.filter((event) => event.kind === "run-settled");
+			expect(settled).toHaveLength(cut === "normal" || cut === "closed-empty" ? 1 : 0);
+			expect(f.refused).toHaveBeenCalledTimes(cut === "normal" || cut === "closed-empty" ? 0 : 1);
+			f.child.interrupt();
+			expect(f.proc.kill).not.toHaveBeenCalled();
+		});
+	}
+
+	it("rechecks the writer after slow process verification, before the actual signal", async () => {
+		const f = effectFixture();
+		f.proc.emit("spawn");
+		await f.child.ready;
+		vi.mocked(f.operations.identityMatches).mockImplementationOnce(() => { f.lose(); return "same"; });
+		f.child.interrupt();
+		f.proc.emit("close", 0);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		expect(f.signals).toEqual([]);
+		expect(f.refused).toHaveBeenCalledTimes(1);
+		expect(f.events).toEqual([{ kind: "run-started" }]);
+	});
+
+	it("fences stdin end separately from the prompt write", async () => {
+		const f = effectFixture();
+		f.proc.stdin.write.mockImplementation(() => { f.lose(); });
+		f.proc.emit("spawn");
+		await expect(f.child.ready).rejects.toThrow("writer lost");
+		expect(f.proc.stdin.write).toHaveBeenCalledExactlyOnceWith("private");
+		expect(f.proc.stdin.end).not.toHaveBeenCalled();
+		f.child.interrupt();
+		f.proc.emit("close", 0);
+		expect(f.signals).toEqual([]);
+		expect(f.events).toEqual([{ kind: "run-started" }]);
 	});
 });
 

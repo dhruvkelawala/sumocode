@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readPrivateJson } from "../activity/persistence.js";
 import type { CompletionManifest } from "./manifest.js";
+import { CHILD_JSON_FRAME_MAX_BYTES } from "../child-protocol.js";
 import type { ProcessTreeOperations } from "../background-tasks/process-tree.js";
 import { createPiChildSpawner } from "./backend-pi.js";
 import { SubagentRegistry, type RegistryProcess, type SubagentRecord } from "./registry.js";
@@ -58,7 +59,7 @@ function retainedFixture(attach = false) {
 	});
 	const spawn = vi.fn(() => proc);
 	// SAFETY: fake piped process; the production backend parser owns these streams.
-	const backend = createPiChildSpawner(spawn as never, () => undefined, () => "/selected/pi");
+	const backend = createPiChildSpawner(spawn as never, () => undefined, () => "/selected/pi", () => undefined, f.operations);
 	let releaseManifest!: (manifest: CompletionManifest) => void;
 	const manifest = new Promise<CompletionManifest>((resolve) => { releaseManifest = resolve; });
 	const subscriptions = vi.fn();
@@ -84,15 +85,59 @@ function retainedFixture(attach = false) {
 }
 
 describe("retained supervisor handle ownership", () => {
+	for (const [cut, loss] of [["TERM", "expiry"], ["KILL", "expiry"], ["TERM", "replacement"], ["KILL", "replacement"]] as const) {
+		it(`stops the real kernel on lease ${loss} before ${cut}, with no late backend effects`, async () => {
+			const f = retainedFixture();
+			f.proc.emit("spawn");
+			await f.owner.ready;
+			let releaseWait!: (empty: boolean) => void;
+			f.operations.waitForTreeEmpty = () => new Promise((resolve) => { releaseWait = resolve; });
+			const lose = (): void => {
+				f.setNow(61_000);
+				if (loss === "replacement") {
+					const replacement = new SubagentRegistry(join(f.record.taskDir, "..", "registry"), "session-a", {
+						now: () => 61_000,
+						writerIdentity: { token: "replacement", pid: process.pid + 1, processStartTime: "new-birth" },
+						inspectWriter: (writer) => writer.token === "replacement" ? "alive" : "dead",
+					});
+					const r = replacement.get(f.record.id)!;
+					replacement.acquireWriter(r.id, r.revision, 60_000);
+				}
+			};
+			if (cut === "TERM") lose();
+			f.proc.stdout.emit("data", Buffer.alloc(CHILD_JSON_FRAME_MAX_BYTES + 1, 0x73));
+			if (cut === "KILL") {
+				await new Promise<void>((resolve) => setImmediate(resolve));
+				lose();
+				releaseWait(false);
+			}
+			expect(await f.owner.settlement).toBe("ambiguous");
+			expect(f.operations.signalTree).toHaveBeenCalledTimes(cut === "TERM" ? 0 : 1);
+			if (cut === "KILL") expect(f.operations.signalTree).toHaveBeenCalledWith(
+				f.registry.get(f.record.id)!.child!.identity, "SIGTERM", f.registry.get(f.record.id)!.child!.verification,
+			);
+			const unchanged = f.registry.get(f.record.id);
+			f.proc.emit("close", 0);
+			f.proc.emit("spawn");
+			f.proc.emit("error", new Error("late child callback"));
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(f.registry.get(f.record.id)).toEqual(unchanged);
+			expect(() => f.owner.renew()).toThrow(/stopped/);
+			expect(f.proc.stdin.write).toHaveBeenCalledTimes(1);
+			expect(f.proc.kill).not.toHaveBeenCalled();
+			expect(existsSync(join(f.record.taskDir, "result.json"))).toBe(false);
+		});
+	}
+
 	it("attaches an unowned starting record and renews through manifest collection", async () => {
 		vi.useFakeTimers();
 		try {
 			const f = retainedFixture(true);
+			f.proc.emit("spawn");
+			await f.owner.ready;
 			f.setNow(21_000);
 			await vi.advanceTimersByTimeAsync(20_000);
 			expect(f.registry.get("sa-proof")?.writerLease?.expiresAt).toBe(81_000);
-			f.proc.emit("spawn");
-			await f.owner.ready;
 			f.proc.emit("close", 0);
 			await Promise.resolve();
 			f.setNow(41_000);
@@ -188,7 +233,7 @@ describe("retained supervisor handle ownership", () => {
 				expect(vi.getTimerCount()).toBe(0);
 				if (cut === "prompt") {
 					f.proc.emit("spawn");
-					await expect(f.owner.ready).rejects.toThrow(/stopped/);
+					await expect(f.owner.ready).rejects.toThrow(/readiness timeout/);
 					expect(f.proc.stdin.write).not.toHaveBeenCalled();
 				}
 				f.release();
@@ -493,7 +538,7 @@ describe("retained supervisor handle ownership", () => {
 		expect(f.proc.kill).not.toHaveBeenCalled();
 	});
 
-	it("keeps the sole backend subscription after ready rejects, without killing or losing later settlement", async () => {
+	it("keeps the sole refused backend without killing or claiming later settlement", async () => {
 		const f = fixture();
 		const proc = Object.assign(new EventEmitter(), {
 			pid: 4242, stdout: new EventEmitter(), stderr: new EventEmitter(),
@@ -512,8 +557,9 @@ describe("retained supervisor handle ownership", () => {
 		expect(f.registry.get("sa-proof")).toMatchObject({ status: "ambiguous", child: { identity: { pid: 4242 } } });
 		owner.subscribe(() => { throw new Error("observer failed"); });
 		proc.emit("close", 1);
-		expect(await owner.settlement).toBe("settled");
-		expect(f.registry.get("sa-proof")).toMatchObject({ status: "settled", outcome: "failed", delivery: { state: "pending" } });
+		expect(await owner.settlement).toBe("ambiguous");
+		expect(f.registry.get("sa-proof")).toMatchObject({ status: "ambiguous", outcome: null, result: null, delivery: { state: "none" } });
+		expect(() => owner.renew()).toThrow(/stopped/);
 		expect(spawn).toHaveBeenCalledTimes(1);
 		expect(proc.kill).not.toHaveBeenCalled();
 		expect(proc.stdin.write).not.toHaveBeenCalled();

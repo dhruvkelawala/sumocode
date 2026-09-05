@@ -8,7 +8,7 @@ import { buildCompletionManifest, type CompletionManifestEvidence } from "./mani
 import { RetainedResults } from "./retained-results.js";
 import { SubagentRegistry, SubagentRevisionConflict, type RegistryProcess, type SubagentRecord } from "./registry.js";
 
-/** Launch admission only. Callers must retain their backend even when ready rejects. */
+/** Persistence-owner gate only, not user control authorization. Retain refused handles. */
 export function createRetainedHeadlessLaunchGate(
 	registry: SubagentRegistry,
 	initial: SubagentRecord,
@@ -73,7 +73,20 @@ function prepareLaunch(
 		transition((record) => record);
 	};
 
+	const childFence = (pid: number): RegistryProcess => {
+		if (phase !== "released" || current.child?.identity.pid !== pid) throw new Error("retained child authority unavailable");
+		const child = structuredClone(current.child);
+		if (operations.identityMatches(child.identity) === "different"
+			|| operations.verificationMatches?.(child.identity, child.verification) !== "same") {
+			throw new Error("retained child identity is ambiguous");
+		}
+		fence();
+		return child;
+	};
 	const gate: HeadlessLaunchGate = {
+		beforeStdin: (pid) => { childFence(pid); },
+		beforeSignal: childFence,
+		onRefused: () => { phase = "blocked"; },
 		beforeSpawn(): void {
 			if (phase !== "prepared") throw new Error("retained spawn gate already used");
 			phase = "blocked";
@@ -173,6 +186,15 @@ export class RetainedHeadlessSupervisor {
 		this.child = (dependencies.spawn ?? spawnPiChild)({
 			...options.launch, signal: undefined,
 			launchGate: {
+				beforeStdin: (pid) => {
+					if (this.stopped) throw new Error("retained owner stopped before stdin");
+					this.authority.gate.beforeStdin(pid);
+				},
+				beforeSignal: (pid) => {
+					if (this.stopped) throw new Error("retained owner stopped before signal");
+					return this.authority.gate.beforeSignal(pid);
+				},
+				onRefused: () => { this.authority.gate.onRefused(); this.fail("ambiguous"); },
 				beforeSpawn: () => {
 					if (this.stopped) throw new Error("retained owner stopped before spawn");
 					this.authority.gate.beforeSpawn();
@@ -202,8 +224,9 @@ export class RetainedHeadlessSupervisor {
 			if (this.stopped || !this.authority.released()) throw new Error("child not ready for prompt release");
 			this.acceptReady();
 		}).catch((error: Error) => {
-			// Ready refusal is not child exit. Keep the parser for its later outcome.
-			if (!this.terminal && !this.stopped) this.markUncertain("ambiguous");
+			// Ready refusal is not child exit. Retain the handle for accounting,
+			// but a stopped owner cannot publish a later outcome.
+			if (!this.terminal && !this.stopped) this.fail("ambiguous");
 			this.refuseReady(error);
 		});
 		void this.ready.catch(() => undefined);

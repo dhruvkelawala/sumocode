@@ -17,6 +17,7 @@ import {
 import { resolveExecutableProvenance } from "../executable-provenance.js";
 import { type BuiltInToolName, resolveTaskConfig } from "../native-task-config.js";
 import { isRecord, type TaskThinking, type ThinkingLevel } from "../native-task-params.js";
+import { systemProcessTree, terminateProcessTree, type ProcessTreeOperations, type ProcessTreeIdentity, type ProcessTreeVerification } from "../background-tasks/process-tree.js";
 import { CHILD_MODEL_ID_ENV, CHILD_MODEL_PROVIDER_ENV } from "./pi-child-model-bootstrap.js";
 
 /** Runtime string discriminator for decoded child-process payloads. */
@@ -171,10 +172,14 @@ export interface SpawnedChild {
 	requestClose?(): void;
 }
 
-/** Synchronous authority checks; a refusal holds the pipe, it is not an exit or cleanup permission. */
+/** Persistence-owner fences, NOT authorization for user control requests.
+ * A refusal holds the pipe and permanently stops local effects, not the child. */
 export interface HeadlessLaunchGate {
 	beforeSpawn(): void;
 	beforePrompt(pid: number): void;
+	beforeStdin(pid: number): void;
+	beforeSignal(pid: number): { readonly identity: ProcessTreeIdentity; readonly verification: ProcessTreeVerification };
+	onRefused(): void;
 }
 
 type SpawnLike = typeof nodeSpawn;
@@ -449,6 +454,7 @@ interface AbortState {
 	interrupt: () => void;
 	terminate: () => void;
 	dispose: () => void;
+	finished?: () => Promise<void> | undefined;
 }
 
 const attachAbortSignal = (proc: ChildProcessWithoutNullStreams, signal: AbortSignal | undefined): AbortState => {
@@ -487,6 +493,70 @@ const attachAbortSignal = (proc: ChildProcessWithoutNullStreams, signal: AbortSi
 		},
 	};
 };
+
+// The shared signalTree performs more OS probes after its caller's fence (and
+// Windows can await several taskkills). For retained POSIX work, verification
+// stays in terminateProcessTree + the gate; this last operation is one signal.
+const retainedProcessTree: ProcessTreeOperations = {
+	...systemProcessTree,
+	async signalTree(identity, signal) {
+		try {
+			process.kill(-identity.processGroupId, signal);
+			return { ok: true, gone: false };
+		} catch {
+			return { ok: false, gone: false, error: "retained signal refused" };
+		}
+	},
+};
+
+function attachRetainedAbortSignal(
+	proc: ChildProcessWithoutNullStreams,
+	signal: AbortSignal | undefined,
+	beforeSignal: HeadlessLaunchGate["beforeSignal"],
+	operations: ProcessTreeOperations,
+	refuse: (error: Error) => void,
+): AbortState {
+	let aborted = false;
+	let exited = false;
+	let termination: Promise<void> | undefined;
+	const onClose = (): void => { exited = true; };
+	proc.once("close", onClose);
+	const terminate = (): void => {
+		if (exited || termination) return;
+		termination = (async () => {
+			if (proc.pid === undefined) throw new Error("retained child pid unavailable");
+			const pid = proc.pid;
+			const tree = beforeSignal(pid);
+			// Preserve the original anchors: terminateProcessTree normally recaptures.
+			const fenced: ProcessTreeOperations = {
+				...operations,
+				captureTreeVerification: () => tree.verification,
+				signalTree: (identity, signal, verification) => {
+					if (exited) throw new Error("retained child closed before tree cleanup finished");
+					beforeSignal(pid);
+					return operations.signalTree(identity, signal, verification);
+				},
+			};
+			if (!await terminateProcessTree(fenced, tree.identity, { termGraceMs: 5000, killGraceMs: 1000 })) {
+				throw new Error("retained cleanup could not be verified");
+			}
+		})().catch((error) => {
+			refuse(error instanceof Error ? error : new Error("retained cleanup refused"));
+		});
+	};
+	const interrupt = (): void => { aborted = true; terminate(); };
+	if (signal?.aborted) interrupt();
+	else signal?.addEventListener("abort", interrupt, { once: true });
+	return {
+		isAborted: () => aborted, interrupt, terminate,
+		finished: () => termination,
+		dispose: () => {
+			exited = true;
+			signal?.removeEventListener("abort", interrupt);
+			proc.removeListener("close", onClose);
+		},
+	};
+}
 
 export function resolvePiBinary(env: NodeJS.ProcessEnv = process.env): string {
 	return resolveExecutableProvenance({ env }).pi;
@@ -535,6 +605,7 @@ export const createPiChildSpawner = (
 	resolveAdapterEntry: () => string | undefined = resolveClaudeOauthAdapterEntry,
 	resolveBinary: () => string = resolvePiBinary,
 	resolveBootstrapEntry: () => string | undefined = resolvePiChildModelBootstrapEntry,
+	operations: ProcessTreeOperations = retainedProcessTree,
 ) => (options: {
 	prompt: string;
 	cwd: string;
@@ -608,6 +679,10 @@ export const createPiChildSpawner = (
 			: process.env;
 		const binary = resolveBinary();
 		if (options.launchGate && !isAbsolute(binary)) throw new Error("retained launch requires absolute Pi provenance");
+		// Windows verified force cleanup may issue multiple asynchronous taskkills
+		// inside one operation; that API cannot fence each effect. Do not launch
+		// retained work there until a per-taskkill seam exists. Ungated is unchanged.
+		if (options.launchGate && process.platform === "win32") throw new Error("retained headless requires POSIX signal fencing");
 		options.launchGate?.beforeSpawn();
 		// SAFETY: stdio is piped below, so the spawned child always has non-null streams.
 		const proc = spawnImpl(binary, [...subprocessArgs, ...roleArgs, ...adapterArgs, ...bootstrapArgs], {
@@ -632,8 +707,27 @@ export const createPiChildSpawner = (
 			proc.stdin.write(options.prompt);
 			proc.stdin.end();
 		}
-		const abortState = attachAbortSignal(proc, options.signal);
-		interrupt = abortState.interrupt;
+		let authorityLost = false;
+		let readinessTimer: ReturnType<typeof setTimeout> | undefined;
+		const refuseEffect = (error: Error): void => {
+			if (authorityLost) return;
+			authorityLost = true;
+			clearTimeout(readinessTimer);
+			refuseReady(error);
+			try { options.launchGate?.onRefused(); }
+			catch { /* Local authority remains lost even if the owner cannot persist it. */ }
+		};
+		const abortState = options.launchGate
+			? attachRetainedAbortSignal(proc, options.signal, (pid) => {
+				if (authorityLost) throw new Error("retained authority lost");
+				try { return options.launchGate!.beforeSignal(pid); }
+				catch (error) {
+					refuseEffect(error instanceof Error ? error : new Error("retained signal refused"));
+					throw error;
+				}
+			}, operations, refuseEffect)
+			: attachAbortSignal(proc, options.signal);
+		interrupt = () => { if (!authorityLost) abortState.interrupt(); };
 		const stderr = new BoundedUtf8Tail();
 		const payloadBudget = new PiRunPayloadBudget();
 		let finalAssistantText = "";
@@ -642,12 +736,14 @@ export const createPiChildSpawner = (
 		let protocolError: string | undefined;
 		let settled = false;
 		const settle = (outcome: Extract<SubagentEvent, { kind: "run-settled" }>["outcome"]): void => {
-			if (settled) return;
+			if (settled || authorityLost) return;
 			settled = true;
+			clearTimeout(readinessTimer);
 			refuseReady(new Error("child settled before prompt release"));
 			emit({ kind: "run-settled", outcome });
 		};
 		const processLine = (line: string) => {
+			if (settled || authorityLost) return;
 			const parsed = parseJsonLine(line);
 			if (!parsed) return;
 			for (const event of mapPiEvent(parsed)) {
@@ -681,6 +777,7 @@ export const createPiChildSpawner = (
 		const onStdout = (data: string | Uint8Array) => stdout.write(data);
 		const onStderr = (data: string | Uint8Array) => stderr.append(data);
 		const cleanup = () => {
+			clearTimeout(readinessTimer);
 			proc.stdout.removeListener("data", onStdout);
 			proc.stderr.removeListener("data", onStderr);
 			abortState.dispose();
@@ -689,35 +786,51 @@ export const createPiChildSpawner = (
 		proc.stderr.on("data", onStderr);
 		proc.once("close", (code, closeSignal) => {
 			stdout.end();
-			if (protocolError) {
-				settle({ kind: "failed", errorText: protocolError, partialText: finalAssistantText || undefined });
-			} else if (abortState.isAborted()) {
-				settle({ kind: "interrupted", partialText: finalAssistantText || undefined });
-			} else if (code === 0 && stopReason !== "error" && stopReason !== "aborted") {
-				settle({ kind: "completed", finalText: finalAssistantText });
-			} else {
-				settle({
-					kind: "failed",
-					errorText: boundRetainedResult(
-						errorMessage || stderr.toString() || (closeSignal ? `pi killed by ${closeSignal}` : `pi exited with code ${code ?? "unknown"}`),
-						ERROR_MAX,
-					),
-					partialText: finalAssistantText || undefined,
-				});
-			}
-			cleanup();
+			const finishClose = (): void => {
+				if (protocolError) {
+					settle({ kind: "failed", errorText: protocolError, partialText: finalAssistantText || undefined });
+				} else if (abortState.isAborted()) {
+					settle({ kind: "interrupted", partialText: finalAssistantText || undefined });
+				} else if (code === 0 && stopReason !== "error" && stopReason !== "aborted") {
+					settle({ kind: "completed", finalText: finalAssistantText });
+				} else {
+					settle({
+						kind: "failed",
+						errorText: boundRetainedResult(
+							errorMessage || stderr.toString() || (closeSignal ? `pi killed by ${closeSignal}` : `pi exited with code ${code ?? "unknown"}`),
+							ERROR_MAX,
+						),
+						partialText: finalAssistantText || undefined,
+					});
+				}
+				cleanup();
+			};
+			const pending = abortState.finished?.();
+			if (pending) void pending.then(finishClose).catch(refuseEffect);
+			else finishClose();
 		});
+		if (options.launchGate && !authorityLost) {
+			readinessTimer = setTimeout(() => {
+				refuseReady(new Error("retained readiness timeout"));
+				protocolError = "retained readiness timeout";
+				abortState.terminate();
+			}, 10_000);
+			readinessTimer.unref?.();
+		}
 		if (options.launchGate) proc.once("spawn", () => {
 			try {
-				if (settled || abortState.isAborted() || proc.pid === undefined) throw new Error("child unavailable before prompt release");
+				if (settled || authorityLost || protocolError || abortState.isAborted() || proc.pid === undefined) throw new Error("child unavailable before prompt release");
 				options.launchGate!.beforePrompt(proc.pid);
+				options.launchGate!.beforeStdin(proc.pid);
 				proc.stdin.write(options.prompt);
+				options.launchGate!.beforeStdin(proc.pid);
 				proc.stdin.end();
+				clearTimeout(readinessTimer);
 				markReady();
 			} catch (error) {
 				// Keep the handle/parser and held stdin. Closing stdin or signalling here
 				// would create an unfenced effect after authority was refused.
-				refuseReady(error instanceof Error ? error : new Error(String(error)));
+				refuseEffect(error instanceof Error ? error : new Error(String(error)));
 			}
 		});
 		proc.once("error", (error) => {

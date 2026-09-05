@@ -1,14 +1,16 @@
 # Plan 110: Evaluate an Effect v4 implementation of the subagent lifecycle
 
-> **Status: DEFERRED outside the active campaign (owner reversal, 2026-09-05).**
-> Effect is removed from the current plan wave. This plan is **NOT DONE** and is recorded as a
-> **NO-GO for campaign closure**: no production Effect dependency or migration is authorized now,
+> **Status: DEFERRED outside the current campaign (owner reversal, 2026-09-05); no GO/NO-GO
+> verdict recorded.**
+> Effect is removed from the current plan wave. This plan is **NOT DONE**, and no GO/NO-GO
+> verdict has been recorded: no production Effect dependency or migration is authorized now,
 > and the audit campaign does not wait on an Effect verdict. Dhruv will run a separate, deeper
 > Effect integration spike later. The pilot code, evidence, and provisional report are preserved
 > — untouched and unpublished — on `spike/404-effect-subagent-pilot`, and the draft staged
 > adoption-doc revisions stay on `sumo/draft-staged-effect-adoption-plan-revisions`, for that
-> future spike. Do not execute this plan inside the current campaign; the steps below are
-> retained as the specification for that future spike.
+> future spike. Do not execute this plan inside the current campaign; the steps below — including
+> the provisional-recommendation and human GO/NO-GO verdict requirements — are retained as the
+> specification for that future spike.
 
 > **Executor instructions**: Follow this plan step by step and run every verification command. This is a contained spike, not authorization for a broad rewrite. Keep production `SubagentManager` as the reference implementation. Use stable Effect core APIs only, pin the tested RC exactly as a devDependency, and produce evidence plus a provisional recommendation for human review. Do not switch production in this plan. When evidence is complete, update this plan's row in `plans/README.md` unless a reviewer says they own the index.
 >

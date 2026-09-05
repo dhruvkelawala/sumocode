@@ -1,6 +1,6 @@
 # Plan 111: Extract a plain-TypeScript RPC host lifecycle seam
 
-> **Executor instructions**: Follow this plan step by step and run every verification command. Refactor without changing observable behavior. Add lifecycle characterization first, then move ownership behind one deep module. This plan does not adopt Effect; Plan 110's Effect pilot is deferred outside the active campaign and does not gate or assist this plain-TypeScript seam. Run signal, reload, child-exit, readiness, integration, and visual gates; never promote goldens. When done, update this plan's row in `plans/README.md` unless a reviewer says they own the index.
+> **Executor instructions**: Follow this plan step by step and run every verification command. Refactor without changing observable behavior. Add lifecycle characterization first, then move ownership behind one deep module. This plan does not adopt Effect; Plan 110's Effect pilot is deferred outside the current campaign and does not gate or assist this plain-TypeScript seam. Run signal, reload, child-exit, readiness, integration, and visual gates; never promote goldens. When done, update this plan's row in `plans/README.md` unless a reviewer says they own the index.
 >
 > **Drift check (run first)**: `git diff --stat b34bd79..HEAD -- dist/host src/sumo-tui/rpc/host.ts src/sumo-tui/rpc/host-lifecycle.ts src/sumo-tui/rpc/host-lifecycle.test.ts src/sumo-tui/rpc/runtime.ts src/sumo-tui/rpc/runtime.test.ts src/sumo-tui/rpc/client.ts src/sumo-tui/rpc/client.test.ts src/sumo-tui/rpc/chrome-cache-worker-client.ts src/sumo-tui/runtime/terminal-controller.ts test/integration/rpc-host-shell.test.ts`
 > **Working-tree preflight (run at the same time)**: `git status --short -- dist/host src/sumo-tui/rpc/host.ts src/sumo-tui/rpc/host-lifecycle.ts src/sumo-tui/rpc/host-lifecycle.test.ts src/sumo-tui/rpc/runtime.ts src/sumo-tui/rpc/runtime.test.ts src/sumo-tui/rpc/client.ts src/sumo-tui/rpc/client.test.ts src/sumo-tui/rpc/chrome-cache-worker-client.ts src/sumo-tui/runtime/terminal-controller.ts test/integration/rpc-host-shell.test.ts`. If this reports pre-existing work, STOP and preserve it; do not layer the refactor on an unknown dirty surface.
@@ -12,7 +12,7 @@
 - **Priority**: P2
 - **Effort**: L
 - **Risk**: HIGH
-- **Depends on**: `plans/094-truthful-command-readiness.md`, `plans/104-terminal-delivery-end-to-end-recovery.md` (Plan 110 is deferred outside the active campaign; its pilot verdict does not gate this plain-TypeScript seam)
+- **Depends on**: `plans/094-truthful-command-readiness.md`, `plans/104-terminal-delivery-end-to-end-recovery.md` (Plan 110 is deferred outside the current campaign; the deferred pilot's future verdict does not gate this plain-TypeScript seam)
 - **Category**: tech-debt
 - **Milestone**: M4 — Lifecycle
 - **Planned at**: commit `b34bd79`, 2026-08-28

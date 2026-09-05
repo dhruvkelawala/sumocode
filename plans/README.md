@@ -23,13 +23,14 @@ landing (worktree/branch gone, no commits; back to TODO); DF-1 fix verified land
 `integrate/track-d` as `e055c3b` (remote `fix/sidebar-fill-height` tip is a stale unrelated
 commit — branch deletable); Orchestration v2 track 065–071 indexed with issues #303–#309.
 **Ledger reconciled:** 2026-09-05 at `99b8cc4d` — owner reversal: Effect is removed from the
-active plan wave. Plan 110 is **DEFERRED outside the active campaign** — NOT DONE and recorded
-NO-GO for campaign closure; no production Effect dependency or migration is authorized now. Its
+active plan wave. Plan 110 is **DEFERRED outside the current campaign; no GO/NO-GO verdict
+recorded** — NOT DONE; no production Effect dependency or migration is authorized now. Its
 pilot code/evidence/provisional report stay preserved, unpublished, on
 `spike/404-effect-subagent-pilot`, and the draft staged-adoption doc revisions stay on
 `sumo/draft-staged-effect-adoption-plan-revisions`, for Dhruv's future separate deeper Effect
-spike. Active plans 106, 111–115 remain plain TypeScript and continue; Plan 105 stays rejected;
-Plan 115's final-wave gate counts only accepted non-deferred 091–114 rows as required.
+spike. Active plans 106, 111–115 remain plain TypeScript and continue; Plan 105 stays rejected.
+The deferral removes only Plan 110 from Plan 115's final-wave gate; 106 and 111–114 must still
+be `DONE` before Plan 115 runs.
 
 > **Track relationship**: The RPC migration (Track A) explicitly **keeps SumoCode's transcript
 > view-model engine** — `docs/research/pi-rpc-migration.md` lists "the transcript view-model
@@ -676,7 +677,7 @@ residuals remain in force.
 | 104 | [Terminal delivery recovery E2E](104-terminal-delivery-end-to-end-recovery.md) | P1 | L | M3 | 092, 093, 100 | DONE locally — `3a83e436`, `d87ce812`; verified crash cleanup, deferred-index replay/ack/redaction, fresh hydration, and non-vacuous 8 KiB projection bounds; production unchanged; focused real-process recovery 10/10 with zero survivors after timeout-evidence repair; official integration at `3a83e436`: 27 seam + 200 integration, zero survivors; tsc/build/lint green (tsc covers src only); historical full unit/native/visual results at `fde69f76`, not rerun for test-only repairs | [#398](https://github.com/dhruvkelawala/sumocode/issues/398) |
 | 106 | [Scale terminal runtime with active work](106-scale-terminal-runtime-with-active-work.md) | P2 | L | M3 | 093, 104 | TODO | [#400](https://github.com/dhruvkelawala/sumocode/issues/400) |
 | 107 | [Scale retained transcript/live Activity](107-scale-retained-transcript-and-live-activity.md) | P2 | L | M3 | 103 | DONE — [PR #447](https://github.com/dhruvkelawala/sumocode/pull/447) at `a4228e73`; indexed Activity/delegation folding removes history scans and bounds changed-path copies, while ChatPager virtualizes off-screen live cards without dropping feed truth, navigation, failures, ordering, or read state. Evidence: focused 183/183; unit 2,998/2,998; integration seam 27/27 plus 167/167 and zero-orphan audit; static/resume/dead-code gates green; 29-scenario visual CI passed with no canon/golden changes | [#401](https://github.com/dhruvkelawala/sumocode/issues/401) |
-| 110 | [Effect `SubagentManager` pilot](110-effect-subagent-manager-pilot.md) | P2 | L | M4 | 109 | DEFERRED (owner reversal 2026-09-05) — outside the active campaign; NOT DONE and recorded NO-GO for campaign closure; no production Effect dependency/migration. Pilot code/evidence/provisional report preserved, unpublished, on `spike/404-effect-subagent-pilot`; draft staged-adoption doc revisions on `sumo/draft-staged-effect-adoption-plan-revisions` for a future separate deeper Effect spike | [#404](https://github.com/dhruvkelawala/sumocode/issues/404) |
+| 110 | [Effect `SubagentManager` pilot](110-effect-subagent-manager-pilot.md) | P2 | L | M4 | 109 | DEFERRED (owner reversal 2026-09-05) — outside the current campaign; NOT DONE, no GO/NO-GO verdict recorded; no production Effect dependency/migration. Pilot code/evidence/provisional report preserved, unpublished, on `spike/404-effect-subagent-pilot`; draft staged-adoption doc revisions on `sumo/draft-staged-effect-adoption-plan-revisions` for a future separate deeper Effect spike | [#404](https://github.com/dhruvkelawala/sumocode/issues/404) |
 | 111 | [Extract RPC host lifecycle seam](111-extract-rpc-host-lifecycle-seam.md) | P2 | L | M4 | 094, 104 | TODO | [#405](https://github.com/dhruvkelawala/sumocode/issues/405) |
 | 112 | [Durable subagent registry](112-durable-subagent-registry.md) | P2 | L | M5 | 095, 097, 098, 104, 109 | TODO | [#406](https://github.com/dhruvkelawala/sumocode/issues/406) |
 | 113 | [Worktree result disposition loop](113-worktree-result-disposition-loop.md) | P2 | L | M5 | 109, 112 | TODO | [#407](https://github.com/dhruvkelawala/sumocode/issues/407) |
@@ -689,7 +690,7 @@ residuals remain in force.
 
 1. **Immediate P1:** Plan 108 follows the now-complete prompt-privacy and Pi-matrix prerequisites and should go first because Plan 117 changes the installed executable boundary. Plan 102 is independent and may run in parallel after its private executor plan is reconciled with Plan 117's Bun/package/release changes; do not publish private security evidence. The published stack must be linearized before readiness.
 2. **M3 terminal reliability:** Plan 104 is now unblocked because Plan 100's completed PR is recorded. Run 104 before Plan 106 and before the Plan 111 host-lifecycle extraction.
-3. **M4 lifecycle:** Plan 110 is DEFERRED outside the active campaign (owner reversal 2026-09-05); it is no longer required for campaign closure, its pilot artifacts stay preserved for Dhruv's future separate deeper Effect spike, and no production Effect dependency/migration is authorized now. Plan 111 remains a plain-TypeScript seam independent of Effect; it follows Plan 104 and must preserve Plan 117's native launcher/child contracts.
+3. **M4 lifecycle:** Plan 110 is DEFERRED outside the current campaign (owner reversal 2026-09-05; no GO/NO-GO verdict recorded); it is no longer required for campaign closure, its pilot artifacts stay preserved for Dhruv's future separate deeper Effect spike, and no production Effect dependency/migration is authorized now. Plan 111 remains a plain-TypeScript seam independent of Effect; it follows Plan 104 and must preserve Plan 117's native launcher/child contracts. Plan 115's final-wave gate is not cleared by this deferral: only Plan 110 is excluded (Plan 105 stays rejected), so 106 and 111–114 must still finish before Plan 115 runs.
 4. **M5 product durability:** Plan 112 follows 104 plus the completed 095/097/098/109 foundations. Integrate 114 then 113 serially because they share registry/schema surfaces.
 5. **M6 docs:** Plan 115 remains last so final readiness, distribution, version, and plan claims describe the settled stack rather than forecasts.
 6. **Excluded:** Plan 105 remains rejected. Issue #448 is a bounded post-native responsiveness follow-up, not a prerequisite for the dependency waves above.
@@ -729,7 +730,7 @@ there. Never copy private security evidence into a branch, issue, PR, transcript
 
 ## Status values
 
-TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale) | DEFERRED (outside the active campaign, with owner/date and reason)
+TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale) | DEFERRED (outside the current campaign, with owner/date and reason)
 
 ## Findings considered and rejected
 

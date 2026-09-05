@@ -32,6 +32,7 @@ export class RpcHostLifecycle {
 	private code: number | undefined;
 	private exited = false;
 	private childOwned = false;
+	private childStopFailed = false;
 	private readonly resources: Finalizer[] = [];
 	private readonly subscriptions: Finalizer[] = [];
 	private readonly timers = new Map<TimerName, NodeJS.Timeout>();
@@ -39,7 +40,7 @@ export class RpcHostLifecycle {
 	private gitWatcher: (() => void) | undefined;
 	private treeRetry: { clear(): void } | undefined;
 	private runtime: HostRuntime | undefined;
-	private client: Pick<SumoRpcClient, "stop" | "stderr"> | undefined;
+	private client: (Pick<SumoRpcClient, "stop" | "stderr"> & Partial<Pick<SumoRpcClient, "adoptedChild">>) | undefined;
 	private cache: Pick<ChromeCacheWorkerClient, "write" | "dispose"> | undefined;
 	private cacheCwd = "";
 	private pendingChrome: CachedChrome | undefined;
@@ -116,7 +117,7 @@ export class RpcHostLifecycle {
 		this.options.onChildAdopted?.();
 	}
 
-	public ownClient(client: Pick<SumoRpcClient, "stop" | "stderr">, terminalIndexGate?: string): void {
+	public ownClient(client: Pick<SumoRpcClient, "stop" | "stderr"> & Partial<Pick<SumoRpcClient, "adoptedChild">>, terminalIndexGate?: string): void {
 		this.client = client;
 		this.terminalIndexGate = terminalIndexGate;
 	}
@@ -221,6 +222,9 @@ export class RpcHostLifecycle {
 			this.removeListeners();
 			this.resolveExit(this.code ?? code);
 			resolveStop();
+			// A live child keeps Node alive even with exitCode set. Entry still owns
+			// pre-adoption failures; adopted failures exit only after all cleanup.
+			if (this.childOwned && this.childStopFailed) this.exit(1);
 		});
 		return this.stopPromise;
 	}
@@ -248,7 +252,16 @@ export class RpcHostLifecycle {
 		if (this.gitWatcher) this.finalize({ name: "git-watcher", run: this.gitWatcher });
 		if (this.childOwned && !this.runtime && this.options.env.SUMOCODE_RELOAD === "1") this.restoreTerminal();
 		for (const finalizer of this.resources.splice(0).reverse()) this.finalize(finalizer);
-		try { await this.client?.stop(); } catch (error) { this.report("child", error); }
+		try { await this.client?.stop(); } catch (error) {
+			this.childStopFailed = true;
+			const wasReload = this.code === SUMOCODE_RELOAD_EXIT_CODE;
+			this.code = 1;
+			const child = this.client?.adoptedChild;
+			const evidence = { pid: child?.pid ?? null, exitCode: child?.exitCode ?? null, signalCode: child?.signalCode ?? null };
+			logDiagnostic("rpc_host_child_reap_failed", evidence);
+			this.report(`child (unreaped; identity snapshot ${JSON.stringify(evidence)})`, error);
+			if (wasReload) this.restoreTerminal();
+		}
 		for (const finalizer of this.subscriptions.splice(0).reverse()) this.finalize(finalizer);
 		if (this.terminalIndexGate) this.finalize({ name: "terminal-index-gate", run: () => rmSync(this.terminalIndexGate!, { force: true }) });
 		await new Promise<void>((resolveTurn) => setImmediate(resolveTurn));

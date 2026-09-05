@@ -312,6 +312,38 @@ describe("RpcHostLifecycle", () => {
 		}
 	});
 
+	it.each(["SIGTERM", "SIGINT", "unhandledRejection", "uncaughtException", "natural", "initialization", "reload"])("reports bounded reap failure through %s after terminal cleanup", async (reason) => {
+		vi.useFakeTimers();
+		try {
+			const f = fixture();
+			const stop = vi.fn(async () => { throw new Error("child still alive"); });
+			const running = f.lifecycle.start(async () => {
+				f.lifecycle.ownClient({ stop, stderr: "" });
+				f.lifecycle.childAdopted();
+				f.lifecycle.ownRuntime(f.runtime);
+				f.lifecycle.ownCache({ write: async () => undefined, dispose: async () => { f.trace.push("cache:dispose"); } }, ".");
+				if (reason === "initialization") throw new Error("initialization failed");
+				return reason === "natural" ? 0 : reason === "reload" ? 100 : f.lifecycle.waitForExit();
+			});
+			if (!["natural", "initialization", "reload"].includes(reason)) {
+				f.signals.emit(reason, new Error("fatal"));
+				f.signals.emit("SIGTERM");
+			}
+			await vi.runAllTimersAsync();
+			expect(await running).toBe(1);
+			expect(await f.lifecycle.waitForExit()).toBe(1);
+			expect(f.trace.filter((item) => item.startsWith("exit:"))).toEqual(["exit:1"]);
+			f.lifecycle.exit(0);
+			expect(f.trace.at(-1)).toBe("exit:1");
+			expect(f.trace.filter((item) => item.startsWith("exit:"))).toEqual(["exit:1"]);
+			expect(f.trace.indexOf("terminal:restore")).toBeLessThan(f.trace.indexOf("exit:1"));
+			expect(f.trace.indexOf("cache:dispose")).toBeLessThan(f.trace.indexOf("exit:1"));
+			expect(stop).toHaveBeenCalledTimes(1);
+			expect(f.signals.eventNames()).toEqual([]);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.useRealTimers(); }
+	});
+
 	it("finalizes partial acquisition after startup rejection", async () => {
 		const f = fixture();
 		await expect(f.lifecycle.start(async () => {

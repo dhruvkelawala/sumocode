@@ -188,7 +188,10 @@ describe("SumoRpcClient", () => {
 		}
 	});
 
-	it.each(["noop", "false", "throw", "fatal"] as const)("rejects bounded %s reap, shares failure and retains child for retry", async (mode) => {
+	it.each([
+		["noop", "SIGTERM"], ["false", "SIGTERM"], ["throw", "SIGTERM"], ["fatal", "SIGTERM"],
+		["noop", "SIGKILL"], ["false", "SIGKILL"], ["throw", "SIGKILL"], ["fatal", "SIGKILL"],
+	] as const)("rejects bounded %s reap, then permits explicit successful %s retry", async (mode, retrySignal) => {
 		vi.useFakeTimers();
 		const logged = vi.spyOn(console, "error").mockImplementation(() => {});
 		try {
@@ -218,18 +221,20 @@ describe("SumoRpcClient", () => {
 			expect(child.listenerCount("exit")).toBe(1);
 			expect(child.listenerCount("close")).toBe(1);
 			expect(vi.getTimerCount()).toBe(0);
-			child.kill.mockImplementation(() => {
-				queueMicrotask(() => {
-					child.signalCode = "SIGTERM";
-					child.emit("exit", null, "SIGTERM");
-					child.emit("close", null, "SIGTERM");
+			child.kill.mockImplementation((signal) => {
+				if (signal === retrySignal) queueMicrotask(() => {
+					child.signalCode = retrySignal;
+					child.emit("exit", null, retrySignal);
+					child.emit("close", null, retrySignal);
 				});
 				return true;
 			});
 			const retry = client.stop();
 			expect(retry).not.toBe(first);
-			await vi.advanceTimersByTimeAsync(0);
+			expect(client.stop()).toBe(retry);
+			await vi.advanceTimersByTimeAsync(3_000);
 			await retry;
+			expect(child.kill.mock.calls.slice(2)).toEqual(retrySignal === "SIGTERM" ? [["SIGTERM"]] : [["SIGTERM"], ["SIGKILL"]]);
 			expect(client.adoptedChild).toBeUndefined();
 			expect(child.listenerCount("exit")).toBe(0);
 			expect(child.listenerCount("close")).toBe(0);

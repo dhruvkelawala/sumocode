@@ -1,9 +1,18 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { makeNativePiBuildCopy } from "./build-native.mjs";
+
+const temporaryDirectories = [];
+
+afterEach(({ task }) => {
+	for (const directory of temporaryDirectories.splice(0)) {
+		if (task.result?.state === "pass") rmSync(directory, { recursive: true, force: true });
+		else console.error(`fixture retained: ${directory}`);
+	}
+});
 
 function write(path, contents) {
 	mkdirSync(dirname(path), { recursive: true });
@@ -12,6 +21,7 @@ function write(path, contents) {
 
 function fixture(layout) {
 	const directory = realpathSync(mkdtempSync(join(tmpdir(), "sumocode-native-build-resolution-")));
+	temporaryDirectories.push(directory);
 	const root = join(directory, "package");
 	const piPkg = layout === "pnpm"
 		? join(root, "node_modules/.pnpm/pi@0.84.4/node_modules/@earendil-works/pi-coding-agent")
@@ -55,6 +65,28 @@ describe("native Pi build-source preparation", () => {
 		expect(() => makeNativePiBuildCopy(piPkg, buildDir, root))
 			.toThrow(`Cannot resolve Pi build dependency parent-only within ${root}`);
 	});
+
+	for (const dependencyKind of ["dependencies", "optionalDependencies"]) {
+		it(`rejects escaped ${dependencyKind} without staging or executing external code`, () => {
+			const { root, piPkg, buildDir } = fixture("pnpm");
+			const manifestPath = join(piPkg, "package.json");
+			const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+			manifest[dependencyKind]["external-private"] = "1.0.0";
+			write(manifestPath, JSON.stringify(manifest));
+			// A sibling with the same prefix must not count as inside the checkout.
+			const externalRoot = mkdtempSync(`${root}-external-`);
+			const marker = join(externalRoot, "executed");
+			write(join(externalRoot, "package.json"), JSON.stringify({ name: "external-private", main: "index.cjs" }));
+			write(join(externalRoot, "index.cjs"), `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "executed");\n`);
+			symlinkSync(externalRoot, join(piPkg, "../../external-private"), "dir");
+			// Do not fall back to another in-checkout version after an escape.
+			write(join(root, "node_modules/external-private/package.json"), JSON.stringify({ name: "external-private" }));
+			expect(() => makeNativePiBuildCopy(piPkg, buildDir, root))
+				.toThrow(`Pi build dependency external-private resolves outside ${root}: ${externalRoot}`);
+			expect(existsSync(join(buildDir, "node_modules/external-private"))).toBe(false);
+			expect(existsSync(marker)).toBe(false);
+		});
+	}
 
 	for (const layout of ["pnpm", "nested"]) {
 		it(`preserves the ${layout} package's private dependency graph in a fresh build copy`, () => {

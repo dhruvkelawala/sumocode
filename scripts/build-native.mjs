@@ -130,7 +130,8 @@ export function makeNativePiBuildCopy(piPkg, buildDir, packageRoot = root) {
 	// Link package roots, not entry files: exports and transitive imports must
 	// keep Pi's installed graph. Never search above this checkout for dependencies.
 	const piRequire = createRequire(join(piPkg, "package.json"));
-	const rootPrefix = `${realpathSync(packageRoot)}${sep}`;
+	const realRoot = realpathSync(packageRoot);
+	const rootPrefix = `${realRoot}${sep}`;
 	for (const name of Object.keys({ ...manifest.dependencies, ...manifest.optionalDependencies })) {
 		const dependency = piRequire.resolve.paths(name)
 			.filter((directory) => directory.startsWith(rootPrefix))
@@ -140,9 +141,14 @@ export function makeNativePiBuildCopy(piPkg, buildDir, packageRoot = root) {
 			if (Object.hasOwn(manifest.optionalDependencies ?? {}, name)) continue;
 			throw new Error(`Cannot resolve Pi build dependency ${name} within ${packageRoot}`);
 		}
+		const realDependency = realpathSync(dependency);
+		// Missing optional packages may be skipped; installed escapes may not.
+		if (realDependency !== realRoot && !realDependency.startsWith(rootPrefix)) {
+			throw new Error(`Pi build dependency ${name} resolves outside ${packageRoot}: ${realDependency}`);
+		}
 		const target = join(buildDir, "node_modules", name);
 		mkdirSync(dirname(target), { recursive: true });
-		symlinkSync(realpathSync(dependency), target, "dir");
+		symlinkSync(realDependency, target, "dir");
 	}
 
 	const cliPath = join(buildDir, "dist/bun/cli.js");

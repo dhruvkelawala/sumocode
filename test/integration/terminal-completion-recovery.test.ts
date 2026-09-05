@@ -168,7 +168,10 @@ function launch(paths: TestRoot, sessionFile: string, overrides: NodeJS.ProcessE
 			return new Promise((resolveRequest, rejectRequest) => {
 				const timer = setTimeout(() => {
 					waiters.delete(id);
-					void supervised.captureFailure().then((evidenceDir) => rejectRequest(new Error(`Timed out waiting for ${type}. Evidence: ${evidenceDir}`)));
+					void supervised.captureFailure().then(
+						(evidenceDir) => rejectRequest(new Error(`Timed out waiting for ${type}. Evidence: ${evidenceDir}`)),
+						(error) => rejectRequest(new Error(`Timed out waiting for ${type}. Evidence capture failed: ${error instanceof Error ? error.message : String(error)}`)),
+					);
 				}, 10_000);
 				waiters.set(id, { resolve: resolveRequest, reject: rejectRequest, timer });
 				child.stdin.write(`${JSON.stringify({ type, id, ...fields })}\n`);

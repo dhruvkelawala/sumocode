@@ -64,7 +64,10 @@ producer-controlled `contentIndex` can force 50 M synchronous allocations from o
    `dependencies` for `effect` (it is inlined into the native binary and extension bundle). Upgrades are
    a reviewed ritual, never automated.
 4. **No `effect/unstable/*` in production code** unless a slice plan justifies it and wraps it behind
-   one project-owned interface. Child processes stay on `node:child_process`; fs stays on `node:fs`.
+   one project-owned interface. Files stay on `node:fs`. Child processes stay on `node:child_process`
+   by default; the one sanctioned exception is slice 2.5a below, where the verified
+   `NodeChildProcessSpawner` from `@effect/platform-node-shared` may back the headless-children layer
+   of `ChildSupervisor` if that slice's plan accepts the extra exact-pinned package.
 5. **No Effect type crosses a Pi boundary.** Tool `execute` callbacks, `pi.on(...)` handlers, pi-tui
    components, and `TerminalHost` keep their Promise/plain signatures; `ManagedRuntime.runPromise`
    and the `*Unsafe` bridges live at the edge.
@@ -126,7 +129,8 @@ of agent-driven work with human review.
 | 2.2 | A5 `backend-pane` steering acks | `Deferred` + one scoped poll fiber + `Effect.timeout` | `backend-pane.test.ts` (4 race tests) | S |
 | 2.3 | A7 `mapWithConcurrencyLimit` → `Effect.forEach({ concurrency })` | | `native-task-tool` suites | S |
 | 2.4 | A2 both backoff machines → one `Schedule.min([exponential, spaced])`, `Schedule.jittered`, `Schedule.tap` for once-per-episode diagnostics | `Schedule`, `Effect.retry` | `task-manager.test.ts:926`, bridge backoff cases | M |
-| 2.5 | A6 `ChildSupervisor` service over `node:child_process`; one `attachAbortSignal`; `waitForTreeEmpty` → `Effect.repeat` | `acquireRelease`, `Effect.timeout` | `backend-pi.test.ts`, `process-tree.test.ts`, integration zero-survivor audit | M |
+| 2.5a | A6 `ChildSupervisor` service, headless-children layer (`backend-pi.ts`, `native-task-tool.ts`): one `attachAbortSignal`, kills that can fail. **Decision in the slice plan:** plain `node:child_process` (default: no unstable namespace, no new package, keeps `JsonLineDecoder` byte caps) versus `NodeChildProcessSpawner` from `@effect/platform-node-shared@4.0.0-rc.112` (verified group kill via `process.kill(-pid)`, `forceKillAfter` escalation, `detached` default; sole dep `ws`; deletes ~120 lines but lives under `effect/unstable/process`). Revisit at Wave 6 if the namespace stabilises. | `acquireRelease`, `Effect.timeout` | `backend-pi.test.ts`, integration zero-survivor audit (mandatory: it changes who sends the signal) | M |
+| 2.5b | A6 durable-terminals layer stays on plain Node + `process-tree.ts` identity primitives; `waitForTreeEmpty` → `Effect.repeat` | `Effect.repeat`, `Schedule` | `process-tree.test.ts`, `task-manager.test.ts` | S |
 | 2.6a | A1 `SubagentManager`: `Deferred` settlement + `Effect.timeout` manifest (interrupts the losing git fan-out) | | `manager.test.ts` + plan 110 contract matrix | L |
 | 2.6b | A1: `Semaphore` visible-spawn + `Queue.bounded` dequeue | | same | M |
 | 2.6c | A1: `SubscriptionRef` snapshots + `FiberMap` children | | same | M |
@@ -228,9 +232,11 @@ Stated plainly so the campaign is judged against reality:
 4. **RC stability.** One prerelease every ~2.25 days; interface breaks in patch bumps; a `Deferred`
    waiter hang fixed in rc.111. Exact pins and a reviewed upgrade ritual are mandatory, and a 4.0.0
    final checkpoint should be planned.
-5. **Effect covers child processes and fs.** In rc.112 it does not, for SumoCode's needs: no adoption
-   constructor, no verified process-group kill, no `O_NOFOLLOW`/`fchmod`/inode-compare. Those stay on
-   Node APIs behind services; the value is the service seam and typed errors, not the platform layer.
+5. **Effect covers child processes and fs.** Only partly. The verified `NodeChildProcessSpawner` fits
+   headless children, but the RPC host adopts a child it did not spawn (no adoption constructor),
+   durable terminals need a start-time identity anchor the handle lacks, and Effect `FileSystem` has no
+   `O_NOFOLLOW`/`fchmod`/inode-compare. Those stay on Node APIs behind services; the value is the
+   service seam and typed errors, not the platform layer.
 6. **Test cost.** 26 test files and 198 `advanceTimers*` sites move to `TestClock`; two files toggle
    fake/real timers 17–24 times and need redesign, not translation.
 7. **Coexistence.** For most of Waves 2 and 3 a bug can live in either world. Budget review time for

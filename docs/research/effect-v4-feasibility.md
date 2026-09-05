@@ -41,8 +41,16 @@ superseded by production adoption. This document does not argue the decision; it
 4. **Three rc.112 facts change the plan.** Core `effect` ships `FileSystem`/`Path`/`ChildProcessSpawner`
    as interfaces only; implementations live in `@effect/platform-node@4.0.0-rc.112`. `NodeRuntime.runMain`
    installs its own SIGINT/SIGTERM handlers and is incompatible with SumoCode's signal-ownership transfer.
-   `ChildProcessSpawner` has no adoption constructor and unverifiable process-group kill semantics, so
-   child processes stay on `node:child_process` behind an Effect service.
+   `ChildProcessSpawner` has no adoption constructor, so the RPC host's pre-spawned Pi child stays on
+   `node:child_process` behind an Effect service. **Correction after a second pass:** the Node
+   implementation does exist, in `@effect/platform-node-shared@4.0.0-rc.112` (`NodeChildProcessSpawner`,
+   sole dependency `ws`). Verified: it signals the process group with `process.kill(-pid)`, falls back
+   to the single pid, escalates SIGTERM to SIGKILL through `forceKillAfter`, and defaults `detached`
+   on POSIX. It is therefore a viable implementation for **headless** subagent children
+   (`backend-pi.ts`, `native-task-tool.ts`) but not for durable terminals, whose handle needs a
+   start-time identity anchor and natural-exit-marker precedence that the spawner does not model.
+   Plan 118 records this as a decision at slice 2.5, defaulting to plain Node because the interface
+   lives under `effect/unstable/process` and the byte-capped `JsonLineDecoder` must be kept either way.
 5. **rc churn is real.** One prerelease every ~2.25 days; interface-breaking changes ship under
    "Patch Changes" (rc.112 changed public `Pool.State` and `Scope.State.Open`). rc.111 fixed a
    `Deferred` bug that could hang waiters forever. Exact pins and a reviewed upgrade ritual are required.
@@ -108,14 +116,14 @@ only place Schema or per-event `runPromise` would show.
 | A3 eleven-timer forest | `Scope`-owned `Effect.repeat` fibers | teardown checklists, five `disposed` guards | M / MED |
 | A4 refresh notification batching | `SubscriptionRef`/`PubSub` | newer-then-stale ordering | L / MED-HIGH, last |
 | A5 pane steering acks | `Deferred` + one poll fiber | four race repairs in 40 lines | S / LOW |
-| A6 two `attachAbortSignal` copies | `ChildSupervisor` service over `node:child_process` | duplication, unfailable kills | M / MED |
+| A6 two `attachAbortSignal` copies | `ChildSupervisor` service; one tag, two layers: headless children on plain Node or the verified `NodeChildProcessSpawner` (decision at slice 2.5), durable terminals on plain Node + `process-tree.ts` | duplication, unfailable kills | M / MED |
 | A7 hand-rolled worker pool | `Effect.forEach({ concurrency })` | no interruption propagation | S / LOW |
 | A8 delivery outbox | `Queue` + `Schema.TaggedError` | mirror-set pruning | S / LOW-MED |
 
 Stays plain: `task-store.ts`, `activity/persistence.ts` (synchronous by design, inside locks),
 `process-tree.ts` identity primitives, `git/worktree.ts` sync arm, per-chunk stdout decoding, node-pty
-harness. `effect/unstable/process` is not adoptable (no Node impl in core, no group-kill verification,
-no start-time identity anchor).
+harness. `effect/unstable/process` is adoptable only for headless children (see §2 point 4); durable
+terminals need the start-time identity anchor and exit-marker precedence it does not model.
 
 ### 4.2 RPC host (Track B) — best candidate, most dangerous location
 
@@ -168,6 +176,7 @@ virtual clock; `scripts/test-wait-classification.test.mjs` must learn TestClock 
 | "As much as possible" | wrong as a target | ~25k of 58k LOC must stay plain; realistic footprint is ~8–10k LOC of lifecycle/host core plus ~15 boundary schemas |
 | Some perf | mostly wrong | +8–19 ms shipped startup, +86–91 ms dev startup without deep imports, +5–13 MB RSS; only steady-state in-fiber code is marginally faster on Node |
 | Effect is stable enough | conditionally | rc every 2.25 days, breaking in patch bumps, `Deferred` hang fixed two releases ago; exact pins and upgrade ritual mitigate |
+| Effect covers child processes and fs | partly | headless children could use the verified `NodeChildProcessSpawner` (rc.112, dep `ws`); the adopted RPC child, durable terminals, and the hardened fs layer cannot; plan 118 defaults to plain Node behind services and revisits at 4.0.0 final |
 | Agents will write it correctly | new bug class | ~40 renamed/removed v3 APIs; cheat sheet in §6 must be in `AGENTS.md`; semantic traps compile fine |
 
 ## 6. Effect v4 cheat sheet for agents (verified against rc.112)

@@ -525,12 +525,55 @@ nativeDescribe("native executable contract", () => {
 		}
 	});
 
-	it("tightens a retained diagnostics file to owner-only", () => {
-		const diagFile = join(tempRoot("sumocode-native-private-diag-"), "diag.jsonl");
-		writeFileSync(diagFile, `${JSON.stringify({ event: "boot_screen_frame" })}\n`, { mode: 0o644 });
-		const result = runNative(["-d", "--no-clear-diag", "diag", diagFile]);
+	it("keeps retained diagnostics output owner-only while summarizing a separate input", () => {
+		const root = tempRoot("sumocode-native-private-diag-");
+		const input = join(root, "summary-input.jsonl");
+		const output = join(root, "debug-output.jsonl");
+		const originalInput = `${JSON.stringify({ event: "boot_screen_frame" })}\n`;
+		const retained = `${JSON.stringify({ event: "retained_output" })}\n`;
+		writeFileSync(input, originalInput, { mode: 0o644 });
+		writeFileSync(output, retained, { mode: 0o644 });
+		const result = runNative(["-d", "--no-clear-diag", "--diag-file", output, "diag", input]);
 		expect(result.status).toBe(0);
-		expect(statSync(diagFile).mode & 0o777).toBe(0o600);
+		expect(result.stdout).toContain(`Diagnostics: ${input}`);
+		expect(readFileSync(output, "utf8")).toBe(retained);
+		expect(statSync(output).mode & 0o777).toBe(0o600);
+		expect(readFileSync(input, "utf8")).toBe(originalInput);
+		expect(statSync(input).mode & 0o777).toBe(0o644);
+	});
+
+	it("selects explicit then inherited diagnostics output independently of diag input", () => {
+		const root = tempRoot("sumocode-native-diag-precedence-");
+		const input = join(root, "summary-input.jsonl");
+		const inherited = join(root, "inherited-output.jsonl");
+		const explicit = join(root, "explicit-output.jsonl");
+		const originalInput = `${JSON.stringify({ event: "boot_screen_frame" })}\n`;
+		writeFileSync(input, originalInput, { mode: 0o644 });
+		writeFileSync(inherited, "inherited\n", { mode: 0o644 });
+		writeFileSync(explicit, "explicit\n", { mode: 0o644 });
+
+		const inheritedResult = runNative(["-d", "--no-clear-diag", "diag", input], {
+			env: { SUMO_TUI_DIAG_FILE: inherited },
+		});
+		expect(inheritedResult.status).toBe(0);
+		expect(inheritedResult.stdout).toContain(`Diagnostics: ${input}`);
+		expect(readFileSync(inherited, "utf8")).toBe("inherited\n");
+		expect(statSync(inherited).mode & 0o777).toBe(0o600);
+		expect(readFileSync(input, "utf8")).toBe(originalInput);
+		expect(statSync(input).mode & 0o777).toBe(0o644);
+
+		chmodSync(inherited, 0o644);
+		const explicitResult = runNative(["-d", "--no-clear-diag", "--diag-file", explicit, "diag", input], {
+			env: { SUMO_TUI_DIAG_FILE: inherited },
+		});
+		expect(explicitResult.status).toBe(0);
+		expect(explicitResult.stdout).toContain(`Diagnostics: ${input}`);
+		expect(readFileSync(explicit, "utf8")).toBe("explicit\n");
+		expect(statSync(explicit).mode & 0o777).toBe(0o600);
+		expect(readFileSync(inherited, "utf8")).toBe("inherited\n");
+		expect(statSync(inherited).mode & 0o777).toBe(0o644);
+		expect(readFileSync(input, "utf8")).toBe(originalInput);
+		expect(statSync(input).mode & 0o777).toBe(0o644);
 	});
 
 	it("renders static slash completion between editor and hydrated command readiness", async () => {

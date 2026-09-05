@@ -334,6 +334,48 @@ Review-ready gate:
 - Simplification: retained the existing fixture/test file and harness APIs; removed redundant PID-only cleanup paths; no generic supervisor/registry framework.
 - Exceptions: nested Vitest is a bounded fixture runtime; real host/Herdr adoption, arbitrary launch cut points, disk CAS/leases, journal bounds, and exact-once session delivery remain explicit later work, not inferred from this gate.
 
+## Authorized bounded continuation from `f4623fe8`: registry schema/CAS/lease only
+
+The coordinating user accepted sa74's CLEAN review of the six-cell **fixture-owned retained-supervisor** gate and authorized this registry-only slice while sa75 owns heavy verification. That acceptance is not production adoption. Plan 112 remains **TODO/in progress**, not DONE; index bookkeeping remains with the parent. The reconciled prerequisite/drift decisions above still apply. Checkout was clean at `f4623fe858627a04911656f1f89c45cb46af5fbe`.
+
+### Shipped seam and evidence pin
+
+Only `src/subagents/registry.ts` and its colocated test were added. No existing domain, backend, manager, delivery, Activity, task-mode, Plan106/111, client/host, or launcher file changed. No production caller imports the registry.
+
+- `b3ac591a`: private versioned records, exclusive creation, owner-bound reads.
+- `06725292`: locked revision CAS and process writer leases.
+- `d276e178`: fail-closed schema/ownership/artifact hardening and deterministic recovery tests.
+
+`SubagentRegistry` owns `create/get/acquireWriter/transition`. Plain v1 objects persist owner session, backend/status, private task directory, child **and supervisor** process-tree identities/member anchors, pane/worktree/session references, model/role labels, timestamps, observed outcome, completion ID, delivery state/claim, and bounded private result/manifest pointers. Null means absent evidence, not inferred success or death. Once populated, process/worktree/completion evidence cannot be silently discarded or replaced by a transition. No prompt/result text is accepted as an extra metadata field.
+
+### Decisions and limits
+
+- Reused `activity/persistence.ts`'s existing exclusive publication, private file lock, and fsynced atomic replacement, plus `private-artifact.ts` ownership checks and `captureProcessBirthTime`. No Effect, dependency, framework, generic registry adapter, or terminal-schema reuse. These shared modules were not changed.
+- Explicit canonical registry path beneath an existing owned **0700 parent**; no default path or operator-state discovery. The registry directory is 0700 and records are 0600. Root identity is pinned and rechecked; widened/symlinked/foreign paths and malformed/oversized records refuse access without repair. Registry lock prevalidation adds the UID check absent from the shared lock reader.
+- Revision and lease live in the same atomic record. Every successful acquisition/renewal advances both revision and lease generation. Another writer needs **expiry plus proven former-process death**; live or unknown former owners block even after expiry. PID, kernel birth, and token all participate in write ownership. A new same-process factory does not implicitly inherit the former token.
+- Lease durations are 1–60,000 ms, persisted as epoch milliseconds. Writes reject wall-clock rollback below the last committed timestamp; expiry is inclusive at the deadline. Forward jumps do not evict live owners. Transitions recheck lease ownership/expiry after the synchronous metadata callback. This is not permission to perform control effects inside that callback.
+- Metadata is capped at 256 KiB **including the atomic writer's formatting**; each result/manifest pointer is capped at 4 MiB and names a private direct-child artifact with matching size. Referenced missing/corrupt artifacts fail closed, not auto-repaired. Already-lost/ambiguous records can retain an absent task directory when no artifact pointer requires it. Automatic classification/discovery of damaged active records remains later recovery work.
+- Corrupt records/locks, abandoned crash artifacts, task directories and worktrees are preserved. The reused transaction helpers release their own transient locks/temps and can reclaim proven-dead transaction locks; no durable record retention/deletion policy was added. File fsync + atomic rename/link follows the existing filesystem contract; directory fsync is best-effort on unsupported filesystems, not a power-loss guarantee.
+- Tests exercise competing registry instances and nested lock contention deterministically in one serial test process; PID/birth inspection includes the test process itself. They do **not** constitute a new multiprocess registry race/crash campaign. Child/supervisor anchors are schema-checked evidence, not a new live-process verification or control operation. Delivery claims are schema only; there is no claim/ack/delivery workflow or exact-once assertion.
+
+### RED → GREEN and bounded verification
+
+Private evidence root: `/tmp/sumocode-plan112-registry-YVOprd/`. Verified source is pinned at `d276e178e6654b54124afb75f60b80f0294d6e78`.
+
+- Initial record test failed on the absent module; CAS test then failed on the absent acquisition method. Later behavioral REDs exposed foreign-owned lock reclamation, a non-private parent, unknown empty-key metadata, and compact-versus-formatted document bounds. The size fixture was corrected from 1,800 to 2,200 anchors so independent assertions prove compact <256 KiB and formatted >256 KiB; `size-red.log` records failure with the old size guard. `targeted.log` retains the earlier fixture-threshold failure, not a final green claim.
+- `TMPDIR=<evidence-root> pnpm vitest run src/subagents/registry.test.ts src/private-artifact.test.ts src/background-tasks/process-tree.test.ts --maxWorkers=1 --fileParallelism=false`: **65/65 passed**, including **46 registry tests**, `targeted-final.log`. Coverage includes owner/revision/generation competition, stale leases, PID/birth/token mismatch, unknown/live former owners, clock rollback/deadline, corrupt schema/locks, duplicate IDs/anchors, symlinks/private modes/foreign ownership, preserved references, and old/new canonical revision recovery around injected rename failure.
+- `pnpm exec tsc --noEmit && pnpm build`: passed, `build-final.log`.
+- Focused Oxlint and `git diff --check`: passed, `lint-final.log` (empty means no diagnostics).
+- No PTY, full unit, integration, native, visual, bundle, or benchmark command ran in this continuation. No operator state was read, evidence deleted, branch/worktree deleted, golden changed, amend, push, or merge performed.
+
+### Next boundary: production-owned retained supervisor, not adoption yet
+
+Before changing shutdown safety, build the production retained owner with the existing backend parser/handle and executable/model/tool provenance intact. Persist starting **before spawn**, track and verify the supervisor and child before releasing work, fence controls at effect time, and publish bounded private result/manifest evidence before notifying listeners. Obtain the heavy lane and prove starting/pre-release/running/settling/post-manifest crash cuts, plus supervisor death both before release and while children run. Every child/pane must have a durable record and verified cleanup/accounting; supervisor death remains truthful **lost/ambiguous**, not pipe reconnection or automatic adoption.
+
+Later slices must separately prove live-old-owner persist-only handoff, expired-dead-owner generation CAS, actual retained-host `/reload` and `/new`/`resume`/`fork` behavior, real pane association, and completion-ID insertion acknowledgement across delivery races. The fixture gate and this metadata module do not discharge those requirements. Stop here before production adoption or delivery.
+
+Review-ready gate: bundled `review-ready/contract.md`; trace is private record → owner/schema check → transaction lock → revision/lease decision → validated atomic publication → fresh owner-bound read. **Caller-knowledge:** callers supply identity/evidence and expected revision/generation, not filesystem protocol. **Deletion:** removing the registry would spread its validation/locking/fencing back into callers. **Ownership:** all new record/lease policy stays in the registry. **Test-surface:** public methods over private real files with clock/OS fault seams, not private helpers. Simplification reused the existing persistence primitives and stdlib structural equality; no speculative interface or runtime wiring. Exceptions are the explicit heavy-lane, same-user filesystem trust, missing-active-evidence, and non-adoption limits above. This bounded source slice is ready for parent review; Plan 112 is not complete.
+
 ## Maintenance notes
 
 Recovery capability must be stated per backend and replacement type. Do not generalize visible-pane evidence into a claim that pipe-based headless runs are recoverable.

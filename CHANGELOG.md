@@ -62,6 +62,8 @@ landed between the original scaffold and this release.
   provenance, and `pnpm runcat:install` / `pnpm runcat:check` setup helpers.
 
 ### Changed
+- **Pi 0.85.1 support** — upgraded for GPT-6 Astra, `cacheTTL`, and
+  selector fixes; removed the obsolete `pi-server` packaging workaround.
 - **Pi 0.85 / Fable 5.1 support** — updated the supported Pi runtime to
   0.85.0, including root-import packaging and overlay compatibility. #455
 - **Herdr-only terminal hosting** — removed the legacy alternate-host adapter,

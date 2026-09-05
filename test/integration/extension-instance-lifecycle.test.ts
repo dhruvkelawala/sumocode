@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it } from "vitest";
+import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
 interface RpcRequest {
 	readonly type: string;
@@ -26,14 +27,15 @@ interface LifecycleEvidence {
 const roots: string[] = [];
 const children: ChildProcessWithoutNullStreams[] = [];
 
-afterEach(() => {
+afterEach(async () => {
 	for (const child of children.splice(0)) {
 		if (child.exitCode === null) child.kill("SIGTERM");
+		await waitForExit(child);
 	}
 	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function launch(extension: string, sessionDir: string, sessionFile: string, evidenceFile: string): RpcClient {
+function launch(extension: string, sessionDir: string, sessionFile: string, evidenceFile: string, agentDir: string): RpcClient {
 	const child = spawn(process.env.PI_BIN ?? "pi", [
 		"--mode", "rpc",
 		"--offline",
@@ -44,7 +46,7 @@ function launch(extension: string, sessionDir: string, sessionFile: string, evid
 		"--session", sessionFile,
 	], {
 		cwd: process.cwd(),
-		env: { ...process.env, PI_EXTENSION_LIFECYCLE_EVIDENCE: evidenceFile },
+		env: buildSpawnEnv(process.env, { PI_CODING_AGENT_DIR: agentDir, PI_EXTENSION_LIFECYCLE_EVIDENCE: evidenceFile }),
 		stdio: ["pipe", "pipe", "pipe"],
 	});
 	children.push(child);
@@ -101,6 +103,8 @@ describe("Pi 0.80.6 extension instance lifecycle", () => {
 	it("recreates the extension factory for new, resume, and fork", async () => {
 		const root = mkdtempSync(join(tmpdir(), "sumocode-extension-lifecycle-"));
 		roots.push(root);
+		const agentDir = join(root, "agent");
+		mkdirSync(agentDir, { mode: 0o700 });
 		const sessionDir = join(root, "sessions");
 		mkdirSync(sessionDir, { recursive: true });
 		const evidenceFile = join(root, "lifecycle.jsonl");
@@ -125,7 +129,7 @@ describe("Pi 0.80.6 extension instance lifecycle", () => {
 			"",
 		].join("\n"));
 
-		const client = launch(extension, sessionDir, sessionFile, evidenceFile);
+		const client = launch(extension, sessionDir, sessionFile, evidenceFile, agentDir);
 		await client.request({ type: "get_state" });
 		await client.request({ type: "new_session" });
 		await client.request({ type: "switch_session", sessionPath: sessionFile });

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it } from "vitest";
+import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
 interface RpcRequest {
 	readonly type: string;
@@ -21,11 +22,12 @@ const children: ChildProcessWithoutNullStreams[] = [];
 afterEach(async () => {
 	for (const child of children.splice(0)) {
 		if (child.exitCode === null) child.kill("SIGTERM");
+		await waitForExit(child);
 	}
 	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function launch(extension: string, sessionDir: string, sessionFile: string): RpcClient {
+function launch(extension: string, sessionDir: string, sessionFile: string, agentDir: string): RpcClient {
 	const child = spawn(process.env.PI_BIN ?? "pi", [
 		"--mode", "rpc",
 		"--offline",
@@ -34,7 +36,11 @@ function launch(extension: string, sessionDir: string, sessionFile: string): Rpc
 		"-e", extension,
 		"--session-dir", sessionDir,
 		"--session", sessionFile,
-	], { cwd: process.cwd(), stdio: ["pipe", "pipe", "pipe"] });
+	], {
+		cwd: process.cwd(),
+		env: buildSpawnEnv(process.env, { PI_CODING_AGENT_DIR: agentDir }),
+		stdio: ["pipe", "pipe", "pipe"],
+	});
 	children.push(child);
 	const waiters = new Map<string, { resolve: (value: any) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
 	createInterface({ input: child.stdout }).on("line", (line) => {
@@ -81,6 +87,8 @@ describe("terminal completion Pi fidelity", () => {
 	it("preserves completion details across sendMessage, RPC replay, and session hydration", async () => {
 		const root = mkdtempSync(join(tmpdir(), "sumocode-terminal-fidelity-"));
 		roots.push(root);
+		const agentDir = join(root, "agent");
+		mkdirSync(agentDir, { mode: 0o700 });
 		const sessionDir = join(root, "sessions");
 		mkdirSync(sessionDir, { recursive: true });
 		const extension = join(root, "terminal-fidelity-extension.ts");
@@ -92,7 +100,7 @@ describe("terminal completion Pi fidelity", () => {
 			"",
 		].join("\n"));
 
-		const first = launch(extension, sessionDir, sessionFile);
+		const first = launch(extension, sessionDir, sessionFile, agentDir);
 		await first.request({ type: "prompt", message: "/terminal-fidelity" });
 		const live = await first.request({ type: "get_messages" });
 		first.child.kill("SIGTERM");
@@ -102,7 +110,7 @@ describe("terminal completion Pi fidelity", () => {
 		expect(persistedAfterSend.match(/completion-probe/g)).toHaveLength(1);
 		expect(persistedAfterSend).toContain('"customType":"terminal-result"');
 
-		const second = launch(extension, sessionDir, sessionFile);
+		const second = launch(extension, sessionDir, sessionFile, agentDir);
 		const hydrated = await second.request({ type: "get_messages" });
 		second.child.kill("SIGTERM");
 		await waitForExit(second.child);

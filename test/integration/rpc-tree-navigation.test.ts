@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it } from "vitest";
+import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
 interface RpcEntry {
 	readonly id: string;
@@ -48,10 +49,7 @@ const requestId = "019f8a78-b4f5-7b7b-b774-2d2e4bce9001";
 const RPC_TEST_TIMEOUT_MS = 60_000;
 
 function isolatedChildEnv(agentDir: string, evidence: string, diagFile?: string): NodeJS.ProcessEnv {
-	const env: NodeJS.ProcessEnv = { ...process.env, PI_CODING_AGENT_DIR: agentDir, SUMOCODE_RPC_CHILD: "1", SUMOCODE_TREE_HOOK_EVIDENCE: evidence };
-	for (const key of Object.keys(env)) {
-		if (/^(?:AWS_|AZURE_|GOOGLE_|GEMINI_|OPENAI_|ANTHROPIC_|MISTRAL_|GROQ_|XAI_|DEEPSEEK_|OPENROUTER_|TOGETHER_|FIRECRAWL_|TAVILY_|BRAVE_)/i.test(key) || /(?:API_KEY|API_TOKEN|AUTH_TOKEN|ACCESS_TOKEN|CLIENT_SECRET|PASSWORD)$/i.test(key)) delete env[key];
-	}
+	const env = buildSpawnEnv(process.env, { PI_CODING_AGENT_DIR: agentDir, SUMOCODE_RPC_CHILD: "1", SUMOCODE_TREE_HOOK_EVIDENCE: evidence });
 	for (const key of ["SUMO_TUI_DIAG_FILE", "SUMOCODE_TASK_DIAG_FILE", "SUMOCODE_TASK_RESPONSE_FILE", "SUMOCODE_TASK_EXIT_FILE", "SUMOCODE_TASK_STARTED_FILE"]) delete env[key];
 	if (diagFile !== undefined) env.SUMO_TUI_DIAG_FILE = diagFile;
 	return env;

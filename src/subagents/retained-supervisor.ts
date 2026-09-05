@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { realpathSync, statSync } from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import { systemProcessTree, type ProcessTreeOperations } from "../background-tasks/process-tree.js";
 import { spawnPiChild, type HeadlessLaunchGate, type SpawnedChild } from "./backend-pi.js";
 import type { RunOutcome, SubagentEvent } from "./domain.js";
 import { buildCompletionManifest, type CompletionManifestEvidence } from "./manifest.js";
 import { RetainedResults } from "./retained-results.js";
-import { SubagentRegistry, type RegistryProcess, type SubagentRecord } from "./registry.js";
+import { SubagentRegistry, SubagentRevisionConflict, type RegistryProcess, type SubagentRecord } from "./registry.js";
 
 /** Launch admission only. Callers must retain their backend even when ready rejects. */
 export function createRetainedHeadlessLaunchGate(
@@ -21,7 +23,9 @@ function prepareLaunch(
 	initial: SubagentRecord,
 	supervisorEvidence: RegistryProcess,
 	operations: ProcessTreeOperations,
+	attach = false,
 ) {
+	const id = initial.id;
 	const supervisor = structuredClone(supervisorEvidence);
 	if (initial.backend !== "headless" || initial.status !== "starting" || supervisor.identity.pid !== process.pid
 		|| supervisor.identity.processGroupId !== process.pid) {
@@ -34,15 +38,30 @@ function prepareLaunch(
 		}
 	};
 	assertLive(supervisor);
-	let current = registry.create(initial);
-	current = registry.acquireWriter(current.id, current.revision, 60_000);
+	const candidate = attach ? registry.get(id) : registry.create(initial);
+	if (!candidate || !isDeepStrictEqual(candidate, initial) || candidate.status !== "starting"
+		|| candidate.writerLease !== null || candidate.supervisor !== null || candidate.child !== null) {
+		throw new Error("retained attach requires the matching unowned starting record");
+	}
+	let current = registry.acquireWriter(candidate.id, candidate.revision, 60_000);
 	let lease = current.writerLease!;
 	if (lease.owner.pid !== supervisor.identity.pid || !supervisor.verification.members.some((member) =>
 		member.pid === lease.owner.pid && member.processStartTime === lease.owner.processStartTime)) {
 		throw new Error("retained writer does not identify this supervisor");
 	}
 	const transition = (update: (record: SubagentRecord) => SubagentRecord): void => {
-		current = registry.transition(current.id, current.revision, lease.generation, update);
+		// Retry only metadata conflicts, never OS inspection or child effects. Keep
+		// our generation pinned: another acquisition is not our heartbeat.
+		for (let attempt = 0; ; attempt++) {
+			const fresh = registry.get(id);
+			if (!fresh) throw new Error("missing retained record");
+			try {
+				current = registry.transition(fresh.id, fresh.revision, lease.generation, update);
+				return;
+			} catch (error) {
+				if (!(error instanceof SubagentRevisionConflict) || attempt >= 2) throw error;
+			}
+		}
 	};
 	transition((record) => ({ ...record, supervisor }));
 	let phase: "prepared" | "admitted" | "blocked" | "released" = "prepared";
@@ -85,8 +104,17 @@ function prepareLaunch(
 		released: () => phase === "released",
 		renew: (): void => {
 			fence();
-			current = registry.acquireWriter(current.id, current.revision, 60_000);
-			lease = current.writerLease!;
+			for (let attempt = 0; ; attempt++) {
+				try {
+					current = registry.acquireWriter(current.id, current.revision, 60_000);
+					if (current.writerLease!.renewedAt >= lease.expiresAt) throw new Error("retained renewal missed deadline");
+					lease = current.writerLease!;
+					return;
+				} catch (error) {
+					if (!(error instanceof SubagentRevisionConflict) || attempt >= 2) throw error;
+					transition((record) => record);
+				}
+			}
 		},
 	};
 }
@@ -95,6 +123,9 @@ interface RetainedHeadlessOptions {
 	readonly registry: SubagentRegistry;
 	readonly initial: SubagentRecord;
 	readonly supervisor: RegistryProcess;
+	/** Explicit attach only; cwd must come from the validated private bootstrap,
+	 * not request payloads. Registry metadata has no non-worktree cwd field. */
+	readonly attach?: { readonly cwd: string };
 	readonly launch: Omit<Parameters<typeof spawnPiChild>[0], "launchGate" | "signal">;
 	readonly baseRef: string;
 }
@@ -109,8 +140,8 @@ type Settlement = "settled" | "lost" | "ambiguous";
 
 /**
  * One backend/parser owner, with read-only observers and durable settlement.
- * No controls, delivery, disposal or adoption: the process entry must heartbeat
- * this owner and account for its death before enabling production retention.
+ * Owns heartbeat through settlement, not controls, delivery, disposal or adoption.
+ * The process entry must account for its death before enabling retention.
  */
 export class RetainedHeadlessSupervisor {
 	private readonly authority: ReturnType<typeof prepareLaunch>;
@@ -121,6 +152,7 @@ export class RetainedHeadlessSupervisor {
 	private readonly listeners = new Set<(record: SubagentRecord) => void>();
 	private terminal = false;
 	private stopped = false;
+	private heartbeat?: ReturnType<typeof setInterval>;
 	private finish!: (state: Settlement) => void;
 	/** Local verdict; disk/lease failure can leave the last durable record unchanged. */
 	public readonly settlement = new Promise<Settlement>((resolve) => { this.finish = resolve; });
@@ -129,9 +161,14 @@ export class RetainedHeadlessSupervisor {
 	public readonly ready = new Promise<void>((resolve, reject) => { this.acceptReady = resolve; this.refuseReady = reject; });
 
 	public constructor(options: RetainedHeadlessOptions, private readonly dependencies: RetainedHeadlessDependencies = {}) {
+		if (options.attach && (options.attach.cwd !== options.launch.cwd
+			|| realpathSync(options.attach.cwd) !== options.attach.cwd || !statSync(options.attach.cwd).isDirectory()
+			|| (options.initial.worktree !== null && options.initial.worktree.path !== options.attach.cwd))) {
+			throw new Error("retained cwd binding mismatch");
+		}
 		this.cwd = options.launch.cwd;
 		this.baseRef = options.baseRef;
-		this.authority = prepareLaunch(options.registry, options.initial, options.supervisor, dependencies.operations ?? systemProcessTree);
+		this.authority = prepareLaunch(options.registry, options.initial, options.supervisor, dependencies.operations ?? systemProcessTree, options.attach !== undefined);
 		this.artifacts = new RetainedResults(options.initial.taskDir);
 		this.child = (dependencies.spawn ?? spawnPiChild)({
 			...options.launch, signal: undefined,
@@ -146,6 +183,10 @@ export class RetainedHeadlessSupervisor {
 				},
 			},
 		});
+		this.heartbeat = setInterval(() => {
+			try { this.renew(); } catch { /* renew records authority loss locally. */ }
+		}, 20_000);
+		this.heartbeat.unref();
 		// Own the handle before subscription (which can synchronously settle).
 		let subscriptionError: Error | undefined;
 		try {
@@ -158,7 +199,7 @@ export class RetainedHeadlessSupervisor {
 			this.fail("ambiguous");
 		}
 		void (subscriptionError ? Promise.reject(subscriptionError) : Promise.resolve(this.child.ready)).then(() => {
-			if (!this.authority.released()) throw new Error("child not ready for prompt release");
+			if (this.stopped || !this.authority.released()) throw new Error("child not ready for prompt release");
 			this.acceptReady();
 		}).catch((error: Error) => {
 			// Ready refusal is not child exit. Keep the parser for its later outcome.
@@ -234,6 +275,7 @@ export class RetainedHeadlessSupervisor {
 				result: result.pointer, manifest: manifestPointer, delivery: { state: "pending", claim: null },
 			}));
 			this.stopped = true;
+			clearInterval(this.heartbeat);
 			this.finish("settled");
 			this.notify();
 		} catch { this.fail("ambiguous"); }
@@ -253,6 +295,7 @@ export class RetainedHeadlessSupervisor {
 	private fail(status: "lost" | "ambiguous"): void {
 		if (this.stopped) return;
 		this.stopped = true;
+		clearInterval(this.heartbeat);
 		this.markUncertain(status);
 		this.finish(status);
 	}

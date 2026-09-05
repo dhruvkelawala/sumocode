@@ -13,7 +13,7 @@ import { createRetainedHeadlessLaunchGate, RetainedHeadlessSupervisor } from "./
 
 // oxlint-disable-next-line anti-slop/no-module-mocking -- filesystem publication faults; all other I/O uses private real files.
 vi.mock("node:fs", async (original) => ({ ...await original<typeof import("node:fs")>() }));
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
 function fixture() {
 	const root = realpathSync(mkdtempSync(join(tmpdir(), "sumocode-launch-gate-")));
@@ -50,7 +50,7 @@ function fixture() {
 	return { registry, record, supervisor, operations, setNow: (value: number) => { now = value; } };
 }
 
-function retainedFixture() {
+function retainedFixture(attach = false) {
 	const f = fixture();
 	const proc = Object.assign(new EventEmitter(), {
 		pid: 4242, stdout: new EventEmitter(), stderr: new EventEmitter(),
@@ -62,8 +62,10 @@ function retainedFixture() {
 	let releaseManifest!: (manifest: CompletionManifest) => void;
 	const manifest = new Promise<CompletionManifest>((resolve) => { releaseManifest = resolve; });
 	const subscriptions = vi.fn();
+	if (attach) f.registry.create(f.record);
 	const owner = new RetainedHeadlessSupervisor({
 		registry: f.registry, initial: f.record, supervisor: f.supervisor,
+		attach: attach ? { cwd: f.record.taskDir } : undefined,
 		launch: { prompt: "prompt-secret", cwd: f.record.taskDir, inherited: {}, builtInTools: ["read"] }, baseRef: "host-base",
 	}, {
 		operations: f.operations,
@@ -82,6 +84,123 @@ function retainedFixture() {
 }
 
 describe("retained supervisor handle ownership", () => {
+	it("attaches an unowned starting record and renews through manifest collection", async () => {
+		vi.useFakeTimers();
+		try {
+			const f = retainedFixture(true);
+			f.setNow(21_000);
+			await vi.advanceTimersByTimeAsync(20_000);
+			expect(f.registry.get("sa-proof")?.writerLease?.expiresAt).toBe(81_000);
+			f.proc.emit("spawn");
+			await f.owner.ready;
+			f.proc.emit("close", 0);
+			await Promise.resolve();
+			f.setNow(41_000);
+			await vi.advanceTimersByTimeAsync(20_000);
+			f.release();
+			expect(await f.owner.settlement).toBe("settled");
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.useRealTimers(); }
+	});
+
+	for (const refusal of ["missing", "duplicate", "owned", "id", "session", "taskDir", "cwd", "worktree"] as const) {
+		it(`refuses ${refusal} attach before backend spawn`, () => {
+			const f = fixture();
+			if (refusal !== "missing") f.registry.create(f.record);
+			if (refusal === "owned") f.registry.acquireWriter(f.record.id, 1, 60_000);
+			const otherDir = join(f.record.taskDir, "other");
+			mkdirSync(otherDir, { mode: 0o700 });
+			const initial = { ...(refusal === "owned" ? f.registry.get(f.record.id)! : f.record),
+				id: refusal === "id" ? "sa-other" : f.record.id,
+				ownerSessionId: refusal === "session" ? "other" : f.record.ownerSessionId,
+				taskDir: refusal === "taskDir" ? otherDir : f.record.taskDir,
+				worktree: refusal === "worktree" ? { path: otherDir, repoRoot: otherDir, baseRef: "base", branch: "branch" } : null,
+			};
+			const spawn = vi.fn();
+			expect(() => new RetainedHeadlessSupervisor({
+				registry: f.registry, initial, supervisor: f.supervisor,
+				attach: refusal === "duplicate" ? undefined : { cwd: refusal === "cwd" ? otherDir : f.record.taskDir },
+				launch: { prompt: "secret", cwd: f.record.taskDir, inherited: {} }, baseRef: "base",
+			}, { operations: f.operations, spawn })).toThrow();
+			expect(spawn).not.toHaveBeenCalled();
+			expect(existsSync(join(f.record.taskDir, "events.json"))).toBe(false);
+		});
+	}
+
+	it("preserves control grants, reservations and revocation across startup and a slow manifest", async () => {
+		vi.useFakeTimers();
+		const f = retainedFixture();
+		const grant = () => {
+			const r = f.registry.get(f.record.id)!;
+			return f.registry.acquireControl(r.id, r.revision, r.writerLease!.generation, r.controlHead, r.writerLease!.owner, 60_000);
+		};
+		const authority = (r: SubagentRecord) => ({ id: r.id, ownerSessionId: r.ownerSessionId,
+			generation: r.controlLease!.generation, owner: r.controlLease!.owner, head: r.controlHead });
+		let r = grant();
+		r = f.registry.reserveControl(r.revision, authority(r), `${r.id}:${r.controlHead + 1}`);
+		const transition = f.registry.transition.bind(f.registry);
+		// A second request wins after the kernel read but before its metadata CAS.
+		vi.spyOn(f.registry, "transition").mockImplementationOnce((id, revision, generation, update) => {
+			r = f.registry.reserveControl(r.revision, authority(r), `${r.id}:${r.controlHead + 1}`);
+			return transition(id, revision, generation, update);
+		});
+		f.proc.emit("spawn");
+		await f.owner.ready;
+		f.proc.emit("close", 0);
+		await Promise.resolve();
+		f.setNow(21_000);
+		await vi.advanceTimersByTimeAsync(20_000);
+		r = f.registry.get(r.id)!;
+		r = f.registry.releaseControl(r.revision, r.writerLease!.generation, authority(r));
+		r = grant();
+		r = f.registry.reserveControl(r.revision, authority(r), `${r.id}:${r.controlHead + 1}`);
+		f.release();
+		expect(await f.owner.settlement).toBe("settled");
+		expect(f.registry.get(r.id)).toMatchObject({ controlHead: 6, controlLease: r.controlLease });
+		expect(f.spawn).toHaveBeenCalledTimes(1);
+		expect(f.proc.stdin.write).toHaveBeenCalledTimes(1);
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	for (const cut of ["prompt", "manifest"] as const) {
+		for (const loss of ["expiry", "other writer"] as const) {
+			it(`stops automatic renewal on ${loss} before ${cut}, with no late release or pointers`, async () => {
+				vi.useFakeTimers();
+				const f = retainedFixture();
+				if (cut === "manifest") {
+					f.proc.emit("spawn");
+					await f.owner.ready;
+					f.proc.emit("close", 0);
+					await Promise.resolve();
+				}
+				f.setNow(61_000);
+				if (loss === "other writer") {
+					const replacement = new SubagentRegistry(join(f.record.taskDir, "..", "registry"), "session-a", {
+						now: () => 61_000,
+						writerIdentity: { token: "replacement", pid: process.pid + 1, processStartTime: "new-birth" },
+						inspectWriter: (writer) => writer.token === "replacement" ? "alive" : "dead",
+					});
+					const r = replacement.get(f.record.id)!;
+					replacement.acquireWriter(r.id, r.revision, 60_000);
+				}
+				await vi.advanceTimersByTimeAsync(20_000);
+				expect(await f.owner.settlement).toBe("ambiguous");
+				expect(vi.getTimerCount()).toBe(0);
+				if (cut === "prompt") {
+					f.proc.emit("spawn");
+					await expect(f.owner.ready).rejects.toThrow(/stopped/);
+					expect(f.proc.stdin.write).not.toHaveBeenCalled();
+				}
+				f.release();
+				await Promise.resolve();
+				expect(f.registry.get(f.record.id)).toMatchObject({ completionId: null, result: null, manifest: null });
+				expect(existsSync(join(f.record.taskDir, "manifest.json"))).toBe(false);
+				expect(f.proc.kill).not.toHaveBeenCalled();
+				expect(() => f.owner.renew()).toThrow(/stopped/);
+			});
+		}
+	}
+
 	it("keeps a starting record and starts no backend when initial journal publication refuses", () => {
 		const f = fixture();
 		writeFileSync(join(f.record.taskDir, "events.json"), "private prior evidence", { mode: 0o600 });

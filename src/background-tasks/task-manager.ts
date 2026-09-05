@@ -46,6 +46,7 @@ import {
 	type TerminalTaskStatus,
 	type TerminalWaitResult,
 } from "./task-types.js";
+import { TerminalSupervisor } from "./terminal-supervisor.js";
 import { buildVisibleTaskPaths, shellEscape } from "./visible-spawn.js";
 
 const DEFAULT_POLL_INTERVAL_MS = 250;
@@ -96,7 +97,6 @@ const INDEX_INIT_RETRY_BACKOFF_MAX_MS = 60_000;
 
 interface RuntimeTask {
 	child?: ChildProcess;
-	pollTimer?: ReturnType<typeof setInterval>;
 	reconcilePromise?: Promise<void>;
 	treeVerification?: ProcessTreeVerification;
 	lastTreeVerificationAt: number;
@@ -512,7 +512,7 @@ export class TerminalTaskManager {
 	private readonly createId: () => string;
 	private readonly createCompletionId: () => string;
 	private readonly createClaimToken: () => string;
-	private readonly pollIntervalMs: number;
+	private readonly supervisor: TerminalSupervisor;
 	private readonly logMaxBytes: number;
 	private readonly termGraceMs: number;
 	private readonly killGraceMs: number;
@@ -569,7 +569,10 @@ export class TerminalTaskManager {
 		this.createId = options.createId ?? (() => `term-${this.now().toString(36)}-${randomUUID().slice(0, 8)}`);
 		this.createCompletionId = options.createCompletionId ?? (() => `completion-${randomUUID()}`);
 		this.createClaimToken = options.createClaimToken ?? (() => `claim-${randomUUID()}`);
-		this.pollIntervalMs = normalizePositive(options.pollIntervalMs, DEFAULT_POLL_INTERVAL_MS);
+		this.supervisor = new TerminalSupervisor(normalizePositive(options.pollIntervalMs, DEFAULT_POLL_INTERVAL_MS), (ids) => {
+			if (!this.indexInitialized) this.ensureIndexInitialized();
+			for (const id of ids) this.scheduleReconcile(id);
+		});
 		this.logMaxBytes = normalizePositive(options.logMaxBytes, DEFAULT_LOG_MAX_BYTES);
 		this.termGraceMs = normalizePositive(options.termGraceMs, DEFAULT_TERM_GRACE_MS);
 		this.killGraceMs = normalizePositive(options.killGraceMs, DEFAULT_KILL_GRACE_MS);
@@ -1418,10 +1421,7 @@ export class TerminalTaskManager {
 		if (this.detached) return;
 		this.detached = true;
 		this.clearIndexInitRetryTimer();
-		for (const runtime of this.runtime.values()) {
-			if (runtime.pollTimer) clearInterval(runtime.pollTimer);
-			runtime.pollTimer = undefined;
-		}
+		this.supervisor.dispose();
 		this.listeners.clear();
 		this.snapshotListeners.clear();
 	}
@@ -1465,19 +1465,9 @@ export class TerminalTaskManager {
 		if (this.detached) return;
 		const task = this.tasks.get(id) ?? this.store.getIndexed(id);
 		if (!task || isTerminalTaskSettled(task.status)) return;
-		const runtime = this.ensureRuntime(task);
-		if (runtime.pollTimer) {
-			if (!this.indexInitialized) this.clearIndexInitRetryTimer();
-			return;
-		}
-		runtime.pollTimer = setInterval(() => this.handlePollTick(id), this.pollIntervalMs);
-		runtime.pollTimer.unref?.();
+		this.ensureRuntime(task);
+		this.supervisor.add(id);
 		if (!this.indexInitialized) this.clearIndexInitRetryTimer();
-	}
-
-	private handlePollTick(id: string): void {
-		if (!this.indexInitialized) this.ensureIndexInitialized();
-		this.scheduleReconcile(id);
 	}
 
 	private scheduleReconcile(id: string): void {
@@ -2083,11 +2073,8 @@ export class TerminalTaskManager {
 	}
 
 	private clearPoll(id: string): void {
-		const runtime = this.runtime.get(id);
+		this.supervisor.delete(id);
 		if (!this.indexInitialized) this.scheduleIndexInitRetryTimer();
-		if (!runtime?.pollTimer) return;
-		clearInterval(runtime.pollTimer);
-		runtime.pollTimer = undefined;
 	}
 
 	private timestamp(task: TerminalTaskSnapshot): number {

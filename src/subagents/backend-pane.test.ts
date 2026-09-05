@@ -173,6 +173,8 @@ const createGateHarness = () => {
 		beforeSpawn(launch) { nonce = launch.nonce; },
 		wrapperBorn(value) { evidence.push(value); },
 		beforeRelease: vi.fn(),
+		beforeEffect: vi.fn(),
+		onRefused: vi.fn(),
 		interrupt: vi.fn(),
 	};
 	const host: TerminalHost = {
@@ -196,6 +198,219 @@ const createGateHarness = () => {
 };
 
 describe("visible launch gate", () => {
+	it("fences follow-up host commands after an awaited creation and retains late pane evidence", async () => {
+		vi.useFakeTimers();
+		try {
+			const h = createGateHarness();
+			let revoked = false;
+			h.gate.beforeEffect = () => { if (revoked) throw new Error("lease lost"); };
+			h.options.pi.exec.mockImplementation(async () => {
+				revoked = true;
+				return { code: 0, stdout: "created pane evidence", stderr: "", killed: false };
+			});
+			h.host.startAgentPane = async (pi) => {
+				await pi.exec("herdr", ["pane", "split"]);
+				await pi.exec("herdr", ["pane", "run", "w1:p2", "private command"]).catch(() => undefined);
+				await pi.exec("herdr", ["pane", "close", "w1:p2"]).catch(() => undefined);
+				return startedPane;
+			};
+			h.subscribe();
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(h.options.pi.exec).toHaveBeenCalledTimes(1);
+			await expect(h.child.ready).rejects.toThrow(/lease lost/);
+			expect(h.events.some((event) => event.kind === "pane-attached")).toBe(true);
+			expect(h.gate.onRefused).toHaveBeenCalledOnce();
+			expect(settledEvents(h.events)).toEqual([]);
+			expect(h.fs.files.has(h.releaseFile)).toBe(false);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.clearAllTimers(); vi.useRealTimers(); }
+	});
+
+	for (const boundary of ["ack tick", "result tick"] as const) {
+		it(`rejects late consumption at ${boundary} after authority loss and stops timers`, async () => {
+			vi.useFakeTimers();
+			try {
+				const h = createGateHarness();
+				h.subscribe(); h.born();
+				await vi.advanceTimersByTimeAsync(50);
+				await h.child.ready;
+				if (boundary === "result tick") await vi.advanceTimersByTimeAsync(500);
+				const consumed = h.child.send!("consumed private text");
+				const pending = h.child.send!("pending private text");
+				const consumedCheck = consumed.catch((error: Error) => error.message);
+				const pendingCheck = pending.catch((error: Error) => error.message);
+				h.fs.files.delete(`${h.taskDir}/control/steer-1.txt`);
+				if (boundary === "result tick") {
+					// The earlier-registered response poll wins the shared 800ms deadline.
+					h.fs.files.set(`${h.taskDir}/exit.code`, "0");
+				}
+				h.gate.beforeEffect = () => { throw new Error("revoked"); };
+				h.gate.onRefused = vi.fn(() => { throw new Error("disk unavailable"); });
+				await vi.advanceTimersByTimeAsync(1000);
+				expect(await consumedCheck).toMatch(/unconfirmed/);
+				expect(await pendingCheck).toMatch(/unconfirmed/);
+				expect(h.fs.files.get(`${h.taskDir}/control/steer-2.txt`)).toBe("pending private text");
+				expect(h.gate.onRefused).toHaveBeenCalledOnce();
+				h.gate.beforeEffect = vi.fn();
+				h.child.interrupt();
+				await expect(h.child.send!("retry forbidden")).rejects.toThrow(/unconfirmed/);
+				expect(() => h.child.requestClose!()).toThrow(/unconfirmed/);
+				expect(h.gate.interrupt).not.toHaveBeenCalled();
+				expect(h.host.closePane).not.toHaveBeenCalled();
+				expect(settledEvents(h.events)).toEqual([]);
+				expect(vi.getTimerCount()).toBe(0);
+			} finally { vi.clearAllTimers(); vi.useRealTimers(); }
+		});
+	}
+
+	it("does not authorize host failure cleanup from a pane ID even with a live persistence owner", async () => {
+		vi.useFakeTimers();
+		try {
+			const h = createGateHarness();
+			h.options.pi.exec.mockResolvedValue({ code: 0, stdout: "", stderr: "", killed: false });
+			h.host.startAgentPane = async (pi) => {
+				await pi.exec("herdr", ["pane", "split"]);
+				await pi.exec("herdr", ["pane", "close", "w1:p2"]).catch(() => undefined);
+				return startedPane;
+			};
+			h.subscribe();
+			await vi.advanceTimersByTimeAsync(100);
+			expect(h.options.pi.exec).toHaveBeenCalledTimes(1);
+			await expect(h.child.ready).rejects.toThrow(/verified.*authority/);
+			expect(h.events.some((event) => event.kind === "pane-attached")).toBe(true);
+			expect(h.operations.signalTree).not.toHaveBeenCalled();
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.clearAllTimers(); vi.useRealTimers(); }
+	});
+
+	for (const cut of ["late pane", "release", "steer temp", "close after await"] as const) {
+		it(`fences the ${cut} write boundary without discarding private evidence`, async () => {
+			vi.useFakeTimers();
+			try {
+				const h = createGateHarness();
+				let revoked = false;
+				h.gate.beforeEffect = () => { if (revoked) throw new Error("lease revoked"); };
+				if (cut === "late pane") h.host.startAgentPane = async () => {
+					await Promise.resolve(); revoked = true; return startedPane;
+				};
+				if (cut === "release") h.gate.beforeRelease = () => { revoked = true; };
+				h.subscribe(); h.born();
+				await vi.advanceTimersByTimeAsync(50);
+				if (cut === "late pane" || cut === "release") {
+					await expect(h.child.ready).rejects.toThrow(/lease revoked/);
+					expect(h.fs.files.has(h.releaseFile)).toBe(false);
+					expect(h.events.some((event) => event.kind === "pane-attached")).toBe(true);
+					expect(h.evidence).toHaveLength(cut === "release" ? 1 : 0);
+				} else {
+					await h.child.ready;
+					if (cut === "steer temp") {
+						const write = h.fs.writeFileSync.bind(h.fs);
+						h.fs.writeFileSync = (path, text, opts) => {
+							write(path, text, opts);
+							if (path.endsWith(".tmp")) revoked = true;
+						};
+						await expect(h.child.send!("private pending text")).rejects.toThrow(/unconfirmed/);
+						expect(h.fs.files.get(`${h.taskDir}/control/steer-1.txt.tmp`)).toBe("private pending text");
+						expect(h.fs.files.has(`${h.taskDir}/control/steer-1.txt`)).toBe(false);
+					} else {
+						await Promise.resolve(); revoked = true;
+						expect(() => h.child.requestClose!()).toThrow(/unconfirmed/);
+						expect(h.fs.files.has(`${h.taskDir}/control/close.request`)).toBe(false);
+					}
+				}
+				expect(h.fs.files.get(`${h.taskDir}/prompt.txt`)).toBe("private task prompt");
+				expect(h.fs.files.has(h.bornFile)).toBe(true);
+				expect(h.gate.onRefused).toHaveBeenCalledOnce();
+				expect(settledEvents(h.events)).toEqual([]);
+				expect(h.host.closePane).not.toHaveBeenCalled();
+				expect(vi.getTimerCount()).toBe(0);
+			} finally { vi.clearAllTimers(); vi.useRealTimers(); }
+		});
+	}
+
+	it("allows fenced host command and key effects on the normal launch path", async () => {
+		vi.useFakeTimers();
+		try {
+			const h = createGateHarness();
+			h.options.pi.exec.mockResolvedValue({ code: 0, stdout: "", stderr: "", killed: false });
+			h.host.startAgentPane = async (pi) => {
+				await pi.exec("herdr", ["pane", "split"]);
+				await pi.exec("herdr", ["pane", "run", "w1:p2", "run.sh"]);
+				await pi.exec("herdr", ["pane", "send-key", "w1:p2", "enter"]);
+				return startedPane;
+			};
+			h.subscribe(); h.born();
+			await vi.advanceTimersByTimeAsync(50);
+			await h.child.ready;
+			expect(h.options.pi.exec).toHaveBeenCalledTimes(3);
+			expect(h.fs.files.get(h.releaseFile)).toBe(h.nonce);
+			expect(h.gate.onRefused).not.toHaveBeenCalled();
+		} finally { vi.clearAllTimers(); vi.useRealTimers(); }
+	});
+
+	it("stops delayed host follow-ups after launch timeout without closing the late pane", async () => {
+		vi.useFakeTimers();
+		try {
+			const h = createGateHarness();
+			let finish = (): void => {};
+			const created = new Promise<void>((resolve) => { finish = resolve; });
+			h.options.pi.exec.mockImplementation(async () => {
+				await created;
+				return { code: 0, stdout: "created", stderr: "", killed: false };
+			});
+			h.host.startAgentPane = async (pi) => {
+				await pi.exec("herdr", ["pane", "split"]);
+				await pi.exec("herdr", ["pane", "run", "w1:p2", "run.sh"]).catch(() => undefined);
+				return startedPane;
+			};
+			h.subscribe();
+			await vi.advanceTimersByTimeAsync(30_000);
+			await expect(h.child.ready).rejects.toThrow(/timed out/);
+			finish();
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(h.options.pi.exec).toHaveBeenCalledTimes(1);
+			expect(h.events.some((event) => event.kind === "pane-attached")).toBe(true);
+			expect(h.host.closePane).not.toHaveBeenCalled();
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.clearAllTimers(); vi.useRealTimers(); }
+	});
+
+	it("contains a refused cancellation callback and stops autonomous watchers", async () => {
+		vi.useFakeTimers();
+		try {
+			const h = createGateHarness();
+			h.subscribe(); h.born();
+			await vi.advanceTimersByTimeAsync(50);
+			await h.child.ready;
+			const send = h.child.send!("private pending text").catch((error: Error) => error.message);
+			h.gate.interrupt = vi.fn(() => { throw new Error("verified cancellation refused"); });
+			expect(() => h.child.interrupt()).not.toThrow();
+			expect(await send).toMatch(/unconfirmed/);
+			h.child.interrupt();
+			expect(h.gate.interrupt).toHaveBeenCalledOnce();
+			expect(h.gate.onRefused).toHaveBeenCalledOnce();
+			expect(h.fs.files.get(`${h.taskDir}/control/steer-1.txt`)).toBe("private pending text");
+			expect(settledEvents(h.events)).toEqual([]);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.clearAllTimers(); vi.useRealTimers(); }
+	});
+
+	it("preserves a gated send file after the unchanged visible consumption timeout", async () => {
+		vi.useFakeTimers();
+		try {
+			const h = createGateHarness();
+			h.subscribe(); h.born();
+			await vi.advanceTimersByTimeAsync(50);
+			await h.child.ready;
+			const send = h.child.send!("private timed out text").catch((error: Error) => error.message);
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(await send).toMatch(/not acknowledged within 30000ms.*file remains/);
+			expect(h.fs.files.get(`${h.taskDir}/control/steer-1.txt`)).toBe("private timed out text");
+			expect(h.gate.onRefused).not.toHaveBeenCalled();
+			expect(vi.getTimerCount()).toBe(1);
+		} finally { vi.clearAllTimers(); vi.useRealTimers(); }
+	});
+
 	it("refuses a planted release symlink before the persistence callback", async () => {
 		vi.useFakeTimers();
 		try {
@@ -305,7 +520,7 @@ describe("visible launch gate", () => {
 				expect(h.fs.files.has(h.bornFile)).toBe(true);
 				expect(h.evidence).toHaveLength(cut === "wrapper persistence" ? 0 : 1);
 				h.child.interrupt();
-				expect(h.gate.interrupt).toHaveBeenCalledOnce();
+				expect(h.gate.interrupt).not.toHaveBeenCalled();
 				expect(h.host.closePane).not.toHaveBeenCalled();
 				expect(settledEvents(h.events)).toEqual([]);
 			} finally { vi.clearAllTimers(); vi.useRealTimers(); }
@@ -346,8 +561,8 @@ describe("visible launch gate", () => {
 		await expect(h.child.ready).rejects.toThrow("starting lease refused");
 		expect(h.host.startAgentPane).not.toHaveBeenCalled();
 		expect(h.subscribe).toThrow("already subscribed");
-		await expect(h.child.send!("secret steer")).rejects.toThrow("not been released");
-		expect(() => h.child.requestClose!()).toThrow("not been released");
+		await expect(h.child.send!("secret steer")).rejects.toThrow("unconfirmed");
+		expect(() => h.child.requestClose!()).toThrow("unconfirmed");
 		expect([...h.fs.files.keys()].some((path) => path.includes("/control/"))).toBe(false);
 		expect(settledEvents(h.events)).toEqual([]);
 	});

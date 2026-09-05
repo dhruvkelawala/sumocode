@@ -73,6 +73,10 @@ export interface VisibleLaunchGate {
 	wrapperBorn(evidence: VisibleLaunchEvidence): void;
 	/** Recheck durable authority after OS inspection, immediately before release. */
 	beforeRelease(): void;
+	/** Recheck persistence-owner authority at each effect/ack boundary, not user authorization. */
+	beforeEffect(): void;
+	/** Record lost/ambiguous ownership without claiming child death or retrying. */
+	onRefused(): void;
 	/** Retained owner owns verified cancellation; pane IDs never authorize a signal. */
 	interrupt(): void;
 }
@@ -278,6 +282,44 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		pollTimer = undefined;
 	};
 
+	let authorityLost = false;
+	const authorityError = (): Error => new Error("visible authority lost; control outcome unconfirmed, files retained");
+	const refuseEffect = (error: Error): void => {
+		if (authorityLost) return;
+		authorityLost = true;
+		blockLaunch(error);
+		clearWatcher();
+		for (const path of pendingSteeringAcks.keys()) finishPendingSteeringAck(path, authorityError());
+		options.signal?.removeEventListener("abort", interrupt);
+		try { gate?.onRefused(); }
+		catch { /* Local effects remain stopped even if the owner cannot persist loss. */ }
+	};
+	const callGate = (check: () => void): void => {
+		if (authorityLost) throw authorityError();
+		try { check(); }
+		catch (error) {
+			refuseEffect(new Error(errorText(error)));
+			throw authorityError();
+		}
+	};
+	const assertAuthority = (): void => { if (gate) callGate(() => gate.beforeEffect()); };
+	// Host implementations may await several execs and swallow failures. Fence
+	// each invocation, but return issued results intact so pane identity survives.
+	const hostPi: PiExecLike = gate ? {
+		exec: async (command, args, execOptions) => {
+			if (launchBlocked) throw new Error("visible launch blocked; issued effects remain unconfirmed");
+			// Herdr's failed-start cleanup knows only a pane ID. Retained cleanup
+			// must instead go through the owner's persisted, verified tree authority.
+			if (command === "herdr" && args[0] === "pane" && args[1] === "close") {
+				const error = new Error("visible host cleanup lacks verified process authority");
+				refuseEffect(error);
+				throw error;
+			}
+			assertAuthority();
+			return options.pi.exec(command, args, execOptions);
+		},
+	} : options.pi;
+
 	const steeringSettlementError = (): Error => new Error(
 		`visible subagent ${options.id} has settled before steering consumption was acknowledged`,
 	);
@@ -285,13 +327,17 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	const finishPendingSteeringAck = (path: string, error?: Error): void => {
 		const pending = pendingSteeringAcks.get(path);
 		if (!pending) return;
+		if (!authorityLost) {
+			try { assertAuthority(); }
+			catch { return; }
+		}
 		pendingSteeringAcks.delete(path);
 		clearInterval(pending.timer);
 		if (error) pending.reject(error);
 		else pending.resolve();
 	};
 
-	// Settlement and interrupt honor the consumption boundary: an absent control
+	// While authority holds, settlement and interrupt honor consumption: an absent control
 	// file proves the child watcher consumed it and synchronously submitted to
 	// Pi, so that waiter resolves even when settlement wins the race against the
 	// next ack tick. Only controls still on disk are ambiguous and rejected with
@@ -304,11 +350,15 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	};
 
 	const settle = (event: Extract<SubagentEvent, { kind: "run-settled" }>): void => {
-		if (settled) return;
+		if (settled || authorityLost) return;
+		try { assertAuthority(); }
+		catch { return; }
 		settled = true;
 		clearWatcher();
 		settlePendingSteeringAcks();
 		options.signal?.removeEventListener("abort", interrupt);
+		try { assertAuthority(); }
+		catch { return; }
 		emitEvent?.(event);
 	};
 
@@ -326,7 +376,9 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	};
 
 	const poll = (): void => {
-		if (settled || interrupted) return;
+		if (settled || interrupted || authorityLost) return;
+		try { assertAuthority(); }
+		catch { return; }
 		// lstat, not existsSync: existsSync follows symlinks, so a dangling
 		// symlink swapped in for the exit marker would read as "not yet written"
 		// and pin the child running forever. A non-regular entry is tamper and
@@ -399,8 +451,12 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 
 	function interrupt(): void {
 		if (gate) {
-			if (!released) blockLaunch(new Error("visible launch interrupted before release"));
-			gate.interrupt();
+			if (authorityLost) return;
+			try {
+				assertAuthority();
+				if (!released) blockLaunch(new Error("visible launch interrupted before release"));
+				callGate(() => gate.interrupt());
+			} catch { /* Refusal stops local actions; it is not cancellation proof. */ }
 			return;
 		}
 		if (settled || interrupted) return;
@@ -423,20 +479,29 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	 * could duplicate steering that Pi already owns.
 	 */
 	const send = (text: string): Promise<void> => {
+		if (authorityLost) return Promise.reject(authorityError());
 		if (settled || interrupted) return Promise.reject(steeringSettlementError());
 		if (!released) return Promise.reject(new Error("visible launch has not been released"));
+		try { assertAuthority(); }
+		catch { return Promise.reject(authorityError()); }
 		const seq = ++steerSeq;
 		const finalPath = join(paths.controlDir, `steer-${seq}.txt`);
 		// 0600 on the temp file: rename preserves the mode, so the published file
 		// is never briefly world-readable. Exclusive create keeps a planted entry
 		// from being followed or overwritten.
 		writeNewPrivateFile(fs, `${finalPath}.tmp`, text);
+		try { assertAuthority(); }
+		catch { return Promise.reject(authorityError()); }
 		fs.renameSync(`${finalPath}.tmp`, finalPath);
+		try { assertAuthority(); }
+		catch { return Promise.reject(authorityError()); }
 		const ackPollMs = dependencies.sendAckPollMs ?? SEND_ACK_POLL_MS;
 		const ackTimeoutMs = dependencies.sendAckTimeoutMs ?? SEND_ACK_TIMEOUT_MS;
 		return new Promise<void>((resolve, reject) => {
 			let elapsed = 0;
 			const ackTimer = setInterval(() => {
+				try { assertAuthority(); }
+				catch { return; }
 				if (!fs.existsSync(finalPath)) {
 					finishPendingSteeringAck(finalPath);
 					return;
@@ -468,7 +533,9 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 
 	/** Ask the child's task-mode watcher to persist its response and exit. */
 	const requestClose = (): void => {
+		if (authorityLost) throw authorityError();
 		if (!released) throw new Error("visible launch has not been released");
+		assertAuthority();
 		try {
 			writeNewPrivateFile(fs, join(paths.controlDir, CLOSE_REQUEST_FILE), "1");
 		} catch (error) {
@@ -480,6 +547,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 			if (!isEexist(error)) throw error;
 			assertPrivateArtifact(fs, join(paths.controlDir, CLOSE_REQUEST_FILE), paths.controlDir, "close control");
 		}
+		assertAuthority();
 	};
 
 	const watchLaunchGate = (launchGate: VisibleLaunchGate): void => {
@@ -487,6 +555,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		launchTimer = setInterval(() => {
 			elapsed += 50;
 			try {
+				assertAuthority();
 				if (elapsed >= 30_000) throw new Error("visible wrapper birth/release timed out; tracking evidence retained");
 				if (!startedPane) return;
 				const stat = validatedArtifactStat(fs, bornFile, taskDir, "wrapper birth");
@@ -510,16 +579,19 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 				};
 				assertLive();
 				if (validatedArtifactStat(fs, releaseFile, taskDir, "wrapper release")) throw new Error("visible wrapper release already exists");
-				launchGate.wrapperBorn({ taskDir, nonce, process: { identity, verification }, pane: structuredClone(startedPane) });
+				assertAuthority();
+				callGate(() => launchGate.wrapperBorn({ taskDir, nonce, process: { identity, verification }, pane: structuredClone(startedPane!) }));
 				if (launchBlocked || options.signal?.aborted) throw new Error("visible launch interrupted before release");
 				assertLive();
 				assertPrivateDir(fs, taskDir, "visible launch directory");
 				assertPrivateArtifact(fs, bornFile, taskDir, "wrapper birth");
 				if (fs.readFileSync(bornFile, "utf8") !== birth) throw new Error("visible wrapper birth changed before release");
-				launchGate.beforeRelease();
+				callGate(() => launchGate.beforeRelease());
 				if (launchBlocked || options.signal?.aborted) throw new Error("visible launch interrupted before release");
+				assertAuthority();
 				writeNewPrivateFile(fs, releaseFile, nonce);
 				released = true;
+				assertAuthority();
 				clearInterval(launchTimer);
 				launchTimer = undefined;
 				markReady();
@@ -546,18 +618,19 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 			try {
 				if (gate) {
 					if (launchBlocked || options.signal?.aborted) throw new Error("visible launch interrupted before spawn");
-					gate.beforeSpawn({ taskDir, nonce });
+					callGate(() => gate.beforeSpawn({ taskDir, nonce }));
 					if (launchBlocked || options.signal?.aborted) throw new Error("visible launch interrupted before spawn");
 					watchLaunchGate(gate);
 				}
-				const result = await startAgentPane.call(options.host, options.pi, {
+				assertAuthority();
+				const result = await startAgentPane.call(options.host, hostPi, {
 					name: options.name,
 					cwd: options.cwd,
 					shellCommand,
 					placement: options.placement,
 				});
 				if (!result.ok) {
-					if (gate) { blockLaunch(new Error(result.error)); return; }
+					if (gate) { assertAuthority(); blockLaunch(new Error(result.error)); return; }
 					settle({ kind: "run-settled", outcome: { kind: "failed", errorText: result.error } });
 					return;
 				}
@@ -572,7 +645,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 						paneId: result.paneId,
 					},
 				});
-				if (gate) return;
+				if (gate) { assertAuthority(); return; }
 				if (interrupted) {
 					await closeInterruptedPane();
 					return;

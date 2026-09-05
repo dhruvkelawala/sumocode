@@ -90,7 +90,7 @@ describe("sidebar placement", () => {
 	it("installs the active non-capturing overlay adapter", () => {
 		const sidebar = component(["side"]).node;
 		const hide = vi.fn();
-		const overlayHandle = { hide, setHidden: vi.fn(), isHidden: vi.fn(() => false), focus: vi.fn(), unfocus: vi.fn(), isFocused: vi.fn(() => false) };
+		const overlayHandle = { hide, setHidden: vi.fn(), isHidden: vi.fn(() => false), focus: vi.fn(), unfocus: vi.fn(), isFocused: vi.fn(() => false), getBounds: vi.fn(() => undefined) };
 		const showOverlay = vi.fn((_component, _options) => overlayHandle);
 		const tui = { requestRender: vi.fn(), showOverlay };
 

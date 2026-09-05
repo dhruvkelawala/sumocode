@@ -1,7 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { lstatSync, mkdirSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { readPrivateJson, withPrivateFileLock, writePrivateJsonExclusive } from "../activity/persistence.js";
-import type { ProcessTreeIdentity, ProcessTreeVerification } from "../background-tasks/process-tree.js";
+import { atomicWritePrivateJson, readPrivateJson, withPrivateFileLock, writePrivateJsonExclusive } from "../activity/persistence.js";
+import { captureProcessBirthTime, type ProcessTreeIdentity, type ProcessTreeVerification } from "../background-tasks/process-tree.js";
 import { assertPrivateArtifact, assertPrivateDir, isErrnoCode, nodeArtifactFs } from "../private-artifact.js";
 import type { SubagentPaneRef, SubagentWorktreeRef } from "./domain.js";
 
@@ -51,6 +52,29 @@ export interface SubagentRecord {
 	readonly result: { readonly file: "result.json"; readonly bytes: number } | null;
 	readonly manifest: { readonly file: "manifest.json"; readonly bytes: number } | null;
 	readonly writerLease: RegistryWriterLease | null;
+}
+
+export interface SubagentRegistryOptions {
+	readonly now?: () => number;
+	readonly writerIdentity?: RegistryWriter;
+	readonly inspectWriter?: (owner: RegistryWriter) => "alive" | "dead" | "unknown";
+}
+
+export class SubagentRevisionConflict extends Error {}
+export class SubagentLeaseConflict extends Error {}
+
+function inspectWriter(owner: RegistryWriter): "alive" | "dead" | "unknown" {
+	try { process.kill(owner.pid, 0); }
+	catch (error) {
+		if (isErrnoCode(error, "ESRCH")) return "dead";
+		if (!isErrnoCode(error, "EPERM")) return "unknown";
+	}
+	const birth = captureProcessBirthTime(owner.pid);
+	return birth === undefined ? "unknown" : birth === owner.processStartTime ? "alive" : "dead";
+}
+
+function sameWriter(left: RegistryWriter, right: RegistryWriter): boolean {
+	return left.token === right.token && left.pid === right.pid && left.processStartTime === right.processStartTime;
 }
 
 const MAX_RECORD_BYTES = 256 * 1024;
@@ -142,8 +166,9 @@ function assertDirectory(path: string): void {
 /** Disk authority only. No watchers, backend handles, signalling, or delivery effects. */
 export class SubagentRegistry {
 	private readonly directoryIdentity: { dev: number; ino: number };
+	private writerIdentity?: RegistryWriter;
 
-	public constructor(private readonly directory: string, private readonly ownerSessionId: string) {
+	public constructor(private readonly directory: string, private readonly ownerSessionId: string, private readonly options: SubagentRegistryOptions = {}) {
 		if (!pathValue(directory) || !text(ownerSessionId)) throw new Error("invalid registry path or owner");
 		if (realpathSync(dirname(directory)) !== dirname(directory)) throw new Error("registry parent must be canonical");
 		try { mkdirSync(directory, { mode: 0o700 }); } catch (error) { if (!isErrnoCode(error, "EEXIST")) throw error; }
@@ -170,6 +195,73 @@ export class SubagentRegistry {
 		if (!validRecord(record) || record.id !== id) throw new Error("corrupt subagent record");
 		this.validate(record);
 		return record;
+	}
+
+	/** CAS-acquire or renew. Even an expired lease blocks takeover until its process is proven dead. */
+	public acquireWriter(id: string, expectedRevision: number, durationMs: number): SubagentRecord {
+		if (!positive(durationMs) || durationMs > 60_000) throw new Error("writer lease duration must be 1..60000ms");
+		return this.change(id, expectedRevision, (current, now) => {
+			const owner = this.ownWriter();
+			const inspect = this.options.inspectWriter ?? inspectWriter;
+			if (inspect(owner) !== "alive") throw new SubagentLeaseConflict("candidate writer lease identity is not live");
+			const previous = current.writerLease;
+			if (previous && !sameWriter(previous.owner, owner)
+				&& (now < previous.expiresAt || inspect(previous.owner) !== "dead")) throw new SubagentLeaseConflict("writer lease is held or owner death is unproven");
+			return { ...current, writerLease: { owner, generation: (previous?.generation ?? 0) + 1, renewedAt: now, expiresAt: now + durationMs } };
+		});
+	}
+
+	/** The callback only decides metadata. It must not signal, launch, deliver, or return a promise. */
+	public transition(id: string, expectedRevision: number, generation: number, update: (current: SubagentRecord) => SubagentRecord): SubagentRecord {
+		return this.change(id, expectedRevision, (current, now) => {
+			this.assertWriter(current, generation, now);
+			const next = update(structuredClone(current));
+			for (const key of ["schemaVersion", "id", "ownerSessionId", "backend", "taskDir", "createdAt", "writerLease"] as const) {
+				if (JSON.stringify(next[key]) !== JSON.stringify(current[key])) throw new Error(`immutable registry field: ${key}`);
+			}
+			for (const key of ["child", "supervisor", "pane", "worktree", "sessionFilePath", "completionId", "settledAt", "result", "manifest"] as const) {
+				if (current[key] !== null && JSON.stringify(next[key]) !== JSON.stringify(current[key])) throw new Error(`registry evidence must be preserved: ${key}`);
+			}
+			this.assertWriter(current, generation, this.clock(current));
+			return next;
+		});
+	}
+
+	private change(id: string, expectedRevision: number, update: (current: SubagentRecord, now: number) => SubagentRecord): SubagentRecord {
+		const path = this.recordPath(id);
+		return withPrivateFileLock(`${path}.lock`, () => {
+			const current = this.get(id);
+			if (!current) throw new Error("missing subagent record");
+			if (current.revision !== expectedRevision) throw new SubagentRevisionConflict(`subagent revision conflict: expected ${expectedRevision}, found ${current.revision}`);
+			const next = { ...update(current, this.clock(current)), revision: current.revision + 1, updatedAt: this.clock(current) };
+			this.validate(next);
+			atomicWritePrivateJson(path, next);
+			return structuredClone(next);
+		});
+	}
+
+	private ownWriter(): RegistryWriter {
+		if (!this.writerIdentity) {
+			const candidate = this.options.writerIdentity ?? { token: randomUUID(), pid: process.pid, processStartTime: captureProcessBirthTime(process.pid) };
+			if (!writer(candidate)) throw new SubagentLeaseConflict("writer birth identity unavailable");
+			this.writerIdentity = structuredClone(candidate);
+		}
+		return structuredClone(this.writerIdentity);
+	}
+
+	private assertWriter(record: SubagentRecord, generation: number, now: number): void {
+		const held = record.writerLease;
+		const owner = this.ownWriter();
+		if (!held || held.generation !== generation || !sameWriter(held.owner, owner) || now >= held.expiresAt
+			|| (this.options.inspectWriter ?? inspectWriter)(owner) !== "alive") throw new SubagentLeaseConflict("writer lease is stale, expired, or not owned");
+	}
+
+	private clock(record: SubagentRecord): number {
+		// Persist epoch milliseconds across restarts. Rollback blocks writes until wall time catches up;
+		// forward jumps never evict a live owner. No monotonic timestamp survives process replacement.
+		const now = (this.options.now ?? Date.now)();
+		if (!integer(now) || now < record.updatedAt) throw new Error("registry clock moved backwards or is invalid");
+		return now;
 	}
 
 	private recordPath(id: string): string {

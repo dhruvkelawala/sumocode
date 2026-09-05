@@ -12,9 +12,9 @@
 // Nothing produced here is ever committed: dist/** is git-ignored (#439).
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 
@@ -117,15 +117,33 @@ async function buildExtensionBundle(entryPoint, outPath) {
 	console.log(`[sumocode] extension bundle: ${outPath} (${output.text.length} bytes, externals: ${[...bareImports].join(", ") || "none"})`);
 }
 
-function makeNativePiBuildCopy(piPkg) {
-	const piVersion = JSON.parse(readFileSync(join(piPkg, "package.json"), "utf8")).version;
+export function makeNativePiBuildCopy(piPkg, buildDir, packageRoot = root) {
+	const manifest = JSON.parse(readFileSync(join(piPkg, "package.json"), "utf8"));
+	const piVersion = manifest.version;
 	if (piVersion !== PI_PIN) fail(`Bedrock-free child patch expects Pi ${PI_PIN}, found ${piVersion}`);
 
-	const buildDir = resolve(root, "dist/native/.pi-build");
 	rmSync(buildDir, { recursive: true, force: true });
 	mkdirSync(buildDir, { recursive: true });
 	cpSync(join(piPkg, "dist"), join(buildDir, "dist"), { recursive: true });
 	copyFileSync(join(piPkg, "package.json"), join(buildDir, "package.json"));
+
+	// Link package roots, not entry files: exports and transitive imports must
+	// keep Pi's installed graph. Never search above this checkout for dependencies.
+	const piRequire = createRequire(join(piPkg, "package.json"));
+	const rootPrefix = `${realpathSync(packageRoot)}${sep}`;
+	for (const name of Object.keys({ ...manifest.dependencies, ...manifest.optionalDependencies })) {
+		const dependency = piRequire.resolve.paths(name)
+			.filter((directory) => directory.startsWith(rootPrefix))
+			.map((directory) => join(directory, name))
+			.find((directory) => existsSync(join(directory, "package.json")));
+		if (!dependency) {
+			if (Object.hasOwn(manifest.optionalDependencies ?? {}, name)) continue;
+			throw new Error(`Cannot resolve Pi build dependency ${name} within ${packageRoot}`);
+		}
+		const target = join(buildDir, "node_modules", name);
+		mkdirSync(dirname(target), { recursive: true });
+		symlinkSync(realpathSync(dependency), target, "dir");
+	}
 
 	const cliPath = join(buildDir, "dist/bun/cli.js");
 	const cliSource = readFileSync(cliPath, "utf8");
@@ -164,12 +182,12 @@ async function main() {
 	// 2. Bun-compiled Pi child + its sidecar assets (copy-binary-assets set).
 	// Pi's exports map does not expose ./package.json, so resolve its dist main
 	// entry directly and derive the package root from it. A require rooted at
-	// that entry resolves Pi's own (hoisted) dependencies like photon-node.
+	// that entry resolves Pi's own dependencies like photon-node.
 	const piMainEntry = realpathSync(join(root, "node_modules/@earendil-works/pi-coding-agent/dist/index.js"));
 	const piPkg = resolve(dirname(piMainEntry), "..");
 	if (!existsSync(join(piPkg, "package.json"))) fail(`cannot locate installed Pi package root at ${piPkg}`);
 	const piRequire = createRequire(pathToFileURL(piMainEntry));
-	const piBuildDir = makeNativePiBuildCopy(piPkg);
+	const piBuildDir = makeNativePiBuildCopy(piPkg, resolve(root, "dist/native/.pi-build"));
 	const piMetafile = resolve(root, "dist/native/sumocode-pi.metafile.json");
 	run(bunBin, [
 		"build",
@@ -242,7 +260,9 @@ async function main() {
 	console.log(`[sumocode] native archive: ${outDir}`);
 }
 
-if (!existsSync(resolve(root, "node_modules"))) {
-	fail("node_modules is missing — run pnpm install first.");
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+	if (!existsSync(resolve(root, "node_modules"))) {
+		fail("node_modules is missing — run pnpm install first.");
+	}
+	await main();
 }
-await main();

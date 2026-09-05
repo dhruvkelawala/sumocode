@@ -367,6 +367,7 @@ export class SumoExtensionUIAdapter implements ExtensionUIContext {
 			focus: () => undefined,
 			unfocus: () => undefined,
 			isFocused: () => false,
+			getBounds: () => undefined,
 		};
 	}
 }

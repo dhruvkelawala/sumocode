@@ -1,0 +1,10 @@
+{
+  "budgetFactor": 2,
+  "recordedAt": "2026-09-05",
+  "typescript": "6.0.3",
+  "files": 2105,
+  "instantiations": 1353836,
+  "checkTimeSeconds": 3,
+  "totalTimeSeconds": 4.31,
+  "memoryUsedKb": 932723
+}

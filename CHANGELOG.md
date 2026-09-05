@@ -11,6 +11,9 @@ landed between the original scaffold and this release.
 ## [Unreleased]
 
 ### Added
+- **Visible subagent steering and close** — delivered steering through task
+  control files, added `subagent_close` for graceful shutdown, and re-armed
+  the idle exit window after each turn. #381
 - **Multi-account Claude OAuth modal preview** — OAuth login modals now show
   an identifiable two-row preview of the authorization URL (with ellipsis
   truncation) instead of hiding the destination behind a generic
@@ -59,6 +62,8 @@ landed between the original scaffold and this release.
   provenance, and `pnpm runcat:install` / `pnpm runcat:check` setup helpers.
 
 ### Changed
+- **Pi 0.85 / Fable 5.1 support** — updated the supported Pi runtime to
+  0.85.0, including root-import packaging and overlay compatibility. #455
 - **Herdr-only terminal hosting** — removed the legacy alternate-host adapter,
   split helpers, environment probes, diagnostics, compatibility copy, and
   obsolete research artifacts. Visible panes, worktrees, notifications, and
@@ -77,6 +82,12 @@ landed between the original scaffold and this release.
 - `/sumo:cursor accent` is theme-neutral: it applies the ACTIVE theme's accent
   (copy now says "theme accent"); the legacy `orange` / `cathedral` aliases
   are deprecated but still resolve the current theme accent.
+
+### Fixed
+- **Claude account reliability** — preserved private multi-account state
+  during migration, clarified when no Claude account is active, redacted
+  login failure diagnostics, and preserved account routing in subagents.
+  #413 #420
 
 ## [0.4.0] — 2026-06-10
 

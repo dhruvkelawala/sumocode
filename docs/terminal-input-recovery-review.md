@@ -34,7 +34,7 @@ limits or UI captures.
   whole-codepoint UTF-8 prefix of **64 KiB (65536 bytes)** in memory only.
   Once a codepoint does not fit, later bytes cannot fill the remaining space:
   this is a prefix, not a filtered selection. Overflow counts exclude delimiters.
-- **1000 ms inactivity or overflow** enters visible **INPUT PAUSED** quarantine.
+- **1000 ms inactivity or overflow** enters visible **input paused** quarantine.
   Neither case synthesizes a terminator or enables normal command routing.
   Ctrl-D, Ctrl-C, unknown CSI, SGR mouse, and ordinary typing remain paste data.
   Silence cannot prove that a paste ended.

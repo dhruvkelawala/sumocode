@@ -196,7 +196,7 @@ describe("SharedInputRouter coalesced commands", () => {
 			router.handleInput("\x1b[200~draft");
 			vi.advanceTimersByTime(1_000);
 			expect(setInputNotice).toHaveBeenCalledTimes(1);
-			expect(setInputNotice).toHaveBeenLastCalledWith(expect.stringContaining("INPUT PAUSED"));
+			expect(setInputNotice).toHaveBeenLastCalledWith(expect.stringContaining("input paused"));
 			vi.advanceTimersByTime(20_000);
 			expect(setInputNotice).toHaveBeenCalledTimes(1);
 			router.handleInput("\x04\x1b[<1z\x1b[<0;1;1M\x1b[20");

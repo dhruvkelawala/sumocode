@@ -197,12 +197,12 @@ describe("ChatViewportController", () => {
 			vi.advanceTimersByTime(1_000);
 			controller.clear();
 			const lines = host.editorContainer!.render(60).join("\n").replace(ANSI_PATTERN, "");
-			expect(lines.match(/INPUT PAUSED/g)).toHaveLength(1);
+			expect(lines.match(/input paused/g)).toHaveLength(1);
 			expect(lines).toContain("13/65536 bytes retained");
 			expect(lines).not.toContain("private-draft");
 			expect(controller.handleInput("\x04")).toEqual({ consume: true });
 			expect(controller.handleInput("\x1b[201~")).toEqual({ data: "\x1b[200~private-draft\x04\x1b[201~" });
-			expect(host.editorContainer!.render(60).join("\n")).not.toContain("INPUT PAUSED");
+			expect(host.editorContainer!.render(60).join("\n")).not.toContain("input paused");
 			controller.dispose();
 			expect(host.editorContainer!.render(60)).toEqual(["chrome", "chrome"]);
 			expect(vi.getTimerCount()).toBe(0);

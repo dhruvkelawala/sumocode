@@ -447,7 +447,7 @@ export class SharedInputRouter {
 		const counts = `${paste.retainedBytes}/${PASTE_LIMIT_BYTES} bytes retained; ${paste.receivedBytes - paste.retainedBytes} bytes truncated`;
 		this.callbacks.setInputNotice?.(complete
 			? `input resumed — paste complete; ${counts}`
-			: `INPUT PAUSED — incomplete paste; ${counts}. waiting for paste end; further bytes beyond limit truncated. if no end arrives, end the paste stream in the terminal, then restart the session from outside input.`);
+			: `input paused — incomplete paste; ${counts}. waiting for paste end; further bytes beyond limit truncated. if no end arrives, end the paste stream in the terminal, then restart the session from outside input.`);
 		this.callbacks.requestRender?.();
 	}
 

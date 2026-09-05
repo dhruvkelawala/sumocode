@@ -819,7 +819,7 @@ describe("RPC host retained runtime frame", () => {
 
 		runtime.startInput();
 		input.emit("draft");
-		expect(editor.inputs).toEqual(["draft"]);
+		expect(editor.inputs.join("")).toBe("draft");
 		expect(input.rawModes).toEqual([true]);
 		expect(output.chunks).toEqual([]);
 

@@ -41,32 +41,21 @@ interface MouseInputDiagnosticsFields {
 }
 
 // oxlint-disable-next-line no-control-regex -- intentional ESC byte match for ANSI input parsing
-const COMPLETE_SGR_MOUSE_SEQUENCE = /\x1b\[<\d+;\d+;\d+[Mm]/g;
-// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for ANSI input parsing
 const BRACKETED_PASTE_BLOCK_PATTERN = /\x1b\[200~[\s\S]*?\x1b\[201~/g;
-// CSI (`ESC [ ... final-byte`) and SS3 (`ESC O <letter>`) sequences are single
-// discrete key events. This mirrors pi-tui's Kitty CSI-u / arrow / func /
-// home-end grammar (keys.js `parseKittySequence`): digits, `;`, and `:`
-// separators followed by one CSI final byte (letters or `~`). Matching the
-// whole sequence as one token is required so `isKeyRelease` — which greps for
-// `:3u`/`:3~`/`:3<letter>` substrings on its input — is only ever asked about
-// one key event at a time, never a coalesced chunk that also contains an
-// unrelated press.
+// Keep CSI (including Kitty and SGR mouse) and SS3 sequences whole.
 // oxlint-disable-next-line no-control-regex -- intentional ESC byte match for ANSI input parsing
-const CSI_OR_SS3_SEQUENCE_PATTERN = /\x1b(?:\[[0-9;:]*[A-Za-z~]|O[A-Za-z])/g;
+const CSI_OR_SS3_SEQUENCE_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|O[A-Za-z])/g;
+const inputGraphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
-/**
- * Split a raw (post mouse-extraction) input chunk into discrete input
- * "tokens": bracketed-paste blocks pass through whole, CSI/SS3 escape
- * sequences are single tokens, and any other bytes are individual
- * characters. This is the granularity pi-tui's own `StdinBuffer` emits
- * `data` events at (see `@earendil-works/pi-tui/dist/stdin-buffer.d.ts`) —
- * the RPC host bypasses that buffer and reads raw stdin chunks directly, so
- * the router has to reconstruct the same per-event granularity itself
- * before it can safely ask `isKeyRelease` about any one token.
- */
+/** Split complete chunks without breaking paste blocks, escape sequences or graphemes. */
 export function splitInputTokens(data: string): string[] {
+	const { tokens, pending } = parseInputTokens(data);
+	return pending ? [...tokens, pending] : tokens;
+}
+
+function parseInputTokens(data: string) {
 	const tokens: string[] = [];
+	const graphemes = inputGraphemes.segment(data);
 	let index = 0;
 	while (index < data.length) {
 		BRACKETED_PASTE_BLOCK_PATTERN.lastIndex = index;
@@ -80,6 +69,16 @@ export function splitInputTokens(data: string): string[] {
 		}
 
 		if (data[index] === "\x1b") {
+			const remaining = data.slice(index);
+			// Kitty terminals can batch a bare Escape with its CSI-u release.
+			if (remaining.startsWith("\x1b\x1b")) {
+				tokens.push("\x1b");
+				index += 1;
+				continue;
+			}
+			if ("\x1b[200~".startsWith(remaining) || remaining.startsWith("\x1b[200~")) {
+				return { tokens, pending: remaining };
+			}
 			CSI_OR_SS3_SEQUENCE_PATTERN.lastIndex = index;
 			const escMatch = CSI_OR_SS3_SEQUENCE_PATTERN.exec(data);
 			if (escMatch && escMatch.index === index) {
@@ -87,12 +86,22 @@ export function splitInputTokens(data: string): string[] {
 				index += escMatch[0].length;
 				continue;
 			}
+			if (remaining.startsWith("\x1b[") || remaining === "\x1bO") {
+				return { tokens, pending: remaining };
+			}
+			const meta = graphemes.containing(index + 1)?.segment;
+			if (meta) {
+				tokens.push("\x1b" + meta);
+				index += 1 + meta.length;
+				continue;
+			}
 		}
 
-		tokens.push(data[index] ?? "");
-		index += 1;
+		const grapheme = graphemes.containing(index)?.segment ?? "";
+		tokens.push(grapheme);
+		index += grapheme.length;
 	}
-	return tokens;
+	return { tokens, pending: "" };
 }
 
 /**
@@ -112,17 +121,6 @@ export function filterKeyReleaseEvents(data: string): string {
 	return tokens.filter((token) => !isKeyRelease(token)).join("");
 }
 const BARE_ESCAPE_DISPATCH_DELAY_MS = 25;
-/**
- * Match a trailing prefix of an SGR mouse sequence so we can buffer partial
- * input across stdin chunks. Matches any of:
- *
- *   ESC, ESC [, ESC [ <, ESC [ < digits, ESC [ < digits ; digits ...
- *
- * The terminating M / m is intentionally absent because that would be a
- * complete sequence. Anchored to end-of-string only.
- */
-// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for ANSI input parsing
-const SGR_MOUSE_PREFIX_TAIL_PATTERN = /(?:\x1b(?:\[(?:<\d*(?:;\d*){0,2})?)?)$/;
 
 function toHex(value: string): string {
 	let hex = "";
@@ -231,13 +229,13 @@ export function containsCtrlCToken(data: string): boolean {
 }
 
 export class SharedInputRouter {
-	private pendingMouseInput = "";
+	private pendingInput = "";
 	private pendingBareEscapeTimer: ReturnType<typeof setTimeout> | undefined;
 
 	public constructor(private readonly callbacks: SharedInputRouterCallbacks = {}) {}
 
 	public clearPendingMouseInput(): void {
-		this.pendingMouseInput = "";
+		this.pendingInput = "";
 		this.clearPendingBareEscapeTimer();
 	}
 
@@ -249,74 +247,79 @@ export class SharedInputRouter {
 		// Run `sumocode -d .`, reproduce the broken key, then `sumocode diag`
 		// or grep the diag file for "raw_key_input" to see the exact bytes.
 		logDiagnostic("raw_key_input", { hex: this.diagnosticHex(data), length: data.length });
-		let pendingMouseInput = this.pendingMouseInput;
-		if (pendingMouseInput === "\x1b" && !data.startsWith("[")) {
+		let pendingInput = this.pendingInput;
+		if (pendingInput === "\x1b" && !data.startsWith("[") && !data.startsWith("O")) {
 			this.clearPendingBareEscapeTimer();
-			this.pendingMouseInput = "";
+			this.pendingInput = "";
 			this.dispatchDeferredInput("\x1b");
-			pendingMouseInput = "";
-		} else if (pendingMouseInput === "\x1b") {
+			pendingInput = "";
+		} else if (pendingInput === "\x1b") {
 			this.clearPendingBareEscapeTimer();
 		}
-		const hadPendingMouseInput = pendingMouseInput.length > 0;
-		const rememberBareEscape = !hadPendingMouseInput && data === "\x1b";
-		const source = pendingMouseInput + data;
-		this.pendingMouseInput = "";
-		let nextData = source;
-		let consumed = false;
-
-		if (hadPendingMouseInput || source.includes("\x1b[<") || source === "\x1b[") {
-			const parsed = parseSgrMouseStream(source);
-			logDiagnostic("mouse_batch", {
-				rawBytes: source.length,
-				events: parsed.events.length,
-				types: parsed.events.map((event) => event.type),
-			});
-			let mouseViewportDirty = false;
-			for (const event of parsed.events) {
-				mouseViewportDirty = this.callbacks.handleMouseEvent?.(event) === true || mouseViewportDirty;
-			}
-			if (mouseViewportDirty) this.callbacks.scheduleMouseRender?.();
-
-			const beforeCompleteStrip = nextData;
-			nextData = nextData.replace(COMPLETE_SGR_MOUSE_SEQUENCE, "");
-			if (nextData !== beforeCompleteStrip) consumed = true;
-
-			const tailMatch = nextData.match(SGR_MOUSE_PREFIX_TAIL_PATTERN);
-			if (tailMatch && tailMatch[0].length > 0) {
-				this.pendingMouseInput = tailMatch[0];
-				nextData = nextData.slice(0, nextData.length - tailMatch[0].length);
-				consumed = true;
-				if (this.pendingMouseInput === "\x1b") this.armBareEscapeTimer();
-			}
-
-			if (nextData.includes("\x1b[<")) {
-				// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for ANSI input parsing
-				const stripped = nextData.replace(/\x1b\[<[\d;]*[Mm]?/g, "");
-				if (stripped !== nextData) {
-					nextData = stripped;
-					consumed = true;
+		const source = pendingInput + data;
+		const normalized = normalizeRawMultilinePasteInput(source);
+		if (normalized !== source) {
+			logDiagnostic("raw_multiline_paste_normalized", { sourceLength: source.length, normalizedLength: normalized.length });
+		}
+		// Preserve the existing unbracketed multiline-paste heuristic before
+		// splitting keys: its newlines are draft content, not submit presses.
+		const parsed = normalized !== source || (!source.includes("\x1b") && source.length > 1 && source.includes("\n"))
+			|| isCommandPaletteInput(source) || selectionCopyKeyFromInput(source) || (source !== "\x1b" && isEscapeInput(source))
+			? { tokens: [normalized], pending: "" }
+			: parseInputTokens(source);
+		this.pendingInput = parsed.pending;
+		if (parsed.pending === "\x1b") this.armBareEscapeTimer();
+		let consumed = parsed.pending.length > 0;
+		let forwarded = false;
+		let mouseViewportDirty = false;
+		const mouseEvents: MouseEvent[] = [];
+		const leftovers: string[] = [];
+		for (const token of parsed.tokens) {
+			if (token.startsWith("\x1b[<")) {
+				const mouse = parseSgrMouseStream(token);
+				mouseEvents.push(...mouse.events);
+				for (const event of mouse.events) {
+					mouseViewportDirty = this.callbacks.handleMouseEvent?.(event) === true || mouseViewportDirty;
 				}
+				consumed = true;
+				continue;
 			}
-
+			const result = this.routeNonMouseInput(token);
+			if (result?.consume) {
+				consumed = true;
+				forwarded = result.forwarded === true || forwarded;
+			} else if (parsed.tokens.length > 1 && this.callbacks.dispatchDelayedInput?.(result?.data ?? token) === true) {
+				consumed = true;
+			} else {
+				leftovers.push(result?.data ?? token);
+			}
+		}
+		if (mouseViewportDirty) this.callbacks.scheduleMouseRender?.();
+		const remaining = leftovers.join("");
+		if (mouseEvents.length > 0 || parsed.pending) {
+			logDiagnostic("mouse_batch", { rawBytes: source.length, events: mouseEvents.length, types: mouseEvents.map((event) => event.type) });
 			diagnoseMouseInput({
 				dataLength: data.length,
 				sourceLength: source.length,
-				eventCount: parsed.events.length,
+				eventCount: mouseEvents.length,
 				consumed,
-				pendingLength: this.pendingMouseInput.length,
-				leftoverLength: nextData.length,
+				pendingLength: parsed.pending.length,
+				leftoverLength: remaining.length,
 				sourceHex: this.diagnosticHex(source.slice(0, 64)),
-				leftoverHex: this.diagnosticHex(nextData.slice(0, 64)),
+				leftoverHex: this.diagnosticHex(remaining.slice(0, 64)),
 			});
 		}
-
-		if (rememberBareEscape && nextData === data && !consumed) {
-			this.deferBareEscape();
-			return { consume: true };
+		if (leftovers.length > 0) {
+			if (data.includes("\x1b") || remaining !== data || consumed) {
+				logDiagnostic("bridge_input_verdict", {
+					inLen: data.length, outLen: remaining.length, consumed, rewritten: remaining !== data,
+					inHex: this.diagnosticHex(data.slice(0, 32)), outHex: this.diagnosticHex(remaining.slice(0, 32)),
+				});
+			}
+			if (remaining !== data) logDiagnostic("route_verdict", { target: "noOpForwarded", hex: this.diagnosticHex(remaining) });
+			return remaining === data && !consumed ? undefined : { data: remaining };
 		}
-
-		return this.routeNonMouseInput(nextData, data, consumed);
+		return forwarded ? { consume: true, forwarded: true } : { consume: true };
 	}
 
 	private diagnosticHex(value: string): string {
@@ -329,18 +332,12 @@ export class SharedInputRouter {
 		this.pendingBareEscapeTimer = undefined;
 	}
 
-	private deferBareEscape(): void {
-		this.clearPendingBareEscapeTimer();
-		this.pendingMouseInput = "\x1b";
-		this.armBareEscapeTimer();
-	}
-
 	private armBareEscapeTimer(): void {
 		this.clearPendingBareEscapeTimer();
 		this.pendingBareEscapeTimer = setTimeout(() => {
 			this.pendingBareEscapeTimer = undefined;
-			if (this.pendingMouseInput !== "\x1b") return;
-			this.pendingMouseInput = "";
+			if (this.pendingInput !== "\x1b") return;
+			this.pendingInput = "";
 			this.dispatchDeferredInput("\x1b");
 		}, BARE_ESCAPE_DISPATCH_DELAY_MS);
 		this.pendingBareEscapeTimer.unref?.();
@@ -348,29 +345,16 @@ export class SharedInputRouter {
 
 	private dispatchDeferredInput(data: string): void {
 		if (this.callbacks.dispatchDelayedInput?.(data) === true) return;
-		void this.routeNonMouseInput(data, data, false);
+		void this.routeNonMouseInput(data);
 	}
 
-	private routeNonMouseInput(nextData: string, originalData: string, consumed: boolean): SharedInputRouterResult | void {
-		const releaseFilteredData = filterKeyReleaseEvents(nextData);
-		if (releaseFilteredData !== nextData) {
-			logDiagnostic("key_release_filtered", { sourceLength: nextData.length, filteredLength: releaseFilteredData.length });
-			nextData = releaseFilteredData;
-			consumed = true;
+	private routeNonMouseInput(nextData: string): SharedInputRouterResult | void {
+		if (isKeyRelease(nextData)) {
+			logDiagnostic("key_release_filtered", { sourceLength: nextData.length, filteredLength: 0 });
+			return { consume: true };
 		}
 
-		if (nextData.length === 0 && consumed) return { consume: true };
-
-		const normalizedPasteData = normalizeRawMultilinePasteInput(nextData);
-		if (normalizedPasteData !== nextData) {
-			logDiagnostic("raw_multiline_paste_normalized", { sourceLength: nextData.length, normalizedLength: normalizedPasteData.length });
-			nextData = normalizedPasteData;
-			consumed = true;
-		}
-
-		if (nextData.length === 0 && consumed) return { consume: true };
-
-		if (containsCtrlCToken(nextData) && this.callbacks.handlePreEditorInput?.(nextData) === true) {
+		if (isCtrlCInput(nextData) && this.callbacks.handlePreEditorInput?.(nextData) === true) {
 			logDiagnostic("route_verdict", { target: "ctrlCPreEditor", hex: this.diagnosticHex(nextData) });
 			this.callbacks.requestRender?.();
 			return { consume: true };
@@ -432,21 +416,6 @@ export class SharedInputRouter {
 			return { consume: true };
 		}
 
-		if (originalData.includes("\x1b") || originalData !== nextData || consumed) {
-			logDiagnostic("bridge_input_verdict", {
-				inLen: originalData.length,
-				outLen: nextData.length,
-				consumed,
-				rewritten: nextData !== originalData,
-				inHex: this.diagnosticHex(originalData.slice(0, 32)),
-				outHex: this.diagnosticHex(nextData.slice(0, 32)),
-			});
-		}
-
-		if (nextData !== originalData) {
-			logDiagnostic("route_verdict", { target: "noOpForwarded", hex: this.diagnosticHex(nextData) });
-			return { data: nextData };
-		}
 		logDiagnostic("route_verdict", { target: "dropped", hex: this.diagnosticHex(nextData) });
 		return undefined;
 	}

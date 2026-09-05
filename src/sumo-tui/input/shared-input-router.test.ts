@@ -39,6 +39,109 @@ it("redacts sensitive modal keystrokes from diagnostics", () => {
 	}
 });
 
+describe("SharedInputRouter coalesced commands", () => {
+	it("defers the palette and independently dispatches Ctrl-D during stalled hydration", () => {
+		const events: string[] = [];
+		const router = new SharedInputRouter({
+			openCommandPalette: () => { events.push("palette deferred"); },
+			forwardToEditor: (data) => {
+				events.push(data === "\x04" ? "exit empty editor" : `unexpected ${data}`);
+				return true;
+			},
+		});
+		router.handleInput(CTRL_SLASH + "\x04");
+		expect(events).toEqual(["palette deferred", "exit empty editor"]);
+	});
+
+	it("rechecks focus after each adjacent command", () => {
+		let focused = false;
+		const events: string[] = [];
+		const router = new SharedInputRouter({
+			openCommandPalette: () => { focused = true; events.push("open"); },
+			handleFocusedModalInput: (data) => {
+				if (!focused) return false;
+				events.push(`modal:${data}`);
+				if (data === "\x1b[A") focused = false;
+				return true;
+			},
+			forwardToEditor: (data) => { events.push(`editor:${data}`); return true; },
+		});
+		router.handleInput(CTRL_SLASH + "x\x1b[A\x04");
+		expect(events).toEqual(["open", "modal:x", "modal:\x1b[A", "editor:\x04"]);
+	});
+
+	it.each<[string, string, string[]]>([
+		["CSI/SS3/Kitty", "\x1b[A\x1bOP\x1b[104;1:1u\x1b[104;1:2u\x1b[104;1:3u", ["\x1b[A", "\x1bOP", "\x1b[104;1:1u", "\x1b[104;1:2u"]],
+		["composition", "😀e\u0301👩‍💻中文", ["😀", "e\u0301", "👩‍💻", "中", "文"]],
+		["legacy modifier enter", "\x1b\r\x1b\n", ["\x1b\r", "\x1b\n"]],
+		["Kitty Escape press/release", "\x1b\x1b[27;1:3u", ["\x1b"]],
+		["raw multiline paste", "one\r\ntwo", ["one\ntwo"]],
+		["LF paste", "one\ntwo", ["one\ntwo"]],
+	])("preserves %s tokens", (_name, data, expected) => {
+		const forwardToEditor = vi.fn((_data: string) => true);
+		new SharedInputRouter({ forwardToEditor }).handleInput(data);
+		expect(forwardToEditor.mock.calls.map(([token]) => token)).toEqual(expected);
+	});
+
+	it("keeps pasted controls and mouse bytes atomic across every chunk boundary", () => {
+		const paste = "\x1b[200~😀\r\n\x1f\x04\x03\x1b[<64;10;5M\x1b[104;1:3u\x1b[201~";
+		for (let cut = 1; cut < paste.length; cut += 1) {
+			const forwardToEditor = vi.fn((_data: string) => true);
+			const openCommandPalette = vi.fn();
+			const handleMouseEvent = vi.fn();
+			const router = new SharedInputRouter({ forwardToEditor, openCommandPalette, handleMouseEvent });
+			router.handleInput(paste.slice(0, cut));
+			expect(forwardToEditor).not.toHaveBeenCalled();
+			router.handleInput(paste.slice(cut) + "\x04");
+			expect(forwardToEditor.mock.calls.map(([token]) => token)).toEqual([paste, "\x04"]);
+			expect(openCommandPalette).not.toHaveBeenCalled();
+			expect(handleMouseEvent).not.toHaveBeenCalled();
+			router.clearPendingMouseInput();
+		}
+	});
+
+	it.each(["\x1b[A", "\x1bOP", "\x1b[104;1:2u"])("retains partial %j until complete", (sequence) => {
+		for (let cut = 1; cut < sequence.length; cut += 1) {
+			const forwardToEditor = vi.fn((_data: string) => true);
+			const router = new SharedInputRouter({ forwardToEditor });
+			router.handleInput(sequence.slice(0, cut));
+			expect(forwardToEditor).not.toHaveBeenCalled();
+			router.handleInput(sequence.slice(cut));
+			expect(forwardToEditor).toHaveBeenCalledExactlyOnceWith(sequence);
+			router.clearPendingMouseInput();
+		}
+	});
+
+	it("keeps mouse and keyboard actions in stream order while batching mouse renders", () => {
+		const events: string[] = [];
+		const scheduleMouseRender = vi.fn();
+		const router = new SharedInputRouter({
+			handleMouseEvent: () => { events.push("mouse"); return true; },
+			forwardToPi: (data) => { events.push(data); return true; },
+			scheduleMouseRender,
+		});
+		router.handleInput("a\x1b[<64;10;5Mb\x1b[<64;10;5M");
+		expect(events).toEqual(["a", "mouse", "b", "mouse"]);
+		expect(scheduleMouseRender).toHaveBeenCalledTimes(1);
+	});
+
+	it("clears unfinished paste state along with pending mouse input", () => {
+		const forwardToEditor = vi.fn((_data: string) => true);
+		const router = new SharedInputRouter({ forwardToEditor });
+		router.handleInput("\x1b[200~unfinished");
+		router.clearPendingMouseInput();
+		router.handleInput("x");
+		expect(forwardToEditor).toHaveBeenCalledExactlyOnceWith("x");
+	});
+
+	it("redispatches unclaimed classic Pi tokens in order without returning duplicates", () => {
+		const dispatchDelayedInput = vi.fn((_data: string) => true);
+		const router = new SharedInputRouter({ dispatchDelayedInput });
+		expect(router.handleInput("ab")).toEqual({ consume: true });
+		expect(dispatchDelayedInput.mock.calls).toEqual([["a"], ["b"]]);
+	});
+});
+
 describe("SharedInputRouter — command palette vs. modal/overlay focus", () => {
 	it("routes Ctrl+/ to a focused modal instead of opening the palette", () => {
 		const openCommandPalette = vi.fn();

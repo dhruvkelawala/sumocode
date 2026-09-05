@@ -883,12 +883,11 @@ setInterval(() => {}, 1000);
 			rows: 30,
 		});
 
-		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
-		app.sendInput("\u001f");
-		await delay(100);
-		expect(app.getOutput()).not.toContain("host controls");
-		app.sendInput("\u0004");
+		// Input is attached, but the stalled child cannot reach command readiness.
+		await app.waitForReady("input");
+		app.sendInput("\u001f\u0004");
 		await app.waitForOutput(TERMINAL_CLEANUP_SEQUENCE, 2_000);
+		expect(app.getOutput()).not.toContain("host controls");
 		expect(app.getCurrentTerminalState().altscreenActive).toBe(false);
 	}, 30_000);
 

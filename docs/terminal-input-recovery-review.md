@@ -1,6 +1,7 @@
 # Terminal input recovery review
 
-Status: bounded recovery implemented above 6537d4f0; serial verification passed.
+Status: delayed opener ownership repaired above 4820fbdb; serial verification passed.
+Accepted Spec HIGH is implemented pending a current-head review pair, not closed.
 Heavy runtime/visual verification remains pending, not waived.
 
 ## Preserved repairs
@@ -28,8 +29,29 @@ limits or UI captures.
   A recognizable paste opener, including a trailing fragmented opener, after
   malformed CSI starts router-owned paste; the preceding failed prefix is one
   opaque event. Otherwise Pi would start an unbounded editor paste behind the
-  router. Time expiry applies before an actual paste opener is assembled; it
-  never applies as an end delimiter after that opener has been recognized.
+  router. A trailing bare ESC is also recognized, including after malformed CSI
+  or a raw multiline draft.
+- **Ambiguous header policy:** every proper prefix of `ESC[200~` survives
+  silence and focus/session clearing. At most five ASCII bytes remain pending,
+  separate from the 64 KiB payload allocation. At 25 ms, bare ESC acts once but
+  remains a recognition marker. Empty calls and repeated clears do not replay
+  it. Subsequent contiguous `[`/`O` bytes assemble a sequence; other bytes drop
+  the marker and route normally, without a second Escape action. Longer paste
+  prefixes stay quarantined and show a count-only lowercase header notice at
+  25 ms. No timer repeats during silence. Actual bytes, not elapsed time,
+  disambiguate the prefix: unrelated CSI goes through whole, invalid CSI stays
+  one opaque event, and a completed opener transfers ownership to bounded paste
+  storage. Header feedback resolves on disambiguation or transfers to the paste
+  notice until the actual end. Generic non-paste CSI/SS3 retain their existing
+  bounded 25 ms dispatch policy.
+- **Terminal ambiguity:** Escape followed much later by literal `[200~` is
+  indistinguishable from a delayed paste opener. It will start paste ownership;
+  the already-executed Escape cannot be undone (it may have changed focus).
+  Likewise a late unrelated CSI can act after that Escape, but Escape is not
+  replayed. Typing a partial matching header can pause until further bytes
+  disambiguate it; ordinary nonmatching typing is not frozen. This is not a
+  claim of perfect arbitrary fragmented-stream decoding. Once actual bytes
+  disprove a paste header, generic CSI timeout behavior still applies.
 - No existing project paste byte bound was found. Paste retains a maximal
   whole-codepoint UTF-8 prefix of **64 KiB (65536 bytes)** in memory only.
   Once a codepoint does not fit, later bytes cannot fill the remaining space:
@@ -117,7 +139,7 @@ does not modify Pi's separate upstream `StdinBuffer` in the classic runtime.
 - Malformed CSI with CR before a fragmented opener: 1 failed / 65 passed
   before fixing the raw-multiline normalization bypass. Additional CR/LF draft
   assertions preserve atomic multiline input before a fragmented opener.
-- Final serial router, mouse, classic viewport controller, RPC runtime,
+- Prior bounded-recovery serial router, mouse, classic viewport controller, RPC runtime,
   Cathedral editor and notice suites: **189 passed**, covering the original
   165 tests plus recovery cases. Command:
   `pnpm vitest run src/sumo-tui/input/shared-input-router.test.ts src/sumo-tui/input/mouse.test.ts src/sumo-tui/pi-compat/chat-viewport-controller.test.ts src/sumo-tui/rpc/runtime.test.ts src/cathedral/cathedral-editor.test.ts src/sumo-tui/widgets/input-recovery-notice.test.ts --maxWorkers=1 --no-file-parallelism`.
@@ -127,6 +149,17 @@ does not modify Pi's separate upstream `StdinBuffer` in the classic runtime.
   `pnpm visual:ci` remain **pending the coordinator's heavy-work grant**. sa105
   owns native work. The notice still requires capture/review evidence after
   that grant; unit wrapping assertions are not visual approval.
+- Delayed-opener repair: **5 failed / 68 passed → 73 passed** at all five
+  boundaries, advancing 30 ms before every continuation. Trailing bare-ESC
+  framing: **4 failed / 73 passed → 77 passed** after malformed CSI and raw
+  CR/LF drafts. A notice-transfer regression (**1 failed / 92 passed → 93
+  passed**) ensures coalesced completion keeps truncation counts rather than
+  overwriting them with header feedback. These are successful RED→GREEN test
+  slices, not failed repair attempts. Expanded serial six-file suite: **214
+  passed**, including all 31 fragmented opener partitions, unrelated/invalid
+  CSI, one-shot Escape at
+  exactly 25 ms, mouse actions only outside paste, notice/disposal timers and
+  diagnostic redaction across delayed headers/focus changes.
 - No installs, heavy gates, new OS signals, golden promotion, push, or edits to
   the sa111 host lifecycle / sa105 native build / sa90 harness ownership areas.
 

@@ -104,7 +104,7 @@ function parseInputTokens(data: string, readPaste?: (data: string, start: number
 				index += 1;
 				continue;
 			}
-			if ("\x1b[200~".startsWith(remaining) || remaining.startsWith("\x1b[200~")) {
+			if (PASTE_START.startsWith(remaining)) {
 				return { tokens, pending: remaining };
 			}
 			CSI_OR_SS3_SEQUENCE_PATTERN.lastIndex = index;
@@ -124,7 +124,7 @@ function parseInputTokens(data: string, readPaste?: (data: string, start: number
 				if (pasteBoundary < 0) {
 					const lastEscape = remaining.lastIndexOf("\x1b");
 					const suffix = remaining.slice(lastEscape);
-					if (lastEscape > 1 && suffix.length > 1 && PASTE_START.startsWith(suffix)) pasteBoundary = lastEscape;
+					if (lastEscape > 1 && PASTE_START.startsWith(suffix)) pasteBoundary = lastEscape;
 				}
 				if (pasteBoundary > 0) {
 					tokens.push(remaining.slice(0, pasteBoundary));
@@ -277,6 +277,8 @@ export function containsCtrlCToken(data: string): boolean {
 
 export class SharedInputRouter {
 	private pendingInput = "";
+	private escapeDispatched = false;
+	private headerPaused = false;
 	private pendingBareEscapeTimer: ReturnType<typeof setTimeout> | undefined;
 	private paste: PendingPaste | undefined;
 	private redactInput = false;
@@ -286,7 +288,7 @@ export class SharedInputRouter {
 
 	public clearPendingMouseInput(): void {
 		// Session/focus changes do not prove the terminal's paste stream ended.
-		if (this.paste || (PASTE_START.startsWith(this.pendingInput) && this.pendingInput.length > 1)) return;
+		if (this.paste || (this.pendingInput.length > 0 && PASTE_START.startsWith(this.pendingInput))) return;
 		this.pendingInput = "";
 		this.clearPendingBareEscapeTimer();
 	}
@@ -295,22 +297,25 @@ export class SharedInputRouter {
 		this.disposed = true;
 		this.clearPendingBareEscapeTimer();
 		this.pendingInput = "";
+		this.escapeDispatched = false;
+		this.headerPaused = false;
 		this.paste = undefined;
 	}
 
 	public handleInput(data: string): SharedInputRouterResult | void {
-		if (this.disposed) return { consume: true };
+		if (this.disposed || data.length === 0) return { consume: true };
 		this.redactInput = this.paste !== undefined || this.pendingInput.length > 0 || data.includes(PASTE_START);
 		logDiagnostic("raw_key_input", { hex: this.diagnosticHex(data), length: data.length });
 		let pendingInput = this.pendingInput;
 		if (pendingInput === "\x1b" && !data.startsWith("[") && !data.startsWith("O")) {
 			this.clearPendingBareEscapeTimer();
 			this.pendingInput = "";
-			this.dispatchDeferredInput("\x1b");
+			if (!this.escapeDispatched) this.dispatchDeferredInput("\x1b");
 			pendingInput = "";
 		} else if (pendingInput === "\x1b") {
 			this.clearPendingBareEscapeTimer();
 		}
+		this.escapeDispatched = false;
 		let source = pendingInput + data;
 		const completedPaste: string[] = [];
 		if (this.paste) {
@@ -322,9 +327,9 @@ export class SharedInputRouter {
 		// a raw multiline draft (it can precede a fragmented paste opener).
 		CSI_OR_SS3_SEQUENCE_PATTERN.lastIndex = 0;
 		const failedCsiPrefix = source.startsWith("\x1b[") && !CSI_OR_SS3_SEQUENCE_PATTERN.test(source);
-		const lastCsi = source.lastIndexOf("\x1b[");
-		const partialPasteOpener = lastCsi >= 0 && PASTE_START.startsWith(source.slice(lastCsi));
-		const draftSource = partialPasteOpener && !failedCsiPrefix ? source.slice(0, lastCsi) : source;
+		const lastEscape = source.lastIndexOf("\x1b");
+		const partialPasteOpener = lastEscape >= 0 && PASTE_START.startsWith(source.slice(lastEscape));
+		const draftSource = partialPasteOpener && !failedCsiPrefix ? source.slice(0, lastEscape) : source;
 		const normalized = failedCsiPrefix ? draftSource : normalizeRawMultilinePasteInput(draftSource);
 		if (normalized !== source) {
 			logDiagnostic("raw_multiline_paste_normalized", { sourceLength: source.length, normalizedLength: normalized.length });
@@ -337,6 +342,11 @@ export class SharedInputRouter {
 			: parseInputTokens(source, (input, start) => this.readPaste(input, start));
 		parsed.tokens.unshift(...completedPaste);
 		this.pendingInput = parsed.pending;
+		if (this.headerPaused && (!parsed.pending || !PASTE_START.startsWith(parsed.pending))) {
+			this.headerPaused = false;
+			this.callbacks.setInputNotice?.("input resumed — paste header resolved");
+			this.callbacks.requestRender?.();
+		}
 		this.clearPendingBareEscapeTimer();
 		if ((this.paste && !this.paste.paused) || parsed.pending) this.armBareEscapeTimer();
 		let consumed = parsed.pending.length > 0 || this.paste !== undefined;
@@ -408,6 +418,10 @@ export class SharedInputRouter {
 			prefix: Buffer.alloc(PASTE_LIMIT_BYTES), retainedBytes: 0, receivedBytes: 0,
 			tail: "", paused: false, truncated: false,
 		};
+		if (this.headerPaused) {
+			this.headerPaused = false;
+			paste.paused = true;
+		}
 		// Scan only this chunk plus at most five delimiter bytes (or one high
 		// surrogate). Never concatenate or rescan the growing retained prefix.
 		const tailLength = paste.tail.length;
@@ -472,6 +486,19 @@ export class SharedInputRouter {
 			}
 			if (!this.pendingInput) return;
 			const pending = this.pendingInput;
+			if (PASTE_START.startsWith(pending)) {
+				// Silence cannot rule out a paste. Keep at most five header bytes;
+				// bare Escape still acts once, without giving up recognition.
+				if (pending === "\x1b") {
+					this.escapeDispatched = true;
+					this.dispatchDeferredInput(pending);
+				} else {
+					this.headerPaused = true;
+					this.callbacks.setInputNotice?.(`input paused — incomplete paste header; ${pending.length}/${PASTE_START.length} bytes received. waiting for header continuation; if none arrives, end the terminal stream, then restart the session from outside input.`);
+					this.callbacks.requestRender?.();
+				}
+				return;
+			}
 			this.pendingInput = "";
 			this.dispatchDeferredInput(pending);
 		}, this.paste ? PASTE_IDLE_MS : BARE_ESCAPE_DISPATCH_DELAY_MS);

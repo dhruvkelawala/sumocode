@@ -48,9 +48,13 @@ it("never logs paste payloads, including late tails after sensitive focus change
 		let sensitive = true;
 		const router = new SharedInputRouter({ isSensitiveInputFocused: () => sensitive, forwardToEditor: () => true });
 		router.handleInput("\x1b[20");
-		router.handleInput("0~private-prefix");
-		vi.advanceTimersByTime(1_000);
+		vi.advanceTimersByTime(30);
 		sensitive = false;
+		router.clearPendingMouseInput();
+		router.handleInput("0");
+		vi.advanceTimersByTime(30);
+		router.handleInput("~private-prefix");
+		vi.advanceTimersByTime(1_000);
 		router.handleInput("private-tail");
 		router.handleInput("\x1b[201~");
 		router.handleInput("\x1b[200~ordinary-paste\x1b[201~");
@@ -128,6 +132,148 @@ describe("SharedInputRouter coalesced commands", () => {
 			expect(handleMouseEvent).not.toHaveBeenCalled();
 			router.clearPendingMouseInput();
 		}
+	});
+
+	it.each([1, 2, 3, 4, 5])("owns a late paste opener after timeout at boundary %i", (cut) => {
+		vi.useFakeTimers();
+		try {
+			const forwardToEditor = vi.fn(() => true);
+			const handleMouseEvent = vi.fn();
+			const router = new SharedInputRouter({ forwardToEditor, handleMouseEvent });
+			const opener = "\x1b[200~";
+			router.handleInput(opener.slice(0, cut));
+			for (const fragment of opener.slice(cut)) {
+				vi.advanceTimersByTime(30);
+				router.clearPendingMouseInput();
+				router.handleInput(fragment);
+			}
+			vi.advanceTimersByTime(1_001);
+			router.handleInput("\x04\x1b[<0;1;1M");
+			expect(forwardToEditor.mock.calls).toEqual(cut === 1 ? [["\x1b"]] : []);
+			expect(handleMouseEvent).not.toHaveBeenCalled();
+			router.handleInput("\x1b[20");
+			vi.advanceTimersByTime(30);
+			router.handleInput("1~\x04");
+			expect(forwardToEditor.mock.calls).toEqual([
+				...(cut === 1 ? [["\x1b"]] : []),
+				["\x1b[200~\x04\x1b[<0;1;1M\x1b[201~"], ["\x04"],
+			]);
+			expect(vi.getTimerCount()).toBe(0);
+			router.dispose();
+		} finally { vi.useRealTimers(); }
+	});
+
+	it.each(["\x1b[12;\x04", "\x1b[12;\r", "draft\r", "draft\n"])("owns a late bare-ESC opener after %j", (prefix) => {
+		vi.useFakeTimers();
+		try {
+			const forwardToEditor = vi.fn(() => true);
+			const router = new SharedInputRouter({ forwardToEditor });
+			router.handleInput(prefix + "\x1b");
+			vi.advanceTimersByTime(30);
+			router.handleInput("[200~\x04");
+			expect(forwardToEditor.mock.calls).toEqual([[prefix.startsWith("draft") ? "draft\n" : prefix], ["\x1b"]]);
+			router.handleInput("\x1b[201~");
+			expect(forwardToEditor.mock.calls.at(-1)).toEqual(["\x1b[200~\x04\x1b[201~"]);
+			router.dispose();
+		} finally { vi.useRealTimers(); }
+	});
+
+	it("keeps paste inert for all opener partitions with silence before every continuation", () => {
+		vi.useFakeTimers();
+		try {
+			for (let mask = 1; mask < 32; mask += 1) {
+				const forwardToEditor = vi.fn(() => true);
+				const handleMouseEvent = vi.fn(() => true);
+				const dispatchDelayedInput = vi.fn(() => true);
+				const router = new SharedInputRouter({ forwardToEditor, handleMouseEvent, dispatchDelayedInput });
+				const opener = "\x1b[200~";
+				let start = 0;
+				for (let end = 1; end <= opener.length; end += 1) {
+					if (end < opener.length && !(mask & (1 << (end - 1)))) continue;
+					vi.advanceTimersByTime(30);
+					router.handleInput(opener.slice(start, end) + (end === opener.length ? "\x04\x1b[<0;1;1M" : ""));
+					start = end;
+				}
+				expect(forwardToEditor).not.toHaveBeenCalled();
+				expect(handleMouseEvent).not.toHaveBeenCalled();
+				expect(dispatchDelayedInput.mock.calls).toEqual(mask & 1 ? [["\x1b"]] : []);
+				router.handleInput("\x1b[201~\x04\x1b[<0;1;1M");
+				expect(forwardToEditor.mock.calls).toEqual([["\x1b[200~\x04\x1b[<0;1;1M\x1b[201~"], ["\x04"]]);
+				expect(handleMouseEvent).toHaveBeenCalledTimes(1);
+				router.dispose();
+			}
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.useRealTimers(); }
+	});
+
+	it.each(["\x1b[A", "\x1b[2J", "\x1b[20h", "\x1b[200z", "\x1b[20\x04"])("disambiguates %j intact after header timeout", (sequence) => {
+		vi.useFakeTimers();
+		try {
+			const forwardToEditor = vi.fn(() => true);
+			const setInputNotice = vi.fn();
+			const router = new SharedInputRouter({ forwardToEditor, setInputNotice });
+			router.handleInput(sequence.slice(0, -1));
+			vi.advanceTimersByTime(30);
+			expect(forwardToEditor).not.toHaveBeenCalled();
+			expect(setInputNotice).toHaveBeenCalledTimes(1);
+			vi.advanceTimersByTime(60_000);
+			expect(setInputNotice).toHaveBeenCalledTimes(1);
+			router.handleInput(sequence.slice(-1));
+			expect(forwardToEditor).toHaveBeenCalledExactlyOnceWith(sequence);
+			expect(setInputNotice).toHaveBeenLastCalledWith("input resumed — paste header resolved");
+			router.handleInput("x\x04");
+			expect(forwardToEditor.mock.calls.slice(1)).toEqual([["x"], ["\x04"]]);
+			expect(vi.getTimerCount()).toBe(0);
+			router.dispose();
+		} finally { vi.useRealTimers(); }
+	});
+
+	it.each(["x", "\x04", "[A", "[<0;1;1M"])("dispatches bare Escape once at 25ms then handles %j normally", (tail) => {
+		vi.useFakeTimers();
+		try {
+			const forwardToEditor = vi.fn(() => true);
+			const handleMouseEvent = vi.fn(() => true);
+			const router = new SharedInputRouter({ forwardToEditor, handleMouseEvent });
+			router.handleInput("\x1b");
+			vi.advanceTimersByTime(24);
+			expect(forwardToEditor).not.toHaveBeenCalled();
+			vi.advanceTimersByTime(1);
+			expect(forwardToEditor).toHaveBeenCalledExactlyOnceWith("\x1b");
+			router.handleInput("");
+			router.clearPendingMouseInput();
+			vi.advanceTimersByTime(60_000);
+			expect(forwardToEditor).toHaveBeenCalledTimes(1);
+			router.handleInput(tail);
+			expect(forwardToEditor.mock.calls).toEqual(tail.includes("<") ? [["\x1b"]] : [["\x1b"], [tail.startsWith("[") ? "\x1b" + tail : tail]]);
+			expect(handleMouseEvent).toHaveBeenCalledTimes(tail.includes("<") ? 1 : 0);
+			expect(vi.getTimerCount()).toBe(0);
+			router.dispose();
+		} finally { vi.useRealTimers(); }
+	});
+
+	it.each([1, 2, 3, 4, 5])("disposes expired header boundary %i without late effects", (cut) => {
+		vi.useFakeTimers();
+		try {
+			const dispatchDelayedInput = vi.fn(() => true);
+			const forwardToEditor = vi.fn(() => true);
+			const handleMouseEvent = vi.fn();
+			const setInputNotice = vi.fn();
+			const router = new SharedInputRouter({ dispatchDelayedInput, forwardToEditor, handleMouseEvent, setInputNotice });
+			router.handleInput("\x1b[200~".slice(0, cut));
+			vi.advanceTimersByTime(30);
+			dispatchDelayedInput.mockClear();
+			setInputNotice.mockClear();
+			router.dispose();
+			router.dispose();
+			router.clearPendingMouseInput();
+			router.handleInput("\x1b[200~".slice(cut) + "\x04\x1b[<0;1;1M\x1b[201~\x04");
+			vi.advanceTimersByTime(2_000);
+			expect(dispatchDelayedInput).not.toHaveBeenCalled();
+			expect(forwardToEditor).not.toHaveBeenCalled();
+			expect(handleMouseEvent).not.toHaveBeenCalled();
+			expect(setInputNotice).not.toHaveBeenCalled();
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.useRealTimers(); }
 	});
 
 	it.each(["\x1b[A", "\x1bOP", "\x1b[104;1:2u"])("retains partial %j until complete", (sequence) => {
@@ -208,6 +354,22 @@ describe("SharedInputRouter coalesced commands", () => {
 			]);
 			expect(setInputNotice).toHaveBeenLastCalledWith(expect.stringContaining("input resumed"));
 			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.useRealTimers(); }
+	});
+
+	it("transfers an expired header notice to paste counts even when completion is coalesced", () => {
+		vi.useFakeTimers();
+		try {
+			const forwardToEditor = vi.fn(() => true);
+			const setInputNotice = vi.fn();
+			const router = new SharedInputRouter({ forwardToEditor, setInputNotice });
+			router.handleInput("\x1b[200");
+			vi.advanceTimersByTime(30);
+			router.handleInput("~" + "x".repeat(65_536) + "\x04\x1b[201~");
+			expect(setInputNotice).toHaveBeenLastCalledWith("input resumed — paste complete; 65536/65536 bytes retained; 1 bytes truncated");
+			expect(forwardToEditor).toHaveBeenCalledExactlyOnceWith("\x1b[200~" + "x".repeat(65_536) + "\x1b[201~");
+			expect(vi.getTimerCount()).toBe(0);
+			router.dispose();
 		} finally { vi.useRealTimers(); }
 	});
 

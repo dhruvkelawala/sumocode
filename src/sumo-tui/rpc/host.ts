@@ -595,7 +595,7 @@ export interface RpcHostExitDependencies {
 	readonly stopHost: (code: number) => Promise<void>;
 	readonly exit: (code: number) => void;
 	readonly updateRuntimeState: (state: RpcHostChromeState) => void;
-	readonly setTimeout?: (callback: () => void, delay: number) => { unref?(): void };
+	readonly setTimeout?: typeof setTimeout;
 	readonly shutdownDelayMs?: number;
 	readonly exitCode?: number;
 }
@@ -1559,7 +1559,10 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		requestRender,
 		stopHost: (code) => lifecycle.stop(code, "child-exit"),
 		exit: (code) => lifecycle.exit(code),
-		setTimeout: (callback, delay) => lifecycle.scheduleTimeout("child-exit", callback, delay),
+		// SAFETY: createRpcExitHandler only calls this private adapter with a
+		// zero-argument callback and delay; the exported dependency keeps Node's type.
+		setTimeout: ((callback: () => void, delay: number) =>
+			lifecycle.scheduleTimeout("child-exit", callback, delay)) as typeof setTimeout,
 		updateRuntimeState: (state) => runtime?.update({ state }),
 	});
 	lifecycle.ownSubscription("client-exit", client.onExit((error) => {

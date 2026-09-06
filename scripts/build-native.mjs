@@ -160,6 +160,8 @@ function loadablePackageDirectory(directory) {
 		// Inspect presence, not CJS resolution or conditional-exports semantics.
 		if (manifest.exports != null) return true;
 		if (manifest.main && existsSync(join(directory, manifest.main))) return true;
+		// Bun also bundles ESM-only trees whose `module` field is the only entry.
+		if (manifest.module && existsSync(join(directory, manifest.module))) return true;
 	}
 	return ["index.js", "index.mjs", "index.cjs"].some((entry) => existsSync(join(directory, entry)));
 }

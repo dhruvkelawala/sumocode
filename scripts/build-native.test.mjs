@@ -209,6 +209,29 @@ describe("native Pi build-source preparation", () => {
 		});
 	}
 
+	// Bun bundles a dependency whose `module` field is its only entry even when
+	// Node's CJS resolution falls through, so the nearest module-only candidate
+	// must decide — not a farther contained ancestor.
+	it("links the nearest module-only candidate instead of the contained ancestor", () => {
+		const { root, piPkg, buildDir } = fixture("pnpm");
+		const name = "module-only-nearest";
+		const manifestPath = join(piPkg, "package.json");
+		const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+		manifest.dependencies[name] = "1.0.0";
+		write(manifestPath, JSON.stringify(manifest));
+		const nearest = join(piPkg, "../..", name);
+		write(join(nearest, "package.json"), JSON.stringify({ name, module: "esm.mjs" }));
+		write(join(nearest, "esm.mjs"), 'export const source = "nearest";\n');
+		const ancestor = join(root, "node_modules", name);
+		write(join(ancestor, "package.json"), JSON.stringify({ name, main: "index.js" }));
+		write(join(ancestor, "index.js"), 'module.exports = "contained-ancestor";\n');
+		// Node skips the module-only nearest candidate and resolves the ancestor.
+		expect(createRequire(manifestPath).resolve(name)).toBe(join(ancestor, "index.js"));
+		makeNativePiBuildCopy(piPkg, buildDir, root);
+		// Bun resolves the nearest dep, so the nearest must be the linked root.
+		expect(realpathSync(join(buildDir, "node_modules", name))).toBe(nearest);
+	});
+
 	it("skips entryless and type-only edges but keeps the missing-required sanity error", () => {
 		const { root, piPkg } = fixture("pnpm");
 		const manifestPath = join(piPkg, "package.json");

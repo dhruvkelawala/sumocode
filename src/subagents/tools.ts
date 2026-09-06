@@ -6,6 +6,7 @@ import { activityFromSubagentSnapshot } from "../activity/subagent-adapter.js";
 import { getTerminalHost } from "../terminal-host/index.js";
 import type { TerminalHost } from "../terminal-host/types.js";
 import { latestText, type SubagentSnapshot } from "./domain.js";
+import { formatSubagentBudget, SUBAGENT_BUDGET_MAX } from "./budget-policy.js";
 import { type AtCapacityDetails, SubagentManager } from "./manager.js";
 import { formatCompletionManifestSummary, SUBAGENT_PROMPT_GUIDELINES, SUBAGENT_PROMPT_SNIPPET, SUBAGENT_TOOL_DESCRIPTIONS } from "./prompt.js";
 import { BUILT_IN_ROLES, loadRoles } from "./roles.js";
@@ -77,7 +78,7 @@ const formatSnapshotLine = (snapshot: SubagentSnapshot, includeBranch = false): 
 	const identity = [snapshot.roleId, model].filter((part): part is string => part !== undefined).join(", ");
 	const branch = includeBranch && snapshot.worktree ? ` · ${snapshot.worktree.branch}` : "";
 	const pane = snapshot.pane ? ` · pane ${snapshot.pane.paneId ?? snapshot.pane.tabId ?? snapshot.pane.workspaceId ?? "unknown"} · agent ${snapshot.pane.agentName}` : "";
-	return `${snapshot.id} [${snapshot.status}] "${snapshot.title}" (${identity}, ${formatDuration(Date.now() - snapshot.createdAt)}, ${snapshot.cwd})${branch}${pane}`;
+	return [`${snapshot.id} [${snapshot.status}] "${snapshot.title}" (${identity}, ${formatDuration(Date.now() - snapshot.createdAt)}, ${snapshot.cwd})${branch}${pane}`, formatSubagentBudget(snapshot)].filter(Boolean).join("\n  ");
 };
 
 const manifestSummary = (snapshot: SubagentSnapshot): string | undefined => snapshot.manifest
@@ -137,6 +138,12 @@ export function registerSubagentTools(
 		promptSnippet: SUBAGENT_PROMPT_SNIPPET,
 		promptGuidelines: SUBAGENT_PROMPT_GUIDELINES,
 		parameters: Type.Object({
+			budget: Type.Optional(Type.Object({
+				wallTimeMs: Type.Optional(Type.Integer({ minimum: 1, maximum: SUBAGENT_BUDGET_MAX.wallTimeMs })),
+				tokens: Type.Optional(Type.Integer({ minimum: 1, maximum: SUBAGENT_BUDGET_MAX.tokens, description: "Warning threshold for summed provider-reported turn tokens, including cache tokens. Not a context limit or billing guarantee." })),
+				costUsd: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: SUBAGENT_BUDGET_MAX.costUsd })),
+				stallAfterMs: Type.Optional(Type.Integer({ minimum: 1, maximum: SUBAGENT_BUDGET_MAX.stallAfterMs, description: "No-progress warning interval. Startup and long tools have grace. Visible children remain liveness-only." })),
+			}, { additionalProperties: false, description: "Optional warning-only limits. Never automatically cancel, close or free a running slot." })),
 			prompt: Type.String({ description: "Self-contained child subagent prompt." }),
 			name: Type.String({ description: "Short human-readable title for this subagent." }),
 			role: Type.Optional(Type.String({ description: roleDescription })),
@@ -185,6 +192,7 @@ export function registerSubagentTools(
 				: activeTools;
 			const spawned = await manager.spawn({
 				sourceId: toolCallId,
+				budget: params.budget,
 				prompt: params.prompt,
 				title: params.name,
 				cwd: params.working_dir ?? ctx.cwd,

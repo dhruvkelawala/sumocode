@@ -6,6 +6,7 @@ import type { AgentPanePlacement, PiExecLike, TerminalHost } from "../terminal-h
 import type { SpawnedChild } from "./backend-pi.js";
 import { SUBAGENT_MAX_QUEUED, SUBAGENT_MAX_RUNNING, type LiveToolState, type RunOutcome, type SubagentEvent, type SubagentSnapshot, type SubagentWorktreeRef } from "./domain.js";
 import { planPlacement } from "./layout.js";
+import { evaluateSubagentBudget, validateSubagentBudget, type SubagentBudget } from "./budget-policy.js";
 import { buildCompletionManifest, type CompletionManifestEvidence } from "./manifest.js";
 
 const execFileAsync = promisify(execFile);
@@ -33,6 +34,7 @@ export interface AtCapacityDetails {
 }
 
 export interface SpawnSubagentTask {
+	readonly budget?: SubagentBudget;
 	readonly sourceId?: string;
 	readonly prompt: string;
 	readonly title: string;
@@ -97,6 +99,10 @@ async function captureGitContext(cwd: string): Promise<SpawnGitContext> {
 	return { repoRoot, baseRef };
 }
 
+const addReported = (total: number | undefined, value: number | undefined): number | undefined =>
+	value !== undefined && Number.isFinite(value) && value >= 0
+		? Math.min(Number.MAX_SAFE_INTEGER, (total ?? 0) + value) : total;
+
 const isSettled = (snapshot: SubagentSnapshot): boolean => snapshot.status !== "running" && snapshot.status !== "queued";
 
 const makeInitialSnapshot = (
@@ -112,6 +118,7 @@ const makeInitialSnapshot = (
 	type MutableSnapshot = { -readonly [K in keyof SubagentSnapshot]: SubagentSnapshot[K] };
 	const snapshot: MutableSnapshot = {
 		id,
+		budget: task.budget ? { ...task.budget } : undefined,
 		title: task.title,
 		prompt: task.prompt,
 		cwd,
@@ -142,6 +149,7 @@ const upsertTool = (tools: readonly LiveToolState[], next: LiveToolState): reado
 
 export class SubagentManager {
 	private nextId = 1;
+	private healthTimer?: ReturnType<typeof setInterval>;
 	private readonly pendingSpawns = new Map<string, { title: string; createdAt: number }>();
 	private readonly queuedTasks: Array<{ task: SpawnSubagentTask; id: string; createdAt: number; generation: number }> = [];
 	private readonly snapshots = new Map<string, SubagentSnapshot>();
@@ -181,6 +189,8 @@ export class SubagentManager {
 	}
 
 	public async spawn(task: SpawnSubagentTask): Promise<SubagentSnapshot | AtCapacityDetails> {
+		if (task.budget !== undefined) validateSubagentBudget(task.budget);
+		task = { ...task, budget: task.budget ? { ...task.budget } : undefined };
 		const generation = this.lifecycleGeneration;
 		const runningSummaries = this.runningSummaries();
 		if (runningSummaries.length >= SUBAGENT_MAX_RUNNING || this.queuedTasks.length > 0) {
@@ -369,9 +379,10 @@ export class SubagentManager {
 				const preservationNote = worktree ? ` Worktree created at ${worktree.path} is preserved.` : "";
 				return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, `unable to spawn child: ${message}.${preservationNote}`, childCwd, worktree);
 			}
-			const snapshot = makeInitialSnapshot(task, id, createdAt, manifestBaseRef, childCwd, worktree, child.sessionFilePath);
+			const snapshot = this.withBudget({ ...makeInitialSnapshot(task, id, createdAt, manifestBaseRef, childCwd, worktree, child.sessionFilePath), startedAt: Date.now() });
 			this.snapshots.set(id, snapshot);
 			this.children.set(id, { child, controller });
+			this.startHealthTimer();
 			releasePending();
 			this.consumeEvents(id, child.events);
 			if (child.ready) await child.ready;
@@ -587,6 +598,8 @@ export class SubagentManager {
 	}
 
 	public disposeAll(): void {
+		clearInterval(this.healthTimer);
+		this.healthTimer = undefined;
 		// In-flight setup cannot be synchronously interrupted, so advance the
 		// generation first. Every awaited setup path checks this token before it
 		// may construct a backend, preventing post-shutdown orphan children while
@@ -751,7 +764,7 @@ export class SubagentManager {
 		if (isSettled(current)) return;
 		let next = current;
 		if (event.kind === "assistant-delta") next = { ...current, liveText: `${current.liveText}${event.delta}` };
-		else if (event.kind === "tool-start") next = { ...current, liveTools: upsertTool(current.liveTools, { id: event.toolId, name: event.name, argsPreview: event.argsPreview, done: false, isError: false }) };
+		else if (event.kind === "tool-start") next = { ...current, liveTools: upsertTool(current.liveTools, { id: event.toolId, name: event.name, argsPreview: event.argsPreview, done: false, isError: false, startedAt: Date.now() }) };
 		else if (event.kind === "tool-update") next = { ...current, liveTools: upsertTool(current.liveTools, { id: event.toolId, name: current.liveTools.find((tool) => tool.id === event.toolId)?.name ?? "tool", outputPreview: event.outputPreview, done: false, isError: false }) };
 		else if (event.kind === "tool-end") next = { ...current, liveTools: upsertTool(current.liveTools, { id: event.toolId, name: event.name, outputPreview: event.outputPreview, done: true, isError: event.isError }) };
 		else if (event.kind === "message-end") next = {
@@ -770,9 +783,12 @@ export class SubagentManager {
 				tokens: event.tokens ?? current.usage.tokens,
 				contextWindow: event.contextWindow ?? current.usage.contextWindow,
 				costUsd: event.costUsd ?? current.usage.costUsd,
+				reportedTokens: addReported(current.usage.reportedTokens, event.tokens),
+				reportedCostUsd: addReported(current.usage.reportedCostUsd, event.costUsd),
 			},
 		};
-		this.snapshots.set(id, next);
+		if (!current.visible && event.kind !== "run-started") next = { ...next, lastProgressAt: Date.now() };
+		this.snapshots.set(id, this.withBudget(next));
 		this.notify();
 		this.prune();
 	}
@@ -796,6 +812,10 @@ export class SubagentManager {
 		if (!current || isSettled(current) || this.settlingIds.has(id)) return;
 		this.settlingIds.add(id);
 		this.children.delete(id);
+		if (this.children.size === 0) {
+			clearInterval(this.healthTimer);
+			this.healthTimer = undefined;
+		}
 		const settledAt = Date.now();
 		try {
 			if (current.status === "queued") {
@@ -823,7 +843,7 @@ export class SubagentManager {
 			if (outcome.kind === "completed") next = { ...latest, status: "done", settledAt, finalText: outcome.finalText || latest.finalText, liveText: "", manifest };
 			else if (outcome.kind === "failed") next = { ...latest, status: "error", settledAt, errorText: outcome.errorText.slice(0, ERROR_TEXT_MAX), finalText: outcome.partialText ?? latest.finalText, liveText: "", manifest };
 			else next = { ...latest, status: "error", settledAt, errorText: "interrupted", finalText: outcome.partialText ?? latest.finalText, liveText: "", manifest };
-			this.snapshots.set(id, next);
+			this.snapshots.set(id, this.withBudget(next));
 			if ((this.waitInterest.get(id) ?? 0) > 0) this.consumedIds.add(id);
 			// Completion listeners (including deferred delivery) must observe the
 			// manifest on the same immutable terminal snapshot.
@@ -877,6 +897,34 @@ export class SubagentManager {
 				}
 			});
 		});
+	}
+
+	private withBudget(snapshot: SubagentSnapshot): SubagentSnapshot {
+		const tools = snapshot.liveTools.filter((tool) => !tool.done && tool.startedAt !== undefined);
+		return { ...snapshot, ...evaluateSubagentBudget({
+			now: snapshot.settledAt ?? Date.now(), status: snapshot.status,
+			startedAt: snapshot.startedAt ?? null, lastProgressAt: snapshot.lastProgressAt ?? null,
+			budget: snapshot.budget, progress: snapshot.visible ? "liveness-only" : "events",
+			// A running handle or an attached pane is not an OS liveness observation.
+			liveness: "unknown", toolStartedAt: tools.length ? Math.min(...tools.map((tool) => tool.startedAt!)) : undefined,
+			usage: { tokens: snapshot.usage.reportedTokens, costUsd: snapshot.usage.reportedCostUsd },
+		}) };
+	}
+
+	private startHealthTimer(): void {
+		if (this.healthTimer) return;
+		this.healthTimer = setInterval(() => {
+			let changed = false;
+			for (const id of this.children.keys()) {
+				const current = this.snapshots.get(id);
+				if (!current || current.status !== "running") continue;
+				const next = this.withBudget(current);
+				changed ||= next.health !== current.health || next.warnings?.join() !== current.warnings?.join();
+				this.snapshots.set(id, next);
+			}
+			if (changed) this.notify();
+		}, 1000);
+		this.healthTimer.unref();
 	}
 
 	private notify(): void {

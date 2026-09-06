@@ -71,6 +71,18 @@ export function validateSubagentBudget(value: unknown): asserts value is Subagen
 }
 // oxlint-enable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof
 
+export function formatSubagentBudget(state: Partial<SubagentBudgetState>): string | undefined {
+	if (!state.health) return undefined;
+	const percent = (value: number | null | undefined): string => value == null ? "unknown" : `${Math.round(value * 100)}%`;
+	const parts = [state.health, `elapsed ${Math.round((state.elapsedMs ?? 0) / 1000)}s`,
+		`wall ${percent(state.utilization?.wallTime)}`, `reported tokens ${percent(state.utilization?.tokens)}`,
+		`reported cost ${percent(state.utilization?.cost)}`, `liveness ${state.liveness ?? "unknown"}`,
+		`last progress ${state.lastProgressAt == null ? "unobserved" : new Date(state.lastProgressAt).toISOString()}`];
+	if (state.health.endsWith("-warning")) parts.push("inspect or explicitly cancel with subagent_cancel");
+	return parts.join(" · ");
+}
+
 function ratio(used: number | undefined, limit: number | undefined): number | null {
-	return used === undefined || !Number.isFinite(used) || used < 0 || limit === undefined ? null : used / limit;
+	// ponytail: cap extreme warning ratios; use decimal arithmetic if exact ratios ever matter.
+	return used === undefined || !Number.isFinite(used) || used < 0 || limit === undefined ? null : Math.min(Number.MAX_SAFE_INTEGER, used / limit);
 }

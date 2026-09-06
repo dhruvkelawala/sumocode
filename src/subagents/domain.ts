@@ -1,4 +1,5 @@
 import type { CompletionManifestEvidence } from "./manifest.js";
+import type { SubagentBudget, SubagentBudgetState } from "./budget-policy.js";
 
 /** Concurrent running-children ceiling. Queue absorbs bursts beyond it (plan 083). */
 export const SUBAGENT_MAX_RUNNING = 10;
@@ -38,6 +39,7 @@ export interface LiveToolState {
 	readonly outputPreview?: string;
 	readonly done: boolean;
 	readonly isError: boolean;
+	readonly startedAt?: number;
 }
 
 export interface SubagentWorktreeRef {
@@ -54,7 +56,9 @@ export interface SubagentPaneRef {
 	readonly paneId?: string;
 }
 
-export interface SubagentSnapshot {
+export interface SubagentSnapshot extends Partial<SubagentBudgetState> {
+	readonly budget?: SubagentBudget;
+	readonly startedAt?: number;
 	readonly id: string;
 	readonly sourceId?: string;
 	readonly title: string;
@@ -73,7 +77,7 @@ export interface SubagentSnapshot {
 	readonly thinkingLabel?: string;
 	readonly sessionFilePath?: string;
 	readonly manifest?: CompletionManifestEvidence;
-	readonly usage: { tokens?: number; contextWindow?: number; costUsd?: number; turns: number };
+	readonly usage: { tokens?: number; contextWindow?: number; costUsd?: number; turns: number; reportedTokens?: number; reportedCostUsd?: number };
 	readonly transcript: readonly TranscriptItem[];
 	readonly liveText: string;
 	readonly liveTools: readonly LiveToolState[];

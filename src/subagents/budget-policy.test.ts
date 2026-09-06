@@ -16,6 +16,13 @@ describe("warning-only subagent policy", () => {
 		expect(result.warnings).toEqual([]);
 	});
 
+	it("keeps utilization serializable for a tiny positive cost budget", () => {
+		const result = evaluateSubagentBudget({ ...running, now: 0, budget: { costUsd: Number.MIN_VALUE }, usage: { costUsd: 1 } });
+		expect(result.health).toBe("over-budget-warning");
+		expect(Number.isFinite(result.utilization.cost)).toBe(true);
+		expect(JSON.parse(JSON.stringify(result)).utilization.cost).not.toBeNull();
+	});
+
 	it("distinguishes quiet, startup grace, tool grace and stalled warnings", () => {
 		expect(evaluateSubagentBudget({ ...running, now: 30_000 }).health).toBe("quiet");
 		expect(evaluateSubagentBudget({ ...running, lastProgressAt: null, budget: { stallAfterMs: 1000 }, now: 59_999 }).health).toBe("quiet");

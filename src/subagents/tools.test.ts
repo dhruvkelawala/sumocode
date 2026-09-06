@@ -91,6 +91,35 @@ const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly Su
 const textOf = <T extends { content: Array<{ text: string }> }>(result: T): string => result.content[0]!.text;
 
 describe("subagent tools", () => {
+	it("surfaces warning budgets in list/check without cancelling and refuses invalid limits", async () => {
+		vi.useFakeTimers();
+		const { manager, tool, ctx, spawnedTasks } = createHarness();
+		try {
+			await expect(tool("subagent_spawn").execute("invalid", { prompt: "task", name: "task", budget: { tokens: 0 } }, undefined, undefined, ctx)).rejects.toThrow(/budget/);
+			expect(spawnedTasks).toEqual([]);
+			await tool("subagent_spawn").execute("valid", { prompt: "task", name: "task", budget: { wallTimeMs: 1000 } }, undefined, undefined, ctx);
+			await vi.advanceTimersByTimeAsync(1000);
+			for (const name of ["subagent_list", "subagent_check"]) {
+				const text = textOf(await tool(name).execute("check", { id: "sa-1" }));
+				expect(text).toContain("over-budget-warning");
+				expect(text).toContain("wall 100%");
+				expect(text).toContain("reported tokens unknown");
+				expect(text).toContain("inspect or explicitly cancel with subagent_cancel");
+			}
+			expect(manager.get("sa-1")?.status).toBe("running");
+		} finally { manager.disposeAll(); vi.useRealTimers(); }
+	});
+
+	it("keeps visible children quiet with unknown liveness instead of inventing a stall", async () => {
+		vi.useFakeTimers();
+		const { manager, tool, ctx } = createHarness();
+		try {
+			await tool("subagent_spawn").execute("visible", { prompt: "task", name: "task", visible: true }, undefined, undefined, ctx);
+			await vi.advanceTimersByTimeAsync(600_000);
+			expect(manager.get("sa-1")).toMatchObject({ status: "running", health: "quiet", lastProgressAt: null, liveness: "unknown", warnings: [] });
+		} finally { manager.disposeAll(); vi.useRealTimers(); }
+	});
+
 	it("registers the seven subagent tools and exposes visible spawning with baseRef", () => {
 		const { registered, tool } = createHarness();
 		expect(registered.map((entry) => entry.name)).toEqual(["subagent_spawn", "subagent_send", "subagent_check", "subagent_wait", "subagent_cancel", "subagent_close", "subagent_list"]);

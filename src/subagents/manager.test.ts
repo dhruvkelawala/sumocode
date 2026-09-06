@@ -49,6 +49,78 @@ const deferredBackend = () => {
 };
 
 describe("SubagentManager", () => {
+	it("warns once at a budget crossing without interrupting or freeing the running slot", async () => {
+		vi.useFakeTimers();
+		const { manager, emitters, interrupts } = deferredBackend();
+		try {
+			await manager.spawn({ ...makeTask("budget"), budget: { wallTimeMs: 1000 } });
+			const listener = vi.fn();
+			manager.addChangeListener(listener);
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(manager.get("sa-1")).toMatchObject({ status: "running", health: "over-budget-warning", elapsedMs: 1000, warnings: ["wall-time"] });
+			expect(listener).toHaveBeenCalledTimes(1);
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(listener).toHaveBeenCalledTimes(1);
+			expect(interrupts.get("sa-1")).not.toHaveBeenCalled();
+			emitters.get("sa-1")!({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+			await vi.advanceTimersByTimeAsync(0);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { manager.disposeAll(); vi.useRealTimers(); }
+	});
+
+	it("keeps one health scheduler with 10 running and 16 queued", async () => {
+		vi.useFakeTimers();
+		const { manager, interrupts } = deferredBackend();
+		try {
+			for (let i = 0; i < 26; i++) await manager.spawn(makeTask(String(i)));
+			expect(vi.getTimerCount()).toBe(1);
+			await vi.advanceTimersByTimeAsync(120_000);
+			expect(manager.list().filter((snapshot) => snapshot.health === "stalled-warning")).toHaveLength(10);
+			expect(manager.list().filter((snapshot) => snapshot.status === "queued")).toHaveLength(16);
+			for (const interrupt of interrupts.values()) expect(interrupt).not.toHaveBeenCalled();
+			manager.disposeAll();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { manager.disposeAll(); vi.useRealTimers(); }
+	});
+
+	it("recovers a stall warning on parsed progress and gives long tools bounded grace", async () => {
+		vi.useFakeTimers();
+		const { manager, emitters } = deferredBackend();
+		try {
+			await manager.spawn(makeTask("progress"));
+			const emit = emitters.get("sa-1")!;
+			await vi.advanceTimersByTimeAsync(120_000);
+			expect(manager.get("sa-1")?.health).toBe("stalled-warning");
+			emit({ kind: "tool-start", toolId: "tool", name: "read" });
+			expect(manager.get("sa-1")?.health).toBe("active");
+			await vi.advanceTimersByTimeAsync(299_000);
+			expect(manager.get("sa-1")?.health).toBe("quiet");
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(manager.get("sa-1")?.health).toBe("stalled-warning");
+			emit({ kind: "tool-end", toolId: "tool", name: "read", isError: false });
+			expect(manager.get("sa-1")).toMatchObject({ health: "active", lastProgressAt: Date.now(), liveness: "unknown" });
+		} finally { manager.disposeAll(); vi.useRealTimers(); }
+	});
+
+	it("sums reported turn usage for budgets without changing context occupancy", async () => {
+		const { manager, emitters } = deferredBackend();
+		try {
+			await manager.spawn({ ...makeTask("usage"), budget: { tokens: 100, costUsd: 1 } });
+			const emit = emitters.get("sa-1")!;
+			emit({ kind: "usage", tokens: 60, costUsd: 0.6 });
+			emit({ kind: "usage" });
+			emit({ kind: "usage", tokens: 40, costUsd: 0.4 });
+			expect(manager.get("sa-1")).toMatchObject({ health: "over-budget-warning", warnings: ["tokens", "cost"], usage: { tokens: 40, costUsd: 0.4, reportedTokens: 100, reportedCostUsd: 1 } });
+		} finally { manager.disposeAll(); }
+	});
+
+	it("rejects invalid budgets before setup or queue admission", async () => {
+		const { manager } = deferredBackend();
+		await expect(manager.spawn({ ...makeTask("invalid"), budget: { tokens: -1 } })).rejects.toThrow(/budget/);
+		expect(manager.list()).toEqual([]);
+	});
+
 	it(`queues spawn ${SUBAGENT_MAX_RUNNING + 1} instead of refusing it`, async () => {
 		const { manager } = deferredBackend();
 		for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await expect(manager.spawn(makeTask(`${index}`))).resolves.toMatchObject({ id: subagentId(index + 1) });

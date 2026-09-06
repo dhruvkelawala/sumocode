@@ -1,12 +1,16 @@
 import { type ChildProcessWithoutNullStreams, type spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createPiChildSpawner, type SpawnedChild } from "../../src/subagents/backend-pi.js";
+import { createPiChildSpawner, type SpawnedChild, type spawnPiChild } from "../../src/subagents/backend-pi.js";
 import { createPaneChildSpawner } from "../../src/subagents/backend-pane.js";
-import type { SubagentEvent } from "../../src/subagents/domain.js";
+import type { SubagentEvent, SubagentSnapshot } from "../../src/subagents/domain.js";
+import { SubagentManager } from "../../src/subagents/manager.js";
+import { SubagentRegistry, type SubagentRecord } from "../../src/subagents/registry.js";
+import { controlAuthority } from "../../src/subagents/retained-adoption.js";
+import { RetainedHeadlessSupervisor } from "../../src/subagents/retained-supervisor.js";
 import { systemProcessTree, terminateProcessTree, signalVerifiedProcessTree, type ProcessTreeOperations } from "../../src/background-tasks/process-tree.js";
 import { shellEscape } from "../../src/background-tasks/visible-spawn.js";
 import { JsonLineDecoder } from "../../src/child-protocol.js";
@@ -285,6 +289,79 @@ describe("cleanup ownership regression", () => {
 		ops.signalTree = vi.fn(async () => ({ ok: false, gone: false, identityStatus: "different" as const }));
 		expect(await cleanupOwnedTree(ops, tree, () => {})).toBe(false);
 		expect(ops.signalTree).toHaveBeenCalledTimes(1);
+	});
+});
+
+// WIP slice 3: production owner/manager composition, fake headless backend only.
+// Real source/native/visible processes and the six-cell crash matrix remain separate gates.
+describe("Plan112 production recovery model", () => {
+	afterEach(() => { vi.useRealTimers(); });
+
+	it.each(["before-settle", "after-settle"])("recovery-model: headless %s preserves one result through two replacements", async (cut) => {
+		vi.useFakeTimers();
+		vi.setSystemTime(1000);
+		const directory = realpathSync(mkdtempSync(join(tmpdir(), "subagent-recovery-model-")));
+		chmodSync(directory, 0o700);
+		const taskDir = join(directory, "task");
+		mkdirSync(taskDir, { mode: 0o700 });
+		const writer = { token: "writer", pid: process.pid, processStartTime: "host-birth" };
+		const registry = new SubagentRegistry(join(directory, "registry"), "origin", { writerIdentity: writer, inspectWriter: () => "alive" });
+		const record: SubagentRecord = {
+			schemaVersion: 2, revision: 1, id: "sa-model", ownerSessionId: "origin", backend: "headless", status: "starting", taskDir,
+			child: null, supervisor: null, pane: null, worktree: null, sessionFilePath: null, modelLabel: null, roleId: null,
+			createdAt: 1000, updatedAt: 1000, settledAt: null, completionId: null, outcome: null,
+			delivery: { state: "none", claim: null }, result: null, manifest: null, writerLease: null, controlLease: null, controlHead: 0,
+		};
+		const ops: ProcessTreeOperations = {
+			captureStartTime: () => "anchor-command", identityMatches: () => "same", verificationMatches: () => "same",
+			captureTreeVerification: (identity) => ({ members: [{ pid: identity.pid, processStartTime: "anchor-birth" }] }),
+			isTreeEmpty: () => false, signalTree: vi.fn(async () => ({ ok: true, gone: true })), waitForTreeEmpty: async () => false,
+		};
+		let emit!: (event: SubagentEvent) => void;
+		const interrupt = vi.fn();
+		const subscribe = vi.fn((listener: typeof emit) => { emit = listener; listener({ kind: "run-started" }); });
+		const spawn = vi.fn((options: Parameters<typeof spawnPiChild>[0]): SpawnedChild => {
+			options.launchGate!.beforeSpawn();
+			options.launchGate!.beforePrompt(42);
+			return { events: subscribe, interrupt };
+		});
+		const owner = new RetainedHeadlessSupervisor({ registry, initial: record,
+			supervisor: { identity: { pid: process.pid, processGroupId: process.pid, processStartTime: "host-command" }, verification: { members: [{ pid: process.pid, processStartTime: "host-birth" }] } },
+			launch: { prompt: "synthetic task", cwd: taskDir, inherited: {}, builtInTools: [] }, baseRef: "HEAD",
+		}, { operations: ops, spawn, buildManifest: async () => ({ baseRef: "HEAD", changedPaths: [], commits: 0, exit: "completed", durationMs: 1 }) });
+		const manager = (token: string) => new SubagentManager(() => { throw new Error("replacement must not respawn"); }, { controllerIdentity: { ...writer, token }, processOperations: ops });
+		const old = manager("origin");
+		const initial = owner.record;
+		const granted = registry.acquireControl(initial.id, initial.revision, initial.writerLease!.generation, initial.controlHead, old.controllerIdentity, 60_000);
+		const snapshot: SubagentSnapshot = { id: record.id, title: "worker", prompt: "synthetic task", cwd: taskDir, baseRef: "HEAD", status: "running", createdAt: 1000,
+			usage: { turns: 0 }, transcript: [], liveText: "", liveTools: [], finalText: "" };
+		await old.trackRetained({ registry: registry.forController(old.controllerIdentity), supervisor: owner, snapshot, authority: controlAuthority(granted) });
+		const finish = async () => {
+			await owner.ready;
+			emit({ kind: "run-settled", outcome: { kind: "completed", finalText: "preserved result" } });
+			await owner.settlement;
+		};
+		if (cut === "after-settle") await finish();
+		const next = manager("successor");
+		await next.adoptFrom(old, "successor");
+		if (cut === "before-settle") await finish();
+		expect(next.get(record.id)).toMatchObject({ status: "done", finalText: "preserved result", recovery: "adopted" });
+		const artifacts = ["result.json", "manifest.json"].map((file) => readFileSync(join(taskDir, file), "utf8"));
+		const piSend = vi.fn();
+		const payload = { id: record.id, title: "worker", status: "done", content: next.get(record.id)!.finalText, details: {} };
+		old.deliver(payload, piSend);
+		next.deliver(payload, piSend);
+		next.deliver(payload, piSend);
+		const final = manager("final");
+		await final.adoptFrom(next, "final");
+		final.deliver(payload, piSend);
+		expect(piSend).toHaveBeenCalledExactlyOnceWith(payload);
+		expect(owner.record).toMatchObject({ controllerGeneration: 2, child: initial.child, supervisor: initial.supervisor, delivery: { state: "sent" } });
+		expect(["result.json", "manifest.json"].map((file) => readFileSync(join(taskDir, file), "utf8"))).toEqual(artifacts);
+		expect(spawn).toHaveBeenCalledTimes(1);
+		expect(subscribe).toHaveBeenCalledTimes(1);
+		expect(interrupt).not.toHaveBeenCalled();
+		expect(ops.signalTree).not.toHaveBeenCalled();
 	});
 });
 

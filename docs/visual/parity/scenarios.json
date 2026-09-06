@@ -1298,6 +1298,31 @@
 			}
 		},
 		{
+			"id": "fixture-subagent-recovery-states-landscape",
+			"lane": "fixture",
+			"status": "review",
+			"dimensions": { "cols": 160, "rows": 45 },
+			"bibleTarget": "scene-activity-cards.png",
+			"fixture": {
+				"id": "subagent-recovery-states",
+				"activityExpansion": {
+					"fixture-recovered-subagent": true,
+					"fixture-lost-subagent": true,
+					"fixture-ambiguous-subagent": true,
+					"fixture-completed-terminal": false,
+					"fixture-failed-terminal": false
+				}
+			},
+			"crops": [
+				{ "id": "full", "targetCrop": "full", "runtimeCrop": "full" },
+				{ "id": "chat-area", "targetCrop": "chat-area", "runtimeCrop": "chat-area" }
+			],
+			"geometrySpec": {
+				"regions": [{ "startRow": 1, "endRow": 1, "category": "top-bar", "firstCol": 1 }],
+				"contentBounds": { "minFirst": 0, "maxLast": 159 }
+			}
+		},
+		{
 			"id": "fixture-subagent-budget-warnings-landscape",
 			"lane": "fixture",
 			"status": "review",

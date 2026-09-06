@@ -170,6 +170,33 @@ const FIXTURES = {
 			],
 		},
 	},
+	"subagent-recovery-states": {
+		transcript: {
+			messages: [
+				{ id: "activity-request", role: "user", displayName: "USER", timestamp: FIXTURE_TIMES.userOne, blocks: [{ type: "markdown", text: "show live orchestration activity" }] },
+				{
+					id: "activity-feed", role: "system", displayName: "ACTIVITY", timestamp: FIXTURE_TIMES.sumoOne,
+					blocks: [
+						{ type: "activity", activity: {
+							id: "fixture-recovered-subagent", kind: "subagent", title: "review auth flow", status: "running", subject: "sa-4", currentStep: "recovered-running",
+							body: { kind: "text", text: "original anchor verified · controller generation 2 · writer unchanged\ninspect or explicitly cancel with subagent_cancel" },
+							model: "gpt-5.5", thinking: "medium",
+						} },
+						{ type: "activity", activity: {
+							id: "fixture-lost-subagent", kind: "subagent", title: "auth test watcher", status: "lost", subject: "sa-6", currentStep: "lost",
+							body: { kind: "text", text: "writer death verified · backend transport lost · evidence preserved\ninspect task evidence; no result or signal inferred" },
+						} },
+						{ type: "activity", activity: {
+							id: "fixture-ambiguous-subagent", kind: "subagent", title: "docs audit", status: "lost", subject: "sa-7", currentStep: "ambiguous identity",
+							body: { kind: "text", text: "original process identity unverified · control refused · evidence preserved\ninspect task evidence; no signal authorized" },
+						} },
+						{ type: "activity", activity: { id: "fixture-completed-terminal", kind: "terminal", title: "typecheck", status: "succeeded", subject: "sumocode", outputTail: "typecheck passed", body: { kind: "terminal", command: "pnpm typecheck", text: "typecheck passed" }, result: { summary: "exit 0" } } },
+						{ type: "activity", activity: { id: "fixture-failed-terminal", kind: "terminal", title: "integration tests", status: "failed", subject: "sumocode", outputTail: "1 test failed", body: { kind: "terminal", command: "pnpm test:integration", text: "1 test failed" }, result: { error: "rpc session switch failed" } } },
+					],
+				},
+			],
+		},
+	},
 	"activity-cards": {
 		transcript: {
 			messages: [

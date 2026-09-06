@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
+import { RpcChildExitError } from "./client.js";
 import { RpcHostLifecycle } from "./host-lifecycle.js";
 
 function fixture(env: NodeJS.ProcessEnv = {}) {
@@ -109,6 +110,18 @@ describe("RpcHostLifecycle", () => {
 		const f = fixture({ SUMOCODE_RELOAD: "1" });
 		await expect(f.lifecycle.start(async () => { throw new Error("setup failed"); })).rejects.toThrow("setup failed");
 		expect(f.trace).toEqual([]);
+	});
+
+	it("returns a recorded pre-adoption child-exit intent instead of rejecting to the entry", async () => {
+		const f = fixture({ SUMOCODE_RELOAD: "1" });
+		// Mirror createRpcExitHandler on a pre-adoption child exit: record the
+		// root exit intent and start the stop pipeline; the client's adoption
+		// rejection lands while that pipeline is still in flight.
+		expect(await f.lifecycle.start(async () => {
+			void f.lifecycle.stop(100, "child-exit").then(() => f.lifecycle.exit(100));
+			throw new RpcChildExitError("RPC child exited before host adoption code=100 signal=null.", { code: 100, signal: null });
+		})).toBe(100);
+		expect(f.trace).toContain("exit:100");
 	});
 
 	it("starts once and stops an idle runtime exit once", async () => {

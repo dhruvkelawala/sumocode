@@ -5,6 +5,7 @@ import { boundRetainedResult } from "../../child-protocol.js";
 import { defaultTerminalSessionOwner } from "../runtime/terminal-controller.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import { drainChromeCacheForShutdown, type ChromeCacheWorkerClient } from "./chrome-cache-worker-client.js";
+import { RpcChildExitError } from "./client.js";
 import type { CachedChrome } from "./chrome-cache.js";
 import type { SumoRpcClient } from "./client.js";
 import type { RpcHostRuntime } from "./runtime.js";
@@ -94,10 +95,20 @@ export class RpcHostLifecycle {
 			code = await Promise.race([construct(), startupFailure, this.exitPromise]);
 		} catch (error) {
 			code = this.code ?? 1;
+			// A child that died before adoption handed the outcome to the exit
+			// handler: it recorded the root exit intent (this.code) and started the
+			// stop pipeline ahead of this rejection. That recorded intent outranks
+			// the raw rejection -- the pre-lifecycle host returned
+			// requestedHostExitCode from its catch -- so fall through to it below.
+			// A deliberate reload exit (100) must reach the entry's respawn loop
+			// instead of surfacing as an unhandled startup crash.
+			const exitHandlerOwnsOutcome = !this.childOwned
+				&& error instanceof RpcChildExitError
+				&& this.code !== undefined;
 			// Entry still owns the pre-spawned child and retained terminal. Its
 			// catch must receive startup rejection so it can reap before exiting.
-			if (!this.childOwned) throw error;
-			if (this.code === undefined) {
+			if (!this.childOwned && !exitHandlerOwnsOutcome) throw error;
+			if (this.childOwned && this.code === undefined) {
 				this.options.stderr.write(`[sumocode-rpc] ${error instanceof Error ? error.message : String(error)}\n`);
 				if (this.client?.stderr) this.options.stderr.write(`${this.client.stderr.trim()}\n`);
 			}

@@ -983,11 +983,16 @@ async function runRpcBranchOnce(parsed: ParsedLaunch): Promise<number> {
 		}
 	}
 
-	// Integration-only seam pinning the ownership phase; inert outside tests.
-	const preAdoptionDelayMs = process.env.NODE_ENV === "test"
-		? Number.parseInt(process.env.SUMOCODE_TEST_PRE_ADOPTION_DELAY_MS ?? "0", 10)
+	// Read through the runtime env object: Bun folds direct process.env.NODE_ENV
+	// access at compile time. These ownership holds must stay test-only at runtime.
+	const env = process.env;
+	const preAdoptionDelayMs = env.NODE_ENV === "test"
+		? Number.parseInt(env.SUMOCODE_TEST_PRE_ADOPTION_DELAY_MS ?? "0", 10)
 		: 0;
 	if (Number.isFinite(preAdoptionDelayMs) && preAdoptionDelayMs > 0) {
+		if (preSpawnedChild?.pid !== undefined) {
+			writeStartupMark("native_pre_adoption_ready");
+		}
 		await new Promise((resolveDelay) => setTimeout(resolveDelay, preAdoptionDelayMs));
 	}
 
@@ -1001,10 +1006,11 @@ async function runRpcBranchOnce(parsed: ParsedLaunch): Promise<number> {
 		return 0;
 	}
 
-	const preMainDelayMs = process.env.NODE_ENV === "test"
-		? Number.parseInt(process.env.SUMOCODE_TEST_PRE_MAIN_DELAY_MS ?? "0", 10)
+	const preMainDelayMs = env.NODE_ENV === "test"
+		? Number.parseInt(env.SUMOCODE_TEST_PRE_MAIN_DELAY_MS ?? "0", 10)
 		: 0;
 	if (Number.isFinite(preMainDelayMs) && preMainDelayMs > 0) {
+		writeStartupMark("native_pre_main_ready");
 		await new Promise((resolveDelay) => setTimeout(resolveDelay, preMainDelayMs));
 	}
 
@@ -1015,6 +1021,7 @@ async function runRpcBranchOnce(parsed: ParsedLaunch): Promise<number> {
 			exit: () => undefined,
 			preSpawnedChild,
 			onPreSpawnedChildAdopted: () => {
+				writeStartupMark("native_child_adopted");
 				releasePreAdoptionSignalHandlers();
 			},
 			shouldAbortAdoption: () => relayingEarlySignal,

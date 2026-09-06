@@ -492,6 +492,34 @@ describe("verification harness v2 seam", () => {
 		expect(focusedNamespaces).toEqual([]);
 	});
 
+	it.each([undefined, Buffer.from('{ "reason": "earlier timeout", "ownerPid": 123 }\n')])(
+		"preserves the shared run's retention state through the probe (%s)",
+		(markerBefore) => {
+			const root = createRunRoot();
+			const marker = join(root, "evidence-retained.json");
+			const tempRoot = join(root, "tmp");
+			const manifest = join(root, "children.jsonl");
+			mkdirSync(tempRoot);
+			if (markerBefore !== undefined) writeFileSync(marker, markerBefore);
+			const env = {
+				...process.env,
+				TMPDIR: tempRoot,
+				SUMOCODE_INTEGRATION_RUN_ROOT: root,
+				SUMOCODE_INTEGRATION_MANIFEST: manifest,
+			};
+			const output = execFileSync(process.execPath, [
+				join(process.cwd(), "node_modules", "vitest", "vitest.mjs"),
+				"run",
+				"test/integration/fixtures/focused-harness-probe.test.ts",
+				"--fileParallelism=false",
+			], { cwd: process.cwd(), env, encoding: "utf8", timeout: 30_000, killSignal: "SIGKILL" });
+
+			expect(output).toContain("zero-survivor audit: 0 survivors across 1 registered process group(s)");
+			expect(existsSync(marker) ? readFileSync(marker) : undefined).toEqual(markerBefore);
+			expect(readdirSync(tempRoot)).toEqual([]);
+		},
+	);
+
 	it("writes argv, stderr, diagnostics, and the final screen on timeout", async () => {
 		const root = createRunRoot();
 		const evidenceDir = join(root, "evidence", "timeout-case");

@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { expect, it } from "vitest";
 import { createChildEvidenceContext, spawnSupervisedProcess } from "../harness-supervisor.js";
@@ -6,6 +6,9 @@ import { createChildEvidenceContext, spawnSupervisedProcess } from "../harness-s
 it("uses the focused harness lifecycle", async () => {
 	const evidenceDir = createChildEvidenceContext([process.execPath, "focused-probe"]).evidenceDir;
 	const root = resolve(evidenceDir, "../../..");
+	const marker = join(root, "evidence-retained.json");
+	// Earlier tests may have retained this shared run; the probe must leave it unchanged.
+	const markerBefore = existsSync(marker) ? readFileSync(marker) : undefined;
 	const supervised = spawnSupervisedProcess(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], {
 		stdio: ["ignore", "ignore", "pipe"],
 	});
@@ -16,6 +19,6 @@ it("uses the focused harness lifecycle", async () => {
 	await supervised.terminate();
 
 	expect(existsSync(evidenceDir)).toBe(true);
-	expect(existsSync(join(root, "evidence-retained.json"))).toBe(false);
+	expect(existsSync(marker) ? readFileSync(marker) : undefined).toEqual(markerBefore);
 	expect(process.env.TMPDIR).toBe(join(root, "tmp"));
 });

@@ -16,12 +16,9 @@ import type { TerminalHost } from "../../src/terminal-host/types.js";
 import { RetainedHeadlessSupervisor, RetainedVisibleSupervisor } from "../../src/subagents/retained-supervisor.js";
 import { RetainedResults } from "../../src/subagents/retained-results.js";
 import { cleanupOwnedTree, type OwnedTree } from "./fixtures/subagent-feasibility-cleanup.js";
+import { runRealRecovery } from "./fixtures/plan112-real-recovery.js";
 
-// No fixture broker may stand in for a production cross-process controller.
-// Real mode is fail-closed until that adapter can register every group through
-// spawnSupervisedProcess/spawnPiPty and audit original births before release.
 const realMode = process.env.PLAN112_RECOVERY_BACKEND === "real";
-const REAL_BLOCKER = "REAL_BACKEND_UNIMPLEMENTED: real-process harness adapter and birth-registered release/zero-owned audit are missing; no process launched";
 const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
 	try {
@@ -33,7 +30,7 @@ afterEach(async () => {
 });
 
 function requireFakeBackend(): void {
-	if (realMode) throw new Error(REAL_BLOCKER);
+	if (realMode) throw new Error("capability: deterministic fault injection is fake-only; select feasibility cells for OS recovery");
 	if (process.env.PLAN112_RECOVERY_BACKEND && process.env.PLAN112_RECOVERY_BACKEND !== "fake") {
 		throw new Error("PLAN112_RECOVERY_BACKEND must be fake or real");
 	}
@@ -234,6 +231,7 @@ describe("production recovery matrix", () => {
 	for (const backend of ["headless", "visible"] as const) {
 		for (const replacement of ["same-process factory replacement", "host-Pi reload", "parent crash-restart"] as const) {
 			it(`feasibility: ${backend} across ${replacement}`, async () => {
+				if (realMode) return runRealRecovery(backend, replacement);
 				requireFakeBackend();
 				if (replacement === "same-process factory replacement") await replaceAndComplete("new", true, backend);
 				else {
@@ -268,7 +266,7 @@ describe("production recovery matrix", () => {
 					expect(f.spawn).toHaveBeenCalledTimes(1);
 					expect(f.subscribe).toHaveBeenCalledTimes(1);
 				}
-			});
+			}, 90_000);
 		}
 	}
 	for (const reason of ["new", "resume", "fork", "reload"]) {

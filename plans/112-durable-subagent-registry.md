@@ -484,3 +484,34 @@ The shared launch gate now persists an immutable launch intent before calling ei
 Tradeoffs: this is a point-in-time census, not an atomic process supervisor or proof against future group membership; it retains existing kernel-birth precision and fails closed on unsupported `ps` output. Registry reads plus live enumeration add startup work, not a new watcher. Optional v2 metadata leaves legacy uncertainty intact. The fake census case tests the production observation seam; actual anchor IPC lifetime is still an unrun real-process requirement.
 
 **The requested real-mode matrix wiring is still SOURCE-INCOMPLETE.** `PLAN112_RECOVERY_BACKEND=real` still refuses before launch. The fake fixture's clock, in-process supervisor, synthetic controller PIDs, event injection and visible host cannot be relabeled as an OS adapter. No unused spawner wrapper or Pi smoke test was added to imply otherwise. This checkpoint is not ready for the real matrix heavy gate. The complete 112/114 map and exact deferred commands are in worktree-local `issue-to-pr/406.md`; production enablement, standalone visible entry, native and visual proof remain unclaimed.
+
+### Real OS feasibility adapter checkpoint
+
+This supersedes the preceding no-launch checkpoint, **not** the outstanding full-matrix gate.
+
+`PLAN112_RECOVERY_BACKEND=real` now selects a separate OS adapter for the six feasibility cells. Headless work runs checkout-local Pi **0.84.4**, `createPiChildSpawner`, the retained anchor, private bootstrap, real registry/supervisor/manager, and a freshly generated synthetic provider. There is no paid provider or network request. The provider holds completion until the test releases it; backend events and process identities are not mocked.
+
+Same-process replacement runs both installer instances inside a real detached source-controller Node process. The two cross-process cells use a surviving writer, a separately spawned origin controller killed through `signalVerifiedProcessTree`, actual lease expiry, and a new Node successor invoking the source installer/census against the same registry. A short initial **3-second control lease** avoids sleeping for a minute without replacing the clock or death inspector. These are source-controller reload/restart contracts, not a live TUI `/reload` test.
+
+The source driver holds each anchor's spawn callback until Vitest has registered its original birth with the existing external-group supervisor seam. Controller launches use `spawnSupervisedProcess`. Per-cell and outer-wrapper audits retain birth records, require a known complete census, check original identities and group emptiness, and fail on any unregistered spawn. No PGID-only shared-harness termination or signal-zero semantics changed. Spawn publication and birth capture remain separate OS operations: a failed capture is an unknown/error verdict, never permission to signal an unverified group or declare zero-owned.
+
+**Capability results remain red, not skips:**
+- The real headless handle has no `send`. The steering request reaches the real manager/control path and fails with `capability: no headless steering`.
+- Without Herdr, visible cells fail with `capability: herdr unavailable`. A standalone visible source-controller entry remains unsupported even when Herdr is present.
+- The other 32 deterministic fault-injection cases remain fake-only and explicitly fail if selected in real mode. They are not relabeled as OS evidence.
+
+The focused supervised payload is:
+
+```sh
+# ROOT must be a fresh canonical caller-owned 0700 directory; use an env -i
+# allowlist with private HOME/TMPDIR/config/cache and an absolute Node/system PATH.
+PLAN112_RECOVERY_BACKEND=real /absolute/path/to/node scripts/run-plan112-recovery.mjs "$ROOT" -- \
+  pnpm exec vitest run test/integration/subagent-recovery.test.ts --fileParallelism=false
+# Append -t 'feasibility: headless across same-process' for one cell.
+```
+
+The wrapper validates that exact single-file payload and resolves its checkout-local Vitest entry directly with the absolute Node. This avoids the `.bin/vitest` shell wrapper's injected `NODE_PATH`, which retained source launch refuses. It always preserves evidence and runs no unrelated integration suite, artifact build, global preflight repair, or cleanup of existing files. `scripts/plan112-recovery-preflight.mjs ROOT` also provides a standalone fail-fast version/Node/provider-generation check; it consumes a fresh root, so use a different root for a subsequent run.
+
+Verification: fake matrix **38/38**, preflight/capability tests **5/5**, subagent plus process-tree units **669/669** (24 files). Project tsc/build, strict integration-file tsc and scoped lint pass. Exactly **one** real headless same-process cell ran: **FAIL, `capability: no headless steering`**, after real startup, adopted controller, settled result and one completion delivery. Cell zero-owned audit **PASS (2 groups)**; outer audit **PASS (3 groups including Vitest)**, known census, no unregistered groups. The filter excluded 37 tests; none was silently skipped for missing capabilities. Cross-process and visible real cells were not run. Private evidence paths and exact commit are in worktree-local `issue-to-pr/406.md`.
+
+Tradeoffs: the test source-controller API collects submitted completion messages rather than launching an additional interactive Pi host; this tests controller ownership, not UI delivery. Real cross-process delivery after settlement, all OS fault cuts, native/full/visual verification and production enablement remain unclaimed. Dirty099, deferred Effect110, existing evidence and all goldens remain untouched.

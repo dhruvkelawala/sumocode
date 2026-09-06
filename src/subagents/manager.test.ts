@@ -1245,7 +1245,8 @@ describe("SubagentManager steering and close", () => {
 			await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
 
 			await expect(manager.close(["sa-9", "sa-1"])).resolves.toEqual(["sa-9 is unknown", "sa-1 was already done"]);
-			expect(manager.consumedIds.has("sa-1")).toBe(false);
+			expect(manager.consumedIds.has("sa-1")).toBe(true);
+			expect(manager.consumedIds.has("sa-9")).toBe(false);
 		});
 
 		it("cancels a queued child without starting it", async () => {

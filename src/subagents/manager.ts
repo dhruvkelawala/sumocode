@@ -763,6 +763,7 @@ export class SubagentManager {
 				continue;
 			}
 			if (isSettled(snapshot)) {
+				this.consumedIds.add(id);
 				lines.set(id, `${id} was already ${snapshot.status === "done" ? "done" : "settled"}`);
 				continue;
 			}

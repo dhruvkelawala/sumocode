@@ -133,6 +133,49 @@ describe("native build input containment", () => {
 });
 
 describe("native Pi build-source preparation", () => {
+	for (const scenario of ["contained", "escaped ancestor", "manifest-only before escaped ancestor"]) {
+		it(`checks the nearest import-only exports package: ${scenario}`, () => {
+			const { directory, root, piPkg, buildDir } = fixture("pnpm");
+			const name = "import-only";
+			const manifestPath = join(piPkg, "package.json");
+			const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+			manifest.dependencies[name] = "1";
+			write(manifestPath, JSON.stringify(manifest));
+			const nearest = join(piPkg, "../..", name);
+			const outside = join(directory, "node_modules", name);
+			const target = scenario === "contained" ? nearest : outside;
+			if (scenario === "manifest-only before escaped ancestor") {
+				write(join(nearest, "package.json"), JSON.stringify({ name }));
+			}
+			write(join(target, "package.json"), JSON.stringify({
+				name, type: "module", exports: { ".": { types: "./index.d.ts", import: "./index.js" } },
+			}));
+			write(join(target, "index.js"), 'throw new Error("fixture source must never execute");\n');
+			if (scenario === "contained") write(join(outside, "index.js"), "export {};\n");
+			const require = createRequire(manifestPath);
+			expect(() => require.resolve(name)).toThrow(expect.objectContaining({ code: "ERR_PACKAGE_PATH_NOT_EXPORTED" }));
+			if (scenario === "manifest-only before escaped ancestor") {
+				expect(require.resolve(`${name}/package.json`)).toBe(join(nearest, "package.json"));
+			} else {
+				expect(() => require.resolve(`${name}/package.json`))
+					.toThrow(expect.objectContaining({ code: "ERR_PACKAGE_PATH_NOT_EXPORTED" }));
+				const resolved = spawnSync(process.execPath, ["--experimental-import-meta-resolve", "--input-type=module", "-e",
+					`console.log(import.meta.resolve(${JSON.stringify(name)}, ${JSON.stringify(pathToFileURL(manifestPath).href)}));`,
+				], { env: {}, encoding: "utf8", timeout: 10_000 });
+				expect(resolved.status).toBe(0);
+				expect(resolved.stdout.trim()).toBe(pathToFileURL(join(target, "index.js")).href);
+			}
+			if (scenario === "contained") {
+				makeNativePiBuildCopy(piPkg, buildDir, root);
+				expect(realpathSync(join(buildDir, "node_modules", name))).toBe(target);
+			} else {
+				expect(() => makeNativePiBuildCopy(piPkg, buildDir, root))
+					.toThrow(`Pi build dependency ${name} resolves outside ${root}: ${outside}`);
+				expect(existsSync(buildDir)).toBe(false);
+			}
+		});
+	}
+
 	for (const scenario of ["manifest without main", "broken main without index", "broken main with index"]) {
 		it(`checks actual resolution for ${scenario}`, () => {
 			const { directory, root, piPkg, buildDir } = fixture("pnpm");

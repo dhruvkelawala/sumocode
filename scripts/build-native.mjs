@@ -159,11 +159,11 @@ function loadablePackageDirectory(directory, require, name) {
 		entry = require.resolve(name);
 	} catch (error) {
 		if (error.code !== "ERR_PACKAGE_PATH_NOT_EXPORTED") return false;
-		try {
-			entry = require.resolve(`${name}/package.json`);
-		} catch {
-			return false;
-		}
+		// Exports can allow import but hide require and package.json. Node stops
+		// at that package; do not confuse an earlier manifest-only directory with it.
+		const manifestPath = join(directory, "package.json");
+		return existsSync(manifestPath)
+			&& JSON.parse(readFileSync(manifestPath, "utf8")).exports != null;
 	}
 	return realpathSync(entry).startsWith(`${realpathSync(directory)}${sep}`);
 }
@@ -173,7 +173,7 @@ function loadablePackageDirectory(directory, require, name) {
  * Advisory fast-fail only: Node and Bun can resolve differently. The post-build
  * metafile containment check is the invariant, not this heuristic or a TOCTOU guard.
  */
-function validatePiBuildGraph(piPkg, packageRoot) {
+export function validatePiBuildGraph(piPkg, packageRoot) {
 	const realRoot = realpathSync(packageRoot);
 	const directories = new Set();
 	const packages = new Map();
@@ -225,8 +225,7 @@ function validatePiBuildGraph(piPkg, packageRoot) {
 			// before resolving — nothing to contain, no directory to link into the copy.
 			if (isBuiltin(name)) continue;
 			// Real package neighborhoods include pnpm siblings, not just child node_modules.
-			// Use Node's resolved file, not manifest presence. Exports hiding both the
-			// entry and manifest are conservatively rejected rather than guessed.
+			// Prefer Node's resolved file; an exports gate may hide import-only entries.
 			const dependency = require.resolve.paths(name)
 				.map((directory) => join(directory, name))
 				.find((directory) => loadablePackageDirectory(directory, require, name));

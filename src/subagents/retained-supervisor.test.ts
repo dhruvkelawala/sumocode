@@ -340,7 +340,7 @@ describe("retained supervisor handle ownership", () => {
 		});
 		await expect(owner.ready).rejects.toThrow(/release/);
 		expect(await owner.settlement).toBe("settled");
-		expect(f.registry.get("sa-proof")).toMatchObject({ status: "settled", child: null, outcome: "failed", delivery: { state: "pending" } });
+		expect(f.registry.get("sa-proof")).toMatchObject({ status: "settled", child: null, outcome: "failed", delivery: { state: "undelivered" } });
 	});
 
 	it("does not turn a pre-release zero exit into completed work", async () => {
@@ -552,7 +552,7 @@ describe("retained supervisor handle ownership", () => {
 		expect(f.subscriptions).toHaveBeenCalledTimes(1);
 	});
 
-	it("publishes host-derived private evidence before completion observers and leaves delivery pending", async () => {
+	it("publishes host-derived private evidence before completion observers and leaves delivery undelivered", async () => {
 		const f = retainedFixture();
 		f.proc.emit("spawn");
 		await f.owner.ready;
@@ -578,7 +578,7 @@ describe("retained supervisor handle ownership", () => {
 		const record = f.registry.get("sa-proof")!;
 		expect(observed).toHaveLength(1);
 		expect(observed[0]).toEqual(record);
-		expect(record).toMatchObject({ delivery: { state: "pending", claim: null } });
+		expect(record).toMatchObject({ delivery: { state: "undelivered" } });
 		expect(record.completionId).toBeTruthy();
 		for (const file of ["events.json", "result.json", "manifest.json"]) expect(statSync(join(record.taskDir, file)).mode & 0o777).toBe(0o600);
 		expect(record.result?.bytes).toBe(statSync(join(record.taskDir, "result.json")).size);

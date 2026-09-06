@@ -12,6 +12,7 @@ import { SUBAGENT_MAX_QUEUED, SUBAGENT_MAX_RUNNING, type LiveToolState, type Run
 import { planPlacement } from "./layout.js";
 import { addReportedSubagentUsage, evaluateSubagentBudget, validateSubagentBudget, type SubagentBudget } from "./budget-policy.js";
 import { buildCompletionManifest, type CompletionManifestEvidence } from "./manifest.js";
+import type { DeliveryPayload } from "./delivery.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -281,7 +282,44 @@ export class SubagentManager {
 
 	public canDeliver(id: string): boolean {
 		const retained = this.retained.get(id);
-		return !this.detached && (!retained || !retained.blocked && retained.entry.registry.inspectControl(retained.entry.authority));
+		if (this.detached || retained?.blocked) return false;
+		try { return !retained || retained.entry.registry.inspectControl(retained.entry.authority); }
+		catch { this.blockRetained(id, "ambiguous"); return false; }
+	}
+
+	/** No await between durable admission and the single synchronous Pi call. */
+	public deliver(payload: DeliveryPayload, send: (payload: DeliveryPayload) => void): void {
+		if (!this.canDeliver(payload.id)) return;
+		const tracked = this.retained.get(payload.id);
+		if (!tracked) { send(payload); return; }
+		const { registry, authority } = tracked.entry;
+		try {
+			let record = registry.get(payload.id)!;
+			if (record.status !== "settled") return;
+			if (record.delivery.state === "sending") {
+				if (record.delivery.controllerGeneration === (record.controllerGeneration ?? 0)) return;
+				record = registry.advanceDelivery(record.revision, authority, "uncertain");
+			}
+			const notice = record.delivery.state === "delivery-uncertain";
+			const slot = record.delivery.state === "delivery-uncertain" ? record.delivery.notice : record.delivery;
+			if (notice && slot.state === "sending" && slot.controllerGeneration !== (record.controllerGeneration ?? 0)) {
+				registry.advanceDelivery(record.revision, authority, "uncertain", true);
+				return;
+			}
+			if (slot.state !== "undelivered") return;
+			const outgoing: DeliveryPayload = notice ? { ...payload,
+				customType: "subagent-delivery-uncertain",
+				content: `delivery of ${payload.id} uncertain; result manifest available at ${join(record.taskDir, "manifest.json")}; use inspect`,
+				details: { id: payload.id, completionId: record.completionId, delivery: "delivery-uncertain", manifestPath: join(record.taskDir, "manifest.json") },
+			} : payload;
+			record = registry.advanceDelivery(record.revision, authority, "send", notice);
+			send(outgoing);
+			registry.advanceDelivery(record.revision, authority, "sent", notice);
+		} catch {
+			// Publication may have committed even if its return was lost. Preserve
+			// successor recovery of sending; only corrupt evidence blocks adoption.
+			this.canDeliver(payload.id);
+		}
 	}
 
 	private blockRetained(id: string, classification: "lost" | "ambiguous"): void {

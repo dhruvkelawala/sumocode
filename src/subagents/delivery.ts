@@ -1,4 +1,5 @@
 export interface DeliveryPayload {
+	readonly customType?: "subagent-delivery-uncertain";
 	readonly id: string;
 	readonly title: string;
 	readonly status: string;

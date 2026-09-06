@@ -217,15 +217,15 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 		try {
 			delivery.flush((payload) => {
 				if (!latestContext || !manager.canDeliver(payload.id)) return;
-				pi.sendMessage(
+				manager.deliver(payload, (outgoing) => pi.sendMessage(
 					{
-						customType: "subagent-result",
-						content: payload.content,
+						customType: outgoing.customType ?? "subagent-result",
+						content: outgoing.content,
 						display: true,
-						details: payload.details,
+						details: outgoing.details,
 					},
 					{ deliverAs: "followUp", triggerTurn: true },
-				);
+				));
 			});
 		// oxlint-disable-next-line anti-slop/no-unknown-parameters -- ExtensionAPI.sendMessage may throw any JavaScript value at this effect boundary.
 		} catch (error: unknown) {

@@ -515,7 +515,7 @@ describe("SubagentRegistry writer CAS", () => {
 		expect(lost).toMatchObject({ child, supervisor, completionId: null, outcome: null, settledAt: null, result: null });
 		expect(() => registry.transition(record.id, 4, 1, (r) => ({ ...r, child: null }))).toThrow(/preserved/);
 		expect(() => registry.transition(record.id, 4, 1, (r) => ({ ...r, ownerSessionId: "other" }))).toThrow(/immutable/);
-		const settled = registry.transition(record.id, 4, 1, (r) => ({ ...r, status: "settled", settledAt: 1000, outcome: "failed", completionId: "completion-1", delivery: { state: "pending", claim: null } }));
+		const settled = registry.transition(record.id, 4, 1, (r) => ({ ...r, status: "settled", settledAt: 1000, outcome: "failed", completionId: "completion-1", delivery: { state: "undelivered" } }));
 		expect(new SubagentRegistry(directory, "session-a").get(record.id)).toEqual(settled);
 		expect(() => registry.transition(record.id, 5, 1, (r) => ({ ...r, completionId: "completion-2" }))).toThrow(/preserved/);
 		const ambiguous = registry.transition(record.id, 5, 1, (r) => ({ ...r, status: "ambiguous" }));
@@ -577,7 +577,7 @@ describe("SubagentRegistry private records", () => {
 		expect(() => registry.create({ ...record, child })).toThrow();
 		registry.create(record);
 		registry.acquireWriter(record.id, 1, 100);
-		expect(() => registry.transition(record.id, 2, 1, (r) => ({ ...r, status: "settled", settledAt: 1000, completionId: "completion-a", delivery: { state: "pending", claim: null } }))).toThrow(/schema/);
+		expect(() => registry.transition(record.id, 2, 1, (r) => ({ ...r, status: "settled", settledAt: 1000, completionId: "completion-a", delivery: { state: "undelivered" } }))).toThrow(/schema/);
 		expect(registry.get(record.id)?.revision).toBe(2);
 	});
 
@@ -689,7 +689,7 @@ describe("SubagentRegistry private records", () => {
 		const resultPath = join(record.taskDir, "result.json");
 		writeFileSync(resultPath, content, { mode: 0o600 });
 		const result = { file: "result.json" as const, bytes: Buffer.byteLength(content) };
-		const settled = registry.transition(record.id, 2, 1, (r) => ({ ...r, status: "settled", settledAt: 1000, outcome: "completed", completionId: "completion-1", delivery: { state: "pending", claim: null }, result }));
+		const settled = registry.transition(record.id, 2, 1, (r) => ({ ...r, status: "settled", settledAt: 1000, outcome: "completed", completionId: "completion-1", delivery: { state: "undelivered" }, result }));
 		expect(new SubagentRegistry(directory, "session-a").get(record.id)).toEqual(settled);
 		expect(readFileSync(join(directory, "sa-proof.json"), "utf8")).not.toContain("private result");
 		fs.renameSync(resultPath, join(root, "preserved-result.json"));

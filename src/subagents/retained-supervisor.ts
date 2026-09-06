@@ -266,7 +266,7 @@ export class RetainedHeadlessSupervisor {
 
 	/** Cooperative outgoing-controller request. Persistence ownership never moves. */
 	public reserveControl(authority: RegistryControlAuthority, successor: RegistryControlSuccessor): SubagentRecord {
-		if (this.stopped || this.terminal) throw new Error("retained owner unavailable for transfer");
+		if ((this.stopped || this.terminal) && !this.completed) throw new Error("retained owner unavailable for transfer");
 		const record = this.authority.record();
 		if (!record.child) throw new Error("retained child unavailable for transfer");
 		try { this.authority.verifyChild(record.child.identity.pid); }
@@ -350,7 +350,7 @@ export class RetainedHeadlessSupervisor {
 			const completionId = randomUUID();
 			this.authority.transition((r) => ({
 				...r, status: "settled", settledAt: completed.updatedAt, completionId,
-				result: result.pointer, manifest: manifestPointer, delivery: { state: "pending", claim: null },
+				result: result.pointer, manifest: manifestPointer, delivery: { state: "undelivered" },
 			}));
 			this.completed = structuredClone({ outcome: result.outcome, manifest: { ...manifest, exit: outcome.kind } });
 			this.stopped = true;

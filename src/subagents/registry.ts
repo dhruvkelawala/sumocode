@@ -43,6 +43,17 @@ export interface RegistryControlSuccessor {
 	readonly owner: RegistryWriter;
 }
 
+export type RegistrySendState =
+	| { readonly state: "undelivered" }
+	| { readonly state: "sending"; readonly completionId: string; readonly controllerGeneration: number; readonly at: number }
+	| { readonly state: "sent"; readonly completionId: string };
+
+export type RegistryDelivery =
+	| { readonly state: "none"; readonly claim: null }
+	| RegistrySendState
+	| { readonly state: "delivery-uncertain"; readonly completionId: string;
+		readonly notice: RegistrySendState | { readonly state: "delivery-uncertain"; readonly completionId: string } };
+
 export interface SubagentRecord {
 	/** Explicit writer-authorized handoff; null/absent grants no successor rights. */
 	readonly controlReservation?: RegistryControlSuccessor | null;
@@ -78,10 +89,7 @@ export interface SubagentRecord {
 	readonly settledAt: number | null;
 	readonly completionId: string | null;
 	readonly outcome: RunOutcome["kind"] | null;
-	readonly delivery: {
-		readonly state: "none" | "pending" | "claimed" | "delivered" | "suppressed";
-		readonly claim: RegistryWriterLease | null;
-	};
+	readonly delivery: RegistryDelivery;
 	/** Private direct-child artifacts; null means no durable result evidence. */
 	readonly result: { readonly file: "result.json"; readonly bytes: number } | null;
 	readonly manifest: { readonly file: "manifest.json"; readonly bytes: number } | null;
@@ -164,6 +172,21 @@ function processEvidence(value: unknown): boolean {
 function pointer(value: unknown, file: string): boolean {
 	return value === null || (object(value, "file bytes") && value.file === file && integer(value.bytes) && value.bytes <= MAX_RESULT_BYTES);
 }
+function sendState(value: unknown, completionId: string, generation: number, createdAt: number, updatedAt: number): boolean {
+	if (object(value, "state") && value.state === "undelivered") return true;
+	if (object(value, "state completionId") && value.state === "sent") return value.completionId === completionId;
+	return object(value, "state completionId controllerGeneration at") && value.state === "sending"
+		&& value.completionId === completionId && integer(value.controllerGeneration) && value.controllerGeneration <= generation
+		&& integer(value.at) && value.at >= createdAt && value.at <= updatedAt;
+}
+function deliveryState(value: unknown, completionId: string | null, generation: number, createdAt: number, updatedAt: number): value is RegistryDelivery {
+	if (completionId === null) return object(value, "state claim") && value.state === "none" && value.claim === null;
+	if (sendState(value, completionId, generation, createdAt, updatedAt)) return true;
+	if (!object(value, "state completionId notice") || value.state !== "delivery-uncertain" || value.completionId !== completionId) return false;
+	const noticeId = `${completionId}:uncertain`;
+	return sendState(value.notice, noticeId, generation, createdAt, updatedAt)
+		|| object(value.notice, "state completionId") && value.notice.state === "delivery-uncertain" && value.notice.completionId === noticeId;
+}
 function validRecord(value: unknown): value is SubagentRecord {
 	if (!object(value, RECORD_KEYS, "budget telemetry controllerSessionId controllerGeneration controlReservation")) return false;
 	if ((value.controllerSessionId === undefined) !== (value.controllerGeneration === undefined)
@@ -205,8 +228,8 @@ function validRecord(value: unknown): value is SubagentRecord {
 	if (r.backend === "headless" && r.pane !== null) return false;
 	if (r.worktree !== null && (!object(r.worktree, "path branch baseRef repoRoot") || !pathValue(r.worktree.path)
 		|| !pathValue(r.worktree.repoRoot) || !text(r.worktree.branch) || !text(r.worktree.baseRef))) return false;
-	if (!object(r.delivery, "state claim") || !text(r.delivery.state) || !["none", "pending", "claimed", "delivered", "suppressed"].includes(r.delivery.state)) return false;
-	if (r.delivery.state === "claimed" ? !(lease(r.delivery.claim) && r.delivery.claim.renewedAt >= r.createdAt && r.delivery.claim.renewedAt <= r.updatedAt) : r.delivery.claim !== null) return false;
+	const generation = r.controllerGeneration ?? 0;
+	if (!integer(generation) || !deliveryState(r.delivery, r.completionId, generation, r.createdAt, r.updatedAt)) return false;
 	if (["running", "settling"].includes(r.status) && (r.child === null || r.supervisor === null || r.writerLease === null)) return false;
 	if (r.status === "queued" && (r.child !== null || r.supervisor !== null)) return false;
 	if (r.status === "settled") {
@@ -449,11 +472,37 @@ export class SubagentRegistry {
 			&& (this.options.inspectWriter ?? inspectWriter)(held.owner) === "alive" && this.clock(current) < held.expiresAt;
 	}
 
+	/** Sender admission only: Pi's void return is not a conversation-insertion receipt. */
+	public advanceDelivery(expectedRevision: number, authority: RegistryControlAuthority, action: "send" | "sent" | "uncertain", notice = false): SubagentRecord {
+		return this.change(authority.id, expectedRevision, (current, now) => {
+			const fence = (): void => {
+				if (!sameWriter(this.ownWriter(), authority.owner) || !this.matchesControl(current, authority, this.clock(current))) throw new SubagentLeaseConflict("stale delivery controller");
+			};
+			fence();
+			if (current.status !== "settled" || !current.completionId || !current.result || !current.manifest) throw new Error("delivery requires settled result evidence");
+			const delivery = current.delivery;
+			const slot = notice && delivery.state === "delivery-uncertain" ? delivery.notice : delivery;
+			if (notice && delivery.state !== "delivery-uncertain") throw new Error("no uncertainty notice");
+			const completionId = notice ? `${current.completionId}:uncertain` : current.completionId;
+			const generation = current.controllerGeneration ?? 0;
+			let next: RegistrySendState | { readonly state: "delivery-uncertain"; readonly completionId: string };
+			if (action === "send" && slot.state === "undelivered") next = { state: "sending", completionId, controllerGeneration: generation, at: now };
+			else if (action === "sent" && slot.state === "sending" && slot.controllerGeneration === generation) next = { state: "sent", completionId };
+			else if (action === "uncertain" && slot.state === "sending" && slot.controllerGeneration < generation) next = { state: "delivery-uncertain", completionId };
+			else throw new SubagentLeaseConflict("delivery state transition refused");
+			fence();
+			return { ...current, delivery: notice && delivery.state === "delivery-uncertain" ? { ...delivery, notice: next }
+				: next.state === "delivery-uncertain" ? { ...next, notice: { state: "undelivered" } } : next };
+		});
+	}
+
 	/** The callback only decides metadata. It must not signal, launch, deliver, or return a promise. */
 	public transition(id: string, expectedRevision: number, generation: number, update: (current: SubagentRecord) => SubagentRecord): SubagentRecord {
 		return this.change(id, expectedRevision, (current, now) => {
 			this.assertWriter(current, generation, now);
 			const next = update(structuredClone(current));
+			if (!isDeepStrictEqual(next.delivery, current.delivery)
+				&& !(current.delivery.state === "none" && next.delivery.state === "undelivered" && next.status === "settled")) throw new Error("delivery requires controller CAS");
 			for (const key of ["schemaVersion", "id", "ownerSessionId", "backend", "taskDir", "createdAt", "writerLease", "controlLease", "controlHead", "controllerSessionId", "controllerGeneration", "controlReservation", "budget"] as const) {
 				if (!isDeepStrictEqual(next[key], current[key])) throw new Error(`immutable registry field: ${key}`);
 			}

@@ -1,4 +1,4 @@
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -103,7 +103,7 @@ function fixture(backend: "headless" | "visible" = "headless") {
 			completion = { outcome: { kind: "completed", finalText: "answer" }, manifest: { exit: "completed", durationMs: 1 } };
 			const result = artifacts.writeResult(completion.outcome);
 			const manifest = artifacts.writeManifest(completion.manifest);
-			const settled = registry.transition(current.id, current.revision, current.writerLease!.generation, (r) => ({ ...r, status: "settled", outcome: "completed", settledAt: 1000, completionId: "completion", delivery: { state: "pending", claim: null }, result: result.pointer, manifest }));
+			const settled = registry.transition(current.id, current.revision, current.writerLease!.generation, (r) => ({ ...r, status: "settled", outcome: "completed", settledAt: 1000, completionId: "completion", delivery: { state: "undelivered" }, result: result.pointer, manifest }));
 			for (const listener of listeners) listener(settled);
 		};
 	}
@@ -137,6 +137,205 @@ function fixture(backend: "headless" | "visible" = "headless") {
 		maxObservers: () => maxObservers, writerState: (value: typeof writerState) => { writerState = value; }, successorState: (value: typeof successorState) => { successorState = value; },
 		originState: (value: typeof originState) => { originState = value; } };
 }
+
+function expectArtifacts(f: ReturnType<typeof fixture>): void {
+	expect(readPrivateJson(join(f.record.taskDir, "result.json"), 4096)).toMatchObject({ outcome: { kind: "completed", finalText: "answer" } });
+	expect(readPrivateJson(join(f.record.taskDir, "manifest.json"), 4096)).toMatchObject({ manifest: { exit: "completed" } });
+}
+
+describe("durable sender delivery", () => {
+	it.each(["headless", "visible"] as const)("%s settles before replacement and the successor sends once", async (backend) => {
+		const f = fixture(backend);
+		const old = f.install("origin");
+		await f.track(old);
+		await f.finish();
+		expect(f.registry.get("sa-1")?.delivery).toEqual({ state: "undelivered" });
+		await old.fire("session_shutdown", "new");
+		const next = f.install("successor");
+		await next.fire("session_start", "new");
+		await next.fire("agent_end");
+		expect(old.delivery).not.toHaveBeenCalled();
+		expect(next.delivery).toHaveBeenCalledTimes(1);
+		expect(f.registry.get("sa-1")?.delivery).toMatchObject({ state: "sent" });
+		expectArtifacts(f);
+	});
+
+	it("does not replay a sent completion into a replacement session", async () => {
+		const f = fixture();
+		const old = f.install("origin");
+		await old.fire("session_start");
+		await f.track(old);
+		await f.finish();
+		expect(old.delivery).toHaveBeenCalledTimes(1);
+		await old.fire("session_shutdown", "fork");
+		const next = f.install("successor");
+		await next.fire("session_start", "fork");
+		await next.fire("agent_end");
+		expect(next.delivery).not.toHaveBeenCalled();
+		expect(f.registry.get("sa-1")?.delivery).toMatchObject({ state: "sent" });
+		expectArtifacts(f);
+	});
+
+	it.each(["before-call", "cas-return", "before-return"])("%s crash leaves one uncertainty notice, never a completion replay", async (cut) => {
+		const f = fixture();
+		const old = f.install("origin");
+		const authority = await f.track(old);
+		await f.finish();
+		if (cut === "before-call") {
+			const record = f.registry.get("sa-1")!;
+			f.registry.forController(old.manager.controllerIdentity).advanceDelivery(record.revision, authority, "send");
+		} else if (cut === "cas-return") {
+			const advance = SubagentRegistry.prototype.advanceDelivery;
+			const fault = vi.spyOn(SubagentRegistry.prototype, "advanceDelivery").mockImplementation(function (this: SubagentRegistry, ...args) {
+				advance.call(this, ...args);
+				throw new Error("admission committed; return lost");
+			});
+			try { await old.fire("agent_end"); }
+			finally { fault.mockRestore(); }
+		} else {
+			old.delivery.mockImplementation(() => { throw new Error("controller lost before return"); });
+			await old.fire("agent_end");
+		}
+		expect(f.registry.get("sa-1")?.delivery).toMatchObject({ state: "sending", controllerGeneration: 0 });
+		await old.fire("agent_end");
+		expect(old.delivery).toHaveBeenCalledTimes(cut === "before-return" ? 1 : 0);
+		await old.fire("session_shutdown", "resume");
+		const next = f.install("successor");
+		await next.fire("session_start", "resume");
+		await next.fire("agent_end");
+		expect(next.delivery).toHaveBeenCalledTimes(1);
+		expect(next.delivery.mock.calls[0]).toEqual([
+			expect.objectContaining({ customType: "subagent-delivery-uncertain", display: true, content: `delivery of sa-1 uncertain; result manifest available at ${join(f.record.taskDir, "manifest.json")}; use inspect` }),
+			{ deliverAs: "followUp", triggerTurn: true },
+		]);
+		expect(f.registry.get("sa-1")?.delivery).toMatchObject({ state: "delivery-uncertain", notice: { state: "sent" } });
+		await next.fire("session_shutdown", "reload");
+		const final = f.install("final");
+		await final.fire("session_start", "reload");
+		expect(final.delivery).not.toHaveBeenCalled();
+		expectArtifacts(f);
+	});
+
+	it("does not recursively replay an uncertainty notice whose own send was lost", async () => {
+		const f = fixture();
+		const old = f.install("origin");
+		const authority = await f.track(old);
+		await f.finish();
+		f.registry.forController(old.manager.controllerIdentity).advanceDelivery(f.registry.get("sa-1")!.revision, authority, "send");
+		await old.fire("session_shutdown", "new");
+		const next = f.install("successor");
+		next.delivery.mockImplementation(() => { throw new Error("notice return lost"); });
+		await next.fire("session_start", "new");
+		expect(next.delivery).toHaveBeenCalledTimes(1);
+		await next.fire("session_shutdown", "new");
+		const final = f.install("final");
+		await final.fire("session_start", "new");
+		await final.fire("agent_end");
+		expect(final.delivery).not.toHaveBeenCalled();
+		expect(f.registry.get("sa-1")?.delivery).toMatchObject({ state: "delivery-uncertain", notice: { state: "delivery-uncertain" } });
+		expectArtifacts(f);
+	});
+
+	it.each(["new", "fork", "resume"])("/%s reservation fences the old sender before successor admission", async (reason) => {
+		const f = fixture();
+		const old = f.install("origin");
+		const stale = await f.track(old);
+		await f.finish();
+		const reserve = f.supervisor.reserveControl.bind(f.supervisor);
+		const send = vi.fn();
+		vi.spyOn(f.supervisor, "reserveControl").mockImplementation((authority, successor) => {
+			const reserved = reserve(authority, successor);
+			old.manager.deliver({ id: "sa-1", title: "worker", status: "done", content: "answer", details: {} }, send);
+			for (const action of ["send", "sent", "uncertain"] as const) {
+				expect(() => f.registry.forController(old.manager.controllerIdentity).advanceDelivery(reserved.revision, stale, action)).toThrow("stale delivery controller");
+			}
+			return reserved;
+		});
+		await old.fire("session_shutdown", reason);
+		const next = f.install("successor");
+		await next.fire("session_start", reason);
+		expect(send).not.toHaveBeenCalled();
+		expect(old.delivery).not.toHaveBeenCalled();
+		expect(next.delivery).toHaveBeenCalledTimes(1);
+		const current = f.registry.get("sa-1")!;
+		for (const action of ["send", "sent", "uncertain"] as const) {
+			expect(() => f.registry.forController(old.manager.controllerIdentity).advanceDelivery(current.revision, stale, action)).toThrow("stale delivery controller");
+		}
+		expectArtifacts(f);
+	});
+
+	it.each(["anchor-undelivered", "anchor-sending", "supervisor-undelivered", "supervisor-sending"])("%s loss blocks replay and preserves settled artifacts", async (fault) => {
+		const f = fixture();
+		const old = f.install("origin");
+		const authority = await f.track(old);
+		await f.finish();
+		if (fault.endsWith("-sending")) f.registry.forController(old.manager.controllerIdentity).advanceDelivery(f.registry.get("sa-1")!.revision, authority, "send");
+		if (fault.startsWith("anchor")) {
+			vi.mocked(f.operations.identityMatches).mockReturnValue("different");
+			vi.mocked(f.operations.isTreeEmpty).mockReturnValue(true);
+		} else f.writerState("dead");
+		await old.fire("session_shutdown", "new");
+		const next = f.install("successor");
+		await next.fire("session_start", "new");
+		await next.fire("agent_end");
+		expect(next.manager.get("sa-1")?.recovery).toBe(fault.startsWith("anchor") ? "lost" : "ambiguous");
+		expect(next.delivery).not.toHaveBeenCalled();
+		expect(old.delivery).not.toHaveBeenCalled();
+		expectArtifacts(f);
+	});
+
+	it("rejects duplicate same-revision admission and writer bypass of delivery CAS", async () => {
+		const f = fixture();
+		const old = f.install("origin");
+		const authority = await f.track(old);
+		await f.finish();
+		const record = f.registry.get("sa-1")!;
+		const first = f.registry.forController(old.manager.controllerIdentity);
+		const second = f.registry.forController(old.manager.controllerIdentity);
+		const results = await Promise.allSettled([first, second].map(async (registry) => registry.advanceDelivery(record.revision, authority, "send")));
+		expect(results.map((result) => result.status)).toEqual(["fulfilled", "rejected"]);
+		const sending = f.registry.get("sa-1")!;
+		expect(() => second.advanceDelivery(sending.revision, authority, "send")).toThrow("delivery state transition refused");
+		expect(() => first.advanceDelivery(sending.revision, authority, "uncertain")).toThrow("delivery state transition refused");
+		expect(() => f.registry.transition(sending.id, sending.revision, sending.writerLease!.generation, (r) => ({ ...r, delivery: { state: "undelivered" } }))).toThrow("delivery requires controller CAS");
+		await old.fire("agent_end");
+		expect(old.delivery).not.toHaveBeenCalled();
+		expectArtifacts(f);
+	});
+
+	it("blocks a successor when delivery state is corrupted during replacement", async () => {
+		const f = fixture();
+		const old = f.install("origin");
+		await f.track(old);
+		await f.finish();
+		await old.fire("session_shutdown", "new");
+		const record = f.registry.get("sa-1")!;
+		writeFileSync(join(f.root, "registry", "sa-1.json"), JSON.stringify({ ...record, delivery: { state: "sent", completionId: "other" } }), { mode: 0o600 });
+		const next = f.install("successor");
+		await next.fire("session_start", "new");
+		expect(next.manager.canDeliver("sa-1")).toBe(false);
+		expect(next.manager.get("sa-1")?.recovery).toBe("ambiguous");
+		expect(next.delivery).not.toHaveBeenCalled();
+		expect(old.delivery).not.toHaveBeenCalled();
+		expectArtifacts(f);
+	});
+
+	it.each(["unknown-state", "wrong-id", "future-generation", "future-time"])("blocks %s without sending or changing result artifacts", async (fault) => {
+		const f = fixture();
+		const old = f.install("origin");
+		await f.track(old);
+		await f.finish();
+		const record = f.registry.get("sa-1")!;
+		const delivery = { state: fault === "unknown-state" ? "broken" : "sending", completionId: fault === "wrong-id" ? "other" : record.completionId,
+			controllerGeneration: fault === "future-generation" ? 1 : 0, at: fault === "future-time" ? 1001 : 1000 };
+		writeFileSync(join(f.root, "registry", "sa-1.json"), JSON.stringify({ ...record, delivery }), { mode: 0o600 });
+		await old.fire("agent_end");
+		expect(old.manager.canDeliver("sa-1")).toBe(false);
+		expect(old.manager.get("sa-1")?.recovery).toBe("ambiguous");
+		expect(old.delivery).not.toHaveBeenCalled();
+		expectArtifacts(f);
+	});
+});
 
 describe("manager replacement adoption", () => {
 	for (const backend of ["headless", "visible"] as const) {

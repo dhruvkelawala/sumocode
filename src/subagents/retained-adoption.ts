@@ -45,10 +45,10 @@ export async function acquireRetained(
 	operations: ProcessTreeOperations, host?: TerminalHost, pi?: PiExecLike,
 ): Promise<{ entry: RetainedSubagent; classification: "adopted" | "lost" | "ambiguous" }> {
 	const registry = entry.registry.forController(successor);
-	let record = registry.get(entry.snapshot.id);
-	if (!record) throw new Error("owned subagent record missing");
 	let classification: "adopted" | "lost" | "ambiguous" = "ambiguous";
 	try {
+		let record = registry.get(entry.snapshot.id);
+		if (!record) throw new Error("owned subagent record missing");
 		const verified = await verifyRetained(record, operations, host, pi);
 		if (verified !== "verified") classification = verified;
 		else if (registry.writerState(record.id) === "alive" && entry.supervisor && record.supervisor?.identity.pid === process.pid) {

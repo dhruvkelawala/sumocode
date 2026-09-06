@@ -152,28 +152,25 @@ export function makeNativePiBuildCopy(piPkg, buildDir, packageRoot = root) {
 	return buildDir;
 }
 
-function loadablePackageDirectory(directory, require, name) {
-	if (!existsSync(directory)) return false;
-	let entry;
-	try {
-		entry = require.resolve(name);
-	} catch (error) {
-		if (error.code !== "ERR_PACKAGE_PATH_NOT_EXPORTED") return false;
-		// Exports can allow import but hide require and package.json. Node stops
-		// at that package; do not confuse an earlier manifest-only directory with it.
-		const manifestPath = join(directory, "package.json");
-		return existsSync(manifestPath)
-			&& JSON.parse(readFileSync(manifestPath, "utf8")).exports != null;
+function loadablePackageDirectory(directory) {
+	const manifestPath = join(directory, "package.json");
+	if (existsSync(manifestPath)) {
+		const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+		// Import-only and private-subpath exports still need their package linked.
+		// Inspect presence, not CJS resolution or conditional-exports semantics.
+		if (manifest.exports != null) return true;
+		if (manifest.main && existsSync(join(directory, manifest.main))) return true;
 	}
-	return realpathSync(entry).startsWith(`${realpathSync(directory)}${sep}`);
+	return ["index.js", "index.mjs", "index.cjs"].some((entry) => existsSync(join(directory, entry)));
 }
 
 /**
  * Check package contents and installed dependency edges, not JS import expressions.
- * Advisory fast-fail only: Node and Bun can resolve differently. The post-build
- * metafile containment check is the invariant, not this heuristic or a TOCTOU guard.
+ * Pre-check: fast-fail on definite escapes and select roots to link.
+ * Node and Bun can resolve differently; post-build metafile containment is the
+ * authoritative invariant, not this presence heuristic or a TOCTOU guard.
  */
-export function validatePiBuildGraph(piPkg, packageRoot) {
+export function validatePiBuildGraph(piPkg, packageRoot, counts = { checked: 0, linked: 0, skipped: 0 }) {
 	const realRoot = realpathSync(packageRoot);
 	const directories = new Set();
 	const packages = new Map();
@@ -223,20 +220,34 @@ export function validatePiBuildGraph(piPkg, packageRoot) {
 			// resolve to core modules: require.resolve.paths returns null for them, and
 			// Node loads the builtin even when a same-named directory is installed. Skip
 			// before resolving — nothing to contain, no directory to link into the copy.
-			if (isBuiltin(name)) continue;
-			// Real package neighborhoods include pnpm siblings, not just child node_modules.
-			// Prefer Node's resolved file; an exports gate may hide import-only entries.
+			counts.checked++;
+			if (isBuiltin(name)) {
+				counts.skipped++;
+				continue;
+			}
+			// Walk pnpm siblings and ancestors in search order. The first loadable
+			// candidate decides; never fall back past an escape to a contained copy.
+			let candidateFound = false;
 			const dependency = require.resolve.paths(name)
 				.map((directory) => join(directory, name))
-				.find((directory) => loadablePackageDirectory(directory, require, name));
+				.find((directory) => {
+					if (!existsSync(directory) || !statSync(directory).isDirectory()) return false;
+					candidateFound = true;
+					return loadablePackageDirectory(directory);
+				});
 			if (!dependency) {
-				if (Object.hasOwn(manifest.optionalDependencies ?? {}, name)
-					|| (manifest.peerDependenciesMeta?.[name]?.optional && !Object.hasOwn(manifest.dependencies ?? {}, name))) continue;
-				throw new Error(`Cannot resolve Pi build dependency ${name} within ${packageRoot}`);
+				if (!candidateFound && !name.startsWith("@types/")
+					&& !Object.hasOwn(manifest.optionalDependencies ?? {}, name)
+					&& !(manifest.peerDependenciesMeta?.[name]?.optional && !Object.hasOwn(manifest.dependencies ?? {}, name))) {
+					throw new Error(`Cannot resolve Pi build dependency ${name} within ${packageRoot}`);
+				}
+				counts.skipped++;
+				continue;
 			}
 			const target = checkedPath(dependency, name);
 			visitPackage(target);
 			dependencies.set(name, target);
+			counts.linked++;
 		}
 		walk(real);
 		return dependencies;

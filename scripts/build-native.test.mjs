@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { assertMetafileContainment, makeNativePiBuildCopy } from "./build-native.mjs";
+import { assertMetafileContainment, makeNativePiBuildCopy, validatePiBuildGraph } from "./build-native.mjs";
 
 const temporaryDirectories = [];
 
@@ -177,7 +177,7 @@ describe("native Pi build-source preparation", () => {
 	}
 
 	for (const scenario of ["manifest without main", "broken main without index", "broken main with index"]) {
-		it(`checks actual resolution for ${scenario}`, () => {
+		it(`checks the first loadable candidate for ${scenario}`, () => {
 			const { directory, root, piPkg, buildDir } = fixture("pnpm");
 			const name = "manifest-nearest";
 			const manifestPath = join(piPkg, "package.json");
@@ -203,11 +203,46 @@ describe("native Pi build-source preparation", () => {
 					// Node aborts here; Bun may fall through. Neither may bless the nearest.
 					expect(() => require.resolve(name)).toThrow();
 				}
-				expect(() => makeNativePiBuildCopy(piPkg, buildDir, root)).toThrow(
-					scenario === "manifest without main" ? /resolves outside/ : /Cannot resolve Pi build dependency/,
-				);
+				expect(() => makeNativePiBuildCopy(piPkg, buildDir, root)).toThrow(/resolves outside/);
 				expect(existsSync(buildDir)).toBe(false);
 			}
+		});
+	}
+
+	it("skips entryless and type-only edges but keeps the missing-required sanity error", () => {
+		const { root, piPkg } = fixture("pnpm");
+		const manifestPath = join(piPkg, "package.json");
+		const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+		for (const [name, contents] of Object.entries({
+			"@types/retry": { main: "", types: "index.d.ts" },
+			"types-only": { types: "index.d.ts" },
+			"entryless": {},
+			"broken-main": { main: "missing.js" },
+		})) {
+			manifest.dependencies[name] = "1";
+			write(join(piPkg, "../..", name, "package.json"), JSON.stringify(contents));
+		}
+		manifest.dependencies["@types/absent"] = "1";
+		write(manifestPath, JSON.stringify(manifest));
+		const counts = { checked: 0, linked: 0, skipped: 0 };
+		const dependencies = validatePiBuildGraph(piPkg, root, counts);
+		expect([...dependencies.keys()]).toEqual(["proper-lockfile", "@earendil-works/pi-agent-core"]);
+		expect(counts).toEqual({ checked: 8, linked: 2, skipped: 6 });
+		manifest.dependencies["missing-required"] = "1";
+		write(manifestPath, JSON.stringify(manifest));
+		expect(() => validatePiBuildGraph(piPkg, root)).toThrow(/Cannot resolve Pi build dependency missing-required/);
+	});
+
+	for (const extension of ["mjs", "cjs"]) {
+		it(`links a manifestless index.${extension} without a CJS resolution oracle`, () => {
+			const { root, piPkg } = fixture("pnpm");
+			const manifestPath = join(piPkg, "package.json");
+			const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+			manifest.dependencies["index-only"] = "1";
+			write(manifestPath, JSON.stringify(manifest));
+			const target = join(piPkg, "../../index-only");
+			write(join(target, `index.${extension}`), 'throw new Error("must not execute");\n');
+			expect(validatePiBuildGraph(piPkg, root).get("index-only")).toBe(realpathSync(target));
 		});
 	}
 
@@ -271,9 +306,8 @@ describe("native Pi build-source preparation", () => {
 		});
 	}
 
-	// A nearest dependency-named directory that exists but is not loadable must be
-	// skipped exactly like Node falls through to ancestor candidates; the validator
-	// must then apply containment to the candidate Node actually resolves.
+	// Entryless candidates do not decide containment; the first loadable one does.
+	// The post-build metafile remains authoritative for actual bundled inputs.
 	for (const scenario of ["contained ancestor", "escaped ancestor"]) {
 		it(`skips a present-but-unloadable nearest candidate and ${scenario === "contained ancestor" ? "links the contained Node fallback" : "rejects the escaped Node fallback"}`, () => {
 			const { directory, root, piPkg, buildDir } = fixture("pnpm");

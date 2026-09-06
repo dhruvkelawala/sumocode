@@ -158,7 +158,7 @@ const FIXTURES = {
 							outputTail: "last observed: inspecting session boundaries", model: "gpt-5.5", thinking: "medium",
 						} },
 						{ type: "activity", activity: {
-							id: "fixture-over-budget-subagent", kind: "subagent", title: "docs audit", status: "running", subject: "sa-5", currentStep: "over-budget-warning",
+							id: "fixture-over-budget-subagent", kind: "subagent", title: "docs audit", status: "running", subject: "sa-6", currentStep: "over-budget-warning",
 							body: { kind: "text", text: "over-budget-warning · elapsed 120s · wall 120% · reported tokens 110% · reported cost 50% · liveness unknown · last progress 2026-04-30T11:41:59.000Z\ninspect or explicitly cancel with subagent_cancel" },
 							outputTail: "still reviewing transcript docs", model: "gpt-5.5", thinking: "medium",
 						} },

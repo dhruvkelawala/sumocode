@@ -1,6 +1,10 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { isAbsolute, join, relative } from "node:path";
-import { promisify } from "node:util";
+import { isDeepStrictEqual, promisify } from "node:util";
+import { captureProcessBirthTime, systemProcessTree, type ProcessTreeOperations } from "../background-tasks/process-tree.js";
+import { acquireRetained, verifyRetained, type RetainedSubagent } from "./retained-adoption.js";
+import type { RegistryWriter, SubagentRecord } from "./registry.js";
 import { createWorktree, resolveCreateOptions, type CreateWorktreeOptions, type CreateWorktreeResult } from "../git/worktree.js";
 import type { AgentPanePlacement, PiExecLike, TerminalHost } from "../terminal-host/types.js";
 import type { SpawnedChild } from "./backend-pi.js";
@@ -67,6 +71,8 @@ export interface SubagentManagerDiagnostic {
 }
 
 export interface SubagentManagerDependencies {
+	readonly controllerIdentity?: RegistryWriter;
+	readonly processOperations?: ProcessTreeOperations;
 	readonly createWorktree?: WorktreeCreator;
 	readonly resolveWorktreeBaseRef?: WorktreeBaseRefResolver;
 	readonly captureGitContext?: (cwd: string) => Promise<SpawnGitContext>;
@@ -143,7 +149,17 @@ const upsertTool = (tools: readonly LiveToolState[], next: LiveToolState): reado
 	return tools.map((tool, toolIndex) => toolIndex === index ? { ...tool, ...next } : tool);
 };
 
+interface TrackedRetained {
+	entry: RetainedSubagent;
+	unsubscribe?: () => void;
+	blocked: boolean;
+}
+
 export class SubagentManager {
+	private readonly retained = new Map<string, TrackedRetained>();
+	private detached = false;
+	private identity?: RegistryWriter;
+	private readonly operations: ProcessTreeOperations;
 	private nextId = 1;
 	private healthTimer?: ReturnType<typeof setInterval>;
 	private readonly pendingSpawns = new Map<string, { title: string; createdAt: number }>();
@@ -173,6 +189,8 @@ export class SubagentManager {
 	public readonly consumedIds = new Set<string>();
 
 	public constructor(private readonly backendFactory: BackendFactory, dependencies: SubagentManagerDependencies = {}) {
+		this.identity = dependencies.controllerIdentity && { ...dependencies.controllerIdentity };
+		this.operations = dependencies.processOperations ?? systemProcessTree;
 		this.createWorktreeImpl = dependencies.createWorktree ?? createWorktree;
 		this.resolveWorktreeBaseRefImpl = dependencies.resolveWorktreeBaseRef ?? ((path) => gitRead(path, ["rev-parse", "HEAD"]));
 		this.captureGitContextImpl = dependencies.captureGitContext ?? captureGitContext;
@@ -184,7 +202,157 @@ export class SubagentManager {
 		this.subagentsTabId = this.initialVisibleTabId;
 	}
 
+	public get controllerIdentity(): RegistryWriter {
+		if (!this.identity) {
+			const processStartTime = captureProcessBirthTime(process.pid);
+			if (!processStartTime) throw new Error("manager birth identity unavailable");
+			this.identity = { token: randomUUID(), pid: process.pid, processStartTime };
+		}
+		return { ...this.identity };
+	}
+
+	/** Register an already launched retained owner; this never spawns or subscribes to its backend. */
+	public async trackRetained(entry: RetainedSubagent): Promise<void> {
+		if (this.retained.has(entry.snapshot.id)) return;
+		if (this.detached || this.snapshots.has(entry.snapshot.id)) throw new Error("manager cannot track retained child");
+		const record = entry.registry.get(entry.snapshot.id);
+		const identity = this.controllerIdentity;
+		if (!record || !entry.supervisor || !isDeepStrictEqual(record, entry.supervisor.record) || !entry.registry.inspectControl(entry.authority)
+			|| record.backend !== (entry.snapshot.visible ? "visible" : "headless")
+			|| entry.authority.owner.token !== identity.token
+			|| entry.authority.owner.pid !== identity.pid
+			|| entry.authority.owner.processStartTime !== identity.processStartTime) throw new Error("retained child control unverified");
+		// Own the descriptor before asynchronous pane inspection so replacement cannot lose it.
+		this.retained.set(record.id, { entry, blocked: true });
+		this.snapshots.set(record.id, entry.snapshot);
+		try {
+			if (await verifyRetained(record, this.operations, this.terminalHost, this.pi) !== "verified") throw new Error("retained child identity unverified");
+			if (this.detached) return;
+			this.bindRetained(entry);
+		} catch (error) {
+			if (this.retained.has(record.id)) this.blockRetained(record.id, "ambiguous");
+			throw error;
+		}
+	}
+
+	/** Replacement stops this view, not its retained persistence owners. */
+	public detachForReplacement(): void {
+		if (this.detached) return;
+		this.detached = true;
+		for (const [id, tracked] of this.retained) {
+			tracked.unsubscribe?.();
+			tracked.unsubscribe = undefined;
+			tracked.entry = { ...tracked.entry, snapshot: this.snapshots.get(id) ?? tracked.entry.snapshot };
+			this.children.delete(id);
+			this.snapshots.delete(id);
+		}
+		for (const snapshot of this.snapshots.values()) {
+			this.consumedIds.add(snapshot.id);
+			if (!isSettled(snapshot)) this.snapshots.set(snapshot.id, { ...snapshot, recovery: "unsupported" });
+		}
+		this.disposeAll();
+		this.notify();
+	}
+
+	public get hasRetainedChildren(): boolean { return this.retained.size > 0; }
+
+	/** One synchronous CAS winner per record; observers bind only after that grant. */
+	public async adoptFrom(previous: SubagentManager, sessionId: string): Promise<void> {
+		if (previous === this || this.detached) return;
+		previous.detachForReplacement();
+		for (const [id, tracked] of previous.retained) {
+			if (this.retained.has(id)) continue;
+			if (this.snapshots.has(id)) throw new Error("retained subagent id conflicts with successor work");
+			const result = tracked.blocked ? { entry: tracked.entry, classification: "ambiguous" as const }
+				: await acquireRetained(tracked.entry, this.controllerIdentity, sessionId, this.operations, this.terminalHost, this.pi);
+			// A concurrent successor can consume the reservation while pane inspection awaits.
+			if (previous.retained.get(id) !== tracked) continue;
+			previous.retained.delete(id);
+			if (previous.consumedIds.has(id)) this.consumedIds.add(id);
+			this.retained.set(id, { entry: result.entry, blocked: true });
+			this.snapshots.set(id, result.entry.snapshot);
+			if (result.classification === "adopted" && !this.detached) {
+				try { this.bindRetained(result.entry); }
+				catch { this.blockRetained(id, "ambiguous"); }
+			} else this.blockRetained(id, result.classification === "adopted" ? "ambiguous" : result.classification);
+		}
+		this.notify();
+	}
+
+	public canDeliver(id: string): boolean {
+		const retained = this.retained.get(id);
+		return !this.detached && (!retained || !retained.blocked && retained.entry.registry.inspectControl(retained.entry.authority));
+	}
+
+	private blockRetained(id: string, classification: "lost" | "ambiguous"): void {
+		const tracked = this.retained.get(id)!;
+		tracked.blocked = true;
+		tracked.unsubscribe?.();
+		tracked.unsubscribe = undefined;
+		this.children.delete(id);
+		this.consumedIds.add(id);
+		this.snapshots.set(id, { ...this.snapshots.get(id)!, status: "error", recovery: classification });
+		try {
+			const record = tracked.entry.registry.get(id)!;
+			tracked.entry.registry.recordRecovery(id, record.revision, classification);
+		} catch {
+			// Failed storage cannot grant effects or justify overwriting old evidence.
+			try { this.onDiagnostic?.({ kind: "listener", message: "retained recovery observation could not be persisted" }); }
+			catch { /* Diagnostics cannot restore refused control. */ }
+		}
+	}
+
+	private bindRetained(entry: RetainedSubagent): void {
+		if (!entry.supervisor || !entry.registry.inspectControl(entry.authority)) throw new Error("retained control changed before observation");
+		const id = entry.snapshot.id;
+		const tracked: TrackedRetained = { entry, blocked: false };
+		this.retained.set(id, tracked);
+		this.snapshots.set(id, { ...entry.snapshot, recovery: "adopted" });
+		this.children.set(id, { child: entry.supervisor.controllerChild(entry.authority), controller: new AbortController() });
+		const observe = (record: SubagentRecord): void => {
+			if (!this.canDeliver(id)) return;
+			const current = this.snapshots.get(id);
+			if (!current) return;
+			const telemetry = record.telemetry;
+			let next: SubagentSnapshot = { ...current, startedAt: telemetry?.startedAt ?? current.startedAt,
+				lastProgressAt: telemetry?.lastProgressAt ?? current.lastProgressAt,
+				lastHeartbeatAt: telemetry?.lastHeartbeatAt ?? current.lastHeartbeatAt,
+				usage: { ...current.usage, reportedTokens: telemetry?.reportedTokens ?? current.usage.reportedTokens, reportedCostUsd: telemetry?.reportedCostUsd ?? current.usage.reportedCostUsd } };
+			const completion = entry.supervisor?.completion;
+			if (record.status === "settled" && completion) {
+				const outcome = completion.outcome;
+				if (!isSettled(current)) next = { ...next, status: outcome.kind === "completed" ? "done" : "error", settledAt: record.settledAt!, manifest: completion.manifest,
+					finalText: outcome.kind === "completed" ? outcome.finalText : outcome.partialText ?? "", liveText: "",
+					errorText: outcome.kind === "failed" ? outcome.errorText : outcome.kind === "interrupted" ? "interrupted" : undefined };
+				this.children.delete(id);
+				if ((this.waitInterest.get(id) ?? 0) > 0) this.consumedIds.add(id);
+				tracked.unsubscribe?.();
+				tracked.unsubscribe = undefined;
+			} else if (record.status === "lost" || record.status === "ambiguous") {
+				tracked.blocked = true;
+				this.consumedIds.add(id);
+				this.children.delete(id);
+				next = { ...next, status: "error", recovery: record.status };
+			}
+			this.snapshots.set(id, this.withBudget(next));
+			if (isSettled(next)) void this.scheduleDequeue();
+			if (this.children.size === 0) { clearInterval(this.healthTimer); this.healthTimer = undefined; }
+			this.notify();
+			this.prune();
+		};
+		tracked.unsubscribe = entry.supervisor.subscribe(observe);
+		this.startHealthTimer();
+		observe(entry.supervisor.record);
+	}
+
+	private allocateId(): string {
+		let id: string;
+		do { id = `sa-${this.nextId++}`; } while (this.snapshots.has(id) || this.retained.has(id));
+		return id;
+	}
+
 	public async spawn(task: SpawnSubagentTask): Promise<SubagentSnapshot | AtCapacityDetails> {
+		if (this.detached) throw new Error("subagent manager was replaced");
 		if (task.budget !== undefined) validateSubagentBudget(task.budget);
 		task = { ...task, budget: task.budget ? { ...task.budget } : undefined };
 		const generation = this.lifecycleGeneration;
@@ -199,7 +367,7 @@ export class SubagentManager {
 					retryHint: "queue is full — do NOT retry in a loop; cancel something or end your turn and respawn later",
 				};
 			}
-			const id = `sa-${this.nextId++}`;
+			const id = this.allocateId();
 			const createdAt = Date.now();
 			const snapshot = makeInitialSnapshot(task, id, createdAt, "HEAD", task.cwd, undefined, undefined, "queued");
 			this.queuedTasks.push({ task, id, createdAt, generation });
@@ -209,7 +377,7 @@ export class SubagentManager {
 			return snapshot;
 		}
 
-		const id = `sa-${this.nextId++}`;
+		const id = this.allocateId();
 		const snapshot = await this.startTask(task, id, Date.now(), generation);
 		// A direct spawn can fail setup after later calls have filled the queue.
 		// Drain immediately instead of leaving accepted work parked until an
@@ -376,11 +544,21 @@ export class SubagentManager {
 				return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, `unable to spawn child: ${message}.${preservationNote}`, childCwd, worktree);
 			}
 			const snapshot = this.withBudget({ ...makeInitialSnapshot(task, id, createdAt, manifestBaseRef, childCwd, worktree, child.sessionFilePath), startedAt: Date.now() });
-			this.snapshots.set(id, snapshot);
-			this.children.set(id, { child, controller });
-			this.startHealthTimer();
 			releasePending();
-			this.consumeEvents(id, child.events);
+			if (child.retained) {
+				const entry = { ...child.retained, snapshot };
+				try { await this.trackRetained(entry); }
+				catch {
+					this.retained.set(id, { entry, blocked: true });
+					this.snapshots.set(id, snapshot);
+					this.blockRetained(id, "ambiguous");
+				}
+			} else {
+				this.snapshots.set(id, snapshot);
+				this.children.set(id, { child, controller });
+				this.startHealthTimer();
+				this.consumeEvents(id, child.events);
+			}
 			if (child.ready) await child.ready;
 			this.notify();
 			this.prune();
@@ -915,12 +1093,23 @@ export class SubagentManager {
 		this.healthTimer = setInterval(() => {
 			let changed = false;
 			for (const id of this.children.keys()) {
+				const retained = this.retained.get(id);
+				if (retained && !retained.blocked) {
+					try {
+						const lease = retained.entry.registry.get(id)?.controlLease;
+						if (!lease || lease.expiresAt - Date.now() < 30_000) retained.entry.registry.renewControl(retained.entry.authority);
+					} catch {
+						this.blockRetained(id, "ambiguous");
+						changed = true;
+					}
+				}
 				const current = this.snapshots.get(id);
 				if (!current || current.status !== "running") continue;
 				const next = this.withBudget(current);
 				changed ||= next.health !== current.health || next.warnings?.join() !== current.warnings?.join();
 				this.snapshots.set(id, next);
 			}
+			if (this.children.size === 0) { clearInterval(this.healthTimer); this.healthTimer = undefined; }
 			if (changed) this.notify();
 		}, 1000);
 		this.healthTimer.unref();

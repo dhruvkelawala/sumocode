@@ -248,6 +248,48 @@ export class SubagentRegistry {
 		this.directoryIdentity = lstatSync(directory);
 	}
 
+	public writerState(id: string): "alive" | "dead" | "unknown" {
+		const lease = this.get(id)?.writerLease;
+		return lease ? (this.options.inspectWriter ?? inspectWriter)(lease.owner) : "unknown";
+	}
+
+	/** Renew the same grant, without creating a new generation or effect slot. */
+	public renewControl(authority: RegistryControlAuthority): void {
+		const current = this.get(authority.id);
+		if (!current) throw new Error("missing subagent record");
+		this.change(current.id, current.revision, (record, now) => {
+			if (!sameWriter(this.ownWriter(), authority.owner) || !this.matchesControl(record, authority, now)
+				|| !this.matchesControl(record, authority, this.clock(record))) throw new SubagentLeaseConflict("control renewal refused");
+			return { ...record, controlLease: { ...record.controlLease!, renewedAt: now, expiresAt: now + 60_000 } };
+		});
+	}
+
+	/** A successor gets its own identity, never the persistence writer's token. */
+	public forController(identity: RegistryWriter): SubagentRegistry {
+		this.assertDirectoryIdentity();
+		const controller = new SubagentRegistry(this.directory, this.ownerSessionId, { ...this.options, writerIdentity: structuredClone(identity) });
+		this.assertDirectoryIdentity();
+		return controller;
+	}
+
+	/** Observation only: this does not change leases, status, or grant effects. */
+	public recordRecovery(id: string, expectedRevision: number, classification: "lost" | "ambiguous"): void {
+		if (!["lost", "ambiguous"].includes(classification)) throw new Error("invalid recovery classification");
+		const path = this.recordPath(id);
+		this.withLock(path, () => {
+			const record = this.get(id);
+			if (!record || record.revision !== expectedRevision) throw new SubagentRevisionConflict("recovery observation is stale");
+			const observation = { schemaVersion: 1, id, revision: record.revision, controllerGeneration: record.controllerGeneration ?? 0, classification };
+			const evidence = join(this.directory, `${id}.recovery-${record.revision}-${classification}.json`);
+			try { writePrivateJsonExclusive(evidence, observation); }
+			catch (error) {
+				if (!isErrnoCode(error, "EEXIST")) throw error;
+				assertPrivateArtifact(nodeArtifactFs, evidence, this.directory, "recovery observation");
+				if (!isDeepStrictEqual(readPrivateJson(evidence, 4096), observation)) throw new Error("recovery observation changed");
+			}
+		});
+	}
+
 	public create(record: SubagentRecord): SubagentRecord {
 		this.validate(record);
 		if (record.revision !== 1 || record.controlReservation != null || record.controllerSessionId !== undefined || record.controllerGeneration !== undefined || record.controlLease !== null || record.controlHead !== 0 || record.writerLease !== null || record.child !== null || record.supervisor !== null || record.result !== null || record.manifest !== null || !["starting", "queued"].includes(record.status)) throw new Error("new registry record must be unlaunched at revision 1");
@@ -487,11 +529,15 @@ export class SubagentRegistry {
 
 	private recordPath(id: string): string {
 		if (!/^sa-[A-Za-z0-9_-]{1,128}$/u.test(id)) throw new Error("invalid subagent id");
+		this.assertDirectoryIdentity();
+		return join(this.directory, `${id}.json`);
+	}
+
+	private assertDirectoryIdentity(): void {
 		assertDirectory(dirname(this.directory));
 		assertDirectory(this.directory);
 		const current = lstatSync(this.directory);
 		if (current.dev !== this.directoryIdentity.dev || current.ino !== this.directoryIdentity.ino) throw new Error("registry directory replaced");
-		return join(this.directory, `${id}.json`);
 	}
 
 	private validate(record: SubagentRecord): void {

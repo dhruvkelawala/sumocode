@@ -16,6 +16,13 @@ import { registerSubagentTools } from "./tools.js";
 export { SubagentManager } from "./manager.js";
 export type { AtCapacityDetails, SpawnSubagentTask } from "./manager.js";
 
+const LIFECYCLE_KEY = Symbol.for("@dhruvkelawala/sumocode/subagent-replacements");
+function pendingReplacements(): Set<SubagentManager> {
+	// SAFETY: only this module writes this namespaced host-owned set, including across reloads.
+	const state = globalThis as typeof globalThis & { [LIFECYCLE_KEY]?: Set<SubagentManager> };
+	return state[LIFECYCLE_KEY] ??= new Set();
+}
+
 const SUBAGENT_STATUS_WIDGET_KEY = "sumocode-subagents";
 const SUBAGENT_DELIVERY_ERROR_MAX = 4_096;
 
@@ -209,6 +216,7 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 	const flush = (mayRetry = true): void => {
 		try {
 			delivery.flush((payload) => {
+				if (!latestContext || !manager.canDeliver(payload.id)) return;
 				pi.sendMessage(
 					{
 						customType: "subagent-result",
@@ -231,7 +239,7 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 		for (const snapshot of manager.list()) {
 			if (snapshot.status === "running" || snapshot.status === "queued" || observedSettledIds.has(snapshot.id)) continue;
 			observedSettledIds.add(snapshot.id);
-			if (manager.consumedIds.has(snapshot.id)) delivery.consume(snapshot.id);
+			if (manager.consumedIds.has(snapshot.id) || !manager.canDeliver(snapshot.id)) delivery.consume(snapshot.id);
 			else delivery.defer(snapshot.id, () => settledPayload(snapshot));
 		}
 		// Prune the mirror sets in lockstep with the manager's MAX_TRACKED prune
@@ -265,9 +273,13 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 	armDelivery();
 
 	registerSubagentTools(pi, manager, delivery, host);
-	pi.on("session_start", (_event, ctx) => {
+	pi.on("session_start", async (_event, ctx) => {
 		latestContext = ctx;
 		armDelivery();
+		for (const previous of pendingReplacements()) {
+			await manager.adoptFrom(previous, ctx.sessionManager.getSessionId());
+			pendingReplacements().delete(previous);
+		}
 		publishStatusWidget();
 		if (ctx.isIdle()) flush();
 	});
@@ -276,21 +288,16 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 		latestContext = ctx;
 		flush();
 	});
-	// CONSCIOUS DIVERGENCE from durable terminal shutdown: terminal tasks
-	// detach their replaced manager and leave children running across
-	// /reload,/new,/resume,/fork because the next manager adopts on-disk state.
-	// Subagents have NO persistent registry (durable reattach is a recorded
-	// deferral in plan 065) — a child surviving a reload would be an orphaned,
-	// unsupervised pi process nobody can harvest, steer, or stop, which is
-	// worse than losing in-flight work. Kill on EVERY shutdown until a durable
-	// registry exists; when it does, adopt the terminal lifecycle model.
-	pi.on("session_shutdown", () => {
+	pi.on("session_shutdown", (event) => {
 		clearStatusWidget(latestContext);
 		latestContext = undefined;
 		unsubscribe?.();
 		unsubscribe = undefined;
 		delivery.clear();
-		manager.disposeAll();
+		if (["new", "fork", "resume", "reload"].includes(event.reason)) {
+			manager.detachForReplacement();
+			if (manager.hasRetainedChildren) pendingReplacements().add(manager);
+		} else manager.disposeAll();
 	});
 	return manager;
 }

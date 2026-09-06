@@ -158,7 +158,7 @@ type Settlement = "settled" | "lost" | "ambiguous";
 
 /**
  * One backend/parser owner, with read-only observers and durable settlement.
- * Owns heartbeat through settlement, not controls, delivery, disposal or adoption.
+ * Owns the backend and heartbeat; managers own control leases and delivery.
  * The process entry must account for its death before enabling retention.
  */
 export class RetainedHeadlessSupervisor {
@@ -169,6 +169,7 @@ export class RetainedHeadlessSupervisor {
 	private readonly cwd: string;
 	private readonly baseRef: string;
 	private readonly listeners = new Set<(record: SubagentRecord) => void>();
+	private completed?: { outcome: RunOutcome; manifest: CompletionManifestEvidence };
 	private terminal = false;
 	private stopped = false;
 	private heartbeat?: ReturnType<typeof setInterval>;
@@ -237,6 +238,30 @@ export class RetainedHeadlessSupervisor {
 			this.refuseReady(error);
 		});
 		void this.ready.catch(() => undefined);
+	}
+
+	public get record(): SubagentRecord { return this.registry.get(this.authority.record().id)!; }
+	public get completion(): { outcome: RunOutcome; manifest: CompletionManifestEvidence } | undefined {
+		return this.completed && structuredClone(this.completed);
+	}
+
+	/** Manager views share this handle; only the supervisor subscribes to its parser. */
+	public controllerChild(authority: RegistryControlAuthority): SpawnedChild {
+		const fence = (): void => {
+			if (!this.registry.inspectControl(authority)) throw new Error("retained control refused");
+			const record = this.record;
+			if (!record.child || this.stopped) throw new Error("retained child unavailable");
+			this.authority.verifyChild(record.child.identity.pid);
+			if (!this.registry.inspectControl(authority)) throw new Error("retained control changed");
+		};
+		return {
+			retained: { registry: this.registry.forController(authority.owner), supervisor: this, authority },
+			ready: this.ready,
+			events: () => undefined,
+			interrupt: () => { fence(); this.child.interrupt(); },
+			send: this.child.send ? async (text) => { fence(); await this.child.send!(text); } : undefined,
+			requestClose: this.child.requestClose ? () => { fence(); this.child.requestClose!(); } : undefined,
+		};
 	}
 
 	/** Cooperative outgoing-controller request. Persistence ownership never moves. */
@@ -327,6 +352,7 @@ export class RetainedHeadlessSupervisor {
 				...r, status: "settled", settledAt: completed.updatedAt, completionId,
 				result: result.pointer, manifest: manifestPointer, delivery: { state: "pending", claim: null },
 			}));
+			this.completed = structuredClone({ outcome: result.outcome, manifest: { ...manifest, exit: outcome.kind } });
 			this.stopped = true;
 			clearInterval(this.heartbeat);
 			this.finish("settled");

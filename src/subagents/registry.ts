@@ -38,7 +38,14 @@ export interface RegistryControlAuthority {
 	readonly head: number;
 }
 
+export interface RegistryControlSuccessor {
+	readonly sessionId: string;
+	readonly owner: RegistryWriter;
+}
+
 export interface SubagentRecord {
+	/** Explicit writer-authorized handoff; null/absent grants no successor rights. */
+	readonly controlReservation?: RegistryControlSuccessor | null;
 	readonly schemaVersion: 2;
 	readonly budget?: SubagentBudget;
 	/** Absent legacy telemetry means unobserved, never zero usage or a fresh heartbeat. */
@@ -158,9 +165,11 @@ function pointer(value: unknown, file: string): boolean {
 	return value === null || (object(value, "file bytes") && value.file === file && integer(value.bytes) && value.bytes <= MAX_RESULT_BYTES);
 }
 function validRecord(value: unknown): value is SubagentRecord {
-	if (!object(value, RECORD_KEYS, "budget telemetry controllerSessionId controllerGeneration")) return false;
+	if (!object(value, RECORD_KEYS, "budget telemetry controllerSessionId controllerGeneration controlReservation")) return false;
 	if ((value.controllerSessionId === undefined) !== (value.controllerGeneration === undefined)
 		|| value.controllerSessionId !== undefined && (!text(value.controllerSessionId) || !positive(value.controllerGeneration))) return false;
+	if (value.controlReservation != null && (!object(value.controlReservation, "sessionId owner")
+		|| !text(value.controlReservation.sessionId) || !writer(value.controlReservation.owner) || value.controlLease !== null)) return false;
 	const r = value;
 	if (r.budget !== undefined) {
 		try { validateSubagentBudget(r.budget); } catch { return false; }
@@ -241,7 +250,7 @@ export class SubagentRegistry {
 
 	public create(record: SubagentRecord): SubagentRecord {
 		this.validate(record);
-		if (record.revision !== 1 || record.controllerSessionId !== undefined || record.controllerGeneration !== undefined || record.controlLease !== null || record.controlHead !== 0 || record.writerLease !== null || record.child !== null || record.supervisor !== null || record.result !== null || record.manifest !== null || !["starting", "queued"].includes(record.status)) throw new Error("new registry record must be unlaunched at revision 1");
+		if (record.revision !== 1 || record.controlReservation != null || record.controllerSessionId !== undefined || record.controllerGeneration !== undefined || record.controlLease !== null || record.controlHead !== 0 || record.writerLease !== null || record.child !== null || record.supervisor !== null || record.result !== null || record.manifest !== null || !["starting", "queued"].includes(record.status)) throw new Error("new registry record must be unlaunched at revision 1");
 		const path = this.recordPath(record.id);
 		return this.withLock(path, () => {
 			this.validate(record);
@@ -280,7 +289,7 @@ export class SubagentRegistry {
 			}
 			if (this.clock(current) >= now + durationMs) throw new SubagentLeaseConflict("controller lease expired during inspection");
 			const head = current.controlHead + 1;
-			return { ...current, controllerSessionId: sessionId, controllerGeneration: expectedGeneration + 1,
+			return { ...current, controlReservation: null, controllerSessionId: sessionId, controllerGeneration: expectedGeneration + 1,
 				writerLease: { owner, generation: (current.writerLease?.generation ?? 0) + 1, renewedAt: now, expiresAt: now + durationMs },
 				controlHead: head, controlLease: { owner, generation: head, renewedAt: now, expiresAt: now + durationMs },
 			};
@@ -297,7 +306,8 @@ export class SubagentRegistry {
 			const previous = current.writerLease;
 			if (previous && !sameWriter(previous.owner, owner)
 				&& (now < previous.expiresAt || inspect(previous.owner) !== "dead")) throw new SubagentLeaseConflict("writer lease is held or owner death is unproven");
-			return { ...current, writerLease: { owner, generation: (previous?.generation ?? 0) + 1, renewedAt: now, expiresAt: now + durationMs } };
+			const next = { ...current, writerLease: { owner, generation: (previous?.generation ?? 0) + 1, renewedAt: now, expiresAt: now + durationMs } };
+			return previous && !sameWriter(previous.owner, owner) ? { ...next, controlReservation: null } : next;
 		});
 	}
 
@@ -308,20 +318,35 @@ export class SubagentRegistry {
 	 * cooperative fencing, not authentication against a process that can edit disk.
 	 * A live holder cannot be replaced without a separate explicit revocation.
 	 */
-	public acquireControl(id: string, expectedRevision: number, writerGeneration: number, expectedHead: number, owner: RegistryWriter, durationMs: number): SubagentRecord {
+	public acquireControl(id: string, expectedRevision: number, writerGeneration: number, expectedHead: number, owner: RegistryWriter, durationMs: number, sessionId?: string): SubagentRecord {
 		if (!writer(owner) || !positive(durationMs) || durationMs > 60_000) throw new Error("invalid control lease candidate or duration");
 		return this.change(id, expectedRevision, (current, now) => {
-			this.assertWriter(current, writerGeneration, now);
+			const reservation = current.controlReservation;
+			const assertGrant = (at: number): void => {
+				if (!reservation) {
+					if (sessionId !== undefined) throw new SubagentLeaseConflict("no successor reservation");
+					this.assertWriter(current, writerGeneration, at);
+					return;
+				}
+				const held = current.writerLease;
+				if (reservation.sessionId !== sessionId || !sameWriter(reservation.owner, owner) || !sameWriter(this.ownWriter(), owner)
+					|| !held || held.generation !== writerGeneration || at >= held.expiresAt
+					|| (this.options.inspectWriter ?? inspectWriter)(held.owner) !== "alive" || this.clock(current) >= held.expiresAt) {
+					throw new SubagentLeaseConflict("successor reservation or live writer unverified");
+				}
+			};
+			assertGrant(now);
 			if (current.controlHead !== expectedHead) throw new SubagentLeaseConflict("stale control head");
 			const inspect = this.options.inspectWriter ?? inspectWriter;
 			if (inspect(owner) !== "alive") throw new SubagentLeaseConflict("candidate control lease identity is not live");
 			const previous = current.controlLease;
 			if (previous && !sameWriter(previous.owner, owner)
 				&& (now < previous.expiresAt || inspect(previous.owner) !== "dead")) throw new SubagentLeaseConflict("control lease is held or owner death is unproven");
-			this.assertWriter(current, writerGeneration, this.clock(current));
+			assertGrant(this.clock(current));
 			if (this.clock(current) >= now + durationMs) throw new SubagentLeaseConflict("proposed control lease expired during inspection");
 			const head = current.controlHead + 1;
-			return { ...current, controlHead: head, controlLease: { owner: structuredClone(owner), generation: head, renewedAt: now, expiresAt: now + durationMs } };
+			const next = { ...current, controlHead: head, controlLease: { owner: structuredClone(owner), generation: head, renewedAt: now, expiresAt: now + durationMs } };
+			return reservation ? { ...next, controlReservation: null, controllerSessionId: reservation.sessionId, controllerGeneration: (current.controllerGeneration ?? 0) + 1 } : next;
 		});
 	}
 
@@ -336,6 +361,9 @@ export class SubagentRegistry {
 	}
 
 	/**
+	 * With a successor, only the persistence writer may reserve: this revokes the
+	 * outgoing controller and binds the next grant to one session and identity.
+	 * Without a successor this reserves an ordinary controller effect slot.
 	 * Request IDs are exactly `${record.id}:${expectedHead + 1}`. Consuming the
 	 * monotonically increasing slot makes that ID permanently unreservable again,
 	 * including across restart/regrant. No payload or receipt history is stored.
@@ -345,13 +373,20 @@ export class SubagentRegistry {
 	 * Returns only after publication, BEFORE any caller effect. Lost return/ack is
 	 * ambiguous, not permission to retry. No exactly-once effect guarantee.
 	 */
-	public reserveControl(expectedRevision: number, authority: RegistryControlAuthority, requestId: string): SubagentRecord {
+	public reserveControl(expectedRevision: number, authority: RegistryControlAuthority, requestId: string, successor?: RegistryControlSuccessor & { readonly writerGeneration: number }): SubagentRecord {
+		if (successor && (!text(successor.sessionId) || !writer(successor.owner))) throw new Error("invalid successor reservation");
 		return this.change(authority.id, expectedRevision, (current, now) => {
 			const owner = this.ownWriter();
 			if (!this.matchesControl(current, authority, now)) throw new SubagentLeaseConflict("stale or absent control authority");
-			if (!sameWriter(current.controlLease!.owner, owner)) throw new SubagentLeaseConflict("control lease is not owned");
+			if (successor) {
+				this.assertWriter(current, successor.writerGeneration, now);
+				if ((this.options.inspectWriter ?? inspectWriter)(successor.owner) !== "alive") throw new SubagentLeaseConflict("successor identity unverified");
+				this.assertWriter(current, successor.writerGeneration, this.clock(current));
+			} else if (!sameWriter(current.controlLease!.owner, owner)) throw new SubagentLeaseConflict("control lease is not owned");
+			if (!this.matchesControl(current, authority, this.clock(current))) throw new SubagentLeaseConflict("control authority expired during reservation");
 			if (requestId !== `${current.id}:${current.controlHead + 1}`) throw new SubagentLeaseConflict("control request does not identify the next slot");
-			return { ...current, controlHead: current.controlHead + 1 };
+			const next = { ...current, controlHead: current.controlHead + 1 };
+			return successor ? { ...next, controlLease: null, controlReservation: { sessionId: successor.sessionId, owner: structuredClone(successor.owner) } } : next;
 		});
 	}
 
@@ -377,7 +412,7 @@ export class SubagentRegistry {
 		return this.change(id, expectedRevision, (current, now) => {
 			this.assertWriter(current, generation, now);
 			const next = update(structuredClone(current));
-			for (const key of ["schemaVersion", "id", "ownerSessionId", "backend", "taskDir", "createdAt", "writerLease", "controlLease", "controlHead", "controllerSessionId", "controllerGeneration", "budget"] as const) {
+			for (const key of ["schemaVersion", "id", "ownerSessionId", "backend", "taskDir", "createdAt", "writerLease", "controlLease", "controlHead", "controllerSessionId", "controllerGeneration", "controlReservation", "budget"] as const) {
 				if (!isDeepStrictEqual(next[key], current[key])) throw new Error(`immutable registry field: ${key}`);
 			}
 			for (const key of ["child", "supervisor", "pane", "worktree", "sessionFilePath", "completionId", "outcome", "settledAt", "result", "manifest"] as const) {

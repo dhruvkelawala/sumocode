@@ -94,6 +94,41 @@ function retainedFixture(attach = false) {
 }
 
 describe("retained supervisor handle ownership", () => {
+	it("authorizes a control reservation while retaining parser, child and writer ownership", async () => {
+		const f = retainedFixture();
+		f.proc.emit("spawn");
+		await f.owner.ready;
+		const record = f.registry.get(f.record.id)!;
+		const granted = f.registry.acquireControl(record.id, record.revision, record.writerLease!.generation, 0, record.writerLease!.owner, 1000);
+		const reserved = f.owner.reserveControl({
+			id: record.id, ownerSessionId: record.ownerSessionId, generation: granted.controlLease!.generation,
+			owner: granted.controlLease!.owner, head: granted.controlHead,
+		}, { sessionId: "successor", owner: { token: "successor", pid: 77, processStartTime: "successor-birth" } });
+		expect(reserved.writerLease).toEqual(record.writerLease);
+		expect(reserved.controlLease).toBeNull();
+		expect(f.subscriptions).toHaveBeenCalledTimes(1);
+		expect(f.operations.signalTree).not.toHaveBeenCalled();
+		await f.finish();
+		f.release();
+		expect(await f.owner.settlement).toBe("settled");
+		expect(f.registry.get(record.id)?.controlReservation?.sessionId).toBe("successor");
+	});
+	it.each(["different", "unknown"] as const)("refuses transfer after %s anchor identity without signals or a new controller", async (status) => {
+		const f = retainedFixture();
+		f.proc.emit("spawn");
+		await f.owner.ready;
+		const record = f.registry.get(f.record.id)!;
+		const granted = f.registry.acquireControl(record.id, record.revision, record.writerLease!.generation, 0, record.writerLease!.owner, 1000);
+		vi.mocked(f.operations.identityMatches).mockImplementation((identity) => identity.pid === 4242 ? status : "same");
+		expect(() => f.owner.reserveControl({ id: record.id, ownerSessionId: record.ownerSessionId,
+			generation: granted.controlLease!.generation, owner: granted.controlLease!.owner, head: granted.controlHead,
+		}, { sessionId: "successor", owner: { token: "successor", pid: 77, processStartTime: "successor-birth" } })).toThrow();
+		expect(await f.owner.settlement).toBe("ambiguous");
+		expect(f.registry.get(record.id)).toMatchObject({ status: "ambiguous", controlLease: granted.controlLease, writerLease: record.writerLease });
+		expect(f.registry.get(record.id)?.controlReservation).toBeUndefined();
+		expect(f.operations.signalTree).not.toHaveBeenCalled();
+	});
+
 	it("persists parsed progress and accumulated reported usage before observers and settlement", async () => {
 		const f = retainedFixture();
 		f.proc.emit("spawn");

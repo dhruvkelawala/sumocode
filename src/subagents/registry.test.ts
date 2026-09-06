@@ -42,6 +42,78 @@ function control(record: SubagentRecord): RegistryControlAuthority {
 }
 
 describe("SubagentRegistry control authority", () => {
+	it("reserves a successor controller without moving the live persistence writer", () => {
+		const { directory, record } = fixture();
+		const options = { now: () => 1000, inspectWriter: () => "alive" as const };
+		const supervisor = new SubagentRegistry(directory, "session-a", { ...options, writerIdentity: writerA });
+		const successor = new SubagentRegistry(directory, "session-a", { ...options, writerIdentity: writerB });
+		supervisor.create(record);
+		const held = supervisor.acquireWriter(record.id, 1, 1000);
+		const granted = supervisor.acquireControl(record.id, held.revision, held.writerLease!.generation, 0, writerA, 1000);
+		const reserved = supervisor.reserveControl(granted.revision, control(granted), `${record.id}:2`, {
+			sessionId: "session-b", owner: writerB, writerGeneration: held.writerLease!.generation,
+		});
+		expect(reserved.writerLease).toEqual(held.writerLease);
+		expect(supervisor.inspectControl(control(granted))).toBe(false);
+		expect(() => successor.acquireControl(record.id, reserved.revision, 1, reserved.controlHead, writerB, 1000, "wrong-session")).toThrow();
+		const adopted = successor.acquireControl(record.id, reserved.revision, 1, reserved.controlHead, writerB, 1000, "session-b");
+		expect(adopted).toMatchObject({ controllerSessionId: "session-b", controllerGeneration: 1, controlReservation: null });
+		expect(adopted.writerLease).toEqual(held.writerLease);
+		expect(successor.inspectControl(control(adopted))).toBe(true);
+		expect(() => successor.acquireControl(record.id, reserved.revision, 1, reserved.controlHead, writerB, 1000, "session-b")).toThrow();
+		expect(() => successor.transition(record.id, adopted.revision, 1, (r) => r)).toThrow();
+	});
+	it.each(["renew", "takeover"] as const)("%s keeps reservations bound to their authorizing writer", (action) => {
+		const { directory, record } = fixture();
+		let now = 1000;
+		const options = { now: () => now, inspectWriter: (owner: RegistryWriter) => now >= 2000 && owner.token === writerA.token ? "dead" as const : "alive" as const };
+		const supervisor = new SubagentRegistry(directory, "session-a", { ...options, writerIdentity: writerA });
+		const successor = new SubagentRegistry(directory, "session-a", { ...options, writerIdentity: writerB });
+		supervisor.create(record);
+		const held = supervisor.acquireWriter(record.id, 1, 1000);
+		const granted = supervisor.acquireControl(record.id, held.revision, 1, 0, writerA, 500);
+		const reserved = supervisor.reserveControl(granted.revision, control(granted), `${record.id}:2`, { sessionId: "session-b", owner: writerB, writerGeneration: 1 });
+		now = action === "renew" ? 1200 : 2000;
+		const fresh = (action === "renew" ? supervisor : successor).acquireWriter(record.id, reserved.revision, 1000);
+		if (action === "takeover") {
+			expect(fresh.controlReservation).toBeNull();
+			expect(() => successor.acquireControl(record.id, fresh.revision, 2, 2, writerB, 1000, "session-b")).toThrow(/reservation/);
+		} else {
+			const adopted = successor.acquireControl(record.id, fresh.revision, 2, 2, writerB, 1000, "session-b");
+			expect(adopted.writerLease).toEqual(fresh.writerLease);
+			expect(adopted.controllerSessionId).toBe("session-b");
+		}
+	});
+
+	it.each(["nonwriter", "unknown-successor", "stale-control", "expired-control", "wrong-identity", "unknown-writer", "dead-writer", "expired-writer"] as const)("blocks %s cooperative transfer with no publication", (failure) => {
+		const { directory, record } = fixture();
+		let now = 1000;
+		let unknown: string | undefined;
+		let dead: string | undefined;
+		const options = { now: () => now, inspectWriter: (owner: RegistryWriter) => owner.token === unknown ? "unknown" as const : owner.token === dead ? "dead" as const : "alive" as const };
+		const supervisor = new SubagentRegistry(directory, "session-a", { ...options, writerIdentity: writerA });
+		const successor = new SubagentRegistry(directory, "session-a", { ...options, writerIdentity: writerB });
+		supervisor.create(record);
+		const held = supervisor.acquireWriter(record.id, 1, 1000);
+		const granted = supervisor.acquireControl(record.id, held.revision, 1, 0, writerA, 500);
+		if (["nonwriter", "unknown-successor", "stale-control", "expired-control"].includes(failure)) {
+			if (failure === "unknown-successor") unknown = writerB.token;
+			if (failure === "expired-control") now = 1500;
+			const authority = { ...control(granted), head: failure === "stale-control" ? 0 : granted.controlHead };
+			expect(() => (failure === "nonwriter" ? successor : supervisor).reserveControl(granted.revision, authority, `${record.id}:2`, {
+				sessionId: "session-b", owner: writerB, writerGeneration: 1,
+			})).toThrow();
+			expect(supervisor.get(record.id)).toEqual(granted);
+			return;
+		}
+		const reserved = supervisor.reserveControl(granted.revision, control(granted), `${record.id}:2`, { sessionId: "session-b", owner: writerB, writerGeneration: 1 });
+		if (failure === "unknown-writer") unknown = writerA.token;
+		if (failure === "dead-writer") dead = writerA.token;
+		if (failure === "expired-writer") now = 2000;
+		expect(() => successor.acquireControl(record.id, reserved.revision, 1, 2, failure === "wrong-identity" ? writerA : writerB, 1000, "session-b")).toThrow();
+		expect(supervisor.get(record.id)).toEqual(reserved);
+	});
+
 	it("preserves the live supervisor writer when a dead manager's successor requests session handoff", () => {
 		const { directory, record } = fixture();
 		let now = 1000;

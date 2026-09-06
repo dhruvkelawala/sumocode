@@ -7,7 +7,7 @@ import type { RunOutcome, SubagentEvent } from "./domain.js";
 import { buildCompletionManifest, type CompletionManifestEvidence } from "./manifest.js";
 import { RetainedResults } from "./retained-results.js";
 import { addReportedSubagentUsage } from "./budget-policy.js";
-import { SubagentRegistry, SubagentRevisionConflict, type RegistryProcess, type SubagentRecord } from "./registry.js";
+import { SubagentRegistry, SubagentRevisionConflict, type RegistryControlAuthority, type RegistryControlSuccessor, type RegistryProcess, type SubagentRecord } from "./registry.js";
 
 /** Persistence-owner gate only, not user control authorization. Retain refused handles. */
 export function createRetainedHeadlessLaunchGate(
@@ -115,7 +115,7 @@ function prepareLaunch(
 		},
 	};
 	return {
-		gate, fence, transition,
+		gate, fence, transition, verifyChild: childFence,
 		record: () => structuredClone(current),
 		released: () => phase === "released",
 		renew: (): void => {
@@ -163,6 +163,7 @@ type Settlement = "settled" | "lost" | "ambiguous";
  */
 export class RetainedHeadlessSupervisor {
 	private readonly authority: ReturnType<typeof prepareLaunch>;
+	private readonly registry: SubagentRegistry;
 	private readonly artifacts: RetainedResults;
 	private readonly child: SpawnedChild;
 	private readonly cwd: string;
@@ -184,6 +185,7 @@ export class RetainedHeadlessSupervisor {
 			|| (options.initial.worktree !== null && options.initial.worktree.path !== options.attach.cwd))) {
 			throw new Error("retained cwd binding mismatch");
 		}
+		this.registry = options.registry;
 		this.cwd = options.launch.cwd;
 		this.baseRef = options.baseRef;
 		this.authority = prepareLaunch(options.registry, options.initial, options.supervisor, dependencies.operations ?? systemProcessTree, options.attach !== undefined);
@@ -235,6 +237,19 @@ export class RetainedHeadlessSupervisor {
 			this.refuseReady(error);
 		});
 		void this.ready.catch(() => undefined);
+	}
+
+	/** Cooperative outgoing-controller request. Persistence ownership never moves. */
+	public reserveControl(authority: RegistryControlAuthority, successor: RegistryControlSuccessor): SubagentRecord {
+		if (this.stopped || this.terminal) throw new Error("retained owner unavailable for transfer");
+		const record = this.authority.record();
+		if (!record.child) throw new Error("retained child unavailable for transfer");
+		try { this.authority.verifyChild(record.child.identity.pid); }
+		catch (error) { this.fail("ambiguous"); throw error; }
+		const fresh = this.authority.record();
+		return this.registry.reserveControl(fresh.revision, authority, `${record.id}:${authority.head + 1}`, {
+			...successor, writerGeneration: fresh.writerLease!.generation,
+		});
 	}
 
 	public subscribe(listener: (record: SubagentRecord) => void): () => void {

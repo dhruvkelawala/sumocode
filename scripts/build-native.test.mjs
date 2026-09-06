@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { makeNativePiBuildCopy } from "./build-native.mjs";
 
@@ -52,6 +53,63 @@ function fixture(layout) {
 	}
 	return { directory, root, piPkg, source, buildDir: join(root, "dist/native/.pi-build") };
 }
+
+describe("native build entry", () => {
+	for (const mode of ["direct", "symlink", "directory alias", "import", "missing argv", "directory argv", "unrelated file argv"]) {
+		it(`${mode} runs instrumentation only for CLI invocation`, () => {
+			const directory = realpathSync(mkdtempSync(join(tmpdir(), "sumocode-native-entry-")));
+			temporaryDirectories.push(directory);
+			const root = join(directory, "package");
+			const script = join(root, "scripts/build-native.mjs");
+			write(join(root, "package.json"), '{"type":"module","version":"0.0.0"}');
+			write(join(root, ".bun-version"), "fixture-only");
+			mkdirSync(dirname(script), { recursive: true });
+			copyFileSync(new URL("./build-native.mjs", import.meta.url), script);
+			write(join(root, "node_modules/esbuild/package.json"), '{"type":"module","exports":"./index.js"}');
+			write(join(root, "node_modules/esbuild/index.js"), 'export function build() { throw new Error("unexpected-build"); }');
+			write(join(root, "scripts/instrument-pi-startup.mjs"),
+				'import { appendFileSync } from "node:fs";\n'
+				+ 'appendFileSync(new URL("../marker", import.meta.url), "entry\\n");\n'
+				+ 'throw new Error("native-entry-sentinel");\n');
+			const env = {};
+			for (const key of ["HOME", "TMPDIR", "XDG_CACHE_HOME"]) {
+				env[key] = join(directory, key);
+				mkdirSync(env[key]);
+			}
+			const cli = ["direct", "symlink", "directory alias"].includes(mode);
+			let args = [script];
+			if (mode === "symlink") {
+				const alias = join(directory, "build-alias.mjs");
+				symlinkSync(script, alias);
+				args = [alias];
+			} else if (mode === "directory alias") {
+				const alias = join(directory, "package-alias");
+				symlinkSync(root, alias, "dir");
+				args = [join(alias, "scripts/build-native.mjs")];
+			} else if (!cli) {
+				const caller = join(directory, "caller.mjs");
+				write(caller, "export {};\n");
+				const argv = mode === "import" ? undefined
+					: mode === "missing argv" ? join(directory, "absent.mjs")
+						: mode === "directory argv" ? directory : caller;
+				args = ["--input-type=module", "-e",
+					`process.argv[1] = ${JSON.stringify(argv)}; await import(${JSON.stringify(pathToFileURL(script).href)});`];
+			}
+			const result = spawnSync(process.execPath, args, { cwd: directory, env, encoding: "utf8", timeout: 10_000 });
+			expect(result.error?.code).toBeUndefined();
+			expect(result.signal).toBeNull();
+			expect(result.status).toBe(cli ? 1 : 0);
+			expect(result.stdout).toBe("");
+			if (cli) {
+				expect(result.stderr).toContain("Error: native-entry-sentinel");
+				expect(readFileSync(join(root, "marker"), "utf8")).toBe("entry\n");
+			} else {
+				expect(result.stderr).toBe("");
+				expect(existsSync(join(root, "marker"))).toBe(false);
+			}
+		});
+	}
+});
 
 describe("native Pi build-source preparation", () => {
 	it("rejects optional dependencies available only above the package root", () => {

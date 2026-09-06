@@ -265,7 +265,14 @@ async function main() {
 	console.log(`[sumocode] native archive: ${outDir}`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+let entryUrl;
+try {
+	if (process.argv[1]) entryUrl = pathToFileURL(realpathSync(process.argv[1])).href;
+} catch {
+	// Import callers need not have a filesystem entry point.
+}
+
+if (import.meta.url === entryUrl) {
 	if (!existsSync(resolve(root, "node_modules"))) {
 		fail("node_modules is missing — run pnpm install first.");
 	}

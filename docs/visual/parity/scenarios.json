@@ -1305,7 +1305,13 @@
 			"bibleTarget": "scene-activity-cards.png",
 			"fixture": {
 				"id": "activity-budget-warnings",
-				"activityExpansion": { "fixture-stalled-subagent": true, "fixture-over-budget-subagent": true }
+				"activityExpansion": {
+					"fixture-stalled-subagent": true,
+					"fixture-over-budget-subagent": true,
+					"fixture-completed-terminal": false,
+					"fixture-failed-terminal": false,
+					"fixture-collapsed-subagent": false
+				}
 			},
 			"crops": [
 				{ "id": "full", "targetCrop": "full", "runtimeCrop": "full" },

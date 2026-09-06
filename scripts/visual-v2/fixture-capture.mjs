@@ -148,9 +148,9 @@ const FIXTURES = {
 	"activity-budget-warnings": {
 		transcript: {
 			messages: [
-				{ id: "budget-request", role: "user", displayName: "USER", timestamp: FIXTURE_TIMES.userOne, blocks: [{ type: "markdown", text: "inspect delegated work budgets" }] },
+				{ id: "activity-request", role: "user", displayName: "USER", timestamp: FIXTURE_TIMES.userOne, blocks: [{ type: "markdown", text: "show live orchestration activity" }] },
 				{
-					id: "budget-feed", role: "system", displayName: "ACTIVITY", timestamp: FIXTURE_TIMES.sumoOne,
+					id: "activity-feed", role: "system", displayName: "ACTIVITY", timestamp: FIXTURE_TIMES.sumoOne,
 					blocks: [
 						{ type: "activity", activity: {
 							id: "fixture-stalled-subagent", kind: "subagent", title: "review auth flow", status: "running", subject: "sa-4", currentStep: "stalled-warning",
@@ -162,6 +162,9 @@ const FIXTURES = {
 							body: { kind: "text", text: "over-budget-warning · elapsed 120s · wall 120% · reported tokens 110% · reported cost 50% · liveness unknown · last progress 2026-04-30T11:41:59.000Z\ninspect or explicitly cancel with subagent_cancel" },
 							outputTail: "still reviewing transcript docs", model: "gpt-5.5", thinking: "medium",
 						} },
+						{ type: "activity", activity: { id: "fixture-completed-terminal", kind: "terminal", title: "typecheck", status: "succeeded", subject: "sumocode", outputTail: "typecheck passed", body: { kind: "terminal", command: "pnpm typecheck", text: "typecheck passed" }, result: { summary: "exit 0" } } },
+						{ type: "activity", activity: { id: "fixture-failed-terminal", kind: "terminal", title: "integration tests", status: "failed", subject: "sumocode", outputTail: "1 test failed", body: { kind: "terminal", command: "pnpm test:integration", text: "1 test failed" }, result: { error: "rpc session switch failed" } } },
+						{ type: "activity", activity: { id: "fixture-collapsed-subagent", kind: "subagent", title: "docs audit", status: "running", subject: "sa-5", currentStep: "reviewing transcript docs" } },
 					],
 				},
 			],

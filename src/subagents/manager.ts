@@ -6,7 +6,7 @@ import type { AgentPanePlacement, PiExecLike, TerminalHost } from "../terminal-h
 import type { SpawnedChild } from "./backend-pi.js";
 import { SUBAGENT_MAX_QUEUED, SUBAGENT_MAX_RUNNING, type LiveToolState, type RunOutcome, type SubagentEvent, type SubagentSnapshot, type SubagentWorktreeRef } from "./domain.js";
 import { planPlacement } from "./layout.js";
-import { evaluateSubagentBudget, validateSubagentBudget, type SubagentBudget } from "./budget-policy.js";
+import { addReportedSubagentUsage, evaluateSubagentBudget, validateSubagentBudget, type SubagentBudget } from "./budget-policy.js";
 import { buildCompletionManifest, type CompletionManifestEvidence } from "./manifest.js";
 
 const execFileAsync = promisify(execFile);
@@ -98,10 +98,6 @@ async function captureGitContext(cwd: string): Promise<SpawnGitContext> {
 	]);
 	return { repoRoot, baseRef };
 }
-
-const addReported = (total: number | undefined, value: number | undefined): number | undefined =>
-	value !== undefined && Number.isFinite(value) && value >= 0
-		? Math.min(Number.MAX_SAFE_INTEGER, (total ?? 0) + value) : total;
 
 const isSettled = (snapshot: SubagentSnapshot): boolean => snapshot.status !== "running" && snapshot.status !== "queued";
 
@@ -783,8 +779,8 @@ export class SubagentManager {
 				tokens: event.tokens ?? current.usage.tokens,
 				contextWindow: event.contextWindow ?? current.usage.contextWindow,
 				costUsd: event.costUsd ?? current.usage.costUsd,
-				reportedTokens: addReported(current.usage.reportedTokens, event.tokens),
-				reportedCostUsd: addReported(current.usage.reportedCostUsd, event.costUsd),
+				reportedTokens: addReportedSubagentUsage(current.usage.reportedTokens, event.tokens),
+				reportedCostUsd: addReportedSubagentUsage(current.usage.reportedCostUsd, event.costUsd),
 			},
 		};
 		if (event.kind === "heartbeat") {

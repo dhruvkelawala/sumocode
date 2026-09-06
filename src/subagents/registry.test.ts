@@ -42,6 +42,44 @@ function control(record: SubagentRecord): RegistryControlAuthority {
 }
 
 describe("SubagentRegistry control authority", () => {
+	it("round-trips optional budgets and durable telemetry without inventing legacy observations", () => {
+		const { directory, record } = fixture();
+		const options = { now: () => 2000, writerIdentity: writerA, inspectWriter: () => "alive" as const };
+		const registry = new SubagentRegistry(directory, "session-a", options);
+		registry.create({ ...record, budget: { tokens: 100, wallTimeMs: 5000 } });
+		const held = registry.acquireWriter(record.id, 1, 1000);
+		registry.transition(record.id, held.revision, held.writerLease!.generation, (r) => ({ ...r,
+			telemetry: { startedAt: 1500, lastProgressAt: 2000, reportedTokens: 60, reportedCostUsd: 0.25 },
+		}));
+		const reopened = new SubagentRegistry(directory, "session-a", options).get(record.id);
+		expect(reopened).toMatchObject({ budget: { tokens: 100, wallTimeMs: 5000 }, telemetry: { startedAt: 1500, lastProgressAt: 2000, reportedTokens: 60, reportedCostUsd: 0.25 } });
+		const legacy = { ...record, id: "sa-legacy" };
+		registry.create(legacy);
+		expect(registry.get(legacy.id)).toEqual(legacy);
+	});
+	it.each([
+		{ budget: { tokens: 0 } },
+		{ telemetry: { startedAt: null, lastProgressAt: null, reportedTokens: Infinity } },
+		{ telemetry: { startedAt: null, lastProgressAt: 1001 } },
+		{ telemetry: { startedAt: null, lastProgressAt: null, prompt: "not metadata" } },
+	])("rejects malformed budget telemetry %j", (patch) => {
+		const { directory, record } = fixture();
+		const registry = new SubagentRegistry(directory, "session-a");
+		// SAFETY: deliberately malformed metadata exercises the JSON validation boundary.
+		expect(() => registry.create({ ...record, ...patch } as SubagentRecord)).toThrow(/schema/);
+	});
+
+	it("preserves budget and monotone telemetry across writer transitions", () => {
+		const { directory, record } = fixture();
+		const registry = new SubagentRegistry(directory, "session-a", { now: () => 2000, writerIdentity: writerA, inspectWriter: () => "alive" });
+		registry.create({ ...record, budget: { tokens: 100 }, telemetry: { startedAt: 1000, lastProgressAt: 1000, reportedTokens: 60 } });
+		const held = registry.acquireWriter(record.id, 1, 1000);
+		for (const patch of [{ budget: { tokens: 200 } }, { telemetry: undefined }, { telemetry: { startedAt: 1000, lastProgressAt: null, reportedTokens: 59 } }]) {
+			expect(() => registry.transition(record.id, held.revision, held.writerLease!.generation, (r) => ({ ...r, ...patch }))).toThrow(/immutable|preserved/);
+		}
+		expect(registry.get(record.id)).toEqual(held);
+	});
+
 	it("does not let two same-session observers race into live control, even after expiry", () => {
 		const { directory, record } = fixture();
 		let now = 1000;

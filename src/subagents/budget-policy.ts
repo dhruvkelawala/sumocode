@@ -87,6 +87,10 @@ export function formatSubagentBudget(state: Partial<SubagentBudgetState>): strin
 	return parts.join(" · ");
 }
 
+export const addReportedSubagentUsage = (total: number | undefined, value: number | undefined): number | undefined =>
+	value !== undefined && Number.isFinite(value) && value >= 0
+		? Math.min(Number.MAX_SAFE_INTEGER, (total ?? 0) + value) : total;
+
 function ratio(used: number | undefined, limit: number | undefined): number | null {
 	// ponytail: cap extreme warning ratios; use decimal arithmetic if exact ratios ever matter.
 	return used === undefined || !Number.isFinite(used) || used < 0 || limit === undefined ? null : Math.min(Number.MAX_SAFE_INTEGER, used / limit);

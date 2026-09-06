@@ -94,6 +94,22 @@ function retainedFixture(attach = false) {
 }
 
 describe("retained supervisor handle ownership", () => {
+	it("persists parsed progress and accumulated reported usage before observers and settlement", async () => {
+		const f = retainedFixture();
+		f.proc.emit("spawn");
+		await f.owner.ready;
+		const observed: SubagentRecord[] = [];
+		f.owner.subscribe((record) => { observed.push(record); });
+		f.setNow(2000);
+		for (const tokens of [60, 40]) f.proc.stdout.emit("data", `${JSON.stringify({ type: "message_end", message: { role: "assistant", text: "private answer", usage: { totalTokens: tokens, cost: { total: 0.25 } } } })}\n`);
+		expect(f.registry.get(f.record.id)?.telemetry).toEqual({ startedAt: 1000, lastProgressAt: 2000, reportedTokens: 100, reportedCostUsd: 0.5 });
+		expect(observed.at(-1)?.telemetry).toEqual(f.registry.get(f.record.id)?.telemetry);
+		expect(f.operations.signalTree).not.toHaveBeenCalled();
+		await f.finish();
+		f.release();
+		expect(await f.owner.settlement).toBe("settled");
+		expect(f.registry.get(f.record.id)?.telemetry).toEqual({ startedAt: 1000, lastProgressAt: 2000, reportedTokens: 100, reportedCostUsd: 0.5 });
+	});
 	for (const [cut, loss] of [["TERM", "expiry"], ["KILL", "expiry"], ["TERM", "replacement"], ["KILL", "replacement"]] as const) {
 		it(`stops the real kernel on lease ${loss} before ${cut}, with no late backend effects`, async () => {
 			const f = retainedFixture();

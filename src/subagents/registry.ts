@@ -6,6 +6,7 @@ import { atomicWritePrivateJson, readPrivateJson, withPrivateFileLock, writePriv
 import { captureProcessBirthTime, type ProcessTreeIdentity, type ProcessTreeVerification } from "../background-tasks/process-tree.js";
 import { assertPrivateArtifact, assertPrivateDir, isErrnoCode, nodeArtifactFs } from "../private-artifact.js";
 import type { RunOutcome, SubagentPaneRef, SubagentWorktreeRef } from "./domain.js";
+import { validateSubagentBudget, type SubagentBudget } from "./budget-policy.js";
 
 export interface RegistryProcess {
 	readonly identity: ProcessTreeIdentity;
@@ -37,6 +38,15 @@ export interface RegistryControlAuthority {
 
 export interface SubagentRecord {
 	readonly schemaVersion: 2;
+	readonly budget?: SubagentBudget;
+	/** Absent legacy telemetry means unobserved, never zero usage or a fresh heartbeat. */
+	readonly telemetry?: {
+		readonly startedAt: number | null;
+		readonly lastProgressAt: number | null;
+		readonly lastHeartbeatAt?: number;
+		readonly reportedTokens?: number;
+		readonly reportedCostUsd?: number;
+	};
 	readonly revision: number;
 	readonly id: string;
 	readonly ownerSessionId: string;
@@ -142,8 +152,23 @@ function pointer(value: unknown, file: string): boolean {
 	return value === null || (object(value, "file bytes") && value.file === file && integer(value.bytes) && value.bytes <= MAX_RESULT_BYTES);
 }
 function validRecord(value: unknown): value is SubagentRecord {
-	if (!object(value, RECORD_KEYS)) return false;
+	if (!object(value, RECORD_KEYS, "budget telemetry")) return false;
 	const r = value;
+	if (r.budget !== undefined) {
+		try { validateSubagentBudget(r.budget); } catch { return false; }
+	}
+	if (r.telemetry !== undefined) {
+		if (!object(r.telemetry, "startedAt lastProgressAt", "lastHeartbeatAt reportedTokens reportedCostUsd")) return false;
+		for (const key of ["startedAt", "lastProgressAt", "lastHeartbeatAt"] as const) {
+			const at = r.telemetry[key];
+			if (at === null && key !== "lastHeartbeatAt" || at === undefined && key === "lastHeartbeatAt") continue;
+			if (!integer(at) || !integer(r.updatedAt) || !integer(r.createdAt) || at < r.createdAt || at > r.updatedAt) return false;
+		}
+		for (const key of ["reportedTokens", "reportedCostUsd"] as const) {
+			const used = r.telemetry[key];
+			if (used !== undefined && (typeof used !== "number" || !Number.isFinite(used) || used < 0 || used > Number.MAX_SAFE_INTEGER)) return false;
+		}
+	}
 	if (r.schemaVersion !== 2 || !positive(r.revision) || !text(r.id) || !/^sa-[A-Za-z0-9_-]{1,128}$/u.test(r.id)
 		|| !text(r.ownerSessionId) || !text(r.backend) || !["headless", "visible"].includes(r.backend)
 		|| !text(r.status) || !["queued", "starting", "running", "settling", "settled", "lost", "ambiguous"].includes(r.status)
@@ -318,11 +343,19 @@ export class SubagentRegistry {
 		return this.change(id, expectedRevision, (current, now) => {
 			this.assertWriter(current, generation, now);
 			const next = update(structuredClone(current));
-			for (const key of ["schemaVersion", "id", "ownerSessionId", "backend", "taskDir", "createdAt", "writerLease", "controlLease", "controlHead"] as const) {
+			for (const key of ["schemaVersion", "id", "ownerSessionId", "backend", "taskDir", "createdAt", "writerLease", "controlLease", "controlHead", "budget"] as const) {
 				if (!isDeepStrictEqual(next[key], current[key])) throw new Error(`immutable registry field: ${key}`);
 			}
 			for (const key of ["child", "supervisor", "pane", "worktree", "sessionFilePath", "completionId", "outcome", "settledAt", "result", "manifest"] as const) {
 				if (current[key] !== null && !isDeepStrictEqual(next[key], current[key])) throw new Error(`registry evidence must be preserved: ${key}`);
+			}
+			if (current.telemetry) {
+				if (!next.telemetry) throw new Error("registry telemetry must be preserved");
+				for (const key of ["startedAt", "lastProgressAt", "lastHeartbeatAt", "reportedTokens", "reportedCostUsd"] as const) {
+					const before = current.telemetry[key];
+					const after = next.telemetry[key];
+					if (before != null && (after == null || after < before || key === "startedAt" && after !== before)) throw new Error("registry telemetry must be preserved");
+				}
 			}
 			this.assertWriter(current, generation, this.clock(current));
 			return next;

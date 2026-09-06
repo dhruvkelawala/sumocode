@@ -6,6 +6,7 @@ import { spawnPiChild, type HeadlessLaunchGate, type SpawnedChild } from "./back
 import type { RunOutcome, SubagentEvent } from "./domain.js";
 import { buildCompletionManifest, type CompletionManifestEvidence } from "./manifest.js";
 import { RetainedResults } from "./retained-results.js";
+import { addReportedSubagentUsage } from "./budget-policy.js";
 import { SubagentRegistry, SubagentRevisionConflict, type RegistryProcess, type SubagentRecord } from "./registry.js";
 
 /** Persistence-owner gate only, not user control authorization. Retain refused handles. */
@@ -109,7 +110,7 @@ function prepareLaunch(
 			transition((record) => ({ ...record, child }));
 			assertLive(child);
 			assertLive(supervisor);
-			transition((record) => ({ ...record, status: "running" }));
+			transition((record) => ({ ...record, status: "running", telemetry: { ...record.telemetry, startedAt: record.updatedAt, lastProgressAt: record.telemetry?.lastProgressAt ?? null } }));
 			phase = "released";
 		},
 	};
@@ -260,6 +261,16 @@ export class RetainedHeadlessSupervisor {
 		try {
 			this.authority.fence();
 			this.artifacts.append(event);
+			if (!["run-started", "run-settled", "pane-attached", "heartbeat"].includes(event.kind)) {
+				this.authority.transition((record) => {
+					const telemetry = { ...record.telemetry, startedAt: record.telemetry?.startedAt ?? null, lastProgressAt: record.updatedAt };
+					return { ...record, telemetry: event.kind === "usage" ? {
+						...telemetry,
+						reportedTokens: addReportedSubagentUsage(telemetry.reportedTokens, event.tokens),
+						reportedCostUsd: addReportedSubagentUsage(telemetry.reportedCostUsd, event.costUsd),
+					} : telemetry };
+				});
+			}
 			if (event.kind === "run-settled") {
 				this.terminal = true;
 				void this.settle(event.outcome);

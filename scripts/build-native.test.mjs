@@ -173,6 +173,41 @@ describe("native Pi build-source preparation", () => {
 		});
 	}
 
+	// A nearest dependency-named directory that exists but is not loadable must be
+	// skipped exactly like Node falls through to ancestor candidates; the validator
+	// must then apply containment to the candidate Node actually resolves.
+	for (const scenario of ["contained ancestor", "escaped ancestor"]) {
+		it(`skips a present-but-unloadable nearest candidate and ${scenario === "contained ancestor" ? "links the contained Node fallback" : "rejects the escaped Node fallback"}`, () => {
+			const { directory, root, piPkg, buildDir } = fixture("pnpm");
+			const name = "unloadable-nearest";
+			const manifestPath = join(piPkg, "package.json");
+			const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+			manifest.dependencies[name] = "1.0.0";
+			write(manifestPath, JSON.stringify(manifest));
+			// Nearest candidate in resolution order: present, but no manifest or index.
+			mkdirSync(join(piPkg, "../..", name), { recursive: true });
+			if (scenario === "contained ancestor") {
+				const ancestor = join(root, "node_modules", name);
+				write(join(ancestor, "package.json"), JSON.stringify({ name, main: "index.js" }));
+				write(join(ancestor, "index.js"), 'module.exports = "contained-ancestor";\n');
+				// Node skips the unloadable nearest candidate for the contained ancestor.
+				expect(createRequire(manifestPath).resolve(name)).toBe(join(ancestor, "index.js"));
+				makeNativePiBuildCopy(piPkg, buildDir, root);
+				expect(realpathSync(join(buildDir, "node_modules", name))).toBe(ancestor);
+				expect(createRequire(join(buildDir, "package.json")).resolve(name)).toBe(join(ancestor, "index.js"));
+			} else {
+				const outside = join(directory, "node_modules", name);
+				write(join(outside, "package.json"), JSON.stringify({ name, main: "index.js" }));
+				write(join(outside, "index.js"), 'throw new Error("external source must never bundle");\n');
+				// Node skips the unloadable nearest candidate for the escaped ancestor.
+				expect(createRequire(manifestPath).resolve(name)).toBe(join(outside, "index.js"));
+				expect(() => makeNativePiBuildCopy(piPkg, buildDir, root))
+					.toThrow(`Pi build dependency ${name} resolves outside ${root}: ${outside}`);
+				expect(existsSync(buildDir)).toBe(false);
+			}
+		});
+	}
+
 	it("links a contained manifestless pnpm neighbor", () => {
 		const { root, piPkg, buildDir } = fixture("pnpm");
 		const manifestPath = join(piPkg, "package.json");

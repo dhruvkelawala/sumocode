@@ -151,6 +151,13 @@ export function makeNativePiBuildCopy(piPkg, buildDir, packageRoot = root) {
 	return buildDir;
 }
 
+// Node loads a bare name from a directory only when a manifest or an index entry
+// is present; anything else falls through to the next resolution candidate.
+function loadablePackageDirectory(directory) {
+	return existsSync(join(directory, "package.json"))
+		|| ["index.js", "index.mjs", "index.cjs"].some((entry) => existsSync(join(directory, entry)));
+}
+
 /**
  * Check package contents and installed dependency edges, not JS import expressions.
  * This is a pre-build check of a stable install, not a sandbox or a TOCTOU guard.
@@ -202,11 +209,14 @@ function validatePiBuildGraph(piPkg, packageRoot) {
 		const require = createRequire(manifestPath);
 		for (const name of Object.keys({ ...manifest.peerDependencies, ...manifest.dependencies, ...manifest.optionalDependencies })) {
 			// Real package neighborhoods include pnpm siblings, not just child node_modules.
-			// Check candidate presence, not a public entry: private exports and manifestless
-			// modules are valid. A present candidate must pass containment before any fallback.
+			// A candidate counts only when Node would load it (manifest or index entry);
+			// unloadable nearest directories fall through to ancestors exactly like Node
+			// resolution, without emulating exports/conditions. Manifestless index-only
+			// modules stay valid. The first loadable candidate must pass containment
+			// before any fallback.
 			const dependency = require.resolve.paths(name)
 				.map((directory) => join(directory, name))
-				.find((directory) => existsSync(directory));
+				.find(loadablePackageDirectory);
 			if (!dependency) {
 				if (Object.hasOwn(manifest.optionalDependencies ?? {}, name)
 					|| (manifest.peerDependenciesMeta?.[name]?.optional && !Object.hasOwn(manifest.dependencies ?? {}, name))) continue;

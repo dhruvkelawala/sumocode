@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SubagentSnapshot } from "../subagents/domain.js";
+import { mergeActivitySnapshot } from "./domain.js";
 import {
 	activitiesFromSubagentToolRecord,
 	activityFromSubagentResultRecord,
@@ -25,6 +26,26 @@ function snapshot(overrides: Partial<SubagentSnapshot> = {}): SubagentSnapshot {
 }
 
 describe("subagent Activity adapter", () => {
+	it.each(["stalled-warning", "over-budget-warning"] as const)("projects %s without changing running status or losing output", (health) => {
+		const activity = activityFromSubagentSnapshot(snapshot({
+			health, elapsedMs: 120_000, lastProgressAt: 1000, lastHeartbeatAt: 2000, liveness: "unknown",
+			utilization: { wallTime: 1.2, tokens: null, cost: 0.5 }, liveText: "still working",
+		}));
+		expect(activity).toMatchObject({ status: "running", currentStep: health, outputTail: "still working", body: { kind: "text" } });
+		expect(activity.body?.text).toContain("wall 120% · reported tokens unknown · reported cost 50%");
+		expect(activity.body?.text).toContain("last heartbeat 1970-01-01T00:00:02.000Z (event loop only)");
+		expect(activity.body?.text).toContain("inspect or explicitly cancel with subagent_cancel");
+	});
+	it("replaces durable warning copy with settled telemetry and final result", () => {
+		const running = activityFromSubagentSnapshot(snapshot({ health: "stalled-warning" }));
+		const settled = activityFromSubagentSnapshot(snapshot({ status: "done", health: "quiet", finalText: "review complete", settledAt: 2000 }));
+		const merged = mergeActivitySnapshot(running, settled);
+		expect(merged.body?.text).not.toContain("stalled-warning");
+		expect(merged.body?.text).not.toContain("subagent_cancel");
+		expect(merged.body?.text).toContain("review complete");
+		expect(merged.currentStep).toBe("quiet");
+	});
+
 	it("maps queued snapshots without running output", () => {
 		const activity = activityFromSubagentSnapshot(snapshot({ status: "queued", liveText: "not started" }));
 		expect(activity).toMatchObject({ id: "subagent:sa-7", status: "queued" });

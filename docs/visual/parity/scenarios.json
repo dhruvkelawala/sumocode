@@ -1298,6 +1298,25 @@
 			}
 		},
 		{
+			"id": "fixture-subagent-budget-warnings-landscape",
+			"lane": "fixture",
+			"status": "review",
+			"dimensions": { "cols": 160, "rows": 45 },
+			"bibleTarget": "scene-activity-cards.png",
+			"fixture": {
+				"id": "activity-budget-warnings",
+				"activityExpansion": { "fixture-stalled-subagent": true, "fixture-over-budget-subagent": true }
+			},
+			"crops": [
+				{ "id": "full", "targetCrop": "full", "runtimeCrop": "full" },
+				{ "id": "chat-area", "targetCrop": "chat-area", "runtimeCrop": "chat-area" }
+			],
+			"geometrySpec": {
+				"regions": [{ "startRow": 1, "endRow": 1, "category": "top-bar", "firstCol": 1 }],
+				"contentBounds": { "minFirst": 0, "maxLast": 159 }
+			}
+		},
+		{
 			"id": "fixture-activity-cards-landscape",
 			"lane": "fixture",
 			"status": "review",

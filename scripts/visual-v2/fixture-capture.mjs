@@ -145,6 +145,28 @@ const FIXTURES = {
 			],
 		},
 	},
+	"activity-budget-warnings": {
+		transcript: {
+			messages: [
+				{ id: "budget-request", role: "user", displayName: "USER", timestamp: FIXTURE_TIMES.userOne, blocks: [{ type: "markdown", text: "inspect delegated work budgets" }] },
+				{
+					id: "budget-feed", role: "system", displayName: "ACTIVITY", timestamp: FIXTURE_TIMES.sumoOne,
+					blocks: [
+						{ type: "activity", activity: {
+							id: "fixture-stalled-subagent", kind: "subagent", title: "review auth flow", status: "running", subject: "sa-4", currentStep: "stalled-warning",
+							body: { kind: "text", text: "stalled-warning · elapsed 180s · wall 30% · reported tokens unknown · reported cost unknown · liveness unknown · last progress 2026-04-30T11:39:00.000Z\ninspect or explicitly cancel with subagent_cancel" },
+							outputTail: "last observed: inspecting session boundaries", model: "gpt-5.5", thinking: "medium",
+						} },
+						{ type: "activity", activity: {
+							id: "fixture-over-budget-subagent", kind: "subagent", title: "docs audit", status: "running", subject: "sa-5", currentStep: "over-budget-warning",
+							body: { kind: "text", text: "over-budget-warning · elapsed 120s · wall 120% · reported tokens 110% · reported cost 50% · liveness unknown · last progress 2026-04-30T11:41:59.000Z\ninspect or explicitly cancel with subagent_cancel" },
+							outputTail: "still reviewing transcript docs", model: "gpt-5.5", thinking: "medium",
+						} },
+					],
+				},
+			],
+		},
+	},
 	"activity-cards": {
 		transcript: {
 			messages: [

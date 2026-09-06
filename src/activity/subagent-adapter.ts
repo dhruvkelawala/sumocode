@@ -1,6 +1,7 @@
 // oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type -- I/O boundary parser (subagent tool payload projection): inputs are untrusted producer JSON,
 // so `unknown` parameters and open string-keyed records are this module's real input contract.
 import type { SubagentSnapshot } from "../subagents/domain.js";
+import { formatSubagentBudget } from "../subagents/budget-policy.js";
 import {
 	type ActivityBody,
 	type ActivityKind,
@@ -348,6 +349,27 @@ function invocationFromSubagent(record: Record<string, unknown>, budget: Adapter
 	return invocation;
 }
 
+function healthDetails(record: Record<string, unknown>, budget: AdapterTraversalBudget): { health: string; text: string } | undefined {
+	const health = record.health;
+	if (health !== "active" && health !== "quiet" && health !== "stalled-warning" && health !== "over-budget-warning") return undefined;
+	const utilization = asRecord(record.utilization, budget);
+	const nonnegative = (value: unknown): number | undefined => {
+		const number = numberFrom(value);
+		return number !== undefined && number >= 0 && number <= Number.MAX_SAFE_INTEGER ? number : undefined;
+	};
+	const timestamp = (value: unknown): number | undefined => {
+		const number = nonnegative(value);
+		return number !== undefined && Number.isSafeInteger(number) && number <= 8_640_000_000_000_000 ? number : undefined;
+	};
+	const text = formatSubagentBudget({
+		health, elapsedMs: nonnegative(record.elapsedMs), lastProgressAt: timestamp(record.lastProgressAt) ?? null,
+		lastHeartbeatAt: timestamp(record.lastHeartbeatAt),
+		liveness: record.liveness === "alive" || record.liveness === "gone" ? record.liveness : "unknown",
+		utilization: { wallTime: nonnegative(utilization?.wallTime) ?? null, tokens: nonnegative(utilization?.tokens) ?? null, cost: nonnegative(utilization?.cost) ?? null },
+	});
+	return text ? { health, text: text.replace(" · inspect or explicitly cancel", "\ninspect or explicitly cancel") } : undefined;
+}
+
 function activityFromSubagentRecord(record: Record<string, unknown>, budget: AdapterTraversalBudget): ActivitySnapshot {
 	const id = firstString(budget, record.id) ?? "unknown";
 	const pane = asRecord(record.pane, budget);
@@ -408,6 +430,11 @@ function activityFromSubagentRecord(record: Record<string, unknown>, budget: Ada
 		subject,
 	};
 	if (currentStep) activity.currentStep = currentStep;
+	const health = status !== "queued" ? healthDetails(record, budget) : undefined;
+	if (health) {
+		activity.currentStep = health.health;
+		activity.body = { kind: "text", text: [health.text, summary, error].filter((text) => text !== undefined).join("\n") };
+	}
 	if (output) activity.outputTail = boundedText(output);
 	if (liveTools.length > 0) activity.activeTools = liveTools;
 	if (summary || error) {

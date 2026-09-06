@@ -24,7 +24,7 @@ export async function cleanupOwnedTree(operations: ProcessTreeOperations, tree: 
 		const result = await signalVerifiedProcessTree(operations, identity, signal, verification);
 		record({ identity, signal, result });
 		if (!result.ok && !result.forceRequired) {
-			const emptyAfterRefusal = operations.isTreeEmpty(identity, verification);
+			const emptyAfterRefusal = await operations.waitForTreeEmpty(identity, 2000, verification);
 			record({ identity, emptyAfterRefusal });
 			return emptyAfterRefusal;
 		}

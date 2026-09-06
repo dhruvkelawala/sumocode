@@ -19,6 +19,7 @@ export async function runRealRecovery(backend: "headless" | "visible", replaceme
 	const env: NodeJS.ProcessEnv = { ...privateEnv, SUMOCODE_INTEGRATION_RUN_ROOT: runRoot, SUMOCODE_INTEGRATION_MANIFEST: join(runRoot, "children.jsonl") };
 	if (process.env.HERDR_ENV === "1") Object.assign(env, { HERDR_ENV: "1", HERDR_SOCKET_PATH: process.env.HERDR_SOCKET_PATH,
 		HERDR_PANE_ID: process.env.HERDR_PANE_ID, PLAN112_HERDR_BIN: process.env.PLAN112_HERDR_BIN });
+	if (backend === "visible") writeFileSync(join(root, "visible"), "", { mode: 0o600, flag: "wx" });
 	if (scenario) writeFileSync(join(root, "scenario.json"), JSON.stringify(scenario), { mode: 0o600, flag: "wx" });
 	const entry = fileURLToPath(new URL("./plan112-source-controller.mjs", import.meta.url));
 	const owned: OwnedTree[] = [];
@@ -55,18 +56,17 @@ export async function runRealRecovery(backend: "headless" | "visible", replaceme
 	};
 	const registry = new SubagentRegistry(join(root, "registry"), "origin");
 	try {
-		if (backend === "visible") {
-			await start("herdr-probe");
-			const result = await wait("herdr-probe-result.json", "herdr-probe");
-			throw new Error(result.error);
-		}
-		if (scenario === "stale-pid" || scenario === "cleanup:same") {
+		if (scenario === "stale-pid" || scenario === "cleanup:same" || scenario === "cleanup:different") {
 			const probe = await start("probe");
 			await wait("probe-ready.json", "probe");
 			if (scenario === "cleanup:same") expect(await cleanupOwnedTree(systemProcessTree, probe, () => {})).toBe(true);
 			else {
 				await kill(probe);
 				expect((await signalVerifiedProcessTree(systemProcessTree, probe.identity, "SIGKILL", probe.verification)).ok).toBe(false);
+				if (scenario === "cleanup:different") {
+					expect(systemProcessTree.verificationMatches!(probe.identity, probe.verification)).toBe("different");
+					expect(await cleanupOwnedTree(systemProcessTree, probe, () => {})).toBe(true);
+				}
 			}
 			return;
 		}
@@ -79,6 +79,16 @@ export async function runRealRecovery(backend: "headless" | "visible", replaceme
 			expect(censusRetained(registry)[0].launch).toBe("never-launched");
 			return;
 		}
+		if (backend === "visible") {
+			await wait("pane-shell-birth.json", mode);
+			// SAFETY: the admitted controller publishes this private birth; OS checks below precede command admission.
+			const shell = JSON.parse(readFileSync(join(root, "pane-shell-birth.json"), "utf8")) as OwnedTree;
+			register(shell);
+			expect(systemProcessTree.identityMatches(shell.identity)).toBe("same");
+			expect(systemProcessTree.verificationMatches!(shell.identity, shell.verification)).toBe("same");
+			supervisePtyProcess(shell.identity.pid, createChildEvidenceContext([node, "pane-shell"], env), env);
+			writeFileSync(join(root, "pane-shell-birth-admitted"), "", { mode: 0o600, flag: "wx" });
+		}
 		await wait("anchor-birth.json", mode);
 		// SAFETY: source driver writes this private birth before admitting Pi. Reverify
 		// it before registering with the existing external-group supervisor seam.
@@ -87,7 +97,8 @@ export async function runRealRecovery(backend: "headless" | "visible", replaceme
 		expect(systemProcessTree.identityMatches(anchor.identity)).toBe("same");
 		expect(systemProcessTree.verificationMatches!(anchor.identity, anchor.verification)).toBe("same");
 		supervisePtyProcess(anchor.identity.pid, createChildEvidenceContext([node, "retained-anchor"], env), env);
-		admit(anchor.identity.pid);
+		if (backend === "visible") writeFileSync(join(root, "anchor-birth-admitted"), "", { mode: 0o600, flag: "wx" });
+		else admit(anchor.identity.pid);
 		if (scenario === "crash:pre-release") {
 			await wait("cut-ready.json", mode);
 			await kill(controller);
@@ -98,7 +109,7 @@ export async function runRealRecovery(backend: "headless" | "visible", replaceme
 			return;
 		}
 		const ready = await wait("owner-ready.json", mode);
-		expect(ready.headlessSteering).toBe(false);
+		expect(ready.headlessSteering).toBe(backend === "visible");
 		expect(read("provider-called.json")).toEqual({ promptPresent: true, privateRolePresent: true, toolsEmpty: true });
 		if (scenario.startsWith("delivery:")) {
 			await wait("cut-ready.json", mode);
@@ -150,7 +161,7 @@ export async function runRealRecovery(backend: "headless" | "visible", replaceme
 		if (mode === "same-process") {
 			const result = await wait("same-process-result.json", mode);
 			if (result.error) throw new Error(result.error);
-			expect(result.steering).toBe("unsupported: headless steering");
+			expect(result.steering).toBe(backend === "visible" ? "consumed" : "unsupported: headless steering");
 		} else {
 			const origin = await start("origin");
 			const lease = await wait("origin-ready.json", "owner");
@@ -181,7 +192,7 @@ export async function runRealRecovery(backend: "headless" | "visible", replaceme
 			writeFileSync(join(root, "finish"), "", { mode: 0o600, flag: "wx" });
 			await wait("owner-result.json", "owner");
 			if (result.error) throw new Error(result.error);
-			expect(result.steering).toBe("unsupported: headless steering");
+			expect(result.steering).toBe(backend === "visible" ? "consumed" : "unsupported: headless steering");
 		}
 	} finally {
 		const failures: number[] = [];
@@ -190,11 +201,17 @@ export async function runRealRecovery(backend: "headless" | "visible", replaceme
 		}
 		const census = systemProcessTree.census!();
 		if (existsSync(join(root, "anchor-spawn.json"))) spawned.push(JSON.parse(readFileSync(join(root, "anchor-spawn.json"), "utf8")).pid);
+		if (existsSync(join(root, "pane-shell-birth.json"))) {
+			// SAFETY: private controller evidence detects missing registration, never new signal authority.
+			const shell = JSON.parse(readFileSync(join(root, "pane-shell-birth.json"), "utf8")) as OwnedTree;
+			spawned.push(shell.identity.pid);
+		}
 		const unregistered = spawned.filter((pid) => !owned.some((tree) => tree.identity.pid === pid));
-		const zeroOwned = census !== undefined && failures.length === 0 && unregistered.length === 0 && owned.every((tree) =>
+		const paneUnverified = existsSync(join(root, "pane-launch-intent")) && !existsSync(join(root, "pane-shell-birth.json"));
+		const zeroOwned = !paneUnverified && census !== undefined && failures.length === 0 && unregistered.length === 0 && owned.every((tree) =>
 			systemProcessTree.isTreeEmpty(tree.identity, tree.verification) && !census.some((member) =>
 				tree.verification.members.some((birth) => member.pid === birth.pid && member.processStartTime === birth.processStartTime)));
-		writeFileSync(join(root, "zero-owned.json"), JSON.stringify({ zeroOwned, censusKnown: census !== undefined, groups: owned.length, failures, unregistered }), { mode: 0o600 });
+		writeFileSync(join(root, "zero-owned.json"), JSON.stringify({ zeroOwned, censusKnown: census !== undefined, groups: owned.length, failures, unregistered, paneUnverified }), { mode: 0o600 });
 		process.stdout.write(`[plan112] zero-owned: ${zeroOwned}; ${owned.length} birth-registered groups; evidence: ${root}\n`);
 		expect(zeroOwned, "zero-owned audit: unknown is not zero").toBe(true);
 	}

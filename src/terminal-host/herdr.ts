@@ -222,8 +222,9 @@ async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): P
 	if (!target.ok) return target;
 	const paneId = target.pane.pane_id;
 	if (!paneId) return { ok: false, error: "herdr child target has no pane_id; cleanup skipped" };
+	await options.beforeRun?.({ host: "herdr", paneId, workspaceId: target.pane.workspace_id });
 	const started = await runPaneCommand(pi, target.pane, options.shellCommand);
-	if (!started.ok) return cleanFailedChildStart(pi, paneId, started.error, recoveryShell);
+	if (!started.ok) return options.beforeRun ? started : cleanFailedChildStart(pi, paneId, started.error, recoveryShell);
 
 	const agentName = uniqueHerdrAgentName(options.name);
 	const workspaceId = target.pane.workspace_id ?? (options.placement.kind === "workspace" ? options.placement.workspaceId : undefined);

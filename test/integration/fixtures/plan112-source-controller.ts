@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -11,10 +11,10 @@ import { SubagentRegistry, type RegistryProcess, type RegistryWriter, type Subag
 import { controlAuthority } from "../../../src/subagents/retained-adoption.js";
 import { prepareRetainedBootstrap } from "../../../src/subagents/retained-bootstrap.js";
 import { censusRetained } from "../../../src/subagents/retained-census.js";
-import { RetainedHeadlessSupervisor } from "../../../src/subagents/retained-supervisor.js";
+import { RetainedHeadlessSupervisor, RetainedVisibleSupervisor } from "../../../src/subagents/retained-supervisor.js";
 import { buildCompletionManifest } from "../../../src/subagents/manifest.js";
 import { runLocalFault } from "./plan112-local-faults.js";
-import { herdrTerminalHost } from "../../../src/terminal-host/herdr.js";
+import { visibleRecoveryLaunch } from "./plan112-visible-recovery.js";
 
 interface ControllerReport {
 	error?: string; expiresAt?: number; headlessSteering?: boolean; child?: RegistryProcess | null;
@@ -25,6 +25,7 @@ interface ControllerReport {
 export async function runSourceController(root: string, mode: string, pi: string, provider: string): Promise<void> {
 	const put = (name: string, value: ControllerReport | RegistryWriter): void => publishReport(join(root, name), JSON.stringify(value));
 	const registry = new SubagentRegistry(join(root, "registry"), "origin");
+	const visible = existsSync(join(root, "visible"));
 	// SAFETY: the admitted test parent alone writes this private JSON string.
 	const scenario = existsSync(join(root, "scenario.json")) ? JSON.parse(readFileSync(join(root, "scenario.json"), "utf8")) as string : "";
 	const cut = (point: string): void => {
@@ -33,20 +34,6 @@ export async function runSourceController(root: string, mode: string, pi: string
 		// Only the external birth-verified owner may end this held controller.
 		while (true) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
 	};
-	if (mode === "herdr-probe") {
-		if (process.env.HERDR_ENV !== "1" || !process.env.PLAN112_HERDR_BIN || !process.env.HERDR_PANE_ID) {
-			put("herdr-probe-result.json", { error: "capability: herdr unavailable; requires explicit owned HERDR_SOCKET_PATH, HERDR_PANE_ID, HERDR_ENV=1 and PLAN112_HERDR_BIN" });
-			return;
-		}
-		const association = await herdrTerminalHost.inspectPane({ exec: async (_command, args) => {
-			try { return { code: 0, stdout: execFileSync(process.env.PLAN112_HERDR_BIN!, args, { encoding: "utf8", timeout: 5000 }), stderr: "", killed: false }; }
-			catch { return { code: 1, stdout: "", stderr: "", killed: false }; }
-		} }, { host: "herdr", paneId: process.env.HERDR_PANE_ID });
-		put("herdr-probe-result.json", { error: association.ok
-			? "real adapter incomplete: Herdr reachable with validated pane query; server-created pane shell has no pre-execution birth admission in this wrapper; visible launch not attempted"
-			: "capability: Herdr pane query refused in supervised private environment" });
-		return;
-	}
 	if (mode === "probe") { put("probe-ready.json", {}); return; }
 	if (mode === "contender") {
 		const before = registry.get("sa-real")!;
@@ -126,8 +113,9 @@ export async function runSourceController(root: string, mode: string, pi: string
 		assert.deepEqual(registry.get(before.id)?.supervisor, before.supervisor);
 		try {
 			const result = await runtime.manager.sendTo(before.id, "steer after disk recovery");
-			assert.deepEqual(result, { capability: "unsupported: headless steering" });
-			put("successor-result.json", { steering: "unsupported: headless steering", census: "verified", recovery: "adopted" });
+			if (visible) assert("id" in result && result.id === before.id && result.visible);
+			else assert.deepEqual(result, { capability: "unsupported: headless steering" });
+			put("successor-result.json", { steering: visible ? "consumed" : "unsupported: headless steering", census: "verified", recovery: "adopted" });
 		} finally { runtime.manager.detachForReplacement(); }
 		return;
 	}
@@ -136,19 +124,24 @@ export async function runSourceController(root: string, mode: string, pi: string
 	mkdirSync(taskDir, { mode: 0o700 });
 	const now = Date.now();
 	const initial: SubagentRecord = {
-		schemaVersion: 2, revision: 1, id: "sa-real", ownerSessionId: "origin", backend: "headless", status: "starting", taskDir,
+		schemaVersion: 2, revision: 1, id: "sa-real", ownerSessionId: "origin", backend: visible ? "visible" : "headless", status: "starting", taskDir,
 		child: null, supervisor: null, pane: null, worktree: null, sessionFilePath: null, modelLabel: "source-proof/fixed", roleId: "synthetic-role",
 		createdAt: now, updatedAt: now, settledAt: null, completionId: null, outcome: null, delivery: { state: "none", claim: null },
 		result: null, manifest: null, writerLease: null, controlLease: null, controlHead: 0,
 	};
-	const descriptor = prepareRetainedBootstrap(initial, {
+	const descriptor = visible ? undefined : prepareRetainedBootstrap(initial, {
 		cwd: join(root, "cwd"), baseRef: "HEAD", pi, adapterEntry: provider, modelBootstrapEntry: null, visible: null,
 		model: { provider: "source-proof", modelId: "fixed", label: "source-proof/fixed" }, thinking: "off", builtInTools: [],
 		role: { id: "synthetic-role", label: "synthetic role" },
 	}, { prompt: "synthetic recovery task", systemPrompt: "synthetic private role" });
 	let backend!: SpawnedChild;
 	const spawner = createPiChildSpawner(registeredAnchorSpawn(root, scenario), () => provider, () => pi);
-	const owner = new RetainedHeadlessSupervisor({ registry, initial, supervisor: captureBirth(process.pid), baseRef: "HEAD",
+	const pane = visible ? visibleRecoveryLaunch(root, pi, provider) : undefined;
+	const owner = pane ? new RetainedVisibleSupervisor({ registry, initial, supervisor: captureBirth(process.pid), baseRef: "HEAD",
+		launch: { cwd: join(root, "cwd"), prompt: "synthetic recovery task", appendSystemPrompt: "synthetic private role",
+			name: "plan112 recovery", id: initial.id, host: pane.host, pi: pane.pi, placement: { kind: "new-tab", label: "plan112 recovery" },
+			model: "source-proof/fixed", thinking: "off", tools: [] },
+	}, { spawn: (options) => { backend = pane.spawn(options); return backend; } }) : new RetainedHeadlessSupervisor({ registry, initial, supervisor: captureBirth(process.pid), baseRef: "HEAD",
 		launch: { cwd: join(root, "cwd"), prompt: "synthetic recovery task", inherited: {}, builtInTools: [], thinking: "off",
 			model: "source-proof/fixed", retainedBootstrap: descriptor },
 	}, {
@@ -178,6 +171,7 @@ export async function runSourceController(root: string, mode: string, pi: string
 	put("owner-ready.json", { headlessSteering: Boolean(backend.send), child: owner.record.child });
 	cut("running");
 	if (mode === "same-process" && scenario) {
+		assert(owner instanceof RetainedHeadlessSupervisor);
 		await runLocalFault(root, scenario, registry, owner, initial, install);
 		put("same-process-result.json", { steering: "unsupported: headless steering" });
 		return;
@@ -199,7 +193,7 @@ export async function runSourceController(root: string, mode: string, pi: string
 	const granted = registry.acquireControl(current.id, current.revision, current.writerLease!.generation, current.controlHead, old.manager.controllerIdentity, 60_000);
 	const authority = controlAuthority(granted);
 	const snapshot: SubagentSnapshot = { id: initial.id, title: "worker", prompt: "synthetic recovery task", cwd: join(root, "cwd"), baseRef: "HEAD",
-		status: "running", createdAt: now, visible: false, usage: { turns: 0 }, transcript: [], liveText: "", liveTools: [], finalText: "" };
+		status: "running", createdAt: now, visible, usage: { turns: 0 }, transcript: [], liveText: "", liveTools: [], finalText: "" };
 	await old.manager.trackRetained({ registry: registry.forController(old.manager.controllerIdentity), supervisor: owner, snapshot, authority });
 	await old.fire("session_shutdown", "new");
 	const next = install("successor");
@@ -208,9 +202,10 @@ export async function runSourceController(root: string, mode: string, pi: string
 		assert.equal(registry.inspectControl(authority), false);
 		assert.equal(next.manager.get(initial.id)?.recovery, "adopted");
 		assert.deepEqual(owner.record.child, current.child);
-		assert.equal(backend.send, undefined);
+		assert.equal(Boolean(backend.send), visible);
 		const result = await next.manager.sendTo(initial.id, "steer after recovery");
-		assert.deepEqual(result, { capability: "unsupported: headless steering" });
+		if (visible) assert("id" in result && result.id === initial.id && result.visible);
+		else assert.deepEqual(result, { capability: "unsupported: headless steering" });
 		put("finish", {});
 		assert.equal(await owner.settlement, "settled");
 		assert.equal(next.manager.get(initial.id)?.finalText, "preserved result");
@@ -218,7 +213,7 @@ export async function runSourceController(root: string, mode: string, pi: string
 		await next.fire("agent_end"); await next.fire("agent_end");
 		assert.equal(old.deliveries.length, 0);
 		assert.equal(next.deliveries.length, 1);
-		put("same-process-result.json", { steering: "unsupported: headless steering", recovery: "adopted", settlement: "settled", deliveries: 1 });
+		put("same-process-result.json", { steering: visible ? "consumed" : "unsupported: headless steering", recovery: "adopted", settlement: "settled", deliveries: 1 });
 	} finally { old.manager.detachForReplacement(); next.manager.detachForReplacement(); }
 }
 

@@ -11,6 +11,14 @@ describe("herdrTerminalHost", () => {
 		delete process.env.HERDR_ENV;
 		delete process.env.HERDR_PANE_ID;
 	});
+	it("preserves an unadmitted pane without sending its command or closing by ID", async () => {
+		const executor = pi(JSON.stringify({ result: { root_pane: { pane_id: "w1:p2", workspace_id: "w1" } } }));
+		const beforeRun = vi.fn(async () => { throw new Error("birth unknown"); });
+		await expect(herdrTerminalHost.startAgentPane(executor, { name: "worker", cwd: "/private/task", shellCommand: "held",
+			placement: { kind: "new-tab", label: "worker" }, beforeRun })).rejects.toThrow("birth unknown");
+		expect(beforeRun).toHaveBeenCalledWith({ host: "herdr", paneId: "w1:p2", workspaceId: "w1" });
+		expect(executor.exec).toHaveBeenCalledTimes(1);
+	});
 	it("splits from the caller pane and runs the command with Herdr 0.8 pane primitives", async () => {
 		process.env.HERDR_ENV = "1";
 		process.env.HERDR_PANE_ID = "w7:p3";

@@ -1,9 +1,9 @@
 import { runRealRecovery } from "./plan112-real-recovery.js";
 
 /** Every real cell selects an OS scenario explicitly; no fake fixture fallback. */
-export async function runRealFault(name: string): Promise<void> {
-	const local = (scenario: string) => runRealRecovery("headless", "same-process factory replacement", scenario);
-	const remote = (scenario: string) => runRealRecovery("headless", "parent crash-restart", scenario);
+export async function runRealFault(name: string, run = runRealRecovery): Promise<void> {
+	const local = (scenario: string) => run("headless", "same-process factory replacement", scenario);
+	const remote = (scenario: string) => run("headless", "parent crash-restart", scenario);
 	const handoff = /^ownership handoff: \/(new|resume|fork|reload) keeps/.exec(name);
 	if (handoff) return local(`handoff:${handoff[1]}`);
 	const crash = /^transition crash: (starting|pre-release|running|settling|post-manifest) preserves/.exec(name);
@@ -24,7 +24,10 @@ export async function runRealFault(name: string): Promise<void> {
 	if (name === "cleanup: same original anchor, unknown never means zero") return remote("cleanup:same");
 	if (name === "PID reuse denial: different anchor denies control and signals") return remote("stale-pid");
 	if (name === "cleanup: retained anchor lifetime and installation census") return remote("census");
-	if (name.includes("unknown") || name.includes("ambiguous-identity") || name.includes("different original anchor")) {
+	if (name === "cleanup: different original anchor, unknown never means zero") return remote("cleanup:different");
+	if (name === "ownership handoff: ambiguous-identity blocked with zero signal/delivery"
+		|| name === "PID reuse denial: unknown anchor denies control and signals"
+		|| name === "cleanup: unknown original anchor, unknown never means zero") {
 		throw new Error("capability: cannot force kernel identity inspection failure or PID recycling without replacing the real OS oracle; no fake fallback");
 	}
 	throw new Error(`real adapter incomplete: ${name}`);

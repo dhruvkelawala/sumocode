@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProcessTreeOperations } from "../background-tasks/process-tree.js";
+import { herdrTerminalHost } from "../terminal-host/herdr.js";
 import type { TerminalHost } from "../terminal-host/types.js";
 import { createPaneChildSpawner } from "./backend-pane.js";
 import { SubagentRegistry, type SubagentRecord } from "./registry.js";
@@ -42,7 +43,7 @@ function fixture(association = true) {
 	};
 	const host: TerminalHost = {
 		kind: "herdr", openCommandInSplit: vi.fn(), closePane: vi.fn(), notify: vi.fn(),
-		inspectPane: vi.fn<NonNullable<TerminalHost["inspectPane"]>>(async () => ({ ok: true, shellPid: 42, foregroundProcessGroupId: association ? 42 : 99, foregroundPids: [42] })),
+		inspectPane: vi.fn(herdrTerminalHost.inspectPane),
 		startAgentPane: vi.fn<NonNullable<TerminalHost["startAgentPane"]>>(async (_pi, launch) => {
 			expect(registry.get(record.id)).toMatchObject({ status: "starting", writerLease: { generation: 1 }, supervisor: expect.any(Object), child: null });
 			nonce = launch.shellCommand.split("'").at(-2)!;
@@ -52,7 +53,10 @@ function fixture(association = true) {
 	};
 	const owner = new RetainedVisibleSupervisor({ registry, initial: record,
 		supervisor: { identity: { pid: process.pid, processGroupId: process.pid, processStartTime: "owner-command" }, verification: { members: [{ pid: process.pid, processStartTime: "owner-birth" }] } },
-		launch: { prompt: "task", name: "worker", id: record.id, cwd: taskDir, host, pi: { exec: vi.fn() }, placement: { kind: "new-tab", label: "worker" } }, baseRef: "HEAD",
+		launch: { prompt: "task", name: "worker", id: record.id, cwd: taskDir, host, pi: { exec: vi.fn(async () => ({ code: 0, stderr: "", killed: false, stdout: JSON.stringify({ result: {
+			type: "pane_process_info", process_info: { pane_id: "pane:1", shell_pid: 42,
+				foreground_process_group_id: association ? 42 : 99, foreground_processes: [{ pid: 42 }] },
+		} }) })) }, placement: { kind: "new-tab", label: "worker" } }, baseRef: "HEAD",
 	}, { operations, spawn: createPaneChildSpawner({ processTree: operations, resolveLauncher: () => "/synthetic/sumocode" }),
 		buildManifest: async () => ({ baseRef: "HEAD", changedPaths: [], commits: 0, exit: "completed", durationMs: 1 }),
 	});

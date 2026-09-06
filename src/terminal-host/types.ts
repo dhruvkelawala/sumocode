@@ -22,6 +22,8 @@ export interface StartAgentPaneOptions {
 	cwd: string;
 	shellCommand: string;
 	placement: AgentPanePlacement;
+	/** Admit the new shell before submitting commands. Refusal preserves the pane for verified cleanup. */
+	beforeRun?(pane: PaneRef): Promise<void>;
 }
 
 export interface StartedAgentPane {

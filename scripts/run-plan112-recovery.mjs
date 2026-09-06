@@ -56,14 +56,18 @@ if (existsSync(manifest)) for (const line of readFileSync(manifest, "utf8").trim
 	const event = JSON.parse(line);
 	if (event.event === "spawn") spawned.push(event.pid);
 }
+const unverifiedPanes = [];
 for (const cell of readdirSync(root).filter((name) => name.startsWith("cell-"))) {
 	const path = join(root, cell, "anchor-spawn.json");
 	if (existsSync(path)) spawned.push(JSON.parse(readFileSync(path, "utf8")).pid);
+	const shell = join(root, cell, "pane-shell-birth.json");
+	if (existsSync(shell)) spawned.push(JSON.parse(readFileSync(shell, "utf8")).identity.pid);
+	else if (existsSync(join(root, cell, "pane-launch-intent"))) unverifiedPanes.push(cell);
 }
 const unregistered = spawned.filter((pid) => !births.some((tree) => tree.identity.pid === pid));
-const zeroOwned = census !== undefined && failures.length === 0 && unregistered.length === 0 && births.every((tree) =>
+const zeroOwned = unverifiedPanes.length === 0 && census !== undefined && failures.length === 0 && unregistered.length === 0 && births.every((tree) =>
 	systemProcessTree.isTreeEmpty(tree.identity, tree.verification) && !census.some((member) =>
 		tree.verification.members.some((birth) => member.pid === birth.pid && member.processStartTime === birth.processStartTime)));
-writeFileSync(join(root, "wrapper-zero-owned.json"), JSON.stringify({ zeroOwned, censusKnown: census !== undefined, groups: births.length, failures, unregistered, status }), { mode: 0o600 });
+writeFileSync(join(root, "wrapper-zero-owned.json"), JSON.stringify({ zeroOwned, censusKnown: census !== undefined, groups: births.length, failures, unregistered, unverifiedPanes, status }), { mode: 0o600 });
 process.stdout.write(`[plan112 wrapper] zero-owned: ${zeroOwned}; ${births.length} birth-registered groups; evidence: ${root}\n`);
 process.exitCode = zeroOwned ? status ?? 1 : 1;

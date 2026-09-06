@@ -673,6 +673,10 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 					cwd: options.cwd,
 					shellCommand,
 					placement: options.placement,
+					beforeRun: gate ? async () => {
+						if (launchBlocked || options.signal?.aborted) throw new Error("visible launch interrupted before command");
+						assertAuthority();
+					} : undefined,
 				});
 				if (!result.ok) {
 					if (gate) { assertAuthority(); blockLaunch(new Error(result.error)); return; }

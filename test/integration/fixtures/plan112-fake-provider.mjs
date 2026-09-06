@@ -18,7 +18,7 @@ export default function(pi) {
 		streamSimple(model, context) {
 			writeFileSync(directory + "/provider-called.pending", JSON.stringify({
 				promptPresent: JSON.stringify(context.messages).includes("synthetic recovery task"),
-				privateRolePresent: context.systemPrompt.includes("synthetic private role"),
+				privateRolePresent: (existsSync(directory + "/visible") ? JSON.stringify(context.messages) : context.systemPrompt).includes("synthetic private role"),
 				toolsEmpty: !context.tools?.length,
 			}), { mode: 0o600, flag: "wx" });
 			renameSync(directory + "/provider-called.pending", directory + "/provider-called.json");

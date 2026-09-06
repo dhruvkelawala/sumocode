@@ -202,9 +202,11 @@ function validatePiBuildGraph(piPkg, packageRoot) {
 		const require = createRequire(manifestPath);
 		for (const name of Object.keys({ ...manifest.peerDependencies, ...manifest.dependencies, ...manifest.optionalDependencies })) {
 			// Real package neighborhoods include pnpm siblings, not just child node_modules.
+			// Check candidate presence, not a public entry: private exports and manifestless
+			// modules are valid. A present candidate must pass containment before any fallback.
 			const dependency = require.resolve.paths(name)
 				.map((directory) => join(directory, name))
-				.find((directory) => existsSync(join(directory, "package.json")));
+				.find((directory) => existsSync(directory));
 			if (!dependency) {
 				if (Object.hasOwn(manifest.optionalDependencies ?? {}, name)
 					|| (manifest.peerDependenciesMeta?.[name]?.optional && !Object.hasOwn(manifest.dependencies ?? {}, name))) continue;

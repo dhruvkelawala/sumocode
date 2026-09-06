@@ -149,6 +149,46 @@ describe("native Pi build-source preparation", () => {
 		});
 	}
 
+	for (const scenario of ["optional without fallback", "required with contained fallback"]) {
+		it(`rejects an escaped manifestless pnpm neighbor: ${scenario}`, () => {
+			const { directory, root, piPkg, buildDir } = fixture("pnpm");
+			const lockPkg = join(root, "node_modules/.pnpm/lock@1/node_modules/proper-lockfile");
+			const name = "manifestless-neighbor";
+			write(join(lockPkg, "package.json"), JSON.stringify({
+				name: "proper-lockfile", main: "index.cjs",
+				[scenario.startsWith("optional") ? "optionalDependencies" : "dependencies"]: { [name]: "1" },
+			}));
+			const outside = join(directory, "outside-manifestless");
+			write(join(outside, "index.js"), 'throw new Error("fake source must never execute");\n');
+			symlinkSync(outside, join(dirname(lockPkg), name), "dir");
+			if (scenario.startsWith("required")) {
+				write(join(root, "node_modules", name, "package.json"), JSON.stringify({ name, main: "index.js" }));
+				write(join(root, "node_modules", name, "index.js"), 'module.exports = "later-contained";\n');
+			}
+			// Resolve the owned fixture without evaluating either candidate.
+			expect(createRequire(join(lockPkg, "index.cjs")).resolve(name)).toBe(join(outside, "index.js"));
+			expect(() => makeNativePiBuildCopy(piPkg, buildDir, root))
+				.toThrow(`Pi build dependency ${name} resolves outside ${root}: ${outside}`);
+			expect(existsSync(buildDir)).toBe(false);
+		});
+	}
+
+	it("links a contained manifestless pnpm neighbor", () => {
+		const { root, piPkg, buildDir } = fixture("pnpm");
+		const manifestPath = join(piPkg, "package.json");
+		const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+		manifest.optionalDependencies["manifestless-neighbor"] = "1";
+		write(manifestPath, JSON.stringify(manifest));
+		const neighbor = join(root, "manifestless-neighbor");
+		write(join(neighbor, "index.js"), 'module.exports = "contained-manifestless";\n');
+		symlinkSync(neighbor, join(piPkg, "../../manifestless-neighbor"), "dir");
+		expect(createRequire(manifestPath).resolve("manifestless-neighbor")).toBe(join(neighbor, "index.js"));
+		makeNativePiBuildCopy(piPkg, buildDir, root);
+		expect(realpathSync(join(buildDir, "node_modules/manifestless-neighbor"))).toBe(neighbor);
+		expect(createRequire(join(buildDir, "package.json")).resolve("manifestless-neighbor"))
+			.toBe(join(neighbor, "index.js"));
+	});
+
 	it("keeps contained pnpm neighbors, cycles and absent optionals without treating example manifests as dependencies", () => {
 		const { root, piPkg, buildDir } = fixture("pnpm");
 		const lockPkg = join(root, "node_modules/.pnpm/lock@1/node_modules/proper-lockfile");

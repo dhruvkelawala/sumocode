@@ -141,6 +141,8 @@ interface RetainedHeadlessOptions {
 	readonly attach?: { readonly cwd: string };
 	readonly launch: Omit<Parameters<typeof spawnPiChild>[0], "launchGate" | "signal">;
 	readonly baseRef: string;
+	/** Source process entry must stay alive through asynchronous settlement. */
+	readonly keepAlive?: boolean;
 }
 
 interface RetainedHeadlessDependencies {
@@ -208,7 +210,7 @@ export class RetainedHeadlessSupervisor {
 		this.heartbeat = setInterval(() => {
 			try { this.renew(); } catch { /* renew records authority loss locally. */ }
 		}, 20_000);
-		this.heartbeat.unref();
+		if (!options.keepAlive) this.heartbeat.unref();
 		// Own the handle before subscription (which can synchronously settle).
 		let subscriptionError: Error | undefined;
 		try {
@@ -301,6 +303,7 @@ export class RetainedHeadlessSupervisor {
 			clearInterval(this.heartbeat);
 			this.finish("settled");
 			this.notify();
+			this.listeners.clear();
 		} catch { this.fail("ambiguous"); }
 	}
 
@@ -321,6 +324,7 @@ export class RetainedHeadlessSupervisor {
 		clearInterval(this.heartbeat);
 		this.markUncertain(status);
 		this.finish(status);
+		this.listeners.clear();
 	}
 
 	private notify(): void {

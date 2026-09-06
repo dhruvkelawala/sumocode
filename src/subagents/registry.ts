@@ -271,6 +271,47 @@ export class SubagentRegistry {
 		this.directoryIdentity = lstatSync(directory);
 	}
 
+	/** The configured private installation directory, not the active session, bounds discovery. */
+	public discover(): Array<{ registry: SubagentRegistry; record: SubagentRecord }> {
+		this.assertDirectoryIdentity();
+		return readdirSync(this.directory).filter((name) => /^sa-[a-zA-Z0-9_-]+\.json$/.test(name)).map((name) => {
+			const path = join(this.directory, name);
+			assertPrivateArtifact(nodeArtifactFs, path, this.directory, "subagent discovery");
+			const value = readPrivateJson(path, MAX_RECORD_BYTES);
+			if (!validRecord(value)) throw new Error("corrupt discovered record");
+			const registry = new SubagentRegistry(this.directory, value.ownerSessionId, this.options);
+			this.assertDirectoryIdentity();
+			return { registry, record: registry.get(name.slice(0, -5))! };
+		});
+	}
+
+	/** A dead controller can be replaced without acquiring the surviving writer's lease. */
+	public recoverControl(id: string, revision: number, generation: number, sessionId: string): SubagentRecord {
+		if (!text(sessionId)) throw new Error("invalid controller session");
+		return this.change(id, revision, (record, now) => {
+			const owner = this.ownWriter();
+			const inspect = this.options.inspectWriter ?? inspectWriter;
+			const fence = (): void => {
+				const at = this.clock(record);
+				if ((record.controllerGeneration ?? 0) !== generation || record.controlReservation
+					|| !record.writerLease || at >= record.writerLease.expiresAt || inspect(record.writerLease.owner) !== "alive"
+					|| !record.controlLease || at < record.controlLease.expiresAt || inspect(record.controlLease.owner) !== "dead"
+					|| inspect(owner) !== "alive" || this.clock(record) >= record.writerLease.expiresAt) throw new SubagentLeaseConflict("controller recovery refused");
+			};
+			fence();
+			const head = record.controlHead + 1;
+			fence();
+			if (this.clock(record) >= now + 60_000) throw new SubagentLeaseConflict("recovery expired");
+			return { ...record, controllerSessionId: sessionId, controllerGeneration: generation + 1, controlHead: head,
+				controlLease: { owner, generation: head, renewedAt: now, expiresAt: now + 60_000 } };
+		});
+	}
+
+	public controllerState(id: string): "alive" | "dead" | "unknown" {
+		const lease = this.get(id)?.controlLease;
+		return lease ? (this.options.inspectWriter ?? inspectWriter)(lease.owner) : "unknown";
+	}
+
 	public writerState(id: string): "alive" | "dead" | "unknown" {
 		const lease = this.get(id)?.writerLease;
 		return lease ? (this.options.inspectWriter ?? inspectWriter)(lease.owner) : "unknown";

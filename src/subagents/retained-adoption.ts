@@ -4,20 +4,16 @@ import type { PiExecLike, TerminalHost } from "../terminal-host/types.js";
 import type { SubagentSnapshot } from "./domain.js";
 import type { RegistryControlAuthority, RegistryProcess, RegistryWriter, SubagentRecord, SubagentRegistry } from "./registry.js";
 import type { RetainedHeadlessSupervisor } from "./retained-supervisor.js";
+import { RetainedResults } from "./retained-results.js";
+import { controlAuthority, retainedControlClient } from "./retained-control.js";
+export { controlAuthority } from "./retained-control.js";
 
-/** The in-process owner boundary also permits retained visible supervisors. */
+/** Controller view over a local supervisor or its private file transport. */
 export interface RetainedSubagent {
 	readonly registry: SubagentRegistry;
 	readonly supervisor?: Pick<RetainedHeadlessSupervisor, "record" | "completion" | "subscribe" | "reserveControl" | "controllerChild">;
 	readonly snapshot: SubagentSnapshot;
 	readonly authority: RegistryControlAuthority;
-}
-
-export function controlAuthority(record: SubagentRecord): RegistryControlAuthority {
-	if (!record.controlLease) throw new Error("subagent has no control owner");
-	return { id: record.id, ownerSessionId: record.ownerSessionId,
-		controllerSessionId: record.controllerSessionId, controllerGeneration: record.controllerGeneration,
-		generation: record.controlLease.generation, owner: record.controlLease.owner, head: record.controlHead };
 }
 
 function sameAnchor(process: RegistryProcess, operations: ProcessTreeOperations): boolean {
@@ -38,6 +34,67 @@ export async function verifyRetained(record: SubagentRecord, operations: Process
 			|| !pane.foregroundPids.includes(identity.pid) || !sameAnchor(record.child, operations)) return "ambiguous";
 	}
 	return "verified";
+}
+
+/** A new host needs only its private registry namespace, never an old JS handle. */
+export async function reconstructRetained(registry: SubagentRegistry, successor: RegistryWriter, sessionId: string,
+	operations: ProcessTreeOperations, host?: TerminalHost, pi?: PiExecLike,
+): Promise<Array<{ entry: RetainedSubagent; classification: "adopted" | "persist-only" | "lost" | "ambiguous" }>> {
+	const results: Array<{ entry: RetainedSubagent; classification: "adopted" | "persist-only" | "lost" | "ambiguous" }> = [];
+	for (const { registry: discovered, record: initial } of registry.discover()) {
+		if (!initial.controlLease) continue;
+		const controller = discovered.forController(successor);
+		const snapshot: SubagentSnapshot = { id: initial.id, title: initial.id, prompt: "", cwd: initial.worktree?.path ?? initial.taskDir,
+			baseRef: initial.worktree?.baseRef ?? "HEAD", status: "running", createdAt: initial.createdAt, visible: initial.backend === "visible",
+			roleId: initial.roleId ?? undefined, modelLabel: initial.modelLabel ?? undefined, sessionFilePath: initial.sessionFilePath ?? undefined,
+			pane: initial.pane ?? undefined, worktree: initial.worktree ?? undefined, budget: initial.budget,
+			usage: { turns: 0 }, transcript: [], liveText: "", liveTools: [], finalText: "" };
+		let entry: RetainedSubagent = { registry: controller, authority: controlAuthority(initial), snapshot };
+		let classification: "adopted" | "persist-only" | "lost" | "ambiguous" = "ambiguous";
+		try {
+			const verified = await verifyRetained(initial, operations, host, pi);
+			classification = verified === "lost" ? "lost" : "ambiguous";
+			if (!initial.supervisor || initial.supervisor.identity.pid === successor.pid
+				|| !sameAnchor(initial.supervisor, operations) || controller.writerState(initial.id) !== "alive"
+				|| verified !== "verified") throw new Error("retained owner unverified");
+			RetainedResults.read(initial.taskDir);
+			const mirror = controller.controllerState(initial.id) === "alive";
+			const record = mirror ? initial : controller.recoverControl(initial.id, initial.revision, initial.controllerGeneration ?? 0, sessionId);
+			const authority = controlAuthority(record);
+			const fence = (): SubagentRecord => {
+				const current = controller.get(record.id)!;
+				if (!current.supervisor || !current.child || !sameAnchor(current.supervisor, operations)
+					|| !sameAnchor(current.child, operations) || controller.writerState(record.id) !== "alive") throw new Error("retained owner changed");
+				return current;
+			};
+			const supervisor: NonNullable<RetainedSubagent["supervisor"]> = {
+				get record() { return fence(); },
+				get completion() { return controller.get(record.id)?.status === "settled" ? RetainedResults.read(record.taskDir) : undefined; },
+				reserveControl: () => { throw new Error("remote transfer requires dead-controller recovery"); },
+				controllerChild: (grant) => {
+					if (mirror) throw new Error("persist-only controller");
+					fence();
+					return retainedControlClient(controller, grant);
+				},
+				subscribe: (listener) => {
+					let revision = record.revision;
+					const timer = setInterval(() => {
+						try {
+							const current = fence();
+							if (current.revision !== revision) { revision = current.revision; listener(current); }
+							if (current.status === "settled") clearInterval(timer);
+						} catch { clearInterval(timer); listener({ ...record, status: "ambiguous" }); }
+					}, 250);
+					timer.unref();
+					return () => { clearInterval(timer); };
+				},
+			};
+			entry = { ...entry, supervisor, authority };
+			classification = mirror ? "persist-only" : "adopted";
+		} catch { /* Refusal preserves the original process evidence and writer. */ }
+		results.push({ entry, classification });
+	}
+	return results;
 }
 
 export async function acquireRetained(

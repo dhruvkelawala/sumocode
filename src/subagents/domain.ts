@@ -59,7 +59,7 @@ export interface SubagentPaneRef {
 }
 
 export interface SubagentSnapshot extends Partial<SubagentBudgetState> {
-	readonly recovery?: "adopted" | "unsupported" | "lost" | "ambiguous";
+	readonly recovery?: "adopted" | "persist-only" | "unsupported" | "lost" | "ambiguous";
 	readonly budget?: SubagentBudget;
 	readonly startedAt?: number;
 	readonly id: string;

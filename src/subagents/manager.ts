@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { isAbsolute, join, relative } from "node:path";
 import { isDeepStrictEqual, promisify } from "node:util";
 import { captureProcessBirthTime, systemProcessTree, type ProcessTreeOperations } from "../background-tasks/process-tree.js";
-import { acquireRetained, verifyRetained, type RetainedSubagent } from "./retained-adoption.js";
+import { acquireRetained, reconstructRetained, verifyRetained, type RetainedSubagent } from "./retained-adoption.js";
 import type { RegistryWriter, SubagentRecord } from "./registry.js";
 import { createWorktree, resolveCreateOptions, type CreateWorktreeOptions, type CreateWorktreeResult } from "../git/worktree.js";
 import type { AgentPanePlacement, PiExecLike, TerminalHost } from "../terminal-host/types.js";
@@ -280,6 +280,20 @@ export class SubagentManager {
 		this.notify();
 	}
 
+	/** Installation-scoped disk discovery; no prior manager or backend handle is accepted. */
+	public async reconstruct(registry: RetainedSubagent["registry"], sessionId: string): Promise<void> {
+		for (const result of await reconstructRetained(registry, this.controllerIdentity, sessionId, this.operations, this.terminalHost, this.pi)) {
+			const id = result.entry.snapshot.id;
+			if (this.detached || this.snapshots.has(id)) continue;
+			this.retained.set(id, { entry: result.entry, blocked: true });
+			this.snapshots.set(id, result.entry.snapshot);
+			if (result.classification === "adopted" || result.classification === "persist-only") {
+				try { this.bindRetained(result.entry, result.classification === "persist-only"); } catch { this.blockRetained(id, "ambiguous"); }
+			} else this.blockRetained(id, result.classification);
+		}
+		this.notify();
+	}
+
 	public canDeliver(id: string): boolean {
 		const retained = this.retained.get(id);
 		if (this.detached || retained?.blocked) return false;
@@ -340,15 +354,15 @@ export class SubagentManager {
 		}
 	}
 
-	private bindRetained(entry: RetainedSubagent): void {
-		if (!entry.supervisor || !entry.registry.inspectControl(entry.authority)) throw new Error("retained control changed before observation");
+	private bindRetained(entry: RetainedSubagent, mirror = false): void {
+		if (!entry.supervisor || (!mirror && !entry.registry.inspectControl(entry.authority))) throw new Error("retained control changed before observation");
 		const id = entry.snapshot.id;
-		const tracked: TrackedRetained = { entry, blocked: false };
+		const tracked: TrackedRetained = { entry, blocked: mirror };
 		this.retained.set(id, tracked);
-		this.snapshots.set(id, { ...entry.snapshot, recovery: "adopted" });
-		this.children.set(id, { child: entry.supervisor.controllerChild(entry.authority), controller: new AbortController() });
+		this.snapshots.set(id, { ...entry.snapshot, recovery: mirror ? "persist-only" : "adopted" });
+		if (!mirror) this.children.set(id, { child: entry.supervisor.controllerChild(entry.authority), controller: new AbortController() });
 		const observe = (record: SubagentRecord): void => {
-			if (!this.canDeliver(id)) return;
+			if (this.detached || (!mirror && !this.canDeliver(id))) return;
 			const current = this.snapshots.get(id);
 			if (!current) return;
 			const telemetry = record.telemetry;
@@ -356,7 +370,7 @@ export class SubagentManager {
 				lastProgressAt: telemetry?.lastProgressAt ?? current.lastProgressAt,
 				lastHeartbeatAt: telemetry?.lastHeartbeatAt ?? current.lastHeartbeatAt,
 				usage: { ...current.usage, reportedTokens: telemetry?.reportedTokens ?? current.usage.reportedTokens, reportedCostUsd: telemetry?.reportedCostUsd ?? current.usage.reportedCostUsd } };
-			const completion = entry.supervisor?.completion;
+			const completion = record.status === "settled" ? entry.supervisor?.completion : undefined;
 			if (record.status === "settled" && completion) {
 				const outcome = completion.outcome;
 				if (!isSettled(current)) next = { ...next, status: outcome.kind === "completed" ? "done" : "error", settledAt: record.settledAt!, manifest: completion.manifest,
@@ -689,6 +703,10 @@ export class SubagentManager {
 				lines.set(id, `${id} was already ${settlingOutcome.kind === "completed" ? "done" : "settled"}`);
 				continue;
 			}
+			if (this.retained.get(id)?.blocked) {
+				lines.set(id, `${id} control unavailable; inspect retained evidence`);
+				continue;
+			}
 			this.consumedIds.add(id);
 			if (isSettled(snapshot)) {
 				lines.set(id, `${id} was already ${snapshot.status === "done" ? "done" : "settled"}`);
@@ -760,6 +778,10 @@ export class SubagentManager {
 			const settlingOutcome = this.settlingOutcomes.get(id);
 			if (settlingOutcome) {
 				lines.set(id, `${id} was already ${settlingOutcome.kind === "completed" ? "done" : "settled"}`);
+				continue;
+			}
+			if (this.retained.get(id)?.blocked) {
+				lines.set(id, `${id} control unavailable; inspect retained evidence`);
 				continue;
 			}
 			if (isSettled(snapshot)) {

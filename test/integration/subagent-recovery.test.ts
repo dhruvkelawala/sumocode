@@ -20,7 +20,7 @@ import { cleanupOwnedTree, type OwnedTree } from "./fixtures/subagent-feasibilit
 // Real mode is fail-closed until that adapter can register every group through
 // spawnSupervisedProcess/spawnPiPty and audit original births before release.
 const realMode = process.env.PLAN112_RECOVERY_BACKEND === "real";
-const REAL_BLOCKER = "REAL_BACKEND_UNIMPLEMENTED: production controller RPC/adoption adapter and birth-registered harness release/zero-owned audit are missing; no process launched";
+const REAL_BLOCKER = "REAL_BACKEND_UNIMPLEMENTED: real-process harness adapter and birth-registered release/zero-owned audit are missing; no process launched";
 const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
 	try {
@@ -38,7 +38,7 @@ function requireFakeBackend(): void {
 	}
 }
 
-function fixture(cut?: "starting" | "pre-release", backend: "headless" | "visible" = "headless") {
+function fixture(cut?: "starting" | "pre-release", backend: "headless" | "visible" = "headless", remoteControls = false) {
 	requireFakeBackend();
 	vi.useFakeTimers();
 	vi.setSystemTime(1000);
@@ -105,7 +105,7 @@ function fixture(cut?: "starting" | "pre-release", backend: "headless" | "visibl
 			const pending = child.send!(text, fence);
 			const file = join(taskDir, "control", `steer-${++seq}.txt`);
 			renameSync(file, `${file}.consumed`);
-			await vi.advanceTimersByTimeAsync(250);
+			if (!remoteControls) await vi.advanceTimersByTimeAsync(250);
 			await pending;
 		} };
 	});
@@ -115,7 +115,7 @@ function fixture(cut?: "starting" | "pre-release", backend: "headless" | "visibl
 		launch: { prompt: "synthetic task", cwd: taskDir, id: record.id, name: "worker", host, pi: { exec: vi.fn() }, placement: { kind: "new-tab", label: "worker" } }, baseRef: "HEAD",
 	}, { operations, spawn: visibleSpawn, buildManifest });
 	const managers: SubagentManager[] = [];
-	function install(session: string, token = session) {
+	function install(session: string, token = session, diskRecovery = false) {
 		type Handler = (event: { type: string; reason: string }, ctx: ExtensionContext) => void | Promise<void>;
 		const handlers = new Map<string, Handler>();
 		const delivery = vi.fn();
@@ -124,11 +124,15 @@ function fixture(cut?: "starting" | "pre-release", backend: "headless" | "visibl
 		const api = { on: (name: string, handler: Handler) => { handlers.set(name, handler); },
 			registerTool: (tool: Tool) => { tools.set(tool.name, tool); },
 			sendMessage: delivery, exec: vi.fn() };
+		const controller = { ...writer, token,
+			pid: remoteControls ? process.pid + (diskRecovery ? 2000 : 1000) : process.pid,
+			processStartTime: remoteControls ? `${token}-birth` : writer.processStartTime };
 		// SAFETY: this fake supplies the installer's public methods; tests invoke only id/ids tools.
 		const manager = installSubagents(api as never, {
 			spawnPiChild: () => { throw new Error("replacement must not respawn"); },
 			terminalHost: host,
-			managerDependencies: { controllerIdentity: { ...writer, token }, processOperations: operations },
+			retainedRegistry: diskRecovery ? registry.forController(controller) : undefined,
+			managerDependencies: { controllerIdentity: controller, processOperations: operations },
 		});
 		const fire = async (name: string, reason = "startup") => {
 			// SAFETY: lifecycle handlers use only idle/UI flags and the current session ID.
@@ -228,8 +232,39 @@ describe("production recovery matrix", () => {
 		for (const replacement of ["same-process factory replacement", "host-Pi reload", "parent crash-restart"] as const) {
 			it(`feasibility: ${backend} across ${replacement}`, async () => {
 				requireFakeBackend();
-				if (replacement !== "same-process factory replacement") throw new Error("CROSS_PROCESS_ADOPTION_MISSING: acquireRetained requires an in-process supervisor handle; no production disk/IPC controller reconstruction after host death");
-				await replaceAndComplete("new", true, backend);
+				if (replacement === "same-process factory replacement") await replaceAndComplete("new", true, backend);
+				else {
+					const f = fixture(undefined, backend, true);
+					const old = f.install("origin");
+					const oldAuthority = await f.track(old);
+					const original = f.owner.record;
+					expect(old.manager.controllerIdentity.pid).not.toBe(original.supervisor!.identity.pid);
+					// Fake kernel death, not a cooperative transfer or global replacement descriptor.
+					old.manager.detachForReplacement();
+					f.originState("dead");
+					// Advance lease time without replaying a minute of unrelated pane polling.
+					for (const elapsed of [20_000, 20_000, 20_001]) {
+						vi.setSystemTime(Date.now() + elapsed);
+						f.owner.renew();
+					}
+					const next = f.install(replacement === "host-Pi reload" ? "origin" : "successor", "successor", true);
+					await next.fire("session_start", "restart");
+					expect(f.registry.inspectControl(oldAuthority)).toBe(false);
+					expect(next.manager.get(f.record.id)?.recovery).toBe("adopted");
+					const steering = next.manager.sendTo(f.record.id, "steer after disk recovery");
+					await vi.advanceTimersByTimeAsync(1000);
+					await steering;
+					expect(f.send).toHaveBeenCalledExactlyOnceWith("steer after disk recovery");
+					await f.finish();
+					await vi.advanceTimersByTimeAsync(250);
+					expect(next.manager.get(f.record.id)).toMatchObject({ status: "done", finalText: "preserved result" });
+					await next.fire("agent_end"); await next.fire("agent_end");
+					expect(next.delivery).toHaveBeenCalledTimes(1);
+					expect(old.delivery).not.toHaveBeenCalled();
+					expect(f.owner.record).toMatchObject({ child: original.child, supervisor: original.supervisor, controllerGeneration: 1, delivery: { state: "sent" } });
+					expect(f.spawn).toHaveBeenCalledTimes(1);
+					expect(f.subscribe).toHaveBeenCalledTimes(1);
+				}
 			});
 		}
 	}

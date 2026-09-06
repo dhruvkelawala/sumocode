@@ -75,6 +75,8 @@ export interface SubagentsInstallOptions {
 	readonly spawnPaneChild?: typeof spawnPaneChild;
 	readonly spawnPiChild?: typeof spawnPiChild;
 	readonly managerDependencies?: SubagentManagerDependencies;
+	/** Explicit trusted installation namespace; absent keeps production retention disabled. */
+	readonly retainedRegistry?: import("./registry.js").SubagentRegistry;
 }
 
 export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOptions = {}): SubagentManager {
@@ -280,6 +282,7 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 			await manager.adoptFrom(previous, ctx.sessionManager.getSessionId());
 			pendingReplacements().delete(previous);
 		}
+		if (options.retainedRegistry) await manager.reconstruct(options.retainedRegistry, ctx.sessionManager.getSessionId());
 		publishStatusWidget();
 		if (ctx.isIdle()) flush();
 	});

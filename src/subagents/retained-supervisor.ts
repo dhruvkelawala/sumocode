@@ -8,6 +8,7 @@ import { retainedProcessTree, spawnPiChild, type HeadlessLaunchGate, type Spawne
 import type { RunOutcome, SubagentEvent, SubagentPaneRef } from "./domain.js";
 import { buildCompletionManifest, type CompletionManifestEvidence } from "./manifest.js";
 import { RetainedResults } from "./retained-results.js";
+import { serveRetainedControl } from "./retained-control.js";
 import { addReportedSubagentUsage } from "./budget-policy.js";
 import { SubagentRegistry, SubagentRevisionConflict, type RegistryControlAuthority, type RegistryControlSuccessor, type RegistryProcess, type SubagentRecord } from "./registry.js";
 
@@ -198,6 +199,7 @@ type Settlement = "settled" | "lost" | "ambiguous";
  * The process entry must account for its death before enabling retention.
  */
 class RetainedSupervisor {
+	private stopControl?: () => void;
 	private readonly authority: ReturnType<typeof prepareLaunch>;
 	private readonly registry: SubagentRegistry;
 	private readonly artifacts: RetainedResults;
@@ -236,6 +238,7 @@ class RetainedSupervisor {
 			try { this.renew(); } catch { /* renew records authority loss locally. */ }
 		}, 20_000);
 		if (!options.keepAlive) this.heartbeat.unref();
+		this.stopControl = serveRetainedControl(this.registry, options.initial.id, (authority) => this.controllerChild(authority));
 		// Own the handle before subscription (which can synchronously settle).
 		let subscriptionError: Error | undefined;
 		try {
@@ -382,6 +385,7 @@ class RetainedSupervisor {
 			this.completed = structuredClone({ outcome: result.outcome, manifest: { ...manifest, exit: outcome.kind } });
 			this.stopped = true;
 			clearInterval(this.heartbeat);
+			this.stopControl?.();
 			this.finish("settled");
 			this.notify();
 			this.listeners.clear();
@@ -404,6 +408,7 @@ class RetainedSupervisor {
 		this.stopped = true;
 		this.authority.gate.onRefused();
 		clearInterval(this.heartbeat);
+		this.stopControl?.();
 		this.markUncertain(status);
 		this.finish(status);
 		this.listeners.clear();

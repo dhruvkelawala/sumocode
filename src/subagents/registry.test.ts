@@ -42,6 +42,26 @@ function control(record: SubagentRecord): RegistryControlAuthority {
 }
 
 describe("SubagentRegistry control authority", () => {
+	it("preserves the live supervisor writer when a dead manager's successor requests session handoff", () => {
+		const { directory, record } = fixture();
+		let now = 1000;
+		const successorIdentity = { token: "successor", pid: 103, processStartTime: "birth-c" };
+		const options = { now: () => now, inspectWriter: (owner: RegistryWriter) => owner.token === writerB.token ? "dead" as const : "alive" as const };
+		const supervisor = new SubagentRegistry(directory, "session-a", { ...options, writerIdentity: writerA });
+		const successor = new SubagentRegistry(directory, "session-a", { ...options, writerIdentity: successorIdentity });
+		supervisor.create(record);
+		const held = supervisor.acquireWriter(record.id, 1, 100);
+		// Grant while the original manager is alive, then observe its death.
+		const grantor = new SubagentRegistry(directory, "session-a", { ...options, writerIdentity: writerA, inspectWriter: () => "alive" });
+		const granted = grantor.acquireControl(record.id, held.revision, held.writerLease!.generation, 0, writerB, 100);
+		now = 1100;
+		expect(() => successor.handoffController(record.id, granted.revision, 0, "session-b", 100)).toThrow(/controller lease is held/);
+		expect(successor.get(record.id)).toEqual(granted);
+		const renewed = supervisor.acquireWriter(record.id, granted.revision, 100);
+		expect(renewed.writerLease?.owner).toEqual(writerA);
+		expect(renewed.controllerSessionId).toBeUndefined();
+	});
+
 	it("explicitly hands controller identity to a successor only after writer death and expiry", () => {
 		const { directory, record } = fixture();
 		let now = 1000;

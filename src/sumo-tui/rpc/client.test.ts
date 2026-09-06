@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import type { spawn, ChildProcessWithoutNullStreams } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 import { CHILD_JSON_FRAME_MAX_BYTES, TRUNCATED_HEAD_MARKER } from "../../child-protocol.js";
 import { RpcChildExitError, SumoRpcClient, type SumoRpcClientOptions } from "./client.js";
@@ -50,7 +50,7 @@ class FakeRpcChild extends EventEmitter {
 	public readonly stdin = new FakeStream();
 	public readonly stdout = new FakeStream();
 	public readonly stderr = new FakeStream();
-	public readonly kill = vi.fn(() => {
+	public readonly kill = vi.fn((_signal?: NodeJS.Signals) => {
 		queueMicrotask(() => {
 			this.signalCode = "SIGTERM";
 			this.emit("exit", null, "SIGTERM");
@@ -98,6 +98,222 @@ describe("SumoRpcClient", () => {
 		expect(spawnSpy).not.toHaveBeenCalled();
 		expect(client.pid).toBe(child.pid);
 		await client.stop();
+	});
+
+	it.each(["parse", "frame", "error"] as const)("retains the post-adoption %s failure child and reap until SIGKILL and close", async (failure) => {
+		vi.useFakeTimers();
+		try {
+			const child = new FakeRpcChild();
+			child.kill.mockImplementation(() => true);
+			const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
+			const exited = vi.fn();
+			client.onExit(exited);
+			await client.start();
+			if (failure === "parse") child.stdout.emit("data", "invalid\ninvalid\ninvalid\n");
+			else if (failure === "frame") child.stdout.emit("data", "x".repeat(CHILD_JSON_FRAME_MAX_BYTES + 1));
+			else child.emit("error", new Error("child transport failed"));
+			expect(exited).toHaveBeenCalledOnce();
+			expect(client.adoptedChild).toBe(child);
+			expect(client.pid).toBeUndefined();
+			await vi.advanceTimersByTimeAsync(750);
+			const stopped = vi.fn();
+			const first = client.stop().then(stopped);
+			const second = client.stop().then(stopped);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(stopped).not.toHaveBeenCalled();
+			await vi.advanceTimersByTimeAsync(1_250);
+			expect(child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+			await vi.advanceTimersByTimeAsync(999);
+			expect(stopped).not.toHaveBeenCalled();
+			expect(client.adoptedChild).toBe(child);
+			child.signalCode = "SIGKILL";
+			child.emit("exit", null, "SIGKILL");
+			await vi.advanceTimersByTimeAsync(0);
+			expect(stopped).not.toHaveBeenCalled();
+			child.emit("close", null, "SIGKILL");
+			await Promise.all([first, second]);
+			expect(client.adoptedChild).toBeUndefined();
+			expect(exited).toHaveBeenCalledOnce();
+			expect(stopped).toHaveBeenCalledTimes(2);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it.each(["close", "exit", "stdout", "stderr", "error"] as const)("ignores late old-child %s after restart", async (event) => {
+		vi.useFakeTimers();
+		try {
+			const old = new FakeRpcChild();
+			const next = new FakeRpcChild();
+			const spawnFn = vi.fn(() => asPreSpawnedChild(old))
+				.mockReturnValueOnce(asPreSpawnedChild(old)).mockReturnValueOnce(asPreSpawnedChild(next));
+			// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: fake covers the client's piped-stdio overload, not spawn's nullable-stdio overloads.
+			const client = new SumoRpcClient({ command: "unused", args: [], spawnFn: spawnFn as unknown as typeof spawn });
+			const exited = vi.fn();
+			const events = vi.fn();
+			client.onExit(exited);
+			client.onEvent(events);
+			await client.start();
+			const stdout = old.stdout.listeners("data")[0]!;
+			const stderr = old.stderr.listeners("data")[0]!;
+			const exit = old.listeners("exit")[0]!;
+			old.kill.mockImplementation(() => true);
+			const stopping = client.stop();
+			old.exitCode = 0;
+			old.emit("exit", 0, null);
+			await vi.advanceTimersByTimeAsync(1_000);
+			await stopping;
+			await client.start();
+			next.stdout.emit("data", '{"type":"agent_start"}');
+			if (event === "stdout") stdout('{"type":"agent_end"}\n');
+			else if (event === "stderr") stderr("old stderr");
+			else if (event === "error") {
+				old.emit("error", new Error("late error"));
+				old.emit("error", new Error("another late error"));
+			} else if (event === "exit") exit(0, null);
+			else old.emit(event, 0, null);
+			expect(client.adoptedChild).toBe(next);
+			expect(client.pid).toBe(next.pid);
+			expect(client.stderr).toBe("");
+			expect(exited).not.toHaveBeenCalled();
+			expect(events).not.toHaveBeenCalled();
+			next.stdout.emit("data", "\n");
+			expect(events).toHaveBeenCalledExactlyOnceWith({ type: "agent_start" });
+			await client.stop();
+			expect(next.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it.each([
+		["noop", "SIGTERM"], ["false", "SIGTERM"], ["throw", "SIGTERM"], ["fatal", "SIGTERM"],
+		["noop", "SIGKILL"], ["false", "SIGKILL"], ["throw", "SIGKILL"], ["fatal", "SIGKILL"],
+	] as const)("rejects bounded %s reap, then permits explicit successful %s retry", async (mode, retrySignal) => {
+		vi.useFakeTimers();
+		const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			const child = new FakeRpcChild();
+			child.kill.mockImplementation(() => {
+				if (mode === "throw") throw new Error("kill denied");
+				return mode !== "false";
+			});
+			const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
+			await client.start();
+			if (mode === "fatal") child.emit("error", new Error("transport failed"));
+			const first = client.stop();
+			const second = client.stop();
+			const settled = vi.fn();
+			const result = Promise.allSettled([first, second]).then((results) => { settled(); return results; });
+			await vi.advanceTimersByTimeAsync(3_000);
+			expect(settled).toHaveBeenCalledOnce();
+			expect(first).toBe(second);
+			expect(await result).toEqual([
+				{ status: "rejected", reason: expect.objectContaining({ message: expect.stringContaining("still alive") }) },
+				{ status: "rejected", reason: expect.objectContaining({ message: expect.stringContaining("still alive") }) },
+			]);
+			expect(child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+			expect(client.adoptedChild).toBe(child);
+			await expect(client.start()).rejects.toThrow("already started");
+			expect(child.stdout.listenerCount("data")).toBe(0);
+			expect(child.listenerCount("exit")).toBe(1);
+			expect(child.listenerCount("close")).toBe(1);
+			expect(vi.getTimerCount()).toBe(0);
+			child.kill.mockImplementation((signal) => {
+				if (signal === retrySignal) queueMicrotask(() => {
+					child.signalCode = retrySignal;
+					child.emit("exit", null, retrySignal);
+					child.emit("close", null, retrySignal);
+				});
+				return true;
+			});
+			const retry = client.stop();
+			expect(retry).not.toBe(first);
+			expect(client.stop()).toBe(retry);
+			await vi.advanceTimersByTimeAsync(3_000);
+			await retry;
+			expect(child.kill.mock.calls.slice(2)).toEqual(retrySignal === "SIGTERM" ? [["SIGTERM"]] : [["SIGTERM"], ["SIGKILL"]]);
+			expect(client.adoptedChild).toBeUndefined();
+			expect(child.listenerCount("exit")).toBe(0);
+			expect(child.listenerCount("close")).toBe(0);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			logged.mockRestore();
+			vi.useRealTimers();
+		}
+	});
+
+	it.each(["SIGTERM", "SIGKILL"])("accepts false %s when exit state proves the child is dead", async (signal) => {
+		vi.useFakeTimers();
+		try {
+			const child = new FakeRpcChild();
+			child.kill.mockImplementation((sent) => {
+				if (sent === signal) child.exitCode = 0;
+				return false;
+			});
+			const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
+			await client.start();
+			const stopping = client.stop();
+			expect(client.stop()).toBe(stopping);
+			await vi.advanceTimersByTimeAsync(3_000);
+			await stopping;
+			expect(client.adoptedChild).toBeUndefined();
+			expect(child.listenerCount("exit")).toBe(0);
+			expect(child.listenerCount("close")).toBe(0);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not send an old async UI reply or apply an old write error after restart", async () => {
+		const old = new FakeRpcChild();
+		const next = new FakeRpcChild();
+		const spawnFn = vi.fn(() => asPreSpawnedChild(old))
+			.mockReturnValueOnce(asPreSpawnedChild(old)).mockReturnValueOnce(asPreSpawnedChild(next));
+		// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: fake covers the client's piped-stdio overload, not spawn's nullable-stdio overloads.
+		const client = new SumoRpcClient({ command: "unused", args: [], spawnFn: spawnFn as unknown as typeof spawn });
+		let finishUi!: () => void;
+		client.setUiRequestHandler(() => new Promise<void>((resolve) => { finishUi = resolve; }));
+		await client.start();
+		old.stdout.emit("data", '{"type":"extension_ui_request","id":"old-ui","method":"confirm"}\n');
+		const failed = client.send({ type: "get_state", id: "reused" }).catch((error: Error) => error);
+		const writeCallback = old.stdin.write.mock.calls[0]![1]!;
+		await client.stop();
+		expect(await failed).toBeInstanceOf(Error);
+		await client.start();
+		const response = client.send({ type: "get_state", id: "reused" });
+		writeCallback(new Error("late write failure"));
+		finishUi();
+		await Promise.resolve();
+		expect(next.stdin.write).toHaveBeenCalledOnce();
+		next.stdout.emit("data", '{"type":"response","id":"reused","success":true}\n');
+		await expect(response).resolves.toMatchObject({ success: true });
+		await client.stop();
+	});
+
+	it("bounds the shared reap when an exited child's stdio never closes", async () => {
+		vi.useFakeTimers();
+		try {
+			const child = new FakeRpcChild();
+			const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
+			await client.start();
+			child.exitCode = 1;
+			child.emit("exit", 1, null);
+			const stopped = vi.fn();
+			const stopping = client.stop().then(stopped);
+			await vi.advanceTimersByTimeAsync(2_999);
+			expect(stopped).not.toHaveBeenCalled();
+			await vi.advanceTimersByTimeAsync(1);
+			await stopping;
+			expect(child.kill).not.toHaveBeenCalled();
+			expect(child.stdout.listenerCount("data")).toBe(0);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("does not resolve deliberate stop until child stdio closes", async () => {
@@ -164,6 +380,17 @@ describe("SumoRpcClient", () => {
 		expect(resolved).toBe(false);
 		await started;
 		await client.stop();
+	});
+
+	it.each(["setup", "adoption"] as const)("reaps partial client startup after %s rejection", async (failure) => {
+		const child = new FakeRpcChild();
+		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
+		if (failure === "setup") vi.spyOn(child.stdout, "on").mockImplementationOnce(() => { throw new Error("setup failed"); });
+		await expect(client.start(() => { throw new Error("adoption failed"); })).rejects.toThrow(`${failure} failed`);
+		expect(client.adoptedChild).toBe(child);
+		await Promise.all([client.stop(), client.stop()]);
+		expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+		expect(client.adoptedChild).toBeUndefined();
 	});
 
 	it("reports a pre-spawn error captured before host adoption", async () => {

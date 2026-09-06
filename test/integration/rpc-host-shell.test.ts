@@ -730,6 +730,38 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		expect(app.getCurrentTerminalState().altscreenActive).toBe(false);
 	}, 30_000);
 
+	it("awaits the adopted protocol-failure reap before publishing host exit", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-adopted-protocol-reap-"));
+		const piBin = join(directory, "stalled-pi");
+		const pidFile = join(directory, "pid");
+		const exitCodeFile = join(directory, "exit-code");
+		await writeFile(piBin, `#!/usr/bin/env node
+process.on('SIGTERM', () => {});
+require('node:fs').writeFileSync(process.env.PID_FILE, String(process.pid));
+// A host request proves adoption; corrupt output must not abandon this child.
+process.stdin.once('data', () => process.stdout.write('invalid\\ninvalid\\ninvalid\\n'));
+process.stdin.resume();
+setInterval(() => {}, 1000);
+`, { mode: 0o700 });
+		app = spawnPiPty({
+			command: process.execPath,
+			args: [join(process.cwd(), "sumo-rpc-host.js")],
+			env: {
+				PI_BIN: piBin,
+				PID_FILE: pidFile,
+				PI_CODING_AGENT_DIR: join(directory, "agent"),
+				SUMOCODE_EXIT_CODE_FILE: exitCodeFile,
+			},
+			cols: 100,
+			rows: 30,
+		});
+		const pid = await waitForPid(pidFile);
+		await waitForFileText(exitCodeFile, "1", 1_000);
+		// Check at publication, not after a cleanup/wait that could hide a leak.
+		expect(() => process.kill(pid, 0)).toThrow();
+		expect(app.getCurrentTerminalState().altscreenActive).toBe(false);
+	}, 30_000);
+
 	it("reaps an adopted SIGTERM-ignoring child across repeated signals", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-adopted-repeat-signal-"));
 		const piBin = join(directory, "stalled-pi");

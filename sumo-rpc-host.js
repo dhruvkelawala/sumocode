@@ -83,6 +83,7 @@ const RELOAD_FALLBACK_TERMINAL_CLEANUP =
 let preSpawnedChild;
 let relayingEarlySignal = false;
 let earlyCleanupPromise;
+let terminatePromise;
 const handleEarlySigint = () => relayEarlySignal("SIGINT");
 const handleEarlySigterm = () => relayEarlySignal("SIGTERM");
 
@@ -116,20 +117,31 @@ async function waitForPreSpawnedChildExit(timeoutMs) {
 	});
 }
 
-async function terminateUnadoptedChild() {
-	if (childHasExited()) return;
+function terminateUnadoptedChild() {
+	terminatePromise ??= reapUnadoptedChild();
+	return terminatePromise;
+}
+
+async function reapUnadoptedChild() {
+	if (childHasExited()) return true;
 	try {
 		preSpawnedChild.kill("SIGTERM");
 	} catch {
 		// The process may have exited between the state check and kill.
 	}
-	if (await waitForPreSpawnedChildExit(PRE_ADOPTION_KILL_GRACE_MS)) return;
+	if (await waitForPreSpawnedChildExit(PRE_ADOPTION_KILL_GRACE_MS)) return true;
 	try {
 		preSpawnedChild.kill("SIGKILL");
 	} catch {
 		// SIGTERM may have landed at the grace boundary.
 	}
-	await waitForPreSpawnedChildExit(PRE_ADOPTION_KILL_GRACE_MS);
+	const reaped = await waitForPreSpawnedChildExit(PRE_ADOPTION_KILL_GRACE_MS);
+	if (!reaped) {
+		const evidence = { pid: preSpawnedChild?.pid ?? null, exitCode: preSpawnedChild?.exitCode ?? null, signalCode: preSpawnedChild?.signalCode ?? null };
+		writeStartupMark("rpc_entry_child_reap_failed", evidence);
+		try { process.stderr.write(`[sumocode-rpc] child unreaped after SIGTERM/SIGKILL deadline; identity snapshot ${JSON.stringify(evidence)}\n`); } catch {}
+	}
+	return reaped;
 }
 
 function releasePreAdoptionSignalHandlers() {
@@ -153,7 +165,7 @@ function relayEarlySignal(signal) {
 	// Keep both guarded listeners installed until child reaping finishes. Any
 	// repeated signal re-enters this function, sees relayingEarlySignal, and is
 	// suppressed instead of restoring Node's default disposition mid-cleanup.
-	earlyCleanupPromise = terminateUnadoptedChild().finally(() => {
+	earlyCleanupPromise = terminateUnadoptedChild().then((reaped) => {
 		releasePreAdoptionSignalHandlers();
 		// A reload predecessor left raw/altscreen modes active. If this successor
 		// is signalled before adoption, no runtime exists to restore them.
@@ -161,7 +173,7 @@ function relayEarlySignal(signal) {
 		// Match the steady-state host contract: SIGTERM is a graceful exit, while
 		// SIGINT is 130. Record the side channel before exiting so bash never
 		// substitutes a timing-dependent 143 for an early SIGTERM.
-		const code = signal === "SIGTERM" ? 0 : 130;
+		const code = reaped ? (signal === "SIGTERM" ? 0 : 130) : 1;
 		const exitCodePath = process.env.SUMOCODE_EXIT_CODE_FILE;
 		if (exitCodePath) {
 			try {
@@ -253,9 +265,13 @@ try {
 		mod = await importSourceHost();
 	}
 } catch (error) {
-	await terminateUnadoptedChild();
+	const reaped = await terminateUnadoptedChild();
 	releasePreAdoptionSignalHandlers();
 	restoreFailedReloadTerminal();
+	if (!reaped && !relayingEarlySignal) {
+		try { process.stderr.write(`${String(error)}\n`); } catch {}
+		process.exit(1);
+	}
 	throw error;
 }
 writeStartupMark("host_import_ready", { mode: hostMode });
@@ -274,36 +290,35 @@ if (Number.isFinite(preMainTestDelayMs) && preMainTestDelayMs > 0) {
 // cleanup has started; the early handler owns the child reap and process exit.
 if (relayingEarlySignal) {
 	await earlyCleanupPromise;
-	process.exit(0);
-}
-
-let childAdopted = false;
-try {
-	await mod.main({
-		preSpawnedChild,
-		onPreSpawnedChildAdopted: () => {
-			childAdopted = true;
-			releasePreAdoptionSignalHandlers();
-		},
-		env: {
-			...process.env,
-			SUMOCODE_ROOT_DIR: root,
-			SUMOCODE_PROJECT_CWD: process.env.SUMOCODE_PROJECT_CWD ?? process.cwd(),
-		},
-		shouldAbortAdoption: () => relayingEarlySignal,
-	});
-} catch (error) {
-	// main() can reject before SumoRpcClient adopts the pre-spawned child
-	// (Yoga/config/runtime initialization). The entry still owns it then, and a
-	// reload predecessor may have deliberately left terminal modes active.
-	await terminateUnadoptedChild();
-	if (!childAdopted) restoreFailedReloadTerminal();
-	throw error;
-} finally {
-	// When an early signal is relaying (e.g. main() aborted adoption while the
-	// SIGTERM-ignoring child is still in its reap grace), keep the guarded entry
-	// handlers installed: relayEarlySignal's own cleanup releases them after the
-	// reap and then exits, so a repeated signal stays suppressed instead of
-	// hitting Node's default disposition mid-cleanup.
-	if (!relayingEarlySignal) releasePreAdoptionSignalHandlers();
+} else {
+	let childAdopted = false;
+	try {
+		await mod.main({
+			preSpawnedChild,
+			onPreSpawnedChildAdopted: () => {
+				childAdopted = true;
+				releasePreAdoptionSignalHandlers();
+			},
+			env: {
+				...process.env,
+				SUMOCODE_ROOT_DIR: root,
+				SUMOCODE_PROJECT_CWD: process.env.SUMOCODE_PROJECT_CWD ?? process.cwd(),
+			},
+			shouldAbortAdoption: () => relayingEarlySignal,
+		});
+	} catch (error) {
+		// Before adoption the entry still owns the child and retained terminal.
+		if (!childAdopted) {
+			const reaped = await terminateUnadoptedChild();
+			restoreFailedReloadTerminal();
+			if (!reaped && !relayingEarlySignal) {
+				try { process.stderr.write(`${String(error)}\n`); } catch {}
+				process.exit(1);
+			}
+		}
+		throw error;
+	} finally {
+		// Early-signal cleanup keeps its guarded listeners until reaping ends.
+		if (!relayingEarlySignal) releasePreAdoptionSignalHandlers();
+	}
 }

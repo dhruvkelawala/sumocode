@@ -19,7 +19,8 @@ import type { ChatPagerReplaceStats } from "../widgets/chat-pager.js";
 import { ModalLayer } from "../widgets/modal-layer.js";
 import { NotificationCenter } from "../widgets/notification.js";
 import { RpcChildExitError, SumoRpcClient, truncateForNotification } from "./client.js";
-import { ChromeCacheWorkerClient, drainChromeCacheForShutdown } from "./chrome-cache-worker-client.js";
+import { ChromeCacheWorkerClient } from "./chrome-cache-worker-client.js";
+import { RpcHostLifecycle, writeExitCodeFile } from "./host-lifecycle.js";
 import { RpcHostControls } from "./controls.js";
 import { createRpcKeybindingsManager, RpcHostEditorController } from "./editor.js";
 import { createRpcExtensionUiResponder } from "./extension-ui-responder.js";
@@ -47,7 +48,8 @@ import { RpcHostStateStore, type RpcHostChromeState } from "./state.js";
 import { RpcTranscriptPump } from "./transcript-pump.js";
 import { rpcVisualFixtureFromEnv } from "./visual-fixtures.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
-import { defaultTerminalSessionOwner } from "../runtime/terminal-controller.js";
+
+export { createUnhandledRejectionHandler, writeExitCodeFile, type UnhandledRejectionShutdownOptions } from "./host-lifecycle.js";
 
 const DEFERRED_SELECTOR_ACTION_KEY = "selector-open";
 const DEFERRED_MODEL_CYCLE_ACTION_KEY = "model-cycle";
@@ -82,10 +84,6 @@ function writeLine(stream: Pick<NodeJS.WriteStream, "write">, line: string): voi
 function writeTerminalTitle(stream: Pick<NodeJS.WriteStream, "write">, title: string): void {
 	// oxlint-disable-next-line no-control-regex -- intentional control-byte strip so OSC titles stay single-line
 	stream.write(`\u001b]0;${title.replace(/[\x00-\x1F\x7F-\x9F]/g, "")}\u0007`);
-}
-
-function formatUnknownError(cause: unknown): string {
-	return cause instanceof Error ? cause.stack ?? cause.message : String(cause);
 }
 
 function valuesEqual(left: readonly unknown[] | undefined, right: readonly unknown[] | undefined): boolean {
@@ -239,27 +237,6 @@ function treeSummaryMode(request: { readonly summarize: boolean; readonly custom
 	return request.customInstructions === undefined ? "default" : "custom";
 }
 
-export interface UnhandledRejectionShutdownOptions {
-	readonly stderr: Pick<NodeJS.WriteStream, "write">;
-	readonly cleanup: (code: number) => Promise<void>;
-	readonly exit: (code: number) => void;
-}
-
-export function createUnhandledRejectionHandler(options: UnhandledRejectionShutdownOptions): (cause: unknown) => void {
-	let shutdown: Promise<void> | undefined;
-	return (cause: unknown): void => {
-		if (shutdown) return;
-		shutdown = (async () => {
-			writeLine(options.stderr, `[sumocode-rpc] unhandled rejection: ${formatUnknownError(cause)}`);
-			await options.cleanup(1);
-			options.exit(1);
-		})().catch((error) => {
-			writeLine(options.stderr, `[sumocode-rpc] unhandled rejection cleanup failed: ${formatUnknownError(error)}`);
-			options.exit(1);
-		});
-	};
-}
-
 function hostRoot(env: NodeJS.ProcessEnv): string {
 	return resolve(env.SUMOCODE_ROOT_DIR ?? process.cwd());
 }
@@ -277,42 +254,6 @@ function piBinary(env: NodeJS.ProcessEnv): string {
 // Static import above lets Bun inline the helper in the native executable;
 // the Node host bundle still copies the same .mjs sibling for its existing
 // runtime path.
-
-/**
- * Writes this host process's final exit code to the out-of-band file
- * bin/sumocode.sh points at via SUMOCODE_EXIT_CODE_FILE, so the launcher's
- * respawn loop can read the host's REAL exit code instead of trusting bash
- * 3.2's `wait`-based recovery (`wait_for_child_exit` in bin/sumocode.sh),
- * which was verified unreliable in this environment: a SIGTERM-graceful
- * shutdown that this host resolves as exit 0 was observed surfacing to the
- * launcher as 143 (128+SIGTERM) instead, because the backgrounded job's
- * status as bash's `wait` builtin reports it does not always reflect the
- * process's own chosen exit code on a graceful signal-triggered shutdown path
- * under macOS bash 3.2.
- *
- * This is the SINGLE choke point every host exit path funnels through
- * (normal return via main(), the reload exit-100 path, every
- * process.exit(...) call site, and both signal handlers) -- see runRpcHost
- * and main() below for each call site. Synchronous by design: an async write
- * racing a subsequent process.exit(code) could be truncated or dropped
- * entirely before it reaches disk.
- *
- * Silently no-ops (never throws) when the env var is unset (e.g. under
- * vitest/unit tests that construct runRpcHost's dependencies directly,
- * pre-existing manual runs of sumo-rpc-host.js without the launcher, or a
- * write failure) -- this is a best-effort side channel the launcher falls
- * back away from when absent or unparseable, never a hard requirement for
- * the host to actually exit.
- */
-export function writeExitCodeFile(env: NodeJS.ProcessEnv, code: number): void {
-	const path = env.SUMOCODE_EXIT_CODE_FILE;
-	if (!path) return;
-	try {
-		writeFileSync(path, String(code));
-	} catch {
-		// Best-effort; the launcher falls back to bash's own wait status.
-	}
-}
 
 function activityPresentation(snapshot: ActivityStoreSnapshot) {
 	const presentation = {
@@ -651,6 +592,7 @@ export interface RpcHostExitDependencies {
 	readonly stateStore: Pick<RpcHostStateStore, "getSnapshot">;
 	readonly notifications: Pick<NotificationCenter, "notify">;
 	readonly requestRender: () => void;
+	readonly recordExitCode: (code: number) => void;
 	readonly stopHost: (code: number) => Promise<void>;
 	readonly exit: (code: number) => void;
 	readonly updateRuntimeState: (state: RpcHostChromeState) => void;
@@ -675,8 +617,9 @@ export interface RpcHostExitDependencies {
  * must propagate that same code and skip the scary "exited unexpectedly"
  * notification, which would otherwise flash on every routine reload.
  *
- * For any other exit, the runtime is stopped with a nonzero exit code after a
- * short delay so the terse notification is actually visible before the
+ * For any other exit, record the nonzero root exit code immediately. Only
+ * cleanup waits for the notification delay; urgent shutdown may cut it short
+ * without losing the failure. The terse notification stays visible before the
  * terminal is restored -- a zombie shell with a dead child behind it cannot
  * do anything useful, so keeping it alive indefinitely is not an option.
  */
@@ -686,6 +629,7 @@ export function createRpcExitHandler(deps: RpcHostExitDependencies): (error: Err
 	const exitCode = deps.exitCode ?? 1;
 	return (error: Error): void => {
 		const reloadCode = error instanceof RpcChildExitError && error.code === SUMOCODE_RELOAD_EXIT_CODE ? error.code : undefined;
+		deps.recordExitCode(reloadCode ?? exitCode);
 		deps.modals.close();
 		deps.overlays.drain();
 		deps.selector?.close();
@@ -907,9 +851,7 @@ export function createToolsExpandToggleHandler(deps: RpcHostToolsExpandDependenc
 }
 
 export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<number> {
-	const argv = [...(options.argv ?? process.argv.slice(2))];
 	const env = options.env ?? process.env;
-	const isReloadResume = env.SUMOCODE_RELOAD === "1";
 	// Pin pi-tui's terminal image capability OFF for the host: the retained
 	// CellBuffer renderer diffs styled cells and cannot pass Kitty/iTerm2
 	// graphics escape sequences through (verified: the APC payload is
@@ -921,24 +863,21 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const stdout = options.stdout ?? process.stdout;
 	const stdin = options.stdin ?? process.stdin;
 	const stderr = options.stderr ?? process.stderr;
-	// Every host exit path funnels its final code through this one closure --
-	// see writeExitCodeFile's doc comment for why the launcher needs this
-	// out-of-band signal instead of trusting bash 3.2's `wait`-based recovery.
-	// Wraps process.exit itself (rather than being threaded through each
-	// dependency-injection object below) so this is the single place that can
-	// never be bypassed by a new exit call site added later.
-	let requestedHostExitCode: number | undefined;
-	const exitProcess = (code: number): void => {
-		requestedHostExitCode = code;
-		writeExitCodeFile(env, code);
-		if (options.exit) options.exit(code);
-		else process.exit(code);
-	};
+	const lifecycle = new RpcHostLifecycle({ env, input: stdin, stderr, exit: options.exit, onChildAdopted: options.onPreSpawnedChildAdopted });
 	if (stdout.isTTY !== true) {
 		writeExitCodeFile(env, 70);
 		writeLine(stderr, "[sumocode-rpc] RPC host requires a TTY; use node-pty or an interactive terminal.");
 		return 70;
 	}
+	return lifecycle.start(() => runRpcHostSession(options, lifecycle));
+}
+
+async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHostLifecycle): Promise<number> {
+	const argv = [...(options.argv ?? process.argv.slice(2))];
+	const env = options.env ?? process.env;
+	const isReloadResume = env.SUMOCODE_RELOAD === "1";
+	const stdout = options.stdout ?? process.stdout;
+	const stdin = options.stdin ?? process.stdin;
 	const root = hostRoot(env);
 	const cwd = hostCwd(env);
 	const settingsManager = SettingsManager.create(cwd);
@@ -953,6 +892,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		modulePath: resolve(root, "src/sumo-tui/rpc/chrome-cache.ts"),
 		operationDelayMs: Number.isFinite(chromeCacheTestDelayMs) ? Math.max(0, chromeCacheTestDelayMs) : 0,
 	});
+	lifecycle.ownCache(chromeCache, cwd);
 	// Resolve and apply the configured theme before the runtime/shell is
 	// constructed so the host's first frame already renders the user's theme
 	// instead of the registry default (Cathedral). The RPC child process never
@@ -971,6 +911,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		preSpawnedChild: options.preSpawnedChild,
 		onRpcReady: () => logDiagnostic("rpc_child_ready"),
 	});
+	lifecycle.ownClient(client, terminalIndexGate);
 	let runtime: RpcHostRuntime | undefined;
 	// The B9 diffing chat sink: `TranscriptController` (owned by
 	// `transcriptPump`) is constructed here, before `runtime`/its
@@ -986,6 +927,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		rootDir: stateRoot,
 		onDiagnostic: (diagnostic) => logDiagnostic("activity_store_diagnostic", { ...diagnostic }),
 	});
+	lifecycle.ownResource("activity", activityStore);
 	let latestActivitySnapshot = activityStore.getSnapshot();
 	let deferActivityRuntimeUpdate = false;
 	const sessionEvents = new RpcSessionEventBuffer();
@@ -1002,7 +944,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		readonly startedAt: number;
 	}
 	let treeNavigationCapture: TreeNavigationCapture | undefined;
-	const unsubscribeActivityStore = activityStore.subscribe((snapshot) => {
+	lifecycle.ownSubscription("activity", activityStore.subscribe((snapshot) => {
 		const rpcSessionId = stateStore.getSnapshot().sessionId;
 		if (!activitySnapshotMatchesSession(snapshot, rpcSessionId)) return;
 		latestActivitySnapshot = snapshot;
@@ -1012,45 +954,13 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			activityCount: snapshot.activities.length,
 		});
 		if (!deferActivityRuntimeUpdate) runtime?.update({ activities: activityPresentation(snapshot) });
-	});
+	}));
 	const requestRender = (): void => runtime?.requestRender();
 	const pushState = (state?: RpcHostChromeState): void => {
 		runtime?.update({ state: state ?? stateStore.getSnapshot() });
 	};
-	let lastChromeCacheWrite: Promise<void> = Promise.resolve();
-	const cacheChromeState = (state: RpcHostChromeState): void => {
-		if (visualFixture) return;
-		lastChromeCacheWrite = chromeCache.write(cwd, {
-			modelLabel: state.modelLabel,
-			thinkingLevel: state.thinkingLevel,
-		}).catch(() => undefined);
-	};
-	let pendingChromeCacheState: RpcHostChromeState | undefined;
-	let pendingChromeCacheWrite: ReturnType<typeof setImmediate> | undefined;
 	const scheduleChromeCacheState = (state = stateStore.getSnapshot()): void => {
-		if (visualFixture) return;
-		pendingChromeCacheState = state;
-		if (pendingChromeCacheWrite) return;
-		pendingChromeCacheWrite = setImmediate(() => {
-			pendingChromeCacheWrite = undefined;
-			const pending = pendingChromeCacheState;
-			pendingChromeCacheState = undefined;
-			if (pending) cacheChromeState(pending);
-		});
-		pendingChromeCacheWrite.unref?.();
-	};
-	const flushChromeCacheState = async (): Promise<void> => {
-		if (visualFixture) return;
-		for (;;) {
-			if (pendingChromeCacheWrite) clearImmediate(pendingChromeCacheWrite);
-			pendingChromeCacheWrite = undefined;
-			const pending = pendingChromeCacheState;
-			pendingChromeCacheState = undefined;
-			if (pending) cacheChromeState(pending);
-			const write = lastChromeCacheWrite;
-			await write;
-			if (!pendingChromeCacheState && lastChromeCacheWrite === write) return;
-		}
+		if (!visualFixture) lifecycle.cacheChrome(state);
 	};
 	const pushStateAndCacheChrome = (state?: RpcHostChromeState): void => {
 		pushState(state);
@@ -1061,25 +971,6 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	};
 	const treeNavigationOutcomeBroker = new InMemoryRpcTreeNavigationOutcomeBroker();
 	const controls = new RpcHostControls(client, stateStore, { onOptimisticChange: pushState, treeNavigationOutcomeBroker });
-	let stopHost: (code: number) => Promise<void> = async (code: number): Promise<void> => {
-		runtime?.stop(code);
-		await client.stop();
-	};
-	const handleUnhandledRejection = createUnhandledRejectionHandler({
-		stderr,
-		cleanup: (code) => stopHost(code),
-		exit: exitProcess,
-	});
-	process.on("unhandledRejection", handleUnhandledRejection);
-	// A synchronous throw from the event -> render path (e.g. a listener
-	// registered via client.onEvent, which runs transcript ingestion + a full
-	// render synchronously) is an uncaughtException, not an unhandledRejection
-	// -- Plan 025 only installed the latter, so a sync throw there had no
-	// terminal-restoring handler at all and could leave the terminal in raw
-	// mode / altscreen after the process died. Reuse the exact same handler
-	// (same stop()-then-exit(1) path, same duplicate-event guard) for both
-	// events so a sync throw and an async rejection are torn down identically.
-	process.once("uncaughtException", handleUnhandledRejection);
 	const hostTerminal = {
 		get columns(): number {
 			return Math.max(1, stdout.columns ?? 80);
@@ -1102,6 +993,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		keybindings: {} as never,
 		onChange: requestRender,
 	});
+	lifecycle.ownResource("regions", regionRegistry);
 	const statusPublication = new ExtensionStatusPublication();
 	regionRegistry.mountStatus(statusPublication.component);
 	const modals = new ModalLayer({
@@ -1112,8 +1004,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const overlays = new RpcHostOverlayManager(requestRender);
 	const notifications = new NotificationCenter({ onChange: requestRender });
 	let actions: RpcHostActions | undefined;
-	let regionRegistryDisposed = false;
-	let requestHostExit: (code: number) => void = () => undefined;
+	const requestHostExit = (code: number): void => { void lifecycle.stop(code, "request"); };
 	// Forward reference: the editor's `onInterrupt` callback (registered below,
 	// on construction) must route `app.interrupt` through the same interrupt
 	// tier module Ctrl-C/Escape already use (`createRpcHostInterruptHandler`,
@@ -1164,7 +1055,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	});
 	const hydrationActionGate = new InitialHydrationActionGate(initialHydration, {
 		onReady: () => {
-			runtime?.markCommandReady();
+			if (lifecycle.stopping) return;
+			lifecycle.markCommandReady();
 			// The RPC child polls this private gate without touching the Pi command
 			// stream; wrappers inherit the path and cannot swallow the readiness cue.
 			// The state root is not guaranteed to exist yet on source-mode runs, and
@@ -1230,8 +1122,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// app.exit (Ctrl+D by default, or the user's keybindings.json remap):
 		// CustomEditor only invokes this when the editor is empty (enforced
 		// inside CustomEditor itself -- see editor.ts's onExit doc comment).
-		// Same clean-shutdown path as `/quit` (host-actions.ts: `onExitRequest(0)`
-		// -> here, `requestHostExit(0)` -> `runtime?.stop(0)`).
+		// Shares the lifecycle shutdown path with `/quit`.
 		onExit: () => requestHostExit(0),
 		// app.interrupt (Escape by default, or the user's remap): replay into
 		// the interrupt tier module (see `handleAppInterrupt` above).
@@ -1321,8 +1212,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		runtime?.endSessionReplacement();
 		for (const event of events) processAgentEvent(event);
 	};
-	let sessionHydrationRetryTimer: ReturnType<typeof setTimeout> | undefined;
 	const treeNavigationRetryScheduler = createRpcTreeNavigationRetryScheduler();
+	lifecycle.ownTreeRetry(treeNavigationRetryScheduler);
 	let treeNavigationRecovery: {
 		readonly outcome?: RpcTreeNavigationOutcome;
 		readonly entryCount: number;
@@ -1331,8 +1222,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		readonly releaseAfterRecovery?: boolean;
 	} | undefined;
 	const refreshSessionRuntime = async (): Promise<void> => {
-		if (sessionHydrationRetryTimer) clearTimeout(sessionHydrationRetryTimer);
-		sessionHydrationRetryTimer = undefined;
+		if (lifecycle.stopping) return;
+		lifecycle.clearTimeout("session-hydration");
 		const continuingFailedHydration = sessionHydrationRetrying;
 		beginSessionChange();
 		// The mutating command has returned (or failed ambiguously). Everything
@@ -1396,11 +1287,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		}
 		if (!hydrationSucceeded) {
 			sessionHydrationRetrying = true;
-			sessionHydrationRetryTimer = setTimeout(() => {
-				sessionHydrationRetryTimer = undefined;
-				void refreshSessionRuntime();
-			}, 100);
-			sessionHydrationRetryTimer.unref?.();
+			lifecycle.scheduleTimeout("session-hydration", () => { void refreshSessionRuntime(); }, 100);
 			return;
 		}
 		sessionHydrationRetrying = false;
@@ -1500,7 +1387,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	};
 
 	const scheduleTreeNavigationRetry = (outcome: RpcTreeNavigationOutcome | undefined): void => {
-		if (!treeNavigationCapture) return;
+		if (!treeNavigationCapture || lifecycle.stopping) return;
 		treeNavigationRetryScheduler.schedule(() => reconcileTreeNavigation(outcome));
 	};
 
@@ -1523,6 +1410,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	};
 
 	const reconcileTreeNavigation = async (outcome?: RpcTreeNavigationOutcome): Promise<void> => {
+		if (lifecycle.stopping) return;
 		const capture = treeNavigationCapture;
 		if (!capture) return;
 		let state: RpcHostChromeState | undefined;
@@ -1652,16 +1540,13 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const hydrationGatedInputHandler = {
 		openCommandPalette: (): void => hydrationActionGate.run(DEFERRED_SELECTOR_ACTION_KEY, () => notifyOnError(() => actions!.openCommandPalette(), notifications)),
 	};
-	let statsTimer: NodeJS.Timeout | undefined;
 	let statsInFlight = false;
-	let stopWatchingGitBranch: (() => void) | undefined;
-	let stopPromise: Promise<void> | undefined;
 
-	client.onEvent((event) => {
+	lifecycle.ownSubscription("client-event", client.onEvent((event) => {
 		if (visualFixture) return;
 		if (sessionEvents.capture(event)) return;
 		processAgentEvent(event);
-	});
+	}));
 
 	// The RPC child is the whole agent -- without this, the host has no signal
 	// at all when it dies while idle (no pending request to reject) and keeps
@@ -1675,14 +1560,19 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		stateStore,
 		notifications,
 		requestRender,
-		stopHost: (code) => stopHost(code),
-		exit: exitProcess,
+		recordExitCode: (code) => lifecycle.recordExitCode(code),
+		stopHost: (code) => lifecycle.stop(code, "child-exit"),
+		exit: (code) => lifecycle.exit(code),
+		// SAFETY: createRpcExitHandler only calls this private adapter with a
+		// zero-argument callback and delay; the exported dependency keeps Node's type.
+		setTimeout: ((callback: () => void, delay: number) =>
+			lifecycle.scheduleTimeout("child-exit", callback, delay)) as typeof setTimeout,
 		updateRuntimeState: (state) => runtime?.update({ state }),
 	});
-	client.onExit((error) => {
+	lifecycle.ownSubscription("client-exit", client.onExit((error) => {
 		if (visualFixture) return;
 		handleClientExit(error);
-	});
+	}));
 
 	const refreshStats = async (): Promise<void> => {
 		if (statsInFlight) return;
@@ -1699,55 +1589,6 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		}
 	};
 
-	const stop = async (code = 0): Promise<void> => {
-		stopPromise ??= (async () => {
-			if (statsTimer) clearInterval(statsTimer);
-			if (sessionHydrationRetryTimer) clearTimeout(sessionHydrationRetryTimer);
-			sessionHydrationRetryTimer = undefined;
-			treeNavigationRetryScheduler.clear();
-			treeNavigationRecovery = undefined;
-			stopWatchingGitBranch?.();
-			stopWatchingGitBranch = undefined;
-			if (runtime) runtime.stop(code, { preserveTerminal: code === SUMOCODE_RELOAD_EXIT_CODE });
-			else if (isReloadResume) {
-				// Child ownership can transfer before the runtime exists. If it dies in
-				// that narrow window, the entry fallback no longer owns cleanup.
-				stdin.setRawMode?.(false);
-				defaultTerminalSessionOwner.adoptRetainedSession();
-				defaultTerminalSessionOwner.exitTerminal();
-				const readyFile = env.SUMOCODE_RELOAD_READY_FILE;
-				if (readyFile) {
-					try { writeFileSync(readyFile, "ready", { mode: 0o600 }); } catch {}
-				}
-			}
-			if (!regionRegistryDisposed) {
-				regionRegistryDisposed = true;
-				regionRegistry.dispose();
-			}
-			unsubscribeActivityStore();
-			activityStore.dispose();
-			// Signal Pi immediately, then let child response/rejection callbacks
-			// quiesce before the final cache snapshot is flushed. Persistent guarded
-			// host signal listeners cover both bounded shutdown phases.
-			await client.stop().catch(() => undefined);
-			rmSync(terminalIndexGate, { force: true });
-			await new Promise<void>((resolveTurn) => setImmediate(resolveTurn));
-			await drainChromeCacheForShutdown(
-				flushChromeCacheState,
-				() => chromeCache.dispose(),
-			);
-		})();
-		await stopPromise;
-	};
-	stopHost = stop;
-	requestHostExit = (code: number): void => {
-		requestedHostExitCode = code;
-		runtime?.stop(code);
-		// Do not wait for initial hydration to finish before tearing down the RPC
-		// child. Stopping it rejects any pending startup request, which transfers
-		// control to the catch/finally path immediately; stop() is idempotent.
-		void stopHost(code);
-	};
 	const handlePreEditorInput = createRpcHostInterruptHandler({
 		modals,
 		overlays,
@@ -1774,24 +1615,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	// `handleAppInterrupt` declaration above for why this is the correct reuse
 	// point instead of a second, editor-local interrupt implementation.
 	handleAppInterrupt = (): void => { handlePreEditorInput("\x1b"); };
-	let handlingHostSignal = false;
-	const handleHostSignal = (code: number): void => {
-		if (handlingHostSignal) return;
-		handlingHostSignal = true;
-		requestedHostExitCode = code;
-		void stop(code).then(() => exitProcess(code));
-	};
-	const handleSigint = (): void => handleHostSignal(130);
-	const handleSigterm = (): void => handleHostSignal(0);
-	const adoptChildAndArmHostSignals = (): void => {
-		// Arm the new owner before removing the entry owner. Persistent guarded
-		// listeners suppress repeated signals until child/cache cleanup completes.
-		process.on("SIGINT", handleSigint);
-		process.on("SIGTERM", handleSigterm);
-		options.onPreSpawnedChildAdopted?.();
-	};
-
-	try {
+	{
 		// Initial boot has the same response/event ordering race as a session
 		// switch: an event parsed immediately after get_messages resolves can land
 		// before the awaiting continuation replaces the transcript. Buffer before
@@ -1811,8 +1635,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// The entry may have begun reaping the child after an early signal while the
 		// setup above was awaiting. Do not adopt it or enter the retained runtime;
 		// the entry owns the child reap and process exit.
-		if (options.shouldAbortAdoption?.()) return requestedHostExitCode ?? 0;
-		await client.start(adoptChildAndArmHostSignals);
+		if (options.shouldAbortAdoption?.() || lifecycle.stopping) return lifecycle.exitCode ?? 0;
+		await client.start(() => lifecycle.childAdopted());
 		const postAdoptionDelayMs = env.NODE_ENV === "test"
 			? Number.parseInt(env.SUMOCODE_TEST_POST_ADOPTION_DELAY_MS ?? "0", 10)
 			: 0;
@@ -1821,10 +1645,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		}
 		// A signal can transfer ownership while client startup settles. Do not
 		// construct a runtime after teardown has already begun.
-		if (stopPromise) {
-			await stopPromise;
-			return requestedHostExitCode ?? 0;
-		}
+		if (lifecycle.stopping) return lifecycle.waitForExit();
 		const initialTranscript = visualFixture ? visualFixture.transcript : transcriptPump.viewModel();
 		const initialState = visualFixture ? visualFixture.state : stateStore.getSnapshot();
 		const initialRuntime = new RpcHostRuntime({
@@ -1857,37 +1678,24 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			preEditorInputHandler: handlePreEditorInput,
 		});
 		runtime = initialRuntime;
-		if (isReloadResume) {
-			initialRuntime.adoptRetainedTerminal();
-			initialRuntime.startInput();
-			// The predecessor's retained frame is already painted. Input is now
-			// editable even though this process hydrates off-screen before its
-			// replacement paint, so publish editor readiness at this boundary.
-			initialRuntime.markEditorReady();
-			const readyFile = env.SUMOCODE_RELOAD_READY_FILE;
-			if (readyFile) {
-				try { writeFileSync(readyFile, "ready", { mode: 0o600 }); } catch {}
-			}
-		} else await initialRuntime.start();
+		lifecycle.ownRuntime(initialRuntime);
+		await lifecycle.startRuntime();
+		if (lifecycle.stopping) return lifecycle.waitForExit();
 		// Optional Git metadata must not gate first paint or authoritative session
 		// hydration. A watcher created after shutdown immediately disposes itself.
 		if (branchPromise) {
 			void (async () => {
 				const initialBranch = await branchPromise;
-				if (stopPromise) return;
+				if (lifecycle.stopping) return;
 				branch = initialBranch;
 				initialRuntime.update({ state: stateStore.setGitBranch(initialBranch) });
 				const stopWatching = await watchGitBranch(cwd, initialBranch, (nextBranch) => {
-					if (stopPromise) return;
+					if (lifecycle.stopping) return;
 					branch = nextBranch;
 					const state = stateStore.setGitBranch(nextBranch);
 					runtime?.update({ state });
 				});
-				if (stopPromise) {
-					stopWatching();
-					return;
-				}
-				stopWatchingGitBranch = stopWatching;
+				lifecycle.ownGitWatcher(stopWatching);
 			})().catch(() => undefined);
 		}
 		// Cached chrome is only an advisory visual hint. Seed it into the store (not
@@ -1908,6 +1716,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// intermediate repaint so the single post-hydration update can apply cold
 		// feed suppression and transcript ownership atomically.
 		deferActivityRuntimeUpdate = true;
+		lifecycle.beginHydration();
 
 		if (visualFixture) {
 			const refreshedState = await controls.refreshState(branch);
@@ -1969,32 +1778,14 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			// identify only the source and cannot leak queue-notice policy.
 			await submitInitialPromptFromFile(env, submitHandlers.fromLaunch);
 			await refreshStats();
-			statsTimer = setInterval(() => { void refreshStats(); }, 5_000);
+			lifecycle.startStatsPolling(() => { void refreshStats(); });
 		}
-		return await initialRuntime.waitForExit();
-	} catch (error) {
-		await stop(requestedHostExitCode ?? 0);
-		if (requestedHostExitCode !== undefined) return requestedHostExitCode;
-		writeLine(stderr, `[sumocode-rpc] ${error instanceof Error ? error.message : String(error)}`);
-		if (client.stderr.length > 0) writeLine(stderr, client.stderr.trim());
-		return 1;
-	} finally {
-		process.removeListener("SIGINT", handleSigint);
-		process.removeListener("SIGTERM", handleSigterm);
-		process.removeListener("unhandledRejection", handleUnhandledRejection);
-		process.removeListener("uncaughtException", handleUnhandledRejection);
-		await stop();
+		return lifecycle.waitForExit();
 	}
 }
 
 export async function main(options: RpcHostMainOptions = {}): Promise<void> {
 	const code = await runRpcHost(options);
-	// Covers every runRpcHost path that returns a code naturally instead of
-	// calling process.exit directly (the plain `runtime.waitForExit()` return
-	// and the top-level catch's `return 1`) -- the explicit process.exit call
-	// sites inside runRpcHost (SIGINT/SIGTERM, unhandledRejection/
-	// uncaughtException, createRpcExitHandler's reload/crash paths) already
-	// write via exitProcess before this point is ever reached.
-	writeExitCodeFile(process.env, code);
+	writeExitCodeFile(options.env ?? process.env, code);
 	process.exitCode = code;
 }

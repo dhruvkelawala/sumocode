@@ -17,9 +17,10 @@ import {
 import { resolveExecutableProvenance } from "../executable-provenance.js";
 import { type BuiltInToolName, resolveTaskConfig } from "../native-task-config.js";
 import { isRecord, type TaskThinking, type ThinkingLevel } from "../native-task-params.js";
-import { systemProcessTree, terminateProcessTree, type ProcessTreeOperations, type ProcessTreeIdentity, type ProcessTreeVerification } from "../background-tasks/process-tree.js";
+import { systemProcessTree, terminateProcessTree, type ProcessTreeOperations, type ProcessTreeIdentity, type ProcessTreeVerification, type ProcessTreeMemberAnchor } from "../background-tasks/process-tree.js";
 import { CHILD_MODEL_ID_ENV, CHILD_MODEL_PROVIDER_ENV } from "./pi-child-model-bootstrap.js";
 import type { RetainedBootstrapDescriptor } from "./retained-bootstrap.js";
+import { RetainedAnchor } from "./retained-anchor.js";
 import { RETAINED_BOOTSTRAP_ENV, assertNoFactoryReceipt, createBootstrapBinding, readBoundBootstrap, waitForFactoryReceipt } from "./retained-bootstrap-receipt.js";
 
 /** Runtime string discriminator for decoded child-process payloads. */
@@ -517,6 +518,7 @@ function attachRetainedAbortSignal(
 	beforeSignal: HeadlessLaunchGate["beforeSignal"],
 	operations: ProcessTreeOperations,
 	refuse: (error: Error) => void,
+	anchor: RetainedAnchor,
 ): AbortState {
 	let aborted = false;
 	let exited = false;
@@ -536,12 +538,24 @@ function attachRetainedAbortSignal(
 				signalTree: (identity, signal, verification) => {
 					if (exited) throw new Error("retained child closed before tree cleanup finished");
 					beforeSignal(pid);
+					anchor.beforeSignal(signal);
 					return operations.signalTree(identity, signal, verification);
 				},
 			};
 			if (!await terminateProcessTree(fenced, tree.identity, { termGraceMs: 5000, killGraceMs: 1000 })) {
 				throw new Error("retained cleanup could not be verified");
 			}
+			// An escaped descendant can retain a pipe after the owned group is
+			// empty. Bound drainage; never signal its new, unowned group.
+			if (!exited) await new Promise<void>((resolve, reject) => {
+				const closed = (): void => { clearTimeout(timer); resolve(); };
+				const timer = setTimeout(() => {
+					proc.removeListener("close", closed);
+					reject(new Error("retained pipes did not close after cleanup"));
+				}, 1000);
+				timer.unref?.();
+				proc.once("close", closed);
+			});
 		})().catch((error) => {
 			refuse(error instanceof Error ? error : new Error("retained cleanup refused"));
 		});
@@ -720,16 +734,26 @@ export const createPiChildSpawner = (
 		// retained work there until a per-taskkill seam exists. Ungated is unchanged.
 		if (options.launchGate && process.platform === "win32") throw new Error("retained headless requires POSIX signal fencing");
 		options.launchGate?.beforeSpawn();
-		// SAFETY: stdio is piped below, so the spawned child always has non-null streams.
-		const proc = spawnImpl(binary, [...subprocessArgs, ...roleArgs, ...adapterArgs, ...bootstrapArgs, ...hookArgs], {
-			cwd: options.cwd,
-			env: childEnv,
-			shell: false,
-			stdio: ["pipe", "pipe", "pipe"],
-			// Own process group on POSIX so interrupt/SIGKILL can signal the
-			// whole tree (see signalGroup) instead of just the pi pid.
-			detached: process.platform !== "win32",
-}) as ChildProcessWithoutNullStreams;
+		const args = [...subprocessArgs, ...roleArgs, ...adapterArgs, ...bootstrapArgs, ...hookArgs];
+		let piExit: { code: number | null; signal: string | null } | undefined;
+		let piChild: ProcessTreeMemberAnchor | undefined;
+		const anchor = options.launchGate ? new RetainedAnchor(spawnImpl, binary, args, { cwd: options.cwd, env: childEnv }, {
+			started: (child) => { piChild = child; waitForFactory(child); },
+			exited: (code, signal) => {
+				piExit = { code, signal };
+				receiptWait.abort();
+				if (!promptReleased) protocolError = "retained child exited before prompt release";
+				// Pi exit does not end the group capability. Reap descendants and the
+				// anchor before publishing Pi's outcome, including normal completion.
+				abortState.terminate();
+			},
+			refused: (error) => refuseEffect(error),
+		}) : undefined;
+		// SAFETY: both launch paths return the original handle and three pipes.
+		const proc = anchor?.proc ?? spawnImpl(binary, args, {
+			cwd: options.cwd, env: childEnv, shell: false,
+			stdio: ["pipe", "pipe", "pipe"], detached: process.platform !== "win32",
+		}) as ChildProcessWithoutNullStreams;
 		// The prompt travels on stdin, never argv: pinned Pi print mode reads
 		// piped stdin as the initial message (interior multiline/Unicode bytes
 		// are exact; Pi itself trims leading/trailing whitespace, same as any
@@ -760,12 +784,12 @@ export const createPiChildSpawner = (
 		const abortState = options.launchGate
 			? attachRetainedAbortSignal(proc, options.signal, (pid) => {
 				if (authorityLost) throw new Error("retained authority lost");
-				try { return options.launchGate!.beforeSignal(pid); }
+				try { anchor!.assertLive(); return options.launchGate!.beforeSignal(pid); }
 				catch (error) {
 					refuseEffect(error instanceof Error ? error : new Error("retained signal refused"));
 					throw error;
 				}
-			}, operations, refuseEffect)
+			}, operations, refuseEffect, anchor!)
 			: attachAbortSignal(proc, options.signal);
 		interrupt = () => {
 			if (!authorityLost) { receiptWait.abort(); abortState.interrupt(); }
@@ -829,6 +853,9 @@ export const createPiChildSpawner = (
 		proc.stdout.on("data", onStdout);
 		proc.stderr.on("data", onStderr);
 		proc.once("close", (code, closeSignal) => {
+			if (anchor && !abortState.finished?.()) refuseEffect(new Error("retained anchor closed without cleanup"));
+			if (piExit) code = piExit.code;
+			const exitSignal = piExit ? piExit.signal : closeSignal;
 			childClosed = true;
 			if (binding && !promptReleased && !protocolError) protocolError = "retained child closed before factory readiness";
 			receiptWait.abort();
@@ -845,7 +872,7 @@ export const createPiChildSpawner = (
 					settle({
 						kind: "failed",
 						errorText: boundRetainedResult(
-							errorMessage || stderr.toString() || (closeSignal ? `pi killed by ${closeSignal}` : `pi exited with code ${code ?? "unknown"}`),
+							errorMessage || stderr.toString() || (exitSignal ? `pi killed by ${exitSignal}` : `pi exited with code ${code ?? "unknown"}`),
 							ERROR_MAX,
 						),
 						partialText: finalAssistantText || undefined,
@@ -866,12 +893,19 @@ export const createPiChildSpawner = (
 			}, 10_000);
 			readinessTimer.unref?.();
 		}
+		const beforeStdin = (): void => {
+			anchor!.assertLive();
+			if (proc.pid === undefined || !piChild || piExit) throw new Error("retained Pi pipe unavailable");
+			const tree = options.launchGate!.beforeSignal(proc.pid);
+			if (operations.verificationMatches?.(tree.identity, { members: [piChild] }) !== "same") throw new Error("retained Pi left its owned group");
+			options.launchGate!.beforeStdin(proc.pid);
+		};
 		const releasePrompt = (): void => {
 			try {
 				if (settled || childClosed || authorityLost || protocolError || abortState.isAborted() || proc.pid === undefined) throw new Error("child unavailable before prompt release");
-				options.launchGate!.beforeStdin(proc.pid);
+				beforeStdin();
 				proc.stdin.write(options.prompt);
-				options.launchGate!.beforeStdin(proc.pid);
+				beforeStdin();
 				proc.stdin.end();
 				promptReleased = true;
 				clearTimeout(readinessTimer);
@@ -882,18 +916,13 @@ export const createPiChildSpawner = (
 				refuseEffect(error instanceof Error ? error : new Error(String(error)));
 			}
 		};
-		if (options.launchGate) proc.once("spawn", () => {
+		const waitForFactory = (child: ProcessTreeMemberAnchor): void => {
 			try {
 				if (settled || childClosed || authorityLost || protocolError || abortState.isAborted() || proc.pid === undefined) throw new Error("child unavailable before prompt release");
-				const pid = proc.pid;
-				options.launchGate!.beforePrompt(pid);
 				if (!binding) { releasePrompt(); return; }
-				const { identity, verification } = options.launchGate!.beforeSignal(pid);
-				const anchor = verification.members.find((member) => member.pid === pid);
-				if (identity.pid !== pid || !anchor) throw new Error("retained child anchor unavailable");
 				const signal = options.signal ? AbortSignal.any([receiptWait.signal, options.signal]) : receiptWait.signal;
-				void waitForFactoryReceipt(binding, anchor, signal, () => {
-					try { options.launchGate!.beforeStdin(pid); }
+				void waitForFactoryReceipt(binding, child, signal, () => {
+					try { beforeStdin(); }
 					catch { refuseEffect(new Error("retained authority lost")); throw new Error("retained authority lost"); }
 				}).then(releasePrompt, () => {
 					if (settled || childClosed || authorityLost || protocolError || abortState.isAborted()) return;
@@ -903,8 +932,18 @@ export const createPiChildSpawner = (
 					abortState.terminate();
 				});
 			} catch (error) { refuseEffect(error instanceof Error ? error : new Error("retained startup refused")); }
+		};
+		if (anchor) proc.once("spawn", () => {
+			try {
+				if (settled || childClosed || authorityLost || protocolError || abortState.isAborted() || proc.pid === undefined) throw new Error("anchor unavailable before release");
+				anchor.assertLive();
+				options.launchGate!.beforePrompt(proc.pid);
+				options.launchGate!.beforeStdin(proc.pid);
+				anchor.start();
+			} catch (error) { refuseEffect(error instanceof Error ? error : new Error("retained anchor release refused")); }
 		});
 		proc.once("error", (error) => {
+			if (anchor) { refuseEffect(new Error("retained anchor process failed")); return; }
 			receiptWait.abort();
 			clearTimeout(readinessTimer);
 			if (protocolError || abortState.isAborted()) return;

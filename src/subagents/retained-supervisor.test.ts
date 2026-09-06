@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readPrivateJson } from "../activity/persistence.js";
 import type { CompletionManifest } from "./manifest.js";
 import { CHILD_JSON_FRAME_MAX_BYTES } from "../child-protocol.js";
@@ -14,7 +14,9 @@ import { createRetainedHeadlessLaunchGate, RetainedHeadlessSupervisor } from "./
 
 // oxlint-disable-next-line anti-slop/no-module-mocking -- filesystem publication faults; all other I/O uses private real files.
 vi.mock("node:fs", async (original) => ({ ...await original<typeof import("node:fs")>() }));
-afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
+const runnerEnvironment = process.env;
+beforeEach(() => { process.env = { PATH: "/synthetic/bin", HOME: "/synthetic/home", TMPDIR: tmpdir() }; });
+afterEach(() => { process.env = runnerEnvironment; vi.restoreAllMocks(); vi.useRealTimers(); });
 
 function fixture() {
 	const root = realpathSync(mkdtempSync(join(tmpdir(), "sumocode-launch-gate-")));
@@ -45,7 +47,7 @@ function fixture() {
 		captureTreeVerification: vi.fn((identity) => ({ members: [{ pid: identity.pid, processStartTime: "child-birth" }] })),
 		verificationMatches: vi.fn(() => "same" as const),
 		isTreeEmpty: vi.fn(() => false),
-		signalTree: vi.fn(async () => ({ ok: true, gone: false })),
+		signalTree: vi.fn(async (_identity, signal) => ({ ok: true, gone: signal === "SIGKILL" })),
 		waitForTreeEmpty: vi.fn(async () => false),
 	};
 	return { registry, record, supervisor, operations, setNow: (value: number) => { now = value; } };
@@ -57,6 +59,7 @@ function retainedFixture(attach = false) {
 		pid: 4242, stdout: new EventEmitter(), stderr: new EventEmitter(),
 		stdin: { on: vi.fn(), end: vi.fn(), write: vi.fn() }, kill: vi.fn(),
 	});
+	Object.assign(proc, { send: vi.fn(() => proc.emit("message", { kind: "started", child: { pid: 4343, processStartTime: "child-birth" } })) });
 	const spawn = vi.fn(() => proc);
 	// SAFETY: fake piped process; the production backend parser owns these streams.
 	const backend = createPiChildSpawner(spawn as never, () => undefined, () => "/selected/pi", () => undefined, f.operations);
@@ -81,7 +84,13 @@ function retainedFixture(attach = false) {
 		buildManifest: () => manifest,
 	});
 	const release = (changedPaths: readonly string[] = []) => releaseManifest({ baseRef: "host-base", headRef: "host-head", changedPaths, commits: 0, exit: "completed", durationMs: 10 });
-	return { ...f, proc, spawn, subscriptions, owner, release };
+	const finish = async (code = 0) => {
+		proc.emit("message", { kind: "exited", code, signal: null });
+		for (let i = 0; i < 10; i++) await Promise.resolve();
+		proc.emit("close", null, "SIGKILL");
+		for (let i = 0; i < 10; i++) await Promise.resolve();
+	};
+	return { ...f, proc, spawn, subscriptions, owner, release, finish };
 }
 
 describe("retained supervisor handle ownership", () => {
@@ -138,8 +147,7 @@ describe("retained supervisor handle ownership", () => {
 			f.setNow(21_000);
 			await vi.advanceTimersByTimeAsync(20_000);
 			expect(f.registry.get("sa-proof")?.writerLease?.expiresAt).toBe(81_000);
-			f.proc.emit("close", 0);
-			await Promise.resolve();
+			await f.finish();
 			f.setNow(41_000);
 			await vi.advanceTimersByTimeAsync(20_000);
 			f.release();
@@ -191,8 +199,7 @@ describe("retained supervisor handle ownership", () => {
 		});
 		f.proc.emit("spawn");
 		await f.owner.ready;
-		f.proc.emit("close", 0);
-		await Promise.resolve();
+		await f.finish();
 		f.setNow(21_000);
 		await vi.advanceTimersByTimeAsync(20_000);
 		r = f.registry.get(r.id)!;
@@ -215,8 +222,7 @@ describe("retained supervisor handle ownership", () => {
 				if (cut === "manifest") {
 					f.proc.emit("spawn");
 					await f.owner.ready;
-					f.proc.emit("close", 0);
-					await Promise.resolve();
+					await f.finish();
 				}
 				f.setNow(61_000);
 				if (loss === "other writer") {
@@ -329,7 +335,7 @@ describe("retained supervisor handle ownership", () => {
 				}
 				return rename(from, to);
 			});
-			f.proc.emit("close", 0);
+			await f.finish();
 			f.release();
 			expect(await f.owner.settlement).toBe("ambiguous");
 			expect(f.registry.get("sa-proof")).toMatchObject({ status: "ambiguous", completionId: null, result: null, manifest: null, delivery: { state: "none" } });
@@ -364,7 +370,7 @@ describe("retained supervisor handle ownership", () => {
 		await f.owner.ready;
 		for (let i = 0; i < 260; i++) f.proc.stdout.emit("data", '{"type":"tool_execution_start","toolCallId":"id-secret","toolName":"read","args":{"password":"argument-secret"}}\n');
 		f.proc.stdout.emit("data", `${JSON.stringify({ type: "message_end", message: { role: "assistant", text: "\u0001".repeat(600_000) } })}\n`);
-		f.proc.emit("close", 0);
+		await f.finish();
 		f.release();
 		expect(await f.owner.settlement).toBe("settled");
 		const record = f.registry.get("sa-proof")!;
@@ -380,7 +386,7 @@ describe("retained supervisor handle ownership", () => {
 		const f = retainedFixture();
 		f.proc.emit("spawn");
 		await f.owner.ready;
-		f.proc.emit("close", 0);
+		await f.finish();
 		f.release(["x".repeat(4 * 1024 * 1024)]);
 		expect(await f.owner.settlement).toBe("ambiguous");
 		expect(f.registry.get("sa-proof")).toMatchObject({ status: "ambiguous", outcome: "completed", completionId: null, result: null, manifest: null });
@@ -392,8 +398,7 @@ describe("retained supervisor handle ownership", () => {
 		const f = retainedFixture();
 		f.proc.emit("spawn");
 		await f.owner.ready;
-		f.proc.emit("close", 0);
-		await Promise.resolve();
+		await f.finish();
 		const path = join(f.record.taskDir, "result.json");
 		const original = readFileSync(path, "utf8");
 		writeFileSync(path, original.replace("completed", "compLeted"), { mode: 0o600 });
@@ -407,7 +412,7 @@ describe("retained supervisor handle ownership", () => {
 		f.proc.emit("spawn");
 		await f.owner.ready;
 		f.proc.stdout.emit("data", '{"type":"message_end","message":{"role":"assistant","text":"partial","stopReason":"error","errorMessage":"provider refused"}}\n');
-		f.proc.emit("close", 0);
+		await f.finish();
 		f.release();
 		expect(await f.owner.settlement).toBe("settled");
 		expect(f.registry.get("sa-proof")?.outcome).toBe("failed");
@@ -446,8 +451,7 @@ describe("retained supervisor handle ownership", () => {
 		const f = retainedFixture();
 		f.proc.emit("spawn");
 		await f.owner.ready;
-		f.proc.emit("close", 0);
-		await Promise.resolve();
+		await f.finish();
 		const current = f.registry.get("sa-proof")!;
 		f.registry.acquireWriter(current.id, current.revision, 60_000);
 		f.release();
@@ -471,8 +475,7 @@ describe("retained supervisor handle ownership", () => {
 		const f = retainedFixture();
 		f.proc.emit("spawn");
 		await f.owner.ready;
-		f.proc.emit("close", 0);
-		await Promise.resolve();
+		await f.finish();
 		expect(f.registry.get("sa-proof")?.status).toBe("settling");
 		f.setNow(61_000);
 		f.release();
@@ -492,7 +495,7 @@ describe("retained supervisor handle ownership", () => {
 		f.owner.renew();
 		expect(f.registry.get("sa-proof")?.writerLease).toMatchObject({ generation: 2, expiresAt: 120_000 });
 		f.setNow(65_000);
-		f.proc.emit("close", 0);
+		await f.finish();
 		f.release();
 		expect(await f.owner.settlement).toBe("settled");
 		expect(f.subscriptions).toHaveBeenCalledTimes(1);
@@ -515,8 +518,7 @@ describe("retained supervisor handle ownership", () => {
 			observed.push(record);
 		});
 		f.proc.stdout.emit("data", `${JSON.stringify({ type: "message_end", message: { role: "assistant", text: "answer-secret", manifest: { headRef: "child-forgery" } } })}\n`);
-		f.proc.emit("close", 0);
-		await Promise.resolve();
+		await f.finish();
 		expect(f.registry.get("sa-proof")).toMatchObject({ status: "settling", outcome: "completed", result: null, manifest: null, completionId: null, delivery: { state: "none" } });
 		expect(existsSync(join(f.record.taskDir, "result.json"))).toBe(true);
 		expect(observed).toHaveLength(0);
@@ -580,9 +582,10 @@ describe("retained supervisor headless launch admission", () => {
 			expect(f.registry.get("sa-proof")).toMatchObject({ status: "starting", supervisor: f.supervisor, child: null });
 			return proc;
 		});
+		Object.assign(proc, { send: vi.fn(() => proc.emit("message", { kind: "started", child: { pid: 4343, processStartTime: "child-birth" } })) });
 		const launchGate = createRetainedHeadlessLaunchGate(f.registry, f.record, f.supervisor, f.operations);
 		// SAFETY: this fake implements the backend's piped child-process surface; no process is launched.
-		const child = createPiChildSpawner(spawn as never, () => undefined, () => "/selected/pi")({
+		const child = createPiChildSpawner(spawn as never, () => undefined, () => "/selected/pi", () => undefined, f.operations)({
 			prompt: "private λ", cwd: f.record.taskDir, inherited: {}, launchGate,
 		});
 		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- the backend explicitly exposes callback or AsyncIterable events.

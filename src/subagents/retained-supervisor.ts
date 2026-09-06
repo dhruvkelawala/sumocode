@@ -32,8 +32,10 @@ function prepareLaunch(
 		throw new Error("retained launch requires a starting headless record and this supervisor");
 	}
 	const assertLive = (tree: RegistryProcess): void => {
-		if (operations.identityMatches(tree.identity) !== "same"
-			|| operations.verificationMatches?.(tree.identity, tree.verification) !== "same") {
+		// A descendant cannot vouch for a replaced or moved live group leader.
+		const root = tree.verification.members.find((member) => member.pid === tree.identity.pid);
+		if (!root || operations.identityMatches(tree.identity) !== "same"
+			|| operations.verificationMatches?.(tree.identity, { members: [root] }) !== "same") {
 			throw new Error("retained launch identity is ambiguous");
 		}
 	};
@@ -76,10 +78,7 @@ function prepareLaunch(
 	const childFence = (pid: number): RegistryProcess => {
 		if (phase !== "released" || current.child?.identity.pid !== pid) throw new Error("retained child authority unavailable");
 		const child = structuredClone(current.child);
-		if (operations.identityMatches(child.identity) === "different"
-			|| operations.verificationMatches?.(child.identity, child.verification) !== "same") {
-			throw new Error("retained child identity is ambiguous");
-		}
+		assertLive(child);
 		fence();
 		return child;
 	};
@@ -101,9 +100,12 @@ function prepareLaunch(
 			const processStartTime = operations.captureStartTime(pid);
 			if (!processStartTime) throw new Error("retained child birth unavailable");
 			const identity = { pid, processGroupId: pid, processStartTime };
-			const verification = operations.captureTreeVerification?.(identity);
-			if (!verification) throw new Error("retained child anchors unavailable");
-			const child = { identity, verification };
+			const captured = operations.captureTreeVerification?.(identity);
+			const root = captured?.members.find((member) => member.pid === pid);
+			if (!root) throw new Error("retained child anchors unavailable");
+			// child identifies the execution group anchor; the backend binds the
+			// actual Pi PID/birth separately to its private factory receipt.
+			const child = { identity, verification: { members: [root] } };
 			transition((record) => ({ ...record, child }));
 			assertLive(child);
 			assertLive(supervisor);

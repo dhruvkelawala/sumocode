@@ -31,6 +31,9 @@ class FakeProcess extends EventEmitter {
 	public readonly stdout = new EventEmitter();
 	public readonly stderr = new EventEmitter();
 	public pid: number | undefined = 4242;
+	public exitCode = null;
+	public signalCode = null;
+	public send = vi.fn((_message: { binary: string; args: string[] }) => this.emit("message", { kind: "started", child: { pid: 4343, processStartTime: "original-birth" } }));
 	public killed = false;
 	public kill = vi.fn(() => {
 		this.killed = true;
@@ -138,7 +141,7 @@ describe("retained headless launch gate", () => {
 		collect(child.events);
 		proc.emit("close", 1);
 		proc.emit("spawn");
-		await expect(child.ready).rejects.toThrow(/settled/);
+		await expect(child.ready).rejects.toThrow(/anchor closed/);
 		expect(beforePrompt).not.toHaveBeenCalled();
 		expect(proc.stdin.write).not.toHaveBeenCalled();
 	});
@@ -151,9 +154,21 @@ describe("retained headless launch gate", () => {
 			expect(pid).toBe(4242);
 			expect(proc.stdin.write).not.toHaveBeenCalled();
 		});
+		const beforeSignal = vi.fn(() => ({
+			identity: { pid: 4242, processGroupId: 4242, processStartTime: "anchor-command" },
+			verification: { members: [{ pid: 4242, processStartTime: "anchor-birth" }] },
+		}));
+		const operations: ProcessTreeOperations = {
+			captureStartTime: () => undefined,
+			identityMatches: () => "same",
+			verificationMatches: () => "same",
+			isTreeEmpty: () => false,
+			signalTree: async () => ({ ok: true, gone: true }),
+			waitForTreeEmpty: async () => true,
+		};
 		// SAFETY: FakeProcess implements the piped process surface used by this backend.
-		const child = createPiChildSpawner(spawn as never, () => undefined, () => "/selected/pi")({
-			prompt: "private\nλ prompt", cwd: "/workspace", inherited: {}, launchGate: { ...passiveFences, beforeSpawn, beforePrompt },
+		const child = createPiChildSpawner(spawn as never, () => undefined, () => "/selected/pi", () => undefined, operations)({
+			prompt: "private\nλ prompt", cwd: "/workspace", inherited: {}, launchGate: { ...passiveFences, beforeSpawn, beforePrompt, beforeSignal },
 		});
 		collect(child.events);
 		expect(beforeSpawn).toHaveBeenCalledTimes(1);
@@ -260,7 +275,7 @@ describe("retained source factory readiness", () => {
 		try {
 			const f = effectFixture(sourceBootstrap());
 			if (cut === "after-await") {
-				publishFactoryReceipt(spawnedBinding(f), { pid: 4242, processStartTime: "original-birth" });
+				publishFactoryReceipt(spawnedBinding(f), { pid: 4343, processStartTime: "original-birth" });
 				f.gate.beforeStdin = () => {
 					queueMicrotask(f.lose);
 					f.gate.beforeStdin = () => { throw new Error("writer lost after await"); };
@@ -279,19 +294,20 @@ describe("retained source factory readiness", () => {
 		} finally { vi.useRealTimers(); }
 	});
 
-	it("cancels receipt wait on early child close and cannot accept late evidence", async () => {
+	it("loses authority on early anchor close and cannot accept late evidence", async () => {
 		vi.useFakeTimers();
 		try {
 			const f = effectFixture(sourceBootstrap());
 			f.proc.emit("spawn");
 			f.proc.emit("close", 0);
-			await expect(f.child.ready).rejects.toThrow(/before prompt release/);
-			publishFactoryReceipt(spawnedBinding(f), { pid: 4242, processStartTime: "original-birth" });
+			await expect(f.child.ready).rejects.toThrow(/anchor closed/);
+			publishFactoryReceipt(spawnedBinding(f), { pid: 4343, processStartTime: "original-birth" });
 			await vi.advanceTimersByTimeAsync(20_000);
 			expect(f.proc.stdin.write).not.toHaveBeenCalled();
 			expect(f.proc.stdin.end).not.toHaveBeenCalled();
 			expect(vi.getTimerCount()).toBe(0);
-			expect(f.events.at(-1)).toMatchObject({ kind: "run-settled", outcome: { kind: "failed" } });
+			expect(f.events).toEqual([{ kind: "run-started" }]);
+			expect(f.refused).toHaveBeenCalledTimes(1);
 		} finally { vi.useRealTimers(); }
 	});
 
@@ -320,14 +336,14 @@ describe("retained source factory readiness", () => {
 			expect(f.proc.stdin.write).not.toHaveBeenCalled();
 			await vi.advanceTimersByTimeAsync(100);
 			expect(f.proc.stdin.end).not.toHaveBeenCalled();
-			const [binary, argv] = f.spawn.mock.calls[0]!;
-			const metadata = [binary, ...argv].join(" ");
+			const { binary, args } = f.proc.send.mock.calls[0]![0];
+			const metadata = [binary, ...args].join(" ");
 			expect(metadata.includes("--no-extensions")).toBe(true);
 			expect(metadata.includes("retained-system-prompt.ts")).toBe(true);
 			expect(metadata.includes("--append-system-prompt")).toBe(false);
 			expect(metadata.includes("secret role λ")).toBe(false);
 			expect(metadata.includes("private task payload")).toBe(false);
-			publishFactoryReceipt(spawnedBinding(f), { pid: 4242, processStartTime: "original-birth" });
+			publishFactoryReceipt(spawnedBinding(f), { pid: 4343, processStartTime: "original-birth" });
 			await vi.advanceTimersByTimeAsync(25);
 			await f.child.ready;
 			expect(f.proc.stdin.write).toHaveBeenCalledExactlyOnceWith("private task payload");

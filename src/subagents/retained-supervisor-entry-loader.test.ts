@@ -11,8 +11,12 @@ const { runSourceEntry } = createRequire(import.meta.url)("./retained-supervisor
 	runSourceEntry(argv: readonly string[], load: (url: string) => Promise<{ createJiti: (entry: string, options: { moduleCache: boolean; tryNative: boolean; fsCache: boolean }) => { import: (path: string) => Promise<{ runRetainedSupervisorEntry: (args: readonly string[]) => Promise<void> }> } }>): Promise<void>;
 };
 const workerArgs = process.execArgv;
-beforeEach(() => { process.execArgv = []; });
-afterEach(() => { process.execArgv = workerArgs; vi.restoreAllMocks(); });
+const runnerEnvironment = process.env;
+beforeEach(() => {
+	process.execArgv = [];
+	process.env = { PATH: "/synthetic/bin", HOME: "/synthetic/home", TMPDIR: tmpdir() };
+});
+afterEach(() => { process.execArgv = workerArgs; process.env = runnerEnvironment; vi.restoreAllMocks(); });
 
 it("loads physical source and Pi-local Jiti from the package, independent of task cwd", async () => {
 	vi.spyOn(process, "cwd").mockReturnValue("/untrusted/task");

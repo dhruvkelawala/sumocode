@@ -1,7 +1,7 @@
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it as test, vi } from "vitest";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { signalVerifiedProcessTree, type ProcessTreeOperations } from "../../src/background-tasks/process-tree.js";
 import type { HeadlessLaunchGate, SpawnedChild, spawnPiChild } from "../../src/subagents/backend-pi.js";
@@ -17,8 +17,12 @@ import { RetainedHeadlessSupervisor, RetainedVisibleSupervisor } from "../../src
 import { RetainedResults } from "../../src/subagents/retained-results.js";
 import { cleanupOwnedTree, type OwnedTree } from "./fixtures/subagent-feasibility-cleanup.js";
 import { runRealRecovery } from "./fixtures/plan112-real-recovery.js";
+import { runRealFault } from "./fixtures/plan112-real-faults.js";
 
 const realMode = process.env.PLAN112_RECOVERY_BACKEND === "real";
+function it(name: string, body: () => void | Promise<void>, timeout?: number): void {
+	test(name, realMode && !name.startsWith("feasibility:") ? () => runRealFault(name) : body, realMode ? 200_000 : timeout);
+}
 const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
 	try {

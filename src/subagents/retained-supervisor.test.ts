@@ -53,7 +53,7 @@ function fixture() {
 	return { registry, record, supervisor, operations, setNow: (value: number) => { now = value; } };
 }
 
-function retainedFixture(attach = false) {
+function retainedFixture(attach = false, onManifestWritten?: () => void) {
 	const f = fixture();
 	const proc = Object.assign(new EventEmitter(), {
 		pid: 4242, stdout: new EventEmitter(), stderr: new EventEmitter(),
@@ -82,6 +82,7 @@ function retainedFixture(attach = false) {
 			} };
 		},
 		buildManifest: () => manifest,
+		onManifestWritten,
 	});
 	const release = (changedPaths: readonly string[] = []) => releaseManifest({ baseRef: "host-base", headRef: "host-head", changedPaths, commits: 0, exit: "completed", durationMs: 10 });
 	const finish = async (code = 0) => {
@@ -94,6 +95,21 @@ function retainedFixture(attach = false) {
 }
 
 describe("retained supervisor handle ownership", () => {
+	it("exposes the durable manifest before publishing completion pointers", async () => {
+		const cut = vi.fn(() => {
+			expect(existsSync(join(f.record.taskDir, "manifest.json"))).toBe(true);
+			expect(f.registry.get(f.record.id)).toMatchObject({ status: "settling", manifest: null, completionId: null });
+			throw new Error("publication cut");
+		});
+		const f = retainedFixture(false, cut);
+		f.proc.emit("spawn");
+		await f.owner.ready;
+		await f.finish();
+		f.release();
+		expect(await f.owner.settlement).toBe("ambiguous");
+		expect(cut).toHaveBeenCalledTimes(1);
+		expect(f.registry.get(f.record.id)?.completionId).toBeNull();
+	});
 	it("authorizes a control reservation while retaining parser, child and writer ownership", async () => {
 		const f = retainedFixture();
 		f.proc.emit("spawn");

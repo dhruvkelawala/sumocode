@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -12,6 +12,9 @@ import { controlAuthority } from "../../../src/subagents/retained-adoption.js";
 import { prepareRetainedBootstrap } from "../../../src/subagents/retained-bootstrap.js";
 import { censusRetained } from "../../../src/subagents/retained-census.js";
 import { RetainedHeadlessSupervisor } from "../../../src/subagents/retained-supervisor.js";
+import { buildCompletionManifest } from "../../../src/subagents/manifest.js";
+import { runLocalFault } from "./plan112-local-faults.js";
+import { herdrTerminalHost } from "../../../src/terminal-host/herdr.js";
 
 interface ControllerReport {
 	error?: string; expiresAt?: number; headlessSteering?: boolean; child?: RegistryProcess | null;
@@ -22,6 +25,89 @@ interface ControllerReport {
 export async function runSourceController(root: string, mode: string, pi: string, provider: string): Promise<void> {
 	const put = (name: string, value: ControllerReport | RegistryWriter): void => writeFileSync(join(root, name), JSON.stringify(value), { mode: 0o600, flag: "wx" });
 	const registry = new SubagentRegistry(join(root, "registry"), "origin");
+	// SAFETY: the admitted test parent alone writes this private JSON string.
+	const scenario = existsSync(join(root, "scenario.json")) ? JSON.parse(readFileSync(join(root, "scenario.json"), "utf8")) as string : "";
+	const cut = (point: string): void => {
+		if (scenario !== `crash:${point}`) return;
+		put("cut-ready.json", {});
+		// Only the external birth-verified owner may end this held controller.
+		while (true) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+	};
+	if (mode === "herdr-probe") {
+		if (process.env.HERDR_ENV !== "1" || !process.env.PLAN112_HERDR_BIN || !process.env.HERDR_PANE_ID) {
+			put("herdr-probe-result.json", { error: "capability: herdr unavailable; requires explicit owned HERDR_SOCKET_PATH, HERDR_PANE_ID, HERDR_ENV=1 and PLAN112_HERDR_BIN" });
+			return;
+		}
+		const association = await herdrTerminalHost.inspectPane({ exec: async (_command, args) => {
+			try { return { code: 0, stdout: execFileSync(process.env.PLAN112_HERDR_BIN!, args, { encoding: "utf8", timeout: 5000 }), stderr: "", killed: false }; }
+			catch { return { code: 1, stdout: "", stderr: "", killed: false }; }
+		} }, { host: "herdr", paneId: process.env.HERDR_PANE_ID });
+		put("herdr-probe-result.json", { error: association.ok
+			? "real adapter incomplete: Herdr reachable with validated pane query; server-created pane shell has no pre-execution birth admission in this wrapper; visible launch not attempted"
+			: "capability: Herdr pane query refused in supervised private environment" });
+		return;
+	}
+	if (mode === "probe") { put("probe-ready.json", {}); return; }
+	if (mode === "contender") {
+		const before = registry.get("sa-real")!;
+		const runtime = install("contender", registry);
+		try {
+			await runtime.fire("session_start", "restart");
+			assert.notEqual(runtime.manager.get(before.id)?.recovery, "adopted");
+			assert.deepEqual(registry.get(before.id)?.controlLease, before.controlLease);
+			await runtime.manager.cancel([before.id]);
+			await runtime.fire("agent_end");
+			assert.equal(runtime.deliveries.length, 0);
+			put("contender-result.json", {});
+		} finally { runtime.manager.detachForReplacement(); }
+		return;
+	}
+	if (mode === "delivery-successor" || mode === "delivery-final") {
+		const runtime = install(mode, registry);
+		try {
+			if (scenario === "delivery:notice-before-ack" && mode === "delivery-successor") runtime.afterSend(() => {
+				put("notice-cut-ready.json", {});
+				while (true) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+			});
+			await runtime.fire("session_start", "restart");
+			await runtime.fire("agent_end"); await runtime.fire("agent_end");
+			assert.equal(runtime.deliveries.length, mode === "delivery-final" ? 0 : 1);
+			if (mode === "delivery-successor") assert.equal(runtime.deliveries[0]?.customType, "subagent-delivery-uncertain");
+			put(`${mode}-result.json`, { deliveries: runtime.deliveries.length });
+		} finally { runtime.manager.detachForReplacement(); }
+		return;
+	}
+	if (mode.startsWith("race-")) {
+		const runtime = install(mode, registry);
+		put(`${mode}-ready.json`, {});
+		await waitForFile(join(root, "race-release"));
+		await runtime.fire("session_start", "restart");
+		put(`${mode}-result.json`, { recovery: runtime.manager.get("sa-real")?.recovery ?? "absent" });
+		return;
+	}
+	if (mode === "recover-lost") {
+		const before = registry.get("sa-real")!;
+		const runtime = install("successor", registry);
+		try {
+			await runtime.fire("session_start", "restart");
+			const after = registry.get(before.id)!;
+			assert.equal(after.status, "lost");
+			assert.equal(after.writerLease!.generation, before.writerLease!.generation + 1);
+			assert.deepEqual(after.child, before.child);
+			assert.equal(runtime.deliveries.length, 0);
+			put("recover-lost-result.json", {});
+		} finally { runtime.manager.detachForReplacement(); }
+		return;
+	}
+	if (mode === "takeover") {
+		const before = registry.get("sa-real")!;
+		const taken = registry.acquireWriter(before.id, before.revision, 60_000);
+		assert.equal(taken.writerLease!.generation, before.writerLease!.generation + 1);
+		assert.deepEqual(taken.child, before.child);
+		assert.throws(() => registry.forController(before.writerLease!.owner).transition(taken.id, taken.revision, before.writerLease!.generation, (record) => record));
+		put("takeover-result.json", {});
+		return;
+	}
 	if (mode === "origin") {
 		const runtime = install("origin", registry);
 		put("origin-identity.json", runtime.manager.controllerIdentity);
@@ -61,14 +147,37 @@ export async function runSourceController(root: string, mode: string, pi: string
 		role: { id: "synthetic-role", label: "synthetic role" },
 	}, { prompt: "synthetic recovery task", systemPrompt: "synthetic private role" });
 	let backend!: SpawnedChild;
-	const spawner = createPiChildSpawner(registeredAnchorSpawn(root), () => provider, () => pi);
+	const spawner = createPiChildSpawner(registeredAnchorSpawn(root, scenario), () => provider, () => pi);
 	const owner = new RetainedHeadlessSupervisor({ registry, initial, supervisor: captureBirth(process.pid), baseRef: "HEAD",
 		launch: { cwd: join(root, "cwd"), prompt: "synthetic recovery task", inherited: {}, builtInTools: [], thinking: "off",
 			model: "source-proof/fixed", retainedBootstrap: descriptor },
-	}, { spawn: (options) => { backend = spawner(options); return backend; } });
+	}, {
+		spawn: (options) => {
+			cut("starting");
+			const gate = options.launchGate!;
+			backend = spawner({ ...options, launchGate: { ...gate, beforePrompt: (pid) => { cut("pre-release"); gate.beforePrompt(pid); } } });
+			if (scenario === "cancel") {
+				const interrupt = backend.interrupt;
+				let count = 0;
+				backend = { ...backend, interrupt: (...args) => {
+					writeFileSync(join(root, "interrupt-count.json"), JSON.stringify(++count), { mode: 0o600 });
+					return interrupt(...args);
+				} };
+			}
+			return backend;
+		},
+		buildManifest: async (options) => { cut("settling"); return buildCompletionManifest(options); },
+		onManifestWritten: () => cut("post-manifest"),
+	});
 	await owner.ready;
 	await waitForFile(join(root, "provider-called.json"));
 	put("owner-ready.json", { headlessSteering: Boolean(backend.send), child: owner.record.child });
+	cut("running");
+	if (mode === "same-process" && scenario) {
+		await runLocalFault(root, scenario, registry, owner, initial, install);
+		put("same-process-result.json", { steering: "unsupported: headless steering" });
+		return;
+	}
 	if (mode === "owner") {
 		await waitForFile(join(root, "origin-identity.json"));
 		// SAFETY: the test's private controller publishes its actual PID/birth;
@@ -109,15 +218,18 @@ export async function runSourceController(root: string, mode: string, pi: string
 	} finally { old.manager.detachForReplacement(); next.manager.detachForReplacement(); }
 }
 
-function install(session: string, registry?: SubagentRegistry) {
+export function install(session: string, registry?: SubagentRegistry) {
 	type Handler = (event: { type: string; reason: string }, context: ExtensionContext) => void | Promise<void>;
 	const handlers = new Map<string, Handler>();
 	const deliveries: Parameters<ExtensionAPI["sendMessage"]>[0][] = [];
-	const api = { on: (name: string, handler: Handler) => { handlers.set(name, handler); }, registerTool: () => {},
-		sendMessage: (message: Parameters<ExtensionAPI["sendMessage"]>[0]) => { deliveries.push(message); }, exec: () => { throw new Error("unexpected controller exec"); } };
+	type Tool = { name: string; execute: (id: string, params: { id?: string; ids?: string[] }) => Promise<{ details: unknown }> };
+	const tools = new Map<string, Tool>();
+	let afterSend: (() => void) | undefined;
+	const api = { on: (name: string, handler: Handler) => { handlers.set(name, handler); }, registerTool: (tool: Tool) => { tools.set(tool.name, tool); },
+		sendMessage: (message: Parameters<ExtensionAPI["sendMessage"]>[0]) => { deliveries.push(message); afterSend?.(); }, exec: () => { throw new Error("unexpected controller exec"); } };
 	// SAFETY: only installer registration and idle lifecycle methods are exercised.
 	const manager = installSubagents(api as never, { retainedRegistry: registry, spawnPiChild: () => { throw new Error("replacement must not respawn"); } });
-	return { manager, deliveries, fire: async (name: string, reason = "startup") => {
+	return { manager, deliveries, tools, afterSend: (callback: () => void) => { afterSend = callback; }, fire: async (name: string, reason = "startup") => {
 		// SAFETY: these lifecycle handlers need only the session ID and idle/UI flags.
 		const context = { isIdle: () => true, hasUI: false, sessionManager: { getSessionId: () => session } } as ExtensionContext;
 		await handlers.get(name)?.({ type: name, reason }, context);
@@ -133,10 +245,21 @@ export function captureBirth(pid: number) {
 	return { identity, verification };
 }
 
-function registeredAnchorSpawn(root: string): typeof spawn {
+function registeredAnchorSpawn(root: string, scenario: string): typeof spawn {
 	// SAFETY: preserves spawn's overloads and original IPC/pipe handle.
 	return ((command: string, args: string[], options: Parameters<typeof spawn>[2]) => {
 		const child = spawn(command, args, options);
+		if (scenario === "census") child.on("message", (message) => {
+			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- Parse the real anchor IPC boundary; unrelated messages must pass untouched.
+			if (message && typeof message === "object" && "kind" in message && message.kind === "exited") {
+				writeFileSync(join(root, "pi-exited.json"), "{}", { mode: 0o600, flag: "wx" });
+				const deadline = Date.now() + 10_000;
+				while (!existsSync(join(root, "census-release"))) {
+					assert(Date.now() < deadline, "census observation timeout");
+					Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+				}
+			}
+		});
 		writeFileSync(join(root, "anchor-spawn.json"), JSON.stringify({ pid: child.pid }), { mode: 0o600, flag: "wx" });
 		child.once("spawn", () => {
 			const birth = captureBirth(child.pid!);

@@ -193,6 +193,8 @@ interface RetainedHeadlessDependencies {
 	readonly operations?: ProcessTreeOperations;
 	readonly spawn?: typeof spawnPiChild;
 	readonly buildManifest?: typeof buildCompletionManifest;
+	/** Embedding observation seam after durable manifest write, before pointer publication. */
+	readonly onManifestWritten?: () => void;
 }
 
 type Settlement = "settled" | "lost" | "ambiguous";
@@ -377,6 +379,7 @@ class RetainedSupervisor {
 			if (this.stopped) return;
 			this.authority.fence();
 			const manifestPointer = this.artifacts.writeManifest({ ...manifest, exit: outcome.kind });
+			this.dependencies.onManifestWritten?.();
 			this.artifacts.verify();
 			// The registry validates both private artifacts before publishing pointers.
 			this.authority.fence();

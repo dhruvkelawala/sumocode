@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { appendFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createJiti } from "jiti";
 import { preflightRecovery, recoveryRepo } from "./plan112-recovery-preflight.mjs";
@@ -16,6 +16,16 @@ if (payload[0] === "--") assert.deepEqual(payload.slice(0, command.length), comm
 const filter = payload[0] === "--" ? payload.slice(command.length) : payload;
 assert(filter.length === 0 || filter.length === 2 && filter[0] === "-t", "only an optional -t test filter is supported");
 const { node, env } = await preflightRecovery(root);
+// Pass only the explicit caller/socket capability, never the operator environment.
+const herdr = {};
+if (process.env.HERDR_ENV === "1" && process.env.HERDR_SOCKET_PATH && process.env.PLAN112_HERDR_BIN) {
+	const socket = lstatSync(process.env.HERDR_SOCKET_PATH);
+	assert(socket.isSocket() && socket.uid === process.getuid(), "Herdr socket must be owned");
+	const binary = realpathSync(process.env.PLAN112_HERDR_BIN);
+	assert(!(lstatSync(binary).mode & 0o022), "Herdr executable must not be group/world writable");
+	Object.assign(herdr, { HERDR_ENV: "1", HERDR_SOCKET_PATH: process.env.HERDR_SOCKET_PATH,
+		HERDR_PANE_ID: process.env.HERDR_PANE_ID, PLAN112_HERDR_BIN: binary });
+}
 const jiti = createJiti(import.meta.url, { tryNative: false, fsCache: false });
 const { systemProcessTree } = await jiti.import(join(recoveryRepo, "src/background-tasks/process-tree.ts"));
 const { cleanupOwnedTree } = await jiti.import(join(recoveryRepo, "test/integration/fixtures/subagent-feasibility-cleanup.ts"));
@@ -25,7 +35,7 @@ const birthsPath = join(root, "births.jsonl");
 // wrapper adds NODE_PATH, which the retained source launch correctly refuses.
 const child = spawn(node, [join(recoveryRepo, "node_modules/vitest/vitest.mjs"), "run", "test/integration/subagent-recovery.test.ts", "--fileParallelism=false", ...filter], {
 	cwd: recoveryRepo, detached: true, stdio: "inherit",
-	env: { ...env, PLAN112_RECOVERY_BACKEND: "real", PLAN112_RECOVERY_ROOT: root,
+	env: { ...env, ...herdr, PLAN112_RECOVERY_BACKEND: "real", PLAN112_RECOVERY_ROOT: root,
 		SUMOCODE_INTEGRATION_RUN_ROOT: root, SUMOCODE_INTEGRATION_MANIFEST: join(root, "children.jsonl"),
 		[HARNESS_SIGNATURE_ENV_KEY]: HARNESS_SIGNATURE },
 });

@@ -5,6 +5,7 @@ import type { SubagentSnapshot } from "./domain.js";
 import type { RegistryControlAuthority, RegistryProcess, RegistryWriter, SubagentRecord, SubagentRegistry } from "./registry.js";
 import type { RetainedHeadlessSupervisor } from "./retained-supervisor.js";
 import { RetainedResults } from "./retained-results.js";
+import { censusRetained } from "./retained-census.js";
 import { controlAuthority, retainedControlClient } from "./retained-control.js";
 export { controlAuthority } from "./retained-control.js";
 
@@ -24,7 +25,7 @@ function sameAnchor(process: RegistryProcess, operations: ProcessTreeOperations)
 
 /** No effects or identity recapture: pane numbers alone never establish ownership. */
 export async function verifyRetained(record: SubagentRecord, operations: ProcessTreeOperations, host?: TerminalHost, pi?: PiExecLike): Promise<"verified" | "lost" | "ambiguous"> {
-	if (!record.child) return "lost";
+	if (!record.child) return record.launchIntent === null ? "lost" : "ambiguous";
 	const { identity, verification } = record.child;
 	if (!sameAnchor(record.child, operations)) return operations.identityMatches(identity) === "different" && operations.isTreeEmpty(identity, verification) ? "lost" : "ambiguous";
 	if (record.backend === "visible") {
@@ -41,8 +42,13 @@ export async function reconstructRetained(registry: SubagentRegistry, successor:
 	operations: ProcessTreeOperations, host?: TerminalHost, pi?: PiExecLike,
 ): Promise<Array<{ entry: RetainedSubagent; classification: "adopted" | "persist-only" | "lost" | "ambiguous" }>> {
 	const results: Array<{ entry: RetainedSubagent; classification: "adopted" | "persist-only" | "lost" | "ambiguous" }> = [];
-	for (const { registry: discovered, record: initial } of registry.discover()) {
-		if (!initial.controlLease) continue;
+	for (const { registry: discovered, record: initial, launch } of censusRetained(registry, operations)) {
+		if (!initial.controlLease) {
+			// Pre-control crashes still need durable successor accounting, not adoption.
+			const lost = discovered.writerState(initial.id) === "dead" && (launch === "never-launched" || launch === "empty");
+			discovered.recordRecovery(initial.id, initial.revision, lost ? "lost" : "ambiguous");
+			continue;
+		}
 		const controller = discovered.forController(successor);
 		const snapshot: SubagentSnapshot = { id: initial.id, title: initial.id, prompt: "", cwd: initial.worktree?.path ?? initial.taskDir,
 			baseRef: initial.worktree?.baseRef ?? "HEAD", status: "running", createdAt: initial.createdAt, visible: initial.backend === "visible",
@@ -54,6 +60,7 @@ export async function reconstructRetained(registry: SubagentRegistry, successor:
 		try {
 			const verified = await verifyRetained(initial, operations, host, pi);
 			classification = verified === "lost" ? "lost" : "ambiguous";
+			if (launch !== "verified") throw new Error("retained census unverified");
 			if (!initial.supervisor || initial.supervisor.identity.pid === successor.pid
 				|| !sameAnchor(initial.supervisor, operations) || controller.writerState(initial.id) !== "alive"
 				|| verified !== "verified") throw new Error("retained owner unverified");

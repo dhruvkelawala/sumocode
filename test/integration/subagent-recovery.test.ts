@@ -9,7 +9,8 @@ import type { SubagentEvent, SubagentSnapshot } from "../../src/subagents/domain
 import { installSubagents } from "../../src/subagents/index.js";
 import type { SubagentManager } from "../../src/subagents/manager.js";
 import { SubagentRegistry, type SubagentRecord } from "../../src/subagents/registry.js";
-import { controlAuthority } from "../../src/subagents/retained-adoption.js";
+import { controlAuthority, reconstructRetained } from "../../src/subagents/retained-adoption.js";
+import { censusRetained } from "../../src/subagents/retained-census.js";
 import { createPaneChildSpawner } from "../../src/subagents/backend-pane.js";
 import type { TerminalHost } from "../../src/terminal-host/types.js";
 import { RetainedHeadlessSupervisor, RetainedVisibleSupervisor } from "../../src/subagents/retained-supervisor.js";
@@ -60,6 +61,8 @@ function fixture(cut?: "starting" | "pre-release", backend: "headless" | "visibl
 		delivery: { state: "none", claim: null }, result: null, manifest: null, writerLease: null, controlLease: null, controlHead: 0,
 	};
 	const operations: ProcessTreeOperations = {
+		census: vi.fn<NonNullable<ProcessTreeOperations["census"]>>(() => [{ pid: process.pid, processGroupId: process.pid, processStartTime: "host-birth" },
+			{ pid: 42, processGroupId: 42, processStartTime: "anchor-birth" }]),
 		captureStartTime: vi.fn(() => "anchor-command"), identityMatches: vi.fn(() => "same" as const), verificationMatches: vi.fn(() => "same" as const),
 		captureTreeVerification: vi.fn((identity) => ({ members: [{ pid: identity.pid, processStartTime: "anchor-birth" }] })),
 		isTreeEmpty: vi.fn(() => false), signalTree: vi.fn(async () => ({ ok: true, gone: true })), waitForTreeEmpty: vi.fn(async () => true),
@@ -364,9 +367,24 @@ describe("durable failure boundaries", () => {
 			if (cut === "post-manifest") expect(artifacts(f)).toHaveLength(2);
 		});
 	}
-	it("transition crash: spawned pre-release anchor must have a durable record", () => {
-		requireFakeBackend();
-		throw new Error("SPAWN_ACCOUNTING_GAP: beforePrompt persists the anchor only after spawn; fake spawn above releases no OS process. A crash between actual spawn and beforePrompt needs original-birth registration/ACK evidence, not a null-child green verdict");
+	it("transition crash: spawned pre-release anchor must have a durable record", async () => {
+		for (const cut of ["starting", "pre-release"] as const) {
+			const f = fixture(cut);
+			const before = f.registry.get(f.record.id)!;
+			expect(before.launchIntent).toEqual(cut === "starting" ? null : { nonce: expect.any(String) });
+			expect(before.child).toBeNull();
+			f.writerState("dead");
+			const nonce = before.launchIntent?.nonce;
+			vi.mocked(f.operations.census!).mockReturnValue(nonce ? [{ pid: 42, processGroupId: 42, processStartTime: "anchor-birth", anchorNonce: nonce }] : []);
+			const [observed] = censusRetained(f.registry, f.operations);
+			expect(observed.launch).toBe(cut === "starting" ? "never-launched" : "launched-unknown");
+			await reconstructRetained(f.registry, { token: "next", pid: 99, processStartTime: "next-birth" }, "next", f.operations);
+			const classification = cut === "starting" ? "lost" : "ambiguous";
+			expect(readFileSync(join(f.directory, "registry", `${f.record.id}.recovery-${before.revision}-${classification}.json`), "utf8")).toContain(classification);
+			expect(f.registry.get(f.record.id)).toEqual(before);
+			expect(f.operations.signalTree).not.toHaveBeenCalled();
+			expect(f.operations.captureStartTime).not.toHaveBeenCalled();
+		}
 	});
 	for (const identity of ["different", "unknown"] as const) {
 		it(`PID reuse denial: ${identity} anchor denies control and signals`, async () => {
@@ -505,8 +523,21 @@ describe("cleanup/zero-owned accounting", () => {
 			expect(operations.isTreeEmpty(tree.identity, tree.verification)).toBe(state === "same");
 		});
 	}
-	it("cleanup: real anchor IPC lifetime and zero-owned census", () => {
-		requireFakeBackend();
-		throw new Error("ANCHOR_RUNTIME_UNIMPLEMENTED: fake backend does not execute retained-process-anchor.mjs; register original anchor and Pi member births before release and use signalVerifiedProcessTree for crash injection; mocked emptiness is not OS proof");
+	it("cleanup: retained anchor lifetime and installation census", async () => {
+		const f = fixture();
+		await f.owner.ready;
+		const original = f.owner.record;
+		expect(censusRetained(f.registry, f.operations)[0]).toMatchObject({ launch: "verified", censusKnown: true });
+		// Pi can exit while the original anchor remains the cleanup capability.
+		vi.mocked(f.operations.census!).mockReturnValue([{ pid: 42, processGroupId: 42, processStartTime: "anchor-birth" }]);
+		expect(censusRetained(f.registry, f.operations)[0].launch).toBe("verified");
+		vi.mocked(f.operations.census!).mockReturnValue(undefined);
+		expect(censusRetained(f.registry, f.operations)[0]).toMatchObject({ launch: "ambiguous", censusKnown: false });
+		vi.mocked(f.operations.census!).mockReturnValue([]);
+		expect(censusRetained(f.registry, f.operations)[0].launch).toBe("ambiguous");
+		vi.mocked(f.operations.isTreeEmpty).mockReturnValue(true);
+		expect(censusRetained(f.registry, f.operations)[0].launch).toBe("empty");
+		expect(f.owner.record).toEqual(original);
+		expect(f.operations.signalTree).not.toHaveBeenCalled();
 	});
 });

@@ -31,6 +31,8 @@ async function fixture() {
 		inspectWriter: (identity) => identity.token === "old" ? oldState : identity.token === "supervisor" ? writerState : "alive",
 	});
 	const operations: ProcessTreeOperations = {
+		census: () => [{ pid: process.pid, processGroupId: process.pid, processStartTime: "supervisor-birth" },
+			{ pid: 4242, processGroupId: 4242, processStartTime: "anchor-birth" }],
 		captureStartTime: vi.fn(() => "anchor-command"), identityMatches: vi.fn(() => "same" as const),
 		verificationMatches: vi.fn(() => "same" as const),
 		captureTreeVerification: (identity) => ({ members: [{ pid: identity.pid, processStartTime: "anchor-birth" }] }),

@@ -180,7 +180,7 @@ export interface SpawnedChild {
 /** Persistence-owner fences, NOT authorization for user control requests.
  * A refusal holds the pipe and permanently stops local effects, not the child. */
 export interface HeadlessLaunchGate {
-	beforeSpawn(): void;
+	beforeSpawn(): string | void;
 	beforePrompt(pid: number): void;
 	beforeStdin(pid: number): void;
 	beforeSignal(pid: number): { readonly identity: ProcessTreeIdentity; readonly verification: ProcessTreeVerification };
@@ -736,11 +736,11 @@ export const createPiChildSpawner = (
 		// inside one operation; that API cannot fence each effect. Do not launch
 		// retained work there until a per-taskkill seam exists. Ungated is unchanged.
 		if (options.launchGate && process.platform === "win32") throw new Error("retained headless requires POSIX signal fencing");
-		options.launchGate?.beforeSpawn();
+		const anchorNonce = options.launchGate?.beforeSpawn();
 		const args = [...subprocessArgs, ...roleArgs, ...adapterArgs, ...bootstrapArgs, ...hookArgs];
 		let piExit: { code: number | null; signal: string | null } | undefined;
 		let piChild: ProcessTreeMemberAnchor | undefined;
-		const anchor = options.launchGate ? new RetainedAnchor(spawnImpl, binary, args, { cwd: options.cwd, env: childEnv }, {
+		const anchor = options.launchGate ? new RetainedAnchor(spawnImpl, binary, args, { cwd: options.cwd, env: childEnv, nonce: anchorNonce || undefined }, {
 			started: (child) => { piChild = child; waitForFactory(child); },
 			exited: (code, signal) => {
 				piExit = { code, signal };

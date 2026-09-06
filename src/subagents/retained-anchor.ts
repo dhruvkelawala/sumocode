@@ -22,7 +22,7 @@ export class RetainedAnchor {
 		spawnImpl: typeof spawn,
 		private readonly binary: string,
 		private readonly args: string[],
-		options: { cwd: string; env: NodeJS.ProcessEnv },
+		options: { cwd: string; env: NodeJS.ProcessEnv; nonce?: string },
 		private readonly callbacks: {
 			started: (child: ProcessTreeMemberAnchor) => void;
 			exited: (code: number | null, signal: string | null) => void;
@@ -36,8 +36,8 @@ export class RetainedAnchor {
 			throw new Error("retained anchor requires trusted Node without preload overrides");
 		}
 		// SAFETY: the three inherited Pi streams are pipes; fd 3 is anchor-only IPC.
-		this.proc = spawnImpl(node, ["-e", ANCHOR_PROGRAM, randomUUID()], {
-			...options, shell: false, detached: true, stdio: ["pipe", "pipe", "pipe", "ipc"],
+		this.proc = spawnImpl(node, ["-e", ANCHOR_PROGRAM, `sumocode-retained-anchor:${options.nonce ?? randomUUID()}`], {
+			cwd: options.cwd, env: options.env, shell: false, detached: true, stdio: ["pipe", "pipe", "pipe", "ipc"],
 		}) as ChildProcessWithoutNullStreams;
 		this.proc.on("message", (message: unknown) => {
 			try {

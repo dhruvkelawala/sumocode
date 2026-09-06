@@ -77,6 +77,8 @@ export interface SubagentRecord {
 	readonly backend: "headless" | "visible";
 	readonly status: "queued" | "starting" | "running" | "settling" | "settled" | "lost" | "ambiguous";
 	readonly taskDir: string;
+	/** null proves spawn was not admitted; absent legacy evidence is unknown. */
+	readonly launchIntent?: { readonly nonce: string } | null;
 	readonly child: RegistryProcess | null;
 	readonly supervisor: RegistryProcess | null;
 	readonly pane: SubagentPaneRef | null;
@@ -188,11 +190,13 @@ function deliveryState(value: unknown, completionId: string | null, generation: 
 		|| object(value.notice, "state completionId") && value.notice.state === "delivery-uncertain" && value.notice.completionId === noticeId;
 }
 function validRecord(value: unknown): value is SubagentRecord {
-	if (!object(value, RECORD_KEYS, "budget telemetry controllerSessionId controllerGeneration controlReservation")) return false;
+	if (!object(value, RECORD_KEYS, "budget telemetry controllerSessionId controllerGeneration controlReservation launchIntent")) return false;
 	if ((value.controllerSessionId === undefined) !== (value.controllerGeneration === undefined)
 		|| value.controllerSessionId !== undefined && (!text(value.controllerSessionId) || !positive(value.controllerGeneration))) return false;
 	if (value.controlReservation != null && (!object(value.controlReservation, "sessionId owner")
 		|| !text(value.controlReservation.sessionId) || !writer(value.controlReservation.owner) || value.controlLease !== null)) return false;
+	if (value.launchIntent != null && (!object(value.launchIntent, "nonce")
+		|| typeof value.launchIntent.nonce !== "string" || !/^[a-f0-9-]{36}$/.test(value.launchIntent.nonce))) return false;
 	const r = value;
 	if (r.budget !== undefined) {
 		try { validateSubagentBudget(r.budget); } catch { return false; }
@@ -232,6 +236,7 @@ function validRecord(value: unknown): value is SubagentRecord {
 	if (!integer(generation) || !deliveryState(r.delivery, r.completionId, generation, r.createdAt, r.updatedAt)) return false;
 	if (["running", "settling"].includes(r.status) && (r.child === null || r.supervisor === null || r.writerLease === null)) return false;
 	if (r.status === "queued" && (r.child !== null || r.supervisor !== null)) return false;
+	if (r.launchIntent === null && r.child !== null) return false;
 	if (r.status === "settled") {
 		if (r.settledAt === null || r.completionId === null || r.delivery.state === "none") return false;
 	} else if (["queued", "starting", "running", "settling"].includes(r.status)) {
@@ -356,7 +361,7 @@ export class SubagentRegistry {
 
 	public create(record: SubagentRecord): SubagentRecord {
 		this.validate(record);
-		if (record.revision !== 1 || record.controlReservation != null || record.controllerSessionId !== undefined || record.controllerGeneration !== undefined || record.controlLease !== null || record.controlHead !== 0 || record.writerLease !== null || record.child !== null || record.supervisor !== null || record.result !== null || record.manifest !== null || !["starting", "queued"].includes(record.status)) throw new Error("new registry record must be unlaunched at revision 1");
+		if (record.launchIntent != null || record.revision !== 1 || record.controlReservation != null || record.controllerSessionId !== undefined || record.controllerGeneration !== undefined || record.controlLease !== null || record.controlHead !== 0 || record.writerLease !== null || record.child !== null || record.supervisor !== null || record.result !== null || record.manifest !== null || !["starting", "queued"].includes(record.status)) throw new Error("new registry record must be unlaunched at revision 1");
 		const path = this.recordPath(record.id);
 		return this.withLock(path, () => {
 			this.validate(record);
@@ -550,6 +555,8 @@ export class SubagentRegistry {
 			for (const key of ["child", "supervisor", "pane", "worktree", "sessionFilePath", "completionId", "outcome", "settledAt", "result", "manifest"] as const) {
 				if (current[key] !== null && !isDeepStrictEqual(next[key], current[key])) throw new Error(`registry evidence must be preserved: ${key}`);
 			}
+			if (current.launchIntent !== undefined && (next.launchIntent === undefined
+				|| current.launchIntent !== null && !isDeepStrictEqual(current.launchIntent, next.launchIntent))) throw new Error("launch intent must be preserved");
 			if (current.telemetry) {
 				if (!next.telemetry) throw new Error("registry telemetry must be preserved");
 				for (const key of ["startedAt", "lastProgressAt", "lastHeartbeatAt", "reportedTokens", "reportedCostUsd"] as const) {

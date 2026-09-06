@@ -20,7 +20,7 @@ it("retains a separate live group anchor through Pi title changes and post-Pi-ex
 		verification: { members: [{ pid: 4242, processStartTime: "anchor-birth" }] },
 	};
 	const gate: HeadlessLaunchGate = {
-		beforeSpawn: vi.fn(), beforePrompt: vi.fn(), beforeStdin: vi.fn(),
+		beforeSpawn: vi.fn(() => "12345678-1234-1234-1234-123456789abc"), beforePrompt: vi.fn(), beforeStdin: vi.fn(),
 		beforeSignal: () => tree, onRefused: vi.fn(),
 	};
 	let finishWait!: (empty: boolean) => void;
@@ -42,6 +42,8 @@ it("retains a separate live group anchor through Pi title changes and post-Pi-ex
 	});
 	if (Symbol.asyncIterator in child.events) throw new Error("callback expected");
 	child.events(() => undefined);
+	expect(spawn).toHaveBeenCalledWith(expect.any(String), ["-e", expect.any(String), "sumocode-retained-anchor:12345678-1234-1234-1234-123456789abc"], expect.objectContaining({ detached: true }));
+	expect(proc.send).not.toHaveBeenCalled();
 	proc.emit("spawn");
 	expect(proc.send).toHaveBeenCalledTimes(1);
 	expect(proc.stdin.write).not.toHaveBeenCalled();

@@ -70,7 +70,7 @@ function prepareLaunch(
 			}
 		}
 	};
-	transition((record) => ({ ...record, supervisor }));
+	transition((record) => ({ ...record, supervisor, launchIntent: null }));
 	let phase: "prepared" | "admitted" | "blocked" | "released" = "prepared";
 
 	const fence = (): void => {
@@ -87,15 +87,20 @@ function prepareLaunch(
 		fence();
 		return child;
 	};
+	let nonce: string | undefined;
 	const gate: HeadlessLaunchGate = {
 		beforeStdin: (pid) => { childFence(pid); },
 		beforeSignal: childFence,
 		onRefused: () => { phase = "blocked"; },
-		beforeSpawn(): void {
+		beforeSpawn(): string {
 			if (phase !== "prepared") throw new Error("retained spawn gate already used");
 			phase = "blocked";
 			fence();
+			const launchNonce = nonce ?? randomUUID();
+			// This write precedes spawn, not its asynchronous birth callback.
+			transition((record) => ({ ...record, launchIntent: { nonce: launchNonce } }));
 			phase = "admitted";
+			return launchNonce;
 		},
 		beforePrompt(pid: number): void {
 			if (phase !== "admitted") throw new Error("retained prompt gate unavailable");
@@ -118,7 +123,6 @@ function prepareLaunch(
 			phase = "released";
 		},
 	};
-	let nonce: string | undefined;
 	const visibleGate: Omit<VisibleLaunchGate, "interrupt" | "onRefused" | "cleanup"> = {
 		beforeSpawn(launch) {
 			if (initial.backend !== "visible" || launch.taskDir !== initial.taskDir || !launch.nonce) throw new Error("visible launch binding mismatch");
@@ -427,7 +431,7 @@ export class RetainedHeadlessSupervisor extends RetainedSupervisor {
 		if (options.initial.backend !== "headless") throw new Error("headless record required");
 		super({ ...options, cwd: options.launch.cwd }, (authority, refuse, checkActive) => (dependencies.spawn ?? spawnPiChild)({
 			...options.launch, signal: undefined, launchGate: {
-				beforeSpawn: () => { checkActive(); authority.gate.beforeSpawn(); },
+				beforeSpawn: () => { checkActive(); return authority.gate.beforeSpawn(); },
 				beforePrompt: (pid) => { checkActive(); authority.gate.beforePrompt(pid); },
 				beforeStdin: (pid) => { checkActive(); authority.gate.beforeStdin(pid); },
 				beforeSignal: (pid) => { checkActive(); return authority.gate.beforeSignal(pid); },

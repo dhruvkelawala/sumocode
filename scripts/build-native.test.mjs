@@ -54,6 +54,20 @@ function fixture(layout) {
 }
 
 describe("native Pi build-source preparation", () => {
+	it("rejects optional dependencies available only above the package root", () => {
+		const { directory, root, piPkg, buildDir } = fixture("pnpm");
+		const manifestPath = join(piPkg, "package.json");
+		const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+		manifest.optionalDependencies["parent-only-optional"] = "1.0.0";
+		write(manifestPath, JSON.stringify(manifest));
+		const parentPackage = join(directory, "node_modules/parent-only-optional");
+		write(join(parentPackage, "package.json"), JSON.stringify({ name: "parent-only-optional", main: "index.js" }));
+		write(join(parentPackage, "index.js"), 'throw new Error("parent dependency must not load");\n');
+		expect(() => makeNativePiBuildCopy(piPkg, buildDir, root))
+			.toThrow(`Pi build dependency parent-only-optional resolves outside ${root}: ${parentPackage}`);
+		expect(existsSync(join(buildDir, "node_modules/parent-only-optional"))).toBe(false);
+	});
+
 	it("rejects required dependencies available only above the package root", () => {
 		const { directory, root, piPkg, buildDir } = fixture("pnpm");
 		const manifestPath = join(piPkg, "package.json");
@@ -63,7 +77,7 @@ describe("native Pi build-source preparation", () => {
 		write(join(directory, "node_modules/parent-only/package.json"), JSON.stringify({ name: "parent-only", main: "index.js" }));
 		write(join(directory, "node_modules/parent-only/index.js"), 'throw new Error("parent dependency must not load");\n');
 		expect(() => makeNativePiBuildCopy(piPkg, buildDir, root))
-			.toThrow(`Cannot resolve Pi build dependency parent-only within ${root}`);
+			.toThrow(`Pi build dependency parent-only resolves outside ${root}: ${join(directory, "node_modules/parent-only")}`);
 	});
 
 	for (const dependencyKind of ["dependencies", "optionalDependencies"]) {
@@ -92,8 +106,7 @@ describe("native Pi build-source preparation", () => {
 		it(`preserves the ${layout} package's private dependency graph in a fresh build copy`, () => {
 			const { directory, root, piPkg, source, buildDir } = fixture(layout);
 			makeNativePiBuildCopy(piPkg, buildDir, root);
-			const env = { ...process.env };
-			for (const key of ["NODE_PATH", "NODE_OPTIONS", "NODE_COMPILE_CACHE"]) delete env[key];
+			const env = { HOME: directory, TMPDIR: directory };
 			const result = spawnSync(process.execPath, [join(buildDir, "dist/bun/cli.js")], {
 				cwd: join(directory, "operator"), env, encoding: "utf8", timeout: 10_000,
 			});

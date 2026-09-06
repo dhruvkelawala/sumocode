@@ -128,13 +128,12 @@ export function makeNativePiBuildCopy(piPkg, buildDir, packageRoot = root) {
 	copyFileSync(join(piPkg, "package.json"), join(buildDir, "package.json"));
 
 	// Link package roots, not entry files: exports and transitive imports must
-	// keep Pi's installed graph. Never search above this checkout for dependencies.
+	// keep Pi's installed graph. Check presence in resolution order, then reject escapes.
 	const piRequire = createRequire(join(piPkg, "package.json"));
 	const realRoot = realpathSync(packageRoot);
 	const rootPrefix = `${realRoot}${sep}`;
 	for (const name of Object.keys({ ...manifest.dependencies, ...manifest.optionalDependencies })) {
 		const dependency = piRequire.resolve.paths(name)
-			.filter((directory) => directory.startsWith(rootPrefix))
 			.map((directory) => join(directory, name))
 			.find((directory) => existsSync(join(directory, "package.json")));
 		if (!dependency) {

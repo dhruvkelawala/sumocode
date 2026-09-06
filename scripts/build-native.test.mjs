@@ -232,6 +232,28 @@ describe("native Pi build-source preparation", () => {
 		expect(realpathSync(join(buildDir, "node_modules", name))).toBe(nearest);
 	});
 
+	// Node and Bun probe extensions and directory indexes for an extensionless main,
+	// so `main: "./lib/entry"` with `lib/entry.js` on disk is loadable. The literal-only
+	// check wrongly skipped such a nearest candidate and linked a same-named ancestor.
+	it("links the nearest extensionless-main candidate instead of the contained ancestor", () => {
+		const { root, piPkg, buildDir } = fixture("pnpm");
+		const name = "extensionless-main-nearest";
+		const manifestPath = join(piPkg, "package.json");
+		const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+		manifest.dependencies[name] = "1.0.0";
+		write(manifestPath, JSON.stringify(manifest));
+		const nearest = join(piPkg, "../..", name);
+		write(join(nearest, "package.json"), JSON.stringify({ name, main: "./lib/entry" }));
+		write(join(nearest, "lib/entry.js"), 'module.exports = "nearest";\n');
+		const ancestor = join(root, "node_modules", name);
+		write(join(ancestor, "package.json"), JSON.stringify({ name, main: "index.js" }));
+		write(join(ancestor, "index.js"), 'module.exports = "contained-ancestor";\n');
+		// Node probes the main field extensions: the nearest candidate itself resolves.
+		expect(createRequire(manifestPath).resolve(name)).toBe(join(nearest, "lib/entry.js"));
+		makeNativePiBuildCopy(piPkg, buildDir, root);
+		expect(realpathSync(join(buildDir, "node_modules", name))).toBe(nearest);
+	});
+
 	it("skips entryless and type-only edges but keeps the missing-required sanity error", () => {
 		const { root, piPkg } = fixture("pnpm");
 		const manifestPath = join(piPkg, "package.json");

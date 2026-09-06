@@ -152,6 +152,16 @@ export function makeNativePiBuildCopy(piPkg, buildDir, packageRoot = root) {
 	return buildDir;
 }
 
+function manifestEntryPresent(directory, entry) {
+	if (!entry) return false;
+	const base = join(directory, entry);
+	// Mirror Node's legacy main resolution: the literal path, probed extensions
+	// (.mjs/.cjs for Bun), or a directory index. Presence only — no exports emulation.
+	if (existsSync(base)) return true;
+	if ([".js", ".mjs", ".cjs", ".json"].some((extension) => existsSync(`${base}${extension}`))) return true;
+	return ["index.js", "index.mjs", "index.cjs"].some((index) => existsSync(join(base, index)));
+}
+
 function loadablePackageDirectory(directory) {
 	const manifestPath = join(directory, "package.json");
 	if (existsSync(manifestPath)) {
@@ -159,9 +169,9 @@ function loadablePackageDirectory(directory) {
 		// Import-only and private-subpath exports still need their package linked.
 		// Inspect presence, not CJS resolution or conditional-exports semantics.
 		if (manifest.exports != null) return true;
-		if (manifest.main && existsSync(join(directory, manifest.main))) return true;
+		if (manifestEntryPresent(directory, manifest.main)) return true;
 		// Bun also bundles ESM-only trees whose `module` field is the only entry.
-		if (manifest.module && existsSync(join(directory, manifest.module))) return true;
+		if (manifestEntryPresent(directory, manifest.module)) return true;
 	}
 	return ["index.js", "index.mjs", "index.cjs"].some((entry) => existsSync(join(directory, entry)));
 }

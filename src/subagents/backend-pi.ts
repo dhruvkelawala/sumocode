@@ -385,6 +385,8 @@ const mapPiEvent = (event: ParsedJsonLine): SubagentEvent[] => {
 		if (assistantEvent?.type === "text_delta" && isString(assistantEvent.delta)) {
 			return [{ kind: "assistant-delta", delta: assistantEvent.delta }];
 		}
+		if ((assistantEvent?.type === "thinking_delta" || assistantEvent?.type === "toolcall_delta")
+			&& isString(assistantEvent.delta) && assistantEvent.delta.length > 0) return [{ kind: "progress" }];
 	}
 	if (typeText === "tool_execution_start") {
 		return [{
@@ -416,9 +418,8 @@ const mapPiEvent = (event: ParsedJsonLine): SubagentEvent[] => {
 		if (messageValue.role === "assistant") {
 			events.push({
 				kind: "usage",
-				// totalTokens is the child's cumulative context occupancy; the JSON
-				// event stream does not carry the model's context-window capacity,
-				// so leave contextWindow unset rather than mislabeling input tokens.
+				// Per-message provider usage, not the model's context-window capacity.
+				// The manager separately sums reports for warning-only run budgets.
 				tokens: messageValue.usage?.totalTokens,
 				costUsd: messageValue.usage?.cost?.total,
 			});
@@ -816,6 +817,7 @@ export const createPiChildSpawner = (
 				if (event.kind === "assistant-delta") {
 					const delta = payloadBudget.appendLive(event.delta);
 					if (delta) emit({ ...event, delta });
+					else if (event.delta.length > 0) emit({ kind: "progress" });
 					continue;
 				}
 				if (event.kind === "message-end") {

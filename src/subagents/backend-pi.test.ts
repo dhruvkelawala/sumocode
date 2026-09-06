@@ -617,6 +617,21 @@ describe("spawnPiChild", () => {
 		expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
 	});
 
+	it("reports progress for thinking and bounded-away text without retaining private deltas", () => {
+		const proc = new FakeProcess();
+		// SAFETY: FakeProcess implements this backend's piped transport contract.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		if (Symbol.asyncIterator in child.events) throw new Error("expected callback backend");
+		const events = collect(child.events);
+		for (const type of ["thinking_delta", "toolcall_delta"]) emitJson(proc, { type: "message_update", assistantMessageEvent: { type, delta: "private reasoning or arguments" } });
+		expect(events.filter((event) => event.kind === "progress")).toHaveLength(2);
+		expect(JSON.stringify(events)).not.toContain("private reasoning or arguments");
+		emitJson(proc, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "x".repeat(CHILD_RETAINED_RESULT_MAX_BYTES) } });
+		emitJson(proc, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "still progressing" } });
+		expect(events.at(-1)).toEqual({ kind: "progress" });
+		proc.emit("close", 0);
+	});
+
 	it("translates pi json-line events", () => {
 		const proc = new FakeProcess();
 		const spawn = vi.fn((_command: string, _args: readonly string[], _options: { cwd: string }) => proc);

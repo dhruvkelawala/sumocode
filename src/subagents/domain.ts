@@ -11,6 +11,7 @@ export type SubagentStatus = "queued" | "running" | "done" | "error";
 export type SubagentEvent =
 	| { kind: "run-started" }
 	| { kind: "heartbeat"; at: number }
+	| { kind: "progress" }
 	| { kind: "pane-attached"; pane: SubagentPaneRef }
 	| { kind: "assistant-delta"; delta: string }
 	| { kind: "tool-start"; toolId: string; name: string; argsPreview?: string }

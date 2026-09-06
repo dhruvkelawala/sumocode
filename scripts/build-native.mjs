@@ -12,7 +12,7 @@
 // Nothing produced here is ever committed: dist/** is git-ignored (#439).
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -118,44 +118,107 @@ async function buildExtensionBundle(entryPoint, outPath) {
 }
 
 export function makeNativePiBuildCopy(piPkg, buildDir, packageRoot = root) {
+	const dependencies = validatePiBuildGraph(piPkg, packageRoot);
 	const manifest = JSON.parse(readFileSync(join(piPkg, "package.json"), "utf8"));
 	const piVersion = manifest.version;
 	if (piVersion !== PI_PIN) fail(`Bedrock-free child patch expects Pi ${PI_PIN}, found ${piVersion}`);
 
 	rmSync(buildDir, { recursive: true, force: true });
 	mkdirSync(buildDir, { recursive: true });
-	cpSync(join(piPkg, "dist"), join(buildDir, "dist"), { recursive: true });
+	cpSync(realpathSync(join(piPkg, "dist")), join(buildDir, "dist"), { recursive: true });
 	copyFileSync(join(piPkg, "package.json"), join(buildDir, "package.json"));
 
-	// Link package roots, not entry files: exports and transitive imports must
-	// keep Pi's installed graph. Check presence in resolution order, then reject escapes.
-	const piRequire = createRequire(join(piPkg, "package.json"));
-	const realRoot = realpathSync(packageRoot);
-	const rootPrefix = `${realRoot}${sep}`;
-	for (const name of Object.keys({ ...manifest.dependencies, ...manifest.optionalDependencies })) {
-		const dependency = piRequire.resolve.paths(name)
-			.map((directory) => join(directory, name))
-			.find((directory) => existsSync(join(directory, "package.json")));
-		if (!dependency) {
-			if (Object.hasOwn(manifest.optionalDependencies ?? {}, name)) continue;
-			throw new Error(`Cannot resolve Pi build dependency ${name} within ${packageRoot}`);
-		}
-		const realDependency = realpathSync(dependency);
-		// Missing optional packages may be skipped; installed escapes may not.
-		if (realDependency !== realRoot && !realDependency.startsWith(rootPrefix)) {
-			throw new Error(`Pi build dependency ${name} resolves outside ${packageRoot}: ${realDependency}`);
-		}
+	// Link roots rather than entries to preserve private exports and resolution.
+	for (const [name, realDependency] of dependencies) {
 		const target = join(buildDir, "node_modules", name);
 		mkdirSync(dirname(target), { recursive: true });
 		symlinkSync(realDependency, target, "dir");
 	}
 
-	const cliPath = join(buildDir, "dist/bun/cli.js");
+	// Detach only the patch path; other dist links retain their source neighborhoods.
+	const bunDir = join(buildDir, "dist/bun");
+	if (lstatSync(bunDir).isSymbolicLink()) {
+		const source = realpathSync(bunDir);
+		unlinkSync(bunDir);
+		cpSync(source, bunDir, { recursive: true });
+	}
+	const cliPath = join(bunDir, "cli.js");
 	const cliSource = readFileSync(cliPath, "utf8");
 	const matches = cliSource.split(BEDROCK_ENTRY_BLOCK).length - 1;
 	if (matches !== 1) fail(`Pi ${PI_PIN} Bedrock patch expected one entry block, found ${matches}`);
+	unlinkSync(cliPath);
 	writeFileSync(cliPath, cliSource.replace(BEDROCK_ENTRY_BLOCK, ""));
 	return buildDir;
+}
+
+/**
+ * Check package contents and installed dependency edges, not JS import expressions.
+ * This is a pre-build check of a stable install, not a sandbox or a TOCTOU guard.
+ */
+function validatePiBuildGraph(piPkg, packageRoot) {
+	const realRoot = realpathSync(packageRoot);
+	const directories = new Set();
+	const packages = new Map();
+
+	function checkedPath(path, name = path) {
+		const real = realpathSync(path);
+		if (real !== realRoot && !real.startsWith(`${realRoot}${sep}`)) {
+			throw new Error(`Pi build dependency ${name} resolves outside ${packageRoot}: ${real}`);
+		}
+		return real;
+	}
+
+	function walk(path) {
+		const real = checkedPath(path);
+		if (!statSync(real).isDirectory() || directories.has(real)) return;
+		directories.add(real);
+		for (const entry of readdirSync(real)) {
+			const child = join(real, entry);
+			if (entry === "node_modules") {
+				const modules = checkedPath(child);
+				for (const name of readdirSync(modules)) {
+					const installed = join(modules, name);
+					if (name.startsWith("@")) {
+						for (const scoped of readdirSync(checkedPath(installed))) visitPackage(join(installed, scoped));
+					} else if (!name.startsWith(".")) visitPackage(installed);
+				}
+			}
+			walk(child);
+		}
+	}
+
+	function visitPackage(path) {
+		const real = checkedPath(path);
+		if (packages.has(real)) return packages.get(real);
+		const dependencies = new Map();
+		packages.set(real, dependencies);
+		const manifestPath = join(real, "package.json");
+		// Manifestless installed modules are valid; example manifests are only content.
+		if (!existsSync(manifestPath)) {
+			walk(real);
+			return dependencies;
+		}
+		const manifest = JSON.parse(readFileSync(checkedPath(manifestPath), "utf8"));
+		const require = createRequire(manifestPath);
+		for (const name of Object.keys({ ...manifest.peerDependencies, ...manifest.dependencies, ...manifest.optionalDependencies })) {
+			// Real package neighborhoods include pnpm siblings, not just child node_modules.
+			const dependency = require.resolve.paths(name)
+				.map((directory) => join(directory, name))
+				.find((directory) => existsSync(join(directory, "package.json")));
+			if (!dependency) {
+				if (Object.hasOwn(manifest.optionalDependencies ?? {}, name)
+					|| (manifest.peerDependenciesMeta?.[name]?.optional && !Object.hasOwn(manifest.dependencies ?? {}, name))) continue;
+				throw new Error(`Cannot resolve Pi build dependency ${name} within ${packageRoot}`);
+			}
+			const target = checkedPath(dependency, name);
+			visitPackage(target);
+			dependencies.set(name, target);
+		}
+		walk(real);
+		return dependencies;
+	}
+
+	return visitPackage(piPkg);
 }
 
 function bedrockInputs(metafilePath) {

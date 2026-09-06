@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -112,6 +113,83 @@ describe("native build entry", () => {
 });
 
 describe("native Pi build-source preparation", () => {
+	for (const escape of ["nested transitive", "pnpm neighbor transitive", "pnpm peer transitive", "pnpm optional transitive", "package file", "package directory", "Pi dist file"]) {
+		it(`rejects an escaped ${escape} before linking the source graph`, () => {
+			const { directory, root, piPkg, buildDir } = fixture("pnpm");
+			const lockPkg = join(root, "node_modules/.pnpm/lock@1/node_modules/proper-lockfile");
+			const outside = join(directory, "outside-fake");
+			write(join(outside, "package.json"), '{"name":"escaped-transitive","main":"index.cjs"}');
+			write(join(outside, "index.cjs"), 'throw new Error("fake source must never execute");\n');
+			let input;
+			if (escape.endsWith("transitive")) {
+				write(join(lockPkg, "package.json"), JSON.stringify({
+					name: "proper-lockfile", main: "index.cjs",
+					[escape === "pnpm peer transitive" ? "peerDependencies"
+						: escape === "pnpm optional transitive" ? "optionalDependencies" : "dependencies"]: { "escaped-transitive": "1" },
+				}));
+				const neighborhood = escape === "nested transitive" ? join(lockPkg, "node_modules") : dirname(lockPkg);
+				input = join(neighborhood, "escaped-transitive");
+				symlinkSync(outside, input, "dir");
+				// Resolve only: this observes the source graph without evaluating its code.
+				expect(createRequire(join(lockPkg, "index.cjs")).resolve("escaped-transitive"))
+					.toBe(join(outside, "index.cjs"));
+			} else if (escape === "package directory") {
+				input = join(lockPkg, "escaped");
+				symlinkSync(outside, input, "dir");
+				expect(createRequire(join(lockPkg, "index.cjs")).resolve("./escaped/index.cjs"))
+					.toBe(join(outside, "index.cjs"));
+			} else {
+				input = join(escape === "package file" ? lockPkg : join(piPkg, "dist"), "escaped.cjs");
+				symlinkSync(join(outside, "index.cjs"), input);
+				expect(createRequire(join(piPkg, "package.json")).resolve(input)).toBe(join(outside, "index.cjs"));
+			}
+			expect(realpathSync(lockPkg).startsWith(`${root}/`)).toBe(true);
+			expect(() => makeNativePiBuildCopy(piPkg, buildDir, root)).toThrow(/resolves outside/);
+			expect(existsSync(join(buildDir, "node_modules/proper-lockfile"))).toBe(false);
+		});
+	}
+
+	it("keeps contained pnpm neighbors, cycles and absent optionals without treating example manifests as dependencies", () => {
+		const { root, piPkg, buildDir } = fixture("pnpm");
+		const lockPkg = join(root, "node_modules/.pnpm/lock@1/node_modules/proper-lockfile");
+		const neighbor = join(root, "node_modules/.pnpm/neighbor@1/node_modules/neighbor");
+		write(join(lockPkg, "package.json"), JSON.stringify({
+			name: "proper-lockfile", main: "index.cjs", dependencies: { neighbor: "1" },
+			optionalDependencies: { "absent-transitive": "1" },
+			peerDependencies: { "absent-peer": "1" },
+			peerDependenciesMeta: { "absent-peer": { optional: true } },
+		}));
+		write(join(neighbor, "package.json"), JSON.stringify({
+			name: "neighbor", main: "index.cjs", dependencies: { "proper-lockfile": "1" },
+		}));
+		write(join(neighbor, "index.cjs"), 'module.exports = "contained-neighbor";\n');
+		symlinkSync(neighbor, join(dirname(lockPkg), "neighbor"), "dir");
+		symlinkSync(lockPkg, join(dirname(neighbor), "proper-lockfile"), "dir");
+		symlinkSync(lockPkg, join(lockPkg, "content-cycle"), "dir");
+		write(join(neighbor, "examples/package.json"), '{"dependencies":{"not-installed-example":"1"}}');
+		makeNativePiBuildCopy(piPkg, buildDir, root);
+		const stagedLock = createRequire(join(buildDir, "package.json")).resolve("proper-lockfile");
+		expect(createRequire(stagedLock).resolve("neighbor")).toBe(join(neighbor, "index.cjs"));
+		expect(createRequire(join(neighbor, "index.cjs")).resolve("proper-lockfile")).toBe(join(lockPkg, "index.cjs"));
+	});
+
+	for (const linkedPath of ["dist", "dist/bun", "dist/bun/cli.js"]) {
+		it(`detaches the ${linkedPath} patch path without changing source bytes or other dist links`, () => {
+			const { root, piPkg, source, buildDir } = fixture("pnpm");
+			const shared = join(root, "shared");
+			renameSync(join(piPkg, linkedPath), shared);
+			symlinkSync(shared, join(piPkg, linkedPath));
+			const cliPath = join(piPkg, "dist/bun/cli.js");
+			const sourceDist = realpathSync(join(piPkg, "dist"));
+			symlinkSync(sourceDist, join(piPkg, "dist/contained-cycle"), "dir");
+			makeNativePiBuildCopy(piPkg, buildDir, root);
+			expect(readFileSync(cliPath, "utf8")).toBe(source);
+			expect(readFileSync(join(buildDir, "dist/bun/cli.js"), "utf8")).not.toContain("bedrock_import_start");
+			expect(realpathSync(join(buildDir, "dist/bun/cli.js"))).toBe(join(buildDir, "dist/bun/cli.js"));
+			expect(realpathSync(join(buildDir, "dist/contained-cycle"))).toBe(sourceDist);
+		});
+	}
+
 	it("rejects optional dependencies available only above the package root", () => {
 		const { directory, root, piPkg, buildDir } = fixture("pnpm");
 		const manifestPath = join(piPkg, "package.json");

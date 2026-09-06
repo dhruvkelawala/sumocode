@@ -13,7 +13,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { createRequire, isBuiltin } from "node:module";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
@@ -208,6 +208,11 @@ function validatePiBuildGraph(piPkg, packageRoot) {
 		const manifest = JSON.parse(readFileSync(checkedPath(manifestPath), "utf8"));
 		const require = createRequire(manifestPath);
 		for (const name of Object.keys({ ...manifest.peerDependencies, ...manifest.dependencies, ...manifest.optionalDependencies })) {
+			// Builtin specifiers (bare like string_decoder, or node:-prefixed) always
+			// resolve to core modules: require.resolve.paths returns null for them, and
+			// Node loads the builtin even when a same-named directory is installed. Skip
+			// before resolving — nothing to contain, no directory to link into the copy.
+			if (isBuiltin(name)) continue;
 			// Real package neighborhoods include pnpm siblings, not just child node_modules.
 			// A candidate counts only when Node would load it (manifest or index entry);
 			// unloadable nearest directories fall through to ancestors exactly like Node

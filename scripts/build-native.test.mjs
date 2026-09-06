@@ -208,6 +208,46 @@ describe("native Pi build-source preparation", () => {
 		});
 	}
 
+	// Builtin-shadowing dependency names are routine in real closures (readable-stream
+	// -> string_decoder, uri-js -> punycode). For such specifiers Node and Bun load the
+	// core module — require.resolve.paths returns null, and even an installed
+	// same-named directory is never loaded — so the validator must skip the name before
+	// resolving: there is nothing to contain and no directory to link.
+	for (const name of ["string_decoder", "node:string_decoder"]) {
+		it(`validates the graph when an uninstalled dependency is named ${name}`, () => {
+			const { root, piPkg, buildDir } = fixture("pnpm");
+			const lockPkg = join(root, "node_modules/.pnpm/lock@1/node_modules/proper-lockfile");
+			write(join(lockPkg, "package.json"), JSON.stringify({
+				name: "proper-lockfile", main: "index.cjs", dependencies: { [name]: "1.0.0" },
+			}));
+			// Node resolves the builtin itself; no installed copy exists anywhere.
+			expect(createRequire(join(lockPkg, "index.cjs")).resolve(name)).toBe(name);
+			makeNativePiBuildCopy(piPkg, buildDir, root);
+			// Remaining dependency edges are still validated and still linked.
+			expect(realpathSync(join(buildDir, "node_modules/proper-lockfile"))).toBe(realpathSync(lockPkg));
+			expect(createRequire(join(buildDir, "package.json")).resolve("proper-lockfile"))
+				.toBe(join(realpathSync(lockPkg), "index.cjs"));
+		});
+	}
+
+	it("does not link a contained install of a builtin-named dependency: string_decoder", () => {
+		const { root, piPkg, buildDir } = fixture("pnpm");
+		const lockPkg = join(root, "node_modules/.pnpm/lock@1/node_modules/proper-lockfile");
+		write(join(lockPkg, "package.json"), JSON.stringify({
+			name: "proper-lockfile", main: "index.cjs", dependencies: { string_decoder: "1.0.0" },
+		}));
+		// A real, contained userland package carrying a builtin's name exists on disk,
+		// but Node still loads the core module for the bare specifier, so the validator
+		// skips the name entirely and the directory is deliberately not linked.
+		const userland = join(root, "node_modules/string_decoder");
+		write(join(userland, "package.json"), JSON.stringify({ name: "string_decoder", main: "index.js" }));
+		write(join(userland, "index.js"), 'module.exports = "userland-shadow";\n');
+		expect(createRequire(join(lockPkg, "index.cjs")).resolve("string_decoder")).toBe("string_decoder");
+		makeNativePiBuildCopy(piPkg, buildDir, root);
+		expect(existsSync(join(buildDir, "node_modules/string_decoder"))).toBe(false);
+		expect(realpathSync(join(buildDir, "node_modules/proper-lockfile"))).toBe(realpathSync(lockPkg));
+	});
+
 	it("links a contained manifestless pnpm neighbor", () => {
 		const { root, piPkg, buildDir } = fixture("pnpm");
 		const manifestPath = join(piPkg, "package.json");

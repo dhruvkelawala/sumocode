@@ -3,7 +3,8 @@ import { createRequire } from "node:module";
 import { basename, isAbsolute } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-/** Source-only entry. Launch with a verified absolute Node, detached, and a clean env.
+/** Source-only entry. Caller supplies a verified absolute Node, detached, and a controlled env.
+ * This entry rejects executable-resolution overrides; it does not sanitize the whole env.
  * Code comes from this package, never argv, task cwd, or SUMOCODE_ROOT_DIR.
  * Args, in order: --task-dir PATH --registry-dir PATH --id ID --owner-session ID --nonce UUID.
  * Native artifacts and control/adoption are deliberately unsupported.
@@ -39,6 +40,8 @@ function assertFile(path, executable = false) {
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
 	void runSourceEntry(process.argv.slice(2)).catch(() => {
 		process.stderr.write("retained_entry_failed\n");
-		process.exitCode = 1;
+		// Exit only this CLI, without reclaiming authority or signaling the child.
+		// Closing our pipes may cause child EPIPE; work remains ambiguous/lost.
+		process.exit(1);
 	});
 }

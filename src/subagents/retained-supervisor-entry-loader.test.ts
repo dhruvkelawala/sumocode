@@ -1,5 +1,7 @@
 import { createRequire } from "node:module";
-import { realpathSync } from "node:fs";
+import { mkdtempSync, realpathSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -28,6 +30,25 @@ it("loads physical source and Pi-local Jiti from the package, independent of tas
 		{ moduleCache: true, tryNative: false, fsCache: false });
 	expect(importSource).toHaveBeenCalledWith(resolve(root, "src/subagents/retained-supervisor-entry.ts"));
 	expect(runRetainedSupervisorEntry).toHaveBeenCalledWith(args);
+});
+
+it("exits the actual CLI on fatal failure despite a referenced timer", () => {
+	const home = mkdtempSync(resolve(tmpdir(), "retained-entry-exit-"));
+	// Test-owned preload only: the entry rejects execArgv before loading Jiti or Pi.
+	const fixture = "import { writeSync } from 'node:fs'; setInterval(() => {}, 1000); writeSync(1, 'timer referenced\\n');";
+	const result = spawnSync(process.execPath, [
+		"--import", `data:text/javascript,${encodeURIComponent(fixture)}`,
+		fileURLToPath(new URL("./retained-supervisor-entry.mjs", import.meta.url)),
+	], {
+		cwd: home, env: { HOME: home, TMPDIR: home, XDG_CACHE_HOME: home },
+		encoding: "utf8", timeout: 3000, killSignal: "SIGKILL", maxBuffer: 4096,
+	});
+	// spawnSync reaps this sole owned process, including on the RED timeout path.
+	expect(result.stdout).toBe("timer referenced\n");
+	expect(result.stderr).toBe("retained_entry_failed\n");
+	expect(result.error).toBeUndefined();
+	expect(result.signal).toBeNull();
+	expect(result.status).toBe(1);
 });
 
 it("rejects Node loader options before loading code", async () => {

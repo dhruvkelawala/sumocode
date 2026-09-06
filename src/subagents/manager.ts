@@ -739,7 +739,7 @@ export class SubagentManager {
 	 * synchronously submits it to Pi. This is not a model-turn delivery ACK.
 	 * Throws with the same shapes the subagent tools surface directly.
 	 */
-	public async sendTo(id: string, text: string): Promise<SubagentSnapshot> {
+	public async sendTo(id: string, text: string): Promise<SubagentSnapshot | { capability: "unsupported: headless steering" }> {
 		const snapshot = this.snapshots.get(id);
 		if (!snapshot) {
 			throw new Error(`Unknown subagent id: ${id}. Known ids: ${this.list().map((known) => known.id).join(", ") || "(none)"}`);
@@ -750,9 +750,15 @@ export class SubagentManager {
 		if (isSettled(snapshot)) {
 			throw new Error(`Subagent ${id} is already settled (${snapshot.status}) and cannot receive input`);
 		}
+		const retained = this.retained.get(id);
+		if (this.detached || retained && (retained.blocked || !retained.entry.registry.inspectControl(retained.entry.authority))) {
+			throw new Error(`Subagent ${id} control refused; inspect retained evidence`);
+		}
+		// Headless stdin carries a one-shot prompt, not a steering channel.
+		if (!snapshot.visible) return { capability: "unsupported: headless steering" };
 		const child = this.children.get(id)?.child;
 		if (!child?.send) {
-			throw new Error("headless children cannot receive input — respawn with visible: true");
+			throw new Error(`Subagent ${id} visible steering channel unavailable`);
 		}
 		await child.send(text);
 		return this.snapshots.get(id) ?? snapshot;

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { projectPiToolActivity } from "../activity/pi-projector.js";
 import { TRUNCATED_HEAD_MARKER } from "../child-protocol.js";
 import { registerSubagentTools } from "./tools.js";
 import { SubagentManager, type SpawnSubagentTask } from "./manager.js";
@@ -347,7 +348,12 @@ describe("subagent tools", () => {
 		await expect(headless.tool("subagent_send").execute("tc", { id: "sa-404", text: "hi" })).rejects.toThrow("Unknown subagent id");
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		await headless.tool("subagent_spawn").execute("tc", { prompt: "quiet", name: "headless" }, undefined, undefined, headless.ctx as never);
-		await expect(headless.tool("subagent_send").execute("tc", { id: "sa-1", text: "hi" })).rejects.toThrow("headless children cannot receive input");
+		const unsupported = await headless.tool("subagent_send").execute("tc", { id: "sa-1", text: "hi" });
+		expect(unsupported).toMatchObject({ details: { action: "send", capability: "unsupported: headless steering" } });
+		expect(unsupported).not.toHaveProperty("isError", true);
+		expect(textOf(unsupported)).toBe("unsupported: headless steering; respawn with visible: true to steer");
+		expect(projectPiToolActivity({ id: "tc", name: "subagent_send", status: "done", output: textOf(unsupported), details: unsupported.details },
+			{ messageId: "message", blockIndex: 0 })).toMatchObject({ status: "succeeded", body: { kind: "text", text: textOf(unsupported) } });
 
 		const settled = createHarness();
 		// SAFETY: the ctx double carries only the fields the tool handlers read.

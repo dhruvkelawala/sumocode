@@ -77,7 +77,7 @@ function fixture(cut?: "starting" | "pre-release", backend: "headless" | "visibl
 			gate.beforeSpawn();
 			if (cut !== "pre-release") gate.beforePrompt(42);
 		}
-		return { events: subscribe, interrupt, send, requestClose };
+		return { events: subscribe, interrupt };
 	});
 	const buildManifest = vi.fn(async () => ({ baseRef: "HEAD", changedPaths: [], commits: 0, exit: "completed" as const, durationMs: 1 }));
 	const supervisor = { identity: { pid: process.pid, processGroupId: process.pid, processStartTime: "host-command" }, verification: { members: [{ pid: process.pid, processStartTime: "host-birth" }] } };
@@ -202,8 +202,11 @@ async function replaceAndComplete(reason: string, beforeSettle = true, backend: 
 	expect(f.registry.inspectControl(controlAuthority(f.owner.record))).toBe(true);
 	expect(f.owner.record.controlLease?.owner.token).toBe("successor");
 	if (beforeSettle) {
-		await next.manager.sendTo(f.record.id, "steer after recovery");
-		expect(f.send).toHaveBeenCalledExactlyOnceWith("steer after recovery");
+		const result = await next.manager.sendTo(f.record.id, "steer after recovery");
+		if (backend === "headless") {
+			expect(result).toEqual({ capability: "unsupported: headless steering" });
+			expect(f.send).not.toHaveBeenCalled();
+		} else expect(f.send).toHaveBeenCalledExactlyOnceWith("steer after recovery");
 		await f.finish();
 	}
 	expect(next.manager.get(f.record.id)).toMatchObject({ status: "done", finalText: "preserved result", recovery: "adopted" });
@@ -254,8 +257,11 @@ describe("production recovery matrix", () => {
 					expect(next.manager.get(f.record.id)?.recovery).toBe("adopted");
 					const steering = next.manager.sendTo(f.record.id, "steer after disk recovery");
 					await vi.advanceTimersByTimeAsync(1000);
-					await steering;
-					expect(f.send).toHaveBeenCalledExactlyOnceWith("steer after disk recovery");
+					const result = await steering;
+					if (backend === "headless") {
+						expect(result).toEqual({ capability: "unsupported: headless steering" });
+						expect(f.send).not.toHaveBeenCalled();
+					} else expect(f.send).toHaveBeenCalledExactlyOnceWith("steer after disk recovery");
 					await f.finish();
 					await vi.advanceTimersByTimeAsync(250);
 					expect(next.manager.get(f.record.id)).toMatchObject({ status: "done", finalText: "preserved result" });
@@ -392,7 +398,8 @@ describe("durable failure boundaries", () => {
 			const initial = f.owner.record.child!;
 			vi.mocked(f.operations.identityMatches).mockReturnValue(identity);
 			vi.mocked(f.operations.verificationMatches!).mockReturnValue(identity);
-			await expect(old.manager.sendTo(f.record.id, "forbidden")).rejects.toThrow();
+			await expect(old.manager.sendTo(f.record.id, "forbidden")).resolves.toEqual({ capability: "unsupported: headless steering" });
+			expect(f.send).not.toHaveBeenCalled();
 			await expect(old.manager.cancel([f.record.id])).rejects.toThrow();
 			expect((await signalVerifiedProcessTree(f.operations, initial.identity, "SIGKILL", initial.verification)).ok).toBe(false);
 			expect(f.owner.record.child).toEqual(initial);

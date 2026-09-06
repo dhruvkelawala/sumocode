@@ -35,7 +35,7 @@ export async function runRealRecovery(backend: "headless" | "visible", replaceme
 		admit(child.pid);
 		return birth;
 	};
-	const read = (name: string): { error?: string; expiresAt?: number; headlessSteering?: boolean; promptPresent?: boolean; privateRolePresent?: boolean; toolsEmpty?: boolean } => JSON.parse(readFileSync(join(root, name), "utf8"));
+	const read = (name: string): { error?: string; steering?: string; expiresAt?: number; headlessSteering?: boolean; promptPresent?: boolean; privateRolePresent?: boolean; toolsEmpty?: boolean } => JSON.parse(readFileSync(join(root, name), "utf8"));
 	const wait = async (name: string, mode: string) => {
 		const deadline = Date.now() + 30_000;
 		while (!existsSync(join(root, name))) {
@@ -58,10 +58,12 @@ export async function runRealRecovery(backend: "headless" | "visible", replaceme
 		supervisePtyProcess(anchor.identity.pid, createChildEvidenceContext([node, "retained-anchor"], env), env);
 		admit(anchor.identity.pid);
 		const ready = await wait("owner-ready.json", mode);
+		expect(ready.headlessSteering).toBe(false);
 		expect(read("provider-called.json")).toEqual({ promptPresent: true, privateRolePresent: true, toolsEmpty: true });
 		if (mode === "same-process") {
 			const result = await wait("same-process-result.json", mode);
 			if (result.error) throw new Error(result.error);
+			expect(result.steering).toBe("unsupported: headless steering");
 		} else {
 			const origin = await start("origin");
 			const lease = await wait("origin-ready.json", "owner");
@@ -72,10 +74,8 @@ export async function runRealRecovery(backend: "headless" | "visible", replaceme
 			const result = await wait("successor-result.json", "successor");
 			writeFileSync(join(root, "finish"), "", { mode: 0o600, flag: "wx" });
 			await wait("owner-result.json", "owner");
-			if (result.error) {
-				expect(ready.headlessSteering).toBe(false);
-				throw new Error(result.error);
-			}
+			if (result.error) throw new Error(result.error);
+			expect(result.steering).toBe("unsupported: headless steering");
 		}
 	} finally {
 		const failures: number[] = [];

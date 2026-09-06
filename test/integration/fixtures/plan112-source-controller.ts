@@ -39,11 +39,9 @@ export async function runSourceController(root: string, mode: string, pi: string
 		assert.deepEqual(registry.get(before.id)?.child, before.child);
 		assert.deepEqual(registry.get(before.id)?.supervisor, before.supervisor);
 		try {
-			await runtime.manager.sendTo(before.id, "steer after disk recovery");
-			put("successor-result.json", { steering: "accepted" });
-		} catch (error) {
-			assert.match(String(error), /retained control uncertain/);
-			put("successor-result.json", { error: "capability: no headless steering", census: "verified", recovery: "adopted" });
+			const result = await runtime.manager.sendTo(before.id, "steer after disk recovery");
+			assert.deepEqual(result, { capability: "unsupported: headless steering" });
+			put("successor-result.json", { steering: "unsupported: headless steering", census: "verified", recovery: "adopted" });
 		} finally { runtime.manager.detachForReplacement(); }
 		return;
 	}
@@ -97,13 +95,9 @@ export async function runSourceController(root: string, mode: string, pi: string
 		assert.equal(registry.inspectControl(authority), false);
 		assert.equal(next.manager.get(initial.id)?.recovery, "adopted");
 		assert.deepEqual(owner.record.child, current.child);
-		let steeringError: string | undefined;
-		try { await next.manager.sendTo(initial.id, "steer after recovery"); }
-		catch (error) {
-			assert.equal(backend.send, undefined);
-			assert.match(String(error), /headless children cannot receive input/);
-			steeringError = "capability: no headless steering";
-		}
+		assert.equal(backend.send, undefined);
+		const result = await next.manager.sendTo(initial.id, "steer after recovery");
+		assert.deepEqual(result, { capability: "unsupported: headless steering" });
 		put("finish", {});
 		assert.equal(await owner.settlement, "settled");
 		assert.equal(next.manager.get(initial.id)?.finalText, "preserved result");
@@ -111,7 +105,7 @@ export async function runSourceController(root: string, mode: string, pi: string
 		await next.fire("agent_end"); await next.fire("agent_end");
 		assert.equal(old.deliveries.length, 0);
 		assert.equal(next.deliveries.length, 1);
-		put("same-process-result.json", { error: steeringError, recovery: "adopted", settlement: "settled", deliveries: 1 });
+		put("same-process-result.json", { steering: "unsupported: headless steering", recovery: "adopted", settlement: "settled", deliveries: 1 });
 	} finally { old.manager.detachForReplacement(); next.manager.detachForReplacement(); }
 }
 

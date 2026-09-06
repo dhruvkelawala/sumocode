@@ -259,7 +259,10 @@ export function registerSubagentTools(
 				throw new Error("subagent_send text is required: blank or whitespace-only steering is rejected before submission");
 			}
 			const snapshot = await manager.sendTo(params.id, params.text);
-			return makeToolResult(`Steering submitted to the child runtime for ${params.id} (${snapshot.title}); Pi exposes no post-acceptance acknowledgement.`, { action: "send", id: params.id, pane: snapshot.pane });
+			return makeToolResult("capability" in snapshot
+				? `${snapshot.capability}; respawn with visible: true to steer`
+				: `Steering submitted to the child runtime for ${params.id} (${snapshot.title}); Pi exposes no post-acceptance acknowledgement.`,
+			{ action: "send", id: params.id, ...("capability" in snapshot ? { capability: snapshot.capability } : { pane: snapshot.pane }) });
 		},
 	});
 

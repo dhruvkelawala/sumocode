@@ -1213,10 +1213,10 @@ describe("SubagentManager steering and close", () => {
 			await expect(manager.sendTo("sa-1", "hi")).rejects.toThrow("already settled (done)");
 		});
 
-		it("rejects children without a send capability as headless", async () => {
+		it("classifies headless steering as unsupported", async () => {
 			const { manager } = deferredBackend();
 			await manager.spawn(makeTask("headless"));
-			await expect(manager.sendTo("sa-1", "hi")).rejects.toThrow("headless children cannot receive input — respawn with visible: true");
+			await expect(manager.sendTo("sa-1", "hi")).resolves.toEqual({ capability: "unsupported: headless steering" });
 		});
 
 		it("waits for the child's consumption acknowledgement and returns the snapshot", async () => {

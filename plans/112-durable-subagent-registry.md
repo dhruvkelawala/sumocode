@@ -448,6 +448,27 @@ Acceptance uses manager/lifecycle and registry interfaces with fake Pi/backend/p
 
 Nonheavy verification and exact SHA/counts are recorded in the local `issue-to-pr/406.md` ledger. Full production recovery matrix, actual runtime/native/full/visual checks and human capture approval remain pending; Plan112 as a whole is not DONE.
 
-### Slice 3 WIP: fake-backend production composition scaffold
+### Slice 3 historical scaffold (superseded by the matrix checkpoint below)
 
-`test/integration/subagent-recovery.test.ts` now has two `recovery-model:` cases composing the production headless supervisor, registry and manager with a fake backend/process boundary. Replacement before or after settlement, then a second replacement after delivery, preserves original anchors, one parser/spawn, one sender call and byte-identical readable result/manifest artifacts. No interrupt or signal is issued. These are **green source-model scaffolding only**, not the real process matrix, visible-owner deployment, host reload or crash proof. The existing six real feasibility cases and five cleanup cases are unchanged and were unselected, not promoted to passing evidence. Run only the model in the nonheavy lane with `-t 'recovery-model:'`; full execution still requires the approved external supervisor and separate heavy authorization.
+`test/integration/subagent-recovery.test.ts` now has two `recovery-model:` cases composing the production headless supervisor, registry and manager with a fake backend/process boundary. Replacement before or after settlement, then a second replacement after delivery, preserves original anchors, one parser/spawn, one sender call and byte-identical readable result/manifest artifacts. No interrupt or signal is issued. These are **green source-model scaffolding only**, not the real process matrix, visible-owner deployment, host reload or crash proof. The existing six real feasibility cases and five cleanup cases are unchanged and were unselected, not promoted to passing evidence. That checkpoint selected only `-t 'recovery-model:'`; it is historical evidence, not the current invocation.
+
+### Slice 3 matrix checkpoint — incomplete, explicitly red
+
+The default command now launches **no backend/Pi/PTY processes**:
+
+```sh
+pnpm vitest run test/integration/subagent-recovery.test.ts --fileParallelism=false
+```
+
+Current result: **38 cases, 30 green, 8 explicitly failing, zero skipped**. The old fixture broker is no longer this file's acceptance path; its historical evidence above is unchanged. Real registry, headless supervisor, manager, registered lifecycle handlers/tools, results and process-signal fences compose over fake backend/kernel/time/sender boundaries. `/reload` here exercises the registered handler in one process, not an actual host reload. Five transition cases inject gate refusal or writer expiry at publication boundaries, not OS death. The fake backend never executes the anchor `.mjs`; timer disposal is asserted, not equated with an OS census.
+
+The eight failures are blocking evidence, not expected-failure/skip annotations:
+- Three visible feasibility cells: no production retained visible supervisor to compose (the prior unit seam supplies a fake owner).
+- Two headless cross-process cells: no production disk/IPC reconstruction of the in-process controller descriptor.
+- Spawn-to-anchor publication accounting: the pre-release fake has no spawned OS child; it cannot prove that the actual spawn/beforePrompt crash window is tracked.
+- Real anchor IPC lifetime/zero-owned census: no production dual-mode adapter in this suite.
+- **Exercised close-consumption counterexample:** settle -> registered `subagent_close` returns result inline -> `/new` -> successor sends it again. The tool consumes the outgoing buffer, but `manager.close`'s already-settled branch does not add `consumedIds` for transfer. Check (read-only), wait and cancel schedules pass. This reopens the complete 112.4 race criterion; the sender CAS/uncertainty protocol remains unchanged.
+
+`PLAN112_RECOVERY_BACKEND=real` currently throws `REAL_BACKEND_UNIMPLEMENTED` before fixture construction in every case; **it is not a working real adapter**. A heavy rerun cannot close these source gaps. Implement the missing production owner/transport and adapter first; use `spawnSupervisedProcess`/`spawnPiPty`, original-birth registration before release, `signalVerifiedProcessTree` for crash injection, and the approved independent unknown-failing zero-owned audit. The shared harness is unchanged, not safety-approved here. After repair, the supervised payload is `PLAN112_RECOVERY_BACKEND=real pnpm test:integration` (the runner propagates the flag); it must still run under the approved external supervisor/private allowlist with Pi 0.84.4. Do not execute it bare or infer runtime proof from this checkpoint.
+
+Strict project tsc/build, an additional strict tsconfig including this normally excluded integration file, scoped lint and whitespace checks pass. Only fake mode was run. Exact private logs, full 112/114 criterion map, remaining heavy payloads and review-ready exceptions are in the worktree-local `issue-to-pr/406.md`. Slice 3 and the dual-mode mandate remain **incomplete**, not merely awaiting heavy proof. No production/default-retention/shared-harness/golden/dirty099/Effect110 changes.

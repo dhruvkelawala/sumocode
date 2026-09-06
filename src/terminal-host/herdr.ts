@@ -1,6 +1,7 @@
 import type {
 	HostResult,
 	PaneRef,
+	PaneProcessInfo,
 	PiExecLike,
 	SplitDirection,
 	StartAgentPaneOptions,
@@ -238,8 +239,32 @@ async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): P
 	};
 }
 
+// Herdr protocol 20: PaneProcessInfo numeric fields may be absent/null. Never
+// infer death from missing data, or retain the accompanying argv/cwd payload.
+async function inspectPane(pi: PiExecLike, pane: PaneRef): Promise<HostResult<PaneProcessInfo>> {
+	const refused = { ok: false as const, error: "pane-unverified" };
+	try {
+		const result = await pi.exec("herdr", ["pane", "process-info", "--pane", pane.paneId], { timeout: 5000 });
+		if (result.code !== 0) return refused;
+		// SAFETY: every association field is checked below before being returned.
+		const parsed = JSON.parse(result.stdout) as { result?: { type?: string; process_info?: { pane_id?: string; shell_pid?: number | null; foreground_process_group_id?: number | null; foreground_processes?: { pid: number }[] } } };
+		const info = parsed?.result?.process_info;
+		const pid = (value: number): boolean => Number.isSafeInteger(value) && value > 0 && value <= 0xffff_ffff;
+		if (parsed?.result?.type !== "pane_process_info" || !info || info.pane_id !== pane.paneId
+			|| info.shell_pid != null && !pid(info.shell_pid)
+			|| info.foreground_process_group_id != null && !pid(info.foreground_process_group_id)
+			|| info.foreground_processes !== undefined && (!Array.isArray(info.foreground_processes)
+				|| !info.foreground_processes.every((process) => process && pid(process.pid)))) return refused;
+		return { ok: true, shellPid: info.shell_pid ?? null, foregroundProcessGroupId: info.foreground_process_group_id ?? null,
+			foregroundPids: info.foreground_processes?.map((process) => process.pid) ?? [] };
+	} catch {
+		return refused;
+	}
+}
+
 export const herdrTerminalHost = {
 	kind: "herdr",
+	inspectPane,
 	startAgentPane,
 	async sendPaneText(pi: PiExecLike, pane: PaneRef, text: string) {
 		try {

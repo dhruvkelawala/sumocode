@@ -11,6 +11,7 @@ import { SubagentRegistry } from "../../../src/subagents/registry.js";
 import { censusRetained } from "../../../src/subagents/retained-census.js";
 
 export async function runRealRecovery(backend: "headless" | "visible", replacement: string, scenario = ""): Promise<void> {
+	if (backend === "visible" && process.env.HERDR_ENV !== "1") throw new Error("capability: herdr unavailable");
 	const runRoot = process.env.PLAN112_RECOVERY_ROOT;
 	if (!runRoot || process.env.SUMOCODE_INTEGRATION_RUN_ROOT !== runRoot) throw new Error("real recovery requires scripts/run-plan112-recovery.mjs supervised wrapper");
 	const root = realpathSync(mkdtempSync(join(runRoot, "cell-")));
@@ -47,10 +48,12 @@ export async function runRealRecovery(backend: "headless" | "visible", replaceme
 		return read(name);
 	};
 	const kill = async (tree: OwnedTree) => {
-		expect((await signalVerifiedProcessTree(systemProcessTree, tree.identity, "SIGKILL", tree.verification)).ok).toBe(true);
+		const result = await signalVerifiedProcessTree(systemProcessTree, tree.identity, "SIGKILL", tree.verification);
+		appendFileSync(join(root, "cuts.jsonl"), `${JSON.stringify({ tree, signal: "SIGKILL", result })}\n`, { mode: 0o600 });
+		expect(result.ok).toBe(true);
 		expect(await systemProcessTree.waitForTreeEmpty(tree.identity, 2000, tree.verification)).toBe(true);
 	};
-	const registry = new SubagentRegistry(join(root, "registry"), "observer");
+	const registry = new SubagentRegistry(join(root, "registry"), "origin");
 	try {
 		if (backend === "visible") {
 			await start("herdr-probe");
@@ -129,7 +132,7 @@ export async function runRealRecovery(backend: "headless" | "visible", replaceme
 		if (scenario === "writer-death" || scenario === "expired-owner") {
 			await kill(controller);
 			const before = registry.get("sa-real")!;
-			await new Promise((resolve) => setTimeout(resolve, Math.max(0, before.writerLease!.expiresAt - Date.now() + 100)));
+			await new Promise((resolve) => setTimeout(resolve, Math.max(0, Math.max(before.writerLease!.expiresAt, before.controlLease?.expiresAt ?? 0) - Date.now() + 100)));
 			const successor = scenario === "writer-death" ? "takeover" : "recover-lost";
 			await start(successor);
 			await wait(`${successor}-result.json`, successor);

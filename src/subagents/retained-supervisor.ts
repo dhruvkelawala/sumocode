@@ -297,7 +297,8 @@ class RetainedSupervisor {
 		if ((this.stopped || this.terminal) && !this.completed) throw new Error("retained owner unavailable for transfer");
 		const record = this.authority.record();
 		if (!record.child) throw new Error("retained child unavailable for transfer");
-		try { this.authority.verifyChild(record.child.identity.pid); }
+		// Settled result transfer grants delivery, not control of an exited child.
+		try { if (this.completed) this.authority.fence(); else this.authority.verifyChild(record.child.identity.pid); }
 		catch (error) { this.fail("ambiguous"); throw error; }
 		const fresh = this.authority.record();
 		return this.registry.reserveControl(fresh.revision, authority, `${record.id}:${authority.head + 1}`, {

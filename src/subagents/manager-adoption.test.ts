@@ -100,6 +100,7 @@ function fixture(backend: "headless" | "visible" = "headless") {
 		finish = async () => {
 			const current = registry.get(record.id)!;
 			const artifacts = new RetainedResults(taskDir);
+			artifacts.append({ kind: "run-started" });
 			completion = { outcome: { kind: "completed", finalText: "answer" }, manifest: { exit: "completed", durationMs: 1 } };
 			const result = artifacts.writeResult(completion.outcome);
 			const manifest = artifacts.writeManifest(completion.manifest);
@@ -144,11 +145,50 @@ function expectArtifacts(f: ReturnType<typeof fixture>): void {
 }
 
 describe("durable sender delivery", () => {
+	it("records lost work when disk recovery takes over an expired dead writer", async () => {
+		const f = fixture();
+		const old = f.install("origin");
+		await f.track(old);
+		old.manager.detachForReplacement();
+		f.writerState("dead"); f.originState("dead");
+		vi.setSystemTime(61_001);
+		const next = f.install("successor");
+		await next.manager.reconstruct(f.registry, "successor");
+		expect(f.registry.get("sa-1")).toMatchObject({ status: "lost", writerLease: { generation: 2 } });
+		expect(next.manager.get("sa-1")?.recovery).toBe("lost");
+		expect(f.operations.signalTree).not.toHaveBeenCalled();
+		expect(next.delivery).not.toHaveBeenCalled();
+		next.manager.detachForReplacement();
+	});
+
+	it("recovers only settled delivery after dead-writer expiry without a live child", async () => {
+		const f = fixture();
+		const old = f.install("origin");
+		const authority = await f.track(old);
+		await f.finish();
+		old.manager.detachForReplacement();
+		f.writerState("dead"); f.originState("dead");
+		vi.setSystemTime(61_001);
+		vi.mocked(f.operations.identityMatches).mockReturnValue("different");
+		vi.mocked(f.operations.verificationMatches!).mockReturnValue("different");
+		const next = f.install("successor");
+		await next.manager.reconstruct(f.registry, "successor");
+		expect(next.manager.get("sa-1")).toMatchObject({ recovery: "adopted", status: "done", finalText: "answer" });
+		expect(f.registry.inspectControl(authority)).toBe(false);
+		await next.fire("agent_end"); await next.fire("agent_end");
+		expect(next.delivery).toHaveBeenCalledTimes(1);
+		await next.manager.cancel(["sa-1"]);
+		expect(f.operations.signalTree).not.toHaveBeenCalled();
+		expectArtifacts(f);
+		next.manager.detachForReplacement();
+	});
+
 	it.each(["headless", "visible"] as const)("%s settles before replacement and the successor sends once", async (backend) => {
 		const f = fixture(backend);
 		const old = f.install("origin");
 		await f.track(old);
 		await f.finish();
+		vi.mocked(f.operations.identityMatches).mockImplementation((identity) => identity.pid === 42 ? "different" : "same");
 		expect(f.registry.get("sa-1")?.delivery).toEqual({ state: "undelivered" });
 		await old.fire("session_shutdown", "new");
 		const next = f.install("successor");
@@ -264,13 +304,13 @@ describe("durable sender delivery", () => {
 		expectArtifacts(f);
 	});
 
-	it.each(["anchor-undelivered", "anchor-sending", "supervisor-undelivered", "supervisor-sending"])("%s loss blocks replay and preserves settled artifacts", async (fault) => {
+	it.each(["identities-undelivered", "identities-sending", "supervisor-undelivered", "supervisor-sending"])("%s loss blocks replay and preserves settled artifacts", async (fault) => {
 		const f = fixture();
 		const old = f.install("origin");
 		const authority = await f.track(old);
 		await f.finish();
 		if (fault.endsWith("-sending")) f.registry.forController(old.manager.controllerIdentity).advanceDelivery(f.registry.get("sa-1")!.revision, authority, "send");
-		if (fault.startsWith("anchor")) {
+		if (fault.startsWith("identities")) {
 			vi.mocked(f.operations.identityMatches).mockReturnValue("different");
 			vi.mocked(f.operations.isTreeEmpty).mockReturnValue(true);
 		} else f.writerState("dead");
@@ -278,7 +318,7 @@ describe("durable sender delivery", () => {
 		const next = f.install("successor");
 		await next.fire("session_start", "new");
 		await next.fire("agent_end");
-		expect(next.manager.get("sa-1")?.recovery).toBe(fault.startsWith("anchor") ? "lost" : "ambiguous");
+		expect(next.manager.get("sa-1")?.recovery).toBe("ambiguous");
 		expect(next.delivery).not.toHaveBeenCalled();
 		expect(old.delivery).not.toHaveBeenCalled();
 		expectArtifacts(f);

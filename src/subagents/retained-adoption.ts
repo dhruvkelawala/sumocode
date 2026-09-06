@@ -25,6 +25,10 @@ function sameAnchor(process: RegistryProcess, operations: ProcessTreeOperations)
 
 /** No effects or identity recapture: pane numbers alone never establish ownership. */
 export async function verifyRetained(record: SubagentRecord, operations: ProcessTreeOperations, host?: TerminalHost, pi?: PiExecLike): Promise<"verified" | "lost" | "ambiguous"> {
+	if (record.status === "settled") {
+		try { return RetainedResults.read(record.taskDir) ? "verified" : "ambiguous"; }
+		catch { return "ambiguous"; }
+	}
 	if (!record.child) return record.launchIntent === null ? "lost" : "ambiguous";
 	const { identity, verification } = record.child;
 	if (!sameAnchor(record.child, operations)) return operations.identityMatches(identity) === "different" && operations.isTreeEmpty(identity, verification) ? "lost" : "ambiguous";
@@ -60,16 +64,25 @@ export async function reconstructRetained(registry: SubagentRegistry, successor:
 		try {
 			const verified = await verifyRetained(initial, operations, host, pi);
 			classification = verified === "lost" ? "lost" : "ambiguous";
-			if (launch !== "verified") throw new Error("retained census unverified");
-			if (!initial.supervisor || initial.supervisor.identity.pid === successor.pid
-				|| !sameAnchor(initial.supervisor, operations) || controller.writerState(initial.id) !== "alive"
-				|| verified !== "verified") throw new Error("retained owner unverified");
+			if (initial.status !== "settled" && controller.writerState(initial.id) === "dead") {
+				results.push(await acquireRetained(entry, successor, sessionId, operations, host, pi));
+				continue;
+			}
+			if (initial.status !== "settled") {
+				if (launch !== "verified") throw new Error("retained census unverified");
+				if (!initial.supervisor || initial.supervisor.identity.pid === successor.pid
+					|| !sameAnchor(initial.supervisor, operations) || controller.writerState(initial.id) !== "alive") throw new Error("retained owner unverified");
+			}
+			if (verified !== "verified") throw new Error("retained evidence unverified");
 			RetainedResults.read(initial.taskDir);
 			const mirror = controller.controllerState(initial.id) === "alive";
-			const record = mirror ? initial : controller.recoverControl(initial.id, initial.revision, initial.controllerGeneration ?? 0, sessionId);
+			const record = mirror ? initial : initial.status === "settled" && controller.writerState(initial.id) === "dead"
+				? controller.handoffController(initial.id, initial.revision, initial.controllerGeneration ?? 0, sessionId, 60_000)
+				: controller.recoverControl(initial.id, initial.revision, initial.controllerGeneration ?? 0, sessionId);
 			const authority = controlAuthority(record);
 			const fence = (): SubagentRecord => {
 				const current = controller.get(record.id)!;
+				if (record.status === "settled" && current.status === "settled" && current.completionId === record.completionId) return current;
 				if (!current.supervisor || !current.child || !sameAnchor(current.supervisor, operations)
 					|| !sameAnchor(current.child, operations) || controller.writerState(record.id) !== "alive") throw new Error("retained owner changed");
 				return current;

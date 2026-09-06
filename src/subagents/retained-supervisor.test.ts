@@ -110,6 +110,20 @@ describe("retained supervisor handle ownership", () => {
 		expect(cut).toHaveBeenCalledTimes(1);
 		expect(f.registry.get(f.record.id)?.completionId).toBeNull();
 	});
+	it("transfers settled result authority after the child anchor exits", async () => {
+		const f = retainedFixture();
+		f.proc.emit("spawn"); await f.owner.ready;
+		const running = f.owner.record;
+		const grant = f.registry.acquireControl(running.id, running.revision, running.writerLease!.generation, 0, running.writerLease!.owner, 60_000);
+		await f.finish(); f.release();
+		expect(await f.owner.settlement).toBe("settled");
+		vi.mocked(f.operations.identityMatches).mockImplementation((identity) => identity.pid === 4242 ? "different" : "same");
+		const record = f.owner.reserveControl({ id: grant.id, ownerSessionId: grant.ownerSessionId, generation: grant.controlLease!.generation,
+			head: grant.controlHead, owner: grant.controlLease!.owner }, { owner: { token: "successor", pid: process.pid, processStartTime: "supervisor-birth" }, sessionId: "next" });
+		expect(record.status).toBe("settled");
+		expect(record.controlReservation?.sessionId).toBe("next");
+	});
+
 	it("authorizes a control reservation while retaining parser, child and writer ownership", async () => {
 		const f = retainedFixture();
 		f.proc.emit("spawn");

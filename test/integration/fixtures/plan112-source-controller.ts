@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { systemProcessTree } from "../../../src/background-tasks/process-tree.js";
@@ -23,7 +23,7 @@ interface ControllerReport {
 
 /** Real controllers share only the registry directory across Node processes. */
 export async function runSourceController(root: string, mode: string, pi: string, provider: string): Promise<void> {
-	const put = (name: string, value: ControllerReport | RegistryWriter): void => writeFileSync(join(root, name), JSON.stringify(value), { mode: 0o600, flag: "wx" });
+	const put = (name: string, value: ControllerReport | RegistryWriter): void => publishReport(join(root, name), JSON.stringify(value));
 	const registry = new SubagentRegistry(join(root, "registry"), "origin");
 	// SAFETY: the admitted test parent alone writes this private JSON string.
 	const scenario = existsSync(join(root, "scenario.json")) ? JSON.parse(readFileSync(join(root, "scenario.json"), "utf8")) as string : "";
@@ -171,6 +171,10 @@ export async function runSourceController(root: string, mode: string, pi: string
 	});
 	await owner.ready;
 	await waitForFile(join(root, "provider-called.json"));
+	if (scenario === "expired-owner") {
+		const record = owner.record;
+		registry.acquireControl(record.id, record.revision, record.writerLease!.generation, record.controlHead, record.writerLease!.owner, 60_000);
+	}
 	put("owner-ready.json", { headlessSteering: Boolean(backend.send), child: owner.record.child });
 	cut("running");
 	if (mode === "same-process" && scenario) {
@@ -260,10 +264,10 @@ function registeredAnchorSpawn(root: string, scenario: string): typeof spawn {
 				}
 			}
 		});
-		writeFileSync(join(root, "anchor-spawn.json"), JSON.stringify({ pid: child.pid }), { mode: 0o600, flag: "wx" });
+		publishReport(join(root, "anchor-spawn.json"), JSON.stringify({ pid: child.pid }));
 		child.once("spawn", () => {
 			const birth = captureBirth(child.pid!);
-			writeFileSync(join(root, "anchor-birth.json"), JSON.stringify(birth), { mode: 0o600, flag: "wx" });
+			publishReport(join(root, "anchor-birth.json"), JSON.stringify(birth));
 			// Block only this source driver. Vitest registers the original birth with
 			// the shared supervisor before the backend's later spawn callback releases Pi.
 			const deadline = Date.now() + 10_000;
@@ -274,6 +278,11 @@ function registeredAnchorSpawn(root: string, scenario: string): typeof spawn {
 		});
 		return child;
 	}) as typeof spawn;
+}
+
+function publishReport(path: string, text: string): void {
+	writeFileSync(`${path}.pending`, text, { mode: 0o600, flag: "wx" });
+	renameSync(`${path}.pending`, path);
 }
 
 async function waitForFile(path: string): Promise<void> {

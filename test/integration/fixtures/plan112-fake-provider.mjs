@@ -8,7 +8,7 @@ export function generateFakeProvider(directory, aiEntry) {
 		|| stat.uid !== process.getuid()) throw new Error("provider requires a private owned directory");
 	const entry = join(directory, "provider.mjs");
 	writeFileSync(entry, `import { createAssistantMessageEventStream } from ${JSON.stringify(aiEntry)};
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, renameSync, writeFileSync } from "node:fs";
 const directory = ${JSON.stringify(directory)};
 export default function(pi) {
 	pi.registerProvider("source-proof", {
@@ -16,11 +16,12 @@ export default function(pi) {
 		models: [{ id: "fixed", name: "fixed", reasoning: false, input: ["text"],
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 8192, maxTokens: 256 }],
 		streamSimple(model, context) {
-			writeFileSync(directory + "/provider-called.json", JSON.stringify({
+			writeFileSync(directory + "/provider-called.pending", JSON.stringify({
 				promptPresent: JSON.stringify(context.messages).includes("synthetic recovery task"),
 				privateRolePresent: context.systemPrompt.includes("synthetic private role"),
 				toolsEmpty: !context.tools?.length,
 			}), { mode: 0o600, flag: "wx" });
+			renameSync(directory + "/provider-called.pending", directory + "/provider-called.json");
 			const stream = createAssistantMessageEventStream();
 			const timer = setInterval(() => {
 				if (!existsSync(directory + "/finish")) return;

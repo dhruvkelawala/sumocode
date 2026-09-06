@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SubagentSnapshot } from "../../../src/subagents/domain.js";
 import type { SubagentRegistry, SubagentRecord } from "../../../src/subagents/registry.js";
@@ -31,7 +31,8 @@ export async function runLocalFault(root: string, scenario: string, registry: Su
 		const saved = before ? artifacts() : undefined;
 		if (uncertain) {
 			const hold = () => {
-				writeFileSync(join(root, "cut-ready.json"), JSON.stringify({ submissions: old.deliveries.length }), { mode: 0o600, flag: "wx" });
+				writeFileSync(join(root, "cut-ready.pending"), JSON.stringify({ submissions: old.deliveries.length }), { mode: 0o600, flag: "wx" });
+				renameSync(join(root, "cut-ready.pending"), join(root, "cut-ready.json"));
 				while (true) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
 			};
 			if (scenario === "delivery:send-before-ack") { old.afterSend(hold); await old.fire("agent_end"); }

@@ -21,4 +21,10 @@ The stale-PID denial records a real process, kills and reaps it, then submits it
 
 Herdr capability forwarding is explicit: `HERDR_ENV=1`, owned `HERDR_SOCKET_PATH`, `HERDR_PANE_ID`, and absolute `PLAN112_HERDR_BIN`. No other operator environment is inherited. A birth-registered controller runs the existing validated `inspectPane` query. Reachability does **not** imply visible recovery coverage: server-created pane shells do not yet have pre-execution birth admission in this wrapper. No pane is created until that accounting gap is closed. Visible cells therefore fail with a source-incomplete classification when the query succeeds, not `herdr unavailable`.
 
+## Defects found by the first real invocation
+
+Readiness publication now uses rename after a private complete write; file existence alone must not expose an empty JSON file. Registry inspection uses the record's immutable origin session, not an invented observer session.
+
+Settled-result adoption no longer requires the exited child anchor. It validates retained artifacts and retains live-supervisor fencing for cooperative transfer. Dead-writer disk recovery uses the existing death-plus-expiry CAS: unfinished work becomes lost; settled work retains its completion and delivery state. No child is restarted, no old pipes are recovered, and process-effect fences are unchanged. A live or unknown old controller cannot be taken over. Unit tests retain supervisor-loss refusal and prove zero signals for settled recovery.
+
 Runtime results and remaining failures are recorded in the worktree-local `issue-to-pr/406.md`; this document makes no green-matrix claim.

@@ -1,4 +1,4 @@
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createJiti } from "jiti";
 
@@ -16,5 +16,6 @@ try {
 	const { runSourceController } = await jiti.import("./plan112-source-controller.ts");
 	await runSourceController(root, mode, pi, provider);
 } catch (error) {
-	writeFileSync(join(root, `${mode}-error.json`), JSON.stringify({ error: error instanceof Error ? error.message : "source controller failed" }), { mode: 0o600 });
+	writeFileSync(join(root, `${mode}-error.pending`), JSON.stringify({ error: error instanceof Error ? error.message : "source controller failed" }), { mode: 0o600 });
+	renameSync(join(root, `${mode}-error.pending`), join(root, `${mode}-error.json`));
 }

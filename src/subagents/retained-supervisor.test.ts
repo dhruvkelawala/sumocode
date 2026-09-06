@@ -656,6 +656,27 @@ describe("retained supervisor headless launch admission", () => {
 		expect(f.operations.signalTree).not.toHaveBeenCalled();
 	});
 
+	it.each(["reused", "moved", "unowned", "unknown"] as const)("denies %s targets before stdin and signal effects", (target) => {
+		const f = fixture();
+		const gate = createRetainedHeadlessLaunchGate(f.registry, f.record, f.supervisor, f.operations);
+		gate.beforeSpawn();
+		gate.beforePrompt(4242);
+		const original = f.registry.get("sa-proof")!.child;
+		if (target === "reused" || target === "unknown") {
+			f.operations.identityMatches = (identity) => identity.pid === 4242 ? target === "reused" ? "different" : "unknown" : "same";
+		}
+		if (target === "moved") f.operations.verificationMatches = (identity, verification) => {
+			if (identity.pid !== 4242) return "same";
+			expect(verification.members).toEqual([{ pid: 4242, processStartTime: "child-birth" }]);
+			return "different";
+		};
+		const pid = target === "unowned" ? 4343 : 4242;
+		expect(() => gate.beforeStdin(pid)).toThrow();
+		expect(() => gate.beforeSignal(pid)).toThrow();
+		expect(f.operations.signalTree).not.toHaveBeenCalled();
+		expect(f.registry.get("sa-proof")!.child).toEqual(original);
+	});
+
 	it("does not create a record for a foreign supervisor or visible backend", () => {
 		const f = fixture();
 		expect(() => createRetainedHeadlessLaunchGate(f.registry, { ...f.record, backend: "visible" }, f.supervisor, f.operations)).toThrow();

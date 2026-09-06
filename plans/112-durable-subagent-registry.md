@@ -418,3 +418,18 @@ Unfinished gates must be closed before packaging enables launches:
 ## Maintenance notes
 
 Recovery capability must be stated per backend and replacement type. Do not generalize visible-pane evidence into a claim that pipe-based headless runs are recoverable.
+
+## Slice 2 receive-owner inspection at `1707aaa7`
+
+The completion-ID deduplication decision requires a receive owner **before Pi conversation insertion**, not just before Activity rendering. The current path does not expose that owner to SumoCode:
+
+- `src/subagents/index.ts` submits `subagent-result` through void `pi.sendMessage`, with `followUp` and `triggerTurn`.
+- Checkout-local Pi `dist/core/agent-session.js`, `sendCustomMessage`, queues through `agent.followUp` while streaming or invokes `_runAgentPrompt` when idle. Its extension API wrapper catches asynchronous rejection separately; the controller cannot acknowledge insertion from its return.
+- Pi's `_appendCustomMessage` directly changes agent state and session history before emitting message events. The agent-loop path's `_handleAgentEvent` emits notifications and persists custom messages without a receiver veto. Extension `message_end` supports same-role replacement, not deletion; it is not an insertion transaction.
+- `src/sumo-tui/rpc/host.ts`, `client.onEvent` → `processAgentEvent`, updates the transcript, state and scheduler. Filtering there can suppress Activity rendering but cannot prevent Pi conversation insertion. Hydration independently obtains Pi's messages through `get_messages`.
+
+A durable set at the RPC event observer therefore does not satisfy the conversation guarantee. Moving it before `pi.sendMessage` instead changes the ACK into submission admission: persist ID → crash or asynchronous Pi rejection → no insertion → successor suppresses replay. Conversely, marking after submission retains the old queued-send race. A private JSON write and Pi conversation insertion are separate effects; atomic replacement of the JSON alone does not make them transactional.
+
+This is source inspection and a failure-schedule argument, **not an executed runtime counterexample**. No production dedupe, completion ACK, recovery behavior or private Pi patch was added. Slice 2 remains source-incomplete; slice 3 is not started against a fictional receive interface.
+
+Required next decision: provide a supported Pi-side completion-ID insertion/receipt contract, or explicitly authorize a different SumoCode-owned inbox/transport and its failure semantics. A pre-Pi admission ledger may offer at-most-once submission with ambiguous failures, but must not be called exact-once observable delivery. Receipt pruning also needs a stale-request rejection rule so an arbitrarily delayed submission cannot become unseen again after retention expiry. Preserve records and existing authority fences while these contracts are unresolved.

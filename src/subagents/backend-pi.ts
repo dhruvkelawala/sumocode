@@ -1,5 +1,5 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { closeSync, existsSync, lstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,6 +19,8 @@ import { type BuiltInToolName, resolveTaskConfig } from "../native-task-config.j
 import { isRecord, type TaskThinking, type ThinkingLevel } from "../native-task-params.js";
 import { systemProcessTree, terminateProcessTree, type ProcessTreeOperations, type ProcessTreeIdentity, type ProcessTreeVerification } from "../background-tasks/process-tree.js";
 import { CHILD_MODEL_ID_ENV, CHILD_MODEL_PROVIDER_ENV } from "./pi-child-model-bootstrap.js";
+import type { RetainedBootstrapDescriptor } from "./retained-bootstrap.js";
+import { RETAINED_BOOTSTRAP_ENV, assertNoFactoryReceipt, createBootstrapBinding, readBoundBootstrap, waitForFactoryReceipt } from "./retained-bootstrap-receipt.js";
 
 /** Runtime string discriminator for decoded child-process payloads. */
 const isString = <T>(value: T): value is T & string => typeof value === "string";
@@ -600,6 +602,24 @@ function removeCliModelSelection(args: readonly string[]): string[] {
 	return result;
 }
 
+function retainedSourceHook(binary: string): string {
+	// Only physical source checkouts and Node Pi scripts are supported. Bun's
+	// virtual source paths are not assets that a separately spawned Pi can read.
+	const entry = fileURLToPath(new URL("./retained-system-prompt.ts", import.meta.url));
+	try {
+		const stat = lstatSync(entry);
+		if (!import.meta.url.endsWith("/src/subagents/backend-pi.ts") || realpathSync(entry) !== entry
+			|| !stat.isFile() || (stat.mode & 0o022) !== 0) throw new Error("unsupported");
+		const fd = openSync(binary, "r");
+		try {
+			const header = Buffer.alloc(128);
+			const size = readSync(fd, header, 0, header.length, 0);
+			if (!/^#!(?:\/usr\/bin\/env node|\/[^\n ]*\/node)\r?\n/u.test(header.subarray(0, size).toString("utf8"))) throw new Error("unsupported");
+		} finally { closeSync(fd); }
+		return entry;
+	} catch { throw new Error("retained native unsupported; physical source hook and Node Pi script required"); }
+}
+
 export const createPiChildSpawner = (
 	spawnImpl: SpawnLike = nodeSpawn,
 	resolveAdapterEntry: () => string | undefined = resolveClaudeOauthAdapterEntry,
@@ -616,6 +636,7 @@ export const createPiChildSpawner = (
 	appendSystemPrompt?: string;
 	signal?: AbortSignal;
 	launchGate?: HeadlessLaunchGate;
+	retainedBootstrap?: RetainedBootstrapDescriptor;
 }): SpawnedChild => {
 	const config = resolveTaskConfig({
 		// SAFETY: options.thinking comes from the typed SpawnSubagentTask.thinking field.
@@ -659,9 +680,12 @@ export const createPiChildSpawner = (
 		if (options.launchGate && subscribed) throw new Error("retained backend already subscribed");
 		subscribed = true;
 		emit({ kind: "run-started" });
-		const adapterEntry = resolveAdapterEntry();
+		if (options.retainedBootstrap && !options.launchGate) throw new Error("retained bootstrap requires launch gate");
+		if (options.launchGate && options.appendSystemPrompt !== undefined) throw new Error("retained system prompt requires private bootstrap, not appendSystemPrompt");
+		const binding = options.retainedBootstrap ? createBootstrapBinding(options.retainedBootstrap) : undefined;
+		const adapterEntry = options.retainedBootstrap ? options.retainedBootstrap.config.adapterEntry ?? undefined : resolveAdapterEntry();
 		const childModel = childModelSelection(config.modelLabel);
-		const bootstrapEntry = childModel ? resolveBootstrapEntry() : undefined;
+		const bootstrapEntry = options.retainedBootstrap ? options.retainedBootstrap.config.modelBootstrapEntry ?? undefined : childModel ? resolveBootstrapEntry() : undefined;
 		if (childModel && (!adapterEntry || !bootstrapEntry)) {
 			refuseReady(new Error("numbered child startup unavailable"));
 			emit({
@@ -674,18 +698,30 @@ export const createPiChildSpawner = (
 		const adapterArgs = adapterEntry ? ["-e", adapterEntry] : [];
 		const bootstrapArgs = bootstrapEntry ? ["-e", bootstrapEntry] : [];
 		const subprocessArgs = childModel ? removeCliModelSelection(config.subprocessArgs) : config.subprocessArgs;
-		const childEnv = childModel
+		let childEnv = childModel
 			? { ...process.env, [CHILD_MODEL_PROVIDER_ENV]: childModel.provider, [CHILD_MODEL_ID_ENV]: childModel.modelId }
 			: process.env;
 		const binary = resolveBinary();
 		if (options.launchGate && !isAbsolute(binary)) throw new Error("retained launch requires absolute Pi provenance");
+		const hookArgs: string[] = [];
+		if (binding) {
+			const data = readBoundBootstrap(binding);
+			const expected = data.descriptor.config;
+			if (options.cwd !== expected.cwd || binary !== expected.pi || options.prompt !== data.prompt
+				|| config.modelLabel !== expected.model.label || config.thinkingLevel !== expected.thinking
+				|| JSON.stringify(options.builtInTools ?? DEFAULT_BUILT_IN_TOOLS) !== JSON.stringify(expected.builtInTools)
+				|| Boolean(childModel) !== Boolean(bootstrapEntry)) throw new Error("retained bootstrap options mismatch");
+			hookArgs.push("-e", retainedSourceHook(binary));
+			assertNoFactoryReceipt(binding);
+			childEnv = { ...childEnv, [RETAINED_BOOTSTRAP_ENV]: JSON.stringify(binding) };
+		}
 		// Windows verified force cleanup may issue multiple asynchronous taskkills
 		// inside one operation; that API cannot fence each effect. Do not launch
 		// retained work there until a per-taskkill seam exists. Ungated is unchanged.
 		if (options.launchGate && process.platform === "win32") throw new Error("retained headless requires POSIX signal fencing");
 		options.launchGate?.beforeSpawn();
 		// SAFETY: stdio is piped below, so the spawned child always has non-null streams.
-		const proc = spawnImpl(binary, [...subprocessArgs, ...roleArgs, ...adapterArgs, ...bootstrapArgs], {
+		const proc = spawnImpl(binary, [...subprocessArgs, ...roleArgs, ...adapterArgs, ...bootstrapArgs, ...hookArgs], {
 			cwd: options.cwd,
 			env: childEnv,
 			shell: false,
@@ -708,10 +744,14 @@ export const createPiChildSpawner = (
 			proc.stdin.end();
 		}
 		let authorityLost = false;
+		let childClosed = false;
+		let promptReleased = false;
+		const receiptWait = new AbortController();
 		let readinessTimer: ReturnType<typeof setTimeout> | undefined;
 		const refuseEffect = (error: Error): void => {
 			if (authorityLost) return;
 			authorityLost = true;
+			receiptWait.abort();
 			clearTimeout(readinessTimer);
 			refuseReady(error);
 			try { options.launchGate?.onRefused(); }
@@ -727,7 +767,9 @@ export const createPiChildSpawner = (
 				}
 			}, operations, refuseEffect)
 			: attachAbortSignal(proc, options.signal);
-		interrupt = () => { if (!authorityLost) abortState.interrupt(); };
+		interrupt = () => {
+			if (!authorityLost) { receiptWait.abort(); abortState.interrupt(); }
+		};
 		const stderr = new BoundedUtf8Tail();
 		const payloadBudget = new PiRunPayloadBudget();
 		let finalAssistantText = "";
@@ -770,6 +812,7 @@ export const createPiChildSpawner = (
 			onLine: processLine,
 			onError: (error) => {
 				protocolError = error.message;
+				receiptWait.abort();
 				// TERM starts shutdown; close remains the terminal boundary while the child exists.
 				abortState.terminate();
 			},
@@ -777,6 +820,7 @@ export const createPiChildSpawner = (
 		const onStdout = (data: string | Uint8Array) => stdout.write(data);
 		const onStderr = (data: string | Uint8Array) => stderr.append(data);
 		const cleanup = () => {
+			receiptWait.abort();
 			clearTimeout(readinessTimer);
 			proc.stdout.removeListener("data", onStdout);
 			proc.stderr.removeListener("data", onStderr);
@@ -785,6 +829,10 @@ export const createPiChildSpawner = (
 		proc.stdout.on("data", onStdout);
 		proc.stderr.on("data", onStderr);
 		proc.once("close", (code, closeSignal) => {
+			childClosed = true;
+			if (binding && !promptReleased && !protocolError) protocolError = "retained child closed before factory readiness";
+			receiptWait.abort();
+			clearTimeout(readinessTimer);
 			stdout.end();
 			const finishClose = (): void => {
 				if (protocolError) {
@@ -813,18 +861,19 @@ export const createPiChildSpawner = (
 			readinessTimer = setTimeout(() => {
 				refuseReady(new Error("retained readiness timeout"));
 				protocolError = "retained readiness timeout";
+				receiptWait.abort();
 				abortState.terminate();
 			}, 10_000);
 			readinessTimer.unref?.();
 		}
-		if (options.launchGate) proc.once("spawn", () => {
+		const releasePrompt = (): void => {
 			try {
-				if (settled || authorityLost || protocolError || abortState.isAborted() || proc.pid === undefined) throw new Error("child unavailable before prompt release");
-				options.launchGate!.beforePrompt(proc.pid);
+				if (settled || childClosed || authorityLost || protocolError || abortState.isAborted() || proc.pid === undefined) throw new Error("child unavailable before prompt release");
 				options.launchGate!.beforeStdin(proc.pid);
 				proc.stdin.write(options.prompt);
 				options.launchGate!.beforeStdin(proc.pid);
 				proc.stdin.end();
+				promptReleased = true;
 				clearTimeout(readinessTimer);
 				markReady();
 			} catch (error) {
@@ -832,8 +881,32 @@ export const createPiChildSpawner = (
 				// would create an unfenced effect after authority was refused.
 				refuseEffect(error instanceof Error ? error : new Error(String(error)));
 			}
+		};
+		if (options.launchGate) proc.once("spawn", () => {
+			try {
+				if (settled || childClosed || authorityLost || protocolError || abortState.isAborted() || proc.pid === undefined) throw new Error("child unavailable before prompt release");
+				const pid = proc.pid;
+				options.launchGate!.beforePrompt(pid);
+				if (!binding) { releasePrompt(); return; }
+				const { identity, verification } = options.launchGate!.beforeSignal(pid);
+				const anchor = verification.members.find((member) => member.pid === pid);
+				if (identity.pid !== pid || !anchor) throw new Error("retained child anchor unavailable");
+				const signal = options.signal ? AbortSignal.any([receiptWait.signal, options.signal]) : receiptWait.signal;
+				void waitForFactoryReceipt(binding, anchor, signal, () => {
+					try { options.launchGate!.beforeStdin(pid); }
+					catch { refuseEffect(new Error("retained authority lost")); throw new Error("retained authority lost"); }
+				}).then(releasePrompt, () => {
+					if (settled || childClosed || authorityLost || protocolError || abortState.isAborted()) return;
+					protocolError = "retained factory receipt refused";
+					clearTimeout(readinessTimer);
+					refuseReady(new Error(protocolError));
+					abortState.terminate();
+				});
+			} catch (error) { refuseEffect(error instanceof Error ? error : new Error("retained startup refused")); }
 		});
 		proc.once("error", (error) => {
+			receiptWait.abort();
+			clearTimeout(readinessTimer);
 			if (protocolError || abortState.isAborted()) return;
 			settle({ kind: "failed", errorText: boundRetainedResult(error.message, ERROR_MAX), partialText: finalAssistantText || undefined });
 			cleanup();

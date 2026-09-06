@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { systemProcessTree, type ProcessTreeOperations } from "../background-tasks/process-tree.js";
-import { spawnPiChild, type HeadlessLaunchGate, type SpawnedChild } from "./backend-pi.js";
-import type { RunOutcome, SubagentEvent } from "./domain.js";
+import { systemProcessTree, terminateProcessTree, type ProcessTreeOperations } from "../background-tasks/process-tree.js";
+import { spawnPaneChild, type PaneChildOptions, type VisibleLaunchEvidence, type VisibleLaunchGate } from "./backend-pane.js";
+import { retainedProcessTree, spawnPiChild, type HeadlessLaunchGate, type SpawnedChild } from "./backend-pi.js";
+import type { RunOutcome, SubagentEvent, SubagentPaneRef } from "./domain.js";
 import { buildCompletionManifest, type CompletionManifestEvidence } from "./manifest.js";
 import { RetainedResults } from "./retained-results.js";
 import { addReportedSubagentUsage } from "./budget-policy.js";
@@ -16,6 +18,7 @@ export function createRetainedHeadlessLaunchGate(
 	supervisorEvidence: RegistryProcess,
 	operations: ProcessTreeOperations = systemProcessTree,
 ): HeadlessLaunchGate {
+	if (initial.backend !== "headless") throw new Error("headless record required");
 	return prepareLaunch(registry, initial, supervisorEvidence, operations).gate;
 }
 
@@ -28,9 +31,9 @@ function prepareLaunch(
 ) {
 	const id = initial.id;
 	const supervisor = structuredClone(supervisorEvidence);
-	if (initial.backend !== "headless" || initial.status !== "starting" || supervisor.identity.pid !== process.pid
+	if (initial.status !== "starting" || supervisor.identity.pid !== process.pid
 		|| supervisor.identity.processGroupId !== process.pid) {
-		throw new Error("retained launch requires a starting headless record and this supervisor");
+		throw new Error("retained launch requires a starting record and this supervisor");
 	}
 	const assertLive = (tree: RegistryProcess): void => {
 		// A descendant cannot vouch for a replaced or moved live group leader.
@@ -114,8 +117,41 @@ function prepareLaunch(
 			phase = "released";
 		},
 	};
+	let nonce: string | undefined;
+	const visibleGate: Omit<VisibleLaunchGate, "interrupt" | "onRefused" | "cleanup"> = {
+		beforeSpawn(launch) {
+			if (initial.backend !== "visible" || launch.taskDir !== initial.taskDir || !launch.nonce) throw new Error("visible launch binding mismatch");
+			nonce = launch.nonce;
+			gate.beforeSpawn();
+		},
+		wrapperBorn(evidence) {
+			if (phase !== "admitted" || evidence.taskDir !== initial.taskDir || !nonce || evidence.nonce !== nonce
+				|| evidence.process.identity.pid !== evidence.process.identity.processGroupId
+				|| !evidence.process.identity.processStartTime.includes(join(initial.taskDir, "run.sh"))
+				|| !evidence.process.identity.processStartTime.includes(nonce)) throw new Error("visible wrapper binding mismatch");
+			assertLive(evidence.process);
+			fence();
+			let pane: SubagentPaneRef = { agentName: evidence.pane.agentName };
+			if (evidence.pane.paneId) pane = { ...pane, paneId: evidence.pane.paneId };
+			if (evidence.pane.workspaceId) pane = { ...pane, workspaceId: evidence.pane.workspaceId };
+			if (evidence.pane.tabId) pane = { ...pane, tabId: evidence.pane.tabId };
+			transition((record) => ({ ...record, child: structuredClone(evidence.process), pane }));
+		},
+		beforeRelease() {
+			if (phase !== "admitted" || !current.child || !current.pane?.paneId) throw new Error("pane-unverified");
+			assertLive(current.child);
+			fence();
+			transition((record) => ({ ...record, status: "running", telemetry: { ...record.telemetry, startedAt: record.updatedAt, lastProgressAt: null } }));
+			phase = "released";
+		},
+		beforeEffect() {
+			if (phase === "blocked") throw new Error("retained owner stopped");
+			if (current.child) assertLive(current.child);
+			fence();
+		},
+	};
 	return {
-		gate, fence, transition, verifyChild: childFence,
+		gate, visibleGate, fence, transition, verifyChild: childFence,
 		record: () => structuredClone(current),
 		released: () => phase === "released",
 		renew: (): void => {
@@ -161,7 +197,7 @@ type Settlement = "settled" | "lost" | "ambiguous";
  * Owns the backend and heartbeat; managers own control leases and delivery.
  * The process entry must account for its death before enabling retention.
  */
-export class RetainedHeadlessSupervisor {
+class RetainedSupervisor {
 	private readonly authority: ReturnType<typeof prepareLaunch>;
 	private readonly registry: SubagentRegistry;
 	private readonly artifacts: RetainedResults;
@@ -180,38 +216,21 @@ export class RetainedHeadlessSupervisor {
 	private refuseReady!: (error: Error) => void;
 	public readonly ready = new Promise<void>((resolve, reject) => { this.acceptReady = resolve; this.refuseReady = reject; });
 
-	public constructor(options: RetainedHeadlessOptions, private readonly dependencies: RetainedHeadlessDependencies = {}) {
-		if (options.attach && (options.attach.cwd !== options.launch.cwd
+	public constructor(options: Omit<RetainedHeadlessOptions, "launch"> & { readonly cwd: string },
+		start: (authority: ReturnType<typeof prepareLaunch>, refuse: () => void, checkActive: () => void) => SpawnedChild,
+		private readonly dependencies: Omit<RetainedHeadlessDependencies, "spawn"> = {}) {
+		if (options.attach && (options.attach.cwd !== options.cwd
 			|| realpathSync(options.attach.cwd) !== options.attach.cwd || !statSync(options.attach.cwd).isDirectory()
 			|| (options.initial.worktree !== null && options.initial.worktree.path !== options.attach.cwd))) {
 			throw new Error("retained cwd binding mismatch");
 		}
 		this.registry = options.registry;
-		this.cwd = options.launch.cwd;
+		this.cwd = options.cwd;
 		this.baseRef = options.baseRef;
 		this.authority = prepareLaunch(options.registry, options.initial, options.supervisor, dependencies.operations ?? systemProcessTree, options.attach !== undefined);
 		this.artifacts = new RetainedResults(options.initial.taskDir);
-		this.child = (dependencies.spawn ?? spawnPiChild)({
-			...options.launch, signal: undefined,
-			launchGate: {
-				beforeStdin: (pid) => {
-					if (this.stopped) throw new Error("retained owner stopped before stdin");
-					this.authority.gate.beforeStdin(pid);
-				},
-				beforeSignal: (pid) => {
-					if (this.stopped) throw new Error("retained owner stopped before signal");
-					return this.authority.gate.beforeSignal(pid);
-				},
-				onRefused: () => { this.authority.gate.onRefused(); this.fail("ambiguous"); },
-				beforeSpawn: () => {
-					if (this.stopped) throw new Error("retained owner stopped before spawn");
-					this.authority.gate.beforeSpawn();
-				},
-				beforePrompt: (pid) => {
-					if (this.stopped) throw new Error("retained owner stopped before release");
-					this.authority.gate.beforePrompt(pid);
-				},
-			},
+		this.child = start(this.authority, () => { this.authority.gate.onRefused(); this.fail("ambiguous"); }, () => {
+			if (this.stopped) throw new Error("retained owner stopped before effect");
 		});
 		this.heartbeat = setInterval(() => {
 			try { this.renew(); } catch { /* renew records authority loss locally. */ }
@@ -258,9 +277,9 @@ export class RetainedHeadlessSupervisor {
 			retained: { registry: this.registry.forController(authority.owner), supervisor: this, authority },
 			ready: this.ready,
 			events: () => undefined,
-			interrupt: () => { fence(); this.child.interrupt(); },
-			send: this.child.send ? async (text) => { fence(); await this.child.send!(text); } : undefined,
-			requestClose: this.child.requestClose ? () => { fence(); this.child.requestClose!(); } : undefined,
+			interrupt: () => { fence(); if (this.record.backend === "visible") this.child.interrupt(fence); else this.child.interrupt(); },
+			send: this.child.send ? async (text) => { fence(); if (this.record.backend === "visible") await this.child.send!(text, fence); else await this.child.send!(text); } : undefined,
+			requestClose: this.child.requestClose ? () => { fence(); if (this.record.backend === "visible") this.child.requestClose!(fence); else this.child.requestClose!(); } : undefined,
 		};
 	}
 
@@ -285,8 +304,10 @@ export class RetainedHeadlessSupervisor {
 	/** Renewal cannot revive a locally failed owner or retry an expired operation. */
 	public renew(): void {
 		if (this.stopped) throw new Error("retained owner stopped");
-		try { this.authority.renew(); }
-		catch (error) { this.fail("ambiguous"); throw error; }
+		try {
+			if (this.record.backend === "visible" && !this.terminal) this.authority.visibleGate.beforeEffect();
+			this.authority.renew();
+		} catch (error) { this.fail("ambiguous"); throw error; }
 	}
 
 	private async consume(events: AsyncIterable<SubagentEvent>): Promise<void> {
@@ -301,6 +322,12 @@ export class RetainedHeadlessSupervisor {
 		try {
 			this.authority.fence();
 			this.artifacts.append(event);
+			if (event.kind === "heartbeat") {
+				this.authority.transition((record) => ({ ...record, telemetry: {
+					...record.telemetry, startedAt: record.telemetry?.startedAt ?? null,
+					lastProgressAt: record.telemetry?.lastProgressAt ?? null, lastHeartbeatAt: event.at,
+				} }));
+			}
 			if (!["run-started", "run-settled", "pane-attached", "heartbeat"].includes(event.kind)) {
 				this.authority.transition((record) => {
 					const telemetry = { ...record.telemetry, startedAt: record.telemetry?.startedAt ?? null, lastProgressAt: record.updatedAt };
@@ -375,6 +402,7 @@ export class RetainedHeadlessSupervisor {
 	private fail(status: "lost" | "ambiguous"): void {
 		if (this.stopped) return;
 		this.stopped = true;
+		this.authority.gate.onRefused();
 		clearInterval(this.heartbeat);
 		this.markUncertain(status);
 		this.finish(status);
@@ -386,5 +414,71 @@ export class RetainedHeadlessSupervisor {
 			try { void Promise.resolve(listener(this.authority.record())).catch(() => undefined); }
 			catch { /* Observers cannot break the parser or durable settlement. */ }
 		}
+	}
+}
+
+export class RetainedHeadlessSupervisor extends RetainedSupervisor {
+	public constructor(options: RetainedHeadlessOptions, dependencies: RetainedHeadlessDependencies = {}) {
+		if (options.initial.backend !== "headless") throw new Error("headless record required");
+		super({ ...options, cwd: options.launch.cwd }, (authority, refuse, checkActive) => (dependencies.spawn ?? spawnPiChild)({
+			...options.launch, signal: undefined, launchGate: {
+				beforeSpawn: () => { checkActive(); authority.gate.beforeSpawn(); },
+				beforePrompt: (pid) => { checkActive(); authority.gate.beforePrompt(pid); },
+				beforeStdin: (pid) => { checkActive(); authority.gate.beforeStdin(pid); },
+				beforeSignal: (pid) => { checkActive(); return authority.gate.beforeSignal(pid); },
+				onRefused: refuse,
+			},
+		}), dependencies);
+	}
+}
+
+interface RetainedVisibleOptions extends Omit<RetainedHeadlessOptions, "launch"> {
+	readonly launch: Omit<PaneChildOptions, "launchGate" | "signal" | "retainedTaskDir">;
+}
+
+/** The held pane wrapper anchors the tree; lifecycle and writer fencing stay shared. */
+export class RetainedVisibleSupervisor extends RetainedSupervisor {
+	public constructor(options: RetainedVisibleOptions, dependencies: Omit<RetainedHeadlessDependencies, "spawn"> & { readonly spawn?: typeof spawnPaneChild } = {}) {
+		if (options.initial.backend !== "visible" || options.initial.id !== options.launch.id) throw new Error("visible record binding mismatch");
+		const operations = dependencies.operations ?? retainedProcessTree;
+		super({ ...options, cwd: options.launch.cwd }, (authority, refuse, checkActive) => {
+			let cleaned = false;
+			const cleanup = async (controlFence?: () => void): Promise<void> => {
+				if (cleaned) return;
+				const child = authority.record().child;
+				if (!child) throw new Error("pane-unverified");
+				const fenced: ProcessTreeOperations = {
+					...operations,
+					captureTreeVerification: () => child.verification,
+					signalTree: (identity, signal, verification) => {
+						checkActive();
+						authority.verifyChild(child.identity.pid);
+						controlFence?.();
+						return operations.signalTree(identity, signal, verification);
+					},
+				};
+				if (!await terminateProcessTree(fenced, child.identity, { termGraceMs: 5000, killGraceMs: 1000 })) throw new Error("visible cleanup unconfirmed");
+				authority.fence();
+				cleaned = true;
+			};
+			return (dependencies.spawn ?? spawnPaneChild)({ ...options.launch, signal: undefined, retainedTaskDir: options.initial.taskDir,
+				launchGate: {
+					...authority.visibleGate,
+					wrapperBorn: async (evidence: VisibleLaunchEvidence) => {
+						const { host, pi } = options.launch;
+						if (host.kind !== "herdr" || !host.inspectPane || !evidence.pane.paneId
+							|| evidence.pane.pane.host !== host.kind || evidence.pane.pane.paneId !== evidence.pane.paneId
+							|| evidence.pane.pane.workspaceId !== evidence.pane.workspaceId) throw new Error("pane-unverified");
+						const association = await host.inspectPane(pi, evidence.pane.pane);
+						if (!association.ok || association.foregroundProcessGroupId !== evidence.process.identity.processGroupId
+							|| !association.foregroundPids.includes(evidence.process.identity.pid)) throw new Error("pane-unverified");
+						authority.visibleGate.wrapperBorn(evidence);
+					},
+					beforeEffect: () => { checkActive(); if (cleaned) authority.fence(); else authority.visibleGate.beforeEffect(); },
+					interrupt: () => { authority.visibleGate.beforeEffect(); },
+					cleanup, onRefused: refuse,
+				},
+			});
+		}, dependencies);
 	}
 }

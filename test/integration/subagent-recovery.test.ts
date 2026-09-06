@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,7 +10,9 @@ import { installSubagents } from "../../src/subagents/index.js";
 import type { SubagentManager } from "../../src/subagents/manager.js";
 import { SubagentRegistry, type SubagentRecord } from "../../src/subagents/registry.js";
 import { controlAuthority } from "../../src/subagents/retained-adoption.js";
-import { RetainedHeadlessSupervisor } from "../../src/subagents/retained-supervisor.js";
+import { createPaneChildSpawner } from "../../src/subagents/backend-pane.js";
+import type { TerminalHost } from "../../src/terminal-host/types.js";
+import { RetainedHeadlessSupervisor, RetainedVisibleSupervisor } from "../../src/subagents/retained-supervisor.js";
 import { RetainedResults } from "../../src/subagents/retained-results.js";
 import { cleanupOwnedTree, type OwnedTree } from "./fixtures/subagent-feasibility-cleanup.js";
 
@@ -19,10 +21,10 @@ import { cleanupOwnedTree, type OwnedTree } from "./fixtures/subagent-feasibilit
 // spawnSupervisedProcess/spawnPiPty and audit original births before release.
 const realMode = process.env.PLAN112_RECOVERY_BACKEND === "real";
 const REAL_BLOCKER = "REAL_BACKEND_UNIMPLEMENTED: production controller RPC/adoption adapter and birth-registered harness release/zero-owned audit are missing; no process launched";
-const cleanups: Array<() => void> = [];
-afterEach(() => {
+const cleanups: Array<() => void | Promise<void>> = [];
+afterEach(async () => {
 	try {
-		for (const cleanup of cleanups.splice(0)) cleanup();
+		for (const cleanup of cleanups.splice(0)) await cleanup();
 	} finally {
 		vi.restoreAllMocks();
 		vi.useRealTimers();
@@ -36,7 +38,7 @@ function requireFakeBackend(): void {
 	}
 }
 
-function fixture(cut?: "starting" | "pre-release") {
+function fixture(cut?: "starting" | "pre-release", backend: "headless" | "visible" = "headless") {
 	requireFakeBackend();
 	vi.useFakeTimers();
 	vi.setSystemTime(1000);
@@ -52,7 +54,7 @@ function fixture(cut?: "starting" | "pre-release") {
 		inspectWriter: (identity) => identity.token === "writer" ? writerState : identity.token === "origin" ? originState : "alive",
 	});
 	const record: SubagentRecord = {
-		schemaVersion: 2, revision: 1, id: "sa-model", ownerSessionId: "origin", backend: "headless", status: "starting", taskDir,
+		schemaVersion: 2, revision: 1, id: "sa-model", ownerSessionId: "origin", backend, status: "starting", taskDir,
 		child: null, supervisor: null, pane: null, worktree: null, sessionFilePath: null, modelLabel: null, roleId: null,
 		createdAt: 1000, updatedAt: 1000, settledAt: null, completionId: null, outcome: null,
 		delivery: { state: "none", claim: null }, result: null, manifest: null, writerLease: null, controlLease: null, controlHead: 0,
@@ -78,10 +80,40 @@ function fixture(cut?: "starting" | "pre-release") {
 		return { events: subscribe, interrupt, send, requestClose };
 	});
 	const buildManifest = vi.fn(async () => ({ baseRef: "HEAD", changedPaths: [], commits: 0, exit: "completed" as const, durationMs: 1 }));
-	const owner = new RetainedHeadlessSupervisor({ registry, initial: record,
-		supervisor: { identity: { pid: process.pid, processGroupId: process.pid, processStartTime: "host-command" }, verification: { members: [{ pid: process.pid, processStartTime: "host-birth" }] } },
+	const supervisor = { identity: { pid: process.pid, processGroupId: process.pid, processStartTime: "host-command" }, verification: { members: [{ pid: process.pid, processStartTime: "host-birth" }] } };
+	const host: TerminalHost = {
+		kind: "herdr", closePane: vi.fn(), openCommandInSplit: vi.fn(), notify: vi.fn(),
+		inspectPane: vi.fn<NonNullable<TerminalHost["inspectPane"]>>(async () => ({ ok: true, shellPid: 42, foregroundProcessGroupId: 42, foregroundPids: [42] })),
+		startAgentPane: vi.fn<NonNullable<TerminalHost["startAgentPane"]>>(async (_pi, launch) => {
+			expect(registry.get(record.id)).toMatchObject({ status: "starting", writerLease: { generation: 1 }, child: null });
+			const nonce = launch.shellCommand.split("'").at(-2)!;
+			vi.mocked(operations.captureStartTime).mockReturnValue(`birth <cmd> ${join(taskDir, "run.sh")} ${nonce}`);
+			writeFileSync(join(taskDir, "launch.born"), `${nonce}\n42\n42\nanchor-birth\n`, { mode: 0o600 });
+			return { ok: true, agentName: "worker", paneId: "pane:1", pane: { host: "herdr", paneId: "pane:1" } };
+		}),
+	};
+	const paneBackend = createPaneChildSpawner({ processTree: operations, resolveLauncher: () => "/synthetic/sumocode" });
+	const visibleSpawn = vi.fn((options: Parameters<typeof paneBackend>[0]): SpawnedChild => {
+		const child = paneBackend(options);
+		let seq = 0;
+		return { ...child, events: (listener) => {
+			subscribe(listener);
+			if (Symbol.asyncIterator in child.events) throw new Error("callback pane backend expected");
+			child.events(listener);
+		}, send: async (text, fence) => {
+			await send(text);
+			const pending = child.send!(text, fence);
+			const file = join(taskDir, "control", `steer-${++seq}.txt`);
+			renameSync(file, `${file}.consumed`);
+			await vi.advanceTimersByTimeAsync(250);
+			await pending;
+		} };
+	});
+	const owner = backend === "headless" ? new RetainedHeadlessSupervisor({ registry, initial: record, supervisor,
 		launch: { prompt: "synthetic task", cwd: taskDir, inherited: {}, builtInTools: [] }, baseRef: "HEAD",
-	}, { operations, spawn, buildManifest });
+	}, { operations, spawn, buildManifest }) : new RetainedVisibleSupervisor({ registry, initial: record, supervisor,
+		launch: { prompt: "synthetic task", cwd: taskDir, id: record.id, name: "worker", host, pi: { exec: vi.fn() }, placement: { kind: "new-tab", label: "worker" } }, baseRef: "HEAD",
+	}, { operations, spawn: visibleSpawn, buildManifest });
 	const managers: SubagentManager[] = [];
 	function install(session: string, token = session) {
 		type Handler = (event: { type: string; reason: string }, ctx: ExtensionContext) => void | Promise<void>;
@@ -95,6 +127,7 @@ function fixture(cut?: "starting" | "pre-release") {
 		// SAFETY: this fake supplies the installer's public methods; tests invoke only id/ids tools.
 		const manager = installSubagents(api as never, {
 			spawnPiChild: () => { throw new Error("replacement must not respawn"); },
+			terminalHost: host,
 			managerDependencies: { controllerIdentity: { ...writer, token }, processOperations: operations },
 		});
 		const fire = async (name: string, reason = "startup") => {
@@ -107,8 +140,9 @@ function fixture(cut?: "starting" | "pre-release") {
 		return runtime;
 	}
 	const snapshot: SubagentSnapshot = { id: record.id, title: "worker", prompt: "synthetic task", cwd: taskDir, baseRef: "HEAD", status: "running", createdAt: 1000,
-		usage: { turns: 0 }, transcript: [], liveText: "", liveTools: [], finalText: "" };
+		visible: backend === "visible", usage: { turns: 0 }, transcript: [], liveText: "", liveTools: [], finalText: "" };
 	const track = async (runtime: ReturnType<typeof install>) => {
+		if (backend === "visible") { await vi.advanceTimersByTimeAsync(50); await owner.ready; }
 		const current = owner.record;
 		const granted = registry.acquireControl(current.id, current.revision, current.writerLease!.generation, current.controlHead, runtime.manager.controllerIdentity, 60_000);
 		const authority = controlAuthority(granted);
@@ -117,15 +151,20 @@ function fixture(cut?: "starting" | "pre-release") {
 	};
 	const finish = async () => {
 		await owner.ready;
-		emit({ kind: "run-settled", outcome: { kind: "completed", finalText: "preserved result" } });
+		if (backend === "visible") {
+			writeFileSync(join(taskDir, "response.md"), "preserved result", { mode: 0o600 });
+			writeFileSync(join(taskDir, "exit.code"), "0", { mode: 0o600 });
+			await vi.advanceTimersByTimeAsync(750);
+		} else emit({ kind: "run-settled", outcome: { kind: "completed", finalText: "preserved result" } });
 		expect(await owner.settlement).toBe("settled");
 	};
-	cleanups.push(() => {
+	cleanups.push(async () => {
 		for (const manager of managers) manager.detachForReplacement();
-		gate.onRefused();
+		if (backend === "headless") gate.onRefused();
+		else { vi.mocked(operations.identityMatches).mockReturnValue("unknown"); try { owner.renew(); } catch { /* Stop only the fake owner. */ } await vi.advanceTimersByTimeAsync(750); }
 		expect(vi.getTimerCount(), "all fake owner/manager timers disposed; no OS groups were created").toBe(0);
 	});
-	return { directory, taskDir, registry, record, owner, gate, operations, spawn, subscribe, interrupt, send, requestClose, buildManifest, emit: (event: SubagentEvent) => emit(event), install, track, finish,
+	return { directory, taskDir, registry, record, owner, gate, operations, spawn: backend === "headless" ? spawn : visibleSpawn, subscribe, interrupt, send, requestClose, buildManifest, emit: (event: SubagentEvent) => emit(event), install, track, finish,
 		writerState: (state: typeof writerState) => { writerState = state; }, originState: (state: typeof originState) => { originState = state; } };
 }
 
@@ -146,8 +185,8 @@ async function blocked(f: Fixture, runtime: ReturnType<Fixture["install"]>): Pro
 	expect(f.operations.signalTree).not.toHaveBeenCalled();
 }
 
-async function replaceAndComplete(reason: string, beforeSettle = true): Promise<void> {
-	const f = fixture();
+async function replaceAndComplete(reason: string, beforeSettle = true, backend: "headless" | "visible" = "headless"): Promise<void> {
+	const f = fixture(undefined, backend);
 	const old = f.install("origin");
 	const authority = await f.track(old);
 	const initial = f.owner.record;
@@ -180,7 +219,8 @@ async function replaceAndComplete(reason: string, beforeSettle = true): Promise<
 	expect(f.spawn).toHaveBeenCalledTimes(1);
 	expect(f.subscribe).toHaveBeenCalledTimes(1);
 	expect(f.interrupt).not.toHaveBeenCalled();
-	expect(f.operations.signalTree).not.toHaveBeenCalled();
+	if (backend === "headless") expect(f.operations.signalTree).not.toHaveBeenCalled();
+	else expect(f.operations.signalTree).toHaveBeenCalledTimes(1);
 }
 
 describe("production recovery matrix", () => {
@@ -188,9 +228,8 @@ describe("production recovery matrix", () => {
 		for (const replacement of ["same-process factory replacement", "host-Pi reload", "parent crash-restart"] as const) {
 			it(`feasibility: ${backend} across ${replacement}`, async () => {
 				requireFakeBackend();
-				if (backend === "visible") throw new Error("VISIBLE_OWNER_MISSING: no production retained visible supervisor; a fake owner would bypass the required controller/anchor path");
 				if (replacement !== "same-process factory replacement") throw new Error("CROSS_PROCESS_ADOPTION_MISSING: acquireRetained requires an in-process supervisor handle; no production disk/IPC controller reconstruction after host death");
-				await replaceAndComplete("new");
+				await replaceAndComplete("new", true, backend);
 			});
 		}
 	}

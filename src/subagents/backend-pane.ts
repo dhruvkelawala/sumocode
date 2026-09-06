@@ -65,12 +65,14 @@ export interface VisibleLaunchEvidence {
 	readonly pane: StartedAgentPane;
 }
 
-/** Synchronous durable fences; the retained owner keeps the handle even if ready rejects. */
+/** Durable launch/effect fences; the owner keeps the handle even if ready rejects. */
 export interface VisibleLaunchGate {
 	/** Persist starting, task path and supervisor/lease authority before pane creation. */
 	beforeSpawn(launch: { readonly taskDir: string; readonly nonce: string }): void;
 	/** Persist wrapper tree + pane references while the launcher is still held. */
-	wrapperBorn(evidence: VisibleLaunchEvidence): void;
+	wrapperBorn(evidence: VisibleLaunchEvidence): void | Promise<void>;
+	/** Complete original-tree cleanup before publishing settlement. */
+	cleanup?(beforeEffect?: () => void): Promise<void>;
 	/** Recheck durable authority after OS inspection, immediately before release. */
 	beforeRelease(): void;
 	/** Recheck persistence-owner authority at each effect/ack boundary, not user authorization. */
@@ -95,6 +97,8 @@ export interface PaneChildOptions {
 	readonly tools?: readonly string[];
 	readonly appendSystemPrompt?: string;
 	readonly launchGate?: VisibleLaunchGate;
+	/** Existing private directory bound to the retained starting record. */
+	readonly retainedTaskDir?: string;
 }
 
 export interface PaneBackendDependencies {
@@ -169,7 +173,9 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	// Owner-only allocation with an exclusive create: the task dir carries the
 	// prompt and every steering message, and a pre-existing or symlinked path
 	// must fail closed rather than be reused.
-	const allocatedDir = allocatePrivateTaskDir(fs, baseDir, `${options.id}-${now()}`);
+	if (options.retainedTaskDir && !options.launchGate) throw new Error("retained task directory requires an owner");
+	const allocatedDir = options.retainedTaskDir ?? allocatePrivateTaskDir(fs, baseDir, `${options.id}-${now()}`);
+	assertPrivateDir(fs, allocatedDir, "visible-subagent task directory");
 	// Registry paths must have their real spelling (not macOS's /tmp alias).
 	const taskDir = options.launchGate ? fs.realpathSync(allocatedDir) : allocatedDir;
 	const paths = visibleTaskPathsInDir(taskDir);
@@ -244,6 +250,8 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		...(gate ? visibleWrapperGate(taskDir, nonce, bornFile, releaseFile) : []),
 		exitGuard,
 		`( ${agentCommand} ) 2>> ${shellEscape(paths.logFile)}`,
+		// Keep the original wrapper alive for verified post-result tree cleanup.
+		...(gate?.cleanup ? ['__sumo_finish "$?"', 'while :; do /bin/sleep 1; done'] : []),
 	].join("\n");
 	fs.writeFileSync(paths.scriptFile, script, { mode: 0o700, flag: "wx" });
 	const shellCommand = `exec ${shellEscape(paths.scriptFile)}${gate ? ` ${shellEscape(nonce)}` : ""}`;
@@ -275,6 +283,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		readonly timer: ReturnType<typeof setInterval>;
 		readonly resolve: () => void;
 		readonly reject: (error: Error) => void;
+		readonly beforeEffect?: () => void;
 	}>();
 
 	const clearWatcher = (): void => {
@@ -291,7 +300,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		blockLaunch(error);
 		clearWatcher();
 		for (const path of pendingSteeringAcks.keys()) finishPendingSteeringAck(path, authorityError());
-		options.signal?.removeEventListener("abort", interrupt);
+		options.signal?.removeEventListener("abort", onAbort);
 		try { gate?.onRefused(); }
 		catch { /* Local effects remain stopped even if the owner cannot persist loss. */ }
 	};
@@ -329,8 +338,8 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		const pending = pendingSteeringAcks.get(path);
 		if (!pending) return;
 		if (!authorityLost) {
-			try { assertAuthority(); }
-			catch { return; }
+			try { assertAuthority(); pending.beforeEffect?.(); }
+			catch { refuseEffect(authorityError()); return; }
 		}
 		pendingSteeringAcks.delete(path);
 		clearInterval(pending.timer);
@@ -350,17 +359,22 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		}
 	};
 
-	const settle = (event: Extract<SubagentEvent, { kind: "run-settled" }>): void => {
+	const settle = (event: Extract<SubagentEvent, { kind: "run-settled" }>, beforeEffect?: () => void): void => {
 		if (settled || authorityLost) return;
 		try { assertAuthority(); }
 		catch { return; }
 		settled = true;
 		clearWatcher();
 		settlePendingSteeringAcks();
-		options.signal?.removeEventListener("abort", interrupt);
+		options.signal?.removeEventListener("abort", onAbort);
 		try { assertAuthority(); }
 		catch { return; }
-		emitEvent?.(event);
+		if (gate?.cleanup) {
+			void gate.cleanup(beforeEffect).then(() => {
+				assertAuthority();
+				emitEvent?.(event);
+			}).catch(() => refuseEffect(authorityError()));
+		} else emitEvent?.(event);
 	};
 
 	const readText = (path: string, label: string): string => {
@@ -460,13 +474,15 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		}
 	};
 
-	function interrupt(): void {
+	function interrupt(beforeEffect?: () => void): void {
+		beforeEffect?.();
 		if (gate) {
 			if (authorityLost) return;
 			try {
 				assertAuthority();
 				if (!released) blockLaunch(new Error("visible launch interrupted before release"));
 				callGate(() => gate.interrupt());
+				if (gate.cleanup) settle({ kind: "run-settled", outcome: { kind: "interrupted" } }, beforeEffect);
 			} catch { /* Refusal stops local actions; it is not cancellation proof. */ }
 			return;
 		}
@@ -489,12 +505,13 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	 * A timeout preserves the file because ownership is ambiguous and retrying
 	 * could duplicate steering that Pi already owns.
 	 */
-	const send = (text: string): Promise<void> => {
+	const send = (text: string, beforeEffect?: () => void): Promise<void> => {
 		if (authorityLost) return Promise.reject(authorityError());
 		if (settled || interrupted) return Promise.reject(steeringSettlementError());
 		if (!released) return Promise.reject(new Error("visible launch has not been released"));
 		try { assertAuthority(); }
 		catch { return Promise.reject(authorityError()); }
+		beforeEffect?.();
 		const seq = ++steerSeq;
 		const finalPath = join(paths.controlDir, `steer-${seq}.txt`);
 		// 0600 on the temp file: rename preserves the mode, so the published file
@@ -503,6 +520,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		writeNewPrivateFile(fs, `${finalPath}.tmp`, text);
 		try { assertAuthority(); }
 		catch { return Promise.reject(authorityError()); }
+		beforeEffect?.();
 		fs.renameSync(`${finalPath}.tmp`, finalPath);
 		try { assertAuthority(); }
 		catch { return Promise.reject(authorityError()); }
@@ -537,16 +555,19 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 					);
 				}
 			}, ackPollMs);
-			pendingSteeringAcks.set(finalPath, { timer: ackTimer, resolve, reject });
+			pendingSteeringAcks.set(finalPath, { timer: ackTimer, resolve, reject, beforeEffect });
 			ackTimer.unref?.();
 		});
 	};
 
 	/** Ask the child's task-mode watcher to persist its response and exit. */
-	const requestClose = (): void => {
+	const requestClose = (beforeEffect?: () => void): void => {
+		beforeEffect?.();
+		if (settled) throw steeringSettlementError();
 		if (authorityLost) throw authorityError();
 		if (!released) throw new Error("visible launch has not been released");
 		assertAuthority();
+		beforeEffect?.();
 		try {
 			writeNewPrivateFile(fs, join(paths.controlDir, CLOSE_REQUEST_FILE), "1");
 		} catch (error) {
@@ -559,12 +580,19 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 			assertPrivateArtifact(fs, join(paths.controlDir, CLOSE_REQUEST_FILE), paths.controlDir, "close control");
 		}
 		assertAuthority();
+		beforeEffect?.();
 	};
 
 	const watchLaunchGate = (launchGate: VisibleLaunchGate): void => {
 		let elapsed = 0;
-		launchTimer = setInterval(() => {
+		let inspecting = false;
+		launchTimer = setInterval(async () => {
 			elapsed += 50;
+			if (inspecting) {
+				if (elapsed >= 30_000) blockLaunch(new Error("visible pane inspection timed out; tracking evidence retained"));
+				return;
+			}
+			inspecting = true;
 			try {
 				assertAuthority();
 				if (elapsed >= 30_000) throw new Error("visible wrapper birth/release timed out; tracking evidence retained");
@@ -591,7 +619,12 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 				assertLive();
 				if (validatedArtifactStat(fs, releaseFile, taskDir, "wrapper release")) throw new Error("visible wrapper release already exists");
 				assertAuthority();
-				callGate(() => launchGate.wrapperBorn({ taskDir, nonce, process: { identity, verification }, pane: structuredClone(startedPane!) }));
+				try {
+					await launchGate.wrapperBorn({ taskDir, nonce, process: { identity, verification }, pane: structuredClone(startedPane!) });
+				} catch (error) {
+					refuseEffect(new Error(errorText(error)));
+					throw error;
+				}
 				if (launchBlocked || options.signal?.aborted) throw new Error("visible launch interrupted before release");
 				assertLive();
 				assertPrivateDir(fs, taskDir, "visible launch directory");
@@ -610,6 +643,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 				pollTimer.unref?.();
 				poll();
 			} catch (error) { blockLaunch(new Error(errorText(error))); }
+			finally { inspecting = false; }
 		}, 50);
 		launchTimer.unref?.();
 	};
@@ -671,8 +705,9 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		})().finally(() => { if (!gate) markReady(); });
 	};
 
+	function onAbort(): void { interrupt(); }
 	if (options.signal?.aborted) interrupted = true;
-	else options.signal?.addEventListener("abort", interrupt, { once: true });
+	else options.signal?.addEventListener("abort", onAbort, { once: true });
 
 	return { events, interrupt, ready, send, requestClose };
 };

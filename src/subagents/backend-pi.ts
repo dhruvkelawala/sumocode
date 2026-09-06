@@ -165,16 +165,16 @@ export interface SpawnedChild {
 	readonly events: AsyncIterable<SubagentEvent> | ((emit: (e: SubagentEvent) => void) => void);
 	readonly sessionFilePath?: string;
 	readonly ready?: Promise<void>;
-	interrupt(): void;
+	interrupt(beforeEffect?: () => void): void;
 	/**
 	 * Publish steering text to a running child's control channel and wait for the
 	 * child watcher to consume it and synchronously submit it to Pi. Rejects when
 	 * unsupported, unconfirmed, or the child settles first; Pi exposes no
 	 * post-acceptance acknowledgement, so this never proves model-turn delivery.
 	 */
-	send?(text: string): Promise<void>;
+	send?(text: string, beforeEffect?: () => void): Promise<void>;
 	/** Ask the child to persist its response and shut down gracefully. */
-	requestClose?(): void;
+	requestClose?(beforeEffect?: () => void): void;
 }
 
 /** Persistence-owner fences, NOT authorization for user control requests.
@@ -503,7 +503,7 @@ const attachAbortSignal = (proc: ChildProcessWithoutNullStreams, signal: AbortSi
 // The shared signalTree performs more OS probes after its caller's fence (and
 // Windows can await several taskkills). For retained POSIX work, verification
 // stays in terminateProcessTree + the gate; this last operation is one signal.
-const retainedProcessTree: ProcessTreeOperations = {
+export const retainedProcessTree: ProcessTreeOperations = {
 	...systemProcessTree,
 	async signalTree(identity, signal) {
 		try {

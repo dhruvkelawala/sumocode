@@ -50,7 +50,7 @@ function resolveBun() {
 }
 
 function run(command, args) {
-	const result = spawnSync(command, args, { stdio: "inherit" });
+	const result = spawnSync(command, args, { cwd: root, stdio: "inherit" });
 	if (result.error || result.status !== 0) {
 		fail(`${command} ${args.join(" ")} failed${result.status !== null ? ` with exit ${result.status}` : ""}`);
 	}
@@ -84,6 +84,7 @@ async function buildExtensionBundle(entryPoint, outPath) {
 		write: false,
 		logLevel: "warning",
 	});
+	assertMetafileContainment(result.metafile);
 	const output = result.outputFiles[0];
 	// Regression guard (plan step 2.3): every bare import in the bundle must be
 	// a Pi virtual module. Relative imports (./, ../, /) are inlined paths.
@@ -151,16 +152,26 @@ export function makeNativePiBuildCopy(piPkg, buildDir, packageRoot = root) {
 	return buildDir;
 }
 
-// Node loads a bare name from a directory only when a manifest or an index entry
-// is present; anything else falls through to the next resolution candidate.
-function loadablePackageDirectory(directory) {
-	return existsSync(join(directory, "package.json"))
-		|| ["index.js", "index.mjs", "index.cjs"].some((entry) => existsSync(join(directory, entry)));
+function loadablePackageDirectory(directory, require, name) {
+	if (!existsSync(directory)) return false;
+	let entry;
+	try {
+		entry = require.resolve(name);
+	} catch (error) {
+		if (error.code !== "ERR_PACKAGE_PATH_NOT_EXPORTED") return false;
+		try {
+			entry = require.resolve(`${name}/package.json`);
+		} catch {
+			return false;
+		}
+	}
+	return realpathSync(entry).startsWith(`${realpathSync(directory)}${sep}`);
 }
 
 /**
  * Check package contents and installed dependency edges, not JS import expressions.
- * This is a pre-build check of a stable install, not a sandbox or a TOCTOU guard.
+ * Advisory fast-fail only: Node and Bun can resolve differently. The post-build
+ * metafile containment check is the invariant, not this heuristic or a TOCTOU guard.
  */
 function validatePiBuildGraph(piPkg, packageRoot) {
 	const realRoot = realpathSync(packageRoot);
@@ -214,14 +225,11 @@ function validatePiBuildGraph(piPkg, packageRoot) {
 			// before resolving — nothing to contain, no directory to link into the copy.
 			if (isBuiltin(name)) continue;
 			// Real package neighborhoods include pnpm siblings, not just child node_modules.
-			// A candidate counts only when Node would load it (manifest or index entry);
-			// unloadable nearest directories fall through to ancestors exactly like Node
-			// resolution, without emulating exports/conditions. Manifestless index-only
-			// modules stay valid. The first loadable candidate must pass containment
-			// before any fallback.
+			// Use Node's resolved file, not manifest presence. Exports hiding both the
+			// entry and manifest are conservatively rejected rather than guessed.
 			const dependency = require.resolve.paths(name)
 				.map((directory) => join(directory, name))
-				.find(loadablePackageDirectory);
+				.find((directory) => loadablePackageDirectory(directory, require, name));
 			if (!dependency) {
 				if (Object.hasOwn(manifest.optionalDependencies ?? {}, name)
 					|| (manifest.peerDependenciesMeta?.[name]?.optional && !Object.hasOwn(manifest.dependencies ?? {}, name))) continue;
@@ -238,8 +246,17 @@ function validatePiBuildGraph(piPkg, packageRoot) {
 	return visitPackage(piPkg);
 }
 
-function bedrockInputs(metafilePath) {
-	const metafile = JSON.parse(readFileSync(metafilePath, "utf8"));
+export function assertMetafileContainment(metafile, packageRoot = root, buildDir) {
+	const roots = [packageRoot, ...(buildDir ? [buildDir] : [])].map((path) => realpathSync(path));
+	for (const input of Object.keys(metafile.inputs)) {
+		const real = realpathSync(resolve(packageRoot, input));
+		if (!roots.some((directory) => real.startsWith(`${directory}${sep}`))) {
+			throw new Error(`Build input ${input} resolves outside ${packageRoot}: ${real}`);
+		}
+	}
+}
+
+function bedrockInputs(metafile) {
 	return Object.keys(metafile.inputs).filter((path) =>
 		path.includes("register-bedrock")
 		|| path.includes("bedrock-provider")
@@ -284,8 +301,10 @@ async function main() {
 		join(piBuildDir, "dist/bun/cli.js"),
 		join(piBuildDir, "dist/utils/image-resize-worker.js"),
 	]);
+	const piBuildMetafile = JSON.parse(readFileSync(piMetafile, "utf8"));
+	assertMetafileContainment(piBuildMetafile, root, piBuildDir);
 	rmSync(piBuildDir, { recursive: true, force: true });
-	const includedBedrockInputs = bedrockInputs(piMetafile);
+	const includedBedrockInputs = bedrockInputs(piBuildMetafile);
 	if (includedBedrockInputs.length > 0) fail(`compiled Pi child still includes Bedrock: ${includedBedrockInputs.join(", ")}`);
 	console.log(`[sumocode] compiled Pi child excludes Bedrock registration (${piMetafile})`);
 	const piDist = join(piPkg, "dist");
@@ -309,16 +328,19 @@ async function main() {
 	// 3. Bun-compiled host executable from the native entry, with the
 	// chrome-cache worker embedded as its own entrypoint (started by the worker
 	// client via new Worker(new URL(...)) inside the binary).
+	const hostMetafile = resolve(root, "dist/native/sumocode.metafile.json");
 	run(bunBin, [
 		"build",
 		"--compile",
 		"--no-compile-autoload-bunfig",
 		"--no-compile-autoload-dotenv",
+		`--metafile=${hostMetafile}`,
 		"--define", `__SUMOCODE_VERSION__=${JSON.stringify(version)}`,
 		"--outfile", join(binDir, "sumocode"),
 		join(root, "src/native/main.ts"),
 		join(root, "src/sumo-tui/rpc/chrome-cache-worker.ts"),
 	]);
+	assertMetafileContainment(JSON.parse(readFileSync(hostMetafile, "utf8")));
 
 	// 4. Host sidecar assets and installer.
 	copyFileSync(require.resolve("yoga-wasm-web/dist/yoga.wasm"), join(shareDir, "yoga.wasm"));

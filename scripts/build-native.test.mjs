@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { makeNativePiBuildCopy } from "./build-native.mjs";
+import { assertMetafileContainment, makeNativePiBuildCopy } from "./build-native.mjs";
 
 const temporaryDirectories = [];
 
@@ -45,7 +45,7 @@ function fixture(layout) {
 	symlinkSync(lockPkg, join(neighborhood, "proper-lockfile"), "dir");
 	write(join(neighborhood, "@earendil-works/pi-agent-core/package.json"), JSON.stringify({
 		name: "@earendil-works/pi-agent-core", type: "module",
-		exports: { "./private-entry": { import: "./nested/entry.js" } },
+		exports: { "./private-entry": { import: "./nested/entry.js" }, "./package.json": "./package.json" },
 	}));
 	write(join(neighborhood, "@earendil-works/pi-agent-core/nested/entry.js"), 'export const agent = "pi-private-esm";\n');
 	for (const base of [directory, root, join(directory, "operator")]) {
@@ -112,7 +112,62 @@ describe("native build entry", () => {
 	}
 });
 
+describe("native build input containment", () => {
+	it("accepts checkout and staged inputs but rejects an escaped realpath", () => {
+		const { directory, root, piPkg } = fixture("pnpm");
+		const stage = join(directory, "stage");
+		write(join(stage, "entry.js"), "export {};\n");
+		const metafile = { inputs: { [join(piPkg, "package.json")]: {}, "../stage/entry.js": {} } };
+		expect(() => assertMetafileContainment(metafile, root, stage)).not.toThrow();
+		const outside = join(directory, "package-external/entry.js");
+		write(outside, "export {};\n");
+		expect(() => assertMetafileContainment({ inputs: { [outside]: {} } }, root, stage))
+			.toThrow(`Build input ${outside} resolves outside ${root}: ${outside}`);
+		symlinkSync(outside, join(stage, "escaped.js"));
+		expect(() => assertMetafileContainment({ inputs: { "../stage/escaped.js": {} } }, root, stage))
+			.toThrow(`Build input ../stage/escaped.js resolves outside ${root}: ${outside}`);
+		symlinkSync(outside, join(root, "escaped.js"));
+		metafile.inputs["escaped.js"] = {};
+		expect(() => assertMetafileContainment(metafile, root, stage)).toThrow(`Build input escaped.js resolves outside ${root}: ${outside}`);
+	});
+});
+
 describe("native Pi build-source preparation", () => {
+	for (const scenario of ["manifest without main", "broken main without index", "broken main with index"]) {
+		it(`checks actual resolution for ${scenario}`, () => {
+			const { directory, root, piPkg, buildDir } = fixture("pnpm");
+			const name = "manifest-nearest";
+			const manifestPath = join(piPkg, "package.json");
+			const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+			manifest.dependencies[name] = "1";
+			write(manifestPath, JSON.stringify(manifest));
+			const nearest = join(piPkg, "../..", name);
+			const nearestManifest = { name };
+			if (scenario.startsWith("broken")) nearestManifest.main = "missing.js";
+			write(join(nearest, "package.json"), JSON.stringify(nearestManifest));
+			const outside = join(directory, "node_modules", name);
+			write(join(outside, "index.js"), "module.exports = 'outside';\n");
+			const require = createRequire(manifestPath);
+			if (scenario === "broken main with index") {
+				write(join(nearest, "index.js"), "module.exports = 'nearest';\n");
+				expect(require.resolve(name)).toBe(join(nearest, "index.js"));
+				makeNativePiBuildCopy(piPkg, buildDir, root);
+				expect(realpathSync(join(buildDir, "node_modules", name))).toBe(nearest);
+			} else {
+				if (scenario === "manifest without main") {
+					expect(require.resolve(name)).toBe(join(outside, "index.js"));
+				} else {
+					// Node aborts here; Bun may fall through. Neither may bless the nearest.
+					expect(() => require.resolve(name)).toThrow();
+				}
+				expect(() => makeNativePiBuildCopy(piPkg, buildDir, root)).toThrow(
+					scenario === "manifest without main" ? /resolves outside/ : /Cannot resolve Pi build dependency/,
+				);
+				expect(existsSync(buildDir)).toBe(false);
+			}
+		});
+	}
+
 	for (const escape of ["nested transitive", "pnpm neighbor transitive", "pnpm peer transitive", "pnpm optional transitive", "package file", "package directory", "Pi dist file"]) {
 		it(`rejects an escaped ${escape} before linking the source graph`, () => {
 			const { directory, root, piPkg, buildDir } = fixture("pnpm");

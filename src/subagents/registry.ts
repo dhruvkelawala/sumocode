@@ -31,6 +31,8 @@ export interface RegistryWriterLease {
 export interface RegistryControlAuthority {
 	readonly id: string;
 	readonly ownerSessionId: string;
+	readonly controllerSessionId?: string;
+	readonly controllerGeneration?: number;
 	readonly generation: number;
 	readonly owner: RegistryWriter;
 	readonly head: number;
@@ -49,7 +51,11 @@ export interface SubagentRecord {
 	};
 	readonly revision: number;
 	readonly id: string;
+	/** Immutable origin; readable history does not follow control handoffs. */
 	readonly ownerSessionId: string;
+	/** Absent on legacy records: origin session, generation zero. */
+	readonly controllerSessionId?: string;
+	readonly controllerGeneration?: number;
 	readonly backend: "headless" | "visible";
 	readonly status: "queued" | "starting" | "running" | "settling" | "settled" | "lost" | "ambiguous";
 	readonly taskDir: string;
@@ -152,7 +158,9 @@ function pointer(value: unknown, file: string): boolean {
 	return value === null || (object(value, "file bytes") && value.file === file && integer(value.bytes) && value.bytes <= MAX_RESULT_BYTES);
 }
 function validRecord(value: unknown): value is SubagentRecord {
-	if (!object(value, RECORD_KEYS, "budget telemetry")) return false;
+	if (!object(value, RECORD_KEYS, "budget telemetry controllerSessionId controllerGeneration")) return false;
+	if ((value.controllerSessionId === undefined) !== (value.controllerGeneration === undefined)
+		|| value.controllerSessionId !== undefined && (!text(value.controllerSessionId) || !positive(value.controllerGeneration))) return false;
 	const r = value;
 	if (r.budget !== undefined) {
 		try { validateSubagentBudget(r.budget); } catch { return false; }
@@ -208,6 +216,7 @@ function validRecord(value: unknown): value is SubagentRecord {
 function matchesControlIdentity(current: SubagentRecord, authority: RegistryControlAuthority): boolean {
 	const held = current.controlLease;
 	return held !== null && authority.id === current.id && authority.ownerSessionId === current.ownerSessionId
+		&& authority.controllerSessionId === current.controllerSessionId && authority.controllerGeneration === current.controllerGeneration
 		&& authority.generation === held.generation && authority.head === current.controlHead
 		&& writer(authority.owner) && sameWriter(authority.owner, held.owner);
 }
@@ -232,7 +241,7 @@ export class SubagentRegistry {
 
 	public create(record: SubagentRecord): SubagentRecord {
 		this.validate(record);
-		if (record.revision !== 1 || record.controlLease !== null || record.controlHead !== 0 || record.writerLease !== null || record.child !== null || record.supervisor !== null || record.result !== null || record.manifest !== null || !["starting", "queued"].includes(record.status)) throw new Error("new registry record must be unlaunched at revision 1");
+		if (record.revision !== 1 || record.controllerSessionId !== undefined || record.controllerGeneration !== undefined || record.controlLease !== null || record.controlHead !== 0 || record.writerLease !== null || record.child !== null || record.supervisor !== null || record.result !== null || record.manifest !== null || !["starting", "queued"].includes(record.status)) throw new Error("new registry record must be unlaunched at revision 1");
 		const path = this.recordPath(record.id);
 		return this.withLock(path, () => {
 			this.validate(record);
@@ -251,6 +260,31 @@ export class SubagentRegistry {
 		if (!validRecord(record) || record.id !== id) throw new Error("corrupt subagent record");
 		this.validate(record);
 		return record;
+	}
+
+	/**
+	 * Explicit session handoff, atomically acquiring writer and control generations.
+	 * The recovery caller verifies retained process/pane evidence before this CAS
+	 * and again before effects. This method grants no pipe or backend handle.
+	 */
+	public handoffController(id: string, expectedRevision: number, expectedGeneration: number, sessionId: string, durationMs: number): SubagentRecord {
+		if (!text(sessionId) || !integer(expectedGeneration) || !positive(durationMs) || durationMs > 60_000) throw new Error("invalid controller handoff");
+		return this.change(id, expectedRevision, (current, now) => {
+			if ((current.controllerGeneration ?? 0) !== expectedGeneration) throw new SubagentLeaseConflict("stale controller generation");
+			const owner = this.ownWriter();
+			const inspect = this.options.inspectWriter ?? inspectWriter;
+			if (inspect(owner) !== "alive") throw new SubagentLeaseConflict("candidate controller lease identity is not live");
+			for (const held of [current.writerLease, current.controlLease]) {
+				// Even the same process/token must not silently move a live session.
+				if (held && (now < held.expiresAt || inspect(held.owner) !== "dead")) throw new SubagentLeaseConflict("controller lease is held or owner death is unproven");
+			}
+			if (this.clock(current) >= now + durationMs) throw new SubagentLeaseConflict("controller lease expired during inspection");
+			const head = current.controlHead + 1;
+			return { ...current, controllerSessionId: sessionId, controllerGeneration: expectedGeneration + 1,
+				writerLease: { owner, generation: (current.writerLease?.generation ?? 0) + 1, renewedAt: now, expiresAt: now + durationMs },
+				controlHead: head, controlLease: { owner, generation: head, renewedAt: now, expiresAt: now + durationMs },
+			};
+		});
 	}
 
 	/** CAS-acquire or renew. Even an expired lease blocks takeover until its process is proven dead. */
@@ -343,7 +377,7 @@ export class SubagentRegistry {
 		return this.change(id, expectedRevision, (current, now) => {
 			this.assertWriter(current, generation, now);
 			const next = update(structuredClone(current));
-			for (const key of ["schemaVersion", "id", "ownerSessionId", "backend", "taskDir", "createdAt", "writerLease", "controlLease", "controlHead", "budget"] as const) {
+			for (const key of ["schemaVersion", "id", "ownerSessionId", "backend", "taskDir", "createdAt", "writerLease", "controlLease", "controlHead", "controllerSessionId", "controllerGeneration", "budget"] as const) {
 				if (!isDeepStrictEqual(next[key], current[key])) throw new Error(`immutable registry field: ${key}`);
 			}
 			for (const key of ["child", "supervisor", "pane", "worktree", "sessionFilePath", "completionId", "outcome", "settledAt", "result", "manifest"] as const) {

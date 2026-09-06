@@ -38,10 +38,38 @@ function fixture() {
 }
 
 function control(record: SubagentRecord): RegistryControlAuthority {
-	return { id: record.id, ownerSessionId: record.ownerSessionId, generation: record.controlLease!.generation, owner: record.controlLease!.owner, head: record.controlHead };
+	return { id: record.id, ownerSessionId: record.ownerSessionId, controllerSessionId: record.controllerSessionId, controllerGeneration: record.controllerGeneration, generation: record.controlLease!.generation, owner: record.controlLease!.owner, head: record.controlHead };
 }
 
 describe("SubagentRegistry control authority", () => {
+	it("explicitly hands controller identity to a successor only after writer death and expiry", () => {
+		const { directory, record } = fixture();
+		let now = 1000;
+		let former: "alive" | "dead" | "unknown" = "alive";
+		const options = { now: () => now, inspectWriter: (owner: RegistryWriter) => owner.token === writerA.token ? former : "alive" as const };
+		const origin = new SubagentRegistry(directory, "session-a", { ...options, writerIdentity: writerA });
+		const successor = new SubagentRegistry(directory, "session-a", { ...options, writerIdentity: writerB });
+		origin.create(record);
+		const first = origin.handoffController(record.id, 1, 0, "session-a", 100);
+		expect(first).toMatchObject({ ownerSessionId: "session-a", controllerSessionId: "session-a", controllerGeneration: 1 });
+		expect(() => successor.handoffController(record.id, first.revision, 1, "session-b", 100)).toThrow(/lease/);
+		now = 1100;
+		for (const state of ["alive", "unknown"] as const) {
+			former = state;
+			expect(() => successor.handoffController(record.id, first.revision, 1, "session-b", 100)).toThrow(/lease/);
+		}
+		former = "dead";
+		expect(() => successor.handoffController(record.id, first.revision, 0, "session-b", 100)).toThrow(/controller/);
+		const next = successor.handoffController(record.id, first.revision, 1, "session-b", 100);
+		expect(next).toMatchObject({ ownerSessionId: "session-a", controllerSessionId: "session-b", controllerGeneration: 2, writerLease: { generation: 2 }, controlLease: { generation: 2 } });
+		expect(origin.get(record.id)).toEqual(next);
+		expect(successor.inspectControl(control(next))).toBe(true);
+		expect(successor.inspectControl({ ...control(next), controllerSessionId: "session-a" })).toBe(false);
+		expect(() => successor.handoffController(record.id, first.revision, 1, "session-c", 100)).toThrow(/revision/);
+		expect(() => successor.transition(record.id, next.revision, 2, (r) => ({ ...r, controllerSessionId: "session-c" }))).toThrow(/immutable/);
+		expect(() => origin.reserveControl(next.revision, control(first), `${record.id}:3`)).toThrow(/authority/);
+	});
+
 	it("round-trips optional budgets and durable telemetry without inventing legacy observations", () => {
 		const { directory, record } = fixture();
 		const options = { now: () => 2000, writerIdentity: writerA, inspectWriter: () => "alive" as const };

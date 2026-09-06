@@ -787,7 +787,10 @@ export class SubagentManager {
 				reportedCostUsd: addReported(current.usage.reportedCostUsd, event.costUsd),
 			},
 		};
-		if (!current.visible && event.kind !== "run-started") next = { ...next, lastProgressAt: Date.now() };
+		if (event.kind === "heartbeat") {
+			if (!current.visible || !Number.isSafeInteger(event.at) || event.at <= (current.lastHeartbeatAt ?? 0) || event.at > Date.now() || Date.now() - event.at > 2000) return;
+			next = { ...next, lastHeartbeatAt: event.at };
+		} else if (!current.visible && event.kind !== "run-started") next = { ...next, lastProgressAt: Date.now() };
 		this.snapshots.set(id, this.withBudget(next));
 		this.notify();
 		this.prune();
@@ -903,7 +906,7 @@ export class SubagentManager {
 		const tools = snapshot.liveTools.filter((tool) => !tool.done && tool.startedAt !== undefined);
 		return { ...snapshot, ...evaluateSubagentBudget({
 			now: snapshot.settledAt ?? Date.now(), status: snapshot.status,
-			startedAt: snapshot.startedAt ?? null, lastProgressAt: snapshot.lastProgressAt ?? null,
+			startedAt: snapshot.startedAt ?? null, lastProgressAt: snapshot.lastProgressAt ?? null, lastHeartbeatAt: snapshot.lastHeartbeatAt,
 			budget: snapshot.budget, progress: snapshot.visible ? "liveness-only" : "events",
 			// A running handle or an attached pane is not an OS liveness observation.
 			liveness: "unknown", toolStartedAt: tools.length ? Math.min(...tools.map((tool) => tool.startedAt!)) : undefined,

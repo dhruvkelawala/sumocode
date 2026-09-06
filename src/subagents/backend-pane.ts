@@ -251,6 +251,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	let emitEvent: ((event: SubagentEvent) => void) | undefined;
 	let pane: PaneRef | undefined;
 	let pollTimer: ReturnType<typeof setInterval> | undefined;
+	let lastHeartbeatAt = 0;
 	let interrupted = false;
 	let settled = false;
 	let steerSeq = 0;
@@ -379,6 +380,16 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		if (settled || interrupted || authorityLost) return;
 		try { assertAuthority(); }
 		catch { return; }
+		try {
+			const file = join(paths.controlDir, "heartbeat");
+			assertPrivateArtifact(fs, file, paths.controlDir, "task heartbeat");
+			const text = fs.readFileSync(file, "utf8");
+			const at = /^\d{1,16}\n$/u.test(text) ? Number(text.trim()) : NaN;
+			if (Number.isSafeInteger(at) && at > lastHeartbeatAt && at <= now() && now() - at <= 2000) {
+				lastHeartbeatAt = at;
+				emitEvent?.({ kind: "heartbeat", at });
+			}
+		} catch { /* Missing, stale or untrusted heartbeat is not proof of death. */ }
 		// lstat, not existsSync: existsSync follows symlinks, so a dangling
 		// symlink swapped in for the exit marker would read as "not yet written"
 		// and pin the child running forever. A non-regular entry is tamper and

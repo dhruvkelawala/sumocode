@@ -12,6 +12,8 @@ export interface SubagentBudgetState {
 	readonly health: SubagentHealth;
 	readonly elapsedMs: number;
 	readonly lastProgressAt: number | null;
+	/** Event-loop observation only; neither model progress nor signal authority. */
+	readonly lastHeartbeatAt?: number;
 	readonly liveness: "alive" | "gone" | "unknown";
 	/** null means no limit or no reported usage, never zero consumption. */
 	readonly utilization: { readonly wallTime: number | null; readonly tokens: number | null; readonly cost: number | null };
@@ -23,6 +25,7 @@ interface BudgetObservation {
 	readonly status: "queued" | "running" | "done" | "error";
 	readonly startedAt: number | null;
 	readonly lastProgressAt: number | null;
+	readonly lastHeartbeatAt?: number;
 	readonly progress: "events" | "liveness-only";
 	readonly liveness: SubagentBudgetState["liveness"];
 	readonly toolStartedAt?: number;
@@ -45,17 +48,18 @@ export function evaluateSubagentBudget(observation: BudgetObservation): Subagent
 		if (utilization.wallTime !== null && utilization.wallTime >= 1) warnings.push("wall-time");
 		if (utilization.tokens !== null && utilization.tokens >= 1) warnings.push("tokens");
 		if (utilization.cost !== null && utilization.cost >= 1) warnings.push("cost");
-		const silentMs = Math.max(0, now - (lastProgressAt ?? startedAt ?? now));
+		const lastSignal = Math.max(lastProgressAt ?? startedAt ?? now, observation.lastHeartbeatAt ?? startedAt ?? now);
+		const silentMs = Math.max(0, now - lastSignal);
 		const startupGrace = lastProgressAt === null && elapsedMs < 60_000;
 		const toolGrace = observation.toolStartedAt !== undefined && now - observation.toolStartedAt < 300_000;
-		if (observation.progress === "events" && startedAt !== null) {
+		if ((observation.progress === "events" || observation.lastHeartbeatAt !== undefined) && startedAt !== null) {
 			health = silentMs < 30_000 ? "active" : "quiet";
 			if (!startupGrace && !toolGrace && silentMs >= (budget?.stallAfterMs ?? 120_000)) warnings.push("stall");
 		}
 		if (warnings.some((warning) => warning !== "stall")) health = "over-budget-warning";
 		else if (warnings.includes("stall")) health = "stalled-warning";
 	}
-	return { health, elapsedMs, lastProgressAt, liveness, utilization, warnings };
+	return { health, elapsedMs, lastProgressAt, lastHeartbeatAt: observation.lastHeartbeatAt, liveness, utilization, warnings };
 }
 
 // oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof -- spawn/registry JSON boundary; reject every unknown key and invalid numeric limit.
@@ -78,6 +82,7 @@ export function formatSubagentBudget(state: Partial<SubagentBudgetState>): strin
 		`wall ${percent(state.utilization?.wallTime)}`, `reported tokens ${percent(state.utilization?.tokens)}`,
 		`reported cost ${percent(state.utilization?.cost)}`, `liveness ${state.liveness ?? "unknown"}`,
 		`last progress ${state.lastProgressAt == null ? "unobserved" : new Date(state.lastProgressAt).toISOString()}`];
+	if (state.lastHeartbeatAt !== undefined) parts.push(`last heartbeat ${new Date(state.lastHeartbeatAt).toISOString()} (event loop only)`);
 	if (state.health.endsWith("-warning")) parts.push("inspect or explicitly cancel with subagent_cancel");
 	return parts.join(" · ");
 }

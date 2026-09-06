@@ -141,6 +141,29 @@ describe("shouldInstallTaskModeAutoExit", () => {
 });
 
 describe("installTaskModeAutoExit", () => {
+	it("writes an owner-only heartbeat on the existing control watcher and stops on shutdown", async () => {
+		vi.useFakeTimers();
+		const dir = mkdtempSync(join(tmpdir(), "task-heartbeat-"));
+		const controlDir = join(dir, "control");
+		makeControlDir(controlDir);
+		const { pi, handlers } = buildPiStub();
+		const ctx = buildCtxStub();
+		try {
+			// SAFETY: the stub implements the registration and control methods used here.
+			installTaskModeAutoExit(pi as never, { env: { SUMOCODE_TASK_MODE: "1", SUMOCODE_TASK_KEEP_OPEN: "1", SUMOCODE_TASK_CONTROL_DIR: controlDir } });
+			handlers.get("session_start")?.forEach((handler) => handler({}, ctx));
+			await vi.advanceTimersByTimeAsync(500);
+			const file = join(controlDir, "heartbeat");
+			expect(readFileSync(file, "utf8")).toBe(`${Date.now()}\n`);
+			expect(lstatSync(file).mode & 0o777).toBe(0o600);
+			handlers.get("session_shutdown")?.forEach((handler) => handler({}, ctx));
+			const last = readFileSync(file, "utf8");
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(readFileSync(file, "utf8")).toBe(last);
+			expect(vi.getTimerCount()).toBe(0);
+			expect(ctx.shutdown).not.toHaveBeenCalled();
+		} finally { vi.useRealTimers(); }
+	});
 	let originalResponseFile: string | undefined;
 	let originalExitFile: string | undefined;
 	let originalStartedFile: string | undefined;

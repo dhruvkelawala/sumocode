@@ -675,6 +675,27 @@ describe("visible launch gate", () => {
 });
 
 describe("pane subagent backend", () => {
+	it("emits only fresh private heartbeat observations and leaves no timer after settlement", async () => {
+		vi.useFakeTimers();
+		try {
+			const { fs, child, paths, events, closePane } = createHarness();
+			await child.ready;
+			const file = `${paths.controlDir}/heartbeat`;
+			fs.writeFileSync(file, "1234\n", { mode: 0o600 });
+			await vi.advanceTimersByTimeAsync(750);
+			expect(events.filter((event) => event.kind === "heartbeat")).toEqual([{ kind: "heartbeat", at: 1234 }]);
+			await vi.advanceTimersByTimeAsync(750);
+			fs.writeFileSync(file, "1235\n", { mode: 0o600 });
+			await vi.advanceTimersByTimeAsync(750);
+			fs.symlinks.add(file);
+			await vi.advanceTimersByTimeAsync(750);
+			expect(events.filter((event) => event.kind === "heartbeat")).toHaveLength(1);
+			expect(closePane).not.toHaveBeenCalled();
+			fs.writeFileSync(paths.exitFile, "0\n");
+			await vi.advanceTimersByTimeAsync(750);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.useRealTimers(); }
+	});
 	it("retains the control and result watcher while replacing a same-process event observer", async () => {
 		vi.useFakeTimers();
 		const oldEvents: SubagentEvent[] = [];

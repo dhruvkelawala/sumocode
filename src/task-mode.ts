@@ -593,6 +593,9 @@ function installControlWatcher(
 			// the first submission attempt and can push control consumption past the
 			// parent's acknowledgement budget. Retry next tick instead.
 			if (!ctx) return;
+			// Event-loop heartbeat only: not model progress or process identity.
+			try { writeOwnedTaskArtifact(join(canonicalControlDir, "heartbeat"), `${Date.now()}\n`, "task heartbeat", canonicalControlDir); }
+			catch { /* Unavailable telemetry must not block explicit steering/close. */ }
 			const closePath = join(canonicalControlDir, CLOSE_REQUEST_FILE);
 			if (existsSync(closePath)) {
 				try {

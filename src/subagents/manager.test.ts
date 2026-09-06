@@ -49,6 +49,30 @@ const deferredBackend = () => {
 };
 
 describe("SubagentManager", () => {
+	it("distinguishes visible heartbeat from progress and warns only after observed heartbeat silence", async () => {
+		vi.useFakeTimers();
+		let emit: (event: SubagentEvent) => void = () => undefined;
+		const interrupt = vi.fn();
+		const requestClose = vi.fn();
+		const manager = new SubagentManager(() => ({ events: (listener) => { emit = listener; }, interrupt, requestClose }), {
+			captureGitContext: async () => ({}),
+			terminalHost: { kind: "herdr", openCommandInSplit: vi.fn(), closePane: vi.fn(), notify: vi.fn() },
+			pi: { exec: vi.fn() },
+		});
+		try {
+			await manager.spawn({ ...makeTask("visible"), visible: true });
+			await vi.advanceTimersByTimeAsync(120_000);
+			expect(manager.get("sa-1")).toMatchObject({ health: "quiet", liveness: "unknown", lastProgressAt: null });
+			emit({ kind: "heartbeat", at: Date.now() });
+			expect(manager.get("sa-1")).toMatchObject({ health: "active", lastHeartbeatAt: Date.now(), lastProgressAt: null, liveness: "unknown" });
+			await vi.advanceTimersByTimeAsync(120_000);
+			expect(manager.get("sa-1")?.health).toBe("stalled-warning");
+			emit({ kind: "heartbeat", at: Date.now() });
+			expect(manager.get("sa-1")?.health).toBe("active");
+			expect(interrupt).not.toHaveBeenCalled();
+			expect(requestClose).not.toHaveBeenCalled();
+		} finally { manager.disposeAll(); vi.useRealTimers(); }
+	});
 	it("warns once at a budget crossing without interrupting or freeing the running slot", async () => {
 		vi.useFakeTimers();
 		const { manager, emitters, interrupts } = deferredBackend();

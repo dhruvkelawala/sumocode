@@ -696,6 +696,9 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 						errorText: result.error,
 						errorCode: result.code,
 						errorReason: result.reason,
+						// The host's definitive "target tab has no live pane" signal;
+						// the manager retires stale still-open records only on this.
+						paneTabGone: result.tabGone,
 					};
 					if (result.orphanPaneId !== undefined || result.orphanTabId !== undefined) {
 						// Cleanup failed or was skipped, so the allocated pane/tab still

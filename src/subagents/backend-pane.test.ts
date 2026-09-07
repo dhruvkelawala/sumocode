@@ -112,7 +112,7 @@ const flushPromises = async (): Promise<void> => {
 };
 
 const createHarness = (
-	startResult: typeof startedPane | { ok: false; error: string; code?: string; reason?: string; orphanPaneId?: string; orphanTabId?: string } = startedPane,
+	startResult: typeof startedPane | { ok: false; error: string; code?: string; reason?: string; orphanPaneId?: string; orphanTabId?: string; tabGone?: boolean } = startedPane,
 	placement: { kind: "tab"; tabId: string; direction: "right" } | { kind: "workspace"; workspaceId: string; paneId: string } = { kind: "tab", tabId: "w1:t1", direction: "right" },
 	appendSystemPrompt?: string,
 	spawnerDependencies?: { sendAckPollMs?: number; sendAckTimeoutMs?: number; resolveLauncher?: () => string; env?: NodeJS.ProcessEnv },
@@ -893,6 +893,26 @@ describe("pane subagent backend", () => {
 				errorText: "herdr returned no pane for tab w5:t8",
 				errorCode: "pane_unavailable",
 				errorReason: "tab has no available shell pane",
+			},
+		}]);
+	});
+
+	it("marks a tab-gone provisioning failure so the manager can retire stale records", async () => {
+		const harness = createHarness({
+			ok: false,
+			code: "pane_unavailable",
+			error: "herdr returned no pane for tab w5:t8",
+			tabGone: true,
+		});
+		await flushPromises();
+
+		expect(settledEvents(harness.events)).toEqual([{
+			kind: "run-settled",
+			outcome: {
+				kind: "failed",
+				errorText: "herdr returned no pane for tab w5:t8",
+				errorCode: "pane_unavailable",
+				paneTabGone: true,
 			},
 		}]);
 	});

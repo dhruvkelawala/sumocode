@@ -166,14 +166,16 @@ async function listWorkspacePanes(pi: PiExecLike, workspaceId: string, timeout =
 	return { ok: true, panes: parsed.panes ?? [] };
 }
 
-const paneUnavailable = (failure: HostResult<never>): HostResult<never> => failure.ok ? failure : ({
-	ok: false,
-	code: "pane_unavailable",
-	error: failure.error,
-	reason: failure.reason ?? failure.error,
-});
+const paneUnavailable = (failure: HostResult<never>): HostResult<never> => {
+	if (failure.ok) return failure;
+	const structured: HostResult<never> = { ok: false, code: "pane_unavailable", error: failure.error, reason: failure.reason ?? failure.error };
+	// A tab-placement failure whose target tab has no live pane is the one
+	// definitive "tab is gone" signal: preserve it so the manager can retire
+	// stale still-open records anchored on that tab.
+	return failure.tabGone === true ? { ...structured, tabGone: true } : structured;
+};
 
-async function paneForTab(pi: PiExecLike, tabId: string, timeout = 5000, deadline?: ProvisionDeadline, reserveMs = 0): Promise<HostResult<{ pane: HerdrPaneInfo }>> {
+async function paneForTab(pi: PiExecLike, tabId: string, timeout = 5000, deadline?: ProvisionDeadline, reserveMs = 0, signalTabGone = false): Promise<HostResult<{ pane: HerdrPaneInfo }>> {
 	const workspaceId = tabId.split(":")[0];
 	if (!workspaceId) return { ok: false, error: `invalid herdr tab id: ${tabId}` };
 	// A just-created tab can be returned before its root pane appears in
@@ -192,7 +194,13 @@ async function paneForTab(pi: PiExecLike, tabId: string, timeout = 5000, deadlin
 			await new Promise<void>((resolve) => setTimeout(resolve, retryDelay));
 		}
 	}
-	return { ok: false, error: `herdr returned no pane for tab ${tabId}` };
+	// No live pane remains in the tab: for an explicit tab placement that is
+	// the definitive "tab is gone" signal the manager uses to retire stale
+	// still-open records anchored on it. A just-created new tab can simply be
+	// racing its own root pane, so that flow does not signal.
+	return signalTabGone
+		? { ok: false, error: `herdr returned no pane for tab ${tabId}`, tabGone: true }
+		: { ok: false, error: `herdr returned no pane for tab ${tabId}` };
 }
 
 type PaneTarget = { kind: "current" } | { kind: "id"; paneId: string };
@@ -347,7 +355,7 @@ async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): P
 			target = await splitPane(pi, { kind: "id", paneId: anchorPaneId }, "right", options.cwd, timeout);
 			workspaceAnchorToMove = { paneId: anchorPaneId, workspaceId };
 		} else if (options.placement.kind === "tab") {
-			const anchor = await paneForTab(pi, options.placement.tabId, 5000, deadline);
+			const anchor = await paneForTab(pi, options.placement.tabId, 5000, deadline, 0, true);
 			if (!anchor.ok || !anchor.pane.pane_id) target = anchor;
 			else {
 				const timeout = remainingProvisionMs(deadline, HERDR_PANE_CLEANUP_RESERVE_MS);

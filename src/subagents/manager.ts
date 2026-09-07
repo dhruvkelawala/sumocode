@@ -1127,12 +1127,14 @@ export class SubagentManager {
 					this.subagentsTabId = outcome.orphanPane.tabId;
 				}
 			}
-			if (outcome.kind === "failed" && outcome.paneStillOpen === true && settledNow && isSettled(settledNow) && settledNow.paneStillOpen !== true) {
-				// A close failure can be reported after cancel() already
-				// force-settled the snapshot (provisioning plus the close timeout
-				// can outlive CANCEL_WAIT_MS). The pane is still open, so record
-				// the occupancy even though the snapshot is terminal; the normal
-				// path records it inside settle().
+			if (outcome.kind === "failed" && outcome.paneStillOpen === true && settledNow && settledNow.paneStillOpen !== true) {
+				// A close failure can be reported late: after cancel() already
+				// force-settled the snapshot, or while a synthetic interrupted
+				// settlement is still collecting its manifest (provisioning plus
+				// the close timeout can outlive CANCEL_WAIT_MS). The pane is still
+				// open, so record the occupancy immediately — the cache-drop guard
+				// below and concurrent placement both read it, and the interrupted
+				// settle path preserves it on completion.
 				settledNow = { ...settledNow, paneStillOpen: true };
 				this.snapshots.set(id, settledNow);
 			}
@@ -1190,10 +1192,12 @@ export class SubagentManager {
 				// re-caches on pane-attach.
 				this.subagentsTabId = this.subagentsTabId === this.initialVisibleTabId ? undefined : this.initialVisibleTabId;
 			}
-			if (outcome.kind === "failed" && !settledNow?.pane && failedPlacement?.kind === "tab") {
-				// A split that produced no live pane is evidence the target tab
-				// is gone. Retire still-open records anchored on it so the
-				// vacancy scan cannot keep selecting the dead tab and fail forever.
+			if (outcome.kind === "failed" && !settledNow?.pane && failedPlacement?.kind === "tab" && outcome.paneTabGone === true) {
+				// The host confirmed the target tab has no live pane, so it is
+				// gone. Retire still-open records anchored on it so the vacancy
+				// scan cannot keep selecting the dead tab and fail forever. A
+				// pre-attach failure without this signal (e.g. a run failure on a
+				// live tab) must not retire records.
 				for (const snapshot of this.list()) {
 					if (snapshot.paneStillOpen === true && snapshot.pane?.tabId === failedPlacement.tabId) {
 						this.snapshots.set(snapshot.id, { ...snapshot, paneStillOpen: undefined });

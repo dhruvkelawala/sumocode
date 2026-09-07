@@ -14,6 +14,7 @@ export type PiExecLike = Pick<ExtensionAPI, "exec">;
 
 export type AgentPanePlacement =
 	| { kind: "workspace"; workspaceId: string; paneId?: string }
+	| { kind: "worktree-workspace"; path: string; label: string; sourceCwd: string }
 	| { kind: "tab"; tabId: string; direction: SplitDirection }
 	| { kind: "new-tab"; label: string };
 

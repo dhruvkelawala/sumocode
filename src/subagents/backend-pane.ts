@@ -655,7 +655,6 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		if (gate && subscribed) throw new Error("retained backend already subscribed");
 		subscribed = true;
 		emitEvent = emit;
-		emit({ kind: "run-started" });
 		void (async () => {
 			const startAgentPane = options.host.startAgentPane;
 			if (!startAgentPane) {
@@ -696,6 +695,10 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 				}
 				pane = result.pane;
 				startedPane = result;
+				// A visible child starts only when Herdr accepts the pane command. Host
+				// preparation failures happen before a process exists and must not trigger
+				// child completion-manifest collection in the manager.
+				emit({ kind: "run-started" });
 				emit({
 					kind: "pane-attached",
 					pane: {

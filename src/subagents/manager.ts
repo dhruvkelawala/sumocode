@@ -575,28 +575,19 @@ export class SubagentManager {
 					sessionTabId: this.subagentsTabId,
 				});
 				if (planned.kind === "workspace") {
-					const openWorkspace = host.openExistingWorktreeWorkspace;
-					let opened: Awaited<ReturnType<NonNullable<typeof openWorkspace>>>;
-					try {
-						opened = openWorkspace
-							? await openWorkspace(this.pi, { path: worktree?.path ?? childCwd, label: worktree?.branch.replace(/^sumo\//, "") ?? task.title, sourceCwd: gitContext.repoRoot ?? task.cwd, focus: false })
-							: { ok: false, error: `${host.kind} cannot open an existing worktree workspace` };
-					} catch (error) {
-						opened = { ok: false, error: error instanceof Error ? error.message : String(error) };
-					}
-					if (this.setupInterrupted(id, generation)) {
+					if (!worktree || !gitContext.repoRoot) {
 						releasePending();
-						return this.recordSetupInterruption(task, id, createdAt, manifestBaseRef, "interrupted during setup", childCwd, worktree);
+						return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, "unable to plan isolated workspace without a created worktree", childCwd, worktree);
 					}
-					const workspaceId = opened.ok ? opened.pane.workspaceId : undefined;
-					if (!opened.ok || !workspaceId) {
-						releasePending();
-						const reason = opened.ok ? "terminal host returned no workspace id" : opened.error;
-						return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, `unable to open worktree workspace: ${reason}. Worktree created at ${worktree?.path ?? childCwd} is preserved.`, childCwd, worktree);
-					}
-					// `worktree open` creates an initial shell pane. Pass its id so the
-					// host can keep it for workspace persistence without showing a split.
-					placement = { kind: "workspace", workspaceId, paneId: opened.pane.paneId };
+					// Herdr owns workspace open, pane discovery, split, and run under one
+					// provisioning deadline. Preparing here would stack independent host
+					// timeouts before the backend can report pane_unavailable.
+					placement = {
+						kind: "worktree-workspace",
+						path: worktree.path,
+						label: worktree.branch.replace(/^sumo\//, ""),
+						sourceCwd: gitContext.repoRoot,
+					};
 				} else if (planned.kind === "tab") placement = planned;
 				else placement = { kind: "new-tab", label: planned.kind === "new-tab" ? planned.label : "subagents" };
 			}
@@ -608,7 +599,7 @@ export class SubagentManager {
 			const controller = new AbortController();
 			const done = new Promise<void>((resolve) => { finishLaunch = resolve; });
 			this.launching.set(id, { controller, done });
-			if (placement?.kind === "workspace") this.workspacePlacedIds.add(id);
+			if (placement?.kind === "workspace" || placement?.kind === "worktree-workspace") this.workspacePlacedIds.add(id);
 			let child: SpawnedChild;
 			try {
 				child = await this.backendFactory({ ...task, cwd: childCwd, id, signal: controller.signal, placement,
@@ -1032,6 +1023,9 @@ export class SubagentManager {
 		if (event.kind === "run-settled") {
 			this.workspacePlacedIds.delete(id);
 			const settling = this.snapshots.get(id);
+			const outcome = event.outcome.kind === "failed" && settling?.worktree && !settling.pane
+				? { ...event.outcome, errorText: `${event.outcome.errorText}. Worktree created at ${settling.worktree.path} is preserved.` }
+				: event.outcome;
 			if (
 				settling?.visible &&
 				settling.pane?.tabId === this.subagentsTabId &&
@@ -1049,14 +1043,14 @@ export class SubagentManager {
 			// instead of failing forever. Evidence-based, not error-text sniffing;
 			// the worst case for a transient failure is one extra tab (cosmetic).
 			if (
-				event.outcome.kind === "failed" &&
+				outcome.kind === "failed" &&
 				settling?.visible &&
 				!settling.pane &&
 				this.subagentsTabId !== undefined
 			) {
 				this.subagentsTabId = this.initialVisibleTabId;
 			}
-			void this.startSettle(id, event.outcome);
+			void this.startSettle(id, outcome);
 			return;
 		}
 		const current = this.snapshots.get(id);

@@ -100,8 +100,11 @@ async function runInWorktreeWorkspace(
 	pi: PiExecLike,
 	workspaceId: string,
 	shellCommand?: string,
+	deadline?: ProvisionDeadline,
 ): Promise<HostResult<{ pane: PaneRef }>> {
-	const panesResult = await pi.exec("herdr", ["pane", "list", "--workspace", workspaceId], { timeout: 5000 });
+	const listTimeout = deadline ? remainingProvisionMs(deadline) : 5000;
+	if (listTimeout === undefined) return deadlineFailure("herdr pane list");
+	const panesResult = await pi.exec("herdr", ["pane", "list", "--workspace", workspaceId], { timeout: listTimeout });
 	if (panesResult.code !== 0) return execFailure("herdr pane list", panesResult);
 	const panesParsed = parseEnvelope<HerdrPaneListResult>(panesResult.stdout);
 	if (!panesParsed.ok) return panesParsed;
@@ -111,10 +114,32 @@ async function runInWorktreeWorkspace(
 	const paneId = panesParsed.panes?.[0]?.pane_id;
 	if (!paneId) return { ok: false, error: `herdr pane list returned no panes for workspace ${workspaceId}` };
 	if (shellCommand !== undefined) {
-		const runResult = await pi.exec("herdr", ["pane", "run", paneId, shellCommand], { timeout: 5000 });
+		const runTimeout = deadline ? remainingProvisionMs(deadline) : 5000;
+		if (runTimeout === undefined) return deadlineFailure("herdr pane run");
+		const runResult = await pi.exec("herdr", ["pane", "run", paneId, shellCommand], { timeout: runTimeout });
 		if (runResult.code !== 0) return execFailure("herdr pane run", runResult);
 	}
 	return { ok: true, pane: { host: "herdr", paneId, workspaceId } };
+}
+
+async function openExistingWorktreeWorkspace(
+	pi: PiExecLike,
+	options: { path: string; label: string; shellCommand?: string; sourceCwd: string; focus?: boolean },
+	deadline?: ProvisionDeadline,
+): Promise<HostResult<{ pane: PaneRef }>> {
+	const openTimeout = deadline ? remainingProvisionMs(deadline) : 5000;
+	if (openTimeout === undefined) return deadlineFailure("herdr worktree open");
+	const result = await pi.exec(
+		"herdr",
+		["worktree", "open", "--cwd", options.sourceCwd, "--path", options.path, "--label", options.label, options.focus === false ? "--no-focus" : "--focus", "--json"],
+		{ timeout: openTimeout },
+	);
+	if (result.code !== 0) return execFailure("herdr worktree open", result);
+	const parsed = parseEnvelope<HerdrWorktreeResult>(result.stdout);
+	if (!parsed.ok) return parsed;
+	const workspaceId = workspaceIdFromWorktreeResult(parsed);
+	if (!workspaceId) return { ok: false, error: "herdr worktree open did not return a workspace_id" };
+	return runInWorktreeWorkspace(pi, workspaceId, options.shellCommand, deadline);
 }
 
 const slugAgentPrefix = (prefix: string): string => prefix
@@ -268,20 +293,31 @@ async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): P
 
 	try {
 		let target: HostResult<{ pane: HerdrPaneInfo }>;
-		if (options.placement.kind === "workspace") {
-			let anchorPaneId = options.placement.paneId;
+		if (options.placement.kind === "workspace" || options.placement.kind === "worktree-workspace") {
+			let workspaceId: string;
+			let anchorPaneId: string | undefined;
+			if (options.placement.kind === "worktree-workspace") {
+				const opened = await openExistingWorktreeWorkspace(pi, { ...options.placement, focus: false }, deadline);
+				if (!opened.ok) return fail(opened);
+				workspaceId = opened.pane.workspaceId ?? "";
+				anchorPaneId = opened.pane.paneId;
+			} else {
+				workspaceId = options.placement.workspaceId;
+				anchorPaneId = options.placement.paneId;
+			}
+			if (!workspaceId) return fail({ ok: false, error: "herdr worktree workspace did not return a workspace_id" });
 			if (!anchorPaneId) {
 				const timeout = remainingProvisionMs(deadline);
 				if (timeout === undefined) return fail(deadlineFailure("herdr pane list"));
-				const listed = await listWorkspacePanes(pi, options.placement.workspaceId, timeout);
+				const listed = await listWorkspacePanes(pi, workspaceId, timeout);
 				if (!listed.ok) return fail(listed);
 				anchorPaneId = listed.panes[0]?.pane_id;
 			}
-			if (!anchorPaneId) return fail({ ok: false, error: `herdr returned no pane for workspace ${options.placement.workspaceId}` });
+			if (!anchorPaneId) return fail({ ok: false, error: `herdr returned no pane for workspace ${workspaceId}` });
 			const timeout = remainingProvisionMs(deadline);
 			if (timeout === undefined) return fail(deadlineFailure("herdr pane split"));
 			target = await splitPane(pi, { kind: "id", paneId: anchorPaneId }, "right", options.cwd, timeout);
-			workspaceAnchorToMove = { paneId: anchorPaneId, workspaceId: options.placement.workspaceId };
+			workspaceAnchorToMove = { paneId: anchorPaneId, workspaceId };
 		} else if (options.placement.kind === "tab") {
 			const anchor = await paneForTab(pi, options.placement.tabId, 5000, deadline);
 			if (!anchor.ok || !anchor.pane.pane_id) target = anchor;
@@ -326,7 +362,7 @@ async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): P
 
 		const agentName = uniqueHerdrAgentName(options.name);
 		const paneId = target.pane.pane_id!;
-		const workspaceId = target.pane.workspace_id ?? (options.placement.kind === "workspace" ? options.placement.workspaceId : undefined);
+		const workspaceId = target.pane.workspace_id ?? workspaceAnchorToMove?.workspaceId;
 		const tabId = target.pane.tab_id ?? (options.placement.kind === "tab" ? options.placement.tabId : undefined);
 		const renameTimeout = remainingProvisionMs(deadline);
 		if (renameTimeout !== undefined) await pi.exec("herdr", ["pane", "rename", paneId, options.name], { timeout: renameTimeout }).catch(() => undefined);
@@ -414,19 +450,7 @@ export const herdrTerminalHost = {
 		if (!workspaceId) return { ok: false, error: "herdr worktree create did not return a workspace_id" };
 		return await runInWorktreeWorkspace(pi, workspaceId, options.shellCommand);
 	},
-	async openExistingWorktreeWorkspace(pi: PiExecLike, options: { path: string; label: string; shellCommand?: string; sourceCwd: string; focus?: boolean }) {
-		const result = await pi.exec(
-			"herdr",
-			["worktree", "open", "--cwd", options.sourceCwd, "--path", options.path, "--label", options.label, options.focus === false ? "--no-focus" : "--focus", "--json"],
-			{ timeout: 5000 },
-		);
-		if (result.code !== 0) return execFailure("herdr worktree open", result);
-		const parsed = parseEnvelope<HerdrWorktreeResult>(result.stdout);
-		if (!parsed.ok) return parsed;
-		const workspaceId = workspaceIdFromWorktreeResult(parsed);
-		if (!workspaceId) return { ok: false, error: "herdr worktree open did not return a workspace_id" };
-		return await runInWorktreeWorkspace(pi, workspaceId, options.shellCommand);
-	},
+	openExistingWorktreeWorkspace,
 	async closePane(pi: PiExecLike, pane: PaneRef) {
 		const result = await pi.exec("herdr", ["pane", "close", pane.paneId], { timeout: 5000 });
 		if (result.code !== 0) return execFailure("herdr pane close", result);

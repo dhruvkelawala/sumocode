@@ -946,7 +946,7 @@ describe("SubagentManager", () => {
 
 		mode = "attach";
 		await manager.spawn({ prompt: "p3", title: "third", cwd: "/repo", visible: true, worktree: true });
-		expect(backendTasks[2]?.placement).toEqual({ kind: "workspace", workspaceId: "w9", paneId: "w9:p1" });
+		expect(backendTasks[2]?.placement).toEqual({ kind: "worktree-workspace", path: "/isolated/third", label: "third", sourceCwd: "/repo" });
 	});
 
 	it("serializes concurrent visible placement until the first tab id is durable", async () => {
@@ -1011,8 +1011,11 @@ pi: { exec: vi.fn() } as never,
 
 		await manager.spawn({ prompt: "p", title: "api work", cwd: "/repo/packages/api", visible: true, worktree: true });
 
-		expect(openExistingWorktreeWorkspace).toHaveBeenCalledWith(expect.anything(), { path: "/isolated/worktree", label: "api", sourceCwd: "/repo", focus: false });
-		expect(backendFactory).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/isolated/worktree/packages/api", placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" } }));
+		expect(openExistingWorktreeWorkspace).not.toHaveBeenCalled();
+		expect(backendFactory).toHaveBeenCalledWith(expect.objectContaining({
+			cwd: "/isolated/worktree/packages/api",
+			placement: { kind: "worktree-workspace", path: "/isolated/worktree", label: "api", sourceCwd: "/repo" },
+		}));
 	});
 
 	it("keeps separate workspace fallbacks for isolated children when no caller tab exists", async () => {
@@ -1056,19 +1059,22 @@ pi: { exec: vi.fn() } as never,
 		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true, worktree: true });
 		await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true, worktree: true });
 
-		expect(openExistingWorktreeWorkspace).toHaveBeenCalledTimes(2);
+		expect(openExistingWorktreeWorkspace).not.toHaveBeenCalled();
 		expect(backendTasks.map((task) => task.placement)).toEqual([
-			{ kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
-			{ kind: "workspace", workspaceId: "w10", paneId: "w10:p1" },
+			{ kind: "worktree-workspace", path: "/isolated/first", label: "first", sourceCwd: "/repo" },
+			{ kind: "worktree-workspace", path: "/isolated/second", label: "second", sourceCwd: "/repo" },
 		]);
 	});
 
-	it("fails closed when a created worktree cannot be opened as a host workspace", async () => {
-		const backendFactory = vi.fn(() => ({ events: () => undefined, interrupt: () => undefined }));
+	it("preserves a created worktree when the backend cannot provision its workspace", async () => {
+		const backendFactory = vi.fn(() => ({
+			events: (emit: (event: SubagentEvent) => void) => emit({ kind: "run-settled", outcome: { kind: "failed", errorText: "daemon unavailable", errorCode: "pane_unavailable", errorReason: "daemon unavailable" } }),
+			interrupt: () => undefined,
+		}));
 		const host: TerminalHost = {
 			kind: "herdr",
 			openCommandInSplit: vi.fn(),
-			openExistingWorktreeWorkspace: vi.fn(async () => ({ ok: false as const, error: "daemon unavailable" })),
+			openExistingWorktreeWorkspace: vi.fn(),
 			closePane: vi.fn(),
 			notify: vi.fn(),
 		};
@@ -1083,10 +1089,17 @@ pi: { exec: vi.fn() } as never,
 
 		const spawned = await manager.spawn({ prompt: "p", title: "preserved", cwd: "/repo", visible: true, worktree: true });
 
-		expect(spawned).toMatchObject({ status: "error", errorText: expect.stringContaining("daemon unavailable"), worktree: { path: "/isolated/preserved" } });
+		expect(spawned).toMatchObject({
+			status: "error",
+			errorCode: "pane_unavailable",
+			errorText: expect.stringContaining("daemon unavailable"),
+			worktree: { path: "/isolated/preserved" },
+		});
 		// SAFETY: failed spawns always carry an errorText field.
 		expect((spawned as { errorText?: string }).errorText).toContain("is preserved");
-		expect(backendFactory).not.toHaveBeenCalled();
+		expect(backendFactory).toHaveBeenCalledWith(expect.objectContaining({
+			placement: { kind: "worktree-workspace", path: "/isolated/preserved", label: "preserved", sourceCwd: "/repo" },
+		}));
 	});
 
 	it("rejects a branch override without worktree isolation", async () => {

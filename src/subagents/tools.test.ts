@@ -390,20 +390,22 @@ describe("subagent tools", () => {
 			expect(Math.max(...completed.map(({ elapsed }) => elapsed))).toBeLessThan(5_000);
 			expect(completed[0]?.result).toMatchObject({ details: { status: "pane_unavailable" } });
 			expect(completed[1]?.result).toMatchObject({ details: { status: "pane_unavailable" } });
+			// The cleanup reserve bounds the second spawn's tab create tighter, so
+			// the third spawn inherits a slot whose remaining budget is exactly the
+			// reserve. It fails at the Herdr deadline check without an exec call.
 			expect(completed[2]?.result).toMatchObject({
 				details: {
 					status: "pane_unavailable",
-					herdrReason: undefined,
+					herdrReason: "herdr tab create exceeded the Herdr pane provisioning deadline",
 					subagent: {
 						status: "error",
-						errorText: "visible pane provisioning queue timed out before a terminal host slot became available",
+						errorText: "herdr tab create exceeded the Herdr pane provisioning deadline",
 					},
 				},
 			});
-			expect(textOf(completed[2]!.result)).not.toContain("Herdr:");
 			expect(exec).toHaveBeenCalledTimes(2);
 			expect(exec.mock.calls[1]?.[2].timeout).toBeLessThan(2_500);
-			expect(await readdir(taskDir)).toHaveLength(2);
+			expect(await readdir(taskDir)).toHaveLength(3);
 			await vi.advanceTimersByTimeAsync(10_000);
 			expect(exec).toHaveBeenCalledTimes(2);
 

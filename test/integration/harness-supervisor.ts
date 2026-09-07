@@ -321,9 +321,18 @@ export function spawnSupervisedProcess(command: string, args: readonly string[],
 			reaping ??= (async () => {
 				// Let spawn complete its setsid before addressing the new group.
 				await new Promise<void>((resolveTurn) => setImmediate(resolveTurn));
-				await terminateGroup(registration);
-				await Promise.race([exited, new Promise<void>((resolveDelay) => setTimeout(resolveDelay, SUPERVISOR_TERM_GRACE_MS))]);
-				appendManifest({ event: "reaped", pid, pgid }, env);
+				try {
+					await terminateGroup(registration);
+				} finally {
+					// The handle names the exact pid this supervisor spawned, so it is
+					// owned even when the group's wider identity cannot be proved. The
+					// group refusal still propagates; only the leader is not left behind.
+					if (child.exitCode === null && child.signalCode === null) {
+						try { child.kill("SIGKILL"); } catch { /* child exited at the boundary */ }
+					}
+					await Promise.race([exited, new Promise<void>((resolveDelay) => setTimeout(resolveDelay, SUPERVISOR_TERM_GRACE_MS))]);
+					appendManifest({ event: "reaped", pid, pgid }, env);
+				}
 			})();
 			return reaping;
 		},

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawn, type IDisposable, type IEvent, type IPty } from "node-pty";
 import { describe, expect, it } from "vitest";
-import { createChildEvidenceContext, HARNESS_SIGNATURE, HARNESS_SIGNATURE_ENV_KEY, recordPtyExit, supervisePtyProcess } from "./harness-supervisor.js";
+import { createChildEvidenceContext, HARNESS_SIGNATURE, HARNESS_SIGNATURE_ENV_KEY, recordPtyExit, requireHarnessAuth, supervisePtyProcess } from "./harness-supervisor.js";
 import { buildSpawnEnv, spawnPiPty, type SpawnPiPtyOptions } from "./spawn-pi-pty.js";
 
 type PtySpawn = NonNullable<SpawnPiPtyOptions["spawn"]>;
@@ -568,6 +568,7 @@ describe("sumocode launcher mirrors Pi option consumption (PTY RPC path)", () =>
 			const childEnv = buildSpawnEnv(process.env, { PI_BIN: "/bin/echo" });
 			const evidence = createChildEvidenceContext([launcher, ...launcherArgs], childEnv);
 			childEnv[HARNESS_SIGNATURE_ENV_KEY] = HARNESS_SIGNATURE;
+			const auth = requireHarnessAuth(childEnv);
 			const child = spawn(launcher, launcherArgs, {
 				name: "xterm-256color",
 				cols: 80,
@@ -575,7 +576,7 @@ describe("sumocode launcher mirrors Pi option consumption (PTY RPC path)", () =>
 				cwd: process.cwd(),
 				env: childEnv,
 			});
-			const supervision = supervisePtyProcess(child.pid, evidence, childEnv);
+			const supervision = supervisePtyProcess(child.pid, evidence, childEnv, auth);
 			let output = "";
 			child.onData((data) => {
 				appendFileSync(evidence.stderrPath, data);

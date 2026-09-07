@@ -10,6 +10,7 @@ import {
 	HARNESS_SIGNATURE,
 	HARNESS_SIGNATURE_ENV_KEY,
 	recordPtyExit,
+	requireHarnessAuth,
 	supervisePtyProcess,
 	waitForDiagnosticReadiness,
 	type ReadinessState,
@@ -79,6 +80,7 @@ function spawnNativePty(
 	const evidence = createChildEvidenceContext([NATIVE_BIN, ...args], childEnv);
 	childEnv.SUMO_TUI_DIAG_FILE = evidence.diagPath;
 	childEnv[HARNESS_SIGNATURE_ENV_KEY] = HARNESS_SIGNATURE;
+	const auth = requireHarnessAuth(childEnv);
 	const child: IPty = spawn(NATIVE_BIN, [...args], {
 		name: "xterm-256color",
 		cols: options.cols ?? 100,
@@ -86,7 +88,7 @@ function spawnNativePty(
 		cwd: options.cwd ?? tempRoot("sumocode-native-cwd-"),
 		env: childEnv,
 	});
-	const supervision = supervisePtyProcess(child.pid, evidence, childEnv);
+	const supervision = supervisePtyProcess(child.pid, evidence, childEnv, auth);
 	let output = "";
 	child.onData((data) => {
 		appendFileSync(evidence.stderrPath, data);

@@ -279,7 +279,7 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 			try {
 				appendFileSync(evidence.stderrPath, data);
 			} catch (error) {
-				recordHarnessAuditFailure("pty stderr capture", child.pid, child.pid, childEnv, error);
+				recordHarnessAuditFailure("pty stderr capture", child.pid, child.pid, childEnv, String(error));
 			}
 		}
 		output += data;

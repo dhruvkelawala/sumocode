@@ -212,8 +212,10 @@ function malformedAuditFailure(reason = "malformed audit failure record"): Harne
 	return { phase: "audit record", pid: 0, pgid: 0, reason };
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- JSONL is untrusted input; this predicate checks its audit-record contract.
 function isHarnessAuditFailure(value: unknown): value is HarnessAuditFailure {
 	if (value === null || typeof value !== "object") return false;
+	// SAFETY: the object guard permits field inspection; every required field is checked below.
 	const failure = value as Partial<HarnessAuditFailure>;
 	return typeof failure.phase === "string"
 		&& typeof failure.pid === "number" && Number.isSafeInteger(failure.pid)
@@ -242,10 +244,10 @@ export function recordHarnessAuditFailure(
 	pid: number,
 	pgid: number,
 	env: NodeJS.ProcessEnv,
-	error: unknown,
+	reason: string,
 	processStart = liveProcessStart(pid),
 ): void {
-	reportAuditFailure(env, { phase, pid, pgid, processStart, reason: String(error) });
+	reportAuditFailure(env, { phase, pid, pgid, processStart, reason });
 }
 
 export function harnessAuditFailures(root: string): HarnessAuditFailure[] {
@@ -253,6 +255,7 @@ export function harnessAuditFailures(root: string): HarnessAuditFailure[] {
 	try {
 		contents = readFileSync(join(root, AUDIT_FAILURES_FILE), "utf8");
 	} catch (error) {
+		// SAFETY: readFileSync throws an fs error; only ENOENT means no audit file.
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
 		return [malformedAuditFailure(`could not read audit failure records: ${String(error)}`)];
 	}
@@ -284,7 +287,7 @@ function appendLifecycleManifest(event: HarnessManifestEvent, env: NodeJS.Proces
 }
 
 function failSpawnRegistration(
-	error: unknown,
+	error: string,
 	env: NodeJS.ProcessEnv,
 	registration: HarnessGroupRegistration,
 ): never {
@@ -474,7 +477,7 @@ export function spawnSupervisedProcess(command: string, args: readonly string[],
 			evidenceDir: evidence.evidenceDir,
 		}, env, auth);
 	} catch (error) {
-		failSpawnRegistration(error, env, registration);
+		failSpawnRegistration(String(error), env, registration);
 	}
 	child.stderr?.on("data", (chunk: Buffer | string) => {
 		try {
@@ -548,7 +551,7 @@ export function supervisePtyProcess(pid: number, evidence: ChildEvidenceContext,
 			kind: "pty",
 		}, env, auth);
 	} catch (error) {
-		failSpawnRegistration(error, env, registration);
+		failSpawnRegistration(String(error), env, registration);
 	}
 	return {
 		pid,

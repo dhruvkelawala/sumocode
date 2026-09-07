@@ -88,6 +88,7 @@ function malformedAuditFailure(reason = "malformed audit failure record") {
 	return { phase: "audit record", pid: 0, pgid: 0, reason };
 }
 
+/* oxlint-disable anti-slop/no-runtime-typeof -- Validate untrusted JSONL at the audit boundary before reading record fields. */
 function isAuditFailure(value) {
 	return value !== null
 		&& typeof value === "object"
@@ -96,6 +97,7 @@ function isAuditFailure(value) {
 		&& Number.isSafeInteger(value.pgid)
 		&& typeof value.reason === "string";
 }
+/* oxlint-enable anti-slop/no-runtime-typeof */
 
 async function readAuditFailures(root) {
 	let contents;

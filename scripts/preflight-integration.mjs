@@ -411,6 +411,8 @@ function inspectHarnessProcessGroup(registration, table, currentPgid, readProces
 	if (rowsByPid.size !== table.rows.length) {
 		return { status: "unverified", identityStatus: "unknown", error: "process table malformed" };
 	}
+	// Self-group exclusion must use the same validated snapshot as signal ownership.
+	currentPgid ??= rowsByPid.get(process.pid)?.pgid;
 	const {
 		pid,
 		pgid,
@@ -508,7 +510,7 @@ function inspectHarnessProcessGroup(registration, table, currentPgid, readProces
  */
 export async function reapHarnessProcessGroup(registration, {
 	readProcessTable = processRows,
-	currentPgid = currentProcessGroupId(processRows().rows),
+	currentPgid,
 	readProcessStart = liveProcessStart,
 	kill = process.kill.bind(process),
 	wait = () => new Promise((resolveDelay) => setTimeout(resolveDelay, PREFLIGHT_TERM_GRACE_MS)),

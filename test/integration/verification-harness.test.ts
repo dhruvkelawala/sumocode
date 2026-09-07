@@ -787,6 +787,51 @@ describe("verified harness group cleanup", () => {
 		};
 	}
 
+	it.each([
+		["exited", [], "exited", []],
+		["self group", [registration.pgid], "unverified", []],
+		["self group changes before KILL", [99_999, registration.pgid], "unverified", ["SIGTERM"]],
+		["fresh escalation", [99_999, 99_999], "reaped", ["SIGTERM", "SIGKILL"]],
+	] satisfies Array<[string, number[], string, string[]]>)(
+		"uses only current inspection tables for default self identity: %s",
+		async (_name, selfGroups, status, expectedSignals) => {
+			const events: string[] = [];
+			let scans = 0;
+			const result = await reapHarnessProcessGroup(registration, {
+				readProcessTable: () => {
+					events.push("inspect");
+					const pgid = selfGroups[scans++];
+					return { rows: pgid === undefined ? [] : [
+						{ pid: process.pid, ppid: 1, pgid, command: "vitest" },
+						{ ...owner, start: registration.ownerProcessStart },
+						{ ...leader, start: registration.processStart },
+					] };
+				},
+				kill: (_pid, signal) => { events.push(String(signal)); return true; },
+				wait: async () => { events.push("wait"); },
+			});
+			expect(result.status).toBe(status);
+			expect(events).toEqual(expectedSignals.flatMap((signal) => ["inspect", signal, "wait"]).concat("inspect"));
+		},
+	);
+
+	it.each([
+		{ rows: [owner, leader] },
+		{ rows: [null] },
+		{ rows: [], issue: { code: "process-table-unavailable" } },
+		{ rows: [{ pid: process.pid, ppid: 1, pgid: 99_999, command: "vitest" }, null] },
+	])("fails closed with no default self identity or malformed table: %j", async (table) => {
+		const signals: string[] = [];
+		const result = await reapHarnessProcessGroup(registration, {
+			readProcessTable: () => table,
+			readProcessStart: (pid) => starts.get(pid),
+			kill: (_pid, signal) => { signals.push(String(signal)); return true; },
+			wait: async () => {},
+		});
+		expect(result.status).toBe("unverified");
+		expect(signals).toEqual([]);
+	});
+
 	it("signs the fixed spawn identity tuple", () => {
 		expect(signSpawnRegistration(registration, runId, signingKey))
 			.toBe("3aaabd84c11b95dd1e56a71dc5d165542de38863b2ed7148264447813b419a78");

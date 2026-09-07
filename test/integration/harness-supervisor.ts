@@ -1,4 +1,5 @@
-import { type ChildProcess, type SpawnOptions, execFileSync, spawn } from "node:child_process";
+import { type ChildProcess, type SpawnOptions, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -9,6 +10,7 @@ import {
 	HARNESS_SIGNATURE,
 	HARNESS_SIGNATURE_ENV_KEY,
 } from "../../scripts/lib/integration-harness-constants.mjs";
+import { liveProcessStart, reapHarnessProcessGroup } from "../../scripts/preflight-integration.mjs";
 
 export { HARNESS_OWNER_TOKEN_ENV_KEY, HARNESS_SIGNATURE, HARNESS_SIGNATURE_ENV_KEY };
 
@@ -50,6 +52,7 @@ interface HarnessManifestEvent {
 	readonly event: "spawn" | "exit" | "reaped";
 	readonly pid: number;
 	readonly pgid: number;
+	readonly processStart?: string;
 	readonly argv?: readonly string[];
 	readonly evidenceDir?: string;
 	readonly kind?: "pty";
@@ -73,21 +76,26 @@ export interface SupervisedProcess {
 
 /** OS-reported start time of this process, or undefined when ps is unavailable. */
 function ownProcessStart(): string | undefined {
-	try {
-		return execFileSync("ps", ["-o", "lstart=", "-p", String(process.pid)], { encoding: "utf8" }).trim() || undefined;
-	} catch {
-		return undefined;
-	}
+	return liveProcessStart(process.pid);
+}
+
+interface HarnessGroupRegistration {
+	readonly pid: number;
+	readonly pgid: number;
+	readonly processStart?: string;
+	readonly ownerToken?: string;
 }
 
 let fallbackRoot: string | undefined;
+let fallbackOwnerToken: string | undefined;
 let childSequence = 0;
-const focusedProcessGroups = new Set<number>();
+const focusedProcessGroups = new Map<number, HarnessGroupRegistration>();
 
 function harnessRoot(env: NodeJS.ProcessEnv = process.env): string {
 	if (env.SUMOCODE_INTEGRATION_RUN_ROOT) return env.SUMOCODE_INTEGRATION_RUN_ROOT;
 	if (fallbackRoot === undefined) {
 		fallbackRoot = mkdtempSync(join(tmpdir(), "sumocode-harness-v2-focused-"));
+		fallbackOwnerToken = randomUUID();
 		// A focused vitest worker cannot re-exec to plant the owner token in its
 		// initial environment (ps shows exec-time env only), so tokenless focused
 		// namespaces carry the OS-reported process start time instead: a reused
@@ -116,7 +124,14 @@ function appendManifest(event: HarnessManifestEvent, env: NodeJS.ProcessEnv = pr
 	const path = manifestPath(env);
 	mkdirSync(dirname(path), { recursive: true });
 	appendFileSync(path, `${JSON.stringify({ ts: Date.now(), ...event })}\n`, { mode: 0o600 });
-	if (env.SUMOCODE_INTEGRATION_RUN_ROOT === undefined && event.event === "spawn") focusedProcessGroups.add(event.pgid);
+	if (env.SUMOCODE_INTEGRATION_RUN_ROOT === undefined && event.event === "spawn") {
+		focusedProcessGroups.set(event.pgid, {
+			pid: event.pid,
+			pgid: event.pgid,
+			processStart: event.processStart,
+			ownerToken: env[HARNESS_OWNER_TOKEN_ENV_KEY],
+		});
+	}
 }
 
 function shellArg(value: string): string {
@@ -136,9 +151,12 @@ export function createChildEvidenceContext(
 ): ChildEvidenceContext {
 	const root = harnessRoot(env);
 	if (env.SUMOCODE_INTEGRATION_RUN_ROOT === undefined) {
+		env[HARNESS_OWNER_TOKEN_ENV_KEY] = fallbackOwnerToken;
 		const tempRoot = join(root, "tmp");
 		mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
 		env.TMPDIR = tempRoot;
+	} else if (env.SUMOCODE_INTEGRATION_RUN_ROOT === process.env.SUMOCODE_INTEGRATION_RUN_ROOT) {
+		env[HARNESS_OWNER_TOKEN_ENV_KEY] = process.env[HARNESS_OWNER_TOKEN_ENV_KEY];
 	}
 	const evidenceDir = join(root, "evidence", `worker-${process.pid}`, childLabel(argv));
 	mkdirSync(evidenceDir, { recursive: true, mode: 0o700 });
@@ -167,12 +185,13 @@ async function waitForGroupExit(pgid: number, timeoutMs: number): Promise<boolea
 	return !groupIsAlive(pgid);
 }
 
-async function terminateGroup(pgid: number): Promise<void> {
-	if (!groupIsAlive(pgid)) return;
-	try { process.kill(-pgid, "SIGTERM"); } catch { return; }
-	if (await waitForGroupExit(pgid, SUPERVISOR_TERM_GRACE_MS)) return;
-	try { process.kill(-pgid, "SIGKILL"); } catch { return; }
-	await waitForGroupExit(pgid, SUPERVISOR_TERM_GRACE_MS);
+async function terminateGroup(registration: HarnessGroupRegistration): Promise<void> {
+	const result = await reapHarnessProcessGroup(registration, {
+		wait: () => waitForGroupExit(registration.pgid, SUPERVISOR_TERM_GRACE_MS),
+	});
+	if (result.status !== "exited" && result.status !== "reaped") {
+		throw new Error(`refused unsafe process-group cleanup for ${registration.pgid}: ${result.status}${result.identityStatus ? `/${result.identityStatus}` : ""}${result.error ? ` (${result.error})` : ""}`);
+	}
 }
 
 function readTail(path: string): string {
@@ -248,7 +267,8 @@ export function spawnSupervisedProcess(command: string, args: readonly string[],
 	if (child.pid === undefined) throw new Error(`supervised child did not publish a pid: ${command}`);
 	const pid = child.pid;
 	const pgid = pid;
-	appendManifest({ event: "spawn", pid, pgid, argv: [command, ...args], evidenceDir: evidence.evidenceDir }, env);
+	const registration = { pid, pgid, processStart: liveProcessStart(pid), ownerToken: env[HARNESS_OWNER_TOKEN_ENV_KEY] };
+	appendManifest({ event: "spawn", pid, pgid, processStart: registration.processStart, argv: [command, ...args], evidenceDir: evidence.evidenceDir }, env);
 	child.stderr?.on("data", (chunk: Buffer | string) => appendFileSync(evidence.stderrPath, chunk));
 	const exited = new Promise<void>((resolveExit) => child.once("exit", (code, signal) => {
 		appendManifest({ event: "exit", pid, pgid, code, signal }, env);
@@ -266,10 +286,7 @@ export function spawnSupervisedProcess(command: string, args: readonly string[],
 			reaping ??= (async () => {
 				// Let spawn complete its setsid before addressing the new group.
 				await new Promise<void>((resolveTurn) => setImmediate(resolveTurn));
-				await terminateGroup(pgid);
-				if (child.exitCode === null && child.signalCode === null) {
-					try { child.kill("SIGKILL"); } catch { /* child exited at the boundary */ }
-				}
+				await terminateGroup(registration);
 				await Promise.race([exited, new Promise<void>((resolveDelay) => setTimeout(resolveDelay, SUPERVISOR_TERM_GRACE_MS))]);
 				appendManifest({ event: "reaped", pid, pgid }, env);
 			})();
@@ -288,13 +305,14 @@ export function supervisePtyProcess(pid: number, evidence: ChildEvidenceContext,
 	const pgid = pid;
 	let reaping: Promise<void> | undefined;
 	env[HARNESS_SIGNATURE_ENV_KEY] = HARNESS_SIGNATURE;
-	appendManifest({ event: "spawn", pid, pgid, argv: evidence.argv, evidenceDir: evidence.evidenceDir, kind: "pty" }, env);
+	const registration = { pid, pgid, processStart: liveProcessStart(pid), ownerToken: env[HARNESS_OWNER_TOKEN_ENV_KEY] };
+	appendManifest({ event: "spawn", pid, pgid, processStart: registration.processStart, argv: evidence.argv, evidenceDir: evidence.evidenceDir, kind: "pty" }, env);
 	return {
 		pid,
 		pgid,
 		evidence,
 		terminate(): Promise<void> {
-			reaping ??= terminateGroup(pgid).then(() => appendManifest({ event: "reaped", pid, pgid }, env));
+			reaping ??= terminateGroup(registration).then(() => appendManifest({ event: "reaped", pid, pgid }, env));
 			return reaping;
 		},
 		captureFailure(output = "", finalScreen = ""): Promise<string> {
@@ -312,13 +330,19 @@ export function recordPtyExit(pid: number, pgid: number, exitCode: number, signa
 afterAll(async () => {
 	if (fallbackRoot === undefined) return;
 	const root = fallbackRoot;
-	const survivors = [...focusedProcessGroups].filter(groupIsAlive);
-	for (const pgid of survivors) await terminateGroup(pgid);
-	const unreaped = survivors.filter(groupIsAlive);
+	const results = [];
+	for (const registration of focusedProcessGroups.values()) {
+		results.push(await reapHarnessProcessGroup(registration, {
+			wait: () => waitForGroupExit(registration.pgid, SUPERVISOR_TERM_GRACE_MS),
+		}));
+	}
+	const survivors = results.filter((result) => result.status !== "exited");
+	const unreaped = results.filter((result) => result.status === "survived" || result.status === "unverified");
 	process.stdout.write(`[focused harness] zero-survivor audit: ${survivors.length} survivors across ${focusedProcessGroups.size} registered process group(s)\n`);
 	if (survivors.length > 0) markRunEvidenceRetained(root);
 	if (!existsSync(join(root, "evidence-retained.json"))) rmSync(root, { recursive: true, force: true });
 	fallbackRoot = undefined;
+	fallbackOwnerToken = undefined;
 	focusedProcessGroups.clear();
 	if (survivors.length > 0) {
 		throw new Error(`focused harness leaked ${survivors.length} process group(s); ${unreaped.length} remained after TERM→KILL`);

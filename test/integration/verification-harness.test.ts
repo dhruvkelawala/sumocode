@@ -18,7 +18,7 @@ import {
 	extensionInputsHashFromManifest,
 	extensionOutputsHash,
 } from "../../scripts/lib/extension-bundle.mjs";
-import { fixIntegrationPreflight, inspectIntegrationPreflight, processRows } from "../../scripts/preflight-integration.mjs";
+import { fixIntegrationPreflight, inspectIntegrationPreflight, processRows, reapHarnessProcessGroup } from "../../scripts/preflight-integration.mjs";
 import { resolveHarnessExitCode } from "../../scripts/run-integration-harness.mjs";
 import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
@@ -103,7 +103,12 @@ describe("verification harness v2 seam", () => {
 			process.execPath,
 			[join(process.cwd(), "test/integration/fixtures/harness-process-tree.mjs")],
 			{
-				env: { ...process.env, SUMOCODE_INTEGRATION_RUN_ROOT: root, SUMOCODE_INTEGRATION_MANIFEST: manifest },
+				env: {
+					...process.env,
+					SUMOCODE_INTEGRATION_RUN_ROOT: root,
+					SUMOCODE_INTEGRATION_MANIFEST: manifest,
+					[HARNESS_OWNER_TOKEN_ENV_KEY]: "seam-test-owner",
+				},
 				stdio: ["ignore", "pipe", "pipe"],
 			},
 		);
@@ -506,6 +511,7 @@ describe("verification harness v2 seam", () => {
 				TMPDIR: tempRoot,
 				SUMOCODE_INTEGRATION_RUN_ROOT: root,
 				SUMOCODE_INTEGRATION_MANIFEST: manifest,
+				[HARNESS_OWNER_TOKEN_ENV_KEY]: "shared-run-test-owner",
 			};
 			const output = execFileSync(process.execPath, [
 				join(process.cwd(), "node_modules", "vitest", "vitest.mjs"),
@@ -546,6 +552,75 @@ describe("verification harness v2 seam", () => {
 	});
 });
 
+describe("verified harness group cleanup", () => {
+	const ownerToken = "run-owner";
+	const registration = { pid: 60_001, pgid: 60_001, processStart: "original-start", ownerToken };
+	const ownedCommand = `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} ${HARNESS_OWNER_TOKEN_ENV_KEY}=${ownerToken} node child.js`;
+	const leader = { pid: registration.pid, ppid: process.pid, pgid: registration.pgid, command: ownedCommand };
+	const descendant = { pid: 60_002, ppid: 1, pgid: registration.pgid, command: ownedCommand };
+
+	function fakeCleanup(tables: Array<{ rows: typeof leader[]; issue?: { code: string } }>, processStart = registration.processStart) {
+		const signals: Array<[number, NodeJS.Signals | number]> = [];
+		return {
+			signals,
+			result: reapHarnessProcessGroup(registration, {
+				readProcessTable: () => tables.shift() ?? { rows: [] },
+				currentPgid: 99_999,
+				readProcessStart: () => processStart,
+				kill: (pid, signal) => { signals.push([pid, signal ?? 0]); return true; },
+				wait: async () => {},
+			}),
+		};
+	}
+
+	it("refuses a reused numeric group owned by a foreign process", async () => {
+		const foreign = { ...leader, command: "node unrelated-server.js" };
+		const cleanup = fakeCleanup([{ rows: [foreign] }]);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "unverified", identityStatus: "different" });
+		expect(cleanup.signals).toEqual([]);
+	});
+
+	it("refuses a leader whose birth identity changed", async () => {
+		const cleanup = fakeCleanup([{ rows: [leader] }], "replacement-start");
+		await expect(cleanup.result).resolves.toMatchObject({ status: "unverified", identityStatus: "different" });
+		expect(cleanup.signals).toEqual([]);
+	});
+
+	it("refuses cleanup when process ownership cannot be inspected", async () => {
+		const cleanup = fakeCleanup([{ rows: [], issue: { code: "process-table-unavailable" } }]);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "unverified", identityStatus: "unknown" });
+		expect(cleanup.signals).toEqual([]);
+	});
+
+	it("allows cleanup while the original leader identity still matches", async () => {
+		const cleanup = fakeCleanup([{ rows: [leader] }, { rows: [] }]);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "reaped" });
+		expect(cleanup.signals).toEqual([[-registration.pgid, "SIGTERM"]]);
+	});
+
+	it("refuses escalation when ownership changes during TERM grace", async () => {
+		const foreign = { ...leader, command: "node replacement.js" };
+		const cleanup = fakeCleanup([{ rows: [leader] }, { rows: [foreign] }]);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "unverified", identityStatus: "different" });
+		expect(cleanup.signals).toEqual([[-registration.pgid, "SIGTERM"]]);
+	});
+
+	it("reports an already exited group without signaling", async () => {
+		const cleanup = fakeCleanup([{ rows: [] }]);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "exited" });
+		expect(cleanup.signals).toEqual([]);
+	});
+
+	it("reaps descendants after leader exit only while current ownership matches", async () => {
+		const cleanup = fakeCleanup([{ rows: [descendant] }, { rows: [descendant] }, { rows: [] }]);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "reaped" });
+		expect(cleanup.signals).toEqual([
+			[-registration.pgid, "SIGTERM"],
+			[-registration.pgid, "SIGKILL"],
+		]);
+	});
+});
+
 describe("harness exit-code contract", () => {
 	const ok = { code: 0, interrupted: false };
 
@@ -562,7 +637,7 @@ describe("harness exit-code contract", () => {
 });
 
 describe("portable process-table probe", () => {
-	const psRow = "  101   1  101 /usr/bin/some-command\n";
+	const psRow = "  101   1  101 S /usr/bin/some-command\n";
 
 	it("falls back to the alternate ps personality when the first form is rejected", () => {
 		const attempts: string[][] = [];
@@ -579,7 +654,7 @@ describe("portable process-table probe", () => {
 		const result = processRows(execute);
 		expect(attempts).toHaveLength(2);
 		expect(result.issue).toBeUndefined();
-		expect(result.rows).toEqual([{ pid: 101, ppid: 1, pgid: 101, command: "/usr/bin/some-command" }]);
+		expect(result.rows).toEqual([{ pid: 101, ppid: 1, pgid: 101, state: "S", command: "/usr/bin/some-command" }]);
 	});
 
 	it("degrades to the named process-table issue only when every ps form fails", () => {

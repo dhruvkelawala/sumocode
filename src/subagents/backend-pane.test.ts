@@ -858,7 +858,7 @@ describe("pane subagent backend", () => {
 			await flushPromises();
 
 			expect(harness.events).toContainEqual({ kind: "pane-attached", pane: { agentName: "worker-abc", workspaceId: "w1", tabId: "w1:t1", paneId: "w1:p2" } });
-			expect(settledEvents(harness.events)).toEqual([{ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive" } }]);
+			expect(settledEvents(harness.events)).toEqual([{ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } }]);
 			expect(vi.getTimerCount()).toBe(0);
 		} finally {
 			vi.useRealTimers();

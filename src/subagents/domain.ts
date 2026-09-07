@@ -25,7 +25,7 @@ export type SubagentEvent =
 
 export type RunOutcome =
 	| { kind: "completed"; finalText: string }
-	| { kind: "failed"; errorText: string; partialText?: string; errorCode?: string; errorReason?: string }
+	| { kind: "failed"; errorText: string; partialText?: string; errorCode?: string; errorReason?: string; paneStillOpen?: boolean }
 	| { kind: "interrupted"; partialText?: string };
 
 export interface TranscriptItem {
@@ -90,6 +90,8 @@ export interface SubagentSnapshot extends Partial<SubagentBudgetState> {
 	readonly errorText?: string;
 	readonly errorCode?: string;
 	readonly errorReason?: string;
+	/** True when the child settled but its pane close failed, so the pane still occupies a layout slot. */
+	readonly paneStillOpen?: boolean;
 	readonly modelLabel?: string;
 	readonly thinkingLabel?: string;
 	readonly sessionFilePath?: string;

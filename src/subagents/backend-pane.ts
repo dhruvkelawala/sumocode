@@ -473,12 +473,12 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		try {
 			const result = await options.host.closePane(options.pi, pane);
 			if (!result.ok) {
-				settle({ kind: "run-settled", outcome: { kind: "failed", errorText: `failed to close visible child pane: ${result.error}` } });
+				settle({ kind: "run-settled", outcome: { kind: "failed", errorText: `failed to close visible child pane: ${result.error}`, paneStillOpen: true } });
 				return;
 			}
 			settle({ kind: "run-settled", outcome: { kind: "interrupted" } });
 		} catch (error) {
-			settle({ kind: "run-settled", outcome: { kind: "failed", errorText: `failed to close visible child pane: ${errorText(error)}` } });
+			settle({ kind: "run-settled", outcome: { kind: "failed", errorText: `failed to close visible child pane: ${errorText(error)}`, paneStillOpen: true } });
 		}
 	};
 

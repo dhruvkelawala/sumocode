@@ -1032,6 +1032,44 @@ describe("SubagentManager", () => {
 		expect(placements[2]).toEqual({ kind: "new-tab", label: "subagents" });
 	});
 
+	it("keeps a failed-close pane in capacity until its slot is confirmed free", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+				emit({ kind: "run-started" });
+				emit({ kind: "pane-attached", pane: { agentName: `${task.id}-worker`, workspaceId: "w1", tabId: "w1:t5", paneId: `w1:p${task.id}` } });
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+		});
+
+		for (const title of ["first", "second", "third", "fourth"]) {
+			await manager.spawn({ prompt: `p-${title}`, title, cwd: "/repo", visible: true });
+		}
+
+		// sa-4's close fails: it leaves `children` but its pane is still open.
+		emitters.get("sa-4")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
+		await vi.waitFor(() => expect(manager.get("sa-4")?.status).toBe("error"));
+
+		await manager.spawn({ prompt: "p5", title: "fifth", cwd: "/repo", visible: true });
+		// The still-open pane keeps w1:t5 at capacity, so the fifth child overflows.
+		expect(placements[4]).toEqual({ kind: "new-tab", label: "subagents 2" });
+	});
+
 	it("counts only live visible panes toward tab capacity", async () => {
 		const backendTasks: Array<SpawnSubagentTask & { placement?: unknown }> = [];
 		const host: TerminalHost = {

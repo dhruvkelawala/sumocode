@@ -602,8 +602,10 @@ export class SubagentManager {
 					// Settling children have already left `children` (settle removes
 					// them synchronously) but their snapshots keep status "running"
 					// while the manifest collects async. Counting those freed panes
-					// would overflow the caller tab into a phantom overflow tab.
-					visiblePanes: this.list().flatMap((snapshot) => snapshot.visible && this.children.has(snapshot.id) && snapshot.pane ? [snapshot.pane] : []),
+					// would overflow the caller tab into a phantom overflow tab. A
+					// failed close, however, leaves the pane genuinely open, so keep
+					// panes whose close was never confirmed occupying their slot.
+					visiblePanes: this.list().flatMap((snapshot) => snapshot.visible && (this.children.has(snapshot.id) || snapshot.paneStillOpen === true) && snapshot.pane ? [snapshot.pane] : []),
 					sessionTabId: this.subagentsTabId,
 				});
 				if (planned.kind === "workspace") {
@@ -1246,6 +1248,7 @@ export class SubagentManager {
 				errorText: outcome.errorText.slice(0, ERROR_TEXT_MAX),
 				errorCode: outcome.errorCode,
 				errorReason: outcome.errorReason?.slice(0, ERROR_TEXT_MAX),
+				paneStillOpen: outcome.paneStillOpen,
 				finalText: outcome.partialText ?? latest.finalText,
 				liveText: "",
 				manifest,

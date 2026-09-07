@@ -53,6 +53,9 @@ interface HarnessManifestEvent {
 	readonly pid: number;
 	readonly pgid: number;
 	readonly processStart?: string;
+	readonly ownerPid?: number;
+	readonly ownerProcessStart?: string;
+	readonly ownershipMode?: HarnessOwnershipMode;
 	readonly argv?: readonly string[];
 	readonly evidenceDir?: string;
 	readonly kind?: "pty";
@@ -79,11 +82,16 @@ function ownProcessStart(): string | undefined {
 	return liveProcessStart(process.pid);
 }
 
+type HarnessOwnershipMode = "shared" | "focused";
+
 interface HarnessGroupRegistration {
 	readonly pid: number;
 	readonly pgid: number;
 	readonly processStart?: string;
+	readonly ownerPid: number;
+	readonly ownerProcessStart?: string;
 	readonly ownerToken?: string;
+	readonly ownershipMode: HarnessOwnershipMode;
 }
 
 let fallbackRoot: string | undefined;
@@ -129,7 +137,12 @@ function appendManifest(event: HarnessManifestEvent, env: NodeJS.ProcessEnv = pr
 			pid: event.pid,
 			pgid: event.pgid,
 			processStart: event.processStart,
+			ownerPid: event.ownerPid ?? 0,
+			ownerProcessStart: event.ownerProcessStart,
 			ownerToken: env[HARNESS_OWNER_TOKEN_ENV_KEY],
+			// This branch exists only for the in-process focused namespace; the
+			// manifest field never chooses the weaker owner proof.
+			ownershipMode: "focused",
 		});
 	}
 }
@@ -260,6 +273,18 @@ export async function waitForDiagnosticReadiness(diagPath: string, state: Readin
 	}
 }
 
+function harnessGroupRegistration(pid: number, pgid: number, env: NodeJS.ProcessEnv): HarnessGroupRegistration {
+	return {
+		pid,
+		pgid,
+		processStart: liveProcessStart(pid),
+		ownerPid: process.pid,
+		ownerProcessStart: ownProcessStart(),
+		ownerToken: env[HARNESS_OWNER_TOKEN_ENV_KEY],
+		ownershipMode: env.SUMOCODE_INTEGRATION_RUN_ROOT === undefined ? "focused" : "shared",
+	};
+}
+
 export function spawnSupervisedProcess(command: string, args: readonly string[], options: SpawnOptions = {}): SupervisedProcess {
 	const env = { ...options.env, [HARNESS_SIGNATURE_ENV_KEY]: HARNESS_SIGNATURE };
 	const evidence = createChildEvidenceContext([command, ...args], env);
@@ -267,8 +292,18 @@ export function spawnSupervisedProcess(command: string, args: readonly string[],
 	if (child.pid === undefined) throw new Error(`supervised child did not publish a pid: ${command}`);
 	const pid = child.pid;
 	const pgid = pid;
-	const registration = { pid, pgid, processStart: liveProcessStart(pid), ownerToken: env[HARNESS_OWNER_TOKEN_ENV_KEY] };
-	appendManifest({ event: "spawn", pid, pgid, processStart: registration.processStart, argv: [command, ...args], evidenceDir: evidence.evidenceDir }, env);
+	const registration = harnessGroupRegistration(pid, pgid, env);
+	appendManifest({
+		event: "spawn",
+		pid,
+		pgid,
+		processStart: registration.processStart,
+		ownerPid: registration.ownerPid,
+		ownerProcessStart: registration.ownerProcessStart,
+		ownershipMode: registration.ownershipMode,
+		argv: [command, ...args],
+		evidenceDir: evidence.evidenceDir,
+	}, env);
 	child.stderr?.on("data", (chunk: Buffer | string) => appendFileSync(evidence.stderrPath, chunk));
 	const exited = new Promise<void>((resolveExit) => child.once("exit", (code, signal) => {
 		appendManifest({ event: "exit", pid, pgid, code, signal }, env);
@@ -305,8 +340,19 @@ export function supervisePtyProcess(pid: number, evidence: ChildEvidenceContext,
 	const pgid = pid;
 	let reaping: Promise<void> | undefined;
 	env[HARNESS_SIGNATURE_ENV_KEY] = HARNESS_SIGNATURE;
-	const registration = { pid, pgid, processStart: liveProcessStart(pid), ownerToken: env[HARNESS_OWNER_TOKEN_ENV_KEY] };
-	appendManifest({ event: "spawn", pid, pgid, processStart: registration.processStart, argv: evidence.argv, evidenceDir: evidence.evidenceDir, kind: "pty" }, env);
+	const registration = harnessGroupRegistration(pid, pgid, env);
+	appendManifest({
+		event: "spawn",
+		pid,
+		pgid,
+		processStart: registration.processStart,
+		ownerPid: registration.ownerPid,
+		ownerProcessStart: registration.ownerProcessStart,
+		ownershipMode: registration.ownershipMode,
+		argv: evidence.argv,
+		evidenceDir: evidence.evidenceDir,
+		kind: "pty",
+	}, env);
 	return {
 		pid,
 		pgid,

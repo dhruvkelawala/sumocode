@@ -81,7 +81,8 @@ export function processRows(execute = execFileSync) {
 }
 
 function hasProcessMarker(row, key, value) {
-	return row.command.includes(`${key}=${value}`);
+	const marker = `${key}=${value}`.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	return new RegExp(`(?:^|\\s)${marker}(?:\\s|$)`).test(row.command);
 }
 
 function hasHarnessSignature(row) {
@@ -310,44 +311,107 @@ function survivingGroupIsHarnessOwned(pgid, rows, currentPgid) {
 		&& rows.some((row) => row.pgid === pgid && hasHarnessSignature(row));
 }
 
+function ancestryStatus(pid, ancestorPid, rowsByPid) {
+	const seen = new Set();
+	while (Number.isSafeInteger(pid) && pid > 1) {
+		if (pid === ancestorPid) return "reached";
+		if (seen.has(pid)) return "cycle";
+		seen.add(pid);
+		const row = rowsByPid.get(pid);
+		if (row === undefined) return "missing";
+		pid = row.ppid;
+	}
+	return "root";
+}
+
+function membersCarryRunIdentity(members, ownerToken) {
+	return members.every((row) => hasHarnessSignature(row) && hasProcessMarker(row, HARNESS_OWNER_TOKEN_ENV_KEY, ownerToken));
+}
+
+function readStart(readProcessStart, pid) {
+	try { return readProcessStart(pid); } catch { return undefined; }
+}
+
 function inspectHarnessProcessGroup(registration, table, currentPgid, readProcessStart) {
 	if (table?.issue !== undefined || !Array.isArray(table?.rows)) {
 		return { status: "unverified", identityStatus: "unknown", error: "process table unavailable" };
 	}
-	const { pid, pgid, processStart, ownerToken } = registration;
-	if (!Number.isSafeInteger(pid) || pid <= 1 || !Number.isSafeInteger(pgid) || pgid <= 1) {
+	const rowsAreValid = table.rows.every((row) => Number.isSafeInteger(row?.pid) && row.pid > 0
+		&& Number.isSafeInteger(row.ppid) && row.ppid >= 0
+		&& Number.isSafeInteger(row.pgid) && row.pgid >= 0
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- process tables are untrusted at this signal boundary
+		&& typeof row.command === "string"
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- injected process tables may omit state; actual ps rows always carry it
+		&& (row.state === undefined || typeof row.state === "string"));
+	const rowsByPid = new Map(table.rows.map((row) => [row.pid, row]));
+	if (!rowsAreValid || rowsByPid.size !== table.rows.length) {
+		return { status: "unverified", identityStatus: "unknown", error: "process table malformed" };
+	}
+	const { pid, pgid, processStart, ownerPid, ownerProcessStart, ownerToken, ownershipMode } = registration;
+	if (!Number.isSafeInteger(pid) || pid <= 1 || !Number.isSafeInteger(pgid) || pgid <= 1
+		|| !Number.isSafeInteger(ownerPid) || ownerPid <= 1 || ownerPid === pid) {
 		return { status: "unverified", identityStatus: "unknown", error: "invalid process identity" };
 	}
 	const members = table.rows.filter((row) => row.pgid === pgid && !row.state?.startsWith("Z"));
 	if (members.length === 0) return { status: "exited" };
 	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- registrations parsed from JSONL are untrusted at this effect boundary
 	if (typeof processStart !== "string" || processStart.length === 0
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- registrations parsed from JSONL are untrusted at this effect boundary
+		|| typeof ownerProcessStart !== "string" || ownerProcessStart.length === 0
 		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- reject malformed owner tokens from JSONL registrations before authorizing signals
 		|| typeof ownerToken !== "string" || ownerToken.length === 0
+		|| (ownershipMode !== "shared" && ownershipMode !== "focused")
 		|| currentPgid === undefined || pgid === currentPgid) {
 		return { status: "unverified", identityStatus: "unknown", error: "incomplete or unsafe process identity" };
 	}
-	// Cleanup authorization needs the explicit harness signature; the broader
-	// fake-pi name match stays reserved for inventory detection only.
-	if (!members.every((row) => hasHarnessSignature(row) && hasProcessMarker(row, HARNESS_OWNER_TOKEN_ENV_KEY, ownerToken))) {
-		return { status: "unverified", identityStatus: "different", error: "process group ownership changed" };
+	const leaderRow = rowsByPid.get(pid);
+	const leader = leaderRow?.pgid === pgid && !leaderRow.state?.startsWith("Z") ? leaderRow : undefined;
+	if (leader === undefined) {
+		return membersCarryRunIdentity(members, ownerToken)
+			? { status: "owned" }
+			: { status: "unverified", identityStatus: "different", error: "process group ownership changed" };
 	}
-	const leader = members.find((row) => row.pid === pid);
-	if (leader === undefined) return { status: "owned" };
-	let currentStart;
-	try { currentStart = readProcessStart(pid); } catch { currentStart = undefined; }
-	if (currentStart === undefined) {
-		return { status: "unverified", identityStatus: "unknown", error: "process birth identity unavailable" };
+	const leaderStart = readStart(readProcessStart, pid);
+	if (leaderStart === undefined) {
+		return { status: "unverified", identityStatus: "unknown", error: "leader birth identity unavailable" };
 	}
-	return currentStart === processStart
-		? { status: "owned" }
-		: { status: "unverified", identityStatus: "different", error: "process birth identity changed" };
+	if (leaderStart !== processStart) {
+		return { status: "unverified", identityStatus: "different", error: "leader birth identity changed" };
+	}
+	if (!members.every((row) => ancestryStatus(row.pid, pid, rowsByPid) === "reached")) {
+		return { status: "unverified", identityStatus: "different", error: "process group ancestry changed" };
+	}
+	const ownerPath = ancestryStatus(pid, ownerPid, rowsByPid);
+	if (ownerPath === "cycle") {
+		return { status: "unverified", identityStatus: "different", error: "owner ancestry changed" };
+	}
+	if (ownerPath !== "reached") {
+		return membersCarryRunIdentity(members, ownerToken)
+			? { status: "owned" }
+			: { status: "unverified", identityStatus: "different", error: "process group ownership changed" };
+	}
+	const owner = rowsByPid.get(ownerPid);
+	if (owner === undefined || owner.pgid === pgid || owner.state?.startsWith("Z")) {
+		return { status: "unverified", identityStatus: "unknown", error: "owner process unavailable" };
+	}
+	const ownerStart = readStart(readProcessStart, ownerPid);
+	if (ownerStart === undefined) {
+		return { status: "unverified", identityStatus: "unknown", error: "owner birth identity unavailable" };
+	}
+	if (ownerStart !== ownerProcessStart) {
+		return { status: "unverified", identityStatus: "different", error: "owner birth identity changed" };
+	}
+	if (ownershipMode === "shared" && (!hasHarnessSignature(owner) || !hasProcessMarker(owner, HARNESS_OWNER_TOKEN_ENV_KEY, ownerToken))) {
+		return { status: "unverified", identityStatus: "different", error: "run owner authentication changed" };
+	}
+	return { status: "owned" };
 }
 
 /**
- * TERM→KILL a registered harness group only after checking its birth identity
- * and run owner immediately before each signal. A dead leader is safe only
- * while every live group member still carries the same private owner token.
+ * TERM→KILL a registered harness group only after checking the live leader,
+ * its spawning owner, and every member's ancestry immediately before each
+ * signal. Once the leader loses that chain, every survivor must carry the
+ * shared signature and private token.
  */
 export async function reapHarnessProcessGroup(registration, {
 	readProcessTable = processRows,

@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	captureTimeoutEvidence,
@@ -96,23 +96,23 @@ describe("verification harness v2 seam", () => {
 		expect(env.UNRELATED_AMBIENT_VALUE).toBeUndefined();
 	});
 
-	it("supervises and reaps a whole process group while recording the manifest", async () => {
-		const root = createRunRoot();
-		const manifest = join(root, "children.jsonl");
+	it("reaps a title-changing child through the public supervised spawn seam", async () => {
 		const child = spawnSupervisedProcess(
 			process.execPath,
-			[join(process.cwd(), "test/integration/fixtures/harness-process-tree.mjs")],
+			[join(process.cwd(), "test/integration/fixtures/title-changing-harness-child.mjs")],
 			{
-				env: {
-					...process.env,
-					SUMOCODE_INTEGRATION_RUN_ROOT: root,
-					SUMOCODE_INTEGRATION_MANIFEST: manifest,
-					[HARNESS_OWNER_TOKEN_ENV_KEY]: "seam-test-owner",
-				},
+				env: { ...process.env },
 				stdio: ["ignore", "pipe", "pipe"],
 			},
 		);
 		children.push(child);
+		await new Promise<void>((resolveReady, rejectReady) => {
+			const timer = setTimeout(() => rejectReady(new Error("title-changing child did not become ready")), 5_000);
+			child.child.stdout?.once("data", () => {
+				clearTimeout(timer);
+				resolveReady();
+			});
+		});
 
 		expect(child.shouldCaptureExitFailure(false)).toBe(true);
 		const termination = child.terminate();
@@ -120,9 +120,23 @@ describe("verification harness v2 seam", () => {
 		expect(child.shouldCaptureExitFailure(true)).toBe(true);
 		await termination;
 		expect(() => process.kill(-child.pgid, 0)).toThrow();
-		// SAFETY: the manifest is written by the harness in this test and only the asserted event/pid fields are consumed.
-		const events = readFileSync(manifest, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { event: string; pid: number });
-		expect(events).toContainEqual(expect.objectContaining({ event: "spawn", pid: child.child.pid }));
+		const root = resolve(child.evidence.evidenceDir, "../../..");
+		const manifest = process.env.SUMOCODE_INTEGRATION_MANIFEST ?? join(root, "children.jsonl");
+		// SAFETY: the manifest is written by the harness in this test and only the asserted registration fields are consumed.
+		const events = readFileSync(manifest, "utf8").trim().split("\n").map((line) => JSON.parse(line) as {
+			event: string;
+			pid: number;
+			ownerPid?: number;
+			ownerProcessStart?: string;
+			ownershipMode?: string;
+		});
+		expect(events).toContainEqual(expect.objectContaining({
+			event: "spawn",
+			pid: child.child.pid,
+			ownerPid: process.pid,
+			ownerProcessStart: expect.any(String),
+			ownershipMode: process.env.SUMOCODE_INTEGRATION_RUN_ROOT === undefined ? "focused" : "shared",
+		}));
 		expect(events).toContainEqual(expect.objectContaining({ event: "exit", pid: child.child.pid }));
 	});
 
@@ -512,6 +526,7 @@ describe("verification harness v2 seam", () => {
 				SUMOCODE_INTEGRATION_RUN_ROOT: root,
 				SUMOCODE_INTEGRATION_MANIFEST: manifest,
 				[HARNESS_OWNER_TOKEN_ENV_KEY]: "shared-run-test-owner",
+				[HARNESS_SIGNATURE_ENV_KEY]: HARNESS_SIGNATURE,
 			};
 			const output = execFileSync(process.execPath, [
 				join(process.cwd(), "node_modules", "vitest", "vitest.mjs"),
@@ -553,35 +568,89 @@ describe("verification harness v2 seam", () => {
 });
 
 describe("verified harness group cleanup", () => {
+	type FakeProcessRow = { pid: number; ppid: number; pgid: number; state?: string; command: string };
 	const ownerToken = "run-owner";
-	const registration = { pid: 60_001, pgid: 60_001, processStart: "original-start", ownerToken };
+	const registration = {
+		pid: 60_001,
+		pgid: 60_001,
+		processStart: "leader-start",
+		ownerPid: 59_001,
+		ownerProcessStart: "owner-start",
+		ownerToken,
+		ownershipMode: "shared",
+	};
 	const ownedCommand = `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} ${HARNESS_OWNER_TOKEN_ENV_KEY}=${ownerToken} node child.js`;
-	const leader = { pid: registration.pid, ppid: process.pid, pgid: registration.pgid, command: ownedCommand };
-	const descendant = { pid: 60_002, ppid: 1, pgid: registration.pgid, command: ownedCommand };
+	const owner = { pid: registration.ownerPid, ppid: 58_001, pgid: 58_001, command: ownedCommand };
+	const leader = { pid: registration.pid, ppid: owner.pid, pgid: registration.pgid, command: "pi" };
+	const member = { pid: 60_002, ppid: leader.pid, pgid: registration.pgid, command: "pi" };
+	const descendant = { pid: 60_003, ppid: 1, pgid: registration.pgid, command: ownedCommand };
+	const starts = new Map([
+		[registration.pid, registration.processStart],
+		[registration.ownerPid, registration.ownerProcessStart],
+	]);
 
-	function fakeCleanup(tables: Array<{ rows: typeof leader[]; issue?: { code: string } }>, processStart = registration.processStart) {
+	function fakeCleanup(
+		tables: Array<{ rows: FakeProcessRow[]; issue?: { code: string } }>,
+		processStarts: ReadonlyMap<number, string | undefined> = starts,
+		registered = registration,
+	) {
 		const signals: Array<[number, NodeJS.Signals | number]> = [];
 		return {
 			signals,
-			result: reapHarnessProcessGroup(registration, {
+			result: reapHarnessProcessGroup(registered, {
 				readProcessTable: () => tables.shift() ?? { rows: [] },
 				currentPgid: 99_999,
-				readProcessStart: () => processStart,
+				readProcessStart: (pid) => processStarts.get(pid),
 				kill: (pid, signal) => { signals.push([pid, signal ?? 0]); return true; },
 				wait: async () => {},
 			}),
 		};
 	}
 
-	it("refuses a reused numeric group owned by a foreign process", async () => {
-		const foreign = { ...leader, command: "node unrelated-server.js" };
-		const cleanup = fakeCleanup([{ rows: [foreign] }]);
+	it("cleans an authenticated tree even when titles hide every child marker", async () => {
+		const cleanup = fakeCleanup([{ rows: [owner, leader, member] }, { rows: [] }]);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "reaped" });
+		expect(cleanup.signals).toEqual([[-registration.pgid, "SIGTERM"]]);
+	});
+
+	it("authenticates a focused owner by its captured pid and birth", async () => {
+		const focused = { ...registration, ownershipMode: "focused" };
+		const unsignedOwner = { ...owner, command: "vitest" };
+		const cleanup = fakeCleanup([{ rows: [unsignedOwner, leader] }, { rows: [] }], starts, focused);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "reaped" });
+		expect(cleanup.signals).toEqual([[-registration.pgid, "SIGTERM"]]);
+	});
+
+	it("refuses a leader whose birth identity changed", async () => {
+		const changed = new Map(starts).set(registration.pid, "replacement-start");
+		const cleanup = fakeCleanup([{ rows: [owner, leader] }], changed);
 		await expect(cleanup.result).resolves.toMatchObject({ status: "unverified", identityStatus: "different" });
 		expect(cleanup.signals).toEqual([]);
 	});
 
-	it("refuses a leader whose birth identity changed", async () => {
-		const cleanup = fakeCleanup([{ rows: [leader] }], "replacement-start");
+	it("refuses an owner whose birth identity changed", async () => {
+		const changed = new Map(starts).set(registration.ownerPid, "replacement-start");
+		const cleanup = fakeCleanup([{ rows: [owner, leader] }], changed);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "unverified", identityStatus: "different" });
+		expect(cleanup.signals).toEqual([]);
+	});
+
+	it.each([
+		["signature", { ...owner, command: `${HARNESS_OWNER_TOKEN_ENV_KEY}=${ownerToken} node worker.js` }],
+		["token", { ...owner, command: `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} ${HARNESS_OWNER_TOKEN_ENV_KEY}=${ownerToken}-forged node worker.js` }],
+	])("refuses a shared owner with the wrong %s", async (_kind, wrongOwner) => {
+		const cleanup = fakeCleanup([{ rows: [wrongOwner, leader] }]);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "unverified", identityStatus: "different" });
+		expect(cleanup.signals).toEqual([]);
+	});
+
+	it.each([
+		["cycle", [owner, leader, { ...member, ppid: 60_004 }, { pid: 60_004, ppid: member.pid, pgid: registration.pgid, command: "pi" }]],
+		["broken", [owner, leader, { ...member, ppid: 60_099 }]],
+		["missing", [owner, leader, { ...member, ppid: 0 }]],
+		["unrelated same-pgid member", [owner, leader, { ...member, ppid: owner.pid }]],
+	] satisfies Array<[string, FakeProcessRow[]]>)("refuses a group with %s ancestry", async (_kind, rows) => {
+		const cleanup = fakeCleanup([{ rows }]);
 		await expect(cleanup.result).resolves.toMatchObject({ status: "unverified", identityStatus: "different" });
 		expect(cleanup.signals).toEqual([]);
 	});
@@ -592,15 +661,12 @@ describe("verified harness group cleanup", () => {
 		expect(cleanup.signals).toEqual([]);
 	});
 
-	it("allows cleanup while the original leader identity still matches", async () => {
-		const cleanup = fakeCleanup([{ rows: [leader] }, { rows: [] }]);
-		await expect(cleanup.result).resolves.toMatchObject({ status: "reaped" });
-		expect(cleanup.signals).toEqual([[-registration.pgid, "SIGTERM"]]);
-	});
-
-	it("refuses escalation when ownership changes during TERM grace", async () => {
-		const foreign = { ...leader, command: "node replacement.js" };
-		const cleanup = fakeCleanup([{ rows: [leader] }, { rows: [foreign] }]);
+	it("refuses escalation when owner authentication changes during TERM grace", async () => {
+		const wrongOwner = { ...owner, command: `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} ${HARNESS_OWNER_TOKEN_ENV_KEY}=other-run node worker.js` };
+		const cleanup = fakeCleanup([
+			{ rows: [owner, leader, member] },
+			{ rows: [wrongOwner, leader, member] },
+		]);
 		await expect(cleanup.result).resolves.toMatchObject({ status: "unverified", identityStatus: "different" });
 		expect(cleanup.signals).toEqual([[-registration.pgid, "SIGTERM"]]);
 	});
@@ -611,11 +677,12 @@ describe("verified harness group cleanup", () => {
 		expect(cleanup.signals).toEqual([]);
 	});
 
-	it("refuses a member carrying a fake-pi name and token without a harness signature", async () => {
-		const unsigned = { ...leader, command: `/tmp/sumocode-fake-pi-unsigned/stub ${HARNESS_OWNER_TOKEN_ENV_KEY}=${ownerToken} node child.js` };
-		const cleanup = fakeCleanup([{ rows: [unsigned] }]);
-		await expect(cleanup.result).resolves.toMatchObject({ status: "unverified", identityStatus: "different" });
-		expect(cleanup.signals).toEqual([]);
+	it("reaps a reparented live leader only when every member carries the run identity", async () => {
+		const signedLeader = { ...leader, ppid: 1, command: ownedCommand };
+		const signedMember = { ...member, command: ownedCommand };
+		const cleanup = fakeCleanup([{ rows: [signedLeader, signedMember] }, { rows: [] }]);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "reaped" });
+		expect(cleanup.signals).toEqual([[-registration.pgid, "SIGTERM"]]);
 	});
 
 	it("reports unverified instead of exited when actual processRows yields malformed rows", async () => {
@@ -625,7 +692,7 @@ describe("verified harness group cleanup", () => {
 			// SAFETY: processRows requests UTF-8 text; this fake returns that text without spawning.
 			readProcessTable: () => processRows((() => output) as typeof execFileSync),
 			currentPgid: 99_999,
-			readProcessStart: () => registration.processStart,
+			readProcessStart: (pid) => starts.get(pid),
 			kill: (pid, signal) => { signals.push([pid, signal ?? 0]); return true; },
 			wait: async () => {},
 		});
@@ -635,7 +702,13 @@ describe("verified harness group cleanup", () => {
 		expect(signals).toEqual([]);
 	});
 
-	it("reaps descendants after leader exit only while current ownership matches", async () => {
+	it("refuses an unsigned survivor after the leader exits", async () => {
+		const cleanup = fakeCleanup([{ rows: [{ ...descendant, command: "pi" }] }]);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "unverified", identityStatus: "different" });
+		expect(cleanup.signals).toEqual([]);
+	});
+
+	it("reaps signed descendants after leader exit while every member matches", async () => {
 		const cleanup = fakeCleanup([{ rows: [descendant] }, { rows: [descendant] }, { rows: [] }]);
 		await expect(cleanup.result).resolves.toMatchObject({ status: "reaped" });
 		expect(cleanup.signals).toEqual([

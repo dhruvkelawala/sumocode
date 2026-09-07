@@ -59,7 +59,17 @@ async function manifestProcessGroups(manifest, ownerToken) {
 			const event = JSON.parse(line);
 			if (event.event === "spawn" && Number.isSafeInteger(event.pid) && event.pid > 1
 				&& Number.isSafeInteger(event.pgid) && event.pgid > 1) {
-				groups.set(event.pgid, { pid: event.pid, pgid: event.pgid, processStart: event.processStart, ownerToken });
+				groups.set(event.pgid, {
+					pid: event.pid,
+					pgid: event.pgid,
+					processStart: event.processStart,
+					ownerPid: event.ownerPid,
+					ownerProcessStart: event.ownerProcessStart,
+					ownerToken,
+					// This audit owns a shared run. A manifest event cannot opt into
+					// focused mode's tokenless owner proof.
+					ownershipMode: "shared",
+				});
 			}
 		} catch {
 			// A worker can be interrupted mid-append; earlier complete registrations remain auditable.

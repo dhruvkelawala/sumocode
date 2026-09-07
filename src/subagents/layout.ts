@@ -14,6 +14,8 @@ export interface PlacementInput {
 	sessionTabId?: string;
 	/** Tab ids that must never be used as shared destinations (isolated workspace tabs). */
 	excludedTabIds?: readonly string[];
+	/** The parent session's caller tab; it survives child exits because it holds the parent pane. */
+	callerTabId?: string;
 }
 
 const MAX_PANES_PER_TAB = 4;
@@ -57,6 +59,21 @@ export function planPlacement(input: PlacementInput): Placement {
 	const candidate = [...vacancies.entries()].find(([, count]) => count < MAX_PANES_PER_TAB);
 	if (candidate !== undefined) {
 		return { kind: "tab", tabId: candidate[0], direction: splitDirection(candidate[1]) };
+	}
+
+	// No live child pane has a free slot anywhere. The caller tab is the one
+	// tab that survives even with zero child panes (it holds the parent
+	// session pane), so return to it before provisioning a duplicate. It is
+	// safe in the same way the cache fallback to initialVisibleTabId is: a
+	// human-closed caller tab fails the split once and invalidates the cache.
+	if (
+		input.callerTabId !== undefined
+		&& input.callerTabId !== input.sessionTabId
+		&& !excluded.has(input.callerTabId)
+		&& input.callerTabId.split(":")[0] === workspaceId
+		&& !vacancies.has(input.callerTabId)
+	) {
+		return { kind: "tab", tabId: input.callerTabId, direction: "right" };
 	}
 
 	const nextTabNumber = Math.floor(input.visiblePanes.length / MAX_PANES_PER_TAB) + 1;

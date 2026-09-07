@@ -1352,6 +1352,50 @@ describe("SubagentManager", () => {
 		expect(placements[8]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "down" });
 	});
 
+	it("returns to the emptied caller tab when the cached overflow tab is full", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+			initialVisibleTabId: "w1:t5",
+		});
+
+		// Four children fill the caller tab, four fill the generated overflow
+		// tab that becomes the cache.
+		for (let index = 1; index <= 8; index += 1) {
+			await manager.spawn({ prompt: `p${index}`, title: `child-${index}`, cwd: "/repo", visible: true });
+			emitters.get(`sa-${index}`)?.({ kind: "run-started" });
+			emitters.get(`sa-${index}`)?.({ kind: "pane-attached", pane: { agentName: `sa-${index}-worker`, workspaceId: "w1", tabId: index <= 4 ? "w1:t5" : "w1:t6", paneId: `w1:p${index}` } });
+		}
+		// Every child exits the caller tab, but the tab itself survives: it
+		// still holds the parent session pane.
+		for (let index = 1; index <= 4; index += 1) {
+			emitters.get(`sa-${index}`)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		}
+		await vi.waitFor(() => expect(["sa-1", "sa-2", "sa-3", "sa-4"].every((id) => manager.get(id)?.status === "done")).toBe(true));
+
+		await manager.spawn({ prompt: "p9", title: "ninth", cwd: "/repo", visible: true });
+		// The cached overflow tab is full and no live child pane remains
+		// elsewhere, so the emptied caller tab must be reclaimed.
+		expect(placements[8]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "right" });
+	});
+
 	it("promotes a surviving tab anchored only by failed-close panes", async () => {
 		const placements: unknown[] = [];
 		const emitters = new Map<string, (event: SubagentEvent) => void>();

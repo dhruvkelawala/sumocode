@@ -610,6 +610,7 @@ export class SubagentManager {
 					// Isolated workspace tabs are isolation destinations, never shared
 					// spillover targets for the vacancy scan.
 					excludedTabIds: this.list().flatMap((snapshot) => this.workspacePlacedIds.has(snapshot.id) && snapshot.pane?.tabId ? [snapshot.pane.tabId] : []),
+					callerTabId: this.initialVisibleTabId,
 				});
 				if (planned.kind === "workspace") {
 					if (!worktree || !gitContext.repoRoot) {

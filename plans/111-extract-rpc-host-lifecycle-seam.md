@@ -66,7 +66,7 @@ Keep transcript, scheduler, controls, renderer, and pure state machines in their
 
 ## Committed bundle freshness
 
-After final source edits, run `pnpm build:host` before `pnpm test`; keep the generated `dist/host/**` changes in this plan. Integration tests rebuild committed bundles, so rerun `pnpm build:host` afterward and verify no additional unexpected generated drift.
+Generated `dist/**` is git-ignored and never committed (see AGENTS.md, Conventions). Run `pnpm build:host` before `pnpm test` so a stale local bundle cannot mask a source change; the integration harness rebuilds bundles itself and falls back to source when one is missing.
 
 ## Scope
 

@@ -73,6 +73,11 @@ export async function verifyRetained(record: SubagentRecord, operations: Process
 	return { classification: "verified" };
 }
 
+function recoveryEvidence(record: SubagentRecord) {
+	// Telemetry is not authority; every other field must survive pane inspection unchanged.
+	return { ...record, revision: 0, updatedAt: 0, telemetry: undefined };
+}
+
 /** A new host needs only its private registry namespace, never an old JS handle. */
 export async function reconstructRetained(registry: SubagentRegistry, successor: RegistryWriter, sessionId: string,
 	operations: ProcessTreeOperations, host?: TerminalHost, pi?: PiExecLike,
@@ -110,10 +115,14 @@ export async function reconstructRetained(registry: SubagentRegistry, successor:
 			}
 			if (verified !== "verified") throw new Error("retained evidence unverified");
 			RetainedResults.read(initial.taskDir);
-			const mirror = controller.controllerState(initial.id) === "alive";
-			const record = mirror ? initial : initial.status === "settled" && controller.writerState(initial.id) === "dead"
-				? controller.handoffController(initial.id, initial.revision, initial.controllerGeneration ?? 0, sessionId, 60_000)
-				: controller.recoverControl(initial.id, initial.revision, initial.controllerGeneration ?? 0, sessionId);
+			const fresh = controller.get(initial.id);
+			if (!fresh || !isDeepStrictEqual(recoveryEvidence(initial), recoveryEvidence(fresh))) throw new Error("retained evidence changed during inspection");
+			if (fresh.status !== "settled" && (!fresh.child || !fresh.supervisor
+				|| !sameAnchor(fresh.child, operations) || !sameAnchor(fresh.supervisor, operations))) throw new Error("retained anchor changed during inspection");
+			const mirror = controller.controllerState(fresh.id) === "alive";
+			const record = mirror ? fresh : fresh.status === "settled" && controller.writerState(fresh.id) === "dead"
+				? controller.handoffController(fresh.id, fresh.revision, fresh.controllerGeneration ?? 0, sessionId, 60_000)
+				: controller.recoverControl(fresh.id, fresh.revision, fresh.controllerGeneration ?? 0, sessionId);
 			const authority = controlAuthority(record);
 			const fence = (): SubagentRecord => {
 				const current = controller.get(record.id)!;

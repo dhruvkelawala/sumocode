@@ -16,7 +16,7 @@ interface HerdrPaneInfoResult { pane?: HerdrPaneInfo }
 interface HerdrTabResult { tab?: { tab_id?: string; workspace_id?: string }; tab_id?: string; root_pane?: HerdrPaneInfo }
 interface HerdrWorktreeResult { root_pane?: HerdrPaneInfo; workspace?: { workspace_id?: string } }
 interface HerdrPaneListResult { panes?: HerdrPaneInfo[] }
-interface HerdrAgentExplainResult { explain?: string | { reason?: string; message?: string } }
+interface HerdrAgentExplainResult { explain?: { reason?: string; message?: string } }
 
 function parseEnvelope<T>(stdout: string): HostResult<T> {
 	try {
@@ -127,12 +127,8 @@ async function paneUnavailable(pi: PiExecLike, target: string, error: string): P
 		const explained = await pi.exec("herdr", ["agent", "explain", target], { timeout: HERDR_EXPLAIN_TIMEOUT_MS });
 		if (explained.code === 0) {
 			const parsed = parseEnvelope<HerdrAgentExplainResult>(explained.stdout);
-			if (parsed.ok) {
-				const explanation = parsed.explain;
-				reason = typeof explanation === "string"
-					? explanation
-					: explanation?.reason ?? explanation?.message ?? reason;
-			} else reason = parsed.error;
+			if (parsed.ok) reason = parsed.explain?.reason ?? parsed.explain?.message ?? reason;
+			else reason = parsed.error;
 		} else reason = (explained.stderr || explained.stdout || `herdr agent explain exited ${explained.code}`).trim();
 	} catch (explainError) {
 		reason = explainError instanceof Error ? explainError.message : String(explainError);

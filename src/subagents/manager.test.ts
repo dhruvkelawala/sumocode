@@ -825,6 +825,7 @@ describe("SubagentManager", () => {
 		});
 
 		const first = await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
+		// SAFETY: this first spawn is below capacity, so it is a snapshot with an id.
 		await manager.close([(first as { id: string }).id]);
 		const second = await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true });
 

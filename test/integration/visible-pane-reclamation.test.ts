@@ -99,7 +99,7 @@ class SupervisedHerdrHarness {
 		}
 	}
 
-	private result(result: unknown) {
+	private result<T extends object>(result: T) {
 		return { stdout: JSON.stringify({ result }), stderr: "", code: 0, killed: false };
 	}
 
@@ -177,7 +177,7 @@ describe("supervised visible pane reclamation", () => {
 		const tool = (name: string) => registered.find((candidate) => candidate.name === name)!;
 		const ctx = { cwd: worktree, model: { provider: "openai", id: "gpt-5" } };
 
-		const first = await tool("subagent_spawn").execute("spawn-1", { prompt: "first", name: "cheap one", role: "implement-cheap", visible: true } as never, undefined as never, undefined as never, ctx as never);
+		const first = await tool("subagent_spawn").execute("spawn-1", { prompt: "first", name: "cheap one", role: "implement-cheap", visible: true }, undefined, undefined, ctx);
 		expect(first.content[0].text).toContain("Started sa-1");
 		await waitFor(() => herdr.liveChildPanes().length === 1 && manager.get("sa-1")?.pane?.paneId !== undefined);
 		const firstPane = manager.get("sa-1")!.pane!.paneId!;
@@ -187,16 +187,16 @@ describe("supervised visible pane reclamation", () => {
 			try { return readFileSync(firstArgsFile, "utf8").includes("--thinking low"); } catch { return false; }
 		});
 
-		await tool("subagent_close").execute("close-1", { ids: ["sa-1"] } as never);
+		await tool("subagent_close").execute("close-1", { ids: ["sa-1"] });
 		await waitFor(() => herdr.liveChildPanes().length === 0);
 
-		const second = await tool("subagent_spawn").execute("spawn-2", { prompt: "second", name: "cheap two", role: "implement-cheap", visible: true } as never, undefined as never, undefined as never, ctx as never);
+		const second = await tool("subagent_spawn").execute("spawn-2", { prompt: "second", name: "cheap two", role: "implement-cheap", visible: true }, undefined, undefined, ctx);
 		expect(second.content[0].text).toContain("Started sa-2");
 		await waitFor(() => herdr.liveChildPanes().length === 1 && manager.get("sa-2")?.pane?.paneId !== undefined);
 		const secondPane = manager.get("sa-2")!.pane!.paneId!;
 		expect(secondPane).not.toBe(firstPane);
 
-		await tool("subagent_close").execute("close-2", { ids: ["sa-2"] } as never);
+		await tool("subagent_close").execute("close-2", { ids: ["sa-2"] });
 		await waitFor(() => herdr.liveChildPanes().length === 0);
 		await herdr.auditZeroOrphans();
 	}, 15_000);

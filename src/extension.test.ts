@@ -35,6 +35,7 @@ function isBlockingResult(value: unknown): value is { block: true } {
 const AMBIENT_ENV_KEYS = [
 	"SUMOCODE_LAUNCHER",
 	"SUMOCODE_ROOT_DIR",
+	"SUMOCODE_STATE_DIR",
 	"SUMOCODE_RPC_CHILD",
 	"SUMOCODE_BG_CHILD",
 	"SUMOCODE_TASK_MODE",

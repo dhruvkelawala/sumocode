@@ -99,6 +99,7 @@ const textOf = <T extends { content: Array<{ text: string }> }>(result: T): stri
 
 const publicSpawnTool = (manager: SubagentManager, host: TerminalHost, roles: readonly SubagentRole[] = []) => {
 	const registered: Array<{ name: string; execute: (...args: unknown[]) => Promise<ToolResult> }> = [];
+	// SAFETY: the public-seam double implements every ExtensionAPI member the registration and spawn handler use.
 	registerSubagentTools({
 		registerTool: (tool: { name: string; execute: (...args: unknown[]) => Promise<ToolResult> }) => registered.push(tool),
 		getThinkingLevel: () => "medium",
@@ -300,6 +301,7 @@ describe("subagent tools", () => {
 				closePane: vi.fn(),
 				notify: vi.fn(),
 			};
+			// SAFETY: the pane backend and manager use only pi.exec on this test double.
 			const piExec = { exec: vi.fn() } as never;
 			const spawnPane = createPaneChildSpawner({ baseDir: taskDir, env: {} });
 			const manager = new SubagentManager((task) => spawnPane({
@@ -355,6 +357,7 @@ describe("subagent tools", () => {
 					resolve({ stdout: JSON.stringify({ result: { panes: [] } }), stderr: "", code: 0, killed: false });
 				}, duration);
 			}));
+			// SAFETY: exec implements the Pi exec result contract exercised by the real Herdr adapter.
 			const piExec = { exec } as never;
 			const spawnPane = createPaneChildSpawner({ baseDir: taskDir, env: {} });
 			const createWorktree = vi.fn(async () => ({ ok: true as const, path: "/repo.sumo-worktrees/sumo__worker", branch: "sumo/worker", baseRef: "HEAD" }));

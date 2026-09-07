@@ -57,7 +57,7 @@ export function processRows(execute = execFileSync) {
 					malformedRows += 1;
 					continue;
 				}
-				rows.push({ pid: Number(match[1]), ppid: Number(match[2]), pgid: Number(match[3]), state: match[4], start: match[5], command: match[6] });
+				rows.push({ pid: Number(match[1]), ppid: Number(match[2]), pgid: Number(match[3]), state: match[4], start: match[5], command: match[6].trimEnd() });
 			}
 			// ps rows can carry process environments; count unparseable rows without
 			// echoing them so the issue stays safe to print.
@@ -481,6 +481,7 @@ function inspectHarnessProcessGroup(registration, table, currentPgid, readProces
 	if (ownerStart !== ownerProcessStart) {
 		return { status: "unverified", identityStatus: "different", error: "owner birth identity changed" };
 	}
+	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- registrations parsed from JSONL are untrusted at this effect boundary
 	if (ownershipMode === "shared" && (typeof ownerToken !== "string" || ownerToken.length === 0
 		|| !hasHarnessSignature(owner) || !hasProcessMarker(owner, HARNESS_OWNER_TOKEN_ENV_KEY, ownerToken))) {
 		return { status: "unverified", identityStatus: "different", error: "run owner authentication changed" };

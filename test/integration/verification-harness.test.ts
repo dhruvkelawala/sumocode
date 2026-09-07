@@ -155,7 +155,7 @@ describe("verification harness v2 seam", () => {
 		expect(events).toContainEqual(expect.objectContaining({ event: "exit", pid: child.child.pid }));
 	});
 
-	it("reclaims a title-hidden child through authenticated preflight after its owner path is gone", async () => {
+	it("reports a dead run's title-hidden survivor by identity and never signals it from --fix", async () => {
 		const child = spawnSupervisedProcess(
 			process.execPath,
 			[join(process.cwd(), "test/integration/fixtures/title-changing-harness-child.mjs")],
@@ -171,6 +171,7 @@ describe("verification harness v2 seam", () => {
 		});
 
 		const root = resolve(child.evidence.evidenceDir, "../../..");
+		// A run whose owner is gone: the child is reparented and its owner row is absent.
 		const withoutOwnerPath = () => processRows().rows
 			.filter((row) => row.pid !== process.pid)
 			.map((row) => row.pid === child.pid ? { ...row, ppid: 1 } : row);
@@ -180,15 +181,25 @@ describe("verification harness v2 seam", () => {
 			rows: withoutOwnerPath(),
 			env: {},
 		});
-		expect(report.issues.find((issue) => issue.code === "orphan-harness-children")?.rows)
-			.toContainEqual(expect.objectContaining({ pid: child.pid, command: "pi" }));
+		const orphanIssue = report.issues.find((issue) => issue.code === "orphan-harness-children");
+		expect(orphanIssue?.rows).toContainEqual(expect.objectContaining({ pid: child.pid, command: "pi" }));
+		// The survivor is named with its immutable identity for a human to act on.
+		expect(orphanIssue?.registeredSurvivors).toContainEqual(expect.objectContaining({ pid: child.pid, pgid: child.pgid }));
+		expect(orphanIssue?.remediation).toContain(`pid ${child.pid} pgid ${child.pgid} born `);
 
+		// The record it was matched from is same-user writable, so --fix must not act on it.
+		const signals: Array<[number, NodeJS.Signals | number]> = [];
 		await fixIntegrationPreflight(report, {
 			rows: withoutOwnerPath(),
 			readRows: withoutOwnerPath,
 			currentPgid: 999_999,
-			kill: process.kill.bind(process),
+			kill: (pid, signal) => { signals.push([pid, signal ?? 0]); return true; },
+			wait: async () => {},
 		});
+		expect(signals.filter(([pid]) => pid === child.pid || pid === -child.pgid)).toEqual([]);
+		expect(() => process.kill(child.pid, 0)).not.toThrow();
+		// The supervisor that spawned it still holds the key in memory and reaps it.
+		await child.terminate();
 		expect(() => process.kill(-child.pgid, 0)).toThrow();
 	});
 

@@ -1,6 +1,6 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -157,7 +157,6 @@ async function waitForDiagnosticCount(path: string, event: string, count: number
 
 let ownedServer: ChildProcess | undefined;
 let ownedSession: string | undefined;
-let tempRoot: string | undefined;
 
 async function stopOwnedSession(): Promise<void> {
 	if (ownedSession) await sessionExec(ownedSession, ["session", "stop", ownedSession, "--json"], 5_000);
@@ -173,20 +172,19 @@ async function stopOwnedSession(): Promise<void> {
 
 afterEach(async () => {
 	await stopOwnedSession();
-	if (tempRoot) await rm(tempRoot, { recursive: true, force: true });
-	tempRoot = undefined;
 });
 
 describe.skipIf(!LIVE_HERDR)("live Herdr visible pane reclamation", () => {
 	it("starts real default-worktree implement-cheap Pi children after explicit and automatic close", async () => {
-		tempRoot = await mkdtemp(join(tmpdir(), "sumocode-issue470-live-"));
 		const runToken = randomUUID().slice(0, 8);
+		const retainedSessionDir = join(tmpdir(), `sumocode-issue470-retained-session-${process.pid}-${runToken}`);
 		const retainedRepo = join(tmpdir(), `sumocode-issue470-retained-repo-${process.pid}-${runToken}`);
-		const agentDir = join(tempRoot, "agent");
-		const taskDir = join(tempRoot, "tasks");
-		const rpcDiagnostics = join(tempRoot, "rpc-diagnostics.jsonl");
+		const agentDir = join(retainedSessionDir, "agent");
+		const taskDir = join(retainedSessionDir, "tasks");
+		const rpcDiagnostics = join(retainedSessionDir, "rpc-diagnostics.jsonl");
+		await mkdir(retainedSessionDir, { recursive: true });
 		await initializeRetainedGitRepo(retainedRepo);
-		process.stdout.write(`[issue470 live] preserving test repo and created worktree: ${retainedRepo}\n`);
+		process.stdout.write(`[issue470 live] preserving test repo, created worktrees, and session artifacts: ${retainedRepo} · ${retainedSessionDir}\n`);
 		await writeFauxProvider(agentDir);
 		ownedSession = `sumocode-issue470-${process.pid}-${runToken}`;
 		const sessionName = ownedSession;
@@ -258,7 +256,7 @@ describe.skipIf(!LIVE_HERDR)("live Herdr visible pane reclamation", () => {
 		const ctx = { cwd: retainedRepo, model: { provider: "issue470-live", id: "implement-cheap" } };
 		const childPgids: number[] = [];
 		const childPaneIds: string[] = [];
-		let retainedWorktreePath: string | undefined;
+		const retainedWorktreePaths: string[] = [];
 		const childPgid = (index: number): number => {
 			const pgid = childPgids[index];
 			if (pgid === undefined) throw new Error(`child ${index + 1} did not publish a process group`);
@@ -271,26 +269,23 @@ describe.skipIf(!LIVE_HERDR)("live Herdr visible pane reclamation", () => {
 				name: `issue470 child ${runToken} ${sequence}`,
 				role: "implement-cheap",
 				visible: true,
-				// The first child intentionally omits this override: implement-cheap's
-				// defaultWorktree=true must create and execute inside real isolation.
-				worktree: sequence === 1 ? undefined : false,
 				model: "issue470-live/implement-cheap",
 			}, undefined, undefined, ctx);
 			expect(result.content[0]?.text).toContain(`Started sa-${sequence}`);
 			const id = result.details?.subagent?.id;
 			if (!id) throw new Error(`spawn ${sequence} did not return a subagent id`);
 			const snapshot = manager.get(id);
-			if (sequence === 1) {
-				retainedWorktreePath = snapshot?.worktree?.path;
-				expect(retainedWorktreePath).toBeTruthy();
-				expect(snapshot?.cwd).toBe(retainedWorktreePath);
-				expect(retainedWorktreePath?.startsWith(tempRoot!)).toBe(false);
-				const taskEntry = (await readdir(taskDir)).find((candidate) => candidate.startsWith(`${id}-`));
-				if (!taskEntry) throw new Error(`${id} did not create its visible task directory`);
-				const script = await readFile(join(taskDir, taskEntry, "run.sh"), "utf8");
-				expect(script).toContain(resolve(ROOT, "bin/sumocode.sh"));
-				expect(script).toContain(resolve(ROOT, "node_modules/.bin/pi"));
-			} else expect(snapshot?.worktree).toBeUndefined();
+			const retainedWorktreePath = snapshot?.worktree?.path;
+			expect(retainedWorktreePath).toBeTruthy();
+			if (!retainedWorktreePath) throw new Error(`${id} did not create its default worktree`);
+			retainedWorktreePaths.push(retainedWorktreePath);
+			expect(snapshot?.cwd).toBe(retainedWorktreePath);
+			expect(retainedWorktreePath.startsWith(retainedSessionDir)).toBe(false);
+			const taskEntry = (await readdir(taskDir)).find((candidate) => candidate.startsWith(`${id}-`));
+			if (!taskEntry) throw new Error(`${id} did not create its visible task directory`);
+			const script = await readFile(join(taskDir, taskEntry, "run.sh"), "utf8");
+			expect(script).toContain(resolve(ROOT, "bin/sumocode.sh"));
+			expect(script).toContain(resolve(ROOT, "node_modules/.bin/pi"));
 			const paneId = await waitFor(async () => manager.get(id)?.pane?.paneId, 10_000, `${id} pane attachment`);
 			const pgid = await waitFor(() => processGroupForPane(sessionName, paneId), 10_000, `${id} process group`);
 			childPaneIds.push(paneId);
@@ -328,9 +323,12 @@ describe.skipIf(!LIVE_HERDR)("live Herdr visible pane reclamation", () => {
 		expect(after.map((pane) => pane.pane_id)).toEqual([parentPaneId]);
 		expect(new Set(childPaneIds).size).toBe(3);
 		expect(childPgids.every((pgid) => !processGroupAlive(pgid))).toBe(true);
-		if (!retainedWorktreePath) throw new Error("default-worktree child did not retain a worktree path");
+		expect(retainedWorktreePaths).toHaveLength(3);
+		expect(new Set(retainedWorktreePaths).size).toBe(3);
 		const worktreeList = await checkedExec("git", ["-C", retainedRepo, "worktree", "list", "--porcelain"]);
-		expect(worktreeList.stdout).toContain(`worktree ${retainedWorktreePath}`);
+		for (const retainedWorktreePath of retainedWorktreePaths) {
+			expect(worktreeList.stdout).toContain(`worktree ${retainedWorktreePath}`);
+		}
 		const diagnostics = await readFile(rpcDiagnostics, "utf8");
 		expect((diagnostics.match(/"event":"app_ready"/g) ?? []).length).toBeGreaterThanOrEqual(3);
 		expect(diagnostics).not.toContain("Timed out waiting for get_state response");

@@ -135,6 +135,7 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 				host,
 				pi,
 				placement: task.placement,
+				provisioningTimeoutMs: task.provisioningTimeoutMs,
 			});
 			return retention ? { ...child, retentionUnsupported: true } : child;
 		}

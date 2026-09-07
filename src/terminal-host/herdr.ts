@@ -261,7 +261,10 @@ async function cleanFailedChildStart(
 }
 
 async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): Promise<HostResult<StartedAgentPane>> {
-	const deadline: ProvisionDeadline = { expiresAt: Date.now() + HERDR_PANE_PROVISION_TOTAL_MS };
+	const requestedBudget = options.provisioningTimeoutMs ?? HERDR_PANE_PROVISION_TOTAL_MS;
+	const deadline: ProvisionDeadline = {
+		expiresAt: Date.now() + Math.min(HERDR_PANE_PROVISION_TOTAL_MS, Math.max(0, requestedBudget)),
+	};
 	let ownedPaneId: string | undefined;
 	let ownedTabId: string | undefined;
 	let workspaceAnchorToMove: { paneId: string; workspaceId: string } | undefined;

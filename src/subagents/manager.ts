@@ -22,6 +22,7 @@ const CANCEL_WAIT_MS = 5_500;
 const CLOSE_WAIT_MS = 15_000;
 const GIT_READ_TIMEOUT_MS = 5_000;
 const MANIFEST_TIMEOUT_MS = 5_000;
+const VISIBLE_PANE_PROVISION_TOTAL_MS = 4_750;
 
 export interface SubagentCapacityTaskSummary {
 	readonly id: string;
@@ -63,8 +64,14 @@ export type SubagentLaunch = SpawnSubagentTask & {
 	readonly worktreeRef?: SubagentWorktreeRef;
 	readonly placement?: AgentPanePlacement;
 };
-type BackendFactory = (task: SubagentLaunch) => SpawnedChild | Promise<SpawnedChild>;
+type BackendFactory = (task: SubagentLaunch & { provisioningTimeoutMs?: number }) => SpawnedChild | Promise<SpawnedChild>;
 type Listener = () => void;
+
+interface VisibleSpawnWaiter {
+	readonly expiresAt: number;
+	readonly resolve: (release: (() => void) | undefined) => void;
+	readonly timeout: ReturnType<typeof setTimeout>;
+}
 type WorktreeCreator = (options: CreateWorktreeOptions) => Promise<CreateWorktreeResult>;
 type WorktreeBaseRefResolver = (worktreePath: string) => Promise<string | undefined>;
 
@@ -188,7 +195,8 @@ export class SubagentManager {
 	private readonly initialVisibleTabId?: string;
 	private readonly onDiagnostic?: (diagnostic: SubagentManagerDiagnostic) => void;
 	private subagentsTabId?: string;
-	private visibleSpawnTail: Promise<void> = Promise.resolve();
+	private visibleSpawnReserved = false;
+	private readonly visibleSpawnWaiters: VisibleSpawnWaiter[] = [];
 	private dequeueTail: Promise<void> = Promise.resolve();
 	private readonly settlingIds = new Set<string>();
 	private readonly settlingPromises = new Map<string, Promise<void>>();
@@ -477,6 +485,7 @@ export class SubagentManager {
 		this.pendingSpawns.set(id, { title: task.title, createdAt });
 		let pending = true;
 		let releaseVisibleSpawn: (() => void) | undefined;
+		let provisioningTimeoutMs: number | undefined;
 		const releasePending = () => {
 			if (!pending) return;
 			pending = false;
@@ -555,7 +564,26 @@ export class SubagentManager {
 
 			let placement: AgentPanePlacement | undefined;
 			if (task.visible) {
-				releaseVisibleSpawn = await this.reserveVisibleSpawn();
+				// Git/worktree preparation is a separate preflight. The user-facing
+				// terminal-provisioning budget begins immediately before placement
+				// serialization and follows the spawn through the host backend.
+				const provisioningExpiresAt = Date.now() + VISIBLE_PANE_PROVISION_TOTAL_MS;
+				releaseVisibleSpawn = await this.reserveVisibleSpawn(provisioningExpiresAt);
+				provisioningTimeoutMs = Math.floor(provisioningExpiresAt - Date.now());
+				if (!releaseVisibleSpawn || provisioningTimeoutMs <= 0) {
+					releasePending();
+					const preservationNote = worktree ? ` Worktree created at ${worktree.path} is preserved.` : "";
+					return this.recordSpawnFailure(
+						task,
+						id,
+						createdAt,
+						manifestBaseRef,
+						`visible pane provisioning queue timed out before a terminal host slot became available${preservationNote}`,
+						childCwd,
+						worktree,
+						{ errorCode: "pane_unavailable" },
+					);
+				}
 				if (this.setupInterrupted(id, generation)) {
 					releasePending();
 					return this.recordSetupInterruption(task, id, createdAt, manifestBaseRef, "interrupted during setup", childCwd, worktree);
@@ -603,7 +631,7 @@ export class SubagentManager {
 			let child: SpawnedChild;
 			try {
 				child = await this.backendFactory({ ...task, cwd: childCwd, id, signal: controller.signal, placement,
-					baseRef: manifestBaseRef, worktreeRef: worktree });
+					baseRef: manifestBaseRef, worktreeRef: worktree, provisioningTimeoutMs });
 			} catch (error) {
 				this.workspacePlacedIds.delete(id);
 				releasePending();
@@ -957,12 +985,48 @@ export class SubagentManager {
 		return this.recordSpawnFailure(task, id, createdAt, baseRef, errorText, cwd, worktree);
 	}
 
-	private async reserveVisibleSpawn(): Promise<() => void> {
-		const previous = this.visibleSpawnTail;
-		let release = (): void => undefined;
-		this.visibleSpawnTail = new Promise<void>((resolve) => { release = resolve; });
-		await previous;
-		return release;
+	private reserveVisibleSpawn(expiresAt: number): Promise<(() => void) | undefined> {
+		if (!this.visibleSpawnReserved) {
+			this.visibleSpawnReserved = true;
+			return Promise.resolve(this.makeVisibleSpawnRelease());
+		}
+		const waitMs = Math.floor(expiresAt - Date.now());
+		if (waitMs <= 0) return Promise.resolve(undefined);
+		return new Promise((resolve) => {
+			const waiter: VisibleSpawnWaiter = {
+				expiresAt,
+				resolve,
+				timeout: setTimeout(() => {
+					const index = this.visibleSpawnWaiters.indexOf(waiter);
+					if (index === -1) return;
+					this.visibleSpawnWaiters.splice(index, 1);
+					resolve(undefined);
+				}, waitMs),
+			};
+			this.visibleSpawnWaiters.push(waiter);
+		});
+	}
+
+	private makeVisibleSpawnRelease(): () => void {
+		let released = false;
+		return () => {
+			if (released) return;
+			released = true;
+			for (;;) {
+				const waiter = this.visibleSpawnWaiters.shift();
+				if (!waiter) {
+					this.visibleSpawnReserved = false;
+					return;
+				}
+				clearTimeout(waiter.timeout);
+				if (waiter.expiresAt <= Date.now()) {
+					waiter.resolve(undefined);
+					continue;
+				}
+				waiter.resolve(this.makeVisibleSpawnRelease());
+				return;
+			}
+		};
 	}
 
 	private recordSpawnFailure(
@@ -973,12 +1037,15 @@ export class SubagentManager {
 		errorText: string,
 		cwd = task.cwd,
 		worktree?: SubagentWorktreeRef,
+		failure?: { readonly errorCode?: string; readonly errorReason?: string },
 	): SubagentSnapshot {
 		const snapshot: SubagentSnapshot = {
 			...makeInitialSnapshot(task, id, createdAt, baseRef, cwd, worktree),
 			status: "error",
 			settledAt: Date.now(),
 			errorText: errorText.slice(0, ERROR_TEXT_MAX),
+			errorCode: failure?.errorCode,
+			errorReason: failure?.errorReason?.slice(0, ERROR_TEXT_MAX),
 		};
 		this.snapshots.set(id, snapshot);
 		this.notify();

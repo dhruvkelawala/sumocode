@@ -25,6 +25,8 @@ export interface StartAgentPaneOptions {
 	placement: AgentPanePlacement;
 	/** Admit the new shell before submitting commands. Refusal preserves the pane for verified cleanup. */
 	beforeRun?(pane: PaneRef): Promise<void>;
+	/** Remaining portion of the caller's end-to-end provisioning budget. */
+	provisioningTimeoutMs?: number;
 }
 
 export interface StartedAgentPane {

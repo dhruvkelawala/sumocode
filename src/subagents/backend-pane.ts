@@ -94,6 +94,8 @@ export interface PaneChildOptions {
 	host: TerminalHost;
 	pi: PiExecLike;
 	placement: AgentPanePlacement;
+	/** Remaining shared manager budget after visible-placement reservation. */
+	provisioningTimeoutMs?: number;
 	readonly tools?: readonly string[];
 	readonly appendSystemPrompt?: string;
 	readonly launchGate?: VisibleLaunchGate;
@@ -168,6 +170,9 @@ const allocatePrivateTaskDir = (fs: PaneBackendFs, root: string, name: string): 
 };
 
 export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {}) => (options: PaneChildOptions): SpawnedChild => {
+	const provisioningExpiresAt = options.provisioningTimeoutMs === undefined
+		? undefined
+		: Date.now() + Math.max(0, options.provisioningTimeoutMs);
 	const fs = dependencies.fs ?? nodeFs;
 	const now = dependencies.now ?? Date.now;
 	const baseDir = resolve(dependencies.baseDir ?? join(process.env.TMPDIR ?? "/tmp", "sumocode-subagents"));
@@ -675,6 +680,9 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 					cwd: options.cwd,
 					shellCommand,
 					placement: options.placement,
+					provisioningTimeoutMs: provisioningExpiresAt === undefined
+						? undefined
+						: Math.max(0, Math.floor(provisioningExpiresAt - Date.now())),
 					beforeRun: gate ? async () => {
 						if (launchBlocked || options.signal?.aborted) throw new Error("visible launch interrupted before command");
 						assertAuthority();

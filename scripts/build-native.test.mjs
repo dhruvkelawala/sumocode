@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { assertMetafileContainment, createBunResolver, makeNativePiBuildCopy, validatePiBuildGraph } from "./build-native.mjs";
@@ -10,6 +10,7 @@ import { assertMetafileContainment, createBunResolver, makeNativePiBuildCopy, va
 const temporaryDirectories = [];
 const bunBin = process.env.BUN_BIN ?? "bun";
 const bunProbe = spawnSync(bunBin, ["--version"], { encoding: "utf8" });
+const bunPresent = bunProbe.error?.code !== "ENOENT";
 const bunResolve = createBunResolver(bunBin);
 
 afterEach(({ task }) => {
@@ -22,6 +23,19 @@ afterEach(({ task }) => {
 function write(path, contents) {
 	mkdirSync(dirname(path), { recursive: true });
 	writeFileSync(path, contents);
+}
+
+function bunBundleInputs(entryPoint, root) {
+	const metafile = join(root, "metafile.json");
+	const result = spawnSync(bunBin, [
+		"--no-install", "--no-env-file", "build",
+		`--metafile=${metafile}`, `--outfile=${join(root, "bundle.js")}`, entryPoint,
+	], { cwd: root, encoding: "utf8", timeout: 10_000 });
+	if (result.error || result.status !== 0) {
+		throw new Error(`bun build failed${result.status !== null ? ` with exit ${result.status}` : ""}: ${result.error?.message ?? result.stderr.trim()}`);
+	}
+	return Object.keys(JSON.parse(readFileSync(metafile, "utf8")).inputs)
+		.map((input) => realpathSync(resolve(root, input)));
 }
 
 function fixture(layout) {
@@ -241,10 +255,55 @@ describe("native Pi build-source preparation", () => {
 		});
 	}
 
-	describe.runIf(bunProbe.status === 0)("Bun package entry resolution", () => {
+	describe.runIf(bunPresent)("Bun package entry resolution", () => {
 		it("uses the pinned Bun runtime", () => {
+			expect(bunProbe.error).toBeUndefined();
+			expect(bunProbe.status).toBe(0);
 			expect(bunProbe.stdout.trim()).toBe(readFileSync(new URL("../.bun-version", import.meta.url), "utf8").trim());
 		});
+
+		for (const scenario of [
+			{ name: "index.json", file: "index.json", contents: '{"source":"nearest"}\n' },
+			{ name: "Bun TS entry", file: "index.ts" },
+			{ name: "extensionless main", manifest: { main: "./lib/entry" }, file: "lib/entry.ts" },
+			{ name: "directory entry", manifest: { main: "./lib" }, file: "lib/index.ts" },
+			{ name: "module-only", manifest: { module: "./lib/entry.ts" }, file: "lib/entry.ts" },
+			{ name: "import-only exports", manifest: { exports: { ".": { types: "./index.d.ts", import: "./index.ts" } } }, file: "index.ts" },
+			{ name: "type-only skip", manifest: { types: "./index.d.ts" }, file: "index.d.ts", typeOnly: true },
+		]) {
+			it(`matches Bun build resolution for ${scenario.name}`, () => {
+				const directory = realpathSync(mkdtempSync(join(tmpdir(), "sumocode-bun-build-resolution-")));
+				temporaryDirectories.push(directory);
+				const root = join(directory, "package");
+				const name = `bun-build-${scenario.name.toLowerCase().replaceAll(" ", "-")}`;
+				const consumer = join(root, "node_modules/.pnpm/consumer@1/node_modules/consumer");
+				const entryPoint = join(consumer, "entry.ts");
+				const nearest = join(dirname(consumer), name);
+				if (scenario.manifest) {
+					write(join(nearest, "package.json"), JSON.stringify({ name, ...scenario.manifest }));
+				}
+				write(join(nearest, scenario.file), scenario.contents ?? (scenario.typeOnly
+					? "export interface Marker { value: string }\n"
+					: 'export default "nearest";\n'));
+				if (!scenario.typeOnly) {
+					const ancestor = join(root, "node_modules", name);
+					write(join(ancestor, "package.json"), JSON.stringify({ name, main: "index.ts" }));
+					write(join(ancestor, "index.ts"), 'export default "wrong-contained-ancestor";\n');
+				}
+				write(entryPoint, scenario.typeOnly
+					? `import type { Marker } from ${JSON.stringify(name)};\nconst marker: Marker = { value: "ok" };\nconsole.log(marker.value);\n`
+					: `import value from ${JSON.stringify(name)};\nconsole.log(value);\n`);
+
+				const selected = bunResolve(name, consumer);
+				const selectedCandidate = bunResolve(nearest, consumer);
+				expect(selectedCandidate).toBe(selected);
+				const packageInputs = bunBundleInputs(entryPoint, root).filter((input) =>
+					input === nearest || input.startsWith(`${nearest}/`)
+						|| input.includes(`${join("node_modules", name)}/`),
+				);
+				expect(packageInputs).toEqual(selected === undefined ? [] : [realpathSync(selected)]);
+			});
+		}
 
 		for (const [scenario, field, entry, file] of [
 			["index.mjs", undefined, undefined, "index.mjs"],

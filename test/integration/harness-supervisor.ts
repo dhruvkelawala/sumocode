@@ -32,6 +32,7 @@ export {
  */
 const SUPERVISOR_TERM_GRACE_MS = 750;
 const STDERR_TAIL_BYTES = 64 * 1024;
+const AUDIT_FAILURES_FILE = "audit-failures.jsonl";
 
 export type ReadinessState = "boot" | "input" | "app";
 
@@ -173,11 +174,8 @@ function appendManifest(event: HarnessManifestEvent, env: NodeJS.ProcessEnv = pr
 	mkdirSync(dirname(path), { recursive: true });
 	let writtenEvent = event;
 	if (event.event === "spawn") {
-		// Callers resolve auth before spawning; a spawn event without it is a
-		// programming error, and by now the child exists, so record it unsigned
-		// rather than throw and lose the handle. Unsigned registrations are
-		// never authenticated on the post-owner path.
-		if (auth !== undefined) writtenEvent = {
+		if (auth === undefined) throw new Error("harness spawn registration requires signing identity");
+		writtenEvent = {
 			...event,
 			runId: auth.runId,
 			registrationHmac: signSpawnRegistration(event, auth.runId, auth.signingKey),
@@ -200,6 +198,91 @@ function appendManifest(event: HarnessManifestEvent, env: NodeJS.ProcessEnv = pr
 			ownershipMode: "focused",
 		});
 	}
+}
+
+interface HarnessAuditFailure {
+	readonly phase: string;
+	readonly pid: number;
+	readonly pgid: number;
+	readonly processStart?: string;
+	readonly reason: string;
+}
+
+function reportAuditFailure(env: NodeJS.ProcessEnv, failure: HarnessAuditFailure): void {
+	try {
+		const root = harnessRoot(env);
+		appendFileSync(join(root, AUDIT_FAILURES_FILE), `${JSON.stringify({ ts: Date.now(), ...failure })}\n`, { mode: 0o600 });
+		markRunEvidenceRetained(root);
+	} catch {
+		// If run state itself is unwritable, the worker exit is the last gate against false green.
+		process.exitCode ||= 1;
+	}
+	try {
+		process.stderr.write(`[harness supervisor] audit write failed: pid ${failure.pid} pgid ${failure.pgid} born ${failure.processStart ?? "unknown"}; ${failure.phase}: ${failure.reason}\n`);
+	} catch {
+		// A closed stderr must not turn an event callback into an uncaught exception.
+	}
+}
+
+export function recordHarnessAuditFailure(
+	phase: string,
+	pid: number,
+	pgid: number,
+	env: NodeJS.ProcessEnv,
+	error: unknown,
+	processStart = liveProcessStart(pid),
+): void {
+	reportAuditFailure(env, { phase, pid, pgid, processStart, reason: String(error) });
+}
+
+export function harnessAuditFailures(root: string): HarnessAuditFailure[] {
+	let contents;
+	try { contents = readFileSync(join(root, AUDIT_FAILURES_FILE), "utf8"); } catch { return []; }
+	const failures: HarnessAuditFailure[] = [];
+	for (const line of contents.split("\n")) {
+		if (!line.trim()) continue;
+		try {
+			failures.push(JSON.parse(line) as HarnessAuditFailure);
+		} catch {
+			failures.push({ phase: "audit record", pid: 0, pgid: 0, reason: "malformed audit failure record" });
+		}
+	}
+	return failures;
+}
+
+function appendLifecycleManifest(event: HarnessManifestEvent, env: NodeJS.ProcessEnv, processStart: string | undefined): void {
+	try {
+		appendManifest(event, env);
+	} catch (error) {
+		reportAuditFailure(env, {
+			phase: `${event.event} manifest`,
+			pid: event.pid,
+			pgid: event.pgid,
+			processStart,
+			reason: String(error),
+		});
+	}
+}
+
+function failSpawnRegistration(
+	error: unknown,
+	env: NodeJS.ProcessEnv,
+	registration: HarnessGroupRegistration,
+	killLeader: () => boolean,
+): never {
+	reportAuditFailure(env, {
+		phase: "spawn registration",
+		pid: registration.pid,
+		pgid: registration.pgid,
+		processStart: registration.processStart,
+		reason: String(error),
+	});
+	try {
+		if (!killLeader()) throw new Error("the exact child handle rejected SIGKILL");
+	} catch (cleanupError) {
+		throw new Error(`spawn registration failed and exact-child cleanup could not be requested for pid ${registration.pid}: ${String(cleanupError)}; registration error: ${String(error)}`);
+	}
+	throw error;
 }
 
 function shellArg(value: string): string {
@@ -357,20 +440,30 @@ export function spawnSupervisedProcess(command: string, args: readonly string[],
 	const pid = child.pid;
 	const pgid = pid;
 	const registration = harnessGroupRegistration(pid, pgid, env, auth);
-	appendManifest({
-		event: "spawn",
-		pid,
-		pgid,
-		processStart: registration.processStart,
-		ownerPid: registration.ownerPid,
-		ownerProcessStart: registration.ownerProcessStart,
-		ownershipMode: registration.ownershipMode,
-		argv: [command, ...args],
-		evidenceDir: evidence.evidenceDir,
-	}, env, auth);
-	child.stderr?.on("data", (chunk: Buffer | string) => appendFileSync(evidence.stderrPath, chunk));
+	try {
+		appendManifest({
+			event: "spawn",
+			pid,
+			pgid,
+			processStart: registration.processStart,
+			ownerPid: registration.ownerPid,
+			ownerProcessStart: registration.ownerProcessStart,
+			ownershipMode: registration.ownershipMode,
+			argv: [command, ...args],
+			evidenceDir: evidence.evidenceDir,
+		}, env, auth);
+	} catch (error) {
+		failSpawnRegistration(error, env, registration, () => child.kill("SIGKILL"));
+	}
+	child.stderr?.on("data", (chunk: Buffer | string) => {
+		try {
+			appendFileSync(evidence.stderrPath, chunk);
+		} catch (error) {
+			reportAuditFailure(env, { phase: "stderr capture", pid, pgid, processStart: registration.processStart, reason: String(error) });
+		}
+	});
 	const exited = new Promise<void>((resolveExit) => child.once("exit", (code, signal) => {
-		appendManifest({ event: "exit", pid, pgid, code, signal }, env);
+		appendLifecycleManifest({ event: "exit", pid, pgid, code, signal }, env, registration.processStart);
 		resolveExit();
 	}));
 	let reaping: Promise<void> | undefined;
@@ -395,7 +488,7 @@ export function spawnSupervisedProcess(command: string, args: readonly string[],
 						try { child.kill("SIGKILL"); } catch { /* child exited at the boundary */ }
 					}
 					await Promise.race([exited, new Promise<void>((resolveDelay) => setTimeout(resolveDelay, SUPERVISOR_TERM_GRACE_MS))]);
-					appendManifest({ event: "reaped", pid, pgid }, env);
+					appendLifecycleManifest({ event: "reaped", pid, pgid }, env, registration.processStart);
 				}
 			})();
 			return reaping;
@@ -411,31 +504,35 @@ export function spawnSupervisedProcess(command: string, args: readonly string[],
 
 /**
  * The PTY child already exists when this runs, so it takes the auth the
- * caller resolved with requireHarnessAuth BEFORE spawning and never throws.
+ * caller resolved with requireHarnessAuth BEFORE spawning.
  */
 export function supervisePtyProcess(pid: number, evidence: ChildEvidenceContext, env: NodeJS.ProcessEnv, auth: HarnessAuth): Pick<SupervisedProcess, "pid" | "pgid" | "evidence" | "terminate" | "captureFailure"> {
 	const pgid = pid;
 	let reaping: Promise<void> | undefined;
 	env[HARNESS_SIGNATURE_ENV_KEY] = HARNESS_SIGNATURE;
 	const registration = harnessGroupRegistration(pid, pgid, env, auth);
-	appendManifest({
-		event: "spawn",
-		pid,
-		pgid,
-		processStart: registration.processStart,
-		ownerPid: registration.ownerPid,
-		ownerProcessStart: registration.ownerProcessStart,
-		ownershipMode: registration.ownershipMode,
-		argv: evidence.argv,
-		evidenceDir: evidence.evidenceDir,
-		kind: "pty",
-	}, env, auth);
+	try {
+		appendManifest({
+			event: "spawn",
+			pid,
+			pgid,
+			processStart: registration.processStart,
+			ownerPid: registration.ownerPid,
+			ownerProcessStart: registration.ownerProcessStart,
+			ownershipMode: registration.ownershipMode,
+			argv: evidence.argv,
+			evidenceDir: evidence.evidenceDir,
+			kind: "pty",
+		}, env, auth);
+	} catch (error) {
+		failSpawnRegistration(error, env, registration, () => process.kill(pid, "SIGKILL"));
+	}
 	return {
 		pid,
 		pgid,
 		evidence,
 		terminate(): Promise<void> {
-			reaping ??= terminateGroup(registration).then(() => appendManifest({ event: "reaped", pid, pgid }, env));
+			reaping ??= terminateGroup(registration).then(() => appendLifecycleManifest({ event: "reaped", pid, pgid }, env, registration.processStart));
 			return reaping;
 		},
 		captureFailure(output = "", finalScreen = ""): Promise<string> {
@@ -445,7 +542,7 @@ export function supervisePtyProcess(pid: number, evidence: ChildEvidenceContext,
 }
 
 export function recordPtyExit(pid: number, pgid: number, exitCode: number, signal: number | undefined, env: NodeJS.ProcessEnv): void {
-	appendManifest({ event: "exit", pid, pgid, code: exitCode, signal, kind: "pty" }, env);
+	appendLifecycleManifest({ event: "exit", pid, pgid, code: exitCode, signal, kind: "pty" }, env, liveProcessStart(pid));
 }
 
 // Register at import time so every focused Vitest file that imports this seam gets a final
@@ -461,15 +558,16 @@ afterAll(async () => {
 	}
 	const survivors = results.filter((result) => result.status !== "exited");
 	const unreaped = results.filter((result) => result.status === "survived" || result.status === "unverified");
+	const auditFailures = harnessAuditFailures(root);
 	process.stdout.write(`[focused harness] zero-survivor audit: ${survivors.length} survivors across ${focusedProcessGroups.size} registered process group(s)\n`);
-	if (survivors.length > 0) markRunEvidenceRetained(root);
+	if (survivors.length > 0 || auditFailures.length > 0) markRunEvidenceRetained(root);
 	if (!existsSync(join(root, "evidence-retained.json"))) rmSync(root, { recursive: true, force: true });
 	fallbackRoot = undefined;
 	fallbackOwnerToken = undefined;
 	fallbackRunId = undefined;
 	fallbackSigningKey = undefined;
 	focusedProcessGroups.clear();
-	if (survivors.length > 0) {
-		throw new Error(`focused harness leaked ${survivors.length} process group(s); ${unreaped.length} remained after TERM→KILL`);
+	if (survivors.length > 0 || auditFailures.length > 0) {
+		throw new Error(`focused harness failed: ${survivors.length} surviving process group(s), ${unreaped.length} unreaped, ${auditFailures.length} audit write failure(s)`);
 	}
 });

@@ -472,16 +472,10 @@ function inspectHarnessProcessGroup(registration, table, currentPgid, readProces
 		return { status: "unverified", identityStatus: "different", error: "owner ancestry changed" };
 	}
 	if (ownerPath !== "reached") {
-		// Post-owner path: birth identity is the only tie left, and macOS ps
-		// reports lstart to whole seconds with no finer field (sess is always 0
-		// on Darwin). Require the leader to still be its own session leader
-		// (pgid == pid, as setsid spawned it) so a same-second PID reuse by an
-		// ordinary child of some shell cannot pass. A finer identity needs a
-		// native kinfo_proc read and is tracked as follow-up work.
+		// A valid HMAC authenticates the recorded tuple, not the live process.
+		// Whole-second lstart cannot distinguish a same-second pid/pgid reuse.
 		if (hasRegistrationAuth) {
-			return leader.pgid === leader.pid && pid === pgid
-				? { status: "owned" }
-				: { status: "unverified", identityStatus: "different", error: "leader is not its own group leader" };
+			return { status: "unverified", identityStatus: "unknown", error: "owner process unavailable and leader birth identity is only whole-second resolution" };
 		}
 		return membersCarryRunIdentity(members, ownerToken)
 			? { status: "owned" }
@@ -509,8 +503,8 @@ function inspectHarnessProcessGroup(registration, table, currentPgid, readProces
 /**
  * TERM→KILL a registered harness group only after checking the live leader,
  * its spawning owner, and every member's ancestry immediately before each
- * signal. A valid spawn HMAC plus the leader's matching birth can replace a
- * lost owner path; legacy registrations still need process-visible run identity.
+ * signal. If the owner is gone, only process-visible run identity can prove
+ * a leader-less descendant group; a spawn HMAC does not identify a live pid.
  */
 export async function reapHarnessProcessGroup(registration, {
 	readProcessTable = processRows,

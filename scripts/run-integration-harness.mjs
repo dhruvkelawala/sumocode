@@ -16,6 +16,7 @@ import {
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const RUNNER_TERM_GRACE_MS = 1_000;
+const AUDIT_FAILURES_FILE = "audit-failures.jsonl";
 
 function groupAlive(pgid) {
 	try { process.kill(-pgid, 0); return true; } catch { return false; }
@@ -83,7 +84,7 @@ export async function manifestProcessGroups(manifest, ownerToken, { runId, signi
 	return [...groups.values()];
 }
 
-async function auditAndReap(manifest, ownerToken, auth) {
+export async function auditAndReap(manifest, ownerToken, auth) {
 	const groups = await manifestProcessGroups(manifest, ownerToken, auth);
 	const results = [];
 	for (const group of groups) {
@@ -92,9 +93,19 @@ async function auditAndReap(manifest, ownerToken, auth) {
 		}) });
 	}
 	const nonclean = results.filter(({ result }) => result.status !== "exited");
-	if (nonclean.length > 0) {
-		const details = nonclean.map(({ group, result }) => `${group.pgid}:${result.status}${result.identityStatus ? `/${result.identityStatus}` : ""}${result.error ? ` (${result.error})` : ""}`).join(", ");
-		process.stderr.write(`[integration harness] zero-orphan audit FAILED: ${nonclean.length} nonclean registered group(s) (${details})\n`);
+	let auditFailures = [];
+	try {
+		const contents = await readFile(join(resolve(manifest, ".."), AUDIT_FAILURES_FILE), "utf8");
+		auditFailures = contents.split("\n").filter((line) => line.trim()).map((line) => {
+			try { return JSON.parse(line); } catch { return { reason: "malformed audit failure record" }; }
+		});
+	} catch {}
+	if (nonclean.length > 0 || auditFailures.length > 0) {
+		const details = [
+			...nonclean.map(({ group, result }) => `pid ${group.pid} pgid ${group.pgid} born ${group.processStart ?? "unknown"}: ${result.status}${result.identityStatus ? `/${result.identityStatus}` : ""}${result.error ? ` (${result.error})` : ""}`),
+			...auditFailures.map((failure) => `pid ${failure.pid ?? "unknown"} pgid ${failure.pgid ?? "unknown"} born ${failure.processStart ?? "unknown"}: ${failure.phase ?? "audit"} (${failure.reason ?? "unknown reason"})`),
+		].join(", ");
+		process.stderr.write(`[integration harness] zero-orphan audit FAILED: ${nonclean.length} nonclean registered group(s), ${auditFailures.length} audit write failure(s) (${details})\n`);
 		return false;
 	}
 	process.stdout.write(`[integration harness] zero-orphan audit: 0 survivors across ${groups.length} registered process group(s)\n`);

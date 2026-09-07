@@ -8,6 +8,7 @@ import {
 	createChildEvidenceContext,
 	HARNESS_SIGNATURE,
 	HARNESS_SIGNATURE_ENV_KEY,
+	recordHarnessAuditFailure,
 	recordPtyExit,
 	requireHarnessAuth,
 	supervisePtyProcess,
@@ -230,16 +231,15 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 	const command = options.command ?? process.env.PI_BIN ?? "pi";
 	const args = applyDefaultProjectTrustOverride(options.args ?? ["--offline", "--no-extensions", "-e", "./src/extension.ts", "--no-session"]);
 	const spawnPty = options.spawn ?? spawn;
-	const ownedAgentDir = options.env?.PI_CODING_AGENT_DIR === undefined ? createOwnedAgentDir() : undefined;
-	const envOverrides = ownedAgentDir === undefined ? options.env : { ...options.env, PI_CODING_AGENT_DIR: ownedAgentDir };
-	const childEnv = buildSpawnEnv(process.env, envOverrides);
+	const childEnv = buildSpawnEnv(process.env, options.env);
+	const isRealPty = options.spawn === undefined;
+	// Auth comes before owned directories as well as spawn, so refusal leaves no state.
+	const auth = isRealPty ? requireHarnessAuth(childEnv) : undefined;
 	const evidence: ChildEvidenceContext = createChildEvidenceContext([command, ...args], childEnv, childEnv.SUMO_TUI_DIAG_FILE);
+	const ownedAgentDir = options.env?.PI_CODING_AGENT_DIR === undefined ? createOwnedAgentDir() : undefined;
+	if (ownedAgentDir !== undefined) childEnv.PI_CODING_AGENT_DIR = ownedAgentDir;
 	childEnv.SUMO_TUI_DIAG_FILE = evidence.diagPath;
 	childEnv[HARNESS_SIGNATURE_ENV_KEY] = HARNESS_SIGNATURE;
-	const isRealPty = options.spawn === undefined;
-	// Resolve the signing identity before the child exists: failing afterwards
-	// would leave a detached PTY process with no handle to reap it.
-	const auth = isRealPty ? requireHarnessAuth(childEnv) : undefined;
 	let child: IPty;
 	try {
 		child = spawnPty(command, args, {
@@ -253,7 +253,13 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 		removeOwnedAgentDir(ownedAgentDir);
 		throw error;
 	}
-	const supervision = auth !== undefined ? supervisePtyProcess(child.pid, evidence, childEnv, auth) : undefined;
+	let supervision: ReturnType<typeof supervisePtyProcess> | undefined;
+	try {
+		supervision = auth !== undefined ? supervisePtyProcess(child.pid, evidence, childEnv, auth) : undefined;
+	} catch (error) {
+		removeOwnedAgentDir(ownedAgentDir);
+		throw error;
+	}
 
 	let output = "";
 	const waiters: Waiter[] = [];
@@ -269,7 +275,13 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 	}
 
 	child.onData((data) => {
-		if (isRealPty) appendFileSync(evidence.stderrPath, data);
+		if (isRealPty) {
+			try {
+				appendFileSync(evidence.stderrPath, data);
+			} catch (error) {
+				recordHarnessAuditFailure("pty stderr capture", child.pid, child.pid, childEnv, error);
+			}
+		}
 		output += data;
 		settleWaiters();
 		// Retained frames are ANSI-heavy. Keep enough history for a waiter that

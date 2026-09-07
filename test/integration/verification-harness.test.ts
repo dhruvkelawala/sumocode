@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
 	captureTimeoutEvidence,
 	HARNESS_OWNER_TOKEN_ENV_KEY,
+	harnessAuditFailures,
 	HARNESS_RUN_ID_ENV_KEY,
 	HARNESS_SIGNATURE,
 	HARNESS_SIGNATURE_ENV_KEY,
@@ -22,8 +23,8 @@ import {
 } from "../../scripts/lib/extension-bundle.mjs";
 import { signSpawnRegistration } from "../../scripts/lib/integration-harness-auth.mjs";
 import { fixIntegrationPreflight, inspectIntegrationPreflight, processRows, reapHarnessProcessGroup } from "../../scripts/preflight-integration.mjs";
-import { manifestProcessGroups, resolveHarnessExitCode } from "../../scripts/run-integration-harness.mjs";
-import { buildSpawnEnv } from "./spawn-pi-pty.js";
+import { auditAndReap, manifestProcessGroups, resolveHarnessExitCode } from "../../scripts/run-integration-harness.mjs";
+import { buildSpawnEnv, spawnPiPty } from "./spawn-pi-pty.js";
 
 const roots: string[] = [];
 const children: SupervisedProcess[] = [];
@@ -155,7 +156,7 @@ describe("verification harness v2 seam", () => {
 		expect(events).toContainEqual(expect.objectContaining({ event: "exit", pid: child.child.pid }));
 	});
 
-	it("refuses to spawn at all when the signing identity is unavailable", async () => {
+	it("refuses to spawn or allocate a Pi agent directory when signing identity is unavailable", async () => {
 		// The failure must happen BEFORE a child exists: a throw after spawn would
 		// leave a detached process with no handle to reap it.
 		const before = new Set(processRows().rows.map((row) => row.pid));
@@ -166,15 +167,85 @@ describe("verification harness v2 seam", () => {
 		const savedKey = process.env[HARNESS_SIGNING_KEY_ENV_KEY];
 		delete process.env[HARNESS_RUN_ID_ENV_KEY];
 		delete process.env[HARNESS_SIGNING_KEY_ENV_KEY];
+		const oldTmpdir = process.env.TMPDIR;
+		process.env.TMPDIR = env.SUMOCODE_INTEGRATION_RUN_ROOT;
 		try {
 			expect(() => spawnSupervisedProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { env, stdio: "ignore" }))
 				.toThrow(/signing identity is unavailable/);
+			expect(() => spawnPiPty({
+				command: "must-not-spawn",
+				env: { SUMOCODE_INTEGRATION_RUN_ROOT: env.SUMOCODE_INTEGRATION_RUN_ROOT },
+			})).toThrow(/signing identity is unavailable/);
+			expect(readdirSync(env.SUMOCODE_INTEGRATION_RUN_ROOT).filter((name) => name.startsWith("sumocode-pi-agent-"))).toEqual([]);
 		} finally {
+			if (oldTmpdir === undefined) delete process.env.TMPDIR;
+			else process.env.TMPDIR = oldTmpdir;
 			if (savedRunId !== undefined) process.env[HARNESS_RUN_ID_ENV_KEY] = savedRunId;
 			if (savedKey !== undefined) process.env[HARNESS_SIGNING_KEY_ENV_KEY] = savedKey;
 		}
 		const after = processRows().rows.filter((row) => !before.has(row.pid) && row.command.includes("setInterval"));
 		expect(after).toEqual([]);
+	});
+
+	it("kills the exact fresh child and records an audit failure when spawn registration cannot be written", async () => {
+		const root = createRunRoot();
+		const manifest = join(root, "children.jsonl");
+		mkdirSync(manifest);
+		const marker = `registration-failure-${Date.now()}`;
+		const oldRunId = process.env[HARNESS_RUN_ID_ENV_KEY];
+		const oldKey = process.env[HARNESS_SIGNING_KEY_ENV_KEY];
+		process.env[HARNESS_RUN_ID_ENV_KEY] = "registration-failure-run";
+		process.env[HARNESS_SIGNING_KEY_ENV_KEY] = "registration-failure-key";
+		try {
+			expect(() => spawnSupervisedProcess(process.execPath, ["-e", `process.title=${JSON.stringify(marker)};setInterval(()=>{},1000)`], {
+				env: { ...process.env, SUMOCODE_INTEGRATION_RUN_ROOT: root, SUMOCODE_INTEGRATION_MANIFEST: manifest },
+				stdio: "ignore",
+			})).toThrow();
+		} finally {
+			if (oldRunId === undefined) delete process.env[HARNESS_RUN_ID_ENV_KEY];
+			else process.env[HARNESS_RUN_ID_ENV_KEY] = oldRunId;
+			if (oldKey === undefined) delete process.env[HARNESS_SIGNING_KEY_ENV_KEY];
+			else process.env[HARNESS_SIGNING_KEY_ENV_KEY] = oldKey;
+		}
+		const deadline = Date.now() + 2_000;
+		while (processRows().rows.some((row) => row.command.includes(marker)) && Date.now() < deadline) {
+			Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+		}
+		expect(processRows().rows.some((row) => row.command.includes(marker))).toBe(false);
+		expect(harnessAuditFailures(root)).toContainEqual(expect.objectContaining({ phase: "spawn registration", reason: expect.any(String) }));
+	});
+
+	it("contains lifecycle write failures and makes the runner audit fail", async () => {
+		const root = createRunRoot();
+		const manifest = join(root, "children.jsonl");
+		const runId = "lifecycle-failure-run";
+		const signingKey = "lifecycle-failure-key";
+		const oldRunId = process.env[HARNESS_RUN_ID_ENV_KEY];
+		const oldKey = process.env[HARNESS_SIGNING_KEY_ENV_KEY];
+		process.env[HARNESS_RUN_ID_ENV_KEY] = runId;
+		process.env[HARNESS_SIGNING_KEY_ENV_KEY] = signingKey;
+		const child = (() => {
+			try {
+				return spawnSupervisedProcess(process.execPath, ["-e", "setTimeout(()=>console.error('late stderr'),20);setTimeout(()=>{},60)"], {
+					env: { ...process.env, SUMOCODE_INTEGRATION_RUN_ROOT: root, SUMOCODE_INTEGRATION_MANIFEST: manifest },
+					stdio: ["ignore", "ignore", "pipe"],
+				});
+			} finally {
+				if (oldRunId === undefined) delete process.env[HARNESS_RUN_ID_ENV_KEY];
+				else process.env[HARNESS_RUN_ID_ENV_KEY] = oldRunId;
+				if (oldKey === undefined) delete process.env[HARNESS_SIGNING_KEY_ENV_KEY];
+				else process.env[HARNESS_SIGNING_KEY_ENV_KEY] = oldKey;
+			}
+		})();
+		children.push(child);
+		rmSync(manifest, { force: true });
+		mkdirSync(manifest);
+		mkdirSync(child.evidence.stderrPath);
+		await new Promise<void>((resolveExit) => child.child.once("exit", () => resolveExit()));
+		await expect(child.terminate()).resolves.toBeUndefined();
+		const failures = harnessAuditFailures(root);
+		expect(failures.map((failure) => failure.phase)).toEqual(expect.arrayContaining(["stderr capture", "exit manifest", "reaped manifest"]));
+		await expect(auditAndReap(manifest, "unused", { runId, signingKey })).resolves.toBe(false);
 	});
 
 	it("reports a dead run's title-hidden survivor by identity and never signals it from --fix", async () => {
@@ -708,8 +779,8 @@ describe("verified harness group cleanup", () => {
 			.toBe("3aaabd84c11b95dd1e56a71dc5d165542de38863b2ed7148264447813b419a78");
 	});
 
-	it("cleans an authenticated tree even when titles hide every child marker", async () => {
-		const cleanup = fakeCleanup([{ rows: [owner, leader, member] }, { rows: [] }]);
+	it("cleans an authenticated tree while its owner identity is live", async () => {
+		const cleanup = fakeCleanup([{ rows: [owner, leader, member] }, { rows: [] }], starts, authenticatedRegistration);
 		await expect(cleanup.result).resolves.toMatchObject({ status: "reaped" });
 		expect(cleanup.signals).toEqual([[-registration.pgid, "SIGTERM"]]);
 	});
@@ -738,21 +809,15 @@ describe("verified harness group cleanup", () => {
 		expect(cleanup.signals).toEqual([]);
 	});
 
-	it("reaps a post-owner authenticated leader only while it is its own group leader", async () => {
-		// Owner gone (reparented to init), HMAC valid, birth matches: the
-		// birth-only path. Its one extra requirement is that the leader is
-		// still the setsid group leader it was spawned as.
-		const ownLeader = { ...leader, ppid: 1 };
-		const own = fakeCleanup([{ rows: [ownLeader] }, { rows: [] }], starts, authenticatedRegistration);
-		await expect(own.result).resolves.toMatchObject({ status: "reaped" });
-		expect(own.signals).toEqual([[-registration.pgid, "SIGTERM"]]);
-
-		// Same pid, same birth second, but a member of some other group: the
-		// shape a same-second PID reuse by a shell child would take.
-		const foreignGroup = { ...leader, ppid: 1, pgid: 58_001 };
-		const reused = fakeCleanup([{ rows: [foreignGroup] }], starts, authenticatedRegistration);
-		await expect(reused.result).resolves.toMatchObject({ status: "unverified" });
-		expect(reused.signals).toEqual([]);
+	it("refuses a post-owner authenticated leader with only coarse birth identity", async () => {
+		const sameTuple = { ...leader, ppid: 1, start: registration.processStart };
+		const cleanup = fakeCleanup([{ rows: [sameTuple] }], new Map(), authenticatedRegistration);
+		await expect(cleanup.result).resolves.toMatchObject({
+			status: "unverified",
+			identityStatus: "unknown",
+			error: "owner process unavailable and leader birth identity is only whole-second resolution",
+		});
+		expect(cleanup.signals).toEqual([]);
 	});
 
 	it("refuses a leader whose birth identity changed", async () => {
@@ -821,12 +886,12 @@ describe("verified harness group cleanup", () => {
 		expect(cleanup.signals).toEqual([]);
 	});
 
-	it("reaps a reparented title-hidden leader from an authenticated birth registration", async () => {
+	it("does not trust a reparented title-hidden leader from an authenticated coarse birth registration", async () => {
 		const hiddenLeader = { ...leader, ppid: 1, start: registration.processStart, command: "pi" };
 		const hiddenMember = { ...member, command: "pi" };
-		const cleanup = fakeCleanup([{ rows: [hiddenLeader, hiddenMember] }, { rows: [] }], new Map(), authenticatedRegistration);
-		await expect(cleanup.result).resolves.toMatchObject({ status: "reaped" });
-		expect(cleanup.signals).toEqual([[-registration.pgid, "SIGTERM"]]);
+		const cleanup = fakeCleanup([{ rows: [hiddenLeader, hiddenMember] }], new Map(), authenticatedRegistration);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "unverified", identityStatus: "unknown" });
+		expect(cleanup.signals).toEqual([]);
 	});
 
 	it.each([
@@ -891,7 +956,7 @@ describe("verified harness group cleanup", () => {
 	});
 
 	it("reaps signed descendants after leader exit while every member matches", async () => {
-		const cleanup = fakeCleanup([{ rows: [descendant] }, { rows: [descendant] }, { rows: [] }]);
+		const cleanup = fakeCleanup([{ rows: [descendant] }, { rows: [descendant] }, { rows: [] }], starts, authenticatedRegistration);
 		await expect(cleanup.result).resolves.toMatchObject({ status: "reaped" });
 		expect(cleanup.signals).toEqual([
 			[-registration.pgid, "SIGTERM"],

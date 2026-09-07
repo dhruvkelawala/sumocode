@@ -8,6 +8,7 @@ import {
 if (process.env[HARNESS_SIGNATURE_ENV_KEY] !== HARNESS_SIGNATURE) throw new Error("missing harness signature");
 if (!process.env[HARNESS_OWNER_TOKEN_ENV_KEY]) throw new Error("missing harness owner token");
 process.title = "pi";
+setTimeout(() => process.exit(0), 60_000);
 if (process.argv[2] === "child") {
 	process.stdout.write("ready\n");
 } else {

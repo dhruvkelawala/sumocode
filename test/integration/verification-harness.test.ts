@@ -19,7 +19,7 @@ import {
 	extensionOutputsHash,
 } from "../../scripts/lib/extension-bundle.mjs";
 import { fixIntegrationPreflight, inspectIntegrationPreflight, processRows, reapHarnessProcessGroup } from "../../scripts/preflight-integration.mjs";
-import { resolveHarnessExitCode } from "../../scripts/run-integration-harness.mjs";
+import { manifestProcessGroups, resolveHarnessExitCode } from "../../scripts/run-integration-harness.mjs";
 import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
 const roots: string[] = [];
@@ -113,6 +113,9 @@ describe("verification harness v2 seam", () => {
 				resolveReady();
 			});
 		});
+
+		const command = execFileSync("ps", ["eww", "-p", String(child.pid), "-o", "command="], { encoding: "utf8" });
+		expect(command).not.toContain(`${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE}`);
 
 		expect(child.shouldCaptureExitFailure(false)).toBe(true);
 		const termination = child.terminate();
@@ -661,6 +664,17 @@ describe("verified harness group cleanup", () => {
 		expect(cleanup.signals).toEqual([]);
 	});
 
+	it("refuses cleanup when an injected process row is null", async () => {
+		// SAFETY: the null row deliberately crosses the untrusted JavaScript process-table seam.
+		const cleanup = fakeCleanup([{ rows: [null] as unknown as FakeProcessRow[] }]);
+		await expect(cleanup.result).resolves.toMatchObject({
+			status: "unverified",
+			identityStatus: "unknown",
+			error: "process table malformed",
+		});
+		expect(cleanup.signals).toEqual([]);
+	});
+
 	it("refuses escalation when owner authentication changes during TERM grace", async () => {
 		const wrongOwner = { ...owner, command: `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} ${HARNESS_OWNER_TOKEN_ENV_KEY}=other-run node worker.js` };
 		const cleanup = fakeCleanup([
@@ -683,6 +697,13 @@ describe("verified harness group cleanup", () => {
 		const cleanup = fakeCleanup([{ rows: [signedLeader, signedMember] }, { rows: [] }]);
 		await expect(cleanup.result).resolves.toMatchObject({ status: "reaped" });
 		expect(cleanup.signals).toEqual([[-registration.pgid, "SIGTERM"]]);
+	});
+
+	it("refuses a member carrying a fake-pi name and token without a harness signature", async () => {
+		const unsigned = { ...leader, command: `/tmp/sumocode-fake-pi-unsigned/stub ${HARNESS_OWNER_TOKEN_ENV_KEY}=${ownerToken} node child.js` };
+		const cleanup = fakeCleanup([{ rows: [unsigned] }]);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "unverified", identityStatus: "different" });
+		expect(cleanup.signals).toEqual([]);
 	});
 
 	it("reports unverified instead of exited when actual processRows yields malformed rows", async () => {
@@ -714,6 +735,26 @@ describe("verified harness group cleanup", () => {
 		expect(cleanup.signals).toEqual([
 			[-registration.pgid, "SIGTERM"],
 			[-registration.pgid, "SIGKILL"],
+		]);
+	});
+});
+
+describe("harness manifest audit contract", () => {
+	it("treats a manifest's forged focused mode as shared", async () => {
+		const root = createRunRoot();
+		const manifest = join(root, "children.jsonl");
+		writeFileSync(manifest, `${JSON.stringify({
+			event: "spawn",
+			pid: 60_001,
+			pgid: 60_001,
+			processStart: "leader-start",
+			ownerPid: 59_001,
+			ownerProcessStart: "owner-start",
+			ownershipMode: "focused",
+		})}\n`);
+
+		await expect(manifestProcessGroups(manifest, "run-owner")).resolves.toEqual([
+			expect.objectContaining({ ownershipMode: "shared" }),
 		]);
 	});
 });

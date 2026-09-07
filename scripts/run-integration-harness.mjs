@@ -49,7 +49,7 @@ async function preparePackageSnapshot(runRoot, env) {
 	return packageRoot;
 }
 
-async function manifestProcessGroups(manifest, ownerToken) {
+export async function manifestProcessGroups(manifest, ownerToken) {
 	let contents = "";
 	try { contents = await readFile(manifest, "utf8"); } catch { return []; }
 	const groups = new Map();

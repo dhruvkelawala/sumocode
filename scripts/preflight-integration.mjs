@@ -343,8 +343,11 @@ function inspectHarnessProcessGroup(registration, table, currentPgid, readProces
 		&& typeof row.command === "string"
 		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- injected process tables may omit state; actual ps rows always carry it
 		&& (row.state === undefined || typeof row.state === "string"));
+	if (!rowsAreValid) {
+		return { status: "unverified", identityStatus: "unknown", error: "process table malformed" };
+	}
 	const rowsByPid = new Map(table.rows.map((row) => [row.pid, row]));
-	if (!rowsAreValid || rowsByPid.size !== table.rows.length) {
+	if (rowsByPid.size !== table.rows.length) {
 		return { status: "unverified", identityStatus: "unknown", error: "process table malformed" };
 	}
 	const { pid, pgid, processStart, ownerPid, ownerProcessStart, ownerToken, ownershipMode } = registration;

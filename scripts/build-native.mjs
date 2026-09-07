@@ -118,8 +118,8 @@ async function buildExtensionBundle(entryPoint, outPath) {
 	console.log(`[sumocode] extension bundle: ${outPath} (${output.text.length} bytes, externals: ${[...bareImports].join(", ") || "none"})`);
 }
 
-export function makeNativePiBuildCopy(piPkg, buildDir, packageRoot = root) {
-	const dependencies = validatePiBuildGraph(piPkg, packageRoot);
+export function makeNativePiBuildCopy(piPkg, buildDir, packageRoot = root, resolvePackage = resolvePackageWithNode) {
+	const dependencies = validatePiBuildGraph(piPkg, packageRoot, undefined, resolvePackage);
 	const manifest = JSON.parse(readFileSync(join(piPkg, "package.json"), "utf8"));
 	const piVersion = manifest.version;
 	if (piVersion !== PI_PIN) fail(`Bedrock-free child patch expects Pi ${PI_PIN}, found ${piVersion}`);
@@ -152,37 +152,47 @@ export function makeNativePiBuildCopy(piPkg, buildDir, packageRoot = root) {
 	return buildDir;
 }
 
-function manifestEntryPresent(directory, entry) {
-	if (!entry) return false;
-	const base = join(directory, entry);
-	// Mirror Node's legacy main resolution: the literal path, probed extensions
-	// (.mjs/.cjs for Bun), or a directory index. Presence only — no exports emulation.
-	if (existsSync(base)) return true;
-	if ([".js", ".mjs", ".cjs", ".json"].some((extension) => existsSync(`${base}${extension}`))) return true;
-	return ["index.js", "index.mjs", "index.cjs"].some((index) => existsSync(join(base, index)));
+function resolvePackageWithNode(directory) {
+	try {
+		return require.resolve(directory);
+	} catch (error) {
+		if (error?.code === "MODULE_NOT_FOUND") return undefined;
+		throw error;
+	}
 }
 
-function loadablePackageDirectory(directory) {
+export function createBunResolver(bunBin) {
+	return (specifier, from = root) => {
+		const result = spawnSync(bunBin, ["--no-install", "--no-env-file", "-e",
+			'try { process.stdout.write(Bun.resolveSync(process.argv[1], process.argv[2])) } catch (error) { if (["ERR_MODULE_NOT_FOUND", "MODULE_NOT_FOUND"].includes(error?.code)) process.exit(42); throw error }',
+			specifier, from,
+		], { cwd: root, encoding: "utf8" });
+		if (result.error) throw result.error;
+		if (result.signal) throw new Error(`Bun resolver exited on signal ${result.signal}`);
+		if (result.status === 42) return undefined;
+		if (result.status !== 0) throw new Error(`Bun resolver failed with exit ${result.status}: ${result.stderr.trim()}`);
+		return result.stdout;
+	};
+}
+
+function loadablePackageDirectory(directory, resolvePackage) {
 	const manifestPath = join(directory, "package.json");
 	if (existsSync(manifestPath)) {
 		const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-		// Import-only and private-subpath exports still need their package linked.
-		// Inspect presence, not CJS resolution or conditional-exports semantics.
+		// A package may expose only private subpaths, so its bare name is not
+		// necessarily resolvable. Exports still make the nearest package decisive.
 		if (manifest.exports != null) return true;
-		if (manifestEntryPresent(directory, manifest.main)) return true;
-		// Bun also bundles ESM-only trees whose `module` field is the only entry.
-		if (manifestEntryPresent(directory, manifest.module)) return true;
 	}
-	return ["index.js", "index.mjs", "index.cjs"].some((entry) => existsSync(join(directory, entry)));
+	return resolvePackage(directory) !== undefined;
 }
 
 /**
  * Check package contents and installed dependency edges, not JS import expressions.
  * Pre-check: fast-fail on definite escapes and select roots to link.
  * Node and Bun can resolve differently; post-build metafile containment is the
- * authoritative invariant, not this presence heuristic or a TOCTOU guard.
+ * authoritative escape invariant, while the injected resolver selects versions.
  */
-export function validatePiBuildGraph(piPkg, packageRoot, counts = { checked: 0, linked: 0, skipped: 0 }) {
+export function validatePiBuildGraph(piPkg, packageRoot, counts = { checked: 0, linked: 0, skipped: 0 }, resolvePackage = resolvePackageWithNode) {
 	const realRoot = realpathSync(packageRoot);
 	const directories = new Set();
 	const packages = new Map();
@@ -245,7 +255,7 @@ export function validatePiBuildGraph(piPkg, packageRoot, counts = { checked: 0, 
 				.find((directory) => {
 					if (!existsSync(directory) || !statSync(directory).isDirectory()) return false;
 					candidateFound = true;
-					return loadablePackageDirectory(directory);
+					return loadablePackageDirectory(directory, resolvePackage);
 				});
 			if (!dependency) {
 				if (!candidateFound && !name.startsWith("@types/")
@@ -311,7 +321,7 @@ async function main() {
 	const piPkg = resolve(dirname(piMainEntry), "..");
 	if (!existsSync(join(piPkg, "package.json"))) fail(`cannot locate installed Pi package root at ${piPkg}`);
 	const piRequire = createRequire(pathToFileURL(piMainEntry));
-	const piBuildDir = makeNativePiBuildCopy(piPkg, resolve(root, "dist/native/.pi-build"));
+	const piBuildDir = makeNativePiBuildCopy(piPkg, resolve(root, "dist/native/.pi-build"), root, createBunResolver(bunBin));
 	const piMetafile = resolve(root, "dist/native/sumocode-pi.metafile.json");
 	run(bunBin, [
 		"build",

@@ -5,9 +5,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { assertMetafileContainment, makeNativePiBuildCopy, validatePiBuildGraph } from "./build-native.mjs";
+import { assertMetafileContainment, createBunResolver, makeNativePiBuildCopy, validatePiBuildGraph } from "./build-native.mjs";
 
 const temporaryDirectories = [];
+const bunBin = process.env.BUN_BIN ?? "bun";
+const bunProbe = spawnSync(bunBin, ["--version"], { encoding: "utf8" });
+const bunResolve = createBunResolver(bunBin);
 
 afterEach(({ task }) => {
 	for (const directory of temporaryDirectories.splice(0)) {
@@ -165,6 +168,9 @@ describe("native Pi build-source preparation", () => {
 				expect(resolved.status).toBe(0);
 				expect(resolved.stdout.trim()).toBe(pathToFileURL(join(target, "index.js")).href);
 			}
+			if (bunProbe.status === 0) {
+				expect(bunResolve(name, dirname(manifestPath))).toBe(join(target, "index.js"));
+			}
 			if (scenario === "contained") {
 				makeNativePiBuildCopy(piPkg, buildDir, root);
 				expect(realpathSync(join(buildDir, "node_modules", name))).toBe(target);
@@ -209,49 +215,86 @@ describe("native Pi build-source preparation", () => {
 		});
 	}
 
-	// Bun bundles a dependency whose `module` field is its only entry even when
-	// Node's CJS resolution falls through, so the nearest module-only candidate
-	// must decide — not a farther contained ancestor.
-	it("links the nearest module-only candidate instead of the contained ancestor", () => {
-		const { root, piPkg, buildDir } = fixture("pnpm");
-		const name = "module-only-nearest";
-		const manifestPath = join(piPkg, "package.json");
-		const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-		manifest.dependencies[name] = "1.0.0";
-		write(manifestPath, JSON.stringify(manifest));
-		const nearest = join(piPkg, "../..", name);
-		write(join(nearest, "package.json"), JSON.stringify({ name, module: "esm.mjs" }));
-		write(join(nearest, "esm.mjs"), 'export const source = "nearest";\n');
-		const ancestor = join(root, "node_modules", name);
-		write(join(ancestor, "package.json"), JSON.stringify({ name, main: "index.js" }));
-		write(join(ancestor, "index.js"), 'module.exports = "contained-ancestor";\n');
-		// Node skips the module-only nearest candidate and resolves the ancestor.
-		expect(createRequire(manifestPath).resolve(name)).toBe(join(ancestor, "index.js"));
-		makeNativePiBuildCopy(piPkg, buildDir, root);
-		// Bun resolves the nearest dep, so the nearest must be the linked root.
-		expect(realpathSync(join(buildDir, "node_modules", name))).toBe(nearest);
-	});
+	for (const [scenario, field, entry, file] of [
+		["index.json", undefined, undefined, "index.json"],
+		["direct main", "main", "./lib/entry.json", "lib/entry.json"],
+		["extensionless main", "main", "./lib/entry", "lib/entry.json"],
+		["directory main", "main", "./lib", "lib/index.json"],
+	]) {
+		it(`uses Node's resolved nearest candidate for ${scenario}`, () => {
+			const { root, piPkg, buildDir } = fixture("pnpm");
+			const name = `node-${scenario.replaceAll(" ", "-")}-nearest`;
+			const manifestPath = join(piPkg, "package.json");
+			const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+			manifest.dependencies[name] = "1.0.0";
+			write(manifestPath, JSON.stringify(manifest));
+			const nearest = join(piPkg, "../..", name);
+			if (field) write(join(nearest, "package.json"), JSON.stringify({ name, [field]: entry }));
+			write(join(nearest, file), '{}\n');
+			const ancestor = join(root, "node_modules", name);
+			write(join(ancestor, "package.json"), JSON.stringify({ name, main: "index.js" }));
+			write(join(ancestor, "index.js"), 'module.exports = "contained-ancestor";\n');
+			const expectedEntry = join(nearest, file);
+			expect(createRequire(manifestPath).resolve(name)).toBe(expectedEntry);
+			makeNativePiBuildCopy(piPkg, buildDir, root);
+			expect(realpathSync(join(buildDir, "node_modules", name))).toBe(nearest);
+		});
+	}
 
-	// Node and Bun probe extensions and directory indexes for an extensionless main,
-	// so `main: "./lib/entry"` with `lib/entry.js` on disk is loadable. The literal-only
-	// check wrongly skipped such a nearest candidate and linked a same-named ancestor.
-	it("links the nearest extensionless-main candidate instead of the contained ancestor", () => {
-		const { root, piPkg, buildDir } = fixture("pnpm");
-		const name = "extensionless-main-nearest";
-		const manifestPath = join(piPkg, "package.json");
-		const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-		manifest.dependencies[name] = "1.0.0";
-		write(manifestPath, JSON.stringify(manifest));
-		const nearest = join(piPkg, "../..", name);
-		write(join(nearest, "package.json"), JSON.stringify({ name, main: "./lib/entry" }));
-		write(join(nearest, "lib/entry.js"), 'module.exports = "nearest";\n');
-		const ancestor = join(root, "node_modules", name);
-		write(join(ancestor, "package.json"), JSON.stringify({ name, main: "index.js" }));
-		write(join(ancestor, "index.js"), 'module.exports = "contained-ancestor";\n');
-		// Node probes the main field extensions: the nearest candidate itself resolves.
-		expect(createRequire(manifestPath).resolve(name)).toBe(join(nearest, "lib/entry.js"));
-		makeNativePiBuildCopy(piPkg, buildDir, root);
-		expect(realpathSync(join(buildDir, "node_modules", name))).toBe(nearest);
+	describe.runIf(bunProbe.status === 0)("Bun package entry resolution", () => {
+		it("uses the pinned Bun runtime", () => {
+			expect(bunProbe.stdout.trim()).toBe(readFileSync(new URL("../.bun-version", import.meta.url), "utf8").trim());
+		});
+
+		for (const [scenario, field, entry, file] of [
+			["index.mjs", undefined, undefined, "index.mjs"],
+			["index.cjs", undefined, undefined, "index.cjs"],
+			["index.ts", undefined, undefined, "index.ts"],
+			["direct main", "main", "./lib/entry.ts", "lib/entry.ts"],
+			["extensionless main", "main", "./lib/entry", "lib/entry.ts"],
+			["directory main", "main", "./lib", "lib/index.ts"],
+			["direct module", "module", "./lib/entry.ts", "lib/entry.ts"],
+			["extensionless module", "module", "./lib/entry", "lib/entry.ts"],
+			["directory module", "module", "./lib", "lib/index.ts"],
+		]) {
+			it(`uses Bun's resolved nearest candidate for ${scenario}`, () => {
+				const { root, piPkg, buildDir } = fixture("pnpm");
+				const name = `bun-${scenario.replaceAll(" ", "-")}-nearest`;
+				const manifestPath = join(piPkg, "package.json");
+				const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+				manifest.dependencies[name] = "1.0.0";
+				write(manifestPath, JSON.stringify(manifest));
+				const nearest = join(piPkg, "../..", name);
+				if (field) write(join(nearest, "package.json"), JSON.stringify({ name, [field]: entry }));
+				write(join(nearest, file), 'export default "nearest";\n');
+				const ancestor = join(root, "node_modules", name);
+				write(join(ancestor, "package.json"), JSON.stringify({ name, main: "index.js" }));
+				write(join(ancestor, "index.js"), 'module.exports = "contained-ancestor";\n');
+				const expectedEntry = join(nearest, file);
+				expect(bunResolve(name, dirname(manifestPath))).toBe(expectedEntry);
+				expect(bunResolve(nearest, dirname(manifestPath))).toBe(expectedEntry);
+				makeNativePiBuildCopy(piPkg, buildDir, root, (directory) => bunResolve(directory, dirname(manifestPath)));
+				expect(realpathSync(join(buildDir, "node_modules", name))).toBe(nearest);
+			});
+		}
+
+		it("rejects Bun's escaped nearest candidate before a contained ancestor", () => {
+			const { directory, root, piPkg, buildDir } = fixture("pnpm");
+			const name = "bun-escaped-nearest";
+			const manifestPath = join(piPkg, "package.json");
+			const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+			manifest.dependencies[name] = "1.0.0";
+			write(manifestPath, JSON.stringify(manifest));
+			const outside = join(directory, "outside-bun-package");
+			write(join(outside, "index.ts"), 'export default "outside";\n');
+			symlinkSync(outside, join(piPkg, "../..", name), "dir");
+			const ancestor = join(root, "node_modules", name);
+			write(join(ancestor, "index.js"), 'module.exports = "contained-ancestor";\n');
+			expect(bunResolve(name, dirname(manifestPath))).toBe(join(outside, "index.ts"));
+			expect(() => makeNativePiBuildCopy(piPkg, buildDir, root, bunResolve))
+				.toThrow(`Pi build dependency ${name} resolves outside ${root}: ${outside}`);
+			expect(existsSync(buildDir)).toBe(false);
+		});
 	});
 
 	it("skips entryless and type-only edges but keeps the missing-required sanity error", () => {
@@ -265,7 +308,12 @@ describe("native Pi build-source preparation", () => {
 			"broken-main": { main: "missing.js" },
 		})) {
 			manifest.dependencies[name] = "1";
-			write(join(piPkg, "../..", name, "package.json"), JSON.stringify(contents));
+			const target = join(piPkg, "../..", name);
+			write(join(target, "package.json"), JSON.stringify(contents));
+			if (contents.types) {
+				write(join(target, contents.types), "export {};\n");
+				if (bunProbe.status === 0) expect(bunResolve(target, dirname(manifestPath))).toBeUndefined();
+			}
 		}
 		manifest.dependencies["@types/absent"] = "1";
 		write(manifestPath, JSON.stringify(manifest));
@@ -277,19 +325,6 @@ describe("native Pi build-source preparation", () => {
 		write(manifestPath, JSON.stringify(manifest));
 		expect(() => validatePiBuildGraph(piPkg, root)).toThrow(/Cannot resolve Pi build dependency missing-required/);
 	});
-
-	for (const extension of ["mjs", "cjs"]) {
-		it(`links a manifestless index.${extension} without a CJS resolution oracle`, () => {
-			const { root, piPkg } = fixture("pnpm");
-			const manifestPath = join(piPkg, "package.json");
-			const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-			manifest.dependencies["index-only"] = "1";
-			write(manifestPath, JSON.stringify(manifest));
-			const target = join(piPkg, "../../index-only");
-			write(join(target, `index.${extension}`), 'throw new Error("must not execute");\n');
-			expect(validatePiBuildGraph(piPkg, root).get("index-only")).toBe(realpathSync(target));
-		});
-	}
 
 	for (const escape of ["nested transitive", "pnpm neighbor transitive", "pnpm peer transitive", "pnpm optional transitive", "package file", "package directory", "Pi dist file"]) {
 		it(`rejects an escaped ${escape} before linking the source graph`, () => {

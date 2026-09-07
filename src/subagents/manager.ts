@@ -1156,7 +1156,17 @@ export class SubagentManager {
 			if (!latest || isSettled(latest)) return;
 			let next: SubagentSnapshot;
 			if (outcome.kind === "completed") next = { ...latest, status: "done", settledAt, finalText: outcome.finalText || latest.finalText, liveText: "", manifest };
-			else if (outcome.kind === "failed") next = { ...latest, status: "error", settledAt, errorText: outcome.errorText.slice(0, ERROR_TEXT_MAX), finalText: outcome.partialText ?? latest.finalText, liveText: "", manifest };
+			else if (outcome.kind === "failed") next = {
+				...latest,
+				status: "error",
+				settledAt,
+				errorText: outcome.errorText.slice(0, ERROR_TEXT_MAX),
+				errorCode: outcome.errorCode,
+				errorReason: outcome.errorReason?.slice(0, ERROR_TEXT_MAX),
+				finalText: outcome.partialText ?? latest.finalText,
+				liveText: "",
+				manifest,
+			};
 			else next = { ...latest, status: "error", settledAt, errorText: "interrupted", finalText: outcome.partialText ?? latest.finalText, liveText: "", manifest };
 			this.snapshots.set(id, this.withBudget(next));
 			if ((this.waitInterest.get(id) ?? 0) > 0) this.consumedIds.add(id);

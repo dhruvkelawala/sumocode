@@ -25,7 +25,7 @@ export type SubagentEvent =
 
 export type RunOutcome =
 	| { kind: "completed"; finalText: string }
-	| { kind: "failed"; errorText: string; partialText?: string }
+	| { kind: "failed"; errorText: string; partialText?: string; errorCode?: string; errorReason?: string }
 	| { kind: "interrupted"; partialText?: string };
 
 export interface TranscriptItem {
@@ -88,6 +88,8 @@ export interface SubagentSnapshot extends Partial<SubagentBudgetState> {
 	readonly createdAt: number;
 	readonly settledAt?: number;
 	readonly errorText?: string;
+	readonly errorCode?: string;
+	readonly errorReason?: string;
 	readonly modelLabel?: string;
 	readonly thinkingLabel?: string;
 	readonly sessionFilePath?: string;

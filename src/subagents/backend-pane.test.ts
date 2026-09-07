@@ -112,7 +112,7 @@ const flushPromises = async (): Promise<void> => {
 };
 
 const createHarness = (
-	startResult: typeof startedPane | { ok: false; error: string } = startedPane,
+	startResult: typeof startedPane | { ok: false; error: string; code?: string; reason?: string } = startedPane,
 	placement: { kind: "tab"; tabId: string; direction: "right" } | { kind: "workspace"; workspaceId: string; paneId: string } = { kind: "tab", tabId: "w1:t1", direction: "right" },
 	appendSystemPrompt?: string,
 	spawnerDependencies?: { sendAckPollMs?: number; sendAckTimeoutMs?: number; resolveLauncher?: () => string; env?: NodeJS.ProcessEnv },
@@ -875,6 +875,26 @@ describe("pane subagent backend", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it("preserves a structured pane-unavailable host failure", async () => {
+		const harness = createHarness({
+			ok: false,
+			code: "pane_unavailable",
+			error: "herdr returned no pane for tab w5:t8",
+			reason: "tab has no available shell pane",
+		});
+		await flushPromises();
+
+		expect(settledEvents(harness.events)).toEqual([{
+			kind: "run-settled",
+			outcome: {
+				kind: "failed",
+				errorText: "herdr returned no pane for tab w5:t8",
+				errorCode: "pane_unavailable",
+				errorReason: "tab has no available shell pane",
+			},
+		}]);
 	});
 
 	it("retries an empty exit marker until the producer writes the code", async () => {

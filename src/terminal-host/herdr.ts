@@ -16,6 +16,7 @@ interface HerdrPaneInfoResult { pane?: HerdrPaneInfo }
 interface HerdrTabResult { tab?: { tab_id?: string; workspace_id?: string }; tab_id?: string; root_pane?: HerdrPaneInfo }
 interface HerdrWorktreeResult { root_pane?: HerdrPaneInfo; workspace?: { workspace_id?: string } }
 interface HerdrPaneListResult { panes?: HerdrPaneInfo[] }
+interface HerdrAgentExplainResult { explain?: string | { reason?: string; message?: string } }
 
 function parseEnvelope<T>(stdout: string): HostResult<T> {
 	try {
@@ -48,6 +49,8 @@ function parseHerdrError(result: { stderr: string; stdout: string }): { code?: s
 
 const HERDR_AGENT_PROMPT_TIMEOUT_MS = 10_000;
 const CHILD_CLEANUP_ERROR_MAX = 1_024;
+const HERDR_PANE_PROVISION_TIMEOUT_MS = 2_000;
+const HERDR_EXPLAIN_TIMEOUT_MS = 500;
 
 const hasHerdrCaller = (env: NodeJS.ProcessEnv = process.env): boolean => env.HERDR_ENV === "1" && Boolean(env.HERDR_PANE_ID);
 
@@ -58,17 +61,17 @@ function workspaceIdFromPaneEnv(env: NodeJS.ProcessEnv): string | undefined {
 	return workspace && /^w[0-9A-Za-z]+$/.test(workspace) ? workspace : undefined;
 }
 
-async function currentPane(pi: PiExecLike): Promise<HostResult<{ pane: HerdrPaneInfo }>> {
-	const result = await pi.exec("herdr", ["pane", "current", "--current"], { timeout: 5000 });
+async function currentPane(pi: PiExecLike, timeout = 5000): Promise<HostResult<{ pane: HerdrPaneInfo }>> {
+	const result = await pi.exec("herdr", ["pane", "current", "--current"], { timeout });
 	if (result.code !== 0) return execFailure("herdr pane current", result);
 	const parsed = parseEnvelope<HerdrPaneInfoResult>(result.stdout);
 	if (!parsed.ok) return parsed;
 	return parsed.pane?.pane_id ? { ok: true, pane: parsed.pane } : { ok: false, error: "herdr pane current did not return a pane_id" };
 }
 
-async function resolveCallerWorkspaceId(pi: PiExecLike, env: NodeJS.ProcessEnv = process.env): Promise<string | undefined> {
+async function resolveCallerWorkspaceId(pi: PiExecLike, env: NodeJS.ProcessEnv = process.env, timeout = 5000): Promise<string | undefined> {
 	if (hasHerdrCaller(env)) {
-		const current = await currentPane(pi);
+		const current = await currentPane(pi, timeout);
 		if (current.ok && current.pane.workspace_id) return current.pane.workspace_id;
 	}
 	return workspaceIdFromPaneEnv(env);
@@ -110,28 +113,47 @@ export function uniqueHerdrAgentName(prefix = "sumocode"): string {
 	return `${slugAgentPrefix(prefix)}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-async function listWorkspacePanes(pi: PiExecLike, workspaceId: string): Promise<HostResult<{ panes: HerdrPaneInfo[] }>> {
-	const result = await pi.exec("herdr", ["pane", "list", "--workspace", workspaceId], { timeout: 5000 });
+async function listWorkspacePanes(pi: PiExecLike, workspaceId: string, timeout = 5000): Promise<HostResult<{ panes: HerdrPaneInfo[] }>> {
+	const result = await pi.exec("herdr", ["pane", "list", "--workspace", workspaceId], { timeout });
 	if (result.code !== 0) return execFailure("herdr pane list", result);
 	const parsed = parseEnvelope<HerdrPaneListResult>(result.stdout);
 	if (!parsed.ok) return parsed;
 	return { ok: true, panes: parsed.panes ?? [] };
 }
 
-async function paneForTab(pi: PiExecLike, tabId: string): Promise<HostResult<{ pane: HerdrPaneInfo }>> {
+async function paneUnavailable(pi: PiExecLike, target: string, error: string): Promise<HostResult<never>> {
+	let reason = "Herdr did not provide an availability explanation";
+	try {
+		const explained = await pi.exec("herdr", ["agent", "explain", target], { timeout: HERDR_EXPLAIN_TIMEOUT_MS });
+		if (explained.code === 0) {
+			const parsed = parseEnvelope<HerdrAgentExplainResult>(explained.stdout);
+			if (parsed.ok) {
+				const explanation = parsed.explain;
+				reason = typeof explanation === "string"
+					? explanation
+					: explanation?.reason ?? explanation?.message ?? reason;
+			} else reason = parsed.error;
+		} else reason = (explained.stderr || explained.stdout || `herdr agent explain exited ${explained.code}`).trim();
+	} catch (explainError) {
+		reason = explainError instanceof Error ? explainError.message : String(explainError);
+	}
+	return { ok: false, code: "pane_unavailable", error, reason };
+}
+
+async function paneForTab(pi: PiExecLike, tabId: string, timeout = 5000): Promise<HostResult<{ pane: HerdrPaneInfo }>> {
 	const workspaceId = tabId.split(":")[0];
 	if (!workspaceId) return { ok: false, error: `invalid herdr tab id: ${tabId}` };
 	// A just-created tab can be returned before its root pane appears in
 	// `pane list` (observed live as `no pane for tab`). Bound the retry so a
 	// genuinely closed/stale tab still fails quickly and invalidates the cache.
 	for (let attempt = 0; attempt < 4; attempt += 1) {
-		const listed = await listWorkspacePanes(pi, workspaceId);
+		const listed = await listWorkspacePanes(pi, workspaceId, timeout);
 		if (!listed.ok) return listed;
 		const pane = listed.panes.find((candidate) => candidate.tab_id === tabId);
 		if (pane?.pane_id) return { ok: true, pane };
 		if (attempt < 3) await new Promise<void>((resolve) => setTimeout(resolve, 25));
 	}
-	return { ok: false, error: `herdr returned no pane for tab ${tabId}` };
+	return paneUnavailable(pi, tabId, `herdr returned no pane for tab ${tabId}`);
 }
 
 type PaneTarget = { kind: "current" } | { kind: "id"; paneId: string };
@@ -140,31 +162,31 @@ function paneTargetArgs(target: PaneTarget): string[] {
 	return target.kind === "current" ? ["--current"] : [target.paneId];
 }
 
-async function splitPane(pi: PiExecLike, target: PaneTarget, direction: SplitDirection, cwd: string): Promise<HostResult<{ pane: HerdrPaneInfo }>> {
-	const result = await pi.exec("herdr", ["pane", "split", ...paneTargetArgs(target), "--direction", direction, "--cwd", cwd, "--no-focus"], { timeout: 5000 });
+async function splitPane(pi: PiExecLike, target: PaneTarget, direction: SplitDirection, cwd: string, timeout = 5000): Promise<HostResult<{ pane: HerdrPaneInfo }>> {
+	const result = await pi.exec("herdr", ["pane", "split", ...paneTargetArgs(target), "--direction", direction, "--cwd", cwd, "--no-focus"], { timeout });
 	if (result.code !== 0) return execFailure("herdr pane split", result);
 	const parsed = parseEnvelope<HerdrPaneInfoResult>(result.stdout);
 	if (!parsed.ok) return parsed;
 	return parsed.pane?.pane_id ? { ok: true, pane: parsed.pane } : { ok: false, error: "herdr pane split did not return a pane_id" };
 }
 
-async function createTabPane(pi: PiExecLike, cwd: string, label: string): Promise<HostResult<{ pane: HerdrPaneInfo }>> {
-	const workspaceId = await resolveCallerWorkspaceId(pi, process.env);
+async function createTabPane(pi: PiExecLike, cwd: string, label: string, timeout = 5000): Promise<HostResult<{ pane: HerdrPaneInfo }>> {
+	const workspaceId = await resolveCallerWorkspaceId(pi, process.env, timeout);
 	const workspaceArgs = workspaceId ? ["--workspace", workspaceId] : [];
-	const result = await pi.exec("herdr", ["tab", "create", ...workspaceArgs, "--cwd", cwd, "--label", label, "--no-focus"], { timeout: 5000 });
+	const result = await pi.exec("herdr", ["tab", "create", ...workspaceArgs, "--cwd", cwd, "--label", label, "--no-focus"], { timeout });
 	if (result.code !== 0) return execFailure("herdr tab create", result);
 	const parsed = parseEnvelope<HerdrTabResult>(result.stdout);
 	if (!parsed.ok) return parsed;
 	if (parsed.root_pane?.pane_id) return { ok: true, pane: parsed.root_pane };
 	const tabId = parsed.tab?.tab_id ?? parsed.tab_id;
 	if (!tabId) return { ok: false, error: "herdr tab create did not return a tab_id" };
-	return paneForTab(pi, tabId);
+	return paneForTab(pi, tabId, timeout);
 }
 
-async function runPaneCommand(pi: PiExecLike, pane: HerdrPaneInfo, command: string): Promise<HostResult<{}>> {
+async function runPaneCommand(pi: PiExecLike, pane: HerdrPaneInfo, command: string, timeout = 5000): Promise<HostResult<{}>> {
 	if (!pane.pane_id) return { ok: false, error: "herdr pane has no pane_id" };
 	try {
-		const result = await pi.exec("herdr", ["pane", "run", pane.pane_id, command], { timeout: 5000 });
+		const result = await pi.exec("herdr", ["pane", "run", pane.pane_id, command], { timeout });
 		return result.code === 0 ? { ok: true } : execFailure("herdr pane run", result);
 	} catch (error) {
 		return { ok: false, error: error instanceof Error ? error.message : String(error) };
@@ -198,32 +220,32 @@ async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): P
 	if (options.placement.kind === "workspace") {
 		let anchorPaneId = options.placement.paneId;
 		if (!anchorPaneId) {
-			const listed = await listWorkspacePanes(pi, options.placement.workspaceId);
+			const listed = await listWorkspacePanes(pi, options.placement.workspaceId, HERDR_PANE_PROVISION_TIMEOUT_MS);
 			if (!listed.ok) return listed;
 			anchorPaneId = listed.panes[0]?.pane_id;
 		}
-		if (!anchorPaneId) return { ok: false, error: `herdr returned no pane for workspace ${options.placement.workspaceId}` };
-		target = await splitPane(pi, { kind: "id", paneId: anchorPaneId }, "right", options.cwd);
+		if (!anchorPaneId) return paneUnavailable(pi, options.placement.workspaceId, `herdr returned no pane for workspace ${options.placement.workspaceId}`);
+		target = await splitPane(pi, { kind: "id", paneId: anchorPaneId }, "right", options.cwd, HERDR_PANE_PROVISION_TIMEOUT_MS);
 		if (target.ok) {
 			recoveryShell = { paneId: anchorPaneId, workspaceId: options.placement.workspaceId };
 			// Keep a shell alive after the child exits so Herdr preserves the
 			// worktree workspace for inspection. Moving it is cosmetic; if the move
 			// fails, the shell stays beside the child and still keeps the workspace.
-			await pi.exec("herdr", ["pane", "move", anchorPaneId, "--new-tab", "--workspace", options.placement.workspaceId, "--label", "shell", "--no-focus"], { timeout: 5000 }).catch(() => undefined);
+			await pi.exec("herdr", ["pane", "move", anchorPaneId, "--new-tab", "--workspace", options.placement.workspaceId, "--label", "shell", "--no-focus"], { timeout: HERDR_PANE_PROVISION_TIMEOUT_MS }).catch(() => undefined);
 		}
 	} else if (options.placement.kind === "tab") {
-		const anchor = await paneForTab(pi, options.placement.tabId);
+		const anchor = await paneForTab(pi, options.placement.tabId, HERDR_PANE_PROVISION_TIMEOUT_MS);
 		target = anchor.ok && anchor.pane.pane_id
-			? await splitPane(pi, { kind: "id", paneId: anchor.pane.pane_id }, options.placement.direction, options.cwd)
+			? await splitPane(pi, { kind: "id", paneId: anchor.pane.pane_id }, options.placement.direction, options.cwd, HERDR_PANE_PROVISION_TIMEOUT_MS)
 			: anchor;
 	} else {
-		target = await createTabPane(pi, options.cwd, options.placement.label);
+		target = await createTabPane(pi, options.cwd, options.placement.label, HERDR_PANE_PROVISION_TIMEOUT_MS);
 	}
 	if (!target.ok) return target;
 	const paneId = target.pane.pane_id;
 	if (!paneId) return { ok: false, error: "herdr child target has no pane_id; cleanup skipped" };
 	await options.beforeRun?.({ host: "herdr", paneId, workspaceId: target.pane.workspace_id });
-	const started = await runPaneCommand(pi, target.pane, options.shellCommand);
+	const started = await runPaneCommand(pi, target.pane, options.shellCommand, HERDR_PANE_PROVISION_TIMEOUT_MS);
 	if (!started.ok) return options.beforeRun ? started : cleanFailedChildStart(pi, paneId, started.error, recoveryShell);
 
 	const agentName = uniqueHerdrAgentName(options.name);

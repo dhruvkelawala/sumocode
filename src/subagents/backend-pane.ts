@@ -683,7 +683,15 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 				});
 				if (!result.ok) {
 					if (gate) { assertAuthority(); blockLaunch(new Error(result.error)); return; }
-					settle({ kind: "run-settled", outcome: { kind: "failed", errorText: result.error } });
+					settle({
+						kind: "run-settled",
+						outcome: {
+							kind: "failed",
+							errorText: result.error,
+							errorCode: result.code,
+							errorReason: result.reason,
+						},
+					});
 					return;
 				}
 				pane = result.pane;

@@ -274,6 +274,42 @@ describe("subagent tools", () => {
 		await expect(tool("subagent_spawn").execute("tc", { prompt: "watch", name: "worker", visible: true }, undefined, undefined, ctx as never)).rejects.toThrow("require a running herdr terminal host");
 	});
 
+	it("returns pane_unavailable with Herdr's reason as structured spawn details", async () => {
+		const { tool, ctx, manager } = createHarness();
+		vi.spyOn(manager, "spawn").mockResolvedValue({
+			id: "sa-1",
+			title: "worker",
+			prompt: "watch",
+			cwd: "/tmp/project",
+			baseRef: "base-ref",
+			visible: true,
+			status: "error",
+			createdAt: 1,
+			settledAt: 2,
+			errorText: "herdr returned no pane for tab w5:t8",
+			errorCode: "pane_unavailable",
+			errorReason: "tab has no available shell pane",
+			usage: { turns: 0 },
+			transcript: [],
+			liveText: "",
+			liveTools: [],
+			finalText: "",
+		});
+
+		// SAFETY: the ctx double carries only the fields the tool handler reads.
+		const result = await tool("subagent_spawn").execute("tc", { prompt: "watch", name: "worker", visible: true }, undefined, undefined, ctx as never);
+
+		expect(result).toMatchObject({
+			details: {
+				action: "spawn",
+				status: "pane_unavailable",
+				herdrReason: "tab has no available shell pane",
+				subagent: { id: "sa-1", status: "error" },
+			},
+		});
+		expect(textOf(result)).toContain("tab has no available shell pane");
+	});
+
 	it("passes worktree isolation, branch, and baseRef overrides to the manager", async () => {
 		const { tool, ctx, manager, createWorktree } = createHarness();
 		// SAFETY: the ctx double carries only the fields the tool handlers read.

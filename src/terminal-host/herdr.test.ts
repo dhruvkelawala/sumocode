@@ -78,9 +78,9 @@ describe("herdrTerminalHost", () => {
 			placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
 		});
 		expect(result).toMatchObject({ ok: true, agentName: expect.stringMatching(/^api-worker-/), workspaceId: "w9", tabId: "w9:t1", paneId: "w9:p2" });
-		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["pane", "split", "w9:p1", "--direction", "right", "--cwd", "/repo/packages/api", "--no-focus"], { timeout: 5000 });
-		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["pane", "move", "w9:p1", "--new-tab", "--workspace", "w9", "--label", "shell", "--no-focus"], { timeout: 5000 });
-		expect(exec).toHaveBeenNthCalledWith(3, "herdr", ["pane", "run", "w9:p2", "exec sumocode task"], { timeout: 5000 });
+		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["pane", "split", "w9:p1", "--direction", "right", "--cwd", "/repo/packages/api", "--no-focus"], { timeout: 2000 });
+		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["pane", "move", "w9:p1", "--new-tab", "--workspace", "w9", "--label", "shell", "--no-focus"], { timeout: 2000 });
+		expect(exec).toHaveBeenNthCalledWith(3, "herdr", ["pane", "run", "w9:p2", "exec sumocode task"], { timeout: 2000 });
 	});
 
 	it("keeps the child when moving the bootstrap shell fails", async () => {
@@ -93,7 +93,7 @@ describe("herdrTerminalHost", () => {
 		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
 			name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
 		})).resolves.toMatchObject({ ok: true, paneId: "w9:p2" });
-		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "run", "w9:p2", "run child"], { timeout: 5000 });
+		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "run", "w9:p2", "run child"], { timeout: 2000 });
 	});
 
 	it("finds and preserves an available workspace pane when no pane id is supplied", async () => {
@@ -110,8 +110,8 @@ describe("herdrTerminalHost", () => {
 			placement: { kind: "workspace", workspaceId: "w9" },
 		});
 		expect(result).toMatchObject({ ok: true, workspaceId: "w9", tabId: "w9:t1", paneId: "w9:p2" });
-		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["pane", "list", "--workspace", "w9"], { timeout: 5000 });
-		expect(exec).toHaveBeenNthCalledWith(3, "herdr", ["pane", "move", "w9:p1", "--new-tab", "--workspace", "w9", "--label", "shell", "--no-focus"], { timeout: 5000 });
+		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["pane", "list", "--workspace", "w9"], { timeout: 2000 });
+		expect(exec).toHaveBeenNthCalledWith(3, "herdr", ["pane", "move", "w9:p1", "--new-tab", "--workspace", "w9", "--label", "shell", "--no-focus"], { timeout: 2000 });
 	});
 
 	it("splits an existing subagents tab before running the child", async () => {
@@ -127,8 +127,8 @@ describe("herdrTerminalHost", () => {
 			shellCommand: "run child",
 			placement: { kind: "tab", tabId: "w3:t2", direction: "down" },
 		})).resolves.toMatchObject({ ok: true, tabId: "w3:t2", paneId: "w3:p4" });
-		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["pane", "split", "w3:p2", "--direction", "down", "--cwd", "/repo", "--no-focus"], { timeout: 5000 });
-		expect(exec).toHaveBeenNthCalledWith(3, "herdr", ["pane", "run", "w3:p4", "run child"], { timeout: 5000 });
+		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["pane", "split", "w3:p2", "--direction", "down", "--cwd", "/repo", "--no-focus"], { timeout: 2000 });
+		expect(exec).toHaveBeenNthCalledWith(3, "herdr", ["pane", "run", "w3:p4", "run child"], { timeout: 2000 });
 	});
 
 	it("retries a just-created tab until its root pane becomes listable", async () => {
@@ -157,6 +157,34 @@ describe("herdrTerminalHost", () => {
 		expect(lists).toBe(2);
 	});
 
+	it("explains an unavailable new-tab pane within the provisioning budget", async () => {
+		const startedAt = Date.now();
+		const exec = vi.fn(async (_bin: string, args: string[]) => {
+			if (args[0] === "tab") return { stdout: JSON.stringify({ result: { tab_id: "w5:t8" } }), stderr: "", code: 0, killed: false };
+			if (args[0] === "agent" && args[1] === "explain") {
+				return { stdout: JSON.stringify({ result: { type: "agent_explain", explain: { reason: "tab has no available shell pane" } } }), stderr: "", code: 0, killed: false };
+			}
+			return { stdout: JSON.stringify({ result: { panes: [] } }), stderr: "", code: 0, killed: false };
+		});
+
+		// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
+		const result = await herdrTerminalHost.startAgentPane({ exec } as never, {
+			name: "research",
+			cwd: "/repo",
+			shellCommand: "run child",
+			placement: { kind: "new-tab", label: "subagents" },
+		});
+
+		expect(result).toEqual({
+			ok: false,
+			code: "pane_unavailable",
+			error: "herdr returned no pane for tab w5:t8",
+			reason: "tab has no available shell pane",
+		});
+		expect(Date.now() - startedAt).toBeLessThan(5_000);
+		expect(exec).toHaveBeenLastCalledWith("herdr", ["agent", "explain", "w5:t8"], { timeout: 500 });
+	});
+
 	it("creates a no-focus tab with a root pane for the first child", async () => {
 		vi.stubEnv("HERDR_PANE_ID", "");
 		const exec = vi.fn(async (_bin: string, args: string[]) => args[0] === "tab"
@@ -169,8 +197,8 @@ describe("herdrTerminalHost", () => {
 			shellCommand: "run child",
 			placement: { kind: "new-tab", label: "subagents" },
 		})).resolves.toMatchObject({ ok: true, tabId: "w5:t8", paneId: "w5:p9" });
-		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["tab", "create", "--cwd", "/repo", "--label", "subagents", "--no-focus"], { timeout: 5000 });
-		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["pane", "run", "w5:p9", "run child"], { timeout: 5000 });
+		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["tab", "create", "--cwd", "/repo", "--label", "subagents", "--no-focus"], { timeout: 2000 });
+		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["pane", "run", "w5:p9", "run child"], { timeout: 2000 });
 		vi.unstubAllEnvs();
 	});
 
@@ -190,8 +218,8 @@ describe("herdrTerminalHost", () => {
 		await herdrTerminalHost.startAgentPane!({ exec } as never, {
 			name: "research", cwd: "/repo", shellCommand: "run child", placement: { kind: "new-tab", label: "subagents" },
 		});
-		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["pane", "current", "--current"], { timeout: 5000 });
-		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["tab", "create", "--workspace", "w1K", "--cwd", "/repo", "--label", "subagents", "--no-focus"], { timeout: 5000 });
+		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["pane", "current", "--current"], { timeout: 2000 });
+		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["tab", "create", "--workspace", "w1K", "--cwd", "/repo", "--label", "subagents", "--no-focus"], { timeout: 2000 });
 	});
 
 	it("cleans failed child start for a command split", async () => {

@@ -611,6 +611,29 @@ describe("verified harness group cleanup", () => {
 		expect(cleanup.signals).toEqual([]);
 	});
 
+	it("refuses a member carrying a fake-pi name and token without a harness signature", async () => {
+		const unsigned = { ...leader, command: `/tmp/sumocode-fake-pi-unsigned/stub ${HARNESS_OWNER_TOKEN_ENV_KEY}=${ownerToken} node child.js` };
+		const cleanup = fakeCleanup([{ rows: [unsigned] }]);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "unverified", identityStatus: "different" });
+		expect(cleanup.signals).toEqual([]);
+	});
+
+	it("reports unverified instead of exited when actual processRows yields malformed rows", async () => {
+		const output = "SUMOCODE_HARNESS_SIGNATURE=leaked-secret truncated-row\n";
+		const signals: Array<[number, NodeJS.Signals | number]> = [];
+		const result = await reapHarnessProcessGroup(registration, {
+			readProcessTable: () => processRows((() => output) as typeof execFileSync),
+			currentPgid: 99_999,
+			readProcessStart: () => registration.processStart,
+			kill: (pid, signal) => { signals.push([pid, signal ?? 0]); return true; },
+			wait: async () => {},
+		});
+
+		expect(result.status).toBe("unverified");
+		expect(result.status).not.toBe("exited");
+		expect(signals).toEqual([]);
+	});
+
 	it("reaps descendants after leader exit only while current ownership matches", async () => {
 		const cleanup = fakeCleanup([{ rows: [descendant] }, { rows: [descendant] }, { rows: [] }]);
 		await expect(cleanup.result).resolves.toMatchObject({ status: "reaped" });
@@ -666,5 +689,32 @@ describe("portable process-table probe", () => {
 		const result = processRows(execute);
 		expect(result.rows).toEqual([]);
 		expect(result.issue?.code).toBe("process-table-unavailable");
+	});
+
+	it("parses valid rows and skips blank lines without an issue", () => {
+		const output = "\n  101   1   101 S /usr/bin/a\n\n  102 101   101 R /usr/bin/b\n\n";
+		const execute = (() => output) as typeof execFileSync;
+
+		const result = processRows(execute);
+		expect(result.issue).toBeUndefined();
+		expect(result.rows).toEqual([
+			{ pid: 101, ppid: 1, pgid: 101, state: "S", command: "/usr/bin/a" },
+			{ pid: 102, ppid: 101, pgid: 101, state: "R", command: "/usr/bin/b" },
+		]);
+	});
+
+	it("flags malformed nonblank rows as an issue without echoing their content", () => {
+		const output = [
+			"SUMOCODE_HARNESS_SIGNATURE=leaked-secret truncated-row",
+			"  103   1",
+			"  101   1   101 S /usr/bin/fine",
+			"",
+		].join("\n");
+		const execute = (() => output) as typeof execFileSync;
+
+		const result = processRows(execute);
+		expect(result.rows).toEqual([{ pid: 101, ppid: 1, pgid: 101, state: "S", command: "/usr/bin/fine" }]);
+		expect(result.issue?.code).toBe("process-table-malformed-row");
+		expect(JSON.stringify(result)).not.toContain("leaked-secret");
 	});
 });

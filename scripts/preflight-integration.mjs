@@ -42,11 +42,27 @@ export function processRows(execute = execFileSync) {
 				encoding: "utf8",
 				maxBuffer: PS_MAX_BUFFER_BYTES,
 			});
-			const rows = output.split("\n").flatMap((line) => {
+			const rows = [];
+			let malformedRows = 0;
+			for (const line of output.split("\n")) {
+				if (line.trim() === "") continue;
 				const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/);
-				return match ? [{ pid: Number(match[1]), ppid: Number(match[2]), pgid: Number(match[3]), state: match[4], command: match[5] }] : [];
-			});
-			return { rows };
+				if (!match) {
+					malformedRows += 1;
+					continue;
+				}
+				rows.push({ pid: Number(match[1]), ppid: Number(match[2]), pgid: Number(match[3]), state: match[4], command: match[5] });
+			}
+			// ps rows can carry process environments; count unparseable rows without
+			// echoing them so the issue stays safe to print.
+			return malformedRows === 0 ? { rows } : {
+				rows,
+				issue: {
+					code: "process-table-malformed-row",
+					message: `ps returned ${malformedRows} row(s) that do not match the expected pid/ppid/pgid/state/command shape; treating the table as unverified`,
+					remediation: "inspect ps output manually, then rerun pnpm test:integration:preflight",
+				},
+			};
 		} catch (error) {
 			lastError = error;
 		}
@@ -310,7 +326,9 @@ function inspectHarnessProcessGroup(registration, table, currentPgid, readProces
 		|| currentPgid === undefined || pgid === currentPgid) {
 		return { status: "unverified", identityStatus: "unknown", error: "incomplete or unsafe process identity" };
 	}
-	if (!members.every((row) => isHarnessProcess(row) && hasProcessMarker(row, HARNESS_OWNER_TOKEN_ENV_KEY, ownerToken))) {
+	// Cleanup authorization needs the explicit harness signature; the broader
+	// fake-pi name match stays reserved for inventory detection only.
+	if (!members.every((row) => hasHarnessSignature(row) && hasProcessMarker(row, HARNESS_OWNER_TOKEN_ENV_KEY, ownerToken))) {
 		return { status: "unverified", identityStatus: "different", error: "process group ownership changed" };
 	}
 	const leader = members.find((row) => row.pid === pid);

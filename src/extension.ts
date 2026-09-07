@@ -121,17 +121,24 @@ export function findActiveSumoDevTree(cwd: string, options: Pick<DuplicateInstal
 
 export function shouldNoopDuplicateInstalledExtension(options: DuplicateInstalledExtensionOptions = {}): boolean {
 	const moduleUrl = options.moduleUrl ?? import.meta.url;
-	if (!isInstalledPiAgentGitModule(moduleUrl, options.homeDir ?? homedir())) return false;
 	const env = options.env ?? process.env;
 	const launcherRoot = env.SUMOCODE_ROOT_DIR;
 	if (launcherRoot) {
 		// The sumocode launcher (`bin/sumocode.sh`) always loads its own dev-tree
 		// extension via `-e ${ROOT_DIR}/src/extension.ts` and exports
 		// SUMOCODE_ROOT_DIR alongside SUMOCODE_LAUNCHER for exactly this check.
+		// This comparison is deliberately independent of the `.pi/agent/git`
+		// prefix test below: Node resolves symlinks before import, so when the
+		// install at `~/.pi/agent/git/.../sumocode` is a symlink into another
+		// checkout, import.meta.url already holds that checkout's realpath and
+		// the prefix test can never match — the exact setup this guard exists
+		// for. When the launcher drives the session its own entry is definitely
+		// loading, so any copy whose package root differs from the launcher root
+		// is a duplicate by definition and must noop instead of re-registering
+		// every tool (Pi treats duplicate tools as fatal).
 		// `~/.pi/agent/git/.../sumocode` can itself be a symlink straight back
 		// into that same dev tree (a common local setup), in which case the
-		// module path both matches the `.pi/agent/git` prefix test above AND
-		// canonicalizes to the launcher's own root — that is the launcher
+		// module canonicalizes to the launcher's own root — that is the launcher
 		// loading itself, not a genuinely separate installed copy, so it must
 		// NOT noop (an unconditional noop here would skip the launcher's own RPC
 		// child profile). Compare realpath-canonicalized paths on both sides so
@@ -152,6 +159,7 @@ export function shouldNoopDuplicateInstalledExtension(options: DuplicateInstalle
 		if (grandparent === canonicalLauncherRoot) return false;
 		return true;
 	}
+	if (!isInstalledPiAgentGitModule(moduleUrl, options.homeDir ?? homedir())) return false;
 	if (env.SUMOCODE_LAUNCHER) return true;
 	return findActiveSumoDevTree(options.cwd ?? process.cwd(), options) !== undefined;
 }

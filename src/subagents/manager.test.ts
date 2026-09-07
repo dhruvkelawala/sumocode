@@ -887,6 +887,61 @@ describe("SubagentManager", () => {
 		expect(placements[2]).toEqual({ kind: "new-tab", label: "subagents" });
 	});
 
+	it("excludes settling children from caller-tab capacity during placement planning", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		let resolveManifest: (manifest: CompletionManifest) => void = () => undefined;
+		const deferredManifest = new Promise<CompletionManifest>((resolve) => { resolveManifest = resolve; });
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+				emit({ kind: "run-started" });
+				emit({ kind: "pane-attached", pane: { agentName: `${task.id}-worker`, workspaceId: "w1", tabId: "w1:t1", paneId: `w1:p${task.id}` } });
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: async () => deferredManifest,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+			initialVisibleTabId: "w1:t1",
+		});
+
+		for (const title of ["first", "second", "third", "fourth"]) {
+			await manager.spawn({ prompt: `p-${title}`, title, cwd: "/repo", visible: true });
+		}
+		expect(placements).toEqual([
+			{ kind: "tab", tabId: "w1:t1", direction: "right" },
+			{ kind: "tab", tabId: "w1:t1", direction: "down" },
+			{ kind: "tab", tabId: "w1:t1", direction: "right" },
+			{ kind: "tab", tabId: "w1:t1", direction: "down" },
+		]);
+
+		// Settle all four together: each leaves `children` synchronously while
+		// its snapshot still reports "running" during deferred manifest
+		// collection. Placement planning must not count those freed panes.
+		for (const id of ["sa-1", "sa-2", "sa-3", "sa-4"]) {
+			emitters.get(id)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		}
+
+		await manager.spawn({ prompt: "p5", title: "fifth", cwd: "/repo", visible: true });
+		expect(placements[4]).toEqual({ kind: "tab", tabId: "w1:t1", direction: "right" });
+
+		resolveManifest({ baseRef: "abc123", changedPaths: [], dirty: false, commits: 0, exit: "completed", durationMs: 1 });
+		await vi.waitFor(() => {
+			expect(manager.get("sa-1")?.status).toBe("done");
+			expect(manager.get("sa-4")?.status).toBe("done");
+		});
+	});
+
 	it("counts only live visible panes toward tab capacity", async () => {
 		const backendTasks: Array<SpawnSubagentTask & { placement?: unknown }> = [];
 		const host: TerminalHost = {

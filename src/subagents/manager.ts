@@ -599,7 +599,11 @@ export class SubagentManager {
 					// Task panes exit with their child process, so historical pane refs are
 					// evidence only. Count live children or closed panes permanently consume
 					// layout slots and force later spawns into phantom tabs.
-					visiblePanes: this.list().flatMap((snapshot) => snapshot.visible && snapshot.status === "running" && snapshot.pane ? [snapshot.pane] : []),
+					// Settling children have already left `children` (settle removes
+					// them synchronously) but their snapshots keep status "running"
+					// while the manifest collects async. Counting those freed panes
+					// would overflow the caller tab into a phantom overflow tab.
+					visiblePanes: this.list().flatMap((snapshot) => snapshot.visible && this.children.has(snapshot.id) && snapshot.pane ? [snapshot.pane] : []),
 					sessionTabId: this.subagentsTabId,
 				});
 				if (planned.kind === "workspace") {

@@ -243,6 +243,35 @@ describe("herdrTerminalHost", () => {
 		}
 	});
 
+	it("reserves cleanup headroom before a slow worktree open", async () => {
+		vi.useFakeTimers();
+		try {
+			const exec = vi.fn((_bin: string, args: string[], options: { timeout: number }) => {
+				if (args[0] === "worktree") {
+					// The open consumes its entire allowed timeout yet still succeeds.
+					return new Promise<{ stdout: string; stderr: string; code: number; killed: boolean }>((resolve) => {
+						setTimeout(() => resolve({ stdout: JSON.stringify({ result: { workspace: { workspace_id: "w9" } } }), stderr: "", code: 0, killed: false }), options.timeout);
+					});
+				}
+				return Promise.resolve({ stdout: JSON.stringify({ result: { panes: [] } }), stderr: "", code: 0, killed: false });
+			});
+
+			// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
+			const pending = herdrTerminalHost.startAgentPane({ exec } as never, {
+				name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "worktree-workspace", path: "/wt", label: "worker", sourceCwd: "/repo" },
+			});
+			await vi.advanceTimersByTimeAsync(10_000);
+			const result = await pending;
+
+			expect(result).toMatchObject({ ok: false, code: "pane_unavailable" });
+			// The worktree open is bounded to leave HERDR_PANE_CLEANUP_RESERVE_MS
+			// headroom for the follow-up rather than the full 4750ms deadline.
+			expect(exec.mock.calls[0]?.[2].timeout).toBe(4_250);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("structures real CLI-shaped split failures without explaining a tab or workspace", async () => {
 		const exec = vi.fn(async (_bin: string, args: string[]) => args[1] === "list"
 			? { stdout: JSON.stringify({ id: "cli:pane:list", result: { panes: [{ pane_id: "w9:p1", workspace_id: "w9", tab_id: "w9:t1" }], type: "pane_list" } }), stderr: "", code: 0, killed: false }

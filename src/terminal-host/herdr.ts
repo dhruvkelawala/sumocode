@@ -127,7 +127,12 @@ async function openExistingWorktreeWorkspace(
 	options: { path: string; label: string; shellCommand?: string; sourceCwd: string; focus?: boolean },
 	deadline?: ProvisionDeadline,
 ): Promise<HostResult<{ pane: PaneRef }>> {
-	const openTimeout = deadline ? remainingProvisionMs(deadline) : 5000;
+	// Reserve cleanup headroom before opening the worktree workspace: a slow
+	// open must not consume the entire deadline and starve the follow-up split
+	// and run. The opened workspace is intentionally preserved on failure — it
+	// anchors a preserved git worktree and is the caller's recovery anchor, so
+	// no owned-pane/owned-tab cleanup is performed for it.
+	const openTimeout = deadline ? remainingProvisionMs(deadline, HERDR_PANE_CLEANUP_RESERVE_MS) : 5000;
 	if (openTimeout === undefined) return deadlineFailure("herdr worktree open");
 	const result = await pi.exec(
 		"herdr",

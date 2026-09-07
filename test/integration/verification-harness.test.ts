@@ -155,6 +155,28 @@ describe("verification harness v2 seam", () => {
 		expect(events).toContainEqual(expect.objectContaining({ event: "exit", pid: child.child.pid }));
 	});
 
+	it("refuses to spawn at all when the signing identity is unavailable", async () => {
+		// The failure must happen BEFORE a child exists: a throw after spawn would
+		// leave a detached process with no handle to reap it.
+		const before = new Set(processRows().rows.map((row) => row.pid));
+		// A shared run root that exists, but no signing identity in this worker.
+		const env = { ...process.env, SUMOCODE_INTEGRATION_RUN_ROOT: createRunRoot() };
+		delete env[HARNESS_OWNER_TOKEN_ENV_KEY];
+		const savedRunId = process.env[HARNESS_RUN_ID_ENV_KEY];
+		const savedKey = process.env[HARNESS_SIGNING_KEY_ENV_KEY];
+		delete process.env[HARNESS_RUN_ID_ENV_KEY];
+		delete process.env[HARNESS_SIGNING_KEY_ENV_KEY];
+		try {
+			expect(() => spawnSupervisedProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { env, stdio: "ignore" }))
+				.toThrow(/signing identity is unavailable/);
+		} finally {
+			if (savedRunId !== undefined) process.env[HARNESS_RUN_ID_ENV_KEY] = savedRunId;
+			if (savedKey !== undefined) process.env[HARNESS_SIGNING_KEY_ENV_KEY] = savedKey;
+		}
+		const after = processRows().rows.filter((row) => !before.has(row.pid) && row.command.includes("setInterval"));
+		expect(after).toEqual([]);
+	});
+
 	it("reports a dead run's title-hidden survivor by identity and never signals it from --fix", async () => {
 		const child = spawnSupervisedProcess(
 			process.execPath,

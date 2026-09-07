@@ -9,6 +9,7 @@ import {
 	HARNESS_SIGNATURE,
 	HARNESS_SIGNATURE_ENV_KEY,
 	recordPtyExit,
+	requireHarnessAuth,
 	supervisePtyProcess,
 	waitForDiagnosticReadiness,
 	type ChildEvidenceContext,
@@ -236,6 +237,9 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 	childEnv.SUMO_TUI_DIAG_FILE = evidence.diagPath;
 	childEnv[HARNESS_SIGNATURE_ENV_KEY] = HARNESS_SIGNATURE;
 	const isRealPty = options.spawn === undefined;
+	// Resolve the signing identity before the child exists: failing afterwards
+	// would leave a detached PTY process with no handle to reap it.
+	const auth = isRealPty ? requireHarnessAuth(childEnv) : undefined;
 	let child: IPty;
 	try {
 		child = spawnPty(command, args, {
@@ -249,7 +253,7 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 		removeOwnedAgentDir(ownedAgentDir);
 		throw error;
 	}
-	const supervision = isRealPty ? supervisePtyProcess(child.pid, evidence, childEnv) : undefined;
+	const supervision = auth !== undefined ? supervisePtyProcess(child.pid, evidence, childEnv, auth) : undefined;
 
 	let output = "";
 	const waiters: Waiter[] = [];

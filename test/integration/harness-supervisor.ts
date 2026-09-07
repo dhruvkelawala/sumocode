@@ -147,20 +147,37 @@ function manifestPath(env: NodeJS.ProcessEnv = process.env): string {
 	return env.SUMOCODE_INTEGRATION_MANIFEST ?? join(harnessRoot(env), "children.jsonl");
 }
 
-function harnessAuth(env: NodeJS.ProcessEnv): { runId: string; signingKey: string } | undefined {
+export interface HarnessAuth { readonly runId: string; readonly signingKey: string }
+
+function harnessAuth(env: NodeJS.ProcessEnv): HarnessAuth | undefined {
+	// A focused namespace mints its identity on first use; make sure it exists
+	// before reading it, so this does not depend on evidence-dir call order.
+	if (env.SUMOCODE_INTEGRATION_RUN_ROOT === undefined) harnessRoot(env);
 	const runId = env.SUMOCODE_INTEGRATION_RUN_ROOT === undefined ? fallbackRunId : process.env[HARNESS_RUN_ID_ENV_KEY];
 	const signingKey = env.SUMOCODE_INTEGRATION_RUN_ROOT === undefined ? fallbackSigningKey : process.env[HARNESS_SIGNING_KEY_ENV_KEY];
 	return runId && signingKey ? { runId, signingKey } : undefined;
 }
 
-function appendManifest(event: HarnessManifestEvent, env: NodeJS.ProcessEnv = process.env): void {
+/**
+ * Resolve the signing identity before a child exists. Failing after spawn
+ * would leave a detached process with no handle to reap it.
+ */
+export function requireHarnessAuth(env: NodeJS.ProcessEnv): HarnessAuth {
+	const auth = harnessAuth(env);
+	if (auth === undefined) throw new Error("harness spawn signing identity is unavailable");
+	return auth;
+}
+
+function appendManifest(event: HarnessManifestEvent, env: NodeJS.ProcessEnv = process.env, auth?: HarnessAuth): void {
 	const path = manifestPath(env);
 	mkdirSync(dirname(path), { recursive: true });
 	let writtenEvent = event;
 	if (event.event === "spawn") {
-		const auth = harnessAuth(env);
-		if (auth === undefined) throw new Error("harness spawn signing identity is unavailable");
-		writtenEvent = {
+		// Callers resolve auth before spawning; a spawn event without it is a
+		// programming error, and by now the child exists, so record it unsigned
+		// rather than throw and lose the handle. Unsigned registrations are
+		// never authenticated on the post-owner path.
+		if (auth !== undefined) writtenEvent = {
 			...event,
 			runId: auth.runId,
 			registrationHmac: signSpawnRegistration(event, auth.runId, auth.signingKey),
@@ -311,7 +328,7 @@ export async function waitForDiagnosticReadiness(diagPath: string, state: Readin
 	}
 }
 
-function harnessGroupRegistration(pid: number, pgid: number, env: NodeJS.ProcessEnv): HarnessGroupRegistration {
+function harnessGroupRegistration(pid: number, pgid: number, env: NodeJS.ProcessEnv, auth: HarnessAuth): HarnessGroupRegistration {
 	const registration = {
 		pid,
 		pgid,
@@ -321,8 +338,7 @@ function harnessGroupRegistration(pid: number, pgid: number, env: NodeJS.Process
 		ownerToken: env[HARNESS_OWNER_TOKEN_ENV_KEY],
 		ownershipMode: env.SUMOCODE_INTEGRATION_RUN_ROOT === undefined ? "focused" as const : "shared" as const,
 	};
-	const auth = harnessAuth(env);
-	return auth === undefined ? registration : {
+	return {
 		...registration,
 		runId: auth.runId,
 		registrationHmac: signSpawnRegistration(registration, auth.runId, auth.signingKey),
@@ -334,12 +350,13 @@ export function spawnSupervisedProcess(command: string, args: readonly string[],
 	const env = { ...options.env, [HARNESS_SIGNATURE_ENV_KEY]: HARNESS_SIGNATURE };
 	delete env[HARNESS_SIGNING_KEY_ENV_KEY];
 	delete env[HARNESS_RUN_ID_ENV_KEY];
+	const auth = requireHarnessAuth(env);
 	const evidence = createChildEvidenceContext([command, ...args], env);
 	const child = spawn(command, [...args], { ...options, detached: true, env });
 	if (child.pid === undefined) throw new Error(`supervised child did not publish a pid: ${command}`);
 	const pid = child.pid;
 	const pgid = pid;
-	const registration = harnessGroupRegistration(pid, pgid, env);
+	const registration = harnessGroupRegistration(pid, pgid, env, auth);
 	appendManifest({
 		event: "spawn",
 		pid,
@@ -350,7 +367,7 @@ export function spawnSupervisedProcess(command: string, args: readonly string[],
 		ownershipMode: registration.ownershipMode,
 		argv: [command, ...args],
 		evidenceDir: evidence.evidenceDir,
-	}, env);
+	}, env, auth);
 	child.stderr?.on("data", (chunk: Buffer | string) => appendFileSync(evidence.stderrPath, chunk));
 	const exited = new Promise<void>((resolveExit) => child.once("exit", (code, signal) => {
 		appendManifest({ event: "exit", pid, pgid, code, signal }, env);
@@ -392,11 +409,15 @@ export function spawnSupervisedProcess(command: string, args: readonly string[],
 	};
 }
 
-export function supervisePtyProcess(pid: number, evidence: ChildEvidenceContext, env: NodeJS.ProcessEnv): Pick<SupervisedProcess, "pid" | "pgid" | "evidence" | "terminate" | "captureFailure"> {
+/**
+ * The PTY child already exists when this runs, so it takes the auth the
+ * caller resolved with requireHarnessAuth BEFORE spawning and never throws.
+ */
+export function supervisePtyProcess(pid: number, evidence: ChildEvidenceContext, env: NodeJS.ProcessEnv, auth: HarnessAuth): Pick<SupervisedProcess, "pid" | "pgid" | "evidence" | "terminate" | "captureFailure"> {
 	const pgid = pid;
 	let reaping: Promise<void> | undefined;
 	env[HARNESS_SIGNATURE_ENV_KEY] = HARNESS_SIGNATURE;
-	const registration = harnessGroupRegistration(pid, pgid, env);
+	const registration = harnessGroupRegistration(pid, pgid, env, auth);
 	appendManifest({
 		event: "spawn",
 		pid,
@@ -408,7 +429,7 @@ export function supervisePtyProcess(pid: number, evidence: ChildEvidenceContext,
 		argv: evidence.argv,
 		evidenceDir: evidence.evidenceDir,
 		kind: "pty",
-	}, env);
+	}, env, auth);
 	return {
 		pid,
 		pgid,

@@ -593,7 +593,8 @@ describe("verified harness group cleanup", () => {
 	]);
 
 	function fakeCleanup(
-		tables: Array<{ rows: FakeProcessRow[]; issue?: { code: string } }>,
+		// Rows admit null so tests can inject a malformed table at the untrusted seam.
+		tables: Array<{ rows: Array<FakeProcessRow | null>; issue?: { code: string } }>,
 		processStarts: ReadonlyMap<number, string | undefined> = starts,
 		registered = registration,
 	) {
@@ -665,8 +666,7 @@ describe("verified harness group cleanup", () => {
 	});
 
 	it("refuses cleanup when an injected process row is null", async () => {
-		// SAFETY: the null row deliberately crosses the untrusted JavaScript process-table seam.
-		const cleanup = fakeCleanup([{ rows: [null] as unknown as FakeProcessRow[] }]);
+		const cleanup = fakeCleanup([{ rows: [null] }]);
 		await expect(cleanup.result).resolves.toMatchObject({
 			status: "unverified",
 			identityStatus: "unknown",

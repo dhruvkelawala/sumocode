@@ -204,6 +204,8 @@ export class SubagentManager {
 	private readonly startedIds = new Set<string>();
 	private readonly cancelledSetupIds = new Set<string>();
 	private readonly workspacePlacedIds = new Set<string>();
+	/** Placement planned for each in-flight visible task, until its run settles. */
+	private readonly placementByTask = new Map<string, AgentPanePlacement>();
 	private lifecycleGeneration = 0;
 	public readonly consumedIds = new Set<string>();
 
@@ -638,6 +640,7 @@ export class SubagentManager {
 			const done = new Promise<void>((resolve) => { finishLaunch = resolve; });
 			this.launching.set(id, { controller, done });
 			if (placement?.kind === "workspace" || placement?.kind === "worktree-workspace") this.workspacePlacedIds.add(id);
+			if (placement !== undefined) this.placementByTask.set(id, placement);
 			let child: SpawnedChild;
 			try {
 				child = await this.backendFactory({ ...task, cwd: childCwd, id, signal: controller.signal, placement,
@@ -1101,6 +1104,8 @@ export class SubagentManager {
 		if (event.kind === "run-settled") {
 			const workspacePlaced = this.workspacePlacedIds.has(id);
 			this.workspacePlacedIds.delete(id);
+			const failedPlacement = this.placementByTask.get(id);
+			this.placementByTask.delete(id);
 			const settling = this.snapshots.get(id);
 			let settledNow = settling;
 			const outcome = event.outcome.kind === "failed" && settling?.worktree && !settling.pane
@@ -1121,6 +1126,15 @@ export class SubagentManager {
 				if (outcome.orphanPane.tabId && !workspacePlaced) {
 					this.subagentsTabId = outcome.orphanPane.tabId;
 				}
+			}
+			if (outcome.kind === "failed" && outcome.paneStillOpen === true && settledNow && isSettled(settledNow) && settledNow.paneStillOpen !== true) {
+				// A close failure can be reported after cancel() already
+				// force-settled the snapshot (provisioning plus the close timeout
+				// can outlive CANCEL_WAIT_MS). The pane is still open, so record
+				// the occupancy even though the snapshot is terminal; the normal
+				// path records it inside settle().
+				settledNow = { ...settledNow, paneStillOpen: true };
+				this.snapshots.set(id, settledNow);
 			}
 			if (
 				settledNow?.visible &&
@@ -1168,7 +1182,23 @@ export class SubagentManager {
 				!settledNow.pane &&
 				this.subagentsTabId !== undefined
 			) {
-				this.subagentsTabId = this.initialVisibleTabId;
+				// A pre-attach failure targeted the cached tab. Drop the cache;
+				// when the cache was the initial caller tab itself (e.g. the
+				// operator moved the parent pane and Herdr closed the original
+				// tab), re-arming the same stale id would fail every subsequent
+				// spawn. Unseed instead so the next spawn plans a fresh tab and
+				// re-caches on pane-attach.
+				this.subagentsTabId = this.subagentsTabId === this.initialVisibleTabId ? undefined : this.initialVisibleTabId;
+			}
+			if (outcome.kind === "failed" && !settledNow?.pane && failedPlacement?.kind === "tab") {
+				// A split that produced no live pane is evidence the target tab
+				// is gone. Retire still-open records anchored on it so the
+				// vacancy scan cannot keep selecting the dead tab and fail forever.
+				for (const snapshot of this.list()) {
+					if (snapshot.paneStillOpen === true && snapshot.pane?.tabId === failedPlacement.tabId) {
+						this.snapshots.set(snapshot.id, { ...snapshot, paneStillOpen: undefined });
+					}
+				}
 			}
 			void this.startSettle(id, outcome);
 			return;

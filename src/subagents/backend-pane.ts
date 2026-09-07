@@ -104,6 +104,7 @@ export interface PaneChildOptions {
 export interface PaneBackendDependencies {
 	fs?: PaneBackendFs;
 	now?: () => number;
+	env?: NodeJS.ProcessEnv;
 	baseDir?: string;
 	pollIntervalMs?: number;
 	/** Steer-consumption poll interval (design contract: 250ms). */
@@ -197,10 +198,12 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	// fails closed instead of being followed or clobbered.
 	writeNewPrivateFile(fs, paths.promptFile, prompt);
 	writeNewPrivateFile(fs, paths.logFile, "");
+	const provenance = resolveExecutableProvenance({ env: dependencies.env });
 	const commandOptions = {
 		cwd: options.cwd,
 		paths,
-		launcher: (dependencies.resolveLauncher ?? (() => resolveExecutableProvenance().sumocode))(),
+		launcher: (dependencies.resolveLauncher ?? (() => provenance.sumocode))(),
+		piBin: (dependencies.env ?? process.env).PI_BIN?.trim() ? provenance.pi : undefined,
 		model: options.model,
 		thinking: options.thinking,
 		tools: options.tools,

@@ -66,6 +66,19 @@ describe("visible-spawn", () => {
 		expect(command).not.toContain("pipefail");
 	});
 
+	it("preserves parent executables for low-thinking worktree agents", () => {
+		const paths = buildVisibleTaskPaths("sa-7", 123, "/tmp/subagents");
+		const command = buildVisibleAgentCommand({
+			cwd: "/repo.worktrees/cheap",
+			paths,
+			launcher: "/opt/Sumo Code/bin/sumocode.sh",
+			piBin: "/opt/Pi Current/bin/pi",
+			thinking: "low",
+		});
+
+		expect(command).toBe("cd '/repo.worktrees/cheap' && exec env 'PI_BIN=/opt/Pi Current/bin/pi' '/opt/Sumo Code/bin/sumocode.sh' 'task' '--thinking' 'low' '--task-dir' '/tmp/subagents/sa-7-123'");
+	});
+
 	it("uses bash pipefail for visible shell tasks", () => {
 		const paths = buildVisibleTaskPaths("bg-2", 123, "/tmp/test-bg");
 		const script = buildVisibleTaskScript({

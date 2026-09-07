@@ -115,7 +115,7 @@ const createHarness = (
 	startResult: typeof startedPane | { ok: false; error: string } = startedPane,
 	placement: { kind: "tab"; tabId: string; direction: "right" } | { kind: "workspace"; workspaceId: string; paneId: string } = { kind: "tab", tabId: "w1:t1", direction: "right" },
 	appendSystemPrompt?: string,
-	spawnerDependencies?: { sendAckPollMs?: number; sendAckTimeoutMs?: number; resolveLauncher?: () => string },
+	spawnerDependencies?: { sendAckPollMs?: number; sendAckTimeoutMs?: number; resolveLauncher?: () => string; env?: NodeJS.ProcessEnv },
 	onEvent?: (event: SubagentEvent) => void,
 ) => {
 	const fs = new FakeFs();
@@ -128,7 +128,7 @@ const createHarness = (
 		closePane,
 		notify: vi.fn(async () => undefined),
 	};
-	const spawn = createPaneChildSpawner({ fs, now: () => 1234, baseDir: "/tmp/subagents", pollIntervalMs: 750, resolveLauncher: () => "sumocode", ...spawnerDependencies });
+	const spawn = createPaneChildSpawner({ fs, now: () => 1234, baseDir: "/tmp/subagents", pollIntervalMs: 750, env: {}, ...spawnerDependencies });
 	const child = spawn({
 		prompt: "do the work",
 		name: "worker",
@@ -182,7 +182,7 @@ const createGateHarness = () => {
 		startAgentPane: vi.fn(async () => startedPane),
 		closePane: vi.fn(), openCommandInSplit: vi.fn(), notify: vi.fn(),
 	};
-	const spawn = createPaneChildSpawner({ fs, now: () => 1234, baseDir: "/tmp/subagents", resolveLauncher: () => "/parent tools/sumocode", processTree: operations });
+	const spawn = createPaneChildSpawner({ fs, now: () => 1234, baseDir: "/tmp/subagents", resolveLauncher: () => "/parent tools/sumocode", env: {}, processTree: operations });
 	const options = {
 		id: "sa-gate", name: "worker", prompt: "private task prompt", cwd: "/repo", host,
 		pi: { exec: vi.fn() }, placement: { kind: "tab" as const, tabId: "t", direction: "right" as const }, launchGate: gate,
@@ -773,6 +773,20 @@ describe("pane subagent backend", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it("starts a worktree child with the parent launcher and Pi binary", async () => {
+		const harness = createHarness(startedPane, { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" }, undefined, {
+			env: {
+				SUMOCODE_LAUNCHER: "/opt/Sumo Code/bin/sumocode.sh",
+				PI_BIN: "/opt/Pi Current/bin/pi",
+			},
+		});
+		await flushPromises();
+
+		const script = harness.fs.files.get(harness.paths.scriptFile) ?? "";
+		expect(script).toContain("exec env 'PI_BIN=/opt/Pi Current/bin/pi' '/opt/Sumo Code/bin/sumocode.sh' 'task'");
+		expect(script).not.toContain("exec sumocode 'task'");
 	});
 
 	it("prepends role instructions to the visible prompt file", () => {

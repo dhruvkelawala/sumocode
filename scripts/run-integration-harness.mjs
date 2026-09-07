@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { runIntegrationPreflight } from "./preflight-integration.mjs";
+import { reapHarnessProcessGroup, runIntegrationPreflight } from "./preflight-integration.mjs";
 import {
 	HARNESS_OWNER_TOKEN_ENV_KEY,
 	HARNESS_SIGNATURE,
@@ -23,14 +23,6 @@ async function waitForGroupExit(pgid, timeoutMs) {
 	const deadline = Date.now() + timeoutMs;
 	while (groupAlive(pgid) && Date.now() < deadline) await new Promise((resolveDelay) => setTimeout(resolveDelay, 20));
 	return !groupAlive(pgid);
-}
-
-async function reapGroup(pgid) {
-	if (!groupAlive(pgid)) return;
-	try { process.kill(-pgid, "SIGTERM"); } catch { return; }
-	if (await waitForGroupExit(pgid, RUNNER_TERM_GRACE_MS)) return;
-	try { process.kill(-pgid, "SIGKILL"); } catch { return; }
-	await waitForGroupExit(pgid, RUNNER_TERM_GRACE_MS);
 }
 
 async function retainEvidence(runRoot, reason) {
@@ -57,29 +49,47 @@ async function preparePackageSnapshot(runRoot, env) {
 	return packageRoot;
 }
 
-async function manifestProcessGroups(manifest) {
+export async function manifestProcessGroups(manifest, ownerToken) {
 	let contents = "";
 	try { contents = await readFile(manifest, "utf8"); } catch { return []; }
-	const groups = new Set();
+	const groups = new Map();
 	for (const line of contents.split("\n")) {
 		if (!line.trim()) continue;
 		try {
 			const event = JSON.parse(line);
-			if (event.event === "spawn" && Number.isSafeInteger(event.pgid) && event.pgid > 1) groups.add(event.pgid);
+			if (event.event === "spawn" && Number.isSafeInteger(event.pid) && event.pid > 1
+				&& Number.isSafeInteger(event.pgid) && event.pgid > 1) {
+				groups.set(event.pgid, {
+					pid: event.pid,
+					pgid: event.pgid,
+					processStart: event.processStart,
+					ownerPid: event.ownerPid,
+					ownerProcessStart: event.ownerProcessStart,
+					ownerToken,
+					// This audit owns a shared run. A manifest event cannot opt into
+					// focused mode's tokenless owner proof.
+					ownershipMode: "shared",
+				});
+			}
 		} catch {
 			// A worker can be interrupted mid-append; earlier complete registrations remain auditable.
 		}
 	}
-	return [...groups];
+	return [...groups.values()];
 }
 
-async function auditAndReap(manifest) {
-	const groups = await manifestProcessGroups(manifest);
-	const survivors = groups.filter(groupAlive);
-	for (const pgid of survivors) await reapGroup(pgid);
-	const unreaped = survivors.filter(groupAlive);
-	if (survivors.length > 0) {
-		process.stderr.write(`[integration harness] zero-orphan audit FAILED: ${survivors.length} survivor group(s) registered (${survivors.join(", ")}); ${unreaped.length} remained after TERM→KILL\n`);
+async function auditAndReap(manifest, ownerToken) {
+	const groups = await manifestProcessGroups(manifest, ownerToken);
+	const results = [];
+	for (const group of groups) {
+		results.push({ group, result: await reapHarnessProcessGroup(group, {
+			wait: () => waitForGroupExit(group.pgid, RUNNER_TERM_GRACE_MS),
+		}) });
+	}
+	const nonclean = results.filter(({ result }) => result.status !== "exited");
+	if (nonclean.length > 0) {
+		const details = nonclean.map(({ group, result }) => `${group.pgid}:${result.status}${result.identityStatus ? `/${result.identityStatus}` : ""}${result.error ? ` (${result.error})` : ""}`).join(", ");
+		process.stderr.write(`[integration harness] zero-orphan audit FAILED: ${nonclean.length} nonclean registered group(s) (${details})\n`);
 		return false;
 	}
 	process.stdout.write(`[integration harness] zero-orphan audit: 0 survivors across ${groups.length} registered process group(s)\n`);
@@ -123,6 +133,7 @@ async function main(ownerToken) {
 	Object.assign(env, {
 		SUMOCODE_INTEGRATION_RUN_ROOT: runRoot,
 		SUMOCODE_INTEGRATION_MANIFEST: manifest,
+		[HARNESS_OWNER_TOKEN_ENV_KEY]: ownerToken,
 		[HARNESS_SIGNATURE_ENV_KEY]: HARNESS_SIGNATURE,
 		NODE_COMPILE_CACHE: compileCache,
 		TMPDIR: tempRoot,
@@ -162,7 +173,7 @@ async function main(ownerToken) {
 			], env);
 		}
 	}
-	const auditPassed = await auditAndReap(manifest);
+	const auditPassed = await auditAndReap(manifest, ownerToken);
 	const exitCode = resolveHarnessExitCode({ seamStatus, integrationStatus, auditPassed });
 	if (exitCode === 0) await rm(runRoot, { recursive: true, force: true });
 	else {

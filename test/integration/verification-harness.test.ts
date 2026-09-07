@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	captureTimeoutEvidence,
@@ -18,8 +18,8 @@ import {
 	extensionInputsHashFromManifest,
 	extensionOutputsHash,
 } from "../../scripts/lib/extension-bundle.mjs";
-import { fixIntegrationPreflight, inspectIntegrationPreflight, processRows } from "../../scripts/preflight-integration.mjs";
-import { resolveHarnessExitCode } from "../../scripts/run-integration-harness.mjs";
+import { fixIntegrationPreflight, inspectIntegrationPreflight, processRows, reapHarnessProcessGroup } from "../../scripts/preflight-integration.mjs";
+import { manifestProcessGroups, resolveHarnessExitCode } from "../../scripts/run-integration-harness.mjs";
 import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
 const roots: string[] = [];
@@ -96,18 +96,26 @@ describe("verification harness v2 seam", () => {
 		expect(env.UNRELATED_AMBIENT_VALUE).toBeUndefined();
 	});
 
-	it("supervises and reaps a whole process group while recording the manifest", async () => {
-		const root = createRunRoot();
-		const manifest = join(root, "children.jsonl");
+	it("reaps a title-changing child through the public supervised spawn seam", async () => {
 		const child = spawnSupervisedProcess(
 			process.execPath,
-			[join(process.cwd(), "test/integration/fixtures/harness-process-tree.mjs")],
+			[join(process.cwd(), "test/integration/fixtures/title-changing-harness-child.mjs")],
 			{
-				env: { ...process.env, SUMOCODE_INTEGRATION_RUN_ROOT: root, SUMOCODE_INTEGRATION_MANIFEST: manifest },
+				env: { ...process.env },
 				stdio: ["ignore", "pipe", "pipe"],
 			},
 		);
 		children.push(child);
+		await new Promise<void>((resolveReady, rejectReady) => {
+			const timer = setTimeout(() => rejectReady(new Error("title-changing child did not become ready")), 5_000);
+			child.child.stdout?.once("data", () => {
+				clearTimeout(timer);
+				resolveReady();
+			});
+		});
+
+		const command = execFileSync("ps", ["eww", "-p", String(child.pid), "-o", "command="], { encoding: "utf8" });
+		expect(command).not.toContain(`${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE}`);
 
 		expect(child.shouldCaptureExitFailure(false)).toBe(true);
 		const termination = child.terminate();
@@ -115,9 +123,23 @@ describe("verification harness v2 seam", () => {
 		expect(child.shouldCaptureExitFailure(true)).toBe(true);
 		await termination;
 		expect(() => process.kill(-child.pgid, 0)).toThrow();
-		// SAFETY: the manifest is written by the harness in this test and only the asserted event/pid fields are consumed.
-		const events = readFileSync(manifest, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { event: string; pid: number });
-		expect(events).toContainEqual(expect.objectContaining({ event: "spawn", pid: child.child.pid }));
+		const root = resolve(child.evidence.evidenceDir, "../../..");
+		const manifest = process.env.SUMOCODE_INTEGRATION_MANIFEST ?? join(root, "children.jsonl");
+		// SAFETY: the manifest is written by the harness in this test and only the asserted registration fields are consumed.
+		const events = readFileSync(manifest, "utf8").trim().split("\n").map((line) => JSON.parse(line) as {
+			event: string;
+			pid: number;
+			ownerPid?: number;
+			ownerProcessStart?: string;
+			ownershipMode?: string;
+		});
+		expect(events).toContainEqual(expect.objectContaining({
+			event: "spawn",
+			pid: child.child.pid,
+			ownerPid: process.pid,
+			ownerProcessStart: expect.any(String),
+			ownershipMode: process.env.SUMOCODE_INTEGRATION_RUN_ROOT === undefined ? "focused" : "shared",
+		}));
 		expect(events).toContainEqual(expect.objectContaining({ event: "exit", pid: child.child.pid }));
 	});
 
@@ -506,6 +528,8 @@ describe("verification harness v2 seam", () => {
 				TMPDIR: tempRoot,
 				SUMOCODE_INTEGRATION_RUN_ROOT: root,
 				SUMOCODE_INTEGRATION_MANIFEST: manifest,
+				[HARNESS_OWNER_TOKEN_ENV_KEY]: "shared-run-test-owner",
+				[HARNESS_SIGNATURE_ENV_KEY]: HARNESS_SIGNATURE,
 			};
 			const output = execFileSync(process.execPath, [
 				join(process.cwd(), "node_modules", "vitest", "vitest.mjs"),
@@ -546,6 +570,214 @@ describe("verification harness v2 seam", () => {
 	});
 });
 
+describe("verified harness group cleanup", () => {
+	type FakeProcessRow = { pid: number; ppid: number; pgid: number; state?: string; start?: string; command: string };
+	const ownerToken = "run-owner";
+	const registration = {
+		pid: 60_001,
+		pgid: 60_001,
+		processStart: "leader-start",
+		ownerPid: 59_001,
+		ownerProcessStart: "owner-start",
+		ownerToken,
+		ownershipMode: "shared",
+	};
+	const ownedCommand = `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} ${HARNESS_OWNER_TOKEN_ENV_KEY}=${ownerToken} node child.js`;
+	const owner = { pid: registration.ownerPid, ppid: 58_001, pgid: 58_001, command: ownedCommand };
+	const leader = { pid: registration.pid, ppid: owner.pid, pgid: registration.pgid, command: "pi" };
+	const member = { pid: 60_002, ppid: leader.pid, pgid: registration.pgid, command: "pi" };
+	const descendant = { pid: 60_003, ppid: 1, pgid: registration.pgid, command: ownedCommand };
+	const starts = new Map([
+		[registration.pid, registration.processStart],
+		[registration.ownerPid, registration.ownerProcessStart],
+	]);
+
+	function fakeCleanup(
+		// Rows admit null so tests can inject a malformed table at the untrusted seam.
+		tables: Array<{ rows: Array<FakeProcessRow | null>; issue?: { code: string } }>,
+		processStarts: ReadonlyMap<number, string | undefined> = starts,
+		registered = registration,
+	) {
+		const signals: Array<[number, NodeJS.Signals | number]> = [];
+		return {
+			signals,
+			result: reapHarnessProcessGroup(registered, {
+				readProcessTable: () => tables.shift() ?? { rows: [] },
+				currentPgid: 99_999,
+				readProcessStart: (pid) => processStarts.get(pid),
+				kill: (pid, signal) => { signals.push([pid, signal ?? 0]); return true; },
+				wait: async () => {},
+			}),
+		};
+	}
+
+	it("cleans an authenticated tree even when titles hide every child marker", async () => {
+		const cleanup = fakeCleanup([{ rows: [owner, leader, member] }, { rows: [] }]);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "reaped" });
+		expect(cleanup.signals).toEqual([[-registration.pgid, "SIGTERM"]]);
+	});
+
+	it("authenticates a focused owner by its captured pid and birth", async () => {
+		const focused = { ...registration, ownershipMode: "focused" };
+		const unsignedOwner = { ...owner, command: "vitest" };
+		const cleanup = fakeCleanup([{ rows: [unsignedOwner, leader] }, { rows: [] }], starts, focused);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "reaped" });
+		expect(cleanup.signals).toEqual([[-registration.pgid, "SIGTERM"]]);
+	});
+
+	it("takes the leader's birth from the membership snapshot when a separate lookup finds nothing", async () => {
+		// A leader exiting between two ps calls must not read as present-but-unknown.
+		const snapshotLeader = { ...leader, start: registration.processStart };
+		const snapshotOwner = { ...owner, start: registration.ownerProcessStart };
+		const cleanup = fakeCleanup([{ rows: [snapshotOwner, snapshotLeader, member] }, { rows: [] }], new Map());
+		await expect(cleanup.result).resolves.toMatchObject({ status: "reaped" });
+		expect(cleanup.signals).toEqual([[-registration.pgid, "SIGTERM"]]);
+	});
+
+	it("still refuses a snapshot leader whose birth differs from the registration", async () => {
+		const replaced = { ...leader, start: "replacement-start" };
+		const cleanup = fakeCleanup([{ rows: [owner, replaced] }], new Map());
+		await expect(cleanup.result).resolves.toMatchObject({ status: "unverified", identityStatus: "different" });
+		expect(cleanup.signals).toEqual([]);
+	});
+
+	it("refuses a leader whose birth identity changed", async () => {
+		const changed = new Map(starts).set(registration.pid, "replacement-start");
+		const cleanup = fakeCleanup([{ rows: [owner, leader] }], changed);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "unverified", identityStatus: "different" });
+		expect(cleanup.signals).toEqual([]);
+	});
+
+	it("refuses an owner whose birth identity changed", async () => {
+		const changed = new Map(starts).set(registration.ownerPid, "replacement-start");
+		const cleanup = fakeCleanup([{ rows: [owner, leader] }], changed);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "unverified", identityStatus: "different" });
+		expect(cleanup.signals).toEqual([]);
+	});
+
+	it.each([
+		["signature", { ...owner, command: `${HARNESS_OWNER_TOKEN_ENV_KEY}=${ownerToken} node worker.js` }],
+		["token", { ...owner, command: `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} ${HARNESS_OWNER_TOKEN_ENV_KEY}=${ownerToken}-forged node worker.js` }],
+	])("refuses a shared owner with the wrong %s", async (_kind, wrongOwner) => {
+		const cleanup = fakeCleanup([{ rows: [wrongOwner, leader] }]);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "unverified", identityStatus: "different" });
+		expect(cleanup.signals).toEqual([]);
+	});
+
+	it.each([
+		["cycle", [owner, leader, { ...member, ppid: 60_004 }, { pid: 60_004, ppid: member.pid, pgid: registration.pgid, command: "pi" }]],
+		["broken", [owner, leader, { ...member, ppid: 60_099 }]],
+		["missing", [owner, leader, { ...member, ppid: 0 }]],
+		["unrelated same-pgid member", [owner, leader, { ...member, ppid: owner.pid }]],
+	] satisfies Array<[string, FakeProcessRow[]]>)("refuses a group with %s ancestry", async (_kind, rows) => {
+		const cleanup = fakeCleanup([{ rows }]);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "unverified", identityStatus: "different" });
+		expect(cleanup.signals).toEqual([]);
+	});
+
+	it("refuses cleanup when process ownership cannot be inspected", async () => {
+		const cleanup = fakeCleanup([{ rows: [], issue: { code: "process-table-unavailable" } }]);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "unverified", identityStatus: "unknown" });
+		expect(cleanup.signals).toEqual([]);
+	});
+
+	it("refuses cleanup when an injected process row is null", async () => {
+		const cleanup = fakeCleanup([{ rows: [null] }]);
+		await expect(cleanup.result).resolves.toMatchObject({
+			status: "unverified",
+			identityStatus: "unknown",
+			error: "process table malformed",
+		});
+		expect(cleanup.signals).toEqual([]);
+	});
+
+	it("refuses escalation when owner authentication changes during TERM grace", async () => {
+		const wrongOwner = { ...owner, command: `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} ${HARNESS_OWNER_TOKEN_ENV_KEY}=other-run node worker.js` };
+		const cleanup = fakeCleanup([
+			{ rows: [owner, leader, member] },
+			{ rows: [wrongOwner, leader, member] },
+		]);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "unverified", identityStatus: "different" });
+		expect(cleanup.signals).toEqual([[-registration.pgid, "SIGTERM"]]);
+	});
+
+	it("reports an already exited group without signaling", async () => {
+		const cleanup = fakeCleanup([{ rows: [] }]);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "exited" });
+		expect(cleanup.signals).toEqual([]);
+	});
+
+	it("reaps a reparented live leader only when every member carries the run identity", async () => {
+		const signedLeader = { ...leader, ppid: 1, command: ownedCommand };
+		const signedMember = { ...member, command: ownedCommand };
+		const cleanup = fakeCleanup([{ rows: [signedLeader, signedMember] }, { rows: [] }]);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "reaped" });
+		expect(cleanup.signals).toEqual([[-registration.pgid, "SIGTERM"]]);
+	});
+
+	it("refuses a member carrying a fake-pi name and token without a harness signature", async () => {
+		// A reparented leader takes the run-identity fallback, so only the missing
+		// signature decides this refusal; with an owner-linked leader the absent
+		// owner row would refuse first and hide the seam under test.
+		const unsigned = { ...leader, ppid: 1, command: `/tmp/sumocode-fake-pi-unsigned/stub ${HARNESS_OWNER_TOKEN_ENV_KEY}=${ownerToken} node child.js` };
+		const cleanup = fakeCleanup([{ rows: [unsigned] }]);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "unverified", identityStatus: "different" });
+		expect(cleanup.signals).toEqual([]);
+	});
+
+	it("reports unverified instead of exited when actual processRows yields malformed rows", async () => {
+		const output = "SUMOCODE_HARNESS_SIGNATURE=leaked-secret truncated-row\n";
+		const signals: Array<[number, NodeJS.Signals | number]> = [];
+		const result = await reapHarnessProcessGroup(registration, {
+			// SAFETY: processRows requests UTF-8 text; this fake returns that text without spawning.
+			readProcessTable: () => processRows((() => output) as typeof execFileSync),
+			currentPgid: 99_999,
+			readProcessStart: (pid) => starts.get(pid),
+			kill: (pid, signal) => { signals.push([pid, signal ?? 0]); return true; },
+			wait: async () => {},
+		});
+
+		expect(result.status).toBe("unverified");
+		expect(result.status).not.toBe("exited");
+		expect(signals).toEqual([]);
+	});
+
+	it("refuses an unsigned survivor after the leader exits", async () => {
+		const cleanup = fakeCleanup([{ rows: [{ ...descendant, command: "pi" }] }]);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "unverified", identityStatus: "different" });
+		expect(cleanup.signals).toEqual([]);
+	});
+
+	it("reaps signed descendants after leader exit while every member matches", async () => {
+		const cleanup = fakeCleanup([{ rows: [descendant] }, { rows: [descendant] }, { rows: [] }]);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "reaped" });
+		expect(cleanup.signals).toEqual([
+			[-registration.pgid, "SIGTERM"],
+			[-registration.pgid, "SIGKILL"],
+		]);
+	});
+});
+
+describe("harness manifest audit contract", () => {
+	it("treats a manifest's forged focused mode as shared", async () => {
+		const root = createRunRoot();
+		const manifest = join(root, "children.jsonl");
+		writeFileSync(manifest, `${JSON.stringify({
+			event: "spawn",
+			pid: 60_001,
+			pgid: 60_001,
+			processStart: "leader-start",
+			ownerPid: 59_001,
+			ownerProcessStart: "owner-start",
+			ownershipMode: "focused",
+		})}\n`);
+
+		await expect(manifestProcessGroups(manifest, "run-owner")).resolves.toEqual([
+			expect.objectContaining({ ownershipMode: "shared" }),
+		]);
+	});
+});
+
 describe("harness exit-code contract", () => {
 	const ok = { code: 0, interrupted: false };
 
@@ -562,7 +794,7 @@ describe("harness exit-code contract", () => {
 });
 
 describe("portable process-table probe", () => {
-	const psRow = "  101   1  101 /usr/bin/some-command\n";
+	const psRow = "  101   1   101 S Sat Aug 22 13:54:46 2026 /usr/bin/some-command\n";
 
 	it("falls back to the alternate ps personality when the first form is rejected", () => {
 		const attempts: string[][] = [];
@@ -579,7 +811,7 @@ describe("portable process-table probe", () => {
 		const result = processRows(execute);
 		expect(attempts).toHaveLength(2);
 		expect(result.issue).toBeUndefined();
-		expect(result.rows).toEqual([{ pid: 101, ppid: 1, pgid: 101, command: "/usr/bin/some-command" }]);
+		expect(result.rows).toEqual([{ pid: 101, ppid: 1, pgid: 101, state: "S", start: "Sat Aug 22 13:54:46 2026", command: "/usr/bin/some-command" }]);
 	});
 
 	it("degrades to the named process-table issue only when every ps form fails", () => {
@@ -591,5 +823,34 @@ describe("portable process-table probe", () => {
 		const result = processRows(execute);
 		expect(result.rows).toEqual([]);
 		expect(result.issue?.code).toBe("process-table-unavailable");
+	});
+
+	it("parses valid rows and skips blank lines without an issue", () => {
+		const output = "\n  101   1   101 S Sat Aug 22 13:54:46 2026 /usr/bin/a\n\n  102 101   101 R Sat Sep  5 20:57:01 2026 /usr/bin/b\n\n";
+		// SAFETY: processRows requests UTF-8 text; this fake returns that text without spawning.
+		const execute = (() => output) as typeof execFileSync;
+
+		const result = processRows(execute);
+		expect(result.issue).toBeUndefined();
+		expect(result.rows).toEqual([
+			{ pid: 101, ppid: 1, pgid: 101, state: "S", start: "Sat Aug 22 13:54:46 2026", command: "/usr/bin/a" },
+			{ pid: 102, ppid: 101, pgid: 101, state: "R", start: "Sat Sep  5 20:57:01 2026", command: "/usr/bin/b" },
+		]);
+	});
+
+	it("flags malformed nonblank rows as an issue without echoing their content", () => {
+		const output = [
+			"SUMOCODE_HARNESS_SIGNATURE=leaked-secret truncated-row",
+			"  103   1",
+			"  101   1   101 S Sat Aug 22 13:54:46 2026 /usr/bin/fine",
+			"",
+		].join("\n");
+		// SAFETY: processRows requests UTF-8 text; this fake returns that text without spawning.
+		const execute = (() => output) as typeof execFileSync;
+
+		const result = processRows(execute);
+		expect(result.rows).toEqual([{ pid: 101, ppid: 1, pgid: 101, state: "S", start: "Sat Aug 22 13:54:46 2026", command: "/usr/bin/fine" }]);
+		expect(result.issue?.code).toBe("process-table-malformed-row");
+		expect(JSON.stringify(result)).not.toContain("leaked-secret");
 	});
 });

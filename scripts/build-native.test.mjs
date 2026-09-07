@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -48,12 +49,40 @@ function fixture(layout) {
 	const neighborhood = layout === "pnpm" ? join(piPkg, "../..") : join(piPkg, "node_modules");
 	write(join(piPkg, "package.json"), JSON.stringify({
 		name: "@earendil-works/pi-coding-agent", version: "0.84.4", type: "module",
-		dependencies: { "proper-lockfile": "1.0.0", "@earendil-works/pi-agent-core": "1.0.0" },
+		dependencies: {
+			"proper-lockfile": "1.0.0",
+			"@earendil-works/pi-agent-core": "1.0.0",
+			"@earendil-works/pi-ai": "1.0.0",
+		},
 		optionalDependencies: { "absent-optional-dependency": "1.0.0" },
 	}));
-	const source = 'globalThis.__sumocodeStartupMark("bedrock_import_start");\nawait import("./register-bedrock.js");\nglobalThis.__sumocodeStartupMark("after_bedrock_import");\n'
-		+ 'import lock from "proper-lockfile";\nimport { agent } from "@earendil-works/pi-agent-core/private-entry";\nconsole.log(JSON.stringify([lock, agent]));\n';
+	const source = 'import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";\n'
+		+ 'await import("./register-bedrock.js");\nawait import("../cli.js");\n';
 	write(join(piPkg, "dist/bun/cli.js"), source);
+	write(join(piPkg, "dist/cli.js"),
+		'import lock from "proper-lockfile";\nimport { agent } from "@earendil-works/pi-agent-core/private-entry";\nconsole.log(JSON.stringify([lock, agent]));\n');
+	write(join(piPkg, "dist/main.js"), "export async function main(args, options) {\n    resetTimings();\n}\n");
+	write(join(piPkg, "dist/core/model-runtime.js"),
+		"static async create(options = {}) {\n        const credentials\n"
+		+ "if (options.refreshOnCreate !== false) {\n                await runtime.refresh({ allowNetwork: refreshFromNetwork, signal });\n            }\n"
+		+ "return runtime;\n    }\n    configureRadiusProviders()\n");
+	write(join(piPkg, "dist/core/agent-session-services.js"), "await modelRuntime.refresh({ allowNetwork: false });\n    diagnostics.push\n");
+	write(join(piPkg, "dist/core/extensions/loader.js"),
+		"try {\n        await factory(load.api);\n        load.commit();\n"
+		+ 'try {\n        const factory = await loadExtensionModule(resolvedPath, cacheToken);\n        time(`${extensionPath} module import`, "extensions");\n');
+	write(join(piPkg, "dist/modes/rpc/rpc-mode.js"),
+		"export async function runRpcMode(runtimeHost) {\n    takeOverStdout();\n"
+		+ 'case "get_state": {\n                const state =\n');
+	write(join(piPkg, "dist/bundle/chunks/chunk-fixture.js"),
+		"async function main(args,options){resetTimings();\n"
+		+ "static async create(options={}){let credentials=\n"
+		+ "try{options.refreshOnCreate!==!1&&await runtime.refresh({allowNetwork:refreshFromNetwork,signal})}finally{timeout&&clearTimeout(timeout)}return runtime}\n"
+		+ "await modelRuntime.refresh({allowNetwork:!1}),diagnostics.push\n"
+		+ "async function initializeExtension(factory,extensionPath,resolvedPath,cwd,eventBus,runtime){let extension=createExtension(extensionPath,resolvedPath),load=createExtensionAPI(extension,runtime,cwd,eventBus);try{await factory(load.api),load.commit()}\n"
+		+ "async function loadExtension(extensionPath,cwd,eventBus,runtime,cacheToken){let resolvedPath=resolvePath(extensionPath,cwd,{normalizeUnicodeSpaces:!0});try{let factory=await loadExtensionModule(resolvedPath,cacheToken);\n"
+		+ "async function runRpcMode(runtimeHost){takeOverStdout();\n"
+		+ 'case"get_state":{let state2=\n');
+	write(join(piPkg, "dist/bundle/cli.js"), "process.title=APP_NAME;\n");
 	const lockPkg = join(root, "node_modules/.pnpm/lock@1/node_modules/proper-lockfile");
 	write(join(lockPkg, "package.json"), JSON.stringify({ name: "proper-lockfile", main: "index.cjs" }));
 	write(join(lockPkg, "index.cjs"), 'module.exports = require("private-transitive");\n');
@@ -65,6 +94,10 @@ function fixture(layout) {
 		exports: { "./private-entry": { import: "./nested/entry.js" }, "./package.json": "./package.json" },
 	}));
 	write(join(neighborhood, "@earendil-works/pi-agent-core/nested/entry.js"), 'export const agent = "pi-private-esm";\n');
+	write(join(neighborhood, "@earendil-works/pi-ai/package.json"), JSON.stringify({
+		name: "@earendil-works/pi-ai", type: "module", exports: { "./bun-oauth": "./bun-oauth.js" },
+	}));
+	write(join(neighborhood, "@earendil-works/pi-ai/bun-oauth.js"), "export function registerBunOAuthFlows() {}\n");
 	for (const base of [directory, root, join(directory, "operator")]) {
 		write(join(base, "node_modules/proper-lockfile/package.json"), JSON.stringify({ name: "proper-lockfile", main: "index.js" }));
 		write(join(base, "node_modules/proper-lockfile/index.js"), 'module.exports = "wrong-root-or-operator-version";\n');
@@ -72,9 +105,42 @@ function fixture(layout) {
 	return { directory, root, piPkg, source, buildDir: join(root, "dist/native/.pi-build") };
 }
 
+const instrumentedFiles = [
+	"bun/cli.js",
+	"bundle/chunks/chunk-fixture.js",
+	"bundle/cli.js",
+	"core/agent-session-services.js",
+	"core/extensions/loader.js",
+	"core/model-runtime.js",
+	"main.js",
+	"modes/rpc/rpc-mode.js",
+];
+
+function startupInstrumentationHashes(piPkg) {
+	return Object.fromEntries(instrumentedFiles.map((path) => [
+		path,
+		createHash("sha256").update(readFileSync(join(piPkg, "dist", path))).digest("hex"),
+	]));
+}
+
 describe("native build entry", () => {
+	it("keeps the direct startup instrumentation command", () => {
+		const { root, piPkg } = fixture("pnpm");
+		write(join(piPkg, "dist/index.js"), "export {};\n");
+		const installedPi = join(root, "node_modules/@earendil-works/pi-coding-agent");
+		mkdirSync(dirname(installedPi), { recursive: true });
+		symlinkSync(piPkg, installedPi, "dir");
+		const script = join(root, "scripts/instrument-pi-startup.mjs");
+		mkdirSync(dirname(script), { recursive: true });
+		copyFileSync(new URL("./instrument-pi-startup.mjs", import.meta.url), script);
+		const result = spawnSync(process.execPath, [script], { cwd: root, env: {}, encoding: "utf8", timeout: 10_000 });
+		expect(result.status, result.stderr).toBe(0);
+		expect(result.stdout).toContain(`startup marks applied under ${realpathSync(join(piPkg, "dist"))}`);
+		expect(readFileSync(join(piPkg, "dist/bun/cli.js"), "utf8")).toContain('globalThis.__sumocodeStartupMark("child_entry")');
+	});
+
 	for (const mode of ["direct", "symlink", "directory alias", "import", "missing argv", "directory argv", "unrelated file argv"]) {
-		it(`${mode} runs instrumentation only for CLI invocation`, () => {
+		it(`${mode} starts the native build only for CLI invocation`, () => {
 			const directory = realpathSync(mkdtempSync(join(tmpdir(), "sumocode-native-entry-")));
 			temporaryDirectories.push(directory);
 			const root = join(directory, "package");
@@ -85,10 +151,7 @@ describe("native build entry", () => {
 			copyFileSync(new URL("./build-native.mjs", import.meta.url), script);
 			write(join(root, "node_modules/esbuild/package.json"), '{"type":"module","exports":"./index.js"}');
 			write(join(root, "node_modules/esbuild/index.js"), 'export function build() { throw new Error("unexpected-build"); }');
-			write(join(root, "scripts/instrument-pi-startup.mjs"),
-				'import { appendFileSync } from "node:fs";\n'
-				+ 'appendFileSync(new URL("../marker", import.meta.url), "entry\\n");\n'
-				+ 'throw new Error("native-entry-sentinel");\n');
+			write(join(root, "scripts/instrument-pi-startup.mjs"), "export function instrumentPiStartup() {}\n");
 			const env = {};
 			for (const key of ["HOME", "TMPDIR", "XDG_CACHE_HOME"]) {
 				env[key] = join(directory, key);
@@ -118,13 +181,8 @@ describe("native build entry", () => {
 			expect(result.signal).toBeNull();
 			expect(result.status).toBe(cli ? 1 : 0);
 			expect(result.stdout).toBe("");
-			if (cli) {
-				expect(result.stderr).toContain("Error: native-entry-sentinel");
-				expect(readFileSync(join(root, "marker"), "utf8")).toBe("entry\n");
-			} else {
-				expect(result.stderr).toBe("");
-				expect(existsSync(join(root, "marker"))).toBe(false);
-			}
+			if (cli) expect(result.stderr).toContain("bun is required");
+			else expect(result.stderr).toBe("");
 		});
 	}
 });
@@ -150,6 +208,34 @@ describe("native build input containment", () => {
 });
 
 describe("native Pi build-source preparation", () => {
+	it("instruments only the detached build copy and keeps startup diagnostics", () => {
+		const { directory, root, piPkg, buildDir } = fixture("pnpm");
+		const sourceHashes = startupInstrumentationHashes(piPkg);
+
+		makeNativePiBuildCopy(piPkg, buildDir, root);
+
+		expect(startupInstrumentationHashes(piPkg)).toEqual(sourceHashes);
+		for (const path of instrumentedFiles) {
+			const stagedPath = join(buildDir, "dist", path);
+			expect(realpathSync(stagedPath)).toBe(stagedPath);
+			expect(statSync(stagedPath).nlink).toBe(1);
+		}
+		const stagedSources = instrumentedFiles.map((path) => readFileSync(join(buildDir, "dist", path), "utf8")).join("\n");
+		for (const event of ["child_entry", "main_enter", "model_runtime_create_start", "model_refresh_1_start", "model_refresh_2_start", "extension_factory_start", "extension_import_start", "run_rpc_mode_enter", "first_get_state_received", "after_cli_import"]) {
+			expect(stagedSources).toContain(event);
+		}
+		const diagnostics = join(directory, "startup.jsonl");
+		const result = spawnSync(process.execPath, [join(buildDir, "dist/bun/cli.js")], {
+			cwd: directory,
+			env: { HOME: directory, TMPDIR: directory, SUMO_TUI_DIAG_FILE: diagnostics },
+			encoding: "utf8",
+			timeout: 10_000,
+		});
+		expect(result.status, result.stderr).toBe(0);
+		expect(readFileSync(diagnostics, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line).event))
+			.toEqual(["child_entry", "cli_import_start", "after_cli_import"]);
+	});
+
 	for (const scenario of ["contained", "escaped ancestor", "manifest-only before escaped ancestor"]) {
 		it(`checks the nearest import-only exports package: ${scenario}`, () => {
 			const { directory, root, piPkg, buildDir } = fixture("pnpm");
@@ -378,8 +464,8 @@ describe("native Pi build-source preparation", () => {
 		write(manifestPath, JSON.stringify(manifest));
 		const counts = { checked: 0, linked: 0, skipped: 0 };
 		const dependencies = validatePiBuildGraph(piPkg, root, counts);
-		expect([...dependencies.keys()]).toEqual(["proper-lockfile", "@earendil-works/pi-agent-core"]);
-		expect(counts).toEqual({ checked: 8, linked: 2, skipped: 6 });
+		expect([...dependencies.keys()]).toEqual(["proper-lockfile", "@earendil-works/pi-agent-core", "@earendil-works/pi-ai"]);
+		expect(counts).toEqual({ checked: 9, linked: 3, skipped: 6 });
 		manifest.dependencies["missing-required"] = "1";
 		write(manifestPath, JSON.stringify(manifest));
 		expect(() => validatePiBuildGraph(piPkg, root)).toThrow(/Cannot resolve Pi build dependency missing-required/);

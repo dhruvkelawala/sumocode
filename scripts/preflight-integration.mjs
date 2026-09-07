@@ -30,9 +30,14 @@ const PREFLIGHT_TERM_GRACE_MS = 300;
 // Try the platform-appropriate form first, then the other, so a runner with
 // either ps lineage produces a process table instead of the degraded issue.
 // On procps, `e`(env) `ww`(wide) `a`+`x`(all) `o`(format) combine dashless.
+// `lstart` rides in the same snapshot as membership so a leader that exits
+// between two separate ps calls cannot read as "present but birth unknown".
+const PS_COLUMNS = "pid=,ppid=,pgid=,state=,lstart=,command=";
 const PS_ARG_FORMS = process.platform === "darwin"
-	? [["eww", "-axo", "pid=,ppid=,pgid=,command="], ["ewwaxo", "pid=,ppid=,pgid=,command="]]
-	: [["ewwaxo", "pid=,ppid=,pgid=,command="], ["eww", "-axo", "pid=,ppid=,pgid=,command="]];
+	? [["eww", "-axo", PS_COLUMNS], ["ewwaxo", PS_COLUMNS]]
+	: [["ewwaxo", PS_COLUMNS], ["eww", "-axo", PS_COLUMNS]];
+// lstart is a fixed 24-character field, e.g. "Sat Aug 22 13:54:46 2026".
+const PS_ROW = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S{3} \S{3} [ \d]\d \d\d:\d\d:\d\d \d{4})\s+(.*)$/;
 
 export function processRows(execute = execFileSync) {
 	let lastError;
@@ -42,11 +47,27 @@ export function processRows(execute = execFileSync) {
 				encoding: "utf8",
 				maxBuffer: PS_MAX_BUFFER_BYTES,
 			});
-			const rows = output.split("\n").flatMap((line) => {
-				const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/);
-				return match ? [{ pid: Number(match[1]), ppid: Number(match[2]), pgid: Number(match[3]), command: match[4] }] : [];
-			});
-			return { rows };
+			const rows = [];
+			let malformedRows = 0;
+			for (const line of output.split("\n")) {
+				if (line.trim() === "") continue;
+				const match = line.match(PS_ROW);
+				if (!match) {
+					malformedRows += 1;
+					continue;
+				}
+				rows.push({ pid: Number(match[1]), ppid: Number(match[2]), pgid: Number(match[3]), state: match[4], start: match[5], command: match[6] });
+			}
+			// ps rows can carry process environments; count unparseable rows without
+			// echoing them so the issue stays safe to print.
+			return malformedRows === 0 ? { rows } : {
+				rows,
+				issue: {
+					code: "process-table-malformed-row",
+					message: `ps returned ${malformedRows} row(s) that do not match the expected pid/ppid/pgid/state/command shape; treating the table as unverified`,
+					remediation: "inspect ps output manually, then rerun pnpm test:integration:preflight",
+				},
+			};
 		} catch (error) {
 			lastError = error;
 		}
@@ -65,7 +86,8 @@ export function processRows(execute = execFileSync) {
 }
 
 function hasProcessMarker(row, key, value) {
-	return row.command.includes(`${key}=${value}`);
+	const marker = `${key}=${value}`.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	return new RegExp(`(?:^|\\s)${marker}(?:\\s|$)`).test(row.command);
 }
 
 function hasHarnessSignature(row) {
@@ -90,7 +112,7 @@ function pidIsAlive(pid) {
 }
 
 /** OS-reported start time for a live pid, or undefined when unavailable. */
-function liveProcessStart(pid, execute = execFileSync) {
+export function liveProcessStart(pid, execute = execFileSync) {
 	try {
 		return execute("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8" }).trim() || undefined;
 	} catch {
@@ -292,6 +314,145 @@ function survivingGroupIsHarnessOwned(pgid, rows, currentPgid) {
 	return currentPgid !== undefined
 		&& pgid !== currentPgid
 		&& rows.some((row) => row.pgid === pgid && hasHarnessSignature(row));
+}
+
+function ancestryStatus(pid, ancestorPid, rowsByPid) {
+	const seen = new Set();
+	while (Number.isSafeInteger(pid) && pid > 1) {
+		if (pid === ancestorPid) return "reached";
+		if (seen.has(pid)) return "cycle";
+		seen.add(pid);
+		const row = rowsByPid.get(pid);
+		if (row === undefined) return "missing";
+		pid = row.ppid;
+	}
+	return "root";
+}
+
+function membersCarryRunIdentity(members, ownerToken) {
+	return members.every((row) => hasHarnessSignature(row) && hasProcessMarker(row, HARNESS_OWNER_TOKEN_ENV_KEY, ownerToken));
+}
+
+/** Birth identity from the same snapshot as membership; a separate ps call only when the row lacks one. */
+function readStart(readProcessStart, row, pid) {
+	if (row?.start) return row.start;
+	try { return readProcessStart(pid); } catch { return undefined; }
+}
+
+function inspectHarnessProcessGroup(registration, table, currentPgid, readProcessStart) {
+	if (table?.issue !== undefined || !Array.isArray(table?.rows)) {
+		return { status: "unverified", identityStatus: "unknown", error: "process table unavailable" };
+	}
+	const rowsAreValid = table.rows.every((row) => Number.isSafeInteger(row?.pid) && row.pid > 0
+		&& Number.isSafeInteger(row.ppid) && row.ppid >= 0
+		&& Number.isSafeInteger(row.pgid) && row.pgid >= 0
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- process tables are untrusted at this signal boundary
+		&& typeof row.command === "string"
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- injected process tables may omit state; actual ps rows always carry it
+		&& (row.state === undefined || typeof row.state === "string"));
+	if (!rowsAreValid) {
+		return { status: "unverified", identityStatus: "unknown", error: "process table malformed" };
+	}
+	const rowsByPid = new Map(table.rows.map((row) => [row.pid, row]));
+	if (rowsByPid.size !== table.rows.length) {
+		return { status: "unverified", identityStatus: "unknown", error: "process table malformed" };
+	}
+	const { pid, pgid, processStart, ownerPid, ownerProcessStart, ownerToken, ownershipMode } = registration;
+	if (!Number.isSafeInteger(pid) || pid <= 1 || !Number.isSafeInteger(pgid) || pgid <= 1
+		|| !Number.isSafeInteger(ownerPid) || ownerPid <= 1 || ownerPid === pid) {
+		return { status: "unverified", identityStatus: "unknown", error: "invalid process identity" };
+	}
+	const members = table.rows.filter((row) => row.pgid === pgid && !row.state?.startsWith("Z"));
+	if (members.length === 0) return { status: "exited" };
+	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- registrations parsed from JSONL are untrusted at this effect boundary
+	if (typeof processStart !== "string" || processStart.length === 0
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- registrations parsed from JSONL are untrusted at this effect boundary
+		|| typeof ownerProcessStart !== "string" || ownerProcessStart.length === 0
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- reject malformed owner tokens from JSONL registrations before authorizing signals
+		|| typeof ownerToken !== "string" || ownerToken.length === 0
+		|| (ownershipMode !== "shared" && ownershipMode !== "focused")
+		|| currentPgid === undefined || pgid === currentPgid) {
+		return { status: "unverified", identityStatus: "unknown", error: "incomplete or unsafe process identity" };
+	}
+	const leaderRow = rowsByPid.get(pid);
+	const leader = leaderRow?.pgid === pgid && !leaderRow.state?.startsWith("Z") ? leaderRow : undefined;
+	if (leader === undefined) {
+		return membersCarryRunIdentity(members, ownerToken)
+			? { status: "owned" }
+			: { status: "unverified", identityStatus: "different", error: "process group ownership changed" };
+	}
+	const leaderStart = readStart(readProcessStart, leader, pid);
+	if (leaderStart === undefined) {
+		return { status: "unverified", identityStatus: "unknown", error: "leader birth identity unavailable" };
+	}
+	if (leaderStart !== processStart) {
+		return { status: "unverified", identityStatus: "different", error: "leader birth identity changed" };
+	}
+	if (!members.every((row) => ancestryStatus(row.pid, pid, rowsByPid) === "reached")) {
+		return { status: "unverified", identityStatus: "different", error: "process group ancestry changed" };
+	}
+	const ownerPath = ancestryStatus(pid, ownerPid, rowsByPid);
+	if (ownerPath === "cycle") {
+		return { status: "unverified", identityStatus: "different", error: "owner ancestry changed" };
+	}
+	if (ownerPath !== "reached") {
+		return membersCarryRunIdentity(members, ownerToken)
+			? { status: "owned" }
+			: { status: "unverified", identityStatus: "different", error: "process group ownership changed" };
+	}
+	const owner = rowsByPid.get(ownerPid);
+	if (owner === undefined || owner.pgid === pgid || owner.state?.startsWith("Z")) {
+		return { status: "unverified", identityStatus: "unknown", error: "owner process unavailable" };
+	}
+	const ownerStart = readStart(readProcessStart, owner, ownerPid);
+	if (ownerStart === undefined) {
+		return { status: "unverified", identityStatus: "unknown", error: "owner birth identity unavailable" };
+	}
+	if (ownerStart !== ownerProcessStart) {
+		return { status: "unverified", identityStatus: "different", error: "owner birth identity changed" };
+	}
+	if (ownershipMode === "shared" && (!hasHarnessSignature(owner) || !hasProcessMarker(owner, HARNESS_OWNER_TOKEN_ENV_KEY, ownerToken))) {
+		return { status: "unverified", identityStatus: "different", error: "run owner authentication changed" };
+	}
+	return { status: "owned" };
+}
+
+/**
+ * TERM→KILL a registered harness group only after checking the live leader,
+ * its spawning owner, and every member's ancestry immediately before each
+ * signal. Once the leader loses that chain, every survivor must carry the
+ * shared signature and private token.
+ */
+export async function reapHarnessProcessGroup(registration, {
+	readProcessTable = processRows,
+	currentPgid = currentProcessGroupId(processRows().rows),
+	readProcessStart = liveProcessStart,
+	kill = process.kill.bind(process),
+	wait = () => new Promise((resolveDelay) => setTimeout(resolveDelay, PREFLIGHT_TERM_GRACE_MS)),
+} = {}) {
+	const inspect = () => {
+		let table;
+		try { table = readProcessTable(); } catch { table = { rows: [], issue: true }; }
+		return inspectHarnessProcessGroup(registration, table, currentPgid, readProcessStart);
+	};
+	let state = inspect();
+	if (state.status !== "owned") return state;
+	try { kill(-registration.pgid, "SIGTERM"); } catch (error) {
+		state = inspect();
+		return state.status === "exited" ? { status: "reaped" } : { status: "unverified", identityStatus: "unknown", error: String(error) };
+	}
+	await wait();
+	state = inspect();
+	if (state.status === "exited") return { status: "reaped" };
+	if (state.status !== "owned") return state;
+	try { kill(-registration.pgid, "SIGKILL"); } catch (error) {
+		state = inspect();
+		return state.status === "exited" ? { status: "reaped" } : { status: "unverified", identityStatus: "unknown", error: String(error) };
+	}
+	await wait();
+	state = inspect();
+	if (state.status === "exited") return { status: "reaped" };
+	return state.status === "owned" ? { status: "survived" } : state;
 }
 
 export async function fixIntegrationPreflight(report, {

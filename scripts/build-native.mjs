@@ -12,11 +12,12 @@
 // Nothing produced here is ever committed: dist/** is git-ignored (#439).
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { createRequire, isBuiltin } from "node:module";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
+import { instrumentPiStartup } from "./instrument-pi-startup.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
@@ -128,6 +129,7 @@ export function makeNativePiBuildCopy(piPkg, buildDir, packageRoot = root, resol
 	mkdirSync(buildDir, { recursive: true });
 	cpSync(realpathSync(join(piPkg, "dist")), join(buildDir, "dist"), { recursive: true });
 	copyFileSync(join(piPkg, "package.json"), join(buildDir, "package.json"));
+	instrumentPiStartup(join(buildDir, "dist"));
 
 	// Link roots rather than entries to preserve private exports and resolution.
 	for (const [name, realDependency] of dependencies) {
@@ -136,14 +138,7 @@ export function makeNativePiBuildCopy(piPkg, buildDir, packageRoot = root, resol
 		symlinkSync(realDependency, target, "dir");
 	}
 
-	// Detach only the patch path; other dist links retain their source neighborhoods.
-	const bunDir = join(buildDir, "dist/bun");
-	if (lstatSync(bunDir).isSymbolicLink()) {
-		const source = realpathSync(bunDir);
-		unlinkSync(bunDir);
-		cpSync(source, bunDir, { recursive: true });
-	}
-	const cliPath = join(bunDir, "cli.js");
+	const cliPath = join(buildDir, "dist/bun/cli.js");
 	const cliSource = readFileSync(cliPath, "utf8");
 	const matches = cliSource.split(BEDROCK_ENTRY_BLOCK).length - 1;
 	if (matches !== 1) fail(`Pi ${PI_PIN} Bedrock patch expected one entry block, found ${matches}`);
@@ -297,7 +292,6 @@ function bedrockInputs(metafile) {
 }
 
 async function main() {
-	await import("./instrument-pi-startup.mjs");
 	const bunBin = resolveBun();
 	const tag = platformTag();
 	const outDir = resolve(root, "dist/native", `sumocode-${version}-${tag}`);

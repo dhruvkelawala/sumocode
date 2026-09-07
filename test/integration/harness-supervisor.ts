@@ -136,7 +136,6 @@ function harnessRoot(env: NodeJS.ProcessEnv = process.env): string {
 				ownerToken: env[HARNESS_OWNER_TOKEN_ENV_KEY],
 				ownerProcessStart: ownProcessStart(),
 				runId: fallbackRunId,
-				signingKey: fallbackSigningKey,
 			}, null, 2)}\n`,
 			{ mode: 0o600 },
 		);

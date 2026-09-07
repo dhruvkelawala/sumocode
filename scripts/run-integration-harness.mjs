@@ -135,7 +135,9 @@ async function main(ownerToken) {
 		pid: process.pid,
 		ownerToken,
 		runId: auth.runId,
-		signingKey: auth.signingKey,
+		// The signing key stays in this process only: every child is told
+		// SUMOCODE_INTEGRATION_RUN_ROOT, so anything written here is readable
+		// by the processes the key is meant to authenticate.
 		root: ROOT,
 		startedAt: new Date().toISOString(),
 	}, null, 2)}\n`, { mode: 0o600 });

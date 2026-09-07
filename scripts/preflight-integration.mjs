@@ -131,8 +131,6 @@ async function readOwner(path) {
 			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- owner.json is untrusted state parsed at this I/O boundary
 			runId: typeof owner.runId === "string" && owner.runId.length > 0 ? owner.runId : undefined,
 			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- owner.json is untrusted state parsed at this I/O boundary
-			signingKey: typeof owner.signingKey === "string" && owner.signingKey.length > 0 ? owner.signingKey : undefined,
-			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- owner.json is untrusted state parsed at this I/O boundary
 			ownerToken: typeof owner.ownerToken === "string" && owner.ownerToken.length > 0
 				? owner.ownerToken
 				: undefined,
@@ -187,9 +185,14 @@ async function harnessState(tempRoot, rowsByPid, tokenIdentityAvailable) {
 	return state;
 }
 
-async function authenticatedSpawnRegistrations(path) {
+/**
+ * Spawn registrations left by a run whose owner is gone. No key survives a
+ * dead runner that a same-user child could not also have read, so these are
+ * identity records for a human, never proof that authorizes a signal.
+ */
+async function deadRunSpawnRegistrations(path) {
 	const owner = await readOwner(path);
-	if (owner?.runId === undefined || owner.signingKey === undefined) return [];
+	if (owner?.runId === undefined) return [];
 	let contents;
 	try { contents = await readFile(join(path, "children.jsonl"), "utf8"); } catch { return []; }
 	const registrations = [];
@@ -197,20 +200,9 @@ async function authenticatedSpawnRegistrations(path) {
 		if (!line.trim()) continue;
 		try {
 			const event = JSON.parse(line);
-			if (event.event !== "spawn" || event.runId !== owner.runId
-				|| !spawnRegistrationHmacIsValid(event, owner.runId, owner.signingKey)) continue;
-			registrations.push({
-				pid: event.pid,
-				pgid: event.pgid,
-				processStart: event.processStart,
-				ownerPid: event.ownerPid,
-				ownerProcessStart: event.ownerProcessStart,
-				ownerToken: owner.ownerToken,
-				ownershipMode: owner.mode,
-				runId: owner.runId,
-				registrationHmac: event.registrationHmac,
-				signingKey: owner.signingKey,
-			});
+			if (event.event !== "spawn" || event.runId !== owner.runId) continue;
+			if (!Number.isSafeInteger(event.pid) || !Number.isSafeInteger(event.pgid)) continue;
+			registrations.push({ pid: event.pid, pgid: event.pgid, processStart: event.processStart });
 		} catch {
 			// A killed worker may leave one partial final append.
 		}
@@ -296,19 +288,22 @@ export async function inspectIntegrationPreflight({ root = ROOT, tempRoot = tmpd
 		...state.liveOwnerPids,
 		...signedHarnessLineage(process.pid, rowsByPid),
 	]);
-	const authenticatedGroups = [];
+	// Title-hidden survivors of a dead run: recognizable by registered pid+birth,
+	// but not reclaimable automatically. Surfaced with their identity so a human
+	// can end them deliberately; --fix never signals on this evidence alone.
+	const registeredSurvivors = [];
 	if (processTable.issue === undefined) {
 		for (const path of state.dirs) {
-			for (const registration of await authenticatedSpawnRegistrations(path)) {
+			for (const registration of await deadRunSpawnRegistrations(path)) {
 				const row = rowsByPid.get(registration.pid);
 				if (registrationMatchesRow(registration, row) && !belongsToLiveHarnessRun(row, rowsByPid, liveHarnessPids)) {
-					authenticatedGroups.push({ path, pid: registration.pid, pgid: registration.pgid });
+					registeredSurvivors.push({ path, pid: registration.pid, pgid: registration.pgid, start: row.start, command: row.command.slice(0, 160) });
 				}
 			}
 		}
 	}
 	const orphanRows = [];
-	const orphanPids = new Set(authenticatedGroups.map((group) => group.pid));
+	const orphanPids = new Set(registeredSurvivors.map((group) => group.pid));
 	for (const row of processTable.rows) {
 		if ((isHarnessProcess(row) || orphanPids.has(row.pid)) && !belongsToLiveHarnessRun(row, rowsByPid, liveHarnessPids)) orphanRows.push(row);
 	}
@@ -316,9 +311,11 @@ export async function inspectIntegrationPreflight({ root = ROOT, tempRoot = tmpd
 		issues.push({
 			code: "orphan-harness-children",
 			message: `harness-owned children are still alive: ${orphanRows.map((row) => `${row.pid} (${row.command.slice(0, 160)})`).join(", ")}`,
-			remediation: "run node scripts/preflight-integration.mjs --fix",
+			remediation: registeredSurvivors.length > 0
+				? `run node scripts/preflight-integration.mjs --fix; ${registeredSurvivors.length} title-hidden survivor(s) of a dead run cannot be authenticated post-mortem and must be ended by hand: ${registeredSurvivors.map((group) => `pid ${group.pid} pgid ${group.pgid} born ${group.start}`).join("; ")}`
+				: "run node scripts/preflight-integration.mjs --fix",
 			rows: orphanRows,
-			authenticatedGroups,
+			registeredSurvivors,
 		});
 	}
 	if (state.staleDirs.length > 0) {
@@ -538,25 +535,14 @@ export async function fixIntegrationPreflight(report, {
 	wait = () => new Promise((resolveDelay) => setTimeout(resolveDelay, PREFLIGHT_TERM_GRACE_MS)),
 } = {}) {
 	const orphanIssue = report.issues.find((issue) => issue.code === "orphan-harness-children");
-	for (const proof of orphanIssue?.authenticatedGroups ?? []) {
-		if (!HARNESS_DIR_PREFIXES.some((prefix) => basename(proof.path).startsWith(prefix))) continue;
-		const registration = (await authenticatedSpawnRegistrations(proof.path))
-			.find((candidate) => candidate.pid === proof.pid && candidate.pgid === proof.pgid);
-		if (registration === undefined || !registrationMatchesRow(registration, rows.find((row) => row.pid === registration.pid))) continue;
-		await reapHarnessProcessGroup(registration, {
-			readProcessTable: () => ({ rows: readRows() }),
-			currentPgid,
-			kill,
-			wait,
-		});
-	}
 	const rowsByPid = new Map(rows.map((row) => [row.pid, row]));
 	const liveHarnessPids = new Set(report.liveHarnessPids ?? []);
-	const authenticatedPids = new Set((orphanIssue?.authenticatedGroups ?? []).map((group) => group.pid));
+	// Never auto-signal a dead run's registered survivors: their record is same-user writable.
+	const registeredSurvivorPids = new Set((orphanIssue?.registeredSurvivors ?? []).map((group) => group.pid));
 	const fixableRows = [];
 	for (const reportedRow of orphanIssue?.rows ?? []) {
 		const row = rowsByPid.get(reportedRow.pid);
-		if (row !== undefined && !authenticatedPids.has(row.pid) && isHarnessProcess(row)
+		if (row !== undefined && !registeredSurvivorPids.has(row.pid) && isHarnessProcess(row)
 			&& !belongsToLiveHarnessRun(row, rowsByPid, liveHarnessPids)) fixableRows.push(row);
 	}
 	const harnessOwnedGroups = new Set(fixableRows

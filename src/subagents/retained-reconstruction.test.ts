@@ -3,9 +3,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ProcessTreeOperations } from "../background-tasks/process-tree.js";
+import type { HostResult, PaneProcessInfo, TerminalHost } from "../terminal-host/types.js";
 import type { SubagentEvent } from "./domain.js";
 import { SubagentRegistry, type SubagentRecord } from "./registry.js";
-import { controlAuthority, reconstructRetained } from "./retained-adoption.js";
+import { controlAuthority, reconstructRetained, verifyRetained } from "./retained-adoption.js";
 import { RetainedHeadlessSupervisor } from "./retained-supervisor.js";
 import { RetainedResults } from "./retained-results.js";
 import { SubagentManager } from "./manager.js";
@@ -65,6 +66,70 @@ async function fixture() {
 		oldState: (state: typeof oldState) => { oldState = state; }, writerState: (state: typeof writerState) => { writerState = state; },
 		finish: async () => { emit({ kind: "run-settled", outcome: { kind: "completed", finalText: "durable answer" } }); await owner.settlement; } };
 }
+
+it("names every visible pane association refusal using content-free categories", async () => {
+	const child = { identity: { pid: 4242, processGroupId: 4242, processStartTime: "anchor-command" },
+		verification: { members: [{ pid: 4242, processStartTime: "anchor-birth" }] } };
+	const record = { schemaVersion: 2, revision: 1, id: "sa-proof", ownerSessionId: "origin", backend: "visible", status: "running", taskDir: "/private/tmp/task",
+		child, supervisor: child, pane: { agentName: "worker", paneId: "pane-1" }, worktree: null, sessionFilePath: null, modelLabel: null, roleId: null,
+		createdAt: 1000, updatedAt: 1000, settledAt: null, completionId: null, outcome: null, delivery: { state: "none", claim: null }, result: null, manifest: null,
+		writerLease: null, controlLease: null, controlHead: 0 } satisfies SubagentRecord;
+	const operations = (): ProcessTreeOperations => ({
+		captureStartTime: vi.fn(), identityMatches: vi.fn(() => "same" as const), verificationMatches: vi.fn(() => "same" as const),
+		isTreeEmpty: vi.fn(() => false), signalTree: vi.fn(async () => ({ ok: false, gone: false })), waitForTreeEmpty: vi.fn(async () => false),
+	});
+	const host = (inspect: () => Promise<HostResult<PaneProcessInfo>>): TerminalHost => ({
+		kind: "herdr", inspectPane: inspect, openCommandInSplit: vi.fn(), closePane: vi.fn(), notify: vi.fn(),
+	});
+	const associated = (): Promise<HostResult<PaneProcessInfo>> => Promise.resolve({ ok: true, shellPid: 4242, foregroundProcessGroupId: 4242, foregroundPids: [4242] });
+	// SAFETY: verification only checks that the executor boundary is present before passing it to the fake host.
+	const pi = { exec: vi.fn() } as never;
+	const results = [];
+	results.push(await verifyRetained({ ...record, pane: { agentName: "worker" } }, operations(), host(associated), pi));
+	results.push(await verifyRetained(record, operations(), undefined, pi));
+	results.push(await verifyRetained(record, operations(), { ...host(associated), inspectPane: undefined }, pi));
+	results.push(await verifyRetained(record, operations(), { ...host(associated), kind: "none" }, pi));
+	results.push(await verifyRetained(record, operations(), host(associated)));
+	results.push(await verifyRetained(record, operations(), host(async () => { throw new Error("private adapter detail"); }), pi));
+	results.push(await verifyRetained(record, operations(), host(async () => ({ ok: false, error: "private adapter detail" })), pi));
+	results.push(await verifyRetained(record, operations(), host(async () => ({ ok: true, shellPid: 4242, foregroundProcessGroupId: null, foregroundPids: [4242] })), pi));
+	results.push(await verifyRetained(record, operations(), host(async () => ({ ok: true, shellPid: 4242, foregroundProcessGroupId: 99, foregroundPids: [4242] })), pi));
+	results.push(await verifyRetained(record, operations(), host(async () => ({ ok: true, shellPid: 4242, foregroundProcessGroupId: 4242, foregroundPids: [] })), pi));
+	const members = [{ pid: 4242, processStartTime: "anchor-birth" }];
+	const missingRoot = { ...record, child: { ...child, verification: { members } } };
+	results.push(await verifyRetained(missingRoot, operations(), host(async () => { members.length = 0; return associated(); }), pi));
+	const missingVerifier = operations();
+	results.push(await verifyRetained(record, missingVerifier, host(async () => { delete missingVerifier.verificationMatches; return associated(); }), pi));
+	for (const observed of ["different", "unknown"] as const) {
+		const changed = operations();
+		vi.mocked(changed.identityMatches).mockReturnValueOnce("same").mockReturnValue(observed);
+		results.push(await verifyRetained(record, changed, host(associated), pi));
+	}
+	for (const observed of ["different", "unknown"] as const) {
+		const changed = operations();
+		vi.mocked(changed.verificationMatches!).mockReturnValueOnce("same").mockReturnValue(observed);
+		results.push(await verifyRetained(record, changed, host(associated), pi));
+	}
+	expect(results.map((result) => result.reason)).toEqual([
+		{ code: "visible-pane-reference", expected: "pane-id", observed: "missing" },
+		{ code: "visible-pane-host", expected: "available", observed: "missing" },
+		{ code: "visible-pane-inspector", expected: "available", observed: "missing" },
+		{ code: "visible-pane-host", expected: "pane-capable", observed: "none" },
+		{ code: "visible-pane-executor", expected: "available", observed: "missing" },
+		{ code: "visible-pane-inspection", expected: "verified", observed: "error" },
+		{ code: "visible-pane-inspection", expected: "verified", observed: "refused" },
+		{ code: "visible-pane-foreground-process-group", expected: "same", observed: "missing" },
+		{ code: "visible-pane-foreground-process-group", expected: "same", observed: "different" },
+		{ code: "visible-pane-foreground-child", expected: "present", observed: "missing" },
+		{ code: "visible-pane-child-root-recheck", expected: "present", observed: "missing" },
+		{ code: "visible-pane-child-verifier-recheck", expected: "available", observed: "missing" },
+		{ code: "visible-pane-child-identity-recheck", expected: "same", observed: "different" },
+		{ code: "visible-pane-child-identity-recheck", expected: "same", observed: "unknown" },
+		{ code: "visible-pane-child-verification-recheck", expected: "same", observed: "different" },
+		{ code: "visible-pane-child-verification-recheck", expected: "same", observed: "unknown" },
+	]);
+	expect(JSON.stringify(results)).not.toContain("private adapter detail");
+});
 
 it("discovers from disk, uses private controls once, and reads immutable completion evidence", async () => {
 	const f = await fixture();

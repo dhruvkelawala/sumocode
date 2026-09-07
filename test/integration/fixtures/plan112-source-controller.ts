@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { systemProcessTree } from "../../../src/background-tasks/process-tree.js";
 import { createPiChildSpawner, type SpawnedChild } from "../../../src/subagents/backend-pi.js";
-import type { RunOutcome, SubagentSnapshot } from "../../../src/subagents/domain.js";
+import type { RunOutcome, SubagentRecoveryReason, SubagentSnapshot } from "../../../src/subagents/domain.js";
 import { installSubagents } from "../../../src/subagents/index.js";
 import { SubagentRegistry, type RegistryProcess, type RegistryWriter, type SubagentRecord } from "../../../src/subagents/registry.js";
 import { controlAuthority } from "../../../src/subagents/retained-adoption.js";
@@ -18,7 +18,7 @@ import { visibleRecoveryLaunch } from "./plan112-visible-recovery.js";
 
 interface ControllerReport {
 	error?: string; expiresAt?: number; headlessSteering?: boolean; child?: RegistryProcess | null;
-	outcome?: RunOutcome; census?: string; recovery?: string; settlement?: string; deliveries?: number; steering?: string;
+	outcome?: RunOutcome; census?: string; recovery?: string; recoveryReason?: SubagentRecoveryReason; settlement?: string; deliveries?: number; steering?: string;
 }
 
 /** Real controllers share only the registry directory across Node processes. */
@@ -107,7 +107,11 @@ export async function runSourceController(root: string, mode: string, pi: string
 		assert.equal(observations[0]?.censusKnown, true);
 		const runtime = install("successor", registry);
 		await runtime.fire("session_start", "restart");
-		assert.equal(runtime.manager.get(before.id)?.recovery, "adopted");
+		const recovered = runtime.manager.get(before.id);
+		if (recovered?.recovery !== "adopted") {
+			put("successor-result.json", { error: "retained recovery refused", recovery: recovered?.recovery ?? "absent", recoveryReason: recovered?.recoveryReason });
+			return;
+		}
 		assert.equal(registry.inspectControl(controlAuthority(before)), false);
 		assert.deepEqual(registry.get(before.id)?.child, before.child);
 		assert.deepEqual(registry.get(before.id)?.supervisor, before.supervisor);
@@ -200,7 +204,11 @@ export async function runSourceController(root: string, mode: string, pi: string
 	try {
 		await next.fire("session_start", "new");
 		assert.equal(registry.inspectControl(authority), false);
-		assert.equal(next.manager.get(initial.id)?.recovery, "adopted");
+		const recovered = next.manager.get(initial.id);
+		if (recovered?.recovery !== "adopted") {
+			put("same-process-result.json", { error: "retained recovery refused", recovery: recovered?.recovery ?? "absent", recoveryReason: recovered?.recoveryReason });
+			return;
+		}
 		assert.deepEqual(owner.record.child, current.child);
 		assert.equal(Boolean(backend.send), visible);
 		const result = await next.manager.sendTo(initial.id, "steer after recovery");

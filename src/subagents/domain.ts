@@ -58,8 +58,19 @@ export interface SubagentPaneRef {
 	readonly paneId?: string;
 }
 
+export type SubagentRecoveryReason =
+	| { readonly code: "visible-pane-reference"; readonly expected: "pane-id"; readonly observed: "missing" }
+	| { readonly code: "visible-pane-host"; readonly expected: "available" | "pane-capable"; readonly observed: "missing" | "none" }
+	| { readonly code: "visible-pane-inspector" | "visible-pane-executor"; readonly expected: "available"; readonly observed: "missing" }
+	| { readonly code: "visible-pane-inspection"; readonly expected: "verified"; readonly observed: "error" | "refused" }
+	| { readonly code: "visible-pane-foreground-process-group"; readonly expected: "same"; readonly observed: "missing" | "different" }
+	| { readonly code: "visible-pane-foreground-child" | "visible-pane-child-root-recheck"; readonly expected: "present"; readonly observed: "missing" }
+	| { readonly code: "visible-pane-child-verifier-recheck"; readonly expected: "available"; readonly observed: "missing" }
+	| { readonly code: "visible-pane-child-identity-recheck" | "visible-pane-child-verification-recheck"; readonly expected: "same"; readonly observed: "different" | "unknown" };
+
 export interface SubagentSnapshot extends Partial<SubagentBudgetState> {
 	readonly recovery?: "adopted" | "persist-only" | "unsupported" | "lost" | "ambiguous";
+	readonly recoveryReason?: SubagentRecoveryReason;
 	readonly budget?: SubagentBudget;
 	readonly startedAt?: number;
 	readonly id: string;

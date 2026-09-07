@@ -8,7 +8,7 @@ import type { RegistryWriter, SubagentRecord } from "./registry.js";
 import { createWorktree, resolveCreateOptions, type CreateWorktreeOptions, type CreateWorktreeResult } from "../git/worktree.js";
 import type { AgentPanePlacement, PiExecLike, TerminalHost } from "../terminal-host/types.js";
 import type { SpawnedChild } from "./backend-pi.js";
-import { SUBAGENT_MAX_QUEUED, SUBAGENT_MAX_RUNNING, type LiveToolState, type RunOutcome, type SubagentEvent, type SubagentSnapshot, type SubagentWorktreeRef } from "./domain.js";
+import { SUBAGENT_MAX_QUEUED, SUBAGENT_MAX_RUNNING, type LiveToolState, type RunOutcome, type SubagentEvent, type SubagentRecoveryReason, type SubagentSnapshot, type SubagentWorktreeRef } from "./domain.js";
 import { planPlacement } from "./layout.js";
 import { addReportedSubagentUsage, evaluateSubagentBudget, validateSubagentBudget, type SubagentBudget } from "./budget-policy.js";
 import { buildCompletionManifest, type CompletionManifestEvidence } from "./manifest.js";
@@ -226,12 +226,17 @@ export class SubagentManager {
 		// Own the descriptor before asynchronous pane inspection so replacement cannot lose it.
 		this.retained.set(record.id, { entry, blocked: true });
 		this.snapshots.set(record.id, entry.snapshot);
+		let recoveryReason: SubagentRecoveryReason | undefined;
 		try {
-			if (await verifyRetained(record, this.operations, this.terminalHost, this.pi) !== "verified") throw new Error("retained child identity unverified");
+			const verification = await verifyRetained(record, this.operations, this.terminalHost, this.pi);
+			recoveryReason = verification.reason;
+			if (verification.classification !== "verified") throw new Error(recoveryReason
+				? `retained child identity unverified: ${recoveryReason.code} expected ${recoveryReason.expected} observed ${recoveryReason.observed}`
+				: "retained child identity unverified");
 			if (this.detached) return;
 			this.bindRetained(entry);
 		} catch (error) {
-			if (this.retained.has(record.id)) this.blockRetained(record.id, "ambiguous");
+			if (this.retained.has(record.id)) this.blockRetained(record.id, "ambiguous", recoveryReason);
 			throw error;
 		}
 	}
@@ -264,7 +269,7 @@ export class SubagentManager {
 		for (const [id, tracked] of previous.retained) {
 			if (this.retained.has(id)) continue;
 			if (this.snapshots.has(id)) throw new Error("retained subagent id conflicts with successor work");
-			const result = tracked.blocked ? { entry: tracked.entry, classification: "ambiguous" as const }
+			const result = tracked.blocked ? { entry: tracked.entry, classification: "ambiguous" as const, reason: tracked.entry.snapshot.recoveryReason }
 				: await acquireRetained(tracked.entry, this.controllerIdentity, sessionId, this.operations, this.terminalHost, this.pi);
 			// A concurrent successor can consume the reservation while pane inspection awaits.
 			if (previous.retained.get(id) !== tracked) continue;
@@ -275,7 +280,7 @@ export class SubagentManager {
 			if (result.classification === "adopted" && !this.detached) {
 				try { this.bindRetained(result.entry); }
 				catch { this.blockRetained(id, "ambiguous"); }
-			} else this.blockRetained(id, result.classification === "adopted" ? "ambiguous" : result.classification);
+			} else this.blockRetained(id, result.classification === "adopted" ? "ambiguous" : result.classification, result.reason);
 		}
 		this.notify();
 	}
@@ -289,7 +294,7 @@ export class SubagentManager {
 			this.snapshots.set(id, result.entry.snapshot);
 			if (result.classification === "adopted" || result.classification === "persist-only") {
 				try { this.bindRetained(result.entry, result.classification === "persist-only"); } catch { this.blockRetained(id, "ambiguous"); }
-			} else this.blockRetained(id, result.classification);
+			} else this.blockRetained(id, result.classification, result.reason);
 		}
 		this.notify();
 	}
@@ -336,17 +341,18 @@ export class SubagentManager {
 		}
 	}
 
-	private blockRetained(id: string, classification: "lost" | "ambiguous"): void {
+	private blockRetained(id: string, classification: "lost" | "ambiguous", reason?: SubagentRecoveryReason): void {
 		const tracked = this.retained.get(id)!;
 		tracked.blocked = true;
 		tracked.unsubscribe?.();
 		tracked.unsubscribe = undefined;
 		this.children.delete(id);
 		this.consumedIds.add(id);
-		this.snapshots.set(id, { ...this.snapshots.get(id)!, status: "error", recovery: classification });
+		const snapshot = { ...this.snapshots.get(id)!, status: "error" as const, recovery: classification };
+		this.snapshots.set(id, reason ? { ...snapshot, recoveryReason: reason } : snapshot);
 		try {
 			const record = tracked.entry.registry.get(id)!;
-			tracked.entry.registry.recordRecovery(id, record.revision, classification);
+			tracked.entry.registry.recordRecovery(id, record.revision, classification, reason);
 		} catch {
 			// Failed storage cannot grant effects or justify overwriting old evidence.
 			try { this.onDiagnostic?.({ kind: "listener", message: "retained recovery observation could not be persisted" }); }

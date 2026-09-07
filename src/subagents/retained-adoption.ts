@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { ProcessTreeOperations } from "../background-tasks/process-tree.js";
 import type { PiExecLike, TerminalHost } from "../terminal-host/types.js";
-import type { SubagentSnapshot } from "./domain.js";
+import type { SubagentRecoveryReason, SubagentSnapshot } from "./domain.js";
 import type { RegistryControlAuthority, RegistryProcess, RegistryWriter, SubagentRecord, SubagentRegistry } from "./registry.js";
 import type { RetainedHeadlessSupervisor } from "./retained-supervisor.js";
 import { RetainedResults } from "./retained-results.js";
@@ -23,29 +23,58 @@ function sameAnchor(process: RegistryProcess, operations: ProcessTreeOperations)
 		&& operations.verificationMatches?.(process.identity, { members: [root] }) === "same";
 }
 
+function refused(reason: SubagentRecoveryReason): RetainedVerification {
+	return { classification: "ambiguous", reason };
+}
+
+function visibleAnchorRefusal(process: RegistryProcess, operations: ProcessTreeOperations): SubagentRecoveryReason | undefined {
+	const root = process.verification.members.find((member) => member.pid === process.identity.pid);
+	if (!root) return { code: "visible-pane-child-root-recheck", expected: "present", observed: "missing" };
+	const identity = operations.identityMatches(process.identity);
+	if (identity !== "same") return { code: "visible-pane-child-identity-recheck", expected: "same", observed: identity };
+	if (!operations.verificationMatches) return { code: "visible-pane-child-verifier-recheck", expected: "available", observed: "missing" };
+	const verification = operations.verificationMatches(process.identity, { members: [root] });
+	return verification === "same" ? undefined : { code: "visible-pane-child-verification-recheck", expected: "same", observed: verification };
+}
+
+export interface RetainedVerification {
+	readonly classification: "verified" | "lost" | "ambiguous";
+	readonly reason?: SubagentRecoveryReason;
+}
+
 /** No effects or identity recapture: pane numbers alone never establish ownership. */
-export async function verifyRetained(record: SubagentRecord, operations: ProcessTreeOperations, host?: TerminalHost, pi?: PiExecLike): Promise<"verified" | "lost" | "ambiguous"> {
+export async function verifyRetained(record: SubagentRecord, operations: ProcessTreeOperations, host?: TerminalHost, pi?: PiExecLike): Promise<RetainedVerification> {
 	if (record.status === "settled") {
-		try { return RetainedResults.read(record.taskDir) ? "verified" : "ambiguous"; }
-		catch { return "ambiguous"; }
+		try { return { classification: RetainedResults.read(record.taskDir) ? "verified" : "ambiguous" }; }
+		catch { return { classification: "ambiguous" }; }
 	}
-	if (!record.child) return record.launchIntent === null ? "lost" : "ambiguous";
+	if (!record.child) return { classification: record.launchIntent === null ? "lost" : "ambiguous" };
 	const { identity, verification } = record.child;
-	if (!sameAnchor(record.child, operations)) return operations.identityMatches(identity) === "different" && operations.isTreeEmpty(identity, verification) ? "lost" : "ambiguous";
+	if (!sameAnchor(record.child, operations)) return { classification: operations.identityMatches(identity) === "different" && operations.isTreeEmpty(identity, verification) ? "lost" : "ambiguous" };
 	if (record.backend === "visible") {
-		if (!record.pane?.paneId || !host?.inspectPane || host.kind === "none" || !pi) return "ambiguous";
-		const pane = await host.inspectPane(pi, { ...record.pane, paneId: record.pane.paneId, host: host.kind });
-		if (!pane.ok || pane.foregroundProcessGroupId !== identity.processGroupId
-			|| !pane.foregroundPids.includes(identity.pid) || !sameAnchor(record.child, operations)) return "ambiguous";
+		if (!record.pane?.paneId) return refused({ code: "visible-pane-reference", expected: "pane-id", observed: "missing" });
+		if (!host) return refused({ code: "visible-pane-host", expected: "available", observed: "missing" });
+		if (host.kind === "none") return refused({ code: "visible-pane-host", expected: "pane-capable", observed: "none" });
+		if (!host.inspectPane) return refused({ code: "visible-pane-inspector", expected: "available", observed: "missing" });
+		if (!pi) return refused({ code: "visible-pane-executor", expected: "available", observed: "missing" });
+		let pane;
+		try { pane = await host.inspectPane(pi, { ...record.pane, paneId: record.pane.paneId, host: host.kind }); }
+		catch { return refused({ code: "visible-pane-inspection", expected: "verified", observed: "error" }); }
+		if (!pane.ok) return refused({ code: "visible-pane-inspection", expected: "verified", observed: "refused" });
+		if (pane.foregroundProcessGroupId === null) return refused({ code: "visible-pane-foreground-process-group", expected: "same", observed: "missing" });
+		if (pane.foregroundProcessGroupId !== identity.processGroupId) return refused({ code: "visible-pane-foreground-process-group", expected: "same", observed: "different" });
+		if (!pane.foregroundPids.includes(identity.pid)) return refused({ code: "visible-pane-foreground-child", expected: "present", observed: "missing" });
+		const anchorRefusal = visibleAnchorRefusal(record.child, operations);
+		if (anchorRefusal) return refused(anchorRefusal);
 	}
-	return "verified";
+	return { classification: "verified" };
 }
 
 /** A new host needs only its private registry namespace, never an old JS handle. */
 export async function reconstructRetained(registry: SubagentRegistry, successor: RegistryWriter, sessionId: string,
 	operations: ProcessTreeOperations, host?: TerminalHost, pi?: PiExecLike,
-): Promise<Array<{ entry: RetainedSubagent; classification: "adopted" | "persist-only" | "lost" | "ambiguous" }>> {
-	const results: Array<{ entry: RetainedSubagent; classification: "adopted" | "persist-only" | "lost" | "ambiguous" }> = [];
+): Promise<Array<{ entry: RetainedSubagent; classification: "adopted" | "persist-only" | "lost" | "ambiguous"; reason?: SubagentRecoveryReason }>> {
+	const results: Array<{ entry: RetainedSubagent; classification: "adopted" | "persist-only" | "lost" | "ambiguous"; reason?: SubagentRecoveryReason }> = [];
 	for (const { registry: discovered, record: initial, launch } of censusRetained(registry, operations)) {
 		if (!initial.controlLease) {
 			// Pre-control crashes still need durable successor accounting, not adoption.
@@ -61,8 +90,11 @@ export async function reconstructRetained(registry: SubagentRegistry, successor:
 			usage: { turns: 0 }, transcript: [], liveText: "", liveTools: [], finalText: "" };
 		let entry: RetainedSubagent = { registry: controller, authority: controlAuthority(initial), snapshot };
 		let classification: "adopted" | "persist-only" | "lost" | "ambiguous" = "ambiguous";
+		let reason: SubagentRecoveryReason | undefined;
 		try {
-			const verified = await verifyRetained(initial, operations, host, pi);
+			const verification = await verifyRetained(initial, operations, host, pi);
+			const verified = verification.classification;
+			reason = verification.reason;
 			classification = verified === "lost" ? "lost" : "ambiguous";
 			if (initial.status !== "settled" && controller.writerState(initial.id) === "dead") {
 				results.push(await acquireRetained(entry, successor, sessionId, operations, host, pi));
@@ -112,7 +144,7 @@ export async function reconstructRetained(registry: SubagentRegistry, successor:
 			entry = { ...entry, supervisor, authority };
 			classification = mirror ? "persist-only" : "adopted";
 		} catch { /* Refusal preserves the original process evidence and writer. */ }
-		results.push({ entry, classification });
+		results.push({ entry, classification, reason });
 	}
 	return results;
 }
@@ -120,14 +152,16 @@ export async function reconstructRetained(registry: SubagentRegistry, successor:
 export async function acquireRetained(
 	entry: RetainedSubagent, successor: RegistryWriter, sessionId: string,
 	operations: ProcessTreeOperations, host?: TerminalHost, pi?: PiExecLike,
-): Promise<{ entry: RetainedSubagent; classification: "adopted" | "lost" | "ambiguous" }> {
+): Promise<{ entry: RetainedSubagent; classification: "adopted" | "lost" | "ambiguous"; reason?: SubagentRecoveryReason }> {
 	const registry = entry.registry.forController(successor);
 	let classification: "adopted" | "lost" | "ambiguous" = "ambiguous";
+	let reason: SubagentRecoveryReason | undefined;
 	try {
 		let record = registry.get(entry.snapshot.id);
 		if (!record) throw new Error("owned subagent record missing");
-		const verified = await verifyRetained(record, operations, host, pi);
-		if (verified !== "verified") classification = verified;
+		const verification = await verifyRetained(record, operations, host, pi);
+		reason = verification.reason;
+		if (verification.classification !== "verified") classification = verification.classification;
 		else if (registry.writerState(record.id) === "alive" && entry.supervisor && record.supervisor?.identity.pid === process.pid) {
 			if (!sameAnchor(record.supervisor, operations)) throw new Error("retained supervisor identity unverified");
 			if (!isDeepStrictEqual(entry.supervisor.record, registry.get(record.id))) throw new Error("retained owner record changed");
@@ -145,5 +179,5 @@ export async function acquireRetained(
 		// The manager records refusal without editing a live writer's status.
 		classification = "ambiguous";
 	}
-	return { entry: { ...entry, registry }, classification };
+	return { entry: { ...entry, registry }, classification, reason };
 }

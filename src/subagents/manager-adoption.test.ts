@@ -426,6 +426,11 @@ describe("manager replacement adoption", () => {
 		await next.fire("session_start", "new");
 		const classification = fault === "anchor-gone" ? "lost" : "ambiguous";
 		expect(next.manager.get("sa-1")?.recovery).toBe(classification);
+		if (fault === "pane-moved") expect(next.manager.get("sa-1")?.recoveryReason).toEqual({
+			code: "visible-pane-foreground-process-group",
+			expected: "same",
+			observed: "different",
+		});
 		expect(next.manager.canDeliver("sa-1")).toBe(false);
 		await next.manager.cancel(["sa-1"]);
 		await next.manager.close(["sa-1"]);
@@ -437,7 +442,11 @@ describe("manager replacement adoption", () => {
 		expect(next.delivery).not.toHaveBeenCalled();
 		const observation = readdirSync(join(f.root, "registry")).find((file) => file.endsWith(`-${classification}.json`));
 		expect(observation).toBeDefined();
-		expect(readPrivateJson(join(f.root, "registry", observation!), 4096)).toMatchObject({ id: "sa-1", controllerGeneration: 0, classification });
+		const recorded = readPrivateJson(join(f.root, "registry", observation!), 4096);
+		expect(recorded).toMatchObject({ id: "sa-1", controllerGeneration: 0, classification });
+		if (fault === "pane-moved") expect(recorded).toMatchObject({
+			reason: { code: "visible-pane-foreground-process-group", expected: "same", observed: "different" },
+		});
 	});
 
 	it("advances controller generation on reload even when the session ID does not change", async () => {

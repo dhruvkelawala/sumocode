@@ -5,7 +5,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { atomicWritePrivateJson, readPrivateJson, withPrivateFileLock, writePrivateJsonExclusive } from "../activity/persistence.js";
 import { captureProcessBirthTime, type ProcessTreeIdentity, type ProcessTreeVerification } from "../background-tasks/process-tree.js";
 import { assertPrivateArtifact, assertPrivateDir, isErrnoCode, nodeArtifactFs } from "../private-artifact.js";
-import type { RunOutcome, SubagentPaneRef, SubagentWorktreeRef } from "./domain.js";
+import type { RunOutcome, SubagentPaneRef, SubagentRecoveryReason, SubagentWorktreeRef } from "./domain.js";
 import { validateSubagentBudget, type SubagentBudget } from "./budget-policy.js";
 
 export interface RegistryProcess {
@@ -99,6 +99,15 @@ export interface SubagentRecord {
 	readonly controlLease: RegistryWriterLease | null;
 	/** Advances on grants, revocations and reservations; never reset, even with no lease. */
 	readonly controlHead: number;
+}
+
+interface RecoveryObservation {
+	readonly schemaVersion: 1;
+	readonly id: string;
+	readonly revision: number;
+	readonly controllerGeneration: number;
+	readonly classification: "lost" | "ambiguous";
+	readonly reason?: SubagentRecoveryReason;
 }
 
 export interface SubagentRegistryOptions {
@@ -342,13 +351,14 @@ export class SubagentRegistry {
 	}
 
 	/** Observation only: this does not change leases, status, or grant effects. */
-	public recordRecovery(id: string, expectedRevision: number, classification: "lost" | "ambiguous"): void {
+	public recordRecovery(id: string, expectedRevision: number, classification: "lost" | "ambiguous", reason?: SubagentRecoveryReason): void {
 		if (!["lost", "ambiguous"].includes(classification)) throw new Error("invalid recovery classification");
 		const path = this.recordPath(id);
 		this.withLock(path, () => {
 			const record = this.get(id);
 			if (!record || record.revision !== expectedRevision) throw new SubagentRevisionConflict("recovery observation is stale");
-			const observation = { schemaVersion: 1, id, revision: record.revision, controllerGeneration: record.controllerGeneration ?? 0, classification };
+			const base = { schemaVersion: 1 as const, id, revision: record.revision, controllerGeneration: record.controllerGeneration ?? 0, classification };
+			const observation: RecoveryObservation = reason ? { ...base, reason } : base;
 			const evidence = join(this.directory, `${id}.recovery-${record.revision}-${classification}.json`);
 			try { writePrivateJsonExclusive(evidence, observation); }
 			catch (error) {

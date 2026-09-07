@@ -25,7 +25,7 @@ export type SubagentEvent =
 
 export type RunOutcome =
 	| { kind: "completed"; finalText: string }
-	| { kind: "failed"; errorText: string; partialText?: string; errorCode?: string; errorReason?: string; paneStillOpen?: boolean }
+	| { kind: "failed"; errorText: string; partialText?: string; errorCode?: string; errorReason?: string; paneStillOpen?: boolean; orphanPane?: SubagentPaneRef }
 	| { kind: "interrupted"; partialText?: string };
 
 export interface TranscriptItem {

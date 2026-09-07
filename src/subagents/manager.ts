@@ -1097,19 +1097,32 @@ export class SubagentManager {
 		if (event.kind === "run-settled") {
 			this.workspacePlacedIds.delete(id);
 			const settling = this.snapshots.get(id);
+			let settledNow = settling;
 			const outcome = event.outcome.kind === "failed" && settling?.worktree && !settling.pane
 				? { ...event.outcome, errorText: `${event.outcome.errorText}. Worktree created at ${settling.worktree.path} is preserved.` }
 				: event.outcome;
+			if (outcome.kind === "failed" && outcome.orphanPane && settledNow && !settledNow.pane) {
+				// Provisioning cleanup failed after allocating a pane. Record the
+				// orphan synchronously so placement keeps counting the slot and the
+				// tab-liveness checks below treat the tab as still occupied.
+				settledNow = { ...settledNow, pane: outcome.orphanPane, paneStillOpen: true };
+				this.snapshots.set(id, settledNow);
+			}
 			if (
-				settling?.visible &&
-				settling.pane?.tabId !== undefined &&
-				settling.pane?.tabId === this.subagentsTabId &&
+				settledNow?.visible &&
+				settledNow.pane?.tabId !== undefined &&
+				settledNow.pane?.tabId === this.subagentsTabId &&
+				// A still-open pane (failed close or failed provisioning cleanup)
+				// keeps the tab alive, so the cache must not be dropped.
+				settledNow.paneStillOpen !== true &&
 				// Liveness must come from `children`, not the snapshot: settle()
 				// removes a child from `children` synchronously, but the snapshot
 				// keeps status "running" while its manifest collects async. Two
 				// siblings settling close together would otherwise each see the
 				// other as still live and neither would drop the generated-tab cache.
-				!this.list().some((snapshot) => snapshot.id !== id && this.children.has(snapshot.id) && snapshot.pane?.tabId === this.subagentsTabId)
+				// A settled child whose close failed keeps its pane open and counts
+				// the same way.
+				!this.list().some((snapshot) => snapshot.id !== id && (this.children.has(snapshot.id) || snapshot.paneStillOpen === true) && snapshot.pane?.tabId === this.subagentsTabId)
 			) {
 				// Herdr removes a task pane when its wrapper exits and removes an empty
 				// tab with it. Drop the generated-tab cache as soon as its final live
@@ -1120,10 +1133,12 @@ export class SubagentManager {
 				const surviving = this.list().find((snapshot) => {
 					// Isolated workspace children are not shared caller destinations;
 					// caching their tab would collapse later children into the first
-					// workspace (same guard as pane-attach).
-					if (snapshot.id === id || !this.children.has(snapshot.id) || this.workspacePlacedIds.has(snapshot.id)) return false;
+					// workspace (same guard as pane-attach). Failed-close panes keep
+					// their tab alive, so a settled paneStillOpen snapshot is as valid
+					// a surviving cache anchor as a live child.
+					if (snapshot.id === id || (!this.children.has(snapshot.id) && snapshot.paneStillOpen !== true) || this.workspacePlacedIds.has(snapshot.id)) return false;
 					const tabId = snapshot.pane?.tabId;
-					return tabId !== undefined && tabId !== this.subagentsTabId;
+					return tabId !== undefined && tabId !== this.subagentsTabId && tabId.split(":")[0] === this.subagentsTabId?.split(":")[0];
 				});
 				this.subagentsTabId = surviving?.pane?.tabId ?? this.initialVisibleTabId;
 			}
@@ -1135,8 +1150,8 @@ export class SubagentManager {
 			// the worst case for a transient failure is one extra tab (cosmetic).
 			if (
 				outcome.kind === "failed" &&
-				settling?.visible &&
-				!settling.pane &&
+				settledNow?.visible &&
+				!settledNow.pane &&
 				this.subagentsTabId !== undefined
 			) {
 				this.subagentsTabId = this.initialVisibleTabId;

@@ -690,15 +690,25 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 				});
 				if (!result.ok) {
 					if (gate) { assertAuthority(); blockLaunch(new Error(result.error)); return; }
-					settle({
-						kind: "run-settled",
-						outcome: {
-							kind: "failed",
-							errorText: result.error,
-							errorCode: result.code,
-							errorReason: result.reason,
-						},
-					});
+					const orphanTabId = result.orphanTabId ?? (options.placement.kind === "tab" ? options.placement.tabId : undefined);
+					const outcome: Extract<SubagentEvent, { kind: "run-settled" }>["outcome"] = {
+						kind: "failed",
+						errorText: result.error,
+						errorCode: result.code,
+						errorReason: result.reason,
+					};
+					if (result.orphanPaneId !== undefined || result.orphanTabId !== undefined) {
+						// Cleanup failed or was skipped, so the allocated pane/tab still
+						// occupies a layout slot the manager must keep counting.
+						outcome.paneStillOpen = true;
+						outcome.orphanPane = {
+							agentName: options.name,
+							paneId: result.orphanPaneId,
+							tabId: orphanTabId,
+							workspaceId: orphanTabId?.split(":")[0],
+						};
+					}
+					settle({ kind: "run-settled", outcome });
 					return;
 				}
 				pane = result.pane;

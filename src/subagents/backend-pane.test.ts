@@ -112,7 +112,7 @@ const flushPromises = async (): Promise<void> => {
 };
 
 const createHarness = (
-	startResult: typeof startedPane | { ok: false; error: string; code?: string; reason?: string } = startedPane,
+	startResult: typeof startedPane | { ok: false; error: string; code?: string; reason?: string; orphanPaneId?: string; orphanTabId?: string } = startedPane,
 	placement: { kind: "tab"; tabId: string; direction: "right" } | { kind: "workspace"; workspaceId: string; paneId: string } = { kind: "tab", tabId: "w1:t1", direction: "right" },
 	appendSystemPrompt?: string,
 	spawnerDependencies?: { sendAckPollMs?: number; sendAckTimeoutMs?: number; resolveLauncher?: () => string; env?: NodeJS.ProcessEnv },
@@ -893,6 +893,29 @@ describe("pane subagent backend", () => {
 				errorText: "herdr returned no pane for tab w5:t8",
 				errorCode: "pane_unavailable",
 				errorReason: "tab has no available shell pane",
+			},
+		}]);
+	});
+
+	it("reports provisioning orphans so their slot stays counted", async () => {
+		const harness = createHarness({
+			ok: false,
+			code: "pane_unavailable",
+			error: "herdr pane run exited 1",
+			reason: "herdr pane run exited 1; cleanup: close refused",
+			orphanPaneId: "w1:p9",
+		});
+		await flushPromises();
+
+		expect(settledEvents(harness.events)).toEqual([{
+			kind: "run-settled",
+			outcome: {
+				kind: "failed",
+				errorText: "herdr pane run exited 1",
+				errorCode: "pane_unavailable",
+				errorReason: "herdr pane run exited 1; cleanup: close refused",
+				paneStillOpen: true,
+				orphanPane: { agentName: "worker", workspaceId: "w1", tabId: "w1:t1", paneId: "w1:p9" },
 			},
 		}]);
 	});

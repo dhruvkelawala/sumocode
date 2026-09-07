@@ -212,6 +212,59 @@ describe("herdrTerminalHost", () => {
 		}
 	});
 
+	it("reports an orphan pane when run fails and its cleanup also fails", async () => {
+		const exec = vi.fn(async (_bin: string, args: string[]) => {
+			if (args[0] === "pane" && args[1] === "list") return { stdout: JSON.stringify({ result: { panes: [{ pane_id: "w6:p1", workspace_id: "w6", tab_id: "w6:t3" }] } }), stderr: "", code: 0, killed: false };
+			if (args[0] === "pane" && args[1] === "split") return { stdout: JSON.stringify({ result: { pane: { pane_id: "w6:p2", workspace_id: "w6", tab_id: "w6:t3" } } }), stderr: "", code: 0, killed: false };
+			if (args[0] === "pane" && args[1] === "run") return { stdout: "", stderr: "boom", code: 1, killed: false };
+			if (args[0] === "pane" && args[1] === "close") return { stdout: "", stderr: "close refused", code: 1, killed: false };
+			return { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false };
+		});
+
+		// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
+		const result = await herdrTerminalHost.startAgentPane({ exec } as never, {
+			name: "worker", cwd: "/repo", shellCommand: "run child",
+			placement: { kind: "tab", tabId: "w6:t3", direction: "right" },
+		});
+
+		expect(result).toMatchObject({ ok: false, code: "pane_unavailable", orphanPaneId: "w6:p2" });
+		// SAFETY: the failure variant of HostResult carries the reason string.
+		expect((result as { reason?: string }).reason).toContain("cleanup:");
+		expect(result).not.toHaveProperty("orphanTabId");
+	});
+
+	it("reports an orphan pane when the deadline expires before cleanup can run", async () => {
+		vi.useFakeTimers();
+		try {
+			let releaseSplit: (value: { stdout: string; stderr: string; code: number; killed: boolean }) => void = () => undefined;
+			const exec = vi.fn((_bin: string, args: string[]) => {
+				if (args[0] === "pane" && args[1] === "list") {
+					return Promise.resolve({ stdout: JSON.stringify({ result: { panes: [{ pane_id: "w6:p1", workspace_id: "w6", tab_id: "w6:t3" }] } }), stderr: "", code: 0, killed: false });
+				}
+				if (args[0] === "pane" && args[1] === "split") {
+					return new Promise<{ stdout: string; stderr: string; code: number; killed: boolean }>((resolve) => { releaseSplit = resolve; });
+				}
+				return Promise.resolve({ stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false });
+			});
+
+			// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
+			const pending = herdrTerminalHost.startAgentPane({ exec } as never, {
+				name: "worker", cwd: "/repo", shellCommand: "run child",
+				placement: { kind: "tab", tabId: "w6:t3", direction: "right" },
+			});
+			await vi.advanceTimersByTimeAsync(10_000);
+			releaseSplit({ stdout: JSON.stringify({ result: { pane: { pane_id: "w6:p2", workspace_id: "w6", tab_id: "w6:t3" } } }), stderr: "", code: 0, killed: false });
+			const result = await pending;
+
+			expect(result).toMatchObject({ ok: false, code: "pane_unavailable", orphanPaneId: "w6:p2" });
+			// SAFETY: the failure variant of HostResult carries the reason string.
+			expect((result as { reason?: string }).reason).toContain("cleanup skipped");
+			expect(exec).not.toHaveBeenCalledWith("herdr", ["pane", "close", "w6:p2"], expect.anything());
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("reserves cleanup headroom before a slow pane split so fail can still close it", async () => {
 		vi.useFakeTimers();
 		try {

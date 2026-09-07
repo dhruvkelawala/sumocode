@@ -9,7 +9,7 @@ export interface PaneRef {
 	workspaceId?: string;
 }
 
-export type HostResult<T> = ({ ok: true } & T) | { ok: false; error: string; code?: string; reason?: string };
+export type HostResult<T> = ({ ok: true } & T) | { ok: false; error: string; code?: string; reason?: string; orphanPaneId?: string; orphanTabId?: string };
 export type PiExecLike = Pick<ExtensionAPI, "exec">;
 
 export type AgentPanePlacement =

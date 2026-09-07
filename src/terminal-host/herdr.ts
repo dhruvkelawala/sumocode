@@ -299,7 +299,14 @@ async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): P
 		}
 		const structured = paneUnavailable(failure);
 		if (structured.ok || !cleanupFailure) return structured;
-		return { ...structured, reason: `${structured.reason}; cleanup: ${cleanupFailure}` };
+		// Cleanup failed or was skipped, so the allocated pane/tab still occupies
+		// layout capacity. Report it so the manager can keep counting the slot
+		// instead of over-tiling the tab on the next spawn.
+		return {
+			...structured,
+			reason: `${structured.reason}; cleanup: ${cleanupFailure}`,
+			...(ownedPaneId ? { orphanPaneId: ownedPaneId } : ownedTabId ? { orphanTabId: ownedTabId } : {}),
+		};
 	};
 
 	try {

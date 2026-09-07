@@ -26,7 +26,7 @@ interface PaneInfo {
 
 interface ToolResult {
 	readonly content: Array<{ readonly text: string }>;
-	readonly details?: { readonly subagent?: { readonly id: string } };
+	readonly details?: { readonly subagent?: { readonly id: string; readonly cwd?: string; readonly worktree?: { readonly path: string } } };
 }
 
 const ROOT = resolve(import.meta.dirname, "../..");
@@ -63,6 +63,29 @@ function sessionExec(sessionName: string, args: readonly string[], timeout = 5_0
 			});
 		});
 	});
+}
+
+function checkedExec(command: string, args: readonly string[], timeout = 10_000): Promise<ExecResult> {
+	return new Promise((resolveExec, rejectExec) => {
+		execFile(command, [...args], { timeout }, (error, stdout, stderr) => {
+			if (error) {
+				rejectExec(new Error(`${command} ${args.join(" ")} failed: ${stderr || stdout || error.message}`));
+				return;
+			}
+			resolveExec({ stdout, stderr, code: 0, killed: false });
+		});
+	});
+}
+
+async function initializeRetainedGitRepo(path: string): Promise<void> {
+	await mkdir(path, { recursive: true });
+	await checkedExec("git", ["init", "--initial-branch=main", path]);
+	await checkedExec("git", ["-C", path, "config", "user.email", "issue470-live@example.invalid"]);
+	await checkedExec("git", ["-C", path, "config", "user.name", "Issue 470 Live"]);
+	await checkedExec("git", ["-C", path, "config", "commit.gpgsign", "false"]);
+	await writeFile(join(path, "README.md"), "issue470 retained live fixture\n", "utf8");
+	await checkedExec("git", ["-C", path, "add", "README.md"]);
+	await checkedExec("git", ["-C", path, "commit", "-m", "test: initialize retained fixture"]);
 }
 
 function resultValue<T>(result: ExecResult): T {
@@ -155,13 +178,17 @@ afterEach(async () => {
 });
 
 describe.skipIf(!LIVE_HERDR)("live Herdr visible pane reclamation", () => {
-	it("starts real implement-cheap Pi children after explicit and automatic close", async () => {
+	it("starts real default-worktree implement-cheap Pi children after explicit and automatic close", async () => {
 		tempRoot = await mkdtemp(join(tmpdir(), "sumocode-issue470-live-"));
+		const runToken = randomUUID().slice(0, 8);
+		const retainedRepo = join(tmpdir(), `sumocode-issue470-retained-repo-${process.pid}-${runToken}`);
 		const agentDir = join(tempRoot, "agent");
 		const taskDir = join(tempRoot, "tasks");
 		const rpcDiagnostics = join(tempRoot, "rpc-diagnostics.jsonl");
+		await initializeRetainedGitRepo(retainedRepo);
+		process.stdout.write(`[issue470 live] preserving test repo and created worktree: ${retainedRepo}\n`);
 		await writeFauxProvider(agentDir);
-		ownedSession = `sumocode-issue470-${process.pid}-${randomUUID().slice(0, 8)}`;
+		ownedSession = `sumocode-issue470-${process.pid}-${runToken}`;
 		const sessionName = ownedSession;
 		ownedServer = spawn("herdr", ["--session", sessionName, "server"], {
 			cwd: ROOT,
@@ -185,7 +212,7 @@ describe.skipIf(!LIVE_HERDR)("live Herdr visible pane reclamation", () => {
 		});
 
 		const created = resultValue<{ workspace: { workspace_id: string }; tab: { tab_id: string }; root_pane: PaneInfo }>(await sessionExec(sessionName, [
-			"workspace", "create", "--cwd", ROOT, "--label", "issue470 live", "--no-focus",
+			"workspace", "create", "--cwd", retainedRepo, "--label", "issue470 live", "--no-focus",
 		]));
 		const workspaceId = created.workspace.workspace_id;
 		const parentPaneId = created.root_pane.pane_id;
@@ -212,8 +239,6 @@ describe.skipIf(!LIVE_HERDR)("live Herdr visible pane reclamation", () => {
 				placement: task.placement,
 			});
 		}, {
-			captureGitContext: async () => ({ repoRoot: ROOT, baseRef: "HEAD" }),
-			buildCompletionManifest: async (options) => ({ exit: options.outcome.kind, durationMs: 1 }),
 			terminalHost: herdrTerminalHost,
 			// SAFETY: this adapter implements the pi.exec surface through the owned named Herdr session.
 			pi: { exec } as never,
@@ -230,9 +255,10 @@ describe.skipIf(!LIVE_HERDR)("live Herdr visible pane reclamation", () => {
 		registerSubagentTools(pi as never, manager, undefined, herdrTerminalHost, () => ({ roles: BUILT_IN_ROLES, warnings: [] }));
 		const spawnTool = registered.find((tool) => tool.name === "subagent_spawn")!;
 		const closeTool = registered.find((tool) => tool.name === "subagent_close")!;
-		const ctx = { cwd: ROOT, model: { provider: "issue470-live", id: "implement-cheap" } };
+		const ctx = { cwd: retainedRepo, model: { provider: "issue470-live", id: "implement-cheap" } };
 		const childPgids: number[] = [];
 		const childPaneIds: string[] = [];
+		let retainedWorktreePath: string | undefined;
 		const childPgid = (index: number): number => {
 			const pgid = childPgids[index];
 			if (pgid === undefined) throw new Error(`child ${index + 1} did not publish a process group`);
@@ -242,15 +268,29 @@ describe.skipIf(!LIVE_HERDR)("live Herdr visible pane reclamation", () => {
 		const spawnChild = async (sequence: number): Promise<string> => {
 			const result = await spawnTool.execute(`spawn-${sequence}`, {
 				prompt: `complete live issue470 fixture ${sequence}`,
-				name: `issue470 child ${sequence}`,
+				name: `issue470 child ${runToken} ${sequence}`,
 				role: "implement-cheap",
 				visible: true,
-				worktree: false,
+				// The first child intentionally omits this override: implement-cheap's
+				// defaultWorktree=true must create and execute inside real isolation.
+				worktree: sequence === 1 ? undefined : false,
 				model: "issue470-live/implement-cheap",
 			}, undefined, undefined, ctx);
 			expect(result.content[0]?.text).toContain(`Started sa-${sequence}`);
 			const id = result.details?.subagent?.id;
 			if (!id) throw new Error(`spawn ${sequence} did not return a subagent id`);
+			const snapshot = manager.get(id);
+			if (sequence === 1) {
+				retainedWorktreePath = snapshot?.worktree?.path;
+				expect(retainedWorktreePath).toBeTruthy();
+				expect(snapshot?.cwd).toBe(retainedWorktreePath);
+				expect(retainedWorktreePath?.startsWith(tempRoot!)).toBe(false);
+				const taskEntry = (await readdir(taskDir)).find((candidate) => candidate.startsWith(`${id}-`));
+				if (!taskEntry) throw new Error(`${id} did not create its visible task directory`);
+				const script = await readFile(join(taskDir, taskEntry, "run.sh"), "utf8");
+				expect(script).toContain(resolve(ROOT, "bin/sumocode.sh"));
+				expect(script).toContain(resolve(ROOT, "node_modules/.bin/pi"));
+			} else expect(snapshot?.worktree).toBeUndefined();
 			const paneId = await waitFor(async () => manager.get(id)?.pane?.paneId, 10_000, `${id} pane attachment`);
 			const pgid = await waitFor(() => processGroupForPane(sessionName, paneId), 10_000, `${id} process group`);
 			childPaneIds.push(paneId);
@@ -288,6 +328,9 @@ describe.skipIf(!LIVE_HERDR)("live Herdr visible pane reclamation", () => {
 		expect(after.map((pane) => pane.pane_id)).toEqual([parentPaneId]);
 		expect(new Set(childPaneIds).size).toBe(3);
 		expect(childPgids.every((pgid) => !processGroupAlive(pgid))).toBe(true);
+		if (!retainedWorktreePath) throw new Error("default-worktree child did not retain a worktree path");
+		const worktreeList = await checkedExec("git", ["-C", retainedRepo, "worktree", "list", "--porcelain"]);
+		expect(worktreeList.stdout).toContain(`worktree ${retainedWorktreePath}`);
 		const diagnostics = await readFile(rpcDiagnostics, "utf8");
 		expect((diagnostics.match(/"event":"app_ready"/g) ?? []).length).toBeGreaterThanOrEqual(3);
 		expect(diagnostics).not.toContain("Timed out waiting for get_state response");

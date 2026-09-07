@@ -216,7 +216,10 @@ async function createTabPane(
 	if (currentTimeout === undefined) return deadlineFailure("herdr pane current");
 	const workspaceId = await resolveCallerWorkspaceId(pi, process.env, currentTimeout);
 	const workspaceArgs = workspaceId ? ["--workspace", workspaceId] : [];
-	const createTimeout = deadline ? remainingProvisionMs(deadline) : timeout;
+	// Reserve cleanup headroom before allocating the tab: `tab create` owns
+	// the new tab, and a slow create must not leave fail() without time to
+	// close it when the subsequent run misses its own reserve check.
+	const createTimeout = deadline ? remainingProvisionMs(deadline, HERDR_PANE_CLEANUP_RESERVE_MS) : timeout;
 	if (createTimeout === undefined) return deadlineFailure("herdr tab create");
 	const result = await pi.exec("herdr", ["tab", "create", ...workspaceArgs, "--cwd", cwd, "--label", label, "--no-focus"], { timeout: createTimeout });
 	if (result.code !== 0) return execFailure("herdr tab create", result);
@@ -317,7 +320,10 @@ async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): P
 				anchorPaneId = listed.panes[0]?.pane_id;
 			}
 			if (!anchorPaneId) return fail({ ok: false, error: `herdr returned no pane for workspace ${workspaceId}` });
-			const timeout = remainingProvisionMs(deadline);
+			// Reserve cleanup headroom before allocating the new pane: a slow
+			// split must not consume the entire budget and leave no time to
+			// close the pane if the subsequent run fails its own reserve check.
+			const timeout = remainingProvisionMs(deadline, HERDR_PANE_CLEANUP_RESERVE_MS);
 			if (timeout === undefined) return fail(deadlineFailure("herdr pane split"));
 			target = await splitPane(pi, { kind: "id", paneId: anchorPaneId }, "right", options.cwd, timeout);
 			workspaceAnchorToMove = { paneId: anchorPaneId, workspaceId };
@@ -325,7 +331,7 @@ async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): P
 			const anchor = await paneForTab(pi, options.placement.tabId, 5000, deadline);
 			if (!anchor.ok || !anchor.pane.pane_id) target = anchor;
 			else {
-				const timeout = remainingProvisionMs(deadline);
+				const timeout = remainingProvisionMs(deadline, HERDR_PANE_CLEANUP_RESERVE_MS);
 				target = timeout === undefined
 					? deadlineFailure("herdr pane split")
 					: await splitPane(pi, { kind: "id", paneId: anchor.pane.pane_id }, options.placement.direction, options.cwd, timeout);

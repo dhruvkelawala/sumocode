@@ -212,6 +212,37 @@ describe("herdrTerminalHost", () => {
 		}
 	});
 
+	it("reserves cleanup headroom before a slow pane split so fail can still close it", async () => {
+		vi.useFakeTimers();
+		try {
+			const exec = vi.fn((_bin: string, args: string[], options: { timeout: number }) => new Promise<{ stdout: string; stderr: string; code: number; killed: boolean }>((resolve) => {
+				// The split consumes its entire allowed timeout yet still succeeds.
+				const duration = args[1] === "split" ? options.timeout : 0;
+				setTimeout(() => {
+					if (args[1] === "split") {
+						resolve({ stdout: JSON.stringify({ result: { pane: { pane_id: "w9:p2", workspace_id: "w9", tab_id: "w9:t1" } } }), stderr: "", code: 0, killed: false });
+					} else {
+						resolve({ stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false });
+					}
+				}, duration);
+			}));
+
+			// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
+			const pending = herdrTerminalHost.startAgentPane({ exec } as never, {
+				name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
+			});
+			await vi.advanceTimersByTimeAsync(10_000);
+			const result = await pending;
+
+			expect(result).toMatchObject({ ok: false, code: "pane_unavailable" });
+			// The split consumed its whole reserved budget; cleanup must still
+			// have had headroom to close the newly allocated pane.
+			expect(exec).toHaveBeenCalledWith("herdr", ["pane", "close", "w9:p2"], expect.objectContaining({ timeout: expect.any(Number) }));
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("structures real CLI-shaped split failures without explaining a tab or workspace", async () => {
 		const exec = vi.fn(async (_bin: string, args: string[]) => args[1] === "list"
 			? { stdout: JSON.stringify({ id: "cli:pane:list", result: { panes: [{ pane_id: "w9:p1", workspace_id: "w9", tab_id: "w9:t1" }], type: "pane_list" } }), stderr: "", code: 0, killed: false }

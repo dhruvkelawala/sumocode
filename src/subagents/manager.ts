@@ -192,7 +192,7 @@ export class SubagentManager {
 	private readonly buildCompletionManifestImpl: typeof buildCompletionManifest;
 	private readonly terminalHost?: TerminalHost;
 	private readonly pi?: PiExecLike;
-	private readonly initialVisibleTabId?: string;
+	private initialVisibleTabId?: string;
 	private readonly onDiagnostic?: (diagnostic: SubagentManagerDiagnostic) => void;
 	private subagentsTabId?: string;
 	private visibleSpawnReserved = false;
@@ -1181,6 +1181,25 @@ export class SubagentManager {
 			// fired). Invalidate the cache so the next spawn re-plans a fresh tab
 			// instead of failing forever. Evidence-based, not error-text sniffing;
 			// the worst case for a transient failure is one extra tab (cosmetic).
+			if (outcome.kind === "failed" && !settledNow?.pane && failedPlacement?.kind === "tab" && outcome.paneTabGone === true) {
+				// The host confirmed the target tab has no live pane, so it is
+				// gone. Retire still-open records anchored on it so the vacancy
+				// scan cannot keep selecting the dead tab and fail forever. A
+				// pre-attach failure without this signal (e.g. a run failure on a
+				// live tab) must not retire records.
+				for (const snapshot of this.list()) {
+					if (snapshot.paneStillOpen === true && snapshot.pane?.tabId === failedPlacement.tabId) {
+						this.snapshots.set(snapshot.id, { ...snapshot, paneStillOpen: undefined });
+					}
+				}
+				if (failedPlacement.tabId === this.initialVisibleTabId) {
+					// The caller tab itself is proven gone (the operator moved the
+					// parent pane elsewhere). Stop supplying the stale id to the
+					// cache fallback and the vacancy seed; closed Herdr ids are
+					// never reused.
+					this.initialVisibleTabId = undefined;
+				}
+			}
 			if (
 				outcome.kind === "failed" &&
 				settledNow?.visible &&
@@ -1194,18 +1213,6 @@ export class SubagentManager {
 				// spawn. Unseed instead so the next spawn plans a fresh tab and
 				// re-caches on pane-attach.
 				this.subagentsTabId = this.subagentsTabId === this.initialVisibleTabId ? undefined : this.initialVisibleTabId;
-			}
-			if (outcome.kind === "failed" && !settledNow?.pane && failedPlacement?.kind === "tab" && outcome.paneTabGone === true) {
-				// The host confirmed the target tab has no live pane, so it is
-				// gone. Retire still-open records anchored on it so the vacancy
-				// scan cannot keep selecting the dead tab and fail forever. A
-				// pre-attach failure without this signal (e.g. a run failure on a
-				// live tab) must not retire records.
-				for (const snapshot of this.list()) {
-					if (snapshot.paneStillOpen === true && snapshot.pane?.tabId === failedPlacement.tabId) {
-						this.snapshots.set(snapshot.id, { ...snapshot, paneStillOpen: undefined });
-					}
-				}
 			}
 			void this.startSettle(id, outcome);
 			return;

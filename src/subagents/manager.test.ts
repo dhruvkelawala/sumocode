@@ -1575,6 +1575,53 @@ describe("SubagentManager", () => {
 		expect(manager.placementByTask.size).toBe(0);
 	});
 
+	it("retires the initial caller tab once paneTabGone proves it stale", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+			initialVisibleTabId: "w1:t5",
+		});
+
+		// The operator moved the parent pane; the caller tab is gone, and the
+		// first spawn proves it with paneTabGone.
+		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
+		expect(placements[0]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "right" });
+		emitters.get("sa-1")?.({ kind: "run-started" });
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "herdr returned no pane for tab w1:t5", paneTabGone: true } });
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("error"));
+
+		// The replacement generated tab fills up; the retired caller tab must
+		// not be re-selected by the vacancy fallback.
+		for (let index = 2; index <= 5; index += 1) {
+			await manager.spawn({ prompt: `p${index}`, title: `child-${index}`, cwd: "/repo", visible: true });
+			emitters.get(`sa-${index}`)?.({ kind: "run-started" });
+			emitters.get(`sa-${index}`)?.({ kind: "pane-attached", pane: { agentName: `sa-${index}-worker`, workspaceId: "w1", tabId: "w1:t9", paneId: `w1:p${index}` } });
+		}
+		expect(placements[1]).toEqual({ kind: "new-tab", label: "subagents" });
+
+		await manager.spawn({ prompt: "p6", title: "sixth", cwd: "/repo", visible: true });
+		// The cached generated tab is full and the caller tab was retired, so a
+		// fresh overflow tab is planned instead of the dead caller tab.
+		expect(placements[5]).toEqual({ kind: "new-tab", label: "subagents 2" });
+	});
+
 	it("retires a stale failed-close record when its tab fails a placement", async () => {
 		const placements: unknown[] = [];
 		const emitters = new Map<string, (event: SubagentEvent) => void>();

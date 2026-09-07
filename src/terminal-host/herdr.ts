@@ -399,7 +399,9 @@ async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): P
 		const agentName = uniqueHerdrAgentName(options.name);
 		const paneId = target.pane.pane_id!;
 		const workspaceId = target.pane.workspace_id ?? workspaceAnchorToMove?.workspaceId;
-		const tabId = target.pane.tab_id ?? (options.placement.kind === "tab" ? options.placement.tabId : undefined);
+		// A new-tab creation can return a bare root pane whose tab id only
+		// exists on the creation result itself; ownedTabId carries it.
+		const tabId = target.pane.tab_id ?? ownedTabId ?? (options.placement.kind === "tab" ? options.placement.tabId : undefined);
 		const renameTimeout = remainingProvisionMs(deadline);
 		if (renameTimeout !== undefined) await pi.exec("herdr", ["pane", "rename", paneId, options.name], { timeout: renameTimeout }).catch(() => undefined);
 		return {

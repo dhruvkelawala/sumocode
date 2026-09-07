@@ -268,6 +268,21 @@ describe("herdrTerminalHost", () => {
 		expect(result).toMatchObject({ ok: false, code: "pane_unavailable", error: "herdr returned no pane for tab w3:t9", tabGone: true });
 	});
 
+	it("propagates the generated tab id when tab create returns a bare root pane", async () => {
+		const exec = vi.fn(async (_bin: string, args: string[]) => {
+			if (args[0] === "tab" && args[1] === "create") return { stdout: JSON.stringify({ result: { tab: { tab_id: "w8:t2" }, root_pane: { pane_id: "w8:p1" } } }), stderr: "", code: 0, killed: false };
+			return { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false };
+		});
+
+		// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
+		const result = await herdrTerminalHost.startAgentPane({ exec } as never, {
+			name: "worker", cwd: "/repo", shellCommand: "run child",
+			placement: { kind: "new-tab", label: "subagents" },
+		});
+
+		expect(result).toMatchObject({ ok: true, pane: { host: "herdr", paneId: "w8:p1" }, tabId: "w8:t2", paneId: "w8:p1" });
+	});
+
 	it("reports an orphan pane when the deadline expires before cleanup can run", async () => {
 		vi.useFakeTimers();
 		try {

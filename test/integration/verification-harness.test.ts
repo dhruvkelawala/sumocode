@@ -622,6 +622,7 @@ describe("verified harness group cleanup", () => {
 		const output = "SUMOCODE_HARNESS_SIGNATURE=leaked-secret truncated-row\n";
 		const signals: Array<[number, NodeJS.Signals | number]> = [];
 		const result = await reapHarnessProcessGroup(registration, {
+			// SAFETY: processRows requests UTF-8 text; this fake returns that text without spawning.
 			readProcessTable: () => processRows((() => output) as typeof execFileSync),
 			currentPgid: 99_999,
 			readProcessStart: () => registration.processStart,
@@ -693,6 +694,7 @@ describe("portable process-table probe", () => {
 
 	it("parses valid rows and skips blank lines without an issue", () => {
 		const output = "\n  101   1   101 S /usr/bin/a\n\n  102 101   101 R /usr/bin/b\n\n";
+		// SAFETY: processRows requests UTF-8 text; this fake returns that text without spawning.
 		const execute = (() => output) as typeof execFileSync;
 
 		const result = processRows(execute);
@@ -710,6 +712,7 @@ describe("portable process-table probe", () => {
 			"  101   1   101 S /usr/bin/fine",
 			"",
 		].join("\n");
+		// SAFETY: processRows requests UTF-8 text; this fake returns that text without spawning.
 		const execute = (() => output) as typeof execFileSync;
 
 		const result = processRows(execute);

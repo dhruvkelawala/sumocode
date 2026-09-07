@@ -322,6 +322,7 @@ function inspectHarnessProcessGroup(registration, table, currentPgid, readProces
 	if (members.length === 0) return { status: "exited" };
 	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- registrations parsed from JSONL are untrusted at this effect boundary
 	if (typeof processStart !== "string" || processStart.length === 0
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- reject malformed owner tokens from JSONL registrations before authorizing signals
 		|| typeof ownerToken !== "string" || ownerToken.length === 0
 		|| currentPgid === undefined || pgid === currentPgid) {
 		return { status: "unverified", identityStatus: "unknown", error: "incomplete or unsafe process identity" };

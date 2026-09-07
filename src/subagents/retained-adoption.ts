@@ -63,7 +63,10 @@ export async function verifyRetained(record: SubagentRecord, operations: Process
 		if (!pane.ok) return refused({ code: "visible-pane-inspection", expected: "verified", observed: "refused" });
 		if (pane.foregroundProcessGroupId === null) return refused({ code: "visible-pane-foreground-process-group", expected: "same", observed: "missing" });
 		if (pane.foregroundProcessGroupId !== identity.processGroupId) return refused({ code: "visible-pane-foreground-process-group", expected: "same", observed: "different" });
-		if (!pane.foregroundPids.includes(identity.pid)) return refused({ code: "visible-pane-foreground-child", expected: "present", observed: "missing" });
+		// Herdr reports the pane shell separately from its foreground children after exec.
+		if (pane.shellPid === null) return refused({ code: "visible-pane-shell-process", expected: "same", observed: "missing" });
+		if (pane.shellPid !== identity.pid) return refused({ code: "visible-pane-shell-process", expected: "same", observed: "different" });
+		if (pane.foregroundPids.length === 0) return refused({ code: "visible-pane-foreground-processes", expected: "present", observed: "missing" });
 		const anchorRefusal = visibleAnchorRefusal(record.child, operations);
 		if (anchorRefusal) return refused(anchorRefusal);
 	}

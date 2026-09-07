@@ -81,7 +81,7 @@ it("names every visible pane association refusal using content-free categories",
 	const host = (inspect: () => Promise<HostResult<PaneProcessInfo>>): TerminalHost => ({
 		kind: "herdr", inspectPane: inspect, openCommandInSplit: vi.fn(), closePane: vi.fn(), notify: vi.fn(),
 	});
-	const associated = (): Promise<HostResult<PaneProcessInfo>> => Promise.resolve({ ok: true, shellPid: 4242, foregroundProcessGroupId: 4242, foregroundPids: [4242] });
+	const associated = (): Promise<HostResult<PaneProcessInfo>> => Promise.resolve({ ok: true, shellPid: 4242, foregroundProcessGroupId: 4242, foregroundPids: [4343] });
 	// SAFETY: verification only checks that the executor boundary is present before passing it to the fake host.
 	const pi = { exec: vi.fn() } as never;
 	const results = [];
@@ -93,7 +93,9 @@ it("names every visible pane association refusal using content-free categories",
 	results.push(await verifyRetained(record, operations(), host(async () => { throw new Error("private adapter detail"); }), pi));
 	results.push(await verifyRetained(record, operations(), host(async () => ({ ok: false, error: "private adapter detail" })), pi));
 	results.push(await verifyRetained(record, operations(), host(async () => ({ ok: true, shellPid: 4242, foregroundProcessGroupId: null, foregroundPids: [4242] })), pi));
-	results.push(await verifyRetained(record, operations(), host(async () => ({ ok: true, shellPid: 4242, foregroundProcessGroupId: 99, foregroundPids: [4242] })), pi));
+	results.push(await verifyRetained(record, operations(), host(async () => ({ ok: true, shellPid: 4242, foregroundProcessGroupId: 99, foregroundPids: [4343] })), pi));
+	results.push(await verifyRetained(record, operations(), host(async () => ({ ok: true, shellPid: null, foregroundProcessGroupId: 4242, foregroundPids: [4343] })), pi));
+	results.push(await verifyRetained(record, operations(), host(async () => ({ ok: true, shellPid: 99, foregroundProcessGroupId: 4242, foregroundPids: [4343] })), pi));
 	results.push(await verifyRetained(record, operations(), host(async () => ({ ok: true, shellPid: 4242, foregroundProcessGroupId: 4242, foregroundPids: [] })), pi));
 	const members = [{ pid: 4242, processStartTime: "anchor-birth" }];
 	const missingRoot = { ...record, child: { ...child, verification: { members } } };
@@ -120,7 +122,9 @@ it("names every visible pane association refusal using content-free categories",
 		{ code: "visible-pane-inspection", expected: "verified", observed: "refused" },
 		{ code: "visible-pane-foreground-process-group", expected: "same", observed: "missing" },
 		{ code: "visible-pane-foreground-process-group", expected: "same", observed: "different" },
-		{ code: "visible-pane-foreground-child", expected: "present", observed: "missing" },
+		{ code: "visible-pane-shell-process", expected: "same", observed: "missing" },
+		{ code: "visible-pane-shell-process", expected: "same", observed: "different" },
+		{ code: "visible-pane-foreground-processes", expected: "present", observed: "missing" },
 		{ code: "visible-pane-child-root-recheck", expected: "present", observed: "missing" },
 		{ code: "visible-pane-child-verifier-recheck", expected: "available", observed: "missing" },
 		{ code: "visible-pane-child-identity-recheck", expected: "same", observed: "different" },
@@ -128,6 +132,7 @@ it("names every visible pane association refusal using content-free categories",
 		{ code: "visible-pane-child-verification-recheck", expected: "same", observed: "different" },
 		{ code: "visible-pane-child-verification-recheck", expected: "same", observed: "unknown" },
 	]);
+	expect(await verifyRetained(record, operations(), host(associated), pi)).toEqual({ classification: "verified" });
 	expect(JSON.stringify(results)).not.toContain("private adapter detail");
 });
 

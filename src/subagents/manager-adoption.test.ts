@@ -449,6 +449,33 @@ describe("manager replacement adoption", () => {
 		});
 	});
 
+	// Post-exec panes report the persistent shell (child pid) with the agent as a
+	// separate foreground child, so each pane shape below must refuse with its own reason.
+	it.each([
+		["shell-missing", { ok: true as const, shellPid: null, foregroundProcessGroupId: 42, foregroundPids: [4343] },
+			{ code: "visible-pane-shell-process", expected: "same", observed: "missing" }],
+		["shell-different", { ok: true as const, shellPid: 99, foregroundProcessGroupId: 42, foregroundPids: [4343] },
+			{ code: "visible-pane-shell-process", expected: "same", observed: "different" }],
+		["empty-foreground", { ok: true as const, shellPid: 42, foregroundProcessGroupId: 42, foregroundPids: [] },
+			{ code: "visible-pane-foreground-processes", expected: "present", observed: "missing" }],
+	])("visible pane %s persists the refusal reason in snapshot and recovery observation", async (_fault, pane, reason) => {
+		const f = fixture("visible");
+		const old = f.install("origin");
+		await f.track(old);
+		vi.mocked(f.host.inspectPane!).mockResolvedValue(pane);
+		await old.fire("session_shutdown", "new");
+		const next = f.install("successor");
+		await next.fire("session_start", "new");
+		expect(next.manager.get("sa-1")?.recovery).toBe("ambiguous");
+		expect(next.manager.get("sa-1")?.recoveryReason).toEqual(reason);
+		expect(next.manager.canDeliver("sa-1")).toBe(false);
+		const observation = readdirSync(join(f.root, "registry")).find((file) => file.endsWith("-ambiguous.json"));
+		expect(observation).toBeDefined();
+		expect(readPrivateJson(join(f.root, "registry", observation!), 4096)).toMatchObject({
+			id: "sa-1", controllerGeneration: 0, classification: "ambiguous", reason,
+		});
+	});
+
 	it("advances controller generation on reload even when the session ID does not change", async () => {
 		const f = fixture();
 		const old = f.install("origin");

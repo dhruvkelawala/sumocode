@@ -3,7 +3,9 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { systemProcessTree } from "../../../src/background-tasks/process-tree.js";
+import { systemProcessTree, type ProcessTreeOperations } from "../../../src/background-tasks/process-tree.js";
+import { herdrTerminalHost } from "../../../src/terminal-host/herdr.js";
+import type { PiExecLike } from "../../../src/terminal-host/types.js";
 import { createPiChildSpawner, type SpawnedChild } from "../../../src/subagents/backend-pi.js";
 import type { RunOutcome, SubagentRecoveryReason, SubagentSnapshot } from "../../../src/subagents/domain.js";
 import { installSubagents } from "../../../src/subagents/index.js";
@@ -14,7 +16,7 @@ import { censusRetained } from "../../../src/subagents/retained-census.js";
 import { RetainedHeadlessSupervisor, RetainedVisibleSupervisor } from "../../../src/subagents/retained-supervisor.js";
 import { buildCompletionManifest } from "../../../src/subagents/manifest.js";
 import { runLocalFault } from "./plan112-local-faults.js";
-import { visibleRecoveryLaunch } from "./plan112-visible-recovery.js";
+import { visibleRecoveryExecutor, visibleRecoveryLaunch } from "./plan112-visible-recovery.js";
 
 interface ControllerReport {
 	error?: string; expiresAt?: number; headlessSteering?: boolean; child?: RegistryProcess | null;
@@ -26,6 +28,7 @@ export async function runSourceController(root: string, mode: string, pi: string
 	const put = (name: string, value: ControllerReport | RegistryWriter): void => publishReport(join(root, name), JSON.stringify(value));
 	const registry = new SubagentRegistry(join(root, "registry"), "origin");
 	const visible = existsSync(join(root, "visible"));
+	const create = (session: string, retainedRegistry?: SubagentRegistry) => install(session, retainedRegistry, { visible });
 	// SAFETY: the admitted test parent alone writes this private JSON string.
 	const scenario = existsSync(join(root, "scenario.json")) ? JSON.parse(readFileSync(join(root, "scenario.json"), "utf8")) as string : "";
 	const cut = (point: string): void => {
@@ -37,7 +40,7 @@ export async function runSourceController(root: string, mode: string, pi: string
 	if (mode === "probe") { put("probe-ready.json", {}); return; }
 	if (mode === "contender") {
 		const before = registry.get("sa-real")!;
-		const runtime = install("contender", registry);
+		const runtime = create("contender", registry);
 		try {
 			await runtime.fire("session_start", "restart");
 			assert.notEqual(runtime.manager.get(before.id)?.recovery, "adopted");
@@ -50,7 +53,7 @@ export async function runSourceController(root: string, mode: string, pi: string
 		return;
 	}
 	if (mode === "delivery-successor" || mode === "delivery-final") {
-		const runtime = install(mode, registry);
+		const runtime = create(mode, registry);
 		try {
 			if (scenario === "delivery:notice-before-ack" && mode === "delivery-successor") runtime.afterSend(() => {
 				put("notice-cut-ready.json", {});
@@ -65,7 +68,7 @@ export async function runSourceController(root: string, mode: string, pi: string
 		return;
 	}
 	if (mode.startsWith("race-")) {
-		const runtime = install(mode, registry);
+		const runtime = create(mode, registry);
 		put(`${mode}-ready.json`, {});
 		await waitForFile(join(root, "race-release"));
 		await runtime.fire("session_start", "restart");
@@ -74,7 +77,7 @@ export async function runSourceController(root: string, mode: string, pi: string
 	}
 	if (mode === "recover-lost") {
 		const before = registry.get("sa-real")!;
-		const runtime = install("successor", registry);
+		const runtime = create("successor", registry);
 		try {
 			await runtime.fire("session_start", "restart");
 			const after = registry.get(before.id)!;
@@ -96,7 +99,7 @@ export async function runSourceController(root: string, mode: string, pi: string
 		return;
 	}
 	if (mode === "origin") {
-		const runtime = install("origin", registry);
+		const runtime = create("origin", registry);
 		put("origin-identity.json", runtime.manager.controllerIdentity);
 		return;
 	}
@@ -105,7 +108,7 @@ export async function runSourceController(root: string, mode: string, pi: string
 		const observations = censusRetained(registry);
 		assert.equal(observations[0]?.launch, "verified");
 		assert.equal(observations[0]?.censusKnown, true);
-		const runtime = install("successor", registry);
+		const runtime = create("successor", registry);
 		await runtime.fire("session_start", "restart");
 		const recovered = runtime.manager.get(before.id);
 		if (recovered?.recovery !== "adopted") {
@@ -176,7 +179,7 @@ export async function runSourceController(root: string, mode: string, pi: string
 	cut("running");
 	if (mode === "same-process" && scenario) {
 		assert(owner instanceof RetainedHeadlessSupervisor);
-		await runLocalFault(root, scenario, registry, owner, initial, install);
+		await runLocalFault(root, scenario, registry, owner, initial, create);
 		put("same-process-result.json", { steering: "unsupported: headless steering" });
 		return;
 	}
@@ -192,7 +195,7 @@ export async function runSourceController(root: string, mode: string, pi: string
 		put("owner-result.json", { outcome: owner.completion?.outcome });
 		return;
 	}
-	const old = install("origin");
+	const old = create("origin");
 	const current = owner.record;
 	const granted = registry.acquireControl(current.id, current.revision, current.writerLease!.generation, current.controlHead, old.manager.controllerIdentity, 60_000);
 	const authority = controlAuthority(granted);
@@ -200,7 +203,7 @@ export async function runSourceController(root: string, mode: string, pi: string
 		status: "running", createdAt: now, visible, usage: { turns: 0 }, transcript: [], liveText: "", liveTools: [], finalText: "" };
 	await old.manager.trackRetained({ registry: registry.forController(old.manager.controllerIdentity), supervisor: owner, snapshot, authority });
 	await old.fire("session_shutdown", "new");
-	const next = install("successor");
+	const next = create("successor");
 	try {
 		await next.fire("session_start", "new");
 		assert.equal(registry.inspectControl(authority), false);
@@ -225,7 +228,8 @@ export async function runSourceController(root: string, mode: string, pi: string
 	} finally { old.manager.detachForReplacement(); next.manager.detachForReplacement(); }
 }
 
-export function install(session: string, registry?: SubagentRegistry) {
+export function install(session: string, registry?: SubagentRegistry,
+	options: { visible?: boolean; executor?: PiExecLike; operations?: ProcessTreeOperations } = {}) {
 	type Handler = (event: { type: string; reason: string }, context: ExtensionContext) => void | Promise<void>;
 	const handlers = new Map<string, Handler>();
 	const deliveries: Parameters<ExtensionAPI["sendMessage"]>[0][] = [];
@@ -233,9 +237,14 @@ export function install(session: string, registry?: SubagentRegistry) {
 	const tools = new Map<string, Tool>();
 	let afterSend: (() => void) | undefined;
 	const api = { on: (name: string, handler: Handler) => { handlers.set(name, handler); }, registerTool: (tool: Tool) => { tools.set(tool.name, tool); },
-		sendMessage: (message: Parameters<ExtensionAPI["sendMessage"]>[0]) => { deliveries.push(message); afterSend?.(); }, exec: () => { throw new Error("unexpected controller exec"); } };
+		sendMessage: (message: Parameters<ExtensionAPI["sendMessage"]>[0]) => { deliveries.push(message); afterSend?.(); },
+		exec: options.visible ? (options.executor ?? visibleRecoveryExecutor).exec : () => { throw new Error("unexpected controller exec"); } };
+	const refuseSpawn = () => { throw new Error("replacement must not respawn"); };
 	// SAFETY: only installer registration and idle lifecycle methods are exercised.
-	const manager = installSubagents(api as never, { retainedRegistry: registry, spawnPiChild: () => { throw new Error("replacement must not respawn"); } });
+	const manager = installSubagents(api as never, { retainedRegistry: registry,
+		terminalHost: options.visible ? herdrTerminalHost : undefined,
+		managerDependencies: { processOperations: options.operations },
+		spawnPiChild: refuseSpawn, spawnPaneChild: refuseSpawn });
 	return { manager, deliveries, tools, afterSend: (callback: () => void) => { afterSend = callback; }, fire: async (name: string, reason = "startup") => {
 		// SAFETY: these lifecycle handlers need only the session ID and idle/UI flags.
 		const context = { isIdle: () => true, hasUI: false, sessionManager: { getSessionId: () => session } } as ExtensionContext;

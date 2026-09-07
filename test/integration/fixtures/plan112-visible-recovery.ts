@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { recoveryEnvironment } from "../../../scripts/plan112-recovery-preflight.mjs";
 import { shellEscape } from "../../../src/background-tasks/visible-spawn.js";
@@ -10,6 +10,15 @@ import { createPaneChildSpawner } from "../../../src/subagents/backend-pane.js";
 import type { RegistryProcess } from "../../../src/subagents/registry.js";
 import { herdrTerminalHost } from "../../../src/terminal-host/herdr.js";
 import type { PiExecLike, TerminalHost } from "../../../src/terminal-host/types.js";
+
+// Controllers reuse the CLI boundary, never the exclusive launcher's file creation.
+export const visibleRecoveryExecutor: PiExecLike = { exec: async (command, args) => {
+	assert.equal(command, "herdr", "unexpected visible recovery command");
+	const binary = process.env.PLAN112_HERDR_BIN;
+	assert(binary && isAbsolute(binary), "explicit absolute Herdr executable required");
+	try { return { code: 0, stdout: execFileSync(binary, args, { encoding: "utf8", timeout: 5000 }), stderr: "", killed: false }; }
+	catch { return { code: 1, stdout: "", stderr: "", killed: false }; }
+} };
 
 /** Real pane backend; only executable selection and external birth admission are injected. */
 export function visibleRecoveryLaunch(root: string, pi: string, provider: string,
@@ -24,10 +33,7 @@ export function visibleRecoveryLaunch(root: string, pi: string, provider: string
 	const environment = Object.entries(env).map(([key, value]) => shellEscape(`${key}=${value}`)).join(" ");
 	writeFileSync(launcher, `#!/bin/bash\nexec ${[process.execPath, pi, "--offline", "--no-extensions", "--no-session", "-e", provider, "-e", extension,
 		"--model", "source-proof/fixed", "--thinking", "off", "--no-tools"].map(shellEscape).join(" ")} "$(< ${shellEscape(join(taskDir, "prompt.txt"))})"\n`, { mode: 0o700, flag: "wx" });
-	const executor: PiExecLike = dependencies.executor ?? { exec: async (_command, args) => {
-		try { return { code: 0, stdout: execFileSync(process.env.PLAN112_HERDR_BIN!, args, { encoding: "utf8", timeout: 5000 }), stderr: "", killed: false }; }
-		catch { return { code: 1, stdout: "", stderr: "", killed: false }; }
-	} };
+	const executor = dependencies.executor ?? visibleRecoveryExecutor;
 	let shell: RegistryProcess | undefined;
 	const admit = async (name: string, birth: RegistryProcess): Promise<void> => {
 		writeFileSync(join(root, `${name}.pending`), JSON.stringify(birth), { mode: 0o600, flag: "wx" });

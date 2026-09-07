@@ -179,7 +179,14 @@ async function splitPane(pi: PiExecLike, target: PaneTarget, direction: SplitDir
 	return parsed.pane?.pane_id ? { ok: true, pane: parsed.pane } : { ok: false, error: "herdr pane split did not return a pane_id" };
 }
 
-async function createTabPane(pi: PiExecLike, cwd: string, label: string, timeout = 5000, deadline?: ProvisionDeadline): Promise<HostResult<{ pane: HerdrPaneInfo }>> {
+async function createTabPane(
+	pi: PiExecLike,
+	cwd: string,
+	label: string,
+	timeout = 5000,
+	deadline?: ProvisionDeadline,
+	onCreatedTab?: (tabId: string) => void,
+): Promise<HostResult<{ pane: HerdrPaneInfo }>> {
 	const currentTimeout = deadline ? remainingProvisionMs(deadline) : timeout;
 	if (currentTimeout === undefined) return deadlineFailure("herdr pane current");
 	const workspaceId = await resolveCallerWorkspaceId(pi, process.env, currentTimeout);
@@ -190,8 +197,9 @@ async function createTabPane(pi: PiExecLike, cwd: string, label: string, timeout
 	if (result.code !== 0) return execFailure("herdr tab create", result);
 	const parsed = parseEnvelope<HerdrTabResult>(result.stdout);
 	if (!parsed.ok) return parsed;
+	const tabId = parsed.root_pane?.tab_id ?? parsed.tab?.tab_id ?? parsed.tab_id;
+	if (tabId) onCreatedTab?.(tabId);
 	if (parsed.root_pane?.pane_id) return { ok: true, pane: parsed.root_pane };
-	const tabId = parsed.tab?.tab_id ?? parsed.tab_id;
 	if (!tabId) return { ok: false, error: "herdr tab create did not return a tab_id" };
 	return paneForTab(pi, tabId, timeout, deadline);
 }
@@ -230,17 +238,23 @@ async function cleanFailedChildStart(
 async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): Promise<HostResult<StartedAgentPane>> {
 	const deadline: ProvisionDeadline = { expiresAt: Date.now() + HERDR_PANE_PROVISION_TOTAL_MS };
 	let ownedPaneId: string | undefined;
+	let ownedTabId: string | undefined;
 	let workspaceAnchorToMove: { paneId: string; workspaceId: string } | undefined;
 
 	const fail = async (failure: HostResult<never>): Promise<HostResult<never>> => {
 		let cleanupFailure: string | undefined;
-		if (ownedPaneId) {
+		const cleanupArgs = ownedPaneId
+			? ["pane", "close", ownedPaneId]
+			: ownedTabId
+				? ["tab", "close", ownedTabId]
+				: undefined;
+		if (cleanupArgs) {
 			const timeout = remainingProvisionMs(deadline);
 			if (timeout === undefined) cleanupFailure = "cleanup skipped because the provisioning deadline expired";
 			else {
 				try {
-					const closed = await pi.exec("herdr", ["pane", "close", ownedPaneId], { timeout });
-					if (closed.code !== 0) cleanupFailure = execFailure("herdr pane close", closed).error;
+					const closed = await pi.exec("herdr", cleanupArgs, { timeout });
+					if (closed.code !== 0) cleanupFailure = execFailure(`herdr ${cleanupArgs[0]} close`, closed).error;
 				} catch (error) {
 					cleanupFailure = error instanceof Error ? error.message : String(error);
 				}
@@ -278,7 +292,9 @@ async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): P
 					: await splitPane(pi, { kind: "id", paneId: anchor.pane.pane_id }, options.placement.direction, options.cwd, timeout);
 			}
 		} else {
-			target = await createTabPane(pi, options.cwd, options.placement.label, 5000, deadline);
+			target = await createTabPane(pi, options.cwd, options.placement.label, 5000, deadline, (tabId) => {
+				ownedTabId = tabId;
+			});
 		}
 		if (!target.ok) return options.beforeRun ? target : fail(target);
 		ownedPaneId = target.pane.pane_id;

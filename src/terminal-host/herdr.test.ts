@@ -178,6 +178,7 @@ describe("herdrTerminalHost", () => {
 			reason: "herdr returned no pane for tab w5:t8",
 		});
 		expect(exec.mock.calls.some((call) => call[1]?.[0] === "agent")).toBe(false);
+		expect(exec).toHaveBeenCalledWith("herdr", ["tab", "close", "w5:t8"], expect.objectContaining({ timeout: expect.any(Number) }));
 	});
 
 	it("structures real CLI-shaped split failures without explaining a tab or workspace", async () => {
@@ -195,6 +196,26 @@ describe("herdrTerminalHost", () => {
 			reason: "pane w9:p1 is unavailable",
 		});
 		expect(exec.mock.calls.some((call) => call[1]?.[0] === "agent")).toBe(false);
+	});
+
+	it("structures a nonzero pane run and closes the new pane", async () => {
+		const exec = vi.fn(async (_bin: string, args: string[]) => {
+			if (args[1] === "split") return { stdout: JSON.stringify({ result: { pane: { pane_id: "w9:p2", workspace_id: "w9", tab_id: "w9:t1" } } }), stderr: "", code: 0, killed: false };
+			if (args[1] === "run") return { stdout: "", stderr: JSON.stringify({ id: "cli:pane:run", error: { code: "pane_not_available", message: "pane w9:p2 has no available shell" } }), code: 1, killed: false };
+			return { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false };
+		});
+
+		// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
+		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
+			name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
+		})).resolves.toEqual({
+			ok: false,
+			code: "pane_unavailable",
+			error: "pane w9:p2 has no available shell",
+			reason: "pane w9:p2 has no available shell",
+		});
+		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "close", "w9:p2"], expect.objectContaining({ timeout: expect.any(Number) }));
+		expect(exec).not.toHaveBeenCalledWith("herdr", ["pane", "close", "w9:p1"], expect.anything());
 	});
 
 	it("closes only its new pane when running the child throws", async () => {

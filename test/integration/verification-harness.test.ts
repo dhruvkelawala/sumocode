@@ -571,7 +571,7 @@ describe("verification harness v2 seam", () => {
 });
 
 describe("verified harness group cleanup", () => {
-	type FakeProcessRow = { pid: number; ppid: number; pgid: number; state?: string; command: string };
+	type FakeProcessRow = { pid: number; ppid: number; pgid: number; state?: string; start?: string; command: string };
 	const ownerToken = "run-owner";
 	const registration = {
 		pid: 60_001,
@@ -623,6 +623,22 @@ describe("verified harness group cleanup", () => {
 		const cleanup = fakeCleanup([{ rows: [unsignedOwner, leader] }, { rows: [] }], starts, focused);
 		await expect(cleanup.result).resolves.toMatchObject({ status: "reaped" });
 		expect(cleanup.signals).toEqual([[-registration.pgid, "SIGTERM"]]);
+	});
+
+	it("takes the leader's birth from the membership snapshot when a separate lookup finds nothing", async () => {
+		// A leader exiting between two ps calls must not read as present-but-unknown.
+		const snapshotLeader = { ...leader, start: registration.processStart };
+		const snapshotOwner = { ...owner, start: registration.ownerProcessStart };
+		const cleanup = fakeCleanup([{ rows: [snapshotOwner, snapshotLeader, member] }, { rows: [] }], new Map());
+		await expect(cleanup.result).resolves.toMatchObject({ status: "reaped" });
+		expect(cleanup.signals).toEqual([[-registration.pgid, "SIGTERM"]]);
+	});
+
+	it("still refuses a snapshot leader whose birth differs from the registration", async () => {
+		const replaced = { ...leader, start: "replacement-start" };
+		const cleanup = fakeCleanup([{ rows: [owner, replaced] }], new Map());
+		await expect(cleanup.result).resolves.toMatchObject({ status: "unverified", identityStatus: "different" });
+		expect(cleanup.signals).toEqual([]);
 	});
 
 	it("refuses a leader whose birth identity changed", async () => {
@@ -778,7 +794,7 @@ describe("harness exit-code contract", () => {
 });
 
 describe("portable process-table probe", () => {
-	const psRow = "  101   1  101 S /usr/bin/some-command\n";
+	const psRow = "  101   1   101 S Sat Aug 22 13:54:46 2026 /usr/bin/some-command\n";
 
 	it("falls back to the alternate ps personality when the first form is rejected", () => {
 		const attempts: string[][] = [];
@@ -795,7 +811,7 @@ describe("portable process-table probe", () => {
 		const result = processRows(execute);
 		expect(attempts).toHaveLength(2);
 		expect(result.issue).toBeUndefined();
-		expect(result.rows).toEqual([{ pid: 101, ppid: 1, pgid: 101, state: "S", command: "/usr/bin/some-command" }]);
+		expect(result.rows).toEqual([{ pid: 101, ppid: 1, pgid: 101, state: "S", start: "Sat Aug 22 13:54:46 2026", command: "/usr/bin/some-command" }]);
 	});
 
 	it("degrades to the named process-table issue only when every ps form fails", () => {
@@ -810,15 +826,15 @@ describe("portable process-table probe", () => {
 	});
 
 	it("parses valid rows and skips blank lines without an issue", () => {
-		const output = "\n  101   1   101 S /usr/bin/a\n\n  102 101   101 R /usr/bin/b\n\n";
+		const output = "\n  101   1   101 S Sat Aug 22 13:54:46 2026 /usr/bin/a\n\n  102 101   101 R Sat Sep  5 20:57:01 2026 /usr/bin/b\n\n";
 		// SAFETY: processRows requests UTF-8 text; this fake returns that text without spawning.
 		const execute = (() => output) as typeof execFileSync;
 
 		const result = processRows(execute);
 		expect(result.issue).toBeUndefined();
 		expect(result.rows).toEqual([
-			{ pid: 101, ppid: 1, pgid: 101, state: "S", command: "/usr/bin/a" },
-			{ pid: 102, ppid: 101, pgid: 101, state: "R", command: "/usr/bin/b" },
+			{ pid: 101, ppid: 1, pgid: 101, state: "S", start: "Sat Aug 22 13:54:46 2026", command: "/usr/bin/a" },
+			{ pid: 102, ppid: 101, pgid: 101, state: "R", start: "Sat Sep  5 20:57:01 2026", command: "/usr/bin/b" },
 		]);
 	});
 
@@ -826,14 +842,14 @@ describe("portable process-table probe", () => {
 		const output = [
 			"SUMOCODE_HARNESS_SIGNATURE=leaked-secret truncated-row",
 			"  103   1",
-			"  101   1   101 S /usr/bin/fine",
+			"  101   1   101 S Sat Aug 22 13:54:46 2026 /usr/bin/fine",
 			"",
 		].join("\n");
 		// SAFETY: processRows requests UTF-8 text; this fake returns that text without spawning.
 		const execute = (() => output) as typeof execFileSync;
 
 		const result = processRows(execute);
-		expect(result.rows).toEqual([{ pid: 101, ppid: 1, pgid: 101, state: "S", command: "/usr/bin/fine" }]);
+		expect(result.rows).toEqual([{ pid: 101, ppid: 1, pgid: 101, state: "S", start: "Sat Aug 22 13:54:46 2026", command: "/usr/bin/fine" }]);
 		expect(result.issue?.code).toBe("process-table-malformed-row");
 		expect(JSON.stringify(result)).not.toContain("leaked-secret");
 	});

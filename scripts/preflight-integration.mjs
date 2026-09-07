@@ -30,9 +30,14 @@ const PREFLIGHT_TERM_GRACE_MS = 300;
 // Try the platform-appropriate form first, then the other, so a runner with
 // either ps lineage produces a process table instead of the degraded issue.
 // On procps, `e`(env) `ww`(wide) `a`+`x`(all) `o`(format) combine dashless.
+// `lstart` rides in the same snapshot as membership so a leader that exits
+// between two separate ps calls cannot read as "present but birth unknown".
+const PS_COLUMNS = "pid=,ppid=,pgid=,state=,lstart=,command=";
 const PS_ARG_FORMS = process.platform === "darwin"
-	? [["eww", "-axo", "pid=,ppid=,pgid=,state=,command="], ["ewwaxo", "pid=,ppid=,pgid=,state=,command="]]
-	: [["ewwaxo", "pid=,ppid=,pgid=,state=,command="], ["eww", "-axo", "pid=,ppid=,pgid=,state=,command="]];
+	? [["eww", "-axo", PS_COLUMNS], ["ewwaxo", PS_COLUMNS]]
+	: [["ewwaxo", PS_COLUMNS], ["eww", "-axo", PS_COLUMNS]];
+// lstart is a fixed 24-character field, e.g. "Sat Aug 22 13:54:46 2026".
+const PS_ROW = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S{3} \S{3} [ \d]\d \d\d:\d\d:\d\d \d{4})\s+(.*)$/;
 
 export function processRows(execute = execFileSync) {
 	let lastError;
@@ -46,12 +51,12 @@ export function processRows(execute = execFileSync) {
 			let malformedRows = 0;
 			for (const line of output.split("\n")) {
 				if (line.trim() === "") continue;
-				const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/);
+				const match = line.match(PS_ROW);
 				if (!match) {
 					malformedRows += 1;
 					continue;
 				}
-				rows.push({ pid: Number(match[1]), ppid: Number(match[2]), pgid: Number(match[3]), state: match[4], command: match[5] });
+				rows.push({ pid: Number(match[1]), ppid: Number(match[2]), pgid: Number(match[3]), state: match[4], start: match[5], command: match[6] });
 			}
 			// ps rows can carry process environments; count unparseable rows without
 			// echoing them so the issue stays safe to print.
@@ -328,7 +333,9 @@ function membersCarryRunIdentity(members, ownerToken) {
 	return members.every((row) => hasHarnessSignature(row) && hasProcessMarker(row, HARNESS_OWNER_TOKEN_ENV_KEY, ownerToken));
 }
 
-function readStart(readProcessStart, pid) {
+/** Birth identity from the same snapshot as membership; a separate ps call only when the row lacks one. */
+function readStart(readProcessStart, row, pid) {
+	if (row?.start) return row.start;
 	try { return readProcessStart(pid); } catch { return undefined; }
 }
 
@@ -374,7 +381,7 @@ function inspectHarnessProcessGroup(registration, table, currentPgid, readProces
 			? { status: "owned" }
 			: { status: "unverified", identityStatus: "different", error: "process group ownership changed" };
 	}
-	const leaderStart = readStart(readProcessStart, pid);
+	const leaderStart = readStart(readProcessStart, leader, pid);
 	if (leaderStart === undefined) {
 		return { status: "unverified", identityStatus: "unknown", error: "leader birth identity unavailable" };
 	}
@@ -397,7 +404,7 @@ function inspectHarnessProcessGroup(registration, table, currentPgid, readProces
 	if (owner === undefined || owner.pgid === pgid || owner.state?.startsWith("Z")) {
 		return { status: "unverified", identityStatus: "unknown", error: "owner process unavailable" };
 	}
-	const ownerStart = readStart(readProcessStart, ownerPid);
+	const ownerStart = readStart(readProcessStart, owner, ownerPid);
 	if (ownerStart === undefined) {
 		return { status: "unverified", identityStatus: "unknown", error: "owner birth identity unavailable" };
 	}

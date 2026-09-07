@@ -605,6 +605,55 @@ describe("SubagentManager", () => {
 		expect(manager.get("sa-65")).toBeDefined();
 	});
 
+	it("keeps failed-close occupancy through history pruning", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+			initialVisibleTabId: "w1:t5",
+		});
+
+		// A visible child whose pane close failed still occupies its slot.
+		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
+		emitters.get("sa-1")?.({ kind: "run-started" });
+		emitters.get("sa-1")?.({ kind: "pane-attached", pane: { agentName: "first-worker", workspaceId: "w1", tabId: "w1:t5", paneId: "w1:p1" } });
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("error"));
+
+		// Fill history past MAX_TRACKED with settled background tasks.
+		for (let index = 0; index < 64; index += 1) {
+			await manager.spawn(makeTask(`${index + 1}`));
+			emitters.get(`sa-${index + 2}`)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		}
+		await vi.waitFor(() => expect(manager.list().every((snapshot) => snapshot.id === "sa-1" || snapshot.status === "done")).toBe(true));
+
+		// The still-open pane's record must survive pruning: placement reads
+		// occupancy only from this.list(), so losing it after MAX_TRACKED newer
+		// tasks would undercount the tab and allow a fifth split.
+		expect(manager.get("sa-1")?.paneStillOpen).toBe(true);
+		expect(manager.get("sa-1")?.pane).toEqual({ agentName: "first-worker", workspaceId: "w1", tabId: "w1:t5", paneId: "w1:p1" });
+
+		await manager.spawn({ prompt: "p66", title: "next", cwd: "/repo", visible: true });
+		// The failed-close pane still counts toward w1:t5's capacity.
+		expect(placements[placements.length - 1]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "down" });
+	});
+
 	it("creates an isolated worktree before spawning and stores its ref", async () => {
 		const backendFactory = vi.fn(() => ({ events: () => undefined, interrupt: () => undefined }));
 		const createWorktree = vi.fn(async () => ({

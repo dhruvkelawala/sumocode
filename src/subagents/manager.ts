@@ -1438,7 +1438,13 @@ export class SubagentManager {
 	}
 
 	private prune(): void {
-		const pruneable = this.list().filter((snapshot) => isSettled(snapshot) && !this.waitInterest.has(snapshot.id));
+		// A failed-close (or failed provisioning-cleanup) pane keeps occupying
+		// layout capacity, so its snapshot must survive history pruning: the
+		// placement predicate reads occupancy only from this.list(), and losing
+		// the record after MAX_TRACKED newer tasks would undercount the tab and
+		// allow an over-capacity split. The number of such records is bounded by
+		// real open panes, so the exemption cannot grow history unboundedly.
+		const pruneable = this.list().filter((snapshot) => isSettled(snapshot) && snapshot.paneStillOpen !== true && !this.waitInterest.has(snapshot.id));
 		while (this.snapshots.size > MAX_TRACKED && pruneable.length > 0) {
 			const oldest = pruneable.shift();
 			if (!oldest) break;

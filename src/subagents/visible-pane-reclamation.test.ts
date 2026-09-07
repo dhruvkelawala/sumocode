@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { chmodSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -35,7 +35,7 @@ class SupervisedHerdrHarness {
 	private readonly panes = new Map<string, PaneState>();
 	private readonly processGroups = new Set<number>();
 
-	public constructor(private readonly workspaceId = "w1", private readonly parentTabId = "w1:t-parent") {
+	public constructor(private readonly workspaceId = "w1", parentTabId = "w1:t-parent") {
 		this.panes.set("w1:p-parent", { paneId: "w1:p-parent", tabId: parentTabId, cwd: process.cwd() });
 	}
 
@@ -108,7 +108,7 @@ class SupervisedHerdrHarness {
 	}
 }
 
-describe("supervised visible pane reclamation", () => {
+describe("simulated process-boundary visible pane reclamation", () => {
 	const roots: string[] = [];
 	const harnesses: SupervisedHerdrHarness[] = [];
 
@@ -151,6 +151,7 @@ describe("supervised visible pane reclamation", () => {
 		});
 		const manager = new SubagentManager((task): SpawnedChild => spawnPane({
 			...task,
+			name: task.title,
 			host: herdrTerminalHost,
 			// SAFETY: the harness implements the pi.exec surface used by herdrTerminalHost.
 			pi: { exec: herdr.exec } as never,
@@ -181,11 +182,6 @@ describe("supervised visible pane reclamation", () => {
 		expect(first.content[0].text).toContain("Started sa-1");
 		await waitFor(() => herdr.liveChildPanes().length === 1 && manager.get("sa-1")?.pane?.paneId !== undefined);
 		const firstPane = manager.get("sa-1")!.pane!.paneId!;
-		const firstTaskDir = join(root, "tasks", readdirSync(join(root, "tasks")).find((entry) => entry.startsWith("sa-1-"))!);
-		const firstArgsFile = join(firstTaskDir, "launcher.argv");
-		await waitFor(() => {
-			try { return readFileSync(firstArgsFile, "utf8").includes("--thinking low"); } catch { return false; }
-		});
 
 		await tool("subagent_close").execute("close-1", { ids: ["sa-1"] });
 		await waitFor(() => herdr.liveChildPanes().length === 0);

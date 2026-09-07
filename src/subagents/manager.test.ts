@@ -17,7 +17,6 @@ const makeTask = (title: string): SpawnSubagentTask => ({ title, prompt: `prompt
 const subagentId = (sequence: number): string => `sa-${sequence}`;
 const firstQueuedId = subagentId(SUBAGENT_MAX_RUNNING + 1);
 const secondQueuedId = subagentId(SUBAGENT_MAX_RUNNING + 2);
-
 const fakeManifestBuilder = async (options: Parameters<NonNullable<import("./manager.js").SubagentManagerDependencies["buildCompletionManifest"]>>[0]) => ({
 	baseRef: options.baseRef,
 	headRef: options.baseRef,
@@ -1551,6 +1550,29 @@ describe("SubagentManager", () => {
 		mode = "attach";
 		await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true });
 		expect(backendTasks[1]?.placement).toEqual({ kind: "new-tab", label: "subagents" });
+	});
+
+	it("clears placement tracking when backend construction fails", async () => {
+		const backendFactory = vi.fn(() => { throw new Error("cannot create task directory"); });
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager(backendFactory, {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+			initialVisibleTabId: "w1:t5",
+		});
+
+		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
+
+		// The planned placement must not leak in the tracking map for a
+		// construction that never emits run-settled.
+		expect(manager.placementByTask.size).toBe(0);
 	});
 
 	it("retires a stale failed-close record when its tab fails a placement", async () => {

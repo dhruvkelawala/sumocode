@@ -205,7 +205,7 @@ export class SubagentManager {
 	private readonly cancelledSetupIds = new Set<string>();
 	private readonly workspacePlacedIds = new Set<string>();
 	/** Placement planned for each in-flight visible task, until its run settles. */
-	private readonly placementByTask = new Map<string, AgentPanePlacement>();
+	public readonly placementByTask = new Map<string, AgentPanePlacement>();
 	private lifecycleGeneration = 0;
 	public readonly consumedIds = new Set<string>();
 
@@ -647,6 +647,9 @@ export class SubagentManager {
 					baseRef: manifestBaseRef, worktreeRef: worktree, provisioningTimeoutMs });
 			} catch (error) {
 				this.workspacePlacedIds.delete(id);
+				// The construction never emits run-settled, so the placement would
+				// otherwise leak in the tracking map forever.
+				this.placementByTask.delete(id);
 				releasePending();
 				const message = error instanceof Error ? error.message : String(error);
 				const preservationNote = worktree ? ` Worktree created at ${worktree.path} is preserved.` : "";

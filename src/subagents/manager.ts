@@ -1019,6 +1019,8 @@ export class SubagentManager {
 					return;
 				}
 				clearTimeout(waiter.timeout);
+				// Host completion and this waiter's timer can become ready in the same
+				// turn. Never hand an expired waiter the lock: its spawn already failed.
 				if (waiter.expiresAt <= Date.now()) {
 					waiter.resolve(undefined);
 					continue;
@@ -1037,7 +1039,7 @@ export class SubagentManager {
 		errorText: string,
 		cwd = task.cwd,
 		worktree?: SubagentWorktreeRef,
-		failure?: { readonly errorCode?: string; readonly errorReason?: string },
+		failure?: { readonly errorCode?: string },
 	): SubagentSnapshot {
 		const snapshot: SubagentSnapshot = {
 			...makeInitialSnapshot(task, id, createdAt, baseRef, cwd, worktree),
@@ -1045,7 +1047,6 @@ export class SubagentManager {
 			settledAt: Date.now(),
 			errorText: errorText.slice(0, ERROR_TEXT_MAX),
 			errorCode: failure?.errorCode,
-			errorReason: failure?.errorReason?.slice(0, ERROR_TEXT_MAX),
 		};
 		this.snapshots.set(id, snapshot);
 		this.notify();

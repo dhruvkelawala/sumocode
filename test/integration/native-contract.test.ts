@@ -429,6 +429,28 @@ nativeDescribe("native executable contract", () => {
 		expect(result.stdout).not.toContain("PROJECT_PI");
 	});
 
+	it("requires PI_BIN to be an executable regular file", () => {
+		const root = tempRoot("sumocode-native-pi-bin-kind-");
+		const nonExecutable = join(root, "non-executable-pi");
+		writeFileSync(nonExecutable, "#!/bin/sh\nprintf SHOULD_NOT_RUN\n", { mode: 0o644 });
+		const directory = join(root, "pi-directory");
+		mkdirSync(directory);
+
+		for (const piBin of [nonExecutable, directory]) {
+			const doctor = runNative(["doctor"], { env: { PI_BIN: piBin } });
+			expect(doctor.status).toBe(70);
+			expect(doctor.stdout).toContain("Pi binary: not found or not executable");
+			const direct = runNative(["--no-sumo-tui"], { env: { PI_BIN: piBin } });
+			expect(direct.status).toBe(70);
+			expect(direct.stderr).toContain("Pi binary is not an executable file");
+			expect(direct.stdout).not.toContain("SHOULD_NOT_RUN");
+		}
+
+		const executable = createExecutable("executable-pi", "#!/bin/sh\nprintf EXECUTABLE_PI\n");
+		expect(runNative(["doctor"], { env: { PI_BIN: executable } }).status).toBe(0);
+		expect(runNative(["--no-sumo-tui"], { env: { PI_BIN: executable } }).stdout).toContain("EXECUTABLE_PI");
+	});
+
 	it("threads compiled parent provenance into nested child launch plans", async () => {
 		const root = tempRoot("sumocode-native-provenance-");
 		const taskLog = join(root, "task.json");

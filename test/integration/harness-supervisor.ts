@@ -1,5 +1,5 @@
 import { type ChildProcess, type SpawnOptions, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,12 +7,21 @@ import { basename, dirname, join } from "node:path";
 import { afterAll } from "vitest";
 import {
 	HARNESS_OWNER_TOKEN_ENV_KEY,
+	HARNESS_RUN_ID_ENV_KEY,
 	HARNESS_SIGNATURE,
 	HARNESS_SIGNATURE_ENV_KEY,
+	HARNESS_SIGNING_KEY_ENV_KEY,
 } from "../../scripts/lib/integration-harness-constants.mjs";
+import { signSpawnRegistration } from "../../scripts/lib/integration-harness-auth.mjs";
 import { liveProcessStart, reapHarnessProcessGroup } from "../../scripts/preflight-integration.mjs";
 
-export { HARNESS_OWNER_TOKEN_ENV_KEY, HARNESS_SIGNATURE, HARNESS_SIGNATURE_ENV_KEY };
+export {
+	HARNESS_OWNER_TOKEN_ENV_KEY,
+	HARNESS_RUN_ID_ENV_KEY,
+	HARNESS_SIGNATURE,
+	HARNESS_SIGNATURE_ENV_KEY,
+	HARNESS_SIGNING_KEY_ENV_KEY,
+};
 
 /**
  * Cross-file harness contract: this module and scripts/run-integration-harness.mjs write owner.json
@@ -55,6 +64,8 @@ interface HarnessManifestEvent {
 	readonly processStart?: string;
 	readonly ownerPid?: number;
 	readonly ownerProcessStart?: string;
+	readonly runId?: string;
+	readonly registrationHmac?: string;
 	readonly ownershipMode?: HarnessOwnershipMode;
 	readonly argv?: readonly string[];
 	readonly evidenceDir?: string;
@@ -91,11 +102,16 @@ interface HarnessGroupRegistration {
 	readonly ownerPid: number;
 	readonly ownerProcessStart?: string;
 	readonly ownerToken?: string;
+	readonly runId?: string;
+	readonly registrationHmac?: string;
+	readonly signingKey?: string;
 	readonly ownershipMode: HarnessOwnershipMode;
 }
 
 let fallbackRoot: string | undefined;
 let fallbackOwnerToken: string | undefined;
+let fallbackRunId: string | undefined;
+let fallbackSigningKey: string | undefined;
 let childSequence = 0;
 const focusedProcessGroups = new Map<number, HarnessGroupRegistration>();
 
@@ -104,6 +120,8 @@ function harnessRoot(env: NodeJS.ProcessEnv = process.env): string {
 	if (fallbackRoot === undefined) {
 		fallbackRoot = mkdtempSync(join(tmpdir(), "sumocode-harness-v2-focused-"));
 		fallbackOwnerToken = randomUUID();
+		fallbackRunId = randomUUID();
+		fallbackSigningKey = randomBytes(32).toString("hex");
 		// A focused vitest worker cannot re-exec to plant the owner token in its
 		// initial environment (ps shows exec-time env only), so tokenless focused
 		// namespaces carry the OS-reported process start time instead: a reused
@@ -117,6 +135,8 @@ function harnessRoot(env: NodeJS.ProcessEnv = process.env): string {
 				mode: "focused",
 				ownerToken: env[HARNESS_OWNER_TOKEN_ENV_KEY],
 				ownerProcessStart: ownProcessStart(),
+				runId: fallbackRunId,
+				signingKey: fallbackSigningKey,
 			}, null, 2)}\n`,
 			{ mode: 0o600 },
 		);
@@ -128,10 +148,26 @@ function manifestPath(env: NodeJS.ProcessEnv = process.env): string {
 	return env.SUMOCODE_INTEGRATION_MANIFEST ?? join(harnessRoot(env), "children.jsonl");
 }
 
+function harnessAuth(env: NodeJS.ProcessEnv): { runId: string; signingKey: string } | undefined {
+	const runId = env.SUMOCODE_INTEGRATION_RUN_ROOT === undefined ? fallbackRunId : process.env[HARNESS_RUN_ID_ENV_KEY];
+	const signingKey = env.SUMOCODE_INTEGRATION_RUN_ROOT === undefined ? fallbackSigningKey : process.env[HARNESS_SIGNING_KEY_ENV_KEY];
+	return runId && signingKey ? { runId, signingKey } : undefined;
+}
+
 function appendManifest(event: HarnessManifestEvent, env: NodeJS.ProcessEnv = process.env): void {
 	const path = manifestPath(env);
 	mkdirSync(dirname(path), { recursive: true });
-	appendFileSync(path, `${JSON.stringify({ ts: Date.now(), ...event })}\n`, { mode: 0o600 });
+	let writtenEvent = event;
+	if (event.event === "spawn") {
+		const auth = harnessAuth(env);
+		if (auth === undefined) throw new Error("harness spawn signing identity is unavailable");
+		writtenEvent = {
+			...event,
+			runId: auth.runId,
+			registrationHmac: signSpawnRegistration(event, auth.runId, auth.signingKey),
+		};
+	}
+	appendFileSync(path, `${JSON.stringify({ ts: Date.now(), ...writtenEvent })}\n`, { mode: 0o600 });
 	if (env.SUMOCODE_INTEGRATION_RUN_ROOT === undefined && event.event === "spawn") {
 		focusedProcessGroups.set(event.pgid, {
 			pid: event.pid,
@@ -140,6 +176,9 @@ function appendManifest(event: HarnessManifestEvent, env: NodeJS.ProcessEnv = pr
 			ownerPid: event.ownerPid ?? 0,
 			ownerProcessStart: event.ownerProcessStart,
 			ownerToken: env[HARNESS_OWNER_TOKEN_ENV_KEY],
+			runId: writtenEvent.runId,
+			registrationHmac: writtenEvent.registrationHmac,
+			signingKey: fallbackSigningKey,
 			// This branch exists only for the in-process focused namespace; the
 			// manifest field never chooses the weaker owner proof.
 			ownershipMode: "focused",
@@ -274,19 +313,28 @@ export async function waitForDiagnosticReadiness(diagPath: string, state: Readin
 }
 
 function harnessGroupRegistration(pid: number, pgid: number, env: NodeJS.ProcessEnv): HarnessGroupRegistration {
-	return {
+	const registration = {
 		pid,
 		pgid,
 		processStart: liveProcessStart(pid),
 		ownerPid: process.pid,
 		ownerProcessStart: ownProcessStart(),
 		ownerToken: env[HARNESS_OWNER_TOKEN_ENV_KEY],
-		ownershipMode: env.SUMOCODE_INTEGRATION_RUN_ROOT === undefined ? "focused" : "shared",
+		ownershipMode: env.SUMOCODE_INTEGRATION_RUN_ROOT === undefined ? "focused" as const : "shared" as const,
+	};
+	const auth = harnessAuth(env);
+	return auth === undefined ? registration : {
+		...registration,
+		runId: auth.runId,
+		registrationHmac: signSpawnRegistration(registration, auth.runId, auth.signingKey),
+		signingKey: auth.signingKey,
 	};
 }
 
 export function spawnSupervisedProcess(command: string, args: readonly string[], options: SpawnOptions = {}): SupervisedProcess {
 	const env = { ...options.env, [HARNESS_SIGNATURE_ENV_KEY]: HARNESS_SIGNATURE };
+	delete env[HARNESS_SIGNING_KEY_ENV_KEY];
+	delete env[HARNESS_RUN_ID_ENV_KEY];
 	const evidence = createChildEvidenceContext([command, ...args], env);
 	const child = spawn(command, [...args], { ...options, detached: true, env });
 	if (child.pid === undefined) throw new Error(`supervised child did not publish a pid: ${command}`);
@@ -398,6 +446,8 @@ afterAll(async () => {
 	if (!existsSync(join(root, "evidence-retained.json"))) rmSync(root, { recursive: true, force: true });
 	fallbackRoot = undefined;
 	fallbackOwnerToken = undefined;
+	fallbackRunId = undefined;
+	fallbackSigningKey = undefined;
 	focusedProcessGroups.clear();
 	if (survivors.length > 0) {
 		throw new Error(`focused harness leaked ${survivors.length} process group(s); ${unreaped.length} remained after TERM→KILL`);

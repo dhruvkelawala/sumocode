@@ -798,7 +798,44 @@ describe("SubagentManager", () => {
 		expect(manager.get("sa-1")?.pane?.tabId).toBe("w1:t5");
 	});
 
-	it("counts settled visible panes toward tab capacity (open panes occupy real estate)", async () => {
+	it("reclaims a closed visible tab before the next spawn", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+				emit({ kind: "run-started" });
+				emit({ kind: "pane-attached", pane: { agentName: `${task.id}-worker`, workspaceId: "w1", tabId: "w1:t5", paneId: `w1:p${task.id}` } });
+			},
+			interrupt: () => undefined,
+			requestClose: () => emitters.get(task.id)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "closed" } }),
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+		});
+
+		const first = await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
+		await manager.close([(first as { id: string }).id]);
+		const second = await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true });
+
+		expect(second).toMatchObject({ status: "running", pane: { paneId: "w1:psa-2" } });
+		expect(placements).toEqual([
+			{ kind: "new-tab", label: "subagents" },
+			{ kind: "new-tab", label: "subagents" },
+		]);
+	});
+
+	it("counts only live visible panes toward tab capacity", async () => {
 		const backendTasks: Array<SpawnSubagentTask & { placement?: unknown }> = [];
 		const host: TerminalHost = {
 			kind: "herdr",
@@ -812,9 +849,6 @@ describe("SubagentManager", () => {
 				events: (emit) => {
 					emit({ kind: "run-started" });
 					emit({ kind: "pane-attached", pane: { agentName: `${task.id}-worker`, workspaceId: "w1", tabId: "w1:t5", paneId: `w1:p${task.id}` } });
-					// Settle immediately: the pane stays OPEN for inspection but the
-					// child no longer counts as running.
-					emit({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
 				},
 				interrupt: () => undefined,
 			};
@@ -825,8 +859,8 @@ describe("SubagentManager", () => {
 			await manager.spawn({ prompt: `p${index}`, title: `task ${index}`, cwd: "/repo", visible: true });
 		}
 
-		// Panes 1-4 fill the first tab even though they settled; the fifth must
-		// overflow to a fresh tab instead of over-tiling the full one.
+		// Four live panes fill the first tab; the fifth must overflow instead of
+		// over-tiling it. Settled panes are covered by the reclamation test above.
 		expect(backendTasks[4]?.placement).toEqual({ kind: "new-tab", label: "subagents 2" });
 	});
 

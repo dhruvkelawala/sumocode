@@ -568,11 +568,10 @@ export class SubagentManager {
 				const planned = planPlacement({
 					hostKind: host.kind,
 					isolated: worktree !== undefined,
-					// Count every tracked pane in the tab, not just running ones: settled
-					// panes stay open for inspection and still occupy tab real estate.
-					// Over-counting an already-closed pane merely opens a fresh tab
-					// earlier — the conservative failure mode.
-					visiblePanes: this.list().flatMap((snapshot) => snapshot.visible && snapshot.pane ? [snapshot.pane] : []),
+					// Task panes exit with their child process, so historical pane refs are
+					// evidence only. Count live children or closed panes permanently consume
+					// layout slots and force later spawns into phantom tabs.
+					visiblePanes: this.list().flatMap((snapshot) => snapshot.visible && snapshot.status === "running" && snapshot.pane ? [snapshot.pane] : []),
 					sessionTabId: this.subagentsTabId,
 				});
 				if (planned.kind === "workspace") {
@@ -1032,13 +1031,23 @@ export class SubagentManager {
 	private fold(id: string, event: SubagentEvent): void {
 		if (event.kind === "run-settled") {
 			this.workspacePlacedIds.delete(id);
+			const settling = this.snapshots.get(id);
+			if (
+				settling?.visible &&
+				settling.pane?.tabId === this.subagentsTabId &&
+				!this.list().some((snapshot) => snapshot.id !== id && snapshot.status === "running" && snapshot.pane?.tabId === this.subagentsTabId)
+			) {
+				// Herdr removes a task pane when its wrapper exits and removes an empty
+				// tab with it. Drop the generated-tab cache as soon as its final live
+				// child settles so the next spawn provisions a real tab on its first try.
+				this.subagentsTabId = this.initialVisibleTabId;
+			}
 			// A visible child that FAILS before any pane attached is
 			// evidence the cached subagents tab may be gone (e.g. the human closed
 			// it — splitting a closed cached tab fails, and no pane event ever
 			// fired). Invalidate the cache so the next spawn re-plans a fresh tab
 			// instead of failing forever. Evidence-based, not error-text sniffing;
 			// the worst case for a transient failure is one extra tab (cosmetic).
-			const settling = this.snapshots.get(id);
 			if (
 				event.outcome.kind === "failed" &&
 				settling?.visible &&

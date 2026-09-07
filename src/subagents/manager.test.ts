@@ -1739,6 +1739,57 @@ describe("SubagentManager", () => {
 		expect(placements[1]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "down" });
 	});
 
+	it("keeps a late close-failure flag when a failed settlement completes first", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		let resolveManifest: (manifest: CompletionManifest) => void = () => undefined;
+		const deferredManifest = new Promise<CompletionManifest>((resolve) => { resolveManifest = resolve; });
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: () => deferredManifest,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+			initialVisibleTabId: "w1:t5",
+		});
+
+		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
+		emitters.get("sa-1")?.({ kind: "run-started" });
+		emitters.get("sa-1")?.({ kind: "pane-attached", pane: { agentName: "first-worker", workspaceId: "w1", tabId: "w1:t5", paneId: "w1:p1" } });
+
+		// The cancel force-settle path emits a failed settlement whose manifest
+		// is still collecting; the snapshot is not terminal yet.
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "cancelled after timeout" } });
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("running"));
+
+		// The real close lands late and fails while the failed settlement is in
+		// flight; the flag is recorded immediately.
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
+		expect(manager.get("sa-1")?.paneStillOpen).toBe(true);
+
+		// The in-flight settlement completes without its own paneStillOpen
+		// evidence; it must not clobber the late flag.
+		resolveManifest({ baseRef: "abc123", changedPaths: [], dirty: false, commits: 0, exit: "failed", durationMs: 1 });
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("error"));
+		expect(manager.get("sa-1")?.paneStillOpen).toBe(true);
+
+		await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true });
+		// The still-open pane still counts toward w1:t5's capacity.
+		expect(placements[1]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "down" });
+	});
+
 	it("records paneStillOpen from a close failure that lands after cancel force-settled the snapshot", async () => {
 		const placements: unknown[] = [];
 		const emitters = new Map<string, (event: SubagentEvent) => void>();

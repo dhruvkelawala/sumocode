@@ -1318,7 +1318,9 @@ export class SubagentManager {
 				errorText: outcome.errorText.slice(0, ERROR_TEXT_MAX),
 				errorCode: outcome.errorCode,
 				errorReason: outcome.errorReason?.slice(0, ERROR_TEXT_MAX),
-				paneStillOpen: outcome.paneStillOpen,
+				// A late close-failure flag recorded while this settlement was in
+				// flight is real evidence this outcome lacks; keep it.
+				paneStillOpen: outcome.paneStillOpen ?? latest.paneStillOpen,
 				finalText: outcome.partialText ?? latest.finalText,
 				liveText: "",
 				manifest,

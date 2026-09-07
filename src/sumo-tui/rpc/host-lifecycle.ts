@@ -86,6 +86,9 @@ export class RpcHostLifecycle {
 	private async run(construct: () => Promise<number>): Promise<number> {
 		if (this.stopping) return this.waitForExit();
 		const startupFailure = new Promise<never>((_resolve, reject) => { this.rejectStartup = reject; });
+		// Both events share one teardown. A synchronous throw in the event ->
+		// render path is an uncaughtException, not a rejection; when only the
+		// latter was handled, such a throw left the terminal in raw mode/altscreen.
 		this.signals.on("unhandledRejection", this.handleError);
 		this.signals.on("uncaughtException", this.handleError);
 		let code = 0;
@@ -369,7 +372,21 @@ export function createUnhandledRejectionHandler(options: UnhandledRejectionShutd
 	};
 }
 
-/** Synchronous launcher side channel; bash wait status can disagree with host intent. */
+/**
+ * Out-of-band exit code for bin/sumocode.sh's respawn loop. Verified on macOS
+ * bash 3.2: a SIGTERM-graceful shutdown this host resolves as exit 0 can
+ * surface through bash's `wait` as 143 (128+SIGTERM), so the launcher reads
+ * this file instead of trusting the job status.
+ *
+ * Two constraints follow. Every host exit path must funnel through here
+ * (normal return, the reload exit-100 path, each process.exit call site, both
+ * signal handlers), or the launcher reads a stale code. And the write must be
+ * synchronous: an async write racing process.exit can be dropped before it
+ * reaches disk.
+ *
+ * Never throws: unset under unit tests and manual runs without the launcher,
+ * which falls back to bash's own status when the file is absent.
+ */
 export function writeExitCodeFile(env: NodeJS.ProcessEnv, code: number): void {
 	const path = env.SUMOCODE_EXIT_CODE_FILE;
 	if (path) {

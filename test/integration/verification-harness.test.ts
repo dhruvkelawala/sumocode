@@ -6,8 +6,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
 	captureTimeoutEvidence,
 	HARNESS_OWNER_TOKEN_ENV_KEY,
+	HARNESS_RUN_ID_ENV_KEY,
 	HARNESS_SIGNATURE,
 	HARNESS_SIGNATURE_ENV_KEY,
+	HARNESS_SIGNING_KEY_ENV_KEY,
 	spawnSupervisedProcess,
 	waitForDiagnosticReadiness,
 	type SupervisedProcess,
@@ -18,6 +20,7 @@ import {
 	extensionInputsHashFromManifest,
 	extensionOutputsHash,
 } from "../../scripts/lib/extension-bundle.mjs";
+import { signSpawnRegistration } from "../../scripts/lib/integration-harness-auth.mjs";
 import { fixIntegrationPreflight, inspectIntegrationPreflight, processRows, reapHarnessProcessGroup } from "../../scripts/preflight-integration.mjs";
 import { manifestProcessGroups, resolveHarnessExitCode } from "../../scripts/run-integration-harness.mjs";
 import { buildSpawnEnv } from "./spawn-pi-pty.js";
@@ -77,6 +80,8 @@ describe("verification harness v2 seam", () => {
 				HERDR_ENV: "1",
 				PI_SESSION_ID: "ambient-session",
 				UNRELATED_AMBIENT_VALUE: "poison",
+				[HARNESS_SIGNING_KEY_ENV_KEY]: "worker-only-secret",
+				[HARNESS_RUN_ID_ENV_KEY]: "worker-only-run-id",
 				SUMOCODE_INTEGRATION_RUN_ROOT: root,
 			},
 			{ TEST_SYNTHETIC_VALUE: "kept" },
@@ -94,6 +99,8 @@ describe("verification harness v2 seam", () => {
 		expect(env.HERDR_ENV).toBeUndefined();
 		expect(env.PI_SESSION_ID).toBeUndefined();
 		expect(env.UNRELATED_AMBIENT_VALUE).toBeUndefined();
+		expect(env[HARNESS_SIGNING_KEY_ENV_KEY]).toBeUndefined();
+		expect(env[HARNESS_RUN_ID_ENV_KEY]).toBeUndefined();
 	});
 
 	it("reaps a title-changing child through the public supervised spawn seam", async () => {
@@ -106,13 +113,14 @@ describe("verification harness v2 seam", () => {
 			},
 		);
 		children.push(child);
-		await new Promise<void>((resolveReady, rejectReady) => {
+		const childEnv = await new Promise<{ hasOwnerToken: boolean; hasSignature: boolean; hasSigningKey: boolean }>((resolveReady, rejectReady) => {
 			const timer = setTimeout(() => rejectReady(new Error("title-changing child did not become ready")), 5_000);
-			child.child.stdout?.once("data", () => {
+			child.child.stdout?.once("data", (data) => {
 				clearTimeout(timer);
-				resolveReady();
+				resolveReady(JSON.parse(String(data)));
 			});
 		});
+		expect(childEnv).toEqual({ hasOwnerToken: true, hasSignature: true, hasSigningKey: false });
 
 		const command = execFileSync("ps", ["eww", "-p", String(child.pid), "-o", "command="], { encoding: "utf8" });
 		expect(command).not.toContain(`${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE}`);
@@ -131,6 +139,8 @@ describe("verification harness v2 seam", () => {
 			pid: number;
 			ownerPid?: number;
 			ownerProcessStart?: string;
+			runId?: string;
+			registrationHmac?: string;
 			ownershipMode?: string;
 		});
 		expect(events).toContainEqual(expect.objectContaining({
@@ -138,9 +148,59 @@ describe("verification harness v2 seam", () => {
 			pid: child.child.pid,
 			ownerPid: process.pid,
 			ownerProcessStart: expect.any(String),
+			runId: expect.any(String),
+			registrationHmac: expect.stringMatching(/^[a-f\d]{64}$/),
 			ownershipMode: process.env.SUMOCODE_INTEGRATION_RUN_ROOT === undefined ? "focused" : "shared",
 		}));
 		expect(events).toContainEqual(expect.objectContaining({ event: "exit", pid: child.child.pid }));
+	});
+
+	it("reports a dead run's title-hidden survivor by identity and never signals it from --fix", async () => {
+		const child = spawnSupervisedProcess(
+			process.execPath,
+			[join(process.cwd(), "test/integration/fixtures/title-changing-harness-child.mjs")],
+			{ env: { ...process.env }, stdio: ["ignore", "pipe", "pipe"] },
+		);
+		children.push(child);
+		await new Promise<void>((resolveReady, rejectReady) => {
+			const timer = setTimeout(() => rejectReady(new Error("title-changing child did not become ready")), 5_000);
+			child.child.stdout?.once("data", () => {
+				clearTimeout(timer);
+				resolveReady();
+			});
+		});
+
+		const root = resolve(child.evidence.evidenceDir, "../../..");
+		// A run whose owner is gone: the child is reparented and its owner row is absent.
+		const withoutOwnerPath = () => processRows().rows
+			.filter((row) => row.pid !== process.pid)
+			.map((row) => row.pid === child.pid ? { ...row, ppid: 1 } : row);
+		const report = await inspectIntegrationPreflight({
+			root: process.cwd(),
+			tempRoot: resolve(root, ".."),
+			rows: withoutOwnerPath(),
+			env: {},
+		});
+		const orphanIssue = report.issues.find((issue) => issue.code === "orphan-harness-children");
+		expect(orphanIssue?.rows).toContainEqual(expect.objectContaining({ pid: child.pid, command: "pi" }));
+		// The survivor is named with its immutable identity for a human to act on.
+		expect(orphanIssue?.registeredSurvivors).toContainEqual(expect.objectContaining({ pid: child.pid, pgid: child.pgid }));
+		expect(orphanIssue?.remediation).toContain(`pid ${child.pid} pgid ${child.pgid} born `);
+
+		// The record it was matched from is same-user writable, so --fix must not act on it.
+		const signals: Array<[number, NodeJS.Signals | number]> = [];
+		await fixIntegrationPreflight(report, {
+			rows: withoutOwnerPath(),
+			readRows: withoutOwnerPath,
+			currentPgid: 999_999,
+			kill: (pid, signal) => { signals.push([pid, signal ?? 0]); return true; },
+			wait: async () => {},
+		});
+		expect(signals.filter(([pid]) => pid === child.pid || pid === -child.pgid)).toEqual([]);
+		expect(() => process.kill(child.pid, 0)).not.toThrow();
+		// The supervisor that spawned it still holds the key in memory and reaps it.
+		await child.terminate();
+		expect(() => process.kill(-child.pgid, 0)).toThrow();
 	});
 
 	it("waits on the extensible diagnostic readiness table", async () => {
@@ -529,6 +589,8 @@ describe("verification harness v2 seam", () => {
 				SUMOCODE_INTEGRATION_RUN_ROOT: root,
 				SUMOCODE_INTEGRATION_MANIFEST: manifest,
 				[HARNESS_OWNER_TOKEN_ENV_KEY]: "shared-run-test-owner",
+				[HARNESS_RUN_ID_ENV_KEY]: "shared-run-test-id",
+				[HARNESS_SIGNING_KEY_ENV_KEY]: "shared-run-test-key",
 				[HARNESS_SIGNATURE_ENV_KEY]: HARNESS_SIGNATURE,
 			};
 			const output = execFileSync(process.execPath, [
@@ -582,6 +644,14 @@ describe("verified harness group cleanup", () => {
 		ownerToken,
 		ownershipMode: "shared",
 	};
+	const signingKey = "test-signing-key";
+	const runId = "test-run-id";
+	const authenticatedRegistration = {
+		...registration,
+		runId,
+		registrationHmac: signSpawnRegistration(registration, runId, signingKey),
+		signingKey,
+	};
 	const ownedCommand = `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} ${HARNESS_OWNER_TOKEN_ENV_KEY}=${ownerToken} node child.js`;
 	const owner = { pid: registration.ownerPid, ppid: 58_001, pgid: 58_001, command: ownedCommand };
 	const leader = { pid: registration.pid, ppid: owner.pid, pgid: registration.pgid, command: "pi" };
@@ -610,6 +680,11 @@ describe("verified harness group cleanup", () => {
 			}),
 		};
 	}
+
+	it("signs the fixed spawn identity tuple", () => {
+		expect(signSpawnRegistration(registration, runId, signingKey))
+			.toBe("3aaabd84c11b95dd1e56a71dc5d165542de38863b2ed7148264447813b419a78");
+	});
 
 	it("cleans an authenticated tree even when titles hide every child marker", async () => {
 		const cleanup = fakeCleanup([{ rows: [owner, leader, member] }, { rows: [] }]);
@@ -707,6 +782,34 @@ describe("verified harness group cleanup", () => {
 		expect(cleanup.signals).toEqual([]);
 	});
 
+	it("reaps a reparented title-hidden leader from an authenticated birth registration", async () => {
+		const hiddenLeader = { ...leader, ppid: 1, start: registration.processStart, command: "pi" };
+		const hiddenMember = { ...member, command: "pi" };
+		const cleanup = fakeCleanup([{ rows: [hiddenLeader, hiddenMember] }, { rows: [] }], new Map(), authenticatedRegistration);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "reaped" });
+		expect(cleanup.signals).toEqual([[-registration.pgid, "SIGTERM"]]);
+	});
+
+	it.each([
+		["missing", undefined],
+		["forged", "0".repeat(64)],
+	])("refuses a %s registration HMAC without signaling", async (_kind, registrationHmac) => {
+		const hiddenLeader = { ...leader, ppid: 1, start: registration.processStart, command: "pi" };
+		const cleanup = fakeCleanup([{ rows: [hiddenLeader] }], new Map(), {
+			...authenticatedRegistration,
+			registrationHmac,
+		});
+		await expect(cleanup.result).resolves.toMatchObject({ status: "unverified" });
+		expect(cleanup.signals).toEqual([]);
+	});
+
+	it("refuses an authenticated registration when the live birth differs", async () => {
+		const reusedLeader = { ...leader, ppid: 1, start: "replacement-start", command: "pi" };
+		const cleanup = fakeCleanup([{ rows: [reusedLeader] }], new Map(), authenticatedRegistration);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "unverified", identityStatus: "different" });
+		expect(cleanup.signals).toEqual([]);
+	});
+
 	it("reaps a reparented live leader only when every member carries the run identity", async () => {
 		const signedLeader = { ...leader, ppid: 1, command: ownedCommand };
 		const signedMember = { ...member, command: ownedCommand };
@@ -772,7 +875,14 @@ describe("harness manifest audit contract", () => {
 			ownershipMode: "focused",
 		})}\n`);
 
-		await expect(manifestProcessGroups(manifest, "run-owner")).resolves.toEqual([
+		const event = JSON.parse(readFileSync(manifest, "utf8"));
+		const signingKey = "manifest-test-key";
+		const runId = "manifest-test-run";
+		event.runId = runId;
+		event.registrationHmac = signSpawnRegistration(event, runId, signingKey);
+		writeFileSync(manifest, `${JSON.stringify(event)}\n`);
+
+		await expect(manifestProcessGroups(manifest, "run-owner", { runId, signingKey })).resolves.toEqual([
 			expect.objectContaining({ ownershipMode: "shared" }),
 		]);
 	});

@@ -1,15 +1,17 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
 import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { reapHarnessProcessGroup, runIntegrationPreflight } from "./preflight-integration.mjs";
 import {
 	HARNESS_OWNER_TOKEN_ENV_KEY,
+	HARNESS_RUN_ID_ENV_KEY,
 	HARNESS_SIGNATURE,
 	HARNESS_SIGNATURE_ENV_KEY,
+	HARNESS_SIGNING_KEY_ENV_KEY,
 } from "./lib/integration-harness-constants.mjs";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -49,7 +51,7 @@ async function preparePackageSnapshot(runRoot, env) {
 	return packageRoot;
 }
 
-export async function manifestProcessGroups(manifest, ownerToken) {
+export async function manifestProcessGroups(manifest, ownerToken, { runId, signingKey }) {
 	let contents = "";
 	try { contents = await readFile(manifest, "utf8"); } catch { return []; }
 	const groups = new Map();
@@ -66,6 +68,9 @@ export async function manifestProcessGroups(manifest, ownerToken) {
 					ownerPid: event.ownerPid,
 					ownerProcessStart: event.ownerProcessStart,
 					ownerToken,
+					runId: event.runId === runId ? event.runId : undefined,
+					registrationHmac: event.registrationHmac,
+					signingKey,
 					// This audit owns a shared run. A manifest event cannot opt into
 					// focused mode's tokenless owner proof.
 					ownershipMode: "shared",
@@ -78,8 +83,8 @@ export async function manifestProcessGroups(manifest, ownerToken) {
 	return [...groups.values()];
 }
 
-async function auditAndReap(manifest, ownerToken) {
-	const groups = await manifestProcessGroups(manifest, ownerToken);
+async function auditAndReap(manifest, ownerToken, auth) {
+	const groups = await manifestProcessGroups(manifest, ownerToken, auth);
 	const results = [];
 	for (const group of groups) {
 		results.push({ group, result: await reapHarnessProcessGroup(group, {
@@ -119,21 +124,34 @@ async function runVitest(vitestEntry, args, env) {
 
 async function main(ownerToken) {
 	if (!await runIntegrationPreflight()) return 1;
+	const auth = { runId: randomUUID(), signingKey: randomBytes(32).toString("hex") };
 	const nativeOnly = process.argv.includes("--native-only");
 	const runRoot = await mkdtemp(join(tmpdir(), "sumocode-harness-v2-run-"));
 	const manifest = join(runRoot, "children.jsonl");
 	const tempRoot = join(runRoot, "tmp");
 	const compileCache = join(runRoot, "node-compile-cache");
 	await Promise.all([mkdir(tempRoot, { recursive: true, mode: 0o700 }), mkdir(compileCache, { recursive: true, mode: 0o700 })]);
-	await writeFile(join(runRoot, "owner.json"), `${JSON.stringify({ pid: process.pid, ownerToken, root: ROOT, startedAt: new Date().toISOString() }, null, 2)}\n`, { mode: 0o600 });
+	await writeFile(join(runRoot, "owner.json"), `${JSON.stringify({
+		pid: process.pid,
+		ownerToken,
+		runId: auth.runId,
+		// The signing key stays in this process only: every child is told
+		// SUMOCODE_INTEGRATION_RUN_ROOT, so anything written here is readable
+		// by the processes the key is meant to authenticate.
+		root: ROOT,
+		startedAt: new Date().toISOString(),
+	}, null, 2)}\n`, { mode: 0o600 });
 	const env = { ...process.env };
 	for (const key of Object.keys(env)) {
-		if (key === HARNESS_OWNER_TOKEN_ENV_KEY || key === "NODE_PATH" || key === "NODE_OPTIONS" || key.startsWith("HERDR_") || key.startsWith("PI_SESSION")) delete env[key];
+		if (key === HARNESS_OWNER_TOKEN_ENV_KEY || key === HARNESS_RUN_ID_ENV_KEY || key === HARNESS_SIGNING_KEY_ENV_KEY
+			|| key === "NODE_PATH" || key === "NODE_OPTIONS" || key.startsWith("HERDR_") || key.startsWith("PI_SESSION")) delete env[key];
 	}
 	Object.assign(env, {
 		SUMOCODE_INTEGRATION_RUN_ROOT: runRoot,
 		SUMOCODE_INTEGRATION_MANIFEST: manifest,
 		[HARNESS_OWNER_TOKEN_ENV_KEY]: ownerToken,
+		[HARNESS_RUN_ID_ENV_KEY]: auth.runId,
+		[HARNESS_SIGNING_KEY_ENV_KEY]: auth.signingKey,
 		[HARNESS_SIGNATURE_ENV_KEY]: HARNESS_SIGNATURE,
 		NODE_COMPILE_CACHE: compileCache,
 		TMPDIR: tempRoot,
@@ -173,7 +191,7 @@ async function main(ownerToken) {
 			], env);
 		}
 	}
-	const auditPassed = await auditAndReap(manifest, ownerToken);
+	const auditPassed = await auditAndReap(manifest, ownerToken, auth);
 	const exitCode = resolveHarnessExitCode({ seamStatus, integrationStatus, auditPassed });
 	if (exitCode === 0) await rm(runRoot, { recursive: true, force: true });
 	else {

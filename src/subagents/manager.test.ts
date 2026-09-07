@@ -942,6 +942,96 @@ describe("SubagentManager", () => {
 		});
 	});
 
+	it("retains a surviving generated tab when the cached overflow tab empties", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+				emit({ kind: "run-started" });
+				// The first two children land in one generated tab, the next two in
+				// a second; the second becomes the cached (most recent) tab.
+				const tabId = task.id === "sa-1" || task.id === "sa-2" ? "w1:t5" : "w1:t6";
+				emit({ kind: "pane-attached", pane: { agentName: `${task.id}-worker`, workspaceId: "w1", tabId, paneId: `w1:p${task.id}` } });
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+		});
+
+		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
+		await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true });
+		await manager.spawn({ prompt: "p3", title: "third", cwd: "/repo", visible: true });
+		await manager.spawn({ prompt: "p4", title: "fourth", cwd: "/repo", visible: true });
+
+		// Settle the cached overflow tab (w1:t6) entirely. The older generated
+		// tab (w1:t5) still holds live panes and must be reclaimed next.
+		emitters.get("sa-3")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-3")?.status).toBe("done"));
+		emitters.get("sa-4")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-4")?.status).toBe("done"));
+
+		await manager.spawn({ prompt: "p5", title: "fifth", cwd: "/repo", visible: true });
+		expect(placements[4]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "right" });
+	});
+
+	it("does not promote an isolated worktree workspace tab when the cached tab empties", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			openExistingWorktreeWorkspace: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+				emit({ kind: "run-started" });
+				const tabId = task.id === "sa-1" ? "w9:t1" : "w1:t5";
+				emit({ kind: "pane-attached", pane: { agentName: `${task.id}-worker`, workspaceId: tabId.split(":")[0], tabId, paneId: `${tabId}:p` } });
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			createWorktree: async (options) => ({ ok: true, path: `/isolated/${options.task}`, branch: options.branch ?? `sumo/${options.task}`, baseRef: options.baseRef ?? "HEAD" }),
+			resolveWorktreeBaseRef: async () => "abc123",
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+		});
+
+		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true, worktree: true });
+		await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true });
+		expect(placements).toEqual([
+			{ kind: "worktree-workspace", path: "/isolated/first", label: "first", sourceCwd: "/repo" },
+			{ kind: "new-tab", label: "subagents" },
+		]);
+
+		// Settle the shared generated tab's only child.
+		emitters.get("sa-2")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-2")?.status).toBe("done"));
+
+		await manager.spawn({ prompt: "p3", title: "third", cwd: "/repo", visible: true });
+		// The isolated worktree workspace (w9:t1) must not be promoted to the
+		// shared cache; with no surviving shared tab, the next spawn plans fresh.
+		expect(placements[2]).toEqual({ kind: "new-tab", label: "subagents" });
+	});
+
 	it("counts only live visible panes toward tab capacity", async () => {
 		const backendTasks: Array<SpawnSubagentTask & { placement?: unknown }> = [];
 		const host: TerminalHost = {

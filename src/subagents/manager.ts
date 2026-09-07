@@ -1100,6 +1100,7 @@ export class SubagentManager {
 				: event.outcome;
 			if (
 				settling?.visible &&
+				settling.pane?.tabId !== undefined &&
 				settling.pane?.tabId === this.subagentsTabId &&
 				// Liveness must come from `children`, not the snapshot: settle()
 				// removes a child from `children` synchronously, but the snapshot
@@ -1110,8 +1111,19 @@ export class SubagentManager {
 			) {
 				// Herdr removes a task pane when its wrapper exits and removes an empty
 				// tab with it. Drop the generated-tab cache as soon as its final live
-				// child settles so the next spawn provisions a real tab on its first try.
-				this.subagentsTabId = this.initialVisibleTabId;
+				// child settles. When another generated tab still holds live panes, keep
+				// it cached so the next spawn reclaims its free capacity instead of
+				// provisioning a duplicate overflow tab; fall back to the initial
+				// visible tab only when no live, non-isolated pane tab remains.
+				const surviving = this.list().find((snapshot) => {
+					// Isolated workspace children are not shared caller destinations;
+					// caching their tab would collapse later children into the first
+					// workspace (same guard as pane-attach).
+					if (snapshot.id === id || !this.children.has(snapshot.id) || this.workspacePlacedIds.has(snapshot.id)) return false;
+					const tabId = snapshot.pane?.tabId;
+					return tabId !== undefined && tabId !== this.subagentsTabId;
+				});
+				this.subagentsTabId = surviving?.pane?.tabId ?? this.initialVisibleTabId;
 			}
 			// A visible child that FAILS before any pane attached is
 			// evidence the cached subagents tab may be gone (e.g. the human closed
@@ -1134,7 +1146,7 @@ export class SubagentManager {
 		if (!current) return;
 		if (event.kind === "pane-attached") {
 			this.snapshots.set(id, { ...current, pane: event.pane });
-			const workspacePlaced = this.workspacePlacedIds.delete(id);
+			const workspacePlaced = this.workspacePlacedIds.has(id);
 			// A worktree workspace is an isolation fallback, not a shared caller
 			// destination. Caching its tab would collapse later isolated children
 			// into the first workspace whenever HERDR_TAB_ID is unavailable.

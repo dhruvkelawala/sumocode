@@ -305,7 +305,13 @@ async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): P
 		return {
 			...structured,
 			reason: `${structured.reason}; cleanup: ${cleanupFailure}`,
-			...(ownedPaneId ? { orphanPaneId: ownedPaneId } : ownedTabId ? { orphanTabId: ownedTabId } : {}),
+			// A failed (or skipped) pane close leaves both the pane and, for
+			// new-tab spawns, its generated tab alive. Report both identifiers
+			// instead of one: a `tab` placement can infer its tab from the
+			// placement, but a generated tab id only exists here, and without
+			// it the manager cannot make the surviving tab reclaimable.
+			...(ownedPaneId ? { orphanPaneId: ownedPaneId } : {}),
+			...(ownedTabId ? { orphanTabId: ownedTabId } : {}),
 		};
 	};
 

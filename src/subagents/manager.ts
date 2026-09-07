@@ -1095,6 +1095,7 @@ export class SubagentManager {
 
 	private fold(id: string, event: SubagentEvent): void {
 		if (event.kind === "run-settled") {
+			const workspacePlaced = this.workspacePlacedIds.has(id);
 			this.workspacePlacedIds.delete(id);
 			const settling = this.snapshots.get(id);
 			let settledNow = settling;
@@ -1107,6 +1108,15 @@ export class SubagentManager {
 				// tab-liveness checks below treat the tab as still occupied.
 				settledNow = { ...settledNow, pane: outcome.orphanPane, paneStillOpen: true };
 				this.snapshots.set(id, settledNow);
+				// A generated orphan tab cannot be inferred from the placement:
+				// the host reports it only when cleanup of a new-tab spawn failed.
+				// Point the reclaim cache at it so the next spawn splits into the
+				// surviving tab instead of provisioning a duplicate. Isolated
+				// workspace children must never capture the shared cache, the same
+				// guard as pane-attach.
+				if (outcome.orphanPane.tabId && !workspacePlaced) {
+					this.subagentsTabId = outcome.orphanPane.tabId;
+				}
 			}
 			if (
 				settledNow?.visible &&

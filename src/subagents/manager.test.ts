@@ -1200,6 +1200,66 @@ describe("SubagentManager", () => {
 		expect(placements[1]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "down" });
 	});
 
+	it("promotes a generated orphan tab into the reclaim cache", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+			initialVisibleTabId: "w1:t5",
+		});
+
+		// Fill the caller tab so the fifth spawn plans a generated tab.
+		for (const [index, title] of ["first", "second", "third", "fourth"].entries()) {
+			await manager.spawn({ prompt: `p${index + 1}`, title, cwd: "/repo", visible: true });
+			emitters.get(`sa-${index + 1}`)?.({ kind: "run-started" });
+			emitters.get(`sa-${index + 1}`)?.({ kind: "pane-attached", pane: { agentName: `sa-${index + 1}-worker`, workspaceId: "w1", tabId: "w1:t5", paneId: `w1:p${index + 1}` } });
+		}
+		expect(placements).toEqual([
+			{ kind: "tab", tabId: "w1:t5", direction: "right" },
+			{ kind: "tab", tabId: "w1:t5", direction: "down" },
+			{ kind: "tab", tabId: "w1:t5", direction: "right" },
+			{ kind: "tab", tabId: "w1:t5", direction: "down" },
+		]);
+
+		await manager.spawn({ prompt: "p5", title: "fifth", cwd: "/repo", visible: true });
+		expect(placements[4]).toEqual({ kind: "new-tab", label: "subagents 2" });
+		// Provisioning failed after the generated tab was created: the pane run
+		// and its cleanup both failed, so the host reports the orphan pane and
+		// the tab that keeps it alive.
+		emitters.get("sa-5")?.({
+			kind: "run-settled",
+			outcome: {
+				kind: "failed",
+				errorText: "herdr pane run exited 1",
+				errorCode: "pane_unavailable",
+				paneStillOpen: true,
+				orphanPane: { agentName: "fifth-worker", workspaceId: "w1", tabId: "w1:t8", paneId: "w1:p8" },
+			},
+		});
+		await vi.waitFor(() => expect(manager.get("sa-5")?.status).toBe("error"));
+
+		await manager.spawn({ prompt: "p6", title: "sixth", cwd: "/repo", visible: true });
+		// The surviving generated tab has three free slots, so the cache must
+		// point at it and the next spawn reclaims capacity there.
+		expect(placements[5]).toEqual({ kind: "tab", tabId: "w1:t8", direction: "down" });
+	});
+
 	it("promotes a surviving tab anchored only by failed-close panes", async () => {
 		const placements: unknown[] = [];
 		const emitters = new Map<string, (event: SubagentEvent) => void>();

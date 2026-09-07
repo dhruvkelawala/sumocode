@@ -233,6 +233,26 @@ describe("herdrTerminalHost", () => {
 		expect(result).not.toHaveProperty("orphanTabId");
 	});
 
+	it("reports the generated tab alongside the orphan pane when a new-tab run and its cleanup both fail", async () => {
+		const exec = vi.fn(async (_bin: string, args: string[]) => {
+			if (args[0] === "tab" && args[1] === "create") return { stdout: JSON.stringify({ result: { tab_id: "w7:t9" } }), stderr: "", code: 0, killed: false };
+			if (args[0] === "pane" && args[1] === "list") return { stdout: JSON.stringify({ result: { panes: [{ pane_id: "w7:p1", workspace_id: "w7", tab_id: "w7:t9" }] } }), stderr: "", code: 0, killed: false };
+			if (args[0] === "pane" && args[1] === "run") return { stdout: "", stderr: "boom", code: 1, killed: false };
+			if (args[0] === "pane" && args[1] === "close") return { stdout: "", stderr: "close refused", code: 1, killed: false };
+			return { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false };
+		});
+
+		// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
+		const result = await herdrTerminalHost.startAgentPane({ exec } as never, {
+			name: "worker", cwd: "/repo", shellCommand: "run child",
+			placement: { kind: "new-tab", label: "subagents" },
+		});
+
+		expect(result).toMatchObject({ ok: false, code: "pane_unavailable", orphanPaneId: "w7:p1", orphanTabId: "w7:t9" });
+		// SAFETY: the failure variant of HostResult carries the reason string.
+		expect((result as { reason?: string }).reason).toContain("cleanup:");
+	});
+
 	it("reports an orphan pane when the deadline expires before cleanup can run", async () => {
 		vi.useFakeTimers();
 		try {

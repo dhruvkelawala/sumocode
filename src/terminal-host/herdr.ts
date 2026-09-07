@@ -301,18 +301,19 @@ async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): P
 		if (structured.ok || !cleanupFailure) return structured;
 		// Cleanup failed or was skipped, so the allocated pane/tab still occupies
 		// layout capacity. Report it so the manager can keep counting the slot
-		// instead of over-tiling the tab on the next spawn.
-		return {
-			...structured,
-			reason: `${structured.reason}; cleanup: ${cleanupFailure}`,
-			// A failed (or skipped) pane close leaves both the pane and, for
-			// new-tab spawns, its generated tab alive. Report both identifiers
-			// instead of one: a `tab` placement can infer its tab from the
-			// placement, but a generated tab id only exists here, and without
-			// it the manager cannot make the surviving tab reclaimable.
-			...(ownedPaneId ? { orphanPaneId: ownedPaneId } : {}),
-			...(ownedTabId ? { orphanTabId: ownedTabId } : {}),
-		};
+		// instead of over-tiling the tab on the next spawn. A failed pane close
+		// leaves both the pane and, for new-tab spawns, its generated tab alive:
+		// report both identifiers so the manager can make the surviving tab
+		// reclaimable (`tab` placements infer their tab from the placement, but a
+		// generated tab id only exists here).
+		const reason = `${structured.reason}; cleanup: ${cleanupFailure}`;
+		if (ownedPaneId !== undefined) {
+			return ownedTabId !== undefined
+				? { ...structured, reason, orphanPaneId: ownedPaneId, orphanTabId: ownedTabId }
+				: { ...structured, reason, orphanPaneId: ownedPaneId };
+		}
+		if (ownedTabId !== undefined) return { ...structured, reason, orphanTabId: ownedTabId };
+		return { ...structured, reason };
 	};
 
 	try {

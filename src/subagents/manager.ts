@@ -1097,7 +1097,12 @@ export class SubagentManager {
 			if (
 				settling?.visible &&
 				settling.pane?.tabId === this.subagentsTabId &&
-				!this.list().some((snapshot) => snapshot.id !== id && snapshot.status === "running" && snapshot.pane?.tabId === this.subagentsTabId)
+				// Liveness must come from `children`, not the snapshot: settle()
+				// removes a child from `children` synchronously, but the snapshot
+				// keeps status "running" while its manifest collects async. Two
+				// siblings settling close together would otherwise each see the
+				// other as still live and neither would drop the generated-tab cache.
+				!this.list().some((snapshot) => snapshot.id !== id && this.children.has(snapshot.id) && snapshot.pane?.tabId === this.subagentsTabId)
 			) {
 				// Herdr removes a task pane when its wrapper exits and removes an empty
 				// tab with it. Drop the generated-tab cache as soon as its final live

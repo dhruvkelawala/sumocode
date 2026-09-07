@@ -432,7 +432,14 @@ function inspectHarnessProcessGroup(registration, table, currentPgid, readProces
 		return { status: "unverified", identityStatus: "unknown", error: "invalid process identity" };
 	}
 	const members = table.rows.filter((row) => row.pgid === pgid && !row.state?.startsWith("Z"));
-	if (members.length === 0) return { status: "exited" };
+	if (members.length === 0) {
+		// The group is empty, but if the registered leader's pid is alive in some
+		// other group that pid has been reused; report it rather than "exited".
+		const reused = table.rows.find((row) => row.pid === pid && !row.state?.startsWith("Z"));
+		return reused === undefined
+			? { status: "exited" }
+			: { status: "unverified", identityStatus: "different", error: "leader pid reused outside the registered group" };
+	}
 	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- registrations parsed from JSONL are untrusted at this effect boundary
 	if (typeof processStart !== "string" || processStart.length === 0
 		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- registrations parsed from JSONL are untrusted at this effect boundary
@@ -465,7 +472,17 @@ function inspectHarnessProcessGroup(registration, table, currentPgid, readProces
 		return { status: "unverified", identityStatus: "different", error: "owner ancestry changed" };
 	}
 	if (ownerPath !== "reached") {
-		if (hasRegistrationAuth) return { status: "owned" };
+		// Post-owner path: birth identity is the only tie left, and macOS ps
+		// reports lstart to whole seconds with no finer field (sess is always 0
+		// on Darwin). Require the leader to still be its own session leader
+		// (pgid == pid, as setsid spawned it) so a same-second PID reuse by an
+		// ordinary child of some shell cannot pass. A finer identity needs a
+		// native kinfo_proc read and is tracked as follow-up work.
+		if (hasRegistrationAuth) {
+			return leader.pgid === leader.pid && pid === pgid
+				? { status: "owned" }
+				: { status: "unverified", identityStatus: "different", error: "leader is not its own group leader" };
+		}
 		return membersCarryRunIdentity(members, ownerToken)
 			? { status: "owned" }
 			: { status: "unverified", identityStatus: "different", error: "process group ownership changed" };

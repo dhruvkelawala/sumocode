@@ -716,6 +716,23 @@ describe("verified harness group cleanup", () => {
 		expect(cleanup.signals).toEqual([]);
 	});
 
+	it("reaps a post-owner authenticated leader only while it is its own group leader", async () => {
+		// Owner gone (reparented to init), HMAC valid, birth matches: the
+		// birth-only path. Its one extra requirement is that the leader is
+		// still the setsid group leader it was spawned as.
+		const ownLeader = { ...leader, ppid: 1 };
+		const own = fakeCleanup([{ rows: [ownLeader] }, { rows: [] }], starts, authenticatedRegistration);
+		await expect(own.result).resolves.toMatchObject({ status: "reaped" });
+		expect(own.signals).toEqual([[-registration.pgid, "SIGTERM"]]);
+
+		// Same pid, same birth second, but a member of some other group: the
+		// shape a same-second PID reuse by a shell child would take.
+		const foreignGroup = { ...leader, ppid: 1, pgid: 58_001 };
+		const reused = fakeCleanup([{ rows: [foreignGroup] }], starts, authenticatedRegistration);
+		await expect(reused.result).resolves.toMatchObject({ status: "unverified" });
+		expect(reused.signals).toEqual([]);
+	});
+
 	it("refuses a leader whose birth identity changed", async () => {
 		const changed = new Map(starts).set(registration.pid, "replacement-start");
 		const cleanup = fakeCleanup([{ rows: [owner, leader] }], changed);

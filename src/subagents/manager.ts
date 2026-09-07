@@ -607,6 +607,9 @@ export class SubagentManager {
 					// panes whose close was never confirmed occupying their slot.
 					visiblePanes: this.list().flatMap((snapshot) => snapshot.visible && (this.children.has(snapshot.id) || snapshot.paneStillOpen === true) && snapshot.pane ? [snapshot.pane] : []),
 					sessionTabId: this.subagentsTabId,
+					// Isolated workspace tabs are isolation destinations, never shared
+					// spillover targets for the vacancy scan.
+					excludedTabIds: this.list().flatMap((snapshot) => this.workspacePlacedIds.has(snapshot.id) && snapshot.pane?.tabId ? [snapshot.pane.tabId] : []),
 				});
 				if (planned.kind === "workspace") {
 					if (!worktree || !gitContext.repoRoot) {

@@ -1260,6 +1260,49 @@ describe("SubagentManager", () => {
 		expect(placements[5]).toEqual({ kind: "tab", tabId: "w1:t8", direction: "down" });
 	});
 
+	it("reclaims a vacancy in an older shared tab when the cached tab is full", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+			initialVisibleTabId: "w1:t5",
+		});
+
+		// Four children fill the caller tab, four more fill a generated overflow
+		// tab that becomes the cache. The child ids are 1-indexed so the pane
+		// placement asserts read naturally.
+		for (let index = 1; index <= 8; index += 1) {
+			await manager.spawn({ prompt: `p${index}`, title: `child-${index}`, cwd: "/repo", visible: true });
+			emitters.get(`sa-${index}`)?.({ kind: "run-started" });
+			emitters.get(`sa-${index}`)?.({ kind: "pane-attached", pane: { agentName: `sa-${index}-worker`, workspaceId: "w1", tabId: index <= 4 ? "w1:t5" : "w1:t6", paneId: `w1:p${index}` } });
+		}
+		expect(placements[4]).toEqual({ kind: "new-tab", label: "subagents 2" });
+		// The cached overflow tab is full, but the caller tab lost a child.
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
+
+		await manager.spawn({ prompt: "p9", title: "ninth", cwd: "/repo", visible: true });
+		// The caller tab's free slot must be reclaimed instead of provisioning
+		// a duplicate overflow tab.
+		expect(placements[8]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "down" });
+	});
+
 	it("promotes a surviving tab anchored only by failed-close panes", async () => {
 		const placements: unknown[] = [];
 		const emitters = new Map<string, (event: SubagentEvent) => void>();

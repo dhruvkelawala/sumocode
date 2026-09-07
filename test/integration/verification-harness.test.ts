@@ -700,7 +700,10 @@ describe("verified harness group cleanup", () => {
 	});
 
 	it("refuses a member carrying a fake-pi name and token without a harness signature", async () => {
-		const unsigned = { ...leader, command: `/tmp/sumocode-fake-pi-unsigned/stub ${HARNESS_OWNER_TOKEN_ENV_KEY}=${ownerToken} node child.js` };
+		// A reparented leader takes the run-identity fallback, so only the missing
+		// signature decides this refusal; with an owner-linked leader the absent
+		// owner row would refuse first and hide the seam under test.
+		const unsigned = { ...leader, ppid: 1, command: `/tmp/sumocode-fake-pi-unsigned/stub ${HARNESS_OWNER_TOKEN_ENV_KEY}=${ownerToken} node child.js` };
 		const cleanup = fakeCleanup([{ rows: [unsigned] }]);
 		await expect(cleanup.result).resolves.toMatchObject({ status: "unverified", identityStatus: "different" });
 		expect(cleanup.signals).toEqual([]);

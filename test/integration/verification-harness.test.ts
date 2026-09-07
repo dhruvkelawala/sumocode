@@ -12,6 +12,7 @@ import {
 	HARNESS_SIGNATURE_ENV_KEY,
 	HARNESS_SIGNING_KEY_ENV_KEY,
 	spawnSupervisedProcess,
+	supervisePtyProcess,
 	waitForDiagnosticReadiness,
 	type SupervisedProcess,
 } from "./harness-supervisor.js";
@@ -187,32 +188,44 @@ describe("verification harness v2 seam", () => {
 		expect(after).toEqual([]);
 	});
 
-	it("kills the exact fresh child and records an audit failure when spawn registration cannot be written", async () => {
+	it("fails closed without signaling when safe PTY cleanup is unavailable", () => {
 		const root = createRunRoot();
 		const manifest = join(root, "children.jsonl");
 		mkdirSync(manifest);
-		const marker = `registration-failure-${Date.now()}`;
-		const oldRunId = process.env[HARNESS_RUN_ID_ENV_KEY];
-		const oldKey = process.env[HARNESS_SIGNING_KEY_ENV_KEY];
-		process.env[HARNESS_RUN_ID_ENV_KEY] = "registration-failure-run";
-		process.env[HARNESS_SIGNING_KEY_ENV_KEY] = "registration-failure-key";
-		try {
-			expect(() => spawnSupervisedProcess(process.execPath, ["-e", `process.title=${JSON.stringify(marker)};setInterval(()=>{},1000)`], {
-				env: { ...process.env, SUMOCODE_INTEGRATION_RUN_ROOT: root, SUMOCODE_INTEGRATION_MANIFEST: manifest },
-				stdio: "ignore",
-			})).toThrow();
-		} finally {
-			if (oldRunId === undefined) delete process.env[HARNESS_RUN_ID_ENV_KEY];
-			else process.env[HARNESS_RUN_ID_ENV_KEY] = oldRunId;
-			if (oldKey === undefined) delete process.env[HARNESS_SIGNING_KEY_ENV_KEY];
-			else process.env[HARNESS_SIGNING_KEY_ENV_KEY] = oldKey;
-		}
-		const deadline = Date.now() + 2_000;
-		while (processRows().rows.some((row) => row.command.includes(marker)) && Date.now() < deadline) {
-			Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-		}
-		expect(processRows().rows.some((row) => row.command.includes(marker))).toBe(false);
-		expect(harnessAuditFailures(root)).toContainEqual(expect.objectContaining({ phase: "spawn registration", reason: expect.any(String) }));
+		const env = { ...process.env, SUMOCODE_INTEGRATION_RUN_ROOT: root, SUMOCODE_INTEGRATION_MANIFEST: manifest };
+		const evidence = {
+			evidenceDir: join(root, "evidence", "pty-registration-failure"),
+			stderrPath: join(root, "stderr.log"),
+			diagPath: join(root, "diag.jsonl"),
+			argv: ["pi"],
+		};
+
+		expect(() => supervisePtyProcess(2_147_483_647, evidence, env, { runId: "pty-run", signingKey: "pty-key" }))
+			.toThrow(/safe post-spawn cleanup control is unavailable/);
+		expect(harnessAuditFailures(root)).toContainEqual(expect.objectContaining({
+			phase: "spawn registration cleanup",
+			pid: 2_147_483_647,
+			reason: "safe post-spawn cleanup control is unavailable; process-group state is unknown",
+		}));
+	});
+
+	it("treats unreadable and malformed audit records as failures", async () => {
+		const root = createRunRoot();
+		const manifest = join(root, "children.jsonl");
+		const auditPath = join(root, "audit-failures.jsonl");
+		mkdirSync(auditPath);
+
+		expect(harnessAuditFailures(root)).toContainEqual(expect.objectContaining({
+			phase: "audit record",
+			reason: expect.stringContaining("could not read audit failure records"),
+		}));
+		await expect(auditAndReap(manifest, "unused", { runId: "audit-run", signingKey: "audit-key" })).resolves.toBe(false);
+
+		rmSync(auditPath, { recursive: true });
+		writeFileSync(auditPath, "null\n42\n{}\nnot-json\n");
+		expect(harnessAuditFailures(root)).toHaveLength(4);
+		expect(harnessAuditFailures(root).every((failure) => failure.reason === "malformed audit failure record")).toBe(true);
+		await expect(auditAndReap(manifest, "unused", { runId: "audit-run", signingKey: "audit-key" })).resolves.toBe(false);
 	});
 
 	it("contains lifecycle write failures and makes the runner audit fail", async () => {

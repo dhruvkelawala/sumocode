@@ -169,7 +169,7 @@ export function requireHarnessAuth(env: NodeJS.ProcessEnv): HarnessAuth {
 	return auth;
 }
 
-function appendManifest(event: HarnessManifestEvent, env: NodeJS.ProcessEnv = process.env, auth?: HarnessAuth): void {
+function appendManifest(event: HarnessManifestEvent, env: NodeJS.ProcessEnv, auth: HarnessAuth | undefined): void {
 	const path = manifestPath(env);
 	mkdirSync(dirname(path), { recursive: true });
 	let writtenEvent = event;
@@ -208,6 +208,19 @@ interface HarnessAuditFailure {
 	readonly reason: string;
 }
 
+function malformedAuditFailure(reason = "malformed audit failure record"): HarnessAuditFailure {
+	return { phase: "audit record", pid: 0, pgid: 0, reason };
+}
+
+function isHarnessAuditFailure(value: unknown): value is HarnessAuditFailure {
+	if (value === null || typeof value !== "object") return false;
+	const failure = value as Partial<HarnessAuditFailure>;
+	return typeof failure.phase === "string"
+		&& typeof failure.pid === "number" && Number.isSafeInteger(failure.pid)
+		&& typeof failure.pgid === "number" && Number.isSafeInteger(failure.pgid)
+		&& typeof failure.reason === "string";
+}
+
 function reportAuditFailure(env: NodeJS.ProcessEnv, failure: HarnessAuditFailure): void {
 	try {
 		const root = harnessRoot(env);
@@ -237,14 +250,20 @@ export function recordHarnessAuditFailure(
 
 export function harnessAuditFailures(root: string): HarnessAuditFailure[] {
 	let contents;
-	try { contents = readFileSync(join(root, AUDIT_FAILURES_FILE), "utf8"); } catch { return []; }
+	try {
+		contents = readFileSync(join(root, AUDIT_FAILURES_FILE), "utf8");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+		return [malformedAuditFailure(`could not read audit failure records: ${String(error)}`)];
+	}
 	const failures: HarnessAuditFailure[] = [];
 	for (const line of contents.split("\n")) {
 		if (!line.trim()) continue;
 		try {
-			failures.push(JSON.parse(line) as HarnessAuditFailure);
+			const failure: unknown = JSON.parse(line);
+			failures.push(isHarnessAuditFailure(failure) ? failure : malformedAuditFailure());
 		} catch {
-			failures.push({ phase: "audit record", pid: 0, pgid: 0, reason: "malformed audit failure record" });
+			failures.push(malformedAuditFailure());
 		}
 	}
 	return failures;
@@ -252,7 +271,7 @@ export function harnessAuditFailures(root: string): HarnessAuditFailure[] {
 
 function appendLifecycleManifest(event: HarnessManifestEvent, env: NodeJS.ProcessEnv, processStart: string | undefined): void {
 	try {
-		appendManifest(event, env);
+		appendManifest(event, env, undefined);
 	} catch (error) {
 		reportAuditFailure(env, {
 			phase: `${event.event} manifest`,
@@ -268,7 +287,6 @@ function failSpawnRegistration(
 	error: unknown,
 	env: NodeJS.ProcessEnv,
 	registration: HarnessGroupRegistration,
-	killLeader: () => boolean,
 ): never {
 	reportAuditFailure(env, {
 		phase: "spawn registration",
@@ -277,12 +295,15 @@ function failSpawnRegistration(
 		processStart: registration.processStart,
 		reason: String(error),
 	});
-	try {
-		if (!killLeader()) throw new Error("the exact child handle rejected SIGKILL");
-	} catch (cleanupError) {
-		throw new Error(`spawn registration failed and exact-child cleanup could not be requested for pid ${registration.pid}: ${String(cleanupError)}; registration error: ${String(error)}`);
-	}
-	throw error;
+	const cleanup = "safe post-spawn cleanup control is unavailable; process-group state is unknown";
+	reportAuditFailure(env, {
+		phase: "spawn registration cleanup",
+		pid: registration.pid,
+		pgid: registration.pgid,
+		processStart: registration.processStart,
+		reason: cleanup,
+	});
+	throw new Error(`spawn registration failed for pid ${registration.pid}: ${cleanup}; registration error: ${String(error)}`);
 }
 
 function shellArg(value: string): string {
@@ -453,7 +474,7 @@ export function spawnSupervisedProcess(command: string, args: readonly string[],
 			evidenceDir: evidence.evidenceDir,
 		}, env, auth);
 	} catch (error) {
-		failSpawnRegistration(error, env, registration, () => child.kill("SIGKILL"));
+		failSpawnRegistration(error, env, registration);
 	}
 	child.stderr?.on("data", (chunk: Buffer | string) => {
 		try {
@@ -480,16 +501,18 @@ export function spawnSupervisedProcess(command: string, args: readonly string[],
 				await new Promise<void>((resolveTurn) => setImmediate(resolveTurn));
 				try {
 					await terminateGroup(registration);
-				} finally {
-					// The handle names the exact pid this supervisor spawned, so it is
-					// owned even when the group's wider identity cannot be proved. The
-					// group refusal still propagates; only the leader is not left behind.
-					if (child.exitCode === null && child.signalCode === null) {
-						try { child.kill("SIGKILL"); } catch { /* child exited at the boundary */ }
-					}
-					await Promise.race([exited, new Promise<void>((resolveDelay) => setTimeout(resolveDelay, SUPERVISOR_TERM_GRACE_MS))]);
-					appendLifecycleManifest({ event: "reaped", pid, pgid }, env, registration.processStart);
+				} catch (error) {
+					reportAuditFailure(env, {
+						phase: "process-group cleanup",
+						pid,
+						pgid,
+						processStart: registration.processStart,
+						reason: String(error),
+					});
+					throw error;
 				}
+				await Promise.race([exited, new Promise<void>((resolveDelay) => setTimeout(resolveDelay, SUPERVISOR_TERM_GRACE_MS))]);
+				appendLifecycleManifest({ event: "reaped", pid, pgid }, env, registration.processStart);
 			})();
 			return reaping;
 		},
@@ -525,7 +548,7 @@ export function supervisePtyProcess(pid: number, evidence: ChildEvidenceContext,
 			kind: "pty",
 		}, env, auth);
 	} catch (error) {
-		failSpawnRegistration(error, env, registration, () => process.kill(pid, "SIGKILL"));
+		failSpawnRegistration(error, env, registration);
 	}
 	return {
 		pid,
@@ -568,6 +591,6 @@ afterAll(async () => {
 	fallbackSigningKey = undefined;
 	focusedProcessGroups.clear();
 	if (survivors.length > 0 || auditFailures.length > 0) {
-		throw new Error(`focused harness failed: ${survivors.length} surviving process group(s), ${unreaped.length} unreaped, ${auditFailures.length} audit write failure(s)`);
+		throw new Error(`focused harness failed: ${survivors.length} surviving process group(s), ${unreaped.length} unreaped, ${auditFailures.length} audit failure record(s)`);
 	}
 });

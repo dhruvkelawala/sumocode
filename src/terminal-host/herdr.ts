@@ -143,21 +143,21 @@ const paneUnavailable = (failure: HostResult<never>): HostResult<never> => failu
 	reason: failure.reason ?? failure.error,
 });
 
-async function paneForTab(pi: PiExecLike, tabId: string, timeout = 5000, deadline?: ProvisionDeadline): Promise<HostResult<{ pane: HerdrPaneInfo }>> {
+async function paneForTab(pi: PiExecLike, tabId: string, timeout = 5000, deadline?: ProvisionDeadline, reserveMs = 0): Promise<HostResult<{ pane: HerdrPaneInfo }>> {
 	const workspaceId = tabId.split(":")[0];
 	if (!workspaceId) return { ok: false, error: `invalid herdr tab id: ${tabId}` };
 	// A just-created tab can be returned before its root pane appears in
 	// `pane list` (observed live as `no pane for tab`). Bound the retry so a
 	// genuinely closed/stale tab still fails quickly and invalidates the cache.
 	for (let attempt = 0; attempt < 4; attempt += 1) {
-		const callTimeout = deadline ? remainingProvisionMs(deadline) : timeout;
+		const callTimeout = deadline ? remainingProvisionMs(deadline, reserveMs) : timeout;
 		if (callTimeout === undefined) return deadlineFailure("herdr pane list");
 		const listed = await listWorkspacePanes(pi, workspaceId, callTimeout);
 		if (!listed.ok) return listed;
 		const pane = listed.panes.find((candidate) => candidate.tab_id === tabId);
 		if (pane?.pane_id) return { ok: true, pane };
 		if (attempt < 3) {
-			const retryDelay = deadline ? Math.min(25, remainingProvisionMs(deadline) ?? 0) : 25;
+			const retryDelay = deadline ? Math.min(25, remainingProvisionMs(deadline, reserveMs) ?? 0) : 25;
 			if (retryDelay <= 0) return deadlineFailure("herdr pane list");
 			await new Promise<void>((resolve) => setTimeout(resolve, retryDelay));
 		}
@@ -201,7 +201,7 @@ async function createTabPane(
 	if (tabId) onCreatedTab?.(tabId);
 	if (parsed.root_pane?.pane_id) return { ok: true, pane: parsed.root_pane };
 	if (!tabId) return { ok: false, error: "herdr tab create did not return a tab_id" };
-	return paneForTab(pi, tabId, timeout, deadline);
+	return paneForTab(pi, tabId, timeout, deadline, HERDR_PANE_CLEANUP_RESERVE_MS);
 }
 
 async function runPaneCommand(pi: PiExecLike, pane: HerdrPaneInfo, command: string, timeout = 5000): Promise<HostResult<{}>> {

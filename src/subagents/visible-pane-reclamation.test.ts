@@ -69,9 +69,6 @@ class SupervisedHerdrHarness {
 			this.panes.delete(args[2]!);
 			return this.result({ type: "ok" });
 		}
-		if (args[0] === "agent" && args[1] === "explain") {
-			return this.result({ type: "agent_explain", explain: { reason: "no available shell pane" } });
-		}
 		return this.result({ type: "ok" });
 	});
 
@@ -126,13 +123,11 @@ describe("simulated process-boundary visible pane reclamation", () => {
 		writeFileSync(launcher, [
 			"#!/usr/bin/env bash",
 			"set -eu",
-			"args=\"$*\"",
 			"task_dir=",
 			"while [ \"$#\" -gt 0 ]; do",
 			"  if [ \"$1\" = \"--task-dir\" ]; then task_dir=$2; shift 2; else shift; fi",
 			"done",
 			"[ -n \"$task_dir\" ]",
-			"printf '%s\\n' \"$args\" > \"$task_dir/launcher.argv\"",
 			"printf '%s\\n' \"$$\" > \"$task_dir/started.marker\"",
 			"finish() { [ -f \"$task_dir/exit.code\" ] || printf '143\\n' > \"$task_dir/exit.code\"; exit 143; }",
 			"trap finish HUP INT TERM",

@@ -181,6 +181,37 @@ describe("herdrTerminalHost", () => {
 		expect(exec).toHaveBeenCalledWith("herdr", ["tab", "close", "w5:t8"], expect.objectContaining({ timeout: expect.any(Number) }));
 	});
 
+	it("reserves deadline time to close a new tab after its pane query times out", async () => {
+		vi.useFakeTimers();
+		try {
+			const startedAt = Date.now();
+			const exec = vi.fn((_bin: string, args: string[], options: { timeout: number }) => {
+				if (args[0] === "tab" && args[1] === "create") {
+					return Promise.resolve({ stdout: JSON.stringify({ result: { tab_id: "w5:t8" } }), stderr: "", code: 0, killed: false });
+				}
+				if (args[0] === "tab" && args[1] === "close") {
+					return Promise.resolve({ stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false });
+				}
+				return new Promise<{ stdout: string; stderr: string; code: number; killed: boolean }>((resolve) => {
+					setTimeout(() => resolve({ stdout: "", stderr: "", code: 1, killed: true }), options.timeout);
+				});
+			});
+
+			// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
+			const pending = herdrTerminalHost.startAgentPane({ exec } as never, {
+				name: "research", cwd: "/repo", shellCommand: "run child", placement: { kind: "new-tab", label: "subagents" },
+			}).then((result) => ({ result, elapsed: Date.now() - startedAt }));
+			await vi.advanceTimersByTimeAsync(10_000);
+			const completed = await pending;
+
+			expect(completed.result).toMatchObject({ ok: false, code: "pane_unavailable", error: "herdr pane list timed out" });
+			expect(completed.elapsed).toBeLessThanOrEqual(5_000);
+			expect(exec).toHaveBeenCalledWith("herdr", ["tab", "close", "w5:t8"], expect.objectContaining({ timeout: expect.any(Number) }));
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("structures real CLI-shaped split failures without explaining a tab or workspace", async () => {
 		const exec = vi.fn(async (_bin: string, args: string[]) => args[1] === "list"
 			? { stdout: JSON.stringify({ id: "cli:pane:list", result: { panes: [{ pane_id: "w9:p1", workspace_id: "w9", tab_id: "w9:t1" }], type: "pane_list" } }), stderr: "", code: 0, killed: false }

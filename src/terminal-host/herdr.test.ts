@@ -78,9 +78,9 @@ describe("herdrTerminalHost", () => {
 			placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
 		});
 		expect(result).toMatchObject({ ok: true, agentName: expect.stringMatching(/^api-worker-/), workspaceId: "w9", tabId: "w9:t1", paneId: "w9:p2" });
-		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["pane", "split", "w9:p1", "--direction", "right", "--cwd", "/repo/packages/api", "--no-focus"], { timeout: 2000 });
-		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["pane", "move", "w9:p1", "--new-tab", "--workspace", "w9", "--label", "shell", "--no-focus"], { timeout: 2000 });
-		expect(exec).toHaveBeenNthCalledWith(3, "herdr", ["pane", "run", "w9:p2", "exec sumocode task"], { timeout: 2000 });
+		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["pane", "split", "w9:p1", "--direction", "right", "--cwd", "/repo/packages/api", "--no-focus"], { timeout: expect.any(Number) });
+		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["pane", "run", "w9:p2", "exec sumocode task"], { timeout: expect.any(Number) });
+		expect(exec).toHaveBeenNthCalledWith(3, "herdr", ["pane", "move", "w9:p1", "--new-tab", "--workspace", "w9", "--label", "shell", "--no-focus"], { timeout: expect.any(Number) });
 	});
 
 	it("keeps the child when moving the bootstrap shell fails", async () => {
@@ -93,7 +93,7 @@ describe("herdrTerminalHost", () => {
 		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
 			name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
 		})).resolves.toMatchObject({ ok: true, paneId: "w9:p2" });
-		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "run", "w9:p2", "run child"], { timeout: 2000 });
+		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "run", "w9:p2", "run child"], { timeout: expect.any(Number) });
 	});
 
 	it("finds and preserves an available workspace pane when no pane id is supplied", async () => {
@@ -110,8 +110,8 @@ describe("herdrTerminalHost", () => {
 			placement: { kind: "workspace", workspaceId: "w9" },
 		});
 		expect(result).toMatchObject({ ok: true, workspaceId: "w9", tabId: "w9:t1", paneId: "w9:p2" });
-		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["pane", "list", "--workspace", "w9"], { timeout: 2000 });
-		expect(exec).toHaveBeenNthCalledWith(3, "herdr", ["pane", "move", "w9:p1", "--new-tab", "--workspace", "w9", "--label", "shell", "--no-focus"], { timeout: 2000 });
+		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["pane", "list", "--workspace", "w9"], { timeout: expect.any(Number) });
+		expect(exec).toHaveBeenNthCalledWith(4, "herdr", ["pane", "move", "w9:p1", "--new-tab", "--workspace", "w9", "--label", "shell", "--no-focus"], { timeout: expect.any(Number) });
 	});
 
 	it("splits an existing subagents tab before running the child", async () => {
@@ -127,8 +127,8 @@ describe("herdrTerminalHost", () => {
 			shellCommand: "run child",
 			placement: { kind: "tab", tabId: "w3:t2", direction: "down" },
 		})).resolves.toMatchObject({ ok: true, tabId: "w3:t2", paneId: "w3:p4" });
-		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["pane", "split", "w3:p2", "--direction", "down", "--cwd", "/repo", "--no-focus"], { timeout: 2000 });
-		expect(exec).toHaveBeenNthCalledWith(3, "herdr", ["pane", "run", "w3:p4", "run child"], { timeout: 2000 });
+		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["pane", "split", "w3:p2", "--direction", "down", "--cwd", "/repo", "--no-focus"], { timeout: expect.any(Number) });
+		expect(exec).toHaveBeenNthCalledWith(3, "herdr", ["pane", "run", "w3:p4", "run child"], { timeout: expect.any(Number) });
 	});
 
 	it("retries a just-created tab until its root pane becomes listable", async () => {
@@ -157,14 +157,10 @@ describe("herdrTerminalHost", () => {
 		expect(lists).toBe(2);
 	});
 
-	it("explains an unavailable new-tab pane within the provisioning budget", async () => {
-		const startedAt = Date.now();
+	it("uses the real pane query result when a new tab has no pane", async () => {
 		const exec = vi.fn(async (_bin: string, args: string[]) => {
-			if (args[0] === "tab") return { stdout: JSON.stringify({ result: { tab_id: "w5:t8" } }), stderr: "", code: 0, killed: false };
-			if (args[0] === "agent" && args[1] === "explain") {
-				return { stdout: JSON.stringify({ result: { type: "agent_explain", explain: { reason: "tab has no available shell pane" } } }), stderr: "", code: 0, killed: false };
-			}
-			return { stdout: JSON.stringify({ result: { panes: [] } }), stderr: "", code: 0, killed: false };
+			if (args[0] === "tab") return { stdout: JSON.stringify({ id: "cli:tab:create", result: { tab_id: "w5:t8", type: "tab_created" } }), stderr: "", code: 0, killed: false };
+			return { stdout: JSON.stringify({ id: "cli:pane:list", result: { panes: [], type: "pane_list" } }), stderr: "", code: 0, killed: false };
 		});
 
 		// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
@@ -179,10 +175,77 @@ describe("herdrTerminalHost", () => {
 			ok: false,
 			code: "pane_unavailable",
 			error: "herdr returned no pane for tab w5:t8",
-			reason: "tab has no available shell pane",
+			reason: "herdr returned no pane for tab w5:t8",
 		});
-		expect(Date.now() - startedAt).toBeLessThan(5_000);
-		expect(exec).toHaveBeenLastCalledWith("herdr", ["agent", "explain", "w5:t8"], { timeout: 500 });
+		expect(exec.mock.calls.some((call) => call[1]?.[0] === "agent")).toBe(false);
+	});
+
+	it("structures real CLI-shaped split failures without explaining a tab or workspace", async () => {
+		const exec = vi.fn(async (_bin: string, args: string[]) => args[1] === "list"
+			? { stdout: JSON.stringify({ id: "cli:pane:list", result: { panes: [{ pane_id: "w9:p1", workspace_id: "w9", tab_id: "w9:t1" }], type: "pane_list" } }), stderr: "", code: 0, killed: false }
+			: { stdout: "", stderr: JSON.stringify({ id: "cli:pane:split", error: { code: "pane_not_found", message: "pane w9:p1 is unavailable" } }), code: 1, killed: false });
+
+		// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
+		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
+			name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "workspace", workspaceId: "w9" },
+		})).resolves.toEqual({
+			ok: false,
+			code: "pane_unavailable",
+			error: "pane w9:p1 is unavailable",
+			reason: "pane w9:p1 is unavailable",
+		});
+		expect(exec.mock.calls.some((call) => call[1]?.[0] === "agent")).toBe(false);
+	});
+
+	it("closes only its new pane when running the child throws", async () => {
+		const exec = vi.fn(async (_bin: string, args: string[]) => {
+			if (args[1] === "split") return { stdout: JSON.stringify({ result: { pane: { pane_id: "w9:p2", workspace_id: "w9", tab_id: "w9:t1" } } }), stderr: "", code: 0, killed: false };
+			if (args[1] === "run") throw new Error("herdr command timed out");
+			return { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false };
+		});
+
+		// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
+		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
+			name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
+		})).resolves.toEqual({
+			ok: false,
+			code: "pane_unavailable",
+			error: "herdr command timed out",
+			reason: "herdr command timed out",
+		});
+		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "close", "w9:p2"], expect.objectContaining({ timeout: expect.any(Number) }));
+		expect(exec).not.toHaveBeenCalledWith("herdr", ["pane", "close", "w9:p1"], expect.anything());
+	});
+
+	it("shares one five-second deadline across delayed provisioning calls", async () => {
+		vi.useFakeTimers();
+		try {
+			const startedAt = Date.now();
+			const exec = vi.fn((_bin: string, args: string[], options: { timeout: number }) => new Promise<{ stdout: string; stderr: string; code: number; killed: boolean }>((resolve) => {
+				const duration = Math.min(1_800, options.timeout);
+				setTimeout(() => {
+					if (duration < 1_800) {
+						resolve({ stdout: "", stderr: "", code: 1, killed: true });
+						return;
+					}
+					if (args[1] === "list") resolve({ stdout: JSON.stringify({ result: { panes: [{ pane_id: "w9:p1", workspace_id: "w9", tab_id: "w9:t1" }] } }), stderr: "", code: 0, killed: false });
+					else if (args[1] === "split") resolve({ stdout: JSON.stringify({ result: { pane: { pane_id: "w9:p2", workspace_id: "w9", tab_id: "w9:t1" } } }), stderr: "", code: 0, killed: false });
+					else resolve({ stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false });
+				}, duration);
+			}));
+
+			// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
+			const pending = herdrTerminalHost.startAgentPane({ exec } as never, {
+				name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "workspace", workspaceId: "w9" },
+			}).then((result) => ({ result, elapsed: Date.now() - startedAt }));
+			await vi.advanceTimersByTimeAsync(10_000);
+			const completed = await pending;
+
+			expect(completed.result).toMatchObject({ ok: false, code: "pane_unavailable" });
+			expect(completed.elapsed).toBeLessThanOrEqual(5_000);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("creates a no-focus tab with a root pane for the first child", async () => {
@@ -197,8 +260,8 @@ describe("herdrTerminalHost", () => {
 			shellCommand: "run child",
 			placement: { kind: "new-tab", label: "subagents" },
 		})).resolves.toMatchObject({ ok: true, tabId: "w5:t8", paneId: "w5:p9" });
-		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["tab", "create", "--cwd", "/repo", "--label", "subagents", "--no-focus"], { timeout: 2000 });
-		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["pane", "run", "w5:p9", "run child"], { timeout: 2000 });
+		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["tab", "create", "--cwd", "/repo", "--label", "subagents", "--no-focus"], { timeout: expect.any(Number) });
+		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["pane", "run", "w5:p9", "run child"], { timeout: expect.any(Number) });
 		vi.unstubAllEnvs();
 	});
 
@@ -218,8 +281,8 @@ describe("herdrTerminalHost", () => {
 		await herdrTerminalHost.startAgentPane!({ exec } as never, {
 			name: "research", cwd: "/repo", shellCommand: "run child", placement: { kind: "new-tab", label: "subagents" },
 		});
-		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["pane", "current", "--current"], { timeout: 2000 });
-		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["tab", "create", "--workspace", "w1K", "--cwd", "/repo", "--label", "subagents", "--no-focus"], { timeout: 2000 });
+		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["pane", "current", "--current"], { timeout: expect.any(Number) });
+		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["tab", "create", "--workspace", "w1K", "--cwd", "/repo", "--label", "subagents", "--no-focus"], { timeout: expect.any(Number) });
 	});
 
 	it("cleans failed child start for a command split", async () => {
@@ -247,8 +310,8 @@ describe("herdrTerminalHost", () => {
 		// SAFETY: test double only exercises the members this test asserts on.
 		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
 			name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "new-tab", label: "subagents" },
-		})).resolves.toEqual({ ok: false, error: "start denied" });
-		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "close", "w5:p9"], { timeout: 5000 });
+		})).resolves.toEqual({ ok: false, code: "pane_unavailable", error: "start denied", reason: "start denied" });
+		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "close", "w5:p9"], expect.objectContaining({ timeout: expect.any(Number) }));
 	});
 
 	it("cleans failed child start without closing an existing tab anchor", async () => {
@@ -262,8 +325,8 @@ describe("herdrTerminalHost", () => {
 		// SAFETY: test double only exercises the members this test asserts on.
 		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
 			name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "tab", tabId: "w3:t2", direction: "down" },
-		})).resolves.toEqual({ ok: false, error: "start denied" });
-		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "close", "w3:p4"], { timeout: 5000 });
+		})).resolves.toEqual({ ok: false, code: "pane_unavailable", error: "start denied", reason: "start denied" });
+		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "close", "w3:p4"], expect.objectContaining({ timeout: expect.any(Number) }));
 		expect(exec).not.toHaveBeenCalledWith("herdr", ["pane", "close", "w3:p2"], expect.anything());
 	});
 
@@ -277,11 +340,11 @@ describe("herdrTerminalHost", () => {
 		// SAFETY: test double only exercises the members this test asserts on.
 		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
 			name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "new-tab", label: "subagents" },
-		})).resolves.toEqual({ ok: false, error: "daemon unavailable" });
-		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "close", "w5:p9"], { timeout: 5000 });
+		})).resolves.toEqual({ ok: false, code: "pane_unavailable", error: "daemon unavailable", reason: "daemon unavailable" });
+		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "close", "w5:p9"], expect.objectContaining({ timeout: expect.any(Number) }));
 	});
 
-	it("cleans failed child start and names the preserved workspace shell", async () => {
+	it("closes the failed child pane and leaves the workspace anchor unmoved", async () => {
 		const exec = vi.fn(async (_bin: string, args: string[]) => {
 			if (args[1] === "split") return { stdout: JSON.stringify({ result: { pane: { pane_id: "w9:p2", workspace_id: "w9", tab_id: "w9:t1" } } }), stderr: "", code: 0, killed: false };
 			if (args[1] === "run") return { stdout: "", stderr: "start denied", code: 1, killed: false };
@@ -292,9 +355,10 @@ describe("herdrTerminalHost", () => {
 		const result = await herdrTerminalHost.startAgentPane({ exec } as never, {
 			name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
 		});
-		expect(result).toEqual({ ok: false, error: "start denied. Recovery shell preserved at pane w9:p1 in workspace w9." });
-		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "close", "w9:p2"], { timeout: 5000 });
+		expect(result).toEqual({ ok: false, code: "pane_unavailable", error: "start denied", reason: "start denied" });
+		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "close", "w9:p2"], expect.objectContaining({ timeout: expect.any(Number) }));
 		expect(exec).not.toHaveBeenCalledWith("herdr", ["pane", "close", "w9:p1"], expect.anything());
+		expect(exec.mock.calls.some((call) => call[1]?.[1] === "move")).toBe(false);
 	});
 
 	it("cleans failed child start while retaining bounded cleanup failure context", async () => {
@@ -311,8 +375,8 @@ describe("herdrTerminalHost", () => {
 		});
 		expect(result.ok).toBe(false);
 		if (result.ok) throw new Error("expected failed start");
-		expect(result.error).toMatch(/^start denied\. Child cleanup failed: close denied x+/);
-		expect(result.error.length).toBeLessThan(1_100);
+		expect(result.reason).toMatch(/^start denied; cleanup: close denied x+$/);
+		expect(result.reason?.length ?? 0).toBeLessThan(1_100);
 	});
 
 	it("keeps a running child when pane rename fails", async () => {

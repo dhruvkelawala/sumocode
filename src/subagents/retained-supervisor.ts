@@ -189,12 +189,22 @@ interface RetainedHeadlessOptions {
 	readonly keepAlive?: boolean;
 }
 
+type RetainedFailurePhase = "backend-refused" | "subscription" | "ready" | "reserve-control" | "renew-effect" | "renew-writer"
+	| "event-stream" | "observe" | "settle" | "visible-cleanup" | "visible-cleanup-fence";
+
 interface RetainedHeadlessDependencies {
 	readonly operations?: ProcessTreeOperations;
 	readonly spawn?: typeof spawnPiChild;
 	readonly buildManifest?: typeof buildCompletionManifest;
 	/** Embedding observation seam after durable manifest write, before pointer publication. */
 	readonly onManifestWritten?: () => void;
+	/** Fixed phase only: never expose task content or caught errors. Observation cannot change settlement. */
+	readonly onFailure?: (phase: RetainedFailurePhase) => void;
+}
+
+function reportFailure(onFailure: RetainedHeadlessDependencies["onFailure"], phase: RetainedFailurePhase): void {
+	try { onFailure?.(phase); }
+	catch { /* Diagnostics cannot replace the original failure. */ }
 }
 
 type Settlement = "settled" | "lost" | "ambiguous";
@@ -237,7 +247,7 @@ class RetainedSupervisor {
 		this.baseRef = options.baseRef;
 		this.authority = prepareLaunch(options.registry, options.initial, options.supervisor, dependencies.operations ?? systemProcessTree, options.attach !== undefined);
 		this.artifacts = new RetainedResults(options.initial.taskDir);
-		this.child = start(this.authority, () => { this.authority.gate.onRefused(); this.fail("ambiguous"); }, () => {
+		this.child = start(this.authority, () => { this.authority.gate.onRefused(); this.fail("ambiguous", "backend-refused"); }, () => {
 			if (this.stopped) throw new Error("retained owner stopped before effect");
 		});
 		this.heartbeat = setInterval(() => {
@@ -254,7 +264,7 @@ class RetainedSupervisor {
 			} else events((event) => this.observe(event));
 		} catch {
 			subscriptionError = new Error("retained event subscription failed");
-			this.fail("ambiguous");
+			this.fail("ambiguous", "subscription");
 		}
 		void (subscriptionError ? Promise.reject(subscriptionError) : Promise.resolve(this.child.ready)).then(() => {
 			if (this.stopped || !this.authority.released()) throw new Error("child not ready for prompt release");
@@ -262,7 +272,7 @@ class RetainedSupervisor {
 		}).catch((error: Error) => {
 			// Ready refusal is not child exit. Retain the handle for accounting,
 			// but a stopped owner cannot publish a later outcome.
-			if (!this.terminal && !this.stopped) this.fail("ambiguous");
+			if (!this.terminal && !this.stopped) this.fail("ambiguous", "ready");
 			this.refuseReady(error);
 		});
 		void this.ready.catch(() => undefined);
@@ -299,7 +309,7 @@ class RetainedSupervisor {
 		if (!record.child) throw new Error("retained child unavailable for transfer");
 		// Settled result transfer grants delivery, not control of an exited child.
 		try { if (this.completed) this.authority.fence(); else this.authority.verifyChild(record.child.identity.pid); }
-		catch (error) { this.fail("ambiguous"); throw error; }
+		catch (error) { this.fail("ambiguous", "reserve-control"); throw error; }
 		const fresh = this.authority.record();
 		return this.registry.reserveControl(fresh.revision, authority, `${record.id}:${authority.head + 1}`, {
 			...successor, writerGeneration: fresh.writerLease!.generation,
@@ -314,17 +324,19 @@ class RetainedSupervisor {
 	/** Renewal cannot revive a locally failed owner or retry an expired operation. */
 	public renew(): void {
 		if (this.stopped) throw new Error("retained owner stopped");
+		let phase: RetainedFailurePhase = "renew-effect";
 		try {
 			if (this.record.backend === "visible" && !this.terminal) this.authority.visibleGate.beforeEffect();
+			phase = "renew-writer";
 			this.authority.renew();
-		} catch (error) { this.fail("ambiguous"); throw error; }
+		} catch (error) { this.fail("ambiguous", phase); throw error; }
 	}
 
 	private async consume(events: AsyncIterable<SubagentEvent>): Promise<void> {
 		try {
 			for await (const event of events) this.observe(event);
-			if (!this.terminal) this.fail("lost");
-		} catch { this.fail("lost"); }
+			if (!this.terminal) this.fail("lost", "event-stream");
+		} catch { this.fail("lost", "event-stream"); }
 	}
 
 	private observe(event: SubagentEvent): void {
@@ -352,7 +364,7 @@ class RetainedSupervisor {
 				this.terminal = true;
 				void this.settle(event.outcome);
 			} else this.notify();
-		} catch { this.fail("ambiguous"); }
+		} catch { this.fail("ambiguous", "observe"); }
 	}
 
 	private async settle(outcome: RunOutcome): Promise<void> {
@@ -397,7 +409,7 @@ class RetainedSupervisor {
 			this.finish("settled");
 			this.notify();
 			this.listeners.clear();
-		} catch { this.fail("ambiguous"); }
+		} catch { this.fail("ambiguous", "settle"); }
 	}
 
 	private markUncertain(status: "lost" | "ambiguous"): void {
@@ -411,7 +423,7 @@ class RetainedSupervisor {
 		}
 	}
 
-	private fail(status: "lost" | "ambiguous"): void {
+	private fail(status: "lost" | "ambiguous", phase: RetainedFailurePhase): void {
 		if (this.stopped) return;
 		this.stopped = true;
 		this.authority.gate.onRefused();
@@ -420,6 +432,7 @@ class RetainedSupervisor {
 		this.markUncertain(status);
 		this.finish(status);
 		this.listeners.clear();
+		reportFailure(this.dependencies.onFailure, phase);
 	}
 
 	private notify(): void {
@@ -470,9 +483,16 @@ export class RetainedVisibleSupervisor extends RetainedSupervisor {
 						return operations.signalTree(identity, signal, verification);
 					},
 				};
-				if (!await terminateProcessTree(fenced, child.identity, { termGraceMs: 5000, killGraceMs: 1000 })) throw new Error("visible cleanup unconfirmed");
-				authority.fence();
-				cleaned = true;
+				let phase: RetainedFailurePhase = "visible-cleanup";
+				try {
+					if (!await terminateProcessTree(fenced, child.identity, { termGraceMs: 5000, killGraceMs: 1000 })) throw new Error("visible cleanup unconfirmed");
+					phase = "visible-cleanup-fence";
+					authority.fence();
+					cleaned = true;
+				} catch (error) {
+					reportFailure(dependencies.onFailure, phase);
+					throw error;
+				}
 			};
 			return (dependencies.spawn ?? spawnPaneChild)({ ...options.launch, signal: undefined, retainedTaskDir: options.initial.taskDir,
 				launchGate: {

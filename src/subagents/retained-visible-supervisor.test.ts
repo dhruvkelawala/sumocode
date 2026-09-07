@@ -18,6 +18,8 @@ afterEach(() => {
 });
 
 function fixture(association = true) {
+	const failures: string[] = [];
+	const onFailure = vi.fn((phase: string) => { failures.push(phase); });
 	vi.useFakeTimers();
 	vi.setSystemTime(1000);
 	const root = realpathSync(mkdtempSync(join(tmpdir(), "retained-visible-")));
@@ -57,7 +59,7 @@ function fixture(association = true) {
 			type: "pane_process_info", process_info: { pane_id: "pane:1", shell_pid: 42,
 				foreground_process_group_id: association ? 42 : 99, foreground_processes: [{ pid: 42 }] },
 		} }) })) }, placement: { kind: "new-tab", label: "worker" } }, baseRef: "HEAD",
-	}, { operations, spawn: createPaneChildSpawner({ processTree: operations, resolveLauncher: () => "/synthetic/sumocode" }),
+	}, { onFailure, operations, spawn: createPaneChildSpawner({ processTree: operations, resolveLauncher: () => "/synthetic/sumocode" }),
 		buildManifest: async () => ({ baseRef: "HEAD", changedPaths: [], commits: 0, exit: "completed", durationMs: 1 }),
 	});
 	stops.push(() => { vi.mocked(operations.identityMatches).mockReturnValue("unknown"); try { owner.renew(); } catch { /* Dispose the fake owner without a signal. */ } });
@@ -73,7 +75,7 @@ function fixture(association = true) {
 		writeFileSync(join(taskDir, "exit.code"), "0", { mode: 0o600 });
 		await vi.advanceTimersByTimeAsync(750);
 	};
-	return { registry, record, owner, operations, host, taskDir, start, control, finish };
+	return { registry, record, owner, operations, host, taskDir, start, control, finish, failures, onFailure };
 }
 
 describe("retained visible owner", () => {
@@ -178,6 +180,40 @@ describe("retained visible owner", () => {
 		expect(f.owner.completion?.outcome).toMatchObject({ kind: "completed" });
 		expect(vi.mocked(f.operations.signalTree).mock.calls.map((call) => call[1])).toEqual(["SIGTERM", "SIGKILL"]);
 		expect(f.host.closePane).not.toHaveBeenCalled();
+	});
+	it("reports renewal refusal while cleanup is pending without publishing success", async () => {
+		const f = fixture(); await f.start();
+		let release!: (empty: boolean) => void;
+		vi.mocked(f.operations.waitForTreeEmpty).mockImplementation(() => new Promise((resolve) => { release = resolve; }));
+		await f.finish();
+		vi.mocked(f.operations.identityMatches).mockImplementation((identity) => identity.pid === 42 ? "different" : "same");
+		await vi.advanceTimersByTimeAsync(20_000);
+		expect(await f.owner.settlement).toBe("ambiguous");
+		expect(f.failures).toEqual(["renew-effect"]);
+		expect(f.owner.record).toMatchObject({ outcome: null, result: null, manifest: null });
+		expect(f.owner.completion).toBeUndefined();
+		release(true);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(f.operations.signalTree).toHaveBeenCalledTimes(1);
+	});
+	it("reports cleanup failure using fixed phases, not the thrown error", async () => {
+		const f = fixture(); await f.start();
+		vi.mocked(f.operations.waitForTreeEmpty).mockRejectedValue(new Error("synthetic private error details"));
+		await f.finish();
+		expect(await f.owner.settlement).toBe("ambiguous");
+		expect(f.failures).toEqual(["visible-cleanup", "backend-refused"]);
+		expect(f.owner.record).toMatchObject({ outcome: null, result: null, manifest: null });
+		expect(f.operations.signalTree).toHaveBeenCalledTimes(1);
+	});
+	it("keeps cleanup failure ambiguous when the diagnostic observer throws", async () => {
+		const f = fixture(); await f.start();
+		f.onFailure.mockImplementation(() => { throw new Error("diagnostic unavailable"); });
+		vi.mocked(f.operations.waitForTreeEmpty).mockRejectedValue(new Error("cleanup unconfirmed"));
+		await f.finish();
+		expect(await f.owner.settlement).toBe("ambiguous");
+		expect(f.owner.record).toMatchObject({ outcome: null, result: null, manifest: null });
+		expect(f.owner.completion).toBeUndefined();
+		expect(f.operations.signalTree).toHaveBeenCalledTimes(1);
 	});
 	it("does not publish success when cleanup cannot confirm emptiness", async () => {
 		const f = fixture(); await f.start();

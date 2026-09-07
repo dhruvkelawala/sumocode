@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { systemProcessTree, type ProcessTreeOperations } from "../../../src/background-tasks/process-tree.js";
@@ -17,6 +17,9 @@ import { RetainedHeadlessSupervisor, RetainedVisibleSupervisor } from "../../../
 import { buildCompletionManifest } from "../../../src/subagents/manifest.js";
 import { runLocalFault } from "./plan112-local-faults.js";
 import { visibleRecoveryExecutor, visibleRecoveryLaunch } from "./plan112-visible-recovery.js";
+
+// Task mode terminates response.md with a newline; the visible backend preserves it.
+export const recoveryFinalText = { headless: "preserved result", visible: "preserved result\n" } as const;
 
 interface ControllerReport {
 	error?: string; expiresAt?: number; headlessSteering?: boolean; child?: RegistryProcess | null;
@@ -144,14 +147,18 @@ export async function runSourceController(root: string, mode: string, pi: string
 	let backend!: SpawnedChild;
 	const spawner = createPiChildSpawner(registeredAnchorSpawn(root, scenario), () => provider, () => pi);
 	const pane = visible ? visibleRecoveryLaunch(root, pi, provider) : undefined;
+	const onFailure = (phase: string): void => {
+		appendFileSync(join(root, "owner-failure.jsonl"), `${JSON.stringify({ phase })}\n`, { mode: 0o600 });
+	};
 	const owner = pane ? new RetainedVisibleSupervisor({ registry, initial, supervisor: captureBirth(process.pid), baseRef: "HEAD",
 		launch: { cwd: join(root, "cwd"), prompt: "synthetic recovery task", appendSystemPrompt: "synthetic private role",
 			name: "plan112 recovery", id: initial.id, host: pane.host, pi: pane.pi, placement: { kind: "new-tab", label: "plan112 recovery" },
 			model: "source-proof/fixed", thinking: "off", tools: [] },
-	}, { spawn: (options) => { backend = pane.spawn(options); return backend; } }) : new RetainedHeadlessSupervisor({ registry, initial, supervisor: captureBirth(process.pid), baseRef: "HEAD",
+	}, { onFailure, spawn: (options) => { backend = pane.spawn(options); return backend; } }) : new RetainedHeadlessSupervisor({ registry, initial, supervisor: captureBirth(process.pid), baseRef: "HEAD",
 		launch: { cwd: join(root, "cwd"), prompt: "synthetic recovery task", inherited: {}, builtInTools: [], thinking: "off",
 			model: "source-proof/fixed", retainedBootstrap: descriptor },
 	}, {
+		onFailure,
 		spawn: (options) => {
 			cut("starting");
 			const gate = options.launchGate!;
@@ -219,7 +226,7 @@ export async function runSourceController(root: string, mode: string, pi: string
 		else assert.deepEqual(result, { capability: "unsupported: headless steering" });
 		put("finish", {});
 		assert.equal(await owner.settlement, "settled");
-		assert.equal(next.manager.get(initial.id)?.finalText, "preserved result");
+		assert.equal(next.manager.get(initial.id)?.finalText, recoveryFinalText[visible ? "visible" : "headless"]);
 		await old.fire("agent_end");
 		await next.fire("agent_end"); await next.fire("agent_end");
 		assert.equal(old.deliveries.length, 0);

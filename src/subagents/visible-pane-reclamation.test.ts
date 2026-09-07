@@ -3,12 +3,12 @@ import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createPaneChildSpawner } from "../../src/subagents/backend-pane.js";
-import type { SpawnedChild } from "../../src/subagents/backend-pi.js";
-import { SubagentManager } from "../../src/subagents/manager.js";
-import { BUILT_IN_ROLES } from "../../src/subagents/roles.js";
-import { registerSubagentTools } from "../../src/subagents/tools.js";
-import { herdrTerminalHost } from "../../src/terminal-host/herdr.js";
+import { createPaneChildSpawner } from "./backend-pane.js";
+import type { SpawnedChild } from "./backend-pi.js";
+import { SubagentManager } from "./manager.js";
+import { BUILT_IN_ROLES } from "./roles.js";
+import { registerSubagentTools } from "./tools.js";
+import { herdrTerminalHost } from "../terminal-host/herdr.js";
 
 interface PaneState {
 	readonly paneId: string;

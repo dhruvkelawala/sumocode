@@ -1216,6 +1216,13 @@ export class SubagentManager {
 		this.settlingIds.add(id);
 		this.children.delete(id);
 		this.stopHealthTimerIfIdle();
+		// A failed close leaves the pane open while `children` no longer tracks
+		// it. Record that occupancy synchronously so a concurrent spawn's
+		// capacity check counts the pane during the asynchronous manifest
+		// collection below, not only after it finishes.
+		if (outcome.kind === "failed" && outcome.paneStillOpen) {
+			this.snapshots.set(id, { ...current, paneStillOpen: true });
+		}
 		const settledAt = Date.now();
 		try {
 			if (current.status === "queued") {

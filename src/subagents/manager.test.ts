@@ -1070,6 +1070,48 @@ describe("SubagentManager", () => {
 		expect(placements[4]).toEqual({ kind: "new-tab", label: "subagents 2" });
 	});
 
+	it("records failed-close occupancy before the manifest settles", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		let resolveManifest: (manifest: CompletionManifest) => void = () => undefined;
+		const deferredManifest = new Promise<CompletionManifest>((resolve) => { resolveManifest = resolve; });
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+				emit({ kind: "run-started" });
+				emit({ kind: "pane-attached", pane: { agentName: `${task.id}-worker`, workspaceId: "w1", tabId: "w1:t5", paneId: `w1:p${task.id}` } });
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: async () => deferredManifest,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+		});
+
+		for (const title of ["first", "second", "third", "fourth"]) {
+			await manager.spawn({ prompt: `p-${title}`, title, cwd: "/repo", visible: true });
+		}
+
+		// sa-4's close fails while its manifest collection stays in flight.
+		emitters.get("sa-4")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
+
+		await manager.spawn({ prompt: "p5", title: "fifth", cwd: "/repo", visible: true });
+		// The still-open pane must already count during the in-flight settle.
+		expect(placements[4]).toEqual({ kind: "new-tab", label: "subagents 2" });
+
+		resolveManifest({ baseRef: "abc123", changedPaths: [], dirty: false, commits: 0, exit: "completed", durationMs: 1 });
+		await vi.waitFor(() => expect(manager.get("sa-4")?.status).toBe("error"));
+	});
+
 	it("counts only live visible panes toward tab capacity", async () => {
 		const backendTasks: Array<SpawnSubagentTask & { placement?: unknown }> = [];
 		const host: TerminalHost = {

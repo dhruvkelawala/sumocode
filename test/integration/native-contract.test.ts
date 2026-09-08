@@ -3,14 +3,14 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFile
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { spawn, type IPty } from "node-pty";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	createChildEvidenceContext,
 	HARNESS_SIGNATURE,
 	HARNESS_SIGNATURE_ENV_KEY,
 	recordPtyExit,
-	supervisePtyProcess,
+	requireHarnessAuth,
+	spawnSupervisedPty,
 	waitForDiagnosticReadiness,
 	type ReadinessState,
 } from "./harness-supervisor.js";
@@ -79,14 +79,14 @@ function spawnNativePty(
 	const evidence = createChildEvidenceContext([NATIVE_BIN, ...args], childEnv);
 	childEnv.SUMO_TUI_DIAG_FILE = evidence.diagPath;
 	childEnv[HARNESS_SIGNATURE_ENV_KEY] = HARNESS_SIGNATURE;
-	const child: IPty = spawn(NATIVE_BIN, [...args], {
+	const auth = requireHarnessAuth(childEnv);
+	const { child, supervision } = spawnSupervisedPty(NATIVE_BIN, args, {
 		name: "xterm-256color",
 		cols: options.cols ?? 100,
 		rows: options.rows ?? 30,
 		cwd: options.cwd ?? tempRoot("sumocode-native-cwd-"),
 		env: childEnv,
-	});
-	const supervision = supervisePtyProcess(child.pid, evidence, childEnv);
+	}, evidence, auth);
 	let output = "";
 	child.onData((data) => {
 		appendFileSync(evidence.stderrPath, data);
@@ -427,6 +427,28 @@ nativeDescribe("native executable contract", () => {
 		expect(result.stdout).not.toContain("PROJECT_PI");
 	});
 
+	it("requires PI_BIN to be an executable regular file", () => {
+		const root = tempRoot("sumocode-native-pi-bin-kind-");
+		const nonExecutable = join(root, "non-executable-pi");
+		writeFileSync(nonExecutable, "#!/bin/sh\nprintf SHOULD_NOT_RUN\n", { mode: 0o644 });
+		const directory = join(root, "pi-directory");
+		mkdirSync(directory);
+
+		for (const piBin of [nonExecutable, directory]) {
+			const doctor = runNative(["doctor"], { env: { PI_BIN: piBin } });
+			expect(doctor.status).toBe(70);
+			expect(doctor.stdout).toContain("Pi binary: not found or not executable");
+			const direct = runNative(["--no-sumo-tui"], { env: { PI_BIN: piBin } });
+			expect(direct.status).toBe(70);
+			expect(direct.stderr).toContain("Pi binary is not an executable file");
+			expect(direct.stdout).not.toContain("SHOULD_NOT_RUN");
+		}
+
+		const executable = createExecutable("executable-pi", "#!/bin/sh\nprintf EXECUTABLE_PI\n");
+		expect(runNative(["doctor"], { env: { PI_BIN: executable } }).status).toBe(0);
+		expect(runNative(["--no-sumo-tui"], { env: { PI_BIN: executable } }).stdout).toContain("EXECUTABLE_PI");
+	});
+
 	it("threads compiled parent provenance into nested child launch plans", async () => {
 		const root = tempRoot("sumocode-native-provenance-");
 		const taskLog = join(root, "task.json");
@@ -673,24 +695,24 @@ nativeDescribe("native executable contract", () => {
 
 	for (const { signal, expected } of [{ signal: "SIGTERM", expected: 0 }, { signal: "SIGINT", expected: 130 }] as const) {
 		it(`owns ${signal} before child adoption`, async () => {
-			const log = join(tempRoot("sumocode-native-pre-adoption-"), "fixture.jsonl");
 			const pi = await createRpcChildFixture("sumocode-native-pre-adoption-child-");
 			const session = spawnNativePty(["--offline", "--no-extensions", "--no-session", "--approve"], {
 				env: {
 					PI_BIN: pi,
 					NODE_ENV: "test",
 					SUMOCODE_TEST_PRE_ADOPTION_DELAY_MS: "5000",
-					SUMOCODE_RPC_FIXTURE_LOG: log,
 				},
 			});
-			await session.waitForOutput("", 50);
-			const deadline = Date.now() + 5_000;
-			while ((!existsSync(log) || readFileSync(log, "utf8").trim() === "") && Date.now() < deadline) {
-				await new Promise((resolveDelay) => setTimeout(resolveDelay, 20));
-			}
-			expect(existsSync(log)).toBe(true);
+			await waitForDiagEvent(session.getDiagPath(), "native_pre_adoption_ready", 5_000);
 			session.signal(signal);
 			expect((await waitForExit(session)).exitCode).toBe(expected);
+			const events = readDiagEvents(session.getDiagPath()).map((event) => event.event);
+			expect(events).toContain("child_spawned");
+			expect(events.indexOf("native_pre_adoption_ready")).toBeGreaterThan(events.indexOf("child_spawned"));
+			expect(events).not.toContain("host_import_ready");
+			expect(events).not.toContain("native_child_adopted");
+			expect(events).not.toContain("input_ready");
+			expect(events).not.toContain("rpc_child_ready");
 		}, 20_000);
 
 		it(`owns ${signal} after child adoption and restores terminal modes`, async () => {
@@ -702,6 +724,42 @@ nativeDescribe("native executable contract", () => {
 			expect(session.getOutput()).toContain(CLEANUP_SEQUENCE);
 		}, 30_000);
 	}
+
+	it("keeps the compiled pre-main test gate visible at runtime", async () => {
+		const pi = await createRpcChildFixture("sumocode-native-pre-main-child-");
+		const session = spawnNativePty(["--offline", "--no-extensions", "--no-session", "--approve"], {
+			env: { PI_BIN: pi, NODE_ENV: "test", SUMOCODE_TEST_PRE_MAIN_DELAY_MS: "5000" },
+		});
+		await waitForDiagEvent(session.getDiagPath(), "native_pre_main_ready", 5_000);
+		session.signal("SIGINT");
+		expect((await waitForExit(session)).exitCode).toBe(130);
+		const events = readDiagEvents(session.getDiagPath()).map((event) => event.event);
+		expect(events).toContain("child_spawned");
+		expect(events).toContain("host_import_ready");
+		expect(events.indexOf("native_pre_main_ready")).toBeGreaterThan(events.indexOf("host_import_ready"));
+		expect(events).not.toContain("native_child_adopted");
+		expect(events).not.toContain("input_ready");
+		expect(events).not.toContain("rpc_child_ready");
+	}, 20_000);
+
+	it("keeps compiled test holds inert outside runtime test mode", async () => {
+		const pi = await createRpcChildFixture("sumocode-native-inert-gates-child-");
+		const session = spawnNativePty(["--offline", "--no-extensions", "--no-session", "--approve"], {
+			env: {
+				PI_BIN: pi,
+				NODE_ENV: "production",
+				SUMOCODE_TEST_PRE_ADOPTION_DELAY_MS: "5000",
+				SUMOCODE_TEST_PRE_MAIN_DELAY_MS: "5000",
+			},
+		});
+		await session.waitForReady("input");
+		session.signal("SIGTERM");
+		expect((await waitForExit(session)).exitCode).toBe(0);
+		const events = readDiagEvents(session.getDiagPath()).map((event) => event.event);
+		expect(events).toContain("native_child_adopted");
+		expect(events).not.toContain("native_pre_adoption_ready");
+		expect(events).not.toContain("native_pre_main_ready");
+	}, 30_000);
 
 	it("contains a crashing Pi child and restores the terminal", async () => {
 		const crashPi = createExecutable("pi-crash", "#!/bin/sh\nexit 42\n");

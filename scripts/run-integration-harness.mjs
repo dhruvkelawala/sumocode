@@ -1,19 +1,22 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
 import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { runIntegrationPreflight } from "./preflight-integration.mjs";
+import { reapHarnessProcessGroup, runIntegrationPreflight } from "./preflight-integration.mjs";
 import {
 	HARNESS_OWNER_TOKEN_ENV_KEY,
+	HARNESS_RUN_ID_ENV_KEY,
 	HARNESS_SIGNATURE,
 	HARNESS_SIGNATURE_ENV_KEY,
+	HARNESS_SIGNING_KEY_ENV_KEY,
 } from "./lib/integration-harness-constants.mjs";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const RUNNER_TERM_GRACE_MS = 1_000;
+const AUDIT_FAILURES_FILE = "audit-failures.jsonl";
 
 function groupAlive(pgid) {
 	try { process.kill(-pgid, 0); return true; } catch { return false; }
@@ -23,14 +26,6 @@ async function waitForGroupExit(pgid, timeoutMs) {
 	const deadline = Date.now() + timeoutMs;
 	while (groupAlive(pgid) && Date.now() < deadline) await new Promise((resolveDelay) => setTimeout(resolveDelay, 20));
 	return !groupAlive(pgid);
-}
-
-async function reapGroup(pgid) {
-	if (!groupAlive(pgid)) return;
-	try { process.kill(-pgid, "SIGTERM"); } catch { return; }
-	if (await waitForGroupExit(pgid, RUNNER_TERM_GRACE_MS)) return;
-	try { process.kill(-pgid, "SIGKILL"); } catch { return; }
-	await waitForGroupExit(pgid, RUNNER_TERM_GRACE_MS);
 }
 
 async function retainEvidence(runRoot, reason) {
@@ -57,29 +52,87 @@ async function preparePackageSnapshot(runRoot, env) {
 	return packageRoot;
 }
 
-async function manifestProcessGroups(manifest) {
+export async function manifestProcessGroups(manifest, ownerToken, { runId, signingKey }) {
 	let contents = "";
 	try { contents = await readFile(manifest, "utf8"); } catch { return []; }
-	const groups = new Set();
+	const groups = new Map();
 	for (const line of contents.split("\n")) {
 		if (!line.trim()) continue;
 		try {
 			const event = JSON.parse(line);
-			if (event.event === "spawn" && Number.isSafeInteger(event.pgid) && event.pgid > 1) groups.add(event.pgid);
+			if (event.event === "spawn" && Number.isSafeInteger(event.pid) && event.pid > 1
+				&& Number.isSafeInteger(event.pgid) && event.pgid > 1) {
+				groups.set(event.pgid, {
+					pid: event.pid,
+					pgid: event.pgid,
+					processStart: event.processStart,
+					ownerPid: event.ownerPid,
+					ownerProcessStart: event.ownerProcessStart,
+					ownerToken,
+					runId: event.runId === runId ? event.runId : undefined,
+					registrationHmac: event.registrationHmac,
+					signingKey,
+					// This audit owns a shared run. A manifest event cannot opt into
+					// focused mode's tokenless owner proof.
+					ownershipMode: "shared",
+				});
+			}
 		} catch {
 			// A worker can be interrupted mid-append; earlier complete registrations remain auditable.
 		}
 	}
-	return [...groups];
+	return [...groups.values()];
 }
 
-async function auditAndReap(manifest) {
-	const groups = await manifestProcessGroups(manifest);
-	const survivors = groups.filter(groupAlive);
-	for (const pgid of survivors) await reapGroup(pgid);
-	const unreaped = survivors.filter(groupAlive);
-	if (survivors.length > 0) {
-		process.stderr.write(`[integration harness] zero-orphan audit FAILED: ${survivors.length} survivor group(s) registered (${survivors.join(", ")}); ${unreaped.length} remained after TERM→KILL\n`);
+function malformedAuditFailure(reason = "malformed audit failure record") {
+	return { phase: "audit record", pid: 0, pgid: 0, reason };
+}
+
+/* oxlint-disable anti-slop/no-runtime-typeof -- Validate untrusted JSONL at the audit boundary before reading record fields. */
+function isAuditFailure(value) {
+	return value !== null
+		&& typeof value === "object"
+		&& typeof value.phase === "string"
+		&& Number.isSafeInteger(value.pid)
+		&& Number.isSafeInteger(value.pgid)
+		&& typeof value.reason === "string";
+}
+/* oxlint-enable anti-slop/no-runtime-typeof */
+
+async function readAuditFailures(root) {
+	let contents;
+	try {
+		contents = await readFile(join(root, AUDIT_FAILURES_FILE), "utf8");
+	} catch (error) {
+		if (error?.code === "ENOENT") return [];
+		return [malformedAuditFailure(`could not read audit failure records: ${String(error)}`)];
+	}
+	return contents.split("\n").filter((line) => line.trim()).map((line) => {
+		try {
+			const failure = JSON.parse(line);
+			return isAuditFailure(failure) ? failure : malformedAuditFailure();
+		} catch {
+			return malformedAuditFailure();
+		}
+	});
+}
+
+export async function auditAndReap(manifest, ownerToken, auth) {
+	const groups = await manifestProcessGroups(manifest, ownerToken, auth);
+	const results = [];
+	for (const group of groups) {
+		results.push({ group, result: await reapHarnessProcessGroup(group, {
+			wait: () => waitForGroupExit(group.pgid, RUNNER_TERM_GRACE_MS),
+		}) });
+	}
+	const nonclean = results.filter(({ result }) => result.status !== "exited");
+	const auditFailures = await readAuditFailures(resolve(manifest, ".."));
+	if (nonclean.length > 0 || auditFailures.length > 0) {
+		const details = [
+			...nonclean.map(({ group, result }) => `pid ${group.pid} pgid ${group.pgid} born ${group.processStart ?? "unknown"}: ${result.status}${result.identityStatus ? `/${result.identityStatus}` : ""}${result.error ? ` (${result.error})` : ""}`),
+			...auditFailures.map((failure) => `pid ${failure.pid ?? "unknown"} pgid ${failure.pgid ?? "unknown"} born ${failure.processStart ?? "unknown"}: ${failure.phase ?? "audit"} (${failure.reason ?? "unknown reason"})`),
+		].join(", ");
+		process.stderr.write(`[integration harness] zero-orphan audit FAILED: ${nonclean.length} nonclean registered group(s), ${auditFailures.length} audit failure record(s) (${details})\n`);
 		return false;
 	}
 	process.stdout.write(`[integration harness] zero-orphan audit: 0 survivors across ${groups.length} registered process group(s)\n`);
@@ -109,20 +162,34 @@ async function runVitest(vitestEntry, args, env) {
 
 async function main(ownerToken) {
 	if (!await runIntegrationPreflight()) return 1;
+	const auth = { runId: randomUUID(), signingKey: randomBytes(32).toString("hex") };
 	const nativeOnly = process.argv.includes("--native-only");
 	const runRoot = await mkdtemp(join(tmpdir(), "sumocode-harness-v2-run-"));
 	const manifest = join(runRoot, "children.jsonl");
 	const tempRoot = join(runRoot, "tmp");
 	const compileCache = join(runRoot, "node-compile-cache");
 	await Promise.all([mkdir(tempRoot, { recursive: true, mode: 0o700 }), mkdir(compileCache, { recursive: true, mode: 0o700 })]);
-	await writeFile(join(runRoot, "owner.json"), `${JSON.stringify({ pid: process.pid, ownerToken, root: ROOT, startedAt: new Date().toISOString() }, null, 2)}\n`, { mode: 0o600 });
+	await writeFile(join(runRoot, "owner.json"), `${JSON.stringify({
+		pid: process.pid,
+		ownerToken,
+		runId: auth.runId,
+		// The signing key stays in this process only: every child is told
+		// SUMOCODE_INTEGRATION_RUN_ROOT, so anything written here is readable
+		// by the processes the key is meant to authenticate.
+		root: ROOT,
+		startedAt: new Date().toISOString(),
+	}, null, 2)}\n`, { mode: 0o600 });
 	const env = { ...process.env };
 	for (const key of Object.keys(env)) {
-		if (key === HARNESS_OWNER_TOKEN_ENV_KEY || key === "NODE_PATH" || key === "NODE_OPTIONS" || key.startsWith("HERDR_") || key.startsWith("PI_SESSION")) delete env[key];
+		if (key === HARNESS_OWNER_TOKEN_ENV_KEY || key === HARNESS_RUN_ID_ENV_KEY || key === HARNESS_SIGNING_KEY_ENV_KEY
+			|| key === "NODE_PATH" || key === "NODE_OPTIONS" || key.startsWith("HERDR_") || key.startsWith("PI_SESSION")) delete env[key];
 	}
 	Object.assign(env, {
 		SUMOCODE_INTEGRATION_RUN_ROOT: runRoot,
 		SUMOCODE_INTEGRATION_MANIFEST: manifest,
+		[HARNESS_OWNER_TOKEN_ENV_KEY]: ownerToken,
+		[HARNESS_RUN_ID_ENV_KEY]: auth.runId,
+		[HARNESS_SIGNING_KEY_ENV_KEY]: auth.signingKey,
 		[HARNESS_SIGNATURE_ENV_KEY]: HARNESS_SIGNATURE,
 		NODE_COMPILE_CACHE: compileCache,
 		TMPDIR: tempRoot,
@@ -162,7 +229,7 @@ async function main(ownerToken) {
 			], env);
 		}
 	}
-	const auditPassed = await auditAndReap(manifest);
+	const auditPassed = await auditAndReap(manifest, ownerToken, auth);
 	const exitCode = resolveHarnessExitCode({ seamStatus, integrationStatus, auditPassed });
 	if (exitCode === 0) await rm(runRoot, { recursive: true, force: true });
 	else {

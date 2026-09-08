@@ -195,12 +195,9 @@ export function assertWorkflowContract(text) {
 	const invocationCount = text.split("scripts/smoke-pi-versions.sh --supported-matrix").length - 1;
 	if (invocationCount !== 1) throw new Error(`workflow must contain one canonical matrix invocation, found ${invocationCount}`);
 	for (const path of [
-		"package.json", "bin/sumocode.sh", "sumo-rpc-host.js", "src/extension-entry.ts", "src/sumo-tui/rpc/**", "src/extension.ts", "src/interaction-registry.ts",
-		"src/executable-provenance.ts", "src/executable-provenance.test.ts", "src/subagents/backend-pi.ts", "src/subagents/backend-pi.test.ts",
-		"src/subagents/backend-pane.ts", "src/subagents/backend-pane.test.ts", "src/native-task-tool.ts", "src/native-task-tool.test.ts",
-		"src/background-tasks/visible-spawn.ts", "src/background-tasks/visible-spawn.test.ts", "src/commands/worktree.ts", "src/commands/worktree.test.ts",
-		"src/cli/open-worktree.ts", "src/cli/open-worktree.test.ts", "test/integration/launcher-runtime-selection.test.ts",
-		"test/integration/launcher-prompt-transport.test.ts", "test/integration/native-contract.test.ts", "scripts/smoke-pi-versions.sh",
+		"package.json", "bin/sumocode.sh", "sumo-rpc-host.js", "src/**",
+		"test/integration/launcher-runtime-selection.test.ts", "test/integration/launcher-prompt-transport.test.ts", "test/integration/native-contract.test.ts",
+		"scripts/smoke-pi-versions.sh", "scripts/build-native.mjs", "scripts/build-native.test.mjs",
 		"scripts/pi-compat-contract.mjs", "scripts/pi-compat-contract.test.mjs", ".github/workflows/pi-compat.yml",
 	]) {
 		if (!text.includes(path)) throw new Error(`workflow PR paths are missing ${path}`);

@@ -332,7 +332,188 @@ function transientFault(code: string): Error {
 		unsubscribe();
 	});
 
-	it("builds one index and joins 1500 retained owner snapshots across owners without further metadata reads", () => {
+	it("unchanged active tick avoids full metadata reads but polls exit evidence and refreshes external revisions", async () => {
+		vi.useFakeTimers();
+		try {
+			const reads = { scans: 0, metadata: 0 };
+			const store = new TerminalTaskStore({ rootDir, onRead: (kind) => { reads[kind === "full-scan" ? "scans" : "metadata"] += 1; } });
+			const open = vi.spyOn(store, "openArtifact");
+			const target = manager({ store, pollIntervalMs: 250 });
+			const task = await start(target);
+			await vi.advanceTimersByTimeAsync(500);
+			reads.metadata = 0;
+			open.mockClear();
+			const probes = vi.mocked(tree.operations.captureTreeVerification!).mock.calls.length;
+			await vi.advanceTimersByTimeAsync(250);
+			expect(reads).toEqual({ scans: 1, metadata: 0 });
+			expect(open.mock.calls.filter(([path]) => path.endsWith("exit.code"))).toHaveLength(1);
+			expect(tree.operations.captureTreeVerification).toHaveBeenCalledTimes(probes);
+
+			const metaFile = join(dirname(task.logFile), "meta.json");
+			const fresh = store.getIndexed(task.id)!;
+			writeFileSync(metaFile, JSON.stringify({ ...fresh, revision: fresh.revision + 1, title: "external revision" }));
+			reads.metadata = 0;
+			await vi.advanceTimersByTimeAsync(250);
+			expect(reads.metadata).toBe(1);
+			expect(target.get(task.id, "session-a")?.title).toBe("external revision");
+
+			// Simulate a missed change hint as well as absent filesystem notifications.
+			const stamp = store.getIndexedStamp(task.id);
+			vi.spyOn(store, "getIndexedStamp").mockReturnValue(stamp);
+			writeFileSync(metaFile, JSON.stringify({ ...store.getIndexed(task.id)!, title: "missed hint" }));
+			reads.metadata = 0;
+			await vi.advanceTimersByTimeAsync(250);
+			expect(reads.metadata).toBe(0);
+			expect(target.get(task.id, "session-a")?.title).toBe("external revision");
+			now += 5_000;
+			await vi.advanceTimersByTimeAsync(250);
+			expect(reads.metadata).toBe(1);
+			expect(tree.operations.captureTreeVerification).toHaveBeenCalledTimes(probes + 1);
+			expect(target.get(task.id, "session-a")?.title).toBe("missed hint");
+			// No child close event or filesystem notification: periodic exit polling must suffice.
+			writeFileSync(exitFile(task), "0");
+			await vi.advanceTimersByTimeAsync(250);
+			expect(target.get(task.id, "session-a")?.status).toBe("completed");
+			expect(target.getSupervisionStats().runtime).toBe(0);
+			target.detach();
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it.each(["wait", "delivery"])("active poll adopts same-revision settlement and wakes %s without another event", async (consumer) => {
+		vi.useFakeTimers();
+		let coordinator: TerminalDeliveryCoordinator | undefined;
+		try {
+			const reads = { scans: 0, metadata: 0 };
+			const store = new TerminalTaskStore({ rootDir, onRead: (kind) => { reads[kind === "full-scan" ? "scans" : "metadata"] += 1; } });
+			const target = manager({ store, pollIntervalMs: 250 });
+			const task = await start(target);
+			await vi.advanceTimersByTimeAsync(500);
+			const branch: Array<{ type: "custom_message"; details: unknown }> = [];
+			const sendMessage = vi.fn((message: { details?: unknown }) => {
+				branch.push({ type: "custom_message", details: message.details });
+			});
+			// SAFETY: the double implements the coordinator's ExtensionAPI member.
+			coordinator = new TerminalDeliveryCoordinator({ sendMessage } as never, target);
+			// SAFETY: the double implements the coordinator's ExtensionContext members.
+			coordinator.bind({
+				isIdle: () => true,
+				sessionManager: { getSessionId: () => "session-a", getBranch: () => branch },
+			} as never);
+			await vi.advanceTimersByTimeAsync(0);
+			const resolved = vi.fn();
+			const waiting = consumer === "wait" ? target.wait([task.id], "session-a", 30_000).then(resolved) : undefined;
+			if (consumer === "wait") coordinator.unbind();
+			const changes: TerminalTaskSnapshot[] = [];
+			target.addChangeListener((snapshot) => changes.push(snapshot));
+			const publications: Array<readonly TerminalTaskSnapshot[]> = [];
+			target.subscribeChanges((snapshots) => publications.push(snapshots));
+			publications.length = 0;
+			const fresh = store.getIndexed(task.id)!;
+			const stamp = store.getIndexedStamp(task.id);
+			writeFileSync(join(dirname(task.logFile), "meta.json"), JSON.stringify({
+				...fresh, status: "completed", deliveryState: "pending", exitCode: 0,
+				settledAt: now, completionId: "completion-external-poll",
+			}));
+			expect(store.getIndexedStamp(task.id)).not.toBe(stamp);
+			reads.metadata = 0;
+			vi.advanceTimersByTime(250);
+			expect(reads).toEqual({ scans: 1, metadata: 1 });
+			expect(changes).toEqual([expect.objectContaining({ revision: fresh.revision, status: "completed", deliveryState: "pending" })]);
+			expect(publications).toHaveLength(1);
+			await vi.advanceTimersByTimeAsync(0);
+			if (consumer === "wait") {
+				expect(resolved).toHaveBeenCalledWith(expect.objectContaining({ timedOut: false, pendingIds: [], settled: [expect.objectContaining({ task: expect.objectContaining({ id: task.id, status: "completed" }) })] }));
+				await waiting;
+				expect(sendMessage).not.toHaveBeenCalled();
+			} else {
+				expect(sendMessage).toHaveBeenCalledTimes(1);
+				expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ customType: "terminal-result" }), expect.anything());
+				expect(target.get(task.id, "session-a")?.deliveryState).toBe("delivered");
+			}
+			expect(reads).toEqual({ scans: 1, metadata: consumer === "wait" ? 2 : 4 });
+			expect(target.getSupervisionStats()).toMatchObject({ runtime: 0, callbacks: 3 });
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			coordinator?.dispose();
+			vi.useRealTimers();
+		}
+	});
+
+	it("refuses cached disposition when active metadata becomes corrupt", async () => {
+		vi.useFakeTimers();
+		try {
+			const store = new TerminalTaskStore({ rootDir });
+			const target = manager({ store, pollIntervalMs: 250 });
+			const task = await start(target);
+			await vi.advanceTimersByTimeAsync(500);
+			const metaFile = join(dirname(task.logFile), "meta.json");
+			const valid = readFileSync(metaFile, "utf8");
+			writeFileSync(metaFile, "{corrupt");
+			writeFileSync(exitFile(task), "0");
+			await vi.advanceTimersByTimeAsync(500);
+			expect(tree.calls).toEqual([]);
+			expect(target.get(task.id, "session-a")?.status).toBe("running");
+			writeFileSync(metaFile, valid);
+			await vi.advanceTimersByTimeAsync(250);
+			expect(target.get(task.id, "session-a")?.status).toBe("completed");
+			target.detach();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it.each(["initialization", "refresh", "lookup"])("retains pending and claimed completions in projection outside the settled replay budget via %s", (adoption) => {
+		const store = new TerminalTaskStore({ rootDir });
+		const tasks: TerminalTaskSnapshot[] = [];
+		for (let index = 0; index < 70; index += 1) {
+			const task = persistSettledTask(store, `term-budget-${index}`, "owner", index + 1);
+			tasks.push(task);
+			writeFileSync(join(dirname(task.logFile), "meta.json"), JSON.stringify({ ...task, deliveryState: "delivered" }));
+		}
+		const target = adoption === "initialization" ? undefined : manager({ store });
+		for (let index = 0; index < 2; index += 1) {
+			const task = tasks[index]!;
+			writeFileSync(join(dirname(task.logFile), "meta.json"), JSON.stringify({
+				...task, observedAt: undefined,
+				deliveryState: index === 0 ? "pending" : "claimed",
+				deliveryClaimToken: index === 1 ? "claim-old" : undefined,
+			}));
+		}
+		const retained = target ?? manager({ store });
+		if (adoption === "refresh") retained.refreshSnapshotsFromStore();
+		if (adoption === "lookup") {
+			retained.get("term-budget-0", "owner");
+			retained.get("term-budget-1", "owner");
+		}
+		expect(retained.getSupervisionStats()).toMatchObject({ snapshots: 66, runtime: 0 });
+		expect(retained.list("owner")).toHaveLength(66);
+		const snapshots = retained.getSnapshots();
+		expect(snapshots).toHaveLength(66);
+		expect(snapshots.slice(0, 2)).toEqual([
+			expect.objectContaining({ id: "term-budget-0", deliveryState: "pending" }),
+			expect.objectContaining({ id: "term-budget-1", deliveryState: "claimed" }),
+		]);
+		expect(snapshots.filter((task) => task.deliveryState === "delivered")).toHaveLength(64);
+		expect(snapshots[2]?.id).toBe("term-budget-6");
+		const replay = vi.fn();
+		const unsubscribe = retained.subscribeChanges(replay);
+		expect(replay).toHaveBeenCalledExactlyOnceWith(snapshots);
+		unsubscribe();
+		expect(retained.check("term-budget-0", "owner")?.task.deliveryState).toBe("suppressed");
+		expect(retained.getSupervisionStats().snapshots).toBe(65);
+		expect(retained.getSnapshots()).toHaveLength(65);
+		expect(retained.acknowledge("owner", [{ completionId: "completion-term-budget-1", claimToken: "claim-old" }])).toHaveLength(1);
+		expect(retained.getSupervisionStats().snapshots).toBe(64);
+		expect(retained.get("term-budget-1", "owner")?.deliveryState).toBe("delivered");
+		expect(retained.getSupervisionStats().snapshots).toBe(64);
+		expect(retained.getSnapshots()).toHaveLength(64);
+		expect(store.listOwnedIndexed("owner")).toHaveLength(70);
+	});
+
+	it("builds one complete 1500-record index and serves bounded owner replay without further metadata reads", () => {
 		const reads = { scans: 0, metadata: 0 };
 		const store = new TerminalTaskStore({
 			rootDir,
@@ -349,11 +530,11 @@ function transientFault(code: string): Error {
 		reads.metadata = 0;
 
 		const owned = target.list("session-indexed");
-		expect(owned).toHaveLength(750);
+		expect(owned).toHaveLength(64);
 		expect(owned.every((task) => task.ownerSessionId === "session-indexed")).toBe(true);
 		expect(owned[0]!.id).toBe("term-retained-1498");
-		expect(owned.map((task) => task.createdAt)).toEqual(Array.from({ length: 750 }, (_, position) => 2_498 - position * 2));
-		expect(target.list("session-other")).toHaveLength(750);
+		expect(owned.map((task) => task.createdAt)).toEqual(Array.from({ length: 64 }, (_, position) => 2_498 - position * 2));
+		expect(target.list("session-other")).toHaveLength(64);
 		expect(target.list("session-unknown")).toEqual([]);
 		expect(target.claimPending("session-indexed", true)).toEqual([]);
 		expect(target.acknowledge("session-indexed", [])).toEqual([]);
@@ -362,6 +543,13 @@ function transientFault(code: string): Error {
 		expect(target.get("term-retained-1499", "session-indexed")).toBeUndefined();
 		expect(target.get("term-missing", "session-indexed")).toBeUndefined();
 		expect(reads).toEqual({ scans: 0, metadata: 0 });
+		expect(target.getSupervisionStats()).toMatchObject({ snapshots: 128, runtime: 0 });
+		// An evicted ID uses the complete compact index, without growing replay.
+		expect(target.get("term-retained-0", "session-indexed")?.id).toBe("term-retained-0");
+		expect(reads).toEqual({ scans: 0, metadata: 1 });
+		expect(target.getSupervisionStats().snapshots).toBe(128);
+		expect(store.listOwnedIndexed("session-indexed")).toHaveLength(750);
+		expect(existsSync(join(rootDir, "term-retained-0-1000", "meta.json"))).toBe(true);
 	}, 120_000);
 
 	it("binds the real coordinator with one full scan and one selected read per delivery step", async () => {
@@ -1754,6 +1942,8 @@ function transientFault(code: string): Error {
 			// Exactly one pending timer: the task's poll interval.
 			expect(vi.getTimerCount()).toBe(1);
 
+			// Leave a reconciliation promise pending across the quarantine boundary.
+			children[0]?.emit("close");
 			// The durable record becomes corrupt; the next successful refresh
 			// quarantines it, prunes the retained projection, and clears its poll
 			// timer so no further reconciles are scheduled for the id.
@@ -1766,6 +1956,8 @@ function transientFault(code: string): Error {
 			const drained = reads.metadata;
 			await vi.advanceTimersByTimeAsync(50);
 			expect(reads.metadata).toBe(drained);
+			// Unknown is not settled: retain child/process bookkeeping without polling.
+			expect(target.getSupervisionStats().runtime).toBe(1);
 			// Quarantine stays logical: the corrupt durable record is untouched.
 			expect(readFileSync(metaFile, "utf8")).toBe("{not json");
 		} finally {

@@ -708,7 +708,23 @@ export class TerminalTaskStore {
 	public getIndexed(id: string): TerminalTaskSnapshot | undefined {
 		const path = this.metaPathById.get(id);
 		if (!path) return undefined;
-		return this.readCurrent(path);
+		const snapshot = this.readCurrent(path);
+		// Keep candidate selection in step with validated poll/pre-send reads.
+		if (snapshot) this.replaceIndexedEntry(snapshot);
+		return snapshot;
+	}
+
+	/** Change hint only: never authority for validation, transitions, or process signals. */
+	public getIndexedStamp(id: string): string | undefined {
+		const path = this.metaPathById.get(id);
+		if (!path) return undefined;
+		try {
+			const stat = lstatSync(path, { bigint: true });
+			if (!stat.isFile() || stat.isSymbolicLink()) return undefined;
+			return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}:${stat.mode}:${stat.uid}`;
+		} catch {
+			return undefined;
+		}
 	}
 
 	/** Verify a direct child directory before creating or opening task artifacts. */

@@ -20,7 +20,7 @@
 declare const __SUMOCODE_VERSION__: string | undefined;
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, fchmodSync, openSync, realpathSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, closeSync, constants as fsConstants, existsSync, fchmodSync, openSync, realpathSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { constants as osConstants } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { buildChildSpawnPlan } from "../sumo-tui/rpc/spawn-child.mjs";
@@ -63,6 +63,15 @@ function resolveProcessPiBin(): string {
 	return join(NATIVE_DIR, "bin", "sumocode-pi");
 }
 
+function isExecutableFile(path: string): boolean {
+	try {
+		accessSync(path, fsConstants.X_OK);
+		return statSync(path).isFile();
+	} catch {
+		return false;
+	}
+}
+
 function usageError(message: string): never {
 	process.stderr.write(`[sumocode] ${message}\n\nRun 'sumocode --help' for usage.\n`);
 	process.exit(64);
@@ -78,6 +87,9 @@ function makePrivateTempFile(prefix: string): string {
 
 interface StartupMarkFields {
 	readonly mode?: "native";
+	readonly pid?: number | null;
+	readonly exitCode?: number | null;
+	readonly signalCode?: NodeJS.Signals | null;
 }
 
 function writeStartupMark(event: string, fields: StartupMarkFields = {}): void {
@@ -452,7 +464,7 @@ function runDoctor(parsed: ParsedLaunch): never {
 	process.stdout.write(`Root: ${NATIVE_DIR}\n`);
 	check(EXEC_DIR === join(NATIVE_DIR, "bin"), `Layout: ${NATIVE_DIR} (bin/, extension/, share/)`, `Layout: executable not under <archive>/bin (${EXEC_DIR})`);
 	check(true, `Runtime: native (${process.platform}-${process.arch}, bun ${process.versions.bun ?? "?"})`, "Runtime: native");
-	check(existsSync(PI_BIN), `Pi binary: ${PI_BIN}`, "Pi binary: not found or not executable");
+	check(isExecutableFile(PI_BIN), `Pi binary: ${PI_BIN}`, "Pi binary: not found or not executable");
 	check(existsSync(EXTENSION_ENTRY), `Extension bundle: ${EXTENSION_ENTRY}`, "Extension bundle: missing");
 	check(existsSync(RPC_EXTENSION_ENTRY), `RPC extension bundle: ${RPC_EXTENSION_ENTRY}`, "RPC extension bundle: missing");
 	const yogaWasm = join(NATIVE_DIR, "share/yoga.wasm");
@@ -590,8 +602,8 @@ function childExitCode(code: number | null, signal: NodeJS.Signals | null): numb
 }
 
 function spawnDirectPi(args: readonly string[], stdinPrompt: string, reloadReadyFile: string): Promise<number> {
-	if (!existsSync(PI_BIN)) {
-		process.stderr.write(`[sumocode] Could not find Pi binary at ${PI_BIN}.\n`);
+	if (!isExecutableFile(PI_BIN)) {
+		process.stderr.write(`[sumocode] Pi binary is not an executable file at ${PI_BIN}.\n`);
 		process.exit(70);
 	}
 	const childEnv: NodeJS.ProcessEnv = { ...process.env, SUMOCODE_RELOAD_READY_FILE: reloadReadyFile };
@@ -638,6 +650,7 @@ function spawnDirectPi(args: readonly string[], stdinPrompt: string, reloadReady
 let preSpawnedChild: ChildProcessWithoutNullStreams | undefined;
 let relayingEarlySignal = false;
 let earlyCleanupPromise: Promise<void> = Promise.resolve();
+let terminatePromise: Promise<boolean> | undefined;
 const preSpawnErrorSymbol = Symbol.for("sumocode.rpc.preSpawnError");
 
 function childHasExited(): boolean {
@@ -661,20 +674,31 @@ function waitForPreSpawnedChildExit(timeoutMs: number): Promise<boolean> {
 	});
 }
 
-async function terminateUnadoptedChild(): Promise<void> {
-	if (childHasExited()) return;
+function terminateUnadoptedChild(): Promise<boolean> {
+	terminatePromise ??= reapUnadoptedChild();
+	return terminatePromise;
+}
+
+async function reapUnadoptedChild(): Promise<boolean> {
+	if (childHasExited()) return true;
 	try {
 		preSpawnedChild!.kill("SIGTERM");
 	} catch {
 		// The process may have exited between the state check and kill.
 	}
-	if (await waitForPreSpawnedChildExit(PRE_ADOPTION_KILL_GRACE_MS)) return;
+	if (await waitForPreSpawnedChildExit(PRE_ADOPTION_KILL_GRACE_MS)) return true;
 	try {
 		preSpawnedChild!.kill("SIGKILL");
 	} catch {
 		// SIGTERM may have landed at the grace boundary.
 	}
-	await waitForPreSpawnedChildExit(PRE_ADOPTION_KILL_GRACE_MS);
+	const reaped = await waitForPreSpawnedChildExit(PRE_ADOPTION_KILL_GRACE_MS);
+	if (!reaped) {
+		const evidence = { pid: preSpawnedChild?.pid ?? null, exitCode: preSpawnedChild?.exitCode ?? null, signalCode: preSpawnedChild?.signalCode ?? null };
+		writeStartupMark("rpc_entry_child_reap_failed", evidence);
+		try { process.stderr.write(`[sumocode-rpc] child unreaped after SIGTERM/SIGKILL deadline; identity snapshot ${JSON.stringify(evidence)}\n`); } catch {}
+	}
+	return reaped;
 }
 
 function restoreFailedReloadTerminal(): void {
@@ -900,6 +924,7 @@ async function runRpcBranchOnce(parsed: ParsedLaunch): Promise<number> {
 	preSpawnedChild = undefined;
 	relayingEarlySignal = false;
 	earlyCleanupPromise = Promise.resolve();
+	terminatePromise = undefined;
 	// Extract the kickoff prompt ONCE; a reload must never re-submit it.
 	const rpcInitialPrompt = extractFirstPositional(parsed.forwardedArgs);
 
@@ -916,6 +941,13 @@ async function runRpcBranchOnce(parsed: ParsedLaunch): Promise<number> {
 		kickoffPromptFile = "";
 	};
 	process.on("exit", cleanupKickoffFile);
+	const cleanupEntryFiles = (): void => {
+		cleanupKickoffFile();
+		if (reloadReadyFile) {
+			try { rmSync(reloadReadyFile, { force: true }); } catch {}
+		}
+		process.removeListener("exit", cleanupKickoffFile);
+	};
 
 	const handleEarlySigint = (): void => void relayEarlySignal("SIGINT");
 	const handleEarlySigterm = (): void => void relayEarlySignal("SIGTERM");
@@ -924,13 +956,14 @@ async function runRpcBranchOnce(parsed: ParsedLaunch): Promise<number> {
 		if (relayingEarlySignal) return;
 		relayingEarlySignal = true;
 		earlyCleanupPromise = (async () => {
-			await terminateUnadoptedChild();
+			const reaped = await terminateUnadoptedChild();
 			releasePreAdoptionSignalHandlers();
 			restoreFailedReloadTerminal();
+			cleanupEntryFiles();
 			// Match the steady-state host contract: SIGTERM is a graceful exit,
 			// SIGINT is 130. Record the side channel before exiting so the
 			// (historical bash) consumer never substitutes a timing-dependent 143.
-			const exitCode = signal === "SIGTERM" ? 0 : 130;
+			const exitCode = reaped ? (signal === "SIGTERM" ? 0 : 130) : 1;
 			const exitCodePath = process.env.SUMOCODE_EXIT_CODE_FILE;
 			if (exitCodePath) {
 				try {
@@ -983,56 +1016,74 @@ async function runRpcBranchOnce(parsed: ParsedLaunch): Promise<number> {
 		}
 	}
 
-	// Integration-only seam pinning the ownership phase; inert outside tests.
-	const preAdoptionDelayMs = process.env.NODE_ENV === "test"
-		? Number.parseInt(process.env.SUMOCODE_TEST_PRE_ADOPTION_DELAY_MS ?? "0", 10)
+	// Read through the runtime env object: Bun folds direct process.env.NODE_ENV
+	// access at compile time. These ownership holds must stay test-only at runtime.
+	const env = process.env;
+	const preAdoptionDelayMs = env.NODE_ENV === "test"
+		? Number.parseInt(env.SUMOCODE_TEST_PRE_ADOPTION_DELAY_MS ?? "0", 10)
 		: 0;
 	if (Number.isFinite(preAdoptionDelayMs) && preAdoptionDelayMs > 0) {
+		if (preSpawnedChild?.pid !== undefined) {
+			writeStartupMark("native_pre_adoption_ready");
+		}
 		await new Promise((resolveDelay) => setTimeout(resolveDelay, preAdoptionDelayMs));
 	}
 
-	writeStartupMark("host_import_ready", { mode: "native" });
-	const host = await import("../sumo-tui/rpc/host.js");
-
-	// An early signal may have begun reaping the child during import; never
-	// adopt or enter the retained runtime once cleanup started.
-	if (relayingEarlySignal) {
-		await earlyCleanupPromise;
-		return 0;
-	}
-
-	const preMainDelayMs = process.env.NODE_ENV === "test"
-		? Number.parseInt(process.env.SUMOCODE_TEST_PRE_MAIN_DELAY_MS ?? "0", 10)
-		: 0;
-	if (Number.isFinite(preMainDelayMs) && preMainDelayMs > 0) {
-		await new Promise((resolveDelay) => setTimeout(resolveDelay, preMainDelayMs));
-	}
-
+	let childAdopted = false;
+	let requestedExit: number | undefined;
 	let code: number;
 	try {
+		writeStartupMark("host_import_ready", { mode: "native" });
+		const host = await import("../sumo-tui/rpc/host.js");
+
+		// An early signal may have begun reaping the child during import; never
+		// adopt or enter the retained runtime once cleanup started.
+		if (relayingEarlySignal) {
+			await earlyCleanupPromise;
+			return 0;
+		}
+
+		const preMainDelayMs = env.NODE_ENV === "test"
+			? Number.parseInt(env.SUMOCODE_TEST_PRE_MAIN_DELAY_MS ?? "0", 10)
+			: 0;
+		if (Number.isFinite(preMainDelayMs) && preMainDelayMs > 0) {
+			writeStartupMark("native_pre_main_ready");
+			await new Promise((resolveDelay) => setTimeout(resolveDelay, preMainDelayMs));
+		}
+
 		code = await host.runRpcHost({
 			argv: parsed.forwardedArgs,
-			exit: () => undefined,
+			exit: (exitCode) => { requestedExit = exitCode; },
 			preSpawnedChild,
 			onPreSpawnedChildAdopted: () => {
+				writeStartupMark("native_child_adopted");
+				childAdopted = true;
 				releasePreAdoptionSignalHandlers();
 			},
 			shouldAbortAdoption: () => relayingEarlySignal,
 			env: process.env,
 		});
 	} catch (error) {
-		// The host can reject before adoption; the entry still owns the child.
-		await terminateUnadoptedChild();
-		if (!relayingEarlySignal) restoreFailedReloadTerminal();
-		cleanupKickoffFile();
-		rmSync(reloadReadyFile, { force: true });
-		process.removeListener("exit", cleanupKickoffFile);
+		// After adoption only the host may signal its child, even on rejection.
+		if (!childAdopted) {
+			const reaped = await terminateUnadoptedChild();
+			if (!relayingEarlySignal) {
+				restoreFailedReloadTerminal();
+				cleanupEntryFiles();
+				if (!reaped) {
+					try { process.stderr.write(`${String(error)}\n`); } catch {}
+					process.exit(1);
+				}
+			}
+		}
 		throw error;
+	} finally {
+		if (!relayingEarlySignal) releasePreAdoptionSignalHandlers();
+		cleanupEntryFiles();
 	}
-
-	cleanupKickoffFile();
-	rmSync(reloadReadyFile, { force: true });
-	process.removeListener("exit", cleanupKickoffFile);
+	// Native intercepts host exit to finish its own files first. Merely setting
+	// exitCode would hang when the host's bounded reap left a live child.
+	if (requestedExit !== undefined && code !== RELOAD_EXIT_CODE) process.exit(code);
 	return code;
 }
 

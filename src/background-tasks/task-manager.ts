@@ -46,6 +46,7 @@ import {
 	type TerminalTaskStatus,
 	type TerminalWaitResult,
 } from "./task-types.js";
+import { TerminalSupervisor } from "./terminal-supervisor.js";
 import { buildVisibleTaskPaths, shellEscape } from "./visible-spawn.js";
 
 const DEFAULT_POLL_INTERVAL_MS = 250;
@@ -96,10 +97,13 @@ const INDEX_INIT_RETRY_BACKOFF_MAX_MS = 60_000;
 
 interface RuntimeTask {
 	child?: ChildProcess;
-	pollTimer?: ReturnType<typeof setInterval>;
 	reconcilePromise?: Promise<void>;
 	treeVerification?: ProcessTreeVerification;
 	lastTreeVerificationAt: number;
+	metadataStamp?: string;
+	lastMetadataReadAt: number;
+	readonly paths: ReturnType<typeof taskPaths>;
+	settled: boolean;
 }
 
 interface MutationResult {
@@ -512,7 +516,7 @@ export class TerminalTaskManager {
 	private readonly createId: () => string;
 	private readonly createCompletionId: () => string;
 	private readonly createClaimToken: () => string;
-	private readonly pollIntervalMs: number;
+	private readonly supervisor: TerminalSupervisor;
 	private readonly logMaxBytes: number;
 	private readonly termGraceMs: number;
 	private readonly killGraceMs: number;
@@ -525,6 +529,7 @@ export class TerminalTaskManager {
 	private readonly onRefreshRecover?: (id: string) => void;
 	private readonly tasks = new Map<string, TerminalTaskSnapshot>();
 	private readonly runtime = new Map<string, RuntimeTask>();
+	private readonly settledReplay = new Map<string, Set<string>>();
 	private readonly listeners = new Set<TerminalTaskChangeListener>();
 	private readonly snapshotListeners = new Set<TerminalTaskSnapshotListener>();
 	/** Open while a refresh batch is running: notifyChanges queues instead of publishing. */
@@ -569,7 +574,10 @@ export class TerminalTaskManager {
 		this.createId = options.createId ?? (() => `term-${this.now().toString(36)}-${randomUUID().slice(0, 8)}`);
 		this.createCompletionId = options.createCompletionId ?? (() => `completion-${randomUUID()}`);
 		this.createClaimToken = options.createClaimToken ?? (() => `claim-${randomUUID()}`);
-		this.pollIntervalMs = normalizePositive(options.pollIntervalMs, DEFAULT_POLL_INTERVAL_MS);
+		this.supervisor = new TerminalSupervisor(normalizePositive(options.pollIntervalMs, DEFAULT_POLL_INTERVAL_MS), (ids) => {
+			if (!this.indexInitialized) this.ensureIndexInitialized();
+			for (const id of ids) this.scheduleReconcile(id, true);
+		});
 		this.logMaxBytes = normalizePositive(options.logMaxBytes, DEFAULT_LOG_MAX_BYTES);
 		this.termGraceMs = normalizePositive(options.termGraceMs, DEFAULT_TERM_GRACE_MS);
 		this.killGraceMs = normalizePositive(options.killGraceMs, DEFAULT_KILL_GRACE_MS);
@@ -718,13 +726,12 @@ export class TerminalTaskManager {
 		return running.snapshot;
 	}
 
-	/** Owner-ordered inventory: the store's owner index joins retained full snapshots. */
+	/** Bounded owner inventory; explicit older IDs remain directly queryable. */
 	public list(ownerSessionId: string): TerminalTaskSnapshot[] {
 		this.ensureIndexInitialized();
-		return this.store.listOwnedIndexed(ownerSessionId).flatMap((indexed) => {
-			const task = this.tasks.get(indexed.id);
-			return task ? [task] : [];
-		});
+		return [...this.tasks.values()]
+			.filter((task) => task.ownerSessionId === ownerSessionId && this.store.isIndexedOwner(task.id, ownerSessionId))
+			.sort((left, right) => right.createdAt - left.createdAt);
 	}
 
 	public get(id: string, ownerSessionId: string): TerminalTaskSnapshot | undefined {
@@ -1344,11 +1351,17 @@ export class TerminalTaskManager {
 			// A transient per-file metadata read failure retained the record's
 			// compact index entry, so its retained full snapshot stays authoritative
 			// for this generation instead of being pruned like a quarantined id.
-			if (preserved?.has(id)) continue;
+			if (preserved?.has(id)) {
+				// A failed validated read overrides an unchanged stat hint.
+				const runtime = this.runtime.get(id);
+				if (runtime) runtime.metadataStamp = undefined;
+				continue;
+			}
 			// A genuinely quarantined id stops polling: no further reconciles are
 			// scheduled for a projection entry the refreshed index no longer reports.
 			this.clearPoll(id);
 			const pruned = this.tasks.get(id);
+			if (pruned) this.removeFromReplay(pruned);
 			this.tasks.delete(id);
 			// A pruned id is waiter-relevant: a known id that became unqueryable
 			// mid-wait is complete for wait purposes (it routes to unknownIds), so
@@ -1375,22 +1388,15 @@ export class TerminalTaskManager {
 		return snapshot;
 	}
 
+	/** Deterministic supervision counters; no disk reads or process probes. */
+	public getSupervisionStats() {
+		return { snapshots: this.tasks.size, runtime: this.runtime.size, callbacks: this.supervisor.callbacks };
+	}
+
 	public getSnapshots(): readonly TerminalTaskSnapshot[] {
-		const snapshots = [...this.tasks.values()];
-		const replayed = snapshots.filter((snapshot) => !isTerminalTaskSettled(snapshot.status));
-		const settledByOwner = new Map<string, TerminalTaskSnapshot[]>();
-		for (const snapshot of snapshots) {
-			if (!isTerminalTaskSettled(snapshot.status)) continue;
-			const owned = settledByOwner.get(snapshot.ownerSessionId) ?? [];
-			owned.push(snapshot);
-			settledByOwner.set(snapshot.ownerSessionId, owned);
-		}
-		for (const owned of settledByOwner.values()) {
-			replayed.push(...owned
-				.sort((left, right) => (right.settledAt ?? right.updatedAt) - (left.settledAt ?? left.updatedAt))
-				.slice(0, MAX_REPLAYED_SETTLED_TERMINALS));
-		}
-		return replayed
+		// Adoption already bounds disposable history per owner. Replay every retained
+		// task so pending/claimed completions never compete for that history budget.
+		return [...this.tasks.values()]
 			.sort((left, right) => left.createdAt - right.createdAt)
 			.map(immutableTerminalSnapshot);
 	}
@@ -1418,10 +1424,7 @@ export class TerminalTaskManager {
 		if (this.detached) return;
 		this.detached = true;
 		this.clearIndexInitRetryTimer();
-		for (const runtime of this.runtime.values()) {
-			if (runtime.pollTimer) clearInterval(runtime.pollTimer);
-			runtime.pollTimer = undefined;
-		}
+		this.supervisor.dispose();
 		this.listeners.clear();
 		this.snapshotListeners.clear();
 	}
@@ -1455,7 +1458,12 @@ export class TerminalTaskManager {
 	private ensureRuntime(task: TerminalTaskSnapshot): RuntimeTask {
 		let runtime = this.runtime.get(task.id);
 		if (!runtime) {
-			runtime = { lastTreeVerificationAt: Number.NEGATIVE_INFINITY };
+			runtime = {
+				lastTreeVerificationAt: Number.NEGATIVE_INFINITY,
+				lastMetadataReadAt: Number.NEGATIVE_INFINITY,
+				paths: taskPaths(this.store, task.id, task.createdAt),
+				settled: isTerminalTaskSettled(task.status),
+			};
 			this.runtime.set(task.id, runtime);
 		}
 		return runtime;
@@ -1465,39 +1473,47 @@ export class TerminalTaskManager {
 		if (this.detached) return;
 		const task = this.tasks.get(id) ?? this.store.getIndexed(id);
 		if (!task || isTerminalTaskSettled(task.status)) return;
-		const runtime = this.ensureRuntime(task);
-		if (runtime.pollTimer) {
-			if (!this.indexInitialized) this.clearIndexInitRetryTimer();
-			return;
-		}
-		runtime.pollTimer = setInterval(() => this.handlePollTick(id), this.pollIntervalMs);
-		runtime.pollTimer.unref?.();
+		this.ensureRuntime(task);
+		this.supervisor.add(id);
 		if (!this.indexInitialized) this.clearIndexInitRetryTimer();
 	}
 
-	private handlePollTick(id: string): void {
-		if (!this.indexInitialized) this.ensureIndexInitialized();
-		this.scheduleReconcile(id);
-	}
-
-	private scheduleReconcile(id: string): void {
+	private scheduleReconcile(id: string, allowCached = false): void {
 		if (this.detached) return;
 		const task = this.tasks.get(id) ?? this.store.getIndexed(id);
 		if (!task) return;
 		const runtime = this.ensureRuntime(task);
 		if (runtime.reconcilePromise) return;
-		runtime.reconcilePromise = this.reconcile(id)
+		runtime.reconcilePromise = this.reconcile(id, allowCached)
 			.catch((error) => this.diagnostic(id, `reconciliation failed safely: ${error instanceof Error ? error.message : String(error)}`))
 			.finally(() => {
 				runtime.reconcilePromise = undefined;
+				this.releaseSettledRuntime(id);
 			});
 	}
 
-	private async reconcile(id: string): Promise<void> {
+	private async reconcile(id: string, allowCached: boolean): Promise<void> {
 		if (this.detached) return;
-		const current = this.store.getIndexed(id);
-		if (!current) return;
-		this.adopt(current, true);
+		const retained = this.tasks.get(id);
+		const cached = this.runtime.get(id);
+		const stamp = this.store.getIndexedStamp(id);
+		// Stat is only a change hint. Revalidate periodically even if it misses a
+		// rewrite; event-driven recovery and every mutation still read disk truth.
+		const unchanged = allowCached && retained && cached && stamp !== undefined
+			&& stamp === cached.metadataStamp
+			&& this.now() - cached.lastMetadataReadAt < TREE_VERIFICATION_REFRESH_MS;
+		const current = unchanged ? retained : this.store.getIndexed(id);
+		if (!current) {
+			if (cached) cached.metadataStamp = undefined;
+			return;
+		}
+		if (!unchanged) {
+			this.adopt(current, true);
+			if (cached) {
+				cached.metadataStamp = stamp;
+				cached.lastMetadataReadAt = this.now();
+			}
+		}
 		if (isTerminalTaskSettled(current.status)) {
 			this.clearPoll(id);
 			return;
@@ -1519,8 +1535,7 @@ export class TerminalTaskManager {
 		// Check the cheap durable exit marker before any process-table probe. Long-
 		// running terminals otherwise spawned several synchronous `ps` commands on
 		// every 250ms poll, blocking the interactive event loop per active task.
-		const paths = taskPaths(this.store, current.id, current.createdAt);
-		const exitCode = readExitCode(this.store, paths.exitFile);
+		const exitCode = readExitCode(this.store, runtime.paths.exitFile);
 		if (exitCode !== undefined) {
 			await this.finishNaturalCompletion(id, identity, exitCode);
 			return;
@@ -1949,10 +1964,53 @@ export class TerminalTaskManager {
 
 	private adopt(snapshot: TerminalTaskSnapshot, notify: boolean): void {
 		const previous = this.tasks.get(snapshot.id);
+		if (previous) this.removeFromReplay(previous);
 		this.tasks.set(snapshot.id, snapshot);
-		this.ensureRuntime(snapshot);
-		if (!notify || previous?.revision === snapshot.revision) return;
-		this.notifyChanges([snapshot]);
+		const runtime = this.runtime.get(snapshot.id);
+		if (runtime) runtime.settled = isTerminalTaskSettled(snapshot.status);
+		if (!isTerminalTaskSettled(snapshot.status)) this.ensureRuntime(snapshot);
+		else {
+			this.supervisor.delete(snapshot.id);
+			this.releaseSettledRuntime(snapshot.id);
+			this.retainSettledReplay(snapshot);
+		}
+		if (!notify) return;
+		// Validated poll reads can reveal same-revision lifecycle or delivery changes.
+		// The caller owns recovery; adoption only fans out the semantic change.
+		if (recoveryRelevantAdoption(previous, snapshot) || (previous !== undefined && deliveryEligibilityChanged(previous, snapshot))) {
+			this.notifyChanges([snapshot]);
+		} else if (previous !== undefined && !snapshotContentEquals(previous, snapshot)) this.publishProjection();
+	}
+
+	private removeFromReplay(snapshot: TerminalTaskSnapshot): void {
+		const owned = this.settledReplay.get(snapshot.ownerSessionId);
+		if (!owned) return;
+		owned.delete(snapshot.id);
+		if (owned.size === 0) this.settledReplay.delete(snapshot.ownerSessionId);
+	}
+
+	private retainSettledReplay(snapshot: TerminalTaskSnapshot): void {
+		// Undelivered completions are retained independently of the replay budget.
+		if (snapshot.deliveryState === "pending" || snapshot.deliveryState === "claimed") return;
+		let owned = this.settledReplay.get(snapshot.ownerSessionId);
+		if (!owned) {
+			owned = new Set();
+			this.settledReplay.set(snapshot.ownerSessionId, owned);
+		}
+		owned.add(snapshot.id);
+		if (owned.size <= MAX_REPLAYED_SETTLED_TERMINALS) return;
+		const oldest = [...owned].map((id) => this.tasks.get(id)!)
+			.sort((left, right) => (left.settledAt ?? left.updatedAt) - (right.settledAt ?? right.updatedAt))[0]!;
+		owned.delete(oldest.id);
+		this.tasks.delete(oldest.id);
+	}
+
+	private releaseSettledRuntime(id: string): void {
+		const runtime = this.runtime.get(id);
+		// Quarantine is not settlement. Keep unknown process bookkeeping, and
+		// keep settled in-flight anchors until their promise finishes, even if
+		// the settled snapshot has already left the replay window.
+		if (runtime?.settled && !runtime.reconcilePromise) this.runtime.delete(id);
 	}
 
 	/**
@@ -2083,11 +2141,9 @@ export class TerminalTaskManager {
 	}
 
 	private clearPoll(id: string): void {
-		const runtime = this.runtime.get(id);
+		this.supervisor.delete(id);
+		this.releaseSettledRuntime(id);
 		if (!this.indexInitialized) this.scheduleIndexInitRetryTimer();
-		if (!runtime?.pollTimer) return;
-		clearInterval(runtime.pollTimer);
-		runtime.pollTimer = undefined;
 	}
 
 	private timestamp(task: TerminalTaskSnapshot): number {

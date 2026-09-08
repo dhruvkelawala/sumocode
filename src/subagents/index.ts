@@ -311,8 +311,9 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 		unsubscribe = undefined;
 		delivery.clear();
 		if (["new", "fork", "resume", "reload"].includes(event.reason)) {
-			manager.detachForReplacement();
-			if (manager.hasRetainedChildren) pendingReplacements().add(manager);
+			// Defer detachment until session_start identifies a distinct successor; Pi may reuse this manager.
+			manager.prepareForReplacement();
+			pendingReplacements().add(manager);
 		} else manager.disposeAll();
 	});
 	return manager;

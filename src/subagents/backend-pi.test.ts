@@ -11,7 +11,7 @@ import {
 	TRUNCATED_HEAD_MARKER,
 	TRUNCATED_TAIL_MARKER,
 } from "../child-protocol.js";
-import { createPiChildSpawner, resolveClaudeOauthAdapterEntry, resolvePiBinary, resolvePiChildModelBootstrapEntry } from "./backend-pi.js";
+import { createPiChildSpawner, resolveClaudeOauthAdapterEntry, resolvePiBinary, resolvePiChildModelBootstrapEntry, retainedProcessTree } from "./backend-pi.js";
 import type { SubagentEvent } from "./domain.js";
 import type { SpawnedChild, HeadlessLaunchGate } from "./backend-pi.js";
 import type { ProcessTreeOperations } from "../background-tasks/process-tree.js";
@@ -80,6 +80,19 @@ const passiveFences = {
 };
 
 describe("retained headless launch gate", () => {
+	it("refuses a retained signal unless the child owns a safe dedicated process group", async () => {
+		const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+		try {
+			for (const identity of [
+				{ pid: 4242, processGroupId: 1, processStartTime: "birth" },
+				{ pid: 4242, processGroupId: 4241, processStartTime: "birth" },
+			]) {
+				await expect(retainedProcessTree.signalTree(identity, "SIGKILL")).resolves.toMatchObject({ ok: false, gone: false });
+			}
+			expect(kill).not.toHaveBeenCalled();
+		} finally { kill.mockRestore(); }
+	});
+
 	it("refuses PATH Pi for retained launches", async () => {
 		const spawn = vi.fn();
 		const beforeSpawn = vi.fn();

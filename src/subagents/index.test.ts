@@ -83,7 +83,7 @@ const fakeBuildCompletionManifest = async (options: { baseRef: string; outcome: 
 
 /** Minimal command-handler context shape exercised by these tests. */
 type HandlerCtx = { cwd: string; model?: { provider: string; id: string }; isIdle?: () => boolean };
-type Handler = (event: { type: string }, ctx: HandlerCtx) => void;
+type Handler = (event: { type: string; reason?: string }, ctx: HandlerCtx) => void;
 
 /** Tool result shape the tests inspect. */
 interface ToolResult {
@@ -123,8 +123,8 @@ const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui", options: { re
 		hasUI,
 		ui: { setWidget },
 	};
-	const fire = (event: string) => {
-		for (const handler of handlers.get(event) ?? []) handler({ type: event }, ctx);
+	const fire = (event: string, reason?: string) => {
+		for (const handler of handlers.get(event) ?? []) handler({ type: event, reason }, ctx);
 	};
 	const fireSessionStart = async (sessionId = "test-session") => {
 		const sessionCtx = { ...ctx, sessionManager: { getSessionId: () => sessionId } };
@@ -409,8 +409,8 @@ describe("subagent result delivery", () => {
 		harness.fire("session_start");
 		// Simulate repeated binding defensively; real Pi 0.80.6 recreates the
 		// factory on replacement and RPC mode may bind the new instance twice.
-		harness.fire("session_shutdown");
-		harness.fire("session_start");
+		harness.fire("session_shutdown", "new");
+		await harness.fireSessionStart("next-session");
 		harness.setIdle(false);
 		await spawn(harness.manager, "post-switch");
 		backend.emitters.at(-1)?.({ kind: "message-end", role: "assistant", text: "after switch" });

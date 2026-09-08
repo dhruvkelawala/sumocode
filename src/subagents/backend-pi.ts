@@ -507,6 +507,7 @@ export const retainedProcessTree: ProcessTreeOperations = {
 	...systemProcessTree,
 	async signalTree(identity, signal) {
 		try {
+			if (identity.processGroupId <= 1 || identity.processGroupId !== identity.pid) throw new Error("unsafe retained process group");
 			process.kill(-identity.processGroupId, signal);
 			return { ok: true, gone: false };
 		} catch {

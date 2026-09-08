@@ -844,6 +844,22 @@ export class SubagentManager {
 		return ids.map((id) => lines.get(id) ?? `${id} is unknown`);
 	}
 
+	/** Stop legacy work while leaving retained children live until session_start identifies the successor manager. */
+	public prepareForReplacement(): void {
+		this.lifecycleGeneration += 1;
+		const queuedIds = this.queuedTasks.map((queued) => queued.id);
+		this.queuedTasks.length = 0;
+		for (const id of queuedIds) void this.startSettle(id, { kind: "interrupted" });
+		for (const [id, snapshot] of this.snapshots) {
+			if (this.retained.has(id)) continue;
+			this.consumedIds.add(id);
+			if (!isSettled(snapshot)) this.snapshots.set(id, { ...snapshot, recovery: "unsupported" });
+		}
+		for (const [id, entry] of this.children) {
+			if (!this.retained.has(id) && this.snapshots.get(id)?.status === "running") entry.child.interrupt();
+		}
+	}
+
 	public disposeAll(): void {
 		clearInterval(this.healthTimer);
 		this.healthTimer = undefined;

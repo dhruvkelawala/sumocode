@@ -29,10 +29,20 @@ export async function runRealRecovery(backend: "headless" | "visible", replaceme
 		appendFileSync(join(runRoot, "births.jsonl"), `${JSON.stringify(tree)}\n`, { mode: 0o600 });
 	};
 	const admit = (pid: number): void => writeFileSync(join(root, `admit-${pid}`), "", { mode: 0o600, flag: "wx" });
+	const waitForControllerExec = async (pid: number) => {
+		const deadline = Date.now() + 5_000;
+		while (Date.now() < deadline) {
+			const identity = systemProcessTree.captureStartTime(pid);
+			if (identity?.includes(entry) && !identity.includes("harness-admission.cjs")) return;
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+		throw new Error(`controller exec identity did not settle for pid ${pid}`);
+	};
 	const start = async (mode: string) => {
 		const child = spawnSupervisedProcess(node, [entry, root, mode, pi, provider], { env, stdio: ["ignore", "pipe", "pipe"] });
 		spawned.push(child.pid);
 		await new Promise<void>((resolve, reject) => { child.child.once("spawn", resolve); child.child.once("error", reject); });
+		await waitForControllerExec(child.pid);
 		const birth = captureBirth(child.pid);
 		register(birth);
 		admit(child.pid);

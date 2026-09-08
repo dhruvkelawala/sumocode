@@ -1,3 +1,5 @@
+> **Status: historical/superseded as of 2026-09-08** — [Current authority](../../README.md). The retained-renderer decision remains accepted; its original migration context is historical.
+
 # ADR 0001 — Build Sumo-Tui as a Node-native retained renderer for SumoCode
 
 | Field | Value |

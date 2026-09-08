@@ -33,8 +33,7 @@ SumoCode can **override** them by registering a tool with the same `name`.
 | `/answer`    | `~/.pi/agent/extensions/answer.ts`               | `src/answer-tool.ts` — Cathedral multi-question wizard |
 
 SumoCode registers its own `question` tool and `/answer` command,
-overriding Pi's defaults. The user's `~/.pi/agent/extensions/answer.ts`
-should be removed or disabled to avoid conflicts.
+overriding Pi's defaults. Check for conflicting personal extension registrations in the private configuration; preserve the user's files.
 
 ### 3. SumoCode-Only Tools
 
@@ -80,19 +79,15 @@ Pi agent event → producer adapter → ChatMessageViewModel → ChatBlock (acti
 | Divine Query       | `src/divine-query.ts`     | `showDivineQuery()` from SumoCode code |
 | Memory Editor      | `src/memory-editor.ts`    | `Ctrl+M` keybinding                 |
 
-All modals use `ctx.ui.custom({ overlay: true })` for centered overlays.
+Classic extension overlays use `ctx.ui.custom` with overlay placement. RPC children cannot paint the foreground terminal: `showDivineQuery()` uses `ctx.ui.select`, which sends an `extension_ui_request`. The host routes it through `src/sumo-tui/rpc/extension-ui-responder.ts` and the host modal manager, then returns an `extension_ui_response`.
+
+The worktree result flow in `src/commands/worktree.ts` is a current example: the command presents its menu and separate apply/prune confirmation through `showDivineQuery()`, so the same domain flow works in the classic and RPC profiles. Host-owned model/session selectors use the host's own controls.
+
+Active approval installation and registration were retired by [Plan 076](../plans/076-disable-approval-gate.md). Dormant `src/approval-modal.ts`, `src/commands/approval.ts` and tests remain. External Pi/operator trust policy owns approval; those modules are not wired into the runtime.
 
 ### Pi's Internal UI (not interceptable)
 
-Pi's own interactive mode has internal UI that SumoCode **cannot** override
-without patching Pi upstream:
-
-- `showExtensionSelector` — Pi's list selector (used by `/model`, `/session`)
-- `showExtensionConfirm` — Pi's yes/no confirm
-- `showExtensionInput` — Pi's text input
-
-If Pi adds a `ui.select` override hook in the future, we can wire Divine Query
-there to theme ALL selectors.
+Classic Pi's internal `showExtensionSelector`, `showExtensionConfirm` and `showExtensionInput` remain Pi-owned. Their private implementations are not a SumoCode interception API. In RPC mode, the supported extension UI request/response protocol is the host boundary; no private constructor patch is needed.
 
 ## LLM Tool Guidance
 
@@ -106,7 +101,8 @@ This ensures the Divine Query renderer doesn't produce double labels like `A) A)
 
 | File                              | Role                                          |
 |-----------------------------------|-----------------------------------------------|
-| `src/extension.ts`               | Main entry — wires all hooks and tools        |
+| `src/extension-entry.ts` | Stable package entry and validated bundle/source selection |
+| `src/extension-core.ts` | Shared profile feature installation |
 | `src/divine-query.ts`            | Divine Query modal renderer + state machine   |
 | `src/command-palette.ts`         | Command palette (calls `showDivineQuery`)     |
 | `src/activity/*.ts`             | Shared Activity contract and producer adapters |

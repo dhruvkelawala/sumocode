@@ -1,6 +1,6 @@
 # SumoCode startup perf snapshot
 
-Report-only startup measurements for the current checkout. These numbers are intentionally not CI gates; use them to compare phase-by-phase deltas. The retained timeline runs `sumocode.sh --offline --no-extensions --no-session`; do not compare it directly with a normal configured-session workload. It reports editable first paint (`editor_ready`), hydrated command dispatch (`command_ready`), and their gap. The deprecated `input_ready` / `app_ready` aliases remain visible for one release. While startup is serial, first-frame is approximately host-import + child-first-response-noext + hydration round trips because the first-frame probe passes `--no-extensions`; plan 061 changes that relationship. Child-first-response minus child-first-response-noext estimates the installed-extension-corpus cost.
+Recorded Plan 094 source baseline at the commit and date below, not a measurement of the current checkout. These report-only numbers are not CI gates. The retained timeline runs the source launcher with --offline --no-extensions --no-session, so it is not comparable to a normal configured session or the native release. It distinguishes editable first paint (`editor_ready`) from hydrated command dispatch (`command_ready`) and their gap. Deprecated aliases in the recorded table are historical labels. See [DEV_LOOP.md](../../DEV_LOOP.md) for current verification and the [plan ledger](../../plans/README.md) for completion status.
 
 - commit: `d96ea75 fix(startup): keep launch policy behind submit handlers`
 - runs: 5

@@ -73,7 +73,7 @@ pnpm visual:ci
 
 The canonical workflow lives in `DEV_LOOP.md`.
 
-Short version: edit in this checkout → `pi -e .` for classic extension-only checks or `pnpm dev` / `bin/sumocode.sh` for source-mode RPC-host checks → commit → for releases bump `package.json` version + `VERSION` in `src/extension.ts`, tag, and let `.github/workflows/release.yml` build the native archive. Tagged releases are the only thing that propagates; pushes to `main` do not.
+Short version: edit in this checkout → `pi -e .` for classic extension-only checks or `pnpm dev` / `bin/sumocode.sh` for source RPC-host checks → verify → commit. Native releases build from version tags using `package.json` as version authority; consumers install the tagged archive. Pi git-package installs are a separate source path: an unpinned update follows its upstream branch. Pin an explicit tag when reproducing a release; see [DEV_LOOP.md](DEV_LOOP.md).
 
 Never edit `~/.pi/agent/git/github.com/dhruvkelawala/sumocode/` — that is the installed clone, not the source of truth.
 
@@ -81,11 +81,11 @@ Never edit `~/.pi/agent/git/github.com/dhruvkelawala/sumocode/` — that is the 
 
 ### Extension entry points
 
-`src/extension.ts` is the canonical entry. It exports a default `(pi: ExtensionAPI) => void` that wires every feature module via its `installX(pi)` / `registerXCommand(pi)` function. The order in that file is the load order — keep it intentional. `package.json#pi.extensions` lists what Pi loads.
+`package.json#pi.extensions` selects `src/extension-entry.ts`, the stable package entry that validates optional generated bundles and falls back to source. The classic source profile is `src/extension.ts`; shared installation belongs to `src/extension-core.ts`. Keep the feature load order intentional.
 
-`src/rpc-child-extension.ts` is the source-mode RPC child entry. It installs the canonical entry's headless profile without importing the canonical entry and its eagerly loaded UI surfaces. Commands shared with the retained host may still import UI-backed handlers. `src/sumo-tui/rpc/spawn-child.mjs` selects it for forced source mode; `src/extension-entry.ts` selects it when a launcher-owned RPC child falls back from a missing or stale bundle. Keep the shared profile in `src/extension-core.ts` and the source entry shallow.
+`src/rpc-child-extension.ts` is the source-mode RPC child entry. It installs the shared headless profile without importing the classic entry and its eagerly loaded UI surfaces. Commands shared with the retained host may still import UI-backed handlers. `src/sumo-tui/rpc/spawn-child.mjs` selects it for forced source mode; `src/extension-entry.ts` selects it when a launcher-owned RPC child falls back from a missing or stale bundle. Keep the shared profile in `src/extension-core.ts` and the source entry shallow.
 
-In the canonical entry, `shouldNoopDuplicateInstalledExtension()` runs before the process latch and feature installation: if the installed-from-git copy is loading while the user is inside a SumoCode dev tree, the installed copy bails so the dev tree wins. The launcher-owned RPC source entry intentionally omits that installed-copy guard; both entries share the process latch. Preserve this split so `pi -e .` coexists with the always-installed copy.
+In the classic source entry, `shouldNoopDuplicateInstalledExtension()` runs before the process latch and feature installation: if the installed-from-git copy is loading while the user is inside a SumoCode dev tree, the installed copy bails so the dev tree wins. The launcher-owned RPC source entry intentionally omits that installed-copy guard; both entries share the process latch. Preserve this split so `pi -e .` coexists with the always-installed copy.
 
 ### Two rendering paths
 
@@ -110,15 +110,16 @@ The user-facing wrapper is `bin/sumocode.sh` and, when linked/installed, the `su
 
 Manual-test diagnostics are opt-in via `sumocode -d` / `bin/sumocode.sh -d`. Debug mode writes JSONL to `/tmp/sumocode-manual.jsonl` by default, or to `--diag-file <path>` / `SUMO_TUI_DIAG_FILE`. The launcher clears the diagnostics file at startup unless `--no-clear-diag` is set. Use `sumocode diag` or `node scripts/diag-summary.mjs /tmp/sumocode-manual.jsonl` to summarize a run. Diagnostics must stay no-op unless `SUMO_TUI_DIAG_FILE` is set.
 
-Do not casually change the launcher runtime selection, `SUMO_RPC`, `SUMO_TUI`, or `sumo-rpc-host.js`. Pi version bumps must recompile `bin/sumocode-pi`, rerun the native extension-bundle external guard and `pnpm test:native`, re-verify the RPC contract (`rpc-types.d.ts`), re-check the hardcoded builtin slash list, rerun the tool-bypass/security regression test, and preserve the direct-Pi bypass for `--print`, explicit `--mode`, and non-TTY stdout.
+Do not casually change the launcher runtime selection, `SUMO_RPC`, `SUMO_TUI`, or `sumo-rpc-host.js`. Pi version bumps must recompile the native archive's `sumocode-pi` executable, rerun the native extension-bundle external guard and `pnpm test:native`, re-verify the RPC contract (`rpc-types.d.ts`), re-check the hardcoded builtin slash list, rerun the tool-bypass/security regression test, and preserve the direct-Pi bypass for `--print`, explicit `--mode`, and non-TTY stdout.
 
 ### Pi ↔ SumoCode tool boundary
 
 Read `docs/PI_TOOL_ARCHITECTURE.md` before adding, overriding, or intercepting tools. Key rules:
 
-- **Built-in tools** (`bash`, `read`, `write`, `edit`, `mcp`, `task`): never re-register. Intercept via `pi.on("tool_call")` for gating; render via transcript view-model pipeline.
+- **Built-in tools** (`bash`, `read`, `write`, `edit`, `mcp`): never re-register. Observe via `pi.on("tool_call")` for UI state; render via the transcript view-model pipeline. SumoCode owns the `task`, `subagent_*`, and `terminal_*` tools.
 - **Pi example extensions** (e.g. `question`): override by registering a tool with the same `name` in SumoCode. SumoCode's version replaces Pi's.
-- **Pi internal UI** (`showExtensionSelector`, `showExtensionConfirm`): cannot be intercepted without upstream changes. SumoCode-owned code calls `showDivineQuery()` directly instead of `ctx.ui.select`.
+- **Pi internal UI**: classic Pi selectors remain Pi-owned. SumoCode code calls `showDivineQuery()`; in RPC mode it uses `ctx.ui.select` and the host handles `extension_ui_request` through `src/sumo-tui/rpc/extension-ui-responder.ts` and its modal manager.
+- **Approval policy**: [Plan 076](plans/076-disable-approval-gate.md) retired active approval installation/registration. Dormant approval modules and tests remain; external Pi/operator trust policy owns approval. Do not wire them back into the runtime.
 
 ## Cathedral rendering
 
@@ -221,7 +222,7 @@ Required crops gate against committed approved runtime goldens. Bible diffs rema
 - `ctx.ui.*` calls must happen inside an event handler (`session_start`, `message_start`, etc.). Calling them at module top level fires before Pi's TUI exists and is silently dropped.
 - Be TTY-defensive: guard interactive UI so `acpx pi`, `pi --print`, and `--mode rpc` keep working.
 - Voice is enforced by `src/voice.ts`. State labels are uppercase Cathedral verbs (`READY / MEDITATING / ILLUMINATING / DEFERRING / INSCRIBING`); other product copy is lowercase, terse, no exclamation marks, no apologies, no decorative emoji.
-- `src/spike/` is throwaway exploration. Do not import from `spike/` outside its own directory; promote a spike by moving it into a real module.
+- The reserved src/spike/ directory is for throwaway exploration. Do not import from `spike/` outside its own directory; promote a spike by moving it into a real module.
 
 ## Visual conventions
 
@@ -265,9 +266,9 @@ Reference exemplar: `~/.agent/diagrams/sumocode-bg-task-final-product.html` — 
 - `PLAN.md` — Q1–Q14 grilling decisions.
 - `docs/visual/parity/FIXTURE_STATES_REVIEW.md` — fixture lane design for deterministic completed/tool/overlay states.
 - `docs/adr/` — accepted ADRs. ADR 0001 covers the SumoTUI retained renderer.
-- `docs/SUMO_TUI_CONSOLIDATION_PLAN.md` — active consolidation sequencing after the deep audit.
-- `docs/SUMO_TUI_AUDIT.md` — audit conclusion: SumoTUI is the right direction; the hybrid Pi/SumoTUI seam is the risk.
-- `docs/SUMO_TUI_PI_PATCH_STRATEGY.md` — private Pi patch maintenance contract.
+- `docs/SUMO_TUI_CONSOLIDATION_PLAN.md` — historical consolidation sequencing.
+- `docs/SUMO_TUI_AUDIT.md` — historical hybrid-renderer audit.
+- `docs/SUMO_TUI_PI_PATCH_STRATEGY.md` — historical private-patch retirement record.
 - `docs/SUMO_TUI_PORTRAIT_SIDEBAR_POLICY.md` — V1 portrait/no-sidebar policy.
 - `docs/SUMO_TUI_RENDER_PRIMITIVES.md` — typed render primitive contract.
 - `docs/SUMO_TUI_TEST_BACKEND.md` — headless retained-renderer test backend contract.
@@ -275,7 +276,7 @@ Reference exemplar: `~/.agent/diagrams/sumocode-bg-task-final-product.html` — 
 - `docs/cathedral/SCRIPTORIUM_CHROME.md` — shared modal painting contract; read this before adding any new Cathedral overlay (Divine Query / Approval / Memory Scriptorium share it).
 - `docs/visual/parity/PORTRAIT_REVIEW.md` — portrait scene composition review.
 - `docs/visual/parity/FIXTURE_STATES_REVIEW.md` — fixture lane and deterministic state review.
-- `docs/prd.md` / `docs/prd.html` — formal product spec.
+- `docs/prd.md` / `docs/prd.html` — historical product design; README.md describes the current product.
 
 ## Integration tests
 

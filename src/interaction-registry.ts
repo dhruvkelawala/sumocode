@@ -13,7 +13,8 @@ import { registerSumoSyncCommand } from "./commands/sync.js";
 import { registerTabsCommand } from "./commands/tabs.js";
 import { registerThemeCommand } from "./commands/theme.js";
 import { registerThemeCheckCommand } from "./commands/theme-check.js";
-import { registerWorktreeCommand } from "./commands/worktree.js";
+import { registerWorktreeCommand, type WorktreeCommandOptions } from "./commands/worktree.js";
+import { RetainedRuntime } from "./subagents/retained-runtime.js";
 import { registerMemoryCommand } from "./memory-editor.js";
 
 export type InteractionKind = "command" | "shortcut";
@@ -120,6 +121,7 @@ export class InteractionRegistry {
 export interface InstallSumoInteractionsOptions {
 	readonly reporter?: InteractionDiagnosticReporter;
 	readonly subagentManager?: SubagentManager;
+	readonly resolveWorktreeResultRegistry?: WorktreeCommandOptions["resolveResultRegistry"];
 	readonly installUiSurfaces: ((registry: InteractionRegistry) => void) | false;
 }
 
@@ -143,7 +145,11 @@ export function installSumoInteractions(pi: ExtensionAPI, options: InstallSumoIn
 	registry.install("commands.tabs", registerTabsCommand);
 	registry.install("commands.theme", registerThemeCommand);
 	registry.install("commands.theme-check", registerThemeCheckCommand);
-	registry.install("commands.worktree", registerWorktreeCommand);
+	const retained = new RetainedRuntime();
+	registry.install("commands.worktree", (targetPi) => registerWorktreeCommand(targetPi, {
+		resolveResultRegistry: options.resolveWorktreeResultRegistry ?? ((id, ctx) =>
+			retained.registry(ctx.sessionManager.getSessionId()).discover().find(({ record }) => record.id === id)?.registry),
+	}));
 	registry.install("commands.memory", registerMemoryCommand);
 	registry.flushDiagnostics();
 	return registry.getSnapshot();

@@ -303,3 +303,17 @@ describe("subagent Activity adapter", () => {
 		expect(activity.settledAt).toBeUndefined();
 	});
 });
+
+it("adds a result disposition hint only to settled retained worktree evidence", () => {
+	const result = snapshot({ status: "done", recovery: "adopted", finalText: "committed result", settledAt: 2000,
+		worktree: { path: "/worktree", repoRoot: "/repo", branch: "sumo/child", baseRef: "a".repeat(40) },
+		manifest: { baseRef: "a".repeat(40), headRef: "b".repeat(40), branch: "sumo/child", worktreePath: "/worktree",
+			changedPaths: ["file.ts"], dirty: false, commits: 1, exit: "completed", durationMs: 1000 } });
+	expect(activityFromSubagentSnapshot(result).body?.text).toContain("/sumo:worktree result sa-7");
+	expect(activityFromSubagentSnapshot(result).body?.text).toContain("inspect · apply · dismiss · prune");
+	expect(activityFromSubagentSnapshot(result).body?.text).toContain("recorded: 1 commits · 1 files · clean");
+	for (const other of [{ ...result, recovery: "unsupported" as const }, { ...result, status: "running" as const },
+		{ ...result, manifest: { exit: "completed" as const, durationMs: 1 } }]) {
+		expect(activityFromSubagentSnapshot(other).body?.text ?? "").not.toContain("/sumo:worktree result");
+	}
+});

@@ -461,8 +461,11 @@ function activityFromSubagentRecord(record: Record<string, unknown>, budget: Ada
 	}
 	if (recoveryStep) activity.currentStep = recoveryStep;
 	else if (health && (mappedStatus !== "running" || health.health.endsWith("-warning"))) activity.currentStep = health.health;
-	if (health || recoveryText) {
-		activity.body = { kind: "text", text: [recoveryText, health?.text, summary, error].filter((text) => text !== undefined).join("\n") };
+	const resultHint = (recovery === "adopted" || recovery === "persist-only") && ["succeeded", "failed", "cancelled"].includes(status)
+		&& firstString(budget, manifest?.worktreePath) && /^sa-[A-Za-z0-9_-]{1,128}$/u.test(id)
+		? `recorded: ${numberFrom(manifest?.commits) ?? "unknown"} commits · ${Array.isArray(manifest?.changedPaths) ? manifest.changedPaths.length : "unknown"} files · ${manifest?.dirty === false ? "clean" : manifest?.dirty === true ? "dirty" : "cleanliness unknown"}\ninspect · apply · dismiss · prune\n/sumo:worktree result ${id}` : undefined;
+	if (health || recoveryText || resultHint) {
+		activity.body = { kind: "text", text: [recoveryText, health?.text, summary, error, resultHint].filter((text) => text !== undefined).join("\n") };
 	}
 	if (output) activity.outputTail = boundedText(output);
 	if (liveTools.length > 0) activity.activeTools = liveTools;

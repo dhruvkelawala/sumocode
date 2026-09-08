@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import type { WorktreeResult } from "../git/worktree-disposition.js";
+import { RetainedResults } from "./retained-results.js";
 import { isDeepStrictEqual } from "node:util";
 import { lstatSync, mkdirSync, readdirSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
@@ -7,6 +9,16 @@ import { captureProcessBirthTime, type ProcessTreeIdentity, type ProcessTreeVeri
 import { assertPrivateArtifact, assertPrivateDir, isErrnoCode, nodeArtifactFs } from "../private-artifact.js";
 import type { RunOutcome, SubagentPaneRef, SubagentRecoveryReason, SubagentWorktreeRef } from "./domain.js";
 import { validateSubagentBudget, type SubagentBudget } from "./budget-policy.js";
+
+export type ResultDisposition = "unreviewed" | "inspected" | "applied" | "dismissed" | "pruned";
+export interface RegisteredWorktreeResult extends WorktreeResult {
+	readonly disposition: ResultDisposition;
+	readonly dispositionRevision: number;
+}
+const DISPOSITION_TRANSITIONS = {
+	unreviewed: ["inspected", "dismissed"], inspected: ["applied", "dismissed", "pruned"],
+	applied: ["dismissed", "pruned"], dismissed: ["pruned"], pruned: [],
+} satisfies Record<ResultDisposition, readonly ResultDisposition[]>;
 
 export interface RegistryProcess {
 	readonly identity: ProcessTreeIdentity;
@@ -143,6 +155,9 @@ const MAX_RESULT_BYTES = 4 * 1024 * 1024;
 const RECORD_KEYS = "schemaVersion revision id ownerSessionId backend status taskDir child supervisor pane worktree sessionFilePath modelLabel roleId createdAt updatedAt settledAt completionId outcome delivery result manifest writerLease controlLease controlHead";
 
 // oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type -- registry records are untrusted JSON; validate every field and reject unknown metadata (including prompt content).
+function disposition(value: unknown): value is ResultDisposition {
+	return value === "unreviewed" || value === "inspected" || value === "applied" || value === "dismissed" || value === "pruned";
+}
 function object(value: unknown, required: string, optional = ""): value is Record<string, unknown> {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
 	const prototype = Object.getPrototypeOf(value);
@@ -395,6 +410,40 @@ export class SubagentRegistry {
 		if (!validRecord(record) || record.id !== id) throw new Error("corrupt subagent record");
 		this.validate(record);
 		return record;
+	}
+
+	/** Human review metadata is independent of the persistence writer and delivery lease. */
+	public worktreeResult(id: string): RegisteredWorktreeResult | undefined {
+		const record = this.get(id);
+		if (!record || record.status !== "settled" || !record.worktree || !record.completionId || !record.result || !record.manifest) return undefined;
+		const evidence = RetainedResults.read(record.taskDir);
+		if (!evidence || !("baseRef" in evidence.manifest)) throw new Error("worktree completion evidence unavailable");
+		const manifest = evidence.manifest;
+		if (manifest.baseRef !== record.worktree.baseRef || manifest.worktreePath !== record.worktree.path || manifest.branch !== record.worktree.branch) throw new Error("worktree completion binding changed");
+		const path = join(this.directory, `${id}.disposition.json`);
+		let state: ResultDisposition = "unreviewed";
+		let revision = 0;
+		try {
+			assertPrivateArtifact(nodeArtifactFs, path, this.directory, "worktree disposition");
+			const value = readPrivateJson(path, 4096);
+			if (!object(value, "schemaVersion id completionId state revision") || value.schemaVersion !== 1
+				|| value.id !== id || value.completionId !== record.completionId || !disposition(value.state)
+				|| !positive(value.revision)) throw new Error("corrupt worktree disposition");
+			state = value.state;
+			revision = value.revision;
+		} catch (error) { if (!isErrnoCode(error, "ENOENT")) throw error; }
+		return { id, completionId: record.completionId, worktree: record.worktree, manifest, disposition: state, dispositionRevision: revision };
+	}
+
+	public setWorktreeDisposition(id: string, completionId: string, expectedRevision: number, next: ResultDisposition): RegisteredWorktreeResult {
+		return this.withLock(this.recordPath(id), () => {
+			const current = this.worktreeResult(id);
+			if (!current || current.completionId !== completionId || current.dispositionRevision !== expectedRevision
+				|| !DISPOSITION_TRANSITIONS[current.disposition].some((state) => state === next)) throw new Error("stale or invalid worktree disposition transition");
+			const revision = expectedRevision + 1;
+			atomicWritePrivateJson(join(this.directory, `${id}.disposition.json`), { schemaVersion: 1, id, completionId, state: next, revision });
+			return { ...current, disposition: next, dispositionRevision: revision };
+		});
 	}
 
 	/**

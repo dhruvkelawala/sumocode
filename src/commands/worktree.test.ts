@@ -1,3 +1,12 @@
+import { execFile, execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+import { SubagentRegistry, type SubagentRecord } from "../subagents/registry.js";
+import { RetainedResults } from "../subagents/retained-results.js";
+import type { GitExecutor } from "../git/worktree-disposition.js";
+import type { showDivineQuery } from "../divine-query.js";
 import { describe, expect, it, vi } from "vitest";
 import { parseWorktreeArgs, registerWorktreeCommand as registerWorktreeCommandWithDefaults } from "./worktree.js";
 import type {
@@ -530,5 +539,131 @@ describe("/sumo:worktree", () => {
 
 		expect(remove).toHaveBeenCalledWith({ repoRoot: "/repo", path: "/repo.wt/sumo__one" });
 		expect(notify).toHaveBeenCalledWith("removed worktree sumo/one", "info");
+	});
+});
+
+
+describe("result command parsing", () => {
+	it("parses result ids before the delegate fallback", () => {
+		expect(parseWorktreeArgs("result sa-one")).toEqual({ mode: "result", value: "sa-one" });
+		expect(parseWorktreeArgs("result")).toEqual({ mode: "result", value: "" });
+		expect(parseWorktreeArgs("fix the result renderer")).toEqual({ mode: "delegate", value: "fix the result renderer" });
+	});
+});
+
+function resultFixture() {
+	const root = realpathSync(mkdtempSync(join(tmpdir(), "sumocode-result-command-")));
+	const parent = join(root, "parent");
+	const child = join(root, "child with spaces");
+	mkdirSync(parent);
+	const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+	git(parent, "init", "-b", "parent");
+	git(parent, "config", "user.name", "fixture");
+	git(parent, "config", "user.email", "fixture@example.test");
+	writeFileSync(join(parent, "base.txt"), "base\n");
+	git(parent, "add", ".");
+	git(parent, "commit", "-m", "base");
+	const base = git(parent, "rev-parse", "HEAD").trim();
+	git(parent, "worktree", "add", "-b", "sumo/child", child, base);
+	writeFileSync(join(child, "file.txt"), "child\n");
+	git(child, "add", ".");
+	git(child, "commit", "-m", "child");
+	const head = git(child, "rev-parse", "HEAD").trim();
+	const taskDir = join(root, "task");
+	mkdirSync(taskDir, { mode: 0o700 });
+	const registry = new SubagentRegistry(join(root, "registry"), "origin", { writerIdentity: { token: "fixture", pid: 101, processStartTime: "birth" }, inspectWriter: () => "alive" });
+	const initial: SubagentRecord = { schemaVersion: 2, revision: 1, id: "sa-result", ownerSessionId: "origin", backend: "headless", status: "starting", taskDir,
+		child: null, supervisor: null, pane: null, worktree: { path: child, repoRoot: parent, branch: "sumo/child", baseRef: base },
+		sessionFilePath: null, modelLabel: null, roleId: null, createdAt: Date.now(), updatedAt: Date.now(), settledAt: null,
+		completionId: null, outcome: null, delivery: { state: "none", claim: null }, result: null, manifest: null, writerLease: null, controlLease: null, controlHead: 0 };
+	registry.create(initial);
+	const held = registry.acquireWriter(initial.id, 1, 60_000);
+	const artifacts = new RetainedResults(taskDir);
+	artifacts.append({ kind: "run-started" });
+	const result = artifacts.writeResult({ kind: "completed", finalText: "answer" });
+	const manifest = artifacts.writeManifest({ baseRef: base, headRef: head, branch: "sumo/child", worktreePath: child,
+		changedPaths: ["file.txt"], dirty: false, commits: 1, exit: "completed", durationMs: 1 });
+	registry.transition(initial.id, held.revision, 1, (record) => ({ ...record, status: "settled", outcome: "completed", completionId: "completed-once",
+		settledAt: Date.now(), result: result.pointer, manifest, delivery: { state: "undelivered" } }));
+	const execute = vi.fn<GitExecutor>(async (file, args, options) => (await promisify(execFile)(file, [...args], options)).stdout);
+	const { pi, handler } = makePi();
+	const create = vi.fn();
+	const query = vi.fn<typeof showDivineQuery>();
+	const openSplit = makeSplitMock();
+	const notify = vi.fn();
+	registerWorktreeCommand(asNever(pi), { create, resolveResultRegistry: () => registry, query,
+		dispositionOptions: { execute }, terminalHost: makeTerminalHost(openSplit), terminalSize: () => ({ columns: 160, rows: 45 }) });
+	const run = (args = "result sa-result") => handler()!(args, { hasUI: true, cwd: parent, ui: { notify } });
+	return { registry, root, parent, child, base, head, git, create, query, execute, openSplit, notify, run };
+}
+
+describe("worktree result actions", () => {
+	it("result without an id or with an unknown id never delegates", async () => {
+		const f = resultFixture();
+		await f.run("result");
+		await f.run("result sa-missing");
+		expect(f.create).not.toHaveBeenCalled();
+		expect(f.query).not.toHaveBeenCalled();
+		expect(f.notify).toHaveBeenCalledWith(expect.stringContaining("result <id>"), "warning");
+	});
+	it("result menu cancellation has no Git mutation or review-state transition", async () => {
+		const f = resultFixture();
+		f.query.mockResolvedValue(undefined);
+		await f.run();
+		expect(f.create).not.toHaveBeenCalled();
+		expect(f.registry.worktreeResult("sa-result")?.disposition).toBe("unreviewed");
+		expect(f.execute.mock.calls.some(([, args]) => args.includes("cherry-pick") || args.includes("remove"))).toBe(false);
+	});
+	it("result inspect presents exact fresh commits and files and records inspection", async () => {
+		const f = resultFixture();
+		f.query.mockImplementation(async (_ctx, _title, options) => options.includes("inspect") ? "inspect" : "continue");
+		await f.run();
+		const shown = f.query.mock.calls.map(([, title]) => title).join("\n");
+		expect(shown).toContain(f.head);
+		expect(shown).toContain("file.txt");
+		expect(f.registry.worktreeResult("sa-result")?.disposition).toBe("inspected");
+		expect(f.execute.mock.calls.some(([, args]) => args.includes("cherry-pick") || args.includes("remove"))).toBe(false);
+	});
+	it.each([false, true])("result apply requires a separate confirmation (%s)", async (approved) => {
+		const f = resultFixture();
+		f.query.mockImplementation(async (_ctx, _title, options) => options.includes("apply") ? "apply"
+			: options.includes("apply these commits") ? approved ? "apply these commits" : undefined : "continue");
+		await f.run();
+		const pick = f.execute.mock.calls.filter(([, args]) => args.includes("cherry-pick"));
+		expect(pick).toHaveLength(approved ? 1 : 0);
+		expect(f.git(f.parent, "rev-parse", "HEAD").trim()).toBe(f.base);
+		expect(f.registry.worktreeResult("sa-result")?.disposition).toBe(approved ? "applied" : "inspected");
+		const shown = f.query.mock.calls.map(([, title]) => title).join("\n");
+		expect(shown).toContain(f.head);
+		expect(shown).toContain("file.txt");
+	});
+	it("dismiss marks handled without touching the worktree", async () => {
+		const f = resultFixture();
+		f.query.mockResolvedValue("dismiss");
+		await f.run();
+		expect(f.registry.worktreeResult("sa-result")?.disposition).toBe("dismissed");
+		expect(f.execute).not.toHaveBeenCalled();
+		expect(existsSync(f.child)).toBe(true);
+	});
+	it.each([false, true])("result prune separately names and confirms the path and preserved branch (%s)", async (approved) => {
+		const f = resultFixture();
+		f.query.mockImplementation(async (_ctx, _title, options) => options.includes("prune") ? "prune"
+			: options.includes("prune worktree") ? approved ? "prune worktree" : undefined : "continue");
+		await f.run();
+		expect(existsSync(f.child)).toBe(!approved);
+		expect(f.git(f.parent, "show-ref", "--verify", "refs/heads/sumo/child")).toContain("sumo/child");
+		const shown = f.query.mock.calls.map(([, title]) => title).join("\n");
+		expect(shown).toContain(f.child);
+		expect(shown).toContain("sumo/child");
+		expect(f.registry.worktreeResult("sa-result")?.disposition).toBe(approved ? "pruned" : "inspected");
+	});
+	it("result open diff uses the terminal host only after the open choice", async () => {
+		const f = resultFixture();
+		f.query.mockResolvedValue("open diff");
+		await f.run();
+		expect(f.openSplit).toHaveBeenCalledOnce();
+		expect(f.openSplit.mock.calls[0]?.[2]).toContain(f.base);
+		expect(f.openSplit.mock.calls[0]?.[2]).toContain(f.head);
+		expect(f.create).not.toHaveBeenCalled();
 	});
 });

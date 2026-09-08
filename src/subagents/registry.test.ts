@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { RetainedResults } from "./retained-results.js";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -784,5 +785,64 @@ describe("SubagentRegistry private records", () => {
 		expect(statSync(join(directory, "sa-proof.json")).mode & 0o777).toBe(0o600);
 		expect(() => registry.create(record)).toThrow();
 		expect(() => new SubagentRegistry(directory, "session-b").get(record.id)).toThrow(/owner/);
+	});
+});
+
+describe("worktree result disposition", () => {
+	function completed() {
+		const f = fixture();
+		const registry = new SubagentRegistry(f.directory, "session-a", { now: () => 1000, inspectWriter: () => "alive", writerIdentity: writerA });
+		const worktree = { path: f.root, repoRoot: f.root, branch: "sumo/child", baseRef: "a".repeat(40) };
+		registry.create({ ...f.record, worktree });
+		const held = registry.acquireWriter(f.record.id, 1, 60_000);
+		const artifacts = new RetainedResults(f.record.taskDir);
+		artifacts.append({ kind: "run-started" });
+		const result = artifacts.writeResult({ kind: "completed", finalText: "answer" });
+		const manifest = artifacts.writeManifest({ baseRef: worktree.baseRef, headRef: "b".repeat(40), branch: worktree.branch,
+			worktreePath: worktree.path, changedPaths: ["file.txt"], dirty: false, commits: 1, exit: "completed", durationMs: 1 });
+		const record = registry.transition(f.record.id, held.revision, 1, (value) => ({ ...value, status: "settled", settledAt: 1000,
+			completionId: "completion-once", outcome: "completed", result: result.pointer, manifest, delivery: { state: "undelivered" } }));
+		return { ...f, registry, record };
+	}
+	it("persists inspected state separately from immutable completion and writer authority", () => {
+		const f = completed();
+		const before = readFileSync(join(f.directory, `${f.record.id}.json`));
+		expect(f.registry.worktreeResult(f.record.id)).toMatchObject({ id: f.record.id, completionId: "completion-once", disposition: "unreviewed", dispositionRevision: 0 });
+		f.registry.setWorktreeDisposition(f.record.id, "completion-once", 0, "inspected");
+		const reopened = new SubagentRegistry(f.directory, "session-a");
+		expect(reopened.worktreeResult(f.record.id)).toMatchObject({ disposition: "inspected", dispositionRevision: 1 });
+		expect(readFileSync(join(f.directory, `${f.record.id}.json`))).toEqual(before);
+		expect(statSync(join(f.directory, `${f.record.id}.disposition.json`)).mode & 0o777).toBe(0o600);
+	});
+	it("rejects stale identity, backward and unreviewed destructive transitions", () => {
+		const f = completed();
+		expect(() => f.registry.setWorktreeDisposition(f.record.id, "other-completion", 0, "inspected")).toThrow();
+		expect(() => f.registry.setWorktreeDisposition(f.record.id, "completion-once", 0, "pruned")).toThrow();
+		f.registry.setWorktreeDisposition(f.record.id, "completion-once", 0, "inspected");
+		expect(() => f.registry.setWorktreeDisposition(f.record.id, "completion-once", 0, "applied")).toThrow();
+		f.registry.setWorktreeDisposition(f.record.id, "completion-once", 1, "applied");
+		expect(() => f.registry.setWorktreeDisposition(f.record.id, "completion-once", 2, "inspected")).toThrow();
+		f.registry.setWorktreeDisposition(f.record.id, "completion-once", 2, "dismissed");
+		f.registry.setWorktreeDisposition(f.record.id, "completion-once", 3, "pruned");
+		expect(() => f.registry.setWorktreeDisposition(f.record.id, "completion-once", 4, "applied")).toThrow();
+	});
+	it("dismiss changes only metadata and corrupted disposition cannot reset review state", () => {
+		const f = completed();
+		const artifacts = ["result.json", "manifest.json"].map((name) => readFileSync(join(f.record.taskDir, name)));
+		f.registry.setWorktreeDisposition(f.record.id, "completion-once", 0, "dismissed");
+		expect(f.registry.worktreeResult(f.record.id)?.disposition).toBe("dismissed");
+		const path = join(f.directory, `${f.record.id}.disposition.json`);
+		writeFileSync(path, "{broken", { mode: 0o600 });
+		expect(() => f.registry.worktreeResult(f.record.id)).toThrow();
+		expect(() => f.registry.setWorktreeDisposition(f.record.id, "completion-once", 0, "inspected")).toThrow();
+		expect(readFileSync(path, "utf8")).toBe("{broken");
+		expect(["result.json", "manifest.json"].map((name) => readFileSync(join(f.record.taskDir, name)))).toEqual(artifacts);
+	});
+	it("does not expose a running or shared-checkout task as a worktree result", () => {
+		const f = fixture();
+		const registry = new SubagentRegistry(f.directory, "session-a");
+		registry.create(f.record);
+		expect(registry.worktreeResult(f.record.id)).toBeUndefined();
+		expect(() => registry.setWorktreeDisposition(f.record.id, "missing", 0, "dismissed")).toThrow();
 	});
 });

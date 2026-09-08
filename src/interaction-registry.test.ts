@@ -109,3 +109,16 @@ describe("InteractionRegistry", () => {
 		expect(pi.registerShortcut).toHaveBeenCalledTimes(5);
 	});
 });
+
+it("injects the result registry into the registered worktree command", async () => {
+	const pi = buildPiStub();
+	const resolveWorktreeResultRegistry = vi.fn(() => undefined);
+	// SAFETY: this stub implements the synchronous command-registration surface.
+	installSumoInteractions(pi as never, { installUiSurfaces: false, resolveWorktreeResultRegistry });
+	const command = pi.registerCommand.mock.calls.find(([name]) => name === "sumo:worktree")?.[1];
+	if (!command) throw new Error("worktree command missing");
+	const ctx = { hasUI: true, cwd: "/repo", ui: { notify: vi.fn() }, sessionManager: { getSessionId: () => "successor" } };
+	await command.handler("result sa-known", ctx);
+	expect(resolveWorktreeResultRegistry).toHaveBeenCalledWith("sa-known", ctx);
+	expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("unavailable"), "warning");
+});

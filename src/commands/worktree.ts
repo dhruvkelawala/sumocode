@@ -1,4 +1,8 @@
 import { existsSync } from "node:fs";
+import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { showDivineQuery } from "../divine-query.js";
+import type { SubagentRegistry, RegisteredWorktreeResult, ResultDisposition } from "../subagents/registry.js";
+import { inspectWorktreeResult, prepareWorktreeApply, applyWorktreeResult, prepareWorktreePrune, pruneWorktreeResult, type WorktreeInspection, type WorktreeDispositionOptions } from "../git/worktree-disposition.js";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { resolveExecutableProvenance } from "../executable-provenance.js";
 import { getTerminalHost, type SplitDirection, type TerminalHost } from "../terminal-host/index.js";
@@ -27,10 +31,13 @@ export interface WorktreeCommandOptions {
 	readonly terminalSize?: () => TerminalSize;
 	readonly setupAction?: string;
 	readonly resolveLauncher?: () => string;
+	readonly resolveResultRegistry?: (id: string, ctx: ExtensionContext) => SubagentRegistry | undefined;
+	readonly query?: typeof showDivineQuery;
+	readonly dispositionOptions?: WorktreeDispositionOptions;
 }
 
 export interface ParsedWorktreeArgs {
-	readonly mode: "fresh" | "reopen" | "delegate" | "prune";
+	readonly mode: "fresh" | "reopen" | "delegate" | "prune" | "result";
 	/** delegate: task prompt · fresh: optional name · reopen/prune: branch-or-path target */
 	readonly value: string;
 	readonly baseRef?: string;
@@ -57,6 +64,9 @@ export function parseWorktreeArgs(args: string): ParsedWorktreeArgs {
 	}
 	if (withoutBase === "prune" || withoutBase.startsWith("prune ")) {
 		return { mode: "prune", value: withoutBase.slice("prune".length).trim(), ...parsedBase };
+	}
+	if (withoutBase === "result" || withoutBase.startsWith("result ")) {
+		return { mode: "result", value: withoutBase.slice("result".length).trim(), ...parsedBase };
 	}
 	return { mode: "delegate", value: withoutBase, ...parsedBase };
 }
@@ -132,6 +142,109 @@ async function handlePrune(
 	notify(pi, ctx, `removed worktree ${match.branch ?? match.path}`);
 }
 
+function resultEvidence(inspection: WorktreeInspection): string[] {
+	return [
+		`base ${inspection.base}`, `head ${inspection.head}`, `branch ${JSON.stringify(inspection.branch)}`,
+		`worktree ${JSON.stringify(inspection.result.worktree.path)}`, inspection.dirty ? "child worktree dirty" : "child worktree clean",
+		`${inspection.commits.length} commits · ${inspection.files.length} changed paths`,
+		...inspection.commits.map((commit) => `commit ${commit}`),
+		...inspection.files.map(({ status, path }) => `${status} ${JSON.stringify(path)}`),
+		...inspection.stat.trimEnd().split("\n"),
+	];
+}
+
+async function reviewResultEvidence(ctx: ExtensionContext, label: string, evidence: readonly string[], query: typeof showDivineQuery): Promise<boolean> {
+	const lines = evidence.flatMap((text) => wrapTextWithAnsi(text, 50));
+	const pages = Math.ceil(lines.length / 4);
+	for (let index = 0; index < pages; index++) {
+		const title = `${label} · ${index + 1}/${pages}\n${lines.slice(index * 4, index * 4 + 4).join("\n")}`;
+		if (await query(ctx, title, ["continue", "return"]) !== "continue") return false;
+	}
+	return true;
+}
+
+function saveResultDisposition(registry: SubagentRegistry, result: RegisteredWorktreeResult, next: ResultDisposition): RegisteredWorktreeResult {
+	return registry.setWorktreeDisposition(result.id, result.completionId, result.dispositionRevision, next);
+}
+
+export function worktreeResultQuery(result: RegisteredWorktreeResult) {
+	const choices = ["inspect", ...(result.disposition === "unreviewed" || result.disposition === "inspected" ? ["apply"] : []),
+		...(result.disposition !== "dismissed" ? ["dismiss"] : []), "prune", "open diff"];
+	const m = result.manifest;
+	return { title: `${result.id} · ${result.disposition}\n${result.worktree.branch}\nrecorded: ${m.commits} commits · ${m.changedPaths.length} files · ${m.dirty === undefined ? "cleanliness unknown" : m.dirty ? "dirty" : "clean"}`, options: choices };
+}
+
+async function handleResult(pi: ExtensionAPI, ctx: ExtensionContext, id: string, options: WorktreeCommandOptions): Promise<void> {
+	if (!/^sa-[A-Za-z0-9_-]{1,128}$/u.test(id)) {
+		notify(pi, ctx, "usage: /sumo:worktree result <id>", "warning");
+		return;
+	}
+	if (!ctx.hasUI) { notify(pi, ctx, "worktree result actions require interactive UI", "warning"); return; }
+	const registry = options.resolveResultRegistry?.(id, ctx);
+	const initial = registry?.worktreeResult(id);
+	if (!registry || !initial) { notify(pi, ctx, `settled worktree result ${id} unavailable`, "warning"); return; }
+	let result = initial;
+	if (result.disposition === "pruned") { notify(pi, ctx, `${id} pruned · branch ${result.worktree.branch} preserved`); return; }
+	const query = options.query ?? showDivineQuery;
+	const menu = worktreeResultQuery(result);
+	const choices = menu.options;
+	const choice = await query(ctx, menu.title, choices);
+	if (!choice || !choices.includes(choice)) return;
+	if (choice === "dismiss") {
+		saveResultDisposition(registry, result, "dismissed");
+		notify(pi, ctx, `${id} dismissed`);
+		return;
+	}
+	const markInspected = (): void => {
+		if (result.disposition === "unreviewed") result = saveResultDisposition(registry, result, "inspected");
+	};
+	const requireCurrentReview = (): void => {
+		const current = registry.worktreeResult(id);
+		if (!current || current.completionId !== result.completionId || current.dispositionRevision !== result.dispositionRevision) throw new Error("result disposition changed; review it again");
+	};
+	if (choice === "apply") {
+		const preview = await prepareWorktreeApply(result, ctx.cwd, options.dispositionOptions);
+		markInspected();
+		if (!await reviewResultEvidence(ctx, `apply ${id}`, [`parent ${JSON.stringify(preview.parent.root)}`, `branch ${JSON.stringify(preview.parent.branch)}`,
+			`parent head ${preview.parent.head}`, ...resultEvidence(preview.inspection)], query)) return;
+		if (await query(ctx, `apply ${preview.inspection.commits.length} commits to ${preview.parent.branch}?\nchanges will be staged; parent HEAD stays unchanged`, ["cancel", "apply these commits"]) !== "apply these commits") return;
+		requireCurrentReview();
+		const outcome = await applyWorktreeResult(preview, true, options.dispositionOptions);
+		if (outcome.kind === "manual-recovery") {
+			notify(pi, ctx, `manual recovery required: ${outcome.reason}\nevidence: ${outcome.evidencePath}\ncommands attempted:\n${outcome.commands.map((args) => args.map(shellEscape).join(" ")).join("\n")}`, "warning");
+		} else if (outcome.kind === "restored") notify(pi, ctx, "apply failed; parent restored and child preserved", "warning");
+		else if (outcome.kind === "applied") {
+			try { saveResultDisposition(registry, result, "applied"); }
+			catch { throw new Error("changes staged, but disposition could not be saved; inspect the result before continuing"); }
+			notify(pi, ctx, `${id} applied · changes staged`);
+		}
+		return;
+	}
+	if (choice === "prune") {
+		const preview = await prepareWorktreePrune(result, options.dispositionOptions);
+		markInspected();
+		if (await query(ctx, `prune worktree ${JSON.stringify(result.worktree.path)}?\nbranch ${JSON.stringify(result.worktree.branch)} will be preserved`, ["keep worktree", "prune worktree"]) !== "prune worktree") return;
+		requireCurrentReview();
+		await pruneWorktreeResult(preview, true, options.dispositionOptions);
+		try { saveResultDisposition(registry, result, "pruned"); }
+		catch { throw new Error("worktree removed and branch preserved, but disposition could not be saved"); }
+		notify(pi, ctx, `${id} pruned · branch preserved`);
+		return;
+	}
+	const inspection = await inspectWorktreeResult(result, options.dispositionOptions);
+	markInspected();
+	if (choice === "inspect") {
+		if (await reviewResultEvidence(ctx, `inspect ${id}`, resultEvidence(inspection), query)) notify(pi, ctx, `${id} inspected`);
+		return;
+	}
+	const host = options.terminalHost ?? getTerminalHost();
+	const command = `git -c core.hooksPath=/dev/null -c core.fsmonitor=false --paginate diff --no-ext-diff --no-textconv ${shellEscape(inspection.base)} ${shellEscape(inspection.head)} --`;
+	const opened = await host.openCommandInSplit(pi, chooseDiffSplitDirection((options.terminalSize ?? terminalSize)()), {
+		cwd: result.worktree.path, shellCommand: buildShellCommand(result.worktree.path, command),
+	});
+	notify(pi, ctx, opened.ok ? `opened diff for ${id}` : `result diff unavailable: ${opened.error}`, opened.ok ? "info" : "warning");
+}
+
 export function registerWorktreeCommand(pi: ExtensionAPI, options: WorktreeCommandOptions = {}): void {
 	const create = options.create ?? createWorktree;
 	const list = options.list ?? listWorktrees;
@@ -143,7 +256,7 @@ export function registerWorktreeCommand(pi: ExtensionAPI, options: WorktreeComma
 	const resolveLauncher = options.resolveLauncher ?? (() => resolveExecutableProvenance().sumocode);
 
 	pi.registerCommand("sumo:worktree", {
-		description: "Open a fresh worktree session, reopen one with open <target>, delegate <task>, or prune [target]; fresh/delegate accept --base <ref>",
+		description: "Open a fresh worktree session, reopen one with open <target>, delegate <task>, prune [target], or review result <id>; fresh/delegate accept --base <ref>",
 		handler: async (args, ctx) => {
 			try {
 				const parsed = parseWorktreeArgs(args ?? "");
@@ -151,8 +264,12 @@ export function registerWorktreeCommand(pi: ExtensionAPI, options: WorktreeComma
 					notify(pi, ctx, "Usage: /sumo:worktree [new [name] | open <branch-or-path> | <task> | prune [branch-or-path]] [--base <ref>]", "warning");
 					return;
 				}
-				if (parsed.baseRef !== undefined && (parsed.mode === "reopen" || parsed.mode === "prune")) {
+				if (parsed.baseRef !== undefined && (parsed.mode === "reopen" || parsed.mode === "prune" || parsed.mode === "result")) {
 					notify(pi, ctx, "/sumo:worktree: --base is only valid for fresh or delegated worktrees", "warning");
+					return;
+				}
+				if (parsed.mode === "result") {
+					await handleResult(pi, ctx, parsed.value, options);
 					return;
 				}
 				if (parsed.mode === "prune") {

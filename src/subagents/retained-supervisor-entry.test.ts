@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { systemProcessTree } from "../background-tasks/process-tree.js";
 import { prepareRetainedBootstrap } from "./retained-bootstrap.js";
 import { SubagentRegistry, type RegistryWriter, type SubagentRecord } from "./registry.js";
+import { controlAuthority, reserveRemoteControl } from "./retained-control.js";
 import { runRetainedSupervisorEntry } from "./retained-supervisor-entry.js";
 import type { spawnPiChild } from "./backend-pi.js";
 import type { SubagentEvent } from "./domain.js";
@@ -49,7 +50,7 @@ function fixture(controller?: RegistryWriter, visible = false) {
 	return { root, taskDir, registryDir, registry, record, descriptor, args };
 }
 
-it("grants the production controller before the backend can launch", async () => {
+it("grants production control before launch and keeps settled transfer available until delivery", async () => {
 	const controller = { token: "parent-controller", pid: process.pid, processStartTime: "birth" };
 	const f = fixture(controller);
 	f.registry.create(f.record);
@@ -70,6 +71,21 @@ it("grants the production controller before the backend can launch", async () =>
 	await run;
 	expect(granted).toEqual(controller);
 	expect(f.registry.get(f.record.id)?.writerLease?.owner.token).not.toBe(controller.token);
+	const successor = { token: "replacement-controller", pid: process.pid, processStartTime: "birth" };
+	const current = f.registry.get(f.record.id)!;
+	const transfer = reserveRemoteControl(f.registry.forController(controller), controlAuthority(current), { owner: successor, sessionId: "replacement" });
+	const observed = transfer.catch((error: Error) => error);
+	await vi.advanceTimersByTimeAsync(5500);
+	const reserved = await observed;
+	expect(reserved).toMatchObject({ controlReservation: { owner: successor, sessionId: "replacement" } });
+	if (reserved instanceof Error) throw reserved;
+	const next = f.registry.forController(successor);
+	const grantedRecord = next.acquireControl(reserved.id, reserved.revision, reserved.writerLease!.generation, reserved.controlHead, successor, 60_000, "replacement");
+	const authority = controlAuthority(grantedRecord);
+	const sending = next.advanceDelivery(grantedRecord.revision, authority, "send");
+	next.advanceDelivery(sending.revision, authority, "sent");
+	await vi.advanceTimersByTimeAsync(20_000);
+	expect(vi.getTimerCount()).toBe(0);
 });
 
 it("launches the visible backend from the same private production descriptor", async () => {

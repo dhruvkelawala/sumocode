@@ -59,8 +59,9 @@ export async function runRetainedSupervisorEntry(
 				thinking: config.thinking, builtInTools: config.builtInTools, inherited: {} },
 		}, { ...dependencies, spawn: dependencies.spawn ?? createPiChildSpawner(undefined, undefined, () => config.pi) });
 		if (await controller.settlement !== "settled") throw new Error();
-		// The entry's work ends at settlement; a lingering heartbeat would hold the process open.
-		controller.dispose();
+		// Production controllers may still need to transfer an undelivered completion.
+		// Standalone proof entries have no external delivery owner to wait for.
+		if (!config.controller) controller.dispose();
 	} catch { throw new Error("retained_entry_failed"); }
 }
 

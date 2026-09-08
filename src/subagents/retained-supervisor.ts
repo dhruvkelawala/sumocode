@@ -189,7 +189,7 @@ interface RetainedHeadlessOptions {
 	readonly attach?: { readonly cwd: string };
 	readonly launch: Omit<Parameters<typeof spawnPiChild>[0], "launchGate" | "signal">;
 	readonly baseRef: string;
-	/** Source process entry must stay alive through asynchronous settlement. */
+	/** Source process entry stays alive through settlement and external-controller delivery. */
 	readonly keepAlive?: boolean;
 }
 
@@ -220,6 +220,7 @@ type Settlement = "settled" | "lost" | "ambiguous";
  */
 class RetainedSupervisor {
 	private stopControl?: () => void;
+	private readonly hasExternalController: boolean;
 	private readonly authority: ReturnType<typeof prepareLaunch>;
 	private readonly registry: SubagentRegistry;
 	private readonly artifacts: RetainedResults;
@@ -247,6 +248,7 @@ class RetainedSupervisor {
 			|| (options.initial.worktree !== null && !isRetainedWorktreeCwd(options.initial.worktree.path, options.attach.cwd)))) {
 			throw new Error("retained cwd binding mismatch");
 		}
+		this.hasExternalController = options.controller !== undefined;
 		this.registry = options.registry;
 		this.cwd = options.cwd;
 		this.baseRef = options.baseRef;
@@ -263,13 +265,13 @@ class RetainedSupervisor {
 		this.heartbeat = setInterval(() => {
 			try {
 				if (!this.completed) this.renew();
-				else if (this.record.delivery.state === "sent") clearInterval(this.heartbeat);
+				else if (this.record.delivery.state === "sent") this.dispose();
 				else this.authority.renew();
 			} catch (error) {
 				// A durable settlement is never invalidated by renewal failure. Once the
 				// registry has moved writer ownership on without us, no later tick can
 				// succeed, so stop instead of spinning on a lost authority.
-				if (this.completed && (error instanceof SubagentLeaseConflict || error instanceof SubagentRevisionConflict)) clearInterval(this.heartbeat);
+				if (this.completed && (error instanceof SubagentLeaseConflict || error instanceof SubagentRevisionConflict)) this.dispose();
 			}
 		}, 20_000);
 		if (!options.keepAlive) this.heartbeat.unref();
@@ -432,8 +434,8 @@ class RetainedSupervisor {
 			}));
 			this.completed = structuredClone({ outcome: result.outcome, manifest: { ...manifest, exit: outcome.kind } });
 			this.stopped = true;
-			// Keep the writer lease alive until the durable result is delivered, including through handoff.
-			this.stopControl?.();
+			// External controllers need the transfer service until the durable result is delivered.
+			if (!this.hasExternalController) this.stopControl?.();
 			this.finish("settled");
 			this.notify();
 			this.listeners.clear();

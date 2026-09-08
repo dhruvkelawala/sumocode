@@ -10,7 +10,7 @@ import { RetainedRuntime } from "../../src/subagents/retained-runtime.js";
 import { createChildEvidenceContext, requireHarnessAuth, spawnSupervisedProcess, supervisePtyProcess } from "./harness-supervisor.js";
 import { cleanupOwnedTree, type OwnedTree } from "./fixtures/subagent-feasibility-cleanup.js";
 
-it("production installer retains a real child across replacement and delivers once", async () => {
+it.each(["running", "settled"] as const)("production installer transfers a %s real child across replacement and delivers once", async (phase) => {
 	const root = realpathSync(mkdtempSync(join(tmpdir(), "production-retention-")));
 	const { pi, provider, env } = await preflightRecovery(root);
 	const owned: OwnedTree[] = [];
@@ -33,6 +33,7 @@ it("production installer retains a real child across replacement and delivers on
 			}
 		}
 	};
+	let idle = phase === "running";
 	const install = (session: string) => {
 		const handlers = new Map<string, (event: never, ctx: ExtensionContext) => Promise<void>>();
 		const delivery = vi.fn();
@@ -44,7 +45,7 @@ it("production installer retains a real child across replacement and delivers on
 		});
 		managers.push(manager);
 		// SAFETY: noninteractive lifecycle handlers only use these context fields.
-		const ctx = { cwd: join(root, "cwd"), isIdle: () => true, hasUI: false, sessionManager: { getSessionId: () => session } } as never;
+		const ctx = { cwd: join(root, "cwd"), isIdle: () => idle, hasUI: false, sessionManager: { getSessionId: () => session } } as never;
 		// SAFETY: the exercised lifecycle events use only the reason field.
 		const fire = (name: string, reason = "startup") => handlers.get(name)!({ reason } as never, ctx);
 		return { manager, delivery, fire };
@@ -59,13 +60,19 @@ it("production installer retains a real child across replacement and delivers on
 		expect(child).toMatchObject({ status: "running", recovery: "adopted" });
 		const before = retention.registry("origin").get(child.id)!;
 		await vi.waitFor(() => expect(existsSync(join(root, "provider-called.json"))).toBe(true), { timeout: 15_000 });
+		if (phase === "settled") {
+			writeFileSync(join(root, "finish"), "", { mode: 0o600, flag: "wx" });
+			await vi.waitFor(() => expect(retention.registry("origin").get(child.id)?.status).toBe("settled"), { timeout: 20_000 });
+			expect(old.delivery).not.toHaveBeenCalled();
+		}
 		await old.fire("session_shutdown", "new");
 		const next = install("successor");
 		await next.fire("session_start", "new");
-		expect(next.manager.get(child.id)).toMatchObject({ status: "running", recovery: "adopted" });
+		expect(next.manager.get(child.id)).toMatchObject({ status: phase === "settled" ? "done" : "running", recovery: "adopted" });
 		expect(retention.registry("origin").get(child.id)?.child).toEqual(before.child);
-		writeFileSync(join(root, "finish"), "", { mode: 0o600, flag: "wx" });
+		if (phase === "running") writeFileSync(join(root, "finish"), "", { mode: 0o600, flag: "wx" });
 		await vi.waitFor(() => expect(next.manager.get(child.id)).toMatchObject({ status: "done", finalText: "preserved result" }), { timeout: 20_000 });
+		idle = true;
 		await old.fire("agent_end");
 		await next.fire("agent_end");
 		await next.fire("agent_end");

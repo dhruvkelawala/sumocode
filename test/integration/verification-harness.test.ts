@@ -1213,7 +1213,28 @@ describe("portable process-table probe", () => {
 
 		const result = processRows(execute);
 		expect(result.issue).toBeUndefined();
-		expect(result.rows).toEqual([{ pid: 101, ppid: 1, pgid: 101, state: "S", start: "Sat Aug 22 13:54:46 2026", command: "/usr/bin/a SOME_ENV=multi" }]);
+		expect(result.rows).toEqual([{ pid: 101, ppid: 1, pgid: 101, state: "S", start: "Sat Aug 22 13:54:46 2026", command: "/usr/bin/a" }]);
+	});
+
+	it("scrubs same-row ps environments from visible command evidence", async () => {
+		const output = `  101   1   101 S Sat Aug 22 13:54:46 2026 pi GITHUB_STATE=/tmp/state ${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} ${HARNESS_SIGNING_KEY_ENV_KEY}=leaked-key\n`;
+		// SAFETY: processRows requests UTF-8 text; this fake returns that text without spawning.
+		const execute = (() => output) as typeof execFileSync;
+
+		const result = processRows(execute);
+		expect(result.issue).toBeUndefined();
+		expect(result.rows).toEqual([{ pid: 101, ppid: 1, pgid: 101, state: "S", start: "Sat Aug 22 13:54:46 2026", command: "pi" }]);
+		expect(JSON.stringify(result.rows)).not.toContain(HARNESS_SIGNATURE_ENV_KEY);
+		expect(JSON.stringify(result.rows)).not.toContain(HARNESS_SIGNING_KEY_ENV_KEY);
+
+		const report = await inspectIntegrationPreflight({
+			root: process.cwd(),
+			tempRoot: createRunRoot(),
+			rows: result,
+			env: {},
+		});
+		const orphanIssue = report.issues.find((issue) => issue.code === "orphan-harness-children");
+		expect(orphanIssue?.rows).toContainEqual(expect.objectContaining({ pid: 101, command: "pi" }));
 	});
 
 	it("flags malformed nonblank rows as an issue without echoing their content", () => {

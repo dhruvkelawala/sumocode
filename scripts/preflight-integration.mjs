@@ -39,6 +39,36 @@ const PS_ARG_FORMS = process.platform === "darwin"
 	: [["ewwaxo", PS_COLUMNS], ["eww", "-axo", PS_COLUMNS]];
 // lstart is a fixed 24-character field, e.g. "Sat Aug 22 13:54:46 2026".
 const PS_ROW = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S{3} \S{3} [ \d]\d \d\d:\d\d:\d\d \d{4})\s+(.*)$/;
+const RAW_COMMAND = Symbol("rawCommand");
+const ENV_ASSIGNMENT = /\s+[A-Za-z_][A-Za-z0-9_]*=/;
+
+function scrubPsCommand(command) {
+	const visible = command.trimEnd();
+	const environmentStart = visible.search(ENV_ASSIGNMENT);
+	return environmentStart === -1 ? visible : visible.slice(0, environmentStart).trimEnd();
+}
+
+function commandForMarkers(row) {
+	return row[RAW_COMMAND] ?? row.command;
+}
+
+function commandIdentity(row) {
+	return row[RAW_COMMAND] ?? row.command;
+}
+
+function processRow(match) {
+	const command = match[6].trimEnd();
+	const row = {
+		pid: Number(match[1]),
+		ppid: Number(match[2]),
+		pgid: Number(match[3]),
+		state: match[4],
+		start: match[5],
+		command: scrubPsCommand(command),
+	};
+	Object.defineProperty(row, RAW_COMMAND, { value: command });
+	return row;
+}
 
 export function processRows(execute = execFileSync) {
 	let lastError;
@@ -59,13 +89,13 @@ export function processRows(execute = execFileSync) {
 				const match = line.match(PS_ROW);
 				if (!match) {
 					// `eww` command text can wrap onto continuation lines that carry
-				// no pid/ppid/pgid fields, so they can hide no process row. A
-				// row-shaped line that fails to parse (e.g. truncated) still
-				// invalidates the whole table.
+					// no pid/ppid/pgid fields, so they can hide no process row. A
+					// row-shaped line that fails to parse (e.g. truncated) still
+					// invalidates the whole table.
 					if (/^\s*\d/.test(line)) malformedRows += 1;
 					continue;
 				}
-				rows.push({ pid: Number(match[1]), ppid: Number(match[2]), pgid: Number(match[3]), state: match[4], start: match[5], command: match[6].trimEnd() });
+				rows.push(processRow(match));
 			}
 			// ps rows can carry process environments; count unparseable rows without
 			// echoing them so the issue stays safe to print.
@@ -96,7 +126,7 @@ export function processRows(execute = execFileSync) {
 
 function hasProcessMarker(row, key, value) {
 	const marker = `${key}=${value}`.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	return new RegExp(`(?:^|\\s)${marker}(?:\\s|$)`).test(row.command);
+	return new RegExp(`(?:^|\\s)${marker}(?:\\s|$)`).test(commandForMarkers(row));
 }
 
 function hasHarnessSignature(row) {
@@ -106,7 +136,7 @@ function hasHarnessSignature(row) {
 function isHarnessProcess(row) {
 	return row.pid !== process.pid && (
 		hasHarnessSignature(row)
-		|| /(?:^|\/)sumocode-fake-pi-[A-Za-z0-9._-]+(?:\/|\s|$)/.test(row.command)
+		|| /(?:^|\/)sumocode-fake-pi-[A-Za-z0-9._-]+(?:\/|\s|$)/.test(commandForMarkers(row))
 	);
 }
 
@@ -604,7 +634,7 @@ export async function fixIntegrationPreflight(report, {
 	}
 	for (const [pid, signaledRow] of individuallySignaled) {
 		const survivor = latestRows.find((row) => row.pid === pid);
-		if (survivor !== undefined && survivor.command === signaledRow.command && isHarnessProcess(survivor)) {
+		if (survivor !== undefined && commandIdentity(survivor) === commandIdentity(signaledRow) && isHarnessProcess(survivor)) {
 			sendSignal(kill, pid, "SIGKILL");
 			escalated = true;
 		}

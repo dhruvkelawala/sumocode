@@ -10,7 +10,7 @@ import { buildCompletionManifest, type CompletionManifestEvidence } from "./mani
 import { RetainedResults } from "./retained-results.js";
 import { serveRetainedControl } from "./retained-control.js";
 import { addReportedSubagentUsage } from "./budget-policy.js";
-import { SubagentRegistry, SubagentRevisionConflict, type RegistryControlAuthority, type RegistryControlSuccessor, type RegistryProcess, type SubagentRecord } from "./registry.js";
+import { SubagentRegistry, SubagentLeaseConflict, SubagentRevisionConflict, type RegistryControlAuthority, type RegistryControlSuccessor, type RegistryProcess, type SubagentRecord } from "./registry.js";
 
 /** Persistence-owner gate only, not user control authorization. Retain refused handles. */
 export function createRetainedHeadlessLaunchGate(
@@ -261,7 +261,12 @@ class RetainedSupervisor {
 				if (!this.completed) this.renew();
 				else if (this.record.delivery.state === "sent") clearInterval(this.heartbeat);
 				else this.authority.renew();
-			} catch { /* Renewal failure cannot invalidate a durable settlement. */ }
+			} catch (error) {
+				// A durable settlement is never invalidated by renewal failure. Once the
+				// registry has moved writer ownership on without us, no later tick can
+				// succeed, so stop instead of spinning on a lost authority.
+				if (this.completed && (error instanceof SubagentLeaseConflict || error instanceof SubagentRevisionConflict)) clearInterval(this.heartbeat);
+			}
 		}, 20_000);
 		if (!options.keepAlive) this.heartbeat.unref();
 		this.stopControl = serveRetainedControl(this.registry, options.initial.id, (authority) => this.controllerChild(authority));
@@ -330,6 +335,13 @@ class RetainedSupervisor {
 	public subscribe(listener: (record: SubagentRecord) => void): () => void {
 		this.listeners.add(listener);
 		return () => { this.listeners.delete(listener); };
+	}
+
+	/** Teardown-only: stop renewal timers without touching durable evidence. */
+	public dispose(): void {
+		clearInterval(this.heartbeat);
+		this.stopControl?.();
+		this.listeners.clear();
 	}
 
 	/** Renewal cannot revive a locally failed owner or retry an expired operation. */

@@ -170,6 +170,7 @@ function fixture(cut?: "starting" | "pre-release", backend: "headless" | "visibl
 		for (const manager of managers) manager.detachForReplacement();
 		if (backend === "headless") gate.onRefused();
 		else { vi.mocked(operations.identityMatches).mockReturnValue("unknown"); try { owner.renew(); } catch { /* Stop only the fake owner. */ } await vi.advanceTimersByTimeAsync(750); }
+		owner.dispose();
 		expect(vi.getTimerCount(), "all fake owner/manager timers disposed; no OS groups were created").toBe(0);
 	});
 	return { directory, taskDir, registry, record, owner, gate, operations, spawn: backend === "headless" ? spawn : visibleSpawn, subscribe, interrupt, send, requestClose, buildManifest, emit: (event: SubagentEvent) => emit(event), install, track, finish,

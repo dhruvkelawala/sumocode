@@ -25,6 +25,7 @@ function fixture() {
 	const taskDir = join(root, "task");
 	mkdirSync(taskDir, { mode: 0o700 });
 	let now = 1000;
+	let writerState: "alive" | "dead" | "unknown" = "alive";
 	const supervisor: RegistryProcess = {
 		identity: { pid: process.pid, processGroupId: process.pid, processStartTime: "supervisor-command" },
 		verification: { members: [{ pid: process.pid, processStartTime: "supervisor-birth" }] },
@@ -32,7 +33,7 @@ function fixture() {
 	const registry = new SubagentRegistry(join(root, "registry"), "session-a", {
 		now: () => now,
 		writerIdentity: { token: "owner", pid: process.pid, processStartTime: "supervisor-birth" },
-		inspectWriter: () => "alive",
+		inspectWriter: () => writerState,
 	});
 	const record: SubagentRecord = {
 		schemaVersion: 2, revision: 1, id: "sa-proof", ownerSessionId: "session-a",
@@ -51,7 +52,8 @@ function fixture() {
 		signalTree: vi.fn(async (_identity, signal) => ({ ok: true, gone: signal === "SIGKILL" })),
 		waitForTreeEmpty: vi.fn(async () => false),
 	};
-	return { registry, record, supervisor, operations, setNow: (value: number) => { now = value; } };
+	return { registry, record, supervisor, operations, setNow: (value: number) => { now = value; },
+		setWriterState: (value: typeof writerState) => { writerState = value; } };
 }
 
 function retainedFixture(attach = false, onManifestWritten?: () => void) {
@@ -611,6 +613,24 @@ describe("retained supervisor handle ownership", () => {
 		f.setNow(21_000);
 		await vi.advanceTimersByTimeAsync(20_000);
 		expect(f.registry.get("sa-proof")?.writerLease).toMatchObject({ generation: 2, renewedAt: 21_000, expiresAt: 81_000 });
+	});
+
+	it("stops post-settlement renewal once writer ownership is provably lost", async () => {
+		vi.useFakeTimers();
+		try {
+			const f = retainedFixture();
+			f.proc.emit("spawn");
+			await f.owner.ready;
+			await f.finish();
+			f.release();
+			expect(await f.owner.settlement).toBe("settled");
+			f.setWriterState("dead");
+			f.setNow(21_000);
+			await vi.advanceTimersByTimeAsync(20_000);
+			expect(vi.getTimerCount()).toBe(0);
+			// No renewal ever succeeded: the lease is untouched, not extended past its owner.
+			expect(f.registry.get("sa-proof")?.writerLease?.generation).toBe(1);
+		} finally { vi.useRealTimers(); }
 	});
 
 	it("publishes host-derived private evidence before completion observers and leaves delivery undelivered", async () => {

@@ -47,6 +47,9 @@ export function processRows(execute = execFileSync) {
 			const output = execute("ps", args, {
 				encoding: "utf8",
 				maxBuffer: PS_MAX_BUFFER_BYTES,
+				// lstart text is locale-dependent; pin it so birth-identity strings
+				// captured here always compare equal across callers.
+				env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
 			});
 			const rows = [];
 			let malformedRows = 0;
@@ -115,7 +118,7 @@ function pidIsAlive(pid) {
 /** OS-reported start time for a live pid, or undefined when unavailable. */
 export function liveProcessStart(pid, execute = execFileSync) {
 	try {
-		return execute("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8" }).trim() || undefined;
+		return execute("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", env: { PATH: "/usr/bin:/bin", LC_ALL: "C" } }).trim() || undefined;
 	} catch {
 		return undefined;
 	}
@@ -279,7 +282,8 @@ async function nodeModulesIssue(root) {
 }
 
 export async function inspectIntegrationPreflight({ root = ROOT, tempRoot = tmpdir(), rows, env = process.env } = {}) {
-	const processTable = rows === undefined ? processRows() : { rows };
+	// Accept a full table (with `issue`) as well as a bare row array for callers.
+	const processTable = rows === undefined ? processRows() : Array.isArray(rows) ? { rows } : rows;
 	const issues = processTable.issue === undefined ? [] : [processTable.issue];
 	const notices = [];
 	const rowsByPid = new Map(processTable.rows.map((row) => [row.pid, row]));
@@ -304,8 +308,12 @@ export async function inspectIntegrationPreflight({ root = ROOT, tempRoot = tmpd
 	}
 	const orphanRows = [];
 	const orphanPids = new Set(registeredSurvivors.map((group) => group.pid));
-	for (const row of processTable.rows) {
-		if ((isHarnessProcess(row) || orphanPids.has(row.pid)) && !belongsToLiveHarnessRun(row, rowsByPid, liveHarnessPids)) orphanRows.push(row);
+	// A partial or unavailable table proves nothing about ownership; classify
+	// orphans only from a fully verified table.
+	if (processTable.issue === undefined) {
+		for (const row of processTable.rows) {
+			if ((isHarnessProcess(row) || orphanPids.has(row.pid)) && !belongsToLiveHarnessRun(row, rowsByPid, liveHarnessPids)) orphanRows.push(row);
+		}
 	}
 	if (orphanRows.length > 0) {
 		issues.push({
@@ -348,6 +356,7 @@ function currentProcessGroupId(rows) {
 		return Number.parseInt(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], {
 			encoding: "utf8",
 			maxBuffer: PS_MAX_BUFFER_BYTES,
+			env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
 		}).trim(), 10);
 	} catch {
 		return undefined;
@@ -547,12 +556,19 @@ export async function reapHarnessProcessGroup(registration, {
 
 export async function fixIntegrationPreflight(report, {
 	purgeEvidence = false,
-	rows = processRows().rows,
+	table = processRows(),
+	rows = table.rows,
 	readRows = () => processRows().rows,
 	currentPgid = currentProcessGroupId(rows),
 	kill = process.kill.bind(process),
 	wait = () => new Promise((resolveDelay) => setTimeout(resolveDelay, PREFLIGHT_TERM_GRACE_MS)),
 } = {}) {
+	// Signaling from an unverified table can misclassify a live child as an
+	// orphan; refuse before any signal or removal when the table is suspect.
+	const tableIssue = table.issue ?? report.issues.find((issue) => issue.code === "process-table-malformed-row" || issue.code === "process-table-unavailable");
+	if (tableIssue !== undefined) {
+		return { refused: true, reason: `${tableIssue.code}: refusing to signal or remove anything derived from an unverified process table` };
+	}
 	const orphanIssue = report.issues.find((issue) => issue.code === "orphan-harness-children");
 	const rowsByPid = new Map(rows.map((row) => [row.pid, row]));
 	const liveHarnessPids = new Set(report.liveHarnessPids ?? []);

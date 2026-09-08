@@ -16,6 +16,12 @@ connection.on("end", () => {
 		process.exitCode = 1;
 		return;
 	}
+	if (!process.execve) {
+		// Without exec, PID/group identity could not be preserved; refuse loudly
+		// instead of silently running the workload in this bootstrap process.
+		process.stderr.write("harness admission bootstrap requires process.execve (Node >= 23.11)\n");
+		process.exit(125);
+	}
 	// env performs PATH lookup with exec, preserving the registered PID/group.
 	process.execve("/usr/bin/env", ["env", "--", ...process.argv.slice(4)], process.env);
 });

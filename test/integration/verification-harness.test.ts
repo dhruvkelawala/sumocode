@@ -344,6 +344,28 @@ describe("verification harness v2 seam", () => {
 		await expect(waitForDiagnosticReadiness(diag, "input", 500)).resolves.toMatchObject({ event: "input_ready" });
 	});
 
+	it("classifies no orphans and refuses --fix from a malformed process table", async () => {
+		const tempRoot = createRunRoot();
+		const malformedTable = {
+			rows: [{ pid: 41001, ppid: 1, pgid: 41001, command: "bash /tmp/sumocode-fake-pi-owned/stub" }],
+			issue: { code: "process-table-malformed-row", message: "unverified", remediation: "inspect manually" },
+		};
+		const report = await inspectIntegrationPreflight({ root: process.cwd(), tempRoot, rows: malformedTable, env: {} });
+		expect(report.issues).toContainEqual(expect.objectContaining({ code: "process-table-malformed-row" }));
+		expect(report.issues.find((issue) => issue.code === "orphan-harness-children")).toBeUndefined();
+
+		const signals: Array<[number, NodeJS.Signals | number]> = [];
+		const result = await fixIntegrationPreflight(report, {
+			rows: malformedTable.rows,
+			readRows: () => malformedTable.rows,
+			currentPgid: 999_999,
+			kill: (pid, signal) => { signals.push([pid, signal ?? 0]); return true; },
+			wait: async () => {},
+		});
+		expect(result).toMatchObject({ refused: true });
+		expect(signals).toEqual([]);
+	});
+
 	it("names harness-owned orphan processes without matching unrelated children", async () => {
 		const tempRoot = createRunRoot();
 		const report = await inspectIntegrationPreflight({

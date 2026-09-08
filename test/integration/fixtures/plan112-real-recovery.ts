@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { expect } from "vitest";
 import { preflightRecovery } from "../../../scripts/plan112-recovery-preflight.mjs";
 import { signalVerifiedProcessTree, systemProcessTree } from "../../../src/background-tasks/process-tree.js";
-import { createChildEvidenceContext, spawnSupervisedProcess, supervisePtyProcess } from "../harness-supervisor.js";
+import { createChildEvidenceContext, requireHarnessAuth, spawnSupervisedProcess, supervisePtyProcess } from "../harness-supervisor.js";
 import { cleanupOwnedTree, type OwnedTree } from "./subagent-feasibility-cleanup.js";
 import { captureBirth } from "./plan112-source-controller.js";
 import { SubagentRegistry } from "../../../src/subagents/registry.js";
@@ -17,6 +17,7 @@ export async function runRealRecovery(backend: "headless" | "visible", replaceme
 	const root = realpathSync(mkdtempSync(join(runRoot, "cell-")));
 	const { node, pi, provider, env: privateEnv } = await preflightRecovery(root);
 	const env: NodeJS.ProcessEnv = { ...privateEnv, SUMOCODE_INTEGRATION_RUN_ROOT: runRoot, SUMOCODE_INTEGRATION_MANIFEST: join(runRoot, "children.jsonl") };
+	const auth = requireHarnessAuth(env);
 	if (process.env.HERDR_ENV === "1") Object.assign(env, { HERDR_ENV: "1", HERDR_SOCKET_PATH: process.env.HERDR_SOCKET_PATH,
 		HERDR_PANE_ID: process.env.HERDR_PANE_ID, PLAN112_HERDR_BIN: process.env.PLAN112_HERDR_BIN });
 	if (backend === "visible") writeFileSync(join(root, "visible"), "", { mode: 0o600, flag: "wx" });
@@ -96,7 +97,7 @@ export async function runRealRecovery(backend: "headless" | "visible", replaceme
 			register(shell);
 			expect(systemProcessTree.identityMatches(shell.identity)).toBe("same");
 			expect(systemProcessTree.verificationMatches!(shell.identity, shell.verification)).toBe("same");
-			supervisePtyProcess(shell.identity.pid, createChildEvidenceContext([node, "pane-shell"], env), env);
+			supervisePtyProcess(shell.identity.pid, createChildEvidenceContext([node, "pane-shell"], env), env, auth);
 			writeFileSync(join(root, "pane-shell-birth-admitted"), "", { mode: 0o600, flag: "wx" });
 		}
 		await wait("anchor-birth.json", mode);
@@ -106,7 +107,7 @@ export async function runRealRecovery(backend: "headless" | "visible", replaceme
 		register(anchor);
 		expect(systemProcessTree.identityMatches(anchor.identity)).toBe("same");
 		expect(systemProcessTree.verificationMatches!(anchor.identity, anchor.verification)).toBe("same");
-		supervisePtyProcess(anchor.identity.pid, createChildEvidenceContext([node, "retained-anchor"], env), env);
+		supervisePtyProcess(anchor.identity.pid, createChildEvidenceContext([node, "retained-anchor"], env), env, auth);
 		if (backend === "visible") writeFileSync(join(root, "anchor-birth-admitted"), "", { mode: 0o600, flag: "wx" });
 		else admit(anchor.identity.pid);
 		if (scenario === "crash:pre-release") {
@@ -205,9 +206,13 @@ export async function runRealRecovery(backend: "headless" | "visible", replaceme
 			expect(result.steering).toBe(backend === "visible" ? "consumed" : "unsupported: headless steering");
 		}
 	} finally {
-		const failures: number[] = [];
+		const unresolved: OwnedTree[] = [];
 		for (const tree of [...owned].reverse()) {
-			if (!await cleanupOwnedTree(systemProcessTree, tree, (value) => appendFileSync(join(root, "cleanup.jsonl"), `${JSON.stringify(value)}\n`, { mode: 0o600 }))) failures.push(tree.identity.pid);
+			if (!await cleanupOwnedTree(systemProcessTree, tree, (value) => appendFileSync(join(root, "cleanup.jsonl"), `${JSON.stringify(value)}\n`, { mode: 0o600 }))) unresolved.push(tree);
+		}
+		const failures: number[] = [];
+		for (const tree of unresolved) {
+			if (!await systemProcessTree.waitForTreeEmpty(tree.identity, 2_000, tree.verification)) failures.push(tree.identity.pid);
 		}
 		const census = systemProcessTree.census!();
 		if (existsSync(join(root, "anchor-spawn.json"))) spawned.push(JSON.parse(readFileSync(join(root, "anchor-spawn.json"), "utf8")).pid);

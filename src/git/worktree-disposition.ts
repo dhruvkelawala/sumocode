@@ -132,7 +132,8 @@ async function parentCheckout(options: WorktreeDispositionOptions, cwd: string):
 		porcelain: await git(options, root, statusArgs) };
 }
 async function ignoredPaths(options: WorktreeDispositionOptions, cwd: string): Promise<string[]> {
-	return (await git(options, cwd, ["ls-files", "--others", "--ignored", "--exclude-standard", "-z"])).split("\0").filter(Boolean);
+	return (await git(options, cwd, ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "--no-empty-directory", "-z"]))
+		.split("\0").filter(Boolean).map((path) => path.replace(/\/$/u, ""));
 }
 
 export async function prepareWorktreeApply(result: WorktreeResult, parentCwd: string, options: WorktreeDispositionOptions = {}): Promise<WorktreeApplyPreview> {

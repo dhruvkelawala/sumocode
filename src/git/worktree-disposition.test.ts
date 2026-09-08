@@ -151,6 +151,27 @@ describe("confirmed committed apply", () => {
 		expect(readFileSync(privatePath, "utf8")).toBe("private parent data");
 		expect(f.execute.mock.calls.some(([, args]) => args.includes("cherry-pick"))).toBe(false);
 	});
+	it("applies linear commits: unrelated ignored dependency trees cannot exhaust the Git read bound", async () => {
+		const f = fixture();
+		f.commit("one.txt", "result");
+		writeFileSync(join(f.parent, ".git", "info", "exclude"), "dependencies/\n");
+		const ignored = join(f.parent, "dependencies");
+		mkdirSync(ignored);
+		for (let index = 0; index < 4500; index++) writeFileSync(join(ignored, `${index}-${"x".repeat(235)}`), "");
+		const preview = await prepareWorktreeApply(f.result(), f.parent);
+		expect(await applyWorktreeResult(preview, true)).toEqual({ kind: "applied" });
+		expect(readFileSync(join(f.parent, "one.txt"), "utf8")).toBe("result");
+		expect(existsSync(join(ignored, `0-${"x".repeat(235)}`))).toBe(true);
+	}, 15_000);
+	it("applies linear commits: collapsed ignored directories still protect descendant paths", async () => {
+		const f = fixture();
+		mkdirSync(join(f.child, "local-cache"));
+		f.commit("local-cache/new.txt", "child data");
+		writeFileSync(join(f.parent, ".git", "info", "exclude"), "local-cache/\n");
+		mkdirSync(join(f.parent, "local-cache"));
+		writeFileSync(join(f.parent, "local-cache", "private.txt"), "private parent data");
+		await expect(prepareWorktreeApply(f.result(), f.parent)).rejects.toThrow(/ignored/);
+	});
 	it("applies linear commits: cancellation has no Git effects", async () => {
 		const f = fixture();
 		f.commit("one.txt", "one");

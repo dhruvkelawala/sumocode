@@ -225,6 +225,7 @@ class RetainedSupervisor {
 	private readonly listeners = new Set<(record: SubagentRecord) => void>();
 	private completed?: { outcome: RunOutcome; manifest: CompletionManifestEvidence };
 	private terminal = false;
+	private visibleCleanupStarted = false;
 	private stopped = false;
 	private heartbeat?: ReturnType<typeof setInterval>;
 	private finish!: (state: Settlement) => void;
@@ -235,7 +236,7 @@ class RetainedSupervisor {
 	public readonly ready = new Promise<void>((resolve, reject) => { this.acceptReady = resolve; this.refuseReady = reject; });
 
 	public constructor(options: Omit<RetainedHeadlessOptions, "launch"> & { readonly cwd: string },
-		start: (authority: ReturnType<typeof prepareLaunch>, refuse: () => void, checkActive: () => void) => SpawnedChild,
+		start: (authority: ReturnType<typeof prepareLaunch>, refuse: () => void, checkActive: () => void, beginVisibleCleanup: () => void) => SpawnedChild,
 		private readonly dependencies: Omit<RetainedHeadlessDependencies, "spawn"> = {}) {
 		if (options.attach && (options.attach.cwd !== options.cwd
 			|| realpathSync(options.attach.cwd) !== options.attach.cwd || !statSync(options.attach.cwd).isDirectory()
@@ -249,6 +250,11 @@ class RetainedSupervisor {
 		this.artifacts = new RetainedResults(options.initial.taskDir);
 		this.child = start(this.authority, () => { this.authority.gate.onRefused(); this.fail("ambiguous", "backend-refused"); }, () => {
 			if (this.stopped) throw new Error("retained owner stopped before effect");
+		}, () => {
+			if (this.stopped) throw new Error("retained owner stopped before cleanup");
+			this.authority.visibleGate.beforeEffect();
+			// The backend stops polling before cleanup, but emits run-settled only after it.
+			this.visibleCleanupStarted = true;
 		});
 		this.heartbeat = setInterval(() => {
 			try { this.renew(); } catch { /* renew records authority loss locally. */ }
@@ -326,7 +332,7 @@ class RetainedSupervisor {
 		if (this.stopped) throw new Error("retained owner stopped");
 		let phase: RetainedFailurePhase = "renew-effect";
 		try {
-			if (this.record.backend === "visible" && !this.terminal) this.authority.visibleGate.beforeEffect();
+			if (this.record.backend === "visible" && !this.terminal && !this.visibleCleanupStarted) this.authority.visibleGate.beforeEffect();
 			phase = "renew-writer";
 			this.authority.renew();
 		} catch (error) { this.fail("ambiguous", phase); throw error; }
@@ -467,7 +473,7 @@ export class RetainedVisibleSupervisor extends RetainedSupervisor {
 	public constructor(options: RetainedVisibleOptions, dependencies: Omit<RetainedHeadlessDependencies, "spawn"> & { readonly spawn?: typeof spawnPaneChild } = {}) {
 		if (options.initial.backend !== "visible" || options.initial.id !== options.launch.id) throw new Error("visible record binding mismatch");
 		const operations = dependencies.operations ?? retainedProcessTree;
-		super({ ...options, cwd: options.launch.cwd }, (authority, refuse, checkActive) => {
+		super({ ...options, cwd: options.launch.cwd }, (authority, refuse, checkActive, beginVisibleCleanup) => {
 			let cleaned = false;
 			const cleanup = async (controlFence?: () => void): Promise<void> => {
 				if (cleaned) return;
@@ -485,6 +491,7 @@ export class RetainedVisibleSupervisor extends RetainedSupervisor {
 				};
 				let phase: RetainedFailurePhase = "visible-cleanup";
 				try {
+					beginVisibleCleanup();
 					if (!await terminateProcessTree(fenced, child.identity, { termGraceMs: 5000, killGraceMs: 1000 })) throw new Error("visible cleanup unconfirmed");
 					phase = "visible-cleanup-fence";
 					authority.fence();

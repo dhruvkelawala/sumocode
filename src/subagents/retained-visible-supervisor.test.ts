@@ -181,21 +181,90 @@ describe("retained visible owner", () => {
 		expect(vi.mocked(f.operations.signalTree).mock.calls.map((call) => call[1])).toEqual(["SIGTERM", "SIGKILL"]);
 		expect(f.host.closePane).not.toHaveBeenCalled();
 	});
-	it("reports renewal refusal while cleanup is pending without publishing success", async () => {
+	it("settles verified cleanup across renewal after the child exits", async () => {
 		const f = fixture(); await f.start();
 		let release!: (empty: boolean) => void;
 		vi.mocked(f.operations.waitForTreeEmpty).mockImplementation(() => new Promise((resolve) => { release = resolve; }));
 		await f.finish();
+		expect(f.operations.signalTree).toHaveBeenCalledTimes(1);
+		const lease = f.owner.record.writerLease!;
 		vi.mocked(f.operations.identityMatches).mockImplementation((identity) => identity.pid === 42 ? "different" : "same");
+		vi.mocked(f.operations.verificationMatches!).mockImplementation((identity) => identity.pid === 42 ? "different" : "same");
 		await vi.advanceTimersByTimeAsync(20_000);
-		expect(await f.owner.settlement).toBe("ambiguous");
-		expect(f.failures).toEqual(["renew-effect"]);
-		expect(f.owner.record).toMatchObject({ outcome: null, result: null, manifest: null });
+		expect(f.owner.record).toMatchObject({ status: "running", outcome: null, result: null, manifest: null });
+		expect(f.owner.record.writerLease!.renewedAt).toBeGreaterThan(lease.renewedAt);
+		expect(f.owner.record.writerLease!.owner).toEqual(lease.owner);
+		expect(f.owner.record.writerLease!.generation).toBe(2);
 		expect(f.owner.completion).toBeUndefined();
 		release(true);
-		await vi.advanceTimersByTimeAsync(0);
+		expect(await f.owner.settlement).toBe("settled");
+		expect(f.owner.completion?.outcome).toEqual({ kind: "completed", finalText: "answer" });
+		expect(f.owner.record).toMatchObject({ status: "settled", result: expect.any(Object), manifest: expect.any(Object) });
+		expect(f.failures).toEqual([]);
 		expect(f.operations.signalTree).toHaveBeenCalledTimes(1);
+		expect(f.host.closePane).not.toHaveBeenCalled();
 	});
+	it.each(["different", "unknown"] as const)("refuses renewal before cleanup on %s child identity", async (state) => {
+		const f = fixture(); await f.start();
+		vi.mocked(f.operations.identityMatches).mockImplementation((identity) => identity.pid === 42 ? state : "same");
+		expect(() => f.owner.renew()).toThrow();
+		expect(await f.owner.settlement).toBe("ambiguous");
+		expect(f.failures).toEqual(["renew-effect"]);
+		await f.finish();
+		expect(f.owner.record).toMatchObject({ outcome: null, result: null, manifest: null });
+		expect(f.owner.completion).toBeUndefined();
+		expect(f.operations.signalTree).not.toHaveBeenCalled();
+	});
+	it.each(["different", "unknown"] as const)("does not treat %s identity as verified empty during cleanup", async (state) => {
+		const f = fixture(); await f.start();
+		let release!: (empty: boolean) => void;
+		vi.mocked(f.operations.waitForTreeEmpty).mockImplementation(() => new Promise((resolve) => { release = resolve; }));
+		await f.finish();
+		vi.mocked(f.operations.identityMatches).mockImplementation((identity) => identity.pid === 42 ? state : "same");
+		vi.mocked(f.operations.verificationMatches!).mockImplementation((identity) => identity.pid === 42 ? state : "same");
+		await vi.advanceTimersByTimeAsync(20_000);
+		expect(f.owner.record.status).toBe("running");
+		expect(f.owner.completion).toBeUndefined();
+		release(false);
+		expect(await f.owner.settlement).toBe("ambiguous");
+		expect(f.failures).toEqual(["visible-cleanup", "backend-refused"]);
+		expect(f.owner.record).toMatchObject({ outcome: null, result: null, manifest: null });
+		expect(f.owner.completion).toBeUndefined();
+		expect(f.operations.signalTree).toHaveBeenCalledTimes(1);
+		expect(f.host.closePane).not.toHaveBeenCalled();
+	});
+	for (const cut of ["renewal", "cleanup fence"] as const) {
+		it.each(["expiry", "replacement"] as const)(`refuses writer %s during cleanup at ${cut}`, async (loss) => {
+			const f = fixture(); await f.start();
+			let release!: (empty: boolean) => void;
+			vi.mocked(f.operations.waitForTreeEmpty).mockImplementation(() => new Promise((resolve) => { release = resolve; }));
+			await f.finish();
+			vi.setSystemTime(f.owner.record.writerLease!.expiresAt + 1);
+			if (loss === "replacement") {
+				const replacement = new SubagentRegistry(join(f.taskDir, "..", "registry"), "session", {
+					writerIdentity: { token: "replacement", pid: 77, processStartTime: "replacement-birth" },
+					inspectWriter: (writer) => writer.token === "replacement" ? "alive" : "dead",
+				});
+				const current = replacement.get(f.record.id)!;
+				replacement.acquireWriter(current.id, current.revision, 60_000);
+			}
+			const fencedRecord = f.owner.record;
+			if (cut === "renewal") {
+				await vi.advanceTimersByTimeAsync(20_000);
+				expect(await f.owner.settlement).toBe("ambiguous");
+				expect(f.failures).toEqual(["renew-writer"]);
+			}
+			release(true);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(await f.owner.settlement).toBe("ambiguous");
+			if (cut === "cleanup fence") expect(f.failures).toEqual(["visible-cleanup-fence", "backend-refused"]);
+			expect(f.owner.record).toEqual(fencedRecord);
+			expect(f.owner.record).toMatchObject({ outcome: null, result: null, manifest: null });
+			expect(f.owner.completion).toBeUndefined();
+			expect(f.operations.signalTree).toHaveBeenCalledTimes(1);
+			expect(f.host.closePane).not.toHaveBeenCalled();
+		});
+	}
 	it("reports cleanup failure using fixed phases, not the thrown error", async () => {
 		const f = fixture(); await f.start();
 		vi.mocked(f.operations.waitForTreeEmpty).mockRejectedValue(new Error("synthetic private error details"));

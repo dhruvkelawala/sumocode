@@ -48,6 +48,11 @@ export async function verifyRetained(record: SubagentRecord, operations: Process
 		try { return { classification: RetainedResults.read(record.taskDir) ? "verified" : "ambiguous" }; }
 		catch { return { classification: "ambiguous" }; }
 	}
+	if (record.status === "settling") {
+		return record.supervisor && sameAnchor(record.supervisor, operations)
+			? { classification: "verified" }
+			: { classification: "ambiguous" };
+	}
 	if (!record.child) return { classification: record.launchIntent === null ? "lost" : "ambiguous" };
 	const { identity, verification } = record.child;
 	if (!sameAnchor(record.child, operations)) return { classification: operations.identityMatches(identity) === "different" && operations.isTreeEmpty(identity, verification) ? "lost" : "ambiguous" };

@@ -10,6 +10,7 @@ import { CHILD_JSON_FRAME_MAX_BYTES } from "../child-protocol.js";
 import type { ProcessTreeOperations } from "../background-tasks/process-tree.js";
 import { createPiChildSpawner } from "./backend-pi.js";
 import { SubagentRegistry, type RegistryProcess, type SubagentRecord } from "./registry.js";
+import { controlAuthority } from "./retained-adoption.js";
 import { createRetainedHeadlessLaunchGate, RetainedHeadlessSupervisor } from "./retained-supervisor.js";
 
 // oxlint-disable-next-line anti-slop/no-module-mocking -- filesystem publication faults; all other I/O uses private real files.
@@ -550,6 +551,23 @@ describe("retained supervisor handle ownership", () => {
 		expect(await f.owner.settlement).toBe("ambiguous");
 		expect(f.registry.get("sa-proof")).toMatchObject({ status: "running", completionId: null, outcome: null });
 		expect(f.proc.kill).not.toHaveBeenCalled();
+	});
+
+	it("hands off a settling supervisor after its child anchor exits", async () => {
+		const f = retainedFixture();
+		let record = f.registry.get("sa-proof")!;
+		record = f.registry.acquireControl(record.id, record.revision, record.writerLease!.generation, record.controlHead, record.writerLease!.owner, 60_000);
+		f.proc.emit("spawn");
+		await f.owner.ready;
+		await f.finish();
+		expect(f.registry.get("sa-proof")?.status).toBe("settling");
+		vi.mocked(f.operations.identityMatches).mockImplementation((identity) => identity.pid === process.pid ? "same" : "different");
+		const reserved = f.owner.reserveControl(controlAuthority(record), {
+			owner: { token: "successor", pid: process.pid, processStartTime: "supervisor-birth" }, sessionId: "next-session",
+		});
+		expect(reserved.status).toBe("settling");
+		f.release();
+		expect(await f.owner.settlement).toBe("settled");
 	});
 
 	it("keeps settling evidence on async manifest lease expiry and never retries publication", async () => {

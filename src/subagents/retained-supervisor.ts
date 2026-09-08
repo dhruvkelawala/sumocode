@@ -314,11 +314,12 @@ class RetainedSupervisor {
 
 	/** Cooperative outgoing-controller request. Persistence ownership never moves. */
 	public reserveControl(authority: RegistryControlAuthority, successor: RegistryControlSuccessor): SubagentRecord {
-		if ((this.stopped || this.terminal) && !this.completed) throw new Error("retained owner unavailable for transfer");
 		const record = this.authority.record();
+		const persisting = record.status === "settling";
+		if ((this.stopped || this.terminal) && !this.completed && !persisting) throw new Error("retained owner unavailable for transfer");
 		if (!record.child) throw new Error("retained child unavailable for transfer");
-		// Settled result transfer grants delivery, not control of an exited child.
-		try { if (this.completed) this.authority.fence(); else this.authority.verifyChild(record.child.identity.pid); }
+		// Settling and settled transfers grant persistence/delivery authority after the child has exited.
+		try { if (this.completed || persisting) this.authority.fence(); else this.authority.verifyChild(record.child.identity.pid); }
 		catch (error) { this.fail("ambiguous", "reserve-control"); throw error; }
 		const fresh = this.authority.record();
 		return this.registry.reserveControl(fresh.revision, authority, `${record.id}:${authority.head + 1}`, {

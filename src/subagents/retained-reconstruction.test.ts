@@ -133,6 +133,12 @@ it("names every visible pane association refusal using content-free categories",
 		{ code: "visible-pane-child-verification-recheck", expected: "same", observed: "unknown" },
 	]);
 	expect(await verifyRetained(record, operations(), host(associated), pi)).toEqual({ classification: "verified" });
+	const settlingOperations = operations();
+	vi.mocked(settlingOperations.identityMatches).mockImplementation((identity) => identity.pid === process.pid ? "same" : "different");
+	const settling = { ...record, backend: "headless", status: "settling",
+		supervisor: { identity: { pid: process.pid, processGroupId: process.pid, processStartTime: "supervisor-command" },
+			verification: { members: [{ pid: process.pid, processStartTime: "supervisor-birth" }] } } } satisfies SubagentRecord;
+	expect(await verifyRetained(settling, settlingOperations)).toEqual({ classification: "verified" });
 	expect(JSON.stringify(results)).not.toContain("private adapter detail");
 });
 

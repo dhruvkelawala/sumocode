@@ -261,12 +261,13 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 	 * Arm the delivery listener for this factory instance. Pi 0.80.6 recreates
 	 * extension factories for /new, /resume, and /fork; RPC mode may still bind
 	 * session_start more than once on the new instance, so this remains
-	 * idempotent. Mark pre-existing snapshots consumed so a repeated bind cannot
-	 * deliver stale settlement noise into the active session.
+	 * idempotent. Mark only pre-existing terminal snapshots consumed; running
+	 * children must remain eligible to deliver when this manager is reused.
 	 */
 	const armDelivery = (): void => {
 		if (unsubscribe) return;
 		for (const snapshot of manager.list()) {
+			if (snapshot.status !== "done" && snapshot.status !== "error") continue;
 			observedSettledIds.add(snapshot.id);
 			delivery.consume(snapshot.id);
 		}

@@ -407,6 +407,21 @@ describe("manager replacement adoption", () => {
 		});
 	}
 
+	it("keeps a running retained child eligible when Pi reuses the same manager", async () => {
+		const f = fixture();
+		const runtime = f.install("origin");
+		await runtime.fire("session_start");
+		await f.track(runtime);
+		f.setIdle(false);
+		await runtime.fire("session_shutdown", "new");
+		await runtime.fire("session_start", "new");
+		await f.finish();
+		expect(runtime.delivery).not.toHaveBeenCalled();
+		f.setIdle(true);
+		await runtime.fire("agent_end");
+		expect(runtime.delivery).toHaveBeenCalledTimes(1);
+	});
+
 	it.each(["headless", "visible"] as const)("%s delivers a retained settlement after the original control lease window", async (backend) => {
 		const f = fixture(backend);
 		const old = f.install("origin");

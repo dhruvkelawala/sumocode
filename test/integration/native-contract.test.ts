@@ -3,7 +3,6 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFile
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { spawn, type IPty } from "node-pty";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	createChildEvidenceContext,
@@ -11,7 +10,7 @@ import {
 	HARNESS_SIGNATURE_ENV_KEY,
 	recordPtyExit,
 	requireHarnessAuth,
-	supervisePtyProcess,
+	spawnSupervisedPty,
 	waitForDiagnosticReadiness,
 	type ReadinessState,
 } from "./harness-supervisor.js";
@@ -81,14 +80,13 @@ function spawnNativePty(
 	childEnv.SUMO_TUI_DIAG_FILE = evidence.diagPath;
 	childEnv[HARNESS_SIGNATURE_ENV_KEY] = HARNESS_SIGNATURE;
 	const auth = requireHarnessAuth(childEnv);
-	const child: IPty = spawn(NATIVE_BIN, [...args], {
+	const { child, supervision } = spawnSupervisedPty(NATIVE_BIN, args, {
 		name: "xterm-256color",
 		cols: options.cols ?? 100,
 		rows: options.rows ?? 30,
 		cwd: options.cwd ?? tempRoot("sumocode-native-cwd-"),
 		env: childEnv,
-	});
-	const supervision = supervisePtyProcess(child.pid, evidence, childEnv, auth);
+	}, evidence, auth);
 	let output = "";
 	child.onData((data) => {
 		appendFileSync(evidence.stderrPath, data);

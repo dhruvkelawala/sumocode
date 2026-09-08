@@ -11,7 +11,7 @@ import {
 	recordHarnessAuditFailure,
 	recordPtyExit,
 	requireHarnessAuth,
-	supervisePtyProcess,
+	spawnSupervisedPty,
 	waitForDiagnosticReadiness,
 	type ChildEvidenceContext,
 	type ReadinessState,
@@ -241,21 +241,20 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 	childEnv.SUMO_TUI_DIAG_FILE = evidence.diagPath;
 	childEnv[HARNESS_SIGNATURE_ENV_KEY] = HARNESS_SIGNATURE;
 	let child: IPty;
+	let supervision: ReturnType<typeof spawnSupervisedPty>["supervision"] | undefined;
 	try {
-		child = spawnPty(command, args, {
+		const forkOptions = {
 			name: "xterm-256color",
 			cols: options.cols ?? 100,
 			rows: options.rows ?? 30,
 			cwd,
 			env: childEnv,
-		});
-	} catch (error) {
-		removeOwnedAgentDir(ownedAgentDir);
-		throw error;
-	}
-	let supervision: ReturnType<typeof supervisePtyProcess> | undefined;
-	try {
-		supervision = auth !== undefined ? supervisePtyProcess(child.pid, evidence, childEnv, auth) : undefined;
+		};
+		if (auth !== undefined) {
+			({ child, supervision } = spawnSupervisedPty(command, args, forkOptions, evidence, auth));
+		} else {
+			child = spawnPty(command, args, forkOptions);
+		}
 	} catch (error) {
 		removeOwnedAgentDir(ownedAgentDir);
 		throw error;

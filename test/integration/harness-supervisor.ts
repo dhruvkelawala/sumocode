@@ -5,6 +5,8 @@ import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { afterAll } from "vitest";
+import { spawn as spawnPty, type IPty, type IPtyForkOptions } from "node-pty";
+import { prepareHarnessAdmission } from "./harness-admission.js";
 import {
 	HARNESS_OWNER_TOKEN_ENV_KEY,
 	HARNESS_RUN_ID_ENV_KEY,
@@ -459,8 +461,20 @@ export function spawnSupervisedProcess(command: string, args: readonly string[],
 	delete env[HARNESS_RUN_ID_ENV_KEY];
 	const auth = requireHarnessAuth(env);
 	const evidence = createChildEvidenceContext([command, ...args], env);
-	const child = spawn(command, [...args], { ...options, detached: true, env });
-	if (child.pid === undefined) throw new Error(`supervised child did not publish a pid: ${command}`);
+	const admission = prepareHarnessAdmission(command, args, evidence.evidenceDir);
+	let child: ChildProcess;
+	try {
+		child = spawn(admission.command, admission.args, { ...options, detached: true, env });
+	} catch (error) {
+		admission.cancel();
+		throw error;
+	}
+	child.once("exit", () => admission.cancel());
+	child.once("error", () => admission.cancel());
+	if (child.pid === undefined) {
+		admission.cancel();
+		throw new Error(`supervised child did not publish a pid: ${command}`);
+	}
 	const pid = child.pid;
 	const pgid = pid;
 	const registration = harnessGroupRegistration(pid, pgid, env, auth);
@@ -476,7 +490,9 @@ export function spawnSupervisedProcess(command: string, args: readonly string[],
 			argv: [command, ...args],
 			evidenceDir: evidence.evidenceDir,
 		}, env, auth);
+		admission.release(pid);
 	} catch (error) {
+		admission.cancel();
 		failSpawnRegistration(String(error), env, registration);
 	}
 	child.stderr?.on("data", (chunk: Buffer | string) => {
@@ -526,6 +542,29 @@ export function spawnSupervisedProcess(command: string, args: readonly string[],
 			return captureTimeoutEvidence({ ...evidence, output, finalScreen });
 		},
 	};
+}
+
+export function spawnSupervisedPty(command: string, args: readonly string[], options: IPtyForkOptions, evidence: ChildEvidenceContext, auth: HarnessAuth) {
+	const env = { ...options.env, [HARNESS_SIGNATURE_ENV_KEY]: HARNESS_SIGNATURE };
+	delete env[HARNESS_SIGNING_KEY_ENV_KEY];
+	delete env[HARNESS_RUN_ID_ENV_KEY];
+	const admission = prepareHarnessAdmission(command, args, evidence.evidenceDir);
+	let child: IPty;
+	try {
+		child = spawnPty(admission.command, admission.args, { ...options, env });
+	} catch (error) {
+		admission.cancel();
+		throw error;
+	}
+	child.onExit(() => admission.cancel());
+	try {
+		const supervision = supervisePtyProcess(child.pid, evidence, env, auth);
+		admission.release(child.pid);
+		return { child, supervision };
+	} catch (error) {
+		admission.cancel();
+		throw error;
+	}
 }
 
 /**

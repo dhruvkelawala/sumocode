@@ -880,6 +880,32 @@ describe("verified harness group cleanup", () => {
 		expect(signals).toEqual([]);
 	});
 
+	it("lets a delivered TERM prove exit after transient ownership change without KILL", async () => {
+		const tables = [
+			{ rows: [owner, leader, member] },
+			{ rows: [{ ...member, ppid: 1, command: "git status" }] },
+			{ rows: [] },
+		];
+		const cleanup = fakeCleanup(tables);
+		await expect(cleanup.result).resolves.toMatchObject({ status: "reaped" });
+		expect(cleanup.signals).toEqual([[-registration.pgid, "SIGTERM"]]);
+	});
+
+	it("keeps refusing after TERM when changed ownership remains present", async () => {
+		const tables = [
+			{ rows: [owner, leader, member] },
+			{ rows: [{ ...member, ppid: 1, command: "git status" }] },
+			{ rows: [{ ...member, ppid: 1, command: "git status" }] },
+		];
+		const cleanup = fakeCleanup(tables);
+		await expect(cleanup.result).resolves.toMatchObject({
+			status: "unverified",
+			identityStatus: "different",
+			error: "process group ownership changed",
+		});
+		expect(cleanup.signals).toEqual([[-registration.pgid, "SIGTERM"]]);
+	});
+
 	it.each(["SIGTERM", "SIGKILL"] as const)("allows the existing grace period to prove exit after %s fails", async (deniedSignal) => {
 		const signals: string[] = [];
 		let denied = false;

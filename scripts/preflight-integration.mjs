@@ -577,7 +577,16 @@ export async function reapHarnessProcessGroup(registration, {
 	await wait();
 	state = inspect();
 	if (state.status === "exited") return { status: "reaped" };
-	if (state.status !== "owned") return state;
+	if (state.status !== "owned") {
+		if (state.error === "process group ownership changed") {
+			// A verified TERM can make the leader exit before short-lived descendants.
+			// Never escalate from the changed-ownership snapshot; allow the existing
+			// grace path to prove the group is empty, otherwise keep the refusal.
+			await wait();
+			return inspect().status === "exited" ? { status: "reaped" } : state;
+		}
+		return state;
+	}
 	try { kill(-registration.pgid, "SIGKILL"); } catch (error) {
 		await wait();
 		state = inspect();

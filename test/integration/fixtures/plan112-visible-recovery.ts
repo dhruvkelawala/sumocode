@@ -17,7 +17,7 @@ export const visibleRecoveryExecutor: PiExecLike = { exec: async (command, args)
 	const binary = process.env.PLAN112_HERDR_BIN;
 	assert(binary && isAbsolute(binary), "explicit absolute Herdr executable required");
 	try { return { code: 0, stdout: execFileSync(binary, args, { encoding: "utf8", timeout: 5000 }), stderr: "", killed: false }; }
-	catch { return { code: 1, stdout: "", stderr: "", killed: false }; }
+	catch (error) { return { code: 1, stdout: "", stderr: `herdr exec failed: ${String(error)}`, killed: false }; }
 } };
 
 /** Real pane backend; only executable selection and external birth admission are injected. */
@@ -55,11 +55,28 @@ export function visibleRecoveryLaunch(root: string, pi: string, provider: string
 			shellCommand: `exec /usr/bin/env -i /bin/bash ${shellEscape(commandFile)}`,
 			beforeRun: async (pane) => {
 				writeFileSync(join(root, "pane-created.json"), JSON.stringify(pane), { mode: 0o600, flag: "wx" });
-				const info = await herdrTerminalHost.inspectPane(hostPi, pane);
-				assert(info.ok && info.shellPid && info.foregroundProcessGroupId === info.shellPid, "pane shell association refused");
-				const processStartTime = operations.captureStartTime(info.shellPid);
+				// The pane was just split; Herdr may not have observed its shell yet
+				// (null ids) or the inspection call itself may time out under load.
+				// Re-observe until the shell is positively attributed — never accept
+				// a mismatch — then capture the birth exactly once.
+				let shellPid: number | undefined;
+				let last = "no sample";
+				const deadline = Date.now() + 10_000;
+				for (;;) {
+					const info = await herdrTerminalHost.inspectPane(hostPi, pane);
+					last = info.ok ? `ok shell=${info.shellPid} pgid=${info.foregroundProcessGroupId}` : `refused (${info.error})`;
+					if (info.ok && info.shellPid == null && info.foregroundProcessGroupId == null) last = "shell not yet observed";
+					if (info.ok && info.shellPid != null) {
+						if (info.foregroundProcessGroupId !== info.shellPid) throw new Error(`pane shell association mismatch: ${last}`);
+						shellPid = info.shellPid;
+						break;
+					}
+					assert(Date.now() < deadline, `pane shell association refused: ${last}`);
+					await new Promise((resolve) => setTimeout(resolve, 100));
+				}
+				const processStartTime = operations.captureStartTime(shellPid);
 				assert(processStartTime, "pane shell identity unknown");
-				const identity = { pid: info.shellPid, processGroupId: info.shellPid, processStartTime };
+				const identity = { pid: shellPid, processGroupId: shellPid, processStartTime };
 				const verification = operations.captureTreeVerification!(identity);
 				assert(verification, "pane shell birth unknown");
 				shell = { identity, verification };

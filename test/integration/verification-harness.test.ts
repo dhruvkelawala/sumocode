@@ -151,7 +151,11 @@ describe("verification harness v2 seam", () => {
 		expect(childEnv).toEqual({ hasOwnerToken: true, hasSignature: true, hasSigningKey: false });
 
 		const command = execFileSync("ps", ["eww", "-p", String(child.pid), "-o", "command="], { encoding: "utf8" });
-		expect(command).not.toContain(`${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE}`);
+		expect(command).not.toContain(`${HARNESS_SIGNING_KEY_ENV_KEY}=`);
+		const row = processRows().rows.find((processRow) => processRow.pid === child.pid);
+		expect(row?.command).toBe("pi");
+		expect(JSON.stringify(row)).not.toContain(HARNESS_SIGNATURE_ENV_KEY);
+		expect(JSON.stringify(row)).not.toContain(HARNESS_SIGNING_KEY_ENV_KEY);
 
 		expect(child.shouldCaptureExitFailure(false)).toBe(true);
 		const termination = child.terminate();

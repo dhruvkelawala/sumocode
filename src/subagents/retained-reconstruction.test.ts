@@ -266,6 +266,19 @@ it("keeps a live-controller manager mirror readable but unable to send, cancel, 
 	expect(manager.canDeliver("sa-proof")).toBe(false);
 });
 
+it("observes a persist-only completion that settles after its anchors are gone", async () => {
+	const f = await fixture(); f.oldState("alive");
+	const manager = new SubagentManager(() => { throw new Error("no respawn"); }, { controllerIdentity: f.next, processOperations: f.operations });
+	disposals.push(() => manager.detachForReplacement());
+	await manager.reconstruct(f.registry, "next-session");
+	expect(manager.get("sa-proof")?.recovery).toBe("persist-only");
+	await f.finish();
+	vi.mocked(f.operations.identityMatches).mockReturnValue("different");
+	vi.mocked(f.operations.verificationMatches!).mockReturnValue("different");
+	await vi.advanceTimersByTimeAsync(500);
+	expect(manager.get("sa-proof")).toMatchObject({ recovery: "persist-only", status: "done", finalText: "durable answer" });
+});
+
 it.each(["interrupt", "requestClose"] as const)("routes %s through the original supervisor, once", async (action) => {
 	const f = await fixture();
 	const [{ entry }] = await f.recover();

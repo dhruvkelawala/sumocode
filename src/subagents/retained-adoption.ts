@@ -139,6 +139,11 @@ export async function reconstructRetained(registry: SubagentRegistry, successor:
 			const fence = (): SubagentRecord => {
 				const current = controller.get(record.id)!;
 				if (record.status === "settled" && current.status === "settled" && current.completionId === record.completionId) return current;
+				// A record adopted while running settles after its child tree is correctly gone. Matching controller
+				// lineage plus durable completion pointers replaces live-anchor verification for that later settlement.
+				if (record.status !== "settled" && current.status === "settled" && current.completionId && current.result && current.manifest
+					&& (current.controllerGeneration ?? 0) === (record.controllerGeneration ?? 0)
+					&& current.controllerSessionId === record.controllerSessionId) return current;
 				if (!current.supervisor || !current.child || !sameAnchor(current.supervisor, operations)
 					|| !sameAnchor(current.child, operations) || controller.writerState(record.id) !== "alive") throw new Error("retained owner changed");
 				return current;

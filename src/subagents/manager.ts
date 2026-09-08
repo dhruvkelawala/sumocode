@@ -394,7 +394,7 @@ export class SubagentManager {
 			}
 			this.snapshots.set(id, this.withBudget(next));
 			if (isSettled(next)) void this.scheduleDequeue();
-			if (this.children.size === 0) { clearInterval(this.healthTimer); this.healthTimer = undefined; }
+			this.stopHealthTimerIfIdle();
 			this.notify();
 			this.prune();
 		};
@@ -1062,10 +1062,7 @@ export class SubagentManager {
 		if (!current || isSettled(current) || this.settlingIds.has(id)) return;
 		this.settlingIds.add(id);
 		this.children.delete(id);
-		if (this.children.size === 0) {
-			clearInterval(this.healthTimer);
-			this.healthTimer = undefined;
-		}
+		this.stopHealthTimerIfIdle();
 		const settledAt = Date.now();
 		try {
 			if (current.status === "queued") {
@@ -1161,6 +1158,23 @@ export class SubagentManager {
 		}) };
 	}
 
+	/** A settled-but-undelivered retained completion still needs control-lease renewal, so the timer outlives its child handle. */
+	private stopHealthTimerIfIdle(): void {
+		if (this.children.size > 0) return;
+		for (const [id, tracked] of this.retained) {
+			if (tracked.blocked) continue;
+			let record: SubagentRecord | undefined;
+			try {
+				record = tracked.entry.registry.get(id);
+			} catch {
+				continue;
+			}
+			if (record && record.delivery.state !== "none" && record.delivery.state !== "sent") return;
+		}
+		clearInterval(this.healthTimer);
+		this.healthTimer = undefined;
+	}
+
 	private startHealthTimer(): void {
 		if (this.healthTimer) return;
 		this.healthTimer = setInterval(() => {
@@ -1182,7 +1196,28 @@ export class SubagentManager {
 				changed ||= next.health !== current.health || next.warnings?.join() !== current.warnings?.join();
 				this.snapshots.set(id, next);
 			}
-			if (this.children.size === 0) { clearInterval(this.healthTimer); this.healthTimer = undefined; }
+			let pendingDelivery = false;
+			for (const [id, tracked] of this.retained) {
+				if (tracked.blocked || this.children.has(id)) continue;
+				let record: SubagentRecord | undefined;
+				try {
+					record = tracked.entry.registry.get(id);
+				} catch {
+					this.blockRetained(id, "ambiguous");
+					changed = true;
+					continue;
+				}
+				if (!record || record.delivery.state === "none" || record.delivery.state === "sent") continue;
+				pendingDelivery = true;
+				try {
+					const lease = record.controlLease;
+					if (!lease || lease.expiresAt - Date.now() < 30_000) tracked.entry.registry.renewControl(tracked.entry.authority);
+				} catch {
+					this.blockRetained(id, "ambiguous");
+					changed = true;
+				}
+			}
+			if (this.children.size === 0 && !pendingDelivery) { clearInterval(this.healthTimer); this.healthTimer = undefined; }
 			if (changed) this.notify();
 		}, 1000);
 		this.healthTimer.unref();

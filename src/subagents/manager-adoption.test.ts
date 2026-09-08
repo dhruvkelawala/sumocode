@@ -28,6 +28,7 @@ function fixture(backend: "headless" | "visible" = "headless") {
 	let writerState: "alive" | "dead" | "unknown" = "alive";
 	let successorState: "alive" | "dead" | "unknown" = "alive";
 	let originState: "alive" | "dead" | "unknown" = "alive";
+	let idle = true;
 	const registry = new SubagentRegistry(join(root, "registry"), "origin", {
 		writerIdentity: writer, inspectWriter: (owner) => owner.token === "writer" ? writerState : owner.token === "origin" ? originState : successorState,
 	});
@@ -124,7 +125,7 @@ function fixture(backend: "headless" | "visible" = "headless") {
 			managerDependencies: { controllerIdentity: identities(token), processOperations: operations, captureGitContext: async () => ({}), buildCompletionManifest: async () => ({ baseRef: "HEAD", changedPaths: [], commits: 0, exit: "interrupted", durationMs: 1 }) } });
 		const fire = async (name: string, reason = "startup") => {
 			// SAFETY: these lifecycle handlers read only idle/UI flags and the session ID.
-			await handlers.get(name)?.({ type: name, reason }, { isIdle: () => true, hasUI: false, sessionManager: { getSessionId: () => session } } as never);
+			await handlers.get(name)?.({ type: name, reason }, { isIdle: () => idle, hasUI: false, sessionManager: { getSessionId: () => session } } as never);
 		};
 		return { manager, delivery, fire };
 	}
@@ -136,7 +137,7 @@ function fixture(backend: "headless" | "visible" = "headless") {
 	}
 	return { root, registry, record, operations, host, interrupt, send, requestClose, spawn, subscriptions, supervisor, finish, install, track,
 		maxObservers: () => maxObservers, writerState: (value: typeof writerState) => { writerState = value; }, successorState: (value: typeof successorState) => { successorState = value; },
-		originState: (value: typeof originState) => { originState = value; } };
+		originState: (value: typeof originState) => { originState = value; }, setIdle: (value: boolean) => { idle = value; } };
 }
 
 function expectArtifacts(f: ReturnType<typeof fixture>): void {
@@ -405,6 +406,26 @@ describe("manager replacement adoption", () => {
 			expect(f.spawn).toHaveBeenCalledTimes(backend === "headless" ? 1 : 0);
 		});
 	}
+
+	it.each(["headless", "visible"] as const)("%s delivers a retained settlement after the original control lease window", async (backend) => {
+		const f = fixture(backend);
+		const old = f.install("origin");
+		await old.fire("session_start");
+		const authority = await f.track(old);
+		expect(f.registry.inspectControl(authority)).toBe(true);
+		await old.fire("session_shutdown", "new");
+		const next = f.install("successor");
+		await next.fire("session_start", "new");
+		await next.manager.adoptFrom(old.manager, "successor");
+		f.setIdle(false);
+		await f.finish();
+		expect(next.delivery).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(61_000);
+		f.setIdle(true);
+		await next.fire("agent_end");
+		expect(next.delivery).toHaveBeenCalledTimes(1);
+		expect(next.manager.get("sa-1")).toMatchObject({ status: "done", finalText: "answer", recovery: "adopted" });
+	});
 
 	it.each(["unknown-anchor", "different-anchor", "anchor-gone", "unknown-writer", "dead-unexpired-writer", "expired-live-writer", "dead-writer-live-controller", "blocked-successor", "pane-moved"])("%s persists uncertainty and makes no signals/delivery", async (fault) => {
 		const f = fixture(fault === "pane-moved" ? "visible" : "headless");

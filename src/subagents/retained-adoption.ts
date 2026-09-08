@@ -193,7 +193,7 @@ export async function acquireRetained(
 
 
 export function observeRemoteRetained(registry: SubagentRegistry, record: SubagentRecord, operations: ProcessTreeOperations, mirror = false): NonNullable<RetainedSubagent["supervisor"]> {
-	const fence = (): SubagentRecord => {
+	const fence = (requireChild = true): SubagentRecord => {
 		for (let attempt = 0; attempt < 3; attempt++) {
 			const current = registry.get(record.id)!;
 			if (current.status === "settled" && current.completionId && current.result && current.manifest
@@ -204,7 +204,9 @@ export function observeRemoteRetained(registry: SubagentRegistry, record: Subage
 			// authority while collecting Git evidence, even though the child is gone.
 			const ownerVerified = current.supervisor && sameAnchor(current.supervisor, operations)
 				&& registry.writerState(record.id) === "alive";
-			const childVerified = current.status === "settling" || current.child && sameAnchor(current.child, operations);
+			// Read-only observation follows the live writer through backend cleanup;
+			// control requests still require the child anchor until settlement begins.
+			const childVerified = !requireChild || current.status === "settling" || current.child && sameAnchor(current.child, operations);
 			// OS inspection and disk reads cannot form one transaction. If settlement
 			// advanced during inspection, validate the new record before declaring loss.
 			const fresh = registry.get(record.id);
@@ -216,7 +218,7 @@ export function observeRemoteRetained(registry: SubagentRegistry, record: Subage
 	};
 
 	const supervisor: NonNullable<RetainedSubagent["supervisor"]> = {
-		get record() { return fence(); },
+		get record() { return fence(false); },
 		get completion() { return registry.get(record.id)?.status === "settled" ? RetainedResults.read(record.taskDir) : undefined; },
 		reserveControl: (authority, successor) => {
 			if (mirror) throw new Error("persist-only controller");
@@ -232,7 +234,7 @@ export function observeRemoteRetained(registry: SubagentRegistry, record: Subage
 			let revision = record.revision;
 			const timer = setInterval(() => {
 				try {
-					const current = fence();
+					const current = fence(false);
 					if (current.revision !== revision) { revision = current.revision; listener(current); }
 					if (current.status === "settled") clearInterval(timer);
 				} catch { clearInterval(timer); listener({ ...record, status: "ambiguous" }); }

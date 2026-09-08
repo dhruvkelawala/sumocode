@@ -7,7 +7,8 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { systemProcessTree, type ProcessTreeOperations } from "../background-tasks/process-tree.js";
 import { installSubagents } from "./index.js";
 import { readRetainedBootstrap } from "./retained-bootstrap.js";
-import { serveRetainedControl } from "./retained-control.js";
+import { controlAuthority, serveRetainedControl } from "./retained-control.js";
+import { observeRemoteRetained } from "./retained-adoption.js";
 import { RetainedResults } from "./retained-results.js";
 import { RetainedRuntime } from "./retained-runtime.js";
 import type { RegistryWriter } from "./registry.js";
@@ -76,7 +77,7 @@ it("retains a normally installed production launch instead of using the disposab
 	} finally { runtime.manager.detachForReplacement(); }
 });
 
-it.each(["before", "during"] as const)("delivers a production child's completion after transferring with cleanup %s observation", async (phase) => {
+it.each(["before", "during", "after"] as const)("delivers a production child's completion after transferring with cleanup %s observation", async (phase) => {
 	const f = fixture();
 	const previous = f.install();
 	await previous.fire("session_start");
@@ -100,12 +101,21 @@ it.each(["before", "during"] as const)("delivers a production child's completion
 		const settling = () => { current = registry.transition(result.id, current.revision, 1, (record) => ({ ...record, status: "settling" })); };
 		if (phase === "before") settling();
 		f.operations.identityMatches = (identity) => {
-			if (identity.pid === f.writer.pid) return "same";
-			if (current.status === "running") settling();
+			if (identity.pid === f.writer.pid) {
+				if (current.status === "running" && phase === "during") settling();
+				return "same";
+			}
 			return "different";
 		};
+		if (phase === "after") current = registry.transition(result.id, current.revision, 1, (record) => ({ ...record,
+			telemetry: { startedAt: record.createdAt, lastProgressAt: Date.now() } }));
 		await observed;
 		expect(next.manager.get(result.id)).toMatchObject({ status: "running", recovery: "adopted" });
+		if (phase === "after") {
+			const observer = observeRemoteRetained(registry, current, f.operations);
+			expect(() => observer.controllerChild(controlAuthority(current))).toThrow("retained owner changed");
+			settling();
+		}
 		const artifacts = new RetainedResults(current.taskDir);
 		artifacts.append({ kind: "run-started" });
 		const completed = artifacts.writeResult({ kind: "completed", finalText: "retained answer" });

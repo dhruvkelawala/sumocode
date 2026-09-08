@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -14,7 +14,7 @@ import type { RegistryWriter } from "./registry.js";
 
 afterEach(() => { vi.unstubAllEnvs(); });
 
-function fixture() {
+function fixture(configuredPi?: string) {
 	const root = realpathSync(mkdtempSync(join(tmpdir(), "sumocode-retained-runtime-")));
 	vi.stubEnv("SUMOCODE_STATE_DIR", root);
 	const piBinary = join(root, "pi.js");
@@ -40,7 +40,7 @@ function fixture() {
 		return Object.assign(new EventEmitter(), { pid: writer.pid, unref: vi.fn() });
 	});
 	const retention = new RetainedRuntime({ spawnOwner, operations, registryOptions: { inspectWriter: () => "alive" },
-		provenance: () => ({ pi: piBinary, sumocode: piBinary }) });
+		provenance: () => ({ pi: configuredPi ?? piBinary, sumocode: piBinary }) });
 	const disposable = vi.fn();
 	function install(identity: RegistryWriter = controller, session = "session") {
 		const handlers = new Map<string, (event: never, ctx: ExtensionContext) => Promise<void>>();
@@ -150,4 +150,30 @@ it("keeps a production launch observable while telemetry changes during identity
 		};
 		expect(await runtime.manager.spawn(f.task)).toMatchObject({ status: "running", recovery: "adopted" });
 	} finally { runtime.manager.detachForReplacement(); }
+});
+
+it.each(["missing-path", "missing-command", "shared-write"])("keeps the disposable backend when retained executable probing refuses %s", async (layout) => {
+	const f = fixture(layout === "missing-path" ? "/nonexistent/sumocode-test/pi" : layout === "missing-command" ? "sumocode-test-missing-pi" : undefined);
+	if (layout === "shared-write") chmodSync(join(f.root, "pi.js"), 0o722);
+	f.disposable.mockReturnValue({ events: () => undefined, interrupt: vi.fn() });
+	const runtime = f.install();
+	try {
+		await runtime.fire("session_start");
+		expect(await runtime.manager.spawn(f.task)).toMatchObject({ recovery: "unsupported" });
+		expect(f.spawnOwner).not.toHaveBeenCalled();
+		expect(f.disposable).toHaveBeenCalledOnce();
+		expect(f.retention.registry("session").discover()).toEqual([]);
+	} finally { runtime.manager.disposeAll(); }
+});
+
+it("does not retry an admitted retained launch through the disposable backend", async () => {
+	const f = fixture();
+	f.spawnOwner.mockImplementation(() => { throw new Error("owner launch failed"); });
+	const runtime = f.install();
+	try {
+		await runtime.fire("session_start");
+		expect(await runtime.manager.spawn(f.task)).toMatchObject({ status: "error", errorText: expect.stringContaining("owner launch failed") });
+		expect(f.disposable).not.toHaveBeenCalled();
+		expect(f.retention.registry("session").discover()).toHaveLength(1);
+	} finally { runtime.manager.disposeAll(); }
 });

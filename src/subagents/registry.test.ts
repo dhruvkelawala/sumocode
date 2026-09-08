@@ -811,6 +811,7 @@ describe("worktree result disposition", () => {
 		f.registry.setWorktreeDisposition(f.record.id, "completion-once", 0, "inspected");
 		const reopened = new SubagentRegistry(f.directory, "session-a");
 		expect(reopened.worktreeResult(f.record.id)).toMatchObject({ disposition: "inspected", dispositionRevision: 1 });
+		expect(reopened.discover().map(({ record }) => record.id)).toEqual([f.record.id]);
 		expect(readFileSync(join(f.directory, `${f.record.id}.json`))).toEqual(before);
 		expect(statSync(join(f.directory, `${f.record.id}.disposition.json`)).mode & 0o777).toBe(0o600);
 	});

@@ -108,6 +108,9 @@ describe("confirmed committed apply", () => {
 		expect(git(f.child, "rev-parse", "HEAD")).toBe(childHead);
 		expect(git(f.child, "status", "--porcelain=v1", "-z")).toBe("");
 		expect(git(f.parent, "diff", "--cached", "--name-only").trim().split("\n")).toHaveLength(count);
+		for (const state of ["CHERRY_PICK_HEAD", "sequencer"]) {
+			expect(existsSync(git(f.parent, "rev-parse", "--path-format=absolute", "--git-path", state).trim())).toBe(false);
+		}
 		const mutations = f.execute.mock.calls.filter(([, args]) => args.includes("cherry-pick"));
 		expect(mutations.map(([, args]) => args.slice(args.indexOf("cherry-pick")))).toEqual([["cherry-pick", "--no-commit", ...hashes]]);
 	});

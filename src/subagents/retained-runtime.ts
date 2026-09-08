@@ -106,23 +106,25 @@ export class RetainedRuntime {
 }
 
 function sourceOwner(provenance: ExecutableProvenance, visible: boolean) {
-	if (process.versions.bun || !["darwin", "linux"].includes(process.platform)) return undefined;
-	const root = fileURLToPath(new URL("../../", import.meta.url));
-	const entry = join(root, "src", "subagents", "retained-supervisor-entry.mjs");
-	if (!existsSync(entry)) return undefined;
-	const node = checkedFile(process.execPath, true);
-	if (basename(node) !== "node") return undefined;
-	const configuredPi = provenance.pi === "pi" ? "pi" : commandPath(provenance.pi);
-	const localShim = join(root, "node_modules", ".bin", "pi");
-	const installedPi = join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "bundle", "cli.js");
-	const pi = checkedFile(provenance.pi === "pi" || (existsSync(localShim) && configuredPi === realpathSync(localShim)) ? installedPi : configuredPi, true);
-	const fd = openSync(pi, "r");
 	try {
-		const header = Buffer.alloc(128);
-		const count = readSync(fd, header, 0, header.length, 0);
-		if (!/^#!(?:\/usr\/bin\/env node|\/[^\n ]*\/node)\r?\n/u.test(header.subarray(0, count).toString("utf8"))) return undefined;
-	} finally { closeSync(fd); }
-	return { node, pi, entry: checkedFile(entry, false), sumocode: visible ? checkedFile(commandPath(provenance.sumocode), true) : "" };
+		if (process.versions.bun || !["darwin", "linux"].includes(process.platform)) return undefined;
+		const root = fileURLToPath(new URL("../../", import.meta.url));
+		const entry = join(root, "src", "subagents", "retained-supervisor-entry.mjs");
+		if (!existsSync(entry)) return undefined;
+		const node = checkedFile(process.execPath, true);
+		if (basename(node) !== "node") return undefined;
+		const configuredPi = provenance.pi === "pi" ? "pi" : commandPath(provenance.pi);
+		const localShim = join(root, "node_modules", ".bin", "pi");
+		const installedPi = join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "bundle", "cli.js");
+		const pi = checkedFile(provenance.pi === "pi" || (existsSync(localShim) && configuredPi === realpathSync(localShim)) ? installedPi : configuredPi, true);
+		const fd = openSync(pi, "r");
+		try {
+			const header = Buffer.alloc(128);
+			const count = readSync(fd, header, 0, header.length, 0);
+			if (!/^#!(?:\/usr\/bin\/env node|\/[^\n ]*\/node)\r?\n/u.test(header.subarray(0, count).toString("utf8"))) return undefined;
+		} finally { closeSync(fd); }
+		return { node, pi, entry: checkedFile(entry, false), sumocode: visible ? checkedFile(commandPath(provenance.sumocode), true) : "" };
+	} catch { return undefined; }
 }
 
 function commandPath(command: string): string {

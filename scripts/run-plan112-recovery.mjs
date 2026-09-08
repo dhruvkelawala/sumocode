@@ -1,11 +1,18 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { randomBytes, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, lstatSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createJiti } from "jiti";
 import { preflightRecovery, recoveryRepo } from "./plan112-recovery-preflight.mjs";
-import { HARNESS_SIGNATURE, HARNESS_SIGNATURE_ENV_KEY } from "./lib/integration-harness-constants.mjs";
+import {
+	HARNESS_OWNER_TOKEN_ENV_KEY,
+	HARNESS_RUN_ID_ENV_KEY,
+	HARNESS_SIGNATURE,
+	HARNESS_SIGNATURE_ENV_KEY,
+	HARNESS_SIGNING_KEY_ENV_KEY,
+} from "./lib/integration-harness-constants.mjs";
 
 // Focused counterpart to the general harness: no package build, unrelated suite,
 // global preflight repair, or evidence removal. Always retain this private run.
@@ -31,11 +38,16 @@ const { systemProcessTree } = await jiti.import(join(recoveryRepo, "src/backgrou
 const { cleanupOwnedTree } = await jiti.import(join(recoveryRepo, "test/integration/fixtures/subagent-feasibility-cleanup.ts"));
 const { captureBirth } = await jiti.import(join(recoveryRepo, "test/integration/fixtures/plan112-source-controller.ts"));
 const birthsPath = join(root, "births.jsonl");
+const harnessAuthEnv = {
+	[HARNESS_OWNER_TOKEN_ENV_KEY]: randomUUID(),
+	[HARNESS_RUN_ID_ENV_KEY]: randomUUID(),
+	[HARNESS_SIGNING_KEY_ENV_KEY]: randomBytes(32).toString("hex"),
+};
 // Resolve pnpm exec's checkout-local Vitest entry directly: the .bin shell
 // wrapper adds NODE_PATH, which the retained source launch correctly refuses.
 const child = spawn(node, [join(recoveryRepo, "node_modules/vitest/vitest.mjs"), "run", "test/integration/subagent-recovery.test.ts", "--fileParallelism=false", ...filter], {
 	cwd: recoveryRepo, detached: true, stdio: "inherit",
-	env: { ...env, ...herdr, PLAN112_RECOVERY_BACKEND: "real", PLAN112_RECOVERY_ROOT: root,
+	env: { ...env, ...herdr, ...harnessAuthEnv, PLAN112_RECOVERY_BACKEND: "real", PLAN112_RECOVERY_ROOT: root,
 		SUMOCODE_INTEGRATION_RUN_ROOT: root, SUMOCODE_INTEGRATION_MANIFEST: join(root, "children.jsonl"),
 		[HARNESS_SIGNATURE_ENV_KEY]: HARNESS_SIGNATURE },
 });

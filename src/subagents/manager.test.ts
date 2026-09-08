@@ -49,6 +49,41 @@ const deferredBackend = () => {
 };
 
 describe("SubagentManager", () => {
+	it("launches an asynchronous backend with the captured worktree identity", async () => {
+		const launch = vi.fn(async () => ({ events: () => undefined, interrupt: () => undefined }));
+		const manager = new SubagentManager(launch, {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "parent-head" }),
+			createWorktree: async () => ({ ok: true, path: "/isolated/child", branch: "sumo/child", baseRef: "topic" }),
+			resolveWorktreeBaseRef: async () => "child-base-sha",
+			buildCompletionManifest: fakeManifestBuilder,
+		});
+		try {
+			await expect(manager.spawn({ ...makeTask("retained"), worktree: true, baseRef: "topic" })).resolves.toMatchObject({
+				status: "running", baseRef: "child-base-sha",
+			});
+			expect(launch).toHaveBeenCalledWith(expect.objectContaining({
+				baseRef: "child-base-sha", cwd: "/isolated/child",
+				worktreeRef: { path: "/isolated/child", branch: "sumo/child", baseRef: "child-base-sha", repoRoot: "/repo" },
+			}));
+		} finally { manager.disposeAll(); }
+	});
+	it("stops a backend admitted while shutdown waits for its launch", async () => {
+		let release!: () => void;
+		const ready = new Promise<void>((resolve) => { release = resolve; });
+		let emit!: (event: SubagentEvent) => void;
+		const interrupt = vi.fn(() => emit({ kind: "run-settled", outcome: { kind: "interrupted" } }));
+		const launch = vi.fn(async () => {
+			await ready;
+			return { events: (listener: typeof emit) => { emit = listener; }, interrupt };
+		});
+		const manager = new SubagentManager(launch, { captureGitContext: async () => ({}), buildCompletionManifest: fakeManifestBuilder });
+		const spawning = manager.spawn(makeTask("late launch"));
+		await vi.waitFor(() => expect(launch).toHaveBeenCalledOnce());
+		manager.disposeAll();
+		release();
+		await expect(spawning).resolves.toMatchObject({ status: "error", errorText: "interrupted" });
+		expect(interrupt).toHaveBeenCalledOnce();
+	});
 	it("distinguishes visible heartbeat from progress and warns only after observed heartbeat silence", async () => {
 		vi.useFakeTimers();
 		let emit: (event: SubagentEvent) => void = () => undefined;

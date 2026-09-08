@@ -56,7 +56,14 @@ export interface SpawnSubagentTask {
 	readonly builtInTools?: readonly string[];
 }
 
-type BackendFactory = (task: SpawnSubagentTask & { id: string; signal: AbortSignal; placement?: AgentPanePlacement }) => SpawnedChild;
+export type SubagentLaunch = SpawnSubagentTask & {
+	readonly id: string;
+	readonly signal: AbortSignal;
+	readonly baseRef: string;
+	readonly worktreeRef?: SubagentWorktreeRef;
+	readonly placement?: AgentPanePlacement;
+};
+type BackendFactory = (task: SubagentLaunch) => SpawnedChild | Promise<SpawnedChild>;
 type Listener = () => void;
 type WorktreeCreator = (options: CreateWorktreeOptions) => Promise<CreateWorktreeResult>;
 type WorktreeBaseRefResolver = (worktreePath: string) => Promise<string | undefined>;
@@ -164,6 +171,7 @@ export class SubagentManager {
 	private nextId = 1;
 	private healthTimer?: ReturnType<typeof setInterval>;
 	private readonly pendingSpawns = new Map<string, { title: string; createdAt: number }>();
+	private readonly launching = new Map<string, { controller: AbortController; done: Promise<void> }>();
 	private readonly queuedTasks: Array<{ task: SpawnSubagentTask; id: string; createdAt: number; generation: number }> = [];
 	private readonly snapshots = new Map<string, SubagentSnapshot>();
 	private readonly children = new Map<string, { child: SpawnedChild; controller: AbortController }>();
@@ -264,6 +272,7 @@ export class SubagentManager {
 
 	/** One synchronous CAS winner per record; observers bind only after that grant. */
 	public async adoptFrom(previous: SubagentManager, sessionId: string): Promise<void> {
+		await Promise.all([...previous.launching.values()].map((launch) => launch.done));
 		if (previous === this || this.detached) return;
 		previous.detachForReplacement();
 		for (const [id, tracked] of previous.retained) {
@@ -457,6 +466,7 @@ export class SubagentManager {
 	}
 
 	private async startTask(task: SpawnSubagentTask, id: string, createdAt: number, generation: number): Promise<SubagentSnapshot> {
+		let finishLaunch: (() => void) | undefined;
 		this.pendingSpawns.set(id, { title: task.title, createdAt });
 		let pending = true;
 		let releaseVisibleSpawn: (() => void) | undefined;
@@ -590,10 +600,13 @@ export class SubagentManager {
 				return this.recordSetupInterruption(task, id, createdAt, manifestBaseRef, "interrupted during setup", childCwd, worktree);
 			}
 			const controller = new AbortController();
+			const done = new Promise<void>((resolve) => { finishLaunch = resolve; });
+			this.launching.set(id, { controller, done });
 			if (placement?.kind === "workspace") this.workspacePlacedIds.add(id);
 			let child: SpawnedChild;
 			try {
-				child = this.backendFactory({ ...task, cwd: childCwd, id, signal: controller.signal, placement });
+				child = await this.backendFactory({ ...task, cwd: childCwd, id, signal: controller.signal, placement,
+					baseRef: manifestBaseRef, worktreeRef: worktree });
 			} catch (error) {
 				this.workspacePlacedIds.delete(id);
 				releasePending();
@@ -617,6 +630,9 @@ export class SubagentManager {
 				this.startHealthTimer();
 				this.consumeEvents(id, child.events);
 			}
+			if (controller.signal.aborted || (!child.retained && this.setupInterrupted(id, generation))) {
+				await this.children.get(id)?.child.interrupt();
+			}
 			if (child.ready) await child.ready;
 			this.notify();
 			this.prune();
@@ -627,6 +643,8 @@ export class SubagentManager {
 			if (synchronousSettle) await synchronousSettle;
 			return this.snapshots.get(id) ?? snapshot;
 		} finally {
+			this.launching.delete(id);
+			finishLaunch?.();
 			this.cancelledSetupIds.delete(id);
 			releaseVisibleSpawn?.();
 			releasePending();
@@ -877,6 +895,7 @@ export class SubagentManager {
 	}
 
 	public disposeAll(): void {
+		for (const launch of this.launching.values()) launch.controller.abort();
 		clearInterval(this.healthTimer);
 		this.healthTimer = undefined;
 		// In-flight setup cannot be synchronously interrupted, so advance the

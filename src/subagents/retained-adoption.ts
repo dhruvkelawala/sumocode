@@ -74,7 +74,7 @@ export async function verifyRetained(record: SubagentRecord, operations: Process
 }
 
 function recoveryEvidence(record: SubagentRecord) {
-	// Telemetry is not authority; every other field must survive pane inspection unchanged.
+	// Telemetry is not authority; every other field must survive inspection unchanged.
 	return { ...record, revision: 0, updatedAt: 0, telemetry: undefined };
 }
 
@@ -115,12 +115,14 @@ export async function reconstructRetained(registry: SubagentRegistry, successor:
 			}
 			if (verified !== "verified") throw new Error("retained evidence unverified");
 			RetainedResults.read(initial.taskDir);
+			if (initial.status !== "settled" && (!initial.child || !initial.supervisor
+				|| !sameAnchor(initial.child, operations) || !sameAnchor(initial.supervisor, operations))) throw new Error("retained anchor changed during inspection");
+			const mirror = controller.controllerState(initial.id) === "alive";
+			const handoff = !mirror && initial.status === "settled" && controller.writerState(initial.id) === "dead";
+			// Finish OS checks before this read; writes after it must still fail the revision CAS.
 			const fresh = controller.get(initial.id);
 			if (!fresh || !isDeepStrictEqual(recoveryEvidence(initial), recoveryEvidence(fresh))) throw new Error("retained evidence changed during inspection");
-			if (fresh.status !== "settled" && (!fresh.child || !fresh.supervisor
-				|| !sameAnchor(fresh.child, operations) || !sameAnchor(fresh.supervisor, operations))) throw new Error("retained anchor changed during inspection");
-			const mirror = controller.controllerState(fresh.id) === "alive";
-			const record = mirror ? fresh : fresh.status === "settled" && controller.writerState(fresh.id) === "dead"
+			const record = mirror ? fresh : handoff
 				? controller.handoffController(fresh.id, fresh.revision, fresh.controllerGeneration ?? 0, sessionId, 60_000)
 				: controller.recoverControl(fresh.id, fresh.revision, fresh.controllerGeneration ?? 0, sessionId);
 			const authority = controlAuthority(record);

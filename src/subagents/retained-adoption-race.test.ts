@@ -20,8 +20,9 @@ function fixture() {
 	const old = { token: "old", pid: 10002, processStartTime: "old-birth" };
 	const next = { token: "next", pid: 10003, processStartTime: "next-birth" };
 	let oldAlive = true;
+	const inspectWriter = vi.fn((owner: typeof writer) => owner.token === "old" && !oldAlive ? "dead" as const : "alive" as const);
 	const registry = new SubagentRegistry(join(root, "registry"), "origin", {
-		writerIdentity: writer, inspectWriter: (owner) => owner.token === "old" && !oldAlive ? "dead" : "alive",
+		writerIdentity: writer, inspectWriter,
 	});
 	const tree = (pid: number, birth: string) => ({ identity: { pid, processGroupId: pid, processStartTime: birth },
 		verification: { members: [{ pid, processStartTime: birth }] } });
@@ -55,7 +56,7 @@ function fixture() {
 		return reconstructRetained(registry, next, "successor", operations, host,
 			{ exec: vi.fn(async () => ({ code: 0, stdout: "", stderr: "", killed: false })) });
 	};
-	return { registry, record, next, operations, update, recover, recordPath: join(root, "registry", `${record.id}.json`) };
+	return { registry, record, next, operations, inspectWriter, update, recover, recordPath: join(root, "registry", `${record.id}.json`) };
 }
 
 it.each([false, true])("adopts with writer heartbeat during pane inspection: %s", async (heartbeat) => {
@@ -140,20 +141,89 @@ it.each(["different", "unknown"] as const)("refuses %s child and supervisor iden
 	}
 });
 
-it("keeps CAS refusal when another heartbeat follows the fresh read", async () => {
+it.each([4242, 10001])("adopts with writer heartbeat during the final anchor check for pid %s", async (pid) => {
 	const f = fixture();
 	let checks = 0;
 	let changed = f.record;
 	const [result] = await f.recover(() => {
 		vi.mocked(f.operations.identityMatches).mockImplementation((identity) => {
-			if (identity.pid === 4242 && ++checks === 2) {
+			if (identity.pid === pid && ++checks === 2) {
 				changed = f.update((record) => ({ ...record, telemetry: { ...record.telemetry!, lastHeartbeatAt: 2001 } }));
 			}
 			return "same";
 		});
 	});
 	expect(checks).toBe(2);
-	expect(result.classification).toBe("ambiguous");
-	expect(f.registry.get(f.record.id)).toEqual(changed);
+	expect(result.classification).toBe("adopted");
+	expect(f.registry.get(f.record.id)).toMatchObject({ telemetry: changed.telemetry,
+		revision: changed.revision + 1, controllerGeneration: 1, controllerSessionId: "successor",
+		writerLease: f.record.writerLease, child: f.record.child, supervisor: f.record.supervisor });
+	expect(f.operations.signalTree).not.toHaveBeenCalled();
+});
+
+it("adopts with writer heartbeat during controller liveness inspection", async () => {
+	const f = fixture();
+	let changed = f.record;
+	let injected = false;
+	f.inspectWriter.mockImplementation((owner) => {
+		if (owner.token !== "old") return "alive";
+		if (!injected) {
+			injected = true;
+			changed = f.update((record) => ({ ...record, telemetry: { ...record.telemetry!, lastHeartbeatAt: 2001 } }));
+		}
+		return "dead";
+	});
+	const [result] = await f.recover(() => {});
+	expect(injected).toBe(true);
+	expect(result.classification).toBe("adopted");
+	expect(f.registry.get(f.record.id)).toMatchObject({ telemetry: changed.telemetry,
+		revision: changed.revision + 1, controllerGeneration: 1, controllerSessionId: "successor",
+		writerLease: f.record.writerLease, child: f.record.child, supervisor: f.record.supervisor });
+	expect(f.operations.signalTree).not.toHaveBeenCalled();
+});
+
+it.each(["child", "supervisor", "pane", "writer-lease", "control-lease", "controller", "status"] as const)(
+	"refuses changed %s during controller liveness inspection", async (field) => {
+		const f = fixture();
+		let changed = f.record;
+		let injected = false;
+		f.inspectWriter.mockImplementation((owner) => {
+			if (owner.token !== "old") return "alive";
+			if (!injected) {
+				injected = true;
+				const current = f.registry.get(f.record.id)!;
+				if (field === "writer-lease") changed = f.registry.acquireWriter(current.id, current.revision, 60_000);
+				else if (field === "controller") changed = f.registry.forController({ ...f.next, token: "contender" })
+					.recoverControl(current.id, current.revision, 0, "contender-session");
+				else if (field === "status") changed = f.update((record) => ({ ...record, status: "settling" }));
+				else {
+					changed = field === "pane" ? { ...current, pane: { ...current.pane!, paneId: "replacement" } }
+						: field === "control-lease" ? { ...current, controlLease: { ...current.controlLease!, expiresAt: 2002 } }
+							: { ...current, [field]: { ...current[field]!, verification: {
+								members: [{ pid: current[field]!.identity.pid, processStartTime: "replacement-birth" }] } } };
+					// Model stored evidence replacement that the writer API forbids.
+					writeFileSync(f.recordPath, `${JSON.stringify(changed)}\n`, { mode: 0o600 });
+				}
+			}
+			return "dead";
+		});
+		const [result] = await f.recover(() => {});
+		expect(injected).toBe(true);
+		expect(result.classification).toBe("ambiguous");
+		expect(f.registry.get(f.record.id)).toEqual(changed);
+		expect(result.entry.supervisor).toBeUndefined();
+		expect(f.operations.captureStartTime).not.toHaveBeenCalled();
+		expect(f.operations.signalTree).not.toHaveBeenCalled();
+	},
+);
+
+it("keeps exact revision CAS refusal for a heartbeat after the final read", () => {
+	const f = fixture();
+	const controller = f.registry.forController(f.next);
+	const fresh = controller.get(f.record.id)!;
+	const changed = f.update((record) => ({ ...record, telemetry: { ...record.telemetry!, lastHeartbeatAt: 2001 } }));
+	expect(() => controller.recoverControl(fresh.id, fresh.revision, fresh.controllerGeneration ?? 0, "successor"))
+		.toThrow("revision");
+	expect(controller.get(f.record.id)).toEqual(changed);
 	expect(f.operations.signalTree).not.toHaveBeenCalled();
 });

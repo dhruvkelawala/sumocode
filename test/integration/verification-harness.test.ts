@@ -1081,7 +1081,9 @@ describe("verified harness group cleanup", () => {
 	});
 
 	it("reports unverified instead of exited when actual processRows yields malformed rows", async () => {
-		const output = "SUMOCODE_HARNESS_SIGNATURE=leaked-secret truncated-row\n";
+		// Row-shaped but truncated: a real ps row missing fields cannot be
+		// trusted. Non-row-shaped continuation text is benign by contract.
+		const output = "  50901   1\n";
 		const signals: Array<[number, NodeJS.Signals | number]> = [];
 		const result = await reapHarnessProcessGroup(registration, {
 			// SAFETY: processRows requests UTF-8 text; this fake returns that text without spawning.
@@ -1198,6 +1200,20 @@ describe("portable process-table probe", () => {
 			{ pid: 101, ppid: 1, pgid: 101, state: "S", start: "Sat Aug 22 13:54:46 2026", command: "/usr/bin/a" },
 			{ pid: 102, ppid: 101, pgid: 101, state: "R", start: "Sat Sep  5 20:57:01 2026", command: "/usr/bin/b" },
 		]);
+	});
+
+	it("treats non-row-shaped continuation lines as benign command text", () => {
+		const output = [
+			"  101   1   101 S Sat Aug 22 13:54:46 2026 /usr/bin/a SOME_ENV=multi",
+			"line value continues here without any pid fields",
+			"",
+		].join("\n");
+		// SAFETY: processRows requests UTF-8 text; this fake returns that text without spawning.
+		const execute = (() => output) as typeof execFileSync;
+
+		const result = processRows(execute);
+		expect(result.issue).toBeUndefined();
+		expect(result.rows).toEqual([{ pid: 101, ppid: 1, pgid: 101, state: "S", start: "Sat Aug 22 13:54:46 2026", command: "/usr/bin/a SOME_ENV=multi" }]);
 	});
 
 	it("flags malformed nonblank rows as an issue without echoing their content", () => {

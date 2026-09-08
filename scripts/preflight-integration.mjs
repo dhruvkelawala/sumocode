@@ -48,8 +48,9 @@ export function processRows(execute = execFileSync) {
 				encoding: "utf8",
 				maxBuffer: PS_MAX_BUFFER_BYTES,
 				// lstart text is locale-dependent; pin it so birth-identity strings
-				// captured here always compare equal across callers.
-				env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
+				// captured here always compare equal across callers. The PATH stays
+				// inherited: Node resolves the executable with the child env's PATH.
+				env: { ...process.env, LC_ALL: "C" },
 			});
 			const rows = [];
 			let malformedRows = 0;
@@ -57,7 +58,11 @@ export function processRows(execute = execFileSync) {
 				if (line.trim() === "") continue;
 				const match = line.match(PS_ROW);
 				if (!match) {
-					malformedRows += 1;
+					// `eww` command text can wrap onto continuation lines that carry
+				// no pid/ppid/pgid fields, so they can hide no process row. A
+				// row-shaped line that fails to parse (e.g. truncated) still
+				// invalidates the whole table.
+					if (/^\s*\d/.test(line)) malformedRows += 1;
 					continue;
 				}
 				rows.push({ pid: Number(match[1]), ppid: Number(match[2]), pgid: Number(match[3]), state: match[4], start: match[5], command: match[6].trimEnd() });
@@ -118,7 +123,7 @@ function pidIsAlive(pid) {
 /** OS-reported start time for a live pid, or undefined when unavailable. */
 export function liveProcessStart(pid, execute = execFileSync) {
 	try {
-		return execute("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", env: { PATH: "/usr/bin:/bin", LC_ALL: "C" } }).trim() || undefined;
+		return execute("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", env: { ...process.env, LC_ALL: "C" } }).trim() || undefined;
 	} catch {
 		return undefined;
 	}
@@ -356,7 +361,7 @@ function currentProcessGroupId(rows) {
 		return Number.parseInt(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], {
 			encoding: "utf8",
 			maxBuffer: PS_MAX_BUFFER_BYTES,
-			env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
+			env: { ...process.env, LC_ALL: "C" },
 		}).trim(), 10);
 	} catch {
 		return undefined;

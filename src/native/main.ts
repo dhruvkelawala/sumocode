@@ -20,7 +20,7 @@
 declare const __SUMOCODE_VERSION__: string | undefined;
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, fchmodSync, openSync, realpathSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, closeSync, constants as fsConstants, existsSync, fchmodSync, openSync, realpathSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { constants as osConstants } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { buildChildSpawnPlan } from "../sumo-tui/rpc/spawn-child.mjs";
@@ -61,6 +61,15 @@ function resolveProcessPiBin(): string {
 		if (existsSync(candidate)) return realpathSync(candidate);
 	}
 	return join(NATIVE_DIR, "bin", "sumocode-pi");
+}
+
+function isExecutableFile(path: string): boolean {
+	try {
+		accessSync(path, fsConstants.X_OK);
+		return statSync(path).isFile();
+	} catch {
+		return false;
+	}
 }
 
 function usageError(message: string): never {
@@ -455,7 +464,7 @@ function runDoctor(parsed: ParsedLaunch): never {
 	process.stdout.write(`Root: ${NATIVE_DIR}\n`);
 	check(EXEC_DIR === join(NATIVE_DIR, "bin"), `Layout: ${NATIVE_DIR} (bin/, extension/, share/)`, `Layout: executable not under <archive>/bin (${EXEC_DIR})`);
 	check(true, `Runtime: native (${process.platform}-${process.arch}, bun ${process.versions.bun ?? "?"})`, "Runtime: native");
-	check(existsSync(PI_BIN), `Pi binary: ${PI_BIN}`, "Pi binary: not found or not executable");
+	check(isExecutableFile(PI_BIN), `Pi binary: ${PI_BIN}`, "Pi binary: not found or not executable");
 	check(existsSync(EXTENSION_ENTRY), `Extension bundle: ${EXTENSION_ENTRY}`, "Extension bundle: missing");
 	check(existsSync(RPC_EXTENSION_ENTRY), `RPC extension bundle: ${RPC_EXTENSION_ENTRY}`, "RPC extension bundle: missing");
 	const yogaWasm = join(NATIVE_DIR, "share/yoga.wasm");
@@ -593,8 +602,8 @@ function childExitCode(code: number | null, signal: NodeJS.Signals | null): numb
 }
 
 function spawnDirectPi(args: readonly string[], stdinPrompt: string, reloadReadyFile: string): Promise<number> {
-	if (!existsSync(PI_BIN)) {
-		process.stderr.write(`[sumocode] Could not find Pi binary at ${PI_BIN}.\n`);
+	if (!isExecutableFile(PI_BIN)) {
+		process.stderr.write(`[sumocode] Pi binary is not an executable file at ${PI_BIN}.\n`);
 		process.exit(70);
 	}
 	const childEnv: NodeJS.ProcessEnv = { ...process.env, SUMOCODE_RELOAD_READY_FILE: reloadReadyFile };

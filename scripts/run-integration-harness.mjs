@@ -16,6 +16,7 @@ import {
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const RUNNER_TERM_GRACE_MS = 1_000;
+const AUDIT_FAILURES_FILE = "audit-failures.jsonl";
 
 function groupAlive(pgid) {
 	try { process.kill(-pgid, 0); return true; } catch { return false; }
@@ -83,7 +84,40 @@ export async function manifestProcessGroups(manifest, ownerToken, { runId, signi
 	return [...groups.values()];
 }
 
-async function auditAndReap(manifest, ownerToken, auth) {
+function malformedAuditFailure(reason = "malformed audit failure record") {
+	return { phase: "audit record", pid: 0, pgid: 0, reason };
+}
+
+/* oxlint-disable anti-slop/no-runtime-typeof -- Validate untrusted JSONL at the audit boundary before reading record fields. */
+function isAuditFailure(value) {
+	return value !== null
+		&& typeof value === "object"
+		&& typeof value.phase === "string"
+		&& Number.isSafeInteger(value.pid)
+		&& Number.isSafeInteger(value.pgid)
+		&& typeof value.reason === "string";
+}
+/* oxlint-enable anti-slop/no-runtime-typeof */
+
+async function readAuditFailures(root) {
+	let contents;
+	try {
+		contents = await readFile(join(root, AUDIT_FAILURES_FILE), "utf8");
+	} catch (error) {
+		if (error?.code === "ENOENT") return [];
+		return [malformedAuditFailure(`could not read audit failure records: ${String(error)}`)];
+	}
+	return contents.split("\n").filter((line) => line.trim()).map((line) => {
+		try {
+			const failure = JSON.parse(line);
+			return isAuditFailure(failure) ? failure : malformedAuditFailure();
+		} catch {
+			return malformedAuditFailure();
+		}
+	});
+}
+
+export async function auditAndReap(manifest, ownerToken, auth) {
 	const groups = await manifestProcessGroups(manifest, ownerToken, auth);
 	const results = [];
 	for (const group of groups) {
@@ -92,9 +126,13 @@ async function auditAndReap(manifest, ownerToken, auth) {
 		}) });
 	}
 	const nonclean = results.filter(({ result }) => result.status !== "exited");
-	if (nonclean.length > 0) {
-		const details = nonclean.map(({ group, result }) => `${group.pgid}:${result.status}${result.identityStatus ? `/${result.identityStatus}` : ""}${result.error ? ` (${result.error})` : ""}`).join(", ");
-		process.stderr.write(`[integration harness] zero-orphan audit FAILED: ${nonclean.length} nonclean registered group(s) (${details})\n`);
+	const auditFailures = await readAuditFailures(resolve(manifest, ".."));
+	if (nonclean.length > 0 || auditFailures.length > 0) {
+		const details = [
+			...nonclean.map(({ group, result }) => `pid ${group.pid} pgid ${group.pgid} born ${group.processStart ?? "unknown"}: ${result.status}${result.identityStatus ? `/${result.identityStatus}` : ""}${result.error ? ` (${result.error})` : ""}`),
+			...auditFailures.map((failure) => `pid ${failure.pid ?? "unknown"} pgid ${failure.pgid ?? "unknown"} born ${failure.processStart ?? "unknown"}: ${failure.phase ?? "audit"} (${failure.reason ?? "unknown reason"})`),
+		].join(", ");
+		process.stderr.write(`[integration harness] zero-orphan audit FAILED: ${nonclean.length} nonclean registered group(s), ${auditFailures.length} audit failure record(s) (${details})\n`);
 		return false;
 	}
 	process.stdout.write(`[integration harness] zero-orphan audit: 0 survivors across ${groups.length} registered process group(s)\n`);

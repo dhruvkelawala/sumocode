@@ -1,5 +1,8 @@
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { evaluateNativeGate, nativeCompareOptions } from "./perf-native-compare.mjs";
+import { evaluateNativeGate, nativeCompareOptions, runNativeComparison } from "./perf-native-compare.mjs";
 
 function report({ editorImprovement = 260, commandRegression = 0, failures = 0 } = {}) {
 	const baselineCommand = 800;
@@ -21,6 +24,22 @@ describe("native perf comparison", () => {
 	it("parses fixture zero and sample count", () => {
 		expect(nativeCompareOptions(["--samples", "15", "--fixture-count", "0"])).toMatchObject({ samples: 15, fixtureCount: 0 });
 		expect(() => nativeCompareOptions(["--samples", "0"])).toThrow(/positive integer/);
+	});
+
+	it("refuses to overwrite caller report artifacts", async () => {
+		const root = await mkdtemp(join(tmpdir(), "sumocode-native-perf-test-"));
+		try {
+			for (const name of ["results.json", "report.md"]) {
+				const outDir = join(root, name.replace(".", "-"));
+				await mkdir(outDir);
+				const artifact = join(outDir, name);
+				await writeFile(artifact, "caller-owned");
+				await expect(runNativeComparison({ outDir, fixtureCount: 0 })).rejects.toThrow(`already contains ${name}`);
+				expect(await readFile(artifact, "utf8")).toBe("caller-owned");
+			}
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
 	});
 
 	it("requires 250ms editor improvement, no command regression, and zero failures", () => {

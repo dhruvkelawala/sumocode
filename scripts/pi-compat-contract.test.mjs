@@ -193,7 +193,7 @@ describe("supported matrix resolution", () => {
 });
 
 describe("workflow contract", () => {
-	const workflow = `on:\n  pull_request:\n    paths: [package.json, bin/sumocode.sh, sumo-rpc-host.js, src/extension-entry.ts, src/sumo-tui/rpc/**, src/extension.ts, src/interaction-registry.ts, src/executable-provenance.ts, src/executable-provenance.test.ts, src/subagents/backend-pi.ts, src/subagents/backend-pi.test.ts, src/subagents/backend-pane.ts, src/subagents/backend-pane.test.ts, src/native-task-tool.ts, src/native-task-tool.test.ts, src/background-tasks/visible-spawn.ts, src/background-tasks/visible-spawn.test.ts, src/commands/worktree.ts, src/commands/worktree.test.ts, src/cli/open-worktree.ts, src/cli/open-worktree.test.ts, test/integration/launcher-runtime-selection.test.ts, test/integration/launcher-prompt-transport.test.ts, test/integration/native-contract.test.ts, scripts/smoke-pi-versions.sh, scripts/pi-compat-contract.mjs, scripts/pi-compat-contract.test.mjs, .github/workflows/pi-compat.yml]\n  schedule:\n    - cron: "17 4 * * *"\n  workflow_dispatch:\njobs:\n  pi-compat:\n    timeout-minutes: 20\n    steps:\n      - run: pnpm install --frozen-lockfile\n      - run: scripts/smoke-pi-versions.sh --supported-matrix\n`;
+	const workflow = `on:\n  pull_request:\n    paths: [package.json, bin/sumocode.sh, sumo-rpc-host.js, src/**, test/integration/launcher-runtime-selection.test.ts, test/integration/launcher-prompt-transport.test.ts, test/integration/native-contract.test.ts, scripts/smoke-pi-versions.sh, scripts/build-native.mjs, scripts/build-native.test.mjs, scripts/pi-compat-contract.mjs, scripts/pi-compat-contract.test.mjs, .github/workflows/pi-compat.yml]\n  schedule:\n    - cron: "17 4 * * *"\n  workflow_dispatch:\njobs:\n  pi-compat:\n    timeout-minutes: 20\n    steps:\n      - run: pnpm install --frozen-lockfile\n      - run: scripts/smoke-pi-versions.sh --supported-matrix\n`;
 
 	it("requires qualifying PR paths, daily/manual triggers, timeout, and one canonical invocation", () => {
 		expect(assertWorkflowContract(workflow)).toBe(true);
@@ -206,5 +206,7 @@ describe("workflow contract", () => {
 	it("rejects an unbounded or non-fresh workflow", () => {
 		expect(() => assertWorkflowContract(workflow.replace("timeout-minutes: 20\n", ""))).toThrow("timeout-minutes");
 		expect(() => assertWorkflowContract(workflow.replace("  schedule:\n", "  ignored:\n"))).toThrow("schedule");
+		expect(() => assertWorkflowContract(workflow.replace("src/**", "src/sumo-tui/rpc/**"))).toThrow("src/**");
+		expect(() => assertWorkflowContract(workflow.replace("scripts/build-native.mjs", "scripts/ignored-builder.mjs"))).toThrow("scripts/build-native.mjs");
 	});
 });

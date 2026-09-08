@@ -3,14 +3,14 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFile
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { spawn, type IPty } from "node-pty";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	createChildEvidenceContext,
 	HARNESS_SIGNATURE,
 	HARNESS_SIGNATURE_ENV_KEY,
 	recordPtyExit,
-	supervisePtyProcess,
+	requireHarnessAuth,
+	spawnSupervisedPty,
 	waitForDiagnosticReadiness,
 	type ReadinessState,
 } from "./harness-supervisor.js";
@@ -79,14 +79,14 @@ function spawnNativePty(
 	const evidence = createChildEvidenceContext([NATIVE_BIN, ...args], childEnv);
 	childEnv.SUMO_TUI_DIAG_FILE = evidence.diagPath;
 	childEnv[HARNESS_SIGNATURE_ENV_KEY] = HARNESS_SIGNATURE;
-	const child: IPty = spawn(NATIVE_BIN, [...args], {
+	const auth = requireHarnessAuth(childEnv);
+	const { child, supervision } = spawnSupervisedPty(NATIVE_BIN, args, {
 		name: "xterm-256color",
 		cols: options.cols ?? 100,
 		rows: options.rows ?? 30,
 		cwd: options.cwd ?? tempRoot("sumocode-native-cwd-"),
 		env: childEnv,
-	});
-	const supervision = supervisePtyProcess(child.pid, evidence, childEnv);
+	}, evidence, auth);
 	let output = "";
 	child.onData((data) => {
 		appendFileSync(evidence.stderrPath, data);
@@ -425,6 +425,28 @@ nativeDescribe("native executable contract", () => {
 		expect(result.status).toBe(0);
 		expect(result.stdout).toContain("SAFE_PI");
 		expect(result.stdout).not.toContain("PROJECT_PI");
+	});
+
+	it("requires PI_BIN to be an executable regular file", () => {
+		const root = tempRoot("sumocode-native-pi-bin-kind-");
+		const nonExecutable = join(root, "non-executable-pi");
+		writeFileSync(nonExecutable, "#!/bin/sh\nprintf SHOULD_NOT_RUN\n", { mode: 0o644 });
+		const directory = join(root, "pi-directory");
+		mkdirSync(directory);
+
+		for (const piBin of [nonExecutable, directory]) {
+			const doctor = runNative(["doctor"], { env: { PI_BIN: piBin } });
+			expect(doctor.status).toBe(70);
+			expect(doctor.stdout).toContain("Pi binary: not found or not executable");
+			const direct = runNative(["--no-sumo-tui"], { env: { PI_BIN: piBin } });
+			expect(direct.status).toBe(70);
+			expect(direct.stderr).toContain("Pi binary is not an executable file");
+			expect(direct.stdout).not.toContain("SHOULD_NOT_RUN");
+		}
+
+		const executable = createExecutable("executable-pi", "#!/bin/sh\nprintf EXECUTABLE_PI\n");
+		expect(runNative(["doctor"], { env: { PI_BIN: executable } }).status).toBe(0);
+		expect(runNative(["--no-sumo-tui"], { env: { PI_BIN: executable } }).stdout).toContain("EXECUTABLE_PI");
 	});
 
 	it("threads compiled parent provenance into nested child launch plans", async () => {

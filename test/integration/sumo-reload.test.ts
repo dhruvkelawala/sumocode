@@ -3,8 +3,8 @@ import { appendFileSync, existsSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { spawn, type IPty } from "node-pty";
-import { createChildEvidenceContext, HARNESS_SIGNATURE, HARNESS_SIGNATURE_ENV_KEY, recordPtyExit, supervisePtyProcess } from "./harness-supervisor.js";
+import type { IPty } from "node-pty";
+import { createChildEvidenceContext, HARNESS_SIGNATURE, HARNESS_SIGNATURE_ENV_KEY, recordPtyExit, requireHarnessAuth, spawnSupervisedPty } from "./harness-supervisor.js";
 import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
 /**
@@ -39,14 +39,14 @@ function spawnLauncherWithMockPi(stateFile: string, extraArgs: string[] = [], en
 	});
 	const evidence = createChildEvidenceContext([launcher, ...args], childEnv);
 	childEnv[HARNESS_SIGNATURE_ENV_KEY] = HARNESS_SIGNATURE;
-	const child: IPty = spawn(launcher, args, {
+	const auth = requireHarnessAuth(childEnv);
+	const { child, supervision } = spawnSupervisedPty(launcher, args, {
 		name: "xterm-256color",
 		cols: 100,
 		rows: 30,
 		cwd: process.cwd(),
 		env: childEnv,
-	});
-	const supervision = supervisePtyProcess(child.pid, evidence, childEnv);
+	}, evidence, auth);
 	let output = "";
 	child.onData((data) => {
 		appendFileSync(evidence.stderrPath, data);

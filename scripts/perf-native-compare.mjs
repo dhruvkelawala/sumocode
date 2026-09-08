@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { cpus, platform, arch, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,7 +20,7 @@ const EDIT_SENTINEL = "native-perf-edit-sentinel";
 const execFileAsync = promisify(execFile);
 
 function usage() {
-	return `Usage: node scripts/perf-native-compare.mjs [options]\n\nOptions:\n  --samples <count>       samples per arm (default: ${DEFAULT_SAMPLES})\n  --fixture-count <count> settled terminal records (default: 0)\n  --out <dir>             report directory (default: private temporary directory)\n  -h, --help              show this help\n`;
+	return `Usage: node scripts/perf-native-compare.mjs [options]\n\nOptions:\n  --samples <count>       samples per arm (default: ${DEFAULT_SAMPLES})\n  --fixture-count <count> settled terminal records (default: 0)\n  --out <dir>             new report files in this directory (default: private temporary directory)\n  -h, --help              show this help\n`;
 }
 
 function positiveInteger(value, flag) {
@@ -297,7 +297,18 @@ function markdown(report) {
 	return `# Native startup comparison\n\n- commit: \`${report.commit}\`\n- platform: ${report.machine.platform}-${report.machine.arch}\n- CPU: ${report.machine.cpu}\n- Bun: ${report.machine.bun}\n- fixture records: ${report.fixtureCount}\n- samples per arm: ${report.samplesPerArm}\n- execution: sequential, alternating dev source / Node bundle / native artifacts\n\n| arm | command-ready median ± MAD (ms) | editor-ready median ± MAD (ms) | failures |\n| --- | ---: | ---: | ---: |\n${rows}\n\nGate: **${report.gate.verdict}** — ${report.gate.reason}.\n`;
 }
 
+async function prepareNativeReportDirectory(outDir, fixtureCount) {
+	if (outDir === undefined) return await mkdtemp(join(tmpdir(), `sumocode-native-perf-${fixtureCount}-`));
+	await mkdir(outDir, { recursive: true, mode: 0o700 });
+	const entries = new Set(await readdir(outDir));
+	for (const name of ["results.json", "report.md"]) {
+		if (entries.has(name)) throw new Error(`--out already contains ${name}; refusing to overwrite it`);
+	}
+	return outDir;
+}
+
 export async function runNativeComparison(options) {
+	const outDir = await prepareNativeReportDirectory(options.outDir, options.fixtureCount);
 	const archive = nativeArchive();
 	for (const path of [
 		join(archive, "bin/sumocode"),
@@ -306,9 +317,7 @@ export async function runNativeComparison(options) {
 	]) {
 		try { await chmod(path, 0o755); } catch { throw new Error(`required artifact missing: ${path}; run pnpm build:bundles && pnpm build:native`); }
 	}
-	const outDir = options.outDir ?? await mkdtemp(join(tmpdir(), `sumocode-native-perf-${options.fixtureCount}-`));
-	await mkdir(outDir, { recursive: true, mode: 0o700 });
-	const agentDir = join(outDir, "fixture-agent");
+	const agentDir = await mkdtemp(join(outDir, "fixture-agent-"));
 	const raw = { "dev-source": [], "node-bundle": [], native: [] };
 	const armOrders = [
 		["dev-source", "node-bundle", "native"],
@@ -344,8 +353,8 @@ export async function runNativeComparison(options) {
 			arms,
 		};
 		report.gate = evaluateNativeGate(report);
-		await writeFile(join(outDir, "results.json"), `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
-		await writeFile(join(outDir, "report.md"), markdown(report), { mode: 0o600 });
+		await writeFile(join(outDir, "results.json"), `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+		await writeFile(join(outDir, "report.md"), markdown(report), { mode: 0o600, flag: "wx" });
 		console.error(`[native perf] artifacts: ${outDir}`);
 		return report;
 	} finally {

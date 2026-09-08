@@ -345,21 +345,22 @@ export function createChildEvidenceContext(
 	};
 }
 
-function groupIsAlive(pgid: number): boolean {
+function groupMayExist(pgid: number): boolean {
 	try {
 		process.kill(-pgid, 0);
 		return true;
-	} catch {
-		return false;
+	} catch (error) {
+		// SAFETY: kill(0) throws an OS error; only ESRCH proves absence, not EPERM.
+		return (error as NodeJS.ErrnoException).code !== "ESRCH";
 	}
 }
 
 async function waitForGroupExit(pgid: number, timeoutMs: number): Promise<boolean> {
 	const deadline = Date.now() + timeoutMs;
-	while (groupIsAlive(pgid) && Date.now() < deadline) {
+	while (groupMayExist(pgid) && Date.now() < deadline) {
 		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}
-	return !groupIsAlive(pgid);
+	return !groupMayExist(pgid);
 }
 
 async function terminateGroup(registration: HarnessGroupRegistration): Promise<void> {

@@ -523,6 +523,10 @@ export async function reapHarnessProcessGroup(registration, {
 	let state = inspect();
 	if (state.status !== "owned") return state;
 	try { kill(-registration.pgid, "SIGTERM"); } catch (error) {
+		// A denied signal (e.g. EPERM on an exiting group) proves nothing by
+		// itself; the group may already be gone. Give it the same grace period
+		// a delivered signal gets, then let the census decide.
+		await wait();
 		state = inspect();
 		return state.status === "exited" ? { status: "reaped" } : { status: "unverified", identityStatus: "unknown", error: String(error) };
 	}
@@ -531,6 +535,7 @@ export async function reapHarnessProcessGroup(registration, {
 	if (state.status === "exited") return { status: "reaped" };
 	if (state.status !== "owned") return state;
 	try { kill(-registration.pgid, "SIGKILL"); } catch (error) {
+		await wait();
 		state = inspect();
 		return state.status === "exited" ? { status: "reaped" } : { status: "unverified", identityStatus: "unknown", error: String(error) };
 	}

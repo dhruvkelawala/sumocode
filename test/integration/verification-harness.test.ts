@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
+import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	captureTimeoutEvidence,
 	HARNESS_OWNER_TOKEN_ENV_KEY,
@@ -103,6 +104,31 @@ describe("verification harness v2 seam", () => {
 		expect(env.UNRELATED_AMBIENT_VALUE).toBeUndefined();
 		expect(env[HARNESS_SIGNING_KEY_ENV_KEY]).toBeUndefined();
 		expect(env[HARNESS_RUN_ID_ENV_KEY]).toBeUndefined();
+	});
+
+	it("does not mistake a denied liveness probe for an exited group", async () => {
+		const child = spawnSupervisedProcess(process.execPath, ["-e",
+			"process.stdin.once('data', () => process.exit(0)); process.stdout.write('ready');",
+		], { env: process.env });
+		children.push(child);
+		await once(child.child.stdout!, "data");
+		const realKill = process.kill.bind(process);
+		let probes = 0;
+		const kill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+			if (pid === -child.pgid) {
+				if (signal === 0) probes++;
+				else child.child.stdin!.end("exit");
+				throw Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+			}
+			return realKill(pid, signal);
+		});
+		try {
+			await child.terminate();
+		} finally {
+			kill.mockRestore();
+		}
+		// One condition check and one final check do not establish a polling wait.
+		expect(probes).toBeGreaterThan(2);
 	});
 
 	it("reaps a title-changing child through the public supervised spawn seam", async () => {
@@ -830,6 +856,48 @@ describe("verified harness group cleanup", () => {
 		});
 		expect(result.status).toBe("unverified");
 		expect(signals).toEqual([]);
+	});
+
+	it.each(["SIGTERM", "SIGKILL"] as const)("allows the existing grace period to prove exit after %s fails", async (deniedSignal) => {
+		const signals: string[] = [];
+		let denied = false;
+		let exited = false;
+		const result = await reapHarnessProcessGroup(registration, {
+			readProcessTable: () => ({ rows: exited ? [] : [owner, leader] }),
+			currentPgid: 99_999,
+			readProcessStart: (pid) => starts.get(pid),
+			kill: (_pid, signal) => {
+				signals.push(String(signal));
+				if (signal === deniedSignal) {
+					denied = true;
+					throw Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+				}
+				return true;
+			},
+			wait: async () => { if (denied) exited = true; },
+		});
+		expect(result.status).toBe("reaped");
+		expect(signals).toEqual(deniedSignal === "SIGTERM" ? ["SIGTERM"] : ["SIGTERM", "SIGKILL"]);
+	});
+
+	it.each(["owned", "different", "unknown"] as const)("does not treat denied signaling as exit when the final census is %s", async (finalState) => {
+		let waited = false;
+		const signals: string[] = [];
+		const result = await reapHarnessProcessGroup(registration, {
+			readProcessTable: () => !waited || finalState === "owned" ? { rows: [owner, leader] }
+				: finalState === "unknown" ? { rows: [], issue: { code: "process-table-unavailable" } }
+					: { rows: [owner, { ...leader, start: "replacement" }] },
+			currentPgid: 99_999,
+			readProcessStart: (pid) => starts.get(pid),
+			kill: (_pid, signal) => {
+				signals.push(String(signal));
+				throw Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+			},
+			wait: async () => { waited = true; },
+		});
+		expect(waited).toBe(true);
+		expect(result.status).toBe("unverified");
+		expect(signals).toEqual(["SIGTERM"]);
 	});
 
 	it("signs the fixed spawn identity tuple", () => {

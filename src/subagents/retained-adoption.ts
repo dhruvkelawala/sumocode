@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { ProcessTreeOperations } from "../background-tasks/process-tree.js";
 import type { PiExecLike, TerminalHost } from "../terminal-host/types.js";
 import type { SubagentRecoveryReason, SubagentSnapshot } from "./domain.js";
-import type { RegistryControlAuthority, RegistryProcess, RegistryWriter, SubagentRecord, SubagentRegistry } from "./registry.js";
+import { SubagentRevisionConflict, type RegistryControlAuthority, type RegistryProcess, type RegistryWriter, type SubagentRecord, type SubagentRegistry } from "./registry.js";
 import type { RetainedHeadlessSupervisor } from "./retained-supervisor.js";
 import { RetainedResults } from "./retained-results.js";
 import { censusRetained } from "./retained-census.js";
@@ -119,12 +119,22 @@ export async function reconstructRetained(registry: SubagentRegistry, successor:
 				|| !sameAnchor(initial.child, operations) || !sameAnchor(initial.supervisor, operations))) throw new Error("retained anchor changed during inspection");
 			const mirror = controller.controllerState(initial.id) === "alive";
 			const handoff = !mirror && initial.status === "settled" && controller.writerState(initial.id) === "dead";
-			// Finish OS checks before this read; writes after it must still fail the revision CAS.
-			const fresh = controller.get(initial.id);
-			if (!fresh || !isDeepStrictEqual(recoveryEvidence(initial), recoveryEvidence(fresh))) throw new Error("retained evidence changed during inspection");
-			const record = mirror ? fresh : handoff
-				? controller.handoffController(fresh.id, fresh.revision, fresh.controllerGeneration ?? 0, sessionId, 60_000)
-				: controller.recoverControl(fresh.id, fresh.revision, fresh.controllerGeneration ?? 0, sessionId);
+			// Finish OS checks before this read. A live writer heartbeats by design, so a
+			// revision conflict is retried a few times; every attempt must still match the
+			// originally verified authority, and the registry CAS itself stays exact.
+			let record: SubagentRecord | undefined;
+			for (let attempt = 1; record === undefined; attempt++) {
+				const fresh = controller.get(initial.id);
+				if (!fresh || !isDeepStrictEqual(recoveryEvidence(initial), recoveryEvidence(fresh))) throw new Error("retained evidence changed during inspection");
+				if (mirror) { record = fresh; break; }
+				try {
+					record = handoff
+						? controller.handoffController(fresh.id, fresh.revision, fresh.controllerGeneration ?? 0, sessionId, 60_000)
+						: controller.recoverControl(fresh.id, fresh.revision, fresh.controllerGeneration ?? 0, sessionId);
+				} catch (error) {
+					if (!(error instanceof SubagentRevisionConflict) || attempt >= 3) throw error;
+				}
+			}
 			const authority = controlAuthority(record);
 			const fence = (): SubagentRecord => {
 				const current = controller.get(record.id)!;

@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -8,7 +8,7 @@ import { SubagentRegistry, type SubagentRecord } from "./registry.js";
 import { reconstructRetained } from "./retained-adoption.js";
 import { RetainedResults } from "./retained-results.js";
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 function fixture() {
 	vi.useFakeTimers(); vi.setSystemTime(1000);
@@ -58,6 +58,42 @@ function fixture() {
 	};
 	return { registry, record, next, operations, inspectWriter, update, recover, recordPath: join(root, "registry", `${record.id}.json`) };
 }
+
+function beforeRecovery(f: ReturnType<typeof fixture>, inject: (attempt: number) => void) {
+	const forController = SubagentRegistry.prototype.forController;
+	let attempts = 0;
+	vi.spyOn(SubagentRegistry.prototype, "forController").mockImplementation(function (this: SubagentRegistry, identity) {
+		const controller = forController.call(this, identity);
+		if (identity.token !== f.next.token) return controller;
+		const recoverControl = controller.recoverControl.bind(controller);
+		controller.recoverControl = (...args) => {
+			// Runs outside the registry lock: the adopter read `fresh` and is about to CAS.
+			if (existsSync(`${f.recordPath}.lock`) || controller.get(args[0])!.revision !== args[1]) {
+				throw new Error(`test seam expected an unlocked registry at the adopter's read revision: lock=${existsSync(`${f.recordPath}.lock`)} current=${controller.get(args[0])!.revision} arg=${args[1]}`);
+			}
+			inject(++attempts);
+			return recoverControl(...args);
+		};
+		return controller;
+	});
+	return () => attempts;
+}
+
+it("retries a heartbeat between the final read and real recovery CAS", async () => {
+	const f = fixture();
+	const attempts = beforeRecovery(f, (attempt) => {
+		if (attempt === 1) f.update((record) => ({ ...record, telemetry: { ...record.telemetry!,
+			lastHeartbeatAt: 2001, reportedTokens: 42, reportedCostUsd: 0.03 } }));
+	});
+	const [result] = await f.recover(() => {});
+	expect(result.classification).toBe("adopted");
+	expect(attempts()).toBe(2);
+	expect(f.registry.get(f.record.id)).toMatchObject({ revision: f.record.revision + 2,
+		telemetry: { lastHeartbeatAt: 2001, reportedTokens: 42, reportedCostUsd: 0.03 },
+		controllerGeneration: 1, controllerSessionId: "successor", writerLease: f.record.writerLease,
+		child: f.record.child, supervisor: f.record.supervisor });
+	expect(f.operations.signalTree).not.toHaveBeenCalled();
+});
 
 it.each([false, true])("adopts with writer heartbeat during pane inspection: %s", async (heartbeat) => {
 	const f = fixture();
@@ -225,5 +261,40 @@ it("keeps exact revision CAS refusal for a heartbeat after the final read", () =
 	expect(() => controller.recoverControl(fresh.id, fresh.revision, fresh.controllerGeneration ?? 0, "successor"))
 		.toThrow("revision");
 	expect(controller.get(f.record.id)).toEqual(changed);
+	expect(f.operations.signalTree).not.toHaveBeenCalled();
+});
+
+it("stops retrying after three revision conflicts without granting control", async () => {
+	const f = fixture();
+	const attempts = beforeRecovery(f, (attempt) => {
+		// Each heartbeat is later than the last, so every write is a legitimate telemetry update.
+		vi.setSystemTime(2001 + attempt);
+		f.update((record) => ({ ...record, telemetry: { ...record.telemetry!, lastHeartbeatAt: 2001 + attempt } }));
+	});
+	const [result] = await f.recover(() => {});
+	expect(result.classification).toBe("ambiguous");
+	expect(attempts()).toBe(3);
+	expect(f.registry.get(f.record.id)?.telemetry?.lastHeartbeatAt).toBe(2004);
+	const record = f.registry.get(f.record.id)!;
+	expect(record.controlHead).toBe(1);
+	expect(record.controllerGeneration).toBeUndefined();
+	expect(record.controllerSessionId).toBeUndefined();
+	expect(result.entry.supervisor).toBeUndefined();
+	expect(f.operations.signalTree).not.toHaveBeenCalled();
+});
+
+it("does not retry when a replacement controller wins between the read and the CAS", async () => {
+	const f = fixture();
+	const attempts = beforeRecovery(f, (attempt) => {
+		if (attempt === 1) {
+			const current = f.registry.get(f.record.id)!;
+			f.registry.forController({ ...f.next, token: "contender" }).recoverControl(current.id, current.revision, 0, "contender-session");
+		}
+	});
+	const [result] = await f.recover(() => {});
+	expect(result.classification).toBe("ambiguous");
+	expect(attempts()).toBe(1);
+	expect(f.registry.get(f.record.id)).toMatchObject({ controllerSessionId: "contender-session", controllerGeneration: 1 });
+	expect(result.entry.supervisor).toBeUndefined();
 	expect(f.operations.signalTree).not.toHaveBeenCalled();
 });

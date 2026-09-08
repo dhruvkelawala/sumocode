@@ -370,17 +370,38 @@ function healthDetails(record: Record<string, unknown>, budget: AdapterTraversal
 	return text ? { health, text: text.replace(" · inspect or explicitly cancel", "\ninspect or explicitly cancel") } : undefined;
 }
 
+type RetainedRecovery = "adopted" | "persist-only" | "unsupported" | "lost" | "ambiguous";
+
+function retainedRecovery(record: Record<string, unknown>): RetainedRecovery | undefined {
+	const recovery = record.recovery;
+	return recovery === "adopted" || recovery === "persist-only" || recovery === "unsupported" || recovery === "lost" || recovery === "ambiguous"
+		? recovery
+		: undefined;
+}
+
+function retainedRecoveryText(recovery: Exclude<RetainedRecovery, "unsupported">): string {
+	switch (recovery) {
+		case "adopted": return "retained child adopted · evidence preserved\ninspect task evidence; control verified";
+		case "persist-only": return "retained child persist-only · evidence preserved\ninspect task evidence; control unavailable";
+		case "lost": return "retained child lost · evidence preserved\ninspect task evidence; no result or signal inferred";
+		case "ambiguous": return "retained child ambiguous · evidence preserved\ninspect task evidence; no signal authorized";
+	}
+}
+
 function activityFromSubagentRecord(record: Record<string, unknown>, budget: AdapterTraversalBudget): ActivitySnapshot {
 	const id = firstString(budget, record.id) ?? "unknown";
 	const pane = asRecord(record.pane, budget);
 	const worktree = asRecord(record.worktree, budget);
-	const status = subagentStatus(record, budget);
+	const mappedStatus = subagentStatus(record, budget);
+	const recovery = retainedRecovery(record);
+	let status = mappedStatus;
+	if (recovery === "lost" || recovery === "ambiguous") status = "lost";
 	const liveText = firstString(budget, record.liveText);
 	const finalText = firstString(budget, record.finalText);
 	// Queued children have not produced output or a current step yet.
-	const output = status === "running" ? liveText ?? finalText : undefined;
-	const error = status === "failed" || status === "cancelled" ? firstString(budget, record.errorText) : undefined;
-	const summary = status === "succeeded" || status === "failed" || status === "cancelled" ? finalText : undefined;
+	const output = mappedStatus === "running" ? liveText ?? finalText : undefined;
+	const error = mappedStatus === "failed" || mappedStatus === "cancelled" ? firstString(budget, record.errorText) : undefined;
+	const summary = mappedStatus === "succeeded" || mappedStatus === "failed" || mappedStatus === "cancelled" ? finalText : undefined;
 	const liveTools = boundedPriorityArray(record.liveTools, MAX_CHILD_TOOLS, budget, isUnfinishedToolValue)
 		.map(({ value, originalIndex }) => toolActivity(value, budget, `subagent:${id}`, originalIndex))
 		.filter((tool): tool is ActivitySnapshot => tool !== undefined);
@@ -430,10 +451,18 @@ function activityFromSubagentRecord(record: Record<string, unknown>, budget: Ada
 		subject,
 	};
 	if (currentStep) activity.currentStep = currentStep;
-	const health = status !== "queued" ? healthDetails(record, budget) : undefined;
-	if (health) {
-		activity.currentStep = health.health;
-		activity.body = { kind: "text", text: [health.text, summary, error].filter((text) => text !== undefined).join("\n") };
+	const recoveryText = recovery && recovery !== "unsupported" ? retainedRecoveryText(recovery) : undefined;
+	const health = mappedStatus !== "queued" && recovery !== "lost" && recovery !== "ambiguous" ? healthDetails(record, budget) : undefined;
+	let recoveryStep: string | undefined;
+	if (recovery === "lost") recoveryStep = "lost";
+	else if (recovery === "ambiguous") recoveryStep = "ambiguous identity";
+	else if ((recovery === "adopted" || recovery === "persist-only") && status === "running" && !currentStep) {
+		recoveryStep = recovery === "adopted" ? "recovered-running" : "persist-only";
+	}
+	if (recoveryStep) activity.currentStep = recoveryStep;
+	else if (health && (mappedStatus !== "running" || health.health.endsWith("-warning"))) activity.currentStep = health.health;
+	if (health || recoveryText) {
+		activity.body = { kind: "text", text: [recoveryText, health?.text, summary, error].filter((text) => text !== undefined).join("\n") };
 	}
 	if (output) activity.outputTail = boundedText(output);
 	if (liveTools.length > 0) activity.activeTools = liveTools;

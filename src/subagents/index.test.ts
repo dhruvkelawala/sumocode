@@ -1,8 +1,12 @@
+import { chmodSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SUBAGENT_MAX_RUNNING, type SubagentEvent } from "./domain.js";
 import type { SpawnedChild } from "./backend-pi.js";
 import type { TerminalHost } from "../terminal-host/types.js";
-import { installSubagents } from "./index.js";
+import { installSubagents, SubagentManager } from "./index.js";
+import { SubagentRegistry } from "./registry.js";
 
 type ChildEmitter = (event: SubagentEvent) => void;
 
@@ -90,7 +94,7 @@ interface ToolResult {
 /** Minimal tool-definition shape captured from registerTool. */
 type Tool = { name: string; execute: (...args: unknown[]) => Promise<ToolResult> };
 
-const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui") => {
+const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui", options: { retainedRegistry?: SubagentRegistry } = {}) => {
 	let idle = true;
 	const handlers = new Map<string, Handler[]>();
 	const tools = new Map<string, Tool>();
@@ -109,6 +113,7 @@ const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui") => {
 		spawnPaneChild: fakeSpawnPaneChild,
 		spawnPiChild: fakeSpawnPiChild,
 		managerDependencies: { buildCompletionManifest: fakeBuildCompletionManifest },
+		...options,
 	});
 	const ctx = {
 		cwd: "/tmp/project",
@@ -121,6 +126,10 @@ const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui") => {
 	const fire = (event: string) => {
 		for (const handler of handlers.get(event) ?? []) handler({ type: event }, ctx);
 	};
+	const fireSessionStart = async (sessionId = "test-session") => {
+		const sessionCtx = { ...ctx, sessionManager: { getSessionId: () => sessionId } };
+		for (const handler of handlers.get("session_start") ?? []) await handler({ type: "session_start" }, sessionCtx);
+	};
 	return {
 		manager,
 		sendMessage,
@@ -128,6 +137,7 @@ const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui") => {
 		tool: (name: string) => tools.get(name)!,
 		ctx,
 		fire,
+		fireSessionStart,
 		setIdle: (value: boolean) => { idle = value; },
 	};
 };
@@ -453,5 +463,42 @@ describe("subagent result delivery", () => {
 		expect(harness.sendMessage).toHaveBeenCalledTimes(1);
 		// SAFETY: sendMessage is always called with a single message payload argument.
 		expect((harness.sendMessage.mock.calls[0] as unknown[])[0]).toMatchObject({ customType: "subagent-result" });
+	});
+
+	it("drops a failed replacement instead of retrying it on every session start", async () => {
+		const harness = createHarness();
+		// SAFETY: the test manipulates the documented process-global replacement set, then removes its entry.
+		const globals = globalThis as { [key: symbol]: Set<SubagentManager> | undefined };
+		const key = Symbol.for("@dhruvkelawala/sumocode/subagent-replacements");
+		// SAFETY: an existing process-global set is reused only when it already holds replacement managers.
+		const replacements = globals[key] instanceof Set ? (globals[key] as Set<SubagentManager>) : new Set<SubagentManager>();
+		globals[key] = replacements;
+		const previous = createHarness().manager;
+		replacements.add(previous);
+		const adopt = vi.spyOn(harness.manager, "adoptFrom").mockRejectedValueOnce(new Error("retained subagent id conflicts with successor work"));
+		try {
+			await harness.fireSessionStart("replacement");
+			await harness.fireSessionStart("replacement");
+			expect(adopt).toHaveBeenCalledTimes(1);
+			expect(replacements.has(previous)).toBe(false);
+		} finally {
+			replacements.delete(previous);
+			adopt.mockRestore();
+		}
+	});
+
+	it("contains corrupt retained recovery during session start and still flushes delivery", async () => {
+		const root = realpathSync(mkdtempSync(join(tmpdir(), "corrupt-recovery-")));
+		chmodSync(root, 0o700);
+		const retained = new SubagentRegistry(join(root, "registry"), "origin");
+		writeFileSync(join(root, "registry", "sa-bad.json"), "{bad", { mode: 0o600 });
+		const harness = createHarness(true, "tui", { retainedRegistry: retained });
+		harness.setIdle(false);
+		await spawn(harness.manager, "deferred worker");
+		backend.emitters.at(-1)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "deferred findings" } });
+		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("done"));
+		harness.setIdle(true);
+		await harness.fireSessionStart("replacement");
+		expect(harness.sendMessage).toHaveBeenCalledTimes(1);
 	});
 });

@@ -42,7 +42,7 @@ it("retains a separate live group anchor through Pi title changes and post-Pi-ex
 	});
 	if (Symbol.asyncIterator in child.events) throw new Error("callback expected");
 	child.events(() => undefined);
-	expect(spawn).toHaveBeenCalledWith(expect.any(String), ["-e", expect.any(String), "sumocode-retained-anchor:12345678-1234-1234-1234-123456789abc"], expect.objectContaining({ detached: true }));
+	expect(spawn).toHaveBeenCalledWith(expect.any(String), ["-e", expect.stringMatching(/^[^\r\n]+$/), "sumocode-retained-anchor:12345678-1234-1234-1234-123456789abc"], expect.objectContaining({ detached: true }));
 	expect(proc.send).not.toHaveBeenCalled();
 	proc.emit("spawn");
 	expect(proc.send).toHaveBeenCalledTimes(1);

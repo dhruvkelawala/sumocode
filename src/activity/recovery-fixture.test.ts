@@ -43,9 +43,9 @@ describe("recovery Activity fixture contract (no capture)", () => {
 			expect(scenario.fixture!.activityExpansion[activity!.id]).toBe(true);
 			expect(activity!.body).toMatchObject({ kind: "text", text: expect.stringContaining("inspect") });
 		}
-		expect(activities[0]!.body).toMatchObject({ text: expect.stringContaining("writer unchanged") });
-		expect(activities[1]!.body).toMatchObject({ text: expect.stringContaining("backend transport lost") });
-		expect(activities[2]!.body).toMatchObject({ text: expect.stringContaining("no signal authorized") });
+		expect(activities[0]!.body).toMatchObject({ text: expect.stringContaining("retained child adopted") });
+		expect(activities[1]!.body).toMatchObject({ text: expect.stringContaining("retained child lost") });
+		expect(activities[2]!.body).toMatchObject({ text: expect.stringContaining("retained child ambiguous") });
 		expect(new Set(activities.map((activity) => activity!.id)).size).toBe(activities.length);
 	});
 });

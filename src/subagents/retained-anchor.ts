@@ -35,8 +35,12 @@ export class RetainedAnchor {
 			|| (stat.mode & 0o022) !== 0 || (stat.mode & 0o111) === 0 || options.env.NODE_OPTIONS || options.env.NODE_PATH) {
 			throw new Error("retained anchor requires trusted Node without preload overrides");
 		}
+		// The census parses physical ps output lines. Keep the trusted anchor program on one argv line so a live anchor cannot blind census.
+		// Newlines become statement separators; never add // line comments to ANCHOR_PROGRAM.
+		const program = ANCHOR_PROGRAM.replace(/\r?\n/g, ";");
+		if (program.includes("\n") || program.includes("\r")) throw new Error("retained anchor program must remain argv-safe");
 		// SAFETY: the three inherited Pi streams are pipes; fd 3 is anchor-only IPC.
-		this.proc = spawnImpl(node, ["-e", ANCHOR_PROGRAM, `sumocode-retained-anchor:${options.nonce ?? randomUUID()}`], {
+		this.proc = spawnImpl(node, ["-e", program, `sumocode-retained-anchor:${options.nonce ?? randomUUID()}`], {
 			cwd: options.cwd, env: options.env, shell: false, detached: true, stdio: ["pipe", "pipe", "pipe", "ipc"],
 		}) as ChildProcessWithoutNullStreams;
 		this.proc.on("message", (message: unknown) => {

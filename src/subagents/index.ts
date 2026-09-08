@@ -279,10 +279,23 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 		latestContext = ctx;
 		armDelivery();
 		for (const previous of pendingReplacements()) {
-			await manager.adoptFrom(previous, ctx.sessionManager.getSessionId());
-			pendingReplacements().delete(previous);
+			try {
+				await manager.adoptFrom(previous, ctx.sessionManager.getSessionId());
+			} catch {
+				// A corrupt or conflicting replacement must degrade this startup, not wedge every later replacement.
+				logDiagnostic("subagent_startup_recovery_refused", { scope: "adoption" });
+			} finally {
+				pendingReplacements().delete(previous);
+			}
 		}
-		if (options.retainedRegistry) await manager.reconstruct(options.retainedRegistry, ctx.sessionManager.getSessionId());
+		if (options.retainedRegistry) {
+			try {
+				await manager.reconstruct(options.retainedRegistry, ctx.sessionManager.getSessionId());
+			} catch {
+				// Corrupt retained evidence stays on disk for inspection; startup still publishes status and delivery.
+				logDiagnostic("subagent_startup_recovery_refused", { scope: "reconstruction" });
+			}
+		}
 		publishStatusWidget();
 		if (ctx.isIdle()) flush();
 	});

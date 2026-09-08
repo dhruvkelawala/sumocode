@@ -36,6 +36,23 @@ describe("subagent Activity adapter", () => {
 		expect(activity.body?.text).toContain("last heartbeat 1970-01-01T00:00:02.000Z (event loop only)");
 		expect(activity.body?.text).toContain("inspect or explicitly cancel with subagent_cancel");
 	});
+	it.each(["active", "quiet"] as const)("preserves a running %s step instead of replacing it with a health label", (health) => {
+		const activity = activityFromSubagentSnapshot(snapshot({ health, liveText: "Inspecting src/auth.ts" }));
+		expect(activity).toMatchObject({ status: "running", currentStep: "Inspecting src/auth.ts", outputTail: "Inspecting src/auth.ts" });
+		expect(activity.body?.text).toContain(`${health} · elapsed`);
+	});
+	it("projects retained recovery without inventing detailed causes", () => {
+		const adopted = activityFromSubagentSnapshot(snapshot({ health: "active", recovery: "adopted" }));
+		expect(adopted).toMatchObject({ status: "running", currentStep: "recovered-running" });
+		expect(adopted.body?.text).toContain("retained child adopted");
+		const lost = activityFromSubagentSnapshot(snapshot({ status: "error", recovery: "lost", errorText: "backend gone", finalText: "partial" }));
+		expect(lost).toMatchObject({ status: "lost", currentStep: "lost" });
+		expect(lost.body?.text).toContain("retained child lost");
+		expect(lost.body?.text).toContain("partial");
+		const ambiguous = activityFromSubagentSnapshot(snapshot({ status: "error", recovery: "ambiguous" }));
+		expect(ambiguous).toMatchObject({ status: "lost", currentStep: "ambiguous identity" });
+		expect(ambiguous.body?.text).toContain("retained child ambiguous");
+	});
 	it("replaces durable warning copy with settled telemetry and final result", () => {
 		const running = activityFromSubagentSnapshot(snapshot({ health: "stalled-warning" }));
 		const settled = activityFromSubagentSnapshot(snapshot({ status: "done", health: "quiet", finalText: "review complete", settledAt: 2000 }));

@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -82,9 +82,9 @@ describe("read-only result inspection", () => {
 		git(f.child, "commit", "--amend", "-m", "rewritten");
 		// The completed commit is still an ancestor of this ordinary revert.
 		expect((await inspectWorktreeResult(captured)).commits).toHaveLength(2);
-		git(f.child, "checkout", "--orphan", "unrelated");
-		git(f.child, "add", ".");
-		git(f.child, "commit", "-m", "unrelated");
+		const unrelated = git(f.child, "commit-tree", "HEAD^{tree}", "-m", "unrelated").trim();
+		git(f.child, "update-ref", "refs/heads/sumo/child", unrelated);
+		expect(git(f.child, "symbolic-ref", "--short", "HEAD").trim()).toBe(captured.worktree.branch);
 		await expect(inspectWorktreeResult(captured)).rejects.toThrow();
 	});
 	it.each(["status", "diff"])("inspects result: timeout or buffer refusal from %s never becomes clean evidence", async (command) => {
@@ -130,6 +130,23 @@ describe("confirmed committed apply", () => {
 		const other = fixture();
 		other.commit("other.txt", "other");
 		await expect(prepareWorktreeApply(other.result(), f.parent)).rejects.toThrow(/repository/);
+	});
+	it.each(["file", "directory"])("applies linear commits: discloses intermediate paths and refuses ignored parent %s overlap", async (kind) => {
+		const f = fixture();
+		f.commit("local-cache", "temporary child data");
+		git(f.child, "rm", "--", "local-cache");
+		git(f.child, "commit", "-m", "remove temporary data");
+		f.commit("one.txt", "final result");
+		const inspection = await inspectWorktreeResult(f.result());
+		expect(inspection.files).toEqual([{ status: "A", path: "one.txt" }]);
+		writeFileSync(join(f.parent, ".git", "info", "exclude"), "local-cache\n");
+		if (kind === "directory") mkdirSync(join(f.parent, "local-cache"));
+		const privatePath = join(f.parent, "local-cache", ...(kind === "directory" ? ["private.txt"] : []));
+		writeFileSync(privatePath, "private parent data");
+		await expect(prepareWorktreeApply(f.result(), f.parent, { execute: f.execute })).rejects.toThrow(/ignored/);
+		expect(inspection.touchedPaths).toEqual(["local-cache", "one.txt"]);
+		expect(readFileSync(privatePath, "utf8")).toBe("private parent data");
+		expect(f.execute.mock.calls.some(([, args]) => args.includes("cherry-pick"))).toBe(false);
 	});
 	it("applies linear commits: cancellation has no Git effects", async () => {
 		const f = fixture();

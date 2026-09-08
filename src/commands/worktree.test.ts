@@ -620,7 +620,7 @@ describe("worktree result actions", () => {
 		await f.run();
 		const shown = f.query.mock.calls.map(([, title]) => title).join("\n");
 		expect(shown).toContain(f.head);
-		expect(shown).toContain("file.txt");
+		expect(shown).toContain('touched "file.txt"');
 		expect(f.registry.worktreeResult("sa-result")?.disposition).toBe("inspected");
 		expect(f.execute.mock.calls.some(([, args]) => args.includes("cherry-pick") || args.includes("remove"))).toBe(false);
 	});
@@ -635,7 +635,7 @@ describe("worktree result actions", () => {
 		expect(f.registry.worktreeResult("sa-result")?.disposition).toBe(approved ? "applied" : "inspected");
 		const shown = f.query.mock.calls.map(([, title]) => title).join("\n");
 		expect(shown).toContain(f.head);
-		expect(shown).toContain("file.txt");
+		expect(shown).toContain('touched "file.txt"');
 	});
 	it("dismiss marks handled without touching the worktree", async () => {
 		const f = resultFixture();

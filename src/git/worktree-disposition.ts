@@ -26,6 +26,7 @@ export interface WorktreeInspection {
 	readonly mergeCommits: readonly string[];
 	readonly files: ReadonlyArray<{ status: string; path: string }>;
 	readonly stat: string;
+	readonly touchedPaths: readonly string[];
 }
 
 export type GitExecutor = (file: "git", args: readonly string[], options: {
@@ -94,11 +95,13 @@ export async function inspectWorktreeResult(result: WorktreeResult, options: Wor
 	const diff = ["diff", "--color=never", "--no-ext-diff", "--no-textconv", "--no-renames"];
 	const files = changedFiles(await git(options, cwd, [...diff, "--name-status", "-z", base, head, "--"]));
 	const stat = await git(options, cwd, [...diff, "--stat", base, head, "--"]);
+	const touched = await git(options, cwd, ["log", "--color=never", "--format=", "--name-only", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", range, "--"]);
+	const touchedPaths = [...new Set(touched.split("\0").filter(Boolean))].sort();
 	if (head !== await object(options, cwd, "HEAD") || porcelain !== await git(options, cwd, statusArgs)
 		|| branch !== (await git(options, cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"])).trim()
 		|| realpathSync(worktree.path) !== cwd) throw new Error("worktree changed during inspection");
 	return { result: structuredClone({ id: result.id, completionId: result.completionId, worktree, manifest }), base, head, branch, commonDir, porcelain, dirty: porcelain.length > 0,
-		commits: ordered, mergeCommits: merges, files, stat };
+		commits: ordered, mergeCommits: merges, files, stat, touchedPaths };
 }
 
 interface ParentCheckout {
@@ -141,7 +144,7 @@ export async function prepareWorktreeApply(result: WorktreeResult, parentCwd: st
 	if (parent.root === result.worktree.path || parent.commonDir !== inspection.commonDir) throw new Error("parent must be a separate checkout of the same repository");
 	if (parent.porcelain !== "") throw new Error("parent checkout must be clean before apply");
 	const ignored = await ignoredPaths(options, parent.root);
-	if (inspection.files.some(({ path }) => ignored.some((other) => path === other || path.startsWith(`${other}/`) || other.startsWith(`${path}/`)))) {
+	if (inspection.touchedPaths.some((path) => ignored.some((other) => path === other || path.startsWith(`${other}/`) || other.startsWith(`${path}/`)))) {
 		throw new Error("committed changes overlap ignored parent files");
 	}
 	return { inspection, parent };

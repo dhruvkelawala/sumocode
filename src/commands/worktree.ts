@@ -148,6 +148,8 @@ function resultEvidence(inspection: WorktreeInspection): string[] {
 		`worktree ${JSON.stringify(inspection.result.worktree.path)}`, inspection.dirty ? "child worktree dirty" : "child worktree clean",
 		`${inspection.commits.length} commits · ${inspection.files.length} changed paths`,
 		...inspection.commits.map((commit) => `commit ${commit}`),
+		...inspection.touchedPaths.map((path) => `touched ${JSON.stringify(path)}`),
+		"net changes:",
 		...inspection.files.map(({ status, path }) => `${status} ${JSON.stringify(path)}`),
 		...inspection.stat.trimEnd().split("\n"),
 	];

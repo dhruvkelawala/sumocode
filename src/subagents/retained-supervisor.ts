@@ -1,3 +1,4 @@
+import { isRetainedWorktreeCwd } from "./retained-bootstrap.js";
 import { randomUUID } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -10,7 +11,7 @@ import { buildCompletionManifest, type CompletionManifestEvidence } from "./mani
 import { RetainedResults } from "./retained-results.js";
 import { serveRetainedControl } from "./retained-control.js";
 import { addReportedSubagentUsage } from "./budget-policy.js";
-import { SubagentRegistry, SubagentLeaseConflict, SubagentRevisionConflict, type RegistryControlAuthority, type RegistryControlSuccessor, type RegistryProcess, type SubagentRecord } from "./registry.js";
+import { SubagentRegistry, SubagentLeaseConflict, SubagentRevisionConflict, type RegistryControlAuthority, type RegistryControlSuccessor, type RegistryProcess, type RegistryWriter, type SubagentRecord } from "./registry.js";
 
 /** Persistence-owner gate only, not user control authorization. Retain refused handles. */
 export function createRetainedHeadlessLaunchGate(
@@ -29,6 +30,7 @@ function prepareLaunch(
 	supervisorEvidence: RegistryProcess,
 	operations: ProcessTreeOperations,
 	attach = false,
+	controller?: RegistryWriter,
 ) {
 	const id = initial.id;
 	const supervisor = structuredClone(supervisorEvidence);
@@ -71,6 +73,7 @@ function prepareLaunch(
 		}
 	};
 	transition((record) => ({ ...record, supervisor, launchIntent: null }));
+	if (controller) current = registry.acquireControl(current.id, current.revision, lease.generation, current.controlHead, controller, 60_000);
 	let phase: "prepared" | "admitted" | "blocked" | "released" = "prepared";
 
 	const fence = (): void => {
@@ -177,6 +180,7 @@ function prepareLaunch(
 }
 
 interface RetainedHeadlessOptions {
+	readonly controller?: RegistryWriter;
 	readonly registry: SubagentRegistry;
 	readonly initial: SubagentRecord;
 	readonly supervisor: RegistryProcess;
@@ -240,13 +244,13 @@ class RetainedSupervisor {
 		private readonly dependencies: Omit<RetainedHeadlessDependencies, "spawn"> = {}) {
 		if (options.attach && (options.attach.cwd !== options.cwd
 			|| realpathSync(options.attach.cwd) !== options.attach.cwd || !statSync(options.attach.cwd).isDirectory()
-			|| (options.initial.worktree !== null && options.initial.worktree.path !== options.attach.cwd))) {
+			|| (options.initial.worktree !== null && !isRetainedWorktreeCwd(options.initial.worktree.path, options.attach.cwd)))) {
 			throw new Error("retained cwd binding mismatch");
 		}
 		this.registry = options.registry;
 		this.cwd = options.cwd;
 		this.baseRef = options.baseRef;
-		this.authority = prepareLaunch(options.registry, options.initial, options.supervisor, dependencies.operations ?? systemProcessTree, options.attach !== undefined);
+		this.authority = prepareLaunch(options.registry, options.initial, options.supervisor, dependencies.operations ?? systemProcessTree, options.attach !== undefined, options.controller);
 		this.artifacts = new RetainedResults(options.initial.taskDir);
 		this.child = start(this.authority, () => { this.authority.gate.onRefused(); this.fail("ambiguous", "backend-refused"); }, () => {
 			if (this.stopped) throw new Error("retained owner stopped before effect");
@@ -269,7 +273,8 @@ class RetainedSupervisor {
 			}
 		}, 20_000);
 		if (!options.keepAlive) this.heartbeat.unref();
-		this.stopControl = serveRetainedControl(this.registry, options.initial.id, (authority) => this.controllerChild(authority));
+		this.stopControl = serveRetainedControl(this.registry, options.initial.id, (authority) => this.controllerChild(authority),
+			(authority, successor) => this.reserveControl(authority, successor));
 		// Own the handle before subscription (which can synchronously settle).
 		let subscriptionError: Error | undefined;
 		try {

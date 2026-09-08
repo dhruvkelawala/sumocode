@@ -119,6 +119,11 @@ export interface SubagentRegistryOptions {
 export class SubagentRevisionConflict extends Error {}
 export class SubagentLeaseConflict extends Error {}
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- private control transport decodes an untrusted successor identity.
+export function isRegistryControlSuccessor(value: unknown): value is RegistryControlSuccessor {
+	return object(value, "owner sessionId") && writer(value.owner) && text(value.sessionId);
+}
+
 function inspectWriter(owner: RegistryWriter): "alive" | "dead" | "unknown" {
 	try { process.kill(owner.pid, 0); }
 	catch (error) {

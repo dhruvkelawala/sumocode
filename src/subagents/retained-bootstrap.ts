@@ -8,10 +8,11 @@ import { VALID_THINKING_LEVELS, type ProviderModel, type ThinkingLevel } from ".
 import { assertPrivateArtifact, assertPrivateDir, isOwnedByUs, nodeArtifactFs, validatedArtifactStat } from "../private-artifact.js";
 import type { AgentPanePlacement } from "../terminal-host/types.js";
 import type { SubagentRole } from "./roles.js";
-import type { SubagentRecord } from "./registry.js";
+import type { RegistryWriter, SubagentRecord } from "./registry.js";
 
 /** Fully resolved values only: null means absent, never inherit or reload roles/config. */
 export interface RetainedBootstrapConfiguration {
+	readonly controller?: RegistryWriter;
 	readonly cwd: string;
 	readonly baseRef: string;
 	readonly model: Readonly<ProviderModel>;
@@ -222,7 +223,10 @@ function validDescriptor(value: unknown): value is RetainedBootstrapDescriptor {
 		|| (value.backend !== "headless" && value.backend !== "visible") || !validPointer(value.prompt, PROMPT_FILE)
 		|| !(value.systemPrompt === null || validPointer(value.systemPrompt, SYSTEM_FILE))) return false;
 	const c = value.config;
-	if (!object(c, "cwd baseRef model thinking builtInTools role pi adapterEntry modelBootstrapEntry visible")
+	if (!object(c, "cwd baseRef model thinking builtInTools role pi adapterEntry modelBootstrapEntry visible", "controller")
+		|| !(c.controller === undefined || (object(c.controller, "token pid processStartTime")
+			&& text(c.controller.token) && Number.isSafeInteger(c.controller.pid) && Number(c.controller.pid) > 0
+			&& text(c.controller.processStartTime)))
 		|| !pathValue(c.cwd) || !text(c.baseRef) || !object(c.model, "provider modelId label")
 		|| !text(c.model.provider) || !text(c.model.modelId) || c.model.label !== `${c.model.provider}/${c.model.modelId}`
 		|| !VALID_THINKING_LEVELS.some((level) => level === c.thinking) || !Array.isArray(c.builtInTools)
@@ -235,7 +239,7 @@ function validDescriptor(value: unknown): value is RetainedBootstrapDescriptor {
 		&& text(c.visible.name) && placement(c.visible.placement) && pathValue(c.visible.launcher))) return false;
 	return value.worktree === null || (object(value.worktree, "path branch baseRef repoRoot")
 		&& pathValue(value.worktree.path) && pathValue(value.worktree.repoRoot) && text(value.worktree.branch)
-		&& value.worktree.baseRef === c.baseRef && value.worktree.path === c.cwd);
+		&& value.worktree.baseRef === c.baseRef && isRetainedWorktreeCwd(value.worktree.path, c.cwd));
 }
 function freeze<T>(value: T): T {
 	if (value && typeof value === "object") {
@@ -245,3 +249,9 @@ function freeze<T>(value: T): T {
 	return value;
 }
 // oxlint-enable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof, anti-slop/no-unsafe-dictionary-type
+
+/** Paths are canonicalized separately; this check preserves a captured nested cwd. */
+export function isRetainedWorktreeCwd(worktree: string, cwd: string): boolean {
+	const path = relative(worktree, cwd);
+	return path !== ".." && !path.startsWith("../") && !isAbsolute(path);
+}

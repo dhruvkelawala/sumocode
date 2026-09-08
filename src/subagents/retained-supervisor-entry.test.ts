@@ -4,10 +4,11 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { systemProcessTree } from "../background-tasks/process-tree.js";
 import { prepareRetainedBootstrap } from "./retained-bootstrap.js";
-import { SubagentRegistry, type SubagentRecord } from "./registry.js";
+import { SubagentRegistry, type RegistryWriter, type SubagentRecord } from "./registry.js";
 import { runRetainedSupervisorEntry } from "./retained-supervisor-entry.js";
 import type { spawnPiChild } from "./backend-pi.js";
 import type { SubagentEvent } from "./domain.js";
+import type { TerminalHost } from "../terminal-host/types.js";
 
 // oxlint-disable-next-line anti-slop/no-module-mocking -- kernel boundary only; registry/bootstrap/controller use real private files.
 vi.mock("../background-tasks/process-tree.js", () => ({
@@ -21,7 +22,7 @@ vi.mock("../background-tasks/process-tree.js", () => ({
 }));
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
-function fixture() {
+function fixture(controller?: RegistryWriter, visible = false) {
 	vi.useFakeTimers();
 	vi.spyOn(process, "kill").mockReturnValue(true);
 	const root = realpathSync(mkdtempSync(join(tmpdir(), "sumocode-entry-")));
@@ -33,18 +34,74 @@ function fixture() {
 	const registryDir = join(root, "registry");
 	const registry = new SubagentRegistry(registryDir, "session-a");
 	const record: SubagentRecord = {
-		schemaVersion: 2, revision: 1, id: "sa-entry", ownerSessionId: "session-a", backend: "headless", status: "starting", taskDir,
+		schemaVersion: 2, revision: 1, id: "sa-entry", ownerSessionId: "session-a", backend: visible ? "visible" : "headless", status: "starting", taskDir,
 		child: null, supervisor: null, pane: null, worktree: null, sessionFilePath: null, modelLabel: "openai/test", roleId: "reviewer",
 		createdAt: Date.now(), updatedAt: Date.now(), settledAt: null, completionId: null, outcome: null,
 		delivery: { state: "none", claim: null }, result: null, manifest: null, writerLease: null, controlLease: null, controlHead: 0,
 	};
 	const descriptor = prepareRetainedBootstrap(record, {
+		controller,
 		cwd: root, baseRef: "HEAD", model: { provider: "openai", modelId: "test", label: "openai/test" }, thinking: "low",
-		builtInTools: ["read"], role: { id: "reviewer", label: "reviewer" }, pi, adapterEntry: null, modelBootstrapEntry: null, visible: null,
+		builtInTools: ["read"], role: { id: "reviewer", label: "reviewer" }, pi, adapterEntry: null, modelBootstrapEntry: null,
+		visible: visible ? { name: "visible worker", placement: { kind: "new-tab", label: "subagents" }, launcher: pi } : null,
 	}, { prompt: "private task text", systemPrompt: "private role text" });
 	const args = ["--task-dir", taskDir, "--registry-dir", registryDir, "--id", record.id, "--owner-session", record.ownerSessionId, "--nonce", descriptor.nonce];
 	return { root, taskDir, registryDir, registry, record, descriptor, args };
 }
+
+it("grants the production controller before the backend can launch", async () => {
+	const controller = { token: "parent-controller", pid: process.pid, processStartTime: "birth" };
+	const f = fixture(controller);
+	f.registry.create(f.record);
+	let granted: RegistryWriter | undefined;
+	let emit!: (event: SubagentEvent) => void;
+	const run = runRetainedSupervisorEntry(f.args, {
+		spawn: (options) => {
+			granted = f.registry.get(f.record.id)?.controlLease?.owner;
+			return { ready: Promise.resolve(), interrupt: vi.fn(), events: (listener) => {
+				emit = listener;
+				options.launchGate!.beforeSpawn();
+				options.launchGate!.beforePrompt(4242);
+			} };
+		},
+		buildManifest: async () => ({ baseRef: "HEAD", headRef: "end", changedPaths: [], commits: 0, exit: "completed", durationMs: 1 }),
+	});
+	emit({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+	await run;
+	expect(granted).toEqual(controller);
+	expect(f.registry.get(f.record.id)?.writerLease?.owner.token).not.toBe(controller.token);
+});
+
+it("launches the visible backend from the same private production descriptor", async () => {
+	const f = fixture({ token: "parent", pid: process.pid, processStartTime: "birth" }, true);
+	vi.mocked(systemProcessTree.isTreeEmpty).mockReturnValue(true);
+	f.registry.create(f.record);
+	const host: TerminalHost = { kind: "herdr", openCommandInSplit: vi.fn(), closePane: vi.fn(), notify: vi.fn(),
+		inspectPane: async () => ({ ok: true, shellPid: 4242, foregroundProcessGroupId: 4242, foregroundPids: [4242] }) };
+	const launch = vi.fn();
+	await runRetainedSupervisorEntry(f.args, { host, executor: { exec: vi.fn() }, spawnPane: (options) => {
+		launch(options);
+		let ready!: () => void;
+		let refuse!: (error: Error) => void;
+		return { interrupt: vi.fn(), ready: new Promise<void>((resolve, reject) => { ready = resolve; refuse = reject; }), events: (emit) => {
+			void (async () => {
+				const nonce = f.descriptor.nonce;
+				const gate = options.launchGate!;
+				gate.beforeSpawn({ taskDir: f.taskDir, nonce });
+				await gate.wrapperBorn({ taskDir: f.taskDir, nonce,
+					process: { identity: { pid: 4242, processGroupId: 4242, processStartTime: `wrapper ${join(f.taskDir, "run.sh")} ${nonce}` },
+						verification: { members: [{ pid: 4242, processStartTime: "birth" }] } },
+					pane: { agentName: "worker", paneId: "p1", pane: { host: "herdr", paneId: "p1" } } });
+				gate.beforeRelease();
+				ready();
+				emit({ kind: "run-settled", outcome: { kind: "completed", finalText: "visible answer" } });
+			})().catch(refuse);
+		} };
+	}, buildManifest: async () => ({ baseRef: "HEAD", headRef: "end", changedPaths: [], commits: 0, exit: "completed", durationMs: 1 }) });
+	expect(launch).toHaveBeenCalledWith(expect.objectContaining({ prompt: "private task text", appendSystemPrompt: "private role text",
+		model: "openai/test", thinking: "low", tools: ["read"], retainedTaskDir: f.taskDir }));
+	expect(f.registry.get(f.record.id)).toMatchObject({ backend: "visible", status: "settled" });
+});
 
 it("refuses invalid private bootstrap before writer acquisition or backend construction", async () => {
 	const f = fixture();

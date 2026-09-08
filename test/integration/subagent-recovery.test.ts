@@ -133,6 +133,7 @@ function fixture(cut?: "starting" | "pre-release", backend: "headless" | "visibl
 			processStartTime: remoteControls ? `${token}-birth` : writer.processStartTime };
 		// SAFETY: this fake supplies the installer's public methods; tests invoke only id/ids tools.
 		const manager = installSubagents(api as never, {
+			retention: false,
 			spawnPiChild: () => { throw new Error("replacement must not respawn"); },
 			terminalHost: host,
 			retainedRegistry: diskRecovery ? registry.forController(controller) : undefined,

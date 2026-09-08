@@ -117,7 +117,7 @@ function fixture(backend: "headless" | "visible" = "headless") {
 		const delivery = vi.fn();
 		const api = { on: (name: string, handler: Handler) => { handlers.set(name, handler); }, registerTool: vi.fn(), sendMessage: delivery, exec: vi.fn() };
 		// SAFETY: this fake implements every API operation used by installSubagents.
-		const manager = installSubagents(api as never, { terminalHost: host, spawnPiChild: retainedLaunch ? () => {
+		const manager = installSubagents(api as never, { retention: false, terminalHost: host, spawnPiChild: retainedLaunch ? () => {
 			const current = registry.get(record.id)!;
 			const granted = registry.acquireControl(record.id, current.revision, current.writerLease!.generation, current.controlHead, identities(token), 60_000);
 			return supervisor.controllerChild(controlAuthority(granted));
@@ -284,8 +284,8 @@ describe("durable sender delivery", () => {
 		await f.finish();
 		const reserve = f.supervisor.reserveControl.bind(f.supervisor);
 		const send = vi.fn();
-		vi.spyOn(f.supervisor, "reserveControl").mockImplementation((authority, successor) => {
-			const reserved = reserve(authority, successor);
+		vi.spyOn(f.supervisor, "reserveControl").mockImplementation(async (authority, successor) => {
+			const reserved = await reserve(authority, successor);
 			old.manager.deliver({ id: "sa-1", title: "worker", status: "done", content: "answer", details: {} }, send);
 			for (const action of ["send", "sent", "uncertain"] as const) {
 				expect(() => f.registry.forController(old.manager.controllerIdentity).advanceDelivery(reserved.revision, stale, action)).toThrow("stale delivery controller");
@@ -525,8 +525,8 @@ describe("manager replacement adoption", () => {
 		expect(next.delivery).toHaveBeenCalledTimes(1);
 	});
 
-	it("allows only one of two racing successor managers to adopt", async () => {
-		const f = fixture("visible");
+	it.each(["headless", "visible"] as const)("%s allows only one of two racing successor managers to adopt", async (backend) => {
+		const f = fixture(backend);
 		const old = f.install("origin");
 		await f.track(old);
 		old.manager.detachForReplacement();

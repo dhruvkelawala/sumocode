@@ -1,9 +1,9 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { isAbsolute, join, relative } from "node:path";
-import { isDeepStrictEqual, promisify } from "node:util";
+import { promisify } from "node:util";
 import { captureProcessBirthTime, systemProcessTree, type ProcessTreeOperations } from "../background-tasks/process-tree.js";
-import { acquireRetained, reconstructRetained, verifyRetained, type RetainedSubagent } from "./retained-adoption.js";
+import { acquireRetained, reconstructRetained, verifyRetained, sameRetainedEvidence, type RetainedSubagent } from "./retained-adoption.js";
 import type { RegistryWriter, SubagentRecord } from "./registry.js";
 import { createWorktree, resolveCreateOptions, type CreateWorktreeOptions, type CreateWorktreeResult } from "../git/worktree.js";
 import type { AgentPanePlacement, PiExecLike, TerminalHost } from "../terminal-host/types.js";
@@ -79,6 +79,7 @@ export interface SubagentManagerDiagnostic {
 }
 
 export interface SubagentManagerDependencies {
+	readonly idNamespace?: string;
 	readonly controllerIdentity?: RegistryWriter;
 	readonly processOperations?: ProcessTreeOperations;
 	readonly createWorktree?: WorktreeCreator;
@@ -169,6 +170,7 @@ export class SubagentManager {
 	private identity?: RegistryWriter;
 	private readonly operations: ProcessTreeOperations;
 	private nextId = 1;
+	private readonly idNamespace?: string;
 	private healthTimer?: ReturnType<typeof setInterval>;
 	private readonly pendingSpawns = new Map<string, { title: string; createdAt: number }>();
 	private readonly launching = new Map<string, { controller: AbortController; done: Promise<void> }>();
@@ -198,6 +200,7 @@ export class SubagentManager {
 	public readonly consumedIds = new Set<string>();
 
 	public constructor(private readonly backendFactory: BackendFactory, dependencies: SubagentManagerDependencies = {}) {
+		this.idNamespace = dependencies.idNamespace;
 		this.identity = dependencies.controllerIdentity && { ...dependencies.controllerIdentity };
 		this.operations = dependencies.processOperations ?? systemProcessTree;
 		this.createWorktreeImpl = dependencies.createWorktree ?? createWorktree;
@@ -226,7 +229,7 @@ export class SubagentManager {
 		if (this.detached || this.snapshots.has(entry.snapshot.id)) throw new Error("manager cannot track retained child");
 		const record = entry.registry.get(entry.snapshot.id);
 		const identity = this.controllerIdentity;
-		if (!record || !entry.supervisor || !isDeepStrictEqual(record, entry.supervisor.record) || !entry.registry.inspectControl(entry.authority)
+		if (!record || !entry.supervisor || !sameRetainedEvidence(record, entry.supervisor.record) || !entry.registry.inspectControl(entry.authority)
 			|| record.backend !== (entry.snapshot.visible ? "visible" : "headless")
 			|| entry.authority.owner.token !== identity.token
 			|| entry.authority.owner.pid !== identity.pid
@@ -270,7 +273,7 @@ export class SubagentManager {
 
 	public get hasRetainedChildren(): boolean { return this.retained.size > 0; }
 
-	/** One synchronous CAS winner per record; observers bind only after that grant. */
+	/** Claim each outgoing view before asynchronous control transfer; bind only after its grant. */
 	public async adoptFrom(previous: SubagentManager, sessionId: string): Promise<void> {
 		await Promise.all([...previous.launching.values()].map((launch) => launch.done));
 		if (previous === this || this.detached) return;
@@ -278,11 +281,15 @@ export class SubagentManager {
 		for (const [id, tracked] of previous.retained) {
 			if (this.retained.has(id)) continue;
 			if (this.snapshots.has(id)) throw new Error("retained subagent id conflicts with successor work");
-			const result = tracked.blocked ? { entry: tracked.entry, classification: "ambiguous" as const, reason: tracked.entry.snapshot.recoveryReason }
-				: await acquireRetained(tracked.entry, this.controllerIdentity, sessionId, this.operations, this.terminalHost, this.pi);
-			// A concurrent successor can consume the reservation while pane inspection awaits.
-			if (previous.retained.get(id) !== tracked) continue;
 			previous.retained.delete(id);
+			let result: Awaited<ReturnType<typeof acquireRetained>>;
+			try {
+				result = tracked.blocked ? { entry: tracked.entry, classification: "ambiguous", reason: tracked.entry.snapshot.recoveryReason }
+					: await acquireRetained(tracked.entry, this.controllerIdentity, sessionId, this.operations, this.terminalHost, this.pi);
+			} catch (error) {
+				previous.retained.set(id, tracked);
+				throw error;
+			}
 			if (previous.consumedIds.has(id)) this.consumedIds.add(id);
 			this.retained.set(id, { entry: result.entry, blocked: true });
 			this.snapshots.set(id, result.entry.snapshot);
@@ -414,7 +421,7 @@ export class SubagentManager {
 
 	private allocateId(): string {
 		let id: string;
-		do { id = `sa-${this.nextId++}`; } while (this.snapshots.has(id) || this.retained.has(id));
+		do { id = `sa-${this.idNamespace ? `${this.idNamespace}-` : ""}${this.nextId++}`; } while (this.snapshots.has(id) || this.retained.has(id));
 		return id;
 	}
 
@@ -614,7 +621,8 @@ export class SubagentManager {
 				const preservationNote = worktree ? ` Worktree created at ${worktree.path} is preserved.` : "";
 				return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, `unable to spawn child: ${message}.${preservationNote}`, childCwd, worktree);
 			}
-			const snapshot = this.withBudget({ ...makeInitialSnapshot(task, id, createdAt, manifestBaseRef, childCwd, worktree, child.sessionFilePath), startedAt: Date.now() });
+			let snapshot = this.withBudget({ ...makeInitialSnapshot(task, id, createdAt, manifestBaseRef, childCwd, worktree, child.sessionFilePath), startedAt: Date.now() });
+			if (child.retentionUnsupported) snapshot = { ...snapshot, recovery: "unsupported" };
 			releasePending();
 			if (child.retained) {
 				const entry = { ...child.retained, snapshot };

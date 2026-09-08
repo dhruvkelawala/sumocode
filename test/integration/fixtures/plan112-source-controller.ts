@@ -248,7 +248,7 @@ export function install(session: string, registry?: SubagentRegistry,
 		exec: options.visible ? (options.executor ?? visibleRecoveryExecutor).exec : () => { throw new Error("unexpected controller exec"); } };
 	const refuseSpawn = () => { throw new Error("replacement must not respawn"); };
 	// SAFETY: only installer registration and idle lifecycle methods are exercised.
-	const manager = installSubagents(api as never, { retainedRegistry: registry,
+	const manager = installSubagents(api as never, { retention: false, retainedRegistry: registry,
 		terminalHost: options.visible ? herdrTerminalHost : undefined,
 		managerDependencies: { processOperations: options.operations },
 		spawnPiChild: refuseSpawn, spawnPaneChild: refuseSpawn });

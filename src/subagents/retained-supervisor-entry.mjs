@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
  * This entry rejects executable-resolution overrides; it does not sanitize the whole env.
  * Code comes from this package, never argv, task cwd, or SUMOCODE_ROOT_DIR.
  * Args, in order: --task-dir PATH --registry-dir PATH --id ID --owner-session ID --nonce UUID.
- * Native artifacts and control/adoption are deliberately unsupported.
+ * Physical Node source supports headless and visible owners; native artifacts use their disposable backend.
  */
 export async function runSourceEntry(argv, load = (url) => import(url)) {
 	try {

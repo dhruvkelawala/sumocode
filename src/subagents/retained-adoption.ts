@@ -2,17 +2,19 @@ import { isDeepStrictEqual } from "node:util";
 import type { ProcessTreeOperations } from "../background-tasks/process-tree.js";
 import type { PiExecLike, TerminalHost } from "../terminal-host/types.js";
 import type { SubagentRecoveryReason, SubagentSnapshot } from "./domain.js";
-import { SubagentRevisionConflict, type RegistryControlAuthority, type RegistryProcess, type RegistryWriter, type SubagentRecord, type SubagentRegistry } from "./registry.js";
+import { SubagentRevisionConflict, type RegistryControlAuthority, type RegistryControlSuccessor, type RegistryProcess, type RegistryWriter, type SubagentRecord, type SubagentRegistry } from "./registry.js";
 import type { RetainedHeadlessSupervisor } from "./retained-supervisor.js";
 import { RetainedResults } from "./retained-results.js";
 import { censusRetained } from "./retained-census.js";
-import { controlAuthority, retainedControlClient } from "./retained-control.js";
+import { controlAuthority, reserveRemoteControl, retainedControlClient } from "./retained-control.js";
 export { controlAuthority } from "./retained-control.js";
 
 /** Controller view over a local supervisor or its private file transport. */
 export interface RetainedSubagent {
 	readonly registry: SubagentRegistry;
-	readonly supervisor?: Pick<RetainedHeadlessSupervisor, "record" | "completion" | "subscribe" | "reserveControl" | "controllerChild">;
+	readonly supervisor?: Pick<RetainedHeadlessSupervisor, "record" | "completion" | "subscribe" | "controllerChild"> & {
+		reserveControl(authority: RegistryControlAuthority, successor: RegistryControlSuccessor): SubagentRecord | Promise<SubagentRecord>;
+	};
 	readonly snapshot: SubagentSnapshot;
 	readonly authority: RegistryControlAuthority;
 }
@@ -83,6 +85,11 @@ function recoveryEvidence(record: SubagentRecord) {
 	return { ...record, revision: 0, updatedAt: 0, telemetry: undefined };
 }
 
+/** Heartbeats and progress cannot invalidate an otherwise identical ownership snapshot. */
+export function sameRetainedEvidence(first: SubagentRecord, second: SubagentRecord): boolean {
+	return isDeepStrictEqual(recoveryEvidence(first), recoveryEvidence(second));
+}
+
 /** A new host needs only its private registry namespace, never an old JS handle. */
 export async function reconstructRetained(registry: SubagentRegistry, successor: RegistryWriter, sessionId: string,
 	operations: ProcessTreeOperations, host?: TerminalHost, pi?: PiExecLike,
@@ -130,7 +137,7 @@ export async function reconstructRetained(registry: SubagentRegistry, successor:
 			let record: SubagentRecord | undefined;
 			for (let attempt = 1; record === undefined; attempt++) {
 				const fresh = controller.get(initial.id);
-				if (!fresh || !isDeepStrictEqual(recoveryEvidence(initial), recoveryEvidence(fresh))) throw new Error("retained evidence changed during inspection");
+				if (!fresh || !sameRetainedEvidence(initial, fresh)) throw new Error("retained evidence changed during inspection");
 				if (mirror) { record = fresh; break; }
 				try {
 					record = handoff
@@ -141,40 +148,7 @@ export async function reconstructRetained(registry: SubagentRegistry, successor:
 				}
 			}
 			const authority = controlAuthority(record);
-			const fence = (): SubagentRecord => {
-				const current = controller.get(record.id)!;
-				if (record.status === "settled" && current.status === "settled" && current.completionId === record.completionId) return current;
-				// A record adopted while running settles after its child tree is correctly gone. Matching controller
-				// lineage plus durable completion pointers replaces live-anchor verification for that later settlement.
-				if (record.status !== "settled" && current.status === "settled" && current.completionId && current.result && current.manifest
-					&& (current.controllerGeneration ?? 0) === (record.controllerGeneration ?? 0)
-					&& current.controllerSessionId === record.controllerSessionId) return current;
-				if (!current.supervisor || !current.child || !sameAnchor(current.supervisor, operations)
-					|| !sameAnchor(current.child, operations) || controller.writerState(record.id) !== "alive") throw new Error("retained owner changed");
-				return current;
-			};
-			const supervisor: NonNullable<RetainedSubagent["supervisor"]> = {
-				get record() { return fence(); },
-				get completion() { return controller.get(record.id)?.status === "settled" ? RetainedResults.read(record.taskDir) : undefined; },
-				reserveControl: () => { throw new Error("remote transfer requires dead-controller recovery"); },
-				controllerChild: (grant) => {
-					if (mirror) throw new Error("persist-only controller");
-					fence();
-					return retainedControlClient(controller, grant);
-				},
-				subscribe: (listener) => {
-					let revision = record.revision;
-					const timer = setInterval(() => {
-						try {
-							const current = fence();
-							if (current.revision !== revision) { revision = current.revision; listener(current); }
-							if (current.status === "settled") clearInterval(timer);
-						} catch { clearInterval(timer); listener({ ...record, status: "ambiguous" }); }
-					}, 250);
-					timer.unref();
-					return () => { clearInterval(timer); };
-				},
-			};
+			const supervisor = observeRemoteRetained(controller, record, operations, mirror);
 			entry = { ...entry, supervisor, authority };
 			classification = mirror ? "persist-only" : "adopted";
 		} catch { /* Refusal preserves the original process evidence and writer. */ }
@@ -196,12 +170,13 @@ export async function acquireRetained(
 		const verification = await verifyRetained(record, operations, host, pi);
 		reason = verification.reason;
 		if (verification.classification !== "verified") classification = verification.classification;
-		else if (registry.writerState(record.id) === "alive" && entry.supervisor && record.supervisor?.identity.pid === process.pid) {
+		else if (registry.writerState(record.id) === "alive" && entry.supervisor && record.supervisor) {
 			if (!sameAnchor(record.supervisor, operations)) throw new Error("retained supervisor identity unverified");
-			if (!isDeepStrictEqual(entry.supervisor.record, registry.get(record.id))) throw new Error("retained owner record changed");
-			const reserved = entry.supervisor.reserveControl(entry.authority, { owner: successor, sessionId });
+			if (!sameRetainedEvidence(entry.supervisor.record, registry.get(record.id)!)) throw new Error("retained owner record changed");
+			const reserved = await entry.supervisor.reserveControl(entry.authority, { owner: successor, sessionId });
 			record = registry.acquireControl(record.id, reserved.revision, reserved.writerLease!.generation, reserved.controlHead, successor, 60_000, sessionId);
-			return { entry: { ...entry, registry, authority: controlAuthority(record) }, classification: "adopted" };
+			const supervisor = record.supervisor?.identity.pid === process.pid ? entry.supervisor : observeRemoteRetained(registry, record, operations);
+			return { entry: { ...entry, registry, authority: controlAuthority(record), supervisor }, classification: "adopted" };
 		} else if (registry.writerState(record.id) === "dead") {
 			// Death + expiry are enforced together by the existing generation CAS.
 			// A new writer cannot reconstruct the former parser's pipes.
@@ -214,4 +189,57 @@ export async function acquireRetained(
 		classification = "ambiguous";
 	}
 	return { entry: { ...entry, registry }, classification, reason };
+}
+
+
+export function observeRemoteRetained(registry: SubagentRegistry, record: SubagentRecord, operations: ProcessTreeOperations, mirror = false): NonNullable<RetainedSubagent["supervisor"]> {
+	const fence = (): SubagentRecord => {
+		for (let attempt = 0; attempt < 3; attempt++) {
+			const current = registry.get(record.id)!;
+			if (current.status === "settled" && current.completionId && current.result && current.manifest
+				&& (current.controllerGeneration ?? 0) === (record.controllerGeneration ?? 0)
+				&& current.controllerSessionId === record.controllerSessionId
+				&& (record.status !== "settled" || current.completionId === record.completionId)) return current;
+			// Settlement starts after backend cleanup; its original writer remains the
+			// authority while collecting Git evidence, even though the child is gone.
+			const ownerVerified = current.supervisor && sameAnchor(current.supervisor, operations)
+				&& registry.writerState(record.id) === "alive";
+			const childVerified = current.status === "settling" || current.child && sameAnchor(current.child, operations);
+			// OS inspection and disk reads cannot form one transaction. If settlement
+			// advanced during inspection, validate the new record before declaring loss.
+			const fresh = registry.get(record.id);
+			if (!fresh || !sameRetainedEvidence(current, fresh)) continue;
+			if (!ownerVerified || !childVerified) throw new Error("retained owner changed");
+			return fresh;
+		}
+		throw new Error("retained observation changed during inspection");
+	};
+
+	const supervisor: NonNullable<RetainedSubagent["supervisor"]> = {
+		get record() { return fence(); },
+		get completion() { return registry.get(record.id)?.status === "settled" ? RetainedResults.read(record.taskDir) : undefined; },
+		reserveControl: (authority, successor) => {
+			if (mirror) throw new Error("persist-only controller");
+			fence();
+			return reserveRemoteControl(registry, authority, successor);
+		},
+		controllerChild: (grant) => {
+			if (mirror) throw new Error("persist-only controller");
+			fence();
+			return retainedControlClient(registry, grant);
+		},
+		subscribe: (listener) => {
+			let revision = record.revision;
+			const timer = setInterval(() => {
+				try {
+					const current = fence();
+					if (current.revision !== revision) { revision = current.revision; listener(current); }
+					if (current.status === "settled") clearInterval(timer);
+				} catch { clearInterval(timer); listener({ ...record, status: "ambiguous" }); }
+			}, 250);
+			timer.unref();
+			return () => { clearInterval(timer); };
+		},
+	};
+	return supervisor;
 }

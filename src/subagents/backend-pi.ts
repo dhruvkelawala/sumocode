@@ -162,6 +162,7 @@ export function resolveClaudeOauthAdapterEntry(env: NodeJS.ProcessEnv = process.
 export interface SpawnedChild {
 	/** In-process retained owner registration; its parser must not be subscribed again. */
 	readonly retained?: Omit<import("./retained-adoption.js").RetainedSubagent, "snapshot">;
+	readonly retentionUnsupported?: true;
 	readonly events: AsyncIterable<SubagentEvent> | ((emit: (e: SubagentEvent) => void) => void);
 	readonly sessionFilePath?: string;
 	readonly ready?: Promise<void>;

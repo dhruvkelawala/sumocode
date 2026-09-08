@@ -38,6 +38,28 @@ function fixture() {
 const secrets = { prompt: "private prompt 🦉\nsecond line", systemPrompt: "private system instruction" };
 
 describe("retained bootstrap private protocol", () => {
+	it("preserves a working directory nested inside the captured worktree", () => {
+		const { root, record, config } = fixture();
+		const cwd = join(root, "packages", "app");
+		mkdirSync(cwd, { recursive: true });
+		const initial = { ...record, worktree: { path: root, repoRoot: root, branch: "feature", baseRef: "HEAD" } };
+		const descriptor = prepareRetainedBootstrap(initial, { ...config, cwd }, secrets);
+		expect(readRetainedBootstrap(initial, descriptor.nonce).descriptor.config.cwd).toBe(cwd);
+	});
+	it("refuses a working directory outside the captured worktree", () => {
+		const { root, record, config } = fixture();
+		const worktree = join(root, "worktree");
+		mkdirSync(worktree);
+		const initial = { ...record, worktree: { path: worktree, repoRoot: root, branch: "feature", baseRef: "HEAD" } };
+		expect(() => prepareRetainedBootstrap(initial, config, secrets)).toThrow("unsafe retained bootstrap");
+	});
+	it("binds a production controller identity without granting it writer authority", () => {
+		const { record, registry, config } = fixture();
+		const controller = { token: "controller-token", pid: 123, processStartTime: "controller-birth" };
+		const descriptor = prepareRetainedBootstrap(record, { ...config, controller }, secrets);
+		expect(readRetainedBootstrap(record, descriptor.nonce).descriptor.config.controller).toEqual(controller);
+		expect(registry.get(record.id)).toEqual(record);
+	});
 	it.each(["id", "ownerSessionId", "taskDir", "nonce"] as const)("rejects a mismatched expected %s", (field) => {
 		const { root, record, config } = fixture();
 		const descriptor = prepareRetainedBootstrap(record, config, secrets);

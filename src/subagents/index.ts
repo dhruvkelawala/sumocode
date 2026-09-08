@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activityFromSubagentSnapshot } from "../activity/subagent-adapter.js";
 import { renderSubagentStatusRow, type SubagentStatusRunningEntry } from "../subagent-status-row.js";
@@ -12,6 +13,7 @@ import type { SubagentSnapshot } from "./domain.js";
 import { SubagentManager, type SubagentManagerDependencies } from "./manager.js";
 import { buildSubagentResultMessage } from "./prompt.js";
 import { registerSubagentTools } from "./tools.js";
+import { RetainedRuntime } from "./retained-runtime.js";
 
 export { SubagentManager } from "./manager.js";
 export type { AtCapacityDetails, SpawnSubagentTask } from "./manager.js";
@@ -71,19 +73,27 @@ const settledPayload = (snapshot: SubagentSnapshot): DeliveryPayload => {
 };
 
 export interface SubagentsInstallOptions {
+	readonly retention?: RetainedRuntime | false;
 	readonly terminalHost?: TerminalHost;
 	readonly spawnPaneChild?: typeof spawnPaneChild;
 	readonly spawnPiChild?: typeof spawnPiChild;
 	readonly managerDependencies?: SubagentManagerDependencies;
-	/** Explicit trusted installation namespace; absent keeps production retention disabled. */
+	/** A private registry supplied by an embedding caller overrides installation discovery. */
 	readonly retainedRegistry?: import("./registry.js").SubagentRegistry;
 }
 
 export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOptions = {}): SubagentManager {
+	const retention = options.retention === false ? undefined : options.retention ?? new RetainedRuntime();
 	const host = options.terminalHost ?? getTerminalHost();
 	const spawnPane = options.spawnPaneChild ?? spawnPaneChild;
 	const spawnHeadless = options.spawnPiChild ?? spawnPiChild;
-	const manager = new SubagentManager((task) => {
+	const manager: SubagentManager = new SubagentManager(async (task) => {
+		if (retention) {
+			const sessionId = latestContext?.sessionManager.getSessionId();
+			if (!sessionId) throw new Error("retained subagent session unavailable");
+			const child = await retention.spawn(task, sessionId, manager.controllerIdentity, host, pi);
+			if (child) return child;
+		}
 		if (task.visible) {
 			if (!task.placement) {
 				return {
@@ -112,7 +122,7 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 			// toward LESS access, never more — acceptable until pi grows a
 			// built-ins-only restriction flag.
 			const paneNarrowed = task.builtInTools !== undefined && paneBuiltIn.length < BUILT_IN_TOOLS.length;
-			return spawnPane({
+			const child = spawnPane({
 				prompt: task.prompt,
 				name: task.title,
 				cwd: task.cwd,
@@ -126,8 +136,9 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 				pi,
 				placement: task.placement,
 			});
+			return retention ? { ...child, retentionUnsupported: true } : child;
 		}
-		return spawnHeadless({
+		const child = spawnHeadless({
 			prompt: task.prompt,
 			cwd: task.cwd,
 			model: task.model,
@@ -137,7 +148,9 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 			appendSystemPrompt: task.appendSystemPrompt,
 			signal: task.signal,
 		});
+		return retention ? { ...child, retentionUnsupported: true } : child;
 	}, {
+		idNamespace: retention ? randomUUID() : undefined,
 		terminalHost: host,
 		pi,
 		// Herdr injects the caller tab into the RPC child. Seed visible placement
@@ -289,9 +302,10 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 				pendingReplacements().delete(previous);
 			}
 		}
-		if (options.retainedRegistry) {
+		if (options.retainedRegistry || retention) {
 			try {
-				await manager.reconstruct(options.retainedRegistry, ctx.sessionManager.getSessionId());
+				const sessionId = ctx.sessionManager.getSessionId();
+				await manager.reconstruct(options.retainedRegistry ?? retention!.registry(sessionId), sessionId);
 			} catch {
 				// Corrupt retained evidence stays on disk for inspection; startup still publishes status and delivery.
 				logDiagnostic("subagent_startup_recovery_refused", { scope: "reconstruction" });

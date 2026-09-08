@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -94,7 +94,7 @@ interface ToolResult {
 /** Minimal tool-definition shape captured from registerTool. */
 type Tool = { name: string; execute: (...args: unknown[]) => Promise<ToolResult> };
 
-const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui", options: { retainedRegistry?: SubagentRegistry } = {}) => {
+const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui", options: { retainedRegistry?: SubagentRegistry; retention?: false } = {}) => {
 	let idle = true;
 	const handlers = new Map<string, Handler[]>();
 	const tools = new Map<string, Tool>();
@@ -109,6 +109,7 @@ const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui", options: { re
 	};
 	// SAFETY: the double implements every ExtensionAPI member installSubagents touches.
 	const manager = installSubagents(pi as never, {
+		retention: false,
 		terminalHost: fakeTerminalHost(),
 		spawnPaneChild: fakeSpawnPaneChild,
 		spawnPiChild: fakeSpawnPiChild,
@@ -158,6 +159,16 @@ beforeEach(() => {
 });
 
 describe("subagent result delivery", () => {
+	it("opens the production retained registry on session start by default", async () => {
+		const root = realpathSync(mkdtempSync(join(tmpdir(), "sumocode-production-registry-")));
+		vi.stubEnv("SUMOCODE_STATE_DIR", root);
+		const harness = createHarness(false, "rpc", { retention: undefined });
+		try {
+			expect(existsSync(join(root, "sumocode", "subagents", "v2", "registry"))).toBe(false);
+			await harness.fireSessionStart("production-session");
+			expect(existsSync(join(root, "sumocode", "subagents", "v2", "registry"))).toBe(true);
+		} finally { harness.manager.disposeAll(); vi.unstubAllEnvs(); }
+	});
 	it("sets the status widget while active and clears it after the last settlement", async () => {
 		const harness = createHarness(true);
 		harness.fire("session_start");

@@ -257,7 +257,11 @@ class RetainedSupervisor {
 			this.visibleCleanupStarted = true;
 		});
 		this.heartbeat = setInterval(() => {
-			try { this.renew(); } catch { /* renew records authority loss locally. */ }
+			try {
+				if (!this.completed) this.renew();
+				else if (this.record.delivery.state === "sent") clearInterval(this.heartbeat);
+				else this.authority.renew();
+			} catch { /* Renewal failure cannot invalidate a durable settlement. */ }
 		}, 20_000);
 		if (!options.keepAlive) this.heartbeat.unref();
 		this.stopControl = serveRetainedControl(this.registry, options.initial.id, (authority) => this.controllerChild(authority));
@@ -302,7 +306,7 @@ class RetainedSupervisor {
 			retained: { registry: this.registry.forController(authority.owner), supervisor: this, authority },
 			ready: this.ready,
 			events: () => undefined,
-			interrupt: () => { fence(); if (this.record.backend === "visible") this.child.interrupt(fence); else this.child.interrupt(); },
+			interrupt: () => { fence(); return this.record.backend === "visible" ? this.child.interrupt(fence) : this.child.interrupt(); },
 			send: this.child.send ? async (text) => { fence(); if (this.record.backend === "visible") await this.child.send!(text, fence); else await this.child.send!(text); } : undefined,
 			requestClose: this.child.requestClose ? () => { fence(); if (this.record.backend === "visible") this.child.requestClose!(fence); else this.child.requestClose!(); } : undefined,
 		};
@@ -410,7 +414,7 @@ class RetainedSupervisor {
 			}));
 			this.completed = structuredClone({ outcome: result.outcome, manifest: { ...manifest, exit: outcome.kind } });
 			this.stopped = true;
-			clearInterval(this.heartbeat);
+			// Keep the writer lease alive until the durable result is delivered, including through handoff.
 			this.stopControl?.();
 			this.finish("settled");
 			this.notify();

@@ -94,7 +94,7 @@ function fixture(backend: "headless" | "visible" = "headless") {
 				const current = registry.get(record.id)!;
 				return registry.reserveControl(current.revision, authority, `${record.id}:${authority.head + 1}`, { ...successor, writerGeneration: current.writerLease!.generation });
 			},
-			controllerChild: (authority) => ({ events: () => undefined, interrupt: () => { if (registry.inspectControl(authority)) interrupt(); },
+			controllerChild: (authority) => ({ events: () => undefined, interrupt: () => { if (registry.inspectControl(authority)) return interrupt(); },
 				send: async (text) => { if (registry.inspectControl(authority)) await send(text); }, requestClose: () => { if (registry.inspectControl(authority)) requestClose(); } }),
 			subscribe: (listener) => { listeners.add(listener); maxObservers = Math.max(maxObservers, listeners.size); return () => { listeners.delete(listener); }; },
 		};
@@ -596,6 +596,18 @@ describe("manager replacement adoption", () => {
 		expect(f.interrupt).not.toHaveBeenCalled();
 		expect(f.send).not.toHaveBeenCalled();
 		expect(next.delivery).not.toHaveBeenCalled();
+	});
+
+	it("marks retained cancellation ambiguous when interrupt admission is refused", async () => {
+		const f = fixture();
+		const old = f.install("origin");
+		await f.track(old);
+		await old.fire("session_shutdown", "new");
+		const next = f.install("successor");
+		await next.fire("session_start", "new");
+		f.interrupt.mockImplementation(() => Promise.reject(new Error("acknowledgement lost")));
+		await expect(next.manager.cancel(["sa-1"])).resolves.toEqual(["sa-1 control unavailable; inspect retained evidence"]);
+		expect(next.manager.get("sa-1")?.recovery).toBe("ambiguous");
 	});
 
 	it("uses dead-and-expired generation CAS without pretending a lost parser was recovered", async () => {

@@ -31,6 +31,9 @@ jobs:
           node-version: 24
           cache: pnpm
 
+      - name: Trust Node executable
+        run: chmod go-w "$(realpath "$(command -v node)")"
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -67,6 +70,9 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+
+      - name: Trust Node executable
+        run: chmod go-w "$(realpath "$(command -v node)")"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

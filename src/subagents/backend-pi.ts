@@ -165,7 +165,7 @@ export interface SpawnedChild {
 	readonly events: AsyncIterable<SubagentEvent> | ((emit: (e: SubagentEvent) => void) => void);
 	readonly sessionFilePath?: string;
 	readonly ready?: Promise<void>;
-	interrupt(beforeEffect?: () => void): void;
+	interrupt(beforeEffect?: () => void): void | Promise<void>;
 	/**
 	 * Publish steering text to a running child's control channel and wait for the
 	 * child watcher to consume it and synchronously submit it to Pi. Rejects when

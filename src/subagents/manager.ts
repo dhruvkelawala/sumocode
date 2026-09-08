@@ -698,6 +698,7 @@ export class SubagentManager {
 		// CANCEL_WAIT_MS each — cancel means "stop everything promptly".
 		const lines = new Map<string, string>();
 		const targets: string[] = [];
+		const admissions = new Map<string, Promise<void>>();
 		for (const id of ids) {
 			const snapshot = this.snapshots.get(id);
 			if (!snapshot) {
@@ -724,14 +725,29 @@ export class SubagentManager {
 				else if (this.pendingSpawns.has(id)) this.cancelledSetupIds.add(id);
 				void this.startSettle(id, { kind: "interrupted" });
 			} else {
-				this.children.get(id)?.child.interrupt();
+				admissions.set(id, Promise.resolve(this.children.get(id)?.child.interrupt()));
 			}
 			targets.push(id);
 		}
 		await Promise.allSettled(targets.map(async (id) => {
+			const retained = this.retained.has(id);
+			try {
+				await admissions.get(id);
+			} catch {
+				if (retained) {
+					this.blockRetained(id, "ambiguous");
+					lines.set(id, `${id} control unavailable; inspect retained evidence`);
+					return;
+				}
+			}
 			try {
 				await this.waitForSettle(id, CANCEL_WAIT_MS);
 			} catch {
+				if (retained) {
+					this.consumedIds.delete(id);
+					lines.set(id, `cancel requested for ${id}; still running — inspect or retry`);
+					return;
+				}
 				await this.startSettle(id, { kind: "interrupted", partialText: this.snapshots.get(id)?.finalText || this.snapshots.get(id)?.liveText });
 			}
 			lines.set(id, `Cancelled ${id}`);

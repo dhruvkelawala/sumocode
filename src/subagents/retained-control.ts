@@ -81,7 +81,7 @@ export function retainedControlClient(registry: SubagentRegistry, authority: Reg
 		});
 	};
 	return { events: () => undefined, send: (text) => submit("send", text),
-		interrupt: () => { void submit("interrupt").catch(() => undefined); },
+		interrupt: () => submit("interrupt"),
 		requestClose: () => { void submit("close").catch(() => undefined); } };
 }
 

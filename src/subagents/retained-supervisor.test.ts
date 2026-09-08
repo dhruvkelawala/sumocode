@@ -233,7 +233,7 @@ describe("retained supervisor handle ownership", () => {
 			await vi.advanceTimersByTimeAsync(20_000);
 			f.release();
 			expect(await f.owner.settlement).toBe("settled");
-			expect(vi.getTimerCount()).toBe(0);
+			expect(vi.getTimerCount()).toBe(1);
 		} finally { vi.useRealTimers(); }
 	});
 
@@ -292,7 +292,7 @@ describe("retained supervisor handle ownership", () => {
 		expect(f.registry.get(r.id)).toMatchObject({ controlHead: 6, controlLease: r.controlLease });
 		expect(f.spawn).toHaveBeenCalledTimes(1);
 		expect(f.proc.stdin.write).toHaveBeenCalledTimes(1);
-		expect(vi.getTimerCount()).toBe(0);
+		expect(vi.getTimerCount()).toBe(1);
 	});
 
 	for (const cut of ["prompt", "manifest"] as const) {
@@ -580,6 +580,19 @@ describe("retained supervisor handle ownership", () => {
 		f.release();
 		expect(await f.owner.settlement).toBe("settled");
 		expect(f.subscriptions).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps the writer lease alive while a settled completion remains undelivered", async () => {
+		vi.useFakeTimers();
+		const f = retainedFixture();
+		f.proc.emit("spawn");
+		await f.owner.ready;
+		await f.finish();
+		f.release();
+		expect(await f.owner.settlement).toBe("settled");
+		f.setNow(21_000);
+		await vi.advanceTimersByTimeAsync(20_000);
+		expect(f.registry.get("sa-proof")?.writerLease).toMatchObject({ generation: 2, renewedAt: 21_000, expiresAt: 81_000 });
 	});
 
 	it("publishes host-derived private evidence before completion observers and leaves delivery undelivered", async () => {

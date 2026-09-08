@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AgentStartEvent, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	createChildEvidenceContext,
 	HARNESS_SIGNATURE,
@@ -473,6 +474,7 @@ nativeDescribe("native executable contract", () => {
 		const tools = new Map<string, { execute: (...args: never[]) => Promise<object> }>();
 		const commands = new Map<string, { handler: (...args: never[]) => Promise<void> }>();
 		const paneRuns: string[] = [];
+		const agentStartHandlers: Array<(event: AgentStartEvent, context: ExtensionContext) => void | Promise<void>> = [];
 		const exec = vi.fn(async (_command: string, args: string[]) => {
 			if (args[0] === "pane" && args[1] === "current") return { code: 0, stdout: JSON.stringify({ result: { pane: { pane_id: "w1:p1", workspace_id: "w1", tab_id: "w1:t1" } } }), stderr: "" };
 			if (args[0] === "pane" && args[1] === "list") return { code: 0, stdout: JSON.stringify({ result: { panes: [{ pane_id: args[3] === "w2" ? "w2:p1" : "w1:p1", workspace_id: args[3] ?? "w1", tab_id: "w1:t1" }] } }), stderr: "" };
@@ -483,7 +485,9 @@ nativeDescribe("native executable contract", () => {
 			return { code: 1, stdout: "", stderr: `unexpected herdr call: ${args.join(" ")}` };
 		});
 		const pi = {
-			on: vi.fn(),
+			on: vi.fn((event: string, handler: (event: AgentStartEvent, context: ExtensionContext) => void | Promise<void>) => {
+				if (event === "agent_start") agentStartHandlers.push(handler);
+			}),
 			registerCommand: vi.fn((name: string, definition: { handler: (...args: never[]) => Promise<void> }) => commands.set(name, definition)),
 			registerShortcut: vi.fn(),
 			registerTool: vi.fn((definition: { name: string; execute: (...args: never[]) => Promise<object> }) => tools.set(definition.name, definition)),
@@ -500,7 +504,11 @@ nativeDescribe("native executable contract", () => {
 			// SAFETY: the Pi double implements the registration/runtime surface used by the compiled RPC extension.
 			extension.default(pi as never);
 			expect([...tools.keys()]).toEqual(expect.arrayContaining(["task", "subagent_spawn"]));
-			const context = { cwd: ROOT, model: undefined, hasUI: true, ui: { notify: vi.fn() }, sessionManager: { getSessionFile: () => undefined, getBranch: () => [{ type: "message" }] } };
+			const context = { cwd: ROOT, model: undefined, hasUI: true, ui: { notify: vi.fn() }, sessionManager: { getSessionId: () => "native-provenance", getSessionFile: () => undefined, getBranch: () => [{ type: "message" }] } };
+			for (const handler of agentStartHandlers) {
+				// SAFETY: the context supplies the session and UI fields used by the compiled agent-start handlers.
+				await handler({ type: "agent_start" }, context as never);
+			}
 			// SAFETY: the compiled task definition and context expose the exact Pi tool execution surface used here.
 			await tools.get("task")!.execute("native-provenance", { type: "single", tasks: [{ prompt: "probe", fork: false }] }, undefined, undefined, context as never);
 			// SAFETY: the fake parent Pi writes this exact provenance record.

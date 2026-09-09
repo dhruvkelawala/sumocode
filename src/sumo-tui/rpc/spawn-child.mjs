@@ -9,11 +9,19 @@ function hostCwd(env) {
 }
 
 function childEnv(env) {
-	return {
+	const child = {
 		...env,
 		SUMOCODE_RPC_CHILD: "1",
 		SUMO_TUI: "0",
 	};
+	// Herdr detects agents by foreground process and does not know the
+	// sumocode wrapper binaries, so agent reports for the hidden pi child
+	// attach to nothing. Hint herdr at the pi manifest (HERDR_AGENT), scoped
+	// to herdr panes only and never overriding an explicit user hint.
+	if (env.HERDR_ENV === "1" && env.HERDR_AGENT === undefined) {
+		child.HERDR_AGENT = "pi";
+	}
+	return child;
 }
 
 function isNativeRuntime(env) {

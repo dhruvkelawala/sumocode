@@ -68,3 +68,20 @@ describe("buildChildSpawnPlan extension entry", () => {
 		expect(result?.command).toBe("/opt/sumocode/bin/sumocode-pi");
 	});
 });
+
+describe("buildChildSpawnPlan herdr agent hint", () => {
+	it("sets HERDR_AGENT=pi for the pi child inside herdr panes", () => {
+		const root = makeRoot();
+		expect(plan(root, { HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1" })?.env).toMatchObject({ HERDR_AGENT: "pi" });
+	});
+
+	it("leaves HERDR_AGENT alone outside herdr", () => {
+		const root = makeRoot();
+		expect(plan(root)?.env?.HERDR_AGENT).toBeUndefined();
+	});
+
+	it("never overrides an explicit HERDR_AGENT hint", () => {
+		const root = makeRoot();
+		expect(plan(root, { HERDR_ENV: "1", HERDR_AGENT: "custom" })?.env).toMatchObject({ HERDR_AGENT: "custom" });
+	});
+});

@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { access, cp, mkdir, mkdtemp, readFile, stat, utimes, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, readFile, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { TERMINAL_CLEANUP_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-controller.js";
 import { PI_BOOT_SEQUENCE, replayScreenRows, spawnPiPty, spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
 import { createRpcChildFixture } from "./rpc-child-fixture.js";
@@ -11,10 +11,34 @@ import { hostOutputsHash } from "../../scripts/lib/host-bundle.mjs";
 const CSI_U_ENTER = "\x1b[13u";
 
 let app: SpawnedPiPty | undefined;
+let artifactRoot: string;
+let suitePackageRoot: string;
+let standalonePackageRoot: string | undefined;
+const originalIntegrationPackageRoot = process.env.SUMOCODE_INTEGRATION_PACKAGE_ROOT;
+const originalCwd = process.cwd();
 
-afterEach(() => {
-	app?.cleanup();
+beforeEach(async () => {
+	const sourceRoot = suitePackageRoot;
+	artifactRoot = await mkdtemp(join(tmpdir(), "sumocode-rpc-host-artifacts-"));
+	for (const entry of ["bin", "dist", "scripts", "src", "package.json", "pnpm-lock.yaml", "tsconfig.json", "sumo-rpc-host.js"]) {
+		await cp(join(sourceRoot, entry), join(artifactRoot, entry), { recursive: true });
+	}
+	await symlink(join(sourceRoot, "node_modules"), join(artifactRoot, "node_modules"), "dir");
+	process.env.SUMOCODE_INTEGRATION_PACKAGE_ROOT = artifactRoot;
+	process.chdir(artifactRoot);
+});
+
+afterEach(async () => {
+	await app?.cleanupAndWait();
 	app = undefined;
+	process.chdir(originalCwd);
+	if (originalIntegrationPackageRoot === undefined) delete process.env.SUMOCODE_INTEGRATION_PACKAGE_ROOT;
+	else process.env.SUMOCODE_INTEGRATION_PACKAGE_ROOT = originalIntegrationPackageRoot;
+	await rm(artifactRoot, { recursive: true, force: true });
+});
+
+afterAll(async () => {
+	if (standalonePackageRoot !== undefined) await rm(standalonePackageRoot, { recursive: true, force: true });
 });
 
 function delay(ms: number): Promise<void> {
@@ -55,9 +79,20 @@ async function waitForFileText(path: string, expected: string, attempts = 200): 
 }
 
 describe("sumocode RPC host shell integration", () => {
-	beforeAll(() => {
-		execFileSync(process.execPath, ["scripts/build-host.mjs"], { cwd: process.cwd(), stdio: "pipe" });
-		execFileSync(process.execPath, ["scripts/build-extension.mjs"], { cwd: process.cwd(), stdio: "pipe" });
+	beforeAll(async () => {
+		if (originalIntegrationPackageRoot !== undefined) {
+			suitePackageRoot = originalIntegrationPackageRoot;
+			return;
+		}
+		standalonePackageRoot = await mkdtemp(join(tmpdir(), "sumocode-rpc-host-bootstrap-"));
+		// The checkout carries no dist/**; the builds below generate it privately.
+		for (const entry of ["bin", "scripts", "src", "package.json", "pnpm-lock.yaml", "tsconfig.json", "sumo-rpc-host.js"]) {
+			await cp(join(originalCwd, entry), join(standalonePackageRoot, entry), { recursive: true });
+		}
+		await symlink(join(originalCwd, "node_modules"), join(standalonePackageRoot, "node_modules"), "dir");
+		execFileSync(process.execPath, ["scripts/build-host.mjs"], { cwd: standalonePackageRoot, stdio: "pipe" });
+		execFileSync(process.execPath, ["scripts/build-extension.mjs"], { cwd: standalonePackageRoot, stdio: "pipe" });
+		suitePackageRoot = standalonePackageRoot;
 	});
 
 	async function bootWithHostMode(mode: "1" | "0"): Promise<void> {
@@ -316,13 +351,17 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		await bootWithExtensionMode(mode);
 	}, 30_000);
 
-	it.each(["bundle", "source"] as const)("loads %s from a peer-only package copy with no local node_modules", async (mode) => {
+	// "absent" is the git-package install shape: the repository never commits
+	// dist/**, so a consumer checkout has no bundle and no override, and the
+	// stable entry must select source on its own.
+	it.each(["bundle", "source", "absent"] as const)("loads %s from a peer-only package copy with no local node_modules", async (mode) => {
 		const packageRoot = await mkdtemp(join(tmpdir(), `sumocode-peer-only-${mode}-package-`));
-		await mkdir(join(packageRoot, "dist"), { recursive: true });
 		await mkdir(join(packageRoot, "scripts", "lib"), { recursive: true });
 		await Promise.all([
 			cp(join(process.cwd(), "src"), join(packageRoot, "src"), { recursive: true }),
-			cp(join(process.cwd(), "dist", "extension"), join(packageRoot, "dist", "extension"), { recursive: true }),
+			mode === "absent"
+				? Promise.resolve()
+				: cp(join(process.cwd(), "dist", "extension"), join(packageRoot, "dist", "extension"), { recursive: true }),
 			cp(join(process.cwd(), "scripts", "build-extension.mjs"), join(packageRoot, "scripts", "build-extension.mjs")),
 			cp(join(process.cwd(), "scripts", "lib", "extension-bundle.mjs"), join(packageRoot, "scripts", "lib", "extension-bundle.mjs")),
 			cp(join(process.cwd(), "package.json"), join(packageRoot, "package.json")),
@@ -330,6 +369,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		]);
 		await expect(access(join(packageRoot, "node_modules"))).rejects.toThrow();
 		await expect(access(join(packageRoot, "pnpm-lock.yaml"))).rejects.toThrow();
+		if (mode === "absent") await expect(access(join(packageRoot, "dist"))).rejects.toThrow();
 		const agentDir = await mkdtemp(join(tmpdir(), `sumocode-peer-only-${mode}-agent-`));
 		const env: NodeJS.ProcessEnv = { PI_CODING_AGENT_DIR: agentDir };
 		if (mode === "source") env.SUMOCODE_EXTENSION_BUNDLE = "0";
@@ -690,6 +730,38 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		expect(app.getCurrentTerminalState().altscreenActive).toBe(false);
 	}, 30_000);
 
+	it("awaits the adopted protocol-failure reap before publishing host exit", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-adopted-protocol-reap-"));
+		const piBin = join(directory, "stalled-pi");
+		const pidFile = join(directory, "pid");
+		const exitCodeFile = join(directory, "exit-code");
+		await writeFile(piBin, `#!/usr/bin/env node
+process.on('SIGTERM', () => {});
+require('node:fs').writeFileSync(process.env.PID_FILE, String(process.pid));
+// A host request proves adoption; corrupt output must not abandon this child.
+process.stdin.once('data', () => process.stdout.write('invalid\\ninvalid\\ninvalid\\n'));
+process.stdin.resume();
+setInterval(() => {}, 1000);
+`, { mode: 0o700 });
+		app = spawnPiPty({
+			command: process.execPath,
+			args: [join(process.cwd(), "sumo-rpc-host.js")],
+			env: {
+				PI_BIN: piBin,
+				PID_FILE: pidFile,
+				PI_CODING_AGENT_DIR: join(directory, "agent"),
+				SUMOCODE_EXIT_CODE_FILE: exitCodeFile,
+			},
+			cols: 100,
+			rows: 30,
+		});
+		const pid = await waitForPid(pidFile);
+		await waitForFileText(exitCodeFile, "1", 1_000);
+		// Check at publication, not after a cleanup/wait that could hide a leak.
+		expect(() => process.kill(pid, 0)).toThrow();
+		expect(app.getCurrentTerminalState().altscreenActive).toBe(false);
+	}, 30_000);
+
 	it("reaps an adopted SIGTERM-ignoring child across repeated signals", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-adopted-repeat-signal-"));
 		const piBin = join(directory, "stalled-pi");
@@ -811,12 +883,11 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 			rows: 30,
 		});
 
-		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
-		app.sendInput("\u001f");
-		await delay(100);
-		expect(app.getOutput()).not.toContain("host controls");
-		app.sendInput("\u0004");
+		// Input is attached, but the stalled child cannot reach command readiness.
+		await app.waitForReady("input");
+		app.sendInput("\u001f\u0004");
 		await app.waitForOutput(TERMINAL_CLEANUP_SEQUENCE, 2_000);
+		expect(app.getOutput()).not.toContain("host controls");
 		expect(app.getCurrentTerminalState().altscreenActive).toBe(false);
 	}, 30_000);
 

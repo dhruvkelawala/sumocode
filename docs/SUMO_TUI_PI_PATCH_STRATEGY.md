@@ -1,3 +1,5 @@
+> **Status: historical/superseded as of 2026-09-08** — [Current authority](../DEV_LOOP.md). Private-patch and early RPC contracts below are preserved retirement evidence.
+
 # SumoTUI Pi Patch Strategy
 
 **Status:** retired on 2026-07-02 by Plan 014

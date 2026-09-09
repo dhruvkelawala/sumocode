@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SubagentSnapshot } from "../subagents/domain.js";
+import { mergeActivitySnapshot } from "./domain.js";
 import {
 	activitiesFromSubagentToolRecord,
 	activityFromSubagentResultRecord,
@@ -25,6 +26,43 @@ function snapshot(overrides: Partial<SubagentSnapshot> = {}): SubagentSnapshot {
 }
 
 describe("subagent Activity adapter", () => {
+	it.each(["stalled-warning", "over-budget-warning"] as const)("projects %s without changing running status or losing output", (health) => {
+		const activity = activityFromSubagentSnapshot(snapshot({
+			health, elapsedMs: 120_000, lastProgressAt: 1000, lastHeartbeatAt: 2000, liveness: "unknown",
+			utilization: { wallTime: 1.2, tokens: null, cost: 0.5 }, liveText: "still working",
+		}));
+		expect(activity).toMatchObject({ status: "running", currentStep: health, outputTail: "still working", body: { kind: "text" } });
+		expect(activity.body?.text).toContain("wall 120% · reported tokens unknown · reported cost 50%");
+		expect(activity.body?.text).toContain("last heartbeat 1970-01-01T00:00:02.000Z (event loop only)");
+		expect(activity.body?.text).toContain("inspect or explicitly cancel with subagent_cancel");
+	});
+	it.each(["active", "quiet"] as const)("preserves a running %s step instead of replacing it with a health label", (health) => {
+		const activity = activityFromSubagentSnapshot(snapshot({ health, liveText: "Inspecting src/auth.ts" }));
+		expect(activity).toMatchObject({ status: "running", currentStep: "Inspecting src/auth.ts", outputTail: "Inspecting src/auth.ts" });
+		expect(activity.body?.text).toContain(`${health} · elapsed`);
+	});
+	it("projects retained recovery without inventing detailed causes", () => {
+		const adopted = activityFromSubagentSnapshot(snapshot({ health: "active", recovery: "adopted" }));
+		expect(adopted).toMatchObject({ status: "running", currentStep: "recovered-running" });
+		expect(adopted.body?.text).toContain("retained child adopted");
+		const lost = activityFromSubagentSnapshot(snapshot({ status: "error", recovery: "lost", errorText: "backend gone", finalText: "partial" }));
+		expect(lost).toMatchObject({ status: "lost", currentStep: "lost" });
+		expect(lost.body?.text).toContain("retained child lost");
+		expect(lost.body?.text).toContain("partial");
+		const ambiguous = activityFromSubagentSnapshot(snapshot({ status: "error", recovery: "ambiguous" }));
+		expect(ambiguous).toMatchObject({ status: "lost", currentStep: "ambiguous identity" });
+		expect(ambiguous.body?.text).toContain("retained child ambiguous");
+	});
+	it("replaces durable warning copy with settled telemetry and final result", () => {
+		const running = activityFromSubagentSnapshot(snapshot({ health: "stalled-warning" }));
+		const settled = activityFromSubagentSnapshot(snapshot({ status: "done", health: "quiet", finalText: "review complete", settledAt: 2000 }));
+		const merged = mergeActivitySnapshot(running, settled);
+		expect(merged.body?.text).not.toContain("stalled-warning");
+		expect(merged.body?.text).not.toContain("subagent_cancel");
+		expect(merged.body?.text).toContain("review complete");
+		expect(merged.currentStep).toBe("quiet");
+	});
+
 	it("maps queued snapshots without running output", () => {
 		const activity = activityFromSubagentSnapshot(snapshot({ status: "queued", liveText: "not started" }));
 		expect(activity).toMatchObject({ id: "subagent:sa-7", status: "queued" });
@@ -264,4 +302,18 @@ describe("subagent Activity adapter", () => {
 		expect(activity.model).toBeUndefined();
 		expect(activity.settledAt).toBeUndefined();
 	});
+});
+
+it("adds a result disposition hint only to settled retained worktree evidence", () => {
+	const result = snapshot({ status: "done", recovery: "adopted", finalText: "committed result", settledAt: 2000,
+		worktree: { path: "/worktree", repoRoot: "/repo", branch: "sumo/child", baseRef: "a".repeat(40) },
+		manifest: { baseRef: "a".repeat(40), headRef: "b".repeat(40), branch: "sumo/child", worktreePath: "/worktree",
+			changedPaths: ["file.ts"], dirty: false, commits: 1, exit: "completed", durationMs: 1000 } });
+	expect(activityFromSubagentSnapshot(result).body?.text).toContain("/sumo:worktree result sa-7");
+	expect(activityFromSubagentSnapshot(result).body?.text).toContain("inspect · apply · dismiss · prune");
+	expect(activityFromSubagentSnapshot(result).body?.text).toContain("recorded: 1 commits · 1 files · clean");
+	for (const other of [{ ...result, recovery: "unsupported" as const }, { ...result, status: "running" as const },
+		{ ...result, manifest: { exit: "completed" as const, durationMs: 1 } }]) {
+		expect(activityFromSubagentSnapshot(other).body?.text ?? "").not.toContain("/sumo:worktree result");
+	}
 });

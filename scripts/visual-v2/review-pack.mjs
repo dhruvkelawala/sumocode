@@ -165,6 +165,8 @@ function finalCellContractHtml(contract, outputDir) {
 function scenarioDescription(scenario) {
 	const descriptions = {
 		"input-typed-component": "Focused component capture for the active typed input frame. Review this before input-frame implementation work.",
+		"input-recovery-paused-component": "Narrow 60-column capture of the persistent paused-input notice. Review wrapping, full-row fill, and recovery guidance.",
+		"input-recovery-resumed-component": "Narrow 60-column capture of the resumed-input notice. Review wrapping, full-row fill, and retained/truncated counts.",
 		"footer-ready-component": "Focused component capture for the Cathedral footer status row. Review state labels, dot ownership, and spacing.",
 		"sidebar-editorial-component": "Focused component capture for the editorial REGISTRY sidebar. Review width, masthead, section rhythm, and hierarchy.",
 		"splash-runtime": "Real runtime splash capture. Required full-frame gate for the RPC-default splash surface.",

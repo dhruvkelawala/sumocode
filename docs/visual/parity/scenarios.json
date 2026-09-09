@@ -164,6 +164,48 @@
 			]
 		},
 		{
+			"id": "input-recovery-paused-component",
+			"lane": "component",
+			"status": "review",
+			"component": {
+				"kind": "input-recovery-notice",
+				"message": "input paused — incomplete paste; 65536/65536 bytes retained; 128 bytes truncated. waiting for paste end; further bytes beyond limit truncated. if no end arrives, end the paste stream in the terminal, then restart the session from outside input."
+			},
+			"dimensions": {
+				"cols": 60,
+				"rows": 5
+			},
+			"bibleTarget": "06-input-recovery-paused.png",
+			"crops": [
+				{
+					"id": "full",
+					"targetCrop": "full",
+					"runtimeCrop": "full"
+				}
+			]
+		},
+		{
+			"id": "input-recovery-resumed-component",
+			"lane": "component",
+			"status": "review",
+			"component": {
+				"kind": "input-recovery-notice",
+				"message": "input resumed — paste complete; 65536/65536 bytes retained; 128 bytes truncated"
+			},
+			"dimensions": {
+				"cols": 60,
+				"rows": 2
+			},
+			"bibleTarget": "06-input-recovery-resumed.png",
+			"crops": [
+				{
+					"id": "full",
+					"targetCrop": "full",
+					"runtimeCrop": "full"
+				}
+			]
+		},
+		{
 			"id": "footer-ready-component",
 			"lane": "component",
 			"status": "review",
@@ -1295,6 +1337,72 @@
 					"minFirst": 0,
 					"maxLast": 59
 				}
+			}
+		},
+		{
+			"id": "fixture-worktree-result-disposition-landscape",
+			"lane": "fixture",
+			"status": "review",
+			"dimensions": { "cols": 160, "rows": 45 },
+			"bibleTarget": "scene-activity-cards.png",
+			"fixture": { "id": "worktree-result-disposition", "activityExpansion": { "subagent:sa-7": true } },
+			"crops": [
+				{ "id": "full", "targetCrop": "full", "runtimeCrop": "full" },
+				{ "id": "chat-area", "targetCrop": "chat-area", "runtimeCrop": "chat-area" }
+			],
+			"geometrySpec": {
+				"regions": [{ "startRow": 1, "endRow": 1, "category": "top-bar", "firstCol": 1 }],
+				"contentBounds": { "minFirst": 0, "maxLast": 159 }
+			}
+		},
+		{
+			"id": "fixture-subagent-recovery-states-landscape",
+			"lane": "fixture",
+			"status": "review",
+			"dimensions": { "cols": 160, "rows": 45 },
+			"bibleTarget": "scene-activity-cards.png",
+			"fixture": {
+				"id": "subagent-recovery-states",
+				"activityExpansion": {
+					"fixture-recovered-subagent": true,
+					"fixture-lost-subagent": true,
+					"fixture-ambiguous-subagent": true,
+					"fixture-completed-terminal": false,
+					"fixture-failed-terminal": false
+				}
+			},
+			"crops": [
+				{ "id": "full", "targetCrop": "full", "runtimeCrop": "full" },
+				{ "id": "chat-area", "targetCrop": "chat-area", "runtimeCrop": "chat-area" }
+			],
+			"geometrySpec": {
+				"regions": [{ "startRow": 1, "endRow": 1, "category": "top-bar", "firstCol": 1 }],
+				"contentBounds": { "minFirst": 0, "maxLast": 159 }
+			}
+		},
+		{
+			"id": "fixture-subagent-budget-warnings-landscape",
+			"lane": "fixture",
+			"status": "review",
+			"dimensions": { "cols": 160, "rows": 45 },
+			"bibleTarget": "scene-activity-cards.png",
+			"fixture": {
+				"id": "activity-budget-warnings",
+				"activityExpansion": {
+					"fixture-stalled-subagent": true,
+					"fixture-over-budget-subagent": true,
+					"fixture-completed-terminal": false,
+					"fixture-failed-terminal": false,
+					"fixture-collapsed-subagent": false
+				}
+			},
+			"crops": [
+				{ "id": "full", "targetCrop": "full", "runtimeCrop": "full" },
+				{ "id": "chat-area", "targetCrop": "chat-area", "runtimeCrop": "chat-area" }
+			],
+			"geometrySpec": {
+				"regions": [{ "startRow": 1, "endRow": 1, "category": "top-bar", "firstCol": 1 }],
+				"contentBounds": { "minFirst": 0, "maxLast": 159 }
 			}
 		},
 		{

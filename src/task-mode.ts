@@ -25,7 +25,17 @@
  */
 
 import { appendFileSync, existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import {
+	assertArtifactInsideDir,
+	assertPrivateArtifact,
+	assertPrivateDir,
+	isErrnoCode,
+	type PrivateArtifactFs,
+	nodeArtifactFs,
+	validatedArtifactStat,
+	PRIVATE_FILE_MODE,
+} from "./private-artifact.js";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 /**
@@ -77,6 +87,92 @@ export function resetTaskMarkerEnvForTests(): void {
 	capturedMarkerEnv = undefined;
 }
 
+const artifactFs: PrivateArtifactFs = nodeArtifactFs;
+
+/**
+ * The task directory that owns the given marker env snapshot, when known.
+ * Confinement is only checkable against it.
+ */
+const taskDirFromMarkers = (markers: NodeJS.ProcessEnv | undefined): string | undefined => {
+	const controlDir = markers?.SUMOCODE_TASK_CONTROL_DIR;
+	return controlDir ? dirname(resolve(controlDir)) : undefined;
+};
+
+/**
+ * Marker paths are a private contract between the orchestrating parent and
+ * THIS process, delivered through the trusted launch env. Capture time
+ * confines every marker to the task directory that owns the control dir and
+ * normalizes it to that resolved spelling, so relative or `..`-decorated
+ * marker values cannot diverge between validation and the writers. Markers
+ * outside the task dir are dropped (fail closed) with a diagnostic.
+ */
+function sanitizeTaskMarkers(markers: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+	const taskDir = taskDirFromMarkers(markers);
+	if (!taskDir) {
+		const refused = TASK_MARKER_ENV_KEYS.filter((key) => markers[key] !== undefined && key !== "SUMOCODE_TASK_CONTROL_DIR");
+		// Two-phase: quarantine EVERY refused marker (including the diag sink)
+		// before logging any of them, so no refusal is ever appended through an
+		// unvalidated diagnostic path.
+		const refusedMarkers = refused.map((key) => ({ key, file: markers[key] }));
+		for (const { key } of refusedMarkers) delete markers[key];
+		for (const { key, file } of refusedMarkers) {
+			diagLog("marker_refused", { file, message: `${key} set without SUMOCODE_TASK_CONTROL_DIR` });
+		}
+		return markers;
+	}
+	// DIAG and CONTROL first: diagLog consumes the snapshot being mutated, so
+	// the diag path must already be validated before refusals are logged for
+	// the remaining markers.
+	const orderedKeys = [
+		"SUMOCODE_TASK_CONTROL_DIR",
+		"SUMOCODE_TASK_DIAG_FILE",
+		...TASK_MARKER_ENV_KEYS.filter((key) => key !== "SUMOCODE_TASK_CONTROL_DIR" && key !== "SUMOCODE_TASK_DIAG_FILE"),
+	] as const;
+	for (const key of orderedKeys) {
+		const value = markers[key];
+		if (value === undefined) continue;
+		if (key === "SUMOCODE_TASK_CONTROL_DIR") {
+			// The anchor itself: confinement is relative to its own parent dir.
+			markers[key] = resolve(value);
+			continue;
+		}
+		try {
+			assertArtifactInsideDir(resolve(value), taskDir, key);
+			markers[key] = resolve(value);
+		} catch (error) {
+			// Quarantine the refused marker BEFORE logging: when the refused key is
+			// the diag sink itself, the refusal must not be appended through the
+			// very path that just failed validation.
+			delete markers[key];
+			diagLog("marker_refused", { file: value, message: error instanceof Error ? error.message : String(error) });
+		}
+	}
+	return markers;
+}
+
+/**
+ * Validate-then-write a task artifact the child itself owns. A valid existing
+ * entry is overwritten in place (response.md is rewritten every turn); an
+ * absent entry is created with an exclusive, no-follow create. Anything else
+ * — including a dangling symlink planted at the artifact path — throws, and
+ * the caller's catch records a truthful diagnostic instead of writing through
+ * the replaced path. When the owning task dir is known, the entry is also
+ * re-checked for direct-child confinement at write time.
+ */
+function writeOwnedTaskArtifact(file: string, contents: string, label: string, taskDir?: string): void {
+	const parentDir = taskDir ?? dirname(file);
+	const existing = validatedArtifactStat(artifactFs, file, parentDir, label);
+	if (existing === undefined) {
+		writeFileSync(file, contents, { mode: PRIVATE_FILE_MODE, flag: "wx" });
+		return;
+	}
+	// ponytail: overwrite window between validate and write is not closeable
+	// portably (O_NOFOLLOW is POSIX-only and untyped here); closing it needs an
+	// openat seam, which waits for an upstream need. Exploiting the window
+	// already requires owner access to the 0700 task dir.
+	writeFileSync(file, contents, { mode: PRIVATE_FILE_MODE });
+}
+
 interface DiagDetail {
 	readonly reason?: string;
 	readonly file?: string;
@@ -92,20 +188,31 @@ interface DiagDetail {
 }
 
 /**
- * Env-gated diagnostic logging. Set `SUMOCODE_TASK_DIAG_FILE=/tmp/xxx.jsonl`
- * to capture every lifecycle event the auto-exit goes through.
- * No-op when the env var is unset (production default).
+ * Env-gated diagnostic logging. The spawn pipeline points
+ * `SUMOCODE_TASK_DIAG_FILE` at `diag.jsonl` inside the private task dir; the
+ * capture-time sanitizer confines it there (and drops it otherwise), since the
+ * trail names task artifact paths. No-op when the env var is unset.
  */
 function diagLog(event: string, detail?: DiagDetail): void {
-	const file = capturedMarkerEnv?.SUMOCODE_TASK_DIAG_FILE ?? process.env.SUMOCODE_TASK_DIAG_FILE;
+	// The sanitized capture is the only marker source — same as persistResponse.
+	const file = capturedMarkerEnv?.SUMOCODE_TASK_DIAG_FILE;
 	if (!file) return;
 	try {
+		// The sink goes through the same boundary as every other artifact: an
+		// absent entry is created exclusively (no-follow), an existing entry must
+		// still be a private regular file, and anything tampered drops the line.
+		// Confinement was capture-checked; per-append this is identity re-check.
+		const stat = validatedArtifactStat(artifactFs, file, dirname(file), "task diag artifact");
+		if (stat === undefined) {
+			writeFileSync(file, "", { mode: PRIVATE_FILE_MODE, flag: "wx" });
+		}
 		appendFileSync(
 			file,
 			`${JSON.stringify({ t: Date.now(), pid: process.pid, event, ...(detail ?? undefined) })}\n`,
+			{ mode: PRIVATE_FILE_MODE },
 		);
 	} catch {
-		// diagnostics must never crash the extension
+		// diagnostics must never crash the extension — a refused sink drops the line
 	}
 }
 
@@ -151,7 +258,9 @@ export function extractFinalAssistantText(messages: unknown[]): string {
  * so a multi-turn pane always exposes its latest assistant response.
  */
 function persistResponse(messages: unknown[]): void {
-	const file = capturedMarkerEnv?.SUMOCODE_TASK_RESPONSE_FILE ?? process.env.SUMOCODE_TASK_RESPONSE_FILE;
+	// The sanitized capture is the only marker source: a raw process.env probe
+	// here would bypass capture-time confinement.
+	const file = capturedMarkerEnv?.SUMOCODE_TASK_RESPONSE_FILE;
 	if (!file) {
 		diagLog("response_skipped", { reason: "no_env" });
 		return;
@@ -162,7 +271,7 @@ function persistResponse(messages: unknown[]): void {
 		return;
 	}
 	try {
-		writeFileSync(file, `${text}\n`);
+		writeOwnedTaskArtifact(file, `${text}\n`, "task response artifact", taskDirFromMarkers(capturedMarkerEnv));
 		diagLog("response_written", { file, bytes: text.length });
 	} catch (error) {
 		diagLog("response_write_failed", {
@@ -175,7 +284,7 @@ export function writeTaskExitMarker(code: number, env: NodeJS.ProcessEnv = proce
 	const file = env.SUMOCODE_TASK_EXIT_FILE;
 	if (!file) return;
 	try {
-		writeFileSync(file, `${code}\n`);
+		writeOwnedTaskArtifact(file, `${code}\n`, "task exit marker", taskDirFromMarkers(env));
 		diagLog("exit_marker_written", { file, code });
 	} catch (error) {
 		diagLog("exit_marker_write_failed", {
@@ -188,7 +297,7 @@ export function writeTaskStartedMarker(env: NodeJS.ProcessEnv = process.env): vo
 	const file = env.SUMOCODE_TASK_STARTED_FILE;
 	if (!file) return;
 	try {
-		writeFileSync(file, `${process.pid}\n`);
+		writeOwnedTaskArtifact(file, `${process.pid}\n`, "task started marker", taskDirFromMarkers(env));
 		diagLog("started_marker_written", { file });
 	} catch (error) {
 		diagLog("started_marker_write_failed", {
@@ -203,6 +312,12 @@ function isNumber(value: number | undefined): value is number {
 
 function errorMessage<T>(error: T): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+/** True when a failed unlink reports the control file is already absent. */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- boundary predicate: fs rejections arrive as `unknown` from catch clauses; isErrnoCode is the sanctioned parse before the errno check.
+function isEnoent(error: unknown): boolean {
+	return isErrnoCode(error, "ENOENT");
 }
 
 function installTaskExitMarker(env: NodeJS.ProcessEnv = process.env): void {
@@ -220,6 +335,11 @@ const STEER_FILE_PATTERN = /^steer-(\d+)\.txt$/;
 export interface TaskModeAutoExitOptions {
 	readonly env?: NodeJS.ProcessEnv;
 	readonly graceMs?: number;
+	/**
+	 * Ack-unlink seam (dependency injection for tests): defaults to the real
+	 * unlinkSync. The watcher only ever unlinks control files with it.
+	 */
+	readonly unlink?: (path: string) => void;
 }
 
 /** True when task mode is active. Mirrors `isTaskMode` in extension.ts. */
@@ -244,17 +364,127 @@ interface TaskModeControlHooks {
 	requestShutdown(ctx: ExtensionContext): void;
 }
 
+const SUBMITTED_CONTROLS_REGISTRY = Symbol.for("sumocode.task-mode.submittedControls");
+
+type SubmittedControlsScope = { [SUBMITTED_CONTROLS_REGISTRY]?: Map<string, Set<string>> };
+
+function globalSubmittedControlsScope(): SubmittedControlsScope {
+	// SAFETY: SubmittedControlsScope only adds an optional module-private symbol
+	// key to globalThis, which no other module reads or writes under that symbol.
+	return globalThis as SubmittedControlsScope;
+}
+
+/**
+ * Process-wide registry of controls whose synchronous Pi submission already
+ * succeeded, keyed by canonical control directory. It lives on globalThis
+ * behind a `Symbol.for` key — the same pattern as the process-install latch in
+ * `extension.ts` — because ONE process can hold distinct SumoCode module
+ * instances at once (source checkout plus generated bundle, or several entry
+ * paths). A per-module-instance Map would let a second instance's watcher
+ * resubmit a control the first instance's watcher already handed to Pi.
+ * Lifetime is exactly the process: Pi recreates the extension API in the SAME
+ * process for `/new`, `/resume`, and `/fork`, and this registry spans all of
+ * those, but a child process restart loses it — resubmission after a restart
+ * remains an upstream/durable-protocol ambiguity this in-process registry does
+ * not solve. Entries are removed when the ack unlink finally succeeds (or the
+ * control is already absent), and empty directory buckets are deleted, so
+ * ordinary watcher stops neither clear nor leak pending ownership.
+ */
+function submittedControlsRegistry(): Map<string, Set<string>> {
+	const scope = globalSubmittedControlsScope();
+	return scope[SUBMITTED_CONTROLS_REGISTRY] ??= new Map<string, Set<string>>();
+}
+
+const submittedControlsFor = (canonicalControlDir: string): Set<string> => {
+	const registry = submittedControlsRegistry();
+	let bucket = registry.get(canonicalControlDir);
+	if (!bucket) {
+		bucket = new Set();
+		registry.set(canonicalControlDir, bucket);
+	}
+	return bucket;
+};
+
+/** Drop a submitted entry after its consumption acknowledgement is complete. */
+const clearSubmittedControl = (canonicalControlDir: string, file: string): void => {
+	const registry = submittedControlsRegistry();
+	const bucket = registry.get(canonicalControlDir);
+	if (!bucket?.delete(file)) return;
+	if (bucket.size === 0) registry.delete(canonicalControlDir);
+};
+
+const isControlSubmitted = (canonicalControlDir: string, file: string): boolean =>
+	submittedControlsRegistry().get(canonicalControlDir)?.has(file) ?? false;
+
+/**
+ * Test seam: a cloned read-only snapshot of the process-wide submitted-control
+ * registry. Cloning keeps the live Map/Sets private — mutating the snapshot
+ * can never touch (or leak) real ownership state.
+ */
+export function submittedControlsForTests(): ReadonlyMap<string, ReadonlySet<string>> {
+	return new Map([...submittedControlsRegistry()].map(([dir, files]) => [dir, new Set(files)]));
+}
+
+/** Test-only: clear the process-wide submitted-control registry (same pattern as `resetSumocodeProcessInstallLatchForTests` in `extension.ts`) so it cannot leak across tests or files. */
+export function resetSubmittedControlsForTests(): void {
+	delete globalSubmittedControlsScope()[SUBMITTED_CONTROLS_REGISTRY];
+}
+
 /**
  * Poll `<controlDir>` for orchestrator control files (the parent-side writer
- * lives in `src/subagents/backend-pane.ts`). Steer files are injected as real
- * Pi steering messages mid-run; `close.request` shuts the child down. The
+ * lives in `src/subagents/backend-pane.ts`). Steer files are consumed and
+ * synchronously submitted to Pi; `close.request` shuts the child down. The
  * watcher is independent of the auto-exit countdown: it also runs for
  * keep-open sessions, because close is explicit while auto-exit is silence.
  */
-function installControlWatcher(pi: ExtensionAPI, controlDir: string | undefined, hooks: TaskModeControlHooks): () => void {
+function installControlWatcher(
+	pi: ExtensionAPI,
+	controlDir: string | undefined,
+	hooks: TaskModeControlHooks,
+	unlinkControl: (path: string) => void,
+): () => void {
 	if (!controlDir) return () => undefined;
 	let stopped = false;
 	let timer: ReturnType<typeof setInterval> | undefined;
+	// Canonicalize exactly once: the registry key, readdir, and every
+	// close/steer member path share this one spelling, so an equivalent
+	// relative/trailing-separator control-dir spelling cannot merge a bucket key
+	// while diverging member paths.
+	const canonicalControlDir = resolve(controlDir);
+	// The control channel is a private parent-child contract. A tampered
+	// directory (replaced by a symlink, group/other-readable, or owned by
+	// someone else) fails closed permanently; a not-yet-created one is the
+	// documented boot ordering and is retried on later ticks.
+	// No successful-validation cache: the directory is re-validated on every
+	// tick so a symlink or widened mode swapped in after the first validation is
+	// never traversed. ENOENT (not yet created) is retried; any other refusal is
+	// logged once and fails closed.
+	let controlDirRefusalLogged = false;
+	const ensureControlDirValidated = (): boolean => {
+		try {
+			assertPrivateDir(artifactFs, canonicalControlDir, "task control directory");
+			return true;
+		} catch (error) {
+			if (!isErrnoCode(error, "ENOENT") && !controlDirRefusalLogged) {
+				controlDirRefusalLogged = true;
+				diagLog("control_dir_refused", {
+					file: canonicalControlDir,
+					message: error instanceof Error ? error.message : String(error),
+				});
+			}
+			return false;
+		}
+	};
+	// The watcher always installs: the per-tick gate re-validates the directory
+	// before consuming anything, so a tampered dir fails closed without a
+	// disable race, an absent dir is the documented boot ordering, and a dir
+	// fixed (or created) later starts being consumed on the next poll.
+	// Submission ownership lives in the process-wide submitted-controls registry,
+	// so watcher recreation and sibling module instances keep it. Ordinary stops
+	// deliberately clear nothing here: clearing would let a recreated watcher
+	// resubmit a control Pi already owns when only the ack unlink was still
+	// failing.
+
 	const stop = (): void => {
 		stopped = true;
 		if (timer) {
@@ -263,59 +493,128 @@ function installControlWatcher(pi: ExtensionAPI, controlDir: string | undefined,
 		}
 	};
 
-	const injectSteer = (file: string): void => {
+	/** Acknowledgement cleanup: unlink the consumed control, never resubmit. */
+	const discardSubmittedControl = (file: string): void => {
+		try {
+			// The entry must still be our private artifact before removal; a
+			// replaced path stays on disk (the parent's send then stays ambiguous
+			// and recoverable) and ownership is retained so it is never resubmitted.
+			assertPrivateArtifact(artifactFs, file, canonicalControlDir, "steer control");
+			unlinkControl(file);
+			clearSubmittedControl(canonicalControlDir, file);
+			diagLog("steer_ack_unlinked", { file });
+		} catch (error) {
+			if (isEnoent(error)) {
+				// The control is already absent: the consumption acknowledgement is
+				// complete. Ownership clears and nothing is retained or retried.
+				clearSubmittedControl(canonicalControlDir, file);
+				diagLog("steer_ack_already_unlinked", { file });
+				return;
+			}
+			// Truthful ack-cleanup diagnostic — the submission itself succeeded and
+			// must not be retried; only the unlink is pending.
+			diagLog("steer_ack_unlink_failed", { file, message: errorMessage(error) });
+		}
+	};
+
+	const submitSteer = (file: string): void => {
+		if (isControlSubmitted(canonicalControlDir, file)) {
+			// Submission already handed this control to Pi. Retry the unlink only.
+			discardSubmittedControl(file);
+			return;
+		}
 		let text: string;
 		try {
+			// Only consume controls that are still private regular artifacts of this
+			// control dir. A replaced or redirected path fails closed: the file
+			// remains so the parent's send budget resolves as an ambiguous timeout,
+			// which the existing protocol treats as recoverable.
+			assertPrivateArtifact(artifactFs, file, canonicalControlDir, "steer control");
 			text = readFileSync(file, "utf8");
 		} catch (error) {
 			diagLog("steer_read_failed", { file, message: errorMessage(error) });
 			return;
 		}
 		if (!text.trim()) {
-			// Empty writes carry nothing to inject; deleting them still acks the
-			// orchestrator's poll so it does not wait out its full budget.
+			// Legacy blank control: nothing to submit, so no Pi call and no
+			// submission diagnostic. Deletion still records consumption so the
+			// orchestrator does not wait out its full budget.
 			try {
-				unlinkSync(file);
+				unlinkControl(file);
+				diagLog("steer_blank_consumed", { file });
 			} catch {
 				// nothing to salvage from an unreadable empty file
 			}
 			return;
 		}
+		hooks.cancelCountdown();
 		try {
-			hooks.cancelCountdown();
-			// The pinned Pi triggers a turn on its own when idle; while streaming
-			// the steer queues for delivery after the current turn's tool calls.
+			// ExtensionAPI.sendUserMessage returns void (unlike the internal
+			// ReplacedSessionContext method). A true acceptance ACK requires an
+			// upstream awaitable result or callback; this call can observe only a
+			// synchronous throw. Do not add a cosmetic await here.
 			pi.sendUserMessage(text, { deliverAs: "steer" });
-			// Unlink is the ack the orchestrator's send poll waits for.
-			unlinkSync(file);
-			diagLog("steer_injected", { file, bytes: text.length });
 		} catch (error) {
-			// One bad file must not wedge the watcher; the next tick retries.
-			diagLog("steer_inject_failed", { file, message: errorMessage(error) });
+			// A synchronous throw means Pi does not own the request: preserve the
+			// file so a later poll can retry the submission.
+			diagLog("steer_submit_failed", { file, message: errorMessage(error) });
+			return;
+		}
+		// Submission succeeded — record ownership process-wide so no watcher in
+		// any module instance ever resubmits it, even across session recreation
+		// while the ack unlink keeps failing.
+		submittedControlsFor(canonicalControlDir).add(file);
+		try {
+			// Unlink tells the parent that the watcher consumed the control and the
+			// synchronous submission did not throw. It is not model-turn delivery.
+			unlinkControl(file);
+			clearSubmittedControl(canonicalControlDir, file);
+			diagLog("steer_submitted", { file, bytes: text.length });
+		} catch (error) {
+			if (isEnoent(error)) {
+				// Removed between the read and this unlink: the consumption
+				// acknowledgement is already complete; ownership clears, nothing retries.
+				clearSubmittedControl(canonicalControlDir, file);
+				diagLog("steer_ack_already_unlinked", { file, bytes: text.length });
+				return;
+			}
+			diagLog("steer_ack_unlink_failed", { file, message: errorMessage(error) });
 		}
 	};
 
 	const tick = (): void => {
 		try {
 			const ctx = hooks.getLatestCtx();
+			if (!ensureControlDirValidated()) return;
 			// Gate EVERY control action on a captured context. Its absence means
 			// session_start has not fired, i.e. the extension runtime is still
 			// loading — and both `sendUserMessage` and `shutdown` throw during
 			// loading ("Extension runtime not initialized"). Ticking anyway burns
-			// the steer file's first delivery attempt and pushes the real
-			// injection past the orchestrator's ack budget, so a delivered steer
-			// gets reported to the parent as a failure. Retry next tick instead.
+			// the first submission attempt and can push control consumption past the
+			// parent's acknowledgement budget. Retry next tick instead.
 			if (!ctx) return;
-			if (existsSync(join(controlDir, CLOSE_REQUEST_FILE))) {
-				diagLog("close_requested");
-				hooks.cancelCountdown();
-				stop();
-				hooks.requestShutdown(ctx);
-				return;
+			// Event-loop heartbeat only: not model progress or process identity.
+			try { writeOwnedTaskArtifact(join(canonicalControlDir, "heartbeat"), `${Date.now()}\n`, "task heartbeat", canonicalControlDir); }
+			catch { /* Unavailable telemetry must not block explicit steering/close. */ }
+			const closePath = join(canonicalControlDir, CLOSE_REQUEST_FILE);
+			if (existsSync(closePath)) {
+				try {
+					// A replaced or symlinked close control is not ours: refuse it and
+					// keep polling (steering stays live) rather than shutting down
+					// through an untrusted path.
+					assertPrivateArtifact(artifactFs, closePath, canonicalControlDir, "close control");
+					diagLog("close_requested");
+					hooks.cancelCountdown();
+					stop();
+					hooks.requestShutdown(ctx);
+					return;
+				} catch (error) {
+					diagLog("close_refused", { file: closePath, message: errorMessage(error) });
+				}
 			}
 			let entries: string[];
 			try {
-				entries = readdirSync(controlDir);
+				entries = readdirSync(canonicalControlDir);
 			} catch {
 				// The parent creates the dir at spawn, but the child can boot
 				// first — tolerate a missing dir until it appears.
@@ -323,7 +622,7 @@ function installControlWatcher(pi: ExtensionAPI, controlDir: string | undefined,
 			}
 			const seqOf = (name: string): number => Number(name.match(STEER_FILE_PATTERN)?.[1] ?? Number.MAX_SAFE_INTEGER);
 			const steerFiles = entries.filter((entry) => STEER_FILE_PATTERN.test(entry)).sort((a, b) => seqOf(a) - seqOf(b));
-			for (const name of steerFiles) injectSteer(join(controlDir, name));
+			for (const name of steerFiles) submitSteer(join(canonicalControlDir, name));
 		} catch (error) {
 			diagLog("control_poll_failed", { message: errorMessage(error) });
 		}
@@ -356,7 +655,10 @@ export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoE
 
 	// Capture marker paths, then scrub them from the env so subprocesses
 	// spawned by this agent cannot clobber the orchestrator's marker files.
-	const markers = captureAndScrubTaskMarkerEnv(env);
+	// Sanitization confines every marker to the task directory that owns the
+	// control dir; refused markers are dropped before any downstream writer or
+	// the control watcher can touch them.
+	const markers = sanitizeTaskMarkers(captureAndScrubTaskMarkerEnv(env));
 	writeTaskStartedMarker(markers);
 	installTaskExitMarker(markers);
 
@@ -425,7 +727,7 @@ export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoE
 			}
 			shutdownNow(ctx);
 		},
-	});
+	}, options.unlink ?? unlinkSync);
 
 	pi.on("session_start", (_event, ctx) => {
 		latestCtx = ctx;

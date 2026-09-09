@@ -1,17 +1,22 @@
 import type { RpcCommand, RpcResponse, RpcSessionState } from "@earendil-works/pi-coding-agent";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { PassThrough } from "node:stream";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatMessageViewModel } from "../transcript/view-model.js";
 import { SUMOCODE_RELOAD_EXIT_CODE } from "../../commands/reload.js";
-import { RpcChildExitError } from "./client.js";
+import { RpcChildExitError, SumoRpcClient } from "./client.js";
 import { RpcHostOverlayManager } from "./host-overlays.js";
+import { RpcHostLifecycle } from "./host-lifecycle.js";
 import { RpcHostControls, type RpcAvailableModel } from "./controls.js";
 import { RpcHostStateStore } from "./state.js";
 import {
 	activitySnapshotMatchesSession,
 	canRpcForceSteer,
+	createEditorSubmitHandlers,
 	createLazyChatSink,
 	createModelCycleBackwardHandler,
 	createModelCycleForwardHandler,
@@ -29,11 +34,13 @@ import {
 	createToolsExpandToggleHandler,
 	createUnhandledRejectionHandler,
 	hydrateSameSessionTreeNavigation,
-	submitInitialPromptFromEnv,
+	submitInitialPromptFromFile,
+	main,
 	writeExitCodeFile,
 	type RpcHostExitDependencies,
 	type RpcHostInterruptDependencies,
 } from "./host.js";
+import { InitialHydrationActionGate } from "./initial-hydration-action-gate.js";
 import { createRpcPromptScheduler } from "./prompt-scheduler.js";
 
 function flush(): Promise<void> {
@@ -120,6 +127,98 @@ function interruptDeps(overrides: Partial<RpcHostInterruptDependencies> = {}): R
 
 const CTRL_C = "";
 const ESCAPE = "";
+
+describe("editor command-readiness submission", () => {
+	it.each(["ordinary prompt", "/help exact text"])("notifies immediately and dispatches pre-ready text exactly once: %s", async (message) => {
+		const settled = deferred();
+		let ready = false;
+		const notifications = { notify: vi.fn() };
+		const submit = vi.fn(async () => undefined);
+		const handlers = createEditorSubmitHandlers({
+			gate: {
+				get isReady() { return ready; },
+				whenSettled: () => settled.promise,
+			},
+			notifications,
+			submit,
+			requestExit: vi.fn(),
+			isTreeBusy: () => false,
+		});
+
+		const pending = handlers.fromEditor(message);
+		expect(notifications.notify).toHaveBeenCalledOnce();
+		expect(notifications.notify).toHaveBeenCalledWith("finishing startup · command queued", "warning");
+		expect(submit).not.toHaveBeenCalled();
+
+		ready = true;
+		settled.resolve();
+		await pending;
+		expect(submit).toHaveBeenCalledOnce();
+		expect(submit).toHaveBeenCalledWith(message);
+	});
+
+	it("keeps quit immediate and silent before command readiness", async () => {
+		const notifications = { notify: vi.fn() };
+		const requestExit = vi.fn();
+		const submit = vi.fn(async () => undefined);
+		const handlers = createEditorSubmitHandlers({
+			gate: { isReady: false, whenSettled: () => new Promise<void>(() => undefined) },
+			notifications,
+			submit,
+			requestExit,
+			isTreeBusy: () => false,
+		});
+
+		await handlers.fromEditor("  /quit now  ");
+		expect(requestExit).toHaveBeenCalledWith(0);
+		expect(notifications.notify).not.toHaveBeenCalled();
+		expect(submit).not.toHaveBeenCalled();
+	});
+
+	it("keeps the launch-seeded kickoff silent once the real hydration gate has settled", async () => {
+		// Regression for the env-seeded kickoff path: releaseInitialHydration()
+		// only resolves the promise; the REAL gate publishes isReady on a later
+		// microtask. runRpcHost therefore awaits whenSettled() before the kickoff
+		// submit. This test locks both halves of that contract.
+		let releaseInitialHydration: () => void = () => undefined;
+		const initialHydration = new Promise<void>((resolve) => {
+			releaseInitialHydration = resolve;
+		});
+		const gate = new InitialHydrationActionGate(initialHydration);
+		const notifications = { notify: vi.fn() };
+		const submit = vi.fn(async () => undefined);
+		const handlers = createEditorSubmitHandlers({
+			gate,
+			notifications,
+			submit,
+			requestExit: vi.fn(),
+			isTreeBusy: () => false,
+		});
+
+		const transportDir = mkdtempSync(join(tmpdir(), "sumo-kickoff-"));
+		const transportFile = join(transportDir, "prompt.txt");
+		writeFileSync(transportFile, "review the diff");
+
+		const pending = submitInitialPromptFromFile(
+			{ SUMOCODE_INITIAL_PROMPT_FILE: transportFile },
+			handlers.fromLaunch,
+		);
+		// The handler, not this caller, owns the silent wait policy for a prompt
+		// supplied at launch.
+		expect(gate.isReady).toBe(false);
+		expect(notifications.notify).not.toHaveBeenCalled();
+		expect(submit).not.toHaveBeenCalled();
+
+		releaseInitialHydration();
+		await pending;
+
+		expect(notifications.notify).not.toHaveBeenCalled();
+		expect(submit).toHaveBeenCalledOnce();
+		expect(submit).toHaveBeenCalledWith("review the diff");
+		expect(existsSync(transportFile)).toBe(false);
+		rmSync(transportDir, { recursive: true, force: true });
+	});
+});
 
 describe("RPC force-steer gate", () => {
 	it("requires streaming without compaction or tree navigation", () => {
@@ -676,10 +775,7 @@ describe("RPC host unhandled rejection shutdown", () => {
 	});
 
 	it("runs the same stop()-then-exit(1) path for a sync throw (uncaughtException) as for a rejection", async () => {
-		// runRpcHost wires this exact handler instance to both process.on("unhandledRejection", ...)
-		// and process.once("uncaughtException", ...) -- a sync throw from the event -> render path
-		// must restore the terminal via the same stopHost() cleanup an unhandled rejection uses, not
-		// fall through with no handler at all (the pre-fix state: only unhandledRejection was wired).
+		// RpcHostLifecycle routes both adopted fatal events through this handler.
 		const writes: string[] = [];
 		const cleanup = vi.fn(async (_code: number) => undefined);
 		const exit = vi.fn((_code: number) => undefined);
@@ -710,6 +806,7 @@ function exitDeps(overrides: Partial<RpcHostExitDependencies> = {}): RpcHostExit
 		stateStore: { getSnapshot: () => asNever({ isStreaming: true, isCompacting: true }) },
 		notifications: { notify: vi.fn() },
 		requestRender: vi.fn(),
+		recordExitCode: vi.fn(),
 		stopHost: vi.fn(async () => undefined),
 		exit: vi.fn(),
 		updateRuntimeState: vi.fn(),
@@ -1019,6 +1116,103 @@ describe("createToolsExpandToggleHandler (app.tools.expand)", () => {
 });
 
 describe("RPC host client-exit shutdown", () => {
+	it.each(["quit", "SIGTERM", "SIGINT", "reload", "runtime-return", "natural-return", "delay"])("retains an observed crash across %s during the notification delay", async (request) => {
+		vi.useFakeTimers();
+		try {
+			const signals = new EventEmitter();
+			const exit = vi.fn();
+			const childStop = vi.fn(async () => undefined);
+			const lifecycle = new RpcHostLifecycle({ env: {}, signals, input: {}, stderr: { write: () => true }, exit });
+			let finish!: (code: number) => void;
+			const returned = new Promise<number>((resolve) => { finish = resolve; });
+			let runtimeExit!: (code: number) => void;
+			const runtimeReturned = new Promise<number>((resolve) => { runtimeExit = resolve; });
+			const runtimeStop = vi.fn((code = 0) => runtimeExit(code));
+			const running = lifecycle.start(async () => {
+				lifecycle.ownClient({ stop: childStop, stderr: "" });
+				lifecycle.childAdopted();
+				lifecycle.ownRuntime({
+					start: async () => undefined, stop: runtimeStop, waitForExit: () => runtimeReturned,
+					adoptRetainedTerminal: vi.fn(), startInput: vi.fn(), markEditorReady: vi.fn(), markCommandReady: vi.fn(),
+				});
+				return returned;
+			});
+			const handle = createRpcExitHandler(exitDeps({
+				modals: { close: () => { expect(lifecycle.exitCode).toBe(1); } },
+				recordExitCode: (code) => lifecycle.recordExitCode(code),
+				stopHost: (code) => lifecycle.stop(code, "child-exit"),
+				exit: (code) => lifecycle.exit(code),
+				// SAFETY: the handler passes only a zero-argument callback and delay, as in host wiring.
+				setTimeout: ((callback: () => void, delay: number) => lifecycle.scheduleTimeout("child-exit", callback, delay)) as typeof setTimeout,
+				shutdownDelayMs: 750,
+			}));
+			handle(new RpcChildExitError("crash", { code: 2, signal: null }));
+			expect(childStop).not.toHaveBeenCalled();
+			if (request === "SIGTERM" || request === "SIGINT") signals.emit(request);
+			else if (request === "reload") handle(new RpcChildExitError("reload", { code: 100, signal: null }));
+			else if (request === "delay") {
+				await vi.advanceTimersByTimeAsync(749);
+				expect(childStop).not.toHaveBeenCalled();
+			} else if (request === "natural-return") finish(0);
+			else if (request === "runtime-return") runtimeExit(0);
+			else void lifecycle.stop(0, request);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(childStop).toHaveBeenCalledOnce();
+			expect(runtimeStop).toHaveBeenCalledExactlyOnceWith(1, { preserveTerminal: false });
+			await vi.advanceTimersByTimeAsync(1);
+			expect(await running).toBe(1);
+			expect(await lifecycle.waitForExit()).toBe(1);
+			lifecycle.exit(0);
+			expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+			await vi.advanceTimersByTimeAsync(750);
+			expect(exit).toHaveBeenCalledOnce();
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.useRealTimers(); }
+	});
+
+	it.each([0, 130, 100])("keeps deliberate shutdown %i from becoming a crash through the real client", async (code) => {
+		vi.useFakeTimers();
+		try {
+			// SAFETY: nullable Node exit fields begin live and change when the fake child exits.
+			const child = Object.assign(new EventEmitter(), {
+				pid: 1234, exitCode: null as number | null, signalCode: null as NodeJS.Signals | null,
+				stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
+				kill: vi.fn(() => {
+					queueMicrotask(() => {
+						child.signalCode = "SIGTERM";
+						child.emit("exit", null, "SIGTERM");
+						child.emit("close", null, "SIGTERM");
+					});
+					return true;
+				}),
+			});
+			// SAFETY: this event/stream fake implements the child surface consumed by SumoRpcClient.
+			const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: child as ChildProcessWithoutNullStreams & typeof child });
+			const exit = vi.fn();
+			const lifecycle = new RpcHostLifecycle({ env: {}, signals: new EventEmitter(), input: {}, stderr: { write: () => true }, exit });
+			const notifications = { notify: vi.fn() };
+			const handle = createRpcExitHandler(exitDeps({
+				notifications,
+				recordExitCode: (value) => lifecycle.recordExitCode(value),
+				stopHost: (value) => lifecycle.stop(value, "child-exit"),
+				exit: (value) => lifecycle.exit(value),
+			}));
+			const onExit = vi.fn(handle);
+			lifecycle.ownSubscription("client-exit", client.onExit(onExit));
+			lifecycle.ownClient(client);
+			await client.start(() => lifecycle.childAdopted());
+			if (code === 100) handle(new RpcChildExitError("reload", { code: 100, signal: null }));
+			else void lifecycle.stop(code, "request");
+			await vi.advanceTimersByTimeAsync(1);
+			expect(await lifecycle.waitForExit()).toBe(code);
+			lifecycle.exit(0);
+			expect(exit).toHaveBeenCalledExactlyOnceWith(code);
+			expect(onExit).not.toHaveBeenCalled();
+			expect(notifications.notify).not.toHaveBeenCalled();
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.useRealTimers(); }
+	});
+
 	it("closes modals, drains overlays without promotion, clears streaming state, and notifies with a bounded message", async () => {
 		const modals = { close: vi.fn() };
 		const overlays = new RpcHostOverlayManager();
@@ -1219,56 +1413,103 @@ describe("createLazyChatSink (B9 host wiring)", () => {
 	});
 });
 
-describe("submitInitialPromptFromEnv (SUMOCODE_INITIAL_PROMPT seam)", () => {
+describe("submitInitialPromptFromFile (SUMOCODE_INITIAL_PROMPT_FILE one-shot seam)", () => {
 	// bin/sumocode.sh strips a task/prompt positional out of the argv it
 	// forwards to `pi --mode rpc` (which never reads argv positionals -- only
-	// InteractiveMode does) and hands it to the host via this env var instead.
-	// runRpcHost submits it through `submitFromEditor`, the exact same function
-	// wired as the editor's onSubmit, once client.start() + initial hydration
-	// have completed.
+	// InteractiveMode does) and hands it to the host through an owner-only
+	// one-shot transport file instead of an env var, so prompt bytes never sit
+	// in process metadata inherited by child processes (issue 391). The host
+	// unlinks the file BEFORE submitting: one-shot by construction, so a
+	// failed submit can never replay on a later /reload and the launcher's
+	// cleanup trap has nothing left to race.
 
-	it("submits exactly one prompt after start when SUMOCODE_INITIAL_PROMPT is set", async () => {
+	it("submits the transport file contents exactly once and deletes the file", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "sumo-prompt-transport-"));
+		const file = join(dir, "prompt.txt");
+		const prompt = "review the diff\n第二行 — ünïcode ✓";
+		writeFileSync(file, prompt);
 		const submit = vi.fn(async (_message: string) => undefined);
 
-		await submitInitialPromptFromEnv({ SUMOCODE_INITIAL_PROMPT: "review the diff" }, submit);
+		await submitInitialPromptFromFile({ SUMOCODE_INITIAL_PROMPT_FILE: file }, submit);
 
 		expect(submit).toHaveBeenCalledOnce();
-		expect(submit).toHaveBeenCalledWith("review the diff");
+		expect(submit).toHaveBeenCalledWith(prompt);
+		expect(existsSync(file)).toBe(false);
+		rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("submits nothing when SUMOCODE_INITIAL_PROMPT is absent", async () => {
+	it("submits nothing when the transport env var is absent", async () => {
 		const submit = vi.fn(async (_message: string) => undefined);
 
-		await submitInitialPromptFromEnv({}, submit);
+		await submitInitialPromptFromFile({}, submit);
 
 		expect(submit).not.toHaveBeenCalled();
 	});
 
-	it("submits nothing when SUMOCODE_INITIAL_PROMPT is blank", async () => {
+	it("submits nothing when the transport file is missing", async () => {
 		const submit = vi.fn(async (_message: string) => undefined);
 
-		await submitInitialPromptFromEnv({ SUMOCODE_INITIAL_PROMPT: "" }, submit);
+		await submitInitialPromptFromFile({ SUMOCODE_INITIAL_PROMPT_FILE: "/nonexistent/prompt.txt" }, submit);
 
 		expect(submit).not.toHaveBeenCalled();
 	});
 
-	it("propagates a submit failure instead of swallowing it", async () => {
+	it("submits nothing for an empty transport file and still deletes it", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "sumo-prompt-transport-"));
+		const file = join(dir, "prompt.txt");
+		writeFileSync(file, "");
+		const submit = vi.fn(async (_message: string) => undefined);
+
+		await submitInitialPromptFromFile({ SUMOCODE_INITIAL_PROMPT_FILE: file }, submit);
+
+		expect(submit).not.toHaveBeenCalled();
+		expect(existsSync(file)).toBe(false);
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("deletes the transport file even when the submit fails, so a reload cannot replay it", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "sumo-prompt-transport-"));
+		const file = join(dir, "prompt.txt");
+		writeFileSync(file, "review the diff");
 		const submit = vi.fn(async (_message: string) => {
 			throw new Error("child not ready");
 		});
 
-		await expect(submitInitialPromptFromEnv({ SUMOCODE_INITIAL_PROMPT: "review the diff" }, submit)).rejects.toThrow("child not ready");
+		await expect(submitInitialPromptFromFile({ SUMOCODE_INITIAL_PROMPT_FILE: file }, submit)).rejects.toThrow("child not ready");
+		expect(existsSync(file)).toBe(false);
+		rmSync(dir, { recursive: true, force: true });
 	});
 });
 
 describe("writeExitCodeFile (SUMOCODE_EXIT_CODE_FILE out-of-band exit-code channel)", () => {
+	it("main natural return publishes only to options.env", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "sumocode-exit-env-"));
+		const file = join(dir, "provided");
+		const ambient = join(dir, "ambient");
+		const previousCode = process.exitCode;
+		vi.stubEnv("SUMOCODE_EXIT_CODE_FILE", ambient);
+		try {
+			await main({
+				env: { SUMOCODE_EXIT_CODE_FILE: file },
+				stdout: asNever({ isTTY: false }),
+				stderr: asNever({ write: () => true }),
+			});
+			expect(readFileSync(file, "utf8")).toBe("70");
+			expect(existsSync(ambient)).toBe(false);
+			expect(process.exitCode).toBe(70);
+		} finally {
+			process.exitCode = previousCode;
+			vi.unstubAllEnvs();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 	// bin/sumocode.sh's wait_for_child_exit was verified unreliable under macOS
 	// bash 3.2: a SIGTERM-graceful shutdown that the host resolves as exit 0
 	// can surface to the launcher as 143 via bash's own `wait` status. This is
 	// the single choke point every host exit path (SIGINT/SIGTERM,
 	// unhandledRejection/uncaughtException, createRpcExitHandler's reload/crash
 	// paths, and main()'s natural-return path) funnels through -- see
-	// runRpcHost's `exitProcess` and main() for the call sites.
+	// RpcHostLifecycle.exit(), its natural-return path, and main() for callers.
 
 	it("writes the exit code to the path given by SUMOCODE_EXIT_CODE_FILE", () => {
 		const dir = mkdtempSync(join(tmpdir(), "sumocode-exit-code-"));

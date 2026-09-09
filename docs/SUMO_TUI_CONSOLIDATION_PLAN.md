@@ -1,3 +1,5 @@
+> **Status: historical/superseded as of 2026-09-08** — [Current authority](../plans/README.md). Execution status belongs to the current ledger; this sequence is preserved history.
+
 # SumoTUI Consolidation Plan
 
 > Created: 2026-04-29  

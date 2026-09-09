@@ -22,6 +22,8 @@ export interface StartAgentPaneOptions {
 	cwd: string;
 	shellCommand: string;
 	placement: AgentPanePlacement;
+	/** Admit the new shell before submitting commands. Refusal preserves the pane for verified cleanup. */
+	beforeRun?(pane: PaneRef): Promise<void>;
 }
 
 export interface StartedAgentPane {
@@ -63,7 +65,15 @@ export interface ExistingWorktreeWorkspaceOptions {
 	focus?: boolean;
 }
 
+/** Point-in-time association only; callers must verify persisted process birth/tree identity. */
+export interface PaneProcessInfo {
+	readonly shellPid: number | null;
+	readonly foregroundProcessGroupId: number | null;
+	readonly foregroundPids: readonly number[];
+}
+
 export interface TerminalHost {
+	inspectPane?(pi: PiExecLike, pane: PaneRef): Promise<HostResult<PaneProcessInfo>>;
 	readonly kind: TerminalHostKind;
 	startAgentPane?(pi: PiExecLike, options: StartAgentPaneOptions): Promise<HostResult<StartedAgentPane>>;
 	sendPaneText?(pi: PiExecLike, pane: PaneRef, text: string): Promise<HostResult<{}>>;

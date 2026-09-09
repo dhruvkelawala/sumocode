@@ -93,23 +93,27 @@ async function readEvents(diag) {
 	}
 }
 
-async function waitForEvent(diag, eventName, occurrence) {
+export function selectReadinessEvent(events, preferredEvent, fallbackEvent, occurrence) {
+	const preferred = events.filter((event) => event.event === preferredEvent);
+	if (preferred.length >= occurrence) return preferred[occurrence - 1];
+	// editor_ready identifies the truthful-readiness event generation. Once it
+	// appears, app_ready is chrome compatibility evidence, not command readiness.
+	if (events.some((event) => event.event === "editor_ready")) return undefined;
+	return events.filter((event) => event.event === fallbackEvent)[occurrence - 1];
+}
+
+async function waitForReadinessEvent(diag, preferredEvent, fallbackEvent, occurrence) {
 	const deadline = Date.now() + TIMEOUT_MS;
 	while (Date.now() < deadline) {
 		const events = await readEvents(diag);
-		const matching = events.filter((event) => event.event === eventName);
-		if (matching.length >= occurrence) return { events, event: matching[occurrence - 1] };
+		const event = selectReadinessEvent(events, preferredEvent, fallbackEvent, occurrence);
+		if (event) return { events, event };
 		await new Promise((resolveSleep) => setTimeout(resolveSleep, POLL_MS));
 	}
-	const events = await readEvents(diag);
-	const error = new Error(`timed out waiting for ${eventName} occurrence ${occurrence}`);
+	const error = new Error(`timed out waiting for ${preferredEvent} occurrence ${occurrence}`);
 	error.code = "diag-timeout";
-	error.events = events;
+	error.events = await readEvents(diag);
 	throw error;
-}
-
-async function waitForInputReady(diag, occurrence) {
-	return waitForEvent(diag, "input_ready", occurrence);
 }
 
 function median(values) {
@@ -128,26 +132,28 @@ export function publicProbeError(error) {
 }
 
 function markdown(report) {
-	const rows = report.runs.map((run) => `| ${run.run} | ${formatMetric(run.startup_ms)} | ${formatMetric(run.first_frame_ms)} | ${formatMetric(run.app_ready_ms)} | ${formatMetric(run.reload_ms)} | ${formatMetric(run.reload_app_ready_ms)} | ${run.error ?? ""} |`);
+	const rows = report.runs.map((run) => `| ${run.run} | ${formatMetric(run.first_frame_ms)} | ${formatMetric(run.editor_ready_ms)} | ${formatMetric(run.command_ready_ms)} | ${formatMetric(run.editor_command_gap_ms)} | ${formatMetric(run.reload_editor_ready_ms)} | ${formatMetric(run.reload_command_ready_ms)} | ${formatMetric(run.reload_editor_command_gap_ms)} | ${run.error ?? ""} |`);
 	return `# SumoCode real-world startup perf snapshot
 
-Report-only measurements from herdr using the operator's real SumoCode configuration and installed extension set. Results are machine-dependent and are not CI gates.
+Report-only measurements from herdr using the operator's real SumoCode configuration and installed extension set. Results are machine-dependent and are not CI gates. The parser prefers \`editor_ready\` / \`command_ready\`; \`input_ready\` / \`app_ready\` are accepted only for an old event stream during their one-release compatibility window.
 
 - commit: \`${report.commit}\`
 - generated: ${report.generatedAt}
 - scratch project: \`${report.scratchProject}\`
 
-| Run | Startup | First frame | App ready | Reload | Reload app ready | Notes |
-| ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| Run | First frame | Editor ready | Command ready | Gap | Reload editor ready | Reload command ready | Reload gap | Notes |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 ${rows.join("\n")}
 
 | Metric | Median |
 | --- | ---: |
-| startup_ms | ${formatMetric(report.medians.startup_ms)} |
 | first_frame_ms | ${formatMetric(report.medians.first_frame_ms)} |
-| app_ready_ms | ${formatMetric(report.medians.app_ready_ms)} |
-| reload_ms | ${formatMetric(report.medians.reload_ms)} |
-| reload_app_ready_ms | ${formatMetric(report.medians.reload_app_ready_ms)} |
+| editor_ready_ms | ${formatMetric(report.medians.editor_ready_ms)} |
+| command_ready_ms | ${formatMetric(report.medians.command_ready_ms)} |
+| editor_command_gap_ms | ${formatMetric(report.medians.editor_command_gap_ms)} |
+| reload_editor_ready_ms | ${formatMetric(report.medians.reload_editor_ready_ms)} |
+| reload_command_ready_ms | ${formatMetric(report.medians.reload_command_ready_ms)} |
+| reload_editor_command_gap_ms | ${formatMetric(report.medians.reload_editor_command_gap_ms)} |
 `;
 }
 
@@ -185,27 +191,30 @@ async function run() {
 			const name = `perf-probe-${index}`;
 			const diag = resolve(scratch, `diag-${index}.jsonl`);
 			let pane;
-			let startupMs;
 			let firstFrameMs;
-			let appReadyMs;
-			let reloadMs;
-			let reloadAppReadyMs;
+			let editorReadyMs;
+			let commandReadyMs;
+			let editorCommandGapMs;
+			let reloadEditorReadyMs;
+			let reloadCommandReadyMs;
+			let reloadEditorCommandGapMs;
 			let errorMessage;
 			try {
 				const t0 = Date.now();
 				pane = startProbe(name, scratch, diag);
 				if (!pane) throw new Error(`could not resolve pane for ${name}`);
 				startedPanes.add(pane);
-				const startup = await waitForInputReady(diag, 1);
-				const bootFrame = startup.events.find((event) => event.event === "boot_screen_frame");
+				const editorReady = await waitForReadinessEvent(diag, "editor_ready", "input_ready", 1);
+				const bootFrame = editorReady.events.find((event) => event.event === "boot_screen_frame");
 				// oxlint-disable-next-line anti-slop/no-runtime-typeof -- timestamp check on parsed diagnostics event
-				if (typeof bootFrame?.ts !== "number") throw new Error("startup diagnostics did not include boot_screen_frame");
+				if (typeof bootFrame?.ts !== "number" || typeof editorReady.event.ts !== "number") throw new Error("startup diagnostics did not include first-frame readiness");
 				firstFrameMs = bootFrame.ts - t0;
-				const startupAppReady = await waitForEvent(diag, "app_ready", 1);
+				const commandReady = await waitForReadinessEvent(diag, "command_ready", "app_ready", 1);
 				// oxlint-disable-next-line anti-slop/no-runtime-typeof -- timestamp check on parsed diagnostics event
-				if (typeof startupAppReady.event.ts !== "number") throw new Error("startup diagnostics did not include app_ready");
-				startupMs = startup.event.ts - t0;
-				appReadyMs = startupAppReady.event.ts - t0;
+				if (typeof commandReady.event.ts !== "number") throw new Error("startup diagnostics did not include command readiness");
+				editorReadyMs = editorReady.event.ts - t0;
+				commandReadyMs = commandReady.event.ts - t0;
+				editorCommandGapMs = commandReady.event.ts - editorReady.event.ts;
 
 				herdr(["pane", "send-text", pane, "/reload"]);
 				await new Promise((resolveSleep) => setTimeout(resolveSleep, POLL_MS));
@@ -214,12 +223,13 @@ async function run() {
 				// dispatch instead of omitting the first POLL_MS of real work.
 				const t1 = Date.now();
 				herdr(["pane", "send-keys", pane, "Enter"]);
-				const reload = await waitForInputReady(diag, 2);
-				const reloadAppReady = await waitForEvent(diag, "app_ready", 2);
+				const reloadEditorReady = await waitForReadinessEvent(diag, "editor_ready", "input_ready", 2);
+				const reloadCommandReady = await waitForReadinessEvent(diag, "command_ready", "app_ready", 2);
 				// oxlint-disable-next-line anti-slop/no-runtime-typeof -- timestamp check on parsed diagnostics event
-				if (typeof reloadAppReady.event.ts !== "number") throw new Error("reload diagnostics did not include app_ready");
-				reloadMs = reload.event.ts - t1;
-				reloadAppReadyMs = reloadAppReady.event.ts - t1;
+				if (typeof reloadEditorReady.event.ts !== "number" || typeof reloadCommandReady.event.ts !== "number") throw new Error("reload diagnostics did not include truthful readiness");
+				reloadEditorReadyMs = reloadEditorReady.event.ts - t1;
+				reloadCommandReadyMs = reloadCommandReady.event.ts - t1;
+				reloadEditorCommandGapMs = reloadCommandReady.event.ts - reloadEditorReady.event.ts;
 				herdr(["pane", "read", pane, "--lines", "5"]);
 				consecutiveReloadFailures = 0;
 			} catch (error) {
@@ -239,7 +249,7 @@ async function run() {
 						console.error(`[perf-real-world] ${name} pane read failed`);
 					}
 				}
-				if (startupMs === undefined) throw error;
+				if (editorReadyMs === undefined) throw error;
 				consecutiveReloadFailures += 1;
 				if (consecutiveReloadFailures >= RUNS) throw new Error(`reload failed on ${consecutiveReloadFailures} consecutive attempts: ${errorMessage}`);
 			} finally {
@@ -249,7 +259,17 @@ async function run() {
 					closePane(pane);
 				}
 			}
-			results.push({ run: index, startup_ms: startupMs, first_frame_ms: firstFrameMs, app_ready_ms: appReadyMs, reload_ms: reloadMs, reload_app_ready_ms: reloadAppReadyMs, error: errorMessage });
+			results.push({
+				run: index,
+				first_frame_ms: firstFrameMs,
+				editor_ready_ms: editorReadyMs,
+				command_ready_ms: commandReadyMs,
+				editor_command_gap_ms: editorCommandGapMs,
+				reload_editor_ready_ms: reloadEditorReadyMs,
+				reload_command_ready_ms: reloadCommandReadyMs,
+				reload_editor_command_gap_ms: reloadEditorCommandGapMs,
+				error: errorMessage,
+			});
 		}
 
 		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- numeric-filter over collected run timings
@@ -260,11 +280,13 @@ async function run() {
 			scratchProject: scratch,
 			runs: results,
 			medians: {
-				startup_ms: median(successful("startup_ms")),
 				first_frame_ms: median(successful("first_frame_ms")),
-				app_ready_ms: median(successful("app_ready_ms")),
-				reload_ms: median(successful("reload_ms")),
-				reload_app_ready_ms: median(successful("reload_app_ready_ms")),
+				editor_ready_ms: median(successful("editor_ready_ms")),
+				command_ready_ms: median(successful("command_ready_ms")),
+				editor_command_gap_ms: median(successful("editor_command_gap_ms")),
+				reload_editor_ready_ms: median(successful("reload_editor_ready_ms")),
+				reload_command_ready_ms: median(successful("reload_command_ready_ms")),
+				reload_editor_command_gap_ms: median(successful("reload_editor_command_gap_ms")),
 			},
 		};
 		const output = markdown(report);

@@ -1,3 +1,5 @@
+> **Status: historical/superseded as of 2026-09-08** — [Current authority](../README.md). This audit describes the earlier hybrid renderer, not the current RPC-first architecture.
+
 # SumoTUI Audit — 2026-04-29
 
 > Scope: current `sumocode` worktree, `src/sumo-tui/**`, Cathedral runtime/UI code, SumoTUI research docs, V2 visual spec, and a quick survey of other production TUI frameworks.

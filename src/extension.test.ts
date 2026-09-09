@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import sumocode, {
 	findActiveSumoDevTree,
@@ -11,6 +14,7 @@ import sumocode, {
 	shouldNoopDuplicateInstalledExtension,
 	shouldNoopHelperSubprocess,
 } from "./extension.js";
+import rpcChildSumocode from "./rpc-child-extension.js";
 
 type Handler = (...args: unknown[]) => void;
 
@@ -31,6 +35,7 @@ function isBlockingResult(value: unknown): value is { block: true } {
 const AMBIENT_ENV_KEYS = [
 	"SUMOCODE_LAUNCHER",
 	"SUMOCODE_ROOT_DIR",
+	"SUMOCODE_STATE_DIR",
 	"SUMOCODE_RPC_CHILD",
 	"SUMOCODE_BG_CHILD",
 	"SUMOCODE_TASK_MODE",
@@ -46,13 +51,19 @@ interface RealpathTable {
 }
 
 let ambientEnvSnapshot: Map<string, string | undefined>;
+let piCodingAgentDirSnapshot: string | undefined;
+let temporaryPiAgentDir: string | undefined;
 
 beforeEach(() => {
+	temporaryPiAgentDir = undefined;
 	ambientEnvSnapshot = new Map();
 	for (const key of AMBIENT_ENV_KEYS) {
 		ambientEnvSnapshot.set(key, process.env[key]);
 		delete process.env[key];
 	}
+	piCodingAgentDirSnapshot = process.env.PI_CODING_AGENT_DIR;
+	temporaryPiAgentDir = mkdtempSync(join(tmpdir(), "sumocode-extension-test-"));
+	process.env.PI_CODING_AGENT_DIR = temporaryPiAgentDir;
 	// Each test gets a fresh "process" as far as the install latch is concerned
 	// (the latch is deliberately process-global in production).
 	resetSumocodeProcessInstallLatchForTests();
@@ -63,8 +74,13 @@ afterEach(() => {
 		if (value === undefined) delete process.env[key];
 		else process.env[key] = value;
 	}
-	// Never leak the process-global latch into other test files in this worker.
+	if (piCodingAgentDirSnapshot === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = piCodingAgentDirSnapshot;
+	// Reset process-global state before cleanup, which can throw independently.
 	resetSumocodeProcessInstallLatchForTests();
+	const ownedPiAgentDir = temporaryPiAgentDir;
+	temporaryPiAgentDir = undefined;
+	if (ownedPiAgentDir !== undefined) rmSync(ownedPiAgentDir, { recursive: true, force: true });
 });
 
 function buildPiStub() {
@@ -335,6 +351,49 @@ describe("rpc child profile", () => {
 		expect(isRpcChildProfile({ env: { SUMOCODE_RPC_CHILD: "0" } })).toBe(false);
 	});
 
+	it("loads the same headless profile through the source-only entry", async () => {
+		const previousRpc = process.env.SUMOCODE_RPC_CHILD;
+		const previousTask = process.env.SUMOCODE_NATIVE_TASK;
+		process.env.SUMOCODE_RPC_CHILD = "1";
+		process.env.SUMOCODE_NATIVE_TASK = "1";
+		try {
+			const { pi, handlers } = buildPiStub();
+			// SAFETY: the pi double supplies the register*/on surfaces the source entry installs on.
+			rpcChildSumocode(pi as never);
+
+			const commandNames = pi.registerCommand.mock.calls.map((call) => call[0]);
+			// SAFETY: registerTool records definitions carrying a name field; the cast reads only that field.
+			const toolNames = pi.registerTool.mock.calls.map((call) => (call[0] as { name: string }).name);
+			expect(commandNames).toContain("sumo:review");
+			expect(toolNames).toEqual(expect.arrayContaining(["task", "question", "terminal_start", "subagent_spawn"]));
+
+			const ctx = { ...buildCtxStub(), mode: "rpc" };
+			for (const handler of handlers.get("session_start") ?? []) {
+				// SAFETY: the ctx double supplies the UI surface the session_start handlers read.
+				await handler({ type: "session_start" }, ctx as never);
+			}
+			expect(ctx.ui.setFooter).not.toHaveBeenCalled();
+			expect(ctx.ui.setHeader).not.toHaveBeenCalled();
+		} finally {
+			if (previousRpc === undefined) delete process.env.SUMOCODE_RPC_CHILD;
+			else process.env.SUMOCODE_RPC_CHILD = previousRpc;
+			if (previousTask === undefined) delete process.env.SUMOCODE_NATIVE_TASK;
+			else process.env.SUMOCODE_NATIVE_TASK = previousTask;
+		}
+	});
+
+	it("keeps background helper subprocesses inert through the source-only entry", () => {
+		process.env.SUMOCODE_BG_CHILD = "1";
+		const { pi } = buildPiStub();
+		// SAFETY: the pi double supplies the register*/on surfaces the source entry would install on.
+		rpcChildSumocode(pi as never);
+
+		expect(pi.registerCommand).not.toHaveBeenCalled();
+		expect(pi.registerTool).not.toHaveBeenCalled();
+		expect(pi.on).not.toHaveBeenCalled();
+		expect(isSumocodeAlreadyInstalledInProcess(pi)).toBe(false);
+	});
+
 	it("keeps tools and commands and skips retained chrome", async () => {
 		const previousRpc = process.env.SUMOCODE_RPC_CHILD;
 		const previousTask = process.env.SUMOCODE_NATIVE_TASK;
@@ -399,6 +458,15 @@ describe("helper subprocess guard", () => {
 });
 
 describe("sumocode extension", () => {
+	it("isolates terminal state under the temporary Pi agent directory", () => {
+		const { pi } = buildPiStub();
+		// SAFETY: the pi double supplies the register*/on surfaces the extension installs on.
+		sumocode(pi as never);
+
+		if (temporaryPiAgentDir === undefined) throw new Error("temporary Pi agent directory was not created");
+		expect(existsSync(join(temporaryPiAgentDir, "state", "sumocode-terminals"))).toBe(true);
+	});
+
 	it("detects whether native task can install without conflicting with the legacy task extension", () => {
 		expect(shouldInstallNativeTaskTool({ homeDir: "/home/user", exists: () => false })).toBe(true);
 		expect(shouldInstallNativeTaskTool({ homeDir: "/home/user", exists: () => true })).toBe(false);

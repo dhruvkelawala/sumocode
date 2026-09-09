@@ -3,7 +3,7 @@ set -euo pipefail
 
 SOURCE="${BASH_SOURCE[0]}"
 while [[ -L "${SOURCE}" ]]; do
-	SOURCE_DIR="$(cd "$(dirname "${SOURCE}")" && pwd)"
+	SOURCE_DIR="$(CDPATH= cd -- "$(dirname "${SOURCE}")" && pwd)"
 	TARGET="$(readlink "${SOURCE}")"
 	if [[ "${TARGET}" == /* ]]; then
 		SOURCE="${TARGET}"
@@ -11,8 +11,9 @@ while [[ -L "${SOURCE}" ]]; do
 		SOURCE="${SOURCE_DIR}/${TARGET}"
 	fi
 done
-SCRIPT_DIR="$(cd "$(dirname "${SOURCE}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "${SOURCE}")" && pwd)"
+SOURCE="${SCRIPT_DIR}/$(basename "${SOURCE}")"
+ROOT_DIR="$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)"
 
 # The RPC host owns the interactive foreground. Direct Pi launches keep the
 # extension loaded for non-interactive modes and diagnostics, but never ask Pi
@@ -84,6 +85,11 @@ COMMANDS
       If name is omitted, a unique wt-<timestamp> name is generated.
 
 OPTIONS
+  --
+      End SumoCode option parsing. For run/task launches, one delimiter is
+      preserved for Pi so following dash-leading tokens are treated as
+      positionals/messages instead of SumoCode options.
+
   -d, --debug
       Enable manual-test diagnostics / flight-recorder mode.
 
@@ -173,11 +179,17 @@ DIAGNOSTICS EVENTS
   Debug mode may record events such as:
       process_preload_start  Node preload + argv baseline for startup traces
       process_module_load_*  slow module imports + aggregate module-load summary
+      host_import_ready      selected host source/bundle imported
+      rpc_child_ready        first correlated RPC response received
+      terminal_index_*       initial terminal-store index phase
       runtime_start          process, cwd, branch, commit, terminal size
       boot_screen_frame      first retained splash/boot frame written to terminal
-      app_ready              first owned-shell render with the real session UI
-      stable_chrome_ready    same reveal point, split out for startup budgeting
-      input_ready            editor/input mounted and interactive
+      editor_ready           first retained frame painted; input can be edited
+      input_ready            deprecated one-release alias for editor_ready
+      hydration_committed    authoritative initial state/transcript applied
+      app_ready              deprecated historical chrome-ready alias
+      stable_chrome_ready    owned-shell render with the real session UI
+      command_ready          hydration settled; commands can dispatch
       render_frame           retained render timings
       slow_frame             render frame over the slow-frame threshold
       render_patches         terminal patch count and cursor placement
@@ -219,6 +231,9 @@ NOTES
   old Sumo retained-TUI patch. Non-interactive Pi modes such as --print or
   --mode, launches where stdout is not a TTY, and --no-sumo-tui bypass the RPC
   host and execute Pi directly with the SumoCode extension loaded.
+
+  Use -- before a prompt that starts with '-' so SumoCode and Pi both treat it
+  as a message rather than an option.
 EOF
 }
 
@@ -322,6 +337,16 @@ while [[ $# -gt 0 ]]; do
 			;;
 		--)
 			shift
+			# Run/task launches need the delimiter later so mode selection and prompt
+			# extraction treat --print/--mode tokens as messages. If the caller used
+			# the historical double-`--` quirk, the remaining argv already starts with
+			# the delimiter the extractor expects.
+			# Tradeoff: coalescing preserves that quirk but collapses two literal delimiters.
+			if [[ "${COMMAND}" == "run" || "${COMMAND}" == "task" ]]; then
+				if [[ "${1-}" != "--" ]]; then
+					SUMOCODE_ARGS+=("--")
+				fi
+			fi
 			SUMOCODE_ARGS+=("$@")
 			break
 			;;
@@ -339,6 +364,299 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
+# Pure membership test so each Pi parser consumption class reads as a table.
+_sumocode_arg_in() {
+	local candidate="$1"
+	shift
+	local item
+	for item in "$@"; do
+		[[ "${candidate}" == "${item}" ]] && return 0
+	done
+	return 1
+}
+
+# Class 2: unconditional value flags in Pi's pinned parseArgs(). Kept global so
+# mode selection and prompt extraction cannot disagree about a value-consuming
+# bare `--` token.
+SUMOCODE_PI_UNCONDITIONAL_VALUE_FLAGS=(
+	--mode --provider --model --api-key --system-prompt
+	--append-system-prompt --name -n --session --session-id --fork
+	--session-dir --models --tools -t --exclude-tools -xt --thinking
+	--export --extension -e --skill --prompt-template --theme
+)
+# Class 3: known boolean flags -- recognized BEFORE the generic unknown branch
+# so a boolean like --offline never consumes the real prompt.
+SUMOCODE_PI_BOOLEAN_FLAGS=(
+	--help -h --version -v --continue -c --resume -r --no-session
+	--no-tools -nt --no-builtin-tools -nbt --no-extensions -ne
+	--no-skills -ns --no-prompt-templates -np --no-themes
+	--no-context-files -nc --verbose --approve -a --no-approve -na
+	--offline
+)
+
+_sumocode_is_pi_unconditional_value_flag() {
+	_sumocode_arg_in "$1" "${SUMOCODE_PI_UNCONDITIONAL_VALUE_FLAGS[@]}"
+}
+
+_sumocode_is_pi_boolean_flag() {
+	_sumocode_arg_in "$1" "${SUMOCODE_PI_BOOLEAN_FLAGS[@]}"
+}
+
+_sumocode_first_pi_delimiter_index() {
+	local i=0
+	local n="${#SUMOCODE_ARGS[@]}"
+	local arg
+	while [[ "${i}" -lt "${n}" ]]; do
+		arg="${SUMOCODE_ARGS[i]}"
+		if [[ "${arg}" == "--" ]]; then
+			printf '%s\n' "${i}"
+			return 0
+		fi
+		if _sumocode_is_pi_unconditional_value_flag "${arg}" && [[ $((i + 1)) -lt "${n}" ]]; then
+			i=$((i + 2))
+			continue
+		fi
+		i=$((i + 1))
+	done
+	return 1
+}
+
+_sumocode_insert_task_prompt_text() {
+	local prompt_text="$1"
+	local delimiter_index
+	local -a before=()
+	local -a after=()
+	if delimiter_index="$(_sumocode_first_pi_delimiter_index)"; then
+		before=("${SUMOCODE_ARGS[@]:0:$((delimiter_index + 1))}")
+		after=("${SUMOCODE_ARGS[@]:$((delimiter_index + 1))}")
+		if [[ "${#after[@]}" -eq 0 ]]; then
+			SUMOCODE_ARGS=("${before[@]}" "${prompt_text}")
+		else
+			SUMOCODE_ARGS=("${before[@]}" "${prompt_text}" "${after[@]}")
+		fi
+	elif [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
+		SUMOCODE_ARGS=("${prompt_text}")
+	else
+		SUMOCODE_ARGS=("${SUMOCODE_ARGS[@]}" "${prompt_text}")
+	fi
+}
+
+_sumocode_first_positional_index() {
+	local i=0
+	local n="${#SUMOCODE_ARGS[@]}"
+	local arg next
+	while [[ "${i}" -lt "${n}" ]]; do
+		arg="${SUMOCODE_ARGS[i]}"
+
+		if [[ "${arg}" == "--" ]]; then
+			i=$((i + 1))
+			while [[ "${i}" -lt "${n}" ]]; do
+				arg="${SUMOCODE_ARGS[i]}"
+				if [[ "${arg}" != @* ]]; then
+					printf '%s\n' "${i}"
+					return 0
+				fi
+				i=$((i + 1))
+			done
+			return 1
+		fi
+
+		if [[ "${arg}" == --*=* ]]; then
+			i=$((i + 1))
+			continue
+		fi
+
+		if _sumocode_is_pi_unconditional_value_flag "${arg}"; then
+			if [[ $((i + 1)) -lt "${n}" ]]; then
+				i=$((i + 2))
+			else
+				i=$((i + 1))
+			fi
+			continue
+		fi
+
+		if _sumocode_is_pi_boolean_flag "${arg}"; then
+			i=$((i + 1))
+			continue
+		fi
+
+		if [[ "${arg}" == --print || "${arg}" == -p ]]; then
+			if [[ $((i + 1)) -lt "${n}" ]]; then
+				next="${SUMOCODE_ARGS[i+1]}"
+				if [[ "${next}" != @* && ( "${next}" != -* || "${next}" == ---* ) ]]; then
+					i=$((i + 2))
+					continue
+				fi
+			fi
+			i=$((i + 1))
+			continue
+		fi
+
+		if [[ "${arg}" == --list-models ]]; then
+			if [[ $((i + 1)) -lt "${n}" ]]; then
+				next="${SUMOCODE_ARGS[i+1]}"
+				if [[ "${next}" != -* && "${next}" != @* ]]; then
+					i=$((i + 2))
+					continue
+				fi
+			fi
+			i=$((i + 1))
+			continue
+		fi
+
+		if [[ "${arg}" == --tui-mode ]]; then
+			if [[ $((i + 1)) -lt "${n}" ]]; then
+				next="${SUMOCODE_ARGS[i+1]}"
+				if [[ "${next}" != -* ]]; then
+					i=$((i + 2))
+					continue
+				fi
+			fi
+			i=$((i + 1))
+			continue
+		fi
+
+		if [[ "${arg}" == --use-theme ]]; then
+			if [[ $((i + 1)) -lt "${n}" ]]; then
+				next="${SUMOCODE_ARGS[i+1]}"
+				if [[ "${next}" != -* ]]; then
+					i=$((i + 2))
+					continue
+				fi
+			fi
+			i=$((i + 1))
+			continue
+		fi
+
+		if [[ "${arg}" == @* ]]; then
+			i=$((i + 1))
+			continue
+		fi
+
+		if [[ "${arg}" == --* ]]; then
+			if [[ $((i + 1)) -lt "${n}" ]]; then
+				next="${SUMOCODE_ARGS[i+1]}"
+				if [[ "${next}" != -* && "${next}" != @* ]]; then
+					i=$((i + 2))
+					continue
+				fi
+			fi
+			i=$((i + 1))
+			continue
+		fi
+
+		if [[ "${arg}" == -* ]]; then
+			i=$((i + 1))
+			continue
+		fi
+
+		printf '%s\n' "${i}"
+		return 0
+	done
+	return 1
+}
+
+_sumocode_task_has_nonempty_prompt_arg() {
+	local prompt_index
+	if ! prompt_index="$(_sumocode_first_positional_index)"; then return 1; fi
+	# Match the host's trimmed-semantics check: a prompt that is only
+	# whitespace would open a task pane without starting an agent turn.
+	[[ -n "${SUMOCODE_ARGS[prompt_index]//[[:space:]]/}" ]]
+}
+
+# Prints SUMOCODE_ARGS with every message token and sensitive option value
+# replaced by [redacted] (issue 391: --dry-run output is diagnostics and must
+# never carry prompt or secret bytes). Message tokens are classified with the
+# same option classes as _sumocode_first_positional_index: every plain
+# positional, everything after a `--` delimiter, and -p/--print's consumed
+# message. --api-key/--system-prompt/--append-system-prompt values are secret
+# bytes too. Display only -- never mutates SUMOCODE_ARGS.
+redact_sensitive_args() {
+	local -a out=()
+	local i=0
+	local n="${#SUMOCODE_ARGS[@]}"
+	local arg next
+	local in_delimiter=0
+	while [[ "${i}" -lt "${n}" ]]; do
+		arg="${SUMOCODE_ARGS[i]}"
+		if [[ "${in_delimiter}" -eq 1 ]]; then
+			if [[ "${arg}" != @* ]]; then out+=("[redacted]"); else out+=("${arg}"); fi
+			i=$((i + 1))
+			continue
+		fi
+		if [[ "${arg}" == "--" ]]; then
+			in_delimiter=1
+			out+=("${arg}")
+			i=$((i + 1))
+			continue
+		fi
+		case "${arg}" in
+			--api-key=*|--system-prompt=*|--append-system-prompt=*|--print=*|-p=*)
+				out+=("${arg%%=*}=[redacted]")
+				i=$((i + 1))
+				continue
+				;;
+			--api-key|--system-prompt|--append-system-prompt)
+				out+=("${arg}" "[redacted]")
+				i=$((i + 2))
+				continue
+				;;
+			--print|-p)
+				out+=("${arg}")
+				if [[ $((i + 1)) -lt "${n}" ]]; then
+					next="${SUMOCODE_ARGS[i+1]}"
+					if [[ "${next}" != @* && ( "${next}" != -* || "${next}" == ---* ) ]]; then
+						out+=("[redacted]")
+						i=$((i + 2))
+						continue
+					fi
+				fi
+				i=$((i + 1))
+				continue
+				;;
+		esac
+		if _sumocode_is_pi_unconditional_value_flag "${arg}"; then
+			out+=("${arg}")
+			if [[ $((i + 1)) -lt "${n}" ]]; then out+=("${SUMOCODE_ARGS[i+1]}"); i=$((i + 2)); else i=$((i + 1)); fi
+			continue
+		fi
+		if _sumocode_is_pi_boolean_flag "${arg}"; then
+			out+=("${arg}")
+			i=$((i + 1))
+			continue
+		fi
+		if [[ "${arg}" == @* ]]; then
+			out+=("${arg}")
+			i=$((i + 1))
+			continue
+		fi
+		if [[ "${arg}" == --* ]]; then
+			out+=("${arg}")
+			if [[ $((i + 1)) -lt "${n}" ]]; then
+				next="${SUMOCODE_ARGS[i+1]}"
+				if [[ "${next}" != -* && "${next}" != @* ]]; then
+					out+=("${next}")
+					i=$((i + 2))
+					continue
+				fi
+			fi
+			i=$((i + 1))
+			continue
+		fi
+		if [[ "${arg}" == -* ]]; then
+			out+=("${arg}")
+			i=$((i + 1))
+			continue
+		fi
+		out+=("[redacted]")
+		i=$((i + 1))
+	done
+	if [[ "${#out[@]}" -eq 0 ]]; then
+		printf ''
+	else
+		printf '%s' "${out[*]}"
+	fi
+}
 if [[ "${COMMAND}" == "doctor" && "${#SUMOCODE_ARGS[@]}" -gt 0 ]]; then
 	usage_error "doctor does not accept a path argument."
 fi
@@ -378,20 +696,14 @@ if [[ "${COMMAND}" == "task" ]]; then
 		# strips a trailing newline, which is what we want — Pi treats the
 		# positional as one message.
 		#
-		# Append to SUMOCODE_ARGS so the prompt is the LAST argument when
-		# pi sees it. Pi's CLI is `pi [options] [@files...] [messages...]`,
-		# so flags forwarded by the caller (e.g. --model, --thinking) must
-		# appear before the positional message for the parser to bind them
-		# correctly.
+		# Put the file prompt where Pi will parse it as the first task message:
+		# after a real preserved `--` delimiter when one exists, otherwise after
+		# forwarded flags so their values still bind correctly.
 		prompt_text="$(<"${PROMPT_FILE}")"
-		if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
-			SUMOCODE_ARGS=("${prompt_text}")
-		else
-			SUMOCODE_ARGS=("${SUMOCODE_ARGS[@]}" "${prompt_text}")
-		fi
+		_sumocode_insert_task_prompt_text "${prompt_text}"
 	fi
-	if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
-		usage_error "task requires a prompt argument or --prompt-file <path>. Example: sumocode task \"review the diff\"."
+	if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]] || ! _sumocode_task_has_nonempty_prompt_arg; then
+		usage_error "task requires a non-empty prompt argument or --prompt-file <path>. Example: sumocode task \"review the diff\"."
 	fi
 	IS_TASK_LAUNCH=1
 	export SUMOCODE_TASK_MODE=1
@@ -444,20 +756,35 @@ fi
 if [[ ! -x "${PI_BIN}" ]]; then
 	PI_BIN="$(command -v pi || true)"
 fi
+if [[ "${PI_BIN}" == */* ]]; then
+	PI_BIN_DIR="$(CDPATH= cd -- "$(dirname "${PI_BIN}")" && pwd)"
+	PI_BIN="${PI_BIN_DIR}/$(basename "${PI_BIN}")"
+fi
+export PI_BIN
 
 args_request_noninteractive_pi() {
 	if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then return 1; fi
-	for arg in "${SUMOCODE_ARGS[@]}"; do
+	local i=0
+	local n="${#SUMOCODE_ARGS[@]}"
+	local arg
+	while [[ "${i}" -lt "${n}" ]]; do
+		arg="${SUMOCODE_ARGS[i]}"
 		case "${arg}" in
 			--print|-p|--mode|--mode=*) return 0 ;;
 		esac
+		if [[ "${arg}" == "--" ]]; then break; fi
+		if _sumocode_is_pi_unconditional_value_flag "${arg}" && [[ $((i + 1)) -lt "${n}" ]]; then
+			i=$((i + 2))
+			continue
+		fi
+		i=$((i + 1))
 	done
 	return 1
 }
 
-# Extracts the first plain (non-flag) positional from SUMOCODE_ARGS, matching
-# Pi's own CLI contract: `parsed.messages[0]` (the first bare positional in
-# argv order -- see @earendil-works/pi-coding-agent's cli/args.js and
+# Extracts the first actual message (parsed.messages[0]) from SUMOCODE_ARGS,
+# mirroring Pi's own CLI contract: the first bare positional in argv order
+# (see @earendil-works/pi-coding-agent's cli/args.js and
 # cli/initial-message.js) becomes the kickoff/initial message in interactive
 # mode. `--mode rpc` never reads this positional at all (rpc-mode.js only
 # consumes stdin JSON commands), so on the RPC path this positional would
@@ -472,115 +799,108 @@ args_request_noninteractive_pi() {
 # unchanged (and are still silently ignored there, same as before this fix,
 # which is a pre-existing multi-positional limitation out of scope here).
 #
-# VALUE-CONSUMING FLAG TABLE -- mirrors
+# OPTION-CONSUMPTION CLASS TABLE -- mirrors
 # node_modules/@earendil-works/pi-coding-agent/dist/cli/args.js parseArgs()
-# (pi-coding-agent 0.79.1) EXACTLY, so that this wrapper skips a flag's value
+# (pi-coding-agent 0.85.1) EXACTLY, so that this wrapper skips a flag's value
 # together with the flag itself instead of mistaking the value for the first
-# plain positional. This is the same reason the wrapper's own arg loop above
-# never needs to worry about ITS OWN value-taking flags (--diag-file,
-# --prompt-file): those are consumed at the wrapper's parse stage before
-# anything reaches SUMOCODE_ARGS. Only Pi's flags need a table here, since
-# Pi's own unrecognized/unknown flags are forwarded opaquely by this wrapper.
+# actual message. Every flag/value token stays in the forwarded argv; only
+# the first real positional message is extracted. This is the same reason the
+# wrapper's own arg loop above never needs to worry about ITS OWN
+# value-taking flags (--diag-file, --prompt-file): those are consumed at the
+# wrapper's parse stage before anything reaches SUMOCODE_ARGS. Only Pi's
+# flags need a table here, since extension flags reach Pi through args.js's
+# generic unknown-long-option branch, which is mirrored as class 6 below.
 #
-# PI-BUMP NOTE: if @earendil-works/pi-coding-agent is upgraded, re-diff
-# cli/args.js's parseArgs() against this table (`git diff` the file, or just
-# re-read it) -- any newly added value-taking flag must be added below, or it
-# will silently reintroduce this same bug for that flag.
+# PI-BUMP NOTE (pinned: pi-coding-agent 0.85.1, dist/cli/args.js): if
+# @earendil-works/pi-coding-agent is upgraded, re-read parseArgs() in the NEW
+# dist/cli/args.js and re-diff every consumption class below (`git diff` the
+# file, or just re-read it) -- any newly added value-taking flag, changed
+# lookahead rule, or changed `--`/unknown-short-option handling must be
+# mirrored here, or it will silently corrupt the extracted kickoff prompt.
+# Plan 101 (Pi compatibility matrix) owns the per-version rerun of this
+# table.
 #
-# Unconditional space-form value flags (always consume `args[++i]` when a
-# next token exists, per args.js -- note --mode consumes its next token even
-# if the value is invalid, since the `i+1 < args.length` check runs before
-# validity is checked):
-#   --mode, --provider, --model, --api-key, --system-prompt,
-#   --append-system-prompt, --name/-n, --session, --session-id, --fork,
-#   --session-dir, --models, --tools/-t, --exclude-tools/-xt, --thinking,
-#   --export, --extension/-e, --skill, --prompt-template, --theme
+# Class 1 -- end-of-options `--`: args.js checks it FIRST; every remaining
+#   token becomes a message (or a fileArg when @-prefixed) and flag parsing
+#   stops. `--` itself stays in the forwarded argv; the first post-`--`
+#   non-@ token (possibly "") is parsed.messages[0] and is extracted.
 #
-# Conditional space-form value flags (args.js only consumes the next token if
-# it doesn't look like a flag or @file -- mirrored with the same lookahead
-# here so we don't eat a following real positional):
-#   --print/-p, --list-models
+# Class 2 -- unconditional space-form value flags: consume `args[++i]`
+#   whenever a next token EXISTS (args.js checks `i + 1 < args.length` before
+#   validity, so dash/@/invalid values are still consumed; --mode consumes
+#   its next token even when the value is invalid):
+#     --mode, --provider, --model, --api-key, --system-prompt,
+#     --append-system-prompt, --name/-n, --session, --session-id, --fork,
+#     --session-dir, --models, --tools/-t, --exclude-tools/-xt, --thinking,
+#     --export, --extension/-e, --skill, --prompt-template, --theme
 #
-# `--flag=value` forms (any flag, per args.js's generic `--` handler) are
-# already a single token and need no table entry -- skipped as-is below.
+# Class 3 -- known boolean flags: never consume. These MUST be recognized
+#   before the generic unknown branch (class 6) or a boolean such as
+#   --offline would wrongly consume the real prompt as its value:
+#     --help/-h, --version/-v, --continue/-c, --resume/-r, --no-session,
+#     --no-tools/-nt, --no-builtin-tools/-nbt, --no-extensions/-ne,
+#     --no-skills/-ns, --no-prompt-templates/-np, --no-themes,
+#     --no-context-files/-nc, --verbose, --approve/-a, --no-approve/-na,
+#     --offline
+#
+# Class 4 -- dedicated lookahead flags with distinct rules in args.js:
+#   --print/-p    consumes the next token as a print message only when it is
+#                 not an @file AND either does not start with `-` or starts
+#                 with `---` (Pi's dash-leading-message exception).
+#   --list-models consumes the next token as a search pattern only when it
+#                 starts with neither `-` nor `@`; otherwise it stands
+#                 boolean.
+#   --tui-mode    consumes the next token only when it is exactly `regular`
+#                 or `fullscreen`; a missing or dash-following value is NOT
+#                 consumed (Pi errors); any other non-dash value, including
+#                 @file, IS consumed as invalid.
+#   --use-theme   consumes the next token unless it starts with `-`
+#                 (@-prefixed theme names included); a missing or
+#                 dash-following value is not consumed (Pi errors).
+#
+# Class 5 -- standalone `@file` tokens: args.js files them as fileArgs, never
+#   messages; keep them and never extract them as the prompt.
+#
+# Class 6 -- unknown `--flag` (how extension flags reach Pi): consume ONE
+#   next token exactly when args.js's generic branch would -- a next token
+#   exists and does not start with `-` or `@`; otherwise the flag stands
+#   alone. `--flag=value` is a single token in args.js's generic handler and
+#   never consumes anything (known flags compared with `==` never match
+#   equals form in args.js either; they fall into the same generic bucket).
+#
+# Class 7 -- unknown short option (any other single-dash token, including
+#   bare `-`): args.js's final dash branch only records an "Unknown option"
+#   diagnostic; the token never becomes a message and never consumes a
+#   following value.
+#
+# Class 8 -- plain positional: the first remaining token that reaches this
+#   class is parsed.messages[0]; args.js's final branch pushes ANY token
+#   that does not start with `-`, INCLUDING the empty string (a bare `""`
+#   positional is parsed.messages[0] === ""), so extraction carries no
+#   non-empty guard. Extract it and remove it from the forwarded argv.
+#
+# Do not infer extension flag schemas beyond args.js's generic class-6 rule:
+# Pi itself treats unknown flags opaquely, and so does this table.
+
 extract_first_positional() {
 	EXTRACTED_INITIAL_PROMPT=""
+	local prompt_index
+	if ! prompt_index="$(_sumocode_first_positional_index)"; then return 0; fi
+	EXTRACTED_INITIAL_PROMPT="${SUMOCODE_ARGS[prompt_index]}"
+
 	local -a kept=()
-	local found=0
 	local i=0
 	local n="${#SUMOCODE_ARGS[@]}"
-	local arg next
-
-	# Pi flags that always consume the following token as a value (space
-	# form). See the flag table comment above for the args.js citation.
-	local -a value_flags=(
-		--mode --provider --model --api-key --system-prompt
-		--append-system-prompt --name -n --session --session-id --fork
-		--session-dir --models --tools -t --exclude-tools -xt --thinking
-		--export --extension -e --skill --prompt-template --theme
-	)
-	# Pi flags that conditionally consume the following token only if it does
-	# not look like another flag or an @file argument.
-	local -a conditional_value_flags=(--print -p --list-models)
-
 	while [[ "${i}" -lt "${n}" ]]; do
-		arg="${SUMOCODE_ARGS[i]}"
-
-		if [[ "${arg}" == --*=* ]]; then
-			# `--flag=value` is already one token; nothing to skip alongside it.
-			kept+=("${arg}")
-			i=$((i + 1))
-			continue
+		if [[ "${i}" -ne "${prompt_index}" ]]; then
+			kept+=("${SUMOCODE_ARGS[i]}")
 		fi
-
-		local is_value_flag=0
-		local f
-		for f in "${value_flags[@]}"; do
-			if [[ "${arg}" == "${f}" ]]; then is_value_flag=1; break; fi
-		done
-		if [[ "${is_value_flag}" -eq 1 ]]; then
-			kept+=("${arg}")
-			if [[ $((i + 1)) -lt "${n}" ]]; then
-				kept+=("${SUMOCODE_ARGS[i+1]}")
-				i=$((i + 2))
-			else
-				i=$((i + 1))
-			fi
-			continue
-		fi
-
-		local is_conditional_flag=0
-		for f in "${conditional_value_flags[@]}"; do
-			if [[ "${arg}" == "${f}" ]]; then is_conditional_flag=1; break; fi
-		done
-		if [[ "${is_conditional_flag}" -eq 1 ]]; then
-			kept+=("${arg}")
-			if [[ $((i + 1)) -lt "${n}" ]]; then
-				next="${SUMOCODE_ARGS[i+1]}"
-				if [[ -n "${next}" && "${next}" != -* && "${next}" != @* ]]; then
-					kept+=("${next}")
-					i=$((i + 2))
-					continue
-				fi
-			fi
-			i=$((i + 1))
-			continue
-		fi
-
-		if [[ "${found}" -eq 0 && -n "${arg}" && "${arg}" != -* ]]; then
-			EXTRACTED_INITIAL_PROMPT="${arg}"
-			found=1
-			i=$((i + 1))
-			continue
-		fi
-
-		kept+=("${arg}")
 		i=$((i + 1))
 	done
-
-	SUMOCODE_ARGS=("${kept[@]:-}")
-	if [[ "${#SUMOCODE_ARGS[@]}" -eq 1 && -z "${SUMOCODE_ARGS[0]}" ]]; then
+	if [[ "${#kept[@]}" -eq 0 ]]; then
 		SUMOCODE_ARGS=()
+	else
+		SUMOCODE_ARGS=("${kept[@]}")
 	fi
 }
 
@@ -619,7 +939,7 @@ pi_main_file() {
 	cli_target="$(grep -Eo '([^"[:space:]]+/)?@earendil-works/pi-coding-agent/dist/cli\.js' "${resolved}" | head -n 1 || true)"
 	[[ -n "${cli_target}" ]] || return 1
 	cli_target="${cli_target#\$basedir/}"
-	cli_path="$(cd "${dir}" && realpath "${cli_target}" 2>/dev/null || true)"
+	cli_path="$(CDPATH= cd -- "${dir}" && realpath "${cli_target}" 2>/dev/null || true)"
 	[[ -n "${cli_path}" ]] || return 1
 	main_file="${cli_path%/cli.js}/main.js"
 	[[ -f "${main_file}" ]] || return 1
@@ -802,13 +1122,21 @@ fi
 if [[ "${DRY_RUN}" == "1" ]]; then
 	# Mirror the real RPC-path argv rewrite (see extract_first_positional and
 	# its call site below) so --dry-run output shows exactly what will be
-	# forwarded to the RPC host/child, including the SUMOCODE_INITIAL_PROMPT
-	# side channel, instead of the pre-extraction argv.
+	# forwarded to the RPC host/child, including the one-shot transport side
+	# channel, instead of the pre-extraction argv. Prompt bytes NEVER appear:
+	# the side channel shows presence only, and ARGS/exec go through
+	# redact_sensitive_args (issue 391).
 	DRY_RUN_INITIAL_PROMPT=""
 	if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
 		extract_first_positional
 		DRY_RUN_INITIAL_PROMPT="${EXTRACTED_INITIAL_PROMPT}"
 	fi
+	if [[ "${USE_RPC_HOST}" -eq 1 && -n "${DRY_RUN_INITIAL_PROMPT}" ]]; then
+		KICKOFF_PROMPT_TRANSPORT="one-shot-file"
+	else
+		KICKOFF_PROMPT_TRANSPORT="(none)"
+	fi
+	REDACTED_ARGS="$(redact_sensitive_args)"
 	cat <<EOF
 sumocode dry run
 PI_BIN=${PI_BIN}
@@ -818,9 +1146,9 @@ SUMO_RPC=${SUMO_RPC:-}
 SUMO_TUI_DIAG_FILE=${SUMO_TUI_DIAG_FILE:-}
 SUMO_TUI_DEBUG=${SUMO_TUI_DEBUG:-}
 COMMAND=${COMMAND}
-ARGS=${SUMOCODE_ARGS[*]:-}
-SUMOCODE_INITIAL_PROMPT=${DRY_RUN_INITIAL_PROMPT}
-exec $(if [[ "${USE_RPC_HOST}" -eq 1 ]]; then printf 'node %s' "${ROOT_DIR}/sumo-rpc-host.js"; else printf '%s -e %s/src/extension-entry.ts' "${PI_BIN}" "${ROOT_DIR}"; fi) ${SUMOCODE_ARGS[*]:-}
+ARGS=${REDACTED_ARGS}
+KICKOFF_PROMPT_TRANSPORT=${KICKOFF_PROMPT_TRANSPORT}
+exec $(if [[ "${USE_RPC_HOST}" -eq 1 ]]; then printf 'node %s' "${ROOT_DIR}/sumo-rpc-host.js"; else printf '%s -e %s/src/extension-entry.ts' "${PI_BIN}" "${ROOT_DIR}"; fi) ${REDACTED_ARGS}
 EOF
 	exit 0
 fi
@@ -855,6 +1183,121 @@ if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
 fi
 
 RPC_INITIAL_PROMPT="${EXTRACTED_INITIAL_PROMPT:-}"
+
+# Owner-only one-shot transport for the kickoff prompt (issue 391): the
+# prompt bytes go into an 0600 mktemp file that sumo-rpc-host.js reads and
+# unlinks BEFORE submitting, so no child's inherited environment ever
+# carries prompt content. Empty when there is no kickoff prompt.
+RPC_INITIAL_PROMPT_FILE=""
+if [[ -n "${RPC_INITIAL_PROMPT}" ]]; then
+	RPC_INITIAL_PROMPT_FILE="$(mktemp "${TMPDIR:-/tmp}/sumocode-kickoff.XXXXXX")"
+	printf '%s' "${RPC_INITIAL_PROMPT}" >"${RPC_INITIAL_PROMPT_FILE}"
+fi
+
+# Headless direct-Pi launches (non-TTY stdin => Pi print mode) read piped
+# stdin as the initial message, so the kickoff/task prompt travels through
+# stdin instead of argv (issue 391). Interactive direct-Pi keeps the
+# positional: Pi's interactive mode reads only argv, and its stdin is the
+# live TTY. Caller-piped stdin is overridden only when an extracted prompt
+# exists -- an explicit prompt argument is authoritative over piped content.
+DIRECT_PI_STDIN_PROMPT=""
+if [[ "${USE_RPC_HOST}" -eq 0 && ! -t 0 ]]; then
+	direct_prompt_index="$(_sumocode_first_positional_index 2>/dev/null || true)"
+	extract_first_positional
+	DIRECT_PI_STDIN_PROMPT="${EXTRACTED_INITIAL_PROMPT:-}"
+	# Fall back to the argv transport when extra message-bearing tokens
+	# remain: a leftover positional (Pi print mode loops over every message
+	# and buildInitialMessage would concatenate stdin with messages[0]), a
+	# `-p/--print` flag with its own message value, or an explicit `--mode`
+	# (rpc/json read stdin as a protocol/command channel, never as a message
+	# — piping prompt text there corrupts the stream). Restoring the
+	# extracted prompt keeps Pi's parsing semantics byte-identical to the
+	# pre-stdin behavior.
+	if [[ -n "${DIRECT_PI_STDIN_PROMPT}" ]]; then
+		direct_fallback=0
+		if _sumocode_first_positional_index >/dev/null 2>&1; then
+			direct_fallback=1
+		elif [[ "${#SUMOCODE_ARGS[@]}" -gt 0 ]]; then
+			for direct_arg in "${SUMOCODE_ARGS[@]}"; do
+				case "${direct_arg}" in
+					-p|--print|--print=*|--mode|--mode=*) direct_fallback=1; break ;;
+				esac
+			done
+		fi
+		if [[ "${direct_fallback}" -eq 1 ]]; then
+			reinserted=()
+			n="${#SUMOCODE_ARGS[@]}"
+			for ((j = 0; j < n; j++)); do
+				if [[ "${j}" -eq "${direct_prompt_index}" ]]; then
+					reinserted+=("${DIRECT_PI_STDIN_PROMPT}")
+				fi
+				reinserted+=("${SUMOCODE_ARGS[j]}")
+			done
+			if [[ "${direct_prompt_index}" -ge "${n}" ]]; then
+				reinserted+=("${DIRECT_PI_STDIN_PROMPT}")
+			fi
+			SUMOCODE_ARGS=("${reinserted[@]}")
+			DIRECT_PI_STDIN_PROMPT=""
+		fi
+		# Pi's own print-message form: a `-p/--print <msg>` (or `--print=<msg>`)
+		# token carries the prompt as a flag value. When that message is the
+		# ONLY message token (no other positional, no second print message, no
+		# --mode), move it to stdin -- keeping the print flag for space form --
+		# so argv carries only non-message flags, matching the positional
+		# kickoff path above.
+		if [[ -z "${DIRECT_PI_STDIN_PROMPT}" && "${#SUMOCODE_ARGS[@]}" -ge 1 ]]; then
+			direct_print_value=""
+			direct_print_tokens=0
+			direct_print_remove_index=-1
+			direct_has_mode=0
+			i=0
+			while [[ "${i}" -lt "${#SUMOCODE_ARGS[@]}" ]]; do
+				arg="${SUMOCODE_ARGS[i]}"
+				case "${arg}" in
+					--mode|--mode=*) direct_has_mode=1 ;;
+					--print=*|-p=*)
+						direct_print_tokens=$((direct_print_tokens + 1))
+						if [[ -z "${direct_print_value}" ]]; then
+							direct_print_value="${arg#*=}"
+							direct_print_remove_index="${i}"
+						fi
+						;;
+					--print|-p)
+						if [[ $((i + 1)) -lt "${#SUMOCODE_ARGS[@]}" ]]; then
+							next="${SUMOCODE_ARGS[i+1]}"
+							if [[ "${next}" != @* && ( "${next}" != -* || "${next}" == ---* ) ]]; then
+								direct_print_tokens=$((direct_print_tokens + 1))
+								if [[ -z "${direct_print_value}" ]]; then
+									direct_print_value="${next}"
+									direct_print_remove_index=$((i + 1))
+								fi
+							fi
+						fi
+						;;
+				esac
+				i=$((i + 1))
+			done
+			if [[ "${direct_has_mode}" -eq 0 && "${direct_print_tokens}" -eq 1 && -n "${direct_print_value}" && "${direct_print_remove_index}" -ge 0 ]]; then
+				direct_kept=()
+				i=0
+				while [[ "${i}" -lt "${#SUMOCODE_ARGS[@]}" ]]; do
+					if [[ "${i}" -ne "${direct_print_remove_index}" ]]; then direct_kept+=("${SUMOCODE_ARGS[i]}"); fi
+					i=$((i + 1))
+				done
+				direct_saved_args=()
+				if [[ "${#SUMOCODE_ARGS[@]}" -gt 0 ]]; then direct_saved_args=("${SUMOCODE_ARGS[@]}"); fi
+				if [[ "${#direct_kept[@]}" -eq 0 ]]; then SUMOCODE_ARGS=(); else SUMOCODE_ARGS=("${direct_kept[@]}"); fi
+				if _sumocode_first_positional_index >/dev/null 2>&1; then
+					# Removing the print message would leave another message
+					# behind; argv stays byte-identical to pre-stdin behavior.
+					if [[ "${#direct_saved_args[@]}" -gt 0 ]]; then SUMOCODE_ARGS=("${direct_saved_args[@]}"); else SUMOCODE_ARGS=(); fi
+				else
+					DIRECT_PI_STDIN_PROMPT="${direct_print_value}"
+				fi
+			fi
+		fi
+	fi
+fi
 
 # The RPC host previously ran via `exec`, which replaced this shell's own pid
 # outright -- the child WAS this script's pid, so a real terminal's Ctrl-C/
@@ -895,6 +1338,11 @@ forward_signal_to_rpc_child() {
 }
 trap 'forward_signal_to_rpc_child INT' INT
 trap 'forward_signal_to_rpc_child TERM' TERM
+# Success, failure, cancellation (INT/TERM exits), and reload all funnel
+# through process exit: the transport file is normally already consumed
+# (unlinked) by the host, and this trap is the backstop for crashes/signal
+# landings before the host ever read it.
+trap 'rm -f "${RPC_INITIAL_PROMPT_FILE:-}" 2>/dev/null || true' EXIT
 
 # `wait` on a backgrounded job can return as soon as the trap handler above
 # runs (bash reports the interrupted `wait` itself, not necessarily the
@@ -1022,14 +1470,28 @@ while :; do
 		# iteration's exit code.
 		SUMOCODE_EXIT_CODE_FILE="$(mktemp "${TMPDIR:-/tmp}/sumocode-exit-code.XXXXXX")"
 		if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
-			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" SUMOCODE_RELOAD="${IS_RELOAD_RESPAWN}" SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" <&0 &
+			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT_FILE="${RPC_INITIAL_PROMPT_FILE}" SUMOCODE_RELOAD="${IS_RELOAD_RESPAWN}" SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" <&0 &
 		else
-			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" SUMOCODE_RELOAD="${IS_RELOAD_RESPAWN}" SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" "${SUMOCODE_ARGS[@]}" <&0 &
+			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT_FILE="${RPC_INITIAL_PROMPT_FILE}" SUMOCODE_RELOAD="${IS_RELOAD_RESPAWN}" SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" "${SUMOCODE_ARGS[@]}" <&0 &
 		fi
 		RPC_CHILD_PID=$!
 		wait_for_child_exit "${RPC_CHILD_PID}"
 		code="$(read_child_exit_code_file "${SUMOCODE_EXIT_CODE_FILE}" "${WAIT_FOR_CHILD_EXIT_STATUS}")"
 		RPC_CHILD_PID=""
+	elif [[ -n "${DIRECT_PI_STDIN_PROMPT}" ]]; then
+		# Headless kickoff: the prompt rides stdin (Pi print mode reads it as
+		# the initial message); argv keeps only flags. The caller's own piped
+		# stdin is streamed first (cat), so Pi's composition — stdin bytes then
+		# the message — stays byte-identical to the pre-stdin behavior, and the
+		# upstream producer keeps its reader instead of taking SIGPIPE.
+		# Pipeline exit status is Pi's, so the reload/exit handling below is
+		# unchanged. Must precede the empty-argv branch: a sole prompt
+		# positional empties SUMOCODE_ARGS during extraction.
+		if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
+			{ cat; printf '%s' "${DIRECT_PI_STDIN_PROMPT}"; } | env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" || code=$?
+		else
+			{ cat; printf '%s' "${DIRECT_PI_STDIN_PROMPT}"; } | env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" "${SUMOCODE_ARGS[@]}" || code=$?
+		fi
 	elif [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
 		env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" || code=$?
 	else
@@ -1048,6 +1510,17 @@ while :; do
 	# a reload respawn resumes the existing session via --continue below and
 	# must not re-submit it as a new message.
 	RPC_INITIAL_PROMPT=""
+	# The host already consumed (unlinked) the transport file; clear the path
+	# so the exit trap has nothing to clean and a reload can never re-export it.
+	# Cleared ONLY here, on the reload-respawn path: code 100 means the host
+	# served a live session, so it already consumed (unlinked) the transport
+	# file. Every other exit reaches `exit "${code}"` below with the path
+	# still set, keeping the EXIT trap as the cleanup backstop for hosts that
+	# die before reading it.
+	RPC_INITIAL_PROMPT_FILE=""
+	# Same one-shot rule for the headless stdin transport: iteration one's
+	# prompt must never ride a reload respawn's stdin.
+	DIRECT_PI_STDIN_PROMPT=""
 	# After the kickoff turn has fired, do NOT re-pass the task prompt on
 	# `/reload`. The reload loop adds `--continue` to resume the existing
 	# session, and re-injecting the original prompt would send it again as a

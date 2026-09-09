@@ -15,7 +15,18 @@ const FIXTURE_TIMES = {
 	sumoTwo: new Date("2026-04-30T11:43:00"),
 };
 
+const WORKTREE_RESULT = {
+	id: "sa-7", disposition: "unreviewed", revision: 0,
+	worktree: { path: "/projects/sumocode-result", repoRoot: "/projects/sumocode", branch: "sumo/auth-result", baseRef: "a".repeat(40) },
+	manifest: { baseRef: "a".repeat(40), headRef: "b".repeat(40), branch: "sumo/auth-result", worktreePath: "/projects/sumocode-result",
+		changedPaths: ["src/auth.ts", "src/auth.test.ts", "docs/auth.md"], dirty: false, commits: 2, exit: "completed", durationMs: 1000 },
+};
+
 const FIXTURES = {
+	"worktree-result-disposition": {
+		transcript: { messages: [] },
+		overlay: "result-disposition",
+	},
 	"completed-active": {
 		transcript: {
 			messages: [
@@ -140,6 +151,58 @@ const FIXTURES = {
 								metrics: { tokensIn: 8000, tokensOut: 3000, elapsedMs: 22000 },
 							},
 						},
+					],
+				},
+			],
+		},
+	},
+	"activity-budget-warnings": {
+		transcript: {
+			messages: [
+				{ id: "activity-request", role: "user", displayName: "USER", timestamp: FIXTURE_TIMES.userOne, blocks: [{ type: "markdown", text: "show live orchestration activity" }] },
+				{
+					id: "activity-feed", role: "system", displayName: "ACTIVITY", timestamp: FIXTURE_TIMES.sumoOne,
+					blocks: [
+						{ type: "activity", activity: {
+							id: "fixture-stalled-subagent", kind: "subagent", title: "review auth flow", status: "running", subject: "sa-4", currentStep: "stalled-warning",
+							body: { kind: "text", text: "stalled-warning · elapsed 180s · wall 30% · reported tokens unknown · reported cost unknown · liveness unknown · last progress 2026-04-30T11:39:00.000Z\ninspect or explicitly cancel with subagent_cancel" },
+							outputTail: "last observed: inspecting session boundaries", model: "gpt-5.5", thinking: "medium",
+						} },
+						{ type: "activity", activity: {
+							id: "fixture-over-budget-subagent", kind: "subagent", title: "docs audit", status: "running", subject: "sa-6", currentStep: "over-budget-warning",
+							body: { kind: "text", text: "over-budget-warning · elapsed 120s · wall 120% · reported tokens 110% · reported cost 50% · liveness unknown · last progress 2026-04-30T11:41:59.000Z\ninspect or explicitly cancel with subagent_cancel" },
+							outputTail: "still reviewing transcript docs", model: "gpt-5.5", thinking: "medium",
+						} },
+						{ type: "activity", activity: { id: "fixture-completed-terminal", kind: "terminal", title: "typecheck", status: "succeeded", subject: "sumocode", outputTail: "typecheck passed", body: { kind: "terminal", command: "pnpm typecheck", text: "typecheck passed" }, result: { summary: "exit 0" } } },
+						{ type: "activity", activity: { id: "fixture-failed-terminal", kind: "terminal", title: "integration tests", status: "failed", subject: "sumocode", outputTail: "1 test failed", body: { kind: "terminal", command: "pnpm test:integration", text: "1 test failed" }, result: { error: "rpc session switch failed" } } },
+						{ type: "activity", activity: { id: "fixture-collapsed-subagent", kind: "subagent", title: "docs audit", status: "running", subject: "sa-5", currentStep: "reviewing transcript docs" } },
+					],
+				},
+			],
+		},
+	},
+	"subagent-recovery-states": {
+		transcript: {
+			messages: [
+				{ id: "activity-request", role: "user", displayName: "USER", timestamp: FIXTURE_TIMES.userOne, blocks: [{ type: "markdown", text: "show live orchestration activity" }] },
+				{
+					id: "activity-feed", role: "system", displayName: "ACTIVITY", timestamp: FIXTURE_TIMES.sumoOne,
+					blocks: [
+						{ type: "activity", activity: {
+							id: "fixture-recovered-subagent", kind: "subagent", title: "review auth flow", status: "running", subject: "sa-4", currentStep: "recovered-running",
+							body: { kind: "text", text: "retained child adopted · evidence preserved\ninspect task evidence; control verified" },
+							model: "gpt-5.5", thinking: "medium",
+						} },
+						{ type: "activity", activity: {
+							id: "fixture-lost-subagent", kind: "subagent", title: "auth test watcher", status: "lost", subject: "sa-6", currentStep: "lost",
+							body: { kind: "text", text: "retained child lost · evidence preserved\ninspect task evidence; no result or signal inferred" },
+						} },
+						{ type: "activity", activity: {
+							id: "fixture-ambiguous-subagent", kind: "subagent", title: "docs audit", status: "lost", subject: "sa-7", currentStep: "ambiguous identity",
+							body: { kind: "text", text: "retained child ambiguous · evidence preserved\ninspect task evidence; no signal authorized" },
+						} },
+						{ type: "activity", activity: { id: "fixture-completed-terminal", kind: "terminal", title: "typecheck", status: "succeeded", subject: "sumocode", outputTail: "typecheck passed", body: { kind: "terminal", command: "pnpm typecheck", text: "typecheck passed" }, result: { summary: "exit 0" } } },
+						{ type: "activity", activity: { id: "fixture-failed-terminal", kind: "terminal", title: "integration tests", status: "failed", subject: "sumocode", outputTail: "1 test failed", body: { kind: "terminal", command: "pnpm test:integration", text: "1 test failed" }, result: { error: "rpc session switch failed" } } },
 					],
 				},
 			],
@@ -329,6 +392,16 @@ export async function captureFixtureScenario(scenario) {
 
 async function renderFixtureScene(scenario, fixture) {
 	const transcript = fixture.transcript;
+	if (scenario.fixture?.id === "worktree-result-disposition") {
+		const adapter = await jiti.import(`${repoRoot}/src/activity/subagent-adapter.ts`);
+		transcript.messages = [{ id: "result", role: "system", displayName: "ACTIVITY", timestamp: FIXTURE_TIMES.sumoOne,
+			blocks: [{ type: "activity", activity: adapter.activityFromSubagentSnapshot({
+				...WORKTREE_RESULT, title: "refactor auth", prompt: "refactor auth", cwd: "/projects/sumocode", baseRef: "a".repeat(40),
+				status: "done", recovery: "adopted", createdAt: 1000, settledAt: 2000, usage: { turns: 1 },
+				transcript: [], liveText: "", liveTools: [], finalText: "committed auth refactor and tests",
+			}) }],
+		}];
+	}
 	const cols = scenario.dimensions.cols;
 	const rows = scenario.dimensions.rows;
 	const portrait = cols < 80;
@@ -428,6 +501,10 @@ async function renderFixtureScene(scenario, fixture) {
 }
 
 async function applyOverlay(lines, cols, rows, overlay) {
+	if (overlay === "result-disposition") {
+		const command = await jiti.import(`${repoRoot}/src/commands/worktree.ts`);
+		return applyDivineQueryOverlay(lines, cols, rows, command.worktreeResultQuery(WORKTREE_RESULT));
+	}
 	if (overlay === "divine-query") return applyDivineQueryOverlay(lines, cols, rows);
 	if (overlay === "memory-scriptorium") return applyMemoryScriptoriumOverlay(lines, cols, rows);
 	if (overlay !== "command-palette") throw new Error(`Unsupported fixture overlay: ${overlay}`);
@@ -500,13 +577,13 @@ async function applyMemoryScriptoriumOverlay(lines, cols, rows) {
 	return next;
 }
 
-async function applyDivineQueryOverlay(lines, cols, rows) {
+async function applyDivineQueryOverlay(lines, cols, rows, query) {
 	const divineQuery = await jiti.import(`${repoRoot}/src/divine-query.ts`);
 
 	const overlayWidth = Math.max(50, Math.min(80, Math.floor(cols * 0.6)));
 	const overlayLines = divineQuery.renderDivineQuery({
-		title: "Should I rename `getUser` to `fetchUser` across the auth module?",
-		options: ["Yes, rename it everywhere", "No, leave it as-is", "Use a different name"],
+		title: query?.title ?? "Should I rename `getUser` to `fetchUser` across the auth module?",
+		options: query?.options ?? ["Yes, rename it everywhere", "No, leave it as-is", "Use a different name"],
 		focusedIndex: 1,
 	}, overlayWidth);
 

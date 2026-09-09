@@ -862,7 +862,11 @@ class RpcOverlayHost {
 		if (notifications) {
 			entries.push({
 				component: notifications,
-				options: { anchor: "top-left", row: this.adapter.isActive() ? 3 : 0, width: "100%" },
+				options: {
+					anchor: "top-left", row: this.adapter.isActive() ? 3 : 0, width: "100%",
+					// Match the full-width paint, including for narrow-repaint eligibility.
+					visible: (cols: number) => notifications.render(cols).length > 0,
+				},
 				focusOrder: 10,
 			});
 		}

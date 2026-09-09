@@ -1,17 +1,39 @@
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it, vi } from "vitest";
-import { createPiChildSpawner, resolveClaudeOauthAdapterEntry, resolvePiBinary, resolvePiChildModelBootstrapEntry } from "./backend-pi.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	CHILD_JSON_FRAME_MAX_BYTES,
+	CHILD_RETAINED_RESULT_MAX_BYTES,
+	CHILD_STDERR_TAIL_MAX_BYTES,
+	TRUNCATED_HEAD_MARKER,
+	TRUNCATED_TAIL_MARKER,
+} from "../child-protocol.js";
+import { createPiChildSpawner, resolveClaudeOauthAdapterEntry, resolvePiBinary, resolvePiChildModelBootstrapEntry, retainedProcessTree } from "./backend-pi.js";
 import type { SubagentEvent } from "./domain.js";
+import type { SpawnedChild, HeadlessLaunchGate } from "./backend-pi.js";
+import type { ProcessTreeOperations } from "../background-tasks/process-tree.js";
+import { prepareRetainedBootstrap, type RetainedBootstrapDescriptor } from "./retained-bootstrap.js";
+import type { SubagentRecord } from "./registry.js";
+import { RETAINED_BOOTSTRAP_ENV, publishFactoryReceipt, type BootstrapReceiptBinding } from "./retained-bootstrap-receipt.js";
+
+const runnerEnvironment = process.env;
+const testTmpdir = tmpdir();
+beforeEach(() => {
+	process.env = { PATH: "/synthetic/bin", HOME: "/synthetic/home", TMPDIR: testTmpdir };
+});
+afterEach(() => { process.env = runnerEnvironment; });
 
 class FakeProcess extends EventEmitter {
-	public readonly stdin = { end: vi.fn() };
+	public readonly stdin = { on: vi.fn(), write: vi.fn(), end: vi.fn() };
 	public readonly stdout = new EventEmitter();
 	public readonly stderr = new EventEmitter();
-	public pid = 4242;
+	public pid: number | undefined = 4242;
+	public exitCode = null;
+	public signalCode = null;
+	public send = vi.fn((_message: { binary: string; args: string[] }) => this.emit("message", { kind: "started", child: { pid: 4343, processStartTime: "original-birth" } }));
 	public killed = false;
 	public kill = vi.fn(() => {
 		this.killed = true;
@@ -19,11 +41,411 @@ class FakeProcess extends EventEmitter {
 	});
 }
 
-const collect = (events: ((emit: (event: SubagentEvent) => void) => void)): SubagentEvent[] => {
+const collect = (events: SpawnedChild["events"]): SubagentEvent[] => {
+	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- backend subscriptions explicitly support callback or AsyncIterable forms.
+	if (typeof events !== "function") throw new Error("expected callback backend");
 	const collected: SubagentEvent[] = [];
 	events((event) => collected.push(event));
 	return collected;
 };
+
+const emitJson = <TEvent extends object>(proc: FakeProcess, event: TEvent): void => {
+	proc.stdout.emit("data", `${JSON.stringify(event)}\n`);
+};
+
+const retainedEventText = (events: readonly SubagentEvent[]): string[] => events.flatMap((event) => {
+	if (event.kind === "assistant-delta") return [event.delta];
+	if (event.kind === "message-end") return [event.text];
+	return [];
+});
+
+const durableEventText = (events: readonly SubagentEvent[]): string => {
+	let transcript: string[] = [];
+	let liveText = "";
+	for (const event of events) {
+		if (event.kind === "assistant-delta") liveText += event.delta;
+		if (event.kind === "message-end") {
+			if (event.replacesRetainedText) transcript = [];
+			transcript.push(event.text);
+			if (event.role === "assistant") liveText = "";
+		}
+	}
+	return `${transcript.join("")}${liveText}`;
+};
+
+const passiveFences = {
+	beforeStdin: (): void => undefined,
+	beforeSignal: (): never => { throw new Error("no signal authority"); },
+	onRefused: (): void => undefined,
+};
+
+describe("retained headless launch gate", () => {
+	it("refuses a retained signal unless the child owns a safe dedicated process group", async () => {
+		const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+		try {
+			for (const identity of [
+				{ pid: 4242, processGroupId: 1, processStartTime: "birth" },
+				{ pid: 4242, processGroupId: 4241, processStartTime: "birth" },
+			]) {
+				await expect(retainedProcessTree.signalTree(identity, "SIGKILL")).resolves.toMatchObject({ ok: false, gone: false });
+			}
+			expect(kill).not.toHaveBeenCalled();
+		} finally { kill.mockRestore(); }
+	});
+
+	it("refuses PATH Pi for retained launches", async () => {
+		const spawn = vi.fn();
+		const beforeSpawn = vi.fn();
+		// SAFETY: provenance refusal must happen before this fake spawn.
+		const child = createPiChildSpawner(spawn as never, () => undefined, () => "pi")({
+			prompt: "private", cwd: "/workspace", inherited: {}, launchGate: { ...passiveFences, beforeSpawn, beforePrompt: vi.fn() },
+		});
+		expect(() => collect(child.events)).toThrow(/absolute Pi/);
+		await expect(child.ready).rejects.toThrow(/absolute Pi/);
+		expect(beforeSpawn).not.toHaveBeenCalled();
+		expect(spawn).not.toHaveBeenCalled();
+	});
+
+	it("refuses a stale spawn with zero process effects and a rejected ready", async () => {
+		const spawn = vi.fn();
+		// SAFETY: this refused launch never reaches the fake spawn.
+		const child = createPiChildSpawner(spawn as never, () => undefined, () => "/selected/pi")({
+			prompt: "private", cwd: "/workspace", inherited: {},
+			launchGate: { ...passiveFences, beforeSpawn: () => { throw new Error("stale"); }, beforePrompt: vi.fn() },
+		});
+		expect(() => collect(child.events)).toThrow("stale");
+		expect(spawn).not.toHaveBeenCalled();
+		await expect(child.ready).rejects.toThrow("stale");
+	}, 1000);
+
+	it("refuses prompt release without closing stdin, signalling, or fabricating settlement", async () => {
+		const proc = new FakeProcess();
+		const spawn = vi.fn(() => proc);
+		const beforePrompt = vi.fn(() => { throw new Error("expired"); });
+		// SAFETY: FakeProcess implements this backend's piped process surface.
+		const child = createPiChildSpawner(spawn as never, () => undefined, () => "/selected/pi")({
+			prompt: "private", cwd: "/workspace", inherited: {}, launchGate: { ...passiveFences, beforeSpawn: vi.fn(), beforePrompt },
+		});
+		const events = collect(child.events);
+		proc.emit("spawn");
+		await expect(child.ready).rejects.toThrow("expired");
+		expect(proc.stdin.write).not.toHaveBeenCalled();
+		expect(proc.stdin.end).not.toHaveBeenCalled();
+		expect(proc.kill).not.toHaveBeenCalled();
+		expect(events).toEqual([{ kind: "run-started" }]);
+		expect(() => collect(child.events)).toThrow(/already subscribed/);
+		expect(spawn).toHaveBeenCalledTimes(1);
+		const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+		try {
+			child.interrupt();
+			proc.emit("close", 0);
+			expect(kill).not.toHaveBeenCalled();
+			expect(events).toEqual([{ kind: "run-started" }]);
+		} finally { kill.mockRestore(); }
+	});
+
+	it("does not release a child that settles before its spawn callback", async () => {
+		const proc = new FakeProcess();
+		const beforePrompt = vi.fn();
+		// SAFETY: FakeProcess implements this backend's piped process surface.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never, () => undefined, () => "/selected/pi")({
+			prompt: "private", cwd: "/workspace", inherited: {}, launchGate: { ...passiveFences, beforeSpawn: vi.fn(), beforePrompt },
+		});
+		collect(child.events);
+		proc.emit("close", 1);
+		proc.emit("spawn");
+		await expect(child.ready).rejects.toThrow(/anchor closed/);
+		expect(beforePrompt).not.toHaveBeenCalled();
+		expect(proc.stdin.write).not.toHaveBeenCalled();
+	});
+
+	it("holds stdin until spawn identity is authorized without changing argv", async () => {
+		const proc = new FakeProcess();
+		const spawn = vi.fn((_binary: string, _argv: string[]) => proc);
+		const beforeSpawn = vi.fn();
+		const beforePrompt = vi.fn((pid: number) => {
+			expect(pid).toBe(4242);
+			expect(proc.stdin.write).not.toHaveBeenCalled();
+		});
+		const beforeSignal = vi.fn(() => ({
+			identity: { pid: 4242, processGroupId: 4242, processStartTime: "anchor-command" },
+			verification: { members: [{ pid: 4242, processStartTime: "anchor-birth" }] },
+		}));
+		const operations: ProcessTreeOperations = {
+			captureStartTime: () => undefined,
+			identityMatches: () => "same",
+			verificationMatches: () => "same",
+			isTreeEmpty: () => false,
+			signalTree: async () => ({ ok: true, gone: true }),
+			waitForTreeEmpty: async () => true,
+		};
+		// SAFETY: FakeProcess implements the piped process surface used by this backend.
+		const child = createPiChildSpawner(spawn as never, () => undefined, () => "/selected/pi", () => undefined, operations)({
+			prompt: "private\nλ prompt", cwd: "/workspace", inherited: {}, launchGate: { ...passiveFences, beforeSpawn, beforePrompt, beforeSignal },
+		});
+		collect(child.events);
+		expect(beforeSpawn).toHaveBeenCalledTimes(1);
+		expect(proc.stdin.write).not.toHaveBeenCalled();
+		proc.emit("spawn");
+		await child.ready;
+		expect(beforePrompt).toHaveBeenCalledTimes(1);
+		expect(proc.stdin.write).toHaveBeenCalledExactlyOnceWith("private\nλ prompt");
+		expect(proc.stdin.end).toHaveBeenCalledTimes(1);
+		const argv = spawn.mock.calls[0]![1];
+		expect(argv.join(" ")).not.toContain("private");
+		proc.emit("close", 0);
+	});
+});
+
+function effectFixture(retainedBootstrap?: RetainedBootstrapDescriptor) {
+	const proc = new FakeProcess();
+	const controller = new AbortController();
+	const tree = {
+		identity: { pid: 4242, processGroupId: 4242, processStartTime: "original-command" },
+		verification: { members: [{ pid: 4242, processStartTime: "original-birth" }] },
+	};
+	let live = true;
+	const fence = (): void => { if (!live) throw new Error("writer lost"); };
+	const refused = vi.fn();
+	const gate: HeadlessLaunchGate = {
+		beforeSpawn: fence, beforePrompt: fence, beforeStdin: fence,
+		beforeSignal: () => { fence(); return tree; }, onRefused: refused,
+	};
+	const signals: string[] = [];
+	let finishWait!: (empty: boolean) => void;
+	const operations: ProcessTreeOperations = {
+		captureStartTime: () => { throw new Error("must not recapture birth"); },
+		captureTreeVerification: () => { throw new Error("must not recapture anchors"); },
+		identityMatches: vi.fn<ProcessTreeOperations["identityMatches"]>(() => "same"),
+		verificationMatches: () => "same", isTreeEmpty: () => false,
+		signalTree: async (identity, signal, verification) => {
+			expect(identity).toEqual(tree.identity);
+			expect(verification).toEqual(tree.verification);
+			signals.push(signal);
+			return { ok: true, gone: signal === "SIGKILL" };
+		},
+		waitForTreeEmpty: () => new Promise<boolean>((resolve) => { finishWait = resolve; }),
+	};
+	const spawn = vi.fn((_binary: string, _argv: string[], _options: { env: NodeJS.ProcessEnv }) => proc);
+	// SAFETY: fake piped child and process operations; no OS process is spawned/signalled.
+	const child = createPiChildSpawner(spawn as never, () => undefined, () => retainedBootstrap?.config.pi ?? "/selected/pi", () => undefined, operations)({
+		prompt: retainedBootstrap ? "private task payload" : "private", cwd: retainedBootstrap?.config.cwd ?? "/workspace", inherited: {}, signal: controller.signal, launchGate: gate,
+		retainedBootstrap, model: retainedBootstrap ? "provider/model" : undefined,
+		thinking: retainedBootstrap ? "low" : undefined, builtInTools: retainedBootstrap ? ["read"] : undefined,
+	});
+	const events = collect(child.events);
+	return { proc, controller, child, events, signals, refused, operations, spawn, gate,
+		lose: () => { live = false; }, revive: () => { live = true; }, finishWait: (empty = false) => finishWait(empty) };
+}
+
+function sourceBootstrap() {
+	const root = realpathSync(mkdtempSync(join(tmpdir(), "sumo-source-backend-")));
+	const taskDir = join(root, "task");
+	mkdirSync(taskDir, { mode: 0o700 });
+	const pi = join(root, "pi");
+	writeFileSync(pi, "#!/usr/bin/env node\n", { mode: 0o755 });
+	const record: SubagentRecord = {
+		schemaVersion: 2, revision: 1, id: "sa-source", ownerSessionId: "session", taskDir,
+		backend: "headless", status: "starting", child: null, supervisor: null, pane: null, worktree: null,
+		sessionFilePath: null, modelLabel: "provider/model", roleId: null, createdAt: 1, updatedAt: 1,
+		settledAt: null, completionId: null, outcome: null, delivery: { state: "none", claim: null },
+		result: null, manifest: null, writerLease: null, controlLease: null, controlHead: 0,
+	};
+	return prepareRetainedBootstrap(record, {
+		cwd: root, baseRef: "HEAD", model: { provider: "provider", modelId: "model", label: "provider/model" },
+		thinking: "low", builtInTools: ["read"], role: null, pi, adapterEntry: null, modelBootstrapEntry: null, visible: null,
+	}, { prompt: "private task payload", systemPrompt: "secret role λ" });
+}
+
+function spawnedBinding(f: ReturnType<typeof effectFixture>): BootstrapReceiptBinding {
+	const binding = f.spawn.mock.calls[0]![2].env[RETAINED_BOOTSTRAP_ENV]!;
+	// SAFETY: the backend creates this binding; receipt validation checks its contents.
+	return JSON.parse(binding) as BootstrapReceiptBinding;
+}
+
+describe("retained source factory readiness", () => {
+	it.each(["missing", "other-child"])("never releases stdin for %s evidence and terminates using original anchors", async (cut) => {
+		vi.useFakeTimers();
+		try {
+			const f = effectFixture(sourceBootstrap());
+			f.proc.emit("spawn");
+			if (cut === "other-child") publishFactoryReceipt(spawnedBinding(f), { pid: 4343, processStartTime: "other-birth" });
+			await vi.advanceTimersByTimeAsync(cut === "missing" ? 10_000 : 25);
+			await expect(f.child.ready).rejects.toThrow(/retained/);
+			expect(f.proc.stdin.write).not.toHaveBeenCalled();
+			expect(f.proc.stdin.end).not.toHaveBeenCalled();
+			expect(f.signals).toEqual(["SIGTERM"]);
+			f.finishWait(true);
+			await Promise.resolve();
+			f.proc.emit("close", 1);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.useRealTimers(); }
+	});
+
+	it.each(["waiting", "after-await"])("disposes receipt wait and refuses stdin on authority loss %s", async (cut) => {
+		vi.useFakeTimers();
+		try {
+			const f = effectFixture(sourceBootstrap());
+			if (cut === "after-await") {
+				publishFactoryReceipt(spawnedBinding(f), { pid: 4343, processStartTime: "original-birth" });
+				f.gate.beforeStdin = () => {
+					queueMicrotask(f.lose);
+					f.gate.beforeStdin = () => { throw new Error("writer lost after await"); };
+				};
+			}
+			f.proc.emit("spawn");
+			if (cut === "waiting") f.lose();
+			await vi.advanceTimersByTimeAsync(25);
+			await expect(f.child.ready).rejects.toThrow(/lost/);
+			expect(f.proc.stdin.write).not.toHaveBeenCalled();
+			expect(f.proc.stdin.end).not.toHaveBeenCalled();
+			expect(f.signals).toEqual([]);
+			expect(f.refused).toHaveBeenCalledTimes(1);
+			expect(vi.getTimerCount()).toBe(0);
+			f.proc.emit("close", 1);
+		} finally { vi.useRealTimers(); }
+	});
+
+	it("loses authority on early anchor close and cannot accept late evidence", async () => {
+		vi.useFakeTimers();
+		try {
+			const f = effectFixture(sourceBootstrap());
+			f.proc.emit("spawn");
+			f.proc.emit("close", 0);
+			await expect(f.child.ready).rejects.toThrow(/anchor closed/);
+			publishFactoryReceipt(spawnedBinding(f), { pid: 4343, processStartTime: "original-birth" });
+			await vi.advanceTimersByTimeAsync(20_000);
+			expect(f.proc.stdin.write).not.toHaveBeenCalled();
+			expect(f.proc.stdin.end).not.toHaveBeenCalled();
+			expect(vi.getTimerCount()).toBe(0);
+			expect(f.events).toEqual([{ kind: "run-started" }]);
+			expect(f.refused).toHaveBeenCalledTimes(1);
+		} finally { vi.useRealTimers(); }
+	});
+
+	it.each(["native", "ambiguous", "unbound", "preexisting", "mismatch"])("refuses %s source startup before spawn", (cut) => {
+		const descriptor = sourceBootstrap();
+		const spawn = vi.fn();
+		if (cut === "native") writeFileSync(descriptor.config.pi, Buffer.from([0xcf, 0xfa, 0xed, 0xfe]));
+		if (cut === "preexisting") writeFileSync(join(descriptor.taskDir, "bootstrap-factory-ready.json"), "{}", { mode: 0o600 });
+		// SAFETY: no process may be spawned on any rejected launch.
+		const child = createPiChildSpawner(spawn as never, () => undefined, () => descriptor.config.pi)({
+			prompt: cut === "mismatch" ? "wrong" : "private task payload", cwd: descriptor.config.cwd, inherited: {},
+			model: "provider/model", thinking: "low", builtInTools: ["read"],
+			launchGate: { ...passiveFences, beforeSpawn: vi.fn(), beforePrompt: vi.fn() },
+			retainedBootstrap: cut === "unbound" ? undefined : descriptor,
+			appendSystemPrompt: cut === "ambiguous" || cut === "unbound" ? "secret role λ" : undefined,
+		});
+		expect(() => collect(child.events)).toThrow(/retained/);
+		expect(spawn).not.toHaveBeenCalled();
+	});
+
+	it("holds stdin for factory evidence, uses explicit source -e under --no-extensions, then releases only task text", async () => {
+		vi.useFakeTimers();
+		try {
+			const f = effectFixture(sourceBootstrap());
+			f.proc.emit("spawn");
+			expect(f.proc.stdin.write).not.toHaveBeenCalled();
+			await vi.advanceTimersByTimeAsync(100);
+			expect(f.proc.stdin.end).not.toHaveBeenCalled();
+			const { binary, args } = f.proc.send.mock.calls[0]![0];
+			const metadata = [binary, ...args].join(" ");
+			expect(metadata.includes("--no-extensions")).toBe(true);
+			expect(metadata.includes("retained-system-prompt.ts")).toBe(true);
+			expect(metadata.includes("--append-system-prompt")).toBe(false);
+			expect(metadata.includes("secret role λ")).toBe(false);
+			expect(metadata.includes("private task payload")).toBe(false);
+			publishFactoryReceipt(spawnedBinding(f), { pid: 4343, processStartTime: "original-birth" });
+			await vi.advanceTimersByTimeAsync(25);
+			await f.child.ready;
+			expect(f.proc.stdin.write).toHaveBeenCalledExactlyOnceWith("private task payload");
+			expect(f.proc.stdin.end).toHaveBeenCalledTimes(1);
+			f.proc.emit("close", 0);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.useRealTimers(); }
+	});
+});
+
+describe("retained headless effect fencing", () => {
+	for (const trigger of ["abort", "protocol", "timeout"] as const) {
+		it(`refuses ${trigger} cleanup after writer loss without later cancellation or success`, async () => {
+			vi.useFakeTimers();
+			try {
+				const f = effectFixture();
+				if (trigger !== "timeout") { f.proc.emit("spawn"); await f.child.ready; }
+				f.lose();
+				if (trigger === "abort") f.controller.abort();
+				else if (trigger === "protocol") f.proc.stdout.emit("data", Buffer.alloc(CHILD_JSON_FRAME_MAX_BYTES + 1, 0x73));
+				else await vi.advanceTimersByTimeAsync(10_000);
+				await Promise.resolve();
+				expect(f.signals).toEqual([]);
+				expect(f.refused).toHaveBeenCalledTimes(1);
+				f.revive();
+				f.child.interrupt();
+				f.proc.emit("spawn");
+				f.proc.emit("close", 0);
+				f.proc.emit("error", new Error("late"));
+				await vi.advanceTimersByTimeAsync(20_000);
+				expect(f.signals).toEqual([]);
+				expect(f.events).toEqual([{ kind: "run-started" }]);
+				expect(f.proc.stdin.write).toHaveBeenCalledTimes(trigger === "timeout" ? 0 : 1);
+				expect(vi.getTimerCount()).toBe(0);
+			} finally { vi.useRealTimers(); }
+		});
+	}
+
+	for (const cut of ["lost", "closed", "closed-empty", "normal", "recycled", "rejected"] as const) {
+		it(`handles ${cut} between TERM and KILL using original anchors only`, async () => {
+			const f = effectFixture();
+			f.proc.emit("spawn");
+			await f.child.ready;
+			f.controller.abort();
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(f.signals).toEqual(["SIGTERM"]);
+			if (cut === "lost") f.lose();
+			if (cut === "closed" || cut === "closed-empty") f.proc.emit("close", null, "SIGTERM");
+			if (cut === "recycled") vi.mocked(f.operations.identityMatches).mockReturnValue("different");
+			if (cut === "rejected") f.operations.signalTree = async () => { throw new Error("OS refused"); };
+			f.finishWait(cut === "closed-empty");
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(f.signals).toEqual(cut === "normal" ? ["SIGTERM", "SIGKILL"] : ["SIGTERM"]);
+			if (cut !== "closed" && cut !== "closed-empty") f.proc.emit("close", null, "SIGKILL");
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			const settled = f.events.filter((event) => event.kind === "run-settled");
+			expect(settled).toHaveLength(cut === "normal" || cut === "closed-empty" ? 1 : 0);
+			expect(f.refused).toHaveBeenCalledTimes(cut === "normal" || cut === "closed-empty" ? 0 : 1);
+			f.child.interrupt();
+			expect(f.proc.kill).not.toHaveBeenCalled();
+		});
+	}
+
+	it("rechecks the writer after slow process verification, before the actual signal", async () => {
+		const f = effectFixture();
+		f.proc.emit("spawn");
+		await f.child.ready;
+		vi.mocked(f.operations.identityMatches).mockImplementationOnce(() => { f.lose(); return "same"; });
+		f.child.interrupt();
+		f.proc.emit("close", 0);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		expect(f.signals).toEqual([]);
+		expect(f.refused).toHaveBeenCalledTimes(1);
+		expect(f.events).toEqual([{ kind: "run-started" }]);
+	});
+
+	it("fences stdin end separately from the prompt write", async () => {
+		const f = effectFixture();
+		f.proc.stdin.write.mockImplementation(() => { f.lose(); });
+		f.proc.emit("spawn");
+		await expect(f.child.ready).rejects.toThrow("writer lost");
+		expect(f.proc.stdin.write).toHaveBeenCalledExactlyOnceWith("private");
+		expect(f.proc.stdin.end).not.toHaveBeenCalled();
+		f.child.interrupt();
+		f.proc.emit("close", 0);
+		expect(f.signals).toEqual([]);
+		expect(f.events).toEqual([{ kind: "run-started" }]);
+	});
+});
 
 describe("resolvePiBinary", () => {
 	it("uses the launcher-selected Pi runtime and falls back to PATH", () => {
@@ -42,7 +464,7 @@ describe("resolvePiBinary", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("resolves the source bootstrap from the committed bundle layout without SUMOCODE_ROOT_DIR", () => {
+	it("resolves the source bootstrap from the generated bundle layout without SUMOCODE_ROOT_DIR", () => {
 		const root = mkdtempSync(join(tmpdir(), "sumo-bundle-bootstrap-"));
 		const entry = join(root, "src", "subagents", "pi-child-model-bootstrap.ts");
 		mkdirSync(join(root, "src", "subagents"), { recursive: true });
@@ -134,9 +556,98 @@ describe("resolveClaudeOauthAdapterEntry", () => {
 });
 
 describe("spawnPiChild", () => {
+	it("retains the pipe owner while replacing a same-process event observer", () => {
+		const proc = new FakeProcess();
+		// No fake PID may reach the operating system through interrupt().
+		proc.pid = undefined;
+		const spawn = vi.fn(() => proc);
+		// SAFETY: FakeProcess implements the piped process members used by this backend.
+		const child = createPiChildSpawner(spawn as never, () => undefined, () => "/selected/pi")({
+			prompt: "private kickoff",
+			cwd: "/repo",
+			inherited: {},
+		});
+		const oldEvents: SubagentEvent[] = [];
+		const newEvents: SubagentEvent[] = [];
+		let observer = (event: SubagentEvent): void => { oldEvents.push(event); };
+		if (Symbol.asyncIterator in child.events) throw new Error("expected callback backend");
+		// The owner subscribes once; replacing a UI/session observer must not call events again.
+		child.events((event) => observer(event));
+		emitJson(proc, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "before" } });
+		observer = (event) => { newEvents.push(event); };
+		emitJson(proc, { type: "message_end", message: { role: "assistant", content: "after replacement" } });
+		try {
+			child.interrupt();
+			expect(proc.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+		} finally {
+			proc.emit("close", null, "SIGTERM");
+		}
+		expect(spawn).toHaveBeenCalledTimes(1);
+		expect(proc.stdin.write).toHaveBeenCalledExactlyOnceWith("private kickoff");
+		expect(oldEvents).toEqual([
+			{ kind: "run-started" },
+			{ kind: "assistant-delta", delta: "before" },
+		]);
+		expect(newEvents.at(-1)).toEqual({
+			kind: "run-settled",
+			outcome: { kind: "interrupted", partialText: "after replacement" },
+		});
+		expect(proc.stdout.listenerCount("data")).toBe(0);
+	});
+
+	it("delivers the delegated prompt via stdin and keeps it out of child argv", () => {
+		// Issue 391: delegated prompts can carry sensitive material. Pinned Pi
+		// (0.85.x) print mode reads piped stdin as the initial message
+		// (interior multiline/Unicode bytes are exact; Pi itself trims
+		// leading/trailing whitespace), so the prompt must travel through
+		// stdin -- never argv, where any local process can read it.
+		const proc = new FakeProcess();
+		const spawn = vi.fn((_command: string, _args: readonly string[]) => proc);
+		const prompt = "SENTINEL-kickoff\n第二行 — ünïcode ✓";
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(spawn as never)({
+			prompt,
+			cwd: "/tmp/project",
+			inherited: { thinking: "low" },
+		});
+		// SAFETY: the pane/pi backends always expose the callback events form here.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+
+		proc.stdout.emit("data", `${JSON.stringify({ type: "message_end", message: { role: "assistant", content: "done", usage: { totalTokens: 1, cost: { total: 0 } } } })}\n`);
+		proc.emit("close", 0);
+
+		const argv = spawn.mock.calls[0]?.[1] ?? [];
+		for (const arg of argv) expect(arg).not.toContain("SENTINEL");
+		expect(proc.stdin.write).toHaveBeenCalledTimes(1);
+		expect(proc.stdin.write).toHaveBeenCalledWith(prompt);
+		expect(proc.stdin.end).toHaveBeenCalled();
+		// A child that dies without draining a >pipe-buffer prompt must not
+		// surface the pending write as an uncaughtException EPIPE.
+		expect(proc.stdin.on).toHaveBeenCalledWith("error", expect.any(Function));
+		// SAFETY: the fake records the registered handler; invoking it with a
+		// synthetic EPIPE proves the guard swallows the failure in-process.
+		expect(() => (proc.stdin.on as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.(new Error("write EPIPE"))).not.toThrow();
+		expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+	});
+
+	it("reports progress for thinking and bounded-away text without retaining private deltas", () => {
+		const proc = new FakeProcess();
+		// SAFETY: FakeProcess implements this backend's piped transport contract.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		if (Symbol.asyncIterator in child.events) throw new Error("expected callback backend");
+		const events = collect(child.events);
+		for (const type of ["thinking_delta", "toolcall_delta"]) emitJson(proc, { type: "message_update", assistantMessageEvent: { type, delta: "private reasoning or arguments" } });
+		expect(events.filter((event) => event.kind === "progress")).toHaveLength(2);
+		expect(JSON.stringify(events)).not.toContain("private reasoning or arguments");
+		emitJson(proc, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "x".repeat(CHILD_RETAINED_RESULT_MAX_BYTES) } });
+		emitJson(proc, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "still progressing" } });
+		expect(events.at(-1)).toEqual({ kind: "progress" });
+		proc.emit("close", 0);
+	});
+
 	it("translates pi json-line events", () => {
 		const proc = new FakeProcess();
-		const spawn = vi.fn(() => proc);
+		const spawn = vi.fn((_command: string, _args: readonly string[], _options: { cwd: string }) => proc);
 		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
 		const child = createPiChildSpawner(spawn as never)({
 			prompt: "do work",
@@ -153,7 +664,12 @@ describe("spawnPiChild", () => {
 		proc.stdout.emit("data", `${JSON.stringify({ type: "message_end", message: { role: "assistant", content: "hello", usage: { totalTokens: 12, cost: { total: 0.01 } } } })}\n`);
 		proc.emit("close", 0);
 
-		expect(spawn).toHaveBeenCalledWith(resolvePiBinary(), expect.arrayContaining(["--mode", "json", "-p", "do work"]), expect.objectContaining({ cwd: "/tmp/project" }));
+		const argv = spawn.mock.calls[0]?.[1] ?? [];
+		expect(argv).not.toContain("do work");
+		expect(spawn.mock.calls[0]?.[0]).toBe(resolvePiBinary());
+		expect(spawn.mock.calls[0]?.[2].cwd).toBe("/tmp/project");
+		expect(argv).toEqual(expect.arrayContaining(["--mode", "json", "-p"]));
+
 		expect(events).toEqual([
 			{ kind: "run-started" },
 			{ kind: "assistant-delta", delta: "hel" },
@@ -164,6 +680,248 @@ describe("spawnPiChild", () => {
 			{ kind: "usage", tokens: 12, contextWindow: undefined, costUsd: 0.01 },
 			{ kind: "run-settled", outcome: { kind: "completed", finalText: "hello" } },
 		]);
+	});
+
+	it("bounds tool-event identifiers before manager retention", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		const hugeId = "i".repeat(1024 * 1024);
+		const hugeName = "n".repeat(1024 * 1024);
+
+		emitJson(proc, { type: "tool_execution_start", toolCallId: hugeId, toolName: hugeName, args: { path: "README.md" } });
+		emitJson(proc, { type: "tool_execution_update", toolCallId: hugeId, toolName: hugeName, partialResult: "working" });
+		emitJson(proc, { type: "tool_execution_end", toolCallId: hugeId, toolName: hugeName, result: "done", isError: false });
+
+		const toolEvents = events.filter((event) => event.kind === "tool-start" || event.kind === "tool-update" || event.kind === "tool-end");
+		expect(toolEvents).toHaveLength(3);
+		expect(new Set(toolEvents.map((event) => event.toolId)).size).toBe(1);
+		for (const event of toolEvents) expect(Buffer.byteLength(event.toolId, "utf8")).toBeLessThanOrEqual(256);
+		for (const event of toolEvents) {
+			if (event.kind !== "tool-update") expect(Buffer.byteLength(event.name, "utf8")).toBeLessThanOrEqual(256);
+		}
+	});
+
+	it("keeps bounded tool-event identifiers distinct when their prefixes match", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		const sharedPrefix = "i".repeat(300);
+		const firstId = `${sharedPrefix}a`;
+		const secondId = `${sharedPrefix}b`;
+
+		for (const toolCallId of [firstId, secondId]) {
+			emitJson(proc, { type: "tool_execution_start", toolCallId, toolName: "read", args: {} });
+			emitJson(proc, { type: "tool_execution_update", toolCallId, partialResult: "working" });
+			emitJson(proc, { type: "tool_execution_end", toolCallId, toolName: "read", result: "done", isError: false });
+		}
+
+		const toolIds = events.flatMap((event) => event.kind === "tool-start" || event.kind === "tool-update" || event.kind === "tool-end" ? [event.toolId] : []);
+		expect(new Set(toolIds).size).toBe(2);
+		expect(toolIds.slice(0, 3)).toEqual([toolIds[0], toolIds[0], toolIds[0]]);
+		expect(toolIds.slice(3)).toEqual([toolIds[3], toolIds[3], toolIds[3]]);
+		for (const toolId of toolIds) expect(Buffer.byteLength(toolId, "utf8")).toBeLessThanOrEqual(256);
+	});
+
+	it("bounds live assistant deltas without waiting for message_end", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+
+		for (let index = 0; index < 5; index += 1) {
+			emitJson(proc, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "x".repeat(1024 * 1024) } });
+		}
+
+		const retained = retainedEventText(events).join("");
+		expect(Buffer.byteLength(retained, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+		expect(retained.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+	});
+
+	it("shares one retained-text budget across completed message roles", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		const text = "m".repeat(2 * 1024 * 1024);
+
+		emitJson(proc, { type: "message_end", message: { role: "user", content: text } });
+		emitJson(proc, { type: "message_end", message: { role: "assistant", content: text } });
+		emitJson(proc, { type: "tool_result_end", message: { role: "toolResult", content: text } });
+
+		const retained = durableEventText(events);
+		expect(Buffer.byteLength(retained, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+		expect(retained.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+	});
+
+	it("reclaims streamed assistant text when its completed message replaces it", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		const assistantText = "a".repeat(2 * 1024 * 1024);
+		const userText = "u".repeat(1024 * 1024);
+
+		emitJson(proc, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: assistantText } });
+		emitJson(proc, { type: "message_end", message: { role: "assistant", content: assistantText } });
+		emitJson(proc, { type: "message_end", message: { role: "user", content: userText } });
+
+		const completed = events.filter((event): event is Extract<SubagentEvent, { kind: "message-end" }> => event.kind === "message-end");
+		expect(completed.map((event) => event.text)).toEqual([assistantText, userText]);
+		expect(completed.map((event) => event.text).join("")).not.toContain(TRUNCATED_HEAD_MARKER);
+	});
+
+	it("preserves a bounded final assistant result after earlier messages exhaust the run budget", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+
+		emitJson(proc, { type: "message_end", message: { role: "user", content: "u".repeat(CHILD_RETAINED_RESULT_MAX_BYTES) } });
+		emitJson(proc, { type: "message_end", message: { role: "assistant", content: "useful final answer" } });
+		proc.emit("close", 0);
+
+		const finalMessage = events.filter((event) => event.kind === "message-end" && event.role === "assistant").at(-1);
+		expect(finalMessage).toMatchObject({ text: expect.stringContaining("useful final answer"), replacesRetainedText: true });
+		expect(events.at(-1)).toMatchObject({ outcome: { kind: "completed", finalText: expect.stringContaining("useful final answer") } });
+		const retained = durableEventText(events);
+		expect(Buffer.byteLength(retained, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+		expect(retained.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+	});
+
+	it("retains later events until inherited-marker headroom is genuinely full", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+
+		emitJson(proc, { type: "message_end", message: { role: "user", content: "u".repeat(CHILD_RETAINED_RESULT_MAX_BYTES) } });
+		emitJson(proc, { type: "message_end", message: { role: "assistant", content: "small useful answer 界" } });
+		emitJson(proc, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "later delta 🧘" } });
+		emitJson(proc, { type: "tool_result_end", message: { role: "toolResult", content: "later tool output" } });
+		emitJson(proc, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "z".repeat(CHILD_RETAINED_RESULT_MAX_BYTES) } });
+		emitJson(proc, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "dropped delta" } });
+		emitJson(proc, { type: "tool_result_end", message: { role: "toolResult", content: "dropped tool output" } });
+
+		const retained = durableEventText(events);
+		expect(retained).toContain("small useful answer 界");
+		expect(retained).toContain("later delta 🧘");
+		expect(retained).toContain("later tool output");
+		expect(retained).not.toContain("dropped delta");
+		expect(retained).not.toContain("dropped tool output");
+		expect(retained).not.toContain("�");
+		expect(Buffer.byteLength(retained, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+		expect(retained.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+	});
+
+	it("moves the sole marker onto a later clipped assistant completion", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+
+		emitJson(proc, { type: "message_end", message: { role: "user", content: "u".repeat(CHILD_RETAINED_RESULT_MAX_BYTES) } });
+		emitJson(proc, { type: "message_end", message: { role: "assistant", content: "first marked answer" } });
+		emitJson(proc, { type: "message_end", message: { role: "user", content: "later user context" } });
+		emitJson(proc, { type: "tool_result_end", message: { role: "toolResult", content: "later tool output" } });
+		emitJson(proc, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "later live delta" } });
+		emitJson(proc, { type: "message_end", message: { role: "assistant", content: `LATEST:${"界".repeat(CHILD_RETAINED_RESULT_MAX_BYTES / 2)}` } });
+		proc.emit("close", 0);
+
+		const finalMessage = events.filter((event) => event.kind === "message-end" && event.role === "assistant").at(-1);
+		const settled = events.at(-1);
+		expect(finalMessage).toMatchObject({ text: expect.stringMatching(/^LATEST:/), replacesRetainedText: true });
+		if (finalMessage?.kind !== "message-end" || settled?.kind !== "run-settled" || settled.outcome.kind !== "completed") throw new Error("missing completed result");
+		expect(finalMessage.text).toContain(TRUNCATED_HEAD_MARKER);
+		expect(settled.outcome.finalText).toBe(finalMessage.text);
+		expect(durableEventText(events).split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+		expect(Buffer.byteLength(durableEventText(events), "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+	});
+
+	it("propagates a clipped live stream marker to its completed assistant message", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+
+		emitJson(proc, { type: "message_end", message: { role: "user", content: "prior context" } });
+		emitJson(proc, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "s".repeat(CHILD_RETAINED_RESULT_MAX_BYTES) } });
+		emitJson(proc, { type: "message_end", message: { role: "assistant", content: "completed answer" } });
+
+		const finalMessage = events.filter((event) => event.kind === "message-end" && event.role === "assistant").at(-1);
+		expect(finalMessage).toMatchObject({ text: `completed answer${TRUNCATED_HEAD_MARKER}`, replacesRetainedText: true });
+		expect(durableEventText(events).split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+	});
+
+	it("keeps one marker when an interleaved message is omitted behind a truncated live stream", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+
+		emitJson(proc, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "s".repeat(CHILD_RETAINED_RESULT_MAX_BYTES) } });
+		emitJson(proc, { type: "tool_result_end", message: { role: "toolResult", content: "omitted tool output" } });
+		emitJson(proc, { type: "message_end", message: { role: "assistant", content: "completed answer" } });
+
+		const retained = durableEventText(events);
+		expect(retained).toContain("completed answer");
+		expect(retained.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+		expect(Buffer.byteLength(retained, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+	});
+
+	it("reclaims prior completed text when the next answer would overflow", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		const finalText = `FINAL:${"f".repeat(3 * 1024 * 1024)}`;
+
+		emitJson(proc, { type: "message_end", message: { role: "assistant", content: "p".repeat(3 * 1024 * 1024) } });
+		emitJson(proc, { type: "message_end", message: { role: "assistant", content: finalText } });
+		proc.emit("close", 0);
+
+		const finalMessage = events.filter((event) => event.kind === "message-end" && event.role === "assistant").at(-1);
+		const settled = events.at(-1);
+		if (finalMessage?.kind !== "message-end") throw new Error("missing final message");
+		expect(finalMessage).toMatchObject({ replacesRetainedText: true });
+		expect(finalMessage.text).toMatch(/^FINAL:/);
+		expect(Buffer.byteLength(finalMessage.text, "utf8")).toBeGreaterThanOrEqual(Buffer.byteLength(finalText, "utf8"));
+		expect(durableEventText(events)).not.toContain("pppp");
+		expect(durableEventText(events).split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+		if (settled?.kind !== "run-settled" || settled.outcome.kind !== "completed") throw new Error("missing completed result");
+		expect(settled.outcome.finalText).toBe(finalMessage.text);
+	});
+
+	it("does not double-charge provisional or final-result aliases against the run budget", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		const finalText = "f".repeat(CHILD_RETAINED_RESULT_MAX_BYTES);
+
+		emitJson(proc, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "p".repeat(3 * 1024 * 1024) } });
+		emitJson(proc, { type: "message_end", message: { role: "assistant", content: finalText } });
+		proc.emit("close", 0);
+
+		const finalMessage = events.filter((event) => event.kind === "message-end" && event.role === "assistant").at(-1);
+		const settled = events.at(-1);
+		if (finalMessage?.kind !== "message-end" || settled?.kind !== "run-settled" || settled.outcome.kind !== "completed") throw new Error("missing completed result");
+		expect(settled.outcome.finalText).toBe(finalMessage.text);
+		expect(Buffer.byteLength(durableEventText(events), "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
 	});
 
 	it("redacts nested tool argument secrets before producing a bounded preview", () => {
@@ -216,7 +974,116 @@ describe("spawnPiChild", () => {
 		expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "failed", errorText: "boom", partialText: undefined } });
 	});
 
-	it("appends role system instructions after task args and before the prompt", () => {
+	it("keeps an oversized-frame run active until forced child close", () => {
+		vi.useFakeTimers();
+		const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+		try {
+			const proc = new FakeProcess();
+			// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+			const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+			// SAFETY: this backend exposes the callback event form collected by the test.
+			const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+
+			proc.stdout.emit("data", Buffer.concat([
+				Buffer.alloc(CHILD_JSON_FRAME_MAX_BYTES + 1, 0x73),
+				Buffer.from("\n"),
+			]));
+			expect(events.filter((event) => event.kind === "run-settled")).toEqual([]);
+			expect(killSpy).toHaveBeenCalledWith(-4242, "SIGTERM");
+
+			vi.advanceTimersByTime(5001);
+			expect(killSpy).toHaveBeenCalledWith(-4242, "SIGKILL");
+			expect(events.filter((event) => event.kind === "run-settled")).toEqual([]);
+
+			proc.emit("close", null, "SIGKILL");
+			proc.emit("error", new Error("late child error"));
+			proc.emit("close", 1);
+			const settled = events.filter((event) => event.kind === "run-settled");
+			expect(settled).toHaveLength(1);
+			expect(settled[0]).toMatchObject({ outcome: { kind: "failed", errorText: expect.stringContaining(`exceeded ${CHILD_JSON_FRAME_MAX_BYTES} bytes`) } });
+			expect(JSON.stringify(settled[0])).not.toContain("ssss");
+		} finally {
+			killSpy.mockRestore();
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps protocol failure ownership when the child errors before close", () => {
+		vi.useFakeTimers();
+		const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+		try {
+			const proc = new FakeProcess();
+			// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+			const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+			// SAFETY: this backend exposes the callback event form collected by the test.
+			const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+
+			proc.stdout.emit("data", Buffer.concat([
+				Buffer.alloc(CHILD_JSON_FRAME_MAX_BYTES + 1, 0x73),
+				Buffer.from("\n"),
+			]));
+			proc.emit("error", new Error("termination failed"));
+			expect(killSpy).toHaveBeenCalledWith(-4242, "SIGTERM");
+			expect(events.filter((event) => event.kind === "run-settled")).toEqual([]);
+
+			proc.emit("close", null, "SIGTERM");
+			const settled = events.filter((event) => event.kind === "run-settled");
+			expect(settled).toHaveLength(1);
+			expect(settled[0]).toMatchObject({ outcome: { kind: "failed", errorText: expect.stringContaining(`exceeded ${CHILD_JSON_FRAME_MAX_BYTES} bytes`) } });
+			expect(JSON.stringify(settled[0])).not.toContain("termination failed");
+		} finally {
+			killSpy.mockRestore();
+			vi.useRealTimers();
+		}
+	});
+
+	it("settles a no-child spawn error without waiting for close", () => {
+		const proc = new FakeProcess();
+		proc.pid = undefined;
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		proc.emit("error", new Error("spawn failed"));
+
+		expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "failed", errorText: "spawn failed", partialText: undefined } });
+	});
+
+	it("bounds stderr and retained final text with explicit markers", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		proc.stderr.emit("data", Buffer.alloc(CHILD_STDERR_TAIL_MAX_BYTES + 1, 0x65));
+		const finalText = "r".repeat(CHILD_RETAINED_RESULT_MAX_BYTES + 1);
+		proc.stdout.emit("data", JSON.stringify({ type: "message_end", message: { role: "assistant", content: finalText } }));
+		proc.emit("close", 2);
+
+		const message = events.find((event) => event.kind === "message-end");
+		expect(message).toMatchObject({ kind: "message-end", text: expect.stringContaining(TRUNCATED_HEAD_MARKER) });
+		if (message?.kind !== "message-end") throw new Error("missing message-end");
+		expect(Buffer.byteLength(message.text)).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+		const settled = events.at(-1);
+		expect(settled).toMatchObject({ outcome: { kind: "failed", errorText: expect.stringContaining(TRUNCATED_TAIL_MARKER) } });
+		if (settled?.kind !== "run-settled" || settled.outcome.kind !== "failed") throw new Error("missing failed outcome");
+		expect(settled.outcome.errorText).toContain(TRUNCATED_HEAD_MARKER);
+		expect(Buffer.byteLength(settled.outcome.errorText)).toBeLessThanOrEqual(4096);
+	});
+
+	it("processes a final partial JSON line on close", () => {
+		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: this backend exposes the callback event form collected by the test.
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		proc.stdout.emit("data", JSON.stringify({ type: "message_end", message: { role: "assistant", content: "final partial" } }));
+		proc.emit("close", 0);
+
+		expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "completed", finalText: "final partial" } });
+	});
+
+	it("appends role system instructions after task args and delivers the prompt on stdin", () => {
 		const proc = new FakeProcess();
 		const spawn = vi.fn(() => proc);
 		// SAFETY: the spawn double only needs to return a FakeProcess; the spawner reads no other spawn surface.
@@ -233,7 +1100,9 @@ describe("spawnPiChild", () => {
 		const appendIndex = args.indexOf("--append-system-prompt");
 		expect(appendIndex).toBeGreaterThan(args.indexOf("--tools"));
 		expect(args[appendIndex + 1]).toBe("review carefully");
-		expect(args.at(-1)).toBe("do work");
+		expect(args).not.toContain("do work");
+		expect(proc.stdin.write).toHaveBeenCalledWith("do work");
+		expect(proc.stdin.end).toHaveBeenCalled();
 	});
 
 	it("omits role system instructions when none are configured", () => {
@@ -250,12 +1119,12 @@ describe("spawnPiChild", () => {
 
 	it("spawns with the launcher-selected Pi runtime", () => {
 		const proc = new FakeProcess();
-		const spawn = vi.fn(() => proc);
+		const spawn = vi.fn((_binary: string) => proc);
 		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
 		const child = createPiChildSpawner(spawn as never, () => undefined, () => "/current/pi")({ prompt: "x", cwd: "/tmp", inherited: {} });
 		// SAFETY: FakeProcess.events exposes the callback collector shape used by collect.
 		collect(child.events as (emit: (event: SubagentEvent) => void) => void);
-		expect(spawn).toHaveBeenCalledWith("/current/pi", expect.any(Array), expect.any(Object));
+		expect(spawn.mock.calls[0]?.[0]).toBe("/current/pi");
 	});
 
 	it("defers numbered Claude model selection until adapter registration", () => {
@@ -277,7 +1146,8 @@ describe("spawnPiChild", () => {
 		expect(args).not.toContain("--provider");
 		expect(args).not.toContain("--model");
 		expect(args).toEqual(expect.arrayContaining(["-e", "/adapter.ts", "-e", "/bootstrap.ts"]));
-		expect(args.at(-1)).toBe("x");
+		expect(args).not.toContain("x");
+		expect(proc.stdin.write).toHaveBeenCalledWith("x");
 		expect(spawnOptions.env.SUMOCODE_CHILD_MODEL_PROVIDER).toBe("anthropic-2");
 		expect(spawnOptions.env.SUMOCODE_CHILD_MODEL_ID).toBe("claude-haiku-4-5");
 	});
@@ -294,8 +1164,9 @@ describe("spawnPiChild", () => {
 		const eIndex = args.indexOf("-e");
 		expect(eIndex).toBeGreaterThan(-1);
 		expect(args[eIndex + 1]).toBe("/fake/adapter/extensions/index.ts");
-		// The prompt must remain the trailing positional after the adapter args.
-		expect(args[args.length - 1]).toBe("x");
+		// The prompt must arrive on stdin, never as a trailing positional.
+		expect(args).not.toContain("x");
+		expect(proc.stdin.write).toHaveBeenCalledWith("x");
 	});
 
 	it("omits the -e flag when no adapter is installed", () => {
@@ -314,13 +1185,14 @@ describe("spawnPiChild", () => {
 		const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 		try {
 			const proc = new FakeProcess();
-			const spawn = vi.fn(() => proc);
+			const spawn = vi.fn((_binary: string, _argv: string[], _options: { detached: boolean }) => proc);
 			const controller = new AbortController();
 			// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
 			const child = createPiChildSpawner(spawn as never)({ prompt: "x", cwd: "/tmp", inherited: {}, signal: controller.signal });
 			// SAFETY: the pane/pi backends always expose the callback events form here.
 			collect(child.events as (emit: (event: SubagentEvent) => void) => void);
-			expect(spawn).toHaveBeenCalledWith(resolvePiBinary(), expect.any(Array), expect.objectContaining({ detached: true }));
+			expect(spawn.mock.calls[0]?.[0]).toBe(resolvePiBinary());
+			expect(spawn.mock.calls[0]?.[2].detached).toBe(true);
 			controller.abort();
 			// Group signal: negative pid targets the whole tree, not just pi.
 			expect(killSpy).toHaveBeenCalledWith(-4242, "SIGTERM");
@@ -367,6 +1239,35 @@ describe("spawnPiChild", () => {
 				killSpy.mockRestore();
 			}
 		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps an interrupted run owned when the child errors before close", () => {
+		vi.useFakeTimers();
+		const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+		try {
+			const proc = new FakeProcess();
+			const controller = new AbortController();
+			// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+			const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {}, signal: controller.signal });
+			// SAFETY: the pane/pi backends always expose the callback events form here.
+			const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+
+			controller.abort();
+			proc.emit("error", new Error("termination failed"));
+			expect(events.filter((event) => event.kind === "run-settled")).toEqual([]);
+			expect(vi.getTimerCount()).toBe(1);
+
+			vi.advanceTimersByTime(5001);
+			expect(killSpy).toHaveBeenCalledWith(-4242, "SIGKILL");
+			expect(events.filter((event) => event.kind === "run-settled")).toEqual([]);
+
+			proc.emit("close", null, "SIGKILL");
+			expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "interrupted", partialText: undefined } });
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			killSpy.mockRestore();
 			vi.useRealTimers();
 		}
 	});

@@ -189,6 +189,30 @@ describe("ChatViewportController", () => {
 		}
 	});
 
+	it("shows one persistent paused notice across chat clears and restores the editor on disposal", async () => {
+		vi.useFakeTimers();
+		const { root, host, controller } = await makeController();
+		try {
+			controller.handleInput("\x1b[200~private-draft");
+			vi.advanceTimersByTime(1_000);
+			controller.clear();
+			const lines = host.editorContainer!.render(60).join("\n").replace(ANSI_PATTERN, "");
+			expect(lines.match(/input paused/g)).toHaveLength(1);
+			expect(lines).toContain("13/65536 bytes retained");
+			expect(lines).not.toContain("private-draft");
+			expect(controller.handleInput("\x04")).toEqual({ consume: true });
+			expect(controller.handleInput("\x1b[201~")).toEqual({ data: "\x1b[200~private-draft\x04\x1b[201~" });
+			expect(host.editorContainer!.render(60).join("\n")).not.toContain("input paused");
+			controller.dispose();
+			expect(host.editorContainer!.render(60)).toEqual(["chrome", "chrome"]);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			controller.dispose();
+			root.dispose();
+			vi.useRealTimers();
+		}
+	});
+
 	it("buffers SGR mouse sequences split after the CSI prefix", async () => {
 		const { root, chat, controller } = await makeController({ terminalRows: 12, terminalColumns: 80 });
 		for (let index = 0; index < 50; index += 1) chat.addMessage("user", `message ${index}`);

@@ -17,6 +17,7 @@
 - **Milestone**: M1 — Command-ready foundation
 - **Planned at**: commit `b34bd79`, 2026-08-28
 - **Issue**: https://github.com/dhruvkelawala/sumocode/issues/388
+- **Execution**: DONE locally on final restacked source head `d96ea75`; exact-head publication CI/Codex and PR creation remain pending; no merge
 
 ## Why this matters
 
@@ -66,6 +67,7 @@ After final source edits, run `pnpm build:host` before `pnpm test`; keep the gen
 - `src/sumo-tui/rpc/initial-hydration-action-gate.ts`
 - Colocated tests, including an exported pure editor-submit handler seam in `host.ts`.
 - `scripts/perf-startup.mjs`, `scripts/perf-real-world.mjs` (both are included in the drift check and migrate to the new names).
+- `bin/sumocode.sh` diagnostics-event help text only, so the public glossary names the new readiness events truthfully.
 - `docs/perf/startup.md`, `docs/perf/real-world.md`, and generated JSON only when their respective perf commands intentionally update them.
 
 **Out of scope**:
@@ -124,14 +126,26 @@ Measure and report `editorReadyMs`, `commandReadyMs`, and their gap. Update `scr
 
 Cover cold start, reload hydration, deferred model/thinking action, pre-ready ordinary prompt, pre-ready slash command, `/quit`, duplicate `markChromeStable`, and shutdown before readiness.
 
+## Local execution evidence (final restacked source head `d96ea75`)
+
+Current predecessor PR #419 at `7abfc128610a1a68ca66104834230cf34e9e57b1` contains Plan 093's final-restack PR #418 head `69f734c7b632f06c2179cac7a2ea905c48a0e3d0`; the root index now records Plan 093 `DONE locally` with publication CI pending. Implementation used `openai-codex/gpt-5.6-sol` at `xhigh` with fast mode requested; the separate `gpt-5.5` xhigh fast scout stayed read-only at the exact base.
+
+- Focused runtime/gate/host/perf suites: 201/201 passed on the final restacked source tree.
+- `pnpm perf:startup`: passed 5/5 samples; `editor-ready` 573.7ms, `command-ready` 1190.3ms, gap 608.3ms on the stripped `--offline --no-extensions --no-session` lane. `docs/perf/startup.{md,json}` stamp exact code head `d96ea75`.
+- Final combined top-of-stack verification at report head `7324663`: changed-seam suites 464/464; full one-worker unit suite 2,677/2,677; typecheck, build, lint, and `bash -n bin/sumocode.sh` passed.
+- Verification-harness v2 passed 25/25 seam tests and 159/159 integration tests, then proved zero survivors across 134 registered process groups.
+- `pnpm visual:ci` exited 0 across all 29 scenarios; no golden was changed or promoted. Final extension and host bundle rebuilds were deterministic and left the worktree clean.
+- The configured Herdr real-world probe and `docs/perf/real-world.md` regeneration were not run. The parser's new-event preference and alias fallback are covered by unit tests.
+- Stack-wide exact-head review found all source patches byte-identical to their previously reviewed forms, linear ancestry, clean merge trees, fresh generated artifacts, and correct startup provenance. Publication CI/Codex and PR creation remain pending.
+
 ## Done criteria
 
-- [ ] First paint emits `editor_ready` exactly once.
-- [ ] Command dispatch capability emits `command_ready` exactly once after gate settlement.
-- [ ] Pre-ready Enter provides immediate truthful feedback and dispatches once later.
-- [ ] Startup report includes the editor-to-command gap.
-- [ ] Early paint, typing, interrupt, and `/quit` behavior are preserved.
-- [ ] Required tests, integration, and visual CI gates pass.
+- [x] First paint emits `editor_ready` exactly once.
+- [x] Command dispatch capability emits `command_ready` exactly once after gate settlement.
+- [x] Pre-ready Enter provides immediate truthful feedback and dispatches once later.
+- [x] Startup report includes the editor-to-command gap.
+- [x] Early paint, typing, interrupt, and `/quit` behavior are preserved.
+- [x] Required tests, integration, and visual CI gates pass.
 
 ## STOP conditions
 

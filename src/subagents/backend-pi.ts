@@ -1,13 +1,27 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { closeSync, existsSync, lstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SubagentEvent } from "./domain.js";
 import { safeValuePreview } from "../activity/domain.js";
+import {
+	BoundedUtf8Head,
+	BoundedUtf8Tail,
+	CHILD_RETAINED_RESULT_MAX_BYTES,
+	JsonLineDecoder,
+	TRUNCATED_HEAD_MARKER,
+	boundRetainedResult,
+	boundStableIdentifier,
+} from "../child-protocol.js";
+import { resolveExecutableProvenance } from "../executable-provenance.js";
 import { type BuiltInToolName, resolveTaskConfig } from "../native-task-config.js";
 import { isRecord, type TaskThinking, type ThinkingLevel } from "../native-task-params.js";
+import { systemProcessTree, terminateProcessTree, type ProcessTreeOperations, type ProcessTreeIdentity, type ProcessTreeVerification, type ProcessTreeMemberAnchor } from "../background-tasks/process-tree.js";
 import { CHILD_MODEL_ID_ENV, CHILD_MODEL_PROVIDER_ENV } from "./pi-child-model-bootstrap.js";
+import type { RetainedBootstrapDescriptor } from "./retained-bootstrap.js";
+import { RetainedAnchor } from "./retained-anchor.js";
+import { RETAINED_BOOTSTRAP_ENV, assertNoFactoryReceipt, createBootstrapBinding, readBoundBootstrap, waitForFactoryReceipt } from "./retained-bootstrap-receipt.js";
 
 /** Runtime string discriminator for decoded child-process payloads. */
 const isString = <T>(value: T): value is T & string => typeof value === "string";
@@ -16,7 +30,13 @@ const isString = <T>(value: T): value is T & string => typeof value === "string"
 // SAFETY: every entry is a literal from the BuiltInToolName union.
 const DEFAULT_BUILT_IN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const satisfies readonly BuiltInToolName[];
 const PREVIEW_MAX = 160;
+const TOOL_IDENTIFIER_MAX_BYTES = 256;
 const ERROR_MAX = 4096;
+
+const boundedToolIdentifier = <T>(value: T, fallback = "tool"): string => {
+	const identifier = isString(value) && value ? value : fallback;
+	return boundStableIdentifier(identifier, TOOL_IDENTIFIER_MAX_BYTES);
+};
 
 const CLAUDE_OAUTH_ADAPTER_PACKAGE = "pi-claude-oauth-adapter";
 const MULTI_ACCOUNT_ADAPTER_SOURCE = "git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account";
@@ -140,14 +160,32 @@ export function resolveClaudeOauthAdapterEntry(env: NodeJS.ProcessEnv = process.
 }
 
 export interface SpawnedChild {
+	/** In-process retained owner registration; its parser must not be subscribed again. */
+	readonly retained?: Omit<import("./retained-adoption.js").RetainedSubagent, "snapshot">;
+	readonly retentionUnsupported?: true;
 	readonly events: AsyncIterable<SubagentEvent> | ((emit: (e: SubagentEvent) => void) => void);
 	readonly sessionFilePath?: string;
 	readonly ready?: Promise<void>;
-	interrupt(): void;
-	/** Deliver steering text to a running child. Rejects when unsupported or unconfirmed. */
-	send?(text: string): Promise<void>;
+	interrupt(beforeEffect?: () => void): void | Promise<void>;
+	/**
+	 * Publish steering text to a running child's control channel and wait for the
+	 * child watcher to consume it and synchronously submit it to Pi. Rejects when
+	 * unsupported, unconfirmed, or the child settles first; Pi exposes no
+	 * post-acceptance acknowledgement, so this never proves model-turn delivery.
+	 */
+	send?(text: string, beforeEffect?: () => void): Promise<void>;
 	/** Ask the child to persist its response and shut down gracefully. */
-	requestClose?(): void;
+	requestClose?(beforeEffect?: () => void): void;
+}
+
+/** Persistence-owner fences, NOT authorization for user control requests.
+ * A refusal holds the pipe and permanently stops local effects, not the child. */
+export interface HeadlessLaunchGate {
+	beforeSpawn(): string | void;
+	beforePrompt(pid: number): void;
+	beforeStdin(pid: number): void;
+	beforeSignal(pid: number): { readonly identity: ProcessTreeIdentity; readonly verification: ProcessTreeVerification };
+	onRefused(): void;
 }
 
 type SpawnLike = typeof nodeSpawn;
@@ -240,6 +278,109 @@ const messageText = (message: Message): string => {
 	return "";
 };
 
+interface RetainedMessageText {
+	readonly text: string;
+	readonly replacesRetainedText?: true;
+}
+
+/** Owns all human-readable event text emitted for one Pi child run. */
+class PiRunPayloadBudget {
+	private retainedBytes = 0;
+	private liveBytes = 0;
+	private markerRetained = false;
+	private retainedFull = false;
+	private liveMarker = false;
+	private liveTruncated = false;
+	private omissionBehindLive = false;
+	private readonly markerBytes = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
+
+	public appendLive(delta: string): string {
+		if (delta.length === 0 || this.retainedFull || this.liveTruncated) return "";
+		const deltaBytes = Buffer.byteLength(delta, "utf8");
+		const markerReserve = this.markerRetained || this.liveMarker ? 0 : this.markerBytes;
+		const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve - this.retainedBytes - this.liveBytes;
+		if (deltaBytes <= contentBytesLeft) {
+			this.liveBytes += deltaBytes;
+			return delta;
+		}
+		const retained = this.markerRetained
+			? this.unmarkedHead(delta, Math.max(0, contentBytesLeft))
+			: this.markedHead(delta, Math.max(0, contentBytesLeft));
+		this.liveBytes += Buffer.byteLength(retained, "utf8");
+		this.liveMarker = !this.markerRetained;
+		this.liveTruncated = true;
+		return retained;
+	}
+
+	public retainMessage(role: Message["role"], text: string): RetainedMessageText {
+		let replacesRetainedText = false;
+		let requiresMarker = false;
+		const textBytes = Buffer.byteLength(text, "utf8");
+		// SubagentManager replaces liveText only at the corresponding completed
+		// assistant message, so reclaim those provisional bytes at that boundary.
+		if (role === "assistant") {
+			const liveOmitted = this.liveTruncated || this.omissionBehindLive;
+			this.liveBytes = 0;
+			this.liveMarker = false;
+			this.liveTruncated = false;
+			this.omissionBehindLive = false;
+			// Any prior omission belongs on the newest real assistant answer. Reclaim
+			// earlier readable text so the marker and remaining cap move together.
+			const markerReserve = this.markerRetained ? 0 : this.markerBytes;
+			if (text.length > 0 && (
+				this.markerRetained ||
+				liveOmitted ||
+				this.retainedFull ||
+				textBytes > CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve - this.retainedBytes
+			)) {
+				this.retainedBytes = 0;
+				this.markerRetained = false;
+				this.retainedFull = false;
+				replacesRetainedText = true;
+				requiresMarker = true;
+			}
+		}
+		if (text.length === 0) return { text: "" };
+		if (this.retainedFull) return { text: "" };
+		if (this.liveTruncated) {
+			this.omissionBehindLive = text.length > 0;
+			return { text: "" };
+		}
+		if (requiresMarker && !this.markerRetained) {
+			const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - this.markerBytes - this.retainedBytes - this.liveBytes;
+			const retained = this.markedHead(text, Math.max(0, contentBytesLeft));
+			this.retainedBytes += Buffer.byteLength(retained, "utf8");
+			this.markerRetained = true;
+			this.retainedFull = textBytes > contentBytesLeft;
+			return replacesRetainedText ? { text: retained, replacesRetainedText: true } : { text: retained };
+		}
+		const markerReserve = this.markerRetained ? 0 : this.markerBytes;
+		const contentBytesLeft = CHILD_RETAINED_RESULT_MAX_BYTES - markerReserve - this.retainedBytes - this.liveBytes;
+		let retained: string;
+		if (textBytes <= contentBytesLeft) {
+			retained = text;
+		} else {
+			retained = this.markerRetained
+				? this.unmarkedHead(text, Math.max(0, contentBytesLeft))
+				: this.markedHead(text, Math.max(0, contentBytesLeft));
+			this.markerRetained = true;
+			this.retainedFull = true;
+		}
+		this.retainedBytes += Buffer.byteLength(retained, "utf8");
+		return replacesRetainedText ? { text: retained, replacesRetainedText: true } : { text: retained };
+	}
+
+	private markedHead(text: string, contentBytes: number): string {
+		const head = new BoundedUtf8Head(contentBytes + this.markerBytes);
+		head.append(text);
+		return head.append(TRUNCATED_HEAD_MARKER);
+	}
+
+	private unmarkedHead(text: string, contentBytes: number): string {
+		return this.markedHead(text, contentBytes).slice(0, -TRUNCATED_HEAD_MARKER.length);
+	}
+}
+
 const mapPiEvent = (event: ParsedJsonLine): SubagentEvent[] => {
 	const typeText = isString(event.type) ? event.type : "";
 	if (typeText === "message_update") {
@@ -247,27 +388,29 @@ const mapPiEvent = (event: ParsedJsonLine): SubagentEvent[] => {
 		if (assistantEvent?.type === "text_delta" && isString(assistantEvent.delta)) {
 			return [{ kind: "assistant-delta", delta: assistantEvent.delta }];
 		}
+		if ((assistantEvent?.type === "thinking_delta" || assistantEvent?.type === "toolcall_delta")
+			&& isString(assistantEvent.delta) && assistantEvent.delta.length > 0) return [{ kind: "progress" }];
 	}
 	if (typeText === "tool_execution_start") {
 		return [{
 			kind: "tool-start",
-			toolId: isString(event.toolCallId) ? event.toolCallId : `${event.toolName ?? "tool"}`,
-			name: isString(event.toolName) ? event.toolName : "tool",
+			toolId: boundedToolIdentifier(event.toolCallId, boundedToolIdentifier(event.toolName)),
+			name: boundedToolIdentifier(event.toolName),
 			argsPreview: safeToolArgumentsPreview(event.args),
 		}];
 	}
 	if (typeText === "tool_execution_update") {
 		return [{
 			kind: "tool-update",
-			toolId: isString(event.toolCallId) ? event.toolCallId : `${event.toolName ?? "tool"}`,
+			toolId: boundedToolIdentifier(event.toolCallId, boundedToolIdentifier(event.toolName)),
 			outputPreview: sanitizePreview(stringifyToolOutput(event.partialResult)),
 		}];
 	}
 	if (typeText === "tool_execution_end") {
 		return [{
 			kind: "tool-end",
-			toolId: isString(event.toolCallId) ? event.toolCallId : `${event.toolName ?? "tool"}`,
-			name: isString(event.toolName) ? event.toolName : "tool",
+			toolId: boundedToolIdentifier(event.toolCallId, boundedToolIdentifier(event.toolName)),
+			name: boundedToolIdentifier(event.toolName),
 			isError: event.isError === true,
 			outputPreview: sanitizePreview(stringifyToolOutput(event.result)),
 		}];
@@ -278,9 +421,8 @@ const mapPiEvent = (event: ParsedJsonLine): SubagentEvent[] => {
 		if (messageValue.role === "assistant") {
 			events.push({
 				kind: "usage",
-				// totalTokens is the child's cumulative context occupancy; the JSON
-				// event stream does not carry the model's context-window capacity,
-				// so leave contextWindow unset rather than mislabeling input tokens.
+				// Per-message provider usage, not the model's context-window capacity.
+				// The manager separately sums reports for warning-only run budgets.
 				tokens: messageValue.usage?.totalTokens,
 				costUsd: messageValue.usage?.cost?.total,
 			});
@@ -317,33 +459,128 @@ const signalGroup = (proc: ChildProcessWithoutNullStreams, signal: NodeJS.Signal
 interface AbortState {
 	isAborted: () => boolean;
 	interrupt: () => void;
+	terminate: () => void;
+	dispose: () => void;
+	finished?: () => Promise<void> | undefined;
 }
 
 const attachAbortSignal = (proc: ChildProcessWithoutNullStreams, signal: AbortSignal | undefined): AbortState => {
 	let aborted = false;
-	// `proc.killed` only means a signal was successfully SENT, not that the
-	// process exited — gating SIGKILL on it means a child that ignores SIGTERM
-	// is never force-killed. Track real exit via the close event instead.
 	let exited = false;
-	proc.once("close", () => {
+	let forceKill: ReturnType<typeof setTimeout> | undefined;
+	const onClose = () => {
 		exited = true;
-	});
+		if (forceKill) clearTimeout(forceKill);
+		forceKill = undefined;
+	};
+	proc.once("close", onClose);
+	const terminate = () => {
+		if (exited || forceKill) return;
+		signalGroup(proc, "SIGTERM");
+		forceKill = setTimeout(() => {
+			if (!exited) signalGroup(proc, "SIGKILL");
+		}, 5000);
+		forceKill.unref?.();
+	};
 	const interrupt = () => {
 		aborted = true;
-		signalGroup(proc, "SIGTERM");
-		setTimeout(() => {
-			if (!exited) signalGroup(proc, "SIGKILL");
-		}, 5000).unref?.();
+		terminate();
 	};
 	if (signal?.aborted) interrupt();
 	else signal?.addEventListener("abort", interrupt, { once: true });
-	return { isAborted: () => aborted, interrupt };
+	return {
+		isAborted: () => aborted,
+		interrupt,
+		terminate,
+		dispose: () => {
+			signal?.removeEventListener("abort", interrupt);
+			proc.removeListener("close", onClose);
+			if (forceKill) clearTimeout(forceKill);
+			forceKill = undefined;
+		},
+	};
 };
 
+// The shared signalTree performs more OS probes after its caller's fence (and
+// Windows can await several taskkills). For retained POSIX work, verification
+// stays in terminateProcessTree + the gate; this last operation is one signal.
+export const retainedProcessTree: ProcessTreeOperations = {
+	...systemProcessTree,
+	async signalTree(identity, signal) {
+		try {
+			if (identity.processGroupId <= 1 || identity.processGroupId !== identity.pid) throw new Error("unsafe retained process group");
+			process.kill(-identity.processGroupId, signal);
+			return { ok: true, gone: false };
+		} catch {
+			return { ok: false, gone: false, error: "retained signal refused" };
+		}
+	},
+};
+
+function attachRetainedAbortSignal(
+	proc: ChildProcessWithoutNullStreams,
+	signal: AbortSignal | undefined,
+	beforeSignal: HeadlessLaunchGate["beforeSignal"],
+	operations: ProcessTreeOperations,
+	refuse: (error: Error) => void,
+	anchor: RetainedAnchor,
+): AbortState {
+	let aborted = false;
+	let exited = false;
+	let termination: Promise<void> | undefined;
+	const onClose = (): void => { exited = true; };
+	proc.once("close", onClose);
+	const terminate = (): void => {
+		if (exited || termination) return;
+		termination = (async () => {
+			if (proc.pid === undefined) throw new Error("retained child pid unavailable");
+			const pid = proc.pid;
+			const tree = beforeSignal(pid);
+			// Preserve the original anchors: terminateProcessTree normally recaptures.
+			const fenced: ProcessTreeOperations = {
+				...operations,
+				captureTreeVerification: () => tree.verification,
+				signalTree: (identity, signal, verification) => {
+					if (exited) throw new Error("retained child closed before tree cleanup finished");
+					beforeSignal(pid);
+					anchor.beforeSignal(signal);
+					return operations.signalTree(identity, signal, verification);
+				},
+			};
+			if (!await terminateProcessTree(fenced, tree.identity, { termGraceMs: 5000, killGraceMs: 1000 })) {
+				throw new Error("retained cleanup could not be verified");
+			}
+			// An escaped descendant can retain a pipe after the owned group is
+			// empty. Bound drainage; never signal its new, unowned group.
+			if (!exited) await new Promise<void>((resolve, reject) => {
+				const closed = (): void => { clearTimeout(timer); resolve(); };
+				const timer = setTimeout(() => {
+					proc.removeListener("close", closed);
+					reject(new Error("retained pipes did not close after cleanup"));
+				}, 1000);
+				timer.unref?.();
+				proc.once("close", closed);
+			});
+		})().catch((error) => {
+			refuse(error instanceof Error ? error : new Error("retained cleanup refused"));
+		});
+	};
+	const interrupt = (): void => { aborted = true; terminate(); };
+	if (signal?.aborted) interrupt();
+	else signal?.addEventListener("abort", interrupt, { once: true });
+	return {
+		isAborted: () => aborted, interrupt, terminate,
+		finished: () => termination,
+		dispose: () => {
+			exited = true;
+			signal?.removeEventListener("abort", interrupt);
+			proc.removeListener("close", onClose);
+		},
+	};
+}
+
 export function resolvePiBinary(env: NodeJS.ProcessEnv = process.env): string {
-	const configured = env.PI_BIN?.trim();
-	if (!configured) return "pi";
-	return configured.includes("/") || configured.includes("\\") ? resolve(configured) : configured;
+	return resolveExecutableProvenance({ env }).pi;
 }
 
 export function resolvePiChildModelBootstrapEntry(
@@ -356,7 +593,7 @@ export function resolvePiChildModelBootstrapEntry(
 		override,
 		env.SUMOCODE_ROOT_DIR ? join(env.SUMOCODE_ROOT_DIR, "src", "subagents", "pi-child-model-bootstrap.ts") : undefined,
 		join(moduleDir, "pi-child-model-bootstrap.ts"),
-		// The committed extension bundle lives at dist/extension/*.mjs while this
+		// A generated extension bundle lives at dist/extension/*.mjs while this
 		// child-only entry remains executable TypeScript under src/subagents.
 		resolve(moduleDir, "..", "..", "src", "subagents", "pi-child-model-bootstrap.ts"),
 	];
@@ -384,11 +621,30 @@ function removeCliModelSelection(args: readonly string[]): string[] {
 	return result;
 }
 
+function retainedSourceHook(binary: string): string {
+	// Only physical source checkouts and Node Pi scripts are supported. Bun's
+	// virtual source paths are not assets that a separately spawned Pi can read.
+	const entry = fileURLToPath(new URL("./retained-system-prompt.ts", import.meta.url));
+	try {
+		const stat = lstatSync(entry);
+		if (!import.meta.url.endsWith("/src/subagents/backend-pi.ts") || realpathSync(entry) !== entry
+			|| !stat.isFile() || (stat.mode & 0o022) !== 0) throw new Error("unsupported");
+		const fd = openSync(binary, "r");
+		try {
+			const header = Buffer.alloc(128);
+			const size = readSync(fd, header, 0, header.length, 0);
+			if (!/^#!(?:\/usr\/bin\/env node|\/[^\n ]*\/node)\r?\n/u.test(header.subarray(0, size).toString("utf8"))) throw new Error("unsupported");
+		} finally { closeSync(fd); }
+		return entry;
+	} catch { throw new Error("retained native unsupported; physical source hook and Node Pi script required"); }
+}
+
 export const createPiChildSpawner = (
 	spawnImpl: SpawnLike = nodeSpawn,
 	resolveAdapterEntry: () => string | undefined = resolveClaudeOauthAdapterEntry,
 	resolveBinary: () => string = resolvePiBinary,
 	resolveBootstrapEntry: () => string | undefined = resolvePiChildModelBootstrapEntry,
+	operations: ProcessTreeOperations = retainedProcessTree,
 ) => (options: {
 	prompt: string;
 	cwd: string;
@@ -398,6 +654,8 @@ export const createPiChildSpawner = (
 	builtInTools?: readonly BuiltInToolName[];
 	appendSystemPrompt?: string;
 	signal?: AbortSignal;
+	launchGate?: HeadlessLaunchGate;
+	retainedBootstrap?: RetainedBootstrapDescriptor;
 }): SpawnedChild => {
 	const config = resolveTaskConfig({
 		// SAFETY: options.thinking comes from the typed SpawnSubagentTask.thinking field.
@@ -427,13 +685,28 @@ export const createPiChildSpawner = (
 		};
 	}
 
+	let markReady = (): void => undefined;
+	let refuseReady = (_error: Error): void => undefined;
+	const ready = options.launchGate ? new Promise<void>((resolve, reject) => {
+		markReady = resolve;
+		refuseReady = reject;
+	}) : undefined;
+	// The owner may attach its ready waiter after subscribing to events.
+	void ready?.catch(() => undefined);
+	let subscribed = false;
 	let interrupt: () => void = () => undefined;
 	const events = (emit: (event: SubagentEvent) => void): void => {
+		if (options.launchGate && subscribed) throw new Error("retained backend already subscribed");
+		subscribed = true;
 		emit({ kind: "run-started" });
-		const adapterEntry = resolveAdapterEntry();
+		if (options.retainedBootstrap && !options.launchGate) throw new Error("retained bootstrap requires launch gate");
+		if (options.launchGate && options.appendSystemPrompt !== undefined) throw new Error("retained system prompt requires private bootstrap, not appendSystemPrompt");
+		const binding = options.retainedBootstrap ? createBootstrapBinding(options.retainedBootstrap) : undefined;
+		const adapterEntry = options.retainedBootstrap ? options.retainedBootstrap.config.adapterEntry ?? undefined : resolveAdapterEntry();
 		const childModel = childModelSelection(config.modelLabel);
-		const bootstrapEntry = childModel ? resolveBootstrapEntry() : undefined;
+		const bootstrapEntry = options.retainedBootstrap ? options.retainedBootstrap.config.modelBootstrapEntry ?? undefined : childModel ? resolveBootstrapEntry() : undefined;
 		if (childModel && (!adapterEntry || !bootstrapEntry)) {
+			refuseReady(new Error("numbered child startup unavailable"));
 			emit({
 				kind: "run-settled",
 				outcome: { kind: "failed", errorText: `Numbered Claude child startup unavailable: ${!adapterEntry ? "OAuth adapter not found" : "model bootstrap not found"}` },
@@ -444,78 +717,257 @@ export const createPiChildSpawner = (
 		const adapterArgs = adapterEntry ? ["-e", adapterEntry] : [];
 		const bootstrapArgs = bootstrapEntry ? ["-e", bootstrapEntry] : [];
 		const subprocessArgs = childModel ? removeCliModelSelection(config.subprocessArgs) : config.subprocessArgs;
-		const childEnv = childModel
+		let childEnv = childModel
 			? { ...process.env, [CHILD_MODEL_PROVIDER_ENV]: childModel.provider, [CHILD_MODEL_ID_ENV]: childModel.modelId }
 			: process.env;
-		// SAFETY: stdio is piped below, so the spawned child always has non-null streams.
-		const proc = spawnImpl(resolveBinary(), [...subprocessArgs, ...roleArgs, ...adapterArgs, ...bootstrapArgs, options.prompt], {
-			cwd: options.cwd,
-			env: childEnv,
-			shell: false,
-			stdio: ["pipe", "pipe", "pipe"],
-			// Own process group on POSIX so interrupt/SIGKILL can signal the
-			// whole tree (see signalGroup) instead of just the pi pid.
-			detached: process.platform !== "win32",
-}) as ChildProcessWithoutNullStreams;
-		proc.stdin.end();
-		const abortState = attachAbortSignal(proc, options.signal);
-		interrupt = abortState.interrupt;
-		let stdoutBuffer = "";
-		let stderr = "";
+		const binary = resolveBinary();
+		if (options.launchGate && !isAbsolute(binary)) throw new Error("retained launch requires absolute Pi provenance");
+		const hookArgs: string[] = [];
+		if (binding) {
+			const data = readBoundBootstrap(binding);
+			const expected = data.descriptor.config;
+			if (options.cwd !== expected.cwd || binary !== expected.pi || options.prompt !== data.prompt
+				|| config.modelLabel !== expected.model.label || config.thinkingLevel !== expected.thinking
+				|| JSON.stringify(options.builtInTools ?? DEFAULT_BUILT_IN_TOOLS) !== JSON.stringify(expected.builtInTools)
+				|| Boolean(childModel) !== Boolean(bootstrapEntry)) throw new Error("retained bootstrap options mismatch");
+			hookArgs.push("-e", retainedSourceHook(binary));
+			assertNoFactoryReceipt(binding);
+			childEnv = { ...childEnv, [RETAINED_BOOTSTRAP_ENV]: JSON.stringify(binding) };
+		}
+		// Windows verified force cleanup may issue multiple asynchronous taskkills
+		// inside one operation; that API cannot fence each effect. Do not launch
+		// retained work there until a per-taskkill seam exists. Ungated is unchanged.
+		if (options.launchGate && process.platform === "win32") throw new Error("retained headless requires POSIX signal fencing");
+		const anchorNonce = options.launchGate?.beforeSpawn();
+		const args = [...subprocessArgs, ...roleArgs, ...adapterArgs, ...bootstrapArgs, ...hookArgs];
+		let piExit: { code: number | null; signal: string | null } | undefined;
+		let piChild: ProcessTreeMemberAnchor | undefined;
+		const anchor = options.launchGate ? new RetainedAnchor(spawnImpl, binary, args, { cwd: options.cwd, env: childEnv, nonce: anchorNonce || undefined }, {
+			started: (child) => { piChild = child; waitForFactory(child); },
+			exited: (code, signal) => {
+				piExit = { code, signal };
+				receiptWait.abort();
+				if (!promptReleased) protocolError = "retained child exited before prompt release";
+				// Pi exit does not end the group capability. Reap descendants and the
+				// anchor before publishing Pi's outcome, including normal completion.
+				abortState.terminate();
+			},
+			refused: (error) => refuseEffect(error),
+		}) : undefined;
+		// SAFETY: both launch paths return the original handle and three pipes.
+		const proc = anchor?.proc ?? spawnImpl(binary, args, {
+			cwd: options.cwd, env: childEnv, shell: false,
+			stdio: ["pipe", "pipe", "pipe"], detached: process.platform !== "win32",
+		}) as ChildProcessWithoutNullStreams;
+		// The prompt travels on stdin, never argv: pinned Pi print mode reads
+		// piped stdin as the initial message (interior multiline/Unicode bytes
+		// are exact; Pi itself trims leading/trailing whitespace, same as any
+		// `echo | pi -p`), while argv is world-readable process metadata. See
+		// issue 391. The error listener keeps a child that dies before draining
+		// a >pipe-buffer prompt from turning the pending write into an
+		// uncaughtException EPIPE — the child's failure settles through the
+		// close/error handlers below.
+		proc.stdin.on("error", () => undefined);
+		if (!options.launchGate) {
+			proc.stdin.write(options.prompt);
+			proc.stdin.end();
+		}
+		let authorityLost = false;
+		let childClosed = false;
+		let promptReleased = false;
+		const receiptWait = new AbortController();
+		let readinessTimer: ReturnType<typeof setTimeout> | undefined;
+		const refuseEffect = (error: Error): void => {
+			if (authorityLost) return;
+			authorityLost = true;
+			receiptWait.abort();
+			clearTimeout(readinessTimer);
+			refuseReady(error);
+			try { options.launchGate?.onRefused(); }
+			catch { /* Local authority remains lost even if the owner cannot persist it. */ }
+		};
+		const abortState = options.launchGate
+			? attachRetainedAbortSignal(proc, options.signal, (pid) => {
+				if (authorityLost) throw new Error("retained authority lost");
+				try { anchor!.assertLive(); return options.launchGate!.beforeSignal(pid); }
+				catch (error) {
+					refuseEffect(error instanceof Error ? error : new Error("retained signal refused"));
+					throw error;
+				}
+			}, operations, refuseEffect, anchor!)
+			: attachAbortSignal(proc, options.signal);
+		interrupt = () => {
+			if (!authorityLost) { receiptWait.abort(); abortState.interrupt(); }
+		};
+		const stderr = new BoundedUtf8Tail();
+		const payloadBudget = new PiRunPayloadBudget();
 		let finalAssistantText = "";
 		let stopReason: string | undefined;
 		let errorMessage: string | undefined;
+		let protocolError: string | undefined;
+		let settled = false;
+		const settle = (outcome: Extract<SubagentEvent, { kind: "run-settled" }>["outcome"]): void => {
+			if (settled || authorityLost) return;
+			settled = true;
+			clearTimeout(readinessTimer);
+			refuseReady(new Error("child settled before prompt release"));
+			emit({ kind: "run-settled", outcome });
+		};
 		const processLine = (line: string) => {
+			if (settled || authorityLost) return;
 			const parsed = parseJsonLine(line);
 			if (!parsed) return;
 			for (const event of mapPiEvent(parsed)) {
-				if (event.kind === "message-end" && event.role === "assistant") finalAssistantText = event.text;
+				if (event.kind === "assistant-delta") {
+					const delta = payloadBudget.appendLive(event.delta);
+					if (delta) emit({ ...event, delta });
+					else if (event.delta.length > 0) emit({ kind: "progress" });
+					continue;
+				}
+				if (event.kind === "message-end") {
+					const retained = { ...event, ...payloadBudget.retainMessage(event.role, event.text) };
+					if (retained.role === "assistant") finalAssistantText = retained.text;
+					emit(retained);
+					continue;
+				}
 				emit(event);
 			}
 			const messageValue = parsed.message;
 			if (isMessage(messageValue) && messageValue.role === "assistant") {
-								if (isString(messageValue.stopReason)) stopReason = messageValue.stopReason;
-				if (isString(messageValue.errorMessage)) errorMessage = messageValue.errorMessage;
+				if (isString(messageValue.stopReason)) stopReason = messageValue.stopReason;
+				if (isString(messageValue.errorMessage)) errorMessage = boundRetainedResult(messageValue.errorMessage, ERROR_MAX);
 			}
 		};
-		proc.stdout.on("data", (data) => {
-			stdoutBuffer += data.toString();
-			const lines = stdoutBuffer.split("\n");
-			stdoutBuffer = lines.pop() ?? "";
-			for (const line of lines) processLine(line);
+		const stdout = new JsonLineDecoder({
+			onLine: processLine,
+			onError: (error) => {
+				protocolError = error.message;
+				receiptWait.abort();
+				// TERM starts shutdown; close remains the terminal boundary while the child exists.
+				abortState.terminate();
+			},
 		});
-		proc.stderr.on("data", (data) => {
-			stderr += data.toString();
+		const onStdout = (data: string | Uint8Array) => stdout.write(data);
+		const onStderr = (data: string | Uint8Array) => stderr.append(data);
+		const cleanup = () => {
+			receiptWait.abort();
+			clearTimeout(readinessTimer);
+			proc.stdout.removeListener("data", onStdout);
+			proc.stderr.removeListener("data", onStderr);
+			abortState.dispose();
+		};
+		proc.stdout.on("data", onStdout);
+		proc.stderr.on("data", onStderr);
+		proc.once("close", (code, closeSignal) => {
+			if (anchor && !abortState.finished?.()) refuseEffect(new Error("retained anchor closed without cleanup"));
+			if (piExit) code = piExit.code;
+			const exitSignal = piExit ? piExit.signal : closeSignal;
+			childClosed = true;
+			if (binding && !promptReleased && !protocolError) protocolError = "retained child closed before factory readiness";
+			receiptWait.abort();
+			clearTimeout(readinessTimer);
+			stdout.end();
+			const finishClose = (): void => {
+				if (protocolError) {
+					settle({ kind: "failed", errorText: protocolError, partialText: finalAssistantText || undefined });
+				} else if (abortState.isAborted()) {
+					settle({ kind: "interrupted", partialText: finalAssistantText || undefined });
+				} else if (code === 0 && stopReason !== "error" && stopReason !== "aborted") {
+					settle({ kind: "completed", finalText: finalAssistantText });
+				} else {
+					settle({
+						kind: "failed",
+						errorText: boundRetainedResult(
+							errorMessage || stderr.toString() || (exitSignal ? `pi killed by ${exitSignal}` : `pi exited with code ${code ?? "unknown"}`),
+							ERROR_MAX,
+						),
+						partialText: finalAssistantText || undefined,
+					});
+				}
+				cleanup();
+			};
+			const pending = abortState.finished?.();
+			if (pending) void pending.then(finishClose).catch(refuseEffect);
+			else finishClose();
 		});
-		proc.on("close", (code, closeSignal) => {
-			if (stdoutBuffer.trim()) processLine(stdoutBuffer);
-			if (abortState.isAborted()) {
-				emit({ kind: "run-settled", outcome: { kind: "interrupted", partialText: finalAssistantText || undefined } });
-				return;
+		if (options.launchGate && !authorityLost) {
+			readinessTimer = setTimeout(() => {
+				refuseReady(new Error("retained readiness timeout"));
+				protocolError = "retained readiness timeout";
+				receiptWait.abort();
+				abortState.terminate();
+			}, 10_000);
+			readinessTimer.unref?.();
+		}
+		const beforeStdin = (): void => {
+			anchor!.assertLive();
+			if (proc.pid === undefined || !piChild || piExit) throw new Error("retained Pi pipe unavailable");
+			const tree = options.launchGate!.beforeSignal(proc.pid);
+			if (operations.verificationMatches?.(tree.identity, { members: [piChild] }) !== "same") throw new Error("retained Pi left its owned group");
+			options.launchGate!.beforeStdin(proc.pid);
+		};
+		const releasePrompt = (): void => {
+			try {
+				if (settled || childClosed || authorityLost || protocolError || abortState.isAborted() || proc.pid === undefined) throw new Error("child unavailable before prompt release");
+				beforeStdin();
+				proc.stdin.write(options.prompt);
+				beforeStdin();
+				proc.stdin.end();
+				promptReleased = true;
+				clearTimeout(readinessTimer);
+				markReady();
+			} catch (error) {
+				// Keep the handle/parser and held stdin. Closing stdin or signalling here
+				// would create an unfenced effect after authority was refused.
+				refuseEffect(error instanceof Error ? error : new Error(String(error)));
 			}
-			// Success gates on exit code + stop reason, matching native-task-tool's
-			// isTaskError semantics. Empty final text at exit 0 is a successful run
-			// with empty output, not a failure. Strictly `code === 0`: a null code
-			// means the child was killed by an EXTERNAL signal (operator kill,
-			// host cleanup) — that must never fold as completed.
-			if (code === 0 && stopReason !== "error" && stopReason !== "aborted") {
-				emit({ kind: "run-settled", outcome: { kind: "completed", finalText: finalAssistantText } });
-				return;
-			}
-			emit({
-				kind: "run-settled",
-				outcome: {
-					kind: "failed",
-					errorText: (errorMessage || stderr || (closeSignal ? `pi killed by ${closeSignal}` : `pi exited with code ${code ?? "unknown"}`)).slice(0, ERROR_MAX),
-					partialText: finalAssistantText || undefined,
-				},
-			});
+		};
+		const waitForFactory = (child: ProcessTreeMemberAnchor): void => {
+			try {
+				if (settled || childClosed || authorityLost || protocolError || abortState.isAborted() || proc.pid === undefined) throw new Error("child unavailable before prompt release");
+				if (!binding) { releasePrompt(); return; }
+				const signal = options.signal ? AbortSignal.any([receiptWait.signal, options.signal]) : receiptWait.signal;
+				void waitForFactoryReceipt(binding, child, signal, () => {
+					try { beforeStdin(); }
+					catch { refuseEffect(new Error("retained authority lost")); throw new Error("retained authority lost"); }
+				}).then(releasePrompt, () => {
+					if (settled || childClosed || authorityLost || protocolError || abortState.isAborted()) return;
+					protocolError = "retained factory receipt refused";
+					clearTimeout(readinessTimer);
+					refuseReady(new Error(protocolError));
+					abortState.terminate();
+				});
+			} catch (error) { refuseEffect(error instanceof Error ? error : new Error("retained startup refused")); }
+		};
+		if (anchor) proc.once("spawn", () => {
+			try {
+				if (settled || childClosed || authorityLost || protocolError || abortState.isAborted() || proc.pid === undefined) throw new Error("anchor unavailable before release");
+				anchor.assertLive();
+				options.launchGate!.beforePrompt(proc.pid);
+				options.launchGate!.beforeStdin(proc.pid);
+				anchor.start();
+			} catch (error) { refuseEffect(error instanceof Error ? error : new Error("retained anchor release refused")); }
 		});
-		proc.on("error", (error) => {
-			emit({ kind: "run-settled", outcome: { kind: "failed", errorText: error.message.slice(0, ERROR_MAX), partialText: finalAssistantText || undefined } });
+		proc.once("error", (error) => {
+			if (anchor) { refuseEffect(new Error("retained anchor process failed")); return; }
+			receiptWait.abort();
+			clearTimeout(readinessTimer);
+			if (protocolError || abortState.isAborted()) return;
+			settle({ kind: "failed", errorText: boundRetainedResult(error.message, ERROR_MAX), partialText: finalAssistantText || undefined });
+			cleanup();
 		});
 	};
-	return { events, interrupt: () => interrupt() };
+	return {
+		events: (emit) => {
+			try { events(emit); }
+			catch (error) {
+				refuseReady(error instanceof Error ? error : new Error(String(error)));
+				throw error;
+			}
+		},
+		interrupt: () => interrupt(),
+		ready,
+	};
 };
 
 export const spawnPiChild = createPiChildSpawner();

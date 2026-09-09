@@ -38,7 +38,7 @@ import type {
 	KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { CustomEditor } from "@earendil-works/pi-coding-agent";
-import { CURSOR_MARKER, truncateToWidth, visibleWidth, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, truncateToWidth, visibleWidth, type AutocompleteProvider, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
 import { sessionHasMessages as cachedSessionHasMessages } from "../session-cache.js";
 import { activeThemeColors } from "../themes/index.js";
 import { EditorImageDraftState, isLikelyClipboardImagePath, normalizePastedImagePath, setActiveEditorDraftController } from "./editor-draft-state.js";
@@ -484,6 +484,18 @@ export class CathedralEditor extends CustomEditor {
 		const boundary = beforeSlash[beforeSlash.length - 1];
 		if (boundary !== " " && boundary !== "\t") return;
 		internals.tryTriggerAutocomplete();
+	}
+
+	public replaceAutocompleteProviderAndRetriggerSlashCompletion(provider: AutocompleteProvider): void {
+		// Pi's setter cancels the open menu, so capture its slash context before
+		// replacing the provider and retrigger through the existing private seam.
+		// SAFETY: reading pi-tui Editor's private autocomplete internals through a structural seam.
+		const internals = unsafeCast<{ autocompleteState: unknown; tryTriggerAutocomplete(explicitTab?: boolean): void }>(this);
+		const { line, col } = this.getCursor();
+		const textBeforeCursor = (this.getText().split("\n")[line] ?? "").slice(0, col);
+		const refreshSlashMenu = Boolean(internals.autocompleteState) && /(?:^|[ \t])\/[^\s/]*$/.test(textBeforeCursor);
+		this.setAutocompleteProvider(provider);
+		if (refreshSlashMenu) internals.tryTriggerAutocomplete();
 	}
 
 	private visibleRowSourceRanges(layoutWidth: number, visibleRowCount: number): readonly EditorSkillSourceRange[] {

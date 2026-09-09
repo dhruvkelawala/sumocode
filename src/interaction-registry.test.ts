@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createInteractionRegistry, installSumoInteractions, type InteractionConflictDiagnostic } from "./interaction-registry.js";
+import { installSumoUiSurfaces } from "./interaction-ui-surfaces.js";
 
 function buildPiStub() {
 	return {
@@ -78,7 +79,10 @@ describe("InteractionRegistry", () => {
 		const pi = buildPiStub();
 		const diagnostics: InteractionConflictDiagnostic[] = [];
 		// SAFETY: the stub implements the on/register* surface the installer reads.
-		const snapshot = installSumoInteractions(pi as never, { reporter: (next) => diagnostics.push(...next) });
+		const snapshot = installSumoInteractions(pi as never, {
+			reporter: (next) => diagnostics.push(...next),
+			installUiSurfaces: installSumoUiSurfaces,
+		});
 
 		expect(diagnostics).toEqual([]);
 		expect(snapshot.diagnostics).toEqual([]);
@@ -104,4 +108,17 @@ describe("InteractionRegistry", () => {
 		expect(pi.registerCommand).toHaveBeenCalledTimes(16);
 		expect(pi.registerShortcut).toHaveBeenCalledTimes(5);
 	});
+});
+
+it("injects the result registry into the registered worktree command", async () => {
+	const pi = buildPiStub();
+	const resolveWorktreeResultRegistry = vi.fn(() => undefined);
+	// SAFETY: this stub implements the synchronous command-registration surface.
+	installSumoInteractions(pi as never, { installUiSurfaces: false, resolveWorktreeResultRegistry });
+	const command = pi.registerCommand.mock.calls.find(([name]) => name === "sumo:worktree")?.[1];
+	if (!command) throw new Error("worktree command missing");
+	const ctx = { hasUI: true, cwd: "/repo", ui: { notify: vi.fn() }, sessionManager: { getSessionId: () => "successor" } };
+	await command.handler("result sa-known", ctx);
+	expect(resolveWorktreeResultRegistry).toHaveBeenCalledWith("sa-known", ctx);
+	expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("unavailable"), "warning");
 });

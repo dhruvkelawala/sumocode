@@ -11,8 +11,8 @@ const OSC52_PATTERN = /\x1b\]52;c;/;
 
 let app: SpawnedPiPty | undefined;
 
-afterEach(() => {
-	app?.cleanup();
+afterEach(async () => {
+	await app?.cleanupAndWait();
 	app = undefined;
 });
 

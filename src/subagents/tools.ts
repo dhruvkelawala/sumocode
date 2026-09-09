@@ -1,13 +1,15 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { TRUNCATED_HEAD_MARKER, boundRetainedResult } from "../child-protocol.js";
 import type { DeferredResultDelivery } from "./delivery.js";
 import { activityFromSubagentSnapshot } from "../activity/subagent-adapter.js";
 import { getTerminalHost } from "../terminal-host/index.js";
 import type { TerminalHost } from "../terminal-host/types.js";
 import { latestText, type SubagentSnapshot } from "./domain.js";
+import { formatSubagentBudget, SUBAGENT_BUDGET_MAX } from "./budget-policy.js";
 import { type AtCapacityDetails, SubagentManager } from "./manager.js";
 import { formatCompletionManifestSummary, SUBAGENT_PROMPT_GUIDELINES, SUBAGENT_PROMPT_SNIPPET, SUBAGENT_TOOL_DESCRIPTIONS } from "./prompt.js";
-import { loadRoles } from "./roles.js";
+import { BUILT_IN_ROLES, loadRoles } from "./roles.js";
 
 const StringEnum = <T extends readonly string[]>(values: T, options?: { description?: string }) => {
 	const schema = { type: "string" as const, enum: [...values] };
@@ -76,29 +78,45 @@ const formatSnapshotLine = (snapshot: SubagentSnapshot, includeBranch = false): 
 	const identity = [snapshot.roleId, model].filter((part): part is string => part !== undefined).join(", ");
 	const branch = includeBranch && snapshot.worktree ? ` · ${snapshot.worktree.branch}` : "";
 	const pane = snapshot.pane ? ` · pane ${snapshot.pane.paneId ?? snapshot.pane.tabId ?? snapshot.pane.workspaceId ?? "unknown"} · agent ${snapshot.pane.agentName}` : "";
-	return `${snapshot.id} [${snapshot.status}] "${snapshot.title}" (${identity}, ${formatDuration(Date.now() - snapshot.createdAt)}, ${snapshot.cwd})${branch}${pane}`;
+	return [`${snapshot.id} [${snapshot.status}] "${snapshot.title}" (${identity}, ${formatDuration(Date.now() - snapshot.createdAt)}, ${snapshot.cwd})${branch}${pane}`, formatSubagentBudget(snapshot)].filter(Boolean).join("\n  ");
 };
 
 const manifestSummary = (snapshot: SubagentSnapshot): string | undefined => snapshot.manifest
 	? formatCompletionManifestSummary(snapshot.manifest)
 	: undefined;
 
+const WAIT_AGENT_MAX_BYTES = 16 * 1024;
+const WAIT_TOTAL_MAX_BYTES = 48 * 1024;
+const WAIT_SEPARATOR = "\n\n---\n\n";
+const WAIT_MARKER_BYTES = Buffer.byteLength(TRUNCATED_HEAD_MARKER, "utf8");
+
+const boundWaitChunk = (text: string, maxBytes: number): string => boundRetainedResult(text, maxBytes);
+
 const boundedWaitText = (snapshots: readonly SubagentSnapshot[]): string => {
-	let remaining = 48 * 1024;
 	const chunks: string[] = [];
-	for (const snapshot of snapshots) {
+	let bytes = 0;
+	for (let index = 0; index < snapshots.length; index += 1) {
+		const snapshot = snapshots[index]!;
 		// A failed child with partial text must still surface WHY it failed —
 		// partial output alone is easy to misread as a successful result.
 		const errorLine = snapshot.status === "error" && snapshot.errorText ? `error: ${snapshot.errorText}\n` : "";
 		const body = `${errorLine}${latestText(snapshot) || (errorLine ? "" : snapshot.errorText || "(no output)")}`;
-		const perAgent = body.slice(0, 16 * 1024);
-		const chunk = [`${snapshot.id} [${snapshot.status}] ${snapshot.title}`, manifestSummary(snapshot), perAgent].filter((line): line is string => line !== undefined).join("\n");
-		const bounded = chunk.slice(0, remaining);
-		chunks.push(bounded);
-		remaining -= bounded.length;
-		if (remaining <= 0) break;
+		const raw = [`${snapshot.id} [${snapshot.status}] ${snapshot.title}`, manifestSummary(snapshot), body].filter((line): line is string => line !== undefined).join("\n");
+		const chunk = boundWaitChunk(raw, WAIT_AGENT_MAX_BYTES);
+		const separatorBytes = chunks.length === 0 ? 0 : Buffer.byteLength(WAIT_SEPARATOR, "utf8");
+		const remaining = WAIT_TOTAL_MAX_BYTES - bytes - separatorBytes;
+		if (remaining <= WAIT_MARKER_BYTES) {
+			return boundWaitChunk(`${chunks.join(WAIT_SEPARATOR)}${TRUNCATED_HEAD_MARKER}`, WAIT_TOTAL_MAX_BYTES);
+		}
+		const retained = Buffer.byteLength(chunk, "utf8") <= remaining ? chunk : boundWaitChunk(chunk, remaining);
+		chunks.push(retained);
+		bytes += separatorBytes + Buffer.byteLength(retained, "utf8");
+		if (bytes >= WAIT_TOTAL_MAX_BYTES) {
+			if (index < snapshots.length - 1) return boundWaitChunk(`${chunks.join(WAIT_SEPARATOR)}${TRUNCATED_HEAD_MARKER}`, WAIT_TOTAL_MAX_BYTES);
+			break;
+		}
 	}
-	return chunks.join("\n\n---\n\n");
+	return chunks.join(WAIT_SEPARATOR);
 };
 
 export function registerSubagentTools(
@@ -120,6 +138,12 @@ export function registerSubagentTools(
 		promptSnippet: SUBAGENT_PROMPT_SNIPPET,
 		promptGuidelines: SUBAGENT_PROMPT_GUIDELINES,
 		parameters: Type.Object({
+			budget: Type.Optional(Type.Object({
+				wallTimeMs: Type.Optional(Type.Integer({ minimum: 1, maximum: SUBAGENT_BUDGET_MAX.wallTimeMs })),
+				tokens: Type.Optional(Type.Integer({ minimum: 1, maximum: SUBAGENT_BUDGET_MAX.tokens, description: "Warning threshold for summed provider-reported turn tokens, including cache tokens. Not a context limit or billing guarantee." })),
+				costUsd: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: SUBAGENT_BUDGET_MAX.costUsd })),
+				stallAfterMs: Type.Optional(Type.Integer({ minimum: 1, maximum: SUBAGENT_BUDGET_MAX.stallAfterMs, description: "No-progress warning interval. Startup and long tools have grace. Visible children remain liveness-only." })),
+			}, { additionalProperties: false, description: "Optional warning-only limits. Never automatically cancel, close or free a running slot." })),
 			prompt: Type.String({ description: "Self-contained child subagent prompt." }),
 			name: Type.String({ description: "Short human-readable title for this subagent." }),
 			role: Type.Optional(Type.String({ description: roleDescription })),
@@ -134,15 +158,21 @@ export function registerSubagentTools(
 		async execute(toolCallId, params, _signal, _onUpdate, ctx) {
 			const loaded = roleLoader();
 			const loadedRoles = loaded.roles;
-			if (params.role && loaded.warnings.length > 0) {
-				return makeToolResult(`Unable to spawn role ${params.role}: roles.json has invalid configuration:\n${loaded.warnings.map((warning) => `- ${warning}`).join("\n")}`, {
+			const role = params.role ? loadedRoles.find((candidate) => candidate.id === params.role) : undefined;
+			const selectedIsBuiltIn = params.role ? BUILT_IN_ROLES.some((candidate) => candidate.id === params.role) : false;
+			// Blocking entry-local warnings block only their role. Fatal file failures block
+			// custom overlays because only the built-in fallback is trustworthy.
+			const warningsBlockingRole = params.role
+				? loaded.warnings.filter((warning) => warning.scope === "role" ? warning.roleId === params.role && warning.blocksRole : warning.blocksOverlays && !selectedIsBuiltIn)
+				: [];
+			if (params.role && warningsBlockingRole.length > 0) {
+				return makeToolResult(`Unable to spawn role ${params.role}: roles.json has invalid configuration:\n${warningsBlockingRole.map((warning) => `- ${warning.message}`).join("\n")}`, {
 					action: "spawn",
 					status: "invalid_role_config",
 					role: params.role,
-					warnings: loaded.warnings,
+					warnings: warningsBlockingRole,
 				});
 			}
-			const role = params.role ? loadedRoles.find((candidate) => candidate.id === params.role) : undefined;
 			if (params.role && !role) {
 				const knownRoles = loadedRoles.map((candidate) => candidate.id);
 				return makeToolResult(`Unknown subagent role: ${params.role}. Known roles: ${knownRoles.join(", ") || "(none)"}.`, {
@@ -162,6 +192,7 @@ export function registerSubagentTools(
 				: activeTools;
 			const spawned = await manager.spawn({
 				sourceId: toolCallId,
+				budget: params.budget,
 				prompt: params.prompt,
 				title: params.name,
 				cwd: params.working_dir ?? ctx.cwd,
@@ -218,11 +249,20 @@ export function registerSubagentTools(
 		promptGuidelines: SUBAGENT_PROMPT_GUIDELINES,
 		parameters: Type.Object({
 			id: Type.String({ description: "Running visible subagent id, e.g. sa-1." }),
-			text: Type.String({ description: "Steering text to deliver to the child." }),
+			text: Type.String({ minLength: 1, description: "Non-blank steering text to submit to the child runtime." }),
 		}),
 		async execute(_toolCallId, params) {
+			// Schema minLength plus an explicit trim guard: blank steering would be
+			// consumed by the child without ever reaching Pi while the tool still
+			// reported success.
+			if (!params.text.trim()) {
+				throw new Error("subagent_send text is required: blank or whitespace-only steering is rejected before submission");
+			}
 			const snapshot = await manager.sendTo(params.id, params.text);
-			return makeToolResult(`Sent steering input to ${params.id} (${snapshot.title}). It is delivered after the child's current turn — no ack beyond delivery-to-child is possible.`, { action: "send", id: params.id, pane: snapshot.pane });
+			return makeToolResult("capability" in snapshot
+				? `${snapshot.capability}; respawn with visible: true to steer`
+				: `Steering submitted to the child runtime for ${params.id} (${snapshot.title}); Pi exposes no post-acceptance acknowledgement.`,
+			{ action: "send", id: params.id, ...("capability" in snapshot ? { capability: snapshot.capability } : { pane: snapshot.pane }) });
 		},
 	});
 

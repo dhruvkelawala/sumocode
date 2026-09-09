@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { promisify } from "node:util";
+import { resolveExecutableProvenance } from "../executable-provenance.js";
 import { buildShellCommand, shellEscape } from "../terminal-host/shell-command.js";
 import { chooseDiffSplitDirection } from "../commands/diff.js";
 import { createWorktree, resolveCreateOptions, type CreateWorktreeResult } from "../git/worktree.js";
@@ -23,8 +24,7 @@ export interface OpenWorktreeCliOptions {
 
 function commandForSumocode(env: NodeJS.ProcessEnv): string {
 	const setup = (env.SUMOCODE_WORKTREE_SETUP ?? DEFAULT_SETUP_ACTION).trim();
-	const launcher = (env.SUMOCODE_LAUNCHER ?? "sumocode").trim() || "sumocode";
-	const openSumocode = `exec ${shellEscape(launcher)}`;
+	const openSumocode = `exec ${shellEscape(resolveExecutableProvenance({ env }).sumocode)}`;
 	return setup ? `${setup} && ${openSumocode}` : openSumocode;
 }
 

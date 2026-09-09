@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { SubagentManager, type SpawnSubagentTask } from "./manager.js";
 import { SUBAGENT_MAX_QUEUED, SUBAGENT_MAX_RUNNING, type SubagentEvent } from "./domain.js";
 import type { CompletionManifest, CompletionManifestEvidence } from "./manifest.js";
+import { CHILD_RETAINED_RESULT_MAX_BYTES, TRUNCATED_HEAD_MARKER } from "../child-protocol.js";
 import type { TerminalHost } from "../terminal-host/types.js";
 
 /** Spawned-child double: only visible children get send/requestClose. */
@@ -48,6 +49,137 @@ const deferredBackend = () => {
 };
 
 describe("SubagentManager", () => {
+	it("launches an asynchronous backend with the captured worktree identity", async () => {
+		const launch = vi.fn(async () => ({ events: () => undefined, interrupt: () => undefined }));
+		const manager = new SubagentManager(launch, {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "parent-head" }),
+			createWorktree: async () => ({ ok: true, path: "/isolated/child", branch: "sumo/child", baseRef: "topic" }),
+			resolveWorktreeBaseRef: async () => "child-base-sha",
+			buildCompletionManifest: fakeManifestBuilder,
+		});
+		try {
+			await expect(manager.spawn({ ...makeTask("retained"), worktree: true, baseRef: "topic" })).resolves.toMatchObject({
+				status: "running", baseRef: "child-base-sha",
+			});
+			expect(launch).toHaveBeenCalledWith(expect.objectContaining({
+				baseRef: "child-base-sha", cwd: "/isolated/child",
+				worktreeRef: { path: "/isolated/child", branch: "sumo/child", baseRef: "child-base-sha", repoRoot: "/repo" },
+			}));
+		} finally { manager.disposeAll(); }
+	});
+	it("stops a backend admitted while shutdown waits for its launch", async () => {
+		let release!: () => void;
+		const ready = new Promise<void>((resolve) => { release = resolve; });
+		let emit!: (event: SubagentEvent) => void;
+		const interrupt = vi.fn(() => emit({ kind: "run-settled", outcome: { kind: "interrupted" } }));
+		const launch = vi.fn(async () => {
+			await ready;
+			return { events: (listener: typeof emit) => { emit = listener; }, interrupt };
+		});
+		const manager = new SubagentManager(launch, { captureGitContext: async () => ({}), buildCompletionManifest: fakeManifestBuilder });
+		const spawning = manager.spawn(makeTask("late launch"));
+		await vi.waitFor(() => expect(launch).toHaveBeenCalledOnce());
+		manager.disposeAll();
+		release();
+		await expect(spawning).resolves.toMatchObject({ status: "error", errorText: "interrupted" });
+		expect(interrupt).toHaveBeenCalledOnce();
+	});
+	it("distinguishes visible heartbeat from progress and warns only after observed heartbeat silence", async () => {
+		vi.useFakeTimers();
+		let emit: (event: SubagentEvent) => void = () => undefined;
+		const interrupt = vi.fn();
+		const requestClose = vi.fn();
+		const manager = new SubagentManager(() => ({ events: (listener) => { emit = listener; }, interrupt, requestClose }), {
+			captureGitContext: async () => ({}),
+			terminalHost: { kind: "herdr", openCommandInSplit: vi.fn(), closePane: vi.fn(), notify: vi.fn() },
+			pi: { exec: vi.fn() },
+		});
+		try {
+			await manager.spawn({ ...makeTask("visible"), visible: true });
+			await vi.advanceTimersByTimeAsync(120_000);
+			expect(manager.get("sa-1")).toMatchObject({ health: "quiet", liveness: "unknown", lastProgressAt: null });
+			emit({ kind: "heartbeat", at: Date.now() });
+			expect(manager.get("sa-1")).toMatchObject({ health: "active", lastHeartbeatAt: Date.now(), lastProgressAt: null, liveness: "unknown" });
+			await vi.advanceTimersByTimeAsync(120_000);
+			expect(manager.get("sa-1")?.health).toBe("stalled-warning");
+			emit({ kind: "heartbeat", at: Date.now() });
+			expect(manager.get("sa-1")?.health).toBe("active");
+			expect(interrupt).not.toHaveBeenCalled();
+			expect(requestClose).not.toHaveBeenCalled();
+		} finally { manager.disposeAll(); vi.useRealTimers(); }
+	});
+	it("warns once at a budget crossing without interrupting or freeing the running slot", async () => {
+		vi.useFakeTimers();
+		const { manager, emitters, interrupts } = deferredBackend();
+		try {
+			await manager.spawn({ ...makeTask("budget"), budget: { wallTimeMs: 1000 } });
+			const listener = vi.fn();
+			manager.addChangeListener(listener);
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(manager.get("sa-1")).toMatchObject({ status: "running", health: "over-budget-warning", elapsedMs: 1000, warnings: ["wall-time"] });
+			expect(listener).toHaveBeenCalledTimes(1);
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(listener).toHaveBeenCalledTimes(1);
+			expect(interrupts.get("sa-1")).not.toHaveBeenCalled();
+			emitters.get("sa-1")!({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+			await vi.advanceTimersByTimeAsync(0);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { manager.disposeAll(); vi.useRealTimers(); }
+	});
+
+	it("keeps one health scheduler with 10 running and 16 queued", async () => {
+		vi.useFakeTimers();
+		const { manager, interrupts } = deferredBackend();
+		try {
+			for (let i = 0; i < 26; i++) await manager.spawn(makeTask(String(i)));
+			expect(vi.getTimerCount()).toBe(1);
+			await vi.advanceTimersByTimeAsync(120_000);
+			expect(manager.list().filter((snapshot) => snapshot.health === "stalled-warning")).toHaveLength(10);
+			expect(manager.list().filter((snapshot) => snapshot.status === "queued")).toHaveLength(16);
+			for (const interrupt of interrupts.values()) expect(interrupt).not.toHaveBeenCalled();
+			manager.disposeAll();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { manager.disposeAll(); vi.useRealTimers(); }
+	});
+
+	it("recovers a stall warning on parsed progress and gives long tools bounded grace", async () => {
+		vi.useFakeTimers();
+		const { manager, emitters } = deferredBackend();
+		try {
+			await manager.spawn(makeTask("progress"));
+			const emit = emitters.get("sa-1")!;
+			await vi.advanceTimersByTimeAsync(120_000);
+			expect(manager.get("sa-1")?.health).toBe("stalled-warning");
+			emit({ kind: "tool-start", toolId: "tool", name: "read" });
+			expect(manager.get("sa-1")?.health).toBe("active");
+			await vi.advanceTimersByTimeAsync(299_000);
+			expect(manager.get("sa-1")?.health).toBe("quiet");
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(manager.get("sa-1")?.health).toBe("stalled-warning");
+			emit({ kind: "tool-end", toolId: "tool", name: "read", isError: false });
+			expect(manager.get("sa-1")).toMatchObject({ health: "active", lastProgressAt: Date.now(), liveness: "unknown" });
+		} finally { manager.disposeAll(); vi.useRealTimers(); }
+	});
+
+	it("sums reported turn usage for budgets without changing context occupancy", async () => {
+		const { manager, emitters } = deferredBackend();
+		try {
+			await manager.spawn({ ...makeTask("usage"), budget: { tokens: 100, costUsd: 1 } });
+			const emit = emitters.get("sa-1")!;
+			emit({ kind: "usage", tokens: 60, costUsd: 0.6 });
+			emit({ kind: "usage" });
+			emit({ kind: "usage", tokens: 40, costUsd: 0.4 });
+			expect(manager.get("sa-1")).toMatchObject({ health: "over-budget-warning", warnings: ["tokens", "cost"], usage: { tokens: 40, costUsd: 0.4, reportedTokens: 100, reportedCostUsd: 1 } });
+		} finally { manager.disposeAll(); }
+	});
+
+	it("rejects invalid budgets before setup or queue admission", async () => {
+		const { manager } = deferredBackend();
+		await expect(manager.spawn({ ...makeTask("invalid"), budget: { tokens: -1 } })).rejects.toThrow(/budget/);
+		expect(manager.list()).toEqual([]);
+	});
+
 	it(`queues spawn ${SUBAGENT_MAX_RUNNING + 1} instead of refusing it`, async () => {
 		const { manager } = deferredBackend();
 		for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await expect(manager.spawn(makeTask(`${index}`))).resolves.toMatchObject({ id: subagentId(index + 1) });
@@ -230,6 +362,50 @@ describe("SubagentManager", () => {
 		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
 	});
 
+	it("contains async iterator rejection", async () => {
+		const unhandled: unknown[] = [];
+		// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Node's unhandledRejection event exposes arbitrary rejection values.
+		const onUnhandled = (error: unknown): void => { unhandled.push(error); };
+		process.on("unhandledRejection", onUnhandled);
+		try {
+			const interrupts = new Map<string, ReturnType<typeof vi.fn>>();
+			const manager = new SubagentManager((task) => ({
+				events: (async function* (): AsyncGenerator<SubagentEvent> {
+					yield { kind: "assistant-delta", delta: "partial" };
+					if (task.id === "sa-1") throw new Error("event stream failed");
+					if (task.id === "sa-2") {
+						yield { kind: "run-settled", outcome: { kind: "completed", finalText: "complete" } };
+						await new Promise<void>((resolve) => setTimeout(resolve, 0));
+						throw new Error("late event stream failure");
+					}
+					await new Promise(() => undefined);
+				})(),
+				interrupt: (() => {
+					const interrupt = vi.fn();
+					interrupts.set(task.id, interrupt);
+					return interrupt;
+				})(),
+			}), { captureGitContext: async () => ({ baseRef: "base-ref" }), buildCompletionManifest: fakeManifestBuilder });
+
+			for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await manager.spawn(makeTask(`worker-${index}`));
+			await vi.waitFor(() => expect(manager.get("sa-1")).toMatchObject({
+				status: "error",
+				errorText: "subagent event stream failed: event stream failed",
+				finalText: "partial",
+			}));
+			await vi.waitFor(() => expect(manager.get("sa-2")).toMatchObject({ status: "done", finalText: "complete" }));
+			expect(interrupts.get("sa-1")).toHaveBeenCalledOnce();
+			expect(interrupts.get("sa-2")).not.toHaveBeenCalled();
+
+			await expect(manager.spawn(makeTask("replacement"))).resolves.toMatchObject({ id: firstQueuedId, status: "running" });
+			await expect(manager.cancel(["sa-1"])).resolves.toEqual(["sa-1 was already settled"]);
+			await Promise.resolve();
+			expect(unhandled).toEqual([]);
+		} finally {
+			process.off("unhandledRejection", onUnhandled);
+		}
+	});
+
 	it("folds events into immutable snapshots", async () => {
 		const { manager, emitters } = deferredBackend();
 		const spawned = await manager.spawn(makeTask("fold"));
@@ -253,6 +429,82 @@ describe("SubagentManager", () => {
 		await expect(wait).resolves.toMatchObject([{ id: "sa-1", status: "done" }]);
 		expect(pending).toEqual([["sa-1"]]);
 		expect(manager.consumedIds.has("sa-1")).toBe(true);
+	});
+
+	it("delivers a replacement final result without retaining or charging the replaced transcript", async () => {
+		const { manager, emitters } = deferredBackend();
+		await manager.spawn(makeTask("bounded delivery"));
+		const prior = `${"u".repeat(CHILD_RETAINED_RESULT_MAX_BYTES - Buffer.byteLength(TRUNCATED_HEAD_MARKER))}${TRUNCATED_HEAD_MARKER}`;
+		emitters.get("sa-1")?.({ kind: "message-end", role: "user", text: prior });
+		const finalText = `useful final answer${TRUNCATED_HEAD_MARKER}`;
+		emitters.get("sa-1")?.({ kind: "message-end", role: "assistant", text: finalText, replacesRetainedText: true });
+		emitters.get("sa-1")?.({ kind: "assistant-delta", delta: "later live text" });
+		emitters.get("sa-1")?.({ kind: "message-end", role: "toolResult", text: "later tool output" });
+		expect(manager.get("sa-1")).toMatchObject({ liveText: "later live text", finalText });
+		const wait = manager.waitFor(["sa-1"]);
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText } });
+
+		const [delivered] = await wait;
+		if (!delivered) throw new Error("missing delivered result");
+		expect(delivered.finalText).toBe(finalText);
+		expect(delivered.transcript).toMatchObject([
+			{ role: "assistant", text: finalText },
+			{ role: "toolResult", text: "later tool output" },
+		]);
+		const retained = delivered.transcript.map((item) => item.text).join("");
+		expect(Buffer.byteLength(retained, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+		expect(retained.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+	});
+
+	it("moves a prior omission marker to the latest finalText", async () => {
+		const { manager, emitters } = deferredBackend();
+		await manager.spawn(makeTask("latest delivery"));
+		emitters.get("sa-1")?.({ kind: "message-end", role: "assistant", text: `first${TRUNCATED_HEAD_MARKER}`, replacesRetainedText: true });
+		emitters.get("sa-1")?.({ kind: "message-end", role: "user", text: "later context" });
+		const latest = `latest useful answer${TRUNCATED_HEAD_MARKER}`;
+		emitters.get("sa-1")?.({ kind: "message-end", role: "assistant", text: latest, replacesRetainedText: true });
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: latest } });
+
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
+		const snapshot = manager.get("sa-1");
+		expect(snapshot?.finalText).toBe(latest);
+		expect(snapshot?.transcript).toMatchObject([{ role: "assistant", text: latest }]);
+		expect(snapshot?.transcript.map((item) => item.text).join("").split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+	});
+
+	it("isolates listener failure", async () => {
+		const diagnostics: Array<{ kind: string; message: string }> = [];
+		const manager = new SubagentManager(() => ({ events: () => undefined, interrupt: () => undefined }), {
+			captureGitContext: async () => ({ baseRef: "base-ref" }),
+			onDiagnostic: (diagnostic: { kind: string; message: string }) => diagnostics.push(diagnostic),
+		});
+		const laterListener = vi.fn();
+		manager.addChangeListener(() => { throw new Error("listener exploded"); });
+		manager.addChangeListener(laterListener);
+
+		await expect(manager.spawn(makeTask("notify"))).resolves.toMatchObject({ status: "running" });
+
+		expect(laterListener).toHaveBeenCalledOnce();
+		expect(diagnostics).toEqual([{ kind: "listener", message: "listener exploded" }]);
+	});
+
+	it("isolates listener failure after an earlier listener succeeds", async () => {
+		const diagnostics: Array<{ kind: string; message: string }> = [];
+		const manager = new SubagentManager(() => ({ events: () => undefined, interrupt: () => undefined }), {
+			captureGitContext: async () => ({ baseRef: "base-ref" }),
+			onDiagnostic: (diagnostic: { kind: string; message: string }) => diagnostics.push(diagnostic),
+		});
+		const firstListener = vi.fn();
+		const lastListener = vi.fn();
+		manager.addChangeListener(firstListener);
+		manager.addChangeListener(() => { throw new Error("second listener exploded"); });
+		manager.addChangeListener(lastListener);
+
+		await expect(manager.spawn(makeTask("notify middle"))).resolves.toMatchObject({ status: "running" });
+
+		expect(firstListener).toHaveBeenCalledOnce();
+		expect(lastListener).toHaveBeenCalledOnce();
+		expect(diagnostics).toEqual([{ kind: "listener", message: "second listener exploded" }]);
 	});
 
 	it("stores the manifest before completion listeners are notified", async () => {
@@ -996,17 +1248,27 @@ describe("SubagentManager steering and close", () => {
 			await expect(manager.sendTo("sa-1", "hi")).rejects.toThrow("already settled (done)");
 		});
 
-		it("rejects children without a send capability as headless", async () => {
+		it("classifies headless steering as unsupported", async () => {
 			const { manager } = deferredBackend();
 			await manager.spawn(makeTask("headless"));
-			await expect(manager.sendTo("sa-1", "hi")).rejects.toThrow("headless children cannot receive input — respawn with visible: true");
+			await expect(manager.sendTo("sa-1", "hi")).resolves.toEqual({ capability: "unsupported: headless steering" });
 		});
 
-		it("delivers text through the child's send and returns the snapshot", async () => {
+		it("waits for the child's consumption acknowledgement and returns the snapshot", async () => {
 			const { manager, sends } = steerableBackend();
 			const id = await spawnVisible(manager, "steered");
 			await expect(manager.sendTo(id, "focus the tests")).resolves.toMatchObject({ id, status: "running" });
 			expect(sends.get(id)).toHaveBeenCalledWith("focus the tests");
+		});
+
+		it("propagates a child consumption or settlement failure", async () => {
+			const { manager, sends } = steerableBackend();
+			const id = await spawnVisible(manager, "settling");
+			// SAFETY: visible spawns always register a send double.
+			(sends.get(id) as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("visible subagent sa-1 has settled before steering consumption was acknowledged"));
+
+			await expect(manager.sendTo(id, "too late")).rejects.toThrow("has settled before steering consumption was acknowledged");
+			expect(sends.get(id)).toHaveBeenCalledWith("too late");
 		});
 	});
 
@@ -1018,7 +1280,8 @@ describe("SubagentManager steering and close", () => {
 			await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
 
 			await expect(manager.close(["sa-9", "sa-1"])).resolves.toEqual(["sa-9 is unknown", "sa-1 was already done"]);
-			expect(manager.consumedIds.has("sa-1")).toBe(false);
+			expect(manager.consumedIds.has("sa-1")).toBe(true);
+			expect(manager.consumedIds.has("sa-9")).toBe(false);
 		});
 
 		it("cancels a queued child without starting it", async () => {

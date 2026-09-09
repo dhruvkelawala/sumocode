@@ -1,313 +1,61 @@
-# SumoCode — Dev Loop
+# SumoCode development workflow
 
-How I edit, test, and release SumoCode. This is the workflow I actually use, not generic advice.
+Run contributor commands from your source checkout. The maintainer's canonical primary tree and path-quoting rule remain in [AGENTS.md](AGENTS.md); other contributors can use any checkout. Never edit Pi's installed clone. [README.md](README.md) describes the current product; [plans/README.md](plans/README.md) owns execution status.
 
----
+## Setup and launch
 
-## Where the repo lives
-
-**Dev repo (authoring):** `/Volumes/SumoDeus NVMe/code/sumocode/`
-
-**Installed version (consumed by Pi):** `~/.pi/agent/git/github.com/dhruvkelawala/sumocode/` (clone managed by `pi install`)
-
-These are two different directories on purpose:
-
-- The **dev repo** on the NVMe is where I make changes — fast local filesystem, owned by me, unaffected by `pi update`.
-- The **installed clone** is what Pi actually loads. It's kept in sync with the published `main` branch on GitHub via `pi install` / `pi update`. I never edit this directory directly.
-
----
-
-## The inner loop (edit → test → commit)
-
-### 1. Edit at the dev repo
+Use the Node engine and Pi peer versions declared in [package.json](package.json). CI uses Node 24 and pnpm 10.29.2; the current development Pi pin is 0.84.4.
 
 ```bash
-cd "/Volumes/SumoDeus NVMe/code/sumocode"
-# open src/extension.ts or wherever the change lives
-```
-
-### 2. Test with ephemeral install or SumoCode CLI
-
-Classic extension-only smoke:
-
-```bash
-pi -e .
-```
-
-RPC-host SumoCode smoke (preferred for daily-driver UI work):
-
-```bash
-./bin/sumocode.sh
-./bin/sumocode.sh .
-```
-
-If the package is globally linked, use the `sumocode` bin directly:
-
-```bash
-sumocode
-sumocode .
-```
-
-### Why `-e` is the dev-checkout entry point
-
-`-e <path>` (alias `--extension`) tells Pi: *for this session only, load the extension at this path via jiti*. Both `pi -e .` and the `bin/sumocode.sh` launcher (which internally runs `pi -e ${ROOT_DIR}/src/extension.ts`) use it for the same reason: the dev checkout is not registered in `~/.pi/agent/settings.json`, so without `-e` Pi would start without SumoCode loaded.
-
-Load path matrix:
-
-| How I run it | Where SumoCode is loaded from | `-e` needed? |
-|---|---|---|
-| `./bin/sumocode.sh` from this checkout | `${ROOT_DIR}/src/extension.ts` | yes — checkout isn't in settings.json |
-| `sumocode` linked from a `pi install` | `pi.extensions` field in installed `package.json` | no — Pi resolves via its own loader |
-| plain `pi` | only globally-registered extensions | never loads SumoCode unless installed |
-
-What `-e` does NOT do:
-
-- Modify `~/.pi/agent/settings.json`
-- Touch the published git-installed version at `~/.pi/agent/git/github.com/dhruvkelawala/sumocode/`
-- Need a commit or push
-
-What `-e` DOES do:
-
-- Spin up a temporary Pi with my local code
-- Read `src/extension.ts` directly via jiti on each launch
-- Let me iterate without polluting my real setup
-
-When I exit Pi, the ephemeral install vanishes. My stable install continues running whatever version is published on GitHub.
-
-### Hot reload: `/reload`
-
-SumoCode overrides Pi's built-in `/reload` because resource reload alone does **not** re-import a `pi -e` extension's TypeScript graph (jiti caches the modules). To pick up source edits without a Ctrl+C + relaunch, use:
-
-```txt
-/reload
-```
-
-Mechanism: `bin/sumocode.sh` runs pi inside a `while :;` loop. The slash-command handler exits pi with code `100`; the loop catches that, re-launches pi with `--continue` appended (so the in-progress session resumes), and the next jiti import reads the fresh source. Any other exit code propagates normally.
-
-This only works when launched through `bin/sumocode.sh` (which exports `SUMOCODE_LAUNCHER`). Run from plain `pi -e .` and `/reload` falls back to a warning notification — you have to quit + relaunch by hand.
-
-Good mental model: `/reload` is the dev-loop fast path; restart by hand is the safe fallback when the loop isn't available.
-
-### 3. Verify it works
-
-Launch Pi with ephemeral install or retained SumoCode:
-
-```bash
-pi -e .
-./bin/sumocode.sh
-```
-
-For manual runtime/debug sessions, use diagnostics mode:
-
-```bash
+pnpm install
+pnpm dev .
 ./bin/sumocode.sh -d .
-sumocode -d .                    # if globally linked
-sumocode diag                    # summarizes /tmp/sumocode-manual.jsonl
-sumocode doctor                  # checks RPC host + Pi/diagnostics health
-```
-
-Expected signals on a healthy interactive boot:
-- The default launcher renders the RPC host shell (`SUMOCODE RPC` / `sumocode · rpc host`)
-- no retired retained-runtime module is required on the default path
-- `./bin/sumocode.sh --no-sumo-tui --offline --no-extensions --no-session --approve` bypasses the foreground RPC host and executes Pi directly for diagnostics
-
-Expected non-interactive behavior:
-- `./bin/sumocode.sh --offline --no-extensions --no-session --print hello` bypasses the foreground RPC host and runs Pi directly
-- explicit `--mode` invocations also bypass the foreground RPC host so Pi's own non-interactive/RPC modes remain available
-
-For a feature change, verify the specific surface I just touched.
-
-### 4. Commit to the dev repo
-
-```bash
-cd "/Volumes/SumoDeus NVMe/code/sumocode"
-git add -A
-git commit -m "feat: add custom footer with memory-count indicator"
-```
-
-Commit messages use conventional-ish prefixes (`feat:`, `fix:`, `refactor:`, `chore:`) — first line imperative, rest explains why. See `.github/commit-style.md` (not yet written; see Q12 in PLAN.md).
-
-### 5. Push to main (ongoing dev, not released)
-
-```bash
-git push
-```
-
-Pushing to `main` does NOT update installed machines. Pi machines pull from tagged releases via `pi update`, not raw `main`. So I can have work-in-progress commits on `main` without breaking my mini or MacBook.
-
----
-
-## The outer loop (release → propagate)
-
-When a set of commits is ready to go live on all machines:
-
-### 1. Bump version
-
-Edit `package.json`:
-
-```json
-{ "version": "0.3.1" }
-```
-
-And update `SPLASH_VERSION_LINE` in `src/footer.ts` so the splash matches. The bible mockup version line in `scripts/gen-bible-element-3.mjs` mirrors it; bump that too if the doc is part of the release.
-
-Semver convention for SumoCode:
-- **MAJOR** — breaking extension API usage (something crashes if downgraded)
-- **MINOR** — new feature lands (footer added, memory widget lands, etc.)
-- **PATCH** — bug fix or small polish
-
-### 2. Commit + tag
-
-```bash
-git commit -am "release: v0.3.1"
-git tag v0.3.1
-```
-
-### 3. Push
-
-```bash
-git push && git push --tags
-```
-
-GitHub now shows the new release. Installed machines still on the previous tag until they `pi update`.
-
-### 4. Pull on each machine
-
-```bash
-pi update git:github.com/dhruvkelawala/sumocode
-```
-
-This refreshes `~/.pi/agent/git/github.com/dhruvkelawala/sumocode/` from the new `main` tip. Restart Pi to load the new version.
-
-Do this on both mini and MacBook. Since `sumocode` is in `sumocode-config`'s synced `settings.json`, no config changes are needed — it's just a package update.
-
----
-
-## Debugging
-
-### Pi loads my extension but nothing happens
-
-Check the extension registered:
-
-```bash
-pi -p --no-tools "List all loaded extensions. Print one per line, name only."
-```
-
-If `sumocode` isn't listed: something errored during load. Run:
-
-```bash
-PI_LOG_LEVEL=debug pi 2>&1 | grep -i "sumocode\|extension.*load"
-```
-
-Common failures:
-- Syntax error in `src/extension.ts` → check TS errors with `pnpm tsc --noEmit` or equivalent
-- Missing peer dep → ensure `@earendil-works/pi-coding-agent` exports the types I'm using
-- Import path typo
-
-### The extension loads but my UI changes don't render
-
-`ctx.ui.*` calls must happen inside an event handler (`session_start`, `message_start`, etc.). If I'm calling them at module top-level, they fire before Pi's TUI exists and get silently dropped.
-
-### Ephemeral install cache is stuck on old code
-
-jiti caches every module it transpiles, so source edits don't show up inside the running session. Two ways to refresh:
-
-```txt
-/reload
-```
-
-Fastest path — only works when launched via `bin/sumocode.sh` / `sumocode`. Re-execs pi inside the launcher loop and resumes the session. See "Hot reload: `/reload`" above.
-
-```bash
-# Ctrl+D or /exit to quit Pi
 pi -e .
 ```
 
-Fallback when running plain `pi -e .` or when the reload signal is unavailable. Loses session unless you pass `--continue`.
+The first two launches exercise the source RPC host. `pi -e .` checks the classic extension profile. The stable package entry is `src/extension-entry.ts`: it validates an optional generated bundle and otherwise uses the appropriate source profile. Launcher-owned RPC children select `src/rpc-child-extension.ts`; classic Pi selects `src/extension.ts`. Shared installation lives in `src/extension-core.ts`.
 
-### Need to see what Pi actually has for the extension
+Interactive TTY launches use the RPC host. Print mode, explicit `--mode`, non-TTY stdout and `--no-sumo-tui` execute Pi directly. Use `./bin/sumocode.sh --dry-run` to inspect routing and `./bin/sumocode.sh --help` for supported options. The native release's compiled host and bundled Pi child are a separate distribution; see [README.md](README.md#install).
 
-```bash
-ls -la "/Volumes/SumoDeus NVMe/code/sumocode/src/"
-# Then compare to:
-ls -la ~/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/
-```
-
-If the installed version is stale, `pi update git:github.com/dhruvkelawala/sumocode`.
-
----
-
-## Common tasks
-
-### Add a new extension file
-
-1. Create `src/my-feature.ts`
-2. Add it to `package.json` under `"pi": { "extensions": [...] }`:
-   ```json
-   "pi": {
-     "extensions": ["src/extension.ts", "src/my-feature.ts"]
-   }
-   ```
-3. Test with `pi -e .`
-
-### Add a dependency
-
-**Runtime deps** (things SumoCode uses at runtime, like a date library): go into `dependencies` in `package.json`.
-
-**Pi-bundled deps** (things Pi itself ships, like `@earendil-works/pi-tui`): go into `peerDependencies` with `"*"` as the version. Do NOT add them to `dependencies` — that creates duplicate module instances and breaks things.
-
-### Test on MacBook before releasing
-
-Don't. That's what tagged releases are for. Keep the mini as the dev machine, MacBook as a consumer. If something's broken on MacBook but not mini, it's likely an environment diff worth investigating, not a dev/test issue.
-
-### Emergency recovery
-
-There is no alternate retained runtime path in this branch. To compare or diagnose Pi behavior without the foreground RPC host, use the direct-Pi bypass:
+## Verification
 
 ```bash
-./bin/sumocode.sh --no-sumo-tui --offline --no-extensions --no-session --approve
+pnpm lint
+pnpm exec tsc --noEmit
+pnpm build
+pnpm test
+pnpm test:integration
+pnpm render:bible
+pnpm visual:ci
 ```
 
-For product recovery to older behavior, install a previous tagged SumoCode release instead of resurrecting the removed private Pi patch.
+TypeScript runs through jiti during source development, so build is a typecheck. Runtime/visual changes require the full unit, integration and visual gates in AGENTS.md. Integration uses its owned process harness; inspect its zero-survivor audit before accepting a run. Run native contracts with `pnpm test:native` when changing distribution or executable provenance; this requires the pinned Bun described by the native builder. The supported Pi compatibility gate is `bash scripts/smoke-pi-versions.sh --supported-matrix`.
 
-On any machine:
+CI workflows in `.github/workflows/` also define dependency auditing, native contracts, compatibility, visual checks and report-only dead-code analysis. Prefer the workflow and package scripts over mutable test totals. `pnpm dead-code` reports findings; it is not a cleanup command.
+
+Generated bundles and binaries stay ignored. `pnpm build:bundles` produces optional local host/extension bundles; `pnpm build:native` builds a native archive. Rebuild after integration when a plan requires it. Never commit generated dist output.
+
+## Diagnostics and visual review
 
 ```bash
-pi update git:github.com/dhruvkelawala/sumocode@v0.1.0
+./bin/sumocode.sh doctor
+./bin/sumocode.sh -d .
+./bin/sumocode.sh diag
+pnpm visual:review
 ```
 
-That pins to the exact tag. Restart Pi. To go back to latest: `pi update git:github.com/dhruvkelawala/sumocode` (no ref).
+Diagnostics are opt-in via debug mode or `SUMO_TUI_DIAG_FILE`; default output is /tmp/sumocode-manual.jsonl. The launcher clears that diagnostic file at startup unless `--no-clear-diag` is supplied. Preserve useful evidence before starting another debug run. This is separate from durable state in [SETUP.md](SETUP.md).
 
----
+Read styled-cell and geometry reports before PNGs. The [V2 contract](docs/visual/parity/CONTRACT.md) defines required crops and explicit human approval for golden promotion. Capturing evidence does not approve a golden.
 
-## Integration with sumocode-config
+## Releases and source consumers
 
-Changes to the `sumocode` extension (this repo) are released via git tags.
+Version authority is `package.json`; the native builder injects that version into the executable. Update release notes and any versioned product copy together. Run required checks before creating a version tag; pushing the tag triggers the release workflow and builds the native archive. Consumers install that archive as described in README.md. Pushes to main do not replace an installed native archive.
 
-Changes to **personal config** (persona, memory, settings tweaks, new MCP servers, new packages) land in `sumocode-config` and sync via `git push` / `git pull` — no version tagging needed, no `pi install` needed, just `bootstrap.sh` if symlinks need refreshing.
+Pi git-package installs remain a separate source path. An unpinned install/update follows the upstream branch rather than selecting the newest release tag. To reproduce a source release, use an explicit tag:
 
-Rule of thumb:
-- Editing `.ts` files in this repo → tag and release
-- Editing `settings.json` / `mcp.json` / `persona.md` in sumocode-config → just commit and push
+```bash
+pi install git:github.com/dhruvkelawala/sumocode@v0.4.1
+```
 
----
-
-## What's in the dev loop now
-
-- **Tests.** 821 unit tests via vitest, 32 integration tests via node-pty. Run `pnpm test` and `pnpm test:integration`. Both gated on the same TypeScript graph that ships.
-- **Visual harness.** `pnpm visual:ci` for the V2 parity contract; `pnpm render:bible` regenerates the mockup PNGs.
-- **Perf snapshot.** `pnpm perf:startup` produces a markdown report under `docs/perf/`.
-- **Scribe diff review.** `/sumo:review` runs an in-session reviewer (default `openai-codex/gpt-5.3-codex`) on the current branch diff. Repeat until GREEN before merging.
-- **CHANGELOG.** Keep-a-Changelog format; one section per release, retroactively documented for v0.1.0 → v0.2.0 → v0.3.0.
-- **Pi version smoke.** Pi bumps re-verify the RPC contract, re-check the RPC editor builtin slash list, rerun the approval/security regression, and confirm the direct-Pi non-interactive bypass still works. `scripts/smoke-pi-versions.sh` should focus on package install and RPC compatibility, not private patch work.
-
-## What's NOT in the dev loop yet
-
-- **Public PR CI.** A GitHub Actions workflow that runs `pnpm test + pnpm exec tsc --noEmit` on every PR. Stub workflows for visual + perf live under `.github/workflows/`; the typecheck/test gate is on the v0.3.x followup list.
-- **Lint.** Project leans on `tsc` strict and the scribe rather than a separate linter. If/when biome gets adopted, point it at `src/`.
-
-These are intentionally deferred. Add them when friction actually shows up.
-
----
-
-*Last updated: 2026-05-08 · v0.3.0 · Pi 0.74.0 (`@earendil-works/pi-coding-agent`)*
+Do not run releases, pushes or updates merely as verification. Follow the repository's authorization rules for publication.

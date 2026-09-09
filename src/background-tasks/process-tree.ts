@@ -1,4 +1,4 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, type ExecFileSyncOptionsWithStringEncoding } from "node:child_process";
 
 export interface ProcessTreeIdentity {
 	readonly pid: number;
@@ -26,7 +26,15 @@ export interface ProcessTreeSignalResult {
 	readonly error?: string;
 }
 
+export interface ProcessCensusMember extends ProcessTreeMemberAnchor {
+	readonly processGroupId: number;
+	/** Discovery hint only; never signal authority. */
+	readonly anchorNonce?: string;
+}
+
 export interface ProcessTreeOperations {
+	/** Complete point-in-time census; undefined means unknown, never empty. */
+	census?(): readonly ProcessCensusMember[] | undefined;
 	captureStartTime(pid: number): string | undefined;
 	identityMatches(identity: ProcessTreeIdentity): ProcessIdentityStatus;
 	isTreeEmpty(identity: ProcessTreeIdentity, verification?: ProcessTreeVerification): boolean;
@@ -296,7 +304,32 @@ async function rawSystemSignal(
 	}
 }
 
+export function captureProcessCensus(
+	execute: (file: string, args: readonly string[], options: ExecFileSyncOptionsWithStringEncoding) => string = execFileSync,
+	platform: NodeJS.Platform = process.platform,
+): readonly ProcessCensusMember[] | undefined {
+	if (platform === "win32") return undefined;
+	try {
+		const output = execute("/bin/ps", ["-axww", "-o", "pid=,pgid=,lstart=,command="], { encoding: "utf8", timeout: 5000, maxBuffer: 16 * 1024 * 1024 });
+		const rows: ProcessCensusMember[] = [];
+		const seen = new Set<number>();
+		for (const line of output.trim().split("\n")) {
+			const match = line.trim().match(/^(\d+)\s+(\d+)\s+([A-Za-z]{3}\s+[A-Za-z]{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.+)$/);
+			if (!match) return undefined;
+			const pid = Number(match[1]);
+			const processGroupId = Number(match[2]);
+			if (!Number.isSafeInteger(pid) || pid <= 0 || !Number.isSafeInteger(processGroupId) || processGroupId < 0 || seen.has(pid)) return undefined;
+			seen.add(pid);
+			const anchorNonce = match[4]!.match(/\ssumocode-retained-anchor:([a-f0-9-]{36})$/)?.[1];
+			const member = { pid, processGroupId, processStartTime: match[3]! };
+			rows.push(anchorNonce ? { ...member, anchorNonce } : member);
+		}
+		return seen.has(process.pid) ? rows : undefined;
+	} catch { return undefined; }
+}
+
 export const systemProcessTree: ProcessTreeOperations = {
+	census: captureProcessCensus,
 	captureStartTime: captureProcessStartTime,
 	identityMatches(identity): ProcessIdentityStatus {
 		const leader = positivePidStatus(identity.pid);

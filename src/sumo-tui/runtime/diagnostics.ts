@@ -4,6 +4,36 @@ type DiagnosticValue = string | number | boolean | null | undefined | Diagnostic
 type DiagnosticFields = { readonly [key: string]: DiagnosticValue };
 
 const PREVIEW_MAX = 160;
+const PUBLIC_STARTUP_EVENTS = new Set([
+	"process_preload_start",
+	"child_spawn_start",
+	"child_spawned",
+	"child_entry",
+	"bedrock_import_start",
+	"after_bedrock_import",
+	"cli_import_start",
+	"after_cli_import",
+	"main_enter",
+	"model_runtime_create_start",
+	"model_refresh_1_start",
+	"model_refresh_1_end",
+	"model_runtime_create_end",
+	"extension_import_start",
+	"extension_import_end",
+	"extension_factory_start",
+	"extension_factory_end",
+	"model_refresh_2_start",
+	"model_refresh_2_end",
+	"run_rpc_mode_enter",
+	"first_get_state_received",
+	"rpc_child_ready",
+	"terminal_index_start",
+	"terminal_index_ready",
+	"editor_ready",
+	"slash_ready",
+	"hydration_committed",
+	"command_ready",
+]);
 
 function diagnosticsFile(): string | undefined {
 	const file = process.env.SUMO_TUI_DIAG_FILE;
@@ -37,10 +67,26 @@ let lastMark = diagnosticsStart;
 export function logDiagnostic(event: string, fields: DiagnosticFields = {}): void {
 	const file = diagnosticsFile();
 	if (!file) return;
+	const publicStartupDiagnostics = process.env.SUMOCODE_PUBLIC_STARTUP_DIAGNOSTICS === "1";
+	if (publicStartupDiagnostics && !PUBLIC_STARTUP_EVENTS.has(event)) return;
 	try {
 		const now = performance.now();
 		const sanitized: Record<string, DiagnosticValue> = {};
-		for (const [key, value] of Object.entries(fields)) sanitized[key] = sanitizeDiagnosticValue(value);
+		if (publicStartupDiagnostics) {
+			// Only the scan's high-resolution duration and accepted-record count are
+			// public-safe; every other field stays process-local.
+			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- diagnostics-file boundary: fields arrive from a caller-supplied DiagnosticFields record, not a parsed domain value.
+			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- diagnostics-file boundary: fields arrive from a caller-supplied DiagnosticFields record, not a parsed domain value.
+			const durationMsValid = typeof fields.durationMs === "number" && Number.isFinite(fields.durationMs);
+			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- same boundary as above for the accepted-record count.
+			const snapshotCountValid = typeof fields.snapshotCount === "number" && Number.isFinite(fields.snapshotCount);
+			if (event === "terminal_index_ready" && durationMsValid && snapshotCountValid) {
+				sanitized.durationMs = fields.durationMs;
+				sanitized.snapshotCount = fields.snapshotCount;
+			}
+		} else {
+			for (const [key, value] of Object.entries(fields)) sanitized[key] = sanitizeDiagnosticValue(value);
+		}
 		// `mode` only applies when the append creates the file: the trace carries
 		// low-level input events, so it must be readable by its owner only.
 		appendFileSync(file, `${JSON.stringify({ ts: Date.now(), event, sinceDiagnosticsMs: Math.round((now - diagnosticsStart) * 100) / 100, deltaMs: Math.round((now - lastMark) * 100) / 100, ...sanitized })}\n`, { encoding: "utf8", mode: 0o600 });

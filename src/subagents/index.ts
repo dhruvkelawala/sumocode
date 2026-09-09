@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activityFromSubagentSnapshot } from "../activity/subagent-adapter.js";
 import { renderSubagentStatusRow, type SubagentStatusRunningEntry } from "../subagent-status-row.js";
+import { logDiagnostic } from "../sumo-tui/runtime/diagnostics.js";
 import { BUILT_IN_TOOLS, getBuiltInToolsFromActiveTools } from "../native-task-config.js";
 import { getTerminalHost } from "../terminal-host/index.js";
 import type { TerminalHost } from "../terminal-host/types.js";
@@ -11,11 +13,20 @@ import type { SubagentSnapshot } from "./domain.js";
 import { SubagentManager, type SubagentManagerDependencies } from "./manager.js";
 import { buildSubagentResultMessage } from "./prompt.js";
 import { registerSubagentTools } from "./tools.js";
+import { RetainedRuntime } from "./retained-runtime.js";
 
 export { SubagentManager } from "./manager.js";
 export type { AtCapacityDetails, SpawnSubagentTask } from "./manager.js";
 
+const LIFECYCLE_KEY = Symbol.for("@dhruvkelawala/sumocode/subagent-replacements");
+function pendingReplacements(): Set<SubagentManager> {
+	// SAFETY: only this module writes this namespaced host-owned set, including across reloads.
+	const state = globalThis as typeof globalThis & { [LIFECYCLE_KEY]?: Set<SubagentManager> };
+	return state[LIFECYCLE_KEY] ??= new Set();
+}
+
 const SUBAGENT_STATUS_WIDGET_KEY = "sumocode-subagents";
+const SUBAGENT_DELIVERY_ERROR_MAX = 4_096;
 
 /** Delivery `details` contract for a settled subagent result. */
 interface SettledSubagentDetails {
@@ -62,17 +73,27 @@ const settledPayload = (snapshot: SubagentSnapshot): DeliveryPayload => {
 };
 
 export interface SubagentsInstallOptions {
+	readonly retention?: RetainedRuntime | false;
 	readonly terminalHost?: TerminalHost;
 	readonly spawnPaneChild?: typeof spawnPaneChild;
 	readonly spawnPiChild?: typeof spawnPiChild;
 	readonly managerDependencies?: SubagentManagerDependencies;
+	/** A private registry supplied by an embedding caller overrides installation discovery. */
+	readonly retainedRegistry?: import("./registry.js").SubagentRegistry;
 }
 
 export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOptions = {}): SubagentManager {
+	const retention = options.retention === false ? undefined : options.retention ?? new RetainedRuntime();
 	const host = options.terminalHost ?? getTerminalHost();
 	const spawnPane = options.spawnPaneChild ?? spawnPaneChild;
 	const spawnHeadless = options.spawnPiChild ?? spawnPiChild;
-	const manager = new SubagentManager((task) => {
+	const manager: SubagentManager = new SubagentManager(async (task) => {
+		if (retention) {
+			const sessionId = latestContext?.sessionManager.getSessionId();
+			if (!sessionId) throw new Error("retained subagent session unavailable");
+			const child = await retention.spawn(task, sessionId, manager.controllerIdentity, host, pi);
+			if (child) return child;
+		}
 		if (task.visible) {
 			if (!task.placement) {
 				return {
@@ -101,7 +122,7 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 			// toward LESS access, never more — acceptable until pi grows a
 			// built-ins-only restriction flag.
 			const paneNarrowed = task.builtInTools !== undefined && paneBuiltIn.length < BUILT_IN_TOOLS.length;
-			return spawnPane({
+			const child = spawnPane({
 				prompt: task.prompt,
 				name: task.title,
 				cwd: task.cwd,
@@ -115,8 +136,9 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 				pi,
 				placement: task.placement,
 			});
+			return retention ? { ...child, retentionUnsupported: true } : child;
 		}
-		return spawnHeadless({
+		const child = spawnHeadless({
 			prompt: task.prompt,
 			cwd: task.cwd,
 			model: task.model,
@@ -126,13 +148,16 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 			appendSystemPrompt: task.appendSystemPrompt,
 			signal: task.signal,
 		});
+		return retention ? { ...child, retentionUnsupported: true } : child;
 	}, {
+		idNamespace: retention ? randomUUID() : undefined,
 		terminalHost: host,
 		pi,
 		// Herdr injects the caller tab into the RPC child. Seed visible placement
 		// with it so the first child is actually beside the operator instead of
 		// disappearing into a background `subagents` tab.
 		initialVisibleTabId: host.kind === "herdr" ? process.env.HERDR_TAB_ID : undefined,
+		onDiagnostic: (diagnostic) => logDiagnostic("subagent_manager_diagnostic", { ...diagnostic }),
 		...options.managerDependencies,
 	});
 	const delivery = createDeferredResultDelivery();
@@ -203,17 +228,25 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 		statusWidgetVisible = false;
 	};
 
-	const flush = (): void => {
-		for (const payload of delivery.drain()) {
-			pi.sendMessage(
-				{
-					customType: "subagent-result",
-					content: payload.content,
-					display: true,
-					details: payload.details,
-				},
-				{ deliverAs: "followUp", triggerTurn: true },
-			);
+	const flush = (mayRetry = true): void => {
+		try {
+			delivery.flush((payload) => {
+				if (!latestContext || !manager.canDeliver(payload.id)) return;
+				manager.deliver(payload, (outgoing) => pi.sendMessage(
+					{
+						customType: outgoing.customType ?? "subagent-result",
+						content: outgoing.content,
+						display: true,
+						details: outgoing.details,
+					},
+					{ deliverAs: "followUp", triggerTurn: true },
+				));
+			});
+		// oxlint-disable-next-line anti-slop/no-unknown-parameters -- ExtensionAPI.sendMessage may throw any JavaScript value at this effect boundary.
+		} catch (error: unknown) {
+			const message = (error instanceof Error ? error.message : String(error)).slice(0, SUBAGENT_DELIVERY_ERROR_MAX);
+			logDiagnostic("subagent_delivery_failed", { message });
+			if (mayRetry) queueMicrotask(() => { flush(false); });
 		}
 	};
 
@@ -221,7 +254,7 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 		for (const snapshot of manager.list()) {
 			if (snapshot.status === "running" || snapshot.status === "queued" || observedSettledIds.has(snapshot.id)) continue;
 			observedSettledIds.add(snapshot.id);
-			if (manager.consumedIds.has(snapshot.id)) delivery.consume(snapshot.id);
+			if (manager.consumedIds.has(snapshot.id) || !manager.canDeliver(snapshot.id)) delivery.consume(snapshot.id);
 			else delivery.defer(snapshot.id, () => settledPayload(snapshot));
 		}
 		// Prune the mirror sets in lockstep with the manager's MAX_TRACKED prune
@@ -241,12 +274,13 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 	 * Arm the delivery listener for this factory instance. Pi 0.80.6 recreates
 	 * extension factories for /new, /resume, and /fork; RPC mode may still bind
 	 * session_start more than once on the new instance, so this remains
-	 * idempotent. Mark pre-existing snapshots consumed so a repeated bind cannot
-	 * deliver stale settlement noise into the active session.
+	 * idempotent. Mark only pre-existing terminal snapshots consumed; running
+	 * children must remain eligible to deliver when this manager is reused.
 	 */
 	const armDelivery = (): void => {
 		if (unsubscribe) return;
 		for (const snapshot of manager.list()) {
+			if (snapshot.status !== "done" && snapshot.status !== "error") continue;
 			observedSettledIds.add(snapshot.id);
 			delivery.consume(snapshot.id);
 		}
@@ -255,9 +289,28 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 	armDelivery();
 
 	registerSubagentTools(pi, manager, delivery, host);
-	pi.on("session_start", (_event, ctx) => {
+	pi.on("session_start", async (_event, ctx) => {
 		latestContext = ctx;
 		armDelivery();
+		for (const previous of pendingReplacements()) {
+			try {
+				await manager.adoptFrom(previous, ctx.sessionManager.getSessionId());
+			} catch {
+				// A corrupt or conflicting replacement must degrade this startup, not wedge every later replacement.
+				logDiagnostic("subagent_startup_recovery_refused", { scope: "adoption" });
+			} finally {
+				pendingReplacements().delete(previous);
+			}
+		}
+		if (options.retainedRegistry || retention) {
+			try {
+				const sessionId = ctx.sessionManager.getSessionId();
+				await manager.reconstruct(options.retainedRegistry ?? retention!.registry(sessionId), sessionId);
+			} catch {
+				// Corrupt retained evidence stays on disk for inspection; startup still publishes status and delivery.
+				logDiagnostic("subagent_startup_recovery_refused", { scope: "reconstruction" });
+			}
+		}
 		publishStatusWidget();
 		if (ctx.isIdle()) flush();
 	});
@@ -266,21 +319,17 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 		latestContext = ctx;
 		flush();
 	});
-	// CONSCIOUS DIVERGENCE from durable terminal shutdown: terminal tasks
-	// detach their replaced manager and leave children running across
-	// /reload,/new,/resume,/fork because the next manager adopts on-disk state.
-	// Subagents have NO persistent registry (durable reattach is a recorded
-	// deferral in plan 065) — a child surviving a reload would be an orphaned,
-	// unsupervised pi process nobody can harvest, steer, or stop, which is
-	// worse than losing in-flight work. Kill on EVERY shutdown until a durable
-	// registry exists; when it does, adopt the terminal lifecycle model.
-	pi.on("session_shutdown", () => {
+	pi.on("session_shutdown", (event) => {
 		clearStatusWidget(latestContext);
 		latestContext = undefined;
 		unsubscribe?.();
 		unsubscribe = undefined;
 		delivery.clear();
-		manager.disposeAll();
+		if (["new", "fork", "resume", "reload"].includes(event.reason)) {
+			// Defer detachment until session_start identifies a distinct successor; Pi may reuse this manager.
+			manager.prepareForReplacement();
+			pendingReplacements().add(manager);
+		} else manager.disposeAll();
 	});
 	return manager;
 }

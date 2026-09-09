@@ -1,0 +1,111 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, expect, it, vi } from "vitest";
+import { TerminalTaskManager } from "./task-manager.js";
+import { TerminalTaskStore } from "./task-store.js";
+import { TERMINAL_TASK_SCHEMA_VERSION, type TerminalTaskSnapshot } from "./task-types.js";
+
+const roots: string[] = [];
+const managers: TerminalTaskManager[] = [];
+afterEach(() => {
+	for (const manager of managers.splice(0)) manager.detach();
+	vi.useRealTimers();
+	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+// The 10,000-record fixture isolates retained heap shape from filesystem timing.
+// Real indexed-path/validation behavior remains covered by task-store.test.ts.
+class HistoryStore extends TerminalTaskStore {
+	public reads = 0;
+	public scans = 0;
+	public readonly records: TerminalTaskSnapshot[];
+	public constructor(active: number, settled: number) {
+		const rootDir = mkdtempSync(join(tmpdir(), "terminal-scale-"));
+		roots.push(rootDir);
+		super({ rootDir });
+		this.records = Array.from({ length: active + settled }, (_, index): TerminalTaskSnapshot => ({
+			schemaVersion: TERMINAL_TASK_SCHEMA_VERSION,
+			revision: 1,
+			id: `term-${index}`,
+			ownerSessionId: "owner",
+			command: "true",
+			cwd: rootDir,
+			title: `terminal ${index}`,
+			createdAt: index + 1,
+			updatedAt: 20_000,
+			completionPolicy: "passive",
+			logFile: join(rootDir, `term-${index}-${index + 1}`, "output.log"),
+			...(index < active ? { status: "starting", deliveryState: "none" } as const : {
+				status: "completed", deliveryState: "delivered", settledAt: index + 1,
+				exitCode: 0, completionId: `completion-${index}`,
+			} as const),
+		}));
+	}
+	public override refreshIndex() {
+		this.scans += 1;
+		return { ok: true, complete: true, snapshots: this.records };
+	}
+	public override getIndexed(id: string) {
+		this.reads += 1;
+		return this.records[Number(id.slice(5))];
+	}
+	public override getIndexedStamp(id: string) {
+		return String(this.records[Number(id.slice(5))]?.revision);
+	}
+	public override isIndexedOwner(id: string, owner: string) {
+		return this.records[Number(id.slice(5))]?.ownerSessionId === owner;
+	}
+	public override listOwnedIndexed(owner: string) {
+		return this.records.filter((record) => record.ownerSessionId === owner).reverse();
+	}
+}
+
+function fixture(active: number, settled = 0) {
+	vi.useFakeTimers();
+	const store = new HistoryStore(active, settled);
+	const manager = new TerminalTaskManager({
+		store, now: () => 20_000, scheduleIndexInitialization: (initialize) => initialize(),
+	});
+	managers.push(manager);
+	return { manager, store };
+}
+
+it.each([0, 1, 100])("characterizes supervision work: %i active tasks plus 10000 settled use one supervision scheduler", async (active) => {
+	const { manager, store } = fixture(active, 10_000);
+	await vi.advanceTimersByTimeAsync(0);
+	store.reads = 0;
+	expect(vi.getTimerCount()).toBe(active === 0 ? 0 : 1);
+	await vi.advanceTimersByTimeAsync(250);
+	expect(store.scans).toBe(1);
+	expect(store.reads).toBe(0);
+	expect(manager.getSnapshots()).toHaveLength(active + 64);
+	expect(manager.getSupervisionStats()).toMatchObject({ snapshots: active + 64, runtime: active });
+	expect(manager.getSupervisionStats().callbacks).toBe(active === 0 ? 0 : 1);
+	manager.detach();
+	const reads = store.reads;
+	await vi.advanceTimersByTimeAsync(1_000);
+	expect(store.reads).toBe(reads);
+	expect(vi.getTimerCount()).toBe(0);
+});
+
+it("queries an evicted old ID directly without retaining it or scanning history", () => {
+	const { manager, store } = fixture(0, 10_000);
+	store.reads = 0;
+	expect(manager.get("term-0", "foreign-owner")).toBeUndefined();
+	expect(store.reads).toBe(0);
+	expect(manager.get("term-0", "owner")?.id).toBe("term-0");
+	expect(store.reads).toBe(1);
+	expect(store.scans).toBe(1);
+	expect(manager.getSupervisionStats()).toEqual({ snapshots: 64, runtime: 0, callbacks: 0 });
+	expect(store.listOwnedIndexed("owner")).toHaveLength(10_000);
+});
+
+it("characterizes supervision work: bounds heavyweight settled state for 10000 records", () => {
+	const { manager, store } = fixture(0, 10_000);
+	expect(manager.getSupervisionStats()).toEqual({ snapshots: 64, runtime: 0, callbacks: 0 });
+	expect(manager.list("owner")).toHaveLength(64);
+	expect(store.records).toHaveLength(10_000);
+	expect(store.scans).toBe(1);
+	expect(vi.getTimerCount()).toBe(0);
+});

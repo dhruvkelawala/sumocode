@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { sanitizeActivityText } from "../activity/domain.js";
+import { redactActivityOutputTail, redactActivitySecrets, sanitizeActivityForFeed } from "../activity/feed-publisher.js";
 import { TerminalTaskManager } from "./task-manager.js";
 import {
 	buildObservationResult,
@@ -18,6 +18,7 @@ const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
 const MAX_WAIT_TIMEOUT_MS = 300_000;
 const MAX_TERMINAL_IDS = 64;
 const COMPLETION_OUTPUT_BYTES = 8 * 1024;
+const REDACTION_CONTEXT_BYTES = 64 * 1024;
 
 interface UnsafeStringSchema<T> {
 	type: "string";
@@ -35,9 +36,65 @@ function makeToolResult<TDetails>(text: string, details?: TDetails) {
 	return { content: [{ type: "text" as const, text }], details };
 }
 
+function sessionActivity(task: TerminalTaskSnapshot, output: string) {
+	return sanitizeActivityForFeed(terminalActivitySnapshot(task, output), task.ownerSessionId);
+}
+
+function sessionTask(task: TerminalTaskSnapshot) {
+	const { command: _omitted, ...visible } = task;
+	return {
+		...visible,
+		title: redactActivitySecrets(task.title),
+		cwd: redactActivitySecrets(task.cwd),
+		logFile: redactActivitySecrets(task.logFile),
+	};
+}
+
+function readRedactedOutputTail(manager: TerminalTaskManager, task: TerminalTaskSnapshot, maxBytes: number): string {
+	try {
+		const tail = manager.getOutputTailBytes(task, REDACTION_CONTEXT_BYTES);
+		return redactActivityOutputTail(tail.bytes, {
+			maxBytes,
+			contextBytes: REDACTION_CONTEXT_BYTES,
+			truncated: tail.truncated,
+			truncatedLineReplacement: "[truncated line redacted]",
+		});
+	} catch {
+		return "";
+	}
+}
+
+function redactCapturedOutput(output: string, maxBytes: number): string {
+	return redactActivityOutputTail(output, {
+		maxBytes,
+		contextBytes: maxBytes,
+		// A full captured window may begin after its credential label.
+		truncated: Buffer.byteLength(output, "utf8") >= maxBytes,
+		truncatedLineReplacement: "[truncated line redacted]",
+	});
+}
+
+function sessionObservation(manager: TerminalTaskManager, observation: { readonly task: TerminalTaskSnapshot; readonly output: string }) {
+	return { task: sessionTask(observation.task), output: readRedactedOutputTail(manager, observation.task, 16 * 1024) };
+}
+
+function sessionStopResult(manager: TerminalTaskManager, result: TerminalStopResult) {
+	return {
+		...result,
+		task: result.task ? sessionTask(result.task) : undefined,
+		output: result.output === undefined
+			? undefined
+			: result.task ? readRedactedOutputTail(manager, result.task, COMPLETION_OUTPUT_BYTES) : redactCapturedOutput(result.output, COMPLETION_OUTPUT_BYTES),
+		message: redactActivitySecrets(result.message),
+	};
+}
+
 function terminalActivityFromStopResult(manager: TerminalTaskManager, result: TerminalStopResult) {
 	if (!result.task) return undefined;
-	return terminalActivitySnapshot(result.task, result.output ?? manager.getOutput(result.task, COMPLETION_OUTPUT_BYTES));
+	const output = result.output === undefined
+		? readRedactedOutputTail(manager, result.task, COMPLETION_OUTPUT_BYTES)
+		: redactCapturedOutput(result.output, COMPLETION_OUTPUT_BYTES);
+	return sessionActivity(result.task, output);
 }
 
 function sessionId(ctx: ExtensionContext): string {
@@ -98,12 +155,12 @@ function completionsFromContext(ctx: ExtensionContext): ObservableCompletions {
 }
 
 function completionDetails(manager: TerminalTaskManager, task: TerminalTaskSnapshot) {
-	const output = sanitizeActivityText(manager.getOutput(task, COMPLETION_OUTPUT_BYTES)).slice(-COMPLETION_OUTPUT_BYTES);
+	const output = readRedactedOutputTail(manager, task, COMPLETION_OUTPUT_BYTES);
 	return {
 		completionId: task.completionId,
 		deliveryClaimToken: task.deliveryClaimToken,
 		ownerSessionId: task.ownerSessionId,
-		activity: terminalActivitySnapshot(task, output),
+		activity: sessionActivity(task, output),
 	};
 }
 
@@ -125,7 +182,12 @@ export class TerminalDeliveryCoordinator {
 
 	public bind(ctx: ExtensionContext): void {
 		this.active = { ownerSessionId: sessionId(ctx), ctx };
-		this.safeReconcile(ctx);
+		// The queued flush is the sole startup pass: acknowledge visible receipts,
+		// reclaim eligible completions, preserve passive-before-wake ordering, and
+		// schedule any remaining lease retry from one manager projection.
+		// Flush is idle-dependent: it returns without delivering while ctx.isIdle()
+		// is false, and agent_end/agent_settled re-run flushWhenIdle so a busy
+		// startup still converges once the session settles.
 		this.requestFlush();
 	}
 
@@ -154,12 +216,12 @@ export class TerminalDeliveryCoordinator {
 
 	public reconcile(ctx: ExtensionContext): void {
 		const ownerSessionId = sessionId(ctx);
+		this.acknowledgeObservable(ctx, ownerSessionId);
+		this.syncLeaseRetry(ownerSessionId);
+	}
+
+	private acknowledgeObservable(ctx: ExtensionContext, ownerSessionId: string): void {
 		this.manager.acknowledge(ownerSessionId, completionsFromContext(ctx).receipts);
-		const retryDelay = this.manager.getClaimRetryDelay(ownerSessionId);
-		if (retryDelay === undefined && this.retryTimer) {
-			clearTimeout(this.retryTimer);
-			this.retryTimer = undefined;
-		}
 	}
 
 	private safeReconcile(ctx: ExtensionContext): void {
@@ -189,19 +251,22 @@ export class TerminalDeliveryCoordinator {
 
 	private flush(): void {
 		const active = this.active;
-		if (!active || this.flushing || !active.ctx.isIdle()) return;
+		if (!active || this.flushing || !active.ctx.isIdle() || !this.manager.isIndexReady()) return;
 		this.flushing = true;
 		try {
-			this.reconcile(active.ctx);
+			this.acknowledgeObservable(active.ctx, active.ownerSessionId);
+			let sentMessage = false;
 			const claimed = this.manager.claimPending(active.ownerSessionId, true, 1)
 				.sort((left, right) => Number(left.completionPolicy === "wake") - Number(right.completionPolicy === "wake"));
 			for (const task of claimed) {
-				// An explicit observer or an expired concurrent claimant can take
-				// ownership before this stack reaches send. The unique claim token,
-				// not completionId alone, decides which coordinator may publish.
-				const current = this.manager.get(task.id, active.ownerSessionId);
+				// Authoritative pre-send read, scoped to this session's owner: a
+				// different process may have reclaimed the claim token after our
+				// selection, which the retained projection cannot see. The unique claim
+				// token, not completionId alone, decides which coordinator may publish.
+				const current = this.manager.readIndexed(task.id, active.ownerSessionId);
+				if (!current) continue;
 				if (
-					current?.deliveryState !== "claimed" || !current.deliveryClaimToken ||
+					current.deliveryState !== "claimed" || !current.deliveryClaimToken ||
 					current.completionId !== task.completionId || current.deliveryClaimToken !== task.deliveryClaimToken
 				) continue;
 				const observable = completionsFromContext(active.ctx);
@@ -219,23 +284,35 @@ export class TerminalDeliveryCoordinator {
 				this.pi.sendMessage(
 					{
 						customType: "terminal-result",
-						content: buildTerminalResultMessage(current, this.manager.getOutput(current, COMPLETION_OUTPUT_BYTES)),
+						content: buildTerminalResultMessage(current, readRedactedOutputTail(this.manager, current, COMPLETION_OUTPUT_BYTES)),
 						display: true,
 						details,
 					},
 					{ deliverAs: "followUp", triggerTurn: current.completionPolicy === "wake" },
 				);
+				sentMessage = true;
 				if (current.completionPolicy === "wake") break;
 			}
-			queueMicrotask(() => {
-				if (this.active?.ownerSessionId !== active.ownerSessionId) return;
-				this.safeReconcile(this.active.ctx);
-			});
-			const retryDelay = this.manager.getClaimRetryDelay(active.ownerSessionId);
-			if (retryDelay !== undefined) this.scheduleLeaseRetry(retryDelay);
+			if (sentMessage) {
+				queueMicrotask(() => {
+					if (this.active?.ownerSessionId !== active.ownerSessionId) return;
+					this.safeReconcile(this.active.ctx);
+				});
+			}
+			this.syncLeaseRetry(active.ownerSessionId);
 		} finally {
 			this.flushing = false;
 		}
+	}
+
+	private syncLeaseRetry(ownerSessionId: string): void {
+		const retryDelay = this.manager.getClaimRetryDelay(ownerSessionId);
+		if (retryDelay !== undefined) {
+			this.scheduleLeaseRetry(retryDelay);
+			return;
+		}
+		if (this.retryTimer) clearTimeout(this.retryTimer);
+		this.retryTimer = undefined;
 	}
 
 	private scheduleLeaseRetry(delayMs: number): void {
@@ -276,7 +353,7 @@ export function installTerminalTools(
 				title: params.title,
 				completionPolicy: params.completion ?? "passive",
 			});
-			return makeToolResult(buildStartResult(task), { task, activity: terminalActivitySnapshot(task, "") });
+			return makeToolResult(buildStartResult(task), { task: sessionTask(task), activity: sessionActivity(task, "") });
 		},
 	});
 
@@ -291,9 +368,10 @@ export function installTerminalTools(
 			coordinator.touch(ctx);
 			const observation = manager.check(params.id, sessionId(ctx));
 			if (!observation) return makeToolResult(`Unknown terminal ${params.id}.`, { id: params.id, status: "unknown" });
-			return makeToolResult(buildObservationResult(observation), {
-				task: observation.task,
-				activity: terminalActivitySnapshot(observation.task, observation.output),
+			const visible = sessionObservation(manager, observation);
+			return makeToolResult(buildObservationResult({ task: observation.task, output: visible.output }), {
+				...visible,
+				activity: sessionActivity(observation.task, visible.output),
 			});
 		},
 	});
@@ -311,9 +389,13 @@ export function installTerminalTools(
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			coordinator.touch(ctx);
 			const result = await manager.wait(params.ids, sessionId(ctx), params.timeout_ms ?? DEFAULT_WAIT_TIMEOUT_MS, signal);
-			return makeToolResult(buildWaitResult(result), {
-				...result,
-				activities: result.settled.map(({ task, output }) => terminalActivitySnapshot(task, output)),
+			const settled = result.settled.map((observation) => sessionObservation(manager, observation));
+			return makeToolResult(buildWaitResult({ ...result, settled: settled.map((observation, index) => ({ task: result.settled[index]!.task, output: observation.output })) }), {
+				settled,
+				pendingIds: result.pendingIds,
+				unknownIds: result.unknownIds,
+				timedOut: result.timedOut,
+				activities: result.settled.map(({ task }, index) => sessionActivity(task, settled[index]!.output)),
 			});
 		},
 	});
@@ -330,8 +412,9 @@ export function installTerminalTools(
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			coordinator.touch(ctx);
 			const results = await manager.stop(params.ids, sessionId(ctx));
-			return makeToolResult(buildStopResult(results), {
-				results,
+			const visible = results.map((result) => sessionStopResult(manager, result));
+			return makeToolResult(buildStopResult(visible), {
+				results: visible,
 				activities: results.map((result) => terminalActivityFromStopResult(manager, result))
 					.filter((activity): activity is NonNullable<typeof activity> => activity !== undefined),
 			});
@@ -351,7 +434,7 @@ export function installTerminalTools(
 			const tasks = manager.list(sessionId(ctx));
 			return makeToolResult(
 				tasks.length > 0 ? tasks.map(describeTerminal).join("\n") : "No terminals tracked for this session.",
-				{ tasks },
+				{ tasks: tasks.map(sessionTask) },
 			);
 		},
 	});

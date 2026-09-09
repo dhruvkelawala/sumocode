@@ -105,6 +105,16 @@ export function activityNote(activity: ActivitySnapshot): string | undefined {
 	return undefined;
 }
 
+function subagentHealthNote(activity: ActivitySnapshot): boolean {
+	return activity.kind === "subagent" && activity.status === "running"
+		&& ["active", "quiet", "stalled-warning", "over-budget-warning"].includes(activity.currentStep ?? "");
+}
+
+function noteColor(activity: ActivitySnapshot, roles: ActivityLedgerRoles): string {
+	return subagentHealthNote(activity) && activity.currentStep?.endsWith("-warning")
+		? activeThemeColors().states.approval : roles.bodyMuted;
+}
+
 function styledHeaderParts(activity: ActivitySnapshot, roles: ActivityLedgerRoles): Span[] {
 	return [
 		span(activityStatusGlyph(activity.status), { fg: activityStatusColor(activity.status) }),
@@ -130,7 +140,7 @@ export function renderCompactActivityPill(activity: ActivitySnapshot): string {
 	const note = noteValue === target ? undefined : noteValue;
 	return lineToAnsi(textLine([
 		...styledHeaderParts(activity, roles),
-		...(note ? [span("  · ", { fg: roles.bodyMuted }), span(note, { fg: roles.bodyMuted })] : []),
+		...(note ? [span("  · ", { fg: roles.bodyMuted }), span(note, { fg: noteColor(activity, roles) })] : []),
 		span("  · ", { fg: roles.bodyMuted }),
 		span(compactHint(activity), { fg: roles.bodyMuted }),
 	]));
@@ -164,7 +174,7 @@ function renderHeader(activity: ActivitySnapshot, width: number, roles: Activity
 	const right: Span[] = [
 		span(" "),
 		span(activityStatusGlyph(activity.status), { fg: activityStatusColor(activity.status) }),
-		...(note ? [span(" "), span(note, { fg: roles.bodyMuted })] : []),
+		...(note ? [span(" "), span(note, { fg: noteColor(activity, roles) })] : []),
 		span(" "),
 	];
 	const rawSubject = activity.subject ?? (activity.body?.kind === "terminal" ? activity.body.command : undefined);
@@ -448,6 +458,9 @@ function renderStreamBody(activity: ActivitySnapshot, width: number, roles: Acti
 		rows.push(...rendered.rows);
 		if (rendered.truncated) reasons.push(reason);
 	};
+	// Health and the explicit next action survive a full output/tool tail.
+	const healthBody = subagentHealthNote(activity) && body?.kind === "text";
+	if (healthBody) appendParts([span(body.text, { fg: noteColor(activity, roles) })], 12, "health details collapsed");
 	const invocation = includeInvocation
 		? body?.kind === "terminal" && body.command
 			? body.command
@@ -474,7 +487,7 @@ function renderStreamBody(activity: ActivitySnapshot, width: number, roles: Acti
 	if (metrics) appendParts([span(metrics, { fg: roles.bodyMuted })], 1, "metrics collapsed");
 
 	const candidates = body
-		? [body.text, activity.outputTail]
+		? [healthBody ? undefined : body.text, activity.outputTail]
 		: [activity.currentStep, activity.outputTail, activity.result?.error, activity.result?.summary];
 	const boundedContent = boundedStreamLines(candidates, invocation);
 	const lines = boundedContent.lines;

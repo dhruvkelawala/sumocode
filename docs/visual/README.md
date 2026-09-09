@@ -1,84 +1,32 @@
-# SumoCode Visual Harness
+# SumoCode visual verification
 
-Headless reproducible screenshots of SumoCode running inside Pi, used for
-Cathedral visual parity verification.
+The [V2 parity contract](parity/CONTRACT.md) is canonical. Component fixtures, full transcript fixtures and real RPC-host runtime captures converge on ANSI replay through xterm/headless, a cell snapshot and a DOM terminal renderer.
 
-## V2 Cathedral Visual Harness
-
-- PRD: https://github.com/dhruvkelawala/sumocode/issues/78
-- Technical spec: [`V2_HARNESS_SPEC.md`](./V2_HARNESS_SPEC.md)
-
-V2 compares Visual Bible targets against deterministic retained-TUI runtime and component captures. It is crop-first, review-only initially, and promotes approved runtime goldens explicitly before they become CI-blocking.
-
-Run V2 locally:
-
-```bash
-pnpm render:bible
-pnpm visual:review
-```
-
-Outputs:
-
-```txt
-docs/visual/out/parity/index.html
-docs/visual/out/parity/results.json
-```
-
-Run one scenario or lane:
-
-```bash
-pnpm visual:review -- --scenario input-typed-component
-pnpm visual:review -- --lane runtime
-```
-
-CI mode uses the same renderer but fails only on hard capture/render failures and `required` crop drift:
-
-```bash
-pnpm visual:ci
-```
-
-Promote an explicitly approved crop to a committed runtime golden:
-
-```bash
-pnpm visual:promote -- --scenario input-typed-component --crop input-frame --status approved
-```
-
-## How it works
-
-[`vhs`](https://github.com/charmbracelet/vhs) renders scripted terminal sessions
-to PNG/GIF. Each `.tape` file under `docs/visual/` defines one scenario:
-
-- launches a fresh Pi process
-- types/sleeps to drive Pi into the state we want to verify
-- writes a PNG into `docs/visual/out/`
-
-Because `vhs` is headless, output is identical regardless of whether the
-developer environment is Herdr over Ghostty, standalone Ghostty, iTerm, or Kitty. Ghostty uses `libghostty`
-under the hood so glyph fallback and 24-bit color match what `vhs` produces.
+Styled-cell comparison is the primary content/style evidence. Geometry audits check row categories and column bounds. PNG crops support visual review and required approved-runtime-golden checks. Browser screenshots do not prove identical font fallback across terminal emulators.
 
 ## Run
 
 ```bash
-pnpm visual
+pnpm render:bible
+pnpm visual:review
+pnpm visual:ci
 ```
 
-Outputs PNGs into `docs/visual/out/`. The directory is git-ignored.
+Review one scenario or lane:
 
-## Adding a scenario
+```bash
+pnpm visual:review -- --scenario input-typed-component
+pnpm visual:review -- --lane fixture
+```
 
-1. Copy an existing tape next to it as `<scenario>.tape`.
-2. Adjust the `Type "..."` / `Sleep` lines to drive Pi into that state.
-3. `pnpm visual` to render.
-4. Open the resulting PNG (or read it from a coding agent) to verify.
+Generated evidence lives under docs/visual/out/parity: index.html, results.json and each scenario's raw styled-cell-diff.txt and geometry-audit.txt, followed by PNG captures and crop diffs. Inspect the text reports first. Outputs stay ignored.
 
-## Pi runtime
+CI rejects capture/render failures and drift in required approved crops. Review-only scenes remain evidence until explicitly approved. Bible differences do not automatically authorize runtime changes or golden promotion. `pnpm visual:promote` requires Dhruv's explicit approval of the particular capture.
 
-The harness assumes:
+## Add or change a scenario
 
-- `pi` is on `PATH`
-- the SumoCode extension is installed (`pi install ...`)
-- Anthropic / OpenAI auth is already cached in `~/.pi/agent/auth.json`,
-  because `vhs` runs non-interactively and cannot complete OAuth flows
+Edit `docs/visual/parity/scenarios.json` using an existing scenario in the appropriate component, fixture or runtime lane. Fixture captures use production view-model/rendering seams; runtime captures launch `./bin/sumocode.sh --offline --no-extensions --no-session` through the owned PTY harness. Keep input deterministic and inspect all generated reports before requesting review.
 
-If you want a "fresh boot, no auth" capture, set `PI_NO_AUTH=1` in the tape
-before launching. (TODO: wire up.)
+The worktree disposition fixture renders the production retained Activity summary and Divine Query action menu; it is review-only. Existing approved goldens are unchanged. The [Bible inventory](../ui/bible/README.md) describes design targets; a design lock is not implementation approval.
+
+Legacy VHS/tape experiments are historical and do not define the active workflow. Live terminal captures are debugging aids; V2 parity defines the CI gate.

@@ -1,6 +1,82 @@
-import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { buildSpawnEnv } from "./spawn-pi-pty.js";
+import { appendFileSync, chmodSync, existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import type { IDisposable, IEvent, IPty } from "node-pty";
+import { describe, expect, it } from "vitest";
+import { createChildEvidenceContext, HARNESS_SIGNATURE, HARNESS_SIGNATURE_ENV_KEY, recordPtyExit, requireHarnessAuth, spawnSupervisedPty } from "./harness-supervisor.js";
+import { buildSpawnEnv, spawnPiPty, type SpawnPiPtyOptions } from "./spawn-pi-pty.js";
+
+type PtySpawn = NonNullable<SpawnPiPtyOptions["spawn"]>;
+type PtySpawnOptions = Parameters<PtySpawn>[2];
+type PtyExitListener = Parameters<IEvent<{ exitCode: number; signal?: number }>>[0];
+
+interface SpawnCall {
+	readonly options: PtySpawnOptions;
+}
+
+class FakePty implements IPty {
+	public readonly pid = 123;
+	public readonly cols = 100;
+	public readonly rows = 30;
+	public readonly process = "synthetic-pty";
+	public handleFlowControl = false;
+	public readonly killSignals: Array<string | undefined> = [];
+	private readonly disposable: IDisposable = { dispose(): void {} };
+	private exitListener: PtyExitListener | undefined;
+
+	public readonly onData: IEvent<string> = () => this.disposable;
+	public readonly onExit: IEvent<{ exitCode: number; signal?: number }> = (listener) => {
+		this.exitListener = listener;
+		return this.disposable;
+	};
+
+	public resize(_columns: number, _rows: number): void {}
+	public clear(): void {}
+	public write(_data: string | Buffer): void {}
+	public kill(signal?: string): void {
+		this.killSignals.push(signal);
+	}
+	public pause(): void {}
+	public resume(): void {}
+
+	public exit(): void {
+		this.exitListener?.({ exitCode: 0, signal: 0 });
+	}
+}
+
+class FakePtySpawner {
+	public readonly calls: SpawnCall[] = [];
+	public readonly ptys: FakePty[] = [];
+	public error: Error | undefined;
+
+	public readonly spawn: PtySpawn = (_file, _args, options) => {
+		this.calls.push({ options });
+		if (this.error !== undefined) throw this.error;
+		const pty = new FakePty();
+		this.ptys.push(pty);
+		return pty;
+	};
+
+	public call(index: number): SpawnCall {
+		const call = this.calls[index];
+		if (call === undefined) throw new Error(`missing fake spawn call ${index}`);
+		return call;
+	}
+
+	public pty(index: number): FakePty {
+		const pty = this.ptys[index];
+		if (pty === undefined) throw new Error(`missing fake pty ${index}`);
+		return pty;
+	}
+}
+
+function agentDir(call: SpawnCall): string {
+	const value = call.options.env?.PI_CODING_AGENT_DIR;
+	if (value === undefined) throw new Error("spawn call has no Pi agent root");
+	return value;
+}
 
 describe("buildSpawnEnv", () => {
 	const retiredModuleKey = ["SUMO", "TUI", "MODULE"].join("_");
@@ -59,6 +135,37 @@ describe("buildSpawnEnv", () => {
 		expect(env.HOME).toBe("/Users/test");
 	});
 
+	it("scrubs inherited credential-shaped keys while preserving benign keys", () => {
+		const env = buildSpawnEnv(
+			{
+				OPENAI_TEST_CREDENTIAL: "provider-sentinel",
+				INTERNAL_ACCESS_TOKEN: "suffix-sentinel",
+				GITHUB_TOKEN: "github-sentinel",
+				GH_TOKEN: "gh-sentinel",
+				NPM_TOKEN: "npm-sentinel",
+				HF_TOKEN: "hf-sentinel",
+				DATABASE_SECRET: "secret-sentinel",
+				PATH: "/usr/bin",
+				HOME: "/Users/test",
+				EDITOR: "vi",
+				TERM: "vt100",
+			},
+			undefined,
+		);
+
+		expect(env.OPENAI_TEST_CREDENTIAL).toBeUndefined();
+		expect(env.INTERNAL_ACCESS_TOKEN).toBeUndefined();
+		expect(env.GITHUB_TOKEN).toBeUndefined();
+		expect(env.GH_TOKEN).toBeUndefined();
+		expect(env.NPM_TOKEN).toBeUndefined();
+		expect(env.HF_TOKEN).toBeUndefined();
+		expect(env.DATABASE_SECRET).toBeUndefined();
+		expect(env.PATH).toBe("/usr/bin");
+		expect(env.HOME).toBe("/Users/test");
+		expect(env.EDITOR).toBe("vi");
+		expect(env.TERM).toBe("xterm-256color");
+	});
+
 	it("applies pi-friendly defaults", () => {
 		const env = buildSpawnEnv({}, undefined);
 		expect(env.PI_OFFLINE).toBe("1");
@@ -77,16 +184,499 @@ describe("buildSpawnEnv", () => {
 
 	it("lets overrides win over scrub when intentionally setting the same key", () => {
 		const env = buildSpawnEnv(
-			{ SUMO_TUI_DEBUG: "1" },
-			{ SUMO_TUI_DEBUG: "0" },
+			{ SUMO_TUI_DEBUG: "1", ANTHROPIC_TEST_CREDENTIAL: "parent-sentinel" },
+			{ SUMO_TUI_DEBUG: "0", ANTHROPIC_TEST_CREDENTIAL: "synthetic-test-value" },
 		);
 		expect(env.SUMO_TUI_DEBUG).toBe("0");
+		expect(env.ANTHROPIC_TEST_CREDENTIAL).toBe("synthetic-test-value");
 	});
 
 	it("preserves overrides for unrelated env vars", () => {
 		const env = buildSpawnEnv({ HOME: "/Users/parent" }, { PI_CODING_AGENT_DIR: "/tmp/foo" });
 		expect(env.HOME).toBe("/Users/parent");
 		expect(env.PI_CODING_AGENT_DIR).toBe("/tmp/foo");
+	});
+});
+
+describe("spawnPiPty agent state isolation", () => {
+	it("creates private unique roots and removes them only after child exit", () => {
+		const spawner = new FakePtySpawner();
+		const first = spawnPiPty({ spawn: spawner.spawn });
+		spawnPiPty({ spawn: spawner.spawn });
+		const roots = [agentDir(spawner.call(0)), agentDir(spawner.call(1))];
+		const firstPty = spawner.pty(0);
+		const secondPty = spawner.pty(1);
+		try {
+			expect(roots[0]).not.toBe(roots[1]);
+			for (const root of roots) {
+				expect(root.startsWith(tmpdir())).toBe(true);
+				expect(existsSync(root)).toBe(true);
+				expect(statSync(root).mode & 0o077).toBe(0);
+			}
+
+			first.cleanup();
+			expect(firstPty.killSignals).toEqual(["SIGTERM"]);
+			expect(existsSync(roots[0])).toBe(true);
+
+			firstPty.exit();
+			expect(existsSync(roots[0])).toBe(false);
+			expect(existsSync(roots[1])).toBe(true);
+
+			secondPty.exit();
+			expect(existsSync(roots[1])).toBe(false);
+		} finally {
+			for (const pty of spawner.ptys) pty.exit();
+			for (const root of roots) rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("preserves a caller-owned root after child exit", () => {
+		const callerRoot = mkdtempSync(join(tmpdir(), "sumocode-caller-agent-"));
+		const spawner = new FakePtySpawner();
+		try {
+			const child = spawnPiPty({ env: { PI_CODING_AGENT_DIR: callerRoot }, spawn: spawner.spawn });
+			expect(agentDir(spawner.call(0))).toBe(callerRoot);
+			child.cleanup();
+			expect(existsSync(callerRoot)).toBe(true);
+			spawner.pty(0).exit();
+			expect(existsSync(callerRoot)).toBe(true);
+		} finally {
+			rmSync(callerRoot, { recursive: true, force: true });
+		}
+	});
+
+	it("removes a helper-owned root when spawning throws", () => {
+		const spawner = new FakePtySpawner();
+		spawner.error = new Error("synthetic spawn failure");
+
+		expect(() => spawnPiPty({ spawn: spawner.spawn })).toThrow("synthetic spawn failure");
+		const generatedRoot = agentDir(spawner.call(0));
+		try {
+			expect(existsSync(generatedRoot)).toBe(false);
+		} finally {
+			rmSync(generatedRoot, { recursive: true, force: true });
+		}
+	});
+});
+
+/**
+ * Plan 096 fixture table: one row per option-consumption class pinned to
+ * @earendil-works/pi-coding-agent 0.85.1 `dist/cli/args.js` `parseArgs()`.
+ * Each row runs `bin/sumocode.sh --dry-run <args>` under a real PTY so the
+ * launcher selects its RPC path and exercises `extract_first_positional`
+ * (the execFile-based dry-run tests above are non-TTY and never extract).
+ *
+ * Plan 101 (Pi compatibility matrix) reruns this table per supported Pi
+ * version: bump the pinned version here alongside the class table in
+ * `bin/sumocode.sh`, re-read the new `parseArgs()`, and adjust expectations.
+ * The prompt values are asserted literally under current behavior; Plan 097
+ * replaces them with redacted presence/length assertions.
+ */
+interface OptionConsumptionRow {
+	readonly name: string;
+	readonly args: readonly string[];
+	/** Literal extracted kickoff prompt; empty when nothing may be extracted. */
+	readonly expectedPrompt: string;
+	/** Space-joined argv forwarded to the child after extraction. */
+	readonly expectedArgs: string;
+	/** `--print` / `--mode` rows must keep the direct-Pi bypass (no RPC host, no extraction). */
+	readonly directBypass?: boolean;
+}
+
+const OPTION_CONSUMPTION_ROWS: readonly OptionConsumptionRow[] = [
+	{
+		name: "tui-mode consumes `regular` and extracts the real positional prompt",
+		args: ["--tui-mode", "regular", "review the diff"],
+		expectedPrompt: "review the diff",
+		expectedArgs: "--tui-mode regular",
+	},
+	{
+		name: "tui-mode equals form stays a single token",
+		args: ["--tui-mode=regular", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--tui-mode=regular",
+	},
+	{
+		name: "tui-mode with a missing value consumes nothing",
+		args: ["--tui-mode"],
+		expectedPrompt: "",
+		expectedArgs: "--tui-mode",
+	},
+	{
+		name: "tui-mode does not consume a dash-following value",
+		args: ["--tui-mode", "--offline", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--tui-mode --offline",
+	},
+	{
+		name: "tui-mode consumes an invalid plain value like Pi",
+		args: ["--tui-mode", "bogus", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--tui-mode bogus",
+	},
+	{
+		name: "tui-mode consumes an @file value as invalid like Pi",
+		args: ["--tui-mode", "@mode.txt", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--tui-mode @mode.txt",
+	},
+	{
+		name: "standalone @file stays a Pi fileArg and is never the prompt",
+		args: ["@notes.md", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "@notes.md",
+	},
+	{
+		name: "use-theme consumes an @-prefixed theme name",
+		args: ["--use-theme", "@cathedral/dark", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--use-theme @cathedral/dark",
+	},
+	{
+		name: "use-theme does not consume a dash-following value",
+		args: ["--use-theme", "--offline", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--use-theme --offline",
+	},
+	{
+		name: "known boolean --offline never consumes the prompt",
+		args: ["--offline", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--offline",
+	},
+	{
+		name: "unknown extension flag consumes one dash-free value",
+		args: ["--plan", "active", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--plan active",
+	},
+	{
+		name: "boolean-style unknown extension flag does not consume a following flag",
+		args: ["--plan", "--offline", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--plan --offline",
+	},
+	{
+		name: "unknown extension flag equals form stays a single token",
+		args: ["--plan=strict", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--plan=strict",
+	},
+	{
+		name: "list-models consumes a dash-free search pattern",
+		args: ["--list-models", "sonnet", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--list-models sonnet",
+	},
+	{
+		name: "list-models refuses an @file search pattern",
+		args: ["--list-models", "@models.txt", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--list-models @models.txt",
+	},
+	{
+		name: "unconditional value flags bind before and after the positional",
+		args: ["--model", "sonnet", "PROMPT", "--offline"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--model sonnet --offline",
+	},
+	{
+		name: "unconditional value flag consumes -- before a later --print direct bypass",
+		args: ["--model", "--", "--print", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "--model -- --print [redacted]",
+		directBypass: true,
+	},
+	{
+		name: "unknown short option is kept and never becomes the prompt",
+		args: ["-x", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "-x",
+	},
+	{
+		name: "unknown short option with no following token extracts nothing",
+		args: ["-x"],
+		expectedPrompt: "",
+		expectedArgs: "-x",
+	},
+	{
+		name: "empty-string positional is extracted as parsed.messages[0]",
+		args: ["", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "[redacted]",
+	},
+	// Conventional single `--`: the wrapper consumes it while parsing its own
+	// options, then preserves delimiter state for mode selection and prompt
+	// extraction.
+	{
+		name: "single end-of-options -- keeps post-delimiter --print on the RPC path",
+		args: ["--", "--print"],
+		expectedPrompt: "--print",
+		expectedArgs: "--",
+	},
+	{
+		name: "single end-of-options -- keeps post-delimiter -p on the RPC path",
+		args: ["--", "-p"],
+		expectedPrompt: "-p",
+		expectedArgs: "--",
+	},
+	{
+		name: "single end-of-options -- keeps post-delimiter --mode on the RPC path",
+		args: ["--", "--mode", "rpc"],
+		expectedPrompt: "--mode",
+		expectedArgs: "-- [redacted]",
+	},
+	{
+		name: "single end-of-options -- keeps post-delimiter --mode=* on the RPC path",
+		args: ["--", "--mode=rpc"],
+		expectedPrompt: "--mode=rpc",
+		expectedArgs: "--",
+	},
+	// Historical double-`--` wrapper quirk: the wrapper consumes the first
+	// delimiter and the extractor sees the second.
+	{
+		name: "end-of-options -- makes the next token the prompt",
+		args: ["--", "--", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--",
+	},
+	{
+		name: "end-of-options -- makes a dash-leading token a message",
+		args: ["--", "--", "--offline"],
+		expectedPrompt: "--offline",
+		expectedArgs: "--",
+	},
+	{
+		name: "end-of-options -- keeps post--- --print on the RPC path",
+		args: ["--", "--", "--print"],
+		expectedPrompt: "--print",
+		expectedArgs: "--",
+	},
+	{
+		name: "end-of-options -- keeps post--- -p on the RPC path",
+		args: ["--", "--", "-p"],
+		expectedPrompt: "-p",
+		expectedArgs: "--",
+	},
+	{
+		name: "end-of-options -- keeps post--- --mode on the RPC path",
+		args: ["--", "--", "--mode"],
+		expectedPrompt: "--mode",
+		expectedArgs: "--",
+	},
+	{
+		name: "end-of-options -- keeps post--- --mode=* on the RPC path",
+		args: ["--", "--", "--mode=rpc"],
+		expectedPrompt: "--mode=rpc",
+		expectedArgs: "--",
+	},
+	{
+		name: "end-of-options -- extracts only the first post--- message",
+		args: ["--offline", "--", "--", "PROMPT", "second"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--offline -- [redacted]",
+	},
+	{
+		name: "end-of-options -- keeps an @file token a fileArg",
+		args: ["--", "--", "@file.md", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "-- @file.md",
+	},
+	{
+		name: "end-of-options -- extracts an empty-string first message",
+		args: ["--", "--", "", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "-- [redacted]",
+	},
+	{
+		name: "pre-delimiter --print keeps the direct-Pi bypass intact",
+		args: ["--print", "--", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "--print -- [redacted]",
+		directBypass: true,
+	},
+	{
+		name: "pre-delimiter -p keeps the direct-Pi bypass intact",
+		args: ["-p", "--", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "-p -- [redacted]",
+		directBypass: true,
+	},
+	{
+		name: "pre-delimiter --mode keeps the direct-Pi bypass intact",
+		args: ["--mode", "rpc", "--", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "--mode rpc -- [redacted]",
+		directBypass: true,
+	},
+	{
+		name: "pre-delimiter --mode=* keeps the direct-Pi bypass intact",
+		args: ["--mode=rpc", "--", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "--mode=rpc -- [redacted]",
+		directBypass: true,
+	},
+	{
+		name: "print keeps the --- message quirk and the direct-Pi bypass intact",
+		args: ["--print", "---text", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "--print [redacted] [redacted]",
+		directBypass: true,
+	},
+	{
+		name: "short -p keeps the direct-Pi bypass intact",
+		args: ["-p", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "-p [redacted]",
+		directBypass: true,
+	},
+	{
+		name: "explicit --mode keeps the direct-Pi bypass intact",
+		args: ["--mode", "rpc", "--offline", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "--mode rpc --offline [redacted]",
+		directBypass: true,
+	},
+	{
+		name: "explicit --mode=* keeps the direct-Pi bypass intact",
+		args: ["--mode=rpc", "--offline", "PROMPT"],
+		expectedPrompt: "",
+		expectedArgs: "--mode=rpc --offline [redacted]",
+		directBypass: true,
+	},
+];
+
+describe("sumocode launcher mirrors Pi option consumption (PTY RPC path)", () => {
+	/** macOS node-pty needs its spawn-helper executable; mirror spawn-pi-pty's ensure step. */
+	function ensureNodePtySpawnHelperExecutableForTest(): void {
+		try {
+			const require = createRequire(import.meta.url);
+			const nodePtyMain = require.resolve("node-pty");
+			const spawnHelper = join(dirname(nodePtyMain), "..", "prebuilds", `${process.platform}-${process.arch}`, "spawn-helper");
+			if (existsSync(spawnHelper)) chmodSync(spawnHelper, 0o755);
+		} catch {
+			// Resolution differences surface as a real spawn error below.
+		}
+	}
+
+	/** Runs `bin/sumocode.sh --dry-run <args>` with stdout on a real PTY (RPC path). */
+	function ptyDryRun(args: readonly string[]): Promise<string> {
+		ensureNodePtySpawnHelperExecutableForTest();
+		return new Promise<string>((resolveRun, rejectRun) => {
+			const launcher = resolve(process.cwd(), "bin/sumocode.sh");
+			const launcherArgs = ["--dry-run", ...args];
+			const childEnv = buildSpawnEnv(process.env, { PI_BIN: "/bin/echo" });
+			const evidence = createChildEvidenceContext([launcher, ...launcherArgs], childEnv);
+			childEnv[HARNESS_SIGNATURE_ENV_KEY] = HARNESS_SIGNATURE;
+			const auth = requireHarnessAuth(childEnv);
+			const { child, supervision } = spawnSupervisedPty(launcher, launcherArgs, {
+				name: "xterm-256color",
+				cols: 80,
+				rows: 24,
+				cwd: process.cwd(),
+				env: childEnv,
+			}, evidence, auth);
+			let output = "";
+			child.onData((data) => {
+				appendFileSync(evidence.stderrPath, data);
+				output += data;
+			});
+			child.onExit(({ exitCode, signal }) => {
+				recordPtyExit(supervision.pid, supervision.pgid, exitCode, signal, childEnv);
+				if (exitCode === 0) resolveRun(output);
+				else rejectRun(new Error(`launcher dry-run exited ${exitCode}. Output:\n${output}\nEvidence: ${evidence.evidenceDir}`));
+			});
+		});
+	}
+
+	function dryRunField(output: string, field: string): string {
+		const line = output.split(/\r?\n/).find((candidate) => candidate.startsWith(`${field}=`));
+		if (line === undefined) throw new Error(`dry-run output missing ${field}. Output:\n${output}`);
+		return line.slice(field.length + 1);
+	}
+
+	for (const row of OPTION_CONSUMPTION_ROWS) {
+		it(row.name, async () => {
+			const output = await ptyDryRun(row.args);
+			const transport = dryRunField(output, "KICKOFF_PROMPT_TRANSPORT");
+			const forwardedArgs = dryRunField(output, "ARGS");
+			const execLine = output.split(/\r?\n/).find((candidate) => candidate.startsWith("exec "));
+			if (execLine === undefined) throw new Error(`dry-run output missing exec line. Output:\n${output}`);
+
+			if (row.directBypass === true) {
+				// Direct-Pi bypass keeps no kickoff side channel. The prompt
+				// positional and -p/--print's consumed message show redacted in
+				// the forwarded argv display — dry-run is diagnostics and never
+				// carries prompt bytes (issue 391).
+				expect(transport).toBe("(none)");
+				expect(forwardedArgs).toBe(row.expectedArgs);
+				expect(execLine.startsWith("exec /bin/echo -e ")).toBe(true);
+				expect(execLine).toContain("/src/extension-entry.ts");
+				expect(execLine.endsWith(` ${row.expectedArgs}`)).toBe(true);
+				expect(execLine).not.toContain("sumo-rpc-host.js");
+				return;
+			}
+
+			// RPC path: flags/values stay in the forwarded argv; only the first
+			// actual message moves to the kickoff-prompt side channel, whose
+			// dry-run display shows presence only — prompt bytes never appear
+			// in ARGS or the exec line (issue 391).
+			expect(transport).toBe(row.expectedPrompt === "" ? "(none)" : "one-shot-file");
+			// Exact forwarded argv assertions catch prompt leaks without treating
+			// prompt-like fragments in the checkout path as argv tokens.
+			expect(forwardedArgs).toBe(row.expectedArgs);
+			expect(execLine).toBe(`exec node ${process.cwd()}/sumo-rpc-host.js ${row.expectedArgs}`);
+		});
+	}
+
+	it("task rejects a bare end-of-options delimiter without a prompt", async () => {
+		await expect(ptyDryRun(["task", "--"])).rejects.toThrow(/task requires a non-empty prompt/);
+	});
+
+	it("task rejects an empty prompt", async () => {
+		await expect(ptyDryRun(["task", ""])).rejects.toThrow(/task requires a non-empty prompt/);
+	});
+
+	it("task rejects a whitespace-only prompt", async () => {
+		await expect(ptyDryRun(["task", "   "])).rejects.toThrow(/task requires a non-empty prompt/);
+	});
+
+	it("task rejects a whitespace-only --prompt-file", async () => {
+		const root = mkdtempSync(join(tmpdir(), "sumocode-task-ws-prompt-file-"));
+		const promptFile = join(root, "prompt.txt");
+		try {
+			writeFileSync(promptFile, "   \n\t ");
+			await expect(ptyDryRun(["task", "--prompt-file", promptFile])).rejects.toThrow(/task requires a non-empty prompt/);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("task --prompt-file keeps the file prompt first after a preserved delimiter", async () => {
+		const root = mkdtempSync(join(tmpdir(), "sumocode-task-prompt-file-"));
+		const promptFile = join(root, "prompt.txt");
+		try {
+			writeFileSync(promptFile, "FILEPROMPT");
+			const output = await ptyDryRun(["task", "--prompt-file", promptFile, "--", "--offline"]);
+			expect(dryRunField(output, "KICKOFF_PROMPT_TRANSPORT")).toBe("one-shot-file");
+			expect(output).not.toContain("FILEPROMPT");
+			expect(dryRunField(output, "ARGS")).toBe("-- [redacted]");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("task --task-dir keeps the prompt.txt text first after a preserved delimiter", async () => {
+		const root = mkdtempSync(join(tmpdir(), "sumocode-task-dir-"));
+		try {
+			writeFileSync(join(root, "prompt.txt"), "TASKDIRPROMPT");
+			const output = await ptyDryRun(["task", "--task-dir", root, "--", "--offline"]);
+			expect(dryRunField(output, "KICKOFF_PROMPT_TRANSPORT")).toBe("one-shot-file");
+			expect(output).not.toContain("TASKDIRPROMPT");
+			expect(dryRunField(output, "ARGS")).toBe("-- [redacted]");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 });
 
@@ -113,9 +703,19 @@ describe("sumocode launcher mode decision", () => {
 		const output = dryRun(["--offline", "--no-extensions", "--no-session", "--print", "hello"]);
 		expect(output).toContain("SUMO_TUI=0");
 		expect(output).toContain("SUMO_RPC=");
-		expect(output).toContain("--print hello");
+		expect(output).toContain("--print [redacted]");
+		// Issue 391: the print message is prompt bytes and never shows.
+		expect(output).not.toContain("hello");
 		expect(output).toContain("/src/extension-entry.ts");
 		expect(output).not.toContain("sumo-rpc-host.js");
+	});
+
+	it("redacts equals-form print messages from dry-run output", () => {
+		// Issue 391: --print=<message> carries prompt bytes in a single token;
+		// the fallback scan and the redaction walk must agree on that.
+		const output = dryRun(["--offline", "--print=secret-prompt-bytes"]);
+		expect(output).toContain("--print=[redacted]");
+		expect(output).not.toContain("secret-prompt-bytes");
 	});
 
 	it("bypasses the RPC host for explicit Pi mode", () => {

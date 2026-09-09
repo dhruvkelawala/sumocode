@@ -1,5 +1,5 @@
 import type { Component } from "@earendil-works/pi-tui";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -8,7 +8,7 @@ import { INPUT_FRAME_PLACEHOLDER } from "../../cathedral/input-frame.js";
 import { activeThemeColors, resetThemeRegistryForTests, setActiveTheme } from "../../themes/index.js";
 import { SharedInputRouter } from "../input/shared-input-router.js";
 import { TerminalSessionOwner } from "../runtime/terminal-controller.js";
-import { RpcHostEditorController } from "./editor.js";
+import { createRpcKeybindingsManager, RpcHostEditorController } from "./editor.js";
 import { submitRpcPrompt } from "./host.js";
 import { renderRpcHostFrameForTest, RpcHostRuntime } from "./runtime.js";
 import { RpcShellAdapter } from "./shell-adapter.js";
@@ -669,6 +669,46 @@ describe("RPC host retained runtime frame", () => {
 		}
 	});
 
+	it("drops command_ready silently before start() and still emits it once after", async () => {
+		// markCommandReady guards on !this.shell: a pre-start call must neither
+		// emit nor latch commandReadyMarked, so the real post-start call still
+		// emits exactly once.
+		const previousDiagFile = process.env.SUMO_TUI_DIAG_FILE;
+		const dir = mkdtempSync(join(tmpdir(), "sumocode-rpc-runtime-preshell-"));
+		const diagFile = join(dir, "diag.jsonl");
+		process.env.SUMO_TUI_DIAG_FILE = diagFile;
+		try {
+			const output = new FakeOutput();
+			const terminal = new TerminalSessionOwner({ output });
+			const runtime = new RpcHostRuntime({
+				output,
+				input: { isTTY: false, on: () => undefined },
+				terminal,
+				initialState: state(),
+				initialTranscript: { messages: [] },
+			});
+
+			writeFileSync(diagFile, "");
+			runtime.markCommandReady();
+			expect(readFileSync(diagFile, "utf8").trim()).toBe("");
+
+			await runtime.start();
+			runtime.markChromeStable();
+			runtime.markCommandReady();
+			runtime.markCommandReady();
+			const events = readFileSync(diagFile, "utf8")
+				.trim()
+				.split("\n")
+				.map(parseDiagEvent);
+			expect(events.filter((entry) => entry.event === "command_ready")).toHaveLength(1);
+			runtime.stop();
+		} finally {
+			if (previousDiagFile === undefined) delete process.env.SUMO_TUI_DIAG_FILE;
+			else process.env.SUMO_TUI_DIAG_FILE = previousDiagFile;
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("emits startup readiness diagnostics after the first retained render", async () => {
 		const previousDiagFile = process.env.SUMO_TUI_DIAG_FILE;
 		const dir = mkdtempSync(join(tmpdir(), "sumocode-rpc-runtime-diag-"));
@@ -691,7 +731,8 @@ describe("RPC host retained runtime frame", () => {
 				.trim()
 				.split("\n")
 				.map(parseDiagEvent);
-			for (const event of ["boot_screen_frame", "input_ready"]) {
+			for (const event of ["boot_screen_frame", "editor_ready", "input_ready"]) {
+				expect(startupEvents.filter((entry) => entry.event === event)).toHaveLength(1);
 				expect(startupEvents).toContainEqual(expect.objectContaining({
 					event,
 					surface: "rpc_host",
@@ -699,12 +740,13 @@ describe("RPC host retained runtime frame", () => {
 					rows: 24,
 				}));
 			}
-			expect(startupEvents).not.toContainEqual(expect.objectContaining({ event: "app_ready" }));
-			expect(startupEvents).not.toContainEqual(expect.objectContaining({ event: "stable_chrome_ready" }));
+			for (const event of ["app_ready", "stable_chrome_ready", "command_ready"]) {
+				expect(startupEvents).not.toContainEqual(expect.objectContaining({ event }));
+			}
 
 			runtime.markChromeStable();
 			runtime.markChromeStable();
-			const stableEvents = readFileSync(diagFile, "utf8")
+			let stableEvents = readFileSync(diagFile, "utf8")
 				.trim()
 				.split("\n")
 				.map(parseDiagEvent);
@@ -717,8 +759,18 @@ describe("RPC host retained runtime frame", () => {
 					rows: 24,
 				}));
 			}
+			expect(stableEvents).not.toContainEqual(expect.objectContaining({ event: "command_ready" }));
+
+			runtime.markCommandReady();
+			runtime.markCommandReady();
+			stableEvents = readFileSync(diagFile, "utf8")
+				.trim()
+				.split("\n")
+				.map(parseDiagEvent);
+			expect(stableEvents.filter((entry) => entry.event === "command_ready")).toHaveLength(1);
 			runtime.stop();
 			runtime.markChromeStable();
+			runtime.markCommandReady();
 		} finally {
 			if (previousDiagFile === undefined) delete process.env.SUMO_TUI_DIAG_FILE;
 			else process.env.SUMO_TUI_DIAG_FILE = previousDiagFile;
@@ -753,6 +805,28 @@ describe("RPC host retained runtime frame", () => {
 		expect(terminal.getState()).toMatchObject({ restored: true });
 	});
 
+	it.each([
+		["bracketed paste", "\x1b[200~one\r\n\x1f\x04\x03\x1b[<1z\x1b[201~", "\x1b[200~one\r\n\x1f\x04\x03\x1b[<1z\x1b[201~"],
+		["multiline draft", "one\ntwo", "one\ntwo"],
+		["CRLF draft", "one\r\ntwo", "one\ntwo"],
+	])("delivers %s atomically to a custom runtime editor", (_name, chunk, expected) => {
+		const input = new FakeInput();
+		const editor = new FakeEditor();
+		const runtime = new RpcHostRuntime({
+			output: new FakeOutput(), input, editor,
+			initialState: state(), initialTranscript: { messages: [] },
+		});
+		try {
+			runtime.startInput();
+			input.emit(chunk);
+			expect(editor.inputs).toEqual([expected]);
+			input.emit("x");
+			expect(editor.inputs).toEqual([expected, "x"]);
+		} finally {
+			runtime.stop();
+		}
+	});
+
 	it("accepts interrupts and drafts before a reload's first paint", async () => {
 		const output = new FakeOutput();
 		const input = new FakeInput();
@@ -767,7 +841,8 @@ describe("RPC host retained runtime frame", () => {
 
 		runtime.startInput();
 		input.emit("draft");
-		expect(editor.inputs).toEqual(["draft"]);
+		// Ordinary text may arrive per grapheme; paste/newline chunks must stay atomic (above).
+		expect(editor.inputs.join("")).toBe("draft");
 		expect(input.rawModes).toEqual([true]);
 		expect(output.chunks).toEqual([]);
 
@@ -776,6 +851,44 @@ describe("RPC host retained runtime frame", () => {
 		const outputAfterStop = [...output.chunks];
 		await runtime.start();
 		expect(output.chunks).toEqual(outputAfterStop);
+	});
+
+	it("marks the retained reload editor ready before hydration and emits readiness once", async () => {
+		const previousDiagFile = process.env.SUMO_TUI_DIAG_FILE;
+		const dir = mkdtempSync(join(tmpdir(), "sumocode-rpc-runtime-reload-ready-"));
+		const diagFile = join(dir, "diag.jsonl");
+		process.env.SUMO_TUI_DIAG_FILE = diagFile;
+		try {
+			const output = new FakeOutput();
+			const input = new FakeInput();
+			const runtime = new RpcHostRuntime({
+				output,
+				input,
+				initialState: state(),
+				initialTranscript: { messages: [] },
+			});
+
+			writeFileSync(diagFile, "");
+			runtime.startInput();
+			runtime.markEditorReady();
+			expect(output.chunks).toEqual([]);
+
+			let events = readFileSync(diagFile, "utf8").trim().split("\n").map(parseDiagEvent);
+			expect(events.filter((entry) => entry.event === "editor_ready")).toHaveLength(1);
+			expect(events.filter((entry) => entry.event === "input_ready")).toHaveLength(1);
+			expect(events.some((entry) => entry.event === "boot_screen_frame")).toBe(false);
+
+			await runtime.start();
+			events = readFileSync(diagFile, "utf8").trim().split("\n").map(parseDiagEvent);
+			expect(events.filter((entry) => entry.event === "editor_ready")).toHaveLength(1);
+			expect(events.filter((entry) => entry.event === "input_ready")).toHaveLength(1);
+			expect(events.filter((entry) => entry.event === "boot_screen_frame")).toHaveLength(1);
+			runtime.stop();
+		} finally {
+			if (previousDiagFile === undefined) delete process.env.SUMO_TUI_DIAG_FILE;
+			else process.env.SUMO_TUI_DIAG_FILE = previousDiagFile;
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("keeps raw mode enabled while handing the terminal to a reload successor", async () => {
@@ -948,6 +1061,68 @@ describe("RPC host retained runtime frame", () => {
 
 		await expect(runtime.waitForExit()).resolves.toBe(130);
 		expect(modal.inputs).toEqual([]);
+	});
+
+	it("keeps late paste controls out of Pi CustomEditor actions until the actual end", () => {
+		vi.useFakeTimers();
+		const input = new FakeInput();
+		const output = new FakeOutput();
+		const onExit = vi.fn();
+		const editor = new RpcHostEditorController({ keybindings: createRpcKeybindingsManager({ env: {} }), onExit });
+		const runtime = new RpcHostRuntime({ input, output, editor, terminal: new TerminalSessionOwner({ output }) });
+		try {
+			runtime.startInput();
+			input.emit("\x1b[200~");
+			vi.advanceTimersByTime(1_000);
+			input.emit("\x04\x1b[<1z\x1b[<0;1;1M");
+			expect(onExit).not.toHaveBeenCalled();
+			expect(editor.getText()).toBe("");
+			input.emit("\x1b[20");
+			input.emit("1~");
+			expect(editor.getText()).not.toBe("");
+			expect(onExit).not.toHaveBeenCalled();
+			editor.setText("");
+			input.emit("\x04");
+			expect(onExit).toHaveBeenCalledTimes(1);
+		} finally { runtime.stop(); vi.useRealTimers(); }
+	});
+
+	it("keeps paste stream ownership while the session input gate is closed", () => {
+		vi.useFakeTimers();
+		const input = new FakeInput();
+		const output = new FakeOutput();
+		const editor = new FakeEditor();
+		const runtime = new RpcHostRuntime({ input, output, editor, terminal: new TerminalSessionOwner({ output }) });
+		try {
+			runtime.startInput();
+			input.emit("\x1b[200~draft");
+			vi.advanceTimersByTime(1_000);
+			runtime.beginSessionReplacement();
+			input.emit("\x03\x04");
+			expect(input.pauseCount).toBe(0);
+			expect(editor.inputs).toEqual([]);
+			runtime.endSessionReplacement();
+			input.emit("\x1b[201~");
+			expect(editor.inputs).toEqual(["\x1b[200~draft\x03\x04\x1b[201~"]);
+			input.emit("\x03");
+			expect(input.pauseCount).toBe(1);
+		} finally { runtime.stop(); vi.useRealTimers(); }
+	});
+
+	it("does not apply Apple Terminal Shift-Enter rewriting inside a late paste tail", () => {
+		const input = new FakeInput();
+		const output = new FakeOutput();
+		const editor = new FakeEditor();
+		const nativeModifierProbe = vi.fn(() => true);
+		const runtime = new RpcHostRuntime({ input, output, editor, env: { TERM_PROGRAM: "Apple_Terminal" }, nativeModifierProbe, terminal: new TerminalSessionOwner({ output }) });
+		try {
+			runtime.startInput();
+			input.emit("\x1b[200~draft");
+			input.emit("\r");
+			input.emit("\x1b[201~");
+			expect(editor.inputs).toEqual(["\x1b[200~draft\r\x1b[201~"]);
+			expect(nativeModifierProbe).not.toHaveBeenCalled();
+		} finally { runtime.stop(); }
 	});
 
 	it("does not dispatch initial bare ESC when buffering split SGR mouse input", () => {

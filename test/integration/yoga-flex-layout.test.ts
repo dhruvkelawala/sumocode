@@ -56,7 +56,7 @@ describe("sumo-tui Yoga flex layout integration", () => {
 			expect(pty.getCurrentTerminalState().altscreenActive).toBe(true);
 			expect(pty.getOutput()).toContain(PI_BOOT_SEQUENCE);
 		} finally {
-			pty.cleanup();
+			await pty.cleanupAndWait();
 		}
 	});
 });

@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { projectPiToolActivity } from "../activity/pi-projector.js";
+import { TRUNCATED_HEAD_MARKER } from "../child-protocol.js";
 import { registerSubagentTools } from "./tools.js";
 import { SubagentManager, type SpawnSubagentTask } from "./manager.js";
 import { SUBAGENT_MAX_RUNNING, type SubagentEvent, type SubagentSnapshot } from "./domain.js";
 import type { TerminalHost, TerminalHostKind } from "../terminal-host/types.js";
-import { loadRoles, type SubagentRole } from "./roles.js";
+import { loadRoles, type RoleWarning, type SubagentRole } from "./roles.js";
 
 /** Tool result shape returned by every subagent tool. */
 interface ToolResult {
@@ -19,7 +21,7 @@ type FakeSpawnedChild = {
 	requestClose?: () => void;
 };
 
-const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly SubagentRole[], roleWarnings: readonly string[] = []) => {
+const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly SubagentRole[], roleWarnings: readonly RoleWarning[] = []) => {
 	const registered: Array<{ name: string; parameters?: unknown; execute: (...args: unknown[]) => Promise<ToolResult> }> = [];
 	const emitters = new Map<string, (event: SubagentEvent) => void>();
 	const childSends = new Map<string, ReturnType<typeof vi.fn>>();
@@ -90,6 +92,35 @@ const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly Su
 const textOf = <T extends { content: Array<{ text: string }> }>(result: T): string => result.content[0]!.text;
 
 describe("subagent tools", () => {
+	it("surfaces warning budgets in list/check without cancelling and refuses invalid limits", async () => {
+		vi.useFakeTimers();
+		const { manager, tool, ctx, spawnedTasks } = createHarness();
+		try {
+			await expect(tool("subagent_spawn").execute("invalid", { prompt: "task", name: "task", budget: { tokens: 0 } }, undefined, undefined, ctx)).rejects.toThrow(/budget/);
+			expect(spawnedTasks).toEqual([]);
+			await tool("subagent_spawn").execute("valid", { prompt: "task", name: "task", budget: { wallTimeMs: 1000 } }, undefined, undefined, ctx);
+			await vi.advanceTimersByTimeAsync(1000);
+			for (const name of ["subagent_list", "subagent_check"]) {
+				const text = textOf(await tool(name).execute("check", { id: "sa-1" }));
+				expect(text).toContain("over-budget-warning");
+				expect(text).toContain("wall 100%");
+				expect(text).toContain("reported tokens unknown");
+				expect(text).toContain("inspect or explicitly cancel with subagent_cancel");
+			}
+			expect(manager.get("sa-1")?.status).toBe("running");
+		} finally { manager.disposeAll(); vi.useRealTimers(); }
+	});
+
+	it("keeps visible children quiet with unknown liveness instead of inventing a stall", async () => {
+		vi.useFakeTimers();
+		const { manager, tool, ctx } = createHarness();
+		try {
+			await tool("subagent_spawn").execute("visible", { prompt: "task", name: "task", visible: true }, undefined, undefined, ctx);
+			await vi.advanceTimersByTimeAsync(600_000);
+			expect(manager.get("sa-1")).toMatchObject({ status: "running", health: "quiet", lastProgressAt: null, liveness: "unknown", warnings: [] });
+		} finally { manager.disposeAll(); vi.useRealTimers(); }
+	});
+
 	it("registers the seven subagent tools and exposes visible spawning with baseRef", () => {
 		const { registered, tool } = createHarness();
 		expect(registered.map((entry) => entry.name)).toEqual(["subagent_spawn", "subagent_send", "subagent_check", "subagent_wait", "subagent_cancel", "subagent_close", "subagent_list"]);
@@ -139,7 +170,7 @@ describe("subagent tools", () => {
 
 	it("fails closed before spawning a role when roles.json has loader warnings", async () => {
 		const role: SubagentRole = { id: "audit", label: "Audit", description: "use for audits", systemPrompt: "audit carefully" };
-		const { tool, ctx, manager } = createHarness("herdr", [role], ["role audit has an invalid thinking level; entry skipped"]);
+		const { tool, ctx, manager } = createHarness("herdr", [role], [{ scope: "role", roleId: "audit", blocksRole: true, message: "role audit has an invalid thinking level; entry skipped" }]);
 
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		const result = await tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker", role: "audit" }, undefined, undefined, ctx as never);
@@ -150,9 +181,51 @@ describe("subagent tools", () => {
 		expect(manager.list()).toEqual([]);
 	});
 
+	it("scopes role warnings to the selected role while keeping built-ins available", async () => {
+		const research: SubagentRole = { id: "research", label: "Research", description: "read only", systemPrompt: "research" };
+		const roleWarnings: RoleWarning[] = [
+			{ scope: "role", roleId: "audit", blocksRole: true, message: "role audit has an invalid thinking level; entry skipped" },
+		];
+		const valid = createHarness("herdr", [research], roleWarnings);
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const validResult = await valid.tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker", role: "research" }, undefined, undefined, valid.ctx as never);
+		expect(textOf(validResult)).toContain("Started sa-1");
+
+		const invalid = createHarness("herdr", [research], roleWarnings);
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const invalidResult = await invalid.tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker", role: "audit" }, undefined, undefined, invalid.ctx as never);
+		expect(textOf(invalidResult)).toContain("invalid thinking level");
+		expect(invalidResult).toMatchObject({ details: { status: "invalid_role_config", warnings: roleWarnings } });
+
+		const fileWarnings: RoleWarning[] = [{ scope: "file", blocksOverlays: true, message: "invalid roles.json: unexpected token" }];
+		const fallback = createHarness("herdr", [research], fileWarnings);
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const fallbackResult = await fallback.tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker", role: "research" }, undefined, undefined, fallback.ctx as never);
+		expect(textOf(fallbackResult)).toContain("Started sa-1");
+
+		const audit: SubagentRole = { id: "audit", label: "Audit", description: "audit", systemPrompt: "audit" };
+		const siblingWarning: RoleWarning[] = [{ scope: "file", blocksOverlays: false, message: "roles[2] must be an object; entry skipped" }];
+		const custom = createHarness("herdr", [research, audit], siblingWarning);
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const customResult = await custom.tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker", role: "audit" }, undefined, undefined, custom.ctx as never);
+		expect(textOf(customResult)).toContain("Started sa-1");
+	});
+
+	it("allows a role whose warnings are advisory", async () => {
+		const role: SubagentRole = { id: "audit", label: "Audit", description: "use for audits", systemPrompt: "audit carefully" };
+		const roleWarnings: RoleWarning[] = [{ scope: "role", roleId: "audit", blocksRole: false, message: "role audit ignores unknown field futureField" }];
+		const { tool, ctx, manager } = createHarness("herdr", [role], roleWarnings);
+
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const result = await tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker", role: "audit" }, undefined, undefined, ctx as never);
+
+		expect(textOf(result)).toContain("Started sa-1");
+		expect(manager.get("sa-1")?.roleId).toBe("audit");
+	});
+
 	it("keeps role-loader warnings out of role-free spawns", async () => {
 		const role: SubagentRole = { id: "audit", label: "Audit", description: "use for audits", systemPrompt: "audit carefully" };
-		const { tool, ctx, manager } = createHarness("herdr", [role], ["invalid optional role overlay"]);
+		const { tool, ctx, manager } = createHarness("herdr", [role], [{ scope: "file", blocksOverlays: true, message: "invalid optional role overlay" }]);
 
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		const result = await tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker" }, undefined, undefined, ctx as never);
@@ -246,10 +319,28 @@ describe("subagent tools", () => {
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		const result = await tool("subagent_send").execute("tc", { id: "sa-1", text: "continue with tests" }, undefined, undefined, ctx as never);
 
-		expect(textOf(result)).toBe("Sent steering input to sa-1 (worker). It is delivered after the child's current turn — no ack beyond delivery-to-child is possible.");
+		expect(textOf(result)).toBe("Steering submitted to the child runtime for sa-1 (worker); Pi exposes no post-acceptance acknowledgement.");
+		expect(textOf(result)).not.toMatch(/(?:was|is) (?:delivered|accepted)|delivery-to-child/);
 		expect(childSends.get("sa-1")).toHaveBeenCalledWith("continue with tests");
 		expect(sendPaneText).not.toHaveBeenCalled();
 		expect(result).toMatchObject({ details: { action: "send", id: "sa-1", pane: { paneId: "w1:p2" } } });
+	});
+
+	it("rejects blank and whitespace steering before the manager or child sees it", async () => {
+		const { tool, ctx, childSends } = createHarness();
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		await tool("subagent_spawn").execute("tc", { prompt: "watch", name: "worker", visible: true }, undefined, undefined, ctx as never);
+		// SAFETY: visible harness children always register a send double in childSends.
+		const send = childSends.get("sa-1") as ReturnType<typeof vi.fn>;
+
+		for (const blank of ["", "   ", "\n\t "]) {
+			// SAFETY: the ctx double carries only the fields the tool handlers read.
+			await expect(tool("subagent_send").execute("tc", { id: "sa-1", text: blank }, undefined, undefined, ctx as never))
+				.rejects.toThrow("blank or whitespace-only steering is rejected before submission");
+		}
+		expect(send).not.toHaveBeenCalled();
+		// The schema carries minLength so the model-facing contract rejects blanks too.
+		expect(JSON.stringify(tool("subagent_send").parameters)).toContain('"minLength":1');
 	});
 
 	it("reports subagent_send error taxonomy", async () => {
@@ -257,7 +348,12 @@ describe("subagent tools", () => {
 		await expect(headless.tool("subagent_send").execute("tc", { id: "sa-404", text: "hi" })).rejects.toThrow("Unknown subagent id");
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		await headless.tool("subagent_spawn").execute("tc", { prompt: "quiet", name: "headless" }, undefined, undefined, headless.ctx as never);
-		await expect(headless.tool("subagent_send").execute("tc", { id: "sa-1", text: "hi" })).rejects.toThrow("headless children cannot receive input");
+		const unsupported = await headless.tool("subagent_send").execute("tc", { id: "sa-1", text: "hi" });
+		expect(unsupported).toMatchObject({ details: { action: "send", capability: "unsupported: headless steering" } });
+		expect(unsupported).not.toHaveProperty("isError", true);
+		expect(textOf(unsupported)).toBe("unsupported: headless steering; respawn with visible: true to steer");
+		expect(projectPiToolActivity({ id: "tc", name: "subagent_send", status: "done", output: textOf(unsupported), details: unsupported.details },
+			{ messageId: "message", blockIndex: 0 })).toMatchObject({ status: "succeeded", body: { kind: "text", text: textOf(unsupported) } });
 
 		const settled = createHarness();
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
@@ -357,6 +453,90 @@ describe("subagent tools", () => {
 		expect(text).toContain("partial progress");
 		expect(text).toContain("shared checkout · base base-re · +0 checkout commits · changed paths suppressed · checkout clean");
 		expect(waited).toMatchObject({ details: { activity: [{ id: `subagent:${id}`, status: "failed", result: { error: "provider exploded" } }] } });
+	});
+
+	it("preserves literal truncation-marker text in untruncated wait results", async () => {
+		const { tool, emitters, ctx } = createHarness();
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const spawned = await tool("subagent_spawn").execute("spawn-literal", { prompt: "do", name: "marker reviewer" }, undefined, undefined, ctx as never);
+		// SAFETY: spawn results always expose details.subagent.id.
+		const id = (spawned as { details: { subagent: { id: string } } }).details.subagent.id;
+		const finalText = `before${TRUNCATED_HEAD_MARKER}after`;
+		emitters.get(id)?.({ kind: "message-end", role: "assistant", text: finalText });
+		emitters.get(id)?.({ kind: "run-settled", outcome: { kind: "completed", finalText } });
+
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const waited = await tool("subagent_wait").execute("wait-literal", { ids: [id] }, undefined, undefined, ctx as never);
+		expect(textOf(waited)).toContain(finalText);
+	});
+
+	it("keeps the omission marker through per-agent and aggregate wait projections", async () => {
+		const { tool, ctx, emitters, manager } = createHarness();
+		const ids: string[] = [];
+		for (let index = 0; index < 4; index += 1) {
+			// SAFETY: the ctx double carries only the fields the tool handlers read.
+			const spawned = await tool("subagent_spawn").execute(`spawn-${index}`, { prompt: "do", name: `worker-${index}` }, undefined, undefined, ctx as never);
+			// SAFETY: spawn results always expose details.subagent.id.
+			const id = (spawned as { details: { subagent: { id: string } } }).details.subagent.id;
+			ids.push(id);
+			const prefix = index === 3 ? "FOURTH-USEFUL:" : `RESULT-${index}:`;
+			const finalText = `${prefix}${"x".repeat((index === 3 ? 20 : 15) * 1024)}${index === 3 ? TRUNCATED_HEAD_MARKER : ""}`;
+			emitters.get(id)?.({ kind: "message-end", role: "assistant", text: finalText });
+			emitters.get(id)?.({ kind: "run-settled", outcome: { kind: "completed", finalText } });
+		}
+		await vi.waitFor(() => expect(ids.every((id) => manager.get(id)?.status === "done")).toBe(true));
+
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const one = await tool("subagent_wait").execute("wait-one", { ids: [ids[3]] }, undefined, undefined, ctx as never);
+		expect(Buffer.byteLength(textOf(one), "utf8")).toBeLessThanOrEqual(16 * 1024);
+		expect(textOf(one)).toContain("FOURTH-USEFUL:");
+		expect(textOf(one).split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const all = await tool("subagent_wait").execute("wait-all", { ids }, undefined, undefined, ctx as never);
+		expect(Buffer.byteLength(textOf(all), "utf8")).toBeLessThanOrEqual(48 * 1024);
+		expect(textOf(all)).toContain("FOURTH-USEFUL:");
+		expect(textOf(all).split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+	});
+
+	it.each([
+		["when the last retained chunk is shorter than the marker", [16_371, 16_371, 16_313, 1, 1]],
+		["when retained chunks exactly fill the aggregate cap", [12_270, 12_270, 12_270, 12_269, 1]],
+	] as const)("marks aggregate omission %s", async (_label, lengths) => {
+		const snapshots: SubagentSnapshot[] = lengths.map((length, index) => ({
+			id: `sa-${index + 1}`,
+			title: "",
+			prompt: "work",
+			cwd: "/tmp/project",
+			baseRef: "base-ref",
+			status: "done",
+			createdAt: 1_000,
+			settledAt: 2_000,
+			usage: { turns: 1 },
+			transcript: [],
+			liveText: "",
+			liveTools: [],
+			finalText: "x".repeat(length),
+		}));
+		const registered: Array<{ name: string; execute: (...args: unknown[]) => Promise<ToolResult> }> = [];
+		const manager = {
+			waitFor: vi.fn(async () => snapshots),
+			get: vi.fn((id: string) => snapshots.find((snapshot) => snapshot.id === id)),
+		};
+		const delivery = { consume: vi.fn() };
+		// SAFETY: doubles cover exactly the members registerSubagentTools touches on each object.
+		registerSubagentTools({
+			registerTool: (tool: { name: string; execute: (...args: unknown[]) => Promise<ToolResult> }) => registered.push(tool),
+			getThinkingLevel: () => "medium",
+			getActiveTools: () => ["read"],
+		} as never, manager as never, delivery, { kind: "none" } as never);
+		const wait = registered.find((entry) => entry.name === "subagent_wait")!;
+
+		const result = await wait.execute("wait-short-tail", { ids: snapshots.map((snapshot) => snapshot.id) }, undefined, undefined);
+		const text = textOf(result);
+		expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(48 * 1024);
+		expect(text.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+		expect(delivery.consume).toHaveBeenCalledTimes(lengths.length);
 	});
 
 	it("cancel returns bounded metadata and Activity updates without raw snapshots", async () => {

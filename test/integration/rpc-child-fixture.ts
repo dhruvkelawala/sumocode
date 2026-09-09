@@ -82,6 +82,14 @@ const compactSummary = ${JSON.stringify(options.compactSummary ?? "Fixture compa
 const compactTokensBefore = ${JSON.stringify(options.compactTokensBefore ?? 42000)};
 let extensionUiRequests = ${JSON.stringify(options.extensionUiRequests ?? [])};
 const commandLogPath = process.env.SUMOCODE_RPC_FIXTURE_LOG;
+if (commandLogPath) {
+	// Issue 391 evidence: record whether this child process saw a kickoff
+	// sentinel in argv or environment. Only a boolean is logged -- no env
+	// values are written to disk.
+	const argvSentinel = process.argv.slice(2).some((a) => a.includes("SENTINEL"));
+	const envSentinel = Object.values(process.env).some((v) => typeof v === "string" && v.includes("SENTINEL"));
+	require("node:fs").appendFileSync(commandLogPath, JSON.stringify({ type: "_fixture_process", pid: process.pid, argvSentinel, envSentinel }) + "\\n");
+}
 const availableModels = [
 	{ provider: "openai", id: "gpt-5", label: "openai/gpt-5" },
 	{ provider: "anthropic", id: "claude-opus-4", label: "anthropic/claude-opus-4" },

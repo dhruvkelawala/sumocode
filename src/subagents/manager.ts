@@ -1,12 +1,18 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { isAbsolute, join, relative } from "node:path";
 import { promisify } from "node:util";
+import { captureProcessBirthTime, systemProcessTree, type ProcessTreeOperations } from "../background-tasks/process-tree.js";
+import { acquireRetained, reconstructRetained, verifyRetained, sameRetainedEvidence, type RetainedSubagent } from "./retained-adoption.js";
+import type { RegistryWriter, SubagentRecord } from "./registry.js";
 import { createWorktree, resolveCreateOptions, type CreateWorktreeOptions, type CreateWorktreeResult } from "../git/worktree.js";
 import type { AgentPanePlacement, PiExecLike, TerminalHost } from "../terminal-host/types.js";
 import type { SpawnedChild } from "./backend-pi.js";
-import { SUBAGENT_MAX_QUEUED, SUBAGENT_MAX_RUNNING, type LiveToolState, type RunOutcome, type SubagentEvent, type SubagentSnapshot, type SubagentWorktreeRef } from "./domain.js";
+import { SUBAGENT_MAX_QUEUED, SUBAGENT_MAX_RUNNING, type LiveToolState, type RunOutcome, type SubagentEvent, type SubagentRecoveryReason, type SubagentSnapshot, type SubagentWorktreeRef } from "./domain.js";
 import { planPlacement } from "./layout.js";
+import { addReportedSubagentUsage, evaluateSubagentBudget, validateSubagentBudget, type SubagentBudget } from "./budget-policy.js";
 import { buildCompletionManifest, type CompletionManifestEvidence } from "./manifest.js";
+import type { DeliveryPayload } from "./delivery.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -33,6 +39,7 @@ export interface AtCapacityDetails {
 }
 
 export interface SpawnSubagentTask {
+	readonly budget?: SubagentBudget;
 	readonly sourceId?: string;
 	readonly prompt: string;
 	readonly title: string;
@@ -49,7 +56,14 @@ export interface SpawnSubagentTask {
 	readonly builtInTools?: readonly string[];
 }
 
-type BackendFactory = (task: SpawnSubagentTask & { id: string; signal: AbortSignal; placement?: AgentPanePlacement }) => SpawnedChild;
+export type SubagentLaunch = SpawnSubagentTask & {
+	readonly id: string;
+	readonly signal: AbortSignal;
+	readonly baseRef: string;
+	readonly worktreeRef?: SubagentWorktreeRef;
+	readonly placement?: AgentPanePlacement;
+};
+type BackendFactory = (task: SubagentLaunch) => SpawnedChild | Promise<SpawnedChild>;
 type Listener = () => void;
 type WorktreeCreator = (options: CreateWorktreeOptions) => Promise<CreateWorktreeResult>;
 type WorktreeBaseRefResolver = (worktreePath: string) => Promise<string | undefined>;
@@ -59,7 +73,15 @@ interface SpawnGitContext {
 	readonly baseRef?: string;
 }
 
+export interface SubagentManagerDiagnostic {
+	readonly kind: "listener" | "interrupt";
+	readonly message: string;
+}
+
 export interface SubagentManagerDependencies {
+	readonly idNamespace?: string;
+	readonly controllerIdentity?: RegistryWriter;
+	readonly processOperations?: ProcessTreeOperations;
 	readonly createWorktree?: WorktreeCreator;
 	readonly resolveWorktreeBaseRef?: WorktreeBaseRefResolver;
 	readonly captureGitContext?: (cwd: string) => Promise<SpawnGitContext>;
@@ -68,6 +90,7 @@ export interface SubagentManagerDependencies {
 	readonly pi?: PiExecLike;
 	/** Parent Herdr tab injected into the RPC child; first visible pane splits here. */
 	readonly initialVisibleTabId?: string;
+	readonly onDiagnostic?: (diagnostic: SubagentManagerDiagnostic) => void;
 }
 
 async function gitRead(cwd: string, args: readonly string[]): Promise<string | undefined> {
@@ -106,6 +129,7 @@ const makeInitialSnapshot = (
 	type MutableSnapshot = { -readonly [K in keyof SubagentSnapshot]: SubagentSnapshot[K] };
 	const snapshot: MutableSnapshot = {
 		id,
+		budget: task.budget ? { ...task.budget } : undefined,
 		title: task.title,
 		prompt: task.prompt,
 		cwd,
@@ -134,9 +158,22 @@ const upsertTool = (tools: readonly LiveToolState[], next: LiveToolState): reado
 	return tools.map((tool, toolIndex) => toolIndex === index ? { ...tool, ...next } : tool);
 };
 
+interface TrackedRetained {
+	entry: RetainedSubagent;
+	unsubscribe?: () => void;
+	blocked: boolean;
+}
+
 export class SubagentManager {
+	private readonly retained = new Map<string, TrackedRetained>();
+	private detached = false;
+	private identity?: RegistryWriter;
+	private readonly operations: ProcessTreeOperations;
 	private nextId = 1;
+	private readonly idNamespace?: string;
+	private healthTimer?: ReturnType<typeof setInterval>;
 	private readonly pendingSpawns = new Map<string, { title: string; createdAt: number }>();
+	private readonly launching = new Map<string, { controller: AbortController; done: Promise<void> }>();
 	private readonly queuedTasks: Array<{ task: SpawnSubagentTask; id: string; createdAt: number; generation: number }> = [];
 	private readonly snapshots = new Map<string, SubagentSnapshot>();
 	private readonly children = new Map<string, { child: SpawnedChild; controller: AbortController }>();
@@ -149,6 +186,7 @@ export class SubagentManager {
 	private readonly terminalHost?: TerminalHost;
 	private readonly pi?: PiExecLike;
 	private readonly initialVisibleTabId?: string;
+	private readonly onDiagnostic?: (diagnostic: SubagentManagerDiagnostic) => void;
 	private subagentsTabId?: string;
 	private visibleSpawnTail: Promise<void> = Promise.resolve();
 	private dequeueTail: Promise<void> = Promise.resolve();
@@ -162,6 +200,9 @@ export class SubagentManager {
 	public readonly consumedIds = new Set<string>();
 
 	public constructor(private readonly backendFactory: BackendFactory, dependencies: SubagentManagerDependencies = {}) {
+		this.idNamespace = dependencies.idNamespace;
+		this.identity = dependencies.controllerIdentity && { ...dependencies.controllerIdentity };
+		this.operations = dependencies.processOperations ?? systemProcessTree;
 		this.createWorktreeImpl = dependencies.createWorktree ?? createWorktree;
 		this.resolveWorktreeBaseRefImpl = dependencies.resolveWorktreeBaseRef ?? ((path) => gitRead(path, ["rev-parse", "HEAD"]));
 		this.captureGitContextImpl = dependencies.captureGitContext ?? captureGitContext;
@@ -169,10 +210,225 @@ export class SubagentManager {
 		this.terminalHost = dependencies.terminalHost;
 		this.pi = dependencies.pi;
 		this.initialVisibleTabId = dependencies.initialVisibleTabId;
+		this.onDiagnostic = dependencies.onDiagnostic;
 		this.subagentsTabId = this.initialVisibleTabId;
 	}
 
+	public get controllerIdentity(): RegistryWriter {
+		if (!this.identity) {
+			const processStartTime = captureProcessBirthTime(process.pid);
+			if (!processStartTime) throw new Error("manager birth identity unavailable");
+			this.identity = { token: randomUUID(), pid: process.pid, processStartTime };
+		}
+		return { ...this.identity };
+	}
+
+	/** Register an already launched retained owner; this never spawns or subscribes to its backend. */
+	public async trackRetained(entry: RetainedSubagent): Promise<void> {
+		if (this.retained.has(entry.snapshot.id)) return;
+		if (this.detached || this.snapshots.has(entry.snapshot.id)) throw new Error("manager cannot track retained child");
+		const record = entry.registry.get(entry.snapshot.id);
+		const identity = this.controllerIdentity;
+		if (!record || !entry.supervisor || !sameRetainedEvidence(record, entry.supervisor.record) || !entry.registry.inspectControl(entry.authority)
+			|| record.backend !== (entry.snapshot.visible ? "visible" : "headless")
+			|| entry.authority.owner.token !== identity.token
+			|| entry.authority.owner.pid !== identity.pid
+			|| entry.authority.owner.processStartTime !== identity.processStartTime) throw new Error("retained child control unverified");
+		// Own the descriptor before asynchronous pane inspection so replacement cannot lose it.
+		this.retained.set(record.id, { entry, blocked: true });
+		this.snapshots.set(record.id, entry.snapshot);
+		let recoveryReason: SubagentRecoveryReason | undefined;
+		try {
+			const verification = await verifyRetained(record, this.operations, this.terminalHost, this.pi);
+			recoveryReason = verification.reason;
+			if (verification.classification !== "verified") throw new Error(recoveryReason
+				? `retained child identity unverified: ${recoveryReason.code} expected ${recoveryReason.expected} observed ${recoveryReason.observed}`
+				: "retained child identity unverified");
+			if (this.detached) return;
+			this.bindRetained(entry);
+		} catch (error) {
+			if (this.retained.has(record.id)) this.blockRetained(record.id, "ambiguous", recoveryReason);
+			throw error;
+		}
+	}
+
+	/** Replacement stops this view, not its retained persistence owners. */
+	public detachForReplacement(): void {
+		if (this.detached) return;
+		this.detached = true;
+		for (const [id, tracked] of this.retained) {
+			tracked.unsubscribe?.();
+			tracked.unsubscribe = undefined;
+			tracked.entry = { ...tracked.entry, snapshot: this.snapshots.get(id) ?? tracked.entry.snapshot };
+			this.children.delete(id);
+			this.snapshots.delete(id);
+		}
+		for (const snapshot of this.snapshots.values()) {
+			this.consumedIds.add(snapshot.id);
+			if (!isSettled(snapshot)) this.snapshots.set(snapshot.id, { ...snapshot, recovery: "unsupported" });
+		}
+		this.disposeAll();
+		this.notify();
+	}
+
+	public get hasRetainedChildren(): boolean { return this.retained.size > 0; }
+
+	/** Claim each outgoing view before asynchronous control transfer; bind only after its grant. */
+	public async adoptFrom(previous: SubagentManager, sessionId: string): Promise<void> {
+		await Promise.all([...previous.launching.values()].map((launch) => launch.done));
+		if (previous === this || this.detached) return;
+		previous.detachForReplacement();
+		for (const [id, tracked] of previous.retained) {
+			if (this.retained.has(id)) continue;
+			if (this.snapshots.has(id)) throw new Error("retained subagent id conflicts with successor work");
+			previous.retained.delete(id);
+			let result: Awaited<ReturnType<typeof acquireRetained>>;
+			try {
+				result = tracked.blocked ? { entry: tracked.entry, classification: "ambiguous", reason: tracked.entry.snapshot.recoveryReason }
+					: await acquireRetained(tracked.entry, this.controllerIdentity, sessionId, this.operations, this.terminalHost, this.pi);
+			} catch (error) {
+				previous.retained.set(id, tracked);
+				throw error;
+			}
+			if (previous.consumedIds.has(id)) this.consumedIds.add(id);
+			this.retained.set(id, { entry: result.entry, blocked: true });
+			this.snapshots.set(id, result.entry.snapshot);
+			if (result.classification === "adopted" && !this.detached) {
+				try { this.bindRetained(result.entry); }
+				catch { this.blockRetained(id, "ambiguous"); }
+			} else this.blockRetained(id, result.classification === "adopted" ? "ambiguous" : result.classification, result.reason);
+		}
+		this.notify();
+	}
+
+	/** Installation-scoped disk discovery; no prior manager or backend handle is accepted. */
+	public async reconstruct(registry: RetainedSubagent["registry"], sessionId: string): Promise<void> {
+		for (const result of await reconstructRetained(registry, this.controllerIdentity, sessionId, this.operations, this.terminalHost, this.pi)) {
+			const id = result.entry.snapshot.id;
+			if (this.detached || this.snapshots.has(id)) continue;
+			this.retained.set(id, { entry: result.entry, blocked: true });
+			this.snapshots.set(id, result.entry.snapshot);
+			if (result.classification === "adopted" || result.classification === "persist-only") {
+				try { this.bindRetained(result.entry, result.classification === "persist-only"); } catch { this.blockRetained(id, "ambiguous"); }
+			} else this.blockRetained(id, result.classification, result.reason);
+		}
+		this.notify();
+	}
+
+	public canDeliver(id: string): boolean {
+		const retained = this.retained.get(id);
+		if (this.detached || retained?.blocked) return false;
+		try { return !retained || retained.entry.registry.inspectControl(retained.entry.authority); }
+		catch { this.blockRetained(id, "ambiguous"); return false; }
+	}
+
+	/** No await between durable admission and the single synchronous Pi call. */
+	public deliver(payload: DeliveryPayload, send: (payload: DeliveryPayload) => void): void {
+		if (!this.canDeliver(payload.id)) return;
+		const tracked = this.retained.get(payload.id);
+		if (!tracked) { send(payload); return; }
+		const { registry, authority } = tracked.entry;
+		try {
+			let record = registry.get(payload.id)!;
+			if (record.status !== "settled") return;
+			if (record.delivery.state === "sending") {
+				if (record.delivery.controllerGeneration === (record.controllerGeneration ?? 0)) return;
+				record = registry.advanceDelivery(record.revision, authority, "uncertain");
+			}
+			const notice = record.delivery.state === "delivery-uncertain";
+			const slot = record.delivery.state === "delivery-uncertain" ? record.delivery.notice : record.delivery;
+			if (notice && slot.state === "sending" && slot.controllerGeneration !== (record.controllerGeneration ?? 0)) {
+				registry.advanceDelivery(record.revision, authority, "uncertain", true);
+				return;
+			}
+			if (slot.state !== "undelivered") return;
+			const outgoing: DeliveryPayload = notice ? { ...payload,
+				customType: "subagent-delivery-uncertain",
+				content: `delivery of ${payload.id} uncertain; result manifest available at ${join(record.taskDir, "manifest.json")}; use inspect`,
+				details: { id: payload.id, completionId: record.completionId, delivery: "delivery-uncertain", manifestPath: join(record.taskDir, "manifest.json") },
+			} : payload;
+			record = registry.advanceDelivery(record.revision, authority, "send", notice);
+			send(outgoing);
+			registry.advanceDelivery(record.revision, authority, "sent", notice);
+		} catch {
+			// Publication may have committed even if its return was lost. Preserve
+			// successor recovery of sending; only corrupt evidence blocks adoption.
+			this.canDeliver(payload.id);
+		}
+	}
+
+	private blockRetained(id: string, classification: "lost" | "ambiguous", reason?: SubagentRecoveryReason): void {
+		const tracked = this.retained.get(id)!;
+		tracked.blocked = true;
+		tracked.unsubscribe?.();
+		tracked.unsubscribe = undefined;
+		this.children.delete(id);
+		this.consumedIds.add(id);
+		const snapshot = { ...this.snapshots.get(id)!, status: "error" as const, recovery: classification };
+		this.snapshots.set(id, reason ? { ...snapshot, recoveryReason: reason } : snapshot);
+		try {
+			const record = tracked.entry.registry.get(id)!;
+			tracked.entry.registry.recordRecovery(id, record.revision, classification, reason);
+		} catch {
+			// Failed storage cannot grant effects or justify overwriting old evidence.
+			try { this.onDiagnostic?.({ kind: "listener", message: "retained recovery observation could not be persisted" }); }
+			catch { /* Diagnostics cannot restore refused control. */ }
+		}
+	}
+
+	private bindRetained(entry: RetainedSubagent, mirror = false): void {
+		if (!entry.supervisor || (!mirror && !entry.registry.inspectControl(entry.authority))) throw new Error("retained control changed before observation");
+		const id = entry.snapshot.id;
+		const tracked: TrackedRetained = { entry, blocked: mirror };
+		this.retained.set(id, tracked);
+		this.snapshots.set(id, { ...entry.snapshot, recovery: mirror ? "persist-only" : "adopted" });
+		if (!mirror) this.children.set(id, { child: entry.supervisor.controllerChild(entry.authority), controller: new AbortController() });
+		const observe = (record: SubagentRecord): void => {
+			if (this.detached || (!mirror && !this.canDeliver(id))) return;
+			const current = this.snapshots.get(id);
+			if (!current) return;
+			const telemetry = record.telemetry;
+			let next: SubagentSnapshot = { ...current, startedAt: telemetry?.startedAt ?? current.startedAt,
+				lastProgressAt: telemetry?.lastProgressAt ?? current.lastProgressAt,
+				lastHeartbeatAt: telemetry?.lastHeartbeatAt ?? current.lastHeartbeatAt,
+				usage: { ...current.usage, reportedTokens: telemetry?.reportedTokens ?? current.usage.reportedTokens, reportedCostUsd: telemetry?.reportedCostUsd ?? current.usage.reportedCostUsd } };
+			const completion = record.status === "settled" ? entry.supervisor?.completion : undefined;
+			if (record.status === "settled" && completion) {
+				const outcome = completion.outcome;
+				if (!isSettled(current)) next = { ...next, status: outcome.kind === "completed" ? "done" : "error", settledAt: record.settledAt!, manifest: completion.manifest,
+					finalText: outcome.kind === "completed" ? outcome.finalText : outcome.partialText ?? "", liveText: "",
+					errorText: outcome.kind === "failed" ? outcome.errorText : outcome.kind === "interrupted" ? "interrupted" : undefined };
+				this.children.delete(id);
+				if ((this.waitInterest.get(id) ?? 0) > 0) this.consumedIds.add(id);
+				tracked.unsubscribe?.();
+				tracked.unsubscribe = undefined;
+			} else if (record.status === "lost" || record.status === "ambiguous") {
+				tracked.blocked = true;
+				this.consumedIds.add(id);
+				this.children.delete(id);
+				next = { ...next, status: "error", recovery: record.status };
+			}
+			this.snapshots.set(id, this.withBudget(next));
+			if (isSettled(next)) void this.scheduleDequeue();
+			this.stopHealthTimerIfIdle();
+			this.notify();
+			this.prune();
+		};
+		tracked.unsubscribe = entry.supervisor.subscribe(observe);
+		this.startHealthTimer();
+		observe(entry.supervisor.record);
+	}
+
+	private allocateId(): string {
+		let id: string;
+		do { id = `sa-${this.idNamespace ? `${this.idNamespace}-` : ""}${this.nextId++}`; } while (this.snapshots.has(id) || this.retained.has(id));
+		return id;
+	}
+
 	public async spawn(task: SpawnSubagentTask): Promise<SubagentSnapshot | AtCapacityDetails> {
+		if (this.detached) throw new Error("subagent manager was replaced");
+		if (task.budget !== undefined) validateSubagentBudget(task.budget);
+		task = { ...task, budget: task.budget ? { ...task.budget } : undefined };
 		const generation = this.lifecycleGeneration;
 		const runningSummaries = this.runningSummaries();
 		if (runningSummaries.length >= SUBAGENT_MAX_RUNNING || this.queuedTasks.length > 0) {
@@ -185,7 +441,7 @@ export class SubagentManager {
 					retryHint: "queue is full — do NOT retry in a loop; cancel something or end your turn and respawn later",
 				};
 			}
-			const id = `sa-${this.nextId++}`;
+			const id = this.allocateId();
 			const createdAt = Date.now();
 			const snapshot = makeInitialSnapshot(task, id, createdAt, "HEAD", task.cwd, undefined, undefined, "queued");
 			this.queuedTasks.push({ task, id, createdAt, generation });
@@ -195,7 +451,7 @@ export class SubagentManager {
 			return snapshot;
 		}
 
-		const id = `sa-${this.nextId++}`;
+		const id = this.allocateId();
 		const snapshot = await this.startTask(task, id, Date.now(), generation);
 		// A direct spawn can fail setup after later calls have filled the queue.
 		// Drain immediately instead of leaving accepted work parked until an
@@ -217,6 +473,7 @@ export class SubagentManager {
 	}
 
 	private async startTask(task: SpawnSubagentTask, id: string, createdAt: number, generation: number): Promise<SubagentSnapshot> {
+		let finishLaunch: (() => void) | undefined;
 		this.pendingSpawns.set(id, { title: task.title, createdAt });
 		let pending = true;
 		let releaseVisibleSpawn: (() => void) | undefined;
@@ -350,10 +607,13 @@ export class SubagentManager {
 				return this.recordSetupInterruption(task, id, createdAt, manifestBaseRef, "interrupted during setup", childCwd, worktree);
 			}
 			const controller = new AbortController();
+			const done = new Promise<void>((resolve) => { finishLaunch = resolve; });
+			this.launching.set(id, { controller, done });
 			if (placement?.kind === "workspace") this.workspacePlacedIds.add(id);
 			let child: SpawnedChild;
 			try {
-				child = this.backendFactory({ ...task, cwd: childCwd, id, signal: controller.signal, placement });
+				child = await this.backendFactory({ ...task, cwd: childCwd, id, signal: controller.signal, placement,
+					baseRef: manifestBaseRef, worktreeRef: worktree });
 			} catch (error) {
 				this.workspacePlacedIds.delete(id);
 				releasePending();
@@ -361,11 +621,26 @@ export class SubagentManager {
 				const preservationNote = worktree ? ` Worktree created at ${worktree.path} is preserved.` : "";
 				return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, `unable to spawn child: ${message}.${preservationNote}`, childCwd, worktree);
 			}
-			const snapshot = makeInitialSnapshot(task, id, createdAt, manifestBaseRef, childCwd, worktree, child.sessionFilePath);
-			this.snapshots.set(id, snapshot);
-			this.children.set(id, { child, controller });
+			let snapshot = this.withBudget({ ...makeInitialSnapshot(task, id, createdAt, manifestBaseRef, childCwd, worktree, child.sessionFilePath), startedAt: Date.now() });
+			if (child.retentionUnsupported) snapshot = { ...snapshot, recovery: "unsupported" };
 			releasePending();
-			this.consumeEvents(id, child.events);
+			if (child.retained) {
+				const entry = { ...child.retained, snapshot };
+				try { await this.trackRetained(entry); }
+				catch {
+					this.retained.set(id, { entry, blocked: true });
+					this.snapshots.set(id, snapshot);
+					this.blockRetained(id, "ambiguous");
+				}
+			} else {
+				this.snapshots.set(id, snapshot);
+				this.children.set(id, { child, controller });
+				this.startHealthTimer();
+				this.consumeEvents(id, child.events);
+			}
+			if (controller.signal.aborted || (!child.retained && this.setupInterrupted(id, generation))) {
+				await this.children.get(id)?.child.interrupt();
+			}
 			if (child.ready) await child.ready;
 			this.notify();
 			this.prune();
@@ -376,6 +651,8 @@ export class SubagentManager {
 			if (synchronousSettle) await synchronousSettle;
 			return this.snapshots.get(id) ?? snapshot;
 		} finally {
+			this.launching.delete(id);
+			finishLaunch?.();
 			this.cancelledSetupIds.delete(id);
 			releaseVisibleSpawn?.();
 			releasePending();
@@ -447,6 +724,7 @@ export class SubagentManager {
 		// CANCEL_WAIT_MS each — cancel means "stop everything promptly".
 		const lines = new Map<string, string>();
 		const targets: string[] = [];
+		const admissions = new Map<string, Promise<void>>();
 		for (const id of ids) {
 			const snapshot = this.snapshots.get(id);
 			if (!snapshot) {
@@ -456,6 +734,10 @@ export class SubagentManager {
 			const settlingOutcome = this.settlingOutcomes.get(id);
 			if (settlingOutcome) {
 				lines.set(id, `${id} was already ${settlingOutcome.kind === "completed" ? "done" : "settled"}`);
+				continue;
+			}
+			if (this.retained.get(id)?.blocked) {
+				lines.set(id, `${id} control unavailable; inspect retained evidence`);
 				continue;
 			}
 			this.consumedIds.add(id);
@@ -469,14 +751,29 @@ export class SubagentManager {
 				else if (this.pendingSpawns.has(id)) this.cancelledSetupIds.add(id);
 				void this.startSettle(id, { kind: "interrupted" });
 			} else {
-				this.children.get(id)?.child.interrupt();
+				admissions.set(id, Promise.resolve(this.children.get(id)?.child.interrupt()));
 			}
 			targets.push(id);
 		}
 		await Promise.allSettled(targets.map(async (id) => {
+			const retained = this.retained.has(id);
+			try {
+				await admissions.get(id);
+			} catch {
+				if (retained) {
+					this.blockRetained(id, "ambiguous");
+					lines.set(id, `${id} control unavailable; inspect retained evidence`);
+					return;
+				}
+			}
 			try {
 				await this.waitForSettle(id, CANCEL_WAIT_MS);
 			} catch {
+				if (retained) {
+					this.consumedIds.delete(id);
+					lines.set(id, `cancel requested for ${id}; still running — inspect or retry`);
+					return;
+				}
 				await this.startSettle(id, { kind: "interrupted", partialText: this.snapshots.get(id)?.finalText || this.snapshots.get(id)?.liveText });
 			}
 			lines.set(id, `Cancelled ${id}`);
@@ -486,10 +783,11 @@ export class SubagentManager {
 	}
 
 	/**
-	 * Deliver steering text to a running child over its control channel.
+	 * Wait until a running child's watcher consumes the steering control and
+	 * synchronously submits it to Pi. This is not a model-turn delivery ACK.
 	 * Throws with the same shapes the subagent tools surface directly.
 	 */
-	public async sendTo(id: string, text: string): Promise<SubagentSnapshot> {
+	public async sendTo(id: string, text: string): Promise<SubagentSnapshot | { capability: "unsupported: headless steering" }> {
 		const snapshot = this.snapshots.get(id);
 		if (!snapshot) {
 			throw new Error(`Unknown subagent id: ${id}. Known ids: ${this.list().map((known) => known.id).join(", ") || "(none)"}`);
@@ -500,9 +798,15 @@ export class SubagentManager {
 		if (isSettled(snapshot)) {
 			throw new Error(`Subagent ${id} is already settled (${snapshot.status}) and cannot receive input`);
 		}
+		const retained = this.retained.get(id);
+		if (this.detached || retained && (retained.blocked || !retained.entry.registry.inspectControl(retained.entry.authority))) {
+			throw new Error(`Subagent ${id} control refused; inspect retained evidence`);
+		}
+		// Headless stdin carries a one-shot prompt, not a steering channel.
+		if (!snapshot.visible) return { capability: "unsupported: headless steering" };
 		const child = this.children.get(id)?.child;
 		if (!child?.send) {
-			throw new Error("headless children cannot receive input — respawn with visible: true");
+			throw new Error(`Subagent ${id} visible steering channel unavailable`);
 		}
 		await child.send(text);
 		return this.snapshots.get(id) ?? snapshot;
@@ -530,7 +834,12 @@ export class SubagentManager {
 				lines.set(id, `${id} was already ${settlingOutcome.kind === "completed" ? "done" : "settled"}`);
 				continue;
 			}
+			if (this.retained.get(id)?.blocked) {
+				lines.set(id, `${id} control unavailable; inspect retained evidence`);
+				continue;
+			}
 			if (isSettled(snapshot)) {
+				this.consumedIds.add(id);
 				lines.set(id, `${id} was already ${snapshot.status === "done" ? "done" : "settled"}`);
 				continue;
 			}
@@ -577,7 +886,26 @@ export class SubagentManager {
 		return ids.map((id) => lines.get(id) ?? `${id} is unknown`);
 	}
 
+	/** Stop legacy work while leaving retained children live until session_start identifies the successor manager. */
+	public prepareForReplacement(): void {
+		this.lifecycleGeneration += 1;
+		const queuedIds = this.queuedTasks.map((queued) => queued.id);
+		this.queuedTasks.length = 0;
+		for (const id of queuedIds) void this.startSettle(id, { kind: "interrupted" });
+		for (const [id, snapshot] of this.snapshots) {
+			if (this.retained.has(id)) continue;
+			this.consumedIds.add(id);
+			if (!isSettled(snapshot)) this.snapshots.set(id, { ...snapshot, recovery: "unsupported" });
+		}
+		for (const [id, entry] of this.children) {
+			if (!this.retained.has(id) && this.snapshots.get(id)?.status === "running") entry.child.interrupt();
+		}
+	}
+
 	public disposeAll(): void {
+		for (const launch of this.launching.values()) launch.controller.abort();
+		clearInterval(this.healthTimer);
+		this.healthTimer = undefined;
 		// In-flight setup cannot be synchronously interrupted, so advance the
 		// generation first. Every awaited setup path checks this token before it
 		// may construct a backend, preventing post-shutdown orphan children while
@@ -674,9 +1002,31 @@ export class SubagentManager {
 			events(emit);
 			return;
 		}
-		void (async () => {
+		const consume = async (): Promise<void> => {
 			for await (const event of events) emit(event);
-		})();
+		};
+		// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Promise rejection boundary: backend async iterators may reject with any JavaScript value.
+		void consume().catch((error: unknown) => {
+			const current = this.snapshots.get(id);
+			if (!current || isSettled(current)) return;
+			const message = error instanceof Error ? error.message : String(error);
+			const child = this.children.get(id)?.child;
+			void this.startSettle(id, {
+				kind: "failed",
+				errorText: `subagent event stream failed: ${message}`,
+				partialText: current.finalText || current.liveText || undefined,
+			});
+			try {
+				child?.interrupt();
+			} catch (interruptError) {
+				const interruptMessage = (interruptError instanceof Error ? interruptError.message : String(interruptError)).slice(0, ERROR_TEXT_MAX);
+				try {
+					this.onDiagnostic?.({ kind: "interrupt", message: interruptMessage });
+				} catch {
+					// Diagnostics must not reopen a contained backend failure.
+				}
+			}
+		});
 	}
 
 	private fold(id: string, event: SubagentEvent): void {
@@ -720,12 +1070,12 @@ export class SubagentManager {
 		if (isSettled(current)) return;
 		let next = current;
 		if (event.kind === "assistant-delta") next = { ...current, liveText: `${current.liveText}${event.delta}` };
-		else if (event.kind === "tool-start") next = { ...current, liveTools: upsertTool(current.liveTools, { id: event.toolId, name: event.name, argsPreview: event.argsPreview, done: false, isError: false }) };
+		else if (event.kind === "tool-start") next = { ...current, liveTools: upsertTool(current.liveTools, { id: event.toolId, name: event.name, argsPreview: event.argsPreview, done: false, isError: false, startedAt: Date.now() }) };
 		else if (event.kind === "tool-update") next = { ...current, liveTools: upsertTool(current.liveTools, { id: event.toolId, name: current.liveTools.find((tool) => tool.id === event.toolId)?.name ?? "tool", outputPreview: event.outputPreview, done: false, isError: false }) };
 		else if (event.kind === "tool-end") next = { ...current, liveTools: upsertTool(current.liveTools, { id: event.toolId, name: event.name, outputPreview: event.outputPreview, done: true, isError: event.isError }) };
 		else if (event.kind === "message-end") next = {
 			...current,
-			transcript: [...current.transcript, { role: event.role, text: event.text, createdAt: Date.now() }],
+			transcript: [...(event.replacesRetainedText ? [] : current.transcript), { role: event.role, text: event.text, createdAt: Date.now() }],
 			liveText: event.role === "assistant" ? "" : current.liveText,
 			finalText: event.role === "assistant" ? event.text : current.finalText,
 			usage: event.role === "assistant" ? { ...current.usage, turns: current.usage.turns + 1 } : current.usage,
@@ -739,9 +1089,15 @@ export class SubagentManager {
 				tokens: event.tokens ?? current.usage.tokens,
 				contextWindow: event.contextWindow ?? current.usage.contextWindow,
 				costUsd: event.costUsd ?? current.usage.costUsd,
+				reportedTokens: addReportedSubagentUsage(current.usage.reportedTokens, event.tokens),
+				reportedCostUsd: addReportedSubagentUsage(current.usage.reportedCostUsd, event.costUsd),
 			},
 		};
-		this.snapshots.set(id, next);
+		if (event.kind === "heartbeat") {
+			if (!current.visible || !Number.isSafeInteger(event.at) || event.at <= (current.lastHeartbeatAt ?? 0) || event.at > Date.now() || Date.now() - event.at > 2000) return;
+			next = { ...next, lastHeartbeatAt: event.at };
+		} else if (!current.visible && event.kind !== "run-started") next = { ...next, lastProgressAt: Date.now() };
+		this.snapshots.set(id, this.withBudget(next));
 		this.notify();
 		this.prune();
 	}
@@ -765,6 +1121,7 @@ export class SubagentManager {
 		if (!current || isSettled(current) || this.settlingIds.has(id)) return;
 		this.settlingIds.add(id);
 		this.children.delete(id);
+		this.stopHealthTimerIfIdle();
 		const settledAt = Date.now();
 		try {
 			if (current.status === "queued") {
@@ -792,7 +1149,7 @@ export class SubagentManager {
 			if (outcome.kind === "completed") next = { ...latest, status: "done", settledAt, finalText: outcome.finalText || latest.finalText, liveText: "", manifest };
 			else if (outcome.kind === "failed") next = { ...latest, status: "error", settledAt, errorText: outcome.errorText.slice(0, ERROR_TEXT_MAX), finalText: outcome.partialText ?? latest.finalText, liveText: "", manifest };
 			else next = { ...latest, status: "error", settledAt, errorText: "interrupted", finalText: outcome.partialText ?? latest.finalText, liveText: "", manifest };
-			this.snapshots.set(id, next);
+			this.snapshots.set(id, this.withBudget(next));
 			if ((this.waitInterest.get(id) ?? 0) > 0) this.consumedIds.add(id);
 			// Completion listeners (including deferred delivery) must observe the
 			// manifest on the same immutable terminal snapshot.
@@ -848,8 +1205,96 @@ export class SubagentManager {
 		});
 	}
 
+	private withBudget(snapshot: SubagentSnapshot): SubagentSnapshot {
+		const tools = snapshot.liveTools.filter((tool) => !tool.done && tool.startedAt !== undefined);
+		return { ...snapshot, ...evaluateSubagentBudget({
+			now: snapshot.settledAt ?? Date.now(), status: snapshot.status,
+			startedAt: snapshot.startedAt ?? null, lastProgressAt: snapshot.lastProgressAt ?? null, lastHeartbeatAt: snapshot.lastHeartbeatAt,
+			budget: snapshot.budget, progress: snapshot.visible ? "liveness-only" : "events",
+			// A running handle or an attached pane is not an OS liveness observation.
+			liveness: "unknown", toolStartedAt: tools.length ? Math.min(...tools.map((tool) => tool.startedAt!)) : undefined,
+			usage: { tokens: snapshot.usage.reportedTokens, costUsd: snapshot.usage.reportedCostUsd },
+		}) };
+	}
+
+	/** A settled-but-undelivered retained completion still needs control-lease renewal, so the timer outlives its child handle. */
+	private stopHealthTimerIfIdle(): void {
+		if (this.children.size > 0) return;
+		for (const [id, tracked] of this.retained) {
+			if (tracked.blocked) continue;
+			let record: SubagentRecord | undefined;
+			try {
+				record = tracked.entry.registry.get(id);
+			} catch {
+				continue;
+			}
+			if (record && record.delivery.state !== "none" && record.delivery.state !== "sent") return;
+		}
+		clearInterval(this.healthTimer);
+		this.healthTimer = undefined;
+	}
+
+	private startHealthTimer(): void {
+		if (this.healthTimer) return;
+		this.healthTimer = setInterval(() => {
+			let changed = false;
+			for (const id of this.children.keys()) {
+				const retained = this.retained.get(id);
+				if (retained && !retained.blocked) {
+					try {
+						const lease = retained.entry.registry.get(id)?.controlLease;
+						if (!lease || lease.expiresAt - Date.now() < 30_000) retained.entry.registry.renewControl(retained.entry.authority);
+					} catch {
+						this.blockRetained(id, "ambiguous");
+						changed = true;
+					}
+				}
+				const current = this.snapshots.get(id);
+				if (!current || current.status !== "running") continue;
+				const next = this.withBudget(current);
+				changed ||= next.health !== current.health || next.warnings?.join() !== current.warnings?.join();
+				this.snapshots.set(id, next);
+			}
+			let pendingDelivery = false;
+			for (const [id, tracked] of this.retained) {
+				if (tracked.blocked || this.children.has(id)) continue;
+				let record: SubagentRecord | undefined;
+				try {
+					record = tracked.entry.registry.get(id);
+				} catch {
+					this.blockRetained(id, "ambiguous");
+					changed = true;
+					continue;
+				}
+				if (!record || record.delivery.state === "none" || record.delivery.state === "sent") continue;
+				pendingDelivery = true;
+				try {
+					const lease = record.controlLease;
+					if (!lease || lease.expiresAt - Date.now() < 30_000) tracked.entry.registry.renewControl(tracked.entry.authority);
+				} catch {
+					this.blockRetained(id, "ambiguous");
+					changed = true;
+				}
+			}
+			if (this.children.size === 0 && !pendingDelivery) { clearInterval(this.healthTimer); this.healthTimer = undefined; }
+			if (changed) this.notify();
+		}, 1000);
+		this.healthTimer.unref();
+	}
+
 	private notify(): void {
-		for (const listener of this.listeners) listener();
+		for (const listener of this.listeners) {
+			try {
+				listener();
+			} catch (error) {
+				const message = (error instanceof Error ? error.message : String(error)).slice(0, ERROR_TEXT_MAX);
+				try {
+					this.onDiagnostic?.({ kind: "listener", message });
+				} catch {
+					// Diagnostics must not break later listeners.
+				}
+			}
+		}
 	}
 
 	private prune(): void {

@@ -1,8 +1,7 @@
 node_modules/
-dist/*
-# The extension bundle is committed so Pi git-package consumers need no build hook.
-!dist/extension/
-!dist/extension/**
+# Generated build/release artifacts (pnpm build:bundles). Never commit dist/**;
+# git-package installs use the source fallback in src/extension-entry.ts.
+/dist/
 .DS_Store
 *.log
 logs/

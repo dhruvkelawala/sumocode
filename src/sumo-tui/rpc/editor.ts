@@ -8,7 +8,6 @@ import {
 	KeybindingsManager as PiTuiKeybindingsManager,
 	TUI_KEYBINDINGS,
 	type AutocompleteItem,
-	type AutocompleteProvider,
 	type Component,
 	type EditorTheme,
 	type KeybindingDefinitions,
@@ -19,6 +18,7 @@ import {
 import { createCathedralEditor, type CathedralEditor } from "../../cathedral/cathedral-editor.js";
 import { activeThemeColors } from "../../themes/index.js";
 import { lineToAnsi, span, textLine } from "../render/primitives.js";
+import { logDiagnostic } from "../runtime/diagnostics.js";
 import { pasteClipboardImageToTempFile } from "./clipboard-paste.js";
 import type { KeyEvent, KeyTarget } from "../input/key-router.js";
 import type { EditorTextController } from "../pi-compat/extension-ui-adapter.js";
@@ -271,6 +271,7 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 	private readonly onSubmit: (text: string) => void | Promise<void>;
 	private readonly errorNotifier: ErrorNotifier | undefined;
 	private isSplashProvider: () => boolean;
+	private slashReadyMarked = false;
 
 	public constructor(options: RpcHostEditorControllerOptions = {}) {
 		this.tui = options.tui ?? createFallbackTui(options.onRenderRequest);
@@ -287,6 +288,10 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 			options.keybindings ?? createNoopKeybindings(),
 			{ isSplash: () => this.isSplashProvider() },
 		);
+		this.editor.setAutocompleteProvider(createRpcAutocompleteProvider(
+			buildRpcAutocompleteCommands([], { controls: this.controls }),
+			{ cwd: this.cwd, fdPath: this.fdPath, env: this.env },
+		));
 		// Manager-driven app actions: `CustomEditor` (which `CathedralEditor`
 		// extends) already gates these on the injected `KeybindingsManager` --
 		// `onCtrlD`/`onEscape` are its special-cased callback props for
@@ -347,15 +352,11 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 
 	public async configureAutocomplete(controls: RpcEditorAutocompleteControls | undefined = this.controls): Promise<void> {
 		if (!controls) return;
-		this.setAutocompleteProvider(await createRpcAutocompleteProviderFromControls(controls, {
+		this.editor.replaceAutocompleteProviderAndRetriggerSlashCompletion(await createRpcAutocompleteProviderFromControls(controls, {
 			cwd: this.cwd,
 			fdPath: this.fdPath,
 			env: this.env,
 		}));
-	}
-
-	public setAutocompleteProvider(provider: AutocompleteProvider): void {
-		this.editor.setAutocompleteProvider(provider);
 	}
 
 	public focus(): Component {
@@ -388,7 +389,13 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 	}
 
 	public render(width: number): string[] {
-		return this.editor.render(width);
+		const rendered = this.editor.render(width);
+		const command = this.getText();
+		if (!this.slashReadyMarked && (command === "/resume" || command === "/model") && this.editor.isShowingAutocomplete()) {
+			this.slashReadyMarked = true;
+			logDiagnostic("slash_ready", { command });
+		}
+		return rendered;
 	}
 
 	public paste(text: string): void {

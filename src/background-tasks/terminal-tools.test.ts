@@ -39,6 +39,7 @@ function createHarness(initial: TerminalTaskSnapshot[] = []) {
 	const listeners = new Set<(snapshot: TerminalTaskSnapshot) => void>();
 	let activeSessionId = "session-a";
 	let idle = true;
+	let indexReady = true;
 	// SAFETY: the fake session branch intentionally stores loose fixture records; the coordinator re-parses them.
 	// oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- fixture records are deliberately open.
 	const branch = [] as Array<Record<string, unknown>>;
@@ -46,8 +47,8 @@ function createHarness(initial: TerminalTaskSnapshot[] = []) {
 	let onSend: (() => void) | undefined;
 	let claimSequence = 0;
 	const manager = {
-		start: vi.fn(async (options: { ownerSessionId: string; sourceId?: string; completionPolicy: "passive" | "wake" }) => {
-			const started = task({ ownerSessionId: options.ownerSessionId, sourceId: options.sourceId, completionPolicy: options.completionPolicy });
+		start: vi.fn(async (options: { ownerSessionId: string; sourceId?: string; completionPolicy: "passive" | "wake"; command: string; cwd: string; title: string }) => {
+			const started = task({ ownerSessionId: options.ownerSessionId, sourceId: options.sourceId, completionPolicy: options.completionPolicy, command: options.command, cwd: options.cwd, title: options.title });
 			tasks.set(started.id, started);
 			return started;
 		}),
@@ -89,7 +90,12 @@ function createHarness(initial: TerminalTaskSnapshot[] = []) {
 			const entry = tasks.get(id);
 			return entry?.ownerSessionId === owner ? entry : undefined;
 		}),
+		readIndexed: vi.fn((id: string, owner: string) => {
+			const entry = tasks.get(id);
+			return entry?.ownerSessionId === owner ? entry : undefined;
+		}),
 		getOutput: vi.fn(() => "bounded output"),
+		getOutputTailBytes: vi.fn(() => ({ bytes: Buffer.from("bounded output"), truncated: false })),
 		claimPending: vi.fn((owner: string, includeWake: boolean) => {
 			const claimed: TerminalTaskSnapshot[] = [];
 			for (const [id, entry] of tasks) {
@@ -117,6 +123,7 @@ function createHarness(initial: TerminalTaskSnapshot[] = []) {
 			return values;
 		}),
 		getClaimRetryDelay: vi.fn((owner: string) => [...tasks.values()].some((entry) => entry.ownerSessionId === owner && entry.deliveryState === "claimed") ? 10 : undefined),
+		isIndexReady: vi.fn(() => indexReady),
 		addChangeListener: vi.fn((listener: (snapshot: TerminalTaskSnapshot) => void) => {
 			listeners.add(listener);
 			return () => listeners.delete(listener);
@@ -159,6 +166,7 @@ function createHarness(initial: TerminalTaskSnapshot[] = []) {
 		setRecordSentMessage: (value: boolean) => { recordSentMessage = value; },
 		setOnSend: (value: (() => void) | undefined) => { onSend = value; },
 		setIdle: (value: boolean) => { idle = value; },
+		setIndexReady: (value: boolean) => { indexReady = value; },
 		setSession: (value: string) => { activeSessionId = value; },
 		emit: (snapshot: TerminalTaskSnapshot) => { for (const listener of listeners) listener(snapshot); },
 	};
@@ -203,6 +211,63 @@ describe("installTerminalTools", () => {
 		expect(result.details).toMatchObject({ activity: { id: "term-a", sourceId: "call-1" } });
 	});
 
+	it("redacts terminal session projections without changing owner-only task state", async () => {
+		const secret = "credential-value-that-must-not-persist";
+		const settled = task({
+			command: `deploy --token ${secret}`,
+			cwd: `/repo/API_KEY=${secret}`,
+			title: `password=${secret}`,
+			logFile: `/tmp/token=${secret}/output.log`,
+			status: "completed",
+			settledAt: 2_000,
+			exitCode: 0,
+			deliveryState: "pending",
+			completionId: "completion-secret",
+		});
+		const harness = createHarness([settled]);
+		harness.manager.getOutputTailBytes.mockReturnValue({
+			bytes: Buffer.from(`${secret}\nAPI_KEY=${secret}\nbenign diagnostic`),
+			truncated: true,
+		});
+		const stop = harness.manager.stop.getMockImplementation()!;
+		harness.manager.stop.mockImplementation(async (ids: string[], owner: string) => {
+			const results = await stop(ids, owner);
+			return results.map((result) => result.task
+				? { ...result, output: `${secret}${"x".repeat(8 * 1024)}\nAPI_KEY=${secret}\nbenign stop diagnostic` }
+				: result);
+		});
+
+		const started = await execute(harness.tool("terminal_start"), {
+			command: `deploy --token ${secret}`,
+			title: `password=${secret}`,
+			working_dir: `/repo/API_KEY=${secret}`,
+		}, harness.ctx());
+		harness.tasks.set(settled.id, settled);
+		await harness.fire("session_start");
+		const checked = await execute(harness.tool("terminal_check"), { id: settled.id }, harness.ctx());
+		const waited = await execute(harness.tool("terminal_wait"), { ids: [settled.id], timeout_ms: 5 }, harness.ctx());
+		const stopped = await execute(harness.tool("terminal_stop"), { ids: [settled.id] }, harness.ctx());
+		const listed = await execute(harness.tool("terminal_list"), {}, harness.ctx());
+
+		const published = JSON.stringify({ started, checked, waited, stopped, listed, messages: harness.sendMessage.mock.calls });
+		expect(published).not.toContain(secret);
+		expect(published).not.toContain("deploy --token");
+		expect(published).toContain("benign diagnostic");
+		expect(harness.tasks.get(settled.id)?.command).toContain(secret);
+	});
+
+	it("reports a safe marker for a truncated newline-free output tail", async () => {
+		const settled = task({ status: "completed", settledAt: 2_000, exitCode: 0, deliveryState: "suppressed" });
+		const harness = createHarness([settled]);
+		harness.manager.check.mockReturnValue({ task: settled, output: "x".repeat(16 * 1024) });
+		harness.manager.getOutputTailBytes.mockReturnValue({ bytes: Buffer.from("x".repeat(64 * 1024)), truncated: true });
+
+		const checked = await execute(harness.tool("terminal_check"), { id: settled.id }, harness.ctx());
+
+		expect(checked.content[0]?.text).toContain("[truncated line redacted]");
+		expect(checked.content[0]?.text).not.toContain("(no output)");
+	});
+
 	it("uses current session ownership at every check, wait, stop, and list boundary", async () => {
 		const settled = task({ status: "completed", settledAt: 2_000, exitCode: 0, deliveryState: "suppressed", completionId: "completion-a" });
 		const harness = createHarness([settled]);
@@ -232,6 +297,33 @@ describe("installTerminalTools", () => {
 		expect(harness.manager.list).toHaveBeenCalledWith("session-a");
 		expect(harness.manager.acknowledge).not.toHaveBeenCalled();
 		expect(harness.manager.getClaimRetryDelay).not.toHaveBeenCalled();
+	});
+
+	it("performs one startup reconciliation over the retained projection", async () => {
+		const harness = createHarness();
+
+		await harness.fire("session_start");
+
+		expect(harness.manager.acknowledge).toHaveBeenCalledOnce();
+		expect(harness.manager.claimPending).toHaveBeenCalledOnce();
+		expect(harness.manager.getClaimRetryDelay).toHaveBeenCalledOnce();
+	});
+
+	it("keeps completion delivery closed until the terminal index is authoritative", async () => {
+		const settled = task({ status: "completed", settledAt: 2_000, exitCode: 0, deliveryState: "pending", completionId: "completion-a" });
+		const harness = createHarness([settled]);
+		harness.setIndexReady(false);
+
+		await harness.fire("session_start");
+		expect(harness.manager.acknowledge).not.toHaveBeenCalled();
+		expect(harness.manager.claimPending).not.toHaveBeenCalled();
+		expect(harness.sendMessage).not.toHaveBeenCalled();
+
+		harness.setIndexReady(true);
+		harness.emit(settled);
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(harness.sendMessage).toHaveBeenCalledOnce();
 	});
 
 	it("does not arm lease retries when no completion was claimed", async () => {

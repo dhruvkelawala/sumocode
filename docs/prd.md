@@ -1,3 +1,5 @@
+> **Status: historical/superseded as of 2026-09-08** — [Current authority](../README.md). Original design intent is preserved; shipped behavior and approval policy have changed.
+
 # SumoCode v1.0 — PRD
 
 > Generated 2026-04-25 from a 14-question grilling session.

@@ -4,6 +4,56 @@ import type { ChatBlock, ChatMessageViewModel } from "./view-model.js";
 export type ActivityBlock = Extract<ChatBlock, { type: "activity" }>;
 export type FoldableBlock = Extract<ChatBlock, { type: "activity" | "delegation" }>;
 
+export interface ActivityFoldOperationCounts {
+	readonly historyMessageVisits: number;
+	readonly messageEnvelopeCopies: number;
+	readonly indexedIdentityLookups: number;
+	readonly indexedCandidateVisits: number;
+	readonly targetBlockVisits: number;
+	readonly changedMessagePaths: number;
+}
+
+let historyMessageVisits = 0;
+let messageEnvelopeCopies = 0;
+let indexedIdentityLookups = 0;
+let indexedCandidateVisits = 0;
+let targetBlockVisits = 0;
+let changedMessagePaths = 0;
+
+export function resetActivityFoldOperationCountsForTests(): void {
+	historyMessageVisits = 0;
+	messageEnvelopeCopies = 0;
+	indexedIdentityLookups = 0;
+	indexedCandidateVisits = 0;
+	targetBlockVisits = 0;
+	changedMessagePaths = 0;
+}
+
+export function getActivityFoldOperationCountsForTests(): ActivityFoldOperationCounts {
+	return { historyMessageVisits, messageEnvelopeCopies, indexedIdentityLookups, indexedCandidateVisits, targetBlockVisits, changedMessagePaths };
+}
+
+function copyMessages(messages: readonly ChatMessageViewModel[]): ChatMessageViewModel[] {
+	messageEnvelopeCopies += 1;
+	return [...messages];
+}
+
+function copyAndAppendMessage(
+	messages: readonly ChatMessageViewModel[],
+	message: ChatMessageViewModel,
+): ChatMessageViewModel[] {
+	messageEnvelopeCopies += 1;
+	return [...messages, message];
+}
+
+function mapMessages(
+	messages: readonly ChatMessageViewModel[],
+	map: (message: ChatMessageViewModel, index: number) => ChatMessageViewModel,
+): ChatMessageViewModel[] {
+	messageEnvelopeCopies += 1;
+	return messages.map(map);
+}
+
 export function isActivityBlock(block: ChatBlock): block is ActivityBlock {
 	return block.type === "activity";
 }
@@ -22,7 +72,12 @@ export function canOwnFoldableUpdates(message: ChatMessageViewModel): boolean {
 }
 
 export function matchingActivityBlockIndex(blocks: readonly ChatBlock[], incoming: ActivityBlock): number {
-	return blocks.findIndex((block) => block.type === "activity" && sameActivity(block.activity, incoming.activity));
+	for (let index = 0; index < blocks.length; index += 1) {
+		targetBlockVisits += 1;
+		const block = blocks[index];
+		if (block?.type === "activity" && sameActivity(block.activity, incoming.activity)) return index;
+	}
+	return -1;
 }
 
 export function mergeActivityBlock(existing: ActivityBlock, incoming: ActivityBlock): ActivityBlock {
@@ -32,9 +87,10 @@ export function mergeActivityBlock(existing: ActivityBlock, incoming: ActivityBl
 export function upsertActivityBlock(blocks: readonly ChatBlock[], incoming: ActivityBlock): ChatBlock[] {
 	const index = matchingActivityBlockIndex(blocks, incoming);
 	if (index === -1) return [...blocks, incoming];
-	return blocks.map((block, blockIndex) => (
-		blockIndex === index && block.type === "activity" ? mergeActivityBlock(block, incoming) : block
-	));
+	return blocks.map((block, blockIndex) => {
+		targetBlockVisits += 1;
+		return blockIndex === index && block.type === "activity" ? mergeActivityBlock(block, incoming) : block;
+	});
 }
 
 function matchingDelegationBlockIndex(
@@ -42,8 +98,13 @@ function matchingDelegationBlockIndex(
 	incoming: Extract<ChatBlock, { type: "delegation" }>,
 ): number {
 	const incomingId = incoming.delegation.id;
-	if (incomingId) return blocks.findIndex((block) => block.type === "delegation" && block.delegation.id === incomingId);
-	return blocks.findIndex((block) => block.type === "delegation" && (block.delegation.status === "queued" || block.delegation.status === "running"));
+	for (let index = 0; index < blocks.length; index += 1) {
+		targetBlockVisits += 1;
+		const block = blocks[index];
+		if (block?.type !== "delegation") continue;
+		if (incomingId ? block.delegation.id === incomingId : block.delegation.status === "queued" || block.delegation.status === "running") return index;
+	}
+	return -1;
 }
 
 function mergeDelegationBlock(
@@ -79,9 +140,10 @@ export function upsertFoldableBlock(blocks: readonly ChatBlock[], incoming: Chat
 	if (incoming.type === "delegation") {
 		const index = matchingDelegationBlockIndex(blocks, incoming);
 		if (index === -1) return [...blocks, incoming];
-		return blocks.map((block, blockIndex) => (
-			blockIndex === index && block.type === "delegation" ? mergeDelegationBlock(block, incoming) : block
-		));
+		return blocks.map((block, blockIndex) => {
+			targetBlockVisits += 1;
+			return blockIndex === index && block.type === "delegation" ? mergeDelegationBlock(block, incoming) : block;
+		});
 	}
 	if (incoming.type === "image") {
 		const key = imageBlockKey(incoming);
@@ -95,6 +157,7 @@ function findLastMessageIndex(
 	predicate: (message: ChatMessageViewModel) => boolean,
 ): number {
 	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		historyMessageVisits += 1;
 		if (predicate(messages[index]!)) return index;
 	}
 	return -1;
@@ -103,6 +166,274 @@ function findLastMessageIndex(
 function foldableBlockId(block: FoldableBlock): string {
 	if (block.type === "activity") return block.activity.id;
 	return block.delegation.id ?? block.delegation.title;
+}
+
+interface FoldableBlockLocation {
+	readonly messageIndex: number;
+	readonly blockIndex: number;
+}
+
+export interface FoldableBlockIndex {
+	readonly locationsByIdentity: ReadonlyMap<string, readonly FoldableBlockLocation[]>;
+	readonly lastSumoMessageIndex: number;
+}
+
+export interface FoldableBlockCursor {
+	readonly base: FoldableBlockIndex;
+	readonly addedLocationsByIdentity: Map<string, FoldableBlockLocation[]>;
+	pendingDelegationOffset: number;
+	lastSumoMessageIndex: number;
+}
+
+function foldableIndexKeys(block: FoldableBlock): string[] {
+	if (block.type === "delegation") {
+		const keys = block.delegation.id ? [`delegation:${block.delegation.id}`] : [];
+		if (block.delegation.status === "queued" || block.delegation.status === "running") keys.push("delegation:pending");
+		return keys;
+	}
+	const keys = [...new Set([block.activity.id, block.activity.sourceId].filter((value): value is string => value !== undefined))]
+		.map((value) => `activity:${value}`);
+	if (block.activity.kind === "subagent" && block.activity.sourceId === undefined) {
+		keys.push(`activity:${block.activity.id}:latest`);
+		if (block.activity.createdAt !== undefined) keys.push(`activity:${block.activity.id}:created:${block.activity.createdAt}`);
+	}
+	return keys;
+}
+
+interface FoldableLookupKeys {
+	readonly preferred: readonly string[];
+	readonly fallback: readonly string[];
+}
+
+function foldableLookupKeys(block: FoldableBlock): FoldableLookupKeys {
+	if (block.type === "delegation") {
+		return {
+			preferred: block.delegation.id ? [`delegation:${block.delegation.id}`] : ["delegation:pending"],
+			fallback: [],
+		};
+	}
+	const sourceId = block.activity.sourceId;
+	if (block.activity.kind === "subagent" && sourceId === undefined) {
+		return block.activity.createdAt === undefined
+			? { preferred: [`activity:${block.activity.id}:latest`], fallback: [] }
+			: {
+				preferred: [`activity:${block.activity.id}:created:${block.activity.createdAt}`],
+				fallback: [`activity:${block.activity.id}:latest`],
+			};
+	}
+	return sourceId && sourceId !== block.activity.id
+		? {
+			preferred: [`activity:${sourceId}`],
+			fallback: block.activity.kind === "subagent" ? [] : [`activity:${block.activity.id}`],
+		}
+		: { preferred: [`activity:${block.activity.id}`], fallback: [] };
+}
+
+function addIndexedLocation(
+	locationsByIdentity: Map<string, FoldableBlockLocation[]>,
+	block: FoldableBlock,
+	location: FoldableBlockLocation,
+): void {
+	for (const key of foldableIndexKeys(block)) {
+		const locations = locationsByIdentity.get(key) ?? [];
+		if (key.endsWith(":latest")) {
+			const current = locations[0];
+			if (!current || location.messageIndex > current.messageIndex
+				|| (location.messageIndex === current.messageIndex && location.blockIndex < current.blockIndex)) {
+				locationsByIdentity.set(key, [location]);
+			}
+			continue;
+		}
+		if (!locations.some((candidate) => candidate.messageIndex === location.messageIndex && candidate.blockIndex === location.blockIndex)) {
+			locations.push(location);
+			locationsByIdentity.set(key, locations);
+		}
+	}
+}
+
+export function indexFoldableBlocks(messages: readonly ChatMessageViewModel[]): FoldableBlockIndex {
+	const locationsByIdentity = new Map<string, FoldableBlockLocation[]>();
+	let lastSumoMessageIndex = -1;
+	for (let messageIndex = 0; messageIndex < messages.length; messageIndex += 1) {
+		const message = messages[messageIndex]!;
+		if (message.role === "sumo") lastSumoMessageIndex = messageIndex;
+		if (!canOwnFoldableUpdates(message)) continue;
+		for (let blockIndex = 0; blockIndex < message.blocks.length; blockIndex += 1) {
+			const block = message.blocks[blockIndex];
+			if (block && isFoldableBlock(block)) addIndexedLocation(locationsByIdentity, block, { messageIndex, blockIndex });
+		}
+	}
+	locationsByIdentity.get("delegation:pending")?.sort((left, right) =>
+		right.messageIndex - left.messageIndex || left.blockIndex - right.blockIndex
+	);
+	return { locationsByIdentity, lastSumoMessageIndex };
+}
+
+export function createFoldableBlockCursor(base: FoldableBlockIndex): FoldableBlockCursor {
+	return {
+		base,
+		addedLocationsByIdentity: new Map(),
+		pendingDelegationOffset: 0,
+		lastSumoMessageIndex: base.lastSumoMessageIndex,
+	};
+}
+
+function indexedMatchingLocation(
+	messages: readonly ChatMessageViewModel[],
+	incoming: FoldableBlock,
+	cursor: FoldableBlockCursor,
+): FoldableBlockLocation | undefined {
+	indexedIdentityLookups += 1;
+	const matches = (location: FoldableBlockLocation): boolean => {
+		indexedCandidateVisits += 1;
+		const message = messages[location.messageIndex];
+		return message !== undefined
+			&& canOwnFoldableUpdates(message)
+			&& matchingFoldableBlockIndex([message.blocks[location.blockIndex]!], incoming) === 0;
+	};
+	if (incoming.type === "delegation" && incoming.delegation.id === undefined) {
+		const added = [...cursor.addedLocationsByIdentity.get("delegation:pending") ?? []]
+			.sort((left, right) => right.messageIndex - left.messageIndex || left.blockIndex - right.blockIndex);
+		const addedMatch = added.find(matches);
+		if (addedMatch) return addedMatch;
+		const pending = cursor.base.locationsByIdentity.get("delegation:pending") ?? [];
+		while (cursor.pendingDelegationOffset < pending.length) {
+			const location = pending[cursor.pendingDelegationOffset]!;
+			if (matches(location)) return location;
+			cursor.pendingDelegationOffset += 1;
+		}
+		return undefined;
+	}
+	const lookup = (keys: readonly string[]): FoldableBlockLocation | undefined => {
+		const candidates = new Map<string, FoldableBlockLocation>();
+		for (const key of keys) {
+			for (const location of cursor.base.locationsByIdentity.get(key) ?? []) {
+				candidates.set(`${location.messageIndex}:${location.blockIndex}`, location);
+			}
+			for (const location of cursor.addedLocationsByIdentity.get(key) ?? []) {
+				candidates.set(`${location.messageIndex}:${location.blockIndex}`, location);
+			}
+		}
+		return [...candidates.values()]
+			.sort((left, right) => right.messageIndex - left.messageIndex || left.blockIndex - right.blockIndex)
+			.find(matches);
+	};
+	const keys = foldableLookupKeys(incoming);
+	return lookup(keys.preferred) ?? lookup(keys.fallback);
+}
+
+function recordIndexedBlock(
+	message: ChatMessageViewModel,
+	messageIndex: number,
+	incoming: FoldableBlock,
+	cursor: FoldableBlockCursor,
+	knownBlockIndex?: number,
+): void {
+	const blockIndex = knownBlockIndex ?? matchingFoldableBlockIndex(message.blocks, incoming);
+	if (blockIndex === -1) return;
+	const location = { messageIndex, blockIndex };
+	addIndexedLocation(cursor.addedLocationsByIdentity, incoming, location);
+	if (incoming.type === "delegation" && (incoming.delegation.status === "queued" || incoming.delegation.status === "running")) {
+		const alreadyInBase = cursor.base.locationsByIdentity.get("delegation:pending")?.some((candidate) =>
+			candidate.messageIndex === messageIndex && candidate.blockIndex === blockIndex
+		) ?? false;
+		if (alreadyInBase) {
+			const added = cursor.addedLocationsByIdentity.get("delegation:pending")?.filter((candidate) =>
+				candidate.messageIndex !== messageIndex || candidate.blockIndex !== blockIndex
+		);
+			if (added?.length) cursor.addedLocationsByIdentity.set("delegation:pending", added);
+			else cursor.addedLocationsByIdentity.delete("delegation:pending");
+		}
+	}
+}
+
+export interface IndexedFoldResult {
+	readonly folded: boolean;
+	readonly messageIndex?: number;
+}
+
+export function foldBlockIntoIndexedMessages(
+	messages: ChatMessageViewModel[],
+	incoming: FoldableBlock,
+	cursor: FoldableBlockCursor,
+	options: { readonly requireMatch: boolean },
+): IndexedFoldResult {
+	const matchingLocation = indexedMatchingLocation(messages, incoming, cursor);
+	const targetIndex = matchingLocation?.messageIndex ?? (options.requireMatch ? -1 : cursor.lastSumoMessageIndex);
+	if (targetIndex === -1) {
+		if (options.requireMatch) return { folded: false };
+		const created: ChatMessageViewModel = {
+			id: `live-foldable-${foldableBlockId(incoming)}`,
+			role: "sumo",
+			displayName: "SUMO",
+			blocks: [incoming],
+		};
+		messages.push(created);
+		cursor.lastSumoMessageIndex = messages.length - 1;
+		recordIndexedBlock(created, messages.length - 1, incoming, cursor);
+		return { folded: true, messageIndex: messages.length - 1 };
+	}
+	const target = messages[targetIndex];
+	if (!target) return { folded: false };
+	changedMessagePaths += 1;
+	const updated = { ...target, blocks: upsertFoldableBlock(target.blocks, incoming) };
+	messages[targetIndex] = updated;
+	recordIndexedBlock(updated, targetIndex, incoming, cursor);
+	return { folded: true, messageIndex: targetIndex };
+}
+
+export interface IndexedAppendResult {
+	readonly changedMessageIndices: readonly number[];
+}
+
+export function appendOrFoldTranscriptMessageIndexed(
+	messages: ChatMessageViewModel[],
+	message: ChatMessageViewModel,
+	cursor: FoldableBlockCursor,
+): IndexedAppendResult {
+	const changedMessageIndices = new Set<number>();
+	if (message.role === "system" && isFoldableResultViewModel(message)) {
+		const unmatched: FoldableBlock[] = [];
+		let targetIndex = -1;
+		for (const block of message.blocks.filter(isFoldableBlock)) {
+			const result = foldBlockIntoIndexedMessages(messages, block, cursor, { requireMatch: true });
+			if (result.folded) {
+				targetIndex = Math.max(targetIndex, result.messageIndex ?? -1);
+				if (result.messageIndex !== undefined) changedMessageIndices.add(result.messageIndex);
+			}
+			else unmatched.push(block);
+		}
+		if (targetIndex !== -1) {
+			const images = message.blocks.filter((block): block is Extract<ChatBlock, { type: "image" }> => block.type === "image");
+			const target = messages[targetIndex];
+			if (target && images.length > 0) messages[targetIndex] = { ...target, blocks: upsertFoldableImages(target.blocks, images) };
+			if (unmatched.length === 0) return { changedMessageIndices: [...changedMessageIndices] };
+			message = { ...message, blocks: unmatched };
+		}
+	}
+	messages.push(message);
+	changedMessageIndices.add(messages.length - 1);
+	if (message.role === "sumo") cursor.lastSumoMessageIndex = messages.length - 1;
+	for (let blockIndex = 0; blockIndex < message.blocks.length; blockIndex += 1) {
+		const block = message.blocks[blockIndex];
+		if (block && isFoldableBlock(block)) recordIndexedBlock(message, messages.length - 1, block, cursor, blockIndex);
+	}
+	return { changedMessageIndices: [...changedMessageIndices] };
+}
+
+function upsertFoldableImages(
+	blocks: readonly ChatBlock[],
+	images: readonly Extract<ChatBlock, { type: "image" }>[],
+): ChatBlock[] {
+	const keys = new Set(blocks
+		.filter((block): block is Extract<ChatBlock, { type: "image" }> => block.type === "image")
+		.map(imageBlockKey));
+	return [...blocks, ...images.filter((image) => {
+		const key = imageBlockKey(image);
+		if (keys.has(key)) return false;
+		keys.add(key);
+		return true;
+	})];
 }
 
 export interface FoldResult {
@@ -125,17 +456,17 @@ export function foldBlockIntoMessages(
 	const fallbackIndex = options.requireMatch ? -1 : findLastMessageIndex(messages, (message) => message.role === "sumo");
 	const targetIndex = matchingMessageIndex !== -1 ? matchingMessageIndex : fallbackIndex;
 	if (targetIndex === -1) {
-		if (options.requireMatch) return { messages: [...messages], folded: false };
+		if (options.requireMatch) return { messages: copyMessages(messages), folded: false };
 		const created: ChatMessageViewModel = {
 			id: `live-foldable-${foldableBlockId(incoming)}`,
 			role: "sumo",
 			displayName: "SUMO",
 			blocks: [incoming],
 		};
-		return { messages: [...messages, created], folded: true };
+		return { messages: copyAndAppendMessage(messages, created), folded: true };
 	}
 	return {
-		messages: messages.map((message, index) => (
+		messages: mapMessages(messages, (message, index) => (
 			index === targetIndex ? { ...message, blocks: upsertFoldableBlock(message.blocks, incoming) } : message
 		)),
 		folded: true,
@@ -147,7 +478,7 @@ export function foldBlocksIntoMessages(
 	blocks: readonly FoldableBlock[],
 	options: { readonly requireMatch: boolean },
 ): FoldedBlocksResult {
-	let next = [...messages];
+	let next = copyMessages(messages);
 	let foldedAny = false;
 	const unmatched: FoldableBlock[] = [];
 	for (const block of blocks) {
@@ -170,12 +501,12 @@ export function foldResultViewModelIntoMessages(
 	messages: readonly ChatMessageViewModel[],
 	message: ChatMessageViewModel,
 ) {
-	if (!isFoldableResultViewModel(message)) return { messages: [...messages], folded: false };
+	if (!isFoldableResultViewModel(message)) return { messages: copyMessages(messages), folded: false };
 	const foldable = message.blocks.filter(isFoldableBlock);
 	const targetIndices = foldable.map((block) => findLastMessageIndex(messages, (candidate) => (
 		canOwnFoldableUpdates(candidate) && matchingFoldableBlockIndex(candidate.blocks, block) !== -1
 	))).filter((index) => index !== -1);
-	if (targetIndices.length === 0) return { messages: [...messages], folded: false };
+	if (targetIndices.length === 0) return { messages: copyMessages(messages), folded: false };
 	const folded = foldBlocksIntoMessages(messages, foldable, { requireMatch: true });
 	const targetIndex = Math.max(...targetIndices);
 	const images = message.blocks.filter((block): block is Extract<ChatBlock, { type: "image" }> => block.type === "image");
@@ -193,7 +524,7 @@ export function foldResultViewModelIntoMessages(
 		return uniqueImages.length > 0 ? { ...candidate, blocks: [...candidate.blocks, ...uniqueImages] } : candidate;
 	});
 	if (folded.unmatched.length > 0) {
-		next = [...next, { ...message, blocks: folded.unmatched }];
+		next = copyAndAppendMessage(next, { ...message, blocks: folded.unmatched });
 	}
 	return { messages: next, folded: true };
 }
@@ -207,5 +538,5 @@ export function appendOrFoldTranscriptMessage(
 		const folded = foldResultViewModelIntoMessages(messages, message);
 		if (folded.folded) return folded.messages;
 	}
-	return [...messages, message];
+	return copyAndAppendMessage(messages, message);
 }

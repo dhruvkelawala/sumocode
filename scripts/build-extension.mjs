@@ -40,10 +40,12 @@ async function atomicCopy(source, destination) {
 	await rename(temporaryPath, destination);
 }
 
-// Pi installs git packages without running a consumer-side build hook. Keep the
-// bundle committed beside its source so consumers receive both at one commit;
-// the default test suite enforces that this output is fresh by comparing the
-// recorded input graph and copied assets against the committed sidecars.
+// dist/** is a build/release artifact and is never committed. Pi installs git
+// packages without a consumer-side build hook, so those consumers boot through
+// the source fallback in src/extension-entry.ts; a future package release may
+// run this script during prepack. When a bundle is present, the entry accepts
+// it only if the manifest written here still matches the input graph and the
+// published bytes.
 await mkdir(outDir, { recursive: true });
 
 // Build entirely in memory, verify the dependency graph did not change while

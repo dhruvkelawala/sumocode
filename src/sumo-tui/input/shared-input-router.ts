@@ -3,7 +3,7 @@ import { normalizeRawMultilinePasteInput } from "../../cathedral/multiline-paste
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import { chatScrollCommandFromInput } from "../widgets/chat-scroll-command.js";
 import type { KeyEvent } from "./key-router.js";
-import { parseSgrMouseStream, type MouseEvent } from "./mouse.js";
+import { parseSgrMouseEvent, type MouseEvent } from "./mouse.js";
 
 export interface SharedInputRouterResult {
 	readonly consume?: boolean;
@@ -12,9 +12,14 @@ export interface SharedInputRouterResult {
 }
 
 export interface SharedInputRouterCallbacks {
+	/** Replace one persistent, count-only recovery notice; never append a toast per chunk. */
+	readonly setInputNotice?: (message: string) => void;
 	readonly openCommandPalette?: () => void | Promise<void>;
 	readonly requestRender?: () => void;
 	readonly requestExit?: (code: number) => void;
+	/** Application input gate receives whole events only, never partial paste tails. */
+	readonly handleInputGate?: (data: string) => boolean | void;
+	readonly normalizeKeyInput?: (data: string) => string;
 	readonly handleFocusedModalInput?: (data: string) => boolean | void;
 	readonly isSensitiveInputFocused?: () => boolean;
 	readonly handleFocusedOverlayInput?: (data: string) => boolean | void;
@@ -40,46 +45,68 @@ interface MouseInputDiagnosticsFields {
 	readonly leftoverHex: string;
 }
 
-// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for ANSI input parsing
-const COMPLETE_SGR_MOUSE_SEQUENCE = /\x1b\[<\d+;\d+;\d+[Mm]/g;
-// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for ANSI input parsing
-const BRACKETED_PASTE_BLOCK_PATTERN = /\x1b\[200~[\s\S]*?\x1b\[201~/g;
-// CSI (`ESC [ ... final-byte`) and SS3 (`ESC O <letter>`) sequences are single
-// discrete key events. This mirrors pi-tui's Kitty CSI-u / arrow / func /
-// home-end grammar (keys.js `parseKittySequence`): digits, `;`, and `:`
-// separators followed by one CSI final byte (letters or `~`). Matching the
-// whole sequence as one token is required so `isKeyRelease` — which greps for
-// `:3u`/`:3~`/`:3<letter>` substrings on its input — is only ever asked about
-// one key event at a time, never a coalesced chunk that also contains an
-// unrelated press.
-// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for ANSI input parsing
-const CSI_OR_SS3_SEQUENCE_PATTERN = /\x1b(?:\[[0-9;:]*[A-Za-z~]|O[A-Za-z])/g;
+const PASTE_START = "\x1b[200~";
+const PASTE_END = "\x1b[201~";
+const PASTE_LIMIT_BYTES = 64 * 1024;
+const PASTE_IDLE_MS = 1_000;
 
-/**
- * Split a raw (post mouse-extraction) input chunk into discrete input
- * "tokens": bracketed-paste blocks pass through whole, CSI/SS3 escape
- * sequences are single tokens, and any other bytes are individual
- * characters. This is the granularity pi-tui's own `StdinBuffer` emits
- * `data` events at (see `@earendil-works/pi-tui/dist/stdin-buffer.d.ts`) —
- * the RPC host bypasses that buffer and reads raw stdin chunks directly, so
- * the router has to reconstruct the same per-event granularity itself
- * before it can safely ask `isKeyRelease` about any one token.
- */
+interface PasteRead {
+	readonly token: string;
+	readonly nextIndex: number;
+}
+
+interface PendingPaste {
+	readonly prefix: Buffer;
+	retainedBytes: number;
+	receivedBytes: number;
+	tail: string;
+	paused: boolean;
+	truncated: boolean;
+}
+// Keep CSI (including Kitty and SGR mouse) and SS3 sequences whole.
+// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for ANSI input parsing
+const CSI_OR_SS3_SEQUENCE_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|O[A-Za-z])/y;
+// oxlint-disable-next-line no-control-regex -- validates an unfinished CSI prefix
+const INCOMPLETE_CSI_PATTERN = /^\x1b\[[0-?]*[ -/]*$/;
+const MAX_PENDING_CSI_BYTES = 256;
+const inputGraphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+/** Split complete chunks without breaking paste blocks, escape sequences or graphemes. */
 export function splitInputTokens(data: string): string[] {
+	const { tokens, pending } = parseInputTokens(data);
+	return pending ? [...tokens, pending] : tokens;
+}
+
+function parseInputTokens(data: string, readPaste?: (data: string, start: number) => PasteRead) {
 	const tokens: string[] = [];
+	const graphemes = inputGraphemes.segment(data);
 	let index = 0;
 	while (index < data.length) {
-		BRACKETED_PASTE_BLOCK_PATTERN.lastIndex = index;
-		const pasteMatch = BRACKETED_PASTE_BLOCK_PATTERN.exec(data);
-		const pasteStart = pasteMatch && pasteMatch.index === index ? index : -1;
-
-		if (pasteStart === index && pasteMatch) {
-			tokens.push(pasteMatch[0]);
-			index += pasteMatch[0].length;
+		if (data.startsWith(PASTE_START, index)) {
+			if (readPaste) {
+				const paste = readPaste(data, index + PASTE_START.length);
+				if (paste.token) tokens.push(paste.token);
+				index = paste.nextIndex;
+				continue;
+			}
+			const end = data.indexOf(PASTE_END, index + PASTE_START.length);
+			if (end < 0) return { tokens, pending: data.slice(index) };
+			tokens.push(data.slice(index, end + PASTE_END.length));
+			index = end + PASTE_END.length;
 			continue;
 		}
 
 		if (data[index] === "\x1b") {
+			const remaining = data.slice(index);
+			// Kitty terminals can batch a bare Escape with its CSI-u release.
+			if (remaining.startsWith("\x1b\x1b")) {
+				tokens.push("\x1b");
+				index += 1;
+				continue;
+			}
+			if (PASTE_START.startsWith(remaining)) {
+				return { tokens, pending: remaining };
+			}
 			CSI_OR_SS3_SEQUENCE_PATTERN.lastIndex = index;
 			const escMatch = CSI_OR_SS3_SEQUENCE_PATTERN.exec(data);
 			if (escMatch && escMatch.index === index) {
@@ -87,12 +114,41 @@ export function splitInputTokens(data: string): string[] {
 				index += escMatch[0].length;
 				continue;
 			}
+			if (remaining.startsWith("\x1b[")) {
+				if (Buffer.byteLength(remaining, "utf8") <= MAX_PENDING_CSI_BYTES && INCOMPLETE_CSI_PATTERN.test(remaining)) {
+					return { tokens, pending: remaining };
+				}
+				// Never send a paste opener inside an opaque failure: Pi's editor
+				// would start its own unbounded paste buffer behind the router.
+				let pasteBoundary = remaining.indexOf(PASTE_START, 2);
+				if (pasteBoundary < 0) {
+					const lastEscape = remaining.lastIndexOf("\x1b");
+					const suffix = remaining.slice(lastEscape);
+					if (lastEscape > 1 && PASTE_START.startsWith(suffix)) pasteBoundary = lastEscape;
+				}
+				if (pasteBoundary > 0) {
+					tokens.push(remaining.slice(0, pasteBoundary));
+					index += pasteBoundary;
+					continue;
+				}
+				// A failed prefix is one opaque event, not fresh keys from its interior.
+				tokens.push(remaining);
+				return { tokens, pending: "" };
+			}
+			if (remaining === "\x1bO") return { tokens, pending: remaining };
+			const meta = graphemes.containing(index + 1)?.segment;
+			if (meta) {
+				tokens.push("\x1b" + meta);
+				index += 1 + meta.length;
+				continue;
+			}
 		}
 
-		tokens.push(data[index] ?? "");
-		index += 1;
+		const grapheme = graphemes.containing(index)?.segment ?? "";
+		tokens.push(grapheme);
+		index += grapheme.length;
 	}
-	return tokens;
+	return { tokens, pending: "" };
 }
 
 /**
@@ -112,17 +168,6 @@ export function filterKeyReleaseEvents(data: string): string {
 	return tokens.filter((token) => !isKeyRelease(token)).join("");
 }
 const BARE_ESCAPE_DISPATCH_DELAY_MS = 25;
-/**
- * Match a trailing prefix of an SGR mouse sequence so we can buffer partial
- * input across stdin chunks. Matches any of:
- *
- *   ESC, ESC [, ESC [ <, ESC [ < digits, ESC [ < digits ; digits ...
- *
- * The terminating M / m is intentionally absent because that would be a
- * complete sequence. Anchored to end-of-string only.
- */
-// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for ANSI input parsing
-const SGR_MOUSE_PREFIX_TAIL_PATTERN = /(?:\x1b(?:\[(?:<\d*(?:;\d*){0,2})?)?)$/;
 
 function toHex(value: string): string {
 	let hex = "";
@@ -231,96 +276,197 @@ export function containsCtrlCToken(data: string): boolean {
 }
 
 export class SharedInputRouter {
-	private pendingMouseInput = "";
+	private pendingInput = "";
+	private escapeDispatched = false;
+	private headerPaused = false;
 	private pendingBareEscapeTimer: ReturnType<typeof setTimeout> | undefined;
+	private paste: PendingPaste | undefined;
+	private redactInput = false;
+	private disposed = false;
 
 	public constructor(private readonly callbacks: SharedInputRouterCallbacks = {}) {}
 
 	public clearPendingMouseInput(): void {
-		this.pendingMouseInput = "";
+		// Session/focus changes do not prove the terminal's paste stream ended.
+		if (this.paste || (this.pendingInput.length > 0 && PASTE_START.startsWith(this.pendingInput))) return;
+		this.pendingInput = "";
 		this.clearPendingBareEscapeTimer();
 	}
 
+	public dispose(): void {
+		this.disposed = true;
+		this.clearPendingBareEscapeTimer();
+		this.pendingInput = "";
+		this.escapeDispatched = false;
+		this.headerPaused = false;
+		this.paste = undefined;
+	}
+
 	public handleInput(data: string): SharedInputRouterResult | void {
-		// Unconditional raw-input trace (no-ops unless SUMO_TUI_DIAG_FILE is
-		// set): ground truth for "keybindings are broken" reports, since a
-		// terminal's actual byte encoding (plain vs Kitty CSI-u press/repeat/
-		// release) can only be confirmed by capturing what it really sends.
-		// Run `sumocode -d .`, reproduce the broken key, then `sumocode diag`
-		// or grep the diag file for "raw_key_input" to see the exact bytes.
+		if (this.disposed || data.length === 0) return { consume: true };
+		this.redactInput = this.paste !== undefined || this.pendingInput.length > 0 || data.includes(PASTE_START);
 		logDiagnostic("raw_key_input", { hex: this.diagnosticHex(data), length: data.length });
-		let pendingMouseInput = this.pendingMouseInput;
-		if (pendingMouseInput === "\x1b" && !data.startsWith("[")) {
+		let pendingInput = this.pendingInput;
+		if (pendingInput === "\x1b" && !data.startsWith("[") && !data.startsWith("O")) {
 			this.clearPendingBareEscapeTimer();
-			this.pendingMouseInput = "";
-			this.dispatchDeferredInput("\x1b");
-			pendingMouseInput = "";
-		} else if (pendingMouseInput === "\x1b") {
+			this.pendingInput = "";
+			if (!this.escapeDispatched) this.dispatchDeferredInput("\x1b");
+			pendingInput = "";
+		} else if (pendingInput === "\x1b") {
 			this.clearPendingBareEscapeTimer();
 		}
-		const hadPendingMouseInput = pendingMouseInput.length > 0;
-		const rememberBareEscape = !hadPendingMouseInput && data === "\x1b";
-		const source = pendingMouseInput + data;
-		this.pendingMouseInput = "";
-		let nextData = source;
-		let consumed = false;
-
-		if (hadPendingMouseInput || source.includes("\x1b[<") || source === "\x1b[") {
-			const parsed = parseSgrMouseStream(source);
-			logDiagnostic("mouse_batch", {
-				rawBytes: source.length,
-				events: parsed.events.length,
-				types: parsed.events.map((event) => event.type),
-			});
-			let mouseViewportDirty = false;
-			for (const event of parsed.events) {
-				mouseViewportDirty = this.callbacks.handleMouseEvent?.(event) === true || mouseViewportDirty;
-			}
-			if (mouseViewportDirty) this.callbacks.scheduleMouseRender?.();
-
-			const beforeCompleteStrip = nextData;
-			nextData = nextData.replace(COMPLETE_SGR_MOUSE_SEQUENCE, "");
-			if (nextData !== beforeCompleteStrip) consumed = true;
-
-			const tailMatch = nextData.match(SGR_MOUSE_PREFIX_TAIL_PATTERN);
-			if (tailMatch && tailMatch[0].length > 0) {
-				this.pendingMouseInput = tailMatch[0];
-				nextData = nextData.slice(0, nextData.length - tailMatch[0].length);
+		this.escapeDispatched = false;
+		let source = pendingInput + data;
+		const completedPaste: string[] = [];
+		if (this.paste) {
+			const paste = this.readPaste(source, 0);
+			if (paste.token) completedPaste.push(paste.token);
+			source = source.slice(paste.nextIndex);
+		}
+		// A CR inside a failed CSI prefix must not bypass stream framing as
+		// a raw multiline draft (it can precede a fragmented paste opener).
+		CSI_OR_SS3_SEQUENCE_PATTERN.lastIndex = 0;
+		const failedCsiPrefix = source.startsWith("\x1b[") && !CSI_OR_SS3_SEQUENCE_PATTERN.test(source);
+		const lastEscape = source.lastIndexOf("\x1b");
+		const partialPasteOpener = lastEscape >= 0 && PASTE_START.startsWith(source.slice(lastEscape));
+		const draftSource = partialPasteOpener && !failedCsiPrefix ? source.slice(0, lastEscape) : source;
+		const normalized = failedCsiPrefix ? draftSource : normalizeRawMultilinePasteInput(draftSource);
+		if (normalized !== source) {
+			logDiagnostic("raw_multiline_paste_normalized", { sourceLength: source.length, normalizedLength: normalized.length });
+		}
+		// Preserve the existing unbracketed multiline-paste heuristic before
+		// splitting keys: its newlines are draft content, not submit presses.
+		const parsed = normalized !== draftSource || (!draftSource.includes("\x1b") && draftSource.length > 1 && draftSource.includes("\n"))
+			|| isCommandPaletteInput(source) || selectionCopyKeyFromInput(source) || (source !== "\x1b" && isEscapeInput(source))
+			? { tokens: [normalized], pending: source.slice(draftSource.length) }
+			: parseInputTokens(source, (input, start) => this.readPaste(input, start));
+		parsed.tokens.unshift(...completedPaste);
+		this.pendingInput = parsed.pending;
+		if (this.headerPaused && (!parsed.pending || !PASTE_START.startsWith(parsed.pending))) {
+			this.headerPaused = false;
+			this.callbacks.setInputNotice?.("input resumed — paste header resolved");
+			this.callbacks.requestRender?.();
+		}
+		this.clearPendingBareEscapeTimer();
+		if ((this.paste && !this.paste.paused) || parsed.pending) this.armBareEscapeTimer();
+		let consumed = parsed.pending.length > 0 || this.paste !== undefined;
+		let forwarded = false;
+		let mouseViewportDirty = false;
+		const mouseEvents: MouseEvent[] = [];
+		const leftovers: string[] = [];
+		for (const token of parsed.tokens) {
+			if (this.disposed) {
 				consumed = true;
-				if (this.pendingMouseInput === "\x1b") this.armBareEscapeTimer();
+				continue;
 			}
-
-			if (nextData.includes("\x1b[<")) {
-				// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for ANSI input parsing
-				const stripped = nextData.replace(/\x1b\[<[\d;]*[Mm]?/g, "");
-				if (stripped !== nextData) {
-					nextData = stripped;
-					consumed = true;
+			if (this.callbacks.handleInputGate?.(token) === true) {
+				if (token.startsWith(PASTE_START)) {
+					const retained = Buffer.byteLength(token, "utf8") - PASTE_START.length - PASTE_END.length;
+					this.callbacks.setInputNotice?.(`paste complete — application input blocked; ${retained} retained bytes not inserted (limit ${PASTE_LIMIT_BYTES}; any overflow truncated)`);
+					this.callbacks.requestRender?.();
 				}
+				consumed = true;
+				continue;
 			}
-
+			const mouse = parseSgrMouseEvent(token);
+			if (mouse) {
+				mouseEvents.push(mouse);
+				mouseViewportDirty = this.callbacks.handleMouseEvent?.(mouse) === true || mouseViewportDirty;
+				consumed = true;
+				continue;
+			}
+			const result = this.routeNonMouseInput(token);
+			if (result?.consume) {
+				consumed = true;
+				forwarded = result.forwarded === true || forwarded;
+			} else if (parsed.tokens.length > 1 && this.callbacks.dispatchDelayedInput?.(result?.data ?? token) === true) {
+				consumed = true;
+			} else {
+				leftovers.push(result?.data ?? token);
+			}
+		}
+		if (mouseViewportDirty) this.callbacks.scheduleMouseRender?.();
+		const remaining = leftovers.join("");
+		if (mouseEvents.length > 0 || parsed.pending) {
+			logDiagnostic("mouse_batch", { rawBytes: source.length, events: mouseEvents.length, types: mouseEvents.map((event) => event.type) });
 			diagnoseMouseInput({
 				dataLength: data.length,
 				sourceLength: source.length,
-				eventCount: parsed.events.length,
+				eventCount: mouseEvents.length,
 				consumed,
-				pendingLength: this.pendingMouseInput.length,
-				leftoverLength: nextData.length,
+				pendingLength: parsed.pending.length,
+				leftoverLength: remaining.length,
 				sourceHex: this.diagnosticHex(source.slice(0, 64)),
-				leftoverHex: this.diagnosticHex(nextData.slice(0, 64)),
+				leftoverHex: this.diagnosticHex(remaining.slice(0, 64)),
 			});
 		}
-
-		if (rememberBareEscape && nextData === data && !consumed) {
-			this.deferBareEscape();
-			return { consume: true };
+		if (leftovers.length > 0) {
+			if (data.includes("\x1b") || remaining !== data || consumed) {
+				logDiagnostic("bridge_input_verdict", {
+					inLen: data.length, outLen: remaining.length, consumed, rewritten: remaining !== data,
+					inHex: this.diagnosticHex(data.slice(0, 32)), outHex: this.diagnosticHex(remaining.slice(0, 32)),
+				});
+			}
+			if (remaining !== data) logDiagnostic("route_verdict", { target: "noOpForwarded", hex: this.diagnosticHex(remaining) });
+			return remaining === data && !consumed ? undefined : { data: remaining };
 		}
+		return forwarded ? { consume: true, forwarded: true } : { consume: true };
+	}
 
-		return this.routeNonMouseInput(nextData, data, consumed);
+	private readPaste(data: string, start: number): PasteRead {
+		const paste = this.paste ??= {
+			prefix: Buffer.alloc(PASTE_LIMIT_BYTES), retainedBytes: 0, receivedBytes: 0,
+			tail: "", paused: false, truncated: false,
+		};
+		if (this.headerPaused) {
+			this.headerPaused = false;
+			paste.paused = true;
+		}
+		// Scan only this chunk plus at most five delimiter bytes (or one high
+		// surrogate). Never concatenate or rescan the growing retained prefix.
+		const tailLength = paste.tail.length;
+		const source = paste.tail + data.slice(start);
+		const end = source.indexOf(PASTE_END);
+		let bodyEnd = end < 0 ? source.length : end;
+		if (end < 0) {
+			for (let length = Math.min(PASTE_END.length - 1, source.length); length > 0; length -= 1) {
+				if (source.endsWith(PASTE_END.slice(0, length))) {
+					bodyEnd -= length;
+					break;
+				}
+			}
+			const last = source.charCodeAt(bodyEnd - 1);
+			if (bodyEnd === source.length && last >= 0xd800 && last <= 0xdbff) bodyEnd -= 1;
+		}
+		const body = source.slice(0, bodyEnd);
+		const bytes = Buffer.byteLength(body, "utf8");
+		paste.receivedBytes = Math.min(Number.MAX_SAFE_INTEGER, paste.receivedBytes + bytes);
+		if (!paste.truncated) {
+			const written = paste.prefix.write(body, paste.retainedBytes, PASTE_LIMIT_BYTES - paste.retainedBytes, "utf8");
+			paste.retainedBytes += written;
+			paste.truncated = written < bytes;
+		}
+		paste.tail = end < 0 ? source.slice(bodyEnd) : "";
+		if (paste.truncated) paste.paused = true;
+		if (paste.paused) this.showPasteNotice(end >= 0);
+		if (end < 0) return { token: "", nextIndex: data.length };
+		const token = PASTE_START + paste.prefix.toString("utf8", 0, paste.retainedBytes) + PASTE_END;
+		this.paste = undefined;
+		return { token, nextIndex: start + end + PASTE_END.length - tailLength };
+	}
+
+	private showPasteNotice(complete: boolean): void {
+		const paste = this.paste;
+		if (!paste) return;
+		const counts = `${paste.retainedBytes}/${PASTE_LIMIT_BYTES} bytes retained; ${paste.receivedBytes - paste.retainedBytes} bytes truncated`;
+		this.callbacks.setInputNotice?.(complete
+			? `input resumed — paste complete; ${counts}`
+			: `input paused — incomplete paste; ${counts}. waiting for paste end; further bytes beyond limit truncated. if no end arrives, end the paste stream in the terminal, then restart the session from outside input.`);
+		this.callbacks.requestRender?.();
 	}
 
 	private diagnosticHex(value: string): string {
-		return this.callbacks.isSensitiveInputFocused?.() === true ? "[redacted]" : toHex(value);
+		return this.redactInput || value.includes(PASTE_START) || this.callbacks.isSensitiveInputFocused?.() === true ? "[redacted]" : toHex(value);
 	}
 
 	private clearPendingBareEscapeTimer(): void {
@@ -329,48 +475,50 @@ export class SharedInputRouter {
 		this.pendingBareEscapeTimer = undefined;
 	}
 
-	private deferBareEscape(): void {
-		this.clearPendingBareEscapeTimer();
-		this.pendingMouseInput = "\x1b";
-		this.armBareEscapeTimer();
-	}
-
 	private armBareEscapeTimer(): void {
 		this.clearPendingBareEscapeTimer();
 		this.pendingBareEscapeTimer = setTimeout(() => {
 			this.pendingBareEscapeTimer = undefined;
-			if (this.pendingMouseInput !== "\x1b") return;
-			this.pendingMouseInput = "";
-			this.dispatchDeferredInput("\x1b");
-		}, BARE_ESCAPE_DISPATCH_DELAY_MS);
+			if (this.paste) {
+				this.paste.paused = true;
+				this.showPasteNotice(false);
+				return;
+			}
+			if (!this.pendingInput) return;
+			const pending = this.pendingInput;
+			if (PASTE_START.startsWith(pending)) {
+				// Silence cannot rule out a paste. Keep at most five header bytes;
+				// bare Escape still acts once, without giving up recognition.
+				if (pending === "\x1b") {
+					this.escapeDispatched = true;
+					this.dispatchDeferredInput(pending);
+				} else {
+					this.headerPaused = true;
+					this.callbacks.setInputNotice?.(`input paused — incomplete paste header; ${pending.length}/${PASTE_START.length} bytes received. waiting for header continuation; if none arrives, end the terminal stream, then restart the session from outside input.`);
+					this.callbacks.requestRender?.();
+				}
+				return;
+			}
+			this.pendingInput = "";
+			this.dispatchDeferredInput(pending);
+		}, this.paste ? PASTE_IDLE_MS : BARE_ESCAPE_DISPATCH_DELAY_MS);
 		this.pendingBareEscapeTimer.unref?.();
 	}
 
 	private dispatchDeferredInput(data: string): void {
+		if (this.disposed || this.callbacks.handleInputGate?.(data) === true) return;
 		if (this.callbacks.dispatchDelayedInput?.(data) === true) return;
-		void this.routeNonMouseInput(data, data, false);
+		void this.routeNonMouseInput(data);
 	}
 
-	private routeNonMouseInput(nextData: string, originalData: string, consumed: boolean): SharedInputRouterResult | void {
-		const releaseFilteredData = filterKeyReleaseEvents(nextData);
-		if (releaseFilteredData !== nextData) {
-			logDiagnostic("key_release_filtered", { sourceLength: nextData.length, filteredLength: releaseFilteredData.length });
-			nextData = releaseFilteredData;
-			consumed = true;
+	private routeNonMouseInput(nextData: string): SharedInputRouterResult | void {
+		if (!nextData.startsWith(PASTE_START)) nextData = this.callbacks.normalizeKeyInput?.(nextData) ?? nextData;
+		if (isKeyRelease(nextData)) {
+			logDiagnostic("key_release_filtered", { sourceLength: nextData.length, filteredLength: 0 });
+			return { consume: true };
 		}
 
-		if (nextData.length === 0 && consumed) return { consume: true };
-
-		const normalizedPasteData = normalizeRawMultilinePasteInput(nextData);
-		if (normalizedPasteData !== nextData) {
-			logDiagnostic("raw_multiline_paste_normalized", { sourceLength: nextData.length, normalizedLength: normalizedPasteData.length });
-			nextData = normalizedPasteData;
-			consumed = true;
-		}
-
-		if (nextData.length === 0 && consumed) return { consume: true };
-
-		if (containsCtrlCToken(nextData) && this.callbacks.handlePreEditorInput?.(nextData) === true) {
+		if (isCtrlCInput(nextData) && this.callbacks.handlePreEditorInput?.(nextData) === true) {
 			logDiagnostic("route_verdict", { target: "ctrlCPreEditor", hex: this.diagnosticHex(nextData) });
 			this.callbacks.requestRender?.();
 			return { consume: true };
@@ -432,21 +580,6 @@ export class SharedInputRouter {
 			return { consume: true };
 		}
 
-		if (originalData.includes("\x1b") || originalData !== nextData || consumed) {
-			logDiagnostic("bridge_input_verdict", {
-				inLen: originalData.length,
-				outLen: nextData.length,
-				consumed,
-				rewritten: nextData !== originalData,
-				inHex: this.diagnosticHex(originalData.slice(0, 32)),
-				outHex: this.diagnosticHex(nextData.slice(0, 32)),
-			});
-		}
-
-		if (nextData !== originalData) {
-			logDiagnostic("route_verdict", { target: "noOpForwarded", hex: this.diagnosticHex(nextData) });
-			return { data: nextData };
-		}
 		logDiagnostic("route_verdict", { target: "dropped", hex: this.diagnosticHex(nextData) });
 		return undefined;
 	}

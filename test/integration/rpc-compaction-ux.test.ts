@@ -4,14 +4,14 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { TERMINAL_CLEANUP_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-controller.js";
 import { createRpcChildFixture } from "./rpc-child-fixture.js";
-import { PI_BOOT_SEQUENCE, spawnSumocodePty, waitForScreen, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { spawnSumocodePty, waitForScreen, type SpawnedPiPty } from "./spawn-pi-pty.js";
 
 const CSI_U_ENTER = "\x1b[13u";
 
 let app: SpawnedPiPty | undefined;
 
-afterEach(() => {
-	app?.cleanup();
+afterEach(async () => {
+	await app?.cleanupAndWait();
 	app = undefined;
 });
 
@@ -35,9 +35,7 @@ describe("sumocode RPC compaction UX", () => {
 			rows,
 		});
 
-		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
-		await app.waitForOutput("DIVINE INVOCATION", 15_000);
-		await app.waitForOutput(/CTRL\+\/[\s\S]*COMMANDS/, 15_000);
+		await app.waitForReady("app", 15_000);
 
 		app.sendInput(`/compact keep runtime evidence${CSI_U_ENTER}`);
 

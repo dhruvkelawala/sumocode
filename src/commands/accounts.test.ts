@@ -17,6 +17,8 @@ import { CLAUDE_ACCOUNTS_MIGRATION_FIELD } from "./accounts-config.js";
 const tempDirs: string[] = [];
 
 afterEach(() => {
+	// Restore stubbed env vars even when an assertion fails mid-test.
+	vi.unstubAllEnvs();
 	while (tempDirs.length > 0) {
 		const dir = tempDirs.pop();
 		if (dir) rmSync(dir, { recursive: true, force: true });
@@ -120,6 +122,9 @@ describe("resolveAccountsConfigPath", () => {
 	});
 
 	it("falls back to ~/.pi/agent", () => {
+		// resolveAgentDir reads process.env.PI_CODING_AGENT_DIR before the homeDir
+		// fallback, so clear any inherited value to keep this test sandbox closed.
+		vi.stubEnv("PI_CODING_AGENT_DIR", undefined);
 		expect(resolveAccountsConfigPath({ homeDir: "/home/u" })).toBe(join("/home/u", ".pi", "agent", "claude-accounts.json"));
 	});
 });

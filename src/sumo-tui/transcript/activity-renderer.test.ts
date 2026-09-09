@@ -2,6 +2,9 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import type { ActivitySnapshot } from "../../activity/domain.js";
 import { projectPiToolActivity } from "../../activity/pi-projector.js";
+import { activityFromSubagentSnapshot } from "../../activity/subagent-adapter.js";
+import { activeThemeApplicationRoles, activeThemeColors } from "../../themes/index.js";
+import { lineToAnsi, span, textLine } from "../render/primitives.js";
 import { stripAnsi } from "../cathedral/ansi.js";
 import { renderActivityBlockRows, renderActivityLedgerRows, renderCompactActivityPill } from "./activity-renderer.js";
 
@@ -20,6 +23,22 @@ function plain(rows: readonly string[]): string {
 }
 
 describe("Activity renderer", () => {
+	it.each(["stalled-warning", "over-budget-warning"] as const)("pins %s and explicit next action above a long output tail", (health) => {
+		const projected = activityFromSubagentSnapshot({
+			id: "sa-warning", title: "worker", prompt: "task", cwd: "/repo", baseRef: "base", status: "running", createdAt: 1000,
+			usage: { turns: 1 }, transcript: [], liveTools: [], finalText: "", liveText: Array.from({ length: 25 }, (_, i) => `output ${i}`).join("\n"),
+			health, elapsedMs: 120_000, lastProgressAt: 1000, liveness: "unknown", utilization: { wallTime: 1.2, tokens: null, cost: null },
+		});
+		const rows = renderActivityLedgerRows(projected, 100);
+		const rendered = plain(rows);
+		expect(rendered).toContain(health);
+		expect(rendered).toContain("inspect or explicitly cancel with subagent_cancel");
+		expect(rendered).toContain("wall 120%");
+		expect(rendered).toContain("output 24");
+		expect(rows.every((row) => visibleWidth(row) === 100)).toBe(true);
+		const warningLabel = lineToAnsi(textLine([span(health, { fg: activeThemeColors().states.approval, bg: activeThemeApplicationRoles().toolLedger.surface })]));
+		expect(rows[0]).toContain(warningLabel.slice(0, -4));
+	});
 	it("renders the running empty state after a command row", () => {
 		const rendered = plain(renderActivityLedgerRows(activity({
 			body: { kind: "terminal", command: "pnpm test", text: "" },

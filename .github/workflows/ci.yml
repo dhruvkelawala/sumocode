@@ -31,8 +31,14 @@ jobs:
           node-version: 24
           cache: pnpm
 
+      - name: Trust Node executable
+        run: chmod go-w "$(realpath "$(command -v node)")"
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Dependency audit policy
+        run: node scripts/check-dependency-audit.mjs
 
       - name: Typecheck
         run: pnpm exec tsc --noEmit
@@ -64,6 +70,9 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+
+      - name: Trust Node executable
+        run: chmod go-w "$(realpath "$(command -v node)")"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

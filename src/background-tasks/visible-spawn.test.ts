@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	buildVisibleAgentCommand,
 	buildVisibleTaskCommand,
 	buildVisibleTaskPaths,
 	buildVisibleTaskScript,
@@ -8,6 +9,18 @@ import {
 } from "./visible-spawn.js";
 
 describe("visible-spawn", () => {
+	it("uses launcher provenance exactly once and shell-escapes it", () => {
+		const paths = buildVisibleTaskPaths("sa-1", 123, "/tmp/test-bg");
+		const command = buildVisibleAgentCommand({
+			cwd: "/repo",
+			paths,
+			launcher: "/Applications/Sumo's Tools/sumocode",
+		});
+
+		expect(command).toContain("exec '/Applications/Sumo'\\''s Tools/sumocode' 'task'");
+		expect(command.match(/Sumo/g)).toHaveLength(1);
+	});
+
 	it("buildVisibleTaskPaths uses task id and timestamp", () => {
 		const paths = buildVisibleTaskPaths("bg-1", 1_700_000_000_000, "/tmp/test-bg");
 		expect(paths.logFile).toBe("/tmp/test-bg/bg-1-1700000000000/output.log");

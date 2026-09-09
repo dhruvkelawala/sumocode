@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import type { spawn, ChildProcessWithoutNullStreams } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
+import { CHILD_JSON_FRAME_MAX_BYTES, TRUNCATED_HEAD_MARKER } from "../../child-protocol.js";
 import { RpcChildExitError, SumoRpcClient, type SumoRpcClientOptions } from "./client.js";
 
 function nodeRpcClient(script: string, options: Partial<Omit<SumoRpcClientOptions, "command" | "args">> = {}): SumoRpcClient {
@@ -49,7 +50,7 @@ class FakeRpcChild extends EventEmitter {
 	public readonly stdin = new FakeStream();
 	public readonly stdout = new FakeStream();
 	public readonly stderr = new FakeStream();
-	public readonly kill = vi.fn(() => {
+	public readonly kill = vi.fn((_signal?: NodeJS.Signals) => {
 		queueMicrotask(() => {
 			this.signalCode = "SIGTERM";
 			this.emit("exit", null, "SIGTERM");
@@ -97,6 +98,222 @@ describe("SumoRpcClient", () => {
 		expect(spawnSpy).not.toHaveBeenCalled();
 		expect(client.pid).toBe(child.pid);
 		await client.stop();
+	});
+
+	it.each(["parse", "frame", "error"] as const)("retains the post-adoption %s failure child and reap until SIGKILL and close", async (failure) => {
+		vi.useFakeTimers();
+		try {
+			const child = new FakeRpcChild();
+			child.kill.mockImplementation(() => true);
+			const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
+			const exited = vi.fn();
+			client.onExit(exited);
+			await client.start();
+			if (failure === "parse") child.stdout.emit("data", "invalid\ninvalid\ninvalid\n");
+			else if (failure === "frame") child.stdout.emit("data", "x".repeat(CHILD_JSON_FRAME_MAX_BYTES + 1));
+			else child.emit("error", new Error("child transport failed"));
+			expect(exited).toHaveBeenCalledOnce();
+			expect(client.adoptedChild).toBe(child);
+			expect(client.pid).toBeUndefined();
+			await vi.advanceTimersByTimeAsync(750);
+			const stopped = vi.fn();
+			const first = client.stop().then(stopped);
+			const second = client.stop().then(stopped);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(stopped).not.toHaveBeenCalled();
+			await vi.advanceTimersByTimeAsync(1_250);
+			expect(child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+			await vi.advanceTimersByTimeAsync(999);
+			expect(stopped).not.toHaveBeenCalled();
+			expect(client.adoptedChild).toBe(child);
+			child.signalCode = "SIGKILL";
+			child.emit("exit", null, "SIGKILL");
+			await vi.advanceTimersByTimeAsync(0);
+			expect(stopped).not.toHaveBeenCalled();
+			child.emit("close", null, "SIGKILL");
+			await Promise.all([first, second]);
+			expect(client.adoptedChild).toBeUndefined();
+			expect(exited).toHaveBeenCalledOnce();
+			expect(stopped).toHaveBeenCalledTimes(2);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it.each(["close", "exit", "stdout", "stderr", "error"] as const)("ignores late old-child %s after restart", async (event) => {
+		vi.useFakeTimers();
+		try {
+			const old = new FakeRpcChild();
+			const next = new FakeRpcChild();
+			const spawnFn = vi.fn(() => asPreSpawnedChild(old))
+				.mockReturnValueOnce(asPreSpawnedChild(old)).mockReturnValueOnce(asPreSpawnedChild(next));
+			// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: fake covers the client's piped-stdio overload, not spawn's nullable-stdio overloads.
+			const client = new SumoRpcClient({ command: "unused", args: [], spawnFn: spawnFn as unknown as typeof spawn });
+			const exited = vi.fn();
+			const events = vi.fn();
+			client.onExit(exited);
+			client.onEvent(events);
+			await client.start();
+			const stdout = old.stdout.listeners("data")[0]!;
+			const stderr = old.stderr.listeners("data")[0]!;
+			const exit = old.listeners("exit")[0]!;
+			old.kill.mockImplementation(() => true);
+			const stopping = client.stop();
+			old.exitCode = 0;
+			old.emit("exit", 0, null);
+			await vi.advanceTimersByTimeAsync(1_000);
+			await stopping;
+			await client.start();
+			next.stdout.emit("data", '{"type":"agent_start"}');
+			if (event === "stdout") stdout('{"type":"agent_end"}\n');
+			else if (event === "stderr") stderr("old stderr");
+			else if (event === "error") {
+				old.emit("error", new Error("late error"));
+				old.emit("error", new Error("another late error"));
+			} else if (event === "exit") exit(0, null);
+			else old.emit(event, 0, null);
+			expect(client.adoptedChild).toBe(next);
+			expect(client.pid).toBe(next.pid);
+			expect(client.stderr).toBe("");
+			expect(exited).not.toHaveBeenCalled();
+			expect(events).not.toHaveBeenCalled();
+			next.stdout.emit("data", "\n");
+			expect(events).toHaveBeenCalledExactlyOnceWith({ type: "agent_start" });
+			await client.stop();
+			expect(next.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it.each([
+		["noop", "SIGTERM"], ["false", "SIGTERM"], ["throw", "SIGTERM"], ["fatal", "SIGTERM"],
+		["noop", "SIGKILL"], ["false", "SIGKILL"], ["throw", "SIGKILL"], ["fatal", "SIGKILL"],
+	] as const)("rejects bounded %s reap, then permits explicit successful %s retry", async (mode, retrySignal) => {
+		vi.useFakeTimers();
+		const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			const child = new FakeRpcChild();
+			child.kill.mockImplementation(() => {
+				if (mode === "throw") throw new Error("kill denied");
+				return mode !== "false";
+			});
+			const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
+			await client.start();
+			if (mode === "fatal") child.emit("error", new Error("transport failed"));
+			const first = client.stop();
+			const second = client.stop();
+			const settled = vi.fn();
+			const result = Promise.allSettled([first, second]).then((results) => { settled(); return results; });
+			await vi.advanceTimersByTimeAsync(3_000);
+			expect(settled).toHaveBeenCalledOnce();
+			expect(first).toBe(second);
+			expect(await result).toEqual([
+				{ status: "rejected", reason: expect.objectContaining({ message: expect.stringContaining("still alive") }) },
+				{ status: "rejected", reason: expect.objectContaining({ message: expect.stringContaining("still alive") }) },
+			]);
+			expect(child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+			expect(client.adoptedChild).toBe(child);
+			await expect(client.start()).rejects.toThrow("already started");
+			expect(child.stdout.listenerCount("data")).toBe(0);
+			expect(child.listenerCount("exit")).toBe(1);
+			expect(child.listenerCount("close")).toBe(1);
+			expect(vi.getTimerCount()).toBe(0);
+			child.kill.mockImplementation((signal) => {
+				if (signal === retrySignal) queueMicrotask(() => {
+					child.signalCode = retrySignal;
+					child.emit("exit", null, retrySignal);
+					child.emit("close", null, retrySignal);
+				});
+				return true;
+			});
+			const retry = client.stop();
+			expect(retry).not.toBe(first);
+			expect(client.stop()).toBe(retry);
+			await vi.advanceTimersByTimeAsync(3_000);
+			await retry;
+			expect(child.kill.mock.calls.slice(2)).toEqual(retrySignal === "SIGTERM" ? [["SIGTERM"]] : [["SIGTERM"], ["SIGKILL"]]);
+			expect(client.adoptedChild).toBeUndefined();
+			expect(child.listenerCount("exit")).toBe(0);
+			expect(child.listenerCount("close")).toBe(0);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			logged.mockRestore();
+			vi.useRealTimers();
+		}
+	});
+
+	it.each(["SIGTERM", "SIGKILL"])("accepts false %s when exit state proves the child is dead", async (signal) => {
+		vi.useFakeTimers();
+		try {
+			const child = new FakeRpcChild();
+			child.kill.mockImplementation((sent) => {
+				if (sent === signal) child.exitCode = 0;
+				return false;
+			});
+			const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
+			await client.start();
+			const stopping = client.stop();
+			expect(client.stop()).toBe(stopping);
+			await vi.advanceTimersByTimeAsync(3_000);
+			await stopping;
+			expect(client.adoptedChild).toBeUndefined();
+			expect(child.listenerCount("exit")).toBe(0);
+			expect(child.listenerCount("close")).toBe(0);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not send an old async UI reply or apply an old write error after restart", async () => {
+		const old = new FakeRpcChild();
+		const next = new FakeRpcChild();
+		const spawnFn = vi.fn(() => asPreSpawnedChild(old))
+			.mockReturnValueOnce(asPreSpawnedChild(old)).mockReturnValueOnce(asPreSpawnedChild(next));
+		// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: fake covers the client's piped-stdio overload, not spawn's nullable-stdio overloads.
+		const client = new SumoRpcClient({ command: "unused", args: [], spawnFn: spawnFn as unknown as typeof spawn });
+		let finishUi!: () => void;
+		client.setUiRequestHandler(() => new Promise<void>((resolve) => { finishUi = resolve; }));
+		await client.start();
+		old.stdout.emit("data", '{"type":"extension_ui_request","id":"old-ui","method":"confirm"}\n');
+		const failed = client.send({ type: "get_state", id: "reused" }).catch((error: Error) => error);
+		const writeCallback = old.stdin.write.mock.calls[0]![1]!;
+		await client.stop();
+		expect(await failed).toBeInstanceOf(Error);
+		await client.start();
+		const response = client.send({ type: "get_state", id: "reused" });
+		writeCallback(new Error("late write failure"));
+		finishUi();
+		await Promise.resolve();
+		expect(next.stdin.write).toHaveBeenCalledOnce();
+		next.stdout.emit("data", '{"type":"response","id":"reused","success":true}\n');
+		await expect(response).resolves.toMatchObject({ success: true });
+		await client.stop();
+	});
+
+	it("bounds the shared reap when an exited child's stdio never closes", async () => {
+		vi.useFakeTimers();
+		try {
+			const child = new FakeRpcChild();
+			const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
+			await client.start();
+			child.exitCode = 1;
+			child.emit("exit", 1, null);
+			const stopped = vi.fn();
+			const stopping = client.stop().then(stopped);
+			await vi.advanceTimersByTimeAsync(2_999);
+			expect(stopped).not.toHaveBeenCalled();
+			await vi.advanceTimersByTimeAsync(1);
+			await stopping;
+			expect(child.kill).not.toHaveBeenCalled();
+			expect(child.stdout.listenerCount("data")).toBe(0);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("does not resolve deliberate stop until child stdio closes", async () => {
@@ -165,6 +382,17 @@ describe("SumoRpcClient", () => {
 		await client.stop();
 	});
 
+	it.each(["setup", "adoption"] as const)("reaps partial client startup after %s rejection", async (failure) => {
+		const child = new FakeRpcChild();
+		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
+		if (failure === "setup") vi.spyOn(child.stdout, "on").mockImplementationOnce(() => { throw new Error("setup failed"); });
+		await expect(client.start(() => { throw new Error("adoption failed"); })).rejects.toThrow(`${failure} failed`);
+		expect(client.adoptedChild).toBe(child);
+		await Promise.all([client.stop(), client.stop()]);
+		expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+		expect(client.adoptedChild).toBeUndefined();
+	});
+
 	it("reports a pre-spawn error captured before host adoption", async () => {
 		const child = new FakeRpcChild();
 		// The Symbol.for channel is shared with client.ts; stamping mirrors what
@@ -194,6 +422,33 @@ describe("SumoRpcClient", () => {
 			code: 2,
 		});
 		expect(client.pid).toBeUndefined();
+	});
+
+	it("reports RPC readiness only after the first correlated response", async () => {
+		const child = new FakeRpcChild();
+		const onRpcReady = vi.fn();
+		const client = new SumoRpcClient({
+			command: "unused",
+			args: [],
+			preSpawnedChild: asPreSpawnedChild(child),
+			onRpcReady,
+		});
+		await client.start();
+		expect(onRpcReady).not.toHaveBeenCalled();
+
+		const response = client.send({ type: "get_state" });
+		const request: { id: string } = JSON.parse(String(child.stdin.write.mock.calls.at(-1)?.[0]));
+		child.stdout.emit("data", `${JSON.stringify({
+			type: "response",
+			id: request.id,
+			command: "get_state",
+			success: true,
+			data: {},
+		})}\n`);
+
+		await expect(response).resolves.toMatchObject({ success: true });
+		expect(onRpcReady).toHaveBeenCalledOnce();
+		await client.stop();
 	});
 
 	it("correlates JSONL responses by request id while streaming events", async () => {
@@ -502,14 +757,15 @@ describe("SumoRpcClient", () => {
 		expect(() => process.kill(pid!, 0)).toThrow();
 	});
 
-	it("tolerates one malformed protocol line between valid responses", async () => {
-		const protocolErrors: Array<{ line: string; message: string }> = [];
+	it("reports a size-only malformed-frame summary with a safe parse reason", async () => {
+		const protocolErrors: Array<{ summary: string; message: string }> = [];
 		const script = `
 			const readline = require("node:readline");
 			const rl = readline.createInterface({ input: process.stdin });
 			rl.on("line", (line) => {
 				const command = JSON.parse(line);
 				if (command.type !== "get_state") return;
+				process.stdout.write("\\n");
 				process.stdout.write("stray extension noise\\n");
 				process.stdout.write(JSON.stringify({ type: "response", id: command.id, command: "get_state", success: true, data: {
 					thinkingLevel: "minimal",
@@ -525,7 +781,7 @@ describe("SumoRpcClient", () => {
 			});
 		`;
 		const client = nodeRpcClient(script, {
-			onProtocolError: (line, error) => protocolErrors.push({ line, message: error.message }),
+			onProtocolError: (frameSummary, error) => protocolErrors.push({ summary: frameSummary, message: error.message }),
 		});
 		try {
 			await client.start();
@@ -533,11 +789,61 @@ describe("SumoRpcClient", () => {
 
 			expect(response).toMatchObject({ command: "get_state", success: true });
 			expect(protocolErrors).toHaveLength(1);
-			expect(protocolErrors[0]?.line).toBe("stray extension noise");
-			expect(protocolErrors[0]?.message).toContain("Unexpected token");
+			expect(protocolErrors[0]?.summary).toBe("[invalid protocol frame: 21 bytes]");
+			expect(protocolErrors[0]?.summary).not.toContain("stray extension noise");
+			expect(protocolErrors[0]?.message).toBe("Invalid JSON protocol frame: Unexpected token in JSON");
+			expect(protocolErrors[0]?.message).not.toContain("stray extension noise");
 		} finally {
 			await client.stop();
 		}
+	});
+
+	it("bounds the JSON parse reason retained in protocol errors", async () => {
+		const child = new FakeRpcChild();
+		const errors: Error[] = [];
+		const client = new SumoRpcClient({
+			command: "unused",
+			args: [],
+			preSpawnedChild: asPreSpawnedChild(child),
+			onProtocolError: (_frameSummary, error) => errors.push(error),
+		});
+		await client.start();
+		const parse = vi.spyOn(JSON, "parse").mockImplementationOnce(() => {
+			throw new SyntaxError(`synthetic reason ${"x".repeat(1_000)}`);
+		});
+		try {
+			child.stdout.emit("data", "malformed\n");
+		} finally {
+			parse.mockRestore();
+		}
+
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.message).toContain(TRUNCATED_HEAD_MARKER);
+		expect(Buffer.byteLength(errors[0]?.message ?? "", "utf8")).toBeLessThanOrEqual(
+			Buffer.byteLength("Invalid JSON protocol frame: ", "utf8") + 500,
+		);
+		await client.stop();
+	});
+
+	it("never echoes malformed producer content in protocol diagnostics", async () => {
+		const child = new FakeRpcChild();
+		const protocolErrors: Array<{ summary: string; message: string }> = [];
+		const client = new SumoRpcClient({
+			command: "unused",
+			args: [],
+			preSpawnedChild: asPreSpawnedChild(child),
+			onProtocolError: (frameSummary, error) => protocolErrors.push({ summary: frameSummary, message: error.message }),
+		});
+		await client.start();
+
+		child.stdout.emit("data", "TOP_SECRET_payload_is_not_json\n");
+
+		expect(protocolErrors).toEqual([{
+			summary: "[invalid protocol frame: 30 bytes]",
+			message: "Invalid JSON protocol frame: Unexpected token in JSON",
+		}]);
+		expect(JSON.stringify(protocolErrors)).not.toContain("TOP_SECRET");
+		await client.stop();
 	});
 
 	it("kills the child after three consecutive malformed protocol lines", async () => {
@@ -556,9 +862,92 @@ describe("SumoRpcClient", () => {
 		const child = clientChild(client);
 		const killSpy = vi.spyOn(child, "kill");
 
-		await expect(client.send({ type: "get_state" })).rejects.toThrow("Failed to parse 3 consecutive RPC lines");
+		await expect(client.send({ type: "get_state" })).rejects.toThrow(
+			"Failed to parse 3 consecutive RPC lines. [invalid protocol frame: 9 bytes]. Invalid JSON protocol frame: Unexpected token in JSON",
+		);
 		expect(killSpy).toHaveBeenCalledWith("SIGTERM");
 		await waitFor(() => child.exitCode !== null || child.signalCode !== null);
+	});
+
+	it("fails the producer on an oversized JSON frame without echoing or parsing it", async () => {
+		const child = new FakeRpcChild();
+		const exits: Error[] = [];
+		const events: unknown[] = [];
+		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
+		client.onExit((error) => exits.push(error));
+		client.onEvent((event) => events.push(event));
+		await client.start();
+		const response = client.send({ type: "get_state" });
+
+		child.stdout.emit("data", Buffer.concat([
+			Buffer.alloc(CHILD_JSON_FRAME_MAX_BYTES + 1, 0x78),
+			Buffer.from("\n"),
+		]));
+
+		await expect(response).rejects.toThrow(`exceeded ${CHILD_JSON_FRAME_MAX_BYTES} bytes`);
+		expect(events).toEqual([]);
+		expect(exits).toHaveLength(1);
+		expect(exits[0]?.message).not.toContain("xxxx");
+		expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+	});
+
+	it("drains a final response between unexpected exit and stdio close", async () => {
+		const child = new FakeRpcChild();
+		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
+		await client.start();
+		const response = client.send({ type: "get_state" });
+		// SAFETY: the client writes one JSON command per line.
+		const request = JSON.parse(String(child.stdin.write.mock.calls.at(-1)?.[0])) as { id: string };
+		child.exitCode = 0;
+		child.emit("exit", 0, null);
+		child.stdout.emit("data", JSON.stringify({
+			type: "response",
+			id: request.id,
+			command: "get_state",
+			success: true,
+			data: { sessionId: "final-partial" },
+		}));
+		child.emit("close", 0, null);
+
+		await expect(response).resolves.toMatchObject({ success: true, data: { sessionId: "final-partial" } });
+	});
+
+	it("includes stderr drained between exit and close in the exit error", async () => {
+		const child = new FakeRpcChild();
+		const exits: Error[] = [];
+		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
+		client.onExit((error) => exits.push(error));
+		await client.start();
+
+		child.exitCode = 1;
+		child.emit("exit", 1, null);
+		child.stderr.emit("data", "final diagnostic");
+		child.emit("close", 1, null);
+
+		expect(exits).toHaveLength(1);
+		expect(exits[0]).toMatchObject({ code: 1, signal: null });
+		expect(exits[0]?.message).toContain("final diagnostic");
+	});
+
+	it("bounds an unexpected exit when stdio close never arrives", async () => {
+		vi.useFakeTimers();
+		const child = new FakeRpcChild();
+		const exits: Error[] = [];
+		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
+		client.onExit((error) => exits.push(error));
+		try {
+			await client.start();
+			child.exitCode = 1;
+			child.emit("exit", 1, null);
+			await vi.advanceTimersByTimeAsync(1_000);
+
+			expect(exits).toHaveLength(1);
+			expect(exits[0]).toBeInstanceOf(RpcChildExitError);
+			expect(child.stdout.listenerCount("data")).toBe(0);
+		} finally {
+			child.emit("close", 1, null);
+			vi.useRealTimers();
+		}
 	});
 
 	it("keeps only the stderr tail up to 64 KiB", async () => {
@@ -569,10 +958,19 @@ describe("SumoRpcClient", () => {
 		`);
 		try {
 			await client.start();
-			await waitFor(() => client.stderr.length === 65536);
+			// Wait for the whole asserted state, not just the byte count: stderr
+			// arrives in chunks, and the trimmed buffer transiently reaches 64 KiB
+			// before the truncation marker is prepended or the last `b` chunk lands.
+			// A count-only predicate is satisfied by that intermediate state.
+			await waitFor(() => (
+				Buffer.byteLength(client.stderr) === 65536
+				&& client.stderr.startsWith("[earlier output truncated]\n")
+				&& client.stderr.endsWith("b")
+			));
 
-			expect(client.stderr).toHaveLength(65536);
-			expect(client.stderr).toBe("b".repeat(65536));
+			expect(Buffer.byteLength(client.stderr)).toBe(65536);
+			expect(client.stderr).toMatch(/^\[earlier output truncated\]\n/);
+			expect(client.stderr).toMatch(/b+$/);
 		} finally {
 			await client.stop();
 		}

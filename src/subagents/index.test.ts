@@ -1,8 +1,12 @@
+import { chmodSync, existsSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SUBAGENT_MAX_RUNNING, type SubagentEvent } from "./domain.js";
 import type { SpawnedChild } from "./backend-pi.js";
 import type { TerminalHost } from "../terminal-host/types.js";
-import { installSubagents } from "./index.js";
+import { installSubagents, SubagentManager } from "./index.js";
+import { SubagentRegistry } from "./registry.js";
 
 type ChildEmitter = (event: SubagentEvent) => void;
 
@@ -79,7 +83,7 @@ const fakeBuildCompletionManifest = async (options: { baseRef: string; outcome: 
 
 /** Minimal command-handler context shape exercised by these tests. */
 type HandlerCtx = { cwd: string; model?: { provider: string; id: string }; isIdle?: () => boolean };
-type Handler = (event: { type: string }, ctx: HandlerCtx) => void;
+type Handler = (event: { type: string; reason?: string }, ctx: HandlerCtx) => void;
 
 /** Tool result shape the tests inspect. */
 interface ToolResult {
@@ -90,7 +94,7 @@ interface ToolResult {
 /** Minimal tool-definition shape captured from registerTool. */
 type Tool = { name: string; execute: (...args: unknown[]) => Promise<ToolResult> };
 
-const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui") => {
+const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui", options: { retainedRegistry?: SubagentRegistry; retention?: false } = {}) => {
 	let idle = true;
 	const handlers = new Map<string, Handler[]>();
 	const tools = new Map<string, Tool>();
@@ -105,10 +109,12 @@ const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui") => {
 	};
 	// SAFETY: the double implements every ExtensionAPI member installSubagents touches.
 	const manager = installSubagents(pi as never, {
+		retention: false,
 		terminalHost: fakeTerminalHost(),
 		spawnPaneChild: fakeSpawnPaneChild,
 		spawnPiChild: fakeSpawnPiChild,
 		managerDependencies: { buildCompletionManifest: fakeBuildCompletionManifest },
+		...options,
 	});
 	const ctx = {
 		cwd: "/tmp/project",
@@ -118,8 +124,12 @@ const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui") => {
 		hasUI,
 		ui: { setWidget },
 	};
-	const fire = (event: string) => {
-		for (const handler of handlers.get(event) ?? []) handler({ type: event }, ctx);
+	const fire = (event: string, reason?: string) => {
+		for (const handler of handlers.get(event) ?? []) handler({ type: event, reason }, ctx);
+	};
+	const fireSessionStart = async (sessionId = "test-session") => {
+		const sessionCtx = { ...ctx, sessionManager: { getSessionId: () => sessionId } };
+		for (const handler of handlers.get("session_start") ?? []) await handler({ type: "session_start" }, sessionCtx);
 	};
 	return {
 		manager,
@@ -128,6 +138,7 @@ const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui") => {
 		tool: (name: string) => tools.get(name)!,
 		ctx,
 		fire,
+		fireSessionStart,
 		setIdle: (value: boolean) => { idle = value; },
 	};
 };
@@ -148,6 +159,16 @@ beforeEach(() => {
 });
 
 describe("subagent result delivery", () => {
+	it("opens the production retained registry on session start by default", async () => {
+		const root = realpathSync(mkdtempSync(join(tmpdir(), "sumocode-production-registry-")));
+		vi.stubEnv("SUMOCODE_STATE_DIR", root);
+		const harness = createHarness(false, "rpc", { retention: undefined });
+		try {
+			expect(existsSync(join(root, "sumocode", "subagents", "v2", "registry"))).toBe(false);
+			await harness.fireSessionStart("production-session");
+			expect(existsSync(join(root, "sumocode", "subagents", "v2", "registry"))).toBe(true);
+		} finally { harness.manager.disposeAll(); vi.unstubAllEnvs(); }
+	});
 	it("sets the status widget while active and clears it after the last settlement", async () => {
 		const harness = createHarness(true);
 		harness.fire("session_start");
@@ -257,6 +278,31 @@ describe("subagent result delivery", () => {
 		harness.setIdle(true);
 		harness.fire("agent_end");
 		expect(harness.sendMessage).toHaveBeenCalledOnce();
+	});
+
+	it("retries deferred delivery without duplicating successful earlier results", async () => {
+		const harness = createHarness();
+		harness.setIdle(false);
+		harness.fire("agent_start");
+		for (const title of ["first", "second", "third"]) await spawn(harness.manager, title);
+		for (let index = 0; index < 3; index += 1) {
+			backend.emitters[index]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: `result-${index + 1}` } });
+		}
+		await vi.waitFor(() => expect(harness.manager.list().every((snapshot) => snapshot.status === "done")).toBe(true));
+		harness.sendMessage
+			.mockImplementationOnce(() => undefined)
+			.mockImplementationOnce(() => { throw new Error("send failed"); })
+			.mockImplementation(() => undefined);
+		harness.setIdle(true);
+
+		expect(() => harness.fire("agent_end")).not.toThrow();
+		await vi.waitFor(() => expect(harness.sendMessage).toHaveBeenCalledTimes(4));
+
+		const deliveredIds = harness.sendMessage.mock.calls.map((call) => {
+			// SAFETY: subagent delivery always sends a message with settled-subagent details.
+			return ((call as unknown[])[0] as { details: { id: string } }).details.id;
+		});
+		expect(deliveredIds).toEqual(["sa-1", "sa-2", "sa-2", "sa-3"]);
 	});
 
 	it("routes visible children through the pane backend and delivers one pane-referenced card", async () => {
@@ -374,8 +420,8 @@ describe("subagent result delivery", () => {
 		harness.fire("session_start");
 		// Simulate repeated binding defensively; real Pi 0.80.6 recreates the
 		// factory on replacement and RPC mode may bind the new instance twice.
-		harness.fire("session_shutdown");
-		harness.fire("session_start");
+		harness.fire("session_shutdown", "new");
+		await harness.fireSessionStart("next-session");
 		harness.setIdle(false);
 		await spawn(harness.manager, "post-switch");
 		backend.emitters.at(-1)?.({ kind: "message-end", role: "assistant", text: "after switch" });
@@ -428,5 +474,42 @@ describe("subagent result delivery", () => {
 		expect(harness.sendMessage).toHaveBeenCalledTimes(1);
 		// SAFETY: sendMessage is always called with a single message payload argument.
 		expect((harness.sendMessage.mock.calls[0] as unknown[])[0]).toMatchObject({ customType: "subagent-result" });
+	});
+
+	it("drops a failed replacement instead of retrying it on every session start", async () => {
+		const harness = createHarness();
+		// SAFETY: the test manipulates the documented process-global replacement set, then removes its entry.
+		const globals = globalThis as { [key: symbol]: Set<SubagentManager> | undefined };
+		const key = Symbol.for("@dhruvkelawala/sumocode/subagent-replacements");
+		// SAFETY: an existing process-global set is reused only when it already holds replacement managers.
+		const replacements = globals[key] instanceof Set ? (globals[key] as Set<SubagentManager>) : new Set<SubagentManager>();
+		globals[key] = replacements;
+		const previous = createHarness().manager;
+		replacements.add(previous);
+		const adopt = vi.spyOn(harness.manager, "adoptFrom").mockRejectedValueOnce(new Error("retained subagent id conflicts with successor work"));
+		try {
+			await harness.fireSessionStart("replacement");
+			await harness.fireSessionStart("replacement");
+			expect(adopt).toHaveBeenCalledTimes(1);
+			expect(replacements.has(previous)).toBe(false);
+		} finally {
+			replacements.delete(previous);
+			adopt.mockRestore();
+		}
+	});
+
+	it("contains corrupt retained recovery during session start and still flushes delivery", async () => {
+		const root = realpathSync(mkdtempSync(join(tmpdir(), "corrupt-recovery-")));
+		chmodSync(root, 0o700);
+		const retained = new SubagentRegistry(join(root, "registry"), "origin");
+		writeFileSync(join(root, "registry", "sa-bad.json"), "{bad", { mode: 0o600 });
+		const harness = createHarness(true, "tui", { retainedRegistry: retained });
+		harness.setIdle(false);
+		await spawn(harness.manager, "deferred worker");
+		backend.emitters.at(-1)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "deferred findings" } });
+		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("done"));
+		harness.setIdle(true);
+		await harness.fireSessionStart("replacement");
+		expect(harness.sendMessage).toHaveBeenCalledTimes(1);
 	});
 });

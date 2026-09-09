@@ -1,8 +1,6 @@
 # Cathedral Visual Bible
 
-Single source of truth for SumoCode runtime visuals. Each element has one
-canonical mockup per dimension variant. The runtime must match these
-renders pixel-by-pixel modulo font-hinting tolerance.
+Design targets for SumoCode visuals. Design locks record visual decisions, not proof that a runtime surface ships. The [V2 parity contract](../../visual/parity/CONTRACT.md) owns implementation verification: styled-cell comparisons, geometry audits and required approved-runtime crops.
 
 ## Run
 
@@ -11,6 +9,8 @@ pnpm render:bible
 ```
 
 Regenerates all scripted HTML mockups, then renders every `*.html` via Playwright + chromium → PNG in `renders/`.
+
+Review with `pnpm visual:review`; run required gates with `pnpm visual:ci`. Golden promotion requires explicit human approval.
 
 ## Static export + hosting
 
@@ -78,25 +78,28 @@ viewing-context adjustment, not a palette change.
 
 See `CATHEDRAL_UX_SPEC_V2.md` for the spec. The bible contains standalone element mockups plus full-scene compositions that combine locked elements in the actual Cathedral shell.
 
-Current harness: **95 mockups** rendered by `pnpm render:bible`.
+Inventory: **107 HTML mockups · 107 PNG renders**. Counts come from top-level HTML and renders/*.png files; the documentation checker compares them with the live inventory.
 
-| Element | Status | Mockups |
-|---|---|---|
-| **1 — Sidebar** | ✅ LOCKED | V2 EDITORIAL: 6 states (context / memory / over-budget / empty / daemon-down / metrics) |
-| 2 — Top bar | TODO | |
-| 3 — Splash | TODO | |
-| **4 — Active input frame** | ✅ LOCKED | empty/typed × landscape/portrait (4) |
-| **5 — Footer** | ✅ LOCKED | 5 states + portrait + version-line (7) |
-| 6 — Approval modal | TODO | |
-| 7 — Memory editor | TODO | |
-| 8 — Command palette | TODO | |
-| 9 — Tool pills | TODO | |
-| 10 — Code blocks | TODO | |
-| 11 — DIVINE QUERY | TODO | |
-| **12 — Scroll + scribe** | ✅ LOCKED | running + done (2) |
-| **13 — Chat messages** | ✅ LOCKED | default (7A refined rounded) + portrait + 2 alts (sharp, dual) (4) |
-| **Skill pill** | ✅ LOCKED | inline default + rejected alts (3) |
-| **Scene compositions** | ✅ ACTIVE | completed/tool active landscape/portrait, runtime active landscape/portrait, tool ledger, bash live-view, code block, skill pill, scroll/scribe, approval overlay, Divine Query overlay, memory overlay, palette overlay (13) |
+| Prefix | Group | HTML files |
+|---|---|---:|
+| 01- | Sidebar | 21 |
+| 02- | Top bar | 11 |
+| 03- | Splash | 2 |
+| 04- | Active input | 4 |
+| 05- | Footer | 7 |
+| 06- | Approval design | 3 |
+| 07- | Memory editor | 2 |
+| 08- | Command palette | 6 |
+| 09- | Tool pills | 7 |
+| 10- | Code blocks | 2 |
+| 11- | Divine Query | 3 |
+| 12- | Scroll + scribe | 2 |
+| 13- | Chat messages | 4 |
+| scene- | Scenes | 25 |
+| skill- | Skill pill | 3 |
+| theme- | Themes | 5 |
+
+Generated files establish design coverage; implementation status belongs to the [plan ledger](../../../plans/README.md) and runtime review evidence. Approval designs remain historical/dormant because [Plan 076](../../../plans/076-disable-approval-gate.md) retired active approval installation.
 
 ## Locked decisions summary
 
@@ -168,7 +171,7 @@ Current harness: **95 mockups** rendered by `pnpm render:bible`.
 
 ## Backup directions (rejected, archived)
 
-In `docs/ui/bible/_archive/`:
+Earlier design notes recorded these rejected backups under the former docs/ui/bible/_archive/ directory; that directory is absent from the current checkout:
 - `13-chat-brutalist.html` — heavy `━━━` rules, `[USER]/[SUMO]` brackets
 - `13-chat-ledger.html` — numbered entries `001 │ USER`, right-aligned timestamps
 

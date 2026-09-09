@@ -272,6 +272,29 @@ export function redactActivitySecrets(text: string): string {
 		.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/giu, "$1[REDACTED]@");
 }
 
+export function redactActivityOutputTail(
+	input: string | Uint8Array,
+	options: {
+		readonly maxBytes: number;
+		readonly contextBytes: number;
+		readonly maxLines?: number;
+		readonly truncated?: boolean;
+		readonly truncatedLineReplacement?: string;
+	},
+): string {
+	let raw = boundedOutputTail(input, { maxBytes: options.contextBytes, maxLines: Number.MAX_SAFE_INTEGER });
+	if (options.truncated) {
+		// A tail can begin after the credential label. Drop that unclassifiable
+		// partial row; a newline-free truncated tail is therefore intentionally empty.
+		const newline = raw.indexOf("\n");
+		raw = newline === -1 ? (options.truncatedLineReplacement ?? "") : raw.slice(newline + 1);
+	}
+	return boundedOutputTail(redactActivitySecrets(raw), {
+		maxBytes: options.maxBytes,
+		maxLines: options.maxLines ?? Number.MAX_SAFE_INTEGER,
+	});
+}
+
 function boundedHead(text: string, maxChars: number): string {
 	return Array.from(sanitizeActivityText(text)).slice(0, maxChars).join("");
 }
@@ -474,7 +497,7 @@ export class ActivityFeedPublisher {
 	private readonly writerIdentity: ActivityFeedWriterIdentity | undefined;
 	private readonly unleasedWriterForTests: boolean;
 	private writerOwned: boolean;
-	private writerDeathProven = false;
+	private writerDeathProof = false;
 	private readonly abandonedRunningIds = new Set<string>();
 	private revision = 0;
 	private activities: readonly ActivitySnapshot[] = [];
@@ -495,7 +518,7 @@ export class ActivityFeedPublisher {
 		if (this.writerIdentity) {
 			const claim = claimWriter(this.writerFile, this.writerIdentity, options.inspectWriter ?? (() => "unknown"));
 			this.writerOwned = claim.owned;
-			this.writerDeathProven = claim.writerDeathProven;
+			this.writerDeathProof = claim.writerDeathProven;
 		} else {
 			// Unidentified publishers are read-only by default. Tests may opt into
 			// fixture writes only while no real writer lease exists.
@@ -505,7 +528,7 @@ export class ActivityFeedPublisher {
 		// the writer token, so no incumbent can publish between this load and our
 		// first write and have that final update overwritten from stale memory.
 		this.load();
-		if (this.writerOwned && this.writerDeathProven) {
+		if (this.writerOwned && this.writerDeathProof) {
 			for (const activity of this.activities) {
 				if (activity.status === "queued" || activity.status === "running") this.abandonedRunningIds.add(activity.id);
 			}
@@ -520,9 +543,15 @@ export class ActivityFeedPublisher {
 		return this.writerOwned;
 	}
 
-	/** Missing running records may be reconciled only after the former writer is proven dead. */
-	public get canReconcileAbandonedActivities(): boolean {
-		return this.writerOwned && this.abandonedRunningIds.size > 0;
+	/**
+	 * The exact claim-time proof that a previous writer died. This is the sole
+	 * authorization bit for one cross-process terminal-index refresh; it stays
+	 * readable until completeAbandonedReconciliation consumes it. The bridge
+	 * consumes it after the takeover's first successful publication — including
+	 * empty feeds, where there are no abandoned running producers to reconcile.
+	 */
+	public get writerDeathProven(): boolean {
+		return this.writerDeathProof;
 	}
 
 	public getAbandonedRunningIds(): ReadonlySet<string> {
@@ -532,7 +561,7 @@ export class ActivityFeedPublisher {
 	/** Consume former-writer death proof only after replacement publication succeeds. */
 	public completeAbandonedReconciliation(): void {
 		this.abandonedRunningIds.clear();
-		this.writerDeathProven = false;
+		this.writerDeathProof = false;
 	}
 
 	public getSnapshot(): readonly ActivitySnapshot[] {

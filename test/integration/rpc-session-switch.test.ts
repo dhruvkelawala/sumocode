@@ -10,8 +10,8 @@ const CSI_U_ENTER = "\x1b[13u";
 
 let app: SpawnedPiPty | undefined;
 
-afterEach(() => {
-	app?.cleanup();
+afterEach(async () => {
+	await app?.cleanupAndWait();
 	app = undefined;
 });
 
@@ -24,6 +24,8 @@ async function waitForChromeCacheWrite(path: string, after = -1): Promise<number
 			const savedAt = Object.values(cache.byCwd ?? {})[0]?.savedAt;
 			if (isSavedAtNumber(savedAt) && savedAt > after) return savedAt;
 		} catch {}
+		// WAIT-CLASS: poll-interval — gap between bounded re-reads of the chrome
+		// cache file; the loop exits on the observed savedAt, not on elapsed time.
 		await new Promise((resolve) => setTimeout(resolve, 20));
 	}
 	throw new Error(`timed out waiting for chrome cache write after ${after}`);

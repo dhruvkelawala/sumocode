@@ -1,12 +1,12 @@
 # Plan execution contract
 
-Use this contract when implementing plans 091–115. The plan file is the execution authority; the linked GitHub issue is coordination metadata.
+Use this contract when implementing plans 091–115. The plan file is the execution authority; the linked GitHub issue is coordination metadata. Plan 110 (Effect pilot) is **deferred outside the current campaign** (owner reversal, 2026-09-05) with **no GO/NO-GO verdict recorded**: it is not implemented here and does not block any plan. The deferral removes only Plan 110 from Plan 115's final-wave gate (Plan 105 stays rejected); 106 and 111–114 must still be `DONE` before Plan 115 runs. See its row in `plans/README.md`.
 
 ## 1. Select only ready work
 
 1. Read the plan completely.
 2. Confirm every **Depends on** row is `DONE` in `plans/README.md`.
-3. For Plan 115, additionally confirm every non-rejected Plan 091–114 row is `DONE`; this final-wave gate is mandatory even when the plan's direct API dependencies are complete.
+3. For Plan 115, additionally confirm every **accepted non-deferred** Plan 091–114 row is `DONE`; Plan 105 is rejected and Plan 110 is deferred outside the current campaign, so neither counts against this final-wave gate. The gate is mandatory even when the plan's direct API dependencies are complete.
 4. Run the plan's commit-range drift check and working-tree preflight before editing.
 5. If either preflight or a dependency/final-wave contract fails, mark the row `BLOCKED` with evidence. Do not recreate dependency APIs.
 
@@ -25,8 +25,10 @@ Completion criterion: `git status --short` contains only scoped implementation, 
 The 2026-08-28 Plan-105 trial used `zai/glm-5.3-flash` in an isolated worktree. It stayed in scope, produced a coherent regression, passed targeted/type/build/lint checks, reproduced unrelated suite failures against pristine baseline, and stopped instead of weakening gates. It also proved Plan 105's expected red premise false: Vitest already filters the integration invocation to 30 integration-only files. Plan 105 is therefore rejected, and the trial does **not** justify cheap execution across this backlog.
 
 - **Cheap implementation with smart review:** Plans 103 and 115 only. The cheap child may produce a bounded candidate branch; a smart reviewer must verify wait semantics or documentation authority before integration.
-- **Smart implementation:** Plans 091–102, 104, and 106–114. This includes every P0/P1, security, persistence, lifecycle, Git mutation, retained-renderer, RPC-host, and Effect plan.
-- **Human gate:** visual golden promotion, dependency-security disposition, worktree apply/prune, final Effect GO/NO-GO, push, and PR publication.
+- **Smart implementation:** Plans 091–102, 104, 106–109, and 111–114. This includes every P0/P1, security, persistence, lifecycle, Git mutation, retained-renderer, and RPC-host plan. Plan 110 is deferred outside the current campaign (see its `plans/README.md` row) and is not implemented here.
+- **Human gate:** visual golden promotion, dependency-security disposition, worktree apply/prune, push, and PR publication.
+
+The final Effect GO/NO-GO human gate is not held in the current campaign: Plan 110 is DEFERRED outside it (owner reversal, 2026-09-05) and no GO/NO-GO verdict has been recorded. The pilot's requirements/evidence remain preserved (NOT DONE) for the future separate deeper Effect spike, where the plan file's provisional-recommendation and human-verdict process still applies.
 
 A cheap child may still perform a precisely scoped mechanical subtask inside smart-owned work, but it does not own the plan verdict, scope changes, or final integration.
 
@@ -49,11 +51,26 @@ Completion criterion: both implementation and security-review runner contract te
 
 ## 5. Verify and record
 
-Run every step gate and final command in the plan. After success:
+Run every step gate and final command in the plan under its declared expected-result contract.
+
+### Load-sensitive unit-suite adjudication
+
+Expected workstation load is not a poisoned-environment condition and does not justify waiting for an idle machine. When a plan explicitly adopts this policy, a failing default-parallel `pnpm test` may be adjudicated on the exact same head only when **all** of these conditions hold:
+
+1. The plan's changed-path focused tests, typecheck, build, and lint are green.
+2. Every default-parallel failure is confined to untouched tests and is timeout/timing-shaped or varies across retries; deterministic assertion failures are not eligible.
+3. No production or test code is changed in response to the parallel failure.
+4. Every failed file passes by itself with file parallelism disabled.
+5. The complete suite passes on the same commit with `VITEST_MAX_WORKERS=1 pnpm test` (or the repository's equivalent fully serial command).
+6. The plan and index record both the default failure and the serial evidence; they must not claim that the unqualified default command passed.
+
+A changed-path failure, a deterministic failure, or any serial failure is immediately blocking and is never eligible for this adjudication. Two bounded repair attempts may address an understood defect, but retries cannot convert an ineligible failure into a load-sensitive pass. This adjudication changes only local workstation scheduling; current-head CI must still be green before the PR can become `STACK_READY`.
+
+After success:
 
 1. Rerun required bundle builders after integration tests.
 2. Confirm no out-of-scope changes.
 3. Update the plan's row in `plans/README.md` to `DONE` with commit/test evidence.
 4. Leave issue/PR synchronization to the operator unless explicitly instructed.
 
-If a verification fails twice after a reasonable fix, preserve evidence and mark the plan `BLOCKED`; do not improvise around the gate.
+If a verification fails twice after a reasonable fix or fails the adjudication contract above, preserve evidence and mark the plan `BLOCKED`; do not improvise around the gate.

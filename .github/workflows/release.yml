@@ -77,6 +77,10 @@ jobs:
           set -euo pipefail
           umask 022
           chmod go-w "$(realpath "$(command -v node)")"
+          # pnpm's macOS prebuilt PTY helper can arrive without its executable bit.
+          helper="node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper"
+          ls -l "$helper"
+          chmod u+x "$helper"
           pnpm test:native
 
       - name: Verify and package checksums

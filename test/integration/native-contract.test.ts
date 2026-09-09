@@ -311,10 +311,10 @@ nativeDescribe("native executable contract", () => {
 		expect(existsSync(NATIVE_EXTENSION)).toBe(true);
 		expect(existsSync(NATIVE_RPC_EXTENSION)).toBe(true);
 		expect(existsSync(join(ARCHIVE, "CHANGELOG.md"))).toBe(true);
-		expect(readFileSync(NATIVE_PI).includes("register-bedrock")).toBe(false);
-		expect(readFileSync(join(ROOT, "node_modules/@earendil-works/pi-coding-agent/dist/bun/cli.js"), "utf8")).toContain('import("./register-bedrock.js")');
+		expect(readFileSync(NATIVE_PI).includes("bedrock-provider")).toBe(false);
+		expect(readFileSync(join(ROOT, "node_modules/@earendil-works/pi-coding-agent/dist/bun/runtime-setup.js"), "utf8")).toContain("setBedrockProviderModule(bedrockProviderModule)");
 		expect(runNative(["--version"]).stdout).toContain(`sumocode ${PACKAGE_VERSION}`);
-		expect(spawnSync(NATIVE_PI, ["--version"], { encoding: "utf8" }).stdout.trim()).toBe("0.84.4");
+		expect(spawnSync(NATIVE_PI, ["--version"], { encoding: "utf8" }).stdout.trim()).toBe("0.85.1");
 	});
 
 	it("forwards Pi option values that collide with launcher subcommands", () => {

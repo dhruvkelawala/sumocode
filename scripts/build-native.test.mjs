@@ -44,11 +44,11 @@ function fixture(layout) {
 	temporaryDirectories.push(directory);
 	const root = join(directory, "package");
 	const piPkg = layout === "pnpm"
-		? join(root, "node_modules/.pnpm/pi@0.84.4/node_modules/@earendil-works/pi-coding-agent")
+		? join(root, "node_modules/.pnpm/pi@0.85.1/node_modules/@earendil-works/pi-coding-agent")
 		: join(root, "node_modules/@earendil-works/pi-coding-agent");
 	const neighborhood = layout === "pnpm" ? join(piPkg, "../..") : join(piPkg, "node_modules");
 	write(join(piPkg, "package.json"), JSON.stringify({
-		name: "@earendil-works/pi-coding-agent", version: "0.84.4", type: "module",
+		name: "@earendil-works/pi-coding-agent", version: "0.85.1", type: "module",
 		dependencies: {
 			"proper-lockfile": "1.0.0",
 			"@earendil-works/pi-agent-core": "1.0.0",
@@ -56,9 +56,16 @@ function fixture(layout) {
 		},
 		optionalDependencies: { "absent-optional-dependency": "1.0.0" },
 	}));
-	const source = 'import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";\n'
-		+ 'await import("./register-bedrock.js");\nawait import("../cli.js");\n';
+	const source = '#!/usr/bin/env node\n'
+		+ 'import "./sandbox-env-setup.js";\nimport "./runtime-setup.js";\nimport "../cli.js";\n';
 	write(join(piPkg, "dist/bun/cli.js"), source);
+	write(join(piPkg, "dist/bun/sandbox-env-setup.js"), "export {};\n");
+	write(join(piPkg, "dist/bun/runtime-setup.js"),
+		'import { bedrockProviderModule } from "@earendil-works/pi-ai/bedrock-provider";\n'
+		+ 'import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";\n'
+		+ 'import { setBedrockProviderModule } from "@earendil-works/pi-ai/compat";\n'
+		+ 'registerBunOAuthFlows();\n'
+		+ 'setBedrockProviderModule(bedrockProviderModule);\n');
 	write(join(piPkg, "dist/cli.js"),
 		'import lock from "proper-lockfile";\nimport { agent } from "@earendil-works/pi-agent-core/private-entry";\nconsole.log(JSON.stringify([lock, agent]));\n');
 	write(join(piPkg, "dist/main.js"), "export async function main(args, options) {\n    resetTimings();\n}\n");
@@ -82,7 +89,7 @@ function fixture(layout) {
 		+ "async function loadExtension(extensionPath,cwd,eventBus,runtime,cacheToken){let resolvedPath=resolvePath(extensionPath,cwd,{normalizeUnicodeSpaces:!0});try{let factory=await loadExtensionModule(resolvedPath,cacheToken);\n"
 		+ "async function runRpcMode(runtimeHost){takeOverStdout();\n"
 		+ 'case"get_state":{let state2=\n');
-	write(join(piPkg, "dist/bundle/cli.js"), "process.title=APP_NAME;\n");
+	write(join(piPkg, "dist/bundle/cli.js"), "process.title=APP_NAME,\n");
 	const lockPkg = join(root, "node_modules/.pnpm/lock@1/node_modules/proper-lockfile");
 	write(join(lockPkg, "package.json"), JSON.stringify({ name: "proper-lockfile", main: "index.cjs" }));
 	write(join(lockPkg, "index.cjs"), 'module.exports = require("private-transitive");\n');
@@ -233,7 +240,7 @@ describe("native Pi build-source preparation", () => {
 		});
 		expect(result.status, result.stderr).toBe(0);
 		expect(readFileSync(diagnostics, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line).event))
-			.toEqual(["child_entry", "cli_import_start", "after_cli_import"]);
+			.toEqual(["child_entry", "bedrock_import_start", "after_bedrock_import", "cli_import_start", "after_cli_import"]);
 	});
 
 	for (const scenario of ["contained", "escaped ancestor", "manifest-only before escaped ancestor"]) {
@@ -656,7 +663,8 @@ describe("native Pi build-source preparation", () => {
 			symlinkSync(sourceDist, join(piPkg, "dist/contained-cycle"), "dir");
 			makeNativePiBuildCopy(piPkg, buildDir, root);
 			expect(readFileSync(cliPath, "utf8")).toBe(source);
-			expect(readFileSync(join(buildDir, "dist/bun/cli.js"), "utf8")).not.toContain("bedrock_import_start");
+			expect(readFileSync(join(buildDir, "dist/bun/runtime-setup.js"), "utf8")).not.toContain("bedrock");
+			expect(readFileSync(join(buildDir, "dist/bun/cli.js"), "utf8")).toContain('await import("./runtime-setup.js")');
 			expect(realpathSync(join(buildDir, "dist/bun/cli.js"))).toBe(join(buildDir, "dist/bun/cli.js"));
 			expect(realpathSync(join(buildDir, "dist/contained-cycle"))).toBe(sourceDist);
 		});

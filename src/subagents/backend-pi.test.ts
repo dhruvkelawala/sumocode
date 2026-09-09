@@ -597,7 +597,7 @@ describe("spawnPiChild", () => {
 
 	it("delivers the delegated prompt via stdin and keeps it out of child argv", () => {
 		// Issue 391: delegated prompts can carry sensitive material. Pinned Pi
-		// (0.84.x) print mode reads piped stdin as the initial message
+		// (0.85.x) print mode reads piped stdin as the initial message
 		// (interior multiline/Unicode bytes are exact; Pi itself trims
 		// leading/trailing whitespace), so the prompt must travel through
 		// stdin -- never argv, where any local process can read it.

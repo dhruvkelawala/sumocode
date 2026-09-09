@@ -30,7 +30,7 @@ export function instrumentPiStartup(piDist = installedPiDist()) {
 		const source = readFileSync(path, "utf8");
 		if (source.includes(replacement)) return;
 		const count = source.split(needle).length - 1;
-		if (count !== 1) throw new Error(`Pi 0.84.4 instrumentation expected one match in ${relativePath}, found ${count}`);
+		if (count !== 1) throw new Error(`Pi instrumentation expected one match in ${relativePath}, found ${count}`);
 		const contents = source.replace(needle, replacement);
 		const stats = statSync(path);
 		if (lstatSync(path).isSymbolicLink() || stats.nlink > 1) {
@@ -41,12 +41,30 @@ export function instrumentPiStartup(piDist = installedPiDist()) {
 		}
 	}
 
+	// Pi 0.85.1 loads bun/cli.js through three static imports (sandbox-env-setup,
+	// runtime-setup, cli). Static imports hoist above any injected body code, so
+	// the marks require converting runtime-setup/cli to dynamic imports; the env
+	// restore stays static-first because later modules read process.env at load.
 	replaceOnce("bun/cli.js",
-		'import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";',
-		`import { appendFileSync } from "node:fs";\nimport { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";\nconst startupDiagnosticsFile = process.env.SUMO_TUI_DIAG_FILE;\nglobalThis.__sumocodeStartupMark = (event, fields = {}) => {\n    if (!startupDiagnosticsFile) return;\n    try {\n        appendFileSync(startupDiagnosticsFile, JSON.stringify({ ts: Date.now(), event, pid: process.pid, ...fields }) + "\\n", { encoding: "utf8", mode: 0o600 });\n    } catch {}\n};\nglobalThis.__sumocodeStartupMark("child_entry");`);
-	replaceOnce("bun/cli.js",
-		'await import("./register-bedrock.js");\nawait import("../cli.js");',
-		'globalThis.__sumocodeStartupMark("bedrock_import_start");\nawait import("./register-bedrock.js");\nglobalThis.__sumocodeStartupMark("after_bedrock_import");\nglobalThis.__sumocodeStartupMark("cli_import_start");\nawait import("../cli.js");\nglobalThis.__sumocodeStartupMark("after_cli_import");');
+		'import "./sandbox-env-setup.js";\nimport "./runtime-setup.js";\nimport "../cli.js";',
+		'import "./sandbox-env-setup.js";\n'
+		+ 'import { appendFileSync } from "node:fs";\n'
+		+ 'const startupDiagnosticsFile = process.env.SUMO_TUI_DIAG_FILE;\n'
+		+ 'globalThis.__sumocodeStartupMark = (event, fields = {}) => {\n'
+		+ "    if (!startupDiagnosticsFile) return;\n"
+		+ "    try {\n"
+		+ '        appendFileSync(startupDiagnosticsFile, JSON.stringify({ ts: Date.now(), event, pid: process.pid, ...fields }) + "\\n", { encoding: "utf8", mode: 0o600 });\n'
+		+ "    } catch {}\n"
+		+ "};\n"
+		+ 'globalThis.__sumocodeStartupMark("child_entry");\n'
+		// 0.85.1 moved Bedrock registration from register-bedrock.js into
+		// runtime-setup.js; these marks still bracket that registration import.
+		+ 'globalThis.__sumocodeStartupMark("bedrock_import_start");\n'
+		+ 'await import("./runtime-setup.js");\n'
+		+ 'globalThis.__sumocodeStartupMark("after_bedrock_import");\n'
+		+ 'globalThis.__sumocodeStartupMark("cli_import_start");\n'
+		+ 'await import("../cli.js");\n'
+		+ 'globalThis.__sumocodeStartupMark("after_cli_import");');
 
 	replaceOnce("main.js",
 		"export async function main(args, options) {\n    resetTimings();",
@@ -88,7 +106,7 @@ export function instrumentPiStartup(piDist = installedPiDist()) {
 			const source = readFileSync(join(piDist, "bundle/chunks", name), "utf8");
 			return source.includes(bundleChunkNeedle) || source.includes(bundleChunkReplacement);
 		});
-	if (chunkMatches.length !== 1) throw new Error(`Pi 0.84.4 instrumentation expected one main bundle chunk, found ${chunkMatches.length}`);
+	if (chunkMatches.length !== 1) throw new Error(`Pi instrumentation expected one main bundle chunk, found ${chunkMatches.length}`);
 	const chunk = join("bundle/chunks", chunkMatches[0]);
 	replaceOnce(chunk, bundleChunkNeedle, bundleChunkReplacement);
 	replaceOnce(chunk,
@@ -114,8 +132,8 @@ export function instrumentPiStartup(piDist = installedPiDist()) {
 		'case"get_state":{globalThis.__sumocodeStartupMark?.("first_get_state_received");let state2=');
 
 	replaceOnce("bundle/cli.js",
-		"process.title=APP_NAME;",
-		'globalThis.__sumocodeStartupMark?.("after_cli_import");process.title=APP_NAME;');
+		"process.title=APP_NAME,",
+		'globalThis.__sumocodeStartupMark?.("after_cli_import");process.title=APP_NAME,');
 
 	console.log(`[sumocode] diagnostic Pi startup marks applied under ${piDist}`);
 }

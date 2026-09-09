@@ -25,7 +25,15 @@ const require = createRequire(import.meta.url);
 const BUN_PIN = readFileSync(resolve(root, ".bun-version"), "utf8").trim();
 const PI_PIN = "0.85.1";
 const { version } = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
-const BEDROCK_ENTRY_BLOCK = 'globalThis.__sumocodeStartupMark("bedrock_import_start");\nawait import("./register-bedrock.js");\nglobalThis.__sumocodeStartupMark("after_bedrock_import");\n';
+// Pi 0.85.1 registers Bedrock inside bun/runtime-setup.js (0.84.4 used a
+// dynamic register-bedrock.js import in bun/cli.js). The child strips only these
+// three Bedrock lines: runtime-setup also owns process.title and the Bun OAuth
+// flows, which the compiled child must keep.
+const BEDROCK_RUNTIME_SETUP_STRIPS = [
+	'import { bedrockProviderModule } from "@earendil-works/pi-ai/bedrock-provider";\n',
+	'import { setBedrockProviderModule } from "@earendil-works/pi-ai/compat";\n',
+	'setBedrockProviderModule(bedrockProviderModule);\n',
+];
 
 function fail(message) {
 	console.error(`[sumocode] build:native: ${message}`);
@@ -138,12 +146,17 @@ export function makeNativePiBuildCopy(piPkg, buildDir, packageRoot = root, resol
 		symlinkSync(realDependency, target, "dir");
 	}
 
-	const cliPath = join(buildDir, "dist/bun/cli.js");
-	const cliSource = readFileSync(cliPath, "utf8");
-	const matches = cliSource.split(BEDROCK_ENTRY_BLOCK).length - 1;
-	if (matches !== 1) fail(`Pi ${PI_PIN} Bedrock patch expected one entry block, found ${matches}`);
-	unlinkSync(cliPath);
-	writeFileSync(cliPath, cliSource.replace(BEDROCK_ENTRY_BLOCK, ""));
+	// The instrumented cli.js keeps its bedrock_import marks around the (now
+	// Bedrock-free) runtime-setup import; only the registration itself is removed.
+	const runtimeSetupPath = join(buildDir, "dist/bun/runtime-setup.js");
+	const runtimeSetupSource = readFileSync(runtimeSetupPath, "utf8");
+	const bedrockFreeRuntimeSetup = BEDROCK_RUNTIME_SETUP_STRIPS.reduce((source, needle) => {
+		const count = source.split(needle).length - 1;
+		if (count !== 1) fail(`Pi ${PI_PIN} Bedrock patch expected one "${needle.trim()}" in bun/runtime-setup.js, found ${count}`);
+		return source.replace(needle, "");
+	}, runtimeSetupSource);
+	unlinkSync(runtimeSetupPath);
+	writeFileSync(runtimeSetupPath, bedrockFreeRuntimeSetup);
 	return buildDir;
 }
 

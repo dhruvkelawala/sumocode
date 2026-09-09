@@ -116,7 +116,7 @@ async function runTerminalRunnerRole(): Promise<boolean> {
 }
 
 // ── Pi parseArgs consumption-class tables (mirrors bin/sumocode.sh, pinned by
-// test/integration/spawn-pi-pty.test.ts against pi-coding-agent 0.84.4) ────
+// test/integration/spawn-pi-pty.test.ts against pi-coding-agent 0.85.1) ────
 
 const PI_UNCONDITIONAL_VALUE_FLAGS = new Set([
 	"--mode", "--provider", "--model", "--api-key", "--system-prompt",

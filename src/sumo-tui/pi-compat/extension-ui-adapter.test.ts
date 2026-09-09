@@ -1,5 +1,5 @@
 import type { KeybindingsManager, ReadonlyFooterDataProvider, Theme } from "@earendil-works/pi-coding-agent";
-import type { Component, EditorComponent, EditorTheme, TUI } from "@earendil-works/pi-tui";
+import type { Component, EditorComponent, EditorTheme, OverlayHandle, TUI } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadYoga } from "../layout/yoga.js";
 import { ModalManager } from "../widgets/modal.js";
@@ -126,5 +126,24 @@ describe("SumoExtensionUIAdapter", () => {
 		modals.handleInput("enter");
 		await expect(result).resolves.toBe("beta");
 		registry.dispose();
+	});
+
+	it("provides the Pi overlay handle contract", async () => {
+		const { adapter, registry } = await makeAdapter();
+		let handle: OverlayHandle | undefined;
+		let close: (() => void) | undefined;
+		const result = adapter.custom<void>((_tui, _theme, _keybindings, done) => {
+			close = done;
+			return new TestComponent();
+		}, { onHandle: (created) => { handle = created; } });
+
+		try {
+			await vi.waitFor(() => expect(handle).toBeDefined());
+			expect(handle?.getBounds()).toBeUndefined();
+		} finally {
+			close?.();
+			await result;
+			registry.dispose();
+		}
 	});
 });

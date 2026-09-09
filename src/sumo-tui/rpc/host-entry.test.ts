@@ -72,6 +72,7 @@ function entryFixture(entry: "node" | "native", mode: Mode, dies: boolean, reque
 		},
 		"./src/sumo-tui/rpc/spawn-child.mjs": { buildChildSpawnPlan: () => ({ command: "fake", args: [], env: {} }) },
 		"../sumo-tui/rpc/spawn-child.mjs": { buildChildSpawnPlan: () => ({ command: "fake", args: [], env: {} }) },
+		"../cli/open-worktree.js": { openWorktree: async () => 0 },
 		jiti: { createJiti: () => ({ import: async () => loadHost() }) },
 	};
 	const result: Promise<void> = runInNewContext(`(async () => { ${source} })()`, {

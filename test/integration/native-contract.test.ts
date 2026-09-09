@@ -416,10 +416,43 @@ nativeDescribe("native executable contract", () => {
 			const result = runNative(argv);
 			if (row.expect === "exit-0") expect(result.status).toBe(0);
 			else if (row.expect === "doctor-runs") expect([0, 70]).toContain(result.status);
+			else if (row.expect === "worktree-host-error") expect(result.status).toBe(1);
 			else expect(result.status).toBe(64);
 			if (row.stdoutContains !== undefined) expect(result.stdout).toContain(row.stdoutContains);
+			if (row.stderrContains !== undefined) expect(result.stderr).toContain(row.stderrContains);
 		}, 30_000);
 	}
+
+	it("routes -w and worktree through the worktree module outside a source checkout", () => {
+		const caller = tempRoot("sumocode-native-worktree-caller-");
+		for (const argv of [["-w"], ["worktree"], ["-w", "mywt"], ["worktree", "mywt"]]) {
+			const result = runNative(argv, { cwd: caller });
+			expect(result.status, result.stderr).toBe(1);
+			expect(result.stderr).toContain("requires a running herdr terminal host");
+			expect(result.stderr).not.toContain("source checkout");
+		}
+	});
+
+	it("parses the worktree subcommand and -w alias with an optional name", () => {
+		for (const [argv, name] of [
+			[["--dry-run", "-w"], ""],
+			[["--dry-run", "worktree"], ""],
+			[["--dry-run", "-w", "mywt"], "mywt"],
+			[["--dry-run", "worktree", "mywt"], "mywt"],
+		] as const) {
+			const result = runNative(argv);
+			expect(result.status, result.stderr).toBe(0);
+			expect(dryRunField(result.stdout, "NAME")).toBe(name);
+		}
+		expect(runNative(["--dry-run", "-w", "--offline"]).status).toBe(64);
+		expect(runNative(["--dry-run", "worktree", "--offline"]).status).toBe(64);
+	});
+
+	it("lists the worktree command in native help", () => {
+		const help = runNative(["--help"]);
+		expect(help.status).toBe(0);
+		expect(help.stdout).toContain("worktree [name]");
+	});
 
 	it("enters an explicit project directory instead of submitting it as a prompt", () => {
 		const caller = tempRoot("sumocode-native-project-caller-");

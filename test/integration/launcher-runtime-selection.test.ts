@@ -161,11 +161,16 @@ describe("launcher subcommands (plan 117 shared contract)", () => {
 				expect(result.status).toBe(0);
 			} else if (row.expect === "doctor-runs") {
 				expect([0, 70]).toContain(result.status);
+			} else if (row.expect === "worktree-host-error") {
+				expect(result.status).toBe(1);
 			} else {
 				expect(result.status).toBe(64);
 			}
 			if (row.stdoutContains !== undefined) {
 				expect(result.stdout).toContain(row.stdoutContains);
+			}
+			if (row.stderrContains !== undefined) {
+				expect(result.stderr).toContain(row.stderrContains);
 			}
 		});
 	}

@@ -269,7 +269,7 @@ TASK_DIR=""
 SUMOCODE_ARGS=()
 while [[ $# -gt 0 ]]; do
 	case "$1" in
-		doctor|diag|task)
+		doctor|diag|task|worktree)
 			if [[ "${COMMAND}" != "run" ]]; then usage_error "Only one command may be specified."; fi
 			COMMAND="$1"
 			shift

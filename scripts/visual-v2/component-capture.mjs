@@ -24,6 +24,7 @@ export async function captureComponentScenario(scenario) {
 async function renderComponentLines(kind, scenario) {
 	if (kind === "input-frame-typed") return renderInputFrameTyped(scenario.dimensions.cols);
 	if (kind === "input-frame-inline-skill") return renderInputFrameInlineSkill(scenario.dimensions.cols);
+	if (kind === "input-recovery-notice") return renderInputRecoveryNotice(scenario.dimensions.cols, scenario.component.message);
 	if (kind === "footer-ready") return renderFooterReady(scenario.dimensions.cols);
 	if (kind === "top-bar-default") return renderTopBarDefault(scenario.dimensions.cols);
 	if (kind === "sidebar-editorial") return renderSidebarEditorial(scenario.dimensions.cols);
@@ -60,6 +61,13 @@ async function renderInputFrameInlineSkill(width) {
 	const editor = editorMod.createCathedralEditor(tui, theme, keybindings, { isSplash: () => false });
 	editor.setText("Testing /skill:apr");
 	return [...editor.render(width), inputMod.renderInputHints(width)];
+}
+
+async function renderInputRecoveryNotice(width, message) {
+	const mod = await jiti.import(`${repoRoot}/src/sumo-tui/widgets/input-recovery-notice.ts`);
+	const notice = new mod.InputRecoveryNotice();
+	notice.setMessage(message);
+	return notice.render(width);
 }
 
 async function renderTopBarDefault(width) {

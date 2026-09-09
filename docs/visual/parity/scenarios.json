@@ -164,6 +164,48 @@
 			]
 		},
 		{
+			"id": "input-recovery-paused-component",
+			"lane": "component",
+			"status": "review",
+			"component": {
+				"kind": "input-recovery-notice",
+				"message": "input paused — incomplete paste; 65536/65536 bytes retained; 128 bytes truncated. waiting for paste end; further bytes beyond limit truncated. if no end arrives, end the paste stream in the terminal, then restart the session from outside input."
+			},
+			"dimensions": {
+				"cols": 60,
+				"rows": 5
+			},
+			"bibleTarget": "06-input-recovery-paused.png",
+			"crops": [
+				{
+					"id": "full",
+					"targetCrop": "full",
+					"runtimeCrop": "full"
+				}
+			]
+		},
+		{
+			"id": "input-recovery-resumed-component",
+			"lane": "component",
+			"status": "review",
+			"component": {
+				"kind": "input-recovery-notice",
+				"message": "input resumed — paste complete; 65536/65536 bytes retained; 128 bytes truncated"
+			},
+			"dimensions": {
+				"cols": 60,
+				"rows": 2
+			},
+			"bibleTarget": "06-input-recovery-resumed.png",
+			"crops": [
+				{
+					"id": "full",
+					"targetCrop": "full",
+					"runtimeCrop": "full"
+				}
+			]
+		},
+		{
 			"id": "footer-ready-component",
 			"lane": "component",
 			"status": "review",

@@ -31,7 +31,7 @@
     "typebox": "*"
   },
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=23.11.0"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "0.84.4",

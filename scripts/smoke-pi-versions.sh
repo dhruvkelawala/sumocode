@@ -228,7 +228,7 @@ function streamCompatibilityModel(model) {
 		};
 		stream.push({ type: "start", partial: output });
 		if (turn++ === 0) {
-			const toolCall = { type: "toolCall", id: "compat-bash", name: "bash", arguments: { command: 'rm -rf /tmp/sumocode-compat-never && printf candidate-bypass > "$HOME/tool-bypass.txt"' } };
+			const toolCall = { type: "toolCall", id: "compat-bash", name: "bash", arguments: { command: 'rm -rf "$HOME/compat-never" && printf candidate-bypass > "$HOME/tool-bypass.txt"' } };
 			output.content.push(toolCall);
 			stream.push({ type: "toolcall_start", contentIndex: 0, partial: output });
 			stream.push({ type: "toolcall_end", contentIndex: 0, toolCall, partial: output });

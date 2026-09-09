@@ -1,8 +1,8 @@
 import { getActiveTheme } from "./themes/index.js";
 import { lineToAnsi, span, textLine, truncateLine } from "./sumo-tui/render/primitives.js";
 
-const TITLE_PREFIX_MAX = 18;
 const LEFT_PADDING = "  ";
+const NAMESPACED_SUBAGENT_ID = /^sa-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-(\d+)$/;
 
 function ageLabel(ageMs: number): string {
 	const seconds = Math.max(0, Math.floor(ageMs / 1_000));
@@ -10,9 +10,19 @@ function ageLabel(ageMs: number): string {
 	return `${Math.floor(seconds / 60)}m`;
 }
 
-function fallbackTitle(title: string): string {
-	const normalized = title.replace(/\s+/g, " ").trim() || "subagent";
-	return normalized.length <= TITLE_PREFIX_MAX ? normalized : `${normalized.slice(0, TITLE_PREFIX_MAX - 1)}…`;
+/**
+ * Collapses a namespaced subagent id (`sa-<uuid>-<n>`) to its readable
+ * sequence suffix (`sa-<n>`). Already-short ids (`sa-1`) and non-sa ids pass
+ * through unchanged; the full id stays the entry identity for actions.
+ */
+export function shortId(id: string): string {
+	const match = NAMESPACED_SUBAGENT_ID.exec(id);
+	return match === null ? id : `sa-${match[1]}`;
+}
+
+/** Whitespace-normalized title, or the generic fallback when it is empty. */
+function titleLabel(title: string): string {
+	return title.replace(/\s+/g, " ").trim() || "subagent";
 }
 
 /** One running subagent summarized in the footer status row. */
@@ -34,7 +44,10 @@ export function renderSubagentStatusRow(options: {
 	if (options.running.length > 0) segments.push(`${options.running.length} running`);
 	if (options.queuedCount > 0) segments.push(`${options.queuedCount} queued`);
 	segments.push(
-		...options.running.map((subagent) => `${subagent.id} ${subagent.roleId ?? fallbackTitle(subagent.title)} ${ageLabel(subagent.ageMs)}`),
+		...options.running.map((subagent) => {
+			const role = subagent.roleId === undefined ? "" : ` ${subagent.roleId}`;
+			return `${titleLabel(subagent.title)} ${shortId(subagent.id)}${role} ${ageLabel(subagent.ageMs)}`;
+		}),
 	);
 	const suffix = segments.length > 0 ? ` · ${segments.join(" · ")}` : "";
 	const row = textLine([

@@ -1,20 +1,53 @@
 import { describe, expect, it } from "vitest";
-import { renderSubagentStatusRow } from "./subagent-status-row.js";
+import { renderSubagentStatusRow, shortId } from "./subagent-status-row.js";
 
 const ANSI = /\x1b\[[0-9;]*m/g; // oxlint-disable-line no-control-regex -- intentional ANSI escape sequence stripping in a render test.
 const plain = (value: string): string => value.replace(ANSI, "");
 
+describe("shortId", () => {
+	it("collapses a namespaced uuid id to its sequence suffix", () => {
+		expect(shortId("sa-7e8fc89b-3545-43af-bf97-d603cdefdea2-2")).toBe("sa-2");
+	});
+
+	it("passes already-short ids through unchanged", () => {
+		expect(shortId("sa-1")).toBe("sa-1");
+	});
+
+	it("passes non-sa ids through unchanged", () => {
+		expect(shortId("task-7")).toBe("task-7");
+	});
+});
+
 describe("renderSubagentStatusRow", () => {
-	it("composes aggregate counts before per-agent role and age segments", () => {
+	it("composes aggregate counts before per-agent title, short id, role, and age segments", () => {
 		const [row] = renderSubagentStatusRow({
-			width: 100,
+			width: 120,
 			running: [
 				{ id: "sa-2", roleId: "research", title: "research auth", ageMs: 4 * 60_000 },
 				{ id: "sa-5", roleId: "implement-cheap", title: "implement auth", ageMs: 40_000 },
 			],
 			queuedCount: 1,
 		});
-		expect(plain(row)).toBe("  ◈ subagents · 2 running · 1 queued · sa-2 research 4m · sa-5 implement-cheap 40s");
+		expect(plain(row)).toBe(
+			"  ◈ subagents · 2 running · 1 queued · research auth sa-2 research 4m · implement auth sa-5 implement-cheap 40s",
+		);
+	});
+
+	it("shows the human title and a shortened id for namespaced subagent ids", () => {
+		const [row] = renderSubagentStatusRow({
+			width: 200,
+			running: [
+				{
+					id: "sa-7e8fc89b-3545-43af-bf97-d603cdefdea2-2",
+					roleId: "implement-cheap",
+					title: "rebase-471-herdr-panes",
+					ageMs: 13 * 60_000,
+				},
+			],
+			queuedCount: 0,
+		});
+		expect(plain(row)).toContain("rebase-471-herdr-panes sa-2 implement-cheap 13m");
+		expect(plain(row)).not.toContain("7e8fc89b");
 	});
 
 	it("keeps aggregate counts visible when per-agent detail is truncated", () => {
@@ -48,18 +81,26 @@ describe("renderSubagentStatusRow", () => {
 			running: [{ id: "sa-1", roleId: "review", title: "review", ageMs: 1_000 }],
 			queuedCount: 0,
 		});
-		expect(plain(row)).toContain("1 running · sa-1 review 1s");
+		expect(plain(row)).toContain("1 running · review sa-1 review 1s");
 		expect(plain(row)).not.toContain("queued");
 	});
 
-	it("falls back to a bounded title prefix when no role is present", () => {
+	it("falls back to the generic label when the title is empty", () => {
 		const [row] = renderSubagentStatusRow({
 			width: 80,
-			running: [{ id: "sa-3", title: "a very long custom investigation title", ageMs: 0 }],
+			running: [{ id: "sa-3", title: "", ageMs: 0 }],
 			queuedCount: 0,
 		});
-		expect(plain(row)).toContain("sa-3 a very long custo… 0s");
-		expect(plain(row)).not.toContain("investigation");
+		expect(plain(row)).toContain("subagent sa-3 0s");
+	});
+
+	it("renders non-sa ids verbatim", () => {
+		const [row] = renderSubagentStatusRow({
+			width: 80,
+			running: [{ id: "task-7", roleId: "plan", title: "refactor", ageMs: 0 }],
+			queuedCount: 0,
+		});
+		expect(plain(row)).toContain("refactor task-7 plan 0s");
 	});
 
 	it("truncates the rendered row to the requested width", () => {

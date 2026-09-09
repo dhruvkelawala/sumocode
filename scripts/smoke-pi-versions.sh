@@ -197,6 +197,10 @@ os.environ["PI_BIN"] = pi
 with open(output, "wb") as target:
     def read(fd):
         data = os.read(fd, 4096)
+        # Python 3.9 on macOS keeps waiting on stdin after master EOF.
+        # pty.spawn handles OSError by closing the master and waiting for exit.
+        if not data:
+            raise OSError("PTY master closed")
         target.write(data)
         return data
     status = pty.spawn([sumo, *args], master_read=read)

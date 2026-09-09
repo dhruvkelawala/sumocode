@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { generateFakeProvider } from "../test/integration/fixtures/plan112-fake-provider.mjs";
 
 export const recoveryRepo = realpathSync(fileURLToPath(new URL("..", import.meta.url)));
+const PI_PIN = JSON.parse(readFileSync(join(recoveryRepo, "package.json"), "utf8")).devDependencies["@earendil-works/pi-coding-agent"];
 
 /** No inherited credentials, user config, preload flags, or shared cache. */
 export function recoveryEnvironment(root) {
@@ -30,7 +31,7 @@ export async function preflightRecovery(root) {
 		&& !(nodeStat.mode & 0o022) && (nodeStat.mode & 0o111), "preflight: trusted absolute Node required");
 	for (const name of ["pi-coding-agent", "pi-ai", "pi-tui"]) {
 		const packageDir = realpathSync(join(recoveryRepo, "node_modules/@earendil-works", name));
-		assert.equal(JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8")).version, "0.84.4", `preflight: checkout-local ${name} must be 0.84.4`);
+		assert.equal(JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8")).version, PI_PIN, `preflight: checkout-local ${name} must be ${PI_PIN}`);
 	}
 	const pi = realpathSync(join(recoveryRepo, "node_modules/@earendil-works/pi-coding-agent/dist/cli.js"));
 	assert(/^#!.*node\n/u.test(readFileSync(pi, "utf8")), "preflight: Node Pi CLI required");
@@ -53,7 +54,7 @@ export async function preflightRecovery(root) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
 	try {
 		await preflightRecovery(process.argv[2]);
-		process.stdout.write("plan112 preflight: checkout-local Pi 0.84.4, absolute Node, private provider PASS\n");
+		process.stdout.write(`plan112 preflight: checkout-local Pi ${PI_PIN}, absolute Node, private provider PASS\n`);
 	} catch (error) {
 		process.stderr.write(`${error instanceof Error ? error.message : "preflight failed"}\n`);
 		process.exitCode = 1;

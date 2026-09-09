@@ -16,7 +16,7 @@ import { RetainedResults } from "./retained-results.js";
 
 afterEach(() => { vi.useRealTimers(); });
 
-function fixture(backend: "headless" | "visible" = "headless") {
+function fixture(backend: "headless" | "visible" = "headless", worktreeResult = false) {
 	vi.useFakeTimers();
 	vi.setSystemTime(1000);
 	const root = realpathSync(mkdtempSync(join(tmpdir(), "manager-adoption-")));
@@ -54,9 +54,10 @@ function fixture(backend: "headless" | "visible" = "headless") {
 		options.launchGate?.beforePrompt(42);
 		return { interrupt, send, requestClose, events: (listener) => { subscriptions(); emit = listener; listener({ kind: "run-started" }); } };
 	});
+	const worktree = worktreeResult ? { path: taskDir, repoRoot: root, branch: "sumo/child", baseRef: "HEAD" } : null;
 	const record: SubagentRecord = {
 		schemaVersion: 2, revision: 1, id: "sa-1", ownerSessionId: "origin", backend, status: "starting", taskDir,
-		child: null, supervisor: null, pane: null, worktree: null, sessionFilePath: null, modelLabel: null, roleId: null,
+		child: null, supervisor: null, pane: null, worktree, sessionFilePath: null, modelLabel: null, roleId: null,
 		createdAt: 1000, updatedAt: 1000, settledAt: null, completionId: null, outcome: null,
 		delivery: { state: "none", claim: null }, result: null, manifest: null, writerLease: null, controlLease: null, controlHead: 0,
 	};
@@ -68,7 +69,7 @@ function fixture(backend: "headless" | "visible" = "headless") {
 	if (backend === "headless") {
 		const owner = new RetainedHeadlessSupervisor({ registry, initial: record, supervisor: supervisorProcess,
 			launch: { prompt: "task", cwd: taskDir, inherited: {}, builtInTools: [] }, baseRef: "HEAD" },
-		{ operations, spawn, buildManifest: async () => ({ baseRef: "HEAD", changedPaths: [], commits: 0, exit: "completed", durationMs: 1 }) });
+		{ operations, spawn, buildManifest: async () => ({ baseRef: "HEAD", branch: worktree?.branch, worktreePath: worktree?.path, changedPaths: [], commits: 0, exit: "completed", durationMs: 1 }) });
 		supervisor = { get record() { return owner.record; }, get completion() { return owner.completion; },
 			reserveControl: (authority, successor) => owner.reserveControl(authority, successor),
 			controllerChild: (authority) => owner.controllerChild(authority),
@@ -199,6 +200,32 @@ describe("durable sender delivery", () => {
 		expect(next.delivery).toHaveBeenCalledTimes(1);
 		expect(f.registry.get("sa-1")?.delivery).toMatchObject({ state: "sent" });
 		expectArtifacts(f);
+	});
+
+	it.each(["new", "fork", "reload"])("/%s preserves a delivered worktree result after supervisor death and lease expiry", async (reason) => {
+		const f = fixture("headless", true);
+		const old = f.install("origin");
+		await old.fire("session_start");
+		await f.track(old);
+		await f.finish();
+		expect(old.delivery).toHaveBeenCalledTimes(1);
+		const result = f.registry.worktreeResult("sa-1")!;
+		f.registry.setWorktreeDisposition("sa-1", result.completionId, 0, "inspected");
+		const settled = f.registry.get("sa-1")!;
+		await old.fire("session_shutdown", reason);
+		f.writerState("dead"); f.originState("dead");
+		vi.setSystemTime(61_001);
+		vi.mocked(f.operations.identityMatches).mockReturnValue("different");
+		const next = f.install("successor");
+		await next.fire("session_start", reason);
+		await next.fire("agent_end");
+		expect(f.registry.get("sa-1")).toMatchObject({ status: "settled", completionId: settled.completionId,
+			result: settled.result, manifest: settled.manifest, delivery: settled.delivery, controllerSessionId: "successor" });
+		expect(f.registry.worktreeResult("sa-1")).toMatchObject({ completionId: result.completionId, disposition: "inspected" });
+		expect(next.manager.get("sa-1")).toMatchObject({ status: "done", recovery: "adopted", finalText: "answer" });
+		expect(next.delivery).not.toHaveBeenCalled();
+		expect(f.operations.signalTree).not.toHaveBeenCalled();
+		next.manager.detachForReplacement();
 	});
 
 	it("does not replay a sent completion into a replacement session", async () => {

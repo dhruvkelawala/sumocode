@@ -181,6 +181,10 @@ export async function acquireRetained(
 			// Death + expiry are enforced together by the existing generation CAS.
 			// A new writer cannot reconstruct the former parser's pipes.
 			record = registry.handoffController(record.id, record.revision, record.controllerGeneration ?? 0, sessionId, 60_000);
+			if (record.status === "settled") {
+				const supervisor = observeRemoteRetained(registry, record, operations);
+				return { entry: { ...entry, registry, authority: controlAuthority(record), supervisor }, classification: "adopted" };
+			}
 			record = registry.transition(record.id, record.revision, record.writerLease!.generation, (r) => ({ ...r, status: "lost" }));
 			classification = "lost";
 		}

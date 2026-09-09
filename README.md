@@ -6,7 +6,7 @@
 SumoTUI owns the foreground experience; Pi runs behind it over RPC.
 
 [![MIT License](https://img.shields.io/badge/license-MIT-2D211A?style=flat-square)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-0.4.1-B974FF?style=flat-square)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.5.0-B974FF?style=flat-square)](./CHANGELOG.md)
 [![Pi](https://img.shields.io/badge/Pi-0.85.1-75E8FF?style=flat-square)](https://github.com/earendil-works/pi)
 [![Node](https://img.shields.io/badge/Node-%3E%3D23.11-87B58E?style=flat-square)](./package.json)
 
@@ -77,7 +77,7 @@ The current launcher workflow lives in [DEV_LOOP.md](DEV_LOOP.md). The [patch st
 macOS arm64 releases contain the compiled SumoCode host, compiled Pi child, extension bundle, and required sidecar assets. Node, pnpm, and a separate Pi install are not required.
 
 ```bash
-VERSION=0.4.1
+VERSION=0.5.0
 curl -LO "https://github.com/dhruvkelawala/sumocode/releases/download/v${VERSION}/sumocode-${VERSION}-macos-arm64.tar.gz"
 curl -LO "https://github.com/dhruvkelawala/sumocode/releases/download/v${VERSION}/SHA256SUMS"
 shasum -a 256 -c SHA256SUMS
@@ -86,7 +86,7 @@ tar -xzf "sumocode-${VERSION}-macos-arm64.tar.gz"
 ~/.local/bin/sumocode
 ```
 
-`install.sh` copies the immutable release under `~/.local/lib/sumocode/` and symlinks `~/.local/bin/sumocode`. Set `SUMOCODE_INSTALL_PREFIX` to choose another prefix. If macOS Gatekeeper blocks an unsigned download, remove its quarantine attribute explicitly:
+`install.sh` copies the immutable release under `~/.local/lib/sumocode/` and symlinks both `~/.local/bin/sumocode` and `~/.local/bin/sc` to the native executable. Set `SUMOCODE_INSTALL_PREFIX` to choose another prefix. If macOS Gatekeeper blocks an unsigned download, remove its quarantine attribute explicitly:
 
 ```bash
 xattr -dr com.apple.quarantine ~/.local/lib/sumocode/sumocode-${VERSION}-macos-arm64

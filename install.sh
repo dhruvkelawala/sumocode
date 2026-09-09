@@ -40,9 +40,10 @@ destination="${prefix}/lib/sumocode/${release}"
 mkdir -p "${destination}" "${prefix}/bin"
 cp -R "${source_root}/." "${destination}/"
 ln -sfn "${destination}/bin/sumocode" "${prefix}/bin/sumocode"
+ln -sfn "${destination}/bin/sumocode" "${prefix}/bin/sc"
 
 printf '[sumocode] installed %s\n' "${destination}"
-printf '[sumocode] linked %s -> %s\n' "${prefix}/bin/sumocode" "${destination}/bin/sumocode"
+printf '[sumocode] linked %s and %s -> %s\n' "${prefix}/bin/sumocode" "${prefix}/bin/sc" "${destination}/bin/sumocode"
 case ":${PATH}:" in
 	*":${prefix}/bin:"*) ;;
 	*) printf '[sumocode] add %s/bin to PATH\n' "${prefix}" ;;

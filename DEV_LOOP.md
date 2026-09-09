@@ -50,7 +50,7 @@ Read styled-cell and geometry reports before PNGs. The [V2 contract](docs/visual
 
 ## Releases and source consumers
 
-Version authority is `package.json`; the native builder injects that version into the executable. Update release notes and any versioned product copy together. Run required checks before creating a version tag; pushing the tag triggers the release workflow and builds the native archive. Consumers install that archive as described in README.md. Pushes to main do not replace an installed native archive.
+Version authority is `package.json`; the native builder injects that version into the executable. Update release notes and any versioned product copy together. Run required checks before creating and pushing a version tag. Releases are manual: in Actions → Native release → Run workflow, enter the existing tag matching `package.json` (for example `v0.5.0`). The workflow checks out that immutable tag, validates its version, builds and tests the macOS arm64 archive, verifies checksums, and publishes it with the tagged `CHANGELOG.md` Unreleased section plus GitHub-generated contributor notes. CLI equivalent: `gh workflow run release.yml --ref main -f tag=v0.5.0`. Existing releases are never overwritten; use a new version for corrections. Consumers install that archive as described in README.md. Pushes to main do not replace an installed native archive.
 
 Pi git-package installs remain a separate source path. An unpinned install/update follows the upstream branch rather than selecting the newest release tag. To reproduce a source release, use an explicit tag:
 

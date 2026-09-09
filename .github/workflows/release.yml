@@ -1,28 +1,40 @@
 name: Native release
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag (must match package.json, e.g. v0.5.0)
+        required: true
+        type: string
 
 permissions:
   contents: write
 
+concurrency:
+  group: native-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
 jobs:
   build-native:
-    name: ${{ matrix.platform }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-14
-            platform: macos-arm64
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    name: macos-arm64
+    runs-on: macos-14
+    timeout-minutes: 20
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
 
     steps:
-      - name: Checkout
+      - name: Validate tag input
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+
+      - name: Checkout release tag
         uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 0
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -40,32 +52,51 @@ jobs:
         with:
           bun-version-file: .bun-version
 
+      - name: Validate version and prepare changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RELEASE_TAG" = "v$(node -p 'require("./package.json").version')"
+          node --input-type=module <<'JS'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const changelog = readFileSync('CHANGELOG.md', 'utf8');
+          const notes = changelog.split('## [Unreleased]\n')[1]?.split('\n## [')[0]?.trim();
+          if (!notes) throw new Error('Missing Unreleased changelog notes');
+          writeFileSync('release-notes.md', notes + '\n');
+          JS
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build native archive directory
-        run: pnpm build:native
+      - name: Typecheck
+        run: pnpm exec tsc --noEmit
+
+      - name: Build and test native archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 022
+          chmod go-w "$(realpath "$(command -v node)")"
+          pnpm test:native
 
       - name: Verify and package checksums
         shell: bash
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          release_dir="dist/native/sumocode-${version}-${{ matrix.platform }}"
-          test -d "${release_dir}"
+          version="${RELEASE_TAG#v}"
+          release_dir="dist/native/sumocode-${version}-macos-arm64"
           (cd "${release_dir}" && shasum -a 256 -c SHA256SUMS)
           archive="${release_dir}.tar.gz"
           tar -C dist/native -czf "${archive}" "$(basename "${release_dir}")"
           (cd dist/native && shasum -a 256 "$(basename "${archive}")" > SHA256SUMS)
 
-      - name: Create release and upload assets
+      - name: Publish release with changelog and generated contributor notes
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          archive="dist/native/sumocode-${version}-${{ matrix.platform }}.tar.gz"
-          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release upload "${GITHUB_REF_NAME}" "${archive}" dist/native/SHA256SUMS --clobber
-          else
-            gh release create "${GITHUB_REF_NAME}" "${archive}" dist/native/SHA256SUMS --generate-notes --verify-tag
-          fi
+          set -euo pipefail
+          archive="dist/native/sumocode-${RELEASE_TAG#v}-macos-arm64.tar.gz"
+          gh release create "$RELEASE_TAG" "$archive" dist/native/SHA256SUMS \
+            --title "SumoCode $RELEASE_TAG" --notes-file release-notes.md \
+            --generate-notes --verify-tag

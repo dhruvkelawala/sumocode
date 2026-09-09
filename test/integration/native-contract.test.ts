@@ -329,6 +329,22 @@ nativeDescribe("native executable contract", () => {
 		}
 	});
 
+	it("installs sumocode and sc as the same native executable", () => {
+		const prefix = tempRoot("sumocode-native-install-alias-");
+		const result = spawnSync("sh", [join(ARCHIVE, "install.sh")], {
+			env: { ...process.env, SUMOCODE_INSTALL_PREFIX: prefix }, encoding: "utf8",
+		});
+		expect(result.status, result.stderr).toBe(0);
+		const installed = join(prefix, "bin", "sumocode");
+		const alias = join(prefix, "bin", "sc");
+		expect(realpathSync(alias)).toBe(realpathSync(installed));
+		for (const binary of [installed, alias]) {
+			const version = spawnSync(binary, ["--version"], { encoding: "utf8" });
+			expect(version.status).toBe(0);
+			expect(version.stdout).toContain(`sumocode ${PACKAGE_VERSION}`);
+		}
+	});
+
 	it("rejects an install missing the RPC extension bundle", () => {
 		const root = tempRoot("sumocode-native-incomplete-install-");
 		for (const directory of ["bin", "extension", "share"]) mkdirSync(join(root, directory));

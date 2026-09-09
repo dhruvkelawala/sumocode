@@ -11,6 +11,9 @@ landed between the original scaffold and this release.
 ## [Unreleased]
 
 ### Added
+- **Native `sc` shortcut** — the installer now exposes both `sumocode` and `sc` as the same compiled executable.
+- **Manual releases** — dispatch a tagged native release from GitHub Actions, with native contract tests, SHA-256 checksums, changelog notes, and generated contributor notes.
+- **Retained subagent work and result disposition** — added fenced recovery for supported Node-source subagents, advisory budgets/stall visibility, and explicit confirmation for applying or pruning worktree results. Native subagents remain disposable. #473 #478
 - **Visible subagent steering and close** — delivered steering through task
   control files, added `subagent_close` for graceful shutdown, and re-armed
   the idle exit window after each turn. #381
@@ -62,6 +65,8 @@ landed between the original scaffold and this release.
   provenance, and `pnpm runcat:install` / `pnpm runcat:check` setup helpers.
 
 ### Changed
+- **Node requirement** — source development now requires Node 23.11.0 or newer; native installs do not require Node.
+- **Large-session responsiveness** — bounded terminal reconciliation and retained transcript/Activity work for long-running sessions. #447 #472
 - **Pi 0.85.1 support** — upgraded for GPT-6 Astra, `cacheTTL`, and
   selector fixes; removed the obsolete `pi-server` packaging workaround.
 - **Pi 0.85 / Fable 5.1 support** — updated the supported Pi runtime to
@@ -86,6 +91,9 @@ landed between the original scaffold and this release.
   are deprecated but still resolve the current theme accent.
 
 ### Fixed
+- **Coalesced terminal input** — routed multiple key events independently and bounded malformed/incomplete paste recovery without retaining overflow text. #479
+- **Native Pi 0.85.1 startup** — preserved sandbox environment setup and OAuth registration while updating diagnostic hooks and Bedrock-free child compilation.
+- **Process and artifact safety** — tightened child identity, credential redaction, protocol bounds, lifecycle cleanup, and executable provenance across terminal and subagent paths.
 - **Claude account reliability** — preserved private multi-account state
   during migration, clarified when no Claude account is active, redacted
   login failure diagnostics, and preserved account routing in subagents.

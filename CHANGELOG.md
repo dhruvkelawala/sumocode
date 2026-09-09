@@ -99,6 +99,15 @@ landed between the original scaffold and this release.
   login failure diagnostics, and preserved account routing in subagents.
   #413 #420
 
+## [0.5.1] — 2026-09-09
+
+### Fixed
+- **Herdr agent-tab detection for wrapper launches** — the Pi RPC child now
+  sets `HERDR_AGENT=pi` inside Herdr panes so Herdr applies the Pi manifest
+  to the `sumocode` / `sumocode-pi` wrapper chain; native sessions appear in
+  the agent tab with working/idle/blocked state and the `sumocode` display
+  name. #480
+
 ## [0.4.0] — 2026-06-10
 
 The worktree fan-out release. SumoCode can now run visible background review

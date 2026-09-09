@@ -45,7 +45,7 @@ export type FooterSnapshot = {
 /**
  * SumoCode version line for splash state (Q5.2 from CATHEDRAL_DECISIONS.md).
  */
-export const SPLASH_VERSION_LINE = "SUMOCODE V0.5.0 · CATHEDRAL · 160 × 45 MONOSPACE";
+export const SPLASH_VERSION_LINE = "SUMOCODE V0.5.1 · CATHEDRAL · 160 × 45 MONOSPACE";
 
 type GitRunner = (args: string[], cwd: string) => string;
 

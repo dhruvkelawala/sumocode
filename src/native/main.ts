@@ -765,14 +765,14 @@ function resolveTaskLaunch(parsed: ParsedLaunch): void {
 
 function validateCommandArgs(parsed: ParsedLaunch): void {
 	if (parsed.command === "doctor" && parsed.forwardedArgs.length > 0) {
-		usageError("doctor does not accept a path argument.");
+		usageError(`doctor does not accept a path argument: ${parsed.forwardedArgs[0]}`);
 	}
 	if (parsed.command === "diag" && parsed.forwardedArgs.length > 1) {
-		usageError("diag accepts at most one diagnostics file path.");
+		usageError(`diag accepts at most one diagnostics file path: ${parsed.forwardedArgs[1]}`);
 	}
 	if (parsed.command === "worktree") {
 		if (parsed.forwardedArgs.length > 1) {
-			usageError("-w accepts at most one optional worktree name.");
+			usageError(`-w accepts at most one optional worktree name: ${parsed.forwardedArgs[1]}`);
 		}
 		if (parsed.forwardedArgs.length === 1 && parsed.forwardedArgs[0]!.startsWith("-")) {
 			usageError(`Unknown worktree option: ${parsed.forwardedArgs[0]}`);

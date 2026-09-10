@@ -469,14 +469,14 @@ redact_sensitive_args() {
 	fi
 }
 if [[ "${COMMAND}" == "doctor" && "${#SUMOCODE_ARGS[@]}" -gt 0 ]]; then
-	usage_error "doctor does not accept a path argument."
+	usage_error "doctor does not accept a path argument: ${SUMOCODE_ARGS[0]}"
 fi
 if [[ "${COMMAND}" == "diag" && "${#SUMOCODE_ARGS[@]}" -gt 1 ]]; then
-	usage_error "diag accepts at most one diagnostics file path."
+	usage_error "diag accepts at most one diagnostics file path: ${SUMOCODE_ARGS[1]}"
 fi
 if [[ "${COMMAND}" == "worktree" ]]; then
 	if [[ "${#SUMOCODE_ARGS[@]}" -gt 1 ]]; then
-		usage_error "-w accepts at most one optional worktree name."
+		usage_error "-w accepts at most one optional worktree name: ${SUMOCODE_ARGS[1]}"
 	fi
 	if [[ "${#SUMOCODE_ARGS[@]}" -eq 1 && "${SUMOCODE_ARGS[0]}" == -* ]]; then
 		usage_error "Unknown worktree option: ${SUMOCODE_ARGS[0]}"

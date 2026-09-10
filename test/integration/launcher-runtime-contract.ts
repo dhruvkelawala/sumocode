@@ -267,6 +267,44 @@ function optionParityCase(spec: LauncherOptionSpec, flag: string): LauncherParit
 export const LAUNCHER_PARITY_CASES: readonly LauncherParityCase[] = [
 	...LAUNCHER_COMMANDS.flatMap((spec) => [spec.command, ...spec.aliases].map((spelling) => commandParityCase(spec, spelling))),
 	...LAUNCHER_OPTIONS.flatMap((spec) => spec.flags.map((flag) => optionParityCase(spec, flag))),
+	// Rejection rows (issue 484): when a launcher-owned check rejects a token it
+	// must name the offending token on stderr, exit 64, and never reach Pi.
+	// Unknown options in Pi-forwarding contexts (run/task) deliberately stay
+	// Pi's business: the launcher mirrors Pi's generic extension-flag and
+	// unknown-short classes, pinned by
+	// test/integration/spawn-pi-pty.test.ts's option-consumption fixtures.
+	{
+		name: "rejects a second command with the offending token",
+		argv: ["doctor", "diag"],
+		expect: "usage-error",
+		stderrContains: "diag",
+		stdoutAbsent: "exec ",
+	},
+	{
+		name: "rejects a doctor argument with the offending token",
+		argv: ["doctor", "somepath"],
+		expect: "usage-error",
+		stderrContains: "somepath",
+		stdoutAbsent: "exec ",
+	},
+	{
+		name: "rejects a second diag path with the offending token",
+		argv: ["diag", "a.jsonl", "b.jsonl"],
+		expect: "usage-error",
+		stderrContains: "b.jsonl",
+	},
+	{
+		name: "rejects a second worktree name with the offending token",
+		argv: ["-w", "a", "b"],
+		expect: "usage-error",
+		stderrContains: "b",
+	},
+	{
+		name: "usage errors point at --help",
+		argv: ["doctor", "diag"],
+		expect: "usage-error",
+		stderrContains: "Run 'sumocode --help' for usage.",
+	},
 ];
 
 /** Every spelling the shared spec declares. */

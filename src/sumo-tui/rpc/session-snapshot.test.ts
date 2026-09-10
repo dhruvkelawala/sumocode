@@ -2,7 +2,8 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
-import { readAuthoritativeSessionSnapshot } from "./session-snapshot.js";
+import { CHILD_JSON_FRAME_MAX_BYTES } from "../../child-protocol.js";
+import { readAuthoritativeSessionSnapshot, readPersistedSessionMessages } from "./session-snapshot.js";
 import type { SessionEntryLike } from "./session-reader.js";
 
 interface DiskFileFixture {
@@ -80,6 +81,70 @@ describe("authoritative flat session snapshots", () => {
 			expect(calls).toEqual(["long-6000"]);
 			expect(result.entries).toHaveLength(6_001);
 			expect(JSON.stringify({ entries: [], leafId: result.leafId }).length).toBeLessThan(4_096);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("hydrates message history larger than one RPC frame through a bounded delta", async () => {
+		const large = "x".repeat(CHILD_JSON_FRAME_MAX_BYTES);
+		const persisted = entry("large");
+		const { dir, file } = diskFile([{ ...persisted, message: { role: "user", content: large } }]);
+		try {
+			const calls: (string | undefined)[] = [];
+			const messages = await readPersistedSessionMessages({
+				getEntries: async (since) => {
+					calls.push(since);
+					return { entries: [], leafId: "large" };
+				},
+			}, { sessionFile: file, sessionId: "session-1" });
+			if (!messages) throw new Error("expected persisted messages");
+			expect(calls).toEqual(["large"]);
+			expect(Buffer.byteLength(JSON.stringify(messages), "utf8")).toBeGreaterThan(CHILD_JSON_FRAME_MAX_BYTES);
+			expect(messages).toHaveLength(1);
+			expect(messages[0]?.role).toBe("user");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps compaction and branch selection when rebuilding messages", async () => {
+		const entries: SessionEntryLike[] = [
+			entry("old"),
+			{ type: "compaction", id: "summary", parentId: "old", timestamp: "2026-08-04T00:00:02.000Z", summary: "older work", firstKeptEntryId: "kept", tokensBefore: 100 },
+			entry("kept", "summary"),
+			entry("chosen", "kept"),
+			entry("sibling", "kept"),
+		];
+		const { dir, file } = diskFile(entries);
+		try {
+			const messages = await readPersistedSessionMessages({
+				getEntries: async () => ({ entries: [], leafId: "chosen" }),
+			}, { sessionFile: file, sessionId: "session-1" });
+			if (!messages) throw new Error("expected persisted messages");
+			const encoded = JSON.stringify(messages);
+			expect(encoded).toContain("older work");
+			expect(encoded).toContain("kept");
+			expect(encoded).toContain("chosen");
+			expect(encoded).not.toContain('"content":"old"');
+			expect(encoded).not.toContain("sibling");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("does not request all entries when the disk cursor is stale", async () => {
+		const { dir, file } = diskFile([entry("one")]);
+		try {
+			const calls: (string | undefined)[] = [];
+			const messages = await readPersistedSessionMessages({
+				getEntries: async (since) => {
+					calls.push(since);
+					throw new Error("get_entries failed: Entry not found: one");
+				},
+			}, { sessionFile: file, sessionId: "session-1" });
+			expect(messages).toBeUndefined();
+			expect(calls).toEqual(["one"]);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

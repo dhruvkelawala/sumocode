@@ -1,4 +1,5 @@
-import { readSessionEntries, type SessionEntryLike, type SessionEntrySnapshot, type SessionDiskEntries } from "./session-reader.js";
+import { buildSessionContext, type SessionEntry } from "@earendil-works/pi-coding-agent";
+import { readSessionEntries, type SessionEntryLike, type SessionEntrySnapshot } from "./session-reader.js";
 import type { SessionEntryValue } from "./session-reader.js";
 import type { RpcHostControls } from "./controls.js";
 
@@ -66,6 +67,26 @@ async function fullSnapshot(controls: SessionSnapshotControls): Promise<SessionE
 	return validatedResponse(await controls.getEntries());
 }
 
+async function persistedSnapshot(
+	controls: SessionSnapshotControls,
+	options: SessionSnapshotOptions,
+): Promise<SessionEntrySnapshot | undefined> {
+	const disk = options.sessionFile ? await readSessionEntries(options.sessionFile) : undefined;
+	if (!disk || disk.entries.length === 0 || (options.sessionId !== undefined && disk.sessionId !== options.sessionId) || !disk.lastEntryId) return undefined;
+
+	let delta: { readonly entries: readonly unknown[]; readonly leafId: string | null };
+	try {
+		delta = await controls.getEntries(disk.lastEntryId);
+	} catch (error) {
+		if (isCursorNotFound(error, disk.lastEntryId)) return undefined;
+		throw error;
+	}
+	return {
+		entries: mergeEntries(disk.entries, asEntries(delta)),
+		leafId: validatedLeafId(delta.leafId),
+	};
+}
+
 /**
  * Reads persisted entries once, then asks Pi for only entries appended after
  * the disk cursor. Full flat retrieval is reserved for the documented cases;
@@ -75,22 +96,17 @@ export async function readAuthoritativeSessionSnapshot(
 	controls: SessionSnapshotControls | Pick<RpcHostControls, "getEntries">,
 	options: SessionSnapshotOptions,
 ): Promise<SessionEntrySnapshot> {
-	let disk: SessionDiskEntries | undefined;
-	if (options.sessionFile) disk = await readSessionEntries(options.sessionFile);
-	if (!disk || disk.entries.length === 0 || (options.sessionId !== undefined && disk.sessionId !== options.sessionId) || !disk.lastEntryId) {
-		return fullSnapshot(controls);
-	}
+	return await persistedSnapshot(controls, options) ?? await fullSnapshot(controls);
+}
 
-	let delta: { readonly entries: readonly unknown[]; readonly leafId: string | null };
-	try {
-		delta = await controls.getEntries(disk.lastEntryId);
-	} catch (error) {
-		if (!isCursorNotFound(error, disk.lastEntryId)) throw error;
-		return fullSnapshot(controls);
-	}
-	const leafId = validatedLeafId(delta.leafId);
-	return {
-		entries: mergeEntries(disk.entries, asEntries(delta)),
-		leafId,
-	};
+/** Rebuilds Pi's current message list without sending the full history through one RPC frame. */
+export async function readPersistedSessionMessages(
+	controls: SessionSnapshotControls | Pick<RpcHostControls, "getEntries">,
+	options: SessionSnapshotOptions,
+): Promise<ReturnType<typeof buildSessionContext>["messages"] | undefined> {
+	const snapshot = await persistedSnapshot(controls, options);
+	if (!snapshot) return undefined;
+	// SAFETY: persisted entries come from Pi's own session writer; RPC delta entries
+	// are validated for the id/type contract before they reach this conversion.
+	return buildSessionContext(snapshot.entries as unknown as SessionEntry[], snapshot.leafId).messages;
 }

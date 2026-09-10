@@ -26,7 +26,7 @@ import { createRpcKeybindingsManager, RpcHostEditorController } from "./editor.j
 import { createRpcExtensionUiResponder } from "./extension-ui-responder.js";
 import { InMemoryRpcTreeNavigationOutcomeBroker, type RpcTreeNavigationRequest } from "../pi-compat/tree-navigation-command.js";
 import { RpcHostActions } from "./host-actions.js";
-import { readAuthoritativeSessionSnapshot } from "./session-snapshot.js";
+import { readAuthoritativeSessionSnapshot, readPersistedSessionMessages } from "./session-snapshot.js";
 import type { SessionEntrySnapshot } from "./session-reader.js";
 import type { RpcTreeNavigationOutcome } from "../pi-compat/tree-navigation-command.js";
 import { RpcHostOverlayManager } from "./host-overlays.js";
@@ -1070,7 +1070,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 	/**
 	 * The retained editor can accept text as soon as the splash paints, but a
 	 * submit must wait for scheduler session ownership to rebind. Otherwise an
-	 * Enter pressed during the initial get_state/get_messages quiet-loop could
+	 * Enter pressed during the initial state/history quiet-loop could
 	 * be consumed by the pre-hydration scheduler generation. Keeping this gate
 	 * at submit (not typing) preserves early editing without dropping a prompt.
 	 */
@@ -1173,15 +1173,17 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		onRenderRequest: requestRender,
 	});
 	client.setUiRequestHandler((request) => uiResponder.handle(request));
-	// After new/switch/clone/fork the child's message list changed out from
-	// under the host, but nothing repaints the transcript on its own -- the
-	// old session's messages otherwise stay on screen as a "ghost transcript".
-	// Refetch get_messages and push the result through the same
-	// replaceFromMessages/runtime.update path used for initial hydration below.
-	const readTranscriptMessages = async () => responseData(
-		await client.send({ type: "get_messages" }),
-		"get_messages",
-	).messages;
+	// After new/switch/clone/fork, rebuild persisted history from disk plus a
+	// bounded RPC delta. Non-persisted sessions still use get_messages.
+	const readTranscriptMessages = async (state = stateStore.getSnapshot()) => {
+		if (state.sessionFile) {
+			try {
+				const messages = await readPersistedSessionMessages(controls, { sessionFile: state.sessionFile, sessionId: state.sessionId });
+				if (messages) return messages;
+			} catch {}
+		}
+		return responseData(await client.send({ type: "get_messages" }), "get_messages").messages;
+	};
 	const readTranscript = async () => transcriptPump.replaceFromMessages(await readTranscriptMessages());
 	const rehydrateTranscript = async (): Promise<void> => {
 		const transcript = await readTranscript();
@@ -1228,7 +1230,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		beginSessionChange();
 		// The mutating command has returned (or failed ambiguously). Everything
 		// before this boundary is superseded by the authoritative destination
-		// get_state/get_messages snapshots; only their concurrent suffix replays.
+		// state/history snapshots; only their concurrent suffix replays.
 		if (!continuingFailedHydration) sessionEvents.markHydrationBaseline();
 		let ownershipRebound = false;
 		let hydrationSucceeded = false;
@@ -1264,7 +1266,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 					runtime?.update({ state, activities: activityPresentation(latestActivitySnapshot) });
 					ownershipRebound = true;
 				}
-				messages = await readTranscriptMessages();
+				messages = await readTranscriptMessages(state);
 				if (!sessionEvents.hasEventsAfterHydrationBarrier) {
 					sessionEvents.markHydrationBarrier();
 					break;
@@ -1481,7 +1483,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		} catch (error) {
 			if (hydrated) throw error;
 			// Once get_state has confirmed the captured identity, a transient
-			// get_messages/get_entries failure is retried in place. Do not rebind
+			// history/snapshot read failure is retried in place. Do not rebind
 			// the scheduler or enter replacement mode for a same-session retry.
 			if (state !== undefined && !identityChanged) {
 				scheduleTreeNavigationRetry(outcome);
@@ -1740,7 +1742,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 					latestActivitySnapshot = activityStore.bindSession(refreshedState.sessionId);
 					ownershipRebound = true;
 				}
-				messages = await readTranscriptMessages();
+				messages = await readTranscriptMessages(refreshedState);
 				if (!sessionEvents.hasEventsAfterHydrationBarrier) {
 					sessionEvents.markHydrationBarrier();
 					break;

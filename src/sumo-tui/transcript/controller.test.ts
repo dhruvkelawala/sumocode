@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it, type Mock, vi } from "vitest";
 import {
+	MAX_CONTENT_PARTS,
 	TranscriptController,
 	getMessageContentKeyCacheMissesForTests,
 	planChatDiff,
@@ -1181,6 +1182,37 @@ describe("TranscriptController streaming deltas (Pi RPC wire shape)", () => {
 		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "weighing options" } });
 
 		expect(assistantText(controller)).toContain("weighing options");
+	});
+
+	it("rejects an out-of-range contentIndex as a protocol error instead of materializing the gap", () => {
+		const controller = new TranscriptController();
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: [] } });
+
+		controller.handleAgentEvent({
+			type: "message_update",
+			assistantMessageEvent: { type: "text_delta", contentIndex: MAX_CONTENT_PARTS + 1, delta: "dropped" },
+		});
+
+		expect(assistantText(controller)).toBe("");
+	});
+
+	it("rejects a giant contentIndex without a synchronous mega-allocation", () => {
+		// contentIndex is producer-controlled: one frame at 50_000_000 used to pad
+		// the draft's content array one part at a time on the render thread. This
+		// test only reaches its assertions if the fold refuses the frame.
+		const controller = new TranscriptController();
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: [] } });
+		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "kept" } });
+
+		controller.handleAgentEvent({
+			type: "message_update",
+			assistantMessageEvent: { type: "text_delta", contentIndex: 50_000_000, delta: "dropped" },
+		});
+
+		expect(assistantText(controller)).toContain("kept");
+		expect(assistantText(controller)).not.toContain("dropped");
 	});
 
 	it("still honors a full message on message_update when the wire carries one (back-compat)", () => {

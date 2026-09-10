@@ -113,6 +113,15 @@ function eventMessage(event: SessionValue): SessionValue | undefined {
  * `tool_execution_*` events, and `start`/`done`/`error` settle through
  * `message_end`.
  */
+/**
+ * Upper bound on the content parts one streamed assistant message may declare.
+ * Pi's per-message fan-out (text, thinking, tool calls) is a handful of parts;
+ * 64 matches the sibling activity adapters (`pi-projector`, `native-task-adapter`,
+ * `subagent-adapter`) and leaves headroom. `contentIndex` is producer-controlled,
+ * so anything past this is a protocol error rather than a size to allocate to.
+ */
+export const MAX_CONTENT_PARTS = 64;
+
 function applyAssistantStreamDelta(draft: SessionValue | undefined, event: SessionRecord | undefined): SessionValue | undefined {
 	if (!event || !isString(event.type)) return draft;
 	const base = asRecord(draft) ?? { role: "assistant", content: [] };
@@ -124,6 +133,11 @@ function applyAssistantStreamDelta(draft: SessionValue | undefined, event: Sessi
 	}
 	const rawIndex = event.contentIndex;
 	const index = isNumber(rawIndex) && rawIndex >= 0 ? Math.floor(rawIndex) : content.length;
+	// A producer-controlled index past the cap is a protocol error: drop the
+	// frame through the same bounded path as an unknown event type (return the
+	// draft untouched) instead of allocating every gap part up to the index.
+	// The fallback `content.length` for a missing index stays untouched.
+	if (isNumber(rawIndex) && index > MAX_CONTENT_PARTS) return draft;
 	while (content.length <= index) content.push({ type: "text", text: "" });
 	const delta = isString(event.delta) ? event.delta : "";
 	const finalText = isString(event.content) ? event.content : undefined;

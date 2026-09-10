@@ -438,7 +438,8 @@ function resumeSessionRows(sessions: readonly SessionListInfo[], now: Date = new
 }
 
 /** Home-shortened, head-elided cwd for the selector's right-hand column. */
-function displaySessionCwd(cwd: string, maxLength = 28): string {
+function displaySessionCwd(cwd: string): string {
+	const maxLength = 28;
 	const home = homedir();
 	const shortened = cwd.startsWith(`${home}/`) ? `~/${cwd.slice(home.length + 1)}` : cwd;
 	return shortened.length <= maxLength ? shortened : `…${shortened.slice(1 - maxLength)}`;

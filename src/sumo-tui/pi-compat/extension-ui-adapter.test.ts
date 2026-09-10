@@ -105,16 +105,12 @@ describe("SumoExtensionUIAdapter", () => {
 		registry.dispose();
 	});
 
-	it("notify creates a toast that auto-dismisses", async () => {
-		vi.useFakeTimers();
+	it("notify reaches the sink without retaining a toast (issue 481)", async () => {
 		const { adapter, notifications, registry } = await makeAdapter();
 
 		adapter.notify("hello", "info");
-		expect(notifications.getToasts()).toHaveLength(1);
-		expect(notifications.getToasts()[0]?.message).toBe("hello");
+		expect(notifications.getToasts()).toEqual([]);
 
-		vi.advanceTimersByTime(3_000);
-		expect(notifications.getToasts()).toHaveLength(0);
 		registry.dispose();
 	});
 

@@ -84,8 +84,8 @@ describe("RPC notification visibility", () => {
 			notifications.notify("upstream toast", "info", 0);
 			runtime.requestRender();
 			await vi.advanceTimersByTimeAsync(0);
-			// Issue 481: upstream notifications stay in the model but paint no rows.
-			expect(notifications.getToasts()).toHaveLength(1);
+			// Issue 481: upstream notifications are neither retained nor painted.
+			expect(notifications.getToasts()).toEqual([]);
 			expect(terminal.patches.map((patch) => patch.ansi).join("")).not.toContain("upstream toast");
 			expect(terminal.cursor).not.toBeNull();
 			notifications.clear();
@@ -140,12 +140,12 @@ describe("RPC notification visibility", () => {
 			expect(terminal.cursor).not.toBeNull();
 			await vi.advanceTimersByTimeAsync(499);
 			shell.render();
-			expect(notifications.getToasts()).toHaveLength(1);
+			expect(notifications.getToasts()).toEqual([]);
 			expect(text()).not.toContain("upstream toast");
 			expect(terminal.cursor).not.toBeNull();
 			await vi.advanceTimersByTimeAsync(1);
 			shell.repaintWorkingIndicator();
-			expect(notifications.getToasts()).toHaveLength(0);
+			expect(notifications.getToasts()).toEqual([]);
 			expect(text()).not.toContain("upstream toast");
 			expect(terminal.cursor).not.toBeNull();
 			setHint("ZZZZZZZZ");

@@ -1,0 +1,578 @@
+---
+title: "Harness evals: tracing, ablation and analytics for SumoCode"
+brief: "Judge SumoCode, not the models. One reader over Pi session JSONL, fixtures that hold the model fixed, and named ablation flags that move one harness axis at a time."
+kind: "plan"
+localOnly: true
+---
+
+# Harness evals: tracing, ablation and analytics for SumoCode
+
+## Objective
+
+Build the measurement loop that tells us whether a change to SumoCode made the agent better.
+
+1. **Per-session metrics** — turns, tool outcomes, token and cost totals, and *struggle signals* derived from the tool-call trajectory, over sessions already on disk.
+2. **A harness sweep** — run one fixture with the model held fixed and exactly one SumoCode behaviour varied, so the difference is attributable to that behaviour.
+3. **Reports** — a terminal table and a page that make a harness change arguable on evidence.
+
+**Done means:** `bin/sumocode.sh trace --root <dir> --json` reports metrics for a corpus; `bin/sumocode.sh eval --fixture <id> --harness baseline,tighter --reps 3` runs and scores both arms; both emit the same metric shape from one reader; and the first ablation is a behaviour SumoCode actually owns.
+
+<Callout id="callout-corrections" tone="decision">
+
+**Four premises in earlier drafts were checked against the source and all four were wrong; the corrections below are load-bearing.**
+
+1. **The first ablation targeted the wrong layer.** `src/activity/output-tail.ts` is Activity *display* sanitization (16 KiB / 25 lines) called by the projection and feed publishers — not what the model reads. The model-facing limit is Pi's own: 2000 lines / 50 KiB in the builtin `bash` tool. The ablation is redefined against a seam that genuinely reaches the model.
+2. **The run protocol disabled the evidence it depended on.** An earlier draft passed `--no-session`, which selects an in-memory session with no transcript on disk — the exact thing the pipeline reads.
+3. **Sharing could write a transcript into a checkout.** Pi's exporter, given no path, resolves a filename against the child's working directory, which in this public repository is a commit-able artifact.
+4. **The tighter arm's escape hatch was asserted rather than built.** Pi persists its temporary file only when Pi's own limits truncate, so the narrowing handler owns persisting what it removes.
+
+</Callout>
+
+## The mistake this avoids
+
+A model benchmark score is never a model score. Every published "model X scores N%" figure was produced by *model X plus some harness* — and the harness is the uncontrolled variable nobody reports. That number is a property of the pair.
+
+SumoCode cannot change the models. The harness is the only part of that product it controls, which makes it the only variable whose value is actionable. Holding the model fixed and moving the harness is not a narrower version of a model eval; it is the version whose result we can act on, and it is what makes any model comparison valid — until the harness is controlled, "this model is weak" and "this harness feeds it badly" are indistinguishable.
+
+<Callout id="callout-ablate-by-flag" tone="decision">
+
+**Ablate by flag from one commit, never by branch.** If variant A lives on `main` and variant B on a feature branch, a B−A delta is contaminated by every other commit on that branch — the measurement silently becomes "this branch versus main." Every axis must be a startup-time override read from one build, so both arms run from the same tree and the only difference is the flag. The one precedent in the codebase is `process.env.SUMOCODE_DISABLE_METRICS_HUD === "1"` in `src/sidebar.ts`, and it is a narrower precedent than it looks: a classic-UI widget guard, not a process-wide read-once loader.
+
+</Callout>
+
+## What the existing corpus already shows
+
+A probe over `~/.pi/agent/sessions` — 237 sessions, 1.1 GB, read with `readline` and `JSON.parse` — produced:
+
+| Signal | Value |
+|---|---|
+| Sessions / total size | 237 / 1.1 GB |
+| Assistant turns / user turns | 30,283 / 1,328 |
+| Tool calls | 35,303 |
+| Tool-reported failures | 1,697 (**4.81%**) |
+| `bash` share of calls / of failures | 17,232 (48.8%) / 1,269 (**74.8%**) |
+| `edit` calls / failures | 4,446 / 238 (5.4%) |
+| `read` calls / failures | 7,496 / 72 (1.0%) |
+| Sessions with repeated non-polling calls | 97 of 237 (41%) |
+| Repeat pairs / worst single pair | 1,705 / 42× the same `agent_browser open` |
+| Total recorded cost | recorded per message (figure withheld from this document) |
+| Cache-read share of input volume | 95.6% (4.90 B of 5.13 B tokens) |
+| Compactions | 94 |
+
+<Callout id="callout-failure-not-defect" tone="warning">
+
+**"Tool-reported failure" is not "harness defect".** A tool result is flagged failed whenever a command exits non-zero, which includes deliberately failing tests, expected `grep` misses, and probes written to fail. The 4.81% figure is a **failure rate, not an error rate**, and the same caveat applies to every per-tool figure derived from it. Separating intent from defect is not something the transcript records, so no amount of analysis recovers it — the number is only useful for ranking and for picking candidates.
+
+</Callout>
+
+These are **historical evidence and a candidate list**, not verdicts. They describe sessions that did different work, on different days, with different models. Their job is to point at sessions worth turning into fixtures and at harness behaviours worth ablating — never to support a causal claim on their own.
+
+## Non-goals
+
+- **No model leaderboard as the deliverable.** The model is a controlled variable, not the sweep.
+- **No hosted analytics backend**, OTLP collector, vendor SDK or database. The record vocabulary stays vendor-neutral so an exporter is possible later; no sender ships in this work.
+- **No live telemetry during interactive sessions.**
+- **No transcript-format fork.** Pi's session format is read as-is.
+- **No LLM-judge scoring.** Assertions are deterministic.
+- **No security sandbox.** The runner provides trusted-workspace isolation for a developer's own machine, not a boundary against a hostile agent. See the isolation callout.
+- **No change to the launcher's runtime selection**, the RPC host, or retained-renderer behaviour. The launcher change is additive dispatch.
+- **No CI gate.** Sweeps are run deliberately.
+
+## Architecture
+
+Three roles over one trace format. The corpus **finds**, the fixture **judges**, the ablation is **the variable** — and both lanes reach the same analysis, which is why they cannot disagree.
+
+<Diagram id="diagram-layers" frame="hide" caption="Find, judge, sweep. A fixture run is a session we controlled, so it flows through the identical analysis.">
+
+```html
+<div class="diagram-panel" style="display:grid;grid-template-columns:1fr;gap:14px">
+  <div class="diagram-card" style="display:grid;grid-template-columns:120px 1fr;gap:14px;align-items:center">
+    <div class="diagram-pill">trace</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <div class="diagram-box" style="flex:1;min-width:190px">Pi session JSONL<div class="diagram-muted">~/.pi/agent/sessions · 237 files · already written</div></div>
+      <div class="diagram-box" style="flex:1;min-width:190px">Render diagnostics JSONL<div class="diagram-muted">opt-in · deferred to a later slice</div></div>
+    </div>
+  </div>
+  <div class="diagram-card" style="display:grid;grid-template-columns:120px 1fr;gap:14px;align-items:center">
+    <div class="diagram-pill">analysis</div>
+    <div class="diagram-box" style="display:grid;gap:8px">
+      <div>Session analysis — reader, metrics, struggle facts</div>
+      <div class="diagram-muted">one in-process interface · reused by both lanes · never imported by the interactive host</div>
+    </div>
+  </div>
+  <div class="diagram-card" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+    <div class="diagram-box">FIND<div class="diagram-muted">scan real sessions · rank candidates</div></div>
+    <div class="diagram-box">JUDGE<div class="diagram-muted">fixture holds work constant · assertions score</div></div>
+    <div class="diagram-box">SWEEP<div class="diagram-muted">one ablation · model fixed · one commit</div></div>
+  </div>
+  <div class="diagram-card" style="display:grid;grid-template-columns:120px 1fr;gap:14px;align-items:center">
+    <div class="diagram-pill">surface</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <div class="diagram-box" style="flex:1;min-width:190px">trace --json<div class="diagram-muted">the acceptance seam</div></div>
+      <div class="diagram-box" style="flex:1;min-width:190px">eval --json<div class="diagram-muted">arms, reps, counts</div></div>
+      <div class="diagram-box" style="flex:1;min-width:190px">HTML page<div class="diagram-muted">later slice</div></div>
+    </div>
+  </div>
+</div>
+```
+
+</Diagram>
+
+## Build vs adopt
+
+Almost everything here is *build*, which needs justifying against the obvious alternative: plugging into an existing observability product.
+
+<Callout id="callout-otlp-first" tone="decision">
+
+**Keep the record vocabulary vendor-neutral; ship no sender.** Field names follow the AI telemetry conventions where an equivalent exists, and a product-namespaced name where one does not. That decision costs nothing now and keeps a hosted viewer a later, config-level option. Shipping an exporter is a **separate work item** with its own payload, consent, error and no-send contract — it is not a flag flip, and describing it as one would be dishonest.
+
+</Callout>
+
+| Layer | Verdict | Why |
+|---|---|---|
+| Wire vocabulary | **Adopt** the naming convention | Zero-cost to follow and vendor-neutral. **No revision is pinned in this work** — the namespace is at development status, so the names are the spec's own until a revision is named there. |
+| Storage, viewer, dataset and experiment diffing | **Adopt later, only if a UI is wanted** | A trace waterfall, dataset manager and experiment comparison is months of work that adds nothing to harness quality |
+| Session analysis | **Build, reusing what exists** | Discovery and header reading already exist; full accounting does not |
+| Ablation and fixture runner | **Build** | No tool can ablate this harness or run it headlessly |
+| Report rendering | **Skip if a backend is adopted later** | Comes free with the backend; the terminal table is small either way |
+
+### Where the reader claim was wrong
+
+An earlier draft claimed nothing parses Pi's session format. That is false: a reader already exists that streams session JSONL off disk with bounded concurrency, and it should be reused for **discovery, headers and tree structure**. Its list reader deliberately scans only a bounded prefix, which is correct for a resume picker and wrong for exact totals — so it is the right tool for finding files and the wrong tool for counting tokens. Reuse it for what it is; do not import the new offline analysis into the interactive host in order to enforce a single-reader slogan.
+
+### Sentry, PostHog, and the category error
+
+Both are *production monitoring*: they observe what happened in the field. "Did this change make the agent better" requires running the same task twice with one variable moved. That is an eval, not a metric, and no monitoring product runs anything.
+
+| Product | What it actually is | Fit here |
+|---|---|---|
+| **Sentry** | Error and performance monitoring; ingests OTLP traces and logs | Its AI trace view does render a hierarchy from standard attributes. But native OTLP ingestion on self-hosted Sentry is still open, so plugging in effectively means a cloud account — shipping users' prompts, diffs and file contents to a third party, which for a local tool in a public repository is a consent story to design, not a config flag |
+| **PostHog** | Product analytics; AI observability via generation events over product dashboards | Answers "what are we spending, how many people run it" — a product question. Cloud-first |
+| **Langfuse** | MIT core, self-hosts with no usage limits, accepts OTLP, carries datasets and experiments | The cleanest pick if a backend is ever adopted: it takes OTLP directly, so the seam stays a config change |
+
+Sentry does have a genuine place in SumoCode — **crash and error reporting from the RPC host**, which today is `pi-crash.log`. That is a separate workstream with different data and different consent, and it should not be folded in.
+
+### What not to adopt
+
+- **The OTel SDK.** OTLP over HTTP is a POST. Adding an SDK to a repo with three runtime dependencies is unjustified.
+- **promptfoo as the runner.** Built around prompt and provider matrices; making it spawn a coding agent in a worktree is a fight. Its assertion algebra is worth copying, and this plan does.
+- **Inspect.** The cleanest typed contract of the frameworks surveyed, but Python-first and built for benchmark tasks rather than coding agents. Take the shape, not the dependency.
+- **OpenAI Evals.** Read-only and shutting down; the grader vocabulary is useful, the API is not a foundation.
+- **Existing subagent spawning as an eval adapter.** Its generated arguments include `--no-session --no-extensions`, which disables both the evidence and the behaviours being measured.
+
+## Layer 1 — Reader, metrics, struggle facts
+
+### Entry parsing
+
+One module normalises a transcript file into a `SessionTrace`. Two details establish the contract:
+
+- A tool call is `{ type: "toolCall", id, name, arguments }`. **It is not `toolName` / `args`** — getting this wrong silently collapses every call into one bucket.
+- A tool result is a `toolResult`-role message with `toolName` and `isError`, joined to its call by `toolCallId`.
+
+Assistant messages carry `provider`, `model` and sometimes `responseModel` per message, independently of `model_change` entries, so attribution does not depend on the change log. Sessions are **trees, not linear conversations** — fork ancestry, abandoned branches and compaction summaries all exist — so the trace must state which branch it accounts for.
+
+### Accounting rules
+
+Ambiguity here produces numbers that are individually defensible and mutually incomparable, so the rules are part of the contract rather than left to the implementer:
+
+- **Cost** is the recorded `usage.cost.total`, summed. It is a historical record, not a re-priced estimate; any future estimate is labelled separately.
+- **Reasoning tokens are a subset of output**, not additive, and cache writes are reported separately from input rather than folded into a single "input volume" figure whose denominator is unexplained.
+- **Failures are per tool, over eligible outcomes** — the count of failed results divided by the count of joined results for that tool. Calls with no result and results with no call are counted as their own diagnostic bucket rather than silently dropped.
+- **Model attribution is per assistant message**, and a multi-model session is reported by turn rather than assigned wholly to one model.
+
+### The metric record
+
+<DataModel id="model-metrics" entities={[
+  {
+    id: "sessions",
+    name: "SessionMetrics",
+    fields: [
+      { name: "session_id", type: "string", pk: true },
+      { name: "branch_leaf", type: "string" },
+      { name: "inherited_entries", type: "int" },
+      { name: "inheritance_verified", type: "boolean" },
+      { name: "started_at", type: "timestamp" },
+      { name: "assistant_turns", type: "int" },
+      { name: "tool_calls", type: "int" },
+      { name: "tool_results_joined", type: "int" },
+      { name: "orphan_results", type: "int" },
+      { name: "calls_without_result", type: "int" },
+      { name: "unknown_entries", type: "int" },
+      { name: "failures_by_tool", type: "Record<string, int>" },
+      { name: "eligibles_by_tool", type: "Record<string, int>" },
+      { name: "input_tokens", type: "int" },
+      { name: "output_tokens", type: "int" },
+      { name: "cache_read_tokens", type: "int" },
+      { name: "cache_write_tokens", type: "int" },
+      { name: "reasoning_tokens", type: "int" },
+      { name: "reasoning_unreported_turns", type: "int" },
+      { name: "cost_usd_recorded", type: "float" },
+      { name: "compactions", type: "int (null under a model filter)" },
+      { name: "stop_reasons", type: "Record<string, int>" },
+      { name: "models_by_turn", type: "Record<string, int>" },
+      { name: "aux_usage", type: "Record<string, TokenBucket>" }
+    ]
+  },
+  {
+    id: "struggle_facts",
+    name: "StruggleFacts",
+    fields: [
+      { name: "session_id", type: "string", fk: "sessions.session_id" },
+      { name: "repeat_pairs", type: "int" },
+      { name: "repeat_occurrences", type: "int" },
+      { name: "longest_repeat", type: "int" },
+      { name: "repeat_locations", type: "Location[]" },
+      { name: "error_streak_max", type: "int" },
+      { name: "fail_repeat_pairs", type: "int" },
+      { name: "compaction_pressure", type: "float (null when turns are zero)" }
+    ]
+  },
+  {
+    id: "harness_variants",
+    name: "HarnessVariant",
+    fields: [
+      { name: "name", type: "string", pk: true },
+      { name: "axis", type: "quality (experience deferred)" },
+      { name: "effective_config", type: "Record<string, string>" },
+      { name: "commit", type: "string" }
+    ]
+  },
+  {
+    id: "eval_runs",
+    name: "EvalRun",
+    fields: [
+      { name: "run_id", type: "string", pk: true },
+      { name: "fixture_id", type: "string", fk: "fixtures.id" },
+      { name: "variant_name", type: "string", fk: "harness_variants.name" },
+      { name: "model", type: "string" },
+      { name: "rep", type: "int" },
+      { name: "session_path", type: "string" },
+      { name: "outcome", type: "completed | aborted | infra_failure" },
+      { name: "assertions", type: "AssertionResult[]" }
+    ]
+  },
+  {
+    id: "fixtures",
+    name: "Fixture",
+    fields: [
+      { name: "id", type: "string", pk: true },
+      { name: "prompt", type: "string" },
+      { name: "seed_repo", type: "string (synthesized repo name, never a source path)" },
+      { name: "assertions", type: "Assertion[]" },
+      { name: "threshold", type: "float" },
+      { name: "min_reps", type: "int" },
+      { name: "source_session_id", type: "string" },
+      { name: "baseline_signal", type: "Record<string, number>" }
+    ]
+  }
+]} relations={[
+  { from: "eval_runs", to: "fixtures", kind: "1-n" },
+  { from: "eval_runs", to: "harness_variants", kind: "1-n" },
+  { from: "struggle_facts", to: "sessions", kind: "1-1" }
+]} />
+
+`HarnessVariant` carries an **`effective_config` map and not a single flag/value pair**, because an arm may set more than one limit and because "the default arm" must be recorded as explicitly unset rather than left to inference. A score is only attributable later if the arm says what configuration it actually ran under.
+
+### Struggle facts, not scores
+
+Detectors return **counts and locations**, and are named `facts` deliberately: nothing at this layer decides whether a run was good. MAST names step repetition as a failure mode across annotated traces ([arXiv:2503.13657](https://arxiv.org/abs/2503.13657)); IAL-Scan formalises infinite agentic loops over repeated calls ([arXiv:2607.01641](https://arxiv.org/abs/2607.01641)).
+
+| Fact | Definition | Why it matters |
+|---|---|---|
+| `repeat_pairs` | Identical `(name, arguments)` beyond the polling set | The strongest single struggle signal |
+| `longest_repeat` | Max count for one pair | Distinguishes a retry from a loop |
+| `fail_repeat_pairs` | Identical calls that **also failed** | The assertion-eligible form; a repeated success is often routine |
+| `error_streak_max` | Consecutive failures with no intervening success | An agent that never adapted |
+| `compaction_pressure` | Compactions per 100 turns | Context loss caused by the harness |
+
+<Callout id="callout-polling-set" tone="risk">
+
+**The polling exclusion set is a contract, and the obvious version of it is wrong.** An earlier draft excluded the wait and check tools while citing a 27× loop of `terminal_start { command: "sleep 300; echo checkpoint" }` as its own motivating example — a tool the set did not contain. Excluding `terminal_start` wholesale would hide genuinely repeated launches. The set is therefore **a declared name list plus one declared argument pattern**: the wait, check and list tools are excluded outright; `terminal_start` is excluded only when its command matches the declared watch form. This *is* a pattern, and calling it anything else would be dishonest — what makes it defensible is that it is written down, versioned with the metric, and **reported in `--json` for every suppressed repeat**, so a reader can audit the exclusion instead of trusting it. An undeclared heuristic would be the thing to reject; a declared, versioned and reported one is a specification.
+
+</Callout>
+
+## Layer 2 — The harness sweep
+
+### What SumoCode actually owns
+
+An earlier draft listed six ablation axes. Checked against the source, three of them are not model-facing knobs at all:
+
+| Axis | Owned and model-facing? | Verdict |
+|---|---|---|
+| **Tool-result narrowing** | Yes — a `tool_result` handler is a documented transform point, and SumoCode already registers such handlers | **First ablation** |
+| Skill inlining | Yes — an `input` transform that expands a token into message content | Candidate |
+| System prompt composition | Yes — the appended system prompt plus persona | Candidate |
+| Subagent system prompt | Yes — retained-prompt composition | Candidate |
+| Memory injection | **No** — extraction posts outbound to a memory service, and recall feeds the sidebar, not the model's context | Requires seam design before it can be ablated |
+| Subagent budget policy | **No** — it computes `stalled-warning` / `over-budget-warning` **metadata**; it does not gate or terminate | Not an ablation |
+| Compaction threshold | **No** — Pi owns the threshold; SumoCode stores only the reason for presentation | Requires upstream cooperation |
+
+<Callout id="callout-two-tracks" tone="warning">
+
+**Never put quality and experience axes in the same table.** Narrowing, prompt and inlining change what the agent *achieves*. Render cost and chrome change how long you *wait*. A blended "improvement" number across both is meaningless, and mixing them invites a latency win to be recorded as a quality win. The experience track is **deferred** — it has no reproducible measurement contract yet, because print-mode runs do not exercise the retained renderer and existing diagnostics carry no mandatory session or turn identifier to join on.
+
+</Callout>
+
+### The first ablation: does showing the model less help?
+
+Pi's builtin `bash` already truncates to its last 2000 lines or 50 KiB, saves the full output to a temporary file, and tells the model the path. So the model always *can* retrieve everything, and the interesting question is not whether more output helps but **whether keeping bulky raw output out of the context window helps** — plausible given a 95.6% cache-read share and a tool whose output dominates input volume.
+
+SumoCode can answer that today through a documented seam: Pi's `tool_result` hook **can replace result content** and chains like middleware, and SumoCode already registers handlers on it.
+
+<Callout id="callout-first-axis" tone="decision">
+
+**The first ablation is tool-result narrowing: `baseline` versus `tighter`.**
+
+- **`baseline`** — no narrowing handler installed; Pi's own limits apply. Recorded as an explicitly unset configuration, not as a default someone assumed.
+- **`tighter`** — a `tool_result` handler narrows bulk output to a declared ceiling **and persists the discarded remainder to a run-owned overflow file, appending that path to the narrowed result**, so the model can always retrieve the whole thing deliberately.
+
+**There is no `full` arm, and this is a correction.** A post-result hook can only narrow; it cannot recover what the builtin already discarded. An arm labelled "unbounded" while returning already-truncated content would be a fabricated treatment whose tests could all pass while every arm fed the model identical bytes.
+
+<Callout id="callout-overflow-ownership" tone="risk">
+
+**The overflow file is ours, not Pi's.** Pi writes its temporary file only when *Pi's own* limits truncate, and appends the path only in that case. A result sitting between the narrower ceiling and Pi's 50 KiB would therefore be destroyed by the handler with **no pointer and no recovery** if it relied on Pi's escape hatch — a silently lossy arm that also confounds the experiment, because discarding data the model would otherwise have changes what the task is, not just how much context it takes. **Anything the handler removes, the handler persists**, under a run-owned path, and the narrowed result names it. This is a decision rather than an implementation detail: the alternative — narrow and discard — is a different experiment that measures the cost of information loss, and it is not the one this axis is for.
+
+</Callout>
+
+</Callout>
+
+The axis is recorded with its `effective_config` — the exact ceiling, the tool families it applies to, and the fact that Pi's limits and the temporary-file path are untouched. Redaction and Activity display limits are explicitly **not** part of this axis; changing them would move two variables and violate the renderer non-goal.
+
+### Run protocol
+
+<Diagram id="diagram-eval-run" frame="hide" caption="One arm. Both arms run from the same commit; the only difference is the effective configuration.">
+
+```html
+<div class="diagram-panel" style="display:grid;gap:10px">
+  <div style="display:flex;gap:10px;align-items:stretch">
+    <div class="diagram-box" style="flex:1">fixture<div class="diagram-muted">task, seeds, trusted graders</div></div>
+    <div class="diagram-node" style="align-self:center">→</div>
+    <div class="diagram-box" style="flex:1">run-owned workspace<div class="diagram-muted">seeded copy, outside the harness tree</div></div>
+    <div class="diagram-node" style="align-self:center">→</div>
+    <div class="diagram-box" style="flex:1">headless run<div class="diagram-muted">session dir pinned per run</div></div>
+  </div>
+  <div style="display:flex;gap:10px;align-items:stretch">
+    <div class="diagram-box" style="flex:1">trusted assertions<div class="diagram-muted">outside the agent-writable seed</div></div>
+    <div class="diagram-node" style="align-self:center">→</div>
+    <div class="diagram-box" style="flex:1">score + joined metrics<div class="diagram-muted">from the run's own transcript</div></div>
+    <div class="diagram-node" style="align-self:center">→</div>
+    <div class="diagram-box" style="flex:1">rep × arm<div class="diagram-muted">run-owned temp, cleaned up</div></div>
+  </div>
+  <div class="diagram-card" style="text-align:center">transcript is read from a run-owned session directory, never by searching for the newest session</div>
+</div>
+```
+
+</Diagram>
+
+Each run copies the seed into a run-owned workspace and executes the real SumoCode profile with **a run-owned session directory**, so the transcript is found where the runner put it rather than by scanning the user's session store for something recent. The run's session JSONL then flows through the same analysis as everything else.
+
+<Callout id="callout-isolation" tone="warning">
+
+**This is trusted-workspace isolation, not a security sandbox.** A coding agent can write absolute paths, spawn descendants, reach the network, and edit its own assertions if they are inside the directory it can write. So:
+
+- **Graders live outside the agent-writable seed**, and assertion failures that cannot be executed are recorded as infrastructure outcomes rather than as agent failures.
+- **The claim is narrowed to what is enforceable.** The runner guarantees it cleans up *its own* temporary artifacts and that it does not modify the user's session store or working tree. It makes no claim that nothing outside the workspace changed, because that is not something it can guarantee.
+- **Teardown authority covers runner-owned temporary paths only**, and process groups are registered with the existing supervisor so descendants are reachable.
+- **Ceilings are enforced, not merely reported.** A wall-clock and spend limit is required to stop a looping run; a post-hoc cost assertion does not bound anything.
+- **Reports and state are written outside the checkout**, in the user's own state directory, so a run cannot leave artifacts in a repository.
+
+</Callout>
+
+### What 3–5 reps can and cannot resolve
+
+The repetition budget is **3–5 reps per arm**. That is a statement about what this framework is able to see, and the honest version is narrower than an earlier draft claimed.
+
+**Pooling gives finer descriptive resolution, not more experiments.** A rate over many events inside a session is a better *description* than a boolean, but it is not an independent observation. With `k` runs of `m` events each and within-session correlation `rho`, the design effect is `1 + (m - 1) * rho` and the effective sample size is therefore approximately `k * m / (1 + (m - 1) * rho)` — which collapses toward `k`, not toward `k * m`, as correlation approaches one. At high correlation, five runs are five runs however many events they contain. No "orders of magnitude" follows, and an earlier draft was wrong both to claim it and to print the formula in a form that gave `k / m` at zero correlation.
+
+**Inference is therefore out of scope for the first release.** Reports are **descriptive screening reports**: they present each rep, the numerator and eligible denominator behind every rate, and the pooled figures, and they state plainly that no conclusion is drawn. There is no noise floor, no effect threshold, and no improved/regressed verdict, because inventing one from three to five runs would be theatre.
+
+Concrete consequences:
+
+- **Never show a pass fraction as a rate estimate.** `k/n` at n=5 is a description of five runs. It is shown as `3/5`, not as 60%.
+- **Counts, not just rates.** Per tool per arm: failures, joined results, and the difference in percentage points — with the denominator labelled so tool families are never pooled into one unexplained number.
+- **Zero eligible outcomes is `unavailable`, never 0%.**
+- **Failed and aborted runs stay in the data.** A looping arm can contribute many successful calls and dilute its own failure rate; an aborted arm can look cheap. Retaining them, with an explicit outcome field, is what makes that visible instead of hidden.
+- **The direction of a rate change is not a quality verdict.** Fewer failures can mean a repair or a suppression; task outcomes stay reported alongside.
+
+<Callout id="callout-clustering" tone="warning">
+
+**A failure flag is not a defect.** Deliberately failing tests, expected misses, and probes written to fail all register as failures. The rate is a screening signal for ranking and candidate selection, and the implementations that would treat it as a defect count are the ones that will produce confident nonsense.
+
+</Callout>
+
+### Assertion discipline
+
+<Callout id="callout-assertion-trap" tone="risk">
+
+**The trap specific to harness evals: asserting your own preferences.** An assertion like "used `read` instead of `bash`" bakes in an opinion about how the agent should work, and the harness will then be optimised to satisfy its own test suite. Every assertion must be either a **task outcome** (tests pass, the file contains the right thing, no unrelated file touched) or an **unambiguous pathology** (the same *failing* call repeated, an error streak with no recovery). Tool choice is only valid when the task genuinely cannot be done otherwise.
+
+</Callout>
+
+Assertions carry a weight and the fixture carries a threshold; the score is the weighted mean and the label is pass at or above the threshold. This is promptfoo's model, adopted because it is the most explicit and least magical of the frameworks surveyed.
+
+<Table id="table-assertions" columns={["Assertion", "Type", "Weight", "Checks"]} rows={[
+  ["build passes", "shell", "3", "typecheck exits 0"],
+  ["symbol renamed everywhere", "shell", "3", "grep finds no old name outside vendor"],
+  ["test suite green", "shell", "2", "the fixture's own test command exits 0"],
+  ["no unrelated file touched", "git", "1", "diff touches only declared paths, including deletions and untracked files"],
+  ["no repeated failing call", "trace", "1", "same (tool, args) never fails twice"],
+  ["cost under budget", "trace", "1", "recorded cost within the fixture's ceiling"],
+]} />
+
+### Mining fixtures from real failures
+
+Fixtures are **mined from real struggling sessions** but their seed repositories are **synthesized, never copied**. The corpus supplies the failure; the repository is invented.
+
+1. **Rank** corpus candidates by struggle facts.
+2. **Reject** the non-reproducible — a session that failed over a flaky dependency or a missing credential produces a fixture that measures noise. Reproducibility, not severity, is the criterion.
+3. **Extract the failure shape** from the trace: which tool, what file structure, how large the outputs were, what the model was attempting.
+4. **Synthesize a minimal seed repo** reproducing that shape with invented content.
+5. **Confirm the baseline reproduces the signal.** A fixture records the `baseline_signal` it was mined for.
+
+<Callout id="callout-mining-order" tone="warning">
+
+**Mining is gated on being able to validate a fixture.** The runner must exist and be able to say "this fixture reproduces its signal under the unmodified harness" *before* fixtures are authored — otherwise there is no way to tell a valid fixture from a plausible-looking one, and the first three get written on faith. Mining is therefore later in the plan than an earlier draft put it.
+
+</Callout>
+
+<Callout id="callout-synthesis-fidelity" tone="risk">
+
+**Synthesis trades leak risk for fidelity risk.** A synthesized repo can reproduce the *appearance* of a failure while removing its cause — if the original struggle came from a 3,000-line file and the stand-in has forty lines, the fixture tests something else. Step 5 is the guard, and a fixture that stops reproducing its signal is deleted or re-mined rather than left green and ignored.
+
+</Callout>
+
+**`source_session_id` stores the session id, never the path.** The id is an opaque identifier and is safe to commit; the path encodes the project directory, which is exactly what synthesis exists to protect.
+
+## Layer 3 — Reports
+
+**Terminal.** `trace --root <dir> --json` emits the versioned envelope above — `sessions[]` plus a `summary` — not a stream of objects. `eval --fixture <id> --harness <names> --reps <n> --json` emits arms, reps, assertion results, and per-tool counts. A missing or empty root is a diagnostic, not a crash.
+
+**JSON contract.** A versioned object, not a stream, with `null` for a measurement that could not be computed — including a session count that carries no model id under a model filter — and `null` for a score that does not apply, since corpus sessions have no score. Diagnostics go to stderr so stdout stays pipeable, and exit status distinguishes success, failed assertions, and infrastructure failure.
+
+**Records and reports are written under the user's state directory**, outside the repository, with an override. HTML reporting is a later slice and carries the same review-evidence obligation as other visual surfaces.
+
+## What this lets us assess
+
+| Question | Signal | Decision it unblocks |
+|---|---|---|
+| Does keeping bulky tool output out of context help? | failures per eligible outcome, repeat facts, task assertions | Narrowing ceiling |
+| Is the system prompt earning its tokens? | task assertions per prompt token | Prompt budget and composition |
+| Does skill inlining change behaviour? | task assertions, first-tool latency | Inlining policy |
+| Is `bash` a UX problem or a model problem? | failures per eligible outcome by tool | Output handling and exit-code surfacing |
+| Did this change regress anything? | the same fixture matrix, same commit, one axis | Ship or revert |
+
+Note what left the table: **the compaction and memory rows are gone**, because neither is a knob SumoCode can currently turn. Claiming otherwise would have produced flags that changed presentation metadata and measured nothing.
+
+## `/share` — its own slice
+
+Pi's `/share` is unreachable from SumoCode: it lives in Pi's interactive mode and needs the interactive session object. SumoCode already has the export path — `/export` sends `export_html` and the child returns a path — so sharing reuses it.
+
+<Callout id="callout-share-paths" tone="risk">
+
+**The export path must be absolute and private, or sharing writes a transcript into the user's checkout.** Pi's exporter, given no output path, writes `pi-session-<basename>.html` resolved **relative to the child's working directory** — the user's project. In a public-repository session that is a commit-able file containing the full entry tree, the system prompt and the tool schemas. Pi's own sharing path does this correctly: it creates an absolute temporary directory, exports there, and removes it in a `finally`. This plan's earlier snippet did not, and it was wrong.
+
+</Callout>
+
+The contract:
+
+- Export to an **absolute private temporary path** created by the host, never a relative default, and clean it up on every exit path.
+- **Disclose what is exported.** The export contains the session header, every entry on the tree rather than only the visible branch, the active leaf, the system prompt and the tool schemas. That is the disclosure, and the user is told before the upload rather than after.
+- **A secret gist is unlisted, not access-controlled.** Say so.
+- **Failure is handled explicitly:** `gh` missing, `gh` not authenticated, a non-zero exit, a spawn failure, and **exit 0 with no parseable URL** — the ambiguous case, where no gist id is known and the runner cannot look one up. There the raw `gh` stdout and stderr are reported and **no retry is attempted**, so a possible success cannot be turned into a duplicate. The uploaded file is named `session.html` and the viewer URL is Pi's own share-viewer helper applied to the returned gist id.
+- **Nothing is sent unless the user runs the command.** No analytics path uploads anything.
+
+## File map
+
+<FileTree id="tree-files" title="Files touched" entries={[
+  { path: "analysis/session-trace", change: "added", note: "Only module that knows Pi's entry shapes. Returns SessionTrace for one branch." },
+  { path: "analysis/metrics", change: "added", note: "Accounting rules: cost, tokens, per-tool failures over eligible outcomes, attribution." },
+  { path: "analysis/struggle", change: "added", note: "Struggle facts plus the versioned polling predicate." },
+  { path: "analysis/corpus", change: "added", note: "Discovery, bounded-concurrency scan, candidate ranking." },
+  { path: "analysis/harness-variants", change: "added", note: "The variant registry: name, axis, effective config, commit." },
+  { path: "analysis/eval/runner", change: "added", note: "Workspace setup, pinned session directory, ceilings, rep loop, teardown." },
+  { path: "analysis/eval/score", change: "added", note: "Weighted assertion algebra and thresholding." },
+  { path: "analysis/report/table", change: "added", note: "Descriptive screening table: per-rep values and per-tool counts." },
+  { path: "session reader (existing)", change: "reused", note: "Discovery, headers and tree structure. Not exact totals — its prefix scan is for the resume picker." },
+  { path: "tool result hook", change: "added", note: "The narrowing transform. Installed only under the tighter variant." },
+  { path: "launcher dispatch", change: "modified", note: "Additive: trace and eval subcommands. No runtime-selection changes." },
+  { path: "host actions", change: "modified", note: "/share action and its command-list entry, with an absolute private export path." },
+  { path: "fixtures", change: "added", note: "Task, synthesized seed, trusted graders, manifest with threshold and baseline signal." }
+]} />
+
+<Callout id="callout-launcher" tone="risk">
+
+Editing the launcher is the one genuinely risky change. AGENTS.md treats its runtime selection as off-limits, and integration tests spawn real PTYs against it. The change here is additive — dispatch names and a script entry, following the precedent that `diag` already sets by calling a script. It must not touch the RPC bypass, the extension bundle selection, or the non-interactive modes.
+
+</Callout>
+
+## Phasing
+
+Five slices, in dependency order. The ablation comes before the runner so the runner has something to vary; mining comes after the runner so fixtures can be validated rather than assumed.
+
+<Checklist id="checklist-phases" items={[
+  { id: "p1", label: "Slice 1 — offline trace CLI", note: "trace --root <dir> --json: command contract, shared analysis, accounting rules, struggle facts, minimal table. Independently shippable. Use the existing session reader for discovery; add no sender and no HTML." },
+  { id: "p2", label: "Slice 2 — one real model-facing ablation", note: "baseline vs tighter through the tool-result hook, with the effective-config mapping recorded and defaults provably unchanged when unset. Independently shippable." },
+  { id: "p3", label: "Slice 3 — one-fixture evaluator", note: "Manifest, trusted graders, run-owned workspace and session directory, ceilings, supervised lifecycle, score plus joined metrics. Validate one synthetic fixture first, then one approved mined fixture." },
+  { id: "p4", label: "Slice 4 — repeated screening report", note: "Reps, per-tool counts, denominators, descriptive-only deltas, and the HTML page with its review evidence." },
+  { id: "p5", label: "Slice 5 — /share", note: "Independent of 1-4. Private absolute export, disclosure, failure paths, host-action tests." },
+  { id: "p6", label: "Deferred", note: "Experience track and latency joins, further ablation axes (each needs seam design first), fixture mining at scale, LLM-judge scoring, OTLP export with its own contract, CI gate." }
+]} />
+
+## Risks
+
+<Callout id="callout-small-effects" tone="risk">
+
+**Harness effects are smaller than model effects, and 3–5 runs will not see a small one.** The failure mode that kills harness evals is someone running a fixture twice, seeing nothing, and concluding the axis does not matter. Mitigation is structural: reports are descriptive and say so, every rate carries its denominator, aborted and failed runs stay visible, and no verdict is printed that the data cannot support.
+
+</Callout>
+
+<Callout id="callout-format-drift" tone="risk">
+
+**Pi's session format can change under us.** Format knowledge is confined to one module, and the two failure modes are treated differently: an **unknown entry type** is skipped, counted and left out of nothing else, so a newer Pi entry cannot invalidate a session; an **unparsable line** marks its file partial, keeps that file out of the totals, and exits 3. The reader is tested against literal entry lines. Note that literal fixtures do **not** automatically catch upstream drift, since a changed producer emits lines the fixture never contained — a pinned producer-versus-reader contract test is the thing that does.
+
+</Callout>
+
+<Callout id="callout-corpus-oracle" tone="risk">
+
+**The corpus numbers are historical evidence, not a live acceptance oracle.** `~/.pi/agent/sessions` is private and mutable, so a correct reader over a changed directory need not reproduce the same totals. Exact reproduction requires a frozen input manifest and fixed accounting definitions; ordinary tests use synthetic inputs with expected metrics instead.
+
+</Callout>
+
+<Callout id="callout-backend-drift" tone="warning">
+
+**Adopting a backend is a one-way door if the vocabulary is not already vendor-neutral.** The failure mode is emitting a product's own event schema first and finding the data unreadable elsewhere. Mitigation: vendor-neutral names in the record shape, product-specific fields namespaced, and no product-aware code anywhere.
+
+</Callout>
+
+## Verification
+
+1. **Command contract.** `trace --root <dir> --json` against a temporary corpus: valid JSON on stdout, diagnostics on stderr, defined exit statuses, and identical results whether invoked through the launcher or the in-process interface.
+2. **Accounting tests** with literal transcripts: malformed and unknown entries, a truncated final line, an orphan result, a call with no result, a `null` entry, a zero denominator, multiple models in one session, and fork ancestry that must not be double-counted.
+3. **Polling predicate.** A trace whose only repeats are wait-shaped calls reports zero repeat facts; a repeated non-watch `terminal_start` is counted; and `--json` lists what was suppressed.
+4. **Ablation effect at the model seam.** With the variant unset, a deterministic command above both limits produces a result identical to today's. With the tighter variant set, the *next model call's* content is verifiably smaller. Comparing two calls to the new helper is not an independent oracle for the default.
+5. **Persisted evidence.** A live run writes a transcript into its run-owned session directory and the runner reads it from there; a run configured without persistence fails loudly rather than scoring an empty result.
+6. **Fixture validity and provenance.** Each committed fixture reproduces its `baseline_signal` under the unmodified harness, and its seed contains no material from its source repository. Provenance is a reviewer-controlled checklist over the whole fixture, not a path scan, because a scan cannot see a copied identifier or a credential.
+7. **Share contract.** Export goes to an absolute private temporary path; failure paths for missing or unauthenticated `gh`, non-zero exit, spawn failure and ambiguous upload are each exercised; nothing is written into the checkout.
+8. **Full gate**, per AGENTS.md: `pnpm exec tsc --noEmit && pnpm build`, then the relevant unit suites, `pnpm test`, `pnpm test:integration` for the launcher change, and `pnpm visual:ci` once any visual surface ships. The paid sweep and any live `/share` publish are opt-in acceptance exercises, not substitutes for the deterministic checks.
+
+## Open Questions
+
+<QuestionForm id="questions" submitLabel="Send answers" questions={[
+  {
+    id: "constraints",
+    title: "Any constraints to respect?",
+    mode: "freeform",
+    placeholder: "Anything else that should constrain this work. Output location, record vocabulary and privacy boundaries are already settled in the contract..."
+  },
+  {
+    id: "first-slice-model",
+    title: "Which model should the first sweep pin?",
+    subtitle: "Slice 2 needs one model held fixed. The corpus makes the most-used model the obvious default, but that is a measured default rather than a decision.",
+    mode: "single",
+    options: [
+      { id: "most-used", label: "The most-used model in the corpus", detail: "So the measurement reflects the model actually in use. The corpus figure is recorded privately.", recommended: true },
+      { id: "other", label: "A different model", detail: "Pick another if you want the first result to be about a model you are considering moving to." },
+      { id: "crossed", label: "Two models from the start", detail: "Doubles the cost of every arm, but comes with a holding-constant story for both." }
+    ]
+  }
+]} />

@@ -1,6 +1,6 @@
 # Dependency advisory remediation inventory — issue #396 / Plan 102
 
-**Status:** public evidence record for [issue #396](https://github.com/dhruvkelawala/sumocode/issues/396). **Local development graph remediated; consumer-runtime graph still upstream-blocked** (correction notice below and §9).
+**Status:** public evidence record for [issue #396](https://github.com/dhruvkelawala/sumocode/issues/396). **Local development graph remediated; consumer-runtime graph still upstream-blocked** (correction notice below and §9). **Post-publication advisory 1193945 (`smol-toml`, local-development only) is recorded in §13** — remediated by a narrow override after the v0.5.1 baseline.
 **Commit range:** baseline `397be093` → candidate `514da877` ([PR #453](https://github.com/dhruvkelawala/sumocode/pull/453), branch `fix/396-dependency-audit-policy`)
 **Tail repair:** spec finding SA123 — the per-advisory public map required by issue #396 was not present in the published PR #453 diff/body, which described remediation only in aggregate. This file supplies that map.
 **Correction:** the first published version of this map (head `7519bab9`, PR #467) presented the nine consumer-runtime advisories as remediated by the Pi `0.84.4` peer floor. Codex P1 (PR #467 discussion 3941838506) correctly rejected that framing: the floor does not enforce the patched transitives in consumer graphs, the empty local policy `records[]` describes only this repository's own overridden graph, and this repo's CI does not audit consumer graphs. This page corrects those claims, keeps the valid 15-advisory map and the historical counts, marks Plan 102 **incomplete / consumer-upstream-blocked** on its consumer-runtime criterion, and adds explicit user-facing remediation guidance (§10). A proper consumer-graph gate is a separate implementation queued by the coordinating parent; **this documentation correction is not the security fix**.
@@ -220,3 +220,48 @@ Maintainer-side remedy (not delivered here): the durable fix is an upstream Pi r
 - CI logs: runs 33907877057 (`ci`), 33907877078 (`Pi compatibility`)
 - Advisory metadata: GitHub Advisory Database entries linked in §4 (all `npm` ecosystem, `protobufjs`/`ws`/`brace-expansion`/`vite`/`postcss`/`nanoid`)
 - Package manifests (declared ranges): `@google/genai@1.52.0`, `minimatch@10.2.5`, `vitest@4.1.5`, `vite@8.0.10`, `@earendil-works/pi-ai@0.84.3/0.84.4`, `@earendil-works/pi-coding-agent@0.84.3/0.84.4` via the npm registry
+
+## 13. Post-publication advisory 1193945 (`smol-toml`) — repo-wide CI unblock (recorded 2026-09-10)
+
+**Status:** remediated in the local development graph by a narrow override; no policy record, no waiver, no consumer claim. **Baseline:** `1a3a05b1` (`chore(release): v0.5.1`). The advisory published 2026-09-09, after v0.5.1, so `main`'s last green CI run predates it; every run after publication fails the `Dependency audit policy` step with `unclassified high advisory 1193945` until this fix, which is why it is an out-of-cycle repo-wide unblock rather than part of the Plan 102 sequence above.
+
+| Field | Value |
+|---|---|
+| Advisory | 1193945 |
+| GHSA / CVE | [GHSA-7w5x-hrqm-74c2](https://github.com/advisories/GHSA-7w5x-hrqm-74c2) / CVE-2026-85730 |
+| Title | smol-toml: Denial of Service via malformed TOML documents (`parse('a=[1 #')` never returns; [upstream fix v1.7.1](https://github.com/squirrelchat/smol-toml/releases/tag/v1.7.1)) |
+| GHSA severity | high |
+| Published | 2026-09-09T18:07:11Z |
+| Module | `smol-toml` |
+| Vulnerable / first patched | `<=1.7.0` / `>=1.7.1` |
+| Installed at baseline | `1.6.1` |
+| pnpm audit chain | `.>knip>smol-toml` |
+
+### 13.1 Role: local-development only (evidence)
+
+- `pnpm why smol-toml` under the frozen baseline lock reports the chain under `devDependencies` only: `knip 5.88.1 → smol-toml 1.6.1`. There is no production path, and the audit finding has exactly one path, `.>knip>smol-toml`.
+- In `knip@5.88.1` the only `smol-toml` import is `dist/util/fs.js` (`loadTOML`), reached from `dist/util/loader.js` only when knip loads a `.toml` configuration file. Those are local project files read at dev time. This repository contains no `.toml` files at all (`find . -name '*.toml' -not -path '*/node_modules/*'` returns nothing), so the vulnerable parser is not exercised by this repository's own configs either.
+- knip is not shipped: no `knip` reference exists in `src/**` runtime code or in `scripts/build-native.mjs`, `scripts/build-extension.mjs`, or `scripts/build-host.mjs`. The native archive copies Pi's own dependency graph (`validatePiBuildGraph` walks the Pi package's `node_modules`), and the extension bundle's entry is `src/extension.ts` with `packages: "external"`; neither includes the dev toolchain. This verifies the "not shipped" claim rather than assuming it.
+- Consumers never receive `knip` (a devDependency, not a peer/runtime dependency), and SumoCode's `pnpm.overrides` never propagate to consumer installs (§6). This advisory is therefore **not** a consumer-runtime finding and adds nothing to the §9 consumer blocker.
+
+### 13.2 Fix: narrow override `knip>smol-toml: 1.7.1`
+
+`package.json#pnpm.overrides` gains `"knip>smol-toml": "1.7.1"`. The candidate lock resolves `smol-toml 1.7.1` under `knip@5.88.1`, and `pnpm why smol-toml` confirms the dev-only chain now at the patched version.
+
+- **Parent semver permits it:** `knip@5.88.1` declares `smol-toml: ^1.5.2`, so `1.7.1` is a re-resolution inside the declared range, not a range widening — the same remediation class as the §4.6 overrides. The exact pin matches the existing overrides convention and the lowest patched release.
+- **Why the knip bump was not taken:** the last 5.x release is `5.88.1` (2026-03-19, before the 2026-07-26 fix) and declares `^1.5.2`; the fixed transitive only appears on the 6.x major (`6.28.0` declares `smol-toml ^1.7.0`, `6.30.0` declares `^1.7.1`). A 6.x bump is not a clean patch for a CI unblock: running `knip@6.35.1` against this repository changes the dead-code report substantially (481 → 296 output lines; unused exported types 284 → 99; the `@oxlint/plugins` unused-devDependency finding disappears; new `Unlisted binaries` category), which is a tool-behavior change out of scope for this advisory and would need its own review. The override keeps knip behavior byte-identical to the pre-override baseline while moving only the patched transitive.
+- **Why no policy record:** the gate schema admits only `status: upstream-blocked` + `scope: consumer-runtime` records whose every chain starts `.>@earendil-works/pi-`, and hard-requires `local-development high/critical: 0` (`scripts/check-dependency-audit.mjs`). A `knip` chain fails the checker's `non-consumer path` rule, so recording this advisory would require weakening the gate, which is out of bounds. Removing the finding via the override is the only compliant local remediation.
+
+### 13.3 Verification owner
+
+The verification owner is the **automated gate**, not a human assignment (same as §8):
+
+- `node scripts/check-dependency-audit.mjs` → `dependency audit policy passed; consumer-runtime upstream-blocked: 0; local-development high/critical: 0` (exit 0), verified after `rm -rf node_modules && pnpm install --frozen-lockfile` so the result does not depend on a stale peer install.
+- `pnpm vitest run scripts/check-dependency-audit.test.mjs` → 17/17.
+- `pnpm exec tsc --noEmit && pnpm build`, `pnpm lint` → green.
+- `pnpm dead-code` → report byte-identical to the pre-override baseline (`diff` empty).
+- `.github/workflows/ci.yml` job `typecheck-and-test`, step `Dependency audit policy`, runs the checker after `pnpm install --frozen-lockfile` on every pull request and `main` push; that step is the merge blocker this section unblocks.
+
+No owner/expiry record is added because the finding is removed from the audited graph, not waived. Untouched: the §9 consumer-runtime blocker and the separately queued consumer-graph gate remain as stated.
+
+**Sources:** `pnpm audit --json` advisory 1193945 and `pnpm why smol-toml` (run 2026-09-10 against the frozen baseline lock); `node_modules/knip/dist/util/fs.js` and `loader.js` (`loadTOML` call site); `scripts/build-native.mjs`, `scripts/build-extension.mjs`; npm registry metadata for `knip@5.88.1`/`6.28.0`/`6.30.0`/`6.35.1` and `smol-toml@1.7.1`; `pnpm-lock.yaml` @ `1a3a05b1`; GHSA-7w5x-hrqm-74c2.

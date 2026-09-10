@@ -35,12 +35,19 @@ export SUMOCODE_LAUNCHER="${SOURCE}"
 # src/cli/launcher-spec.ts) so this launcher and the native binary can never
 # describe different CLIs. Node loads the spec directly: it is dependency-free
 # and erasable-syntax-only, so plain type stripping is enough (no jiti, no
-# build step).
+# build step). If node cannot load the spec (no type stripping, broken layout)
+# the pristine help bytes never reach stdout -- fail loudly instead of exiting
+# 0 on empty output.
 print_help() {
-	node --input-type=module -e '
+	local help_output
+	if ! help_output="$(node --input-type=module -e '
 		const spec = await import(process.argv[1]);
 		process.stdout.write(spec.renderLauncherHelp());
-	' "${ROOT_DIR}/src/cli/launcher-spec.ts"
+	' "${ROOT_DIR}/src/cli/launcher-spec.ts")"; then
+		printf '[sumocode] Could not render help: node failed to load %s (requires Node with TypeScript type stripping, 22.6+).\n' "${ROOT_DIR}/src/cli/launcher-spec.ts" >&2
+		exit 70
+	fi
+	printf '%s\n' "${help_output}"
 }
 
 package_version() {

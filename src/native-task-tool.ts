@@ -755,10 +755,25 @@ const parseJsonLine = (line: string): Record<string, unknown> | undefined => {
 	}
 };
 
-const isMessage = (value: unknown): value is Message => {
+/** True when a known-role child message's content is readable by retention. */
+const isReadableChildMessage = (value: unknown): value is Message => {
 	if (!isRecord(value)) return false;
 	const role = value.role;
-	return role === "assistant" || role === "user" || role === "toolResult";
+	if (role !== "assistant" && role !== "user" && role !== "toolResult") return false;
+	const content = value.content;
+	return typeof content === "string" || Array.isArray(content);
+};
+
+/**
+ * Validate a child frame's role-specific payload before retention reads role
+ * fields. Returns undefined for non-message frames; a bounded rejection reason
+ * when a known role's content cannot be read. Reasons never echo producer data.
+ */
+const decodeMessage = (value: unknown): { message: Message } | { rejected: string } | undefined => {
+	if (!isRecord(value)) return undefined;
+	const role = value.role;
+	if (role !== "assistant" && role !== "user" && role !== "toolResult") return undefined;
+	return isReadableChildMessage(value) ? { message: value } : { rejected: `child message rejected: malformed ${role} content` };
 };
 
 const applyAssistantUsage = (result: SingleResult, message: AssistantMessage): void => {
@@ -1166,7 +1181,10 @@ const runSingleTask = async (options: {
 
 			const abortState = attachAbortSignal(proc, options.signal);
 
+			let settled = false;
+			let protocolFailed = false;
 			const processLine = (line: string) => {
+				if (protocolFailed) return;
 				const event = parseJsonLine(line);
 				if (!event) return;
 				const typeValue = event.type;
@@ -1211,19 +1229,27 @@ const runSingleTask = async (options: {
 					emitUpdate();
 				}
 				const messageValue = event.message;
-				if ((typeText === "message_end" || typeText === "tool_result_end") && isMessage(messageValue)) {
-					let liveOmitted = false;
-					if (messageValue.role === "assistant") {
-						liveOmitted = getRunPayloadBudget(currentResult).releaseLive();
-						currentResult.streamingText = undefined;
+				if (typeText === "message_end" || typeText === "tool_result_end") {
+					const decoded = decodeMessage(messageValue);
+					if (decoded && "rejected" in decoded) {
+						protocolFailed = true;
+						currentResult.errorMessage = decoded.rejected;
+						// TERM starts shutdown; close remains the terminal boundary while the child exists.
+						abortState.terminate();
+						return;
 					}
-					handleEventMessage(currentResult, messageValue, liveOmitted);
-					emitUpdate();
+					if (decoded) {
+						let liveOmitted = false;
+						if (decoded.message.role === "assistant") {
+							liveOmitted = getRunPayloadBudget(currentResult).releaseLive();
+							currentResult.streamingText = undefined;
+						}
+						handleEventMessage(currentResult, decoded.message, liveOmitted);
+						emitUpdate();
+					}
 				}
 			};
 
-			let settled = false;
-			let protocolFailed = false;
 			const stdout = new JsonLineDecoder({
 				onLine: processLine,
 				onError: (error) => {

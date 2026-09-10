@@ -717,6 +717,57 @@ describe("native task tool", () => {
 		expect(toolResult.details?.results?.[0]?.messages?.[0]?.content).toMatchObject([{ type: "image", data: "" }]);
 	});
 
+	it("rejects malformed user message content before retention accounting", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		const sentinel = "USER-SENTINEL-PAYLOAD";
+
+		expect(() => emitTaskEvent(proc, {
+			type: "message_end",
+			message: { role: "user", content: { sentinel } },
+		})).not.toThrow();
+		proc.emit("close", null, "SIGTERM");
+
+		const result = await running;
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain("malformed user content");
+		expect(JSON.stringify(result)).not.toContain(sentinel);
+	});
+
+	it("rejects malformed toolResult message content before retention accounting", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		const sentinel = "TOOL-SENTINEL-PAYLOAD";
+
+		expect(() => emitTaskEvent(proc, {
+			type: "tool_result_end",
+			message: { role: "toolResult", toolCallId: sentinel, toolName: sentinel },
+		})).not.toThrow();
+		proc.emit("close", null, "SIGTERM");
+
+		const result = await running;
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain("malformed toolResult content");
+		expect(JSON.stringify(result)).not.toContain(sentinel);
+	});
+
+	it("rejects malformed assistant message content before retention accounting", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		const sentinel = "ASSISTANT-SENTINEL-PAYLOAD";
+
+		expect(() => emitTaskEvent(proc, {
+			type: "message_end",
+			message: { role: "assistant", content: { sentinel }, usage: {} },
+		})).not.toThrow();
+		proc.emit("close", null, "SIGTERM");
+
+		const result = await running;
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain("malformed assistant content");
+		expect(JSON.stringify(result)).not.toContain(sentinel);
+	});
+
 	it("caps producer-controlled structural metadata", async () => {
 		const proc = new FakeTaskProcess();
 		const running = registeredTask(proc).execute();

@@ -16,3 +16,6 @@ test/fixtures/pi-agent-*/state/
 # visual harness output (rendered PNGs from `pnpm visual`)
 docs/visual/out/
 package-lock.json
+
+# local-files visual-plan bridge token files (written by `plan local serve`)
+.plan-url

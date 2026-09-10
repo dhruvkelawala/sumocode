@@ -1,5 +1,7 @@
 # Plan 110: Evaluate an Effect v4 implementation of the subagent lifecycle
 
+> **Superseded (2026-09-05):** production Effect adoption is now planned in [`plans/118-effect-v4-refactor-campaign.md`](118-effect-v4-refactor-campaign.md), grounded in [`docs/research/effect-v4-feasibility.md`](../docs/research/effect-v4-feasibility.md). This spike is not executed. Its contract matrix (Step 2) is reused as the Wave 2 oracle and its startup STOP condition becomes a permanent build assertion.
+
 > **Executor instructions**: Follow this plan step by step and run every verification command. This is a contained spike, not authorization for a broad rewrite. Keep production `SubagentManager` as the reference implementation. Use stable Effect core APIs only, pin the tested RC exactly as a devDependency, and produce evidence plus a provisional recommendation for human review. Do not switch production in this plan. When evidence is complete, update this plan's row in `plans/README.md` unless a reviewer says they own the index.
 >
 > **Drift check (run first)**: `git diff --stat b34bd79..HEAD -- dist/host dist/extension package.json pnpm-lock.yaml src/subagents/manager.test.ts src/spike/effect-subagents docs/research/effect-subagent-pilot.md`

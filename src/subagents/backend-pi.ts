@@ -441,10 +441,11 @@ const mapPiEvent = (event: ParsedJsonLine): SubagentEvent[] => {
  * leads its own group.
  */
 const signalGroup = (proc: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void => {
-	// A pid-less handle owns no child (spawn failed or has not completed). Never
-	// fall through to a pid-less kill: some Node runtimes route that signal at
-	// the caller's own process group rather than a child.
-	if (proc.pid == null) return;
+	// A handle without a positive pid owns no child (spawn failed, has not
+	// completed, or carries a zero/negative pid). Never fall through:
+	// process.kill(-0) targets the caller's process group and a negative pid
+	// targets arbitrary processes rather than a child.
+	if (typeof proc.pid !== "number" || proc.pid <= 0) return;
 	if (process.platform !== "win32") {
 		try {
 			process.kill(-proc.pid, signal);
@@ -479,7 +480,9 @@ const attachAbortSignal = (proc: ChildProcessWithoutNullStreams, signal: AbortSi
 	};
 	proc.once("close", onClose);
 	const terminate = () => {
-		if (exited || forceKill) return;
+		// Mirrors native-task-tool: without an owned positive pid there is no
+		// signal to send and no escalation to schedule.
+		if (exited || forceKill || typeof proc.pid !== "number" || proc.pid <= 0) return;
 		signalGroup(proc, "SIGTERM");
 		forceKill = setTimeout(() => {
 			if (!exited) signalGroup(proc, "SIGKILL");

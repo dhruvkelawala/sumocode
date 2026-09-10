@@ -92,8 +92,9 @@ export const LAUNCHER_COMMANDS: readonly LauncherCommandSpec[] = [
 	{
 		command: "worktree",
 		aliases: ["-w", "--worktree"],
-		usage: ["-w [name]"],
-		help: `  -w, --worktree [name]
+		usage: ["worktree [name]", "-w [name]"],
+		help: `  worktree [name]
+  -w, --worktree [name]
       Create and open a new sumo/<name> worktree in the current terminal
       host, run the configured worktree setup, and start SumoCode there.
       If name is omitted, a unique wt-<timestamp> name is generated.`,

@@ -473,7 +473,7 @@ nativeDescribe("native executable contract", () => {
 	it("lists the worktree command in native help", () => {
 		const help = runNative(["--help"]);
 		expect(help.status).toBe(0);
-		expect(help.stdout).toContain("worktree [name]");
+		expect(help.stdout.split(/\r?\n/)).toContain("  worktree [name]");
 	});
 
 	it("renders the shared CLI spec help verbatim", () => {

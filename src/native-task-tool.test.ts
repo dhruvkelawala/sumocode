@@ -44,7 +44,7 @@ type RetainedTaskResult = {
 	toolEvents?: Array<{ id?: string; name?: string; args?: object | string; status: string; output?: string }>;
 	stderr?: string;
 	streamingText?: string;
-	usage?: { turns: number };
+	usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: number; contextTokens?: number; turns?: number };
 };
 
 interface TaskUpdate {
@@ -793,6 +793,41 @@ describe("native task tool", () => {
 		expect(result.content[0]?.text).not.toContain(sentinel);
 		expect(JSON.stringify(result)).not.toContain(sentinel);
 		expect(Buffer.byteLength(result.content[0]?.text ?? "", "utf8")).toBeLessThan(4096);
+	});
+
+	it("keeps valid role-specific message semantics and the aggregate byte cap", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+
+		emitTaskEvent(proc, { type: "message_end", message: { role: "user", content: "u".repeat(2 * 1024 * 1024) } });
+		emitTaskEvent(proc, {
+			type: "tool_result_end",
+			message: { role: "toolResult", toolCallId: "t1", toolName: "read", content: [{ type: "text", text: "t".repeat(2 * 1024 * 1024) }] },
+		});
+		emitTaskEvent(proc, {
+			type: "message_end",
+			message: {
+				role: "assistant",
+				content: [{ type: "text", text: "FINAL-VALID" }],
+				usage: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, totalTokens: 10, cost: { total: 0.5 } },
+			},
+		});
+		proc.emit("close", 0);
+
+		const result = await running;
+		expect(result.isError).toBeUndefined();
+		const detail = result.details?.results?.[0];
+		if (!detail) throw new Error("task result is missing");
+		expect(detail.exitCode).toBe(0);
+		expect(detail.messages?.map((message) => message.role)).toEqual(["user", "toolResult", "assistant"]);
+		const retained = retainedPayloadText(detail).join("");
+		expect(retained).toContain("FINAL-VALID");
+		expect(retained.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+		expect(Buffer.byteLength(retained, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+		expect(result.content[0]?.text).toContain("FINAL-VALID");
+		expect(detail.usage?.turns).toBe(1);
+		expect(detail.usage?.contextTokens).toBe(10);
+		expect(detail.usage?.cost).toBeCloseTo(0.5);
 	});
 
 	it("caps producer-controlled structural metadata", async () => {

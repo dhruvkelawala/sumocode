@@ -29,6 +29,9 @@ interface RetainedRuntimeOptions {
 	readonly spawnOwner?: (command: string, args: readonly string[], options: { cwd: string; env: NodeJS.ProcessEnv; detached: true; stdio: "ignore" }) => OwnerProcess;
 }
 
+/** Owner-bootstrap wait for launches without a caller-supplied provisioning budget. */
+const RETAINED_OWNER_BOOTSTRAP_WAIT_MS = 30_000;
+
 /** Owns the installation namespace shared by production launches and replacement sessions. */
 export class RetainedRuntime {
 	public constructor(private readonly options: RetainedRuntimeOptions = {}) {}
@@ -39,7 +42,7 @@ export class RetainedRuntime {
 	}
 
 	/** Unsupported distributions keep the caller's disposable backend; a refused admitted launch never falls back. */
-	public async spawn(task: SubagentLaunch, sessionId: string, controller: RegistryWriter, host: TerminalHost, pi: PiExecLike): Promise<SpawnedChild | undefined> {
+	public async spawn(task: SubagentLaunch & { readonly provisioningTimeoutMs?: number }, sessionId: string, controller: RegistryWriter, host: TerminalHost, pi: PiExecLike): Promise<SpawnedChild | undefined> {
 		const source = sourceOwner(this.options.provenance?.() ?? resolveExecutableProvenance(), task.visible === true);
 		if (!source) return undefined;
 		if (task.signal.aborted) throw new Error("retained launch interrupted before admission");
@@ -70,7 +73,8 @@ export class RetainedRuntime {
 			builtInTools: task.builtInTools === undefined ? BUILT_IN_TOOLS : getBuiltInToolsFromActiveTools([...task.builtInTools]),
 			role: task.roleId ? { id: task.roleId, label: task.roleId } : null,
 			pi: source.pi, adapterEntry: adapter ? realpathSync(adapter) : null, modelBootstrapEntry: bootstrap ? realpathSync(bootstrap) : null,
-			visible: task.visible ? { name: task.title, placement: task.placement!, launcher: source.sumocode } : null,
+			visible: task.visible ? { name: task.title, placement: task.placement!, launcher: source.sumocode,
+				provisioningTimeoutMs: task.provisioningTimeoutMs } : null,
 		}, { prompt: task.prompt, systemPrompt: task.appendSystemPrompt ?? null });
 		if (task.signal.aborted) throw new Error("retained launch interrupted before admission");
 		const env: NodeJS.ProcessEnv = { ...process.env, PI_BIN: source.pi };
@@ -84,7 +88,12 @@ export class RetainedRuntime {
 		let failed = false;
 		owner.once("error", () => { failed = true; });
 		owner.unref();
-		const deadline = Date.now() + 30_000;
+		// A visible launch's remaining end-to-end budget bounds this wait too: the
+		// owner provisions the pane and the parent confirms the record inside the
+		// same window the manager opened before the visible-spawn reservation, so
+		// this must never add a fresh fixed timeout on top. Launches without a
+		// caller budget (headless bootstrap) keep the owner-startup wait.
+		const deadline = Date.now() + Math.max(0, task.provisioningTimeoutMs ?? RETAINED_OWNER_BOOTSTRAP_WAIT_MS);
 		const operations = this.options.operations ?? systemProcessTree;
 		while (!failed && Date.now() < deadline) {
 			const record = registry.get(task.id)!;

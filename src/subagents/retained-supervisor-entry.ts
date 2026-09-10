@@ -51,7 +51,8 @@ export async function runRetainedSupervisorEntry(
 		const controller = config.visible ? new RetainedVisibleSupervisor({ ...owner,
 			launch: { cwd: config.cwd, prompt, appendSystemPrompt: systemPrompt ?? undefined, name: config.visible.name,
 				id, model: config.model.label, thinking: config.thinking, tools: config.builtInTools,
-				placement: config.visible.placement, host: dependencies.host ?? getTerminalHost(),
+				placement: config.visible.placement, provisioningTimeoutMs: config.visible.provisioningTimeoutMs,
+				host: dependencies.host ?? getTerminalHost(),
 				pi: dependencies.executor ?? terminalExecutor },
 		}, { ...dependencies, spawn: dependencies.spawnPane ?? createPaneChildSpawner({ resolveLauncher: () => config.visible!.launcher }) })
 			: new RetainedHeadlessSupervisor({ ...owner,

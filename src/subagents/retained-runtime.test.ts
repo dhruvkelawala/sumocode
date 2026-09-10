@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { systemProcessTree, type ProcessTreeOperations } from "../background-tasks/process-tree.js";
+import type { AgentPanePlacement, TerminalHost } from "../terminal-host/types.js";
 import { installSubagents } from "./index.js";
 import { readRetainedBootstrap } from "./retained-bootstrap.js";
 import { controlAuthority, serveRetainedControl } from "./retained-control.js";
@@ -24,6 +25,8 @@ function fixture(configuredPi?: string) {
 	const writer = { token: "writer", pid: 4321, processStartTime: "writer-birth" };
 	const operations: ProcessTreeOperations = { ...systemProcessTree, identityMatches: () => "same", verificationMatches: () => "same",
 		census: () => [] };
+	const visibleLaunches: Array<{ id: string; placement: AgentPanePlacement; provisioningTimeoutMs?: number }> = [];
+	let paneSequence = 0;
 	const spawnOwner = vi.fn((_command: string, args: readonly string[]) => {
 		const id = args[args.indexOf("--id") + 1];
 		const registry = retention.registry("session").forController(writer);
@@ -32,25 +35,33 @@ function fixture(configuredPi?: string) {
 		const { descriptor, prompt } = readRetainedBootstrap(initial, args[args.indexOf("--nonce") + 1]);
 		expect(prompt).toBe("private task text");
 		expect(descriptor.config).toMatchObject({ controller, model: { label: "provider/model" }, builtInTools: ["read"] });
+		const visible = descriptor.config.visible;
+		if (visible) {
+			visibleLaunches.push({ id, placement: visible.placement, provisioningTimeoutMs: visible.provisioningTimeoutMs });
+		}
 		const held = registry.acquireWriter(id, initial.revision, 60_000);
 		const evidence = (pid: number) => ({ identity: { pid, processGroupId: pid, processStartTime: `command-${pid}` },
 			verification: { members: [{ pid, processStartTime: `birth-${pid}` }] } });
+		paneSequence += 1;
+		const pane = visible ? { agentName: "worker", workspaceId: "w1",
+			tabId: visible.placement.kind === "tab" ? visible.placement.tabId : `w1:t${paneSequence}`,
+			paneId: `w1:p${paneSequence}` } : null;
 		const running = registry.transition(id, held.revision, 1, (record) => ({ ...record, status: "running",
-			supervisor: evidence(writer.pid), child: evidence(5678), launchIntent: { nonce: descriptor.nonce } }));
+			supervisor: evidence(writer.pid), child: evidence(5678), pane, launchIntent: { nonce: descriptor.nonce } }));
 		registry.acquireControl(id, running.revision, 1, 0, controller, 60_000);
 		return Object.assign(new EventEmitter(), { pid: writer.pid, unref: vi.fn() });
 	});
 	const retention = new RetainedRuntime({ spawnOwner, operations, registryOptions: { inspectWriter: () => "alive" },
 		provenance: () => ({ pi: configuredPi ?? piBinary, sumocode: piBinary }) });
 	const disposable = vi.fn();
-	function install(identity: RegistryWriter = controller, session = "session") {
+	function install(identity: RegistryWriter = controller, session = "session", host: TerminalHost = { kind: "none", openCommandInSplit: vi.fn(), closePane: vi.fn(), notify: vi.fn() }) {
 		const handlers = new Map<string, (event: never, ctx: ExtensionContext) => Promise<void>>();
 		const sendMessage = vi.fn();
 		const api = { on: (name: string, handler: (event: never, ctx: ExtensionContext) => Promise<void>) => handlers.set(name, handler),
 			registerTool: vi.fn(), sendMessage };
 		// SAFETY: this caller double supplies the installation and lifecycle API used in these tests.
 		const manager = installSubagents(api as never, { retention, spawnPiChild: disposable,
-			terminalHost: { kind: "none", openCommandInSplit: vi.fn(), closePane: vi.fn(), notify: vi.fn() },
+			terminalHost: host,
 			managerDependencies: { controllerIdentity: identity, processOperations: operations, captureGitContext: async () => ({ baseRef: "base-sha" }) } });
 		// SAFETY: lifecycle handlers use only these context members when UI is disabled.
 		const context = { cwd: root, hasUI: false, isIdle: () => true, sessionManager: { getSessionId: () => session } } as never;
@@ -60,7 +71,7 @@ function fixture(configuredPi?: string) {
 	}
 	const task = { prompt: "private task text", title: "worker", cwd: root,
 		inherited: { model: { provider: "provider", id: "model" }, thinking: "low" }, builtInTools: ["read"] };
-	return { root, controller, writer, retention, operations, spawnOwner, disposable, install, task };
+	return { root, controller, writer, retention, operations, spawnOwner, disposable, install, task, visibleLaunches };
 }
 
 it("retains a normally installed production launch instead of using the disposable backend", async () => {
@@ -75,6 +86,75 @@ it("retains a normally installed production launch instead of using the disposab
 		expect(f.spawnOwner).toHaveBeenCalledOnce();
 		expect(JSON.stringify(f.spawnOwner.mock.calls)).not.toContain("private task text");
 	} finally { runtime.manager.detachForReplacement(); }
+});
+
+it("counts a retained-visible pane persisted by the owner in placement and reclaims it after settlement", async () => {
+	const f = fixture();
+	vi.stubEnv("HERDR_TAB_ID", undefined);
+	const host: TerminalHost = {
+		kind: "herdr",
+		inspectPane: vi.fn(async () => ({ ok: true as const, shellPid: 5678, foregroundProcessGroupId: 5678, foregroundPids: [5678] })),
+		openCommandInSplit: vi.fn(async () => ({ ok: false as const, error: "unsupported" })),
+		closePane: vi.fn(async () => ({ ok: false as const, error: "unsupported" })),
+		notify: vi.fn(async () => undefined),
+	};
+	const runtime = f.install(f.controller, "session", host);
+	try {
+		await runtime.fire("session_start");
+		const first = await runtime.manager.spawn({ ...f.task, visible: true });
+		if (!("id" in first)) throw new Error("first visible child was not admitted");
+		// The owner persists the pane in the registry instead of emitting
+		// `pane-attached`; the manager observer must surface it and follow its tab.
+		expect(first).toMatchObject({ status: "running", recovery: "adopted", pane: { tabId: "w1:t1", paneId: "w1:p1" } });
+		expect(runtime.manager.get(first.id)?.pane).toEqual({ agentName: "worker", workspaceId: "w1", tabId: "w1:t1", paneId: "w1:p1" });
+		expect(f.visibleLaunches[0]).toMatchObject({ id: first.id, placement: { kind: "new-tab", label: "subagents" } });
+		expect(f.visibleLaunches[0]?.provisioningTimeoutMs).toEqual(expect.any(Number));
+		expect(f.visibleLaunches[0]?.provisioningTimeoutMs).toBeGreaterThan(0);
+		expect(f.visibleLaunches[0]?.provisioningTimeoutMs).toBeLessThanOrEqual(4_750);
+
+		// The recorded pane occupies w1:t1, so the next spawn must split that tab
+		// instead of provisioning a duplicate: placement counts retained panes.
+		const second = await runtime.manager.spawn({ ...f.task, visible: true });
+		if (!("id" in second)) throw new Error("second visible child was not admitted");
+		expect(f.visibleLaunches[1]).toMatchObject({ id: second.id, placement: { kind: "tab", tabId: "w1:t1", direction: "down" } });
+
+		const registry = f.retention.registry("session").forController(f.writer);
+		const settle = (id: string): void => {
+			const record = registry.get(id)!;
+			const artifacts = new RetainedResults(record.taskDir);
+			artifacts.append({ kind: "run-started" });
+			const result = artifacts.writeResult({ kind: "completed", finalText: "done" });
+			const manifest = artifacts.writeManifest({ exit: "completed", durationMs: 1 });
+			registry.transition(id, record.revision, record.writerLease!.generation, (current) => ({ ...current, status: "settled", outcome: "completed",
+				settledAt: Date.now(), completionId: `completion-${id}`, result: result.pointer, manifest, delivery: { state: "undelivered" } }));
+		};
+		settle(first.id);
+		await vi.waitFor(() => expect(runtime.manager.get(first.id)?.status).toBe("done"));
+		settle(second.id);
+		await vi.waitFor(() => expect(runtime.manager.get(second.id)?.status).toBe("done"));
+
+		// Both settled panes are gone, so the next spawn must plan a fresh tab
+		// rather than target the emptied one: reclamation sees the retained slot.
+		const third = await runtime.manager.spawn({ ...f.task, visible: true });
+		if (!("id" in third)) throw new Error("third visible child was not admitted");
+		expect(f.visibleLaunches[2]).toMatchObject({ id: third.id, placement: { kind: "new-tab", label: "subagents" } });
+	} finally {
+		runtime.manager.detachForReplacement();
+	}
+});
+
+it("bounds the owner-bootstrap wait by the caller's remaining provisioning budget", async () => {
+	const f = fixture();
+	// Never publish a running record: the parent must give up on the caller's
+	// remaining budget instead of the fixed owner-startup wait.
+	f.spawnOwner.mockImplementation(() => Object.assign(new EventEmitter(), { pid: f.writer.pid, unref: vi.fn() }));
+	const startedAt = Date.now();
+	// SAFETY: the stalled owner never publishes a record, so this PiExecLike double is never invoked.
+	await expect(f.retention.spawn({ ...f.task, visible: true, placement: { kind: "new-tab", label: "subagents" },
+		signal: new AbortController().signal, id: "sa-budget", baseRef: "base-sha", provisioningTimeoutMs: 120 },
+	"session", f.controller, { kind: "none", openCommandInSplit: vi.fn(), closePane: vi.fn(), notify: vi.fn() }, { exec: vi.fn() } as never))
+		.rejects.toThrow("retained launch unconfirmed");
+	expect(Date.now() - startedAt).toBeLessThan(2_000);
 });
 
 it.each(["before", "during", "after"] as const)("delivers a production child's completion after transferring with cleanup %s observation", async (phase) => {

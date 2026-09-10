@@ -441,7 +441,11 @@ const mapPiEvent = (event: ParsedJsonLine): SubagentEvent[] => {
  * leads its own group.
  */
 const signalGroup = (proc: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void => {
-	if (process.platform !== "win32" && proc.pid != null) {
+	// A pid-less handle owns no child (spawn failed or has not completed). Never
+	// fall through to a pid-less kill: some Node runtimes route that signal at
+	// the caller's own process group rather than a child.
+	if (proc.pid == null) return;
+	if (process.platform !== "win32") {
 		try {
 			process.kill(-proc.pid, signal);
 			return;

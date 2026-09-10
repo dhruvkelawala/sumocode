@@ -411,13 +411,14 @@ function isClaudeProvider(providerId: string): boolean {
  * never silently changes the model. Otherwise (fresh sessions start on the
  * settings default provider) pick the first model the user has enabled for
  * the base anthropic provider, since those patterns mirror onto every
- * account, and only then fall back to the provider's first model.
+ * account, and only then fall back to the provider's first available model.
  */
 function preferredAccountModel(ctx: ExtensionCommandContext, account: ClaudeAccount, deps: AccountsCommandDeps): Model<Api> | undefined {
-	const models = ctx.modelRegistry.getAll().filter((model) => model.provider === account.providerId);
+	const available = ctx.modelRegistry.getAvailable();
+	const availableForAccount = available.filter((model) => model.provider === account.providerId);
 	const current = ctx.model;
 	if (current && isClaudeProvider(current.provider)) {
-		const sameModel = models.find((model) => model.id === current.id);
+		const sameModel = availableForAccount.find((model) => model.id === current.id);
 		if (sameModel) return sameModel;
 	}
 	// Resolve the patterns over the same set the cycle ring and /model picker
@@ -425,8 +426,8 @@ function preferredAccountModel(ctx: ExtensionCommandContext, account: ClaudeAcco
 	// same thing here as it does there. Resolving over one provider's models
 	// would disambiguate an id the picker rejects; resolving over every
 	// registered model would treat an unreachable provider as a collision.
-	const enabled = filterToEnabled(ctx.modelRegistry.getAvailable(), readEnabledModelPatterns({ PI_CODING_AGENT_DIR: resolveAgentDir(deps) }));
-	return enabled.find((model) => model.provider === account.providerId) ?? models[0];
+	const enabled = filterToEnabled(available, readEnabledModelPatterns({ PI_CODING_AGENT_DIR: resolveAgentDir(deps) }));
+	return enabled.find((model) => model.provider === account.providerId) ?? availableForAccount[0];
 }
 
 async function switchAccount(pi: ExtensionAPI, ctx: ExtensionCommandContext, account: ClaudeAccount, deps: AccountsCommandDeps): Promise<void> {
@@ -436,7 +437,7 @@ async function switchAccount(pi: ExtensionAPI, ctx: ExtensionCommandContext, acc
 	}
 	const target = preferredAccountModel(ctx, account, deps);
 	if (!target) {
-		ctx.ui.notify(`${account.providerId} is not active; reload SumoCode after adding the account`, "warning");
+		ctx.ui.notify(`${account.providerId} has no selectable model; reload SumoCode before switching`, "warning");
 		return;
 	}
 	const selected = await pi.setModel(target);

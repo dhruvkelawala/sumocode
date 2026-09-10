@@ -128,6 +128,13 @@ _sumocode_pi_flag_consumes_value() {
 		[[ "${next:0:1}" != "-" ]]
 		return
 	fi
+	# Generic Pi long option: Pi's parseArgs() consumes one dash-free, non-@ token
+	# for an unknown long flag, so its value can never be read as a command either.
+	# Known booleans (`--offline`) and `--flag=value` forms consume nothing.
+	if [[ "${flag}" == --* && "${flag}" != *=* ]] && ! _sumocode_is_pi_boolean_flag "${flag}"; then
+		[[ "${next}" != -* && "${next}" != @* ]]
+		return
+	fi
 	return 1
 }
 

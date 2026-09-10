@@ -376,6 +376,27 @@ export const LAUNCHER_PARITY_CASES: readonly LauncherParityCase[] = [
 		expect: "exit-0",
 		dryRun: { command: "run", args: "--print [redacted]" },
 	},
+	// Generic Pi long options consume one dash-free value (Pi's parseArgs rule),
+	// so an extension flag's value is a value even when it spells a command, and
+	// a known Pi boolean still leaves the next command spelling a command.
+	{
+		name: "keeps a generic Pi flag value that spells a command",
+		argv: ["--plan", "run"],
+		expect: "exit-0",
+		dryRun: { command: "run", args: "--plan run" },
+	},
+	{
+		name: "keeps a generic Pi flag value that spells another command",
+		argv: ["--plan", "doctor"],
+		expect: "exit-0",
+		dryRun: { command: "run", args: "--plan doctor" },
+	},
+	{
+		name: "keeps a command after a known Pi boolean flag",
+		argv: ["--offline", "doctor"],
+		expect: "usage-error",
+		stderrContains: "doctor does not accept a path argument: --offline",
+	},
 	// Empty space-form option values are usage errors in both launchers, exactly
 	// like their `=` spellings (issue 484).
 	{

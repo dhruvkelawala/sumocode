@@ -425,6 +425,10 @@ function parseLauncherArgv(argv: readonly string[]): ParsedLaunch {
 			if (consumes) parsed.forwardedArgs.push(args.shift()!);
 		} else if ((arg === "--list-models" || arg === "--tui-mode" || arg === "--use-theme") && !next.startsWith("-")) {
 			parsed.forwardedArgs.push(args.shift()!);
+		} else if (arg.startsWith("--") && !arg.includes("=") && !PI_BOOLEAN_FLAGS.has(arg) && !next.startsWith("-") && !next.startsWith("@")) {
+			// Generic Pi long option: Pi's parseArgs() consumes one dash-free value,
+			// so an extension flag's value can never be read as a command either.
+			parsed.forwardedArgs.push(args.shift()!);
 		}
 	}
 	return parsed;

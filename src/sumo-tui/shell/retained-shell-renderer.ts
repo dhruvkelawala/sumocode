@@ -411,7 +411,7 @@ export class RetainedShellRenderer {
 	 *      (necessary for autocomplete dropdown growth and dynamic header content).
 	 *   3. Yoga layout for the full screen.
 	 *   4. Composite cells into a CellBuffer.
-	 *   5. Composite Pi's overlay stack (sidebar, modals, notifications) on top.
+	 *   5. Composite Pi's overlay stack (sidebar, modals, input-recovery notice) on top.
 	 *   6. Diff against previous frame.
 	 *   7. Write patches via TerminalSessionOwner (synchronized output).
 	 */
@@ -446,8 +446,8 @@ export class RetainedShellRenderer {
 		const overlayCount = this.compositeOverlays(frame, cols, rows);
 		const compositeMs = performance.now() - compositeStart;
 
-		// Hide the hardware cursor when an overlay (modal) is visible
-		// so the editor's cursor doesn't bleed through the modal's text.
+		// Hide the hardware cursor when a modal or the input-recovery notice
+		// overlay is visible so the editor's cursor doesn't bleed through it.
 		const cursor: HardwareCursor | null = overlayCount > 0 ? null : result.hardwareCursor;
 		this.lastOverlayCount = overlayCount;
 		this.lastCursor = cursor;

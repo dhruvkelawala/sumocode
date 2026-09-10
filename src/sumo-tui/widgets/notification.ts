@@ -20,8 +20,10 @@ export interface NotificationCenterOptions {
 /**
  * Host notification model consumed by `RpcHostActions`, the RPC extension UI
  * responder, and the pi-compat ExtensionUI adapter. Issue 481 removed the
- * top-right toast surface: `render` never paints rows, while `notify` keeps
- * funneling host feedback and extension notify requests into one sink.
+ * top-right toast surface: `render` is intentionally empty and nothing is
+ * retained, while `notify` keeps funneling host feedback and extension notify
+ * requests into one sink. The `Component` mount point is retained because the
+ * shared overlay slot still hosts the input-recovery notice.
  */
 export class NotificationCenter implements Component {
 	private nextId = 1;

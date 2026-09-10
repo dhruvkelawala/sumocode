@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Component } from "@earendil-works/pi-tui";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
@@ -51,7 +52,7 @@ import type { InlineSelectorHost, InlineSelectorItem, InlineSelectorTab } from "
 import { notifyOnError } from "./safe-send.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import type { MermaidRenderingMode } from "../transcript/mermaid.js";
-import { listSessions, type SessionListInfo } from "./session-reader.js";
+import { listAllSessions, listSessions, type SessionListInfo } from "./session-reader.js";
 import { buildSessionTreeFromEntries, currentTreeSelection, entryTimestampsFromEntries, flattenSessionTree, formatRelativeTime, sessionExcerpt, treeNodeSummary, treeRowTimestamp } from "./session-tree.js";
 import { readAuthoritativeSessionSnapshot } from "./session-snapshot.js";
 import type { RpcHostChromeState, RpcHostStateStore } from "./state.js";
@@ -422,14 +423,35 @@ function renderHotkeysOverlay(theme: ThemeReader, width: number): string[] {
  * all). Count and age are padded to per-list column widths so the
  * description blocks line up as real columns instead of a ragged edge.
  */
-function resumeSessionRows(sessions: readonly SessionListInfo[], now: Date = new Date()): { label: string; description: string }[] {
+function resumeSessionRows(sessions: readonly SessionListInfo[], now: Date = new Date(), { showProjectDirectory = false }: { readonly showProjectDirectory?: boolean } = {}): { label: string; description: string }[] {
 	const counts = sessions.map((session) => `${formatInteger(session.messageCount)}${session.truncatedScan ? "+" : ""} ${session.messageCount === 1 && !session.truncatedScan ? "msg" : "msgs"}`);
 	const ages = sessions.map((session) => formatRelativeTime(session.modified, now));
 	const countWidth = Math.max(...counts.map((count) => count.length));
 	const ageWidth = Math.max(...ages.map((age) => age.length));
 	return sessions.map((session, index) => ({
 		label: session.name?.trim() || sessionExcerpt(session.firstMessage, 52) || "(empty session)",
-		description: `${session.id.slice(0, 8)} · ${counts[index]!.padStart(countWidth)} · ${ages[index]!.padStart(ageWidth)}`,
+		// `showProjectDirectory` is the all-sessions scope: every row there can
+		// come from a different project, so the directory leads the identifier
+		// block (the position Pi's own session list uses).
+		description: `${showProjectDirectory && session.cwd ? `${displaySessionCwd(session.cwd)} · ` : ""}${session.id.slice(0, 8)} · ${counts[index]!.padStart(countWidth)} · ${ages[index]!.padStart(ageWidth)}`,
+	}));
+}
+
+/** Home-shortened, head-elided cwd for the selector's right-hand column. */
+function displaySessionCwd(cwd: string, maxLength = 28): string {
+	const home = homedir();
+	const shortened = cwd.startsWith(`${home}/`) ? `~/${cwd.slice(home.length + 1)}` : cwd;
+	return shortened.length <= maxLength ? shortened : `…${shortened.slice(1 - maxLength)}`;
+}
+
+/** Selector rows for one resume scope; `isCurrent` marks the row the host is already in. */
+function resumeSessionItems(sessions: readonly SessionListInfo[], currentPath: string, options?: { readonly showProjectDirectory?: boolean }): InlineSelectorItem[] {
+	const rows = resumeSessionRows(sessions, new Date(), options);
+	return sessions.map((session, index) => ({
+		value: session.path,
+		label: rows[index]!.label,
+		description: rows[index]!.description,
+		isCurrent: session.path === currentPath,
 	}));
 }
 
@@ -1053,14 +1075,23 @@ export class RpcHostActions {
 
 	/**
 	 * `/resume` -- lists every session (`.jsonl` file) sitting alongside the
-	 * current one on disk and lets the user pick one to load. Pi's RPC surface
-	 * has no "list sessions" verb, so this reads the session directory
-	 * directly (`session-reader.ts`'s `listSessions`, a faithful port of Pi's
-	 * own `SessionManager.list`/`buildSessionInfo`), deriving the directory
-	 * from `sessionFile` (threaded through `get_state` -- see state.ts). The
-	 * chosen path is loaded through the existing `switch_session` control, the
-	 * same path `/sessions` -> "Switch session by path" already uses, so
-	 * rehydration/state-refresh behavior is identical.
+	 * current one on disk and lets the user pick one to load, with a Tab toggle
+	 * to the all-sessions scope (every project directory under the sessions
+	 * root, the current project's parent, one row per session carrying its own
+	 * project directory). Pi's RPC surface has no "list sessions" verb, so this
+	 * reads the session directory directly (`session-reader.ts`'s `listSessions`
+	 * / `listAllSessions`, ports of Pi's own `SessionManager.list`/`listAll`),
+	 * deriving the directory from `sessionFile` (threaded through `get_state` --
+	 * see state.ts). The chosen path is loaded through the existing
+	 * `switch_session` control, the same path `/sessions` -> "Switch session by
+	 * path" already uses, so rehydration/state-refresh behavior is identical.
+	 *
+	 * Both scopes are read before the selector opens so each tab is a plain
+	 * `selectTabs` option list (the model chooser's shape). The all-sessions
+	 * read is bounded (`DEFAULT_MAX_ALL_SESSIONS`, ~110ms measured on a
+	 * 676-session store); Pi loads its all-scope lazily on Tab, which would need
+	 * a lazy-tab capability this selector does not have.
+	 * ponytail: eager bounded scan, upgrade to a lazy tab if open latency grows.
 	 */
 	public async openResumeSelector(): Promise<void> {
 		const sessionFile = this.stateStore.getSnapshot().sessionFile;
@@ -1068,21 +1099,26 @@ export class RpcHostActions {
 			notify(this.notifications, "no session file available to resume from", "warning");
 			return;
 		}
-		const sessions = await listSessions(dirname(sessionFile));
-		if (sessions.length === 0) {
+		const projectDir = dirname(sessionFile);
+		const [projectSessions, allSessions] = await Promise.all([
+			listSessions(projectDir),
+			listAllSessions(dirname(projectDir)),
+		]);
+		if (projectSessions.length === 0 && allSessions.length === 0) {
 			notify(this.notifications, "no sessions found", "warning");
 			return;
 		}
-		const rows = resumeSessionRows(sessions);
-		const items: InlineSelectorItem[] = sessions.map((session, index) => ({
-			value: session.path,
-			label: rows[index]!.label,
-			description: rows[index]!.description,
-			isCurrent: session.path === sessionFile,
-		}));
-		const selected = await this.inlineSelectors.select("Resume session", items);
+		const tabs: InlineSelectorTab[] = [
+			{ id: "project", label: "current project", options: resumeSessionItems(projectSessions, sessionFile) },
+			{ id: "all", label: "all sessions", options: resumeSessionItems(allSessions, sessionFile, { showProjectDirectory: true }) },
+		];
+		// Nothing to resume inside this project? Open where the sessions are
+		// (same default-tab rule the model chooser uses for an empty enabled list).
+		const selected = await this.inlineSelectors.selectTabs("Resume session", tabs, {
+			initialTabId: projectSessions.length === 0 ? "all" : "project",
+		});
 		if (!selected) return;
-		const session = sessions.find((candidate) => candidate.path === selected);
+		const session = projectSessions.find((candidate) => candidate.path === selected) ?? allSessions.find((candidate) => candidate.path === selected);
 		if (!session) return;
 		const result = await this.applySessionChange(() => this.controls.switchSession(session.path));
 		if (!result.cancelled) this.onStateChange();

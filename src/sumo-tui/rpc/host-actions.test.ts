@@ -912,10 +912,16 @@ describe("RpcHostActions", () => {
 			return `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`;
 		}
 
-		function writeFixtureSession(dir: string, fileName: string, id: string, timestamp: string, firstMessage: string): string {
+		function writeFixtureSession(root: string, fileName: string, id: string, timestamp: string, firstMessage: string, options: { readonly projectDir?: string; readonly cwd?: string } = {}): string {
+			// One level below the temp root, mirroring Pi's
+			// `<sessions>/<encoded-cwd>/<file>.jsonl` layout, so `/resume`'s
+			// all-sessions scope (which derives its sessions root as
+			// `dirname(dirname(sessionFile))`) stays inside this test's directory.
+			const dir = join(root, options.projectDir ?? "--repo--");
+			mkdirSync(dir, { recursive: true });
 			const path = join(dir, fileName);
 			writeFileSync(path, jsonl([
-				{ type: "session", version: 3, id, timestamp, cwd: "/repo" },
+				{ type: "session", version: 3, id, timestamp, cwd: options.cwd ?? "/repo" },
 				{
 					type: "message",
 					id: "e1",
@@ -927,7 +933,9 @@ describe("RpcHostActions", () => {
 			return path;
 		}
 
-		function writeLargeFixtureSession(dir: string, fileName: string, id: string, timestamp: string, firstMessage: string): string {
+		function writeLargeFixtureSession(root: string, fileName: string, id: string, timestamp: string, firstMessage: string): string {
+			const dir = join(root, "--repo--");
+			mkdirSync(dir, { recursive: true });
 			const path = join(dir, fileName);
 			const prefix = jsonl([
 				{ type: "session", version: 3, id, timestamp, cwd: "/repo" },
@@ -993,6 +1001,134 @@ describe("RpcHostActions", () => {
 			}
 		});
 
+		// The scope fixture: two project directories under one temp sessions root,
+		// the current session in `--repo--` and a newer one in `--other--`.
+		function writeScopeFixtures(root: string) {
+			const currentFile = writeFixtureSession(root, "2026-07-02T20-00-00-000Z_current.jsonl", "current", "2026-07-02T20:00:00.000Z", "current session first message");
+			writeFixtureSession(root, "2026-07-02T19-00-00-000Z_older.jsonl", "older", "2026-07-02T19:00:00.000Z", "older session first message");
+			const otherFile = writeFixtureSession(root, "2026-07-02T22-00-00-000Z_other.jsonl", "other", "2026-07-02T22:00:00.000Z", "other project first message", { projectDir: "--other--", cwd: "/repo-other" });
+			return { currentFile, otherFile };
+		}
+
+		it("opens scoped to the current project, with the current row marked", async () => {
+			const root = mkdtempSync(join(tmpdir(), "sumocode-resume-scope-default-test-"));
+			try {
+				const { currentFile } = writeScopeFixtures(root);
+				const { actions, controls, inlineSelectors } = setup({ sessionFile: currentFile });
+
+				const resumePromise = actions.handleSubmittedText("/resume");
+				await waitForInlineSelector(inlineSelectors, "Resume session");
+				const rendered = inlineSelectorText(inlineSelectors);
+
+				expect(rendered).toContain("◆ CURRENT PROJECT 2");
+				expect(rendered).toContain("◇ ALL SESSIONS 3");
+				expect(rendered).toContain("older session first message");
+				// The other project's rows only appear inside the all-sessions tab.
+				expect(rendered).not.toContain("other project first message");
+				expect(rendered).toContain("● current session first message");
+
+				inlineSelectors.handleInput(SELECTOR_ESCAPE);
+				await resumePromise;
+				expect(controls.calls.filter((call) => call.startsWith("switchSession:"))).toEqual([]);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+
+		it("toggles to all sessions with Tab, showing each project directory, and back", async () => {
+			const root = mkdtempSync(join(tmpdir(), "sumocode-resume-scope-toggle-test-"));
+			try {
+				const { currentFile } = writeScopeFixtures(root);
+				const { actions, inlineSelectors } = setup({ sessionFile: currentFile });
+
+				const resumePromise = actions.handleSubmittedText("/resume");
+				await waitForInlineSelector(inlineSelectors, "Resume session");
+				expect(inlineSelectorText(inlineSelectors)).toContain("⇥ tab");
+
+				inlineSelectors.handleInput(SELECTOR_TAB);
+				const allScope = inlineSelectorText(inlineSelectors);
+				expect(allScope).toContain("◆ ALL SESSIONS 3");
+				expect(allScope).toContain("other project first message");
+				expect(allScope).toContain("/repo-other");
+				// The current session stays marked in the all-sessions scope too.
+				expect(allScope).toContain("● current session first message");
+
+				inlineSelectors.handleInput(SELECTOR_TAB);
+				const backToProject = inlineSelectorText(inlineSelectors);
+				expect(backToProject).toContain("◆ CURRENT PROJECT 2");
+				expect(backToProject).not.toContain("other project first message");
+
+				inlineSelectors.handleInput(SELECTOR_ESCAPE);
+				await resumePromise;
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+
+		it("resumes a session picked from the all-sessions scope through switch_session", async () => {
+			const root = mkdtempSync(join(tmpdir(), "sumocode-resume-scope-select-test-"));
+			try {
+				const { currentFile, otherFile } = writeScopeFixtures(root);
+				const { actions, controls, inlineSelectors, rehydrateCalls } = setup({ sessionFile: currentFile });
+
+				const resumePromise = actions.handleSubmittedText("/resume");
+				await waitForInlineSelector(inlineSelectors, "Resume session");
+				inlineSelectors.handleInput(SELECTOR_TAB);
+				// Row 0 of the all-sessions scope is the most recently active session.
+				inlineSelectors.handleInput(SELECTOR_ENTER);
+				await resumePromise;
+
+				expect(controls.calls).toContain(`switchSession:${otherFile}`);
+				expect(controls.calls).toContain("refreshState");
+				expect(rehydrateCalls).toHaveLength(1);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+
+		it("opens on the all-sessions scope when the current project has none of its own", async () => {
+			const root = mkdtempSync(join(tmpdir(), "sumocode-resume-scope-empty-project-test-"));
+			try {
+				const { otherFile } = writeScopeFixtures(root);
+				const { actions, controls, inlineSelectors } = setup({ sessionFile: join(root, "--fresh--", "2026-07-02T23-00-00-000Z_current.jsonl") });
+
+				const resumePromise = actions.handleSubmittedText("/resume");
+				await waitForInlineSelector(inlineSelectors, "Resume session");
+				const rendered = inlineSelectorText(inlineSelectors);
+				expect(rendered).toContain("◆ ALL SESSIONS 3");
+				expect(rendered).toContain("other project first message");
+
+				inlineSelectors.handleInput(SELECTOR_ENTER);
+				await resumePromise;
+				expect(controls.calls).toContain(`switchSession:${otherFile}`);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+
+		it("cancels with Esc from either scope, without switching sessions", async () => {
+			const root = mkdtempSync(join(tmpdir(), "sumocode-resume-scope-cancel-test-"));
+			try {
+				const { currentFile } = writeScopeFixtures(root);
+				const { actions, controls, inlineSelectors } = setup({ sessionFile: currentFile });
+
+				const fromProject = actions.handleSubmittedText("/resume");
+				await waitForInlineSelector(inlineSelectors, "Resume session");
+				inlineSelectors.handleInput(SELECTOR_ESCAPE);
+				await fromProject;
+
+				const fromAll = actions.handleSubmittedText("/resume");
+				await waitForInlineSelector(inlineSelectors, "Resume session");
+				inlineSelectors.handleInput(SELECTOR_TAB);
+				inlineSelectors.handleInput(SELECTOR_ESCAPE);
+				await fromAll;
+
+				expect(controls.calls.filter((call) => call.startsWith("switchSession:"))).toEqual([]);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+
 		it("loads the selected path when session labels collide", async () => {
 			const dir = mkdtempSync(join(tmpdir(), "sumocode-resume-collision-test-"));
 			try {
@@ -1028,7 +1164,7 @@ describe("RpcHostActions", () => {
 		it("warns when the session directory has no sessions", async () => {
 			const dir = mkdtempSync(join(tmpdir(), "sumocode-resume-empty-test-"));
 			try {
-				const { actions, notifications } = setup({ sessionFile: join(dir, "2026-07-02T20-00-00-000Z_missing.jsonl") });
+				const { actions, notifications } = setup({ sessionFile: join(dir, "--repo--", "2026-07-02T20-00-00-000Z_missing.jsonl") });
 
 				await expect(actions.handleSubmittedText("/resume")).resolves.toBe(true);
 

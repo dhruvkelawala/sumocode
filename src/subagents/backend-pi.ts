@@ -433,6 +433,13 @@ const mapPiEvent = (event: ParsedJsonLine): SubagentEvent[] => {
 };
 
 /**
+ * A pid is owned only when it is a positive number: `process.kill(-0)` targets
+ * the caller's process group and a negative pid targets arbitrary processes
+ * rather than this child.
+ */
+const isOwnedPid = <T>(value: T): value is T & number => typeof value === "number" && value > 0;
+
+/**
  * Signal the child's whole PROCESS GROUP on POSIX (negative pid), falling back
  * to the single pid. Signalling only the `pi` pid leaves tool grandchildren
  * (e.g. a long-running command under the child's bash tool) alive and mutating
@@ -441,11 +448,9 @@ const mapPiEvent = (event: ParsedJsonLine): SubagentEvent[] => {
  * leads its own group.
  */
 const signalGroup = (proc: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void => {
-	// A handle without a positive pid owns no child (spawn failed, has not
-	// completed, or carries a zero/negative pid). Never fall through:
-	// process.kill(-0) targets the caller's process group and a negative pid
-	// targets arbitrary processes rather than a child.
-	if (typeof proc.pid !== "number" || proc.pid <= 0) return;
+	// A handle without an owned pid has no child to signal (spawn failed, has
+	// not completed, or carries a zero/negative pid).
+	if (!isOwnedPid(proc.pid)) return;
 	if (process.platform !== "win32") {
 		try {
 			process.kill(-proc.pid, signal);
@@ -482,7 +487,7 @@ const attachAbortSignal = (proc: ChildProcessWithoutNullStreams, signal: AbortSi
 	const terminate = () => {
 		// Mirrors native-task-tool: without an owned positive pid there is no
 		// signal to send and no escalation to schedule.
-		if (exited || forceKill || typeof proc.pid !== "number" || proc.pid <= 0) return;
+		if (exited || forceKill || !isOwnedPid(proc.pid)) return;
 		signalGroup(proc, "SIGTERM");
 		forceKill = setTimeout(() => {
 			if (!exited) signalGroup(proc, "SIGKILL");

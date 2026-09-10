@@ -5,7 +5,7 @@
  * change forces both launchers to move together.
  */
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -16,9 +16,14 @@ import {
 	classifyBranch,
 	dryRunExecLine,
 	dryRunField,
+	expandLauncherArgv,
+	launcherCaseFailures,
+	launcherParityGaps,
 	LAUNCHER_COMMAND_CASES,
+	LAUNCHER_PARITY_CASES,
 	RUNTIME_SELECTION_CASES,
 	type DryRunObservation,
+	type LauncherCasePaths,
 } from "./launcher-runtime-contract.js";
 import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
@@ -153,6 +158,34 @@ describe("launcher help (plan 117 shared contract)", () => {
 
 	it("renders -h identically to --help", () => {
 		expect(runCommand(["-h"]).stdout).toBe(runCommand(["--help"]).stdout);
+	});
+});
+
+describe("launcher parity matrix (issue 484 shared spec)", () => {
+	const root = mkdtempSync(join(tmpdir(), "sumocode-parity-shell-"));
+	const paths: LauncherCasePaths = {
+		diagFile: join(root, "diag.jsonl"),
+		promptFile: join(root, "prompt.txt"),
+		taskDir: join(root, "task"),
+	};
+	mkdirSync(paths.taskDir, { recursive: true });
+	writeFileSync(paths.diagFile, `${JSON.stringify({ event: "boot_screen_frame" })}\n`);
+	writeFileSync(paths.promptFile, "parity task prompt\n");
+	writeFileSync(join(paths.taskDir, "prompt.txt"), "parity task prompt\n");
+
+	afterAll(() => {
+		rmSync(root, { recursive: true, force: true });
+	});
+
+	for (const row of LAUNCHER_PARITY_CASES) {
+		it(row.name, () => {
+			const result = runCommand(["--dry-run", ...expandLauncherArgv(row.argv, paths)]);
+			expect(launcherCaseFailures(result, row).join("\n")).toBe("");
+		});
+	}
+
+	it("covers every command, alias, and option in the shared spec", () => {
+		expect(launcherParityGaps()).toEqual([]);
 	});
 });
 

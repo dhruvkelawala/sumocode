@@ -11,6 +11,8 @@
  * with the worktree module's code; usage errors exit 64.
  */
 
+import { LAUNCHER_COMMANDS, LAUNCHER_OPTIONS, type LauncherCommandSpec, type LauncherOptionSpec } from "../../src/cli/launcher-spec.js";
+
 export type RuntimeBranch = "rpc-host" | "direct-pi";
 
 export interface RuntimeSelectionCase {
@@ -94,8 +96,18 @@ export interface LauncherCommandCase {
 	readonly expect: LauncherCommandExpectation;
 	/** Substring the invocation's stdout must contain. */
 	readonly stdoutContains?: string;
+	/** Substring the invocation's stdout must NOT contain. */
+	readonly stdoutAbsent?: string;
 	/** Substring the invocation's stderr must contain. */
 	readonly stderrContains?: string;
+}
+
+/** Dry-run fields a `--dry-run` case asserts (`ARGS` etc. come from `dryRunField`). */
+export interface LauncherDryRunExpectation {
+	readonly command?: string;
+	readonly args?: string;
+	readonly debug?: string;
+	readonly diagFile?: string;
 }
 
 export const LAUNCHER_COMMAND_CASES: readonly LauncherCommandCase[] = [
@@ -123,6 +135,59 @@ export interface DryRunObservation {
 	readonly exitCode: number;
 }
 
+/** Result shape both suites produce before the shared assertions run. */
+export interface LauncherCaseResult {
+	readonly status: number;
+	readonly stdout: string;
+	readonly stderr: string;
+}
+
+/** Per-case files `{diagFile}` / `{promptFile}` / `{taskDir}` expand to. */
+export interface LauncherCasePaths {
+	readonly diagFile: string;
+	readonly promptFile: string;
+	readonly taskDir: string;
+}
+
+export function expandLauncherArgv(argv: readonly string[], paths: LauncherCasePaths): string[] {
+	return argv.map((arg) => {
+		if (arg === "{diagFile}") return paths.diagFile;
+		if (arg === "{promptFile}") return paths.promptFile;
+		if (arg === "{taskDir}") return paths.taskDir;
+		return arg;
+	});
+}
+
+/**
+ * Shared assertions for one launcher invocation. Returns one line per failed
+ * expectation (empty when the case passed) so both suites report identically.
+ */
+export function launcherCaseFailures(result: LauncherCaseResult, row: LauncherCommandCase & { readonly dryRun?: LauncherDryRunExpectation }): readonly string[] {
+	const failures: string[] = [];
+	const accepted = row.expect === "exit-0" ? [0]
+		: row.expect === "doctor-runs" ? [0, 70]
+		: row.expect === "worktree-host-error" ? [1]
+		: [64];
+	if (!accepted.includes(result.status)) failures.push(`exit ${result.status} not in ${accepted.join("/")}`);
+	if (row.stdoutContains !== undefined && !result.stdout.includes(row.stdoutContains)) failures.push(`stdout missing ${JSON.stringify(row.stdoutContains)}`);
+	if (row.stdoutAbsent !== undefined && result.stdout.includes(row.stdoutAbsent)) failures.push(`stdout still contains ${JSON.stringify(row.stdoutAbsent)}`);
+	if (row.stderrContains !== undefined && !result.stderr.includes(row.stderrContains)) failures.push(`stderr missing ${JSON.stringify(row.stderrContains)}`);
+	if (row.dryRun !== undefined) {
+		const fields: readonly (readonly [string, string | undefined])[] = [
+			["COMMAND", row.dryRun.command],
+			["ARGS", row.dryRun.args],
+			["SUMO_TUI_DEBUG", row.dryRun.debug],
+			["SUMO_TUI_DIAG_FILE", row.dryRun.diagFile],
+		];
+		for (const [field, expected] of fields) {
+			if (expected === undefined) continue;
+			const observed = dryRunField(result.stdout, field);
+			if (observed !== expected) failures.push(`${field}=${JSON.stringify(observed)} expected ${JSON.stringify(expected)}`);
+		}
+	}
+	return failures;
+}
+
 /** Extracts a `FIELD=value` line from dry-run output ("" when absent). */
 export function dryRunField(output: string, field: string): string {
 	const line = output.split(/\r?\n/).find((candidate) => candidate.startsWith(`${field}=`));
@@ -143,4 +208,77 @@ export function dryRunExecLine(output: string): string {
  */
 export function classifyBranch(execLine: string): RuntimeBranch {
 	return execLine.includes("sumo-rpc-host.js") ? "rpc-host" : "direct-pi";
+}
+
+// ── spec-derived parity matrix (issue 484) ─────────────────────────────────
+
+/** A `--dry-run` parity case: every spec spelling, run through both parsers. */
+export interface LauncherParityCase extends LauncherCommandCase {
+	readonly dryRun?: LauncherDryRunExpectation;
+}
+
+/** Deterministic argv per command spelling; both suites prepend `--dry-run`. */
+function commandParityCase(spec: LauncherCommandSpec, spelling: string): LauncherParityCase {
+	const name = `shares the ${spelling} command spelling`;
+	switch (spec.command) {
+		case "run":
+			return { name, argv: [spelling], expect: "exit-0", dryRun: { command: "run", args: "" } };
+		case "doctor":
+			return { name, argv: [spelling], expect: "doctor-runs", stdoutContains: "SumoCode doctor" };
+		case "diag":
+			return { name, argv: [spelling, "{diagFile}"], expect: "exit-0", stdoutContains: "Event counts" };
+		case "task":
+			return { name, argv: [spelling, "parity task prompt"], expect: "exit-0", dryRun: { command: "task" } };
+		case "worktree":
+			return { name, argv: [spelling, "parity-worktree"], expect: "exit-0", stdoutContains: "worktree dry run" };
+	}
+}
+
+function optionParityCase(spec: LauncherOptionSpec, flag: string): LauncherParityCase {
+	const name = `shares the ${flag} option spelling`;
+	switch (spec.id) {
+		case "help":
+			return { name, argv: [flag], expect: "exit-0", stdoutContains: "USAGE" };
+		case "version":
+			return { name, argv: [flag], expect: "exit-0", stdoutContains: "sumocode " };
+		case "debug":
+			return { name, argv: [flag], expect: "exit-0", dryRun: { debug: "1" } };
+		case "diag-file":
+			return { name, argv: [flag, "{diagFile}"], expect: "exit-0", dryRun: { debug: "1" } };
+		case "no-clear-diag":
+			return { name, argv: ["-d", flag], expect: "exit-0", dryRun: { debug: "1" } };
+		case "prompt-file":
+			return { name, argv: ["task", flag, "{promptFile}"], expect: "exit-0", dryRun: { command: "task" } };
+		case "task-dir":
+			return { name, argv: ["task", flag, "{taskDir}"], expect: "exit-0", dryRun: { command: "task" } };
+		case "no-sumo-tui":
+			return { name, argv: [flag], expect: "exit-0" };
+		case "dry-run":
+			return { name, argv: [flag], expect: "exit-0" };
+	}
+}
+
+/**
+ * Every command, alias and option spelling the shared spec declares, run
+ * through BOTH launchers. Generated from the spec so adding a command (or a
+ * `-w`-style alias, #483) without implementing it in both parsers fails CI in
+ * both suites at once.
+ */
+export const LAUNCHER_PARITY_CASES: readonly LauncherParityCase[] = [
+	...LAUNCHER_COMMANDS.flatMap((spec) => [spec.command, ...spec.aliases].map((spelling) => commandParityCase(spec, spelling))),
+	...LAUNCHER_OPTIONS.flatMap((spec) => spec.flags.map((flag) => optionParityCase(spec, flag))),
+];
+
+/** Every spelling the shared spec declares. */
+export function launcherSpecSpellings(): readonly string[] {
+	return [
+		...LAUNCHER_COMMANDS.flatMap((spec) => [spec.command, ...spec.aliases]),
+		...LAUNCHER_OPTIONS.flatMap((spec) => spec.flags),
+	];
+}
+
+/** Spec spellings without a parity row; must stay empty. */
+export function launcherParityGaps(): readonly string[] {
+	const covered = new Set(LAUNCHER_PARITY_CASES.flatMap((row) => row.argv));
+	return launcherSpecSpellings().filter((spelling) => !covered.has(spelling));
 }

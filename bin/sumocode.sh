@@ -75,8 +75,13 @@ TASK_DIR=""
 SUMOCODE_ARGS=()
 while [[ $# -gt 0 ]]; do
 	case "$1" in
-		doctor|diag|task|worktree)
-			if [[ "${COMMAND}" != "run" ]]; then usage_error "Only one command may be specified."; fi
+		run|doctor|diag|task|worktree)
+			# SPEC COMMANDS: `run`, `doctor`, `diag`, `task`, `worktree` (+ the
+			# `-w`/`--worktree` aliases below) live in src/cli/launcher-spec.ts; the
+			# native parser reads the same table and
+			# test/integration/launcher-runtime-contract.ts runs every spelling
+			# through both launchers. `run` is the explicit default spelling.
+			if [[ "${COMMAND}" != "run" && "${COMMAND}" != "$1" ]]; then usage_error "Only one command may be specified: $1"; fi
 			COMMAND="$1"
 			shift
 			;;

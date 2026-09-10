@@ -18,7 +18,11 @@ import {
 import {
 	dryRunExecLine,
 	dryRunField,
+	expandLauncherArgv,
+	launcherCaseFailures,
+	launcherParityGaps,
 	LAUNCHER_COMMAND_CASES,
+	LAUNCHER_PARITY_CASES,
 	RUNTIME_SELECTION_CASES,
 } from "./launcher-runtime-contract.js";
 import { renderLauncherHelp } from "../../src/cli/launcher-spec.js";
@@ -423,6 +427,23 @@ nativeDescribe("native executable contract", () => {
 			if (row.stderrContains !== undefined) expect(result.stderr).toContain(row.stderrContains);
 		}, 30_000);
 	}
+
+	for (const row of LAUNCHER_PARITY_CASES) {
+		it(`shares launcher parity: ${row.name}`, () => {
+			const diagFile = join(tempRoot("sumocode-native-parity-diag-"), "diag.jsonl");
+			writeFileSync(diagFile, `${JSON.stringify({ event: "boot_screen_frame" })}\n`);
+			const promptFile = join(tempRoot("sumocode-native-parity-prompt-"), "prompt.txt");
+			writeFileSync(promptFile, "parity task prompt\n");
+			const taskDir = tempRoot("sumocode-native-parity-task-");
+			writeFileSync(join(taskDir, "prompt.txt"), "parity task prompt\n");
+			const result = runNative(["--dry-run", ...expandLauncherArgv(row.argv, { diagFile, promptFile, taskDir })]);
+			expect(launcherCaseFailures({ status: result.status ?? -1, stdout: result.stdout, stderr: result.stderr }, row).join("\n")).toBe("");
+		}, 30_000);
+	}
+
+	it("covers every command, alias, and option in the shared spec", () => {
+		expect(launcherParityGaps()).toEqual([]);
+	});
 
 	it("routes -w and worktree through the worktree module outside a source checkout", () => {
 		const caller = tempRoot("sumocode-native-worktree-caller-");

@@ -26,9 +26,14 @@ import { dirname, join, resolve } from "node:path";
 import { buildChildSpawnPlan } from "../sumo-tui/rpc/spawn-child.mjs";
 import { openWorktree } from "../cli/open-worktree.js";
 import {
+	launcherCommandForToken,
+	launcherOptionForEqualsToken,
+	launcherOptionForToken,
 	LAUNCHER_EXIT_CODES,
 	renderLauncherHelp,
 	renderUsageError,
+	type LauncherCommand,
+	type LauncherOptionSpec,
 } from "../cli/launcher-spec.js";
 
 const RELOAD_EXIT_CODE = 100;
@@ -302,8 +307,6 @@ function extractFirstPositional(args: string[]): string {
 
 // ── launcher arg parsing (bin/sumocode.sh wrapper layer) ───────────────────
 
-type LauncherCommand = "run" | "doctor" | "diag" | "task" | "worktree";
-
 interface ParsedLaunch {
 	command: LauncherCommand;
 	debugMode: boolean;
@@ -314,6 +317,48 @@ interface ParsedLaunch {
 	promptFile: string;
 	taskDir: string;
 	forwardedArgs: string[];
+}
+
+/** Consumes a launcher option value: `--flag=value` inline or the next token. */
+function readLauncherOptionValue(arg: string, option: LauncherOptionSpec, args: string[]): string {
+	if (!option.takesValue) return "";
+	const equalsIndex = arg.indexOf("=");
+	const value = equalsIndex === -1 ? args.shift() : arg.slice(equalsIndex + 1);
+	if (value === undefined || value === "") usageError(`${option.flags[0]} requires a path.`);
+	return value;
+}
+
+function applyLauncherOption(parsed: ParsedLaunch, option: LauncherOptionSpec, value: string): void {
+	switch (option.id) {
+		case "debug":
+			parsed.debugMode = true;
+			return;
+		case "diag-file":
+			parsed.debugMode = true;
+			parsed.diagFile = value;
+			return;
+		case "no-clear-diag":
+			parsed.clearDiag = false;
+			return;
+		case "prompt-file":
+			parsed.promptFile = value;
+			return;
+		case "task-dir":
+			parsed.taskDir = value;
+			return;
+		case "no-sumo-tui":
+			parsed.forceDirectPi = true;
+			return;
+		case "dry-run":
+			parsed.dryRun = true;
+			return;
+		case "version":
+			process.stdout.write(`sumocode ${__SUMOCODE_VERSION__ ?? "0.0.0"}\n`);
+			process.exit(LAUNCHER_EXIT_CODES.success);
+		case "help":
+			printHelp();
+			process.exit(LAUNCHER_EXIT_CODES.success);
+	}
 }
 
 function parseLauncherArgv(argv: readonly string[]): ParsedLaunch {
@@ -331,98 +376,46 @@ function parseLauncherArgv(argv: readonly string[]): ParsedLaunch {
 	const args = [...argv];
 	while (args.length > 0) {
 		const arg = args.shift()!;
-		if (arg.startsWith("--diag-file=")) {
-			parsed.diagFile = arg.slice("--diag-file=".length);
-			if (parsed.diagFile === "") usageError("--diag-file requires a path.");
-			parsed.debugMode = true;
-			continue;
-		}
-		if (arg.startsWith("--prompt-file=")) {
-			parsed.promptFile = arg.slice("--prompt-file=".length);
-			if (parsed.promptFile === "") usageError("--prompt-file requires a path.");
-			continue;
-		}
-		if (arg.startsWith("--task-dir=")) {
-			parsed.taskDir = arg.slice("--task-dir=".length);
-			if (parsed.taskDir === "") usageError("--task-dir requires a path.");
-			continue;
-		}
-		switch (arg) {
-			case "doctor":
-			case "diag":
-			case "task":
-			case "worktree":
-				if (parsed.command !== "run") usageError("Only one command may be specified.");
-				parsed.command = arg;
-				continue;
-			case "-w":
-			case "--worktree":
-				if (parsed.command !== "run") usageError("Only one command may be specified.");
-				parsed.command = "worktree";
-				continue;
-			case "-d":
-			case "--debug":
-				parsed.debugMode = true;
-				continue;
-			case "--diag-file":
-				if (args.length < 1) usageError("--diag-file requires a path.");
-				parsed.debugMode = true;
-				parsed.diagFile = args.shift()!;
-				continue;
-			case "--no-clear-diag":
-				parsed.clearDiag = false;
-				continue;
-			case "--prompt-file":
-				if (args.length < 1) usageError("--prompt-file requires a path.");
-				parsed.promptFile = args.shift()!;
-				continue;
-			case "--task-dir":
-				if (args.length < 1) usageError("--task-dir requires a path.");
-				parsed.taskDir = args.shift()!;
-				continue;
-			case "--no-sumo-tui":
-				parsed.forceDirectPi = true;
-				continue;
-			case "--dry-run":
-				parsed.dryRun = true;
-				continue;
-			case "-v":
-			case "--version":
-				process.stdout.write(`sumocode ${__SUMOCODE_VERSION__ ?? "0.0.0"}\n`);
-				process.exit(LAUNCHER_EXIT_CODES.success);
-				break; // unreachable
-			case "-h":
-			case "--help":
-				printHelp();
-				process.exit(LAUNCHER_EXIT_CODES.success);
-				break; // unreachable
-			case "--": {
-				// Preserve the delimiter for run/task so mode selection and prompt
-				// extraction treat --print/--mode tokens as messages.
-				if (parsed.command === "run" || parsed.command === "task") {
-					if (args[0] !== "--") parsed.forwardedArgs.push("--");
-				}
-				parsed.forwardedArgs.push(...args);
-				args.length = 0;
-				continue;
+		if (arg === "--") {
+			// Preserve the delimiter for run/task so mode selection and prompt
+			// extraction treat --print/--mode tokens as messages.
+			if (parsed.command === "run" || parsed.command === "task") {
+				if (args[0] !== "--") parsed.forwardedArgs.push("--");
 			}
-			default: {
-				// Unknown flags belong to Pi; everything forwards. A value flag's
-				// value is consumed atomically so it can never be stolen as a
-				// launcher subcommand (`--name task` must stay a Pi argv pair).
-				parsed.forwardedArgs.push(arg);
-				const next = args[0];
-				if (next === undefined) continue;
-				if (isUnconditionalValueFlag(arg) || arg === "--print" || arg === "-p") {
-					const consumes = arg === "--print" || arg === "-p"
-						? !next.startsWith("@") && (!next.startsWith("-") || next.startsWith("---"))
-						: true;
-					if (consumes) parsed.forwardedArgs.push(args.shift()!);
-				} else if ((arg === "--list-models" || arg === "--tui-mode" || arg === "--use-theme") && !next.startsWith("-")) {
-					parsed.forwardedArgs.push(args.shift()!);
-				}
-				continue;
-			}
+			parsed.forwardedArgs.push(...args);
+			args.length = 0;
+			continue;
+		}
+		// Commands, aliases and options come from the shared CLI spec
+		// (src/cli/launcher-spec.ts); bin/sumocode.sh is pinned to the same table
+		// by test/integration/launcher-runtime-contract.ts, so a command can no
+		// longer exist in one launcher only (#483).
+		const command = launcherCommandForToken(arg);
+		if (command !== undefined) {
+			// `run` is the default command; any other second command spelling is a
+			// usage error (repeating the same spelling is idempotent).
+			if (parsed.command !== "run" && parsed.command !== command) usageError(`Only one command may be specified: ${arg}`);
+			parsed.command = command;
+			continue;
+		}
+		const option = launcherOptionForToken(arg) ?? launcherOptionForEqualsToken(arg);
+		if (option !== undefined) {
+			applyLauncherOption(parsed, option, readLauncherOptionValue(arg, option, args));
+			continue;
+		}
+		// Unknown flags belong to Pi; everything forwards. A value flag's
+		// value is consumed atomically so it can never be stolen as a
+		// launcher subcommand (`--name task` must stay a Pi argv pair).
+		parsed.forwardedArgs.push(arg);
+		const next = args[0];
+		if (next === undefined) continue;
+		if (isUnconditionalValueFlag(arg) || arg === "--print" || arg === "-p") {
+			const consumes = arg === "--print" || arg === "-p"
+				? !next.startsWith("@") && (!next.startsWith("-") || next.startsWith("---"))
+				: true;
+			if (consumes) parsed.forwardedArgs.push(args.shift()!);
+		} else if ((arg === "--list-models" || arg === "--tui-mode" || arg === "--use-theme") && !next.startsWith("-")) {
+			parsed.forwardedArgs.push(args.shift()!);
 		}
 	}
 	return parsed;

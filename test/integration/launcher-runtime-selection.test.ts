@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawn } from "node-pty";
 import { afterAll, describe, expect, it } from "vitest";
+import { renderLauncherHelp } from "../../src/cli/launcher-spec.js";
 import {
 	classifyBranch,
 	dryRunExecLine,
@@ -125,6 +126,36 @@ interface CommandResult {
 	readonly stderr: string;
 }
 
+function runCommand(args: readonly string[]): CommandResult {
+	try {
+		const stdout = execFileSync("bash", [LAUNCHER, ...args], {
+			cwd: process.cwd(),
+			env: buildSpawnEnv(process.env, { PI_BIN: STUB_PI }),
+			encoding: "utf8",
+			input: "",
+			timeout: 30_000,
+		});
+		return { status: 0, stdout, stderr: "" };
+	} catch (error) {
+		// SAFETY: execFileSync augments thrown process errors with numeric status
+		// and captured stdout/stderr when encoding is utf8.
+		const err = error as Partial<CommandResult>;
+		return { status: err.status ?? -1, stdout: err.stdout ?? "", stderr: err.stderr ?? "" };
+	}
+}
+
+describe("launcher help (plan 117 shared contract)", () => {
+	it("renders the shared CLI spec help verbatim", () => {
+		const result = runCommand(["--help"]);
+		expect(result.status).toBe(0);
+		expect(result.stdout).toBe(renderLauncherHelp());
+	});
+
+	it("renders -h identically to --help", () => {
+		expect(runCommand(["-h"]).stdout).toBe(runCommand(["--help"]).stdout);
+	});
+});
+
 describe("launcher subcommands (plan 117 shared contract)", () => {
 	const diagDir = mkdtempSync(join(tmpdir(), "sumocode-runtime-contract-diag-"));
 	const diagFile = join(diagDir, "diag.jsonl");
@@ -132,24 +163,6 @@ describe("launcher subcommands (plan 117 shared contract)", () => {
 	afterAll(() => {
 		rmSync(diagDir, { recursive: true, force: true });
 	});
-
-	function runCommand(args: readonly string[]): CommandResult {
-		try {
-			const stdout = execFileSync("bash", [LAUNCHER, ...args], {
-				cwd: process.cwd(),
-				env: buildSpawnEnv(process.env, { PI_BIN: STUB_PI }),
-				encoding: "utf8",
-				input: "",
-				timeout: 30_000,
-			});
-			return { status: 0, stdout, stderr: "" };
-		} catch (error) {
-			// SAFETY: execFileSync augments thrown process errors with numeric status
-			// and captured stdout/stderr when encoding is utf8.
-			const err = error as Partial<CommandResult>;
-			return { status: err.status ?? -1, stdout: err.stdout ?? "", stderr: err.stderr ?? "" };
-		}
-	}
 
 	writeFileSync(diagFile, `${JSON.stringify({ event: "boot_screen_frame" })}\n`);
 

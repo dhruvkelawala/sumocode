@@ -21,6 +21,7 @@ import {
 	LAUNCHER_COMMAND_CASES,
 	RUNTIME_SELECTION_CASES,
 } from "./launcher-runtime-contract.js";
+import { renderLauncherHelp } from "../../src/cli/launcher-spec.js";
 import { createRpcChildFixture } from "./rpc-child-fixture.js";
 import { buildSpawnEnv, replayScreenRows } from "./spawn-pi-pty.js";
 
@@ -452,6 +453,12 @@ nativeDescribe("native executable contract", () => {
 		const help = runNative(["--help"]);
 		expect(help.status).toBe(0);
 		expect(help.stdout).toContain("worktree [name]");
+	});
+
+	it("renders the shared CLI spec help verbatim", () => {
+		const help = runNative(["--help"]);
+		expect(help.status).toBe(0);
+		expect(help.stdout).toBe(renderLauncherHelp());
 	});
 
 	it("enters an explicit project directory instead of submitting it as a prompt", () => {

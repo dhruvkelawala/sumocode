@@ -25,6 +25,11 @@ import { constants as osConstants } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { buildChildSpawnPlan } from "../sumo-tui/rpc/spawn-child.mjs";
 import { openWorktree } from "../cli/open-worktree.js";
+import {
+	LAUNCHER_EXIT_CODES,
+	renderLauncherHelp,
+	renderUsageError,
+} from "../cli/launcher-spec.js";
 
 const RELOAD_EXIT_CODE = 100;
 const PRE_ADOPTION_KILL_GRACE_MS = 250;
@@ -74,8 +79,8 @@ function isExecutableFile(path: string): boolean {
 }
 
 function usageError(message: string): never {
-	process.stderr.write(`[sumocode] ${message}\n\nRun 'sumocode --help' for usage.\n`);
-	process.exit(64);
+	process.stderr.write(renderUsageError(message));
+	process.exit(LAUNCHER_EXIT_CODES.usage);
 }
 
 function makePrivateTempFile(prefix: string): string {
@@ -384,12 +389,12 @@ function parseLauncherArgv(argv: readonly string[]): ParsedLaunch {
 			case "-v":
 			case "--version":
 				process.stdout.write(`sumocode ${__SUMOCODE_VERSION__ ?? "0.0.0"}\n`);
-				process.exit(0);
+				process.exit(LAUNCHER_EXIT_CODES.success);
 				break; // unreachable
 			case "-h":
 			case "--help":
 				printHelp();
-				process.exit(0);
+				process.exit(LAUNCHER_EXIT_CODES.success);
 				break; // unreachable
 			case "--": {
 				// Preserve the delimiter for run/task so mode selection and prompt
@@ -424,34 +429,9 @@ function parseLauncherArgv(argv: readonly string[]): ParsedLaunch {
 }
 
 function printHelp(): void {
-	process.stdout.write(`SumoCode — Cathedral terminal AI coding agent
-
-USAGE
-  sumocode [options] [path]
-
-COMMANDS
-  doctor          Check the native runtime, Pi child, and diagnostics path
-  diag [file]     Summarize a diagnostics JSONL (default /tmp/sumocode-manual.jsonl)
-  task <prompt>   Launch a one-shot task pane kickoff
-  worktree [name] Create and open a sumo/<name> worktree in the current terminal host
-
-OPTIONS
-  -d, --debug                 Enable diagnostics (JSONL flight recorder)
-  --diag-file <path>          Write diagnostics to <path> (implies --debug)
-  --no-clear-diag             Keep an existing diagnostics file at startup
-  --prompt-file <path>        (task) Read the kickoff prompt from a file
-  --task-dir <dir>            (task) Machine-readable task directory contract
-  --no-sumo-tui               Bypass the retained runtime; run Pi directly
-  --dry-run                   Print the resolved launch plan and exit
-  -v, --version               Print the version
-  -h, --help                  Print this help
-
-Unknown flags forward to Pi (e.g. --offline, --model, --no-session).
-Interactive TTY launches use the SumoCode RPC host. Non-interactive Pi
-modes (--print, --mode), non-TTY stdout, and --no-sumo-tui bypass it.
-
-Documentation: https://github.com/dhruvkelawala/sumocode
-`);
+	// The help document is shared with bin/sumocode.sh (src/cli/launcher-spec.ts),
+	// so the two launchers cannot describe different CLIs.
+	process.stdout.write(renderLauncherHelp());
 }
 
 // ── subcommands ────────────────────────────────────────────────────────────
@@ -494,10 +474,10 @@ function runDoctor(parsed: ParsedLaunch): never {
 	process.stdout.write("\n");
 	if (failures === 0) {
 		process.stdout.write("Doctor passed.\n");
-		process.exit(0);
+		process.exit(LAUNCHER_EXIT_CODES.success);
 	}
 	process.stdout.write(`Doctor found ${failures} problem(s).\n`);
-	process.exit(70);
+	process.exit(LAUNCHER_EXIT_CODES.doctorFailure);
 }
 
 async function runDiag(file: string): Promise<never> {

@@ -756,20 +756,33 @@ const parseJsonLine = (line: string): Record<string, unknown> | undefined => {
 };
 
 /**
+ * Validated view of a child message frame: decode narrows role and content,
+ * while every other frame field stays unknown here and is bounded by retention
+ * before it reaches a retained Message.
+ */
+type DecodedMessage =
+	| ({ role: "user"; content: string | unknown[] } & Record<string, unknown>)
+	| ({ role: "assistant" | "toolResult"; content: unknown[] } & Record<string, unknown>);
+
+/**
  * Validate a child frame's role-specific payload before retention reads role
  * fields. Returns undefined for non-message frames; a bounded rejection reason
  * when a known role's content cannot be read. Retention accepts string or array
  * content for user messages, but only arrays for assistant and toolResult.
  * Reasons never echo producer data.
  */
-const decodeMessage = (value: unknown): { message: Message } | { rejected: string } | undefined => {
+const decodeMessage = (value: unknown): { message: DecodedMessage } | { rejected: string } | undefined => {
 	if (!isRecord(value)) return undefined;
 	const role = value.role;
 	if (role !== "assistant" && role !== "user" && role !== "toolResult") return undefined;
 	const content = value.content;
-	const readable = Array.isArray(content) || (role === "user" && typeof content === "string");
-	// Role and content shape are validated above; the record is the producer's Message frame.
-	return readable ? { message: value as unknown as Message } : { rejected: `child message rejected: malformed ${role} content` };
+	if (role === "user" && (typeof content === "string" || Array.isArray(content))) {
+		return { message: { ...value, role, content } };
+	}
+	if (role !== "user" && Array.isArray(content)) {
+		return { message: { ...value, role, content } };
+	}
+	return { rejected: `child message rejected: malformed ${role} content` };
 };
 
 const applyAssistantUsage = (result: SingleResult, message: AssistantMessage): void => {
@@ -885,7 +898,7 @@ const retainMultimodalContent = (
 	return content;
 };
 
-const handleEventMessage = (result: SingleResult, message: Message, liveOmitted = false): void => {
+const handleEventMessage = (result: SingleResult, message: DecodedMessage, liveOmitted = false): void => {
 	const budget = getRunPayloadBudget(result);
 	if (message.role === "user") {
 		const rawContent: unknown = message.content;

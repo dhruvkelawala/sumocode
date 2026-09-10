@@ -7,7 +7,8 @@
  * USE_RPC_HOST decision) and its subcommand handling — NOT from its bash
  * implementation details. Both launchers must honor: interactive TTY → RPC
  * host; `--print`/`-p`/`--mode`/non-TTY stdout/`--no-sumo-tui` → direct Pi;
- * `-h`/`-v`/`doctor`/`diag` subcommands; usage errors exit 64.
+ * `-h`/`-v`/`doctor`/`diag` subcommands; the `worktree`/`-w` command exits
+ * with the worktree module's code; usage errors exit 64.
  */
 
 export type RuntimeBranch = "rpc-host" | "direct-pi";
@@ -85,7 +86,7 @@ export const RUNTIME_SELECTION_CASES: readonly RuntimeSelectionCase[] = [
  * problems were found — both acceptable; anything else is a contract
  * failure).
  */
-export type LauncherCommandExpectation = "exit-0" | "doctor-runs" | "usage-error";
+export type LauncherCommandExpectation = "exit-0" | "doctor-runs" | "usage-error" | "worktree-host-error";
 
 export interface LauncherCommandCase {
 	readonly name: string;
@@ -93,6 +94,8 @@ export interface LauncherCommandCase {
 	readonly expect: LauncherCommandExpectation;
 	/** Substring the invocation's stdout must contain. */
 	readonly stdoutContains?: string;
+	/** Substring the invocation's stderr must contain. */
+	readonly stderrContains?: string;
 }
 
 export const LAUNCHER_COMMAND_CASES: readonly LauncherCommandCase[] = [
@@ -104,6 +107,14 @@ export const LAUNCHER_COMMAND_CASES: readonly LauncherCommandCase[] = [
 	{ name: "diag summarizes a diagnostics file", argv: ["diag", "{diagFile}"], expect: "exit-0", stdoutContains: "Event counts" },
 	{ name: "doctor rejects a path argument", argv: ["doctor", "somepath"], expect: "usage-error" },
 	{ name: "diag rejects more than one path", argv: ["diag", "a.jsonl", "b.jsonl"], expect: "usage-error" },
+	{ name: "worktree without a terminal host reports the host requirement", argv: ["worktree"], expect: "worktree-host-error", stderrContains: "requires a running herdr terminal host" },
+	{ name: "-w without a terminal host reports the host requirement", argv: ["-w"], expect: "worktree-host-error", stderrContains: "requires a running herdr terminal host" },
+	{ name: "worktree rejects more than one worktree name", argv: ["worktree", "a", "b"], expect: "usage-error" },
+	{ name: "-w rejects more than one worktree name", argv: ["-w", "a", "b"], expect: "usage-error" },
+	{ name: "worktree rejects a task-only --prompt-file", argv: ["--dry-run", "worktree", "--prompt-file", "/tmp/nope"], expect: "usage-error", stderrContains: "[sumocode] --prompt-file is only valid with the 'task' subcommand." },
+	{ name: "worktree rejects a task-only --task-dir", argv: ["--dry-run", "worktree", "--task-dir", "/tmp/nope"], expect: "usage-error", stderrContains: "[sumocode] --task-dir is only valid with the 'task' subcommand." },
+	{ name: "worktree dry run prints the resolved name", argv: ["--dry-run", "worktree", "dry-wt"], expect: "exit-0", stdoutContains: "worktree dry run" },
+	{ name: "-w dry run prints the resolved name", argv: ["--dry-run", "-w", "dry-wt"], expect: "exit-0", stdoutContains: "worktree dry run" },
 ];
 
 /** One parsed `--dry-run` output document. */

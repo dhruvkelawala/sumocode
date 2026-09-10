@@ -10,7 +10,7 @@
  *  2. The launcher contract pinned in
  *    `test/integration/launcher-runtime-contract.ts` — interactive TTY →
  *    in-process RPC host; `--print/-p/--mode`/non-TTY stdout/`--no-sumo-tui` →
- *    direct Pi; `-h/-v/doctor/diag/-d/--diag-file/--no-clear-diag/--dry-run`.
+ *    direct Pi; `-h/-v/doctor/diag/worktree/-w/-d/--diag-file/--no-clear-diag/--dry-run`.
  *  3. The RPC host itself, imported only after the child is pre-spawned (no
  *    Jiti, no bundle freshness scan — the archive is immutable).
  *
@@ -24,6 +24,7 @@ import { accessSync, appendFileSync, closeSync, constants as fsConstants, exists
 import { constants as osConstants } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { buildChildSpawnPlan } from "../sumo-tui/rpc/spawn-child.mjs";
+import { openWorktree } from "../cli/open-worktree.js";
 
 const RELOAD_EXIT_CODE = 100;
 const PRE_ADOPTION_KILL_GRACE_MS = 250;
@@ -345,6 +346,7 @@ function parseLauncherArgv(argv: readonly string[]): ParsedLaunch {
 			case "doctor":
 			case "diag":
 			case "task":
+			case "worktree":
 				if (parsed.command !== "run") usageError("Only one command may be specified.");
 				parsed.command = arg;
 				continue;
@@ -431,6 +433,7 @@ COMMANDS
   doctor          Check the native runtime, Pi child, and diagnostics path
   diag [file]     Summarize a diagnostics JSONL (default /tmp/sumocode-manual.jsonl)
   task <prompt>   Launch a one-shot task pane kickoff
+  worktree [name] Create and open a sumo/<name> worktree in the current terminal host
 
 OPTIONS
   -d, --debug                 Enable diagnostics (JSONL flight recorder)
@@ -794,6 +797,14 @@ function validateCommandArgs(parsed: ParsedLaunch): void {
 	if (parsed.command === "diag" && parsed.forwardedArgs.length > 1) {
 		usageError("diag accepts at most one diagnostics file path.");
 	}
+	if (parsed.command === "worktree") {
+		if (parsed.forwardedArgs.length > 1) {
+			usageError("-w accepts at most one optional worktree name.");
+		}
+		if (parsed.forwardedArgs.length === 1 && parsed.forwardedArgs[0]!.startsWith("-")) {
+			usageError(`Unknown worktree option: ${parsed.forwardedArgs[0]}`);
+		}
+	}
 }
 
 function writeDryRun(parsed: ParsedLaunch, useRpcHost: boolean): never {
@@ -875,15 +886,22 @@ function enterProjectDirectory(args: string[]): void {
 async function launcherFlow(): Promise<void> {
 	const parsed = parseLauncherArgv(process.argv.slice(2));
 
-	// The native archive has no repo checkout to open a worktree from.
-	if (parsed.command === "worktree") {
-		process.stderr.write("[sumocode] the worktree command requires a source checkout (bin/sumocode.sh).\n");
-		process.exit(64);
-	}
-
 	validateCommandArgs(parsed);
+	// Mirror bin/sumocode.sh's order: task-only option rejection and debug mode
+	// run before the worktree branch, so `worktree --prompt-file`/`--task-dir`
+	// exit 64 in both launchers and `-d -w` records diagnostics.
 	resolveTaskLaunch(parsed);
 	applyDebugMode(parsed);
+	if (parsed.command === "worktree") {
+		if (parsed.dryRun) {
+			process.stdout.write(`sumocode worktree dry run\nROOT_DIR=${NATIVE_DIR}\nNAME=${parsed.forwardedArgs[0] ?? ""}\n`);
+			process.exit(0);
+		}
+		// openWorktree operates on process.cwd() and the terminal host env, so
+		// the native archive can open a worktree in any git repository.
+		process.exitCode = await openWorktree(parsed.forwardedArgs[0]);
+		return;
+	}
 
 	if (parsed.command === "doctor") runDoctor(parsed);
 	if (parsed.command === "diag") await runDiag(parsed.forwardedArgs[0] ?? "/tmp/sumocode-manual.jsonl");

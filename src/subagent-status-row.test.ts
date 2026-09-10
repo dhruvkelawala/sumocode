@@ -176,3 +176,31 @@ describe("renderSubagentStatusRow", () => {
 		}
 	});
 });
+
+	it("strips control characters from titles", () => {
+		const [row] = renderSubagentStatusRow({
+			width: 80,
+			running: [{ id: "sa-1", title: "worker\x1b[31mred\x07bell", ageMs: 1000 }],
+			queuedCount: 0,
+		});
+		const text = plain(row);
+		// oxlint-disable-next-line no-control-regex -- asserting no ESC/control bytes survive in rendered output
+		expect(text).not.toMatch(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/);
+		expect(text).toContain("worker[31mredbell sa-1");
+	});
+
+	it("caps wide titles by terminal cells, not code units", () => {
+		const [row] = renderSubagentStatusRow({
+			width: 200,
+			running: [{
+				id: "sa-7e8fc89b-3545-43af-bf97-d603cdefdea2-2",
+				roleId: "implement-cheap",
+				title: "漢".repeat(60),
+				ageMs: 13 * 60_000,
+			}],
+			queuedCount: 0,
+		});
+		const text = plain(row);
+		expect(text).toContain("…");
+		expect(text).toContain("sa-2 implement-cheap 13m");
+	});

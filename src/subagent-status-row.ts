@@ -1,3 +1,4 @@
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { getActiveTheme } from "./themes/index.js";
 import { lineToAnsi, span, textLine, truncateLine } from "./sumo-tui/render/primitives.js";
 
@@ -32,10 +33,12 @@ function namespacedShortId(id: string): string {
 	return match === null ? id : `sa-${match[1]}-${match[2]}`;
 }
 
-/** Whitespace-normalized, bounded title, or the generic fallback when empty. */
+/** Whitespace-normalized, control-char-free, cell-width-bounded title, or the generic fallback when empty. */
 function titleLabel(title: string): string {
-	const normalized = title.replace(/\s+/g, " ").trim() || "subagent";
-	return normalized.length <= TITLE_MAX ? normalized : `${normalized.slice(0, TITLE_MAX - 1)}…`;
+	// oxlint-disable-next-line no-control-regex -- intentional strip of C0 controls/DEL so titles can never emit terminal bytes
+	const clean = title.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+	const normalized = clean.replace(/\s+/g, " ").trim() || "subagent";
+	return truncateToWidth(normalized, TITLE_MAX, "…");
 }
 
 /** One running subagent summarized in the footer status row. */

@@ -281,6 +281,21 @@ export const LAUNCHER_PARITY_CASES: readonly LauncherParityCase[] = [
 	// path/prompt positional, not a command switch, so `run doctor` dispatches
 	// `run` in both launchers. Positional bytes are redacted in dry-run output.
 	...LAUNCHER_COMMANDS.filter((spec) => spec.command !== "run").map(explicitRunPositionalCase),
+	// Repeating the same command through its spellings is idempotent in both
+	// launchers (issue 484): canonical+alias and alias+alias must launch the
+	// worktree command instead of exiting 64.
+	{
+		name: "repeats the worktree command with its alias",
+		argv: ["worktree", "-w"],
+		expect: "exit-0",
+		stdoutContains: "worktree dry run",
+	},
+	{
+		name: "repeats the worktree alias with another alias",
+		argv: ["-w", "--worktree"],
+		expect: "exit-0",
+		stdoutContains: "worktree dry run",
+	},
 	// Rejection rows (issue 484): when a launcher-owned check rejects a token it
 	// must name the offending token on stderr, exit 64, and never reach Pi.
 	// Unknown options in Pi-forwarding contexts (run/task) deliberately stay
@@ -312,6 +327,12 @@ export const LAUNCHER_PARITY_CASES: readonly LauncherParityCase[] = [
 		argv: ["-w", "a", "b"],
 		expect: "usage-error",
 		stderrContains: "b",
+	},
+	{
+		name: "rejects a worktree alias after another command with the offending token",
+		argv: ["doctor", "-w"],
+		expect: "usage-error",
+		stderrContains: "Only one command may be specified: -w",
 	},
 	{
 		name: "usage errors point at --help",

@@ -97,12 +97,18 @@ while [[ $# -gt 0 ]]; do
 			shift
 			;;
 		-w|--worktree)
-			if [[ "${COMMAND_EXPLICIT}" -eq 1 && "${COMMAND}" == "run" ]]; then
-				SUMOCODE_ARGS+=("$1")
-				shift
-				continue
+			# Same explicit-command rule as the canonical branch above: `run` keeps
+			# later spellings positional, repeating the worktree command through either
+			# alias is idempotent, and any other canonical command errors naming the
+			# offending token (issue 484). Compare the canonical command, not `$1`.
+			if [[ "${COMMAND_EXPLICIT}" -eq 1 ]]; then
+				if [[ "${COMMAND}" == "run" ]]; then
+					SUMOCODE_ARGS+=("$1")
+					shift
+					continue
+				fi
+				if [[ "${COMMAND}" != "worktree" ]]; then usage_error "Only one command may be specified: $1"; fi
 			fi
-			if [[ "${COMMAND}" != "run" ]]; then usage_error "Only one command may be specified."; fi
 			COMMAND="worktree"
 			COMMAND_EXPLICIT=1
 			shift

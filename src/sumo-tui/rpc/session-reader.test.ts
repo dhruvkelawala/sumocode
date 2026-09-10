@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -309,6 +309,60 @@ describe("session-reader", () => {
 
 			expect(read).toHaveLength(5);
 			expect(sessions.map((session) => session.id)).toEqual(["p5-9", "p5-8", "p5-7", "p5-6", "p5-5"]);
+		});
+
+		it("surfaces a recently-active project directory ahead of newer file names in stale ones", async () => {
+			const sessionsRoot = join(dir, "sessions");
+			const staleDir = join(sessionsRoot, "--stale--");
+			const activeDir = join(sessionsRoot, "--active--");
+			mkdirSync(staleDir, { recursive: true });
+			mkdirSync(activeDir, { recursive: true });
+			// Stale project: files with the newest creation names.
+			for (let index = 0; index < 3; index += 1) {
+				writeSession(join(staleDir, fileNameFor(50 + index, `stale-${index}`)), `stale-${index}`, isoAt(50 + index), "/stale");
+			}
+			// Active project: older creation names, but the directory was last written most recently.
+			for (let index = 0; index < 3; index += 1) {
+				writeSession(join(activeDir, fileNameFor(index, `active-${index}`)), `active-${index}`, isoAt(index), "/active");
+			}
+			utimesSync(staleDir, new Date(Date.UTC(2026, 6, 2, 21)), new Date(Date.UTC(2026, 6, 2, 21)));
+			utimesSync(activeDir, new Date(Date.UTC(2026, 6, 3)), new Date(Date.UTC(2026, 6, 3)));
+
+			const sessions = await listAllSessions(sessionsRoot, { maxSessions: 2 });
+
+			expect(sessions.map((session) => session.id)).toEqual(["active-2", "active-1"]);
+		});
+
+		it("reads only the window plus the pinned current session on a large synthetic store", async () => {
+			const sessionsRoot = join(dir, "sessions");
+			for (let project = 0; project < 12; project += 1) {
+				const projectDir = join(sessionsRoot, `--repo-${String(project).padStart(2, "0")}--`);
+				mkdirSync(projectDir, { recursive: true });
+				for (let index = 0; index < 10; index += 1) {
+					const offset = project * 10 + index;
+					const id = `p${project}-${index}`;
+					writeSession(join(projectDir, fileNameFor(offset, id)), id, isoAt(offset), `/repo-${project}`);
+				}
+			}
+			// The current session is the oldest-named file in the oldest project.
+			const currentFile = join(sessionsRoot, "--repo-00--", fileNameFor(0, "p0-0"));
+			const read: string[] = [];
+
+			const sessions = await listAllSessions(sessionsRoot, {
+				maxSessions: 5,
+				currentSessionFile: currentFile,
+				reader: async (filePath) => {
+					read.push(filePath);
+					return readSessionInfo(filePath);
+				},
+			});
+
+			// Five window reads, then one bounded read to pin the current session.
+			expect(read).toHaveLength(6);
+			expect(new Set(read).size).toBe(6);
+			expect(read).toContain(currentFile);
+			expect(sessions).toHaveLength(5);
+			expect(sessions.map((session) => session.id)).toContain("p0-0");
 		});
 
 		it("bounds a default all-sessions scan by DEFAULT_MAX_ALL_SESSIONS", async () => {

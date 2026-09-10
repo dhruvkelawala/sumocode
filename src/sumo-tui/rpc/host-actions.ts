@@ -1089,8 +1089,9 @@ export class RpcHostActions {
 	 * Both scopes are read before the selector opens so each tab is a plain
 	 * `selectTabs` option list (the model chooser's shape). The all-sessions
 	 * read is bounded (`DEFAULT_MAX_ALL_SESSIONS`, ~110ms measured on a
-	 * 676-session store); Pi loads its all-scope lazily on Tab, which would need
-	 * a lazy-tab capability this selector does not have.
+	 * 676-session store) and pins the current session, so an old-named current
+	 * file cannot fall outside the window. Pi loads its all-scope lazily on
+	 * Tab, which would need a lazy-tab capability this selector does not have.
 	 * ponytail: eager bounded scan, upgrade to a lazy tab if open latency grows.
 	 */
 	public async openResumeSelector(): Promise<void> {
@@ -1102,7 +1103,7 @@ export class RpcHostActions {
 		const projectDir = dirname(sessionFile);
 		const [projectSessions, allSessions] = await Promise.all([
 			listSessions(projectDir),
-			listAllSessions(dirname(projectDir)),
+			listAllSessions(dirname(projectDir), { currentSessionFile: sessionFile }),
 		]);
 		if (projectSessions.length === 0 && allSessions.length === 0) {
 			notify(this.notifications, "no sessions found", "warning");

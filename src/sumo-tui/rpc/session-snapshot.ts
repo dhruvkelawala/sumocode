@@ -103,9 +103,9 @@ export async function readAuthoritativeSessionSnapshot(
 export async function readPersistedSessionMessages(
 	controls: SessionSnapshotControls | Pick<RpcHostControls, "getEntries">,
 	options: SessionSnapshotOptions,
-): Promise<ReturnType<typeof buildSessionContext>["messages"] | undefined> {
+): Promise<ReturnType<typeof buildSessionContext>["messages"]> {
 	const snapshot = await persistedSnapshot(controls, options);
-	if (!snapshot) return undefined;
+	if (!snapshot) throw new Error("Persisted session snapshot is unavailable");
 	// SAFETY: persisted entries come from Pi's own session writer; RPC delta entries
 	// are validated for the id/type contract before they reach this conversion.
 	return buildSessionContext([...snapshot.entries] as SessionEntry[], snapshot.leafId).messages;

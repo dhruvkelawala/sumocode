@@ -133,17 +133,16 @@ describe("authoritative flat session snapshots", () => {
 		}
 	});
 
-	it("does not request all entries when the disk cursor is stale", async () => {
+	it("rejects a stale disk cursor without requesting all entries", async () => {
 		const { dir, file } = diskFile([entry("one")]);
 		try {
 			const calls: (string | undefined)[] = [];
-			const messages = await readPersistedSessionMessages({
+			await expect(readPersistedSessionMessages({
 				getEntries: async (since) => {
 					calls.push(since);
 					throw new Error("get_entries failed: Entry not found: one");
 				},
-			}, { sessionFile: file, sessionId: "session-1" });
-			expect(messages).toBeUndefined();
+			}, { sessionFile: file, sessionId: "session-1" })).rejects.toThrow("Persisted session snapshot is unavailable");
 			expect(calls).toEqual(["one"]);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });

@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { defaultActivityStateRoot } from "../../activity/persistence.js";
+import { CHILD_JSON_FRAME_MAX_BYTES } from "../../child-protocol.js";
 import { FileActivityStore, type ActivityStoreSnapshot } from "../../activity/store.js";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { SettingsManager, type AgentSessionEvent } from "@earendil-works/pi-coding-agent";
@@ -55,6 +56,7 @@ const DEFERRED_SELECTOR_ACTION_KEY = "selector-open";
 const DEFERRED_MODEL_CYCLE_ACTION_KEY = "model-cycle";
 const DEFERRED_MESSAGE_QUEUE_ACTION_KEY = "message-queue";
 const DEFERRED_MESSAGE_FORCE_SEND_ACTION_KEY = "message-force-send";
+const RPC_MESSAGE_FALLBACK_MAX_SESSION_BYTES = CHILD_JSON_FRAME_MAX_BYTES / 2;
 
 export interface RpcHostMainOptions {
 	readonly argv?: readonly string[];
@@ -235,6 +237,16 @@ export function createRpcTreeNavigationRetryScheduler(delayMs = 100): RpcTreeNav
 function treeSummaryMode(request: { readonly summarize: boolean; readonly customInstructions?: string }): "none" | "default" | "custom" {
 	if (!request.summarize) return "none";
 	return request.customInstructions === undefined ? "default" : "custom";
+}
+
+function canFallbackToRpcMessages(sessionFile: string): boolean {
+	try {
+		const stats = statSync(sessionFile, { throwIfNoEntry: false });
+		// A missing file has no persisted history; leave headroom for unflushed messages.
+		return stats === undefined || stats.size <= RPC_MESSAGE_FALLBACK_MAX_SESSION_BYTES;
+	} catch {
+		return false;
+	}
 }
 
 function hostRoot(env: NodeJS.ProcessEnv): string {
@@ -1175,14 +1187,15 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 	client.setUiRequestHandler((request) => uiResponder.handle(request));
 	// After new/switch/clone/fork, rebuild persisted history from disk plus a
 	// bounded RPC delta. Non-persisted sessions still use get_messages.
+	const readRpcMessages = async () => responseData(await client.send({ type: "get_messages" }), "get_messages").messages;
 	const readTranscriptMessages = async (state = stateStore.getSnapshot()) => {
-		if (state.sessionFile) {
-			try {
-				const messages = await readPersistedSessionMessages(controls, { sessionFile: state.sessionFile, sessionId: state.sessionId });
-				if (messages) return messages;
-			} catch {}
+		if (!state.sessionFile) return readRpcMessages();
+		try {
+			return await readPersistedSessionMessages(controls, { sessionFile: state.sessionFile, sessionId: state.sessionId });
+		} catch (error) {
+			if (!canFallbackToRpcMessages(state.sessionFile)) throw error;
+			return readRpcMessages();
 		}
-		return responseData(await client.send({ type: "get_messages" }), "get_messages").messages;
 	};
 	const readTranscript = async () => transcriptPump.replaceFromMessages(await readTranscriptMessages());
 	const rehydrateTranscript = async (): Promise<void> => {

@@ -1,6 +1,6 @@
 import { createReadStream, statSync, type Dirent } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 
 /**
@@ -409,6 +409,45 @@ async function collectRankedProjectDirs(sessionsRoot: string): Promise<string[][
  */
 export async function listAllSessions(sessionsRoot: string, options: ListAllSessionsOptions = {}): Promise<SessionListInfo[]> {
 	return listSessionsFromRankedFiles(await collectRankedProjectDirs(sessionsRoot), options);
+}
+
+/** Pi's `getDefaultSessionDirPath` encoding of a cwd into a project directory name. */
+function encodeSessionDirName(cwd: string): string {
+	return `--${resolve(cwd).replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+}
+
+/** Default-layout project directories always look like `--<encoded-cwd>--`. */
+function isEncodedProjectDirName(name: string): boolean {
+	return /^--.*--$/.test(name);
+}
+
+/**
+ * `/resume`'s all-sessions read for the current session file, covering both
+ * layouts Pi supports:
+ *  - nested (default): `<sessions>/<encoded-cwd>/<file>.jsonl`, so the scope
+ *    spans `dirname(sessionDir)`;
+ *  - flat (custom `--session-dir`): session files sit directly in the
+ *    configured directory (Pi's `SessionManager.listAll(customDir)`), so that
+ *    directory is scanned itself and its parent -- an arbitrary directory --
+ *    never is.
+ * The current file's own directory is a project directory exactly when its
+ * name is the encoding of the session's own `cwd` (read from its header), so
+ * the layout is resolved before anything above the session's directory is
+ * touched; an unreadable/not-yet-written current file falls back to the
+ * directory-name shape (`--<cwd>--` means nested). The current session is
+ * pinned in both layouts.
+ */
+export async function listAllSessionsForSession(sessionFile: string, options: ListAllSessionsOptions = {}): Promise<SessionListInfo[]> {
+	const reader = options.reader ?? readSessionInfo;
+	const sessionDir = dirname(sessionFile);
+	const currentSessionInfo = await reader(sessionFile);
+	const resolvedOptions: ListAllSessionsOptions = { ...options, reader, currentSessionFile: sessionFile, currentSessionInfo };
+	const nested = currentSessionInfo !== undefined
+		? basename(sessionDir) === encodeSessionDirName(currentSessionInfo.cwd)
+		: isEncodedProjectDirName(basename(sessionDir));
+	if (nested) return listAllSessions(dirname(sessionDir), resolvedOptions);
+	const files = await collectSessionFiles(sessionDir);
+	return listSessionsFromRankedFiles(files && files.length > 0 ? [rankSessionFiles(files)] : [], resolvedOptions);
 }
 
 /**

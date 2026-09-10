@@ -52,7 +52,7 @@ import type { InlineSelectorHost, InlineSelectorItem, InlineSelectorTab } from "
 import { notifyOnError } from "./safe-send.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import type { MermaidRenderingMode } from "../transcript/mermaid.js";
-import { listAllSessions, listSessions, type SessionListInfo } from "./session-reader.js";
+import { listAllSessionsForSession, listSessions, type SessionListInfo } from "./session-reader.js";
 import { buildSessionTreeFromEntries, currentTreeSelection, entryTimestampsFromEntries, flattenSessionTree, formatRelativeTime, sessionExcerpt, treeNodeSummary, treeRowTimestamp } from "./session-tree.js";
 import { readAuthoritativeSessionSnapshot } from "./session-snapshot.js";
 import type { RpcHostChromeState, RpcHostStateStore } from "./state.js";
@@ -1089,9 +1089,11 @@ export class RpcHostActions {
 	 * Both scopes are read before the selector opens so each tab is a plain
 	 * `selectTabs` option list (the model chooser's shape). The all-sessions
 	 * read is bounded (`DEFAULT_MAX_ALL_SESSIONS`, ~110ms measured on a
-	 * 676-session store) and pins the current session, so an old-named current
-	 * file cannot fall outside the window. Pi loads its all-scope lazily on
-	 * Tab, which would need a lazy-tab capability this selector does not have.
+	 * 676-session store) and layout-aware: Pi's nested default layout scans the
+	 * sessions root, a flat custom `--session-dir` scans that directory itself
+	 * (never its parent), and the current session is pinned into the window
+	 * either way. Pi loads its all-scope lazily on Tab, which would need a lazy
+	 * tab capability this selector does not have.
 	 * ponytail: eager bounded scan, upgrade to a lazy tab if open latency grows.
 	 */
 	public async openResumeSelector(): Promise<void> {
@@ -1100,10 +1102,9 @@ export class RpcHostActions {
 			notify(this.notifications, "no session file available to resume from", "warning");
 			return;
 		}
-		const projectDir = dirname(sessionFile);
 		const [projectSessions, allSessions] = await Promise.all([
-			listSessions(projectDir),
-			listAllSessions(dirname(projectDir), { currentSessionFile: sessionFile }),
+			listSessions(dirname(sessionFile)),
+			listAllSessionsForSession(sessionFile),
 		]);
 		if (projectSessions.length === 0 && allSessions.length === 0) {
 			notify(this.notifications, "no sessions found", "warning");

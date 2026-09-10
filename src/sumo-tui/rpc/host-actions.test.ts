@@ -1106,6 +1106,36 @@ describe("RpcHostActions", () => {
 			}
 		});
 
+		it("scopes a flat --session-dir all-sessions tab to that directory, not its parent", async () => {
+			const root = mkdtempSync(join(tmpdir(), "sumocode-resume-flat-scope-test-"));
+			try {
+				const customDir = join(root, "custom-sessions");
+				const currentFile = writeFixtureSession(customDir, "2026-07-02T20-00-00-000Z_current.jsonl", "current", "2026-07-02T20:00:00.000Z", "flat current first message", { projectDir: "." });
+				const siblingFile = writeFixtureSession(customDir, "2026-07-02T21-00-00-000Z_sibling.jsonl", "sibling", "2026-07-02T21:00:00.000Z", "flat sibling first message", { projectDir: "." });
+				// A sibling of the custom dir: the old `dirname(sessionDir)` scan
+				// would have walked it as if it were a project directory.
+				writeFixtureSession(root, "2026-07-02T22-00-00-000Z_bait.jsonl", "bait", "2026-07-02T22:00:00.000Z", "parent bait first message", { projectDir: "--bait--" });
+
+				const { actions, controls, inlineSelectors } = setup({ sessionFile: currentFile });
+
+				const resumePromise = actions.handleSubmittedText("/resume");
+				await waitForInlineSelector(inlineSelectors, "Resume session");
+				expect(inlineSelectorText(inlineSelectors)).toContain("◆ CURRENT PROJECT 2");
+
+				inlineSelectors.handleInput(SELECTOR_TAB);
+				const allScope = inlineSelectorText(inlineSelectors);
+				expect(allScope).toContain("◆ ALL SESSIONS 2");
+				expect(allScope).toContain("flat sibling first message");
+				expect(allScope).not.toContain("parent bait first message");
+
+				inlineSelectors.handleInput(SELECTOR_ENTER); // row 0 is the newest: the sibling
+				await resumePromise;
+				expect(controls.calls).toContain(`switchSession:${siblingFile}`);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+
 		it("cancels with Esc from either scope, without switching sessions", async () => {
 			const root = mkdtempSync(join(tmpdir(), "sumocode-resume-scope-cancel-test-"));
 			try {

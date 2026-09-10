@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DEFAULT_MAX_ALL_SESSIONS, buildSessionTree, listAllSessions, listSessions, readSessionInfo } from "./session-reader.js";
+import { DEFAULT_MAX_ALL_SESSIONS, buildSessionTree, listAllSessions, listAllSessionsForSession, listSessions, readSessionInfo } from "./session-reader.js";
 
 type PromiseConstructorWithResolvers = PromiseConstructor & {
 	withResolvers<T>(): {
@@ -387,6 +387,61 @@ describe("session-reader", () => {
 
 		it("returns an empty list for a missing sessions root", async () => {
 			expect(await listAllSessions(join(dir, "does-not-exist"))).toEqual([]);
+		});
+
+		describe("listAllSessionsForSession", () => {
+			it("scans a flat custom session directory directly, never its parent", async () => {
+				const customDir = join(dir, "custom-sessions");
+				mkdirSync(customDir, { recursive: true });
+				const currentFile = writeSession(join(customDir, fileNameFor(0, "current")), "current", isoAt(0), "/repo");
+				writeSession(join(customDir, fileNameFor(1, "sibling")), "sibling", isoAt(1), "/other-repo");
+				// Contamination bait: a sibling of the custom dir, which the old
+				// `dirname(sessionDir)` scan would have walked as a project directory.
+				const baitDir = join(dir, "--bait--");
+				mkdirSync(baitDir, { recursive: true });
+				writeSession(join(baitDir, fileNameFor(2, "bait")), "bait", isoAt(2), "/bait");
+
+				const sessions = await listAllSessionsForSession(currentFile);
+
+				expect(sessions.map((session) => session.id)).toEqual(["sibling", "current"]);
+			});
+
+			it("keeps the nested layout scanning the project root", async () => {
+				const sessionsRoot = join(dir, "sessions");
+				const currentDir = join(sessionsRoot, "--repo--");
+				const otherDir = join(sessionsRoot, "--other--");
+				mkdirSync(currentDir, { recursive: true });
+				mkdirSync(otherDir, { recursive: true });
+				const currentFile = writeSession(join(currentDir, fileNameFor(0, "current")), "current", isoAt(0), "/repo");
+				writeSession(join(otherDir, fileNameFor(1, "other")), "other", isoAt(1), "/repo-other");
+
+				const sessions = await listAllSessionsForSession(currentFile);
+
+				expect(sessions.map((session) => session.id)).toEqual(["other", "current"]);
+			});
+
+			it("bounds a flat custom session directory scan", async () => {
+				const customDir = join(dir, "custom-sessions");
+				mkdirSync(customDir, { recursive: true });
+				const currentFile = writeSession(join(customDir, fileNameFor(0, "current")), "current", isoAt(0), "/repo");
+				for (let index = 1; index <= DEFAULT_MAX_ALL_SESSIONS + 3; index += 1) {
+					writeSession(join(customDir, fileNameFor(index, `bulk-${index}`)), `bulk-${index}`, isoAt(index), "/repo");
+				}
+				let reads = 0;
+
+				const sessions = await listAllSessionsForSession(currentFile, {
+					reader: async (filePath) => {
+						reads += 1;
+						return readSessionInfo(filePath);
+					},
+				});
+
+				// One layout-detection read plus the capped window (the current
+				// session is outside it but pinned from the detected info).
+				expect(reads).toBe(DEFAULT_MAX_ALL_SESSIONS + 1);
+				expect(sessions).toHaveLength(DEFAULT_MAX_ALL_SESSIONS);
+				expect(sessions.map((session) => session.id)).toContain("current");
+			});
 		});
 	});
 

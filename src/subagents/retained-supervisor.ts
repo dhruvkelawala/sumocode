@@ -6,7 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import { systemProcessTree, terminateProcessTree, type ProcessTreeOperations } from "../background-tasks/process-tree.js";
 import { spawnPaneChild, type PaneChildOptions, type VisibleLaunchEvidence, type VisibleLaunchGate } from "./backend-pane.js";
 import { retainedProcessTree, spawnPiChild, type HeadlessLaunchGate, type SpawnedChild } from "./backend-pi.js";
-import type { RunOutcome, SubagentEvent, SubagentPaneRef } from "./domain.js";
+import type { RunOutcome, SubagentEvent, SubagentLaunchFailure, SubagentPaneRef } from "./domain.js";
 import { buildCompletionManifest, type CompletionManifestEvidence } from "./manifest.js";
 import { RetainedResults } from "./retained-results.js";
 import { serveRetainedControl } from "./retained-control.js";
@@ -241,7 +241,7 @@ class RetainedSupervisor {
 	public readonly ready = new Promise<void>((resolve, reject) => { this.acceptReady = resolve; this.refuseReady = reject; });
 
 	public constructor(options: Omit<RetainedHeadlessOptions, "launch"> & { readonly cwd: string },
-		start: (authority: ReturnType<typeof prepareLaunch>, refuse: () => void, checkActive: () => void, beginVisibleCleanup: () => void) => SpawnedChild,
+		start: (authority: ReturnType<typeof prepareLaunch>, refuse: (failure?: SubagentLaunchFailure) => void, checkActive: () => void, beginVisibleCleanup: () => void) => SpawnedChild,
 		private readonly dependencies: Omit<RetainedHeadlessDependencies, "spawn"> = {}) {
 		if (options.attach && (options.attach.cwd !== options.cwd
 			|| realpathSync(options.attach.cwd) !== options.attach.cwd || !statSync(options.attach.cwd).isDirectory()
@@ -254,7 +254,7 @@ class RetainedSupervisor {
 		this.baseRef = options.baseRef;
 		this.authority = prepareLaunch(options.registry, options.initial, options.supervisor, dependencies.operations ?? systemProcessTree, options.attach !== undefined, options.controller);
 		this.artifacts = new RetainedResults(options.initial.taskDir);
-		this.child = start(this.authority, () => { this.authority.gate.onRefused(); this.fail("ambiguous", "backend-refused"); }, () => {
+		this.child = start(this.authority, (failure?: SubagentLaunchFailure) => { this.authority.gate.onRefused(); this.fail("ambiguous", "backend-refused", failure); }, () => {
 			if (this.stopped) throw new Error("retained owner stopped before effect");
 		}, () => {
 			if (this.stopped) throw new Error("retained owner stopped before cleanup");
@@ -442,10 +442,12 @@ class RetainedSupervisor {
 		} catch { this.fail("ambiguous", "settle"); }
 	}
 
-	private markUncertain(status: "lost" | "ambiguous"): void {
+	private markUncertain(status: "lost" | "ambiguous", failure?: SubagentLaunchFailure): void {
 		try {
 			this.authority.fence();
-			this.authority.transition((record) => ({ ...record, status }));
+			// A structured launch refusal is durable evidence: the parent reads it
+			// after this process exits to surface the host taxonomy it observed.
+			this.authority.transition((record) => failure ? { ...record, status, failure } : { ...record, status });
 			this.notify();
 		} catch {
 			// Lost lease/corrupt disk cannot be repaired by this writer. Preserve the
@@ -453,13 +455,13 @@ class RetainedSupervisor {
 		}
 	}
 
-	private fail(status: "lost" | "ambiguous", phase: RetainedFailurePhase): void {
+	private fail(status: "lost" | "ambiguous", phase: RetainedFailurePhase, failure?: SubagentLaunchFailure): void {
 		if (this.stopped) return;
 		this.stopped = true;
 		this.authority.gate.onRefused();
 		clearInterval(this.heartbeat);
 		this.stopControl?.();
-		this.markUncertain(status);
+		this.markUncertain(status, failure);
 		this.finish(status);
 		this.listeners.clear();
 		reportFailure(this.dependencies.onFailure, phase);

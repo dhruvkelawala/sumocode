@@ -28,6 +28,23 @@ export type RunOutcome =
 	| { kind: "failed"; errorText: string; partialText?: string; errorCode?: string; errorReason?: string; paneStillOpen?: boolean; paneTabGone?: boolean; orphanPane?: SubagentPaneRef }
 	| { kind: "interrupted"; partialText?: string };
 
+/**
+ * Structured launch refusal evidence. A failed visible launch collapses to a
+ * text error unless the owner persists the host's taxonomy, so the durable
+ * retained failure record carries the same fields the disposable RunOutcome
+ * maps: `paneStillOpen` states whether an orphaned pane/tab still occupies a
+ * layout slot (`orphanPane` holds its reference), and `paneTabGone` is the
+ * host's definitive "target tab has no live pane" signal.
+ */
+export interface SubagentLaunchFailure {
+	readonly errorText?: string;
+	readonly errorCode?: string;
+	readonly errorReason?: string;
+	readonly paneStillOpen?: boolean;
+	readonly paneTabGone?: boolean;
+	readonly orphanPane?: SubagentPaneRef;
+}
+
 export interface TranscriptItem {
 	readonly role: "user" | "assistant" | "toolResult";
 	readonly text: string;

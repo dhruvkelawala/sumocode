@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { systemProcessTree, type ProcessTreeOperations } from "../background-tasks/process-tree.js";
+import { captureProcessBirthTime, systemProcessTree, type ProcessTreeOperations } from "../background-tasks/process-tree.js";
 import type { AgentPanePlacement, TerminalHost } from "../terminal-host/types.js";
 import { installSubagents } from "./index.js";
 import { readRetainedBootstrap } from "./retained-bootstrap.js";
@@ -12,6 +12,7 @@ import { controlAuthority, serveRetainedControl } from "./retained-control.js";
 import { observeRemoteRetained } from "./retained-adoption.js";
 import { RetainedResults } from "./retained-results.js";
 import { RetainedRuntime } from "./retained-runtime.js";
+import { runRetainedSupervisorEntry } from "./retained-supervisor-entry.js";
 import type { RegistryWriter } from "./registry.js";
 
 afterEach(() => { vi.unstubAllEnvs(); });
@@ -141,6 +142,45 @@ it("counts a retained-visible pane persisted by the owner in placement and recla
 	} finally {
 		runtime.manager.detachForReplacement();
 	}
+});
+
+it("surfaces a retained-visible pane_unavailable reason and orphan slot through spawn", async () => {
+	const f = fixture();
+	const host: TerminalHost = {
+		kind: "herdr",
+		startAgentPane: vi.fn(async () => ({
+			ok: false as const, code: "pane_unavailable",
+			error: "herdr tab create failed", reason: "herdr tab create failed; cleanup: close refused",
+			orphanPaneId: "w1:p9", orphanTabId: "w1:t9",
+		})),
+		openCommandInSplit: vi.fn(), closePane: vi.fn(), notify: vi.fn(),
+	};
+	// The mock replaces only the detached-process boundary; the real owner entry
+	// runs in-process, so the refusal travels host -> backend -> supervisor ->
+	// registry -> parent -> manager exactly as production does. An in-process
+	// owner is not a group leader, so verification is stubbed the way a detached
+	// production owner would provide it.
+	const operations: ProcessTreeOperations = { ...f.operations,
+		captureTreeVerification: () => ({ members: [{ pid: process.pid, processStartTime: captureProcessBirthTime(process.pid)! }] }) };
+	f.spawnOwner.mockImplementation((_command, args) => {
+		void runRetainedSupervisorEntry(args.slice(1), { host, executor: { exec: vi.fn() }, operations }).catch(() => undefined);
+		return Object.assign(new EventEmitter(), { pid: f.writer.pid, unref: vi.fn() });
+	});
+	const runtime = f.install({ token: "parent", pid: process.pid, processStartTime: captureProcessBirthTime(process.pid)! }, "session", host);
+	try {
+		await runtime.fire("session_start");
+		const result = await runtime.manager.spawn({ ...f.task, visible: true });
+		expect(result).toMatchObject({
+			status: "error",
+			errorCode: "pane_unavailable",
+			errorReason: "herdr tab create failed; cleanup: close refused",
+			errorText: expect.stringContaining("herdr tab create failed"),
+			paneStillOpen: true,
+			pane: { agentName: "worker", paneId: "w1:p9", tabId: "w1:t9", workspaceId: "w1" },
+		});
+		// A refused admitted launch never falls back to the disposable backend.
+		expect(f.disposable).not.toHaveBeenCalled();
+	} finally { runtime.manager.detachForReplacement(); }
 });
 
 it("bounds the owner-bootstrap wait by the caller's remaining provisioning budget", async () => {

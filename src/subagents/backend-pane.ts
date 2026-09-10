@@ -36,7 +36,7 @@ import {
 	PRIVATE_FILE_MODE,
 } from "../private-artifact.js";
 import type { SpawnedChild } from "./backend-pi.js";
-import type { SubagentEvent } from "./domain.js";
+import type { SubagentEvent, SubagentLaunchFailure } from "./domain.js";
 
 const RESPONSE_POLL_INTERVAL_MS = 750;
 const SEND_ACK_POLL_MS = 250;
@@ -78,7 +78,7 @@ export interface VisibleLaunchGate {
 	/** Recheck persistence-owner authority at each effect/ack boundary, not user authorization. */
 	beforeEffect(): void;
 	/** Record lost/ambiguous ownership without claiming child death or retrying. */
-	onRefused(): void;
+	onRefused(failure?: SubagentLaunchFailure): void;
 	/** Retained owner owns verified cancellation; pane IDs never authorize a signal. */
 	interrupt(): void;
 }
@@ -689,7 +689,31 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 					} : undefined,
 				});
 				if (!result.ok) {
-					if (gate) { assertAuthority(); blockLaunch(new Error(result.error)); return; }
+					if (gate) {
+						assertAuthority();
+						// Mirror the disposable branch below: the owner must persist the same
+						// host taxonomy and orphan occupancy, or the retained failure record
+						// only carries an unstructured text error.
+						const orphanTabId = result.orphanTabId ?? (options.placement.kind === "tab" ? options.placement.tabId : undefined);
+						const paneStillOpen = result.orphanPaneId !== undefined || result.orphanTabId !== undefined;
+						type MutableFailure = { -readonly [K in keyof SubagentLaunchFailure]: SubagentLaunchFailure[K] };
+						const failure: MutableFailure = {
+							errorText: result.error,
+							errorCode: result.code,
+							errorReason: result.reason,
+							paneTabGone: result.tabGone,
+							paneStillOpen,
+						};
+						if (paneStillOpen) failure.orphanPane = {
+							agentName: options.name,
+							paneId: result.orphanPaneId,
+							tabId: orphanTabId,
+							workspaceId: orphanTabId?.split(":")[0],
+						};
+						gate.onRefused(failure);
+						blockLaunch(new Error(result.error));
+						return;
+					}
 					const orphanTabId = result.orphanTabId ?? (options.placement.kind === "tab" ? options.placement.tabId : undefined);
 					const outcome: Extract<SubagentEvent, { kind: "run-settled" }>["outcome"] = {
 						kind: "failed",

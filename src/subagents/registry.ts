@@ -7,7 +7,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { atomicWritePrivateJson, readPrivateJson, withPrivateFileLock, writePrivateJsonExclusive } from "../activity/persistence.js";
 import { captureProcessBirthTime, type ProcessTreeIdentity, type ProcessTreeVerification } from "../background-tasks/process-tree.js";
 import { assertPrivateArtifact, assertPrivateDir, isErrnoCode, nodeArtifactFs } from "../private-artifact.js";
-import type { RunOutcome, SubagentPaneRef, SubagentRecoveryReason, SubagentWorktreeRef } from "./domain.js";
+import type { RunOutcome, SubagentLaunchFailure, SubagentPaneRef, SubagentRecoveryReason, SubagentWorktreeRef } from "./domain.js";
 import { validateSubagentBudget, type SubagentBudget } from "./budget-policy.js";
 
 export type ResultDisposition = "unreviewed" | "inspected" | "applied" | "dismissed" | "pruned";
@@ -103,6 +103,8 @@ export interface SubagentRecord {
 	readonly settledAt: number | null;
 	readonly completionId: string | null;
 	readonly outcome: RunOutcome["kind"] | null;
+	/** Structurally refused launch evidence; absent unless the owner observed one. */
+	readonly failure?: SubagentLaunchFailure;
 	readonly delivery: RegistryDelivery;
 	/** Private direct-child artifacts; null means no durable result evidence. */
 	readonly result: { readonly file: "result.json"; readonly bytes: number } | null;
@@ -203,6 +205,20 @@ function processEvidence(value: unknown): boolean {
 function pointer(value: unknown, file: string): boolean {
 	return value === null || (object(value, "file bytes") && value.file === file && integer(value.bytes) && value.bytes <= MAX_RESULT_BYTES);
 }
+function launchFailure(value: unknown): value is SubagentLaunchFailure {
+	if (!object(value, "paneStillOpen", "errorText errorCode errorReason paneTabGone orphanPane")) return false;
+	// Host error text is a bounded diagnostic, not record metadata: unlike
+	// identifiers it may carry the raw (possibly multi-line) stderr the host saw.
+	const diagnostic = (candidate: unknown): candidate is string =>
+		typeof candidate === "string" && candidate.length > 0 && candidate.length <= 4096;
+	return typeof value.paneStillOpen === "boolean"
+		&& (value.errorText === undefined || diagnostic(value.errorText))
+		&& (value.errorCode === undefined || text(value.errorCode))
+		&& (value.errorReason === undefined || diagnostic(value.errorReason))
+		&& (value.paneTabGone === undefined || typeof value.paneTabGone === "boolean")
+		&& (value.orphanPane === undefined
+			|| object(value.orphanPane, "agentName", "workspaceId tabId paneId") && Object.values(value.orphanPane).every(text));
+}
 function sendState(value: unknown, completionId: string, generation: number, createdAt: number, updatedAt: number): boolean {
 	if (object(value, "state") && value.state === "undelivered") return true;
 	if (object(value, "state completionId") && value.state === "sent") return value.completionId === completionId;
@@ -219,7 +235,7 @@ function deliveryState(value: unknown, completionId: string | null, generation: 
 		|| object(value.notice, "state completionId") && value.notice.state === "delivery-uncertain" && value.notice.completionId === noticeId;
 }
 function validRecord(value: unknown): value is SubagentRecord {
-	if (!object(value, RECORD_KEYS, "budget telemetry controllerSessionId controllerGeneration controlReservation launchIntent")) return false;
+	if (!object(value, RECORD_KEYS, "budget telemetry controllerSessionId controllerGeneration controlReservation launchIntent failure")) return false;
 	if ((value.controllerSessionId === undefined) !== (value.controllerGeneration === undefined)
 		|| value.controllerSessionId !== undefined && (!text(value.controllerSessionId) || !positive(value.controllerGeneration))) return false;
 	if (value.controlReservation != null && (!object(value.controlReservation, "sessionId owner")
@@ -258,6 +274,7 @@ function validRecord(value: unknown): value is SubagentRecord {
 			&& r.controlLease.renewedAt >= r.createdAt && r.controlLease.renewedAt <= r.updatedAt))
 		|| !(r.writerLease === null || (lease(r.writerLease) && r.writerLease.renewedAt <= r.updatedAt && r.writerLease.renewedAt >= r.createdAt))) return false;
 	if (r.pane !== null && (!object(r.pane, "agentName", "workspaceId tabId paneId") || !Object.values(r.pane).every(text))) return false;
+	if (r.failure !== undefined && !launchFailure(r.failure)) return false;
 	if (r.backend === "headless" && r.pane !== null) return false;
 	if (r.worktree !== null && (!object(r.worktree, "path branch baseRef repoRoot") || !pathValue(r.worktree.path)
 		|| !pathValue(r.worktree.repoRoot) || !text(r.worktree.branch) || !text(r.worktree.baseRef))) return false;
@@ -619,6 +636,9 @@ export class SubagentRegistry {
 			for (const key of ["child", "supervisor", "pane", "worktree", "sessionFilePath", "completionId", "outcome", "settledAt", "result", "manifest"] as const) {
 				if (current[key] !== null && !isDeepStrictEqual(next[key], current[key])) throw new Error(`registry evidence must be preserved: ${key}`);
 			}
+			// Optional evidence (absent on legacy records) needs its own guard:
+			// `undefined !== null` would make the loop above reject the first write.
+			if (current.failure != null && !isDeepStrictEqual(next.failure, current.failure)) throw new Error("registry evidence must be preserved: failure");
 			if (current.launchIntent !== undefined && (next.launchIntent === undefined
 				|| current.launchIntent !== null && !isDeepStrictEqual(current.launchIntent, next.launchIntent))) throw new Error("launch intent must be preserved");
 			if (current.telemetry) {

@@ -4,11 +4,12 @@ import { isAbsolute, join, relative } from "node:path";
 import { promisify } from "node:util";
 import { captureProcessBirthTime, systemProcessTree, type ProcessTreeOperations } from "../background-tasks/process-tree.js";
 import { acquireRetained, reconstructRetained, verifyRetained, sameRetainedEvidence, type RetainedSubagent } from "./retained-adoption.js";
+import { RetainedLaunchRefusal } from "./retained-runtime.js";
 import type { RegistryWriter, SubagentRecord } from "./registry.js";
 import { createWorktree, resolveCreateOptions, type CreateWorktreeOptions, type CreateWorktreeResult } from "../git/worktree.js";
 import type { AgentPanePlacement, PiExecLike, TerminalHost } from "../terminal-host/types.js";
 import type { SpawnedChild } from "./backend-pi.js";
-import { SUBAGENT_MAX_QUEUED, SUBAGENT_MAX_RUNNING, type LiveToolState, type RunOutcome, type SubagentEvent, type SubagentPaneRef, type SubagentRecoveryReason, type SubagentSnapshot, type SubagentWorktreeRef } from "./domain.js";
+import { SUBAGENT_MAX_QUEUED, SUBAGENT_MAX_RUNNING, type LiveToolState, type RunOutcome, type SubagentEvent, type SubagentLaunchFailure, type SubagentPaneRef, type SubagentRecoveryReason, type SubagentSnapshot, type SubagentWorktreeRef } from "./domain.js";
 import { planPlacement } from "./layout.js";
 import { addReportedSubagentUsage, evaluateSubagentBudget, validateSubagentBudget, type SubagentBudget } from "./budget-policy.js";
 import { buildCompletionManifest, type CompletionManifestEvidence } from "./manifest.js";
@@ -673,9 +674,13 @@ export class SubagentManager {
 				// otherwise leak in the tracking map forever.
 				this.placementByTask.delete(id);
 				releasePending();
+				// A retained owner that refused before admission persists the same
+				// structured failure the disposable backend folds via run-settled;
+				// surface its taxonomy and orphan occupancy instead of text-only.
+				const refusal = error instanceof RetainedLaunchRefusal ? error : undefined;
 				const message = error instanceof Error ? error.message : String(error);
 				const preservationNote = worktree ? ` Worktree created at ${worktree.path} is preserved.` : "";
-				return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, `unable to spawn child: ${message}.${preservationNote}`, childCwd, worktree);
+				return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, `unable to spawn child: ${message}.${preservationNote}`, childCwd, worktree, refusal?.failure);
 			}
 			let snapshot = this.withBudget({ ...makeInitialSnapshot(task, id, createdAt, manifestBaseRef, childCwd, worktree, child.sessionFilePath), startedAt: Date.now() });
 			if (child.retentionUnsupported) snapshot = { ...snapshot, recovery: "unsupported" };
@@ -1077,7 +1082,7 @@ export class SubagentManager {
 		errorText: string,
 		cwd = task.cwd,
 		worktree?: SubagentWorktreeRef,
-		failure?: { readonly errorCode?: string },
+		failure?: SubagentLaunchFailure,
 	): SubagentSnapshot {
 		const snapshot: SubagentSnapshot = {
 			...makeInitialSnapshot(task, id, createdAt, baseRef, cwd, worktree),
@@ -1085,6 +1090,12 @@ export class SubagentManager {
 			settledAt: Date.now(),
 			errorText: errorText.slice(0, ERROR_TEXT_MAX),
 			errorCode: failure?.errorCode,
+			errorReason: failure?.errorReason?.slice(0, ERROR_TEXT_MAX),
+			// A refused launch whose cleanup was unconfirmed still occupies a
+			// layout slot; keep it counted exactly like the disposable backend's
+			// failed RunOutcome so placement cannot over-tile the tab.
+			pane: failure?.orphanPane,
+			paneStillOpen: failure?.paneStillOpen,
 		};
 		this.snapshots.set(id, snapshot);
 		this.notify();

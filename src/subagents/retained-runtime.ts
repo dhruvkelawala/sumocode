@@ -15,6 +15,15 @@ import { observeRemoteRetained, verifyRetained } from "./retained-adoption.js";
 import { controlAuthority, retainedControlClient } from "./retained-control.js";
 import { SubagentRegistry, type RegistryWriter, type SubagentRecord, type SubagentRegistryOptions } from "./registry.js";
 import type { PiExecLike, TerminalHost } from "../terminal-host/types.js";
+import type { SubagentLaunchFailure } from "./domain.js";
+
+/** Owner refused a launch before admission and persisted structured evidence for it. */
+export class RetainedLaunchRefusal extends Error {
+	constructor(readonly failure: SubagentLaunchFailure) {
+		super(failure.errorText ?? failure.errorReason ?? failure.errorCode ?? "retained launch refused before admission");
+		this.name = "RetainedLaunchRefusal";
+	}
+}
 
 interface OwnerProcess {
 	readonly pid?: number;
@@ -95,9 +104,10 @@ export class RetainedRuntime {
 		// caller budget (headless bootstrap) keep the owner-startup wait.
 		const deadline = Date.now() + Math.max(0, task.provisioningTimeoutMs ?? RETAINED_OWNER_BOOTSTRAP_WAIT_MS);
 		const operations = this.options.operations ?? systemProcessTree;
+		let refusal: SubagentLaunchFailure | undefined;
 		while (!failed && Date.now() < deadline) {
 			const record = registry.get(task.id)!;
-			if (["lost", "ambiguous"].includes(record.status)) break;
+			if (["lost", "ambiguous"].includes(record.status)) { refusal = record.failure; break; }
 			if ((record.status === "running" || record.status === "settled") && record.controlLease) {
 				const authority = controlAuthority(record);
 				if (record.supervisor?.identity.pid !== owner.pid || authority.owner.token !== controller.token
@@ -110,6 +120,7 @@ export class RetainedRuntime {
 			}
 			await delay(50);
 		}
+		if (refusal) throw new RetainedLaunchRefusal(refusal);
 		throw new Error(`retained launch unconfirmed; preserved evidence for ${task.id}`);
 	}
 }

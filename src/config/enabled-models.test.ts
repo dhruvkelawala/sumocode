@@ -2,8 +2,14 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { RpcModelOption } from "./controls.js";
 import { filterToEnabled, readEnabledModelPatterns } from "./enabled-models.js";
+
+interface RpcModelOption {
+	readonly provider: string;
+	readonly id: string;
+	readonly label: string;
+	readonly active: boolean;
+}
 
 function option(provider: string, id: string, active = false): RpcModelOption {
 	return {
@@ -35,6 +41,58 @@ function writeSettings(dir: string, content: string): void {
 	mkdirSync(dir, { recursive: true });
 	writeFileSync(join(dir, "settings.json"), content);
 }
+
+describe("filterToEnabled with extra Claude accounts", () => {
+	const ACCOUNT_MODELS: RpcModelOption[] = [
+		option("anthropic", "claude-opus-4"),
+		option("anthropic", "claude-sonnet-4"),
+		option("anthropic-2", "claude-opus-4"),
+		option("anthropic-2", "claude-sonnet-4"),
+		option("anthropic-3", "claude-opus-4"),
+		option("openai", "gpt-5"),
+	];
+
+	it("mirrors an exact base anthropic pattern onto every account provider", () => {
+		expect(filterToEnabled(ACCOUNT_MODELS, ["anthropic/claude-opus-4"]).map((m) => m.label)).toEqual([
+			"anthropic/claude-opus-4",
+			"anthropic-2/claude-opus-4",
+			"anthropic-3/claude-opus-4",
+		]);
+	});
+
+	it("mirrors a base anthropic glob onto account providers", () => {
+		expect(filterToEnabled(ACCOUNT_MODELS, ["anthropic/claude-sonnet-*"]).map((m) => m.label)).toEqual([
+			"anthropic/claude-sonnet-4",
+			"anthropic-2/claude-sonnet-4",
+		]);
+	});
+
+	it("keeps explicit account patterns scoped to that account", () => {
+		expect(filterToEnabled(ACCOUNT_MODELS, ["anthropic-2/claude-opus-4"]).map((m) => m.label)).toEqual(["anthropic-2/claude-opus-4"]);
+	});
+
+	it("does not duplicate a model named by both a base and an explicit account pattern", () => {
+		expect(filterToEnabled(ACCOUNT_MODELS, ["anthropic-2/claude-opus-4", "anthropic/claude-opus-4"]).map((m) => m.label)).toEqual([
+			"anthropic-2/claude-opus-4",
+			"anthropic/claude-opus-4",
+			"anthropic-3/claude-opus-4",
+		]);
+	});
+
+	it("keeps a bare Claude model id resolvable across the base and account providers", () => {
+		expect(filterToEnabled(ACCOUNT_MODELS, ["claude-opus-4"]).map((m) => m.label)).toEqual([
+			"anthropic/claude-opus-4",
+			"anthropic-2/claude-opus-4",
+			"anthropic-3/claude-opus-4",
+		]);
+	});
+
+	it("still treats a bare id shared by unrelated providers as ambiguous", () => {
+		const models = [...ACCOUNT_MODELS, option("openrouter", "claude-opus-4")];
+		expect(filterToEnabled(models, ["claude-opus-4"])).toEqual([]);
+		expect(filterToEnabled(ACCOUNT_MODELS, ["gpt-5"]).map((m) => m.label)).toEqual(["openai/gpt-5"]);
+	});
+});
 
 describe("filterToEnabled", () => {
 	it("selects exact provider/id entries in enabledModels order", () => {

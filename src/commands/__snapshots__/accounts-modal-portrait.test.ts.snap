@@ -25,8 +25,8 @@ exports[`accounts modal row layout > makes a new session's no-selection state vi
 
      ❯   type to filter…
 
-     ❈   default account · inactive
-     ·   company · inactive  anthrop
+     ❈   default account · signed in
+     ·   company · signed in  anthro
      ·   add Claude account
 
 ──────────────────────  ·  ─────────

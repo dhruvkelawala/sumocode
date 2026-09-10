@@ -52,6 +52,8 @@ interface CtxOptions {
 	agentDir: string;
 	auth?: Record<string, boolean>;
 	models?: { provider: string; id: string }[];
+	/** Models Pi reports as selectable; defaults to every registered model. */
+	availableModels?: { provider: string; id: string }[];
 	currentModel?: { provider: string; id: string };
 	onSelect?: (title: string, options: string[]) => string | undefined;
 	onConfirm?: (title: string, message: string) => boolean;
@@ -72,6 +74,7 @@ function makeCtx(options: CtxOptions) {
 		modelRegistry: {
 			getProviderAuthStatus: (providerId: string) => ({ configured: options.auth?.[providerId] ?? false }),
 			getAll: () => options.models ?? [],
+			getAvailable: () => options.availableModels ?? options.models ?? [],
 		},
 		model: options.currentModel,
 	};
@@ -427,16 +430,18 @@ describe("executeAccountsCommand", () => {
 		expect(select).not.toHaveBeenCalled();
 	});
 
-	it("makes the no-active-Claude state explicit in a new session", async () => {
+	it("reports signed-in accounts as signed in when the session is on a non-Claude model", async () => {
 		const agentDir = tempAgentDir();
 		writeAccounts(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });
 		const { ctx, select } = makeCtx({
 			agentDir,
 			auth: { anthropic: true, "anthropic-2": false },
+			currentModel: { provider: "cursor", id: "grok" },
 		});
 		await executeAccountsCommand(extensionApi(), commandContext(ctx), withAgentDir(agentDir));
 		const options = selectOptionsAt(select, 0);
-		expect(options[0]).toContain("default account · inactive");
+		expect(options[0]).toContain("default account · signed in");
+		expect(options[0]).not.toContain("inactive");
 		expect(options[1]).toContain("company · sign in required");
 		expect(options[1]).toContain("anthropic-2");
 	});
@@ -567,6 +572,91 @@ describe("executeAccountsCommand", () => {
 		expect(setModel).toHaveBeenCalledWith(models[1]);
 	});
 
+	it("switching from a non-Claude model prefers a model enabled for the base anthropic provider", async () => {
+		const agentDir = tempAgentDir();
+		writeFileSync(
+			join(agentDir, "settings.json"),
+			JSON.stringify({ packages: [PINNED_ADAPTER_SOURCE], enabledModels: ["cursor/grok", "anthropic/claude-opus"] }),
+			"utf8",
+		);
+		writeAccounts(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });
+		const models = [
+			{ provider: "cursor", id: "grok" },
+			{ provider: "anthropic-2", id: "claude-sonnet" },
+			{ provider: "anthropic-2", id: "claude-opus" },
+		];
+		const { ctx, setModel } = makeCtx({
+			agentDir,
+			auth: { anthropic: true, "anthropic-2": true },
+			models,
+			currentModel: { provider: "cursor", id: "grok" },
+			onSelect: (title: string, options: string[]) => {
+				if (title === "CLAUDE ACCOUNTS") return options[1];
+				return options.find((option) => option === "use this account");
+			},
+		});
+		await executeAccountsCommand(extensionApi(setModel), commandContext(ctx), withAgentDir(agentDir));
+		expect(setModel).toHaveBeenCalledWith(models[2]);
+	});
+
+	it("switching does not resolve a bare model id the model picker treats as ambiguous", async () => {
+		const agentDir = tempAgentDir();
+		writeFileSync(
+			join(agentDir, "settings.json"),
+			JSON.stringify({ packages: [PINNED_ADAPTER_SOURCE], enabledModels: ["claude-opus"] }),
+			"utf8",
+		);
+		writeAccounts(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });
+		const models = [
+			{ provider: "cursor", id: "grok" },
+			{ provider: "openrouter", id: "claude-opus" },
+			{ provider: "anthropic-2", id: "claude-sonnet" },
+			{ provider: "anthropic-2", id: "claude-opus" },
+		];
+		const { ctx, setModel } = makeCtx({
+			agentDir,
+			auth: { anthropic: true, "anthropic-2": true },
+			models,
+			currentModel: { provider: "cursor", id: "grok" },
+			onSelect: (title: string, options: string[]) => {
+				if (title === "CLAUDE ACCOUNTS") return options[1];
+				return options.find((option) => option === "use this account");
+			},
+		});
+		await executeAccountsCommand(extensionApi(setModel), commandContext(ctx), withAgentDir(agentDir));
+		expect(setModel).toHaveBeenCalledWith(models[2]);
+	});
+
+	it("ignores an unavailable provider's model id when resolving enabled patterns", async () => {
+		const agentDir = tempAgentDir();
+		writeFileSync(
+			join(agentDir, "settings.json"),
+			JSON.stringify({ packages: [PINNED_ADAPTER_SOURCE], enabledModels: ["claude-opus"] }),
+			"utf8",
+		);
+		writeAccounts(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });
+		const models = [
+			{ provider: "cursor", id: "grok" },
+			{ provider: "openrouter", id: "claude-opus" },
+			{ provider: "anthropic-2", id: "claude-sonnet" },
+			{ provider: "anthropic-2", id: "claude-opus" },
+		];
+		const { ctx, setModel } = makeCtx({
+			agentDir,
+			auth: { anthropic: true, "anthropic-2": true },
+			models,
+			// openrouter has no credentials, so Pi never offers its model.
+			availableModels: [models[0], models[2], models[3]],
+			currentModel: { provider: "cursor", id: "grok" },
+			onSelect: (title: string, options: string[]) => {
+				if (title === "CLAUDE ACCOUNTS") return options[1];
+				return options.find((option) => option === "use this account");
+			},
+		});
+		await executeAccountsCommand(extensionApi(setModel), commandContext(ctx), withAgentDir(agentDir));
+		expect(setModel).toHaveBeenCalledWith(models[3]);
+	});
+
 	it("switching falls back to the first model of the provider", async () => {
 		const agentDir = tempAgentDir();
 		writeAccounts(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });
@@ -586,6 +676,58 @@ describe("executeAccountsCommand", () => {
 		});
 		await executeAccountsCommand(extensionApi(setModel), commandContext(ctx), withAgentDir(agentDir));
 		expect(setModel).toHaveBeenCalledWith(models[1]);
+	});
+
+	it("switching picks an available account model when the first registered model is unavailable", async () => {
+		const agentDir = tempAgentDir();
+		writeFileSync(
+			join(agentDir, "settings.json"),
+			JSON.stringify({ packages: [PINNED_ADAPTER_SOURCE], enabledModels: ["cursor/grok"] }),
+			"utf8",
+		);
+		writeAccounts(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });
+		const models = [
+			{ provider: "anthropic-2", id: "claude-opus" },
+			{ provider: "anthropic-2", id: "claude-sonnet" },
+		];
+		const { ctx, setModel } = makeCtx({
+			agentDir,
+			auth: { anthropic: true, "anthropic-2": true },
+			models,
+			// claude-opus is registered for anthropic-2 but not selectable.
+			availableModels: [{ provider: "cursor", id: "grok" }, models[1]],
+			currentModel: { provider: "cursor", id: "grok" },
+			onSelect: (title: string, options: string[]) => {
+				if (title === "CLAUDE ACCOUNTS") return options[1];
+				return options.find((option) => option === "use this account");
+			},
+		});
+		await executeAccountsCommand(extensionApi(setModel), commandContext(ctx), withAgentDir(agentDir));
+		expect(setModel).toHaveBeenCalledWith(models[1]);
+	});
+
+	it("does not switch when the account has no available model", async () => {
+		const agentDir = tempAgentDir();
+		writeFileSync(
+			join(agentDir, "settings.json"),
+			JSON.stringify({ packages: [PINNED_ADAPTER_SOURCE], enabledModels: ["cursor/grok"] }),
+			"utf8",
+		);
+		writeAccounts(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });
+		const { ctx, setModel, notify } = makeCtx({
+			agentDir,
+			auth: { anthropic: true, "anthropic-2": true },
+			models: [{ provider: "anthropic-2", id: "claude-opus" }],
+			availableModels: [{ provider: "cursor", id: "grok" }],
+			currentModel: { provider: "cursor", id: "grok" },
+			onSelect: (title: string, options: string[]) => {
+				if (title === "CLAUDE ACCOUNTS") return options[1];
+				return options.find((option) => option === "use this account");
+			},
+		});
+		await executeAccountsCommand(extensionApi(setModel), commandContext(ctx), withAgentDir(agentDir));
+		expect(setModel).not.toHaveBeenCalled();
+		expect(notify).toHaveBeenCalledWith("anthropic-2 has no selectable model; reload SumoCode before switching", "warning");
 	});
 
 	it("does not offer switching for unsigned accounts", async () => {

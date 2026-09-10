@@ -2,7 +2,13 @@ import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { RpcModelOption } from "./controls.js";
+import { CLAUDE_BASE_PROVIDER, isClaudeAccountProvider } from "./claude-providers.js";
+
+/** Any model-like record: Pi's `Model`, the host's option rows, or a test fixture. */
+interface EnabledModelCandidate {
+	readonly provider: string;
+	readonly id: string;
+}
 
 const THINKING_LEVELS = {
 	off: true,
@@ -46,8 +52,19 @@ function stripThinkingSuffix(pattern: string): string {
 	return Object.hasOwn(THINKING_LEVELS, suffix) ? pattern.slice(0, colonIndex) : pattern;
 }
 
-function modelKey(model: Pick<RpcModelOption, "provider" | "id">): string {
+function modelKey(model: EnabledModelCandidate): string {
 	return `${model.provider}/${model.id}`.toLowerCase();
+}
+
+/**
+ * Extra Claude accounts (`anthropic-N`) clone the base provider's model list,
+ * so a base-provider pattern such as `anthropic/claude-opus-5` should enable
+ * that model on every account without the user hand-listing each one. This
+ * is the key such a pattern matches; explicit `anthropic-N/...` patterns keep
+ * matching only their own account through `modelKey`.
+ */
+function baseProviderKey(model: EnabledModelCandidate): string | undefined {
+	return isClaudeAccountProvider(model.provider) ? `${CLAUDE_BASE_PROVIDER}/${model.id}`.toLowerCase() : undefined;
 }
 
 function escapeRegexChar(char: string): string {
@@ -83,28 +100,32 @@ function globToRegExp(pattern: string): RegExp {
 }
 
 
-function findExactModel(pattern: string, models: readonly RpcModelOption[]): RpcModelOption | undefined {
+function findExactModels<T extends EnabledModelCandidate>(pattern: string, models: readonly T[]): T[] {
 	const normalized = pattern.trim().toLowerCase();
-	if (!normalized) return undefined;
+	if (!normalized) return [];
 	const canonicalMatches = models.filter((model) => modelKey(model) === normalized);
-	if (canonicalMatches.length === 1) return canonicalMatches[0];
-	if (canonicalMatches.length > 1) return undefined;
+	if (canonicalMatches.length > 1) return [];
 	const slashIndex = normalized.indexOf("/");
-	if (slashIndex !== -1) return undefined;
+	if (slashIndex !== -1) {
+		return [...canonicalMatches, ...models.filter((model) => baseProviderKey(model) === normalized)];
+	}
+	// A bare id is ambiguous across unrelated providers, but the base
+	// anthropic provider and its account clones are one logical model.
 	const idMatches = models.filter((model) => model.id.toLowerCase() === normalized);
-	return idMatches.length === 1 ? idMatches[0] : undefined;
+	const logicalKeys = new Set(idMatches.map((model) => baseProviderKey(model) ?? modelKey(model)));
+	return logicalKeys.size === 1 ? idMatches : [];
 }
 
-function appendIfNew(result: RpcModelOption[], seen: Set<string>, model: RpcModelOption): void {
+function appendIfNew<T extends EnabledModelCandidate>(result: T[], seen: Set<string>, model: T): void {
 	const key = modelKey(model);
 	if (seen.has(key)) return;
 	seen.add(key);
 	result.push(model);
 }
 
-export function filterToEnabled(models: readonly RpcModelOption[], patterns: readonly string[]): RpcModelOption[] {
+export function filterToEnabled<T extends EnabledModelCandidate>(models: readonly T[], patterns: readonly string[]): T[] {
 	if (patterns.length === 0) return [...models];
-	const result: RpcModelOption[] = [];
+	const result: T[] = [];
 	const seen = new Set<string>();
 	for (const rawPattern of patterns) {
 		const pattern = stripThinkingSuffix(rawPattern.trim());
@@ -112,12 +133,14 @@ export function filterToEnabled(models: readonly RpcModelOption[], patterns: rea
 		if (pattern.includes("*") || pattern.includes("?") || pattern.includes("[")) {
 			const regex = globToRegExp(pattern);
 			for (const model of models) {
-				if (regex.test(modelKey(model)) || regex.test(model.id)) appendIfNew(result, seen, model);
+				const baseKey = baseProviderKey(model);
+				if (regex.test(modelKey(model)) || regex.test(model.id) || (baseKey !== undefined && regex.test(baseKey))) {
+					appendIfNew(result, seen, model);
+				}
 			}
 			continue;
 		}
-		const model = findExactModel(pattern, models);
-		if (model) appendIfNew(result, seen, model);
+		for (const model of findExactModels(pattern, models)) appendIfNew(result, seen, model);
 	}
 	return result;
 }

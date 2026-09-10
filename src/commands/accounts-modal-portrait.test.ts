@@ -89,7 +89,8 @@ describe("accounts modal row layout", () => {
 	it("makes a new session's no-selection state visible at portrait width", async () => {
 		const text = renderAccountsModal(await accountRows(null), 36);
 		expect(text.split("\n").map((line) => line.trimEnd()).join("\n")).toMatchSnapshot();
-		expect(text).toContain("default account · inactive");
-		expect(text).toContain("company · inactive");
+		expect(text).toContain("default account · signed in");
+		expect(text).toContain("company · signed in");
+		expect(text).not.toContain("inactive");
 	});
 });

@@ -755,25 +755,21 @@ const parseJsonLine = (line: string): Record<string, unknown> | undefined => {
 	}
 };
 
-/** True when a known-role child message's content is readable by retention. */
-const isReadableChildMessage = (value: unknown): value is Message => {
-	if (!isRecord(value)) return false;
-	const role = value.role;
-	if (role !== "assistant" && role !== "user" && role !== "toolResult") return false;
-	const content = value.content;
-	return typeof content === "string" || Array.isArray(content);
-};
-
 /**
  * Validate a child frame's role-specific payload before retention reads role
  * fields. Returns undefined for non-message frames; a bounded rejection reason
- * when a known role's content cannot be read. Reasons never echo producer data.
+ * when a known role's content cannot be read. Retention accepts string or array
+ * content for user messages, but only arrays for assistant and toolResult.
+ * Reasons never echo producer data.
  */
 const decodeMessage = (value: unknown): { message: Message } | { rejected: string } | undefined => {
 	if (!isRecord(value)) return undefined;
 	const role = value.role;
 	if (role !== "assistant" && role !== "user" && role !== "toolResult") return undefined;
-	return isReadableChildMessage(value) ? { message: value } : { rejected: `child message rejected: malformed ${role} content` };
+	const content = value.content;
+	const readable = Array.isArray(content) || (role === "user" && typeof content === "string");
+	// Role and content shape are validated above; the record is the producer's Message frame.
+	return readable ? { message: value as unknown as Message } : { rejected: `child message rejected: malformed ${role} content` };
 };
 
 const applyAssistantUsage = (result: SingleResult, message: AssistantMessage): void => {

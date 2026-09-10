@@ -768,6 +768,58 @@ describe("native task tool", () => {
 		expect(JSON.stringify(result)).not.toContain(sentinel);
 	});
 
+	it("rejects string toolResult message content before retention accounting", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		const sentinel = "TOOL-STRING-SENTINEL-PAYLOAD";
+
+		expect(() => emitTaskEvent(proc, {
+			type: "tool_result_end",
+			message: { role: "toolResult", toolCallId: "t1", toolName: "read", content: sentinel },
+		})).not.toThrow();
+		proc.emit("close", null, "SIGTERM");
+
+		const result = await running;
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain("malformed toolResult content");
+		expect(JSON.stringify(result)).not.toContain(sentinel);
+	});
+
+	it("rejects string assistant message content before retention accounting", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		const sentinel = "ASSISTANT-STRING-SENTINEL-PAYLOAD";
+
+		expect(() => emitTaskEvent(proc, {
+			type: "message_end",
+			message: { role: "assistant", content: sentinel, usage: {} },
+		})).not.toThrow();
+		proc.emit("close", null, "SIGTERM");
+
+		const result = await running;
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain("malformed assistant content");
+		expect(JSON.stringify(result)).not.toContain(sentinel);
+	});
+
+	it("accepts each role's valid content shape", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+
+		emitTaskEvent(proc, { type: "message_end", message: { role: "user", content: "plain user string" } });
+		emitTaskEvent(proc, { type: "message_end", message: { role: "user", content: [{ type: "text", text: "typed user array" }] } });
+		emitTaskEvent(proc, { type: "tool_result_end", message: { role: "toolResult", toolCallId: "t1", toolName: "read", content: [{ type: "text", text: "tool text" }] } });
+		emitTaskEvent(proc, { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "assistant text" }], usage: {} } });
+		proc.emit("close", 0);
+
+		const toolResult = await running;
+		const result = toolResult.details?.results?.[0];
+		if (!result) throw new Error("task result is missing");
+		expect(toolResult.isError).toBeUndefined();
+		expect(result.messages?.map((message) => message.role)).toEqual(["user", "user", "toolResult", "assistant"]);
+		expect(result.messages?.[0]?.content).toBe("plain user string");
+	});
+
 	it("bounds malformed-message diagnostics and settles the child run exactly once", async () => {
 		const proc = new FakeTaskProcess();
 		const task = registeredTask(proc);

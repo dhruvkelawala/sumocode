@@ -340,6 +340,47 @@ export const LAUNCHER_PARITY_CASES: readonly LauncherParityCase[] = [
 		expect: "usage-error",
 		stderrContains: "Run 'sumocode --help' for usage.",
 	},
+	// A Pi option value is bound atomically in both parsers (issue 484): a value
+	// that spells a launcher command belongs to Pi, so it never switches
+	// commands and is never dropped from the forwarded argv.
+	{
+		name: "keeps a Pi value that spells a command",
+		argv: ["--name", "run"],
+		expect: "exit-0",
+		dryRun: { command: "run", args: "--name run" },
+	},
+	{
+		name: "keeps a Pi value that spells another command",
+		argv: ["--model", "diag"],
+		expect: "exit-0",
+		dryRun: { command: "run", args: "--model diag" },
+	},
+	{
+		name: "keeps a print message that spells a command",
+		argv: ["--print", "run"],
+		expect: "exit-0",
+		dryRun: { command: "run", args: "--print [redacted]" },
+	},
+	// Empty space-form option values are usage errors in both launchers, exactly
+	// like their `=` spellings (issue 484).
+	{
+		name: "rejects an empty --diag-file value",
+		argv: ["--diag-file", ""],
+		expect: "usage-error",
+		stderrContains: "--diag-file requires a path.",
+	},
+	{
+		name: "rejects an empty --prompt-file value",
+		argv: ["task", "--prompt-file", ""],
+		expect: "usage-error",
+		stderrContains: "--prompt-file requires a path.",
+	},
+	{
+		name: "rejects an empty --task-dir value",
+		argv: ["task", "--task-dir", ""],
+		expect: "usage-error",
+		stderrContains: "--task-dir requires a path.",
+	},
 ];
 
 /** Every spelling the shared spec declares. */

@@ -71,6 +71,66 @@ EOF
 	exit 64
 }
 
+# Pure membership test so each Pi parser consumption class reads as a table.
+_sumocode_arg_in() {
+	local candidate="$1"
+	shift
+	local item
+	for item in "$@"; do
+		[[ "${candidate}" == "${item}" ]] && return 0
+	done
+	return 1
+}
+
+# Class 2: unconditional value flags in Pi's pinned parseArgs(). Kept global so
+# mode selection and prompt extraction cannot disagree about a value-consuming
+# bare `--` token.
+SUMOCODE_PI_UNCONDITIONAL_VALUE_FLAGS=(
+	--mode --provider --model --api-key --system-prompt
+	--append-system-prompt --name -n --session --session-id --fork
+	--session-dir --models --tools -t --exclude-tools -xt --thinking
+	--export --extension -e --skill --prompt-template --theme
+)
+# Class 3: known boolean flags -- recognized BEFORE the generic unknown branch
+# so a boolean like --offline never consumes the real prompt.
+SUMOCODE_PI_BOOLEAN_FLAGS=(
+	--help -h --version -v --continue -c --resume -r --no-session
+	--no-tools -nt --no-builtin-tools -nbt --no-extensions -ne
+	--no-skills -ns --no-prompt-templates -np --no-themes
+	--no-context-files -nc --verbose --approve -a --no-approve -na
+	--offline
+)
+
+_sumocode_is_pi_unconditional_value_flag() {
+	_sumocode_arg_in "$1" "${SUMOCODE_PI_UNCONDITIONAL_VALUE_FLAGS[@]}"
+}
+
+_sumocode_is_pi_boolean_flag() {
+	_sumocode_arg_in "$1" "${SUMOCODE_PI_BOOLEAN_FLAGS[@]}"
+}
+
+# Pi's parseArgs() lookahead consumption classes, mirrored for the unknown flags
+# this loop forwards to Pi: a Pi value that happens to spell a launcher command
+# (`--name task`, `--model diag`) belongs to Pi, exactly as the native parser
+# treats it (issue 484 parity).
+_sumocode_pi_flag_consumes_value() {
+	local flag="$1"
+	local next="${2-}"
+	if _sumocode_is_pi_unconditional_value_flag "${flag}"; then
+		return 0
+	fi
+	if [[ "${flag}" == "--print" || "${flag}" == "-p" ]]; then
+		[[ "${next}" != @* ]] || return 1
+		[[ "${next:0:1}" != "-" || "${next}" == "---"* ]]
+		return
+	fi
+	if [[ "${flag}" == "--list-models" || "${flag}" == "--tui-mode" || "${flag}" == "--use-theme" ]]; then
+		[[ "${next:0:1}" != "-" ]]
+		return
+	fi
+	return 1
+}
+
 DEBUG_MODE=0
 CLEAR_DIAG=1
 DRY_RUN=0
@@ -82,7 +142,17 @@ DIAG_FILE="${SUMO_TUI_DIAG_FILE:-}"
 PROMPT_FILE=""
 TASK_DIR=""
 SUMOCODE_ARGS=()
+PI_VALUE_PENDING=0
 while [[ $# -gt 0 ]]; do
+	# The previous token was a Pi value flag that consumes its value atomically
+	# (mirrors src/native/main.ts): forward this token instead of letting command
+	# detection claim it, so `--name run` stays a Pi argv pair.
+	if [[ "${PI_VALUE_PENDING}" -eq 1 ]]; then
+		SUMOCODE_ARGS+=("$1")
+		PI_VALUE_PENDING=0
+		shift
+		continue
+	fi
 	case "$1" in
 		run|doctor|diag|task|worktree)
 			# SPEC COMMANDS: `run`, `doctor`, `diag`, `task`, `worktree` (+ the
@@ -126,7 +196,7 @@ while [[ $# -gt 0 ]]; do
 			shift
 			;;
 		--diag-file)
-			[[ $# -ge 2 ]] || usage_error "--diag-file requires a path."
+			[[ $# -ge 2 && -n "${2:-}" ]] || usage_error "--diag-file requires a path."
 			DEBUG_MODE=1
 			DIAG_FILE="$2"
 			shift 2
@@ -142,7 +212,7 @@ while [[ $# -gt 0 ]]; do
 			shift
 			;;
 		--prompt-file)
-			[[ $# -ge 2 ]] || usage_error "--prompt-file requires a path."
+			[[ $# -ge 2 && -n "${2:-}" ]] || usage_error "--prompt-file requires a path."
 			PROMPT_FILE="$2"
 			shift 2
 			;;
@@ -152,7 +222,7 @@ while [[ $# -gt 0 ]]; do
 			shift
 			;;
 		--task-dir)
-			[[ $# -ge 2 ]] || usage_error "--task-dir requires a path."
+			[[ $# -ge 2 && -n "${2:-}" ]] || usage_error "--task-dir requires a path."
 			TASK_DIR="$2"
 			shift 2
 			;;
@@ -195,8 +265,12 @@ while [[ $# -gt 0 ]]; do
 		-*)
 			# Unknown flags belong to Pi. Preserve pass-through so existing visual
 			# harness/runtime invocations keep working (`--offline`, `--no-session`,
-			# `--no-extensions`, provider/model flags, etc.).
+			# `--no-extensions`, provider/model flags, etc.). A value-consuming Pi
+			# flag claims the next token for the same reason the native parser does.
 			SUMOCODE_ARGS+=("$1")
+			if _sumocode_pi_flag_consumes_value "$1" "${2-}"; then
+				PI_VALUE_PENDING=1
+			fi
 			shift
 			;;
 		*)
@@ -205,44 +279,6 @@ while [[ $# -gt 0 ]]; do
 			;;
 	esac
 done
-
-# Pure membership test so each Pi parser consumption class reads as a table.
-_sumocode_arg_in() {
-	local candidate="$1"
-	shift
-	local item
-	for item in "$@"; do
-		[[ "${candidate}" == "${item}" ]] && return 0
-	done
-	return 1
-}
-
-# Class 2: unconditional value flags in Pi's pinned parseArgs(). Kept global so
-# mode selection and prompt extraction cannot disagree about a value-consuming
-# bare `--` token.
-SUMOCODE_PI_UNCONDITIONAL_VALUE_FLAGS=(
-	--mode --provider --model --api-key --system-prompt
-	--append-system-prompt --name -n --session --session-id --fork
-	--session-dir --models --tools -t --exclude-tools -xt --thinking
-	--export --extension -e --skill --prompt-template --theme
-)
-# Class 3: known boolean flags -- recognized BEFORE the generic unknown branch
-# so a boolean like --offline never consumes the real prompt.
-SUMOCODE_PI_BOOLEAN_FLAGS=(
-	--help -h --version -v --continue -c --resume -r --no-session
-	--no-tools -nt --no-builtin-tools -nbt --no-extensions -ne
-	--no-skills -ns --no-prompt-templates -np --no-themes
-	--no-context-files -nc --verbose --approve -a --no-approve -na
-	--offline
-)
-
-_sumocode_is_pi_unconditional_value_flag() {
-	_sumocode_arg_in "$1" "${SUMOCODE_PI_UNCONDITIONAL_VALUE_FLAGS[@]}"
-}
-
-_sumocode_is_pi_boolean_flag() {
-	_sumocode_arg_in "$1" "${SUMOCODE_PI_BOOLEAN_FLAGS[@]}"
-}
 
 _sumocode_first_pi_delimiter_index() {
 	local i=0

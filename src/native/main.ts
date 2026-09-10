@@ -374,6 +374,7 @@ function parseLauncherArgv(argv: readonly string[]): ParsedLaunch {
 		forwardedArgs: [],
 	};
 	const args = [...argv];
+	let commandExplicit = false;
 	while (args.length > 0) {
 		const arg = args.shift()!;
 		if (arg === "--") {
@@ -392,10 +393,17 @@ function parseLauncherArgv(argv: readonly string[]): ParsedLaunch {
 		// longer exist in one launcher only (#483).
 		const command = launcherCommandForToken(arg);
 		if (command !== undefined) {
+			if (commandExplicit && parsed.command === "run") {
+				// An explicit `run` owns the launch: later command spellings are
+				// path/prompt positionals, never command switches (issue 484).
+				parsed.forwardedArgs.push(arg);
+				continue;
+			}
 			// `run` is the default command; any other second command spelling is a
 			// usage error (repeating the same spelling is idempotent).
-			if (parsed.command !== "run" && parsed.command !== command) usageError(`Only one command may be specified: ${arg}`);
+			if (commandExplicit && parsed.command !== command) usageError(`Only one command may be specified: ${arg}`);
 			parsed.command = command;
+			commandExplicit = true;
 			continue;
 		}
 		const option = launcherOptionForToken(arg) ?? launcherOptionForEqualsToken(arg);

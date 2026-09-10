@@ -234,6 +234,16 @@ function commandParityCase(spec: LauncherCommandSpec, spelling: string): Launche
 	}
 }
 
+/** `run <command>`: an explicit run keeps the later spelling positional (issue 484). */
+function explicitRunPositionalCase(spec: LauncherCommandSpec): LauncherParityCase {
+	return {
+		name: `explicit run keeps ${spec.command} positional`,
+		argv: ["run", spec.command],
+		expect: "exit-0",
+		dryRun: { command: "run", args: "[redacted]" },
+	};
+}
+
 function optionParityCase(spec: LauncherOptionSpec, flag: string): LauncherParityCase {
 	const name = `shares the ${flag} option spelling`;
 	switch (spec.id) {
@@ -267,6 +277,10 @@ function optionParityCase(spec: LauncherOptionSpec, flag: string): LauncherParit
 export const LAUNCHER_PARITY_CASES: readonly LauncherParityCase[] = [
 	...LAUNCHER_COMMANDS.flatMap((spec) => [spec.command, ...spec.aliases].map((spelling) => commandParityCase(spec, spelling))),
 	...LAUNCHER_OPTIONS.flatMap((spec) => spec.flags.map((flag) => optionParityCase(spec, flag))),
+	// Explicit `run` owns the launch: a later known-command spelling is a
+	// path/prompt positional, not a command switch, so `run doctor` dispatches
+	// `run` in both launchers. Positional bytes are redacted in dry-run output.
+	...LAUNCHER_COMMANDS.filter((spec) => spec.command !== "run").map(explicitRunPositionalCase),
 	// Rejection rows (issue 484): when a launcher-owned check rejects a token it
 	// must name the offending token on stderr, exit 64, and never reach Pi.
 	// Unknown options in Pi-forwarding contexts (run/task) deliberately stay

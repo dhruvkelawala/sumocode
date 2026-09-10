@@ -67,6 +67,7 @@ DEBUG_MODE=0
 CLEAR_DIAG=1
 DRY_RUN=0
 COMMAND="run"
+COMMAND_EXPLICIT=0
 IS_TASK_LAUNCH=0
 FORCE_DIRECT_PI=0
 DIAG_FILE="${SUMO_TUI_DIAG_FILE:-}"
@@ -80,14 +81,30 @@ while [[ $# -gt 0 ]]; do
 			# `-w`/`--worktree` aliases below) live in src/cli/launcher-spec.ts; the
 			# native parser reads the same table and
 			# test/integration/launcher-runtime-contract.ts runs every spelling
-			# through both launchers. `run` is the explicit default spelling.
-			if [[ "${COMMAND}" != "run" && "${COMMAND}" != "$1" ]]; then usage_error "Only one command may be specified: $1"; fi
+			# through both launchers. `run` is the explicit default spelling. Once a
+			# command is explicit, `run` keeps later command spellings positional
+			# (path/prompt) and never switches commands (issue 484).
+			if [[ "${COMMAND_EXPLICIT}" -eq 1 ]]; then
+				if [[ "${COMMAND}" == "run" ]]; then
+					SUMOCODE_ARGS+=("$1")
+					shift
+					continue
+				fi
+				if [[ "${COMMAND}" != "$1" ]]; then usage_error "Only one command may be specified: $1"; fi
+			fi
 			COMMAND="$1"
+			COMMAND_EXPLICIT=1
 			shift
 			;;
 		-w|--worktree)
+			if [[ "${COMMAND_EXPLICIT}" -eq 1 && "${COMMAND}" == "run" ]]; then
+				SUMOCODE_ARGS+=("$1")
+				shift
+				continue
+			fi
 			if [[ "${COMMAND}" != "run" ]]; then usage_error "Only one command may be specified."; fi
 			COMMAND="worktree"
+			COMMAND_EXPLICIT=1
 			shift
 			;;
 		-d|--debug)

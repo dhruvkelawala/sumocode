@@ -1,11 +1,17 @@
+import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { performance } from "node:perf_hooks";
 import { describe, expect, it, vi } from "vitest";
 import { projectPiToolActivity } from "../activity/pi-projector.js";
 import { TRUNCATED_HEAD_MARKER } from "../child-protocol.js";
-import { registerSubagentTools } from "./tools.js";
-import { SubagentManager, type SpawnSubagentTask } from "./manager.js";
-import { SUBAGENT_MAX_RUNNING, type SubagentEvent, type SubagentSnapshot } from "./domain.js";
+import { herdrTerminalHost } from "../terminal-host/herdr.js";
 import type { TerminalHost, TerminalHostKind } from "../terminal-host/types.js";
+import { createPaneChildSpawner } from "./backend-pane.js";
+import { SUBAGENT_MAX_RUNNING, type SubagentEvent, type SubagentSnapshot } from "./domain.js";
+import { SubagentManager, type SpawnSubagentTask } from "./manager.js";
 import { loadRoles, type RoleWarning, type SubagentRole } from "./roles.js";
+import { registerSubagentTools } from "./tools.js";
 
 /** Tool result shape returned by every subagent tool. */
 interface ToolResult {
@@ -90,6 +96,17 @@ const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly Su
 };
 
 const textOf = <T extends { content: Array<{ text: string }> }>(result: T): string => result.content[0]!.text;
+
+const publicSpawnTool = (manager: SubagentManager, host: TerminalHost, roles: readonly SubagentRole[] = []) => {
+	const registered: Array<{ name: string; execute: (...args: unknown[]) => Promise<ToolResult> }> = [];
+	// SAFETY: the public-seam double implements every ExtensionAPI member the registration and spawn handler use.
+	registerSubagentTools({
+		registerTool: (tool: { name: string; execute: (...args: unknown[]) => Promise<ToolResult> }) => registered.push(tool),
+		getThinkingLevel: () => "medium",
+		getActiveTools: () => ["read", "bash"],
+	} as never, manager, undefined, host, () => ({ roles, warnings: [] }));
+	return registered.find((tool) => tool.name === "subagent_spawn")!;
+};
 
 describe("subagent tools", () => {
 	it("surfaces warning budgets in list/check without cancelling and refuses invalid limits", async () => {
@@ -272,6 +289,239 @@ describe("subagent tools", () => {
 		const { tool, ctx } = createHarness("none");
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		await expect(tool("subagent_spawn").execute("tc", { prompt: "watch", name: "worker", visible: true }, undefined, undefined, ctx as never)).rejects.toThrow("require a running herdr terminal host");
+	});
+
+	it("returns a pre-pane host failure without waiting for a stalled manifest", async () => {
+		const taskDir = await mkdtemp(join(tmpdir(), "sumocode-spawn-fast-failure-"));
+		try {
+			const host: TerminalHost = {
+				kind: "herdr",
+				startAgentPane: vi.fn(async () => ({ ok: false as const, code: "pane_unavailable", error: "no pane", reason: "no attach target" })),
+				openCommandInSplit: vi.fn(),
+				closePane: vi.fn(),
+				notify: vi.fn(),
+			};
+			// SAFETY: the pane backend and manager use only pi.exec on this test double.
+			const piExec = { exec: vi.fn() } as never;
+			const spawnPane = createPaneChildSpawner({ baseDir: taskDir, env: {} });
+			const manager = new SubagentManager((task) => spawnPane({
+				...task,
+				name: task.title,
+				host,
+				pi: piExec,
+				placement: task.placement!,
+			}), {
+				captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "base-ref" }),
+				buildCompletionManifest: async () => new Promise(() => undefined),
+				terminalHost: host,
+				pi: piExec,
+				initialVisibleTabId: "w1:t1",
+			});
+			const startedAt = performance.now();
+
+			const result = await publicSpawnTool(manager, host).execute("spawn-1", {
+				prompt: "watch",
+				name: "worker",
+				visible: true,
+			}, undefined, undefined, { cwd: "/repo", model: { provider: "openai", id: "gpt-5" } });
+
+			expect(performance.now() - startedAt).toBeLessThan(1_000);
+			expect(result).toMatchObject({
+				details: {
+					status: "pane_unavailable",
+					herdrReason: "no attach target",
+					subagent: { status: "error", manifest: { exit: "failed" } },
+				},
+			});
+		} finally {
+			await rm(taskDir, { recursive: true, force: true });
+		}
+	}, 10_000);
+
+	it("bounds concurrent no-pane spawns across reservation and Herdr provisioning", async () => {
+		vi.useFakeTimers();
+		vi.stubEnv("HERDR_ENV", "");
+		vi.stubEnv("HERDR_PANE_ID", "");
+		const taskDir = await mkdtemp(join(tmpdir(), "sumocode-spawn-reservation-timeout-"));
+		try {
+			let hostMode: "stall" | "succeed" = "stall";
+			let stalledCalls = 0;
+			const exec = vi.fn((_command: string, args: string[], options: { timeout: number }) => {
+				if (hostMode === "stall") {
+					stalledCalls += 1;
+					const delayMs = stalledCalls === 1 ? Math.min(2_500, options.timeout) : options.timeout;
+					return new Promise<{ stdout: string; stderr: string; code: number; killed: boolean }>((resolve) => {
+						setTimeout(() => resolve({ stdout: "", stderr: "", code: 1, killed: true }), delayMs);
+					});
+				}
+				if (args[0] === "tab") {
+					return Promise.resolve({ stdout: JSON.stringify({ result: { root_pane: { pane_id: "w1:p3", workspace_id: "w1", tab_id: "w1:t2" } } }), stderr: "", code: 0, killed: false });
+				}
+				return Promise.resolve({ stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false });
+			});
+			// SAFETY: exec implements the Pi exec result contract exercised by the real Herdr adapter.
+			const piExec = { exec } as never;
+			const spawnPane = createPaneChildSpawner({ baseDir: taskDir, env: {} });
+			const manager = new SubagentManager((task) => spawnPane({
+				...task,
+				name: task.title,
+				host: herdrTerminalHost,
+				pi: piExec,
+				placement: task.placement!,
+			}), {
+				captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "base-ref" }),
+				terminalHost: herdrTerminalHost,
+				pi: piExec,
+			});
+			const spawn = publicSpawnTool(manager, herdrTerminalHost);
+			const startedAt = Date.now();
+			const first = spawn.execute("spawn-1", { prompt: "watch one", name: "one", visible: true }, undefined, undefined, { cwd: "/repo", model: { provider: "openai", id: "gpt-5" } })
+				.then((result) => ({ result, elapsed: Date.now() - startedAt }));
+			await vi.advanceTimersByTimeAsync(0);
+			expect(exec).toHaveBeenCalledTimes(1);
+			const second = spawn.execute("spawn-2", { prompt: "watch two", name: "two", visible: true }, undefined, undefined, { cwd: "/repo", model: { provider: "openai", id: "gpt-5" } })
+				.then((result) => ({ result, elapsed: Date.now() - startedAt }));
+			const third = spawn.execute("spawn-3", { prompt: "watch three", name: "three", visible: true }, undefined, undefined, { cwd: "/repo", model: { provider: "openai", id: "gpt-5" } })
+				.then((result) => ({ result, elapsed: Date.now() - startedAt }));
+
+			await vi.advanceTimersByTimeAsync(10_000);
+			const completed = await Promise.all([first, second, third]);
+
+			expect(Math.max(...completed.map(({ elapsed }) => elapsed))).toBeLessThan(5_000);
+			expect(completed[0]?.result).toMatchObject({ details: { status: "pane_unavailable" } });
+			expect(completed[1]?.result).toMatchObject({ details: { status: "pane_unavailable" } });
+			// The cleanup reserve bounds the second spawn's tab create tighter, so
+			// the third spawn inherits a slot whose remaining budget is exactly the
+			// reserve. It fails at the Herdr deadline check without an exec call.
+			expect(completed[2]?.result).toMatchObject({
+				details: {
+					status: "pane_unavailable",
+					herdrReason: "herdr tab create exceeded the Herdr pane provisioning deadline",
+					subagent: {
+						status: "error",
+						errorText: "herdr tab create exceeded the Herdr pane provisioning deadline",
+					},
+				},
+			});
+			expect(exec).toHaveBeenCalledTimes(2);
+			expect(exec.mock.calls[1]?.[2].timeout).toBeLessThan(2_500);
+			expect(await readdir(taskDir)).toHaveLength(3);
+			await vi.advanceTimersByTimeAsync(10_000);
+			expect(exec).toHaveBeenCalledTimes(2);
+
+			hostMode = "succeed";
+			const fourthResult = await spawn.execute("spawn-4", { prompt: "watch four", name: "four", visible: true }, undefined, undefined, { cwd: "/repo", model: { provider: "openai", id: "gpt-5" } });
+			expect(textOf(fourthResult)).toContain("Started sa-4");
+			expect(manager.get("sa-4")).toMatchObject({ status: "running", pane: { paneId: "w1:p3" } });
+		} finally {
+			vi.useRealTimers();
+			vi.unstubAllEnvs();
+			await rm(taskDir, { recursive: true, force: true });
+		}
+	});
+
+	it("shares one Herdr budget for default-worktree fallback and returns pane_unavailable", async () => {
+		vi.useFakeTimers();
+		const taskDir = await mkdtemp(join(tmpdir(), "sumocode-spawn-worktree-failure-"));
+		try {
+			const exec = vi.fn((_command: string, args: string[], options: { timeout: number }) => new Promise<{ stdout: string; stderr: string; code: number; killed: boolean }>((resolve) => {
+				const expectedDuration = args[0] === "worktree" || (args[0] === "pane" && args[1] === "list") ? 3_000 : 0;
+				const duration = Math.min(expectedDuration, options.timeout);
+				setTimeout(() => {
+					if (duration < expectedDuration) {
+						resolve({ stdout: "", stderr: "", code: 1, killed: true });
+						return;
+					}
+					if (args[0] === "worktree") {
+						resolve({ stdout: JSON.stringify({ result: { workspace: { workspace_id: "w9" } } }), stderr: "", code: 0, killed: false });
+						return;
+					}
+					resolve({ stdout: JSON.stringify({ result: { panes: [] } }), stderr: "", code: 0, killed: false });
+				}, duration);
+			}));
+			// SAFETY: exec implements the Pi exec result contract exercised by the real Herdr adapter.
+			const piExec = { exec } as never;
+			const spawnPane = createPaneChildSpawner({ baseDir: taskDir, env: {} });
+			const createWorktree = vi.fn(async () => ({ ok: true as const, path: "/repo.sumo-worktrees/sumo__worker", branch: "sumo/worker", baseRef: "HEAD" }));
+			const manager = new SubagentManager((task) => spawnPane({
+				...task,
+				name: task.title,
+				host: herdrTerminalHost,
+				pi: piExec,
+				placement: task.placement!,
+			}), {
+				captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "base-ref" }),
+				createWorktree,
+				resolveWorktreeBaseRef: async () => "base-ref",
+				buildCompletionManifest: async () => new Promise(() => undefined),
+				terminalHost: herdrTerminalHost,
+				pi: piExec,
+			});
+			const role: SubagentRole = { id: "implement-cheap", label: "Implement Cheap", description: "implement", systemPrompt: "implement", defaultWorktree: true };
+			const startedAt = Date.now();
+			const pending = publicSpawnTool(manager, herdrTerminalHost, [role]).execute("spawn-1", {
+				prompt: "write",
+				name: "worker",
+				role: "implement-cheap",
+				visible: true,
+			}, undefined, undefined, { cwd: "/repo", model: { provider: "openai", id: "gpt-5" } }).then((result) => ({ result, elapsed: Date.now() - startedAt }));
+
+			await vi.advanceTimersByTimeAsync(20_000);
+			const { result, elapsed } = await pending;
+
+			expect(elapsed).toBeLessThanOrEqual(5_000);
+			expect(createWorktree).toHaveBeenCalledTimes(1);
+			expect(result).toMatchObject({
+				details: {
+					status: "pane_unavailable",
+					herdrReason: expect.stringContaining("herdr pane list"),
+					subagent: {
+						status: "error",
+						worktree: { path: "/repo.sumo-worktrees/sumo__worker" },
+						manifest: { exit: "failed" },
+					},
+				},
+			});
+		} finally {
+			vi.useRealTimers();
+			await rm(taskDir, { recursive: true, force: true });
+		}
+	});
+
+	it("returns pane_unavailable with Herdr's reason as structured spawn details", async () => {
+		const { tool, ctx, manager } = createHarness();
+		vi.spyOn(manager, "spawn").mockResolvedValue({
+			id: "sa-1",
+			title: "worker",
+			prompt: "watch",
+			cwd: "/tmp/project",
+			baseRef: "base-ref",
+			visible: true,
+			status: "error",
+			createdAt: 1,
+			settledAt: 2,
+			errorText: "herdr returned no pane for tab w5:t8",
+			errorCode: "pane_unavailable",
+			errorReason: "tab has no available shell pane",
+			usage: { turns: 0 },
+			transcript: [],
+			liveText: "",
+			liveTools: [],
+			finalText: "",
+		});
+
+		// SAFETY: the ctx double carries only the fields the tool handler reads.
+		const result = await tool("subagent_spawn").execute("tc", { prompt: "watch", name: "worker", visible: true }, undefined, undefined, ctx as never);
+
+		expect(result).toMatchObject({
+			details: {
+				action: "spawn",
+				status: "pane_unavailable",
+				herdrReason: "tab has no available shell pane",
+				subagent: { id: "sa-1", status: "error" },
+			},
+		});
+		expect(textOf(result)).toContain("tab has no available shell pane");
 	});
 
 	it("passes worktree isolation, branch, and baseRef overrides to the manager", async () => {

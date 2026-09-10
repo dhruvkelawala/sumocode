@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProcessTreeOperations } from "../background-tasks/process-tree.js";
 import { herdrTerminalHost } from "../terminal-host/herdr.js";
-import type { TerminalHost } from "../terminal-host/types.js";
+import type { HostResult, StartedAgentPane, TerminalHost } from "../terminal-host/types.js";
 import { createPaneChildSpawner } from "./backend-pane.js";
 import { SubagentRegistry, type SubagentRecord } from "./registry.js";
 import { controlAuthority } from "./retained-adoption.js";
@@ -17,7 +17,7 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
-function fixture(association = true) {
+function fixture(association = true, startFailure?: HostResult<StartedAgentPane>) {
 	const failures: string[] = [];
 	const onFailure = vi.fn((phase: string) => { failures.push(phase); });
 	vi.useFakeTimers();
@@ -47,6 +47,7 @@ function fixture(association = true) {
 		kind: "herdr", openCommandInSplit: vi.fn(), closePane: vi.fn(), notify: vi.fn(),
 		inspectPane: vi.fn(herdrTerminalHost.inspectPane),
 		startAgentPane: vi.fn<NonNullable<TerminalHost["startAgentPane"]>>(async (_pi, launch) => {
+			if (startFailure) return startFailure;
 			expect(registry.get(record.id)).toMatchObject({ status: "starting", writerLease: { generation: 1 }, supervisor: expect.any(Object), child: null });
 			nonce = launch.shellCommand.split("'").at(-2)!;
 			writeFileSync(join(taskDir, "launch.born"), `${nonce}\n42\n42\nwrapper-birth\n`, { mode: 0o600 });
@@ -89,6 +90,30 @@ describe("retained visible owner", () => {
 			verification: { members: [{ pid: 42, processStartTime: "wrapper-birth" }] },
 		} });
 		expect(f.host.inspectPane).toHaveBeenCalledTimes(1);
+	});
+	it("persists the host's structured refusal when provisioning fails before admission", async () => {
+		const f = fixture(true, {
+			ok: false, code: "pane_unavailable",
+			error: "herdr tab create failed", reason: "herdr tab create failed; cleanup: close refused",
+			orphanPaneId: "pane:9", orphanTabId: "w9:t9",
+		});
+		await vi.advanceTimersByTimeAsync(50);
+		await expect(f.owner.ready).rejects.toThrow("herdr tab create failed");
+		expect(await f.owner.settlement).toBe("ambiguous");
+		// The refusal must outlive the owner process: the parent reads this record
+		// to surface pane_unavailable and keep counting the orphaned slot.
+		expect(f.owner.record).toMatchObject({
+			status: "ambiguous",
+			failure: {
+				errorText: "herdr tab create failed",
+				errorCode: "pane_unavailable",
+				errorReason: "herdr tab create failed; cleanup: close refused",
+				paneStillOpen: true,
+				orphanPane: { agentName: "worker", paneId: "pane:9", tabId: "w9:t9", workspaceId: "w9" },
+			},
+		});
+		expect(f.host.inspectPane).not.toHaveBeenCalled();
+		expect(f.operations.signalTree).not.toHaveBeenCalled();
 	});
 	it("refuses a pane ID with a different process association", async () => {
 		const f = fixture(false);

@@ -17,7 +17,6 @@ const makeTask = (title: string): SpawnSubagentTask => ({ title, prompt: `prompt
 const subagentId = (sequence: number): string => `sa-${sequence}`;
 const firstQueuedId = subagentId(SUBAGENT_MAX_RUNNING + 1);
 const secondQueuedId = subagentId(SUBAGENT_MAX_RUNNING + 2);
-
 const fakeManifestBuilder = async (options: Parameters<NonNullable<import("./manager.js").SubagentManagerDependencies["buildCompletionManifest"]>>[0]) => ({
 	baseRef: options.baseRef,
 	headRef: options.baseRef,
@@ -605,6 +604,55 @@ describe("SubagentManager", () => {
 		expect(manager.get("sa-65")).toBeDefined();
 	});
 
+	it("keeps failed-close occupancy through history pruning", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+			initialVisibleTabId: "w1:t5",
+		});
+
+		// A visible child whose pane close failed still occupies its slot.
+		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
+		emitters.get("sa-1")?.({ kind: "run-started" });
+		emitters.get("sa-1")?.({ kind: "pane-attached", pane: { agentName: "first-worker", workspaceId: "w1", tabId: "w1:t5", paneId: "w1:p1" } });
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("error"));
+
+		// Fill history past MAX_TRACKED with settled background tasks.
+		for (let index = 0; index < 64; index += 1) {
+			await manager.spawn(makeTask(`${index + 1}`));
+			emitters.get(`sa-${index + 2}`)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		}
+		await vi.waitFor(() => expect(manager.list().every((snapshot) => snapshot.id === "sa-1" || snapshot.status === "done")).toBe(true));
+
+		// The still-open pane's record must survive pruning: placement reads
+		// occupancy only from this.list(), so losing it after MAX_TRACKED newer
+		// tasks would undercount the tab and allow a fifth split.
+		expect(manager.get("sa-1")?.paneStillOpen).toBe(true);
+		expect(manager.get("sa-1")?.pane).toEqual({ agentName: "first-worker", workspaceId: "w1", tabId: "w1:t5", paneId: "w1:p1" });
+
+		await manager.spawn({ prompt: "p66", title: "next", cwd: "/repo", visible: true });
+		// The failed-close pane still counts toward w1:t5's capacity.
+		expect(placements[placements.length - 1]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "down" });
+	});
+
 	it("creates an isolated worktree before spawning and stores its ref", async () => {
 		const backendFactory = vi.fn(() => ({ events: () => undefined, interrupt: () => undefined }));
 		const createWorktree = vi.fn(async () => ({
@@ -798,7 +846,605 @@ describe("SubagentManager", () => {
 		expect(manager.get("sa-1")?.pane?.tabId).toBe("w1:t5");
 	});
 
-	it("counts settled visible panes toward tab capacity (open panes occupy real estate)", async () => {
+	it("reclaims a closed visible tab before the next spawn", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+				emit({ kind: "run-started" });
+				emit({ kind: "pane-attached", pane: { agentName: `${task.id}-worker`, workspaceId: "w1", tabId: "w1:t5", paneId: `w1:p${task.id}` } });
+			},
+			interrupt: () => undefined,
+			requestClose: () => emitters.get(task.id)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "closed" } }),
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+		});
+
+		const first = await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
+		// SAFETY: this first spawn is below capacity, so it is a snapshot with an id.
+		await manager.close([(first as { id: string }).id]);
+		const second = await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true });
+
+		expect(second).toMatchObject({ status: "running", pane: { paneId: "w1:psa-2" } });
+		expect(placements).toEqual([
+			{ kind: "new-tab", label: "subagents" },
+			{ kind: "new-tab", label: "subagents" },
+		]);
+	});
+
+	it("drops the generated tab cache when the last of two siblings settles while the other manifest is still collecting", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		let resolveManifest: (manifest: CompletionManifest) => void = () => undefined;
+		const deferredManifest = new Promise<CompletionManifest>((resolve) => { resolveManifest = resolve; });
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+				emit({ kind: "run-started" });
+				emit({ kind: "pane-attached", pane: { agentName: `${task.id}-worker`, workspaceId: "w1", tabId: "w1:t5", paneId: `w1:p${task.id}` } });
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: async () => deferredManifest,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+		});
+
+		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
+		await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true });
+		expect(placements).toEqual([
+			{ kind: "new-tab", label: "subagents" },
+			{ kind: "tab", tabId: "w1:t5", direction: "down" },
+		]);
+
+		// Settle both siblings close together: the first child's manifest is
+		// deferred, so its snapshot stays "running" while the second child's
+		// run-settled folds. The second fold must still drop the generated-tab
+		// cache because the first child is no longer a live `children` entry.
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "first done" } });
+		emitters.get("sa-2")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "second done" } });
+
+		resolveManifest({ baseRef: "abc123", changedPaths: [], dirty: false, commits: 0, exit: "completed", durationMs: 1 });
+		await vi.waitFor(() => {
+			expect(manager.get("sa-1")?.status).toBe("done");
+			expect(manager.get("sa-2")?.status).toBe("done");
+		});
+
+		await manager.spawn({ prompt: "p3", title: "third", cwd: "/repo", visible: true });
+		expect(placements[2]).toEqual({ kind: "new-tab", label: "subagents" });
+	});
+
+	it("excludes settling children from caller-tab capacity during placement planning", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		let resolveManifest: (manifest: CompletionManifest) => void = () => undefined;
+		const deferredManifest = new Promise<CompletionManifest>((resolve) => { resolveManifest = resolve; });
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+				emit({ kind: "run-started" });
+				emit({ kind: "pane-attached", pane: { agentName: `${task.id}-worker`, workspaceId: "w1", tabId: "w1:t1", paneId: `w1:p${task.id}` } });
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: async () => deferredManifest,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+			initialVisibleTabId: "w1:t1",
+		});
+
+		for (const title of ["first", "second", "third", "fourth"]) {
+			await manager.spawn({ prompt: `p-${title}`, title, cwd: "/repo", visible: true });
+		}
+		expect(placements).toEqual([
+			{ kind: "tab", tabId: "w1:t1", direction: "right" },
+			{ kind: "tab", tabId: "w1:t1", direction: "down" },
+			{ kind: "tab", tabId: "w1:t1", direction: "right" },
+			{ kind: "tab", tabId: "w1:t1", direction: "down" },
+		]);
+
+		// Settle all four together: each leaves `children` synchronously while
+		// its snapshot still reports "running" during deferred manifest
+		// collection. Placement planning must not count those freed panes.
+		for (const id of ["sa-1", "sa-2", "sa-3", "sa-4"]) {
+			emitters.get(id)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		}
+
+		await manager.spawn({ prompt: "p5", title: "fifth", cwd: "/repo", visible: true });
+		expect(placements[4]).toEqual({ kind: "tab", tabId: "w1:t1", direction: "right" });
+
+		resolveManifest({ baseRef: "abc123", changedPaths: [], dirty: false, commits: 0, exit: "completed", durationMs: 1 });
+		await vi.waitFor(() => {
+			expect(manager.get("sa-1")?.status).toBe("done");
+			expect(manager.get("sa-4")?.status).toBe("done");
+		});
+	});
+
+	it("retains a surviving generated tab when the cached overflow tab empties", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+				emit({ kind: "run-started" });
+				// The first two children land in one generated tab, the next two in
+				// a second; the second becomes the cached (most recent) tab.
+				const tabId = task.id === "sa-1" || task.id === "sa-2" ? "w1:t5" : "w1:t6";
+				emit({ kind: "pane-attached", pane: { agentName: `${task.id}-worker`, workspaceId: "w1", tabId, paneId: `w1:p${task.id}` } });
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+		});
+
+		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
+		await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true });
+		await manager.spawn({ prompt: "p3", title: "third", cwd: "/repo", visible: true });
+		await manager.spawn({ prompt: "p4", title: "fourth", cwd: "/repo", visible: true });
+
+		// Settle the cached overflow tab (w1:t6) entirely. The older generated
+		// tab (w1:t5) still holds live panes and must be reclaimed next.
+		emitters.get("sa-3")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-3")?.status).toBe("done"));
+		emitters.get("sa-4")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-4")?.status).toBe("done"));
+
+		await manager.spawn({ prompt: "p5", title: "fifth", cwd: "/repo", visible: true });
+		expect(placements[4]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "right" });
+	});
+
+	it("does not promote an isolated worktree workspace tab when the cached tab empties", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			openExistingWorktreeWorkspace: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+				emit({ kind: "run-started" });
+				const tabId = task.id === "sa-1" ? "w9:t1" : "w1:t5";
+				emit({ kind: "pane-attached", pane: { agentName: `${task.id}-worker`, workspaceId: tabId.split(":")[0], tabId, paneId: `${tabId}:p` } });
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			createWorktree: async (options) => ({ ok: true, path: `/isolated/${options.task}`, branch: options.branch ?? `sumo/${options.task}`, baseRef: options.baseRef ?? "HEAD" }),
+			resolveWorktreeBaseRef: async () => "abc123",
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+		});
+
+		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true, worktree: true });
+		await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true });
+		expect(placements).toEqual([
+			{ kind: "worktree-workspace", path: "/isolated/first", label: "first", sourceCwd: "/repo" },
+			{ kind: "new-tab", label: "subagents" },
+		]);
+
+		// Settle the shared generated tab's only child.
+		emitters.get("sa-2")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-2")?.status).toBe("done"));
+
+		await manager.spawn({ prompt: "p3", title: "third", cwd: "/repo", visible: true });
+		// The isolated worktree workspace (w9:t1) must not be promoted to the
+		// shared cache; with no surviving shared tab, the next spawn plans fresh.
+		expect(placements[2]).toEqual({ kind: "new-tab", label: "subagents" });
+	});
+
+	it("keeps a failed-close pane in capacity until its slot is confirmed free", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+				emit({ kind: "run-started" });
+				emit({ kind: "pane-attached", pane: { agentName: `${task.id}-worker`, workspaceId: "w1", tabId: "w1:t5", paneId: `w1:p${task.id}` } });
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+		});
+
+		for (const title of ["first", "second", "third", "fourth"]) {
+			await manager.spawn({ prompt: `p-${title}`, title, cwd: "/repo", visible: true });
+		}
+
+		// sa-4's close fails: it leaves `children` but its pane is still open.
+		emitters.get("sa-4")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
+		await vi.waitFor(() => expect(manager.get("sa-4")?.status).toBe("error"));
+
+		await manager.spawn({ prompt: "p5", title: "fifth", cwd: "/repo", visible: true });
+		// The still-open pane keeps w1:t5 at capacity, so the fifth child overflows.
+		expect(placements[4]).toEqual({ kind: "new-tab", label: "subagents 2" });
+	});
+
+	it("records failed-close occupancy before the manifest settles", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		let resolveManifest: (manifest: CompletionManifest) => void = () => undefined;
+		const deferredManifest = new Promise<CompletionManifest>((resolve) => { resolveManifest = resolve; });
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+				emit({ kind: "run-started" });
+				emit({ kind: "pane-attached", pane: { agentName: `${task.id}-worker`, workspaceId: "w1", tabId: "w1:t5", paneId: `w1:p${task.id}` } });
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: async () => deferredManifest,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+		});
+
+		for (const title of ["first", "second", "third", "fourth"]) {
+			await manager.spawn({ prompt: `p-${title}`, title, cwd: "/repo", visible: true });
+		}
+
+		// sa-4's close fails while its manifest collection stays in flight.
+		emitters.get("sa-4")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
+
+		await manager.spawn({ prompt: "p5", title: "fifth", cwd: "/repo", visible: true });
+		// The still-open pane must already count during the in-flight settle.
+		expect(placements[4]).toEqual({ kind: "new-tab", label: "subagents 2" });
+
+		resolveManifest({ baseRef: "abc123", changedPaths: [], dirty: false, commits: 0, exit: "completed", durationMs: 1 });
+		await vi.waitFor(() => expect(manager.get("sa-4")?.status).toBe("error"));
+	});
+
+	it("retains a generated tab anchored by a failed-close pane", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+				emit({ kind: "run-started" });
+				emit({ kind: "pane-attached", pane: { agentName: `${task.id}-worker`, workspaceId: "w1", tabId: "w1:t5", paneId: `w1:p${task.id}` } });
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+		});
+
+		for (const title of ["first", "second"]) {
+			await manager.spawn({ prompt: `p-${title}`, title, cwd: "/repo", visible: true });
+		}
+
+		// sa-1's close fails: its pane keeps w1:t5 alive after it settles.
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("error"));
+		emitters.get("sa-2")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-2")?.status).toBe("done"));
+
+		await manager.spawn({ prompt: "p3", title: "third", cwd: "/repo", visible: true });
+		// The failed-close pane keeps w1:t5 alive, so the cache must stay and the
+		// next child reclaims its remaining capacity instead of a fresh tab.
+		expect(placements[2]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "down" });
+	});
+
+	it("records provisioning orphan occupancy and retains its tab", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+			initialVisibleTabId: "w1:t5",
+		});
+
+		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
+		expect(placements[0]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "right" });
+		// Provisioning failed after a split whose cleanup also failed: the pane is
+		// still open even though no pane-attached event ever fired.
+		emitters.get("sa-1")?.({
+			kind: "run-settled",
+			outcome: {
+				kind: "failed",
+				errorText: "herdr pane run exited 1",
+				errorCode: "pane_unavailable",
+				paneStillOpen: true,
+				orphanPane: { agentName: "first-worker", workspaceId: "w1", tabId: "w1:t5", paneId: "w1:p9" },
+			},
+		});
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("error"));
+
+		expect(manager.get("sa-1")?.pane).toEqual({ agentName: "first-worker", workspaceId: "w1", tabId: "w1:t5", paneId: "w1:p9" });
+		expect(manager.get("sa-1")?.paneStillOpen).toBe(true);
+		await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true });
+		// The orphan occupies w1:t5, so the cache stays and the slot counts.
+		expect(placements[1]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "down" });
+	});
+
+	it("promotes a generated orphan tab into the reclaim cache", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+			initialVisibleTabId: "w1:t5",
+		});
+
+		// Fill the caller tab so the fifth spawn plans a generated tab.
+		for (const [index, title] of ["first", "second", "third", "fourth"].entries()) {
+			await manager.spawn({ prompt: `p${index + 1}`, title, cwd: "/repo", visible: true });
+			emitters.get(`sa-${index + 1}`)?.({ kind: "run-started" });
+			emitters.get(`sa-${index + 1}`)?.({ kind: "pane-attached", pane: { agentName: `sa-${index + 1}-worker`, workspaceId: "w1", tabId: "w1:t5", paneId: `w1:p${index + 1}` } });
+		}
+		expect(placements).toEqual([
+			{ kind: "tab", tabId: "w1:t5", direction: "right" },
+			{ kind: "tab", tabId: "w1:t5", direction: "down" },
+			{ kind: "tab", tabId: "w1:t5", direction: "right" },
+			{ kind: "tab", tabId: "w1:t5", direction: "down" },
+		]);
+
+		await manager.spawn({ prompt: "p5", title: "fifth", cwd: "/repo", visible: true });
+		expect(placements[4]).toEqual({ kind: "new-tab", label: "subagents 2" });
+		// Provisioning failed after the generated tab was created: the pane run
+		// and its cleanup both failed, so the host reports the orphan pane and
+		// the tab that keeps it alive.
+		emitters.get("sa-5")?.({
+			kind: "run-settled",
+			outcome: {
+				kind: "failed",
+				errorText: "herdr pane run exited 1",
+				errorCode: "pane_unavailable",
+				paneStillOpen: true,
+				orphanPane: { agentName: "fifth-worker", workspaceId: "w1", tabId: "w1:t8", paneId: "w1:p8" },
+			},
+		});
+		await vi.waitFor(() => expect(manager.get("sa-5")?.status).toBe("error"));
+
+		await manager.spawn({ prompt: "p6", title: "sixth", cwd: "/repo", visible: true });
+		// The surviving generated tab has three free slots, so the cache must
+		// point at it and the next spawn reclaims capacity there.
+		expect(placements[5]).toEqual({ kind: "tab", tabId: "w1:t8", direction: "down" });
+	});
+
+	it("reclaims a vacancy in an older shared tab when the cached tab is full", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+			initialVisibleTabId: "w1:t5",
+		});
+
+		// Four children fill the caller tab, four more fill a generated overflow
+		// tab that becomes the cache. The child ids are 1-indexed so the pane
+		// placement asserts read naturally.
+		for (let index = 1; index <= 8; index += 1) {
+			await manager.spawn({ prompt: `p${index}`, title: `child-${index}`, cwd: "/repo", visible: true });
+			emitters.get(`sa-${index}`)?.({ kind: "run-started" });
+			emitters.get(`sa-${index}`)?.({ kind: "pane-attached", pane: { agentName: `sa-${index}-worker`, workspaceId: "w1", tabId: index <= 4 ? "w1:t5" : "w1:t6", paneId: `w1:p${index}` } });
+		}
+		expect(placements[4]).toEqual({ kind: "new-tab", label: "subagents 2" });
+		// The cached overflow tab is full, but the caller tab lost a child.
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
+
+		await manager.spawn({ prompt: "p9", title: "ninth", cwd: "/repo", visible: true });
+		// The caller tab's free slot must be reclaimed instead of provisioning
+		// a duplicate overflow tab.
+		expect(placements[8]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "down" });
+	});
+
+	it("returns to the emptied caller tab when the cached overflow tab is full", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+			initialVisibleTabId: "w1:t5",
+		});
+
+		// Four children fill the caller tab, four fill the generated overflow
+		// tab that becomes the cache.
+		for (let index = 1; index <= 8; index += 1) {
+			await manager.spawn({ prompt: `p${index}`, title: `child-${index}`, cwd: "/repo", visible: true });
+			emitters.get(`sa-${index}`)?.({ kind: "run-started" });
+			emitters.get(`sa-${index}`)?.({ kind: "pane-attached", pane: { agentName: `sa-${index}-worker`, workspaceId: "w1", tabId: index <= 4 ? "w1:t5" : "w1:t6", paneId: `w1:p${index}` } });
+		}
+		// Every child exits the caller tab, but the tab itself survives: it
+		// still holds the parent session pane.
+		for (let index = 1; index <= 4; index += 1) {
+			emitters.get(`sa-${index}`)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		}
+		await vi.waitFor(() => expect(["sa-1", "sa-2", "sa-3", "sa-4"].every((id) => manager.get(id)?.status === "done")).toBe(true));
+
+		await manager.spawn({ prompt: "p9", title: "ninth", cwd: "/repo", visible: true });
+		// The cached overflow tab is full and no live child pane remains
+		// elsewhere, so the emptied caller tab must be reclaimed.
+		expect(placements[8]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "right" });
+	});
+
+	it("promotes a surviving tab anchored only by failed-close panes", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+				emit({ kind: "run-started" });
+				emit({ kind: "pane-attached", pane: { agentName: `${task.id}-worker`, workspaceId: "w1", tabId: task.id === "sa-5" ? "w1:t9" : "w1:t5", paneId: `w1:p${task.id}` } });
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+		});
+
+		for (const title of ["first", "second", "third", "fourth"]) {
+			await manager.spawn({ prompt: `p-${title}`, title, cwd: "/repo", visible: true });
+		}
+		// sa-5 overflows into a fresh tab and the cache follows its pane.
+		await manager.spawn({ prompt: "p5", title: "fifth", cwd: "/repo", visible: true });
+		expect(placements[4]).toEqual({ kind: "new-tab", label: "subagents 2" });
+		await manager.spawn({ prompt: "p6", title: "sixth", cwd: "/repo", visible: true });
+		expect(placements[5]).toEqual({ kind: "tab", tabId: "w1:t9", direction: "down" });
+
+		for (const id of ["sa-2", "sa-3", "sa-4"]) {
+			emitters.get(id)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		}
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("error"));
+		emitters.get("sa-5")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		emitters.get("sa-6")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-6")?.status).toBe("done"));
+
+		await manager.spawn({ prompt: "p7", title: "seventh", cwd: "/repo", visible: true });
+		// w1:t9 died with its last live child, but w1:t5 still holds sa-1's
+		// failed-close pane; that surviving tab must become the cache.
+		expect(placements[6]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "down" });
+	});
+
+	it("counts only live visible panes toward tab capacity", async () => {
 		const backendTasks: Array<SpawnSubagentTask & { placement?: unknown }> = [];
 		const host: TerminalHost = {
 			kind: "herdr",
@@ -812,9 +1458,6 @@ describe("SubagentManager", () => {
 				events: (emit) => {
 					emit({ kind: "run-started" });
 					emit({ kind: "pane-attached", pane: { agentName: `${task.id}-worker`, workspaceId: "w1", tabId: "w1:t5", paneId: `w1:p${task.id}` } });
-					// Settle immediately: the pane stays OPEN for inspection but the
-					// child no longer counts as running.
-					emit({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
 				},
 				interrupt: () => undefined,
 			};
@@ -825,8 +1468,8 @@ describe("SubagentManager", () => {
 			await manager.spawn({ prompt: `p${index}`, title: `task ${index}`, cwd: "/repo", visible: true });
 		}
 
-		// Panes 1-4 fill the first tab even though they settled; the fifth must
-		// overflow to a fresh tab instead of over-tiling the full one.
+		// Four live panes fill the first tab; the fifth must overflow instead of
+		// over-tiling it. Settled panes are covered by the reclamation test above.
 		expect(backendTasks[4]?.placement).toEqual({ kind: "new-tab", label: "subagents 2" });
 	});
 
@@ -871,6 +1514,395 @@ describe("SubagentManager", () => {
 		expect(backendTasks[2]?.placement).toEqual({ kind: "new-tab", label: "subagents" });
 	});
 
+	it("unseeds the cache when a pre-attach failure targets the initial caller tab", async () => {
+		const backendTasks: Array<SpawnSubagentTask & { placement?: unknown }> = [];
+		let mode: "attach" | "fail-preattach" = "fail-preattach";
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => {
+			backendTasks.push(task);
+			const current = mode;
+			return {
+				events: (emit) => {
+					emit({ kind: "run-started" });
+					if (current === "attach") {
+						emit({ kind: "pane-attached", pane: { agentName: `${task.id}-worker`, workspaceId: "w1", tabId: "w1:t9", paneId: `w1:p${task.id}` } });
+					} else {
+						emit({ kind: "run-settled", outcome: { kind: "failed", errorText: "herdr agent start exited 1" } });
+					}
+				},
+				interrupt: () => undefined,
+			};
+		}, { captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }), terminalHost: host, // SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never, initialVisibleTabId: "w1:t5" });
+
+		// The cache starts on the caller tab; the operator moved the parent pane
+		// elsewhere and Herdr closed the original tab, so the split fails.
+		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
+		expect(backendTasks[0]?.placement).toEqual({ kind: "tab", tabId: "w1:t5", direction: "right" });
+
+		// Re-arming the same stale initial id would fail every subsequent spawn.
+		// The cache must unseed so the next spawn plans a fresh tab instead.
+		mode = "attach";
+		await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true });
+		expect(backendTasks[1]?.placement).toEqual({ kind: "new-tab", label: "subagents" });
+	});
+
+	it("clears placement tracking when backend construction fails", async () => {
+		const backendFactory = vi.fn(() => { throw new Error("cannot create task directory"); });
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager(backendFactory, {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+			initialVisibleTabId: "w1:t5",
+		});
+
+		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
+
+		// The planned placement must not leak in the tracking map for a
+		// construction that never emits run-settled.
+		expect(manager.placementByTask.size).toBe(0);
+	});
+
+	it("retires the initial caller tab once paneTabGone proves it stale", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+			initialVisibleTabId: "w1:t5",
+		});
+
+		// The operator moved the parent pane; the caller tab is gone, and the
+		// first spawn proves it with paneTabGone.
+		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
+		expect(placements[0]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "right" });
+		emitters.get("sa-1")?.({ kind: "run-started" });
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "herdr returned no pane for tab w1:t5", paneTabGone: true } });
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("error"));
+
+		// The replacement generated tab fills up; the retired caller tab must
+		// not be re-selected by the vacancy fallback.
+		for (let index = 2; index <= 5; index += 1) {
+			await manager.spawn({ prompt: `p${index}`, title: `child-${index}`, cwd: "/repo", visible: true });
+			emitters.get(`sa-${index}`)?.({ kind: "run-started" });
+			emitters.get(`sa-${index}`)?.({ kind: "pane-attached", pane: { agentName: `sa-${index}-worker`, workspaceId: "w1", tabId: "w1:t9", paneId: `w1:p${index}` } });
+		}
+		expect(placements[1]).toEqual({ kind: "new-tab", label: "subagents" });
+
+		await manager.spawn({ prompt: "p6", title: "sixth", cwd: "/repo", visible: true });
+		// The cached generated tab is full and the caller tab was retired, so a
+		// fresh overflow tab is planned instead of the dead caller tab.
+		expect(placements[5]).toEqual({ kind: "new-tab", label: "subagents 2" });
+	});
+
+	it("retires a stale failed-close record when its tab fails a placement", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+			initialVisibleTabId: "w1:t5",
+		});
+
+		// Four children fill the caller tab; a fifth opens the overflow tab
+		// whose close later fails, leaving a still-open pane record there.
+		for (let index = 1; index <= 4; index += 1) {
+			await manager.spawn({ prompt: `p${index}`, title: `child-${index}`, cwd: "/repo", visible: true });
+			emitters.get(`sa-${index}`)?.({ kind: "run-started" });
+			emitters.get(`sa-${index}`)?.({ kind: "pane-attached", pane: { agentName: `sa-${index}-worker`, workspaceId: "w1", tabId: "w1:t5", paneId: `w1:p${index}` } });
+		}
+		await manager.spawn({ prompt: "p5", title: "fifth", cwd: "/repo", visible: true });
+		expect(placements[4]).toEqual({ kind: "new-tab", label: "subagents 2" });
+		emitters.get("sa-5")?.({ kind: "run-started" });
+		emitters.get("sa-5")?.({ kind: "pane-attached", pane: { agentName: "sa-5-worker", workspaceId: "w1", tabId: "w1:t6", paneId: "w1:p5" } });
+		emitters.get("sa-5")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
+		await vi.waitFor(() => expect(manager.get("sa-5")?.status).toBe("error"));
+
+		// The caller tab is full, so the vacancy scan selects w1:t6 for the next
+		// spawn. The operator has closed that pane in the meantime: the split
+		// fails pre-attach, proving the tab is gone.
+		await manager.spawn({ prompt: "p6", title: "sixth", cwd: "/repo", visible: true });
+		expect(placements[5]).toEqual({ kind: "tab", tabId: "w1:t6", direction: "down" });
+		emitters.get("sa-6")?.({ kind: "run-started" });
+		emitters.get("sa-6")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "herdr returned no pane for tab w1:t6", paneTabGone: true } });
+		await vi.waitFor(() => expect(manager.get("sa-6")?.status).toBe("error"));
+
+		// The stale record must be retired: otherwise the scan keeps selecting
+		// the dead tab and every spawn fails forever.
+		expect(manager.get("sa-5")?.paneStillOpen).toBeUndefined();
+		await manager.spawn({ prompt: "p7", title: "seventh", cwd: "/repo", visible: true });
+		expect(placements[6]).toEqual({ kind: "new-tab", label: "subagents 2" });
+	});
+
+	it("keeps still-open records when a tab placement fails without tab-gone evidence", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+			initialVisibleTabId: "w1:t5",
+		});
+
+		for (let index = 1; index <= 4; index += 1) {
+			await manager.spawn({ prompt: `p${index}`, title: `child-${index}`, cwd: "/repo", visible: true });
+			emitters.get(`sa-${index}`)?.({ kind: "run-started" });
+			emitters.get(`sa-${index}`)?.({ kind: "pane-attached", pane: { agentName: `sa-${index}-worker`, workspaceId: "w1", tabId: "w1:t5", paneId: `w1:p${index}` } });
+		}
+		await manager.spawn({ prompt: "p5", title: "fifth", cwd: "/repo", visible: true });
+		emitters.get("sa-5")?.({ kind: "run-started" });
+		emitters.get("sa-5")?.({ kind: "pane-attached", pane: { agentName: "sa-5-worker", workspaceId: "w1", tabId: "w1:t6", paneId: "w1:p5" } });
+		emitters.get("sa-5")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
+		await vi.waitFor(() => expect(manager.get("sa-5")?.status).toBe("error"));
+
+		// The candidate tab's split fails without proving the tab is gone (e.g.
+		// the run failed on a live tab), so the still-open record must survive.
+		await manager.spawn({ prompt: "p6", title: "sixth", cwd: "/repo", visible: true });
+		expect(placements[5]).toEqual({ kind: "tab", tabId: "w1:t6", direction: "down" });
+		emitters.get("sa-6")?.({ kind: "run-started" });
+		emitters.get("sa-6")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "herdr agent start exited 1" } });
+		await vi.waitFor(() => expect(manager.get("sa-6")?.status).toBe("error"));
+
+		expect(manager.get("sa-5")?.paneStillOpen).toBe(true);
+	});
+
+	it("keeps the cached generated tab when its sole child's close fails", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+			initialVisibleTabId: "w1:t5",
+		});
+
+		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
+		emitters.get("sa-1")?.({ kind: "run-started" });
+		// The child lands in a generated tab that becomes the cache.
+		emitters.get("sa-1")?.({ kind: "pane-attached", pane: { agentName: "first-worker", workspaceId: "w1", tabId: "w1:t6", paneId: "w1:p1" } });
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("error"));
+
+		await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true });
+		// The close failed, so the pane keeps w1:t6 alive and the cache must
+		// stay there instead of provisioning a duplicate tab.
+		expect(placements[1]).toEqual({ kind: "tab", tabId: "w1:t6", direction: "down" });
+	});
+
+	it("records a close failure that lands during an in-flight settlement", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		let resolveManifest: (manifest: CompletionManifest) => void = () => undefined;
+		const deferredManifest = new Promise<CompletionManifest>((resolve) => { resolveManifest = resolve; });
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: () => deferredManifest,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+			initialVisibleTabId: "w1:t5",
+		});
+
+		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
+		emitters.get("sa-1")?.({ kind: "run-started" });
+		emitters.get("sa-1")?.({ kind: "pane-attached", pane: { agentName: "first-worker", workspaceId: "w1", tabId: "w1:t5", paneId: "w1:p1" } });
+
+		// cancel() starts a synthetic interrupted settlement whose manifest is
+		// still collecting; the snapshot is not terminal yet.
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "interrupted" } });
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("running"));
+
+		// The real close lands late and fails while settlement is in flight.
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
+		expect(manager.get("sa-1")?.paneStillOpen).toBe(true);
+
+		// Completing the interrupted settlement must not clobber the flag.
+		resolveManifest({ baseRef: "abc123", changedPaths: [], dirty: false, commits: 0, exit: "interrupted", durationMs: 1 });
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("error"));
+		expect(manager.get("sa-1")?.paneStillOpen).toBe(true);
+
+		await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true });
+		// The still-open pane still counts toward w1:t5's capacity.
+		expect(placements[1]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "down" });
+	});
+
+	it("keeps a late close-failure flag when a failed settlement completes first", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		let resolveManifest: (manifest: CompletionManifest) => void = () => undefined;
+		const deferredManifest = new Promise<CompletionManifest>((resolve) => { resolveManifest = resolve; });
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: () => deferredManifest,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+			initialVisibleTabId: "w1:t5",
+		});
+
+		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
+		emitters.get("sa-1")?.({ kind: "run-started" });
+		emitters.get("sa-1")?.({ kind: "pane-attached", pane: { agentName: "first-worker", workspaceId: "w1", tabId: "w1:t5", paneId: "w1:p1" } });
+
+		// The cancel force-settle path emits a failed settlement whose manifest
+		// is still collecting; the snapshot is not terminal yet.
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "cancelled after timeout" } });
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("running"));
+
+		// The real close lands late and fails while the failed settlement is in
+		// flight; the flag is recorded immediately.
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
+		expect(manager.get("sa-1")?.paneStillOpen).toBe(true);
+
+		// The in-flight settlement completes without its own paneStillOpen
+		// evidence; it must not clobber the late flag.
+		resolveManifest({ baseRef: "abc123", changedPaths: [], dirty: false, commits: 0, exit: "failed", durationMs: 1 });
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("error"));
+		expect(manager.get("sa-1")?.paneStillOpen).toBe(true);
+
+		await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true });
+		// The still-open pane still counts toward w1:t5's capacity.
+		expect(placements[1]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "down" });
+	});
+
+	it("records paneStillOpen from a close failure that lands after cancel force-settled the snapshot", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+			initialVisibleTabId: "w1:t5",
+		});
+
+		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
+		emitters.get("sa-1")?.({ kind: "run-started" });
+		emitters.get("sa-1")?.({ kind: "pane-attached", pane: { agentName: "first-worker", workspaceId: "w1", tabId: "w1:t5", paneId: "w1:p1" } });
+
+		// cancel() force-settles the snapshot while the backend close is still
+		// in flight; the snapshot is terminal before the real result arrives.
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "cancelled after timeout" } });
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("error"));
+		expect(manager.get("sa-1")?.paneStillOpen).toBeUndefined();
+
+		// The late close fails: the pane is still open, so occupancy must be
+		// recorded even though the snapshot is already terminal.
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
+		expect(manager.get("sa-1")?.paneStillOpen).toBe(true);
+
+		await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true });
+		// The still-open pane still counts toward w1:t5's capacity.
+		expect(placements[1]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "down" });
+	});
+
 	it("invalidates a stale cached tab after a worktree-backed child fails before attach", async () => {
 		const backendTasks: Array<SpawnSubagentTask & { placement?: unknown }> = [];
 		let mode: "attach" | "fail-preattach" = "attach";
@@ -911,7 +1943,7 @@ describe("SubagentManager", () => {
 
 		mode = "attach";
 		await manager.spawn({ prompt: "p3", title: "third", cwd: "/repo", visible: true, worktree: true });
-		expect(backendTasks[2]?.placement).toEqual({ kind: "workspace", workspaceId: "w9", paneId: "w9:p1" });
+		expect(backendTasks[2]?.placement).toEqual({ kind: "worktree-workspace", path: "/isolated/third", label: "third", sourceCwd: "/repo" });
 	});
 
 	it("serializes concurrent visible placement until the first tab id is durable", async () => {
@@ -976,8 +2008,11 @@ pi: { exec: vi.fn() } as never,
 
 		await manager.spawn({ prompt: "p", title: "api work", cwd: "/repo/packages/api", visible: true, worktree: true });
 
-		expect(openExistingWorktreeWorkspace).toHaveBeenCalledWith(expect.anything(), { path: "/isolated/worktree", label: "api", sourceCwd: "/repo", focus: false });
-		expect(backendFactory).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/isolated/worktree/packages/api", placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" } }));
+		expect(openExistingWorktreeWorkspace).not.toHaveBeenCalled();
+		expect(backendFactory).toHaveBeenCalledWith(expect.objectContaining({
+			cwd: "/isolated/worktree/packages/api",
+			placement: { kind: "worktree-workspace", path: "/isolated/worktree", label: "api", sourceCwd: "/repo" },
+		}));
 	});
 
 	it("keeps separate workspace fallbacks for isolated children when no caller tab exists", async () => {
@@ -1021,19 +2056,22 @@ pi: { exec: vi.fn() } as never,
 		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true, worktree: true });
 		await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true, worktree: true });
 
-		expect(openExistingWorktreeWorkspace).toHaveBeenCalledTimes(2);
+		expect(openExistingWorktreeWorkspace).not.toHaveBeenCalled();
 		expect(backendTasks.map((task) => task.placement)).toEqual([
-			{ kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
-			{ kind: "workspace", workspaceId: "w10", paneId: "w10:p1" },
+			{ kind: "worktree-workspace", path: "/isolated/first", label: "first", sourceCwd: "/repo" },
+			{ kind: "worktree-workspace", path: "/isolated/second", label: "second", sourceCwd: "/repo" },
 		]);
 	});
 
-	it("fails closed when a created worktree cannot be opened as a host workspace", async () => {
-		const backendFactory = vi.fn(() => ({ events: () => undefined, interrupt: () => undefined }));
+	it("preserves a created worktree when the backend cannot provision its workspace", async () => {
+		const backendFactory = vi.fn(() => ({
+			events: (emit: (event: SubagentEvent) => void) => emit({ kind: "run-settled", outcome: { kind: "failed", errorText: "daemon unavailable", errorCode: "pane_unavailable", errorReason: "daemon unavailable" } }),
+			interrupt: () => undefined,
+		}));
 		const host: TerminalHost = {
 			kind: "herdr",
 			openCommandInSplit: vi.fn(),
-			openExistingWorktreeWorkspace: vi.fn(async () => ({ ok: false as const, error: "daemon unavailable" })),
+			openExistingWorktreeWorkspace: vi.fn(),
 			closePane: vi.fn(),
 			notify: vi.fn(),
 		};
@@ -1048,10 +2086,17 @@ pi: { exec: vi.fn() } as never,
 
 		const spawned = await manager.spawn({ prompt: "p", title: "preserved", cwd: "/repo", visible: true, worktree: true });
 
-		expect(spawned).toMatchObject({ status: "error", errorText: expect.stringContaining("daemon unavailable"), worktree: { path: "/isolated/preserved" } });
+		expect(spawned).toMatchObject({
+			status: "error",
+			errorCode: "pane_unavailable",
+			errorText: expect.stringContaining("daemon unavailable"),
+			worktree: { path: "/isolated/preserved" },
+		});
 		// SAFETY: failed spawns always carry an errorText field.
 		expect((spawned as { errorText?: string }).errorText).toContain("is preserved");
-		expect(backendFactory).not.toHaveBeenCalled();
+		expect(backendFactory).toHaveBeenCalledWith(expect.objectContaining({
+			placement: { kind: "worktree-workspace", path: "/isolated/preserved", label: "preserved", sourceCwd: "/repo" },
+		}));
 	});
 
 	it("rejects a branch override without worktree isolation", async () => {

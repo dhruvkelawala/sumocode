@@ -142,6 +142,26 @@ describe("bin/sumocode.sh reload loop", () => {
 		await rm(tempDir, { recursive: true, force: true });
 	}, 15_000);
 
+	it("names the loading tree on the direct-Pi path so a stale inherited root cannot noop the entry", async () => {
+		const tempDir = await mkdtemp(join(tmpdir(), "sumocode-reload-rootdir-"));
+		stateFile = join(tempDir, "mock-pi.count");
+		// Simulate a stale ancestor launcher: even with a foreign root leaking
+		// in, the child must receive this checkout's root (buildSpawnEnv strips
+		// the real one, so inject the stale value explicitly here).
+		session = spawnLauncherWithMockPi(stateFile, [], { SUMOCODE_ROOT_DIR: "/stale/ancestor/tree" });
+
+		const event = await session.exit;
+		const output = session.getOutput();
+
+		const rootOne = output.split(/[\r\n]+/).find((line) => line.includes("ROOT-DIR-1:"));
+		const rootTwo = output.split(/[\r\n]+/).find((line) => line.includes("ROOT-DIR-2:"));
+		expect(rootOne).toBe(`ROOT-DIR-1:${resolve(process.cwd())}`);
+		expect(rootTwo).toBe(`ROOT-DIR-2:${resolve(process.cwd())}`);
+		expect(event.exitCode).toBe(0);
+
+		await rm(tempDir, { recursive: true, force: true });
+	}, 15_000);
+
 	it("preserves the inner exit code for any non-100 exit (no respawn)", async () => {
 		// Mock-pi exits 100 on first invocation; we verify the second invocation
 		// (which exits 0) does NOT trigger a third respawn.

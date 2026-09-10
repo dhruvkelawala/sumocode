@@ -112,10 +112,10 @@ const flushPromises = async (): Promise<void> => {
 };
 
 const createHarness = (
-	startResult: typeof startedPane | { ok: false; error: string } = startedPane,
+	startResult: typeof startedPane | { ok: false; error: string; code?: string; reason?: string; orphanPaneId?: string; orphanTabId?: string; tabGone?: boolean } = startedPane,
 	placement: { kind: "tab"; tabId: string; direction: "right" } | { kind: "workspace"; workspaceId: string; paneId: string } = { kind: "tab", tabId: "w1:t1", direction: "right" },
 	appendSystemPrompt?: string,
-	spawnerDependencies?: { sendAckPollMs?: number; sendAckTimeoutMs?: number; resolveLauncher?: () => string },
+	spawnerDependencies?: { sendAckPollMs?: number; sendAckTimeoutMs?: number; resolveLauncher?: () => string; env?: NodeJS.ProcessEnv },
 	onEvent?: (event: SubagentEvent) => void,
 ) => {
 	const fs = new FakeFs();
@@ -128,7 +128,7 @@ const createHarness = (
 		closePane,
 		notify: vi.fn(async () => undefined),
 	};
-	const spawn = createPaneChildSpawner({ fs, now: () => 1234, baseDir: "/tmp/subagents", pollIntervalMs: 750, resolveLauncher: () => "sumocode", ...spawnerDependencies });
+	const spawn = createPaneChildSpawner({ fs, now: () => 1234, baseDir: "/tmp/subagents", pollIntervalMs: 750, env: {}, ...spawnerDependencies });
 	const child = spawn({
 		prompt: "do the work",
 		name: "worker",
@@ -182,7 +182,7 @@ const createGateHarness = () => {
 		startAgentPane: vi.fn(async () => startedPane),
 		closePane: vi.fn(), openCommandInSplit: vi.fn(), notify: vi.fn(),
 	};
-	const spawn = createPaneChildSpawner({ fs, now: () => 1234, baseDir: "/tmp/subagents", resolveLauncher: () => "/parent tools/sumocode", processTree: operations });
+	const spawn = createPaneChildSpawner({ fs, now: () => 1234, baseDir: "/tmp/subagents", resolveLauncher: () => "/parent tools/sumocode", env: {}, processTree: operations });
 	const options = {
 		id: "sa-gate", name: "worker", prompt: "private task prompt", cwd: "/repo", host,
 		pi: { exec: vi.fn() }, placement: { kind: "tab" as const, tabId: "t", direction: "right" as const }, launchGate: gate,
@@ -775,6 +775,20 @@ describe("pane subagent backend", () => {
 		}
 	});
 
+	it("starts a worktree child with the parent launcher and Pi binary", async () => {
+		const harness = createHarness(startedPane, { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" }, undefined, {
+			env: {
+				SUMOCODE_LAUNCHER: "/opt/Sumo Code/bin/sumocode.sh",
+				PI_BIN: "/opt/Pi Current/bin/pi",
+			},
+		});
+		await flushPromises();
+
+		const script = harness.fs.files.get(harness.paths.scriptFile) ?? "";
+		expect(script).toContain("exec env 'PI_BIN=/opt/Pi Current/bin/pi' '/opt/Sumo Code/bin/sumocode.sh' 'task'");
+		expect(script).not.toContain("exec sumocode 'task'");
+	});
+
 	it("prepends role instructions to the visible prompt file", () => {
 		const harness = createHarness(startedPane, { kind: "tab", tabId: "w1:t1", direction: "right" }, "review carefully");
 		expect(harness.fs.files.get(harness.paths.promptFile)).toBe([
@@ -844,7 +858,7 @@ describe("pane subagent backend", () => {
 			await flushPromises();
 
 			expect(harness.events).toContainEqual({ kind: "pane-attached", pane: { agentName: "worker-abc", workspaceId: "w1", tabId: "w1:t1", paneId: "w1:p2" } });
-			expect(settledEvents(harness.events)).toEqual([{ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive" } }]);
+			expect(settledEvents(harness.events)).toEqual([{ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } }]);
 			expect(vi.getTimerCount()).toBe(0);
 		} finally {
 			vi.useRealTimers();
@@ -861,6 +875,69 @@ describe("pane subagent backend", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it("preserves a structured pane-unavailable host failure", async () => {
+		const harness = createHarness({
+			ok: false,
+			code: "pane_unavailable",
+			error: "herdr returned no pane for tab w5:t8",
+			reason: "tab has no available shell pane",
+		});
+		await flushPromises();
+
+		expect(settledEvents(harness.events)).toEqual([{
+			kind: "run-settled",
+			outcome: {
+				kind: "failed",
+				errorText: "herdr returned no pane for tab w5:t8",
+				errorCode: "pane_unavailable",
+				errorReason: "tab has no available shell pane",
+			},
+		}]);
+	});
+
+	it("marks a tab-gone provisioning failure so the manager can retire stale records", async () => {
+		const harness = createHarness({
+			ok: false,
+			code: "pane_unavailable",
+			error: "herdr returned no pane for tab w5:t8",
+			tabGone: true,
+		});
+		await flushPromises();
+
+		expect(settledEvents(harness.events)).toEqual([{
+			kind: "run-settled",
+			outcome: {
+				kind: "failed",
+				errorText: "herdr returned no pane for tab w5:t8",
+				errorCode: "pane_unavailable",
+				paneTabGone: true,
+			},
+		}]);
+	});
+
+	it("reports provisioning orphans so their slot stays counted", async () => {
+		const harness = createHarness({
+			ok: false,
+			code: "pane_unavailable",
+			error: "herdr pane run exited 1",
+			reason: "herdr pane run exited 1; cleanup: close refused",
+			orphanPaneId: "w1:p9",
+		});
+		await flushPromises();
+
+		expect(settledEvents(harness.events)).toEqual([{
+			kind: "run-settled",
+			outcome: {
+				kind: "failed",
+				errorText: "herdr pane run exited 1",
+				errorCode: "pane_unavailable",
+				errorReason: "herdr pane run exited 1; cleanup: close refused",
+				paneStillOpen: true,
+				orphanPane: { agentName: "worker", workspaceId: "w1", tabId: "w1:t1", paneId: "w1:p9" },
+			},
+		}]);
 	});
 
 	it("retries an empty exit marker until the producer writes the code", async () => {

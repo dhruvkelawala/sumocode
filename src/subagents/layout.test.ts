@@ -58,4 +58,50 @@ describe("planPlacement", () => {
 		const secondTab = Array.from({ length: 4 }, (_, index) => pane("w1:t2", index + 5));
 		expect(planPlacement({ hostKind: "herdr", isolated: false, visiblePanes: [...firstTab, ...secondTab], sessionTabId: "w1:t2" })).toEqual({ kind: "new-tab", label: "subagents 3" });
 	});
+
+	it("reclaims a vacancy in another live shared tab when the cached tab is full", () => {
+		const cachedTab = Array.from({ length: 4 }, (_, index) => pane("w1:t2", index + 1));
+		const olderTab = Array.from({ length: 3 }, (_, index) => pane("w1:t1", index + 5));
+		expect(planPlacement({ hostKind: "herdr", isolated: false, visiblePanes: [...cachedTab, ...olderTab], sessionTabId: "w1:t2" })).toEqual({
+			kind: "tab",
+			tabId: "w1:t1",
+			direction: "down",
+		});
+	});
+
+	it("never reclaims an excluded workspace tab as a shared destination", () => {
+		const cachedTab = Array.from({ length: 4 }, (_, index) => pane("w1:t2", index + 1));
+		const workspacePane = pane("w9:t1", 9);
+		expect(planPlacement({ hostKind: "herdr", isolated: false, visiblePanes: [...cachedTab, workspacePane], sessionTabId: "w1:t2", excludedTabIds: ["w9:t1"] })).toEqual({ kind: "new-tab", label: "subagents 2" });
+	});
+
+	it("ignores tabs in other workspaces when looking for a vacancy", () => {
+		const cachedTab = Array.from({ length: 4 }, (_, index) => pane("w1:t2", index + 1));
+		const foreignTab = [pane("w2:t1", 5), pane("w2:t1", 6)];
+		expect(planPlacement({ hostKind: "herdr", isolated: false, visiblePanes: [...cachedTab, ...foreignTab], sessionTabId: "w1:t2" })).toEqual({ kind: "new-tab", label: "subagents 2" });
+	});
+
+	it("returns to the empty caller tab when the cached tab is full and no other vacancy exists", () => {
+		const cachedTab = Array.from({ length: 4 }, (_, index) => pane("w1:t2", index + 1));
+		expect(planPlacement({ hostKind: "herdr", isolated: false, visiblePanes: cachedTab, sessionTabId: "w1:t2", callerTabId: "w1:t1" })).toEqual({
+			kind: "tab",
+			tabId: "w1:t1",
+			direction: "right",
+		});
+	});
+
+	it("prefers a live under-capacity tab over the empty caller tab", () => {
+		const cachedTab = Array.from({ length: 4 }, (_, index) => pane("w1:t2", index + 1));
+		const olderTab = [pane("w1:t1", 5), pane("w1:t1", 6)];
+		expect(planPlacement({ hostKind: "herdr", isolated: false, visiblePanes: [...cachedTab, ...olderTab], sessionTabId: "w1:t2", callerTabId: "w1:t0" })).toEqual({
+			kind: "tab",
+			tabId: "w1:t1",
+			direction: "right",
+		});
+	});
+
+	it("does not seed a caller tab from another workspace", () => {
+		const cachedTab = Array.from({ length: 4 }, (_, index) => pane("w1:t2", index + 1));
+		expect(planPlacement({ hostKind: "herdr", isolated: false, visiblePanes: cachedTab, sessionTabId: "w1:t2", callerTabId: "w9:t0" })).toEqual({ kind: "new-tab", label: "subagents 2" });
+	});
 });

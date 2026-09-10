@@ -9,11 +9,12 @@ export interface PaneRef {
 	workspaceId?: string;
 }
 
-export type HostResult<T> = ({ ok: true } & T) | { ok: false; error: string };
+export type HostResult<T> = ({ ok: true } & T) | { ok: false; error: string; code?: string; reason?: string; orphanPaneId?: string; orphanTabId?: string; tabGone?: boolean };
 export type PiExecLike = Pick<ExtensionAPI, "exec">;
 
 export type AgentPanePlacement =
 	| { kind: "workspace"; workspaceId: string; paneId?: string }
+	| { kind: "worktree-workspace"; path: string; label: string; sourceCwd: string }
 	| { kind: "tab"; tabId: string; direction: SplitDirection }
 	| { kind: "new-tab"; label: string };
 
@@ -24,6 +25,8 @@ export interface StartAgentPaneOptions {
 	placement: AgentPanePlacement;
 	/** Admit the new shell before submitting commands. Refusal preserves the pane for verified cleanup. */
 	beforeRun?(pane: PaneRef): Promise<void>;
+	/** Remaining portion of the caller's end-to-end provisioning budget. */
+	provisioningTimeoutMs?: number;
 }
 
 export interface StartedAgentPane {

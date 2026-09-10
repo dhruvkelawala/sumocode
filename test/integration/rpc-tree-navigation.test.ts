@@ -52,6 +52,13 @@ const RPC_TEST_TIMEOUT_MS = 60_000;
 function isolatedChildEnv(agentDir: string, evidence: string, diagFile?: string): NodeJS.ProcessEnv {
 	const env = buildSpawnEnv(process.env, { PI_CODING_AGENT_DIR: agentDir, SUMOCODE_RPC_CHILD: "1", SUMOCODE_TREE_HOOK_EVIDENCE: evidence });
 	for (const key of ["SUMO_TUI_DIAG_FILE", "SUMOCODE_TASK_DIAG_FILE", "SUMOCODE_TASK_RESPONSE_FILE", "SUMOCODE_TASK_EXIT_FILE", "SUMOCODE_TASK_STARTED_FILE"]) delete env[key];
+	// Launcher identity must not leak from the developer's shell: a stale
+	// SUMOCODE_ROOT_DIR would make the fixture's own -e entry noop via
+	// shouldNoopDuplicateInstalledExtension (it reads as "another tree drives
+	// this session"), so tree navigation would never install and every test
+	// would time out. Same class of leak as SUMO_DEBUG_ENV_KEYS in
+	// spawn-pi-pty.ts (see #187); the explicit SUMOCODE_RPC_CHILD below stays.
+	for (const key of ["SUMOCODE_ROOT_DIR", "SUMOCODE_PROJECT_CWD", "SUMOCODE_LAUNCHER", "SUMOCODE_RELOAD"]) delete env[key];
 	if (diagFile !== undefined) env.SUMO_TUI_DIAG_FILE = diagFile;
 	return env;
 }

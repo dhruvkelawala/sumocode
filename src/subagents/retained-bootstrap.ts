@@ -26,6 +26,8 @@ export interface RetainedBootstrapConfiguration {
 		readonly name: string;
 		readonly placement: AgentPanePlacement;
 		readonly launcher: ExecutableProvenance["sumocode"];
+		/** Remaining end-to-end pane-provisioning budget; absent means the host default. */
+		readonly provisioningTimeoutMs?: number;
 	} | null;
 }
 
@@ -235,8 +237,10 @@ function validDescriptor(value: unknown): value is RetainedBootstrapDescriptor {
 		|| !(c.role === null || (object(c.role, "id label") && text(c.role.id) && text(c.role.label)))
 		|| !pathValue(c.pi) || !(c.adapterEntry === null || pathValue(c.adapterEntry))
 		|| !(c.modelBootstrapEntry === null || pathValue(c.modelBootstrapEntry))) return false;
-	if (value.backend === "headless" ? c.visible !== null : !(object(c.visible, "name placement launcher")
-		&& text(c.visible.name) && placement(c.visible.placement) && pathValue(c.visible.launcher))) return false;
+	if (value.backend === "headless" ? c.visible !== null : !(object(c.visible, "name placement launcher", "provisioningTimeoutMs")
+		&& text(c.visible.name) && placement(c.visible.placement) && pathValue(c.visible.launcher)
+		&& (c.visible.provisioningTimeoutMs === undefined || typeof c.visible.provisioningTimeoutMs === "number"
+			&& Number.isSafeInteger(c.visible.provisioningTimeoutMs) && c.visible.provisioningTimeoutMs >= 0))) return false;
 	return value.worktree === null || (object(value.worktree, "path branch baseRef repoRoot")
 		&& pathValue(value.worktree.path) && pathValue(value.worktree.repoRoot) && text(value.worktree.branch)
 		&& value.worktree.baseRef === c.baseRef && isRetainedWorktreeCwd(value.worktree.path, c.cwd));

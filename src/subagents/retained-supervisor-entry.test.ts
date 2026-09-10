@@ -44,7 +44,7 @@ function fixture(controller?: RegistryWriter, visible = false) {
 		controller,
 		cwd: root, baseRef: "HEAD", model: { provider: "openai", modelId: "test", label: "openai/test" }, thinking: "low",
 		builtInTools: ["read"], role: { id: "reviewer", label: "reviewer" }, pi, adapterEntry: null, modelBootstrapEntry: null,
-		visible: visible ? { name: "visible worker", placement: { kind: "new-tab", label: "subagents" }, launcher: pi } : null,
+		visible: visible ? { name: "visible worker", placement: { kind: "new-tab", label: "subagents" }, launcher: pi, provisioningTimeoutMs: 1_234 } : null,
 	}, { prompt: "private task text", systemPrompt: "private role text" });
 	const args = ["--task-dir", taskDir, "--registry-dir", registryDir, "--id", record.id, "--owner-session", record.ownerSessionId, "--nonce", descriptor.nonce];
 	return { root, taskDir, registryDir, registry, record, descriptor, args };
@@ -115,7 +115,7 @@ it("launches the visible backend from the same private production descriptor", a
 		} };
 	}, buildManifest: async () => ({ baseRef: "HEAD", headRef: "end", changedPaths: [], commits: 0, exit: "completed", durationMs: 1 }) });
 	expect(launch).toHaveBeenCalledWith(expect.objectContaining({ prompt: "private task text", appendSystemPrompt: "private role text",
-		model: "openai/test", thinking: "low", tools: ["read"], retainedTaskDir: f.taskDir }));
+		model: "openai/test", thinking: "low", tools: ["read"], retainedTaskDir: f.taskDir, provisioningTimeoutMs: 1_234 }));
 	expect(f.registry.get(f.record.id)).toMatchObject({ backend: "visible", status: "settled" });
 });
 

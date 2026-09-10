@@ -32,6 +32,7 @@ interface VisibleAgentCommandOptions {
 	cwd: string;
 	paths: VisibleTaskPaths;
 	launcher?: string;
+	piBin?: string;
 	model?: string;
 	thinking?: string;
 	tools?: readonly string[];
@@ -103,12 +104,15 @@ function buildVisibleAgentArgs(options: VisibleAgentCommandOptions): string[] {
 }
 
 export function buildVisibleAgentCommand(options: VisibleAgentCommandOptions): string {
+	const launcher = options.launcher?.trim();
+	const piBin = options.piBin?.trim();
 	return [
 		"cd",
 		shellEscape(options.cwd),
 		"&&",
 		"exec",
-		options.launcher && options.launcher !== "sumocode" ? shellEscape(options.launcher) : "sumocode",
+		...(piBin ? ["env", shellEscape(`PI_BIN=${piBin}`)] : []),
+		launcher && launcher !== "sumocode" ? shellEscape(launcher) : "sumocode",
 		...buildVisibleAgentArgs(options).map(shellEscape),
 	].join(" ");
 }

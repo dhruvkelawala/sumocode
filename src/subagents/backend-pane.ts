@@ -36,7 +36,7 @@ import {
 	PRIVATE_FILE_MODE,
 } from "../private-artifact.js";
 import type { SpawnedChild } from "./backend-pi.js";
-import type { SubagentEvent } from "./domain.js";
+import type { SubagentEvent, SubagentLaunchFailure } from "./domain.js";
 
 const RESPONSE_POLL_INTERVAL_MS = 750;
 const SEND_ACK_POLL_MS = 250;
@@ -78,7 +78,7 @@ export interface VisibleLaunchGate {
 	/** Recheck persistence-owner authority at each effect/ack boundary, not user authorization. */
 	beforeEffect(): void;
 	/** Record lost/ambiguous ownership without claiming child death or retrying. */
-	onRefused(): void;
+	onRefused(failure?: SubagentLaunchFailure): void;
 	/** Retained owner owns verified cancellation; pane IDs never authorize a signal. */
 	interrupt(): void;
 }
@@ -94,6 +94,8 @@ export interface PaneChildOptions {
 	host: TerminalHost;
 	pi: PiExecLike;
 	placement: AgentPanePlacement;
+	/** Remaining shared manager budget after visible-placement reservation. */
+	provisioningTimeoutMs?: number;
 	readonly tools?: readonly string[];
 	readonly appendSystemPrompt?: string;
 	readonly launchGate?: VisibleLaunchGate;
@@ -104,6 +106,7 @@ export interface PaneChildOptions {
 export interface PaneBackendDependencies {
 	fs?: PaneBackendFs;
 	now?: () => number;
+	env?: NodeJS.ProcessEnv;
 	baseDir?: string;
 	pollIntervalMs?: number;
 	/** Steer-consumption poll interval (design contract: 250ms). */
@@ -167,6 +170,9 @@ const allocatePrivateTaskDir = (fs: PaneBackendFs, root: string, name: string): 
 };
 
 export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {}) => (options: PaneChildOptions): SpawnedChild => {
+	const provisioningExpiresAt = options.provisioningTimeoutMs === undefined
+		? undefined
+		: Date.now() + Math.max(0, options.provisioningTimeoutMs);
 	const fs = dependencies.fs ?? nodeFs;
 	const now = dependencies.now ?? Date.now;
 	const baseDir = resolve(dependencies.baseDir ?? join(process.env.TMPDIR ?? "/tmp", "sumocode-subagents"));
@@ -197,10 +203,12 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	// fails closed instead of being followed or clobbered.
 	writeNewPrivateFile(fs, paths.promptFile, prompt);
 	writeNewPrivateFile(fs, paths.logFile, "");
+	const provenance = resolveExecutableProvenance({ env: dependencies.env });
 	const commandOptions = {
 		cwd: options.cwd,
 		paths,
-		launcher: (dependencies.resolveLauncher ?? (() => resolveExecutableProvenance().sumocode))(),
+		launcher: (dependencies.resolveLauncher ?? (() => provenance.sumocode))(),
+		piBin: (dependencies.env ?? process.env).PI_BIN?.trim() ? provenance.pi : undefined,
 		model: options.model,
 		thinking: options.thinking,
 		tools: options.tools,
@@ -465,12 +473,12 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		try {
 			const result = await options.host.closePane(options.pi, pane);
 			if (!result.ok) {
-				settle({ kind: "run-settled", outcome: { kind: "failed", errorText: `failed to close visible child pane: ${result.error}` } });
+				settle({ kind: "run-settled", outcome: { kind: "failed", errorText: `failed to close visible child pane: ${result.error}`, paneStillOpen: true } });
 				return;
 			}
 			settle({ kind: "run-settled", outcome: { kind: "interrupted" } });
 		} catch (error) {
-			settle({ kind: "run-settled", outcome: { kind: "failed", errorText: `failed to close visible child pane: ${errorText(error)}` } });
+			settle({ kind: "run-settled", outcome: { kind: "failed", errorText: `failed to close visible child pane: ${errorText(error)}`, paneStillOpen: true } });
 		}
 	};
 
@@ -652,7 +660,6 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		if (gate && subscribed) throw new Error("retained backend already subscribed");
 		subscribed = true;
 		emitEvent = emit;
-		emit({ kind: "run-started" });
 		void (async () => {
 			const startAgentPane = options.host.startAgentPane;
 			if (!startAgentPane) {
@@ -673,18 +680,70 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 					cwd: options.cwd,
 					shellCommand,
 					placement: options.placement,
+					provisioningTimeoutMs: provisioningExpiresAt === undefined
+						? undefined
+						: Math.max(0, Math.floor(provisioningExpiresAt - Date.now())),
 					beforeRun: gate ? async () => {
 						if (launchBlocked || options.signal?.aborted) throw new Error("visible launch interrupted before command");
 						assertAuthority();
 					} : undefined,
 				});
 				if (!result.ok) {
-					if (gate) { assertAuthority(); blockLaunch(new Error(result.error)); return; }
-					settle({ kind: "run-settled", outcome: { kind: "failed", errorText: result.error } });
+					if (gate) {
+						assertAuthority();
+						// Mirror the disposable branch below: the owner must persist the same
+						// host taxonomy and orphan occupancy, or the retained failure record
+						// only carries an unstructured text error.
+						const orphanTabId = result.orphanTabId ?? (options.placement.kind === "tab" ? options.placement.tabId : undefined);
+						const paneStillOpen = result.orphanPaneId !== undefined || result.orphanTabId !== undefined;
+						type MutableFailure = { -readonly [K in keyof SubagentLaunchFailure]: SubagentLaunchFailure[K] };
+						const failure: MutableFailure = {
+							errorText: result.error,
+							errorCode: result.code,
+							errorReason: result.reason,
+							paneTabGone: result.tabGone,
+							paneStillOpen,
+						};
+						if (paneStillOpen) failure.orphanPane = {
+							agentName: options.name,
+							paneId: result.orphanPaneId,
+							tabId: orphanTabId,
+							workspaceId: orphanTabId?.split(":")[0],
+						};
+						gate.onRefused(failure);
+						blockLaunch(new Error(result.error));
+						return;
+					}
+					const orphanTabId = result.orphanTabId ?? (options.placement.kind === "tab" ? options.placement.tabId : undefined);
+					const outcome: Extract<SubagentEvent, { kind: "run-settled" }>["outcome"] = {
+						kind: "failed",
+						errorText: result.error,
+						errorCode: result.code,
+						errorReason: result.reason,
+						// The host's definitive "target tab has no live pane" signal;
+						// the manager retires stale still-open records only on this.
+						paneTabGone: result.tabGone,
+					};
+					if (result.orphanPaneId !== undefined || result.orphanTabId !== undefined) {
+						// Cleanup failed or was skipped, so the allocated pane/tab still
+						// occupies a layout slot the manager must keep counting.
+						outcome.paneStillOpen = true;
+						outcome.orphanPane = {
+							agentName: options.name,
+							paneId: result.orphanPaneId,
+							tabId: orphanTabId,
+							workspaceId: orphanTabId?.split(":")[0],
+						};
+					}
+					settle({ kind: "run-settled", outcome });
 					return;
 				}
 				pane = result.pane;
 				startedPane = result;
+				// A visible child starts only when Herdr accepts the pane command. Host
+				// preparation failures happen before a process exists and must not trigger
+				// child completion-manifest collection in the manager.
+				emit({ kind: "run-started" });
 				emit({
 					kind: "pane-attached",
 					pane: {

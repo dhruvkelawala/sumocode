@@ -1488,14 +1488,19 @@ while :; do
 		# unchanged. Must precede the empty-argv branch: a sole prompt
 		# positional empties SUMOCODE_ARGS during extraction.
 		if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
-			{ cat; printf '%s' "${DIRECT_PI_STDIN_PROMPT}"; } | env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" || code=$?
+			{ cat; printf '%s' "${DIRECT_PI_STDIN_PROMPT}"; } | env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" || code=$?
 		else
-			{ cat; printf '%s' "${DIRECT_PI_STDIN_PROMPT}"; } | env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" "${SUMOCODE_ARGS[@]}" || code=$?
+			{ cat; printf '%s' "${DIRECT_PI_STDIN_PROMPT}"; } | env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" "${SUMOCODE_ARGS[@]}" || code=$?
 		fi
 	elif [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
-		env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" || code=$?
+		# Name the tree actually loading on the direct-Pi path too: the loaded
+		# entry noops itself via shouldNoopDuplicateInstalledExtension whenever
+		# SUMOCODE_ROOT_DIR names a different tree, so a stale value inherited
+		# from an ancestor launcher must never reach the child -- it would
+		# silently disable the extension with no error.
+		env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" || code=$?
 	else
-		env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" "${SUMOCODE_ARGS[@]}" || code=$?
+		env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" "${SUMOCODE_ARGS[@]}" || code=$?
 	fi
 	if [[ "${code}" -ne "${SUMOCODE_RELOAD_EXIT_CODE}" ]]; then
 		restore_reload_terminal "${SUMOCODE_RELOAD_READY_FILE:-}"

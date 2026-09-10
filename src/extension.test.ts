@@ -233,6 +233,45 @@ describe("duplicate installed extension guard", () => {
 			).toBe(false);
 		});
 
+		it("noops a symlink-resolved installed copy whose realpath is another checkout", () => {
+			// Node resolves symlinks before import, so when the install at
+			// `~/.pi/agent/git/.../sumocode` points at a different checkout,
+			// import.meta.url holds that checkout's realpath and the
+			// `.pi/agent/git` prefix test can never match. The launcher-root
+			// comparison must still recognize the duplicate (live repro: the
+			// symlinked install loaded the main checkout while a worktree
+			// launcher drove the session, and every tool registration
+			// conflicted fatally).
+			const mainCheckout = "/Volumes/dev-disk/code/sumocode";
+			const worktree = "/Volumes/dev-disk/code/sumocode.sumo-worktrees/sumo__wt";
+			const fakeFs = packageFs(mainCheckout, worktree);
+			expect(
+				shouldNoopDuplicateInstalledExtension({
+					moduleUrl: `file://${mainCheckout}/src/extension-entry.ts`,
+					homeDir: "/Users/dev",
+					env: { SUMOCODE_ROOT_DIR: worktree },
+					exists: fakeFs.exists,
+					readFile: fakeFs.readFile,
+					realpath: identityRealpath,
+				}),
+			).toBe(true);
+		});
+
+		it("does NOT noop the launcher's own entry even when it is not under ~/.pi/agent/git", () => {
+			const worktree = "/Volumes/dev-disk/code/sumocode.sumo-worktrees/sumo__wt";
+			const fakeFs = packageFs(worktree);
+			expect(
+				shouldNoopDuplicateInstalledExtension({
+					moduleUrl: `file://${worktree}/src/extension-entry.ts`,
+					homeDir: "/Users/dev",
+					env: { SUMOCODE_ROOT_DIR: worktree },
+					exists: fakeFs.exists,
+					readFile: fakeFs.readFile,
+					realpath: identityRealpath,
+				}),
+			).toBe(false);
+		});
+
 		it("noops a src entry from a genuinely separate installed copy", () => {
 			const fakeFs = packageFs(installedRoot, "/Users/dev/development/sumocode");
 			expect(

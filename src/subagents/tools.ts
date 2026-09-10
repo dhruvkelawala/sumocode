@@ -227,8 +227,11 @@ export function registerSubagentTools(
 				// listener's already-deferred payload is not ALSO auto-delivered
 				// on the next agent_end (double report + pointless extra turn).
 				delivery?.consume(spawned.id);
-				return makeToolResult(`Subagent ${spawned.id} (${spawned.title}) failed to start: ${spawned.errorText ?? "unknown error"}`, {
+				const reason = spawned.errorReason ? ` Herdr: ${spawned.errorReason}` : "";
+				return makeToolResult(`Subagent ${spawned.id} (${spawned.title}) failed to start: ${spawned.errorText ?? "unknown error"}${reason}`, {
 					action: "spawn",
+					status: spawned.errorCode ?? "error",
+					herdrReason: spawned.errorReason,
 					subagent: spawned,
 					activity: activityEnvelope(spawned, toolCallId),
 				});

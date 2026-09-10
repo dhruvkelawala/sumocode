@@ -910,6 +910,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		env: { ...spawnPlan.env, SUMOCODE_TERMINAL_INDEX_GATE: terminalIndexGate },
 		preSpawnedChild: options.preSpawnedChild,
 		onRpcReady: () => logDiagnostic("rpc_child_ready"),
+		onProtocolError: (frameSummary, error) => logDiagnostic("rpc_protocol_error", { frameSummary, reason: error.message }),
 	});
 	lifecycle.ownClient(client, terminalIndexGate);
 	let runtime: RpcHostRuntime | undefined;

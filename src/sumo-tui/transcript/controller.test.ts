@@ -1215,6 +1215,33 @@ describe("TranscriptController streaming deltas (Pi RPC wire shape)", () => {
 		expect(assistantText(controller)).not.toContain("dropped");
 	});
 
+	it("keeps every legitimate contentIndex at or below the cap behaving as before", () => {
+		// Characterization: only indices past MAX_CONTENT_PARTS are refused, so 0
+		// and the cap itself must still build (and extend) their part.
+		const controller = new TranscriptController();
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: [] } });
+		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "zero " } });
+		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: MAX_CONTENT_PARTS, delta: "at-cap" } });
+		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: MAX_CONTENT_PARTS, delta: "!" } });
+
+		expect(assistantText(controller)).toBe("zero \nat-cap!");
+	});
+
+	it("still appends a delta that carries no contentIndex after the cap part exists", () => {
+		const controller = new TranscriptController();
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: [] } });
+		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: MAX_CONTENT_PARTS, delta: "at-cap" } });
+		// A missing index falls back to the end of the content array. That
+		// fallback must not be mistaken for an out-of-range producer index even
+		// though the array is now one part longer than the cap.
+		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "no-index" } });
+
+		expect(assistantText(controller)).toContain("at-cap");
+		expect(assistantText(controller)).toContain("no-index");
+	});
+
 	it("still honors a full message on message_update when the wire carries one (back-compat)", () => {
 		const controller = new TranscriptController();
 		controller.handleAgentEvent({ type: "agent_start" });

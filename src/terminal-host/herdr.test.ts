@@ -19,6 +19,34 @@ describe("herdrTerminalHost", () => {
 		expect(beforeRun).toHaveBeenCalledWith({ host: "herdr", paneId: "w1:p2", workspaceId: "w1" });
 		expect(executor.exec).toHaveBeenCalledTimes(1);
 	});
+	it("cleans and reports the generated tab when no pane is found before retained admission", async () => {
+		const exec = vi.fn(async (_bin: string, args: string[]) => {
+			if (args[0] === "tab" && args[1] === "create") return { stdout: JSON.stringify({ result: { tab_id: "w7:t9" } }), stderr: "", code: 0, killed: false };
+			if (args[0] === "pane" && args[1] === "list") return { stdout: JSON.stringify({ result: { panes: [] } }), stderr: "", code: 0, killed: false };
+			return { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false };
+		});
+		const beforeRun = vi.fn(async () => undefined);
+		// SAFETY: test double only exercises the members this test asserts on.
+		const result = await herdrTerminalHost.startAgentPane({ exec } as never, { name: "worker", cwd: "/repo", shellCommand: "held",
+			placement: { kind: "new-tab", label: "subagents" }, beforeRun });
+		expect(result).toMatchObject({ ok: false, code: "pane_unavailable", error: "herdr returned no pane for tab w7:t9" });
+		expect(beforeRun).not.toHaveBeenCalled();
+		expect(exec).toHaveBeenCalledWith("herdr", ["tab", "close", "w7:t9"], expect.objectContaining({ timeout: expect.any(Number) }));
+	});
+	it("cleans and reports the generated tab when target discovery throws before retained admission", async () => {
+		const exec = vi.fn(async (_bin: string, args: string[]) => {
+			if (args[0] === "tab" && args[1] === "create") return { stdout: JSON.stringify({ result: { tab_id: "w7:t9" } }), stderr: "", code: 0, killed: false };
+			if (args[0] === "pane" && args[1] === "list") throw new Error("daemon unavailable");
+			return { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false };
+		});
+		const beforeRun = vi.fn(async () => undefined);
+		// SAFETY: test double only exercises the members this test asserts on.
+		const result = await herdrTerminalHost.startAgentPane({ exec } as never, { name: "worker", cwd: "/repo", shellCommand: "held",
+			placement: { kind: "new-tab", label: "subagents" }, beforeRun });
+		expect(result).toMatchObject({ ok: false, code: "pane_unavailable", error: "daemon unavailable", reason: "daemon unavailable" });
+		expect(beforeRun).not.toHaveBeenCalled();
+		expect(exec).toHaveBeenCalledWith("herdr", ["tab", "close", "w7:t9"], expect.objectContaining({ timeout: expect.any(Number) }));
+	});
 	it("splits from the caller pane and runs the command with Herdr 0.8 pane primitives", async () => {
 		process.env.HERDR_ENV = "1";
 		process.env.HERDR_PANE_ID = "w7:p3";

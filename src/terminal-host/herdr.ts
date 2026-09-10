@@ -284,6 +284,11 @@ async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): P
 	let ownedPaneId: string | undefined;
 	let ownedTabId: string | undefined;
 	let workspaceAnchorToMove: { paneId: string; workspaceId: string } | undefined;
+	// The retained owner admits the pane inside `beforeRun`. Until that admission
+	// is attempted, a generated tab/pane from target provisioning is unadmitted
+	// and this call owns its cleanup; a refused admission or any later failure
+	// keeps the pane with the owner, so no close runs here.
+	let admissionAttempted = false;
 
 	const fail = async (failure: HostResult<never>): Promise<HostResult<never>> => {
 		let cleanupFailure: string | undefined;
@@ -368,7 +373,7 @@ async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): P
 				ownedTabId = tabId;
 			});
 		}
-		if (!target.ok) return options.beforeRun ? target : fail(target);
+		if (!target.ok) return fail(target);
 		ownedPaneId = target.pane.pane_id;
 
 		// Retained-launch gate (retained-work feature): the retained owner must
@@ -376,6 +381,7 @@ async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): P
 		// the launch and the owner keeps the pane, so no cleanup runs here; the
 		// same contract applies when the admitted command fails to start.
 		if (options.beforeRun) {
+			admissionAttempted = true;
 			await options.beforeRun({ host: "herdr", paneId: target.pane.pane_id!, workspaceId: target.pane.workspace_id });
 			const started = await runPaneCommand(pi, target.pane, options.shellCommand, remainingProvisionMs(deadline, HERDR_PANE_CLEANUP_RESERVE_MS) ?? 5000);
 			if (!started.ok) return started;
@@ -413,7 +419,10 @@ async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): P
 			paneId,
 		};
 	} catch (error) {
-		if (options.beforeRun) throw error;
+		// Once admission was attempted the owner owns the pane; before that the
+		// target failure is an unadmitted resource this call must clean up and
+		// report as structured pane_unavailable.
+		if (admissionAttempted) throw error;
 		return fail({ ok: false, error: error instanceof Error ? error.message : String(error) });
 	}
 }

@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>SumoCode × Pi RPC — audit map</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Fragment+Mono:ital@0;1&display=swap" rel="stylesheet">
+	<style>
+		:root {
+			--ink: #101010;
+			--paper: #fff8e8;
+			--white: #fffdf7;
+			--yellow: #ffd447;
+			--coral: #ff6b5f;
+			--cyan: #53d8d0;
+			--blue: #3576ff;
+			--lime: #b9ef63;
+			--muted: #6b685f;
+			--line: 4px solid var(--ink);
+			--shadow: 8px 8px 0 var(--ink);
+			--max: 1220px;
+		}
+		* { box-sizing: border-box; }
+		html { scroll-behavior: smooth; }
+		body {
+			margin: 0;
+			color: var(--ink);
+			background-color: var(--paper);
+			background-image:
+				linear-gradient(rgba(16,16,16,.07) 1px, transparent 1px),
+				linear-gradient(90deg, rgba(16,16,16,.07) 1px, transparent 1px);
+			background-size: 28px 28px;
+			font-family: "Bricolage Grotesque", system-ui, sans-serif;
+			font-size: 17px;
+			line-height: 1.45;
+		}
+		a { color: inherit; text-decoration-thickness: 2px; text-underline-offset: 3px; }
+		a:focus-visible { outline: 4px solid var(--blue); outline-offset: 4px; }
+		.shell { width: min(calc(100% - 32px), var(--max)); margin: 0 auto; }
+		nav {
+			position: sticky;
+			top: 0;
+			z-index: 20;
+			border-bottom: var(--line);
+			background: var(--yellow);
+		}
+		.nav-inner {
+			display: flex;
+			align-items: center;
+			gap: 22px;
+			min-height: 58px;
+			overflow-x: auto;
+			white-space: nowrap;
+		}
+		.brand { font-weight: 800; letter-spacing: -.04em; margin-right: auto; }
+		.nav-inner a { font: 13px "Fragment Mono", monospace; text-decoration: none; border-bottom: 2px solid transparent; }
+		.nav-inner a:hover { border-bottom-color: var(--ink); }
+		header { padding: 70px 0 54px; }
+		.hero {
+			display: grid;
+			grid-template-columns: 1.3fr .7fr;
+			gap: 30px;
+			align-items: stretch;
+		}
+		.kicker, .eyebrow, .chip, .mini-label {
+			font-family: "Fragment Mono", monospace;
+			text-transform: uppercase;
+			letter-spacing: .08em;
+		}
+		.kicker { display: inline-block; padding: 8px 12px; border: var(--line); background: var(--coral); box-shadow: 5px 5px 0 var(--ink); font-size: 12px; }
+		h1 { margin: 26px 0 18px; max-width: 880px; font-size: clamp(58px, 8.5vw, 118px); line-height: .84; letter-spacing: -.075em; }
+		.hero p { max-width: 760px; margin: 0; font-size: clamp(21px, 2.4vw, 32px); font-weight: 700; line-height: 1.15; }
+		.release-card { border: var(--line); background: var(--blue); color: #fff; box-shadow: var(--shadow); padding: 26px; transform: rotate(1.5deg); }
+		.release-card .lock { font-size: 76px; line-height: 1; font-weight: 800; }
+		.release-card strong { display: block; font-size: 30px; line-height: 1; margin: 20px 0 12px; }
+		.release-card p { font: 14px/1.45 "Fragment Mono", monospace; }
+		section { padding: 78px 0; border-top: var(--line); scroll-margin-top: 58px; }
+		.section-head { display: flex; gap: 18px; align-items: end; margin-bottom: 36px; }
+		.section-no { font: 15px "Fragment Mono", monospace; border: var(--line); padding: 7px 10px; background: var(--yellow); box-shadow: 4px 4px 0 var(--ink); }
+		h2 { font-size: clamp(38px, 5.4vw, 72px); line-height: .94; letter-spacing: -.055em; margin: 0; }
+		.section-note { margin-left: auto; max-width: 320px; font: 13px/1.45 "Fragment Mono", monospace; }
+		.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; margin-top: 42px; }
+		.stat { border: var(--line); background: var(--white); box-shadow: 6px 6px 0 var(--ink); padding: 20px; }
+		.stat:nth-child(2) { background: var(--cyan); transform: translateY(12px); }
+		.stat:nth-child(3) { background: var(--lime); }
+		.stat:nth-child(4) { background: var(--coral); transform: translateY(-8px); }
+		.stat b { display: block; font-size: 54px; line-height: .9; letter-spacing: -.06em; }
+		.stat span { font: 12px/1.4 "Fragment Mono", monospace; text-transform: uppercase; }
+		.diagram { border: var(--line); background: var(--white); box-shadow: var(--shadow); padding: 26px; overflow: hidden; }
+		.diagram svg { display: block; width: 100%; height: auto; }
+		.diagram text { fill: var(--ink); font-family: "Fragment Mono", monospace; }
+		.diagram .big { font-family: "Bricolage Grotesque", sans-serif; font-weight: 800; }
+		.two-up { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+		.flow-title { display: flex; align-items: center; justify-content: space-between; margin: 0 0 20px; }
+		.flow-title h3 { margin: 0; font-size: 30px; letter-spacing: -.04em; }
+		.chip { border: 3px solid var(--ink); padding: 5px 8px; font-size: 11px; background: var(--white); }
+		.chip.bad { background: var(--coral); }
+		.chip.good { background: var(--lime); }
+		.strength-grid { display: grid; grid-template-columns: 1.3fr .7fr 1fr; gap: 20px; }
+		.block { border: var(--line); padding: 24px; min-height: 180px; box-shadow: 6px 6px 0 var(--ink); display: flex; flex-direction: column; justify-content: space-between; }
+		.block h3 { margin: 0; font-size: 31px; line-height: 1; letter-spacing: -.04em; }
+		.block p { margin: 18px 0 0; font: 13px/1.45 "Fragment Mono", monospace; }
+		.block.transport { background: var(--cyan); }
+		.block.hydration { background: var(--yellow); }
+		.block.tools { background: var(--blue); color: white; }
+		.block.ui { background: var(--lime); grid-column: span 2; }
+		.block.entries { background: var(--white); }
+		.gap-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 18px; align-items: stretch; }
+		.gap { border: var(--line); box-shadow: 6px 6px 0 var(--ink); padding: 22px; min-height: 190px; }
+		.gap h3 { margin: 0 0 16px; font-size: 28px; line-height: 1; letter-spacing: -.04em; }
+		.gap p { margin: 0; font: 13px/1.5 "Fragment Mono", monospace; }
+		.gap .n { font-size: 64px; line-height: .8; float: right; margin-left: 8px; }
+		.g1 { grid-column: span 7; background: var(--coral); }
+		.g2 { grid-column: span 5; background: var(--yellow); transform: translateY(12px); }
+		.g3 { grid-column: span 4; background: var(--white); }
+		.g4 { grid-column: span 4; background: var(--cyan); }
+		.g5 { grid-column: span 4; background: var(--lime); transform: translateY(-8px); }
+		.roadmap { display: grid; grid-template-columns: 1fr 80px 1fr; gap: 18px; align-items: center; }
+		.milestone { border: var(--line); background: var(--white); box-shadow: 7px 7px 0 var(--ink); padding: 24px; min-height: 148px; }
+		.milestone.gate { background: var(--blue); color: white; }
+		.milestone.queue { background: var(--lime); }
+		.milestone h3 { margin: 0; font-size: 28px; line-height: 1; }
+		.milestone p { margin: 14px 0 0; font: 13px/1.45 "Fragment Mono", monospace; }
+		.arrow { text-align: center; font-size: 54px; font-weight: 800; }
+		.parallel { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 6px; padding-left: calc(50% + 9px); position: relative; }
+		.parallel::before { content: ""; position: absolute; top: -28px; left: 50%; width: 4px; height: 28px; background: var(--ink); }
+		.parallel .milestone:first-child { background: var(--yellow); }
+		.parallel .milestone:last-child { background: var(--cyan); }
+		.edge-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+		.edge { background: var(--ink); color: white; border: var(--line); box-shadow: 7px 7px 0 var(--coral); padding: 24px; }
+		.edge b { display: block; font-size: 25px; line-height: 1; margin-bottom: 16px; }
+		.edge span { font: 12px/1.5 "Fragment Mono", monospace; color: #eee; }
+		footer { border-top: var(--line); background: var(--yellow); padding: 36px 0 48px; }
+		.footer-inner { display: flex; align-items: start; justify-content: space-between; gap: 24px; }
+		.footer-inner strong { font-size: 28px; }
+		.footer-inner p { margin: 6px 0 0; font: 12px/1.5 "Fragment Mono", monospace; }
+		.source-links { display: flex; gap: 14px; flex-wrap: wrap; justify-content: flex-end; font: 12px "Fragment Mono", monospace; }
+		@media (max-width: 900px) {
+			.hero, .two-up { grid-template-columns: 1fr; }
+			.stats { grid-template-columns: 1fr 1fr; }
+			.strength-grid { grid-template-columns: 1fr 1fr; }
+			.block.ui { grid-column: span 1; }
+			.g1, .g2, .g3, .g4, .g5 { grid-column: span 6; transform: none; }
+			.roadmap { grid-template-columns: 1fr; }
+			.arrow { transform: rotate(90deg); }
+			.parallel { grid-column: auto; padding-left: 0; grid-template-columns: 1fr; }
+			.parallel::before { display: none; }
+			.edge-strip { grid-template-columns: 1fr; }
+			.section-head { align-items: start; flex-wrap: wrap; }
+			.section-note { margin-left: 0; }
+		}
+		@media (max-width: 600px) {
+			body { font-size: 15px; }
+			.shell { width: min(calc(100% - 22px), var(--max)); }
+			header, section { padding: 52px 0; }
+			.nav-inner { gap: 16px; }
+			.stats, .strength-grid { grid-template-columns: 1fr; }
+			.g1, .g2, .g3, .g4, .g5 { grid-column: span 12; }
+			.footer-inner { display: block; }
+			.source-links { justify-content: flex-start; margin-top: 20px; }
+		}
+		@media (prefers-color-scheme: dark) {
+			:root { --ink: #f6f1e8; --paper: #131313; --white: #202020; --muted: #bbb; }
+			body { background-image: linear-gradient(rgba(246,241,232,.08) 1px, transparent 1px), linear-gradient(90deg, rgba(246,241,232,.08) 1px, transparent 1px); }
+			.release-card, .block.tools { color: #101010; }
+			.edge { background: #f6f1e8; color: #101010; }
+			.edge span { color: #292929; }
+			.diagram text { fill: #101010; }
+		}
+	</style>
+</head>
+<body>
+	<nav aria-label="Audit sections">
+		<div class="shell nav-inner">
+			<div class="brand">SUMOCODE × PI</div>
+			<a href="#verdict">VERDICT</a>
+			<a href="#queues">QUEUES</a>
+			<a href="#strong">STRONG</a>
+			<a href="#gaps">GAPS</a>
+			<a href="#roadmap">ROADMAP</a>
+			<a href="#edges">EDGES</a>
+		</div>
+	</nav>
+
+	<header id="verdict">
+		<div class="shell hero">
+			<div>
+				<div class="kicker">deep audit · 27 aug 2026</div>
+				<h1>KEEP RPC.<br>FIX WHO OWNS WHAT.</h1>
+				<p>The transport is solid. The host is duplicating Pi’s queue policy and ending turns too early.</p>
+				<div class="stats" aria-label="Audit totals">
+					<div class="stat"><b>33</b><span>RPC commands on target main</span></div>
+					<div class="stat"><b>24</b><span>actual event types audited</span></div>
+					<div class="stat"><b>9</b><span>extension UI methods covered</span></div>
+					<div class="stat"><b>2→1</b><span>delivery authorities</span></div>
+				</div>
+			</div>
+			<aside class="release-card" aria-label="Release gate">
+				<div class="lock">WAIT</div>
+				<strong>ONE HARD GATE</strong>
+				<p>Do not execute the roadmap until a published Pi release contains <code>clear_queue</code>. Current Pi main marks it unreleased.</p>
+			</aside>
+		</div>
+	</header>
+
+	<main>
+		<section id="queues">
+			<div class="shell">
+				<div class="section-head">
+					<span class="section-no">01</span><h2>ONE QUEUE OWNER</h2>
+					<p class="section-note">The exact classic behavior is RPC <strong>prompt + streamingBehavior</strong>, not the lower-level steer command.</p>
+				</div>
+				<div class="two-up">
+					<div class="diagram">
+						<div class="flow-title"><h3>Today</h3><span class="chip bad">split authority</span></div>
+						<svg viewBox="0 0 560 520" role="img" aria-label="Current split queue architecture">
+							<defs><marker id="arrow-now" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#101010"/></marker></defs>
+							<rect x="50" y="18" width="460" height="70" rx="0" fill="#ffd447" stroke="#101010" stroke-width="4"/>
+							<text x="280" y="62" text-anchor="middle" class="big" font-size="25">EDITOR / ENTER</text>
+							<path d="M280 88 V132" stroke="#101010" stroke-width="5" marker-end="url(#arrow-now)"/>
+							<rect x="50" y="142" width="460" height="105" fill="#ff6b5f" stroke="#101010" stroke-width="4"/>
+							<text x="280" y="181" text-anchor="middle" class="big" font-size="24">SUMOCODE FIFO</text>
+							<text x="280" y="215" text-anchor="middle" font-size="14">waits for agent_settled</text>
+							<path d="M280 247 V291" stroke="#101010" stroke-width="5" marker-end="url(#arrow-now)"/>
+							<rect x="50" y="301" width="220" height="92" fill="#fffdf7" stroke="#101010" stroke-width="4"/>
+							<text x="160" y="340" text-anchor="middle" class="big" font-size="20">PLAIN PROMPT</text>
+							<text x="160" y="368" text-anchor="middle" font-size="12">normal drain</text>
+							<rect x="290" y="301" width="220" height="92" fill="#53d8d0" stroke="#101010" stroke-width="4"/>
+							<text x="400" y="340" text-anchor="middle" class="big" font-size="20">FORCE STEER</text>
+							<text x="400" y="368" text-anchor="middle" font-size="12">escape hatch</text>
+							<path d="M160 393 V435 M400 393 V435" stroke="#101010" stroke-width="5"/>
+							<path d="M160 435 H400" stroke="#101010" stroke-width="5"/>
+							<path d="M280 435 V462" stroke="#101010" stroke-width="5" marker-end="url(#arrow-now)"/>
+							<rect x="145" y="470" width="270" height="44" fill="#3576ff" stroke="#101010" stroke-width="4"/>
+							<text x="280" y="499" text-anchor="middle" class="big" font-size="18" fill="#fff">PI QUEUES</text>
+						</svg>
+					</div>
+					<div class="diagram">
+						<div class="flow-title"><h3>Target</h3><span class="chip good">Pi authority</span></div>
+						<svg viewBox="0 0 560 520" role="img" aria-label="Target native Pi queue architecture">
+							<defs><marker id="arrow-next" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#101010"/></marker></defs>
+							<rect x="50" y="18" width="460" height="70" fill="#ffd447" stroke="#101010" stroke-width="4"/>
+							<text x="280" y="62" text-anchor="middle" class="big" font-size="25">EDITOR / ENTER</text>
+							<path d="M280 88 V126" stroke="#101010" stroke-width="5" marker-end="url(#arrow-next)"/>
+							<rect x="82" y="136" width="396" height="70" fill="#b9ef63" stroke="#101010" stroke-width="4"/>
+							<text x="280" y="165" text-anchor="middle" class="big" font-size="20">STEER · FOLLOW-UP</text>
+							<text x="280" y="190" text-anchor="middle" font-size="12">visible toggle · STEER default</text>
+							<path d="M280 206 V250" stroke="#101010" stroke-width="5" marker-end="url(#arrow-next)"/>
+							<rect x="50" y="260" width="460" height="90" fill="#53d8d0" stroke="#101010" stroke-width="4"/>
+							<text x="280" y="298" text-anchor="middle" class="big" font-size="22">PROMPT(behavior)</text>
+							<text x="280" y="326" text-anchor="middle" font-size="12">same AgentSession preflight as classic</text>
+							<path d="M280 350 V394" stroke="#101010" stroke-width="5" marker-end="url(#arrow-next)"/>
+							<rect x="50" y="404" width="460" height="74" fill="#3576ff" stroke="#101010" stroke-width="4"/>
+							<text x="280" y="437" text-anchor="middle" class="big" font-size="22" fill="#fff">PI NATIVE QUEUES</text>
+							<text x="280" y="462" text-anchor="middle" font-size="12" fill="#fff">queue_update → UI · clear_queue → restore</text>
+							<path d="M50 440 H20 V172 H74" fill="none" stroke="#101010" stroke-width="4" stroke-dasharray="9 7" marker-end="url(#arrow-next)"/>
+						</svg>
+					</div>
+				</div>
+			</div>
+		</section>
+
+		<section id="strong">
+			<div class="shell">
+				<div class="section-head"><span class="section-no">02</span><h2>KEEP THE DEEP PARTS</h2><p class="section-note">No rewrite. The subprocess seam and retained host stay.</p></div>
+				<div class="strength-grid">
+					<article class="block transport"><span class="mini-label">01 · transport</span><h3>Strict JSONL + request IDs</h3><p>LF framing · timeouts · stderr · child ownership</p></article>
+					<article class="block hydration"><span class="mini-label">02 · hydration</span><h3>Race-safe replacement</h3><p>quiet loop · event barrier · suffix replay</p></article>
+					<article class="block tools"><span class="mini-label">03 · transcript</span><h3>Indexed deltas + stable tool IDs</h3><p>final events stay authoritative</p></article>
+					<article class="block ui"><span class="mini-label">04 · extension UI</span><h3>All 9 request methods bridged</h3><p>dialogs · notify · status · editor text · title</p></article>
+					<article class="block entries"><span class="mini-label">05 · sessions</span><h3>Append-only entry access</h3><p>get_entries · disk reconciliation · tree safety</p></article>
+				</div>
+			</div>
+		</section>
+
+		<section id="gaps">
+			<div class="shell">
+				<div class="section-head"><span class="section-no">03</span><h2>THE FIVE LEAKS</h2><p class="section-note">Policy and presentation gaps—not transport failures.</p></div>
+				<div class="gap-grid">
+					<article class="gap g1"><span class="n">1</span><h3>Idle too soon</h3><p><strong>agent_end ≠ idle.</strong><br>Only agent_settled closes retry, compaction and continuation.</p></article>
+					<article class="gap g2"><span class="n">2</span><h3>Duplicate queues</h3><p>390 lines of host policy compete with Pi’s own steering and follow-up queues.</p></article>
+					<article class="gap g3"><span class="n">3</span><h3>No direct bash</h3><p>!command becomes an agent prompt instead of RPC bash.</p></article>
+					<article class="gap g4"><span class="n">4</span><h3>Images are text</h3><p>Paths enter prompts; native ImageContent is unused.</p></article>
+					<article class="gap g5"><span class="n">5</span><h3>Hidden truth</h3><p>Queue modes, auto-compaction, retry, errors and live usage are under-projected.</p></article>
+				</div>
+			</div>
+		</section>
+
+		<section id="roadmap">
+			<div class="shell">
+				<div class="section-head"><span class="section-no">04</span><h2>RELEASE-GATED ROADMAP</h2><p class="section-note">Every issue stays BLOCKED until task 088 verifies the published package.</p></div>
+				<div class="roadmap">
+					<article class="milestone gate"><h3>WAIT: NEXT PI RELEASE</h3><p>Must contain clear_queue in shipped types + runtime.</p></article>
+					<div class="arrow">→</div>
+					<article class="milestone"><h3>088 · UPGRADE + CONTRACT</h3><p>pin all Pi packages · verify exports · lock fixtures</p></article>
+					<div class="arrow">↓</div>
+					<div></div>
+					<article class="milestone"><h3>089 · LIFECYCLE TRUTH</h3><p>agent_settled · settings · retry/errors · live usage</p></article>
+					<div></div>
+					<div class="arrow">→</div>
+					<article class="milestone queue"><h3>090 · NATIVE DELIVERY</h3><p>STEER default · FOLLOW-UP toggle · clear + restore</p></article>
+					<div class="parallel">
+						<article class="milestone"><h3>091 · DIRECT BASH</h3><p>! / !! · streamed output · abort_bash</p></article>
+						<article class="milestone"><h3>092 · NATIVE IMAGES</h3><p>ImageContent · attachment path · queue caveat</p></article>
+					</div>
+				</div>
+			</div>
+		</section>
+
+		<section id="edges">
+			<div class="shell">
+				<div class="section-head"><span class="section-no">05</span><h2>UPSTREAM EDGES STAY VISIBLE</h2><p class="section-note">Don’t fake capabilities the protocol does not expose.</p></div>
+				<div class="edge-strip">
+					<div class="edge"><b>TEXT-ONLY QUEUE RECOVERY</b><span>clear_queue returns strings, not image blocks or stable IDs.</span></div>
+					<div class="edge"><b>NO COMPACTION ABORT</b><span>Generic abort does not cancel manual/automatic compaction.</span></div>
+					<div class="edge"><b>NO BRANCH-SUMMARY ABORT</b><span>Exact classic Escape parity still needs an upstream RPC command.</span></div>
+				</div>
+			</div>
+		</section>
+	</main>
+
+	<footer>
+		<div class="shell footer-inner">
+			<div><strong>SUMOCODE × PI RPC</strong><p>audited at SumoCode 1ad967b · Pi main 4e49492</p></div>
+			<div class="source-links"><a href="./SUMOCODE_PI_RPC_AUDIT_2026.md">full audit</a><a href="./PI_RPC_MAIN_SPEC_RESEARCH.md">upstream inventory</a><a href="https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/rpc.md">Pi RPC spec ↗</a></div>
+		</div>
+	</footer>
+</body>
+</html>

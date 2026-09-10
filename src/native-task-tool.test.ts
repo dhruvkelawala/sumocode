@@ -768,6 +768,33 @@ describe("native task tool", () => {
 		expect(JSON.stringify(result)).not.toContain(sentinel);
 	});
 
+	it("bounds malformed-message diagnostics and settles the child run exactly once", async () => {
+		const proc = new FakeTaskProcess();
+		const task = registeredTask(proc);
+		const running = task.execute();
+		const sentinel = "BOUNDED-SENTINEL";
+		const payload = `${sentinel}${"x".repeat(CHILD_RETAINED_RESULT_MAX_BYTES)}`;
+
+		expect(() => emitTaskEvent(proc, {
+			type: "message_end",
+			message: { role: "assistant", content: { payload }, usage: {} },
+		})).not.toThrow();
+		// Frames after the protocol failure must neither re-settle the run nor leak.
+		expect(() => emitTaskEvent(proc, { type: "message_end", message: { role: "user", content: payload } })).not.toThrow();
+		proc.emit("close", null, "SIGTERM");
+		proc.emit("close", 0);
+		proc.emit("error", new Error("late child error"));
+
+		const result = await running;
+		expect(result.isError).toBe(true);
+		expect(proc.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+		expect(proc.stdout.listenerCount("data")).toBe(0);
+		expect(result.content[0]?.text).toContain("malformed assistant content");
+		expect(result.content[0]?.text).not.toContain(sentinel);
+		expect(JSON.stringify(result)).not.toContain(sentinel);
+		expect(Buffer.byteLength(result.content[0]?.text ?? "", "utf8")).toBeLessThan(4096);
+	});
+
 	it("caps producer-controlled structural metadata", async () => {
 		const proc = new FakeTaskProcess();
 		const running = registeredTask(proc).execute();

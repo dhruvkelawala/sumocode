@@ -296,6 +296,21 @@ export const LAUNCHER_PARITY_CASES: readonly LauncherParityCase[] = [
 		expect: "exit-0",
 		stdoutContains: "worktree dry run",
 	},
+	// `run` is the default spelling, so after an explicit command it stays a
+	// path/prompt positional: `task run` is a task prompt and `worktree run` a
+	// worktree name, their pre-#484 meanings (issue 484).
+	{
+		name: "keeps a run-named task prompt positional",
+		argv: ["task", "run"],
+		expect: "exit-0",
+		dryRun: { command: "task", args: "[redacted]" },
+	},
+	{
+		name: "keeps a run-named worktree positional",
+		argv: ["worktree", "run"],
+		expect: "exit-0",
+		stdoutContains: "NAME=run",
+	},
 	// Rejection rows (issue 484): when a launcher-owned check rejects a token it
 	// must name the offending token on stderr, exit 64, and never reach Pi.
 	// Unknown options in Pi-forwarding contexts (run/task) deliberately stay

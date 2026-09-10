@@ -393,14 +393,15 @@ function parseLauncherArgv(argv: readonly string[]): ParsedLaunch {
 		// longer exist in one launcher only (#483).
 		const command = launcherCommandForToken(arg);
 		if (command !== undefined) {
-			if (commandExplicit && parsed.command === "run") {
-				// An explicit `run` owns the launch: later command spellings are
-				// path/prompt positionals, never command switches (issue 484).
+			// `run` is the default spelling, so once any command is explicit a `run`
+			// token stays path/prompt positional: `run <command>` and
+			// `task run`/`worktree run` keep their pre-#484 argument meaning.
+			if (commandExplicit && (parsed.command === "run" || command === "run")) {
 				parsed.forwardedArgs.push(arg);
 				continue;
 			}
-			// `run` is the default command; any other second command spelling is a
-			// usage error (repeating the same spelling is idempotent).
+			// Any other second command spelling is a usage error (repeating the same
+			// spelling is idempotent).
 			if (commandExplicit && parsed.command !== command) usageError(`Only one command may be specified: ${arg}`);
 			parsed.command = command;
 			commandExplicit = true;

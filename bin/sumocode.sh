@@ -159,11 +159,12 @@ while [[ $# -gt 0 ]]; do
 			# `-w`/`--worktree` aliases below) live in src/cli/launcher-spec.ts; the
 			# native parser reads the same table and
 			# test/integration/launcher-runtime-contract.ts runs every spelling
-			# through both launchers. `run` is the explicit default spelling. Once a
-			# command is explicit, `run` keeps later command spellings positional
-			# (path/prompt) and never switches commands (issue 484).
+			# through both launchers. `run` is the explicit default spelling, so once
+			# any command is explicit a `run` token stays path/prompt positional: both
+			# `run <command>` and `task run`/`worktree run` keep their pre-#484
+			# argument meaning instead of reading as a second command (issue 484).
 			if [[ "${COMMAND_EXPLICIT}" -eq 1 ]]; then
-				if [[ "${COMMAND}" == "run" ]]; then
+				if [[ "${COMMAND}" == "run" || "$1" == "run" ]]; then
 					SUMOCODE_ARGS+=("$1")
 					shift
 					continue

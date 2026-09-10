@@ -50,6 +50,37 @@ describe("renderSubagentStatusRow", () => {
 		expect(plain(row)).not.toContain("7e8fc89b");
 	});
 
+	it("keeps single-namespace short ids unchanged", () => {
+		const [row] = renderSubagentStatusRow({
+			width: 200,
+			running: [
+				{ id: "sa-7e8fc89b-3545-43af-bf97-d603cdefdea2-1", title: "one", ageMs: 0 },
+				{ id: "sa-7e8fc89b-3545-43af-bf97-d603cdefdea2-2", title: "two", ageMs: 0 },
+			],
+			queuedCount: 0,
+		});
+		expect(plain(row)).toContain("one sa-1 0s");
+		expect(plain(row)).toContain("two sa-2 0s");
+		expect(plain(row)).not.toContain("7e8fc89b");
+	});
+
+	it("disambiguates colliding short ids with a namespace fragment", () => {
+		const [row] = renderSubagentStatusRow({
+			width: 200,
+			running: [
+				{ id: "sa-01234567-89ab-cdef-0123-456789abcdef-1", title: "old", ageMs: 1_000 },
+				{ id: "sa-89abcdef-0123-4567-89ab-cdef01234567-1", title: "new", ageMs: 2_000 },
+				{ id: "sa-89abcdef-0123-4567-89ab-cdef01234567-2", title: "next", ageMs: 3_000 },
+			],
+			queuedCount: 0,
+		});
+		const text = plain(row);
+		expect(text).toContain("old sa-01234567-1 1s");
+		expect(text).toContain("new sa-89abcdef-1 2s");
+		// Only colliding ids widen; the unambiguous sibling keeps the short form.
+		expect(text).toContain("next sa-2 3s");
+	});
+
 	it("keeps aggregate counts visible when per-agent detail is truncated", () => {
 		const [row] = renderSubagentStatusRow({
 			width: 60,
@@ -81,8 +112,39 @@ describe("renderSubagentStatusRow", () => {
 			running: [{ id: "sa-1", roleId: "review", title: "review", ageMs: 1_000 }],
 			queuedCount: 0,
 		});
-		expect(plain(row)).toContain("1 running · review sa-1 review 1s");
+		expect(plain(row)).toContain("1 running · review sa-1 1s");
 		expect(plain(row)).not.toContain("queued");
+	});
+
+	it("skips a role that duplicates the title", () => {
+		const [row] = renderSubagentStatusRow({
+			width: 200,
+			running: [
+				{ id: "sa-1", roleId: "research", title: "research", ageMs: 1_000 },
+				{ id: "sa-2", roleId: "implement-cheap", title: "rebase-471-herdr-panes", ageMs: 2_000 },
+			],
+			queuedCount: 0,
+		});
+		expect(plain(row)).toContain("research sa-1 1s");
+		expect(plain(row)).not.toContain("research sa-1 research");
+		expect(plain(row)).toContain("rebase-471-herdr-panes sa-2 implement-cheap 2s");
+	});
+
+	it("caps a long title so the short id stays visible", () => {
+		const [row] = renderSubagentStatusRow({
+			width: 120,
+			running: [{
+				id: "sa-7e8fc89b-3545-43af-bf97-d603cdefdea2-2",
+				roleId: "implement-cheap",
+				title: "investigate the failing flaky integration test ".repeat(8),
+				ageMs: 13 * 60_000,
+			}],
+			queuedCount: 0,
+		});
+		const text = plain(row);
+		expect(text).toContain("…");
+		expect(text).toContain("sa-2 implement-cheap 13m");
+		expect(text.length).toBeLessThanOrEqual(120);
 	});
 
 	it("falls back to the generic label when the title is empty", () => {

@@ -2,7 +2,9 @@ import { getActiveTheme } from "./themes/index.js";
 import { lineToAnsi, span, textLine, truncateLine } from "./sumo-tui/render/primitives.js";
 
 const LEFT_PADDING = "  ";
-const NAMESPACED_SUBAGENT_ID = /^sa-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-(\d+)$/;
+/** Per-title bound so one long title cannot push the id out of the row. */
+const TITLE_MAX = 48;
+const NAMESPACED_SUBAGENT_ID = /^sa-([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-(\d+)$/;
 
 function ageLabel(ageMs: number): string {
 	const seconds = Math.max(0, Math.floor(ageMs / 1_000));
@@ -17,12 +19,23 @@ function ageLabel(ageMs: number): string {
  */
 export function shortId(id: string): string {
 	const match = NAMESPACED_SUBAGENT_ID.exec(id);
-	return match === null ? id : `sa-${match[1]}`;
+	return match === null ? id : `sa-${match[2]}`;
 }
 
-/** Whitespace-normalized title, or the generic fallback when it is empty. */
+/**
+ * Adds a compact namespace fragment (`sa-<uuid prefix>-<n>`) for entries whose
+ * short ids collide across retained namespaces. Non-namespaced ids have no
+ * fragment to add and pass through unchanged.
+ */
+function namespacedShortId(id: string): string {
+	const match = NAMESPACED_SUBAGENT_ID.exec(id);
+	return match === null ? id : `sa-${match[1]}-${match[2]}`;
+}
+
+/** Whitespace-normalized, bounded title, or the generic fallback when empty. */
 function titleLabel(title: string): string {
-	return title.replace(/\s+/g, " ").trim() || "subagent";
+	const normalized = title.replace(/\s+/g, " ").trim() || "subagent";
+	return normalized.length <= TITLE_MAX ? normalized : `${normalized.slice(0, TITLE_MAX - 1)}…`;
 }
 
 /** One running subagent summarized in the footer status row. */
@@ -43,10 +56,18 @@ export function renderSubagentStatusRow(options: {
 	const segments: string[] = [];
 	if (options.running.length > 0) segments.push(`${options.running.length} running`);
 	if (options.queuedCount > 0) segments.push(`${options.queuedCount} queued`);
+	const shortIdCounts = new Map<string, number>();
+	for (const subagent of options.running) {
+		const short = shortId(subagent.id);
+		shortIdCounts.set(short, (shortIdCounts.get(short) ?? 0) + 1);
+	}
 	segments.push(
 		...options.running.map((subagent) => {
-			const role = subagent.roleId === undefined ? "" : ` ${subagent.roleId}`;
-			return `${titleLabel(subagent.title)} ${shortId(subagent.id)}${role} ${ageLabel(subagent.ageMs)}`;
+			const short = shortId(subagent.id);
+			const id = (shortIdCounts.get(short) ?? 0) > 1 ? namespacedShortId(subagent.id) : short;
+			const title = titleLabel(subagent.title);
+			const role = subagent.roleId === undefined || subagent.roleId === title ? "" : ` ${subagent.roleId}`;
+			return `${title} ${id}${role} ${ageLabel(subagent.ageMs)}`;
 		}),
 	);
 	const suffix = segments.length > 0 ? ` · ${segments.join(" · ")}` : "";

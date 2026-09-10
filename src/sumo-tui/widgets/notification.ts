@@ -17,31 +17,12 @@ export interface NotificationCenterOptions {
 	readonly onChange?: () => void;
 }
 
-const LEVEL_PREFIX = {
-	info: "ⓘ",
-	success: "✓",
-	warning: "⚠",
-	error: "✖",
-} satisfies Record<NotificationLevel, string>;
-
-function stripAnsi(text: string): string {
-	// oxlint-disable-next-line no-control-regex -- intentional ESC byte match to strip ANSI styling from notification text
-	return text.replace(/\u001b\[[0-9;]*m/g, "");
-}
-
-function truncateVisible(text: string, width: number): string {
-	const plain = stripAnsi(text);
-	if (plain.length <= width) return text;
-	if (width <= 1) return "…";
-	return `${plain.slice(0, width - 1)}…`;
-}
-
-function pad(text: string, width: number): string {
-	const visible = stripAnsi(text).length;
-	return visible >= width ? text : `${text}${" ".repeat(width - visible)}`;
-}
-
-/** Minimal top-right toast stack used by the Phase 4 ExtensionUI adapter. */
+/**
+ * Host notification model consumed by `RpcHostActions`, the RPC extension UI
+ * responder, and the pi-compat ExtensionUI adapter. Issue 481 removed the
+ * top-right toast surface: `render` never paints rows, while `notify` keeps
+ * funneling host feedback and extension notify requests into one sink.
+ */
 export class NotificationCenter implements Component {
 	private readonly defaultTimeoutMs: number;
 	private readonly getNow: () => number;
@@ -95,16 +76,8 @@ export class NotificationCenter implements Component {
 
 	public invalidate(): void {}
 
-	public render(width: number): string[] {
-		if (this.toasts.length === 0 || width <= 0) return [];
-		const boxWidth = Math.min(Math.max(24, Math.floor(width * 0.45)), width);
-		const leftPad = Math.max(0, width - boxWidth);
-		const indent = " ".repeat(leftPad);
-		return this.toasts.slice(-4).map((toast) => {
-			const content = `${LEVEL_PREFIX[toast.level]} ${toast.message}`;
-			const text = truncateVisible(content, Math.max(0, boxWidth - 2));
-			return `${indent} ${pad(text, boxWidth - 1)}`;
-		});
+	public render(_width: number): string[] {
+		return [];
 	}
 
 	public dispose(): void {

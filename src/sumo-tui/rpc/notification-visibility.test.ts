@@ -84,8 +84,10 @@ describe("RPC notification visibility", () => {
 			notifications.notify("upstream toast", "info", 0);
 			runtime.requestRender();
 			await vi.advanceTimersByTimeAsync(0);
-			expect(terminal.patches.map((patch) => patch.ansi).join("")).toContain("upstream toast");
-			expect(terminal.cursor).toBeNull();
+			// Issue 481: upstream notifications stay in the model but paint no rows.
+			expect(notifications.getToasts()).toHaveLength(1);
+			expect(terminal.patches.map((patch) => patch.ansi).join("")).not.toContain("upstream toast");
+			expect(terminal.cursor).not.toBeNull();
 			notifications.clear();
 			runtime.requestRender();
 			await vi.advanceTimersByTimeAsync(0);
@@ -125,7 +127,7 @@ describe("RPC notification visibility", () => {
 		}
 	});
 
-	it("keeps upstream toasts until timer expiry and hides the cursor for an active modal", async () => {
+	it("never paints upstream toasts and hides the cursor only for an active modal", async () => {
 		vi.useFakeTimers();
 		const notifications = new NotificationCenter({ defaultTimeoutMs: 500 });
 		let modalActive = false;
@@ -134,13 +136,16 @@ describe("RPC notification visibility", () => {
 		try {
 			notifications.notify("upstream toast");
 			shell.render();
-			expect(text()).toContain("upstream toast");
-			expect(terminal.cursor).toBeNull();
+			expect(text()).not.toContain("upstream toast");
+			expect(terminal.cursor).not.toBeNull();
 			await vi.advanceTimersByTimeAsync(499);
 			shell.render();
-			expect(text()).toContain("upstream toast");
+			expect(notifications.getToasts()).toHaveLength(1);
+			expect(text()).not.toContain("upstream toast");
+			expect(terminal.cursor).not.toBeNull();
 			await vi.advanceTimersByTimeAsync(1);
 			shell.repaintWorkingIndicator();
+			expect(notifications.getToasts()).toHaveLength(0);
 			expect(text()).not.toContain("upstream toast");
 			expect(terminal.cursor).not.toBeNull();
 			setHint("ZZZZZZZZ");

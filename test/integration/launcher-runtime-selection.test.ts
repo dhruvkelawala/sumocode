@@ -245,4 +245,14 @@ describe("launcher subcommands (plan 117 shared contract)", () => {
 			}
 		});
 	}
+
+	it("doctor exits 70 when a check fails", () => {
+		// Deterministic failure fixture (the native suite pins its own verdict the
+		// same way): a diagnostics path inside a missing directory fails the
+		// writability check, so doctor must report 70 instead of a silent 0.
+		const result = runCommand(["doctor", "--diag-file", join(diagDir, "does-not-exist", "diag.jsonl")]);
+		expect(result.status).toBe(70);
+		expect(result.stdout).toContain("SumoCode doctor");
+		expect(result.stdout).toContain("diagnostics directory not writable");
+	});
 });

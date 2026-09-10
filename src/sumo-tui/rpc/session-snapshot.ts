@@ -108,5 +108,5 @@ export async function readPersistedSessionMessages(
 	if (!snapshot) return undefined;
 	// SAFETY: persisted entries come from Pi's own session writer; RPC delta entries
 	// are validated for the id/type contract before they reach this conversion.
-	return buildSessionContext(snapshot.entries as unknown as SessionEntry[], snapshot.leafId).messages;
+	return buildSessionContext([...snapshot.entries] as SessionEntry[], snapshot.leafId).messages;
 }

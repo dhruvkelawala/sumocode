@@ -887,6 +887,11 @@ async function launcherFlow(): Promise<void> {
 	const parsed = parseLauncherArgv(process.argv.slice(2));
 
 	validateCommandArgs(parsed);
+	// Mirror bin/sumocode.sh's order: task-only option rejection and debug mode
+	// run before the worktree branch, so `worktree --prompt-file`/`--task-dir`
+	// exit 64 in both launchers and `-d -w` records diagnostics.
+	resolveTaskLaunch(parsed);
+	applyDebugMode(parsed);
 	if (parsed.command === "worktree") {
 		if (parsed.dryRun) {
 			process.stdout.write(`sumocode worktree dry run\nROOT_DIR=${NATIVE_DIR}\nNAME=${parsed.forwardedArgs[0] ?? ""}\n`);
@@ -897,8 +902,6 @@ async function launcherFlow(): Promise<void> {
 		process.exitCode = await openWorktree(parsed.forwardedArgs[0]);
 		return;
 	}
-	resolveTaskLaunch(parsed);
-	applyDebugMode(parsed);
 
 	if (parsed.command === "doctor") runDoctor(parsed);
 	if (parsed.command === "diag") await runDiag(parsed.forwardedArgs[0] ?? "/tmp/sumocode-manual.jsonl");

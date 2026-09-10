@@ -111,6 +111,8 @@ export const LAUNCHER_COMMAND_CASES: readonly LauncherCommandCase[] = [
 	{ name: "-w without a terminal host reports the host requirement", argv: ["-w"], expect: "worktree-host-error", stderrContains: "requires a running herdr terminal host" },
 	{ name: "worktree rejects more than one worktree name", argv: ["worktree", "a", "b"], expect: "usage-error" },
 	{ name: "-w rejects more than one worktree name", argv: ["-w", "a", "b"], expect: "usage-error" },
+	{ name: "worktree rejects a task-only --prompt-file", argv: ["--dry-run", "worktree", "--prompt-file", "/tmp/nope"], expect: "usage-error", stderrContains: "[sumocode] --prompt-file is only valid with the 'task' subcommand." },
+	{ name: "worktree rejects a task-only --task-dir", argv: ["--dry-run", "worktree", "--task-dir", "/tmp/nope"], expect: "usage-error", stderrContains: "[sumocode] --task-dir is only valid with the 'task' subcommand." },
 	{ name: "worktree dry run prints the resolved name", argv: ["--dry-run", "worktree", "dry-wt"], expect: "exit-0", stdoutContains: "worktree dry run" },
 	{ name: "-w dry run prints the resolved name", argv: ["--dry-run", "-w", "dry-wt"], expect: "exit-0", stdoutContains: "worktree dry run" },
 ];

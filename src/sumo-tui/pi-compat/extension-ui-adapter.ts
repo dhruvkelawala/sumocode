@@ -96,7 +96,8 @@ function normalizeNotificationLevel(level: "info" | "warning" | "error" | undefi
  * Pi ExtensionUIContext implementation backed by RegionRegistry's named slots.
  * OwnedShellRenderer is the product render root; this adapter remains the
  * compatibility layer for extension UI surfaces that are not yet permanent
- * chrome siblings.
+ * chrome siblings. NotificationCenter stays as the notify sink only: issue 481
+ * removed the top-right toast overlay.
  *
  * Source: Pi 0.78.0's interactive mode exposes this surface from
  * `createExtensionUIContext()` at
@@ -149,15 +150,6 @@ export class SumoExtensionUIAdapter implements ExtensionUIContext {
 		this.onWorkingIndicator = options.setWorkingIndicator;
 		this.onHiddenThinkingLabel = options.setHiddenThinkingLabel;
 		this.requestRender = options.onRenderRequest ?? (() => this.tui.requestRender?.());
-		const notificationOverlayOptions: OverlayOptions = {
-			anchor: "top-right",
-			width: "45%",
-			maxHeight: 6,
-			nonCapturing: true,
-			visible: () => this.notifications.getToasts().length > 0,
-		};
-		this.tui.showOverlay?.(this.notifications, notificationOverlayOptions);
-		this.regionRegistry.mountOverlay("__notifications", this.notifications, notificationOverlayOptions);
 		if (this.modals instanceof ModalLayer) {
 			this.regionRegistry.mountOverlay("__modal", this.modals, {
 				row: 0,

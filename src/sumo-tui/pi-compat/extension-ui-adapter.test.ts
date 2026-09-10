@@ -17,7 +17,7 @@ class TestComponent implements Component {
 }
 
 function fakeTui(): TUI {
-	return { requestRender: vi.fn(), terminal: { columns: 80, rows: 24, setTitle: vi.fn() } } as unknown as TUI;
+	return { requestRender: vi.fn(), showOverlay: vi.fn(), terminal: { columns: 80, rows: 24, setTitle: vi.fn() } } as unknown as TUI;
 }
 
 function fakeTheme(): Theme {
@@ -46,6 +46,7 @@ async function makeAdapter(): Promise<{
 	notifications: NotificationCenter;
 	modals: ModalManager;
 	adapter: SumoExtensionUIAdapter;
+	tui: TUI;
 }> {
 	const yoga = await loadYoga();
 	const tui = fakeTui();
@@ -71,7 +72,7 @@ async function makeAdapter(): Promise<{
 		notifications,
 		modals,
 	});
-	return { registry, notifications, modals, adapter };
+	return { registry, notifications, modals, adapter, tui };
 }
 
 afterEach(() => {
@@ -79,6 +80,14 @@ afterEach(() => {
 });
 
 describe("SumoExtensionUIAdapter", () => {
+	it("mounts no notification toast overlay (issue 481)", async () => {
+		const { registry, tui } = await makeAdapter();
+
+		expect(registry.getMounted("__notifications")).toBeUndefined();
+		expect(tui.showOverlay).not.toHaveBeenCalled();
+		registry.dispose();
+	});
+
 	it("routes Pi extension UI methods to retained RegionRegistry slots", async () => {
 		const { adapter, registry } = await makeAdapter();
 

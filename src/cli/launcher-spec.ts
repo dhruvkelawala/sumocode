@@ -251,10 +251,9 @@ ARGUMENTS
       current working directory. The path is forwarded to Pi unchanged, so all
       normal Pi path handling still applies.
 
-  Pi's own options are forwarded unchanged (for example --offline,
-  --no-session, --no-extensions, --provider, and --model). Anything that is
-  neither a SumoCode command/option nor a Pi option is rejected with a usage
-  error instead of reaching Pi.
+  Additional unknown flags are forwarded to Pi unchanged. This preserves Pi
+  options such as --offline, --no-session, --no-extensions, --provider, and
+  --model while SumoCode owns only the options documented below.
 
 COMMANDS
 ${commands}

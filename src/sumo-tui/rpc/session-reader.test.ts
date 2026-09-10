@@ -1,8 +1,8 @@
-import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildSessionTree, listSessions, readSessionInfo } from "./session-reader.js";
+import { DEFAULT_MAX_ALL_SESSIONS, buildSessionTree, listAllSessions, listSessions, readSessionInfo } from "./session-reader.js";
 
 type PromiseConstructorWithResolvers = PromiseConstructor & {
 	withResolvers<T>(): {
@@ -243,6 +243,96 @@ describe("session-reader", () => {
 
 		it("returns an empty list for a missing directory", async () => {
 			expect(await listSessions(join(dir, "does-not-exist"))).toEqual([]);
+		});
+	});
+
+	describe("listAllSessions", () => {
+		/** Pi's file name is the ISO creation timestamp with `:`/`.` dashed. */
+		const fileNameFor = (offsetMinutes: number, id: string): string =>
+			`${new Date(Date.UTC(2026, 6, 2, 20, offsetMinutes)).toISOString().replace(/[:.]/g, "-")}_${id}.jsonl`;
+
+		const writeSession = (file: string, id: string, timestamp: string, cwd = "/repo"): string => {
+			writeFileSync(file, jsonl([
+				{ type: "session", version: 3, id, timestamp, cwd },
+				{
+					type: "message",
+					id: "e1",
+					parentId: null,
+					timestamp,
+					message: { role: "user", content: `first ${id}`, timestamp: new Date(timestamp).getTime() },
+				},
+			]));
+			return file;
+		};
+
+		const isoAt = (offsetMinutes: number): string => new Date(Date.UTC(2026, 6, 2, 20, offsetMinutes)).toISOString();
+
+		it("lists sessions from every project directory under the sessions root", async () => {
+			const sessionsRoot = join(dir, "sessions");
+			const projectA = join(sessionsRoot, "--repo-a--");
+			const projectB = join(sessionsRoot, "--repo-b--");
+			mkdirSync(join(projectA, "nested"), { recursive: true });
+			mkdirSync(projectB, { recursive: true });
+			writeSession(join(projectA, fileNameFor(0, "a")), "a", isoAt(0), "/repo-a");
+			writeSession(join(projectB, fileNameFor(10, "b")), "b", isoAt(10), "/repo-b");
+			// Only one level below the root is walked, matching Pi's
+			// `<sessions>/<encoded-cwd>/<file>.jsonl` layout.
+			writeSession(join(projectA, "nested", fileNameFor(20, "nested")), "nested", isoAt(20), "/repo-a");
+			writeFileSync(join(projectA, "notes.txt"), "not a session");
+
+			const sessions = await listAllSessions(sessionsRoot);
+
+			expect(sessions.map((session) => session.id)).toEqual(["b", "a"]);
+			expect(sessions.map((session) => session.cwd)).toEqual(["/repo-b", "/repo-a"]);
+		});
+
+		it("reads at most maxSessions files, newest-created first, on a large synthetic store", async () => {
+			const sessionsRoot = join(dir, "sessions");
+			for (let project = 0; project < 6; project += 1) {
+				const projectDir = join(sessionsRoot, `--repo-${project}--`);
+				mkdirSync(projectDir, { recursive: true });
+				for (let index = 0; index < 10; index += 1) {
+					const offset = project * 10 + index;
+					const id = `p${project}-${index}`;
+					writeSession(join(projectDir, fileNameFor(offset, id)), id, isoAt(offset), `/repo-${project}`);
+				}
+			}
+			const read: string[] = [];
+
+			const sessions = await listAllSessions(sessionsRoot, {
+				maxSessions: 5,
+				reader: async (filePath) => {
+					read.push(filePath);
+					return readSessionInfo(filePath);
+				},
+			});
+
+			expect(read).toHaveLength(5);
+			expect(sessions.map((session) => session.id)).toEqual(["p5-9", "p5-8", "p5-7", "p5-6", "p5-5"]);
+		});
+
+		it("bounds a default all-sessions scan by DEFAULT_MAX_ALL_SESSIONS", async () => {
+			const sessionsRoot = join(dir, "sessions");
+			const projectDir = join(sessionsRoot, "--repo--");
+			mkdirSync(projectDir, { recursive: true });
+			for (let index = 0; index < DEFAULT_MAX_ALL_SESSIONS + 3; index += 1) {
+				writeSession(join(projectDir, fileNameFor(index, `bulk-${index}`)), `bulk-${index}`, isoAt(index));
+			}
+			let reads = 0;
+
+			const sessions = await listAllSessions(sessionsRoot, {
+				reader: async (filePath) => {
+					reads += 1;
+					return readSessionInfo(filePath);
+				},
+			});
+
+			expect(reads).toBe(DEFAULT_MAX_ALL_SESSIONS);
+			expect(sessions).toHaveLength(DEFAULT_MAX_ALL_SESSIONS);
+		});
+
+		it("returns an empty list for a missing sessions root", async () => {
+			expect(await listAllSessions(join(dir, "does-not-exist"))).toEqual([]);
 		});
 	});
 

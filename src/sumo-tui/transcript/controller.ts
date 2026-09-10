@@ -102,6 +102,15 @@ function eventMessage(event: SessionValue): SessionValue | undefined {
 }
 
 /**
+ * Upper bound on the content parts one streamed assistant message may declare.
+ * Pi's per-message fan-out (text, thinking, tool calls) is a handful of parts;
+ * 64 matches the sibling activity adapters (`pi-projector`, `native-task-adapter`,
+ * `subagent-adapter`) and leaves headroom. `contentIndex` is producer-controlled,
+ * so anything past this is a protocol error rather than a size to allocate to.
+ */
+export const MAX_CONTENT_PARTS = 64;
+
+/**
  * Fold one streamed `assistantMessageEvent` delta into the running assistant
  * draft. Pi's RPC/JSON wire protocol (`toJsonEvent`) strips the cumulative
  * `message`/`partial` snapshot from `message_update` events: `message_start`
@@ -113,15 +122,6 @@ function eventMessage(event: SessionValue): SessionValue | undefined {
  * `tool_execution_*` events, and `start`/`done`/`error` settle through
  * `message_end`.
  */
-/**
- * Upper bound on the content parts one streamed assistant message may declare.
- * Pi's per-message fan-out (text, thinking, tool calls) is a handful of parts;
- * 64 matches the sibling activity adapters (`pi-projector`, `native-task-adapter`,
- * `subagent-adapter`) and leaves headroom. `contentIndex` is producer-controlled,
- * so anything past this is a protocol error rather than a size to allocate to.
- */
-export const MAX_CONTENT_PARTS = 64;
-
 function applyAssistantStreamDelta(draft: SessionValue | undefined, event: SessionRecord | undefined): SessionValue | undefined {
 	if (!event || !isString(event.type)) return draft;
 	const base = asRecord(draft) ?? { role: "assistant", content: [] };

@@ -35,12 +35,13 @@ export SUMOCODE_LAUNCHER="${SOURCE}"
 # src/cli/launcher-spec.ts) so this launcher and the native binary can never
 # describe different CLIs. Node loads the spec directly: it is dependency-free
 # and erasable-syntax-only, so plain type stripping is enough (no jiti, no
-# build step). If node cannot load the spec (no type stripping, broken layout)
-# the pristine help bytes never reach stdout -- fail loudly instead of exiting
-# 0 on empty output.
+# build step). --experimental-strip-types keeps Node 22.6-22.17 working and is
+# a no-op on versions where stripping is already on by default. If node cannot
+# load the spec (no type stripping, broken layout) the pristine help bytes
+# never reach stdout -- fail loudly instead of exiting 0 on empty output.
 print_help() {
 	local help_output
-	if ! help_output="$(node --input-type=module -e '
+	if ! help_output="$(node --experimental-strip-types --input-type=module -e '
 		const spec = await import(process.argv[1]);
 		process.stdout.write(spec.renderLauncherHelp());
 	' "${ROOT_DIR}/src/cli/launcher-spec.ts")"; then

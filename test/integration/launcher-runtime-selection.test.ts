@@ -163,9 +163,15 @@ describe("launcher help (plan 117 shared contract)", () => {
 	it("fails with a stderr diagnostic when node cannot render the shared spec", () => {
 		// A shim `node` that exits non-zero stands in for a Node without type
 		// stripping (or a layout where the spec import fails): the launcher must
-		// not report empty success when help rendered nothing.
+		// not report empty success when help rendered nothing. The shim also
+		// echoes its argv so the strip-types flag path stays pinned for Node
+		// versions that need it explicitly (22.6-22.17).
 		const shimDir = mkdtempSync(join(tmpdir(), "sumocode-help-node-failure-"));
-		writeFileSync(join(shimDir, "node"), "#!/bin/sh\nprintf 'simulated node failure\\n' >&2\nexit 1\n", { mode: 0o755 });
+		writeFileSync(
+			join(shimDir, "node"),
+			"#!/bin/sh\nprintf 'simulated node failure\\n' >&2\nprintf 'node argv: %s\\n' \"$*\" >&2\nexit 1\n",
+			{ mode: 0o755 },
+		);
 		try {
 			const result = runCommand(["--help"], { PATH: `${shimDir}:${process.env.PATH ?? ""}` });
 			expect(result.status).not.toBe(0);
@@ -173,6 +179,7 @@ describe("launcher help (plan 117 shared contract)", () => {
 			expect(result.stderr).toContain("Could not render help");
 			expect(result.stderr).toContain("TypeScript type stripping");
 			expect(result.stderr).toContain("src/cli/launcher-spec.ts");
+			expect(result.stderr).toContain("--experimental-strip-types");
 		} finally {
 			rmSync(shimDir, { recursive: true, force: true });
 		}

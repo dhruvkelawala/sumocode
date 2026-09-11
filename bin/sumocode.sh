@@ -31,210 +31,24 @@ fi
 # the loop-respawn launcher and can exit with the reload signal.
 export SUMOCODE_LAUNCHER="${SOURCE}"
 
+# The help document lives in the shared CLI spec (issue 484,
+# src/cli/launcher-spec.ts) so this launcher and the native binary can never
+# describe different CLIs. Node loads the spec directly: it is dependency-free
+# and erasable-syntax-only, so plain type stripping is enough (no jiti, no
+# build step). --experimental-strip-types keeps Node 22.6-22.17 working and is
+# a no-op on versions where stripping is already on by default. If node cannot
+# load the spec (no type stripping, broken layout) the pristine help bytes
+# never reach stdout -- fail loudly instead of exiting 0 on empty output.
 print_help() {
-	cat <<EOF
-SumoCode — Cathedral terminal AI coding agent
-
-USAGE
-  sumocode [options] [path]
-  sumocode doctor [options]
-  sumocode diag [file]
-  sumocode task <prompt> [path]
-  sumocode -w [name]
-
-ARGUMENTS
-  path
-      Optional project directory to open. If omitted, SumoCode starts in the
-      current working directory. The path is forwarded to Pi unchanged, so all
-      normal Pi path handling still applies.
-
-  Additional unknown flags are forwarded to Pi unchanged. This preserves Pi
-  options such as --offline, --no-session, --no-extensions, --provider, and
-  --model while SumoCode owns only the options documented below.
-
-COMMANDS
-  doctor
-      Check local SumoCode/Pi installation health: Node version, Pi binary,
-      RPC host availability, Pi module resolution, and diagnostics path
-      writability.
-
-  diag [file]
-      Summarize a diagnostics JSONL file. Defaults to /tmp/sumocode-manual.jsonl.
-
-  task <prompt> [path]
-  task --prompt-file <abs-path> [path]
-  task --task-dir <abs-path> [path]
-      Open SumoCode and immediately start an agent turn on <prompt>.
-      Skips the splash screen, forwards <prompt> to Pi as the kickoff user
-      message, and stays interactive afterwards. Designed for the orchestrator
-      bg_task hand-off flow: the spawned terminal pane goes straight into the
-      agent loop with no manual typing.
-
-      Use --prompt-file <path> instead of an inline prompt when the prompt is
-      long or contains shell metacharacters — the wrapper reads the file and
-      forwards its contents as the kickoff message. This keeps the terminal
-      respawn-pane command short so it doesn't flash a wall of text in the
-      pane before Pi takes over the screen.
-
-      Sets SUMOCODE_TASK_MODE=1 in the launched process so the extension
-      knows to skip splash and other onboarding UI.
-
-  -w, --worktree [name]
-      Create and open a new sumo/<name> worktree in the current terminal
-      host, run the configured worktree setup, and start SumoCode there.
-      If name is omitted, a unique wt-<timestamp> name is generated.
-
-OPTIONS
-  --
-      End SumoCode option parsing. For run/task launches, one delimiter is
-      preserved for Pi so following dash-leading tokens are treated as
-      positionals/messages instead of SumoCode options.
-
-  -d, --debug
-      Enable manual-test diagnostics / flight-recorder mode.
-
-      In debug mode, SumoCode writes structured JSONL diagnostics to:
-
-        /tmp/sumocode-manual.jsonl
-
-      unless SUMO_TUI_DIAG_FILE is already set. The file is cleared at startup
-      so every debug run starts with a fresh trace.
-
-      Debug mode also exports:
-        SUMO_TUI_DEBUG=1
-        SUMOCODE_DEBUG_BRANCH=<current git branch, when available>
-        SUMOCODE_DEBUG_COMMIT=<current git commit summary, when available>
-
-      Diagnostics are intentionally no-op in normal mode.
-
-  --diag-file <path>
-      Write debug diagnostics to <path>. Implies --debug.
-
-  --no-clear-diag
-      Do not delete the diagnostics file at debug startup. By default, debug
-      mode starts with a fresh trace.
-
-  --prompt-file <path>
-      Used with 'sumocode task'. Reads the file at <path> and forwards its
-      contents as the kickoff user message. The file must exist when the
-      wrapper runs. Contents are read as a single argument (newlines and
-      shell metacharacters survive intact).
-
-  --task-dir <path>
-      Internal orchestration contract for visible agents. Reads prompt.txt
-      from the directory and writes task lifecycle files alongside it.
-
-  --no-sumo-tui
-      Bypass the foreground RPC host for this launch and execute Pi directly
-      with the SumoCode extension loaded. Useful for diagnostics and
-      non-runtime comparisons.
-
-  --dry-run
-      Print the resolved launch configuration and exit without starting Pi.
-
-  -v, --version
-      Print SumoCode package version and git commit, then exit.
-
-  -h, --help
-      Show this help message and exit.
-
-EXAMPLES
-  Start in the current directory:
-      sumocode
-
-  Start in an explicit project directory:
-      sumocode .
-      sumocode /path/to/project
-
-  Open a named worktree and start SumoCode there:
-      sumocode -w new-worktree
-
-  Start with diagnostics enabled:
-      sumocode -d
-      sumocode --debug
-
-  Start a specific project with diagnostics enabled:
-      sumocode -d .
-      sumocode --debug /path/to/project
-
-  Use a custom diagnostics file:
-      sumocode -d --diag-file /tmp/my-run.jsonl
-      SUMO_TUI_DIAG_FILE=/tmp/my-run.jsonl sumocode -d
-
-  Keep appending to an existing diagnostics file:
-      sumocode -d --no-clear-diag
-
-  Bypass the foreground RPC host for diagnostics:
-      sumocode --no-sumo-tui .
-
-  Check installation health:
-      sumocode doctor
-
-  Summarize a debug run:
-      sumocode diag
-      sumocode diag /tmp/my-run.jsonl
-      node scripts/diag-summary.mjs /tmp/sumocode-manual.jsonl
-
-DIAGNOSTICS EVENTS
-  Debug mode may record events such as:
-      process_preload_start  Node preload + argv baseline for startup traces
-      process_module_load_*  slow module imports + aggregate module-load summary
-      host_import_ready      selected host source/bundle imported
-      rpc_child_ready        first correlated RPC response received
-      terminal_index_*       initial terminal-store index phase
-      runtime_start          process, cwd, branch, commit, terminal size
-      boot_screen_frame      first retained splash/boot frame written to terminal
-      editor_ready           first retained frame painted; input can be edited
-      input_ready            deprecated one-release alias for editor_ready
-      hydration_committed    authoritative initial state/transcript applied
-      app_ready              deprecated historical chrome-ready alias
-      stable_chrome_ready    owned-shell render with the real session UI
-      command_ready          hydration settled; commands can dispatch
-      render_frame           retained render timings
-      slow_frame             render frame over the slow-frame threshold
-      render_patches         terminal patch count and cursor placement
-      mouse_batch            parsed SGR mouse bytes per stdin batch
-      mouse_dispatch         chat hit-testing and scroll offset transitions
-      pi_event               Pi lifecycle events observed by SumoCode
-
-  Event payloads are truncated/sanitized so logs stay readable and diagnostics
-  never interrupt the interactive session.
-
-ENVIRONMENT
-  SUMO_TUI
-      Set to 0 by this launcher. The RPC host owns SumoCode's interactive
-      foreground, and direct Pi launches are reserved for non-interactive Pi
-      behavior or diagnostics.
-
-  SUMO_RPC
-      Set automatically by the launcher for the default RPC host path.
-
-  SUMO_TUI_DIAG_FILE
-      Path to the diagnostics JSONL file used by --debug. Defaults to
-      /tmp/sumocode-manual.jsonl in debug mode.
-
-  SUMO_TUI_DEBUG
-      Enables extra stderr debug messages in SumoTUI internals. Automatically
-      set to 1 by --debug unless already set.
-
-EXIT STATUS
-  0     Help/version/doctor succeeded, or Pi exited successfully.
-  64    Command-line usage error, such as an unknown option or too many paths.
-  70    Doctor found an installation problem.
-  other Propagates the underlying Pi process exit status.
-
-NOTES
-  SumoCode wraps the project-local Pi binary when available:
-      ./node_modules/.bin/pi
-
-  Interactive TTY launches use the SumoCode RPC host and do not require the
-  old Sumo retained-TUI patch. Non-interactive Pi modes such as --print or
-  --mode, launches where stdout is not a TTY, and --no-sumo-tui bypass the RPC
-  host and execute Pi directly with the SumoCode extension loaded.
-
-  Use -- before a prompt that starts with '-' so SumoCode and Pi both treat it
-  as a message rather than an option.
-EOF
+	local help_output
+	if ! help_output="$(node --experimental-strip-types --input-type=module -e '
+		const spec = await import(process.argv[1]);
+		process.stdout.write(spec.renderLauncherHelp());
+	' "${ROOT_DIR}/src/cli/launcher-spec.ts")"; then
+		printf '[sumocode] Could not render help: node failed to load %s (requires Node with TypeScript type stripping, 22.6+).\n' "${ROOT_DIR}/src/cli/launcher-spec.ts" >&2
+		exit 70
+	fi
+	printf '%s\n' "${help_output}"
 }
 
 package_version() {
@@ -257,26 +71,132 @@ EOF
 	exit 64
 }
 
+# Pure membership test so each Pi parser consumption class reads as a table.
+_sumocode_arg_in() {
+	local candidate="$1"
+	shift
+	local item
+	for item in "$@"; do
+		[[ "${candidate}" == "${item}" ]] && return 0
+	done
+	return 1
+}
+
+# Class 2: unconditional value flags in Pi's pinned parseArgs(). Kept global so
+# mode selection and prompt extraction cannot disagree about a value-consuming
+# bare `--` token.
+SUMOCODE_PI_UNCONDITIONAL_VALUE_FLAGS=(
+	--mode --provider --model --api-key --system-prompt
+	--append-system-prompt --name -n --session --session-id --fork
+	--session-dir --models --tools -t --exclude-tools -xt --thinking
+	--export --extension -e --skill --prompt-template --theme
+)
+# Class 3: known boolean flags -- recognized BEFORE the generic unknown branch
+# so a boolean like --offline never consumes the real prompt.
+SUMOCODE_PI_BOOLEAN_FLAGS=(
+	--help -h --version -v --continue -c --resume -r --no-session
+	--no-tools -nt --no-builtin-tools -nbt --no-extensions -ne
+	--no-skills -ns --no-prompt-templates -np --no-themes
+	--no-context-files -nc --verbose --approve -a --no-approve -na
+	--offline
+)
+
+_sumocode_is_pi_unconditional_value_flag() {
+	_sumocode_arg_in "$1" "${SUMOCODE_PI_UNCONDITIONAL_VALUE_FLAGS[@]}"
+}
+
+_sumocode_is_pi_boolean_flag() {
+	_sumocode_arg_in "$1" "${SUMOCODE_PI_BOOLEAN_FLAGS[@]}"
+}
+
+# Pi's parseArgs() lookahead consumption classes, mirrored for the unknown flags
+# this loop forwards to Pi: a Pi value that happens to spell a launcher command
+# (`--name task`, `--model diag`) belongs to Pi, exactly as the native parser
+# treats it (issue 484 parity).
+_sumocode_pi_flag_consumes_value() {
+	local flag="$1"
+	local next="${2-}"
+	if _sumocode_is_pi_unconditional_value_flag "${flag}"; then
+		return 0
+	fi
+	if [[ "${flag}" == "--print" || "${flag}" == "-p" ]]; then
+		[[ "${next}" != @* ]] || return 1
+		[[ "${next:0:1}" != "-" || "${next}" == "---"* ]]
+		return
+	fi
+	if [[ "${flag}" == "--list-models" || "${flag}" == "--tui-mode" || "${flag}" == "--use-theme" ]]; then
+		[[ "${next:0:1}" != "-" ]]
+		return
+	fi
+	# Generic Pi long option: Pi's parseArgs() consumes one dash-free, non-@ token
+	# for an unknown long flag, so its value can never be read as a command either.
+	# Known booleans (`--offline`) and `--flag=value` forms consume nothing.
+	if [[ "${flag}" == --* && "${flag}" != *=* ]] && ! _sumocode_is_pi_boolean_flag "${flag}"; then
+		[[ "${next}" != -* && "${next}" != @* ]]
+		return
+	fi
+	return 1
+}
+
 DEBUG_MODE=0
 CLEAR_DIAG=1
 DRY_RUN=0
 COMMAND="run"
+COMMAND_EXPLICIT=0
 IS_TASK_LAUNCH=0
 FORCE_DIRECT_PI=0
 DIAG_FILE="${SUMO_TUI_DIAG_FILE:-}"
 PROMPT_FILE=""
 TASK_DIR=""
 SUMOCODE_ARGS=()
+PI_VALUE_PENDING=0
 while [[ $# -gt 0 ]]; do
+	# The previous token was a Pi value flag that consumes its value atomically
+	# (mirrors src/native/main.ts): forward this token instead of letting command
+	# detection claim it, so `--name run` stays a Pi argv pair.
+	if [[ "${PI_VALUE_PENDING}" -eq 1 ]]; then
+		SUMOCODE_ARGS+=("$1")
+		PI_VALUE_PENDING=0
+		shift
+		continue
+	fi
 	case "$1" in
-		doctor|diag|task|worktree)
-			if [[ "${COMMAND}" != "run" ]]; then usage_error "Only one command may be specified."; fi
+		run|doctor|diag|task|worktree)
+			# SPEC COMMANDS: `run`, `doctor`, `diag`, `task`, `worktree` (+ the
+			# `-w`/`--worktree` aliases below) live in src/cli/launcher-spec.ts; the
+			# native parser reads the same table and
+			# test/integration/launcher-runtime-contract.ts runs every spelling
+			# through both launchers. `run` is the explicit default spelling, so once
+			# any command is explicit a `run` token stays path/prompt positional: both
+			# `run <command>` and `task run`/`worktree run` keep their pre-#484
+			# argument meaning instead of reading as a second command (issue 484).
+			if [[ "${COMMAND_EXPLICIT}" -eq 1 ]]; then
+				if [[ "${COMMAND}" == "run" || "$1" == "run" ]]; then
+					SUMOCODE_ARGS+=("$1")
+					shift
+					continue
+				fi
+				if [[ "${COMMAND}" != "$1" ]]; then usage_error "Only one command may be specified: $1"; fi
+			fi
 			COMMAND="$1"
+			COMMAND_EXPLICIT=1
 			shift
 			;;
 		-w|--worktree)
-			if [[ "${COMMAND}" != "run" ]]; then usage_error "Only one command may be specified."; fi
+			# Same explicit-command rule as the canonical branch above: `run` keeps
+			# later spellings positional, repeating the worktree command through either
+			# alias is idempotent, and any other canonical command errors naming the
+			# offending token (issue 484). Compare the canonical command, not `$1`.
+			if [[ "${COMMAND_EXPLICIT}" -eq 1 ]]; then
+				if [[ "${COMMAND}" == "run" ]]; then
+					SUMOCODE_ARGS+=("$1")
+					shift
+					continue
+				fi
+				if [[ "${COMMAND}" != "worktree" ]]; then usage_error "Only one command may be specified: $1"; fi
+			fi
 			COMMAND="worktree"
+			COMMAND_EXPLICIT=1
 			shift
 			;;
 		-d|--debug)
@@ -284,7 +204,7 @@ while [[ $# -gt 0 ]]; do
 			shift
 			;;
 		--diag-file)
-			[[ $# -ge 2 ]] || usage_error "--diag-file requires a path."
+			[[ $# -ge 2 && -n "${2:-}" ]] || usage_error "--diag-file requires a path."
 			DEBUG_MODE=1
 			DIAG_FILE="$2"
 			shift 2
@@ -300,7 +220,7 @@ while [[ $# -gt 0 ]]; do
 			shift
 			;;
 		--prompt-file)
-			[[ $# -ge 2 ]] || usage_error "--prompt-file requires a path."
+			[[ $# -ge 2 && -n "${2:-}" ]] || usage_error "--prompt-file requires a path."
 			PROMPT_FILE="$2"
 			shift 2
 			;;
@@ -310,7 +230,7 @@ while [[ $# -gt 0 ]]; do
 			shift
 			;;
 		--task-dir)
-			[[ $# -ge 2 ]] || usage_error "--task-dir requires a path."
+			[[ $# -ge 2 && -n "${2:-}" ]] || usage_error "--task-dir requires a path."
 			TASK_DIR="$2"
 			shift 2
 			;;
@@ -353,8 +273,12 @@ while [[ $# -gt 0 ]]; do
 		-*)
 			# Unknown flags belong to Pi. Preserve pass-through so existing visual
 			# harness/runtime invocations keep working (`--offline`, `--no-session`,
-			# `--no-extensions`, provider/model flags, etc.).
+			# `--no-extensions`, provider/model flags, etc.). A value-consuming Pi
+			# flag claims the next token for the same reason the native parser does.
 			SUMOCODE_ARGS+=("$1")
+			if _sumocode_pi_flag_consumes_value "$1" "${2-}"; then
+				PI_VALUE_PENDING=1
+			fi
 			shift
 			;;
 		*)
@@ -363,44 +287,6 @@ while [[ $# -gt 0 ]]; do
 			;;
 	esac
 done
-
-# Pure membership test so each Pi parser consumption class reads as a table.
-_sumocode_arg_in() {
-	local candidate="$1"
-	shift
-	local item
-	for item in "$@"; do
-		[[ "${candidate}" == "${item}" ]] && return 0
-	done
-	return 1
-}
-
-# Class 2: unconditional value flags in Pi's pinned parseArgs(). Kept global so
-# mode selection and prompt extraction cannot disagree about a value-consuming
-# bare `--` token.
-SUMOCODE_PI_UNCONDITIONAL_VALUE_FLAGS=(
-	--mode --provider --model --api-key --system-prompt
-	--append-system-prompt --name -n --session --session-id --fork
-	--session-dir --models --tools -t --exclude-tools -xt --thinking
-	--export --extension -e --skill --prompt-template --theme
-)
-# Class 3: known boolean flags -- recognized BEFORE the generic unknown branch
-# so a boolean like --offline never consumes the real prompt.
-SUMOCODE_PI_BOOLEAN_FLAGS=(
-	--help -h --version -v --continue -c --resume -r --no-session
-	--no-tools -nt --no-builtin-tools -nbt --no-extensions -ne
-	--no-skills -ns --no-prompt-templates -np --no-themes
-	--no-context-files -nc --verbose --approve -a --no-approve -na
-	--offline
-)
-
-_sumocode_is_pi_unconditional_value_flag() {
-	_sumocode_arg_in "$1" "${SUMOCODE_PI_UNCONDITIONAL_VALUE_FLAGS[@]}"
-}
-
-_sumocode_is_pi_boolean_flag() {
-	_sumocode_arg_in "$1" "${SUMOCODE_PI_BOOLEAN_FLAGS[@]}"
-}
 
 _sumocode_first_pi_delimiter_index() {
 	local i=0
@@ -658,14 +544,14 @@ redact_sensitive_args() {
 	fi
 }
 if [[ "${COMMAND}" == "doctor" && "${#SUMOCODE_ARGS[@]}" -gt 0 ]]; then
-	usage_error "doctor does not accept a path argument."
+	usage_error "doctor does not accept a path argument: ${SUMOCODE_ARGS[0]}"
 fi
 if [[ "${COMMAND}" == "diag" && "${#SUMOCODE_ARGS[@]}" -gt 1 ]]; then
-	usage_error "diag accepts at most one diagnostics file path."
+	usage_error "diag accepts at most one diagnostics file path: ${SUMOCODE_ARGS[1]}"
 fi
 if [[ "${COMMAND}" == "worktree" ]]; then
 	if [[ "${#SUMOCODE_ARGS[@]}" -gt 1 ]]; then
-		usage_error "-w accepts at most one optional worktree name."
+		usage_error "-w accepts at most one optional worktree name: ${SUMOCODE_ARGS[1]}"
 	fi
 	if [[ "${#SUMOCODE_ARGS[@]}" -eq 1 && "${SUMOCODE_ARGS[0]}" == -* ]]; then
 		usage_error "Unknown worktree option: ${SUMOCODE_ARGS[0]}"

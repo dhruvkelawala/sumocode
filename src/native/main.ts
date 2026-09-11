@@ -25,6 +25,16 @@ import { constants as osConstants } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { buildChildSpawnPlan } from "../sumo-tui/rpc/spawn-child.mjs";
 import { openWorktree } from "../cli/open-worktree.js";
+import {
+	launcherCommandForToken,
+	launcherOptionForEqualsToken,
+	launcherOptionForToken,
+	LAUNCHER_EXIT_CODES,
+	renderLauncherHelp,
+	renderUsageError,
+	type LauncherCommand,
+	type LauncherOptionSpec,
+} from "../cli/launcher-spec.js";
 
 const RELOAD_EXIT_CODE = 100;
 const PRE_ADOPTION_KILL_GRACE_MS = 250;
@@ -74,8 +84,8 @@ function isExecutableFile(path: string): boolean {
 }
 
 function usageError(message: string): never {
-	process.stderr.write(`[sumocode] ${message}\n\nRun 'sumocode --help' for usage.\n`);
-	process.exit(64);
+	process.stderr.write(renderUsageError(message));
+	process.exit(LAUNCHER_EXIT_CODES.usage);
 }
 
 function makePrivateTempFile(prefix: string): string {
@@ -297,8 +307,6 @@ function extractFirstPositional(args: string[]): string {
 
 // ── launcher arg parsing (bin/sumocode.sh wrapper layer) ───────────────────
 
-type LauncherCommand = "run" | "doctor" | "diag" | "task" | "worktree";
-
 interface ParsedLaunch {
 	command: LauncherCommand;
 	debugMode: boolean;
@@ -309,6 +317,48 @@ interface ParsedLaunch {
 	promptFile: string;
 	taskDir: string;
 	forwardedArgs: string[];
+}
+
+/** Consumes a launcher option value: `--flag=value` inline or the next token. */
+function readLauncherOptionValue(arg: string, option: LauncherOptionSpec, args: string[]): string {
+	if (!option.takesValue) return "";
+	const equalsIndex = arg.indexOf("=");
+	const value = equalsIndex === -1 ? args.shift() : arg.slice(equalsIndex + 1);
+	if (value === undefined || value === "") usageError(`${option.flags[0]} requires a path.`);
+	return value;
+}
+
+function applyLauncherOption(parsed: ParsedLaunch, option: LauncherOptionSpec, value: string): void {
+	switch (option.id) {
+		case "debug":
+			parsed.debugMode = true;
+			return;
+		case "diag-file":
+			parsed.debugMode = true;
+			parsed.diagFile = value;
+			return;
+		case "no-clear-diag":
+			parsed.clearDiag = false;
+			return;
+		case "prompt-file":
+			parsed.promptFile = value;
+			return;
+		case "task-dir":
+			parsed.taskDir = value;
+			return;
+		case "no-sumo-tui":
+			parsed.forceDirectPi = true;
+			return;
+		case "dry-run":
+			parsed.dryRun = true;
+			return;
+		case "version":
+			process.stdout.write(`sumocode ${__SUMOCODE_VERSION__ ?? "0.0.0"}\n`);
+			process.exit(LAUNCHER_EXIT_CODES.success);
+		case "help":
+			printHelp();
+			process.exit(LAUNCHER_EXIT_CODES.success);
+	}
 }
 
 function parseLauncherArgv(argv: readonly string[]): ParsedLaunch {
@@ -324,134 +374,70 @@ function parseLauncherArgv(argv: readonly string[]): ParsedLaunch {
 		forwardedArgs: [],
 	};
 	const args = [...argv];
+	let commandExplicit = false;
 	while (args.length > 0) {
 		const arg = args.shift()!;
-		if (arg.startsWith("--diag-file=")) {
-			parsed.diagFile = arg.slice("--diag-file=".length);
-			if (parsed.diagFile === "") usageError("--diag-file requires a path.");
-			parsed.debugMode = true;
-			continue;
-		}
-		if (arg.startsWith("--prompt-file=")) {
-			parsed.promptFile = arg.slice("--prompt-file=".length);
-			if (parsed.promptFile === "") usageError("--prompt-file requires a path.");
-			continue;
-		}
-		if (arg.startsWith("--task-dir=")) {
-			parsed.taskDir = arg.slice("--task-dir=".length);
-			if (parsed.taskDir === "") usageError("--task-dir requires a path.");
-			continue;
-		}
-		switch (arg) {
-			case "doctor":
-			case "diag":
-			case "task":
-			case "worktree":
-				if (parsed.command !== "run") usageError("Only one command may be specified.");
-				parsed.command = arg;
-				continue;
-			case "-w":
-			case "--worktree":
-				if (parsed.command !== "run") usageError("Only one command may be specified.");
-				parsed.command = "worktree";
-				continue;
-			case "-d":
-			case "--debug":
-				parsed.debugMode = true;
-				continue;
-			case "--diag-file":
-				if (args.length < 1) usageError("--diag-file requires a path.");
-				parsed.debugMode = true;
-				parsed.diagFile = args.shift()!;
-				continue;
-			case "--no-clear-diag":
-				parsed.clearDiag = false;
-				continue;
-			case "--prompt-file":
-				if (args.length < 1) usageError("--prompt-file requires a path.");
-				parsed.promptFile = args.shift()!;
-				continue;
-			case "--task-dir":
-				if (args.length < 1) usageError("--task-dir requires a path.");
-				parsed.taskDir = args.shift()!;
-				continue;
-			case "--no-sumo-tui":
-				parsed.forceDirectPi = true;
-				continue;
-			case "--dry-run":
-				parsed.dryRun = true;
-				continue;
-			case "-v":
-			case "--version":
-				process.stdout.write(`sumocode ${__SUMOCODE_VERSION__ ?? "0.0.0"}\n`);
-				process.exit(0);
-				break; // unreachable
-			case "-h":
-			case "--help":
-				printHelp();
-				process.exit(0);
-				break; // unreachable
-			case "--": {
-				// Preserve the delimiter for run/task so mode selection and prompt
-				// extraction treat --print/--mode tokens as messages.
-				if (parsed.command === "run" || parsed.command === "task") {
-					if (args[0] !== "--") parsed.forwardedArgs.push("--");
-				}
-				parsed.forwardedArgs.push(...args);
-				args.length = 0;
-				continue;
+		if (arg === "--") {
+			// Preserve the delimiter for run/task so mode selection and prompt
+			// extraction treat --print/--mode tokens as messages.
+			if (parsed.command === "run" || parsed.command === "task") {
+				if (args[0] !== "--") parsed.forwardedArgs.push("--");
 			}
-			default: {
-				// Unknown flags belong to Pi; everything forwards. A value flag's
-				// value is consumed atomically so it can never be stolen as a
-				// launcher subcommand (`--name task` must stay a Pi argv pair).
+			parsed.forwardedArgs.push(...args);
+			args.length = 0;
+			continue;
+		}
+		// Commands, aliases and options come from the shared CLI spec
+		// (src/cli/launcher-spec.ts); bin/sumocode.sh is pinned to the same table
+		// by test/integration/launcher-runtime-contract.ts, so a command can no
+		// longer exist in one launcher only (#483).
+		const command = launcherCommandForToken(arg);
+		if (command !== undefined) {
+			// `run` is the default spelling, so once any command is explicit a `run`
+			// token stays path/prompt positional: `run <command>` and
+			// `task run`/`worktree run` keep their pre-#484 argument meaning.
+			if (commandExplicit && (parsed.command === "run" || command === "run")) {
 				parsed.forwardedArgs.push(arg);
-				const next = args[0];
-				if (next === undefined) continue;
-				if (isUnconditionalValueFlag(arg) || arg === "--print" || arg === "-p") {
-					const consumes = arg === "--print" || arg === "-p"
-						? !next.startsWith("@") && (!next.startsWith("-") || next.startsWith("---"))
-						: true;
-					if (consumes) parsed.forwardedArgs.push(args.shift()!);
-				} else if ((arg === "--list-models" || arg === "--tui-mode" || arg === "--use-theme") && !next.startsWith("-")) {
-					parsed.forwardedArgs.push(args.shift()!);
-				}
 				continue;
 			}
+			// Any other second command spelling is a usage error (repeating the same
+			// spelling is idempotent).
+			if (commandExplicit && parsed.command !== command) usageError(`Only one command may be specified: ${arg}`);
+			parsed.command = command;
+			commandExplicit = true;
+			continue;
+		}
+		const option = launcherOptionForToken(arg) ?? launcherOptionForEqualsToken(arg);
+		if (option !== undefined) {
+			applyLauncherOption(parsed, option, readLauncherOptionValue(arg, option, args));
+			continue;
+		}
+		// Unknown flags belong to Pi; everything forwards. A value flag's
+		// value is consumed atomically so it can never be stolen as a
+		// launcher subcommand (`--name task` must stay a Pi argv pair).
+		parsed.forwardedArgs.push(arg);
+		const next = args[0];
+		if (next === undefined) continue;
+		if (isUnconditionalValueFlag(arg) || arg === "--print" || arg === "-p") {
+			const consumes = arg === "--print" || arg === "-p"
+				? !next.startsWith("@") && (!next.startsWith("-") || next.startsWith("---"))
+				: true;
+			if (consumes) parsed.forwardedArgs.push(args.shift()!);
+		} else if ((arg === "--list-models" || arg === "--tui-mode" || arg === "--use-theme") && !next.startsWith("-")) {
+			parsed.forwardedArgs.push(args.shift()!);
+		} else if (arg.startsWith("--") && !arg.includes("=") && !PI_BOOLEAN_FLAGS.has(arg) && !next.startsWith("-") && !next.startsWith("@")) {
+			// Generic Pi long option: Pi's parseArgs() consumes one dash-free value,
+			// so an extension flag's value can never be read as a command either.
+			parsed.forwardedArgs.push(args.shift()!);
 		}
 	}
 	return parsed;
 }
 
 function printHelp(): void {
-	process.stdout.write(`SumoCode — Cathedral terminal AI coding agent
-
-USAGE
-  sumocode [options] [path]
-
-COMMANDS
-  doctor          Check the native runtime, Pi child, and diagnostics path
-  diag [file]     Summarize a diagnostics JSONL (default /tmp/sumocode-manual.jsonl)
-  task <prompt>   Launch a one-shot task pane kickoff
-  worktree [name] Create and open a sumo/<name> worktree in the current terminal host
-
-OPTIONS
-  -d, --debug                 Enable diagnostics (JSONL flight recorder)
-  --diag-file <path>          Write diagnostics to <path> (implies --debug)
-  --no-clear-diag             Keep an existing diagnostics file at startup
-  --prompt-file <path>        (task) Read the kickoff prompt from a file
-  --task-dir <dir>            (task) Machine-readable task directory contract
-  --no-sumo-tui               Bypass the retained runtime; run Pi directly
-  --dry-run                   Print the resolved launch plan and exit
-  -v, --version               Print the version
-  -h, --help                  Print this help
-
-Unknown flags forward to Pi (e.g. --offline, --model, --no-session).
-Interactive TTY launches use the SumoCode RPC host. Non-interactive Pi
-modes (--print, --mode), non-TTY stdout, and --no-sumo-tui bypass it.
-
-Documentation: https://github.com/dhruvkelawala/sumocode
-`);
+	// The help document is shared with bin/sumocode.sh (src/cli/launcher-spec.ts),
+	// so the two launchers cannot describe different CLIs.
+	process.stdout.write(renderLauncherHelp());
 }
 
 // ── subcommands ────────────────────────────────────────────────────────────
@@ -494,10 +480,10 @@ function runDoctor(parsed: ParsedLaunch): never {
 	process.stdout.write("\n");
 	if (failures === 0) {
 		process.stdout.write("Doctor passed.\n");
-		process.exit(0);
+		process.exit(LAUNCHER_EXIT_CODES.success);
 	}
 	process.stdout.write(`Doctor found ${failures} problem(s).\n`);
-	process.exit(70);
+	process.exit(LAUNCHER_EXIT_CODES.doctorFailure);
 }
 
 async function runDiag(file: string): Promise<never> {
@@ -792,14 +778,14 @@ function resolveTaskLaunch(parsed: ParsedLaunch): void {
 
 function validateCommandArgs(parsed: ParsedLaunch): void {
 	if (parsed.command === "doctor" && parsed.forwardedArgs.length > 0) {
-		usageError("doctor does not accept a path argument.");
+		usageError(`doctor does not accept a path argument: ${parsed.forwardedArgs[0]}`);
 	}
 	if (parsed.command === "diag" && parsed.forwardedArgs.length > 1) {
-		usageError("diag accepts at most one diagnostics file path.");
+		usageError(`diag accepts at most one diagnostics file path: ${parsed.forwardedArgs[1]}`);
 	}
 	if (parsed.command === "worktree") {
 		if (parsed.forwardedArgs.length > 1) {
-			usageError("-w accepts at most one optional worktree name.");
+			usageError(`-w accepts at most one optional worktree name: ${parsed.forwardedArgs[1]}`);
 		}
 		if (parsed.forwardedArgs.length === 1 && parsed.forwardedArgs[0]!.startsWith("-")) {
 			usageError(`Unknown worktree option: ${parsed.forwardedArgs[0]}`);

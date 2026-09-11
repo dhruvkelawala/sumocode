@@ -5,19 +5,25 @@
  * change forces both launchers to move together.
  */
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawn } from "node-pty";
 import { afterAll, describe, expect, it } from "vitest";
+import { renderLauncherHelp } from "../../src/cli/launcher-spec.js";
 import {
 	classifyBranch,
 	dryRunExecLine,
 	dryRunField,
+	expandLauncherArgv,
+	launcherCaseFailures,
+	launcherParityGaps,
 	LAUNCHER_COMMAND_CASES,
+	LAUNCHER_PARITY_CASES,
 	RUNTIME_SELECTION_CASES,
 	type DryRunObservation,
+	type LauncherCasePaths,
 } from "./launcher-runtime-contract.js";
 import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
@@ -125,6 +131,89 @@ interface CommandResult {
 	readonly stderr: string;
 }
 
+function runCommand(args: readonly string[], env: NodeJS.ProcessEnv = {}): CommandResult {
+	try {
+		const stdout = execFileSync("bash", [LAUNCHER, ...args], {
+			cwd: process.cwd(),
+			env: buildSpawnEnv(process.env, { PI_BIN: STUB_PI, ...env }),
+			encoding: "utf8",
+			input: "",
+			timeout: 30_000,
+		});
+		return { status: 0, stdout, stderr: "" };
+	} catch (error) {
+		// SAFETY: execFileSync augments thrown process errors with numeric status
+		// and captured stdout/stderr when encoding is utf8.
+		const err = error as Partial<CommandResult>;
+		return { status: err.status ?? -1, stdout: err.stdout ?? "", stderr: err.stderr ?? "" };
+	}
+}
+
+describe("launcher help (plan 117 shared contract)", () => {
+	it("renders the shared CLI spec help verbatim", () => {
+		const result = runCommand(["--help"]);
+		expect(result.status).toBe(0);
+		expect(result.stdout).toBe(renderLauncherHelp());
+	});
+
+	it("renders -h identically to --help", () => {
+		expect(runCommand(["-h"]).stdout).toBe(runCommand(["--help"]).stdout);
+	});
+
+	it("fails with a stderr diagnostic when node cannot render the shared spec", () => {
+		// A shim `node` that exits non-zero stands in for a Node without type
+		// stripping (or a layout where the spec import fails): the launcher must
+		// not report empty success when help rendered nothing. The shim also
+		// echoes its argv so the strip-types flag path stays pinned for Node
+		// versions that need it explicitly (22.6-22.17).
+		const shimDir = mkdtempSync(join(tmpdir(), "sumocode-help-node-failure-"));
+		writeFileSync(
+			join(shimDir, "node"),
+			"#!/bin/sh\nprintf 'simulated node failure\\n' >&2\nprintf 'node argv: %s\\n' \"$*\" >&2\nexit 1\n",
+			{ mode: 0o755 },
+		);
+		try {
+			const result = runCommand(["--help"], { PATH: `${shimDir}:${process.env.PATH ?? ""}` });
+			expect(result.status).not.toBe(0);
+			expect(result.stdout).toBe("");
+			expect(result.stderr).toContain("Could not render help");
+			expect(result.stderr).toContain("TypeScript type stripping");
+			expect(result.stderr).toContain("src/cli/launcher-spec.ts");
+			expect(result.stderr).toContain("--experimental-strip-types");
+		} finally {
+			rmSync(shimDir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("launcher parity matrix (issue 484 shared spec)", () => {
+	const root = mkdtempSync(join(tmpdir(), "sumocode-parity-shell-"));
+	const paths: LauncherCasePaths = {
+		diagFile: join(root, "diag.jsonl"),
+		promptFile: join(root, "prompt.txt"),
+		taskDir: join(root, "task"),
+	};
+	mkdirSync(paths.taskDir, { recursive: true });
+	writeFileSync(paths.diagFile, `${JSON.stringify({ event: "boot_screen_frame" })}\n`);
+	writeFileSync(paths.promptFile, "parity task prompt\n");
+	writeFileSync(join(paths.taskDir, "prompt.txt"), "parity task prompt\n");
+
+	afterAll(() => {
+		rmSync(root, { recursive: true, force: true });
+	});
+
+	for (const row of LAUNCHER_PARITY_CASES) {
+		it(row.name, () => {
+			const result = runCommand(["--dry-run", ...expandLauncherArgv(row.argv, paths)]);
+			expect(launcherCaseFailures(result, row).join("\n")).toBe("");
+		});
+	}
+
+	it("covers every command, alias, and option in the shared spec", () => {
+		expect(launcherParityGaps()).toEqual([]);
+	});
+});
+
 describe("launcher subcommands (plan 117 shared contract)", () => {
 	const diagDir = mkdtempSync(join(tmpdir(), "sumocode-runtime-contract-diag-"));
 	const diagFile = join(diagDir, "diag.jsonl");
@@ -132,24 +221,6 @@ describe("launcher subcommands (plan 117 shared contract)", () => {
 	afterAll(() => {
 		rmSync(diagDir, { recursive: true, force: true });
 	});
-
-	function runCommand(args: readonly string[]): CommandResult {
-		try {
-			const stdout = execFileSync("bash", [LAUNCHER, ...args], {
-				cwd: process.cwd(),
-				env: buildSpawnEnv(process.env, { PI_BIN: STUB_PI }),
-				encoding: "utf8",
-				input: "",
-				timeout: 30_000,
-			});
-			return { status: 0, stdout, stderr: "" };
-		} catch (error) {
-			// SAFETY: execFileSync augments thrown process errors with numeric status
-			// and captured stdout/stderr when encoding is utf8.
-			const err = error as Partial<CommandResult>;
-			return { status: err.status ?? -1, stdout: err.stdout ?? "", stderr: err.stderr ?? "" };
-		}
-	}
 
 	writeFileSync(diagFile, `${JSON.stringify({ event: "boot_screen_frame" })}\n`);
 
@@ -174,4 +245,14 @@ describe("launcher subcommands (plan 117 shared contract)", () => {
 			}
 		});
 	}
+
+	it("doctor exits 70 when a check fails", () => {
+		// Deterministic failure fixture (the native suite pins its own verdict the
+		// same way): a diagnostics path inside a missing directory fails the
+		// writability check, so doctor must report 70 instead of a silent 0.
+		const result = runCommand(["doctor", "--diag-file", join(diagDir, "does-not-exist", "diag.jsonl")]);
+		expect(result.status).toBe(70);
+		expect(result.stdout).toContain("SumoCode doctor");
+		expect(result.stdout).toContain("diagnostics directory not writable");
+	});
 });

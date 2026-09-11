@@ -6,6 +6,7 @@ import * as url from "node:url";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
+import * as launcherSpec from "../../cli/launcher-spec.js";
 // SAFETY: untyped build module; the VM consumes its actual runtime exports.
 const hostBundle = await import("../../../scripts/lib/host-bundle.mjs" as string);
 
@@ -73,6 +74,9 @@ function entryFixture(entry: "node" | "native", mode: Mode, dies: boolean, reque
 		"./src/sumo-tui/rpc/spawn-child.mjs": { buildChildSpawnPlan: () => ({ command: "fake", args: [], env: {} }) },
 		"../sumo-tui/rpc/spawn-child.mjs": { buildChildSpawnPlan: () => ({ command: "fake", args: [], env: {} }) },
 		"../cli/open-worktree.js": { openWorktree: async () => 0 },
+		// The native entry's launcher CLI table (src/cli/launcher-spec.ts) is pure
+		// data; #487 registered open-worktree.js here the same way for #483.
+		"../cli/launcher-spec.js": launcherSpec,
 		jiti: { createJiti: () => ({ import: async () => loadHost() }) },
 	};
 	const result: Promise<void> = runInNewContext(`(async () => { ${source} })()`, {

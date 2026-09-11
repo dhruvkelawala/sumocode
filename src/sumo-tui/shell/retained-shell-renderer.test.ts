@@ -393,9 +393,9 @@ describe("RetainedShellRenderer", () => {
 			}
 		});
 
-		it("falls back to a full render when an overlay is visible during repaint", async () => {
+		it("repaints only above-editor rows when an overlay is visible, leaving the overlay painted", async () => {
 			const aboveEditor = new StaticComponent(["", "INDICATOR-A"]);
-			const { renderer } = await createHarness({
+			const { terminal, renderer } = await createHarness({
 				aboveEditorWidgets: () => aboveEditor,
 				overlayHost: {
 					overlayStack: [
@@ -409,14 +409,60 @@ describe("RetainedShellRenderer", () => {
 			const calculateLayout = vi.spyOn(rootYogaNodeForTest(renderer), "calculateLayout");
 			try {
 				renderer.render();
+				const initialRows = frameRows(renderer);
+				const overlayRow = rowsContaining(initialRows, "MODAL")[0];
+				if (overlayRow === undefined) throw new Error("overlay row was not rendered");
 				calculateLayout.mockClear();
 
 				aboveEditor.rows = ["", "INDICATOR-B"];
 				renderer.repaintRegion("aboveEditor");
 
-				expect(calculateLayout).toHaveBeenCalledTimes(1);
-				expect(frameRows(renderer).join("\n")).toContain("MODAL");
-				expect(frameRows(renderer).join("\n")).toContain("INDICATOR-B");
+				// #520: a visible overlay must not force the tick back through the full
+				// transcript render.
+				expect(calculateLayout).not.toHaveBeenCalled();
+				const rows = frameRows(renderer);
+				expect(rows.join("\n")).toContain("MODAL");
+				expect(rows.join("\n")).toContain("INDICATOR-B");
+				expect(rows.join("\n")).not.toContain("INDICATOR-A");
+				// The overlay's own rows are untouched by the narrow diff.
+				expect(rows[overlayRow]).toBe(initialRows[overlayRow]);
+				expect(terminal.patches).toHaveLength(1);
+			} finally {
+				calculateLayout.mockRestore();
+				renderer.dispose();
+			}
+		});
+
+		it("restores overlay rows that intersect the repainted region", async () => {
+			const aboveEditor = new StaticComponent(["", "INDICATOR-A"]);
+			const { terminal, renderer } = await createHarness({
+				aboveEditorWidgets: () => aboveEditor,
+				overlayHost: {
+					overlayStack: [
+						{
+							component: new StaticComponent(Array.from({ length: ROWS }, () => "OVERLAY")),
+							options: { anchor: "top-left", row: 0, width: "100%" },
+						},
+					],
+				},
+			});
+			const calculateLayout = vi.spyOn(rootYogaNodeForTest(renderer), "calculateLayout");
+			try {
+				renderer.render();
+				const initialRows = frameRows(renderer);
+				// The overlay covers every row, so it also covers the above-editor leaf.
+				expect(rowsContaining(initialRows, "INDICATOR-A")).toEqual([]);
+				calculateLayout.mockClear();
+
+				aboveEditor.rows = ["", "INDICATOR-B"];
+				renderer.repaintRegion("aboveEditor");
+
+				expect(calculateLayout).not.toHaveBeenCalled();
+				// The leaf repaint cleared the rows the overlay owns; the narrow path
+				// must re-composite the overlay over them (no visible change, so no
+				// patches) instead of letting the indicator bleed through.
+				expect(frameRows(renderer)).toEqual(initialRows);
+				expect(terminal.patches).toHaveLength(0);
 			} finally {
 				calculateLayout.mockRestore();
 				renderer.dispose();

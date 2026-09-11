@@ -90,7 +90,6 @@ export class RetainedShellRenderer {
 	private readonly paintHardwareCursorAsSoftware: boolean;
 	private lastFrame: CellBuffer | undefined;
 	private previousFrame: CellBuffer | undefined;
-	private lastOverlayCount = 0;
 	private lastCursor: HardwareCursor | null = null;
 	private readonly headerLeaf: PiComponentLeaf;
 	private readonly topChromeGapSpacer: SumoNode;
@@ -451,7 +450,6 @@ export class RetainedShellRenderer {
 		// Hide the hardware cursor when a modal or the input-recovery notice
 		// overlay is visible so the editor's cursor doesn't bleed through it.
 		const cursor: HardwareCursor | null = overlayCount > 0 ? null : result.hardwareCursor;
-		this.lastOverlayCount = overlayCount;
 		this.lastCursor = cursor;
 		if (cursor && this.paintHardwareCursorAsSoftware) this.paintSoftwareCursor(frame, cursor);
 		// Owned-shell has independently pinned regions (chat, sidebar, input,
@@ -519,10 +517,6 @@ export class RetainedShellRenderer {
 			fallback("leaf_detached");
 			return;
 		}
-		if (this.lastOverlayCount > 0 || this.visibleOverlayEntries(cols, rows).length > 0) {
-			fallback("overlay_visible");
-			return;
-		}
 
 		const rect = this.clampedNodeRect(this.aboveEditorLeaf, rows, cols);
 		if (!rect || rect.height <= 0 || rect.width <= 0) {
@@ -533,6 +527,12 @@ export class RetainedShellRenderer {
 		const frame = previous.clone();
 		frame.clear(rect);
 		this.aboveEditorLeaf.render(frame, rect);
+		// Restore the overlay rows the clear erased. render() paints overlays on
+		// top of the shell, so the narrow repaint must re-paint only the overlay
+		// rows intersecting `rect` to keep that order -- the clone already holds
+		// every other overlay pixel. Bailing to a full render instead re-segmented
+		// the whole visible transcript once per indicator tick (#520).
+		const overlayCount = this.compositeOverlays(frame, cols, rows, rect);
 		const selectedFrame = this.withSelectionForNarrowRepaint(frame, rect.top, rect.height);
 		if (!selectedFrame) {
 			fallback("selection_mismatch");
@@ -547,6 +547,7 @@ export class RetainedShellRenderer {
 			top: rect.top,
 			height: rect.height,
 			patchCount: patches.length,
+			overlayCount,
 			repaintMs: Math.round((performance.now() - repaintStart) * 100) / 100,
 			segmentationCalls: graphemeSegmentationCount() - segmentStart,
 		});
@@ -574,7 +575,7 @@ export class RetainedShellRenderer {
 	 * without forcing a full migration to RegionRegistry, walk the overlay
 	 * stack and paint each visible overlay into the cell buffer.
 	 */
-	private compositeOverlays(frame: CellBuffer, termWidth: number, termHeight: number): number {
+	private compositeOverlays(frame: CellBuffer, termWidth: number, termHeight: number, clipTo?: Rect): number {
 		const visibleEntries = this.visibleOverlayEntries(termWidth, termHeight);
 		if (visibleEntries.length === 0) return 0;
 
@@ -588,6 +589,10 @@ export class RetainedShellRenderer {
 			for (let row = 0; row < overlayLines.length; row += 1) {
 				const targetRow = layout.row + row;
 				if (targetRow < 0 || targetRow >= termHeight) continue;
+				// Narrow repaint passes the repainted rect: rows outside it already
+				// hold this overlay's pixels, and painting them would desync
+				// previousFrame from the terminal without a diff.
+				if (clipTo && (targetRow < clipTo.top || targetRow >= clipTo.top + clipTo.height)) continue;
 				frame.paintRow(targetRow, overlayLines[row] ?? "", layout.col, layout.width);
 			}
 		}

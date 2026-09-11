@@ -195,6 +195,23 @@ describe("InlineSelectorComponent Cathedral styling (plan 037)", () => {
 		expect(otherRow).not.toContain("●");
 	});
 
+	it("P2: a portrait row yields the label to the description instead of clipping its suffix", () => {
+		const label = "a very long session title that cannot fit beside the identifier block";
+		const description = "~/code/sumocode · 1a2b3c4d · 12 msgs · 3h";
+		const component = new InlineSelectorComponent("Resume session", [{ value: "/session", label, description }], () => undefined);
+
+		const row = component.render(60).find((line) => line.includes("1a2b3c4d"));
+		expect(row).toBeDefined();
+		const stripped = row!.replace(/\u001b\[[0-9;]*m/g, "");
+		// The label is what yields, and its cut is marked with an ellipsis...
+		expect(stripped).toContain("…");
+		expect(stripped).not.toContain(label);
+		// ...so the whole description column (id, count, age) survives intact and
+		// the row still fills exactly the width it was rendered at.
+		expect(stripped).toContain(description);
+		expect(PiTui.visibleWidth(stripped)).toBe(60);
+	});
+
 	it("P2: the scroll-overflow indicator picks up the panel background and an explicit dim foreground", () => {
 		const options = Array.from({ length: 10 }, (_, index) => `option-${index}`);
 		const component = new InlineSelectorComponent("Pick", options, () => undefined, 3);

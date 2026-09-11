@@ -105,6 +105,12 @@ export interface InlineSelectorItem {
 export interface InlineSelectorTab {
 	readonly id: string;
 	readonly label: string;
+	/**
+	 * Label used instead of `label` when the whole tab strip does not fit the
+	 * render width. The strip must yield a label before it clips one: its badges
+	 * are the row counts the tabs exist to report.
+	 */
+	readonly narrowLabel?: string;
 	readonly options: readonly (string | InlineSelectorItem)[];
 }
 
@@ -118,6 +124,7 @@ type NormalizedItem = {
 type NormalizedTab = {
 	readonly id: string;
 	readonly label: string;
+	readonly narrowLabel: string | undefined;
 	readonly items: NormalizedItem[];
 };
 
@@ -147,10 +154,11 @@ function normalizeItems(options: readonly (string | InlineSelectorItem)[]): Norm
 }
 
 function normalizeTabs(options: readonly (string | InlineSelectorItem)[], tabs?: readonly InlineSelectorTab[]): NormalizedTab[] {
-	if (!tabs || tabs.length === 0) return [{ id: "default", label: "", items: normalizeItems(options) }];
+	if (!tabs || tabs.length === 0) return [{ id: "default", label: "", narrowLabel: undefined, items: normalizeItems(options) }];
 	return tabs.map((tab) => ({
 		id: tab.id,
 		label: tab.label,
+		narrowLabel: tab.narrowLabel,
 		items: normalizeItems(tab.options),
 	}));
 }
@@ -291,7 +299,7 @@ export class InlineSelectorComponent implements Component {
 		lines.push(wrapPanelRow(splitRule(w), w));
 		lines.push(wrapPanelRow("", w));
 		if (this.tabs.length > 1) {
-			lines.push(wrapPanelRow(center(this.renderTabs(), w), w));
+			lines.push(wrapPanelRow(center(this.renderTabs(w), w), w));
 			lines.push(wrapPanelRow("", w));
 		}
 		lines.push(wrapPanelRow(this.renderSearchRow(), w));
@@ -321,10 +329,19 @@ export class InlineSelectorComponent implements Component {
 		return lines;
 	}
 
-	private renderTabs(): string {
+	private renderTabs(width: number): string {
+		const full = this.renderTabLabels(false);
+		// A strip that would not fit yields each tab's narrow label instead of
+		// letting `center`/`fitLine` clip the right edge -- what hangs off that
+		// edge is the last tab's row-count badge.
+		return visibleWidth(full) <= width ? full : this.renderTabLabels(true);
+	}
+
+	private renderTabLabels(narrow: boolean): string {
 		const colors = activeThemeColors();
 		return this.tabs.map((tab, index) => {
-			const label = `${tab.label.toUpperCase()} ${tab.items.length}`;
+			const base = narrow ? tab.narrowLabel ?? tab.label : tab.label;
+			const label = `${base.toUpperCase()} ${tab.items.length}`;
 			return index === this.activeTabIndex
 				? fg(`◆ ${label}`, colors.accent)
 				: fg(`◇ ${label}`, colors.foregroundDim);

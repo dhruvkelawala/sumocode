@@ -1179,6 +1179,41 @@ describe("RpcHostActions", () => {
 			}
 		});
 
+		it("yields the pinned-current marker before clipping a tab badge at portrait width", async () => {
+			const root = mkdtempSync(join(tmpdir(), "sumocode-resume-pinned-marker-fit-test-"));
+			try {
+				// A two-digit project count alone fills the portrait tab bar.
+				for (let index = 0; index < 10; index += 1) {
+					const minute = String(index).padStart(2, "0");
+					writeFixtureSession(root, `2026-07-02T19-${minute}-00-000Z_project-${index}.jsonl`, `project-${index}`, "2026-07-02T19:00:00.000Z", `project first message ${index}`);
+				}
+				const currentFile = writeFixtureSession(root, "2026-07-02T20-00-00-000Z_current.jsonl", "current", "2026-07-02T20:00:00.000Z", "current session first message");
+				for (let index = 0; index <= DEFAULT_MAX_ALL_SESSIONS; index += 1) {
+					const minute = String(index % 60).padStart(2, "0");
+					writeFixtureSession(root, `2026-07-02T21-${minute}-00-000Z_bulk-${index}.jsonl`, `bulk-${index}`, "2026-07-02T21:00:01.000Z", `bulk first message ${index}`, { projectDir: "--other--", cwd: "/repo-other" });
+				}
+				const { actions, inlineSelectors } = setup({ sessionFile: currentFile });
+
+				const resumePromise = actions.handleSubmittedText("/resume");
+				await waitForInlineSelector(inlineSelectors, "Resume session");
+				// Wide: the pinned current session is named.
+				expect(inlineSelectorText(inlineSelectors)).toContain("ALL SESSIONS · RECENT +CURRENT 100");
+
+				// Portrait: the marker yields instead of pushing the strip past the panel
+				// edge, where `fitLine` would clip a badge count.
+				const portrait = inlineSelectorText(inlineSelectors, 60).split("\n").find((line) => line.includes("CURRENT PROJECT"))!;
+				expect(portrait).toContain("CURRENT PROJECT 11");
+				expect(portrait).toContain("ALL SESSIONS · RECENT 100");
+				expect(portrait).not.toContain("+CURRENT");
+				expect(portrait).not.toContain("…");
+
+				inlineSelectors.handleInput(SELECTOR_ESCAPE);
+				await resumePromise;
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+
 		it("keeps the plain recent label when the cap drops rows but the current session is in the window", async () => {
 			const root = mkdtempSync(join(tmpdir(), "sumocode-resume-windowed-label-test-"));
 			try {

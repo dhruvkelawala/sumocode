@@ -1176,14 +1176,17 @@ export class RpcHostActions {
 		// the current session was pinned into that window from outside it, the
 		// label says so too: the rows are then recent sessions *plus* the current
 		// one, not a pure newest-N window.
-		const allSessionsLabel = !allSessionsWindow.truncated
-			? "all sessions"
-			: allSessionsWindow.pinnedCurrent
-				? "all sessions · recent +current"
-				: "all sessions · recent";
+		const allSessionsLabel = allSessionsWindow.truncated ? "all sessions · recent" : "all sessions";
 		const tabs: InlineSelectorTab[] = [
 			{ id: "project", label: "current project", options: resumeSessionItems(projectSessions, sessionFile) },
-			{ id: "all", label: allSessionsLabel, options: resumeSessionItems(allSessions, sessionFile, { showProjectDirectory: true }) },
+			{
+				id: "all",
+				label: allSessionsWindow.pinnedCurrent ? `${allSessionsLabel} +current` : allSessionsLabel,
+				// The marker yields before the strip clips a badge: a two-digit sibling
+				// project count already fills the canonical 60-column portrait tab bar.
+				narrowLabel: allSessionsLabel,
+				options: resumeSessionItems(allSessions, sessionFile, { showProjectDirectory: true }),
+			},
 		];
 		// Nothing to resume inside this project? Open where the sessions are
 		// (same default-tab rule the model chooser uses for an empty enabled list).

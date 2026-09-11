@@ -245,6 +245,24 @@ describe("RPC notification visibility", () => {
 		}
 	});
 
+	it("flattens a multiline extension notice onto the single hint row", async () => {
+		const notifications = new NotificationCenter();
+		const { shell, rows } = await createShell(notifications);
+		try {
+			// e.g. login details (publishLoginDetails joins its lines with \n).
+			notifications.notify("Open https://example.test/auth\nCode: ABCD-1234");
+			shell.render();
+			const painted = rows();
+			const hint = painted.filter((row) => row.includes("Open https://example.test/auth"));
+			expect(hint).toHaveLength(1);
+			expect(hint[0]).toContain("Code: ABCD-1234");
+			expect(painted.some((row) => row.includes("\n"))).toBe(false);
+		} finally {
+			shell.dispose();
+			notifications.dispose();
+		}
+	});
+
 	it("does not activate an overlay whose rows are empty at the paint width", async () => {
 		const notifications = { invalidate() {}, render: (width: number) => width === 1 ? ["probe-only row"] : [] };
 		const { shell, terminal, text, setHint } = await createShell(notifications);

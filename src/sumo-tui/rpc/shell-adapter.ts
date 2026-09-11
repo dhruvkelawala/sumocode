@@ -833,6 +833,15 @@ class RpcEditorShellComponent implements ShellRenderable {
 	}
 }
 
+/**
+ * Flattens a host notice onto the single hint row. Extension notices can carry
+ * newlines (login details join their lines), and a raw newline reaching the
+ * retained cell buffer paints as a control character that shifts the frame.
+ */
+function hintRowText(message: string | undefined): string | undefined {
+	return message?.replace(/[\r\n]+/g, " ");
+}
+
 class RpcHintComponent implements ShellRenderable {
 	public constructor(private readonly adapter: RpcShellAdapter) {}
 	public invalidate(): void {}
@@ -841,7 +850,7 @@ class RpcHintComponent implements ShellRenderable {
 		// quit window, session changes, "nothing happened" lines) must not be
 		// silenced by an extension's belowEditor widget.
 		const notice = this.adapter.getNotice();
-		const hint = notice?.sticky === true ? undefined : notice?.message;
+		const hint = notice?.sticky === true ? undefined : hintRowText(notice?.message);
 		if (hint === undefined) {
 			const extensionRows = this.adapter.renderExtensionBelowEditor(width).filter((row) => stripAnsi(row).trim().length > 0);
 			if (extensionRows.length > 0) return [extensionRows[0]!];

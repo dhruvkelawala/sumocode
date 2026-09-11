@@ -97,7 +97,7 @@ function eventMessage(event: SessionValue): SessionValue | undefined {
  * Maximum zero-based `contentIndex` one streamed assistant message may declare.
  * Pi's per-message fan-out (text, thinking, tool calls) is a handful of parts;
  * 64 matches the scale of the sibling activity adapters (`pi-projector`,
- * `pi-projector`, `subagent-adapter`) and leaves headroom. `contentIndex`
+ * `subagent-adapter`) and leaves headroom. `contentIndex`
  * is producer-controlled, so anything past this is a protocol error rather than
  * a size to allocate to.
  */

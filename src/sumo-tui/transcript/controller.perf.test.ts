@@ -47,7 +47,6 @@ describe("TranscriptController streaming operation bounds", () => {
 	it.each([100, 1_000, 10_000])("characterizes live update operations: %i committed messages", (messageCount) => {
 		const delegate = createTranscriptViewModelMapper();
 		const mapper = {
-			reset: vi.fn(() => delegate.reset()),
 			messageFromPiMessage: vi.fn(delegate.messageFromPiMessage.bind(delegate)),
 			transcriptFromSessionContext: delegate.transcriptFromSessionContext.bind(delegate),
 		};
@@ -59,7 +58,6 @@ describe("TranscriptController streaming operation bounds", () => {
 			controller.handleAgentEvent({ type: "tool_execution_start", toolCallId, toolName: "read", args: { path } });
 		}
 		const before = controller.viewModel();
-		mapper.reset.mockClear();
 		mapper.messageFromPiMessage.mockClear();
 		vi.mocked(chat.replaceViewModelAt).mockClear();
 		resetActivityFoldOperationCountsForTests();
@@ -84,7 +82,6 @@ describe("TranscriptController streaming operation bounds", () => {
 		});
 		expect(getTranscriptSnapshotEnvelopeCopiesForTests()).toBe(1);
 		expect(getMessageContentKeyCacheMissesForTests()).toBeLessThanOrEqual(2);
-		expect(mapper.reset).not.toHaveBeenCalled();
 		expect(mapper.messageFromPiMessage).not.toHaveBeenCalled();
 		expect(chat.replaceViewModelAt).toHaveBeenCalledTimes(1);
 		expect(after.messages).not.toBe(before.messages);

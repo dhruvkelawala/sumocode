@@ -60,24 +60,6 @@ describe("RpcTranscriptPump", () => {
 		expect(replay(eventsPath)).toEqual(comparable(readJson(expectedPath)));
 	});
 
-	it("captures live task partial output from tool_execution_update.partialResult", () => {
-		const pump = new RpcTranscriptPump();
-		for (const event of readJsonl("scratch/rpc-spike/events-task-partial.jsonl")) {
-			pump.handleAgentEvent(event);
-			if (isJsonObjectValue(event) && event["type"] === "tool_execution_update") break;
-		}
-
-		const partials = pump.getTaskPartials();
-		expect(partials).toHaveLength(1);
-		expect(partials[0]).toMatchObject({
-			toolCallId: "rpc-spike-task-1",
-			toolName: "task",
-			partialResult: {
-				content: [{ type: "text", text: "task partial output" }],
-			},
-		});
-	});
-
 	it("maps committed messages once while replacing only the live draft across streaming updates", () => {
 		const mapper = createTranscriptViewModelMapper();
 		const originalMessageFromPiMessage = mapper.messageFromPiMessage.bind(mapper);
@@ -103,32 +85,29 @@ describe("RpcTranscriptPump", () => {
 		expect(messageFromPiMessage.mock.calls.map(([message]) => (message as { id?: string }).id)).toEqual(["draft", "draft", "draft", "draft", "draft"]);
 	});
 
-	it("prunes live tool and task partial state after authoritative agent_end messages arrive", () => {
+	it("prunes live tool state after authoritative agent_end messages arrive", () => {
 		const pump = new RpcTranscriptPump();
-		pump.handleAgentEvent({
-			type: "tool_execution_update",
-			toolCallId: "task-1",
-			toolName: "task",
-			args: { prompt: "Track task output" },
-			partialResult: { content: [{ type: "text", text: "partial" }] },
-		});
 		pump.handleAgentEvent({
 			type: "tool_execution_start",
 			toolCallId: "read-1",
 			toolName: "read",
 			args: { path: "src/auth.ts" },
 		});
+		pump.handleAgentEvent({
+			type: "tool_execution_start",
+			toolCallId: "bash-1",
+			toolName: "bash",
+			args: { command: "pnpm test" },
+		});
 
-		expect(pump.getTaskPartials()).toHaveLength(1);
-		expect(pump.getLiveStateSnapshot()).toMatchObject({ liveTools: 2, taskPartials: 1 });
+		expect(pump.getLiveStateSnapshot()).toMatchObject({ liveTools: 2 });
 
 		pump.handleAgentEvent({
 			type: "agent_end",
 			messages: [{ id: "final", role: "assistant", content: "done" }],
 		});
 
-		expect(pump.getTaskPartials()).toHaveLength(0);
-		expect(pump.getLiveStateSnapshot()).toMatchObject({ liveTools: 0, taskPartials: 0, draftMessage: false });
+		expect(pump.getLiveStateSnapshot()).toMatchObject({ liveTools: 0, draftMessage: false });
 		expect(pump.viewModel().messages.map((message) => message.id)).toEqual(["final"]);
 	});
 
@@ -209,51 +188,6 @@ describe("RpcTranscriptPump", () => {
 			content: "Kept the important state.",
 			expanded: false,
 		}]);
-	});
-
-	it("folds live task execution partial details into the active Activity block", () => {
-		const pump = new RpcTranscriptPump();
-		const taskCall = {
-			type: "toolCall",
-			id: "tc-task",
-			name: "task",
-			arguments: { type: "single", tasks: [{ prompt: "## Audit auth\n\nFind risky files." }] },
-		};
-
-		pump.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: "" } });
-		pump.handleAgentEvent({ type: "message_update", message: { role: "assistant", content: [taskCall] } });
-		const transcript = pump.handleAgentEvent({
-			type: "tool_execution_update",
-			toolCallId: "tc-task",
-			toolName: "task",
-			args: taskCall.arguments,
-			partialResult: {
-				content: [{ type: "text", text: "reading auth files" }],
-				details: {
-					mode: "single",
-					results: [{
-						prompt: "## Audit auth\n\nFind risky files.",
-						exitCode: -1,
-						messages: [],
-						toolEvents: [{ id: "read-1", name: "read", args: { path: "src/auth.ts" }, status: "running" }],
-						usage: { input: 0, output: 0 },
-						model: "openai-codex/gpt-5.5",
-						thinking: "high",
-					}],
-				},
-			},
-		});
-
-		expect(transcript.messages[0]?.blocks[0]).toMatchObject({
-			type: "activity",
-			activity: {
-				title: "Audit auth",
-				model: "openai-codex/gpt-5.5",
-				thinking: "high",
-				status: "running",
-				activeTools: [{ id: "read-1", title: "read", status: "running", invocation: { path: "src/auth.ts" } }],
-			},
-		});
 	});
 
 	it("folds non-task live tool execution updates into one SUMO block by toolCallId", () => {

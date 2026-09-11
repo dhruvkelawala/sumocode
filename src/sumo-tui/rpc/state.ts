@@ -26,7 +26,6 @@ export interface RpcHostChromeState {
 	readonly hasMessages: boolean;
 	readonly gitBranch?: string;
 	readonly lastEventType?: string;
-	readonly taskPartialCount: number;
 	/**
 	 * Display composition of SumoCode host-owned queued drafts plus any
 	 * unexpected Pi-owned queue snapshots reported by `queue_update`. The host
@@ -90,7 +89,6 @@ export class RpcHostStateStore {
 		messageCount: 0,
 		pendingMessageCount: 0,
 		hasMessages: false,
-		taskPartialCount: 0,
 		costUsd: 0,
 		queuedMessages: [],
 	};
@@ -127,7 +125,6 @@ export class RpcHostStateStore {
 			hasMessages: rpcState.messageCount > 0,
 			gitBranch,
 			lastEventType: undefined,
-			taskPartialCount: 0,
 		});
 		return this.getSnapshot();
 	}
@@ -192,9 +189,8 @@ export class RpcHostStateStore {
 				this.state = { ...this.state, thinkingLevel: isJsonObject(payload) && isString(payload["level"]) ? payload["level"] : undefined, lastEventType: type };
 				break;
 			case "tool_execution_update":
-				if (isJsonObject(payload) && payload["toolName"] === "task" && "partialResult" in payload) {
-					this.state = { ...this.state, taskPartialCount: this.state.taskPartialCount + 1, lastEventType: type };
-				}
+				// Tool progress is chrome-neutral: the working state derives from
+				// tool_call/tool_execution_start and settles on tool_execution_end.
 				break;
 			default:
 				if (type) this.state = { ...this.state, lastEventType: type };

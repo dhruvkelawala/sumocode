@@ -15,8 +15,8 @@ import {
 	boundStableIdentifier,
 } from "../child-protocol.js";
 import { resolveExecutableProvenance } from "../executable-provenance.js";
-import { type BuiltInToolName, resolveTaskConfig } from "../native-task-config.js";
-import { isRecord, type TaskThinking, type ThinkingLevel } from "../native-task-params.js";
+import { type BuiltInToolName, resolveTaskConfig } from "./task-config.js";
+import { isRecord, type TaskThinking, type ThinkingLevel } from "./task-params.js";
 import { systemProcessTree, terminateProcessTree, type ProcessTreeOperations, type ProcessTreeIdentity, type ProcessTreeVerification, type ProcessTreeMemberAnchor } from "../background-tasks/process-tree.js";
 import { CHILD_MODEL_ID_ENV, CHILD_MODEL_PROVIDER_ENV } from "./pi-child-model-bootstrap.js";
 import type { RetainedBootstrapDescriptor } from "./retained-bootstrap.js";
@@ -485,7 +485,7 @@ const attachAbortSignal = (proc: ChildProcessWithoutNullStreams, signal: AbortSi
 	};
 	proc.once("close", onClose);
 	const terminate = () => {
-		// Mirrors native-task-tool: without an owned positive pid there is no
+		// Without an owned positive pid there is no
 		// signal to send and no escalation to schedule.
 		if (exited || forceKill || !isOwnedPid(proc.pid)) return;
 		signalGroup(proc, "SIGTERM");
@@ -671,17 +671,16 @@ export const createPiChildSpawner = (
 }): SpawnedChild => {
 	const config = resolveTaskConfig({
 		// SAFETY: options.thinking comes from the typed SpawnSubagentTask.thinking field.
-		item: { prompt: options.prompt, model: options.model, thinking: options.thinking as TaskThinking | undefined, fork: false },
+		item: { model: options.model, thinking: options.thinking as TaskThinking | undefined },
 		defaultModel: undefined,
 		defaultThinking: "inherit",
 		// SAFETY: inherited thinking strings are validated by resolveTaskConfig below.
 		inheritedThinking: (options.inherited.thinking ?? "low") as ThinkingLevel,
 		ctxModel: options.inherited.model,
-		// Children inherit the PARENT's active built-in tool set (mirroring
-		// native-task-tool's getActiveTools threading) so a narrowed parent
-		// session cannot spawn children with broader tool access.
+		// Children inherit the PARENT's active built-in tool set so a narrowed
+		// parent session cannot spawn children with broader tool access.
 		//
-		// TRUST MODEL (conscious, documented — parity with native-task): children
+		// TRUST MODEL (conscious, documented): children
 		// run --no-extensions, so SumoCode's approval gate is NOT installed in
 		// them. A headless child has no UI to prompt anyway; a child-side gate
 		// would hang or fail-closed all bash including legitimate worktree git

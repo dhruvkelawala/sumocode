@@ -540,7 +540,6 @@ nativeDescribe("native executable contract", () => {
 			PI_BIN: piBinary,
 			SUMOCODE_LAUNCHER: NATIVE_BIN,
 			SUMOCODE_RPC_CHILD: "1",
-			SUMOCODE_NATIVE_TASK: "1",
 			PI_CODING_AGENT_DIR: join(root, "agent"),
 			TMPDIR: root,
 			PROVENANCE_TASK_LOG: taskLog,
@@ -580,18 +579,12 @@ nativeDescribe("native executable contract", () => {
 			extension.resetSumocodeProcessInstallLatchForTests?.();
 			// SAFETY: the Pi double implements the registration/runtime surface used by the compiled RPC extension.
 			extension.default(pi as never);
-			expect([...tools.keys()]).toEqual(expect.arrayContaining(["task", "subagent_spawn"]));
+			expect([...tools.keys()]).toContain("subagent_spawn");
 			const context = { cwd: ROOT, model: undefined, hasUI: true, ui: { notify: vi.fn() }, sessionManager: { getSessionId: () => "native-provenance", getSessionFile: () => undefined, getBranch: () => [{ type: "message" }] } };
 			for (const handler of agentStartHandlers) {
 				// SAFETY: the context supplies the session and UI fields used by the compiled agent-start handlers.
 				await handler({ type: "agent_start" }, context as never);
 			}
-			// SAFETY: the compiled task definition and context expose the exact Pi tool execution surface used here.
-			await tools.get("task")!.execute("native-provenance", { type: "single", tasks: [{ prompt: "probe", fork: false }] }, undefined, undefined, context as never);
-			// SAFETY: the fake parent Pi writes this exact provenance record.
-			const observed = JSON.parse(readFileSync(taskLog, "utf8")) as { pi: string; launcher: string };
-			expect(observed).toMatchObject({ pi: piBinary, launcher: NATIVE_BIN });
-
 			// SAFETY: the compiled subagent tool uses the same caller-facing execute seam.
 			await tools.get("subagent_spawn")!.execute("visible-provenance", { prompt: "watch", name: "worker", visible: true }, undefined, undefined, context as never);
 			const visibleScript = readdirSync(root, { recursive: true, encoding: "utf8" }).find((path) => path.endsWith("run.sh"));
@@ -599,6 +592,16 @@ nativeDescribe("native executable contract", () => {
 			// The visible child must carry the parent-selected Pi through PI_BIN as well as
 			// launching the native binary, so a nested visible spawn keeps the same runtime.
 			expect(readFileSync(join(root, visibleScript!), "utf8")).toContain(`exec env 'PI_BIN=${piBinary}' '${NATIVE_BIN}' 'task'`);
+
+			// The headless child must spawn the same parent-selected Pi. The fake
+			// binary records the env it was launched with, so the log only exists when
+			// provenance reached the real spawn.
+			// SAFETY: the compiled subagent tool uses the same caller-facing execute seam.
+			await tools.get("subagent_spawn")!.execute("headless-provenance", { prompt: "probe", name: "probe" }, undefined, undefined, context as never);
+			await vi.waitFor(() => expect(existsSync(taskLog)).toBe(true), { timeout: 5_000 });
+			// SAFETY: the fake parent Pi writes this exact provenance record.
+			const observed = JSON.parse(readFileSync(taskLog, "utf8")) as { pi: string; launcher: string };
+			expect(observed).toMatchObject({ pi: piBinary, launcher: NATIVE_BIN });
 
 			// SAFETY: the compiled command definition and context expose the registered slash-command handler seam.
 			await commands.get("sumo:worktree")!.handler("new provenance", context as never);

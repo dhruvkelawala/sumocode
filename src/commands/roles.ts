@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { BUILT_IN_TOOLS } from "../native-task-config.js";
+import { BUILT_IN_TOOLS } from "../subagents/task-config.js";
 import { BUILT_IN_ROLES, loadRoles, resolveRolesPath, type LoadedRoles, type SubagentRole } from "../subagents/roles.js";
 import { showSearchPalette, type SearchPaletteOptions, type SearchPaletteRow } from "./roles-palette.js";
 

@@ -206,7 +206,7 @@ export function registerSubagentTools(
 				thinking: params.thinking ?? role?.thinking,
 				inherited: {
 					model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
-					// Mirror native-task-tool.ts (`pi.getThinkingLevel()` at spawn time):
+					// Mirror the child spawners (`pi.getThinkingLevel()` at spawn time):
 					// children inherit the parent session's thinking level unless the
 					// call overrides it, instead of silently defaulting to "low".
 					thinking: pi.getThinkingLevel(),

@@ -10,7 +10,6 @@ import sumocode, {
 	isTaskMode,
 	markSumocodeInstalledInProcess,
 	resetSumocodeProcessInstallLatchForTests,
-	shouldInstallNativeTaskTool,
 	shouldNoopDuplicateInstalledExtension,
 	shouldNoopHelperSubprocess,
 } from "./extension.js";
@@ -39,7 +38,6 @@ const AMBIENT_ENV_KEYS = [
 	"SUMOCODE_RPC_CHILD",
 	"SUMOCODE_BG_CHILD",
 	"SUMOCODE_TASK_MODE",
-	"SUMOCODE_NATIVE_TASK",
 	"SUMOCODE_TASK_RESPONSE_FILE",
 	"SUMOCODE_TASK_EXIT_FILE",
 	"SUMOCODE_TASK_STARTED_FILE",
@@ -392,9 +390,7 @@ describe("rpc child profile", () => {
 
 	it("loads the same headless profile through the source-only entry", async () => {
 		const previousRpc = process.env.SUMOCODE_RPC_CHILD;
-		const previousTask = process.env.SUMOCODE_NATIVE_TASK;
 		process.env.SUMOCODE_RPC_CHILD = "1";
-		process.env.SUMOCODE_NATIVE_TASK = "1";
 		try {
 			const { pi, handlers } = buildPiStub();
 			// SAFETY: the pi double supplies the register*/on surfaces the source entry installs on.
@@ -404,7 +400,7 @@ describe("rpc child profile", () => {
 			// SAFETY: registerTool records definitions carrying a name field; the cast reads only that field.
 			const toolNames = pi.registerTool.mock.calls.map((call) => (call[0] as { name: string }).name);
 			expect(commandNames).toContain("sumo:review");
-			expect(toolNames).toEqual(expect.arrayContaining(["task", "question", "terminal_start", "subagent_spawn"]));
+			expect(toolNames).toEqual(expect.arrayContaining(["question", "terminal_start", "subagent_spawn"]));
 
 			const ctx = { ...buildCtxStub(), mode: "rpc" };
 			for (const handler of handlers.get("session_start") ?? []) {
@@ -416,8 +412,6 @@ describe("rpc child profile", () => {
 		} finally {
 			if (previousRpc === undefined) delete process.env.SUMOCODE_RPC_CHILD;
 			else process.env.SUMOCODE_RPC_CHILD = previousRpc;
-			if (previousTask === undefined) delete process.env.SUMOCODE_NATIVE_TASK;
-			else process.env.SUMOCODE_NATIVE_TASK = previousTask;
 		}
 	});
 
@@ -435,9 +429,7 @@ describe("rpc child profile", () => {
 
 	it("keeps tools and commands and skips retained chrome", async () => {
 		const previousRpc = process.env.SUMOCODE_RPC_CHILD;
-		const previousTask = process.env.SUMOCODE_NATIVE_TASK;
 		process.env.SUMOCODE_RPC_CHILD = "1";
-		process.env.SUMOCODE_NATIVE_TASK = "1";
 		try {
 			const { pi, handlers } = buildPiStub();
 			// SAFETY: the pi double supplies the register*/on surfaces the extension installs on.
@@ -449,7 +441,6 @@ describe("rpc child profile", () => {
 			const shortcutNames = pi.registerShortcut.mock.calls.map((call) => call[0]);
 			expect(commandNames).toContain("sumo:review");
 			expect(commandNames).toContain("sumo:ship");
-			expect(toolNames).toContain("task");
 			expect(toolNames).toContain("question");
 			for (const name of ["terminal_start", "terminal_check", "terminal_wait", "terminal_stop", "terminal_list"]) expect(toolNames).toContain(name);
 			expect(shortcutNames).not.toContain("ctrl+/");
@@ -479,8 +470,6 @@ describe("rpc child profile", () => {
 		} finally {
 			if (previousRpc === undefined) delete process.env.SUMOCODE_RPC_CHILD;
 			else process.env.SUMOCODE_RPC_CHILD = previousRpc;
-			if (previousTask === undefined) delete process.env.SUMOCODE_NATIVE_TASK;
-			else process.env.SUMOCODE_NATIVE_TASK = previousTask;
 		}
 	});
 });
@@ -506,62 +495,29 @@ describe("sumocode extension", () => {
 		expect(existsSync(join(temporaryPiAgentDir, "state", "sumocode-terminals"))).toBe(true);
 	});
 
-	it("detects whether native task can install without conflicting with the legacy task extension", () => {
-		expect(shouldInstallNativeTaskTool({ homeDir: "/home/user", exists: () => false })).toBe(true);
-		expect(shouldInstallNativeTaskTool({ homeDir: "/home/user", exists: () => true })).toBe(false);
-		expect(shouldInstallNativeTaskTool({ homeDir: "/home/user", exists: () => true, force: "1" })).toBe(true);
-	});
-
-	it("registers a native task tool when forced", () => {
-		const previous = process.env.SUMOCODE_NATIVE_TASK;
-		process.env.SUMOCODE_NATIVE_TASK = "1";
-		try {
-			const { pi } = buildPiStub();
-
-			// SAFETY: the pi double supplies the register*/on surfaces the extension installs on.
-
-			sumocode(pi as never);
-
-			// SAFETY: registerTool records definitions carrying a name field; the cast reads only that field.
-
-			const toolNames = pi.registerTool.mock.calls.map((call) => (call[0] as { name: string }).name);
-			expect(toolNames).toContain("task");
-		} finally {
-			if (previous === undefined) delete process.env.SUMOCODE_NATIVE_TASK;
-			else process.env.SUMOCODE_NATIVE_TASK = previous;
-		}
-	});
-
 	it("registers the single orchestration tool inventory without the legacy mega-tool", () => {
-		const previous = process.env.SUMOCODE_NATIVE_TASK;
-		process.env.SUMOCODE_NATIVE_TASK = "1";
-		try {
-			const { pi } = buildPiStub();
+		const { pi } = buildPiStub();
 
-			// SAFETY: the pi double supplies the register*/on surfaces the extension installs on.
+		// SAFETY: the pi double supplies the register*/on surfaces the extension installs on.
 
-			sumocode(pi as never);
+		sumocode(pi as never);
 
-			// SAFETY: registerTool records definitions carrying a name field; the cast reads only that field.
+		// SAFETY: registerTool records definitions carrying a name field; the cast reads only that field.
 
-			const toolNames = pi.registerTool.mock.calls.map((call) => (call[0] as { name: string }).name);
-			expect(toolNames.filter((name) => name.startsWith("subagent_"))).toEqual([
-				"subagent_spawn",
-				"subagent_send",
-				"subagent_check",
-				"subagent_wait",
-				"subagent_cancel",
-				"subagent_close",
-				"subagent_list",
-			]);
-			expect(toolNames.filter((name) => name.startsWith("terminal_"))).toEqual(["terminal_start", "terminal_check", "terminal_wait", "terminal_stop", "terminal_list"]);
-			expect(toolNames.filter((name) => name.startsWith("bg_"))).toEqual([]);
-			expect(toolNames).toContain("task");
-			expect(toolNames).not.toContain(["bg", "task"].join("_"));
-		} finally {
-			if (previous === undefined) delete process.env.SUMOCODE_NATIVE_TASK;
-			else process.env.SUMOCODE_NATIVE_TASK = previous;
-		}
+		const toolNames = pi.registerTool.mock.calls.map((call) => (call[0] as { name: string }).name);
+		expect(toolNames.filter((name) => name.startsWith("subagent_"))).toEqual([
+			"subagent_spawn",
+			"subagent_send",
+			"subagent_check",
+			"subagent_wait",
+			"subagent_cancel",
+			"subagent_close",
+			"subagent_list",
+		]);
+		expect(toolNames.filter((name) => name.startsWith("terminal_"))).toEqual(["terminal_start", "terminal_check", "terminal_wait", "terminal_stop", "terminal_list"]);
+		expect(toolNames.filter((name) => name.startsWith("bg_"))).toEqual([]);
+		expect(toolNames).not.toContain("task");
+		expect(toolNames).not.toContain(["bg", "task"].join("_"));
 	});
 
 	it("registers the v0.4 slash commands during full extension install", () => {

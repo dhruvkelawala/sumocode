@@ -14,14 +14,11 @@ import { registerRolesCommand } from "./commands/roles.js";
 import { canonicalizeExtensionPath, type RealpathFn } from "./extension-entry-loader.js";
 import {
 	claimSumocodeRuntime,
-	hasLegacyTaskToolExtension,
-	installConfiguredNativeTaskTool,
 	installOrchestrationTools,
 	installRpcChildProfile,
 	isSumocodeAlreadyInstalledInProcess,
 	markSumocodeInstalledInProcess,
 	resetSumocodeProcessInstallLatchForTests,
-	shouldInstallNativeTaskTool,
 	shouldNoopHelperSubprocess,
 } from "./extension-core.js";
 import { installFastMode } from "./fast-mode.js";
@@ -41,11 +38,9 @@ import { installTopChrome } from "./top-chrome.js";
 import { installWorkingIndicator } from "./working-indicator.js";
 
 export {
-	hasLegacyTaskToolExtension,
 	isSumocodeAlreadyInstalledInProcess,
 	markSumocodeInstalledInProcess,
 	resetSumocodeProcessInstallLatchForTests,
-	shouldInstallNativeTaskTool,
 	shouldNoopHelperSubprocess,
 };
 export type { HelperSubprocessGuardOptions } from "./extension-core.js";
@@ -240,7 +235,6 @@ export default function sumocode(pi: ExtensionAPI): void {
 		installRpcChildProfile(pi);
 		logDiagnostic("extension_activate_end", {
 			profile: "rpc-child",
-			nativeTaskInstalled: shouldInstallNativeTaskTool({ force: process.env.SUMOCODE_NATIVE_TASK }),
 		});
 		return;
 	}
@@ -269,12 +263,6 @@ export default function sumocode(pi: ExtensionAPI): void {
 	installCathedralEditor(pi);
 	installInputHints(pi);
 	installSkillInlineExpansion(pi);
-	// The old global `~/.pi/agent/extensions/task-tool` extension registers the
-	// same `task` tool name and Pi treats duplicate tools as fatal. Until the
-	// user removes/disables that legacy extension, defer to it instead of
-	// crashing SumoCode startup. Native task takes over automatically once the
-	// legacy wrapper is gone.
-	installConfiguredNativeTaskTool(pi);
 	installQuestionTool(pi);
 	installAnswerTool(pi);
 	const { terminalTaskManager, subagentManager } = installOrchestrationTools(pi);
@@ -288,7 +276,6 @@ export default function sumocode(pi: ExtensionAPI): void {
 	installSumoInteractions(pi, { subagentManager, installUiSurfaces: installSumoUiSurfaces });
 	logDiagnostic("extension_activate_end", {
 		taskMode: isTaskMode(),
-		nativeTaskInstalled: shouldInstallNativeTaskTool({ force: process.env.SUMOCODE_NATIVE_TASK }),
 		hasBackgroundTasks: terminalTaskManager !== undefined,
 		hasSubagents: subagentManager !== undefined,
 	});

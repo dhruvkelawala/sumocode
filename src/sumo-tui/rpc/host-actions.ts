@@ -1133,10 +1133,11 @@ export class RpcHostActions {
 	 * (never its parent -- and its project tab keeps the current cwd only, the
 	 * way Pi's `filterCwd` narrows a custom session dir), and the current
 	 * session is pinned into the window
-	 * either way. When that cap drops candidates the tab is labelled `newest`,
-	 * so a bounded window is never mistaken for the whole store. Pi loads its
-	 * all-scope lazily on Tab, which would need a lazy tab capability this
-	 * selector does not have.
+	 * either way, so a capped window is the recent rows rather than a strictly
+	 * newest-N ranking. When that cap drops candidates the tab is labelled
+	 * `recent`, so a bounded window is never mistaken for the whole store. Pi
+	 * loads its all-scope lazily on Tab, which would need a lazy tab capability
+	 * this selector does not have.
 	 * ponytail: eager bounded scan, upgrade to a lazy tab if open latency grows.
 	 */
 	public async openResumeSelector(): Promise<void> {
@@ -1157,8 +1158,8 @@ export class RpcHostActions {
 		const tabs: InlineSelectorTab[] = [
 			{ id: "project", label: "current project", options: resumeSessionItems(projectSessions, sessionFile) },
 			// The tab badge appends the row count, so a capped list reads as
-			// "all sessions · newest <rows shown>" instead of an exhaustive list.
-			{ id: "all", label: allSessionsWindow.truncated ? "all sessions · newest" : "all sessions", options: resumeSessionItems(allSessions, sessionFile, { showProjectDirectory: true }) },
+			// "all sessions · recent <rows shown>" instead of an exhaustive list.
+			{ id: "all", label: allSessionsWindow.truncated ? "all sessions · recent" : "all sessions", options: resumeSessionItems(allSessions, sessionFile, { showProjectDirectory: true }) },
 		];
 		// Nothing to resume inside this project? Open where the sessions are
 		// (same default-tab rule the model chooser uses for an empty enabled list).

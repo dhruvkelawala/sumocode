@@ -1143,7 +1143,7 @@ describe("RpcHostActions", () => {
 			}
 		});
 
-		it("labels the all-sessions tab as the newest window when the cap drops sessions", async () => {
+		it("labels the all-sessions tab as a recent window when the cap drops sessions", async () => {
 			const root = mkdtempSync(join(tmpdir(), "sumocode-resume-scope-capped-test-"));
 			try {
 				const currentFile = writeFixtureSession(root, "2026-07-02T20-00-00-000Z_current.jsonl", "current", "2026-07-02T20:00:00.000Z", "current session first message");
@@ -1159,14 +1159,14 @@ describe("RpcHostActions", () => {
 				const projectScope = inlineSelectorText(inlineSelectors);
 				expect(projectScope).toContain("◆ CURRENT PROJECT 1");
 				// The capped scope says so; the exhaustive project scope does not.
-				expect(projectScope).toContain("◇ ALL SESSIONS · NEWEST 100");
+				expect(projectScope).toContain("◇ ALL SESSIONS · RECENT 100");
 				// Narrow (portrait) widths must not push the other tab out of the bar.
 				const narrow = inlineSelectorText(inlineSelectors, 60);
-				expect(narrow).toContain("ALL SESSIONS · NEWEST 100");
+				expect(narrow).toContain("ALL SESSIONS · RECENT 100");
 				expect(narrow).toContain("CURRENT PROJECT 1");
 
 				inlineSelectors.handleInput(SELECTOR_TAB);
-				expect(inlineSelectorText(inlineSelectors)).toContain("◆ ALL SESSIONS · NEWEST 100");
+				expect(inlineSelectorText(inlineSelectors)).toContain("◆ ALL SESSIONS · RECENT 100");
 
 				inlineSelectors.handleInput(SELECTOR_ESCAPE);
 				await resumePromise;

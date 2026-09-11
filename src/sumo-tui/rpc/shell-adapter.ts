@@ -801,6 +801,10 @@ function renderSplashHint(state: RpcHostChromeState, width: number, notice: stri
 		: splashInvocationHint(state.modelLabel ? state.modelLabel.split("/").pop()! : "no model", state.thinkingLevel));
 	const hint = renderInputHints(frameWidth, {
 		leftHint,
+		// The frame is capped at SPLASH_INPUT_FRAME_WIDTH, so a long host notice
+		// (e.g. "SumoCode sync complete — ...") would otherwise be dropped and the
+		// invocation hint painted in its place.
+		leftHintOverflow: "truncate",
 		leftHintStyle: notice !== undefined ? "dim" : "model-thinking",
 	});
 	return centerAnsi(hint, width);

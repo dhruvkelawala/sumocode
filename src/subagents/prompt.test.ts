@@ -79,10 +79,10 @@ describe("subagent prompt guidance", () => {
 		expect(guidance).toContain("research → inherit (shared checkout)");
 	});
 
-	it("states the no-respawn model rule and the visible-child exception", () => {
+	it("scopes the no-respawn rule to the child's effective toolset", () => {
 		const guidance = guidanceText();
-		expect(guidance).toContain("headless children cannot spawn");
-		expect(guidance).toContain("a visible child of an unnarrowed parent keeps the full toolset and still can");
+		expect(guidance).toContain("headless children and tool-narrowed visible children cannot spawn");
+		expect(guidance).toContain("its visible child keeps the subagent tools and can delegate again");
 		expect(guidance).toContain("the child's model IS the implementer's model");
 		expect(guidance).toContain("an explicit `worktree:false` plus `working_dir` overrides a role's worktree default");
 	});

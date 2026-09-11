@@ -153,9 +153,13 @@ const slugAgentPrefix = (prefix: string): string => prefix
 	.replace(/^-+|-+$/g, "")
 	.slice(0, 40) || "sumocode";
 
-/** Unique child label used in SumoCode snapshots and pane metadata. */
-export function uniqueHerdrAgentName(prefix = "sumocode"): string {
-	return `${slugAgentPrefix(prefix)}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+/**
+ * Child label used in SumoCode snapshots and pane metadata: the subagent id
+ * verbatim. The manager already guarantees uniqueness (its allocateId do/while),
+ * so no timestamp/random suffix is needed and the pane stays traceable to the id.
+ */
+export function uniqueHerdrAgentName(id: string): string {
+	return slugAgentPrefix(id);
 }
 
 async function listWorkspacePanes(pi: PiExecLike, workspaceId: string, timeout = 5000): Promise<HostResult<{ panes: HerdrPaneInfo[] }>> {
@@ -402,7 +406,7 @@ async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): P
 			}
 		}
 
-		const agentName = uniqueHerdrAgentName(options.name);
+		const agentName = uniqueHerdrAgentName(options.agentName ?? options.name);
 		const paneId = target.pane.pane_id!;
 		const workspaceId = target.pane.workspace_id ?? workspaceAnchorToMove?.workspaceId;
 		// A new-tab creation can return a bare root pane whose tab id only

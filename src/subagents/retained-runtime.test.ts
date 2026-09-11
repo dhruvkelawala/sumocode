@@ -104,6 +104,8 @@ it("counts a retained-visible pane persisted by the owner in placement and recla
 		await runtime.fire("session_start");
 		const first = await runtime.manager.spawn({ ...f.task, visible: true });
 		if (!("id" in first)) throw new Error("first visible child was not admitted");
+		// Retained ids carry the title slug plus the 4-char installation namespace.
+		expect(first.id).toMatch(/^sa-worker-1-[0-9a-f]{4}$/);
 		// The owner persists the pane in the registry instead of emitting
 		// `pane-attached`; the manager observer must surface it and follow its tab.
 		expect(first).toMatchObject({ status: "running", recovery: "adopted", pane: { tabId: "w1:t1", paneId: "w1:p1" } });
@@ -120,6 +122,8 @@ it("counts a retained-visible pane persisted by the owner in placement and recla
 		expect(f.visibleLaunches[1]).toMatchObject({ id: second.id, placement: { kind: "tab", tabId: "w1:t1", direction: "down" } });
 
 		const registry = f.retention.registry("session").forController(f.writer);
+		// The private task dir follows the id (join(tasks, task.id)).
+		expect(registry.get(first.id)?.taskDir.endsWith(`/${first.id}`)).toBe(true);
 		const settle = (id: string): void => {
 			const record = registry.get(id)!;
 			const artifacts = new RetainedResults(record.taskDir);
@@ -176,7 +180,7 @@ it("surfaces a retained-visible pane_unavailable reason and orphan slot through 
 			errorReason: "herdr tab create failed; cleanup: close refused",
 			errorText: expect.stringContaining("herdr tab create failed"),
 			paneStillOpen: true,
-			pane: { agentName: "worker", paneId: "w1:p9", tabId: "w1:t9", workspaceId: "w1" },
+			pane: { agentName: expect.stringMatching(/^sa-worker-1-[0-9a-f]{4}$/), paneId: "w1:p9", tabId: "w1:t9", workspaceId: "w1" },
 		});
 		// A refused admitted launch never falls back to the disposable backend.
 		expect(f.disposable).not.toHaveBeenCalled();

@@ -101,11 +101,12 @@ describe("herdrTerminalHost", () => {
 		// SAFETY: test double only exercises the members this test asserts on.
 		const result = await herdrTerminalHost.startAgentPane({ exec } as never, {
 			name: "API Worker",
+			agentName: "sa-api-worker-1",
 			cwd: "/repo/packages/api",
 			shellCommand: "exec sumocode task",
 			placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
 		});
-		expect(result).toMatchObject({ ok: true, agentName: expect.stringMatching(/^api-worker-/), workspaceId: "w9", tabId: "w9:t1", paneId: "w9:p2" });
+		expect(result).toMatchObject({ ok: true, agentName: "sa-api-worker-1", workspaceId: "w9", tabId: "w9:t1", paneId: "w9:p2" });
 		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["pane", "split", "w9:p1", "--direction", "right", "--cwd", "/repo/packages/api", "--no-focus"], { timeout: expect.any(Number) });
 		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["pane", "run", "w9:p2", "exec sumocode task"], { timeout: expect.any(Number) });
 		expect(exec).toHaveBeenNthCalledWith(3, "herdr", ["pane", "move", "w9:p1", "--new-tab", "--workspace", "w9", "--label", "shell", "--no-focus"], { timeout: expect.any(Number) });
@@ -764,11 +765,7 @@ describe("herdrTerminalHost", () => {
 		await expect(herdrTerminalHost.notify(fake as never, "title", "body")).resolves.toBeUndefined();
 	});
 
-	it("generates a unique agent name per spawn (no agent_name_taken collision)", () => {
-		const a = uniqueHerdrAgentName();
-		const b = uniqueHerdrAgentName();
-		expect(a).toMatch(/^sumocode-/);
-		expect(b).toMatch(/^sumocode-/);
-		expect(a).not.toBe(b);
+	it("uses the subagent id as the agent name with no timestamp or random suffix", () => {
+		expect(uniqueHerdrAgentName("sa-issue-to-pr-426-2")).toBe("sa-issue-to-pr-426-2");
 	});
 });

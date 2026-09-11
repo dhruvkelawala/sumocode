@@ -677,6 +677,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 				assertAuthority();
 				const result = await startAgentPane.call(options.host, hostPi, {
 					name: options.name,
+					agentName: options.id,
 					cwd: options.cwd,
 					shellCommand,
 					placement: options.placement,
@@ -705,7 +706,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 							paneStillOpen,
 						};
 						if (paneStillOpen) failure.orphanPane = {
-							agentName: options.name,
+							agentName: options.id,
 							paneId: result.orphanPaneId,
 							tabId: orphanTabId,
 							workspaceId: orphanTabId?.split(":")[0],
@@ -729,7 +730,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 						// occupies a layout slot the manager must keep counting.
 						outcome.paneStillOpen = true;
 						outcome.orphanPane = {
-							agentName: options.name,
+							agentName: options.id,
 							paneId: result.orphanPaneId,
 							tabId: orphanTabId,
 							workspaceId: orphanTabId?.split(":")[0],

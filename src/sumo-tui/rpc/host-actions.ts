@@ -797,6 +797,7 @@ export class RpcHostActions {
 
 	public async openModelSelector(): Promise<void> {
 		if (this.isTreeNavigationBusy()) {
+			notify(this.notifications, "branch summary in progress", "warning");
 			return;
 		}
 		const enabledModels = await this.controls.getEnabledModels();
@@ -822,6 +823,7 @@ export class RpcHostActions {
 
 	public async openThinkingSelector(): Promise<void> {
 		if (this.isTreeNavigationBusy()) {
+			notify(this.notifications, "branch summary in progress", "warning");
 			return;
 		}
 		const currentLevel = this.stateStore.getSnapshot().thinkingLevel;
@@ -849,6 +851,7 @@ export class RpcHostActions {
 
 	public async openSessionControls(): Promise<void> {
 		if (this.isTreeNavigationBusy()) {
+			notify(this.notifications, "branch summary in progress", "warning");
 			return;
 		}
 		const selected = await this.inlineSelectors.select("Session controls", [
@@ -867,6 +870,7 @@ export class RpcHostActions {
 
 	public async openSettings(): Promise<void> {
 		if (this.isTreeNavigationBusy()) {
+			notify(this.notifications, "branch summary in progress", "warning");
 			return;
 		}
 		const currentMermaidMode = this.getMermaidRenderingMode();
@@ -1070,6 +1074,7 @@ export class RpcHostActions {
 	 */
 	public async openForkSelector(): Promise<void> {
 		if (this.isTreeNavigationBusy()) {
+			notify(this.notifications, "branch summary in progress", "warning");
 			return;
 		}
 		const messages = (await this.controls.getForkMessages())
@@ -1181,6 +1186,7 @@ export class RpcHostActions {
 	/** Browse and navigate the current session tree in place, matching Pi's summary loop. */
 	public async openTreeBrowser(initialSelectedId?: string): Promise<void> {
 		if (this.isTreeNavigationBusy()) {
+			notify(this.notifications, "branch summary in progress", "warning");
 			return;
 		}
 		if (!hasGetEntries(this.controls)) {

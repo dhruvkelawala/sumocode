@@ -711,6 +711,21 @@ describe("createRpcHostInterruptHandler wiring", () => {
 		expect(requestHostExit).not.toHaveBeenCalled();
 	});
 
+	it("clears the draft on Ctrl-C and supersedes a stale sticky failure", () => {
+		let editorText = "half-typed prompt";
+		const editor = { getText: () => editorText, setText: vi.fn((text: string) => { editorText = text; }), isAutocompleteOpen: () => false };
+		const notifications = { notify: vi.fn(), dismissSticky: vi.fn() };
+		const handle = createRpcHostInterruptHandler(interruptDeps({
+			stateStore: { getSnapshot: () => asNever({ isStreaming: false }) },
+			editor,
+			notifications,
+		}));
+
+		expect(handle(CTRL_C)).toBe(true);
+		expect(editorText).toBe("");
+		expect(notifications.dismissSticky).toHaveBeenCalledOnce();
+	});
+
 	it("restores host-owned queued drafts before aborting", () => {
 		const controls = { abort: vi.fn(async () => undefined) };
 		const restoreQueuedDrafts = vi.fn();

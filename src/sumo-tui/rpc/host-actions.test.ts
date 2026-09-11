@@ -1739,6 +1739,21 @@ describe("RpcHostActions", () => {
 			expect(controls.calls).toContain("getLastAssistantText");
 		});
 
+		it("keeps a transient reason when branch navigation blocks a direct selector action", async () => {
+			const { actions, notifications } = setup({ isTreeNavigationBusy: () => true });
+
+			await actions.openModelSelector();
+			await actions.openThinkingSelector();
+			await actions.openSessionControls();
+			await actions.openSettings();
+			await actions.openForkSelector();
+			await actions.openTreeBrowser();
+
+			// Direct entry points (Ctrl+L, the command palette) never reach
+			// handleSubmittedText's warning path.
+			expect(notifications).toEqual(Array.from({ length: 6 }, () => ({ message: "branch summary in progress", level: "warning" })));
+		});
+
 		it("warns when there is no session file to browse", async () => {
 			const { actions, notifications } = setup();
 

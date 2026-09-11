@@ -699,7 +699,7 @@ export interface RpcHostInterruptDependencies {
 	readonly stateStore: Pick<RpcHostStateStore, "getSnapshot">;
 	readonly controls: Pick<RpcHostControls, "abort">;
 	readonly abortInFlight?: () => Promise<void>;
-	readonly notifications: Pick<NotificationCenter, "notify">;
+	readonly notifications: Pick<NotificationCenter, "notify"> & Partial<Pick<NotificationCenter, "dismissSticky">>;
 	readonly requestHostExit: (code: number) => void;
 	/**
 	 * True in the window between a prompt submission and the RPC child's
@@ -768,6 +768,9 @@ export function createRpcHostInterruptHandler(deps: RpcHostInterruptDependencies
 			case "clear-draft":
 				armedQuitUntil = undefined;
 				deps.editor.setText("");
+				// Clearing the draft is a host action, so it supersedes a stale sticky
+				// failure (issue 481 home B) the way the direct editor actions do.
+				deps.notifications.dismissSticky?.();
 				return true;
 			case "abort":
 				armedQuitUntil = undefined;

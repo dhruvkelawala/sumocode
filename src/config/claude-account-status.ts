@@ -54,10 +54,22 @@ interface ClaudeAccountStatusInputs {
  */
 export function claudeAccountLabel(providerId: string, subscriptionLabel: string | undefined): string {
 	if (providerId === CLAUDE_BASE_PROVIDER) return "default";
-	const labelled = subscriptionLabel?.trim();
+	const labelled = withoutControlCharacters(subscriptionLabel ?? "").trim();
 	if (labelled) return labelled.toLowerCase();
 	const index = /^anthropic-(\d+)$/.exec(providerId)?.[1];
 	return index ? `#${index}` : providerId;
+}
+
+/**
+ * A label comes from a hand-edited `claude-accounts.json` and ends up in a
+ * terminal row, so a newline or escape sequence in it would paint extra footer
+ * rows or run a control sequence. Control characters (C0, DEL, C1) are dropped
+ * rather than escaped: the label is a display name, and subagent metadata
+ * rejects them the same way.
+ */
+function withoutControlCharacters(text: string): string {
+	// oxlint-disable-next-line no-control-regex -- the label is display text; control characters are exactly what this drops.
+	return text.replace(/[\x00-\x1f\x7f-\x9f]/gu, "");
 }
 
 /**

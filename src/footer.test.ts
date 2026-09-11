@@ -94,7 +94,14 @@ function installFooterHarness(options: { resolveClaudeAccount?: (ctx: ExtensionC
 	};
 }
 
-function footerCtx(options: { cwd?: string; modelId?: string; throwOnSnapshot?: boolean; setFooter?: (factory: FooterFactory | undefined) => void }): ExtensionContext {
+function footerCtx(options: {
+	cwd?: string;
+	modelId?: string;
+	provider?: string;
+	modelRegistry?: unknown;
+	throwOnSnapshot?: boolean;
+	setFooter?: (factory: FooterFactory | undefined) => void;
+}): ExtensionContext {
 	const branch = [{ type: "message", message: { role: "assistant", usage: { input: 10, output: 5, cost: { total: 0.01 } } } }];
 	const ctx = {
 		hasUI: true,
@@ -122,10 +129,11 @@ function footerCtx(options: { cwd?: string; modelId?: string; throwOnSnapshot?: 
 		model: {
 			get() {
 				if (options.throwOnSnapshot) throw new Error("stale extension ctx");
-				return { id: options.modelId ?? "test-model", contextWindow: 1000 };
+				return { id: options.modelId ?? "test-model", provider: options.provider, contextWindow: 1000 };
 			},
 		},
 	});
+	if (options.modelRegistry !== undefined) Object.defineProperty(ctx, "modelRegistry", { value: options.modelRegistry, configurable: true });
 	// SAFETY: the double supplies the hasUI/ui/sessionManager surface installFooter reads.
 	return ctx as never;
 }
@@ -441,6 +449,29 @@ describe("installFooter Claude account resolution", () => {
 		component.render(160);
 
 		expect(resolveClaudeAccount).toHaveBeenCalledTimes(2);
+	});
+
+	it("resolves through the real registry surface when no resolver is injected", () => {
+		const models = [
+			{ provider: "anthropic", id: "claude-opus-5" },
+			{ provider: "anthropic-2", id: "claude-opus-5" },
+		];
+		const registry = {
+			getAvailable: () => models,
+			getProviderDisplayName: (providerId: string) => (providerId === "anthropic-2" ? "Claude (company)" : "Anthropic"),
+		};
+		const harness = installFooterHarness({});
+		const ctx = footerCtx({ modelId: "gpt-5.6", provider: "openai-codex", modelRegistry: registry, setFooter: harness.setFooter });
+		harness.fireSessionStart(ctx);
+		// SAFETY: the theme is unused by the render paths exercised here.
+		const component = harness.latestFactory()({ requestRender: vi.fn() }, {} as never, footerData("main"));
+
+		expect(withoutAnsi(component.render(160).join("\n"))).toContain("claude default");
+
+		// Base provider gone: the next Claude model resolves to the extra account.
+		registry.getAvailable = () => [models[1]];
+		harness.fire("model_select", ctx);
+		expect(withoutAnsi(component.render(160).join("\n"))).toContain("claude company");
 	});
 
 	it("paints the resolved account into the footer row", () => {

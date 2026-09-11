@@ -64,6 +64,17 @@ describe("chrome cache", () => {
 		expect(existsSync(join(agentDir, "state", "sumocode", "chrome", "v1", "chrome-cache.json"))).toBe(true);
 	});
 
+	it("drops malformed persisted thinking levels", () => {
+		const { stateRoot, path } = cacheFixture();
+		writeCachedChrome("/project/a", { modelLabel: "model" }, { stateRoot });
+		writeFileSync(path, JSON.stringify({
+			version: 1,
+			byCwd: { "/project/a": { savedAt: 1, modelLabel: "model", thinkingLevel: "impossible" } },
+		}));
+
+		expect(readCachedChrome("/project/a", { stateRoot })).toEqual({ modelLabel: "model" });
+	});
+
 	it("returns undefined for missing, corrupt, and wrong-version files", () => {
 		const { stateRoot, path } = cacheFixture();
 		expect(readCachedChrome("/project/a", { stateRoot })).toBeUndefined();

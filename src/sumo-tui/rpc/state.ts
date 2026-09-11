@@ -1,5 +1,6 @@
 import type { AgentSessionEvent, RpcSessionState, SessionStats } from "@earendil-works/pi-coding-agent";
 import type { CompactionReason } from "../../compaction-state.js";
+import { isRpcThinkingLevel, type RpcThinkingLevel } from "./thinking-level.js";
 
 export interface RpcHostChromeState {
 	readonly sessionId?: string;
@@ -14,7 +15,10 @@ export interface RpcHostChromeState {
 	 */
 	readonly sessionFile?: string;
 	readonly modelLabel?: string;
-	readonly thinkingLevel?: string;
+	readonly thinkingLevel?: RpcThinkingLevel;
+	readonly steeringMode?: RpcSessionState["steeringMode"];
+	readonly followUpMode?: RpcSessionState["followUpMode"];
+	readonly autoCompactionEnabled?: boolean;
 	/** True only after an authoritative get_state hydration, never for cache seeds. */
 	readonly hydrated?: boolean;
 	readonly isStreaming: boolean;
@@ -47,6 +51,18 @@ function isString(value: JsonValue | undefined): value is string {
 	return typeof value === "string";
 }
 
+function isBoolean(value: JsonValue | undefined): value is boolean {
+	return typeof value === "boolean";
+}
+
+function isQueueMode(value: JsonValue | undefined): value is RpcSessionState["steeringMode"] {
+	return value === "all" || value === "one-at-a-time";
+}
+
+function isNonnegativeInteger(value: JsonValue | undefined): value is number {
+	return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
 function isJsonObject(value: JsonValue | undefined): value is { [key: string]: JsonValue } {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -77,8 +93,31 @@ function compactionReasonFromEvent(event: JsonValue): CompactionReason | undefin
 	return value === "manual" || value === "threshold" || value === "overflow" ? value : undefined;
 }
 
-function stringEntries(value: JsonValue | undefined): string[] {
-	return Array.isArray(value) ? value.filter(isString) : [];
+function isStringArray(value: JsonValue | undefined): value is string[] {
+	return Array.isArray(value) && value.every(isString);
+}
+
+function invalidRpcState(field: string): never {
+	throw new Error(`get_state failed: invalid data.${field}`);
+}
+
+/** Validates the state fields SumoCode projects while preserving additive Pi fields. */
+function validateRpcSessionState(state: RpcSessionState): RpcSessionState {
+	if (!state) invalidRpcState("state");
+	const model = state.model;
+	if (model !== undefined && (!model || !isString(model.provider) || !isString(model.id))) invalidRpcState("model");
+	if (!isRpcThinkingLevel(state.thinkingLevel)) invalidRpcState("thinkingLevel");
+	if (!isBoolean(state.isStreaming)) invalidRpcState("isStreaming");
+	if (!isBoolean(state.isCompacting)) invalidRpcState("isCompacting");
+	if (!isQueueMode(state.steeringMode)) invalidRpcState("steeringMode");
+	if (!isQueueMode(state.followUpMode)) invalidRpcState("followUpMode");
+	if (!isString(state.sessionId)) invalidRpcState("sessionId");
+	if (state.sessionName !== undefined && !isString(state.sessionName)) invalidRpcState("sessionName");
+	if (state.sessionFile !== undefined && !isString(state.sessionFile)) invalidRpcState("sessionFile");
+	if (!isBoolean(state.autoCompactionEnabled)) invalidRpcState("autoCompactionEnabled");
+	if (!isNonnegativeInteger(state.messageCount)) invalidRpcState("messageCount");
+	if (!isNonnegativeInteger(state.pendingMessageCount)) invalidRpcState("pendingMessageCount");
+	return state;
 }
 
 export class RpcHostStateStore {
@@ -103,12 +142,13 @@ export class RpcHostStateStore {
 	public seedChrome(chrome: { readonly modelLabel?: string; readonly thinkingLevel?: string }): RpcHostChromeState {
 		const next = { ...this.state };
 		if (chrome.modelLabel !== undefined) next.modelLabel = chrome.modelLabel;
-		if (chrome.thinkingLevel !== undefined) next.thinkingLevel = chrome.thinkingLevel;
+		if (isRpcThinkingLevel(chrome.thinkingLevel)) next.thinkingLevel = chrome.thinkingLevel;
 		this.state = next;
 		return this.getSnapshot();
 	}
 
-	public hydrateFromRpcState(rpcState: RpcSessionState, gitBranch = this.state.gitBranch): RpcHostChromeState {
+	public hydrateFromRpcState(value: RpcSessionState, gitBranch = this.state.gitBranch): RpcHostChromeState {
+		const rpcState = validateRpcSessionState(value);
 		const pendingMessageCount = Math.max(rpcState.pendingMessageCount, this.piQueuedMessages.length) + this.hostQueuedMessages.length;
 		this.state = this.withComposedQueue({
 			...this.state,
@@ -117,6 +157,9 @@ export class RpcHostStateStore {
 			sessionFile: rpcState.sessionFile,
 			modelLabel: modelLabelFrom(rpcState),
 			thinkingLevel: rpcState.thinkingLevel,
+			steeringMode: rpcState.steeringMode,
+			followUpMode: rpcState.followUpMode,
+			autoCompactionEnabled: rpcState.autoCompactionEnabled,
 			hydrated: true,
 			isStreaming: rpcState.isStreaming,
 			isCompacting: rpcState.isCompacting,
@@ -156,18 +199,15 @@ export class RpcHostStateStore {
 			case "agent_start":
 				this.state = { ...this.state, isStreaming: true, lastEventType: type };
 				break;
-			case "agent_end": {
-				const messages = isJsonObject(payload) ? payload["messages"] : undefined;
-				const messageCount = Array.isArray(messages) ? messages.length : this.state.messageCount;
-				this.state = this.withComposedQueue({
-					...this.state,
-					isStreaming: false,
-					messageCount,
-					hasMessages: messageCount > 0,
-					lastEventType: type,
-				});
+			case "agent_end":
+				// Pi reports only this low-level run's suffix here and may immediately
+				// retry, compact, or continue queued work. Totals stay hydration/stats-owned,
+				// and ordinary activity ends only at agent_settled.
+				this.state = { ...this.state, lastEventType: type };
 				break;
-			}
+			case "agent_settled":
+				this.state = { ...this.state, isStreaming: false, lastEventType: type };
+				break;
 			case "compaction_start":
 				this.state = { ...this.state, isCompacting: true, compactionReason: compactionReasonFromEvent(payload), lastEventType: type };
 				break;
@@ -177,20 +217,28 @@ export class RpcHostStateStore {
 			case "queue_update": {
 				const steering = isJsonObject(payload) ? payload["steering"] : undefined;
 				const followUp = isJsonObject(payload) ? payload["followUp"] : undefined;
-				this.piQueuedMessages = [...stringEntries(steering), ...stringEntries(followUp)];
-				this.state = this.withComposedQueue({
-					...this.state,
-					pendingMessageCount: this.hostQueuedMessages.length + this.piQueuedMessages.length,
-					lastEventType: type,
-				});
+				if (isStringArray(steering) && isStringArray(followUp)) {
+					this.piQueuedMessages = [...steering, ...followUp];
+					this.state = this.withComposedQueue({
+						...this.state,
+						pendingMessageCount: this.hostQueuedMessages.length + this.piQueuedMessages.length,
+						lastEventType: type,
+					});
+				} else {
+					this.state = { ...this.state, lastEventType: type };
+				}
 				break;
 			}
 			case "session_info_changed":
 				this.state = { ...this.state, sessionName: isJsonObject(payload) && isString(payload["name"]) ? payload["name"] : undefined, lastEventType: type };
 				break;
-			case "thinking_level_changed":
-				this.state = { ...this.state, thinkingLevel: isJsonObject(payload) && isString(payload["level"]) ? payload["level"] : undefined, lastEventType: type };
+			case "thinking_level_changed": {
+				const level = isJsonObject(payload) ? payload["level"] : undefined;
+				this.state = isRpcThinkingLevel(level)
+					? { ...this.state, thinkingLevel: level, lastEventType: type }
+					: { ...this.state, lastEventType: type };
 				break;
+			}
 			case "tool_execution_update":
 				if (isJsonObject(payload) && payload["toolName"] === "task" && "partialResult" in payload) {
 					this.state = { ...this.state, taskPartialCount: this.state.taskPartialCount + 1, lastEventType: type };
@@ -225,7 +273,7 @@ export class RpcHostStateStore {
 	 * already told them. Fixes a real perceived-latency bug: the footer used
 	 * to sit on the stale value until a full extra RPC round-trip completed.
 	 */
-	public applyModelChange(model: ModelIdentityLike, thinkingLevel?: string): RpcHostChromeState {
+	public applyModelChange(model: ModelIdentityLike, thinkingLevel?: RpcThinkingLevel): RpcHostChromeState {
 		const modelLabel = modelLabelFromModel(model);
 		const next = { ...this.state };
 		if (modelLabel !== undefined) next.modelLabel = modelLabel;
@@ -234,14 +282,8 @@ export class RpcHostStateStore {
 		return this.getSnapshot();
 	}
 
-	/**
-	 * Patches `thinkingLevel` directly -- used after `set_thinking_level`
-	 * (whose response carries no data at all, so the level we asked for IS
-	 * the result on success) and after `cycle_thinking_level` (whose response
-	 * already includes the resulting level inline). Same round-trip-avoidance
-	 * rationale as `applyModelChange`.
-	 */
-	public applyThinkingLevel(level: string): RpcHostChromeState {
+	/** Applies an effective level from hydration, an event, or cycle response. */
+	public applyThinkingLevel(level: RpcThinkingLevel): RpcHostChromeState {
 		this.state = { ...this.state, thinkingLevel: level };
 		return this.getSnapshot();
 	}

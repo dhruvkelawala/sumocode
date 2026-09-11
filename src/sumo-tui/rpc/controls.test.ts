@@ -104,6 +104,20 @@ function writeAgentSettings(content: Record<string, string[] | string | boolean 
 }
 
 describe("RpcHostControls", () => {
+	it("rejects malformed get_state payloads before they reach chrome", async () => {
+		const client = new FakeClient(asNever({
+			type: "response",
+			command: "get_state",
+			success: true,
+			data: { ...rpcState(), thinkingLevel: "impossible", messageCount: -1 },
+		}));
+		const store = new RpcHostStateStore();
+		const controls = new RpcHostControls(client, store);
+
+		await expect(controls.refreshState()).rejects.toThrow("get_state failed: invalid data.thinkingLevel");
+		expect(store.getSnapshot().hydrated).toBeUndefined();
+	});
+
 	it("hydrates the supplied state store when refreshing state", async () => {
 		const store = new RpcHostStateStore();
 		const client = new FakeClient(stateResponse({ sessionId: "session-refresh", sessionName: "RPC controls" }));
@@ -427,19 +441,33 @@ describe("RpcHostControls", () => {
 		]);
 	});
 
-	it("sets and cycles thinking level by patching state locally, with no follow-up get_state round-trip", async () => {
+	it("reconciles a void thinking setter to Pi's effective level before returning", async () => {
 		const client = new FakeClient(
 			{ type: "response", command: "set_thinking_level", success: true },
+			stateResponse({ thinkingLevel: "medium" }),
 			{ type: "response", command: "cycle_thinking_level", success: true, data: { level: "minimal" } },
 		);
 		const controls = new RpcHostControls(client);
 
-		await expect(controls.setThinkingLevel("high")).resolves.toMatchObject({ thinkingLevel: "high" });
+		await expect(controls.setThinkingLevel("xhigh")).resolves.toMatchObject({ thinkingLevel: "medium" });
 		await expect(controls.cycleThinkingLevel()).resolves.toMatchObject({ thinkingLevel: "minimal" });
 		expect(client.commands).toEqual([
-			{ type: "set_thinking_level", level: "high" },
+			{ type: "set_thinking_level", level: "xhigh" },
+			{ type: "get_state" },
 			{ type: "cycle_thinking_level" },
 		]);
+	});
+
+	it("rejects malformed thinking capabilities", async () => {
+		const client = new FakeClient(asNever({
+			type: "response",
+			command: "get_available_thinking_levels",
+			success: true,
+			data: { levels: ["off", "impossible"] },
+		}));
+		const controls = new RpcHostControls(client);
+
+		await expect(controls.getAvailableThinkingLevels()).rejects.toThrow("get_available_thinking_levels failed: invalid data.levels");
 	});
 
 	it("loads available thinking levels from Pi", async () => {
@@ -457,7 +485,8 @@ describe("RpcHostControls", () => {
 
 	it("optimistically patches setThinkingLevel before the RPC response", async () => {
 		const setThinkingLevelResponse = deferred<RpcResponse>();
-		const client = new DeferredFakeClient(setThinkingLevelResponse);
+		const refreshResponse = deferred<RpcResponse>();
+		const client = new DeferredFakeClient(setThinkingLevelResponse, refreshResponse);
 		const store = new RpcHostStateStore();
 		store.hydrateFromRpcState(rpcState({ thinkingLevel: "medium" }));
 		const optimisticStates: RpcHostChromeState[] = [];
@@ -472,8 +501,14 @@ describe("RpcHostControls", () => {
 		expect(optimisticStates[0]).toMatchObject({ thinkingLevel: "high" });
 
 		setThinkingLevelResponse.resolve({ type: "response", command: "set_thinking_level", success: true });
+		await Promise.resolve();
+		expect(client.commands).toEqual([
+			{ type: "set_thinking_level", level: "high" },
+			{ type: "get_state" },
+		]);
+		refreshResponse.resolve(stateResponse({ thinkingLevel: "medium" }));
 
-		await expect(result).resolves.toMatchObject({ thinkingLevel: "high" });
+		await expect(result).resolves.toMatchObject({ thinkingLevel: "medium" });
 	});
 
 	it("pushes the rolled-back state through onOptimisticChange when setThinkingLevel fails", async () => {
@@ -507,6 +542,18 @@ describe("RpcHostControls", () => {
 		expect(optimisticStates).toHaveLength(2);
 		expect(optimisticStates[1]).toMatchObject({ thinkingLevel: "medium" });
 		expect(store.getSnapshot()).toMatchObject({ thinkingLevel: "medium" });
+	});
+
+	it("rejects a malformed effective cycle level", async () => {
+		const client = new FakeClient(asNever({
+			type: "response",
+			command: "cycle_thinking_level",
+			success: true,
+			data: { level: "impossible" },
+		}));
+		const controls = new RpcHostControls(client);
+
+		await expect(controls.cycleThinkingLevel()).rejects.toThrow("cycle_thinking_level failed: invalid data.level");
 	});
 
 	it("cycle_thinking_level's null response (nothing to cycle to) leaves state untouched with no follow-up round-trip", async () => {
@@ -758,7 +805,7 @@ describe("RpcHostControls", () => {
 
 	it("leaves quick getters and setters on the client's default timeout", async () => {
 		const client = new FakeClient(
-			{ type: "response", command: "get_state", success: true, data: asNever({}) },
+			stateResponse(),
 			{ type: "response", command: "abort", success: true },
 		);
 		const controls = new RpcHostControls(client);

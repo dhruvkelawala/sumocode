@@ -33,7 +33,7 @@ it("classifies every shipped agent-session event under one primary consumer", ()
 	expect(AGENT_EVENT_DISPOSITIONS.agent_end.kind).toBe("projected");
 	expect(AGENT_EVENT_DISPOSITIONS.thinking_level_changed).toMatchObject({ kind: "projected", owner: "state.ts RpcHostStateStore.handleAgentEvent" });
 	expect(AGENT_EVENT_DISPOSITIONS.queue_update.kind).toBe("projected");
-	expect(AGENT_EVENT_DISPOSITIONS.agent_settled.kind).toBe("scheduler-only");
+	expect(AGENT_EVENT_DISPOSITIONS.agent_settled).toMatchObject({ kind: "projected", owner: "state.ts RpcHostStateStore.handleAgentEvent" });
 	expect(AGENT_EVENT_DISPOSITIONS.turn_end.kind).toBe("scheduler-only");
 	expect(AGENT_EVENT_DISPOSITIONS.message_update.kind).toBe("transcript-only");
 	expect(AGENT_EVENT_DISPOSITIONS.message_end.kind).toBe("transcript-only");

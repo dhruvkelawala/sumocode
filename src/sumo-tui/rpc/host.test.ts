@@ -447,7 +447,7 @@ describe("session hydration event barrier", () => {
 		}
 
 		expect(replayed).toEqual(["message_update", "agent_end", "agent_settled"]);
-		expect(state.getSnapshot()).toMatchObject({ isStreaming: false, messageCount: 1, lastEventType: "agent_settled" });
+		expect(state.getSnapshot()).toMatchObject({ isStreaming: false, messageCount: 0, lastEventType: "agent_settled" });
 		expect(buffer.isActive).toBe(false);
 	});
 });

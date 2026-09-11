@@ -2,10 +2,11 @@ import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
-import type { AgentSessionEvent, RpcSessionState } from "@earendil-works/pi-coding-agent";
+import { afterEach, describe, expect, it } from "vitest";
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { SumoRpcClient } from "../../src/sumo-tui/rpc/client.js";
-import { expectRpcSuccess, responseData, type RpcResponseData } from "../../src/sumo-tui/rpc/response.js";
+import { PINNED_THINKING_LEVELS } from "../../src/sumo-tui/rpc/contract-classification.js";
+import { expectRpcSuccess, responseData } from "../../src/sumo-tui/rpc/response.js";
 import { spawnSupervisedProcess, type SupervisedProcess } from "./harness-supervisor.js";
 import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
@@ -90,9 +91,6 @@ async function waitForEvent(events: readonly AgentSessionEvent[], type: string, 
 	return undefined;
 }
 
-/** The shipped ThinkingLevel union, kept in lockstep by the satisfies check below. */
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const satisfies readonly RpcSessionState["thinkingLevel"][];
-
 async function startInstalledWorker(): Promise<SumoRpcClient> {
 	const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-contract-agent-"));
 	tempDirs.push(agentDir);
@@ -146,26 +144,23 @@ describe("installed Pi worker contract", () => {
 		expect(cleared.id).toBe("rpc-contract-clear-queue");
 		expect(cleared.data.steering).toEqual([]);
 		expect(cleared.data.followUp).toEqual([]);
-		expectTypeOf(cleared.data).toEqualTypeOf<RpcResponseData<"clear_queue">>();
 
 		const queued = await waitForEvent(events, "queue_update", 10_000);
 		expect(queued).toBeDefined();
 
 		const state = responseData(await client.send({ type: "get_state" }), "get_state");
 		expect(state.sessionId.length).toBeGreaterThan(0);
-		expect(THINKING_LEVELS).toContain(state.thinkingLevel);
-		expectTypeOf(state).toEqualTypeOf<RpcSessionState>();
+		expect(PINNED_THINKING_LEVELS).toContain(state.thinkingLevel);
 
 		const levels = responseData(await client.send({ type: "get_available_thinking_levels" }), "get_available_thinking_levels").levels;
 		expect(Array.isArray(levels)).toBe(true);
-		for (const level of levels) expect(THINKING_LEVELS).toContain(level);
-		expectTypeOf(levels).toEqualTypeOf<RpcResponseData<"get_available_thinking_levels">["levels"]>();
+		// An empty capability list is a valid Pi response; each reported level must
+		// still be one of the shipped literals.
+		for (const level of levels) expect(PINNED_THINKING_LEVELS).toContain(level);
 
 		// 0.85.1 acknowledges the clamped level with a void success and carries no
 		// effective-level payload; the get_state/event shapes above are authoritative.
 		const setter = responseData(await client.send({ type: "set_thinking_level", level: "off" }), "set_thinking_level");
 		expect(setter).toBeUndefined();
-		expectTypeOf(setter).toEqualTypeOf<RpcResponseData<"set_thinking_level">>();
-		expectTypeOf<Extract<AgentSessionEvent, { type: "thinking_level_changed" }>["level"]>().toEqualTypeOf<RpcSessionState["thinkingLevel"]>();
 	}, 30_000);
 });

@@ -1,4 +1,4 @@
-import type { AgentSessionEvent, RpcCommand, RpcExtensionUIRequest } from "@earendil-works/pi-coding-agent";
+import type { AgentSessionEvent, RpcCommand, RpcExtensionUIRequest, RpcSessionState } from "@earendil-works/pi-coding-agent";
 
 /**
  * Compile-exhaustive disposition matrix for the pinned Pi RPC release
@@ -28,6 +28,14 @@ type AgentEventDisposition =
 	| { readonly kind: "downstream-plan-owned"; readonly owner: string; readonly reason: string };
 
 type ExtensionUiDisposition = { readonly kind: "mapped"; readonly owner: string; readonly response: string };
+
+/**
+ * The shipped thinking-level literals. The equality anchor in
+ * `contract-classification.test.ts` proves this list is the whole union, not a
+ * subset, and the integration lane uses it for the runtime containment check on
+ * values the installed worker reports.
+ */
+export const PINNED_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const satisfies readonly RpcSessionState["thinkingLevel"][];
 
 export const RPC_COMMAND_DISPOSITIONS = {
 	abort: { kind: "implemented", owner: "controls.ts RpcHostControls.abort" },

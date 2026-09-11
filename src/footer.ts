@@ -306,7 +306,12 @@ export function installFooter(
 	pi.on("agent_start", () => setState("thinking"));
 	pi.on("tool_call", () => setState("tool"));
 	pi.on("tool_result", () => setState("thinking"));
-	pi.on("agent_end", () => setState("idle"));
+	pi.on("agent_end", (_event, ctx) => {
+		// `/accounts` renames write claude-accounts.json without a model change, so
+		// the chip re-resolves once per turn boundary to pick the new label up.
+		if (ctx.hasUI) refreshClaudeAccount(ctx);
+		setState("idle");
+	});
 	pi.on("model_select", (_event, ctx) => {
 		// Mirror session_start's guard: a headless session must not repaint the UI
 		// footer's chip from its own context, nor pay for the registry read.

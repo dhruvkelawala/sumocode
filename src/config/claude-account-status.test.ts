@@ -37,6 +37,16 @@ describe("formatClaudeAccountChip", () => {
 		expect(formatClaudeAccountChip({ providerId: "anthropic-2", label: "work-account", active: false })).toBe("claude work-ac…");
 		expect(formatClaudeAccountChip({ providerId: "anthropic-2", label: "personal", active: false })).toBe("claude personal");
 	});
+
+	it("clips by grapheme, never splitting a surrogate pair or combining mark", () => {
+		const emoji = formatClaudeAccountChip({ providerId: "anthropic-2", label: "😀😀😀😀😀😀😀😀😀", active: false });
+		expect(emoji).toBe("claude 😀😀😀😀😀😀😀…");
+		// No lone surrogate survives the clip.
+		expect(emoji).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+		expect(emoji).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+		// A combining mark travels with its base character.
+		expect(formatClaudeAccountChip({ providerId: "anthropic-2", label: "ééééééééé", active: false })).toBe("claude ééééééé…");
+	});
 });
 
 describe("resolveClaudeAccountStatus", () => {
@@ -72,13 +82,17 @@ describe("resolveClaudeAccountStatus", () => {
 		expect(status).toEqual({ providerId: "anthropic-2", label: "company", active: true });
 	});
 
-	it("ignores a live Claude provider that has no reachable model", () => {
+	it("keeps the live account when its own models are filtered out of the enabled set", () => {
 		const status = resolveClaudeAccountStatus({
-			models: [model("anthropic-2")],
-			currentProvider: "anthropic",
+			models: [model("anthropic")],
+			currentProvider: "anthropic-2",
 			subscriptionLabel: () => "company",
 		});
-		expect(status).toEqual({ providerId: "anthropic-2", label: "company", active: false });
+		expect(status).toEqual({ providerId: "anthropic-2", label: "company", active: true });
+	});
+
+	it("reports no account when the model is not Claude and none is enabled", () => {
+		expect(resolveClaudeAccountStatus({ models: [model("openai-codex")], currentProvider: "openai-codex" })).toBeUndefined();
 	});
 
 	it("reads the subscription label once per call", () => {

@@ -52,7 +52,8 @@ import type { InlineSelectorHost, InlineSelectorItem, InlineSelectorTab } from "
 import { notifyOnError } from "./safe-send.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import type { MermaidRenderingMode } from "../transcript/mermaid.js";
-import { listAllSessionsForSession, listProjectSessions, type SessionListInfo } from "./session-reader.js";import { buildSessionTreeFromEntries, currentTreeSelection, entryTimestampsFromEntries, flattenSessionTree, formatRelativeTime, sessionExcerpt, treeNodeSummary, treeRowTimestamp } from "./session-tree.js";
+import { listAllSessionsForSession, listProjectSessions, type SessionListInfo } from "./session-reader.js";
+import { buildSessionTreeFromEntries, currentTreeSelection, entryTimestampsFromEntries, flattenSessionTree, formatRelativeTime, sessionExcerpt, treeNodeSummary, treeRowTimestamp } from "./session-tree.js";
 import { readAuthoritativeSessionSnapshot } from "./session-snapshot.js";
 import type { RpcHostChromeState, RpcHostStateStore } from "./state.js";
 
@@ -454,17 +455,28 @@ const RESUME_LABEL_WIDTH = 52;
  * after the full label: at the canonical 60-column portrait width (AGENTS.md)
  * the project scope's 52-column label leaves no columns for the directory --
  * the one thing that tells two identically titled sessions from different
- * projects apart -- while 30 still leaves it ~19, enough for the tail that
- * `displaySessionCwd` keeps when it elides a long path.
+ * projects apart -- while 30 still leaves it the directory's own budget below.
  * ponytail: a fixed reservation, not a dynamic one; a label fitted to the live
  * render width would need that width, which reaches the selector component
  * only at render time (`inline-selector.ts`), not this row builder.
  */
 const ALL_SESSIONS_LABEL_WIDTH = 30;
 
+/**
+ * Directory column budget, and therefore the width `displaySessionCwd` elides
+ * to. It is the space this row actually has at the canonical 60-column portrait
+ * width (AGENTS.md): 60 - 9 (gutter, focus marker, tag) - 2 (minimum gap) - 30
+ * (the all-sessions label) - 1 (the row's own truncation ellipsis) = 18. A
+ * longer directory would not be visible there, and because the row is cut at
+ * its right edge while `displaySessionCwd` keeps the path tail, what falls off
+ * instead is the project's own last segment -- the thing that distinguishes two
+ * same-named projects.
+ */
+const SESSION_DIRECTORY_WIDTH = 18;
+
 /** Home-shortened, head-elided cwd for the selector's right-hand column. */
 function displaySessionCwd(cwd: string): string {
-	const maxLength = 28;
+	const maxLength = SESSION_DIRECTORY_WIDTH;
 	const home = homedir();
 	const shortened = cwd.startsWith(`${home}/`) ? `~/${cwd.slice(home.length + 1)}` : cwd;
 	return shortened.length <= maxLength ? shortened : `…${shortened.slice(1 - maxLength)}`;

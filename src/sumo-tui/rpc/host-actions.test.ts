@@ -1175,12 +1175,13 @@ describe("RpcHostActions", () => {
 			}
 		});
 
-		it("keeps the project directory visible in all-sessions rows at portrait width", async () => {
+		it("keeps the project directory's own segment visible in all-sessions rows at portrait width", async () => {
 			const root = mkdtempSync(join(tmpdir(), "sumocode-resume-portrait-cwd-test-"));
 			try {
 				const currentFile = writeFixtureSession(root, "2026-07-02T20-00-00-000Z_current.jsonl", "current", "2026-07-02T20:00:00.000Z", "current session first message");
-				// The label is long enough to fill a portrait row on its own.
-				writeFixtureSession(root, "2026-07-02T21-00-00-000Z_other.jsonl", "other", "2026-07-02T21:00:00.000Z", "a very long first message that would push the project directory off a portrait row", { projectDir: "--other--", cwd: "/repo-other" });
+				// Long label *and* long path: the row's right edge falls inside the
+				// directory unless both are bounded against the portrait width.
+				writeFixtureSession(root, "2026-07-02T21-00-00-000Z_other.jsonl", "other", "2026-07-02T21:00:00.000Z", "a very long first message that would push the project directory off a portrait row", { projectDir: "--other--", cwd: "/Volumes/SumoDeus NVMe/code/sumocode" });
 
 				const { actions, inlineSelectors } = setup({ sessionFile: currentFile });
 
@@ -1189,9 +1190,12 @@ describe("RpcHostActions", () => {
 				inlineSelectors.handleInput(SELECTOR_TAB);
 
 				// The directory is the only thing telling two identically titled
-				// sessions from different projects apart, so it has to survive the
-				// label rather than being pushed past the row's right edge.
-				expect(inlineSelectorText(inlineSelectors, 60)).toContain("/repo-other");
+				// sessions from different projects apart, so its last segment has to
+				// survive the label rather than being pushed past the row's right edge.
+				const portrait = inlineSelectorText(inlineSelectors, 60);
+
+				expect(portrait).toContain("code/sumocode");
+				expect(portrait).not.toContain("SumoDeus NVMe/cod\n");
 
 				inlineSelectors.handleInput(SELECTOR_ESCAPE);
 				await resumePromise;

@@ -662,7 +662,6 @@ async function renameAccount(ctx: ExtensionCommandContext, account: ClaudeAccoun
 		entry.index === account.subscription?.index ? { ...entry, label: label.trim() } : entry,
 	);
 	saveClaudeSubscriptions(subscriptions, deps);
-	deps.refreshAccountStatus?.(ctx);
 	ctx.ui.notify(`Renamed ${account.providerId} to ${label.trim()}`, "info");
 }
 
@@ -726,7 +725,13 @@ export async function executeAccountsCommand(pi: ExtensionAPI, ctx: ExtensionCom
 		return;
 	}
 	const account = accountList[rows.indexOf(selected ?? "")];
-	if (account) await accountActions(pi, ctx, account, deps);
+	if (!account) return;
+	await accountActions(pi, ctx, account, deps);
+	// A rename or a stored credential changes the account the footer resolves
+	// while the command runs no agent turn — Pi executes an extension command
+	// inside `prompt()` and returns before the agent loop — so no `agent_end`
+	// follows to repaint it.
+	deps.refreshAccountStatus?.(ctx);
 }
 
 export function registerAccountsCommand(pi: ExtensionAPI, deps: AccountsCommandDeps = {}): void {

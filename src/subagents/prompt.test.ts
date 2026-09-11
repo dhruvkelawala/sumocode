@@ -79,11 +79,10 @@ describe("subagent prompt guidance", () => {
 		expect(guidance).toContain("research → inherit (shared checkout)");
 	});
 
-	it("scopes the no-respawn rule to the child's effective toolset", () => {
+	it("keeps the model guarantee for the child's own work", () => {
 		const guidance = guidanceText();
-		expect(guidance).toContain("headless children and tool-narrowed visible children cannot spawn");
-		expect(guidance).toContain("its visible child keeps the subagent tools and can delegate again");
 		expect(guidance).toContain("the child's model IS the implementer's model");
+		expect(guidance).toContain("do not assume your own model or a reviewer will write the code");
 		expect(guidance).toContain("an explicit `worktree:false` plus `working_dir` overrides a role's worktree default");
 	});
 

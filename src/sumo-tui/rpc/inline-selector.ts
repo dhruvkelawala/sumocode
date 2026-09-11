@@ -83,6 +83,16 @@ const INLINE_SELECTOR_TABBED_HINT_ROW = "↑↓ choose    ⇥ tab    ⏎ select 
 /** Maximum rows the inline selector list shows before scrolling (mirrors Pi's own selector components). */
 const DEFAULT_MAX_VISIBLE = 8;
 
+/** Minimum gap between the label and the right-aligned description column. */
+const ROW_MIN_GAP = 2;
+/**
+ * Right margin the description column keeps from the panel edge. Both the
+ * label budget and the padding use it, so a row whose label had to yield ends
+ * its description in the same column as one whose label fit -- otherwise the
+ * identifier/age column would drift by this margin row to row.
+ */
+const ROW_RIGHT_MARGIN = 5;
+
 /**
  * A selectable row. `value` is what resolves the selector; `label` is the
  * primary display text (defaults to `value` when omitted at call sites that
@@ -102,6 +112,12 @@ export interface InlineSelectorItem {
 export interface InlineSelectorTab {
 	readonly id: string;
 	readonly label: string;
+	/**
+	 * Label used instead of `label` when the whole tab strip does not fit the
+	 * render width. The strip must yield a label before it clips one: its badges
+	 * are the row counts the tabs exist to report.
+	 */
+	readonly narrowLabel?: string;
 	readonly options: readonly (string | InlineSelectorItem)[];
 }
 
@@ -115,6 +131,7 @@ type NormalizedItem = {
 type NormalizedTab = {
 	readonly id: string;
 	readonly label: string;
+	readonly narrowLabel: string | undefined;
 	readonly items: NormalizedItem[];
 };
 
@@ -144,10 +161,11 @@ function normalizeItems(options: readonly (string | InlineSelectorItem)[]): Norm
 }
 
 function normalizeTabs(options: readonly (string | InlineSelectorItem)[], tabs?: readonly InlineSelectorTab[]): NormalizedTab[] {
-	if (!tabs || tabs.length === 0) return [{ id: "default", label: "", items: normalizeItems(options) }];
+	if (!tabs || tabs.length === 0) return [{ id: "default", label: "", narrowLabel: undefined, items: normalizeItems(options) }];
 	return tabs.map((tab) => ({
 		id: tab.id,
 		label: tab.label,
+		narrowLabel: tab.narrowLabel,
 		items: normalizeItems(tab.options),
 	}));
 }
@@ -288,7 +306,7 @@ export class InlineSelectorComponent implements Component {
 		lines.push(wrapPanelRow(splitRule(w), w));
 		lines.push(wrapPanelRow("", w));
 		if (this.tabs.length > 1) {
-			lines.push(wrapPanelRow(center(this.renderTabs(), w), w));
+			lines.push(wrapPanelRow(center(this.renderTabs(w), w), w));
 			lines.push(wrapPanelRow("", w));
 		}
 		lines.push(wrapPanelRow(this.renderSearchRow(), w));
@@ -318,10 +336,19 @@ export class InlineSelectorComponent implements Component {
 		return lines;
 	}
 
-	private renderTabs(): string {
+	private renderTabs(width: number): string {
+		const full = this.renderTabLabels(false);
+		// A strip that would not fit yields each tab's narrow label instead of
+		// letting `center`/`fitLine` clip the right edge -- what hangs off that
+		// edge is the last tab's row-count badge.
+		return visibleWidth(full) <= width ? full : this.renderTabLabels(true);
+	}
+
+	private renderTabLabels(narrow: boolean): string {
 		const colors = activeThemeColors();
 		return this.tabs.map((tab, index) => {
-			const label = `${tab.label.toUpperCase()} ${tab.items.length}`;
+			const base = narrow ? tab.narrowLabel ?? tab.label : tab.label;
+			const label = `${base.toUpperCase()} ${tab.items.length}`;
 			return index === this.activeTabIndex
 				? fg(`◆ ${label}`, colors.accent)
 				: fg(`◇ ${label}`, colors.foregroundDim);
@@ -349,15 +376,30 @@ export class InlineSelectorComponent implements Component {
 		const colors = activeThemeColors();
 		const marker = focused ? fg(FOCUSED_MARK, colors.accent) : fg(UNFOCUSED_MARK, colors.divider);
 		const tag = currentTag(item.isCurrent);
-		const label = focused ? fg(item.label, colors.foreground) : fg(item.label, colors.foregroundDim);
-		const left = `     ${marker}   ${tag}${label}`;
+		const labelColor = focused ? colors.foreground : colors.foregroundDim;
+		const prefix = `     ${marker}   ${tag}`;
+		const prefixWidth = visibleLength(prefix);
+		// The description is laid out after the label, so at narrow widths an
+		// unbounded label pushes the row's identifier block (id, count, age --
+		// and the project directory in the all-sessions scope) past the row's
+		// right edge. `width` is the real render width, so the label yields to
+		// what the description actually needs instead of to a fixed budget that
+		// cannot fit a 60-column portrait row.
+		let labelText = item.label;
+		let labelWidth = visibleWidth(labelText);
+		if (item.description.length > 0) {
+			const labelBudget = width - prefixWidth - ROW_MIN_GAP - visibleWidth(item.description) - ROW_RIGHT_MARGIN;
+			if (labelBudget < labelWidth) {
+				labelText = truncateToWidth(labelText, Math.max(1, labelBudget), "…");
+				labelWidth = visibleWidth(labelText);
+			}
+		}
+		const left = `${prefix}${fg(labelText, labelColor)}`;
 
 		if (item.description.length === 0) return left;
 
-		const valueText = focused ? fg(item.description, colors.foreground) : fg(item.description, colors.foregroundDim);
-		const leftWidth = visibleLength(left);
-		const valueWidth = visibleWidth(item.description);
-		const padBetween = Math.max(2, width - leftWidth - valueWidth - 5);
+		const valueText = fg(item.description, labelColor);
+		const padBetween = Math.max(ROW_MIN_GAP, width - prefixWidth - labelWidth - visibleWidth(item.description) - ROW_RIGHT_MARGIN);
 		return `${left}${" ".repeat(padBetween)}${valueText}`;
 	}
 }

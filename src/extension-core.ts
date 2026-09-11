@@ -7,7 +7,7 @@ import { installAnswerTool } from "./answer-tool.js";
 import { installBackgroundTasks, installTerminalTools } from "./background-tasks/index.js";
 import type { TerminalTaskManagerOptions } from "./background-tasks/task-manager.js";
 import { loadClaudeSubscriptions, registerAccountsCommand } from "./commands/accounts.js";
-import { installClaudeAccountStatus } from "./claude-account-status-publication.js";
+import { installClaudeAccountStatus, publishClaudeAccountStatus } from "./claude-account-status-publication.js";
 import { claudeAccountProviderId } from "./config/claude-providers.js";
 import { registerSumoReloadCommand } from "./commands/reload.js";
 import { registerRolesCommand } from "./commands/roles.js";
@@ -180,6 +180,10 @@ export function installRpcChildProfile(pi: ExtensionAPI): void {
 	installTaskModeAutoExit(pi);
 	registerSumoReloadCommand(pi);
 	registerRolesCommand(pi);
-	registerAccountsCommand(pi);
+	// `/accounts` renames a label and returns without an agent turn, so the host
+	// footer would keep painting the old one; repaint from the command itself.
+	registerAccountsCommand(pi, {
+		refreshAccountStatus: (ctx) => publishClaudeAccountStatus(ctx, { subscriptionLabel: claudeAccountSubscriptionLabel }),
+	});
 	installSumoInteractions(pi, { subagentManager, installUiSurfaces: false });
 }

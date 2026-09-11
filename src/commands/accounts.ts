@@ -76,6 +76,8 @@ export interface AccountsCommandDeps {
 	readonly installAdapter?: () => Promise<void>;
 	readonly login?: (providerId: string, ctx: ExtensionCommandContext) => Promise<void>;
 	readonly reload?: (ctx: ExtensionCommandContext) => Promise<void>;
+	/** Repaint the account chrome after a label change; a rename runs no agent turn. */
+	readonly refreshAccountStatus?: (ctx: ExtensionCommandContext) => void;
 	/** Session-local providers whose config was written after registry startup. */
 	readonly pendingReloadProviders?: Set<string>;
 	/** Token-flow seams; tests inject them so no spawn, fetch, or Pi runtime is needed. */
@@ -660,6 +662,7 @@ async function renameAccount(ctx: ExtensionCommandContext, account: ClaudeAccoun
 		entry.index === account.subscription?.index ? { ...entry, label: label.trim() } : entry,
 	);
 	saveClaudeSubscriptions(subscriptions, deps);
+	deps.refreshAccountStatus?.(ctx);
 	ctx.ui.notify(`Renamed ${account.providerId} to ${label.trim()}`, "info");
 }
 

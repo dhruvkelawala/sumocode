@@ -1,5 +1,6 @@
 import { SUBAGENT_MAX_RUNNING, type SubagentStatus } from "./domain.js";
 import type { CompletionManifestEvidence } from "./manifest.js";
+import type { SubagentRole } from "./roles.js";
 
 const RESULT_OUTPUT_MAX_CHARS = 24 * 1024;
 const RESULT_OUTPUT_MAX_LINES = 600;
@@ -50,22 +51,31 @@ export function buildSubagentResultMessage(input: SubagentResultMessageInput): s
 	return lines.join("\n\n");
 }
 
-export const SUBAGENT_PROMPT_GUIDELINES = [
-	"Use subagent_spawn for independent research, review, or implementation slices that can proceed while you keep working.",
-	"Use visible subagents for long or interactive work the human may want to watch or steer; use headless subagents for silent, bounded fan-out.",
-	"All children have their own context, cannot see this conversation, and cannot spawn subagents; prompts must be self-contained with objective, paths, constraints, expected output, and stop conditions.",
-	"Use subagent_send to steer a running visible child; success means the child runtime consumed the control and synchronously submitted it to Pi, and Pi exposes no post-acceptance acknowledgement. It does not prove the text was delivered as a Pi steering message or accepted into a model turn, and it is not typed into its terminal. Headless or settled children cannot receive input.",
-	"visible children stay open while active and auto-close after 30s of silence; use subagent_close to end one deliberately.",
-	"Visible Herdr children split beside the parent when its tab is available, including worktree-backed children; overflow falls back to subagent tabs/workspaces.",
-	"delegation is fire-and-forget: after spawning, continue other work or end your turn. settled results arrive as automatic follow-up messages that wake you. do NOT call subagent_wait right after subagent_spawn.",
-	"spawn with a role for recurring shapes: research, review, documentor, designer, implement-cheap, implement-smart. the role sets the child's system prompt, tool limits, and defaults; your prompt supplies the concrete objective and stop conditions. read the role list in the spawn tool for per-role defaults — research and review run in the shared checkout; documentor, designer, and the implement roles default to isolated worktrees.",
-	"worktree children branch from committed HEAD — they cannot see the parent's dirty working tree. run checks of uncommitted edits in the parent, not in a worktree child.",
-	"after a worktree child settles, read its completion manifest before acting: +0 commits means nothing to apply; +N commits means review the changed paths, then merge or cherry-pick its sumo/<branch> from the preserved worktree path. worktrees accumulate and are never auto-removed; removing one requires explicit user approval.",
-	"if spawn returns status=queued, the child starts automatically when a slot frees — do not retry, do not wait.",
-	`At most ${SUBAGENT_MAX_RUNNING} subagents can run concurrently. If spawn returns status=at_capacity, the queue is full; cancel something or end your turn and respawn later.`,
-	"To delegate a self-contained coding task, spawn an isolated, watchable child: `subagent_spawn { visible: true, worktree: true, model, baseRef: 'origin/main' }`. It branches `sumo/<slug>` from baseRef, opens beside the parent when possible (otherwise in a Herdr workspace), and returns a completion manifest to review before acting on the result.",
-	"Headless children run WITHOUT the dangerous-command approval gate (same trust model as the native task tool): they cannot prompt the user, so their bash executes directly. Do not delegate destructive commands against the user's checkout; use worktree isolation for write-heavy work. Isolated worktrees are preserved after completion and never auto-removed.",
-];
+/** One line per role: resolved model plus the worktree default the role applies when the spawn omits it. */
+export function formatRoleTable(roles: readonly SubagentRole[]): string {
+	return roles.map((role) => `${role.id} → ${role.model ?? "inherit"}${role.defaultWorktree ? " (worktree)" : " (shared checkout)"}`).join("\n");
+}
+
+export function buildSubagentPromptGuidelines(roles: readonly SubagentRole[]): string[] {
+	return [
+		"Use subagent_spawn for independent research, review, or implementation slices that can proceed while you keep working.",
+		"Use visible subagents for long or interactive work the human may want to watch or steer; use headless subagents for silent, bounded fan-out.",
+		"All children have their own context, cannot see this conversation, and cannot spawn subagents; prompts must be self-contained with objective, paths, constraints, expected output, and stop conditions.",
+		"Use subagent_send to steer a running visible child; success means the child runtime consumed the control and synchronously submitted it to Pi, and Pi exposes no post-acceptance acknowledgement. It does not prove the text was delivered as a Pi steering message or accepted into a model turn, and it is not typed into its terminal. Headless or settled children cannot receive input.",
+		"visible children stay open while active and auto-close after 30s of silence; use subagent_close to end one deliberately.",
+		"Visible Herdr children split beside the parent when its tab is available, including worktree-backed children; overflow falls back to subagent tabs/workspaces.",
+		"delegation is fire-and-forget: after spawning, continue other work or end your turn. settled results arrive as automatic follow-up messages that wake you. do NOT call subagent_wait right after subagent_spawn.",
+		`spawn with a role for recurring shapes: research, review, documentor, designer, implement-cheap, implement-smart. the role sets the child's system prompt, tool limits, and defaults; your prompt supplies the concrete objective and stop conditions. resolved model and worktree default per role:\n${formatRoleTable(roles)}`,
+		"children cannot spawn, so the child's model IS the implementer's model: pick the role whose resolved model you want writing the code; an explicit `model` is the only override.",
+		"an explicit `worktree:false` plus `working_dir` overrides a role's worktree default; omit both to keep the role's default isolation.",
+		"worktree children branch from committed HEAD — they cannot see the parent's dirty working tree. run checks of uncommitted edits in the parent, not in a worktree child.",
+		"after a worktree child settles, read its completion manifest before acting: +0 commits means nothing to apply; +N commits means review the changed paths, then merge or cherry-pick its sumo/<branch> from the preserved worktree path. worktrees accumulate and are never auto-removed; removing one requires explicit user approval.",
+		"if spawn returns status=queued, the child starts automatically when a slot frees — do not retry, do not wait.",
+		`At most ${SUBAGENT_MAX_RUNNING} subagents can run concurrently. If spawn returns status=at_capacity, the queue is full; cancel something or end your turn and respawn later.`,
+		"To delegate a self-contained coding task, spawn an isolated, watchable child: `subagent_spawn { role: \"implement-smart\" | \"implement-cheap\", visible: true, worktree: true, baseRef: 'origin/main' }`. Every coding delegation picks one of the two implement roles. It branches `sumo/<slug>` from baseRef, opens beside the parent when possible (otherwise in a Herdr workspace), and returns a completion manifest to review before acting on the result.",
+		"Headless children run WITHOUT the dangerous-command approval gate (same trust model as the native task tool): they cannot prompt the user, so their bash executes directly. Do not delegate destructive commands against the user's checkout; use worktree isolation for write-heavy work. Isolated worktrees are preserved after completion and never auto-removed.",
+	];
+}
 
 export const SUBAGENT_PROMPT_SNIPPET = "Spawn, steer, check, wait for, cancel, and list headless or visible subagents with self-contained prompts.";
 

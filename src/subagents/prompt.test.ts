@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { SUBAGENT_MAX_RUNNING } from "./domain.js";
 import {
-	SUBAGENT_PROMPT_GUIDELINES,
+	buildSubagentPromptGuidelines,
 	SUBAGENT_PROMPT_SNIPPET,
 	SUBAGENT_TOOL_DESCRIPTIONS,
 } from "./prompt.js";
+import { BUILT_IN_ROLES, loadRoles, type SubagentRole } from "./roles.js";
+
+const guidanceText = (roles: readonly SubagentRole[] = BUILT_IN_ROLES): string => buildSubagentPromptGuidelines(roles).join("\n");
 
 describe("subagent prompt guidance", () => {
 	it("distinguishes visible work from silent headless fan-out", () => {
-		const guidance = SUBAGENT_PROMPT_GUIDELINES.join("\n");
+		const guidance = guidanceText();
 		expect(guidance).toContain("Use visible subagents for long or interactive work");
 		expect(guidance).toContain("use headless subagents for silent, bounded fan-out");
 		expect(guidance).toContain("Visible Herdr children split beside the parent when its tab is available");
@@ -16,7 +19,7 @@ describe("subagent prompt guidance", () => {
 	});
 
 	it("teaches fire-and-forget role delegation and demotes waiting", () => {
-		const guidance = SUBAGENT_PROMPT_GUIDELINES.join("\n");
+		const guidance = guidanceText();
 		expect(guidance).toContain("delegation is fire-and-forget");
 		expect(guidance).toContain("do NOT call subagent_wait right after subagent_spawn");
 		expect(guidance).toContain("research, review, documentor, designer, implement-cheap, implement-smart");
@@ -27,7 +30,7 @@ describe("subagent prompt guidance", () => {
 	});
 
 	it("documents the isolated coding-task recipe with worktree and baseRef", () => {
-		const guidance = SUBAGENT_PROMPT_GUIDELINES.join("\n");
+		const guidance = guidanceText();
 		expect(guidance).toContain("To delegate a self-contained coding task");
 		expect(guidance).toContain("worktree: true");
 		expect(guidance).toContain("baseRef: 'origin/main'");
@@ -35,7 +38,7 @@ describe("subagent prompt guidance", () => {
 	});
 
 	it("documents steering acknowledgement bounds and the close/auto-close lifecycle", () => {
-		const guidance = SUBAGENT_PROMPT_GUIDELINES.join("\n");
+		const guidance = guidanceText();
 		expect(guidance).toContain("Use subagent_send to steer a running visible child");
 		// Bounded success claim: consumption + synchronous submission, nothing more.
 		expect(guidance).toContain("consumed the control and synchronously submitted it to Pi");
@@ -56,15 +59,34 @@ describe("subagent prompt guidance", () => {
 	});
 
 	it("teaches role isolation defaults and the dirty-checkout visibility boundary", () => {
-		const guidance = SUBAGENT_PROMPT_GUIDELINES.join("\n");
-		expect(guidance).toContain("research and review run in the shared checkout");
-		expect(guidance).toContain("documentor, designer, and the implement roles default to isolated worktrees");
+		const guidance = guidanceText();
+		expect(guidance).toContain("research → inherit (shared checkout)");
+		expect(guidance).toContain("implement-smart → inherit (worktree)");
 		expect(guidance).toContain("worktree children branch from committed HEAD");
 		expect(guidance).toContain("run checks of uncommitted edits in the parent, not in a worktree child");
 	});
 
+	it("names one of the two implement roles in every coding delegation", () => {
+		const guidance = guidanceText();
+		expect(guidance).toContain('role: "implement-smart" | "implement-cheap"');
+		expect(guidance).toContain("Every coding delegation picks one of the two implement roles");
+	});
+
+	it("prints the resolved model and worktree default for an overlaid role", () => {
+		const loaded = loadRoles({ readFile: () => JSON.stringify({ roles: [{ id: "implement-smart", model: "openai-codex/gpt-5.6-sol" }] }), env: { PI_CODING_AGENT_DIR: "/agent" } });
+		const guidance = guidanceText(loaded.roles);
+		expect(guidance).toContain("implement-smart → openai-codex/gpt-5.6-sol (worktree)");
+		expect(guidance).toContain("research → inherit (shared checkout)");
+	});
+
+	it("states the no-respawn model rule and the worktree override", () => {
+		const guidance = guidanceText();
+		expect(guidance).toContain("the child's model IS the implementer's model");
+		expect(guidance).toContain("an explicit `worktree:false` plus `working_dir` overrides a role's worktree default");
+	});
+
 	it("teaches how to consume a settled worktree child's manifest", () => {
-		const guidance = SUBAGENT_PROMPT_GUIDELINES.join("\n");
+		const guidance = guidanceText();
 		expect(guidance).toContain("read its completion manifest before acting");
 		expect(guidance).toContain("+0 commits means nothing to apply");
 		expect(guidance).toContain("merge or cherry-pick its sumo/<branch> from the preserved worktree path");

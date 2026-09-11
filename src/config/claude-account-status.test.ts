@@ -26,6 +26,13 @@ describe("claudeAccountLabel", () => {
 		expect(claudeAccountLabel("anthropic-42", "")).toBe("#42");
 		expect(claudeAccountLabel("custom-provider", undefined)).toBe("custom-provider");
 	});
+
+	it("drops control characters a hand-edited label can carry", () => {
+		expect(claudeAccountLabel("anthropic-2", "com\npany")).toBe("company");
+		expect(claudeAccountLabel("anthropic-2", "company\u001b")).toBe("company");
+		expect(claudeAccountLabel("anthropic-2", "company\u009b31m")).toBe("company31m");
+		expect(claudeAccountLabel("anthropic-2", "\u0007")).toBe("#2");
+	});
 });
 
 describe("formatClaudeAccountChip", () => {

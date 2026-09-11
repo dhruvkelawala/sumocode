@@ -76,7 +76,7 @@ export interface AccountsCommandDeps {
 	readonly installAdapter?: () => Promise<void>;
 	readonly login?: (providerId: string, ctx: ExtensionCommandContext) => Promise<void>;
 	readonly reload?: (ctx: ExtensionCommandContext) => Promise<void>;
-	/** Repaint the account chrome after a label change; a rename runs no agent turn. */
+	/** Repaint the account chrome after any account action that can change what the chip resolves; `/accounts` runs no agent turn. */
 	readonly refreshAccountStatus?: (ctx: ExtensionCommandContext) => void;
 	/** Session-local providers whose config was written after registry startup. */
 	readonly pendingReloadProviders?: Set<string>;

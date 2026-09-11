@@ -758,10 +758,34 @@ const parseJsonLine = (line: string): Record<string, unknown> | undefined => {
 	}
 };
 
-const isMessage = (value: unknown): value is Message => {
-	if (!isRecord(value)) return false;
+/**
+ * Validated view of a child message frame: decode narrows role and content,
+ * while every other frame field stays unknown here and is bounded by retention
+ * before it reaches a retained Message.
+ */
+type DecodedMessage =
+	| ({ role: "user"; content: string | unknown[] } & Record<string, unknown>)
+	| ({ role: "assistant" | "toolResult"; content: unknown[] } & Record<string, unknown>);
+
+/**
+ * Validate a child frame's role-specific payload before retention reads role
+ * fields. Returns undefined for non-message frames; a bounded rejection reason
+ * when a known role's content cannot be read. Retention accepts string or array
+ * content for user messages, but only arrays for assistant and toolResult.
+ * Reasons never echo producer data.
+ */
+const decodeMessage = (value: unknown): { message: DecodedMessage } | { rejected: string } | undefined => {
+	if (!isRecord(value)) return undefined;
 	const role = value.role;
-	return role === "assistant" || role === "user" || role === "toolResult";
+	if (role !== "assistant" && role !== "user" && role !== "toolResult") return undefined;
+	const content = value.content;
+	if (role === "user" && (typeof content === "string" || Array.isArray(content))) {
+		return { message: { ...value, role, content } };
+	}
+	if (role !== "user" && Array.isArray(content)) {
+		return { message: { ...value, role, content } };
+	}
+	return { rejected: `child message rejected: malformed ${role} content` };
 };
 
 const applyAssistantUsage = (result: SingleResult, message: AssistantMessage): void => {
@@ -877,7 +901,7 @@ const retainMultimodalContent = (
 	return content;
 };
 
-const handleEventMessage = (result: SingleResult, message: Message, liveOmitted = false): void => {
+const handleEventMessage = (result: SingleResult, message: DecodedMessage, liveOmitted = false): void => {
 	const budget = getRunPayloadBudget(result);
 	if (message.role === "user") {
 		const rawContent: unknown = message.content;
@@ -1169,7 +1193,10 @@ const runSingleTask = async (options: {
 
 			const abortState = attachAbortSignal(proc, options.signal);
 
+			let settled = false;
+			let protocolFailed = false;
 			const processLine = (line: string) => {
+				if (protocolFailed) return;
 				const event = parseJsonLine(line);
 				if (!event) return;
 				const typeValue = event.type;
@@ -1214,19 +1241,27 @@ const runSingleTask = async (options: {
 					emitUpdate();
 				}
 				const messageValue = event.message;
-				if ((typeText === "message_end" || typeText === "tool_result_end") && isMessage(messageValue)) {
-					let liveOmitted = false;
-					if (messageValue.role === "assistant") {
-						liveOmitted = getRunPayloadBudget(currentResult).releaseLive();
-						currentResult.streamingText = undefined;
+				if (typeText === "message_end" || typeText === "tool_result_end") {
+					const decoded = decodeMessage(messageValue);
+					if (decoded && "rejected" in decoded) {
+						protocolFailed = true;
+						currentResult.errorMessage = decoded.rejected;
+						// TERM starts shutdown; close remains the terminal boundary while the child exists.
+						abortState.terminate();
+						return;
 					}
-					handleEventMessage(currentResult, messageValue, liveOmitted);
-					emitUpdate();
+					if (decoded) {
+						let liveOmitted = false;
+						if (decoded.message.role === "assistant") {
+							liveOmitted = getRunPayloadBudget(currentResult).releaseLive();
+							currentResult.streamingText = undefined;
+						}
+						handleEventMessage(currentResult, decoded.message, liveOmitted);
+						emitUpdate();
+					}
 				}
 			};
 
-			let settled = false;
-			let protocolFailed = false;
 			const stdout = new JsonLineDecoder({
 				onLine: processLine,
 				onError: (error) => {

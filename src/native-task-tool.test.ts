@@ -44,7 +44,7 @@ type RetainedTaskResult = {
 	toolEvents?: Array<{ id?: string; name?: string; args?: object | string; status: string; output?: string }>;
 	stderr?: string;
 	streamingText?: string;
-	usage?: { turns: number };
+	usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: number; contextTokens?: number; turns?: number };
 };
 
 interface TaskUpdate {
@@ -718,6 +718,171 @@ describe("native task tool", () => {
 		const toolResult = await running;
 		expect(toolResult.content[0]?.text).toContain("safe final");
 		expect(toolResult.details?.results?.[0]?.messages?.[0]?.content).toMatchObject([{ type: "image", data: "" }]);
+	});
+
+	it("rejects malformed user message content before retention accounting", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		const sentinel = "USER-SENTINEL-PAYLOAD";
+
+		expect(() => emitTaskEvent(proc, {
+			type: "message_end",
+			message: { role: "user", content: { sentinel } },
+		})).not.toThrow();
+		proc.emit("close", null, "SIGTERM");
+
+		const result = await running;
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain("malformed user content");
+		expect(JSON.stringify(result)).not.toContain(sentinel);
+	});
+
+	it("rejects malformed toolResult message content before retention accounting", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		const sentinel = "TOOL-SENTINEL-PAYLOAD";
+
+		expect(() => emitTaskEvent(proc, {
+			type: "tool_result_end",
+			message: { role: "toolResult", toolCallId: sentinel, toolName: sentinel },
+		})).not.toThrow();
+		proc.emit("close", null, "SIGTERM");
+
+		const result = await running;
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain("malformed toolResult content");
+		expect(JSON.stringify(result)).not.toContain(sentinel);
+	});
+
+	it("rejects malformed assistant message content before retention accounting", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		const sentinel = "ASSISTANT-SENTINEL-PAYLOAD";
+
+		expect(() => emitTaskEvent(proc, {
+			type: "message_end",
+			message: { role: "assistant", content: { sentinel }, usage: {} },
+		})).not.toThrow();
+		proc.emit("close", null, "SIGTERM");
+
+		const result = await running;
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain("malformed assistant content");
+		expect(JSON.stringify(result)).not.toContain(sentinel);
+	});
+
+	it("rejects string toolResult message content before retention accounting", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		const sentinel = "TOOL-STRING-SENTINEL-PAYLOAD";
+
+		expect(() => emitTaskEvent(proc, {
+			type: "tool_result_end",
+			message: { role: "toolResult", toolCallId: "t1", toolName: "read", content: sentinel },
+		})).not.toThrow();
+		proc.emit("close", null, "SIGTERM");
+
+		const result = await running;
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain("malformed toolResult content");
+		expect(JSON.stringify(result)).not.toContain(sentinel);
+	});
+
+	it("rejects string assistant message content before retention accounting", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+		const sentinel = "ASSISTANT-STRING-SENTINEL-PAYLOAD";
+
+		expect(() => emitTaskEvent(proc, {
+			type: "message_end",
+			message: { role: "assistant", content: sentinel, usage: {} },
+		})).not.toThrow();
+		proc.emit("close", null, "SIGTERM");
+
+		const result = await running;
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain("malformed assistant content");
+		expect(JSON.stringify(result)).not.toContain(sentinel);
+	});
+
+	it("accepts each role's valid content shape", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+
+		emitTaskEvent(proc, { type: "message_end", message: { role: "user", content: "plain user string" } });
+		emitTaskEvent(proc, { type: "message_end", message: { role: "user", content: [{ type: "text", text: "typed user array" }] } });
+		emitTaskEvent(proc, { type: "tool_result_end", message: { role: "toolResult", toolCallId: "t1", toolName: "read", content: [{ type: "text", text: "tool text" }] } });
+		emitTaskEvent(proc, { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "assistant text" }], usage: {} } });
+		proc.emit("close", 0);
+
+		const toolResult = await running;
+		const result = toolResult.details?.results?.[0];
+		if (!result) throw new Error("task result is missing");
+		expect(toolResult.isError).toBeUndefined();
+		expect(result.messages?.map((message) => message.role)).toEqual(["user", "user", "toolResult", "assistant"]);
+		expect(result.messages?.[0]?.content).toBe("plain user string");
+	});
+
+	it("bounds malformed-message diagnostics and settles the child run exactly once", async () => {
+		const proc = new FakeTaskProcess();
+		const task = registeredTask(proc);
+		const running = task.execute();
+		const sentinel = "BOUNDED-SENTINEL";
+		const payload = `${sentinel}${"x".repeat(CHILD_RETAINED_RESULT_MAX_BYTES)}`;
+
+		expect(() => emitTaskEvent(proc, {
+			type: "message_end",
+			message: { role: "assistant", content: { payload }, usage: {} },
+		})).not.toThrow();
+		// Frames after the protocol failure must neither re-settle the run nor leak.
+		expect(() => emitTaskEvent(proc, { type: "message_end", message: { role: "user", content: payload } })).not.toThrow();
+		proc.emit("close", null, "SIGTERM");
+		proc.emit("close", 0);
+		proc.emit("error", new Error("late child error"));
+
+		const result = await running;
+		expect(result.isError).toBe(true);
+		expect(proc.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+		expect(proc.stdout.listenerCount("data")).toBe(0);
+		expect(result.content[0]?.text).toContain("malformed assistant content");
+		expect(result.content[0]?.text).not.toContain(sentinel);
+		expect(JSON.stringify(result)).not.toContain(sentinel);
+		expect(Buffer.byteLength(result.content[0]?.text ?? "", "utf8")).toBeLessThan(4096);
+	});
+
+	it("keeps valid role-specific message semantics and the aggregate byte cap", async () => {
+		const proc = new FakeTaskProcess();
+		const running = registeredTask(proc).execute();
+
+		emitTaskEvent(proc, { type: "message_end", message: { role: "user", content: "u".repeat(2 * 1024 * 1024) } });
+		emitTaskEvent(proc, {
+			type: "tool_result_end",
+			message: { role: "toolResult", toolCallId: "t1", toolName: "read", content: [{ type: "text", text: "t".repeat(2 * 1024 * 1024) }] },
+		});
+		emitTaskEvent(proc, {
+			type: "message_end",
+			message: {
+				role: "assistant",
+				content: [{ type: "text", text: "FINAL-VALID" }],
+				usage: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, totalTokens: 10, cost: { total: 0.5 } },
+			},
+		});
+		proc.emit("close", 0);
+
+		const result = await running;
+		expect(result.isError).toBeUndefined();
+		const detail = result.details?.results?.[0];
+		if (!detail) throw new Error("task result is missing");
+		expect(detail.exitCode).toBe(0);
+		expect(detail.messages?.map((message) => message.role)).toEqual(["user", "toolResult", "assistant"]);
+		const retained = retainedPayloadText(detail).join("");
+		expect(retained).toContain("FINAL-VALID");
+		expect(retained.split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
+		expect(Buffer.byteLength(retained, "utf8")).toBeLessThanOrEqual(CHILD_RETAINED_RESULT_MAX_BYTES);
+		expect(result.content[0]?.text).toContain("FINAL-VALID");
+		expect(detail.usage?.turns).toBe(1);
+		expect(detail.usage?.contextTokens).toBe(10);
+		expect(detail.usage?.cost).toBeCloseTo(0.5);
 	});
 
 	it("caps producer-controlled structural metadata", async () => {

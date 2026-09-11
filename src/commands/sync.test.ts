@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -579,6 +580,38 @@ describe("/sumo:sync", () => {
 		expect(calls).toEqual([{ file: "git", cwd: "/config" }]);
 		expect(context.ui.notify).toHaveBeenLastCalledWith("/sumo:sync failed at config symlinks", "warning");
 		expect(stdout).not.toHaveBeenCalled();
+		stdout.mockRestore();
+	});
+
+	it("streams a noisy step's output instead of dying at execFile's maxBuffer", async () => {
+		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		// The fake child carries only the stdout/stderr/close members the streamed runner reads.
+		const spawn = vi.fn(() => {
+			const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter() });
+			queueMicrotask(() => {
+				child.stdout.emit("data", "a".repeat(2 * 1024 * 1024));
+				child.stdout.emit("data", "TAIL-MARKER");
+				child.emit("close", 0, null);
+			});
+			return child;
+		});
+		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
+		const results = await executeSumoSync(ctx() as never, {
+			env: { SUMOCODE_CONFIG_DIR: "/config" },
+			cwd: "/repo/sumocode",
+			moduleUrl: "file:///repo/sumocode/src/commands/sync.ts",
+			exists: (path) => path === "/config/.git" || sumocodeRepoExists(path),
+			readFile: () => JSON.stringify({ name: "@dhruvkelawala/sumocode" }),
+			linkConfig: () => ({ label: "config symlinks", ok: true, output: "linked" }),
+			spawn,
+		});
+
+		expect(results.map((step) => step.ok)).toEqual([true, true, true]);
+		const output = results[0]?.output ?? "";
+		expect(output.length).toBeLessThan(128 * 1024);
+		expect(output).toContain("truncated");
+		expect(output.endsWith("TAIL-MARKER")).toBe(true);
+		expect(spawn).toHaveBeenCalledTimes(2);
 		stdout.mockRestore();
 	});
 });

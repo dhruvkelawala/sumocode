@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { TERMINAL_CLEANUP_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-controller.js";
-import { PI_BOOT_SEQUENCE, replayScreenRows, spawnPiPty, spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { PI_BOOT_SEQUENCE, replayScreenRows, spawnPiPty, spawnSumocodePty, waitForScreenText, type SpawnedPiPty } from "./spawn-pi-pty.js";
 import { createRpcChildFixture } from "./rpc-child-fixture.js";
 import { hostOutputsHash } from "../../scripts/lib/host-bundle.mjs";
 
@@ -340,8 +340,8 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		});
 
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
-		await app.waitForOutput("DIVINE INVOCATION", 15_000);
-		await app.waitForOutput(/CTRL\+\/[\s\S]*COMMANDS/, 15_000);
+		await waitForScreenText(app, "DIVINE INVOCATION", 15_000);
+		await waitForScreenText(app, /CTRL\+\/[\s\S]*COMMANDS/, 15_000);
 	}
 
 	it.each([
@@ -381,7 +381,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		});
 
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
-		await app.waitForOutput("DIVINE INVOCATION", 15_000);
+		await waitForScreenText(app, "DIVINE INVOCATION", 15_000);
 		expect(app.getOutput()).not.toContain("extension bundle failed to import");
 	}, 30_000);
 
@@ -397,8 +397,8 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		});
 
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
-		await app.waitForOutput("DIVINE INVOCATION", 15_000);
-		await app.waitForOutput(/CTRL\+[\s\S]*COMMANDS/, 15_000);
+		await waitForScreenText(app, "DIVINE INVOCATION", 15_000);
+		await waitForScreenText(app, /CTRL\+[\s\S]*COMMANDS/, 15_000);
 	}, 30_000);
 
 	it("does not print stale-bundle diagnostics over a retained reload frame", async () => {
@@ -418,7 +418,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 				cols: 100,
 				rows: 30,
 			});
-			await app.waitForOutput("DIVINE INVOCATION", 15_000);
+			await waitForScreenText(app, "DIVINE INVOCATION", 15_000);
 			expect(app.getOutput()).not.toContain("host bundle stale — using source");
 		} finally {
 			await writeFile(helperPath, original);
@@ -519,13 +519,13 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 
 		// The splash editor accepts input before hydration completes; wait for it so
 		// the child stdin is reading, then act inside the 2.5s hydration window.
-		await app.waitForOutput(/CTRL\+\/[\s\S]*COMMANDS/, 15_000);
+		await waitForScreenText(app, /CTRL\+\/[\s\S]*COMMANDS/, 15_000);
 		// Cycle the model (Ctrl+P, kitty encoding) then submit a prompt. The submit
 		// must wait for the deferred cycle's set_model to apply.
 		app.sendInput("\x1b[112;5u");
 		await delay(50);
 		app.sendInput(`hello world${CSI_U_ENTER}`);
-		await app.waitForOutput("fixture response complete: hello world", 15_000);
+		await waitForScreenText(app, "fixture response complete: hello world", 15_000);
 
 		// SAFETY: the fixture RPC command log is JSONL; every frame carries the
 		// type field and optionally the provider/modelId/message fields asserted below.
@@ -544,14 +544,14 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		app = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: 100, rows: 30 });
 
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
-		await app.waitForOutput("DIVINE INVOCATION", 15_000);
-		await app.waitForOutput(/CTRL\+\/[\s\S]*COMMANDS/, 15_000);
+		await waitForScreenText(app, "DIVINE INVOCATION", 15_000);
+		await waitForScreenText(app, /CTRL\+\/[\s\S]*COMMANDS/, 15_000);
 		await delay(250);
 
-		const output = app.getOutput();
-		expect(output).not.toContain("SUMOCODE RPC");
-		expect(output).not.toContain("empty transcript");
-		expect(output).not.toContain("rpc host");
+		const screen = (await replayScreenRows(app.getOutput(), 100, 30)).join("\n");
+		expect(screen).not.toContain("SUMOCODE RPC");
+		expect(screen).not.toContain("empty transcript");
+		expect(screen).not.toContain("rpc host");
 
 		const activeState = app.getCurrentTerminalState();
 		expect(activeState.altscreenActive).toBe(true);
@@ -578,14 +578,14 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		});
 
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
-		await app.waitForOutput("DIVINE INVOCATION", 15_000);
-		await app.waitForOutput(/CTRL\+\/[\s\S]*COMMANDS/, 15_000);
+		await waitForScreenText(app, "DIVINE INVOCATION", 15_000);
+		await waitForScreenText(app, /CTRL\+\/[\s\S]*COMMANDS/, 15_000);
 		await delay(250);
 
-		const output = app.getOutput();
-		expect(output).not.toContain("SUMOCODE RPC");
-		expect(output).not.toContain("empty transcript");
-		expect(output).not.toContain("rpc host");
+		const screen = (await replayScreenRows(app.getOutput(), 100, 30)).join("\n");
+		expect(screen).not.toContain("SUMOCODE RPC");
+		expect(screen).not.toContain("empty transcript");
+		expect(screen).not.toContain("rpc host");
 
 		const activeState = app.getCurrentTerminalState();
 		expect(activeState.altscreenActive).toBe(true);
@@ -866,7 +866,7 @@ setInterval(() => {}, 1000);
 		});
 
 		await waitForFileText(gitStartedFile, "started", 1_000);
-		await app.waitForOutput("initial race completed", 5_000);
+		await waitForScreenText(app, "initial race completed", 5_000);
 		await expect(readFile(gitFinishedFile, "utf8")).rejects.toThrow();
 		await waitForFileText(gitFinishedFile, "finished", 1_000);
 		app.sendSignal("SIGTERM");
@@ -918,7 +918,7 @@ setInterval(() => {}, 1000);
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
 		app.sendInput("\u001f");
 		app.sendInput("\u000c");
-		await app.waitForOutput("initial race completed", 5_000);
+		await waitForScreenText(app, "initial race completed", 5_000);
 		await delay(250);
 		expect(app.getOutput()).not.toContain("host controls");
 		app.sendSignal("SIGTERM");
@@ -931,7 +931,7 @@ setInterval(() => {}, 1000);
 
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
 		app.sendInput("hello");
-		await app.waitForOutput("hello", 2_000);
+		await waitForScreenText(app, "hello", 2_000);
 
 		// This test owns only the early-input contract. Ctrl-C has separate
 		// draft-clearing semantics (first press clears non-empty input), so using
@@ -946,10 +946,10 @@ setInterval(() => {}, 1000);
 		app = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: 100, rows: 30 });
 
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
-		await app.waitForOutput("DIVINE INVOCATION", 15_000);
-		await app.waitForOutput(/CTRL\+\/[\s\S]*COMMANDS/, 15_000);
+		await waitForScreenText(app, "DIVINE INVOCATION", 15_000);
+		await waitForScreenText(app, /CTRL\+\/[\s\S]*COMMANDS/, 15_000);
 		app.sendInput("\u001f");
 
-		await app.waitForOutput("host controls", 10_000);
+		await waitForScreenText(app, "host controls", 10_000);
 	}, 30_000);
 });

@@ -2,7 +2,7 @@ import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { spawnSumocodePty, waitForScreen, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { spawnSumocodePty, waitForScreen, waitForScreenText, type SpawnedPiPty } from "./spawn-pi-pty.js";
 import { createRpcChildFixture } from "./rpc-child-fixture.js";
 
 const CSI_U_ENTER = "\x1b[13u";
@@ -243,7 +243,7 @@ describe("RPC queued message undo", () => {
 		app = await bootRpcHost("sumocode-rpc-queue-agent-", piBin, logPath);
 
 		app.sendInput(`prompt A${CSI_U_ENTER}`);
-		await app.waitForOutput("MEDITATING", 5_000);
+		await waitForScreenText(app, "MEDITATING", 5_000);
 		app.sendInput(`prompt B${CSI_U_ENTER}`);
 		await waitForScreen(
 			app,
@@ -275,8 +275,8 @@ describe("RPC queued message undo", () => {
 		prompts = await readPromptCommands(logPath);
 		expect(prompts.map((command) => command.message)).toEqual(["prompt A"]);
 
-		await app.waitForOutput("fixture response complete: prompt A", 5_000);
-		await app.waitForOutput("fixture response complete: prompt B edited", 5_000);
+		await waitForScreenText(app, "fixture response complete: prompt A", 5_000);
+		await waitForScreenText(app, "fixture response complete: prompt B edited", 5_000);
 		prompts = await readPromptCommands(logPath);
 		expect(prompts.map((command) => command.message)).toEqual(["prompt A", "prompt B edited"]);
 		expect(prompts.some((command) => "streamingBehavior" in command)).toBe(false);
@@ -292,7 +292,7 @@ describe("RPC queued message undo", () => {
 		app = await bootRpcHost("sumocode-rpc-force-queue-agent-", piBin, logPath);
 
 		app.sendInput(`prompt A${CSI_U_ENTER}`);
-		await app.waitForOutput("MEDITATING", 5_000);
+		await waitForScreenText(app, "MEDITATING", 5_000);
 		app.sendInput(`prompt B${CSI_U_ENTER}`);
 		app.sendInput(`prompt C${CSI_U_ENTER}`);
 		await waitForScreen(
@@ -324,7 +324,7 @@ describe("RPC queued message undo", () => {
 			{ cols: COLS, rows: ROWS, timeoutMs: 5_000 },
 		);
 
-		await app.waitForOutput("fixture response complete: prompt A", 5_000);
+		await waitForScreenText(app, "fixture response complete: prompt A", 5_000);
 		prompts = await readPromptCommands(logPath);
 		expect(prompts.map((command) => command.message)).toEqual(["prompt A", "prompt B"]);
 	}, 30_000);
@@ -339,7 +339,7 @@ describe("RPC queued message undo", () => {
 		app = await bootRpcHost("sumocode-rpc-force-handled-agent-", piBin, logPath);
 
 		app.sendInput(`prompt A${CSI_U_ENTER}`);
-		await app.waitForOutput("MEDITATING", 5_000);
+		await waitForScreenText(app, "MEDITATING", 5_000);
 		app.sendInput(`prompt B${CSI_U_ENTER}`);
 		app.sendInput(`prompt C${CSI_U_ENTER}`);
 		await waitForScreen(
@@ -365,7 +365,7 @@ describe("RPC queued message undo", () => {
 
 		// No queue_update or B lifecycle means Pi's disposition is unclear.
 		// A settling must not cause the host to guess and send C.
-		await app.waitForOutput("fixture response complete: prompt A", 5_000);
+		await waitForScreenText(app, "fixture response complete: prompt A", 5_000);
 		// WAIT-CLASS: negative-observation — A's settle must not drain C. The
 		// causal boundary (A settled) is awaited above; this bounded window covers
 		// the send that must never follow it.
@@ -481,7 +481,7 @@ describe("RPC queued message undo", () => {
 		app = await bootRpcHost("sumocode-rpc-drain-agent-", piBin, logPath);
 
 		app.sendInput(`prompt A${CSI_U_ENTER}`);
-		await app.waitForOutput("MEDITATING", 5_000);
+		await waitForScreenText(app, "MEDITATING", 5_000);
 		app.sendInput(`prompt B${CSI_U_ENTER}`);
 		app.sendInput(`prompt C${CSI_U_ENTER}`);
 		await waitForScreen(
@@ -490,7 +490,7 @@ describe("RPC queued message undo", () => {
 			{ cols: COLS, rows: ROWS, timeoutMs: 5_000 },
 		);
 
-		await app.waitForOutput("fixture response complete: prompt A", 5_000);
+		await waitForScreenText(app, "fixture response complete: prompt A", 5_000);
 		// WAIT-CLASS: negative-observation — agent_end alone must not drain B. The
 		// causal boundary (A's response completed) is awaited above; this window
 		// stays strictly inside the fixture's 700ms settleDelayMs so a drain here
@@ -499,11 +499,11 @@ describe("RPC queued message undo", () => {
 		let prompts = await readPromptCommands(logPath);
 		expect(prompts.map((command) => command.message)).toEqual(["prompt A"]);
 
-		await app.waitForOutput("fixture response complete: prompt B", 5_000);
+		await waitForScreenText(app, "fixture response complete: prompt B", 5_000);
 		prompts = await readPromptCommands(logPath);
 		expect(prompts.map((command) => command.message)).toEqual(["prompt A", "prompt B"]);
 
-		await app.waitForOutput("fixture response complete: prompt C", 5_000);
+		await waitForScreenText(app, "fixture response complete: prompt C", 5_000);
 		prompts = await readPromptCommands(logPath);
 		expect(prompts.map((command) => command.message)).toEqual(["prompt A", "prompt B", "prompt C"]);
 		expect(prompts.some((command) => "streamingBehavior" in command)).toBe(false);
@@ -541,8 +541,8 @@ describe("RPC queued message undo", () => {
 		let prompts = await readPromptCommands(logPath);
 		expect(prompts.map((command) => command.message)).toEqual(["prompt B"]);
 
-		await app.waitForOutput("fixture response complete: prompt B", 6_000);
-		await app.waitForOutput("fixture response complete: prompt C", 6_000);
+		await waitForScreenText(app, "fixture response complete: prompt B", 6_000);
+		await waitForScreenText(app, "fixture response complete: prompt C", 6_000);
 		prompts = await readPromptCommands(logPath);
 		expect(prompts.map((command) => command.message)).toEqual(["prompt B", "prompt C"]);
 		expect(prompts.some((command) => "streamingBehavior" in command)).toBe(false);

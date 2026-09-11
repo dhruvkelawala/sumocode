@@ -3,10 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Editor, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { spawnPiPty, spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { spawnPiPty, spawnSumocodePty, waitForScreenText, type SpawnedPiPty } from "./spawn-pi-pty.js";
 
-// oxlint-disable-next-line no-control-regex -- intentional ESC/control-byte match to strip ANSI in captured output
-const ANSI_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|_[^\x07]*(?:\x07|\x1b\\))/g;
 const BRACKETED_PASTE_ENABLE = "\x1b[?2004h";
 
 const editorTheme: EditorTheme = {
@@ -26,10 +24,6 @@ afterEach(async () => {
 	await app?.cleanupAndWait();
 	app = undefined;
 });
-
-function stripAnsi(text: string): string {
-	return text.replace(ANSI_PATTERN, "").replaceAll("\r", "");
-}
 
 function fakeTui(): TUI {
 	// SAFETY: fake supplies the requestRender/terminal surface Editor reads.
@@ -69,17 +63,16 @@ describe("multiline paste and newline handling", () => {
 		app = spawnPiPty({ cols: 80, rows: 30, env: { PI_CODING_AGENT_DIR: agentDir } });
 
 		await app.waitForOutput(BRACKETED_PASTE_ENABLE, 10_000);
-		await app.waitForOutput("DIVINE INVOCATION", 10_000);
+		await waitForScreenText(app, "DIVINE INVOCATION", 10_000);
 
 		app.sendInput("line one\rline two\rline three");
-		await app.waitForOutput("line three", 5_000);
+		const screen = await waitForScreenText(app, "line three", 5_000);
 
-		const plain = stripAnsi(app.getOutput());
-		expect(plain).toContain("line one");
-		expect(plain).toContain("line two");
-		expect(plain).toContain("line three");
-		expect(plain).not.toContain("Working...");
-		expect(plain).not.toContain("Error:");
+		expect(screen.text).toContain("line one");
+		expect(screen.text).toContain("line two");
+		expect(screen.text).toContain("line three");
+		expect(screen.text).not.toContain("Working...");
+		expect(screen.text).not.toContain("Error:");
 	}, 20_000);
 
 	it("enables bracketed paste in the RPC SumoCode runtime and does not submit pasted newlines", async () => {
@@ -93,18 +86,17 @@ describe("multiline paste and newline handling", () => {
 		});
 
 		await app.waitForOutput(BRACKETED_PASTE_ENABLE, 10_000);
-		await app.waitForOutput("DIVINE INVOCATION", 10_000);
+		await waitForScreenText(app, "DIVINE INVOCATION", 10_000);
 
 		app.sendInput('\x1b[200~echo "a\nb\nc"\x1b[201~');
-		await app.waitForOutput("c\"", 5_000);
+		const screen = await waitForScreenText(app, 'c"', 5_000);
 
 		const output = app.getOutput();
-		const plain = stripAnsi(output);
 		expect(output).toContain(BRACKETED_PASTE_ENABLE);
-		expect(plain).toContain('echo "a');
-		expect(plain).toContain("b");
-		expect(plain).toContain('c"');
-		expect(plain).not.toContain("Error:");
+		expect(screen.text).toContain('echo "a');
+		expect(screen.text).toContain("b");
+		expect(screen.text).toContain('c"');
+		expect(screen.text).not.toContain("Error:");
 		expect(output).not.toContain("\x1b[200~");
 		expect(output).not.toContain("\x1b[201~");
 	}, 20_000);

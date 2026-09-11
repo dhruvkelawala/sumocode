@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { Editor, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { spawnPiPty, spawnSumocodePty, waitForScreenText, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { stripAnsi } from "../../src/sumo-tui/cathedral/ansi.js";
 
 const BRACKETED_PASTE_ENABLE = "\x1b[?2004h";
 
@@ -71,10 +72,11 @@ describe("multiline paste and newline handling", () => {
 		expect(screen.text).toContain("line one");
 		expect(screen.text).toContain("line two");
 		expect(screen.text).toContain("line three");
-		// A submission or failure must be absent from the emitted bytes, not just the
-		// settled frame: painted-then-repainted copy still ships the bug.
-		expect(app.getOutput()).not.toContain("Working...");
-		expect(app.getOutput()).not.toContain("Error:");
+		// A submission or failure must be absent from the whole emitted byte
+		// history, not just the settled frame, and the control sequences have to be
+		// removed first: a repaint can split the literal across frames.
+		expect(stripAnsi(app.getOutput())).not.toContain("Working...");
+		expect(stripAnsi(app.getOutput())).not.toContain("Error:");
 	}, 20_000);
 
 	it("enables bracketed paste in the RPC SumoCode runtime and does not submit pasted newlines", async () => {
@@ -98,7 +100,7 @@ describe("multiline paste and newline handling", () => {
 		expect(screen.text).toContain('echo "a');
 		expect(screen.text).toContain("b");
 		expect(screen.text).toContain('c"');
-		expect(output).not.toContain("Error:");
+		expect(stripAnsi(output)).not.toContain("Error:");
 		expect(output).not.toContain("\x1b[200~");
 		expect(output).not.toContain("\x1b[201~");
 	}, 20_000);

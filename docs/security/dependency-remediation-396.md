@@ -163,7 +163,7 @@ The audit policy's classification rule (see `scripts/check-dependency-audit.mjs`
 The verification owner is the **automated gate**, not a human assignment:
 
 - **Policy module:** `scripts/check-dependency-audit.mjs` — fail-closed CLI. It rejects unclassified, stale, expired, package/fixed-version/upstream/dependency-chain-mismatched, duplicate, local-path, and unremediated high/critical records, and hard-fails on audit errors (registry/network), not just findings (`83231ad6`, `514da877`).
-- **Tests:** `scripts/check-dependency-audit.test.mjs` — 17 cases including multi-chain matching and local-path rejection added by the final commit.
+- **Tests:** `scripts/check-dependency-audit.test.mjs` — 17 cases at `514da877` including multi-chain matching and local-path rejection added by the final commit, 18 at current head with the vitest-floor case (§14).
 - **CI gate:** `.github/workflows/ci.yml`, job `typecheck-and-test`, step `Dependency audit policy` (`node scripts/check-dependency-audit.mjs`) runs after `pnpm install --frozen-lockfile` on every pull request and `main` push. **The audited graph is this repository's own** — the frozen lock with its local overrides applied. CI evidence: run [33907877057](https://github.com/dhruvkelawala/sumocode/actions/runs/33907877057) (head `514da877`, 2026-09-04) logs `dependency audit policy passed; consumer-runtime upstream-blocked: 0; local-development high/critical: 0` and the 17-test focused file green. That log counts high/critical findings in the **local** audit only; with the overridden local graph clean it reports `0`, and it says nothing about any consumer graph. The separate `Pi compatibility` workflow run [33907877078](https://github.com/dhruvkelawala/sumocode/actions/runs/33907877078) on the same head covers the Plan 101 matrix gate for the `0.84.4` floor — a compatibility gate, not a consumer-security gate.
 - **Human-touch fields:** the only owner/expiry fields in the policy schema belong to upstream-blocked records; none exist in the final policy (§9). That means no expiry obligation for this repository's own policy. It does **not** mean the consumer-side finding is resolved: the local policy cannot represent a finding absent from its audited (local) graph — a re-added upstream-blocked record would fail the gate's own stale-record check — so the consumer blocker is recorded here as status only (§9), with no invented owner or expiry. Real consumer-side records with owner/expiry belong to the separately queued consumer-graph gate.
 
@@ -279,7 +279,7 @@ No owner/expiry record is added because the finding is removed from the audited 
 |---|---|---|
 | Live audit | `pnpm audit --json` | exit `0`, **0 findings** (base lock: exit `1`, 2 moderate vitest findings `1193683`/`1193684`) |
 | Policy gate | `node scripts/check-dependency-audit.mjs` | `dependency audit policy passed; consumer-runtime upstream-blocked: 0; local-development high/critical: 0` |
-| Checker tests | `pnpm vitest run scripts/check-dependency-audit.test.mjs` | 17/17 |
+| Checker tests | `pnpm vitest run scripts/check-dependency-audit.test.mjs` | 18/18 (17 at the pre-test re-run, plus the vitest-floor case added by `c7232cfb`) |
 
 ### 14.2 Override review — all six retired as redundant
 

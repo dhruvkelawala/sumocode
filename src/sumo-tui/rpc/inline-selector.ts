@@ -85,6 +85,13 @@ const DEFAULT_MAX_VISIBLE = 8;
 
 /** Minimum gap between the label and the right-aligned description column. */
 const ROW_MIN_GAP = 2;
+/**
+ * Right margin the description column keeps from the panel edge. Both the
+ * label budget and the padding use it, so a row whose label had to yield ends
+ * its description in the same column as one whose label fit -- otherwise the
+ * identifier/age column would drift by this margin row to row.
+ */
+const ROW_RIGHT_MARGIN = 5;
 
 /**
  * A selectable row. `value` is what resolves the selector; `label` is the
@@ -381,7 +388,7 @@ export class InlineSelectorComponent implements Component {
 		let labelText = item.label;
 		let labelWidth = visibleWidth(labelText);
 		if (item.description.length > 0) {
-			const labelBudget = width - prefixWidth - ROW_MIN_GAP - visibleWidth(item.description);
+			const labelBudget = width - prefixWidth - ROW_MIN_GAP - visibleWidth(item.description) - ROW_RIGHT_MARGIN;
 			if (labelBudget < labelWidth) {
 				labelText = truncateToWidth(labelText, Math.max(1, labelBudget), "…");
 				labelWidth = visibleWidth(labelText);
@@ -392,7 +399,7 @@ export class InlineSelectorComponent implements Component {
 		if (item.description.length === 0) return left;
 
 		const valueText = fg(item.description, labelColor);
-		const padBetween = Math.max(ROW_MIN_GAP, width - prefixWidth - labelWidth - visibleWidth(item.description) - 5);
+		const padBetween = Math.max(ROW_MIN_GAP, width - prefixWidth - labelWidth - visibleWidth(item.description) - ROW_RIGHT_MARGIN);
 		return `${left}${" ".repeat(padBetween)}${valueText}`;
 	}
 }

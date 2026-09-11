@@ -235,6 +235,25 @@ describe("InlineSelectorComponent Cathedral styling (plan 037)", () => {
 		expect(PiTui.visibleWidth(stripped)).toBe(60);
 	});
 
+	it("P2: a row whose label had to yield keeps the description column aligned with one whose label fit", () => {
+		const description = "~/code/sumocode · 1a2b3c4d · 12 msgs · 3h";
+		const component = new InlineSelectorComponent("Resume session", [
+			{ value: "/long", label: "a very long session title that cannot fit beside the identifier block", description },
+			{ value: "/short", label: "short title", description },
+		], () => undefined);
+
+		// Wide enough for the short label but not the long one, so the two rows
+		// exercise both sides of the budget.
+		const rows = component.render(70).map((line) => line.replace(/\u001b\[[0-9;]*m/g, ""));
+		const described = rows.filter((line) => line.includes("1a2b3c4d"));
+		expect(described).toHaveLength(2);
+
+		// Both descriptions end in the same column, 5 cells from the panel edge --
+		// a truncated label takes its cut, not the column alignment.
+		for (const row of described) expect(PiTui.visibleWidth(row.trimEnd())).toBe(65);
+		expect(described[0]!.indexOf(description)).toBe(described[1]!.indexOf(description));
+	});
+
 	it("P2: the scroll-overflow indicator picks up the panel background and an explicit dim foreground", () => {
 		const options = Array.from({ length: 10 }, (_, index) => `option-${index}`);
 		const component = new InlineSelectorComponent("Pick", options, () => undefined, 3);

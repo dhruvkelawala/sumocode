@@ -189,5 +189,9 @@ export function installRpcChildProfile(pi: ExtensionAPI): void {
 	registerAccountsCommand(pi, {
 		refreshAccountStatus: (ctx) => publishClaudeAccountStatus(ctx, { subscriptionLabel: claudeAccountSubscriptionLabel }),
 	});
-	installSumoInteractions(pi, { subagentManager, installUiSurfaces: false });
+	installSumoInteractions(pi, {
+		subagentManager,
+		installUiSurfaces: false,
+		refreshAccountStatus: (ctx) => publishClaudeAccountStatus(ctx, { subscriptionLabel: claudeAccountSubscriptionLabel }),
+	});
 }

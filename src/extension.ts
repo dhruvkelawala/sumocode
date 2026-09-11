@@ -26,6 +26,7 @@ import {
 	claudeAccountSubscriptionLabel,
 } from "./extension-core.js";
 import { installFastMode } from "./fast-mode.js";
+import { publishClaudeAccountStatus } from "./claude-account-status-publication.js";
 import { installFooter } from "./footer.js";
 import { installSumoInteractions } from "./interaction-registry.js";
 import { installSumoUiSurfaces } from "./interaction-ui-surfaces.js";
@@ -292,7 +293,11 @@ export default function sumocode(pi: ExtensionAPI): void {
 	registerSumoReloadCommand(pi);
 	registerRolesCommand(pi);
 	registerAccountsCommand(pi);
-	installSumoInteractions(pi, { subagentManager, installUiSurfaces: installSumoUiSurfaces });
+	installSumoInteractions(pi, {
+		subagentManager,
+		installUiSurfaces: installSumoUiSurfaces,
+		refreshAccountStatus: (ctx) => publishClaudeAccountStatus(ctx, { subscriptionLabel: claudeAccountSubscriptionLabel }),
+	});
 	logDiagnostic("extension_activate_end", {
 		taskMode: isTaskMode(),
 		nativeTaskInstalled: shouldInstallNativeTaskTool({ force: process.env.SUMOCODE_NATIVE_TASK }),

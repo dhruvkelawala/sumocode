@@ -2,13 +2,14 @@
  * Which Claude account the session's Claude models resolve to.
  *
  * `/accounts` can only mark an account "in use" while the current model routes
- * through it; on a non-Claude model nothing tells the owner which subscription a
- * Claude-model subagent, role, or task would use. This resolves that account the
- * same way the model ring does — the first enabled, available Claude model wins,
- * base `anthropic` first — so the chrome can show one small, truthful label.
+ * through it, so on a non-Claude model nothing told the owner which subscription
+ * Claude work lands on: the account a Claude model picked without an explicit
+ * provider resolves to. This resolves that account over the same enabled-model
+ * set `/accounts` and the model picker use — base `anthropic` first, then extra
+ * accounts by index — so the chrome can show one small, truthful label.
  *
- * Pure by construction: the caller supplies the registry snapshot, the current
- * provider, and the provider-name lookup, so the footer can memoize one call per
+ * Pure by construction: the caller supplies the reachable models, the current
+ * provider, and the subscription labels, so the footer memoizes one call per
  * session start / model select instead of touching the filesystem per render.
  */
 import type { Api, Model } from "@earendil-works/pi-ai";
@@ -30,8 +31,8 @@ interface ClaudeAccountStatusInputs {
 	/** Models the picker and cycle ring can reach: available, then enabled-filtered. */
 	readonly models: readonly Model<Api>[];
 	readonly currentProvider?: string;
-	/** Registry display name for a provider id, used to read a subscription label. */
-	readonly providerName?: (providerId: string) => string | undefined;
+	/** Subscription label for an extra account provider, from claude-accounts.json. */
+	readonly subscriptionLabel?: (providerId: string) => string | undefined;
 }
 
 function isClaudeProviderId(providerId: string | undefined): boolean {
@@ -39,16 +40,25 @@ function isClaudeProviderId(providerId: string | undefined): boolean {
 }
 
 /**
- * Subscription label out of the provider's registered display name
- * (`Claude (company)`), or `#N` for an unlabelled extra account, or `default`
- * for the built-in provider.
+ * The footer label for an account: the subscription label lowercased, `#N` for
+ * an unlabelled extra account, `default` for the built-in provider.
  */
-export function claudeAccountLabel(providerId: string, providerName: string | undefined): string {
+export function claudeAccountLabel(providerId: string, subscriptionLabel: string | undefined): string {
 	if (providerId === CLAUDE_BASE_PROVIDER) return "default";
-	const labelled = /^claude\s*\((.+)\)\s*$/i.exec(providerName?.trim() ?? "");
-	if (labelled?.[1]?.trim()) return labelled[1].trim();
+	const labelled = subscriptionLabel?.trim();
+	if (labelled) return labelled.toLowerCase();
 	const index = /^anthropic-(\d+)$/.exec(providerId)?.[1];
 	return index ? `#${index}` : providerId;
+}
+
+/**
+ * Resolution order, made explicit rather than inherited from registry
+ * insertion order: the built-in provider first, then extra accounts by index.
+ */
+function accountRank(providerId: string): number {
+	if (providerId === CLAUDE_BASE_PROVIDER) return 0;
+	const index = /^anthropic-(\d+)$/.exec(providerId)?.[1];
+	return index ? Number(index) : Number.MAX_SAFE_INTEGER;
 }
 
 export function resolveClaudeAccountStatus(inputs: ClaudeAccountStatusInputs): ClaudeAccountStatus | undefined {
@@ -59,10 +69,10 @@ export function resolveClaudeAccountStatus(inputs: ClaudeAccountStatusInputs): C
 	const liveProvider = isClaudeProviderId(inputs.currentProvider) && claudeModels.some((model) => model.provider === inputs.currentProvider)
 		? inputs.currentProvider
 		: undefined;
-	const providerId = liveProvider ?? claudeModels[0].provider;
+	const providerId = liveProvider ?? [...claudeModels].sort((a, b) => accountRank(a.provider) - accountRank(b.provider))[0].provider;
 	return {
 		providerId,
-		label: claudeAccountLabel(providerId, inputs.providerName?.(providerId)),
+		label: claudeAccountLabel(providerId, inputs.subscriptionLabel?.(providerId)),
 		active: liveProvider !== undefined,
 	};
 }

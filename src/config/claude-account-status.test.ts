@@ -13,18 +13,18 @@ function model(provider: string, id = "claude-opus-5"): Model<never> {
 
 describe("claudeAccountLabel", () => {
 	it("labels the built-in provider default", () => {
-		expect(claudeAccountLabel("anthropic", "Anthropic")).toBe("default");
+		expect(claudeAccountLabel("anthropic", "personal")).toBe("default");
 	});
 
-	it("reads the subscription label out of the registered provider name", () => {
-		expect(claudeAccountLabel("anthropic-2", "Claude (company)")).toBe("company");
-		expect(claudeAccountLabel("anthropic-3", "Claude (Work Account)")).toBe("Work Account");
+	it("lowercases the subscription label", () => {
+		expect(claudeAccountLabel("anthropic-2", "company")).toBe("company");
+		expect(claudeAccountLabel("anthropic-3", "Work Account")).toBe("work account");
 	});
 
 	it("falls back to the account number, then the provider id", () => {
-		expect(claudeAccountLabel("anthropic-2", "Claude #2")).toBe("#2");
 		expect(claudeAccountLabel("anthropic-2", undefined)).toBe("#2");
-		expect(claudeAccountLabel("anthropic-42", "Weird Name")).toBe("#42");
+		expect(claudeAccountLabel("anthropic-42", "")).toBe("#42");
+		expect(claudeAccountLabel("custom-provider", undefined)).toBe("custom-provider");
 	});
 });
 
@@ -49,7 +49,7 @@ describe("resolveClaudeAccountStatus", () => {
 		const status = resolveClaudeAccountStatus({
 			models: [model("anthropic"), model("anthropic-2")],
 			currentProvider: "openai-codex",
-			providerName: (providerId) => (providerId === "anthropic-2" ? "Claude (company)" : "Anthropic"),
+			subscriptionLabel: (providerId) => (providerId === "anthropic-2" ? "company" : undefined),
 		});
 		expect(status).toEqual({ providerId: "anthropic", label: "default", active: false });
 	});
@@ -58,7 +58,7 @@ describe("resolveClaudeAccountStatus", () => {
 		const status = resolveClaudeAccountStatus({
 			models: [model("anthropic-2")],
 			currentProvider: "deepseek",
-			providerName: () => "Claude (company)",
+			subscriptionLabel: () => "company",
 		});
 		expect(status).toEqual({ providerId: "anthropic-2", label: "company", active: false });
 	});
@@ -67,7 +67,7 @@ describe("resolveClaudeAccountStatus", () => {
 		const status = resolveClaudeAccountStatus({
 			models: [model("anthropic"), model("anthropic-2")],
 			currentProvider: "anthropic-2",
-			providerName: () => "Claude (company)",
+			subscriptionLabel: () => "company",
 		});
 		expect(status).toEqual({ providerId: "anthropic-2", label: "company", active: true });
 	});
@@ -76,15 +76,29 @@ describe("resolveClaudeAccountStatus", () => {
 		const status = resolveClaudeAccountStatus({
 			models: [model("anthropic-2")],
 			currentProvider: "anthropic",
-			providerName: () => "Claude (company)",
+			subscriptionLabel: () => "company",
 		});
 		expect(status).toEqual({ providerId: "anthropic-2", label: "company", active: false });
 	});
 
-	it("reads the provider name once per call", () => {
-		const providerName = vi.fn(() => "Claude (company)");
-		resolveClaudeAccountStatus({ models: [model("anthropic-2")], currentProvider: "openai", providerName });
-		expect(providerName).toHaveBeenCalledTimes(1);
-		expect(providerName).toHaveBeenCalledWith("anthropic-2");
+	it("reads the subscription label once per call", () => {
+		const subscriptionLabel = vi.fn(() => "company");
+		resolveClaudeAccountStatus({ models: [model("anthropic-2")], currentProvider: "openai", subscriptionLabel });
+		expect(subscriptionLabel).toHaveBeenCalledTimes(1);
+		expect(subscriptionLabel).toHaveBeenCalledWith("anthropic-2");
+	});
+
+	it("orders accounts explicitly: base first, then by index, not by registry order", () => {
+		const status = resolveClaudeAccountStatus({
+			models: [model("anthropic-3"), model("anthropic-2"), model("anthropic")],
+			currentProvider: "openai-codex",
+		});
+		expect(status?.providerId).toBe("anthropic");
+
+		const withoutBase = resolveClaudeAccountStatus({
+			models: [model("anthropic-3"), model("anthropic-2")],
+			currentProvider: "openai-codex",
+		});
+		expect(withoutBase?.providerId).toBe("anthropic-2");
 	});
 });

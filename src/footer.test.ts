@@ -64,7 +64,10 @@ type FooterFactory = (
 	footerData: Pick<ReadonlyFooterDataProvider, "getGitBranch" | "onBranchChange">,
 ) => FooterComponent;
 
-function installFooterHarness(options: { resolveClaudeAccount?: (ctx: ExtensionContext) => { providerId: string; label: string; active: boolean } | undefined } = {}) {
+function installFooterHarness(options: {
+	resolveClaudeAccount?: (ctx: ExtensionContext) => { providerId: string; label: string; active: boolean } | undefined;
+	subscriptionLabel?: (providerId: string) => string | undefined;
+} = {}) {
 	const handlers = new Map<string, Array<(event: { type: string }, ctx: ExtensionContext) => void>>();
 	let factory: FooterFactory | undefined;
 	const pi = {
@@ -416,7 +419,13 @@ describe("footer Claude account segment", () => {
 		expect(w60).toContain("xhigh");
 		expect(w60).toContain("claude company");
 
-		// 50: thinking and fast are dropped before the account is touched.
+		// 54: fast is the first field dropped; thinking is still there.
+		const w54 = render(54);
+		expect(w54).toContain("xhigh");
+		expect(w54).not.toContain("fast");
+		expect(w54).toContain("claude company");
+
+		// 50: thinking follows, and the account is still untouched.
 		const w50 = render(50);
 		expect(w50).not.toContain("xhigh");
 		expect(w50).not.toContain("fast");
@@ -456,11 +465,8 @@ describe("installFooter Claude account resolution", () => {
 			{ provider: "anthropic", id: "claude-opus-5" },
 			{ provider: "anthropic-2", id: "claude-opus-5" },
 		];
-		const registry = {
-			getAvailable: () => models,
-			getProviderDisplayName: (providerId: string) => (providerId === "anthropic-2" ? "Claude (company)" : "Anthropic"),
-		};
-		const harness = installFooterHarness({});
+		const registry = { getAvailable: () => models };
+		const harness = installFooterHarness({ subscriptionLabel: (providerId) => (providerId === "anthropic-2" ? "company" : undefined) });
 		const ctx = footerCtx({ modelId: "gpt-5.6", provider: "openai-codex", modelRegistry: registry, setFooter: harness.setFooter });
 		harness.fireSessionStart(ctx);
 		// SAFETY: the theme is unused by the render paths exercised here.

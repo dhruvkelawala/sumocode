@@ -261,7 +261,7 @@ describe("RPC editor controller", () => {
 		controller.handleInput("\r");
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
-		expect(notifications).toEqual([{ message: "rpc error: prompt timed out", level: "warning" }]);
+		expect(notifications).toEqual([{ message: "rpc error: prompt timed out", level: "error" }]);
 		expect(controller.getText()).toBe("");
 	});
 

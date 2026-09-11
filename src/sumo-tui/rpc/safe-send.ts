@@ -21,6 +21,10 @@ export async function notifyOnError(
 	try {
 		await action();
 	} catch (cause) {
-		notifier.notify(`${options.prefix ?? "rpc error"}: ${errorMessage(cause)}`, options.level ?? "warning");
+		// Default to error, not warning: every caller of a function named
+		// `notifyOnError` is reporting a failure, and an unmarked failure must
+		// render as a sticky error notice (issue 481 home B) rather than a
+		// 3s transient hint that silently rots future call sites the same way.
+		notifier.notify(`${options.prefix ?? "rpc error"}: ${errorMessage(cause)}`, options.level ?? "error");
 	}
 }

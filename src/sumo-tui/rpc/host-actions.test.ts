@@ -2004,7 +2004,7 @@ describe("RpcHostActions", () => {
 		await expect(actions.handleSubmittedText("/sumo:memory add remember this")).resolves.toBe(true);
 
 		expect(memory.calls).toEqual(["add:remember this"]);
-		expect(notifications).toContainEqual({ message: "rpc error: memory offline", level: "warning" });
+		expect(notifications).toContainEqual({ message: "rpc error: memory offline", level: "error" });
 	});
 
 	it("handles /quit through the injected exit request", async () => {

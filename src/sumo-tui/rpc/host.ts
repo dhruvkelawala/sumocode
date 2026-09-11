@@ -557,7 +557,7 @@ export function handleRpcMessageFollowUp(deps: RpcMessageFollowUpDependencies): 
 		deps.editor.addToHistory(draft);
 		deps.editor.setText("");
 		deps.editor.clearImageDrafts();
-	}, deps.notifications, { level: "error" });
+	}, deps.notifications);
 }
 
 export interface RpcMessageForceSendDependencies {
@@ -574,7 +574,7 @@ export async function handleRpcMessageForceSend(
 		if (result === "accepted") deps.notifications.notify("queued message sent as steering", "info");
 		else if (result === "held") deps.notifications.notify("message sent; remaining queue held", "warning");
 		else if (result === "unknown") deps.notifications.notify("steering acceptance unknown; message not requeued", "warning");
-	}, deps.notifications, { level: "error" });
+	}, deps.notifications);
 	return result;
 }
 
@@ -766,7 +766,7 @@ export function createRpcHostInterruptHandler(deps: RpcHostInterruptDependencies
 				void notifyOnError(async () => {
 					if (deps.abortInFlight) await deps.abortInFlight();
 					else await deps.controls.abort();
-				}, deps.notifications, { level: "error" });
+				}, deps.notifications);
 				return true;
 			case "arm-quit":
 				armedQuitUntil = nowMs + 1_500;
@@ -814,7 +814,7 @@ async function applyModelCycleStep(deps: RpcHostModelCycleDependencies, directio
 export function createModelCycleForwardHandler(deps: RpcHostModelCycleDependencies): () => Promise<void> {
 	return (): Promise<void> => notifyOnError(async () => {
 		await applyModelCycleStep(deps, 1);
-	}, deps.notifications, { level: "error" });
+	}, deps.notifications);
 }
 
 /**
@@ -829,7 +829,7 @@ export function createModelCycleForwardHandler(deps: RpcHostModelCycleDependenci
 export function createModelCycleBackwardHandler(deps: RpcHostModelCycleDependencies): () => Promise<void> {
 	return (): Promise<void> => notifyOnError(async () => {
 		await applyModelCycleStep(deps, -1);
-	}, deps.notifications, { level: "error" });
+	}, deps.notifications);
 }
 
 export interface RpcHostThinkingCycleDependencies {
@@ -850,7 +850,7 @@ export function createThinkingCycleHandler(deps: RpcHostThinkingCycleDependencie
 	return (): Promise<void> => notifyOnError(async () => {
 		const state = await deps.controls.cycleThinkingLevel();
 		deps.onStateChange?.(state);
-	}, deps.notifications, { level: "error" });
+	}, deps.notifications);
 }
 
 export interface RpcHostToolsExpandDependencies {
@@ -1020,12 +1020,6 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 	});
 	const overlays = new RpcHostOverlayManager(requestRender);
 	const notifications = new NotificationCenter({ onChange: requestRender });
-	/**
-	 * `notifyOnError` failures are sticky notices (issue 481 home B) -- the
-	 * helper's own default level predates the notice split, so the host marks
-	 * every failure path explicitly rather than editing safe-send.ts.
-	 */
-	const failureNotifier: ErrorNotifier = { notify: (message) => notifications.notify(message, "error") };
 	let actions: RpcHostActions | undefined;
 	const requestHostExit = (code: number): void => { void lifecycle.stop(code, "request"); };
 	// Forward reference: the editor's `onInterrupt` callback (registered below,
@@ -1141,7 +1135,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		env,
 		keybindings,
 		onRenderRequest: requestRender,
-		errorNotifier: failureNotifier,
+		errorNotifier: notifications,
 		// app.exit (Ctrl+D by default, or the user's keybindings.json remap):
 		// CustomEditor only invokes this when the editor is empty (enforced
 		// inside CustomEditor itself -- see editor.ts's onExit doc comment).
@@ -1164,7 +1158,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		// pattern `submitHandlers` above already relies on for `actions`)
 		// since `RpcHostActions` itself needs `editorText: editor` to
 		// construct.
-		onModelSelect: () => hydrationActionGate.run(DEFERRED_SELECTOR_ACTION_KEY, () => notifyOnError(async () => { await actions?.openModelSelector(); }, notifications, { level: "error" })),
+		onModelSelect: () => hydrationActionGate.run(DEFERRED_SELECTOR_ACTION_KEY, () => notifyOnError(async () => { await actions?.openModelSelector(); }, notifications)),
 		onThinkingCycle: () => hydrationActionGate.run("thinking-cycle", handleThinkingCycle),
 		onToolsExpandToggle: handleToolsExpandToggle,
 		onMessageFollowUp: () => hydrationActionGate.run(DEFERRED_MESSAGE_QUEUE_ACTION_KEY, handleMessageFollowUp),
@@ -1564,7 +1558,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		changelogRoot: root,
 	});
 	const hydrationGatedInputHandler = {
-		openCommandPalette: (): void => hydrationActionGate.run(DEFERRED_SELECTOR_ACTION_KEY, () => notifyOnError(() => actions!.openCommandPalette(), notifications, { level: "error" })),
+		openCommandPalette: (): void => hydrationActionGate.run(DEFERRED_SELECTOR_ACTION_KEY, () => notifyOnError(() => actions!.openCommandPalette(), notifications)),
 	};
 	let statsInFlight = false;
 

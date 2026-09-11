@@ -22,6 +22,6 @@ describe("notifyOnError", () => {
 			notify: (message, level) => notifications.push({ message, level }),
 		});
 
-		expect(notifications).toEqual([{ message: "rpc error: memory offline", level: "warning" }]);
+		expect(notifications).toEqual([{ message: "rpc error: memory offline", level: "error" }]);
 	});
 });

@@ -8,7 +8,7 @@ import { installInputHints } from "./cathedral/input-hints.js";
 import { installAltscreen } from "./cathedral/altscreen.js";
 import { installCathedralEditor } from "./cathedral/cathedral-editor.js";
 import { installCompactionIndicator } from "./compaction-indicator.js";
-import { registerAccountsCommand } from "./commands/accounts.js";
+import { loadClaudeSubscriptions, registerAccountsCommand } from "./commands/accounts.js";
 import { registerSumoReloadCommand } from "./commands/reload.js";
 import { registerRolesCommand } from "./commands/roles.js";
 import { canonicalizeExtensionPath, type RealpathFn } from "./extension-entry-loader.js";
@@ -26,6 +26,7 @@ import {
 } from "./extension-core.js";
 import { installFastMode } from "./fast-mode.js";
 import { installFooter } from "./footer.js";
+import { claudeAccountProviderId } from "./config/claude-providers.js";
 import { installSumoInteractions } from "./interaction-registry.js";
 import { installSumoUiSurfaces } from "./interaction-ui-surfaces.js";
 import { installMemoryExtraction } from "./memory-extraction.js";
@@ -264,7 +265,13 @@ export default function sumocode(pi: ExtensionAPI): void {
 	}
 	let requestFooterRender: (() => void) | undefined;
 	const fastModeState = installFastMode(pi, { onChange: () => requestFooterRender?.() });
-	requestFooterRender = installFooter(pi, { fastModeState });
+	requestFooterRender = installFooter(pi, {
+		fastModeState,
+		// The accounts config owns the labels; the footer only displays them, so a
+		// renamed account shows the same name in /accounts and in the chrome.
+		subscriptionLabel: (providerId) =>
+			loadClaudeSubscriptions().find((entry) => claudeAccountProviderId(entry.index) === providerId)?.label,
+	});
 	installMemoryExtraction(pi);
 	installCathedralEditor(pi);
 	installInputHints(pi);

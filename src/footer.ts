@@ -150,7 +150,7 @@ function formatFooterLineInner(snapshot: FooterSnapshot, width: number): string 
 	// on a non-Claude provider.
 	const leftCandidates = uniqueCandidates([
 		[statePart, model, thinking, fast, account],
-		[statePart, model, fast, account],
+		[statePart, model, thinking, account],
 		[statePart, model, account],
 		[statePart, account],
 		[statePart],
@@ -165,7 +165,10 @@ function formatFooterLineInner(snapshot: FooterSnapshot, width: number): string 
 	const cost = colorHex(`$${snapshot.costUsd.toFixed(2)}`, activeThemeColors().foreground);
 
 	// Right zone degrades first; the left degrades only when its own fields alone
-	// cannot fit, which keeps today's preference for the session metrics.
+	// cannot fit. Below that the ladder keeps the state and the account segment
+	// ahead of the model id: the model is visible in the input hints and the
+	// model picker, while the account is visible nowhere else on a non-Claude
+	// model, and a session metric is not worth losing it for.
 	const rightCandidates: string[][] = [
 		[tokens, cost],
 		[tokens],
@@ -240,6 +243,8 @@ export function installFooter(
 	pi: ExtensionAPI,
 	options: {
 		fastModeState?: FastModeState;
+		/** Subscription labels for extra Claude accounts, owned by the accounts config. */
+		subscriptionLabel?: (providerId: string) => string | undefined;
 		/** Injection seam; production reads the model registry and enabled patterns. */
 		resolveClaudeAccount?: (ctx: ExtensionContext) => ClaudeAccountStatus | undefined;
 	} = {},
@@ -251,7 +256,8 @@ export function installFooter(
 	let claudeAccount: ClaudeAccountStatus | undefined;
 	// Memoized on purpose: the resolver reads settings.json, and the footer
 	// re-renders on every requestRender.
-	const resolveClaudeAccount = options.resolveClaudeAccount ?? defaultClaudeAccountResolver;
+	const resolveClaudeAccount =
+		options.resolveClaudeAccount ?? ((ctx: ExtensionContext) => defaultClaudeAccountResolver(ctx, options.subscriptionLabel));
 	const refreshClaudeAccount = (ctx: ExtensionContext): void => {
 		claudeAccount = safeRead(() => resolveClaudeAccount(ctx), undefined);
 	};
@@ -368,20 +374,19 @@ function createSnapshot(
 }
 
 /**
- * Which Claude account this session's Claude models resolve to, read from the
- * same reachable-model set the cycle ring and /accounts use.
+ * Which Claude account this session's Claude models resolve to, over the same
+ * enabled-model set `/accounts` uses to decide which accounts are reachable.
  */
-function defaultClaudeAccountResolver(ctx: ExtensionContext): ClaudeAccountStatus | undefined {
+function defaultClaudeAccountResolver(
+	ctx: ExtensionContext,
+	subscriptionLabel?: (providerId: string) => string | undefined,
+): ClaudeAccountStatus | undefined {
 	const registry = ctx.modelRegistry;
 	const available = safeRead(() => registry.getAvailable(), []);
-	// The registered display name carries the subscription label: the oauth
-	// adapter registers extra accounts as `Claude (company)`.
-	const providerName = (providerId: string): string | undefined =>
-		safeRead(() => registry.getProviderDisplayName(providerId), undefined);
 	return resolveClaudeAccountStatus({
 		models: filterToEnabled(available, readEnabledModelPatterns()),
 		currentProvider: safeRead(() => ctx.model?.provider, undefined),
-		providerName,
+		subscriptionLabel,
 	});
 }
 

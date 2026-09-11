@@ -529,7 +529,8 @@ nativeDescribe("native executable contract", () => {
 
 	it("threads compiled parent provenance into nested child launch plans", async () => {
 		const root = tempRoot("sumocode-native-provenance-");
-		const parentPi = createExecutable("parent-selected-pi", "#!/bin/sh\nexit 0\n");
+		const taskLog = join(root, "task.json");
+		const parentPi = createExecutable("parent-selected-pi", `#!/bin/bash\nnode -e 'const fs=require("node:fs"); fs.writeFileSync(process.env.PROVENANCE_TASK_LOG, JSON.stringify({argv:process.argv.slice(1),pi:process.env.PI_BIN,launcher:process.env.SUMOCODE_LAUNCHER})); console.log(JSON.stringify({type:"message_end",message:{role:"assistant",content:"done"}}))' -- "$@"\n`);
 		const dryRun = runNative(["--dry-run"], { env: { PI_BIN: parentPi } });
 		expect(dryRun.status).toBe(0);
 		const piBinary = dryRunField(dryRun.stdout, "PI_BIN");
@@ -541,6 +542,7 @@ nativeDescribe("native executable contract", () => {
 			SUMOCODE_RPC_CHILD: "1",
 			PI_CODING_AGENT_DIR: join(root, "agent"),
 			TMPDIR: root,
+			PROVENANCE_TASK_LOG: taskLog,
 			HERDR_ENV: "1",
 			HERDR_PANE_ID: "w1:p1",
 		});
@@ -590,6 +592,16 @@ nativeDescribe("native executable contract", () => {
 			// The visible child must carry the parent-selected Pi through PI_BIN as well as
 			// launching the native binary, so a nested visible spawn keeps the same runtime.
 			expect(readFileSync(join(root, visibleScript!), "utf8")).toContain(`exec env 'PI_BIN=${piBinary}' '${NATIVE_BIN}' 'task'`);
+
+			// The headless child must spawn the same parent-selected Pi. The fake
+			// binary records the env it was launched with, so the log only exists when
+			// provenance reached the real spawn.
+			// SAFETY: the compiled subagent tool uses the same caller-facing execute seam.
+			await tools.get("subagent_spawn")!.execute("headless-provenance", { prompt: "probe", name: "probe" }, undefined, undefined, context as never);
+			await vi.waitFor(() => expect(existsSync(taskLog)).toBe(true), { timeout: 5_000 });
+			// SAFETY: the fake parent Pi writes this exact provenance record.
+			const observed = JSON.parse(readFileSync(taskLog, "utf8")) as { pi: string; launcher: string };
+			expect(observed).toMatchObject({ pi: piBinary, launcher: NATIVE_BIN });
 
 			// SAFETY: the compiled command definition and context expose the registered slash-command handler seam.
 			await commands.get("sumo:worktree")!.handler("new provenance", context as never);

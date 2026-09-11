@@ -41,7 +41,7 @@ import { CellBuffer, type Rect } from "../render/buffer.js";
 import { composite, dispatchMouseEvent, type CompositeSelectionPass, type HardwareCursor } from "../render/compositor.js";
 import { cellRowToAnsi } from "../render/ansi-writer.js";
 import { diffFrames, type FrameDiffPatch } from "../render/diff.js";
-import { logDiagnostic } from "../runtime/diagnostics.js";
+import { graphemeSegmentationCount, logDiagnostic } from "../runtime/diagnostics.js";
 import type { MouseEvent } from "../input/mouse.js";
 import type { ChatPager } from "../widgets/chat-pager.js";
 import { PiComponentLeaf } from "../widgets/pi-component-leaf.js";
@@ -417,6 +417,8 @@ export class RetainedShellRenderer {
 	 */
 	public render(): void {
 		if (this.disposed) return;
+		const renderStart = performance.now();
+		const segmentStart = graphemeSegmentationCount();
 		const cols = Math.max(1, Math.floor(this.dimensions.columns ?? 80));
 		const rows = Math.max(1, Math.floor(this.dimensions.rows ?? 24));
 
@@ -463,6 +465,8 @@ export class RetainedShellRenderer {
 		logDiagnostic("owned_shell_render", {
 			cols,
 			rows,
+			renderMs: Math.round((performance.now() - renderStart) * 100) / 100,
+			segmentationCalls: graphemeSegmentationCount() - segmentStart,
 			layoutMs: Math.round(layoutMs * 100) / 100,
 			compositeMs: Math.round(compositeMs * 100) / 100,
 			patchCount: patches.length,
@@ -492,33 +496,60 @@ export class RetainedShellRenderer {
 	public repaintRegion(leaf: "aboveEditor"): void {
 		if (this.disposed) return;
 		if (leaf !== "aboveEditor") return;
+		const repaintStart = performance.now();
+		const segmentStart = graphemeSegmentationCount();
 		const cols = Math.max(1, Math.floor(this.dimensions.columns ?? 80));
 		const rows = Math.max(1, Math.floor(this.dimensions.rows ?? 24));
 		const previous = this.previousFrame;
-		if (!previous || !this.frameMatchesViewport(previous, rows, cols) || this.aboveEditorLeaf.parent === undefined) {
+		// Each bail names its guard so an offline trace (#503) can tell which
+		// condition is re-entering the full transcript render on every tick.
+		const fallback = (guard: string): void => {
+			logDiagnostic("owned_shell_repaint_fallback", { leaf, guard });
 			this.render();
+		};
+		if (!previous) {
+			fallback("no_previous_frame");
+			return;
+		}
+		if (!this.frameMatchesViewport(previous, rows, cols)) {
+			fallback("viewport_mismatch");
+			return;
+		}
+		if (this.aboveEditorLeaf.parent === undefined) {
+			fallback("leaf_detached");
 			return;
 		}
 		if (this.lastOverlayCount > 0 || this.visibleOverlayEntries(cols, rows).length > 0) {
-			this.render();
+			fallback("overlay_visible");
 			return;
 		}
 
 		const rect = this.clampedNodeRect(this.aboveEditorLeaf, rows, cols);
-		if (!rect || rect.height <= 0 || rect.width <= 0) return;
+		if (!rect || rect.height <= 0 || rect.width <= 0) {
+			logDiagnostic("owned_shell_repaint_skip", { leaf, guard: "empty_rect" });
+			return;
+		}
 
 		const frame = previous.clone();
 		frame.clear(rect);
 		this.aboveEditorLeaf.render(frame, rect);
 		const selectedFrame = this.withSelectionForNarrowRepaint(frame, rect.top, rect.height);
 		if (!selectedFrame) {
-			this.render();
+			fallback("selection_mismatch");
 			return;
 		}
 		const patches = this.diffRowSpan(previous, selectedFrame, rect.top, rect.height);
 		this.terminal.writeFramePatches(patches, this.lastCursor);
 		this.previousFrame = selectedFrame.clone();
 		this.lastFrame = selectedFrame;
+		logDiagnostic("owned_shell_repaint_narrow", {
+			leaf,
+			top: rect.top,
+			height: rect.height,
+			patchCount: patches.length,
+			repaintMs: Math.round((performance.now() - repaintStart) * 100) / 100,
+			segmentationCalls: graphemeSegmentationCount() - segmentStart,
+		});
 	}
 
 	private paintSoftwareCursor(frame: CellBuffer, cursor: HardwareCursor): void {

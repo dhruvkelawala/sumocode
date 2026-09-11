@@ -63,6 +63,21 @@ function sanitizeDiagnosticValue(value: DiagnosticValue): DiagnosticValue {
 
 const diagnosticsStart = performance.now();
 let lastMark = diagnosticsStart;
+let graphemeSegmentationCalls = 0;
+
+/**
+ * Counts one grapheme-segmentation run (a non-empty text run handed to
+ * `splitGraphemes`). Always-on: one integer add, and the retained renderer
+ * reads the delta per frame so an offline trace (#503) can attribute
+ * `Intl.Segmenter` cost to a render without perturbing it.
+ */
+export function recordGraphemeSegmentation(): void {
+	graphemeSegmentationCalls += 1;
+}
+
+export function graphemeSegmentationCount(): number {
+	return graphemeSegmentationCalls;
+}
 
 export function logDiagnostic(event: string, fields: DiagnosticFields = {}): void {
 	const file = diagnosticsFile();

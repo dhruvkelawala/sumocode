@@ -13,6 +13,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { resolveClaudeAccountStatus, type ClaudeAccountStatus } from "./config/claude-account-status.js";
 import { filterToEnabled, readEnabledModelPatterns } from "./config/enabled-models.js";
+import type { RpcLoginRuntime } from "./sumo-tui/pi-compat/login-command.js";
 
 export const CLAUDE_ACCOUNT_STATUS_KEY = "sumocode.claude-account";
 export const CLAUDE_ACCOUNT_ACTIVE_STATUS_KEY = "sumocode.claude-account-active";
@@ -93,6 +94,28 @@ export function publishClaudeAccountStatus(
 	options: { subscriptionLabel?: ClaudeSubscriptionLabel } = {},
 ): void {
 	publish(ctx, () => resolveSessionClaudeAccount(ctx, options.subscriptionLabel));
+}
+
+/**
+ * `/login` runs outside the agent loop too, so a successful sign-in that makes
+ * a Claude provider reachable produces no `agent_end` for the publisher to
+ * catch. Delegating every other runtime method keeps Pi's login orchestration
+ * intact; only a resolved credential repaints.
+ */
+export function loginRuntimeWithAccountRefresh(
+	ctx: ExtensionContext,
+	runtime: RpcLoginRuntime,
+	options: { subscriptionLabel?: ClaudeSubscriptionLabel } = {},
+): RpcLoginRuntime {
+	return {
+		getAvailable: () => runtime.getAvailable(),
+		getProviders: () => runtime.getProviders(),
+		login: async (providerId, type, interaction) => {
+			const credential = await runtime.login(providerId, type, interaction);
+			publishClaudeAccountStatus(ctx, options);
+			return credential;
+		},
+	};
 }
 
 /**

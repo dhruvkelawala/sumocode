@@ -24,10 +24,10 @@ env:
   # https://api-docs.deepseek.com/quick_start/pricing
   VISUAL_RECAP_BASE_URL: https://api.deepseek.com
   VISUAL_RECAP_MODEL: deepseek-flash
-  # DeepSeek thinking supports low | high | max and defaults to high. Keep high
-  # explicit so provider defaults cannot silently change recap quality. This
+  # DeepSeek thinking supports low | high | max and defaults to high. Keep the
+  # level explicit so provider defaults cannot silently change recap quality. This
   # repo variable only tunes cost and latency; it cannot redirect credentials.
-  VISUAL_RECAP_REASONING_EFFORT: ${{ vars.VISUAL_RECAP_REASONING_EFFORT || 'high' }}
+  VISUAL_RECAP_REASONING_EFFORT: ${{ vars.VISUAL_RECAP_REASONING_EFFORT || 'max' }}
   VISUAL_RECAP_SKILL_SOURCE: ${{ vars.VISUAL_RECAP_SKILL_SOURCE || 'auto' }}
   VISUAL_RECAP_SECRET_SCAN: ${{ vars.VISUAL_RECAP_SECRET_SCAN || 'high-confidence' }}
 

@@ -128,21 +128,24 @@ describe("RpcHostStateStore", () => {
 		);
 	});
 
-	it("keeps sessionFile undefined when the payload omits it", () => {
+	it("normalizes null optional get_state fields", () => {
 		const store = new RpcHostStateStore();
 		const state = store.hydrateFromRpcState(asRpcSessionState({
+			model: null,
 			thinkingLevel: "high",
 			isStreaming: false,
 			isCompacting: false,
 			steeringMode: "all",
 			followUpMode: "one-at-a-time",
+			sessionName: null,
+			sessionFile: null,
 			sessionId: "session-1",
 			autoCompactionEnabled: true,
 			messageCount: 0,
 			pendingMessageCount: 0,
 		}));
 
-		expect(state.sessionFile).toBeUndefined();
+		expect(state).toMatchObject({ sessionId: "session-1", modelLabel: undefined, sessionName: undefined, sessionFile: undefined });
 	});
 
 	it("stays active across run boundaries until Pi reports agent_settled", () => {

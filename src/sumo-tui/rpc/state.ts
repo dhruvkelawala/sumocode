@@ -105,19 +105,19 @@ function invalidRpcState(field: string): never {
 function validateRpcSessionState(state: RpcSessionState): RpcSessionState {
 	if (!state) invalidRpcState("state");
 	const model = state.model;
-	if (model !== undefined && (!model || !isString(model.provider) || !isString(model.id))) invalidRpcState("model");
+	if (model !== undefined && model !== null && (!isString(model.provider) || !isString(model.id))) invalidRpcState("model");
 	if (!isRpcThinkingLevel(state.thinkingLevel)) invalidRpcState("thinkingLevel");
 	if (!isBoolean(state.isStreaming)) invalidRpcState("isStreaming");
 	if (!isBoolean(state.isCompacting)) invalidRpcState("isCompacting");
 	if (!isQueueMode(state.steeringMode)) invalidRpcState("steeringMode");
 	if (!isQueueMode(state.followUpMode)) invalidRpcState("followUpMode");
 	if (!isString(state.sessionId)) invalidRpcState("sessionId");
-	if (state.sessionName !== undefined && !isString(state.sessionName)) invalidRpcState("sessionName");
-	if (state.sessionFile !== undefined && !isString(state.sessionFile)) invalidRpcState("sessionFile");
+	if (state.sessionName !== undefined && state.sessionName !== null && !isString(state.sessionName)) invalidRpcState("sessionName");
+	if (state.sessionFile !== undefined && state.sessionFile !== null && !isString(state.sessionFile)) invalidRpcState("sessionFile");
 	if (!isBoolean(state.autoCompactionEnabled)) invalidRpcState("autoCompactionEnabled");
 	if (!isNonnegativeInteger(state.messageCount)) invalidRpcState("messageCount");
 	if (!isNonnegativeInteger(state.pendingMessageCount)) invalidRpcState("pendingMessageCount");
-	return state;
+	return { ...state, model: model ?? undefined, sessionName: state.sessionName ?? undefined, sessionFile: state.sessionFile ?? undefined };
 }
 
 export class RpcHostStateStore {

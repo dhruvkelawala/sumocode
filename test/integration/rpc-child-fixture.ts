@@ -295,6 +295,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		} else {
 			isStreaming = false;
 			write({ type: "agent_end", messages: [], willRetry: false });
+			write({ type: "agent_settled" });
 		}
 		return;
 	}

@@ -954,9 +954,10 @@ describe("createModelCycleForwardHandler (app.model.cycleForward)", () => {
 		await flush();
 
 		expect(notifications.notify).toHaveBeenCalledWith(expect.stringContaining("boom"), "error");
-		// A failed action re-arms its own sticky notice; it must not clear the
-		// previous one on the way out.
-		expect(notifications.dismissSticky).not.toHaveBeenCalled();
+		// The stale sticky failure is cleared at the action's ENTRY (issue 481
+		// home B); the failure then raises its own notice, which survives.
+		expect(notifications.dismissSticky).toHaveBeenCalledTimes(1);
+		expect(notifications.dismissSticky.mock.invocationCallOrder[0]!).toBeLessThan(notifications.notify.mock.invocationCallOrder[0]!);
 	});
 });
 

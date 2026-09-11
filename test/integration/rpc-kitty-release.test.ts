@@ -2,7 +2,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { PI_BOOT_SEQUENCE, spawnSumocodePty, waitForScreen, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { PI_BOOT_SEQUENCE, spawnSumocodePty, waitForScreen, waitForScreenText, type SpawnedPiPty } from "./spawn-pi-pty.js";
 
 // Regression test for the Kitty keyboard-protocol double-insertion bug: the
 // terminal controller pushes Kitty flags 1+2+4 (report event types included,
@@ -56,8 +56,8 @@ describe("sumocode RPC host Kitty key-release filtering", () => {
 		app = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: 100, rows: 30 });
 
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
-		await app.waitForOutput("DIVINE INVOCATION", 15_000);
-		await app.waitForOutput(/CTRL\+\/[\s\S]*COMMANDS/, 15_000);
+		await waitForScreenText(app, "DIVINE INVOCATION", 15_000);
+		await waitForScreenText(app, /CTRL\+\/[\s\S]*COMMANDS/, 15_000);
 
 		typeWordAsPlainPressWithKittyRelease(app, "hello");
 		const screen = await waitForScreen(app, ({ text }) => text.includes("hello"), { cols: 100, rows: 30, timeoutMs: 5_000 });
@@ -76,8 +76,8 @@ describe("sumocode RPC host Kitty key-release filtering", () => {
 		app = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: 100, rows: 30 });
 
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
-		await app.waitForOutput("DIVINE INVOCATION", 15_000);
-		await app.waitForOutput(/CTRL\+\/[\s\S]*COMMANDS/, 15_000);
+		await waitForScreenText(app, "DIVINE INVOCATION", 15_000);
+		await waitForScreenText(app, /CTRL\+\/[\s\S]*COMMANDS/, 15_000);
 
 		// Plain press, then two CSI-u repeat events (event type 2), then a
 		// CSI-u release. Whether the repeats themselves insert additional

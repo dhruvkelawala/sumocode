@@ -512,6 +512,41 @@ describe("RetainedShellRenderer", () => {
 				renderer.dispose();
 			}
 		});
+
+		it("falls back to a full render when the visible overlay set changed since the last render", async () => {
+			const aboveEditor = new StaticComponent(["", "INDICATOR-A"]);
+			const notice = new StaticComponent([]);
+			const { renderer } = await createHarness({
+				aboveEditorWidgets: () => aboveEditor,
+				overlayHost: {
+					overlayStack: [
+						{
+							component: notice,
+							options: { anchor: "top-left", row: 3, width: "100%", visible: () => notice.render(1).length > 0 },
+							focusOrder: 10,
+						},
+					],
+				},
+			});
+			const calculateLayout = vi.spyOn(rootYogaNodeForTest(renderer), "calculateLayout");
+			try {
+				renderer.render();
+				calculateLayout.mockClear();
+
+				// The notice becomes visible without a render request, so the cloned
+				// frame does not hold it: the narrow path cannot publish it.
+				notice.rows = ["NOTICE APPEARED"];
+				aboveEditor.rows = ["", "INDICATOR-B"];
+				renderer.repaintRegion("aboveEditor");
+
+				expect(calculateLayout).toHaveBeenCalledTimes(1);
+				expect(frameRows(renderer).join("\n")).toContain("NOTICE APPEARED");
+				expect(frameRows(renderer).join("\n")).toContain("INDICATOR-B");
+			} finally {
+				calculateLayout.mockRestore();
+				renderer.dispose();
+			}
+		});
 	});
 
 	describe("dispose", () => {
@@ -576,11 +611,11 @@ describe("RetainedShellRenderer", () => {
 
 				const narrow = events.filter((entry) => entry.event === "owned_shell_repaint_narrow").at(-1);
 				expect(narrow).toMatchObject({ leaf: "aboveEditor", patchCount: 1, overlayCount: 0 });
-				expect(narrow.repaintMs).toBeGreaterThanOrEqual(0);
+				expect(narrow.repaintMs).toBeGreaterThan(0);
 				expect(narrow.segmentationCalls).toBeGreaterThanOrEqual(1);
 
 				const full = events.filter((entry) => entry.event === "owned_shell_render").at(-1);
-				expect(full.renderMs).toBeGreaterThanOrEqual(0);
+				expect(full.renderMs).toBeGreaterThan(0);
 				expect(full.segmentationCalls).toBeGreaterThanOrEqual(1);
 			} finally {
 				if (previousDiagFile === undefined) delete process.env.SUMO_TUI_DIAG_FILE;

@@ -143,14 +143,10 @@ describe("RPC notification visibility", () => {
 			shell.render();
 			expect(terminal.cursor).not.toBeNull();
 			notice.setMessage("input paused — incomplete paste");
-			// The notice's own onChange requestRender publishes it in the runtime; the
-			// indicator tick only preserves the frame it already holds (#520).
-			shell.render();
 			shell.repaintWorkingIndicator();
 			expect(text()).toContain("input paused");
 			expect(terminal.cursor).toBeNull();
 			notice.setMessage("");
-			shell.render();
 			shell.repaintWorkingIndicator();
 			expect(text()).not.toContain("input paused");
 			expect(terminal.cursor).not.toBeNull();
@@ -189,9 +185,6 @@ describe("RPC notification visibility", () => {
 			shell.repaintWorkingIndicator();
 			expect(text()).toContain("before tick");
 			modalActive = true;
-			// Opening the modal requests a render in the runtime; the tick must keep
-			// the overlay and its hidden cursor rather than re-rendering the shell.
-			shell.render();
 			shell.repaintWorkingIndicator();
 			expect(terminal.cursor).toBeNull();
 			expect(text()).toContain("ZZZZZZZZ");

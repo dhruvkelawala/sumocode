@@ -539,7 +539,10 @@ export class RetainedShellRenderer {
 			return;
 		}
 		const patches = this.diffRowSpan(previous, selectedFrame, rect.top, rect.height);
-		this.terminal.writeFramePatches(patches, this.lastCursor);
+		// Mirrors render()'s rule: a visible overlay hides the editor cursor, so a
+		// narrow tick must not hand the terminal a cursor the overlay is covering.
+		const cursor = overlayCount > 0 ? null : this.lastCursor;
+		this.terminal.writeFramePatches(patches, cursor);
 		this.previousFrame = selectedFrame.clone();
 		this.lastFrame = selectedFrame;
 		logDiagnostic("owned_shell_repaint_narrow", {

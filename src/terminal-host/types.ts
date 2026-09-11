@@ -21,7 +21,7 @@ export type AgentPanePlacement =
 export interface StartAgentPaneOptions {
 	name: string;
 	/** Subagent id used as the host agent name; `name` stays the human-readable pane label. */
-	agentName?: string;
+	agentName: string;
 	cwd: string;
 	shellCommand: string;
 	placement: AgentPanePlacement;

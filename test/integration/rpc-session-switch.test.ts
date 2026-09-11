@@ -1,9 +1,8 @@
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import xterm from "@xterm/headless";
 import { afterEach, describe, expect, it } from "vitest";
-import { PI_BOOT_SEQUENCE, spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { PI_BOOT_SEQUENCE, replayScreenRows, spawnSumocodePty, waitForScreenText, type SpawnedPiPty } from "./spawn-pi-pty.js";
 import { createRpcChildFixture, transcriptMessages } from "./rpc-child-fixture.js";
 
 const CSI_U_ENTER = "\x1b[13u";
@@ -35,20 +34,6 @@ function isSavedAtNumber(savedAt: number | undefined): savedAt is number {
 	return typeof savedAt === "number";
 }
 
-async function replayTerminalRows(output: string, cols: number, rows: number): Promise<string[]> {
-	const term = new xterm.Terminal({ cols, rows, allowProposedApi: true, scrollback: 0 });
-	await new Promise<void>((resolve) => term.write(output, () => resolve()));
-	const buffer = term.buffer.active;
-	const lines: string[] = [];
-	for (let row = 0; row < rows; row += 1) {
-		const line = buffer.getLine(row);
-		let text = "";
-		for (let col = 0; col < cols; col += 1) text += line?.getCell(col)?.getChars() ?? " ";
-		lines.push(text);
-	}
-	return lines;
-}
-
 describe("sumocode RPC session switching", () => {
 	it("drains the latest destination chrome when shutdown follows replacement", async () => {
 		const piBin = await createRpcChildFixture("sumocode-rpc-cache-drain-child-", {
@@ -68,12 +53,12 @@ describe("sumocode RPC session switching", () => {
 		});
 
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
-		await app.waitForOutput("Original Session", 15_000);
+		await waitForScreenText(app, "Original Session", 15_000);
 		const cachePath = join(agentDir, "state", "sumocode", "chrome", "v1", "chrome-cache.json");
 		const initialCacheWrite = await waitForChromeCacheWrite(cachePath);
 
 		app.sendInput(`/new${CSI_U_ENTER}`);
-		await app.waitForOutput("new session", 5_000);
+		await waitForScreenText(app, "new session", 5_000);
 		app.sendSignal("SIGTERM");
 		await waitForChromeCacheWrite(cachePath, initialCacheWrite);
 	}, 30_000);
@@ -96,16 +81,18 @@ describe("sumocode RPC session switching", () => {
 		});
 
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
-		await app.waitForOutput("Original Session", 15_000);
+		await waitForScreenText(app, "Original Session", 15_000);
 		const cachePath = join(agentDir, "state", "sumocode", "chrome", "v1", "chrome-cache.json");
 		const initialCacheWrite = await waitForChromeCacheWrite(cachePath);
 
 		app.sendInput(`/new${CSI_U_ENTER}`);
-		await app.waitForOutput("new session", 5_000);
+		await waitForScreenText(app, "new session", 5_000);
 		await waitForChromeCacheWrite(cachePath, initialCacheWrite);
 
-		const finalScreen = (await replayTerminalRows(app.getOutput(), cols, rows)).join("\n");
-
+		// The negatives are assertions on the settled frame the cache write ends on,
+		// not a search for a frame that satisfies them: the previous session's chrome
+		// and transcript must be gone once the switch has landed.
+		const finalScreen = (await replayScreenRows(app.getOutput(), cols, rows)).join("\n");
 		const state = app.getCurrentTerminalState();
 		expect(state.altscreenActive).toBe(true);
 		expect(state.mouseSGRActive).toBe(true);

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { MOUSE_SGR_ENABLE_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-controller.js";
-import { spawnPiPty, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { spawnPiPty, waitForScreenText, type SpawnedPiPty } from "./spawn-pi-pty.js";
 
 let app: SpawnedPiPty | undefined;
 
@@ -23,7 +23,7 @@ describe("sumo-tui Ctrl+C input semantics", () => {
 
 		await app.waitForOutput(MOUSE_SGR_ENABLE_SEQUENCE, 10_000);
 		app.sendInput("draft-before-clear");
-		await app.waitForOutput("draft-before-clear", 5_000);
+		await waitForScreenText(app, "draft-before-clear", 5_000);
 
 		// Ghostty sends Ctrl+C through Kitty keyboard protocol while Pi enables
 		// disambiguate mode; raw ETX may be treated by the PTY as SIGINT in tests.
@@ -31,11 +31,12 @@ describe("sumo-tui Ctrl+C input semantics", () => {
 		await delay(300);
 
 		app.sendInput("after-ctrl-c\r");
-		await app.waitForOutput("after-ctrl-c", 5_000);
-		await delay(300);
+		// If Ctrl+C had not cleared the draft, the editor would hold the merged
+		// "draft-before-clearafter-ctrl-c", so any stable frame showing the new text
+		// also shows the merge. Asserting absence on that same frame is race-free.
+		const screen = await waitForScreenText(app, "after-ctrl-c", 5_000);
 
-		const output = app.getOutput();
-		expect(output).toContain("after-ctrl-c");
-		expect(output).not.toContain("draft-before-clearafter-ctrl-c");
+		expect(screen.text).toContain("after-ctrl-c");
+		expect(screen.text).not.toContain("draft-before-clearafter-ctrl-c");
 	}, 15_000);
 });

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createRpcChildFixture } from "./rpc-child-fixture.js";
-import { spawnSumocodePty, waitForScreen, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { spawnSumocodePty, waitForScreen, waitForScreenText, type SpawnedPiPty } from "./spawn-pi-pty.js";
 
 const COLS = 100;
 const ROWS = 30;
@@ -39,7 +39,7 @@ describe("RPC subagent status strip", () => {
 
 		await app.waitForReady("app", 10_000);
 		app.sendInput("show active shell");
-		await app.waitForOutput("show active shell", 5_000);
+		await waitForScreenText(app, "show active shell", 5_000);
 		app.sendInput(CSI_U_ENTER);
 		const screen = await waitForScreen(
 			app,

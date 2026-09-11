@@ -15,6 +15,7 @@ import {
 	replayScreenRows,
 	spawnSumocodePty,
 	waitForScreen,
+	waitForScreenText,
 	type SpawnedPiPty,
 } from "./spawn-pi-pty.js";
 import { createRpcChildFixture } from "./rpc-child-fixture.js";
@@ -236,7 +237,7 @@ describe("RPC durable Activity cards", () => {
 		app.sendInput(CTRL_O);
 		await waitForScreen(app, ({ text }) => text.includes("ctrl+o output") && text.includes("[live terminal]"), { cols, rows, timeoutMs: 5_000 });
 		app.sendInput("\x03");
-		await app.waitForOutput("press ctrl-c again to quit", 5_000);
+		await waitForScreenText(app, "press ctrl-c again to quit", 5_000);
 		app.sendInput("\x03");
 		await app.waitForOutput(TERMINAL_CLEANUP_SEQUENCE, 10_000);
 		app = undefined;

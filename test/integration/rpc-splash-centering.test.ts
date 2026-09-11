@@ -1,10 +1,9 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import xterm from "@xterm/headless";
 import { afterEach, describe, expect, it } from "vitest";
 import { createRpcChildFixture } from "./rpc-child-fixture.js";
-import { spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { spawnSumocodePty, waitForScreenText, type SpawnedPiPty } from "./spawn-pi-pty.js";
 import { INPUT_FRAME_HINT_KEYBINDS } from "../../src/cathedral/input-frame.js";
 
 let app: SpawnedPiPty | undefined;
@@ -13,20 +12,6 @@ afterEach(async () => {
 	await app?.cleanupAndWait();
 	app = undefined;
 });
-
-async function replayTerminalRows(output: string, cols: number, rows: number): Promise<string[]> {
-	const term = new xterm.Terminal({ cols, rows, allowProposedApi: true, scrollback: 0 });
-	await new Promise<void>((resolve) => term.write(output, () => resolve()));
-	const buffer = term.buffer.active;
-	const lines: string[] = [];
-	for (let row = 0; row < rows; row += 1) {
-		const line = buffer.getLine(row);
-		let text = "";
-		for (let col = 0; col < cols; col += 1) text += line?.getCell(col)?.getChars() ?? " ";
-		lines.push(text);
-	}
-	return lines;
-}
 
 const EXPECTED_100X30_SPLASH = {
 	catTopRow: 1,
@@ -61,11 +46,11 @@ describe("sumocode RPC splash centering", () => {
 			rows,
 		});
 
-		await app.waitForOutput("DIVINE INVOCATION", 15_000);
-		await app.waitForOutput(/CTRL\+\/[\s\S]*COMMANDS/, 15_000);
-		await app.waitForOutput("SUMOCODE V", 5_000);
-
-		const lines = await replayTerminalRows(app.getOutput(), cols, rows);
+		await waitForScreenText(app, "DIVINE INVOCATION", 15_000);
+		await waitForScreenText(app, /CTRL\+\/[\s\S]*COMMANDS/, 15_000);
+		// The layout assertions read the settled frame the last wait observed, so
+		// they cannot see a mid-repaint frame from an extra replay.
+		const { rows: lines } = await waitForScreenText(app, "SUMOCODE V", 5_000);
 		const catRows = rowIndexes(lines, containsCatFaceGlyph);
 		const wordmarkEdgeRows = rowIndexes(lines, (line) => line.includes("█████ █"));
 		const invocationRow = lines.findIndex((line) => line.includes("DIVINE INVOCATION"));

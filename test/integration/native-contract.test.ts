@@ -27,7 +27,7 @@ import {
 } from "./launcher-runtime-contract.js";
 import { renderLauncherHelp } from "../../src/cli/launcher-spec.js";
 import { createRpcChildFixture } from "./rpc-child-fixture.js";
-import { buildSpawnEnv, replayScreenRows } from "./spawn-pi-pty.js";
+import { buildSpawnEnv, replayScreenRows, waitForScreenText } from "./spawn-pi-pty.js";
 
 const ROOT = resolve(process.env.SUMOCODE_INTEGRATION_PACKAGE_ROOT ?? process.cwd());
 // SAFETY: package.json is repository-owned and the version field is required by
@@ -49,9 +49,12 @@ interface PtyExit {
 interface NativePtySession {
 	readonly pid: number;
 	readonly exit: Promise<PtyExit>;
+	readonly cols: number;
+	readonly rows: number;
 	getOutput(): string;
 	getDiagPath(): string;
 	waitForOutput(pattern: string | RegExp, timeoutMs?: number): Promise<string>;
+	captureEvidence(finalScreen?: string): Promise<string>;
 	waitForReady(state: ReadinessState, timeoutMs?: number): Promise<void>;
 	sendInput(input: string): void;
 	signal(signal: NodeJS.Signals): void;
@@ -82,14 +85,16 @@ function spawnNativePty(
 	options: { readonly env?: NodeJS.ProcessEnv; readonly cwd?: string; readonly cols?: number; readonly rows?: number } = {},
 ): NativePtySession {
 	const childEnv = buildSpawnEnv(process.env, { PI_BIN: "", ...options.env });
+	const cols = options.cols ?? 100;
+	const rows = options.rows ?? 30;
 	const evidence = createChildEvidenceContext([NATIVE_BIN, ...args], childEnv);
 	childEnv.SUMO_TUI_DIAG_FILE = evidence.diagPath;
 	childEnv[HARNESS_SIGNATURE_ENV_KEY] = HARNESS_SIGNATURE;
 	const auth = requireHarnessAuth(childEnv);
 	const { child, supervision } = spawnSupervisedPty(NATIVE_BIN, args, {
 		name: "xterm-256color",
-		cols: options.cols ?? 100,
-		rows: options.rows ?? 30,
+		cols,
+		rows,
 		cwd: options.cwd ?? tempRoot("sumocode-native-cwd-"),
 		env: childEnv,
 	}, evidence, auth);
@@ -108,8 +113,14 @@ function spawnNativePty(
 	const session: NativePtySession = {
 		pid: child.pid,
 		exit,
+		cols,
+		rows,
 		getOutput: () => output,
 		getDiagPath: () => evidence.diagPath,
+		async captureEvidence(finalScreen?: string): Promise<string> {
+			if (finalScreen !== undefined) writeFileSync(join(evidence.evidenceDir, "final-screen.txt"), finalScreen, { mode: 0o600 });
+			return evidence.evidenceDir;
+		},
 		waitForOutput(pattern, timeoutMs = 10_000) {
 			if (matches(output, pattern)) return Promise.resolve(output);
 			return new Promise((resolveOutput, rejectOutput) => {
@@ -692,7 +703,7 @@ nativeDescribe("native executable contract", () => {
 			env: { PI_CODING_AGENT_DIR: agentDir }, cwd,
 		});
 		await session.waitForReady("input");
-		await session.waitForOutput("DIVINE INVOCATION");
+		await waitForScreenText(session, "DIVINE INVOCATION", 10_000);
 		session.sendInput("/resume");
 		await waitForDiagEvent(session.getDiagPath(), "slash_ready");
 		await waitForDiagEvent(session.getDiagPath(), "command_ready");

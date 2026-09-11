@@ -3,7 +3,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { activityFromSubagentSnapshot } from "../activity/subagent-adapter.js";
 import { renderSubagentStatusRow, type SubagentStatusRunningEntry } from "../subagent-status-row.js";
 import { logDiagnostic } from "../sumo-tui/runtime/diagnostics.js";
-import { BUILT_IN_TOOLS, getBuiltInToolsFromActiveTools } from "../native-task-config.js";
+import { BUILT_IN_TOOLS, getBuiltInToolsFromActiveTools } from "./task-config.js";
 import { getTerminalHost } from "../terminal-host/index.js";
 import type { TerminalHost } from "../terminal-host/types.js";
 import { spawnPaneChild } from "./backend-pane.js";

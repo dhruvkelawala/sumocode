@@ -43,7 +43,6 @@ function state(overrides: Partial<RpcHostChromeState> = {}): RpcHostChromeState 
 		pendingMessageCount: 0,
 		hasMessages: false,
 		gitBranch: "codex/rpc-host",
-		taskPartialCount: 0,
 		contextTokens: 0,
 		contextWindow: 100_000,
 		costUsd: 0,

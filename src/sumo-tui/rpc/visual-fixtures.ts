@@ -80,7 +80,6 @@ const COMPLETED_ACTIVE_STATE: RpcHostChromeState = {
 	pendingMessageCount: 0,
 	hasMessages: true,
 	gitBranch: "main",
-	taskPartialCount: 0,
 	contextTokens: 42000,
 	contextWindow: 200000,
 	costUsd: 0.42,

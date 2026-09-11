@@ -1,6 +1,4 @@
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { installActivityManagerBridge } from "./activity/manager-bridge.js";
 import { installAnswerTool } from "./answer-tool.js";
@@ -13,7 +11,6 @@ import { installFastMode } from "./fast-mode.js";
 import { installHerdrRpcBridge } from "./herdr-rpc-bridge.js";
 import { installSumoInteractions } from "./interaction-registry.js";
 import { installMemoryExtraction } from "./memory-extraction.js";
-import { taskTool } from "./native-task-tool.js";
 import { installQuestionTool } from "./question-tool.js";
 import { installSkillInlineExpansion } from "./skill-inline.js";
 import { installSubagents } from "./subagents/index.js";
@@ -22,10 +19,8 @@ import { registerRpcLoginCommand } from "./sumo-tui/pi-compat/login-command.js";
 import { registerRpcTreeNavigationCommand } from "./sumo-tui/pi-compat/tree-navigation-command.js";
 import { installTaskModeAutoExit } from "./task-mode.js";
 
-const LEGACY_TASK_TOOL_EXTENSION_PATH = join(".pi", "agent", "extensions", "task-tool", "index.ts");
 const PROCESS_INSTALL_LATCH = Symbol.for("sumocode.extension.processInstallLatch");
 
-type ExistsFn = (path: string) => boolean;
 type LatchScope = { [PROCESS_INSTALL_LATCH]?: WeakSet<object> };
 
 export interface HelperSubprocessGuardOptions {
@@ -35,16 +30,6 @@ export interface HelperSubprocessGuardOptions {
 /** Keep background-terminal helpers from recursively installing SumoCode. */
 export function shouldNoopHelperSubprocess(options: HelperSubprocessGuardOptions = {}): boolean {
 	return (options.env ?? process.env).SUMOCODE_BG_CHILD === "1";
-}
-
-export function hasLegacyTaskToolExtension(options: { readonly homeDir?: string; readonly exists?: ExistsFn } = {}): boolean {
-	const exists = options.exists ?? existsSync;
-	return exists(join(options.homeDir ?? homedir(), LEGACY_TASK_TOOL_EXTENSION_PATH));
-}
-
-export function shouldInstallNativeTaskTool(options: { readonly homeDir?: string; readonly exists?: ExistsFn; readonly force?: string } = {}): boolean {
-	if (options.force === "1" || options.force === "true") return true;
-	return !hasLegacyTaskToolExtension(options);
 }
 
 function globalLatchScope(): LatchScope {
@@ -78,28 +63,6 @@ export function claimSumocodeRuntime<T extends object>(runtime: T): boolean {
 /** Test-only: clear the process latch so installation paths can be re-exercised. */
 export function resetSumocodeProcessInstallLatchForTests(scope: LatchScope = globalLatchScope()): void {
 	delete scope[PROCESS_INSTALL_LATCH];
-}
-
-export function installConfiguredNativeTaskTool(pi: ExtensionAPI): void {
-	if (!shouldInstallNativeTaskTool({ force: process.env.SUMOCODE_NATIVE_TASK })) return;
-	taskTool({
-		name: "task",
-		label: "Task",
-		description: [
-			"Run isolated pi subprocess tasks (single, chain, or parallel).",
-			"Optional model override (provider/modelId).",
-		].join(" "),
-		maxParallelTasks: 8,
-		maxConcurrency: 4,
-		collapsedItemCount: 10,
-		skillListLimit: 30,
-		systemPromptPatches: [
-			{
-				match: /\n\s*\n\s*in addition to the tools above, you may have access to other custom tools depending on the project\./i,
-				replace: "\n- task: only for skill runs. For delegation use subagent_spawn; for background commands use terminal_start.",
-			},
-		],
-	})(pi);
 }
 
 export function installOrchestrationTools(pi: ExtensionAPI, rpcChild = false) {
@@ -159,7 +122,6 @@ export function installRpcChildProfile(pi: ExtensionAPI): void {
 	registerRpcTreeNavigationCommand(pi);
 	installMemoryExtraction(pi);
 	installFastMode(pi);
-	installConfiguredNativeTaskTool(pi);
 	installQuestionTool(pi);
 	installAnswerTool(pi);
 	const { subagentManager } = installOrchestrationTools(pi, true);

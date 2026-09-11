@@ -596,7 +596,6 @@ export function rpcSessionIsActive(state: RpcHostChromeState, transcript: Transc
 		|| state.hasMessages
 		|| state.messageCount > 0
 		|| state.pendingMessageCount > 0
-		|| state.taskPartialCount > 0
 		|| state.isStreaming
 		|| state.isCompacting
 		|| transcript.messages.length > 0;

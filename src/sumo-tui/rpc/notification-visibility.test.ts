@@ -12,7 +12,7 @@ import { RpcShellAdapter } from "./shell-adapter.js";
 
 const activeState = {
 	isStreaming: true, isCompacting: false, hasMessages: true,
-	messageCount: 1, pendingMessageCount: 0, taskPartialCount: 0, costUsd: 0,
+	messageCount: 1, pendingMessageCount: 0, costUsd: 0,
 };
 
 class CaptureTerminal extends TerminalSessionOwner {

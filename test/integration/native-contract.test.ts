@@ -529,8 +529,7 @@ nativeDescribe("native executable contract", () => {
 
 	it("threads compiled parent provenance into nested child launch plans", async () => {
 		const root = tempRoot("sumocode-native-provenance-");
-		const taskLog = join(root, "task.json");
-		const parentPi = createExecutable("parent-selected-pi", `#!/bin/bash\nnode -e 'const fs=require("node:fs"); fs.writeFileSync(process.env.PROVENANCE_TASK_LOG, JSON.stringify({argv:process.argv.slice(1),pi:process.env.PI_BIN,launcher:process.env.SUMOCODE_LAUNCHER})); console.log(JSON.stringify({type:"message_end",message:{role:"assistant",content:"done"}}))' -- "$@"\n`);
+		const parentPi = createExecutable("parent-selected-pi", "#!/bin/sh\nexit 0\n");
 		const dryRun = runNative(["--dry-run"], { env: { PI_BIN: parentPi } });
 		expect(dryRun.status).toBe(0);
 		const piBinary = dryRunField(dryRun.stdout, "PI_BIN");
@@ -540,10 +539,8 @@ nativeDescribe("native executable contract", () => {
 			PI_BIN: piBinary,
 			SUMOCODE_LAUNCHER: NATIVE_BIN,
 			SUMOCODE_RPC_CHILD: "1",
-			SUMOCODE_NATIVE_TASK: "1",
 			PI_CODING_AGENT_DIR: join(root, "agent"),
 			TMPDIR: root,
-			PROVENANCE_TASK_LOG: taskLog,
 			HERDR_ENV: "1",
 			HERDR_PANE_ID: "w1:p1",
 		});
@@ -580,18 +577,12 @@ nativeDescribe("native executable contract", () => {
 			extension.resetSumocodeProcessInstallLatchForTests?.();
 			// SAFETY: the Pi double implements the registration/runtime surface used by the compiled RPC extension.
 			extension.default(pi as never);
-			expect([...tools.keys()]).toEqual(expect.arrayContaining(["task", "subagent_spawn"]));
+			expect([...tools.keys()]).toContain("subagent_spawn");
 			const context = { cwd: ROOT, model: undefined, hasUI: true, ui: { notify: vi.fn() }, sessionManager: { getSessionId: () => "native-provenance", getSessionFile: () => undefined, getBranch: () => [{ type: "message" }] } };
 			for (const handler of agentStartHandlers) {
 				// SAFETY: the context supplies the session and UI fields used by the compiled agent-start handlers.
 				await handler({ type: "agent_start" }, context as never);
 			}
-			// SAFETY: the compiled task definition and context expose the exact Pi tool execution surface used here.
-			await tools.get("task")!.execute("native-provenance", { type: "single", tasks: [{ prompt: "probe", fork: false }] }, undefined, undefined, context as never);
-			// SAFETY: the fake parent Pi writes this exact provenance record.
-			const observed = JSON.parse(readFileSync(taskLog, "utf8")) as { pi: string; launcher: string };
-			expect(observed).toMatchObject({ pi: piBinary, launcher: NATIVE_BIN });
-
 			// SAFETY: the compiled subagent tool uses the same caller-facing execute seam.
 			await tools.get("subagent_spawn")!.execute("visible-provenance", { prompt: "watch", name: "worker", visible: true }, undefined, undefined, context as never);
 			const visibleScript = readdirSync(root, { recursive: true, encoding: "utf8" }).find((path) => path.endsWith("run.sh"));

@@ -71,8 +71,10 @@ describe("multiline paste and newline handling", () => {
 		expect(screen.text).toContain("line one");
 		expect(screen.text).toContain("line two");
 		expect(screen.text).toContain("line three");
-		expect(screen.text).not.toContain("Working...");
-		expect(screen.text).not.toContain("Error:");
+		// A submission or failure must be absent from the emitted bytes, not just the
+		// settled frame: painted-then-repainted copy still ships the bug.
+		expect(app.getOutput()).not.toContain("Working...");
+		expect(app.getOutput()).not.toContain("Error:");
 	}, 20_000);
 
 	it("enables bracketed paste in the RPC SumoCode runtime and does not submit pasted newlines", async () => {
@@ -96,7 +98,7 @@ describe("multiline paste and newline handling", () => {
 		expect(screen.text).toContain('echo "a');
 		expect(screen.text).toContain("b");
 		expect(screen.text).toContain('c"');
-		expect(screen.text).not.toContain("Error:");
+		expect(output).not.toContain("Error:");
 		expect(output).not.toContain("\x1b[200~");
 		expect(output).not.toContain("\x1b[201~");
 	}, 20_000);

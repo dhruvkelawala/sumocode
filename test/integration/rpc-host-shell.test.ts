@@ -548,10 +548,13 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		await waitForScreenText(app, /CTRL\+\/[\s\S]*COMMANDS/, 15_000);
 		await delay(250);
 
-		const screen = (await replayScreenRows(app.getOutput(), 100, 30)).join("\n");
-		expect(screen).not.toContain("SUMOCODE RPC");
-		expect(screen).not.toContain("empty transcript");
-		expect(screen).not.toContain("rpc host");
+		// Legacy copy is banned from the *emitted* bytes, not merely the settled
+		// frame: a leak painted over by the next repaint still ships the fallback
+		// surface, and a raw negative can only ever pass a split match.
+		const output = app.getOutput();
+		expect(output).not.toContain("SUMOCODE RPC");
+		expect(output).not.toContain("empty transcript");
+		expect(output).not.toContain("rpc host");
 
 		const activeState = app.getCurrentTerminalState();
 		expect(activeState.altscreenActive).toBe(true);
@@ -582,10 +585,10 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		await waitForScreenText(app, /CTRL\+\/[\s\S]*COMMANDS/, 15_000);
 		await delay(250);
 
-		const screen = (await replayScreenRows(app.getOutput(), 100, 30)).join("\n");
-		expect(screen).not.toContain("SUMOCODE RPC");
-		expect(screen).not.toContain("empty transcript");
-		expect(screen).not.toContain("rpc host");
+		const output = app.getOutput();
+		expect(output).not.toContain("SUMOCODE RPC");
+		expect(output).not.toContain("empty transcript");
+		expect(output).not.toContain("rpc host");
 
 		const activeState = app.getCurrentTerminalState();
 		expect(activeState.altscreenActive).toBe(true);

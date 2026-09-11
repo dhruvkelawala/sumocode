@@ -41,7 +41,8 @@ function diagnosticsFile(): string | undefined {
 }
 
 export function isDiagnosticsEnabled(): boolean {
-	return diagnosticsFile() !== undefined;
+	diagnosticsEnabled = diagnosticsFile() !== undefined;
+	return diagnosticsEnabled;
 }
 
 function isDiagnosticString(value: DiagnosticValue): value is string {
@@ -64,14 +65,23 @@ function sanitizeDiagnosticValue(value: DiagnosticValue): DiagnosticValue {
 const diagnosticsStart = performance.now();
 let lastMark = diagnosticsStart;
 let graphemeSegmentationCalls = 0;
+/**
+ * Last observed enablement. The hot segmentation counter reads this instead of
+ * the environment, so a normal launch never counts and never touches the
+ * counter. Real processes have `SUMO_TUI_DIAG_FILE` set before start; tests
+ * that flip it mid-process go through `isDiagnosticsEnabled()`, which refreshes
+ * this cache.
+ */
+let diagnosticsEnabled = diagnosticsFile() !== undefined;
 
 /**
  * Counts one grapheme-segmentation run (a non-empty text run handed to
- * `splitGraphemes`). Always-on: one integer add, and the retained renderer
- * reads the delta per frame so an offline trace (#503) can attribute
- * `Intl.Segmenter` cost to a render without perturbing it.
+ * `splitGraphemes`) so an offline trace (#503) can attribute `Intl.Segmenter`
+ * cost to a render. Inert unless diagnostics are enabled, and read by the
+ * retained renderer as a per-frame delta.
  */
 export function recordGraphemeSegmentation(): void {
+	if (!diagnosticsEnabled) return;
 	graphemeSegmentationCalls += 1;
 }
 

@@ -41,7 +41,7 @@ import { CellBuffer, type Rect } from "../render/buffer.js";
 import { composite, dispatchMouseEvent, type CompositeSelectionPass, type HardwareCursor } from "../render/compositor.js";
 import { cellRowToAnsi } from "../render/ansi-writer.js";
 import { diffFrames, type FrameDiffPatch } from "../render/diff.js";
-import { graphemeSegmentationCount, logDiagnostic } from "../runtime/diagnostics.js";
+import { graphemeSegmentationCount, isDiagnosticsEnabled, logDiagnostic } from "../runtime/diagnostics.js";
 import type { MouseEvent } from "../input/mouse.js";
 import type { ChatPager } from "../widgets/chat-pager.js";
 import { PiComponentLeaf } from "../widgets/pi-component-leaf.js";
@@ -90,6 +90,14 @@ export class RetainedShellRenderer {
 	private readonly paintHardwareCursorAsSoftware: boolean;
 	private lastFrame: CellBuffer | undefined;
 	private previousFrame: CellBuffer | undefined;
+	/**
+	 * Overlay components the last full render painted, in paint order. The narrow
+	 * repaint trusts the cloned frame's overlay pixels only while this set is
+	 * unchanged; a tick that finds a different visible set bails to a full render,
+	 * so an overlay opening or closing still reaches the screen even when no host
+	 * requested a render for it (#520).
+	 */
+	private paintedOverlayComponents: readonly ShellRenderable[] = [];
 	private lastCursor: HardwareCursor | null = null;
 	private readonly headerLeaf: PiComponentLeaf;
 	private readonly topChromeGapSpacer: SumoNode;
@@ -416,8 +424,11 @@ export class RetainedShellRenderer {
 	 */
 	public render(): void {
 		if (this.disposed) return;
-		const renderStart = performance.now();
-		const segmentStart = graphemeSegmentationCount();
+		// Frame-cost diagnostics stay inert (no clock reads, no counter deltas)
+		// unless a trace is actually being written.
+		const diagnosticsEnabled = isDiagnosticsEnabled();
+		const renderStart = diagnosticsEnabled ? performance.now() : 0;
+		const segmentStart = diagnosticsEnabled ? graphemeSegmentationCount() : 0;
 		const cols = Math.max(1, Math.floor(this.dimensions.columns ?? 80));
 		const rows = Math.max(1, Math.floor(this.dimensions.rows ?? 24));
 
@@ -463,8 +474,8 @@ export class RetainedShellRenderer {
 		logDiagnostic("owned_shell_render", {
 			cols,
 			rows,
-			renderMs: Math.round((performance.now() - renderStart) * 100) / 100,
-			segmentationCalls: graphemeSegmentationCount() - segmentStart,
+			renderMs: diagnosticsEnabled ? Math.round((performance.now() - renderStart) * 100) / 100 : 0,
+			segmentationCalls: diagnosticsEnabled ? graphemeSegmentationCount() - segmentStart : 0,
 			layoutMs: Math.round(layoutMs * 100) / 100,
 			compositeMs: Math.round(compositeMs * 100) / 100,
 			patchCount: patches.length,
@@ -494,8 +505,9 @@ export class RetainedShellRenderer {
 	public repaintRegion(leaf: "aboveEditor"): void {
 		if (this.disposed) return;
 		if (leaf !== "aboveEditor") return;
-		const repaintStart = performance.now();
-		const segmentStart = graphemeSegmentationCount();
+		const diagnosticsEnabled = isDiagnosticsEnabled();
+		const repaintStart = diagnosticsEnabled ? performance.now() : 0;
+		const segmentStart = diagnosticsEnabled ? graphemeSegmentationCount() : 0;
 		const cols = Math.max(1, Math.floor(this.dimensions.columns ?? 80));
 		const rows = Math.max(1, Math.floor(this.dimensions.rows ?? 24));
 		const previous = this.previousFrame;
@@ -515,6 +527,11 @@ export class RetainedShellRenderer {
 		}
 		if (this.aboveEditorLeaf.parent === undefined) {
 			fallback("leaf_detached");
+			return;
+		}
+		const visibleOverlays = this.visibleOverlayEntries(cols, rows).map((entry) => entry.component);
+		if (!sameOverlayComponents(visibleOverlays, this.paintedOverlayComponents)) {
+			fallback("overlay_set_changed");
 			return;
 		}
 
@@ -551,8 +568,8 @@ export class RetainedShellRenderer {
 			height: rect.height,
 			patchCount: patches.length,
 			overlayCount,
-			repaintMs: Math.round((performance.now() - repaintStart) * 100) / 100,
-			segmentationCalls: graphemeSegmentationCount() - segmentStart,
+			repaintMs: diagnosticsEnabled ? Math.round((performance.now() - repaintStart) * 100) / 100 : 0,
+			segmentationCalls: diagnosticsEnabled ? graphemeSegmentationCount() - segmentStart : 0,
 		});
 	}
 
@@ -580,6 +597,10 @@ export class RetainedShellRenderer {
 	 */
 	private compositeOverlays(frame: CellBuffer, termWidth: number, termHeight: number, clipTo?: Rect): number {
 		const visibleEntries = this.visibleOverlayEntries(termWidth, termHeight);
+		// A full render records what it painted; the narrow repaint compares against
+		// it above. Recording only on the full-render call keeps the narrow path
+		// from claiming a paint it did not do.
+		if (!clipTo) this.paintedOverlayComponents = visibleEntries.map((entry) => entry.component);
 		if (visibleEntries.length === 0) return 0;
 
 		for (const entry of visibleEntries) {
@@ -836,6 +857,11 @@ interface ResolvedOverlayLayout {
 
 function isNumber<T>(value: T): value is T & number {
 	return typeof value === "number";
+}
+
+/** Reference equality is enough: overlay components are long-lived host singletons. */
+function sameOverlayComponents(left: readonly ShellRenderable[], right: readonly ShellRenderable[]): boolean {
+	return left.length === right.length && left.every((component, index) => component === right[index]);
 }
 
 function parseSizeValue(value: number | string | undefined, reference: number): number | undefined {

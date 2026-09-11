@@ -1,6 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { loadYoga } from "../layout/yoga.js";
-import { graphemeSegmentationCount } from "../runtime/diagnostics.js";
 import type { TerminalPatch } from "../runtime/terminal-controller.js";
 import type { ChatBlock, ChatMessageViewModel } from "../transcript/view-model.js";
 import { ChatPager } from "../widgets/chat-pager.js";
@@ -105,14 +104,22 @@ describe("RetainedShellRenderer idle indicator ticks", () => {
 			renderer.render();
 			for (const component of [aboveEditor, topChrome, editor, belowEditor, footer]) component.resetRenderCalls();
 
-			const segmentStart = graphemeSegmentationCount();
+			// Count the real `Intl.Segmenter` calls made by both render-module
+			// splitters; the diagnostics counter is inert without a diag file.
+			const segmentSpy = vi.spyOn(Intl.Segmenter.prototype, "segment");
+			let segmentationCalls = 0;
 			const started = performance.now();
-			for (let tick = 1; tick <= TICKS; tick += 1) {
-				aboveEditor.rows = ["", `WORKING ${tick}`];
-				renderer.repaintRegion("aboveEditor");
+			try {
+				for (let tick = 1; tick <= TICKS; tick += 1) {
+					aboveEditor.rows = ["", `WORKING ${tick}`];
+					renderer.repaintRegion("aboveEditor");
+				}
+				// Read before mockRestore(), which clears the spy's recorded calls.
+				segmentationCalls = segmentSpy.mock.calls.length;
+			} finally {
+				segmentSpy.mockRestore();
 			}
 			const elapsedMs = performance.now() - started;
-			const segmentationCalls = graphemeSegmentationCount() - segmentStart;
 
 			// One changed row per tick (the spinner); two runs per row is headroom
 			// for a styled multi-escape indicator. The overlay rows are outside the

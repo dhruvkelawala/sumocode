@@ -619,6 +619,14 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 - Force-send is disabled outside an active streaming turn, including compaction and tree-navigation windows.
 - No Pi patch, hidden child queue, new RPC command, queue-card redesign, or golden promotion is authorized.
 
+## Pi RPC contract lock (088)
+
+**Planned at:** `42e6eec`, 2026-08-28. Release gate cleared at Pi `0.85.1` (`601689ad`).
+
+| Plan | Title | Priority | Effort | Depends on | Status |
+|------|-------|----------|--------|------------|--------|
+| 088 | Upgrade Pi to the first `clear_queue` release and lock the RPC contract | P0 | L | published Pi release with `clear_queue` | DONE — Pi `0.85.1` pinned across `pi-ai`/`pi-coding-agent`/`pi-tui`; installed-worker `clear_queue` proof and thinking-shape locks in `test/integration/rpc-contract.test.ts`; compile-exhaustive command/event/extension-UI dispositions in `src/sumo-tui/rpc/contract-classification.ts`; response envelope requires a real boolean success ([#375](https://github.com/dhruvkelawala/sumocode/issues/375)) |
+
 ## Deep improvement audit — command readiness, security, lifecycle, and Effect (091–115)
 
 **Planned at:** `b34bd79`, 2026-08-28. This deep audit covered all nine improve categories

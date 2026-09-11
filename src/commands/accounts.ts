@@ -534,15 +534,12 @@ async function pasteLongLivedToken(
 
 /**
  * A signed-in account reads "signed in" regardless of which provider the
- * session's current model uses. Fresh sessions start on the settings default
- * (often a non-Claude provider), and an earlier "inactive" label for that
- * state read as "sign in required" and sent users through needless re-auth.
- */
-/**
- * A stored long-lived token is authoritative over Pi's auth snapshot: the
- * snapshot is refreshed asynchronously after a store write, and a token row
- * rendered as "sign in required" during that window is the exact confusion
- * this flow exists to remove.
+ * session's current model uses — a fresh session starts on the settings default
+ * (often non-Claude), and an earlier "inactive" label sent users through
+ * needless re-auth. A stored long-lived token is authoritative over the auth
+ * snapshot, which is refreshed asynchronously after a store write; a token row
+ * reading "sign in required" during that window is the confusion this flow
+ * exists to remove.
  */
 function accountState(account: ClaudeAccount): string {
 	if (account.active) return "in use";

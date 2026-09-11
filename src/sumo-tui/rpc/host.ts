@@ -786,7 +786,7 @@ export function createRpcHostInterruptHandler(deps: RpcHostInterruptDependencies
 
 export interface RpcHostModelCycleDependencies {
 	readonly controls: Pick<RpcHostControls, "getEnabledModels" | "setModel">;
-	readonly notifications: Pick<NotificationCenter, "notify">;
+	readonly notifications: ErrorNotifier;
 	readonly onStateChange?: (state?: RpcHostChromeState) => void;
 }
 
@@ -834,7 +834,7 @@ export function createModelCycleBackwardHandler(deps: RpcHostModelCycleDependenc
 
 export interface RpcHostThinkingCycleDependencies {
 	readonly controls: Pick<RpcHostControls, "cycleThinkingLevel">;
-	readonly notifications: Pick<NotificationCenter, "notify">;
+	readonly notifications: ErrorNotifier;
 	readonly onStateChange?: (state?: RpcHostChromeState) => void;
 }
 

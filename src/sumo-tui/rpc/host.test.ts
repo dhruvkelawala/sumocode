@@ -915,8 +915,30 @@ describe("createModelCycleForwardHandler (app.model.cycleForward)", () => {
 		expect(notifications.notify).not.toHaveBeenCalled();
 	});
 
+	it("clears the previous sticky failure when the cycle succeeds", async () => {
+		const controls = {
+			getAvailableModels: vi.fn(),
+			getEnabledModels: vi.fn(async () => [
+				{ provider: "anthropic", id: "claude-opus-4", label: "anthropic/claude-opus-4", active: false },
+				{ provider: "openai", id: "gpt-5", label: "openai/gpt-5", active: true },
+			]),
+			setModel: vi.fn(async () => asNever({ modelLabel: "anthropic/claude-opus-4" })),
+		};
+		const dismissSticky = vi.fn();
+		const handle = createModelCycleForwardHandler({
+			// SAFETY: partial fixture; unread members of the target type are unused here.
+			controls: controls as never,
+			notifications: { notify: vi.fn(), dismissSticky },
+		});
+
+		handle();
+		await flush();
+
+		expect(dismissSticky).toHaveBeenCalledTimes(1);
+	});
+
 	it("notifies a warning instead of throwing when enabled-model discovery fails", async () => {
-		const notifications = { notify: vi.fn() };
+		const notifications = { notify: vi.fn(), dismissSticky: vi.fn() };
 		const handle = createModelCycleForwardHandler({
 			// SAFETY: partial controls fixture; only the members below are exercised.
 			controls: {
@@ -932,6 +954,9 @@ describe("createModelCycleForwardHandler (app.model.cycleForward)", () => {
 		await flush();
 
 		expect(notifications.notify).toHaveBeenCalledWith(expect.stringContaining("boom"), "error");
+		// A failed action re-arms its own sticky notice; it must not clear the
+		// previous one on the way out.
+		expect(notifications.dismissSticky).not.toHaveBeenCalled();
 	});
 });
 

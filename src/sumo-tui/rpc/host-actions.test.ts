@@ -364,6 +364,7 @@ function setup(options: {
 	const overlays = new RpcHostOverlayManager();
 	const inlineSelectors = new InlineSelectorHost(new FakeInlineEditor());
 	const notifications: Notification[] = [];
+	const dismissSticky = vi.fn();
 	const memory = options.memory ?? new FakeMemoryClient();
 	const editorText = new FakeEditorText();
 	const rehydrateCalls: number[] = [];
@@ -385,6 +386,7 @@ function setup(options: {
 				notifications.push({ message, level });
 				return notifications.length;
 			},
+			dismissSticky,
 		},
 		editorText,
 		createMemoryClient: () => memory,
@@ -410,7 +412,7 @@ function setup(options: {
 		},
 	});
 
-	return { actions, controls, modals, overlays, inlineSelectors, notifications, memory, editorText, rehydrateCalls, stateChanges, persistedThemes };
+	return { actions, controls, modals, overlays, inlineSelectors, notifications, dismissSticky, memory, editorText, rehydrateCalls, stateChanges, persistedThemes };
 }
 
 function rpcCommand(name: string, source: RpcSlashCommand["source"] = "prompt"): RpcSlashCommand {
@@ -1943,6 +1945,15 @@ describe("RpcHostActions", () => {
 		expect(after).not.toBe(before);
 		expect(persistedThemes).toEqual(["amber-crt", after]);
 		expect(notifications).toEqual([]);
+	});
+
+	it("clears the previous sticky failure when a host theme cycle succeeds", () => {
+		const { actions, dismissSticky } = setup();
+
+		actions.cycleTheme();
+
+		expect(getActiveTheme().name).toBe("amber-crt");
+		expect(dismissSticky).toHaveBeenCalledTimes(1);
 	});
 
 	it("warns when theme persistence fails but still applies the theme", async () => {

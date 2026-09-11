@@ -1438,6 +1438,11 @@ export class RpcHostActions {
 		// selector changed the live palette but reverted on restart.
 		const persisted = this.persistTheme(result.theme.name);
 		this.onRenderRequest();
+		// The theme changed, so the previous sticky failure is superseded
+		// (issue 481 home B). The /theme command path already clears at submit;
+		// this covers the host-side Ctrl+Shift+T/Alt+T cycle. Dismiss BEFORE the
+		// persistence failure below re-arms its own sticky notice.
+		this.notifications.dismissSticky?.();
 		if (!persisted.success) {
 			notify(this.notifications, `theme: ${result.theme.name} (not persisted: ${persisted.error})`, "warning", { sticky: true });
 		}

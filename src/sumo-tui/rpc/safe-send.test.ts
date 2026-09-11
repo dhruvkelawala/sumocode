@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { NotificationLevel } from "../widgets/notification.js";
 import { notifyOnError } from "./safe-send.js";
 
@@ -23,5 +23,29 @@ describe("notifyOnError", () => {
 		});
 
 		expect(notifications).toEqual([{ message: "rpc error: memory offline", level: "error" }]);
+	});
+
+	it("dismisses the previous sticky failure after the action completes successfully", async () => {
+		const dismissSticky = vi.fn();
+
+		await notifyOnError(async () => undefined, {
+			notify: vi.fn(),
+			dismissSticky,
+		});
+
+		expect(dismissSticky).toHaveBeenCalledTimes(1);
+	});
+
+	it("leaves the notice alone when the action fails so the failure notice re-arms it", async () => {
+		const dismissSticky = vi.fn();
+
+		await notifyOnError(async () => {
+			throw new Error("memory offline");
+		}, {
+			notify: vi.fn(),
+			dismissSticky,
+		});
+
+		expect(dismissSticky).not.toHaveBeenCalled();
 	});
 });

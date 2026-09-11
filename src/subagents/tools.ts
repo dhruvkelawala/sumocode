@@ -378,7 +378,7 @@ export function registerSubagentTools(
 			const snapshots = manager.list();
 			const text = snapshots.length > 0
 				? snapshots.map((snapshot) => formatSnapshotLine(snapshot, true)).join("\n")
-				: `No subagents tracked.\n\nKnown roles:\n${formatRoleTable(registeredRoles)}`;
+				: `No subagents tracked.\n\nKnown roles:\n${formatRoleTable(roleLoader().roles)}`;
 			return makeToolResult(text, { action: "list", subagents: snapshots });
 		},
 	});

@@ -563,6 +563,15 @@ describe("subagent tools", () => {
 		expect(textOf(result)).toContain("audit → openai-codex/gpt-5.6-sol (worktree)");
 	});
 
+	it("reloads roles for the empty list table after an in-session roles edit", async () => {
+		const roles: SubagentRole[] = [{ id: "audit", label: "Audit", description: "use for audits", systemPrompt: "audit carefully" }];
+		const { tool, ctx } = createHarness("herdr", roles);
+		roles.push({ id: "scribe", label: "Scribe", description: "use for writing", systemPrompt: "write", model: "openai/gpt-5.6-sol", defaultWorktree: true });
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const result = await tool("subagent_list").execute("tc", {}, undefined, undefined, ctx as never);
+		expect(textOf(result)).toContain("scribe → openai/gpt-5.6-sol (worktree)");
+	});
+
 	it("reports an automatic queue position when running capacity is occupied", async () => {
 		const { tool, ctx } = createHarness();
 		for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) {

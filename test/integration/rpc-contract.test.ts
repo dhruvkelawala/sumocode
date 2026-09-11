@@ -1,8 +1,11 @@
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
-import { afterEach, describe, expect, it } from "vitest";
-import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
+import type { AgentSessionEvent, RpcSessionState } from "@earendil-works/pi-coding-agent";
 import { SumoRpcClient } from "../../src/sumo-tui/rpc/client.js";
-import { responseData } from "../../src/sumo-tui/rpc/response.js";
+import { expectRpcSuccess, responseData, type RpcResponseData } from "../../src/sumo-tui/rpc/response.js";
 import { spawnSupervisedProcess, type SupervisedProcess } from "./harness-supervisor.js";
 import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
@@ -43,6 +46,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 
 const clients: SumoRpcClient[] = [];
 const children: SupervisedProcess[] = [];
+const tempDirs: string[] = [];
 
 afterEach(async () => {
 	for (const client of clients.splice(0)) {
@@ -53,6 +57,7 @@ afterEach(async () => {
 		}
 	}
 	for (const child of children.splice(0)) await child.terminate();
+	for (const dir of tempDirs.splice(0)) await rm(dir, { recursive: true, force: true });
 });
 
 function createClient(command: string, args: readonly string[], env: NodeJS.ProcessEnv): SumoRpcClient {
@@ -83,6 +88,16 @@ async function waitForEvent(events: readonly AgentSessionEvent[], type: string, 
 		await new Promise((resolve) => setTimeout(resolve, 25));
 	}
 	return undefined;
+}
+
+/** The shipped ThinkingLevel union, kept in lockstep by the satisfies check below. */
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const satisfies readonly RpcSessionState["thinkingLevel"][];
+
+async function startInstalledWorker(): Promise<SumoRpcClient> {
+	const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-contract-agent-"));
+	tempDirs.push(agentDir);
+	const env = buildSpawnEnv(process.env, { PI_CODING_AGENT_DIR: agentDir });
+	return createClient(process.env.PI_BIN ?? "pi", ["--mode", "rpc", "--offline", "--no-extensions", "--no-session"], env);
 }
 
 describe("RPC client contract tolerance", () => {
@@ -116,4 +131,41 @@ describe("RPC client contract tolerance", () => {
 		const wrongCommand = await client.send({ type: "clear_queue" });
 		expect(() => responseData(wrongCommand, "clear_queue")).toThrow(/unexpected response command get_state/);
 	}, 20_000);
+});
+
+describe("installed Pi worker contract", () => {
+	it("answers clear_queue and locks the thinking-level response and event shapes", async () => {
+		const client = await startInstalledWorker();
+		const events: AgentSessionEvent[] = [];
+		client.onEvent((event) => events.push(event));
+		await client.start();
+
+		// A fresh worker boots with an empty queue; the exact-id response also
+		// proves request/response correlation over the real child transport.
+		const cleared = expectRpcSuccess(await client.send({ type: "clear_queue", id: "rpc-contract-clear-queue" }), "clear_queue");
+		expect(cleared.id).toBe("rpc-contract-clear-queue");
+		expect(cleared.data.steering).toEqual([]);
+		expect(cleared.data.followUp).toEqual([]);
+		expectTypeOf(cleared.data).toEqualTypeOf<RpcResponseData<"clear_queue">>();
+
+		const queued = await waitForEvent(events, "queue_update", 10_000);
+		expect(queued).toBeDefined();
+
+		const state = responseData(await client.send({ type: "get_state" }), "get_state");
+		expect(state.sessionId.length).toBeGreaterThan(0);
+		expect(THINKING_LEVELS).toContain(state.thinkingLevel);
+		expectTypeOf(state).toEqualTypeOf<RpcSessionState>();
+
+		const levels = responseData(await client.send({ type: "get_available_thinking_levels" }), "get_available_thinking_levels").levels;
+		expect(Array.isArray(levels)).toBe(true);
+		for (const level of levels) expect(THINKING_LEVELS).toContain(level);
+		expectTypeOf(levels).toEqualTypeOf<RpcResponseData<"get_available_thinking_levels">["levels"]>();
+
+		// 0.85.1 acknowledges the clamped level with a void success and carries no
+		// effective-level payload; the get_state/event shapes above are authoritative.
+		const setter = responseData(await client.send({ type: "set_thinking_level", level: "off" }), "set_thinking_level");
+		expect(setter).toBeUndefined();
+		expectTypeOf(setter).toEqualTypeOf<RpcResponseData<"set_thinking_level">>();
+		expectTypeOf<Extract<AgentSessionEvent, { type: "thinking_level_changed" }>["level"]>().toEqualTypeOf<RpcSessionState["thinkingLevel"]>();
+	}, 30_000);
 });

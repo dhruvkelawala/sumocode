@@ -1,4 +1,5 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { recordGraphemeSegmentation } from "../runtime/diagnostics.js";
 import type { Cell } from "./cell.js";
 import { createAttrs } from "./cell.js";
 
@@ -177,6 +178,7 @@ export function truncateLine(line: Line, width: number): Line {
 
 export function splitGraphemes(text: string): string[] {
 	if (!text) return [];
+	recordGraphemeSegmentation();
 	if (!GRAPHEME_SEGMENTER) return Array.from(text);
 	return [...GRAPHEME_SEGMENTER.segment(text)].map((part) => part.segment);
 }

@@ -1,5 +1,9 @@
 import { CURSOR_MARKER } from "@earendil-works/pi-tui";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createAttrs } from "../render/cell.js";
 import { loadYoga, type Yoga } from "../layout/yoga.js";
 import type { TerminalPatch } from "../runtime/terminal-controller.js";
 import { ChatPager } from "../widgets/chat-pager.js";
@@ -478,6 +482,66 @@ describe("RetainedShellRenderer", () => {
 			// after dispose() returns early without throwing and writes nothing.
 			expect(() => renderer.render()).not.toThrow();
 			expect(terminal.cursors).toHaveLength(1);
+		});
+	});
+
+	describe("repaint diagnostics", () => {
+		it("names each narrow-repaint fallback guard and records per-render cost fields", async () => {
+			const previousDiagFile = process.env.SUMO_TUI_DIAG_FILE;
+			const tempDir = mkdtempSync(join(tmpdir(), "sumocode-repaint-"));
+			const file = join(tempDir, "manual.jsonl");
+			process.env.SUMO_TUI_DIAG_FILE = file;
+			const viewport = { columns: COLS, rows: ROWS };
+			const aboveEditor = new StaticComponent(["", "INDICATOR-A"]);
+			// The selection pass only bails the narrow path when it would repaint a
+			// row outside the above-editor rect differently than the frame already
+			// holds: arm it, run one tick, then disarm so the next tick is narrow.
+			let selectionMutates = false;
+			const selection: ShellSelectionPass = {
+				applySelectionHighlight(buffer): void {
+					if (!selectionMutates) return;
+					buffer.setCell(0, 0, { char: "S", attrs: createAttrs({ bold: true }) });
+				},
+			};
+			const { renderer } = await createHarness({ aboveEditorWidgets: () => aboveEditor, viewport, selection });
+			try {
+				renderer.repaintRegion("aboveEditor"); // no previous frame
+				renderer.render();
+
+				viewport.rows = ROWS + 1;
+				renderer.repaintRegion("aboveEditor"); // viewport mismatch
+				viewport.rows = ROWS;
+				renderer.render();
+
+				selectionMutates = true;
+				aboveEditor.rows = ["", "INDICATOR-B"];
+				renderer.repaintRegion("aboveEditor"); // selection mismatch
+				renderer.render();
+
+				selectionMutates = false;
+				aboveEditor.rows = ["", "INDICATOR-C"];
+				renderer.repaintRegion("aboveEditor"); // narrow
+
+				const events = readFileSync(file, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+				const fallbackGuards = events
+					.filter((entry) => entry.event === "owned_shell_repaint_fallback")
+					.map((entry) => entry.guard);
+				expect(fallbackGuards).toEqual(["no_previous_frame", "viewport_mismatch", "selection_mismatch"]);
+
+				const narrow = events.filter((entry) => entry.event === "owned_shell_repaint_narrow").at(-1);
+				expect(narrow).toMatchObject({ leaf: "aboveEditor", patchCount: 1 });
+				expect(typeof narrow.repaintMs).toBe("number");
+				expect(typeof narrow.segmentationCalls).toBe("number");
+
+				const full = events.filter((entry) => entry.event === "owned_shell_render").at(-1);
+				expect(typeof full.renderMs).toBe("number");
+				expect(typeof full.segmentationCalls).toBe("number");
+			} finally {
+				if (previousDiagFile === undefined) delete process.env.SUMO_TUI_DIAG_FILE;
+				else process.env.SUMO_TUI_DIAG_FILE = previousDiagFile;
+				rmSync(tempDir, { recursive: true, force: true });
+				renderer.dispose();
+			}
 		});
 	});
 

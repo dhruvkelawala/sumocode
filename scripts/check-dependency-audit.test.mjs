@@ -58,6 +58,11 @@ describe("dependency audit policy", () => {
 		expect(readFileSync(join(import.meta.dirname, "smoke-pi-versions.sh"), "utf8")).toContain('VERSIONS=("0.85.1")');
 	});
 
+	it("keeps the vitest dev floor at the patched release", () => {
+		const packageJson = JSON.parse(readFileSync(join(import.meta.dirname, "../package.json"), "utf8"));
+		expect(packageJson.devDependencies.vitest).toBe("^4.1.11");
+	});
+
 	it("runs in the required CI lane", () => {
 		const workflow = readFileSync(join(import.meta.dirname, "../.github/workflows/ci.yml"), "utf8");
 		expect(workflow).toContain("run: node scripts/check-dependency-audit.mjs");

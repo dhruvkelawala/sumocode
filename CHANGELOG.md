@@ -87,6 +87,10 @@ merge.
 - **Dependency audit gate** — the post-publication `smol-toml` advisory that
   broke the CI gate for every branch is remediated by a narrow dev-graph
   override, recorded with its reachability evidence. #489
+- **Native release gate** — the native executable contract asserted the
+  pre-provenance visible-child command, so the macOS release build failed
+  before packaging; the assertion now pins both the parent-selected
+  `PI_BIN` and the native binary. #509
 
 ### Documentation
 - Salvaged the Pi RPC audit documents (upstream protocol inventory,

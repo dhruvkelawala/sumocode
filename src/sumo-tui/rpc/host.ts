@@ -488,6 +488,10 @@ export function createEditorSubmitHandlers(deps: EditorSubmitHandlerDependencies
 		// state an earlier gated shortcut is still committing.
 		await deps.gate.whenSettled();
 		if (deps.isTreeBusy()) {
+			// The editor cleared its buffer when Enter fired (submitValue clears
+			// before the async submit settles), so a silent return loses the
+			// prompt: this rejection is failure feedback, not a confirmation.
+			deps.notifications.notify("branch summary in progress", "warning");
 			return;
 		}
 		await deps.submit(message);

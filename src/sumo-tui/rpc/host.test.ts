@@ -157,6 +157,24 @@ describe("editor command-readiness submission", () => {
 		expect(submit).toHaveBeenCalledWith(message);
 	});
 
+	it("keeps a transient reason when the tree busy-gate drops an editor submission", async () => {
+		const notifications = { notify: vi.fn() };
+		const submit = vi.fn(async () => undefined);
+		const handlers = createEditorSubmitHandlers({
+			gate: { isReady: true, whenSettled: async () => undefined },
+			notifications,
+			submit,
+			requestExit: vi.fn(),
+			isTreeBusy: () => true,
+		});
+
+		await handlers.fromEditor("summarize this branch");
+
+		expect(submit).not.toHaveBeenCalled();
+		expect(notifications.notify).toHaveBeenCalledOnce();
+		expect(notifications.notify).toHaveBeenCalledWith("branch summary in progress", "warning");
+	});
+
 	it("keeps quit immediate and silent before command readiness", async () => {
 		const notifications = { notify: vi.fn() };
 		const requestExit = vi.fn();

@@ -595,6 +595,9 @@ export class RpcHostActions {
 		this.notifications.dismissSticky?.();
 		const { command, args } = firstArg(text);
 		if (this.isTreeNavigationBusy() && this.isTreeNavigationBlockedCommand(command)) {
+			// The submission was rejected, not performed: keep the reason visible as a
+			// transient hint after the entry dismiss cleared the previous sticky.
+			notify(this.notifications, "branch summary in progress", "warning");
 			return true;
 		}
 		if (!command.startsWith("/")) return false;

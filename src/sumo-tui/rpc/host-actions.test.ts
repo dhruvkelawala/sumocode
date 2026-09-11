@@ -1727,7 +1727,13 @@ describe("RpcHostActions", () => {
 			await expect(actions.handleSubmittedText("/tree")).resolves.toBe(true);
 			await expect(actions.handleSubmittedText("/new")).resolves.toBe(true);
 			expect(controls.calls).toEqual([]);
-			expect(notifications).toEqual([]);
+			// The editor already cleared its buffer, so a rejected submission keeps its
+			// transient reason visible instead of vanishing silently.
+			expect(notifications).toEqual([
+				{ message: "branch summary in progress", level: "warning" },
+				{ message: "branch summary in progress", level: "warning" },
+				{ message: "branch summary in progress", level: "warning" },
+			]);
 			busy = false;
 			await expect(actions.handleSubmittedText("/copy")).resolves.toBe(true);
 			expect(controls.calls).toContain("getLastAssistantText");

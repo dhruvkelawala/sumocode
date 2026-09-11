@@ -284,6 +284,13 @@ export function installFooter(
 		const status = safeRead(() => resolveClaudeAccount(ctx), undefined);
 		claudeAccount = status ? { label: status.label, active: status.active } : undefined;
 	};
+	// One owner for repainting the chip, so every caller gets the same guard: a
+	// headless session must not repaint the UI footer from its own context.
+	const refreshAccount = (ctx: ExtensionContext): void => {
+		if (!ctx.hasUI) return;
+		refreshClaudeAccount(ctx);
+		render?.();
+	};
 
 	const setState = (next: SumoCodeState): void => {
 		state = next;
@@ -335,21 +342,11 @@ export function installFooter(
 		if (ctx.hasUI) refreshClaudeAccount(ctx);
 		setState("idle");
 	});
-	pi.on("model_select", (_event, ctx) => {
-		// Mirror session_start's guard: a headless session must not repaint the UI
-		// footer's chip from its own context, nor pay for the registry read.
-		if (!ctx.hasUI) return;
-		refreshClaudeAccount(ctx);
-		render?.();
-	});
+	pi.on("model_select", (_event, ctx) => refreshAccount(ctx));
 
 	return {
 		requestRender: () => render?.(),
-		refreshAccount: (ctx: ExtensionContext): void => {
-			if (!ctx.hasUI) return;
-			refreshClaudeAccount(ctx);
-			render?.();
-		},
+		refreshAccount,
 	};
 }
 

@@ -1171,11 +1171,19 @@ export class RpcHostActions {
 			notify(this.notifications, "no sessions found", "warning");
 			return;
 		}
+		// The tab badge appends the row count, so a capped list reads as
+		// "all sessions · recent <rows shown>" instead of an exhaustive list. When
+		// the current session was pinned into that window from outside it, the
+		// label says so too: the rows are then recent sessions *plus* the current
+		// one, not a pure newest-N window.
+		const allSessionsLabel = !allSessionsWindow.truncated
+			? "all sessions"
+			: allSessionsWindow.pinnedCurrent
+				? "all sessions · recent +current"
+				: "all sessions · recent";
 		const tabs: InlineSelectorTab[] = [
 			{ id: "project", label: "current project", options: resumeSessionItems(projectSessions, sessionFile) },
-			// The tab badge appends the row count, so a capped list reads as
-			// "all sessions · recent <rows shown>" instead of an exhaustive list.
-			{ id: "all", label: allSessionsWindow.truncated ? "all sessions · recent" : "all sessions", options: resumeSessionItems(allSessions, sessionFile, { showProjectDirectory: true }) },
+			{ id: "all", label: allSessionsLabel, options: resumeSessionItems(allSessions, sessionFile, { showProjectDirectory: true }) },
 		];
 		// Nothing to resume inside this project? Open where the sessions are
 		// (same default-tab rule the model chooser uses for an empty enabled list).

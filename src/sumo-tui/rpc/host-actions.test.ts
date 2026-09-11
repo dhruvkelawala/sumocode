@@ -1160,15 +1160,43 @@ describe("RpcHostActions", () => {
 				await waitForInlineSelector(inlineSelectors, "Resume session");
 				const projectScope = inlineSelectorText(inlineSelectors);
 				expect(projectScope).toContain("◆ CURRENT PROJECT 1");
-				// The capped scope says so; the exhaustive project scope does not.
-				expect(projectScope).toContain("◇ ALL SESSIONS · RECENT 100");
+				// The capped scope says so, and it names the pinned current session it
+				// holds in place of the newest dropped row; the exhaustive project scope
+				// does not.
+				expect(projectScope).toContain("◇ ALL SESSIONS · RECENT +CURRENT 100");
 				// Narrow (portrait) widths must not push the other tab out of the bar.
 				const narrow = inlineSelectorText(inlineSelectors, 60);
-				expect(narrow).toContain("ALL SESSIONS · RECENT 100");
+				expect(narrow).toContain("ALL SESSIONS · RECENT +CURRENT 100");
 				expect(narrow).toContain("CURRENT PROJECT 1");
 
 				inlineSelectors.handleInput(SELECTOR_TAB);
-				expect(inlineSelectorText(inlineSelectors)).toContain("◆ ALL SESSIONS · RECENT 100");
+				expect(inlineSelectorText(inlineSelectors)).toContain("◆ ALL SESSIONS · RECENT +CURRENT 100");
+
+				inlineSelectors.handleInput(SELECTOR_ESCAPE);
+				await resumePromise;
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+
+		it("keeps the plain recent label when the cap drops rows but the current session is in the window", async () => {
+			const root = mkdtempSync(join(tmpdir(), "sumocode-resume-windowed-label-test-"));
+			try {
+				// One more session than the window holds, all older than the current
+				// one: the cap still drops rows, but the current session is already
+				// inside the window, so nothing was pinned into it.
+				for (let index = 0; index <= DEFAULT_MAX_ALL_SESSIONS; index += 1) {
+					const minute = String(index % 60).padStart(2, "0");
+					writeFixtureSession(root, `2026-07-02T20-${minute}-00-000Z_bulk-${index}.jsonl`, `bulk-${index}`, "2026-07-02T20:00:01.000Z", `bulk first message ${index}`, { projectDir: "--other--", cwd: "/repo-other" });
+				}
+				// Written last, so it is the newest active session.
+				const currentFile = writeFixtureSession(root, "2026-07-02T22-00-00-000Z_current.jsonl", "current", "2026-07-02T22:00:00.000Z", "current session first message");
+				const { actions, inlineSelectors } = setup({ sessionFile: currentFile });
+
+				const resumePromise = actions.handleSubmittedText("/resume");
+				await waitForInlineSelector(inlineSelectors, "Resume session");
+				expect(inlineSelectorText(inlineSelectors)).toContain("ALL SESSIONS · RECENT 100");
+				expect(inlineSelectorText(inlineSelectors)).not.toContain("+CURRENT");
 
 				inlineSelectors.handleInput(SELECTOR_ESCAPE);
 				await resumePromise;

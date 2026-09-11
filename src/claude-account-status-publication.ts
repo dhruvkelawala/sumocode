@@ -18,7 +18,7 @@ import type { RpcLoginRuntime } from "./sumo-tui/pi-compat/login-command.js";
 export const CLAUDE_ACCOUNT_STATUS_KEY = "sumocode.claude-account";
 export const CLAUDE_ACCOUNT_ACTIVE_STATUS_KEY = "sumocode.claude-account-active";
 
-export interface PublishedClaudeAccount {
+interface PublishedClaudeAccount {
 	readonly label: string;
 	readonly active: boolean;
 }
@@ -68,7 +68,7 @@ function isSetStatusFunction(value: ((key: string, text: string | undefined) => 
 	return typeof value === "function";
 }
 
-export type ClaudeSubscriptionLabel = (providerId: string) => string | undefined;
+type ClaudeSubscriptionLabel = (providerId: string) => string | undefined;
 
 function publish(ctx: ExtensionContext, resolve: () => ClaudeAccountStatus | undefined): void {
 	if (!ctx.hasUI) return;

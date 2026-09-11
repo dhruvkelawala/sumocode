@@ -116,7 +116,7 @@ async function renderFooterClaudeAccount(width) {
 		// the state this scenario exists to capture.
 		modelId: "gpt-5.5",
 		thinkingLevel: "medium",
-		claudeAccount: { providerId: "anthropic-2", label: "company", active: false },
+		claudeAccount: { label: "company", active: false },
 	}, width);
 }
 

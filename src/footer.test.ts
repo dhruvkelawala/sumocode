@@ -17,6 +17,7 @@ import {
 	type FooterSnapshot,
 } from "./footer.js";
 import { VOICE } from "./voice.js";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { activeThemeColors } from "./themes/index.js";
 
 // oxlint-disable-next-line no-control-regex -- intentional ESC/control-byte match to strip ANSI in captured output
@@ -405,6 +406,13 @@ describe("footer Claude account segment", () => {
 	it("brightens the segment when the account is live", () => {
 		const line = formatFooterLine(snapshot({ claudeAccount: { ...COMPANY, active: true } }), 160);
 		expect(line).toContain(colorHex("claude company", activeThemeColors().foreground));
+	});
+
+	it("keeps the segment inside its column budget for a wide-character label", () => {
+		const line = formatFooterLine(snapshot({ claudeAccount: { providerId: "anthropic-2", label: "会社アカウント", active: false } }), 160);
+		const chip = /claude \S+/.exec(withoutAnsi(line))?.[0] ?? "";
+		expect(visibleWidth(chip)).toBeLessThanOrEqual(15);
+		expect(chip.endsWith("…")).toBe(true);
 	});
 
 	it("omits the segment when no Claude account is resolved", () => {

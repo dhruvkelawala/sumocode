@@ -61,6 +61,9 @@ const RESET = "\u001b[0m";
 const SPLASH_VERSION_TOP_GAP_ROWS = 2;
 const SPLASH_VERSION_BOTTOM_GAP_ROWS = 7;
 const FOOTER_HORIZONTAL_PADDING = 1;
+/** `claude ` plus the eight-column label budget the resolver also applies. */
+const CLAUDE_ACCOUNT_CHIP_COLUMNS = 15;
+const CLAUDE_ACCOUNT_CHIP_TRUNCATION_MARKER = "…";
 
 export function colorHex(text: string, hex: string): string {
 	const normalized = hex.replace("#", "");
@@ -136,9 +139,12 @@ function formatFooterLineInner(snapshot: FooterSnapshot, width: number): string 
 	const thinking = colorHex(snapshot.thinkingLevel, activeThemeColors().foreground);
 	const sep = colorHex(" · ", activeThemeColors().foregroundDim);
 	const fast = snapshot.showFastMode ? colorHex("fast", activeThemeColors().foreground) : undefined;
+	// The resolver clips by grapheme so a label can never split mid-character;
+	// the column budget is the footer's to enforce, since only it knows how wide
+	// a grapheme paints (a CJK label is two columns per character).
 	const account = snapshot.claudeAccount
 		? colorHex(
-			formatClaudeAccountChip(snapshot.claudeAccount),
+			truncateToWidth(formatClaudeAccountChip(snapshot.claudeAccount), CLAUDE_ACCOUNT_CHIP_COLUMNS, CLAUDE_ACCOUNT_CHIP_TRUNCATION_MARKER),
 			snapshot.claudeAccount.active ? activeThemeColors().foreground : activeThemeColors().foregroundDim,
 		)
 		: undefined;

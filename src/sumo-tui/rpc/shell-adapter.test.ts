@@ -2,7 +2,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CellBuffer } from "../render/buffer.js";
 import type { MouseEvent } from "../input/mouse.js";
-import { resetThemeRegistryForTests, setActiveTheme } from "../../themes/index.js";
+import { activeThemeColors, resetThemeRegistryForTests, setActiveTheme } from "../../themes/index.js";
 import { ULTRAVIOLET_CORE_INDICATOR_INTERVAL_MS, ULTRAVIOLET_RUNCAT_FRAMES, ULTRAVIOLET_RUNCAT_INTERVAL_MS } from "../../themes/ultraviolet-core.js";
 import { ChatPager } from "../widgets/chat-pager.js";
 import { NotificationCenter } from "../widgets/notification.js";
@@ -121,6 +121,44 @@ describe("RpcShellAdapter splash hint", () => {
 			expect(text).toContain("SumoCode sync complete");
 			expect(text).not.toContain("╰─ gpt-5.5");
 			expect(text).toContain("CTRL+/ · COMMANDS");
+		} finally {
+			adapter.dispose();
+			notifications.dispose();
+		}
+	});
+
+	it("paints a sticky failure above the splash input frame and clears it on demand", async () => {
+		const notifications = new NotificationCenter();
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 100, rows: 30 },
+			initialState: state({ hasMessages: false, modelLabel: "openai/gpt-5.5", thinkingLevel: "high" }),
+			initialTranscript: { messages: [] },
+			notifications,
+		});
+		const text = (): string => Array.from({ length: 30 }, (_value, row) => adapter.getLastFrame()!.toPlainRow(row)).join("\n");
+		try {
+			adapter.render();
+			const splashBefore = text();
+			notifications.notify("unknown model: nope", "warning", { sticky: true });
+			adapter.render();
+			const frame = adapter.getLastFrame()!;
+			const rows = Array.from({ length: 30 }, (_value, row) => frame.toPlainRow(row));
+			const notice = rows.findIndex((row) => row.includes("unknown model: nope"));
+			const frameTop = rows.findIndex((row) => row.includes("┌"));
+			expect(notice).toBeGreaterThanOrEqual(0);
+			expect(notice).toBeLessThan(frameTop);
+			expect(frame.getCell(notice, 0).fg?.toLowerCase()).toBe(activeThemeColors().states.approval.toLowerCase());
+			// The sticky text owns its own row; the splash hint row keeps the
+			// model/thinking invocation hint.
+			expect(text()).toContain("╰─ gpt-5.5 · high");
+
+			notifications.dismissSticky();
+			adapter.render();
+			expect(text()).not.toContain("unknown model: nope");
+			// A cleared notice restores the exact no-notice splash frame: the leaf
+			// measures to zero rows, so the sticky row never shifts the layout.
+			expect(text()).toBe(splashBefore);
 		} finally {
 			adapter.dispose();
 			notifications.dispose();

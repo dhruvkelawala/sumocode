@@ -34,13 +34,14 @@ export interface SyncStepResult {
 
 /** Minimal child-process surface the streamed runner reads; Node's `spawn` returns one. */
 interface StepChildProcess {
-	readonly stdout: { on(event: "data", listener: (chunk: Buffer | string) => void): void } | null;
-	readonly stderr: { on(event: "data", listener: (chunk: Buffer | string) => void): void } | null;
+	readonly stdout: { on(event: "data", listener: (chunk: Buffer | string) => void): void; destroy?: () => void } | null;
+	readonly stderr: { on(event: "data", listener: (chunk: Buffer | string) => void): void; destroy?: () => void } | null;
 	on(event: "error", listener: (error: Error) => void): void;
 	on(event: "close", listener: (code: number | null, signal: NodeJS.Signals | null) => void): void;
+	kill(): boolean;
 }
 
-type SpawnStepChild = (file: string, args: readonly string[], options: { cwd?: string; signal: AbortSignal }) => StepChildProcess;
+type SpawnStepChild = (file: string, args: readonly string[], options: { cwd?: string }) => StepChildProcess;
 
 export interface SumoSyncDeps {
 	readonly env?: NodeJS.ProcessEnv;
@@ -344,14 +345,15 @@ function runStepStreamed(
 	spawnChild: SpawnStepChild,
 ): Promise<{ stdout: string; stderr: string }> {
 	return new Promise((resolveOutput, rejectOutput) => {
-		const signal = AbortSignal.timeout(options.timeout);
-		const child = spawnChild(file, args, { cwd: options.cwd, signal });
+		const child = spawnChild(file, args, { cwd: options.cwd });
 		const stdout = createOutputTail();
 		const stderr = createOutputTail();
+		let timer: NodeJS.Timeout | undefined;
 		let settled = false;
 		const settle = (finish: () => void): void => {
 			if (settled) return;
 			settled = true;
+			clearTimeout(timer);
 			finish();
 		};
 		const failed = (detail: string): Error => Object.assign(
@@ -360,10 +362,18 @@ function runStepStreamed(
 		);
 		child.stdout?.on("data", (chunk) => stdout.write(chunk));
 		child.stderr?.on("data", (chunk) => stderr.write(chunk));
-		// Spawn failures and the timeout abort both emit `error` before `close`; the first one settles.
-		child.on("error", (error) => settle(() => {
-			rejectOutput(failed(signal.aborted ? `timed out after ${options.timeout}ms` : error.message));
-		}));
+		// A descendant that inherits the stdio pipes keeps `close` pending after the child
+		// has exited, so the timeout settles the step itself and drops the pipes instead of
+		// waiting for an event that may never arrive.
+		timer = setTimeout(() => {
+			child.kill();
+			child.stdout?.destroy?.();
+			child.stderr?.destroy?.();
+			settle(() => rejectOutput(failed(`timed out after ${options.timeout}ms`)));
+		}, options.timeout);
+		timer.unref();
+		// Spawn failures and the timeout kill both emit `error` before `close`; the first one settles.
+		child.on("error", (error) => settle(() => rejectOutput(failed(error.message))));
 		child.on("close", (code, closeSignal) => settle(() => {
 			if (code === 0) {
 				resolveOutput({ stdout: stdout.read(), stderr: stderr.read() });

@@ -585,9 +585,9 @@ describe("/sumo:sync", () => {
 
 	it("streams a noisy step's output instead of dying at execFile's maxBuffer", async () => {
 		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-		// The fake child carries only the stdout/stderr/close members the streamed runner reads.
+		// The fake child carries only the stdout/stderr/close/kill members the streamed runner reads.
 		const spawn = vi.fn(() => {
-			const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter() });
+			const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter(), kill: () => true });
 			queueMicrotask(() => {
 				child.stdout.emit("data", "a".repeat(2 * 1024 * 1024));
 				child.stdout.emit("data", "TAIL-MARKER");
@@ -613,6 +613,40 @@ describe("/sumo:sync", () => {
 		expect(output.endsWith("TAIL-MARKER")).toBe(true);
 		expect(spawn).toHaveBeenCalledTimes(2);
 		stdout.mockRestore();
+	});
+
+	it("fails a step at the timeout instead of waiting for a close that never comes", async () => {
+		vi.useFakeTimers();
+		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const kill = vi.fn(() => true);
+		// The fake child stays silent: a descendant held its stdio pipes open, so no close arrives.
+		const spawn = vi.fn(() => Object.assign(new EventEmitter(), {
+			stdout: new EventEmitter(),
+			stderr: new EventEmitter(),
+			kill,
+		}));
+		try {
+			// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
+			const pending = executeSumoSync(ctx() as never, {
+				env: { SUMOCODE_CONFIG_DIR: "/config" },
+				cwd: "/repo/sumocode",
+				moduleUrl: "file:///repo/sumocode/src/commands/sync.ts",
+				exists: (path) => path === "/config/.git" || sumocodeRepoExists(path),
+				readFile: () => JSON.stringify({ name: "@dhruvkelawala/sumocode" }),
+				spawn,
+			});
+			await vi.advanceTimersByTimeAsync(120_000);
+			const results = await pending;
+
+			expect(kill).toHaveBeenCalledTimes(1);
+			expect(results).toHaveLength(1);
+			expect(results[0]?.ok).toBe(false);
+			expect(results[0]?.output).toContain("timed out after 120000ms");
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+			stdout.mockRestore();
+		}
 	});
 });
 

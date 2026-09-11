@@ -28,7 +28,7 @@ import { saveSumoCodeConfigPatch } from "../../config/sumocode-config.js";
 import { tryCreateOsc52Sequence } from "../input/selection.js";
 import type { EditorTextController } from "../pi-compat/extension-ui-adapter.js";
 import type { ModalManager } from "../widgets/modal.js";
-import type { NotificationCenter, NotificationLevel } from "../widgets/notification.js";
+import type { NotificationCenter, NotificationLevel, NotifyOptions } from "../widgets/notification.js";
 import type { RpcHostControls, RpcModelOption, RpcSessionStats, RpcSlashCommand, RpcThinkingLevel } from "./controls.js";
 import { validateRpcTreeNavigationRequest, type RpcTreeNavigationOutcome, type RpcTreeNavigationRequest } from "../pi-compat/tree-navigation-command.js";
 import type { RpcHostOverlayManager } from "./host-overlays.js";
@@ -211,12 +211,12 @@ function isMermaidRenderingMode(value: string): value is MermaidRenderingMode {
 }
 
 /**
- * Records a host notice (issue 481). `timeoutMs` 0 makes it sticky: failures
- * paint above the input frame until Escape or the next host action, while any
- * other notice is a transient hint in the belowEditor hint row.
+ * Records a host notice (issue 481). `{ sticky: true }` paints a failure above
+ * the input frame until Escape or the next host action; any other notice is a
+ * transient hint in the belowEditor hint row.
  */
-function notify(notifications: HostNotifications, message: string, level: NotificationLevel = "info", timeoutMs?: number): void {
-	notifications.notify(message, level, timeoutMs);
+function notify(notifications: HostNotifications, message: string, level: NotificationLevel = "info", options?: NotifyOptions): void {
+	notifications.notify(message, level, options);
 }
 
 function isConfigScalar(value: LovelyWebConfigValue): value is string | number | boolean | null | undefined {
@@ -609,7 +609,7 @@ export class RpcHostActions {
 				return true;
 			case "/login":
 				if (this.loginActive) {
-					notify(this.notifications, "login already in progress", "warning", 0);
+					notify(this.notifications, "login already in progress", "warning", { sticky: true });
 					return true;
 				}
 				this.loginActive = true;
@@ -708,7 +708,7 @@ export class RpcHostActions {
 						return true;
 					}
 					if (childCommand) return false;
-					notify(this.notifications, `unknown command: ${command}`, "warning", 0);
+					notify(this.notifications, `unknown command: ${command}`, "warning", { sticky: true });
 					return true;
 				}
 				return false;
@@ -810,7 +810,7 @@ export class RpcHostActions {
 		if (selected === undefined) return;
 		const parsed = parseModelLabel(selected);
 		if (!parsed) {
-			notify(this.notifications, `unknown model: ${selected}`, "warning", 0);
+			notify(this.notifications, `unknown model: ${selected}`, "warning", { sticky: true });
 			return;
 		}
 		const state = await this.controls.setModel(parsed.provider, parsed.id);
@@ -1006,14 +1006,14 @@ export class RpcHostActions {
 
 	private async setLovelyWebApiKey(scope: LovelyWebConfigScope, cwd: string, provider: string): Promise<void> {
 		if (scope !== "user") {
-			notify(this.notifications, "Lovely Web API keys are user-only", "warning", 0);
+			notify(this.notifications, "Lovely Web API keys are user-only", "warning", { sticky: true });
 			return;
 		}
 		// SAFETY: LOVELY_WEB_API_KEY_FIELDS is keyed by provider name; an
 		// unknown provider yields undefined and the caller returns early below.
 		const key = LOVELY_WEB_API_KEY_FIELDS[provider as keyof typeof LOVELY_WEB_API_KEY_FIELDS];
 		if (!key) {
-			notify(this.notifications, `unknown Lovely Web provider: ${provider}`, "warning", 0);
+			notify(this.notifications, `unknown Lovely Web provider: ${provider}`, "warning", { sticky: true });
 			return;
 		}
 		const value = await this.modals.input(`${provider} API key`, "paste key; blank to clear", { secret: true });
@@ -1239,7 +1239,7 @@ export class RpcHostActions {
 			try {
 				validateRpcTreeNavigationRequest(request);
 			} catch {
-				notify(this.notifications, "invalid tree navigation request", "warning", 0);
+				notify(this.notifications, "invalid tree navigation request", "warning", { sticky: true });
 				return;
 			}
 			this.setTreeNavigationBusy(true);
@@ -1322,7 +1322,7 @@ export class RpcHostActions {
 			facts = await client.browse({ status: "active", limit: 500 });
 		} catch (error) {
 			const message = error instanceof MemoryClientError ? error.message : String(error);
-			notify(this.notifications, `memory unavailable: ${message}`, "warning", 0);
+			notify(this.notifications, `memory unavailable: ${message}`, "warning", { sticky: true });
 			return;
 		}
 		const initial: MemoryEditorSnapshot = {
@@ -1409,13 +1409,13 @@ export class RpcHostActions {
 	private async setThinkingFromText(value: string): Promise<void> {
 		const levelText = value.trim().toLowerCase();
 		if (!isRpcThinkingLevel(levelText)) {
-			notify(this.notifications, `unknown thinking level: ${value}`, "warning", 0);
+			notify(this.notifications, `unknown thinking level: ${value}`, "warning", { sticky: true });
 			return;
 		}
 		const level = levelText;
 		const levels = await this.availableThinkingLevels();
 		if (!levels.includes(level)) {
-			notify(this.notifications, `unknown thinking level: ${value}`, "warning", 0);
+			notify(this.notifications, `unknown thinking level: ${value}`, "warning", { sticky: true });
 			return;
 		}
 		const state = await this.controls.setThinkingLevel(level);
@@ -1573,7 +1573,7 @@ export class RpcHostActions {
 
 	private async requireChildCommand(command: string): Promise<boolean> {
 		if (await this.childCanExecuteCommand(command)) return true;
-		notify(this.notifications, `unknown command: ${command}`, "warning", 0);
+		notify(this.notifications, `unknown command: ${command}`, "warning", { sticky: true });
 		return false;
 	}
 

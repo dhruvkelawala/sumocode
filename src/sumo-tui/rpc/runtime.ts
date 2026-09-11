@@ -242,7 +242,7 @@ export class RpcHostRuntime {
 		this.notifications = {
 			render: (width) => [...(options.notifications?.render(width) ?? []), ...this.inputNotice.render(width)],
 			invalidate: () => { options.notifications?.invalidate(); this.inputNotice.invalidate(); },
-			notify: (message, level, timeout) => options.notifications?.notify?.(message, level, timeout) ?? 0,
+			notify: (message, level, notifyOptions) => options.notifications?.notify?.(message, level, notifyOptions) ?? 0,
 			getNotice: () => options.notifications?.getNotice?.(),
 			dismissTransient: () => options.notifications?.dismissTransient?.(),
 			dismissSticky: () => options.notifications?.dismissSticky?.(),

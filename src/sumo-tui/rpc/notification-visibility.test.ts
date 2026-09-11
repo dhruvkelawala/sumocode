@@ -212,7 +212,7 @@ describe("RPC notification visibility", () => {
 
 			// A sticky failure leaves the hint row alone and paints its own row above
 			// the input frame, in the rust/approval tone.
-			notifications.notify("unknown model: nope", "warning", 0);
+			notifications.notify("unknown model: nope", "warning", { sticky: true });
 			shell.render();
 			const painted = rows();
 			const noticeRow = painted.findIndex((row) => row.includes("unknown model: nope"));

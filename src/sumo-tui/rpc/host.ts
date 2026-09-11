@@ -649,7 +649,7 @@ export function createRpcExitHandler(deps: RpcHostExitDependencies): (error: Err
 		deps.selector?.close();
 		deps.updateRuntimeState({ ...deps.stateStore.getSnapshot(), isStreaming: false, isCompacting: false });
 		if (deliberateCode === undefined) {
-			deps.notifications.notify(`RPC child exited unexpectedly: ${truncateForNotification(error.message)}`, "error", 0);
+			deps.notifications.notify(`RPC child exited unexpectedly: ${truncateForNotification(error.message)}`, "error", { timeoutMs: 0 });
 		}
 		deps.requestRender();
 		if (deliberateCode !== undefined) {
@@ -772,7 +772,7 @@ export function createRpcHostInterruptHandler(deps: RpcHostInterruptDependencies
 				armedQuitUntil = nowMs + 1_500;
 				// Matches the armed-quit window: the hint is gone exactly when a
 				// third Ctrl-C would stop being a quit (issue 481 home A).
-				deps.notifications.notify("press ctrl-c again to quit", "info", 1_500);
+				deps.notifications.notify("press ctrl-c again to quit", "info", { timeoutMs: 1_500 });
 				return true;
 			case "quit":
 				armedQuitUntil = undefined;

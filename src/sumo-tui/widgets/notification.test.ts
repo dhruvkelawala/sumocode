@@ -26,7 +26,7 @@ describe("NotificationCenter host notices", () => {
 		vi.useFakeTimers();
 		const onChange = vi.fn();
 		const notifications = new NotificationCenter({ defaultTimeoutMs: 3_000, onChange });
-		notifications.notify("press ctrl-c again to quit", "info", 1_500);
+		notifications.notify("press ctrl-c again to quit", "info", { timeoutMs: 1_500 });
 		expect(onChange).toHaveBeenCalledTimes(1);
 		vi.advanceTimersByTime(1_499);
 		expect(notifications.getNotice()?.message).toBe("press ctrl-c again to quit");
@@ -48,10 +48,10 @@ describe("NotificationCenter host notices", () => {
 		expect(notifications.getNotice()).toBeUndefined();
 	});
 
-	it("treats an explicit zero timeout as sticky (the child-exit notice convention)", () => {
+	it("treats an explicit sticky option as sticky (the child-exit notice convention)", () => {
 		vi.useFakeTimers();
 		const notifications = new NotificationCenter();
-		notifications.notify("RPC child exited unexpectedly", "error", 0);
+		notifications.notify("RPC child exited unexpectedly", "error", { sticky: true });
 		expect(vi.getTimerCount()).toBe(0);
 		vi.advanceTimersByTime(60_000);
 		expect(notifications.getNotice()?.sticky).toBe(true);
@@ -81,7 +81,7 @@ describe("NotificationCenter host notices", () => {
 		notifications.notify("exported: /tmp/session.html");
 		notifications.dismissTransient();
 		expect(notifications.getNotice()).toBeUndefined();
-		notifications.notify("unknown model: nope", "warning", 0);
+		notifications.notify("unknown model: nope", "warning", { sticky: true });
 		notifications.dismissTransient();
 		expect(notifications.getNotice()?.message).toBe("unknown model: nope");
 		notifications.dismissSticky();

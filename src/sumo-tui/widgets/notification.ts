@@ -21,6 +21,19 @@ export interface NotificationCenterOptions {
 
 const DEFAULT_NOTICE_TIMEOUT_MS = 3_000;
 
+/** Named inputs for {@link NotificationCenter.notify}. */
+export interface NotifyOptions {
+	/**
+	 * Explicit sticky request: paint above the input frame and survive
+	 * keystrokes and expiry until Escape or the next host action clears it.
+	 * Errors are sticky without this flag; a plain timeout of 0 is not a
+	 * sticky request.
+	 */
+	readonly sticky?: boolean;
+	/** Override the default transient expiry. Ignored for sticky notices. */
+	readonly timeoutMs?: number;
+}
+
 /**
  * The one live host notice. Issue 481 replaced the top-right toast stack with
  * two surfaces fed from this single slot: transient hints paint in the
@@ -60,11 +73,13 @@ export class NotificationCenter implements Component {
 	}
 
 	/**
-	 * Records the live host notice. Errors and an explicit `timeoutMs` of 0 are
-	 * sticky; everything else is a transient hint that expires on its own.
+	 * Records the live host notice. Errors are sticky, an explicit
+	 * `options.sticky` makes any level sticky, and everything else is a
+	 * transient hint that expires after `options.timeoutMs` (default 3s).
 	 */
-	public notify(message: string, level: NotificationLevel = "info", timeoutMs = this.defaultTimeoutMs): number {
-		const sticky = level === "error" || timeoutMs === 0;
+	public notify(message: string, level: NotificationLevel = "info", options: NotifyOptions = {}): number {
+		const sticky = level === "error" || options.sticky === true;
+		const timeoutMs = options.timeoutMs ?? this.defaultTimeoutMs;
 		if (this.notice?.message === message && this.notice.level === level && this.notice.sticky === sticky) {
 			this.armExpiry(sticky ? 0 : timeoutMs);
 			return this.noticeId;

@@ -1439,7 +1439,7 @@ export class RpcHostActions {
 		const persisted = this.persistTheme(result.theme.name);
 		this.onRenderRequest();
 		if (!persisted.success) {
-			notify(this.notifications, `theme: ${result.theme.name} (not persisted: ${persisted.error})`, "warning");
+			notify(this.notifications, `theme: ${result.theme.name} (not persisted: ${persisted.error})`, "warning", { sticky: true });
 		}
 	}
 

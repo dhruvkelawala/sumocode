@@ -151,19 +151,17 @@ describe("/sumo:theme", () => {
 			await shortcuts.get("ctrl+shift+t")?.({ hasUI: true, ui: { notify, setTheme } });
 			expect(setTheme).toHaveBeenLastCalledWith("herdr");
 			expect(persistTheme).toHaveBeenLastCalledWith("herdr");
-			expect(notify).toHaveBeenLastCalledWith("theme: herdr", "info");
 
 			await shortcuts.get("ctrl+shift+t")?.({ hasUI: true, ui: { notify, setTheme } });
 			expect(setTheme).toHaveBeenLastCalledWith("ultraviolet-core");
 			expect(persistTheme).toHaveBeenLastCalledWith("ultraviolet-core");
-			expect(notify).toHaveBeenLastCalledWith("theme: ultraviolet-core", "info");
 
 			await shortcuts.get("ctrl+shift+t")?.({ hasUI: true, ui: { notify, setTheme } });
 			expect(setTheme).toHaveBeenLastCalledWith("cathedral");
-			expect(notify).toHaveBeenLastCalledWith("theme: cathedral", "info");
+			expect(notify).not.toHaveBeenCalled();
 		});
 
-		it("cycles theme through Pi UI, persists, and notifies on success", async () => {
+		it("cycles theme through Pi UI and persists without a confirmation toast", async () => {
 			// PRD-pinned cycle order: cathedral → amber-crt → obsidian → herdr → ultraviolet-core → cathedral.
 			const { shortcuts, persistTheme } = registerHarness();
 			const setTheme = vi.fn(() => ({ success: true }));
@@ -173,7 +171,7 @@ describe("/sumo:theme", () => {
 
 			expect(setTheme).toHaveBeenCalledWith("amber-crt");
 			expect(persistTheme).toHaveBeenCalledWith("amber-crt");
-			expect(notify).toHaveBeenCalledWith("theme: amber-crt", "info");
+			expect(notify).not.toHaveBeenCalled();
 		});
 
 		it("alt+t fallback uses the same handler", async () => {
@@ -184,7 +182,7 @@ describe("/sumo:theme", () => {
 			await shortcuts.get("alt+t")?.({ hasUI: true, ui: { notify, setTheme } });
 
 			expect(setTheme).toHaveBeenCalledWith("amber-crt");
-			expect(notify).toHaveBeenCalledWith("theme: amber-crt", "info");
+			expect(notify).not.toHaveBeenCalled();
 		});
 
 		it("cycles SumoCode theme even when Pi theme API rejects the cycle", async () => {
@@ -194,17 +192,19 @@ describe("/sumo:theme", () => {
 
 			await shortcuts.get("ctrl+shift+t")?.({ hasUI: true, ui: { notify, setTheme } });
 
-			expect(notify).toHaveBeenCalledWith("theme: amber-crt (Theme API unavailable)", "info");
+			// The Pi-theme mismatch is non-fatal and its confirmation is dropped;
+			// only a failed config write surfaces.
+			expect(notify).not.toHaveBeenCalled();
 		});
 
-		it("warns when cycling succeeds but persistence fails", async () => {
+		it("reports a sticky error when cycling succeeds but persistence fails", async () => {
 			const { shortcuts } = registerHarness({ persistTheme: vi.fn(() => ({ success: false, error: "EACCES" })) });
 			const setTheme = vi.fn(() => ({ success: true }));
 			const notify = vi.fn();
 
 			await shortcuts.get("ctrl+shift+t")?.({ hasUI: true, ui: { notify, setTheme } });
 
-			expect(notify).toHaveBeenCalledWith("theme: amber-crt (EACCES)", "warning");
+			expect(notify).toHaveBeenCalledWith("theme: amber-crt (not persisted: EACCES)", "error");
 		});
 	});
 });

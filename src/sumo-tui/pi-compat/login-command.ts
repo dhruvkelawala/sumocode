@@ -16,7 +16,7 @@ export interface RpcLoginRuntime {
  * Pi's own refreshes by the same lock file.
  */
 export interface RpcCredentialStore {
-	readonly read?: (providerId: string, options?: { signal?: AbortSignal }) => Promise<Credential | undefined>;
+	read(providerId: string, options?: { signal?: AbortSignal }): Promise<Credential | undefined>;
 	modify(
 		providerId: string,
 		fn: (current: Credential | undefined) => Credential | undefined,
@@ -24,11 +24,12 @@ export interface RpcCredentialStore {
 	): Promise<Credential | undefined>;
 }
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- runtime capability probe: the value is an undocumented field read through Reflect, and the typeof check below is the parse.
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- runtime capability probe: the value is an undocumented field read through Reflect, and the typeof checks below are the parse.
 function isCredentialStore(value: unknown): value is RpcCredentialStore {
-	// SAFETY: the typeof check on this line establishes the object shape before the property probe.
-	// oxlint-disable-next-line anti-slop/require-safety-comment-for-type-assertion
-	return typeof value === "object" && value !== null && typeof (value as { modify?: unknown }).modify === "function";
+	// SAFETY: the typeof check on this line establishes the object shape before the property probes.
+	// oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type, anti-slop/require-safety-comment-for-type-assertion
+	const candidate = value as { modify?: unknown; read?: unknown };
+	return typeof value === "object" && value !== null && typeof candidate.modify === "function" && typeof candidate.read === "function";
 }
 
 export interface RpcLoginCommandDeps {

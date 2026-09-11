@@ -4,7 +4,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathS
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Credential, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { CLAUDE_ACCOUNTS_MIGRATION_FIELD } from "./accounts-config.js";
 import { CLAUDE_BASE_PROVIDER, claudeAccountProviderId, isClaudeAccountProvider } from "../config/claude-providers.js";
@@ -80,7 +80,7 @@ export interface AccountsCommandDeps {
 	readonly pendingReloadProviders?: Set<string>;
 	/** Token-flow seams; tests inject them so no spawn, fetch, or Pi runtime is needed. */
 	readonly acquireToken?: (options: AcquireTokenOptions) => Promise<AcquireResult>;
-	readonly validateToken?: (token: string, runtime?: ValidateRuntime) => Promise<TokenValidation>;
+	readonly validateToken?: (token: string, runtime: ValidateRuntime) => Promise<TokenValidation>;
 	readonly storeCredential?: (providerId: string, credential: StaticClaudeCredential) => Promise<void>;
 	readonly readStoredCredential?: (providerId: string) => Promise<StoredClaudeCredential | undefined>;
 	readonly now?: () => number;
@@ -337,12 +337,27 @@ async function readStoredCredentialKind(ctx: ExtensionCommandContext, providerId
 	let store: RpcCredentialStore | undefined;
 	try {
 		store = getRpcCredentialStore(ctx);
-	} catch {
-		// The account list must still render when Pi's auth runtime is unavailable.
+	} catch (error) {
+		// Degraded, not fatal: the account list still renders, labelled from the
+		// auth snapshot alone. Logged because a row then cannot tell a token from
+		// a login until Pi's runtime is back.
+		logDiagnostic("accounts_credential_store_unavailable", {
+			provider: providerId,
+			errorName: error instanceof Error ? error.name : "unknown",
+		});
 		return undefined;
 	}
-	if (!store?.read) return undefined;
-	const credential = await store.read(providerId).catch(() => undefined);
+	if (!store) return undefined;
+	let credential: Credential | undefined;
+	try {
+		credential = await store.read(providerId);
+	} catch (error) {
+		logDiagnostic("accounts_credential_read_failed", {
+			provider: providerId,
+			errorName: error instanceof Error ? error.name : "unknown",
+		});
+		return undefined;
+	}
 	if (isStaticClaudeCredential(credential)) return "long-lived-token";
 	if (credential?.type === "oauth") return "oauth";
 	if (credential?.type === "api_key") return "api-key";
@@ -361,7 +376,11 @@ async function accounts(ctx: ExtensionCommandContext, deps: AccountsCommandDeps)
 			longLivedToken: (await read("anthropic")) === "long-lived-token",
 		},
 	];
-	for (const subscription of loadClaudeSubscriptions(deps)) {
+	const subscriptions = loadClaudeSubscriptions(deps);
+	const subscriptionKinds = await Promise.all(
+		subscriptions.map((subscription) => read(accountProviderId(subscription))),
+	);
+	for (const [index, subscription] of subscriptions.entries()) {
 		const providerId = accountProviderId(subscription);
 		accountList.push({
 			providerId,
@@ -369,7 +388,7 @@ async function accounts(ctx: ExtensionCommandContext, deps: AccountsCommandDeps)
 			subscription,
 			configured: authConfigured(ctx, providerId),
 			active: activeProvider === providerId,
-			longLivedToken: (await read(providerId)) === "long-lived-token",
+			longLivedToken: subscriptionKinds[index] === "long-lived-token",
 		});
 	}
 	return accountList;
@@ -520,10 +539,16 @@ async function pasteLongLivedToken(
  * (often a non-Claude provider), and an earlier "inactive" label for that
  * state read as "sign in required" and sent users through needless re-auth.
  */
+/**
+ * A stored long-lived token is authoritative over Pi's auth snapshot: the
+ * snapshot is refreshed asynchronously after a store write, and a token row
+ * rendered as "sign in required" during that window is the exact confusion
+ * this flow exists to remove.
+ */
 function accountState(account: ClaudeAccount): string {
 	if (account.active) return "in use";
-	if (!account.configured) return "sign in required";
-	return account.longLivedToken ? "token" : "signed in";
+	if (account.longLivedToken) return "token";
+	return account.configured ? "signed in" : "sign in required";
 }
 
 /**
@@ -622,7 +647,7 @@ function preferredAccountModel(ctx: ExtensionCommandContext, account: ClaudeAcco
 }
 
 async function switchAccount(pi: ExtensionAPI, ctx: ExtensionCommandContext, account: ClaudeAccount, deps: AccountsCommandDeps): Promise<void> {
-	if (!account.configured) {
+	if (!account.configured && !account.longLivedToken) {
 		ctx.ui.notify(`${account.label} must be signed in before it can be selected`, "warning");
 		return;
 	}
@@ -679,7 +704,7 @@ async function accountActions(pi: ExtensionAPI, ctx: ExtensionCommandContext, ac
 		}
 	}
 	const actions = [
-		...(account.configured && !account.active ? ["use this account"] : []),
+		...((account.configured || account.longLivedToken) && !account.active ? ["use this account"] : []),
 		account.longLivedToken ? RENEW_LONG_LIVED : SIGN_IN_LONG_LIVED,
 		SIGN_IN_BROWSER,
 		...(account.subscription ? ["rename account"] : []),

@@ -16,7 +16,12 @@ import {
 	type AccountsCommandDeps,
 	type StoredClaudeCredential,
 } from "./accounts.js";
-import { CLAUDE_SETUP_TOKEN_COMMAND, STATIC_CREDENTIAL_EXPIRES, type StaticClaudeCredential } from "./claude-token.js";
+import {
+	CLAUDE_SETUP_TOKEN_COMMAND,
+	STATIC_CREDENTIAL_EXPIRES,
+	staticClaudeCredential,
+	type StaticClaudeCredential,
+} from "./claude-token.js";
 import { isSecretInputTitle } from "../sumo-tui/pi-compat/secret-input.js";
 import { CLAUDE_ACCOUNTS_MIGRATION_FIELD } from "./accounts-config.js";
 
@@ -75,6 +80,7 @@ interface ModelStub {
 }
 
 interface CredentialStoreStub {
+	readonly read: (providerId: string) => Promise<StaticClaudeCredential | undefined>;
 	readonly modify: (
 		providerId: string,
 		fn: (current: StaticClaudeCredential | undefined) => StaticClaudeCredential | undefined,
@@ -1044,6 +1050,47 @@ describe("stored credential classification", () => {
 		expect(selectOptionsAt(select, 0)).toContain("company · token  anthropic-2");
 	});
 
+	it("classifies through Pi's store when no reader is injected", async () => {
+		const agentDir = tempAgentDir();
+		companyAccount(agentDir);
+		const { ctx, select } = makeCtx({
+			agentDir,
+			auth: { anthropic: true, "anthropic-2": true },
+			models: COMPANY_MODELS,
+			onSelect: pickOption("company"),
+			runtime: {
+				getAvailable: async () => [],
+				getProviders: () => [],
+				login: async () => {},
+				credentials: {
+					read: async () => staticClaudeCredential(TOKEN, 1),
+					modify: async () => undefined,
+				},
+			},
+		});
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), withAgentDir(agentDir));
+		expect(selectOptionsAt(select, 0)).toContain("company · token  anthropic-2");
+		expect(selectOptionsAt(select, 1)).toContain(RENEW_LONG_LIVED);
+	});
+
+	it("keeps a stored token account selectable before Pi's snapshot catches up", async () => {
+		const agentDir = tempAgentDir();
+		companyAccount(agentDir);
+		const store = { read: async () => staticClaudeCredential(TOKEN, 1), modify: async () => undefined };
+		const { ctx, select, notify } = makeCtx({
+			agentDir,
+			auth: { anthropic: true, "anthropic-2": false },
+			models: COMPANY_MODELS,
+			onSelect: pickAccountAction("company", "use this account"),
+			runtime: { getAvailable: async () => [], getProviders: () => [], login: async () => {}, credentials: store },
+		});
+		const setModel = vi.fn(async () => true);
+		await executeAccountsCommand(extensionApi(setModel), commandContext(ctx), withAgentDir(agentDir));
+		expect(selectOptionsAt(select, 1)).toContain("use this account");
+		expect(setModel).toHaveBeenCalled();
+		expect(notify).not.toHaveBeenCalledWith(expect.stringContaining("must be signed in"), "warning");
+	});
+
 	it("degrades to signed in when the store is unavailable", async () => {
 		const agentDir = tempAgentDir();
 		companyAccount(agentDir);
@@ -1226,7 +1273,7 @@ describe("long-lived token sign-in", () => {
 				getAvailable: async () => [],
 				getProviders: () => [],
 				login: async () => {},
-				credentials: { modify },
+				credentials: { read: async () => undefined, modify },
 			},
 		});
 		await executeAccountsCommand(extensionApi(), commandContext(ctx), tokenAccountDeps(agentDir, { storeCredential: undefined }));

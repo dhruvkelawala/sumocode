@@ -13,7 +13,12 @@ import { spawn, type ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
 import type { OAuthCredential } from "@earendil-works/pi-ai";
 
-/** The mint child with piped stdout/stderr and no stdin (the command must not wait on input). */
+/**
+ * The mint child: stdout/stderr piped, stdin closed. Closing stdin is
+ * deliberate — SumoCode never answers an interactive prompt, so a CLI that
+ * needs a TTY should fail fast into the paste fallback instead of blocking the
+ * flow; the timeout below bounds one that waits anyway.
+ */
 type SetupTokenProcess = ChildProcessByStdio<null, Readable, Readable>;
 
 /** Command that mints a long-lived token; the user runs it when we cannot. */
@@ -101,7 +106,10 @@ export function isStaticClaudeCredential(credential: unknown): credential is Sta
 		value.type === "oauth" &&
 		value.refresh === "" &&
 		typeof value.access === "string" &&
-		value.access.startsWith("sk-ant-oat")
+		value.access.startsWith("sk-ant-oat") &&
+		// SumoCode's own marker: a refresh-less oauth credential without it is
+		// some other static-token provider's shape, not this flow's credential.
+		typeof value.mintedAt === "number"
 	);
 }
 
@@ -130,7 +138,7 @@ export function acquireLongLivedToken(
 		let output = "";
 		let emitted = 0;
 		let child: SetupTokenProcess | undefined;
-		const timer = setTimeout(() => finish({ status: "timeout" }), timeoutMs);
+		let timer: NodeJS.Timeout | undefined;
 		const finish = (result: AcquireResult): void => {
 			if (settled) return;
 			settled = true;
@@ -139,6 +147,7 @@ export function acquireLongLivedToken(
 			child?.kill("SIGTERM");
 			resolve(result);
 		};
+		timer = setTimeout(() => finish({ status: "timeout" }), timeoutMs);
 		const onAbort = (): void => finish({ status: "failed", reason: "cancelled" });
 		const consume = (chunk: Buffer | string): void => {
 			output += chunk.toString();
@@ -195,8 +204,10 @@ export interface ValidateRuntime {
 
 /**
  * Confirm the token authenticates before it is stored, and report which
- * account it belongs to. Only an explicit 401 rejects: a 403 or an unreachable
- * endpoint must not block a valid inference-only token.
+ * account it belongs to. Only an explicit 401 rejects: this endpoint may
+ * require a profile scope that an inference-only setup token does not carry, so
+ * a 403 (or an unreachable endpoint) warns instead of blocking a valid token —
+ * Pi's first request is the authoritative check for those.
  */
 export async function validateLongLivedToken(token: string, runtime: ValidateRuntime = {}): Promise<TokenValidation> {
 	const fetchImpl = runtime.fetchImpl ?? fetch;

@@ -282,6 +282,7 @@ describe("getRpcCredentialStore", () => {
 	const loginRuntime = { getAvailable: vi.fn(), getProviders: vi.fn(), login: vi.fn() };
 
 	interface CredentialStoreStub {
+		readonly read: (providerId: string) => Promise<undefined>;
 		readonly modify: (providerId: string, fn: () => undefined) => Promise<undefined>;
 	}
 	type AuthRuntimeStub = Partial<RpcLoginRuntime> & { readonly credentials?: CredentialStoreStub };
@@ -291,12 +292,18 @@ describe("getRpcCredentialStore", () => {
 	}
 
 	it("returns Pi's credential store when the runtime exposes one", () => {
-		const store = { modify: vi.fn() };
+		const store = { read: vi.fn(), modify: vi.fn() };
 		expect(getRpcCredentialStore(contextWithRuntime({ ...loginRuntime, credentials: store }))).toBe(store);
 	});
 
 	it("returns undefined when this Pi build exposes no credential store", () => {
 		expect(getRpcCredentialStore(contextWithRuntime({ ...loginRuntime }))).toBeUndefined();
+	});
+
+	it("returns undefined when the store cannot be read", () => {
+		expect(
+			getRpcCredentialStore(contextWithRuntime({ ...loginRuntime, credentials: { modify: vi.fn() } as unknown as CredentialStoreStub })),
+		).toBeUndefined();
 	});
 
 	it("reports the compatibility failure when the auth runtime is gone", () => {

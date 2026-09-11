@@ -145,6 +145,10 @@ describe("subagent tools", () => {
 		const spawnSchema = JSON.stringify(tool("subagent_spawn").parameters);
 		expect(spawnSchema).toContain("visible");
 		expect(spawnSchema).toContain("baseRef");
+		// Id examples name the slug format; the old sa-1 shape no longer exists.
+		for (const name of ["subagent_send", "subagent_check"]) {
+			expect(JSON.stringify(tool(name).parameters)).toContain("e.g. sa-issue-to-pr-426-2");
+		}
 	});
 
 	it("enumerates loaded roles with their resolved model in the spawn schema", () => {

@@ -14,20 +14,20 @@ import type { AgentSessionEvent, RpcCommand, RpcExtensionUIRequest } from "@eare
  * Re-run the classification whenever the Pi pins in `package.json` change.
  */
 
-export type RpcCommandDisposition =
+type RpcCommandDisposition =
 	| { readonly kind: "implemented"; readonly owner: string }
 	| { readonly kind: "intentionally-bypassed"; readonly owner: string; readonly reason: string }
 	| { readonly kind: "downstream-plan-owned"; readonly owner: string; readonly reason: string }
 	| { readonly kind: "unsupported"; readonly owner: string; readonly reason: string };
 
-export type AgentEventDisposition =
+type AgentEventDisposition =
 	| { readonly kind: "projected"; readonly owner: string; readonly note?: string }
 	| { readonly kind: "scheduler-only"; readonly owner: string; readonly note?: string }
 	| { readonly kind: "transcript-only"; readonly owner: string; readonly note?: string }
 	| { readonly kind: "intentionally-ignored"; readonly owner: string; readonly reason: string }
 	| { readonly kind: "downstream-plan-owned"; readonly owner: string; readonly reason: string };
 
-export type ExtensionUiDisposition = { readonly kind: "mapped"; readonly owner: string; readonly response: string };
+type ExtensionUiDisposition = { readonly kind: "mapped"; readonly owner: string; readonly response: string };
 
 export const RPC_COMMAND_DISPOSITIONS = {
 	abort: { kind: "implemented", owner: "controls.ts RpcHostControls.abort" },

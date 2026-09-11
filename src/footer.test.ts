@@ -316,9 +316,9 @@ describe("renderFooterBlock — splash renders Bible version block", () => {
 });
 
 describe("renderSplashVersionLine", () => {
-	it("renders the SUMOCODE V0.5.1 version string", () => {
+	it("renders the SUMOCODE V0.6.0 version string", () => {
 		const line = renderSplashVersionLine(160).replace(ANSI, "");
-		expect(line).toContain("SUMOCODE V0.5.1");
+		expect(line).toContain("SUMOCODE V0.6.0");
 		expect(line).toContain("CATHEDRAL");
 		expect(line).toContain("160 \u00d7 45 MONOSPACE");
 	});

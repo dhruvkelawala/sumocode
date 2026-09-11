@@ -10,6 +10,90 @@ landed between the original scaffold and this release.
 
 ## [Unreleased]
 
+The stabilization release. No new UI surfaces land; this closes defects where the
+agent runtime, the child protocol, or the feedback chrome misreported what they
+were doing. Ten pull requests, all reviewed by an independent agent pass before
+merge.
+
+### Added
+- **Long-lived Claude token sign-in** — `/accounts` can sign an account in with
+  a static token minted by `claude setup-token` instead of a browser login,
+  which Pi never refreshes and which does not expire on the 30-day refresh
+  window. Falls back to a masked paste modal when the CLI is missing or the
+  mint fails, and validates the token against Anthropic before storing it.
+  #506 #508
+- **All-sessions scope in `/resume`** — Tab switches the resume picker between
+  the current project and every session under the sessions root, matching Pi.
+  The all-sessions rows lead with the project directory, the window is bounded
+  and labelled `recent` when it is capped, the current session is always
+  present, and a flat custom `--session-dir` is scanned directly rather than
+  through its parent. #495 #501
+- **Shared launcher CLI contract** — one spec table (`src/cli/launcher-spec.ts`)
+  owns every SumoCode command, alias, option, help line and exit code, consumed
+  by both `sc` and `bin/sumocode.sh`, with a parity matrix that runs every
+  spelling through both binaries so a one-sided addition fails CI. #484 #494
+- **Effect v4 adoption campaign (Plan 118)** — the umbrella plan, feasibility
+  study and per-track evidence for adopting Effect at the launcher-free seams,
+  plus the Wave 0.6 tsc baseline. #462 #463 #490 #491
+
+### Changed
+- **Feedback surfaces replace the top-right toast** — notification toasts are
+  removed. Transient hints (`press ctrl-c again to quit`, session switches,
+  queue acknowledgements, "nothing happened" lines) render in the hint row for
+  their lifetime; failures render as a sticky row above the input frame until
+  Escape or the next host action. Roughly twenty noise confirmations
+  (`model:`, `thinking:`, `theme:`, `copied`, `session name:`, …) are deleted
+  outright rather than re-homed. #481 #500
+- **A clean exit is quiet** — `/exit` shuts the child down with code 0, which
+  the host previously reported as `RPC child exited unexpectedly`. Deliberate
+  exits (0 and the reload code 100) now exit the host immediately, with no
+  crash notice and no shutdown delay; genuine crashes are unchanged. #505 #507
+
+### Fixed
+- **Producer-controlled stream indices are bounded** — an assistant
+  `message_update` carrying an out-of-range, fractional or negative
+  `contentIndex` is treated as a protocol error instead of driving an
+  unbounded allocation on the render thread. #460 #496
+- **Malformed RPC frames are observable** — the host now passes
+  `onProtocolError` to the client, so a malformed frame below the consecutive
+  error threshold reaches the diagnostics sink instead of vanishing. #461 #497
+- **Child termination needs an owned PID** — TERM/KILL is attempted only when
+  the child handle owns a positive PID, so an abort racing a failed spawn can
+  no longer signal the caller's process group; the no-op escalation timer on
+  that path is gone. #431 #498
+- **Child message shapes are validated before retention** — a frame whose role
+  is known but whose content has the wrong shape fails deterministically
+  through the bounded protocol-error path instead of throwing while stdout is
+  processed. #427 #499
+- **Extra Claude accounts are reachable** — a signed-in account no longer reads
+  as inactive, base-`anthropic` enabled-model patterns also enable the
+  `anthropic-N` clones, and account switching can no longer land on a model the
+  registry reports as unavailable. #440 #442
+- **Visible subagent panes are reclaimed** — a closed visible pane no longer
+  leaves the orchestrator unable to spawn the next one, the retained path is
+  accounted for on both success and failure, and Herdr's failure taxonomy
+  reaches the operator as `pane_unavailable` rather than a generic error.
+  #470 #471
+- **Footer subagent strip is readable** — rows show the human title and a short
+  id (`sa-2`) instead of a raw namespaced UUID, with colliding short ids
+  disambiguated and titles sanitised and bounded by cell width. #485 #486
+- **Native `sc -w` works outside a source checkout** — the native launcher
+  routes `worktree` through `openWorktree()` like the shell launcher, accepts
+  the bare `worktree` subcommand, documents it in `--help`, and rejects
+  task-only options before dispatch. #483 #487
+- **Large sessions resume** — persisted transcripts hydrate from the session
+  file plus a bounded `get_entries(since)` delta instead of one oversized RPC
+  frame that terminated the host. #493
+- **Dependency audit gate** — the post-publication `smol-toml` advisory that
+  broke the CI gate for every branch is remediated by a narrow dev-graph
+  override, recorded with its reachability evidence. #489
+
+### Documentation
+- Salvaged the Pi RPC audit documents (upstream protocol inventory,
+  implementation audit, visual map) from the superseded audit branch. #482
+
+## [0.5.0] — 2026-09-09
+
 ### Added
 - **Native `sc` shortcut** — the installer now exposes both `sumocode` and `sc` as the same compiled executable.
 - **Manual releases** — dispatch a tagged native release from GitHub Actions, with native contract tests, SHA-256 checksums, changelog notes, and generated contributor notes.

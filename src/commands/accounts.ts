@@ -15,6 +15,7 @@ import {
 	executeRpcLogin,
 	getRpcCredentialStore,
 	getRpcLoginRuntime,
+	type RpcCredentialStore,
 	type RpcLoginRuntime,
 } from "../sumo-tui/pi-compat/login-command.js";
 import {
@@ -29,6 +30,7 @@ import {
 	type AcquireTokenOptions,
 	type StaticClaudeCredential,
 	type TokenValidation,
+	type ValidateRuntime,
 } from "./claude-token.js";
 import { secretInputTitle } from "../sumo-tui/pi-compat/secret-input.js";
 
@@ -65,7 +67,7 @@ export const SIGN_IN_BROWSER = "sign in with a browser";
 export const RENEW_LONG_LIVED = "mint a new long-lived token";
 
 /** How an account's stored credential authenticates, read from auth.json. */
-type StoredClaudeCredential = "long-lived-token" | "oauth" | "api-key";
+export type StoredClaudeCredential = "long-lived-token" | "oauth" | "api-key";
 
 export interface AccountsCommandDeps {
 	readonly agentDir?: string;
@@ -78,9 +80,9 @@ export interface AccountsCommandDeps {
 	readonly pendingReloadProviders?: Set<string>;
 	/** Token-flow seams; tests inject them so no spawn, fetch, or Pi runtime is needed. */
 	readonly acquireToken?: (options: AcquireTokenOptions) => Promise<AcquireResult>;
-	readonly validateToken?: (token: string, signal?: AbortSignal) => Promise<TokenValidation>;
+	readonly validateToken?: (token: string, runtime?: ValidateRuntime) => Promise<TokenValidation>;
 	readonly storeCredential?: (providerId: string, credential: StaticClaudeCredential) => Promise<void>;
-	readonly readStoredCredential?: (providerId: string) => StoredClaudeCredential | undefined;
+	readonly readStoredCredential?: (providerId: string) => Promise<StoredClaudeCredential | undefined>;
 	readonly now?: () => number;
 }
 
@@ -327,48 +329,50 @@ function authConfigured(ctx: ExtensionCommandContext, providerId: string): boole
 }
 
 /**
- * Credential kind for an account, read from the same auth.json Pi resolves
+ * Credential kind for an account, read through the same store Pi resolves
  * requests against. Only the credential's shape is inspected; key material is
  * never returned, logged, or rendered.
  */
-export function readStoredClaudeCredential(providerId: string, deps: AccountsCommandDeps = {}): StoredClaudeCredential | undefined {
-	const authPath = join(resolveAgentDir(deps), "auth.json");
-	if (!existsSync(authPath)) return undefined;
-	let parsed: unknown;
+async function readStoredCredentialKind(ctx: ExtensionCommandContext, providerId: string): Promise<StoredClaudeCredential | undefined> {
+	let store: RpcCredentialStore | undefined;
 	try {
-		parsed = JSON.parse(readFileSync(authPath, "utf8"));
+		store = getRpcCredentialStore(ctx);
 	} catch {
+		// The account list must still render when Pi's auth runtime is unavailable.
 		return undefined;
 	}
-	if (!isRecord(parsed)) return undefined;
-	const credential = parsed[providerId];
+	if (!store?.read) return undefined;
+	const credential = await store.read(providerId).catch(() => undefined);
 	if (isStaticClaudeCredential(credential)) return "long-lived-token";
-	if (!isRecord(credential)) return undefined;
-	if (credential.type === "oauth") return "oauth";
-	if (credential.type === "api_key") return "api-key";
+	if (credential?.type === "oauth") return "oauth";
+	if (credential?.type === "api_key") return "api-key";
 	return undefined;
 }
 
-function accounts(ctx: ExtensionCommandContext, deps: AccountsCommandDeps): ClaudeAccount[] {
+async function accounts(ctx: ExtensionCommandContext, deps: AccountsCommandDeps): Promise<ClaudeAccount[]> {
 	const activeProvider = ctx.model?.provider;
-	const credentialKind = deps.readStoredCredential ?? ((providerId: string) => readStoredClaudeCredential(providerId, deps));
-	return [
+	const read = deps.readStoredCredential ?? ((providerId: string) => readStoredCredentialKind(ctx, providerId));
+	const accountList: ClaudeAccount[] = [
 		{
 			providerId: "anthropic",
 			label: "default account",
 			configured: authConfigured(ctx, "anthropic"),
 			active: activeProvider === "anthropic",
-			longLivedToken: credentialKind("anthropic") === "long-lived-token",
+			longLivedToken: (await read("anthropic")) === "long-lived-token",
 		},
-		...loadClaudeSubscriptions(deps).map((subscription) => ({
-			providerId: accountProviderId(subscription),
+	];
+	for (const subscription of loadClaudeSubscriptions(deps)) {
+		const providerId = accountProviderId(subscription);
+		accountList.push({
+			providerId,
 			label: subscription.label ?? `Claude account ${subscription.index}`,
 			subscription,
-			configured: authConfigured(ctx, accountProviderId(subscription)),
-			active: activeProvider === accountProviderId(subscription),
-			longLivedToken: credentialKind(accountProviderId(subscription)) === "long-lived-token",
-		})),
-	];
+			configured: authConfigured(ctx, providerId),
+			active: activeProvider === providerId,
+			longLivedToken: (await read(providerId)) === "long-lived-token",
+		});
+	}
+	return accountList;
 }
 
 async function defaultLogin(providerId: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -385,7 +389,7 @@ async function defaultLogin(providerId: string, ctx: ExtensionCommandContext): P
 	await executeRpcLogin(providerId, ctx, runtime);
 }
 
-function acquireFailureText(result: AcquireResult): string {
+function acquireFailureText(result: Exclude<AcquireResult, { status: "ok" }>): string {
 	switch (result.status) {
 		case "unavailable":
 			return "the claude CLI is not on PATH";
@@ -393,8 +397,6 @@ function acquireFailureText(result: AcquireResult): string {
 			return "the command timed out";
 		case "failed":
 			return result.reason;
-		case "ok":
-			return "";
 	}
 }
 
@@ -435,10 +437,9 @@ async function useLongLivedToken(ctx: ExtensionCommandContext, account: ClaudeAc
 	const controller = new AbortController();
 	try {
 		ctx.ui.setStatus("sumocode.accounts", `minting a long-lived token for ${account.label}…`);
-		const savedAcquire = deps.acquireToken;
 		let acquired: string | undefined;
 		try {
-			const result = await (savedAcquire ?? ((options: AcquireTokenOptions) => acquireLongLivedToken(options)))({
+			const result = await (deps.acquireToken ?? ((options: AcquireTokenOptions) => acquireLongLivedToken(options)))({
 				signal: controller.signal,
 				onProgress: (line) => {
 					const url = parseAuthorizationUrl(line);
@@ -447,26 +448,26 @@ async function useLongLivedToken(ctx: ExtensionCommandContext, account: ClaudeAc
 			});
 			if (result.status === "ok") acquired = result.token;
 			else if (!(result.status === "failed" && result.reason === "cancelled")) {
-				ctx.ui.notify(`Could not run ${CLAUDE_SETUP_TOKEN_COMMAND}: ${acquireFailureText(result)}. Run it yourself and paste the token.`, "warning");
+				ctx.ui.notify(`could not run ${CLAUDE_SETUP_TOKEN_COMMAND}: ${acquireFailureText(result)} — run it yourself and paste the token`, "warning");
 			}
 		} finally {
 			ctx.ui.setStatus("sumocode.accounts", undefined);
 			ctx.ui.setWidget("sumocode.accounts", undefined);
 		}
-		const pasted = acquired ?? (await ctx.ui.input(secretInputTitle(`CLAUDE SETUP TOKEN · ${account.label}`), "sk-ant-oat01-…", { signal: controller.signal }));
+		const pasted = acquired ?? (await pasteLongLivedToken(ctx, account, controller.signal));
 		const token = pasted?.trim();
 		if (!token) return;
 		if (!isLongLivedClaudeToken(token)) {
-			ctx.ui.notify(`That is not a Claude long-lived token; ${CLAUDE_SETUP_TOKEN_COMMAND} prints one starting with sk-ant-oat.`, "warning");
+			ctx.ui.notify(`that is not a Claude long-lived token; ${CLAUDE_SETUP_TOKEN_COMMAND} prints one starting with sk-ant-oat`, "warning");
 			return;
 		}
-		const validation = await (deps.validateToken ?? validateLongLivedToken)(token, controller.signal);
+		const validation = await (deps.validateToken ?? validateLongLivedToken)(token, { signal: controller.signal });
 		if (validation.status === "rejected") {
-			ctx.ui.notify(`${account.label}: Anthropic rejected that token. Mint a fresh one with ${CLAUDE_SETUP_TOKEN_COMMAND}.`, "error");
+			ctx.ui.notify(`${account.label}: Anthropic rejected that token — mint a fresh one with ${CLAUDE_SETUP_TOKEN_COMMAND}`, "error");
 			return;
 		}
 		if (validation.status === "unreachable") {
-			ctx.ui.notify("Anthropic could not be reached to check the token; storing it anyway.", "warning");
+			ctx.ui.notify("Anthropic could not be reached to check the token; storing it anyway", "warning");
 		}
 		const organization = validation.status === "ok" ? validation.organization : undefined;
 		const credential = staticClaudeCredential(token, (deps.now ?? Date.now)());
@@ -480,16 +481,36 @@ async function useLongLivedToken(ctx: ExtensionCommandContext, account: ClaudeAc
 				provider: account.providerId,
 				errorName: error instanceof Error ? error.name : "unknown",
 			});
-			ctx.ui.notify(`Unable to store the token for ${account.label}. See /sumo:diag output for details.`, "error");
+			ctx.ui.notify(`unable to store the token for ${account.label} — see /sumo:diag output`, "error");
 			return;
 		}
 		logDiagnostic("accounts_long_lived_token_stored", { provider: account.providerId, organization: organization ?? null });
 		ctx.ui.notify(
-			`Stored a long-lived token for ${account.label}${organization ? ` · ${organization}` : ""}. It never refreshes; mint a new one when it expires.`,
+			`stored a long-lived token for ${account.label}${organization ? ` · ${organization}` : ""} — it never refreshes, so mint a new one when it expires`,
 			"info",
 		);
 	} finally {
 		controller.abort();
+	}
+}
+
+/**
+ * Masked paste fallback. The command travels in the widget above the editor,
+ * not only in the transient notification, because the modal is where the user
+ * is looking when they need it.
+ */
+async function pasteLongLivedToken(
+	ctx: ExtensionCommandContext,
+	account: ClaudeAccount,
+	signal: AbortSignal,
+): Promise<string | undefined> {
+	ctx.ui.setWidget("sumocode.accounts", [`run \`${CLAUDE_SETUP_TOKEN_COMMAND}\`, then paste the token here`], {
+		placement: "aboveEditor",
+	});
+	try {
+		return await ctx.ui.input(secretInputTitle(`CLAUDE SETUP TOKEN · ${account.label}`), "sk-ant-oat01-…", { signal });
+	} finally {
+		ctx.ui.setWidget("sumocode.accounts", undefined);
 	}
 }
 
@@ -501,8 +522,8 @@ async function useLongLivedToken(ctx: ExtensionCommandContext, account: ClaudeAc
  */
 function accountState(account: ClaudeAccount): string {
 	if (account.active) return "in use";
-	if (account.longLivedToken) return "token";
-	return account.configured ? "signed in" : "sign in required";
+	if (!account.configured) return "sign in required";
+	return account.longLivedToken ? "token" : "signed in";
 }
 
 /**
@@ -676,7 +697,7 @@ export async function executeAccountsCommand(pi: ExtensionAPI, ctx: ExtensionCom
 		ctx.ui.notify("/accounts requires the SumoCode RPC interface", "warning");
 		return;
 	}
-	const accountList = accounts(ctx, deps);
+	const accountList = await accounts(ctx, deps);
 	const rows = accountList.map(accountRow);
 	const addLabel = "add Claude account";
 	const selected = await ctx.ui.select("CLAUDE ACCOUNTS", [...rows, addLabel]);

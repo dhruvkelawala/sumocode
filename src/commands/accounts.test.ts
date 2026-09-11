@@ -10,11 +10,11 @@ import {
 	executeAccountsCommand,
 	isAdapterInstalled,
 	loadClaudeSubscriptions,
-	readStoredClaudeCredential,
 	registerAccountsCommand,
 	resolveAccountsConfigPath,
 	saveClaudeSubscriptions,
 	type AccountsCommandDeps,
+	type StoredClaudeCredential,
 } from "./accounts.js";
 import { CLAUDE_SETUP_TOKEN_COMMAND, STATIC_CREDENTIAL_EXPIRES, type StaticClaudeCredential } from "./claude-token.js";
 import { isSecretInputTitle } from "../sumo-tui/pi-compat/secret-input.js";
@@ -1000,11 +1000,6 @@ function pickAccountAction(accountPrefix: string, action: string) {
 	};
 }
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- test helper: serializes an arbitrary auth.json fixture into the credential read boundary.
-function writeAuth(agentDir: string, entries: unknown): void {
-	writeFileSync(join(agentDir, "auth.json"), JSON.stringify(entries, null, 2), "utf8");
-}
-
 /** Run with the real diagnostics sink pointed at a temp file, so token leakage is observable. */
 async function withDiagnosticsFile(run: (file: string) => Promise<void>): Promise<void> {
 	const dir = mkdtempSync(join(tmpdir(), "sumocode-accounts-diag-"));
@@ -1036,23 +1031,25 @@ function companyAccount(agentDir: string): void {
 
 const COMPANY_MODELS = [{ provider: "anthropic-2", id: "claude-opus" }];
 
-describe("readStoredClaudeCredential", () => {
-	it("distinguishes a long-lived token from a browser login", () => {
+describe("stored credential classification", () => {
+	it("reads the credential kind through Pi's store, not a file", async () => {
 		const agentDir = tempAgentDir();
-		writeAuth(agentDir, {
-			"anthropic-2": { type: "oauth", access: TOKEN, refresh: "", expires: STATIC_CREDENTIAL_EXPIRES, mintedAt: 1 },
-			anthropic: { type: "oauth", access: "sk-ant-oat01-login", refresh: "sk-ant-ort01-login", expires: 1 },
-		});
-		expect(readStoredClaudeCredential("anthropic-2", withAgentDir(agentDir))).toBe("long-lived-token");
-		expect(readStoredClaudeCredential("anthropic", withAgentDir(agentDir))).toBe("oauth");
-		expect(readStoredClaudeCredential("anthropic-3", withAgentDir(agentDir))).toBeUndefined();
+		companyAccount(agentDir);
+		const read = vi.fn(async (providerId: string): Promise<StoredClaudeCredential | undefined> =>
+			providerId === "anthropic-2" ? "long-lived-token" : undefined,
+		);
+		const { ctx, select } = makeCtx({ agentDir, auth: { anthropic: true, "anthropic-2": true }, models: COMPANY_MODELS, onSelect: pickOption("company") });
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), readStoredCredential: read });
+		expect(read).toHaveBeenCalledWith("anthropic-2");
+		expect(selectOptionsAt(select, 0)).toContain("company · token  anthropic-2");
 	});
 
-	it("tolerates a missing or malformed auth file", () => {
+	it("degrades to signed in when the store is unavailable", async () => {
 		const agentDir = tempAgentDir();
-		expect(readStoredClaudeCredential("anthropic", withAgentDir(agentDir))).toBeUndefined();
-		writeFileSync(join(agentDir, "auth.json"), "{not json", "utf8");
-		expect(readStoredClaudeCredential("anthropic", withAgentDir(agentDir))).toBeUndefined();
+		companyAccount(agentDir);
+		const { ctx, select } = makeCtx({ agentDir, auth: { anthropic: true, "anthropic-2": true }, models: COMPANY_MODELS, onSelect: pickOption("company") });
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), withAgentDir(agentDir));
+		expect(selectOptionsAt(select, 0)).toContain("company · signed in  anthropic-2");
 	});
 });
 
@@ -1114,7 +1111,7 @@ describe("long-lived token sign-in", () => {
 		const agentDir = tempAgentDir();
 		companyAccount(agentDir);
 		const storeCredential = vi.fn(async () => {});
-		const { ctx, input, notify } = makeCtx({
+		const { ctx, input, notify, setWidget } = makeCtx({
 			agentDir,
 			auth: { anthropic: true },
 			models: COMPANY_MODELS,
@@ -1128,6 +1125,11 @@ describe("long-lived token sign-in", () => {
 		);
 		expect(notify).toHaveBeenCalledWith(expect.stringContaining(CLAUDE_SETUP_TOKEN_COMMAND), "warning");
 		expect(isSecretInputTitle(input.mock.calls[0][0])).toBe(true);
+		expect(setWidget).toHaveBeenCalledWith(
+			"sumocode.accounts",
+			[expect.stringContaining(CLAUDE_SETUP_TOKEN_COMMAND)],
+			{ placement: "aboveEditor" },
+		);
 		expect(storeCredential).toHaveBeenCalled();
 	});
 
@@ -1249,16 +1251,16 @@ describe("long-lived token sign-in", () => {
 	it("labels a token-backed account and offers a re-mint", async () => {
 		const agentDir = tempAgentDir();
 		companyAccount(agentDir);
-		writeAuth(agentDir, {
-			"anthropic-2": { type: "oauth", access: TOKEN, refresh: "", expires: STATIC_CREDENTIAL_EXPIRES, mintedAt: 1 },
-		});
 		const { ctx, select } = makeCtx({
 			agentDir,
 			auth: { anthropic: true, "anthropic-2": true },
 			models: COMPANY_MODELS,
 			onSelect: pickOption("company"),
 		});
-		await executeAccountsCommand(extensionApi(), commandContext(ctx), withAgentDir(agentDir));
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), {
+			...withAgentDir(agentDir),
+			readStoredCredential: async () => "long-lived-token",
+		});
 		expect(selectOptionsAt(select, 0)).toContain("company · token  anthropic-2");
 		const actions = selectOptionsAt(select, 1);
 		expect(actions).toContain(RENEW_LONG_LIVED);

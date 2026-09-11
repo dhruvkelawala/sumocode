@@ -16,11 +16,12 @@ export interface RpcLoginRuntime {
  * Pi's own refreshes by the same lock file.
  */
 export interface RpcCredentialStore {
-	modify<T>(
+	readonly read?: (providerId: string, options?: { signal?: AbortSignal }) => Promise<Credential | undefined>;
+	modify(
 		providerId: string,
-		fn: (current: Credential | undefined) => T | undefined | Promise<T | undefined>,
+		fn: (current: Credential | undefined) => Credential | undefined,
 		options?: { signal?: AbortSignal },
-	): Promise<T | undefined>;
+	): Promise<Credential | undefined>;
 }
 
 // oxlint-disable-next-line anti-slop/no-unknown-parameters -- runtime capability probe: the value is an undocumented field read through Reflect, and the typeof check below is the parse.

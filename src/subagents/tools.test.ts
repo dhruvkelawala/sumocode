@@ -87,7 +87,8 @@ const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly Su
 		}),
 	});
 	const pi = { registerTool: vi.fn((tool) => registered.push(tool)), on: vi.fn(), getThinkingLevel: vi.fn(() => "medium"), getActiveTools: vi.fn(() => ["read", "bash"]) };
-	const roleLoader: typeof loadRoles = roles ? (() => ({ roles, warnings: roleWarnings })) : loadRoles;
+	// Each call snapshots the caller's array, matching loadRoles() returning a fresh list per call.
+	const roleLoader: typeof loadRoles = roles ? (() => ({ roles: [...roles], warnings: roleWarnings })) : loadRoles;
 	// SAFETY: the double implements registerTool/on/getThinkingLevel/getActiveTools, all registerSubagentTools uses.
 	registerSubagentTools(pi as never, manager, delivery, host, roleLoader);
 	const tool = (name: string) => registered.find((entry) => entry.name === name)!;

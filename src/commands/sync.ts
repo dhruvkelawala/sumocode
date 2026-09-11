@@ -1,15 +1,15 @@
 // oxlint-disable anti-slop/no-runtime-typeof -- account migration parses user-authored JSON at the sync I/O boundary.
-import { execFile as execFileCallback } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { CLAUDE_ACCOUNTS_MIGRATION_FIELD } from "./accounts-config.js";
 
-const execFile = promisify(execFileCallback);
 const DEFAULT_TIMEOUT_MS = 120_000;
+/** Diagnostics keep only the tail of a step's output; noisy commands emit far more than anyone reads. */
+const MAX_STEP_OUTPUT_CHARS = 64 * 1024;
 const CONFIG_REPO_NAME = "sumocode";
 const CONFIG_REPO_URL = "git@github.com:dhruvkelawala/sumocode-config.git";
 const MANAGED_CONFIG_ITEMS = [
@@ -32,6 +32,16 @@ export interface SyncStepResult {
 	readonly output: string;
 }
 
+/** Minimal child-process surface the streamed runner reads; Node's `spawn` returns one. */
+interface StepChildProcess {
+	readonly stdout: { on(event: "data", listener: (chunk: Buffer | string) => void): void } | null;
+	readonly stderr: { on(event: "data", listener: (chunk: Buffer | string) => void): void } | null;
+	on(event: "error", listener: (error: Error) => void): void;
+	on(event: "close", listener: (code: number | null, signal: NodeJS.Signals | null) => void): void;
+}
+
+type SpawnStepChild = (file: string, args: readonly string[], options: { cwd?: string; signal: AbortSignal }) => StepChildProcess;
+
 export interface SumoSyncDeps {
 	readonly env?: NodeJS.ProcessEnv;
 	readonly cwd?: string;
@@ -41,6 +51,7 @@ export interface SumoSyncDeps {
 	readonly readFile?: (path: string, encoding: BufferEncoding) => string;
 	readonly linkConfig?: (configRepo: string, agentDir: string) => SyncStepResult;
 	readonly exec?: (file: string, args: readonly string[], options: { cwd?: string; timeout: number }) => Promise<{ stdout: string; stderr: string }>;
+	readonly spawn?: SpawnStepChild;
 }
 
 function moduleUrlToPath(moduleUrl: string): string {
@@ -306,6 +317,63 @@ function runConfigLinkStep(configRepo: string, agentDir: string, deps: SumoSyncD
 	}
 }
 
+/** Accumulate a step's output up to `MAX_STEP_OUTPUT_CHARS`, dropping the oldest text first. */
+function outputTail() {
+	let text = "";
+	let dropped = 0;
+	return {
+		write: (chunk: Buffer | string) => {
+			text += chunk.toString();
+			if (text.length <= MAX_STEP_OUTPUT_CHARS) return;
+			dropped += text.length - MAX_STEP_OUTPUT_CHARS;
+			text = text.slice(text.length - MAX_STEP_OUTPUT_CHARS);
+		},
+		read: () => (dropped > 0 ? `[… ${dropped} earlier output character(s) truncated …]\n${text}` : text),
+	};
+}
+
+/**
+ * Run a child through `spawn` and stream its output, so no amount of output can hit
+ * execFile's maxBuffer and get the child killed. Rejections carry the same
+ * stdout/stderr/message fields the execFile path rejected with.
+ */
+function runStepStreamed(
+	file: string,
+	args: readonly string[],
+	options: { cwd?: string; timeout: number },
+	spawnChild: SpawnStepChild,
+): Promise<{ stdout: string; stderr: string }> {
+	return new Promise((resolveOutput, rejectOutput) => {
+		const signal = AbortSignal.timeout(options.timeout);
+		const child = spawnChild(file, args, { cwd: options.cwd, signal });
+		const stdout = outputTail();
+		const stderr = outputTail();
+		let settled = false;
+		const settle = (finish: () => void): void => {
+			if (settled) return;
+			settled = true;
+			finish();
+		};
+		const failed = (detail: string): Error => Object.assign(
+			new Error(`Command failed: ${file} ${args.join(" ")} (${detail})`),
+			{ stdout: stdout.read(), stderr: stderr.read() },
+		);
+		child.stdout?.on("data", (chunk) => stdout.write(chunk));
+		child.stderr?.on("data", (chunk) => stderr.write(chunk));
+		// Spawn failures and the timeout abort both emit `error` before `close`; the first one settles.
+		child.on("error", (error) => settle(() => {
+			rejectOutput(failed(signal.aborted ? `timed out after ${options.timeout}ms` : error.message));
+		}));
+		child.on("close", (code, closeSignal) => settle(() => {
+			if (code === 0) {
+				resolveOutput({ stdout: stdout.read(), stderr: stderr.read() });
+				return;
+			}
+			rejectOutput(failed(code === null ? `killed by ${closeSignal ?? "signal"}` : `exited with code ${code}`));
+		}));
+	});
+}
+
 async function runStep(
 	label: string,
 	file: string,
@@ -313,9 +381,11 @@ async function runStep(
 	options: { cwd?: string; timeout?: number },
 	deps: SumoSyncDeps,
 ): Promise<SyncStepResult> {
-	const run = deps.exec ?? execFile;
+	const timeout = options.timeout ?? DEFAULT_TIMEOUT_MS;
 	try {
-		const result = await run(file, args, { cwd: options.cwd, timeout: options.timeout ?? DEFAULT_TIMEOUT_MS });
+		const result = deps.exec
+			? await deps.exec(file, args, { cwd: options.cwd, timeout })
+			: await runStepStreamed(file, args, { cwd: options.cwd, timeout }, deps.spawn ?? spawn);
 		return { label, ok: true, output: [result.stdout, result.stderr].filter(Boolean).join("\n").trim() };
 	} catch (error) {
 		// SAFETY: Node execFile rejections carry stdout/stderr/message strings on the error object.

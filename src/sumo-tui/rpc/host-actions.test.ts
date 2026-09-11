@@ -1199,12 +1199,12 @@ describe("RpcHostActions", () => {
 				// Wide: the pinned current session is named.
 				expect(inlineSelectorText(inlineSelectors)).toContain("ALL SESSIONS · RECENT +CURRENT 100");
 
-				// Portrait: the marker yields instead of pushing the strip past the panel
-				// edge, where `fitLine` would clip a badge count.
-				const portrait = inlineSelectorText(inlineSelectors, 60).split("\n").find((line) => line.includes("CURRENT PROJECT"))!;
-				expect(portrait).toContain("CURRENT PROJECT 11");
-				expect(portrait).toContain("ALL SESSIONS · RECENT 100");
-				expect(portrait).not.toContain("+CURRENT");
+				// Portrait: the tab strip yields its narrow project label instead of
+				// pushing the marker or a row count past the panel edge, where
+				// `fitLine` would clip one of them.
+				const portrait = inlineSelectorText(inlineSelectors, 60).split("\n").find((line) => line.includes("PROJECT"))!;
+				expect(portrait).toContain("THIS PROJECT 11");
+				expect(portrait).toContain("ALL SESSIONS · RECENT +CURRENT 100");
 				expect(portrait).not.toContain("…");
 
 				inlineSelectors.handleInput(SELECTOR_ESCAPE);

@@ -1178,13 +1178,18 @@ export class RpcHostActions {
 		// one, not a pure newest-N window.
 		const allSessionsLabel = allSessionsWindow.truncated ? "all sessions · recent" : "all sessions";
 		const tabs: InlineSelectorTab[] = [
-			{ id: "project", label: "current project", options: resumeSessionItems(projectSessions, sessionFile) },
+			{
+				id: "project",
+				label: "current project",
+				// The project tab yields a word before either tab's row count or the
+				// all-sessions pinned marker is dropped: a two-digit project count
+				// already fills the canonical 60-column portrait tab bar.
+				narrowLabel: "this project",
+				options: resumeSessionItems(projectSessions, sessionFile),
+			},
 			{
 				id: "all",
 				label: allSessionsWindow.pinnedCurrent ? `${allSessionsLabel} +current` : allSessionsLabel,
-				// The marker yields before the strip clips a badge: a two-digit sibling
-				// project count already fills the canonical 60-column portrait tab bar.
-				narrowLabel: allSessionsLabel,
 				options: resumeSessionItems(allSessions, sessionFile, { showProjectDirectory: true }),
 			},
 		];

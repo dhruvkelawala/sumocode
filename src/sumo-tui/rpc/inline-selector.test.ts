@@ -115,22 +115,24 @@ describe("InlineSelectorComponent", () => {
 
 	it("yields a tab's narrow label rather than clipping the strip's badges when the tabs do not fit", () => {
 		const tabs = [
-			{ id: "project", label: "current project", options: Array.from({ length: 10 }, (_, index) => `project-${index}`) },
-			{ id: "all", label: "all sessions · recent +current", narrowLabel: "all sessions · recent", options: Array.from({ length: 100 }, (_, index) => `session-${index}`) },
+			{ id: "project", label: "current project", narrowLabel: "this project", options: Array.from({ length: 10 }, (_, index) => `project-${index}`) },
+			{ id: "all", label: "all sessions · recent +current", options: Array.from({ length: 100 }, (_, index) => `session-${index}`) },
 		];
 		const tabRow = (width: number): string => new InlineSelectorComponent("Resume session", [], () => undefined, { tabs })
 			.render(width)
 			.map((line) => line.replace(/\[[0-9;]*m/g, ""))
-			.find((line) => line.includes("CURRENT PROJECT"))!;
+			.find((line) => line.includes("PROJECT"))!;
 
-		// Wide enough for the whole strip: the pinned marker renders.
+		// Wide enough for the whole strip: both full labels render.
+		expect(tabRow(120)).toContain("CURRENT PROJECT 10");
 		expect(tabRow(120)).toContain("ALL SESSIONS · RECENT +CURRENT 100");
 
-		// A two-digit sibling count fills the portrait bar, so the marker yields:
-		// the badge survives and the strip clips nothing.
+		// A two-digit project count fills the portrait bar, so the strip's tabs
+		// yield their narrow labels -- taking neither the row counts nor the
+		// pinned marker with them.
 		const portrait = tabRow(60);
-		expect(portrait).toContain("ALL SESSIONS · RECENT 100");
-		expect(portrait).not.toContain("+CURRENT");
+		expect(portrait).toContain("THIS PROJECT 10");
+		expect(portrait).toContain("ALL SESSIONS · RECENT +CURRENT 100");
 		expect(portrait).not.toContain("…");
 	});
 });

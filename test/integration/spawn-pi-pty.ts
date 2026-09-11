@@ -533,10 +533,14 @@ export async function waitForScreenText(
 }
 
 /**
- * A `/g` or `/y` pattern keeps `lastIndex` between calls, so two observations of
- * the same screen would not both match; match with a stateless copy instead.
+ * `test` advances `lastIndex` for `/g` and `/y` patterns, so two observations of
+ * the same screen would not both match. Reset it per observation on a copy, which
+ * keeps the pattern's own semantics (including stickiness) intact.
  */
 function statelessMatcher(pattern: RegExp): (text: string) => boolean {
-	const stateless = new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, ""));
-	return (text) => stateless.test(text);
+	const matcher = new RegExp(pattern.source, pattern.flags);
+	return (text) => {
+		matcher.lastIndex = 0;
+		return matcher.test(text);
+	};
 }

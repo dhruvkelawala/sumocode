@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import type { IDisposable, IEvent, IPty } from "node-pty";
 import { describe, expect, it } from "vitest";
 import { createChildEvidenceContext, HARNESS_SIGNATURE, HARNESS_SIGNATURE_ENV_KEY, recordPtyExit, requireHarnessAuth, spawnSupervisedPty } from "./harness-supervisor.js";
-import { buildSpawnEnv, spawnPiPty, waitForScreenText, type SpawnPiPtyOptions } from "./spawn-pi-pty.js";
+import { buildSpawnEnv, spawnPiPty, waitForScreenText, WaitForScreenTimeoutError, type SpawnPiPtyOptions } from "./spawn-pi-pty.js";
 
 type PtySpawn = NonNullable<SpawnPiPtyOptions["spawn"]>;
 type PtySpawnOptions = Parameters<PtySpawn>[2];
@@ -272,6 +272,19 @@ describe("waitForScreenText", () => {
 
 		const screen = await waitForScreenText(pty, /hello/g, 1_000);
 		expect(screen.text).toContain("hello");
+	});
+
+	it("keeps a sticky pattern anchored instead of unanchoring it", async () => {
+		// /y must keep matching only at lastIndex 0 (the row starts with "x"), so
+		// dropping the flag to make the pattern stateless would match the wrong text.
+		const pty = {
+			cols: 20,
+			rows: 2,
+			getOutput: () => "\x1b[1;1Hx\x1b[1;3Hhello",
+			captureEvidence: async () => "synthetic evidence",
+		};
+
+		await expect(waitForScreenText(pty, /hello/y, 300)).rejects.toThrow(WaitForScreenTimeoutError);
 	});
 
 	it("matches rendered text a repaint split across frames, where the raw byte stream does not", async () => {

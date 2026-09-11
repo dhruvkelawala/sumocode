@@ -333,6 +333,12 @@ function createOutputTail() {
 			if (text.length <= MAX_STEP_OUTPUT_CHARS) return;
 			dropped += text.length - MAX_STEP_OUTPUT_CHARS;
 			text = text.slice(text.length - MAX_STEP_OUTPUT_CHARS);
+			// The cut can land between the halves of a surrogate pair; do not keep the low half alone.
+			const first = text.charCodeAt(0);
+			if (first >= 0xdc00 && first <= 0xdfff) {
+				text = text.slice(1);
+				dropped += 1;
+			}
 		},
 		read: () => {
 			text += decoder.end();

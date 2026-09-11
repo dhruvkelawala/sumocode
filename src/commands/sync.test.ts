@@ -643,6 +643,35 @@ describe("/sumo:sync", () => {
 		stdout.mockRestore();
 	});
 
+	it("drops the orphaned half of a surrogate pair at the truncation boundary", async () => {
+		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		// 10 leading characters put the emoji's low surrogate exactly on the 64 KiB cut.
+		const chunk = Buffer.from(`${"a".repeat(10)}😀${"x".repeat(65_535)}`);
+		const spawn = vi.fn(() => {
+			const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter(), kill: () => true });
+			queueMicrotask(() => {
+				child.stdout.emit("data", chunk);
+				child.emit("close", 0, null);
+			});
+			return child;
+		});
+		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
+		const results = await executeSumoSync(ctx() as never, {
+			env: { SUMOCODE_CONFIG_DIR: "/config" },
+			cwd: "/repo/sumocode",
+			moduleUrl: "file:///repo/sumocode/src/commands/sync.ts",
+			exists: (path) => path === "/config/.git" || sumocodeRepoExists(path),
+			readFile: () => JSON.stringify({ name: "@dhruvkelawala/sumocode" }),
+			linkConfig: () => ({ label: "config symlinks", ok: true, output: "linked" }),
+			spawn,
+		});
+
+		const output = results[0]?.output ?? "";
+		expect(output).toContain("truncated");
+		expect(output.slice(output.indexOf("\n") + 1)).toBe("x".repeat(65_535));
+		stdout.mockRestore();
+	});
+
 	it("fails a step at the timeout instead of waiting for a close that never comes", async () => {
 		vi.useFakeTimers();
 		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);

@@ -152,9 +152,12 @@ export function registerThemeCycleShortcuts(pi: ExtensionAPI, options: RegisterT
 
 		const applyPi = ctx.hasUI ? (name: string) => ctx.ui.setTheme(name) : undefined;
 		const outcome = applyKnownTheme(theme, applyPi, options.persistTheme);
-		if (ctx.hasUI) {
-			const warning = outcome.persistenceWarning ?? outcome.piWarning;
-			ctx.ui.notify(warning ? `theme: ${theme.name} (${warning})` : `theme: ${theme.name}`, outcome.persistenceWarning ? "warning" : "info");
+		// Success stays silent (issue 481 drops action confirmations) and a
+		// Pi-only theme warning is non-fatal; only a failed config write is a
+		// failure worth surfacing. Error level is the sticky notice class in
+		// the host's notice slot, so a lost preference does not time out.
+		if (ctx.hasUI && outcome.persistenceWarning) {
+			ctx.ui.notify(`theme: ${theme.name} (not persisted: ${outcome.persistenceWarning})`, "error");
 		}
 	};
 

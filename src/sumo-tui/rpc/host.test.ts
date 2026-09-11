@@ -157,6 +157,24 @@ describe("editor command-readiness submission", () => {
 		expect(submit).toHaveBeenCalledWith(message);
 	});
 
+	it("keeps a transient reason when the tree busy-gate drops an editor submission", async () => {
+		const notifications = { notify: vi.fn() };
+		const submit = vi.fn(async () => undefined);
+		const handlers = createEditorSubmitHandlers({
+			gate: { isReady: true, whenSettled: async () => undefined },
+			notifications,
+			submit,
+			requestExit: vi.fn(),
+			isTreeBusy: () => true,
+		});
+
+		await handlers.fromEditor("summarize this branch");
+
+		expect(submit).not.toHaveBeenCalled();
+		expect(notifications.notify).toHaveBeenCalledOnce();
+		expect(notifications.notify).toHaveBeenCalledWith("branch summary in progress", "warning");
+	});
+
 	it("keeps quit immediate and silent before command readiness", async () => {
 		const notifications = { notify: vi.fn() };
 		const requestExit = vi.fn();
@@ -461,6 +479,22 @@ describe("handleRpcMessageFollowUp", () => {
 		expect(editor.setText).toHaveBeenCalledWith("");
 	});
 
+	it("keeps a transient reason when tree navigation blocks the follow-up", async () => {
+		const editor = followUpEditor("still here");
+		const scheduler = {
+			getSnapshot: vi.fn(() => ({ busy: true, queuedMessages: [], pausedAfterFailure: false })),
+			submit: vi.fn(async () => "queued" as const),
+		};
+		const notifications = { notify: vi.fn() };
+
+		await handleRpcMessageFollowUp({ editor, scheduler, notifications, isBlocked: () => true });
+
+		expect(scheduler.submit).not.toHaveBeenCalled();
+		expect(editor.setText).not.toHaveBeenCalled();
+		expect(notifications.notify).toHaveBeenCalledOnce();
+		expect(notifications.notify).toHaveBeenCalledWith("branch summary in progress", "warning");
+	});
+
 	it("adds history and clears the draft when the scheduler handled a host command", async () => {
 		const editor = followUpEditor("/model anthropic/claude-opus-4");
 		const scheduler = {
@@ -553,7 +587,7 @@ describe("handleRpcMessageForceSend", () => {
 		const scheduler = { forceSendNext: vi.fn(async () => { throw new Error("preflight rejected"); }) };
 
 		await expect(handleRpcMessageForceSend({ scheduler, notifications })).resolves.toBe("ignored");
-		expect(notifications.notify).toHaveBeenCalledWith("rpc error: preflight rejected", "warning");
+		expect(notifications.notify).toHaveBeenCalledWith("rpc error: preflight rejected", "error");
 	});
 });
 
@@ -602,12 +636,15 @@ describe("handleRpcMessageDequeue", () => {
 			setText: vi.fn((text: string) => { draft = text; }),
 		};
 		const stateStore = new RpcHostStateStore();
-		const notifications = { notify: vi.fn() };
+		const notifications = { notify: vi.fn(), dismissSticky: vi.fn() };
 
 		await expect(scheduler.submit("prompt A")).resolves.toBe("sent");
 		await expect(scheduler.submit("prompt B")).resolves.toBe("queued");
 
 		handleRpcMessageDequeue({ editor, scheduler, stateStore, notifications });
+
+		// A direct editor action supersedes a stale sticky failure (issue 481 home B).
+		expect(notifications.dismissSticky).toHaveBeenCalledOnce();
 
 		expect(editor.setText).toHaveBeenCalledWith("prompt B");
 		expect(scheduler.getSnapshot()).toMatchObject({ busy: true, queuedMessages: [] });
@@ -672,6 +709,21 @@ describe("createRpcHostInterruptHandler wiring", () => {
 		expect(editor.setText).not.toHaveBeenCalled();
 		expect(controls.abort).not.toHaveBeenCalled();
 		expect(requestHostExit).not.toHaveBeenCalled();
+	});
+
+	it("clears the draft on Ctrl-C and supersedes a stale sticky failure", () => {
+		let editorText = "half-typed prompt";
+		const editor = { getText: () => editorText, setText: vi.fn((text: string) => { editorText = text; }), isAutocompleteOpen: () => false };
+		const notifications = { notify: vi.fn(), dismissSticky: vi.fn() };
+		const handle = createRpcHostInterruptHandler(interruptDeps({
+			stateStore: { getSnapshot: () => asNever({ isStreaming: false }) },
+			editor,
+			notifications,
+		}));
+
+		expect(handle(CTRL_C)).toBe(true);
+		expect(editorText).toBe("");
+		expect(notifications.dismissSticky).toHaveBeenCalledOnce();
 	});
 
 	it("restores host-owned queued drafts before aborting", () => {
@@ -915,8 +967,30 @@ describe("createModelCycleForwardHandler (app.model.cycleForward)", () => {
 		expect(notifications.notify).not.toHaveBeenCalled();
 	});
 
+	it("clears the previous sticky failure when the cycle succeeds", async () => {
+		const controls = {
+			getAvailableModels: vi.fn(),
+			getEnabledModels: vi.fn(async () => [
+				{ provider: "anthropic", id: "claude-opus-4", label: "anthropic/claude-opus-4", active: false },
+				{ provider: "openai", id: "gpt-5", label: "openai/gpt-5", active: true },
+			]),
+			setModel: vi.fn(async () => asNever({ modelLabel: "anthropic/claude-opus-4" })),
+		};
+		const dismissSticky = vi.fn();
+		const handle = createModelCycleForwardHandler({
+			// SAFETY: partial fixture; unread members of the target type are unused here.
+			controls: controls as never,
+			notifications: { notify: vi.fn(), dismissSticky },
+		});
+
+		handle();
+		await flush();
+
+		expect(dismissSticky).toHaveBeenCalledTimes(1);
+	});
+
 	it("notifies a warning instead of throwing when enabled-model discovery fails", async () => {
-		const notifications = { notify: vi.fn() };
+		const notifications = { notify: vi.fn(), dismissSticky: vi.fn() };
 		const handle = createModelCycleForwardHandler({
 			// SAFETY: partial controls fixture; only the members below are exercised.
 			controls: {
@@ -931,7 +1005,11 @@ describe("createModelCycleForwardHandler (app.model.cycleForward)", () => {
 		handle();
 		await flush();
 
-		expect(notifications.notify).toHaveBeenCalledWith(expect.stringContaining("boom"), "warning");
+		expect(notifications.notify).toHaveBeenCalledWith(expect.stringContaining("boom"), "error");
+		// The stale sticky failure is cleared at the action's ENTRY (issue 481
+		// home B); the failure then raises its own notice, which survives.
+		expect(notifications.dismissSticky).toHaveBeenCalledTimes(1);
+		expect(notifications.dismissSticky.mock.invocationCallOrder[0]!).toBeLessThan(notifications.notify.mock.invocationCallOrder[0]!);
 	});
 });
 
@@ -1105,13 +1183,16 @@ describe("createToolsExpandToggleHandler (app.tools.expand)", () => {
 	it("delegates every toggle to the presentation-owned pager state", () => {
 		const toggleActivityExpansion = vi.fn();
 		const requestRender = vi.fn();
-		const handle = createToolsExpandToggleHandler({ toggleActivityExpansion, requestRender });
+		const notifications = { dismissSticky: vi.fn() };
+		const handle = createToolsExpandToggleHandler({ toggleActivityExpansion, requestRender, notifications });
 
 		handle();
 		handle();
 		handle();
 		expect(toggleActivityExpansion).toHaveBeenCalledTimes(3);
 		expect(requestRender).toHaveBeenCalledTimes(3);
+		// A direct editor action supersedes a stale sticky failure (issue 481 home B).
+		expect(notifications.dismissSticky).toHaveBeenCalledTimes(3);
 	});
 });
 

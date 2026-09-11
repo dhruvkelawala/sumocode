@@ -5,6 +5,7 @@ import type { MouseEvent } from "../input/mouse.js";
 import { resetThemeRegistryForTests, setActiveTheme } from "../../themes/index.js";
 import { ULTRAVIOLET_CORE_INDICATOR_INTERVAL_MS, ULTRAVIOLET_RUNCAT_FRAMES, ULTRAVIOLET_RUNCAT_INTERVAL_MS } from "../../themes/ultraviolet-core.js";
 import { ChatPager } from "../widgets/chat-pager.js";
+import { NotificationCenter } from "../widgets/notification.js";
 import { InlineSelectorHost } from "./inline-selector.js";
 import { RpcShellAdapter } from "./shell-adapter.js";
 import type { RpcHostChromeState } from "./state.js";
@@ -97,6 +98,32 @@ describe("RpcShellAdapter splash hint", () => {
 			expect(frame!.getCell(thinking.row, thinking.col).fg?.toLowerCase()).toBe("#8b7a63");
 		} finally {
 			adapter.dispose();
+		}
+	});
+
+	it("keeps a long transient notice visible by truncating it into the splash hint row", async () => {
+		const notifications = new NotificationCenter();
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 160, rows: 45 },
+			initialState: state({ hasMessages: false, modelLabel: "openai/gpt-5.5", thinkingLevel: "high" }),
+			initialTranscript: { messages: [] },
+			notifications,
+		});
+		try {
+			// The splash hint row is capped at SPLASH_INPUT_FRAME_WIDTH (60), so a
+			// notice longer than the leftover columns used to be dropped entirely.
+			notifications.notify("SumoCode sync complete — run /reload if source changed");
+			adapter.render();
+			const frame = adapter.getLastFrame();
+			expect(frame).toBeDefined();
+			const text = Array.from({ length: 45 }, (_value, row) => frame!.toPlainRow(row)).join("\n");
+			expect(text).toContain("SumoCode sync complete");
+			expect(text).not.toContain("╰─ gpt-5.5");
+			expect(text).toContain("CTRL+/ · COMMANDS");
+		} finally {
+			adapter.dispose();
+			notifications.dispose();
 		}
 	});
 
@@ -634,7 +661,7 @@ describe("RpcShellAdapter chat update", () => {
 });
 
 describe("RpcShellAdapter mouse drag-select + OSC52 copy", () => {
-	it("turns a drag press/move/up over chat text into a selection, auto-copies via OSC52, and shows a copied notification", async () => {
+	it("turns a drag press/move/up over chat text into a selection, auto-copies via OSC52, and notifies nothing", async () => {
 		const terminal = new SpyTerminal();
 		const notifications = new SpyNotifications();
 		const adapter = await makeAdapter({ terminal, notifications });
@@ -662,7 +689,7 @@ describe("RpcShellAdapter mouse drag-select + OSC52 copy", () => {
 			const decoded = Buffer.from(terminal.clipboardSequences[0]!.replace(/^\x1b\]52;c;/, "").replace(/\x1b\\$/, ""), "base64").toString("utf8");
 			expect(decoded).toContain("selectable drag target");
 
-			expect(notifications.notifications).toContainEqual(expect.objectContaining({ message: "copied", level: "success" }));
+			expect(notifications.notifications).toEqual([]);
 		} finally {
 			adapter.dispose();
 		}

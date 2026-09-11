@@ -20,8 +20,8 @@
  *   └── blank              (h: 1)
  *
  * Composites Pi's own overlay stack on top of the buffer so existing widgets
- * that depend on `tui.showOverlay` (modal selectors, notifications) keep
- * working while permanent chrome is owned by Yoga siblings.
+ * that depend on `tui.showOverlay` (modal selectors) keep working while
+ * permanent chrome is owned by Yoga siblings.
  */
 
 import type { CustomEditor } from "@earendil-works/pi-coding-agent";
@@ -411,7 +411,7 @@ export class RetainedShellRenderer {
 	 *      (necessary for autocomplete dropdown growth and dynamic header content).
 	 *   3. Yoga layout for the full screen.
 	 *   4. Composite cells into a CellBuffer.
-	 *   5. Composite Pi's overlay stack (sidebar, modals, notifications) on top.
+	 *   5. Composite Pi's overlay stack (sidebar, modals, input-recovery notice) on top.
 	 *   6. Diff against previous frame.
 	 *   7. Write patches via TerminalSessionOwner (synchronized output).
 	 */
@@ -446,8 +446,8 @@ export class RetainedShellRenderer {
 		const overlayCount = this.compositeOverlays(frame, cols, rows);
 		const compositeMs = performance.now() - compositeStart;
 
-		// Hide the hardware cursor when an overlay (modal/notification) is visible
-		// so the editor's cursor doesn't bleed through the modal's text.
+		// Hide the hardware cursor when a modal or the input-recovery notice
+		// overlay is visible so the editor's cursor doesn't bleed through it.
 		const cursor: HardwareCursor | null = overlayCount > 0 ? null : result.hardwareCursor;
 		this.lastOverlayCount = overlayCount;
 		this.lastCursor = cursor;
@@ -539,7 +539,7 @@ export class RetainedShellRenderer {
 	 *
 	 * Pi composes overlays into rendered string lines inside `doRender`, which
 	 * we've replaced. To keep `tui.showOverlay`-based widgets (Cathedral
-	 * sidebar, Pi extension modal selectors, NotificationCenter toasts) working
+	 * sidebar, Pi extension modal selectors) working
 	 * without forcing a full migration to RegionRegistry, walk the overlay
 	 * stack and paint each visible overlay into the cell buffer.
 	 */

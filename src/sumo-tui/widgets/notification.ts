@@ -1,4 +1,6 @@
-import type { Component } from "@earendil-works/pi-tui";
+import { wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
+import { activeThemeColors } from "../../themes/index.js";
+import { lineToAnsi, textLine, truncateLine } from "../render/primitives.js";
 
 export type NotificationLevel = "info" | "success" | "warning" | "error";
 
@@ -17,97 +19,171 @@ export interface NotificationCenterOptions {
 	readonly onChange?: () => void;
 }
 
-const LEVEL_PREFIX = {
-	info: "ⓘ",
-	success: "✓",
-	warning: "⚠",
-	error: "✖",
-} satisfies Record<NotificationLevel, string>;
+const DEFAULT_NOTICE_TIMEOUT_MS = 3_000;
 
-function stripAnsi(text: string): string {
-	// oxlint-disable-next-line no-control-regex -- intentional ESC byte match to strip ANSI styling from notification text
-	return text.replace(/\u001b\[[0-9;]*m/g, "");
+/** Named inputs for {@link NotificationCenter.notify}. */
+export interface NotifyOptions {
+	/**
+	 * Explicit sticky request: paint above the input frame and survive
+	 * keystrokes and expiry until Escape or the next host action clears it.
+	 * Errors are sticky without this flag; a plain timeout of 0 is not a
+	 * sticky request.
+	 */
+	readonly sticky?: boolean;
+	/** Override the default transient expiry. Ignored for sticky notices. */
+	readonly timeoutMs?: number;
 }
 
-function truncateVisible(text: string, width: number): string {
-	const plain = stripAnsi(text);
-	if (plain.length <= width) return text;
-	if (width <= 1) return "…";
-	return `${plain.slice(0, width - 1)}…`;
+/**
+ * The one live host notice. Issue 481 replaced the top-right toast stack with
+ * two surfaces fed from this single slot: transient hints paint in the
+ * belowEditor hint row, sticky failures paint as a notice above the input
+ * frame (see `renderHostNotice`). Notices are last-writer-wins -- a repeat of
+ * the live notice refreshes its expiry instead of stacking.
+ */
+export interface HostNotice {
+	readonly message: string;
+	readonly level: NotificationLevel;
+	/** Sticky notices survive keystrokes and expiry; only Escape or the next host action clears them. */
+	readonly sticky: boolean;
 }
 
-function pad(text: string, width: number): string {
-	const visible = stripAnsi(text).length;
-	return visible >= width ? text : `${text}${" ".repeat(width - visible)}`;
-}
-
-/** Minimal top-right toast stack used by the Phase 4 ExtensionUI adapter. */
+/**
+ * Host notification model consumed by `RpcHostActions`, the RPC extension UI
+ * responder, and the pi-compat ExtensionUI adapter. Issue 481 removed the
+ * top-right toast surface: `render` is intentionally empty and `getToasts`
+ * stays empty forever, while `notify` keeps funneling host feedback and
+ * extension notify requests into one last-writer-wins notice slot.
+ */
 export class NotificationCenter implements Component {
 	private readonly defaultTimeoutMs: number;
-	private readonly getNow: () => number;
 	private readonly setTimer: typeof setTimeout;
 	private readonly clearTimer: typeof clearTimeout;
 	private readonly onChange: () => void;
-	private readonly timers = new Map<number, ReturnType<typeof setTimeout>>();
-	private readonly toasts: Toast[] = [];
+	private notice: HostNotice | undefined;
+	private timer: ReturnType<typeof setTimeout> | undefined;
+	private noticeId = 0;
 	private nextId = 1;
 
 	public constructor(options: NotificationCenterOptions = {}) {
-		this.defaultTimeoutMs = options.defaultTimeoutMs ?? 3_000;
-		this.getNow = options.now ?? Date.now;
+		this.defaultTimeoutMs = options.defaultTimeoutMs ?? DEFAULT_NOTICE_TIMEOUT_MS;
 		this.setTimer = options.setTimeout ?? setTimeout;
 		this.clearTimer = options.clearTimeout ?? clearTimeout;
 		this.onChange = options.onChange ?? (() => undefined);
 	}
 
-	public notify(message: string, level: NotificationLevel = "info", timeoutMs = this.defaultTimeoutMs): number {
-		const id = this.nextId++;
-		this.toasts.push({ id, message, level, createdAt: this.getNow() });
-		if (timeoutMs > 0) {
-			const timer = this.setTimer(() => this.dismiss(id), timeoutMs);
-			timer.unref?.();
-			this.timers.set(id, timer);
+	/**
+	 * Records the live host notice. Errors are sticky, an explicit
+	 * `options.sticky` makes any level sticky, and everything else is a
+	 * transient hint that expires after `options.timeoutMs` (default 3s).
+	 */
+	public notify(message: string, level: NotificationLevel = "info", options: NotifyOptions = {}): number {
+		const sticky = level === "error" || options.sticky === true;
+		const timeoutMs = options.timeoutMs ?? this.defaultTimeoutMs;
+		if (this.notice?.message === message && this.notice.level === level && this.notice.sticky === sticky) {
+			this.armExpiry(sticky ? 0 : timeoutMs);
+			return this.noticeId;
 		}
+		this.notice = { message, level, sticky };
+		this.noticeId = this.nextId++;
+		this.armExpiry(sticky ? 0 : timeoutMs);
 		this.onChange();
-		return id;
+		return this.noticeId;
+	}
+
+	public getNotice(): HostNotice | undefined {
+		return this.notice;
 	}
 
 	public dismiss(id: number): void {
-		const index = this.toasts.findIndex((toast) => toast.id === id);
-		if (index === -1) return;
-		this.toasts.splice(index, 1);
-		const timer = this.timers.get(id);
-		if (timer) this.clearTimer(timer);
-		this.timers.delete(id);
-		this.onChange();
+		if (id !== this.noticeId) return;
+		this.clearNotice();
+	}
+
+	/** Keystroke dismissal: transient hints go, sticky failures stay. */
+	public dismissTransient(): void {
+		if (this.notice?.sticky !== false) return;
+		this.clearNotice();
+	}
+
+	/** Escape / next-host-action dismissal: sticky failures go, a live hint stays. */
+	public dismissSticky(): void {
+		if (this.notice?.sticky !== true) return;
+		this.clearNotice();
 	}
 
 	public clear(): void {
-		for (const timer of this.timers.values()) this.clearTimer(timer);
-		this.timers.clear();
-		this.toasts.length = 0;
-		this.onChange();
+		if (this.notice === undefined) return;
+		this.clearNotice();
 	}
 
+	/** The removed toast surface: retained as an always-empty compatibility read. */
 	public getToasts(): readonly Toast[] {
-		return this.toasts;
+		return [];
 	}
 
 	public invalidate(): void {}
 
-	public render(width: number): string[] {
-		if (this.toasts.length === 0 || width <= 0) return [];
-		const boxWidth = Math.min(Math.max(24, Math.floor(width * 0.45)), width);
-		const leftPad = Math.max(0, width - boxWidth);
-		const indent = " ".repeat(leftPad);
-		return this.toasts.slice(-4).map((toast) => {
-			const content = `${LEVEL_PREFIX[toast.level]} ${toast.message}`;
-			const text = truncateVisible(content, Math.max(0, boxWidth - 2));
-			return `${indent} ${pad(text, boxWidth - 1)}`;
-		});
+	public render(_width: number): string[] {
+		return [];
 	}
 
 	public dispose(): void {
-		this.clear();
+		this.clearNotice();
 	}
+
+	private clearNotice(): void {
+		if (this.timer !== undefined) this.clearTimer(this.timer);
+		this.timer = undefined;
+		this.notice = undefined;
+		this.noticeId = 0;
+		this.onChange();
+	}
+
+	private armExpiry(timeoutMs: number): void {
+		if (this.timer !== undefined) this.clearTimer(this.timer);
+		this.timer = undefined;
+		if (timeoutMs <= 0) return;
+		const timer = this.setTimer(() => {
+			this.timer = undefined;
+			this.clearNotice();
+		}, timeoutMs);
+		timer.unref?.();
+		this.timer = timer;
+	}
+}
+
+/**
+ * The removed toast capped its chrome at 6 rows; a sticky notice mirrors that
+ * cap so an over-long failure (a `notifyOnError` message can carry a large
+ * stderr tail) cannot displace the input frame and hint row.
+ */
+const HOST_NOTICE_MAX_ROWS = 6;
+
+/**
+ * Renders a sticky host notice as above-the-input rows. This is the sibling
+ * render of `InputRecoveryNotice` (same text wrap, same surface fill) with the
+ * rust/approval tone; the router-owned recovery notice keeps its own lifecycle.
+ * A message wrapping past {@link HOST_NOTICE_MAX_ROWS} is capped, with the last
+ * retained row ellipsized so the truncation is visible.
+ */
+export function renderHostNotice(notice: HostNotice, width: number): string[] {
+	if (!notice.message || width <= 0) return [];
+	const colors = activeThemeColors();
+	const wrapped = wrapTextWithAnsi(notice.message, width);
+	const rows = wrapped.length <= HOST_NOTICE_MAX_ROWS
+		? wrapped
+		: [...wrapped.slice(0, HOST_NOTICE_MAX_ROWS - 1), ellipsizeRow(wrapped[HOST_NOTICE_MAX_ROWS - 1]!, width)];
+	return rows.map((text) => lineToAnsi(textLine([text], {
+		fg: colors.states.approval, bg: colors.surface,
+	}), { width }));
+}
+
+/**
+ * Cuts one wrapped row to `width - 1` and marks the cut with an ellipsis.
+ * Goes through the typed primitive so wide graphemes are measured, not sliced.
+ */
+function ellipsizeRow(text: string, width: number): string {
+	const truncated = truncateLine(textLine([text]), Math.max(1, width - 1));
+	return `${truncated.spans.map((part) => part.text).join("")}…`;
 }

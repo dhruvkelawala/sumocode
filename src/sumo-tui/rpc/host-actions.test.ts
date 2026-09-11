@@ -364,6 +364,7 @@ function setup(options: {
 	const overlays = new RpcHostOverlayManager();
 	const inlineSelectors = new InlineSelectorHost(new FakeInlineEditor());
 	const notifications: Notification[] = [];
+	const dismissSticky = vi.fn();
 	const memory = options.memory ?? new FakeMemoryClient();
 	const editorText = new FakeEditorText();
 	const rehydrateCalls: number[] = [];
@@ -385,6 +386,7 @@ function setup(options: {
 				notifications.push({ message, level });
 				return notifications.length;
 			},
+			dismissSticky,
 		},
 		editorText,
 		createMemoryClient: () => memory,
@@ -410,7 +412,7 @@ function setup(options: {
 		},
 	});
 
-	return { actions, controls, modals, overlays, inlineSelectors, notifications, memory, editorText, rehydrateCalls, stateChanges, persistedThemes };
+	return { actions, controls, modals, overlays, inlineSelectors, notifications, dismissSticky, memory, editorText, rehydrateCalls, stateChanges, persistedThemes };
 }
 
 function rpcCommand(name: string, source: RpcSlashCommand["source"] = "prompt"): RpcSlashCommand {
@@ -561,7 +563,7 @@ describe("RpcHostActions", () => {
 			{ thinkingLevel: "high" },
 			undefined,
 		]);
-		expect(notifications).toContainEqual({ message: "auto compaction disabled", level: "info" });
+		expect(notifications).toEqual([]);
 	});
 
 	it("persists Mermaid mode through RPC settings and requests an immediate repaint", async () => {
@@ -611,7 +613,7 @@ describe("RpcHostActions", () => {
 		expect(inlineSelectors.getActiveKind()).toBeUndefined();
 		expect(controls.calls).toContain("getAvailableThinkingLevels");
 		expect(controls.calls).toContain("setThinking:minimal");
-		expect(notifications).toContainEqual({ message: "thinking: minimal", level: "info" });
+		expect(notifications).toEqual([]);
 	});
 
 	it("validates explicit /thinking values against Pi's available thinking levels", async () => {
@@ -1531,7 +1533,7 @@ describe("RpcHostActions", () => {
 				inlineSelectors.handleInput(SELECTOR_ENTER);
 				await treePromise;
 				expect(controls.treeRequests).toHaveLength(0);
-				expect(notifications).toContainEqual({ message: "already at this point", level: "info" });
+				expect(notifications).toEqual([]);
 		} finally {
 				rmSync(dir, { recursive: true, force: true });
 		}
@@ -1725,10 +1727,31 @@ describe("RpcHostActions", () => {
 			await expect(actions.handleSubmittedText("/tree")).resolves.toBe(true);
 			await expect(actions.handleSubmittedText("/new")).resolves.toBe(true);
 			expect(controls.calls).toEqual([]);
-			expect(notifications.filter((entry) => entry.message === "branch summary in progress")).toHaveLength(3);
+			// The editor already cleared its buffer, so a rejected submission keeps its
+			// transient reason visible instead of vanishing silently.
+			expect(notifications).toEqual([
+				{ message: "branch summary in progress", level: "warning" },
+				{ message: "branch summary in progress", level: "warning" },
+				{ message: "branch summary in progress", level: "warning" },
+			]);
 			busy = false;
 			await expect(actions.handleSubmittedText("/copy")).resolves.toBe(true);
 			expect(controls.calls).toContain("getLastAssistantText");
+		});
+
+		it("keeps a transient reason when branch navigation blocks a direct selector action", async () => {
+			const { actions, notifications } = setup({ isTreeNavigationBusy: () => true });
+
+			await actions.openModelSelector();
+			await actions.openThinkingSelector();
+			await actions.openSessionControls();
+			await actions.openSettings();
+			await actions.openForkSelector();
+			await actions.openTreeBrowser();
+
+			// Direct entry points (Ctrl+L, the command palette) never reach
+			// handleSubmittedText's warning path.
+			expect(notifications).toEqual(Array.from({ length: 6 }, () => ({ message: "branch summary in progress", level: "warning" })));
 		});
 
 		it("warns when there is no session file to browse", async () => {
@@ -1784,7 +1807,7 @@ describe("RpcHostActions", () => {
 
 		expect(controls.calls).toEqual(["setSessionName:Plan 023"]);
 		expect(stateChanges).toEqual([{ sessionName: "Plan 023" }]);
-		expect(notifications).toContainEqual({ message: "session name: Plan 023", level: "info" });
+		expect(notifications).toEqual([]);
 	});
 
 	it("copies the last assistant response via OSC52 and shows a terse toast", async () => {
@@ -1803,7 +1826,7 @@ describe("RpcHostActions", () => {
 		expect(sequences).toHaveLength(1);
 		expect(sequences[0]).toContain("\x1b]52;c;");
 		expect(sequences[0]).toContain(Buffer.from("here is the answer", "utf8").toString("base64"));
-		expect(notifications).toContainEqual({ message: "copied", level: "success" });
+		expect(notifications).toEqual([]);
 	});
 
 	it("refuses to copy oversized assistant responses without sending a clipboard sequence", async () => {
@@ -1942,7 +1965,16 @@ describe("RpcHostActions", () => {
 		const after = getActiveTheme().name;
 		expect(after).not.toBe(before);
 		expect(persistedThemes).toEqual(["amber-crt", after]);
-		expect(notifications).toContainEqual({ message: `theme: ${after}`, level: "info" });
+		expect(notifications).toEqual([]);
+	});
+
+	it("clears the previous sticky failure when a host theme cycle succeeds", () => {
+		const { actions, dismissSticky } = setup();
+
+		actions.cycleTheme();
+
+		expect(getActiveTheme().name).toBe("amber-crt");
+		expect(dismissSticky).toHaveBeenCalledTimes(1);
 	});
 
 	it("warns when theme persistence fails but still applies the theme", async () => {
@@ -1973,7 +2005,9 @@ describe("RpcHostActions", () => {
 			"forget:fact-1",
 		]);
 		expect(getActiveTheme().name).toBe("amber-crt");
-		expect(notifications).toContainEqual({ message: "theme: amber-crt", level: "info" });
+		// Issue 481: the add/forget/theme confirmations are dropped noise; only
+		// the memory status report survives.
+		expect(notifications.filter((entry) => entry.message.startsWith("memory added:") || entry.message.startsWith("memory forgotten:") || entry.message.startsWith("theme:"))).toEqual([]);
 	});
 
 	it("opens /theme's picker through the in-place InlineSelectorHost, not modals.select", async () => {
@@ -1988,7 +2022,7 @@ describe("RpcHostActions", () => {
 		await themePromise;
 
 		expect(getActiveTheme().name).toBe("amber-crt");
-		expect(notifications).toContainEqual({ message: "theme: amber-crt", level: "info" });
+		expect(notifications).toEqual([]);
 	});
 
 	it("notifies memory client failures without throwing from direct memory commands", async () => {
@@ -2002,7 +2036,7 @@ describe("RpcHostActions", () => {
 		await expect(actions.handleSubmittedText("/sumo:memory add remember this")).resolves.toBe(true);
 
 		expect(memory.calls).toEqual(["add:remember this"]);
-		expect(notifications).toContainEqual({ message: "rpc error: memory offline", level: "warning" });
+		expect(notifications).toContainEqual({ message: "rpc error: memory offline", level: "error" });
 	});
 
 	it("handles /quit through the injected exit request", async () => {

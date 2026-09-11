@@ -64,7 +64,7 @@ export interface RpcHostRuntimeOptions {
 	readonly editor?: Component;
 	readonly modal?: Component & { getActiveKind?(): string | undefined; isSecretInputActive?(): boolean };
 	readonly overlay?: Component & { getActiveKind?(): string | undefined };
-	readonly notifications?: Component & Partial<Pick<NotificationCenter, "notify">>;
+	readonly notifications?: Component & Partial<Pick<NotificationCenter, "notify" | "getNotice" | "dismissTransient" | "dismissSticky" | "dispose">>;
 	readonly extensionRegions?: {
 		readonly aboveEditor?: Component;
 		readonly belowEditor?: Component;
@@ -242,7 +242,11 @@ export class RpcHostRuntime {
 		this.notifications = {
 			render: (width) => [...(options.notifications?.render(width) ?? []), ...this.inputNotice.render(width)],
 			invalidate: () => { options.notifications?.invalidate(); this.inputNotice.invalidate(); },
-			notify: (message, level, timeout) => options.notifications?.notify?.(message, level, timeout) ?? 0,
+			notify: (message, level, notifyOptions) => options.notifications?.notify?.(message, level, notifyOptions) ?? 0,
+			getNotice: () => options.notifications?.getNotice?.(),
+			dismissTransient: () => options.notifications?.dismissTransient?.(),
+			dismissSticky: () => options.notifications?.dismissSticky?.(),
+			dispose: () => options.notifications?.dispose?.(),
 		};
 		this.extensionRegions = options.extensionRegions;
 		this.extensionStatuses = options.extensionStatuses;
@@ -289,6 +293,12 @@ export class RpcHostRuntime {
 			handleChatScrollKey: (event) => this.shell?.handleChatKey(event) === true,
 			handleSelectionKey: (event) => this.shell?.handleSelectionKey(event) === true,
 			handlePreEditorInput: (data) => {
+				// Issue 481 notice dismissal: the hint row is not a log, so any
+				// keystroke clears a transient hint, and Escape dismisses a sticky
+				// failure. Both run before the interrupt tiers so the keystroke that
+				// dismisses a notice still does its normal job.
+				if (isEscapeInput(data)) this.notifications.dismissSticky?.();
+				else this.notifications.dismissTransient?.();
 				if (this.preEditorInputHandler?.(data) === true) return true;
 				// Fallback for when there's no host-level interrupt handler wired
 				// (e.g. bare RpcHostRuntime in tests): containsCtrlCToken, not a
@@ -544,6 +554,8 @@ export class RpcHostRuntime {
 		else this.output.removeListener?.("resize", this.handleResize);
 		this.shell?.dispose();
 		this.shell = undefined;
+		// Drop any live notice timer with the shell that painted it.
+		this.notifications.dispose?.();
 		this.themeUnsubscribe?.();
 		this.themeUnsubscribe = undefined;
 		if (!options.preserveTerminal) this.terminal.exitTerminal();

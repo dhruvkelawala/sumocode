@@ -9,6 +9,7 @@ import type { RemnicMemoryClient } from "../../memory.js";
 import { activeThemeColors, resetThemeRegistryForTests } from "../../themes/index.js";
 import { SumoTuiTestBackend, type TestBackendFrame } from "../testing/test-backend.js";
 import { ModalManager } from "../widgets/modal.js";
+import { NotificationCenter } from "../widgets/notification.js";
 import type { NotificationLevel } from "../widgets/notification.js";
 import { PiEditorLeaf } from "../widgets/pi-editor-leaf.js";
 import type { RpcHostControls, RpcModelOption, RpcSlashCommand } from "./controls.js";
@@ -261,7 +262,7 @@ describe("RPC editor controller", () => {
 		controller.handleInput("\r");
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
-		expect(notifications).toEqual([{ message: "rpc error: prompt timed out", level: "warning" }]);
+		expect(notifications).toEqual([{ message: "rpc error: prompt timed out", level: "error" }]);
 		expect(controller.getText()).toBe("");
 	});
 
@@ -887,7 +888,7 @@ describe("advertised host slash-command dispatch invariant", () => {
 		readonly notifications: { message: string; level: NotificationLevel }[];
 	}
 
-	function dispatchHarness(changelogRoot: string): DispatchHarness {
+	function dispatchHarness(changelogRoot: string, notifier?: NotificationCenter): DispatchHarness {
 		const controls = new FakeDispatchControls();
 		const modals = new ModalManager();
 		const overlays = new RpcHostOverlayManager();
@@ -907,7 +908,7 @@ describe("advertised host slash-command dispatch invariant", () => {
 			modals,
 			overlays,
 			inlineSelectors,
-			notifications: {
+			notifications: notifier ?? {
 				notify: (message, level = "info") => {
 					notifications.push({ message, level });
 					return notifications.length;
@@ -979,6 +980,34 @@ describe("advertised host slash-command dispatch invariant", () => {
 			expect(fallthrough).toEqual([]);
 		},
 	);
+
+	// Regression (issue 481 home B): a command rejection returns normally after
+	// raising a sticky notice, so the editor's notifyOnError wrapper must not
+	// dismiss it when the submit action resolves. Drives the real editor submit
+	// path into the real dispatcher's unknown-command branch.
+	it("keeps an unknown-command rejection sticky through the editor submit path", async () => {
+		const notifications = new NotificationCenter();
+		const harness = dispatchHarness(changelogRoot, notifications);
+		const controller = new RpcHostEditorController({
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: fakeKeybindings(),
+			onSubmit: async (text) => {
+				await harness.actions.handleSubmittedText(text);
+			},
+			errorNotifier: notifications,
+		});
+
+		controller.setText("/sumo:does-not-exist");
+		controller.handleInput("\r");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(notifications.getNotice()).toEqual({
+			message: "unknown command: /sumo:does-not-exist",
+			level: "warning",
+			sticky: true,
+		});
+	});
 });
 
 describe("RPC keybindings manager construction", () => {

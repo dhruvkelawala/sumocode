@@ -488,6 +488,9 @@ export function createEditorSubmitHandlers(deps: EditorSubmitHandlerDependencies
 		// state an earlier gated shortcut is still committing.
 		await deps.gate.whenSettled();
 		if (deps.isTreeBusy()) {
+			// The editor cleared its buffer when Enter fired (submitValue clears
+			// before the async submit settles), so a silent return loses the
+			// prompt: this rejection is failure feedback, not a confirmation.
 			deps.notifications.notify("branch summary in progress", "warning");
 			return;
 		}
@@ -542,6 +545,8 @@ export interface RpcMessageFollowUpDependencies {
 export function handleRpcMessageFollowUp(deps: RpcMessageFollowUpDependencies): Promise<void> {
 	return notifyOnError(async () => {
 		if (deps.isBlocked?.() === true) {
+			// The draft stays in the editor, but the entry dismiss has already cleared
+			// the previous sticky: without this the shortcut looks dead.
 			deps.notifications.notify("branch summary in progress", "warning");
 			return;
 		}
@@ -584,10 +589,12 @@ export interface RpcMessageDequeueDependencies {
 	readonly editor: Pick<RpcHostEditorController, "getText" | "setText">;
 	readonly scheduler: Pick<RpcPromptScheduler, "restoreAll">;
 	readonly stateStore: Pick<RpcHostStateStore, "getSnapshot">;
-	readonly notifications: Pick<NotificationCenter, "notify">;
+	readonly notifications: Pick<NotificationCenter, "notify"> & Partial<Pick<NotificationCenter, "dismissSticky">>;
 }
 
 export function handleRpcMessageDequeue(deps: RpcMessageDequeueDependencies): void {
+	// A host action supersedes the previous sticky failure (issue 481 home B).
+	deps.notifications.dismissSticky?.();
 	const restored = deps.scheduler.restoreAll(deps.editor.getText());
 	if (restored.count > 0) {
 		deps.editor.setText(restored.text);
@@ -651,7 +658,7 @@ export function createRpcExitHandler(deps: RpcHostExitDependencies): (error: Err
 		deps.selector?.close();
 		deps.updateRuntimeState({ ...deps.stateStore.getSnapshot(), isStreaming: false, isCompacting: false });
 		if (deliberateCode === undefined) {
-			deps.notifications.notify(`RPC child exited unexpectedly: ${truncateForNotification(error.message)}`, "error", 0);
+			deps.notifications.notify(`RPC child exited unexpectedly: ${truncateForNotification(error.message)}`, "error", { timeoutMs: 0 });
 		}
 		deps.requestRender();
 		if (deliberateCode !== undefined) {
@@ -692,7 +699,7 @@ export interface RpcHostInterruptDependencies {
 	readonly stateStore: Pick<RpcHostStateStore, "getSnapshot">;
 	readonly controls: Pick<RpcHostControls, "abort">;
 	readonly abortInFlight?: () => Promise<void>;
-	readonly notifications: Pick<NotificationCenter, "notify">;
+	readonly notifications: Pick<NotificationCenter, "notify"> & Partial<Pick<NotificationCenter, "dismissSticky">>;
 	readonly requestHostExit: (code: number) => void;
 	/**
 	 * True in the window between a prompt submission and the RPC child's
@@ -761,6 +768,9 @@ export function createRpcHostInterruptHandler(deps: RpcHostInterruptDependencies
 			case "clear-draft":
 				armedQuitUntil = undefined;
 				deps.editor.setText("");
+				// Clearing the draft is a host action, so it supersedes a stale sticky
+				// failure (issue 481 home B) the way the direct editor actions do.
+				deps.notifications.dismissSticky?.();
 				return true;
 			case "abort":
 				armedQuitUntil = undefined;
@@ -772,7 +782,9 @@ export function createRpcHostInterruptHandler(deps: RpcHostInterruptDependencies
 				return true;
 			case "arm-quit":
 				armedQuitUntil = nowMs + 1_500;
-				deps.notifications.notify("press ctrl-c again to quit", "info");
+				// Matches the armed-quit window: the hint is gone exactly when a
+				// third Ctrl-C would stop being a quit (issue 481 home A).
+				deps.notifications.notify("press ctrl-c again to quit", "info", { timeoutMs: 1_500 });
 				return true;
 			case "quit":
 				armedQuitUntil = undefined;
@@ -786,7 +798,7 @@ export function createRpcHostInterruptHandler(deps: RpcHostInterruptDependencies
 
 export interface RpcHostModelCycleDependencies {
 	readonly controls: Pick<RpcHostControls, "getEnabledModels" | "setModel">;
-	readonly notifications: Pick<NotificationCenter, "notify">;
+	readonly notifications: ErrorNotifier;
 	readonly onStateChange?: (state?: RpcHostChromeState) => void;
 }
 
@@ -834,7 +846,7 @@ export function createModelCycleBackwardHandler(deps: RpcHostModelCycleDependenc
 
 export interface RpcHostThinkingCycleDependencies {
 	readonly controls: Pick<RpcHostControls, "cycleThinkingLevel">;
-	readonly notifications: Pick<NotificationCenter, "notify">;
+	readonly notifications: ErrorNotifier;
 	readonly onStateChange?: (state?: RpcHostChromeState) => void;
 }
 
@@ -856,11 +868,14 @@ export function createThinkingCycleHandler(deps: RpcHostThinkingCycleDependencie
 export interface RpcHostToolsExpandDependencies {
 	readonly toggleActivityExpansion: () => void;
 	readonly requestRender: () => void;
+	readonly notifications: Pick<NotificationCenter, "dismissSticky">;
 }
 
 /** Builds `app.tools.expand` without duplicating presentation state in the host. */
 export function createToolsExpandToggleHandler(deps: RpcHostToolsExpandDependencies): () => void {
 	return (): void => {
+		// A host action supersedes the previous sticky failure (issue 481 home B).
+		deps.notifications.dismissSticky();
 		deps.toggleActivityExpansion();
 		deps.requestRender();
 	};
@@ -1121,6 +1136,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 	const handleToolsExpandToggle = createToolsExpandToggleHandler({
 		toggleActivityExpansion: () => runtime?.toggleActivityExpansion(),
 		requestRender,
+		notifications,
 	});
 	const handleMessageFollowUp = (): Promise<void> =>
 		handleRpcMessageFollowUp({ editor, scheduler, notifications, isBlocked: () => treeNavigationBusy });

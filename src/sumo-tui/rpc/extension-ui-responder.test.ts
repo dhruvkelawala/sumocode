@@ -426,8 +426,9 @@ describe("RpcExtensionUiResponder", () => {
 		expect(responder.getSnapshot().editorText).toBe("live prefill");
 	});
 
-	it("keeps real notification center behavior available for host-owned toasts", async () => {
+	it("routes host-owned notifications through the sink without retaining a toast (issue 481)", async () => {
 		const notifications = new NotificationCenter({ defaultTimeoutMs: 0 });
+		const notify = vi.spyOn(notifications, "notify");
 		const responder = new RpcExtensionUiResponder({ notifications });
 
 		await responder.handle(request({
@@ -438,7 +439,8 @@ describe("RpcExtensionUiResponder", () => {
 			notifyType: "info",
 		}));
 
-		expect(notifications.getToasts()).toMatchObject([{ message: "hello", level: "info" }]);
+		expect(notify).toHaveBeenCalledWith("hello", "info");
+		expect(notifications.getToasts()).toEqual([]);
 	});
 
 	it("treats approval-shaped select titles as ordinary generic selects", async () => {

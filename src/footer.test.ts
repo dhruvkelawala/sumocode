@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -462,6 +462,12 @@ describe("installFooter Claude account resolution", () => {
 	});
 
 	it("resolves through the real registry surface when no resolver is injected", () => {
+		// Hermetic: the default resolver reads enabledModels from the agent dir, so
+		// pin PI_CODING_AGENT_DIR at a temp settings file instead of the ambient one.
+		const agentDir = mkdtempSync(join(tmpdir(), "sumocode-footer-agent-"));
+		tempDirs.push(agentDir);
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ enabledModels: ["claude-*"] }), "utf8");
+		vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
 		const models = [
 			{ provider: "anthropic", id: "claude-opus-5" },
 			{ provider: "anthropic-2", id: "claude-opus-5" },

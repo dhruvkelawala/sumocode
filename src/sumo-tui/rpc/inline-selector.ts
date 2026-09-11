@@ -83,8 +83,6 @@ const INLINE_SELECTOR_TABBED_HINT_ROW = "↑↓ choose    ⇥ tab    ⏎ select 
 /** Maximum rows the inline selector list shows before scrolling (mirrors Pi's own selector components). */
 const DEFAULT_MAX_VISIBLE = 8;
 
-/** Fixed left gutter every row starts with: 5 spaces, the focus marker, 3 spaces. */
-const ROW_GUTTER_WIDTH = 9;
 /** Minimum gap between the label and the right-aligned description column. */
 const ROW_MIN_GAP = 2;
 
@@ -355,6 +353,8 @@ export class InlineSelectorComponent implements Component {
 		const marker = focused ? fg(FOCUSED_MARK, colors.accent) : fg(UNFOCUSED_MARK, colors.divider);
 		const tag = currentTag(item.isCurrent);
 		const labelColor = focused ? colors.foreground : colors.foregroundDim;
+		const prefix = `     ${marker}   ${tag}`;
+		const prefixWidth = visibleLength(prefix);
 		// The description is laid out after the label, so at narrow widths an
 		// unbounded label pushes the row's identifier block (id, count, age --
 		// and the project directory in the all-sessions scope) past the row's
@@ -362,16 +362,20 @@ export class InlineSelectorComponent implements Component {
 		// what the description actually needs instead of to a fixed budget that
 		// cannot fit a 60-column portrait row.
 		let labelText = item.label;
+		let labelWidth = visibleWidth(labelText);
 		if (item.description.length > 0) {
-			const labelBudget = width - ROW_GUTTER_WIDTH - visibleLength(tag) - ROW_MIN_GAP - visibleWidth(item.description);
-			if (labelBudget < visibleWidth(labelText)) labelText = truncateToWidth(labelText, Math.max(1, labelBudget), "…");
+			const labelBudget = width - prefixWidth - ROW_MIN_GAP - visibleWidth(item.description);
+			if (labelBudget < labelWidth) {
+				labelText = truncateToWidth(labelText, Math.max(1, labelBudget), "…");
+				labelWidth = visibleWidth(labelText);
+			}
 		}
-		const left = `     ${marker}   ${tag}${fg(labelText, labelColor)}`;
+		const left = `${prefix}${fg(labelText, labelColor)}`;
 
 		if (item.description.length === 0) return left;
 
 		const valueText = fg(item.description, labelColor);
-		const padBetween = Math.max(ROW_MIN_GAP, width - visibleLength(left) - visibleWidth(item.description) - 5);
+		const padBetween = Math.max(ROW_MIN_GAP, width - prefixWidth - labelWidth - visibleWidth(item.description) - 5);
 		return `${left}${" ".repeat(padBetween)}${valueText}`;
 	}
 }

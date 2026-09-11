@@ -500,6 +500,7 @@ describe("session-reader", () => {
 				// The cap dropped candidates, so the picker must say the list is a window.
 				expect(truncated).toBe(true);
 			});
+
 			it("reports whether the capped window had to pin the current session", async () => {
 				const projectDir = join(dir, "sessions", "--repo--");
 				mkdirSync(projectDir, { recursive: true });

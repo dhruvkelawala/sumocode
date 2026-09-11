@@ -297,8 +297,12 @@ function isDefaultProjectDirFor(sessionDir: string, cwd: string): boolean {
  * project directory already; a flat custom `--session-dir` is shared by every
  * project, so the rows are narrowed to the current session's cwd -- matching
  * Pi's `SessionManager.list`, which filters by cwd whenever a custom session
- * dir is in use (`filterCwd`). An unreadable current file leaves the rows
- * unfiltered: there is no cwd to filter by.
+ * dir is in use (`filterCwd`). An unreadable current file carries no cwd to
+ * filter by, so the scope falls back to the directory-name shape: Pi's encoded
+ * `--<cwd>--` project directory (the nested default layout) keeps its rows, and
+ * any other directory -- the flat custom `--session-dir` a fresh or corrupt
+ * current file leaves unreadable -- shows none, because its cross-project rows
+ * belong to the all-sessions tab rather than to "current project".
  */
 export async function listProjectSessions(sessionFile: string, { concurrency = 8, reader = readSessionInfo }: ListSessionsOptions = {}): Promise<SessionListInfo[]> {
 	const sessionDir = dirname(sessionFile);
@@ -306,7 +310,8 @@ export async function listProjectSessions(sessionFile: string, { concurrency = 8
 		reader(sessionFile),
 		listSessions(sessionDir, { concurrency, reader }),
 	]);
-	if (!currentSessionInfo || isDefaultProjectDirFor(sessionDir, currentSessionInfo.cwd)) return sessions;
+	if (!currentSessionInfo) return isEncodedProjectDirName(basename(sessionDir)) ? sessions : [];
+	if (isDefaultProjectDirFor(sessionDir, currentSessionInfo.cwd)) return sessions;
 	const resolvedCwd = resolve(currentSessionInfo.cwd);
 	return sessions.filter((session) => sessionCwdMatches(session.cwd, resolvedCwd));
 }

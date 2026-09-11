@@ -545,6 +545,32 @@ describe("session-reader", () => {
 
 			expect(sessions.map((session) => session.id)).toEqual(["elsewhere", "same-project", "current"]);
 		});
+
+		it("shows no rows for a flat custom session directory when the current file is unreadable", async () => {
+			const customDir = join(dir, "custom-sessions");
+			mkdirSync(customDir, { recursive: true });
+			// A fresh or corrupt current file has no header, so there is no cwd to
+			// filter the shared directory by. "current project" must not fall back
+			// to every readable sibling -- those rows are other projects'.
+			const currentFile = join(customDir, "current.jsonl");
+			write(join(customDir, "same-project.jsonl"), "same-project", "/repo", 1);
+			write(join(customDir, "other-project.jsonl"), "other-project", "/other-repo", 2);
+
+			expect(await listProjectSessions(currentFile)).toEqual([]);
+		});
+
+		it("keeps a project directory's rows when the current file is unreadable", async () => {
+			const projectDir = join(dir, "sessions", "--repo--");
+			mkdirSync(projectDir, { recursive: true });
+			// The encoded name is the nested default layout's signal, so the
+			// directory is still this project's scope with no header to read.
+			const currentFile = join(projectDir, "current.jsonl");
+			write(join(projectDir, "same-project.jsonl"), "same-project", "/repo", 1);
+
+			const sessions = await listProjectSessions(currentFile);
+
+			expect(sessions.map((session) => session.id)).toEqual(["same-project"]);
+		});
 	});
 
 	describe("buildSessionTree", () => {

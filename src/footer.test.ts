@@ -457,8 +457,13 @@ describe("installFooter Claude account resolution", () => {
 		harness.fire("model_select", ctx);
 		component.render(160);
 		component.render(160);
-
 		expect(resolveClaudeAccount).toHaveBeenCalledTimes(2);
+
+		// One more refresh at each turn boundary, so an /accounts rename lands
+		// without waiting for a model switch. Still nothing per render.
+		harness.fire("agent_end", ctx);
+		component.render(160);
+		expect(resolveClaudeAccount).toHaveBeenCalledTimes(3);
 	});
 
 	it("resolves through the real registry surface when no resolver is injected", () => {

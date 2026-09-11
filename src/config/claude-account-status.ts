@@ -18,6 +18,19 @@ import { CLAUDE_BASE_PROVIDER, isClaudeProvider } from "./claude-providers.js";
 /** Footer chip budget: `claude ` plus at most this many label columns, ellipsis included. */
 const MAX_LABEL_COLUMNS = 8;
 
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+/**
+ * Clip by grapheme, not by UTF-16 code unit: a user-authored label can carry a
+ * surrogate pair or a combining mark, and slicing `String.length` would split it
+ * into a replacement character.
+ */
+function clipToGraphemes(text: string, max: number): string {
+	const graphemes = [...graphemeSegmenter.segment(text)].map((entry) => entry.segment);
+	if (graphemes.length <= max) return text;
+	return `${graphemes.slice(0, Math.max(1, max - 1)).join("")}…`;
+}
+
 export interface ClaudeAccountStatus {
 	/** Provider the Claude models resolve to (`anthropic`, `anthropic-2`, …). */
 	readonly providerId: string;
@@ -64,12 +77,14 @@ function firstResolvedAccount(models: readonly Model<Api>[]): string {
 
 export function resolveClaudeAccountStatus(inputs: ClaudeAccountStatusInputs): ClaudeAccountStatus | undefined {
 	const claudeModels = inputs.models.filter((model) => isClaudeProvider(model.provider));
-	if (claudeModels.length === 0) return undefined;
-	// A live Claude model is authoritative; otherwise the first Claude model is
-	// what a bare id resolves to next, which is what a subagent would use.
-	const liveProvider = inputs.currentProvider !== undefined && isClaudeProvider(inputs.currentProvider) && claudeModels.some((model) => model.provider === inputs.currentProvider)
+	// A live Claude model is authoritative even when its own models fall outside
+	// the enabled subset: the session is demonstrably on that account, so
+	// reporting a different (or no) account would be wrong. Only the fallback —
+	// which account a bare id resolves to next — depends on the enabled set.
+	const liveProvider = inputs.currentProvider !== undefined && isClaudeProvider(inputs.currentProvider)
 		? inputs.currentProvider
 		: undefined;
+	if (liveProvider === undefined && claudeModels.length === 0) return undefined;
 	const providerId = liveProvider ?? firstResolvedAccount(claudeModels);
 	return {
 		providerId,
@@ -78,10 +93,7 @@ export function resolveClaudeAccountStatus(inputs: ClaudeAccountStatusInputs): C
 	};
 }
 
-/** `claude company` — the footer segment, with the label clipped to its column budget. */
+/** `claude company` — the footer segment, with the label clipped to its budget. */
 export function formatClaudeAccountChip(status: ClaudeAccountStatus): string {
-	const label = status.label.length > MAX_LABEL_COLUMNS
-		? `${status.label.slice(0, MAX_LABEL_COLUMNS - 1)}…`
-		: status.label;
-	return `claude ${label}`;
+	return `claude ${clipToGraphemes(status.label, MAX_LABEL_COLUMNS)}`;
 }

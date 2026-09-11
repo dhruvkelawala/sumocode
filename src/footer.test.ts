@@ -102,12 +102,13 @@ function footerCtx(options: {
 	modelId?: string;
 	provider?: string;
 	modelRegistry?: unknown;
+	hasUI?: boolean;
 	throwOnSnapshot?: boolean;
 	setFooter?: (factory: FooterFactory | undefined) => void;
 }): ExtensionContext {
 	const branch = [{ type: "message", message: { role: "assistant", usage: { input: 10, output: 5, cost: { total: 0.01 } } } }];
 	const ctx = {
-		hasUI: true,
+		hasUI: options.hasUI ?? true,
 		ui: {
 			setFooter: options.setFooter ?? (() => undefined),
 		},
@@ -478,6 +479,17 @@ describe("installFooter Claude account resolution", () => {
 		registry.getAvailable = () => [models[1]];
 		harness.fire("model_select", ctx);
 		expect(withoutAnsi(component.render(160).join("\n"))).toContain("claude company");
+	});
+
+	it("ignores a model select from a session without a UI", () => {
+		const resolveClaudeAccount = vi.fn(() => undefined);
+		const harness = installFooterHarness({ resolveClaudeAccount });
+		harness.fireSessionStart(footerCtx({ setFooter: harness.setFooter }));
+		const headless = footerCtx({ hasUI: false, setFooter: harness.setFooter });
+
+		harness.fire("model_select", headless);
+
+		expect(resolveClaudeAccount).toHaveBeenCalledTimes(1);
 	});
 
 	it("paints the resolved account into the footer row", () => {

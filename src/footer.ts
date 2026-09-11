@@ -308,6 +308,9 @@ export function installFooter(
 	pi.on("tool_result", () => setState("thinking"));
 	pi.on("agent_end", () => setState("idle"));
 	pi.on("model_select", (_event, ctx) => {
+		// Mirror session_start's guard: a headless session must not repaint the UI
+		// footer's chip from its own context, nor pay for the registry read.
+		if (!ctx.hasUI) return;
 		refreshClaudeAccount(ctx);
 		render?.();
 	});

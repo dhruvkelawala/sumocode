@@ -9,6 +9,27 @@ export interface RpcLoginRuntime {
 	login(providerId: string, type: AuthType, interaction: AuthInteraction): Promise<Credential>;
 }
 
+/**
+ * Pi's credential store as extensions can reach it: a locked read-modify-write
+ * over auth.json. `modify` returns the value the callback produced (or the
+ * stored value when the callback returned undefined) and is serialized with
+ * Pi's own refreshes by the same lock file.
+ */
+export interface RpcCredentialStore {
+	modify<T>(
+		providerId: string,
+		fn: (current: Credential | undefined) => T | undefined | Promise<T | undefined>,
+		options?: { signal?: AbortSignal },
+	): Promise<T | undefined>;
+}
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- runtime capability probe: the value is an undocumented field read through Reflect, and the typeof check below is the parse.
+function isCredentialStore(value: unknown): value is RpcCredentialStore {
+	// SAFETY: the typeof check on this line establishes the object shape before the property probe.
+	// oxlint-disable-next-line anti-slop/require-safety-comment-for-type-assertion
+	return typeof value === "object" && value !== null && typeof (value as { modify?: unknown }).modify === "function";
+}
+
 export interface RpcLoginCommandDeps {
 	readonly getRuntime?: (ctx: ExtensionCommandContext) => RpcLoginRuntime;
 }
@@ -24,6 +45,20 @@ const AUTH_LABELS = {
 	oauth: "Sign in with an account",
 	api_key: "Sign in with an API key",
 } satisfies Record<AuthType, string>;
+
+/**
+ * Credential store for flows that must persist a credential Pi did not mint
+ * itself (a long-lived token pasted by the user). Undefined when this Pi build
+ * does not expose one; callers degrade to an explicit error, never to a
+ * partial write.
+ */
+export function getRpcCredentialStore(ctx: ExtensionCommandContext): RpcCredentialStore | undefined {
+	const runtime = getRpcLoginRuntime(ctx);
+	// SAFETY: the runtime instance is an object by construction (isLoginRuntime proved its callable members).
+	// oxlint-disable-next-line anti-slop/no-reflect-get, anti-slop/require-safety-comment-for-type-assertion -- same undocumented runtime seam as getRpcLoginRuntime; the store is used only after isCredentialStore proves a callable modify().
+	const store = Reflect.get(runtime as object, "credentials");
+	return isCredentialStore(store) ? store : undefined;
+}
 
 export function getRpcLoginRuntime(ctx: ExtensionCommandContext): RpcLoginRuntime {
 	// Pi exposes only the synchronous ModelRegistry compatibility facade to

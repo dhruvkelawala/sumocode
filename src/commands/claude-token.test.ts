@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
+/* oxlint-disable anti-slop/no-chained-type-assertions, anti-slop/require-safety-comment-for-type-assertion -- test doubles cast minimal stubs to the node child_process and fetch types the production seams accept; each stub implements every member the module reads. */
 import {
 	CLAUDE_SETUP_TOKEN_COMMAND,
 	acquireLongLivedToken,

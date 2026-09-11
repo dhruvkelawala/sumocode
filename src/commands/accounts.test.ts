@@ -4,14 +4,20 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
+	RENEW_LONG_LIVED,
+	SIGN_IN_BROWSER,
+	SIGN_IN_LONG_LIVED,
 	executeAccountsCommand,
 	isAdapterInstalled,
 	loadClaudeSubscriptions,
+	readStoredClaudeCredential,
 	registerAccountsCommand,
 	resolveAccountsConfigPath,
 	saveClaudeSubscriptions,
 	type AccountsCommandDeps,
 } from "./accounts.js";
+import { CLAUDE_SETUP_TOKEN_COMMAND, STATIC_CREDENTIAL_EXPIRES, type StaticClaudeCredential } from "./claude-token.js";
+import { isSecretInputTitle } from "../sumo-tui/pi-compat/secret-input.js";
 import { CLAUDE_ACCOUNTS_MIGRATION_FIELD } from "./accounts-config.js";
 
 const tempDirs: string[] = [];
@@ -58,27 +64,63 @@ interface CtxOptions {
 	onSelect?: (title: string, options: string[]) => string | undefined;
 	onConfirm?: (title: string, message: string) => boolean;
 	onInput?: (title: string, placeholder?: string) => string | undefined;
+	/** Pi's auth runtime double, for flows that reach the credential store. */
+	runtime?: AuthRuntimeStub;
+	onRefresh?: (options?: { providers?: readonly string[] }) => Promise<void>;
+}
+
+interface ModelStub {
+	readonly provider: string;
+	readonly id: string;
+}
+
+interface CredentialStoreStub {
+	readonly modify: (
+		providerId: string,
+		fn: (current: StaticClaudeCredential | undefined) => StaticClaudeCredential | undefined,
+	) => Promise<StaticClaudeCredential | undefined>;
+}
+
+/** The slice of Pi's auth runtime the accounts flow reaches through the compat seam. */
+interface AuthRuntimeStub {
+	readonly getAvailable: () => Promise<readonly never[]>;
+	readonly getProviders: () => readonly never[];
+	readonly login: () => Promise<void>;
+	readonly credentials: CredentialStoreStub;
+}
+
+interface RegistryDouble {
+	getProviderAuthStatus(providerId: string): { configured: boolean };
+	getAll(): readonly ModelStub[];
+	getAvailable(): readonly ModelStub[];
+	refresh(options?: { providers?: readonly string[] }): Promise<void>;
+	runtime?: AuthRuntimeStub;
 }
 
 function makeCtx(options: CtxOptions) {
 	const notify = vi.fn();
 	const setStatus = vi.fn();
+	const setWidget = vi.fn();
 	const select = vi.fn(options.onSelect ?? (() => undefined));
 	const confirm = vi.fn(options.onConfirm ?? (() => false));
 	const input = vi.fn(options.onInput ?? (() => undefined));
 	const setModel = vi.fn(async () => true);
+	const refresh = vi.fn(options.onRefresh ?? (async () => {}));
+	const modelRegistry: RegistryDouble = {
+		getProviderAuthStatus: (providerId: string) => ({ configured: options.auth?.[providerId] ?? false }),
+		getAll: () => options.models ?? [],
+		getAvailable: () => options.availableModels ?? options.models ?? [],
+		refresh,
+	};
+	if (options.runtime) modelRegistry.runtime = options.runtime;
 	const ctx = {
 		mode: "rpc",
 		hasUI: true,
-		ui: { select, confirm, input, notify, setStatus },
-		modelRegistry: {
-			getProviderAuthStatus: (providerId: string) => ({ configured: options.auth?.[providerId] ?? false }),
-			getAll: () => options.models ?? [],
-			getAvailable: () => options.availableModels ?? options.models ?? [],
-		},
+		ui: { select, confirm, input, notify, setStatus, setWidget },
+		modelRegistry,
 		model: options.currentModel,
 	};
-	return { ctx, notify, setStatus, select, confirm, input, setModel };
+	return { ctx, notify, setStatus, setWidget, select, confirm, input, setModel, refresh };
 }
 
 function withAgentDir(agentDir: string): AccountsCommandDeps {
@@ -473,7 +515,7 @@ describe("executeAccountsCommand", () => {
 		await executeAccountsCommand(extensionApi(), commandContext(ctx), withAgentDir(agentDir));
 		const actionOptions = selectOptionsAt(select, 1);
 		expect(actionOptions).not.toContain("use this account");
-		expect(actionOptions).toContain("sign in again");
+		expect(actionOptions).toContain(SIGN_IN_BROWSER);
 	});
 
 	it("passes the exact provider id to the injected login flow", async () => {
@@ -486,7 +528,7 @@ describe("executeAccountsCommand", () => {
 			models: [{ provider: "anthropic-2", id: "claude-opus" }],
 			onSelect: (title: string, options: string[]) => {
 				if (title === "CLAUDE ACCOUNTS") return options[1];
-				return options.find((option) => option === "sign in");
+				return options.find((option) => option === SIGN_IN_BROWSER);
 			},
 		});
 		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), login });
@@ -742,7 +784,7 @@ describe("executeAccountsCommand", () => {
 		await executeAccountsCommand(extensionApi(), commandContext(ctx), withAgentDir(agentDir));
 		const actionOptions = selectOptionsAt(select, 1);
 		expect(actionOptions).not.toContain("use this account");
-		expect(actionOptions).toContain("sign in");
+		expect(actionOptions).toContain(SIGN_IN_BROWSER);
 	});
 
 	it("add flow confirms adapter install, writes config, then requests reload", async () => {
@@ -945,5 +987,300 @@ describe("registerAccountsCommand", () => {
 		const { ctx, select } = makeCtx({ agentDir: tempAgentDir() });
 		await handler("", commandContext(ctx));
 		expect(select).toHaveBeenCalled();
+	});
+});
+
+const TOKEN = "sk-ant-oat01-TestToken0123456789_-abcd";
+
+/** First call picks the account row, later calls pick the requested action. */
+function pickAccountAction(accountPrefix: string, action: string) {
+	return (title: string, options: string[]) => {
+		if (title === "CLAUDE ACCOUNTS") return options.find((option) => option.startsWith(accountPrefix));
+		return options.find((option) => option.startsWith(action));
+	};
+}
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- test helper: serializes an arbitrary auth.json fixture into the credential read boundary.
+function writeAuth(agentDir: string, entries: unknown): void {
+	writeFileSync(join(agentDir, "auth.json"), JSON.stringify(entries, null, 2), "utf8");
+}
+
+/** Run with the real diagnostics sink pointed at a temp file, so token leakage is observable. */
+async function withDiagnosticsFile(run: (file: string) => Promise<void>): Promise<void> {
+	const dir = mkdtempSync(join(tmpdir(), "sumocode-accounts-diag-"));
+	const file = join(dir, "diagnostics.jsonl");
+	const previous = process.env.SUMO_TUI_DIAG_FILE;
+	process.env.SUMO_TUI_DIAG_FILE = file;
+	try {
+		await run(file);
+	} finally {
+		if (previous === undefined) delete process.env.SUMO_TUI_DIAG_FILE;
+		else process.env.SUMO_TUI_DIAG_FILE = previous;
+		rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+function tokenAccountDeps(agentDir: string, overrides: AccountsCommandDeps = {}): AccountsCommandDeps {
+	return {
+		...withAgentDir(agentDir),
+		acquireToken: async () => ({ status: "ok", token: TOKEN }),
+		validateToken: async () => ({ status: "ok", organization: "Acme Org" }),
+		storeCredential: async () => {},
+		...overrides,
+	};
+}
+
+function companyAccount(agentDir: string): void {
+	writeAccounts(agentDir, { subscriptions: [{ provider: "anthropic", index: 2, label: "company" }] });
+}
+
+const COMPANY_MODELS = [{ provider: "anthropic-2", id: "claude-opus" }];
+
+describe("readStoredClaudeCredential", () => {
+	it("distinguishes a long-lived token from a browser login", () => {
+		const agentDir = tempAgentDir();
+		writeAuth(agentDir, {
+			"anthropic-2": { type: "oauth", access: TOKEN, refresh: "", expires: STATIC_CREDENTIAL_EXPIRES, mintedAt: 1 },
+			anthropic: { type: "oauth", access: "sk-ant-oat01-login", refresh: "sk-ant-ort01-login", expires: 1 },
+		});
+		expect(readStoredClaudeCredential("anthropic-2", withAgentDir(agentDir))).toBe("long-lived-token");
+		expect(readStoredClaudeCredential("anthropic", withAgentDir(agentDir))).toBe("oauth");
+		expect(readStoredClaudeCredential("anthropic-3", withAgentDir(agentDir))).toBeUndefined();
+	});
+
+	it("tolerates a missing or malformed auth file", () => {
+		const agentDir = tempAgentDir();
+		expect(readStoredClaudeCredential("anthropic", withAgentDir(agentDir))).toBeUndefined();
+		writeFileSync(join(agentDir, "auth.json"), "{not json", "utf8");
+		expect(readStoredClaudeCredential("anthropic", withAgentDir(agentDir))).toBeUndefined();
+	});
+});
+
+describe("long-lived token sign-in", () => {
+	it("offers the long-lived token ahead of the browser sign-in", async () => {
+		const agentDir = tempAgentDir();
+		companyAccount(agentDir);
+		const { ctx, select } = makeCtx({
+			agentDir,
+			auth: { anthropic: true },
+			models: COMPANY_MODELS,
+			onSelect: pickOption("company"),
+		});
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), withAgentDir(agentDir));
+		const actions = selectOptionsAt(select, 1);
+		expect(actions.filter((action) => action === SIGN_IN_LONG_LIVED || action === SIGN_IN_BROWSER)).toEqual([
+			SIGN_IN_LONG_LIVED,
+			SIGN_IN_BROWSER,
+		]);
+	});
+
+	it("runs the browser sign-in only when that method is chosen", async () => {
+		const agentDir = tempAgentDir();
+		companyAccount(agentDir);
+		const login = vi.fn(async () => {});
+		const { ctx } = makeCtx({
+			agentDir,
+			auth: { anthropic: true },
+			models: COMPANY_MODELS,
+			onSelect: pickAccountAction("company", SIGN_IN_BROWSER),
+		});
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), tokenAccountDeps(agentDir, { login }));
+		expect(login).toHaveBeenCalledWith("anthropic-2", expect.anything());
+	});
+
+	it("stores the token the mint captures, without asking for a paste", async () => {
+		const agentDir = tempAgentDir();
+		companyAccount(agentDir);
+		const storeCredential = vi.fn(async () => {});
+		const { ctx, input, notify } = makeCtx({
+			agentDir,
+			auth: { anthropic: true },
+			models: COMPANY_MODELS,
+			onSelect: pickAccountAction("company", SIGN_IN_LONG_LIVED),
+		});
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), tokenAccountDeps(agentDir, { storeCredential }));
+		expect(input).not.toHaveBeenCalled();
+		expect(storeCredential).toHaveBeenCalledWith("anthropic-2", {
+			type: "oauth",
+			access: TOKEN,
+			refresh: "",
+			expires: STATIC_CREDENTIAL_EXPIRES,
+			mintedAt: expect.any(Number),
+		});
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining("Acme Org"), "info");
+	});
+
+	it("falls back to the masked paste modal when the CLI is missing", async () => {
+		const agentDir = tempAgentDir();
+		companyAccount(agentDir);
+		const storeCredential = vi.fn(async () => {});
+		const { ctx, input, notify } = makeCtx({
+			agentDir,
+			auth: { anthropic: true },
+			models: COMPANY_MODELS,
+			onSelect: pickAccountAction("company", SIGN_IN_LONG_LIVED),
+			onInput: () => TOKEN,
+		});
+		await executeAccountsCommand(
+			extensionApi(),
+			commandContext(ctx),
+			tokenAccountDeps(agentDir, { acquireToken: async () => ({ status: "unavailable" }), storeCredential }),
+		);
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining(CLAUDE_SETUP_TOKEN_COMMAND), "warning");
+		expect(isSecretInputTitle(input.mock.calls[0][0])).toBe(true);
+		expect(storeCredential).toHaveBeenCalled();
+	});
+
+	it("accepts a pasted token on the same terms after a timed-out mint", async () => {
+		const agentDir = tempAgentDir();
+		companyAccount(agentDir);
+		const storeCredential = vi.fn(async () => {});
+		const { ctx } = makeCtx({
+			agentDir,
+			auth: { anthropic: true },
+			models: COMPANY_MODELS,
+			onSelect: pickAccountAction("company", SIGN_IN_LONG_LIVED),
+			onInput: () => TOKEN,
+		});
+		await executeAccountsCommand(
+			extensionApi(),
+			commandContext(ctx),
+			tokenAccountDeps(agentDir, { acquireToken: async () => ({ status: "timeout" }), storeCredential }),
+		);
+		expect(storeCredential).toHaveBeenCalled();
+	});
+
+	it("rejects a value that is not a Claude long-lived token", async () => {
+		const agentDir = tempAgentDir();
+		companyAccount(agentDir);
+		const storeCredential = vi.fn(async () => {});
+		const { ctx, notify } = makeCtx({
+			agentDir,
+			auth: { anthropic: true },
+			models: COMPANY_MODELS,
+			onSelect: pickAccountAction("company", SIGN_IN_LONG_LIVED),
+			onInput: () => "sk-ant-api03-not-a-setup-token",
+		});
+		await executeAccountsCommand(
+			extensionApi(),
+			commandContext(ctx),
+			tokenAccountDeps(agentDir, { acquireToken: async () => ({ status: "unavailable" }), storeCredential }),
+		);
+		expect(storeCredential).not.toHaveBeenCalled();
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining("sk-ant-oat"), "warning");
+	});
+
+	it("refuses to store a token Anthropic rejects", async () => {
+		const agentDir = tempAgentDir();
+		companyAccount(agentDir);
+		const storeCredential = vi.fn(async () => {});
+		const { ctx, notify } = makeCtx({
+			agentDir,
+			auth: { anthropic: true },
+			models: COMPANY_MODELS,
+			onSelect: pickAccountAction("company", SIGN_IN_LONG_LIVED),
+		});
+		await executeAccountsCommand(
+			extensionApi(),
+			commandContext(ctx),
+			tokenAccountDeps(agentDir, { validateToken: async () => ({ status: "rejected" }), storeCredential }),
+		);
+		expect(storeCredential).not.toHaveBeenCalled();
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining("rejected"), "error");
+	});
+
+	it("stores anyway when the live check cannot reach Anthropic", async () => {
+		const agentDir = tempAgentDir();
+		companyAccount(agentDir);
+		const storeCredential = vi.fn(async () => {});
+		const { ctx, notify } = makeCtx({
+			agentDir,
+			auth: { anthropic: true },
+			models: COMPANY_MODELS,
+			onSelect: pickAccountAction("company", SIGN_IN_LONG_LIVED),
+		});
+		await executeAccountsCommand(
+			extensionApi(),
+			commandContext(ctx),
+			tokenAccountDeps(agentDir, { validateToken: async () => ({ status: "unreachable" }), storeCredential }),
+		);
+		expect(storeCredential).toHaveBeenCalled();
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining("could not be reached"), "warning");
+	});
+
+	it("writes through Pi's credential store and refreshes that provider's auth snapshot", async () => {
+		const agentDir = tempAgentDir();
+		companyAccount(agentDir);
+		const modify = vi.fn(
+			async (_providerId: string, fn: (current: StaticClaudeCredential | undefined) => StaticClaudeCredential | undefined) =>
+				fn(undefined),
+		);
+		const { ctx, refresh } = makeCtx({
+			agentDir,
+			auth: { anthropic: true },
+			models: COMPANY_MODELS,
+			onSelect: pickAccountAction("company", SIGN_IN_LONG_LIVED),
+			runtime: {
+				getAvailable: async () => [],
+				getProviders: () => [],
+				login: async () => {},
+				credentials: { modify },
+			},
+		});
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), tokenAccountDeps(agentDir, { storeCredential: undefined }));
+		expect(modify).toHaveBeenCalledWith("anthropic-2", expect.any(Function));
+		expect(refresh).toHaveBeenCalledWith({ providers: ["anthropic-2"] });
+	});
+
+	it("never writes token material into the accounts config", async () => {
+		const agentDir = tempAgentDir();
+		companyAccount(agentDir);
+		const { ctx } = makeCtx({
+			agentDir,
+			auth: { anthropic: true },
+			models: COMPANY_MODELS,
+			onSelect: pickAccountAction("company", SIGN_IN_LONG_LIVED),
+		});
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), tokenAccountDeps(agentDir));
+		const config = readFileSync(join(agentDir, "claude-accounts.json"), "utf8");
+		expect(config).not.toContain(TOKEN);
+	});
+
+	it("labels a token-backed account and offers a re-mint", async () => {
+		const agentDir = tempAgentDir();
+		companyAccount(agentDir);
+		writeAuth(agentDir, {
+			"anthropic-2": { type: "oauth", access: TOKEN, refresh: "", expires: STATIC_CREDENTIAL_EXPIRES, mintedAt: 1 },
+		});
+		const { ctx, select } = makeCtx({
+			agentDir,
+			auth: { anthropic: true, "anthropic-2": true },
+			models: COMPANY_MODELS,
+			onSelect: pickOption("company"),
+		});
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), withAgentDir(agentDir));
+		expect(selectOptionsAt(select, 0)).toContain("company · token  anthropic-2");
+		const actions = selectOptionsAt(select, 1);
+		expect(actions).toContain(RENEW_LONG_LIVED);
+		expect(actions).toContain(SIGN_IN_BROWSER);
+		expect(actions.indexOf(RENEW_LONG_LIVED)).toBeLessThan(actions.indexOf(SIGN_IN_BROWSER));
+	});
+
+	it("never renders or logs the token value", async () => {
+		const agentDir = tempAgentDir();
+		companyAccount(agentDir);
+		const { ctx, notify } = makeCtx({
+			agentDir,
+			auth: { anthropic: true },
+			models: COMPANY_MODELS,
+			onSelect: pickAccountAction("company", SIGN_IN_LONG_LIVED),
+		});
+		await withDiagnosticsFile(async (file) => {
+			await executeAccountsCommand(extensionApi(), commandContext(ctx), tokenAccountDeps(agentDir));
+			const logged = readFileSync(file, "utf8");
+			expect(logged).not.toContain(TOKEN);
+			expect(logged).toContain("accounts_long_lived_token_stored");
+		});
+		expect(JSON.stringify(notify.mock.calls)).not.toContain(TOKEN);
 	});
 });

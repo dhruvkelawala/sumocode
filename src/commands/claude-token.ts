@@ -9,6 +9,7 @@
  * `{ type: "oauth", refresh: "", expires: MAX_SAFE_INTEGER }` shape for a
  * static token.
  */
+// oxlint-disable anti-slop/no-runtime-typeof, anti-slop/no-unsafe-dictionary-type, anti-slop/require-safety-comment-for-type-assertion -- this module parses two untrusted external shapes (the setup-token CLI's output and Anthropic's roles response) and reads a stored credential back from auth.json; the typeof checks at each boundary are the sanctioned parse.
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
 
@@ -19,7 +20,7 @@ type SetupTokenProcess = ChildProcessByStdio<null, Readable, Readable>;
 export const CLAUDE_SETUP_TOKEN_COMMAND = "claude setup-token";
 
 /** The browser authorization inside the mint can take minutes. */
-export const CLAUDE_SETUP_TOKEN_TIMEOUT_MS = 180_000;
+const CLAUDE_SETUP_TOKEN_TIMEOUT_MS = 180_000;
 
 /** Static tokens carry no local expiry; the far-future value disables Pi's refresh path. */
 export const STATIC_CREDENTIAL_EXPIRES = Number.MAX_SAFE_INTEGER;
@@ -92,7 +93,7 @@ export function isStaticClaudeCredential(credential: unknown): credential is Sta
 	return value.type === "oauth" && typeof value.access === "string" && value.refresh === "";
 }
 
-export interface AcquireRuntime {
+interface AcquireRuntime {
 	/** Injection seam for tests; production spawns the real CLI. */
 	readonly spawnCommand?: typeof spawn;
 	readonly timeoutMs?: number;
@@ -164,7 +165,7 @@ export function acquireLongLivedToken(
 	});
 }
 
-export interface ValidateRuntime {
+interface ValidateRuntime {
 	readonly fetchImpl?: typeof fetch;
 	readonly signal?: AbortSignal;
 }

@@ -1205,6 +1205,39 @@ describe("RpcHostActions", () => {
 			}
 		});
 
+		it("drops the message count from all-sessions rows and keeps their identifier suffix at portrait width", async () => {
+			const root = mkdtempSync(join(tmpdir(), "sumocode-resume-all-scope-row-test-"));
+			try {
+				const currentFile = writeFixtureSession(root, "2026-07-02T20-00-00-000Z_current.jsonl", "current", "2026-07-02T20:00:00.000Z", "current session first message");
+				// A long label and a long path: both want the portrait row's columns.
+				writeFixtureSession(root, "2026-07-02T21-00-00-000Z_other.jsonl", "other123", "2026-07-02T21:00:00.000Z", "another message whose label would push the identifier block off a portrait row", { projectDir: "--other--", cwd: "/Volumes/SumoDeus NVMe/code/sumocode" });
+
+				const { actions, inlineSelectors } = setup({ sessionFile: currentFile });
+
+				const resumePromise = actions.handleSubmittedText("/resume");
+				await waitForInlineSelector(inlineSelectors, "Resume session");
+				// The project scope keeps the message count...
+				expect(inlineSelectorText(inlineSelectors)).toContain("1 msg");
+
+				inlineSelectors.handleInput(SELECTOR_TAB);
+				// ...the all-sessions scope drops it: those rows carry the project
+				// directory in the same column instead.
+				expect(inlineSelectorText(inlineSelectors)).not.toMatch(/\d+\+? msgs?\b/);
+
+				// At portrait width the label yields, so the identifier block -- the id
+				// and the directory that tell same-titled sessions apart -- stays on
+				// the row instead of falling off its right edge.
+				const portrait = inlineSelectorText(inlineSelectors, 60);
+				expect(portrait).toContain("other123");
+				expect(portrait).toContain("code/sumocode");
+
+				inlineSelectors.handleInput(SELECTOR_ESCAPE);
+				await resumePromise;
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+
 		it("cancels with Esc from either scope, without switching sessions", async () => {
 			const root = mkdtempSync(join(tmpdir(), "sumocode-resume-scope-cancel-test-"));
 			try {

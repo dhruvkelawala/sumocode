@@ -1410,6 +1410,53 @@ describe("SubagentManager", () => {
 		expect(placements[8]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "right" });
 	});
 
+	it("returns to the caller tab as soon as it has room, before the overflow tab fills", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+			initialVisibleTabId: "w1:t5",
+		});
+
+		// Four children fill the caller tab, two spill into the generated overflow
+		// tab that becomes the attach cache and still has two free slots.
+		for (let index = 1; index <= 6; index += 1) {
+			await manager.spawn({ prompt: `p${index}`, title: `child-${index}`, cwd: "/repo", visible: true });
+			emitters.get(`sa-child-${index}-${index}`)?.({ kind: "run-started" });
+			emitters.get(`sa-child-${index}-${index}`)?.({ kind: "pane-attached", pane: { agentName: `sa-child-${index}-${index}-worker`, workspaceId: "w1", tabId: index <= 4 ? "w1:t5" : "w1:t6", paneId: `w1:p${index}` } });
+		}
+		expect(placements[4]).toEqual({ kind: "new-tab", label: "subagents 2" });
+		expect(placements[5]).toEqual({ kind: "tab", tabId: "w1:t6", direction: "down" });
+
+		// Every caller-tab child exits; the tab survives because it holds the
+		// parent session pane.
+		for (let index = 1; index <= 4; index += 1) {
+			emitters.get(`sa-child-${index}-${index}`)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		}
+		await vi.waitFor(() => expect(["sa-child-1-1", "sa-child-2-2", "sa-child-3-3", "sa-child-4-4"].every((id) => manager.get(id)?.status === "done")).toBe(true));
+
+		await manager.spawn({ prompt: "p7", title: "seventh", cwd: "/repo", visible: true });
+		// The overflow tab has room, but the freed caller tab is the home for
+		// visible children again; overflow is spillover only.
+		expect(placements[6]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "right" });
+	});
+
 	it("promotes a surviving tab anchored only by failed-close panes", async () => {
 		const placements: unknown[] = [];
 		const emitters = new Map<string, (event: SubagentEvent) => void>();
@@ -1737,7 +1784,7 @@ describe("SubagentManager", () => {
 		expect(manager.get("sa-fifth-5")?.paneStillOpen).toBe(true);
 	});
 
-	it("keeps the cached generated tab when its sole child's close fails", async () => {
+	it("reuses the caller tab when a failed-close pane keeps the cached tab alive", async () => {
 		const placements: unknown[] = [];
 		const emitters = new Map<string, (event: SubagentEvent) => void>();
 		const host: TerminalHost = {
@@ -1769,9 +1816,10 @@ describe("SubagentManager", () => {
 		await vi.waitFor(() => expect(manager.get("sa-first-1")?.status).toBe("error"));
 
 		await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true });
-		// The close failed, so the pane keeps w1:t6 alive and the cache must
-		// stay there instead of provisioning a duplicate tab.
-		expect(placements[1]).toEqual({ kind: "tab", tabId: "w1:t6", direction: "down" });
+		// The failed-close pane keeps w1:t6 alive and counted (see "keeps a
+		// failed-close pane in capacity until its slot is confirmed free"), but
+		// the caller tab with a free slot is the preferred destination.
+		expect(placements[1]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "right" });
 	});
 
 	it("records a close failure that lands during an in-flight settlement", async () => {

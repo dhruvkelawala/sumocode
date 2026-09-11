@@ -1,6 +1,6 @@
 import { wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { activeThemeColors } from "../../themes/index.js";
-import { lineToAnsi, textLine } from "../render/primitives.js";
+import { lineToAnsi, textLine, truncateLine } from "../render/primitives.js";
 
 export type NotificationLevel = "info" | "success" | "warning" | "error";
 
@@ -154,14 +154,36 @@ export class NotificationCenter implements Component {
 }
 
 /**
+ * The removed toast capped its chrome at 6 rows; a sticky notice mirrors that
+ * cap so an over-long failure (a `notifyOnError` message can carry a large
+ * stderr tail) cannot displace the input frame and hint row.
+ */
+const HOST_NOTICE_MAX_ROWS = 6;
+
+/**
  * Renders a sticky host notice as above-the-input rows. This is the sibling
  * render of `InputRecoveryNotice` (same text wrap, same surface fill) with the
  * rust/approval tone; the router-owned recovery notice keeps its own lifecycle.
+ * A message wrapping past {@link HOST_NOTICE_MAX_ROWS} is capped, with the last
+ * retained row ellipsized so the truncation is visible.
  */
 export function renderHostNotice(notice: HostNotice, width: number): string[] {
 	if (!notice.message || width <= 0) return [];
 	const colors = activeThemeColors();
-	return wrapTextWithAnsi(notice.message, width).map((text) => lineToAnsi(textLine([text], {
+	const wrapped = wrapTextWithAnsi(notice.message, width);
+	const rows = wrapped.length <= HOST_NOTICE_MAX_ROWS
+		? wrapped
+		: [...wrapped.slice(0, HOST_NOTICE_MAX_ROWS - 1), ellipsizeRow(wrapped[HOST_NOTICE_MAX_ROWS - 1]!, width)];
+	return rows.map((text) => lineToAnsi(textLine([text], {
 		fg: colors.states.approval, bg: colors.surface,
 	}), { width }));
+}
+
+/**
+ * Cuts one wrapped row to `width - 1` and marks the cut with an ellipsis.
+ * Goes through the typed primitive so wide graphemes are measured, not sliced.
+ */
+function ellipsizeRow(text: string, width: number): string {
+	const truncated = truncateLine(textLine([text]), Math.max(1, width - 1));
+	return `${truncated.spans.map((part) => part.text).join("")}…`;
 }

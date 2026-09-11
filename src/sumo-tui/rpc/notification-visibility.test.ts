@@ -226,6 +226,25 @@ describe("RPC notification visibility", () => {
 		}
 	});
 
+	it("caps an over-long sticky failure so the editor frame and hint row stay on screen", async () => {
+		const notifications = new NotificationCenter();
+		const { shell, rows } = await createShell(notifications);
+		try {
+			notifications.notify(`rpc error: ${"stderr tail ".repeat(200)}`, "error");
+			shell.render();
+			const painted = rows();
+			const frameBottom = painted.findIndex((row) => row.includes("└"));
+			// The input frame and the row under it survive: an unbounded wrap would
+			// paint ~26 rows here (2 KB at 90 columns) and push them off-screen.
+			expect(frameBottom).toBeGreaterThan(0);
+			expect(painted[frameBottom - 1]).toContain("│ >");
+			expect(painted.filter((row) => row.includes("stderr tail")).length).toBeLessThanOrEqual(6);
+		} finally {
+			shell.dispose();
+			notifications.dispose();
+		}
+	});
+
 	it("does not activate an overlay whose rows are empty at the paint width", async () => {
 		const notifications = { invalidate() {}, render: (width: number) => width === 1 ? ["probe-only row"] : [] };
 		const { shell, terminal, text, setHint } = await createShell(notifications);

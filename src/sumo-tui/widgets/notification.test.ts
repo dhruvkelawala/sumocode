@@ -100,6 +100,13 @@ describe("NotificationCenter host notices", () => {
 		expect(notifications.getNotice()).toBeUndefined();
 	});
 
+	it("caps an over-long sticky failure and ellipsizes the last retained row", () => {
+		const rows = renderHostNotice({ message: `rpc error: ${"stderr tail ".repeat(200)}`, level: "error", sticky: true }, 40);
+		expect(rows).toHaveLength(6);
+		expect(rows.every((row) => stripAnsi(row).length === 40)).toBe(true);
+		expect(stripAnsi(rows[5]!).trimEnd().endsWith("…")).toBe(true);
+	});
+
 	it("renders a sticky failure in the rust/approval tone", () => {
 		const rows = renderHostNotice({ message: "unknown model: nope", level: "warning", sticky: true }, 40);
 		expect(rows).toHaveLength(1);

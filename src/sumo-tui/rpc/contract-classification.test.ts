@@ -1,8 +1,9 @@
 import { expect, expectTypeOf, it } from "vitest";
-import type { AgentSessionEvent, RpcCommand, RpcExtensionUIRequest } from "@earendil-works/pi-coding-agent";
+import type { AgentSessionEvent, RpcCommand, RpcExtensionUIRequest, RpcSessionState } from "@earendil-works/pi-coding-agent";
 import {
 	AGENT_EVENT_DISPOSITIONS,
 	EXTENSION_UI_METHOD_DISPOSITIONS,
+	PINNED_THINKING_LEVELS,
 	RPC_COMMAND_DISPOSITIONS,
 } from "./contract-classification.js";
 
@@ -54,4 +55,8 @@ it("maps every extension-UI method to a retained-host handler and response behav
 		expect(disposition.response.length).toBeGreaterThan(0);
 	}
 	expectTypeOf<keyof typeof EXTENSION_UI_METHOD_DISPOSITIONS>().toEqualTypeOf<RpcExtensionUIRequest["method"]>();
+});
+
+it("pins the shipped thinking-level union exhaustively, not as a subset", () => {
+	expectTypeOf<(typeof PINNED_THINKING_LEVELS)[number]>().toEqualTypeOf<RpcSessionState["thinkingLevel"]>();
 });

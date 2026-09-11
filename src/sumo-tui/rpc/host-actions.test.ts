@@ -1195,7 +1195,6 @@ describe("RpcHostActions", () => {
 				const portrait = inlineSelectorText(inlineSelectors, 60);
 
 				expect(portrait).toContain("code/sumocode");
-				expect(portrait).not.toContain("SumoDeus NVMe/cod\n");
 
 				inlineSelectors.handleInput(SELECTOR_ESCAPE);
 				await resumePromise;

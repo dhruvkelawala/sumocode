@@ -26,7 +26,7 @@ export interface ClaudeAccountStatus {
 	readonly active: boolean;
 }
 
-export interface ClaudeAccountStatusInputs {
+interface ClaudeAccountStatusInputs {
 	/** Models the picker and cycle ring can reach: available, then enabled-filtered. */
 	readonly models: readonly Model<Api>[];
 	readonly currentProvider?: string;

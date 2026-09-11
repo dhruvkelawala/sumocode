@@ -553,7 +553,7 @@ describe("handleRpcMessageForceSend", () => {
 		const scheduler = { forceSendNext: vi.fn(async () => { throw new Error("preflight rejected"); }) };
 
 		await expect(handleRpcMessageForceSend({ scheduler, notifications })).resolves.toBe("ignored");
-		expect(notifications.notify).toHaveBeenCalledWith("rpc error: preflight rejected", "warning");
+		expect(notifications.notify).toHaveBeenCalledWith("rpc error: preflight rejected", "error");
 	});
 });
 
@@ -931,7 +931,7 @@ describe("createModelCycleForwardHandler (app.model.cycleForward)", () => {
 		handle();
 		await flush();
 
-		expect(notifications.notify).toHaveBeenCalledWith(expect.stringContaining("boom"), "warning");
+		expect(notifications.notify).toHaveBeenCalledWith(expect.stringContaining("boom"), "error");
 	});
 });
 

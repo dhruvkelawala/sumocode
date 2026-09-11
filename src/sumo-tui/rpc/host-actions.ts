@@ -66,7 +66,7 @@ export interface RpcHostSlashCommand {
 
 type HostModals = Pick<ModalManager, "select" | "confirm" | "input" | "editor">;
 type HostInlineSelectors = Pick<InlineSelectorHost, "select" | "selectTabs">;
-type HostNotifications = Pick<NotificationCenter, "notify">;
+type HostNotifications = Pick<NotificationCenter, "notify"> & Partial<Pick<NotificationCenter, "dismissSticky">>;
 type MemoryClientFactory = () => RemnicMemoryClient;
 
 export interface RpcHostActionsOptions {
@@ -210,8 +210,13 @@ function isMermaidRenderingMode(value: string): value is MermaidRenderingMode {
 	return (MERMAID_RENDERING_MODES as readonly string[]).includes(value);
 }
 
-function notify(notifications: HostNotifications, message: string, level: NotificationLevel = "info"): void {
-	notifications.notify(message, level);
+/**
+ * Records a host notice (issue 481). `timeoutMs` 0 makes it sticky: failures
+ * paint above the input frame until Escape or the next host action, while any
+ * other notice is a transient hint in the belowEditor hint row.
+ */
+function notify(notifications: HostNotifications, message: string, level: NotificationLevel = "info", timeoutMs?: number): void {
+	notifications.notify(message, level, timeoutMs);
 }
 
 function isConfigScalar(value: LovelyWebConfigValue): value is string | number | boolean | null | undefined {
@@ -585,9 +590,11 @@ export class RpcHostActions {
 	}
 
 	public async handleSubmittedText(text: string): Promise<boolean> {
+		// A new host action supersedes the previous sticky failure (issue 481
+		// home B); a failure below re-arms it.
+		this.notifications.dismissSticky?.();
 		const { command, args } = firstArg(text);
 		if (this.isTreeNavigationBusy() && this.isTreeNavigationBlockedCommand(command)) {
-			notify(this.notifications, "branch summary in progress", "warning");
 			return true;
 		}
 		if (!command.startsWith("/")) return false;
@@ -602,7 +609,7 @@ export class RpcHostActions {
 				return true;
 			case "/login":
 				if (this.loginActive) {
-					notify(this.notifications, "login already in progress", "warning");
+					notify(this.notifications, "login already in progress", "warning", 0);
 					return true;
 				}
 				this.loginActive = true;
@@ -701,7 +708,7 @@ export class RpcHostActions {
 						return true;
 					}
 					if (childCommand) return false;
-					notify(this.notifications, `unknown command: ${command}`, "warning");
+					notify(this.notifications, `unknown command: ${command}`, "warning", 0);
 					return true;
 				}
 				return false;
@@ -787,7 +794,6 @@ export class RpcHostActions {
 
 	public async openModelSelector(): Promise<void> {
 		if (this.isTreeNavigationBusy()) {
-			notify(this.notifications, "branch summary in progress", "warning");
 			return;
 		}
 		const enabledModels = await this.controls.getEnabledModels();
@@ -804,7 +810,7 @@ export class RpcHostActions {
 		if (selected === undefined) return;
 		const parsed = parseModelLabel(selected);
 		if (!parsed) {
-			notify(this.notifications, `unknown model: ${selected}`, "warning");
+			notify(this.notifications, `unknown model: ${selected}`, "warning", 0);
 			return;
 		}
 		const state = await this.controls.setModel(parsed.provider, parsed.id);
@@ -813,7 +819,6 @@ export class RpcHostActions {
 
 	public async openThinkingSelector(): Promise<void> {
 		if (this.isTreeNavigationBusy()) {
-			notify(this.notifications, "branch summary in progress", "warning");
 			return;
 		}
 		const currentLevel = this.stateStore.getSnapshot().thinkingLevel;
@@ -841,7 +846,6 @@ export class RpcHostActions {
 
 	public async openSessionControls(): Promise<void> {
 		if (this.isTreeNavigationBusy()) {
-			notify(this.notifications, "branch summary in progress", "warning");
 			return;
 		}
 		const selected = await this.inlineSelectors.select("Session controls", [
@@ -860,7 +864,6 @@ export class RpcHostActions {
 
 	public async openSettings(): Promise<void> {
 		if (this.isTreeNavigationBusy()) {
-			notify(this.notifications, "branch summary in progress", "warning");
 			return;
 		}
 		const currentMermaidMode = this.getMermaidRenderingMode();
@@ -1003,14 +1006,14 @@ export class RpcHostActions {
 
 	private async setLovelyWebApiKey(scope: LovelyWebConfigScope, cwd: string, provider: string): Promise<void> {
 		if (scope !== "user") {
-			notify(this.notifications, "Lovely Web API keys are user-only", "warning");
+			notify(this.notifications, "Lovely Web API keys are user-only", "warning", 0);
 			return;
 		}
 		// SAFETY: LOVELY_WEB_API_KEY_FIELDS is keyed by provider name; an
 		// unknown provider yields undefined and the caller returns early below.
 		const key = LOVELY_WEB_API_KEY_FIELDS[provider as keyof typeof LOVELY_WEB_API_KEY_FIELDS];
 		if (!key) {
-			notify(this.notifications, `unknown Lovely Web provider: ${provider}`, "warning");
+			notify(this.notifications, `unknown Lovely Web provider: ${provider}`, "warning", 0);
 			return;
 		}
 		const value = await this.modals.input(`${provider} API key`, "paste key; blank to clear", { secret: true });
@@ -1064,7 +1067,6 @@ export class RpcHostActions {
 	 */
 	public async openForkSelector(): Promise<void> {
 		if (this.isTreeNavigationBusy()) {
-			notify(this.notifications, "branch summary in progress", "warning");
 			return;
 		}
 		const messages = (await this.controls.getForkMessages())
@@ -1176,7 +1178,6 @@ export class RpcHostActions {
 	/** Browse and navigate the current session tree in place, matching Pi's summary loop. */
 	public async openTreeBrowser(initialSelectedId?: string): Promise<void> {
 		if (this.isTreeNavigationBusy()) {
-			notify(this.notifications, "branch summary in progress", "warning");
 			return;
 		}
 		if (!hasGetEntries(this.controls)) {
@@ -1213,7 +1214,6 @@ export class RpcHostActions {
 			if (!selected) return;
 			selectedId = selected;
 			if (selected === snapshot.leafId) {
-				notify(this.notifications, "already at this point", "info");
 				return;
 			}
 
@@ -1239,7 +1239,7 @@ export class RpcHostActions {
 			try {
 				validateRpcTreeNavigationRequest(request);
 			} catch {
-				notify(this.notifications, "invalid tree navigation request", "warning");
+				notify(this.notifications, "invalid tree navigation request", "warning", 0);
 				return;
 			}
 			this.setTreeNavigationBusy(true);
@@ -1260,7 +1260,6 @@ export class RpcHostActions {
 				await this.reconcileTreeNavigation(outcome);
 				if (outcome.status === "committed") {
 					this.onStateChange();
-					notify(this.notifications, "tree navigated", "info");
 				} else if (outcome.status === "cancelled") {
 					notify(this.notifications, "tree navigation cancelled", "info");
 				} else {
@@ -1323,7 +1322,7 @@ export class RpcHostActions {
 			facts = await client.browse({ status: "active", limit: 500 });
 		} catch (error) {
 			const message = error instanceof MemoryClientError ? error.message : String(error);
-			notify(this.notifications, `memory unavailable: ${message}`, "warning");
+			notify(this.notifications, `memory unavailable: ${message}`, "warning", 0);
 			return;
 		}
 		const initial: MemoryEditorSnapshot = {
@@ -1364,7 +1363,6 @@ export class RpcHostActions {
 			}
 			await notifyOnError(async () => {
 				await client.add(text);
-				notify(this.notifications, `memory added: ${text.slice(0, 40)}${text.length > 40 ? "…" : ""}`, "info");
 			}, this.notifications);
 			return;
 		}
@@ -1376,7 +1374,6 @@ export class RpcHostActions {
 			}
 			await notifyOnError(async () => {
 				await client.forget(id);
-				notify(this.notifications, `memory forgotten: ${id}`, "info");
 			}, this.notifications);
 			return;
 		}
@@ -1407,24 +1404,22 @@ export class RpcHostActions {
 		}
 		const state = await this.controls.setModel(parsed.provider, parsed.id);
 		this.onStateChange(state);
-		notify(this.notifications, `model: ${parsed.provider}/${parsed.id}`, "info");
 	}
 
 	private async setThinkingFromText(value: string): Promise<void> {
 		const levelText = value.trim().toLowerCase();
 		if (!isRpcThinkingLevel(levelText)) {
-			notify(this.notifications, `unknown thinking level: ${value}`, "warning");
+			notify(this.notifications, `unknown thinking level: ${value}`, "warning", 0);
 			return;
 		}
 		const level = levelText;
 		const levels = await this.availableThinkingLevels();
 		if (!levels.includes(level)) {
-			notify(this.notifications, `unknown thinking level: ${value}`, "warning");
+			notify(this.notifications, `unknown thinking level: ${value}`, "warning", 0);
 			return;
 		}
 		const state = await this.controls.setThinkingLevel(level);
 		this.onStateChange(state);
-		notify(this.notifications, `thinking: ${level}`, "info");
 	}
 
 	private async availableThinkingLevels(): Promise<readonly RpcThinkingLevel[]> {
@@ -1443,9 +1438,7 @@ export class RpcHostActions {
 		// selector changed the live palette but reverted on restart.
 		const persisted = this.persistTheme(result.theme.name);
 		this.onRenderRequest();
-		if (persisted.success) {
-			notify(this.notifications, `theme: ${result.theme.name}`, "info");
-		} else {
+		if (!persisted.success) {
 			notify(this.notifications, `theme: ${result.theme.name} (not persisted: ${persisted.error})`, "warning");
 		}
 	}
@@ -1462,7 +1455,6 @@ export class RpcHostActions {
 	private async compact(instructions: string): Promise<void> {
 		await this.controls.compact(instructions.length > 0 ? instructions : undefined);
 		this.onStateChange();
-		notify(this.notifications, "compaction requested", "info");
 	}
 
 	private async applySessionChange<T extends { readonly cancelled: boolean }>(
@@ -1516,7 +1508,6 @@ export class RpcHostActions {
 		const result = await this.applySessionChange(() => this.controls.switchSession(trimmed));
 		if (!result.cancelled) {
 			this.onStateChange();
-			notify(this.notifications, "session switched", "info");
 		}
 	}
 
@@ -1524,7 +1515,6 @@ export class RpcHostActions {
 		const result = await this.applySessionChange(() => this.controls.clone());
 		if (!result.cancelled) {
 			this.onStateChange();
-			notify(this.notifications, "session cloned", "info");
 		}
 	}
 
@@ -1557,7 +1547,6 @@ export class RpcHostActions {
 			notify(this.notifications, "copy unavailable (not a TTY)", "warning");
 			return;
 		}
-		notify(this.notifications, "copied", "success");
 	}
 
 	private async exportHtml(): Promise<void> {
@@ -1571,23 +1560,20 @@ export class RpcHostActions {
 		if (!trimmed) return;
 		const state = await this.controls.setSessionName(trimmed);
 		this.onStateChange(state);
-		notify(this.notifications, `session name: ${trimmed}`, "info");
 	}
 
 	private async setAutoCompaction(enabled: boolean): Promise<void> {
 		await this.controls.setAutoCompaction(enabled);
-		notify(this.notifications, `auto compaction ${enabled ? "enabled" : "disabled"}`, "info");
 	}
 
 	private async setAutoRetry(enabled: boolean): Promise<void> {
 		await this.controls.setAutoRetry(enabled);
 		this.onStateChange();
-		notify(this.notifications, `auto retry ${enabled ? "enabled" : "disabled"}`, "info");
 	}
 
 	private async requireChildCommand(command: string): Promise<boolean> {
 		if (await this.childCanExecuteCommand(command)) return true;
-		notify(this.notifications, `unknown command: ${command}`, "warning");
+		notify(this.notifications, `unknown command: ${command}`, "warning", 0);
 		return false;
 	}
 

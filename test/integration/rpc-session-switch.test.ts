@@ -2,7 +2,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { PI_BOOT_SEQUENCE, spawnSumocodePty, waitForScreenText, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { PI_BOOT_SEQUENCE, spawnSumocodePty, waitForScreen, waitForScreenText, type SpawnedPiPty } from "./spawn-pi-pty.js";
 import { createRpcChildFixture, transcriptMessages } from "./rpc-child-fixture.js";
 
 const CSI_U_ENTER = "\x1b[13u";
@@ -86,8 +86,16 @@ describe("sumocode RPC session switching", () => {
 		const initialCacheWrite = await waitForChromeCacheWrite(cachePath);
 
 		app.sendInput(`/new${CSI_U_ENTER}`);
-		const finalScreen = await waitForScreenText(app, "new session", 5_000);
 		await waitForChromeCacheWrite(cachePath, initialCacheWrite);
+
+		// The chrome flip alone does not prove the old session is gone: wait for a
+		// frame where the new name is present and the old transcript is not, so the
+		// negatives below cannot read a mid-transition repaint.
+		const finalScreen = await waitForScreen(
+			app,
+			({ text }) => text.includes("new session") && !text.includes("Original Session") && !text.includes("old session anchor"),
+			{ cols, rows, timeoutMs: 5_000 },
+		);
 
 		const state = app.getCurrentTerminalState();
 		expect(state.altscreenActive).toBe(true);

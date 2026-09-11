@@ -265,7 +265,7 @@ describe("waitForScreenText", () => {
 		// the next cell, then flush "lo": the raw stream never carries the literal
 		// substring, while the replayed screen shows "hello". Matching rendered text
 		// against the raw stream is what made rpc-kitty-release flake (issue #324).
-		const frameSplit = "\x1b[1;1Hhel\x1b[1;4H\x1b[38;5;8ml\x1b[1;6H\x1b[39mo";
+		const frameSplit = "\x1b[1;1Hhel\x1b[1;4H\x1b[38;5;8ml\x1b[1;5H\x1b[39mo";
 		expect(frameSplit).not.toContain("hello");
 		const pty = {
 			cols: 20,

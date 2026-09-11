@@ -25,7 +25,6 @@ describe("sumo-tui mouse SGR integration", () => {
 		await waitForScreenText(app, "DIVINE INVOCATION", 10_000);
 		await app.waitForOutput("\x1b[?2004h", 10_000);
 		app.sendInput("phase1-scroll-proof");
-		const screen = await waitForScreenText(app, "phase1-scroll-proof", 5_000);
 
 		app.sendInput("\x1b[<64;10;10M\x1b[<65;10;10M\x1b[<64;10;10m\x1b[<65;10;10m");
 		await delay(300);
@@ -33,7 +32,9 @@ describe("sumo-tui mouse SGR integration", () => {
 		const output = app.getOutput();
 		const state = app.getCurrentTerminalState();
 		expect(state.mouseSGRActive).toBe(true);
-		expect(screen.text).toContain("phase1-scroll-proof");
+		// The draft must survive the wheel events, not merely have been painted
+		// before them, so this reads the settled frame after the scroll.
+		expect((await waitForScreenText(app, "phase1-scroll-proof", 5_000)).text).toContain("phase1-scroll-proof");
 		expect(output).not.toContain("[<64;10;10M");
 		expect(output).not.toContain("[<65;10;10M");
 	});

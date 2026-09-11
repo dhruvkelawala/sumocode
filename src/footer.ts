@@ -11,12 +11,18 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
  * upstream levels flow in automatically. Do not redeclare this union by hand.
  */
 export type ThinkingLevel = ModelThinkingLevel;
-import { resolveClaudeAccountStatus, formatClaudeAccountChip, type ClaudeAccountStatus } from "./config/claude-account-status.js";
-import { filterToEnabled, readEnabledModelPatterns } from "./config/enabled-models.js";
+import { formatClaudeAccountChip } from "./config/claude-account-status.js";
+import { resolveSessionClaudeAccount } from "./claude-account-status-publication.js";
 import { shouldApplyFastMode, type FastModeState } from "./fast-mode.js";
 import { getSessionUsage as getCachedSessionUsage, sessionHasMessages as cachedSessionHasMessages, linkGitBranchProvider } from "./session-cache.js";
 import { activeThemeColors, type SumoCodeState } from "./themes/index.js";
 import { VOICE } from "./voice.js";
+
+/** The render-facing pair the footer paints; the resolver owns the provider id. */
+export interface FooterClaudeAccount {
+	readonly label: string;
+	readonly active: boolean;
+}
 
 type Usage = {
 	input: number;
@@ -42,7 +48,7 @@ export type FooterSnapshot = {
 	 * Claude task would resolve here, bright when it is live; absent when no
 	 * Claude account is configured.
 	 */
-	claudeAccount?: ClaudeAccountStatus;
+	claudeAccount?: FooterClaudeAccount;
 	/**
 	 * When true, an additional dim version line is rendered below the main
 	 * footer row. Per Q5.2, this only happens on the splash empty state.
@@ -252,20 +258,21 @@ export function installFooter(
 		/** Subscription labels for extra Claude accounts, owned by the accounts config. */
 		subscriptionLabel?: (providerId: string) => string | undefined;
 		/** Injection seam; production reads the model registry and enabled patterns. */
-		resolveClaudeAccount?: (ctx: ExtensionContext) => ClaudeAccountStatus | undefined;
+		resolveClaudeAccount?: (ctx: ExtensionContext) => { label: string; active: boolean } | undefined;
 	} = {},
 ): () => void {
 	let state: SumoCodeState = "idle";
 	let render: (() => void) | undefined;
 	let activeCtx: ExtensionContext | undefined;
 	let activeFooterData: Pick<ReadonlyFooterDataProvider, "getGitBranch"> | undefined;
-	let claudeAccount: ClaudeAccountStatus | undefined;
+	let claudeAccount: FooterClaudeAccount | undefined;
 	// Memoized on purpose: the resolver reads settings.json, and the footer
 	// re-renders on every requestRender.
 	const resolveClaudeAccount =
-		options.resolveClaudeAccount ?? ((ctx: ExtensionContext) => defaultClaudeAccountResolver(ctx, options.subscriptionLabel));
+		options.resolveClaudeAccount ?? ((ctx: ExtensionContext) => resolveSessionClaudeAccount(ctx, options.subscriptionLabel));
 	const refreshClaudeAccount = (ctx: ExtensionContext): void => {
-		claudeAccount = safeRead(() => resolveClaudeAccount(ctx), undefined);
+		const status = safeRead(() => resolveClaudeAccount(ctx), undefined);
+		claudeAccount = status ? { label: status.label, active: status.active } : undefined;
 	};
 
 	const setState = (next: SumoCodeState): void => {
@@ -347,7 +354,7 @@ function createSnapshot(
 	ctx: ExtensionContext | undefined,
 	branch: string | null,
 	state: SumoCodeState,
-	claudeAccount: ClaudeAccountStatus | undefined,
+	claudeAccount: FooterClaudeAccount | undefined,
 	fastModeState?: FastModeState,
 ): FooterSnapshot {
 	if (!ctx) {
@@ -385,23 +392,6 @@ function createSnapshot(
 		claudeAccount,
 		isSplash: !sessionHasMessages(ctx),
 	};
-}
-
-/**
- * Which Claude account this session's Claude models resolve to, over the same
- * enabled-model set `/accounts` uses to decide which accounts are reachable.
- */
-function defaultClaudeAccountResolver(
-	ctx: ExtensionContext,
-	subscriptionLabel?: (providerId: string) => string | undefined,
-): ClaudeAccountStatus | undefined {
-	const registry = ctx.modelRegistry;
-	const available = safeRead(() => registry.getAvailable(), []);
-	return resolveClaudeAccountStatus({
-		models: filterToEnabled(available, readEnabledModelPatterns()),
-		currentProvider: safeRead(() => ctx.model?.provider, undefined),
-		subscriptionLabel,
-	});
 }
 
 function shouldShowFastModeInFooter(fastModeState: FastModeState | undefined, model: ExtensionContext["model"] | undefined): boolean {

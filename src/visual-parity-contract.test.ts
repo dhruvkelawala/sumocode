@@ -1017,6 +1017,7 @@ describe("V2 visual parity contract", () => {
 		expect(requiredCrops.map(({ scenarioId, crop }) => `${scenarioId}/${crop.id}`)).toEqual([
 			"input-typed-component/input-frame",
 			"footer-ready-component/footer",
+			"footer-claude-account-component/footer",
 			"top-bar-default-component/top-bar",
 			"splash-runtime/full",
 			"active-landscape-runtime/top-bar",

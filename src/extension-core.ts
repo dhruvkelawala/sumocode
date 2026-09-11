@@ -6,7 +6,9 @@ import { installActivityManagerBridge } from "./activity/manager-bridge.js";
 import { installAnswerTool } from "./answer-tool.js";
 import { installBackgroundTasks, installTerminalTools } from "./background-tasks/index.js";
 import type { TerminalTaskManagerOptions } from "./background-tasks/task-manager.js";
-import { registerAccountsCommand } from "./commands/accounts.js";
+import { loadClaudeSubscriptions, registerAccountsCommand } from "./commands/accounts.js";
+import { installClaudeAccountStatus } from "./claude-account-status-publication.js";
+import { claudeAccountProviderId } from "./config/claude-providers.js";
 import { registerSumoReloadCommand } from "./commands/reload.js";
 import { registerRolesCommand } from "./commands/roles.js";
 import { installFastMode } from "./fast-mode.js";
@@ -149,8 +151,20 @@ export function installOrchestrationTools(pi: ExtensionAPI, rpcChild = false) {
 	return { terminalTaskManager, subagentManager, activityBridge };
 }
 
+/**
+ * Subscription labels for the Claude account chrome, owned by the accounts
+ * config so `/accounts` and the footer cannot disagree. Read once per
+ * resolution, never per render.
+ */
+export function claudeAccountSubscriptionLabel(providerId: string): string | undefined {
+	return loadClaudeSubscriptions().find((entry) => claudeAccountProviderId(entry.index) === providerId)?.label;
+}
+
 export function installRpcChildProfile(pi: ExtensionAPI): void {
 	installHerdrRpcBridge(pi);
+	// The retained host draws the footer, so the resolved account travels as an
+	// extension status instead of through installFooter.
+	installClaudeAccountStatus(pi, { subscriptionLabel: claudeAccountSubscriptionLabel });
 	installSkillInlineExpansion(pi);
 	// Pi's built-in /login exists only in InteractiveMode and is intentionally
 	// absent from RPC get_commands. Register the compatibility command in the

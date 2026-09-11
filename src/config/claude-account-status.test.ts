@@ -30,22 +30,22 @@ describe("claudeAccountLabel", () => {
 
 describe("formatClaudeAccountChip", () => {
 	it("renders the lowercase chip", () => {
-		expect(formatClaudeAccountChip({ providerId: "anthropic-2", label: "company", active: false })).toBe("claude company");
+		expect(formatClaudeAccountChip({ label: "company" })).toBe("claude company");
 	});
 
 	it("clips a long label to the eight-column budget", () => {
-		expect(formatClaudeAccountChip({ providerId: "anthropic-2", label: "work-account", active: false })).toBe("claude work-ac…");
-		expect(formatClaudeAccountChip({ providerId: "anthropic-2", label: "personal", active: false })).toBe("claude personal");
+		expect(formatClaudeAccountChip({ label: "work-account" })).toBe("claude work-ac…");
+		expect(formatClaudeAccountChip({ label: "personal" })).toBe("claude personal");
 	});
 
 	it("clips by grapheme, never splitting a surrogate pair or combining mark", () => {
-		const emoji = formatClaudeAccountChip({ providerId: "anthropic-2", label: "😀😀😀😀😀😀😀😀😀", active: false });
+		const emoji = formatClaudeAccountChip({ label: "😀😀😀😀😀😀😀😀😀" });
 		expect(emoji).toBe("claude 😀😀😀😀😀😀😀…");
 		// No lone surrogate survives the clip.
 		expect(emoji).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
 		expect(emoji).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
 		// A combining mark travels with its base character.
-		expect(formatClaudeAccountChip({ providerId: "anthropic-2", label: "ééééééééé", active: false })).toBe("claude ééééééé…");
+		expect(formatClaudeAccountChip({ label: "ééééééééé" })).toBe("claude ééééééé…");
 	});
 });
 

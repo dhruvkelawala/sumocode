@@ -589,8 +589,8 @@ describe("/sumo:sync", () => {
 		const spawn = vi.fn(() => {
 			const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter(), kill: () => true });
 			queueMicrotask(() => {
-				child.stdout.emit("data", "a".repeat(2 * 1024 * 1024));
-				child.stdout.emit("data", "TAIL-MARKER");
+				child.stdout.emit("data", Buffer.from("a".repeat(2 * 1024 * 1024)));
+				child.stdout.emit("data", Buffer.from("TAIL-MARKER"));
 				child.emit("close", 0, null);
 			});
 			return child;
@@ -612,6 +612,34 @@ describe("/sumo:sync", () => {
 		expect(output).toContain("truncated");
 		expect(output.endsWith("TAIL-MARKER")).toBe(true);
 		expect(spawn).toHaveBeenCalledTimes(2);
+		stdout.mockRestore();
+	});
+
+	it("keeps a multi-byte character split across output chunks", async () => {
+		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const emoji = Buffer.from("😀", "utf8");
+		// The fake child splits one code point across two data events, as a pipe chunk boundary can.
+		const spawn = vi.fn(() => {
+			const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter(), kill: () => true });
+			queueMicrotask(() => {
+				child.stdout.emit("data", emoji.subarray(0, 1));
+				child.stdout.emit("data", emoji.subarray(1));
+				child.emit("close", 0, null);
+			});
+			return child;
+		});
+		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
+		const results = await executeSumoSync(ctx() as never, {
+			env: { SUMOCODE_CONFIG_DIR: "/config" },
+			cwd: "/repo/sumocode",
+			moduleUrl: "file:///repo/sumocode/src/commands/sync.ts",
+			exists: (path) => path === "/config/.git" || sumocodeRepoExists(path),
+			readFile: () => JSON.stringify({ name: "@dhruvkelawala/sumocode" }),
+			linkConfig: () => ({ label: "config symlinks", ok: true, output: "linked" }),
+			spawn,
+		});
+
+		expect(results[0]?.output).toBe("😀");
 		stdout.mockRestore();
 	});
 

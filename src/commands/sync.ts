@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { CLAUDE_ACCOUNTS_MIGRATION_FIELD } from "./accounts-config.js";
@@ -34,8 +35,8 @@ export interface SyncStepResult {
 
 /** Minimal child-process surface the streamed runner reads; Node's `spawn` returns one. */
 interface StepChildProcess {
-	readonly stdout: { on(event: "data", listener: (chunk: Buffer | string) => void): void; destroy?: () => void } | null;
-	readonly stderr: { on(event: "data", listener: (chunk: Buffer | string) => void): void; destroy?: () => void } | null;
+	readonly stdout: { on(event: "data", listener: (chunk: Buffer) => void): void; destroy?: () => void } | null;
+	readonly stderr: { on(event: "data", listener: (chunk: Buffer) => void): void; destroy?: () => void } | null;
 	on(event: "error", listener: (error: Error) => void): void;
 	on(event: "close", listener: (code: number | null, signal: NodeJS.Signals | null) => void): void;
 	kill(): boolean;
@@ -320,16 +321,23 @@ function runConfigLinkStep(configRepo: string, agentDir: string, deps: SumoSyncD
 
 /** Accumulate a step's output up to `MAX_STEP_OUTPUT_CHARS`, dropping the oldest text first. */
 function createOutputTail() {
+	// A decoder keeps a UTF-8 sequence that straddles two pipe chunks intact, matching
+	// the `setEncoding("utf8")` the execFile path used. `read` flushes its final bytes
+	// and is called once, when the step settles.
+	const decoder = new StringDecoder("utf8");
 	let text = "";
 	let dropped = 0;
 	return {
-		write: (chunk: Buffer | string) => {
-			text += chunk.toString();
+		write: (chunk: Buffer) => {
+			text += decoder.write(chunk);
 			if (text.length <= MAX_STEP_OUTPUT_CHARS) return;
 			dropped += text.length - MAX_STEP_OUTPUT_CHARS;
 			text = text.slice(text.length - MAX_STEP_OUTPUT_CHARS);
 		},
-		read: () => (dropped > 0 ? `[… ${dropped} earlier output character(s) truncated …]\n${text}` : text),
+		read: () => {
+			text += decoder.end();
+			return dropped > 0 ? `[… ${dropped} earlier output character(s) truncated …]\n${text}` : text;
+		},
 	};
 }
 

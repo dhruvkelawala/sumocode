@@ -67,6 +67,8 @@ function isSetStatusFunction(value: ((key: string, text: string | undefined) => 
 	return typeof value === "function";
 }
 
+export type ClaudeSubscriptionLabel = (providerId: string) => string | undefined;
+
 function publish(ctx: ExtensionContext, resolve: () => ClaudeAccountStatus | undefined): void {
 	if (!ctx.hasUI) return;
 	// SAFETY: the ui surface exposes an optional setStatus registrar; the
@@ -81,16 +83,28 @@ function publish(ctx: ExtensionContext, resolve: () => ClaudeAccountStatus | und
 }
 
 /**
+ * Publish the resolved account now. `/accounts` renames its label and finishes
+ * without an agent turn — Pi executes an extension command inside `prompt()`
+ * and returns before the agent loop starts — so no `agent_end` follows to
+ * re-resolve it, and the host would keep painting the old label indefinitely.
+ */
+export function publishClaudeAccountStatus(
+	ctx: ExtensionContext,
+	options: { subscriptionLabel?: ClaudeSubscriptionLabel } = {},
+): void {
+	publish(ctx, () => resolveSessionClaudeAccount(ctx, options.subscriptionLabel));
+}
+
+/**
  * Publish the resolved account on session start, model select, and each turn
  * boundary (so an `/accounts` rename lands without waiting for a model switch).
  * Never inside a render: the resolution reads settings.json.
  */
 export function installClaudeAccountStatus(
 	pi: ExtensionAPI,
-	options: { subscriptionLabel?: (providerId: string) => string | undefined } = {},
+	options: { subscriptionLabel?: ClaudeSubscriptionLabel } = {},
 ): void {
-	const publishFor = (ctx: ExtensionContext): void =>
-		publish(ctx, () => resolveSessionClaudeAccount(ctx, options.subscriptionLabel));
+	const publishFor = (ctx: ExtensionContext): void => publishClaudeAccountStatus(ctx, options);
 	pi.on("session_start", (_event, ctx) => publishFor(ctx));
 	pi.on("model_select", (_event, ctx) => publishFor(ctx));
 	pi.on("agent_end", (_event, ctx) => publishFor(ctx));

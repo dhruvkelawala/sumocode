@@ -9,6 +9,7 @@ import {
 	CLAUDE_ACCOUNT_STATUS_KEY,
 	hasPublishedClaudeAccount,
 	installClaudeAccountStatus,
+	publishClaudeAccountStatus,
 	resolveSessionClaudeAccount,
 } from "./claude-account-status-publication.js";
 
@@ -104,6 +105,20 @@ describe("resolveSessionClaudeAccount", () => {
 		agentDirWithClaudeEnabled();
 		const { ctx } = ctxWith({ provider: "openai-codex", models: [{ provider: "anthropic", id: "claude-opus-5" }] });
 		expect(resolveSessionClaudeAccount(ctx, () => "personal")).toEqual({ providerId: "anthropic", label: "default", active: false });
+	});
+});
+
+describe("publishClaudeAccountStatus", () => {
+	it("repaints a renamed label without waiting for an agent turn", () => {
+		agentDirWithClaudeEnabled();
+		let label = "company";
+		const { ctx, statuses } = ctxWith({ provider: "anthropic-2", models: [{ provider: "anthropic-2", id: "claude-opus-5" }] });
+		publishClaudeAccountStatus(ctx, { subscriptionLabel: () => label });
+		expect(statuses.get(CLAUDE_ACCOUNT_ACTIVE_STATUS_KEY)).toBe("company");
+		label = "personal";
+		publishClaudeAccountStatus(ctx, { subscriptionLabel: () => label });
+		expect(statuses.get(CLAUDE_ACCOUNT_ACTIVE_STATUS_KEY)).toBe("personal");
+		expect(statuses.has(CLAUDE_ACCOUNT_STATUS_KEY)).toBe(false);
 	});
 });
 

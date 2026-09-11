@@ -963,8 +963,10 @@ describe("executeAccountsCommand", () => {
 			},
 			onInput: () => "personal",
 		});
-		await executeAccountsCommand(extensionApi(), commandContext(ctx), withAgentDir(agentDir));
+		const refreshAccountStatus = vi.fn();
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), refreshAccountStatus });
 		expect(loadClaudeSubscriptions(withAgentDir(agentDir))).toEqual([{ provider: "anthropic", index: 2, label: "personal" }]);
+		expect(refreshAccountStatus).toHaveBeenCalledOnce();
 		const saved = JSON.parse(readFileSync(join(agentDir, "claude-accounts.json"), "utf8"));
 		expect(saved.subscriptions).toContainEqual({ provider: "openai", index: 4, label: "work" });
 	});

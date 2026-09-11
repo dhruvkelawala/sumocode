@@ -81,10 +81,10 @@ function createClient(command: string, args: readonly string[], env: NodeJS.Proc
 	return client;
 }
 
-async function waitForEvent(events: readonly AgentSessionEvent[], type: string, timeoutMs: number): Promise<AgentSessionEvent | undefined> {
+async function waitForEvent(events: readonly AgentSessionEvent[], type: string, timeoutMs: number, since = 0): Promise<AgentSessionEvent | undefined> {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
-		const match = events.find((event) => event.type === type);
+		const match = events.slice(since).find((event) => event.type === type);
 		if (match !== undefined) return match;
 		await new Promise((resolve) => setTimeout(resolve, 25));
 	}
@@ -158,9 +158,24 @@ describe("installed Pi worker contract", () => {
 		// still be one of the shipped literals.
 		for (const level of levels) expect(PINNED_THINKING_LEVELS).toContain(level);
 
-		// 0.85.1 acknowledges the clamped level with a void success and carries no
-		// effective-level payload; the get_state/event shapes above are authoritative.
-		const setter = responseData(await client.send({ type: "set_thinking_level", level: "off" }), "set_thinking_level");
-		expect(setter).toBeUndefined();
+		// 0.85.1 acknowledges the (possibly clamped) level with a void success and
+		// carries no effective-level payload, so the event and the next get_state are
+		// the authoritative reconciliation. When the active model exposes a second
+		// level, force the change and prove both agree; a single or empty capability
+		// list cannot produce an effective change without a provider credential.
+		const settable = levels.find((level) => level !== state.thinkingLevel);
+		if (settable !== undefined) {
+			const observedBefore = events.length;
+			expect(responseData(await client.send({ type: "set_thinking_level", level: settable }), "set_thinking_level")).toBeUndefined();
+			const changed = await waitForEvent(events, "thinking_level_changed", 5_000, observedBefore);
+			expect(changed).toBeDefined();
+			const changedLevel = changed?.type === "thinking_level_changed" ? changed.level : undefined;
+			expect(changedLevel).toBe(settable);
+			expect(PINNED_THINKING_LEVELS).toContain(changedLevel);
+			const changedState = responseData(await client.send({ type: "get_state" }), "get_state");
+			expect(changedState.thinkingLevel).toBe(settable);
+		} else {
+			expect(responseData(await client.send({ type: "set_thinking_level", level: "off" }), "set_thinking_level")).toBeUndefined();
+		}
 	}, 30_000);
 });

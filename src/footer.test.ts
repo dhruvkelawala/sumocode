@@ -66,7 +66,7 @@ type FooterFactory = (
 ) => FooterComponent;
 
 function installFooterHarness(options: {
-	resolveClaudeAccount?: (ctx: ExtensionContext) => { providerId: string; label: string; active: boolean } | undefined;
+	resolveClaudeAccount?: (ctx: ExtensionContext) => { label: string; active: boolean } | undefined;
 	subscriptionLabel?: (providerId: string) => string | undefined;
 } = {}) {
 	const handlers = new Map<string, Array<(event: { type: string }, ctx: ExtensionContext) => void>>();
@@ -386,7 +386,7 @@ describe("resolveGitBranch", () => {
 });
 
 describe("footer Claude account segment", () => {
-	const COMPANY = { providerId: "anthropic-2", label: "company", active: false } as const;
+	const COMPANY = { label: "company", active: false } as const;
 
 	it("renders the resolved account after thinking", () => {
 		const plain = withoutAnsi(formatFooterLine(snapshot({ claudeAccount: COMPANY }), 160));
@@ -394,7 +394,7 @@ describe("footer Claude account segment", () => {
 	});
 
 	it("labels the built-in account default", () => {
-		const plain = withoutAnsi(formatFooterLine(snapshot({ claudeAccount: { providerId: "anthropic", label: "default", active: true } }), 160));
+		const plain = withoutAnsi(formatFooterLine(snapshot({ claudeAccount: { label: "default", active: true } }), 160));
 		expect(plain).toContain("claude default");
 	});
 
@@ -409,7 +409,7 @@ describe("footer Claude account segment", () => {
 	});
 
 	it("keeps the segment inside its column budget for a wide-character label", () => {
-		const line = formatFooterLine(snapshot({ claudeAccount: { providerId: "anthropic-2", label: "会社アカウント", active: false } }), 160);
+		const line = formatFooterLine(snapshot({ claudeAccount: { label: "会社アカウント", active: false } }), 160);
 		const chip = /claude \S+/.exec(withoutAnsi(line))?.[0] ?? "";
 		expect(visibleWidth(chip)).toBeLessThanOrEqual(15);
 		expect(chip.endsWith("…")).toBe(true);
@@ -512,7 +512,7 @@ describe("installFooter Claude account resolution", () => {
 	});
 
 	it("paints the resolved account into the footer row", () => {
-		const harness = installFooterHarness({ resolveClaudeAccount: () => ({ providerId: "anthropic-2", label: "company", active: false }) });
+		const harness = installFooterHarness({ resolveClaudeAccount: () => ({ label: "company", active: false }) });
 		const ctx = footerCtx({ setFooter: harness.setFooter });
 		harness.fireSessionStart(ctx);
 		// SAFETY: the theme is unused by the render paths exercised here.

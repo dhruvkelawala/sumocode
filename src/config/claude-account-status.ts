@@ -94,6 +94,6 @@ export function resolveClaudeAccountStatus(inputs: ClaudeAccountStatusInputs): C
 }
 
 /** `claude company` — the footer segment, with the label clipped to its budget. */
-export function formatClaudeAccountChip(status: ClaudeAccountStatus): string {
+export function formatClaudeAccountChip(status: { readonly label: string }): string {
 	return `claude ${clipToGraphemes(status.label, MAX_LABEL_COLUMNS)}`;
 }

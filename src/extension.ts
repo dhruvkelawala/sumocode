@@ -8,7 +8,7 @@ import { installInputHints } from "./cathedral/input-hints.js";
 import { installAltscreen } from "./cathedral/altscreen.js";
 import { installCathedralEditor } from "./cathedral/cathedral-editor.js";
 import { installCompactionIndicator } from "./compaction-indicator.js";
-import { loadClaudeSubscriptions, registerAccountsCommand } from "./commands/accounts.js";
+import { registerAccountsCommand } from "./commands/accounts.js";
 import { registerSumoReloadCommand } from "./commands/reload.js";
 import { registerRolesCommand } from "./commands/roles.js";
 import { canonicalizeExtensionPath, type RealpathFn } from "./extension-entry-loader.js";
@@ -23,10 +23,10 @@ import {
 	resetSumocodeProcessInstallLatchForTests,
 	shouldInstallNativeTaskTool,
 	shouldNoopHelperSubprocess,
+	claudeAccountSubscriptionLabel,
 } from "./extension-core.js";
 import { installFastMode } from "./fast-mode.js";
 import { installFooter } from "./footer.js";
-import { claudeAccountProviderId } from "./config/claude-providers.js";
 import { installSumoInteractions } from "./interaction-registry.js";
 import { installSumoUiSurfaces } from "./interaction-ui-surfaces.js";
 import { installMemoryExtraction } from "./memory-extraction.js";
@@ -270,8 +270,7 @@ export default function sumocode(pi: ExtensionAPI): void {
 		// The accounts config owns the labels; the footer only displays them, so a
 		// rename lands in both surfaces. The chrome lowercases the label for the
 		// footer's voice, /accounts keeps the configured spelling.
-		subscriptionLabel: (providerId) =>
-			loadClaudeSubscriptions().find((entry) => claudeAccountProviderId(entry.index) === providerId)?.label,
+		subscriptionLabel: claudeAccountSubscriptionLabel,
 	});
 	installMemoryExtraction(pi);
 	installCathedralEditor(pi);

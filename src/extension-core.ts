@@ -7,7 +7,7 @@ import { installAnswerTool } from "./answer-tool.js";
 import { installBackgroundTasks, installTerminalTools } from "./background-tasks/index.js";
 import type { TerminalTaskManagerOptions } from "./background-tasks/task-manager.js";
 import { loadClaudeSubscriptions, registerAccountsCommand } from "./commands/accounts.js";
-import { installClaudeAccountStatus, publishClaudeAccountStatus } from "./claude-account-status-publication.js";
+import { installClaudeAccountStatus, loginRuntimeWithAccountRefresh, publishClaudeAccountStatus } from "./claude-account-status-publication.js";
 import { claudeAccountProviderId } from "./config/claude-providers.js";
 import { registerSumoReloadCommand } from "./commands/reload.js";
 import { registerRolesCommand } from "./commands/roles.js";
@@ -20,7 +20,7 @@ import { installQuestionTool } from "./question-tool.js";
 import { installSkillInlineExpansion } from "./skill-inline.js";
 import { installSubagents } from "./subagents/index.js";
 import { logDiagnostic } from "./sumo-tui/runtime/diagnostics.js";
-import { registerRpcLoginCommand } from "./sumo-tui/pi-compat/login-command.js";
+import { getRpcLoginRuntime, registerRpcLoginCommand } from "./sumo-tui/pi-compat/login-command.js";
 import { registerRpcTreeNavigationCommand } from "./sumo-tui/pi-compat/tree-navigation-command.js";
 import { installTaskModeAutoExit } from "./task-mode.js";
 
@@ -169,7 +169,11 @@ export function installRpcChildProfile(pi: ExtensionAPI): void {
 	// Pi's built-in /login exists only in InteractiveMode and is intentionally
 	// absent from RPC get_commands. Register the compatibility command in the
 	// child so the retained host can discover and dispatch it normally.
-	registerRpcLoginCommand(pi);
+	// `/login` is its own command with no agent turn behind it either, so the
+	// runtime seam repaints the chip as soon as a credential lands.
+	registerRpcLoginCommand(pi, {
+		getRuntime: (ctx) => loginRuntimeWithAccountRefresh(ctx, getRpcLoginRuntime(ctx), { subscriptionLabel: claudeAccountSubscriptionLabel }),
+	});
 	registerRpcTreeNavigationCommand(pi);
 	installMemoryExtraction(pi);
 	installFastMode(pi);

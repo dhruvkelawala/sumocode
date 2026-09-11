@@ -9,6 +9,7 @@ import {
 	CLAUDE_ACCOUNT_STATUS_KEY,
 	hasPublishedClaudeAccount,
 	installClaudeAccountStatus,
+	loginRuntimeWithAccountRefresh,
 	publishClaudeAccountStatus,
 	resolveSessionClaudeAccount,
 } from "./claude-account-status-publication.js";
@@ -119,6 +120,48 @@ describe("publishClaudeAccountStatus", () => {
 		publishClaudeAccountStatus(ctx, { subscriptionLabel: () => label });
 		expect(statuses.get(CLAUDE_ACCOUNT_ACTIVE_STATUS_KEY)).toBe("personal");
 		expect(statuses.has(CLAUDE_ACCOUNT_STATUS_KEY)).toBe(false);
+	});
+});
+
+// SAFETY: the double's login ignores the interaction; the wrapper only forwards it.
+const loginInteraction = { prompt: async () => "", notify: () => {} } as never;
+
+describe("loginRuntimeWithAccountRefresh", () => {
+	it("repaints after a resolved sign-in and delegates the other runtime methods", async () => {
+		agentDirWithClaudeEnabled();
+		const { ctx, statuses } = ctxWith({ provider: "anthropic-2", models: [{ provider: "anthropic-2", id: "claude-opus-5" }] });
+		const runtime = {
+			getAvailable: vi.fn(async () => []),
+			getProviders: vi.fn(() => []),
+			login: vi.fn(async () => ({ type: "oauth" })),
+		};
+		// SAFETY: the double implements every RpcLoginRuntime member the wrapper delegates to.
+		const wrapped = loginRuntimeWithAccountRefresh(ctx, runtime as never, { subscriptionLabel: () => "company" });
+		expect(statuses.size).toBe(0);
+
+		await wrapped.login("anthropic-2", "oauth", loginInteraction);
+		expect(statuses.get(CLAUDE_ACCOUNT_ACTIVE_STATUS_KEY)).toBe("company");
+		expect(runtime.login).toHaveBeenCalledTimes(1);
+
+		await wrapped.getAvailable();
+		expect(runtime.getAvailable).toHaveBeenCalledTimes(1);
+		expect(wrapped.getProviders()).toEqual([]);
+	});
+
+	it("leaves the chip alone when the sign-in rejects", async () => {
+		agentDirWithClaudeEnabled();
+		const { ctx, statuses } = ctxWith({ provider: "anthropic-2", models: [{ provider: "anthropic-2", id: "claude-opus-5" }] });
+		const runtime = {
+			getAvailable: vi.fn(async () => []),
+			getProviders: vi.fn(() => []),
+			login: vi.fn(async () => {
+				throw new Error("Login cancelled");
+			}),
+		};
+		// SAFETY: the double implements every RpcLoginRuntime member the wrapper delegates to.
+		const wrapped = loginRuntimeWithAccountRefresh(ctx, runtime as never, { subscriptionLabel: () => "company" });
+		await expect(wrapped.login("anthropic-2", "oauth", loginInteraction)).rejects.toThrow("Login cancelled");
+		expect(statuses.size).toBe(0);
 	});
 });
 

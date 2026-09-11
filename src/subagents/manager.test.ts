@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { SubagentManager, type SpawnSubagentTask } from "./manager.js";
+import type { CreateWorktreeOptions } from "../git/worktree.js";
 import { SUBAGENT_MAX_QUEUED, SUBAGENT_MAX_RUNNING, type SubagentEvent } from "./domain.js";
 import type { CompletionManifest, CompletionManifestEvidence } from "./manifest.js";
 import { CHILD_RETAINED_RESULT_MAX_BYTES, TRUNCATED_HEAD_MARKER } from "../child-protocol.js";
@@ -779,6 +780,42 @@ describe("SubagentManager", () => {
 		});
 		await manager.spawn({ prompt: "p", title: "api work", cwd: "/repo/packages/api", worktree: true });
 		expect(backendFactory).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/isolated/worktree/packages/api" }));
+	});
+
+	it("serializes concurrent worktree creation so both isolated spawns succeed", async () => {
+		let inFlight = 0;
+		let maxInFlight = 0;
+		const createWorktree = vi.fn(async (options: CreateWorktreeOptions) => {
+			inFlight += 1;
+			maxInFlight = Math.max(maxInFlight, inFlight);
+			try {
+				// Two overlapping `git worktree add` calls contend on the shared repo
+				// config lock, which failed two of six parallel isolated spawns.
+				if (inFlight > 1) return { ok: false as const, error: "git_failed" as const, message: "could not lock config file .git/config: File exists" };
+				// A macrotask gives the second spawn's (all-microtask) path time to reach
+				// createWorktree; without the gate it enters here and overlaps.
+				await new Promise((resolve) => setTimeout(resolve, 0));
+				return { ok: true as const, path: options.path ?? "/isolated/worktree", branch: options.branch ?? "sumo/task", baseRef: "abc123" };
+			} finally {
+				inFlight -= 1;
+			}
+		});
+		const manager = new SubagentManager(() => ({ events: () => undefined, interrupt: () => undefined }), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			createWorktree,
+			resolveWorktreeBaseRef: async () => "abc123",
+			buildCompletionManifest: fakeManifestBuilder,
+		});
+
+		const [first, second] = await Promise.all([
+			manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", worktree: true }),
+			manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", worktree: true }),
+		]);
+
+		expect(maxInFlight).toBe(1);
+		expect(createWorktree).toHaveBeenCalledTimes(2);
+		expect(first).toMatchObject({ status: "running" });
+		expect(second).toMatchObject({ status: "running" });
 	});
 
 	it("splits the first visible child beside the parent when its Herdr tab is known", async () => {

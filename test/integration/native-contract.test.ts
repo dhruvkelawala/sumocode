@@ -596,7 +596,9 @@ nativeDescribe("native executable contract", () => {
 			await tools.get("subagent_spawn")!.execute("visible-provenance", { prompt: "watch", name: "worker", visible: true }, undefined, undefined, context as never);
 			const visibleScript = readdirSync(root, { recursive: true, encoding: "utf8" }).find((path) => path.endsWith("run.sh"));
 			expect(visibleScript).toBeDefined();
-			expect(readFileSync(join(root, visibleScript!), "utf8")).toContain(`exec '${NATIVE_BIN}' 'task'`);
+			// The visible child must carry the parent-selected Pi through PI_BIN as well as
+			// launching the native binary, so a nested visible spawn keeps the same runtime.
+			expect(readFileSync(join(root, visibleScript!), "utf8")).toContain(`exec env 'PI_BIN=${piBinary}' '${NATIVE_BIN}' 'task'`);
 
 			// SAFETY: the compiled command definition and context expose the registered slash-command handler seam.
 			await commands.get("sumo:worktree")!.handler("new provenance", context as never);

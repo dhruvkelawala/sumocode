@@ -671,7 +671,7 @@ export const createPiChildSpawner = (
 }): SpawnedChild => {
 	const config = resolveTaskConfig({
 		// SAFETY: options.thinking comes from the typed SpawnSubagentTask.thinking field.
-		item: { prompt: options.prompt, model: options.model, thinking: options.thinking as TaskThinking | undefined, fork: false },
+		item: { model: options.model, thinking: options.thinking as TaskThinking | undefined },
 		defaultModel: undefined,
 		defaultThinking: "inherit",
 		// SAFETY: inherited thinking strings are validated by resolveTaskConfig below.

@@ -5,14 +5,6 @@ export const VALID_THINKING_OPTIONS = ["inherit", ...VALID_THINKING_LEVELS] as c
 export type ThinkingLevel = (typeof VALID_THINKING_LEVELS)[number];
 export type TaskThinking = (typeof VALID_THINKING_OPTIONS)[number];
 
-export type TaskWorkItem = {
-	prompt: string;
-	skill?: string;
-	model?: string;
-	thinking?: TaskThinking;
-	fork: boolean;
-};
-
 export type ProviderModel = {
 	provider: string;
 	modelId: string;

@@ -321,13 +321,20 @@ export class RetainedShellRenderer {
 
 		if (centerWithSplash && this.splash) {
 			if (this.splash.bottomSpacer.parent === this.splash.root) this.splash.root.removeChild(this.splash.bottomSpacer);
-			// Splash mode never shows the working indicator (no agent activity yet),
-			// so the above-editor leaf stays detached and both indicator spacers are
+			// Splash mode still mounts the above-editor leaf so splash-state host
+			// feedback (a sticky failure from an unknown command or login/config
+			// error) has a surface above the input frame. The working indicator
+			// stays hidden: `RpcAboveEditorComponent` skips it while inactive, and
+			// the leaf measures to zero rows when nothing is live, so the
+			// no-notice splash geometry is unchanged. Both indicator spacers are
 			// repurposed: belowIndicatorSpacer provides breathing above the editor,
 			// aboveIndicatorSpacer provides the gap between editor and hint row.
 			// Restore both to SHELL_BLANK_ROW because active-layout may have zeroed one.
 			this.aboveIndicatorSpacer.height = SHELL_BLANK_ROW;
 			this.belowIndicatorSpacer.height = SHELL_BLANK_ROW;
+			// Above-editor block sits before the below-editor spacer so a live
+			// notice keeps the active layout's gap above the editor frame.
+			if (this.hasAboveEditorContainer) this.splash.root.addChild(this.aboveEditorLeaf);
 			this.splash.root.addChild(this.belowIndicatorSpacer);
 			this.splash.root.addChild(this.editorRow);
 			this.splash.root.addChild(this.aboveIndicatorSpacer);

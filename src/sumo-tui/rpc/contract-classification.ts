@@ -1,4 +1,5 @@
-import type { AgentSessionEvent, RpcCommand, RpcExtensionUIRequest, RpcSessionState } from "@earendil-works/pi-coding-agent";
+import type { AgentSessionEvent, RpcCommand, RpcExtensionUIRequest } from "@earendil-works/pi-coding-agent";
+import { RPC_THINKING_LEVELS } from "./thinking-level.js";
 
 /**
  * Compile-exhaustive disposition matrix for the pinned Pi RPC release
@@ -35,7 +36,7 @@ type ExtensionUiDisposition = { readonly kind: "mapped"; readonly owner: string;
  * subset, and the integration lane uses it for the runtime containment check on
  * values the installed worker reports.
  */
-export const PINNED_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const satisfies readonly RpcSessionState["thinkingLevel"][];
+export const PINNED_THINKING_LEVELS = RPC_THINKING_LEVELS;
 
 export const RPC_COMMAND_DISPOSITIONS = {
 	abort: { kind: "implemented", owner: "controls.ts RpcHostControls.abort" },
@@ -75,7 +76,7 @@ export const RPC_COMMAND_DISPOSITIONS = {
 
 export const AGENT_EVENT_DISPOSITIONS = {
 	agent_end: { kind: "projected", owner: "state.ts RpcHostStateStore.handleAgentEvent", note: "run boundary only; agent_settled is the idle boundary" },
-	agent_settled: { kind: "scheduler-only", owner: "prompt-scheduler.ts RpcPromptScheduler.handleAgentEvent", note: "ordinary idle boundary" },
+	agent_settled: { kind: "projected", owner: "state.ts RpcHostStateStore.handleAgentEvent", note: "ordinary idle boundary; prompt scheduler also drains here" },
 	agent_start: { kind: "projected", owner: "state.ts RpcHostStateStore.handleAgentEvent", note: "also opens the transcript run and scheduler busy window" },
 	auto_retry_end: { kind: "downstream-plan-owned", owner: "Plan 089 (#376)", reason: "retry lifecycle projection" },
 	auto_retry_start: { kind: "downstream-plan-owned", owner: "Plan 089 (#376)", reason: "retry lifecycle projection" },

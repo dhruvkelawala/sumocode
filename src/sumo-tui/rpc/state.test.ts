@@ -58,6 +58,9 @@ describe("RpcHostStateStore", () => {
 			modelLabel: "openai/gpt-5.5",
 			hydrated: true,
 			thinkingLevel: "high",
+			steeringMode: "all",
+			followUpMode: "one-at-a-time",
+			autoCompactionEnabled: true,
 			isStreaming: false,
 			isCompacting: false,
 			messageCount: 2,
@@ -89,6 +92,7 @@ describe("RpcHostStateStore", () => {
 		});
 		expect(store.getSnapshot().hydrated).toBeUndefined();
 		expect(store.applyModelChange({ provider: "anthropic", id: "claude-opus-4-8" }).hydrated).toBeUndefined();
+		expect(new RpcHostStateStore().seedChrome({ thinkingLevel: "impossible" }).thinkingLevel).toBeUndefined();
 
 		expect(store.hydrateFromRpcState(asRpcSessionState({
 			thinkingLevel: "medium",
@@ -141,18 +145,32 @@ describe("RpcHostStateStore", () => {
 		expect(state.sessionFile).toBeUndefined();
 	});
 
-	it("tracks working and compaction lifecycle events", () => {
+	it("stays active across run boundaries until Pi reports agent_settled", () => {
 		const store = new RpcHostStateStore();
+		store.hydrateFromRpcState(asRpcSessionState({
+			thinkingLevel: "medium",
+			isStreaming: false,
+			isCompacting: false,
+			steeringMode: "all",
+			followUpMode: "one-at-a-time",
+			sessionId: "session-1",
+			autoCompactionEnabled: true,
+			messageCount: 8,
+			pendingMessageCount: 0,
+		}));
 
 		expect(store.handleAgentEvent({ type: "agent_start" })).toMatchObject({ isStreaming: true });
-		expect(store.handleAgentEvent({ type: "compaction_start", reason: "manual" })).toMatchObject({ isCompacting: true, compactionReason: "manual" });
-		expect(store.handleAgentEvent({ type: "compaction_end", reason: "manual", aborted: false, willRetry: false, result: undefined })).toMatchObject({ isCompacting: false });
-		expect(store.getSnapshot().compactionReason).toBeUndefined();
-		expect(store.handleAgentEvent({ type: "agent_end", messages: [{ role: "user", content: "done" }], willRetry: false })).toMatchObject({
-			isStreaming: false,
-			messageCount: 1,
+		expect(store.handleAgentEvent({ type: "compaction_start", reason: "manual" })).toMatchObject({ isStreaming: true, isCompacting: true });
+		expect(store.handleAgentEvent({ type: "compaction_end", reason: "manual", aborted: false, willRetry: false, result: undefined })).toMatchObject({ isStreaming: true, isCompacting: false });
+		expect(store.handleAgentEvent({ type: "agent_end", messages: [{ role: "assistant", content: "run suffix" }], willRetry: true })).toMatchObject({
+			isStreaming: true,
+			messageCount: 8,
 			hasMessages: true,
 		});
+		expect(store.handleAgentEvent({ type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 10, errorMessage: "retry" })).toMatchObject({ isStreaming: true });
+		expect(store.handleAgentEvent({ type: "agent_start" })).toMatchObject({ isStreaming: true });
+		expect(store.handleAgentEvent({ type: "agent_end", messages: [], willRetry: false })).toMatchObject({ isStreaming: true, messageCount: 8 });
+		expect(store.handleAgentEvent({ type: "agent_settled" })).toMatchObject({ isStreaming: false, messageCount: 8, lastEventType: "agent_settled" });
 	});
 
 	it("carries manual and threshold compaction reasons from compaction_start events", () => {
@@ -231,10 +249,16 @@ describe("RpcHostStateStore", () => {
 		expect(empty.pendingMessageCount).toBe(0);
 	});
 
-	it("ignores malformed queue_update payloads without crashing", () => {
+	it("preserves prior state for malformed projected events", () => {
 		const store = new RpcHostStateStore();
-		const state = store.handleAgentEvent({ type: "queue_update", steering: "nope", followUp: [42, "ok"] });
-		expect(state.queuedMessages).toEqual(["ok"]);
+		store.seedChrome({ thinkingLevel: "high" });
+		store.handleAgentEvent({ type: "queue_update", steering: ["keep"], followUp: [] });
+
+		const malformedQueue = store.handleAgentEvent({ type: "queue_update", steering: "nope", followUp: [42, "drop"] });
+		expect(malformedQueue).toMatchObject({ queuedMessages: ["keep"], thinkingLevel: "high", lastEventType: "queue_update" });
+
+		const malformedThinking = store.handleAgentEvent({ type: "thinking_level_changed", level: "impossible" });
+		expect(malformedThinking).toMatchObject({ thinkingLevel: "high", lastEventType: "thinking_level_changed" });
 	});
 
 	it("composes host-owned and Pi-owned queue snapshots without hydration erasing host messages", () => {

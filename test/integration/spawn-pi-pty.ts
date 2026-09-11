@@ -522,9 +522,21 @@ export async function waitForScreenText(
 	pattern: string | RegExp,
 	timeoutMs = 5_000,
 ): Promise<ScreenSnapshot> {
+	const matches = isStringPattern(pattern)
+		? (text: string): boolean => text.includes(pattern)
+		: statelessMatcher(pattern);
 	return waitForScreen(
 		pty,
-		({ text }) => (isStringPattern(pattern) ? text.includes(pattern) : pattern.test(text)),
+		({ text }) => matches(text),
 		{ cols: pty.cols, rows: pty.rows, timeoutMs },
 	);
+}
+
+/**
+ * A `/g` or `/y` pattern keeps `lastIndex` between calls, so two observations of
+ * the same screen would not both match; match with a stateless copy instead.
+ */
+function statelessMatcher(pattern: RegExp): (text: string) => boolean {
+	const stateless = new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, ""));
+	return (text) => stateless.test(text);
 }

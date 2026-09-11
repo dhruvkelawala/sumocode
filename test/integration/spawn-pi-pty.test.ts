@@ -260,6 +260,20 @@ describe("spawnPiPty agent state isolation", () => {
 });
 
 describe("waitForScreenText", () => {
+	it("resolves a global pattern instead of stalling on its lastIndex", async () => {
+		// A /g pattern advances `lastIndex` on each `test`, so without a stateless
+		// copy the second observation of the same screen would never match.
+		const pty = {
+			cols: 20,
+			rows: 2,
+			getOutput: () => "\x1b[1;1Hhello",
+			captureEvidence: async () => "synthetic evidence",
+		};
+
+		const screen = await waitForScreenText(pty, /hello/g, 1_000);
+		expect(screen.text).toContain("hello");
+	});
+
 	it("matches rendered text a repaint split across frames, where the raw byte stream does not", async () => {
 		// The retained renderer may flush "hel", move the cursor and emit SGR for
 		// the next cell, then flush "lo": the raw stream never carries the literal

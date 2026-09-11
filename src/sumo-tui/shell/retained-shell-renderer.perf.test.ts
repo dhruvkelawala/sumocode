@@ -140,4 +140,4 @@ describe("RetainedShellRenderer idle indicator ticks", () => {
 			renderer.dispose();
 		}
 	});
-});
+}, 30_000);

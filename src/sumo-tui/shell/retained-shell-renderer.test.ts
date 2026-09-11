@@ -575,13 +575,13 @@ describe("RetainedShellRenderer", () => {
 				expect(fallbackGuards).toEqual(["no_previous_frame", "viewport_mismatch", "selection_mismatch"]);
 
 				const narrow = events.filter((entry) => entry.event === "owned_shell_repaint_narrow").at(-1);
-				expect(narrow).toMatchObject({ leaf: "aboveEditor", patchCount: 1 });
-				expect(typeof narrow.repaintMs).toBe("number");
-				expect(typeof narrow.segmentationCalls).toBe("number");
+				expect(narrow).toMatchObject({ leaf: "aboveEditor", patchCount: 1, overlayCount: 0 });
+				expect(narrow.repaintMs).toBeGreaterThanOrEqual(0);
+				expect(narrow.segmentationCalls).toBeGreaterThanOrEqual(1);
 
 				const full = events.filter((entry) => entry.event === "owned_shell_render").at(-1);
-				expect(typeof full.renderMs).toBe("number");
-				expect(typeof full.segmentationCalls).toBe("number");
+				expect(full.renderMs).toBeGreaterThanOrEqual(0);
+				expect(full.segmentationCalls).toBeGreaterThanOrEqual(1);
 			} finally {
 				if (previousDiagFile === undefined) delete process.env.SUMO_TUI_DIAG_FILE;
 				else process.env.SUMO_TUI_DIAG_FILE = previousDiagFile;

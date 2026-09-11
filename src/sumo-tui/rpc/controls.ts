@@ -1,8 +1,9 @@
-import type { RpcCommand, RpcResponse, RpcSessionState } from "@earendil-works/pi-coding-agent";
+import type { RpcCommand, RpcResponse } from "@earendil-works/pi-coding-agent";
 import { encodeRpcTreeNavigationPayload, type RpcTreeNavigationOutcome, type RpcTreeNavigationOutcomeBroker, type RpcTreeNavigationRequest } from "../pi-compat/tree-navigation-command.js";
 import { responseData, type RpcResponseData } from "./response.js";
 import { filterToEnabled, readEnabledModelPatterns } from "../../config/enabled-models.js";
 import { RpcHostStateStore, type RpcHostChromeState } from "./state.js";
+import { isRpcThinkingLevel, type RpcThinkingLevel } from "./thinking-level.js";
 
 export interface RpcCommandClient {
 	send(command: RpcCommand, timeoutMs?: number): Promise<RpcResponse>;
@@ -14,7 +15,7 @@ export interface RpcHostControlsOptions {
 }
 
 export type RpcAvailableModel = RpcResponseData<"get_available_models">["models"][number];
-export type RpcThinkingLevel = RpcSessionState["thinkingLevel"];
+export type { RpcThinkingLevel } from "./thinking-level.js";
 export type RpcAvailableThinkingLevels = RpcResponseData<"get_available_thinking_levels">["levels"];
 export type RpcSlashCommand = RpcResponseData<"get_commands">["commands"][number];
 export type RpcForkMessage = RpcResponseData<"get_fork_messages">["messages"][number];
@@ -108,14 +109,9 @@ export class RpcHostControls {
 		}
 	}
 
-	// set_model/cycle_model/cycle_thinking_level's own responses already carry
-	// the resulting model/level inline (see rpc-types.d.ts) -- these apply
-	// that payload straight to the state store instead of following up with a
-	// second get_state round-trip, halving the RPC latency the footer/chrome
-	// waits on before it can show the change. set_thinking_level's response
-	// has no data at all, but on success the level we asked for IS the
-	// result, so it's applied directly with no round-trip beyond the command
-	// itself.
+	// set_model/cycle_model/cycle_thinking_level return their effective values.
+	// set_thinking_level is the exception: its void success can hide clamping, so
+	// that path must read back get_state before publishing authority.
 
 	public async setModel(provider: string, modelId: string): Promise<RpcHostChromeState> {
 		const optimisticState = this.stateStore.applyModelChange({ provider, id: modelId });
@@ -143,22 +139,26 @@ export class RpcHostControls {
 		this.options.onOptimisticChange?.(optimisticState);
 		try {
 			responseData(await this.client.send({ type: "set_thinking_level", level }), "set_thinking_level");
-			return this.stateStore.getSnapshot();
 		} catch (error) {
 			const rolledBackState = await this.refreshState();
 			this.options.onOptimisticChange?.(rolledBackState);
 			throw error;
 		}
+		return await this.refreshState();
 	}
 
 	public async cycleThinkingLevel(): Promise<RpcHostChromeState> {
 		const data = responseData(await this.client.send({ type: "cycle_thinking_level" }), "cycle_thinking_level");
-		if (!data) return this.stateStore.getSnapshot();
+		if (data === null) return this.stateStore.getSnapshot();
+		if (!data || !isRpcThinkingLevel(data.level)) throw new Error("cycle_thinking_level failed: invalid data.level");
 		return this.stateStore.applyThinkingLevel(data.level);
 	}
 
 	public async getAvailableThinkingLevels(): Promise<RpcAvailableThinkingLevels> {
 		const data = responseData(await this.client.send({ type: "get_available_thinking_levels" }), "get_available_thinking_levels");
+		if (!data || !Array.isArray(data.levels) || !data.levels.every(isRpcThinkingLevel)) {
+			throw new Error("get_available_thinking_levels failed: invalid data.levels");
+		}
 		return data.levels;
 	}
 

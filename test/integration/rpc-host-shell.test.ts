@@ -251,7 +251,7 @@ function respond(command, data) { write({ type: "response", id: command.id, comm
 readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const command = JSON.parse(line);
   if (command.type === "get_state") {
-    respond(command, { model: { provider: "openai", id: "gpt-5", name: "GPT-5" }, thinkingLevel: "medium", isStreaming: false, isCompacting: false, sessionId: "reload-session", sessionName: "Reload Session", messageCount: messages.length, pendingMessageCount: 0 });
+    respond(command, { model: { provider: "openai", id: "gpt-5", name: "GPT-5" }, thinkingLevel: "medium", isStreaming: false, isCompacting: false, steeringMode: "all", followUpMode: "all", sessionId: "reload-session", sessionName: "Reload Session", autoCompactionEnabled: true, messageCount: messages.length, pendingMessageCount: 0 });
     return;
   }
   if (command.type === "get_messages") {

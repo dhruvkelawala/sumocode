@@ -616,6 +616,31 @@ describe("RpcHostActions", () => {
 		expect(notifications).toEqual([]);
 	});
 
+	it("fails closed when Pi reports no thinking capabilities", async () => {
+		const { actions, controls, inlineSelectors, notifications } = setup();
+		controls.thinkingLevels = [];
+
+		await expect(actions.handleSubmittedText("/thinking")).resolves.toBe(true);
+		await expect(actions.handleSubmittedText("/thinking high")).resolves.toBe(true);
+
+		expect(inlineSelectors.getActiveKind()).toBeUndefined();
+		expect(controls.calls).toEqual(["getAvailableThinkingLevels", "getAvailableThinkingLevels"]);
+		expect(notifications).toEqual([
+			{ message: "no thinking levels available", level: "warning" },
+			{ message: "no thinking levels available", level: "warning" },
+		]);
+	});
+
+	it("accepts off as a model's only thinking capability", async () => {
+		const { actions, controls, notifications } = setup();
+		controls.thinkingLevels = ["off"];
+
+		await expect(actions.handleSubmittedText("/thinking off")).resolves.toBe(true);
+
+		expect(controls.calls).toEqual(["getAvailableThinkingLevels", "setThinking:off"]);
+		expect(notifications).toEqual([]);
+	});
+
 	it("validates explicit /thinking values against Pi's available thinking levels", async () => {
 		const { actions, controls, notifications } = setup();
 		controls.thinkingLevels = ["off", "minimal", "low", "medium", "high"];

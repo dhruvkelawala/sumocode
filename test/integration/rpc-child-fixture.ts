@@ -131,7 +131,7 @@ function finishPrompt(command, assistantText) {
 		...messages,
 		{ id: "fixture-assistant-" + messages.length, role: "assistant", content: assistantText }
 	];
-	write({ type: "agent_end", messages, willRetry: false });
+	write({ type: "agent_end", messages: messages.slice(-2), willRetry: false });
 	setTimeout(() => write({ type: "agent_settled" }), settleDelayMs);
 }
 
@@ -155,7 +155,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 				write({ type: "message_update", message: { id: "initial-race-draft", role: "assistant", content: "initial race draft" } });
 				messages = [{ id: "initial-race-complete", role: "assistant", content: "initial race completed" }];
 				isStreaming = false;
-				write({ type: "agent_end", messages, willRetry: false });
+				write({ type: "agent_end", messages: [...messages], willRetry: false });
 				write({ type: "agent_settled" });
 			};
 			if (initialHydrationDelayMs > 0) setTimeout(finishInitialHydration, initialHydrationDelayMs);
@@ -169,7 +169,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 			setTimeout(() => {
 				messages = [{ id: "session-race-complete", role: "assistant", content: "session race completed" }];
 				isStreaming = false;
-				write({ type: "agent_end", messages, willRetry: false });
+				write({ type: "agent_end", messages: [...messages], willRetry: false });
 			}, 10);
 			setTimeout(() => write({ type: "agent_settled" }), 15);
 			setTimeout(() => write(response(command, { messages: hydrationSnapshot })), 40);
@@ -207,7 +207,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		isCompacting = false;
 		write({ type: "session_info_changed", name: sessionName });
 		if (sessionHydrationRace) sessionHydrationRacePending = true;
-		else write({ type: "agent_end", messages, willRetry: false });
+		else write({ type: "agent_end", messages: [], willRetry: false });
 		write(response(command, { cancelled: false }));
 		return;
 	}
@@ -223,7 +223,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		isStreaming = false;
 		isCompacting = false;
 		write({ type: "session_info_changed", name: sessionName });
-		write({ type: "agent_end", messages, willRetry: false });
+		write({ type: "agent_end", messages: [], willRetry: false });
 		write(response(command, { cancelled: false }));
 		return;
 	}
@@ -294,7 +294,8 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 			finishPrompt(prompt, "aborted by fixture");
 		} else {
 			isStreaming = false;
-			write({ type: "agent_end", messages, willRetry: false });
+			write({ type: "agent_end", messages: [], willRetry: false });
+			write({ type: "agent_settled" });
 		}
 		return;
 	}

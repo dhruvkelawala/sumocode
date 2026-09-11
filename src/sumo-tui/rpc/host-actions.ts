@@ -143,14 +143,6 @@ export interface RpcHostActionsOptions {
 	readonly persistTheme?: (name: string) => { success: boolean; error?: string };
 }
 
-const FALLBACK_THINKING_LEVELS: readonly RpcThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-
-function isRpcThinkingLevel(value: string): value is RpcThinkingLevel {
-	// SAFETY: FALLBACK_THINKING_LEVELS only holds RpcThinkingLevel literals,
-	// so widening the array to readonly string[] loses nothing.
-	return (FALLBACK_THINKING_LEVELS as readonly string[]).includes(value);
-}
-
 export const RPC_HOST_SLASH_COMMANDS: readonly RpcHostSlashCommand[] = Object.freeze([
 	{ name: "settings", description: "Open RPC settings" },
 	{ name: "login", description: "Configure provider authentication" },
@@ -827,7 +819,11 @@ export class RpcHostActions {
 			return;
 		}
 		const currentLevel = this.stateStore.getSnapshot().thinkingLevel;
-		const levels = await this.availableThinkingLevels();
+		const levels = await this.controls.getAvailableThinkingLevels();
+		if (levels.length === 0) {
+			notify(this.notifications, "no thinking levels available", "warning");
+			return;
+		}
 		const items: InlineSelectorItem[] = levels.map((level) => ({
 			value: level,
 			label: level,
@@ -835,7 +831,7 @@ export class RpcHostActions {
 		}));
 		const selected = await this.inlineSelectors.select("Set thinking level", items);
 		if (selected === undefined) return;
-		await this.setThinkingFromText(selected);
+		await this.setThinkingFromText(selected, levels);
 	}
 
 	public async openThemeSelector(): Promise<void> {
@@ -1415,15 +1411,15 @@ export class RpcHostActions {
 		this.onStateChange(state);
 	}
 
-	private async setThinkingFromText(value: string): Promise<void> {
-		const levelText = value.trim().toLowerCase();
-		if (!isRpcThinkingLevel(levelText)) {
-			notify(this.notifications, `unknown thinking level: ${value}`, "warning", { sticky: true });
+	private async setThinkingFromText(value: string, knownLevels?: readonly RpcThinkingLevel[]): Promise<void> {
+		const levels = knownLevels ?? await this.controls.getAvailableThinkingLevels();
+		if (levels.length === 0) {
+			notify(this.notifications, "no thinking levels available", "warning");
 			return;
 		}
-		const level = levelText;
-		const levels = await this.availableThinkingLevels();
-		if (!levels.includes(level)) {
+		const normalized = value.trim().toLowerCase();
+		const level = levels.find((candidate) => candidate === normalized);
+		if (!level) {
 			notify(this.notifications, `unknown thinking level: ${value}`, "warning", { sticky: true });
 			return;
 		}
@@ -1431,10 +1427,6 @@ export class RpcHostActions {
 		this.onStateChange(state);
 	}
 
-	private async availableThinkingLevels(): Promise<readonly RpcThinkingLevel[]> {
-		const levels = await this.controls.getAvailableThinkingLevels();
-		return levels.length === 0 ? FALLBACK_THINKING_LEVELS : levels;
-	}
 
 	private setThemeFromText(value: string): void {
 		const result = setActiveTheme(value);

@@ -40,6 +40,7 @@ import { SelectionController } from "../input/selection.js";
 import type { HostNotice, NotificationCenter } from "../widgets/notification.js";
 import { renderHostNotice } from "../widgets/notification.js";
 import type { RpcHostChromeState } from "./state.js";
+import { isRpcThinkingLevel } from "./thinking-level.js";
 
 /**
  * The slice of `NotificationCenter` the shell renders from: the extension-UI
@@ -115,8 +116,6 @@ interface TextReadableComponent extends Component {
 
 // oxlint-disable-next-line no-control-regex -- intentional ESC byte match for ANSI CSI/OSC/APC stripping
 const ANSI_PATTERN = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\)|_[^\u0007]*(?:\u0007|\u001b\\))/g;
-// Canonical pi thinking levels; keep in sync with @earendil-works/pi-ai.
-const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const SPLASH_INPUT_FRAME_WIDTH = 60;
 const SIMPLE_INPUT_FRAME_ROWS = 3;
 const VISUAL_SIDEBAR_CONTEXT_TOKENS = 42_000;
@@ -614,14 +613,8 @@ function isVisualHarness(env: NodeJS.ProcessEnv = process.env): boolean {
 	return env.SUMOCODE_HARNESS === "1";
 }
 
-function isThinkingLevelValue(value: string): value is ThinkingLevel {
-	// SAFETY: THINKING_LEVELS only holds ThinkingLevel literals, so widening
-	// the set to a plain string set loses nothing.
-	return (THINKING_LEVELS as ReadonlySet<string>).has(value);
-}
-
 function normalizeThinkingLevel(value: string | undefined): ThinkingLevel {
-	return value !== undefined && isThinkingLevelValue(value) ? value : "medium";
+	return isRpcThinkingLevel(value) ? value : "medium";
 }
 
 function sumoState(state: RpcHostChromeState): SumoCodeState {

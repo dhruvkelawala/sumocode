@@ -6,6 +6,7 @@ import {
 	readPrivateJson,
 	withPrivateFileLock,
 } from "../../activity/persistence.js";
+import { isRpcThinkingLevel, type RpcThinkingLevel } from "./thinking-level.js";
 
 const CACHE_VERSION = 1 as const;
 const MAX_CACHED_CWDS = 20;
@@ -13,7 +14,7 @@ const MAX_CACHE_BYTES = 64 * 1024;
 
 export interface CachedChrome {
 	modelLabel?: string;
-	thinkingLevel?: string;
+	thinkingLevel?: RpcThinkingLevel;
 }
 
 interface CachedChromeEntry extends CachedChrome {
@@ -63,7 +64,7 @@ function readCacheFile(options: ChromeCacheOptions): ChromeCacheFile | undefined
 			if (!isJsonObject(value) || !isNumber(value["savedAt"]) || !Number.isFinite(value["savedAt"])) continue;
 			const entry: CachedChromeEntry = { savedAt: value["savedAt"] };
 			if (isString(value["modelLabel"])) entry.modelLabel = value["modelLabel"];
-			if (isString(value["thinkingLevel"])) entry.thinkingLevel = value["thinkingLevel"];
+			if (isRpcThinkingLevel(value["thinkingLevel"])) entry.thinkingLevel = value["thinkingLevel"];
 			byCwd[cwd] = entry;
 		}
 		return { version: CACHE_VERSION, byCwd };

@@ -268,7 +268,8 @@ export default function sumocode(pi: ExtensionAPI): void {
 	requestFooterRender = installFooter(pi, {
 		fastModeState,
 		// The accounts config owns the labels; the footer only displays them, so a
-		// renamed account shows the same name in /accounts and in the chrome.
+		// rename lands in both surfaces. The chrome lowercases the label for the
+		// footer's voice, /accounts keeps the configured spelling.
 		subscriptionLabel: (providerId) =>
 			loadClaudeSubscriptions().find((entry) => claudeAccountProviderId(entry.index) === providerId)?.label,
 	});

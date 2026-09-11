@@ -57,6 +57,11 @@ function accountRank(providerId: string): number {
 	return index ? Number(index) : Number.MAX_SAFE_INTEGER;
 }
 
+/** The account a Claude model with no explicit provider resolves to. */
+function firstResolvedAccount(models: readonly Model<Api>[]): string {
+	return [...models].sort((a, b) => accountRank(a.provider) - accountRank(b.provider))[0].provider;
+}
+
 export function resolveClaudeAccountStatus(inputs: ClaudeAccountStatusInputs): ClaudeAccountStatus | undefined {
 	const claudeModels = inputs.models.filter((model) => isClaudeProvider(model.provider));
 	if (claudeModels.length === 0) return undefined;
@@ -65,7 +70,7 @@ export function resolveClaudeAccountStatus(inputs: ClaudeAccountStatusInputs): C
 	const liveProvider = inputs.currentProvider !== undefined && isClaudeProvider(inputs.currentProvider) && claudeModels.some((model) => model.provider === inputs.currentProvider)
 		? inputs.currentProvider
 		: undefined;
-	const providerId = liveProvider ?? [...claudeModels].sort((a, b) => accountRank(a.provider) - accountRank(b.provider))[0].provider;
+	const providerId = liveProvider ?? firstResolvedAccount(claudeModels);
 	return {
 		providerId,
 		label: claudeAccountLabel(providerId, inputs.subscriptionLabel?.(providerId)),

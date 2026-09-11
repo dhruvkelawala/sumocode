@@ -578,7 +578,8 @@ describe("spawnPiChild", () => {
 		emitJson(proc, { type: "message_end", message: { role: "assistant", content: "after replacement" } });
 		try {
 			child.interrupt();
-			expect(proc.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+			// No pid means no owned child: nothing may be signalled at all.
+			expect(proc.kill).not.toHaveBeenCalled();
 		} finally {
 			proc.emit("close", null, "SIGTERM");
 		}
@@ -1266,6 +1267,64 @@ describe("spawnPiChild", () => {
 			proc.emit("close", null, "SIGKILL");
 			expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "interrupted", partialText: undefined } });
 			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			killSpy.mockRestore();
+			vi.useRealTimers();
+		}
+	});
+
+	it("never signals a spawn-failed child when abort races the error event", () => {
+		vi.useFakeTimers();
+		const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+		try {
+			const proc = new FakeProcess();
+			proc.pid = undefined;
+			const controller = new AbortController();
+			// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+			const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {}, signal: controller.signal });
+			// SAFETY: this backend exposes the callback event form collected by the test.
+			const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+
+			controller.abort();
+			proc.emit("error", new Error("spawn ENOENT"));
+			// The handle owns no pid: no group or single-pid signal may be attempted
+			// and no escalation timer may be scheduled at all.
+			expect(killSpy).not.toHaveBeenCalled();
+			expect(proc.kill).not.toHaveBeenCalled();
+			expect(vi.getTimerCount()).toBe(0);
+			expect(events.filter((event) => event.kind === "run-settled")).toEqual([]);
+
+			proc.emit("close", -2);
+			expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "interrupted", partialText: undefined } });
+		} finally {
+			killSpy.mockRestore();
+			vi.useRealTimers();
+		}
+	});
+
+	it.each([0, -1])("never signals a spawn-failed child with pid %i when abort races the error event", (pid) => {
+		vi.useFakeTimers();
+		const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+		try {
+			const proc = new FakeProcess();
+			proc.pid = pid;
+			const controller = new AbortController();
+			// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+			const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {}, signal: controller.signal });
+			// SAFETY: this backend exposes the callback event form collected by the test.
+			const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+
+			controller.abort();
+			proc.emit("error", new Error("spawn ENOENT"));
+			// A zero or negative pid is not an owned child: no group or single-pid
+			// signal may be attempted and no escalation timer may be scheduled.
+			expect(killSpy).not.toHaveBeenCalled();
+			expect(proc.kill).not.toHaveBeenCalled();
+			expect(vi.getTimerCount()).toBe(0);
+			expect(events.filter((event) => event.kind === "run-settled")).toEqual([]);
+
+			proc.emit("close", -2);
+			expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "interrupted", partialText: undefined } });
 		} finally {
 			killSpy.mockRestore();
 			vi.useRealTimers();

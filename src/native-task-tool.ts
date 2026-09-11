@@ -720,7 +720,10 @@ const attachAbortSignal = (
 	};
 	proc.once("close", onClose);
 	const terminate = () => {
-		if (closed || forceKill) return;
+		// A handle without a positive pid owns no child (spawn failed, has not
+		// completed, or carries a zero/negative pid that process.kill would
+		// reinterpret as a group), so there is nothing to signal or escalate against.
+		if (closed || forceKill || typeof proc.pid !== "number" || proc.pid <= 0) return;
 		proc.kill("SIGTERM");
 		forceKill = setTimeout(() => {
 			if (!closed) proc.kill("SIGKILL");

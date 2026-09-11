@@ -62,6 +62,9 @@ class FakeTaskProcess extends EventEmitter {
 	public readonly stdin = { on: vi.fn(), write: vi.fn(), end: vi.fn() };
 	public readonly stdout = new EventEmitter();
 	public readonly stderr = new EventEmitter();
+	// A successfully spawned child always carries a pid; pid-less doubles model
+	// the spawn-failure/pre-spawn handle.
+	public pid: number | undefined = 4242;
 	public killed = false;
 	public readonly kill = vi.fn(() => {
 		this.killed = true;
@@ -1063,6 +1066,74 @@ describe("native task tool", () => {
 			expect(result.isError).toBe(true);
 			expect(result.details?.results?.[0]?.stopReason).toBe("aborted");
 			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("never signals a spawn-failed child when abort races the error event", async () => {
+		vi.useFakeTimers();
+		try {
+			const proc = new FakeTaskProcess();
+			proc.pid = undefined;
+			const controller = new AbortController();
+			let resolved = false;
+			const running = registeredTask(proc).execute(controller.signal).then((result) => {
+				resolved = true;
+				return result;
+			});
+
+			controller.abort();
+			proc.emit("error", new Error("spawn ENOENT"));
+			await Promise.resolve();
+			await Promise.resolve();
+			// The handle owns no pid: no signal may be attempted and no escalation
+			// timer may outlive the failed spawn.
+			expect(proc.kill).not.toHaveBeenCalled();
+			expect(vi.getTimerCount()).toBe(0);
+			expect(resolved).toBe(false);
+
+			vi.advanceTimersByTime(5001);
+			expect(proc.kill).not.toHaveBeenCalled();
+
+			proc.emit("close", -2);
+			const result = await running;
+			expect(result.isError).toBe(true);
+			expect(result.details?.results?.[0]?.stopReason).toBe("aborted");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it.each([0, -1])("never signals a spawn-failed child with pid %i when abort races the error event", async (pid) => {
+		vi.useFakeTimers();
+		try {
+			const proc = new FakeTaskProcess();
+			proc.pid = pid;
+			const controller = new AbortController();
+			let resolved = false;
+			const running = registeredTask(proc).execute(controller.signal).then((result) => {
+				resolved = true;
+				return result;
+			});
+
+			controller.abort();
+			proc.emit("error", new Error("spawn ENOENT"));
+			await Promise.resolve();
+			await Promise.resolve();
+			// A zero or negative pid is not an owned child: no signal may be
+			// attempted and no escalation timer may outlive the failed spawn.
+			expect(proc.kill).not.toHaveBeenCalled();
+			expect(vi.getTimerCount()).toBe(0);
+			expect(resolved).toBe(false);
+
+			vi.advanceTimersByTime(5001);
+			expect(proc.kill).not.toHaveBeenCalled();
+
+			proc.emit("close", -2);
+			const result = await running;
+			expect(result.isError).toBe(true);
+			expect(result.details?.results?.[0]?.stopReason).toBe("aborted");
 		} finally {
 			vi.useRealTimers();
 		}

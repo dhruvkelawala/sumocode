@@ -1091,6 +1091,33 @@ describe("stored credential classification", () => {
 		expect(notify).not.toHaveBeenCalledWith(expect.stringContaining("must be signed in"), "warning");
 	});
 
+	it("logs a credential read failure instead of silently mislabelling the row", async () => {
+		const agentDir = tempAgentDir();
+		companyAccount(agentDir);
+		const { ctx, select } = makeCtx({
+			agentDir,
+			auth: { anthropic: true, "anthropic-2": true },
+			models: COMPANY_MODELS,
+			onSelect: pickOption("company"),
+			runtime: {
+				getAvailable: async () => [],
+				getProviders: () => [],
+				login: async () => {},
+				credentials: {
+					read: async () => {
+						throw new Error("credential store unavailable");
+					},
+					modify: async () => undefined,
+				},
+			},
+		});
+		await withDiagnosticsFile(async (file) => {
+			await executeAccountsCommand(extensionApi(), commandContext(ctx), withAgentDir(agentDir));
+			expect(readFileSync(file, "utf8")).toContain("accounts_credential_read_failed");
+		});
+		expect(selectOptionsAt(select, 0)).toContain("company · signed in  anthropic-2");
+	});
+
 	it("degrades to signed in when the store is unavailable", async () => {
 		const agentDir = tempAgentDir();
 		companyAccount(agentDir);

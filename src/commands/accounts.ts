@@ -367,19 +367,18 @@ async function readStoredCredentialKind(ctx: ExtensionCommandContext, providerId
 async function accounts(ctx: ExtensionCommandContext, deps: AccountsCommandDeps): Promise<ClaudeAccount[]> {
 	const activeProvider = ctx.model?.provider;
 	const read = deps.readStoredCredential ?? ((providerId: string) => readStoredCredentialKind(ctx, providerId));
+	const subscriptions = loadClaudeSubscriptions(deps);
+	const providerIds = ["anthropic", ...subscriptions.map(accountProviderId)];
+	const kinds = await Promise.all(providerIds.map((providerId) => read(providerId)));
 	const accountList: ClaudeAccount[] = [
 		{
 			providerId: "anthropic",
 			label: "default account",
 			configured: authConfigured(ctx, "anthropic"),
 			active: activeProvider === "anthropic",
-			longLivedToken: (await read("anthropic")) === "long-lived-token",
+			longLivedToken: kinds[0] === "long-lived-token",
 		},
 	];
-	const subscriptions = loadClaudeSubscriptions(deps);
-	const subscriptionKinds = await Promise.all(
-		subscriptions.map((subscription) => read(accountProviderId(subscription))),
-	);
 	for (const [index, subscription] of subscriptions.entries()) {
 		const providerId = accountProviderId(subscription);
 		accountList.push({
@@ -388,7 +387,7 @@ async function accounts(ctx: ExtensionCommandContext, deps: AccountsCommandDeps)
 			subscription,
 			configured: authConfigured(ctx, providerId),
 			active: activeProvider === providerId,
-			longLivedToken: subscriptionKinds[index] === "long-lived-token",
+			longLivedToken: kinds[index + 1] === "long-lived-token",
 		});
 	}
 	return accountList;

@@ -14,10 +14,14 @@ import type { Readable } from "node:stream";
 import type { OAuthCredential } from "@earendil-works/pi-ai";
 
 /**
- * The mint child: stdout/stderr piped, stdin closed. Closing stdin is
- * deliberate — SumoCode never answers an interactive prompt, so a CLI that
- * needs a TTY should fail fast into the paste fallback instead of blocking the
- * flow; the timeout below bounds one that waits anyway.
+ * The mint child: stdout/stderr piped, stdin closed.
+ *
+ * Closing stdin is deliberate and verified against Claude Code 2.1.267: the
+ * command authorizes through a localhost callback server and only *offers* a
+ * code-paste prompt (`startOAuthFlow(..., {inferenceOnly: true})`, paste prompt
+ * shown after 3s), so the local browser flow completes with no stdin. On a
+ * remote machine where the callback cannot be reached the CLI waits for stdin
+ * instead, which is what the timeout and the paste fallback cover.
  */
 type SetupTokenProcess = ChildProcessByStdio<null, Readable, Readable>;
 
@@ -206,8 +210,9 @@ export interface ValidateRuntime {
  * Confirm the token authenticates before it is stored, and report which
  * account it belongs to. Only an explicit 401 rejects: this endpoint may
  * require a profile scope that an inference-only setup token does not carry, so
- * a 403 (or an unreachable endpoint) warns instead of blocking a valid token —
- * Pi's first request is the authoritative check for those.
+ * every other outcome — 403, 404, 5xx, or an unreachable endpoint — warns and
+ * proceeds rather than blocking a valid token. Pi's first request is the
+ * authoritative check for those.
  */
 export async function validateLongLivedToken(token: string, runtime: ValidateRuntime = {}): Promise<TokenValidation> {
 	const fetchImpl = runtime.fetchImpl ?? fetch;

@@ -470,12 +470,18 @@ describe("isAdapterInstalled", () => {
 });
 
 describe("executeAccountsCommand", () => {
-	it("warns outside RPC mode", async () => {
-		const { ctx, notify, select } = makeCtx({ agentDir: tempAgentDir() });
-		ctx.mode = "print";
-		await executeAccountsCommand(extensionApi(), commandContext(ctx), {});
-		expect(notify).toHaveBeenCalledWith(expect.stringContaining("/accounts requires"), "warning");
-		expect(select).not.toHaveBeenCalled();
+	it("warns outside RPC mode, where no account action can run", async () => {
+		// `tui` is the classic profile: it registers /accounts, so the repaint hook
+		// the RPC child wires is deliberately absent there and unreachable anyway.
+		for (const mode of ["tui", "print"] as const) {
+			const refreshAccountStatus = vi.fn();
+			const { ctx, notify, select } = makeCtx({ agentDir: tempAgentDir() });
+			ctx.mode = mode;
+			await executeAccountsCommand(extensionApi(), commandContext(ctx), { refreshAccountStatus });
+			expect(notify).toHaveBeenCalledWith(expect.stringContaining("/accounts requires"), "warning");
+			expect(select).not.toHaveBeenCalled();
+			expect(refreshAccountStatus).not.toHaveBeenCalled();
+		}
 	});
 
 	it("reports signed-in accounts as signed in when the session is on a non-Claude model", async () => {

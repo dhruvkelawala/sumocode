@@ -110,6 +110,28 @@ describe("acquireLongLivedToken", () => {
 		expect(onProgress).toHaveBeenCalledWith("Open https://claude.ai/oauth/authorize?code=true");
 	});
 
+	it("does not capture a token that is still split across writes", async () => {
+		const child = new FakeChild();
+		const promise = acquireLongLivedToken({}, { spawnCommand: fakeSpawn(child) });
+		child.emitStdout("export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-AbCdEf");
+		let settled = false;
+		void promise.then(() => {
+			settled = true;
+		});
+		await Promise.resolve();
+		expect(settled).toBe(false);
+		child.emitStdout("0123456789_-xyz\n");
+		await expect(promise).resolves.toEqual({ status: "ok", token: VALID_TOKEN });
+	});
+
+	it("captures a token that arrives without a trailing newline before exit", async () => {
+		const child = new FakeChild();
+		const promise = acquireLongLivedToken({}, { spawnCommand: fakeSpawn(child) });
+		child.emitStdout(`Use this token by setting: export CLAUDE_CODE_OAUTH_TOKEN=${VALID_TOKEN}`);
+		child.emit("close", 0);
+		await expect(promise).resolves.toEqual({ status: "ok", token: VALID_TOKEN });
+	});
+
 	it("reports the CLI as unavailable when the binary is missing", async () => {
 		const child = new FakeChild();
 		const promise = acquireLongLivedToken({}, { spawnCommand: fakeSpawn(child) });

@@ -155,15 +155,19 @@ export function acquireLongLivedToken(
 		const onAbort = (): void => finish({ status: "failed", reason: "cancelled" });
 		const consume = (chunk: Buffer | string): void => {
 			output += chunk.toString();
-			const token = parseSetupTokenOutput(output);
+			// Only complete lines may be parsed while the child is running: a token
+			// split across two writes would otherwise match as a truncated prefix and
+			// be stored as a broken credential. The close handler parses the whole
+			// buffer, where no further bytes can arrive.
+			const flushable = output.slice(0, output.lastIndexOf("\n") + 1);
+			const token = parseSetupTokenOutput(flushable);
 			if (token) {
 				finish({ status: "ok", token });
 				return;
 			}
-			const newline = output.lastIndexOf("\n");
-			if (newline < emitted || !options.onProgress) return;
-			const lines = output.slice(emitted, newline).split("\n").map((line) => line.trim()).filter(Boolean);
-			emitted = newline + 1;
+			if (!options.onProgress || flushable.length <= emitted) return;
+			const lines = flushable.slice(emitted).split("\n").map((line) => line.trim()).filter(Boolean);
+			emitted = flushable.length;
 			for (const line of lines) options.onProgress(line);
 		};
 		if (options.signal?.aborted) {
@@ -217,9 +221,13 @@ export interface ValidateRuntime {
 export async function validateLongLivedToken(token: string, runtime: ValidateRuntime = {}): Promise<TokenValidation> {
 	const fetchImpl = runtime.fetchImpl ?? fetch;
 	try {
+		// Bounded so a hung endpoint cannot hold the flow open; the caller's
+		// signal still cancels immediately when the command is torn down.
+		const timeout = AbortSignal.timeout(15_000);
+		const signal = runtime.signal ? AbortSignal.any([runtime.signal, timeout]) : timeout;
 		const response = await fetchImpl(ROLES_URL, {
 			headers: { Authorization: `Bearer ${token}`, accept: "application/json", "anthropic-beta": OAUTH_BETA },
-			signal: runtime.signal,
+			signal,
 		});
 		if (response.status === 401) return { status: "rejected" };
 		if (!response.ok) return { status: "unreachable" };

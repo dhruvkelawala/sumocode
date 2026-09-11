@@ -3,7 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { cancelActiveRpcLogin, executeRpcLogin, registerRpcLoginCommand, type RpcLoginRuntime } from "./login-command.js";
+import {
+	cancelActiveRpcLogin,
+	executeRpcLogin,
+	getRpcCredentialStore,
+	registerRpcLoginCommand,
+	type RpcLoginRuntime,
+} from "./login-command.js";
 import { decodeAuthInputTitle, isSecretInputTitle } from "./secret-input.js";
 /* oxlint-disable anti-slop/no-chained-type-assertions -- test doubles cast minimal stub objects to Pi context types. */
 /* oxlint-disable anti-slop/require-safety-comment-for-type-assertion -- stub shape is exercised by the assertions below. */
@@ -269,5 +275,38 @@ describe("RPC /login compatibility command", () => {
 			expect(trace).not.toContain(secret);
 			expect(trace).not.toContain('"requested"');
 		});
+	});
+});
+
+describe("getRpcCredentialStore", () => {
+	const loginRuntime = { getAvailable: vi.fn(), getProviders: vi.fn(), login: vi.fn() };
+
+	interface CredentialStoreStub {
+		readonly read: (providerId: string) => Promise<undefined>;
+		readonly modify: (providerId: string, fn: () => undefined) => Promise<undefined>;
+	}
+	type AuthRuntimeStub = Partial<RpcLoginRuntime> & { readonly credentials?: CredentialStoreStub };
+
+	function contextWithRuntime(runtime: AuthRuntimeStub | undefined): ExtensionCommandContext {
+		return { modelRegistry: { runtime } } as unknown as ExtensionCommandContext;
+	}
+
+	it("returns Pi's credential store when the runtime exposes one", () => {
+		const store = { read: vi.fn(), modify: vi.fn() };
+		expect(getRpcCredentialStore(contextWithRuntime({ ...loginRuntime, credentials: store }))).toBe(store);
+	});
+
+	it("returns undefined when this Pi build exposes no credential store", () => {
+		expect(getRpcCredentialStore(contextWithRuntime({ ...loginRuntime }))).toBeUndefined();
+	});
+
+	it("returns undefined when the store cannot be read", () => {
+		expect(
+			getRpcCredentialStore(contextWithRuntime({ ...loginRuntime, credentials: { modify: vi.fn() } as unknown as CredentialStoreStub })),
+		).toBeUndefined();
+	});
+
+	it("reports the compatibility failure when the auth runtime is gone", () => {
+		expect(() => getRpcCredentialStore(contextWithRuntime(undefined))).toThrow(/compatibility adapter/);
 	});
 });

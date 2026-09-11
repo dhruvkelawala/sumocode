@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import type { Api, Credential, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { CLAUDE_ACCOUNTS_MIGRATION_FIELD } from "./accounts-config.js";
-import { CLAUDE_BASE_PROVIDER, claudeAccountProviderId, isClaudeAccountProvider } from "../config/claude-providers.js";
+import { claudeAccountProviderId, isClaudeProvider } from "../config/claude-providers.js";
 import { filterToEnabled, readEnabledModelPatterns } from "../config/enabled-models.js";
 import { executeSumoReload } from "./reload.js";
 import { logDiagnostic } from "../sumo-tui/runtime/diagnostics.js";
@@ -76,6 +76,8 @@ export interface AccountsCommandDeps {
 	readonly installAdapter?: () => Promise<void>;
 	readonly login?: (providerId: string, ctx: ExtensionCommandContext) => Promise<void>;
 	readonly reload?: (ctx: ExtensionCommandContext) => Promise<void>;
+	/** Repaint the account chrome after any account action that can change what the chip resolves; `/accounts` runs no agent turn. */
+	readonly refreshAccountStatus?: (ctx: ExtensionCommandContext) => void;
 	/** Session-local providers whose config was written after registry startup. */
 	readonly pendingReloadProviders?: Set<string>;
 	/** Token-flow seams; tests inject them so no spawn, fetch, or Pi runtime is needed. */
@@ -613,10 +615,6 @@ async function addAccount(ctx: ExtensionCommandContext, deps: AccountsCommandDep
 	if (reload) await (deps.reload ?? ((reloadCtx) => executeSumoReload(reloadCtx)))(ctx);
 }
 
-function isClaudeProvider(providerId: string): boolean {
-	return providerId === CLAUDE_BASE_PROVIDER || isClaudeAccountProvider(providerId);
-}
-
 /**
  * Model to select when switching onto `account`. Keep the current model id
  * when the session is already on a Claude account, so switching accounts
@@ -727,7 +725,13 @@ export async function executeAccountsCommand(pi: ExtensionAPI, ctx: ExtensionCom
 		return;
 	}
 	const account = accountList[rows.indexOf(selected ?? "")];
-	if (account) await accountActions(pi, ctx, account, deps);
+	if (!account) return;
+	await accountActions(pi, ctx, account, deps);
+	// A rename or a stored credential changes the account the footer resolves
+	// while the command runs no agent turn — Pi executes an extension command
+	// inside `prompt()` and returns before the agent loop — so no `agent_end`
+	// follows to repaint it.
+	deps.refreshAccountStatus?.(ctx);
 }
 
 export function registerAccountsCommand(pi: ExtensionAPI, deps: AccountsCommandDeps = {}): void {

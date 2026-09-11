@@ -26,6 +26,7 @@ async function renderComponentLines(kind, scenario) {
 	if (kind === "input-frame-inline-skill") return renderInputFrameInlineSkill(scenario.dimensions.cols);
 	if (kind === "input-recovery-notice") return renderInputRecoveryNotice(scenario.dimensions.cols, scenario.component.message);
 	if (kind === "footer-ready") return renderFooterReady(scenario.dimensions.cols);
+	if (kind === "footer-claude-account") return renderFooterClaudeAccount(scenario.dimensions.cols);
 	if (kind === "top-bar-default") return renderTopBarDefault(scenario.dimensions.cols);
 	if (kind === "sidebar-editorial") return renderSidebarEditorial(scenario.dimensions.cols);
 	if (kind === "tree-selector") return renderTreeSelector(scenario.dimensions.cols);
@@ -96,6 +97,26 @@ async function renderFooterReady(width) {
 		state: "idle",
 		modelId: "gpt-5.5",
 		thinkingLevel: "medium",
+	}, width);
+}
+
+async function renderFooterClaudeAccount(width) {
+	const mod = await jiti.import(`${repoRoot}/src/footer.ts`);
+	return mod.renderFooterBlock({
+		cwd: "/Users/dev/projects/sumocode",
+		branch: "main",
+		inputTokens: 42000,
+		outputTokens: 0,
+		contextTokens: 42000,
+		contextWindow: 200000,
+		costUsd: 0.42,
+		state: "idle",
+		// Non-Claude model with a second Claude account: the segment is dim because
+		// the company account is only where a Claude task would resolve, which is
+		// the state this scenario exists to capture.
+		modelId: "gpt-5.5",
+		thinkingLevel: "medium",
+		claudeAccount: { providerId: "anthropic-2", label: "company", active: false },
 	}, width);
 }
 

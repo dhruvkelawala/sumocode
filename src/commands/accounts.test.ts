@@ -963,8 +963,10 @@ describe("executeAccountsCommand", () => {
 			},
 			onInput: () => "personal",
 		});
-		await executeAccountsCommand(extensionApi(), commandContext(ctx), withAgentDir(agentDir));
+		const refreshAccountStatus = vi.fn();
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), refreshAccountStatus });
 		expect(loadClaudeSubscriptions(withAgentDir(agentDir))).toEqual([{ provider: "anthropic", index: 2, label: "personal" }]);
+		expect(refreshAccountStatus).toHaveBeenCalledOnce();
 		const saved = JSON.parse(readFileSync(join(agentDir, "claude-accounts.json"), "utf8"));
 		expect(saved.subscriptions).toContainEqual({ provider: "openai", index: 4, label: "work" });
 	});
@@ -1163,13 +1165,14 @@ describe("long-lived token sign-in", () => {
 		const agentDir = tempAgentDir();
 		companyAccount(agentDir);
 		const storeCredential = vi.fn(async () => {});
+		const refreshAccountStatus = vi.fn();
 		const { ctx, input, notify } = makeCtx({
 			agentDir,
 			auth: { anthropic: true },
 			models: COMPANY_MODELS,
 			onSelect: pickAccountAction("company", SIGN_IN_LONG_LIVED),
 		});
-		await executeAccountsCommand(extensionApi(), commandContext(ctx), tokenAccountDeps(agentDir, { storeCredential }));
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), tokenAccountDeps(agentDir, { storeCredential, refreshAccountStatus }));
 		expect(input).not.toHaveBeenCalled();
 		expect(storeCredential).toHaveBeenCalledWith("anthropic-2", {
 			type: "oauth",
@@ -1179,6 +1182,7 @@ describe("long-lived token sign-in", () => {
 			mintedAt: expect.any(Number),
 		});
 		expect(notify).toHaveBeenCalledWith(expect.stringContaining("Acme Org"), "info");
+		expect(refreshAccountStatus).toHaveBeenCalledOnce();
 	});
 
 	it("falls back to the masked paste modal when the CLI is missing", async () => {

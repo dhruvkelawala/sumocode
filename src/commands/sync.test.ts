@@ -108,7 +108,6 @@ describe("/sumo:sync", () => {
 	it("resolves the package root from a flattened extension bundle", async () => {
 		const calls: Array<{ file: string; cwd?: string }> = [];
 		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
 		// SAFETY: the ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
 		await executeSumoSync(ctx() as never, {
 			env: { SUMOCODE_CONFIG_DIR: "/config" },

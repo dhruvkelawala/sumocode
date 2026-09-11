@@ -80,8 +80,9 @@ function installFooterHarness(options: {
 		getThinkingLevel: () => "medium",
 	};
 	// SAFETY: the double supplies the on/getThinkingLevel surface installFooter reads.
-	installFooter(pi as never, options);
+	const handle = installFooter(pi as never, options);
 	return {
+		handle,
 		setFooter(next: FooterFactory | undefined): void {
 			factory = next;
 		},
@@ -509,6 +510,24 @@ describe("installFooter Claude account resolution", () => {
 		harness.fire("model_select", headless);
 
 		expect(resolveClaudeAccount).toHaveBeenCalledTimes(1);
+	});
+
+	it("re-resolves the memoized account when a command asks for a repaint", () => {
+		const resolveClaudeAccount = vi.fn(() => ({ label: "company", active: false }));
+		const harness = installFooterHarness({ resolveClaudeAccount });
+		const ctx = footerCtx({ setFooter: harness.setFooter });
+		harness.fireSessionStart(ctx);
+		const tui = { requestRender: vi.fn() };
+		// SAFETY: the theme is unused by the render paths exercised here.
+		const component = harness.latestFactory()(tui, {} as never, footerData("main"));
+		expect(resolveClaudeAccount).toHaveBeenCalledTimes(1);
+
+		resolveClaudeAccount.mockReturnValue({ label: "personal", active: false });
+		harness.handle.refreshAccount(ctx);
+
+		expect(resolveClaudeAccount).toHaveBeenCalledTimes(2);
+		expect(tui.requestRender).toHaveBeenCalledTimes(1);
+		expect(withoutAnsi(component.render(160).join("\n"))).toContain("claude personal");
 	});
 
 	it("paints the resolved account into the footer row", () => {

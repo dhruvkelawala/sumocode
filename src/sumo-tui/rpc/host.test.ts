@@ -620,12 +620,15 @@ describe("handleRpcMessageDequeue", () => {
 			setText: vi.fn((text: string) => { draft = text; }),
 		};
 		const stateStore = new RpcHostStateStore();
-		const notifications = { notify: vi.fn() };
+		const notifications = { notify: vi.fn(), dismissSticky: vi.fn() };
 
 		await expect(scheduler.submit("prompt A")).resolves.toBe("sent");
 		await expect(scheduler.submit("prompt B")).resolves.toBe("queued");
 
 		handleRpcMessageDequeue({ editor, scheduler, stateStore, notifications });
+
+		// A direct editor action supersedes a stale sticky failure (issue 481 home B).
+		expect(notifications.dismissSticky).toHaveBeenCalledOnce();
 
 		expect(editor.setText).toHaveBeenCalledWith("prompt B");
 		expect(scheduler.getSnapshot()).toMatchObject({ busy: true, queuedMessages: [] });
@@ -1149,13 +1152,16 @@ describe("createToolsExpandToggleHandler (app.tools.expand)", () => {
 	it("delegates every toggle to the presentation-owned pager state", () => {
 		const toggleActivityExpansion = vi.fn();
 		const requestRender = vi.fn();
-		const handle = createToolsExpandToggleHandler({ toggleActivityExpansion, requestRender });
+		const notifications = { dismissSticky: vi.fn() };
+		const handle = createToolsExpandToggleHandler({ toggleActivityExpansion, requestRender, notifications });
 
 		handle();
 		handle();
 		handle();
 		expect(toggleActivityExpansion).toHaveBeenCalledTimes(3);
 		expect(requestRender).toHaveBeenCalledTimes(3);
+		// A direct editor action supersedes a stale sticky failure (issue 481 home B).
+		expect(notifications.dismissSticky).toHaveBeenCalledTimes(3);
 	});
 });
 

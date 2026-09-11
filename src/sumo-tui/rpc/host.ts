@@ -586,10 +586,12 @@ export interface RpcMessageDequeueDependencies {
 	readonly editor: Pick<RpcHostEditorController, "getText" | "setText">;
 	readonly scheduler: Pick<RpcPromptScheduler, "restoreAll">;
 	readonly stateStore: Pick<RpcHostStateStore, "getSnapshot">;
-	readonly notifications: Pick<NotificationCenter, "notify">;
+	readonly notifications: Pick<NotificationCenter, "notify"> & Partial<Pick<NotificationCenter, "dismissSticky">>;
 }
 
 export function handleRpcMessageDequeue(deps: RpcMessageDequeueDependencies): void {
+	// A host action supersedes the previous sticky failure (issue 481 home B).
+	deps.notifications.dismissSticky?.();
 	const restored = deps.scheduler.restoreAll(deps.editor.getText());
 	if (restored.count > 0) {
 		deps.editor.setText(restored.text);
@@ -860,11 +862,14 @@ export function createThinkingCycleHandler(deps: RpcHostThinkingCycleDependencie
 export interface RpcHostToolsExpandDependencies {
 	readonly toggleActivityExpansion: () => void;
 	readonly requestRender: () => void;
+	readonly notifications: Pick<NotificationCenter, "dismissSticky">;
 }
 
 /** Builds `app.tools.expand` without duplicating presentation state in the host. */
 export function createToolsExpandToggleHandler(deps: RpcHostToolsExpandDependencies): () => void {
 	return (): void => {
+		// A host action supersedes the previous sticky failure (issue 481 home B).
+		deps.notifications.dismissSticky();
 		deps.toggleActivityExpansion();
 		deps.requestRender();
 	};
@@ -1125,6 +1130,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 	const handleToolsExpandToggle = createToolsExpandToggleHandler({
 		toggleActivityExpansion: () => runtime?.toggleActivityExpansion(),
 		requestRender,
+		notifications,
 	});
 	const handleMessageFollowUp = (): Promise<void> =>
 		handleRpcMessageFollowUp({ editor, scheduler, notifications, isBlocked: () => treeNavigationBusy });

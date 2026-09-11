@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { dirname, join } from "node:path";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { Component } from "@earendil-works/pi-tui";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
 import {
@@ -51,7 +52,7 @@ import type { InlineSelectorHost, InlineSelectorItem, InlineSelectorTab } from "
 import { notifyOnError } from "./safe-send.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import type { MermaidRenderingMode } from "../transcript/mermaid.js";
-import { listSessions, type SessionListInfo } from "./session-reader.js";
+import { listAllSessionsForSession, listProjectSessions, type SessionListInfo } from "./session-reader.js";
 import { buildSessionTreeFromEntries, currentTreeSelection, entryTimestampsFromEntries, flattenSessionTree, formatRelativeTime, sessionExcerpt, treeNodeSummary, treeRowTimestamp } from "./session-tree.js";
 import { readAuthoritativeSessionSnapshot } from "./session-snapshot.js";
 import type { RpcHostChromeState, RpcHostStateStore } from "./state.js";
@@ -421,15 +422,74 @@ function renderHotkeysOverlay(theme: ThemeReader, width: number): string[] {
  * title remain distinguishable (the old single-string label had no id at
  * all). Count and age are padded to per-list column widths so the
  * description blocks line up as real columns instead of a ragged edge.
+ *
+ * Labels are width-bounded because the selector lays the description out
+ * after the full label: an unbounded label pushes the description (and, in
+ * the all-sessions scope, the directory that row exists to show) past the
+ * row's right edge instead of giving it room.
  */
-function resumeSessionRows(sessions: readonly SessionListInfo[], now: Date = new Date()): { label: string; description: string }[] {
+function resumeSessionRows(sessions: readonly SessionListInfo[], now: Date = new Date(), { showProjectDirectory = false }: { readonly showProjectDirectory?: boolean } = {}): { label: string; description: string }[] {
 	const counts = sessions.map((session) => `${formatInteger(session.messageCount)}${session.truncatedScan ? "+" : ""} ${session.messageCount === 1 && !session.truncatedScan ? "msg" : "msgs"}`);
 	const ages = sessions.map((session) => formatRelativeTime(session.modified, now));
 	const countWidth = Math.max(...counts.map((count) => count.length));
 	const ageWidth = Math.max(...ages.map((age) => age.length));
+	// The 52-column project-scope label is the pre-existing budget; the
+	// all-sessions scope reserves the up-to-28-column directory column, the
+	// gutter/marker/gap and the canonical 60-column portrait width (AGENTS.md).
+	const labelWidth = showProjectDirectory ? ALL_SESSIONS_LABEL_WIDTH : RESUME_LABEL_WIDTH;
 	return sessions.map((session, index) => ({
-		label: session.name?.trim() || sessionExcerpt(session.firstMessage, 52) || "(empty session)",
-		description: `${session.id.slice(0, 8)} · ${counts[index]!.padStart(countWidth)} · ${ages[index]!.padStart(ageWidth)}`,
+		label: sessionExcerpt(session.name?.trim() || session.firstMessage, labelWidth) || "(empty session)",
+		// `showProjectDirectory` is the all-sessions scope: every row there can
+		// come from a different project, so the directory leads the identifier
+		// block (the position Pi's own session list uses).
+		description: `${showProjectDirectory && session.cwd ? `${displaySessionCwd(session.cwd)} · ` : ""}${session.id.slice(0, 8)} · ${counts[index]!.padStart(countWidth)} · ${ages[index]!.padStart(ageWidth)}`,
+	}));
+}
+
+/** Label budget for the project scope (the pre-existing excerpt width). */
+const RESUME_LABEL_WIDTH = 52;
+
+/**
+ * Label budget for the all-sessions scope. Those rows append the project
+ * directory to the description, and the selector renders a description only
+ * after the full label: at the canonical 60-column portrait width (AGENTS.md)
+ * the project scope's 52-column label leaves no columns for the directory --
+ * the one thing that tells two identically titled sessions from different
+ * projects apart -- while 30 still leaves it the directory's own budget below.
+ * ponytail: a fixed reservation, not a dynamic one; a label fitted to the live
+ * render width would need that width, which reaches the selector component
+ * only at render time (`inline-selector.ts`), not this row builder.
+ */
+const ALL_SESSIONS_LABEL_WIDTH = 30;
+
+/**
+ * Directory column budget, and therefore the width `displaySessionCwd` elides
+ * to. It is the space this row actually has at the canonical 60-column portrait
+ * width (AGENTS.md): 60 - 9 (gutter, focus marker, tag) - 2 (minimum gap) - 30
+ * (the all-sessions label) - 1 (the row's own truncation ellipsis) = 18. A
+ * longer directory would not be visible there, and because the row is cut at
+ * its right edge while `displaySessionCwd` keeps the path tail, what falls off
+ * instead is the project's own last segment -- the thing that distinguishes two
+ * same-named projects.
+ */
+const SESSION_DIRECTORY_WIDTH = 18;
+
+/** Home-shortened, head-elided cwd for the selector's right-hand column. */
+function displaySessionCwd(cwd: string): string {
+	const maxLength = SESSION_DIRECTORY_WIDTH;
+	const home = homedir();
+	const shortened = cwd.startsWith(`${home}/`) ? `~/${cwd.slice(home.length + 1)}` : cwd;
+	return shortened.length <= maxLength ? shortened : `…${shortened.slice(1 - maxLength)}`;
+}
+
+/** Selector rows for one resume scope; `isCurrent` marks the row the host is already in. */
+function resumeSessionItems(sessions: readonly SessionListInfo[], currentPath: string, options?: { readonly showProjectDirectory?: boolean }): InlineSelectorItem[] {
+	const rows = resumeSessionRows(sessions, new Date(), options);
+	return sessions.map((session, index) => ({
+		value: session.path,
+		label: rows[index]!.label,
+		description: rows[index]!.description,
+		isCurrent: session.path === currentPath,
 	}));
 }
 
@@ -1053,14 +1113,32 @@ export class RpcHostActions {
 
 	/**
 	 * `/resume` -- lists every session (`.jsonl` file) sitting alongside the
-	 * current one on disk and lets the user pick one to load. Pi's RPC surface
-	 * has no "list sessions" verb, so this reads the session directory
-	 * directly (`session-reader.ts`'s `listSessions`, a faithful port of Pi's
-	 * own `SessionManager.list`/`buildSessionInfo`), deriving the directory
-	 * from `sessionFile` (threaded through `get_state` -- see state.ts). The
-	 * chosen path is loaded through the existing `switch_session` control, the
-	 * same path `/sessions` -> "Switch session by path" already uses, so
-	 * rehydration/state-refresh behavior is identical.
+	 * current one on disk and lets the user pick one to load, with a Tab toggle
+	 * to the all-sessions scope (every project directory under the sessions
+	 * root, the current project's parent, one row per session carrying its own
+	 * project directory). Pi's RPC surface has no "list sessions" verb, so this
+	 * reads the session directory directly (`session-reader.ts`'s
+	 * `listProjectSessions` / `listAllSessions`, ports of Pi's own
+	 * `SessionManager.list`/`listAll`), deriving the directory from `sessionFile`
+	 * (threaded through `get_state` --
+	 * see state.ts). The chosen path is loaded through the existing
+	 * `switch_session` control, the same path `/sessions` -> "Switch session by
+	 * path" already uses, so rehydration/state-refresh behavior is identical.
+	 *
+	 * Both scopes are read before the selector opens so each tab is a plain
+	 * `selectTabs` option list (the model chooser's shape). The all-sessions
+	 * read is bounded (`DEFAULT_MAX_ALL_SESSIONS`, ~110ms measured on a
+	 * 676-session store) and layout-aware: Pi's nested default layout scans the
+	 * sessions root, a flat custom `--session-dir` scans that directory itself
+	 * (never its parent -- and its project tab keeps the current cwd only, the
+	 * way Pi's `filterCwd` narrows a custom session dir), and the current
+	 * session is pinned into the window
+	 * either way, so a capped window is the recent rows rather than a strictly
+	 * newest-N ranking. When that cap drops candidates the tab is labelled
+	 * `recent`, so a bounded window is never mistaken for the whole store. Pi
+	 * loads its all-scope lazily on Tab, which would need a lazy tab capability
+	 * this selector does not have.
+	 * ponytail: eager bounded scan, upgrade to a lazy tab if open latency grows.
 	 */
 	public async openResumeSelector(): Promise<void> {
 		const sessionFile = this.stateStore.getSnapshot().sessionFile;
@@ -1068,21 +1146,28 @@ export class RpcHostActions {
 			notify(this.notifications, "no session file available to resume from", "warning");
 			return;
 		}
-		const sessions = await listSessions(dirname(sessionFile));
-		if (sessions.length === 0) {
+		const [projectSessions, allSessionsWindow] = await Promise.all([
+			listProjectSessions(sessionFile),
+			listAllSessionsForSession(sessionFile),
+		]);
+		const allSessions = allSessionsWindow.sessions;
+		if (projectSessions.length === 0 && allSessions.length === 0) {
 			notify(this.notifications, "no sessions found", "warning");
 			return;
 		}
-		const rows = resumeSessionRows(sessions);
-		const items: InlineSelectorItem[] = sessions.map((session, index) => ({
-			value: session.path,
-			label: rows[index]!.label,
-			description: rows[index]!.description,
-			isCurrent: session.path === sessionFile,
-		}));
-		const selected = await this.inlineSelectors.select("Resume session", items);
+		const tabs: InlineSelectorTab[] = [
+			{ id: "project", label: "current project", options: resumeSessionItems(projectSessions, sessionFile) },
+			// The tab badge appends the row count, so a capped list reads as
+			// "all sessions · recent <rows shown>" instead of an exhaustive list.
+			{ id: "all", label: allSessionsWindow.truncated ? "all sessions · recent" : "all sessions", options: resumeSessionItems(allSessions, sessionFile, { showProjectDirectory: true }) },
+		];
+		// Nothing to resume inside this project? Open where the sessions are
+		// (same default-tab rule the model chooser uses for an empty enabled list).
+		const selected = await this.inlineSelectors.selectTabs("Resume session", tabs, {
+			initialTabId: projectSessions.length === 0 ? "all" : "project",
+		});
 		if (!selected) return;
-		const session = sessions.find((candidate) => candidate.path === selected);
+		const session = projectSessions.find((candidate) => candidate.path === selected) ?? allSessions.find((candidate) => candidate.path === selected);
 		if (!session) return;
 		const result = await this.applySessionChange(() => this.controls.switchSession(session.path));
 		if (!result.cancelled) this.onStateChange();

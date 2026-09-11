@@ -1,6 +1,6 @@
-import { createReadStream, statSync } from "node:fs";
-import { readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { createReadStream, statSync, type Dirent } from "node:fs";
+import { readdir, stat } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 
 /**
@@ -239,9 +239,8 @@ export async function readSessionInfo(filePath: string, { maxBytes = 256 * 1024 
 
 /**
  * Lists every session (`.jsonl` file) in `sessionDir`, newest-modified first.
- * Ports `SessionManager.list`'s directory scan (minus the optional cwd
- * filter, which the host doesn't need since `sessionDir` here is already the
- * cwd-scoped directory derived from the current session's path).
+ * Ports `SessionManager.list`'s directory scan; the cwd filter Pi applies when
+ * a custom session dir is in use lives in `listProjectSessions`.
  */
 async function readSessionInfosWithLimit(
 	files: readonly string[],
@@ -280,6 +279,246 @@ export async function listSessions(sessionDir: string, { concurrency = 8, reader
 	const sessions = infos.filter((info): info is SessionListInfo => info !== undefined);
 	sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
 	return sessions;
+}
+
+/** Pi's `sessionCwdMatches`: resolved-path equality, and an empty cwd never matches. */
+function sessionCwdMatches(cwd: string, resolvedCwd: string): boolean {
+	return cwd !== "" && resolve(cwd) === resolvedCwd;
+}
+
+/** True when `sessionDir` is Pi's default per-cwd project directory for `cwd`. */
+function isDefaultProjectDirFor(sessionDir: string, cwd: string): boolean {
+	return basename(sessionDir) === encodeSessionDirName(cwd);
+}
+
+/**
+ * `/resume`'s project scope: the sessions sitting in the current session's own
+ * directory. In Pi's nested default layout that directory is the cwd's own
+ * project directory already; a flat custom `--session-dir` is shared by every
+ * project, so the rows are narrowed to the current session's cwd -- matching
+ * Pi's `SessionManager.list`, which filters by cwd whenever a custom session
+ * dir is in use (`filterCwd`). An unreadable current file carries no cwd to
+ * filter by, so the scope falls back to the directory-name shape: Pi's encoded
+ * `--<cwd>--` project directory (the nested default layout) keeps its rows, and
+ * any other directory -- the flat custom `--session-dir` a fresh or corrupt
+ * current file leaves unreadable -- shows none, because its cross-project rows
+ * belong to the all-sessions tab rather than to "current project".
+ */
+export async function listProjectSessions(sessionFile: string, { concurrency = 8, reader = readSessionInfo }: ListSessionsOptions = {}): Promise<SessionListInfo[]> {
+	const sessionDir = dirname(sessionFile);
+	const [currentSessionInfo, sessions] = await Promise.all([
+		reader(sessionFile),
+		listSessions(sessionDir, { concurrency, reader }),
+	]);
+	if (!currentSessionInfo) return isEncodedProjectDirName(basename(sessionDir)) ? sessions : [];
+	if (isDefaultProjectDirFor(sessionDir, currentSessionInfo.cwd)) return sessions;
+	const resolvedCwd = resolve(currentSessionInfo.cwd);
+	return sessions.filter((session) => sessionCwdMatches(session.cwd, resolvedCwd));
+}
+
+/** How many session rows `listAllSessions` returns when the caller names no limit. */
+export const DEFAULT_MAX_ALL_SESSIONS = 100;
+
+export interface ListAllSessionsOptions extends ListSessionsOptions {
+	readonly maxSessions?: number;
+	/**
+	 * Session path that must be present in the result even when it falls
+	 * outside the newest window (the session the host is already in).
+	 */
+	readonly currentSessionFile?: string;
+	/** Already-read info for `currentSessionFile`, so pinning it doesn't re-read it. */
+	readonly currentSessionInfo?: SessionListInfo;
+}
+
+/** Newest-modified first; the path tiebreak keeps equal mtimes deterministic. */
+function compareNewestActiveFirst(a: { readonly path: string; readonly modifiedMs: number }, b: { readonly path: string; readonly modifiedMs: number }): number {
+	if (a.modifiedMs !== b.modifiedMs) return b.modifiedMs - a.modifiedMs;
+	const aName = basename(a.path);
+	const bName = basename(b.path);
+	if (aName === bName) return a.path < b.path ? 1 : -1;
+	return aName < bName ? 1 : -1;
+}
+
+/**
+ * Session files ordered by session activity (file mtime) newest first, with
+ * `concurrency` bounding in-flight `stat` calls. Ranking is metadata-only work
+ * -- no session file is opened here -- and a file deleted between the
+ * directory listing and its own stat is dropped (it cannot be read either).
+ * Session mtime, not directory mtime: writing to an existing `.jsonl` updates
+ * the file, not its parent directory.
+ */
+async function rankSessionFilesByActivity(files: readonly string[], concurrency: number): Promise<string[]> {
+	const normalizedConcurrency = Number.isFinite(concurrency) ? Math.max(1, Math.floor(concurrency)) : 1;
+	const ranked: { readonly path: string; readonly modifiedMs: number }[] = [];
+	let nextIndex = 0;
+	const runWorker = async (): Promise<void> => {
+		for (;;) {
+			const index = nextIndex;
+			nextIndex += 1;
+			if (index >= files.length) return;
+			const filePath = files[index]!;
+			try {
+				ranked.push({ path: filePath, modifiedMs: (await stat(filePath)).mtimeMs });
+			} catch {
+				// Deleted between the directory listing and this stat.
+			}
+		}
+	};
+	const workers: Promise<void>[] = [];
+	for (let index = 0; index < Math.min(files.length, normalizedConcurrency); index += 1) workers.push(runWorker());
+	for (const worker of workers) await worker;
+	ranked.sort(compareNewestActiveFirst);
+	return ranked.map((entry) => entry.path);
+}
+
+/** Session files directly inside `dir`, or `undefined` when it can't be read. */
+async function collectSessionFiles(dir: string): Promise<string[] | undefined> {
+	let names: string[];
+	try {
+		names = await readdir(dir);
+	} catch {
+		return undefined;
+	}
+	return names.filter((name) => name.endsWith(".jsonl")).map((name) => join(dir, name));
+}
+
+/**
+ * Info for the newest-active `limit` candidates, dropping files with no
+ * readable session header. `limit` caps the read attempts themselves, not just
+ * the rows kept, so a store full of corrupt or unreadable files cannot turn
+ * the window into an unbounded scan.
+ */
+async function readRankedSessionInfos(files: readonly string[], concurrency: number, reader: SessionInfoReader, limit: number): Promise<SessionListInfo[]> {
+	const infos = await readSessionInfosWithLimit(files.slice(0, limit), concurrency, reader);
+	return infos.filter((info): info is SessionListInfo => info !== undefined);
+}
+
+/**
+ * The all-sessions window: `sessions` is what the picker shows, and
+ * `truncated` says candidate files were dropped to stay inside the row cap, so
+ * the list is a newest-N window rather than every session on disk.
+ */
+export interface SessionWindow {
+	readonly sessions: readonly SessionListInfo[];
+	readonly truncated: boolean;
+}
+
+/**
+ * Reads the `maxSessions` most recently active files out of `rankedFiles`
+ * (already newest first), then pins `currentSessionFile` when it fell outside
+ * that window (its info comes from the caller when already read, otherwise one
+ * more bounded prefix read). The pin takes the last row slot, keeping the
+ * result at or below the cap. `truncated` reports candidates the cap dropped.
+ */
+async function listSessionsFromRankedFiles(rankedFiles: readonly string[], { concurrency = 8, reader = readSessionInfo, maxSessions = DEFAULT_MAX_ALL_SESSIONS, currentSessionFile, currentSessionInfo }: ListAllSessionsOptions = {}): Promise<SessionWindow> {
+	const limit = Number.isFinite(maxSessions) ? Math.max(0, Math.floor(maxSessions)) : DEFAULT_MAX_ALL_SESSIONS;
+	const sessions = limit > 0 ? await readRankedSessionInfos(rankedFiles, concurrency, reader, limit) : [];
+	if (limit > 0 && currentSessionFile && !sessions.some((session) => session.path === currentSessionFile)) {
+		const pinned = currentSessionInfo ?? await reader(currentSessionFile);
+		if (pinned) {
+			sessions.push(pinned);
+			if (sessions.length > limit) sessions.splice(limit - 1, 1);
+		}
+	}
+	sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+	// A cap of 0 keeps no rows at all; `truncated` applies only to a positive cap.
+	return { sessions, truncated: limit > 0 && rankedFiles.length > limit };
+}
+
+/**
+ * Every session file one level below `sessionsRoot` (Pi's
+ * `<sessions>/<encoded-cwd>/<file>.jsonl` layout), in directory order --
+ * ranking happens globally afterwards, so no project directory can front-load
+ * the window. One `readdir` per project directory; no file is opened.
+ */
+async function collectSessionFilesUnder(sessionsRoot: string): Promise<string[]> {
+	let entries: Dirent[];
+	try {
+		entries = await readdir(sessionsRoot, { withFileTypes: true });
+	} catch {
+		return [];
+	}
+	const files: string[] = [];
+	for (const entry of entries) {
+		if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+		const projectFiles = await collectSessionFiles(join(sessionsRoot, entry.name));
+		if (projectFiles) files.push(...projectFiles);
+	}
+	return files;
+}
+
+/**
+ * Lists sessions across every project directory under `sessionsRoot` -- Pi's
+ * `SessionManager.listAll` layout, `<sessions>/<encoded-cwd>/<file>.jsonl`,
+ * walked one level deep. Deliberately bounded where Pi's own version is not:
+ * candidates from every project directory are ranked together by session
+ * activity (file mtime, newest first -- not the directory's, which a resumed
+ * session does not touch), and only the `maxSessions` newest are opened
+ * (bounded prefix reads). Ranking globally means one busy project cannot fill
+ * the whole window. `currentSessionFile` is always included, so a session that
+ * fell outside the window (old file name, or no longer active) is still
+ * resumable.
+ *
+ * Returns the rows only; `listAllSessionsForSession` carries the truncation
+ * flag the all-sessions picker renders.
+ */
+export async function listAllSessions(sessionsRoot: string, options: ListAllSessionsOptions = {}): Promise<SessionListInfo[]> {
+	return [...(await listAllSessionsWithin(sessionsRoot, options)).sessions];
+}
+
+/** Pi's `getDefaultSessionDirPath` encoding of a cwd into a project directory name. */
+function encodeSessionDirName(cwd: string): string {
+	return `--${resolve(cwd).replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+}
+
+/** Default-layout project directories always look like `--<encoded-cwd>--`. */
+function isEncodedProjectDirName(name: string): boolean {
+	return /^--.*--$/.test(name);
+}
+
+/**
+ * `/resume`'s all-sessions read for the current session file, covering both
+ * layouts Pi supports:
+ *  - nested (default): `<sessions>/<encoded-cwd>/<file>.jsonl`, so the scope
+ *    spans `dirname(sessionDir)`;
+ *  - flat (custom `--session-dir`): session files sit directly in the
+ *    configured directory (Pi's `SessionManager.listAll(customDir)`), so that
+ *    directory is scanned itself and its parent -- an arbitrary directory --
+ *    never is.
+ * The current file's own directory is a project directory exactly when its
+ * name is the encoding of the session's own `cwd` (read from its header), so
+ * the layout is resolved before anything above the session's directory is
+ * touched; an unreadable/not-yet-written current file falls back to the
+ * directory-name shape (`--<cwd>--` means nested). The current session is
+ * pinned in both layouts.
+ *
+ * ponytail: that fallback is a guess, and a flat custom `--session-dir`
+ * literally named `--something--` is the one case it gets wrong. The RPC seam
+ * carries only the current `sessionFile` -- no configured session dir -- so
+ * the caller has no layout to hand down; preferring the flat reading would
+ * instead hide every other project on a default install, where an unreadable
+ * session file is the common case (brand-new session, or a corrupt one).
+ *
+ * Returns the window rather than bare rows so `/resume` can tell the user when
+ * the all-sessions scope is showing a bounded window (`truncated`).
+ */
+export async function listAllSessionsForSession(sessionFile: string, options: ListAllSessionsOptions = {}): Promise<SessionWindow> {
+	const reader = options.reader ?? readSessionInfo;
+	const sessionDir = dirname(sessionFile);
+	const currentSessionInfo = await reader(sessionFile);
+	const resolvedOptions: ListAllSessionsOptions = { ...options, reader, currentSessionFile: sessionFile, currentSessionInfo };
+	const nested = currentSessionInfo !== undefined
+		? isDefaultProjectDirFor(sessionDir, currentSessionInfo.cwd)
+		: isEncodedProjectDirName(basename(sessionDir));
+	if (nested) return listAllSessionsWithin(dirname(sessionDir), resolvedOptions);
+	const files = (await collectSessionFiles(sessionDir)) ?? [];
+	return listSessionsFromRankedFiles(await rankSessionFilesByActivity(files, options.concurrency ?? 8), resolvedOptions);
+}
+
+/** `listAllSessions` that keeps the truncation flag. */
+async function listAllSessionsWithin(sessionsRoot: string, options: ListAllSessionsOptions): Promise<SessionWindow> {
+	const files = await collectSessionFilesUnder(sessionsRoot);
+	return listSessionsFromRankedFiles(await rankSessionFilesByActivity(files, options.concurrency ?? 8), options);
 }
 
 /**

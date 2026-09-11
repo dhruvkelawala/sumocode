@@ -609,15 +609,18 @@ export interface RpcHostExitDependencies {
  * and draining overlays resolves any pending overlay/select/input promises
  * without promoting queued overlay work during crash teardown.
  *
- * Exit code SUMOCODE_RELOAD_EXIT_CODE (100) is a deliberate `/reload`
- * (src/commands/reload.ts: the RPC child process.exit(100)s itself), not a
- * crash -- see `RpcChildExitError` in client.ts for how that code reaches
- * here structurally instead of via message-parsing. bin/sumocode.sh's respawn
- * loop only re-launches on THIS process (the host) exiting 100, so the host
- * must propagate that same code and skip the scary "exited unexpectedly"
- * notification, which would otherwise flash on every routine reload.
+ * Exit codes 0 and SUMOCODE_RELOAD_EXIT_CODE (100) are deliberate stops,
+ * not a crash -- see `RpcChildExitError` in client.ts for how those codes
+ * reach here structurally instead of via message-parsing. 100 is `/reload`
+ * (src/commands/reload.ts: the RPC child process.exit(100)s itself); 0 is any
+ * clean child shutdown, e.g. `/exit` (src/commands/exit.ts: `ctx.shutdown()`).
+ * bin/sumocode.sh's respawn loop only re-launches on THIS process (the host)
+ * exiting 100, so the host must propagate the same code and skip the scary
+ * "exited unexpectedly" notification, which would otherwise flash on every
+ * routine reload and on every clean `/exit`.
  *
- * For any other exit, record the nonzero root exit code immediately. Only
+ * For any other exit (including a signal death or a spawn failure, which has
+ * no numeric code), record the nonzero root exit code immediately. Only
  * cleanup waits for the notification delay; urgent shutdown may cut it short
  * without losing the failure. The terse notification stays visible before the
  * terminal is restored -- a zombie shell with a dead child behind it cannot
@@ -628,22 +631,23 @@ export function createRpcExitHandler(deps: RpcHostExitDependencies): (error: Err
 	const shutdownDelayMs = deps.shutdownDelayMs ?? 750;
 	const exitCode = deps.exitCode ?? 1;
 	return (error: Error): void => {
-		const reloadCode = error instanceof RpcChildExitError && error.code === SUMOCODE_RELOAD_EXIT_CODE ? error.code : undefined;
-		deps.recordExitCode(reloadCode ?? exitCode);
+		const childCode = error instanceof RpcChildExitError ? error.code : undefined;
+		const deliberateCode = childCode === 0 || childCode === SUMOCODE_RELOAD_EXIT_CODE ? childCode : undefined;
+		deps.recordExitCode(deliberateCode ?? exitCode);
 		deps.modals.close();
 		deps.overlays.drain();
 		deps.selector?.close();
 		deps.updateRuntimeState({ ...deps.stateStore.getSnapshot(), isStreaming: false, isCompacting: false });
-		if (reloadCode === undefined) {
+		if (deliberateCode === undefined) {
 			deps.notifications.notify(`RPC child exited unexpectedly: ${truncateForNotification(error.message)}`, "error", 0);
 		}
 		deps.requestRender();
-		if (reloadCode !== undefined) {
-			// Deliberate reload: exit the host itself with the same code right
-			// away (no shutdown delay -- there is no scary notification to give
-			// time to render) so bin/sumocode.sh's respawn loop sees exit 100 and
-			// relaunches with --continue.
-			void deps.stopHost(reloadCode).then(() => deps.exit(reloadCode));
+		if (deliberateCode !== undefined) {
+			// Deliberate quit: exit the host itself with the same code right away
+			// (no shutdown delay -- there is no scary notification to give time to
+			// render) so bin/sumocode.sh's respawn loop sees exit 100 and relaunches
+			// with --continue, while a clean `/exit` finishes with 0.
+			void deps.stopHost(deliberateCode).then(() => deps.exit(deliberateCode));
 			return;
 		}
 		const timer = scheduleTimeout(() => {

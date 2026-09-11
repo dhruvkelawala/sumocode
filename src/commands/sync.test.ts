@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -580,6 +581,129 @@ describe("/sumo:sync", () => {
 		expect(context.ui.notify).toHaveBeenLastCalledWith("/sumo:sync failed at config symlinks", "warning");
 		expect(stdout).not.toHaveBeenCalled();
 		stdout.mockRestore();
+	});
+
+	it("streams a noisy step's output instead of dying at execFile's maxBuffer", async () => {
+		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		// The fake child carries only the stdout/stderr/close/kill members the streamed runner reads.
+		const spawn = vi.fn(() => {
+			const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter(), kill: () => true });
+			queueMicrotask(() => {
+				child.stdout.emit("data", Buffer.from("a".repeat(2 * 1024 * 1024)));
+				child.stdout.emit("data", Buffer.from("TAIL-MARKER"));
+				child.emit("close", 0, null);
+			});
+			return child;
+		});
+		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
+		const results = await executeSumoSync(ctx() as never, {
+			env: { SUMOCODE_CONFIG_DIR: "/config" },
+			cwd: "/repo/sumocode",
+			moduleUrl: "file:///repo/sumocode/src/commands/sync.ts",
+			exists: (path) => path === "/config/.git" || sumocodeRepoExists(path),
+			readFile: () => JSON.stringify({ name: "@dhruvkelawala/sumocode" }),
+			linkConfig: () => ({ label: "config symlinks", ok: true, output: "linked" }),
+			spawn,
+		});
+
+		expect(results.map((step) => step.ok)).toEqual([true, true, true]);
+		const output = results[0]?.output ?? "";
+		expect(output.length).toBeLessThan(128 * 1024);
+		expect(output).toContain("truncated");
+		expect(output.endsWith("TAIL-MARKER")).toBe(true);
+		expect(spawn).toHaveBeenCalledTimes(2);
+		stdout.mockRestore();
+	});
+
+	it("keeps a multi-byte character split across output chunks", async () => {
+		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const emoji = Buffer.from("😀", "utf8");
+		// The fake child splits one code point across two data events, as a pipe chunk boundary can.
+		const spawn = vi.fn(() => {
+			const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter(), kill: () => true });
+			queueMicrotask(() => {
+				child.stdout.emit("data", emoji.subarray(0, 1));
+				child.stdout.emit("data", emoji.subarray(1));
+				child.emit("close", 0, null);
+			});
+			return child;
+		});
+		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
+		const results = await executeSumoSync(ctx() as never, {
+			env: { SUMOCODE_CONFIG_DIR: "/config" },
+			cwd: "/repo/sumocode",
+			moduleUrl: "file:///repo/sumocode/src/commands/sync.ts",
+			exists: (path) => path === "/config/.git" || sumocodeRepoExists(path),
+			readFile: () => JSON.stringify({ name: "@dhruvkelawala/sumocode" }),
+			linkConfig: () => ({ label: "config symlinks", ok: true, output: "linked" }),
+			spawn,
+		});
+
+		expect(results[0]?.output).toBe("😀");
+		stdout.mockRestore();
+	});
+
+	it("drops the orphaned half of a surrogate pair at the truncation boundary", async () => {
+		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		// 10 leading characters put the emoji's low surrogate exactly on the 64 KiB cut.
+		const chunk = Buffer.from(`${"a".repeat(10)}😀${"x".repeat(65_535)}`);
+		const spawn = vi.fn(() => {
+			const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter(), kill: () => true });
+			queueMicrotask(() => {
+				child.stdout.emit("data", chunk);
+				child.emit("close", 0, null);
+			});
+			return child;
+		});
+		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
+		const results = await executeSumoSync(ctx() as never, {
+			env: { SUMOCODE_CONFIG_DIR: "/config" },
+			cwd: "/repo/sumocode",
+			moduleUrl: "file:///repo/sumocode/src/commands/sync.ts",
+			exists: (path) => path === "/config/.git" || sumocodeRepoExists(path),
+			readFile: () => JSON.stringify({ name: "@dhruvkelawala/sumocode" }),
+			linkConfig: () => ({ label: "config symlinks", ok: true, output: "linked" }),
+			spawn,
+		});
+
+		const output = results[0]?.output ?? "";
+		expect(output).toContain("truncated");
+		expect(output.slice(output.indexOf("\n") + 1)).toBe("x".repeat(65_535));
+		stdout.mockRestore();
+	});
+
+	it("fails a step at the timeout instead of waiting for a close that never comes", async () => {
+		vi.useFakeTimers();
+		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const kill = vi.fn(() => true);
+		// The fake child stays silent: a descendant held its stdio pipes open, so no close arrives.
+		const spawn = vi.fn(() => Object.assign(new EventEmitter(), {
+			stdout: new EventEmitter(),
+			stderr: new EventEmitter(),
+			kill,
+		}));
+		try {
+			// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
+			const pending = executeSumoSync(ctx() as never, {
+				env: { SUMOCODE_CONFIG_DIR: "/config" },
+				cwd: "/repo/sumocode",
+				moduleUrl: "file:///repo/sumocode/src/commands/sync.ts",
+				exists: (path) => path === "/config/.git" || sumocodeRepoExists(path),
+				readFile: () => JSON.stringify({ name: "@dhruvkelawala/sumocode" }),
+				spawn,
+			});
+			await vi.advanceTimersByTimeAsync(120_000);
+			const results = await pending;
+
+			expect(kill).toHaveBeenCalledTimes(1);
+			expect(results).toHaveLength(1);
+			expect(results[0]?.ok).toBe(false);
+			expect(results[0]?.output).toContain("timed out after 120000ms");
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+			stdout.mockRestore();
+		}
 	});
 });
 

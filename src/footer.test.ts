@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionContext, ReadonlyFooterDataProvider, Theme } from "@earendil-works/pi-coding-agent";
 import { SUMOCODE_STATES, type SumoCodeState } from "./tokens.js";
 import {
+	colorHex,
 	formatCwd,
 	formatFooterLine,
 	installFooter,
@@ -16,6 +17,7 @@ import {
 	type FooterSnapshot,
 } from "./footer.js";
 import { VOICE } from "./voice.js";
+import { activeThemeColors } from "./themes/index.js";
 
 // oxlint-disable-next-line no-control-regex -- intentional ESC/control-byte match to strip ANSI in captured output
 const ANSI = /\u001b\[[0-9;]*m/g;
@@ -62,7 +64,7 @@ type FooterFactory = (
 	footerData: Pick<ReadonlyFooterDataProvider, "getGitBranch" | "onBranchChange">,
 ) => FooterComponent;
 
-function installFooterHarness() {
+function installFooterHarness(options: { resolveClaudeAccount?: (ctx: ExtensionContext) => { providerId: string; label: string; active: boolean } | undefined } = {}) {
 	const handlers = new Map<string, Array<(event: { type: string }, ctx: ExtensionContext) => void>>();
 	let factory: FooterFactory | undefined;
 	const pi = {
@@ -74,13 +76,16 @@ function installFooterHarness() {
 		getThinkingLevel: () => "medium",
 	};
 	// SAFETY: the double supplies the on/getThinkingLevel surface installFooter reads.
-	installFooter(pi as never);
+	installFooter(pi as never, options);
 	return {
 		setFooter(next: FooterFactory | undefined): void {
 			factory = next;
 		},
 		fireSessionStart(ctx: ExtensionContext): void {
 			for (const handler of handlers.get("session_start") ?? []) handler({ type: "session_start" }, ctx);
+		},
+		fire(eventName: string, ctx: ExtensionContext): void {
+			for (const handler of handlers.get(eventName) ?? []) handler({ type: eventName }, ctx);
 		},
 		latestFactory(): FooterFactory {
 			if (!factory) throw new Error("footer factory was not registered");
@@ -364,5 +369,87 @@ describe("resolveGitBranch", () => {
 		tempDirs.push(dir);
 
 		expect(resolveGitBranch(dir)).toBeNull();
+	});
+});
+
+describe("footer Claude account segment", () => {
+	const COMPANY = { providerId: "anthropic-2", label: "company", active: false } as const;
+
+	it("renders the resolved account after thinking", () => {
+		const plain = withoutAnsi(formatFooterLine(snapshot({ claudeAccount: COMPANY }), 160));
+		expect(plain).toContain("● READY · claude-opus-4-7 · xhigh · claude company");
+	});
+
+	it("labels the built-in account default", () => {
+		const plain = withoutAnsi(formatFooterLine(snapshot({ claudeAccount: { providerId: "anthropic", label: "default", active: true } }), 160));
+		expect(plain).toContain("claude default");
+	});
+
+	it("dims the segment when the account is only the next resolution", () => {
+		const line = formatFooterLine(snapshot({ claudeAccount: COMPANY }), 160);
+		expect(line).toContain(colorHex("claude company", activeThemeColors().foregroundDim));
+	});
+
+	it("brightens the segment when the account is live", () => {
+		const line = formatFooterLine(snapshot({ claudeAccount: { ...COMPANY, active: true } }), 160);
+		expect(line).toContain(colorHex("claude company", activeThemeColors().foreground));
+	});
+
+	it("omits the segment when no Claude account is resolved", () => {
+		expect(withoutAnsi(formatFooterLine(snapshot(), 160))).not.toContain("claude company");
+	});
+
+	it("keeps the segment whole and drops thinking, fast, then the model as width shrinks", () => {
+		const render = (width: number): string =>
+			withoutAnsi(formatFooterLine(snapshot({ showFastMode: true, claudeAccount: COMPANY }), width));
+
+		// 60: full left zone, no session metrics left to paint.
+		const w60 = render(60);
+		expect(w60).toContain("xhigh");
+		expect(w60).toContain("claude company");
+
+		// 50: thinking and fast are dropped before the account is touched.
+		const w50 = render(50);
+		expect(w50).not.toContain("xhigh");
+		expect(w50).not.toContain("fast");
+		expect(w50).toContain("claude-opus-4-7");
+		expect(w50).toContain("claude company");
+
+		// 41: the model goes, the account stays.
+		const w41 = render(41);
+		expect(w41).not.toContain("claude-opus-4-7");
+		expect(w41).toContain("claude company");
+
+		// 20: only the state survives, and the chip is gone rather than clipped.
+		const w20 = render(20);
+		expect(w20).toContain(VOICE.status.idle);
+		expect(w20).not.toContain("claude");
+	});
+});
+
+describe("installFooter Claude account resolution", () => {
+	it("resolves on session start and model select, never during render", () => {
+		const resolveClaudeAccount = vi.fn(() => undefined);
+		const harness = installFooterHarness({ resolveClaudeAccount });
+		const ctx = footerCtx({ setFooter: harness.setFooter });
+
+		harness.fireSessionStart(ctx);
+		// SAFETY: the theme is unused by the render paths exercised here.
+		const component = harness.latestFactory()({ requestRender: vi.fn() }, {} as never, footerData("main"));
+		harness.fire("model_select", ctx);
+		component.render(160);
+		component.render(160);
+
+		expect(resolveClaudeAccount).toHaveBeenCalledTimes(2);
+	});
+
+	it("paints the resolved account into the footer row", () => {
+		const harness = installFooterHarness({ resolveClaudeAccount: () => ({ providerId: "anthropic-2", label: "company", active: false }) });
+		const ctx = footerCtx({ setFooter: harness.setFooter });
+		harness.fireSessionStart(ctx);
+		// SAFETY: the theme is unused by the render paths exercised here.
+		const component = harness.latestFactory()({ requestRender: vi.fn() }, {} as never, footerData("main"));
+
+		expect(withoutAnsi(component.render(160).join("\n"))).toContain("claude company");
 	});
 });

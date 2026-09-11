@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DEFAULT_MAX_ALL_SESSIONS, buildSessionTree, listAllSessions, listAllSessionsForSession, listSessions, readSessionInfo } from "./session-reader.js";
+import { DEFAULT_MAX_ALL_SESSIONS, buildSessionTree, listAllSessions, listAllSessionsForSession, listProjectSessions, listSessions, readSessionInfo } from "./session-reader.js";
 
 type PromiseConstructorWithResolvers = PromiseConstructor & {
 	withResolvers<T>(): {
@@ -286,7 +286,7 @@ describe("session-reader", () => {
 			expect(sessions.map((session) => session.cwd)).toEqual(["/repo-b", "/repo-a"]);
 		});
 
-		it("reads at most maxSessions files, newest-created first, on a large synthetic store", async () => {
+		it("reads at most maxSessions files, newest-active first, on a large synthetic store", async () => {
 			const sessionsRoot = join(dir, "sessions");
 			for (let project = 0; project < 6; project += 1) {
 				const projectDir = join(sessionsRoot, `--repo-${project}--`);
@@ -500,6 +500,50 @@ describe("session-reader", () => {
 				// The cap dropped candidates, so the picker must say the list is a window.
 				expect(truncated).toBe(true);
 			});
+		});
+	});
+
+	describe("listProjectSessions", () => {
+		/** A session whose message timestamp is `minute` past 20:00 (sets `modified`). */
+		const write = (file: string, id: string, cwd: string, minute: number): string => {
+			const timestamp = new Date(Date.UTC(2026, 6, 2, 20, minute)).toISOString();
+			writeFileSync(file, jsonl([
+				{ type: "session", version: 3, id, timestamp, cwd },
+				{
+					type: "message",
+					id: "e1",
+					parentId: null,
+					timestamp,
+					message: { role: "user", content: `first ${id}`, timestamp: Date.UTC(2026, 6, 2, 20, minute) },
+				},
+			]));
+			return file;
+		};
+
+		it("narrows a flat custom session directory to the current session's cwd", async () => {
+			const customDir = join(dir, "custom-sessions");
+			mkdirSync(customDir, { recursive: true });
+			const currentFile = write(join(customDir, "current.jsonl"), "current", "/repo", 0);
+			write(join(customDir, "same-project.jsonl"), "same-project", "/repo", 1);
+			write(join(customDir, "other-project.jsonl"), "other-project", "/other-repo", 2);
+
+			const sessions = await listProjectSessions(currentFile);
+
+			expect(sessions.map((session) => session.id)).toEqual(["same-project", "current"]);
+		});
+
+		it("keeps every session of a project directory (the default layout is not cwd-filtered)", async () => {
+			const projectDir = join(dir, "sessions", "--repo--");
+			mkdirSync(projectDir, { recursive: true });
+			const currentFile = write(join(projectDir, "current.jsonl"), "current", "/repo", 0);
+			write(join(projectDir, "same-project.jsonl"), "same-project", "/repo", 1);
+			// Pi filters by cwd only for a custom session dir, so a project
+			// directory still lists a session whose header names another cwd.
+			write(join(projectDir, "elsewhere.jsonl"), "elsewhere", "/elsewhere", 2);
+
+			const sessions = await listProjectSessions(currentFile);
+
+			expect(sessions.map((session) => session.id)).toEqual(["elsewhere", "same-project", "current"]);
 		});
 	});
 

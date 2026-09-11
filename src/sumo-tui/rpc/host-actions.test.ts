@@ -1107,12 +1107,12 @@ describe("RpcHostActions", () => {
 			}
 		});
 
-		it("scopes a flat --session-dir all-sessions tab to that directory, not its parent", async () => {
+		it("keeps a flat --session-dir's project tab on the current cwd and its all-sessions tab on that directory", async () => {
 			const root = mkdtempSync(join(tmpdir(), "sumocode-resume-flat-scope-test-"));
 			try {
 				const customDir = join(root, "custom-sessions");
 				const currentFile = writeFixtureSession(customDir, "2026-07-02T20-00-00-000Z_current.jsonl", "current", "2026-07-02T20:00:00.000Z", "flat current first message", { projectDir: "." });
-				const siblingFile = writeFixtureSession(customDir, "2026-07-02T21-00-00-000Z_sibling.jsonl", "sibling", "2026-07-02T21:00:00.000Z", "flat sibling first message", { projectDir: "." });
+				const siblingFile = writeFixtureSession(customDir, "2026-07-02T21-00-00-000Z_sibling.jsonl", "sibling", "2026-07-02T21:00:00.000Z", "flat sibling first message", { projectDir: ".", cwd: "/other-repo" });
 				// A sibling of the custom dir: the old `dirname(sessionDir)` scan
 				// would have walked it as if it were a project directory.
 				writeFixtureSession(root, "2026-07-02T22-00-00-000Z_bait.jsonl", "bait", "2026-07-02T22:00:00.000Z", "parent bait first message", { projectDir: "--bait--" });
@@ -1121,12 +1121,18 @@ describe("RpcHostActions", () => {
 
 				const resumePromise = actions.handleSubmittedText("/resume");
 				await waitForInlineSelector(inlineSelectors, "Resume session");
-				expect(inlineSelectorText(inlineSelectors)).toContain("◆ CURRENT PROJECT 2");
+				// One flat directory, several projects in it: the project tab keeps
+				// the current cwd only (Pi's `filterCwd`), the all-sessions tab does
+				// not filter.
+				const projectScope = inlineSelectorText(inlineSelectors);
+				expect(projectScope).toContain("◆ CURRENT PROJECT 1");
+				expect(projectScope).not.toContain("flat sibling first message");
 
 				inlineSelectors.handleInput(SELECTOR_TAB);
 				const allScope = inlineSelectorText(inlineSelectors);
 				expect(allScope).toContain("◆ ALL SESSIONS 2");
 				expect(allScope).toContain("flat sibling first message");
+				expect(allScope).toContain("/other-repo");
 				expect(allScope).not.toContain("parent bait first message");
 
 				inlineSelectors.handleInput(SELECTOR_ENTER); // row 0 is the newest: the sibling
@@ -1161,6 +1167,31 @@ describe("RpcHostActions", () => {
 
 				inlineSelectors.handleInput(SELECTOR_TAB);
 				expect(inlineSelectorText(inlineSelectors)).toContain("◆ ALL SESSIONS · NEWEST 100");
+
+				inlineSelectors.handleInput(SELECTOR_ESCAPE);
+				await resumePromise;
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+
+		it("keeps the project directory visible in all-sessions rows at portrait width", async () => {
+			const root = mkdtempSync(join(tmpdir(), "sumocode-resume-portrait-cwd-test-"));
+			try {
+				const currentFile = writeFixtureSession(root, "2026-07-02T20-00-00-000Z_current.jsonl", "current", "2026-07-02T20:00:00.000Z", "current session first message");
+				// The label is long enough to fill a portrait row on its own.
+				writeFixtureSession(root, "2026-07-02T21-00-00-000Z_other.jsonl", "other", "2026-07-02T21:00:00.000Z", "a very long first message that would push the project directory off a portrait row", { projectDir: "--other--", cwd: "/repo-other" });
+
+				const { actions, inlineSelectors } = setup({ sessionFile: currentFile });
+
+				const resumePromise = actions.handleSubmittedText("/resume");
+				await waitForInlineSelector(inlineSelectors, "Resume session");
+				inlineSelectors.handleInput(SELECTOR_TAB);
+
+				// The directory is the only thing telling two identically titled
+				// sessions from different projects apart, so it has to survive the
+				// label rather than being pushed past the row's right edge.
+				expect(inlineSelectorText(inlineSelectors, 60)).toContain("/repo-other");
 
 				inlineSelectors.handleInput(SELECTOR_ESCAPE);
 				await resumePromise;

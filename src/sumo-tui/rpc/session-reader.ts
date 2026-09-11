@@ -239,9 +239,8 @@ export async function readSessionInfo(filePath: string, { maxBytes = 256 * 1024 
 
 /**
  * Lists every session (`.jsonl` file) in `sessionDir`, newest-modified first.
- * Ports `SessionManager.list`'s directory scan (minus the optional cwd
- * filter, which the host doesn't need since `sessionDir` here is already the
- * cwd-scoped directory derived from the current session's path).
+ * Ports `SessionManager.list`'s directory scan; the cwd filter Pi applies when
+ * a custom session dir is in use lives in `listProjectSessions`.
  */
 async function readSessionInfosWithLimit(
 	files: readonly string[],
@@ -280,6 +279,36 @@ export async function listSessions(sessionDir: string, { concurrency = 8, reader
 	const sessions = infos.filter((info): info is SessionListInfo => info !== undefined);
 	sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
 	return sessions;
+}
+
+/** Pi's `sessionCwdMatches`: resolved-path equality, and an empty cwd never matches. */
+function sessionCwdMatches(cwd: string, resolvedCwd: string): boolean {
+	return cwd !== "" && resolve(cwd) === resolvedCwd;
+}
+
+/** True when `sessionDir` is Pi's default per-cwd project directory for `cwd`. */
+function isDefaultProjectDirFor(sessionDir: string, cwd: string): boolean {
+	return basename(sessionDir) === encodeSessionDirName(cwd);
+}
+
+/**
+ * `/resume`'s project scope: the sessions sitting in the current session's own
+ * directory. In Pi's nested default layout that directory is the cwd's own
+ * project directory already; a flat custom `--session-dir` is shared by every
+ * project, so the rows are narrowed to the current session's cwd -- matching
+ * Pi's `SessionManager.list`, which filters by cwd whenever a custom session
+ * dir is in use (`filterCwd`). An unreadable current file leaves the rows
+ * unfiltered: there is no cwd to filter by.
+ */
+export async function listProjectSessions(sessionFile: string, { concurrency = 8, reader = readSessionInfo }: ListSessionsOptions = {}): Promise<SessionListInfo[]> {
+	const sessionDir = dirname(sessionFile);
+	const [currentSessionInfo, sessions] = await Promise.all([
+		reader(sessionFile),
+		listSessions(sessionDir, { concurrency, reader }),
+	]);
+	if (!currentSessionInfo || isDefaultProjectDirFor(sessionDir, currentSessionInfo.cwd)) return sessions;
+	const resolvedCwd = resolve(currentSessionInfo.cwd);
+	return sessions.filter((session) => sessionCwdMatches(session.cwd, resolvedCwd));
 }
 
 /** How many session rows `listAllSessions` returns when the caller names no limit. */
@@ -387,7 +416,7 @@ async function listSessionsFromRankedFiles(rankedFiles: readonly string[], { con
 		}
 	}
 	sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
-	// A cap of 0 lists everything, so it hides nothing.
+	// A cap of 0 keeps no rows at all; `truncated` applies only to a positive cap.
 	return { sessions, truncated: limit > 0 && rankedFiles.length > limit };
 }
 
@@ -474,7 +503,7 @@ export async function listAllSessionsForSession(sessionFile: string, options: Li
 	const currentSessionInfo = await reader(sessionFile);
 	const resolvedOptions: ListAllSessionsOptions = { ...options, reader, currentSessionFile: sessionFile, currentSessionInfo };
 	const nested = currentSessionInfo !== undefined
-		? basename(sessionDir) === encodeSessionDirName(currentSessionInfo.cwd)
+		? isDefaultProjectDirFor(sessionDir, currentSessionInfo.cwd)
 		: isEncodedProjectDirName(basename(sessionDir));
 	if (nested) return listAllSessionsWithin(dirname(sessionDir), resolvedOptions);
 	const files = (await collectSessionFiles(sessionDir)) ?? [];

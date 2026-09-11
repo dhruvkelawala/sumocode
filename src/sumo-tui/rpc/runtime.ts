@@ -64,7 +64,7 @@ export interface RpcHostRuntimeOptions {
 	readonly editor?: Component;
 	readonly modal?: Component & { getActiveKind?(): string | undefined; isSecretInputActive?(): boolean };
 	readonly overlay?: Component & { getActiveKind?(): string | undefined };
-	readonly notifications?: Component & Partial<Pick<NotificationCenter, "notify" | "getNotice" | "dismissTransient" | "dismissSticky">>;
+	readonly notifications?: Component & Partial<Pick<NotificationCenter, "notify" | "getNotice" | "dismissTransient" | "dismissSticky" | "dispose">>;
 	readonly extensionRegions?: {
 		readonly aboveEditor?: Component;
 		readonly belowEditor?: Component;
@@ -246,6 +246,7 @@ export class RpcHostRuntime {
 			getNotice: () => options.notifications?.getNotice?.(),
 			dismissTransient: () => options.notifications?.dismissTransient?.(),
 			dismissSticky: () => options.notifications?.dismissSticky?.(),
+			dispose: () => options.notifications?.dispose?.(),
 		};
 		this.extensionRegions = options.extensionRegions;
 		this.extensionStatuses = options.extensionStatuses;
@@ -553,6 +554,8 @@ export class RpcHostRuntime {
 		else this.output.removeListener?.("resize", this.handleResize);
 		this.shell?.dispose();
 		this.shell = undefined;
+		// Drop any live notice timer with the shell that painted it.
+		this.notifications.dispose?.();
 		this.themeUnsubscribe?.();
 		this.themeUnsubscribe = undefined;
 		if (!options.preserveTerminal) this.terminal.exitTerminal();

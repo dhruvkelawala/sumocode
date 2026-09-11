@@ -119,6 +119,23 @@ describe("RPC notification visibility", () => {
 		}
 	});
 
+	it("clears a live notice timer with the runtime at shutdown", async () => {
+		vi.useFakeTimers();
+		const terminal = new CaptureTerminal({ output: { write: () => undefined } });
+		const notifications = new NotificationCenter();
+		const runtime = new RpcHostRuntime({
+			output: { columns: 90, rows: 30, write: () => undefined },
+			input: { isTTY: false, on() {} }, terminal,
+			editor: new RpcHostEditorController(), initialState: activeState, notifications,
+		});
+		await runtime.start();
+		notifications.notify("new session");
+		expect(vi.getTimerCount()).toBeGreaterThan(0);
+		runtime.stop();
+		expect(vi.getTimerCount()).toBe(0);
+		expect(notifications.getNotice()).toBeUndefined();
+	});
+
 	it("shows a recovery notice, then restores the cursor and narrow repaint after clear", async () => {
 		const notice = new InputRecoveryNotice();
 		const { shell, terminal, text, setHint } = await createShell(notice);

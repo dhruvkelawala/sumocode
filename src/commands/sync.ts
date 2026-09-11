@@ -40,6 +40,11 @@ export interface SumoSyncDeps {
 	readonly exists?: (path: string) => boolean;
 	readonly readFile?: (path: string, encoding: BufferEncoding) => string;
 	readonly linkConfig?: (configRepo: string, agentDir: string) => SyncStepResult;
+	/**
+	 * Repaint the Claude account chrome after the config link step: it re-links
+	 * claude-accounts.json, and neither command starts an agent turn.
+	 */
+	readonly refreshAccountStatus?: (ctx: ExtensionCommandContext) => void;
 	readonly exec?: (file: string, args: readonly string[], options: { cwd?: string; timeout: number }) => Promise<{ stdout: string; stderr: string }>;
 }
 
@@ -359,6 +364,7 @@ export async function executeSumoSync(ctx: ExtensionCommandContext, deps: SumoSy
 		notifyFailure("sync", ctx, steps[steps.length - 1]!);
 		return steps;
 	}
+	deps.refreshAccountStatus?.(ctx);
 
 	steps.push(await runStep("sumocode source git pull", "git", ["pull", "--ff-only"], { cwd: sumocodeRepo }, deps));
 	if (!steps[steps.length - 1]!.ok) {
@@ -417,6 +423,7 @@ export async function executeSumoBootstrap(ctx: ExtensionCommandContext, deps: S
 		notifyFailure("bootstrap", ctx, steps[steps.length - 1]!);
 		return steps;
 	}
+	deps.refreshAccountStatus?.(ctx);
 
 	steps.push({
 		label: "next step",

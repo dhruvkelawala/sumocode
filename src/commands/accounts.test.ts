@@ -470,12 +470,18 @@ describe("isAdapterInstalled", () => {
 });
 
 describe("executeAccountsCommand", () => {
-	it("warns outside RPC mode", async () => {
-		const { ctx, notify, select } = makeCtx({ agentDir: tempAgentDir() });
-		ctx.mode = "print";
-		await executeAccountsCommand(extensionApi(), commandContext(ctx), {});
-		expect(notify).toHaveBeenCalledWith(expect.stringContaining("/accounts requires"), "warning");
-		expect(select).not.toHaveBeenCalled();
+	it("warns outside RPC mode, where no account action can run", async () => {
+		// `tui` is the classic profile: it registers /accounts, so the repaint hook
+		// the RPC child wires is deliberately absent there and unreachable anyway.
+		for (const mode of ["tui", "print"] as const) {
+			const refreshAccountStatus = vi.fn();
+			const { ctx, notify, select } = makeCtx({ agentDir: tempAgentDir() });
+			ctx.mode = mode;
+			await executeAccountsCommand(extensionApi(), commandContext(ctx), { refreshAccountStatus });
+			expect(notify).toHaveBeenCalledWith(expect.stringContaining("/accounts requires"), "warning");
+			expect(select).not.toHaveBeenCalled();
+			expect(refreshAccountStatus).not.toHaveBeenCalled();
+		}
 	});
 
 	it("reports signed-in accounts as signed in when the session is on a non-Claude model", async () => {
@@ -963,8 +969,10 @@ describe("executeAccountsCommand", () => {
 			},
 			onInput: () => "personal",
 		});
-		await executeAccountsCommand(extensionApi(), commandContext(ctx), withAgentDir(agentDir));
+		const refreshAccountStatus = vi.fn();
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), { ...withAgentDir(agentDir), refreshAccountStatus });
 		expect(loadClaudeSubscriptions(withAgentDir(agentDir))).toEqual([{ provider: "anthropic", index: 2, label: "personal" }]);
+		expect(refreshAccountStatus).toHaveBeenCalledOnce();
 		const saved = JSON.parse(readFileSync(join(agentDir, "claude-accounts.json"), "utf8"));
 		expect(saved.subscriptions).toContainEqual({ provider: "openai", index: 4, label: "work" });
 	});
@@ -1163,13 +1171,14 @@ describe("long-lived token sign-in", () => {
 		const agentDir = tempAgentDir();
 		companyAccount(agentDir);
 		const storeCredential = vi.fn(async () => {});
+		const refreshAccountStatus = vi.fn();
 		const { ctx, input, notify } = makeCtx({
 			agentDir,
 			auth: { anthropic: true },
 			models: COMPANY_MODELS,
 			onSelect: pickAccountAction("company", SIGN_IN_LONG_LIVED),
 		});
-		await executeAccountsCommand(extensionApi(), commandContext(ctx), tokenAccountDeps(agentDir, { storeCredential }));
+		await executeAccountsCommand(extensionApi(), commandContext(ctx), tokenAccountDeps(agentDir, { storeCredential, refreshAccountStatus }));
 		expect(input).not.toHaveBeenCalled();
 		expect(storeCredential).toHaveBeenCalledWith("anthropic-2", {
 			type: "oauth",
@@ -1179,6 +1188,7 @@ describe("long-lived token sign-in", () => {
 			mintedAt: expect.any(Number),
 		});
 		expect(notify).toHaveBeenCalledWith(expect.stringContaining("Acme Org"), "info");
+		expect(refreshAccountStatus).toHaveBeenCalledOnce();
 	});
 
 	it("falls back to the masked paste modal when the CLI is missing", async () => {

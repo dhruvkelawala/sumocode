@@ -30,6 +30,43 @@ describe("/sumo:sync", () => {
 		);
 	});
 
+	it("repaints the account chrome after the config link step", async () => {
+		const refreshAccountStatus = vi.fn();
+		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		// SAFETY: the ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
+		await executeSumoSync(ctx() as never, {
+			env: { SUMOCODE_CONFIG_DIR: "/config" },
+			homeDir: "/Users/test",
+			cwd: "/repo/sumocode/src",
+			moduleUrl: "file:///repo/sumocode/src/commands/sync.ts",
+			exists: (path) => path === "/config/.git" || sumocodeRepoExists(path),
+			readFile: () => JSON.stringify({ name: "@dhruvkelawala/sumocode" }),
+			linkConfig: () => ({ label: "config symlinks", ok: true, output: "linked" }),
+			refreshAccountStatus,
+			exec: async () => ({ stdout: "done", stderr: "" }),
+		});
+		expect(refreshAccountStatus).toHaveBeenCalledTimes(1);
+		stdout.mockRestore();
+	});
+
+	it("does not repaint when the config link step fails", async () => {
+		const refreshAccountStatus = vi.fn();
+		const context = ctx();
+		// SAFETY: the ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
+		await executeSumoSync(context as never, {
+			env: { SUMOCODE_CONFIG_DIR: "/config" },
+			homeDir: "/Users/test",
+			cwd: "/repo/sumocode/src",
+			moduleUrl: "file:///repo/sumocode/src/commands/sync.ts",
+			exists: (path) => path === "/config/.git" || sumocodeRepoExists(path),
+			readFile: () => JSON.stringify({ name: "@dhruvkelawala/sumocode" }),
+			linkConfig: () => ({ label: "config symlinks", ok: false, output: "nope" }),
+			refreshAccountStatus,
+			exec: async () => ({ stdout: "done", stderr: "" }),
+		});
+		expect(refreshAccountStatus).not.toHaveBeenCalled();
+	});
+
 	it("pulls config repo, refreshes symlinks, and pulls source", async () => {
 		const calls: Array<{ file: string; args: readonly string[]; cwd?: string }> = [];
 		const linkConfig = vi.fn(() => ({ label: "config symlinks", ok: true, output: "linked" }));
@@ -71,7 +108,7 @@ describe("/sumo:sync", () => {
 	it("resolves the package root from a flattened extension bundle", async () => {
 		const calls: Array<{ file: string; cwd?: string }> = [];
 		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
+		// SAFETY: the ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
 		await executeSumoSync(ctx() as never, {
 			env: { SUMOCODE_CONFIG_DIR: "/config" },
 			homeDir: "/Users/test",

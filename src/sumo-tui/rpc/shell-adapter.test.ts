@@ -223,6 +223,40 @@ describe("RpcShellAdapter splash hint", () => {
 });
 
 describe("RpcShellAdapter active footer", () => {
+	it("shows the Claude account the child published", async () => {
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 120, rows: 30 },
+			initialState: state({ modelLabel: "openai/gpt-5.5", thinkingLevel: "high" }),
+			initialTranscript: { messages: [] },
+			extensionStatuses: () => new Map([["sumocode.claude-account", "company"]]),
+		});
+		try {
+			adapter.render();
+			const text = Array.from({ length: 30 }, (_value, row) => adapter.getLastFrame()!.toPlainRow(row)).join("\n");
+			expect(text).toContain("gpt-5.5 · high · claude company");
+		} finally {
+			adapter.dispose();
+		}
+	});
+
+	it("shows no Claude account when the child published none", async () => {
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 120, rows: 30 },
+			initialState: state({ modelLabel: "openai/gpt-5.5", thinkingLevel: "high" }),
+			initialTranscript: { messages: [] },
+			extensionStatuses: () => new Map(),
+		});
+		try {
+			adapter.render();
+			const text = Array.from({ length: 30 }, (_value, row) => adapter.getLastFrame()!.toPlainRow(row)).join("\n");
+			expect(text).not.toContain("claude ");
+		} finally {
+			adapter.dispose();
+		}
+	});
+
 	it("shows fast after /fast publishes the fast-mode extension status", async () => {
 		const adapter = await RpcShellAdapter.create({
 			terminal: { writeFramePatches: () => undefined },

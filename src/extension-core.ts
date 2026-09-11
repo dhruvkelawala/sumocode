@@ -6,7 +6,9 @@ import { installActivityManagerBridge } from "./activity/manager-bridge.js";
 import { installAnswerTool } from "./answer-tool.js";
 import { installBackgroundTasks, installTerminalTools } from "./background-tasks/index.js";
 import type { TerminalTaskManagerOptions } from "./background-tasks/task-manager.js";
-import { registerAccountsCommand } from "./commands/accounts.js";
+import { loadClaudeSubscriptions, registerAccountsCommand } from "./commands/accounts.js";
+import { installClaudeAccountStatus, loginRuntimeWithAccountRefresh, publishClaudeAccountStatus } from "./claude-account-status-publication.js";
+import { claudeAccountProviderId } from "./config/claude-providers.js";
 import { registerSumoReloadCommand } from "./commands/reload.js";
 import { registerRolesCommand } from "./commands/roles.js";
 import { installFastMode } from "./fast-mode.js";
@@ -18,7 +20,7 @@ import { installQuestionTool } from "./question-tool.js";
 import { installSkillInlineExpansion } from "./skill-inline.js";
 import { installSubagents } from "./subagents/index.js";
 import { logDiagnostic } from "./sumo-tui/runtime/diagnostics.js";
-import { registerRpcLoginCommand } from "./sumo-tui/pi-compat/login-command.js";
+import { getRpcLoginRuntime, registerRpcLoginCommand } from "./sumo-tui/pi-compat/login-command.js";
 import { registerRpcTreeNavigationCommand } from "./sumo-tui/pi-compat/tree-navigation-command.js";
 import { installTaskModeAutoExit } from "./task-mode.js";
 
@@ -149,13 +151,29 @@ export function installOrchestrationTools(pi: ExtensionAPI, rpcChild = false) {
 	return { terminalTaskManager, subagentManager, activityBridge };
 }
 
+/**
+ * Subscription labels for the Claude account chrome, owned by the accounts
+ * config so `/accounts` and the footer cannot disagree. Read once per
+ * resolution, never per render.
+ */
+export function claudeAccountSubscriptionLabel(providerId: string): string | undefined {
+	return loadClaudeSubscriptions().find((entry) => claudeAccountProviderId(entry.index) === providerId)?.label;
+}
+
 export function installRpcChildProfile(pi: ExtensionAPI): void {
 	installHerdrRpcBridge(pi);
+	// The retained host draws the footer, so the resolved account travels as an
+	// extension status instead of through installFooter.
+	installClaudeAccountStatus(pi, { subscriptionLabel: claudeAccountSubscriptionLabel });
 	installSkillInlineExpansion(pi);
 	// Pi's built-in /login exists only in InteractiveMode and is intentionally
 	// absent from RPC get_commands. Register the compatibility command in the
 	// child so the retained host can discover and dispatch it normally.
-	registerRpcLoginCommand(pi);
+	// `/login` is its own command with no agent turn behind it either, so the
+	// runtime seam repaints the chip as soon as a credential lands.
+	registerRpcLoginCommand(pi, {
+		getRuntime: (ctx) => loginRuntimeWithAccountRefresh(ctx, getRpcLoginRuntime(ctx), { subscriptionLabel: claudeAccountSubscriptionLabel }),
+	});
 	registerRpcTreeNavigationCommand(pi);
 	installMemoryExtraction(pi);
 	installFastMode(pi);
@@ -166,6 +184,14 @@ export function installRpcChildProfile(pi: ExtensionAPI): void {
 	installTaskModeAutoExit(pi);
 	registerSumoReloadCommand(pi);
 	registerRolesCommand(pi);
-	registerAccountsCommand(pi);
-	installSumoInteractions(pi, { subagentManager, installUiSurfaces: false });
+	// `/accounts` renames a label and returns without an agent turn, so the host
+	// footer would keep painting the old one; repaint from the command itself.
+	registerAccountsCommand(pi, {
+		refreshAccountStatus: (ctx) => publishClaudeAccountStatus(ctx, { subscriptionLabel: claudeAccountSubscriptionLabel }),
+	});
+	installSumoInteractions(pi, {
+		subagentManager,
+		installUiSurfaces: false,
+		refreshAccountStatus: (ctx) => publishClaudeAccountStatus(ctx, { subscriptionLabel: claudeAccountSubscriptionLabel }),
+	});
 }

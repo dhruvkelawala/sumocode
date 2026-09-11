@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionContext, ReadonlyFooterDataProvider, Theme } from "@earendil-works/pi-coding-agent";
 import { SUMOCODE_STATES, type SumoCodeState } from "./tokens.js";
 import {
+	colorHex,
 	formatCwd,
 	formatFooterLine,
 	installFooter,
@@ -16,6 +17,8 @@ import {
 	type FooterSnapshot,
 } from "./footer.js";
 import { VOICE } from "./voice.js";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { activeThemeColors } from "./themes/index.js";
 
 // oxlint-disable-next-line no-control-regex -- intentional ESC/control-byte match to strip ANSI in captured output
 const ANSI = /\u001b\[[0-9;]*m/g;
@@ -62,7 +65,10 @@ type FooterFactory = (
 	footerData: Pick<ReadonlyFooterDataProvider, "getGitBranch" | "onBranchChange">,
 ) => FooterComponent;
 
-function installFooterHarness() {
+function installFooterHarness(options: {
+	resolveClaudeAccount?: (ctx: ExtensionContext) => { label: string; active: boolean } | undefined;
+	subscriptionLabel?: (providerId: string) => string | undefined;
+} = {}) {
 	const handlers = new Map<string, Array<(event: { type: string }, ctx: ExtensionContext) => void>>();
 	let factory: FooterFactory | undefined;
 	const pi = {
@@ -74,13 +80,17 @@ function installFooterHarness() {
 		getThinkingLevel: () => "medium",
 	};
 	// SAFETY: the double supplies the on/getThinkingLevel surface installFooter reads.
-	installFooter(pi as never);
+	const handle = installFooter(pi as never, options);
 	return {
+		handle,
 		setFooter(next: FooterFactory | undefined): void {
 			factory = next;
 		},
 		fireSessionStart(ctx: ExtensionContext): void {
 			for (const handler of handlers.get("session_start") ?? []) handler({ type: "session_start" }, ctx);
+		},
+		fire(eventName: string, ctx: ExtensionContext): void {
+			for (const handler of handlers.get(eventName) ?? []) handler({ type: eventName }, ctx);
 		},
 		latestFactory(): FooterFactory {
 			if (!factory) throw new Error("footer factory was not registered");
@@ -89,10 +99,18 @@ function installFooterHarness() {
 	};
 }
 
-function footerCtx(options: { cwd?: string; modelId?: string; throwOnSnapshot?: boolean; setFooter?: (factory: FooterFactory | undefined) => void }): ExtensionContext {
+function footerCtx(options: {
+	cwd?: string;
+	modelId?: string;
+	provider?: string;
+	modelRegistry?: unknown;
+	hasUI?: boolean;
+	throwOnSnapshot?: boolean;
+	setFooter?: (factory: FooterFactory | undefined) => void;
+}): ExtensionContext {
 	const branch = [{ type: "message", message: { role: "assistant", usage: { input: 10, output: 5, cost: { total: 0.01 } } } }];
 	const ctx = {
-		hasUI: true,
+		hasUI: options.hasUI ?? true,
 		ui: {
 			setFooter: options.setFooter ?? (() => undefined),
 		},
@@ -117,10 +135,11 @@ function footerCtx(options: { cwd?: string; modelId?: string; throwOnSnapshot?: 
 		model: {
 			get() {
 				if (options.throwOnSnapshot) throw new Error("stale extension ctx");
-				return { id: options.modelId ?? "test-model", contextWindow: 1000 };
+				return { id: options.modelId ?? "test-model", provider: options.provider, contextWindow: 1000 };
 			},
 		},
 	});
+	if (options.modelRegistry !== undefined) Object.defineProperty(ctx, "modelRegistry", { value: options.modelRegistry, configurable: true });
 	// SAFETY: the double supplies the hasUI/ui/sessionManager surface installFooter reads.
 	return ctx as never;
 }
@@ -364,5 +383,160 @@ describe("resolveGitBranch", () => {
 		tempDirs.push(dir);
 
 		expect(resolveGitBranch(dir)).toBeNull();
+	});
+});
+
+describe("footer Claude account segment", () => {
+	const COMPANY = { label: "company", active: false } as const;
+
+	it("renders the resolved account after thinking", () => {
+		const plain = withoutAnsi(formatFooterLine(snapshot({ claudeAccount: COMPANY }), 160));
+		expect(plain).toContain("● READY · claude-opus-4-7 · xhigh · claude company");
+	});
+
+	it("labels the built-in account default", () => {
+		const plain = withoutAnsi(formatFooterLine(snapshot({ claudeAccount: { label: "default", active: true } }), 160));
+		expect(plain).toContain("claude default");
+	});
+
+	it("dims the segment when the account is only the next resolution", () => {
+		const line = formatFooterLine(snapshot({ claudeAccount: COMPANY }), 160);
+		expect(line).toContain(colorHex("claude company", activeThemeColors().foregroundDim));
+	});
+
+	it("brightens the segment when the account is live", () => {
+		const line = formatFooterLine(snapshot({ claudeAccount: { ...COMPANY, active: true } }), 160);
+		expect(line).toContain(colorHex("claude company", activeThemeColors().foreground));
+	});
+
+	it("keeps the segment inside its column budget for a wide-character label", () => {
+		const line = formatFooterLine(snapshot({ claudeAccount: { label: "会社アカウント", active: false } }), 160);
+		const chip = /claude \S+/.exec(withoutAnsi(line))?.[0] ?? "";
+		expect(visibleWidth(chip)).toBeLessThanOrEqual(15);
+		expect(chip.endsWith("…")).toBe(true);
+	});
+
+	it("omits the segment when no Claude account is resolved", () => {
+		expect(withoutAnsi(formatFooterLine(snapshot(), 160))).not.toContain("claude company");
+	});
+
+	it("keeps the segment whole and drops thinking, fast, then the model as width shrinks", () => {
+		const render = (width: number): string =>
+			withoutAnsi(formatFooterLine(snapshot({ showFastMode: true, claudeAccount: COMPANY }), width));
+
+		// 60: full left zone, no session metrics left to paint.
+		const w60 = render(60);
+		expect(w60).toContain("xhigh");
+		expect(w60).toContain("claude company");
+
+		// 54: fast is the first field dropped; thinking is still there.
+		const w54 = render(54);
+		expect(w54).toContain("xhigh");
+		expect(w54).not.toContain("fast");
+		expect(w54).toContain("claude company");
+
+		// 50: thinking follows, and the account is still untouched.
+		const w50 = render(50);
+		expect(w50).not.toContain("xhigh");
+		expect(w50).not.toContain("fast");
+		expect(w50).toContain("claude-opus-4-7");
+		expect(w50).toContain("claude company");
+
+		// 41: the model goes, the account stays.
+		const w41 = render(41);
+		expect(w41).not.toContain("claude-opus-4-7");
+		expect(w41).toContain("claude company");
+
+		// 20: only the state survives, and the chip is gone rather than clipped.
+		const w20 = render(20);
+		expect(w20).toContain(VOICE.status.idle);
+		expect(w20).not.toContain("claude");
+	});
+});
+
+describe("installFooter Claude account resolution", () => {
+	it("resolves on session start and model select, never during render", () => {
+		const resolveClaudeAccount = vi.fn(() => undefined);
+		const harness = installFooterHarness({ resolveClaudeAccount });
+		const ctx = footerCtx({ setFooter: harness.setFooter });
+
+		harness.fireSessionStart(ctx);
+		// SAFETY: the theme is unused by the render paths exercised here.
+		const component = harness.latestFactory()({ requestRender: vi.fn() }, {} as never, footerData("main"));
+		harness.fire("model_select", ctx);
+		component.render(160);
+		component.render(160);
+		expect(resolveClaudeAccount).toHaveBeenCalledTimes(2);
+
+		// One more refresh at each turn boundary, so an /accounts rename lands
+		// without waiting for a model switch. Still nothing per render.
+		harness.fire("agent_end", ctx);
+		component.render(160);
+		expect(resolveClaudeAccount).toHaveBeenCalledTimes(3);
+	});
+
+	it("resolves through the real registry surface when no resolver is injected", () => {
+		// Hermetic: the default resolver reads enabledModels from the agent dir, so
+		// pin PI_CODING_AGENT_DIR at a temp settings file instead of the ambient one.
+		const agentDir = mkdtempSync(join(tmpdir(), "sumocode-footer-agent-"));
+		tempDirs.push(agentDir);
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ enabledModels: ["claude-*"] }), "utf8");
+		vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+		const models = [
+			{ provider: "anthropic", id: "claude-opus-5" },
+			{ provider: "anthropic-2", id: "claude-opus-5" },
+		];
+		const registry = { getAvailable: () => models };
+		const harness = installFooterHarness({ subscriptionLabel: (providerId) => (providerId === "anthropic-2" ? "company" : undefined) });
+		const ctx = footerCtx({ modelId: "gpt-5.6", provider: "openai-codex", modelRegistry: registry, setFooter: harness.setFooter });
+		harness.fireSessionStart(ctx);
+		// SAFETY: the theme is unused by the render paths exercised here.
+		const component = harness.latestFactory()({ requestRender: vi.fn() }, {} as never, footerData("main"));
+
+		expect(withoutAnsi(component.render(160).join("\n"))).toContain("claude default");
+
+		// Base provider gone: the next Claude model resolves to the extra account.
+		registry.getAvailable = () => [models[1]];
+		harness.fire("model_select", ctx);
+		expect(withoutAnsi(component.render(160).join("\n"))).toContain("claude company");
+	});
+
+	it("ignores a model select from a session without a UI", () => {
+		const resolveClaudeAccount = vi.fn(() => undefined);
+		const harness = installFooterHarness({ resolveClaudeAccount });
+		harness.fireSessionStart(footerCtx({ setFooter: harness.setFooter }));
+		const headless = footerCtx({ hasUI: false, setFooter: harness.setFooter });
+
+		harness.fire("model_select", headless);
+
+		expect(resolveClaudeAccount).toHaveBeenCalledTimes(1);
+	});
+
+	it("re-resolves the memoized account when a command asks for a repaint", () => {
+		const resolveClaudeAccount = vi.fn(() => ({ label: "company", active: false }));
+		const harness = installFooterHarness({ resolveClaudeAccount });
+		const ctx = footerCtx({ setFooter: harness.setFooter });
+		harness.fireSessionStart(ctx);
+		const tui = { requestRender: vi.fn() };
+		// SAFETY: the theme is unused by the render paths exercised here.
+		const component = harness.latestFactory()(tui, {} as never, footerData("main"));
+		expect(resolveClaudeAccount).toHaveBeenCalledTimes(1);
+
+		resolveClaudeAccount.mockReturnValue({ label: "personal", active: false });
+		harness.handle.refreshAccount(ctx);
+
+		expect(resolveClaudeAccount).toHaveBeenCalledTimes(2);
+		expect(tui.requestRender).toHaveBeenCalledTimes(1);
+		expect(withoutAnsi(component.render(160).join("\n"))).toContain("claude personal");
+	});
+
+	it("paints the resolved account into the footer row", () => {
+		const harness = installFooterHarness({ resolveClaudeAccount: () => ({ label: "company", active: false }) });
+		const ctx = footerCtx({ setFooter: harness.setFooter });
+		harness.fireSessionStart(ctx);
+		// SAFETY: the theme is unused by the render paths exercised here.
+		const component = harness.latestFactory()({ requestRender: vi.fn() }, {} as never, footerData("main"));
+
+		expect(withoutAnsi(component.render(160).join("\n"))).toContain("claude company");
 	});
 });

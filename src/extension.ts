@@ -23,8 +23,10 @@ import {
 	resetSumocodeProcessInstallLatchForTests,
 	shouldInstallNativeTaskTool,
 	shouldNoopHelperSubprocess,
+	claudeAccountSubscriptionLabel,
 } from "./extension-core.js";
 import { installFastMode } from "./fast-mode.js";
+import { publishClaudeAccountStatus } from "./claude-account-status-publication.js";
 import { installFooter } from "./footer.js";
 import { installSumoInteractions } from "./interaction-registry.js";
 import { installSumoUiSurfaces } from "./interaction-ui-surfaces.js";
@@ -264,7 +266,14 @@ export default function sumocode(pi: ExtensionAPI): void {
 	}
 	let requestFooterRender: (() => void) | undefined;
 	const fastModeState = installFastMode(pi, { onChange: () => requestFooterRender?.() });
-	requestFooterRender = installFooter(pi, { fastModeState });
+	const footer = installFooter(pi, {
+		fastModeState,
+		// The accounts config owns the labels; the footer only displays them, so a
+		// rename lands in both surfaces. The chrome lowercases the label for the
+		// footer's voice, /accounts keeps the configured spelling.
+		subscriptionLabel: claudeAccountSubscriptionLabel,
+	});
+	requestFooterRender = footer.requestRender;
 	installMemoryExtraction(pi);
 	installCathedralEditor(pi);
 	installInputHints(pi);
@@ -285,7 +294,16 @@ export default function sumocode(pi: ExtensionAPI): void {
 	registerSumoReloadCommand(pi);
 	registerRolesCommand(pi);
 	registerAccountsCommand(pi);
-	installSumoInteractions(pi, { subagentManager, installUiSurfaces: installSumoUiSurfaces });
+	installSumoInteractions(pi, {
+		subagentManager,
+		installUiSurfaces: installSumoUiSurfaces,
+		// Classic mode renders the footer from its own memoized context, and these
+		// commands start no agent turn, so repaint that cache too.
+		refreshAccountStatus: (ctx) => {
+			publishClaudeAccountStatus(ctx, { subscriptionLabel: claudeAccountSubscriptionLabel });
+			footer.refreshAccount(ctx);
+		},
+	});
 	logDiagnostic("extension_activate_end", {
 		taskMode: isTaskMode(),
 		nativeTaskInstalled: shouldInstallNativeTaskTool({ force: process.env.SUMOCODE_NATIVE_TASK }),

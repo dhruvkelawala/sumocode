@@ -11,10 +11,18 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
  * upstream levels flow in automatically. Do not redeclare this union by hand.
  */
 export type ThinkingLevel = ModelThinkingLevel;
+import { formatClaudeAccountChip } from "./config/claude-account-status.js";
+import { resolveSessionClaudeAccount } from "./claude-account-status-publication.js";
 import { shouldApplyFastMode, type FastModeState } from "./fast-mode.js";
 import { getSessionUsage as getCachedSessionUsage, sessionHasMessages as cachedSessionHasMessages, linkGitBranchProvider } from "./session-cache.js";
 import { activeThemeColors, type SumoCodeState } from "./themes/index.js";
 import { VOICE } from "./voice.js";
+
+/** The render-facing pair the footer paints; the resolver owns the provider id. */
+export interface FooterClaudeAccount {
+	readonly label: string;
+	readonly active: boolean;
+}
 
 type Usage = {
 	input: number;
@@ -36,6 +44,12 @@ export type FooterSnapshot = {
 	/** When true, append a `fast` label after thinking when active fast mode applies. */
 	showFastMode?: boolean;
 	/**
+	 * The Claude account this session's Claude models resolve to. Dim when a
+	 * Claude task would resolve here, bright when it is live; absent when no
+	 * Claude account is configured.
+	 */
+	claudeAccount?: FooterClaudeAccount;
+	/**
 	 * When true, an additional dim version line is rendered below the main
 	 * footer row. Per Q5.2, this only happens on the splash empty state.
 	 */
@@ -53,6 +67,9 @@ const RESET = "\u001b[0m";
 const SPLASH_VERSION_TOP_GAP_ROWS = 2;
 const SPLASH_VERSION_BOTTOM_GAP_ROWS = 7;
 const FOOTER_HORIZONTAL_PADDING = 1;
+/** `claude ` plus the eight-column label budget the resolver also applies. */
+const CLAUDE_ACCOUNT_CHIP_COLUMNS = 15;
+const CLAUDE_ACCOUNT_CHIP_TRUNCATION_MARKER = "…";
 
 export function colorHex(text: string, hex: string): string {
 	const normalized = hex.replace("#", "");
@@ -96,8 +113,12 @@ export function resolveGitBranch(cwd: string, runGit: GitRunner = defaultGitRunn
 /**
  * F1 two-zone footer layout (Element 5 from CATHEDRAL_DECISIONS.md).
  *
- *   left zone  = agent state:    ● <STATE> · <model> · <thinking> [· fast]
+ *   left zone  = agent state:    ● <STATE> · <model> · <thinking> [· fast] [· claude <account>]
  *   right zone = session metrics: <ctx>/<window> · $<cost>
+ *
+ * The account segment is the last left field dropped when width runs out: it is
+ * the one fact the model id cannot supply once the session is on another
+ * provider, which is exactly when the owner needs it.
  *
  * Zones are separated by spaces sized to fill width. Project/branch are not
  * rendered here: sidebar owns them when visible, and the hint row owns them
@@ -123,11 +144,29 @@ function formatFooterLineInner(snapshot: FooterSnapshot, width: number): string 
 	const model = colorHex(snapshot.modelId, activeThemeColors().foreground);
 	const thinking = colorHex(snapshot.thinkingLevel, activeThemeColors().foreground);
 	const sep = colorHex(" · ", activeThemeColors().foregroundDim);
+	const fast = snapshot.showFastMode ? colorHex("fast", activeThemeColors().foreground) : undefined;
+	// The resolver clips by grapheme so a label can never split mid-character;
+	// the column budget is the footer's to enforce, since only it knows how wide
+	// a grapheme paints (a CJK label is two columns per character).
+	const account = snapshot.claudeAccount
+		? colorHex(
+			truncateToWidth(formatClaudeAccountChip(snapshot.claudeAccount), CLAUDE_ACCOUNT_CHIP_COLUMNS, CLAUDE_ACCOUNT_CHIP_TRUNCATION_MARKER),
+			snapshot.claudeAccount.active ? activeThemeColors().foreground : activeThemeColors().foregroundDim,
+		)
+		: undefined;
 
-	const leftParts = [`${dot} ${stateLabel}`, model, thinking];
-	if (snapshot.showFastMode) leftParts.push(colorHex("fast", activeThemeColors().foreground));
-	const leftZone = leftParts.join(sep);
-	const leftLen = visibleWidth(leftZone);
+	const statePart = `${dot} ${stateLabel}`;
+
+	// Left ladder, richest first. The account segment outlives thinking and fast
+	// because it is the only field the model id cannot imply once the session is
+	// on a non-Claude provider.
+	const leftCandidates = uniqueCandidates([
+		[statePart, model, thinking, fast, account],
+		[statePart, model, thinking, account],
+		[statePart, model, account],
+		[statePart, account],
+		[statePart],
+	]);
 
 	const contextTokens = snapshot.contextTokens ?? snapshot.inputTokens + snapshot.outputTokens;
 	const contextWindow = snapshot.contextWindow ?? 0;
@@ -137,7 +176,11 @@ function formatFooterLineInner(snapshot: FooterSnapshot, width: number): string 
 	const tokens = colorHex(tokensText, activeThemeColors().foreground);
 	const cost = colorHex(`$${snapshot.costUsd.toFixed(2)}`, activeThemeColors().foreground);
 
-	// Build right zone progressively, dropping rightmost fields if they don't fit.
+	// Right zone degrades first; the left degrades only when its own fields alone
+	// cannot fit. Below that the ladder keeps the state and the account segment
+	// ahead of the model id: the model is visible in the input hints and the
+	// model picker, while the account is visible nowhere else on a non-Claude
+	// model, and a session metric is not worth losing it for.
 	const rightCandidates: string[][] = [
 		[tokens, cost],
 		[tokens],
@@ -145,21 +188,35 @@ function formatFooterLineInner(snapshot: FooterSnapshot, width: number): string 
 	];
 
 	const MIN_GAP = 3; // minimum spaces between zones
-	for (const candidate of rightCandidates) {
-		const rightZone = candidate.join(sep);
-		const rightLen = visibleWidth(rightZone);
-		const totalNeeded = leftLen + (rightLen > 0 ? MIN_GAP + rightLen : 0);
-		if (totalNeeded <= width) {
-			if (rightLen === 0) {
-				return truncateToWidth(leftZone, width);
-			}
-			const gap = width - leftLen - rightLen;
-			return `${leftZone}${" ".repeat(gap)}${rightZone}`;
+	for (const left of leftCandidates) {
+		const leftZone = left.join(sep);
+		const leftLen = visibleWidth(leftZone);
+		for (const candidate of rightCandidates) {
+			const rightZone = candidate.join(sep);
+			const rightLen = visibleWidth(rightZone);
+			const totalNeeded = leftLen + (rightLen > 0 ? MIN_GAP + rightLen : 0);
+			if (totalNeeded > width) continue;
+			if (rightLen === 0) return truncateToWidth(leftZone, width);
+			return `${leftZone}${" ".repeat(width - leftLen - rightLen)}${rightZone}`;
 		}
 	}
 
-	// Fallback: even just the left zone overflows; truncate it.
-	return truncateToWidth(leftZone, width);
+	// Even the state label alone overflows; keep the state readable.
+	return truncateToWidth(statePart, width);
+}
+
+/** Drops undefined fields and duplicate candidate rows, preserving order. */
+function uniqueCandidates(rows: Array<Array<string | undefined>>): string[][] {
+	const seen = new Set<string>();
+	const result: string[][] = [];
+	for (const row of rows) {
+		const fields = row.filter((field): field is string => field !== undefined);
+		const key = fields.join("\u0000");
+		if (seen.has(key)) continue;
+		seen.add(key);
+		result.push(fields);
+	}
+	return result;
 }
 
 /**
@@ -194,11 +251,46 @@ export function renderFooterBlock(snapshot: FooterSnapshot, width = 160): string
 	];
 }
 
-export function installFooter(pi: ExtensionAPI, options: { fastModeState?: FastModeState } = {}): () => void {
+/** Repaint hooks for the surfaces that own the classic footer's account chip. */
+export interface FooterHandle {
+	readonly requestRender: () => void;
+	/**
+	 * Re-resolve the memoized Claude account and repaint. Commands like
+	 * `/sumo:sync` run no agent turn, so no lifecycle event follows to do it.
+	 */
+	readonly refreshAccount: (ctx: ExtensionContext) => void;
+}
+
+export function installFooter(
+	pi: ExtensionAPI,
+	options: {
+		fastModeState?: FastModeState;
+		/** Subscription labels for extra Claude accounts, owned by the accounts config. */
+		subscriptionLabel?: (providerId: string) => string | undefined;
+		/** Injection seam; production reads the model registry and enabled patterns. */
+		resolveClaudeAccount?: (ctx: ExtensionContext) => { label: string; active: boolean } | undefined;
+	} = {},
+): FooterHandle {
 	let state: SumoCodeState = "idle";
 	let render: (() => void) | undefined;
 	let activeCtx: ExtensionContext | undefined;
 	let activeFooterData: Pick<ReadonlyFooterDataProvider, "getGitBranch"> | undefined;
+	let claudeAccount: FooterClaudeAccount | undefined;
+	// Memoized on purpose: the resolver reads settings.json, and the footer
+	// re-renders on every requestRender.
+	const resolveClaudeAccount =
+		options.resolveClaudeAccount ?? ((ctx: ExtensionContext) => resolveSessionClaudeAccount(ctx, options.subscriptionLabel));
+	const refreshClaudeAccount = (ctx: ExtensionContext): void => {
+		const status = safeRead(() => resolveClaudeAccount(ctx), undefined);
+		claudeAccount = status ? { label: status.label, active: status.active } : undefined;
+	};
+	// One owner for repainting the chip, so every caller gets the same guard: a
+	// headless session must not repaint the UI footer from its own context.
+	const refreshAccount = (ctx: ExtensionContext): void => {
+		if (!ctx.hasUI) return;
+		refreshClaudeAccount(ctx);
+		render?.();
+	};
 
 	const setState = (next: SumoCodeState): void => {
 		state = next;
@@ -207,6 +299,7 @@ export function installFooter(pi: ExtensionAPI, options: { fastModeState?: FastM
 
 	pi.on("session_start", (_event, ctx) => {
 		if (!ctx.hasUI) return;
+		refreshClaudeAccount(ctx);
 		activeCtx = ctx;
 
 		ctx.ui.setFooter((tui, _theme, footerData) => {
@@ -233,7 +326,7 @@ export function installFooter(pi: ExtensionAPI, options: { fastModeState?: FastM
 					const renderCtx = resolveRenderContext(activeCtx, ctx);
 					const branchProvider = activeFooterData ?? footerData;
 					const branch = safeRead(() => branchProvider.getGitBranch(), null);
-					return renderFooterBlock(createSnapshot(pi, renderCtx, branch, state, options.fastModeState), width);
+					return renderFooterBlock(createSnapshot(pi, renderCtx, branch, state, claudeAccount, options.fastModeState), width);
 				},
 			};
 		});
@@ -243,10 +336,18 @@ export function installFooter(pi: ExtensionAPI, options: { fastModeState?: FastM
 	pi.on("agent_start", () => setState("thinking"));
 	pi.on("tool_call", () => setState("tool"));
 	pi.on("tool_result", () => setState("thinking"));
-	pi.on("agent_end", () => setState("idle"));
-	pi.on("model_select", () => render?.());
+	pi.on("agent_end", (_event, ctx) => {
+		// `/accounts` renames write claude-accounts.json without a model change, so
+		// the chip re-resolves once per turn boundary to pick the new label up.
+		if (ctx.hasUI) refreshClaudeAccount(ctx);
+		setState("idle");
+	});
+	pi.on("model_select", (_event, ctx) => refreshAccount(ctx));
 
-	return () => render?.();
+	return {
+		requestRender: () => render?.(),
+		refreshAccount,
+	};
 }
 
 
@@ -267,6 +368,7 @@ function createSnapshot(
 	ctx: ExtensionContext | undefined,
 	branch: string | null,
 	state: SumoCodeState,
+	claudeAccount: FooterClaudeAccount | undefined,
 	fastModeState?: FastModeState,
 ): FooterSnapshot {
 	if (!ctx) {
@@ -301,6 +403,7 @@ function createSnapshot(
 		modelId: model?.id ?? "no-model",
 		thinkingLevel: getThinkingLevel(pi, ctx),
 		showFastMode: shouldShowFastModeInFooter(fastModeState, model),
+		claudeAccount,
 		isSplash: !sessionHasMessages(ctx),
 	};
 }

@@ -251,6 +251,16 @@ export function renderFooterBlock(snapshot: FooterSnapshot, width = 160): string
 	];
 }
 
+/** Repaint hooks for the surfaces that own the classic footer's account chip. */
+export interface FooterHandle {
+	readonly requestRender: () => void;
+	/**
+	 * Re-resolve the memoized Claude account and repaint. Commands like
+	 * `/sumo:sync` run no agent turn, so no lifecycle event follows to do it.
+	 */
+	readonly refreshAccount: (ctx: ExtensionContext) => void;
+}
+
 export function installFooter(
 	pi: ExtensionAPI,
 	options: {
@@ -260,7 +270,7 @@ export function installFooter(
 		/** Injection seam; production reads the model registry and enabled patterns. */
 		resolveClaudeAccount?: (ctx: ExtensionContext) => { label: string; active: boolean } | undefined;
 	} = {},
-): () => void {
+): FooterHandle {
 	let state: SumoCodeState = "idle";
 	let render: (() => void) | undefined;
 	let activeCtx: ExtensionContext | undefined;
@@ -333,7 +343,14 @@ export function installFooter(
 		render?.();
 	});
 
-	return () => render?.();
+	return {
+		requestRender: () => render?.(),
+		refreshAccount: (ctx: ExtensionContext): void => {
+			if (!ctx.hasUI) return;
+			refreshClaudeAccount(ctx);
+			render?.();
+		},
+	};
 }
 
 

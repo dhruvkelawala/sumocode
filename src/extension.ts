@@ -266,13 +266,14 @@ export default function sumocode(pi: ExtensionAPI): void {
 	}
 	let requestFooterRender: (() => void) | undefined;
 	const fastModeState = installFastMode(pi, { onChange: () => requestFooterRender?.() });
-	requestFooterRender = installFooter(pi, {
+	const footer = installFooter(pi, {
 		fastModeState,
 		// The accounts config owns the labels; the footer only displays them, so a
 		// rename lands in both surfaces. The chrome lowercases the label for the
 		// footer's voice, /accounts keeps the configured spelling.
 		subscriptionLabel: claudeAccountSubscriptionLabel,
 	});
+	requestFooterRender = footer.requestRender;
 	installMemoryExtraction(pi);
 	installCathedralEditor(pi);
 	installInputHints(pi);
@@ -296,7 +297,12 @@ export default function sumocode(pi: ExtensionAPI): void {
 	installSumoInteractions(pi, {
 		subagentManager,
 		installUiSurfaces: installSumoUiSurfaces,
-		refreshAccountStatus: (ctx) => publishClaudeAccountStatus(ctx, { subscriptionLabel: claudeAccountSubscriptionLabel }),
+		// Classic mode renders the footer from its own memoized context, and these
+		// commands start no agent turn, so repaint that cache too.
+		refreshAccountStatus: (ctx) => {
+			publishClaudeAccountStatus(ctx, { subscriptionLabel: claudeAccountSubscriptionLabel });
+			footer.refreshAccount(ctx);
+		},
 	});
 	logDiagnostic("extension_activate_end", {
 		taskMode: isTaskMode(),

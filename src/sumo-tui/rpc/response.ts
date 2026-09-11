@@ -7,8 +7,12 @@ export type RpcResponseData<C extends RpcSuccessCommand> = RpcSuccessResponseFor
 
 export function expectRpcSuccess<C extends RpcSuccessCommand>(response: RpcResponse, command: C): RpcSuccessResponseFor<C> {
 	if (response.success === false) throw new Error(`${command} failed: ${response.error}`);
+	// Decoded frames are untrusted JSON: `success` must be the boolean true, not a
+	// truthy value. Without this a malformed known response masquerades as success
+	// and reaches the state stores as if Pi had confirmed it.
+	if (response.success !== true) throw new Error(`${command} failed: response did not report boolean success`);
 	if (response.command !== command) throw new Error(`${command} failed: unexpected response command ${response.command}`);
-	// SAFETY: the two guards above prove success === true and command === command,
+	// SAFETY: the three guards above prove success === true and command === command,
 	// which is exactly the Extract<RpcResponse, { success: true; command: C }> arm.
 	return response as RpcSuccessResponseFor<C>;
 }

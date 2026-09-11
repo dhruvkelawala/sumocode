@@ -1179,7 +1179,7 @@ describe("RpcHostActions", () => {
 			}
 		});
 
-		it("yields the pinned-current marker before clipping a tab badge at portrait width", async () => {
+		it("yields the project tab's narrow label so the pinned-current marker and badges survive at portrait width", async () => {
 			const root = mkdtempSync(join(tmpdir(), "sumocode-resume-pinned-marker-fit-test-"));
 			try {
 				// A two-digit project count alone fills the portrait tab bar.

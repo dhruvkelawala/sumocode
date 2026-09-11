@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it, type Mock, vi } from "vitest";
 import {
+	MAX_CONTENT_INDEX,
 	TranscriptController,
 	getMessageContentKeyCacheMissesForTests,
 	planChatDiff,
@@ -1181,6 +1182,110 @@ describe("TranscriptController streaming deltas (Pi RPC wire shape)", () => {
 		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "weighing options" } });
 
 		expect(assistantText(controller)).toContain("weighing options");
+	});
+
+	it("rejects an out-of-range contentIndex as a protocol error instead of materializing the gap", () => {
+		const controller = new TranscriptController();
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: [] } });
+
+		controller.handleAgentEvent({
+			type: "message_update",
+			assistantMessageEvent: { type: "text_delta", contentIndex: MAX_CONTENT_INDEX + 1, delta: "dropped" },
+		});
+
+		expect(assistantText(controller)).toBe("");
+	});
+
+	it("rejects a giant contentIndex without a synchronous mega-allocation", () => {
+		// contentIndex is producer-controlled: one frame at 50_000_000 used to pad
+		// the draft's content array one part at a time on the render thread. This
+		// test only reaches its assertions if the fold refuses the frame.
+		const controller = new TranscriptController();
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: [] } });
+		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "kept" } });
+
+		controller.handleAgentEvent({
+			type: "message_update",
+			assistantMessageEvent: { type: "text_delta", contentIndex: 50_000_000, delta: "dropped" },
+		});
+
+		expect(assistantText(controller)).toContain("kept");
+		expect(assistantText(controller)).not.toContain("dropped");
+	});
+
+	it("rejects a fractional contentIndex instead of flooring it into a valid part", () => {
+		const controller = new TranscriptController();
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: [] } });
+		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "kept" } });
+
+		controller.handleAgentEvent({
+			type: "message_update",
+			assistantMessageEvent: { type: "text_delta", contentIndex: 64.5, delta: "dropped" },
+		});
+
+		expect(assistantText(controller)).toContain("kept");
+		expect(assistantText(controller)).not.toContain("dropped");
+	});
+
+	it("rejects a negative present contentIndex instead of appending it", () => {
+		const controller = new TranscriptController();
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: [] } });
+		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "kept" } });
+
+		controller.handleAgentEvent({
+			type: "message_update",
+			assistantMessageEvent: { type: "text_delta", contentIndex: -1, delta: "dropped" },
+		});
+
+		expect(assistantText(controller)).toContain("kept");
+		expect(assistantText(controller)).not.toContain("dropped");
+	});
+
+	it("rejects a non-number present contentIndex instead of appending it", () => {
+		const controller = new TranscriptController();
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: [] } });
+		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "kept" } });
+
+		controller.handleAgentEvent({
+			type: "message_update",
+			assistantMessageEvent: { type: "text_delta", contentIndex: "1", delta: "dropped" },
+		});
+
+		expect(assistantText(controller)).toContain("kept");
+		expect(assistantText(controller)).not.toContain("dropped");
+	});
+
+	it("keeps every legitimate contentIndex at or below the cap behaving as before", () => {
+		// Characterization: valid integer indices at or below
+		// MAX_CONTENT_INDEX are accepted, so 0 and the cap itself must still
+		// build (and extend) their part.
+		const controller = new TranscriptController();
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: [] } });
+		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "zero " } });
+		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: MAX_CONTENT_INDEX, delta: "at-cap" } });
+		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: MAX_CONTENT_INDEX, delta: "!" } });
+
+		expect(assistantText(controller)).toBe("zero \nat-cap!");
+	});
+
+	it("still appends a delta that carries no contentIndex after the cap part exists", () => {
+		const controller = new TranscriptController();
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: [] } });
+		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: MAX_CONTENT_INDEX, delta: "at-cap" } });
+		// A missing index falls back to the end of the content array. That
+		// fallback must not be mistaken for an out-of-range producer index even
+		// though the array is now one part longer than the cap.
+		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "no-index" } });
+
+		expect(assistantText(controller)).toContain("at-cap");
+		expect(assistantText(controller)).toContain("no-index");
 	});
 
 	it("still honors a full message on message_update when the wire carries one (back-compat)", () => {

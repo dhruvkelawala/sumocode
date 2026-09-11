@@ -96,6 +96,10 @@ async function renderFooterReady(width) {
 		state: "idle",
 		modelId: "gpt-5.5",
 		thinkingLevel: "medium",
+		// Non-Claude model with two Claude accounts: the chip is dim because the
+		// company account is only where a Claude task would resolve, which is the
+		// state this scenario exists to capture.
+		claudeAccount: { providerId: "anthropic-2", label: "company", active: false },
 	}, width);
 }
 

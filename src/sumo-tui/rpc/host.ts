@@ -545,6 +545,9 @@ export interface RpcMessageFollowUpDependencies {
 export function handleRpcMessageFollowUp(deps: RpcMessageFollowUpDependencies): Promise<void> {
 	return notifyOnError(async () => {
 		if (deps.isBlocked?.() === true) {
+			// The draft stays in the editor, but the entry dismiss has already cleared
+			// the previous sticky: without this the shortcut looks dead.
+			deps.notifications.notify("branch summary in progress", "warning");
 			return;
 		}
 		const draft = deps.editor.getText();

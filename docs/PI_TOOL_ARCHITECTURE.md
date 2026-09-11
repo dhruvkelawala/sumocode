@@ -42,7 +42,6 @@ vanilla Pi.
 
 | Tool family   | Source                         | Purpose                      |
 |---------------|--------------------------------|------------------------------|
-| `task`        | `src/native-task-tool.ts`       | Skill-run substrate; run isolated Pi subprocess skills and stream structured Activity state |
 | `subagent_*`  | `src/subagents/`                | Spawn, steer, inspect, wait for, cancel, and list delegated child agents; bounded snapshots project to Activities |
 | `terminal_*`  | `src/background-tasks/`         | Start, check, wait for, stop, and list durable non-interactive shell terminals with passive-by-default typed completion |
 
@@ -62,7 +61,7 @@ SumoCode may observe `pi.on("tool_call")` events for non-blocking UI state, but 
 
 ### Transcript View-Model Pipeline
 
-All tool results flow through the structured transcript. Ordinary Pi tools use `src/activity/pi-projector.ts`; native `task` and `subagent_*` records use bounded structural adapters in `src/activity/`. Execution machinery remains separate. `subagent_send` and `subagent_list` stay ordinary tool Activities, while spawn/check/wait/cancel details may also update canonical subagent Activities.
+All tool results flow through the structured transcript. Ordinary Pi tools use `src/activity/pi-projector.ts`; `subagent_*` records use bounded structural adapters in `src/activity/`. Execution machinery remains separate. `subagent_send` and `subagent_list` stay ordinary tool Activities, while spawn/check/wait/cancel details may also update canonical subagent Activities.
 
 
 ```

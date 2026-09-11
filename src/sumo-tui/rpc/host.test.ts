@@ -1311,6 +1311,70 @@ describe("RPC host client-exit shutdown", () => {
 		}
 	});
 
+	// /exit (src/commands/exit.ts) calls ctx.shutdown() in the RPC child, which
+	// exits code 0. That is a user-requested clean quit, not a crash: it must
+	// skip the sticky "exited unexpectedly" toast and the 750ms delay, and the
+	// host must exit 0 itself.
+	it("treats a clean child exit (code 0) as a quiet, immediate host exit", async () => {
+		vi.useFakeTimers();
+		try {
+			const notifications = { notify: vi.fn() };
+			const recordExitCode = vi.fn();
+			const stopHost = vi.fn(async (_code: number) => undefined);
+			const exit = vi.fn((_code: number) => undefined);
+			const handle = createRpcExitHandler(exitDeps({ notifications, recordExitCode, stopHost, exit, shutdownDelayMs: 750 }));
+
+			handle(new RpcChildExitError("RPC child exited code=0 signal=null.", { code: 0, signal: null }));
+			await flush();
+
+			expect(notifications.notify).not.toHaveBeenCalled();
+			expect(recordExitCode).toHaveBeenCalledWith(0);
+			expect(stopHost).toHaveBeenCalledWith(0);
+			expect(exit).toHaveBeenCalledWith(0);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("exits the real lifecycle 0 for a clean child exit without waiting out the notification delay", async () => {
+		vi.useFakeTimers();
+		try {
+			const signals = new EventEmitter();
+			const exit = vi.fn();
+			const childStop = vi.fn(async () => undefined);
+			const lifecycle = new RpcHostLifecycle({ env: {}, signals, input: {}, stderr: { write: () => true }, exit });
+			const running = lifecycle.start(async () => {
+				lifecycle.ownClient({ stop: childStop, stderr: "" });
+				lifecycle.childAdopted();
+				return lifecycle.waitForExit();
+			});
+			const notifications = { notify: vi.fn() };
+			const handle = createRpcExitHandler(exitDeps({
+				notifications,
+				recordExitCode: (code) => lifecycle.recordExitCode(code),
+				stopHost: (code) => lifecycle.stop(code, "child-exit"),
+				exit: (code) => lifecycle.exit(code),
+				// SAFETY: the handler passes only a zero-argument callback and delay, as in host wiring.
+				setTimeout: ((callback: () => void, delay: number) => lifecycle.scheduleTimeout("child-exit", callback, delay)) as typeof setTimeout,
+				shutdownDelayMs: 750,
+			}));
+
+			handle(new RpcChildExitError("RPC child exited code=0 signal=null.", { code: 0, signal: null }));
+			await flush();
+			await vi.advanceTimersByTimeAsync(1);
+
+			expect(notifications.notify).not.toHaveBeenCalled();
+			expect(childStop).toHaveBeenCalledOnce();
+			expect(await running).toBe(0);
+			expect(await lifecycle.waitForExit()).toBe(0);
+			expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("still shows the crash notification and uses the configured (not the child's) exit code for a real crash carrying a structured exit code", async () => {
 		vi.useFakeTimers();
 		try {

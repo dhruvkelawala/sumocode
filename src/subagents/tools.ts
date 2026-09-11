@@ -8,7 +8,7 @@ import type { TerminalHost } from "../terminal-host/types.js";
 import { latestText, type SubagentSnapshot } from "./domain.js";
 import { formatSubagentBudget, SUBAGENT_BUDGET_MAX } from "./budget-policy.js";
 import { type AtCapacityDetails, SubagentManager } from "./manager.js";
-import { formatCompletionManifestSummary, SUBAGENT_PROMPT_GUIDELINES, SUBAGENT_PROMPT_SNIPPET, SUBAGENT_TOOL_DESCRIPTIONS } from "./prompt.js";
+import { buildSubagentPromptGuidelines, formatCompletionManifestSummary, formatRoleTable, SUBAGENT_PROMPT_SNIPPET, SUBAGENT_TOOL_DESCRIPTIONS } from "./prompt.js";
 import { BUILT_IN_ROLES, loadRoles } from "./roles.js";
 
 const StringEnum = <T extends readonly string[]>(values: T, options?: { description?: string }) => {
@@ -127,16 +127,17 @@ export function registerSubagentTools(
 	roleLoader: typeof loadRoles = loadRoles,
 ): void {
 	const registeredRoles = roleLoader().roles;
+	const promptGuidelines = buildSubagentPromptGuidelines(registeredRoles);
 	const roleDescription = [
 		"Optional role preset. Explicit spawn parameters override role defaults. Known roles:",
-		...registeredRoles.map((role) => `${role.id} — ${role.description}${role.defaultWorktree ? " (isolated worktree by default)" : ""}`),
+		...registeredRoles.map((role) => `${role.id} — ${role.description} (${role.model ?? "inherit"}, ${role.defaultWorktree ? "worktree" : "shared checkout"})`),
 	].join("\n");
 	pi.registerTool({
 		name: "subagent_spawn",
 		label: "Subagent Spawn",
 		description: SUBAGENT_TOOL_DESCRIPTIONS.spawn,
 		promptSnippet: SUBAGENT_PROMPT_SNIPPET,
-		promptGuidelines: SUBAGENT_PROMPT_GUIDELINES,
+		promptGuidelines,
 		parameters: Type.Object({
 			budget: Type.Optional(Type.Object({
 				wallTimeMs: Type.Optional(Type.Integer({ minimum: 1, maximum: SUBAGENT_BUDGET_MAX.wallTimeMs })),
@@ -249,7 +250,7 @@ export function registerSubagentTools(
 		label: "Subagent Send",
 		description: SUBAGENT_TOOL_DESCRIPTIONS.send,
 		promptSnippet: SUBAGENT_PROMPT_SNIPPET,
-		promptGuidelines: SUBAGENT_PROMPT_GUIDELINES,
+		promptGuidelines,
 		parameters: Type.Object({
 			id: Type.String({ description: "Running visible subagent id, e.g. sa-1." }),
 			text: Type.String({ minLength: 1, description: "Non-blank steering text to submit to the child runtime." }),
@@ -274,7 +275,7 @@ export function registerSubagentTools(
 		label: "Subagent Check",
 		description: SUBAGENT_TOOL_DESCRIPTIONS.check,
 		promptSnippet: SUBAGENT_PROMPT_SNIPPET,
-		promptGuidelines: SUBAGENT_PROMPT_GUIDELINES,
+		promptGuidelines,
 		parameters: Type.Object({ id: Type.String({ description: "Subagent id, e.g. sa-1." }) }),
 		async execute(_toolCallId, params) {
 			const snapshot = manager.get(params.id);
@@ -293,7 +294,7 @@ export function registerSubagentTools(
 		label: "Subagent Wait",
 		description: SUBAGENT_TOOL_DESCRIPTIONS.wait,
 		promptSnippet: SUBAGENT_PROMPT_SNIPPET,
-		promptGuidelines: SUBAGENT_PROMPT_GUIDELINES,
+		promptGuidelines,
 		parameters: Type.Object({ ids: Type.Array(Type.String(), { maxItems: 64, description: "Subagent ids to wait for." }) }),
 		async execute(_toolCallId, params, signal, onUpdate) {
 			const snapshots = await manager.waitFor(params.ids, signal, (pending) => {
@@ -320,7 +321,7 @@ export function registerSubagentTools(
 		label: "Subagent Cancel",
 		description: SUBAGENT_TOOL_DESCRIPTIONS.cancel,
 		promptSnippet: SUBAGENT_PROMPT_SNIPPET,
-		promptGuidelines: SUBAGENT_PROMPT_GUIDELINES,
+		promptGuidelines,
 		parameters: Type.Object({ ids: Type.Array(Type.String(), { maxItems: 64, description: "Subagent ids to cancel." }) }),
 		async execute(_toolCallId, params) {
 			const lines = await manager.cancel(params.ids);
@@ -344,7 +345,7 @@ export function registerSubagentTools(
 		label: "Subagent Close",
 		description: SUBAGENT_TOOL_DESCRIPTIONS.close,
 		promptSnippet: SUBAGENT_PROMPT_SNIPPET,
-		promptGuidelines: SUBAGENT_PROMPT_GUIDELINES,
+		promptGuidelines,
 		parameters: Type.Object({
 			ids: Type.Array(Type.String(), { maxItems: 64, description: "Visible subagent ids to close gracefully." }),
 		}),
@@ -371,11 +372,13 @@ export function registerSubagentTools(
 		label: "Subagent List",
 		description: SUBAGENT_TOOL_DESCRIPTIONS.list,
 		promptSnippet: SUBAGENT_PROMPT_SNIPPET,
-		promptGuidelines: SUBAGENT_PROMPT_GUIDELINES,
+		promptGuidelines,
 		parameters: Type.Object({}),
 		async execute() {
 			const snapshots = manager.list();
-			const text = snapshots.length > 0 ? snapshots.map((snapshot) => formatSnapshotLine(snapshot, true)).join("\n") : "No subagents tracked.";
+			const text = snapshots.length > 0
+				? snapshots.map((snapshot) => formatSnapshotLine(snapshot, true)).join("\n")
+				: `No subagents tracked.\n\nKnown roles:\n${formatRoleTable(roleLoader().roles)}`;
 			return makeToolResult(text, { action: "list", subagents: snapshots });
 		},
 	});

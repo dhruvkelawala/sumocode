@@ -40,6 +40,15 @@ export interface SpawnPiPtyOptions {
 
 export interface SpawnedPiPty {
 	sendInput(data: string): void;
+	/** Size the child was spawned with; screen replay must use the same. */
+	readonly cols: number;
+	readonly rows: number;
+	/**
+	 * Matches the raw PTY byte stream. Only safe for bytes written atomically
+	 * (terminal/protocol sequences, diagnostics printed outside the retained
+	 * renderer, a test child's own stdout). Rendered text must go through
+	 * `waitForScreenText`: a repaint can split a visible string across frames.
+	 */
 	waitForOutput(pattern: string | RegExp, timeoutMs?: number): Promise<string>;
 	waitForReady(state: ReadinessState, timeoutMs?: number): Promise<void>;
 	sendSignal(signal: NodeJS.Signals): void;
@@ -231,6 +240,8 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 	const command = options.command ?? process.env.PI_BIN ?? "pi";
 	const args = applyDefaultProjectTrustOverride(options.args ?? ["--offline", "--no-extensions", "-e", "./src/extension.ts", "--no-session"]);
 	const spawnPty = options.spawn ?? spawn;
+	const cols = options.cols ?? 100;
+	const rows = options.rows ?? 30;
 	const childEnv = buildSpawnEnv(process.env, options.env);
 	const isRealPty = options.spawn === undefined;
 	// Auth comes before owned directories as well as spawn, so refusal leaves no state.
@@ -245,8 +256,8 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 	try {
 		const forkOptions = {
 			name: "xterm-256color",
-			cols: options.cols ?? 100,
-			rows: options.rows ?? 30,
+			cols,
+			rows,
 			cwd,
 			env: childEnv,
 		};
@@ -295,7 +306,7 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 		let screen = finalScreen;
 		if (screen === undefined) {
 			try {
-				screen = (await replayScreenRows(output, options.cols ?? 100, options.rows ?? 30)).join("\n");
+				screen = (await replayScreenRows(output, cols, rows)).join("\n");
 			} catch (error) {
 				screen = `<screen replay failed: ${String(error)}>`;
 			}
@@ -339,6 +350,8 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 		sendInput(data: string): void {
 			child.write(data);
 		},
+		cols,
+		rows,
 		waitForOutput(pattern: string | RegExp, timeoutMs = 5_000): Promise<string> {
 			if (matches(output, pattern)) return Promise.resolve(output);
 			return new Promise((resolveWaiter, rejectWaiter) => {
@@ -415,6 +428,18 @@ export interface ScreenSnapshot {
 	readonly text: string;
 }
 
+/**
+ * What a replayed-screen wait needs from a PTY: the size its frames must be
+ * replayed at, its raw byte stream, and a way to retain the failing screen.
+ * Both the harness PTYs and the native-contract session satisfy it.
+ */
+export interface ScreenReplaySource {
+	readonly cols: number;
+	readonly rows: number;
+	getOutput(): string;
+	captureEvidence(finalScreen?: string): Promise<string>;
+}
+
 export interface WaitForScreenOptions {
 	/** Terminal width the PTY was spawned with -- the replay must match it. */
 	readonly cols: number;
@@ -456,7 +481,7 @@ export async function replayScreenRows(output: string, cols: number, rows: numbe
  * the wait ends as soon as the condition is observably true and stable.
  */
 export async function waitForScreen(
-	pty: SpawnedPiPty,
+	pty: ScreenReplaySource,
 	predicate: (screen: ScreenSnapshot) => boolean,
 	options: WaitForScreenOptions,
 ): Promise<ScreenSnapshot> {
@@ -480,4 +505,26 @@ export async function waitForScreen(
 		}
 		await new Promise<void>((resolve) => setTimeout(resolve, pollIntervalMs));
 	}
+}
+
+/**
+ * Waits until the replayed screen's visible text contains `pattern` (a plain
+ * substring, or a RegExp over the rows joined by newlines).
+ *
+ * This is the matcher for rendered text. `waitForOutput` matches the raw byte
+ * stream, which is only safe for terminal/protocol sequences and diagnostics
+ * written outside the retained renderer: a repaint can flush a visible string
+ * in several frames ("hel" + cursor move + "lo"), so the literal never appears
+ * contiguously in the stream even though the screen shows it (issue #324).
+ */
+export async function waitForScreenText(
+	pty: ScreenReplaySource,
+	pattern: string | RegExp,
+	timeoutMs = 5_000,
+): Promise<ScreenSnapshot> {
+	return waitForScreen(
+		pty,
+		({ text }) => (typeof pattern === "string" ? text.includes(pattern) : pattern.test(text)),
+		{ cols: pty.cols, rows: pty.rows, timeoutMs },
+	);
 }

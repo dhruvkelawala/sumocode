@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import type { IDisposable, IEvent, IPty } from "node-pty";
 import { describe, expect, it } from "vitest";
 import { createChildEvidenceContext, HARNESS_SIGNATURE, HARNESS_SIGNATURE_ENV_KEY, recordPtyExit, requireHarnessAuth, spawnSupervisedPty } from "./harness-supervisor.js";
-import { buildSpawnEnv, spawnPiPty, type SpawnPiPtyOptions } from "./spawn-pi-pty.js";
+import { buildSpawnEnv, spawnPiPty, waitForScreenText, type SpawnPiPtyOptions } from "./spawn-pi-pty.js";
 
 type PtySpawn = NonNullable<SpawnPiPtyOptions["spawn"]>;
 type PtySpawnOptions = Parameters<PtySpawn>[2];
@@ -256,6 +256,38 @@ describe("spawnPiPty agent state isolation", () => {
 		} finally {
 			rmSync(generatedRoot, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("waitForScreenText", () => {
+	it("matches rendered text a repaint split across frames, where the raw byte stream does not", async () => {
+		// The retained renderer may flush "hel", move the cursor and emit SGR for
+		// the next cell, then flush "lo": the raw stream never carries the literal
+		// substring, while the replayed screen shows "hello". Matching rendered text
+		// against the raw stream is what made rpc-kitty-release flake (issue #324).
+		const frameSplit = "\x1b[1;1Hhel\x1b[1;4H\x1b[38;5;8ml\x1b[1;6H\x1b[39mo";
+		expect(frameSplit).not.toContain("hello");
+		const pty = {
+			cols: 20,
+			rows: 2,
+			getOutput: () => frameSplit,
+			captureEvidence: async () => "synthetic evidence",
+		};
+
+		const screen = await waitForScreenText(pty, "hello", 1_000);
+		expect(screen.rows[0]).toContain("hello");
+	});
+
+	it("matches a regex over the visible rows", async () => {
+		const pty = {
+			cols: 20,
+			rows: 2,
+			getOutput: () => "\x1b[1;1HCTRL+/\x1b[2;1H\u00b7 COMMANDS",
+			captureEvidence: async () => "synthetic evidence",
+		};
+
+		const screen = await waitForScreenText(pty, /CTRL\+\/[\s\S]*COMMANDS/, 1_000);
+		expect(screen.text).toContain("COMMANDS");
 	});
 });
 

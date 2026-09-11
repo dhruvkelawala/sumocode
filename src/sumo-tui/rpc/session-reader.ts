@@ -360,13 +360,23 @@ async function readRankedSessionInfos(files: readonly string[], concurrency: num
 }
 
 /**
+ * The all-sessions window: `sessions` is what the picker shows, and
+ * `truncated` says candidate files were dropped to stay inside the row cap, so
+ * the list is a newest-N window rather than every session on disk.
+ */
+export interface SessionWindow {
+	readonly sessions: readonly SessionListInfo[];
+	readonly truncated: boolean;
+}
+
+/**
  * Reads the `maxSessions` most recently active files out of `rankedFiles`
  * (already newest first), then pins `currentSessionFile` when it fell outside
  * that window (its info comes from the caller when already read, otherwise one
  * more bounded prefix read). The pin takes the last row slot, keeping the
- * result at or below the cap.
+ * result at or below the cap. `truncated` reports candidates the cap dropped.
  */
-async function listSessionsFromRankedFiles(rankedFiles: readonly string[], { concurrency = 8, reader = readSessionInfo, maxSessions = DEFAULT_MAX_ALL_SESSIONS, currentSessionFile, currentSessionInfo }: ListAllSessionsOptions = {}): Promise<SessionListInfo[]> {
+async function listSessionsFromRankedFiles(rankedFiles: readonly string[], { concurrency = 8, reader = readSessionInfo, maxSessions = DEFAULT_MAX_ALL_SESSIONS, currentSessionFile, currentSessionInfo }: ListAllSessionsOptions = {}): Promise<SessionWindow> {
 	const limit = Number.isFinite(maxSessions) ? Math.max(0, Math.floor(maxSessions)) : DEFAULT_MAX_ALL_SESSIONS;
 	const sessions = limit > 0 ? await readRankedSessionInfos(rankedFiles, concurrency, reader, limit) : [];
 	if (limit > 0 && currentSessionFile && !sessions.some((session) => session.path === currentSessionFile)) {
@@ -377,7 +387,8 @@ async function listSessionsFromRankedFiles(rankedFiles: readonly string[], { con
 		}
 	}
 	sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
-	return sessions;
+	// A cap of 0 lists everything, so it hides nothing.
+	return { sessions, truncated: limit > 0 && rankedFiles.length > limit };
 }
 
 /**
@@ -413,10 +424,12 @@ async function collectSessionFilesUnder(sessionsRoot: string): Promise<string[]>
  * the whole window. `currentSessionFile` is always included, so a session that
  * fell outside the window (old file name, or no longer active) is still
  * resumable.
+ *
+ * Returns the rows only; `listAllSessionsForSession` carries the truncation
+ * flag the all-sessions picker renders.
  */
 export async function listAllSessions(sessionsRoot: string, options: ListAllSessionsOptions = {}): Promise<SessionListInfo[]> {
-	const files = await collectSessionFilesUnder(sessionsRoot);
-	return listSessionsFromRankedFiles(await rankSessionFilesByActivity(files, options.concurrency ?? 8), options);
+	return [...(await listAllSessionsWithin(sessionsRoot, options)).sessions];
 }
 
 /** Pi's `getDefaultSessionDirPath` encoding of a cwd into a project directory name. */
@@ -451,8 +464,11 @@ function isEncodedProjectDirName(name: string): boolean {
  * the caller has no layout to hand down; preferring the flat reading would
  * instead hide every other project on a default install, where an unreadable
  * session file is the common case (brand-new session, or a corrupt one).
+ *
+ * Returns the window rather than bare rows so `/resume` can tell the user when
+ * the all-sessions scope is showing a bounded window (`truncated`).
  */
-export async function listAllSessionsForSession(sessionFile: string, options: ListAllSessionsOptions = {}): Promise<SessionListInfo[]> {
+export async function listAllSessionsForSession(sessionFile: string, options: ListAllSessionsOptions = {}): Promise<SessionWindow> {
 	const reader = options.reader ?? readSessionInfo;
 	const sessionDir = dirname(sessionFile);
 	const currentSessionInfo = await reader(sessionFile);
@@ -460,9 +476,15 @@ export async function listAllSessionsForSession(sessionFile: string, options: Li
 	const nested = currentSessionInfo !== undefined
 		? basename(sessionDir) === encodeSessionDirName(currentSessionInfo.cwd)
 		: isEncodedProjectDirName(basename(sessionDir));
-	if (nested) return listAllSessions(dirname(sessionDir), resolvedOptions);
+	if (nested) return listAllSessionsWithin(dirname(sessionDir), resolvedOptions);
 	const files = (await collectSessionFiles(sessionDir)) ?? [];
 	return listSessionsFromRankedFiles(await rankSessionFilesByActivity(files, options.concurrency ?? 8), resolvedOptions);
+}
+
+/** `listAllSessions` that keeps the truncation flag. */
+async function listAllSessionsWithin(sessionsRoot: string, options: ListAllSessionsOptions): Promise<SessionWindow> {
+	const files = await collectSessionFilesUnder(sessionsRoot);
+	return listSessionsFromRankedFiles(await rankSessionFilesByActivity(files, options.concurrency ?? 8), options);
 }
 
 /**

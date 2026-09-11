@@ -456,9 +456,10 @@ describe("session-reader", () => {
 				mkdirSync(baitDir, { recursive: true });
 				writeSession(join(baitDir, fileNameFor(2, "bait")), "bait", isoAt(2), "/bait");
 
-				const sessions = await listAllSessionsForSession(currentFile);
+				const { sessions, truncated } = await listAllSessionsForSession(currentFile);
 
 				expect(sessions.map((session) => session.id)).toEqual(["sibling", "current"]);
+				expect(truncated).toBe(false);
 			});
 
 			it("keeps the nested layout scanning the project root", async () => {
@@ -470,7 +471,7 @@ describe("session-reader", () => {
 				const currentFile = writeSession(join(currentDir, fileNameFor(0, "current")), "current", isoAt(0), "/repo");
 				writeSession(join(otherDir, fileNameFor(1, "other")), "other", isoAt(1), "/repo-other");
 
-				const sessions = await listAllSessionsForSession(currentFile);
+				const { sessions } = await listAllSessionsForSession(currentFile);
 
 				expect(sessions.map((session) => session.id)).toEqual(["other", "current"]);
 			});
@@ -484,7 +485,7 @@ describe("session-reader", () => {
 				}
 				let reads = 0;
 
-				const sessions = await listAllSessionsForSession(currentFile, {
+				const { sessions, truncated } = await listAllSessionsForSession(currentFile, {
 					reader: async (filePath) => {
 						reads += 1;
 						return readSessionInfo(filePath);
@@ -496,6 +497,8 @@ describe("session-reader", () => {
 				expect(reads).toBe(DEFAULT_MAX_ALL_SESSIONS + 1);
 				expect(sessions).toHaveLength(DEFAULT_MAX_ALL_SESSIONS);
 				expect(sessions.map((session) => session.id)).toContain("current");
+				// The cap dropped candidates, so the picker must say the list is a window.
+				expect(truncated).toBe(true);
 			});
 		});
 	});

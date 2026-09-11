@@ -1093,8 +1093,10 @@ export class RpcHostActions {
 	 * 676-session store) and layout-aware: Pi's nested default layout scans the
 	 * sessions root, a flat custom `--session-dir` scans that directory itself
 	 * (never its parent), and the current session is pinned into the window
-	 * either way. Pi loads its all-scope lazily on Tab, which would need a lazy
-	 * tab capability this selector does not have.
+	 * either way. When that cap drops candidates the tab is labelled `newest`,
+	 * so a bounded window is never mistaken for the whole store. Pi loads its
+	 * all-scope lazily on Tab, which would need a lazy tab capability this
+	 * selector does not have.
 	 * ponytail: eager bounded scan, upgrade to a lazy tab if open latency grows.
 	 */
 	public async openResumeSelector(): Promise<void> {
@@ -1103,17 +1105,20 @@ export class RpcHostActions {
 			notify(this.notifications, "no session file available to resume from", "warning");
 			return;
 		}
-		const [projectSessions, allSessions] = await Promise.all([
+		const [projectSessions, allSessionsWindow] = await Promise.all([
 			listSessions(dirname(sessionFile)),
 			listAllSessionsForSession(sessionFile),
 		]);
+		const allSessions = allSessionsWindow.sessions;
 		if (projectSessions.length === 0 && allSessions.length === 0) {
 			notify(this.notifications, "no sessions found", "warning");
 			return;
 		}
 		const tabs: InlineSelectorTab[] = [
 			{ id: "project", label: "current project", options: resumeSessionItems(projectSessions, sessionFile) },
-			{ id: "all", label: "all sessions", options: resumeSessionItems(allSessions, sessionFile, { showProjectDirectory: true }) },
+			// The tab badge appends the row count, so a capped list reads as
+			// "all sessions · newest <rows shown>" instead of an exhaustive list.
+			{ id: "all", label: allSessionsWindow.truncated ? "all sessions · newest" : "all sessions", options: resumeSessionItems(allSessions, sessionFile, { showProjectDirectory: true }) },
 		];
 		// Nothing to resume inside this project? Open where the sessions are
 		// (same default-tab rule the model chooser uses for an empty enabled list).

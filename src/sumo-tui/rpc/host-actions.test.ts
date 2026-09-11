@@ -21,6 +21,7 @@ import type { NotificationLevel } from "../widgets/notification.js";
 import type { RpcHostControls, RpcModelOption, RpcSlashCommand } from "./controls.js";
 import type { RpcTreeNavigationOutcome, RpcTreeNavigationRequest } from "../pi-compat/tree-navigation-command.js";
 import type { SessionEntryLike } from "./session-reader.js";
+import { DEFAULT_MAX_ALL_SESSIONS } from "./session-reader.js";
 import { isRpcHostSlashCommandName, RpcHostActions, RPC_HOST_COMMAND_PALETTE_INPUT, RPC_HOST_ROUTED_CHILD_COMMANDS, RPC_HOST_SLASH_COMMANDS } from "./host-actions.js";
 import { RpcHostOverlayManager } from "./host-overlays.js";
 import { writeLovelyWebPatch } from "./lovely-web-config.js";
@@ -1131,6 +1132,38 @@ describe("RpcHostActions", () => {
 				inlineSelectors.handleInput(SELECTOR_ENTER); // row 0 is the newest: the sibling
 				await resumePromise;
 				expect(controls.calls).toContain(`switchSession:${siblingFile}`);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+
+		it("labels the all-sessions tab as the newest window when the cap drops sessions", async () => {
+			const root = mkdtempSync(join(tmpdir(), "sumocode-resume-scope-capped-test-"));
+			try {
+				const currentFile = writeFixtureSession(root, "2026-07-02T20-00-00-000Z_current.jsonl", "current", "2026-07-02T20:00:00.000Z", "current session first message");
+				// One more session than the window holds, all in another project.
+				for (let index = 0; index <= DEFAULT_MAX_ALL_SESSIONS; index += 1) {
+					const minute = String(index % 60).padStart(2, "0");
+					writeFixtureSession(root, `2026-07-02T21-${minute}-00-000Z_bulk-${index}.jsonl`, `bulk-${index}`, "2026-07-02T21:00:01.000Z", `bulk first message ${index}`, { projectDir: "--other--", cwd: "/repo-other" });
+				}
+				const { actions, inlineSelectors } = setup({ sessionFile: currentFile });
+
+				const resumePromise = actions.handleSubmittedText("/resume");
+				await waitForInlineSelector(inlineSelectors, "Resume session");
+				const projectScope = inlineSelectorText(inlineSelectors);
+				expect(projectScope).toContain("◆ CURRENT PROJECT 1");
+				// The capped scope says so; the exhaustive project scope does not.
+				expect(projectScope).toContain("◇ ALL SESSIONS · NEWEST 100");
+				// Narrow (portrait) widths must not push the other tab out of the bar.
+				const narrow = inlineSelectorText(inlineSelectors, 60);
+				expect(narrow).toContain("ALL SESSIONS · NEWEST 100");
+				expect(narrow).toContain("CURRENT PROJECT 1");
+
+				inlineSelectors.handleInput(SELECTOR_TAB);
+				expect(inlineSelectorText(inlineSelectors)).toContain("◆ ALL SESSIONS · NEWEST 100");
+
+				inlineSelectors.handleInput(SELECTOR_ESCAPE);
+				await resumePromise;
 			} finally {
 				rmSync(root, { recursive: true, force: true });
 			}

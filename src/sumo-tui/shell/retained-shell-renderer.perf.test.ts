@@ -125,11 +125,12 @@ describe("RetainedShellRenderer idle indicator ticks", () => {
 			expect(editor.renderCalls).toBe(0);
 			expect(belowEditor.renderCalls).toBe(0);
 			expect(footer.renderCalls).toBe(0);
-			// Wall-clock ceiling, secondary to the call-count assertions above: the
-			// fixed path measured 0.8 ms/tick and the overlay-guard regression
-			// 6.3 ms/tick in this harness. It is deliberately loose so a loaded CI
-			// worker cannot flake it; the structural assertions are the real gate.
-			expect(elapsedMs).toBeLessThan(2_000);
+			// Runaway ceiling only: the loop is CPU-bound and this suite runs in
+			// parallel with other heavy files, so a tight millisecond budget would
+			// flake on a loaded worker (measured 0.8 ms/tick idle, 7 ms/tick under
+			// load). The call-count and sibling-render assertions above are the
+			// real gate; this catches a tick that never yields or loops back-to-back.
+			expect(elapsedMs).toBeLessThan(10_000);
 
 			const frame = renderer.getLastFrame();
 			if (!frame) throw new Error("renderer produced no frame");

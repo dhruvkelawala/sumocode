@@ -318,7 +318,7 @@ function runConfigLinkStep(configRepo: string, agentDir: string, deps: SumoSyncD
 }
 
 /** Accumulate a step's output up to `MAX_STEP_OUTPUT_CHARS`, dropping the oldest text first. */
-function outputTail() {
+function createOutputTail() {
 	let text = "";
 	let dropped = 0;
 	return {
@@ -346,8 +346,8 @@ function runStepStreamed(
 	return new Promise((resolveOutput, rejectOutput) => {
 		const signal = AbortSignal.timeout(options.timeout);
 		const child = spawnChild(file, args, { cwd: options.cwd, signal });
-		const stdout = outputTail();
-		const stderr = outputTail();
+		const stdout = createOutputTail();
+		const stderr = createOutputTail();
 		let settled = false;
 		const settle = (finish: () => void): void => {
 			if (settled) return;

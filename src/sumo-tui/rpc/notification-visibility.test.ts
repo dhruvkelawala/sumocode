@@ -1,6 +1,7 @@
 import type { Component } from "@earendil-works/pi-tui";
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { activeThemeColors } from "../../themes/index.js";
 import type { HardwareCursor } from "../render/compositor.js";
 import { TerminalSessionOwner, type TerminalPatch } from "../runtime/terminal-controller.js";
 import { InputRecoveryNotice } from "../widgets/input-recovery-notice.js";
@@ -23,7 +24,7 @@ class CaptureTerminal extends TerminalSessionOwner {
 	}
 }
 
-async function createShell(notifications?: Component, modal?: Component & { getActiveKind(): string }) {
+async function createShell(notifications?: Component & Partial<Pick<NotificationCenter, "getNotice">>, modal?: Component & { getActiveKind(): string }) {
 	const terminal = new CaptureTerminal({ output: { write: () => undefined } });
 	const viewport = { columns: 90, rows: 30 };
 	let hint = "before tick";
@@ -32,11 +33,17 @@ async function createShell(notifications?: Component, modal?: Component & { getA
 		editor: new RpcHostEditorController(), notifications, modal,
 		extensionRegions: { belowEditor: { invalidate() {}, render: () => [hint] } },
 	});
-	const text = () => {
+	const rows = () => {
 		const frame = shell.getLastFrame()!;
-		return Array.from({ length: viewport.rows }, (_, row) => frame.toPlainRow(row)).join("\n");
+		return Array.from({ length: viewport.rows }, (_, row) => frame.toPlainRow(row));
 	};
-	return { shell, terminal, viewport, text, setHint: (value: string) => { hint = value; } };
+	const text = () => rows().join("\n");
+	return { shell, terminal, viewport, rows, text, setHint: (value: string) => { hint = value; } };
+}
+
+/** The active layout paints the input frame's bottom border one row above the hint row. */
+function hintRowIndex(rows: readonly string[]): number {
+	return rows.findIndex((row) => row.includes("└")) + 1;
 }
 
 afterEach(() => vi.useRealTimers());
@@ -81,13 +88,22 @@ describe("RPC notification visibility", () => {
 		});
 		try {
 			await runtime.start();
-			notifications.notify("upstream toast", "info", 0);
+			// Issue 481: the notice is a transient hint, not a retained toast.
+			notifications.notify("upstream notice");
 			runtime.requestRender();
 			await vi.advanceTimersByTimeAsync(0);
-			// Issue 481: upstream notifications are neither retained nor painted.
 			expect(notifications.getToasts()).toEqual([]);
-			expect(terminal.patches.map((patch) => patch.ansi).join("")).not.toContain("upstream toast");
+			expect(notifications.getNotice()?.message).toBe("upstream notice");
+			expect(terminal.patches.map((patch) => patch.ansi).join("")).toContain("upstream notice");
 			expect(terminal.cursor).not.toBeNull();
+			// The hint row is not a log: the next keystroke clears it without a repaint race.
+			input.emit("data", "x");
+			await vi.advanceTimersByTimeAsync(0);
+			expect(notifications.getNotice()).toBeUndefined();
+			notifications.notify("sticky failure", "error");
+			input.emit("data", "\u001b");
+			await vi.advanceTimersByTimeAsync(30);
+			expect(notifications.getNotice()).toBeUndefined();
 			notifications.clear();
 			runtime.requestRender();
 			await vi.advanceTimersByTimeAsync(0);
@@ -134,19 +150,19 @@ describe("RPC notification visibility", () => {
 		const modal = { invalidate() {}, render: () => ["active modal"], getActiveKind: () => modalActive ? "select" : "" };
 		const { shell, terminal, text, setHint } = await createShell(notifications, modal);
 		try {
-			notifications.notify("upstream toast");
+			notifications.notify("expiring hint");
 			shell.render();
-			expect(text()).not.toContain("upstream toast");
+			expect(text()).toContain("expiring hint");
 			expect(terminal.cursor).not.toBeNull();
 			await vi.advanceTimersByTimeAsync(499);
 			shell.render();
 			expect(notifications.getToasts()).toEqual([]);
-			expect(text()).not.toContain("upstream toast");
+			expect(text()).toContain("expiring hint");
 			expect(terminal.cursor).not.toBeNull();
 			await vi.advanceTimersByTimeAsync(1);
-			shell.repaintWorkingIndicator();
+			shell.render();
 			expect(notifications.getToasts()).toEqual([]);
-			expect(text()).not.toContain("upstream toast");
+			expect(text()).not.toContain("expiring hint");
 			expect(terminal.cursor).not.toBeNull();
 			setHint("ZZZZZZZZ");
 			shell.repaintWorkingIndicator();
@@ -155,6 +171,38 @@ describe("RPC notification visibility", () => {
 			shell.repaintWorkingIndicator();
 			expect(terminal.cursor).toBeNull();
 			expect(text()).toContain("ZZZZZZZZ");
+		} finally {
+			shell.dispose();
+			notifications.dispose();
+		}
+	});
+
+	it("paints a transient notice in the hint row and a sticky failure above the input frame", async () => {
+		const notifications = new NotificationCenter();
+		const { shell, rows, text } = await createShell(notifications);
+		try {
+			shell.render();
+			const hint = hintRowIndex(rows());
+			const editor = hint - 2;
+			expect(editor).toBeGreaterThan(1);
+			const projectHint = rows()[hint]!.slice(0, rows()[hint]!.indexOf("CTRL+/")).trim();
+			expect(projectHint.length).toBeGreaterThan(0);
+
+			notifications.notify("new session");
+			shell.render();
+			expect(rows()[hintRowIndex(rows())]).toContain("new session");
+			expect(text()).not.toContain(projectHint);
+
+			// A sticky failure leaves the hint row alone and paints its own row above
+			// the input frame, in the rust/approval tone.
+			notifications.notify("unknown model: nope", "warning", 0);
+			shell.render();
+			const painted = rows();
+			const noticeRow = painted.findIndex((row) => row.includes("unknown model: nope"));
+			expect(noticeRow).toBeGreaterThanOrEqual(0);
+			expect(noticeRow).toBeLessThan(hintRowIndex(painted) - 2);
+			expect(painted[hintRowIndex(painted)]).toContain(projectHint);
+			expect(shell.getLastFrame()!.getCell(noticeRow, 0).fg?.toLowerCase()).toBe(activeThemeColors().states.approval.toLowerCase());
 		} finally {
 			shell.dispose();
 			notifications.dispose();

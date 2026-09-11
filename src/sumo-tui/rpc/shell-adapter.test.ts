@@ -634,7 +634,7 @@ describe("RpcShellAdapter chat update", () => {
 });
 
 describe("RpcShellAdapter mouse drag-select + OSC52 copy", () => {
-	it("turns a drag press/move/up over chat text into a selection, auto-copies via OSC52, and shows a copied notification", async () => {
+	it("turns a drag press/move/up over chat text into a selection, auto-copies via OSC52, and notifies nothing", async () => {
 		const terminal = new SpyTerminal();
 		const notifications = new SpyNotifications();
 		const adapter = await makeAdapter({ terminal, notifications });
@@ -662,7 +662,7 @@ describe("RpcShellAdapter mouse drag-select + OSC52 copy", () => {
 			const decoded = Buffer.from(terminal.clipboardSequences[0]!.replace(/^\x1b\]52;c;/, "").replace(/\x1b\\$/, ""), "base64").toString("utf8");
 			expect(decoded).toContain("selectable drag target");
 
-			expect(notifications.notifications).toContainEqual(expect.objectContaining({ message: "copied", level: "success" }));
+			expect(notifications.notifications).toEqual([]);
 		} finally {
 			adapter.dispose();
 		}

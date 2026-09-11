@@ -37,8 +37,16 @@ import { ChatPager } from "../widgets/chat-pager.js";
 import type { KeyEvent } from "../input/key-router.js";
 import type { MouseEvent } from "../input/mouse.js";
 import { SelectionController } from "../input/selection.js";
-import type { NotificationLevel } from "../widgets/notification.js";
+import type { HostNotice, NotificationCenter } from "../widgets/notification.js";
+import { renderHostNotice } from "../widgets/notification.js";
 import type { RpcHostChromeState } from "./state.js";
+
+/**
+ * The slice of `NotificationCenter` the shell renders from: the extension-UI
+ * `notify` sink plus the one live notice slot (issue 481). Optional members so
+ * test doubles that only need `notify`/`render` stay valid.
+ */
+type RpcNoticeSink = Component & Partial<Pick<NotificationCenter, "notify" | "getNotice">>;
 
 export interface RpcShellAdapterOptions {
 	readonly terminal: ShellTerminalSessionOwner;
@@ -54,7 +62,7 @@ export interface RpcShellAdapterOptions {
 	readonly editor?: Component;
 	readonly modal?: Component & { getActiveKind?(): string | undefined };
 	readonly overlay?: Component & { getActiveKind?(): string | undefined };
-	readonly notifications?: Component & { notify?(message: string, level?: NotificationLevel, timeoutMs?: number): void };
+	readonly notifications?: RpcNoticeSink;
 	readonly extensionRegions?: {
 		readonly aboveEditor?: Component;
 		readonly belowEditor?: Component;
@@ -124,7 +132,7 @@ export class RpcShellAdapter {
 	private readonly editor: Component | undefined;
 	private readonly modal: (Component & { getActiveKind?(): string | undefined }) | undefined;
 	private readonly overlay: (Component & { getActiveKind?(): string | undefined }) | undefined;
-	private readonly notifications: (Component & { notify?(message: string, level?: NotificationLevel, timeoutMs?: number): void }) | undefined;
+	private readonly notifications: RpcNoticeSink | undefined;
 	private readonly extensionAboveEditor: Component | undefined;
 	private readonly extensionBelowEditor: Component | undefined;
 	private readonly extensionSidebar: Component | undefined;
@@ -200,7 +208,6 @@ export class RpcShellAdapter {
 				options.terminal.writeClipboardSequence?.(sequence);
 			},
 			onCopied: () => {
-				this.notifications?.notify?.("copied", "success", 1_400);
 				this.renderer.invalidatePreviousFrame();
 			},
 			onSelectionChanged: () => this.renderer.invalidatePreviousFrame(),
@@ -405,6 +412,18 @@ export class RpcShellAdapter {
 
 	public getNotifications(): Component | undefined {
 		return this.notifications;
+	}
+
+	/** The one live host notice (issue 481); the shell owns where each kind paints. */
+	public getNotice(): HostNotice | undefined {
+		return this.notifications?.getNotice?.();
+	}
+
+	/** Sticky failures paint above the input frame; transient hints paint in the hint row. */
+	public renderStickyNotice(width: number): string[] {
+		const notice = this.getNotice();
+		if (notice?.sticky !== true) return [];
+		return renderHostNotice(notice, width);
 	}
 
 	public renderEditor(width: number, inputPreview: string | undefined): string[] {
@@ -757,29 +776,32 @@ function latestUserPrompt(transcript: TranscriptViewModel): string | undefined {
 	return undefined;
 }
 
-function renderActiveHint(state: RpcHostChromeState, width: number, sidebarVisible: boolean): string {
+function renderActiveHint(state: RpcHostChromeState, width: number, sidebarVisible: boolean, notice: string | undefined): string {
 	const pad = width > 2 ? 1 : 0;
 	const innerWidth = Math.max(0, width - pad * 2);
 	const visualHarness = isVisualHarness();
 	const project = visualHarness ? "sumocode" : formatCwd(hostCwd());
 	const branch = visualHarness ? "main" : state.gitBranch;
-	const leftHint = sidebarVisible ? undefined : branch ? `${project} (${branch})` : project;
+	// A live host notice replaces the project/branch hint: in-flight feedback
+	// (ctrl-c quit window, session changes, "nothing happened" lines) must stay
+	// visible even when the sidebar owns the project/branch context.
+	const leftHint = notice ?? (sidebarVisible ? undefined : branch ? `${project} (${branch})` : project);
 	const hint = renderInputHints(innerWidth, {
 		leftHint,
 		leftHintOverflow: "truncate",
-		leftHintStyle: "project-branch",
+		leftHintStyle: notice !== undefined ? "dim" : "project-branch",
 	});
 	return `${" ".repeat(pad)}${hint}${" ".repeat(pad)}`;
 }
 
-function renderSplashHint(state: RpcHostChromeState, width: number): string {
+function renderSplashHint(state: RpcHostChromeState, width: number, notice: string | undefined): string {
 	const frameWidth = Math.min(width, SPLASH_INPUT_FRAME_WIDTH);
-	const leftHint = state.modelLabel === undefined && state.hydrated !== true
+	const leftHint = notice ?? (state.modelLabel === undefined && state.hydrated !== true
 		? "╰─"
-		: splashInvocationHint(state.modelLabel ? state.modelLabel.split("/").pop()! : "no model", state.thinkingLevel);
+		: splashInvocationHint(state.modelLabel ? state.modelLabel.split("/").pop()! : "no model", state.thinkingLevel));
 	const hint = renderInputHints(frameWidth, {
 		leftHint,
-		leftHintStyle: "model-thinking",
+		leftHintStyle: notice !== undefined ? "dim" : "model-thinking",
 	});
 	return centerAnsi(hint, width);
 }
@@ -811,11 +833,18 @@ class RpcHintComponent implements ShellRenderable {
 	public constructor(private readonly adapter: RpcShellAdapter) {}
 	public invalidate(): void {}
 	public render(width: number): string[] {
-		const extensionRows = this.adapter.renderExtensionBelowEditor(width).filter((row) => stripAnsi(row).trim().length > 0);
-		if (extensionRows.length > 0) return [extensionRows[0]!];
-		if (!this.adapter.isActive()) return [renderSplashHint(this.adapter.getState(), width)];
+		// A live host notice owns the hint row: functional feedback (the ctrl-c
+		// quit window, session changes, "nothing happened" lines) must not be
+		// silenced by an extension's belowEditor widget.
+		const notice = this.adapter.getNotice();
+		const hint = notice?.sticky === true ? undefined : notice?.message;
+		if (hint === undefined) {
+			const extensionRows = this.adapter.renderExtensionBelowEditor(width).filter((row) => stripAnsi(row).trim().length > 0);
+			if (extensionRows.length > 0) return [extensionRows[0]!];
+		}
+		if (!this.adapter.isActive()) return [renderSplashHint(this.adapter.getState(), width, hint)];
 		const sidebarVisible = width >= SIDEBAR_MIN_TERMINAL_WIDTH;
-		return [renderActiveHint(this.adapter.getState(), width, sidebarVisible)];
+		return [renderActiveHint(this.adapter.getState(), width, sidebarVisible, hint)];
 	}
 }
 
@@ -823,16 +852,19 @@ class RpcAboveEditorComponent implements ShellRenderable {
 	public constructor(private readonly adapter: RpcShellAdapter) {}
 	public invalidate(): void {}
 	public render(width: number): string[] {
+		// A sticky failure sits closest to the input frame: it answers the action
+		// the user just took (issue 481 home B).
+		const noticeRows = this.adapter.renderStickyNotice(width);
 		// Queued steer/follow-up messages render above everything else in this
 		// region (visually: bottom of the chat area), including when an
 		// extension region (e.g. approval prompt) is active — a queued message
 		// must never silently vanish from view.
 		const queuedRows = this.adapter.renderQueuedMessages(width);
 		const extensionRows = this.adapter.renderExtensionAboveEditor(width);
-		if (extensionRows.length > 0) return ["", ...queuedRows, ...extensionRows];
-		if (!this.adapter.isActive()) return queuedRows.length > 0 ? ["", ...queuedRows] : [];
+		if (extensionRows.length > 0) return ["", ...queuedRows, ...extensionRows, ...noticeRows];
+		if (!this.adapter.isActive()) return queuedRows.length + noticeRows.length > 0 ? ["", ...queuedRows, ...noticeRows] : [];
 		const indicatorRows = this.adapter.renderWorkingIndicator(width).filter((row) => row.length > 0);
-		const rows = [...queuedRows, ...indicatorRows];
+		const rows = [...queuedRows, ...indicatorRows, ...noticeRows];
 		return rows.length > 0 ? ["", ...rows] : [];
 	}
 }

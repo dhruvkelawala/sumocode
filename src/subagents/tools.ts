@@ -252,7 +252,7 @@ export function registerSubagentTools(
 		promptSnippet: SUBAGENT_PROMPT_SNIPPET,
 		promptGuidelines,
 		parameters: Type.Object({
-			id: Type.String({ description: "Running visible subagent id, e.g. sa-1." }),
+			id: Type.String({ description: "Running visible subagent id, e.g. sa-issue-to-pr-426-2." }),
 			text: Type.String({ minLength: 1, description: "Non-blank steering text to submit to the child runtime." }),
 		}),
 		async execute(_toolCallId, params) {
@@ -276,7 +276,7 @@ export function registerSubagentTools(
 		description: SUBAGENT_TOOL_DESCRIPTIONS.check,
 		promptSnippet: SUBAGENT_PROMPT_SNIPPET,
 		promptGuidelines,
-		parameters: Type.Object({ id: Type.String({ description: "Subagent id, e.g. sa-1." }) }),
+		parameters: Type.Object({ id: Type.String({ description: "Subagent id, e.g. sa-issue-to-pr-426-2." }) }),
 		async execute(_toolCallId, params) {
 			const snapshot = manager.get(params.id);
 			if (!snapshot) throw new Error(`Unknown subagent id: ${params.id}`);

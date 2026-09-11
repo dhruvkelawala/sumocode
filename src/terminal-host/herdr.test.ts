@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { herdrTerminalHost, uniqueHerdrAgentName } from "./herdr.js";
+import { herdrTerminalHost } from "./herdr.js";
 
 function pi(stdout: string, code = 0) {
 	return { exec: vi.fn(async () => ({ stdout, stderr: "", code, killed: false })) };
@@ -14,7 +14,7 @@ describe("herdrTerminalHost", () => {
 	it("preserves an unadmitted pane without sending its command or closing by ID", async () => {
 		const executor = pi(JSON.stringify({ result: { root_pane: { pane_id: "w1:p2", workspace_id: "w1" } } }));
 		const beforeRun = vi.fn(async () => { throw new Error("birth unknown"); });
-		await expect(herdrTerminalHost.startAgentPane(executor, { name: "worker", cwd: "/private/task", shellCommand: "held",
+		await expect(herdrTerminalHost.startAgentPane(executor, { name: "worker", agentName: "sa-worker-1", cwd: "/private/task", shellCommand: "held",
 			placement: { kind: "new-tab", label: "worker" }, beforeRun })).rejects.toThrow("birth unknown");
 		expect(beforeRun).toHaveBeenCalledWith({ host: "herdr", paneId: "w1:p2", workspaceId: "w1" });
 		expect(executor.exec).toHaveBeenCalledTimes(1);
@@ -27,7 +27,7 @@ describe("herdrTerminalHost", () => {
 		});
 		const beforeRun = vi.fn(async () => undefined);
 		// SAFETY: test double only exercises the members this test asserts on.
-		const result = await herdrTerminalHost.startAgentPane({ exec } as never, { name: "worker", cwd: "/repo", shellCommand: "held",
+		const result = await herdrTerminalHost.startAgentPane({ exec } as never, { name: "worker", agentName: "sa-worker-1", cwd: "/repo", shellCommand: "held",
 			placement: { kind: "new-tab", label: "subagents" }, beforeRun });
 		expect(result).toMatchObject({ ok: false, code: "pane_unavailable", error: "herdr returned no pane for tab w7:t9" });
 		expect(beforeRun).not.toHaveBeenCalled();
@@ -41,7 +41,7 @@ describe("herdrTerminalHost", () => {
 		});
 		const beforeRun = vi.fn(async () => undefined);
 		// SAFETY: test double only exercises the members this test asserts on.
-		const result = await herdrTerminalHost.startAgentPane({ exec } as never, { name: "worker", cwd: "/repo", shellCommand: "held",
+		const result = await herdrTerminalHost.startAgentPane({ exec } as never, { name: "worker", agentName: "sa-worker-1", cwd: "/repo", shellCommand: "held",
 			placement: { kind: "new-tab", label: "subagents" }, beforeRun });
 		expect(result).toMatchObject({ ok: false, code: "pane_unavailable", error: "daemon unavailable", reason: "daemon unavailable" });
 		expect(beforeRun).not.toHaveBeenCalled();
@@ -101,11 +101,12 @@ describe("herdrTerminalHost", () => {
 		// SAFETY: test double only exercises the members this test asserts on.
 		const result = await herdrTerminalHost.startAgentPane({ exec } as never, {
 			name: "API Worker",
+			agentName: "sa-api-worker-1",
 			cwd: "/repo/packages/api",
 			shellCommand: "exec sumocode task",
 			placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
 		});
-		expect(result).toMatchObject({ ok: true, agentName: expect.stringMatching(/^api-worker-/), workspaceId: "w9", tabId: "w9:t1", paneId: "w9:p2" });
+		expect(result).toMatchObject({ ok: true, agentName: "sa-api-worker-1", workspaceId: "w9", tabId: "w9:t1", paneId: "w9:p2" });
 		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["pane", "split", "w9:p1", "--direction", "right", "--cwd", "/repo/packages/api", "--no-focus"], { timeout: expect.any(Number) });
 		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["pane", "run", "w9:p2", "exec sumocode task"], { timeout: expect.any(Number) });
 		expect(exec).toHaveBeenNthCalledWith(3, "herdr", ["pane", "move", "w9:p1", "--new-tab", "--workspace", "w9", "--label", "shell", "--no-focus"], { timeout: expect.any(Number) });
@@ -119,7 +120,7 @@ describe("herdrTerminalHost", () => {
 		});
 		// SAFETY: test double only exercises the members this test asserts on.
 		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
-			name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
+			name: "worker", agentName: "sa-worker-1", cwd: "/repo", shellCommand: "run child", placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
 		})).resolves.toMatchObject({ ok: true, paneId: "w9:p2" });
 		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "run", "w9:p2", "run child"], { timeout: expect.any(Number) });
 	});
@@ -133,6 +134,7 @@ describe("herdrTerminalHost", () => {
 		// SAFETY: test double only exercises the members this test asserts on.
 		const result = await herdrTerminalHost.startAgentPane({ exec } as never, {
 			name: "API Worker",
+			agentName: "sa-worker-1",
 			cwd: "/repo/packages/api",
 			shellCommand: "exec sumocode task",
 			placement: { kind: "workspace", workspaceId: "w9" },
@@ -151,6 +153,7 @@ describe("herdrTerminalHost", () => {
 		// SAFETY: test double only exercises the members this test asserts on.
 		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
 			name: "review",
+			agentName: "sa-worker-1",
 			cwd: "/repo",
 			shellCommand: "run child",
 			placement: { kind: "tab", tabId: "w3:t2", direction: "down" },
@@ -178,6 +181,7 @@ describe("herdrTerminalHost", () => {
 		// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
 		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
 			name: "research",
+			agentName: "sa-worker-1",
 			cwd: "/repo",
 			shellCommand: "run child",
 			placement: { kind: "new-tab", label: "subagents" },
@@ -194,6 +198,7 @@ describe("herdrTerminalHost", () => {
 		// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
 		const result = await herdrTerminalHost.startAgentPane({ exec } as never, {
 			name: "research",
+			agentName: "sa-worker-1",
 			cwd: "/repo",
 			shellCommand: "run child",
 			placement: { kind: "new-tab", label: "subagents" },
@@ -227,7 +232,7 @@ describe("herdrTerminalHost", () => {
 
 			// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
 			const pending = herdrTerminalHost.startAgentPane({ exec } as never, {
-				name: "research", cwd: "/repo", shellCommand: "run child", placement: { kind: "new-tab", label: "subagents" },
+				name: "research", agentName: "sa-worker-1", cwd: "/repo", shellCommand: "run child", placement: { kind: "new-tab", label: "subagents" },
 			}).then((result) => ({ result, elapsed: Date.now() - startedAt }));
 			await vi.advanceTimersByTimeAsync(10_000);
 			const completed = await pending;
@@ -251,7 +256,7 @@ describe("herdrTerminalHost", () => {
 
 		// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
 		const result = await herdrTerminalHost.startAgentPane({ exec } as never, {
-			name: "worker", cwd: "/repo", shellCommand: "run child",
+			name: "worker", agentName: "sa-worker-1", cwd: "/repo", shellCommand: "run child",
 			placement: { kind: "tab", tabId: "w6:t3", direction: "right" },
 		});
 
@@ -272,7 +277,7 @@ describe("herdrTerminalHost", () => {
 
 		// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
 		const result = await herdrTerminalHost.startAgentPane({ exec } as never, {
-			name: "worker", cwd: "/repo", shellCommand: "run child",
+			name: "worker", agentName: "sa-worker-1", cwd: "/repo", shellCommand: "run child",
 			placement: { kind: "new-tab", label: "subagents" },
 		});
 
@@ -289,7 +294,7 @@ describe("herdrTerminalHost", () => {
 
 		// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
 		const result = await herdrTerminalHost.startAgentPane({ exec } as never, {
-			name: "worker", cwd: "/repo", shellCommand: "run child",
+			name: "worker", agentName: "sa-worker-1", cwd: "/repo", shellCommand: "run child",
 			placement: { kind: "tab", tabId: "w3:t9", direction: "right" },
 		});
 
@@ -304,7 +309,7 @@ describe("herdrTerminalHost", () => {
 
 		// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
 		const result = await herdrTerminalHost.startAgentPane({ exec } as never, {
-			name: "worker", cwd: "/repo", shellCommand: "run child",
+			name: "worker", agentName: "sa-worker-1", cwd: "/repo", shellCommand: "run child",
 			placement: { kind: "new-tab", label: "subagents" },
 		});
 
@@ -327,7 +332,7 @@ describe("herdrTerminalHost", () => {
 
 			// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
 			const pending = herdrTerminalHost.startAgentPane({ exec } as never, {
-				name: "worker", cwd: "/repo", shellCommand: "run child",
+				name: "worker", agentName: "sa-worker-1", cwd: "/repo", shellCommand: "run child",
 				placement: { kind: "tab", tabId: "w6:t3", direction: "right" },
 			});
 			await vi.advanceTimersByTimeAsync(10_000);
@@ -360,7 +365,7 @@ describe("herdrTerminalHost", () => {
 
 			// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
 			const pending = herdrTerminalHost.startAgentPane({ exec } as never, {
-				name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
+				name: "worker", agentName: "sa-worker-1", cwd: "/repo", shellCommand: "run child", placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
 			});
 			await vi.advanceTimersByTimeAsync(10_000);
 			const result = await pending;
@@ -389,7 +394,7 @@ describe("herdrTerminalHost", () => {
 
 			// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
 			const pending = herdrTerminalHost.startAgentPane({ exec } as never, {
-				name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "worktree-workspace", path: "/wt", label: "worker", sourceCwd: "/repo" },
+				name: "worker", agentName: "sa-worker-1", cwd: "/repo", shellCommand: "run child", placement: { kind: "worktree-workspace", path: "/wt", label: "worker", sourceCwd: "/repo" },
 			});
 			await vi.advanceTimersByTimeAsync(10_000);
 			const result = await pending;
@@ -410,7 +415,7 @@ describe("herdrTerminalHost", () => {
 
 		// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
 		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
-			name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "workspace", workspaceId: "w9" },
+			name: "worker", agentName: "sa-worker-1", cwd: "/repo", shellCommand: "run child", placement: { kind: "workspace", workspaceId: "w9" },
 		})).resolves.toEqual({
 			ok: false,
 			code: "pane_unavailable",
@@ -429,7 +434,7 @@ describe("herdrTerminalHost", () => {
 
 		// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
 		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
-			name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
+			name: "worker", agentName: "sa-worker-1", cwd: "/repo", shellCommand: "run child", placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
 		})).resolves.toEqual({
 			ok: false,
 			code: "pane_unavailable",
@@ -449,7 +454,7 @@ describe("herdrTerminalHost", () => {
 
 		// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
 		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
-			name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
+			name: "worker", agentName: "sa-worker-1", cwd: "/repo", shellCommand: "run child", placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
 		})).resolves.toEqual({
 			ok: false,
 			code: "pane_unavailable",
@@ -479,7 +484,7 @@ describe("herdrTerminalHost", () => {
 
 			// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
 			const pending = herdrTerminalHost.startAgentPane({ exec } as never, {
-				name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "workspace", workspaceId: "w9" },
+				name: "worker", agentName: "sa-worker-1", cwd: "/repo", shellCommand: "run child", placement: { kind: "workspace", workspaceId: "w9" },
 			}).then((result) => ({ result, elapsed: Date.now() - startedAt }));
 			await vi.advanceTimersByTimeAsync(10_000);
 			const completed = await pending;
@@ -499,6 +504,7 @@ describe("herdrTerminalHost", () => {
 		// SAFETY: test double only exercises the members this test asserts on.
 		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
 			name: "research",
+			agentName: "sa-worker-1",
 			cwd: "/repo",
 			shellCommand: "run child",
 			placement: { kind: "new-tab", label: "subagents" },
@@ -522,7 +528,7 @@ describe("herdrTerminalHost", () => {
 		});
 		// SAFETY: test double only exercises the members this test asserts on.
 		await herdrTerminalHost.startAgentPane!({ exec } as never, {
-			name: "research", cwd: "/repo", shellCommand: "run child", placement: { kind: "new-tab", label: "subagents" },
+			name: "research", agentName: "sa-worker-1", cwd: "/repo", shellCommand: "run child", placement: { kind: "new-tab", label: "subagents" },
 		});
 		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["pane", "current", "--current"], { timeout: expect.any(Number) });
 		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["tab", "create", "--workspace", "w1K", "--cwd", "/repo", "--label", "subagents", "--no-focus"], { timeout: expect.any(Number) });
@@ -552,7 +558,7 @@ describe("herdrTerminalHost", () => {
 
 		// SAFETY: test double only exercises the members this test asserts on.
 		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
-			name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "new-tab", label: "subagents" },
+			name: "worker", agentName: "sa-worker-1", cwd: "/repo", shellCommand: "run child", placement: { kind: "new-tab", label: "subagents" },
 		})).resolves.toEqual({ ok: false, code: "pane_unavailable", error: "start denied", reason: "start denied" });
 		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "close", "w5:p9"], expect.objectContaining({ timeout: expect.any(Number) }));
 	});
@@ -567,7 +573,7 @@ describe("herdrTerminalHost", () => {
 
 		// SAFETY: test double only exercises the members this test asserts on.
 		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
-			name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "tab", tabId: "w3:t2", direction: "down" },
+			name: "worker", agentName: "sa-worker-1", cwd: "/repo", shellCommand: "run child", placement: { kind: "tab", tabId: "w3:t2", direction: "down" },
 		})).resolves.toEqual({ ok: false, code: "pane_unavailable", error: "start denied", reason: "start denied" });
 		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "close", "w3:p4"], expect.objectContaining({ timeout: expect.any(Number) }));
 		expect(exec).not.toHaveBeenCalledWith("herdr", ["pane", "close", "w3:p2"], expect.anything());
@@ -582,7 +588,7 @@ describe("herdrTerminalHost", () => {
 
 		// SAFETY: test double only exercises the members this test asserts on.
 		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
-			name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "new-tab", label: "subagents" },
+			name: "worker", agentName: "sa-worker-1", cwd: "/repo", shellCommand: "run child", placement: { kind: "new-tab", label: "subagents" },
 		})).resolves.toEqual({ ok: false, code: "pane_unavailable", error: "daemon unavailable", reason: "daemon unavailable" });
 		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "close", "w5:p9"], expect.objectContaining({ timeout: expect.any(Number) }));
 	});
@@ -596,7 +602,7 @@ describe("herdrTerminalHost", () => {
 
 		// SAFETY: test double only exercises the members this test asserts on.
 		const result = await herdrTerminalHost.startAgentPane({ exec } as never, {
-			name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
+			name: "worker", agentName: "sa-worker-1", cwd: "/repo", shellCommand: "run child", placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
 		});
 		expect(result).toEqual({ ok: false, code: "pane_unavailable", error: "start denied", reason: "start denied" });
 		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "close", "w9:p2"], expect.objectContaining({ timeout: expect.any(Number) }));
@@ -614,7 +620,7 @@ describe("herdrTerminalHost", () => {
 
 		// SAFETY: test double only exercises the members this test asserts on.
 		const result = await herdrTerminalHost.startAgentPane({ exec } as never, {
-			name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "new-tab", label: "subagents" },
+			name: "worker", agentName: "sa-worker-1", cwd: "/repo", shellCommand: "run child", placement: { kind: "new-tab", label: "subagents" },
 		});
 		expect(result.ok).toBe(false);
 		if (result.ok) throw new Error("expected failed start");
@@ -630,7 +636,7 @@ describe("herdrTerminalHost", () => {
 		});
 		// SAFETY: test double only exercises the members this test asserts on.
 		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
-			name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "workspace", workspaceId: "w1" },
+			name: "worker", agentName: "sa-worker-1", cwd: "/repo", shellCommand: "run child", placement: { kind: "workspace", workspaceId: "w1" },
 		})).resolves.toMatchObject({ ok: true, paneId: "w1:p7" });
 	});
 
@@ -764,11 +770,18 @@ describe("herdrTerminalHost", () => {
 		await expect(herdrTerminalHost.notify(fake as never, "title", "body")).resolves.toBeUndefined();
 	});
 
-	it("generates a unique agent name per spawn (no agent_name_taken collision)", () => {
-		const a = uniqueHerdrAgentName();
-		const b = uniqueHerdrAgentName();
-		expect(a).toMatch(/^sumocode-/);
-		expect(b).toMatch(/^sumocode-/);
-		expect(a).not.toBe(b);
+	it("returns a long subagent id as the agent name without truncation", async () => {
+		const exec = vi.fn(async (_bin: string, args: string[]) => args[1] === "split"
+			? { stdout: JSON.stringify({ result: { pane: { pane_id: "w9:p2", workspace_id: "w9", tab_id: "w9:t1" } } }), stderr: "", code: 0, killed: false }
+			: { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false });
+		// The counter and retention namespace live at the end of the id: truncating
+		// to a label budget would collapse distinct children onto one agent name.
+		const long = `sa-${"implement-the-new-authentication-flow".padEnd(48, "x")}-2-a1b2`;
+		// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
+		const result = await herdrTerminalHost.startAgentPane({ exec } as never, {
+			name: "worker", agentName: long, cwd: "/repo", shellCommand: "held",
+			placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
+		});
+		expect(result).toMatchObject({ ok: true, agentName: long });
 	});
 });

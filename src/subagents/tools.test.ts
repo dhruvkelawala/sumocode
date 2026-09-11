@@ -53,7 +53,7 @@ const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly Su
 			events: (emit) => {
 				emitters.set(task.id, emit);
 				emit({ kind: "run-started" });
-				if (task.visible) emit({ kind: "pane-attached", pane: { agentName: "worker-abc", workspaceId: "w1", tabId: "w1:t1", paneId: "w1:p2" } });
+				if (task.visible) emit({ kind: "pane-attached", pane: { agentName: task.id, workspaceId: "w1", tabId: "w1:t1", paneId: "w1:p2" } });
 			},
 			interrupt: vi.fn(() => emitters.get(task.id)?.({ kind: "run-settled", outcome: { kind: "interrupted" } })),
 		};
@@ -119,13 +119,13 @@ describe("subagent tools", () => {
 			await tool("subagent_spawn").execute("valid", { prompt: "task", name: "task", budget: { wallTimeMs: 1000 } }, undefined, undefined, ctx);
 			await vi.advanceTimersByTimeAsync(1000);
 			for (const name of ["subagent_list", "subagent_check"]) {
-				const text = textOf(await tool(name).execute("check", { id: "sa-1" }));
+				const text = textOf(await tool(name).execute("check", { id: "sa-task-1" }));
 				expect(text).toContain("over-budget-warning");
 				expect(text).toContain("wall 100%");
 				expect(text).toContain("reported tokens unknown");
 				expect(text).toContain("inspect or explicitly cancel with subagent_cancel");
 			}
-			expect(manager.get("sa-1")?.status).toBe("running");
+			expect(manager.get("sa-task-1")?.status).toBe("running");
 		} finally { manager.disposeAll(); vi.useRealTimers(); }
 	});
 
@@ -135,7 +135,7 @@ describe("subagent tools", () => {
 		try {
 			await tool("subagent_spawn").execute("visible", { prompt: "task", name: "task", visible: true }, undefined, undefined, ctx);
 			await vi.advanceTimersByTimeAsync(600_000);
-			expect(manager.get("sa-1")).toMatchObject({ status: "running", health: "quiet", lastProgressAt: null, liveness: "unknown", warnings: [] });
+			expect(manager.get("sa-task-1")).toMatchObject({ status: "running", health: "quiet", lastProgressAt: null, liveness: "unknown", warnings: [] });
 		} finally { manager.disposeAll(); vi.useRealTimers(); }
 	});
 
@@ -145,6 +145,10 @@ describe("subagent tools", () => {
 		const spawnSchema = JSON.stringify(tool("subagent_spawn").parameters);
 		expect(spawnSchema).toContain("visible");
 		expect(spawnSchema).toContain("baseRef");
+		// Id examples name the slug format; the old sa-1 shape no longer exists.
+		for (const name of ["subagent_send", "subagent_check"]) {
+			expect(JSON.stringify(tool(name).parameters)).toContain("e.g. sa-issue-to-pr-426-2");
+		}
 	});
 
 	it("enumerates loaded roles with their resolved model in the spawn schema", () => {
@@ -183,7 +187,7 @@ describe("subagent tools", () => {
 			thinking: "minimal",
 			builtInTools: ["read"],
 		});
-		expect(manager.get("sa-1")).toMatchObject({ roleId: "audit", modelLabel: "openai/explicit", thinkingLabel: "minimal" });
+		expect(manager.get("sa-auditor-1")).toMatchObject({ roleId: "audit", modelLabel: "openai/explicit", thinkingLabel: "minimal" });
 	});
 
 	it("fails closed before spawning a role when roles.json has loader warnings", async () => {
@@ -207,7 +211,7 @@ describe("subagent tools", () => {
 		const valid = createHarness("herdr", [research], roleWarnings);
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		const validResult = await valid.tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker", role: "research" }, undefined, undefined, valid.ctx as never);
-		expect(textOf(validResult)).toContain("Started sa-1");
+		expect(textOf(validResult)).toContain("Started sa-worker-1");
 
 		const invalid = createHarness("herdr", [research], roleWarnings);
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
@@ -219,14 +223,14 @@ describe("subagent tools", () => {
 		const fallback = createHarness("herdr", [research], fileWarnings);
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		const fallbackResult = await fallback.tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker", role: "research" }, undefined, undefined, fallback.ctx as never);
-		expect(textOf(fallbackResult)).toContain("Started sa-1");
+		expect(textOf(fallbackResult)).toContain("Started sa-worker-1");
 
 		const audit: SubagentRole = { id: "audit", label: "Audit", description: "audit", systemPrompt: "audit" };
 		const siblingWarning: RoleWarning[] = [{ scope: "file", blocksOverlays: false, message: "roles[2] must be an object; entry skipped" }];
 		const custom = createHarness("herdr", [research, audit], siblingWarning);
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		const customResult = await custom.tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker", role: "audit" }, undefined, undefined, custom.ctx as never);
-		expect(textOf(customResult)).toContain("Started sa-1");
+		expect(textOf(customResult)).toContain("Started sa-worker-1");
 	});
 
 	it("allows a role whose warnings are advisory", async () => {
@@ -237,8 +241,8 @@ describe("subagent tools", () => {
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		const result = await tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker", role: "audit" }, undefined, undefined, ctx as never);
 
-		expect(textOf(result)).toContain("Started sa-1");
-		expect(manager.get("sa-1")?.roleId).toBe("audit");
+		expect(textOf(result)).toContain("Started sa-worker-1");
+		expect(manager.get("sa-worker-1")?.roleId).toBe("audit");
 	});
 
 	it("keeps role-loader warnings out of role-free spawns", async () => {
@@ -248,8 +252,8 @@ describe("subagent tools", () => {
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		const result = await tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker" }, undefined, undefined, ctx as never);
 
-		expect(textOf(result)).toContain("Started sa-1");
-		expect(manager.get("sa-1")?.roleId).toBeUndefined();
+		expect(textOf(result)).toContain("Started sa-worker-1");
+		expect(manager.get("sa-worker-1")?.roleId).toBeUndefined();
 	});
 
 	it("returns an inline error for an unknown role", async () => {
@@ -266,12 +270,12 @@ describe("subagent tools", () => {
 		const { tool, ctx } = createHarness();
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		const result = await tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker" }, undefined, undefined, ctx as never);
-		expect(textOf(result)).toBe("Started sa-1 (worker). No polling needed — continue other work or END YOUR TURN; the result will be delivered to you and wake you automatically when it settles. Only call subagent_wait if you cannot take a single further step without this result.");
+		expect(textOf(result)).toBe("Started sa-worker-1 (worker). No polling needed — continue other work or END YOUR TURN; the result will be delivered to you and wake you automatically when it settles. Only call subagent_wait if you cannot take a single further step without this result.");
 		expect(textOf(result)).not.toMatch(/block for\s+it/);
 		expect(result).toMatchObject({
 			details: {
 				action: "spawn",
-				activity: { id: "subagent:sa-1", sourceId: "tc", kind: "subagent", status: "running", model: "openai/gpt-5", thinking: "medium" },
+				activity: { id: "subagent:sa-worker-1", sourceId: "tc", kind: "subagent", status: "running", model: "openai/gpt-5", thinking: "medium" },
 			},
 		});
 	});
@@ -280,10 +284,22 @@ describe("subagent tools", () => {
 		const { tool, ctx, manager } = createHarness();
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		await tool("subagent_spawn").execute("tc", { prompt: "watch", name: "worker", visible: true }, undefined, undefined, ctx as never);
-		expect(manager.get("sa-1")).toMatchObject({ visible: true, pane: { agentName: "worker-abc", paneId: "w1:p2" } });
+		expect(manager.get("sa-worker-1")).toMatchObject({ visible: true, pane: { agentName: "sa-worker-1", paneId: "w1:p2" } });
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		const listed = await tool("subagent_list").execute("tc", {}, undefined, undefined, ctx as never);
-		expect(textOf(listed)).toContain("pane w1:p2 · agent worker-abc");
+		expect(textOf(listed)).toContain("pane w1:p2 · agent sa-worker-1");
+	});
+
+	it("prints the id and one pane/agent segment on the check line", async () => {
+		const { tool, ctx } = createHarness();
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		await tool("subagent_spawn").execute("tc", { prompt: "watch", name: "worker", visible: true }, undefined, undefined, ctx as never);
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const checked = await tool("subagent_check").execute("tc", { id: "sa-worker-1" }, undefined, undefined, ctx as never);
+		const [line] = textOf(checked).split("\n");
+		expect(line).toContain("sa-worker-1 [running]");
+		expect(line).toContain("· pane w1:p2 · agent sa-worker-1");
+		expect(line?.match(/ · pane /g)).toHaveLength(1);
 	});
 
 	it("rejects visible spawning without a terminal host", async () => {
@@ -412,8 +428,8 @@ describe("subagent tools", () => {
 
 			hostMode = "succeed";
 			const fourthResult = await spawn.execute("spawn-4", { prompt: "watch four", name: "four", visible: true }, undefined, undefined, { cwd: "/repo", model: { provider: "openai", id: "gpt-5" } });
-			expect(textOf(fourthResult)).toContain("Started sa-4");
-			expect(manager.get("sa-4")).toMatchObject({ status: "running", pane: { paneId: "w1:p3" } });
+			expect(textOf(fourthResult)).toContain("Started sa-four-4");
+			expect(manager.get("sa-four-4")).toMatchObject({ status: "running", pane: { paneId: "w1:p3" } });
 		} finally {
 			vi.useRealTimers();
 			vi.unstubAllEnvs();
@@ -492,7 +508,7 @@ describe("subagent tools", () => {
 	it("returns pane_unavailable with Herdr's reason as structured spawn details", async () => {
 		const { tool, ctx, manager } = createHarness();
 		vi.spyOn(manager, "spawn").mockResolvedValue({
-			id: "sa-1",
+			id: "sa-worker-1",
 			title: "worker",
 			prompt: "watch",
 			cwd: "/tmp/project",
@@ -519,7 +535,7 @@ describe("subagent tools", () => {
 				action: "spawn",
 				status: "pane_unavailable",
 				herdrReason: "tab has no available shell pane",
-				subagent: { id: "sa-1", status: "error" },
+				subagent: { id: "sa-worker-1", status: "error" },
 			},
 		});
 		expect(textOf(result)).toContain("tab has no available shell pane");
@@ -530,9 +546,9 @@ describe("subagent tools", () => {
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		const result = await tool("subagent_spawn").execute("tc", { prompt: "write", name: "worker", worktree: true, branch: "sumo/custom", baseRef: "origin/main" }, undefined, undefined, ctx as never);
 
-		expect(textOf(result)).toContain("Started sa-1");
+		expect(textOf(result)).toContain("Started sa-worker-1");
 		expect(createWorktree).toHaveBeenCalledWith(expect.objectContaining({ baseRef: "origin/main" }));
-		expect(manager.get("sa-1")).toMatchObject({
+		expect(manager.get("sa-worker-1")).toMatchObject({
 			cwd: "/tmp/isolated",
 			worktree: { path: "/tmp/isolated", branch: "sumo/custom", baseRef: "base-ref-sha", repoRoot: "/tmp/project" },
 		});
@@ -581,7 +597,7 @@ describe("subagent tools", () => {
 		}
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		const result = await tool("subagent_spawn").execute("tc", { prompt: "do", name: "queued worker" }, undefined, undefined, ctx as never);
-		const queuedId = `sa-${SUBAGENT_MAX_RUNNING + 1}`;
+		const queuedId = "sa-queued-worker-11";
 		expect(textOf(result)).toBe(`Queued ${queuedId} (queued worker) at position 1 — starts automatically when a slot frees. Do not retry or wait.`);
 		expect(result).toMatchObject({ details: { subagent: { id: queuedId, status: "queued" }, activity: { status: "queued" } } });
 	});
@@ -592,13 +608,13 @@ describe("subagent tools", () => {
 		await tool("subagent_spawn").execute("tc", { prompt: "watch", name: "worker", visible: true }, undefined, undefined, ctx as never);
 
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
-		const result = await tool("subagent_send").execute("tc", { id: "sa-1", text: "continue with tests" }, undefined, undefined, ctx as never);
+		const result = await tool("subagent_send").execute("tc", { id: "sa-worker-1", text: "continue with tests" }, undefined, undefined, ctx as never);
 
-		expect(textOf(result)).toBe("Steering submitted to the child runtime for sa-1 (worker); Pi exposes no post-acceptance acknowledgement.");
+		expect(textOf(result)).toBe("Steering submitted to the child runtime for sa-worker-1 (worker); Pi exposes no post-acceptance acknowledgement.");
 		expect(textOf(result)).not.toMatch(/(?:was|is) (?:delivered|accepted)|delivery-to-child/);
-		expect(childSends.get("sa-1")).toHaveBeenCalledWith("continue with tests");
+		expect(childSends.get("sa-worker-1")).toHaveBeenCalledWith("continue with tests");
 		expect(sendPaneText).not.toHaveBeenCalled();
-		expect(result).toMatchObject({ details: { action: "send", id: "sa-1", pane: { paneId: "w1:p2" } } });
+		expect(result).toMatchObject({ details: { action: "send", id: "sa-worker-1", pane: { paneId: "w1:p2" } } });
 	});
 
 	it("rejects blank and whitespace steering before the manager or child sees it", async () => {
@@ -606,11 +622,11 @@ describe("subagent tools", () => {
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		await tool("subagent_spawn").execute("tc", { prompt: "watch", name: "worker", visible: true }, undefined, undefined, ctx as never);
 		// SAFETY: visible harness children always register a send double in childSends.
-		const send = childSends.get("sa-1") as ReturnType<typeof vi.fn>;
+		const send = childSends.get("sa-worker-1") as ReturnType<typeof vi.fn>;
 
 		for (const blank of ["", "   ", "\n\t "]) {
 			// SAFETY: the ctx double carries only the fields the tool handlers read.
-			await expect(tool("subagent_send").execute("tc", { id: "sa-1", text: blank }, undefined, undefined, ctx as never))
+			await expect(tool("subagent_send").execute("tc", { id: "sa-worker-1", text: blank }, undefined, undefined, ctx as never))
 				.rejects.toThrow("blank or whitespace-only steering is rejected before submission");
 		}
 		expect(send).not.toHaveBeenCalled();
@@ -623,7 +639,7 @@ describe("subagent tools", () => {
 		await expect(headless.tool("subagent_send").execute("tc", { id: "sa-404", text: "hi" })).rejects.toThrow("Unknown subagent id");
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		await headless.tool("subagent_spawn").execute("tc", { prompt: "quiet", name: "headless" }, undefined, undefined, headless.ctx as never);
-		const unsupported = await headless.tool("subagent_send").execute("tc", { id: "sa-1", text: "hi" });
+		const unsupported = await headless.tool("subagent_send").execute("tc", { id: "sa-headless-1", text: "hi" });
 		expect(unsupported).toMatchObject({ details: { action: "send", capability: "unsupported: headless steering" } });
 		expect(unsupported).not.toHaveProperty("isError", true);
 		expect(textOf(unsupported)).toBe("unsupported: headless steering; respawn with visible: true to steer");
@@ -633,32 +649,32 @@ describe("subagent tools", () => {
 		const settled = createHarness();
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		await settled.tool("subagent_spawn").execute("tc", { prompt: "watch", name: "visible", visible: true }, undefined, undefined, settled.ctx as never);
-		settled.emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
-		await vi.waitFor(() => expect(settled.manager.get("sa-1")?.status).toBe("done"));
-		await expect(settled.tool("subagent_send").execute("tc", { id: "sa-1", text: "hi" })).rejects.toThrow("already settled");
+		settled.emitters.get("sa-visible-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(settled.manager.get("sa-visible-1")?.status).toBe("done"));
+		await expect(settled.tool("subagent_send").execute("tc", { id: "sa-visible-1", text: "hi" })).rejects.toThrow("already settled");
 	});
 
 	it("check does not consume", async () => {
 		const { tool, ctx, emitters, manager } = createHarness();
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		await tool("subagent_spawn").execute("tc", { prompt: "do", name: "w" }, undefined, undefined, ctx as never);
-		emitters.get("sa-1")?.({ kind: "assistant-delta", delta: "hello" });
+		emitters.get("sa-w-1")?.({ kind: "assistant-delta", delta: "hello" });
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
-		const result = await tool("subagent_check").execute("tc", { id: "sa-1" }, undefined, undefined, ctx as never);
+		const result = await tool("subagent_check").execute("tc", { id: "sa-w-1" }, undefined, undefined, ctx as never);
 		expect(textOf(result)).toContain("hello");
-		expect(result).toMatchObject({ details: { activity: { id: "subagent:sa-1", status: "running", outputTail: "hello" } } });
-		expect(manager.consumedIds.has("sa-1")).toBe(false);
+		expect(result).toMatchObject({ details: { activity: { id: "subagent:sa-w-1", status: "running", outputTail: "hello" } } });
+		expect(manager.consumedIds.has("sa-w-1")).toBe(false);
 	});
 
 	it("check renders the host-derived manifest summary after settlement", async () => {
 		const { tool, ctx, emitters, manager } = createHarness();
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		await tool("subagent_spawn").execute("tc", { prompt: "write", name: "worker", worktree: true, branch: "sumo/custom" }, undefined, undefined, ctx as never);
-		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
-		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
+		emitters.get("sa-worker-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-worker-1")?.status).toBe("done"));
 
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
-		const result = await tool("subagent_check").execute("tc", { id: "sa-1" }, undefined, undefined, ctx as never);
+		const result = await tool("subagent_check").execute("tc", { id: "sa-worker-1" }, undefined, undefined, ctx as never);
 
 		expect(textOf(result)).toContain("branch: sumo/custom · base base-re · +1 commits · 1 file changed · clean");
 	});
@@ -668,7 +684,7 @@ describe("subagent tools", () => {
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		await tool("subagent_spawn").execute("tc", { prompt: "do", name: "w" }, undefined, undefined, ctx as never);
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
-		await expect(tool("subagent_wait").execute("tc", { ids: ["sa-2"] }, undefined, undefined, ctx as never)).rejects.toThrow("Known ids: sa-1");
+		await expect(tool("subagent_wait").execute("tc", { ids: ["sa-2"] }, undefined, undefined, ctx as never)).rejects.toThrow("Known ids: sa-w-1");
 	});
 
 	it("emits all 64 wait and cancel Activity envelopes", async () => {
@@ -818,16 +834,16 @@ describe("subagent tools", () => {
 		const { tool, ctx, emitters } = createHarness();
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		await tool("subagent_spawn").execute("spawn-1", { prompt: "do", name: "w" }, undefined, undefined, ctx as never);
-		emitters.get("sa-1")?.({ kind: "message-end", role: "assistant", text: "RAW_TRANSCRIPT_MUST_NOT_ESCAPE" });
+		emitters.get("sa-w-1")?.({ kind: "message-end", role: "assistant", text: "RAW_TRANSCRIPT_MUST_NOT_ESCAPE" });
 
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
-		const result = await tool("subagent_cancel").execute("cancel-1", { ids: ["sa-1", "sa-404"] }, undefined, undefined, ctx as never);
+		const result = await tool("subagent_cancel").execute("cancel-1", { ids: ["sa-w-1", "sa-404"] }, undefined, undefined, ctx as never);
 
-		expect(textOf(result)).toContain("Cancelled sa-1");
+		expect(textOf(result)).toContain("Cancelled sa-w-1");
 		expect(result).toMatchObject({
 			details: {
-				subagents: [{ id: "sa-1", title: "w", status: "error", createdAt: expect.any(Number), settledAt: expect.any(Number) }],
-				activity: [{ id: "subagent:sa-1", status: "cancelled", result: { summary: "RAW_TRANSCRIPT_MUST_NOT_ESCAPE", error: "interrupted" } }],
+				subagents: [{ id: "sa-w-1", title: "w", status: "error", createdAt: expect.any(Number), settledAt: expect.any(Number) }],
+				activity: [{ id: "subagent:sa-w-1", status: "cancelled", result: { summary: "RAW_TRANSCRIPT_MUST_NOT_ESCAPE", error: "interrupted" } }],
 			},
 		});
 		/** Bounded cancellation metadata entry shape. */
@@ -847,21 +863,21 @@ describe("subagent_close tool", () => {
 		const { tool, ctx, emitters, manager, delivery } = createHarness();
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		await tool("subagent_spawn").execute("spawn-1", { prompt: "do", name: "w" }, undefined, undefined, ctx as never);
-		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "final answer" } });
-		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
+		emitters.get("sa-w-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "final answer" } });
+		await vi.waitFor(() => expect(manager.get("sa-w-1")?.status).toBe("done"));
 
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
-		const result = await tool("subagent_close").execute("close-1", { ids: ["sa-1"] }, undefined, undefined, ctx as never);
+		const result = await tool("subagent_close").execute("close-1", { ids: ["sa-w-1"] }, undefined, undefined, ctx as never);
 
-		expect(textOf(result)).toContain("sa-1 was already done");
+		expect(textOf(result)).toContain("sa-w-1 was already done");
 		expect(textOf(result)).toContain("final answer");
-		expect(delivery.consume).toHaveBeenCalledWith("sa-1");
+		expect(delivery.consume).toHaveBeenCalledWith("sa-w-1");
 		expect(result).toMatchObject({
 			details: {
 				action: "close",
-				ids: ["sa-1"],
-				subagents: [{ id: "sa-1", title: "w", status: "done" }],
-				activity: [{ id: "subagent:sa-1", status: "succeeded" }],
+				ids: ["sa-w-1"],
+				subagents: [{ id: "sa-w-1", title: "w", status: "done" }],
+				activity: [{ id: "subagent:sa-w-1", status: "succeeded" }],
 			},
 		});
 	});
@@ -871,17 +887,17 @@ describe("subagent_close tool", () => {
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
 		await tool("subagent_spawn").execute("spawn-1", { prompt: "do", name: "worker", visible: true }, undefined, undefined, ctx as never);
 		// SAFETY: visible harness children always register a requestClose double.
-		(childRequestCloses.get("sa-1") as ReturnType<typeof vi.fn>).mockImplementation(() => {
-			emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "wrapped up" } });
+		(childRequestCloses.get("sa-worker-1") as ReturnType<typeof vi.fn>).mockImplementation(() => {
+			emitters.get("sa-worker-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "wrapped up" } });
 		});
 
 		// SAFETY: the ctx double carries only the fields the tool handlers read.
-		const result = await tool("subagent_close").execute("close-1", { ids: ["sa-1"] }, undefined, undefined, ctx as never);
+		const result = await tool("subagent_close").execute("close-1", { ids: ["sa-worker-1"] }, undefined, undefined, ctx as never);
 
-		expect(textOf(result)).toContain("Closed sa-1");
+		expect(textOf(result)).toContain("Closed sa-worker-1");
 		expect(textOf(result)).toContain("wrapped up");
-		expect(manager.get("sa-1")?.status).toBe("done");
-		expect(delivery.consume).toHaveBeenCalledWith("sa-1");
+		expect(manager.get("sa-worker-1")?.status).toBe("done");
+		expect(delivery.consume).toHaveBeenCalledWith("sa-worker-1");
 	});
 
 	it("keeps a still-running child unconsumed with a follow-up line", async () => {
@@ -891,14 +907,14 @@ describe("subagent_close tool", () => {
 			// SAFETY: the ctx double carries only the fields the tool handlers read.
 			await tool("subagent_spawn").execute("spawn-1", { prompt: "do", name: "worker", visible: true }, undefined, undefined, ctx as never);
 
-			const closing = tool("subagent_close").execute("close-1", { ids: ["sa-1"] });
+			const closing = tool("subagent_close").execute("close-1", { ids: ["sa-worker-1"] });
 			await vi.advanceTimersByTimeAsync(15_000);
 			const result = await closing;
 
-			expect(textOf(result)).toContain("close requested for sa-1; still running — check the pane or use subagent_cancel");
-			expect(manager.get("sa-1")?.status).toBe("running");
+			expect(textOf(result)).toContain("close requested for sa-worker-1; still running — check the pane or use subagent_cancel");
+			expect(manager.get("sa-worker-1")?.status).toBe("running");
 			expect(delivery.consume).not.toHaveBeenCalled();
-			expect(childRequestCloses.get("sa-1")).toHaveBeenCalledTimes(1);
+			expect(childRequestCloses.get("sa-worker-1")).toHaveBeenCalledTimes(1);
 		} finally {
 			vi.useRealTimers();
 		}

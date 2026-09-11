@@ -13,7 +13,7 @@
  * session start / model select instead of touching the filesystem per render.
  */
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { CLAUDE_BASE_PROVIDER, isClaudeAccountProvider } from "./claude-providers.js";
+import { CLAUDE_BASE_PROVIDER, isClaudeProvider } from "./claude-providers.js";
 
 /** Footer chip budget: `claude ` plus at most this many label columns, ellipsis included. */
 const MAX_LABEL_COLUMNS = 8;
@@ -33,10 +33,6 @@ interface ClaudeAccountStatusInputs {
 	readonly currentProvider?: string;
 	/** Subscription label for an extra account provider, from claude-accounts.json. */
 	readonly subscriptionLabel?: (providerId: string) => string | undefined;
-}
-
-function isClaudeProviderId(providerId: string | undefined): boolean {
-	return providerId === CLAUDE_BASE_PROVIDER || (providerId !== undefined && isClaudeAccountProvider(providerId));
 }
 
 /**
@@ -62,11 +58,11 @@ function accountRank(providerId: string): number {
 }
 
 export function resolveClaudeAccountStatus(inputs: ClaudeAccountStatusInputs): ClaudeAccountStatus | undefined {
-	const claudeModels = inputs.models.filter((model) => isClaudeProviderId(model.provider));
+	const claudeModels = inputs.models.filter((model) => isClaudeProvider(model.provider));
 	if (claudeModels.length === 0) return undefined;
 	// A live Claude model is authoritative; otherwise the first Claude model is
 	// what a bare id resolves to next, which is what a subagent would use.
-	const liveProvider = isClaudeProviderId(inputs.currentProvider) && claudeModels.some((model) => model.provider === inputs.currentProvider)
+	const liveProvider = inputs.currentProvider !== undefined && isClaudeProvider(inputs.currentProvider) && claudeModels.some((model) => model.provider === inputs.currentProvider)
 		? inputs.currentProvider
 		: undefined;
 	const providerId = liveProvider ?? [...claudeModels].sort((a, b) => accountRank(a.provider) - accountRank(b.provider))[0].provider;

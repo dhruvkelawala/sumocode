@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import type { Api, Credential, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { CLAUDE_ACCOUNTS_MIGRATION_FIELD } from "./accounts-config.js";
-import { CLAUDE_BASE_PROVIDER, claudeAccountProviderId, isClaudeAccountProvider } from "../config/claude-providers.js";
+import { claudeAccountProviderId, isClaudeProvider } from "../config/claude-providers.js";
 import { filterToEnabled, readEnabledModelPatterns } from "../config/enabled-models.js";
 import { executeSumoReload } from "./reload.js";
 import { logDiagnostic } from "../sumo-tui/runtime/diagnostics.js";
@@ -611,10 +611,6 @@ async function addAccount(ctx: ExtensionCommandContext, deps: AccountsCommandDep
 		"Reload SumoCode now? After reload, open /accounts and sign in to the new account.",
 	);
 	if (reload) await (deps.reload ?? ((reloadCtx) => executeSumoReload(reloadCtx)))(ctx);
-}
-
-function isClaudeProvider(providerId: string): boolean {
-	return providerId === CLAUDE_BASE_PROVIDER || isClaudeAccountProvider(providerId);
 }
 
 /**

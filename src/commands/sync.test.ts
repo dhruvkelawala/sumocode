@@ -208,7 +208,6 @@ describe("/sumo:sync", () => {
 
 		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
-		// SAFETY: the ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
 		await executeSumoSync(ctx() as never, {
 			env: {},
 			homeDir: home,
@@ -308,7 +307,6 @@ describe("/sumo:sync", () => {
 
 		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
-		// SAFETY: the ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
 		await executeSumoSync(ctx() as never, {
 			env: {},
 			homeDir: home,
@@ -343,7 +341,6 @@ describe("/sumo:sync", () => {
 
 		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
-		// SAFETY: the ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
 		await executeSumoSync(ctx() as never, {
 			env: {},
 			homeDir: home,
@@ -389,7 +386,6 @@ describe("/sumo:sync", () => {
 
 		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
-		// SAFETY: the ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
 		await executeSumoSync(ctx() as never, {
 			env: {},
 			homeDir: home,
@@ -432,7 +428,6 @@ describe("/sumo:sync", () => {
 
 		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
-		// SAFETY: the ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
 		await executeSumoSync(ctx() as never, {
 			env: {},
 			homeDir: home,
@@ -471,7 +466,6 @@ describe("/sumo:sync", () => {
 
 		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
-		// SAFETY: the ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
 		await executeSumoSync(ctx() as never, {
 			env: {},
 			homeDir: home,
@@ -511,7 +505,6 @@ describe("/sumo:sync", () => {
 
 		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
-		// SAFETY: the ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
 		await executeSumoSync(ctx() as never, {
 			env: {},
 			homeDir: home,
@@ -545,7 +538,6 @@ describe("/sumo:sync", () => {
 
 		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		// SAFETY: ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
-		// SAFETY: the ctx double only carries the fields executeSumoSync reads (cwd/ui/env).
 		await executeSumoSync(ctx() as never, {
 			env: {},
 			homeDir: home,

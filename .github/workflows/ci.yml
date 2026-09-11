@@ -46,6 +46,9 @@ jobs:
       - name: Lint (anti-slop oxlint)
         run: pnpm lint
 
+      - name: Visual recap validator tests
+        run: node --test "tools/visual-recap/**/*.test.mjs"
+
       - name: Unit tests
         run: pnpm test
 

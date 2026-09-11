@@ -296,16 +296,45 @@ export interface ListAllSessionsOptions extends ListSessionsOptions {
 	readonly currentSessionInfo?: SessionListInfo;
 }
 
-/** Newest-created first; the path tiebreak keeps equal file names deterministic. */
-function compareNewestCreatedFirst(a: string, b: string): number {
-	const aName = basename(a);
-	const bName = basename(b);
-	if (aName === bName) return a < b ? 1 : -1;
+/** Newest-modified first; the path tiebreak keeps equal mtimes deterministic. */
+function compareNewestActiveFirst(a: { readonly path: string; readonly modifiedMs: number }, b: { readonly path: string; readonly modifiedMs: number }): number {
+	if (a.modifiedMs !== b.modifiedMs) return b.modifiedMs - a.modifiedMs;
+	const aName = basename(a.path);
+	const bName = basename(b.path);
+	if (aName === bName) return a.path < b.path ? 1 : -1;
 	return aName < bName ? 1 : -1;
 }
 
-function rankSessionFiles(files: readonly string[]): string[] {
-	return [...files].sort(compareNewestCreatedFirst);
+/**
+ * Session files ordered by session activity (file mtime) newest first, with
+ * `concurrency` bounding in-flight `stat` calls. Ranking is metadata-only work
+ * -- no session file is opened here -- and a file deleted between the
+ * directory listing and its own stat is dropped (it cannot be read either).
+ * Session mtime, not directory mtime: writing to an existing `.jsonl` updates
+ * the file, not its parent directory.
+ */
+async function rankSessionFilesByActivity(files: readonly string[], concurrency: number): Promise<string[]> {
+	const normalizedConcurrency = Number.isFinite(concurrency) ? Math.max(1, Math.floor(concurrency)) : 1;
+	const ranked: { readonly path: string; readonly modifiedMs: number }[] = [];
+	let nextIndex = 0;
+	const runWorker = async (): Promise<void> => {
+		for (;;) {
+			const index = nextIndex;
+			nextIndex += 1;
+			if (index >= files.length) return;
+			const filePath = files[index]!;
+			try {
+				ranked.push({ path: filePath, modifiedMs: (await stat(filePath)).mtimeMs });
+			} catch {
+				// Deleted between the directory listing and this stat.
+			}
+		}
+	};
+	const workers: Promise<void>[] = [];
+	for (let index = 0; index < Math.min(files.length, normalizedConcurrency); index += 1) workers.push(runWorker());
+	for (const worker of workers) await worker;
+	ranked.sort(compareNewestActiveFirst);
+	return ranked.map((entry) => entry.path);
 }
 
 /** Session files directly inside `dir`, or `undefined` when it can't be read. */
@@ -320,37 +349,26 @@ async function collectSessionFiles(dir: string): Promise<string[] | undefined> {
 }
 
 /**
- * `readSessionInfosWithLimit` over `files` in rank order, stopping as soon as
- * `limit` infos have been collected. Batches never exceed the remaining need,
- * so an all-readable store performs exactly `limit` bounded prefix reads.
+ * Info for the newest-active `limit` candidates, dropping files with no
+ * readable session header. `limit` caps the read attempts themselves, not just
+ * the rows kept, so a store full of corrupt or unreadable files cannot turn
+ * the window into an unbounded scan.
  */
-async function readSessionInfosUntilLimit(files: readonly string[], concurrency: number, reader: SessionInfoReader, limit: number): Promise<SessionListInfo[]> {
-	const normalizedConcurrency = Number.isFinite(concurrency) ? Math.max(1, Math.floor(concurrency)) : 1;
-	const sessions: SessionListInfo[] = [];
-	let index = 0;
-	while (index < files.length && sessions.length < limit) {
-		const batchSize = Math.max(1, Math.min(limit - sessions.length, normalizedConcurrency));
-		const batch = files.slice(index, index + batchSize);
-		index += batchSize;
-		for (const info of await readSessionInfosWithLimit(batch, normalizedConcurrency, reader)) {
-			if (info !== undefined) sessions.push(info);
-		}
-	}
-	return sessions;
+async function readRankedSessionInfos(files: readonly string[], concurrency: number, reader: SessionInfoReader, limit: number): Promise<SessionListInfo[]> {
+	const infos = await readSessionInfosWithLimit(files.slice(0, limit), concurrency, reader);
+	return infos.filter((info): info is SessionListInfo => info !== undefined);
 }
 
 /**
- * Reads ranked session-file groups (newest file first inside each group,
- * groups already in recency order) until `maxSessions` infos have been
- * collected, then pins `currentSessionFile` when it fell outside that window
- * (its info comes from the caller when already read, otherwise one more
- * bounded prefix read). The pin takes the last row slot, keeping the result at
- * or below the cap.
+ * Reads the `maxSessions` most recently active files out of `rankedFiles`
+ * (already newest first), then pins `currentSessionFile` when it fell outside
+ * that window (its info comes from the caller when already read, otherwise one
+ * more bounded prefix read). The pin takes the last row slot, keeping the
+ * result at or below the cap.
  */
-async function listSessionsFromRankedFiles(fileGroups: readonly (readonly string[])[], { concurrency = 8, reader = readSessionInfo, maxSessions = DEFAULT_MAX_ALL_SESSIONS, currentSessionFile, currentSessionInfo }: ListAllSessionsOptions = {}): Promise<SessionListInfo[]> {
+async function listSessionsFromRankedFiles(rankedFiles: readonly string[], { concurrency = 8, reader = readSessionInfo, maxSessions = DEFAULT_MAX_ALL_SESSIONS, currentSessionFile, currentSessionInfo }: ListAllSessionsOptions = {}): Promise<SessionListInfo[]> {
 	const limit = Number.isFinite(maxSessions) ? Math.max(0, Math.floor(maxSessions)) : DEFAULT_MAX_ALL_SESSIONS;
-	const candidates = fileGroups.flat();
-	const sessions = limit > 0 ? await readSessionInfosUntilLimit(candidates, concurrency, reader, limit) : [];
+	const sessions = limit > 0 ? await readRankedSessionInfos(rankedFiles, concurrency, reader, limit) : [];
 	if (limit > 0 && currentSessionFile && !sessions.some((session) => session.path === currentSessionFile)) {
 		const pinned = currentSessionInfo ?? await reader(currentSessionFile);
 		if (pinned) {
@@ -363,52 +381,42 @@ async function listSessionsFromRankedFiles(fileGroups: readonly (readonly string
 }
 
 /**
- * Enumerates the session files under each project directory of `sessionsRoot`
- * (Pi's `<sessions>/<encoded-cwd>/<file>.jsonl` layout, one level deep),
- * ranking project directories most-recently-modified first and files within
- * each by file name (which starts with the session creation timestamp). Only
- * directory metadata is touched -- one `readdir` per project directory plus
- * one `stat` for the directories that hold session files; session files are
- * never stat-ed here.
+ * Every session file one level below `sessionsRoot` (Pi's
+ * `<sessions>/<encoded-cwd>/<file>.jsonl` layout), in directory order --
+ * ranking happens globally afterwards, so no project directory can front-load
+ * the window. One `readdir` per project directory; no file is opened.
  */
-async function collectRankedProjectDirs(sessionsRoot: string): Promise<string[][]> {
+async function collectSessionFilesUnder(sessionsRoot: string): Promise<string[]> {
 	let entries: Dirent[];
 	try {
 		entries = await readdir(sessionsRoot, { withFileTypes: true });
 	} catch {
 		return [];
 	}
-	const ranked: { readonly name: string; readonly files: string[]; readonly modifiedMs: number }[] = [];
+	const files: string[] = [];
 	for (const entry of entries) {
 		if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
-		const projectDir = join(sessionsRoot, entry.name);
-		const files = await collectSessionFiles(projectDir);
-		if (!files || files.length === 0) continue;
-		let modifiedMs = 0;
-		try {
-			modifiedMs = (await stat(projectDir)).mtimeMs;
-		} catch {
-			// Unstatable project directory: keep its files, ranked last.
-		}
-		ranked.push({ name: entry.name, files: rankSessionFiles(files), modifiedMs });
+		const projectFiles = await collectSessionFiles(join(sessionsRoot, entry.name));
+		if (projectFiles) files.push(...projectFiles);
 	}
-	ranked.sort((a, b) => b.modifiedMs - a.modifiedMs || (a.name < b.name ? 1 : -1));
-	return ranked.map((entry) => entry.files);
+	return files;
 }
 
 /**
  * Lists sessions across every project directory under `sessionsRoot` -- Pi's
  * `SessionManager.listAll` layout, `<sessions>/<encoded-cwd>/<file>.jsonl`,
  * walked one level deep. Deliberately bounded where Pi's own version is not:
- * project directories are enumerated and mtime-ranked, their files ordered
- * newest-created first, and only as many files as the row cap needs are
- * opened (bounded prefix reads). A recently-active project directory is read
- * before newer file names in stale ones. `currentSessionFile` is always
- * included, so a long-lived current session with an old file name cannot fall
- * out of the window.
+ * candidates from every project directory are ranked together by session
+ * activity (file mtime, newest first -- not the directory's, which a resumed
+ * session does not touch), and only the `maxSessions` newest are opened
+ * (bounded prefix reads). Ranking globally means one busy project cannot fill
+ * the whole window. `currentSessionFile` is always included, so a session that
+ * fell outside the window (old file name, or no longer active) is still
+ * resumable.
  */
 export async function listAllSessions(sessionsRoot: string, options: ListAllSessionsOptions = {}): Promise<SessionListInfo[]> {
-	return listSessionsFromRankedFiles(await collectRankedProjectDirs(sessionsRoot), options);
+	const files = await collectSessionFilesUnder(sessionsRoot);
+	return listSessionsFromRankedFiles(await rankSessionFilesByActivity(files, options.concurrency ?? 8), options);
 }
 
 /** Pi's `getDefaultSessionDirPath` encoding of a cwd into a project directory name. */
@@ -436,6 +444,13 @@ function isEncodedProjectDirName(name: string): boolean {
  * touched; an unreadable/not-yet-written current file falls back to the
  * directory-name shape (`--<cwd>--` means nested). The current session is
  * pinned in both layouts.
+ *
+ * ponytail: that fallback is a guess, and a flat custom `--session-dir`
+ * literally named `--something--` is the one case it gets wrong. The RPC seam
+ * carries only the current `sessionFile` -- no configured session dir -- so
+ * the caller has no layout to hand down; preferring the flat reading would
+ * instead hide every other project on a default install, where an unreadable
+ * session file is the common case (brand-new session, or a corrupt one).
  */
 export async function listAllSessionsForSession(sessionFile: string, options: ListAllSessionsOptions = {}): Promise<SessionListInfo[]> {
 	const reader = options.reader ?? readSessionInfo;
@@ -446,8 +461,8 @@ export async function listAllSessionsForSession(sessionFile: string, options: Li
 		? basename(sessionDir) === encodeSessionDirName(currentSessionInfo.cwd)
 		: isEncodedProjectDirName(basename(sessionDir));
 	if (nested) return listAllSessions(dirname(sessionDir), resolvedOptions);
-	const files = await collectSessionFiles(sessionDir);
-	return listSessionsFromRankedFiles(files && files.length > 0 ? [rankSessionFiles(files)] : [], resolvedOptions);
+	const files = (await collectSessionFiles(sessionDir)) ?? [];
+	return listSessionsFromRankedFiles(await rankSessionFilesByActivity(files, options.concurrency ?? 8), resolvedOptions);
 }
 
 /**

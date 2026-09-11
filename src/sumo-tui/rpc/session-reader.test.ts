@@ -311,26 +311,81 @@ describe("session-reader", () => {
 			expect(sessions.map((session) => session.id)).toEqual(["p5-9", "p5-8", "p5-7", "p5-6", "p5-5"]);
 		});
 
-		it("surfaces a recently-active project directory ahead of newer file names in stale ones", async () => {
+		it("surfaces recently-active sessions ahead of newer-created quiet ones", async () => {
 			const sessionsRoot = join(dir, "sessions");
-			const staleDir = join(sessionsRoot, "--stale--");
+			const quietDir = join(sessionsRoot, "--quiet--");
 			const activeDir = join(sessionsRoot, "--active--");
-			mkdirSync(staleDir, { recursive: true });
+			mkdirSync(quietDir, { recursive: true });
 			mkdirSync(activeDir, { recursive: true });
-			// Stale project: files with the newest creation names.
-			for (let index = 0; index < 3; index += 1) {
-				writeSession(join(staleDir, fileNameFor(50 + index, `stale-${index}`)), `stale-${index}`, isoAt(50 + index), "/stale");
-			}
-			// Active project: older creation names, but the directory was last written most recently.
-			for (let index = 0; index < 3; index += 1) {
-				writeSession(join(activeDir, fileNameFor(index, `active-${index}`)), `active-${index}`, isoAt(index), "/active");
-			}
-			utimesSync(staleDir, new Date(Date.UTC(2026, 6, 2, 21)), new Date(Date.UTC(2026, 6, 2, 21)));
-			utimesSync(activeDir, new Date(Date.UTC(2026, 6, 3)), new Date(Date.UTC(2026, 6, 3)));
+			const now = Date.now();
+			// Active project: older creation names, appended to most recently --
+			// writing to an existing session file moves the file's mtime and leaves
+			// its directory's untouched.
+			const activeFiles = [0, 1, 2].map((index) => writeSession(join(activeDir, fileNameFor(index, `active-${index}`)), `active-${index}`, isoAt(index), "/active"));
+			// Quiet project: files with the newest creation names, written last so the
+			// quiet directory also carries the newest directory mtime -- directory
+			// metadata points the opposite way from session activity here.
+			const quietFiles = [0, 1, 2].map((index) => writeSession(join(quietDir, fileNameFor(50 + index, `quiet-${index}`)), `quiet-${index}`, isoAt(50 + index), "/quiet"));
+			for (const file of activeFiles) utimesSync(file, new Date(now - 5_000), new Date(now - 5_000));
+			for (const file of quietFiles) utimesSync(file, new Date(now - 60_000), new Date(now - 60_000));
 
 			const sessions = await listAllSessions(sessionsRoot, { maxSessions: 2 });
 
 			expect(sessions.map((session) => session.id)).toEqual(["active-2", "active-1"]);
+		});
+
+		it("ranks candidates globally, so one busy project cannot fill the window", async () => {
+			const sessionsRoot = join(dir, "sessions");
+			const busyDir = join(sessionsRoot, "--busy--");
+			const otherDir = join(sessionsRoot, "--other--");
+			mkdirSync(busyDir, { recursive: true });
+			mkdirSync(otherDir, { recursive: true });
+			const now = Date.now();
+			// Other project: older creation names, but active since the busy ones were.
+			const otherFiles = [0, 1].map((index) => writeSession(join(otherDir, fileNameFor(index, `other-${index}`)), `other-${index}`, isoAt(index), "/other"));
+			// Busy project: more sessions than the entire window, newest names.
+			// Written last, so the busy directory also carries the newest directory
+			// mtime -- directory metadata points the opposite way from activity here.
+			const busyFiles: string[] = [];
+			for (let index = 0; index < DEFAULT_MAX_ALL_SESSIONS + 3; index += 1) {
+				busyFiles.push(writeSession(join(busyDir, fileNameFor(200 + index, `busy-${index}`)), `busy-${index}`, isoAt(200 + index), "/busy"));
+			}
+			for (const file of otherFiles) utimesSync(file, new Date(now - 5_000), new Date(now - 5_000));
+			for (const file of busyFiles) utimesSync(file, new Date(now - 60_000), new Date(now - 60_000));
+			const read: string[] = [];
+
+			const sessions = await listAllSessions(sessionsRoot, {
+				reader: async (filePath) => {
+					read.push(filePath);
+					return readSessionInfo(filePath);
+				},
+			});
+
+			expect(read).toHaveLength(DEFAULT_MAX_ALL_SESSIONS);
+			expect(sessions).toHaveLength(DEFAULT_MAX_ALL_SESSIONS);
+			// The other project's sessions share the window with the busy project's
+			// instead of being pushed out by it.
+			expect(sessions.map((session) => session.id)).toEqual(expect.arrayContaining(["other-0", "other-1"]));
+		});
+
+		it("caps read attempts when the candidates are unreadable", async () => {
+			const sessionsRoot = join(dir, "sessions");
+			const projectDir = join(sessionsRoot, "--repo--");
+			mkdirSync(projectDir, { recursive: true });
+			for (let index = 0; index < DEFAULT_MAX_ALL_SESSIONS + 3; index += 1) {
+				writeFileSync(join(projectDir, fileNameFor(index, `corrupt-${index}`)), "not a session line\n");
+			}
+			let reads = 0;
+
+			const sessions = await listAllSessions(sessionsRoot, {
+				reader: async () => {
+					reads += 1;
+					return undefined;
+				},
+			});
+
+			expect(reads).toBe(DEFAULT_MAX_ALL_SESSIONS);
+			expect(sessions).toEqual([]);
 		});
 
 		it("reads only the window plus the pinned current session on a large synthetic store", async () => {

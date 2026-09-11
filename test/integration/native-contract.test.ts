@@ -118,7 +118,7 @@ function spawnNativePty(
 		getOutput: () => output,
 		getDiagPath: () => evidence.diagPath,
 		async captureEvidence(finalScreen?: string): Promise<string> {
-			if (finalScreen !== undefined) await writeFile(join(evidence.evidenceDir, "final-screen.txt"), finalScreen, { mode: 0o600 });
+			if (finalScreen !== undefined) writeFileSync(join(evidence.evidenceDir, "final-screen.txt"), finalScreen, { mode: 0o600 });
 			return evidence.evidenceDir;
 		},
 		waitForOutput(pattern, timeoutMs = 10_000) {

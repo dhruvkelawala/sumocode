@@ -524,7 +524,7 @@ export async function waitForScreenText(
 ): Promise<ScreenSnapshot> {
 	return waitForScreen(
 		pty,
-		({ text }) => (typeof pattern === "string" ? text.includes(pattern) : pattern.test(text)),
+		({ text }) => (isStringPattern(pattern) ? text.includes(pattern) : pattern.test(text)),
 		{ cols: pty.cols, rows: pty.rows, timeoutMs },
 	);
 }

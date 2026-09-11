@@ -124,6 +124,35 @@ describe("acquireLongLivedToken", () => {
 		await expect(promise).resolves.toEqual({ status: "ok", token: VALID_TOKEN });
 	});
 
+	it("does not let a stderr newline terminate a token split across stdout writes", async () => {
+		const child = new FakeChild();
+		const promise = acquireLongLivedToken({}, { spawnCommand: fakeSpawn(child) });
+		child.emitStdout("export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-AbCdEf");
+		child.stderr.emit("data", Buffer.from("\n", "utf8"));
+		child.emitStdout("0123456789_-xyz\n");
+		await expect(promise).resolves.toEqual({ status: "ok", token: VALID_TOKEN });
+	});
+
+	it("does not let stderr text extend a token split across stdout writes", async () => {
+		const child = new FakeChild();
+		const promise = acquireLongLivedToken({}, { spawnCommand: fakeSpawn(child) });
+		child.emitStdout("export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-AbCdEf");
+		child.stderr.emit("data", Buffer.from("warning: slow down\n", "utf8"));
+		child.emitStdout("0123456789_-xyz\n");
+		await expect(promise).resolves.toEqual({ status: "ok", token: VALID_TOKEN });
+	});
+
+	it("never forwards a partially written token line to onProgress", async () => {
+		const child = new FakeChild();
+		const onProgress = vi.fn();
+		const promise = acquireLongLivedToken({ onProgress }, { spawnCommand: fakeSpawn(child) });
+		child.emitStdout("export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-AbCdEf");
+		child.stderr.emit("data", Buffer.from("warning: slow down\n", "utf8"));
+		child.emitStdout("0123456789_-xyz\n");
+		await expect(promise).resolves.toEqual({ status: "ok", token: VALID_TOKEN });
+		expect(onProgress.mock.calls.map(([line]) => line).join("\n")).not.toContain("sk-ant-oat01");
+	});
+
 	it("captures a token that arrives without a trailing newline before exit", async () => {
 		const child = new FakeChild();
 		const promise = acquireLongLivedToken({}, { spawnCommand: fakeSpawn(child) });

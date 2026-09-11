@@ -139,8 +139,10 @@ export function acquireLongLivedToken(
 	const timeoutMs = runtime.timeoutMs ?? CLAUDE_SETUP_TOKEN_TIMEOUT_MS;
 	return new Promise((resolve) => {
 		let settled = false;
-		let output = "";
-		let emitted = 0;
+		let stdoutOutput = "";
+		let stderrOutput = "";
+		let stdoutEmitted = 0;
+		let stderrEmitted = 0;
 		let child: SetupTokenProcess | undefined;
 		let timer: NodeJS.Timeout | undefined;
 		const finish = (result: AcquireResult): void => {
@@ -153,21 +155,32 @@ export function acquireLongLivedToken(
 		};
 		timer = setTimeout(() => finish({ status: "timeout" }), timeoutMs);
 		const onAbort = (): void => finish({ status: "failed", reason: "cancelled" });
-		const consume = (chunk: Buffer | string): void => {
-			output += chunk.toString();
-			// Only complete lines may be parsed while the child is running: a token
-			// split across two writes would otherwise match as a truncated prefix and
-			// be stored as a broken credential. The close handler parses the whole
-			// buffer, where no further bytes can arrive.
-			const flushable = output.slice(0, output.lastIndexOf("\n") + 1);
-			const token = parseSetupTokenOutput(flushable);
-			if (token) {
-				finish({ status: "ok", token });
-				return;
+		const consume = (chunk: Buffer | string, isStdout: boolean): void => {
+			const output = (isStdout ? stdoutOutput : stderrOutput) + chunk.toString();
+			if (isStdout) stdoutOutput = output;
+			else stderrOutput = output;
+			// Each stream keeps its own buffer and progress cursor: stdout alone is
+			// parsed for the token, so stderr bytes can never terminate or extend a
+			// partial token, and the streams are never concatenated into one progress
+			// line that would carry token bytes to another sink.
+			// Only complete stdout lines may be parsed while the child is running: a
+			// token split across two writes would otherwise match as a truncated
+			// prefix and be stored as a broken credential. The close handler parses
+			// the whole stdout buffer, where no further bytes can arrive.
+			if (isStdout) {
+				const token = parseSetupTokenOutput(output.slice(0, output.lastIndexOf("\n") + 1));
+				if (token) {
+					finish({ status: "ok", token });
+					return;
+				}
 			}
-			if (!options.onProgress || flushable.length <= emitted) return;
+			if (!options.onProgress) return;
+			const flushable = output.slice(0, output.lastIndexOf("\n") + 1);
+			const emitted = isStdout ? stdoutEmitted : stderrEmitted;
+			if (flushable.length <= emitted) return;
 			const lines = flushable.slice(emitted).split("\n").map((line) => line.trim()).filter(Boolean);
-			emitted = flushable.length;
+			if (isStdout) stdoutEmitted = flushable.length;
+			else stderrEmitted = flushable.length;
 			for (const line of lines) options.onProgress(line);
 		};
 		if (options.signal?.aborted) {
@@ -184,10 +197,10 @@ export function acquireLongLivedToken(
 		spawned.on("error", (error: NodeJS.ErrnoException) => {
 			finish(error.code === "ENOENT" ? { status: "unavailable" } : { status: "failed", reason: error.message });
 		});
-		spawned.stdout.on("data", consume);
-		spawned.stderr.on("data", consume);
+		spawned.stdout.on("data", (chunk) => consume(chunk, true));
+		spawned.stderr.on("data", (chunk) => consume(chunk, false));
 		spawned.on("close", (code) => {
-			const token = parseSetupTokenOutput(output);
+			const token = parseSetupTokenOutput(stdoutOutput);
 			if (token) finish({ status: "ok", token });
 			else finish({ status: "failed", reason: `claude setup-token exited with code ${code ?? "unknown"}` });
 		});

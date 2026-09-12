@@ -388,7 +388,10 @@ export class SubagentManager {
 			record = registry.advanceDelivery(record.revision, authority, "send", notice);
 			send(outgoing);
 			registry.advanceDelivery(record.revision, authority, "sent", notice);
-		} catch {
+		} catch (error: unknown) {
+			// Turn delivery has no durable admission record, so let the deferred
+			// queue retain and retry it. Terminal delivery recovers from `sending`.
+			if (payload.status === "turn_done") throw error;
 			// Publication may have committed even if its return was lost. Preserve
 			// successor recovery of sending; only corrupt evidence blocks adoption.
 			this.canDeliver(payload.id);

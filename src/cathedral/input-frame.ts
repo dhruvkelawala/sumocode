@@ -179,6 +179,8 @@ export function renderInputFrame(input: string, width: number, options: InputFra
 }
 
 export type InputHintsOptions = {
+	/** Active prompt delivery selection; rendered before optional project context. */
+	deliveryMode?: "steer" | "followUp";
 	/**
 	 * Left-side hint. Splash uses `╰─ <model> · <thinking>`; portrait active
 	 * state uses project/branch context when the sidebar is hidden.
@@ -204,7 +206,10 @@ export function renderInputHints(width: number, options: InputHintsOptions = {})
 
 	const rightPlain = INPUT_FRAME_HINT_KEYBINDS;
 	const rightLen = rightPlain.length;
-	const left = options.leftHint;
+	const deliveryBadge = options.deliveryMode === undefined ? undefined : options.deliveryMode === "steer" ? "STEER" : "FOLLOW-UP";
+	const left = deliveryBadge === undefined
+		? options.leftHint
+		: options.leftHint === undefined ? deliveryBadge : `${deliveryBadge} · ${options.leftHint}`;
 
 	const dimFg = fg(activeThemeColors().foregroundDim);
 	const accent = fg(activeThemeColors().accent);
@@ -212,6 +217,10 @@ export function renderInputHints(width: number, options: InputHintsOptions = {})
 	// Build the colored right-hand string: CTRL+/ in accent, label in dim.
 	const rightColored = `${accent}CTRL+/${RESET} ${dimFg}· COMMANDS${RESET}`;
 	const colorLeftHint = (text: string): string => {
+		if (deliveryBadge !== undefined && text.startsWith(deliveryBadge)) {
+			const suffix = text.slice(deliveryBadge.length);
+			return `${color(deliveryBadge, activeThemeColors().accent)}${dimFg}${suffix}${RESET}`;
+		}
 		if (options.leftHintStyle === "model-thinking") {
 			const prefix = "╰─ ";
 			const separator = " · ";

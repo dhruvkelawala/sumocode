@@ -1866,6 +1866,18 @@
 					"runtimeCrop": "chat-area"
 				}
 			]
+		},
+		{
+			"id": "fixture-native-queues-followup-landscape",
+			"lane": "fixture",
+			"status": "review",
+			"dimensions": { "cols": 160, "rows": 45 },
+			"bibleTarget": "scene-active.png",
+			"fixture": { "id": "native-queues-followup" },
+			"crops": [
+				{ "id": "full", "targetCrop": "full", "runtimeCrop": "full" },
+				{ "id": "hint-row", "targetCrop": "hint-row", "runtimeCrop": "hint-row" }
+			]
 		}
 	]
 }

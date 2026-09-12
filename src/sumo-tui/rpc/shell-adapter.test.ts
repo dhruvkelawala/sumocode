@@ -211,7 +211,8 @@ describe("RpcShellAdapter queued messages banner", () => {
 			initialState: state({
 				isStreaming: true,
 				hasMessages: true,
-				queuedMessages: ["first queued prompt", "second queued prompt"],
+				steeringMessages: ["first queued prompt"],
+				followUpMessages: ["second queued prompt"],
 			}),
 			initialTranscript: { messages: [{ id: "m1", role: "user", displayName: "YOU", blocks: [{ type: "markdown", text: "hello" }] }] },
 		});
@@ -223,13 +224,13 @@ describe("RpcShellAdapter queued messages banner", () => {
 			expect(text).toContain("first queued prompt");
 			expect(text).toContain("second queued prompt");
 
-			// Card chrome: bordered like the USER/SUMO chat cards with a count
-			// label, dim body text.
-			expect(text).toContain("QUEUED (2)");
+			// Pi's queue kinds remain visibly distinct.
+			expect(text).toContain("STEERING (1)");
+			expect(text).toContain("FOLLOW-UP (1)");
 			const queuedCell = findText(frame!, "first queued prompt");
 			expect(frame!.getCell(queuedCell.row, queuedCell.col).fg?.toLowerCase()).toBe("#8b7a63");
 			// Border row above the first entry is the frame top.
-			const label = findText(frame!, "QUEUED (2)");
+			const label = findText(frame!, "STEERING (1)");
 			expect(label.row).toBeLessThan(queuedCell.row);
 		} finally {
 			adapter.dispose();
@@ -243,7 +244,8 @@ describe("RpcShellAdapter queued messages banner", () => {
 			initialState: state({
 				isStreaming: true,
 				hasMessages: true,
-				queuedMessages: ["/var/folders/ab/pi-clipboard-9f3a.png", "look at /tmp/pi-clipboard-77.jpeg please"],
+				steeringMessages: ["/var/folders/ab/pi-clipboard-9f3a.png"],
+				followUpMessages: ["look at /tmp/pi-clipboard-77.jpeg please"],
 			}),
 			initialTranscript: { messages: [{ id: "m1", role: "user", displayName: "YOU", blocks: [{ type: "markdown", text: "hello" }] }] },
 		});
@@ -265,7 +267,7 @@ describe("RpcShellAdapter queued messages banner", () => {
 			initialState: state({
 				isStreaming: true,
 				hasMessages: true,
-				queuedMessages: ["vanish me"],
+				steeringMessages: ["vanish me"],
 			}),
 			initialTranscript: { messages: [{ id: "m1", role: "user", displayName: "YOU", blocks: [{ type: "markdown", text: "hello" }] }] },
 		});
@@ -274,7 +276,7 @@ describe("RpcShellAdapter queued messages banner", () => {
 			let text = Array.from({ length: 30 }, (_value, row) => adapter.getLastFrame()!.toPlainRow(row)).join("\n");
 			expect(text).toContain("vanish me");
 
-			adapter.update({ state: state({ isStreaming: true, hasMessages: true, queuedMessages: [] }) });
+			adapter.update({ state: state({ isStreaming: true, hasMessages: true, steeringMessages: [], followUpMessages: [] }) });
 			adapter.render();
 			text = Array.from({ length: 30 }, (_value, row) => adapter.getLastFrame()!.toPlainRow(row)).join("\n");
 			expect(text).not.toContain("vanish me");

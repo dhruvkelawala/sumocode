@@ -90,11 +90,23 @@ export function rpcVisualFixtureFromEnv(env: NodeJS.ProcessEnv): RpcVisualFixtur
 	if (env.SUMOCODE_HARNESS !== "1") return undefined;
 	const fixtureId = env.SUMOCODE_VISUAL_RPC_FIXTURE;
 	if (!fixtureId) return undefined;
-	if (fixtureId !== "completed-active") throw new Error(`Unsupported RPC visual fixture: ${fixtureId}`);
+	if (fixtureId !== "completed-active" && fixtureId !== "native-queues-followup") {
+		throw new Error(`Unsupported RPC visual fixture: ${fixtureId}`);
+	}
 	const inputPreview = env.SUMOCODE_VISUAL_RPC_INPUT_PREVIEW;
+	const state = fixtureId === "native-queues-followup"
+		? {
+			...COMPLETED_ACTIVE_STATE,
+			isStreaming: true,
+			promptDeliveryMode: "followUp" as const,
+			steeringMessages: ["steer after the current tool"],
+			followUpMessages: ["run verification when settled"],
+			pendingMessageCount: 2,
+		}
+		: COMPLETED_ACTIVE_STATE;
 	const fixture = {
 		transcript: COMPLETED_ACTIVE_TRANSCRIPT,
-		state: COMPLETED_ACTIVE_STATE,
+		state,
 		inputPreview: inputPreview && inputPreview.length > 0 ? inputPreview : undefined,
 	};
 	if (!inputPreview || inputPreview.length === 0) delete fixture.inputPreview;

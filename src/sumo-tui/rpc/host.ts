@@ -553,6 +553,25 @@ export async function submitRpcDirectBash(message: string, deps: RpcDirectBashSu
 	return true;
 }
 
+export function createRpcImageDraftSubmitter(
+	submit: (draft: RpcEditorSubmissionDraft) => Promise<void>,
+	notifications: ErrorNotifier,
+): (draft: RpcEditorSubmissionDraft) => Promise<void> {
+	let inFlight = false;
+	return async (draft) => {
+		if (inFlight) {
+			notifications.notify("image already sending · draft kept", "warning");
+			return;
+		}
+		inFlight = true;
+		try {
+			await submit(draft);
+		} finally {
+			inFlight = false;
+		}
+	};
+}
+
 export interface RpcImageDraftSubmitDependencies {
 	readonly editor: Pick<RpcHostEditorController, "getText" | "setText" | "addToHistory" | "commitRpcDraft">;
 	readonly notifications: ErrorNotifier;
@@ -1464,6 +1483,15 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		ownerSessionId: () => stateStore.getSnapshot().sessionId,
 		reconcileTranscript: (completion) => reconcileDirectBashTranscript(completion),
 	});
+	const submitImageDraft = createRpcImageDraftSubmitter(
+		(draft) => submitRpcImageDraft(draft, {
+			editor,
+			notifications,
+			client,
+			isAgentBusy: () => stateStore.getSnapshot().isStreaming || stateStore.getSnapshot().isCompacting,
+		}),
+		notifications,
+	);
 	const submitHandlers = createEditorSubmitHandlers({
 		gate: hydrationActionGate,
 		notifications,
@@ -1478,12 +1506,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 				delivery: delivery ?? "steer",
 			});
 		},
-		submitImageDraft: (draft) => submitRpcImageDraft(draft, {
-			editor,
-			notifications,
-			client,
-			isAgentBusy: () => stateStore.getSnapshot().isStreaming || stateStore.getSnapshot().isCompacting,
-		}),
+		submitImageDraft,
 	});
 	const keybindings = createRpcKeybindingsManager({ env });
 	// Pre-hydration cycle ring (issue 448): the last-known enabled models and
@@ -1543,12 +1566,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 			isBlocked: () => treeNavigationBusy,
 			isAgentBusy: () => stateStore.getSnapshot().isStreaming || stateStore.getSnapshot().isCompacting,
 			submitDirectBash,
-			submitImageDraft: (draft) => submitRpcImageDraft(draft, {
-				editor,
-				notifications,
-				client,
-				isAgentBusy: () => stateStore.getSnapshot().isStreaming || stateStore.getSnapshot().isCompacting,
-			}),
+			submitImageDraft,
 		});
 	const handleMessageToggleDelivery = (): void => {
 		const current = stateStore.getSnapshot().promptDeliveryMode ?? "steer";

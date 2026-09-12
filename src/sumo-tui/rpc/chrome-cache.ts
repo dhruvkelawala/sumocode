@@ -10,19 +10,42 @@ import {
 const CACHE_VERSION = 1 as const;
 const MAX_CACHED_CWDS = 20;
 const MAX_CACHE_BYTES = 64 * 1024;
+const MAX_CACHED_MODELS = 256;
+const MAX_CACHED_THINKING_LEVELS = 16;
+
+/** Model identity only: the cycle ring derives its label from provider/id. */
+export interface CachedModelRef {
+	readonly provider: string;
+	readonly id: string;
+}
 
 export interface CachedChrome {
 	modelLabel?: string;
 	thinkingLevel?: string;
+	/**
+	 * Enabled-model ring from the last hydrate. Initial hydration owns the
+	 * authoritative chrome, so before it settles the cycle keys step through
+	 * this last-known ring instead (issue 448); the choice reconciles against
+	 * the live list once hydration commits.
+	 */
+	models?: readonly CachedModelRef[];
+	/** Available thinking levels from the last hydrate; same pre-hydration seam. */
+	thinkingLevels?: readonly string[];
 }
 
-interface CachedChromeEntry extends CachedChrome {
+interface CachedChromeEntry {
 	readonly savedAt: number;
+	modelLabel?: string;
+	thinkingLevel?: string;
 }
 
 interface ChromeCacheFile {
 	readonly version: typeof CACHE_VERSION;
 	readonly byCwd: Record<string, CachedChromeEntry>;
+	// The child reports one model list per process, not per project, so the
+	// cycle rings are stored once instead of duplicated into every cwd entry.
+	readonly models?: readonly CachedModelRef[];
+	readonly thinkingLevels?: readonly string[];
 }
 
 export interface ChromeCacheOptions {
@@ -52,6 +75,26 @@ function isString(value: JsonValue | undefined): value is string {
 	return typeof value === "string";
 }
 
+function cachedModelRefs(value: JsonValue | undefined): CachedModelRef[] | undefined {
+	if (!Array.isArray(value) || value.length === 0 || value.length > MAX_CACHED_MODELS) return undefined;
+	const models: CachedModelRef[] = [];
+	for (const entry of value) {
+		if (!isJsonObject(entry) || !isString(entry["provider"]) || !isString(entry["id"])) return undefined;
+		models.push({ provider: entry["provider"], id: entry["id"] });
+	}
+	return models;
+}
+
+function cachedThinkingLevels(value: JsonValue | undefined): string[] | undefined {
+	if (!Array.isArray(value) || value.length === 0 || value.length > MAX_CACHED_THINKING_LEVELS) return undefined;
+	return value.every(isString) ? [...value] : undefined;
+}
+
+/** Drops an oversized ring: one huge entry would push the whole file past MAX_CACHE_BYTES and disable the cache. */
+function cappedRing<T>(values: readonly T[] | undefined, max: number): readonly T[] | undefined {
+	return values !== undefined && values.length > 0 && values.length <= max ? values : undefined;
+}
+
 function readCacheFile(options: ChromeCacheOptions): ChromeCacheFile | undefined {
 	try {
 		// SAFETY: readPrivateJson returns untyped file contents; every field is
@@ -66,7 +109,9 @@ function readCacheFile(options: ChromeCacheOptions): ChromeCacheFile | undefined
 			if (isString(value["thinkingLevel"])) entry.thinkingLevel = value["thinkingLevel"];
 			byCwd[cwd] = entry;
 		}
-		return { version: CACHE_VERSION, byCwd };
+		const models = cachedModelRefs(parsed["models"]);
+		const thinkingLevels = cachedThinkingLevels(parsed["thinkingLevels"]);
+		return { version: CACHE_VERSION, byCwd, models, thinkingLevels };
 	} catch {
 		return undefined;
 	}
@@ -74,11 +119,14 @@ function readCacheFile(options: ChromeCacheOptions): ChromeCacheFile | undefined
 
 /** Reads only the last hydrate-derived chrome for this project, never throwing. */
 export function readCachedChrome(cwd: string, options: ChromeCacheOptions = {}): CachedChrome | undefined {
-	const entry = readCacheFile(options)?.byCwd[cwd];
-	if (!entry) return undefined;
+	const file = readCacheFile(options);
+	const entry = file?.byCwd[cwd];
+	if (!file || !entry) return undefined;
 	const result: CachedChrome = {};
 	if (entry.modelLabel !== undefined) result.modelLabel = entry.modelLabel;
 	if (entry.thinkingLevel !== undefined) result.thinkingLevel = entry.thinkingLevel;
+	if (file.models !== undefined) result.models = file.models;
+	if (file.thinkingLevels !== undefined) result.thinkingLevels = file.thinkingLevels;
 	return result;
 }
 
@@ -100,9 +148,15 @@ export function writeCachedChrome(cwd: string, chrome: CachedChrome, options: Ch
 			const retained = Object.entries(byCwd)
 				.sort(([, left], [, right]) => left.savedAt - right.savedAt)
 				.slice(-MAX_CACHED_CWDS);
+			// A write that carries no ring (an optimistic chrome paint before the
+			// child list is known) keeps the stored one instead of erasing it.
+			const models = cappedRing(chrome.models, MAX_CACHED_MODELS) ?? existing?.models;
+			const thinkingLevels = cappedRing(chrome.thinkingLevels, MAX_CACHED_THINKING_LEVELS) ?? existing?.thinkingLevels;
 			const cache: ChromeCacheFile = {
 				version: CACHE_VERSION,
 				byCwd: Object.fromEntries(retained),
+				models,
+				thinkingLevels,
 			};
 			atomicWritePrivateJson(path, cache);
 		});

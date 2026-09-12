@@ -43,6 +43,29 @@ describe("chrome cache", () => {
 		}
 	});
 
+	it("round-trips the cycle rings once, not once per project, and keeps them across a chrome-only write", () => {
+		const { stateRoot, path } = cacheFixture();
+		const models = [{ provider: "anthropic", id: "claude-opus-4" }, { provider: "openai", id: "gpt-5" }];
+		writeCachedChrome("/project/a", { modelLabel: "anthropic/claude-opus-4", models, thinkingLevels: ["low", "high"] }, { stateRoot, now: () => 10 });
+		writeCachedChrome("/project/b", { modelLabel: "openai/gpt-5" }, { stateRoot, now: () => 20 });
+
+		expect(readCachedChrome("/project/b", { stateRoot })).toEqual({ modelLabel: "openai/gpt-5", models, thinkingLevels: ["low", "high"] });
+		const stored = JSON.parse(readFileSync(path, "utf8"));
+		expect(stored.models).toEqual(models);
+		expect(Object.keys(stored.byCwd)).toEqual(["/project/a", "/project/b"]);
+	});
+
+	it("ignores a corrupt cycle ring instead of failing the whole read", () => {
+		const { stateRoot, path } = cacheFixture();
+		writeCachedChrome("/project/a", { modelLabel: "m" }, { stateRoot });
+		const stored = JSON.parse(readFileSync(path, "utf8"));
+		stored.models = [{ provider: "anthropic" }, { id: "gpt-5" }];
+		stored.thinkingLevels = [7];
+		writeFileSync(path, JSON.stringify(stored), { mode: 0o600 });
+
+		expect(readCachedChrome("/project/a", { stateRoot })).toEqual({ modelLabel: "m" });
+	});
+
 	it("resolves SUMOCODE_STATE_DIR ahead of PI_CODING_AGENT_DIR", () => {
 		const directory = temporaryDirectory();
 		const stateRoot = join(directory, "custom-state");

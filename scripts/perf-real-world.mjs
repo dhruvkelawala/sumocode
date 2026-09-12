@@ -93,24 +93,20 @@ async function readEvents(diag) {
 	}
 }
 
-export function selectReadinessEvent(events, preferredEvent, fallbackEvent, occurrence) {
-	const preferred = events.filter((event) => event.event === preferredEvent);
-	if (preferred.length >= occurrence) return preferred[occurrence - 1];
-	// editor_ready identifies the truthful-readiness event generation. Once it
-	// appears, app_ready is chrome compatibility evidence, not command readiness.
-	if (events.some((event) => event.event === "editor_ready")) return undefined;
-	return events.filter((event) => event.event === fallbackEvent)[occurrence - 1];
+export function selectReadinessEvent(events, eventName, occurrence) {
+	const matches = events.filter((event) => event.event === eventName);
+	return matches.length >= occurrence ? matches[occurrence - 1] : undefined;
 }
 
-async function waitForReadinessEvent(diag, preferredEvent, fallbackEvent, occurrence) {
+async function waitForReadinessEvent(diag, eventName, occurrence) {
 	const deadline = Date.now() + TIMEOUT_MS;
 	while (Date.now() < deadline) {
 		const events = await readEvents(diag);
-		const event = selectReadinessEvent(events, preferredEvent, fallbackEvent, occurrence);
+		const event = selectReadinessEvent(events, eventName, occurrence);
 		if (event) return { events, event };
 		await new Promise((resolveSleep) => setTimeout(resolveSleep, POLL_MS));
 	}
-	const error = new Error(`timed out waiting for ${preferredEvent} occurrence ${occurrence}`);
+	const error = new Error(`timed out waiting for ${eventName} occurrence ${occurrence}`);
 	error.code = "diag-timeout";
 	error.events = await readEvents(diag);
 	throw error;
@@ -135,7 +131,7 @@ function markdown(report) {
 	const rows = report.runs.map((run) => `| ${run.run} | ${formatMetric(run.first_frame_ms)} | ${formatMetric(run.editor_ready_ms)} | ${formatMetric(run.command_ready_ms)} | ${formatMetric(run.editor_command_gap_ms)} | ${formatMetric(run.reload_editor_ready_ms)} | ${formatMetric(run.reload_command_ready_ms)} | ${formatMetric(run.reload_editor_command_gap_ms)} | ${run.error ?? ""} |`);
 	return `# SumoCode real-world startup perf snapshot
 
-Report-only measurements from herdr using the operator's real SumoCode configuration and installed extension set. Results are machine-dependent and are not CI gates. The parser prefers \`editor_ready\` / \`command_ready\`; \`input_ready\` / \`app_ready\` are accepted only for an old event stream during their one-release compatibility window.
+Report-only measurements from herdr using the operator's real SumoCode configuration and installed extension set. Results are machine-dependent and are not CI gates. Readiness is measured from the truthful \`editor_ready\` and \`command_ready\` events.
 
 - commit: \`${report.commit}\`
 - generated: ${report.generatedAt}
@@ -204,12 +200,12 @@ async function run() {
 				pane = startProbe(name, scratch, diag);
 				if (!pane) throw new Error(`could not resolve pane for ${name}`);
 				startedPanes.add(pane);
-				const editorReady = await waitForReadinessEvent(diag, "editor_ready", "input_ready", 1);
+				const editorReady = await waitForReadinessEvent(diag, "editor_ready", 1);
 				const bootFrame = editorReady.events.find((event) => event.event === "boot_screen_frame");
 				// oxlint-disable-next-line anti-slop/no-runtime-typeof -- timestamp check on parsed diagnostics event
 				if (typeof bootFrame?.ts !== "number" || typeof editorReady.event.ts !== "number") throw new Error("startup diagnostics did not include first-frame readiness");
 				firstFrameMs = bootFrame.ts - t0;
-				const commandReady = await waitForReadinessEvent(diag, "command_ready", "app_ready", 1);
+				const commandReady = await waitForReadinessEvent(diag, "command_ready", 1);
 				// oxlint-disable-next-line anti-slop/no-runtime-typeof -- timestamp check on parsed diagnostics event
 				if (typeof commandReady.event.ts !== "number") throw new Error("startup diagnostics did not include command readiness");
 				editorReadyMs = editorReady.event.ts - t0;
@@ -223,8 +219,8 @@ async function run() {
 				// dispatch instead of omitting the first POLL_MS of real work.
 				const t1 = Date.now();
 				herdr(["pane", "send-keys", pane, "Enter"]);
-				const reloadEditorReady = await waitForReadinessEvent(diag, "editor_ready", "input_ready", 2);
-				const reloadCommandReady = await waitForReadinessEvent(diag, "command_ready", "app_ready", 2);
+				const reloadEditorReady = await waitForReadinessEvent(diag, "editor_ready", 2);
+				const reloadCommandReady = await waitForReadinessEvent(diag, "command_ready", 2);
 				// oxlint-disable-next-line anti-slop/no-runtime-typeof -- timestamp check on parsed diagnostics event
 				if (typeof reloadEditorReady.event.ts !== "number" || typeof reloadCommandReady.event.ts !== "number") throw new Error("reload diagnostics did not include truthful readiness");
 				reloadEditorReadyMs = reloadEditorReady.event.ts - t1;

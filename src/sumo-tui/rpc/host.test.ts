@@ -15,26 +15,25 @@ import { RpcHostControls, type RpcAvailableModel } from "./controls.js";
 import { RpcHostStateStore } from "./state.js";
 import {
 	activitySnapshotMatchesSession,
-	canRpcForceSteer,
 	createEditorSubmitHandlers,
 	createLazyChatSink,
 	createModelCycleBackwardHandler,
 	createModelCycleForwardHandler,
 	createRpcExitHandler,
 	createRpcHostInterruptHandler,
+	createRpcQueueRestoreTransaction,
 	createRpcTreeNavigationRetryScheduler,
 	createThinkingCycleHandler,
 	RpcTreeNavigationQuietTimeoutError,
 	waitForTreeNavigationQuiet,
 	RpcSessionEventBuffer,
 	handleRpcMessageFollowUp,
-	handleRpcMessageForceSend,
-	handleRpcMessageDequeue,
 	sendRpcPrompt,
 	createToolsExpandToggleHandler,
 	createUnhandledRejectionHandler,
 	hydrateSameSessionTreeNavigation,
 	submitInitialPromptFromFile,
+	toggleRpcPromptDelivery,
 	main,
 	writeExitCodeFile,
 	type RpcHostExitDependencies,
@@ -154,7 +153,7 @@ describe("editor command-readiness submission", () => {
 		settled.resolve();
 		await pending;
 		expect(submit).toHaveBeenCalledOnce();
-		expect(submit).toHaveBeenCalledWith(message);
+		expect(submit).toHaveBeenCalledWith(message, undefined);
 	});
 
 	it("keeps a transient reason when the tree busy-gate drops an editor submission", async () => {
@@ -232,18 +231,9 @@ describe("editor command-readiness submission", () => {
 
 		expect(notifications.notify).not.toHaveBeenCalled();
 		expect(submit).toHaveBeenCalledOnce();
-		expect(submit).toHaveBeenCalledWith("review the diff");
+		expect(submit).toHaveBeenCalledWith("review the diff", "steer");
 		expect(existsSync(transportFile)).toBe(false);
 		rmSync(transportDir, { recursive: true, force: true });
-	});
-});
-
-describe("RPC force-steer gate", () => {
-	it("requires streaming without compaction or tree navigation", () => {
-		expect(canRpcForceSteer({ isStreaming: true, isCompacting: false }, false)).toBe(true);
-		expect(canRpcForceSteer({ isStreaming: false, isCompacting: false }, false)).toBe(false);
-		expect(canRpcForceSteer({ isStreaming: true, isCompacting: true }, false)).toBe(false);
-		expect(canRpcForceSteer({ isStreaming: true, isCompacting: false }, true)).toBe(false);
 	});
 });
 
@@ -340,7 +330,7 @@ describe("session hydration event barrier", () => {
 		expect(buffer.finishHydration()).toEqual({ supersededSnapshotEvents: [covered], suffixEvents: [suffix] });
 	});
 
-	it("does not let a pre-handoff stale settle release a queued destination item", async () => {
+	it("sends destination prompts natively despite a stale settle", async () => {
 		const buffer = new RpcSessionEventBuffer();
 		const sent: string[] = [];
 		const scheduler = createRpcPromptScheduler({ sendPrompt: async (message) => { sent.push(message); } });
@@ -353,13 +343,13 @@ describe("session hydration event barrier", () => {
 		buffer.markHydrationBaseline();
 		scheduler.rebindSession("session-b", "");
 		scheduler.handleAgentEvent({ type: "agent_start" });
-		await expect(scheduler.submit("destination item")).resolves.toBe("queued");
+		await expect(scheduler.submit("destination item", { delivery: "steer" })).resolves.toBe("sent");
 
 		const replay = buffer.finishHydration();
 		for (const event of [...replay.supersededSnapshotEvents, ...replay.suffixEvents]) scheduler.handleAgentEvent(event);
 		await flush();
-		expect(sent).toEqual([]);
-		expect(scheduler.getSnapshot().queuedMessages).toEqual(["destination item"]);
+		expect(sent).toEqual(["destination item"]);
+		expect(scheduler.getSnapshot().queuedMessages).toEqual([]);
 
 		scheduler.handleAgentEvent({ type: "agent_settled" });
 		await flush();
@@ -464,17 +454,17 @@ describe("handleRpcMessageFollowUp", () => {
 		};
 	}
 
-	it("adds history and clears the draft when the scheduler queues the follow-up", async () => {
+	it("adds history and clears the draft when Pi accepts an idle follow-up", async () => {
 		const editor = followUpEditor("queued draft");
 		const scheduler = {
-			getSnapshot: vi.fn(() => ({ busy: true, queuedMessages: [], pausedAfterFailure: false })),
-			submit: vi.fn(async () => "queued" as const),
+			getSnapshot: vi.fn(() => ({ busy: false, queuedMessages: [], pausedAfterFailure: false })),
+			submit: vi.fn(async () => "sent" as const),
 		};
 
 		handleRpcMessageFollowUp({ editor, scheduler, notifications: { notify: vi.fn() } });
 		await flush();
 
-		expect(scheduler.submit).toHaveBeenCalledWith("queued draft", { forceQueue: true });
+		expect(scheduler.submit).toHaveBeenCalledWith("queued draft", { delivery: "followUp" });
 		expect(editor.addToHistory).toHaveBeenCalledWith("queued draft");
 		expect(editor.setText).toHaveBeenCalledWith("");
 	});
@@ -505,12 +495,12 @@ describe("handleRpcMessageFollowUp", () => {
 		handleRpcMessageFollowUp({ editor, scheduler, notifications: { notify: vi.fn() } });
 		await flush();
 
-		expect(scheduler.submit).toHaveBeenCalledWith("/model anthropic/claude-opus-4", { forceQueue: true });
+		expect(scheduler.submit).toHaveBeenCalledWith("/model anthropic/claude-opus-4", { delivery: "followUp" });
 		expect(editor.addToHistory).toHaveBeenCalledWith("/model anthropic/claude-opus-4");
 		expect(editor.setText).toHaveBeenCalledWith("");
 	});
 
-	it("retains the draft when the scheduler declines the forced follow-up", async () => {
+	it("retains the draft when the scheduler rejects the follow-up", async () => {
 		const editor = followUpEditor("still here");
 		const scheduler = {
 			getSnapshot: vi.fn(() => ({ busy: true, queuedMessages: [], pausedAfterFailure: false })),
@@ -520,74 +510,116 @@ describe("handleRpcMessageFollowUp", () => {
 		handleRpcMessageFollowUp({ editor, scheduler, notifications: { notify: vi.fn() } });
 		await flush();
 
-		expect(scheduler.submit).toHaveBeenCalledWith("still here", { forceQueue: true });
+		expect(scheduler.submit).toHaveBeenCalledWith("still here", { delivery: "followUp" });
 		expect(editor.addToHistory).not.toHaveBeenCalled();
-		expect(editor.setText).not.toHaveBeenCalled();
-		// The image draft state must survive a declined queue — the untouched
+		expect(editor.setText).toHaveBeenCalledWith("still here");
+		// The image draft state must survive a declined queue — the original
 		// draft (with its tokens) stays editable.
 		expect(editor.clearImageDrafts).not.toHaveBeenCalled();
 	});
 
-	it("queues the expanded submission for image drafts and clears drafts only on accept", async () => {
+	it("sends the expanded submission for an accepted idle image draft", async () => {
 		const editor = followUpEditor("look at [Image 1]");
 		editor.expandDraftTokens.mockImplementation((draft: string) => draft.replace("[Image 1]", "/tmp/img-1.png"));
 		const scheduler = {
-			getSnapshot: vi.fn(() => ({ busy: true, queuedMessages: [], pausedAfterFailure: false })),
-			submit: vi.fn(async () => "queued" as const),
+			getSnapshot: vi.fn(() => ({ busy: false, queuedMessages: [], pausedAfterFailure: false })),
+			submit: vi.fn(async () => "sent" as const),
 		};
 
 		handleRpcMessageFollowUp({ editor, scheduler, notifications: { notify: vi.fn() } });
 		await flush();
 
-		// The QUEUED text carries the real path; history keeps the human-readable token form.
-		expect(scheduler.submit).toHaveBeenCalledWith("look at /tmp/img-1.png", { forceQueue: true });
+		// The submitted text carries the real path; history keeps the human-readable token form.
+		expect(scheduler.submit).toHaveBeenCalledWith("look at /tmp/img-1.png", { delivery: "followUp" });
 		expect(editor.addToHistory).toHaveBeenCalledWith("look at [Image 1]");
 		expect(editor.setText).toHaveBeenCalledWith("");
 		expect(editor.clearImageDrafts).toHaveBeenCalledOnce();
 	});
 });
 
-describe("handleRpcMessageForceSend", () => {
-	it("notifies once when the queued message is accepted as steering", async () => {
-		const notifications = { notify: vi.fn() };
-		const scheduler = { forceSendNext: vi.fn(async () => "accepted" as const) };
-
-		await expect(handleRpcMessageForceSend({ scheduler, notifications })).resolves.toBe("accepted");
-		expect(scheduler.forceSendNext).toHaveBeenCalledOnce();
-		expect(notifications.notify).toHaveBeenCalledOnce();
-		expect(notifications.notify).toHaveBeenCalledWith("queued message sent as steering", "info");
+describe("native queue delivery and restore", () => {
+	it("toggles the process-local delivery selection", () => {
+		expect(toggleRpcPromptDelivery("steer")).toBe("followUp");
+		expect(toggleRpcPromptDelivery("followUp")).toBe("steer");
 	});
 
-	it("warns when Pi accepted the message but the remaining FIFO must stay held", async () => {
-		const notifications = { notify: vi.fn() };
-		const scheduler = { forceSendNext: vi.fn(async () => "held" as const) };
+	it("restores steering, follow-up, compaction-local, then the current draft before abort", async () => {
+		const calls: string[] = [];
+		let draft = "draft";
+		const stateStore = new RpcHostStateStore();
+		const transaction = createRpcQueueRestoreTransaction({
+			editor: { getText: () => draft, setText: (text) => { calls.push("restore"); draft = text; } },
+			scheduler: { restoreAll: (current) => ({ count: 1, text: `compact\n\n${current}` }) },
+			stateStore,
+			controls: {
+				clearQueue: async () => { calls.push("clear"); return { steering: ["steer"], followUp: ["follow"] }; },
+				abort: async () => { calls.push("abort"); },
+			},
+			notifications: { notify: vi.fn(), dismissSticky: vi.fn() },
+		});
 
-		await expect(handleRpcMessageForceSend({ scheduler, notifications })).resolves.toBe("held");
-		expect(notifications.notify).toHaveBeenCalledWith("message sent; remaining queue held", "warning");
+		await transaction(true);
+		expect(calls).toEqual(["clear", "restore", "abort"]);
+		expect(draft).toBe("steer\n\nfollow\n\ncompact\n\ndraft");
 	});
 
-	it("stays silent when no queued message can be force-sent", async () => {
-		const notifications = { notify: vi.fn() };
-		const scheduler = { forceSendNext: vi.fn(async () => "ignored" as const) };
+	it("rejects a stale clear result without changing the editor", async () => {
+		let generation = 1;
+		let resolveClear!: (queue: { steering: string[]; followUp: string[] }) => void;
+		const clear = new Promise<{ steering: string[]; followUp: string[] }>((resolve) => { resolveClear = resolve; });
+		const editor = { getText: () => "new session draft", setText: vi.fn() };
+		const transaction = createRpcQueueRestoreTransaction({
+			editor,
+			scheduler: { restoreAll: (current) => ({ count: 0, text: current }) },
+			stateStore: new RpcHostStateStore(),
+			controls: { clearQueue: () => clear, abort: vi.fn(async () => undefined) },
+			notifications: { notify: vi.fn(), dismissSticky: vi.fn() },
+			getGeneration: () => generation,
+		});
 
-		await expect(handleRpcMessageForceSend({ scheduler, notifications })).resolves.toBe("ignored");
-		expect(notifications.notify).not.toHaveBeenCalled();
+		const result = transaction();
+		generation += 1;
+		resolveClear({ steering: ["old session"], followUp: [] });
+		await expect(result).rejects.toThrow("queue owner changed during clear");
+		expect(editor.setText).not.toHaveBeenCalled();
 	});
 
-	it("warns when steering acceptance is unknown and never touches editor draft state", async () => {
-		const notifications = { notify: vi.fn() };
-		const scheduler = { forceSendNext: vi.fn(async () => "unknown" as const) };
+	it("honors a coalesced Escape request after an Alt+Up clear starts", async () => {
+		let resolve!: (queue: { steering: string[]; followUp: string[] }) => void;
+		const clear = new Promise<{ steering: string[]; followUp: string[] }>((resolvePromise) => { resolve = resolvePromise; });
+		const controls = { clearQueue: vi.fn(() => clear), abort: vi.fn(async () => undefined) };
+		const transaction = createRpcQueueRestoreTransaction({
+			editor: { getText: () => "", setText: vi.fn() },
+			scheduler: { restoreAll: (current) => ({ count: 0, text: current }) },
+			stateStore: new RpcHostStateStore(), controls,
+			notifications: { notify: vi.fn(), dismissSticky: vi.fn() },
+		});
 
-		await expect(handleRpcMessageForceSend({ scheduler, notifications })).resolves.toBe("unknown");
-		expect(notifications.notify).toHaveBeenCalledWith("steering acceptance unknown; message not requeued", "warning");
+		const dequeue = transaction();
+		const escape = transaction(true);
+		resolve({ steering: [], followUp: [] });
+		await Promise.all([dequeue, escape]);
+		expect(controls.clearQueue).toHaveBeenCalledOnce();
+		expect(controls.abort).toHaveBeenCalledOnce();
 	});
 
-	it("routes explicit preflight rejection through the existing rpc warning path", async () => {
-		const notifications = { notify: vi.fn() };
-		const scheduler = { forceSendNext: vi.fn(async () => { throw new Error("preflight rejected"); }) };
-
-		await expect(handleRpcMessageForceSend({ scheduler, notifications })).resolves.toBe("ignored");
-		expect(notifications.notify).toHaveBeenCalledWith("rpc error: preflight rejected", "error");
+	it("coalesces concurrent clears and never aborts when clear fails", async () => {
+		let reject!: (cause: unknown) => void;
+		const clear = new Promise<never>((_resolve, rejectPromise) => { reject = rejectPromise; });
+		const controls = { clearQueue: vi.fn(() => clear), abort: vi.fn(async () => undefined) };
+		const transaction = createRpcQueueRestoreTransaction({
+			editor: { getText: () => "draft", setText: vi.fn() },
+			scheduler: { restoreAll: (current) => ({ count: 0, text: current }) },
+			stateStore: new RpcHostStateStore(), controls,
+			notifications: { notify: vi.fn(), dismissSticky: vi.fn() },
+		});
+		const first = transaction(true);
+		const second = transaction(true);
+		reject(new Error("clear failed"));
+		await expect(first).rejects.toThrow("clear failed");
+		await expect(second).rejects.toThrow("clear failed");
+		expect(controls.clearQueue).toHaveBeenCalledOnce();
+		expect(controls.abort).not.toHaveBeenCalled();
 	});
 });
 
@@ -598,6 +630,14 @@ describe("sendRpcPrompt payloads", () => {
 		await sendRpcPrompt("ordinary", { client });
 
 		expect(client.send).toHaveBeenCalledWith({ type: "prompt", message: "ordinary" });
+	});
+
+	it("adds either native delivery mode when explicit", async () => {
+		const client = { send: vi.fn(async () => ({ type: "response", command: "prompt", success: true, data: {} } as const)) };
+
+		await sendRpcPrompt("later", { client, delivery: { streamingBehavior: "followUp" } });
+
+		expect(client.send).toHaveBeenCalledWith({ type: "prompt", message: "later", streamingBehavior: "followUp" });
 	});
 
 	it("adds steer only for an explicit steering delivery", async () => {
@@ -617,49 +657,6 @@ describe("sendRpcPrompt payloads", () => {
 			name: "RpcPromptPreflightRejection",
 			message: "prompt failed: agent is compacting",
 		});
-	});
-});
-
-describe("handleRpcMessageDequeue", () => {
-	it("restores only queued drafts while preserving an active dispatch", async () => {
-		const gate = deferred();
-		const sent: string[] = [];
-		const scheduler = createRpcPromptScheduler({
-			sendPrompt: async (message) => {
-				sent.push(message);
-				await gate.promise;
-			},
-		});
-		let draft = "";
-		const editor = {
-			getText: vi.fn(() => draft),
-			setText: vi.fn((text: string) => { draft = text; }),
-		};
-		const stateStore = new RpcHostStateStore();
-		const notifications = { notify: vi.fn(), dismissSticky: vi.fn() };
-
-		await expect(scheduler.submit("prompt A")).resolves.toBe("sent");
-		await expect(scheduler.submit("prompt B")).resolves.toBe("queued");
-
-		handleRpcMessageDequeue({ editor, scheduler, stateStore, notifications });
-
-		// A direct editor action supersedes a stale sticky failure (issue 481 home B).
-		expect(notifications.dismissSticky).toHaveBeenCalledOnce();
-
-		expect(editor.setText).toHaveBeenCalledWith("prompt B");
-		expect(scheduler.getSnapshot()).toMatchObject({ busy: true, queuedMessages: [] });
-
-		draft = "prompt B edited";
-		await expect(scheduler.submit(draft)).resolves.toBe("queued");
-		expect(sent).toEqual(["prompt A"]);
-
-		gate.resolve();
-		await flush();
-		expect(sent).toEqual(["prompt A"]);
-
-		scheduler.handleAgentEvent({ type: "agent_settled" });
-		await flush();
-		expect(sent).toEqual(["prompt A", "prompt B edited"]);
 	});
 });
 

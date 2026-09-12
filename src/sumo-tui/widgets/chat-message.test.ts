@@ -726,12 +726,14 @@ describe("ChatMessage", () => {
 			const root = new SumoNode(yoga.Node.create());
 			const message = ChatMessage.create(yoga, "sumo", "hello", root, FIXED_TIME);
 
-			const before = [...renderRows(message, 40)];
+			const before = renderRows(message, 40);
 			message.appendText(" world");
 			const after = renderRows(message, 40);
 
-			expect(after).not.toEqual(before);
+			expect(after).not.toBe(before);
+			expect(stripAnsi(before.join("\n"))).not.toContain("hello world");
 			expect(stripAnsi(after.join("\n"))).toContain("hello world");
+			root.dispose();
 		});
 
 		it("keeps incrementally wrapped plain rows byte-identical to a fresh layout", async () => {

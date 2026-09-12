@@ -98,6 +98,7 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 			this.queue.push({ text: message, delivery: options.delivery });
 			this.pausedAfterFailure = false;
 			this.publishQueue();
+			void this.flush(this.generation);
 			return "queued";
 		}
 		void this.dispatch({ text: message, delivery: options.delivery }, this.generation, false);
@@ -106,7 +107,10 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 
 	public handleAgentEvent(event: RpcSchedulerEvent): void {
 		if (event.type === "agent_start") this.lifecycleBusy = true;
-		if (event.type === "agent_settled") this.lifecycleBusy = false;
+		if (event.type === "agent_settled") {
+			this.lifecycleBusy = false;
+			void this.flush(this.generation);
+		}
 		if (event.type === "compaction_end") void this.flush(this.generation);
 	}
 

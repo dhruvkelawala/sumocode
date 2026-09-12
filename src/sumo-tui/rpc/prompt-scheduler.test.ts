@@ -65,11 +65,16 @@ describe("RpcPromptScheduler", () => {
 		expect(scheduler.getSnapshot().localQueue).toEqual([]);
 	});
 
-	it("restores a failed compaction dispatch without automatically retrying", async () => {
+	it("restores a failed compaction dispatch and resumes when new input arrives", async () => {
 		let compacting = true;
+		let fail = true;
+		const sent: string[] = [];
 		const scheduler = createRpcPromptScheduler({
 			getCompacting: () => compacting,
-			sendPrompt: async () => { throw new Error("transport lost"); },
+			sendPrompt: async (message) => {
+				sent.push(message);
+				if (fail) throw new Error("transport lost");
+			},
 		});
 		await scheduler.submit("keep me", { delivery: "steer" });
 		compacting = false;
@@ -77,7 +82,11 @@ describe("RpcPromptScheduler", () => {
 		await flush();
 
 		expect(scheduler.getSnapshot()).toMatchObject({ pausedAfterFailure: true, queuedMessages: ["keep me"] });
-		expect(scheduler.restoreAll("draft")).toEqual({ count: 1, text: "keep me\n\ndraft" });
+		fail = false;
+		await scheduler.submit("resume", { delivery: "followUp" });
+		await flush();
+		expect(sent).toEqual(["keep me", "keep me", "resume"]);
+		expect(scheduler.getSnapshot()).toMatchObject({ pausedAfterFailure: false, queuedMessages: [] });
 	});
 
 	it("reports correlated rejection separately from ambiguous transport failure", async () => {

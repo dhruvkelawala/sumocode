@@ -682,7 +682,12 @@ describe("sumocode launcher mirrors Pi option consumption (PTY RPC path)", () =>
 			child.onExit(({ exitCode, signal }) => {
 				recordPtyExit(supervision.pid, supervision.pgid, exitCode, signal, childEnv);
 				if (exitCode === 0) resolveRun(output);
-				else rejectRun(new Error(`launcher dry-run exited ${exitCode}. Output:\n${output}\nEvidence: ${evidence.evidenceDir}`));
+				// Persist the evidence before a focused teardown can delete the run:
+				// a reported path must survive the failure it describes (issue #423).
+				else void supervision.captureFailure(output).then(
+					(evidenceDir) => rejectRun(new Error(`launcher dry-run exited ${exitCode}. Output:\n${output}\nEvidence: ${evidenceDir}`)),
+					(error) => rejectRun(new Error(`launcher dry-run exited ${exitCode}. Output:\n${output}\nEvidence capture failed: ${String(error)}`)),
+				);
 			});
 		});
 	}
@@ -731,8 +736,15 @@ describe("sumocode launcher mirrors Pi option consumption (PTY RPC path)", () =>
 		await expect(ptyDryRun(["task", "--"])).rejects.toThrow(/task requires a non-empty prompt/);
 	});
 
-	it("task rejects an empty prompt", async () => {
-		await expect(ptyDryRun(["task", ""])).rejects.toThrow(/task requires a non-empty prompt/);
+	it("task rejects an empty prompt and retains the evidence it reports", async () => {
+		const error = await ptyDryRun(["task", ""]).then(() => undefined, (cause: unknown) => cause);
+		expect(String(error)).toMatch(/task requires a non-empty prompt/);
+		const evidenceDir = /Evidence: (\S+)/.exec(String(error))?.[1];
+		if (evidenceDir === undefined) throw new Error(`dry-run rejection reported no evidence directory: ${String(error)}`);
+		// The path the rejection prints must exist after the focused harness would
+		// have removed the run: artifacts plus the retention marker.
+		expect(existsSync(join(evidenceDir, "argv.txt"))).toBe(true);
+		expect(existsSync(join(resolve(evidenceDir, "../../.."), "evidence-retained.json"))).toBe(true);
 	});
 
 	it("task rejects a whitespace-only prompt", async () => {

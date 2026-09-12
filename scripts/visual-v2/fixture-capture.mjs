@@ -358,6 +358,9 @@ const FIXTURES = {
 	},
 };
 
+// Native-queue parity reuses the settled transcript; only chrome state differs.
+FIXTURES["native-queues-followup"] = FIXTURES["completed-active"];
+
 export async function captureFixtureScenario(scenario) {
 	const fixtureId = scenario.fixture?.id;
 	if (!fixtureId) throw new Error(`Fixture scenario ${scenario.id} is missing fixture.id`);
@@ -410,7 +413,7 @@ async function renderFixtureScene(scenario, fixture) {
 	const sidebarWidth = sidebarVisible ? 30 : 0;
 	const chatWidth = Math.max(1, cols - sidebarWidth - gutter);
 
-	const [topChrome, inputFrame, footer, sidebar, chatPager, yogaMod, layoutNodeMod, bufferMod, compositorMod, writerMod, ansiMod] = await Promise.all([
+	const [topChrome, inputFrame, footer, sidebar, chatPager, yogaMod, layoutNodeMod, bufferMod, compositorMod, writerMod, ansiMod, shellAdapter] = await Promise.all([
 		jiti.import(`${repoRoot}/src/top-chrome.ts`),
 		jiti.import(`${repoRoot}/src/cathedral/input-frame.ts`),
 		jiti.import(`${repoRoot}/src/footer.ts`),
@@ -422,6 +425,7 @@ async function renderFixtureScene(scenario, fixture) {
 		jiti.import(`${repoRoot}/src/sumo-tui/render/compositor.ts`),
 		jiti.import(`${repoRoot}/src/sumo-tui/render/ansi-writer.ts`),
 		jiti.import(`${repoRoot}/src/sumo-tui/cathedral/ansi.ts`),
+		jiti.import(`${repoRoot}/src/sumo-tui/rpc/shell-adapter.ts`),
 	]);
 
 	// Bible always has blank / topbar / blank regardless of width.
@@ -433,10 +437,11 @@ async function renderFixtureScene(scenario, fixture) {
 	const topRows = ["", topBarLine, ""];
 
 	const inputRows = inputFrame.renderInputFrame("", cols, { promptColor: "accent" });
+	const deliveryMode = scenario.fixture?.id === "native-queues-followup" ? "followUp" : undefined;
 	// Portrait hint already includes its own breathing blank row.
 	const hintRow = portrait
-		? ` ${inputFrame.renderInputHints(cols - 2, { leftHint: "sumocode (main)", leftHintStyle: "project-branch" })} `
-		: inputFrame.renderInputHints(cols);
+		? ` ${inputFrame.renderInputHints(cols - 2, { deliveryMode, leftHint: "sumocode (main)", leftHintStyle: "project-branch" })} `
+		: inputFrame.renderInputHints(cols, { deliveryMode });
 	const footerRows = footer.renderFooterBlock({
 		cwd: "/Users/dev/projects/sumocode",
 		branch: "main",
@@ -449,8 +454,17 @@ async function renderFixtureScene(scenario, fixture) {
 		modelId: "gpt-5.5",
 		thinkingLevel: "medium",
 	}, cols);
-	// Bible bottom stack: blank, input(3), hint, blank, footer, blank
-	const bottomRows = ["", ...inputRows, hintRow, "", ...footerRows, ""];
+	const queueRows = scenario.fixture?.id === "native-queues-followup"
+		? shellAdapter.RpcShellAdapter.prototype.renderQueuedMessages.call({
+			state: {
+				steeringMessages: ["steer after the current tool"],
+				followUpMessages: ["run verification when settled"],
+				localQueuedMessages: [],
+			},
+		}, chatWidth)
+		: [];
+	// Bible bottom stack: queued cards, blank, input(3), hint, blank, footer, blank
+	const bottomRows = [...queueRows, "", ...inputRows, hintRow, "", ...footerRows, ""];
 	const chatHeight = Math.max(1, rows - topRows.length - bottomRows.length);
 
 	const yoga = await yogaMod.loadYoga();

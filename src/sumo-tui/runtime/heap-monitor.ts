@@ -28,7 +28,10 @@ export const HEAP_SNAPSHOT_ENV = "SUMOCODE_HEAP_SNAPSHOT";
 export interface HeapSampleCounters {
 	/** Blocks in the transcript view model. */
 	readonly transcriptBlocks: number;
-	/** Rows the chat pager has laid out for the current viewport. */
+	/**
+	 * Total laid-out content height of the chat pager's scroll box: the whole
+	 * transcript, not just the rows inside the viewport.
+	 */
 	readonly viewModelRows: number;
 	/** Full-screen `CellBuffer`s the renderer still holds. */
 	readonly retainedFrames: number;

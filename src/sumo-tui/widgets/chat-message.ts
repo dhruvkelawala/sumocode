@@ -43,14 +43,16 @@ const DIM = "\x1b[2m";
  * frame per message — and its body path runs the `Markdown` parser (plus
  * `Image` construction), which is not cheap. We cache the last computed rows
  * per `(width, contentVersion, themeVersion)` so unchanged messages skip
- * recompute entirely. Rows are read-only string arrays; sharing the cached
- * array reference across calls is safe as nothing mutates it in place.
+ * recompute entirely. Plain `appendText` updates only the cached tail rows.
+ * `renderRows` is private and its callers consume this working array immediately.
  */
 interface RenderRowsCacheEntry {
 	width: number;
 	contentVersion: number;
 	themeVersion: number;
 	rows: string[];
+	/** Unframed rows retained only for incrementally appended plain text. */
+	plainBodyRows?: string[];
 }
 
 /** Keep only the current + previous width entries: resize churns width, not content. */
@@ -59,6 +61,10 @@ const RENDER_ROWS_CACHE_LIMIT = 2;
 function normalizeWidth(width: number): number {
 	if (!Number.isFinite(width)) return 0;
 	return Math.max(0, Math.floor(width));
+}
+
+function trailingWhitespaceOf(text: string): string {
+	return /\s*$/u.exec(text)?.[0] ?? "";
 }
 
 function agentRoleLabel(primaryAgentName: string | undefined): string {
@@ -342,6 +348,7 @@ export class ChatMessage extends SumoNode {
 	 */
 	private contentVersion = 0;
 	private renderRowsCache: RenderRowsCacheEntry[] = [];
+	private trailingWhitespace: string;
 	private mermaidRenderingMode: MermaidRenderingMode;
 	private isStreaming = false;
 
@@ -356,6 +363,7 @@ export class ChatMessage extends SumoNode {
 	) {
 		super(yogaNode, parent);
 		this.timestampValue = timestamp;
+		this.trailingWhitespace = trailingWhitespaceOf(text);
 		this.mermaidRenderingMode = options.mermaidRenderingMode ?? "streaming";
 		this.marginBottom = 1;
 		this.setMeasureFunc((width, widthMode, height, heightMode) => this.measure(width, widthMode, height, heightMode));
@@ -391,6 +399,7 @@ export class ChatMessage extends SumoNode {
 		if (this.text === text && this.blocks === undefined) return;
 		this.text = text;
 		this.blocks = undefined;
+		this.trailingWhitespace = trailingWhitespaceOf(text);
 		this.invalidateRenderCache();
 	}
 
@@ -410,6 +419,7 @@ export class ChatMessage extends SumoNode {
 	public setBlocks(blocks: readonly ChatBlock[], text: string): void {
 		this.blocks = blocks;
 		this.text = text;
+		this.trailingWhitespace = trailingWhitespaceOf(text);
 		this.invalidateRenderCache();
 	}
 
@@ -460,9 +470,31 @@ export class ChatMessage extends SumoNode {
 
 	public appendText(chunk: string): void {
 		if (chunk.length === 0) return;
+		const wasPlainText = this.blocks === undefined;
+		const trailingWhitespace = wasPlainText ? this.trailingWhitespace : "";
+		const previousVersion = this.contentVersion;
 		this.blocks = undefined;
 		this.text += chunk;
-		this.invalidateRenderCache();
+		const chunkTrailingWhitespace = trailingWhitespaceOf(chunk);
+		this.trailingWhitespace = chunkTrailingWhitespace.length === chunk.length
+			? this.trailingWhitespace + chunk
+			: chunkTrailingWhitespace;
+		this.contentVersion += 1;
+
+		if (wasPlainText) {
+			const themeVersion = getThemeVersion();
+			for (const entry of this.renderRowsCache) {
+				if (entry.contentVersion !== previousVersion || entry.themeVersion !== themeVersion || !entry.plainBodyRows || entry.width < MIN_BOX_WIDTH) continue;
+				const trailingNewlines = trailingWhitespace.split("\n").length - 1;
+				const tailRowCount = Math.min(entry.plainBodyRows.length, trailingNewlines + 1);
+				const previousTailRows = entry.plainBodyRows.splice(-tailRowCount, tailRowCount);
+				const tailRows = wrapPlainText(`${previousTailRows[0] ?? ""}${trailingWhitespace}${chunk}`, Math.max(1, entry.width - 4));
+				entry.plainBodyRows.push(...tailRows);
+				entry.rows.splice(entry.rows.length - 1 - tailRowCount, tailRowCount, ...tailRows.map((row) => frameBody(row, entry.width)));
+				entry.contentVersion = this.contentVersion;
+			}
+		}
+		this.markDirty();
 	}
 
 	public toSnapshot(): ChatMessageSnapshot {
@@ -578,20 +610,23 @@ export class ChatMessage extends SumoNode {
 		);
 		if (cached) return cached.rows;
 
-		const rows = this.computeRenderRows(renderWidth);
-		const entry: RenderRowsCacheEntry = { width: renderWidth, contentVersion: this.contentVersion, themeVersion, rows };
+		const plainBodyRows = this.blocks === undefined && renderWidth >= MIN_BOX_WIDTH
+			? wrapPlainText(this.text, Math.max(1, renderWidth - 4))
+			: undefined;
+		const rows = this.computeRenderRows(renderWidth, plainBodyRows);
+		const entry: RenderRowsCacheEntry = { width: renderWidth, contentVersion: this.contentVersion, themeVersion, rows, plainBodyRows };
 		this.renderRowsCache = [entry, ...this.renderRowsCache.filter((existing) => existing.width !== renderWidth)].slice(0, RENDER_ROWS_CACHE_LIMIT);
 		return rows;
 	}
 
-	private computeRenderRows(renderWidth: number): string[] {
+	private computeRenderRows(renderWidth: number, cachedPlainBodyRows?: string[]): string[] {
 		if (renderWidth <= 0) return [""];
 		if (renderWidth < MIN_BOX_WIDTH) return [fitCellText(this.text, renderWidth)];
 
 		const bodyWidth = Math.max(1, renderWidth - 4);
-		const bodyRows = this.blocks
+		const bodyRows = cachedPlainBodyRows ?? (this.blocks
 			? renderBlockRows(this.blocks, bodyWidth, this.activityExpansion, this.mermaidRenderingMode, this.isStreaming)
-			: wrapPlainText(this.text, bodyWidth);
+			: wrapPlainText(this.text, bodyWidth));
 		return [
 			frameTop(this.role, this.timestamp, renderWidth, this.options.primaryAgentName),
 			...bodyRows.map((row) => frameBody(row, renderWidth)),

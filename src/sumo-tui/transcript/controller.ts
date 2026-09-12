@@ -46,6 +46,8 @@ export interface TranscriptControllerChatSink {
 	): ChatPagerReplaceStats;
 	/** Append one new message to the end of the pager without touching scroll/read state. */
 	addViewModel(message: ChatMessageViewModel, sourceIndex?: number): ChatSinkMutationResult;
+	/** Append a plain streamed text delta to the retained last message. */
+	appendToLast?(chunk: string): boolean;
 	/** Replace one rendered transcript node in place (scroll/read state preserved). */
 	replaceViewModelAt(index: number, message: ChatMessageViewModel): ChatSinkMutationResult;
 	/** Replace the pager's current last message in place (scroll/read state preserved). */
@@ -349,6 +351,8 @@ export class TranscriptController {
 	} | undefined;
 	private pendingLiveToolProjection: LiveToolExecution | undefined;
 	private draftMessage: SessionValue | undefined;
+	/** Indexed wire deltas not yet folded into the immutable draft snapshot. */
+	private plainTextStreamChunks: string[] | undefined;
 	private readonly taskPartials = new Map<string, TaskPartialUpdate>();
 	private readonly liveTools = new Map<string, LiveToolExecution>();
 	private lastTranscript: TranscriptViewModel = { messages: [] };
@@ -375,8 +379,9 @@ export class TranscriptController {
 	private pendingChatOp: ChatDiffHint | undefined;
 	private pendingIndexedChatIndices: Set<number> | undefined;
 	/**
-	 * Bumped on every `publish`/`publishFullReplace`, i.e. every time
-	 * `lastTranscript` changes. A consumer that also receives the raw
+	 * Bumped whenever transcript sink ownership advances. Plain text deltas may
+	 * advance the retained boundary while `lastTranscript` remains the last
+	 * immutable materialized snapshot. A consumer that also receives the raw
 	 * `TranscriptViewModel` out-of-band (e.g. `RpcShellAdapter.update`, which
 	 * gets it via `RpcHostRuntime`) can compare this against the revision it
 	 * last applied through its OWN full-replace path to tell whether the
@@ -425,6 +430,14 @@ export class TranscriptController {
 		// the string check below re-validate shape at runtime.
 		const record = asRecord(event as SessionValue);
 		if (!record || !isString(record.type)) return this.lastTranscript;
+		// A replacement start can arrive after an interrupted stream. First align
+		// the controller's lazy snapshot with the text already appended to the
+		// retained node so the new empty draft cannot compare equal to stale state.
+		if (record.type === "message_start" && this.plainTextStreamChunks !== undefined) {
+			this.materializePlainTextStream();
+			this.publish(this.viewModel());
+		}
+		let transcriptDirty = false;
 		const taskPartial = taskPartialFromEvent(record);
 		if (taskPartial) this.taskPartials.set(taskPartial.toolCallId, taskPartial);
 		const liveTool = liveToolExecutionFromEvent(record);
@@ -435,16 +448,21 @@ export class TranscriptController {
 			if (!existing || existing.status === "running" || liveTool.status !== "running") {
 				this.liveTools.set(liveTool.toolCallId, liveTool);
 				this.pendingLiveToolProjection = liveTool;
+				transcriptDirty = true;
 			}
 		}
 
-		switch (record.type) {
+		const appendedPlainDelta = this.appendPlainAssistantDelta(record);
+		if (!appendedPlainDelta && record.type === "message_update") this.materializePlainTextStream();
+
+		if (!appendedPlainDelta) switch (record.type) {
 			case "agent_start":
 				this.currentRunStartIndex = this.committedMessages.length;
 				break;
 			case "message_start":
 			case "message_update": {
 				this.pendingChatOp = "incremental";
+				const previousDraft = this.draftMessage;
 				this.pendingIndexedChatIndices ??= new Set();
 				const message = eventMessage(record);
 				if (message === undefined && record.type === "message_update") {
@@ -452,6 +470,7 @@ export class TranscriptController {
 					// into the running draft instead of blanking it. See
 					// applyAssistantStreamDelta.
 					this.draftMessage = applyAssistantStreamDelta(this.draftMessage, asRecord(record.assistantMessageEvent));
+					transcriptDirty ||= this.draftMessage !== previousDraft;
 					break;
 				}
 				const hydratedIndex = stableMessageId(message) ? findCommittedMessageIndex(this.committedMessages, message) : -1;
@@ -464,17 +483,27 @@ export class TranscriptController {
 						this.committedMessages[hydratedIndex] = message;
 						this.invalidateCommittedCache();
 						this.pendingIndexedChatIndices = undefined;
+						transcriptDirty = true;
 					}
 					this.draftMessage = undefined;
+					this.plainTextStreamChunks = undefined;
 				} else {
 					this.draftMessage = message;
 				}
+				if (record.type === "message_start") {
+					const messageRecord = asRecord(this.draftMessage);
+					this.plainTextStreamChunks = messageRecord?.role === "assistant" && Array.isArray(messageRecord.content) && messageRecord.content.length === 0
+						? []
+						: undefined;
+				}
 				if (asRecord(message)?.role === "user") this.options.noteUserMessage?.();
+				transcriptDirty ||= this.draftMessage !== previousDraft;
 				break;
 			}
 			case "message_end": {
 				this.pendingChatOp = "incremental";
 				const message = eventMessage(record);
+				transcriptDirty = message !== undefined || this.draftMessage !== undefined;
 				if (message !== undefined) {
 					const hydratedIndex = findCommittedMessageIndex(this.committedMessages, message);
 					if (hydratedIndex >= 0) {
@@ -485,10 +514,12 @@ export class TranscriptController {
 					this.invalidateCommittedCache();
 				}
 				this.draftMessage = undefined;
+				this.plainTextStreamChunks = undefined;
 				break;
 			}
 			case "agent_end": {
 				this.pendingChatOp = "rewrite";
+				transcriptDirty = true;
 				const messages = eventMessages(record);
 				if (messages) {
 					// `agent_end.messages` carries only the CURRENT RUN's messages, not
@@ -543,6 +574,7 @@ export class TranscriptController {
 				}
 				this.currentRunStartIndex = undefined;
 				this.draftMessage = undefined;
+				this.plainTextStreamChunks = undefined;
 				this.liveTools.clear();
 				this.liveProjectionCache = undefined;
 				this.taskPartials.clear();
@@ -555,6 +587,7 @@ export class TranscriptController {
 				this.options.setCompactionReason?.(null);
 				const summary = compactionSummaryMessageFromEvent(record);
 				if (summary) {
+					transcriptDirty = true;
 					const hydratedIndex = findCommittedMessageIndex(this.committedMessages, summary);
 					if (hydratedIndex >= 0) this.committedMessages[hydratedIndex] = summary;
 					else this.committedMessages.push(summary);
@@ -564,7 +597,12 @@ export class TranscriptController {
 			}
 		}
 
-		const transcript = this.publish(this.viewModel());
+		if (!appendedPlainDelta && transcriptDirty && record.type !== "message_start" && this.plainTextStreamChunks !== undefined) {
+			this.materializePlainTextStream();
+		}
+		// RPC chrome/state owners still receive every event and `runtime.update`
+		// schedules their frame; this gate suppresses transcript work only.
+		const transcript = appendedPlainDelta || !transcriptDirty ? this.lastTranscript : this.publish(this.viewModel());
 		const eventMsg = eventMessage(record);
 		const messageRole = asRecord(eventMsg)?.role;
 		// Over RPC the streaming `message_update` carries only the delta (no
@@ -582,15 +620,16 @@ export class TranscriptController {
 
 	public viewModel(): TranscriptViewModel {
 		const committedMessages = this.ensureCommittedViewModels();
+		const draftMessage = this.materializedDraftMessage();
 		const cached = this.liveProjectionCache;
-		const canReuseProjection = cached?.committedMessages === committedMessages && cached.draftMessage === this.draftMessage;
+		const canReuseProjection = cached?.committedMessages === committedMessages && cached.draftMessage === draftMessage;
 		const foldCursor = canReuseProjection
 			? cached.foldCursor
 			: createFoldableBlockCursor(this.committedFoldableBlockIndex ?? indexFoldableBlocks(committedMessages));
 		transcriptSnapshotEnvelopeCopies += 1;
 		const messages = [...(canReuseProjection ? cached.messages : committedMessages)];
-		if (!canReuseProjection && this.draftMessage !== undefined) {
-			const message = this.mapper.messageFromPiMessage(this.draftMessage, messages.length, {
+		if (!canReuseProjection && draftMessage !== undefined) {
+			const message = this.mapper.messageFromPiMessage(draftMessage, messages.length, {
 				includeOpenMermaidFence: true,
 			});
 			if (message) {
@@ -609,7 +648,7 @@ export class TranscriptController {
 				if (result.messageIndex !== undefined) this.pendingIndexedChatIndices?.add(result.messageIndex);
 			}
 		}
-		this.liveProjectionCache = { committedMessages, draftMessage: this.draftMessage, messages, foldCursor };
+		this.liveProjectionCache = { committedMessages, draftMessage, messages, foldCursor };
 		this.pendingLiveToolProjection = undefined;
 		return { messages };
 	}
@@ -628,12 +667,10 @@ export class TranscriptController {
 	}
 
 	/**
-	 * Monotonically increasing counter bumped every time `lastTranscript`
-	 * changes (whether the change was applied to the chat sink incrementally
-	 * or via a full replace). Lets an out-of-band consumer of the raw
-	 * `TranscriptViewModel` (see `RpcShellAdapter.update`) tell whether it
-	 * already reflects the sink-applied state without deep-comparing message
-	 * arrays.
+	 * Monotonically increasing sink-ownership counter. Most revisions carry a
+	 * freshly materialized transcript; the plain-delta fast path advances only
+	 * the retained boundary and leaves the prior immutable snapshot in place.
+	 * `RpcShellAdapter.update` uses the revision to avoid replacing that sink.
 	 */
 	public getRevision(): number {
 		return this.revision;
@@ -645,10 +682,70 @@ export class TranscriptController {
 		this.committedMessages = [...messages] as SessionValue[];
 		this.currentRunStartIndex = undefined;
 		this.draftMessage = undefined;
+		this.plainTextStreamChunks = undefined;
 		this.pendingChatOp = undefined;
 		this.liveTools.clear();
 		this.taskPartials.clear();
 		this.invalidateCommittedCache();
+	}
+
+	private appendPlainAssistantDelta(record: SessionRecord): boolean {
+		const sink = this.options.chat?.appendToLast;
+		const deltaEvent = asRecord(record.assistantMessageEvent);
+		if (
+			record.type !== "message_update"
+			|| !sink
+			|| this.draftMessage === undefined
+			|| this.plainTextStreamChunks === undefined
+			|| deltaEvent?.contentIndex !== 0
+		) return false;
+		if (deltaEvent.type === "text_start") return this.plainTextStreamChunks.length === 0;
+		if (deltaEvent.type === "text_end") return true;
+		if (deltaEvent.type !== "text_delta" || !isString(deltaEvent.delta)) return false;
+		// `ChatMessage.appendText` intentionally skips markdown parsing. Leave the
+		// fast path before any syntax-bearing chunk so streamed markdown keeps the
+		// same block rendering as a freshly mapped draft. Probe a bounded prefix
+		// tail too because an ordered-list marker can straddle delta boundaries.
+		let markdownProbe = deltaEvent.delta;
+		for (let index = this.plainTextStreamChunks.length - 1; index >= 0 && markdownProbe.length < 64; index -= 1) {
+			markdownProbe = `${this.plainTextStreamChunks[index]!.slice(markdownProbe.length - 64)}${markdownProbe}`;
+		}
+		if (/[\\`*_{}\x5b\x5d<>#+=!|~\x2d]/u.test(deltaEvent.delta) || /(?:^|\n)\s*\d+[.)]\s/u.test(markdownProbe)) return false;
+
+		if (deltaEvent.delta.length > 0 && sink.call(this.options.chat, deltaEvent.delta) !== true) return false;
+		const message = eventMessage(record);
+		if (message === undefined) this.plainTextStreamChunks.push(deltaEvent.delta);
+		else {
+			this.draftMessage = message;
+			this.plainTextStreamChunks = [];
+		}
+		if (deltaEvent.delta.length > 0) {
+			this.revision += 1;
+			this.options.scheduleRender?.();
+		}
+		return true;
+	}
+
+	private materializedDraftMessage(): SessionValue | undefined {
+		if (!this.plainTextStreamChunks || this.plainTextStreamChunks.length === 0) return this.draftMessage;
+		const draft = asRecord(this.draftMessage);
+		if (!draft || !Array.isArray(draft.content)) return this.draftMessage;
+		// SAFETY: Array.isArray above establishes an array of opaque wire values;
+		// element shape is validated through asRecord before field access.
+		const content = [...draft.content] as SessionValue[];
+		const first = asRecord(content[0]);
+		content[0] = {
+			type: "text",
+			text: `${first?.type === "text" && isString(first.text) ? first.text : ""}${this.plainTextStreamChunks.join("")}`,
+		};
+		return { ...draft, content };
+	}
+
+	private materializePlainTextStream(): void {
+		if (this.plainTextStreamChunks === undefined) return;
+		this.draftMessage = this.materializedDraftMessage();
+		this.plainTextStreamChunks = undefined;
+		this.liveProjectionCache = undefined;
 	}
 
 	private invalidateCommittedCache(): void {

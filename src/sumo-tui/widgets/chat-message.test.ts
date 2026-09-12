@@ -726,12 +726,51 @@ describe("ChatMessage", () => {
 			const root = new SumoNode(yoga.Node.create());
 			const message = ChatMessage.create(yoga, "sumo", "hello", root, FIXED_TIME);
 
-			const before = renderRows(message, 40);
+			const before = [...renderRows(message, 40)];
 			message.appendText(" world");
 			const after = renderRows(message, 40);
 
 			expect(after).not.toEqual(before);
 			expect(stripAnsi(after.join("\n"))).toContain("hello world");
+			root.dispose();
+		});
+
+		it("keeps incrementally wrapped plain rows byte-identical to a fresh layout", async () => {
+			const yoga = await loadYoga();
+			const root = new SumoNode(yoga.Node.create());
+			const message = ChatMessage.create(yoga, "sumo", "", root, FIXED_TIME);
+			let text = "";
+			for (const chunk of ["hello ", "world", "  with spaces\n", "\nsecond paragraph ", "界", "\nfinal"]) {
+				text += chunk;
+				message.appendText(chunk);
+				const fresh = ChatMessage.create(yoga, "sumo", text, root, FIXED_TIME);
+				expect(renderRows(message, 24)).toEqual(renderRows(fresh, 24));
+				fresh.dispose();
+			}
+			root.dispose();
+		});
+
+		it("segments only the unstable tail while a plain message grows", async () => {
+			const yoga = await loadYoga();
+			const root = new SumoNode(yoga.Node.create());
+			const message = ChatMessage.create(yoga, "sumo", "", root, FIXED_TIME);
+			const segment = vi.spyOn(Intl.Segmenter.prototype, "segment");
+			const chunk = "streaming words stay bounded ".repeat(8);
+			try {
+				renderRows(message, 80);
+				segment.mockClear();
+				for (let index = 0; index < 300; index += 1) {
+					message.appendText(chunk);
+					renderRows(message, 80);
+				}
+
+				const segmentedCharacters = segment.mock.calls.reduce((total, [text]) => total + text.length, 0);
+				expect(segmentedCharacters).toBeLessThanOrEqual(300 * (chunk.length + 80));
+				expect(stripAnsi(renderRows(message, 80).join("\n"))).toContain("streaming words stay bounded");
+			} finally {
+				segment.mockRestore();
+				root.dispose();
+			}
 		});
 
 		it("invalidates the memo on setText, setBlocks, and setRole", async () => {

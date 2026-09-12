@@ -1512,7 +1512,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		treeNavigationBusy = busy;
 		const state = stateStore.setBranchSummaryBusy(busy);
 		if (busy) runtime?.update({ state });
-		else runtime?.update({ state, activities: activityPresentation(latestActivitySnapshot) });
+		else runtime?.update({ state, activities: activityPresentation(latestActivitySnapshot, directBash.getSnapshot()) });
 		if (!busy) deferActivityRuntimeUpdate = false;
 	};
 

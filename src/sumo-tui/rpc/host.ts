@@ -1942,6 +1942,13 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 			});
 		}
 		deferActivityRuntimeUpdate = false;
+		// The cached cycle ring has served its purpose: hydration has committed
+		// authoritative chrome, so any later press (including one during the settle
+		// drain, before the gate reports ready) defers to the live ring instead of
+		// previewing a cached pick over it -- which would otherwise leave a model
+		// the child is not on painted, and cache-persisted, when the reconcile
+		// rejects (pullfrog, PR #542).
+		cachedCycleChrome = undefined;
 		logDiagnostic("hydration_committed", { surface: "rpc_host" });
 		// A reload predecessor deliberately leaves its retained frame and terminal
 		// modes in place. Hydrate off-screen, then atomically replace that frame;

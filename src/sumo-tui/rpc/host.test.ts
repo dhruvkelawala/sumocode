@@ -1174,11 +1174,16 @@ describe("cached pre-hydration cycle (issue 448: cycle keys answer before hydrat
 		models?: readonly RpcModelOption[];
 		thinkingLevels?: readonly string[];
 		currentThinkingLevel?: string;
+		currentModelLabel?: string;
 	}) {
 		let release!: () => void;
 		const gate = new InitialHydrationActionGate(new Promise<void>((resolve) => { release = resolve; }));
 		const previewModel = vi.fn();
 		const previewThinkingLevel = vi.fn();
+		// Mirrors the host wiring: the ring's `active` is derived from the label
+		// the last preview wrote, so successive presses advance.
+		let modelLabel = initial.currentModelLabel;
+		let thinkingLevel = initial.currentThinkingLevel;
 		return {
 			gate,
 			release,
@@ -1186,11 +1191,17 @@ describe("cached pre-hydration cycle (issue 448: cycle keys answer before hydrat
 			previewThinkingLevel,
 			cachedCycle: {
 				gate,
-				models: () => initial.models,
+				models: () => initial.models?.map((model) => ({ ...model, active: model.label === modelLabel })),
 				thinkingLevels: () => initial.thinkingLevels,
-				currentThinkingLevel: () => initial.currentThinkingLevel,
-				previewModel,
-				previewThinkingLevel,
+				currentThinkingLevel: () => thinkingLevel,
+				previewModel: (model: RpcModelOption) => {
+					modelLabel = model.label;
+					previewModel(model);
+				},
+				previewThinkingLevel: (level: string) => {
+					thinkingLevel = level;
+					previewThinkingLevel(level);
+				},
 			} satisfies RpcHostCachedCycleDependencies,
 		};
 	}
@@ -1322,6 +1333,78 @@ describe("cached pre-hydration cycle (issue 448: cycle keys answer before hydrat
 
 		release();
 		await gate.whenSettled();
+		expect(controls.setModel).toHaveBeenCalledExactlyOnceWith("openai", "gpt-5");
+	});
+
+	it("advances once per rapid press and applies only the last previewed pick", async () => {
+		const ring: readonly RpcModelOption[] = [
+			{ provider: "p", id: "a", label: "p/a", active: true },
+			{ provider: "p", id: "b", label: "p/b", active: false },
+			{ provider: "p", id: "c", label: "p/c", active: false },
+		];
+		const { cachedCycle, gate, release, previewModel } = cycleFixture({ models: ring, currentModelLabel: "p/a" });
+		const controls = {
+			getEnabledModels: vi.fn(async () => ring),
+			setModel: vi.fn(async () => asNever({ modelLabel: "p/a" })),
+		};
+		const handle = createModelCycleForwardHandler({
+			// SAFETY: partial fixture; unread members of the target type are unused here.
+			controls: controls as never,
+			notifications: { notify: vi.fn() },
+			cachedCycle,
+		});
+
+		handle();
+		handle();
+		handle();
+
+		expect(previewModel.mock.calls.map((call) => call[0].id)).toEqual(["b", "c", "a"]);
+
+		release();
+		await gate.whenSettled();
+		// One latest intent per key: only the final press's pick reaches the child.
+		expect(controls.setModel).toHaveBeenCalledExactlyOnceWith("p", "a");
+	});
+
+	it("stops previewing once the host withdraws the ring at the hydration commit, deferring the live cycle instead", async () => {
+		let release!: () => void;
+		const gate = new InitialHydrationActionGate(new Promise<void>((resolve) => { release = resolve; }));
+		let ringAvailable = true;
+		const previewModel = vi.fn();
+		const cachedCycle = {
+			gate,
+			models: () => (ringAvailable ? cachedRing : undefined),
+			thinkingLevels: () => undefined,
+			currentThinkingLevel: () => undefined,
+			previewModel,
+			previewThinkingLevel: vi.fn(),
+		} satisfies RpcHostCachedCycleDependencies;
+		const controls = {
+			getEnabledModels: vi.fn(async () => cachedRing),
+			setModel: vi.fn(async () => asNever({ modelLabel: "openai/gpt-5" })),
+		};
+		const handle = createModelCycleForwardHandler({
+			// SAFETY: partial fixture; unread members of the target type are unused here.
+			controls: controls as never,
+			notifications: { notify: vi.fn() },
+			cachedCycle,
+		});
+
+		handle();
+		await flush();
+		expect(previewModel).toHaveBeenCalledOnce();
+
+		// The host withdraws the ring when hydration commits; a press during the
+		// settle drain must not preview a cached pick over the authoritative chrome.
+		ringAvailable = false;
+		handle();
+		await flush();
+		expect(previewModel).toHaveBeenCalledOnce();
+		expect(controls.getEnabledModels).not.toHaveBeenCalled();
+
+		release();
+		await gate.whenSettled();
+		// The post-commit press deferred a live cycle, which the drain then runs.
 		expect(controls.setModel).toHaveBeenCalledExactlyOnceWith("openai", "gpt-5");
 	});
 

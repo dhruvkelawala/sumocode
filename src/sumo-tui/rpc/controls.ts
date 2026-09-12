@@ -29,7 +29,7 @@ export interface RpcClearedQueue {
 	readonly followUp: readonly string[];
 }
 
-export interface RpcBashRequest {
+interface RpcBashRequest {
 	readonly id: string;
 	readonly written: Promise<void>;
 	readonly result: Promise<DirectBashResult>;

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, chmodSync, existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -256,6 +256,45 @@ describe("spawnPiPty agent state isolation", () => {
 		} finally {
 			rmSync(generatedRoot, { recursive: true, force: true });
 		}
+	});
+});
+
+/**
+ * The unexpected-exit capture has no promise to await, so wait for the
+ * artifact set it writes and the retention marker it writes last (issue #423).
+ */
+async function waitForRetainedEvidence(evidenceDir: string, timeoutMs = 5_000): Promise<void> {
+	const artifacts = ["argv.txt", "stderr-tail.txt", "raw-output.txt", "final-screen.txt", "diagnostics.jsonl"]
+		.map((name) => join(evidenceDir, name));
+	const marker = join(resolve(evidenceDir, "../../.."), "evidence-retained.json");
+	const deadline = Date.now() + timeoutMs;
+	for (;;) {
+		const marked = artifacts.every((path) => existsSync(path))
+			&& existsSync(marker)
+			&& statSync(marker).mtimeMs >= Math.max(...artifacts.map((path) => statSync(path).mtimeMs));
+		if (marked) return;
+		if (Date.now() >= deadline) throw new Error(`timed out waiting for retained evidence in ${evidenceDir}`);
+		await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 25));
+	}
+}
+
+describe("spawnPiPty exit evidence", () => {
+	it("retains diagnostics when the PTY exits between waits with no waiter pending", async () => {
+		// `--` stops node option parsing; the explicit `--approve` tells
+		// spawnPiPty it need not append a Pi trust flag.
+		const pty = spawnPiPty({ command: process.execPath, args: ["-e", "process.exit(3)", "--", "--approve"] });
+		try {
+			await waitForRetainedEvidence(pty.getEvidenceDir());
+			expect(readFileSync(join(pty.getEvidenceDir(), "argv.txt"), "utf8")).toContain("process.exit(3)");
+		} finally {
+			await pty.cleanupAndWait();
+		}
+	});
+
+	it("retains nothing when the harness deliberately terminates the PTY", async () => {
+		const pty = spawnPiPty({ command: process.execPath, args: ["-e", "setInterval(() => {}, 1_000)", "--", "--approve"] });
+		await pty.cleanupAndWait();
+		expect(existsSync(join(pty.getEvidenceDir(), "argv.txt"))).toBe(false);
 	});
 });
 

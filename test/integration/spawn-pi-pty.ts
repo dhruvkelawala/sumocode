@@ -272,6 +272,9 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 	}
 
 	let output = "";
+	// Set before any harness-initiated kill: an exit this process asked for is
+	// not a failure and must not retain evidence (issue #423).
+	let terminationRequested = false;
 	const waiters: Waiter[] = [];
 
 	function settleWaiters(): void {
@@ -316,10 +319,10 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 
 	child.onExit(({ exitCode, signal }) => {
 		if (supervision) recordPtyExit(supervision.pid, supervision.pgid, exitCode, signal, childEnv);
-		resolveExit?.();
 		void (async () => {
 			try {
-				for (const waiter of waiters.splice(0)) {
+				const pending = waiters.splice(0);
+				for (const waiter of pending) {
 					clearTimeout(waiter.timer);
 					if (matches(output, waiter.pattern)) {
 						waiter.resolve(output);
@@ -328,13 +331,19 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 						waiter.reject(new Error(`pi pty exited before output matched ${String(waiter.pattern)} (exitCode=${exitCode}, signal=${signal}). Evidence: ${evidenceDir}`));
 					}
 				}
+				// A PTY that dies between waits is a failure with no waiter to
+				// reject: capture before the focused harness decides to delete the
+				// run (issue #423).
+				if (pending.length === 0 && !terminationRequested && supervision !== undefined) await capture();
 			} finally {
 				removeOwnedAgentDir(ownedAgentDir);
+				resolveExit?.();
 			}
 		})();
 	});
 
 	function requestCleanup(): void {
+		terminationRequested = true;
 		for (const waiter of waiters.splice(0)) {
 			clearTimeout(waiter.timer);
 			waiter.reject(new Error("pi pty cleaned up before matcher completed"));
@@ -377,6 +386,7 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 			}
 		},
 		sendSignal(signal: NodeJS.Signals): void {
+			terminationRequested = true;
 			child.kill(signal);
 		},
 		getCurrentTerminalState(): TerminalStateProbe {
@@ -397,6 +407,7 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 			requestCleanup();
 		},
 		async cleanupAndWait(): Promise<void> {
+			terminationRequested = true;
 			for (const waiter of waiters.splice(0)) {
 				clearTimeout(waiter.timer);
 				waiter.reject(new Error("pi pty cleaned up before matcher completed"));

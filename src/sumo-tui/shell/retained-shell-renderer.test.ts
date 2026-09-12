@@ -624,6 +624,21 @@ describe("RetainedShellRenderer", () => {
 				renderer.dispose();
 			}
 		});
+
+		it("reports retained frames and cumulative frame clones for the heap diagnostic", async () => {
+			const { renderer } = await createHarness({ aboveEditorWidgets: () => new StaticComponent(["", "INDICATOR"]) });
+			try {
+				expect(renderer.getFrameStats()).toEqual({ retainedFrames: 0, cloneCount: 0 });
+				renderer.render();
+				// render() keeps the composed frame plus its previous-frame clone.
+				expect(renderer.getFrameStats()).toEqual({ retainedFrames: 2, cloneCount: 1 });
+				renderer.repaintRegion("aboveEditor");
+				// The narrow tick clones the previous frame and its selected result.
+				expect(renderer.getFrameStats()).toEqual({ retainedFrames: 2, cloneCount: 3 });
+			} finally {
+				renderer.dispose();
+			}
+		});
 	});
 
 	describe("selection pass", () => {

@@ -1356,3 +1356,35 @@ describe("RpcShellAdapter inline selector composition (plan 036 regression guard
 		}
 	});
 });
+
+describe("RpcShellAdapter heap counters", () => {
+	it("reports transcript blocks, laid-out rows, and retained frames for the heap diagnostic", async () => {
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 100, rows: 30 },
+			initialState: state({ hasMessages: true }),
+			initialTranscript: {
+				messages: [
+					{ id: "m1", role: "user", displayName: "you", blocks: [{ type: "markdown", text: "first" }] },
+					{
+						id: "m2",
+						role: "sumo",
+						displayName: "sumo",
+						blocks: [
+							{ type: "markdown", text: "second" },
+							{ type: "code", lang: "ts", source: "const a = 1;\n".repeat(40), collapsed: false },
+						],
+					},
+				],
+			},
+		});
+		try {
+			expect(adapter.getHeapCounters()).toMatchObject({ transcriptBlocks: 3, retainedFrames: 0, cloneCount: 0 });
+			adapter.render();
+			expect(adapter.getHeapCounters()).toMatchObject({ transcriptBlocks: 3, retainedFrames: 2, cloneCount: 1 });
+			expect(adapter.getHeapCounters().viewModelRows).toBeGreaterThan(0);
+		} finally {
+			adapter.dispose();
+		}
+	});
+});

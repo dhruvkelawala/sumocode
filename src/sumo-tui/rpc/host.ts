@@ -6,6 +6,8 @@ import { CHILD_JSON_FRAME_MAX_BYTES } from "../../child-protocol.js";
 import { FileActivityStore, type ActivityStoreSnapshot } from "../../activity/store.js";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { SettingsManager, type AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import type { ImageContent } from "@earendil-works/pi-ai";
+import type { RpcEditorSubmissionDraft } from "../../cathedral/editor-draft-state.js";
 import { getCapabilities, setCapabilities } from "@earendil-works/pi-tui";
 import { SUMOCODE_RELOAD_EXIT_CODE } from "../../commands/reload.js";
 import { containsCtrlCToken, isEscapeInput } from "../input/shared-input-router.js";
@@ -50,6 +52,7 @@ import { RpcHostStateStore, type RpcHostChromeState } from "./state.js";
 import { RpcTranscriptPump } from "./transcript-pump.js";
 import { rpcVisualFixtureFromEnv } from "./visual-fixtures.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
+import { loadRpcImages } from "./image-content.js";
 
 export { createUnhandledRejectionHandler, writeExitCodeFile, type UnhandledRejectionShutdownOptions } from "./host-lifecycle.js";
 
@@ -438,12 +441,18 @@ export function createLazyChatSink(getRuntime: () => { getChatSink(): Transcript
 export interface RpcPromptSendOptions {
 	readonly client: Pick<SumoRpcClient, "send">;
 	readonly delivery?: RpcPromptDelivery;
+	readonly images?: ImageContent[];
 }
 
 export async function sendRpcPrompt(message: string, options: RpcPromptSendOptions): Promise<void> {
-	const command = options.delivery
-		? { type: "prompt" as const, message, streamingBehavior: options.delivery.streamingBehavior }
-		: { type: "prompt" as const, message };
+	// Pi 0.85.1 clear_queue returns text only. Image prompts must omit
+	// streamingBehavior so Pi atomically rejects an idle-to-busy race instead
+	// of creating an attachment queue entry SumoCode cannot recover.
+	const command = options.images
+		? { type: "prompt" as const, message, images: options.images }
+		: options.delivery
+			? { type: "prompt" as const, message, streamingBehavior: options.delivery.streamingBehavior }
+			: { type: "prompt" as const, message };
 	const response = await options.client.send(command);
 	if (response.success === false && response.command === "prompt") {
 		try {
@@ -540,6 +549,47 @@ export async function submitRpcDirectBash(message: string, deps: RpcDirectBashSu
 	return true;
 }
 
+export interface RpcImageDraftSubmitDependencies {
+	readonly editor: Pick<RpcHostEditorController, "getText" | "setText" | "addToHistory" | "commitRpcDraft">;
+	readonly notifications: ErrorNotifier;
+	readonly isAgentBusy: () => boolean;
+	readonly client: Pick<SumoRpcClient, "send">;
+	readonly loadImages?: typeof loadRpcImages;
+}
+
+export async function submitRpcImageDraft(
+	draft: RpcEditorSubmissionDraft,
+	deps: RpcImageDraftSubmitDependencies,
+): Promise<void> {
+	if (draft.images.length === 0) return;
+	if (deps.isAgentBusy()) {
+		deps.notifications.notify("images wait for idle · draft kept", "warning");
+		return;
+	}
+	let images: ImageContent[];
+	try {
+		images = await (deps.loadImages ?? loadRpcImages)(draft.images);
+	} catch (error) {
+		deps.notifications.notify(`image validation failed · draft kept: ${truncateForNotification(error instanceof Error ? error.message : String(error))}`, "error");
+		return;
+	}
+	try {
+		await sendRpcPrompt(draft.text, { client: deps.client, images });
+	} catch (error) {
+		if (error instanceof RpcPromptPreflightRejection) {
+			deps.notifications.notify(`prompt rejected · image draft kept: ${truncateForNotification(error.message)}`, "error");
+		} else {
+			deps.notifications.notify(`prompt acceptance unknown · image draft kept: ${truncateForNotification(error instanceof Error ? error.message : String(error))}`, "warning");
+		}
+		return;
+	}
+	deps.editor.addToHistory(draft.text);
+	if (deps.editor.getText() === draft.text) {
+		deps.editor.commitRpcDraft(draft.text);
+		deps.editor.setText("");
+	}
+}
+
 export interface RpcPromptSubmitOptions {
 	readonly visualFixture?: unknown;
 	readonly scheduler?: Pick<RpcPromptScheduler, "submit">;
@@ -571,12 +621,14 @@ export interface EditorSubmitHandlerDependencies {
 	readonly gate: EditorSubmitReadinessGate;
 	readonly notifications: ErrorNotifier;
 	readonly submit: (message: string, delivery?: RpcPromptDeliveryMode) => Promise<void>;
+	readonly submitImageDraft?: (draft: RpcEditorSubmissionDraft) => Promise<void>;
 	readonly requestExit: (code: number) => void;
 	readonly isTreeBusy: () => boolean;
 }
 
 export interface EditorSubmitHandlers {
 	readonly fromEditor: (message: string, delivery?: RpcPromptDeliveryMode) => Promise<void>;
+	readonly fromEditorDraft: (draft: RpcEditorSubmissionDraft, delivery?: RpcPromptDeliveryMode) => Promise<void>;
 	readonly fromLaunch: (message: string) => Promise<void>;
 }
 
@@ -611,6 +663,18 @@ export function createEditorSubmitHandlers(deps: EditorSubmitHandlerDependencies
 	};
 	return {
 		fromEditor: (message, delivery) => submit(message, true, delivery),
+		fromEditorDraft: async (draft, delivery) => {
+			if (draft.images.length === 0) return submit(draft.text, true, delivery);
+			if (!deps.gate.isReady) {
+				deps.notifications.notify("finishing startup · command queued", "warning");
+				await deps.gate.whenSettled();
+			}
+			if (deps.isTreeBusy()) {
+				deps.notifications.notify("branch summary in progress", "warning");
+				return;
+			}
+			await deps.submitImageDraft?.(draft);
+		},
 		fromLaunch: (message) => submit(message, false, "steer"),
 	};
 }
@@ -649,11 +713,12 @@ export async function submitInitialPromptFromFile(env: NodeJS.ProcessEnv, submit
 }
 
 export interface RpcMessageFollowUpDependencies {
-	readonly editor: Pick<RpcHostEditorController, "getText" | "addToHistory" | "setText" | "expandDraftTokens" | "clearImageDrafts">;
+	readonly editor: Pick<RpcHostEditorController, "getText" | "addToHistory" | "setText" | "expandDraftTokens" | "clearImageDrafts" | "captureRpcDraft">;
 	readonly scheduler: Pick<RpcPromptScheduler, "submit">;
 	readonly notifications: ErrorNotifier;
 	readonly isBlocked?: () => boolean;
 	readonly submitDirectBash?: (message: string) => Promise<boolean>;
+	readonly submitImageDraft?: (draft: RpcEditorSubmissionDraft) => Promise<void>;
 	readonly isAgentBusy?: () => boolean;
 }
 
@@ -667,14 +732,24 @@ export function handleRpcMessageFollowUp(deps: RpcMessageFollowUpDependencies): 
 		}
 		const draft = deps.editor.getText();
 		if (draft.trim().length === 0) return;
+		const captured = deps.editor.captureRpcDraft(draft);
+		if (captured.images.length > 0) {
+			if (deps.isAgentBusy?.() === true) {
+				deps.notifications.notify("images wait for idle · draft kept", "warning");
+				return;
+			}
+			if (!deps.submitImageDraft) {
+				deps.notifications.notify("native image delivery unavailable · draft kept", "error");
+				return;
+			}
+			await deps.submitImageDraft(captured);
+			return;
+		}
 		// Idle Alt+Enter follows ordinary submit semantics; busy Alt+Enter remains
 		// a prompt follow-up and must never turn shell-looking text into execution.
 		if (deps.isAgentBusy?.() !== true && await deps.submitDirectBash?.(draft)) return;
-		// Queue the EXPANDED submission (pasted [Image N] tokens → temp paths),
-		// mirroring the Enter-submit wrapper — a raw draft would deliver the
-		// literal token once drained. Expansion is capture-only here; the draft
-		// state is cleared ONLY after the queue accepts, because a busy→idle
-		// race can return "ignored" and the untouched draft must stay editable.
+		// Native attachments return above and can never enter Pi's text-only
+		// recoverable queues. This expansion now applies only to text drafts.
 		const submission = deps.editor.expandDraftTokens(draft);
 		const result = await deps.scheduler.submit(submission, { delivery: "followUp" });
 		if (result === "ignored") {
@@ -1276,6 +1351,12 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 				delivery: delivery ?? "steer",
 			});
 		},
+		submitImageDraft: (draft) => submitRpcImageDraft(draft, {
+			editor,
+			notifications,
+			client,
+			isAgentBusy: () => stateStore.getSnapshot().isStreaming || stateStore.getSnapshot().isCompacting,
+		}),
 	});
 	const keybindings = createRpcKeybindingsManager({ env });
 	const handleModelCycleForward = createModelCycleForwardHandler({
@@ -1306,6 +1387,12 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 			isBlocked: () => treeNavigationBusy,
 			isAgentBusy: () => stateStore.getSnapshot().isStreaming || stateStore.getSnapshot().isCompacting,
 			submitDirectBash,
+			submitImageDraft: (draft) => submitRpcImageDraft(draft, {
+				editor,
+				notifications,
+				client,
+				isAgentBusy: () => stateStore.getSnapshot().isStreaming || stateStore.getSnapshot().isCompacting,
+			}),
 		});
 	const handleMessageToggleDelivery = (): void => {
 		const current = stateStore.getSnapshot().promptDeliveryMode ?? "steer";
@@ -1329,7 +1416,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		// app.interrupt (Escape by default, or the user's remap): replay into
 		// the interrupt tier module (see `handleAppInterrupt` above).
 		onInterrupt: () => handleAppInterrupt(),
-		onSubmit: (message) => submitHandlers.fromEditor(message, stateStore.getSnapshot().promptDeliveryMode ?? "steer"),
+		onSubmitDraft: (draft) => submitHandlers.fromEditorDraft(draft, stateStore.getSnapshot().promptDeliveryMode ?? "steer"),
 		// app.model.cycleForward / app.model.cycleBackward / app.thinking.cycle
 		// / app.tools.expand: registered via CustomEditor's generic
 		// `onAction` map (see editor.ts's onModelCycleForward etc. doc

@@ -627,7 +627,6 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 |------|-------|----------|--------|------------|--------|
 | 088 | Upgrade Pi to the first `clear_queue` release and lock the RPC contract | P0 | L | published Pi release with `clear_queue` | DONE — Pi `0.85.1` pinned across `pi-ai`/`pi-coding-agent`/`pi-tui`; installed-worker `clear_queue` proof and thinking-shape locks in `test/integration/rpc-contract.test.ts`; compile-exhaustive command/event/extension-UI dispositions in `src/sumo-tui/rpc/contract-classification.ts`; response envelope requires a real boolean success ([#375](https://github.com/dhruvkelawala/sumocode/issues/375)) |
 | 090 | Move prompt delivery to Pi queues with a steer-default toggle | P0 | L | 088, 089 | IN PROGRESS — `feat/377-native-queues`; Pi owns ordinary steering/follow-up queues, host ownership narrows to compaction submissions ([#377](https://github.com/dhruvkelawala/sumocode/issues/377)) |
-| 091-RPC | Add Pi-native direct bash to the RPC host | P1 | L | 088, 090 | DONE — `feat/378-direct-bash`; `!`/`!!` use Pi `bash`, stream one bounded activity, and Escape targets `abort_bash` ([#378](https://github.com/dhruvkelawala/sumocode/issues/378)). The `091-RPC` label disambiguates the pre-existing later audit row 091 for #385. |
 
 ## Deep improvement audit — command readiness, security, lifecycle, and Effect (091–115)
 

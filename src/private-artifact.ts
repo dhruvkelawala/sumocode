@@ -26,6 +26,8 @@ export interface PrivateArtifactStat {
 	isDirectory(): boolean;
 	mode: number;
 	uid: number;
+	/** Present on Node fs.Stats; optional so narrow test doubles stay valid. */
+	mtimeMs?: number;
 }
 
 export interface PrivateArtifactFs {

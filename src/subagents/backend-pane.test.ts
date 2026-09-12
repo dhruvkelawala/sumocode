@@ -11,6 +11,7 @@ class FakeFs {
 	/** Recorded creation modes so permission expectations are assertable. */
 	readonly dirModes = new Map<string, number | undefined>();
 	readonly fileModes = new Map<string, number | undefined>();
+	readonly mtimes = new Map<string, number>();
 	readonly dirs = new Set<string>();
 	/** Adversarial fixture: paths whose lstat reports a symlink instead of a regular file. */
 	readonly symlinks = new Set<string>();
@@ -37,7 +38,7 @@ class FakeFs {
 		}
 		if (this.files.has(path)) {
 			const mode = this.widenedModes.has(path) ? 0o644 : (this.fileModes.get(path) ?? 0o600);
-			return { isFile: () => true, isDirectory: () => false, mode, uid: process.getuid?.() ?? 0 };
+			return { isFile: () => true, isDirectory: () => false, mode, uid: process.getuid?.() ?? 0, mtimeMs: this.mtimes.get(path) };
 		}
 		// SAFETY: Node reports lstat ENOENT as an ErrnoException; the double reproduces that shape for isEnoent.
 		const error = new Error(`ENOENT: no such file or directory, lstat '${path}'`) as Error & { code?: string };
@@ -83,6 +84,9 @@ class FakeFs {
 		// A real rename carries the source's mode across.
 		this.fileModes.set(target, this.fileModes.get(source));
 		this.fileModes.delete(source);
+		const mtime = this.mtimes.get(source);
+		if (mtime !== undefined) this.mtimes.set(target, mtime);
+		this.mtimes.delete(source);
 	}
 
 	writeFileSync(path: string, contents: string, options?: { mode?: number; flag?: string }): void {
@@ -718,7 +722,8 @@ describe("pane subagent backend", () => {
 			expect(harness.host.startAgentPane).toHaveBeenCalledTimes(1);
 			expect(harness.closePane).not.toHaveBeenCalled();
 			expect(settledEvents(oldEvents)).toEqual([]);
-			expect(newEvents).toEqual([{
+			expect(newEvents.filter((event) => event.kind === "turn-finished")).toEqual([]);
+			expect(settledEvents(newEvents)).toEqual([{
 				kind: "run-settled",
 				outcome: { kind: "completed", finalText: "after replacement" },
 			}]);
@@ -735,6 +740,36 @@ describe("pane subagent backend", () => {
 		const script = harness.fs.files.get(harness.paths.scriptFile) ?? "";
 		expect(script).toContain("exec '/parent tools/sumocode' 'task'");
 		harness.child.interrupt();
+	});
+
+	it("reports a completed turn within one poll while keeping the pane steerable", async () => {
+		vi.useFakeTimers();
+		try {
+			const harness = createHarness();
+			await harness.child.ready;
+			harness.fs.files.set(harness.paths.responseFile, "turn result\n");
+
+			await vi.advanceTimersByTimeAsync(750);
+
+			expect(harness.events).toContainEqual({ kind: "turn-finished", finalText: "turn result\n", at: 1234 });
+			expect(settledEvents(harness.events)).toEqual([]);
+			const send = harness.child.send!("one more thing");
+			expect(harness.events).toContainEqual({ kind: "turn-started", at: 1234 });
+			const steer = `${harness.paths.controlDir}/steer-1.txt`;
+			harness.fs.files.delete(steer);
+			await vi.advanceTimersByTimeAsync(750);
+			await send;
+			expect(harness.events.filter((event) => event.kind === "turn-finished")).toHaveLength(1);
+			// The old response remains on disk while the next turn runs. Only a new
+			// write (mtime or content) may return the snapshot to idle.
+			harness.fs.mtimes.set(harness.paths.responseFile, 1235);
+			await vi.advanceTimersByTimeAsync(750);
+			expect(harness.events.filter((event) => event.kind === "turn-finished")).toHaveLength(2);
+			expect(harness.closePane).not.toHaveBeenCalled();
+		} finally {
+			vi.clearAllTimers();
+			vi.useRealTimers();
+		}
 	});
 
 	it("harvests a completed child from response and exit files exactly once", async () => {

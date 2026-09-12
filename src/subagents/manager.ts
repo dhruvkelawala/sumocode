@@ -1,8 +1,10 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 import { promisify } from "node:util";
 import { captureProcessBirthTime, systemProcessTree, type ProcessTreeOperations } from "../background-tasks/process-tree.js";
+import { nodeArtifactFs, validatedArtifactStat } from "../private-artifact.js";
 import { acquireRetained, reconstructRetained, verifyRetained, sameRetainedEvidence, type RetainedSubagent } from "./retained-adoption.js";
 import { RetainedLaunchRefusal } from "./retained-runtime.js";
 import type { RegistryWriter, SubagentRecord } from "./registry.js";
@@ -124,6 +126,13 @@ async function captureGitContext(cwd: string): Promise<SpawnGitContext> {
 
 const isSettled = (snapshot: SubagentSnapshot): boolean => snapshot.status !== "running" && snapshot.status !== "queued";
 
+const readRetainedTurnResult = (record: SubagentRecord): string | undefined => {
+	const path = join(record.taskDir, "response.md");
+	return validatedArtifactStat(nodeArtifactFs, path, record.taskDir, "visible-subagent response artifact")
+		? readFileSync(path, "utf8") || undefined
+		: undefined;
+};
+
 const makeInitialSnapshot = (
 	task: SpawnSubagentTask,
 	id: string,
@@ -156,7 +165,12 @@ const makeInitialSnapshot = (
 	};
 	if (task.sourceId !== undefined) snapshot.sourceId = task.sourceId;
 	if (task.roleId !== undefined) snapshot.roleId = task.roleId;
-	if (task.visible) snapshot.visible = true;
+	if (task.visible) {
+		snapshot.visible = true;
+		snapshot.turnState = "working";
+		snapshot.turnSequence = 0;
+		snapshot.lastProgressAt = createdAt;
+	}
 	return snapshot;
 };
 
@@ -339,10 +353,21 @@ export class SubagentManager {
 	public deliver(payload: DeliveryPayload, send: (payload: DeliveryPayload) => void): void {
 		if (!this.canDeliver(payload.id)) return;
 		const tracked = this.retained.get(payload.id);
-		if (!tracked) { send(payload); return; }
+		if (!tracked) {
+			if (payload.status === "turn_done" && this.snapshots.get(payload.id)?.status !== "running") return;
+			send(payload);
+			if (payload.status === "turn_done") this.markTurnDelivered(payload);
+			return;
+		}
 		const { registry, authority } = tracked.entry;
 		try {
 			let record = registry.get(payload.id)!;
+			if (payload.status === "turn_done") {
+				if (record.status !== "running") return;
+				send(payload);
+				this.markTurnDelivered(payload);
+				return;
+			}
 			if (record.status !== "settled") return;
 			if (record.delivery.state === "sending") {
 				if (record.delivery.controllerGeneration === (record.controllerGeneration ?? 0)) return;
@@ -406,9 +431,16 @@ export class SubagentManager {
 			// retained-visible launches and reclamation sees their tab.
 			const current = this.attachPane(id, observed, record.pane);
 			const telemetry = record.telemetry;
+			let turnState = telemetry?.turnState ?? current.turnState;
+			let finalText = current.finalText;
+			if (record.backend === "visible" && turnState === "idle") {
+				try { finalText = readRetainedTurnResult(record) ?? finalText; }
+				catch { turnState = current.turnState; }
+			}
 			let next: SubagentSnapshot = { ...current, startedAt: telemetry?.startedAt ?? current.startedAt,
 				lastProgressAt: telemetry?.lastProgressAt ?? current.lastProgressAt,
 				lastHeartbeatAt: telemetry?.lastHeartbeatAt ?? current.lastHeartbeatAt,
+				turnState, turnSequence: telemetry?.turnSequence ?? current.turnSequence, finalText,
 				usage: { ...current.usage, reportedTokens: telemetry?.reportedTokens ?? current.usage.reportedTokens, reportedCostUsd: telemetry?.reportedCostUsd ?? current.usage.reportedCostUsd } };
 			const completion = record.status === "settled" ? entry.supervisor?.completion : undefined;
 			const failedPlacement = this.placementByTask.get(id);
@@ -887,7 +919,11 @@ export class SubagentManager {
 			throw new Error(`Subagent ${id} visible steering channel unavailable`);
 		}
 		await child.send(text);
-		return this.snapshots.get(id) ?? snapshot;
+		const current = this.snapshots.get(id) ?? snapshot;
+		const next = this.withBudget({ ...current, turnState: "working", lastProgressAt: Date.now() });
+		this.snapshots.set(id, next);
+		this.notify();
+		return next;
 	}
 
 	/**
@@ -1318,7 +1354,9 @@ export class SubagentManager {
 		// run-settled and flip an explicitly cancelled subagent back to "done".
 		if (isSettled(current)) return;
 		let next = current;
-		if (event.kind === "assistant-delta") next = { ...current, liveText: `${current.liveText}${event.delta}` };
+		if (event.kind === "turn-started") next = { ...current, turnState: "working" };
+		else if (event.kind === "turn-finished") next = { ...current, turnState: "idle", turnSequence: (current.turnSequence ?? 0) + 1, finalText: event.finalText, liveText: "" };
+		else if (event.kind === "assistant-delta") next = { ...current, liveText: `${current.liveText}${event.delta}` };
 		else if (event.kind === "tool-start") next = { ...current, liveTools: upsertTool(current.liveTools, { id: event.toolId, name: event.name, argsPreview: event.argsPreview, done: false, isError: false, startedAt: Date.now() }) };
 		else if (event.kind === "tool-update") next = { ...current, liveTools: upsertTool(current.liveTools, { id: event.toolId, name: current.liveTools.find((tool) => tool.id === event.toolId)?.name ?? "tool", outputPreview: event.outputPreview, done: false, isError: false }) };
 		else if (event.kind === "tool-end") next = { ...current, liveTools: upsertTool(current.liveTools, { id: event.toolId, name: event.name, outputPreview: event.outputPreview, done: true, isError: event.isError }) };
@@ -1342,13 +1380,21 @@ export class SubagentManager {
 				reportedCostUsd: addReportedSubagentUsage(current.usage.reportedCostUsd, event.costUsd),
 			},
 		};
-		if (event.kind === "heartbeat") {
+		if (event.kind === "turn-started" || event.kind === "turn-finished") {
+			next = { ...next, lastProgressAt: event.at };
+		} else if (event.kind === "heartbeat") {
 			if (!current.visible || !Number.isSafeInteger(event.at) || event.at <= (current.lastHeartbeatAt ?? 0) || event.at > Date.now() || Date.now() - event.at > 2000) return;
 			next = { ...next, lastHeartbeatAt: event.at };
 		} else if (!current.visible && event.kind !== "run-started") next = { ...next, lastProgressAt: Date.now() };
 		this.snapshots.set(id, this.withBudget(next));
 		this.notify();
 		this.prune();
+	}
+
+	private markTurnDelivered(payload: DeliveryPayload): void {
+		const current = this.snapshots.get(payload.id);
+		if (!current || !payload.turnSequence || payload.turnText === undefined || payload.turnSequence <= (current.deliveredTurnSequence ?? 0)) return;
+		this.snapshots.set(payload.id, { ...current, deliveredTurnSequence: payload.turnSequence, deliveredTurnText: payload.turnText });
 	}
 
 	private startSettle(id: string, outcome: RunOutcome): Promise<void> {

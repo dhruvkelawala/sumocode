@@ -8,7 +8,7 @@ const RESULT_OUTPUT_MAX_LINES = 600;
 export interface SubagentResultMessageInput {
 	readonly id: string;
 	readonly title: string;
-	readonly status: Exclude<SubagentStatus, "running" | "queued">;
+	readonly status: Exclude<SubagentStatus, "running" | "queued"> | "turn_done";
 	readonly errorText?: string;
 	readonly output: string;
 	readonly sessionFilePath?: string;
@@ -42,7 +42,10 @@ export function formatCompletionManifest(manifest: CompletionManifestEvidence): 
 }
 
 export function buildSubagentResultMessage(input: SubagentResultMessageInput): string {
-	const lines = [`Subagent ${input.id} "${input.title}" ${input.status === "done" ? "finished" : "failed"}.`];
+	const state = input.status === "done" ? "finished"
+		: input.status === "turn_done" ? "completed a turn and remains available for steering"
+			: "failed";
+	const lines = [`Subagent ${input.id} "${input.title}" ${state}.`];
 	if (input.errorText) lines.push(`Error: ${input.errorText}`);
 	const output = boundedResultOutput(input.output);
 	if (output) lines.push(output);

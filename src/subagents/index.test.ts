@@ -98,7 +98,7 @@ const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui", options: { re
 	let idle = true;
 	const handlers = new Map<string, Handler[]>();
 	const tools = new Map<string, Tool>();
-	const sendMessage = vi.fn(() => { idle = false; });
+	const sendMessage = vi.fn((_message: { content?: string }) => { idle = false; });
 	const setWidget = vi.fn();
 	const pi = {
 		on: vi.fn((event: string, handler: Handler) => handlers.set(event, [...(handlers.get(event) ?? []), handler])),
@@ -303,6 +303,95 @@ describe("subagent result delivery", () => {
 			return ((call as unknown[])[0] as { details: { id: string } }).details.id;
 		});
 		expect(deliveredIds).toEqual(["sa-first-1", "sa-second-2", "sa-second-2", "sa-third-3"]);
+	});
+
+	it("delivers each visible idle-turn result once, then a terminal envelope without repeated output", async () => {
+		const harness = createHarness();
+		harness.fire("session_start");
+		harness.setIdle(false);
+		harness.fire("agent_start");
+		await harness.manager.spawn({ prompt: "watch me", title: "visible idle", cwd: "/tmp/project", visible: true });
+
+		backend.paneEmitters[0]?.({ kind: "turn-finished", finalText: "visible report", at: 1_234 });
+		expect(harness.sendMessage).not.toHaveBeenCalled();
+		harness.setIdle(true);
+		harness.fire("agent_end");
+
+		await vi.waitFor(() => expect(harness.sendMessage).toHaveBeenCalledOnce());
+		expect(harness.manager.get("sa-visible-idle-1")).toMatchObject({ status: "running", turnState: "idle", finalText: "visible report" });
+		expect(harness.sendMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				customType: "subagent-result",
+				content: expect.stringContaining("completed a turn and remains available for steering"),
+				details: expect.objectContaining({ id: "sa-visible-idle-1", status: "running" }),
+			}),
+			{ deliverAs: "followUp", triggerTurn: true },
+		);
+
+		backend.paneEmitters[0]?.({ kind: "turn-started", at: 2_000 });
+		backend.paneEmitters[0]?.({ kind: "turn-finished", finalText: "revised report", at: 3_000 });
+		harness.setIdle(true);
+		harness.fire("agent_end");
+		expect(harness.sendMessage).toHaveBeenCalledTimes(2);
+		expect(harness.sendMessage.mock.calls[1]?.[0]).toMatchObject({ content: expect.stringContaining("revised report") });
+
+		backend.paneEmitters[0]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "revised report" } });
+		await vi.waitFor(() => expect(harness.manager.get("sa-visible-idle-1")?.status).toBe("done"));
+		harness.fire("agent_end");
+		expect(harness.sendMessage).toHaveBeenCalledTimes(3);
+		expect(harness.sendMessage.mock.calls[2]?.[0]).toMatchObject({
+			content: expect.stringContaining("finished"),
+		});
+		expect(harness.sendMessage.mock.calls[2]?.[0]).not.toMatchObject({ content: expect.stringContaining("revised report") });
+	});
+
+	it("surfaces a terminal failure after an earlier visible turn result", async () => {
+		const harness = createHarness();
+		harness.fire("session_start");
+		await harness.manager.spawn({ prompt: "watch me", title: "visible failure", cwd: "/tmp/project", visible: true });
+		backend.paneEmitters[0]?.({ kind: "turn-finished", finalText: "report before failure", at: 1_234 });
+		await vi.waitFor(() => expect(harness.sendMessage).toHaveBeenCalledOnce());
+
+		backend.paneEmitters[0]?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "pane wrapper failed", partialText: "report before failure" } });
+		await vi.waitFor(() => expect(harness.manager.get("sa-visible-failure-1")?.status).toBe("error"));
+		harness.setIdle(true);
+		harness.fire("agent_end");
+
+		expect(harness.sendMessage).toHaveBeenCalledTimes(2);
+		expect(harness.sendMessage.mock.calls[1]?.[0]).toMatchObject({ content: expect.stringContaining("pane wrapper failed") });
+	});
+
+	it("drops a stale queued turn card when terminal failure wins the busy-parent race", async () => {
+		const harness = createHarness();
+		harness.fire("session_start");
+		harness.setIdle(false);
+		harness.fire("agent_start");
+		await harness.manager.spawn({ prompt: "watch me", title: "visible race", cwd: "/tmp/project", visible: true });
+		backend.paneEmitters[0]?.({ kind: "turn-finished", finalText: "stale report", at: 1_234 });
+		backend.paneEmitters[0]?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "late failure", partialText: "stale report" } });
+		await vi.waitFor(() => expect(harness.manager.get("sa-visible-race-1")?.status).toBe("error"));
+
+		harness.setIdle(true);
+		harness.fire("agent_end");
+
+		expect(harness.sendMessage).toHaveBeenCalledOnce();
+		expect(harness.sendMessage.mock.calls[0]?.[0]).toMatchObject({ content: expect.stringContaining("late failure") });
+	});
+
+	it("delivers a changed final response that exits before another idle poll", async () => {
+		const harness = createHarness();
+		harness.fire("session_start");
+		await harness.manager.spawn({ prompt: "watch me", title: "visible final", cwd: "/tmp/project", visible: true });
+		backend.paneEmitters[0]?.({ kind: "turn-finished", finalText: "first report", at: 1_234 });
+		await vi.waitFor(() => expect(harness.sendMessage).toHaveBeenCalledOnce());
+
+		backend.paneEmitters[0]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "final report" } });
+		await vi.waitFor(() => expect(harness.manager.get("sa-visible-final-1")?.status).toBe("done"));
+		harness.setIdle(true);
+		harness.fire("agent_end");
+
+		expect(harness.sendMessage).toHaveBeenCalledTimes(2);
+		expect(harness.sendMessage.mock.calls[1]?.[0]).toMatchObject({ content: expect.stringContaining("final report") });
 	});
 
 	it("routes visible children through the pane backend and delivers one pane-referenced card", async () => {

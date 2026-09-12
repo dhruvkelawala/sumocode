@@ -3,12 +3,14 @@ export interface DeliveryPayload {
 	readonly id: string;
 	readonly title: string;
 	readonly status: string;
+	readonly turnSequence?: number;
+	readonly turnText?: string;
 	readonly content: string;
 	readonly details: unknown;
 }
 
 export interface DeferredResultDelivery {
-	defer(id: string, build: () => DeliveryPayload): void;
+	defer(key: string, build: () => DeliveryPayload): void;
 	consume(id: string): void;
 	/**
 	 * Drop CONSUMED tracking for an id whose subagent no longer exists
@@ -33,13 +35,15 @@ export function createDeferredResultDelivery(): DeferredResultDelivery {
 	const consumed = new Set<string>();
 
 	return {
-		defer(id, build): void {
-			if (consumed.has(id) || pending.has(id)) return;
-			pending.set(id, build());
+		defer(key, build): void {
+			if (consumed.has(key) || pending.has(key)) return;
+			const payload = build();
+			if (consumed.has(payload.id)) return;
+			pending.set(key, payload);
 		},
 		consume(id): void {
 			consumed.add(id);
-			pending.delete(id);
+			for (const [key, payload] of pending) if (payload.id === id) pending.delete(key);
 		},
 		forget(id): void {
 			consumed.delete(id);

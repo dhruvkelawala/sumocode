@@ -129,13 +129,27 @@ describe("subagent tools", () => {
 		} finally { manager.disposeAll(); vi.useRealTimers(); }
 	});
 
+	it("prints visible turn state and observed progress time in list and check", async () => {
+		const { manager, emitters, tool, ctx } = createHarness();
+		try {
+			await tool("subagent_spawn").execute("visible", { prompt: "task", name: "task", visible: true }, undefined, undefined, ctx);
+			emitters.get("sa-task-1")?.({ kind: "turn-finished", finalText: "report", at: 1_700_000_000_000 });
+			for (const name of ["subagent_list", "subagent_check"]) {
+				const text = textOf(await tool(name).execute("check", { id: "sa-task-1" }));
+				expect(text).toContain("turn idle");
+				expect(text).toContain("last progress 2023-11-14T22:13:20.000Z");
+				expect(text).not.toContain("last progress unobserved");
+			}
+		} finally { manager.disposeAll(); }
+	});
+
 	it("keeps visible children quiet with unknown liveness instead of inventing a stall", async () => {
 		vi.useFakeTimers();
 		const { manager, tool, ctx } = createHarness();
 		try {
 			await tool("subagent_spawn").execute("visible", { prompt: "task", name: "task", visible: true }, undefined, undefined, ctx);
 			await vi.advanceTimersByTimeAsync(600_000);
-			expect(manager.get("sa-task-1")).toMatchObject({ status: "running", health: "quiet", lastProgressAt: null, liveness: "unknown", warnings: [] });
+			expect(manager.get("sa-task-1")).toMatchObject({ status: "running", health: "quiet", lastProgressAt: expect.any(Number), liveness: "unknown", warnings: [] });
 		} finally { manager.disposeAll(); vi.useRealTimers(); }
 	});
 

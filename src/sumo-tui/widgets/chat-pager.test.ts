@@ -265,6 +265,35 @@ describe("ChatPager", () => {
 		root.dispose();
 	});
 
+	it("keeps long-history plain streaming segmentation proportional to incoming deltas", async () => {
+		const { root, chat, buffer } = await makeChat(80, 8);
+		const controller = new TranscriptController({ chat });
+		controller.replaceFromMessages(Array.from({ length: 5_000 }, (_, index) => ({
+			id: `history-${index}`,
+			role: index % 2 === 0 ? "user" : "assistant",
+			content: `message ${index}`,
+		})));
+		controller.handleAgentEvent({ type: "message_start", message: { id: "draft", role: "assistant", content: [] } });
+		buffer();
+		const segment = vi.spyOn(Intl.Segmenter.prototype, "segment");
+		const chunk = "streaming words stay bounded ".repeat(8);
+		try {
+			for (let index = 0; index < 300; index += 1) {
+				controller.handleAgentEvent({
+					type: "message_update",
+					assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: chunk },
+				});
+			}
+
+			const segmentedCharacters = segment.mock.calls.reduce((total, [text]) => total + text.length, 0);
+			expect(segmentedCharacters).toBeLessThanOrEqual(300 * (chunk.length + 80));
+			expect(chat.getRenderedMessages().at(-1)?.text).toBe(chunk.repeat(300));
+		} finally {
+			segment.mockRestore();
+			root.dispose();
+		}
+	});
+
 	it("preserves nodes, scroll, unread, and expansion across multi-index spawn/wait progress", async () => {
 		const { root, chat, buffer } = await makeChat(100, 8);
 		const controller = new TranscriptController({ chat });

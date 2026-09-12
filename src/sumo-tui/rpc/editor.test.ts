@@ -1280,28 +1280,29 @@ describe("RPC editor controller app-level action wiring", () => {
 		}
 	});
 
-	it("invokes onMessageForceSend via Super+Enter and a remapped binding", () => {
-		const onMessageForceSend = vi.fn();
+	it("invokes onMessageToggleDelivery via Super+Enter and a remapped binding", () => {
+		const onMessageToggleDelivery = vi.fn();
 		const controller = new RpcHostEditorController({
 			tui: fakeTui(),
 			theme: fakeEditorTheme(),
 			keybindings: createRpcKeybindingsManager({ env: {} }),
-			onMessageForceSend,
+			onMessageToggleDelivery,
 		});
 
+		controller.setText("unchanged draft");
 		controller.handleInput("\x1b[13;9u"); // super+enter (CSI-u)
-		expect(onMessageForceSend).toHaveBeenCalledTimes(1);
-		expect(controller.getText()).toBe("");
+		expect(onMessageToggleDelivery).toHaveBeenCalledTimes(1);
+		expect(controller.getText()).toBe("unchanged draft");
 
 		const agentDir = mkdtempSync(join(tmpdir(), "sumocode-rpc-force-send-remap-test-"));
 		try {
-			writeFileSync(join(agentDir, "keybindings.json"), JSON.stringify({ "app.message.forceSend": "ctrl+q" }), "utf8");
+			writeFileSync(join(agentDir, "keybindings.json"), JSON.stringify({ "app.message.toggleDelivery": "ctrl+q" }), "utf8");
 			const remapped = vi.fn();
 			const remappedController = new RpcHostEditorController({
 				tui: fakeTui(),
 				theme: fakeEditorTheme(),
 				keybindings: createRpcKeybindingsManager({ env: { PI_CODING_AGENT_DIR: agentDir } }),
-				onMessageForceSend: remapped,
+				onMessageToggleDelivery: remapped,
 			});
 
 			remappedController.handleInput("\x1b[13;9u");
@@ -1313,20 +1314,20 @@ describe("RPC editor controller app-level action wiring", () => {
 		}
 	});
 
-	it("keeps Shift+Enter as multiline input and never invokes force-send", () => {
-		const onMessageForceSend = vi.fn();
+	it("keeps Shift+Enter as multiline input and never toggles delivery", () => {
+		const onMessageToggleDelivery = vi.fn();
 		const controller = new RpcHostEditorController({
 			tui: fakeTui(),
 			theme: fakeEditorTheme(),
 			keybindings: createRpcKeybindingsManager({ env: {} }),
-			onMessageForceSend,
+			onMessageToggleDelivery,
 		});
 
 		controller.setText("hello");
 		controller.handleInput("\x1b[13;2u"); // shift+enter (CSI-u)
 
 		expect(controller.getText()).toBe("hello\n");
-		expect(onMessageForceSend).not.toHaveBeenCalled();
+		expect(onMessageToggleDelivery).not.toHaveBeenCalled();
 	});
 
 	it("invokes onMessageDequeue via Alt+Up and a remapped binding", () => {

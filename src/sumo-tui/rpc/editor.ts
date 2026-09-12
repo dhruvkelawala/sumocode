@@ -86,8 +86,8 @@ export interface RpcHostEditorControllerOptions extends RpcAutocompleteProviderO
 	readonly onThemeCycle?: () => void;
 	/** `app.message.followUp` (Alt+Enter by default). */
 	readonly onMessageFollowUp?: () => void;
-	/** `app.message.forceSend` (Super+Enter by default). */
-	readonly onMessageForceSend?: () => void;
+	/** `app.message.toggleDelivery` (Super+Enter by default). */
+	readonly onMessageToggleDelivery?: () => void;
 	/** `app.message.dequeue` (Alt+Up by default). */
 	readonly onMessageDequeue?: () => void;
 }
@@ -311,11 +311,9 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 		if (options.onThinkingCycle) this.editor.onAction("app.thinking.cycle", options.onThinkingCycle);
 		if (options.onToolsExpandToggle) this.editor.onAction("app.tools.expand", options.onToolsExpandToggle);
 		if (options.onMessageFollowUp) this.editor.onAction("app.message.followUp", options.onMessageFollowUp);
-		if (options.onMessageForceSend) {
-			// SAFETY: CustomEditor's action map is string-keyed at runtime and
-			// matches() consults our merged keybindings table, which defines
-			// app.message.forceSend; only the declared signature is narrow.
-			(this.editor.onAction as (action: string, handler: () => void) => void)("app.message.forceSend", options.onMessageForceSend);
+		if (options.onMessageToggleDelivery) {
+			// SAFETY: SumoCode custom actions use the runtime string-keyed map.
+			(this.editor.onAction as (action: string, handler: () => void) => void)("app.message.toggleDelivery", options.onMessageToggleDelivery);
 		}
 		if (options.onMessageDequeue) this.editor.onAction("app.message.dequeue", options.onMessageDequeue);
 		if (options.onThemeCycle) {
@@ -585,7 +583,7 @@ const APP_KEYBINDING_DEFINITIONS: KeybindingDefinitions = {
 	"app.session.toggleNamedFilter": { defaultKeys: "ctrl+n", description: "Toggle named session filter" },
 	"app.editor.external": { defaultKeys: "ctrl+g", description: "Open external editor" },
 	"app.message.followUp": { defaultKeys: "alt+enter", description: "Queue follow-up message" },
-	"app.message.forceSend": { defaultKeys: "super+enter", description: "Send next queued message as steering" },
+	"app.message.toggleDelivery": { defaultKeys: "super+enter", description: "Toggle steer/follow-up delivery" },
 	"app.message.dequeue": { defaultKeys: "alt+up", description: "Restore queued messages" },
 	"app.clipboard.pasteImage": { defaultKeys: process.platform === "win32" ? "alt+v" : "ctrl+v", description: "Paste image from clipboard" },
 	"app.session.new": { defaultKeys: [], description: "Start a new session" },

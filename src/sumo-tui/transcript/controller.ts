@@ -47,7 +47,7 @@ export interface TranscriptControllerChatSink {
 	/** Append one new message to the end of the pager without touching scroll/read state. */
 	addViewModel(message: ChatMessageViewModel, sourceIndex?: number): ChatSinkMutationResult;
 	/** Append a plain streamed text delta to the retained last message. */
-	appendToLast?(chunk: string): void;
+	appendToLast?(chunk: string): boolean;
 	/** Replace one rendered transcript node in place (scroll/read state preserved). */
 	replaceViewModelAt(index: number, message: ChatMessageViewModel): ChatSinkMutationResult;
 	/** Replace the pager's current last message in place (scroll/read state preserved). */
@@ -712,6 +712,7 @@ export class TranscriptController {
 		}
 		if (/[\\`*_{}\x5b\x5d<>#+=!|~\x2d]/u.test(deltaEvent.delta) || /(?:^|\n)\s*\d+[.)]\s/u.test(markdownProbe)) return false;
 
+		if (deltaEvent.delta.length > 0 && sink.call(this.options.chat, deltaEvent.delta) !== true) return false;
 		const message = eventMessage(record);
 		if (message === undefined) this.plainTextStreamChunks.push(deltaEvent.delta);
 		else {
@@ -719,7 +720,6 @@ export class TranscriptController {
 			this.plainTextStreamChunks = [];
 		}
 		if (deltaEvent.delta.length > 0) {
-			sink.call(this.options.chat, deltaEvent.delta);
 			this.revision += 1;
 			this.options.scheduleRender?.();
 		}

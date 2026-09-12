@@ -627,7 +627,7 @@ function fakeChatSink(): FakeChatSink {
 			archivedMessages: 0,
 		})),
 		addViewModel: vi.fn((_message: ChatMessageViewModel) => undefined),
-		appendToLast: vi.fn((_chunk: string) => undefined),
+		appendToLast: vi.fn((_chunk: string) => true),
 		replaceViewModelAt: vi.fn((_index: number, _message: ChatMessageViewModel) => undefined),
 		replaceLastWithViewModel: vi.fn((_message: ChatMessageViewModel) => undefined),
 		beginStreaming: vi.fn(),
@@ -880,6 +880,22 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		expect(chat.appendToLast.mock.calls.length / 500).toBe(1);
 		expect(materializedBeforeStream.messages.at(-1)?.blocks).toEqual([{ type: "markdown", text: "" }]);
 		expect(chatMessageViewModelToPlainText(controller.viewModel().messages.at(-1)!)).toBe("stream ".repeat(500));
+	});
+
+	it("falls back to a published draft when the retained sink cannot append", () => {
+		const chat = fakeChatSink();
+		chat.appendToLast.mockReturnValue(false);
+		const controller = new TranscriptController({ chat });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "draft", role: "assistant", content: [] } });
+		chat.replaceLastWithViewModel.mockClear();
+
+		const transcript = controller.handleAgentEvent({
+			type: "message_update",
+			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "retained" },
+		});
+
+		expect(chat.replaceLastWithViewModel).toHaveBeenCalledTimes(1);
+		expect(chatMessageViewModelToPlainText(transcript.messages.at(-1)!)).toBe("retained");
 	});
 
 	it("falls back to mapped block rendering when a stream gains markdown syntax", () => {

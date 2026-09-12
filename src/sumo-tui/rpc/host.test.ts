@@ -179,6 +179,30 @@ describe("Pi-native direct bash submission", () => {
 		expect(notifications.notify).toHaveBeenCalledWith(expect.stringContaining("write failed"), "error");
 	});
 
+	it("reports unknown acceptance when the child exits before write acknowledgement", async () => {
+		let rejectWritten!: (error: Error) => void;
+		let rejectResult!: (error: Error) => void;
+		const written = new Promise<void>((_resolve, reject) => { rejectWritten = reject; });
+		const result = new Promise<DirectBashResult>((_resolve, reject) => { rejectResult = reject; });
+		const editor = bashEditor("");
+		const notifications = { notify: vi.fn() };
+		const controller = new DirectBashController();
+		const submitting = submitRpcDirectBash("!sleep 60", {
+			editor,
+			controller,
+			controls: { runBash: () => ({ id: "bash-1", written, result }) },
+			notifications,
+			createId: () => "bash-1",
+		});
+		const exit = new RpcChildExitError("child exited", { code: 1, signal: null });
+		rejectWritten(exit);
+		rejectResult(exit);
+		await expect(submitting).resolves.toBe(true);
+		expect(editor.getText()).toBe("!sleep 60");
+		expect(controller.getSnapshot()).toMatchObject({ status: "lost", result: { error: "acceptance unknown" } });
+		expect(notifications.notify).toHaveBeenCalledWith(expect.stringContaining("acceptance unknown"), "warning");
+	});
+
 	it("restores an acknowledged command when the child exits before its response", async () => {
 		const editor = bashEditor("");
 		const notifications = { notify: vi.fn() };

@@ -465,8 +465,13 @@ export async function submitRpcDirectBash(message: string, deps: RpcDirectBashSu
 	try {
 		await request.written;
 	} catch (error) {
-		deps.controller.reset();
-		deps.notifications.notify(`bash write failed: ${truncateForNotification(error instanceof Error ? error.message : String(error))}`, "error");
+		if (error instanceof RpcChildExitError) {
+			deps.controller.fail("acceptance unknown");
+			deps.notifications.notify(`bash acceptance unknown: ${truncateForNotification(error.message)}`, "warning");
+		} else {
+			deps.controller.reset();
+			deps.notifications.notify(`bash write failed: ${truncateForNotification(error instanceof Error ? error.message : String(error))}`, "error");
+		}
 		return true;
 	}
 	deps.editor.addToHistory(message);

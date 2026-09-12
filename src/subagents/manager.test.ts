@@ -146,6 +146,22 @@ describe("SubagentManager", () => {
 		} finally { manager.disposeAll(); }
 	});
 
+	it("rejects a second reply while the first continuation is queued", async () => {
+		const { manager, emitters } = deferredBackend();
+		try {
+			const original = await manager.spawn(makeTask("original"));
+			if (!("id" in original)) throw new Error("unexpected capacity refusal");
+			emitters.get(original.id)?.({ kind: "session-located", sessionFilePath: "/tmp/session/child.jsonl" });
+			emitters.get(original.id)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+			await vi.waitFor(() => expect(manager.get(original.id)?.status).toBe("done"));
+			for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await manager.spawn(makeTask(`busy-${index}`));
+
+			const queued = await manager.reply(original.id, "first reply");
+			expect(queued).toMatchObject({ status: "queued", sessionFilePath: "/tmp/session/child.jsonl" });
+			await expect(manager.reply(original.id, "second reply")).rejects.toThrow("already in flight");
+		} finally { manager.disposeAll(); }
+	});
+
 	it("rejects replies to running, visible, and sessionless children", async () => {
 		const { manager, emitters } = deferredBackend();
 		try {

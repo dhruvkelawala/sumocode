@@ -44,6 +44,7 @@ describe("sumocode RPC scroll-during-stream integration", () => {
 			// slow enough to reliably observe an intermediate streaming state
 			// between chunks instead of racing straight to completion.
 			streamChunks: ["streaming chunk one ", "streaming chunk two ", "streaming chunk three ", "streaming chunk four "],
+			streamWireDeltas: true,
 			chunkDelayMs: 500,
 			// Each chunk also renames the session to "stream-chunk-<N>-landed",
 			// giving this test an always-visible chrome sentinel for chunk

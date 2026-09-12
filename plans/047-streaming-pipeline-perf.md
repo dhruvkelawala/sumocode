@@ -11,6 +11,12 @@
 
 ## Status
 
+> **Superseded by [#383](https://github.com/dhruvkelawala/sumocode/issues/383).**
+> This plan removed history-sized diff-key scans and bounded pager objects, but
+> it still materialized and re-rendered the growing draft on every delta. #383
+> completes the common indexed plain-text path with lazy snapshots and retained
+> boundary appends.
+
 - **Priority**: P2
 - **Effort**: M
 - **Risk**: MED

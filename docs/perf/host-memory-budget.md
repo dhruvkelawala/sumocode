@@ -68,6 +68,28 @@ What the two runs show is the split the issue asked for — the idle baseline is
 flat and session-scoped retention is small, while the unbounded shape that
 remains is the per-delta re-render of a growing message.
 
+### #383 indexed-delta replay
+
+The #383 follow-up replayed the same **689 KiB** final assistant text as 300
+indexed `text_delta` events, 100 ms apart, through a real 120×40 RPC host. The
+base and optimized runs used the same generated child and the `heap` sampler
+from this document; each was also checked after the authoritative
+`message_end`. Numbers are sample maxima, not CI thresholds:
+
+| Revision | `heapUsed` peak | in-process `rss` peak | settled `heapUsed` |
+| --- | ---: | ---: | ---: |
+| base `d99faaeb` | 169.6 MB | 470.4 MB | 69.9 MB |
+| #383 optimized | 126.8 MB | 266.0 MB | 52.9 MB |
+
+The earlier 326.2/348.4 MB capture above used legacy cumulative update frames,
+so it remains the motivating observation rather than a like-for-like delta-wire
+comparison. The indexed replay is the reproducible before/after pair: peak heap
+fell 25%, peak RSS fell 43%, and the stream performed one retained append per
+delta with zero committed-prefix remaps or snapshot-envelope copies. The test
+suite gates those operation counts and bounds total text handed to
+`Intl.Segmenter`; elapsed time and memory remain report-only because both vary
+with host load and V8 collection timing.
+
 ## Top retainers (idle snapshot, t = 606 s, 79.5 MB heap)
 
 Retained sizes from the dominator tree of a 48.6 MB `v8.writeHeapSnapshot()`

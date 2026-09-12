@@ -1491,6 +1491,7 @@ describe("createLazyChatSink (B9 host wiring)", () => {
 		// Must not throw even with no live pager to forward to.
 		expect(() => sink.addViewModel(message)).not.toThrow();
 		expect(() => sink.replaceViewModelAt(0, message)).not.toThrow();
+		expect(() => sink.appendToLast?.("delta")).not.toThrow();
 		expect(() => sink.replaceLastWithViewModel(message)).not.toThrow();
 		expect(() => sink.beginStreaming()).not.toThrow();
 		expect(() => sink.endStreaming()).not.toThrow();
@@ -1509,6 +1510,7 @@ describe("createLazyChatSink (B9 host wiring)", () => {
 			replaceViewModels: vi.fn(() => ({ sourceMessages: 1, acceptedMessages: 1, renderedMessages: 1, archivedMessages: 0 })),
 			addViewModel: vi.fn(),
 			replaceViewModelAt: vi.fn(),
+			appendToLast: vi.fn(),
 			replaceLastWithViewModel: vi.fn(),
 			beginStreaming: vi.fn(),
 			endStreaming: vi.fn(),
@@ -1518,6 +1520,7 @@ describe("createLazyChatSink (B9 host wiring)", () => {
 
 		sink.addViewModel(message);
 		sink.replaceViewModelAt(0, message);
+		sink.appendToLast?.("delta");
 		sink.replaceLastWithViewModel(message);
 		sink.replaceViewModels([message]);
 		sink.beginStreaming();
@@ -1525,6 +1528,7 @@ describe("createLazyChatSink (B9 host wiring)", () => {
 
 		expect(pager.addViewModel).toHaveBeenCalledWith(message);
 		expect(pager.replaceViewModelAt).toHaveBeenCalledWith(0, message);
+		expect(pager.appendToLast).toHaveBeenCalledWith("delta");
 		expect(pager.replaceLastWithViewModel).toHaveBeenCalledWith(message);
 		expect(pager.replaceViewModels).toHaveBeenCalledWith([message]);
 		expect(pager.beginStreaming).toHaveBeenCalledTimes(1);

@@ -398,6 +398,7 @@ export function createLazyChatSink(getRuntime: () => { getChatSink(): Transcript
 			return sourceIndex === undefined ? sink?.addViewModel(message) : sink?.addViewModel(message, sourceIndex);
 		},
 		replaceViewModelAt: (index, message) => getRuntime()?.getChatSink()?.replaceViewModelAt(index, message),
+		appendToLast: (chunk) => getRuntime()?.getChatSink()?.appendToLast?.(chunk),
 		replaceLastWithViewModel: (message, sourceIndex) => {
 			const sink = getRuntime()?.getChatSink();
 			return sourceIndex === undefined

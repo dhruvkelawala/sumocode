@@ -191,7 +191,9 @@ describe("subagent result delivery", () => {
 		// SAFETY: Array.isArray(widget) is asserted above, so the string[] cast is checked.
 		expect((widget as string[]).join("\n")).toContain("1 running");
 		// SAFETY: Array.isArray(widget) is asserted above, so the string[] cast is checked.
-		expect((widget as string[]).join("\n")).toContain("research sa-research-1");
+		expect((widget as string[]).join("\n")).toContain("research sa-1");
+		// SAFETY: Array.isArray(widget) is asserted above, so the string[] cast is checked.
+		expect((widget as string[]).join("\n")).not.toContain("sa-research-1");
 	});
 
 	it("renders queued count and clears the widget on shutdown", async () => {

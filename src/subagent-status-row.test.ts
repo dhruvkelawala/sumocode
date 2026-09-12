@@ -13,6 +13,14 @@ describe("shortId", () => {
 		expect(shortId("sa-1")).toBe("sa-1");
 	});
 
+	it("collapses a readable slug id to its sequence suffix", () => {
+		expect(shortId("sa-rebase-471-herdr-panes-2")).toBe("sa-2");
+	});
+
+	it("collapses a readable slug id with a retention namespace", () => {
+		expect(shortId("sa-rebase-471-herdr-panes-2-a1b2")).toBe("sa-2");
+	});
+
 	it("passes non-sa ids through unchanged", () => {
 		expect(shortId("task-7")).toBe("task-7");
 	});
@@ -62,6 +70,93 @@ describe("renderSubagentStatusRow", () => {
 		expect(plain(row)).toContain("one sa-1 0s");
 		expect(plain(row)).toContain("two sa-2 0s");
 		expect(plain(row)).not.toContain("7e8fc89b");
+	});
+
+	it("reads the counter after the manager's own slug, not the last numeric segment", () => {
+		const [row] = renderSubagentStatusRow({
+			width: 200,
+			running: [
+				// slug `fix-471` + sequence 1000: the trailing 4 digits are the counter
+				{ id: "sa-fix-471-1000", title: "fix 471", ageMs: 1_000 },
+				// slug `a` + sequence 1 + all-digit retention namespace
+				{ id: "sa-a-1-8650", title: "a", ageMs: 2_000 },
+			],
+			queuedCount: 0,
+		});
+		const text = plain(row);
+		expect(text).toContain("fix 471 sa-1000 1s");
+		expect(text).toContain("a sa-1 2s");
+	});
+
+	it("falls back to the id shape when the title no longer reproduces the slug", () => {
+		// Adopted retained records carry their id as the title.
+		const [row] = renderSubagentStatusRow({
+			width: 200,
+			running: [{ id: "sa-research-1-a1b2", title: "sa-research-1-a1b2", ageMs: 1_000 }],
+			queuedCount: 0,
+		});
+		expect(plain(row)).toContain("sa-research-1-a1b2 sa-1 1s");
+	});
+
+	it("disambiguates colliding readable ids with their retention namespace", () => {
+		const [row] = renderSubagentStatusRow({
+			width: 200,
+			running: [
+				{ id: "sa-old-task-1-a1b2", title: "old", ageMs: 1_000 },
+				{ id: "sa-new-task-1-c3d4", title: "new", ageMs: 2_000 },
+				{ id: "sa-fresh-task-2", title: "fresh", ageMs: 3_000 },
+			],
+			queuedCount: 0,
+		});
+		const text = plain(row);
+		expect(text).toContain("old sa-1-a1b2 1s");
+		expect(text).toContain("new sa-1-c3d4 2s");
+		// Only colliding ids widen; the unambiguous sibling keeps the short form.
+		expect(text).toContain("fresh sa-2 3s");
+	});
+
+	it("keeps the counter, age, and role at width 60 for a long readable id", () => {
+		for (const id of ["sa-rebase-471-herdr-panes-2", "sa-rebase-471-herdr-panes-2-a1b2"]) {
+			const [row] = renderSubagentStatusRow({
+				width: 60,
+				running: [{ id, roleId: "implement-cheap", title: "rebase 471 herdr panes", ageMs: 13 * 60_000 }],
+				queuedCount: 0,
+			});
+			const text = plain(row);
+			expect(text).toBe("  ◈ subagents · 1 running · rebase… sa-2 implement-cheap 13m");
+			expect(text.length).toBe(60);
+		}
+	});
+
+	it("keeps the leading child's detail when more children follow at width 60", () => {
+		const [row] = renderSubagentStatusRow({
+			width: 60,
+			running: [
+				{ id: "sa-rebase-471-herdr-panes-2", roleId: "implement-cheap", title: "rebase 471 herdr panes", ageMs: 13 * 60_000 },
+				{ id: "sa-fix-flaky-tests-3", roleId: "research", title: "fix flaky tests", ageMs: 40_000 },
+			],
+			queuedCount: 0,
+		});
+		const text = plain(row);
+		expect(text.length).toBe(60);
+		expect(text).toContain("2 running");
+		expect(text).toContain("rebase… sa-2 implement-cheap 13m");
+		expect(text).not.toContain("rebase-471");
+		expect(text).not.toContain("sa-fix-flaky-tests-3");
+	});
+
+	it("renders every child's compact id when the row is wide", () => {
+		const [row] = renderSubagentStatusRow({
+			width: 200,
+			running: [
+				{ id: "sa-rebase-471-herdr-panes-2", roleId: "implement-cheap", title: "rebase 471 herdr panes", ageMs: 13 * 60_000 },
+				{ id: "sa-fix-flaky-tests-3", roleId: "research", title: "fix flaky tests", ageMs: 40_000 },
+			],
+			queuedCount: 0,
+		});
+		const text = plain(row);
+		expect(text).toContain("rebase 471 herdr panes sa-2 implement-cheap 13m");
+		expect(text).toContain("fix flaky tests sa-3 research 40s");
 	});
 
 	it("disambiguates colliding short ids with a namespace fragment", () => {

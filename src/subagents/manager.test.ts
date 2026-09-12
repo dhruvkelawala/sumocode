@@ -492,6 +492,23 @@ describe("SubagentManager", () => {
 		await vi.waitFor(() => expect(manager.get("sa-0-1")?.status).toBe("done"));
 	});
 
+	it("settles a child when a synchronous event subscription throws", async () => {
+		const interrupt = vi.fn();
+		const manager = new SubagentManager(() => ({
+			events: () => { throw new Error("subscription failed"); },
+			interrupt,
+		}), { captureGitContext: async () => ({ baseRef: "base-ref" }), buildCompletionManifest: fakeManifestBuilder });
+
+		const child = await manager.spawn(makeTask("worker"));
+		if (child.status === "at_capacity") throw new Error("unexpected capacity refusal");
+
+		await vi.waitFor(() => expect(manager.get(child.id)).toMatchObject({
+			status: "error",
+			errorText: "subagent event stream failed: subscription failed",
+		}));
+		expect(interrupt).toHaveBeenCalledOnce();
+	});
+
 	it("contains async iterator rejection", async () => {
 		const unhandled: unknown[] = [];
 		// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Node's unhandledRejection event exposes arbitrary rejection values.

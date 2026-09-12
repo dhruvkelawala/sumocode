@@ -1220,15 +1220,8 @@ export class SubagentManager {
 
 	private consumeEvents(id: string, events: SpawnedChild["events"]): void {
 		const emit = (event: SubagentEvent) => this.fold(id, event);
-		if (!(Symbol.asyncIterator in events)) {
-			events(emit);
-			return;
-		}
-		const consume = async (): Promise<void> => {
-			for await (const event of events) emit(event);
-		};
-		// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Promise rejection boundary: backend async iterators may reject with any JavaScript value.
-		void consume().catch((error: unknown) => {
+		// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Backend subscriptions and async iterators may fail with any JavaScript value.
+		const fail = (error: unknown): void => {
 			const current = this.snapshots.get(id);
 			if (!current || isSettled(current)) return;
 			const message = error instanceof Error ? error.message : String(error);
@@ -1248,7 +1241,19 @@ export class SubagentManager {
 					// Diagnostics must not reopen a contained backend failure.
 				}
 			}
-		});
+		};
+		if (!(Symbol.asyncIterator in events)) {
+			try {
+				events(emit);
+			} catch (error) {
+				fail(error);
+			}
+			return;
+		}
+		const consume = async (): Promise<void> => {
+			for await (const event of events) emit(event);
+		};
+		void consume().catch(fail);
 	}
 
 	/**

@@ -284,7 +284,7 @@ last:    056 claude-oauth-401 (user-deferred to end)
 | 044 | [Input router interrupt fixes](044-input-router-interrupt-fixes.md) | P2 | M | — | DONE (reviewer-approved) — `advisor/044-input-router-interrupt-fixes` `eabbf5a`; paste-then-Ctrl-C fixed; Apple Terminal Shift+Enter via guarded lazy pi-tui native probe (case a) with fallback stub |
 | 045 | [Diagnostics file hardening](045-diagnostics-file-hardening.md) | P2 | S | 044 | DONE (reviewer-approved) — `advisor/045-diagnostics-file-hardening` `392648a`; 0600 trace file, selection previews dropped |
 | 046 | [extension_ui protocol hardening](046-extension-ui-protocol-hardening.md) | P1 | M | — | DONE (reviewer-approved) — `advisor/046-extension-ui-protocol-hardening` `ffeae01`; multiline editor(), overlays.drain() on teardown, logged handler errors; 91 tests |
-| 047 | [Streaming pipeline perf](047-streaming-pipeline-perf.md) | P2 | M | 043 | DONE (reviewer-approved) — `advisor/047-streaming-pipeline-perf` `12bb229`; WeakMap key memo + op-hint diff + bounded archive dispose |
+| 047 | [Streaming pipeline perf](047-streaming-pipeline-perf.md) | P2 | M | 043 | DONE (partial; superseded by [#383](https://github.com/dhruvkelawala/sumocode/issues/383)) — `advisor/047-streaming-pipeline-perf` `12bb229`; bounded diff-key scans and pager objects, but not growing-draft materialization/rendering |
 | 048 | [/resume bounded metadata](048-resume-bounded-metadata.md) | P2 | M | 042 | DONE (reviewer-approved) — `advisor/048-resume-bounded-metadata` `22d4303`; byte-capped scan + N+ labels + concurrency 8 |
 | 049 | [Renderer characterization tests](049-renderer-characterization-tests.md) | P2 | M | — | DONE (reviewer-approved) — `advisor/049-renderer-characterization-tests` `144acce`; 6 mutation-tested renderer contracts |
 | 050 | [Indicator narrow invalidation](050-indicator-narrow-invalidation.md) | P2 | M | 049 | DONE (reviewer-approved) — `advisor/050-indicator-narrow-invalidation` `7d2dbff`; scoped repaintRegion, no relayout on tick, overlay/selection fallback, frame convergence proven |
@@ -370,7 +370,7 @@ Startup-perf findings considered and rejected (2026-07-08, so nobody re-audits t
   cheap, post-startup only.
 - **SumoCode extension slows the child**: rejected — child boot measured identical with
   and without `-e src/extension.ts`; the cost is Pi itself (→ 063).
-- **Streaming/resume pipeline perf**: already handled (plans 047/048, DONE).
+- **Streaming/resume pipeline perf**: plan 048 and plan 047's diff/pager bounds are DONE; [#383](https://github.com/dhruvkelawala/sumocode/issues/383) supersedes 047's total per-delta complexity claim.
 
 ### Audit findings not planned (2026-07-07, for the record)
 

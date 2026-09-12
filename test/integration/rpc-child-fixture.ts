@@ -20,6 +20,8 @@ export interface RpcChildFixtureOptions {
 	 * (e.g. scrolling up mid-stream) rather than just start/end.
 	 */
 	readonly streamChunks?: readonly string[];
+	/** Emit Plan 089's indexed delta wire shape instead of legacy cumulative updates. */
+	readonly streamWireDeltas?: boolean;
 	readonly chunkDelayMs?: number;
 	/**
 	 * When true (with `streamChunks`), each streamed chunk N additionally
@@ -72,6 +74,7 @@ let initialHydrationRacePending = ${options.initialHydrationRace ? "true" : "fal
 const initialHydrationDelayMs = ${JSON.stringify(options.initialHydrationDelayMs ?? 0)};
 const oldSessionAgentStartDuringChange = ${options.oldSessionAgentStartDuringChange ? "true" : "false"};
 const streamChunks = ${JSON.stringify(options.streamChunks ?? null)};
+const streamWireDeltas = ${options.streamWireDeltas ? "true" : "false"};
 const chunkDelayMs = ${JSON.stringify(options.chunkDelayMs ?? 500)};
 const streamChunkSentinels = ${options.streamChunkSentinels ? "true" : "false"};
 const compactDelayMs = ${JSON.stringify(options.compactDelayMs ?? 250)};
@@ -127,11 +130,10 @@ function logCommand(command) {
 
 function finishPrompt(command, assistantText) {
 	isStreaming = false;
-	messages = [
-		...messages,
-		{ id: "fixture-assistant-" + messages.length, role: "assistant", content: assistantText }
-	];
-	write({ type: "agent_end", messages, willRetry: false });
+	const assistant = { id: "fixture-assistant-" + messages.length, role: "assistant", content: assistantText };
+	messages = [...messages, assistant];
+	if (streamWireDeltas) write({ type: "message_end", message: assistant });
+	write({ type: "agent_end", messages: streamWireDeltas ? [messages.at(-2), assistant] : messages, willRetry: false });
 	setTimeout(() => write({ type: "agent_settled" }), settleDelayMs);
 }
 
@@ -241,6 +243,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		];
 		isStreaming = true;
 		write({ type: "agent_start" });
+		if (streamChunks && streamWireDeltas) write({ type: "message_start", message: { id: "fixture-draft", role: "assistant", content: [] } });
 		for (const request of extensionUiRequests) write(request);
 		extensionUiRequests = [];
 		write(response(command, {}));
@@ -252,9 +255,12 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 					finishPrompt(command, text);
 					return;
 				}
-				text += streamChunks[index];
+				const chunk = streamChunks[index];
+				text += chunk;
 				index += 1;
-				write({ type: "message_update", message: { id: "fixture-draft", role: "assistant", content: text } });
+				write(streamWireDeltas
+					? { type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: chunk } }
+					: { type: "message_update", message: { id: "fixture-draft", role: "assistant", content: text } });
 				if (streamChunkSentinels) write({ type: "session_info_changed", name: "stream-chunk-" + index + "-landed" });
 				setTimeout(pump, chunkDelayMs);
 			};

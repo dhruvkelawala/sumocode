@@ -452,6 +452,7 @@ export class TranscriptController {
 						transcriptDirty = true;
 					}
 					this.draftMessage = undefined;
+					this.plainTextStreamChunks = undefined;
 				} else {
 					this.draftMessage = message;
 				}
@@ -648,6 +649,7 @@ export class TranscriptController {
 		if (
 			record.type !== "message_update"
 			|| !sink
+			|| this.draftMessage === undefined
 			|| this.plainTextStreamChunks === undefined
 			|| deltaEvent?.contentIndex !== 0
 		) return false;

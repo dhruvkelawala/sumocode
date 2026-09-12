@@ -5,6 +5,7 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import type { EditorImageAttachment } from "../../cathedral/editor-draft-state.js";
 
 export const MAX_RPC_IMAGE_BYTES = 3 * 1024 * 1024;
+export const MAX_RPC_IMAGE_TOTAL_BYTES = 5 * 1024 * 1024;
 
 interface LoadRpcImagesOptions {
 	readonly cwd?: string;
@@ -24,10 +25,15 @@ export async function loadRpcImages(
 	options: LoadRpcImagesOptions = {},
 ): Promise<ImageContent[]> {
 	const images: ImageContent[] = [];
+	let totalBytes = 0;
 	for (const attachment of attachments) {
 		const path = resolveImagePath(attachment.path, options.cwd ?? process.cwd(), options.home ?? homedir());
 		const maxBytes = options.maxBytes ?? MAX_RPC_IMAGE_BYTES;
 		const bytes = await readBoundedImage(path, attachment, maxBytes);
+		totalBytes += bytes.byteLength;
+		if (totalBytes > MAX_RPC_IMAGE_TOTAL_BYTES) {
+			throw new RpcImageLoadError(attachment, `images exceed ${MAX_RPC_IMAGE_TOTAL_BYTES} byte total limit`);
+		}
 		const detected = detectImageMime(bytes);
 		const expected = mimeForExtension(extname(path));
 		if (!detected || !expected) throw new RpcImageLoadError(attachment, "file does not contain a supported image");

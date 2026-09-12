@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { MAX_RPC_IMAGE_BYTES, loadRpcImages } from "./image-content.js";
+import { MAX_RPC_IMAGE_BYTES, MAX_RPC_IMAGE_TOTAL_BYTES, loadRpcImages } from "./image-content.js";
 
 const roots: string[] = [];
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
@@ -40,6 +40,19 @@ describe("loadRpcImages", () => {
 		await expect(loadRpcImages([{ token: "[Image 1]", path: `./${name}` }], { cwd })).rejects.not.toThrow("secret-image-payload");
 	});
 
+	it("loads multiple images while keeping the aggregate below the RPC frame ceiling", async () => {
+		const cwd = root();
+		writeFileSync(join(cwd, "one.png"), PNG);
+		writeFileSync(join(cwd, "two.png"), PNG);
+
+		const images = await loadRpcImages([
+			{ token: "[Image 1]", path: "./one.png" },
+			{ token: "[Image 2]", path: "./two.png" },
+		], { cwd });
+		expect(images).toHaveLength(2);
+		expect(images.map((entry) => entry.data)).toEqual([PNG.toString("base64"), PNG.toString("base64")]);
+	});
+
 	it("rejects an oversized image before reading it", async () => {
 		const cwd = root();
 		const path = join(cwd, "huge.png");
@@ -48,7 +61,8 @@ describe("loadRpcImages", () => {
 		await expect(loadRpcImages([{ token: "[Image 1]", path }], { cwd, maxBytes: PNG.length - 1 })).rejects.toThrow(`exceeds ${PNG.length - 1} byte limit`);
 	});
 
-	it("keeps the conservative limit below an unbounded read", () => {
+	it("keeps conservative per-image and aggregate limits below the RPC frame ceiling", () => {
 		expect(MAX_RPC_IMAGE_BYTES).toBe(3 * 1024 * 1024);
+		expect(MAX_RPC_IMAGE_TOTAL_BYTES).toBe(5 * 1024 * 1024);
 	});
 });

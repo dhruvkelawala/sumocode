@@ -40,8 +40,10 @@ export type ReadinessState = "boot" | "input" | "app";
 
 export const READINESS_EVENT_BY_STATE = {
 	boot: "boot_screen_frame",
-	input: "input_ready",
-	app: "app_ready",
+	// editor_ready marks editable input; stable_chrome_ready is the owned-shell
+	// mark the removed app_ready alias used to duplicate.
+	input: "editor_ready",
+	app: "stable_chrome_ready",
 } as const satisfies Record<ReadinessState, string>;
 
 export interface TimeoutEvidenceInput {

@@ -343,9 +343,9 @@ describe("verification harness v2 seam", () => {
 		const root = createRunRoot();
 		const diag = join(root, "diag.jsonl");
 		writeFileSync(diag, `${JSON.stringify({ event: "boot_screen_frame" })}\n`);
-		setTimeout(() => writeFileSync(diag, `${JSON.stringify({ event: "input_ready" })}\n`, { flag: "a" }), 20);
+		setTimeout(() => writeFileSync(diag, `${JSON.stringify({ event: "editor_ready" })}\n`, { flag: "a" }), 20);
 
-		await expect(waitForDiagnosticReadiness(diag, "input", 500)).resolves.toMatchObject({ event: "input_ready" });
+		await expect(waitForDiagnosticReadiness(diag, "input", 500)).resolves.toMatchObject({ event: "editor_ready" });
 	});
 
 	it("classifies no orphans and refuses --fix from a malformed process table", async () => {

@@ -350,13 +350,7 @@ export class RpcHostRuntime {
 		this.editorReadyMarked = true;
 		const cols = terminalColumns(this.output);
 		const rows = terminalRows(this.output);
-		for (const event of [
-			"editor_ready",
-			// Deprecated compatibility alias for one release.
-			"input_ready",
-		]) {
-			logDiagnostic(event, { surface: "rpc_host", cols, rows });
-		}
+		logDiagnostic("editor_ready", { surface: "rpc_host", cols, rows });
 	}
 
 	public async start(): Promise<void> {
@@ -425,13 +419,7 @@ export class RpcHostRuntime {
 		this.chromeStableMarked = true;
 		const cols = terminalColumns(this.output);
 		const rows = terminalRows(this.output);
-		for (const event of [
-			// Deprecated compatibility alias for one release.
-			"app_ready",
-			"stable_chrome_ready",
-		]) {
-			logDiagnostic(event, { surface: "rpc_host", cols, rows });
-		}
+		logDiagnostic("stable_chrome_ready", { surface: "rpc_host", cols, rows });
 	}
 
 	/** Marks command dispatch ready after hydration and deferred actions settle. */

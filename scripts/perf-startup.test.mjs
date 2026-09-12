@@ -12,7 +12,7 @@ describe("startup RPC readiness classification", () => {
 });
 
 describe("startup readiness timeline", () => {
-	it("measures editor readiness, command readiness, and their gap from the new events", () => {
+	it("measures editor readiness, command readiness, and their gap from the truthful events", () => {
 		expect(readinessTimeline([
 			{ event: "editor_ready", ts: 110 },
 			{ event: "input_ready", ts: 111 },
@@ -21,11 +21,11 @@ describe("startup readiness timeline", () => {
 		], 100)).toEqual({ editorReadyMs: 10, commandReadyMs: 160, editorToCommandGapMs: 150 });
 	});
 
-	it("uses the one-release aliases only for an old event stream", () => {
+	it("ignores the removed alias events", () => {
 		expect(readinessTimeline([
 			{ event: "input_ready", ts: 115 },
 			{ event: "app_ready", ts: 225 },
-		], 100)).toEqual({ editorReadyMs: 15, commandReadyMs: 125, editorToCommandGapMs: 110 });
+		], 100)).toEqual({ editorReadyMs: undefined, commandReadyMs: undefined, editorToCommandGapMs: undefined });
 		expect(readinessTimeline([
 			{ event: "editor_ready", ts: 115 },
 			{ event: "app_ready", ts: 225 },
@@ -34,15 +34,13 @@ describe("startup readiness timeline", () => {
 });
 
 describe("startup timeline completion", () => {
-	it("settles from the permanent events without requiring one-release aliases", () => {
+	it("settles from the permanent events", () => {
 		expect(startupTimelineComplete({
 			bootScreenFrameMs: 10,
 			editorReadyMs: 11,
 			commandReadyMs: 20,
 			editorToCommandGapMs: 9,
 			stableChromeMs: 19,
-			appReadyMs: undefined,
-			inputReadyMs: undefined,
 		})).toBe(true);
 	});
 

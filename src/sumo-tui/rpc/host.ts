@@ -441,7 +441,7 @@ export interface RpcDirectBashSubmitDependencies {
 	readonly controller: DirectBashController;
 	readonly notifications: ErrorNotifier;
 	readonly ownerSessionId?: () => string | undefined;
-	readonly rehydrateTranscript?: (command: string, excludeFromContext: boolean, result: DirectBashResult, startedAt: number) => Promise<boolean>;
+	readonly rehydrateTranscript?: (id: string, command: string, excludeFromContext: boolean, result: DirectBashResult, startedAt: number) => Promise<boolean>;
 	readonly createId?: () => string;
 }
 
@@ -502,7 +502,7 @@ export async function submitRpcDirectBash(message: string, deps: RpcDirectBashSu
 		const startedAt = deps.controller.getSnapshot()?.createdAt ?? 0;
 		deps.controller.complete(id, settled.result);
 		try {
-			const durable = await deps.rehydrateTranscript?.(parsed.command, parsed.excludeFromContext, settled.result, startedAt) ?? false;
+			const durable = await deps.rehydrateTranscript?.(id, parsed.command, parsed.excludeFromContext, settled.result, startedAt) ?? false;
 			if (durable && deps.controller.getSnapshot()?.id === `rpc-bash:${id}`) deps.controller.reset();
 		} catch (error) {
 			deps.notifications.notify(`bash history refresh failed: ${truncateForNotification(error instanceof Error ? error.message : String(error))}`, "warning");
@@ -1224,7 +1224,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 	 * be consumed by the pre-hydration scheduler generation. Keeping this gate
 	 * at submit (not typing) preserves early editing without dropping a prompt.
 	 */
-	let rehydrateDirectBashTranscript = async (_command: string, _excludeFromContext: boolean, _result: DirectBashResult, _startedAt: number): Promise<boolean> => false;
+	let rehydrateDirectBashTranscript = async (_id: string, _command: string, _excludeFromContext: boolean, _result: DirectBashResult, _startedAt: number): Promise<boolean> => false;
 	const submitDirectBash = (message: string): Promise<boolean> => submitRpcDirectBash(message, {
 		editor,
 		controls,
@@ -1363,16 +1363,30 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 			return readRpcMessages();
 		}
 	};
-	const readTranscript = async () => transcriptPump.replaceFromMessages(await readTranscriptMessages());
-	const rehydrateTranscript = async (): Promise<void> => {
-		const transcript = await readTranscript();
-		runtime?.update({ transcript, transcriptRevision: transcriptPump.getRevision() });
+	interface PendingDirectBashReconciliation {
+		readonly id: string;
+		readonly command: string;
+		readonly excludeFromContext: boolean;
+		readonly result: DirectBashResult;
+		readonly startedAt: number;
+	}
+	let pendingDirectBashReconciliation: PendingDirectBashReconciliation | undefined;
+	const reconcileDurableDirectBash = (messages: RpcResponseData<"get_messages">["messages"]): void => {
+		const pending = pendingDirectBashReconciliation;
+		if (!pending || !messages.some((message) => matchesDurableDirectBash(message, pending.command, pending.excludeFromContext, pending.result, pending.startedAt))) return;
+		pendingDirectBashReconciliation = undefined;
+		if (directBash.getSnapshot()?.id === `rpc-bash:${pending.id}`) directBash.reset();
 	};
-	rehydrateDirectBashTranscript = async (command, excludeFromContext, result, startedAt) => {
+	const rehydrateTranscript = async (): Promise<void> => {
 		const messages = await readTranscriptMessages();
 		const transcript = transcriptPump.replaceFromMessages(messages);
+		reconcileDurableDirectBash(messages);
 		runtime?.update({ transcript, transcriptRevision: transcriptPump.getRevision() });
-		return messages.some((message) => matchesDurableDirectBash(message, command, excludeFromContext, result, startedAt));
+	};
+	rehydrateDirectBashTranscript = async (id, command, excludeFromContext, result, startedAt) => {
+		pendingDirectBashReconciliation = { id, command, excludeFromContext, result, startedAt };
+		await rehydrateTranscript();
+		return false;
 	};
 	const processAgentEvent = (event: AgentSessionEvent): void => {
 		const transcript = transcriptPump.handleAgentEvent(event);
@@ -1384,6 +1398,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 	const beginSessionChange = (): void => {
 		if (!sessionEvents.begin()) return;
 		directBash.reset();
+		pendingDirectBashReconciliation = undefined;
 		queueOwnerGeneration += 1;
 		sessionHydrationRetrying = false;
 		deferActivityRuntimeUpdate = true;

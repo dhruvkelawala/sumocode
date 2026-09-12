@@ -358,7 +358,6 @@ const FIXTURES = {
 	},
 };
 
-// Native-queue parity reuses the settled transcript; only chrome state differs.
 for (const [id, status, output, summary] of [
 	["direct-bash-running", "running", "building…", "running"],
 	["direct-bash-succeeded", "succeeded", "42 tests passed", "exit 0"],
@@ -388,6 +387,7 @@ for (const [id, status, output, summary] of [
 	};
 }
 
+// Native-queue parity reuses the settled transcript; only chrome state differs.
 FIXTURES["native-queues-followup"] = FIXTURES["completed-active"];
 
 export async function captureFixtureScenario(scenario) {

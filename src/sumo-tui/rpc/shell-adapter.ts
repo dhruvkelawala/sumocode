@@ -27,6 +27,7 @@ import { renderIndicator, shouldInstallWorkingIndicator } from "../../working-in
 import { createSplashTree, defaultSplashSnapshot, type SplashTree } from "../cathedral/splash-tree.js";
 import { loadYoga, type Yoga } from "../layout/yoga.js";
 import type { CellBuffer } from "../render/buffer.js";
+import type { HeapSampleCounters } from "../runtime/heap-monitor.js";
 import type { ShellOverlayEntry, ShellRenderable, ShellTerminalSessionOwner, ShellViewport } from "../shell/contracts.js";
 import { RetainedShellRenderer } from "../shell/retained-shell-renderer.js";
 import type { TranscriptControllerChatSink } from "../transcript/controller.js";
@@ -396,6 +397,17 @@ export class RpcShellAdapter {
 
 	public getTranscript(): TranscriptViewModel {
 		return this.transcript;
+	}
+
+	/** Counters for the host's `heap` diagnostic (#521). */
+	public getHeapCounters(): HeapSampleCounters {
+		let transcriptBlocks = 0;
+		for (const message of this.transcript.messages) transcriptBlocks += message.blocks.length;
+		return {
+			transcriptBlocks,
+			viewModelRows: this.chat.scrollBox.scrollHeight,
+			...this.renderer.getFrameStats(),
+		};
 	}
 
 	public isActive(): boolean {

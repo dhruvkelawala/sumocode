@@ -324,6 +324,9 @@ DIAGNOSTICS EVENTS
       mouse_batch            parsed SGR mouse bytes per stdin batch
       mouse_dispatch         chat hit-testing and scroll offset transitions
       pi_event               Pi lifecycle events observed by SumoCode
+      heap                   host rss/heap/external + transcript blocks, view-model rows,
+                             retained frames and frame clones, sampled every 10s (#521)
+      heap_snapshot          SIGUSR2 wrote a V8 heap snapshot to SUMOCODE_HEAP_SNAPSHOT
 
   Event payloads are truncated/sanitized so logs stay readable and diagnostics
   never interrupt the interactive session.
@@ -344,6 +347,11 @@ ENVIRONMENT
   SUMO_TUI_DEBUG
       Enables extra stderr debug messages in SumoTUI internals. Automatically
       set to 1 by --debug unless already set.
+
+  SUMOCODE_HEAP_SNAPSHOT
+      Destination for the on-demand host heap snapshot. When set, SIGUSR2
+      writes v8.writeHeapSnapshot() there ('1' =
+      <tmpdir>/sumocode-heap-<pid>.heapsnapshot). Unset disables the signal.
 
 EXIT STATUS
   ${LAUNCHER_EXIT_CODES.success}     Help/version/doctor succeeded, or Pi exited successfully.

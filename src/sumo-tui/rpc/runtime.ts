@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { activeThemeColors, onThemeChanged, type Theme } from "../../themes/index.js";
 import type { CellBuffer } from "../render/buffer.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
+import { installHeapSnapshotTrigger, startHeapDiagnostics } from "../runtime/heap-monitor.js";
 import { defaultTerminalSessionOwner, type TerminalOutput, type TerminalPalette, type TerminalSessionOwner } from "../runtime/terminal-controller.js";
 import type { TranscriptControllerChatSink } from "../transcript/controller.js";
 import type { ActivityPresentationSnapshot } from "../transcript/activity-view-model.js";
@@ -196,6 +197,8 @@ export class RpcHostRuntime {
 	private readonly onActivityExpansionMigration: ((previousId: string, nextId: string, expanded: boolean) => void) | undefined;
 	private readonly onAllActivityExpansionChange: ((expanded: boolean, activityIds: readonly string[]) => void) | undefined;
 	private shell: RpcShellAdapter | undefined;
+	/** Stops for the host's optional heap diagnostics (#521): sampler + snapshot signal. */
+	private readonly heapDiagnosticsStops: Array<() => void> = [];
 	private themeUnsubscribe: (() => void) | undefined;
 	private started = false;
 	private inputStarted = false;
@@ -411,6 +414,8 @@ export class RpcHostRuntime {
 		}
 		this.shell = shell;
 		this.render();
+		this.heapDiagnosticsStops.push(installHeapSnapshotTrigger());
+		this.heapDiagnosticsStops.push(startHeapDiagnostics(() => shell.getHeapCounters()));
 		logDiagnostic("boot_screen_frame", {
 			surface: "rpc_host",
 			cols: terminalColumns(this.output),
@@ -550,6 +555,7 @@ export class RpcHostRuntime {
 			this.inputStarted = false;
 		}
 		this.input?.pause?.();
+		for (const stopHeapDiagnostics of this.heapDiagnosticsStops.splice(0)) stopHeapDiagnostics();
 		if (this.output.off) this.output.off("resize", this.handleResize);
 		else this.output.removeListener?.("resize", this.handleResize);
 		this.shell?.dispose();

@@ -42,6 +42,7 @@ import { composite, dispatchMouseEvent, type CompositeSelectionPass, type Hardwa
 import { cellRowToAnsi } from "../render/ansi-writer.js";
 import { diffFrames, type FrameDiffPatch } from "../render/diff.js";
 import { graphemeSegmentationCount, isDiagnosticsEnabled, logDiagnostic } from "../runtime/diagnostics.js";
+import type { HeapSampleCounters } from "../runtime/heap-monitor.js";
 import type { MouseEvent } from "../input/mouse.js";
 import type { ChatPager } from "../widgets/chat-pager.js";
 import { PiComponentLeaf } from "../widgets/pi-component-leaf.js";
@@ -90,6 +91,8 @@ export class RetainedShellRenderer {
 	private readonly paintHardwareCursorAsSoftware: boolean;
 	private lastFrame: CellBuffer | undefined;
 	private previousFrame: CellBuffer | undefined;
+	/** Full-frame clones since construction, read by the host `heap` diagnostic (#521). */
+	private frameCloneCount = 0;
 	/**
 	 * Overlay components the last full render painted, in paint order. The narrow
 	 * repaint trusts the cloned frame's overlay pixels only while this set is
@@ -468,7 +471,7 @@ export class RetainedShellRenderer {
 		// corrupts those siblings during ChatPager scroll. Use row diffs only.
 		const patches = diffFrames(this.previousFrame, frame, { detectScroll: false });
 		this.terminal.writeFramePatches(patches, cursor);
-		this.previousFrame = frame.clone();
+		this.previousFrame = this.cloneFrame(frame);
 		this.lastFrame = frame;
 
 		logDiagnostic("owned_shell_render", {
@@ -541,7 +544,7 @@ export class RetainedShellRenderer {
 			return;
 		}
 
-		const frame = previous.clone();
+		const frame = this.cloneFrame(previous);
 		frame.clear(rect);
 		this.aboveEditorLeaf.render(frame, rect);
 		// Restore the overlay rows the clear erased. render() paints overlays on
@@ -560,7 +563,7 @@ export class RetainedShellRenderer {
 		// narrow tick must not hand the terminal a cursor the overlay is covering.
 		const cursor = overlayCount > 0 ? null : this.lastCursor;
 		this.terminal.writeFramePatches(patches, cursor);
-		this.previousFrame = selectedFrame.clone();
+		this.previousFrame = this.cloneFrame(selectedFrame);
 		this.lastFrame = selectedFrame;
 		logDiagnostic("owned_shell_repaint_narrow", {
 			leaf,
@@ -713,9 +716,14 @@ export class RetainedShellRenderer {
 		return { top, left, width: right - left, height: bottom - top };
 	}
 
+	private cloneFrame(frame: CellBuffer): CellBuffer {
+		this.frameCloneCount += 1;
+		return frame.clone();
+	}
+
 	private withSelectionForNarrowRepaint(frame: CellBuffer, top: number, height: number): CellBuffer | undefined {
 		if (!this.selection) return frame;
-		const selected = frame.clone();
+		const selected = this.cloneFrame(frame);
 		this.selection.applySelectionHighlight(selected);
 		const end = top + height;
 		const { rows } = selected.getDimensions();
@@ -757,6 +765,14 @@ export class RetainedShellRenderer {
 
 	public getLastFrame(): CellBuffer | undefined {
 		return this.lastFrame;
+	}
+
+	/** Retained frame/clone counters for the host `heap` diagnostic (#521). */
+	public getFrameStats(): Pick<HeapSampleCounters, "retainedFrames" | "cloneCount"> {
+		return {
+			retainedFrames: (this.lastFrame ? 1 : 0) + (this.previousFrame ? 1 : 0),
+			cloneCount: this.frameCloneCount,
+		};
 	}
 
 	public getChatRect(): Rect | undefined {

@@ -146,7 +146,7 @@ describe("Pi-native direct bash submission", () => {
 		const result = { promise: new Promise<DirectBashResult>((resolve) => { resolveResult = resolve; }) };
 		const editor = bashEditor("");
 		const controller = new DirectBashController();
-		const rehydrateTranscript = vi.fn(async () => undefined);
+		const rehydrateTranscript = vi.fn(async () => true);
 		const submitting = submitRpcDirectBash("!! printf ok  ", {
 			editor,
 			controller,
@@ -163,6 +163,24 @@ describe("Pi-native direct bash submission", () => {
 		resolveResult({ output: "ok", exitCode: 0, cancelled: false, truncated: false });
 		await vi.waitFor(() => expect(rehydrateTranscript).toHaveBeenCalledOnce());
 		expect(controller.getSnapshot()).toBeUndefined();
+	});
+
+	it("keeps the final activity when Pi has deferred durable history", async () => {
+		const editor = bashEditor("");
+		const controller = new DirectBashController();
+		await submitRpcDirectBash("!pwd", {
+			editor,
+			controller,
+			controls: { runBash: () => ({
+				id: "bash-1",
+				written: Promise.resolve(),
+				result: Promise.resolve({ output: "/repo", exitCode: 0, cancelled: false, truncated: false }),
+			}) },
+			notifications: { notify: vi.fn() },
+			createId: () => "bash-1",
+			rehydrateTranscript: async () => false,
+		});
+		await vi.waitFor(() => expect(controller.getSnapshot()?.status).toBe("succeeded"));
 	});
 
 	it("does not let an older history refresh reset a newer bash", async () => {
@@ -182,7 +200,10 @@ describe("Pi-native direct bash submission", () => {
 			controls: { runBash },
 			notifications: { notify: vi.fn() },
 			createId: () => "first",
-			rehydrateTranscript: () => refresh.promise,
+			rehydrateTranscript: async () => {
+				await refresh.promise;
+				return true;
+			},
 		});
 		resolveFirst({ output: "done", exitCode: 0, cancelled: false, truncated: false });
 		await vi.waitFor(() => expect(controller.getSnapshot()?.status).toBe("succeeded"));

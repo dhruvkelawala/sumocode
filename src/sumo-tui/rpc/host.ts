@@ -34,7 +34,7 @@ import { RpcHostOverlayManager } from "./host-overlays.js";
 import { InlineSelectorHost } from "./inline-selector.js";
 import { InitialHydrationActionGate } from "./initial-hydration-action-gate.js";
 import { decideRpcInterrupt, type RpcInterruptInputKind } from "./interrupt.js";
-import { DirectBashController, parseDirectBash } from "./direct-bash.js";
+import { DirectBashController, parseDirectBash, type DirectBashResult } from "./direct-bash.js";
 import { readGitBranch, watchGitBranch } from "./git.js";
 import {
 	createRpcPromptScheduler,
@@ -44,7 +44,7 @@ import {
 	type RpcPromptScheduler,
 } from "./prompt-scheduler.js";
 import { RpcHostRuntime } from "./runtime.js";
-import { responseData } from "./response.js";
+import { responseData, type RpcResponseData } from "./response.js";
 import { notifyOnError, type ErrorNotifier } from "./safe-send.js";
 import { RpcHostStateStore, type RpcHostChromeState } from "./state.js";
 import { RpcTranscriptPump } from "./transcript-pump.js";
@@ -261,6 +261,18 @@ function piBinary(env: NodeJS.ProcessEnv): string {
 // the Node host bundle still copies the same .mjs sibling for its existing
 // runtime path.
 
+function matchesDurableDirectBash(message: RpcResponseData<"get_messages">["messages"][number], command: string, excludeFromContext: boolean, result: DirectBashResult, startedAt: number): boolean {
+	return message.role === "bashExecution"
+		&& message.command === command
+		&& message.output === result.output
+		&& message.exitCode === result.exitCode
+		&& message.cancelled === result.cancelled
+		&& message.truncated === result.truncated
+		&& message.fullOutputPath === result.fullOutputPath
+		&& message.excludeFromContext === excludeFromContext
+		&& message.timestamp >= startedAt;
+}
+
 function activityPresentation(snapshot: ActivityStoreSnapshot, directBash?: ActivityStoreSnapshot["activities"][number]) {
 	const presentation = {
 		activities: directBash ? [...snapshot.activities, directBash] : snapshot.activities,
@@ -429,7 +441,7 @@ export interface RpcDirectBashSubmitDependencies {
 	readonly controller: DirectBashController;
 	readonly notifications: ErrorNotifier;
 	readonly ownerSessionId?: () => string | undefined;
-	readonly rehydrateTranscript?: () => Promise<void>;
+	readonly rehydrateTranscript?: (command: string, excludeFromContext: boolean, result: DirectBashResult, startedAt: number) => Promise<boolean>;
 	readonly createId?: () => string;
 }
 
@@ -487,10 +499,11 @@ export async function submitRpcDirectBash(message: string, deps: RpcDirectBashSu
 			deps.notifications.notify(`bash acceptance unknown: ${truncateForNotification(settled.error instanceof Error ? settled.error.message : String(settled.error))}`, "warning");
 			return;
 		}
+		const startedAt = deps.controller.getSnapshot()?.createdAt ?? 0;
 		deps.controller.complete(id, settled.result);
 		try {
-			await deps.rehydrateTranscript?.();
-			if (deps.controller.getSnapshot()?.id === `rpc-bash:${id}`) deps.controller.reset();
+			const durable = await deps.rehydrateTranscript?.(parsed.command, parsed.excludeFromContext, settled.result, startedAt) ?? false;
+			if (durable && deps.controller.getSnapshot()?.id === `rpc-bash:${id}`) deps.controller.reset();
 		} catch (error) {
 			deps.notifications.notify(`bash history refresh failed: ${truncateForNotification(error instanceof Error ? error.message : String(error))}`, "warning");
 		}
@@ -1211,14 +1224,14 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 	 * be consumed by the pre-hydration scheduler generation. Keeping this gate
 	 * at submit (not typing) preserves early editing without dropping a prompt.
 	 */
-	let rehydrateDirectBashTranscript = async (): Promise<void> => undefined;
+	let rehydrateDirectBashTranscript = async (_command: string, _excludeFromContext: boolean, _result: DirectBashResult, _startedAt: number): Promise<boolean> => false;
 	const submitDirectBash = (message: string): Promise<boolean> => submitRpcDirectBash(message, {
 		editor,
 		controls,
 		controller: directBash,
 		notifications,
 		ownerSessionId: () => stateStore.getSnapshot().sessionId,
-		rehydrateTranscript: () => rehydrateDirectBashTranscript(),
+		rehydrateTranscript: rehydrateDirectBashTranscript,
 	});
 	const submitHandlers = createEditorSubmitHandlers({
 		gate: hydrationActionGate,
@@ -1355,7 +1368,12 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		const transcript = await readTranscript();
 		runtime?.update({ transcript, transcriptRevision: transcriptPump.getRevision() });
 	};
-	rehydrateDirectBashTranscript = rehydrateTranscript;
+	rehydrateDirectBashTranscript = async (command, excludeFromContext, result, startedAt) => {
+		const messages = await readTranscriptMessages();
+		const transcript = transcriptPump.replaceFromMessages(messages);
+		runtime?.update({ transcript, transcriptRevision: transcriptPump.getRevision() });
+		return messages.some((message) => matchesDurableDirectBash(message, command, excludeFromContext, result, startedAt));
+	};
 	const processAgentEvent = (event: AgentSessionEvent): void => {
 		const transcript = transcriptPump.handleAgentEvent(event);
 		const state = stateStore.handleAgentEvent(event);

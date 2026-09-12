@@ -463,7 +463,7 @@ export class TranscriptController {
 			case "message_update": {
 				this.pendingChatOp = "incremental";
 				const previousDraft = this.draftMessage;
-				this.pendingIndexedChatIndices = undefined;
+				this.pendingIndexedChatIndices ??= new Set();
 				const message = eventMessage(record);
 				if (message === undefined && record.type === "message_update") {
 					// RPC streaming delta (no cumulative snapshot on the wire): fold it
@@ -600,6 +600,8 @@ export class TranscriptController {
 		if (!appendedPlainDelta && transcriptDirty && record.type !== "message_start" && this.plainTextStreamChunks !== undefined) {
 			this.materializePlainTextStream();
 		}
+		// RPC chrome/state owners still receive every event and `runtime.update`
+		// schedules their frame; this gate suppresses transcript work only.
 		const transcript = appendedPlainDelta || !transcriptDirty ? this.lastTranscript : this.publish(this.viewModel());
 		const eventMsg = eventMessage(record);
 		const messageRole = asRecord(eventMsg)?.role;

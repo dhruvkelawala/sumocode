@@ -911,13 +911,13 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		const controller = new TranscriptController({ chat });
 		controller.handleAgentEvent({ type: "message_start", message: { id: "old-draft", role: "assistant", content: [] } });
 		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "old text" } });
-		chat.replaceLastWithViewModel.mockClear();
+		chat.replaceViewModels.mockClear();
 
 		controller.handleAgentEvent({ type: "message_start", message: { id: "new-draft", role: "assistant", content: [] } });
 
-		expect(chat.replaceLastWithViewModel).toHaveBeenLastCalledWith(
-			expect.objectContaining({ blocks: [{ type: "markdown", text: "" }] }),
-			0,
+		expect(chat.replaceViewModels).toHaveBeenLastCalledWith(
+			[expect.objectContaining({ blocks: [{ type: "markdown", text: "" }] })],
+			{ materializeSettledFeed: false },
 		);
 	});
 

@@ -43,16 +43,30 @@ describe("chrome cache", () => {
 		}
 	});
 
-	it("round-trips the cycle rings once, not once per project, and keeps them across a chrome-only write", () => {
+	it("stores the model ring once for all projects, and the thinking ring only while the model is unchanged", () => {
 		const { stateRoot, path } = cacheFixture();
 		const models = [{ provider: "anthropic", id: "claude-opus-4" }, { provider: "openai", id: "gpt-5" }];
 		writeCachedChrome("/project/a", { modelLabel: "anthropic/claude-opus-4", models, thinkingLevels: ["low", "high"] }, { stateRoot, now: () => 10 });
-		writeCachedChrome("/project/b", { modelLabel: "openai/gpt-5" }, { stateRoot, now: () => 20 });
+		// A ring-less write (the boot-time write before the rings are primed) keeps
+		// both rings while the model is unchanged.
+		writeCachedChrome("/project/b", { modelLabel: "anthropic/claude-opus-4" }, { stateRoot, now: () => 20 });
+		expect(readCachedChrome("/project/b", { stateRoot })).toEqual({ modelLabel: "anthropic/claude-opus-4", models, thinkingLevels: ["low", "high"] });
+		// A model switch drops the coupled thinking ring, never the model ring.
+		writeCachedChrome("/project/a", { modelLabel: "openai/gpt-5" }, { stateRoot, now: () => 30 });
+		expect(readCachedChrome("/project/a", { stateRoot })).toEqual({ modelLabel: "openai/gpt-5", models });
 
-		expect(readCachedChrome("/project/b", { stateRoot })).toEqual({ modelLabel: "openai/gpt-5", models, thinkingLevels: ["low", "high"] });
 		const stored = JSON.parse(readFileSync(path, "utf8"));
-		expect(stored.models).toEqual(models);
-		expect(Object.keys(stored.byCwd)).toEqual(["/project/a", "/project/b"]);
+		expect(Object.keys(stored.byCwd).sort()).toEqual(["/project/a", "/project/b"]);
+		expect(Object.keys(stored.byCwd["/project/a"])).toEqual(["savedAt", "modelLabel"]);
+	});
+
+	it("persists only model identity, never the child's full model records", () => {
+		const { stateRoot, path } = cacheFixture();
+		const childModels = [{ provider: "anthropic", id: "claude-opus-4", name: "Opus", contextWindow: 200_000, cost: { input: 3 } }];
+		writeCachedChrome("/project/a", { modelLabel: "anthropic/claude-opus-4", models: childModels }, { stateRoot });
+
+		const stored = JSON.parse(readFileSync(path, "utf8"));
+		expect(stored.models).toEqual([{ provider: "anthropic", id: "claude-opus-4" }]);
 	});
 
 	it("ignores a corrupt cycle ring instead of failing the whole read", () => {

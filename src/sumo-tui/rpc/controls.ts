@@ -76,6 +76,8 @@ export function modelOptionsFrom(models: readonly ModelIdentity[], currentModel?
 export class RpcHostControls {
 	private availableModelsCache: readonly RpcAvailableModel[] | undefined;
 	private availableThinkingLevelsCache: RpcAvailableThinkingLevels | undefined;
+	/** Model label the cached levels were reported for; levels are model-coupled. */
+	private availableThinkingLevelsFor: string | undefined;
 
 	public constructor(
 		private readonly client: RpcCommandClient,
@@ -86,6 +88,7 @@ export class RpcHostControls {
 	public async refreshState(gitBranch?: string): Promise<RpcHostChromeState> {
 		this.availableModelsCache = undefined;
 		this.availableThinkingLevelsCache = undefined;
+		this.availableThinkingLevelsFor = undefined;
 		const state = responseData(await this.client.send({ type: "get_state" }), "get_state");
 		return this.stateStore.hydrateFromRpcState(state, gitBranch);
 	}
@@ -97,7 +100,11 @@ export class RpcHostControls {
 
 	/** Last successful child-reported thinking levels, for the advisory chrome cache. */
 	public knownThinkingLevels(): RpcAvailableThinkingLevels | undefined {
-		return this.availableThinkingLevelsCache;
+		const cached = this.availableThinkingLevelsCache;
+		if (cached === undefined) return undefined;
+		// Levels are coupled to the active model: a memo fetched under a previous
+		// model must never be written beside the new model's label.
+		return this.availableThinkingLevelsFor === this.stateStore.getSnapshot().modelLabel ? cached : undefined;
 	}
 
 	public async getAvailableModels(): Promise<RpcModelOption[]> {
@@ -170,10 +177,16 @@ export class RpcHostControls {
 	}
 
 	public async getAvailableThinkingLevels(): Promise<RpcAvailableThinkingLevels> {
+		// Stamp the request-time model so a response landing after a model switch
+		// is never memoized for the new model.
+		const modelAtRequest = this.stateStore.getSnapshot().modelLabel;
 		const data = responseData(await this.client.send({ type: "get_available_thinking_levels" }), "get_available_thinking_levels");
-		// Remembered for the chrome cache only: levels depend on the active model,
-		// so the call itself stays uncached to keep `/thinking` truthful.
-		this.availableThinkingLevelsCache = data.levels;
+		if (this.stateStore.getSnapshot().modelLabel === modelAtRequest) {
+			// Remembered for the chrome cache only: levels depend on the active model,
+			// so the call itself stays uncached to keep `/thinking` truthful.
+			this.availableThinkingLevelsCache = data.levels;
+			this.availableThinkingLevelsFor = modelAtRequest;
+		}
 		return data.levels;
 	}
 

@@ -1954,8 +1954,10 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		releaseInitialHydration();
 		// The cache is advisory. Coalesce snapshots before posting them to the
 		// worker; lock waits and durability fsyncs never run on the TUI thread.
-		// Prime the child's cycle rings first (issue 448) so the next boot has a
-		// ring to step through; both stay off the hydration critical path.
+		scheduleChromeCacheState();
+		// Prime the child's cycle rings (issue 448) so the next boot has a ring to
+		// step through, then refresh the write once they are known. Both stay off
+		// the hydration critical path.
 		void primeCachedCycleRings().then(() => scheduleChromeCacheState()).catch(() => undefined);
 		if (!visualFixture) {
 			// The launch-specific handler owns its silent readiness wait; callers

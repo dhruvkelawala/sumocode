@@ -46,6 +46,8 @@ interface ChromeCacheFile {
 	// cycle rings are stored once instead of duplicated into every cwd entry.
 	readonly models?: readonly CachedModelRef[];
 	readonly thinkingLevels?: readonly string[];
+	/** Model label the stored thinking ring was reported for. */
+	readonly thinkingLevelsFor?: string;
 }
 
 export interface ChromeCacheOptions {
@@ -111,7 +113,15 @@ function readCacheFile(options: ChromeCacheOptions): ChromeCacheFile | undefined
 		}
 		const models = cachedModelRefs(parsed["models"]);
 		const thinkingLevels = cachedThinkingLevels(parsed["thinkingLevels"]);
-		return { version: CACHE_VERSION, byCwd, models, thinkingLevels };
+		const thinkingLevelsFor = isString(parsed["thinkingLevelsFor"]) ? parsed["thinkingLevelsFor"] : undefined;
+		return {
+			version: CACHE_VERSION,
+			byCwd,
+			models,
+			// An unstamped ring cannot be tied to a model, so it is unusable.
+			thinkingLevels: thinkingLevels !== undefined && thinkingLevelsFor !== undefined ? thinkingLevels : undefined,
+			thinkingLevelsFor,
+		};
 	} catch {
 		return undefined;
 	}
@@ -126,7 +136,10 @@ export function readCachedChrome(cwd: string, options: ChromeCacheOptions = {}):
 	if (entry.modelLabel !== undefined) result.modelLabel = entry.modelLabel;
 	if (entry.thinkingLevel !== undefined) result.thinkingLevel = entry.thinkingLevel;
 	if (file.models !== undefined) result.models = file.models;
-	if (file.thinkingLevels !== undefined) result.thinkingLevels = file.thinkingLevels;
+	// The thinking ring is only usable beside the model it was reported for.
+	if (file.thinkingLevels !== undefined && file.thinkingLevelsFor !== undefined && file.thinkingLevelsFor === entry.modelLabel) {
+		result.thinkingLevels = file.thinkingLevels;
+	}
 	return result;
 }
 
@@ -148,15 +161,28 @@ export function writeCachedChrome(cwd: string, chrome: CachedChrome, options: Ch
 			const retained = Object.entries(byCwd)
 				.sort(([, left], [, right]) => left.savedAt - right.savedAt)
 				.slice(-MAX_CACHED_CWDS);
-			// A write that carries no ring (an optimistic chrome paint before the
-			// child list is known) keeps the stored one instead of erasing it.
-			const models = cappedRing(chrome.models, MAX_CACHED_MODELS) ?? existing?.models;
-			const thinkingLevels = cappedRing(chrome.thinkingLevels, MAX_CACHED_THINKING_LEVELS) ?? existing?.thinkingLevels;
+			// A write that carries no model ring (an optimistic chrome paint before
+			// the child list is known) keeps the stored one: the list is stable across
+			// model switches. Project to identity refs at this boundary -- callers hand
+			// over the child's full model records, whose extra fields would bloat the
+			// file past its read cap and persist data this cache never needed.
+			const models = cappedRing(chrome.models, MAX_CACHED_MODELS)
+				?.map((model) => ({ provider: model.provider, id: model.id }))
+				?? existing?.models;
+			// The thinking ring is coupled to the active model: a fresh ring is
+			// stamped with the label it was fetched under, and a write with no fresh
+			// ring keeps the stored one only while that label still matches, so a
+			// model switch drops it instead of pairing the new label with levels it
+			// may not support.
+			const freshLevels = cappedRing(chrome.thinkingLevels, MAX_CACHED_THINKING_LEVELS);
+			const thinkingLevels = freshLevels
+				?? (existing?.thinkingLevelsFor === chrome.modelLabel ? existing?.thinkingLevels : undefined);
 			const cache: ChromeCacheFile = {
 				version: CACHE_VERSION,
 				byCwd: Object.fromEntries(retained),
 				models,
 				thinkingLevels,
+				thinkingLevelsFor: thinkingLevels !== undefined ? chrome.modelLabel : undefined,
 			};
 			atomicWritePrivateJson(path, cache);
 		});

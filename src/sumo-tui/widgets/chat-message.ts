@@ -43,8 +43,8 @@ const DIM = "\x1b[2m";
  * frame per message — and its body path runs the `Markdown` parser (plus
  * `Image` construction), which is not cheap. We cache the last computed rows
  * per `(width, contentVersion, themeVersion)` so unchanged messages skip
- * recompute entirely. Plain `appendText` updates only the cached tail row;
- * callers consume these internal arrays synchronously and do not retain them.
+ * recompute entirely. Plain `appendText` replaces only the cached tail rows;
+ * arrays already returned to callers remain immutable snapshots.
  */
 interface RenderRowsCacheEntry {
 	width: number;
@@ -475,10 +475,15 @@ export class ChatMessage extends SumoNode {
 				if (entry.contentVersion !== previousVersion || entry.themeVersion !== themeVersion || !entry.plainBodyRows || entry.width < MIN_BOX_WIDTH) continue;
 				const trailingNewlines = trailingWhitespace.split("\n").length - 1;
 				const tailRowCount = Math.min(entry.plainBodyRows.length, trailingNewlines + 1);
-				const previousTailRows = entry.plainBodyRows.splice(-tailRowCount, tailRowCount);
-				const tailRows = wrapPlainText(`${previousTailRows[0] ?? ""}${trailingWhitespace}${chunk}`, Math.max(1, entry.width - 4));
-				entry.plainBodyRows.push(...tailRows);
-				entry.rows.splice(entry.rows.length - 1 - tailRowCount, tailRowCount, ...tailRows.map((row) => frameBody(row, entry.width)));
+				const stableBodyRows = entry.plainBodyRows.slice(0, -tailRowCount);
+				const previousTailRow = entry.plainBodyRows.at(-tailRowCount) ?? "";
+				const tailRows = wrapPlainText(`${previousTailRow}${trailingWhitespace}${chunk}`, Math.max(1, entry.width - 4));
+				entry.plainBodyRows = [...stableBodyRows, ...tailRows];
+				entry.rows = [
+					...entry.rows.slice(0, entry.rows.length - 1 - tailRowCount),
+					...tailRows.map((row) => frameBody(row, entry.width)),
+					entry.rows.at(-1)!,
+				];
 				entry.contentVersion = this.contentVersion;
 			}
 		}
@@ -601,26 +606,20 @@ export class ChatMessage extends SumoNode {
 		const plainBodyRows = this.blocks === undefined && renderWidth >= MIN_BOX_WIDTH
 			? wrapPlainText(this.text, Math.max(1, renderWidth - 4))
 			: undefined;
-		const rows = plainBodyRows
-			? [
-				frameTop(this.role, this.timestamp, renderWidth, this.options.primaryAgentName),
-				...plainBodyRows.map((row) => frameBody(row, renderWidth)),
-				frameBottom(renderWidth),
-			]
-			: this.computeRenderRows(renderWidth);
+		const rows = this.computeRenderRows(renderWidth, plainBodyRows);
 		const entry: RenderRowsCacheEntry = { width: renderWidth, contentVersion: this.contentVersion, themeVersion, rows, plainBodyRows };
 		this.renderRowsCache = [entry, ...this.renderRowsCache.filter((existing) => existing.width !== renderWidth)].slice(0, RENDER_ROWS_CACHE_LIMIT);
 		return rows;
 	}
 
-	private computeRenderRows(renderWidth: number): string[] {
+	private computeRenderRows(renderWidth: number, cachedPlainBodyRows?: string[]): string[] {
 		if (renderWidth <= 0) return [""];
 		if (renderWidth < MIN_BOX_WIDTH) return [fitCellText(this.text, renderWidth)];
 
 		const bodyWidth = Math.max(1, renderWidth - 4);
-		const bodyRows = this.blocks
+		const bodyRows = cachedPlainBodyRows ?? (this.blocks
 			? renderBlockRows(this.blocks, bodyWidth, this.activityExpansion, this.mermaidRenderingMode, this.isStreaming)
-			: wrapPlainText(this.text, bodyWidth);
+			: wrapPlainText(this.text, bodyWidth));
 		return [
 			frameTop(this.role, this.timestamp, renderWidth, this.options.primaryAgentName),
 			...bodyRows.map((row) => frameBody(row, renderWidth)),

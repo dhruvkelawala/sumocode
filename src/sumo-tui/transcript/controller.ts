@@ -702,8 +702,13 @@ export class TranscriptController {
 		if (deltaEvent.type !== "text_delta" || !isString(deltaEvent.delta)) return false;
 		// `ChatMessage.appendText` intentionally skips markdown parsing. Leave the
 		// fast path before any syntax-bearing chunk so streamed markdown keeps the
-		// same block rendering as a freshly mapped draft.
-		if (!/^[\p{L}\p{N}\s]*$/u.test(deltaEvent.delta)) return false;
+		// same block rendering as a freshly mapped draft. Probe a bounded prefix
+		// tail too because an ordered-list marker can straddle delta boundaries.
+		let markdownProbe = deltaEvent.delta;
+		for (let index = this.plainTextStreamChunks.length - 1; index >= 0 && markdownProbe.length < 64; index -= 1) {
+			markdownProbe = `${this.plainTextStreamChunks[index]!.slice(markdownProbe.length - 64)}${markdownProbe}`;
+		}
+		if (/[\\`*_{}\x5b\x5d<>#+=!|~\x2d]/u.test(deltaEvent.delta) || /(?:^|\n)\s*\d+[.)]\s/u.test(markdownProbe)) return false;
 
 		const message = eventMessage(record);
 		if (message === undefined) this.plainTextStreamChunks.push(deltaEvent.delta);

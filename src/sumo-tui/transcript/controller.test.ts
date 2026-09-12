@@ -886,7 +886,8 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		const chat = fakeChatSink();
 		const controller = new TranscriptController({ chat });
 		controller.handleAgentEvent({ type: "message_start", message: { id: "draft", role: "assistant", content: [] } });
-		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "plain " } });
+		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "plain sentence." } });
+		expect(chat.appendToLast).toHaveBeenLastCalledWith("plain sentence.");
 		chat.appendToLast.mockClear();
 		chat.replaceLastWithViewModel.mockClear();
 		chat.replaceViewModelAt.mockClear();
@@ -900,7 +901,7 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 
 		expect(chat.appendToLast).not.toHaveBeenCalled();
 		expect(chat.replaceLastWithViewModel).toHaveBeenCalledWith(
-			expect.objectContaining({ blocks: [{ type: "markdown", text: "plain **bold**" }] }),
+			expect.objectContaining({ blocks: [{ type: "markdown", text: "plain sentence.**bold**" }] }),
 			0,
 		);
 	});

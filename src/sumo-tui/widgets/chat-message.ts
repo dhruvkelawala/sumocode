@@ -43,8 +43,8 @@ const DIM = "\x1b[2m";
  * frame per message — and its body path runs the `Markdown` parser (plus
  * `Image` construction), which is not cheap. We cache the last computed rows
  * per `(width, contentVersion, themeVersion)` so unchanged messages skip
- * recompute entirely. Plain `appendText` replaces only the cached tail rows;
- * arrays already returned to callers remain immutable snapshots.
+ * recompute entirely. Plain `appendText` updates only the cached tail rows.
+ * `renderRows` is private and its callers consume this working array immediately.
  */
 interface RenderRowsCacheEntry {
 	width: number;
@@ -475,15 +475,10 @@ export class ChatMessage extends SumoNode {
 				if (entry.contentVersion !== previousVersion || entry.themeVersion !== themeVersion || !entry.plainBodyRows || entry.width < MIN_BOX_WIDTH) continue;
 				const trailingNewlines = trailingWhitespace.split("\n").length - 1;
 				const tailRowCount = Math.min(entry.plainBodyRows.length, trailingNewlines + 1);
-				const stableBodyRows = entry.plainBodyRows.slice(0, -tailRowCount);
-				const previousTailRow = entry.plainBodyRows.at(-tailRowCount) ?? "";
-				const tailRows = wrapPlainText(`${previousTailRow}${trailingWhitespace}${chunk}`, Math.max(1, entry.width - 4));
-				entry.plainBodyRows = [...stableBodyRows, ...tailRows];
-				entry.rows = [
-					...entry.rows.slice(0, entry.rows.length - 1 - tailRowCount),
-					...tailRows.map((row) => frameBody(row, entry.width)),
-					entry.rows.at(-1)!,
-				];
+				const previousTailRows = entry.plainBodyRows.splice(-tailRowCount, tailRowCount);
+				const tailRows = wrapPlainText(`${previousTailRows[0] ?? ""}${trailingWhitespace}${chunk}`, Math.max(1, entry.width - 4));
+				entry.plainBodyRows.push(...tailRows);
+				entry.rows.splice(entry.rows.length - 1 - tailRowCount, tailRowCount, ...tailRows.map((row) => frameBody(row, entry.width)));
 				entry.contentVersion = this.contentVersion;
 			}
 		}

@@ -129,7 +129,7 @@ const isSettled = (snapshot: SubagentSnapshot): boolean => snapshot.status !== "
 const readRetainedTurnResult = (record: SubagentRecord): string | undefined => {
 	const path = join(record.taskDir, "response.md");
 	const stat = validatedArtifactStat(nodeArtifactFs, path, record.taskDir, "visible-subagent response artifact");
-	return stat && (stat.size === undefined || stat.size <= PRIVATE_RESPONSE_MAX_BYTES) ? readFileSync(path, "utf8") || undefined : undefined;
+	return stat?.isFile() && (stat.size === undefined || stat.size <= PRIVATE_RESPONSE_MAX_BYTES) ? readFileSync(path, "utf8") || undefined : undefined;
 };
 
 const makeInitialSnapshot = (

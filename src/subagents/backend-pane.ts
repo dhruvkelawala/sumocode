@@ -403,7 +403,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	const observeCompletedTurn = (): void => {
 		try {
 			const stat = validatedArtifactStat(fs, paths.responseFile, taskDir, "visible-subagent response artifact");
-			if (!stat || stat.size !== undefined && stat.size > PRIVATE_RESPONSE_MAX_BYTES) return;
+			if (!stat || !stat.isFile() || stat.size !== undefined && stat.size > PRIVATE_RESPONSE_MAX_BYTES) return;
 			const finalText = fs.readFileSync(paths.responseFile, "utf8");
 			const signature = `${stat.mtimeMs ?? ""}:${finalText}`;
 			if (!finalText || signature === observedResponseSignature) return;

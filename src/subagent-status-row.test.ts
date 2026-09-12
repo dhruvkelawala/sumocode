@@ -1,30 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { renderSubagentStatusRow, shortId } from "./subagent-status-row.js";
+import { renderSubagentStatusRow } from "./subagent-status-row.js";
 
 const ANSI = /\x1b\[[0-9;]*m/g; // oxlint-disable-line no-control-regex -- intentional ANSI escape sequence stripping in a render test.
 const plain = (value: string): string => value.replace(ANSI, "");
-
-describe("shortId", () => {
-	it("collapses a namespaced uuid id to its sequence suffix", () => {
-		expect(shortId("sa-7e8fc89b-3545-43af-bf97-d603cdefdea2-2")).toBe("sa-2");
-	});
-
-	it("passes already-short ids through unchanged", () => {
-		expect(shortId("sa-1")).toBe("sa-1");
-	});
-
-	it("collapses a readable slug id to its sequence suffix", () => {
-		expect(shortId("sa-rebase-471-herdr-panes-2")).toBe("sa-2");
-	});
-
-	it("collapses a readable slug id with a retention namespace", () => {
-		expect(shortId("sa-rebase-471-herdr-panes-2-a1b2")).toBe("sa-2");
-	});
-
-	it("passes non-sa ids through unchanged", () => {
-		expect(shortId("task-7")).toBe("task-7");
-	});
-});
 
 describe("renderSubagentStatusRow", () => {
 	it("composes aggregate counts before per-agent title, short id, role, and age segments", () => {

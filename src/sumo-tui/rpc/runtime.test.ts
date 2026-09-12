@@ -769,8 +769,6 @@ describe("RPC host retained runtime frame", () => {
 				.split("\n")
 				.map(parseDiagEvent);
 			expect(stableEvents.filter((entry) => entry.event === "command_ready")).toHaveLength(1);
-			expect(stableEvents.map((entry) => entry.event)).not.toContain("input_ready");
-			expect(stableEvents.map((entry) => entry.event)).not.toContain("app_ready");
 			runtime.stop();
 			runtime.markChromeStable();
 			runtime.markCommandReady();

@@ -75,7 +75,10 @@ function ensureNodePtySpawnHelperExecutable(): void {
 	chmodSync(spawnHelper, 0o755);
 }
 
-const TERMINATING_SIGNALS: ReadonlySet<NodeJS.Signals> = new Set(["SIGTERM", "SIGKILL", "SIGHUP"]);
+// The signals this harness and its tests use to terminate a child. SIGINT is
+// included because the RPC host exits 130 on it: an unlatched deliberate
+// teardown must not look like a failure (issue #423).
+const TERMINATING_SIGNALS: ReadonlySet<NodeJS.Signals> = new Set(["SIGTERM", "SIGKILL", "SIGHUP", "SIGINT"]);
 
 /**
  * Evidence is retained only for an exit the harness never asked for and that

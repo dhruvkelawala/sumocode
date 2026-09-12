@@ -310,6 +310,20 @@ describe("spawnPiPty exit evidence", () => {
 		expect(existsSync(join(pty.getEvidenceDir(), "argv.txt"))).toBe(false);
 	});
 
+	it("keeps a deliberate SIGINT teardown evidence-free even when the child dies before cleanup", async () => {
+		// The RPC host exits 130 on SIGINT, so an unlatched exit still looks
+		// abnormal: the raw signal channel must recognize SIGINT as termination or
+		// every deliberate Ctrl-C teardown races cleanupAndWait's latch (issue #423).
+		const pty = spawnPiPty({ command: process.execPath, args: ["-e", "setInterval(() => {}, 1_000)", "--", "--approve"] });
+		try {
+			pty.sendSignal("SIGINT");
+			await new Promise((resolve) => setTimeout(resolve, 1_500));
+			expect(existsSync(join(pty.getEvidenceDir(), "argv.txt"))).toBe(false);
+		} finally {
+			await pty.cleanupAndWait();
+		}
+	});
+
 	it("keeps capturing when a non-terminating signal precedes the failure", async () => {
 		// SIGWINCH is a probe, not termination: latching the exit as deliberate
 		// from any raw signal would silently drop the evidence for a later crash

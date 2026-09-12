@@ -344,12 +344,12 @@ export class ChatPager extends SumoNode {
 		this.renderControls.setStreamingMode(true);
 	}
 
-	public appendToLast(chunk: string): void {
-		if (chunk.length === 0) return;
+	public appendToLast(chunk: string): boolean {
+		if (chunk.length === 0) return true;
 		const last = this.getLastMessage();
 		if (!last) {
 			this.addMessage("sumo", chunk);
-			return;
+			return true;
 		}
 		const width = this.scrollBox.getComputedWidth();
 		const beforeHeight = last.getEstimatedHeight(width);
@@ -362,6 +362,7 @@ export class ChatPager extends SumoNode {
 		}]);
 		this.beginStreaming();
 		this.scheduleRender();
+		return true;
 	}
 
 	public replaceLast(text: string): void {

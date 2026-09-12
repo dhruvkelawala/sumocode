@@ -164,7 +164,10 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 			await this.options.sendPrompt(entry.text, { streamingBehavior: entry.delivery });
 			return generation === this.generation;
 		} catch (error) {
-			if (generation !== this.generation) return false;
+			if (generation !== this.generation) {
+				this.options.onDispatchFailure?.(entry.text, error);
+				return false;
+			}
 			if (restoreOnFailure) {
 				this.queue.unshift(entry);
 				this.pausedAfterFailure = true;

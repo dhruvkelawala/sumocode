@@ -40,6 +40,13 @@ kill -USR2 "$(pgrep -f sumo-rpc-host.js | head -1)"
 | `retainedFrames` | 2 | 2 (`render()` + `repaintRegion()` keep exactly one clone) |
 | `cloneCount` | — | +2 every 5 s (the idle stats-refresh render) |
 
+`viewModelRows` is the pager's total laid-out content height (the whole
+transcript), not the rows inside the viewport — it does not move while the run
+is idle. The `rss` and `heapUsed` medians come from the same sample set but are
+not mutually consistent here: on macOS the OS `rss` can read below V8's
+`heapUsed` when the compressor evicts heap pages (the maxima, 85.8 MB vs
+66.7 MB, agree). Both are reported as measured; the budget check uses `rss`.
+
 Idle steady state is **54–86 MB in-process / 82–123 MB `ps` RSS**, well under the
 200 MB budget, and flat: the transcript counters and retained-frame count do not
 move across 10 minutes.
@@ -55,9 +62,11 @@ move across 10 minutes.
 | `viewModelRows` | 15 460 | 15 460 |
 
 A large streaming message transiently reaches ~330 MB and collapses once the run
-settles. The observed 416 MB host in #520 is this shape — a spike during a live
-message, not a steady-state session leak — and the new `heap` event is what makes
-the two distinguishable.
+settles. This run does **not** attribute #520's 416 MB host: that host was sampled
+idle, and the measurement base has moved since (`perf/520-idle-render-loop`).
+What the two runs show is the split the issue asked for — the idle baseline is
+flat and session-scoped retention is small, while the unbounded shape that
+remains is the per-delta re-render of a growing message.
 
 ## Top retainers (idle snapshot, t = 606 s, 79.5 MB heap)
 

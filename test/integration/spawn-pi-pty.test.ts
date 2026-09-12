@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import type { IDisposable, IEvent, IPty } from "node-pty";
 import { describe, expect, it } from "vitest";
 import { createChildEvidenceContext, HARNESS_SIGNATURE, HARNESS_SIGNATURE_ENV_KEY, recordPtyExit, requireHarnessAuth, spawnSupervisedPty } from "./harness-supervisor.js";
-import { buildSpawnEnv, spawnPiPty, waitForScreenText, WaitForScreenTimeoutError, type SpawnPiPtyOptions } from "./spawn-pi-pty.js";
+import { buildSpawnEnv, isUnexpectedPtyFailure, spawnPiPty, waitForScreenText, WaitForScreenTimeoutError, type SpawnPiPtyOptions } from "./spawn-pi-pty.js";
 
 type PtySpawn = NonNullable<SpawnPiPtyOptions["spawn"]>;
 type PtySpawnOptions = Parameters<PtySpawn>[2];
@@ -277,6 +277,19 @@ async function waitForRetainedEvidence(evidenceDir: string, timeoutMs = 5_000): 
 		await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 25));
 	}
 }
+
+describe("isUnexpectedPtyFailure", () => {
+	it("retains evidence for an abnormal exit the harness did not request", () => {
+		expect(isUnexpectedPtyFailure({ exitCode: 3 }, false)).toBe(true);
+		expect(isUnexpectedPtyFailure({ exitCode: 0, signal: 11 }, false)).toBe(true);
+	});
+
+	it("ignores a clean exit and any harness-requested termination", () => {
+		expect(isUnexpectedPtyFailure({ exitCode: 0, signal: 0 }, false)).toBe(false);
+		expect(isUnexpectedPtyFailure({ exitCode: 3, signal: undefined }, true)).toBe(false);
+		expect(isUnexpectedPtyFailure({ exitCode: 0, signal: 15 }, true)).toBe(false);
+	});
+});
 
 describe("spawnPiPty exit evidence", () => {
 	it("retains diagnostics when the PTY exits between waits with no waiter pending", async () => {

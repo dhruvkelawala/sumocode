@@ -75,6 +75,18 @@ function ensureNodePtySpawnHelperExecutable(): void {
 	chmodSync(spawnHelper, 0o755);
 }
 
+/**
+ * Evidence is retained only for an exit the harness never asked for and that
+ * is abnormal: a clean exit between waits is the child finishing its work,
+ * not a failure (issue #423).
+ */
+export function isUnexpectedPtyFailure(
+	exit: { readonly exitCode: number; readonly signal?: number },
+	terminationRequested: boolean,
+): boolean {
+	return !terminationRequested && (exit.exitCode !== 0 || (exit.signal ?? 0) !== 0);
+}
+
 function isStringPattern(pattern: string | RegExp): pattern is string {
 	return typeof pattern === "string";
 }
@@ -334,7 +346,13 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 				// A PTY that dies between waits is a failure with no waiter to
 				// reject: capture before the focused harness decides to delete the
 				// run (issue #423).
-				if (pending.length === 0 && !terminationRequested && supervision !== undefined) await capture();
+				if (pending.length === 0 && supervision !== undefined && isUnexpectedPtyFailure({ exitCode, signal }, terminationRequested)) {
+					try {
+						await capture();
+					} catch (error) {
+						recordHarnessAuditFailure("pty exit evidence", child.pid, child.pid, childEnv, String(error));
+					}
+				}
 			} finally {
 				removeOwnedAgentDir(ownedAgentDir);
 				resolveExit?.();

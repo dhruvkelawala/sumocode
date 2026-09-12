@@ -146,14 +146,14 @@ describe("Pi-native direct bash submission", () => {
 		const result = { promise: new Promise<DirectBashResult>((resolve) => { resolveResult = resolve; }) };
 		const editor = bashEditor("");
 		const controller = new DirectBashController();
-		const rehydrateTranscript = vi.fn(async () => true);
+		const reconcileTranscript = vi.fn(async () => controller.reset());
 		const submitting = submitRpcDirectBash("!! printf ok  ", {
 			editor,
 			controller,
 			controls: { runBash: vi.fn(() => ({ id: "bash-1", written: written.promise, result: result.promise })) },
 			notifications: { notify: vi.fn() },
 			createId: () => "bash-1",
-			rehydrateTranscript,
+			reconcileTranscript,
 		});
 		expect(editor.getText()).toBe("!! printf ok  ");
 		written.resolve();
@@ -161,7 +161,7 @@ describe("Pi-native direct bash submission", () => {
 		expect(editor.addToHistory).toHaveBeenCalledWith("!! printf ok  ");
 		expect(editor.getText()).toBe("");
 		resolveResult({ output: "ok", exitCode: 0, cancelled: false, truncated: false });
-		await vi.waitFor(() => expect(rehydrateTranscript).toHaveBeenCalledOnce());
+		await vi.waitFor(() => expect(reconcileTranscript).toHaveBeenCalledOnce());
 		expect(controller.getSnapshot()).toBeUndefined();
 	});
 
@@ -178,7 +178,7 @@ describe("Pi-native direct bash submission", () => {
 			}) },
 			notifications: { notify: vi.fn() },
 			createId: () => "bash-1",
-			rehydrateTranscript: async () => false,
+			reconcileTranscript: async () => undefined,
 		});
 		await vi.waitFor(() => expect(controller.getSnapshot()?.status).toBe("succeeded"));
 	});
@@ -200,9 +200,9 @@ describe("Pi-native direct bash submission", () => {
 			controls: { runBash },
 			notifications: { notify: vi.fn() },
 			createId: () => "first",
-			rehydrateTranscript: async () => {
+			reconcileTranscript: async (completion) => {
 				await refresh.promise;
-				return true;
+				if (controller.getSnapshot()?.id === `rpc-bash:${completion.id}`) controller.reset();
 			},
 		});
 		resolveFirst({ output: "done", exitCode: 0, cancelled: false, truncated: false });

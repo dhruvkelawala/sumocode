@@ -435,13 +435,21 @@ export async function sendRpcPrompt(message: string, options: RpcPromptSendOptio
 	responseData(response, "prompt");
 }
 
+interface DirectBashCompletion {
+	readonly id: string;
+	readonly command: string;
+	readonly excludeFromContext: boolean;
+	readonly result: DirectBashResult;
+	readonly startedAt: number;
+}
+
 export interface RpcDirectBashSubmitDependencies {
 	readonly editor: Pick<RpcHostEditorController, "getText" | "setText" | "addToHistory" | "clearImageDrafts">;
 	readonly controls: Pick<RpcHostControls, "runBash">;
 	readonly controller: DirectBashController;
 	readonly notifications: ErrorNotifier;
 	readonly ownerSessionId?: () => string | undefined;
-	readonly rehydrateTranscript?: (id: string, command: string, excludeFromContext: boolean, result: DirectBashResult, startedAt: number) => Promise<boolean>;
+	readonly reconcileTranscript?: (completion: DirectBashCompletion) => Promise<void>;
 	readonly createId?: () => string;
 }
 
@@ -502,8 +510,7 @@ export async function submitRpcDirectBash(message: string, deps: RpcDirectBashSu
 		const startedAt = deps.controller.getSnapshot()?.createdAt ?? 0;
 		deps.controller.complete(id, settled.result);
 		try {
-			const durable = await deps.rehydrateTranscript?.(id, parsed.command, parsed.excludeFromContext, settled.result, startedAt) ?? false;
-			if (durable && deps.controller.getSnapshot()?.id === `rpc-bash:${id}`) deps.controller.reset();
+			await deps.reconcileTranscript?.({ id, command: parsed.command, excludeFromContext: parsed.excludeFromContext, result: settled.result, startedAt });
 		} catch (error) {
 			deps.notifications.notify(`bash history refresh failed: ${truncateForNotification(error instanceof Error ? error.message : String(error))}`, "warning");
 		}
@@ -1224,14 +1231,14 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 	 * be consumed by the pre-hydration scheduler generation. Keeping this gate
 	 * at submit (not typing) preserves early editing without dropping a prompt.
 	 */
-	let rehydrateDirectBashTranscript = async (_id: string, _command: string, _excludeFromContext: boolean, _result: DirectBashResult, _startedAt: number): Promise<boolean> => false;
+	let reconcileDirectBashTranscript = async (_completion: DirectBashCompletion): Promise<void> => undefined;
 	const submitDirectBash = (message: string): Promise<boolean> => submitRpcDirectBash(message, {
 		editor,
 		controls,
 		controller: directBash,
 		notifications,
 		ownerSessionId: () => stateStore.getSnapshot().sessionId,
-		rehydrateTranscript: rehydrateDirectBashTranscript,
+		reconcileTranscript: (completion) => reconcileDirectBashTranscript(completion),
 	});
 	const submitHandlers = createEditorSubmitHandlers({
 		gate: hydrationActionGate,
@@ -1363,14 +1370,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 			return readRpcMessages();
 		}
 	};
-	interface PendingDirectBashReconciliation {
-		readonly id: string;
-		readonly command: string;
-		readonly excludeFromContext: boolean;
-		readonly result: DirectBashResult;
-		readonly startedAt: number;
-	}
-	let pendingDirectBashReconciliation: PendingDirectBashReconciliation | undefined;
+	let pendingDirectBashReconciliation: DirectBashCompletion | undefined;
 	const reconcileDurableDirectBash = (messages: RpcResponseData<"get_messages">["messages"]): void => {
 		const pending = pendingDirectBashReconciliation;
 		if (!pending || !messages.some((message) => matchesDurableDirectBash(message, pending.command, pending.excludeFromContext, pending.result, pending.startedAt))) return;
@@ -1383,16 +1383,20 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		reconcileDurableDirectBash(messages);
 		runtime?.update({ transcript, transcriptRevision: transcriptPump.getRevision() });
 	};
-	rehydrateDirectBashTranscript = async (id, command, excludeFromContext, result, startedAt) => {
-		pendingDirectBashReconciliation = { id, command, excludeFromContext, result, startedAt };
+	reconcileDirectBashTranscript = async (completion) => {
+		pendingDirectBashReconciliation = completion;
 		await rehydrateTranscript();
-		return false;
 	};
 	const processAgentEvent = (event: AgentSessionEvent): void => {
 		const transcript = transcriptPump.handleAgentEvent(event);
 		const state = stateStore.handleAgentEvent(event);
 		runtime?.update({ state, transcript, transcriptRevision: transcriptPump.getRevision() });
 		scheduler.handleAgentEvent(event);
+		if (event.type === "agent_settled" && pendingDirectBashReconciliation) {
+			void rehydrateTranscript().catch((error: Error) => {
+				notifications.notify(`bash history refresh failed: ${truncateForNotification(error.message)}`, "warning");
+			});
+		}
 	};
 	let sessionHydrationRetrying = false;
 	const beginSessionChange = (): void => {

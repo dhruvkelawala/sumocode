@@ -732,7 +732,8 @@ export const createPiChildSpawner = (
 		const bootstrapArgs = bootstrapEntry ? ["-e", bootstrapEntry] : [];
 		const configuredArgs = childModel ? removeCliModelSelection(config.subprocessArgs) : config.subprocessArgs;
 		const sessionDir = options.resumeSessionFile ? dirname(options.resumeSessionFile) : options.sessionDir;
-		if (sessionDir) mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
+		if (options.resumeSessionFile && !existsSync(options.resumeSessionFile)) throw new Error("resume session file is unavailable");
+		if (sessionDir && !options.resumeSessionFile) mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
 		const subprocessArgs = sessionDir
 			? [...configuredArgs.filter((arg) => arg !== "--no-session"), ...(options.resumeSessionFile ? ["--session", options.resumeSessionFile] : []), "--session-dir", sessionDir]
 			: configuredArgs;

@@ -592,6 +592,17 @@ describe("spawnPiChild", () => {
 		}
 	});
 
+	it("refuses to resume a missing session instead of starting without context", () => {
+		const missing = join(tmpdir(), `sumocode-missing-session-${Date.now()}`, "child.jsonl");
+		const spawn = vi.fn();
+		// SAFETY: session validation refuses before the fake spawn is reached.
+		const child = createPiChildSpawner(spawn as never, () => undefined, () => "/selected/pi")({
+			prompt: "follow up", cwd: "/repo", inherited: {}, resumeSessionFile: missing,
+		});
+		expect(() => collect(child.events)).toThrow("resume session file is unavailable");
+		expect(spawn).not.toHaveBeenCalled();
+	});
+
 	it("retains the pipe owner while replacing a same-process event observer", () => {
 		const proc = new FakeProcess();
 		// No fake PID may reach the operating system through interrupt().

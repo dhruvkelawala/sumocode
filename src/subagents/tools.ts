@@ -301,6 +301,15 @@ export function registerSubagentTools(
 				builtInTools: role?.tools ? role.tools.filter((name) => activeTools.includes(name)) : activeTools,
 			});
 			if (isAtCapacity(spawned)) return formatAtCapacity(spawned, "reply");
+			if (spawned.status === "queued") return makeToolResult(`Queued ${spawned.id} continuing ${params.id}'s session. It starts automatically when a slot frees.`, {
+				action: "reply", id: spawned.id, repliesTo: params.id, subagent: spawned, activity: activityEnvelope(spawned, toolCallId),
+			});
+			if (spawned.status !== "running") {
+				delivery?.consume(spawned.id);
+				return makeToolResult(`Unable to continue ${params.id}: ${spawned.errorText ?? "unknown error"}`, {
+					action: "reply", status: "error", id: spawned.id, repliesTo: params.id, subagent: spawned, activity: activityEnvelope(spawned, toolCallId),
+				});
+			}
 			return makeToolResult(`Started ${spawned.id} continuing ${params.id}'s session. Same fire-and-forget contract: the result is delivered when it settles.`, {
 				action: "reply",
 				id: spawned.id,

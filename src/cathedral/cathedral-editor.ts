@@ -404,8 +404,8 @@ export class CathedralEditor extends CustomEditor {
 		return this.imageDraftState.captureRpcSubmission(text);
 	}
 
-	public commitRpcDraft(text: string): void {
-		this.imageDraftState.commitRpcSubmission(text);
+	public commitRpcDraft(draft: RpcEditorSubmissionDraft): void {
+		this.imageDraftState.commitRpcSubmission(draft);
 	}
 
 	/**

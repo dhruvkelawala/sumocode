@@ -588,9 +588,15 @@ export async function submitRpcImageDraft(
 		return;
 	}
 	deps.editor.addToHistory(draft.text);
-	if (deps.editor.getText() === draft.text) {
-		deps.editor.commitRpcDraft(draft.text);
+	const currentDraft = deps.editor.getText();
+	deps.editor.commitRpcDraft(draft);
+	if (currentDraft === draft.text) {
 		deps.editor.setText("");
+	} else {
+		let remaining = currentDraft;
+		for (const attachment of draft.images) remaining = remaining.split(attachment.token).join("");
+		deps.editor.setText(remaining);
+		deps.notifications.notify("image sent · current edits kept", "warning");
 	}
 }
 
@@ -677,7 +683,11 @@ export function createEditorSubmitHandlers(deps: EditorSubmitHandlerDependencies
 				deps.notifications.notify("branch summary in progress", "warning");
 				return;
 			}
-			await deps.submitImageDraft?.(draft);
+			if (!deps.submitImageDraft) {
+				deps.notifications.notify("native image delivery unavailable · draft kept", "error");
+				return;
+			}
+			await deps.submitImageDraft(draft);
 		},
 		fromLaunch: (message) => submit(message, false, "steer"),
 	};

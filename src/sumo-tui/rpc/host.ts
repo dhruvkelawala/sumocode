@@ -482,13 +482,13 @@ export async function submitRpcDirectBash(message: string, deps: RpcDirectBashSu
 		return true;
 	}
 	if (deps.controller.isRunning) {
-		deps.editor.setText(message);
+		if (deps.editor.getText().length === 0) deps.editor.setText(message);
 		deps.notifications.notify("direct bash already running", "warning");
 		return true;
 	}
 	// CustomEditor clears before onSubmit. Restore synchronously until the child
 	// pipe acknowledges the write; that acknowledgement is not Pi acceptance.
-	deps.editor.setText(message);
+	if (deps.editor.getText().length === 0) deps.editor.setText(message);
 	const id = deps.createId?.() ?? randomUUID();
 	let request: ReturnType<RpcHostControls["runBash"]>;
 	try {

@@ -165,6 +165,26 @@ describe("Pi-native direct bash submission", () => {
 		expect(controller.getSnapshot()).toBeUndefined();
 	});
 
+	it("does not overwrite text entered while submission waited for hydration", async () => {
+		const written = deferred();
+		const editor = bashEditor("newer draft");
+		const submitting = submitRpcDirectBash("!pwd", {
+			editor,
+			controller: new DirectBashController(),
+			controls: { runBash: () => ({
+				id: "bash-1",
+				written: written.promise,
+				result: new Promise<DirectBashResult>(() => undefined),
+			}) },
+			notifications: { notify: vi.fn() },
+			createId: () => "bash-1",
+		});
+		expect(editor.getText()).toBe("newer draft");
+		written.resolve();
+		await submitting;
+		expect(editor.getText()).toBe("newer draft");
+	});
+
 	it("keeps the final activity when Pi has deferred durable history", async () => {
 		const editor = bashEditor("");
 		const controller = new DirectBashController();

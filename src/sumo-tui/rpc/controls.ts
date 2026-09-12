@@ -1,4 +1,6 @@
 import type { RpcCommand, RpcResponse } from "@earendil-works/pi-coding-agent";
+import type { RpcRequestHandle } from "./client.js";
+import type { DirectBashResult } from "./direct-bash.js";
 import { encodeRpcTreeNavigationPayload, type RpcTreeNavigationOutcome, type RpcTreeNavigationOutcomeBroker, type RpcTreeNavigationRequest } from "../pi-compat/tree-navigation-command.js";
 import { responseData, type RpcResponseData } from "./response.js";
 import { filterToEnabled, readEnabledModelPatterns } from "../../config/enabled-models.js";
@@ -6,7 +8,8 @@ import { RpcHostStateStore, type RpcHostChromeState } from "./state.js";
 import { isRpcThinkingLevel, type RpcThinkingLevel } from "./thinking-level.js";
 
 export interface RpcCommandClient {
-	send(command: RpcCommand, timeoutMs?: number): Promise<RpcResponse>;
+	send(command: RpcCommand, timeoutMs?: number | null): Promise<RpcResponse>;
+	sendWithWriteAck?(command: RpcCommand, timeoutMs?: number | null): RpcRequestHandle;
 }
 
 export interface RpcHostControlsOptions {
@@ -24,6 +27,12 @@ export type RpcSessionStats = RpcResponseData<"get_session_stats">;
 export interface RpcClearedQueue {
 	readonly steering: readonly string[];
 	readonly followUp: readonly string[];
+}
+
+interface RpcBashRequest {
+	readonly id: string;
+	readonly written: Promise<void>;
+	readonly result: Promise<DirectBashResult>;
 }
 
 export interface RpcModelOption {
@@ -51,6 +60,17 @@ const COMPACT_TIMEOUT_MS = 300_000;
 const LOGIN_TIMEOUT_MS = 1_200_000;
 export const TREE_NAVIGATION_TIMEOUT_MS = 1_200_000;
 const SESSION_COMMAND_TIMEOUT_MS = 60_000;
+
+function validateBashResult(result: DirectBashResult): DirectBashResult {
+	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- validate untrusted RPC data at the control boundary.
+	if (!result || typeof result.output !== "string" || typeof result.cancelled !== "boolean" || typeof result.truncated !== "boolean") {
+		throw new Error("bash failed: invalid result");
+	}
+	if (result.exitCode !== undefined && (!Number.isInteger(result.exitCode))) throw new Error("bash failed: invalid result.exitCode");
+	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- validate untrusted RPC data at the control boundary.
+	if (result.fullOutputPath !== undefined && typeof result.fullOutputPath !== "string") throw new Error("bash failed: invalid result.fullOutputPath");
+	return result;
+}
 
 function modelLabel(model: ModelIdentity): string {
 	return `${model.provider}/${model.id}`;
@@ -198,6 +218,20 @@ export class RpcHostControls {
 
 	public async abort(): Promise<void> {
 		responseData(await this.client.send({ type: "abort" }), "abort");
+	}
+
+	public runBash(command: string, excludeFromContext: boolean, id: string): RpcBashRequest {
+		if (!this.client.sendWithWriteAck) throw new Error("RPC client does not support staged writes");
+		const request = this.client.sendWithWriteAck({ type: "bash", id, command, excludeFromContext }, null);
+		return {
+			id: request.id,
+			written: request.written,
+			result: request.response.then((response) => validateBashResult(responseData(response, "bash"))),
+		};
+	}
+
+	public async abortBash(): Promise<void> {
+		responseData(await this.client.send({ type: "abort_bash" }), "abort_bash");
 	}
 
 	public async getForkMessages(): Promise<RpcForkMessage[]> {

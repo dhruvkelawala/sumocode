@@ -21,6 +21,7 @@ function decodeFrame(json: string): RpcResponse {
  */
 it("pins the 0.85.1 queue and thinking wire shapes", () => {
 	expectTypeOf<RpcResponseData<"clear_queue">>().toEqualTypeOf<{ steering: string[]; followUp: string[] }>();
+	expectTypeOf<RpcResponseData<"bash">>().toMatchTypeOf<{ output: string; cancelled: boolean; truncated: boolean }>();
 	expectTypeOf<RpcResponseData<"get_available_thinking_levels">>().toEqualTypeOf<{ levels: RpcSessionState["thinkingLevel"][] }>();
 	expectTypeOf<RpcResponseData<"set_thinking_level">>().toEqualTypeOf<undefined>();
 	expectTypeOf<Extract<AgentSessionEvent, { type: "thinking_level_changed" }>["level"]>().toEqualTypeOf<RpcSessionState["thinkingLevel"]>();

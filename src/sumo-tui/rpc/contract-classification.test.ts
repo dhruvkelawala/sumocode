@@ -24,8 +24,8 @@ it("classifies every shipped RPC command, including the 0.85.1 queue and retry v
 	expect(RPC_COMMAND_DISPOSITIONS.set_steering_mode).toMatchObject({ kind: "downstream-plan-owned", owner: "Plan 090 (#377)" });
 	expect(RPC_COMMAND_DISPOSITIONS.set_follow_up_mode).toMatchObject({ kind: "downstream-plan-owned", owner: "Plan 090 (#377)" });
 	expect(RPC_COMMAND_DISPOSITIONS.abort_retry).toMatchObject({ kind: "downstream-plan-owned", owner: "Plan 089 (#376)" });
-	expect(RPC_COMMAND_DISPOSITIONS.bash).toMatchObject({ kind: "downstream-plan-owned", owner: "Plan 091 (#378)" });
-	expect(RPC_COMMAND_DISPOSITIONS.abort_bash).toMatchObject({ kind: "downstream-plan-owned", owner: "Plan 091 (#378)" });
+	expect(RPC_COMMAND_DISPOSITIONS.bash).toMatchObject({ kind: "implemented", owner: "direct-bash.ts DirectBashController" });
+	expect(RPC_COMMAND_DISPOSITIONS.abort_bash).toMatchObject({ kind: "implemented", owner: "controls.ts RpcHostControls.abortBash" });
 	expectTypeOf<keyof typeof RPC_COMMAND_DISPOSITIONS>().toEqualTypeOf<RpcCommand["type"]>();
 });
 
@@ -42,7 +42,7 @@ it("classifies every shipped agent-session event under one primary consumer", ()
 	expect(AGENT_EVENT_DISPOSITIONS.turn_start.kind).toBe("intentionally-ignored");
 	expect(AGENT_EVENT_DISPOSITIONS.auto_retry_start).toMatchObject({ kind: "downstream-plan-owned", owner: "Plan 089 (#376)" });
 	expect(AGENT_EVENT_DISPOSITIONS.summarization_retry_finished).toMatchObject({ kind: "downstream-plan-owned", owner: "Plan 089 (#376)" });
-	expect(AGENT_EVENT_DISPOSITIONS.bash_execution_update).toMatchObject({ kind: "downstream-plan-owned", owner: "Plan 091 (#378)" });
+	expect(AGENT_EVENT_DISPOSITIONS.bash_execution_update).toMatchObject({ kind: "projected", owner: "direct-bash.ts DirectBashController" });
 	expectTypeOf<keyof typeof AGENT_EVENT_DISPOSITIONS>().toEqualTypeOf<AgentSessionEvent["type"]>();
 });
 

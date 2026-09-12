@@ -34,6 +34,7 @@ import { RpcHostOverlayManager } from "./host-overlays.js";
 import { InlineSelectorHost } from "./inline-selector.js";
 import { InitialHydrationActionGate } from "./initial-hydration-action-gate.js";
 import { decideRpcInterrupt, type RpcInterruptInputKind } from "./interrupt.js";
+import { DirectBashController, parseDirectBash, type DirectBashResult } from "./direct-bash.js";
 import { readGitBranch, watchGitBranch } from "./git.js";
 import {
 	createRpcPromptScheduler,
@@ -260,9 +261,41 @@ function piBinary(env: NodeJS.ProcessEnv): string {
 // the Node host bundle still copies the same .mjs sibling for its existing
 // runtime path.
 
-function activityPresentation(snapshot: ActivityStoreSnapshot) {
+interface DurableDirectBashRecord {
+	readonly role?: unknown;
+	readonly command?: unknown;
+	readonly output?: unknown;
+	readonly exitCode?: unknown;
+	readonly cancelled?: unknown;
+	readonly truncated?: unknown;
+	readonly fullOutputPath?: unknown;
+	readonly excludeFromContext?: unknown;
+	readonly timestamp?: unknown;
+}
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- parse the persisted/RPC transcript boundary before reconciliation.
+function matchesDurableDirectBash(value: unknown, command: string, excludeFromContext: boolean, result: DirectBashResult, startedAt: number): boolean {
+	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- parse the persisted/RPC transcript boundary before reconciliation.
+	if (typeof value !== "object" || value === null) return false;
+	// SAFETY: field equality below validates the only durable bash shape used.
+	// oxlint-disable-next-line anti-slop/require-safety-comment-for-type-assertion
+	const message = value as DurableDirectBashRecord;
+	return message.role === "bashExecution"
+		&& message.command === command
+		&& message.output === result.output
+		&& message.exitCode === result.exitCode
+		&& message.cancelled === result.cancelled
+		&& message.truncated === result.truncated
+		&& message.fullOutputPath === result.fullOutputPath
+		&& message.excludeFromContext === excludeFromContext
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- persisted timestamps are untrusted.
+		&& typeof message.timestamp === "number"
+		&& message.timestamp >= startedAt;
+}
+
+function activityPresentation(snapshot: ActivityStoreSnapshot, directBash?: ActivityStoreSnapshot["activities"][number]) {
 	const presentation = {
-		activities: snapshot.activities,
+		activities: directBash ? [...snapshot.activities, directBash] : snapshot.activities,
 		expansion: snapshot.expansion,
 		defaultExpansion: snapshot.defaultExpansion,
 	};
@@ -422,6 +455,91 @@ export async function sendRpcPrompt(message: string, options: RpcPromptSendOptio
 	responseData(response, "prompt");
 }
 
+interface DirectBashCompletion {
+	readonly id: string;
+	readonly command: string;
+	readonly excludeFromContext: boolean;
+	readonly result: DirectBashResult;
+	readonly startedAt: number;
+}
+
+export interface RpcDirectBashSubmitDependencies {
+	readonly editor: Pick<RpcHostEditorController, "getText" | "setText" | "addToHistory" | "clearImageDrafts">;
+	readonly controls: Pick<RpcHostControls, "runBash">;
+	readonly controller: DirectBashController;
+	readonly notifications: ErrorNotifier;
+	readonly ownerSessionId?: () => string | undefined;
+	readonly reconcileTranscript?: (completion: DirectBashCompletion) => Promise<void>;
+	readonly createId?: () => string;
+}
+
+/** Submit explicit local shell syntax through Pi RPC, never through prompt/tool_call. */
+export async function submitRpcDirectBash(message: string, deps: RpcDirectBashSubmitDependencies): Promise<boolean> {
+	if (!message.startsWith("!")) return false;
+	const parsed = parseDirectBash(message);
+	if (!parsed) {
+		deps.notifications.notify("enter a command after !", "warning");
+		return true;
+	}
+	if (deps.controller.isRunning) {
+		if (deps.editor.getText().length === 0) deps.editor.setText(message);
+		deps.notifications.notify("direct bash already running", "warning");
+		return true;
+	}
+	// CustomEditor clears before onSubmit. Restore synchronously until the child
+	// pipe acknowledges the write; that acknowledgement is not Pi acceptance.
+	if (deps.editor.getText().length === 0) deps.editor.setText(message);
+	const id = deps.createId?.() ?? randomUUID();
+	let request: ReturnType<RpcHostControls["runBash"]>;
+	try {
+		request = deps.controls.runBash(parsed.command, parsed.excludeFromContext, id);
+		deps.controller.start({ ...parsed, id, ownerSessionId: deps.ownerSessionId?.() });
+	} catch (error) {
+		deps.notifications.notify(`bash write failed: ${truncateForNotification(error instanceof Error ? error.message : String(error))}`, "error");
+		return true;
+	}
+	const outcome = request.result.then(
+		(result) => ({ result } as const),
+		(error: Error) => ({ error } as const),
+	);
+	try {
+		await request.written;
+	} catch (error) {
+		if (error instanceof RpcChildExitError) {
+			deps.controller.fail("acceptance unknown");
+			deps.notifications.notify(`bash acceptance unknown: ${truncateForNotification(error.message)}`, "warning");
+		} else {
+			deps.controller.reset();
+			deps.notifications.notify(`bash write failed: ${truncateForNotification(error instanceof Error ? error.message : String(error))}`, "error");
+		}
+		return true;
+	}
+	deps.editor.addToHistory(message);
+	if (deps.editor.getText() === message) {
+		deps.editor.setText("");
+		deps.editor.clearImageDrafts();
+	}
+	void outcome.then(async (settled) => {
+		// Session replacement resets ownership before late old-session responses
+		// arrive; never restore or project their command into the new session.
+		if (deps.controller.getSnapshot()?.id !== `rpc-bash:${id}`) return;
+		if ("error" in settled) {
+			deps.controller.fail("acceptance unknown");
+			if (deps.editor.getText().length === 0) deps.editor.setText(message);
+			deps.notifications.notify(`bash acceptance unknown: ${truncateForNotification(settled.error instanceof Error ? settled.error.message : String(settled.error))}`, "warning");
+			return;
+		}
+		const startedAt = deps.controller.getSnapshot()?.createdAt ?? 0;
+		deps.controller.complete(id, settled.result);
+		try {
+			await deps.reconcileTranscript?.({ id, command: parsed.command, excludeFromContext: parsed.excludeFromContext, result: settled.result, startedAt });
+		} catch (error) {
+			deps.notifications.notify(`bash history refresh failed: ${truncateForNotification(error instanceof Error ? error.message : String(error))}`, "warning");
+		}
+	});
+	return true;
+}
+
 export interface RpcPromptSubmitOptions {
 	readonly visualFixture?: unknown;
 	readonly scheduler?: Pick<RpcPromptScheduler, "submit">;
@@ -535,6 +653,8 @@ export interface RpcMessageFollowUpDependencies {
 	readonly scheduler: Pick<RpcPromptScheduler, "submit">;
 	readonly notifications: ErrorNotifier;
 	readonly isBlocked?: () => boolean;
+	readonly submitDirectBash?: (message: string) => Promise<boolean>;
+	readonly isAgentBusy?: () => boolean;
 }
 
 export function handleRpcMessageFollowUp(deps: RpcMessageFollowUpDependencies): Promise<void> {
@@ -547,6 +667,9 @@ export function handleRpcMessageFollowUp(deps: RpcMessageFollowUpDependencies): 
 		}
 		const draft = deps.editor.getText();
 		if (draft.trim().length === 0) return;
+		// Idle Alt+Enter follows ordinary submit semantics; busy Alt+Enter remains
+		// a prompt follow-up and must never turn shell-looking text into execution.
+		if (deps.isAgentBusy?.() !== true && await deps.submitDirectBash?.(draft)) return;
 		// Queue the EXPANDED submission (pasted [Image N] tokens → temp paths),
 		// mirroring the Enter-submit wrapper — a raw draft would deliver the
 		// literal token once drained. Expansion is capture-only here; the draft
@@ -706,7 +829,8 @@ export interface RpcHostInterruptDependencies {
 	readonly selector?: Pick<InlineSelectorHost, "getActiveKind" | "close">;
 	readonly editor: Pick<RpcHostEditorController, "getText" | "setText" | "isAutocompleteOpen">;
 	readonly stateStore: Pick<RpcHostStateStore, "getSnapshot">;
-	readonly controls: Pick<RpcHostControls, "abort">;
+	readonly controls: Pick<RpcHostControls, "abort"> & Partial<Pick<RpcHostControls, "abortBash">>;
+	readonly directBash?: Pick<DirectBashController, "isRunning">;
 	readonly abortInFlight?: () => Promise<void>;
 	readonly notifications: Pick<NotificationCenter, "notify"> & Partial<Pick<NotificationCenter, "dismissSticky">>;
 	readonly requestHostExit: (code: number) => void;
@@ -763,6 +887,7 @@ export function createRpcHostInterruptHandler(deps: RpcHostInterruptDependencies
 			overlayActive,
 			draftNonEmpty: deps.editor.getText().trim().length > 0,
 			isStreaming,
+			directBashActive: deps.directBash?.isRunning,
 			autocompleteOpen: deps.editor.isAutocompleteOpen(),
 			armedUntil: armedQuitUntil,
 			now: nowMs,
@@ -780,6 +905,13 @@ export function createRpcHostInterruptHandler(deps: RpcHostInterruptDependencies
 				// Clearing the draft is a host action, so it supersedes a stale sticky
 				// failure (issue 481 home B) the way the direct editor actions do.
 				deps.notifications.dismissSticky?.();
+				return true;
+			case "abort-bash":
+				armedQuitUntil = undefined;
+				void notifyOnError(async () => {
+					if (!deps.controls.abortBash) throw new Error("abort_bash is unavailable");
+					await deps.controls.abortBash();
+				}, deps.notifications);
 				return true;
 			case "abort":
 				armedQuitUntil = undefined;
@@ -970,6 +1102,9 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 	});
 	lifecycle.ownResource("activity", activityStore);
 	let latestActivitySnapshot = activityStore.getSnapshot();
+	const directBash = new DirectBashController({
+		onChange: (activity) => runtime?.update({ activities: activityPresentation(latestActivitySnapshot, activity) }),
+	});
 	let deferActivityRuntimeUpdate = false;
 	const sessionEvents = new RpcSessionEventBuffer();
 	let treeNavigationBusy = false;
@@ -994,7 +1129,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 			feedOwnerSessionId: snapshot.ownerSessionId ?? null,
 			activityCount: snapshot.activities.length,
 		});
-		if (!deferActivityRuntimeUpdate) runtime?.update({ activities: activityPresentation(snapshot) });
+		if (!deferActivityRuntimeUpdate) runtime?.update({ activities: activityPresentation(snapshot, directBash.getSnapshot()) });
 	}));
 	const requestRender = (): void => runtime?.requestRender();
 	const pushState = (state?: RpcHostChromeState): void => {
@@ -1118,17 +1253,29 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 	 * be consumed by the pre-hydration scheduler generation. Keeping this gate
 	 * at submit (not typing) preserves early editing without dropping a prompt.
 	 */
+	let reconcileDirectBashTranscript = async (_completion: DirectBashCompletion): Promise<void> => undefined;
+	const submitDirectBash = (message: string): Promise<boolean> => submitRpcDirectBash(message, {
+		editor,
+		controls,
+		controller: directBash,
+		notifications,
+		ownerSessionId: () => stateStore.getSnapshot().sessionId,
+		reconcileTranscript: (completion) => reconcileDirectBashTranscript(completion),
+	});
 	const submitHandlers = createEditorSubmitHandlers({
 		gate: hydrationActionGate,
 		notifications,
 		requestExit: (code) => requestHostExit(code),
 		isTreeBusy: () => treeNavigationBusy,
-		submit: (message, delivery) => submitRpcPrompt(message, {
-			visualFixture,
-			scheduler,
-			client,
-			delivery: delivery ?? "steer",
-		}),
+		submit: async (message, delivery) => {
+			if (await submitDirectBash(message)) return;
+			await submitRpcPrompt(message, {
+				visualFixture,
+				scheduler,
+				client,
+				delivery: delivery ?? "steer",
+			});
+		},
 	});
 	const keybindings = createRpcKeybindingsManager({ env });
 	const handleModelCycleForward = createModelCycleForwardHandler({
@@ -1152,7 +1299,14 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		notifications,
 	});
 	const handleMessageFollowUp = (): Promise<void> =>
-		handleRpcMessageFollowUp({ editor, scheduler, notifications, isBlocked: () => treeNavigationBusy });
+		handleRpcMessageFollowUp({
+			editor,
+			scheduler,
+			notifications,
+			isBlocked: () => treeNavigationBusy,
+			isAgentBusy: () => stateStore.getSnapshot().isStreaming || stateStore.getSnapshot().isCompacting,
+			submitDirectBash,
+		});
 	const handleMessageToggleDelivery = (): void => {
 		const current = stateStore.getSnapshot().promptDeliveryMode ?? "steer";
 		pushState(stateStore.setPromptDeliveryMode(toggleRpcPromptDelivery(current)));
@@ -1238,20 +1392,39 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 			return readRpcMessages();
 		}
 	};
-	const readTranscript = async () => transcriptPump.replaceFromMessages(await readTranscriptMessages());
+	let pendingDirectBashReconciliation: DirectBashCompletion | undefined;
+	const reconcileDurableDirectBash = <T>(messages: readonly T[]): void => {
+		const pending = pendingDirectBashReconciliation;
+		if (!pending || !messages.some((message) => matchesDurableDirectBash(message, pending.command, pending.excludeFromContext, pending.result, pending.startedAt))) return;
+		pendingDirectBashReconciliation = undefined;
+		if (directBash.getSnapshot()?.id === `rpc-bash:${pending.id}`) directBash.reset();
+	};
 	const rehydrateTranscript = async (): Promise<void> => {
-		const transcript = await readTranscript();
+		const messages = await readTranscriptMessages();
+		const transcript = transcriptPump.replaceFromMessages(messages);
+		reconcileDurableDirectBash(messages);
 		runtime?.update({ transcript, transcriptRevision: transcriptPump.getRevision() });
+	};
+	reconcileDirectBashTranscript = async (completion) => {
+		pendingDirectBashReconciliation = completion;
+		await rehydrateTranscript();
 	};
 	const processAgentEvent = (event: AgentSessionEvent): void => {
 		const transcript = transcriptPump.handleAgentEvent(event);
 		const state = stateStore.handleAgentEvent(event);
 		runtime?.update({ state, transcript, transcriptRevision: transcriptPump.getRevision() });
 		scheduler.handleAgentEvent(event);
+		if (event.type === "agent_settled" && pendingDirectBashReconciliation) {
+			void rehydrateTranscript().catch((error: Error) => {
+				notifications.notify(`bash history refresh failed: ${truncateForNotification(error.message)}`, "warning");
+			});
+		}
 	};
 	let sessionHydrationRetrying = false;
 	const beginSessionChange = (): void => {
 		if (!sessionEvents.begin()) return;
+		directBash.reset();
+		pendingDirectBashReconciliation = undefined;
 		queueOwnerGeneration += 1;
 		sessionHydrationRetrying = false;
 		deferActivityRuntimeUpdate = true;
@@ -1380,7 +1553,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		treeNavigationBusy = busy;
 		const state = stateStore.setBranchSummaryBusy(busy);
 		if (busy) runtime?.update({ state });
-		else runtime?.update({ state, activities: activityPresentation(latestActivitySnapshot) });
+		else runtime?.update({ state, activities: activityPresentation(latestActivitySnapshot, directBash.getSnapshot()) });
 		if (!busy) deferActivityRuntimeUpdate = false;
 	};
 
@@ -1521,6 +1694,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 				outcomeStatus: outcome?.status ?? "unknown",
 				success: hydrationSuccess,
 			});
+			reconcileDurableDirectBash(messages);
 			runtime?.update({ state, transcript, transcriptRevision: transcriptPump.getRevision() });
 			const replay = sessionEvents.finishHydration();
 			for (const event of replay.supersededSnapshotEvents) scheduler.handleAgentEvent(event);
@@ -1603,6 +1777,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 
 	lifecycle.ownSubscription("client-event", client.onEvent((event) => {
 		if (visualFixture) return;
+		if (directBash.handleEvent(event)) return;
 		if (sessionEvents.capture(event)) return;
 		processAgentEvent(event);
 	}));
@@ -1655,6 +1830,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		editor,
 		stateStore,
 		controls,
+		directBash,
 		notifications,
 		requestHostExit: (code) => requestHostExit(code),
 		submitInFlight: () => scheduler.getSnapshot().busy || actions?.isLoginActive() === true,

@@ -13,6 +13,7 @@ import { RpcHostOverlayManager } from "./host-overlays.js";
 import { RpcHostLifecycle } from "./host-lifecycle.js";
 import { RpcHostControls, type RpcAvailableModel } from "./controls.js";
 import { RpcHostStateStore } from "./state.js";
+import { DirectBashController, type DirectBashResult } from "./direct-bash.js";
 import {
 	activitySnapshotMatchesSession,
 	createEditorSubmitHandlers,
@@ -33,6 +34,7 @@ import {
 	createUnhandledRejectionHandler,
 	hydrateSameSessionTreeNavigation,
 	submitInitialPromptFromFile,
+	submitRpcDirectBash,
 	toggleRpcPromptDelivery,
 	main,
 	writeExitCodeFile,
@@ -116,7 +118,7 @@ function interruptDeps(overrides: Partial<RpcHostInterruptDependencies> = {}): R
 		overlays: { getActiveKind: () => undefined, close: vi.fn() },
 		editor: { getText: () => "", setText: vi.fn(), isAutocompleteOpen: () => false },
 		stateStore: { getSnapshot: () => asNever({ isStreaming: false }) },
-		controls: { abort: vi.fn(async () => undefined) },
+		controls: { abort: vi.fn(async () => undefined), abortBash: vi.fn(async () => undefined) },
 		notifications: { notify: vi.fn() },
 		requestHostExit: vi.fn(),
 		now: () => 1_000,
@@ -126,6 +128,170 @@ function interruptDeps(overrides: Partial<RpcHostInterruptDependencies> = {}): R
 
 const CTRL_C = "";
 const ESCAPE = "";
+
+describe("Pi-native direct bash submission", () => {
+	function bashEditor(text: string) {
+		let value = text;
+		return {
+			getText: () => value,
+			setText: vi.fn((next: string) => { value = next; }),
+			addToHistory: vi.fn(),
+			clearImageDrafts: vi.fn(),
+		};
+	}
+
+	it("keeps the draft until local write acknowledgement, then finalizes from Pi and rehydrates", async () => {
+		const written = deferred();
+		let resolveResult!: (value: DirectBashResult) => void;
+		const result = { promise: new Promise<DirectBashResult>((resolve) => { resolveResult = resolve; }) };
+		const editor = bashEditor("");
+		const controller = new DirectBashController();
+		const reconcileTranscript = vi.fn(async () => controller.reset());
+		const submitting = submitRpcDirectBash("!! printf ok  ", {
+			editor,
+			controller,
+			controls: { runBash: vi.fn(() => ({ id: "bash-1", written: written.promise, result: result.promise })) },
+			notifications: { notify: vi.fn() },
+			createId: () => "bash-1",
+			reconcileTranscript,
+		});
+		expect(editor.getText()).toBe("!! printf ok  ");
+		written.resolve();
+		await expect(submitting).resolves.toBe(true);
+		expect(editor.addToHistory).toHaveBeenCalledWith("!! printf ok  ");
+		expect(editor.getText()).toBe("");
+		resolveResult({ output: "ok", exitCode: 0, cancelled: false, truncated: false });
+		await vi.waitFor(() => expect(reconcileTranscript).toHaveBeenCalledOnce());
+		expect(controller.getSnapshot()).toBeUndefined();
+	});
+
+	it("does not overwrite text entered while submission waited for hydration", async () => {
+		const written = deferred();
+		const editor = bashEditor("newer draft");
+		const submitting = submitRpcDirectBash("!pwd", {
+			editor,
+			controller: new DirectBashController(),
+			controls: { runBash: () => ({
+				id: "bash-1",
+				written: written.promise,
+				result: new Promise<DirectBashResult>(() => undefined),
+			}) },
+			notifications: { notify: vi.fn() },
+			createId: () => "bash-1",
+		});
+		expect(editor.getText()).toBe("newer draft");
+		written.resolve();
+		await submitting;
+		expect(editor.getText()).toBe("newer draft");
+		expect(editor.clearImageDrafts).not.toHaveBeenCalled();
+	});
+
+	it("keeps the final activity when Pi has deferred durable history", async () => {
+		const editor = bashEditor("");
+		const controller = new DirectBashController();
+		await submitRpcDirectBash("!pwd", {
+			editor,
+			controller,
+			controls: { runBash: () => ({
+				id: "bash-1",
+				written: Promise.resolve(),
+				result: Promise.resolve({ output: "/repo", exitCode: 0, cancelled: false, truncated: false }),
+			}) },
+			notifications: { notify: vi.fn() },
+			createId: () => "bash-1",
+			reconcileTranscript: async () => undefined,
+		});
+		await vi.waitFor(() => expect(controller.getSnapshot()?.status).toBe("succeeded"));
+	});
+
+	it("does not let an older history refresh reset a newer bash", async () => {
+		let resolveFirst!: (value: DirectBashResult) => void;
+		const firstResult = new Promise<DirectBashResult>((resolve) => { resolveFirst = resolve; });
+		const refresh = deferred();
+		const editor = bashEditor("");
+		const controller = new DirectBashController();
+		const runBash = vi.fn((_command: string, _excluded: boolean, id: string) => ({
+			id,
+			written: Promise.resolve(),
+			result: id === "first" ? firstResult : new Promise<DirectBashResult>(() => undefined),
+		}));
+		await submitRpcDirectBash("!first", {
+			editor,
+			controller,
+			controls: { runBash },
+			notifications: { notify: vi.fn() },
+			createId: () => "first",
+			reconcileTranscript: async (completion) => {
+				await refresh.promise;
+				if (controller.getSnapshot()?.id === `rpc-bash:${completion.id}`) controller.reset();
+			},
+		});
+		resolveFirst({ output: "done", exitCode: 0, cancelled: false, truncated: false });
+		await vi.waitFor(() => expect(controller.getSnapshot()?.status).toBe("succeeded"));
+		await submitRpcDirectBash("!second", {
+			editor,
+			controller,
+			controls: { runBash },
+			notifications: { notify: vi.fn() },
+			createId: () => "second",
+		});
+		refresh.resolve();
+		await new Promise((resolve) => setImmediate(resolve));
+		expect(controller.getSnapshot()).toMatchObject({ id: "rpc-bash:second", status: "running" });
+	});
+
+	it("leaves the draft untouched on synchronous write failure", async () => {
+		const editor = bashEditor("");
+		const notifications = { notify: vi.fn() };
+		await expect(submitRpcDirectBash("!pwd", {
+			editor,
+			controller: new DirectBashController(),
+			controls: { runBash: () => { throw new Error("pipe closed"); } },
+			notifications,
+		})).resolves.toBe(true);
+		expect(editor.getText()).toBe("!pwd");
+		expect(editor.addToHistory).not.toHaveBeenCalled();
+		expect(notifications.notify).toHaveBeenCalledWith(expect.stringContaining("write failed"), "error");
+	});
+
+	it("reports unknown acceptance when the child exits before write acknowledgement", async () => {
+		let rejectWritten!: (error: Error) => void;
+		let rejectResult!: (error: Error) => void;
+		const written = new Promise<void>((_resolve, reject) => { rejectWritten = reject; });
+		const result = new Promise<DirectBashResult>((_resolve, reject) => { rejectResult = reject; });
+		const editor = bashEditor("");
+		const notifications = { notify: vi.fn() };
+		const controller = new DirectBashController();
+		const submitting = submitRpcDirectBash("!sleep 60", {
+			editor,
+			controller,
+			controls: { runBash: () => ({ id: "bash-1", written, result }) },
+			notifications,
+			createId: () => "bash-1",
+		});
+		const exit = new RpcChildExitError("child exited", { code: 1, signal: null });
+		rejectWritten(exit);
+		rejectResult(exit);
+		await expect(submitting).resolves.toBe(true);
+		expect(editor.getText()).toBe("!sleep 60");
+		expect(controller.getSnapshot()).toMatchObject({ status: "lost", result: { error: "acceptance unknown" } });
+		expect(notifications.notify).toHaveBeenCalledWith(expect.stringContaining("acceptance unknown"), "warning");
+	});
+
+	it("restores an acknowledged command when the child exits before its response", async () => {
+		const editor = bashEditor("");
+		const notifications = { notify: vi.fn() };
+		await submitRpcDirectBash("!sleep 60", {
+			editor,
+			controller: new DirectBashController(),
+			controls: { runBash: () => ({ id: "bash-1", written: Promise.resolve(), result: Promise.reject(new Error("child exited")) }) },
+			notifications,
+			createId: () => "bash-1",
+		});
+		await vi.waitFor(() => expect(notifications.notify).toHaveBeenCalledWith(expect.stringContaining("acceptance unknown"), "warning"));
+		expect(editor.getText()).toBe("!sleep 60");
+	});
+});
 
 describe("editor command-readiness submission", () => {
 	it.each(["ordinary prompt", "/help exact text"])("notifies immediately and dispatches pre-ready text exactly once: %s", async (message) => {
@@ -454,6 +620,40 @@ describe("handleRpcMessageFollowUp", () => {
 		};
 	}
 
+	it("delegates an idle ! draft to direct bash", async () => {
+		const editor = followUpEditor("!pwd");
+		const scheduler = { submit: vi.fn() };
+		const submitDirectBash = vi.fn(async () => true);
+
+		await handleRpcMessageFollowUp({
+			editor,
+			scheduler,
+			notifications: { notify: vi.fn() },
+			isAgentBusy: () => false,
+			submitDirectBash,
+		});
+
+		expect(submitDirectBash).toHaveBeenCalledWith("!pwd");
+		expect(scheduler.submit).not.toHaveBeenCalled();
+	});
+
+	it("keeps a busy Alt+Enter ! draft in the prompt follow-up queue", async () => {
+		const editor = followUpEditor("!pwd");
+		const scheduler = { submit: vi.fn(async () => "queued" as const) };
+		const submitDirectBash = vi.fn(async () => true);
+
+		await handleRpcMessageFollowUp({
+			editor,
+			scheduler,
+			notifications: { notify: vi.fn() },
+			isAgentBusy: () => true,
+			submitDirectBash,
+		});
+
+		expect(submitDirectBash).not.toHaveBeenCalled();
+		expect(scheduler.submit).toHaveBeenCalledWith("!pwd", { delivery: "followUp" });
+	});
+
 	it("adds history and clears the draft when Pi accepts an idle follow-up", async () => {
 		const editor = followUpEditor("queued draft");
 		const scheduler = {
@@ -661,6 +861,22 @@ describe("sendRpcPrompt payloads", () => {
 });
 
 describe("createRpcHostInterruptHandler wiring", () => {
+	it("sends only abort_bash when Escape interrupts direct bash during agent streaming", async () => {
+		const abort = vi.fn(async () => undefined);
+		const abortBash = vi.fn(async () => undefined);
+		const restoreQueuedDrafts = vi.fn();
+		const handle = createRpcHostInterruptHandler(interruptDeps({
+			stateStore: { getSnapshot: () => asNever({ isStreaming: true }) },
+			controls: { abort, abortBash },
+			directBash: { isRunning: true },
+			restoreQueuedDrafts,
+		}));
+
+		expect(handle(ESCAPE)).toBe(true);
+		await vi.waitFor(() => expect(abortBash).toHaveBeenCalledOnce());
+		expect(abort).not.toHaveBeenCalled();
+		expect(restoreQueuedDrafts).not.toHaveBeenCalled();
+	});
 	it("passes Escape through to the editor when the autocomplete dropdown is open, even while streaming", () => {
 		const requestHostExit = vi.fn();
 		const handle = createRpcHostInterruptHandler(interruptDeps({

@@ -9,14 +9,14 @@ import { RpcHostStateStore, type RpcHostChromeState } from "./state.js";
 
 class FakeClient implements RpcCommandClient {
 	public readonly commands: RpcCommand[] = [];
-	public readonly timeouts: Array<number | undefined> = [];
+	public readonly timeouts: Array<number | null | undefined> = [];
 	private readonly responses: RpcResponse[];
 
 	public constructor(...responses: RpcResponse[]) {
 		this.responses = [...responses];
 	}
 
-	public async send(command: RpcCommand, timeoutMs?: number): Promise<RpcResponse> {
+	public async send(command: RpcCommand, timeoutMs?: number | null): Promise<RpcResponse> {
 		this.commands.push(command);
 		this.timeouts.push(timeoutMs);
 		const response = this.responses.shift();
@@ -43,7 +43,7 @@ function deferred<T>(): Deferred<T> {
 
 class DeferredFakeClient implements RpcCommandClient {
 	public readonly commands: RpcCommand[] = [];
-	public readonly timeouts: Array<number | undefined> = [];
+	public readonly timeouts: Array<number | null | undefined> = [];
 	private readonly responses: Array<Deferred<RpcResponse>>;
 	public readonly deferredResponses: readonly Deferred<RpcResponse>[];
 
@@ -52,7 +52,7 @@ class DeferredFakeClient implements RpcCommandClient {
 		this.deferredResponses = responses;
 	}
 
-	public send(command: RpcCommand, timeoutMs?: number): Promise<RpcResponse> {
+	public send(command: RpcCommand, timeoutMs?: number | null): Promise<RpcResponse> {
 		this.commands.push(command);
 		this.timeouts.push(timeoutMs);
 		const response = this.responses.shift();
@@ -665,6 +665,31 @@ describe("RpcHostControls", () => {
 			{ type: "prompt", message: "/sumo:login-cancel" },
 		]);
 		expect(client.timeouts).toEqual([1_200_000, undefined]);
+	});
+
+	it("runs direct bash with its caller id, inclusion mode, write acknowledgement, and no timeout", async () => {
+		const written = Promise.resolve();
+		const response = Promise.resolve<RpcResponse>({
+			type: "response", command: "bash", id: "bash-1", success: true,
+			data: { output: "ok", exitCode: 0, cancelled: false, truncated: false },
+		});
+		const client: RpcCommandClient = {
+			send: vi.fn(),
+			sendWithWriteAck: vi.fn(() => ({ id: "bash-1", written, response })),
+		};
+		const controls = new RpcHostControls(client);
+		const request = controls.runBash("printf ok", true, "bash-1");
+		await expect(request.written).resolves.toBeUndefined();
+		await expect(request.result).resolves.toMatchObject({ output: "ok", exitCode: 0 });
+		expect(client.sendWithWriteAck).toHaveBeenCalledWith({
+			type: "bash", id: "bash-1", command: "printf ok", excludeFromContext: true,
+		}, null);
+	});
+
+	it("sends abort_bash separately from generic agent abort", async () => {
+		const client = new FakeClient({ type: "response", command: "abort_bash", success: true });
+		await new RpcHostControls(client).abortBash();
+		expect(client.commands).toEqual([{ type: "abort_bash" }]);
 	});
 
 	it("clears both native queues with the exact RPC command", async () => {

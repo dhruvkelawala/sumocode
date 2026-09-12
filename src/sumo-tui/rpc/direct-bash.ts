@@ -36,7 +36,6 @@ interface ActiveDirectBash extends DirectBashStart {
 	readonly createdAt: number;
 	output: string;
 	pendingHighSurrogate: string;
-	cancellationRequested: boolean;
 	settled: boolean;
 	activity: ActivitySnapshot;
 }
@@ -97,7 +96,7 @@ export class DirectBashController {
 			createdAt,
 			updatedAt: createdAt,
 		};
-		this.active = { ...start, createdAt, output: "", pendingHighSurrogate: "", cancellationRequested: false, settled: false, activity };
+		this.active = { ...start, createdAt, output: "", pendingHighSurrogate: "", settled: false, activity };
 		this.onChange(activity);
 		return activity;
 	}
@@ -127,9 +126,7 @@ export class DirectBashController {
 	}
 
 	public requestCancellation(): boolean {
-		if (!this.active || this.active.settled) return false;
-		this.active.cancellationRequested = true;
-		return true;
+		return this.active?.settled === false;
 	}
 
 	public complete(id: string, result: DirectBashResult): ActivitySnapshot {

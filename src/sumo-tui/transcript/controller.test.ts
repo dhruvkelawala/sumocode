@@ -882,6 +882,29 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		expect(chatMessageViewModelToPlainText(controller.viewModel().messages.at(-1)!)).toBe("stream ".repeat(500));
 	});
 
+	it("falls back to mapped block rendering when a stream gains markdown syntax", () => {
+		const chat = fakeChatSink();
+		const controller = new TranscriptController({ chat });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "draft", role: "assistant", content: [] } });
+		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "plain " } });
+		chat.appendToLast.mockClear();
+		chat.replaceLastWithViewModel.mockClear();
+		chat.replaceViewModelAt.mockClear();
+		chat.addViewModel.mockClear();
+		chat.replaceViewModels.mockClear();
+
+		controller.handleAgentEvent({
+			type: "message_update",
+			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "**bold**" },
+		});
+
+		expect(chat.appendToLast).not.toHaveBeenCalled();
+		expect(chat.replaceLastWithViewModel).toHaveBeenCalledWith(
+			expect.objectContaining({ blocks: [{ type: "markdown", text: "plain **bold**" }] }),
+			0,
+		);
+	});
+
 	it("keeps transcript-neutral events on the same snapshot and revision", () => {
 		const chat = fakeChatSink();
 		const controller = new TranscriptController({ chat });

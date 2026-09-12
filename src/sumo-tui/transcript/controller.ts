@@ -456,13 +456,14 @@ export class TranscriptController {
 			case "message_update": {
 				this.pendingChatOp = "incremental";
 				const previousDraft = this.draftMessage;
-				this.pendingIndexedChatIndices ??= new Set();
+				this.pendingIndexedChatIndices = undefined;
 				const message = eventMessage(record);
 				if (message === undefined && record.type === "message_update") {
 					// RPC streaming delta (no cumulative snapshot on the wire): fold it
 					// into the running draft instead of blanking it. See
 					// applyAssistantStreamDelta.
 					this.draftMessage = applyAssistantStreamDelta(this.draftMessage, asRecord(record.assistantMessageEvent));
+					transcriptDirty ||= this.draftMessage !== previousDraft;
 					break;
 				}
 				const hydratedIndex = stableMessageId(message) ? findCommittedMessageIndex(this.committedMessages, message) : -1;
@@ -689,6 +690,10 @@ export class TranscriptController {
 		if (deltaEvent.type === "text_start") return this.plainTextStreamChunks.length === 0;
 		if (deltaEvent.type === "text_end") return true;
 		if (deltaEvent.type !== "text_delta" || !isString(deltaEvent.delta)) return false;
+		// `ChatMessage.appendText` intentionally skips markdown parsing. Leave the
+		// fast path before any syntax-bearing chunk so streamed markdown keeps the
+		// same block rendering as a freshly mapped draft.
+		if (!/^[\p{L}\p{N}\s]*$/u.test(deltaEvent.delta)) return false;
 
 		const message = eventMessage(record);
 		if (message === undefined) this.plainTextStreamChunks.push(deltaEvent.delta);

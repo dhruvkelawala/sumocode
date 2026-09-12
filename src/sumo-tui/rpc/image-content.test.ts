@@ -53,6 +53,19 @@ describe("loadRpcImages", () => {
 		expect(images.map((entry) => entry.data)).toEqual([PNG.toString("base64"), PNG.toString("base64")]);
 	});
 
+	it("rejects multiple individually valid images that cross the aggregate limit", async () => {
+		const cwd = root();
+		const large = Buffer.alloc(Math.floor(MAX_RPC_IMAGE_TOTAL_BYTES / 2) + 1);
+		PNG.copy(large);
+		writeFileSync(join(cwd, "one.png"), large);
+		writeFileSync(join(cwd, "two.png"), large);
+
+		await expect(loadRpcImages([
+			{ token: "[Image 1]", path: "./one.png" },
+			{ token: "[Image 2]", path: "./two.png" },
+		], { cwd })).rejects.toThrow(`images exceed ${MAX_RPC_IMAGE_TOTAL_BYTES} byte total limit`);
+	});
+
 	it("rejects an oversized image before reading it", async () => {
 		const cwd = root();
 		const path = join(cwd, "huge.png");

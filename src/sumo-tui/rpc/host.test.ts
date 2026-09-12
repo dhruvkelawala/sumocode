@@ -23,6 +23,7 @@ import {
 	createModelCycleForwardHandler,
 	createRpcExitHandler,
 	createRpcHostInterruptHandler,
+	createRpcImageDraftSubmitter,
 	createRpcQueueRestoreTransaction,
 	createRpcTreeNavigationRetryScheduler,
 	createThinkingCycleHandler,
@@ -859,6 +860,21 @@ describe("native image prompt submission", () => {
 			...overrides,
 		};
 	}
+
+	it("declines a repeated image submission while correlated preflight is pending", async () => {
+		let release!: () => void;
+		const first = new Promise<void>((resolve) => { release = resolve; });
+		const submit = vi.fn(() => first);
+		const notifications = { notify: vi.fn() };
+		const submitDraft = createRpcImageDraftSubmitter(submit, notifications);
+
+		const pending = submitDraft(draft);
+		await submitDraft(draft);
+		expect(submit).toHaveBeenCalledOnce();
+		expect(notifications.notify).toHaveBeenCalledWith("image already sending · draft kept", "warning");
+		release();
+		await pending;
+	});
 
 	it("sends accepted image drafts natively without a queue behavior, then commits the clear", async () => {
 		const deps = imageDeps();

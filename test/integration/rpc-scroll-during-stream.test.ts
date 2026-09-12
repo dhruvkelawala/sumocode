@@ -81,15 +81,17 @@ describe("sumocode RPC scroll-during-stream integration", () => {
 			{ cols, rows, timeoutMs: 5_000 },
 		);
 
-		// Wait for chunk three's on-screen sentinel: the fixture renames the
-		// session after each chunk and the session name renders in the
-		// always-visible chrome, so this observes "chunks two and three landed
-		// WHILE scrolled up" without wall-clock guessing. waitForOutput cannot
-		// help here -- while scrolled away from the streaming tail the draft
-		// rows are never painted, so chunk text never enters the byte stream.
+		// Wait until at least chunk three's on-screen sentinel: the fixture
+		// renames the session after each chunk and the session name renders in
+		// the always-visible chrome, so this observes "chunks two and three landed
+		// WHILE scrolled up" without wall-clock guessing. Accept chunk four too:
+		// under load the stable-screen poll can legitimately skip chunk three's
+		// short-lived frame. waitForOutput cannot help here -- while scrolled away
+		// from the streaming tail the draft rows are never painted, so chunk text
+		// never enters the byte stream.
 		const midStream = await waitForScreen(
 			app,
-			(screen) => screen.text.includes("stream-chunk-3"),
+			(screen) => /stream-chunk-[34]-landed/.test(screen.text),
 			{ cols, rows, timeoutMs: 10_000 },
 		);
 		const midStreamViewport = chatViewportRows(midStream.rows).join("\n");

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { defaultActivityStateRoot } from "../../activity/persistence.js";
+import { filterToEnabled, readEnabledModelPatterns } from "../../config/enabled-models.js";
 import { CHILD_JSON_FRAME_MAX_BYTES } from "../../child-protocol.js";
 import { FileActivityStore, type ActivityStoreSnapshot } from "../../activity/store.js";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
@@ -21,8 +22,9 @@ import { ModalLayer } from "../widgets/modal-layer.js";
 import { NotificationCenter } from "../widgets/notification.js";
 import { RpcChildExitError, SumoRpcClient, truncateForNotification } from "./client.js";
 import { ChromeCacheWorkerClient } from "./chrome-cache-worker-client.js";
+import type { CachedChrome } from "./chrome-cache.js";
 import { RpcHostLifecycle, writeExitCodeFile } from "./host-lifecycle.js";
-import { RpcHostControls } from "./controls.js";
+import { modelOptionsFrom, RpcHostControls, type RpcModelOption } from "./controls.js";
 import { createRpcKeybindingsManager, RpcHostEditorController } from "./editor.js";
 import { createRpcExtensionUiResponder } from "./extension-ui-responder.js";
 import { InMemoryRpcTreeNavigationOutcomeBroker, type RpcTreeNavigationRequest } from "../pi-compat/tree-navigation-command.js";
@@ -54,6 +56,7 @@ export { createUnhandledRejectionHandler, writeExitCodeFile, type UnhandledRejec
 
 const DEFERRED_SELECTOR_ACTION_KEY = "selector-open";
 const DEFERRED_MODEL_CYCLE_ACTION_KEY = "model-cycle";
+const DEFERRED_THINKING_CYCLE_ACTION_KEY = "thinking-cycle";
 const DEFERRED_MESSAGE_QUEUE_ACTION_KEY = "message-queue";
 const DEFERRED_MESSAGE_FORCE_SEND_ACTION_KEY = "message-force-send";
 const RPC_MESSAGE_FALLBACK_MAX_SESSION_BYTES = CHILD_JSON_FRAME_MAX_BYTES / 2;
@@ -800,6 +803,28 @@ export interface RpcHostModelCycleDependencies {
 	readonly controls: Pick<RpcHostControls, "getEnabledModels" | "setModel">;
 	readonly notifications: ErrorNotifier;
 	readonly onStateChange?: (state?: RpcHostChromeState) => void;
+	/** Pre-hydration seam (issue 448); absent means the live list is always used. */
+	readonly cachedCycle?: RpcHostCachedCycleDependencies;
+}
+
+/**
+ * Pre-hydration cycle seam (issue 448). Initial hydration owns the
+ * authoritative chrome, so until it settles the cycle keys step through the
+ * last-known ring read from the chrome cache, and the gate replays only the
+ * final choice against the live list. That replay is what keeps
+ * `whenSettled()` honest: a prompt submitted mid-cycle still waits for the
+ * applied model/level.
+ */
+export interface RpcHostCachedCycleDependencies {
+	readonly gate: Pick<InitialHydrationActionGate, "isReady" | "run">;
+	/** Enabled ring from the chrome cache, active-flagged against the live label. */
+	readonly models: () => readonly RpcModelOption[] | undefined;
+	/** Available thinking levels from the chrome cache. */
+	readonly thinkingLevels: () => readonly string[] | undefined;
+	readonly currentThinkingLevel: () => string | undefined;
+	/** Paints a cached pick optimistically; the store's label drives the next step. */
+	readonly previewModel: (model: RpcModelOption) => void;
+	readonly previewThinkingLevel: (level: string) => void;
 }
 
 async function applyModelCycleStep(deps: RpcHostModelCycleDependencies, direction: -1 | 1): Promise<void> {
@@ -817,6 +842,43 @@ async function applyModelCycleStep(deps: RpcHostModelCycleDependencies, directio
 }
 
 /**
+ * Handles a model-cycle press while hydration is still settling. Returns true
+ * when it owned the press (cached ring, or nothing cached yet so the press
+ * stays deferred exactly as before).
+ */
+function applyCachedModelStep(deps: RpcHostModelCycleDependencies, direction: -1 | 1): boolean {
+	const cached = deps.cachedCycle;
+	if (!cached || cached.gate.isReady) return false;
+	const models = cached.models();
+	if (!models || models.length <= 1) {
+		// No cached ring yet: defer rather than let a live step land under
+		// hydration's authoritative commit, which would clobber it.
+		cached.gate.run(DEFERRED_MODEL_CYCLE_ACTION_KEY, () => notifyOnError(async () => {
+			await applyModelCycleStep(deps, direction);
+		}, deps.notifications));
+		return true;
+	}
+	const activeIndex = models.findIndex((model) => model.active);
+	const baseIndex = activeIndex < 0 ? 0 : activeIndex;
+	const next = models[(baseIndex + direction + models.length) % models.length];
+	cached.previewModel(next);
+	// One latest intent per key: successive pre-hydration presses collapse into
+	// a single live apply of the final choice, which `whenSettled()` still awaits.
+	cached.gate.run(DEFERRED_MODEL_CYCLE_ACTION_KEY, () => notifyOnError(async () => {
+		const live = await deps.controls.getEnabledModels();
+		const target = live.find((model) => model.provider === next.provider && model.id === next.id);
+		if (!target) {
+			// The cached ring drifted: converge on the live list, loudly.
+			deps.notifications.notify(`model ${next.label} is no longer available`, "warning");
+			return;
+		}
+		const state = await deps.controls.setModel(target.provider, target.id);
+		deps.onStateChange?.(state);
+	}, deps.notifications));
+	return true;
+}
+
+/**
  * Builds the `app.model.cycleForward` (Ctrl+P by default) action handler.
  * Forward and backward cycling both step through the host-resolved
  * enabledModels list so the hotkeys and `/model` selector share one visible
@@ -824,9 +886,12 @@ async function applyModelCycleStep(deps: RpcHostModelCycleDependencies, directio
  * stays toast-free on success.
  */
 export function createModelCycleForwardHandler(deps: RpcHostModelCycleDependencies): () => Promise<void> {
-	return (): Promise<void> => notifyOnError(async () => {
-		await applyModelCycleStep(deps, 1);
-	}, deps.notifications);
+	return (): Promise<void> => {
+		if (applyCachedModelStep(deps, 1)) return Promise.resolve();
+		return notifyOnError(async () => {
+			await applyModelCycleStep(deps, 1);
+		}, deps.notifications);
+	};
 }
 
 /**
@@ -839,15 +904,55 @@ export function createModelCycleForwardHandler(deps: RpcHostModelCycleDependenci
  * first entry to the last entry, mirroring Pi's scoped-cycle behavior.
  */
 export function createModelCycleBackwardHandler(deps: RpcHostModelCycleDependencies): () => Promise<void> {
-	return (): Promise<void> => notifyOnError(async () => {
-		await applyModelCycleStep(deps, -1);
-	}, deps.notifications);
+	return (): Promise<void> => {
+		if (applyCachedModelStep(deps, -1)) return Promise.resolve();
+		return notifyOnError(async () => {
+			await applyModelCycleStep(deps, -1);
+		}, deps.notifications);
+	};
 }
 
 export interface RpcHostThinkingCycleDependencies {
-	readonly controls: Pick<RpcHostControls, "cycleThinkingLevel">;
+	readonly controls: Pick<RpcHostControls, "cycleThinkingLevel" | "getAvailableThinkingLevels" | "setThinkingLevel">;
 	readonly notifications: ErrorNotifier;
 	readonly onStateChange?: (state?: RpcHostChromeState) => void;
+	/** Pre-hydration seam (issue 448); absent means the live level ring is always used. */
+	readonly cachedCycle?: RpcHostCachedCycleDependencies;
+}
+
+/**
+ * Handles a thinking-cycle press while hydration is still settling. Returns
+ * true when it owned the press (cached level ring, or nothing cached yet so
+ * the press stays deferred exactly as before).
+ */
+function applyCachedThinkingStep(deps: RpcHostThinkingCycleDependencies): boolean {
+	const cached = deps.cachedCycle;
+	if (!cached || cached.gate.isReady) return false;
+	const levels = cached.thinkingLevels();
+	const current = cached.currentThinkingLevel();
+	if (!levels || levels.length <= 1 || current === undefined || !levels.includes(current)) {
+		// No usable cached ring yet: defer rather than let a live step land under
+		// hydration's authoritative commit, which would clobber it.
+		cached.gate.run(DEFERRED_THINKING_CYCLE_ACTION_KEY, () => notifyOnError(async () => {
+			const state = await deps.controls.cycleThinkingLevel();
+			deps.onStateChange?.(state);
+		}, deps.notifications));
+		return true;
+	}
+	const next = levels[(levels.indexOf(current) + 1) % levels.length];
+	cached.previewThinkingLevel(next);
+	cached.gate.run(DEFERRED_THINKING_CYCLE_ACTION_KEY, () => notifyOnError(async () => {
+		const live = await deps.controls.getAvailableThinkingLevels();
+		const target = live.find((level) => level === next);
+		if (!target) {
+			// The cached ring drifted: converge on the live list, loudly.
+			deps.notifications.notify(`thinking level ${next} is no longer available`, "warning");
+			return;
+		}
+		const state = await deps.controls.setThinkingLevel(target);
+		deps.onStateChange?.(state);
+	}, deps.notifications));
+	return true;
 }
 
 /**
@@ -859,10 +964,13 @@ export interface RpcHostThinkingCycleDependencies {
  * thinking level, so success stays toast-free.
  */
 export function createThinkingCycleHandler(deps: RpcHostThinkingCycleDependencies): () => Promise<void> {
-	return (): Promise<void> => notifyOnError(async () => {
-		const state = await deps.controls.cycleThinkingLevel();
-		deps.onStateChange?.(state);
-	}, deps.notifications);
+	return (): Promise<void> => {
+		if (applyCachedThinkingStep(deps)) return Promise.resolve();
+		return notifyOnError(async () => {
+			const state = await deps.controls.cycleThinkingLevel();
+			deps.onStateChange?.(state);
+		}, deps.notifications);
+	};
 }
 
 export interface RpcHostToolsExpandDependencies {
@@ -992,7 +1100,15 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		runtime?.update({ state: state ?? stateStore.getSnapshot() });
 	};
 	const scheduleChromeCacheState = (state = stateStore.getSnapshot()): void => {
-		if (!visualFixture) lifecycle.cacheChrome(state);
+		if (visualFixture) return;
+		// The cycle rings ride along as advisory hints so the next boot can cycle
+		// before hydration (issue 448). An undefined ring keeps the stored one.
+		lifecycle.cacheChrome({
+			modelLabel: state.modelLabel,
+			thinkingLevel: state.thinkingLevel,
+			models: controls.knownAvailableModels(),
+			thinkingLevels: controls.knownThinkingLevels(),
+		});
 	};
 	const pushStateAndCacheChrome = (state?: RpcHostChromeState): void => {
 		pushState(state);
@@ -1118,20 +1234,49 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		}),
 	});
 	const keybindings = createRpcKeybindingsManager({ env });
+	// Pre-hydration cycle ring (issue 448): the last-known enabled models and
+	// thinking levels from the chrome cache, applied by the cycle keys while
+	// initial hydration still owns the authoritative chrome. The cache read
+	// resolves async, so a press before it lands keeps the old deferred path.
+	let cachedCycleChrome: CachedChrome | undefined;
+	const cachedCycleDependencies: RpcHostCachedCycleDependencies = {
+		gate: hydrationActionGate,
+		models: () => {
+			const models = cachedCycleChrome?.models;
+			if (!models || models.length === 0) return undefined;
+			return modelOptionsFrom(filterToEnabled(models, readEnabledModelPatterns(env)), stateStore.getSnapshot().modelLabel);
+		},
+		thinkingLevels: () => cachedCycleChrome?.thinkingLevels,
+		currentThinkingLevel: () => stateStore.getSnapshot().thinkingLevel,
+		// Optimistic paints only: the gate's replay is what persists, so a
+		// pre-hydration pick can never reach the cache as an authoritative write.
+		previewModel: (model) => pushState(stateStore.applyModelChange({ provider: model.provider, id: model.id })),
+		previewThinkingLevel: (level) => pushState(stateStore.applyThinkingLevel(level)),
+	};
+	/** Remembers the child's cycle rings for the next boot (issue 448). */
+	const primeCachedCycleRings = async (): Promise<void> => {
+		// The fixture lane never writes the chrome cache, so it needs no ring.
+		if (visualFixture) return;
+		await controls.getAvailableModels().catch(() => undefined);
+		await controls.getAvailableThinkingLevels().catch(() => undefined);
+	};
 	const handleModelCycleForward = createModelCycleForwardHandler({
 		controls,
 		notifications,
 		onStateChange: pushStateAndCacheChrome,
+		cachedCycle: cachedCycleDependencies,
 	});
 	const handleModelCycleBackward = createModelCycleBackwardHandler({
 		controls,
 		notifications,
 		onStateChange: pushStateAndCacheChrome,
+		cachedCycle: cachedCycleDependencies,
 	});
 	const handleThinkingCycle = createThinkingCycleHandler({
 		controls,
 		notifications,
 		onStateChange: pushStateAndCacheChrome,
+		cachedCycle: cachedCycleDependencies,
 	});
 	const handleToolsExpandToggle = createToolsExpandToggleHandler({
 		toggleActivityExpansion: () => runtime?.toggleActivityExpansion(),
@@ -1165,8 +1310,8 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		// / app.tools.expand: registered via CustomEditor's generic
 		// `onAction` map (see editor.ts's onModelCycleForward etc. doc
 		// comments) rather than a dedicated callback prop.
-		onModelCycleForward: () => hydrationActionGate.run(DEFERRED_MODEL_CYCLE_ACTION_KEY, handleModelCycleForward),
-		onModelCycleBackward: () => hydrationActionGate.run(DEFERRED_MODEL_CYCLE_ACTION_KEY, handleModelCycleBackward),
+		onModelCycleForward: () => { void handleModelCycleForward(); },
+		onModelCycleBackward: () => { void handleModelCycleBackward(); },
 		// app.model.select (Ctrl+L by default): opens the same in-place model
 		// selector `/model` with no args and the command palette's "MODEL"
 		// entry both already use. `actions` is a forward reference (assigned
@@ -1175,7 +1320,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		// since `RpcHostActions` itself needs `editorText: editor` to
 		// construct.
 		onModelSelect: () => hydrationActionGate.run(DEFERRED_SELECTOR_ACTION_KEY, () => notifyOnError(async () => { await actions?.openModelSelector(); }, notifications)),
-		onThinkingCycle: () => hydrationActionGate.run("thinking-cycle", handleThinkingCycle),
+		onThinkingCycle: () => { void handleThinkingCycle(); },
 		onToolsExpandToggle: handleToolsExpandToggle,
 		onMessageFollowUp: () => hydrationActionGate.run(DEFERRED_MESSAGE_QUEUE_ACTION_KEY, handleMessageFollowUp),
 		onMessageForceSend: () => hydrationActionGate.run(DEFERRED_MESSAGE_FORCE_SEND_ACTION_KEY, handleMessageForceSend),
@@ -1744,6 +1889,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		if (!visualFixture) {
 			void chromeCache.read(cwd).then((cachedChrome) => {
 				if (!cachedChrome || stateStore.getSnapshot().hydrated) return;
+				cachedCycleChrome = cachedChrome;
 				initialRuntime.update({ state: stateStore.seedChrome(cachedChrome) });
 			}).catch(() => undefined);
 		}
@@ -1808,7 +1954,9 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		releaseInitialHydration();
 		// The cache is advisory. Coalesce snapshots before posting them to the
 		// worker; lock waits and durability fsyncs never run on the TUI thread.
-		scheduleChromeCacheState();
+		// Prime the child's cycle rings first (issue 448) so the next boot has a
+		// ring to step through; both stay off the hydration critical path.
+		void primeCachedCycleRings().then(() => scheduleChromeCacheState()).catch(() => undefined);
 		if (!visualFixture) {
 			// The launch-specific handler owns its silent readiness wait; callers
 			// identify only the source and cannot leak queue-notice policy.

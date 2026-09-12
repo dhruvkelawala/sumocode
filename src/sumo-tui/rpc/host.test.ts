@@ -11,7 +11,7 @@ import { SUMOCODE_RELOAD_EXIT_CODE } from "../../commands/reload.js";
 import { RpcChildExitError, SumoRpcClient } from "./client.js";
 import { RpcHostOverlayManager } from "./host-overlays.js";
 import { RpcHostLifecycle } from "./host-lifecycle.js";
-import { RpcHostControls, type RpcAvailableModel } from "./controls.js";
+import { RpcHostControls, type RpcAvailableModel, type RpcModelOption } from "./controls.js";
 import { RpcHostStateStore } from "./state.js";
 import {
 	activitySnapshotMatchesSession,
@@ -39,6 +39,7 @@ import {
 	writeExitCodeFile,
 	type RpcHostExitDependencies,
 	type RpcHostInterruptDependencies,
+	type RpcHostCachedCycleDependencies,
 } from "./host.js";
 import { InitialHydrationActionGate } from "./initial-hydration-action-gate.js";
 import { createRpcPromptScheduler } from "./prompt-scheduler.js";
@@ -1163,12 +1164,230 @@ describe("createModelCycleBackwardHandler (app.model.cycleBackward -- the other 
 	});
 });
 
+describe("cached pre-hydration cycle (issue 448: cycle keys answer before hydration)", () => {
+	const cachedRing: readonly RpcModelOption[] = [
+		{ provider: "anthropic", id: "claude-opus-4", label: "anthropic/claude-opus-4", active: true },
+		{ provider: "openai", id: "gpt-5", label: "openai/gpt-5", active: false },
+	];
+
+	function cycleFixture(initial: {
+		models?: readonly RpcModelOption[];
+		thinkingLevels?: readonly string[];
+		currentThinkingLevel?: string;
+	}) {
+		let release!: () => void;
+		const gate = new InitialHydrationActionGate(new Promise<void>((resolve) => { release = resolve; }));
+		const previewModel = vi.fn();
+		const previewThinkingLevel = vi.fn();
+		return {
+			gate,
+			release,
+			previewModel,
+			previewThinkingLevel,
+			cachedCycle: {
+				gate,
+				models: () => initial.models,
+				thinkingLevels: () => initial.thinkingLevels,
+				currentThinkingLevel: () => initial.currentThinkingLevel,
+				previewModel,
+				previewThinkingLevel,
+			} satisfies RpcHostCachedCycleDependencies,
+		};
+	}
+
+	it("paints the next cached model at the first frame, then replays only the pick against the live list", async () => {
+		const { cachedCycle, gate, release, previewModel } = cycleFixture({ models: cachedRing });
+		const controls = {
+			getEnabledModels: vi.fn(async () => cachedRing),
+			setModel: vi.fn(async () => asNever({ modelLabel: "openai/gpt-5" })),
+		};
+		const notifications = { notify: vi.fn() };
+		const onStateChange = vi.fn();
+		const handle = createModelCycleForwardHandler({
+			// SAFETY: partial fixture; unread members of the target type are unused here.
+			controls: controls as never,
+			notifications,
+			onStateChange,
+			cachedCycle,
+		});
+
+		handle();
+		await flush();
+
+		// The press answers from the cache without touching the child...
+		expect(previewModel).toHaveBeenCalledWith(cachedRing[1]);
+		expect(controls.getEnabledModels).not.toHaveBeenCalled();
+		expect(controls.setModel).not.toHaveBeenCalled();
+
+		// ...and the gate replays the pick, not another cycle, once hydration settles.
+		release();
+		await gate.whenSettled();
+
+		expect(controls.getEnabledModels).toHaveBeenCalledOnce();
+		expect(controls.setModel).toHaveBeenCalledExactlyOnceWith("openai", "gpt-5");
+		expect(onStateChange).toHaveBeenCalledWith({ modelLabel: "openai/gpt-5" });
+		expect(notifications.notify).not.toHaveBeenCalled();
+	});
+
+	it("uses the live ring, never the cache, once hydration has settled", async () => {
+		const { cachedCycle, gate, release, previewModel } = cycleFixture({ models: cachedRing });
+		const controls = {
+			getEnabledModels: vi.fn(async () => cachedRing),
+			setModel: vi.fn(async () => asNever({ modelLabel: "openai/gpt-5" })),
+		};
+		const handle = createModelCycleForwardHandler({
+			// SAFETY: partial fixture; unread members of the target type are unused here.
+			controls: controls as never,
+			notifications: { notify: vi.fn() },
+			cachedCycle,
+		});
+		release();
+		await gate.whenSettled();
+
+		handle();
+		await flush();
+
+		expect(previewModel).not.toHaveBeenCalled();
+		expect(controls.getEnabledModels).toHaveBeenCalledOnce();
+		expect(controls.setModel).toHaveBeenCalledExactlyOnceWith("openai", "gpt-5");
+	});
+
+	it("warns and converges on the live list when the cached pick no longer exists", async () => {
+		const { cachedCycle, gate, release, previewModel } = cycleFixture({ models: cachedRing });
+		const controls = {
+			getEnabledModels: vi.fn(async () => [cachedRing[0]]),
+			setModel: vi.fn(),
+		};
+		const notifications = { notify: vi.fn() };
+		const handle = createModelCycleForwardHandler({
+			// SAFETY: partial fixture; unread members of the target type are unused here.
+			controls: controls as never,
+			notifications,
+			cachedCycle,
+		});
+
+		handle();
+		await flush();
+		release();
+		await gate.whenSettled();
+
+		expect(previewModel).toHaveBeenCalledWith(cachedRing[1]);
+		expect(controls.setModel).not.toHaveBeenCalled();
+		expect(notifications.notify).toHaveBeenCalledWith("model openai/gpt-5 is no longer available", "warning");
+	});
+
+	it("keeps whenSettled() pending until the deferred pick has been applied", async () => {
+		const { cachedCycle, gate, release } = cycleFixture({ models: cachedRing });
+		let resolveSetModel!: () => void;
+		const controls = {
+			getEnabledModels: vi.fn(async () => cachedRing),
+			setModel: vi.fn(() => new Promise((resolve) => { resolveSetModel = () => { resolve(asNever({ modelLabel: "openai/gpt-5" })); }; })),
+		};
+		const handle = createModelCycleForwardHandler({
+			// SAFETY: partial fixture; unread members of the target type are unused here.
+			controls: controls as never,
+			notifications: { notify: vi.fn() },
+			cachedCycle,
+		});
+
+		handle();
+		await flush();
+		release();
+		let settled = false;
+		void gate.whenSettled().then(() => { settled = true; });
+		await flush();
+		expect(settled).toBe(false);
+
+		resolveSetModel();
+		await gate.whenSettled();
+		expect(settled).toBe(true);
+	});
+
+	it("keeps the old deferred live cycle when no cached ring has landed yet", async () => {
+		const { cachedCycle, gate, release } = cycleFixture({});
+		const controls = {
+			getEnabledModels: vi.fn(async () => cachedRing),
+			setModel: vi.fn(async () => asNever({ modelLabel: "openai/gpt-5" })),
+		};
+		const handle = createModelCycleForwardHandler({
+			// SAFETY: partial fixture; unread members of the target type are unused here.
+			controls: controls as never,
+			notifications: { notify: vi.fn() },
+			cachedCycle,
+		});
+
+		handle();
+		await flush();
+		expect(controls.getEnabledModels).not.toHaveBeenCalled();
+
+		release();
+		await gate.whenSettled();
+		expect(controls.setModel).toHaveBeenCalledExactlyOnceWith("openai", "gpt-5");
+	});
+
+	it("paints the next cached thinking level, then applies it against the live levels", async () => {
+		const { cachedCycle, gate, release, previewThinkingLevel } = cycleFixture({ thinkingLevels: ["off", "low", "high"], currentThinkingLevel: "low" });
+		const controls = {
+			cycleThinkingLevel: vi.fn(),
+			getAvailableThinkingLevels: vi.fn(async () => ["off", "low", "high"]),
+			setThinkingLevel: vi.fn(async () => asNever({ thinkingLevel: "high" })),
+		};
+		const onStateChange = vi.fn();
+		const handle = createThinkingCycleHandler({
+			// SAFETY: partial fixture; unread members of the target type are unused here.
+			controls: controls as never,
+			notifications: { notify: vi.fn() },
+			onStateChange,
+			cachedCycle,
+		});
+
+		handle();
+		await flush();
+		expect(previewThinkingLevel).toHaveBeenCalledWith("high");
+		expect(controls.cycleThinkingLevel).not.toHaveBeenCalled();
+
+		release();
+		await gate.whenSettled();
+		expect(controls.setThinkingLevel).toHaveBeenCalledExactlyOnceWith("high");
+		expect(onStateChange).toHaveBeenCalledWith({ thinkingLevel: "high" });
+	});
+
+	it("warns instead of applying a cached thinking level the live model no longer supports", async () => {
+		const { cachedCycle, gate, release } = cycleFixture({ thinkingLevels: ["low", "high"], currentThinkingLevel: "low" });
+		const controls = {
+			cycleThinkingLevel: vi.fn(),
+			getAvailableThinkingLevels: vi.fn(async () => ["low"]),
+			setThinkingLevel: vi.fn(),
+		};
+		const notifications = { notify: vi.fn() };
+		const handle = createThinkingCycleHandler({
+			// SAFETY: partial fixture; unread members of the target type are unused here.
+			controls: controls as never,
+			notifications,
+			cachedCycle,
+		});
+
+		handle();
+		await flush();
+		release();
+		await gate.whenSettled();
+
+		expect(controls.setThinkingLevel).not.toHaveBeenCalled();
+		expect(notifications.notify).toHaveBeenCalledWith("thinking level high is no longer available", "warning");
+	});
+});
+
 describe("createThinkingCycleHandler (app.thinking.cycle -- one of the two exact reported-broken chords)", () => {
 	it("calls controls.cycleThinkingLevel() and updates state without a confirmation toast", async () => {
 		const cycleThinkingLevel = vi.fn(async () => asNever({ thinkingLevel: "high" }));
 		const notifications = { notify: vi.fn() };
 		const onStateChange = vi.fn();
-		const handle = createThinkingCycleHandler({ controls: { cycleThinkingLevel }, notifications, onStateChange });
+		const handle = createThinkingCycleHandler({
+			// SAFETY: partial fixture; the cached-cycle members are unused here.
+			controls: { cycleThinkingLevel } as never,
+			notifications,
+			onStateChange,
+		});
 
 		handle();
 		await flush();

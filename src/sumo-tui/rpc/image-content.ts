@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, extname, resolve } from "node:path";
 import type { ImageContent } from "@earendil-works/pi-ai";
@@ -26,22 +26,8 @@ export async function loadRpcImages(
 	const images: ImageContent[] = [];
 	for (const attachment of attachments) {
 		const path = resolveImagePath(attachment.path, options.cwd ?? process.cwd(), options.home ?? homedir());
-		let file;
-		try {
-			file = await stat(path);
-		} catch {
-			throw new RpcImageLoadError(attachment, "file not found or unreadable");
-		}
-		if (!file.isFile()) throw new RpcImageLoadError(attachment, "path is not a regular file");
 		const maxBytes = options.maxBytes ?? MAX_RPC_IMAGE_BYTES;
-		if (file.size > maxBytes) throw new RpcImageLoadError(attachment, `image exceeds ${maxBytes} byte limit`);
-
-		let bytes: Buffer;
-		try {
-			bytes = await readFile(path);
-		} catch {
-			throw new RpcImageLoadError(attachment, "file not found or unreadable");
-		}
+		const bytes = await readBoundedImage(path, attachment, maxBytes);
 		const detected = detectImageMime(bytes);
 		const expected = mimeForExtension(extname(path));
 		if (!detected || !expected) throw new RpcImageLoadError(attachment, "file does not contain a supported image");
@@ -49,6 +35,34 @@ export async function loadRpcImages(
 		images.push({ type: "image", data: bytes.toString("base64"), mimeType: detected });
 	}
 	return images;
+}
+
+async function readBoundedImage(path: string, attachment: EditorImageAttachment, maxBytes: number): Promise<Buffer> {
+	let file;
+	try {
+		file = await open(path, "r");
+	} catch {
+		throw new RpcImageLoadError(attachment, "file not found or unreadable");
+	}
+	try {
+		const metadata = await file.stat();
+		if (!metadata.isFile()) throw new RpcImageLoadError(attachment, "path is not a regular file");
+		if (metadata.size > maxBytes) throw new RpcImageLoadError(attachment, `image exceeds ${maxBytes} byte limit`);
+		const buffer = Buffer.alloc(maxBytes + 1);
+		let bytesRead = 0;
+		while (bytesRead < buffer.length) {
+			const read = await file.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+			if (read.bytesRead === 0) break;
+			bytesRead += read.bytesRead;
+		}
+		if (bytesRead > maxBytes) throw new RpcImageLoadError(attachment, `image exceeds ${maxBytes} byte limit`);
+		return buffer.subarray(0, bytesRead);
+	} catch (error) {
+		if (error instanceof RpcImageLoadError) throw error;
+		throw new RpcImageLoadError(attachment, "file not found or unreadable");
+	} finally {
+		await file.close();
+	}
 }
 
 function resolveImagePath(path: string, cwd: string, home: string): string {

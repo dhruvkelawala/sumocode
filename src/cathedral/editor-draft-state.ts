@@ -54,7 +54,7 @@ export class EditorImageDraftState {
 
 	clear(): void {
 		this.images.clear();
-		this.nextImageIndex = 1;
+		if (this.submitted.size === 0) this.nextImageIndex = 1;
 	}
 
 	captureRpcSubmission(text: string): RpcEditorSubmissionDraft {
@@ -62,10 +62,17 @@ export class EditorImageDraftState {
 		return { text, images: this.list() };
 	}
 
-	commitRpcSubmission(text: string): void {
-		const draft = this.captureRpcSubmission(text);
-		this.submitted.set(text, draft.images);
-		this.images.clear();
+	commitRpcSubmission(draft: RpcEditorSubmissionDraft): void {
+		this.submitted.delete(draft.text);
+		this.submitted.set(draft.text, draft.images);
+		while (this.submitted.size > 100) {
+			const oldest = this.submitted.keys().next();
+			if (oldest.done) break;
+			this.submitted.delete(oldest.value);
+		}
+		for (const attachment of draft.images) {
+			if (this.images.get(attachment.token) === attachment.path) this.images.delete(attachment.token);
+		}
 	}
 
 	restoreSubmittedTokens(text: string): void {

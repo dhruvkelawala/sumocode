@@ -427,8 +427,8 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 		return this.editor.captureRpcDraft(text);
 	}
 
-	public commitRpcDraft(text: string): void {
-		this.editor.commitRpcDraft(text);
+	public commitRpcDraft(draft: RpcEditorSubmissionDraft): void {
+		this.editor.commitRpcDraft(draft);
 	}
 
 	/** See CathedralEditor.expandDraftTokens — expand-only, no clear. */

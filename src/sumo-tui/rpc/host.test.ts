@@ -870,8 +870,19 @@ describe("native image prompt submission", () => {
 			images: [{ type: "image", mimeType: "image/png", data: "c2FmZQ==" }],
 		});
 		expect(deps.editor.addToHistory).toHaveBeenCalledWith(draft.text);
-		expect(deps.editor.commitRpcDraft).toHaveBeenCalledWith(draft.text);
+		expect(deps.editor.commitRpcDraft).toHaveBeenCalledWith(draft);
 		expect(deps.editor.setText).toHaveBeenCalledWith("");
+	});
+
+	it("keeps concurrent edits without leaving an accepted image token resendable", async () => {
+		const deps = imageDeps();
+		vi.mocked(deps.editor.getText).mockReturnValue(`${draft.text}\nnext thought`);
+
+		await submitRpcImageDraft(draft, deps);
+
+		expect(deps.editor.commitRpcDraft).toHaveBeenCalledWith(draft);
+		expect(deps.editor.setText).toHaveBeenCalledWith("inspect \nnext thought");
+		expect(deps.notifications.notify).toHaveBeenCalledWith("image sent · current edits kept", "warning");
 	});
 
 	it("fails visibly closed before reading attachments while busy", async () => {

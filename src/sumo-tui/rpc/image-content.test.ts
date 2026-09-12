@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -44,7 +44,6 @@ describe("loadRpcImages", () => {
 		const cwd = root();
 		const path = join(cwd, "huge.png");
 		writeFileSync(path, PNG);
-		chmodSync(path, 0o000);
 
 		await expect(loadRpcImages([{ token: "[Image 1]", path }], { cwd, maxBytes: PNG.length - 1 })).rejects.toThrow(`exceeds ${PNG.length - 1} byte limit`);
 	});

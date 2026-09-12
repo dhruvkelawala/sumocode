@@ -347,6 +347,20 @@ describe("subagent result delivery", () => {
 		expect(harness.sendMessage.mock.calls[2]?.[0]).not.toMatchObject({ content: expect.stringContaining("revised report") });
 	});
 
+	it("retries an idle turn after retained delivery eligibility recovers", async () => {
+		const harness = createHarness();
+		harness.fire("session_start");
+		await harness.manager.spawn({ prompt: "watch me", title: "visible eligibility", cwd: "/tmp/project", visible: true });
+		const canDeliver = vi.spyOn(harness.manager, "canDeliver").mockReturnValue(false);
+		backend.paneEmitters[0]?.({ kind: "turn-finished", finalText: "eventual report", at: 1_234 });
+		expect(harness.sendMessage).not.toHaveBeenCalled();
+
+		canDeliver.mockRestore();
+		backend.paneEmitters[0]?.({ kind: "heartbeat", at: Date.now() });
+		await vi.waitFor(() => expect(harness.sendMessage).toHaveBeenCalledOnce());
+		expect(harness.sendMessage.mock.calls[0]?.[0]).toMatchObject({ content: expect.stringContaining("eventual report") });
+	});
+
 	it("surfaces a terminal failure after an earlier visible turn result", async () => {
 		const harness = createHarness();
 		harness.fire("session_start");

@@ -12,6 +12,7 @@ class FakeFs {
 	readonly dirModes = new Map<string, number | undefined>();
 	readonly fileModes = new Map<string, number | undefined>();
 	readonly mtimes = new Map<string, number>();
+	readonly sizes = new Map<string, number>();
 	readonly dirs = new Set<string>();
 	/** Adversarial fixture: paths whose lstat reports a symlink instead of a regular file. */
 	readonly symlinks = new Set<string>();
@@ -38,7 +39,7 @@ class FakeFs {
 		}
 		if (this.files.has(path)) {
 			const mode = this.widenedModes.has(path) ? 0o644 : (this.fileModes.get(path) ?? 0o600);
-			return { isFile: () => true, isDirectory: () => false, mode, uid: process.getuid?.() ?? 0, mtimeMs: this.mtimes.get(path) };
+			return { isFile: () => true, isDirectory: () => false, mode, uid: process.getuid?.() ?? 0, mtimeMs: this.mtimes.get(path), size: this.sizes.get(path) ?? Buffer.byteLength(this.files.get(path) ?? "") };
 		}
 		// SAFETY: Node reports lstat ENOENT as an ErrnoException; the double reproduces that shape for isEnoent.
 		const error = new Error(`ENOENT: no such file or directory, lstat '${path}'`) as Error & { code?: string };
@@ -766,6 +767,24 @@ describe("pane subagent backend", () => {
 			await vi.advanceTimersByTimeAsync(750);
 			expect(harness.events.filter((event) => event.kind === "turn-finished")).toHaveLength(2);
 			expect(harness.closePane).not.toHaveBeenCalled();
+		} finally {
+			vi.clearAllTimers();
+			vi.useRealTimers();
+		}
+	});
+
+	it("ignores an oversized response artifact while the pane remains running", async () => {
+		vi.useFakeTimers();
+		try {
+			const harness = createHarness();
+			await harness.child.ready;
+			harness.fs.files.set(harness.paths.responseFile, "oversized");
+			harness.fs.sizes.set(harness.paths.responseFile, 4 * 1024 * 1024 + 1);
+
+			await vi.advanceTimersByTimeAsync(750);
+
+			expect(harness.events.some((event) => event.kind === "turn-finished")).toBe(false);
+			expect(settledEvents(harness.events)).toEqual([]);
 		} finally {
 			vi.clearAllTimers();
 			vi.useRealTimers();

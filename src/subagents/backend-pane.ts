@@ -34,6 +34,7 @@ import {
 	validatedArtifactStat,
 	PRIVATE_DIR_MODE,
 	PRIVATE_FILE_MODE,
+	PRIVATE_RESPONSE_MAX_BYTES,
 } from "../private-artifact.js";
 import type { SpawnedChild } from "./backend-pi.js";
 import type { SubagentEvent, SubagentLaunchFailure } from "./domain.js";
@@ -402,7 +403,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	const observeCompletedTurn = (): void => {
 		try {
 			const stat = validatedArtifactStat(fs, paths.responseFile, taskDir, "visible-subagent response artifact");
-			if (!stat) return;
+			if (!stat || stat.size !== undefined && stat.size > PRIVATE_RESPONSE_MAX_BYTES) return;
 			const finalText = fs.readFileSync(paths.responseFile, "utf8");
 			const signature = `${stat.mtimeMs ?? ""}:${finalText}`;
 			if (!finalText || signature === observedResponseSignature) return;

@@ -277,12 +277,8 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 	const onManagerChange = (): void => {
 		for (const snapshot of manager.list()) {
 			if (snapshot.status === "queued") continue;
-			if (manager.consumedIds.has(snapshot.id) || !manager.canDeliver(snapshot.id)) {
-				delivery.consume(snapshot.id);
-				continue;
-			}
 			if (snapshot.status === "running") {
-				if (snapshot.turnState !== "idle" || !snapshot.turnSequence || snapshot.deliveredTurnSequence === snapshot.turnSequence) continue;
+				if (snapshot.turnState !== "idle" || !snapshot.turnSequence || snapshot.deliveredTurnSequence === snapshot.turnSequence || !manager.canDeliver(snapshot.id)) continue;
 				const key = `${snapshot.id}:turn:${snapshot.turnSequence}`;
 				if (observedResultKeys.has(key)) continue;
 				observedResultKeys.add(key);
@@ -292,6 +288,10 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 			const key = `${snapshot.id}:settled`;
 			if (observedResultKeys.has(key)) continue;
 			observedResultKeys.add(key);
+			if (manager.consumedIds.has(snapshot.id) || !manager.canDeliver(snapshot.id)) {
+				delivery.consume(snapshot.id);
+				continue;
+			}
 			// Always close the lifecycle and retained delivery record. If the final
 			// output was already reported at idle, send only the terminal envelope.
 			delivery.defer(key, () => settledPayload(snapshot, snapshot.status === "error" || snapshot.deliveredTurnText !== snapshot.finalText));

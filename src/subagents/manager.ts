@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 import { promisify } from "node:util";
 import { captureProcessBirthTime, systemProcessTree, type ProcessTreeOperations } from "../background-tasks/process-tree.js";
-import { nodeArtifactFs, validatedArtifactStat } from "../private-artifact.js";
+import { nodeArtifactFs, PRIVATE_RESPONSE_MAX_BYTES, validatedArtifactStat } from "../private-artifact.js";
 import { acquireRetained, reconstructRetained, verifyRetained, sameRetainedEvidence, type RetainedSubagent } from "./retained-adoption.js";
 import { RetainedLaunchRefusal } from "./retained-runtime.js";
 import type { RegistryWriter, SubagentRecord } from "./registry.js";
@@ -128,9 +128,8 @@ const isSettled = (snapshot: SubagentSnapshot): boolean => snapshot.status !== "
 
 const readRetainedTurnResult = (record: SubagentRecord): string | undefined => {
 	const path = join(record.taskDir, "response.md");
-	return validatedArtifactStat(nodeArtifactFs, path, record.taskDir, "visible-subagent response artifact")
-		? readFileSync(path, "utf8") || undefined
-		: undefined;
+	const stat = validatedArtifactStat(nodeArtifactFs, path, record.taskDir, "visible-subagent response artifact");
+	return stat && (stat.size === undefined || stat.size <= PRIVATE_RESPONSE_MAX_BYTES) ? readFileSync(path, "utf8") || undefined : undefined;
 };
 
 const makeInitialSnapshot = (
@@ -435,15 +434,16 @@ export class SubagentManager {
 			const current = this.attachPane(id, observed, record.pane);
 			const telemetry = record.telemetry;
 			let turnState = telemetry?.turnState ?? current.turnState;
+			const turnSequence = telemetry?.turnSequence ?? current.turnSequence;
 			let finalText = current.finalText;
-			if (record.backend === "visible" && turnState === "idle") {
+			if (record.backend === "visible" && turnState === "idle" && (turnSequence !== current.turnSequence || !finalText)) {
 				try { finalText = readRetainedTurnResult(record) ?? finalText; }
 				catch { turnState = current.turnState; }
 			}
 			let next: SubagentSnapshot = { ...current, startedAt: telemetry?.startedAt ?? current.startedAt,
 				lastProgressAt: telemetry?.lastProgressAt ?? current.lastProgressAt,
 				lastHeartbeatAt: telemetry?.lastHeartbeatAt ?? current.lastHeartbeatAt,
-				turnState, turnSequence: telemetry?.turnSequence ?? current.turnSequence, finalText,
+				turnState, turnSequence, finalText,
 				usage: { ...current.usage, reportedTokens: telemetry?.reportedTokens ?? current.usage.reportedTokens, reportedCostUsd: telemetry?.reportedCostUsd ?? current.usage.reportedCostUsd } };
 			const completion = record.status === "settled" ? entry.supervisor?.completion : undefined;
 			const failedPlacement = this.placementByTask.get(id);

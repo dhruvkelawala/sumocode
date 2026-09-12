@@ -170,6 +170,8 @@ describe("durable sender delivery", () => {
 		await Promise.resolve();
 		expect(runtime.delivery).toHaveBeenCalledTimes(2);
 		expect(runtime.manager.get("sa-worker-1")).toMatchObject({ status: "running", deliveredTurnSequence: 1, deliveredTurnText: "idle report\n" });
+		f.publishTurn("same sequence must not reread");
+		expect(runtime.manager.get("sa-worker-1")?.finalText).toBe("idle report\n");
 	});
 
 	it("records lost work when disk recovery takes over an expired dead writer", async () => {

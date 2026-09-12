@@ -5,8 +5,10 @@ import {
 	MAX_CONTENT_INDEX,
 	TranscriptController,
 	getMessageContentKeyCacheMissesForTests,
+	getTranscriptSnapshotEnvelopeCopiesForTests,
 	planChatDiff,
 	resetMessageContentKeyCacheForTests,
+	resetTranscriptSnapshotEnvelopeCopiesForTests,
 	type TranscriptControllerChatSink,
 } from "./controller.js";
 import {
@@ -609,6 +611,7 @@ describe("TranscriptController live-state clearing", () => {
 type FakeChatSink = TranscriptControllerChatSink & {
 	replaceViewModels: Mock;
 	addViewModel: Mock;
+	appendToLast: Mock;
 	replaceViewModelAt: Mock;
 	replaceLastWithViewModel: Mock;
 	beginStreaming: Mock;
@@ -624,6 +627,7 @@ function fakeChatSink(): FakeChatSink {
 			archivedMessages: 0,
 		})),
 		addViewModel: vi.fn((_message: ChatMessageViewModel) => undefined),
+		appendToLast: vi.fn((_chunk: string) => undefined),
 		replaceViewModelAt: vi.fn((_index: number, _message: ChatMessageViewModel) => undefined),
 		replaceLastWithViewModel: vi.fn((_message: ChatMessageViewModel) => undefined),
 		beginStreaming: vi.fn(),
@@ -837,6 +841,70 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		expect(block).toMatchObject({ type: "activity", activity: { id: "huge-custom", outputTail: expect.stringContaining("newest-progress") } });
 		if (block?.type !== "activity") throw new Error("wrong projected block");
 		expect(JSON.stringify(block.activity.invocation)).not.toContain("hidden");
+	});
+
+	it("streams indexed plain deltas with one append and no history snapshot copy per event", () => {
+		const chat = fakeChatSink();
+		const delegate = createTranscriptViewModelMapper();
+		const mapper = {
+			reset: vi.fn(() => delegate.reset()),
+			messageFromPiMessage: vi.fn(delegate.messageFromPiMessage.bind(delegate)),
+			transcriptFromSessionContext: delegate.transcriptFromSessionContext.bind(delegate),
+		};
+		const controller = new TranscriptController({ chat, mapper });
+		controller.replaceFromMessages(Array.from({ length: 5_000 }, (_, index) => ({
+			id: `history-${index}`,
+			role: index % 2 === 0 ? "user" : "assistant",
+			content: `message ${index}`,
+		})));
+		controller.handleAgentEvent({ type: "agent_start" });
+		const materializedBeforeStream = controller.handleAgentEvent({ type: "message_start", message: { id: "draft", role: "assistant", content: [] } });
+		chat.appendToLast.mockClear();
+		chat.replaceLastWithViewModel.mockClear();
+		mapper.messageFromPiMessage.mockClear();
+		resetTranscriptSnapshotEnvelopeCopiesForTests();
+
+		for (let index = 0; index < 500; index += 1) {
+			controller.handleAgentEvent({
+				type: "message_update",
+				assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "stream " },
+			});
+		}
+
+		expect(chat.appendToLast).toHaveBeenCalledTimes(500);
+		expect(chat.replaceLastWithViewModel).not.toHaveBeenCalled();
+		expect(mapper.messageFromPiMessage).not.toHaveBeenCalled();
+		expect(getTranscriptSnapshotEnvelopeCopiesForTests()).toBe(0);
+		expect(chat.appendToLast.mock.calls.every(([chunk]) => chunk === "stream ")).toBe(true);
+		expect(chat.replaceViewModels).toHaveBeenCalledTimes(1); // hydration only; the draft appends incrementally
+		expect(chat.appendToLast.mock.calls.length / 500).toBe(1);
+		expect(materializedBeforeStream.messages.at(-1)?.blocks).toEqual([{ type: "markdown", text: "" }]);
+		expect(chatMessageViewModelToPlainText(controller.viewModel().messages.at(-1)!)).toBe("stream ".repeat(500));
+	});
+
+	it("keeps transcript-neutral events on the same snapshot and revision", () => {
+		const chat = fakeChatSink();
+		const controller = new TranscriptController({ chat });
+		const snapshot = controller.replaceFromMessages([{ id: "history", role: "user", content: "hello" }]);
+		const revision = controller.getRevision();
+		chat.replaceViewModels.mockClear();
+
+		for (const event of [
+			{ type: "agent_start" },
+			{ type: "queue_update", steering: ["later"], followUp: [] },
+			{ type: "session_info_changed", name: "renamed" },
+			{ type: "thinking_level_changed", level: "high" },
+			{ type: "future_additive_event", payload: "ignored" },
+		]) {
+			expect(controller.handleAgentEvent(event)).toBe(snapshot);
+		}
+
+		expect(controller.getRevision()).toBe(revision);
+		expect(chat.replaceViewModels).not.toHaveBeenCalled();
+		expect(chat.addViewModel).not.toHaveBeenCalled();
+		expect(chat.appendToLast).not.toHaveBeenCalled();
+		expect(chat.replaceViewModelAt).not.toHaveBeenCalled();
+		expect(chat.replaceLastWithViewModel).not.toHaveBeenCalled();
 	});
 
 	it("message_update draft deltas call replaceLastWithViewModel, never replaceViewModels", () => {
@@ -1164,14 +1232,15 @@ describe("TranscriptController streaming deltas (Pi RPC wire shape)", () => {
 		const controller = new TranscriptController({ chat });
 		controller.handleAgentEvent({ type: "agent_start" });
 		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: [] } });
+		chat.appendToLast.mockClear();
 		chat.replaceLastWithViewModel.mockClear();
 		chat.beginStreaming.mockClear();
 
 		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "hello" } });
 
 		expect(chat.beginStreaming).toHaveBeenCalled();
-		const pushed = chat.replaceLastWithViewModel.mock.calls.at(-1)?.[0] as ChatMessageViewModel;
-		expect(chatMessageViewModelToPlainText(pushed)).toContain("hello");
+		expect(chat.appendToLast).toHaveBeenCalledWith("hello");
+		expect(chat.replaceLastWithViewModel).not.toHaveBeenCalled();
 	});
 
 	it("accumulates thinking deltas into a thinking block", () => {

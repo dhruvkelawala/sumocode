@@ -219,12 +219,74 @@ describe("herdrTerminalHost", () => {
 			["w1:p2", "down"],
 		]);
 		expect(exec.mock.calls.filter(([, args]) => args[0] === "pane" && args[1] === "layout")).toHaveLength(3);
+		// `pane layout` takes the pane as a --pane option, not positionally; a
+		// wrong argv would silently fall back to the planned direction.
+		expect(exec.mock.calls.filter(([, args]) => args[1] === "layout").map(([, args]) => args)).toEqual([
+			["pane", "layout", "--pane", "w1:p1"],
+			["pane", "layout", "--pane", "w1:p1"],
+			["pane", "layout", "--pane", "w1:p1"],
+		]);
 		expect([...panes].sort(([left], [right]) => left.localeCompare(right))).toEqual([
 			["w1:p1", { x: 0, y: 0, width: 110, height: 55 }],
 			["w1:p2", { x: 110, y: 0, width: 110, height: 55 }],
 			["w1:p3", { x: 0, y: 55, width: 110, height: 55 }],
 			["w1:p4", { x: 110, y: 55, width: 110, height: 55 }],
 		]);
+	});
+
+	it("caps the best-effort layout read so a hung one still leaves split budget", async () => {
+		vi.useFakeTimers();
+		try {
+			const exec = vi.fn((_bin: string, args: string[], options: { timeout: number }) => {
+				if (args[0] === "pane" && args[1] === "list") {
+					return Promise.resolve({ stdout: JSON.stringify({ result: { panes: [{ pane_id: "w3:p2", workspace_id: "w3", tab_id: "w3:t2" }] } }), stderr: "", code: 0, killed: false });
+				}
+				if (args[0] === "pane" && args[1] === "layout") {
+					// The query consumes its whole cap and reports the timeout the way
+					// Pi's exec does; the split must still run on the planned direction.
+					return new Promise<{ stdout: string; stderr: string; code: number; killed: boolean }>((resolve) => {
+						setTimeout(() => resolve({ stdout: "", stderr: "", code: 1, killed: true }), options.timeout);
+					});
+				}
+				if (args[0] === "pane" && args[1] === "split") {
+					return Promise.resolve({ stdout: JSON.stringify({ result: { pane: { pane_id: "w3:p4", workspace_id: "w3", tab_id: "w3:t2" } } }), stderr: "", code: 0, killed: false });
+				}
+				return Promise.resolve({ stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false });
+			});
+
+			// SAFETY: test double only exercises the members this test asserts on.
+			const pending = herdrTerminalHost.startAgentPane({ exec } as never, {
+				name: "worker", agentName: "sa-worker-1", cwd: "/repo", shellCommand: "run child", placement: { kind: "tab", tabId: "w3:t2", direction: "down" },
+			});
+			await vi.advanceTimersByTimeAsync(1_000);
+			await expect(pending).resolves.toMatchObject({ ok: true, paneId: "w3:p4" });
+			expect(exec.mock.calls.find(([, args]) => args[1] === "layout")?.[2].timeout).toBeLessThanOrEqual(1_000);
+			expect(exec).toHaveBeenCalledWith("herdr", ["pane", "split", "w3:p2", "--direction", "down", "--cwd", "/repo", "--no-focus"], { timeout: expect.any(Number) });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("skips the layout read when the remaining budget cannot cover it and the split", async () => {
+		const exec = vi.fn(async (_bin: string, args: string[]) => {
+			if (args[0] === "pane" && args[1] === "list") {
+				return { stdout: JSON.stringify({ result: { panes: [{ pane_id: "w3:p2", workspace_id: "w3", tab_id: "w3:t2" }] } }), stderr: "", code: 0, killed: false };
+			}
+			if (args[0] === "pane" && args[1] === "split") {
+				return { stdout: JSON.stringify({ result: { pane: { pane_id: "w3:p4", workspace_id: "w3", tab_id: "w3:t2" } } }), stderr: "", code: 0, killed: false };
+			}
+			return { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false };
+		});
+
+		// 1200ms of budget leaves 700ms after the cleanup reserve, which cannot
+		// cover the 1s read cap plus split headroom.
+		// SAFETY: test double only exercises the members this test asserts on.
+		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
+			name: "worker", agentName: "sa-worker-1", cwd: "/repo", shellCommand: "run child",
+			placement: { kind: "tab", tabId: "w3:t2", direction: "down" }, provisioningTimeoutMs: 1_200,
+		})).resolves.toMatchObject({ ok: true, paneId: "w3:p4" });
+		expect(exec.mock.calls.some(([, args]) => args[1] === "layout")).toBe(false);
+		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "split", "w3:p2", "--direction", "down", "--cwd", "/repo", "--no-focus"], { timeout: expect.any(Number) });
 	});
 
 	it("retries a just-created tab until its root pane becomes listable", async () => {

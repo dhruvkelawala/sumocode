@@ -53,6 +53,11 @@ const execFailure = (operation: string, result: { code: number; stderr: string; 
 
 const HERDR_AGENT_PROMPT_TIMEOUT_MS = 10_000;
 const CHILD_CLEANUP_ERROR_MAX = 1_024;
+// The geometry read is best-effort and only feeds the split axis, so it gets a
+// small slice of the provisioning budget: a hung `pane layout` must not consume
+// the split's own time and turn a placeable spawn into a deadline failure.
+const HERDR_PANE_LAYOUT_TIMEOUT_MS = 1_000;
+const HERDR_PANE_SPLIT_MIN_MS = 500;
 // Leave cleanup headroom inside the public five-second failure contract. Pi's
 // exec timeout terminates the CLI process, so no detached Promise.race can
 // continue creating panes after startAgentPane has returned.
@@ -219,8 +224,12 @@ function paneRects(panes: readonly HerdrPaneLayoutEntry[] | undefined): PaneRect
  * the caller then keeps its planned direction.
  */
 async function tabSplitChoice(pi: PiExecLike, paneId: string, deadline: ProvisionDeadline): Promise<PaneSplitChoice | undefined> {
-	const timeout = remainingProvisionMs(deadline, HERDR_PANE_CLEANUP_RESERVE_MS);
-	if (timeout === undefined) return undefined;
+	const remaining = remainingProvisionMs(deadline, HERDR_PANE_CLEANUP_RESERVE_MS);
+	// A retrying pane lookup can leave almost no budget. Below the read cap plus
+	// the split's own headroom the geometry is not worth reading: skip it and let
+	// the split keep what is left with the planned direction.
+	if (remaining === undefined || remaining <= HERDR_PANE_LAYOUT_TIMEOUT_MS + HERDR_PANE_SPLIT_MIN_MS) return undefined;
+	const timeout = Math.min(HERDR_PANE_LAYOUT_TIMEOUT_MS, remaining - HERDR_PANE_SPLIT_MIN_MS);
 	try {
 		const result = await pi.exec("herdr", ["pane", "layout", "--pane", paneId], { timeout });
 		if (result.code !== 0) return undefined;

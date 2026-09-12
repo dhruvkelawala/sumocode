@@ -600,6 +600,8 @@ export function createRpcQueueRestoreTransaction(deps: RpcQueueRestoreDependenci
 			if (restored.some((text) => /pi-clipboard-[\w-]+\.(?:png|jpe?g|gif|webp)/i.test(text))) {
 				deps.notifications.notify("queued image restored as text; review before sending", "warning");
 			}
+			// Fail closed: abort only after clear/restore succeeds, or Pi may start
+			// a queued continuation immediately after the active turn aborts.
 			if (abortRequested) await deps.controls.abort();
 		})().finally(() => {
 			inFlight = undefined;

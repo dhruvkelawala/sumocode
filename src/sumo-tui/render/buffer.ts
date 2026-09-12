@@ -1,4 +1,5 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { recordGraphemeSegmentation } from "../runtime/diagnostics.js";
 import { BLANK_CELL, attrsEqual, attrsToMask, createAttrs, maskToAttrs, type Cell } from "./cell.js";
 import { indexedColor, isColorByte, normalizeHexColor } from "./truecolor.js";
 
@@ -27,6 +28,7 @@ const GRAPHEME_SEGMENTER = SEGMENTER_CTOR ? new SEGMENTER_CTOR(undefined, { gran
 
 function splitGraphemes(text: string): string[] {
 	if (!text) return [];
+	recordGraphemeSegmentation();
 	if (!GRAPHEME_SEGMENTER) return Array.from(text);
 	return [...GRAPHEME_SEGMENTER.segment(text)].map((part) => part.segment);
 }

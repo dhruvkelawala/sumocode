@@ -41,7 +41,7 @@ import { CellBuffer, type Rect } from "../render/buffer.js";
 import { composite, dispatchMouseEvent, type CompositeSelectionPass, type HardwareCursor } from "../render/compositor.js";
 import { cellRowToAnsi } from "../render/ansi-writer.js";
 import { diffFrames, type FrameDiffPatch } from "../render/diff.js";
-import { logDiagnostic } from "../runtime/diagnostics.js";
+import { graphemeSegmentationCount, isDiagnosticsEnabled, logDiagnostic } from "../runtime/diagnostics.js";
 import type { MouseEvent } from "../input/mouse.js";
 import type { ChatPager } from "../widgets/chat-pager.js";
 import { PiComponentLeaf } from "../widgets/pi-component-leaf.js";
@@ -90,7 +90,14 @@ export class RetainedShellRenderer {
 	private readonly paintHardwareCursorAsSoftware: boolean;
 	private lastFrame: CellBuffer | undefined;
 	private previousFrame: CellBuffer | undefined;
-	private lastOverlayCount = 0;
+	/**
+	 * Overlay components the last full render painted, in paint order. The narrow
+	 * repaint trusts the cloned frame's overlay pixels only while this set is
+	 * unchanged; a tick that finds a different visible set bails to a full render,
+	 * so an overlay opening or closing still reaches the screen even when no host
+	 * requested a render for it (#520).
+	 */
+	private paintedOverlayComponents: readonly ShellRenderable[] = [];
 	private lastCursor: HardwareCursor | null = null;
 	private readonly headerLeaf: PiComponentLeaf;
 	private readonly topChromeGapSpacer: SumoNode;
@@ -417,6 +424,11 @@ export class RetainedShellRenderer {
 	 */
 	public render(): void {
 		if (this.disposed) return;
+		// Frame-cost diagnostics stay inert (no clock reads, no counter deltas)
+		// unless a trace is actually being written.
+		const diagnosticsEnabled = isDiagnosticsEnabled();
+		const renderStart = diagnosticsEnabled ? performance.now() : 0;
+		const segmentStart = diagnosticsEnabled ? graphemeSegmentationCount() : 0;
 		const cols = Math.max(1, Math.floor(this.dimensions.columns ?? 80));
 		const rows = Math.max(1, Math.floor(this.dimensions.rows ?? 24));
 
@@ -449,7 +461,6 @@ export class RetainedShellRenderer {
 		// Hide the hardware cursor when a modal or the input-recovery notice
 		// overlay is visible so the editor's cursor doesn't bleed through it.
 		const cursor: HardwareCursor | null = overlayCount > 0 ? null : result.hardwareCursor;
-		this.lastOverlayCount = overlayCount;
 		this.lastCursor = cursor;
 		if (cursor && this.paintHardwareCursorAsSoftware) this.paintSoftwareCursor(frame, cursor);
 		// Owned-shell has independently pinned regions (chat, sidebar, input,
@@ -463,6 +474,8 @@ export class RetainedShellRenderer {
 		logDiagnostic("owned_shell_render", {
 			cols,
 			rows,
+			renderMs: diagnosticsEnabled ? Math.round((performance.now() - renderStart) * 100) / 100 : 0,
+			segmentationCalls: diagnosticsEnabled ? graphemeSegmentationCount() - segmentStart : 0,
 			layoutMs: Math.round(layoutMs * 100) / 100,
 			compositeMs: Math.round(compositeMs * 100) / 100,
 			patchCount: patches.length,
@@ -492,33 +505,72 @@ export class RetainedShellRenderer {
 	public repaintRegion(leaf: "aboveEditor"): void {
 		if (this.disposed) return;
 		if (leaf !== "aboveEditor") return;
+		const diagnosticsEnabled = isDiagnosticsEnabled();
+		const repaintStart = diagnosticsEnabled ? performance.now() : 0;
+		const segmentStart = diagnosticsEnabled ? graphemeSegmentationCount() : 0;
 		const cols = Math.max(1, Math.floor(this.dimensions.columns ?? 80));
 		const rows = Math.max(1, Math.floor(this.dimensions.rows ?? 24));
 		const previous = this.previousFrame;
-		if (!previous || !this.frameMatchesViewport(previous, rows, cols) || this.aboveEditorLeaf.parent === undefined) {
+		// Each bail names its guard so an offline trace (#503) can tell which
+		// condition is re-entering the full transcript render on every tick.
+		const fallback = (guard: string): void => {
+			logDiagnostic("owned_shell_repaint_fallback", { leaf, guard });
 			this.render();
+		};
+		if (!previous) {
+			fallback("no_previous_frame");
 			return;
 		}
-		if (this.lastOverlayCount > 0 || this.visibleOverlayEntries(cols, rows).length > 0) {
-			this.render();
+		if (!this.frameMatchesViewport(previous, rows, cols)) {
+			fallback("viewport_mismatch");
+			return;
+		}
+		if (this.aboveEditorLeaf.parent === undefined) {
+			fallback("leaf_detached");
+			return;
+		}
+		const visibleOverlays = this.visibleOverlayEntries(cols, rows).map((entry) => entry.component);
+		if (!sameOverlayComponents(visibleOverlays, this.paintedOverlayComponents)) {
+			fallback("overlay_set_changed");
 			return;
 		}
 
 		const rect = this.clampedNodeRect(this.aboveEditorLeaf, rows, cols);
-		if (!rect || rect.height <= 0 || rect.width <= 0) return;
+		if (!rect || rect.height <= 0 || rect.width <= 0) {
+			logDiagnostic("owned_shell_repaint_skip", { leaf, guard: "empty_rect" });
+			return;
+		}
 
 		const frame = previous.clone();
 		frame.clear(rect);
 		this.aboveEditorLeaf.render(frame, rect);
+		// Restore the overlay rows the clear erased. render() paints overlays on
+		// top of the shell, so the narrow repaint must re-paint only the overlay
+		// rows intersecting `rect` to keep that order -- the clone already holds
+		// every other overlay pixel. Bailing to a full render instead re-segmented
+		// the whole visible transcript once per indicator tick (#520).
+		const overlayCount = this.compositeOverlays(frame, cols, rows, rect);
 		const selectedFrame = this.withSelectionForNarrowRepaint(frame, rect.top, rect.height);
 		if (!selectedFrame) {
-			this.render();
+			fallback("selection_mismatch");
 			return;
 		}
 		const patches = this.diffRowSpan(previous, selectedFrame, rect.top, rect.height);
-		this.terminal.writeFramePatches(patches, this.lastCursor);
+		// Mirrors render()'s rule: a visible overlay hides the editor cursor, so a
+		// narrow tick must not hand the terminal a cursor the overlay is covering.
+		const cursor = overlayCount > 0 ? null : this.lastCursor;
+		this.terminal.writeFramePatches(patches, cursor);
 		this.previousFrame = selectedFrame.clone();
 		this.lastFrame = selectedFrame;
+		logDiagnostic("owned_shell_repaint_narrow", {
+			leaf,
+			top: rect.top,
+			height: rect.height,
+			patchCount: patches.length,
+			overlayCount,
+			repaintMs: diagnosticsEnabled ? Math.round((performance.now() - repaintStart) * 100) / 100 : 0,
+			segmentationCalls: diagnosticsEnabled ? graphemeSegmentationCount() - segmentStart : 0,
+		});
 	}
 
 	private paintSoftwareCursor(frame: CellBuffer, cursor: HardwareCursor): void {
@@ -543,8 +595,12 @@ export class RetainedShellRenderer {
 	 * without forcing a full migration to RegionRegistry, walk the overlay
 	 * stack and paint each visible overlay into the cell buffer.
 	 */
-	private compositeOverlays(frame: CellBuffer, termWidth: number, termHeight: number): number {
+	private compositeOverlays(frame: CellBuffer, termWidth: number, termHeight: number, clipTo?: Rect): number {
 		const visibleEntries = this.visibleOverlayEntries(termWidth, termHeight);
+		// A full render records what it painted; the narrow repaint compares against
+		// it above. Recording only on the full-render call keeps the narrow path
+		// from claiming a paint it did not do.
+		if (!clipTo) this.paintedOverlayComponents = visibleEntries.map((entry) => entry.component);
 		if (visibleEntries.length === 0) return 0;
 
 		for (const entry of visibleEntries) {
@@ -557,6 +613,10 @@ export class RetainedShellRenderer {
 			for (let row = 0; row < overlayLines.length; row += 1) {
 				const targetRow = layout.row + row;
 				if (targetRow < 0 || targetRow >= termHeight) continue;
+				// Narrow repaint passes the repainted rect: rows outside it already
+				// hold this overlay's pixels, and painting them would desync
+				// previousFrame from the terminal without a diff.
+				if (clipTo && (targetRow < clipTo.top || targetRow >= clipTo.top + clipTo.height)) continue;
 				frame.paintRow(targetRow, overlayLines[row] ?? "", layout.col, layout.width);
 			}
 		}
@@ -797,6 +857,11 @@ interface ResolvedOverlayLayout {
 
 function isNumber<T>(value: T): value is T & number {
 	return typeof value === "number";
+}
+
+/** Reference equality is enough: overlay components are long-lived host singletons. */
+function sameOverlayComponents(left: readonly ShellRenderable[], right: readonly ShellRenderable[]): boolean {
+	return left.length === right.length && left.every((component, index) => component === right[index]);
 }
 
 function parseSizeValue(value: number | string | undefined, reference: number): number | undefined {

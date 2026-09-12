@@ -83,7 +83,6 @@ describe("diagnostics", () => {
 	});
 
 	it("keeps the grapheme segmentation counter inert until diagnostics are enabled", () => {
-		tempDir = mkdtempSync(join(tmpdir(), "sumocode-diag-"));
 		delete process.env.SUMO_TUI_DIAG_FILE;
 		expect(isDiagnosticsEnabled()).toBe(false);
 		recordGraphemeSegmentation();

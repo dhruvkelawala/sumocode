@@ -183,6 +183,7 @@ describe("Pi-native direct bash submission", () => {
 		written.resolve();
 		await submitting;
 		expect(editor.getText()).toBe("newer draft");
+		expect(editor.clearImageDrafts).not.toHaveBeenCalled();
 	});
 
 	it("keeps the final activity when Pi has deferred durable history", async () => {

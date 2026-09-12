@@ -515,8 +515,10 @@ export async function submitRpcDirectBash(message: string, deps: RpcDirectBashSu
 		return true;
 	}
 	deps.editor.addToHistory(message);
-	if (deps.editor.getText() === message) deps.editor.setText("");
-	deps.editor.clearImageDrafts();
+	if (deps.editor.getText() === message) {
+		deps.editor.setText("");
+		deps.editor.clearImageDrafts();
+	}
 	void outcome.then(async (settled) => {
 		// Session replacement resets ownership before late old-session responses
 		// arrive; never restore or project their command into the new session.

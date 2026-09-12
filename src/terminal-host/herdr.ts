@@ -8,6 +8,7 @@ import type {
 	StartedAgentPane,
 	TerminalHost,
 } from "./types.js";
+import { chooseSplitAnchor, type PaneRect, type PaneSplitChoice } from "../subagents/layout.js";
 
 interface HerdrEnvelope { result?: unknown }
 interface HerdrErrorEnvelope { error?: { code?: string; message?: string } }
@@ -16,6 +17,9 @@ interface HerdrPaneInfoResult { pane?: HerdrPaneInfo }
 interface HerdrTabResult { tab?: { tab_id?: string; workspace_id?: string }; tab_id?: string; root_pane?: HerdrPaneInfo }
 interface HerdrWorktreeResult { root_pane?: HerdrPaneInfo; workspace?: { workspace_id?: string } }
 interface HerdrPaneListResult { panes?: HerdrPaneInfo[] }
+interface HerdrPaneRect { x?: number | null; y?: number | null; width?: number | null; height?: number | null }
+interface HerdrPaneLayoutEntry { pane_id?: string; rect?: HerdrPaneRect }
+interface HerdrPaneLayoutResult { layout?: { panes?: HerdrPaneLayoutEntry[] } }
 
 function parseEnvelope<T>(stdout: string): HostResult<T> {
 	try {
@@ -192,6 +196,43 @@ async function paneForTab(pi: PiExecLike, tabId: string, timeout = 5000, deadlin
 		: { ok: false, error: `herdr returned no pane for tab ${tabId}` };
 }
 
+// Herdr omits or nulls layout dimensions for panes it cannot measure; an
+// unmeasurable pane is left out of the chooser and the planned direction wins.
+const finite = (value: number | null | undefined): value is number => Number.isFinite(value);
+
+function paneRects(panes: readonly HerdrPaneLayoutEntry[] | undefined): PaneRect[] {
+	const rects: PaneRect[] = [];
+	for (const pane of panes ?? []) {
+		const rect = pane.rect;
+		if (!pane.pane_id || !rect) continue;
+		if (!finite(rect.x) || !finite(rect.y) || !finite(rect.width) || !finite(rect.height)) continue;
+		rects.push({ paneId: pane.pane_id, x: rect.x, y: rect.y, width: rect.width, height: rect.height });
+	}
+	return rects;
+}
+
+/**
+ * Read the tab's live geometry through one of its panes and pick the next
+ * split. A count-based or planned direction cannot see the tree a previous
+ * child left behind, so the pane with the largest area wins and its longer
+ * axis is the split axis. Returns undefined when the layout cannot be read;
+ * the caller then keeps its planned direction.
+ */
+async function tabSplitChoice(pi: PiExecLike, paneId: string, deadline: ProvisionDeadline): Promise<PaneSplitChoice | undefined> {
+	const timeout = remainingProvisionMs(deadline, HERDR_PANE_CLEANUP_RESERVE_MS);
+	if (timeout === undefined) return undefined;
+	try {
+		const result = await pi.exec("herdr", ["pane", "layout", "--pane", paneId], { timeout });
+		if (result.code !== 0) return undefined;
+		const parsed = parseEnvelope<HerdrPaneLayoutResult>(result.stdout);
+		return parsed.ok ? chooseSplitAnchor(paneRects(parsed.layout?.panes)) : undefined;
+	} catch {
+		// A geometry read is best-effort: an unavailable layout must not fail a
+		// spawn whose split the planned direction can still place.
+		return undefined;
+	}
+}
+
 type PaneTarget = { kind: "current" } | { kind: "id"; paneId: string };
 
 function paneTargetArgs(target: PaneTarget): string[] {
@@ -352,10 +393,16 @@ async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): P
 			const anchor = await paneForTab(pi, options.placement.tabId, 5000, deadline, 0, true);
 			if (!anchor.ok || !anchor.pane.pane_id) target = anchor;
 			else {
+				// Tile from the live geometry instead of the placement's count-based
+				// direction so sequential children fill the tab's grid rather than
+				// nesting halves of one corner. The placement direction remains the
+				// fallback for an unreadable layout.
+				const choice = await tabSplitChoice(pi, anchor.pane.pane_id, deadline)
+					?? { paneId: anchor.pane.pane_id, direction: options.placement.direction };
 				const timeout = remainingProvisionMs(deadline, HERDR_PANE_CLEANUP_RESERVE_MS);
 				target = timeout === undefined
 					? deadlineFailure("herdr pane split")
-					: await splitPane(pi, { kind: "id", paneId: anchor.pane.pane_id }, options.placement.direction, options.cwd, timeout);
+					: await splitPane(pi, { kind: "id", paneId: choice.paneId }, choice.direction, options.cwd, timeout);
 			}
 		} else {
 			target = await createTabPane(pi, options.cwd, options.placement.label, 5000, deadline, (tabId) => {

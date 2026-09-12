@@ -1388,10 +1388,10 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		const schedulerBefore = scheduler.getSnapshot();
 		const wasStreaming = state.isStreaming || schedulerBefore.dispatching === true;
 		if (!sessionEvents.begin()) throw new Error("session event barrier is already active");
-		queueOwnerGeneration += 1;
 		deferActivityRuntimeUpdate = true;
 		try {
 			await clearAndRestoreQueue(wasStreaming);
+			queueOwnerGeneration += 1;
 			let snapshot = await readAuthoritativeSessionSnapshot(controls, {
 				sessionFile: state.sessionFile,
 				sessionId: state.sessionId,
@@ -1577,13 +1577,11 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		onExitRequest: (code) => requestHostExit(code),
 		rehydrateTranscript,
 		beforeSessionChange: async () => {
+			// Finish any coalesced dequeue/interrupt clear against the current
+			// owner before advancing the session epoch, or its restored text would
+			// be rejected as stale after Pi has already emptied the queue.
+			await clearAndRestoreQueue();
 			beginSessionChange();
-			try {
-				await clearAndRestoreQueue();
-			} catch (error) {
-				cancelSessionChange();
-				throw error;
-			}
 		},
 		cancelSessionChange,
 		afterSessionChange: refreshSessionRuntime,

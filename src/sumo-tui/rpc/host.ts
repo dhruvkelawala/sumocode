@@ -44,7 +44,7 @@ import {
 	type RpcPromptScheduler,
 } from "./prompt-scheduler.js";
 import { RpcHostRuntime } from "./runtime.js";
-import { responseData, type RpcResponseData } from "./response.js";
+import { responseData } from "./response.js";
 import { notifyOnError, type ErrorNotifier } from "./safe-send.js";
 import { RpcHostStateStore, type RpcHostChromeState } from "./state.js";
 import { RpcTranscriptPump } from "./transcript-pump.js";
@@ -261,7 +261,25 @@ function piBinary(env: NodeJS.ProcessEnv): string {
 // the Node host bundle still copies the same .mjs sibling for its existing
 // runtime path.
 
-function matchesDurableDirectBash(message: RpcResponseData<"get_messages">["messages"][number], command: string, excludeFromContext: boolean, result: DirectBashResult, startedAt: number): boolean {
+interface DurableDirectBashRecord {
+	readonly role?: unknown;
+	readonly command?: unknown;
+	readonly output?: unknown;
+	readonly exitCode?: unknown;
+	readonly cancelled?: unknown;
+	readonly truncated?: unknown;
+	readonly fullOutputPath?: unknown;
+	readonly excludeFromContext?: unknown;
+	readonly timestamp?: unknown;
+}
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- parse the persisted/RPC transcript boundary before reconciliation.
+function matchesDurableDirectBash(value: unknown, command: string, excludeFromContext: boolean, result: DirectBashResult, startedAt: number): boolean {
+	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- parse the persisted/RPC transcript boundary before reconciliation.
+	if (typeof value !== "object" || value === null) return false;
+	// SAFETY: field equality below validates the only durable bash shape used.
+	// oxlint-disable-next-line anti-slop/require-safety-comment-for-type-assertion
+	const message = value as DurableDirectBashRecord;
 	return message.role === "bashExecution"
 		&& message.command === command
 		&& message.output === result.output
@@ -270,6 +288,8 @@ function matchesDurableDirectBash(message: RpcResponseData<"get_messages">["mess
 		&& message.truncated === result.truncated
 		&& message.fullOutputPath === result.fullOutputPath
 		&& message.excludeFromContext === excludeFromContext
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- persisted timestamps are untrusted.
+		&& typeof message.timestamp === "number"
 		&& message.timestamp >= startedAt;
 }
 
@@ -1371,7 +1391,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		}
 	};
 	let pendingDirectBashReconciliation: DirectBashCompletion | undefined;
-	const reconcileDurableDirectBash = (messages: RpcResponseData<"get_messages">["messages"]): void => {
+	const reconcileDurableDirectBash = <T>(messages: readonly T[]): void => {
 		const pending = pendingDirectBashReconciliation;
 		if (!pending || !messages.some((message) => matchesDurableDirectBash(message, pending.command, pending.excludeFromContext, pending.result, pending.startedAt))) return;
 		pendingDirectBashReconciliation = undefined;
@@ -1672,6 +1692,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 				outcomeStatus: outcome?.status ?? "unknown",
 				success: hydrationSuccess,
 			});
+			reconcileDurableDirectBash(messages);
 			runtime?.update({ state, transcript, transcriptRevision: transcriptPump.getRevision() });
 			const replay = sessionEvents.finishHydration();
 			for (const event of replay.supersededSnapshotEvents) scheduler.handleAgentEvent(event);

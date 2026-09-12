@@ -102,7 +102,8 @@ describe("retained supervisor handle ownership", () => {
 		const f = retainedFixture();
 		f.proc.emit("spawn");
 		await f.owner.ready;
-		const sessionFile = join(f.record.taskDir, "session", "child.jsonl");
+		const sessionFile = join(f.record.taskDir, "session", "--task--", "child.jsonl");
+		mkdirSync(join(f.record.taskDir, "session", "--task--"));
 		writeFileSync(sessionFile, "session", { mode: 0o600 });
 		await f.finish();
 		f.release();

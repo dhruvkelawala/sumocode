@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -569,7 +569,8 @@ describe("spawnPiChild", () => {
 				prompt: "first", cwd: "/repo", inherited: {}, sessionDir,
 			});
 			const freshEvents = collect(fresh.events);
-			const sessionFile = join(sessionDir, "child.jsonl");
+			const sessionFile = join(sessionDir, "--repo--", "child.jsonl");
+			mkdirSync(join(sessionDir, "--repo--"));
 			writeFileSync(sessionFile, "session");
 			first.emit("close", 0);
 			expect(spawn.mock.calls[0]?.[1]).not.toContain("--no-session");
@@ -585,7 +586,7 @@ describe("spawnPiChild", () => {
 			});
 			const resumedEvents = collect(resumed.events);
 			expect(spawn.mock.calls[1]?.[1]).not.toContain("--no-session");
-			expect(spawn.mock.calls[1]?.[1]).toEqual(expect.arrayContaining(["--session", sessionFile, "--session-dir", sessionDir]));
+			expect(spawn.mock.calls[1]?.[1]).toEqual(expect.arrayContaining(["--session", sessionFile, "--session-dir", dirname(sessionFile)]));
 			second.emit("close", 0);
 			expect(resumedEvents.at(-2)).toEqual({ kind: "session-located", sessionFilePath: sessionFile });
 		} finally {

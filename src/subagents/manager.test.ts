@@ -146,6 +146,32 @@ describe("SubagentManager", () => {
 		} finally { manager.disposeAll(); }
 	});
 
+	it("reserves a session before asynchronous reply setup", async () => {
+		let blockReply = false;
+		let release!: () => void;
+		const setupGate = new Promise<void>((resolve) => { release = resolve; });
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => { emitters.set(task.id, emit); emit({ kind: "run-started" }); }, interrupt: vi.fn(),
+		}), {
+			captureGitContext: async () => { if (blockReply) await setupGate; return { baseRef: "base-ref" }; },
+			buildCompletionManifest: fakeManifestBuilder,
+		});
+		try {
+			const original = await manager.spawn(makeTask("parallel"));
+			if (!("id" in original)) throw new Error("unexpected capacity refusal");
+			emitters.get(original.id)?.({ kind: "session-located", sessionFilePath: "/tmp/session/parallel.jsonl" });
+			emitters.get(original.id)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+			await vi.waitFor(() => expect(manager.get(original.id)?.status).toBe("done"));
+			blockReply = true;
+
+			const first = manager.reply(original.id, "first");
+			await expect(manager.reply(original.id, "second")).rejects.toThrow("already in flight");
+			release();
+			await expect(first).resolves.toMatchObject({ status: "running" });
+		} finally { manager.disposeAll(); }
+	});
+
 	it("rejects a second reply while the first continuation is queued", async () => {
 		const { manager, emitters } = deferredBackend();
 		try {

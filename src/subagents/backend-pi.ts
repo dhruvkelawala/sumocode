@@ -836,7 +836,7 @@ export const createPiChildSpawner = (
 					if (options.resumeSessionFile && existsSync(options.resumeSessionFile)) {
 						emit({ kind: "session-located", sessionFilePath: options.resumeSessionFile });
 					} else {
-						const sessions = readdirSync(sessionDir).filter((entry) => entry.endsWith(".jsonl"));
+						const sessions = readdirSync(sessionDir, { recursive: true, encoding: "utf8" }).filter((entry) => entry.endsWith(".jsonl"));
 						if (sessions.length === 1) emit({ kind: "session-located", sessionFilePath: join(sessionDir, sessions[0]!) });
 					}
 				} catch { /* Session discovery is optional evidence; settlement must still publish. */ }

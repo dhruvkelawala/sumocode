@@ -225,6 +225,7 @@ export class SubagentManager {
 	private readonly settlingIds = new Set<string>();
 	private readonly settlingPromises = new Map<string, Promise<void>>();
 	private readonly settlingOutcomes = new Map<string, RunOutcome>();
+	private readonly replyingSessions = new Set<string>();
 	private readonly startedIds = new Set<string>();
 	private readonly cancelledSetupIds = new Set<string>();
 	private readonly workspacePlacedIds = new Set<string>();
@@ -792,18 +793,23 @@ export class SubagentManager {
 		if (!isSettled(original)) throw new Error(`${id} is still ${original.status} — steer it with subagent_send (visible) or wait for it to settle`);
 		if (!original.sessionFilePath) throw new Error(`${id} has no captured session (spawned before session persistence, or discovery failed) — respawn instead`);
 		const active = this.list().find((snapshot) => snapshot.id !== id && snapshot.sessionFilePath === original.sessionFilePath && !isSettled(snapshot));
-		if (active) throw new Error(`a reply to ${id} is already in flight (${active.id})`);
-		return this.spawn({
-			...overrides,
-			prompt: text,
-			title: original.title.startsWith("re: ") ? original.title : `re: ${original.title}`,
-			roleId: original.roleId,
-			cwd: original.cwd,
-			model: overrides.model ?? original.modelLabel,
-			thinking: overrides.thinking ?? original.thinkingLabel,
-			visible: undefined,
-			resume: { sessionFilePath: original.sessionFilePath, repliesTo: id, worktree: original.worktree, baseRef: original.baseRef },
-		});
+		if (this.replyingSessions.has(original.sessionFilePath) || active) throw new Error(`a reply to ${id} is already in flight${active ? ` (${active.id})` : ""}`);
+		this.replyingSessions.add(original.sessionFilePath);
+		try {
+			return await this.spawn({
+				...overrides,
+				prompt: text,
+				title: original.title.startsWith("re: ") ? original.title : `re: ${original.title}`,
+				roleId: original.roleId,
+				cwd: original.cwd,
+				model: overrides.model ?? original.modelLabel,
+				thinking: overrides.thinking ?? original.thinkingLabel,
+				visible: undefined,
+				resume: { sessionFilePath: original.sessionFilePath, repliesTo: id, worktree: original.worktree, baseRef: original.baseRef },
+			});
+		} finally {
+			this.replyingSessions.delete(original.sessionFilePath);
+		}
 	}
 
 	public get(id: string): SubagentSnapshot | undefined {

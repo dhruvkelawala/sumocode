@@ -43,7 +43,7 @@ export const RPC_COMMAND_DISPOSITIONS = {
 	abort_bash: { kind: "downstream-plan-owned", owner: "Plan 091 (#378)", reason: "direct bash owns the abort path" },
 	abort_retry: { kind: "downstream-plan-owned", owner: "Plan 089 (#376)", reason: "auto-retry lifecycle authority" },
 	bash: { kind: "downstream-plan-owned", owner: "Plan 091 (#378)", reason: "Pi-native direct user bash" },
-	clear_queue: { kind: "downstream-plan-owned", owner: "Plan 090 (#377)", reason: "native queue ownership and clear/restore UX; 088 only locks the response envelope" },
+	clear_queue: { kind: "implemented", owner: "controls.ts RpcHostControls.clearQueue" },
 	clone: { kind: "implemented", owner: "controls.ts RpcHostControls.clone" },
 	compact: { kind: "implemented", owner: "controls.ts RpcHostControls.compact" },
 	cycle_model: { kind: "implemented", owner: "controls.ts RpcHostControls.cycleModel" },
@@ -85,9 +85,9 @@ export const AGENT_EVENT_DISPOSITIONS = {
 	compaction_start: { kind: "projected", owner: "state.ts RpcHostStateStore.handleAgentEvent", note: "transcript also tracks the reason" },
 	entry_appended: { kind: "intentionally-ignored", owner: "session-reader.ts", reason: "authoritative entries are read with get_entries/get_messages; no live consumer" },
 	message_end: { kind: "transcript-only", owner: "transcript/controller.ts TranscriptController" },
-	message_start: { kind: "transcript-only", owner: "transcript/controller.ts TranscriptController", note: "prompt-scheduler observes it only for the Plan 087 force-steer lifecycle" },
+	message_start: { kind: "transcript-only", owner: "transcript/controller.ts TranscriptController" },
 	message_update: { kind: "transcript-only", owner: "transcript/controller.ts TranscriptController" },
-	queue_update: { kind: "projected", owner: "state.ts RpcHostStateStore.handleAgentEvent", note: "prompt-scheduler also consumes it for force-steer ownership" },
+	queue_update: { kind: "projected", owner: "state.ts RpcHostStateStore.handleAgentEvent", note: "full native steering/follow-up snapshot" },
 	session_info_changed: { kind: "projected", owner: "state.ts RpcHostStateStore.handleAgentEvent" },
 	summarization_retry_attempt_start: { kind: "downstream-plan-owned", owner: "Plan 089 (#376)", reason: "summarization retry lifecycle projection" },
 	summarization_retry_finished: { kind: "downstream-plan-owned", owner: "Plan 089 (#376)", reason: "summarization retry lifecycle projection" },
@@ -96,8 +96,8 @@ export const AGENT_EVENT_DISPOSITIONS = {
 	tool_execution_end: { kind: "transcript-only", owner: "transcript/controller.ts TranscriptController" },
 	tool_execution_start: { kind: "transcript-only", owner: "transcript/controller.ts TranscriptController" },
 	tool_execution_update: { kind: "transcript-only", owner: "transcript/controller.ts TranscriptController", note: "state store also counts task partials" },
-	turn_end: { kind: "scheduler-only", owner: "prompt-scheduler.ts RpcPromptScheduler.handleAgentEvent", note: "force-steer lifecycle boundary" },
-	turn_start: { kind: "intentionally-ignored", owner: "prompt-scheduler.ts", reason: "no consumer; turn_end and agent_settled own the scheduling boundaries" },
+	turn_end: { kind: "transcript-only", owner: "transcript/controller.ts TranscriptController" },
+	turn_start: { kind: "intentionally-ignored", owner: "prompt-scheduler.ts", reason: "no scheduler consumer; Pi owns native queue delivery" },
 } as const satisfies Record<AgentSessionEvent["type"], AgentEventDisposition>;
 
 export const EXTENSION_UI_METHOD_DISPOSITIONS = {

@@ -122,7 +122,7 @@ export interface RpcHostActionsOptions {
 	 */
 	readonly rehydrateTranscript?: () => Promise<void>;
 	/** Enter fail-closed rendering immediately before a session-changing RPC. */
-	readonly beforeSessionChange?: () => void;
+	readonly beforeSessionChange?: () => void | Promise<void>;
 	/** Restore the previous presentation only when a cancelled-operation refresh fails before rebinding. */
 	readonly cancelSessionChange?: () => void;
 	/** Shared successful new/switch/clone/fork seam. Defaults to refresh + transcript rehydrate. */
@@ -522,7 +522,7 @@ export class RpcHostActions {
 	private readonly setMermaidRenderingMode: (mode: MermaidRenderingMode) => void;
 	private readonly onExitRequest: (code: number) => void;
 	private readonly rehydrateTranscript: () => Promise<void>;
-	private readonly beforeSessionChange: () => void;
+	private readonly beforeSessionChange: () => void | Promise<void>;
 	private readonly cancelSessionChange: () => void;
 	private readonly afterSessionChange: () => Promise<void>;
 	private readonly afterCancelledSessionChange: () => Promise<void>;
@@ -1112,7 +1112,10 @@ export class RpcHostActions {
 		if (!message) return;
 		const result = await this.applySessionChange(
 			() => this.controls.fork(message.entryId),
-			(current) => { if (current.text) this.editorText?.setText(current.text); },
+			(current) => {
+				if (!current.text || !this.editorText) return;
+				this.editorText.setText([this.editorText.getText(), current.text].filter(Boolean).join("\n\n"));
+			},
 		);
 		if (!result.cancelled) this.onStateChange();
 	}
@@ -1467,7 +1470,7 @@ export class RpcHostActions {
 		operation: () => Promise<T>,
 		onSucceeded?: (result: T) => void,
 	): Promise<T> {
-		this.beforeSessionChange();
+		await this.beforeSessionChange();
 		let result: T;
 		try {
 			result = await operation();

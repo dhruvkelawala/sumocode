@@ -512,43 +512,33 @@ export class RpcShellAdapter {
 		return width > 0 ? [truncateToWidth(line, width)] : [line];
 	}
 
-	/**
-	 * Render queued messages above the editor. `state.queuedMessages` is a
-	 * display-only composition of SumoCode's host-owned prompt queue plus any
-	 * unexpected Pi-owned queue_update entries; only the host-owned portion is
-	 * undoable, but the card geometry stays shared.
-	 */
+	/** Render Pi's two native queues separately, followed by the narrow local compaction queue. */
 	public renderQueuedMessages(width: number): string[] {
-		const queued = this.state.queuedMessages;
-		if (!queued || queued.length === 0 || width < 8) return [];
+		if (width < 8) return [];
+		const groups = [
+			["STEERING", this.state.steeringMessages ?? []],
+			["FOLLOW-UP", this.state.followUpMessages ?? []],
+			["COMPACTION", this.state.localQueuedMessages ?? []],
+		] as const;
 		const colors = activeThemeColors();
 		const accent = getActiveTheme().tokens.colors.accent;
 		const frame = activeThemeChrome().frame;
 		const divider = (glyphs: string) => colorHex(glyphs, colors.divider);
-
-		// Bordered card in the same visual language as the USER/SUMO chat
-		// cards (dim divider frame, dim body), so queued prompts read as part
-		// of the conversation surface rather than loose banner rows:
-		//
-		//   ╭ QUEUED (2) ──────────────────────╮
-		//   │ ↳ first queued prompt              │
-		//   ╰──────────────────────────────────╯
-		const label = `QUEUED (${queued.length})`;
-		const topRule = Math.max(0, width - 4 - label.length);
-		const top = `${divider(`${frame.topLeft} `)}${colorHex(label, colors.foregroundDim)}${divider(` ${frame.horizontal.repeat(topRule)}${frame.topRight}`)}`;
-		const bottom = divider(`${frame.bottomLeft}${frame.horizontal.repeat(Math.max(0, width - 2))}${frame.bottomRight}`);
-
-		const textAvail = Math.max(1, width - 6); // "│ ↳ " + " │"
-		const rows = queued.map((text) => {
-			// Clipboard-image paths are an implementation detail — show a compact
-			// [image] tag instead of the raw /tmp/pi-clipboard-….png path.
-			const display = text.replace(/\S*pi-clipboard-[\w-]+\.(?:png|jpe?g|gif|webp)/gi, "[image]");
-			const single = truncateToWidth(display.replace(/\s+/g, " ").trim(), textAvail);
-			const pad = " ".repeat(Math.max(0, textAvail - visibleWidth(single)));
-			return `${divider(frame.vertical)} ${colorHex("↳", accent)} ${colorHex(single, colors.foregroundDim)}${pad} ${divider(frame.vertical)}`;
+		const textAvail = Math.max(1, width - 6);
+		return groups.flatMap(([kind, messages]) => {
+			if (messages.length === 0) return [];
+			const label = `${kind} (${messages.length})`;
+			const topRule = Math.max(0, width - 4 - label.length);
+			const top = `${divider(`${frame.topLeft} `)}${colorHex(label, colors.foregroundDim)}${divider(` ${frame.horizontal.repeat(topRule)}${frame.topRight}`)}`;
+			const rows = messages.map((text) => {
+				const display = text.replace(/\S*pi-clipboard-[\w-]+\.(?:png|jpe?g|gif|webp)/gi, "[image]");
+				const single = truncateToWidth(display.replace(/\s+/g, " ").trim(), textAvail);
+				const pad = " ".repeat(Math.max(0, textAvail - visibleWidth(single)));
+				return `${divider(frame.vertical)} ${colorHex("↳", accent)} ${colorHex(single, colors.foregroundDim)}${pad} ${divider(frame.vertical)}`;
+			});
+			const bottom = divider(`${frame.bottomLeft}${frame.horizontal.repeat(Math.max(0, width - 2))}${frame.bottomRight}`);
+			return [top, ...rows, bottom];
 		});
-
-		return [top, ...rows, bottom];
 	}
 
 	/**
@@ -780,6 +770,7 @@ function renderActiveHint(state: RpcHostChromeState, width: number, sidebarVisib
 	// visible even when the sidebar owns the project/branch context.
 	const leftHint = notice ?? (sidebarVisible ? undefined : branch ? `${project} (${branch})` : project);
 	const hint = renderInputHints(innerWidth, {
+		deliveryMode: state.promptDeliveryMode ?? "steer",
 		leftHint,
 		leftHintOverflow: "truncate",
 		leftHintStyle: notice !== undefined ? "dim" : "project-branch",

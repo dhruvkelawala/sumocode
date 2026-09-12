@@ -518,7 +518,7 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 | 074 | [Herdr-native integration: approval attention queue + native worktree workspaces](074-herdr-native-integration.md) | P2 | S | 072 | [#316](https://github.com/dhruvkelawala/sumocode/issues/316) | DONE — PR #320 (`93e077a`); Claude autoreview 3 rounds → clean; live-verified: blocked flip + attention-queue jump during approval modal (operator screenshot 2026-07-18) |
 | 075 | [Ultraviolet Core Application Theme](075-ultraviolet-core-application-theme.md) | P1 | L | 073 | [#319](https://github.com/dhruvkelawala/sumocode/issues/319) | DONE — implementation branch `advisor/075-ultraviolet-core-application-theme`; review-only visual evidence, no golden promotion |
 | 076 | [Ultraviolet RunCat working indicator](076-ultraviolet-runcat-working-indicator.md) | P2 | M | 075 | [#331](https://github.com/dhruvkelawala/sumocode/issues/331) | IN PROGRESS — automated implementation approved at `3747af4`; 1,759 unit tests, 45 integration tests, 101 Bible renders, and 22 visual scenarios pass; two-Mac human canary pending |
-| 078 | [Host-owned RPC prompt queue and queued-message undo](078-restore-queued-message-undo.md) | P1 | M | PR #325 | — | DONE — approved at `48949b5`; 1,741 unit tests, 48 integration tests, 100 Bible renders, 21 visual scenarios, and final Claude autoreview pass |
+| 078 | [Host-owned RPC prompt queue and queued-message undo](078-restore-queued-message-undo.md) | P1 | M | PR #325 | — | DONE — historical implementation approved at `48949b5`; ordinary queue ownership superseded by Plan 090, with only the compaction-local hold retained |
 
 ### Dependency notes
 
@@ -607,9 +607,9 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
-| 087 | [Force-send the next host-queued message as Pi steering](087-force-send-next-queued-message.md) | P1 | M | 078 | BLOCKED — Pi 0.83 cannot distinguish handled input from the active-to-idle normal-start race; two revisions exhausted at `1857f8d` |
+| 087 | [Force-send the next host-queued message as Pi steering](087-force-send-next-queued-message.md) | P1 | M | 078 | REJECTED — superseded by Plan 090's direct Pi-native prompt delivery; no force-send barrier remains |
 
-### Locked decisions
+### Historical locked decisions (superseded by Plan 090)
 
 - Ordinary busy Enter remains an undoable host FIFO append; ordinary FIFO drain still waits for `agent_settled`.
 - `super+enter` (Command+Enter) force-sends only the oldest FIFO entry through `prompt.streamingBehavior: "steer"`; later entries keep their order.
@@ -626,6 +626,7 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
 | 088 | Upgrade Pi to the first `clear_queue` release and lock the RPC contract | P0 | L | published Pi release with `clear_queue` | DONE — Pi `0.85.1` pinned across `pi-ai`/`pi-coding-agent`/`pi-tui`; installed-worker `clear_queue` proof and thinking-shape locks in `test/integration/rpc-contract.test.ts`; compile-exhaustive command/event/extension-UI dispositions in `src/sumo-tui/rpc/contract-classification.ts`; response envelope requires a real boolean success ([#375](https://github.com/dhruvkelawala/sumocode/issues/375)) |
+| 090 | Move prompt delivery to Pi queues with a steer-default toggle | P0 | L | 088, 089 | IN PROGRESS — `feat/377-native-queues`; Pi owns ordinary steering/follow-up queues, host ownership narrows to compaction submissions ([#377](https://github.com/dhruvkelawala/sumocode/issues/377)) |
 
 ## Deep improvement audit — command readiness, security, lifecycle, and Effect (091–115)
 

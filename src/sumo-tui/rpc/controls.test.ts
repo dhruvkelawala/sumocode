@@ -667,6 +667,17 @@ describe("RpcHostControls", () => {
 		expect(client.timeouts).toEqual([1_200_000, undefined]);
 	});
 
+	it("clears both native queues with the exact RPC command", async () => {
+		const client = new FakeClient({
+			type: "response", command: "clear_queue", success: true,
+			data: { steering: ["first"], followUp: ["later"] },
+		});
+		const controls = new RpcHostControls(client);
+
+		await expect(controls.clearQueue()).resolves.toEqual({ steering: ["first"], followUp: ["later"] });
+		expect(client.commands).toEqual([{ type: "clear_queue" }]);
+	});
+
 	it("sends the abort control payload", async () => {
 		const client = new FakeClient({ type: "response", command: "abort", success: true });
 		const controls = new RpcHostControls(client);

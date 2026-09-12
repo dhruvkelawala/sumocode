@@ -236,8 +236,12 @@ describe("RpcHostStateStore", () => {
 			steering: ["steer me"],
 			followUp: ["then this", "and this"],
 		});
-		expect(queued.queuedMessages).toEqual(["steer me", "then this", "and this"]);
-		expect(queued.pendingMessageCount).toBe(3);
+		expect(queued).toMatchObject({
+			steeringMessages: ["steer me"],
+			followUpMessages: ["then this", "and this"],
+			queuedMessages: ["steer me", "then this", "and this"],
+			pendingMessageCount: 3,
+		});
 
 		// Unrelated events must not clear the queue…
 		expect(store.handleAgentEvent({ type: "agent_start" }).queuedMessages).toEqual(["steer me", "then this", "and this"]);
@@ -284,6 +288,21 @@ describe("RpcHostStateStore", () => {
 		expect(store.handleAgentEvent({ type: "queue_update", steering: ["pi steer"], followUp: [] }).queuedMessages).toEqual(["pi steer", "host b"]);
 		expect(store.setHostQueuedMessages([]).queuedMessages).toEqual(["pi steer"]);
 		expect(store.handleAgentEvent({ type: "queue_update", steering: [], followUp: [] }).queuedMessages).toEqual([]);
+	});
+
+	it("drops prior-session queue text while preserving an unknown destination count", () => {
+		const store = new RpcHostStateStore();
+		const state = (sessionId: string, pendingMessageCount: number) => asRpcSessionState({
+			thinkingLevel: "medium", isStreaming: false, isCompacting: false,
+			steeringMode: "all", followUpMode: "one-at-a-time", sessionId,
+			autoCompactionEnabled: true, messageCount: 1, pendingMessageCount,
+		});
+		store.hydrateFromRpcState(state("session-a", 0));
+		store.handleAgentEvent({ type: "queue_update", steering: ["private a"], followUp: [] });
+
+		const destination = store.hydrateFromRpcState(state("session-b", 2));
+		expect(destination).toMatchObject({ steeringMessages: [], followUpMessages: [], pendingMessageCount: 2 });
+		expect(destination.queuedMessages).toEqual([]);
 	});
 
 	it("tracks session/thinking updates and task partial counts", () => {

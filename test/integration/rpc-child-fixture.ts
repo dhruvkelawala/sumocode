@@ -64,6 +64,8 @@ const newSessionName = ${JSON.stringify(options.newSessionName ?? "Fresh Session
 const switchSessions = ${JSON.stringify(options.switchSessions ?? {})};
 let isStreaming = false;
 let isCompacting = false;
+let steeringQueue = [];
+let followUpQueue = [];
 let pendingPrompt = null;
 let holdNextPromptUntilAbort = ${options.holdPromptUntilAbort ? "true" : "false"};
 let sessionHydrationRacePending = false;
@@ -112,7 +114,7 @@ function state() {
 		sessionName,
 		autoCompactionEnabled: true,
 		messageCount: messages.length,
-		pendingMessageCount: isStreaming ? 1 : 0
+		pendingMessageCount: steeringQueue.length + followUpQueue.length
 	};
 }
 
@@ -205,6 +207,8 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		messages = [];
 		isStreaming = sessionHydrationRace;
 		isCompacting = false;
+		steeringQueue = [];
+		followUpQueue = [];
 		write({ type: "session_info_changed", name: sessionName });
 		if (sessionHydrationRace) sessionHydrationRacePending = true;
 		else write({ type: "agent_end", messages: [], willRetry: false });
@@ -222,16 +226,18 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		messages = target.messages || [];
 		isStreaming = false;
 		isCompacting = false;
+		steeringQueue = [];
+		followUpQueue = [];
 		write({ type: "session_info_changed", name: sessionName });
 		write({ type: "agent_end", messages: [], willRetry: false });
 		write(response(command, { cancelled: false }));
 		return;
 	}
 	if (command.type === "prompt") {
-		// Model a Pi input extension returning handled: the steer is acknowledged
-		// without queue_update, message_start, or a second agent lifecycle. The
-		// delayed ordinary prompt still owns the current run's settlement.
-		if (command.streamingBehavior === "steer" && isStreaming) {
+		if (isStreaming) {
+			if (command.streamingBehavior === "followUp") followUpQueue.push(command.message);
+			else steeringQueue.push(command.message);
+			write({ type: "queue_update", steering: [...steeringQueue], followUp: [...followUpQueue] });
 			write(response(command, {}));
 			return;
 		}
@@ -268,6 +274,14 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 			return;
 		}
 		setTimeout(() => finishPrompt(command, "fixture response complete: " + command.message), promptDelayMs);
+		return;
+	}
+	if (command.type === "clear_queue") {
+		const cleared = { steering: [...steeringQueue], followUp: [...followUpQueue] };
+		steeringQueue = [];
+		followUpQueue = [];
+		write({ type: "queue_update", steering: [], followUp: [] });
+		write(response(command, cleared));
 		return;
 	}
 	if (command.type === "compact") {

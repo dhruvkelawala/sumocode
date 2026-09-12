@@ -39,7 +39,7 @@ import {
 	createRpcPromptScheduler,
 	RpcPromptPreflightRejection,
 	type RpcPromptDelivery,
-	type RpcPromptForceSendResult,
+	type RpcPromptDeliveryMode,
 	type RpcPromptScheduler,
 } from "./prompt-scheduler.js";
 import { RpcHostRuntime } from "./runtime.js";
@@ -55,7 +55,7 @@ export { createUnhandledRejectionHandler, writeExitCodeFile, type UnhandledRejec
 const DEFERRED_SELECTOR_ACTION_KEY = "selector-open";
 const DEFERRED_MODEL_CYCLE_ACTION_KEY = "model-cycle";
 const DEFERRED_MESSAGE_QUEUE_ACTION_KEY = "message-queue";
-const DEFERRED_MESSAGE_FORCE_SEND_ACTION_KEY = "message-force-send";
+const DEFERRED_MESSAGE_TOGGLE_ACTION_KEY = "message-toggle-delivery";
 const RPC_MESSAGE_FALLBACK_MAX_SESSION_BYTES = CHILD_JSON_FRAME_MAX_BYTES / 2;
 
 export interface RpcHostMainOptions {
@@ -96,13 +96,6 @@ function valuesEqual(left: readonly unknown[] | undefined, right: readonly unkno
 	} catch {
 		return false;
 	}
-}
-
-export function canRpcForceSteer(
-	state: Pick<RpcHostChromeState, "isStreaming" | "isCompacting">,
-	treeNavigationBusy: boolean,
-): boolean {
-	return state.isStreaming && !state.isCompacting && !treeNavigationBusy;
 }
 
 export const TREE_NAVIGATION_QUIET_POLL_MS = 100;
@@ -415,8 +408,8 @@ export interface RpcPromptSendOptions {
 }
 
 export async function sendRpcPrompt(message: string, options: RpcPromptSendOptions): Promise<void> {
-	const command = options.delivery?.streamingBehavior === "steer"
-		? { type: "prompt" as const, message, streamingBehavior: "steer" as const }
+	const command = options.delivery
+		? { type: "prompt" as const, message, streamingBehavior: options.delivery.streamingBehavior }
 		: { type: "prompt" as const, message };
 	const response = await options.client.send(command);
 	if (response.success === false && response.command === "prompt") {
@@ -436,13 +429,14 @@ export interface RpcPromptSubmitOptions {
 	readonly stateStore?: Pick<RpcHostStateStore, "getSnapshot">;
 	readonly client: Pick<SumoRpcClient, "send">;
 	readonly onBeforeSend?: (message: string) => void;
+	readonly delivery?: RpcPromptDeliveryMode;
 }
 
 export async function submitRpcPrompt(message: string, options: RpcPromptSubmitOptions): Promise<void> {
 	if (options.visualFixture) return;
 	if (message.trim().length === 0) return;
 	if (options.scheduler) {
-		await options.scheduler.submit(message);
+		await options.scheduler.submit(message, { delivery: options.delivery ?? "steer" });
 		return;
 	}
 	if (await options.actions?.handleSubmittedText(message)) return;
@@ -458,19 +452,19 @@ export interface EditorSubmitReadinessGate {
 export interface EditorSubmitHandlerDependencies {
 	readonly gate: EditorSubmitReadinessGate;
 	readonly notifications: ErrorNotifier;
-	readonly submit: (message: string) => Promise<void>;
+	readonly submit: (message: string, delivery?: RpcPromptDeliveryMode) => Promise<void>;
 	readonly requestExit: (code: number) => void;
 	readonly isTreeBusy: () => boolean;
 }
 
 export interface EditorSubmitHandlers {
-	readonly fromEditor: (message: string) => Promise<void>;
+	readonly fromEditor: (message: string, delivery?: RpcPromptDeliveryMode) => Promise<void>;
 	readonly fromLaunch: (message: string) => Promise<void>;
 }
 
 /** Keeps early editing responsive while command dispatch waits for hydration. */
 export function createEditorSubmitHandlers(deps: EditorSubmitHandlerDependencies): EditorSubmitHandlers {
-	const submit = async (message: string, notifyWhenQueued: boolean): Promise<void> => {
+	const submit = async (message: string, notifyWhenQueued: boolean, delivery?: RpcPromptDeliveryMode): Promise<void> => {
 		const trimmed = message.trim();
 		if (trimmed.length === 0) return;
 		// /quit is entirely host-owned and must remain available when the child
@@ -485,8 +479,9 @@ export function createEditorSubmitHandlers(deps: EditorSubmitHandlerDependencies
 		}
 		// Wait for hydration AND for any deferred child-dependent intent (e.g. a
 		// model/thinking cycle) to fully apply, so a prompt never dispatches under
-		// state an earlier gated shortcut is still committing.
-		await deps.gate.whenSettled();
+		// state an earlier gated shortcut is still committing. Once ready, avoid
+		// yielding: a following shortcut must not overtake this Enter submission.
+		if (!deps.gate.isReady) await deps.gate.whenSettled();
 		if (deps.isTreeBusy()) {
 			// The editor cleared its buffer when Enter fired (submitValue clears
 			// before the async submit settles), so a silent return loses the
@@ -494,11 +489,11 @@ export function createEditorSubmitHandlers(deps: EditorSubmitHandlerDependencies
 			deps.notifications.notify("branch summary in progress", "warning");
 			return;
 		}
-		await deps.submit(message);
+		await deps.submit(message, delivery);
 	};
 	return {
-		fromEditor: (message) => submit(message, true),
-		fromLaunch: (message) => submit(message, false),
+		fromEditor: (message, delivery) => submit(message, true, delivery),
+		fromLaunch: (message) => submit(message, false, "steer"),
 	};
 }
 
@@ -537,7 +532,7 @@ export async function submitInitialPromptFromFile(env: NodeJS.ProcessEnv, submit
 
 export interface RpcMessageFollowUpDependencies {
 	readonly editor: Pick<RpcHostEditorController, "getText" | "addToHistory" | "setText" | "expandDraftTokens" | "clearImageDrafts">;
-	readonly scheduler: Pick<RpcPromptScheduler, "getSnapshot" | "submit">;
+	readonly scheduler: Pick<RpcPromptScheduler, "submit">;
 	readonly notifications: ErrorNotifier;
 	readonly isBlocked?: () => boolean;
 }
@@ -552,55 +547,69 @@ export function handleRpcMessageFollowUp(deps: RpcMessageFollowUpDependencies): 
 		}
 		const draft = deps.editor.getText();
 		if (draft.trim().length === 0) return;
-		if (!deps.scheduler.getSnapshot().busy) return;
 		// Queue the EXPANDED submission (pasted [Image N] tokens → temp paths),
 		// mirroring the Enter-submit wrapper — a raw draft would deliver the
 		// literal token once drained. Expansion is capture-only here; the draft
 		// state is cleared ONLY after the queue accepts, because a busy→idle
 		// race can return "ignored" and the untouched draft must stay editable.
 		const submission = deps.editor.expandDraftTokens(draft);
-		const result = await deps.scheduler.submit(submission, { forceQueue: true });
-		if (result !== "queued" && result !== "handled") return;
+		const result = await deps.scheduler.submit(submission, { delivery: "followUp" });
+		if (result === "ignored") {
+			deps.editor.setText(draft);
+			return;
+		}
 		deps.editor.addToHistory(draft);
 		deps.editor.setText("");
 		deps.editor.clearImageDrafts();
 	}, deps.notifications);
 }
 
-export interface RpcMessageForceSendDependencies {
-	readonly scheduler: Pick<RpcPromptScheduler, "forceSendNext">;
-	readonly notifications: ErrorNotifier;
+export function toggleRpcPromptDelivery(mode: RpcPromptDeliveryMode): RpcPromptDeliveryMode {
+	return mode === "steer" ? "followUp" : "steer";
 }
 
-export async function handleRpcMessageForceSend(
-	deps: RpcMessageForceSendDependencies,
-): Promise<RpcPromptForceSendResult> {
-	let result: RpcPromptForceSendResult = "ignored";
-	await notifyOnError(async () => {
-		result = await deps.scheduler.forceSendNext();
-		if (result === "accepted") deps.notifications.notify("queued message sent as steering", "info");
-		else if (result === "held") deps.notifications.notify("message sent; remaining queue held", "warning");
-		else if (result === "unknown") deps.notifications.notify("steering acceptance unknown; message not requeued", "warning");
-	}, deps.notifications);
-	return result;
-}
-
-export interface RpcMessageDequeueDependencies {
+export interface RpcQueueRestoreDependencies {
 	readonly editor: Pick<RpcHostEditorController, "getText" | "setText">;
 	readonly scheduler: Pick<RpcPromptScheduler, "restoreAll">;
-	readonly stateStore: Pick<RpcHostStateStore, "getSnapshot">;
+	readonly stateStore: Pick<RpcHostStateStore, "getSnapshot" | "clearPiQueueProjection">;
+	readonly controls: Pick<RpcHostControls, "clearQueue" | "abort">;
 	readonly notifications: Pick<NotificationCenter, "notify"> & Partial<Pick<NotificationCenter, "dismissSticky">>;
+	readonly getGeneration?: () => number;
+	readonly onStateChange?: (state: RpcHostChromeState) => void;
 }
 
-export function handleRpcMessageDequeue(deps: RpcMessageDequeueDependencies): void {
-	// A host action supersedes the previous sticky failure (issue 481 home B).
-	deps.notifications.dismissSticky?.();
-	const restored = deps.scheduler.restoreAll(deps.editor.getText());
-	if (restored.count > 0) {
-		deps.editor.setText(restored.text);
-		return;
-	}
-	if ((deps.stateStore.getSnapshot().queuedMessages?.length ?? 0) > 0) deps.notifications.notify("queued messages are owned by pi", "info");
+/** One ordered clear/restore transaction shared by dequeue, interrupt, and session mutations. */
+export function createRpcQueueRestoreTransaction(deps: RpcQueueRestoreDependencies): (abortAfterRestore?: boolean) => Promise<void> {
+	let inFlight: Promise<void> | undefined;
+	let abortRequested = false;
+	return (abortAfterRestore = false): Promise<void> => {
+		abortRequested ||= abortAfterRestore;
+		if (inFlight) return inFlight;
+		inFlight = (async () => {
+			deps.notifications.dismissSticky?.();
+			const sessionId = deps.stateStore.getSnapshot().sessionId;
+			const generation = deps.getGeneration?.();
+			const cleared = await deps.controls.clearQueue();
+			if (deps.stateStore.getSnapshot().sessionId !== sessionId || deps.getGeneration?.() !== generation) {
+				throw new Error("queue owner changed during clear");
+			}
+			const local = deps.scheduler.restoreAll(deps.editor.getText());
+			const restored = [...cleared.steering, ...cleared.followUp];
+			if (local.text.length > 0) restored.push(local.text);
+			if (restored.length > 0) deps.editor.setText(restored.join("\n\n"));
+			deps.onStateChange?.(deps.stateStore.clearPiQueueProjection());
+			if (restored.some((text) => /pi-clipboard-[\w-]+\.(?:png|jpe?g|gif|webp)/i.test(text))) {
+				deps.notifications.notify("queued image restored as text; review before sending", "warning");
+			}
+			// Fail closed: abort only after clear/restore succeeds, or Pi may start
+			// a queued continuation immediately after the active turn aborts.
+			if (abortRequested) await deps.controls.abort();
+		})().finally(() => {
+			inFlight = undefined;
+			abortRequested = false;
+		});
+		return inFlight;
+	};
 }
 
 export interface RpcHostExitDependencies {
@@ -1065,7 +1074,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 			const state = stateStore.getSnapshot();
 			return treeNavigationBusy || state.isStreaming || state.isCompacting;
 		},
-		canForceSteer: () => canRpcForceSteer(stateStore.getSnapshot(), treeNavigationBusy),
+		getCompacting: () => stateStore.getSnapshot().isCompacting,
 		handleHostCommand: (message) => actions?.handleSubmittedText(message) ?? false,
 		sendPrompt: (message, delivery) => sendRpcPrompt(message, { client, delivery }),
 		onQueueChange: (messages) => {
@@ -1073,12 +1082,15 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 			runtime?.update({ state });
 		},
 		onDispatchStart: paintDispatchStart,
-		onDispatchFailure: (error) => {
+		onPreflightRejected: (message, error) => {
+			const draft = editor.getText();
+			editor.setText(draft.length > 0 ? `${message}\n\n${draft}` : message);
 			runtime?.update({ state: stateStore.getSnapshot() });
-			notifications.notify(`prompt failed: ${truncateForNotification(error instanceof Error ? error.message : String(error))}`, "error");
+			notifications.notify(`prompt rejected: ${truncateForNotification(error instanceof Error ? error.message : String(error))}`, "error");
 		},
-		onDispatchStateSync: () => {
+		onDispatchFailure: (_message, error) => {
 			runtime?.update({ state: stateStore.getSnapshot() });
+			notifications.notify(`prompt acceptance unknown: ${truncateForNotification(error instanceof Error ? error.message : String(error))}`, "warning");
 		},
 	});
 	let releaseInitialHydration!: () => void;
@@ -1111,10 +1123,11 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		notifications,
 		requestExit: (code) => requestHostExit(code),
 		isTreeBusy: () => treeNavigationBusy,
-		submit: (message) => submitRpcPrompt(message, {
+		submit: (message, delivery) => submitRpcPrompt(message, {
 			visualFixture,
 			scheduler,
 			client,
+			delivery: delivery ?? "steer",
 		}),
 	});
 	const keybindings = createRpcKeybindingsManager({ env });
@@ -1140,11 +1153,13 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 	});
 	const handleMessageFollowUp = (): Promise<void> =>
 		handleRpcMessageFollowUp({ editor, scheduler, notifications, isBlocked: () => treeNavigationBusy });
-	const handleMessageForceSend = (): Promise<void> =>
-		handleRpcMessageForceSend({ scheduler, notifications }).then(() => undefined);
-	const handleMessageDequeue = (): void => {
-		handleRpcMessageDequeue({ editor, scheduler, stateStore, notifications });
+	const handleMessageToggleDelivery = (): void => {
+		const current = stateStore.getSnapshot().promptDeliveryMode ?? "steer";
+		pushState(stateStore.setPromptDeliveryMode(toggleRpcPromptDelivery(current)));
 	};
+	let queueOwnerGeneration = 0;
+	let clearAndRestoreQueue: (abortAfterRestore?: boolean) => Promise<void> = async () => undefined;
+	const handleMessageDequeue = (): Promise<void> => notifyOnError(() => clearAndRestoreQueue(), notifications);
 	const editor = new RpcHostEditorController({
 		controls,
 		cwd,
@@ -1160,7 +1175,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		// app.interrupt (Escape by default, or the user's remap): replay into
 		// the interrupt tier module (see `handleAppInterrupt` above).
 		onInterrupt: () => handleAppInterrupt(),
-		onSubmit: submitHandlers.fromEditor,
+		onSubmit: (message) => submitHandlers.fromEditor(message, stateStore.getSnapshot().promptDeliveryMode ?? "steer"),
 		// app.model.cycleForward / app.model.cycleBackward / app.thinking.cycle
 		// / app.tools.expand: registered via CustomEditor's generic
 		// `onAction` map (see editor.ts's onModelCycleForward etc. doc
@@ -1178,12 +1193,17 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		onThinkingCycle: () => hydrationActionGate.run("thinking-cycle", handleThinkingCycle),
 		onToolsExpandToggle: handleToolsExpandToggle,
 		onMessageFollowUp: () => hydrationActionGate.run(DEFERRED_MESSAGE_QUEUE_ACTION_KEY, handleMessageFollowUp),
-		onMessageForceSend: () => hydrationActionGate.run(DEFERRED_MESSAGE_FORCE_SEND_ACTION_KEY, handleMessageForceSend),
+		onMessageToggleDelivery: () => hydrationActionGate.run(DEFERRED_MESSAGE_TOGGLE_ACTION_KEY, handleMessageToggleDelivery),
 		onMessageDequeue: () => hydrationActionGate.run(DEFERRED_MESSAGE_QUEUE_ACTION_KEY, handleMessageDequeue),
 		// app.theme.cycle (Shift+Ctrl+T / Alt+T): host-side — the child
 		// extension's pi.registerShortcut never receives keys in RPC mode.
 		// Same forward-reference pattern as onModelSelect above.
 		onThemeCycle: () => actions?.cycleTheme(),
+	});
+	clearAndRestoreQueue = createRpcQueueRestoreTransaction({
+		editor, scheduler, stateStore, controls, notifications,
+		getGeneration: () => queueOwnerGeneration,
+		onStateChange: pushState,
 	});
 	// In-place selector surface (plan 036): occupies the editor's Yoga slot for
 	// `/model`, `/thinking`, `/sessions`, `/settings`, and `/fork` instead of
@@ -1232,6 +1252,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 	let sessionHydrationRetrying = false;
 	const beginSessionChange = (): void => {
 		if (!sessionEvents.begin()) return;
+		queueOwnerGeneration += 1;
 		sessionHydrationRetrying = false;
 		deferActivityRuntimeUpdate = true;
 		runtime?.beginSessionReplacement();
@@ -1371,12 +1392,9 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		const wasStreaming = state.isStreaming || schedulerBefore.dispatching === true;
 		if (!sessionEvents.begin()) throw new Error("session event barrier is already active");
 		deferActivityRuntimeUpdate = true;
-		// This is deliberately synchronous before the abort request: queued host
-		// drafts belong to the current session and must not be lost or dispatched
-		// into a newly selected branch.
-		const restored = scheduler.restoreAll(editorBefore, { discardInFlight: true });
-		if (restored.count > 0) editor.setText(restored.text);
 		try {
+			await clearAndRestoreQueue(wasStreaming);
+			queueOwnerGeneration += 1;
 			let snapshot = await readAuthoritativeSessionSnapshot(controls, {
 				sessionFile: state.sessionFile,
 				sessionId: state.sessionId,
@@ -1393,7 +1411,6 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 				draftWasNonEmpty: editorBefore.length !== 0,
 			});
 			if (wasStreaming) {
-				await controls.abort();
 				// Abort may settle the active turn on a different leaf before Pi
 				// accepts the navigation command. Rebaseline cancellation against the
 				// post-abort authoritative leaf/messages, not the pre-abort snapshot.
@@ -1408,7 +1425,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 				sessionId: state.sessionId,
 				sessionFile: state.sessionFile,
 				leafId: snapshot.leafId,
-				editorText: editorBefore,
+				editorText: editor.getText(),
 				messages,
 				pagerState,
 				pagerRevision,
@@ -1562,7 +1579,13 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		},
 		onExitRequest: (code) => requestHostExit(code),
 		rehydrateTranscript,
-		beforeSessionChange: beginSessionChange,
+		beforeSessionChange: async () => {
+			// Finish any coalesced dequeue/interrupt clear against the current
+			// owner before advancing the session epoch, or its restored text would
+			// be rejected as stale after Pi has already emptied the queue.
+			await clearAndRestoreQueue();
+			beginSessionChange();
+		},
 		cancelSessionChange,
 		afterSessionChange: refreshSessionRuntime,
 		afterCancelledSessionChange: replayCancelledSessionEvents,
@@ -1638,11 +1661,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		isTreeNavigationBusy: () => treeNavigationBusy,
 		abortInFlight: async () => {
 			if (actions?.isLoginActive()) await actions.cancelLogin();
-			else await controls.abort();
-		},
-		restoreQueuedDrafts: () => {
-			const restored = scheduler.restoreAll(editor.getText(), { discardInFlight: true });
-			if (restored.count > 0) editor.setText(restored.text);
+			else await clearAndRestoreQueue(true);
 		},
 	});
 	// A canonical escape token replays the exact same classification

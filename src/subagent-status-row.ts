@@ -46,7 +46,9 @@ function tailAfterSlug(id: string, title: string): { readonly sequence: string; 
 	return namespace === undefined ? { sequence } : { sequence, namespace };
 }
 
-/** Compact form derived from an id's own shape, with no title to anchor the slug. */
+/** Compact form derived from an id's own shape: legacy `sa-<uuid>-<n>` and readable
+ * `sa-<slug>-<n>[-<ns4>]` both collapse to `sa-<n>`; already-short and non-sa ids
+ * pass through. Used when the entry's title no longer reproduces the id's slug. */
 function idOnlyDisplayId(id: string): DisplayId {
 	const legacy = LEGACY_NAMESPACED_SUBAGENT_ID.exec(id);
 	if (legacy !== null) return { short: `sa-${legacy[2]}`, distinct: `sa-${legacy[1]}-${legacy[2]}` };
@@ -67,15 +69,6 @@ function displayId(id: string, title: string): DisplayId {
 		short: `sa-${derived.sequence}`,
 		distinct: derived.namespace === undefined ? id : `sa-${derived.sequence}-${derived.namespace}`,
 	};
-}
-
-/**
- * Collapses a namespaced subagent id to its readable sequence suffix. Legacy
- * `sa-<uuid>-<n>` ids and readable `sa-<slug>-<n>[-<ns4>]` ids both render as
- * `sa-<n>`; already-short ids (`sa-1`) and non-sa ids pass through unchanged.
- */
-export function shortId(id: string): string {
-	return idOnlyDisplayId(id).short;
 }
 
 /** Whitespace-normalized, control-char-free title, or the generic fallback when empty. */

@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activityFromSubagentSnapshot } from "../activity/subagent-adapter.js";
+import { ensurePrivateSumocodeDirectory } from "../activity/persistence.js";
 import { renderSubagentStatusRow, type SubagentStatusRunningEntry } from "../subagent-status-row.js";
 import { logDiagnostic } from "../sumo-tui/runtime/diagnostics.js";
 import { BUILT_IN_TOOLS, getBuiltInToolsFromActiveTools } from "./task-config.js";
@@ -172,7 +174,7 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 			builtInTools: getBuiltInToolsFromActiveTools([...(task.builtInTools ?? [])]),
 			appendSystemPrompt: task.appendSystemPrompt,
 			signal: task.signal,
-			sessionDir: task.resume ? undefined : join(process.env.TMPDIR ?? "/tmp", "sumocode-subagents", `${task.id}-${Date.now()}`, "session"),
+			sessionDir: task.resume ? undefined : mkdtempSync(join(ensurePrivateSumocodeDirectory(["subagents", "sessions"]), `${task.id}-`)),
 			resumeSessionFile: task.resume?.sessionFilePath,
 		});
 		return retention ? { ...child, retentionUnsupported: true } : child;

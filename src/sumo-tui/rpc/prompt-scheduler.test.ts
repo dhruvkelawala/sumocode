@@ -98,6 +98,18 @@ describe("RpcPromptScheduler", () => {
 		expect(unknown).toHaveBeenCalledWith("maybe", expect.any(Error));
 	});
 
+	it("sends child-owned slash commands during compaction before held prompts", async () => {
+		const sendPrompt = vi.fn(async () => undefined);
+		const scheduler = createRpcPromptScheduler({ getCompacting: () => true, sendPrompt });
+
+		await expect(scheduler.submit("ordinary", { delivery: "steer" })).resolves.toBe("queued");
+		await expect(scheduler.submit("/extension-command", { delivery: "followUp" })).resolves.toBe("sent");
+		await flush();
+
+		expect(sendPrompt).toHaveBeenCalledWith("/extension-command", { streamingBehavior: "followUp" });
+		expect(scheduler.getSnapshot().queuedMessages).toEqual(["ordinary"]);
+	});
+
 	it("runs host commands before compaction holding", async () => {
 		const sendPrompt = vi.fn(async () => undefined);
 		const scheduler = createRpcPromptScheduler({

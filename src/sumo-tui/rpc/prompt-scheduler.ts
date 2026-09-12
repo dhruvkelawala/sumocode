@@ -86,6 +86,10 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 		if (message.trim().length === 0) return "ignored";
 		if (await this.options.handleHostCommand?.(message)) return "handled";
 		const compacting = this.options.getCompacting?.() === true;
+		if (compacting && message.trimStart().startsWith("/")) {
+			void this.dispatch({ text: message, delivery: options.delivery }, this.generation, false);
+			return "sent";
+		}
 		if (containsQueuedAttachment(message) && (compacting || this.options.getBusy?.() === true)) {
 			this.options.onPreflightRejected?.(message, new RpcPromptPreflightRejection("attachments cannot be queued safely"));
 			return "ignored";

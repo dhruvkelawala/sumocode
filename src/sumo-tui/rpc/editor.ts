@@ -16,6 +16,7 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 import { createCathedralEditor, type CathedralEditor } from "../../cathedral/cathedral-editor.js";
+import type { RpcEditorSubmissionDraft } from "../../cathedral/editor-draft-state.js";
 import { activeThemeColors } from "../../themes/index.js";
 import { lineToAnsi, span, textLine } from "../render/primitives.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
@@ -47,6 +48,7 @@ export interface RpcHostEditorControllerOptions extends RpcAutocompleteProviderO
 	readonly keybindings?: KeybindingsManager;
 	readonly isSplash?: () => boolean;
 	readonly onSubmit?: (text: string) => void | Promise<void>;
+	readonly onSubmitDraft?: (draft: RpcEditorSubmissionDraft) => void | Promise<void>;
 	readonly errorNotifier?: ErrorNotifier;
 	readonly onRenderRequest?: () => void;
 	readonly autocompleteMaxVisible?: number;
@@ -325,9 +327,8 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 		}
 		// Ctrl+V → app.clipboard.pasteImage: read the clipboard image to a
 		// pi-clipboard-* temp file and insert its path; CathedralEditor's
-		// insertTextAtCursor collapses it into a compact [Image N] token
-		// (expanded back to the real path on submit). Without this wiring
-		// CustomEditor.handleInput swallows the keybinding as a no-op.
+		// insertTextAtCursor collapses it into a compact [Image N] token.
+		// Without this wiring CustomEditor.handleInput swallows the keybinding.
 		this.editor.onPasteImage = () => {
 			void (async () => {
 				const path = await pasteClipboardImageToTempFile();
@@ -338,13 +339,24 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 		};
 		this.editor.focused = true;
 		this.editor.onChange = () => this.tui.requestRender();
-		this.editor.onSubmit = (text) => {
-			if (this.errorNotifier) {
-				void notifyOnError(() => this.onSubmit(text), this.errorNotifier);
-				return;
-			}
-			void Promise.resolve(this.onSubmit(text)).catch(() => undefined);
-		};
+		if (options.onSubmitDraft) {
+			this.editor.setRpcSubmitHandler((draft) => {
+				// Pi's editor clears before invoking onSubmit. Native-image ownership
+				// is not committed until the correlated RPC response succeeds.
+				if (draft.images.length > 0) this.editor.setText(draft.text);
+				const submit = () => options.onSubmitDraft!(draft);
+				if (this.errorNotifier) void notifyOnError(submit, this.errorNotifier);
+				else void Promise.resolve(submit()).catch(() => undefined);
+			});
+		} else {
+			this.editor.onSubmit = (text) => {
+				if (this.errorNotifier) {
+					void notifyOnError(() => this.onSubmit(text), this.errorNotifier);
+					return;
+				}
+				void Promise.resolve(this.onSubmit(text)).catch(() => undefined);
+			};
+		}
 		if (options.autocompleteMaxVisible !== undefined) this.editor.setAutocompleteMaxVisible(options.autocompleteMaxVisible);
 	}
 
@@ -408,6 +420,14 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 
 	public addToHistory(text: string): void {
 		this.editor.addToHistory?.(text);
+	}
+
+	public captureRpcDraft(text: string): RpcEditorSubmissionDraft {
+		return this.editor.captureRpcDraft(text);
+	}
+
+	public commitRpcDraft(draft: RpcEditorSubmissionDraft): void {
+		this.editor.commitRpcDraft(draft);
 	}
 
 	/** See CathedralEditor.expandDraftTokens — expand-only, no clear. */

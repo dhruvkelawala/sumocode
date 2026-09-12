@@ -53,4 +53,42 @@ describe("EditorImageDraftState", () => {
 
 		expect(state.list()).toEqual([{ token: "[Image 2]", path: "/tmp/pi-clipboard-two.png" }]);
 	});
+
+	it("restores structured attachments from token history without token collisions", () => {
+		const state = new EditorImageDraftState();
+		const first = state.addImage("/tmp/first.png");
+		const submitted = state.captureRpcSubmission(first);
+		const second = state.addImage("/tmp/second.png");
+		state.commitRpcSubmission(submitted);
+		expect(second).toBe("[Image 2]");
+		expect(state.list()).toEqual([{ token: "[Image 2]", path: "/tmp/second.png" }]);
+
+		state.pruneMissingTokens(first);
+		state.restoreSubmittedTokens(first);
+		expect(state.list()).toEqual([{ token: "[Image 1]", path: "/tmp/first.png" }]);
+	});
+
+	it("merges every recalled attachment using Pi history's trimmed key", () => {
+		const state = new EditorImageDraftState();
+		state.addImage("/tmp/first.png");
+		state.addImage("/tmp/second.png");
+		const submitted = state.captureRpcSubmission("[Image 1] [Image 2]  ");
+		state.commitRpcSubmission(submitted);
+
+		state.restoreSubmittedTokens("[Image 1] [Image 2]");
+		state.pruneMissingTokens("[Image 1]");
+		state.restoreSubmittedTokens("[Image 1] [Image 2]");
+		expect(state.list()).toEqual(submitted.images);
+	});
+
+	it("captures only referenced attachments without expanding their tokens", () => {
+		const state = new EditorImageDraftState();
+		state.addImage("/tmp/pi-clipboard-one.png");
+		state.addImage("/tmp/pi-clipboard-two.png");
+
+		expect(state.captureRpcSubmission("compare [Image 2] twice: [Image 2]")).toEqual({
+			text: "compare [Image 2] twice: [Image 2]",
+			images: [{ token: "[Image 2]", path: "/tmp/pi-clipboard-two.png" }],
+		});
+	});
 });

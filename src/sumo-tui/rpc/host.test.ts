@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatMessageViewModel } from "../transcript/view-model.js";
+import type { RpcEditorSubmissionDraft } from "../../cathedral/editor-draft-state.js";
 import { SUMOCODE_RELOAD_EXIT_CODE } from "../../commands/reload.js";
 import { RpcChildExitError, SumoRpcClient } from "./client.js";
 import { RpcHostOverlayManager } from "./host-overlays.js";
@@ -22,6 +23,7 @@ import {
 	createModelCycleForwardHandler,
 	createRpcExitHandler,
 	createRpcHostInterruptHandler,
+	createRpcImageDraftSubmitter,
 	createRpcQueueRestoreTransaction,
 	createRpcTreeNavigationRetryScheduler,
 	createThinkingCycleHandler,
@@ -35,11 +37,13 @@ import {
 	hydrateSameSessionTreeNavigation,
 	submitInitialPromptFromFile,
 	submitRpcDirectBash,
+	submitRpcImageDraft,
 	toggleRpcPromptDelivery,
 	main,
 	writeExitCodeFile,
 	type RpcHostExitDependencies,
 	type RpcHostInterruptDependencies,
+	type RpcImageDraftSubmitDependencies,
 } from "./host.js";
 import { InitialHydrationActionGate } from "./initial-hydration-action-gate.js";
 import { createRpcPromptScheduler } from "./prompt-scheduler.js";
@@ -616,6 +620,7 @@ describe("handleRpcMessageFollowUp", () => {
 			setText: vi.fn(),
 			// Identity expansion by default; image tests override.
 			expandDraftTokens: vi.fn((draft: string) => draft),
+			captureRpcDraft: vi.fn((draft: string): RpcEditorSubmissionDraft => ({ text: draft, images: [] })),
 			clearImageDrafts: vi.fn(),
 		};
 	}
@@ -718,22 +723,30 @@ describe("handleRpcMessageFollowUp", () => {
 		expect(editor.clearImageDrafts).not.toHaveBeenCalled();
 	});
 
-	it("sends the expanded submission for an accepted idle image draft", async () => {
+	it("sends an accepted idle image draft through native delivery", async () => {
 		const editor = followUpEditor("look at [Image 1]");
-		editor.expandDraftTokens.mockImplementation((draft: string) => draft.replace("[Image 1]", "/tmp/img-1.png"));
-		const scheduler = {
-			getSnapshot: vi.fn(() => ({ busy: false, queuedMessages: [], pausedAfterFailure: false })),
-			submit: vi.fn(async () => "sent" as const),
-		};
+		const draft = { text: "look at [Image 1]", images: [{ token: "[Image 1]", path: "/tmp/img-1.png" }] };
+		editor.captureRpcDraft.mockReturnValue(draft);
+		const scheduler = { submit: vi.fn() };
+		const submitImageDraft = vi.fn(async () => undefined);
 
-		handleRpcMessageFollowUp({ editor, scheduler, notifications: { notify: vi.fn() } });
-		await flush();
+		await handleRpcMessageFollowUp({ editor, scheduler, notifications: { notify: vi.fn() }, submitImageDraft });
 
-		// The submitted text carries the real path; history keeps the human-readable token form.
-		expect(scheduler.submit).toHaveBeenCalledWith("look at /tmp/img-1.png", { delivery: "followUp" });
-		expect(editor.addToHistory).toHaveBeenCalledWith("look at [Image 1]");
-		expect(editor.setText).toHaveBeenCalledWith("");
-		expect(editor.clearImageDrafts).toHaveBeenCalledOnce();
+		expect(submitImageDraft).toHaveBeenCalledWith(draft);
+		expect(scheduler.submit).not.toHaveBeenCalled();
+		expect(editor.expandDraftTokens).not.toHaveBeenCalled();
+	});
+
+	it("keeps a busy image draft out of every queue", async () => {
+		const editor = followUpEditor("look at [Image 1]");
+		editor.captureRpcDraft.mockReturnValue({ text: "look at [Image 1]", images: [{ token: "[Image 1]", path: "/tmp/img-1.png" }] });
+		const scheduler = { submit: vi.fn() };
+		const notifications = { notify: vi.fn() };
+
+		await handleRpcMessageFollowUp({ editor, scheduler, notifications, isAgentBusy: () => true });
+
+		expect(scheduler.submit).not.toHaveBeenCalled();
+		expect(notifications.notify).toHaveBeenCalledWith("images wait for idle · draft kept", "warning");
 	});
 });
 
@@ -823,6 +836,98 @@ describe("native queue delivery and restore", () => {
 	});
 });
 
+describe("native image prompt submission", () => {
+	const draft = {
+		text: "inspect [Image 1]",
+		images: [{ token: "[Image 1]", path: "/tmp/pi-clipboard-native.png" }],
+	};
+
+	function imageDeps(overrides: {
+		readonly isAgentBusy?: () => boolean;
+		readonly client?: Pick<SumoRpcClient, "send">;
+	} = {}): RpcImageDraftSubmitDependencies {
+		return {
+			editor: {
+				getText: vi.fn(() => draft.text),
+				setText: vi.fn(),
+				addToHistory: vi.fn(),
+				commitRpcDraft: vi.fn(),
+			},
+			notifications: { notify: vi.fn() },
+			isAgentBusy: () => false,
+			loadImages: vi.fn(async () => [{ type: "image" as const, mimeType: "image/png", data: "c2FmZQ==" }]),
+			client: { send: vi.fn(async () => ({ type: "response", command: "prompt", success: true, data: {} } as const)) },
+			...overrides,
+		};
+	}
+
+	it("declines a repeated image submission while correlated preflight is pending", async () => {
+		let release!: () => void;
+		const first = new Promise<void>((resolve) => { release = resolve; });
+		const submit = vi.fn(() => first);
+		const notifications = { notify: vi.fn() };
+		const submitDraft = createRpcImageDraftSubmitter(submit, notifications);
+
+		const pending = submitDraft(draft);
+		await submitDraft(draft);
+		expect(submit).toHaveBeenCalledOnce();
+		expect(notifications.notify).toHaveBeenCalledWith("image already sending · draft kept", "warning");
+		release();
+		await pending;
+	});
+
+	it("sends accepted image drafts natively without a queue behavior, then commits the clear", async () => {
+		const deps = imageDeps();
+		await submitRpcImageDraft(draft, deps);
+
+		expect(deps.client.send).toHaveBeenCalledWith({
+			type: "prompt",
+			message: "inspect [Image 1]",
+			images: [{ type: "image", mimeType: "image/png", data: "c2FmZQ==" }],
+		});
+		expect(deps.editor.addToHistory).toHaveBeenCalledWith(draft.text);
+		expect(deps.editor.commitRpcDraft).toHaveBeenCalledWith(draft);
+		expect(deps.editor.setText).toHaveBeenCalledWith("");
+	});
+
+	it("keeps concurrent edits without leaving an accepted image token resendable", async () => {
+		const deps = imageDeps();
+		vi.mocked(deps.editor.getText).mockReturnValue(`${draft.text}\nnext thought`);
+
+		await submitRpcImageDraft(draft, deps);
+
+		expect(deps.editor.commitRpcDraft).toHaveBeenCalledWith(draft);
+		expect(deps.editor.setText).toHaveBeenCalledWith("inspect \nnext thought");
+		expect(deps.notifications.notify).toHaveBeenCalledWith("image sent · current edits kept", "warning");
+	});
+
+	it("fails visibly closed before reading attachments while busy", async () => {
+		const deps = imageDeps({ isAgentBusy: () => true });
+		await submitRpcImageDraft(draft, deps);
+
+		expect(deps.loadImages).not.toHaveBeenCalled();
+		expect(deps.client.send).not.toHaveBeenCalled();
+		expect(deps.editor.setText).not.toHaveBeenCalled();
+		expect(deps.notifications.notify).toHaveBeenCalledWith("images wait for idle · draft kept", "warning");
+	});
+
+	it.each([
+		[{ type: "response", command: "prompt", success: false, error: "agent is busy" }, "prompt rejected · image draft kept", "error"],
+		[new RpcChildExitError("child exited"), "prompt acceptance unknown · image draft kept", "warning"],
+	] as const)("preserves the complete draft when dispatch does not confirm acceptance", async (outcome, notice, level) => {
+		const send = outcome instanceof Error
+			? vi.fn(async () => { throw outcome; })
+			: vi.fn(async () => outcome);
+		const deps = imageDeps({ client: { send } });
+
+		await submitRpcImageDraft(draft, deps);
+
+		expect(deps.editor.setText).not.toHaveBeenCalled();
+		expect(deps.editor.commitRpcDraft).not.toHaveBeenCalled();
+		expect(deps.notifications.notify).toHaveBeenCalledWith(expect.stringContaining(notice), level);
+	});
+});
+
 describe("sendRpcPrompt payloads", () => {
 	it("sends the ordinary prompt payload without a streaming behavior", async () => {
 		const client = { send: vi.fn(async () => ({ type: "response", command: "prompt", success: true, data: {} } as const)) };
@@ -830,6 +935,15 @@ describe("sendRpcPrompt payloads", () => {
 		await sendRpcPrompt("ordinary", { client });
 
 		expect(client.send).toHaveBeenCalledWith({ type: "prompt", message: "ordinary" });
+	});
+
+	it("sends native images without a streaming behavior", async () => {
+		const client = { send: vi.fn(async () => ({ type: "response", command: "prompt", success: true, data: {} } as const)) };
+		const images = [{ type: "image" as const, mimeType: "image/png", data: "c2FmZQ==" }];
+
+		await sendRpcPrompt("[Image 1]", { client, images });
+
+		expect(client.send).toHaveBeenCalledWith({ type: "prompt", message: "[Image 1]", images });
 	});
 
 	it("adds either native delivery mode when explicit", async () => {

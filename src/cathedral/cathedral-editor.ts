@@ -41,7 +41,13 @@ import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, truncateToWidth, visibleWidth, type AutocompleteProvider, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
 import { sessionHasMessages as cachedSessionHasMessages } from "../session-cache.js";
 import { activeThemeColors } from "../themes/index.js";
-import { EditorImageDraftState, isLikelyClipboardImagePath, normalizePastedImagePath, setActiveEditorDraftController } from "./editor-draft-state.js";
+import {
+	EditorImageDraftState,
+	isLikelyClipboardImagePath,
+	normalizePastedImagePath,
+	setActiveEditorDraftController,
+	type RpcEditorSubmissionDraft,
+} from "./editor-draft-state.js";
 import {
 	INPUT_FRAME_LABEL_ACTIVE,
 	INPUT_FRAME_LABEL_SPLASH,
@@ -382,22 +388,20 @@ export class CathedralEditor extends CustomEditor {
 		super.insertTextAtCursor(text);
 	}
 
-	/**
-	 * Collapse a pasted/dropped image path into an `[Image N]` token. Returns
-	 * true when the text was consumed. Candidates are normalized first
-	 * (surrounding quotes stripped, `\ ` escapes unescaped) so terminal
-	 * drag/paste forms of paths with spaces still collapse and the draft
-	 * state stores the real on-disk path.
-	 */
-	/**
-	 * Expand `[Image N]` draft tokens to their temp-file paths WITHOUT clearing
-	 * the draft state. Used by queue-time consumers (Alt+Enter follow-up
-	 * queueing) that must capture real paths before the editor is cleared, but
-	 * only commit the clear once the queue accepts the message — a busy→idle
-	 * race can decline the queue, and clearing early would leave dangling
-	 * tokens in the editor. The Enter-submit wrapper above stays atomic
-	 * (expand + clear).
-	 */
+	/** RPC-only capture path: native attachments remain typed until the host confirms acceptance. */
+	public setRpcSubmitHandler(handler: (draft: RpcEditorSubmissionDraft) => void): void {
+		this.submitHandler = (text) => handler(this.captureRpcDraft(text));
+	}
+
+	public captureRpcDraft(text: string): RpcEditorSubmissionDraft {
+		return this.imageDraftState.captureRpcSubmission(text);
+	}
+
+	public commitRpcDraft(draft: RpcEditorSubmissionDraft): void {
+		this.imageDraftState.commitRpcSubmission(draft);
+	}
+
+	/** Classic string compatibility path. RPC image drafts use captureRpcDraft instead. */
 	public expandDraftTokens(text: string): string {
 		return this.imageDraftState.expandTokensToPaths(text);
 	}
@@ -407,6 +411,13 @@ export class CathedralEditor extends CustomEditor {
 		this.imageDraftState.clear();
 	}
 
+	/**
+	 * Collapse a pasted/dropped image path into an `[Image N]` token. Returns
+	 * true when the text was consumed. Candidates are normalized first
+	 * (surrounding quotes stripped, `\ ` escapes unescaped) so terminal
+	 * drag/paste forms of paths with spaces still collapse and the draft
+	 * state stores the real on-disk path.
+	 */
 	private collapseImagePath(text: string): boolean {
 		const candidate = normalizePastedImagePath(text);
 		if (!isLikelyClipboardImagePath(candidate)) return false;
@@ -457,6 +468,7 @@ export class CathedralEditor extends CustomEditor {
 		if (/[^\x00-\x1f\x7f]/.test(normalized)) this.lastPrintableInputAt = now;
 		super.handleInput(normalized);
 		this.imageDraftState.pruneMissingTokens(this.getText());
+		this.imageDraftState.restoreSubmittedTokens(this.getText());
 		this.maybeTriggerMidLineSlashMenu(data);
 	}
 

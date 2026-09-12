@@ -129,7 +129,16 @@ function response(command, data) {
 
 function logCommand(command) {
 	if (!commandLogPath) return;
-	require("node:fs").appendFileSync(commandLogPath, JSON.stringify(command) + "\\n");
+	const safeCommand = command.images ? {
+		...command,
+		images: command.images.map((image) => ({
+			type: image.type,
+			mimeType: image.mimeType,
+			byteCount: Buffer.from(image.data, "base64").byteLength,
+			sha256: require("node:crypto").createHash("sha256").update(Buffer.from(image.data, "base64")).digest("hex"),
+		})),
+	} : command;
+	require("node:fs").appendFileSync(commandLogPath, JSON.stringify(safeCommand) + "\\n");
 }
 
 function finishPrompt(command, assistantText) {

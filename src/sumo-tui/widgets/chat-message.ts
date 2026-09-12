@@ -63,6 +63,10 @@ function normalizeWidth(width: number): number {
 	return Math.max(0, Math.floor(width));
 }
 
+function trailingWhitespaceOf(text: string): string {
+	return /\s*$/u.exec(text)?.[0] ?? "";
+}
+
 function agentRoleLabel(primaryAgentName: string | undefined): string {
 	const label = primaryAgentName?.trim() || DEFAULT_SUMOCODE_CONFIG.primaryAgentName;
 	return label.toUpperCase();
@@ -344,6 +348,7 @@ export class ChatMessage extends SumoNode {
 	 */
 	private contentVersion = 0;
 	private renderRowsCache: RenderRowsCacheEntry[] = [];
+	private trailingWhitespace: string;
 	private mermaidRenderingMode: MermaidRenderingMode;
 	private isStreaming = false;
 
@@ -358,6 +363,7 @@ export class ChatMessage extends SumoNode {
 	) {
 		super(yogaNode, parent);
 		this.timestampValue = timestamp;
+		this.trailingWhitespace = trailingWhitespaceOf(text);
 		this.mermaidRenderingMode = options.mermaidRenderingMode ?? "streaming";
 		this.marginBottom = 1;
 		this.setMeasureFunc((width, widthMode, height, heightMode) => this.measure(width, widthMode, height, heightMode));
@@ -393,6 +399,7 @@ export class ChatMessage extends SumoNode {
 		if (this.text === text && this.blocks === undefined) return;
 		this.text = text;
 		this.blocks = undefined;
+		this.trailingWhitespace = trailingWhitespaceOf(text);
 		this.invalidateRenderCache();
 	}
 
@@ -412,6 +419,7 @@ export class ChatMessage extends SumoNode {
 	public setBlocks(blocks: readonly ChatBlock[], text: string): void {
 		this.blocks = blocks;
 		this.text = text;
+		this.trailingWhitespace = trailingWhitespaceOf(text);
 		this.invalidateRenderCache();
 	}
 
@@ -463,10 +471,14 @@ export class ChatMessage extends SumoNode {
 	public appendText(chunk: string): void {
 		if (chunk.length === 0) return;
 		const wasPlainText = this.blocks === undefined;
-		const trailingWhitespace = wasPlainText ? /\s*$/u.exec(this.text)?.[0] ?? "" : "";
+		const trailingWhitespace = wasPlainText ? this.trailingWhitespace : "";
 		const previousVersion = this.contentVersion;
 		this.blocks = undefined;
 		this.text += chunk;
+		const chunkTrailingWhitespace = trailingWhitespaceOf(chunk);
+		this.trailingWhitespace = chunkTrailingWhitespace.length === chunk.length
+			? this.trailingWhitespace + chunk
+			: chunkTrailingWhitespace;
 		this.contentVersion += 1;
 
 		if (wasPlainText) {

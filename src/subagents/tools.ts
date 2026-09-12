@@ -29,7 +29,7 @@ const isAtCapacity = (value: SubagentSnapshot | AtCapacityDetails): value is AtC
 
 const isSettledSnapshot = (snapshot: SubagentSnapshot): boolean => snapshot.status !== "running" && snapshot.status !== "queued";
 
-const formatAtCapacity = (details: AtCapacityDetails) => {
+const formatAtCapacity = (details: AtCapacityDetails, action: "spawn" | "reply" = "spawn") => {
 	const runningLines = details.running.length > 0
 		? details.running.map((task) => `- ${task.id}${task.title ? ` · ${task.title}` : ""} · ${task.status} · ${Math.round(task.ageMs / 1000)}s`).join("\n")
 		: "- (no running subagents found)";
@@ -38,7 +38,7 @@ const formatAtCapacity = (details: AtCapacityDetails) => {
 		"Running subagents:",
 		runningLines,
 		`Next action: ${details.retryHint}.`,
-	].join("\n"), { action: "spawn", ...details });
+	].join("\n"), { action, ...details });
 };
 
 const trimLines = (text: string, maxChars: number, maxLines: number): string => {
@@ -79,7 +79,8 @@ const formatSnapshotLine = (snapshot: SubagentSnapshot, includeBranch = false): 
 	const branch = includeBranch && snapshot.worktree ? ` · ${snapshot.worktree.branch}` : "";
 	const pane = snapshot.pane ? ` · pane ${snapshot.pane.paneId ?? snapshot.pane.tabId ?? snapshot.pane.workspaceId ?? "unknown"} · agent ${snapshot.pane.agentName}` : "";
 	const turn = snapshot.turnState ? ` · turn ${snapshot.turnState}` : "";
-	return [`${snapshot.id} [${snapshot.status}] "${snapshot.title}" (${identity}, ${formatDuration(Date.now() - snapshot.createdAt)}, ${snapshot.cwd})${turn}${branch}${pane}`, formatSubagentBudget(snapshot)].filter(Boolean).join("\n  ");
+	const reply = snapshot.repliesTo ? ` · re: ${snapshot.repliesTo}` : "";
+	return [`${snapshot.id} [${snapshot.status}] "${snapshot.title}" (${identity}, ${formatDuration(Date.now() - snapshot.createdAt)}, ${snapshot.cwd})${turn}${reply}${branch}${pane}`, formatSubagentBudget(snapshot)].filter(Boolean).join("\n  ");
 };
 
 const manifestSummary = (snapshot: SubagentSnapshot): string | undefined => snapshot.manifest
@@ -268,6 +269,54 @@ export function registerSubagentTools(
 				? `${snapshot.capability}; respawn with visible: true to steer`
 				: `Steering submitted to the child runtime for ${params.id} (${snapshot.title}); Pi exposes no post-acceptance acknowledgement.`,
 			{ action: "send", id: params.id, ...("capability" in snapshot ? { capability: snapshot.capability } : { pane: snapshot.pane }) });
+		},
+	});
+
+	pi.registerTool({
+		name: "subagent_reply",
+		label: "Subagent Reply",
+		description: SUBAGENT_TOOL_DESCRIPTIONS.reply,
+		promptSnippet: SUBAGENT_PROMPT_SNIPPET,
+		promptGuidelines,
+		parameters: Type.Object({
+			id: Type.String({ description: "Settled headless subagent id." }),
+			text: Type.String({ minLength: 1, description: "Follow-up prompt continuing the settled child's session." }),
+			model: Type.Optional(Type.String({ description: "Optional model override as provider/modelId." })),
+			thinking: Type.Optional(StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const, { description: "Optional thinking level override." })),
+		}),
+		async execute(toolCallId, params, _signal, _onUpdate, ctx) {
+			if (!params.text.trim()) throw new Error("subagent_reply text is required: blank or whitespace-only replies are rejected");
+			const original = manager.get(params.id);
+			const role = original?.roleId ? roleLoader().roles.find((candidate) => candidate.id === original.roleId) : undefined;
+			const activeTools = pi.getActiveTools();
+			const spawned = await manager.reply(params.id, params.text, {
+				sourceId: toolCallId,
+				appendSystemPrompt: role?.systemPrompt,
+				model: params.model,
+				thinking: params.thinking,
+				inherited: {
+					model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
+					thinking: pi.getThinkingLevel(),
+				},
+				builtInTools: role?.tools ? role.tools.filter((name) => activeTools.includes(name)) : activeTools,
+			});
+			if (isAtCapacity(spawned)) return formatAtCapacity(spawned, "reply");
+			if (spawned.status === "queued") return makeToolResult(`Queued ${spawned.id} continuing ${params.id}'s session. It starts automatically when a slot frees.`, {
+				action: "reply", id: spawned.id, repliesTo: params.id, subagent: spawned, activity: activityEnvelope(spawned, toolCallId),
+			});
+			if (spawned.status !== "running") {
+				delivery?.consume(spawned.id);
+				return makeToolResult(`Unable to continue ${params.id}: ${spawned.errorText ?? "unknown error"}`, {
+					action: "reply", status: "error", id: spawned.id, repliesTo: params.id, subagent: spawned, activity: activityEnvelope(spawned, toolCallId),
+				});
+			}
+			return makeToolResult(`Started ${spawned.id} continuing ${params.id}'s session. Same fire-and-forget contract: the result is delivered when it settles.`, {
+				action: "reply",
+				id: spawned.id,
+				repliesTo: params.id,
+				subagent: spawned,
+				activity: activityEnvelope(spawned, toolCallId),
+			});
 		},
 	});
 

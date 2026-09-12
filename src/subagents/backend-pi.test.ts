@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -556,6 +556,55 @@ describe("resolveClaudeOauthAdapterEntry", () => {
 });
 
 describe("spawnPiChild", () => {
+	it("retains a fresh session and resumes that exact session file", () => {
+		const sessionDir = mkdtempSync(join(tmpdir(), "sumo-reply-session-"));
+		const first = new FakeProcess();
+		const second = new FakeProcess();
+		const spawn = vi.fn()
+			.mockReturnValueOnce(first)
+			.mockReturnValueOnce(second);
+		try {
+			// SAFETY: FakeProcess implements the piped process members used by this backend.
+			const fresh = createPiChildSpawner(spawn as never, () => undefined, () => "/selected/pi")({
+				prompt: "first", cwd: "/repo", inherited: {}, sessionDir,
+			});
+			const freshEvents = collect(fresh.events);
+			const sessionFile = join(sessionDir, "--repo--", "child.jsonl");
+			mkdirSync(join(sessionDir, "--repo--"));
+			writeFileSync(sessionFile, "session");
+			first.emit("close", 0);
+			expect(spawn.mock.calls[0]?.[1]).not.toContain("--no-session");
+			expect(spawn.mock.calls[0]?.[1]).toEqual(expect.arrayContaining(["--session-dir", sessionDir]));
+			expect(freshEvents.slice(-2)).toEqual([
+				{ kind: "session-located", sessionFilePath: sessionFile },
+				{ kind: "run-settled", outcome: { kind: "completed", finalText: "" } },
+			]);
+
+			// SAFETY: FakeProcess implements the piped process members used by this backend.
+			const resumed = createPiChildSpawner(spawn as never, () => undefined, () => "/selected/pi")({
+				prompt: "follow up", cwd: "/repo", inherited: {}, resumeSessionFile: sessionFile,
+			});
+			const resumedEvents = collect(resumed.events);
+			expect(spawn.mock.calls[1]?.[1]).not.toContain("--no-session");
+			expect(spawn.mock.calls[1]?.[1]).toEqual(expect.arrayContaining(["--session", sessionFile, "--session-dir", dirname(sessionFile)]));
+			second.emit("close", 0);
+			expect(resumedEvents.at(-2)).toEqual({ kind: "session-located", sessionFilePath: sessionFile });
+		} finally {
+			rmSync(sessionDir, { recursive: true, force: true });
+		}
+	});
+
+	it("refuses to resume a missing session instead of starting without context", () => {
+		const missing = join(tmpdir(), `sumocode-missing-session-${Date.now()}`, "child.jsonl");
+		const spawn = vi.fn();
+		// SAFETY: session validation refuses before the fake spawn is reached.
+		const child = createPiChildSpawner(spawn as never, () => undefined, () => "/selected/pi")({
+			prompt: "follow up", cwd: "/repo", inherited: {}, resumeSessionFile: missing,
+		});
+		expect(() => collect(child.events)).toThrow("resume session file is unavailable");
+		expect(spawn).not.toHaveBeenCalled();
+	});
+
 	it("retains the pipe owner while replacing a same-process event observer", () => {
 		const proc = new FakeProcess();
 		// No fake PID may reach the operating system through interrupt().

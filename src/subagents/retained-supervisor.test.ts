@@ -73,7 +73,7 @@ function retainedFixture(attach = false, onManifestWritten?: () => void) {
 	const owner = new RetainedHeadlessSupervisor({
 		registry: f.registry, initial: f.record, supervisor: f.supervisor,
 		attach: attach ? { cwd: f.record.taskDir } : undefined,
-		launch: { prompt: "prompt-secret", cwd: f.record.taskDir, inherited: {}, builtInTools: ["read"] }, baseRef: "host-base",
+		launch: { prompt: "prompt-secret", cwd: f.record.taskDir, inherited: {}, builtInTools: ["read"], sessionDir: join(f.record.taskDir, "session") }, baseRef: "host-base",
 	}, {
 		operations: f.operations,
 		spawn: (options) => {
@@ -98,6 +98,19 @@ function retainedFixture(attach = false, onManifestWritten?: () => void) {
 }
 
 describe("retained supervisor handle ownership", () => {
+	it("persists the discovered child session before settlement", async () => {
+		const f = retainedFixture();
+		f.proc.emit("spawn");
+		await f.owner.ready;
+		const sessionFile = join(f.record.taskDir, "session", "--task--", "child.jsonl");
+		mkdirSync(join(f.record.taskDir, "session", "--task--"));
+		writeFileSync(sessionFile, "session", { mode: 0o600 });
+		await f.finish();
+		f.release();
+		expect(await f.owner.settlement).toBe("settled");
+		expect(f.registry.get(f.record.id)?.sessionFilePath).toBe(sessionFile);
+	});
+
 	it("exposes the durable manifest before publishing completion pointers", async () => {
 		const cut = vi.fn(() => {
 			expect(existsSync(join(f.record.taskDir, "manifest.json"))).toBe(true);

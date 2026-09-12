@@ -169,6 +169,26 @@ describe("subagent result delivery", () => {
 			expect(existsSync(join(root, "sumocode", "subagents", "v2", "registry"))).toBe(true);
 		} finally { harness.manager.disposeAll(); vi.unstubAllEnvs(); }
 	});
+	it("delivers a settled headless reply through the existing follow-up path", async () => {
+		const harness = createHarness();
+		harness.fire("session_start");
+		harness.setIdle(false);
+		await spawn(harness.manager, "conversation");
+		backend.emitters[0]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "first" } });
+		await vi.waitFor(() => expect(harness.manager.get("sa-conversation-1")?.status).toBe("done"));
+
+		await harness.tool("subagent_reply").execute("reply", { id: "sa-conversation-1", text: "follow up" }, undefined, undefined, harness.ctx);
+		backend.emitters[1]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "second" } });
+		await vi.waitFor(() => expect(harness.manager.get("sa-re-conversation-2")?.status).toBe("done"));
+		harness.setIdle(true);
+		harness.fire("agent_end");
+
+		expect(harness.sendMessage).toHaveBeenCalledWith(
+			expect.objectContaining({ content: expect.stringContaining("second"), details: expect.objectContaining({ id: "sa-re-conversation-2" }) }),
+			{ deliverAs: "followUp", triggerTurn: true },
+		);
+	});
+
 	it("sets the status widget while active and clears it after the last settlement", async () => {
 		const harness = createHarness(true);
 		harness.fire("session_start");

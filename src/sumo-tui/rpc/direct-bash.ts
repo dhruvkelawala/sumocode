@@ -4,7 +4,7 @@ export type DirectBashResult = Extract<RpcResponse, { command: "bash"; success: 
 import type { ActivitySnapshot, ActivityStatus } from "../../activity/domain.js";
 import { ACTIVITY_OUTPUT_MAX_BYTES, ACTIVITY_OUTPUT_MAX_LINES, boundedOutputTail } from "../../activity/output-tail.js";
 
-export interface ParsedDirectBash {
+interface ParsedDirectBash {
 	readonly command: string;
 	readonly excludeFromContext: boolean;
 }
@@ -18,14 +18,14 @@ export function parseDirectBash(text: string): ParsedDirectBash | undefined {
 	return command.trim().length === 0 ? undefined : { command, excludeFromContext };
 }
 
-export interface DirectBashStart {
+interface DirectBashStart {
 	readonly id: string;
 	readonly command: string;
 	readonly excludeFromContext: boolean;
 	readonly ownerSessionId?: string;
 }
 
-export interface DirectBashControllerOptions {
+interface DirectBashControllerOptions {
 	readonly maxOutputBytes?: number;
 	readonly maxOutputLines?: number;
 	readonly now?: () => number;

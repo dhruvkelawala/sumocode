@@ -549,13 +549,23 @@ export class SubagentManager {
 					baseRef: task.baseRef ?? "HEAD",
 					task: task.title,
 				});
-				const created = await this.withWorktreeCreation(() => this.createWorktreeImpl({
-					repoRoot,
-					branch: resolved.branch,
-					baseRef: resolved.baseRef,
-					path: resolved.path,
-					task: task.title,
-				}));
+				const created = await this.withWorktreeCreation(async () => {
+					// The gate can queue a spawn behind another creation. A setup that
+					// was interrupted while waiting must not create (and preserve) a
+					// worktree it will never run.
+					if (this.setupInterrupted(id, generation)) return undefined;
+					return this.createWorktreeImpl({
+						repoRoot,
+						branch: resolved.branch,
+						baseRef: resolved.baseRef,
+						path: resolved.path,
+						task: task.title,
+					});
+				});
+				if (!created) {
+					releasePending();
+					return this.recordSetupInterruption(task, id, createdAt, baseRef, "interrupted during setup");
+				}
 				if (!created.ok) {
 					releasePending();
 					return this.recordSpawnFailure(task, id, createdAt, baseRef, `unable to create worktree: ${created.message}`);

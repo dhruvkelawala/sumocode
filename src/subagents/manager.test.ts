@@ -818,6 +818,38 @@ describe("SubagentManager", () => {
 		expect(second).toMatchObject({ status: "running" });
 	});
 
+	it("does not create a worktree for a spawn interrupted while waiting on the creation gate", async () => {
+		let releaseFirst = (): void => undefined;
+		const firstHeld = new Promise<void>((resolve) => { releaseFirst = resolve; });
+		let calls = 0;
+		const createWorktree = vi.fn(async (options: CreateWorktreeOptions) => {
+			calls += 1;
+			if (calls === 1) await firstHeld;
+			return { ok: true as const, path: options.path ?? "/isolated/worktree", branch: options.branch ?? "sumo/task", baseRef: "abc123" };
+		});
+		const backendFactory = vi.fn(() => ({ events: () => undefined, interrupt: () => undefined }));
+		const manager = new SubagentManager(backendFactory, {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			createWorktree,
+			resolveWorktreeBaseRef: async () => "abc123",
+			buildCompletionManifest: fakeManifestBuilder,
+		});
+
+		const first = manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", worktree: true });
+		const second = manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", worktree: true });
+		// The first creation holds the gate, so the second spawn can only wait.
+		await vi.waitFor(() => expect(createWorktree).toHaveBeenCalledTimes(1));
+
+		manager.disposeAll();
+		releaseFirst();
+
+		await expect(first).resolves.toMatchObject({ status: "error", errorText: expect.stringContaining("interrupted during setup") });
+		await expect(second).resolves.toMatchObject({ status: "error", errorText: "interrupted during setup" });
+		expect(backendFactory).not.toHaveBeenCalled();
+		// The interrupted waiter must not create (and preserve) a worktree.
+		expect(createWorktree).toHaveBeenCalledTimes(1);
+	});
+
 	it("splits the first visible child beside the parent when its Herdr tab is known", async () => {
 		const backendFactory = vi.fn(() => ({ events: () => undefined, interrupt: () => undefined }));
 		const host: TerminalHost = {

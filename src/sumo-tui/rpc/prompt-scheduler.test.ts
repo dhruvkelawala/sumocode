@@ -89,6 +89,27 @@ describe("RpcPromptScheduler", () => {
 		expect(scheduler.getSnapshot()).toMatchObject({ pausedAfterFailure: false, queuedMessages: [] });
 	});
 
+	it("reports an in-flight compaction failure invalidated by queue restore", async () => {
+		let compacting = true;
+		let rejectSend: ((error: Error) => void) | undefined;
+		const unknown = vi.fn();
+		const scheduler = createRpcPromptScheduler({
+			getCompacting: () => compacting,
+			sendPrompt: () => new Promise<void>((_resolve, reject) => { rejectSend = reject; }),
+			onDispatchFailure: unknown,
+		});
+		await scheduler.submit("keep visible", { delivery: "steer" });
+		compacting = false;
+		scheduler.handleAgentEvent({ type: "compaction_end" });
+		await flush();
+
+		scheduler.restoreAll("");
+		rejectSend?.(new Error("transport lost"));
+		await flush();
+
+		expect(unknown).toHaveBeenCalledWith("keep visible", expect.any(Error));
+	});
+
 	it("reports correlated rejection separately from ambiguous transport failure", async () => {
 		const rejected = vi.fn();
 		const unknown = vi.fn();

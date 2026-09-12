@@ -1112,7 +1112,10 @@ export class RpcHostActions {
 		if (!message) return;
 		const result = await this.applySessionChange(
 			() => this.controls.fork(message.entryId),
-			(current) => { if (current.text) this.editorText?.setText(current.text); },
+			(current) => {
+				if (!current.text || !this.editorText) return;
+				this.editorText.setText([this.editorText.getText(), current.text].filter(Boolean).join("\n\n"));
+			},
 		);
 		if (!result.cancelled) this.onStateChange();
 	}

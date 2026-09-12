@@ -1,4 +1,5 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { slugifyBranch } from "./git/worktree.js";
 import { getActiveTheme } from "./themes/index.js";
 import { lineToAnsi, span, textLine, truncateLine } from "./sumo-tui/render/primitives.js";
 
@@ -25,7 +26,28 @@ interface DisplayId {
 	readonly distinct: string;
 }
 
-function displayId(id: string): DisplayId {
+/**
+ * Sequence and optional retention namespace after the manager's own slug. The
+ * manager builds `sa-<slugifyBranch(title)>-<n>[-<ns4>]`, so a title that still
+ * reproduces that slug locates the boundary exactly — which matters for ids
+ * whose slug ends in a number (`sa-fix-471-1000` is sequence 1000, not 471).
+ * Adopted retained records carry their id as the title, hence the id-shape
+ * fallback below.
+ */
+function tailAfterSlug(id: string, title: string): { readonly sequence: string; readonly namespace?: string } | undefined {
+	const prefix = `sa-${slugifyBranch(title)}-`;
+	if (!id.startsWith(prefix)) return undefined;
+	const rest = id.slice(prefix.length);
+	const separator = rest.indexOf("-");
+	const sequence = separator === -1 ? rest : rest.slice(0, separator);
+	const namespace = separator === -1 ? undefined : rest.slice(separator + 1);
+	if (!/^\d+$/.test(sequence)) return undefined;
+	if (namespace !== undefined && !/^[0-9a-f]{4}$/.test(namespace)) return undefined;
+	return namespace === undefined ? { sequence } : { sequence, namespace };
+}
+
+/** Compact form derived from an id's own shape, with no title to anchor the slug. */
+function idOnlyDisplayId(id: string): DisplayId {
 	const legacy = LEGACY_NAMESPACED_SUBAGENT_ID.exec(id);
 	if (legacy !== null) return { short: `sa-${legacy[2]}`, distinct: `sa-${legacy[1]}-${legacy[2]}` };
 	const readable = READABLE_SUBAGENT_ID.exec(id);
@@ -38,13 +60,22 @@ function displayId(id: string): DisplayId {
 	};
 }
 
+function displayId(id: string, title: string): DisplayId {
+	const derived = tailAfterSlug(id, title);
+	if (derived === undefined) return idOnlyDisplayId(id);
+	return {
+		short: `sa-${derived.sequence}`,
+		distinct: derived.namespace === undefined ? id : `sa-${derived.sequence}-${derived.namespace}`,
+	};
+}
+
 /**
  * Collapses a namespaced subagent id to its readable sequence suffix. Legacy
  * `sa-<uuid>-<n>` ids and readable `sa-<slug>-<n>[-<ns4>]` ids both render as
  * `sa-<n>`; already-short ids (`sa-1`) and non-sa ids pass through unchanged.
  */
 export function shortId(id: string): string {
-	return displayId(id).short;
+	return idOnlyDisplayId(id).short;
 }
 
 /** Whitespace-normalized, control-char-free title, or the generic fallback when empty. */
@@ -76,7 +107,7 @@ export function renderSubagentStatusRow(options: {
 	// Cells already spent before the first entry, so each title can shrink to keep
 	// its own id, role, and age inside the row instead of being clipped away.
 	const prefixWidth = visibleWidth(`${LEFT_PADDING}◈ subagents${suffix} · `);
-	const parsed = options.running.map((subagent) => ({ subagent, id: displayId(subagent.id) }));
+	const parsed = options.running.map((subagent) => ({ subagent, id: displayId(subagent.id, subagent.title) }));
 	const shortIdCounts = new Map<string, number>();
 	for (const { id } of parsed) shortIdCounts.set(id.short, (shortIdCounts.get(id.short) ?? 0) + 1);
 	const entries = parsed.map(({ subagent, id }) => {

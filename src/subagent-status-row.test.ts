@@ -72,6 +72,32 @@ describe("renderSubagentStatusRow", () => {
 		expect(plain(row)).not.toContain("7e8fc89b");
 	});
 
+	it("reads the counter after the manager's own slug, not the last numeric segment", () => {
+		const [row] = renderSubagentStatusRow({
+			width: 200,
+			running: [
+				// slug `fix-471` + sequence 1000: the trailing 4 digits are the counter
+				{ id: "sa-fix-471-1000", title: "fix 471", ageMs: 1_000 },
+				// slug `a` + sequence 1 + all-digit retention namespace
+				{ id: "sa-a-1-8650", title: "a", ageMs: 2_000 },
+			],
+			queuedCount: 0,
+		});
+		const text = plain(row);
+		expect(text).toContain("fix 471 sa-1000 1s");
+		expect(text).toContain("a sa-1 2s");
+	});
+
+	it("falls back to the id shape when the title no longer reproduces the slug", () => {
+		// Adopted retained records carry their id as the title.
+		const [row] = renderSubagentStatusRow({
+			width: 200,
+			running: [{ id: "sa-research-1-a1b2", title: "sa-research-1-a1b2", ageMs: 1_000 }],
+			queuedCount: 0,
+		});
+		expect(plain(row)).toContain("sa-research-1-a1b2 sa-1 1s");
+	});
+
 	it("disambiguates colliding readable ids with their retention namespace", () => {
 		const [row] = renderSubagentStatusRow({
 			width: 200,

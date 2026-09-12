@@ -833,8 +833,12 @@ export const createPiChildSpawner = (
 			refuseReady(new Error("child settled before prompt release"));
 			if (sessionDir) {
 				try {
-					const sessions = readdirSync(sessionDir).filter((entry) => entry.endsWith(".jsonl"));
-					if (sessions.length === 1) emit({ kind: "session-located", sessionFilePath: join(sessionDir, sessions[0]!) });
+					if (options.resumeSessionFile && existsSync(options.resumeSessionFile)) {
+						emit({ kind: "session-located", sessionFilePath: options.resumeSessionFile });
+					} else {
+						const sessions = readdirSync(sessionDir).filter((entry) => entry.endsWith(".jsonl"));
+						if (sessions.length === 1) emit({ kind: "session-located", sessionFilePath: join(sessionDir, sessions[0]!) });
+					}
 				} catch { /* Session discovery is optional evidence; settlement must still publish. */ }
 			}
 			emit({ kind: "run-settled", outcome });

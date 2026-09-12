@@ -583,10 +583,11 @@ describe("spawnPiChild", () => {
 			const resumed = createPiChildSpawner(spawn as never, () => undefined, () => "/selected/pi")({
 				prompt: "follow up", cwd: "/repo", inherited: {}, resumeSessionFile: sessionFile,
 			});
-			collect(resumed.events);
+			const resumedEvents = collect(resumed.events);
 			expect(spawn.mock.calls[1]?.[1]).not.toContain("--no-session");
 			expect(spawn.mock.calls[1]?.[1]).toEqual(expect.arrayContaining(["--session", sessionFile, "--session-dir", sessionDir]));
 			second.emit("close", 0);
+			expect(resumedEvents.at(-2)).toEqual({ kind: "session-located", sessionFilePath: sessionFile });
 		} finally {
 			rmSync(sessionDir, { recursive: true, force: true });
 		}

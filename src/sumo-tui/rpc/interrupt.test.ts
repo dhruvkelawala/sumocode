@@ -32,6 +32,11 @@ describe("decideRpcInterrupt", () => {
 		expect(decideRpcInterrupt("ctrl-c", state({ armedUntil: 999 }))).toBe("arm-quit");
 	});
 
+	it("routes Escape to direct bash ahead of an independently streaming agent", () => {
+		expect(decideRpcInterrupt("escape", state({ directBashActive: true, isStreaming: true }))).toBe("abort-bash");
+		expect(decideRpcInterrupt("ctrl-c", state({ directBashActive: true }))).toBe("arm-quit");
+	});
+
 	it("maps Escape to modal dismissal, streaming abort, or pass-through", () => {
 		expect(decideRpcInterrupt("escape", state({ modalActive: true }))).toBe("dismiss-modal");
 		expect(decideRpcInterrupt("escape", state({ overlayActive: true }))).toBe("dismiss-modal");

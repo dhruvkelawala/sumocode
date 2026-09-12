@@ -40,8 +40,8 @@ export type ReadinessState = "boot" | "input" | "app";
 
 export const READINESS_EVENT_BY_STATE = {
 	boot: "boot_screen_frame",
-	input: "input_ready",
-	app: "app_ready",
+	input: "editor_ready",
+	app: "stable_chrome_ready",
 } as const satisfies Record<ReadinessState, string>;
 
 export interface TimeoutEvidenceInput {

@@ -809,7 +809,7 @@ nativeDescribe("native executable contract", () => {
 			expect(events.indexOf("native_pre_adoption_ready")).toBeGreaterThan(events.indexOf("child_spawned"));
 			expect(events).not.toContain("host_import_ready");
 			expect(events).not.toContain("native_child_adopted");
-			expect(events).not.toContain("input_ready");
+			expect(events).not.toContain("editor_ready");
 			expect(events).not.toContain("rpc_child_ready");
 		}, 20_000);
 
@@ -836,7 +836,7 @@ nativeDescribe("native executable contract", () => {
 		expect(events).toContain("host_import_ready");
 		expect(events.indexOf("native_pre_main_ready")).toBeGreaterThan(events.indexOf("host_import_ready"));
 		expect(events).not.toContain("native_child_adopted");
-		expect(events).not.toContain("input_ready");
+		expect(events).not.toContain("editor_ready");
 		expect(events).not.toContain("rpc_child_ready");
 	}, 20_000);
 

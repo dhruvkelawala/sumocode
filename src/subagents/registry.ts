@@ -78,6 +78,9 @@ export interface SubagentRecord {
 		readonly lastHeartbeatAt?: number;
 		readonly reportedTokens?: number;
 		readonly reportedCostUsd?: number;
+		/** Visible model-turn state; independent of the retained process lifecycle. */
+		readonly turnState?: "working" | "idle";
+		readonly turnSequence?: number;
 	};
 	readonly revision: number;
 	readonly id: string;
@@ -247,7 +250,9 @@ function validRecord(value: unknown): value is SubagentRecord {
 		try { validateSubagentBudget(r.budget); } catch { return false; }
 	}
 	if (r.telemetry !== undefined) {
-		if (!object(r.telemetry, "startedAt lastProgressAt", "lastHeartbeatAt reportedTokens reportedCostUsd")) return false;
+		if (!object(r.telemetry, "startedAt lastProgressAt", "lastHeartbeatAt reportedTokens reportedCostUsd turnState turnSequence")) return false;
+		if (r.telemetry.turnState !== undefined && r.telemetry.turnState !== "working" && r.telemetry.turnState !== "idle") return false;
+		if (r.telemetry.turnSequence !== undefined && !integer(r.telemetry.turnSequence)) return false;
 		for (const key of ["startedAt", "lastProgressAt", "lastHeartbeatAt"] as const) {
 			const at = r.telemetry[key];
 			if (at === null && key !== "lastHeartbeatAt" || at === undefined && key === "lastHeartbeatAt") continue;
@@ -643,7 +648,7 @@ export class SubagentRegistry {
 				|| current.launchIntent !== null && !isDeepStrictEqual(current.launchIntent, next.launchIntent))) throw new Error("launch intent must be preserved");
 			if (current.telemetry) {
 				if (!next.telemetry) throw new Error("registry telemetry must be preserved");
-				for (const key of ["startedAt", "lastProgressAt", "lastHeartbeatAt", "reportedTokens", "reportedCostUsd"] as const) {
+				for (const key of ["startedAt", "lastProgressAt", "lastHeartbeatAt", "reportedTokens", "reportedCostUsd", "turnSequence"] as const) {
 					const before = current.telemetry[key];
 					const after = next.telemetry[key];
 					if (before != null && (after == null || after < before || key === "startedAt" && after !== before)) throw new Error("registry telemetry must be preserved");

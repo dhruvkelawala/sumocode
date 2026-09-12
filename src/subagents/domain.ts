@@ -7,9 +7,12 @@ export const SUBAGENT_MAX_RUNNING = 10;
 export const SUBAGENT_MAX_QUEUED = 16;
 
 export type SubagentStatus = "queued" | "running" | "done" | "error";
+export type SubagentTurnState = "working" | "idle";
 
 export type SubagentEvent =
 	| { kind: "run-started" }
+	| { kind: "turn-started"; at: number }
+	| { kind: "turn-finished"; finalText: string; at: number }
 	| { kind: "heartbeat"; at: number }
 	| { kind: "progress" }
 	| { kind: "pane-attached"; pane: SubagentPaneRef }
@@ -102,6 +105,12 @@ export interface SubagentSnapshot extends Partial<SubagentBudgetState> {
 	readonly visible?: boolean;
 	readonly pane?: SubagentPaneRef;
 	readonly status: SubagentStatus;
+	/** Visible child model-turn state; process status remains running while an idle pane is steerable. */
+	readonly turnState?: SubagentTurnState;
+	readonly turnSequence?: number;
+	/** Last turn result handed to the parent; separate from terminal-result consumption. */
+	readonly deliveredTurnSequence?: number;
+	readonly deliveredTurnText?: string;
 	readonly createdAt: number;
 	readonly settledAt?: number;
 	readonly errorText?: string;

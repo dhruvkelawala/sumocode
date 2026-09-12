@@ -21,6 +21,10 @@ export type RpcSlashCommand = RpcResponseData<"get_commands">["commands"][number
 export type RpcForkMessage = RpcResponseData<"get_fork_messages">["messages"][number];
 export type RpcEntriesResponse = RpcResponseData<"get_entries">;
 export type RpcSessionStats = RpcResponseData<"get_session_stats">;
+export interface RpcClearedQueue {
+	readonly steering: readonly string[];
+	readonly followUp: readonly string[];
+}
 
 export interface RpcModelOption {
 	readonly provider: string;
@@ -177,6 +181,19 @@ export class RpcHostControls {
 
 	public async clone(): Promise<RpcResponseData<"clone">> {
 		return responseData(await this.client.send({ type: "clone" }), "clone");
+	}
+
+	public async clearQueue(): Promise<RpcClearedQueue> {
+		const data = responseData(await this.client.send({ type: "clear_queue" }), "clear_queue");
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- validate untrusted RPC data at the control boundary.
+		if (!data || !Array.isArray(data.steering) || !data.steering.every((item) => typeof item === "string")) {
+			throw new Error("clear_queue failed: invalid data.steering");
+		}
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- validate untrusted RPC data at the control boundary.
+		if (!Array.isArray(data.followUp) || !data.followUp.every((item) => typeof item === "string")) {
+			throw new Error("clear_queue failed: invalid data.followUp");
+		}
+		return { steering: [...data.steering], followUp: [...data.followUp] };
 	}
 
 	public async abort(): Promise<void> {

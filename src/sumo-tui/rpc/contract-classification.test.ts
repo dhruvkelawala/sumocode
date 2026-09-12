@@ -18,7 +18,7 @@ it("classifies every shipped RPC command, including the 0.85.1 queue and retry v
 	expect(RPC_COMMAND_DISPOSITIONS.get_available_thinking_levels.kind).toBe("implemented");
 	expect(RPC_COMMAND_DISPOSITIONS.set_thinking_level.kind).toBe("implemented");
 	expect(RPC_COMMAND_DISPOSITIONS.get_tree.kind).toBe("intentionally-bypassed");
-	expect(RPC_COMMAND_DISPOSITIONS.clear_queue).toMatchObject({ kind: "downstream-plan-owned", owner: "Plan 090 (#377)" });
+	expect(RPC_COMMAND_DISPOSITIONS.clear_queue).toMatchObject({ kind: "implemented", owner: "controls.ts RpcHostControls.clearQueue" });
 	expect(RPC_COMMAND_DISPOSITIONS.steer).toMatchObject({ kind: "downstream-plan-owned", owner: "Plan 090 (#377)" });
 	expect(RPC_COMMAND_DISPOSITIONS.follow_up).toMatchObject({ kind: "downstream-plan-owned", owner: "Plan 090 (#377)" });
 	expect(RPC_COMMAND_DISPOSITIONS.set_steering_mode).toMatchObject({ kind: "downstream-plan-owned", owner: "Plan 090 (#377)" });
@@ -34,7 +34,7 @@ it("classifies every shipped agent-session event under one primary consumer", ()
 	expect(AGENT_EVENT_DISPOSITIONS.thinking_level_changed).toMatchObject({ kind: "projected", owner: "state.ts RpcHostStateStore.handleAgentEvent" });
 	expect(AGENT_EVENT_DISPOSITIONS.queue_update.kind).toBe("projected");
 	expect(AGENT_EVENT_DISPOSITIONS.agent_settled).toMatchObject({ kind: "projected", owner: "state.ts RpcHostStateStore.handleAgentEvent" });
-	expect(AGENT_EVENT_DISPOSITIONS.turn_end.kind).toBe("scheduler-only");
+	expect(AGENT_EVENT_DISPOSITIONS.turn_end.kind).toBe("transcript-only");
 	expect(AGENT_EVENT_DISPOSITIONS.message_update.kind).toBe("transcript-only");
 	expect(AGENT_EVENT_DISPOSITIONS.message_end.kind).toBe("transcript-only");
 	expect(AGENT_EVENT_DISPOSITIONS.tool_execution_end.kind).toBe("transcript-only");

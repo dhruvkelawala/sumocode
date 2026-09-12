@@ -27,17 +27,16 @@ export interface RpcHostChromeState {
 	readonly compactionReason?: CompactionReason;
 	readonly messageCount: number;
 	readonly pendingMessageCount: number;
+	readonly promptDeliveryMode?: "steer" | "followUp";
 	readonly hasMessages: boolean;
 	readonly gitBranch?: string;
 	readonly lastEventType?: string;
 	readonly taskPartialCount: number;
-	/**
-	 * Display composition of SumoCode host-owned queued drafts plus any
-	 * unexpected Pi-owned queue snapshots reported by `queue_update`. The host
-	 * queue is the only undoable source; Pi-owned entries are shown truthfully
-	 * but are not claimed by Alt+Up restore.
-	 */
+	/** Compatibility composition; queue-kind rendering uses the fields below. */
 	readonly queuedMessages?: readonly string[];
+	readonly steeringMessages?: readonly string[];
+	readonly followUpMessages?: readonly string[];
+	readonly localQueuedMessages?: readonly string[];
 	readonly contextTokens?: number;
 	readonly contextWindow?: number;
 	readonly costUsd: number;
@@ -122,16 +121,21 @@ function validateRpcSessionState(state: RpcSessionState): RpcSessionState {
 
 export class RpcHostStateStore {
 	private hostQueuedMessages: readonly string[] = [];
-	private piQueuedMessages: readonly string[] = [];
+	private steeringMessages: readonly string[] = [];
+	private followUpMessages: readonly string[] = [];
 	private state: RpcHostChromeState = {
 		isStreaming: false,
 		isCompacting: false,
 		messageCount: 0,
 		pendingMessageCount: 0,
+		promptDeliveryMode: "steer",
 		hasMessages: false,
 		taskPartialCount: 0,
 		costUsd: 0,
 		queuedMessages: [],
+		steeringMessages: [],
+		followUpMessages: [],
+		localQueuedMessages: [],
 	};
 
 	/**
@@ -149,7 +153,9 @@ export class RpcHostStateStore {
 
 	public hydrateFromRpcState(value: RpcSessionState, gitBranch = this.state.gitBranch): RpcHostChromeState {
 		const rpcState = validateRpcSessionState(value);
-		const pendingMessageCount = Math.max(rpcState.pendingMessageCount, this.piQueuedMessages.length) + this.hostQueuedMessages.length;
+		if (this.state.sessionId !== undefined && this.state.sessionId !== rpcState.sessionId) this.clearPiQueueProjection();
+		const projectedQueueCount = this.steeringMessages.length + this.followUpMessages.length;
+		const pendingMessageCount = Math.max(rpcState.pendingMessageCount, projectedQueueCount) + this.hostQueuedMessages.length;
 		this.state = this.withComposedQueue({
 			...this.state,
 			sessionId: rpcState.sessionId,
@@ -218,10 +224,11 @@ export class RpcHostStateStore {
 				const steering = isJsonObject(payload) ? payload["steering"] : undefined;
 				const followUp = isJsonObject(payload) ? payload["followUp"] : undefined;
 				if (isStringArray(steering) && isStringArray(followUp)) {
-					this.piQueuedMessages = [...steering, ...followUp];
+					this.steeringMessages = [...steering];
+					this.followUpMessages = [...followUp];
 					this.state = this.withComposedQueue({
 						...this.state,
-						pendingMessageCount: this.hostQueuedMessages.length + this.piQueuedMessages.length,
+						pendingMessageCount: this.hostQueuedMessages.length + steering.length + followUp.length,
 						lastEventType: type,
 					});
 				} else {
@@ -250,11 +257,23 @@ export class RpcHostStateStore {
 		return this.getSnapshot();
 	}
 
+	public clearPiQueueProjection(): RpcHostChromeState {
+		this.steeringMessages = [];
+		this.followUpMessages = [];
+		this.state = this.withComposedQueue({ ...this.state, pendingMessageCount: this.hostQueuedMessages.length });
+		return this.getSnapshot();
+	}
+
+	public setPromptDeliveryMode(promptDeliveryMode: "steer" | "followUp"): RpcHostChromeState {
+		this.state = { ...this.state, promptDeliveryMode };
+		return this.getSnapshot();
+	}
+
 	public setHostQueuedMessages(messages: readonly string[]): RpcHostChromeState {
 		this.hostQueuedMessages = [...messages];
 		this.state = this.withComposedQueue({
 			...this.state,
-			pendingMessageCount: this.hostQueuedMessages.length + this.piQueuedMessages.length,
+			pendingMessageCount: this.hostQueuedMessages.length + this.steeringMessages.length + this.followUpMessages.length,
 		});
 		return this.getSnapshot();
 	}
@@ -302,13 +321,19 @@ export class RpcHostStateStore {
 		return {
 			...this.state,
 			queuedMessages: [...(this.state.queuedMessages ?? [])],
+			steeringMessages: [...(this.state.steeringMessages ?? [])],
+			followUpMessages: [...(this.state.followUpMessages ?? [])],
+			localQueuedMessages: [...(this.state.localQueuedMessages ?? [])],
 		};
 	}
 
 	private withComposedQueue(state: RpcHostChromeState): RpcHostChromeState {
 		return {
 			...state,
-			queuedMessages: [...this.piQueuedMessages, ...this.hostQueuedMessages],
+			queuedMessages: [...this.steeringMessages, ...this.followUpMessages, ...this.hostQueuedMessages],
+			steeringMessages: [...this.steeringMessages],
+			followUpMessages: [...this.followUpMessages],
+			localQueuedMessages: [...this.hostQueuedMessages],
 		};
 	}
 }

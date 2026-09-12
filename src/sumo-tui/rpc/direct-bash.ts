@@ -125,10 +125,6 @@ export class DirectBashController {
 		return true;
 	}
 
-	public requestCancellation(): boolean {
-		return this.active?.settled === false;
-	}
-
 	public complete(id: string, result: DirectBashResult): ActivitySnapshot {
 		const active = this.active;
 		if (!active || active.id !== id || active.settled) throw new Error("direct bash response does not match the active operation");

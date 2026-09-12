@@ -44,7 +44,6 @@ describe("DirectBashController", () => {
 	] as const)("finalizes from Pi's authoritative result", (result, status, summary) => {
 		const controller = new DirectBashController();
 		controller.start({ id: "one", command: "cmd", excludeFromContext: false });
-		controller.requestCancellation();
 		const final = controller.complete("one", result);
 		expect(final).toMatchObject({ status, outputTail: result.output, result: { summary } });
 	});

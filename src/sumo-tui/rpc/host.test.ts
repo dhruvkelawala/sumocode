@@ -165,6 +165,39 @@ describe("Pi-native direct bash submission", () => {
 		expect(controller.getSnapshot()).toBeUndefined();
 	});
 
+	it("does not let an older history refresh reset a newer bash", async () => {
+		let resolveFirst!: (value: DirectBashResult) => void;
+		const firstResult = new Promise<DirectBashResult>((resolve) => { resolveFirst = resolve; });
+		const refresh = deferred();
+		const editor = bashEditor("");
+		const controller = new DirectBashController();
+		const runBash = vi.fn((_command: string, _excluded: boolean, id: string) => ({
+			id,
+			written: Promise.resolve(),
+			result: id === "first" ? firstResult : new Promise<DirectBashResult>(() => undefined),
+		}));
+		await submitRpcDirectBash("!first", {
+			editor,
+			controller,
+			controls: { runBash },
+			notifications: { notify: vi.fn() },
+			createId: () => "first",
+			rehydrateTranscript: () => refresh.promise,
+		});
+		resolveFirst({ output: "done", exitCode: 0, cancelled: false, truncated: false });
+		await vi.waitFor(() => expect(controller.getSnapshot()?.status).toBe("succeeded"));
+		await submitRpcDirectBash("!second", {
+			editor,
+			controller,
+			controls: { runBash },
+			notifications: { notify: vi.fn() },
+			createId: () => "second",
+		});
+		refresh.resolve();
+		await new Promise((resolve) => setImmediate(resolve));
+		expect(controller.getSnapshot()).toMatchObject({ id: "rpc-bash:second", status: "running" });
+	});
+
 	it("leaves the draft untouched on synchronous write failure", async () => {
 		const editor = bashEditor("");
 		const notifications = { notify: vi.fn() };
@@ -789,18 +822,16 @@ describe("createRpcHostInterruptHandler wiring", () => {
 	it("sends only abort_bash when Escape interrupts direct bash during agent streaming", async () => {
 		const abort = vi.fn(async () => undefined);
 		const abortBash = vi.fn(async () => undefined);
-		const requestCancellation = vi.fn(() => true);
 		const restoreQueuedDrafts = vi.fn();
 		const handle = createRpcHostInterruptHandler(interruptDeps({
 			stateStore: { getSnapshot: () => asNever({ isStreaming: true }) },
 			controls: { abort, abortBash },
-			directBash: { isRunning: true, requestCancellation },
+			directBash: { isRunning: true },
 			restoreQueuedDrafts,
 		}));
 
 		expect(handle(ESCAPE)).toBe(true);
 		await vi.waitFor(() => expect(abortBash).toHaveBeenCalledOnce());
-		expect(requestCancellation).toHaveBeenCalledOnce();
 		expect(abort).not.toHaveBeenCalled();
 		expect(restoreQueuedDrafts).not.toHaveBeenCalled();
 	});

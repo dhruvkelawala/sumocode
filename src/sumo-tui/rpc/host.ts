@@ -490,7 +490,7 @@ export async function submitRpcDirectBash(message: string, deps: RpcDirectBashSu
 		deps.controller.complete(id, settled.result);
 		try {
 			await deps.rehydrateTranscript?.();
-			deps.controller.reset();
+			if (deps.controller.getSnapshot()?.id === `rpc-bash:${id}`) deps.controller.reset();
 		} catch (error) {
 			deps.notifications.notify(`bash history refresh failed: ${truncateForNotification(error instanceof Error ? error.message : String(error))}`, "warning");
 		}
@@ -788,7 +788,7 @@ export interface RpcHostInterruptDependencies {
 	readonly editor: Pick<RpcHostEditorController, "getText" | "setText" | "isAutocompleteOpen">;
 	readonly stateStore: Pick<RpcHostStateStore, "getSnapshot">;
 	readonly controls: Pick<RpcHostControls, "abort"> & Partial<Pick<RpcHostControls, "abortBash">>;
-	readonly directBash?: Pick<DirectBashController, "isRunning" | "requestCancellation">;
+	readonly directBash?: Pick<DirectBashController, "isRunning">;
 	readonly abortInFlight?: () => Promise<void>;
 	readonly notifications: Pick<NotificationCenter, "notify"> & Partial<Pick<NotificationCenter, "dismissSticky">>;
 	readonly requestHostExit: (code: number) => void;
@@ -866,7 +866,6 @@ export function createRpcHostInterruptHandler(deps: RpcHostInterruptDependencies
 				return true;
 			case "abort-bash":
 				armedQuitUntil = undefined;
-				deps.directBash?.requestCancellation();
 				void notifyOnError(async () => {
 					if (!deps.controls.abortBash) throw new Error("abort_bash is unavailable");
 					await deps.controls.abortBash();

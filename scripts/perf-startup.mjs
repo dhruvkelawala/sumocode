@@ -65,9 +65,8 @@ function eventElapsedMs(events, eventName, startWallMs) {
 }
 
 export function readinessTimeline(events, startWallMs) {
-	const hasTruthfulReadiness = events.some((entry) => entry?.event === "editor_ready");
-	const editorReadyMs = eventElapsedMs(events, hasTruthfulReadiness ? "editor_ready" : "input_ready", startWallMs);
-	const commandReadyMs = eventElapsedMs(events, hasTruthfulReadiness ? "command_ready" : "app_ready", startWallMs);
+	const editorReadyMs = eventElapsedMs(events, "editor_ready", startWallMs);
+	const commandReadyMs = eventElapsedMs(events, "command_ready", startWallMs);
 	return {
 		editorReadyMs,
 		commandReadyMs,
@@ -400,9 +399,7 @@ async function measureStartupTimeline() {
 					events,
 					bootScreenFrameMs: eventElapsedMs(events, "boot_screen_frame", startWallMs),
 					...readinessTimeline(events, startWallMs),
-					appReadyMs: eventElapsedMs(events, "app_ready", startWallMs),
 					stableChromeMs: eventElapsedMs(events, "stable_chrome_ready", startWallMs),
-					inputReadyMs: eventElapsedMs(events, "input_ready", startWallMs),
 				};
 			};
 			pollHandle = setInterval(async () => {
@@ -446,15 +443,13 @@ async function measureStartupTimeline() {
 		summariseMeasurement("editor-ready", metricSamples(rawSamples, "editorReadyMs")),
 		summariseMeasurement("command-ready", metricSamples(rawSamples, "commandReadyMs")),
 		summariseMeasurement("editor-to-command-gap", metricSamples(rawSamples, "editorToCommandGapMs")),
-		summariseMeasurement("app-ready-deprecated", metricSamples(rawSamples, "appReadyMs")),
 		summariseMeasurement("stable-chrome", metricSamples(rawSamples, "stableChromeMs")),
-		summariseMeasurement("input-ready-deprecated", metricSamples(rawSamples, "inputReadyMs")),
 	];
 }
 
 function markdown(report) {
 	const rows = report.measurements.map((measurement) => `| ${measurement.label} | ${measurement.avgMiddleMs === null ? "—" : `${measurement.avgMiddleMs}ms`} | ${measurement.minMs === null ? "—" : `${measurement.minMs}ms`} | ${measurement.maxMs === null ? "—" : `${measurement.maxMs}ms`} | ${measurement.samples.length} | ${measurement.failedRuns} |`);
-	return `# SumoCode startup perf snapshot\n\nReport-only startup measurements for the current checkout. These numbers are intentionally not CI gates; use them to compare phase-by-phase deltas. The retained timeline runs \`sumocode.sh --offline --no-extensions --no-session\`; do not compare it directly with a normal configured-session workload. It reports editable first paint (\`editor_ready\`), hydrated command dispatch (\`command_ready\`), and their gap. The deprecated \`input_ready\` / \`app_ready\` aliases remain visible for one release. While startup is serial, first-frame is approximately host-import + child-first-response-noext + hydration round trips because the first-frame probe passes \`--no-extensions\`; plan 061 changes that relationship. Child-first-response minus child-first-response-noext estimates the installed-extension-corpus cost.\n\n- commit: \`${report.commit}\`\n- runs: ${report.runs}\n- generated: ${report.generatedAt}\n\n| Measurement | Avg middle runs | Min | Max | Runs | Failed |\n| --- | ---: | ---: | ---: | ---: | ---: |\n${rows.join("\n")}\n`;
+	return `# SumoCode startup perf snapshot\n\nReport-only startup measurements for the current checkout. These numbers are intentionally not CI gates; use them to compare phase-by-phase deltas. The retained timeline runs \`sumocode.sh --offline --no-extensions --no-session\`; do not compare it directly with a normal configured-session workload. It reports editable first paint (\`editor_ready\`), hydrated command dispatch (\`command_ready\`), and their gap. While startup is serial, first-frame is approximately host-import + child-first-response-noext + hydration round trips because the first-frame probe passes \`--no-extensions\`; plan 061 changes that relationship. Child-first-response minus child-first-response-noext estimates the installed-extension-corpus cost.\n\n- commit: \`${report.commit}\`\n- runs: ${report.runs}\n- generated: ${report.generatedAt}\n\n| Measurement | Avg middle runs | Min | Max | Runs | Failed |\n| --- | ---: | ---: | ---: | ---: | ---: |\n${rows.join("\n")}\n`;
 }
 
 async function main() {

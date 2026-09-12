@@ -905,6 +905,21 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		);
 	});
 
+	it("replaces an interrupted streamed draft before a new message starts", () => {
+		const chat = fakeChatSink();
+		const controller = new TranscriptController({ chat });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "old-draft", role: "assistant", content: [] } });
+		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "old text" } });
+		chat.replaceLastWithViewModel.mockClear();
+
+		controller.handleAgentEvent({ type: "message_start", message: { id: "new-draft", role: "assistant", content: [] } });
+
+		expect(chat.replaceLastWithViewModel).toHaveBeenLastCalledWith(
+			expect.objectContaining({ blocks: [{ type: "markdown", text: "" }] }),
+			0,
+		);
+	});
+
 	it.each([false, true])("disarms plain appends when another transcript event publishes (prior delta: %s)", (withPriorDelta) => {
 		const chat = fakeChatSink();
 		const controller = new TranscriptController({ chat });

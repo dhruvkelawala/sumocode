@@ -430,6 +430,13 @@ export class TranscriptController {
 		// the string check below re-validate shape at runtime.
 		const record = asRecord(event as SessionValue);
 		if (!record || !isString(record.type)) return this.lastTranscript;
+		// A replacement start can arrive after an interrupted stream. First align
+		// the controller's lazy snapshot with the text already appended to the
+		// retained node so the new empty draft cannot compare equal to stale state.
+		if (record.type === "message_start" && this.plainTextStreamChunks !== undefined) {
+			this.materializePlainTextStream();
+			this.publish(this.viewModel());
+		}
 		let transcriptDirty = false;
 		const taskPartial = taskPartialFromEvent(record);
 		if (taskPartial) this.taskPartials.set(taskPartial.toolCallId, taskPartial);

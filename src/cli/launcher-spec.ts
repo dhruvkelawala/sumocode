@@ -313,9 +313,7 @@ DIAGNOSTICS EVENTS
       runtime_start          process, cwd, branch, commit, terminal size
       boot_screen_frame      first retained splash/boot frame written to terminal
       editor_ready           first retained frame painted; input can be edited
-      input_ready            deprecated one-release alias for editor_ready
       hydration_committed    authoritative initial state/transcript applied
-      app_ready              deprecated historical chrome-ready alias
       stable_chrome_ready    owned-shell render with the real session UI
       command_ready          hydration settled; commands can dispatch
       render_frame           retained render timings

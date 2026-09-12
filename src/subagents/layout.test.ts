@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SubagentPaneRef } from "./domain.js";
-import { planPlacement } from "./layout.js";
+import { chooseSplitAnchor, planPlacement } from "./layout.js";
 
 const pane = (tabId: string, index: number): SubagentPaneRef => ({
 	agentName: `worker-${index}`,
@@ -124,5 +124,43 @@ describe("planPlacement", () => {
 	it("does not seed a caller tab from another workspace", () => {
 		const cachedTab = Array.from({ length: 4 }, (_, index) => pane("w1:t2", index + 1));
 		expect(planPlacement({ hostKind: "herdr", isolated: false, visiblePanes: cachedTab, sessionTabId: "w1:t2", callerTabId: "w9:t0" })).toEqual({ kind: "new-tab", label: "subagents 2" });
+	});
+});
+
+const rect = (paneId: string, x: number, y: number, width: number, height: number) => ({ paneId, x, y, width, height });
+
+describe("chooseSplitAnchor", () => {
+	it("splits the largest pane along its longer axis", () => {
+		// Issue #519's four-child layout: p7 is the full-width bottom half and the
+		// largest pane, so it is the next anchor. At 104x50 the width is at least
+		// twice the height, so the new child lands to the right.
+		expect(chooseSplitAnchor([
+			rect("p8", 52, 0, 52, 56),
+			rect("p6", 0, 0, 52, 28),
+			rect("p9", 0, 28, 52, 28),
+			rect("p7", 0, 56, 104, 50),
+		])).toEqual({ paneId: "p7", direction: "right" });
+	});
+
+	it("splits down when the pane is less than twice as wide as it is tall", () => {
+		// The issue's rendered rects: p7 is 104x55. Splitting right would leave
+		// 52x55 children taller than they are wide, so the axis flips to rows.
+		expect(chooseSplitAnchor([
+			rect("p8", 52, 0, 52, 56),
+			rect("p6", 0, 0, 52, 28),
+			rect("p9", 0, 28, 52, 28),
+			rect("p7", 0, 56, 104, 55),
+		])).toEqual({ paneId: "p7", direction: "down" });
+	});
+
+	it("breaks equal-area ties in reading order, not list order", () => {
+		expect(chooseSplitAnchor([
+			rect("right", 110, 0, 110, 55),
+			rect("left", 0, 0, 110, 55),
+		])).toEqual({ paneId: "left", direction: "right" });
+	});
+
+	it("returns undefined without a usable pane", () => {
+		expect(chooseSplitAnchor([])).toBeUndefined();
 	});
 });

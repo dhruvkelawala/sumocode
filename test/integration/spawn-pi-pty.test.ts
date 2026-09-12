@@ -1,12 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, chmodSync, existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { IDisposable, IEvent, IPty } from "node-pty";
 import { describe, expect, it } from "vitest";
 import { createChildEvidenceContext, HARNESS_SIGNATURE, HARNESS_SIGNATURE_ENV_KEY, recordPtyExit, requireHarnessAuth, spawnSupervisedPty } from "./harness-supervisor.js";
-import { buildSpawnEnv, spawnPiPty, waitForScreenText, WaitForScreenTimeoutError, type SpawnPiPtyOptions } from "./spawn-pi-pty.js";
+import { buildSpawnEnv, isUnexpectedPtyFailure, spawnPiPty, waitForScreenText, WaitForScreenTimeoutError, type SpawnPiPtyOptions } from "./spawn-pi-pty.js";
 
 type PtySpawn = NonNullable<SpawnPiPtyOptions["spawn"]>;
 type PtySpawnOptions = Parameters<PtySpawn>[2];
@@ -255,6 +255,89 @@ describe("spawnPiPty agent state isolation", () => {
 			expect(existsSync(generatedRoot)).toBe(false);
 		} finally {
 			rmSync(generatedRoot, { recursive: true, force: true });
+		}
+	});
+});
+
+/**
+ * The unexpected-exit capture has no promise to await, so wait for the
+ * artifact set it writes and the retention marker it writes last (issue #423).
+ */
+async function waitForRetainedEvidence(evidenceDir: string, timeoutMs = 5_000): Promise<void> {
+	const artifacts = ["argv.txt", "stderr-tail.txt", "raw-output.txt", "final-screen.txt", "diagnostics.jsonl"]
+		.map((name) => join(evidenceDir, name));
+	const marker = join(resolve(evidenceDir, "../../.."), "evidence-retained.json");
+	const deadline = Date.now() + timeoutMs;
+	for (;;) {
+		const marked = artifacts.every((path) => existsSync(path))
+			&& existsSync(marker)
+			&& statSync(marker).mtimeMs >= Math.max(...artifacts.map((path) => statSync(path).mtimeMs));
+		if (marked) return;
+		if (Date.now() >= deadline) throw new Error(`timed out waiting for retained evidence in ${evidenceDir}`);
+		await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 25));
+	}
+}
+
+describe("isUnexpectedPtyFailure", () => {
+	it("retains evidence for an abnormal exit the harness did not request", () => {
+		expect(isUnexpectedPtyFailure({ exitCode: 3 }, false)).toBe(true);
+		expect(isUnexpectedPtyFailure({ exitCode: 0, signal: 11 }, false)).toBe(true);
+	});
+
+	it("ignores a clean exit and any harness-requested termination", () => {
+		expect(isUnexpectedPtyFailure({ exitCode: 0, signal: 0 }, false)).toBe(false);
+		expect(isUnexpectedPtyFailure({ exitCode: 3, signal: undefined }, true)).toBe(false);
+		expect(isUnexpectedPtyFailure({ exitCode: 0, signal: 15 }, true)).toBe(false);
+	});
+});
+
+describe("spawnPiPty exit evidence", () => {
+	it("retains diagnostics when the PTY exits between waits with no waiter pending", async () => {
+		// `--` stops node option parsing; the explicit `--approve` tells
+		// spawnPiPty it need not append a Pi trust flag.
+		const pty = spawnPiPty({ command: process.execPath, args: ["-e", "process.exit(3)", "--", "--approve"] });
+		try {
+			await waitForRetainedEvidence(pty.getEvidenceDir());
+			expect(readFileSync(join(pty.getEvidenceDir(), "argv.txt"), "utf8")).toContain("process.exit(3)");
+		} finally {
+			await pty.cleanupAndWait();
+		}
+	});
+
+	it("retains nothing when the harness deliberately terminates the PTY", async () => {
+		const pty = spawnPiPty({ command: process.execPath, args: ["-e", "setInterval(() => {}, 1_000)", "--", "--approve"] });
+		await pty.cleanupAndWait();
+		expect(existsSync(join(pty.getEvidenceDir(), "argv.txt"))).toBe(false);
+	});
+
+	it("keeps a deliberate SIGINT teardown evidence-free even when the child dies before cleanup", async () => {
+		// The RPC host exits 130 on SIGINT, so an unlatched exit still looks
+		// abnormal: the raw signal channel must recognize SIGINT as termination or
+		// every deliberate Ctrl-C teardown races cleanupAndWait's latch (issue #423).
+		const pty = spawnPiPty({ command: process.execPath, args: ["-e", "setInterval(() => {}, 1_000)", "--", "--approve"] });
+		try {
+			pty.sendSignal("SIGINT");
+			await new Promise((resolve) => setTimeout(resolve, 1_500));
+			expect(existsSync(join(pty.getEvidenceDir(), "argv.txt"))).toBe(false);
+		} finally {
+			await pty.cleanupAndWait();
+		}
+	});
+
+	it("keeps capturing when a non-terminating signal precedes the failure", async () => {
+		// SIGWINCH is a probe, not termination: latching the exit as deliberate
+		// from any raw signal would silently drop the evidence for a later crash
+		// (issue #423).
+		const pty = spawnPiPty({
+			command: process.execPath,
+			args: ["-e", "process.stdin.resume(); process.stdin.on('data', () => process.exit(3))", "--", "--approve"],
+		});
+		try {
+			pty.sendSignal("SIGWINCH");
+			pty.sendInput("\r");
+			await waitForRetainedEvidence(pty.getEvidenceDir());
+		} finally {
+			await pty.cleanupAndWait();
 		}
 	});
 });
@@ -643,7 +726,12 @@ describe("sumocode launcher mirrors Pi option consumption (PTY RPC path)", () =>
 			child.onExit(({ exitCode, signal }) => {
 				recordPtyExit(supervision.pid, supervision.pgid, exitCode, signal, childEnv);
 				if (exitCode === 0) resolveRun(output);
-				else rejectRun(new Error(`launcher dry-run exited ${exitCode}. Output:\n${output}\nEvidence: ${evidence.evidenceDir}`));
+				// Persist the evidence before a focused teardown can delete the run:
+				// a reported path must survive the failure it describes (issue #423).
+				else void supervision.captureFailure(output).then(
+					(evidenceDir) => rejectRun(new Error(`launcher dry-run exited ${exitCode}. Output:\n${output}\nEvidence: ${evidenceDir}`)),
+					(error) => rejectRun(new Error(`launcher dry-run exited ${exitCode}. Output:\n${output}\nEvidence capture failed: ${String(error)}`)),
+				);
 			});
 		});
 	}
@@ -692,8 +780,15 @@ describe("sumocode launcher mirrors Pi option consumption (PTY RPC path)", () =>
 		await expect(ptyDryRun(["task", "--"])).rejects.toThrow(/task requires a non-empty prompt/);
 	});
 
-	it("task rejects an empty prompt", async () => {
-		await expect(ptyDryRun(["task", ""])).rejects.toThrow(/task requires a non-empty prompt/);
+	it("task rejects an empty prompt and retains the evidence it reports", async () => {
+		const error = await ptyDryRun(["task", ""]).then(() => undefined, (cause: unknown) => cause);
+		expect(String(error)).toMatch(/task requires a non-empty prompt/);
+		const evidenceDir = /Evidence: (\S+)/.exec(String(error))?.[1];
+		if (evidenceDir === undefined) throw new Error(`dry-run rejection reported no evidence directory: ${String(error)}`);
+		// The path the rejection prints must exist after the focused harness would
+		// have removed the run: artifacts plus the retention marker.
+		expect(existsSync(join(evidenceDir, "argv.txt"))).toBe(true);
+		expect(existsSync(join(resolve(evidenceDir, "../../.."), "evidence-retained.json"))).toBe(true);
 	});
 
 	it("task rejects a whitespace-only prompt", async () => {

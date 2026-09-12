@@ -455,6 +455,24 @@ describe("RpcHostControls", () => {
 		expect(client.commands).toEqual([{ type: "get_available_thinking_levels" }]);
 	});
 
+	it("never hands the chrome cache thinking levels fetched under a different model", async () => {
+		const levels: RpcResponse = { type: "response", command: "get_available_thinking_levels", success: true, data: { levels: ["low", "high"] } };
+		const client = new FakeClient(levels, levels);
+		const store = new RpcHostStateStore();
+		store.hydrateFromRpcState(rpcState({ model: model("anthropic", "claude-opus-4-8") }));
+		const controls = new RpcHostControls(client, store);
+
+		await controls.getAvailableThinkingLevels();
+		expect(controls.knownThinkingLevels()).toEqual(["low", "high"]);
+
+		store.applyModelChange({ provider: "openai", id: "gpt-5" });
+		expect(controls.knownThinkingLevels()).toBeUndefined();
+
+		// Re-fetched under the new model, the ring is trustworthy again.
+		await controls.getAvailableThinkingLevels();
+		expect(controls.knownThinkingLevels()).toEqual(["low", "high"]);
+	});
+
 	it("optimistically patches setThinkingLevel before the RPC response", async () => {
 		const setThinkingLevelResponse = deferred<RpcResponse>();
 		const client = new DeferredFakeClient(setThinkingLevelResponse);

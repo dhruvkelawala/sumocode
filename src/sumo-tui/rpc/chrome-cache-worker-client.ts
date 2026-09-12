@@ -83,6 +83,8 @@ export class ChromeCacheWorkerClient {
 			const result: CachedChrome = {};
 			if (value.modelLabel !== undefined) result.modelLabel = value.modelLabel;
 			if (value.thinkingLevel !== undefined) result.thinkingLevel = value.thinkingLevel;
+			if (value.models !== undefined) result.models = value.models;
+			if (value.thinkingLevels !== undefined) result.thinkingLevels = value.thinkingLevels;
 			return result;
 		} catch {
 			return undefined;

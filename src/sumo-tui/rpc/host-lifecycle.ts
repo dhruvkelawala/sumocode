@@ -212,7 +212,12 @@ export class RpcHostLifecycle {
 
 	public cacheChrome(chrome: CachedChrome): void {
 		if (this.currentPhase === "stopped") return;
-		this.pendingChrome = { modelLabel: chrome.modelLabel, thinkingLevel: chrome.thinkingLevel };
+		this.pendingChrome = {
+			modelLabel: chrome.modelLabel,
+			thinkingLevel: chrome.thinkingLevel,
+			models: chrome.models,
+			thinkingLevels: chrome.thinkingLevels,
+		};
 		if (this.cacheImmediate) return;
 		this.cacheImmediate = setImmediate(() => {
 			this.cacheImmediate = undefined;

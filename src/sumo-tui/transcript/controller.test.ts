@@ -905,6 +905,20 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		);
 	});
 
+	it("disarms plain appends when another transcript event publishes mid-stream", () => {
+		const chat = fakeChatSink();
+		const controller = new TranscriptController({ chat });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "draft", role: "assistant", content: [] } });
+		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "before " } });
+		controller.handleAgentEvent({ type: "tool_execution_start", toolCallId: "tool-1", toolName: "read", args: {} });
+		chat.appendToLast.mockClear();
+
+		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "after" } });
+
+		expect(chat.appendToLast).not.toHaveBeenCalled();
+		expect(chatMessageViewModelToPlainText(controller.viewModel().messages[0]!)).toContain("before after");
+	});
+
 	it("keeps transcript-neutral events on the same snapshot and revision", () => {
 		const chat = fakeChatSink();
 		const controller = new TranscriptController({ chat });

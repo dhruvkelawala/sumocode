@@ -590,6 +590,7 @@ export class TranscriptController {
 			}
 		}
 
+		if (!appendedPlainDelta && transcriptDirty && this.plainTextStreamChunks?.length) this.materializePlainTextStream();
 		const transcript = appendedPlainDelta || !transcriptDirty ? this.lastTranscript : this.publish(this.viewModel());
 		const eventMsg = eventMessage(record);
 		const messageRole = asRecord(eventMsg)?.role;

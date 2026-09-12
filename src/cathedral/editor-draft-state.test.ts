@@ -53,4 +53,27 @@ describe("EditorImageDraftState", () => {
 
 		expect(state.list()).toEqual([{ token: "[Image 2]", path: "/tmp/pi-clipboard-two.png" }]);
 	});
+
+	it("restores structured attachments from token history without token collisions", () => {
+		const state = new EditorImageDraftState();
+		const first = state.addImage("/tmp/first.png");
+		state.commitRpcSubmission(first);
+		const second = state.addImage("/tmp/second.png");
+		expect(second).toBe("[Image 2]");
+
+		state.pruneMissingTokens("");
+		state.restoreSubmittedTokens(first);
+		expect(state.list()).toEqual([{ token: "[Image 1]", path: "/tmp/first.png" }]);
+	});
+
+	it("captures only referenced attachments without expanding their tokens", () => {
+		const state = new EditorImageDraftState();
+		state.addImage("/tmp/pi-clipboard-one.png");
+		state.addImage("/tmp/pi-clipboard-two.png");
+
+		expect(state.captureRpcSubmission("compare [Image 2] twice: [Image 2]")).toEqual({
+			text: "compare [Image 2] twice: [Image 2]",
+			images: [{ token: "[Image 2]", path: "/tmp/pi-clipboard-two.png" }],
+		});
+	});
 });

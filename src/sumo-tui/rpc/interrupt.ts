@@ -3,6 +3,7 @@ export type RpcInterruptInputKind = "ctrl-c" | "escape";
 export type RpcInterruptDecision =
 	| "dismiss-modal"
 	| "clear-draft"
+	| "abort-bash"
 	| "abort"
 	| "arm-quit"
 	| "quit"
@@ -13,6 +14,7 @@ export interface RpcInterruptState {
 	readonly overlayActive: boolean;
 	readonly draftNonEmpty: boolean;
 	readonly isStreaming: boolean;
+	readonly directBashActive?: boolean;
 	readonly autocompleteOpen?: boolean;
 	readonly armedUntil?: number;
 	readonly now: number;
@@ -29,6 +31,7 @@ export function decideRpcInterrupt(
 		// While it's open, Esc must reach the editor so it can close the
 		// dropdown instead of aborting an in-flight stream.
 		if (state.autocompleteOpen) return "pass";
+		if (state.directBashActive) return "abort-bash";
 		return state.isStreaming ? "abort" : "pass";
 	}
 	if (state.draftNonEmpty) return "clear-draft";

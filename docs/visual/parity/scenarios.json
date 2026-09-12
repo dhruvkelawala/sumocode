@@ -1878,6 +1878,36 @@
 				{ "id": "full", "targetCrop": "full", "runtimeCrop": "full" },
 				{ "id": "hint-row", "targetCrop": "hint-row", "runtimeCrop": "hint-row" }
 			]
+		},
+		{
+			"id": "fixture-direct-bash-running",
+			"lane": "fixture", "status": "review", "dimensions": { "cols": 160, "rows": 45 },
+			"bibleTarget": "scene-active.png", "fixture": { "id": "direct-bash-running" },
+			"crops": [{ "id": "full", "targetCrop": "full", "runtimeCrop": "full" }, { "id": "chat-area", "targetCrop": "chat-area", "runtimeCrop": "chat-area" }]
+		},
+		{
+			"id": "fixture-direct-bash-succeeded",
+			"lane": "fixture", "status": "review", "dimensions": { "cols": 160, "rows": 45 },
+			"bibleTarget": "scene-active.png", "fixture": { "id": "direct-bash-succeeded" },
+			"crops": [{ "id": "full", "targetCrop": "full", "runtimeCrop": "full" }, { "id": "chat-area", "targetCrop": "chat-area", "runtimeCrop": "chat-area" }]
+		},
+		{
+			"id": "fixture-direct-bash-failed",
+			"lane": "fixture", "status": "review", "dimensions": { "cols": 160, "rows": 45 },
+			"bibleTarget": "scene-active.png", "fixture": { "id": "direct-bash-failed" },
+			"crops": [{ "id": "full", "targetCrop": "full", "runtimeCrop": "full" }, { "id": "chat-area", "targetCrop": "chat-area", "runtimeCrop": "chat-area" }]
+		},
+		{
+			"id": "fixture-direct-bash-cancelled",
+			"lane": "fixture", "status": "review", "dimensions": { "cols": 160, "rows": 45 },
+			"bibleTarget": "scene-active.png", "fixture": { "id": "direct-bash-cancelled" },
+			"crops": [{ "id": "full", "targetCrop": "full", "runtimeCrop": "full" }, { "id": "chat-area", "targetCrop": "chat-area", "runtimeCrop": "chat-area" }]
+		},
+		{
+			"id": "fixture-direct-bash-truncated",
+			"lane": "fixture", "status": "review", "dimensions": { "cols": 160, "rows": 45 },
+			"bibleTarget": "scene-active.png", "fixture": { "id": "direct-bash-truncated" },
+			"crops": [{ "id": "full", "targetCrop": "full", "runtimeCrop": "full" }, { "id": "chat-area", "targetCrop": "chat-area", "runtimeCrop": "chat-area" }]
 		}
 	]
 }

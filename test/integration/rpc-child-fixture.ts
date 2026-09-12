@@ -35,6 +35,8 @@ export interface RpcChildFixtureOptions {
 	readonly compactDelayMs?: number;
 	readonly promptDelayMs?: number;
 	readonly settleDelayMs?: number;
+	readonly directBashChunks?: readonly string[];
+	readonly directBashDelayMs?: number;
 	/** Emit a post-get_state message_update→agent_end→agent_settled suffix while get_messages returns its older snapshot. */
 	readonly sessionHydrationRace?: boolean;
 	/** Emit an event immediately after the first get_messages response during host boot. */
@@ -67,6 +69,7 @@ let isCompacting = false;
 let steeringQueue = [];
 let followUpQueue = [];
 let pendingPrompt = null;
+let pendingBash = null;
 let holdNextPromptUntilAbort = ${options.holdPromptUntilAbort ? "true" : "false"};
 let sessionHydrationRacePending = false;
 const sessionHydrationRace = ${options.sessionHydrationRace ? "true" : "false"};
@@ -79,6 +82,8 @@ const streamChunkSentinels = ${options.streamChunkSentinels ? "true" : "false"};
 const compactDelayMs = ${JSON.stringify(options.compactDelayMs ?? 250)};
 const promptDelayMs = ${JSON.stringify(options.promptDelayMs ?? 100)};
 const settleDelayMs = ${JSON.stringify(options.settleDelayMs ?? 0)};
+const directBashChunks = ${JSON.stringify(options.directBashChunks ?? ["fixture bash output\n"])};
+const directBashDelayMs = ${JSON.stringify(options.directBashDelayMs ?? 10)};
 const compactReason = ${JSON.stringify(options.compactReason ?? "manual")};
 const compactSummary = ${JSON.stringify(options.compactSummary ?? "Fixture compaction summary.")};
 const compactTokensBefore = ${JSON.stringify(options.compactTokensBefore ?? 42000)};
@@ -274,6 +279,42 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 			return;
 		}
 		setTimeout(() => finishPrompt(command, "fixture response complete: " + command.message), promptDelayMs);
+		return;
+	}
+	if (command.type === "bash") {
+		if (pendingBash) {
+			write({ id: command.id, type: "response", command: "bash", success: false, error: "bash already running" });
+			return;
+		}
+		pendingBash = { command, output: "", index: 0, timer: null };
+		const pumpBash = () => {
+			if (!pendingBash) return;
+			if (pendingBash.index >= directBashChunks.length) {
+				const active = pendingBash;
+				pendingBash = null;
+				const result = { output: active.output, exitCode: 0, cancelled: false, truncated: false };
+				messages.push({ role: "bashExecution", command: active.command.command, ...result, excludeFromContext: active.command.excludeFromContext, timestamp: Date.now() });
+				write(response(active.command, result));
+				return;
+			}
+			const delta = directBashChunks[pendingBash.index++];
+			pendingBash.output += delta;
+			write({ type: "bash_execution_update", id: command.id, delta });
+			pendingBash.timer = setTimeout(pumpBash, directBashDelayMs);
+		};
+		pendingBash.timer = setTimeout(pumpBash, directBashDelayMs);
+		return;
+	}
+	if (command.type === "abort_bash") {
+		write(response(command, {}));
+		if (pendingBash) {
+			const active = pendingBash;
+			clearTimeout(active.timer);
+			pendingBash = null;
+			const result = { output: active.output, cancelled: true, truncated: false };
+			messages.push({ role: "bashExecution", command: active.command.command, ...result, excludeFromContext: active.command.excludeFromContext, timestamp: Date.now() });
+			write(response(active.command, result));
+		}
 		return;
 	}
 	if (command.type === "clear_queue") {

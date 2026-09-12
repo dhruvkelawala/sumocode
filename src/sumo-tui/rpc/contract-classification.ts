@@ -40,9 +40,9 @@ export const PINNED_THINKING_LEVELS = RPC_THINKING_LEVELS;
 
 export const RPC_COMMAND_DISPOSITIONS = {
 	abort: { kind: "implemented", owner: "controls.ts RpcHostControls.abort" },
-	abort_bash: { kind: "downstream-plan-owned", owner: "Plan 091 (#378)", reason: "direct bash owns the abort path" },
+	abort_bash: { kind: "implemented", owner: "controls.ts RpcHostControls.abortBash" },
 	abort_retry: { kind: "downstream-plan-owned", owner: "Plan 089 (#376)", reason: "auto-retry lifecycle authority" },
-	bash: { kind: "downstream-plan-owned", owner: "Plan 091 (#378)", reason: "Pi-native direct user bash" },
+	bash: { kind: "implemented", owner: "direct-bash.ts DirectBashController" },
 	clear_queue: { kind: "implemented", owner: "controls.ts RpcHostControls.clearQueue" },
 	clone: { kind: "implemented", owner: "controls.ts RpcHostControls.clone" },
 	compact: { kind: "implemented", owner: "controls.ts RpcHostControls.compact" },
@@ -80,7 +80,7 @@ export const AGENT_EVENT_DISPOSITIONS = {
 	agent_start: { kind: "projected", owner: "state.ts RpcHostStateStore.handleAgentEvent", note: "also opens the transcript run and scheduler busy window" },
 	auto_retry_end: { kind: "downstream-plan-owned", owner: "Plan 089 (#376)", reason: "retry lifecycle projection" },
 	auto_retry_start: { kind: "downstream-plan-owned", owner: "Plan 089 (#376)", reason: "retry lifecycle projection" },
-	bash_execution_update: { kind: "downstream-plan-owned", owner: "Plan 091 (#378)", reason: "native direct bash streaming" },
+	bash_execution_update: { kind: "projected", owner: "direct-bash.ts DirectBashController", note: "separate from the LLM tool lifecycle" },
 	compaction_end: { kind: "projected", owner: "state.ts RpcHostStateStore.handleAgentEvent", note: "transcript commits the summary; scheduler drains on it" },
 	compaction_start: { kind: "projected", owner: "state.ts RpcHostStateStore.handleAgentEvent", note: "transcript also tracks the reason" },
 	entry_appended: { kind: "intentionally-ignored", owner: "session-reader.ts", reason: "authoritative entries are read with get_entries/get_messages; no live consumer" },

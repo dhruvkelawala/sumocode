@@ -12,8 +12,16 @@ import type {
 type PendingRequest = {
 	resolve(response: RpcResponse): void;
 	reject(error: Error): void;
-	timeout: NodeJS.Timeout;
+	rejectWritten(error: Error): void;
+	timeout?: NodeJS.Timeout;
 };
+
+export interface RpcRequestHandle {
+	readonly id: string;
+	/** Resolves when Node confirms the frame entered the child pipe; this is not Pi acceptance. */
+	readonly written: Promise<void>;
+	readonly response: Promise<RpcResponse>;
+}
 
 export type RpcEventListener = (event: AgentSessionEvent) => void;
 export type RpcUiRequestHandler = (request: RpcExtensionUIRequest, client: SumoRpcClient) => RpcExtensionUIResponse | void | Promise<RpcExtensionUIResponse | void>;
@@ -341,27 +349,67 @@ export class SumoRpcClient {
 		return this.stopPromise;
 	}
 
-	public async send(command: RpcCommand, timeoutMs = this.options.requestTimeoutMs ?? 30_000): Promise<RpcResponse> {
+	public async send(command: RpcCommand, timeoutMs: number | null = this.options.requestTimeoutMs ?? 30_000): Promise<RpcResponse> {
+		const handle = this.sendWithWriteAck(command, timeoutMs);
+		// Ordinary callers care only about the response; observe the paired write
+		// promise so a shared transport failure never becomes an unhandled rejection.
+		void handle.written.catch(() => undefined);
+		return await handle.response;
+	}
+
+	public sendWithWriteAck(command: RpcCommand, timeoutMs: number | null = this.options.requestTimeoutMs ?? 30_000): RpcRequestHandle {
 		if (!this.child || this.exited) throw new Error(`RPC child is not running. stderr=${this.stderr}`);
 		const child = this.child;
 		const id = command.id ?? `sumocode_rpc_${++this.nextRequestId}_${randomUUID()}`;
 		const request = { ...command, id } satisfies RpcCommand;
-		return await new Promise<RpcResponse>((resolve, reject) => {
-			const timeout = setTimeout(() => {
+		let resolveWritten!: () => void;
+		let rejectWritten!: (error: Error) => void;
+		let writeSettled = false;
+		const written = new Promise<void>((resolve, reject) => {
+			resolveWritten = resolve;
+			rejectWritten = reject;
+		});
+		const response = new Promise<RpcResponse>((resolve, reject) => {
+			const timeout = timeoutMs === null ? undefined : setTimeout(() => {
+				const error = new Error(`Timed out waiting for ${command.type} response after ${timeoutMs}ms. stderr=${this.stderr}`);
+				const pending = this.pending.get(id);
 				this.pending.delete(id);
-				reject(new Error(`Timed out waiting for ${command.type} response after ${timeoutMs}ms. stderr=${this.stderr}`));
+				pending?.rejectWritten(error);
+				reject(error);
 			}, timeoutMs);
-			this.pending.set(id, { resolve, reject, timeout });
-			child.stdin.write(`${JSON.stringify(request)}\n`, (error) => {
-				if (!error || this.child !== child) return;
+			this.pending.set(id, {
+				resolve,
+				reject,
+				rejectWritten: (error) => {
+					if (writeSettled) return;
+					writeSettled = true;
+					rejectWritten(error);
+				},
+				timeout,
+			});
+			const finishWrite = (error?: Error | null): void => {
+				if (this.child !== child || writeSettled) return;
+				writeSettled = true;
+				if (!error) {
+					resolveWritten();
+					return;
+				}
 				const pending = this.pending.get(id);
 				if (pending) {
 					this.pending.delete(id);
-					clearTimeout(pending.timeout);
+					if (pending.timeout) clearTimeout(pending.timeout);
 				}
-				reject(toError(error));
-			});
+				const writeError = toError(error);
+				rejectWritten(writeError);
+				reject(writeError);
+			};
+			try {
+				child.stdin.write(`${JSON.stringify(request)}\n`, finishWrite);
+			} catch (error) {
+				finishWrite(toError(error));
+			}
 		});
+		return { id, written, response };
 	}
 
 	public sendUiResponse(response: RpcExtensionUIResponse): void {
@@ -405,7 +453,7 @@ export class SumoRpcClient {
 			const pending = parsed.id ? this.pending.get(parsed.id) : undefined;
 			if (!pending) return;
 			this.pending.delete(parsed.id!);
-			clearTimeout(pending.timeout);
+			if (pending.timeout) clearTimeout(pending.timeout);
 			if (!this.rpcReadyNotified) {
 				this.rpcReadyNotified = true;
 				try { this.options.onRpcReady?.(); } catch {}
@@ -534,7 +582,8 @@ export class SumoRpcClient {
 	private rejectPending(error: Error): void {
 		for (const [id, pending] of this.pending) {
 			this.pending.delete(id);
-			clearTimeout(pending.timeout);
+			if (pending.timeout) clearTimeout(pending.timeout);
+			pending.rejectWritten(error);
 			pending.reject(error);
 		}
 	}

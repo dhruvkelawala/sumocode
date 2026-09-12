@@ -359,6 +359,35 @@ const FIXTURES = {
 };
 
 // Native-queue parity reuses the settled transcript; only chrome state differs.
+for (const [id, status, output, summary] of [
+	["direct-bash-running", "running", "building…", "running"],
+	["direct-bash-succeeded", "succeeded", "42 tests passed", "exit 0"],
+	["direct-bash-failed", "failed", "command not found", "exit 127"],
+	["direct-bash-cancelled", "cancelled", "interrupted", "cancelled"],
+	["direct-bash-truncated", "succeeded", "… newest output retained", "exit 0 · truncated · /tmp/pi-bash-full.log"],
+]) {
+	FIXTURES[id] = {
+		transcript: {
+			messages: [{
+				id: id,
+				role: "system",
+				displayName: "ACTIVITY",
+				timestamp: FIXTURE_TIMES.sumoTwo,
+				blocks: [{ type: "activity", activity: {
+					id: `rpc-bash:${id}`,
+					kind: "terminal",
+					title: "bash",
+					status,
+					subject: "pnpm test",
+					outputTail: output,
+					body: { kind: "terminal", command: "pnpm test", text: output },
+					result: status === "running" ? undefined : { summary },
+				} }],
+			}],
+		},
+	};
+}
+
 FIXTURES["native-queues-followup"] = FIXTURES["completed-active"];
 
 export async function captureFixtureScenario(scenario) {

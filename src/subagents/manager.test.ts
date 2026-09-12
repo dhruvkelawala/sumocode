@@ -120,6 +120,49 @@ describe("SubagentManager", () => {
 		} finally { manager.disposeAll(); vi.useRealTimers(); }
 	});
 
+	it("replies to a settled headless child by resuming its session in a new child", async () => {
+		const launches: Array<SpawnSubagentTask & { id: string }> = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const manager = new SubagentManager((task) => {
+			launches.push(task);
+			return { events: (emit) => { emitters.set(task.id, emit); emit({ kind: "run-started" }); }, interrupt: vi.fn() };
+		}, { captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "current-head" }), buildCompletionManifest: fakeManifestBuilder });
+		try {
+			const original = await manager.spawn({ ...makeTask("conversation"), roleId: "research" });
+			if (!("id" in original)) throw new Error("unexpected capacity refusal");
+			emitters.get(original.id)?.({ kind: "session-located", sessionFilePath: "/tmp/session/child.jsonl" });
+			emitters.get(original.id)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "first result" } });
+			await vi.waitFor(() => expect(manager.get(original.id)?.status).toBe("done"));
+
+			const reply = await manager.reply(original.id, "clarify point 3", { model: "provider/model", thinking: "high", builtInTools: ["read"] });
+
+			expect(reply).toMatchObject({ status: "running", repliesTo: original.id, sessionFilePath: "/tmp/session/child.jsonl", baseRef: "current-head" });
+			expect(launches[1]).toMatchObject({
+				prompt: "clarify point 3", title: "re: conversation", roleId: "research", cwd: "/tmp",
+				model: "provider/model", thinking: "high", builtInTools: ["read"], visible: undefined,
+				resume: { sessionFilePath: "/tmp/session/child.jsonl", repliesTo: original.id, baseRef: "current-head" },
+			});
+			await expect(manager.reply(original.id, "duplicate")).rejects.toThrow(`already in flight (${"id" in reply ? reply.id : "missing"})`);
+		} finally { manager.disposeAll(); }
+	});
+
+	it("rejects replies to running, visible, and sessionless children", async () => {
+		const { manager, emitters } = deferredBackend();
+		try {
+			const running = await manager.spawn(makeTask("running"));
+			if (!("id" in running)) throw new Error("unexpected capacity refusal");
+			await expect(manager.reply(running.id, "more")).rejects.toThrow("still running");
+
+			const visible = await manager.spawn({ ...makeTask("visible"), visible: true });
+			if (!("id" in visible)) throw new Error("unexpected capacity refusal");
+			await expect(manager.reply(visible.id, "more")).rejects.toThrow("visible child");
+
+			emitters.get(running.id)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+			await vi.waitFor(() => expect(manager.get(running.id)?.status).toBe("done"));
+			await expect(manager.reply(running.id, "more")).rejects.toThrow("has no captured session");
+		} finally { manager.disposeAll(); }
+	});
+
 	it("distinguishes visible heartbeat from progress and warns only after observed heartbeat silence", async () => {
 		vi.useFakeTimers();
 		let emit: (event: SubagentEvent) => void = () => undefined;

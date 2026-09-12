@@ -1,5 +1,5 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { closeSync, existsSync, lstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -668,6 +668,9 @@ export const createPiChildSpawner = (
 	signal?: AbortSignal;
 	launchGate?: HeadlessLaunchGate;
 	retainedBootstrap?: RetainedBootstrapDescriptor;
+	/** Fresh children persist here; continuations instead append to resumeSessionFile. */
+	sessionDir?: string;
+	resumeSessionFile?: string;
 }): SpawnedChild => {
 	const config = resolveTaskConfig({
 		// SAFETY: options.thinking comes from the typed SpawnSubagentTask.thinking field.
@@ -727,7 +730,12 @@ export const createPiChildSpawner = (
 		const roleArgs = options.appendSystemPrompt ? ["--append-system-prompt", options.appendSystemPrompt] : [];
 		const adapterArgs = adapterEntry ? ["-e", adapterEntry] : [];
 		const bootstrapArgs = bootstrapEntry ? ["-e", bootstrapEntry] : [];
-		const subprocessArgs = childModel ? removeCliModelSelection(config.subprocessArgs) : config.subprocessArgs;
+		const configuredArgs = childModel ? removeCliModelSelection(config.subprocessArgs) : config.subprocessArgs;
+		const sessionDir = options.resumeSessionFile ? dirname(options.resumeSessionFile) : options.sessionDir;
+		if (sessionDir) mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
+		const subprocessArgs = sessionDir
+			? [...configuredArgs.filter((arg) => arg !== "--no-session"), ...(options.resumeSessionFile ? ["--session", options.resumeSessionFile] : []), "--session-dir", sessionDir]
+			: configuredArgs;
 		let childEnv = childModel
 			? { ...process.env, [CHILD_MODEL_PROVIDER_ENV]: childModel.provider, [CHILD_MODEL_ID_ENV]: childModel.modelId }
 			: process.env;
@@ -822,6 +830,12 @@ export const createPiChildSpawner = (
 			settled = true;
 			clearTimeout(readinessTimer);
 			refuseReady(new Error("child settled before prompt release"));
+			if (sessionDir) {
+				try {
+					const sessions = readdirSync(sessionDir).filter((entry) => entry.endsWith(".jsonl"));
+					if (sessions.length === 1) emit({ kind: "session-located", sessionFilePath: join(sessionDir, sessions[0]!) });
+				} catch { /* Session discovery is optional evidence; settlement must still publish. */ }
+			}
 			emit({ kind: "run-settled", outcome });
 		};
 		const processLine = (line: string) => {

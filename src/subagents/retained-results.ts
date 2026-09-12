@@ -61,7 +61,7 @@ export class RetainedResults {
 			const value = read(`event-${sequence}.json`, 4096);
 			if (!value || typeof value !== "object" || !("sequence" in value) || value.sequence !== sequence
 				|| !("kind" in value) || typeof value.kind !== "string"
-				|| !["run-started", "turn-started", "turn-finished", "heartbeat", "progress", "pane-attached", "assistant-delta", "tool-start", "tool-update", "tool-end", "message-end", "usage", "run-settled"].includes(value.kind)) throw new Error("invalid retained journal");
+				|| !["run-started", "turn-started", "turn-finished", "heartbeat", "progress", "pane-attached", "assistant-delta", "tool-start", "tool-update", "tool-end", "message-end", "usage", "session-located", "run-settled"].includes(value.kind)) throw new Error("invalid retained journal");
 		}
 		if (!names.includes("manifest.json")) return undefined;
 		const result = read("result.json", MAX_ARTIFACT_BYTES);

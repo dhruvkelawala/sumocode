@@ -24,6 +24,7 @@ export type SubagentEvent =
 	// result survives; the replacement text carries the run's sole marker.
 	| { kind: "message-end"; role: "user" | "assistant" | "toolResult"; text: string; replacesRetainedText?: true }
 	| { kind: "usage"; tokens?: number; contextWindow?: number; costUsd?: number }
+	| { kind: "session-located"; sessionFilePath: string }
 	| { kind: "run-settled"; outcome: RunOutcome };
 
 export type RunOutcome =
@@ -96,6 +97,7 @@ export interface SubagentSnapshot extends Partial<SubagentBudgetState> {
 	readonly startedAt?: number;
 	readonly id: string;
 	readonly sourceId?: string;
+	readonly repliesTo?: string;
 	readonly title: string;
 	readonly prompt: string;
 	readonly roleId?: string;

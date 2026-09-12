@@ -126,9 +126,14 @@ describe("SubagentManager", () => {
 		const manager = new SubagentManager((task) => {
 			launches.push(task);
 			return { events: (emit) => { emitters.set(task.id, emit); emit({ kind: "run-started" }); }, interrupt: vi.fn() };
-		}, { captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "current-head" }), buildCompletionManifest: fakeManifestBuilder });
+		}, {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "current-head" }),
+			createWorktree: async () => ({ ok: true, path: "/isolated/conversation", branch: "sumo/conversation", baseRef: "HEAD" }),
+			resolveWorktreeBaseRef: async () => "worktree-base",
+			buildCompletionManifest: fakeManifestBuilder,
+		});
 		try {
-			const original = await manager.spawn({ ...makeTask("conversation"), roleId: "research" });
+			const original = await manager.spawn({ ...makeTask("conversation"), roleId: "research", worktree: true });
 			if (!("id" in original)) throw new Error("unexpected capacity refusal");
 			emitters.get(original.id)?.({ kind: "session-located", sessionFilePath: "/tmp/session/child.jsonl" });
 			emitters.get(original.id)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "first result" } });
@@ -136,11 +141,14 @@ describe("SubagentManager", () => {
 
 			const reply = await manager.reply(original.id, "clarify point 3", { model: "provider/model", thinking: "high", builtInTools: ["read"] });
 
-			expect(reply).toMatchObject({ status: "running", repliesTo: original.id, sessionFilePath: "/tmp/session/child.jsonl", baseRef: "current-head" });
+			expect(reply).toMatchObject({ status: "running", repliesTo: original.id, sessionFilePath: "/tmp/session/child.jsonl", baseRef: "worktree-base" });
 			expect(launches[1]).toMatchObject({
-				prompt: "clarify point 3", title: "re: conversation", roleId: "research", cwd: "/tmp",
+				prompt: "clarify point 3", title: "re: conversation", roleId: "research", cwd: "/isolated/conversation",
 				model: "provider/model", thinking: "high", builtInTools: ["read"], visible: undefined,
-				resume: { sessionFilePath: "/tmp/session/child.jsonl", repliesTo: original.id, baseRef: "current-head" },
+				resume: {
+					sessionFilePath: "/tmp/session/child.jsonl", repliesTo: original.id, baseRef: "worktree-base",
+					worktree: { path: "/isolated/conversation", branch: "sumo/conversation", baseRef: "worktree-base", repoRoot: "/repo" },
+				},
 			});
 			await expect(manager.reply(original.id, "duplicate")).rejects.toThrow(`already in flight (${"id" in reply ? reply.id : "missing"})`);
 		} finally { manager.disposeAll(); }

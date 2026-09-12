@@ -388,13 +388,6 @@ export class CathedralEditor extends CustomEditor {
 		super.insertTextAtCursor(text);
 	}
 
-	/**
-	 * Collapse a pasted/dropped image path into an `[Image N]` token. Returns
-	 * true when the text was consumed. Candidates are normalized first
-	 * (surrounding quotes stripped, `\ ` escapes unescaped) so terminal
-	 * drag/paste forms of paths with spaces still collapse and the draft
-	 * state stores the real on-disk path.
-	 */
 	/** RPC-only capture path: native attachments remain typed until the host confirms acceptance. */
 	public setRpcSubmitHandler(handler: (draft: RpcEditorSubmissionDraft) => void): void {
 		this.submitHandler = (text) => handler(this.captureRpcDraft(text));
@@ -418,6 +411,13 @@ export class CathedralEditor extends CustomEditor {
 		this.imageDraftState.clear();
 	}
 
+	/**
+	 * Collapse a pasted/dropped image path into an `[Image N]` token. Returns
+	 * true when the text was consumed. Candidates are normalized first
+	 * (surrounding quotes stripped, `\ ` escapes unescaped) so terminal
+	 * drag/paste forms of paths with spaces still collapse and the draft
+	 * state stores the real on-disk path.
+	 */
 	private collapseImagePath(text: string): boolean {
 		const candidate = normalizePastedImagePath(text);
 		if (!isLikelyClipboardImagePath(candidate)) return false;

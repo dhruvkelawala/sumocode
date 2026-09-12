@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { SubagentManager, type SpawnSubagentTask } from "./manager.js";
+import type { CreateWorktreeOptions } from "../git/worktree.js";
 import { SUBAGENT_MAX_QUEUED, SUBAGENT_MAX_RUNNING, type SubagentEvent } from "./domain.js";
 import type { CompletionManifest, CompletionManifestEvidence } from "./manifest.js";
 import { CHILD_RETAINED_RESULT_MAX_BYTES, TRUNCATED_HEAD_MARKER } from "../child-protocol.js";
@@ -781,6 +782,74 @@ describe("SubagentManager", () => {
 		expect(backendFactory).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/isolated/worktree/packages/api" }));
 	});
 
+	it("serializes concurrent worktree creation so both isolated spawns succeed", async () => {
+		let inFlight = 0;
+		let maxInFlight = 0;
+		const createWorktree = vi.fn(async (options: CreateWorktreeOptions) => {
+			inFlight += 1;
+			maxInFlight = Math.max(maxInFlight, inFlight);
+			try {
+				// Two overlapping `git worktree add` calls contend on the shared repo
+				// config lock, which failed two of six parallel isolated spawns.
+				if (inFlight > 1) return { ok: false as const, error: "git_failed" as const, message: "could not lock config file .git/config: File exists" };
+				// A macrotask gives the second spawn's (all-microtask) path time to reach
+				// createWorktree; without the gate it enters here and overlaps.
+				await new Promise((resolve) => setTimeout(resolve, 0));
+				return { ok: true as const, path: options.path ?? "/isolated/worktree", branch: options.branch ?? "sumo/task", baseRef: "abc123" };
+			} finally {
+				inFlight -= 1;
+			}
+		});
+		const manager = new SubagentManager(() => ({ events: () => undefined, interrupt: () => undefined }), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			createWorktree,
+			resolveWorktreeBaseRef: async () => "abc123",
+			buildCompletionManifest: fakeManifestBuilder,
+		});
+
+		const [first, second] = await Promise.all([
+			manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", worktree: true }),
+			manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", worktree: true }),
+		]);
+
+		expect(maxInFlight).toBe(1);
+		expect(createWorktree).toHaveBeenCalledTimes(2);
+		expect(first).toMatchObject({ status: "running" });
+		expect(second).toMatchObject({ status: "running" });
+	});
+
+	it("does not create a worktree for a spawn interrupted while waiting on the creation gate", async () => {
+		let releaseFirst = (): void => undefined;
+		const firstHeld = new Promise<void>((resolve) => { releaseFirst = resolve; });
+		let calls = 0;
+		const createWorktree = vi.fn(async (options: CreateWorktreeOptions) => {
+			calls += 1;
+			if (calls === 1) await firstHeld;
+			return { ok: true as const, path: options.path ?? "/isolated/worktree", branch: options.branch ?? "sumo/task", baseRef: "abc123" };
+		});
+		const backendFactory = vi.fn(() => ({ events: () => undefined, interrupt: () => undefined }));
+		const manager = new SubagentManager(backendFactory, {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			createWorktree,
+			resolveWorktreeBaseRef: async () => "abc123",
+			buildCompletionManifest: fakeManifestBuilder,
+		});
+
+		const first = manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", worktree: true });
+		const second = manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", worktree: true });
+		// The first creation holds the gate, so the second spawn can only wait.
+		await vi.waitFor(() => expect(createWorktree).toHaveBeenCalledTimes(1));
+
+		manager.disposeAll();
+		releaseFirst();
+
+		await expect(first).resolves.toMatchObject({ status: "error", errorText: expect.stringContaining("interrupted during setup") });
+		await expect(second).resolves.toMatchObject({ status: "error", errorText: "interrupted during setup" });
+		expect(backendFactory).not.toHaveBeenCalled();
+		// The interrupted waiter must not create (and preserve) a worktree.
+		expect(createWorktree).toHaveBeenCalledTimes(1);
+	});
+
 	it("splits the first visible child beside the parent when its Herdr tab is known", async () => {
 		const backendFactory = vi.fn(() => ({ events: () => undefined, interrupt: () => undefined }));
 		const host: TerminalHost = {
@@ -1410,6 +1479,53 @@ describe("SubagentManager", () => {
 		expect(placements[8]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "right" });
 	});
 
+	it("returns to the caller tab as soon as it has room, before the overflow tab fills", async () => {
+		const placements: unknown[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => {
+				placements.push(task.placement);
+				emitters.set(task.id, emit);
+			},
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			buildCompletionManifest: fakeManifestBuilder,
+			terminalHost: host,
+			// SAFETY: the manager only calls pi.exec on this object.
+			pi: { exec: vi.fn() } as never,
+			initialVisibleTabId: "w1:t5",
+		});
+
+		// Four children fill the caller tab, two spill into the generated overflow
+		// tab that becomes the attach cache and still has two free slots.
+		for (let index = 1; index <= 6; index += 1) {
+			await manager.spawn({ prompt: `p${index}`, title: `child-${index}`, cwd: "/repo", visible: true });
+			emitters.get(`sa-child-${index}-${index}`)?.({ kind: "run-started" });
+			emitters.get(`sa-child-${index}-${index}`)?.({ kind: "pane-attached", pane: { agentName: `sa-child-${index}-${index}-worker`, workspaceId: "w1", tabId: index <= 4 ? "w1:t5" : "w1:t6", paneId: `w1:p${index}` } });
+		}
+		expect(placements[4]).toEqual({ kind: "new-tab", label: "subagents 2" });
+		expect(placements[5]).toEqual({ kind: "tab", tabId: "w1:t6", direction: "down" });
+
+		// Every caller-tab child exits; the tab survives because it holds the
+		// parent session pane.
+		for (let index = 1; index <= 4; index += 1) {
+			emitters.get(`sa-child-${index}-${index}`)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		}
+		await vi.waitFor(() => expect(["sa-child-1-1", "sa-child-2-2", "sa-child-3-3", "sa-child-4-4"].every((id) => manager.get(id)?.status === "done")).toBe(true));
+
+		await manager.spawn({ prompt: "p7", title: "seventh", cwd: "/repo", visible: true });
+		// The overflow tab has room, but the freed caller tab is the home for
+		// visible children again; overflow is spillover only.
+		expect(placements[6]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "right" });
+	});
+
 	it("promotes a surviving tab anchored only by failed-close panes", async () => {
 		const placements: unknown[] = [];
 		const emitters = new Map<string, (event: SubagentEvent) => void>();
@@ -1737,7 +1853,7 @@ describe("SubagentManager", () => {
 		expect(manager.get("sa-fifth-5")?.paneStillOpen).toBe(true);
 	});
 
-	it("keeps the cached generated tab when its sole child's close fails", async () => {
+	it("reuses the caller tab when a failed-close pane keeps the cached tab alive", async () => {
 		const placements: unknown[] = [];
 		const emitters = new Map<string, (event: SubagentEvent) => void>();
 		const host: TerminalHost = {
@@ -1769,9 +1885,10 @@ describe("SubagentManager", () => {
 		await vi.waitFor(() => expect(manager.get("sa-first-1")?.status).toBe("error"));
 
 		await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true });
-		// The close failed, so the pane keeps w1:t6 alive and the cache must
-		// stay there instead of provisioning a duplicate tab.
-		expect(placements[1]).toEqual({ kind: "tab", tabId: "w1:t6", direction: "down" });
+		// The failed-close pane keeps w1:t6 alive and counted (see "keeps a
+		// failed-close pane in capacity until its slot is confirmed free"), but
+		// the caller tab with a free slot is the preferred destination.
+		expect(placements[1]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "right" });
 	});
 
 	it("records a close failure that lands during an in-flight settlement", async () => {

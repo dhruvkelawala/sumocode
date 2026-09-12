@@ -75,6 +75,8 @@ function ensureNodePtySpawnHelperExecutable(): void {
 	chmodSync(spawnHelper, 0o755);
 }
 
+const TERMINATING_SIGNALS: ReadonlySet<NodeJS.Signals> = new Set(["SIGTERM", "SIGKILL", "SIGHUP"]);
+
 /**
  * Evidence is retained only for an exit the harness never asked for and that
  * is abnormal: a clean exit between waits is the child finishing its work,
@@ -354,8 +356,11 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 					}
 				}
 			} finally {
-				removeOwnedAgentDir(ownedAgentDir);
-				resolveExit?.();
+				try {
+					removeOwnedAgentDir(ownedAgentDir);
+				} finally {
+					resolveExit?.();
+				}
 			}
 		})();
 	});
@@ -404,7 +409,10 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 			}
 		},
 		sendSignal(signal: NodeJS.Signals): void {
-			terminationRequested = true;
+			// Raw signal channel: only a termination signal marks the exit as
+			// deliberate, so a probe like SIGWINCH cannot suppress a later crash's
+			// evidence (issue #423).
+			if (TERMINATING_SIGNALS.has(signal)) terminationRequested = true;
 			child.kill(signal);
 		},
 		getCurrentTerminalState(): TerminalStateProbe {

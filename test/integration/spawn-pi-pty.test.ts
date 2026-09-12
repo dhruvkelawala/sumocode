@@ -309,6 +309,23 @@ describe("spawnPiPty exit evidence", () => {
 		await pty.cleanupAndWait();
 		expect(existsSync(join(pty.getEvidenceDir(), "argv.txt"))).toBe(false);
 	});
+
+	it("keeps capturing when a non-terminating signal precedes the failure", async () => {
+		// SIGWINCH is a probe, not termination: latching the exit as deliberate
+		// from any raw signal would silently drop the evidence for a later crash
+		// (issue #423).
+		const pty = spawnPiPty({
+			command: process.execPath,
+			args: ["-e", "process.stdin.resume(); process.stdin.on('data', () => process.exit(3))", "--", "--approve"],
+		});
+		try {
+			pty.sendSignal("SIGWINCH");
+			pty.sendInput("\r");
+			await waitForRetainedEvidence(pty.getEvidenceDir());
+		} finally {
+			await pty.cleanupAndWait();
+		}
+	});
 });
 
 describe("waitForScreenText", () => {

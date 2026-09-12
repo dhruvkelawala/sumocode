@@ -327,9 +327,8 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 		}
 		// Ctrl+V → app.clipboard.pasteImage: read the clipboard image to a
 		// pi-clipboard-* temp file and insert its path; CathedralEditor's
-		// insertTextAtCursor collapses it into a compact [Image N] token
-		// (expanded back to the real path on submit). Without this wiring
-		// CustomEditor.handleInput swallows the keybinding as a no-op.
+		// insertTextAtCursor collapses it into a compact [Image N] token.
+		// Without this wiring CustomEditor.handleInput swallows the keybinding.
 		this.editor.onPasteImage = () => {
 			void (async () => {
 				const path = await pasteClipboardImageToTempFile();

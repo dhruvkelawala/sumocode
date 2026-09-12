@@ -408,15 +408,7 @@ export class CathedralEditor extends CustomEditor {
 		this.imageDraftState.commitRpcSubmission(draft);
 	}
 
-	/**
-	 * Expand `[Image N]` draft tokens to their temp-file paths WITHOUT clearing
-	 * the draft state. Used by queue-time consumers (Alt+Enter follow-up
-	 * queueing) that must capture real paths before the editor is cleared, but
-	 * only commit the clear once the queue accepts the message — a busy→idle
-	 * race can decline the queue, and clearing early would leave dangling
-	 * tokens in the editor. The Enter-submit wrapper above stays atomic
-	 * (expand + clear).
-	 */
+	/** Classic string compatibility path. RPC image drafts use captureRpcDraft instead. */
 	public expandDraftTokens(text: string): string {
 		return this.imageDraftState.expandTokensToPaths(text);
 	}

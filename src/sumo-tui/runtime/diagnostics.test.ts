@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { logDiagnostic, logRuntimeStart } from "./diagnostics.js";
+import { graphemeSegmentationCount, isDiagnosticsEnabled, logDiagnostic, logRuntimeStart, recordGraphemeSegmentation } from "./diagnostics.js";
 
 const previousDiagFile = process.env.SUMO_TUI_DIAG_FILE;
 const previousBranch = process.env.SUMOCODE_DEBUG_BRANCH;
@@ -80,6 +80,18 @@ describe("diagnostics", () => {
 		expect(events[0]).not.toHaveProperty("surface");
 		expect(events[1]).not.toHaveProperty("cwd");
 		expect(events[1]).toHaveProperty("snapshotCount", 1800);
+	});
+
+	it("keeps the grapheme segmentation counter inert until diagnostics are enabled", () => {
+		delete process.env.SUMO_TUI_DIAG_FILE;
+		expect(isDiagnosticsEnabled()).toBe(false);
+		recordGraphemeSegmentation();
+		expect(graphemeSegmentationCount()).toBe(0);
+
+		useDiagFile();
+		expect(isDiagnosticsEnabled()).toBe(true);
+		recordGraphemeSegmentation();
+		expect(graphemeSegmentationCount()).toBe(1);
 	});
 
 	it("records runtime branch and commit metadata", () => {

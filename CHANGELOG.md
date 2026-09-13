@@ -10,6 +10,110 @@ landed between the original scaffold and this release.
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-09-12
+
+Native Pi RPC and one delegation path. Prompt delivery, direct bash and images
+now ride Pi 0.85's own queues and commands instead of a host-side emulation;
+the `task` tool is gone and role-first subagents are the only way to delegate;
+and the host stops burning a core on long transcripts. Twenty-five pull
+requests across five stacks, every one CI-green and reviewer-gated before
+merge; eighteen built by `implement-cheap`, seven by `implement-smart`.
+
+### Added
+- **Pi-native direct bash** — `!` commands run through Pi's `bash` /
+  `abort_bash` as their own activity lifecycle, never disguised as a prompt
+  or a tool call. #378 #549
+- **Native RPC images** — attachments are sent as `ImageContent[]` when Pi can
+  accept the prompt immediately; busy or compacting submissions with
+  attachments fail visibly closed instead of dropping a file (3 MiB / 5 MiB
+  caps, no base64 in logs). #379 #550
+- **Conversational children** — a visible child that has finished its turn
+  can take a follow-up prompt in place, and `subagent_reply` resumes a settled
+  headless child's private session for another turn. Headless sessions are
+  retained for replyability (no cleanup policy yet). #384 #552
+- **Role-first delegation prompt** — the spawn recipe names
+  `implement-smart` / `implement-cheap`, every role prints its resolved model
+  and worktree default, and an empty `subagent_list` prints the role table.
+  #514 #526
+- **Tiling placement for visible children** — the next pane splits the
+  largest pane along its longer axis, so four children form a 2×2 grid
+  instead of nested halves. #519 #546
+- **Claude account chip** — the footer shows which Claude account is active
+  at every width and repaints after every account, login and sync action.
+  #512 #535
+- **Cached model and thinking rings** — model/thinking cycle keys work before
+  hydration from the last-known ring and reconcile against the live list once
+  hydration commits. #448 #542
+- **Host heap diagnostics** — a `heap` line every 10 s under
+  `SUMO_TUI_DIAG_FILE` and an on-demand `v8.writeHeapSnapshot()`; steady-state
+  RSS on a 766 KB session measured at 54 MB median. #521 #543
+
+### Changed
+- **Pi owns the prompt queue** — the host's own FIFO and force-send are
+  removed; Enter and Alt+Enter map to Pi's `steer` / `followUp`, `queue_update`
+  renders the queue truthfully, `clear_queue` restores steering, follow-up,
+  then compaction-local text, then the draft, and Escape clears before it
+  aborts. A process-local steer-default toggle replaces the old behaviour.
+  #377 #541
+- **Truthful RPC lifecycle** — `agent_settled` is the only ordinary idle
+  boundary (`agent_end` is a low-level run boundary), `messageCount` no longer
+  derives from `agent_end`, thinking levels come from
+  `get_available_thinking_levels` and are reconciled after `set_thinking_level`
+  rather than trusted from a void success, and malformed state payloads are
+  contained. #376 #532
+- **RPC contract locked on Pi 0.85.1** — `clear_queue`,
+  `get_available_thinking_levels` and `abort_bash` are classified and pinned by
+  `test/integration/rpc-contract.test.ts`; Plan 088 is done. #375 #525
+- **Subagent identity is readable** — ids are `sa-<slug>-<n>` (plus a 4-char
+  suffix only under retention), the Herdr agent name is the id itself, every
+  `subagent_*` output prints `id · pane` once, and the status strip compacts
+  the id. #515 #536 #537 #547
+- **Visible children return to the caller tab** — once the caller tab has a
+  free slot it is preferred over overflow tabs; concurrent `git worktree add`
+  is serialised so parallel spawns no longer race on `.git/config`. #518 #538
+- **`/sumo:sync` streams step output** — noisy steps no longer die at
+  `execFile`'s `maxBuffer`; a bounded tail is kept for diagnostics and split
+  UTF-8 sequences are decoded correctly. #259 #524
+
+### Removed
+- **The `task` tool** — delegation runs only through `subagent_*`. The isolated
+  Pi subprocess task tool, its skill-wrapper system-prompt patch, its
+  `SUMOCODE_NATIVE_TASK` override, and its native-task transcript/Activity
+  adapter are deleted. The visible-child launcher command and the child-side
+  task-mode watcher remain. #513 #523
+- **Readiness aliases** — `input_ready` and `app_ready` are gone; consumers
+  read `editor_ready`, `command_ready`, `boot_screen_frame` and
+  `stable_chrome_ready`. #424 #545
+
+### Fixed
+- **Idle host no longer pegs a core** — an overlay forced a full render on
+  every working-indicator tick (62,400 segmenter calls per 200 ticks on a long
+  transcript); overlays now render into the narrow repaint (200 calls), and
+  each fallback branch is named in diagnostics. #520 #534
+- **Streaming is history-independent** — per-delta work no longer scales with
+  transcript length or the size of the message being streamed; peak RSS on a
+  689 KB message drops from 470 MB to 266 MB. #383 #551
+- **Visible children settle promptly** — a child whose final report exists is
+  marked turn-finished and its result delivered without waiting for the pane
+  to auto-close; `subagent_check` shows last progress and turn state instead
+  of `unknown`. #488 #548
+- **Sticky errors show on the splash** — the splash mounts the above-editor
+  leaf so a sticky failure has a surface before the first message. #511 #522
+- **Resume picker rows fit** — labels yield to the id/age suffix at narrow
+  widths and the pinned current session is named in the all-sessions tab.
+  #504 #528
+- **Integration waits match the replayed screen** — rendered-text waits use
+  the screen matcher instead of the raw PTY stream, ending the frame-split
+  flake; raw-byte guards stay on the byte stream. #324 #531
+- **Harness evidence for non-timeout failures** — an unexpected PTY exit
+  between waits retains diagnostics (deliberate termination, including
+  SIGINT, stays evidence-free), and a focused dry-run rejection persists the
+  evidence directory it reports. #423 #539
+- **Dependency audit is clean** — `pnpm audit` reports zero findings on the
+  0.85.1 lockfile and redundant overrides are retired. #396 #530
+
+## [0.6.1] — 2026-09-11
+
 The stabilization release. No new UI surfaces land; this closes defects where the
 agent runtime, the child protocol, or the feedback chrome misreported what they
 were doing. Ten pull requests, all reviewed by an independent agent pass before
@@ -48,13 +152,6 @@ merge.
   the host previously reported as `RPC child exited unexpectedly`. Deliberate
   exits (0 and the reload code 100) now exit the host immediately, with no
   crash notice and no shutdown delay; genuine crashes are unchanged. #505 #507
-
-### Removed
-- **The `task` tool** — delegation runs only through `subagent_*`. The isolated
-  Pi subprocess task tool, its skill-wrapper system-prompt patch, its
-  `SUMOCODE_NATIVE_TASK` override, and its native-task transcript/Activity
-  adapter are deleted. The visible-child launcher command and the child-side
-  task-mode watcher remain. #513
 
 ### Fixed
 - **Producer-controlled stream indices are bounded** — an assistant

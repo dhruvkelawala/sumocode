@@ -11,7 +11,7 @@ import { SUMOCODE_RELOAD_EXIT_CODE } from "../../commands/reload.js";
 import { RpcChildExitError, SumoRpcClient } from "./client.js";
 import { RpcHostOverlayManager } from "./host-overlays.js";
 import { RpcHostLifecycle } from "./host-lifecycle.js";
-import { RpcHostControls, type RpcAvailableModel, type RpcModelOption } from "./controls.js";
+import { RpcHostControls, type RpcAvailableModel, type RpcModelOption, type RpcThinkingLevel } from "./controls.js";
 import { RpcHostStateStore } from "./state.js";
 import {
 	activitySnapshotMatchesSession,
@@ -1172,8 +1172,8 @@ describe("cached pre-hydration cycle (issue 448: cycle keys answer before hydrat
 
 	function cycleFixture(initial: {
 		models?: readonly RpcModelOption[];
-		thinkingLevels?: readonly string[];
-		currentThinkingLevel?: string;
+		thinkingLevels?: readonly RpcThinkingLevel[];
+		currentThinkingLevel?: RpcThinkingLevel;
 		currentModelLabel?: string;
 	}) {
 		let release!: () => void;
@@ -1198,7 +1198,7 @@ describe("cached pre-hydration cycle (issue 448: cycle keys answer before hydrat
 					modelLabel = model.label;
 					previewModel(model);
 				},
-				previewThinkingLevel: (level: string) => {
+				previewThinkingLevel: (level: RpcThinkingLevel) => {
 					thinkingLevel = level;
 					previewThinkingLevel(level);
 				},

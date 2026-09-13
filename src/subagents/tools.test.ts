@@ -28,7 +28,7 @@ type FakeSpawnedChild = {
 };
 
 const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly SubagentRole[], roleWarnings: readonly RoleWarning[] = []) => {
-	const registered: Array<{ name: string; parameters?: unknown; execute: (...args: unknown[]) => Promise<ToolResult> }> = [];
+	const registered: Array<{ name: string; parameters?: unknown; promptGuidelines?: readonly string[]; execute: (...args: unknown[]) => Promise<ToolResult> }> = [];
 	const emitters = new Map<string, (event: SubagentEvent) => void>();
 	const childSends = new Map<string, ReturnType<typeof vi.fn>>();
 	const childRequestCloses = new Map<string, ReturnType<typeof vi.fn>>();
@@ -87,7 +87,8 @@ const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly Su
 		}),
 	});
 	const pi = { registerTool: vi.fn((tool) => registered.push(tool)), on: vi.fn(), getThinkingLevel: vi.fn(() => "medium"), getActiveTools: vi.fn(() => ["read", "bash"]) };
-	const roleLoader: typeof loadRoles = roles ? (() => ({ roles, warnings: roleWarnings })) : loadRoles;
+	// Each call snapshots the caller's array, matching loadRoles() returning a fresh list per call.
+	const roleLoader: typeof loadRoles = roles ? (() => ({ roles: [...roles], warnings: roleWarnings })) : loadRoles;
 	// SAFETY: the double implements registerTool/on/getThinkingLevel/getActiveTools, all registerSubagentTools uses.
 	registerSubagentTools(pi as never, manager, delivery, host, roleLoader);
 	const tool = (name: string) => registered.find((entry) => entry.name === name)!;
@@ -146,11 +147,11 @@ describe("subagent tools", () => {
 		expect(spawnSchema).toContain("baseRef");
 	});
 
-	it("enumerates loaded roles in the spawn schema", () => {
-		const role: SubagentRole = { id: "audit", label: "Audit", description: "use for audits", systemPrompt: "audit carefully" };
+	it("enumerates loaded roles with their resolved model in the spawn schema", () => {
+		const role: SubagentRole = { id: "audit", label: "Audit", description: "use for audits", systemPrompt: "audit carefully", model: "openai-codex/gpt-5.6-sol", defaultWorktree: true };
 		const { tool } = createHarness("herdr", [role]);
 		const spawnSchema = JSON.stringify(tool("subagent_spawn").parameters);
-		expect(spawnSchema).toContain("audit — use for audits");
+		expect(spawnSchema).toContain("audit — use for audits (openai-codex/gpt-5.6-sol, worktree)");
 		expect(spawnSchema).toContain("Explicit spawn parameters override role defaults");
 	});
 
@@ -546,6 +547,30 @@ describe("subagent tools", () => {
 		const result = await tool("subagent_list").execute("tc", {}, undefined, undefined, ctx as never);
 
 		expect(textOf(result)).toContain("· sumo/custom");
+	});
+
+	it("builds prompt guidelines from the loaded role table", () => {
+		const role: SubagentRole = { id: "audit", label: "Audit", description: "use for audits", systemPrompt: "audit carefully", model: "openai-codex/gpt-5.6-sol", defaultWorktree: true };
+		const { tool } = createHarness("herdr", [role]);
+		expect(tool("subagent_spawn").promptGuidelines?.join("\n")).toContain("audit → openai-codex/gpt-5.6-sol (worktree)");
+	});
+
+	it("prints the role table when no subagents are tracked", async () => {
+		const role: SubagentRole = { id: "audit", label: "Audit", description: "use for audits", systemPrompt: "audit carefully", model: "openai-codex/gpt-5.6-sol", defaultWorktree: true };
+		const { tool, ctx } = createHarness("herdr", [role]);
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const result = await tool("subagent_list").execute("tc", {}, undefined, undefined, ctx as never);
+		expect(textOf(result)).toContain("No subagents tracked.");
+		expect(textOf(result)).toContain("audit → openai-codex/gpt-5.6-sol (worktree)");
+	});
+
+	it("reloads roles for the empty list table after an in-session roles edit", async () => {
+		const roles: SubagentRole[] = [{ id: "audit", label: "Audit", description: "use for audits", systemPrompt: "audit carefully" }];
+		const { tool, ctx } = createHarness("herdr", roles);
+		roles.push({ id: "scribe", label: "Scribe", description: "use for writing", systemPrompt: "write", model: "openai/gpt-5.6-sol", defaultWorktree: true });
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const result = await tool("subagent_list").execute("tc", {}, undefined, undefined, ctx as never);
+		expect(textOf(result)).toContain("scribe → openai/gpt-5.6-sol (worktree)");
 	});
 
 	it("reports an automatic queue position when running capacity is occupied", async () => {

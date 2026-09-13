@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { TERMINAL_CLEANUP_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-controller.js";
-import { spawnSumocodePty, waitForScreen, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { spawnSumocodePty, waitForScreen, waitForScreenText, type SpawnedPiPty } from "./spawn-pi-pty.js";
 import { createRpcChildFixture } from "./rpc-child-fixture.js";
 
 const CTRL_C = "\x1b[99;5u";
@@ -44,7 +44,7 @@ describe("sumocode RPC Ctrl-C semantics", () => {
 		app = await bootRpcHost("sumocode-rpc-ctrl-c-agent-");
 
 		app.sendInput("draft-before-clear");
-		await app.waitForOutput("draft-before-clear", 5_000);
+		await waitForScreenText(app, "draft-before-clear", 5_000);
 
 		app.sendInput(CTRL_C);
 		await waitForScreen(
@@ -71,7 +71,7 @@ describe("sumocode RPC Ctrl-C semantics", () => {
 		app = await bootRpcHost("sumocode-rpc-double-ctrl-c-agent-");
 
 		app.sendInput(CTRL_C);
-		await app.waitForOutput("press ctrl-c again to quit", 5_000);
+		await waitForScreenText(app, "press ctrl-c again to quit", 5_000);
 		app.sendInput(CTRL_C);
 		await app.waitForOutput(TERMINAL_CLEANUP_SEQUENCE, 5_000);
 
@@ -89,19 +89,19 @@ describe("sumocode RPC Ctrl-C semantics", () => {
 		app = await bootRpcHostWithPiFixture("sumocode-rpc-streaming-agent-", piBin);
 
 		app.sendInput(`hold this streaming response${CSI_U_ENTER}`);
-		await app.waitForOutput("MEDITATING", 5_000);
-		await app.waitForOutput("streaming fixture response", 5_000);
+		await waitForScreenText(app, "MEDITATING", 5_000);
+		await waitForScreenText(app, "streaming fixture response", 5_000);
 
 		app.sendInput(CTRL_C);
-		await app.waitForOutput("aborted by fixture", 5_000);
+		await waitForScreenText(app, "aborted by fixture", 5_000);
 
 		app.sendInput(`second prompt after abort${CSI_U_ENTER}`);
-		await app.waitForOutput("fixture response complete: second prompt after abort", 5_000);
+		const completed = await waitForScreenText(app, "fixture response complete: second prompt after abort", 5_000);
 
 		const state = app.getCurrentTerminalState();
 		expect(state.altscreenActive).toBe(true);
 		expect(state.mouseSGRActive).toBe(true);
 		expect(state.cleanupSequenceSeen).toBe(false);
-		expect(app.getOutput()).toContain("fixture response complete: second prompt after abort");
+		expect(completed.text).toContain("fixture response complete: second prompt after abort");
 	}, 30_000);
 });

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { MOUSE_SGR_ENABLE_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-controller.js";
 import { createRpcChildFixture, transcriptMessages } from "./rpc-child-fixture.js";
-import { spawnSumocodePty, waitForScreen, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { spawnSumocodePty, waitForScreen, waitForScreenText, type SpawnedPiPty } from "./spawn-pi-pty.js";
 
 const CSI_U_ENTER = "\x1b[13u";
 
@@ -61,11 +61,11 @@ describe("sumocode RPC scroll-during-stream integration", () => {
 		});
 
 		await app.waitForOutput(MOUSE_SGR_ENABLE_SEQUENCE, 15_000);
-		await app.waitForOutput("history proof anchor 47", 15_000);
+		await waitForScreenText(app, "history proof anchor 47", 15_000);
 
 		// Submit a prompt and wait for the first streamed chunk to land.
 		app.sendInput(`ask about the anchors${CSI_U_ENTER}`);
-		await app.waitForOutput("streaming chunk one", 10_000);
+		await waitForScreenText(app, "streaming chunk one", 10_000);
 
 		// Scroll up while the response is still streaming. The scrolled-up
 		// state is directly observable: history rows enter the chat viewport
@@ -83,9 +83,9 @@ describe("sumocode RPC scroll-during-stream integration", () => {
 		// Wait for chunk three's on-screen sentinel: the fixture renames the
 		// session after each chunk and the session name renders in the
 		// always-visible chrome, so this observes "chunks two and three landed
-		// WHILE scrolled up" without wall-clock guessing. waitForOutput cannot
-		// help here -- while scrolled away from the streaming tail the draft
-		// rows are never painted, so chunk text never enters the byte stream.
+		// WHILE scrolled up" without wall-clock guessing. Raw-stream matching
+		// cannot help here -- while scrolled away from the streaming tail the
+		// draft rows are never painted, so chunk text never enters the byte stream.
 		const midStream = await waitForScreen(
 			app,
 			(screen) => screen.text.includes("stream-chunk-3"),

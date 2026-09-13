@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { MOUSE_SGR_ENABLE_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-controller.js";
 import { createRpcChildFixture, transcriptMessages } from "./rpc-child-fixture.js";
-import { replayScreenRows, spawnSumocodePty, waitForScreen, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { spawnSumocodePty, waitForScreen, waitForScreenText, type SpawnedPiPty } from "./spawn-pi-pty.js";
 
 let app: SpawnedPiPty | undefined;
 
@@ -47,11 +47,9 @@ describe("sumocode RPC mouse scroll integration", () => {
 		});
 
 		await app.waitForOutput(MOUSE_SGR_ENABLE_SEQUENCE, 15_000);
-		await app.waitForOutput("scroll proof anchor 47", 15_000);
+		await waitForScreenText(app, "scroll proof anchor 47", 15_000);
 		app.sendInput("draft-after-scroll");
-		await app.waitForOutput("draft-after-scroll", 5_000);
-
-		const beforeRows = await replayScreenRows(app.getOutput(), cols, rows);
+		const beforeRows = (await waitForScreenText(app, "draft-after-scroll", 5_000)).rows;
 		const beforeAnchors = visibleScrollAnchors(beforeRows);
 		const beforeBottomAnchor = Math.max(...beforeAnchors);
 		expect(beforeAnchors).toContain(47);

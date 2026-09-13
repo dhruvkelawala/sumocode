@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { MOUSE_SGR_ENABLE_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-controller.js";
 import { createRpcChildFixture, transcriptMessages } from "./rpc-child-fixture.js";
-import { replayScreenRows, spawnSumocodePty, waitForScreen, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { spawnSumocodePty, waitForScreen, waitForScreenText, type SpawnedPiPty } from "./spawn-pi-pty.js";
 
 // oxlint-disable-next-line no-control-regex -- intentional ESC/control-byte match to strip ANSI in captured output
 const OSC52_PATTERN = /\x1b\]52;c;/;
@@ -55,9 +55,7 @@ describe("sumocode RPC mouse drag-select + OSC52 clipboard", () => {
 		});
 
 		await app.waitForOutput(MOUSE_SGR_ENABLE_SEQUENCE, 15_000);
-		await app.waitForOutput("select proof anchor 05", 15_000);
-
-		const rowsBefore = await replayScreenRows(app.getOutput(), cols, rows);
+		const rowsBefore = (await waitForScreenText(app, "select proof anchor 05", 15_000)).rows;
 		const anchor = findAnchor(rowsBefore, "select proof anchor 05");
 		const start = { row: anchor.row, col: anchor.col };
 		const end = { row: anchor.row, col: anchor.col + "select proof anchor 05".length - 1 };

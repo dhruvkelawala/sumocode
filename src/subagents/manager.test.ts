@@ -14,9 +14,6 @@ type FakeSpawnedChild = {
 };
 
 const makeTask = (title: string): SpawnSubagentTask => ({ title, prompt: `prompt ${title}`, cwd: "/tmp" });
-const subagentId = (sequence: number): string => `sa-${sequence}`;
-const firstQueuedId = subagentId(SUBAGENT_MAX_RUNNING + 1);
-const secondQueuedId = subagentId(SUBAGENT_MAX_RUNNING + 2);
 const fakeManifestBuilder = async (options: Parameters<NonNullable<import("./manager.js").SubagentManagerDependencies["buildCompletionManifest"]>>[0]) => ({
 	baseRef: options.baseRef,
 	headRef: options.baseRef,
@@ -48,6 +45,24 @@ const deferredBackend = () => {
 };
 
 describe("SubagentManager", () => {
+	it("allocates readable slug ids with an optional 4-char retention namespace suffix", async () => {
+		const plain = deferredBackend();
+		try {
+			const one = await plain.manager.spawn(makeTask("issue-to-pr-426"));
+			const two = await plain.manager.spawn(makeTask("issue-to-pr-426"));
+			expect(one).toMatchObject({ id: "sa-issue-to-pr-426-1" });
+			expect(two).toMatchObject({ id: "sa-issue-to-pr-426-2" });
+		} finally { plain.manager.disposeAll(); }
+
+		const retained = new SubagentManager(() => ({ events: () => undefined, interrupt: () => undefined }), {
+			idNamespace: "a1b2", captureGitContext: async () => ({ baseRef: "base-ref" }),
+		});
+		try {
+			await expect(retained.spawn(makeTask("issue-to-pr-426"))).resolves.toMatchObject({ id: "sa-issue-to-pr-426-1-a1b2" });
+			await expect(retained.spawn(makeTask("Fix: the Widget!"))).resolves.toMatchObject({ id: "sa-fix-the-widget-2-a1b2" });
+		} finally { retained.disposeAll(); }
+	});
+
 	it("launches an asynchronous backend with the captured worktree identity", async () => {
 		const launch = vi.fn(async () => ({ events: () => undefined, interrupt: () => undefined }));
 		const manager = new SubagentManager(launch, {
@@ -96,13 +111,13 @@ describe("SubagentManager", () => {
 		try {
 			await manager.spawn({ ...makeTask("visible"), visible: true });
 			await vi.advanceTimersByTimeAsync(120_000);
-			expect(manager.get("sa-1")).toMatchObject({ health: "quiet", liveness: "unknown", lastProgressAt: null });
+			expect(manager.get("sa-visible-1")).toMatchObject({ health: "quiet", liveness: "unknown", lastProgressAt: null });
 			emit({ kind: "heartbeat", at: Date.now() });
-			expect(manager.get("sa-1")).toMatchObject({ health: "active", lastHeartbeatAt: Date.now(), lastProgressAt: null, liveness: "unknown" });
+			expect(manager.get("sa-visible-1")).toMatchObject({ health: "active", lastHeartbeatAt: Date.now(), lastProgressAt: null, liveness: "unknown" });
 			await vi.advanceTimersByTimeAsync(120_000);
-			expect(manager.get("sa-1")?.health).toBe("stalled-warning");
+			expect(manager.get("sa-visible-1")?.health).toBe("stalled-warning");
 			emit({ kind: "heartbeat", at: Date.now() });
-			expect(manager.get("sa-1")?.health).toBe("active");
+			expect(manager.get("sa-visible-1")?.health).toBe("active");
 			expect(interrupt).not.toHaveBeenCalled();
 			expect(requestClose).not.toHaveBeenCalled();
 		} finally { manager.disposeAll(); vi.useRealTimers(); }
@@ -115,12 +130,12 @@ describe("SubagentManager", () => {
 			const listener = vi.fn();
 			manager.addChangeListener(listener);
 			await vi.advanceTimersByTimeAsync(1000);
-			expect(manager.get("sa-1")).toMatchObject({ status: "running", health: "over-budget-warning", elapsedMs: 1000, warnings: ["wall-time"] });
+			expect(manager.get("sa-budget-1")).toMatchObject({ status: "running", health: "over-budget-warning", elapsedMs: 1000, warnings: ["wall-time"] });
 			expect(listener).toHaveBeenCalledTimes(1);
 			await vi.advanceTimersByTimeAsync(1000);
 			expect(listener).toHaveBeenCalledTimes(1);
-			expect(interrupts.get("sa-1")).not.toHaveBeenCalled();
-			emitters.get("sa-1")!({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+			expect(interrupts.get("sa-budget-1")).not.toHaveBeenCalled();
+			emitters.get("sa-budget-1")!({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
 			await vi.advanceTimersByTimeAsync(0);
 			expect(vi.getTimerCount()).toBe(0);
 		} finally { manager.disposeAll(); vi.useRealTimers(); }
@@ -147,17 +162,17 @@ describe("SubagentManager", () => {
 		const { manager, emitters } = deferredBackend();
 		try {
 			await manager.spawn(makeTask("progress"));
-			const emit = emitters.get("sa-1")!;
+			const emit = emitters.get("sa-progress-1")!;
 			await vi.advanceTimersByTimeAsync(120_000);
-			expect(manager.get("sa-1")?.health).toBe("stalled-warning");
+			expect(manager.get("sa-progress-1")?.health).toBe("stalled-warning");
 			emit({ kind: "tool-start", toolId: "tool", name: "read" });
-			expect(manager.get("sa-1")?.health).toBe("active");
+			expect(manager.get("sa-progress-1")?.health).toBe("active");
 			await vi.advanceTimersByTimeAsync(299_000);
-			expect(manager.get("sa-1")?.health).toBe("quiet");
+			expect(manager.get("sa-progress-1")?.health).toBe("quiet");
 			await vi.advanceTimersByTimeAsync(1000);
-			expect(manager.get("sa-1")?.health).toBe("stalled-warning");
+			expect(manager.get("sa-progress-1")?.health).toBe("stalled-warning");
 			emit({ kind: "tool-end", toolId: "tool", name: "read", isError: false });
-			expect(manager.get("sa-1")).toMatchObject({ health: "active", lastProgressAt: Date.now(), liveness: "unknown" });
+			expect(manager.get("sa-progress-1")).toMatchObject({ health: "active", lastProgressAt: Date.now(), liveness: "unknown" });
 		} finally { manager.disposeAll(); vi.useRealTimers(); }
 	});
 
@@ -165,11 +180,11 @@ describe("SubagentManager", () => {
 		const { manager, emitters } = deferredBackend();
 		try {
 			await manager.spawn({ ...makeTask("usage"), budget: { tokens: 100, costUsd: 1 } });
-			const emit = emitters.get("sa-1")!;
+			const emit = emitters.get("sa-usage-1")!;
 			emit({ kind: "usage", tokens: 60, costUsd: 0.6 });
 			emit({ kind: "usage" });
 			emit({ kind: "usage", tokens: 40, costUsd: 0.4 });
-			expect(manager.get("sa-1")).toMatchObject({ health: "over-budget-warning", warnings: ["tokens", "cost"], usage: { tokens: 40, costUsd: 0.4, reportedTokens: 100, reportedCostUsd: 1 } });
+			expect(manager.get("sa-usage-1")).toMatchObject({ health: "over-budget-warning", warnings: ["tokens", "cost"], usage: { tokens: 40, costUsd: 0.4, reportedTokens: 100, reportedCostUsd: 1 } });
 		} finally { manager.disposeAll(); }
 	});
 
@@ -181,9 +196,9 @@ describe("SubagentManager", () => {
 
 	it(`queues spawn ${SUBAGENT_MAX_RUNNING + 1} instead of refusing it`, async () => {
 		const { manager } = deferredBackend();
-		for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await expect(manager.spawn(makeTask(`${index}`))).resolves.toMatchObject({ id: subagentId(index + 1) });
+		for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await expect(manager.spawn(makeTask(`${index}`))).resolves.toMatchObject({ id: `sa-${index}-${index + 1}` });
 		const queued = await manager.spawn(makeTask("queued"));
-		expect(queued).toMatchObject({ id: firstQueuedId, status: "queued", baseRef: "HEAD" });
+		expect(queued).toMatchObject({ id: "sa-queued-11", status: "queued", baseRef: "HEAD" });
 		expect(manager.list()).toHaveLength(SUBAGENT_MAX_RUNNING + 1);
 	});
 
@@ -199,7 +214,7 @@ describe("SubagentManager", () => {
 
 		const queued = await manager.spawn(makeTask("queued"));
 
-		expect(queued).toMatchObject({ id: firstQueuedId, status: "queued" });
+		expect(queued).toMatchObject({ id: "sa-queued-11", status: "queued" });
 		expect(captureGitContext).toHaveBeenCalledTimes(SUBAGENT_MAX_RUNNING);
 		releaseCapture();
 		await Promise.all(pending);
@@ -209,7 +224,7 @@ describe("SubagentManager", () => {
 		let releaseCapture = (): void => undefined;
 		const captureGate = new Promise<void>((resolve) => { releaseCapture = resolve; });
 		const starts = vi.fn((task: SpawnSubagentTask & { id: string }) => {
-			if (task.id === "sa-1") throw new Error("setup failed");
+			if (task.id === "sa-pending-0-1") throw new Error("setup failed");
 			return { events: () => undefined, interrupt: () => undefined };
 		});
 		const manager = new SubagentManager(starts, {
@@ -221,12 +236,12 @@ describe("SubagentManager", () => {
 		const pending = Array.from({ length: SUBAGENT_MAX_RUNNING }, (_, index) => manager.spawn(makeTask(`pending-${index}`)));
 		await vi.waitFor(() => expect(manager.list()).toHaveLength(0));
 		const queued = await manager.spawn(makeTask("queued"));
-		expect(queued).toMatchObject({ id: firstQueuedId, status: "queued" });
+		expect(queued).toMatchObject({ id: "sa-queued-11", status: "queued" });
 
 		releaseCapture();
 		await Promise.all(pending);
-		await vi.waitFor(() => expect(manager.get(firstQueuedId)?.status).toBe("running"));
-		expect(starts.mock.calls.filter(([task]) => task.id === firstQueuedId)).toHaveLength(1);
+		await vi.waitFor(() => expect(manager.get("sa-queued-11")?.status).toBe("running"));
+		expect(starts.mock.calls.filter(([task]) => task.id === "sa-queued-11")).toHaveLength(1);
 	});
 
 	it("prevents an in-flight setup from launching a child after shutdown", async () => {
@@ -270,14 +285,14 @@ describe("SubagentManager", () => {
 		blockSetup = true;
 		await manager.spawn(makeTask("queued"));
 
-		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		emitters.get("sa-running-0-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
 		await vi.waitFor(() => expect(captureGitContext).toHaveBeenCalledTimes(SUBAGENT_MAX_RUNNING + 1));
-		await expect(manager.cancel([firstQueuedId])).resolves.toEqual([`Cancelled ${firstQueuedId}`]);
+		await expect(manager.cancel(["sa-queued-11"])).resolves.toEqual([`Cancelled ${"sa-queued-11"}`]);
 		releaseCapture();
 
-		await vi.waitFor(() => expect(manager.get(firstQueuedId)?.status).toBe("error"));
-		expect(manager.get(firstQueuedId)).toMatchObject({ errorText: "interrupted", manifest: { exit: "interrupted" } });
-		expect(backendFactory.mock.calls.some(([task]) => task.id === firstQueuedId)).toBe(false);
+		await vi.waitFor(() => expect(manager.get("sa-queued-11")?.status).toBe("error"));
+		expect(manager.get("sa-queued-11")).toMatchObject({ errorText: "interrupted", manifest: { exit: "interrupted" } });
+		expect(backendFactory.mock.calls.some(([task]) => task.id === "sa-queued-11")).toBe(false);
 	});
 
 	it("starts queued tasks in fifo order as running slots free", async () => {
@@ -286,12 +301,12 @@ describe("SubagentManager", () => {
 		await manager.spawn(makeTask("first queued"));
 		await manager.spawn(makeTask("second queued"));
 
-		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
-		await vi.waitFor(() => expect(manager.get(firstQueuedId)?.status).toBe("running"));
-		expect(manager.get(secondQueuedId)?.status).toBe("queued");
+		emitters.get("sa-running-0-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-first-queued-11")?.status).toBe("running"));
+		expect(manager.get("sa-second-queued-12")?.status).toBe("queued");
 
-		emitters.get("sa-2")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
-		await vi.waitFor(() => expect(manager.get(secondQueuedId)?.status).toBe("running"));
+		emitters.get("sa-running-1-2")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-second-queued-12")?.status).toBe("running"));
 	});
 
 	it("cancels a queued task without starting a child", async () => {
@@ -299,12 +314,12 @@ describe("SubagentManager", () => {
 		for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await manager.spawn(makeTask(`running-${index}`));
 		await manager.spawn(makeTask("queued"));
 
-		await expect(manager.cancel([firstQueuedId])).resolves.toEqual([`Cancelled ${firstQueuedId}`]);
-		expect(manager.get(firstQueuedId)).toMatchObject({ status: "error", errorText: "interrupted", manifest: { exit: "interrupted" } });
-		expect(interrupts.has(firstQueuedId)).toBe(false);
-		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
-		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
-		expect(interrupts.has(firstQueuedId)).toBe(false);
+		await expect(manager.cancel(["sa-queued-11"])).resolves.toEqual([`Cancelled ${"sa-queued-11"}`]);
+		expect(manager.get("sa-queued-11")).toMatchObject({ status: "error", errorText: "interrupted", manifest: { exit: "interrupted" } });
+		expect(interrupts.has("sa-queued-11")).toBe(false);
+		emitters.get("sa-running-0-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-running-0-1")?.status).toBe("done"));
+		expect(interrupts.has("sa-queued-11")).toBe(false);
 	});
 
 	it("returns at_capacity only after every queue slot is filled", async () => {
@@ -312,7 +327,7 @@ describe("SubagentManager", () => {
 		const acceptedCount = SUBAGENT_MAX_RUNNING + SUBAGENT_MAX_QUEUED;
 		for (let index = 0; index < acceptedCount; index += 1) {
 			const spawned = await manager.spawn(makeTask(`${index}`));
-			expect(spawned).toMatchObject({ id: subagentId(index + 1), status: index < SUBAGENT_MAX_RUNNING ? "running" : "queued" });
+			expect(spawned).toMatchObject({ id: `sa-${index}-${index + 1}`, status: index < SUBAGENT_MAX_RUNNING ? "running" : "queued" });
 		}
 		const over = await manager.spawn(makeTask("over"));
 		expect(over).toMatchObject({ status: "at_capacity", runningCount: SUBAGENT_MAX_RUNNING });
@@ -333,11 +348,11 @@ describe("SubagentManager", () => {
 		for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await manager.spawn(makeTask(`running-${index}`));
 		await manager.spawn(makeTask("queued"));
 
-		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
-		emitters.get("sa-2")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		emitters.get("sa-running-0-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		emitters.get("sa-running-1-2")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
 
-		await vi.waitFor(() => expect(manager.get(firstQueuedId)?.status).toBe("running"));
-		expect(starts.mock.calls.filter(([task]) => task.id === firstQueuedId)).toHaveLength(1);
+		await vi.waitFor(() => expect(manager.get("sa-queued-11")?.status).toBe("running"));
+		expect(starts.mock.calls.filter(([task]) => task.id === "sa-queued-11")).toHaveLength(1);
 	});
 
 	it("frees capacity while a settled child manifest is still collecting", async () => {
@@ -352,13 +367,13 @@ describe("SubagentManager", () => {
 			buildCompletionManifest: async () => manifestPromise,
 		});
 		for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await manager.spawn(makeTask(`${index}`));
-		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		emitters.get("sa-0-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
 
 		const replacement = await manager.spawn(makeTask("replacement"));
 
-		expect(replacement).toMatchObject({ id: firstQueuedId, status: "running" });
+		expect(replacement).toMatchObject({ id: "sa-replacement-11", status: "running" });
 		resolveManifest({ baseRef: "base-ref", changedPaths: [], dirty: false, commits: 0, exit: "completed", durationMs: 1 });
-		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
+		await vi.waitFor(() => expect(manager.get("sa-0-1")?.status).toBe("done"));
 	});
 
 	it("contains async iterator rejection", async () => {
@@ -371,8 +386,8 @@ describe("SubagentManager", () => {
 			const manager = new SubagentManager((task) => ({
 				events: (async function* (): AsyncGenerator<SubagentEvent> {
 					yield { kind: "assistant-delta", delta: "partial" };
-					if (task.id === "sa-1") throw new Error("event stream failed");
-					if (task.id === "sa-2") {
+					if (task.id === "sa-worker-0-1") throw new Error("event stream failed");
+					if (task.id === "sa-worker-1-2") {
 						yield { kind: "run-settled", outcome: { kind: "completed", finalText: "complete" } };
 						await new Promise<void>((resolve) => setTimeout(resolve, 0));
 						throw new Error("late event stream failure");
@@ -387,17 +402,17 @@ describe("SubagentManager", () => {
 			}), { captureGitContext: async () => ({ baseRef: "base-ref" }), buildCompletionManifest: fakeManifestBuilder });
 
 			for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await manager.spawn(makeTask(`worker-${index}`));
-			await vi.waitFor(() => expect(manager.get("sa-1")).toMatchObject({
+			await vi.waitFor(() => expect(manager.get("sa-worker-0-1")).toMatchObject({
 				status: "error",
 				errorText: "subagent event stream failed: event stream failed",
 				finalText: "partial",
 			}));
-			await vi.waitFor(() => expect(manager.get("sa-2")).toMatchObject({ status: "done", finalText: "complete" }));
-			expect(interrupts.get("sa-1")).toHaveBeenCalledOnce();
-			expect(interrupts.get("sa-2")).not.toHaveBeenCalled();
+			await vi.waitFor(() => expect(manager.get("sa-worker-1-2")).toMatchObject({ status: "done", finalText: "complete" }));
+			expect(interrupts.get("sa-worker-0-1")).toHaveBeenCalledOnce();
+			expect(interrupts.get("sa-worker-1-2")).not.toHaveBeenCalled();
 
-			await expect(manager.spawn(makeTask("replacement"))).resolves.toMatchObject({ id: firstQueuedId, status: "running" });
-			await expect(manager.cancel(["sa-1"])).resolves.toEqual(["sa-1 was already settled"]);
+			await expect(manager.spawn(makeTask("replacement"))).resolves.toMatchObject({ id: "sa-replacement-11", status: "running" });
+			await expect(manager.cancel(["sa-worker-0-1"])).resolves.toEqual(["sa-worker-0-1 was already settled"]);
 			await Promise.resolve();
 			expect(unhandled).toEqual([]);
 		} finally {
@@ -408,40 +423,40 @@ describe("SubagentManager", () => {
 	it("folds events into immutable snapshots", async () => {
 		const { manager, emitters } = deferredBackend();
 		const spawned = await manager.spawn(makeTask("fold"));
-		expect(spawned).toMatchObject({ id: "sa-1" });
-		emitters.get("sa-1")?.({ kind: "assistant-delta", delta: "hi" });
-		expect(manager.get("sa-1")?.liveText).toBe("hi");
-		emitters.get("sa-1")?.({ kind: "message-end", role: "assistant", text: "hi done" });
-		expect(manager.get("sa-1")?.liveText).toBe("");
-		expect(manager.get("sa-1")?.finalText).toBe("hi done");
-		expect(manager.get("sa-1")?.usage.turns).toBe(1);
-		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "hi done" } });
-		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
+		expect(spawned).toMatchObject({ id: "sa-fold-1" });
+		emitters.get("sa-fold-1")?.({ kind: "assistant-delta", delta: "hi" });
+		expect(manager.get("sa-fold-1")?.liveText).toBe("hi");
+		emitters.get("sa-fold-1")?.({ kind: "message-end", role: "assistant", text: "hi done" });
+		expect(manager.get("sa-fold-1")?.liveText).toBe("");
+		expect(manager.get("sa-fold-1")?.finalText).toBe("hi done");
+		expect(manager.get("sa-fold-1")?.usage.turns).toBe(1);
+		emitters.get("sa-fold-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "hi done" } });
+		await vi.waitFor(() => expect(manager.get("sa-fold-1")?.status).toBe("done"));
 	});
 
 	it("waitFor resolves settled snapshots and marks them consumed", async () => {
 		const { manager, emitters } = deferredBackend();
 		await manager.spawn(makeTask("wait"));
 		const pending: string[][] = [];
-		const wait = manager.waitFor(["sa-1"], undefined, (snapshots) => pending.push(snapshots.map((snapshot) => snapshot.id)));
-		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
-		await expect(wait).resolves.toMatchObject([{ id: "sa-1", status: "done" }]);
-		expect(pending).toEqual([["sa-1"]]);
-		expect(manager.consumedIds.has("sa-1")).toBe(true);
+		const wait = manager.waitFor(["sa-wait-1"], undefined, (snapshots) => pending.push(snapshots.map((snapshot) => snapshot.id)));
+		emitters.get("sa-wait-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await expect(wait).resolves.toMatchObject([{ id: "sa-wait-1", status: "done" }]);
+		expect(pending).toEqual([["sa-wait-1"]]);
+		expect(manager.consumedIds.has("sa-wait-1")).toBe(true);
 	});
 
 	it("delivers a replacement final result without retaining or charging the replaced transcript", async () => {
 		const { manager, emitters } = deferredBackend();
 		await manager.spawn(makeTask("bounded delivery"));
 		const prior = `${"u".repeat(CHILD_RETAINED_RESULT_MAX_BYTES - Buffer.byteLength(TRUNCATED_HEAD_MARKER))}${TRUNCATED_HEAD_MARKER}`;
-		emitters.get("sa-1")?.({ kind: "message-end", role: "user", text: prior });
+		emitters.get("sa-bounded-delivery-1")?.({ kind: "message-end", role: "user", text: prior });
 		const finalText = `useful final answer${TRUNCATED_HEAD_MARKER}`;
-		emitters.get("sa-1")?.({ kind: "message-end", role: "assistant", text: finalText, replacesRetainedText: true });
-		emitters.get("sa-1")?.({ kind: "assistant-delta", delta: "later live text" });
-		emitters.get("sa-1")?.({ kind: "message-end", role: "toolResult", text: "later tool output" });
-		expect(manager.get("sa-1")).toMatchObject({ liveText: "later live text", finalText });
-		const wait = manager.waitFor(["sa-1"]);
-		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText } });
+		emitters.get("sa-bounded-delivery-1")?.({ kind: "message-end", role: "assistant", text: finalText, replacesRetainedText: true });
+		emitters.get("sa-bounded-delivery-1")?.({ kind: "assistant-delta", delta: "later live text" });
+		emitters.get("sa-bounded-delivery-1")?.({ kind: "message-end", role: "toolResult", text: "later tool output" });
+		expect(manager.get("sa-bounded-delivery-1")).toMatchObject({ liveText: "later live text", finalText });
+		const wait = manager.waitFor(["sa-bounded-delivery-1"]);
+		emitters.get("sa-bounded-delivery-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText } });
 
 		const [delivered] = await wait;
 		if (!delivered) throw new Error("missing delivered result");
@@ -458,14 +473,14 @@ describe("SubagentManager", () => {
 	it("moves a prior omission marker to the latest finalText", async () => {
 		const { manager, emitters } = deferredBackend();
 		await manager.spawn(makeTask("latest delivery"));
-		emitters.get("sa-1")?.({ kind: "message-end", role: "assistant", text: `first${TRUNCATED_HEAD_MARKER}`, replacesRetainedText: true });
-		emitters.get("sa-1")?.({ kind: "message-end", role: "user", text: "later context" });
+		emitters.get("sa-latest-delivery-1")?.({ kind: "message-end", role: "assistant", text: `first${TRUNCATED_HEAD_MARKER}`, replacesRetainedText: true });
+		emitters.get("sa-latest-delivery-1")?.({ kind: "message-end", role: "user", text: "later context" });
 		const latest = `latest useful answer${TRUNCATED_HEAD_MARKER}`;
-		emitters.get("sa-1")?.({ kind: "message-end", role: "assistant", text: latest, replacesRetainedText: true });
-		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: latest } });
+		emitters.get("sa-latest-delivery-1")?.({ kind: "message-end", role: "assistant", text: latest, replacesRetainedText: true });
+		emitters.get("sa-latest-delivery-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: latest } });
 
-		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
-		const snapshot = manager.get("sa-1");
+		await vi.waitFor(() => expect(manager.get("sa-latest-delivery-1")?.status).toBe("done"));
+		const snapshot = manager.get("sa-latest-delivery-1");
 		expect(snapshot?.finalText).toBe(latest);
 		expect(snapshot?.transcript).toMatchObject([{ role: "assistant", text: latest }]);
 		expect(snapshot?.transcript.map((item) => item.text).join("").split(TRUNCATED_HEAD_MARKER)).toHaveLength(2);
@@ -519,12 +534,12 @@ describe("SubagentManager", () => {
 		});
 		await manager.spawn(makeTask("ordering"));
 		const observedManifests: Array<CompletionManifestEvidence | undefined> = [];
-		manager.addChangeListener(() => observedManifests.push(manager.get("sa-1")?.manifest));
+		manager.addChangeListener(() => observedManifests.push(manager.get("sa-ordering-1")?.manifest));
 
 		emitFn?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
 		expect(observedManifests).toEqual([]);
 		resolveManifest({ baseRef: "base-ref", headRef: "head-ref", changedPaths: ["src/a.ts"], dirty: false, commits: 1, exit: "completed", durationMs: 10 });
-		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
+		await vi.waitFor(() => expect(manager.get("sa-ordering-1")?.status).toBe("done"));
 
 		expect(observedManifests).toEqual([expect.objectContaining({ changedPaths: ["src/a.ts"] })]);
 	});
@@ -545,7 +560,7 @@ describe("SubagentManager", () => {
 			emitFn?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
 			await vi.advanceTimersByTimeAsync(5_000);
 
-			expect(manager.get("sa-1")).toMatchObject({
+			expect(manager.get("sa-timeout-1")).toMatchObject({
 				status: "done",
 				manifest: { exit: "completed", durationMs: 0 },
 			});
@@ -557,18 +572,18 @@ describe("SubagentManager", () => {
 	it("waitFor rejects unknown ids with known id list", async () => {
 		const { manager } = deferredBackend();
 		await manager.spawn(makeTask("known"));
-		await expect(manager.waitFor(["sa-2"])).rejects.toThrow("Known ids: sa-1");
+		await expect(manager.waitFor(["sa-2"])).rejects.toThrow("Known ids: sa-known-1");
 	});
 
 	it("cancels running children and reports already-settled ids", async () => {
 		const { manager, emitters, interrupts } = deferredBackend();
 		await manager.spawn(makeTask("run"));
 		await manager.spawn(makeTask("done"));
-		emitters.get("sa-2")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
-		await vi.waitFor(() => expect(manager.get("sa-2")?.status).toBe("done"));
-		await expect(manager.cancel(["sa-1", "sa-2"])).resolves.toEqual(["Cancelled sa-1", "sa-2 was already done"]);
-		expect(interrupts.get("sa-1")).toHaveBeenCalled();
-		expect(manager.consumedIds.has("sa-1")).toBe(true);
+		emitters.get("sa-done-2")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-done-2")?.status).toBe("done"));
+		await expect(manager.cancel(["sa-run-1", "sa-done-2"])).resolves.toEqual(["Cancelled sa-run-1", "sa-done-2 was already done"]);
+		expect(interrupts.get("sa-run-1")).toHaveBeenCalled();
+		expect(manager.consumedIds.has("sa-run-1")).toBe(true);
 	});
 
 	it("does not consume a completed result while its manifest is collecting", async () => {
@@ -585,10 +600,10 @@ describe("SubagentManager", () => {
 		await manager.spawn(makeTask("completed"));
 		emitFn?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
 
-		await expect(manager.cancel(["sa-1"])).resolves.toEqual(["sa-1 was already done"]);
-		expect(manager.consumedIds.has("sa-1")).toBe(false);
+		await expect(manager.cancel(["sa-completed-1"])).resolves.toEqual(["sa-completed-1 was already done"]);
+		expect(manager.consumedIds.has("sa-completed-1")).toBe(false);
 		resolveManifest({ baseRef: "base-ref", changedPaths: [], dirty: false, commits: 0, exit: "completed", durationMs: 1 });
-		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
+		await vi.waitFor(() => expect(manager.get("sa-completed-1")?.status).toBe("done"));
 	});
 
 	it("prunes oldest settled snapshots above max tracked", async () => {
@@ -596,12 +611,12 @@ describe("SubagentManager", () => {
 		for (let index = 0; index < 65; index += 1) {
 			const result = await manager.spawn(makeTask(`${index}`));
 			expect(result).toHaveProperty("id");
-			emitters.get(`sa-${index + 1}`)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
-			await vi.waitFor(() => expect(manager.get(`sa-${index + 1}`)?.status).toBe("done"));
+			emitters.get(`sa-${index}-${index + 1}`)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+			await vi.waitFor(() => expect(manager.get(`sa-${index}-${index + 1}`)?.status).toBe("done"));
 		}
 		expect(manager.list()).toHaveLength(64);
-		expect(manager.get("sa-1")).toBeUndefined();
-		expect(manager.get("sa-65")).toBeDefined();
+		expect(manager.get("sa-0-1")).toBeUndefined();
+		expect(manager.get("sa-64-65")).toBeDefined();
 	});
 
 	it("keeps failed-close occupancy through history pruning", async () => {
@@ -630,23 +645,23 @@ describe("SubagentManager", () => {
 
 		// A visible child whose pane close failed still occupies its slot.
 		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
-		emitters.get("sa-1")?.({ kind: "run-started" });
-		emitters.get("sa-1")?.({ kind: "pane-attached", pane: { agentName: "first-worker", workspaceId: "w1", tabId: "w1:t5", paneId: "w1:p1" } });
-		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
-		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("error"));
+		emitters.get("sa-first-1")?.({ kind: "run-started" });
+		emitters.get("sa-first-1")?.({ kind: "pane-attached", pane: { agentName: "first-worker", workspaceId: "w1", tabId: "w1:t5", paneId: "w1:p1" } });
+		emitters.get("sa-first-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
+		await vi.waitFor(() => expect(manager.get("sa-first-1")?.status).toBe("error"));
 
 		// Fill history past MAX_TRACKED with settled background tasks.
 		for (let index = 0; index < 64; index += 1) {
 			await manager.spawn(makeTask(`${index + 1}`));
-			emitters.get(`sa-${index + 2}`)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+			emitters.get(`sa-${index + 1}-${index + 2}`)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
 		}
-		await vi.waitFor(() => expect(manager.list().every((snapshot) => snapshot.id === "sa-1" || snapshot.status === "done")).toBe(true));
+		await vi.waitFor(() => expect(manager.list().every((snapshot) => snapshot.id === "sa-first-1" || snapshot.status === "done")).toBe(true));
 
 		// The still-open pane's record must survive pruning: placement reads
 		// occupancy only from this.list(), so losing it after MAX_TRACKED newer
 		// tasks would undercount the tab and allow a fifth split.
-		expect(manager.get("sa-1")?.paneStillOpen).toBe(true);
-		expect(manager.get("sa-1")?.pane).toEqual({ agentName: "first-worker", workspaceId: "w1", tabId: "w1:t5", paneId: "w1:p1" });
+		expect(manager.get("sa-first-1")?.paneStillOpen).toBe(true);
+		expect(manager.get("sa-first-1")?.pane).toEqual({ agentName: "first-worker", workspaceId: "w1", tabId: "w1:t5", paneId: "w1:p1" });
 
 		await manager.spawn({ prompt: "p66", title: "next", cwd: "/repo", visible: true });
 		// The failed-close pane still counts toward w1:t5's capacity.
@@ -697,7 +712,7 @@ describe("SubagentManager", () => {
 
 		const spawned = await manager.spawn({ prompt: "p", title: "write feature", cwd: "/repo", worktree: true, baseRef: "origin/main" });
 		emitFn?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
-		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
+		await vi.waitFor(() => expect(manager.get("sa-write-feature-1")?.status).toBe("done"));
 
 		expect(createWorktree).toHaveBeenCalledWith(expect.objectContaining({ repoRoot: "/repo", baseRef: "origin/main" }));
 		expect(buildCompletionManifest).toHaveBeenCalledWith(expect.objectContaining({ baseRef: "resolved-origin-main" }));
@@ -705,7 +720,7 @@ describe("SubagentManager", () => {
 			baseRef: "resolved-origin-main",
 			worktree: { baseRef: "resolved-origin-main" },
 		});
-		expect(manager.get("sa-1")?.manifest).toMatchObject({ baseRef: "resolved-origin-main" });
+		expect(manager.get("sa-write-feature-1")?.manifest).toMatchObject({ baseRef: "resolved-origin-main" });
 	});
 
 	it("fails closed and preserves the worktree when an explicit base cannot resolve to a commit", async () => {
@@ -747,11 +762,11 @@ describe("SubagentManager", () => {
 
 		await manager.spawn({ prompt: "p", title: "write feature", cwd: "/repo", worktree: true });
 		emitFn?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
-		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
+		await vi.waitFor(() => expect(manager.get("sa-write-feature-1")?.status).toBe("done"));
 
 		expect(createWorktree).toHaveBeenCalledWith(expect.objectContaining({ baseRef: "HEAD" }));
 		expect(buildCompletionManifest).toHaveBeenCalledWith(expect.objectContaining({ baseRef: "captured-head" }));
-		expect(manager.get("sa-1")?.manifest).toMatchObject({ baseRef: "captured-head" });
+		expect(manager.get("sa-write-feature-1")?.manifest).toMatchObject({ baseRef: "captured-head" });
 	});
 
 	it("preserves the caller's subdirectory inside the worktree", async () => {
@@ -843,7 +858,7 @@ describe("SubagentManager", () => {
 
 		expect(backendTasks[0]?.placement).toEqual({ kind: "new-tab", label: "subagents" });
 		expect(backendTasks[1]?.placement).toEqual({ kind: "tab", tabId: "w1:t5", direction: "down" });
-		expect(manager.get("sa-1")?.pane?.tabId).toBe("w1:t5");
+		expect(manager.get("sa-first-1")?.pane?.tabId).toBe("w1:t5");
 	});
 
 	it("reclaims a closed visible tab before the next spawn", async () => {
@@ -877,7 +892,7 @@ describe("SubagentManager", () => {
 		await manager.close([(first as { id: string }).id]);
 		const second = await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true });
 
-		expect(second).toMatchObject({ status: "running", pane: { paneId: "w1:psa-2" } });
+		expect(second).toMatchObject({ status: "running", pane: { paneId: "w1:psa-second-2" } });
 		expect(placements).toEqual([
 			{ kind: "new-tab", label: "subagents" },
 			{ kind: "new-tab", label: "subagents" },
@@ -922,13 +937,13 @@ describe("SubagentManager", () => {
 		// deferred, so its snapshot stays "running" while the second child's
 		// run-settled folds. The second fold must still drop the generated-tab
 		// cache because the first child is no longer a live `children` entry.
-		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "first done" } });
-		emitters.get("sa-2")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "second done" } });
+		emitters.get("sa-first-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "first done" } });
+		emitters.get("sa-second-2")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "second done" } });
 
 		resolveManifest({ baseRef: "abc123", changedPaths: [], dirty: false, commits: 0, exit: "completed", durationMs: 1 });
 		await vi.waitFor(() => {
-			expect(manager.get("sa-1")?.status).toBe("done");
-			expect(manager.get("sa-2")?.status).toBe("done");
+			expect(manager.get("sa-first-1")?.status).toBe("done");
+			expect(manager.get("sa-second-2")?.status).toBe("done");
 		});
 
 		await manager.spawn({ prompt: "p3", title: "third", cwd: "/repo", visible: true });
@@ -976,7 +991,7 @@ describe("SubagentManager", () => {
 		// Settle all four together: each leaves `children` synchronously while
 		// its snapshot still reports "running" during deferred manifest
 		// collection. Placement planning must not count those freed panes.
-		for (const id of ["sa-1", "sa-2", "sa-3", "sa-4"]) {
+		for (const id of ["sa-first-1", "sa-second-2", "sa-third-3", "sa-fourth-4"]) {
 			emitters.get(id)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
 		}
 
@@ -985,8 +1000,8 @@ describe("SubagentManager", () => {
 
 		resolveManifest({ baseRef: "abc123", changedPaths: [], dirty: false, commits: 0, exit: "completed", durationMs: 1 });
 		await vi.waitFor(() => {
-			expect(manager.get("sa-1")?.status).toBe("done");
-			expect(manager.get("sa-4")?.status).toBe("done");
+			expect(manager.get("sa-first-1")?.status).toBe("done");
+			expect(manager.get("sa-fourth-4")?.status).toBe("done");
 		});
 	});
 
@@ -1006,7 +1021,7 @@ describe("SubagentManager", () => {
 				emit({ kind: "run-started" });
 				// The first two children land in one generated tab, the next two in
 				// a second; the second becomes the cached (most recent) tab.
-				const tabId = task.id === "sa-1" || task.id === "sa-2" ? "w1:t5" : "w1:t6";
+				const tabId = task.id === "sa-first-1" || task.id === "sa-second-2" ? "w1:t5" : "w1:t6";
 				emit({ kind: "pane-attached", pane: { agentName: `${task.id}-worker`, workspaceId: "w1", tabId, paneId: `w1:p${task.id}` } });
 			},
 			interrupt: () => undefined,
@@ -1025,10 +1040,10 @@ describe("SubagentManager", () => {
 
 		// Settle the cached overflow tab (w1:t6) entirely. The older generated
 		// tab (w1:t5) still holds live panes and must be reclaimed next.
-		emitters.get("sa-3")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
-		await vi.waitFor(() => expect(manager.get("sa-3")?.status).toBe("done"));
-		emitters.get("sa-4")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
-		await vi.waitFor(() => expect(manager.get("sa-4")?.status).toBe("done"));
+		emitters.get("sa-third-3")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-third-3")?.status).toBe("done"));
+		emitters.get("sa-fourth-4")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-fourth-4")?.status).toBe("done"));
 
 		await manager.spawn({ prompt: "p5", title: "fifth", cwd: "/repo", visible: true });
 		expect(placements[4]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "right" });
@@ -1049,7 +1064,7 @@ describe("SubagentManager", () => {
 				placements.push(task.placement);
 				emitters.set(task.id, emit);
 				emit({ kind: "run-started" });
-				const tabId = task.id === "sa-1" ? "w9:t1" : "w1:t5";
+				const tabId = task.id === "sa-first-1" ? "w9:t1" : "w1:t5";
 				emit({ kind: "pane-attached", pane: { agentName: `${task.id}-worker`, workspaceId: tabId.split(":")[0], tabId, paneId: `${tabId}:p` } });
 			},
 			interrupt: () => undefined,
@@ -1071,8 +1086,8 @@ describe("SubagentManager", () => {
 		]);
 
 		// Settle the shared generated tab's only child.
-		emitters.get("sa-2")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
-		await vi.waitFor(() => expect(manager.get("sa-2")?.status).toBe("done"));
+		emitters.get("sa-second-2")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-second-2")?.status).toBe("done"));
 
 		await manager.spawn({ prompt: "p3", title: "third", cwd: "/repo", visible: true });
 		// The isolated worktree workspace (w9:t1) must not be promoted to the
@@ -1109,9 +1124,9 @@ describe("SubagentManager", () => {
 			await manager.spawn({ prompt: `p-${title}`, title, cwd: "/repo", visible: true });
 		}
 
-		// sa-4's close fails: it leaves `children` but its pane is still open.
-		emitters.get("sa-4")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
-		await vi.waitFor(() => expect(manager.get("sa-4")?.status).toBe("error"));
+		// sa-fourth-4's close fails: it leaves `children` but its pane is still open.
+		emitters.get("sa-fourth-4")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
+		await vi.waitFor(() => expect(manager.get("sa-fourth-4")?.status).toBe("error"));
 
 		await manager.spawn({ prompt: "p5", title: "fifth", cwd: "/repo", visible: true });
 		// The still-open pane keeps w1:t5 at capacity, so the fifth child overflows.
@@ -1149,15 +1164,15 @@ describe("SubagentManager", () => {
 			await manager.spawn({ prompt: `p-${title}`, title, cwd: "/repo", visible: true });
 		}
 
-		// sa-4's close fails while its manifest collection stays in flight.
-		emitters.get("sa-4")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
+		// sa-fourth-4's close fails while its manifest collection stays in flight.
+		emitters.get("sa-fourth-4")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
 
 		await manager.spawn({ prompt: "p5", title: "fifth", cwd: "/repo", visible: true });
 		// The still-open pane must already count during the in-flight settle.
 		expect(placements[4]).toEqual({ kind: "new-tab", label: "subagents 2" });
 
 		resolveManifest({ baseRef: "abc123", changedPaths: [], dirty: false, commits: 0, exit: "completed", durationMs: 1 });
-		await vi.waitFor(() => expect(manager.get("sa-4")?.status).toBe("error"));
+		await vi.waitFor(() => expect(manager.get("sa-fourth-4")?.status).toBe("error"));
 	});
 
 	it("retains a generated tab anchored by a failed-close pane", async () => {
@@ -1189,11 +1204,11 @@ describe("SubagentManager", () => {
 			await manager.spawn({ prompt: `p-${title}`, title, cwd: "/repo", visible: true });
 		}
 
-		// sa-1's close fails: its pane keeps w1:t5 alive after it settles.
-		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
-		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("error"));
-		emitters.get("sa-2")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
-		await vi.waitFor(() => expect(manager.get("sa-2")?.status).toBe("done"));
+		// sa-first-1's close fails: its pane keeps w1:t5 alive after it settles.
+		emitters.get("sa-first-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
+		await vi.waitFor(() => expect(manager.get("sa-first-1")?.status).toBe("error"));
+		emitters.get("sa-second-2")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-second-2")?.status).toBe("done"));
 
 		await manager.spawn({ prompt: "p3", title: "third", cwd: "/repo", visible: true });
 		// The failed-close pane keeps w1:t5 alive, so the cache must stay and the
@@ -1229,7 +1244,7 @@ describe("SubagentManager", () => {
 		expect(placements[0]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "right" });
 		// Provisioning failed after a split whose cleanup also failed: the pane is
 		// still open even though no pane-attached event ever fired.
-		emitters.get("sa-1")?.({
+		emitters.get("sa-first-1")?.({
 			kind: "run-settled",
 			outcome: {
 				kind: "failed",
@@ -1239,10 +1254,10 @@ describe("SubagentManager", () => {
 				orphanPane: { agentName: "first-worker", workspaceId: "w1", tabId: "w1:t5", paneId: "w1:p9" },
 			},
 		});
-		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("error"));
+		await vi.waitFor(() => expect(manager.get("sa-first-1")?.status).toBe("error"));
 
-		expect(manager.get("sa-1")?.pane).toEqual({ agentName: "first-worker", workspaceId: "w1", tabId: "w1:t5", paneId: "w1:p9" });
-		expect(manager.get("sa-1")?.paneStillOpen).toBe(true);
+		expect(manager.get("sa-first-1")?.pane).toEqual({ agentName: "first-worker", workspaceId: "w1", tabId: "w1:t5", paneId: "w1:p9" });
+		expect(manager.get("sa-first-1")?.paneStillOpen).toBe(true);
 		await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true });
 		// The orphan occupies w1:t5, so the cache stays and the slot counts.
 		expect(placements[1]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "down" });
@@ -1275,8 +1290,8 @@ describe("SubagentManager", () => {
 		// Fill the caller tab so the fifth spawn plans a generated tab.
 		for (const [index, title] of ["first", "second", "third", "fourth"].entries()) {
 			await manager.spawn({ prompt: `p${index + 1}`, title, cwd: "/repo", visible: true });
-			emitters.get(`sa-${index + 1}`)?.({ kind: "run-started" });
-			emitters.get(`sa-${index + 1}`)?.({ kind: "pane-attached", pane: { agentName: `sa-${index + 1}-worker`, workspaceId: "w1", tabId: "w1:t5", paneId: `w1:p${index + 1}` } });
+			emitters.get(`sa-${title}-${index + 1}`)?.({ kind: "run-started" });
+			emitters.get(`sa-${title}-${index + 1}`)?.({ kind: "pane-attached", pane: { agentName: `sa-${title}-${index + 1}-worker`, workspaceId: "w1", tabId: "w1:t5", paneId: `w1:p${index + 1}` } });
 		}
 		expect(placements).toEqual([
 			{ kind: "tab", tabId: "w1:t5", direction: "right" },
@@ -1290,7 +1305,7 @@ describe("SubagentManager", () => {
 		// Provisioning failed after the generated tab was created: the pane run
 		// and its cleanup both failed, so the host reports the orphan pane and
 		// the tab that keeps it alive.
-		emitters.get("sa-5")?.({
+		emitters.get("sa-fifth-5")?.({
 			kind: "run-settled",
 			outcome: {
 				kind: "failed",
@@ -1300,7 +1315,7 @@ describe("SubagentManager", () => {
 				orphanPane: { agentName: "fifth-worker", workspaceId: "w1", tabId: "w1:t8", paneId: "w1:p8" },
 			},
 		});
-		await vi.waitFor(() => expect(manager.get("sa-5")?.status).toBe("error"));
+		await vi.waitFor(() => expect(manager.get("sa-fifth-5")?.status).toBe("error"));
 
 		await manager.spawn({ prompt: "p6", title: "sixth", cwd: "/repo", visible: true });
 		// The surviving generated tab has three free slots, so the cache must
@@ -1337,13 +1352,13 @@ describe("SubagentManager", () => {
 		// placement asserts read naturally.
 		for (let index = 1; index <= 8; index += 1) {
 			await manager.spawn({ prompt: `p${index}`, title: `child-${index}`, cwd: "/repo", visible: true });
-			emitters.get(`sa-${index}`)?.({ kind: "run-started" });
-			emitters.get(`sa-${index}`)?.({ kind: "pane-attached", pane: { agentName: `sa-${index}-worker`, workspaceId: "w1", tabId: index <= 4 ? "w1:t5" : "w1:t6", paneId: `w1:p${index}` } });
+			emitters.get(`sa-child-${index}-${index}`)?.({ kind: "run-started" });
+			emitters.get(`sa-child-${index}-${index}`)?.({ kind: "pane-attached", pane: { agentName: `sa-child-${index}-${index}-worker`, workspaceId: "w1", tabId: index <= 4 ? "w1:t5" : "w1:t6", paneId: `w1:p${index}` } });
 		}
 		expect(placements[4]).toEqual({ kind: "new-tab", label: "subagents 2" });
 		// The cached overflow tab is full, but the caller tab lost a child.
-		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
-		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
+		emitters.get("sa-child-1-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-child-1-1")?.status).toBe("done"));
 
 		await manager.spawn({ prompt: "p9", title: "ninth", cwd: "/repo", visible: true });
 		// The caller tab's free slot must be reclaimed instead of provisioning
@@ -1379,15 +1394,15 @@ describe("SubagentManager", () => {
 		// tab that becomes the cache.
 		for (let index = 1; index <= 8; index += 1) {
 			await manager.spawn({ prompt: `p${index}`, title: `child-${index}`, cwd: "/repo", visible: true });
-			emitters.get(`sa-${index}`)?.({ kind: "run-started" });
-			emitters.get(`sa-${index}`)?.({ kind: "pane-attached", pane: { agentName: `sa-${index}-worker`, workspaceId: "w1", tabId: index <= 4 ? "w1:t5" : "w1:t6", paneId: `w1:p${index}` } });
+			emitters.get(`sa-child-${index}-${index}`)?.({ kind: "run-started" });
+			emitters.get(`sa-child-${index}-${index}`)?.({ kind: "pane-attached", pane: { agentName: `sa-child-${index}-${index}-worker`, workspaceId: "w1", tabId: index <= 4 ? "w1:t5" : "w1:t6", paneId: `w1:p${index}` } });
 		}
 		// Every child exits the caller tab, but the tab itself survives: it
 		// still holds the parent session pane.
 		for (let index = 1; index <= 4; index += 1) {
-			emitters.get(`sa-${index}`)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+			emitters.get(`sa-child-${index}-${index}`)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
 		}
-		await vi.waitFor(() => expect(["sa-1", "sa-2", "sa-3", "sa-4"].every((id) => manager.get(id)?.status === "done")).toBe(true));
+		await vi.waitFor(() => expect(["sa-child-1-1", "sa-child-2-2", "sa-child-3-3", "sa-child-4-4"].every((id) => manager.get(id)?.status === "done")).toBe(true));
 
 		await manager.spawn({ prompt: "p9", title: "ninth", cwd: "/repo", visible: true });
 		// The cached overflow tab is full and no live child pane remains
@@ -1409,7 +1424,7 @@ describe("SubagentManager", () => {
 				placements.push(task.placement);
 				emitters.set(task.id, emit);
 				emit({ kind: "run-started" });
-				emit({ kind: "pane-attached", pane: { agentName: `${task.id}-worker`, workspaceId: "w1", tabId: task.id === "sa-5" ? "w1:t9" : "w1:t5", paneId: `w1:p${task.id}` } });
+				emit({ kind: "pane-attached", pane: { agentName: `${task.id}-worker`, workspaceId: "w1", tabId: task.id === "sa-fifth-5" ? "w1:t9" : "w1:t5", paneId: `w1:p${task.id}` } });
 			},
 			interrupt: () => undefined,
 		}), {
@@ -1423,23 +1438,23 @@ describe("SubagentManager", () => {
 		for (const title of ["first", "second", "third", "fourth"]) {
 			await manager.spawn({ prompt: `p-${title}`, title, cwd: "/repo", visible: true });
 		}
-		// sa-5 overflows into a fresh tab and the cache follows its pane.
+		// sa-fifth-5 overflows into a fresh tab and the cache follows its pane.
 		await manager.spawn({ prompt: "p5", title: "fifth", cwd: "/repo", visible: true });
 		expect(placements[4]).toEqual({ kind: "new-tab", label: "subagents 2" });
 		await manager.spawn({ prompt: "p6", title: "sixth", cwd: "/repo", visible: true });
 		expect(placements[5]).toEqual({ kind: "tab", tabId: "w1:t9", direction: "down" });
 
-		for (const id of ["sa-2", "sa-3", "sa-4"]) {
+		for (const id of ["sa-second-2", "sa-third-3", "sa-fourth-4"]) {
 			emitters.get(id)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
 		}
-		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
-		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("error"));
-		emitters.get("sa-5")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
-		emitters.get("sa-6")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
-		await vi.waitFor(() => expect(manager.get("sa-6")?.status).toBe("done"));
+		emitters.get("sa-first-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
+		await vi.waitFor(() => expect(manager.get("sa-first-1")?.status).toBe("error"));
+		emitters.get("sa-fifth-5")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		emitters.get("sa-sixth-6")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-sixth-6")?.status).toBe("done"));
 
 		await manager.spawn({ prompt: "p7", title: "seventh", cwd: "/repo", visible: true });
-		// w1:t9 died with its last live child, but w1:t5 still holds sa-1's
+		// w1:t9 died with its last live child, but w1:t5 still holds sa-first-1's
 		// failed-close pane; that surviving tab must become the cache.
 		expect(placements[6]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "down" });
 	});
@@ -1603,16 +1618,16 @@ describe("SubagentManager", () => {
 		// first spawn proves it with paneTabGone.
 		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
 		expect(placements[0]).toEqual({ kind: "tab", tabId: "w1:t5", direction: "right" });
-		emitters.get("sa-1")?.({ kind: "run-started" });
-		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "herdr returned no pane for tab w1:t5", paneTabGone: true } });
-		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("error"));
+		emitters.get("sa-first-1")?.({ kind: "run-started" });
+		emitters.get("sa-first-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "herdr returned no pane for tab w1:t5", paneTabGone: true } });
+		await vi.waitFor(() => expect(manager.get("sa-first-1")?.status).toBe("error"));
 
 		// The replacement generated tab fills up; the retired caller tab must
 		// not be re-selected by the vacancy fallback.
 		for (let index = 2; index <= 5; index += 1) {
 			await manager.spawn({ prompt: `p${index}`, title: `child-${index}`, cwd: "/repo", visible: true });
-			emitters.get(`sa-${index}`)?.({ kind: "run-started" });
-			emitters.get(`sa-${index}`)?.({ kind: "pane-attached", pane: { agentName: `sa-${index}-worker`, workspaceId: "w1", tabId: "w1:t9", paneId: `w1:p${index}` } });
+			emitters.get(`sa-child-${index}-${index}`)?.({ kind: "run-started" });
+			emitters.get(`sa-child-${index}-${index}`)?.({ kind: "pane-attached", pane: { agentName: `sa-child-${index}-${index}-worker`, workspaceId: "w1", tabId: "w1:t9", paneId: `w1:p${index}` } });
 		}
 		expect(placements[1]).toEqual({ kind: "new-tab", label: "subagents" });
 
@@ -1650,28 +1665,28 @@ describe("SubagentManager", () => {
 		// whose close later fails, leaving a still-open pane record there.
 		for (let index = 1; index <= 4; index += 1) {
 			await manager.spawn({ prompt: `p${index}`, title: `child-${index}`, cwd: "/repo", visible: true });
-			emitters.get(`sa-${index}`)?.({ kind: "run-started" });
-			emitters.get(`sa-${index}`)?.({ kind: "pane-attached", pane: { agentName: `sa-${index}-worker`, workspaceId: "w1", tabId: "w1:t5", paneId: `w1:p${index}` } });
+			emitters.get(`sa-child-${index}-${index}`)?.({ kind: "run-started" });
+			emitters.get(`sa-child-${index}-${index}`)?.({ kind: "pane-attached", pane: { agentName: `sa-child-${index}-${index}-worker`, workspaceId: "w1", tabId: "w1:t5", paneId: `w1:p${index}` } });
 		}
 		await manager.spawn({ prompt: "p5", title: "fifth", cwd: "/repo", visible: true });
 		expect(placements[4]).toEqual({ kind: "new-tab", label: "subagents 2" });
-		emitters.get("sa-5")?.({ kind: "run-started" });
-		emitters.get("sa-5")?.({ kind: "pane-attached", pane: { agentName: "sa-5-worker", workspaceId: "w1", tabId: "w1:t6", paneId: "w1:p5" } });
-		emitters.get("sa-5")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
-		await vi.waitFor(() => expect(manager.get("sa-5")?.status).toBe("error"));
+		emitters.get("sa-fifth-5")?.({ kind: "run-started" });
+		emitters.get("sa-fifth-5")?.({ kind: "pane-attached", pane: { agentName: "sa-fifth-5-worker", workspaceId: "w1", tabId: "w1:t6", paneId: "w1:p5" } });
+		emitters.get("sa-fifth-5")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
+		await vi.waitFor(() => expect(manager.get("sa-fifth-5")?.status).toBe("error"));
 
 		// The caller tab is full, so the vacancy scan selects w1:t6 for the next
 		// spawn. The operator has closed that pane in the meantime: the split
 		// fails pre-attach, proving the tab is gone.
 		await manager.spawn({ prompt: "p6", title: "sixth", cwd: "/repo", visible: true });
 		expect(placements[5]).toEqual({ kind: "tab", tabId: "w1:t6", direction: "down" });
-		emitters.get("sa-6")?.({ kind: "run-started" });
-		emitters.get("sa-6")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "herdr returned no pane for tab w1:t6", paneTabGone: true } });
-		await vi.waitFor(() => expect(manager.get("sa-6")?.status).toBe("error"));
+		emitters.get("sa-sixth-6")?.({ kind: "run-started" });
+		emitters.get("sa-sixth-6")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "herdr returned no pane for tab w1:t6", paneTabGone: true } });
+		await vi.waitFor(() => expect(manager.get("sa-sixth-6")?.status).toBe("error"));
 
 		// The stale record must be retired: otherwise the scan keeps selecting
 		// the dead tab and every spawn fails forever.
-		expect(manager.get("sa-5")?.paneStillOpen).toBeUndefined();
+		expect(manager.get("sa-fifth-5")?.paneStillOpen).toBeUndefined();
 		await manager.spawn({ prompt: "p7", title: "seventh", cwd: "/repo", visible: true });
 		expect(placements[6]).toEqual({ kind: "new-tab", label: "subagents 2" });
 	});
@@ -1702,24 +1717,24 @@ describe("SubagentManager", () => {
 
 		for (let index = 1; index <= 4; index += 1) {
 			await manager.spawn({ prompt: `p${index}`, title: `child-${index}`, cwd: "/repo", visible: true });
-			emitters.get(`sa-${index}`)?.({ kind: "run-started" });
-			emitters.get(`sa-${index}`)?.({ kind: "pane-attached", pane: { agentName: `sa-${index}-worker`, workspaceId: "w1", tabId: "w1:t5", paneId: `w1:p${index}` } });
+			emitters.get(`sa-child-${index}-${index}`)?.({ kind: "run-started" });
+			emitters.get(`sa-child-${index}-${index}`)?.({ kind: "pane-attached", pane: { agentName: `sa-child-${index}-${index}-worker`, workspaceId: "w1", tabId: "w1:t5", paneId: `w1:p${index}` } });
 		}
 		await manager.spawn({ prompt: "p5", title: "fifth", cwd: "/repo", visible: true });
-		emitters.get("sa-5")?.({ kind: "run-started" });
-		emitters.get("sa-5")?.({ kind: "pane-attached", pane: { agentName: "sa-5-worker", workspaceId: "w1", tabId: "w1:t6", paneId: "w1:p5" } });
-		emitters.get("sa-5")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
-		await vi.waitFor(() => expect(manager.get("sa-5")?.status).toBe("error"));
+		emitters.get("sa-fifth-5")?.({ kind: "run-started" });
+		emitters.get("sa-fifth-5")?.({ kind: "pane-attached", pane: { agentName: "sa-fifth-5-worker", workspaceId: "w1", tabId: "w1:t6", paneId: "w1:p5" } });
+		emitters.get("sa-fifth-5")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
+		await vi.waitFor(() => expect(manager.get("sa-fifth-5")?.status).toBe("error"));
 
 		// The candidate tab's split fails without proving the tab is gone (e.g.
 		// the run failed on a live tab), so the still-open record must survive.
 		await manager.spawn({ prompt: "p6", title: "sixth", cwd: "/repo", visible: true });
 		expect(placements[5]).toEqual({ kind: "tab", tabId: "w1:t6", direction: "down" });
-		emitters.get("sa-6")?.({ kind: "run-started" });
-		emitters.get("sa-6")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "herdr agent start exited 1" } });
-		await vi.waitFor(() => expect(manager.get("sa-6")?.status).toBe("error"));
+		emitters.get("sa-sixth-6")?.({ kind: "run-started" });
+		emitters.get("sa-sixth-6")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "herdr agent start exited 1" } });
+		await vi.waitFor(() => expect(manager.get("sa-sixth-6")?.status).toBe("error"));
 
-		expect(manager.get("sa-5")?.paneStillOpen).toBe(true);
+		expect(manager.get("sa-fifth-5")?.paneStillOpen).toBe(true);
 	});
 
 	it("keeps the cached generated tab when its sole child's close fails", async () => {
@@ -1747,11 +1762,11 @@ describe("SubagentManager", () => {
 		});
 
 		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
-		emitters.get("sa-1")?.({ kind: "run-started" });
+		emitters.get("sa-first-1")?.({ kind: "run-started" });
 		// The child lands in a generated tab that becomes the cache.
-		emitters.get("sa-1")?.({ kind: "pane-attached", pane: { agentName: "first-worker", workspaceId: "w1", tabId: "w1:t6", paneId: "w1:p1" } });
-		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
-		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("error"));
+		emitters.get("sa-first-1")?.({ kind: "pane-attached", pane: { agentName: "first-worker", workspaceId: "w1", tabId: "w1:t6", paneId: "w1:p1" } });
+		emitters.get("sa-first-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
+		await vi.waitFor(() => expect(manager.get("sa-first-1")?.status).toBe("error"));
 
 		await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true });
 		// The close failed, so the pane keeps w1:t6 alive and the cache must
@@ -1786,22 +1801,22 @@ describe("SubagentManager", () => {
 		});
 
 		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
-		emitters.get("sa-1")?.({ kind: "run-started" });
-		emitters.get("sa-1")?.({ kind: "pane-attached", pane: { agentName: "first-worker", workspaceId: "w1", tabId: "w1:t5", paneId: "w1:p1" } });
+		emitters.get("sa-first-1")?.({ kind: "run-started" });
+		emitters.get("sa-first-1")?.({ kind: "pane-attached", pane: { agentName: "first-worker", workspaceId: "w1", tabId: "w1:t5", paneId: "w1:p1" } });
 
 		// cancel() starts a synthetic interrupted settlement whose manifest is
 		// still collecting; the snapshot is not terminal yet.
-		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "interrupted" } });
-		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("running"));
+		emitters.get("sa-first-1")?.({ kind: "run-settled", outcome: { kind: "interrupted" } });
+		await vi.waitFor(() => expect(manager.get("sa-first-1")?.status).toBe("running"));
 
 		// The real close lands late and fails while settlement is in flight.
-		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
-		expect(manager.get("sa-1")?.paneStillOpen).toBe(true);
+		emitters.get("sa-first-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
+		expect(manager.get("sa-first-1")?.paneStillOpen).toBe(true);
 
 		// Completing the interrupted settlement must not clobber the flag.
 		resolveManifest({ baseRef: "abc123", changedPaths: [], dirty: false, commits: 0, exit: "interrupted", durationMs: 1 });
-		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("error"));
-		expect(manager.get("sa-1")?.paneStillOpen).toBe(true);
+		await vi.waitFor(() => expect(manager.get("sa-first-1")?.status).toBe("error"));
+		expect(manager.get("sa-first-1")?.paneStillOpen).toBe(true);
 
 		await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true });
 		// The still-open pane still counts toward w1:t5's capacity.
@@ -1835,24 +1850,24 @@ describe("SubagentManager", () => {
 		});
 
 		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
-		emitters.get("sa-1")?.({ kind: "run-started" });
-		emitters.get("sa-1")?.({ kind: "pane-attached", pane: { agentName: "first-worker", workspaceId: "w1", tabId: "w1:t5", paneId: "w1:p1" } });
+		emitters.get("sa-first-1")?.({ kind: "run-started" });
+		emitters.get("sa-first-1")?.({ kind: "pane-attached", pane: { agentName: "first-worker", workspaceId: "w1", tabId: "w1:t5", paneId: "w1:p1" } });
 
 		// The cancel force-settle path emits a failed settlement whose manifest
 		// is still collecting; the snapshot is not terminal yet.
-		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "cancelled after timeout" } });
-		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("running"));
+		emitters.get("sa-first-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "cancelled after timeout" } });
+		await vi.waitFor(() => expect(manager.get("sa-first-1")?.status).toBe("running"));
 
 		// The real close lands late and fails while the failed settlement is in
 		// flight; the flag is recorded immediately.
-		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
-		expect(manager.get("sa-1")?.paneStillOpen).toBe(true);
+		emitters.get("sa-first-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
+		expect(manager.get("sa-first-1")?.paneStillOpen).toBe(true);
 
 		// The in-flight settlement completes without its own paneStillOpen
 		// evidence; it must not clobber the late flag.
 		resolveManifest({ baseRef: "abc123", changedPaths: [], dirty: false, commits: 0, exit: "failed", durationMs: 1 });
-		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("error"));
-		expect(manager.get("sa-1")?.paneStillOpen).toBe(true);
+		await vi.waitFor(() => expect(manager.get("sa-first-1")?.status).toBe("error"));
+		expect(manager.get("sa-first-1")?.paneStillOpen).toBe(true);
 
 		await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true });
 		// The still-open pane still counts toward w1:t5's capacity.
@@ -1884,19 +1899,19 @@ describe("SubagentManager", () => {
 		});
 
 		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
-		emitters.get("sa-1")?.({ kind: "run-started" });
-		emitters.get("sa-1")?.({ kind: "pane-attached", pane: { agentName: "first-worker", workspaceId: "w1", tabId: "w1:t5", paneId: "w1:p1" } });
+		emitters.get("sa-first-1")?.({ kind: "run-started" });
+		emitters.get("sa-first-1")?.({ kind: "pane-attached", pane: { agentName: "first-worker", workspaceId: "w1", tabId: "w1:t5", paneId: "w1:p1" } });
 
 		// cancel() force-settles the snapshot while the backend close is still
 		// in flight; the snapshot is terminal before the real result arrives.
-		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "cancelled after timeout" } });
-		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("error"));
-		expect(manager.get("sa-1")?.paneStillOpen).toBeUndefined();
+		emitters.get("sa-first-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "cancelled after timeout" } });
+		await vi.waitFor(() => expect(manager.get("sa-first-1")?.status).toBe("error"));
+		expect(manager.get("sa-first-1")?.paneStillOpen).toBeUndefined();
 
 		// The late close fails: the pane is still open, so occupancy must be
 		// recorded even though the snapshot is already terminal.
-		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
-		expect(manager.get("sa-1")?.paneStillOpen).toBe(true);
+		emitters.get("sa-first-1")?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive", paneStillOpen: true } });
+		expect(manager.get("sa-first-1")?.paneStillOpen).toBe(true);
 
 		await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true });
 		// The still-open pane still counts toward w1:t5's capacity.
@@ -1959,7 +1974,7 @@ describe("SubagentManager", () => {
 		};
 		const manager = new SubagentManager((task) => {
 			backendTasks.push(task);
-			if (task.id === "sa-1") {
+			if (task.id === "sa-first-1") {
 				return { events: (emit) => { firstEmit = emit; emit({ kind: "run-started" }); }, ready: firstReady, interrupt: () => undefined };
 			}
 			return {
@@ -2275,28 +2290,28 @@ describe("SubagentManager steering and close", () => {
 		it("rejects unknown ids with the known id list", async () => {
 			const { manager } = steerableBackend();
 			await manager.spawn(makeTask("known"));
-			await expect(manager.sendTo("sa-9", "hi")).rejects.toThrow("Unknown subagent id: sa-9. Known ids: sa-1");
+			await expect(manager.sendTo("sa-9", "hi")).rejects.toThrow("Unknown subagent id: sa-9. Known ids: sa-known-1");
 		});
 
 		it("rejects queued children", async () => {
 			const { manager } = steerableBackend();
 			for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await manager.spawn(makeTask(`running-${index}`));
 			await manager.spawn(makeTask("queued"));
-			await expect(manager.sendTo(firstQueuedId, "hi")).rejects.toThrow(`Subagent ${firstQueuedId} is queued and cannot receive input until it starts`);
+			await expect(manager.sendTo("sa-queued-11", "hi")).rejects.toThrow(`Subagent ${"sa-queued-11"} is queued and cannot receive input until it starts`);
 		});
 
 		it("rejects settled children", async () => {
 			const { manager, emitters } = steerableBackend();
 			await manager.spawn(makeTask("done"));
-			emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
-			await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
-			await expect(manager.sendTo("sa-1", "hi")).rejects.toThrow("already settled (done)");
+			emitters.get("sa-done-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+			await vi.waitFor(() => expect(manager.get("sa-done-1")?.status).toBe("done"));
+			await expect(manager.sendTo("sa-done-1", "hi")).rejects.toThrow("already settled (done)");
 		});
 
 		it("classifies headless steering as unsupported", async () => {
 			const { manager } = deferredBackend();
 			await manager.spawn(makeTask("headless"));
-			await expect(manager.sendTo("sa-1", "hi")).resolves.toEqual({ capability: "unsupported: headless steering" });
+			await expect(manager.sendTo("sa-headless-1", "hi")).resolves.toEqual({ capability: "unsupported: headless steering" });
 		});
 
 		it("waits for the child's consumption acknowledgement and returns the snapshot", async () => {
@@ -2321,11 +2336,11 @@ describe("SubagentManager steering and close", () => {
 		it("reports unknown and already-settled ids without action", async () => {
 			const { manager, emitters } = steerableBackend();
 			await manager.spawn(makeTask("done"));
-			emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
-			await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
+			emitters.get("sa-done-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+			await vi.waitFor(() => expect(manager.get("sa-done-1")?.status).toBe("done"));
 
-			await expect(manager.close(["sa-9", "sa-1"])).resolves.toEqual(["sa-9 is unknown", "sa-1 was already done"]);
-			expect(manager.consumedIds.has("sa-1")).toBe(true);
+			await expect(manager.close(["sa-9", "sa-done-1"])).resolves.toEqual(["sa-9 is unknown", "sa-done-1 was already done"]);
+			expect(manager.consumedIds.has("sa-done-1")).toBe(true);
 			expect(manager.consumedIds.has("sa-9")).toBe(false);
 		});
 
@@ -2334,16 +2349,16 @@ describe("SubagentManager steering and close", () => {
 			for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await manager.spawn(makeTask(`running-${index}`));
 			await manager.spawn(makeTask("queued"));
 
-			await expect(manager.close([firstQueuedId])).resolves.toEqual([`Cancelled queued ${firstQueuedId}`]);
-			expect(manager.get(firstQueuedId)).toMatchObject({ status: "error", errorText: "interrupted" });
-			expect(requestCloses.has(firstQueuedId)).toBe(false);
+			await expect(manager.close(["sa-queued-11"])).resolves.toEqual([`Cancelled queued ${"sa-queued-11"}`]);
+			expect(manager.get("sa-queued-11")).toMatchObject({ status: "error", errorText: "interrupted" });
+			expect(requestCloses.has("sa-queued-11")).toBe(false);
 		});
 
 		it("reports headless running children without acting", async () => {
 			const { manager } = deferredBackend();
 			await manager.spawn(makeTask("headless"));
-			await expect(manager.close(["sa-1"])).resolves.toEqual(["sa-1 is headless — it settles on its own; use subagent_cancel to stop it"]);
-			expect(manager.get("sa-1")?.status).toBe("running");
+			await expect(manager.close(["sa-headless-1"])).resolves.toEqual(["sa-headless-1 is headless — it settles on its own; use subagent_cancel to stop it"]);
+			expect(manager.get("sa-headless-1")?.status).toBe("running");
 		});
 
 		it("closes a visible child, marks it consumed, and returns its line", async () => {

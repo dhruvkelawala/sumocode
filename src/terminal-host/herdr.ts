@@ -147,17 +147,6 @@ async function openExistingWorktreeWorkspace(
 	return runInWorktreeWorkspace(pi, workspaceId, options.shellCommand, deadline);
 }
 
-const slugAgentPrefix = (prefix: string): string => prefix
-	.toLowerCase()
-	.replace(/[^a-z0-9]+/g, "-")
-	.replace(/^-+|-+$/g, "")
-	.slice(0, 40) || "sumocode";
-
-/** Unique child label used in SumoCode snapshots and pane metadata. */
-export function uniqueHerdrAgentName(prefix = "sumocode"): string {
-	return `${slugAgentPrefix(prefix)}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-}
-
 async function listWorkspacePanes(pi: PiExecLike, workspaceId: string, timeout = 5000): Promise<HostResult<{ panes: HerdrPaneInfo[] }>> {
 	const result = await pi.exec("herdr", ["pane", "list", "--workspace", workspaceId], { timeout });
 	if (result.code !== 0) return execFailure("herdr pane list", result);
@@ -402,7 +391,6 @@ async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): P
 			}
 		}
 
-		const agentName = uniqueHerdrAgentName(options.name);
 		const paneId = target.pane.pane_id!;
 		const workspaceId = target.pane.workspace_id ?? workspaceAnchorToMove?.workspaceId;
 		// A new-tab creation can return a bare root pane whose tab id only
@@ -413,7 +401,11 @@ async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): P
 		return {
 			ok: true,
 			pane: { host: "herdr", paneId, workspaceId },
-			agentName,
+			// The caller owns subagent identity: the id is the agent name verbatim.
+			// No timestamp/random suffix and no length cap — the id's counter and
+			// retention namespace sit at the end, so truncation would strip the
+			// disambiguator.
+			agentName: options.agentName,
 			workspaceId,
 			tabId,
 			paneId,

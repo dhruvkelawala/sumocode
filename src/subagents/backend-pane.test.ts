@@ -935,7 +935,7 @@ describe("pane subagent backend", () => {
 				errorCode: "pane_unavailable",
 				errorReason: "herdr pane run exited 1; cleanup: close refused",
 				paneStillOpen: true,
-				orphanPane: { agentName: "worker", workspaceId: "w1", tabId: "w1:t1", paneId: "w1:p9" },
+				orphanPane: { agentName: "sa-1", workspaceId: "w1", tabId: "w1:t1", paneId: "w1:p9" },
 			},
 		}]);
 	});
@@ -992,6 +992,13 @@ describe("pane subagent backend", () => {
 		expect(() => spawn({ prompt: "p", name: "worker", cwd: "/repo", id: "sa-1", host: {} as never, pi: { exec: vi.fn() } as never, placement: { kind: "tab", tabId: "t", direction: "right" } })).toThrow(/task root directory/);
 		// Ownership is checked before chmod: a foreign dir must never be re-moded.
 		expect(fs.dirModes.get("/tmp/subagents")).toBe(0o755);
+	});
+
+	it("uses the subagent id for the host agent name and the private task directory", async () => {
+		const harness = createHarness();
+		await flushPromises();
+		expect(harness.host.startAgentPane).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ agentName: "sa-1" }));
+		expect(harness.fs.dirs.has("/tmp/subagents/sa-1-1234")).toBe(true);
 	});
 
 	it("fails closed when the task root is a symlinked directory", () => {

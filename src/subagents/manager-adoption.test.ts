@@ -56,7 +56,7 @@ function fixture(backend: "headless" | "visible" = "headless", worktreeResult = 
 	});
 	const worktree = worktreeResult ? { path: taskDir, repoRoot: root, branch: "sumo/child", baseRef: "HEAD" } : null;
 	const record: SubagentRecord = {
-		schemaVersion: 2, revision: 1, id: "sa-1", ownerSessionId: "origin", backend, status: "starting", taskDir,
+		schemaVersion: 2, revision: 1, id: "sa-worker-1", ownerSessionId: "origin", backend, status: "starting", taskDir,
 		child: null, supervisor: null, pane: null, worktree, sessionFilePath: null, modelLabel: null, roleId: null,
 		createdAt: 1000, updatedAt: 1000, settledAt: null, completionId: null, outcome: null,
 		delivery: { state: "none", claim: null }, result: null, manifest: null, writerLease: null, controlLease: null, controlHead: 0,
@@ -156,8 +156,8 @@ describe("durable sender delivery", () => {
 		vi.setSystemTime(61_001);
 		const next = f.install("successor");
 		await next.manager.reconstruct(f.registry, "successor");
-		expect(f.registry.get("sa-1")).toMatchObject({ status: "lost", writerLease: { generation: 2 } });
-		expect(next.manager.get("sa-1")?.recovery).toBe("lost");
+		expect(f.registry.get("sa-worker-1")).toMatchObject({ status: "lost", writerLease: { generation: 2 } });
+		expect(next.manager.get("sa-worker-1")?.recovery).toBe("lost");
 		expect(f.operations.signalTree).not.toHaveBeenCalled();
 		expect(next.delivery).not.toHaveBeenCalled();
 		next.manager.detachForReplacement();
@@ -175,11 +175,11 @@ describe("durable sender delivery", () => {
 		vi.mocked(f.operations.verificationMatches!).mockReturnValue("different");
 		const next = f.install("successor");
 		await next.manager.reconstruct(f.registry, "successor");
-		expect(next.manager.get("sa-1")).toMatchObject({ recovery: "adopted", status: "done", finalText: "answer" });
+		expect(next.manager.get("sa-worker-1")).toMatchObject({ recovery: "adopted", status: "done", finalText: "answer" });
 		expect(f.registry.inspectControl(authority)).toBe(false);
 		await next.fire("agent_end"); await next.fire("agent_end");
 		expect(next.delivery).toHaveBeenCalledTimes(1);
-		await next.manager.cancel(["sa-1"]);
+		await next.manager.cancel(["sa-worker-1"]);
 		expect(f.operations.signalTree).not.toHaveBeenCalled();
 		expectArtifacts(f);
 		next.manager.detachForReplacement();
@@ -191,14 +191,14 @@ describe("durable sender delivery", () => {
 		await f.track(old);
 		await f.finish();
 		vi.mocked(f.operations.identityMatches).mockImplementation((identity) => identity.pid === 42 ? "different" : "same");
-		expect(f.registry.get("sa-1")?.delivery).toEqual({ state: "undelivered" });
+		expect(f.registry.get("sa-worker-1")?.delivery).toEqual({ state: "undelivered" });
 		await old.fire("session_shutdown", "new");
 		const next = f.install("successor");
 		await next.fire("session_start", "new");
 		await next.fire("agent_end");
 		expect(old.delivery).not.toHaveBeenCalled();
 		expect(next.delivery).toHaveBeenCalledTimes(1);
-		expect(f.registry.get("sa-1")?.delivery).toMatchObject({ state: "sent" });
+		expect(f.registry.get("sa-worker-1")?.delivery).toMatchObject({ state: "sent" });
 		expectArtifacts(f);
 	});
 
@@ -209,9 +209,9 @@ describe("durable sender delivery", () => {
 		await f.track(old);
 		await f.finish();
 		expect(old.delivery).toHaveBeenCalledTimes(1);
-		const result = f.registry.worktreeResult("sa-1")!;
-		f.registry.setWorktreeDisposition("sa-1", result.completionId, 0, "inspected");
-		const settled = f.registry.get("sa-1")!;
+		const result = f.registry.worktreeResult("sa-worker-1")!;
+		f.registry.setWorktreeDisposition("sa-worker-1", result.completionId, 0, "inspected");
+		const settled = f.registry.get("sa-worker-1")!;
 		await old.fire("session_shutdown", reason);
 		f.writerState("dead"); f.originState("dead");
 		vi.setSystemTime(61_001);
@@ -219,10 +219,10 @@ describe("durable sender delivery", () => {
 		const next = f.install("successor");
 		await next.fire("session_start", reason);
 		await next.fire("agent_end");
-		expect(f.registry.get("sa-1")).toMatchObject({ status: "settled", completionId: settled.completionId,
+		expect(f.registry.get("sa-worker-1")).toMatchObject({ status: "settled", completionId: settled.completionId,
 			result: settled.result, manifest: settled.manifest, delivery: settled.delivery, controllerSessionId: "successor" });
-		expect(f.registry.worktreeResult("sa-1")).toMatchObject({ completionId: result.completionId, disposition: "inspected" });
-		expect(next.manager.get("sa-1")).toMatchObject({ status: "done", recovery: "adopted", finalText: "answer" });
+		expect(f.registry.worktreeResult("sa-worker-1")).toMatchObject({ completionId: result.completionId, disposition: "inspected" });
+		expect(next.manager.get("sa-worker-1")).toMatchObject({ status: "done", recovery: "adopted", finalText: "answer" });
 		expect(next.delivery).not.toHaveBeenCalled();
 		expect(f.operations.signalTree).not.toHaveBeenCalled();
 		next.manager.detachForReplacement();
@@ -240,7 +240,7 @@ describe("durable sender delivery", () => {
 		await next.fire("session_start", "fork");
 		await next.fire("agent_end");
 		expect(next.delivery).not.toHaveBeenCalled();
-		expect(f.registry.get("sa-1")?.delivery).toMatchObject({ state: "sent" });
+		expect(f.registry.get("sa-worker-1")?.delivery).toMatchObject({ state: "sent" });
 		expectArtifacts(f);
 	});
 
@@ -250,7 +250,7 @@ describe("durable sender delivery", () => {
 		const authority = await f.track(old);
 		await f.finish();
 		if (cut === "before-call") {
-			const record = f.registry.get("sa-1")!;
+			const record = f.registry.get("sa-worker-1")!;
 			f.registry.forController(old.manager.controllerIdentity).advanceDelivery(record.revision, authority, "send");
 		} else if (cut === "cas-return") {
 			const advance = SubagentRegistry.prototype.advanceDelivery;
@@ -264,7 +264,7 @@ describe("durable sender delivery", () => {
 			old.delivery.mockImplementation(() => { throw new Error("controller lost before return"); });
 			await old.fire("agent_end");
 		}
-		expect(f.registry.get("sa-1")?.delivery).toMatchObject({ state: "sending", controllerGeneration: 0 });
+		expect(f.registry.get("sa-worker-1")?.delivery).toMatchObject({ state: "sending", controllerGeneration: 0 });
 		await old.fire("agent_end");
 		expect(old.delivery).toHaveBeenCalledTimes(cut === "before-return" ? 1 : 0);
 		await old.fire("session_shutdown", "resume");
@@ -273,10 +273,10 @@ describe("durable sender delivery", () => {
 		await next.fire("agent_end");
 		expect(next.delivery).toHaveBeenCalledTimes(1);
 		expect(next.delivery.mock.calls[0]).toEqual([
-			expect.objectContaining({ customType: "subagent-delivery-uncertain", display: true, content: `delivery of sa-1 uncertain; result manifest available at ${join(f.record.taskDir, "manifest.json")}; use inspect` }),
+			expect.objectContaining({ customType: "subagent-delivery-uncertain", display: true, content: `delivery of sa-worker-1 uncertain; result manifest available at ${join(f.record.taskDir, "manifest.json")}; use inspect` }),
 			{ deliverAs: "followUp", triggerTurn: true },
 		]);
-		expect(f.registry.get("sa-1")?.delivery).toMatchObject({ state: "delivery-uncertain", notice: { state: "sent" } });
+		expect(f.registry.get("sa-worker-1")?.delivery).toMatchObject({ state: "delivery-uncertain", notice: { state: "sent" } });
 		await next.fire("session_shutdown", "reload");
 		const final = f.install("final");
 		await final.fire("session_start", "reload");
@@ -289,7 +289,7 @@ describe("durable sender delivery", () => {
 		const old = f.install("origin");
 		const authority = await f.track(old);
 		await f.finish();
-		f.registry.forController(old.manager.controllerIdentity).advanceDelivery(f.registry.get("sa-1")!.revision, authority, "send");
+		f.registry.forController(old.manager.controllerIdentity).advanceDelivery(f.registry.get("sa-worker-1")!.revision, authority, "send");
 		await old.fire("session_shutdown", "new");
 		const next = f.install("successor");
 		next.delivery.mockImplementation(() => { throw new Error("notice return lost"); });
@@ -300,7 +300,7 @@ describe("durable sender delivery", () => {
 		await final.fire("session_start", "new");
 		await final.fire("agent_end");
 		expect(final.delivery).not.toHaveBeenCalled();
-		expect(f.registry.get("sa-1")?.delivery).toMatchObject({ state: "delivery-uncertain", notice: { state: "delivery-uncertain" } });
+		expect(f.registry.get("sa-worker-1")?.delivery).toMatchObject({ state: "delivery-uncertain", notice: { state: "delivery-uncertain" } });
 		expectArtifacts(f);
 	});
 
@@ -313,7 +313,7 @@ describe("durable sender delivery", () => {
 		const send = vi.fn();
 		vi.spyOn(f.supervisor, "reserveControl").mockImplementation(async (authority, successor) => {
 			const reserved = await reserve(authority, successor);
-			old.manager.deliver({ id: "sa-1", title: "worker", status: "done", content: "answer", details: {} }, send);
+			old.manager.deliver({ id: "sa-worker-1", title: "worker", status: "done", content: "answer", details: {} }, send);
 			for (const action of ["send", "sent", "uncertain"] as const) {
 				expect(() => f.registry.forController(old.manager.controllerIdentity).advanceDelivery(reserved.revision, stale, action)).toThrow("stale delivery controller");
 			}
@@ -325,7 +325,7 @@ describe("durable sender delivery", () => {
 		expect(send).not.toHaveBeenCalled();
 		expect(old.delivery).not.toHaveBeenCalled();
 		expect(next.delivery).toHaveBeenCalledTimes(1);
-		const current = f.registry.get("sa-1")!;
+		const current = f.registry.get("sa-worker-1")!;
 		for (const action of ["send", "sent", "uncertain"] as const) {
 			expect(() => f.registry.forController(old.manager.controllerIdentity).advanceDelivery(current.revision, stale, action)).toThrow("stale delivery controller");
 		}
@@ -337,7 +337,7 @@ describe("durable sender delivery", () => {
 		const old = f.install("origin");
 		const authority = await f.track(old);
 		await f.finish();
-		if (fault.endsWith("-sending")) f.registry.forController(old.manager.controllerIdentity).advanceDelivery(f.registry.get("sa-1")!.revision, authority, "send");
+		if (fault.endsWith("-sending")) f.registry.forController(old.manager.controllerIdentity).advanceDelivery(f.registry.get("sa-worker-1")!.revision, authority, "send");
 		if (fault.startsWith("identities")) {
 			vi.mocked(f.operations.identityMatches).mockReturnValue("different");
 			vi.mocked(f.operations.isTreeEmpty).mockReturnValue(true);
@@ -346,7 +346,7 @@ describe("durable sender delivery", () => {
 		const next = f.install("successor");
 		await next.fire("session_start", "new");
 		await next.fire("agent_end");
-		expect(next.manager.get("sa-1")?.recovery).toBe("ambiguous");
+		expect(next.manager.get("sa-worker-1")?.recovery).toBe("ambiguous");
 		expect(next.delivery).not.toHaveBeenCalled();
 		expect(old.delivery).not.toHaveBeenCalled();
 		expectArtifacts(f);
@@ -357,12 +357,12 @@ describe("durable sender delivery", () => {
 		const old = f.install("origin");
 		const authority = await f.track(old);
 		await f.finish();
-		const record = f.registry.get("sa-1")!;
+		const record = f.registry.get("sa-worker-1")!;
 		const first = f.registry.forController(old.manager.controllerIdentity);
 		const second = f.registry.forController(old.manager.controllerIdentity);
 		const results = await Promise.allSettled([first, second].map(async (registry) => registry.advanceDelivery(record.revision, authority, "send")));
 		expect(results.map((result) => result.status)).toEqual(["fulfilled", "rejected"]);
-		const sending = f.registry.get("sa-1")!;
+		const sending = f.registry.get("sa-worker-1")!;
 		expect(() => second.advanceDelivery(sending.revision, authority, "send")).toThrow("delivery state transition refused");
 		expect(() => first.advanceDelivery(sending.revision, authority, "uncertain")).toThrow("delivery state transition refused");
 		expect(() => f.registry.transition(sending.id, sending.revision, sending.writerLease!.generation, (r) => ({ ...r, delivery: { state: "undelivered" } }))).toThrow("delivery requires controller CAS");
@@ -377,12 +377,12 @@ describe("durable sender delivery", () => {
 		await f.track(old);
 		await f.finish();
 		await old.fire("session_shutdown", "new");
-		const record = f.registry.get("sa-1")!;
-		writeFileSync(join(f.root, "registry", "sa-1.json"), JSON.stringify({ ...record, delivery: { state: "sent", completionId: "other" } }), { mode: 0o600 });
+		const record = f.registry.get("sa-worker-1")!;
+		writeFileSync(join(f.root, "registry", "sa-worker-1.json"), JSON.stringify({ ...record, delivery: { state: "sent", completionId: "other" } }), { mode: 0o600 });
 		const next = f.install("successor");
 		await next.fire("session_start", "new");
-		expect(next.manager.canDeliver("sa-1")).toBe(false);
-		expect(next.manager.get("sa-1")?.recovery).toBe("ambiguous");
+		expect(next.manager.canDeliver("sa-worker-1")).toBe(false);
+		expect(next.manager.get("sa-worker-1")?.recovery).toBe("ambiguous");
 		expect(next.delivery).not.toHaveBeenCalled();
 		expect(old.delivery).not.toHaveBeenCalled();
 		expectArtifacts(f);
@@ -393,13 +393,13 @@ describe("durable sender delivery", () => {
 		const old = f.install("origin");
 		await f.track(old);
 		await f.finish();
-		const record = f.registry.get("sa-1")!;
+		const record = f.registry.get("sa-worker-1")!;
 		const delivery = { state: fault === "unknown-state" ? "broken" : "sending", completionId: fault === "wrong-id" ? "other" : record.completionId,
 			controllerGeneration: fault === "future-generation" ? 1 : 0, at: fault === "future-time" ? 1001 : 1000 };
-		writeFileSync(join(f.root, "registry", "sa-1.json"), JSON.stringify({ ...record, delivery }), { mode: 0o600 });
+		writeFileSync(join(f.root, "registry", "sa-worker-1.json"), JSON.stringify({ ...record, delivery }), { mode: 0o600 });
 		await old.fire("agent_end");
-		expect(old.manager.canDeliver("sa-1")).toBe(false);
-		expect(old.manager.get("sa-1")?.recovery).toBe("ambiguous");
+		expect(old.manager.canDeliver("sa-worker-1")).toBe(false);
+		expect(old.manager.get("sa-worker-1")?.recovery).toBe("ambiguous");
 		expect(old.delivery).not.toHaveBeenCalled();
 		expectArtifacts(f);
 	});
@@ -412,15 +412,15 @@ describe("manager replacement adoption", () => {
 			const old = f.install("origin");
 			await old.fire("session_start");
 			const authority = await f.track(old);
-			const writer = f.registry.get("sa-1")!.writerLease;
+			const writer = f.registry.get("sa-worker-1")!.writerLease;
 			await old.fire("session_shutdown", reason);
 			const next = f.install("successor");
 			await next.fire("session_start", reason);
 			await next.fire("session_start", reason);
 			await next.manager.adoptFrom(old.manager, "successor");
-			expect(f.registry.get("sa-1")).toMatchObject({ writerLease: writer, ownerSessionId: "origin", controllerSessionId: "successor", controllerGeneration: 1 });
+			expect(f.registry.get("sa-worker-1")).toMatchObject({ writerLease: writer, ownerSessionId: "origin", controllerSessionId: "successor", controllerGeneration: 1 });
 			expect(f.registry.inspectControl(authority)).toBe(false);
-			expect(next.manager.canDeliver("sa-1")).toBe(true);
+			expect(next.manager.canDeliver("sa-worker-1")).toBe(true);
 			expect(f.maxObservers()).toBe(1);
 			expect(f.subscriptions).toHaveBeenCalledTimes(backend === "headless" ? 1 : 0);
 			expect(f.interrupt).not.toHaveBeenCalled();
@@ -429,7 +429,7 @@ describe("manager replacement adoption", () => {
 			await next.fire("agent_end");
 			expect(old.delivery).not.toHaveBeenCalled();
 			expect(next.delivery).toHaveBeenCalledTimes(1);
-			expect(next.manager.get("sa-1")).toMatchObject({ status: "done", finalText: "answer", recovery: "adopted" });
+			expect(next.manager.get("sa-worker-1")).toMatchObject({ status: "done", finalText: "answer", recovery: "adopted" });
 			expect(f.spawn).toHaveBeenCalledTimes(backend === "headless" ? 1 : 0);
 		});
 	}
@@ -466,7 +466,7 @@ describe("manager replacement adoption", () => {
 		f.setIdle(true);
 		await next.fire("agent_end");
 		expect(next.delivery).toHaveBeenCalledTimes(1);
-		expect(next.manager.get("sa-1")).toMatchObject({ status: "done", finalText: "answer", recovery: "adopted" });
+		expect(next.manager.get("sa-worker-1")).toMatchObject({ status: "done", finalText: "answer", recovery: "adopted" });
 	});
 
 	it.each(["unknown-anchor", "different-anchor", "anchor-gone", "unknown-writer", "dead-unexpired-writer", "expired-live-writer", "dead-writer-live-controller", "blocked-successor", "pane-moved"])("%s persists uncertainty and makes no signals/delivery", async (fault) => {
@@ -488,16 +488,16 @@ describe("manager replacement adoption", () => {
 		const next = f.install("successor");
 		await next.fire("session_start", "new");
 		const classification = fault === "anchor-gone" ? "lost" : "ambiguous";
-		expect(next.manager.get("sa-1")?.recovery).toBe(classification);
-		if (fault === "pane-moved") expect(next.manager.get("sa-1")?.recoveryReason).toEqual({
+		expect(next.manager.get("sa-worker-1")?.recovery).toBe(classification);
+		if (fault === "pane-moved") expect(next.manager.get("sa-worker-1")?.recoveryReason).toEqual({
 			code: "visible-pane-foreground-process-group",
 			expected: "same",
 			observed: "different",
 		});
-		expect(next.manager.canDeliver("sa-1")).toBe(false);
-		await next.manager.cancel(["sa-1"]);
-		await next.manager.close(["sa-1"]);
-		await expect(next.manager.sendTo("sa-1", "text")).rejects.toThrow();
+		expect(next.manager.canDeliver("sa-worker-1")).toBe(false);
+		await next.manager.cancel(["sa-worker-1"]);
+		await next.manager.close(["sa-worker-1"]);
+		await expect(next.manager.sendTo("sa-worker-1", "text")).rejects.toThrow();
 		await next.fire("agent_end");
 		expect(f.interrupt).not.toHaveBeenCalled();
 		expect(f.send).not.toHaveBeenCalled();
@@ -506,7 +506,7 @@ describe("manager replacement adoption", () => {
 		const observation = readdirSync(join(f.root, "registry")).find((file) => file.endsWith(`-${classification}.json`));
 		expect(observation).toBeDefined();
 		const recorded = readPrivateJson(join(f.root, "registry", observation!), 4096);
-		expect(recorded).toMatchObject({ id: "sa-1", controllerGeneration: 0, classification });
+		expect(recorded).toMatchObject({ id: "sa-worker-1", controllerGeneration: 0, classification });
 		if (fault === "pane-moved") expect(recorded).toMatchObject({
 			reason: { code: "visible-pane-foreground-process-group", expected: "same", observed: "different" },
 		});
@@ -529,13 +529,13 @@ describe("manager replacement adoption", () => {
 		await old.fire("session_shutdown", "new");
 		const next = f.install("successor");
 		await next.fire("session_start", "new");
-		expect(next.manager.get("sa-1")?.recovery).toBe("ambiguous");
-		expect(next.manager.get("sa-1")?.recoveryReason).toEqual(reason);
-		expect(next.manager.canDeliver("sa-1")).toBe(false);
+		expect(next.manager.get("sa-worker-1")?.recovery).toBe("ambiguous");
+		expect(next.manager.get("sa-worker-1")?.recoveryReason).toEqual(reason);
+		expect(next.manager.canDeliver("sa-worker-1")).toBe(false);
 		const observation = readdirSync(join(f.root, "registry")).find((file) => file.endsWith("-ambiguous.json"));
 		expect(observation).toBeDefined();
 		expect(readPrivateJson(join(f.root, "registry", observation!), 4096)).toMatchObject({
-			id: "sa-1", controllerGeneration: 0, classification: "ambiguous", reason,
+			id: "sa-worker-1", controllerGeneration: 0, classification: "ambiguous", reason,
 		});
 	});
 
@@ -546,7 +546,7 @@ describe("manager replacement adoption", () => {
 		await old.fire("session_shutdown", "reload");
 		const next = f.install("origin", false, "reload-controller");
 		await next.fire("session_start", "reload");
-		expect(f.registry.get("sa-1")).toMatchObject({ ownerSessionId: "origin", controllerSessionId: "origin", controllerGeneration: 1, controlLease: { owner: { token: "reload-controller" } } });
+		expect(f.registry.get("sa-worker-1")).toMatchObject({ ownerSessionId: "origin", controllerSessionId: "origin", controllerGeneration: 1, controlLease: { owner: { token: "reload-controller" } } });
 		expect(f.registry.inspectControl(authority)).toBe(false);
 		await f.finish();
 		expect(next.delivery).toHaveBeenCalledTimes(1);
@@ -560,8 +560,8 @@ describe("manager replacement adoption", () => {
 		const first = f.install("first");
 		const second = f.install("second");
 		await Promise.all([first.manager.adoptFrom(old.manager, "first"), second.manager.adoptFrom(old.manager, "second")]);
-		expect(f.registry.get("sa-1")?.controllerGeneration).toBe(1);
-		expect([first, second].filter((runtime) => runtime.manager.get("sa-1"))).toHaveLength(1);
+		expect(f.registry.get("sa-worker-1")?.controllerGeneration).toBe(1);
+		expect([first, second].filter((runtime) => runtime.manager.get("sa-worker-1"))).toHaveLength(1);
 		expect(f.maxObservers()).toBe(1);
 		expect(f.interrupt).not.toHaveBeenCalled();
 		await f.finish();
@@ -593,7 +593,7 @@ describe("manager replacement adoption", () => {
 		expect(queued.status).toBe("queued");
 		await f.finish();
 		await vi.advanceTimersByTimeAsync(0);
-		expect(next.manager.get("sa-11")?.status).toBe("running");
+		expect(next.manager.get("sa-queued-10")?.status).toBe("running");
 		expect(f.spawn).toHaveBeenCalledTimes(11);
 		expect(next.delivery).toHaveBeenCalledTimes(1);
 	});
@@ -606,14 +606,14 @@ describe("manager replacement adoption", () => {
 		const next = f.install("successor");
 		await next.fire("session_start", "new");
 		await vi.advanceTimersByTimeAsync(32_000);
-		const renewed = f.registry.get("sa-1")!;
+		const renewed = f.registry.get("sa-worker-1")!;
 		expect(renewed.controlLease?.expiresAt).toBeGreaterThan(61_000);
 		expect(renewed.writerLease?.owner.token).toBe("writer");
 		expect(renewed.controllerGeneration).toBe(1);
 		await next.fire("session_shutdown", "reload");
 		const final = f.install("final");
 		await final.fire("session_start", "reload");
-		expect(f.registry.get("sa-1")?.controllerGeneration).toBe(2);
+		expect(f.registry.get("sa-worker-1")?.controllerGeneration).toBe(2);
 		expect(f.registry.inspectControl(controlAuthority(renewed))).toBe(false);
 		await f.finish();
 		expect(next.delivery).not.toHaveBeenCalled();
@@ -629,10 +629,10 @@ describe("manager replacement adoption", () => {
 		await old.fire("session_shutdown", "new");
 		const next = f.install("successor");
 		await next.fire("session_start", "new");
-		const current = f.registry.get("sa-1")!;
+		const current = f.registry.get("sa-worker-1")!;
 		f.registry.releaseControl(current.revision, current.writerLease!.generation, controlAuthority(current));
-		await expect(next.manager.sendTo("sa-1", "steer")).rejects.toThrow("control refused");
-		await expect(next.manager.cancel(["sa-1"])).rejects.toThrow("control refused");
+		await expect(next.manager.sendTo("sa-worker-1", "steer")).rejects.toThrow("control refused");
+		await expect(next.manager.cancel(["sa-worker-1"])).rejects.toThrow("control refused");
 		await f.finish();
 		await next.fire("agent_end");
 		expect(f.interrupt).not.toHaveBeenCalled();
@@ -648,8 +648,8 @@ describe("manager replacement adoption", () => {
 		const next = f.install("successor");
 		await next.fire("session_start", "new");
 		f.interrupt.mockImplementation(() => Promise.reject(new Error("acknowledgement lost")));
-		await expect(next.manager.cancel(["sa-1"])).resolves.toEqual(["sa-1 control unavailable; inspect retained evidence"]);
-		expect(next.manager.get("sa-1")?.recovery).toBe("ambiguous");
+		await expect(next.manager.cancel(["sa-worker-1"])).resolves.toEqual(["sa-worker-1 control unavailable; inspect retained evidence"]);
+		expect(next.manager.get("sa-worker-1")?.recovery).toBe("ambiguous");
 	});
 
 	it("uses dead-and-expired generation CAS without pretending a lost parser was recovered", async () => {
@@ -662,8 +662,8 @@ describe("manager replacement adoption", () => {
 		const next = f.install("successor");
 		vi.setSystemTime(61_001);
 		await next.fire("session_start", "resume");
-		expect(f.registry.get("sa-1")).toMatchObject({ status: "lost", controllerSessionId: "successor", controllerGeneration: 1, writerLease: { generation: 2 } });
-		expect(next.manager.get("sa-1")?.recovery).toBe("lost");
+		expect(f.registry.get("sa-worker-1")).toMatchObject({ status: "lost", controllerSessionId: "successor", controllerGeneration: 1, writerLease: { generation: 2 } });
+		expect(next.manager.get("sa-worker-1")?.recovery).toBe("lost");
 		expect(next.delivery).not.toHaveBeenCalled();
 		expect(f.interrupt).not.toHaveBeenCalled();
 	});
@@ -677,7 +677,7 @@ describe("manager replacement adoption", () => {
 		const original = join(f.root, "original-registry");
 		renameSync(directory, original);
 		mkdirSync(directory, { mode: 0o700 });
-		copyFileSync(join(original, "sa-1.json"), join(directory, "sa-1.json"));
+		copyFileSync(join(original, "sa-worker-1.json"), join(directory, "sa-worker-1.json"));
 		const next = f.install("successor");
 		await expect(next.manager.adoptFrom(old.manager, "successor")).rejects.toThrow("registry directory replaced");
 		expect(next.manager.list()).toEqual([]);
@@ -692,7 +692,7 @@ describe("manager replacement adoption", () => {
 		await old.manager.spawn({ title: "legacy", prompt: "task", cwd: f.record.taskDir });
 		await old.fire("session_shutdown", "fork");
 		expect(f.interrupt).toHaveBeenCalledTimes(1);
-		expect(old.manager.get("sa-1")?.recovery).toBe("unsupported");
+		expect(old.manager.get("sa-legacy-1")?.recovery).toBe("unsupported");
 		expect(old.manager.hasRetainedChildren).toBe(false);
 	});
 });

@@ -177,7 +177,7 @@ describe("subagent result delivery", () => {
 		expect(harness.setWidget).toHaveBeenCalledWith("sumocode-subagents", expect.any(Function), { placement: "aboveEditor" });
 
 		backend.emitters[0]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
-		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("done"));
+		await vi.waitFor(() => expect(harness.manager.get("sa-research-1")?.status).toBe("done"));
 		expect(harness.setWidget).toHaveBeenLastCalledWith("sumocode-subagents", undefined, { placement: "aboveEditor" });
 	});
 
@@ -191,7 +191,7 @@ describe("subagent result delivery", () => {
 		// SAFETY: Array.isArray(widget) is asserted above, so the string[] cast is checked.
 		expect((widget as string[]).join("\n")).toContain("1 running");
 		// SAFETY: Array.isArray(widget) is asserted above, so the string[] cast is checked.
-		expect((widget as string[]).join("\n")).toContain("research sa-1");
+		expect((widget as string[]).join("\n")).toContain("research sa-research-1");
 	});
 
 	it("renders queued count and clears the widget on shutdown", async () => {
@@ -209,7 +209,7 @@ describe("subagent result delivery", () => {
 		expect(backend.piCalls).toBe(SUBAGENT_MAX_RUNNING);
 
 		harness.fire("session_start");
-		await expect(spawn(harness.manager, "next session")).resolves.toMatchObject({ id: `sa-${SUBAGENT_MAX_RUNNING + 2}`, status: "running" });
+		await expect(spawn(harness.manager, "next session")).resolves.toMatchObject({ id: "sa-next-session-12", status: "running" });
 		harness.fire("session_shutdown");
 	});
 
@@ -218,7 +218,7 @@ describe("subagent result delivery", () => {
 		harness.fire("session_start");
 		await spawn(harness.manager);
 		backend.emitters[0]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
-		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("done"));
+		await vi.waitFor(() => expect(harness.manager.get("sa-worker-1")?.status).toBe("done"));
 		harness.fire("session_shutdown");
 		expect(harness.setWidget).not.toHaveBeenCalled();
 	});
@@ -229,7 +229,7 @@ describe("subagent result delivery", () => {
 		harness.fire("session_start");
 		await expect(spawn(harness.manager)).resolves.toMatchObject({ status: "running" });
 		backend.emitters[0]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
-		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("done"));
+		await vi.waitFor(() => expect(harness.manager.get("sa-worker-1")?.status).toBe("done"));
 	});
 
 	it("does not deliver a queued snapshot as a settled result", async () => {
@@ -237,7 +237,7 @@ describe("subagent result delivery", () => {
 		harness.setIdle(false);
 		for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await spawn(harness.manager, `running-${index}`);
 		const queued = await spawn(harness.manager, "queued");
-		expect(queued).toMatchObject({ id: `sa-${SUBAGENT_MAX_RUNNING + 1}`, status: "queued" });
+		expect(queued).toMatchObject({ id: "sa-queued-11", status: "queued" });
 		harness.setIdle(true);
 		harness.fire("agent_end");
 		expect(harness.sendMessage).not.toHaveBeenCalled();
@@ -250,7 +250,7 @@ describe("subagent result delivery", () => {
 		await spawn(harness.manager, "research");
 
 		backend.emitters[0]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "findings" } });
-		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("done"));
+		await vi.waitFor(() => expect(harness.manager.get("sa-research-1")?.status).toBe("done"));
 		expect(harness.sendMessage).not.toHaveBeenCalled();
 
 		harness.setIdle(true);
@@ -259,13 +259,13 @@ describe("subagent result delivery", () => {
 		expect(harness.sendMessage).toHaveBeenCalledWith(
 			{
 				customType: "subagent-result",
-				content: expect.stringContaining('Subagent sa-1 "research" finished.'),
+				content: expect.stringContaining('Subagent sa-research-1 "research" finished.'),
 				display: true,
 				details: expect.objectContaining({
-					id: "sa-1",
+					id: "sa-research-1",
 					title: "research",
 					status: "done",
-					activity: expect.objectContaining({ id: "subagent:sa-1", kind: "subagent", status: "succeeded", result: { summary: "findings" } }),
+					activity: expect.objectContaining({ id: "subagent:sa-research-1", kind: "subagent", status: "succeeded", result: { summary: "findings" } }),
 					manifest: expect.objectContaining({ changedPaths: [] }),
 				}),
 			},
@@ -302,7 +302,7 @@ describe("subagent result delivery", () => {
 			// SAFETY: subagent delivery always sends a message with settled-subagent details.
 			return ((call as unknown[])[0] as { details: { id: string } }).details.id;
 		});
-		expect(deliveredIds).toEqual(["sa-1", "sa-2", "sa-2", "sa-3"]);
+		expect(deliveredIds).toEqual(["sa-first-1", "sa-second-2", "sa-second-2", "sa-third-3"]);
 	});
 
 	it("routes visible children through the pane backend and delivers one pane-referenced card", async () => {
@@ -312,13 +312,13 @@ describe("subagent result delivery", () => {
 		await harness.manager.spawn({ prompt: "watch me", title: "visible worker", cwd: "/tmp/project", visible: true });
 		expect(backend.paneCalls).toHaveLength(1);
 		expect(backend.piCalls).toBe(0);
-		expect(harness.manager.get("sa-1")?.pane).toEqual({ agentName: "visible-worker-abc", workspaceId: "w1", tabId: "w1:t2", paneId: "w1:p3" });
+		expect(harness.manager.get("sa-visible-worker-1")?.pane).toEqual({ agentName: "visible-worker-abc", workspaceId: "w1", tabId: "w1:t2", paneId: "w1:p3" });
 		// Full-toolset parent: no --tools narrowing (pi --tools would strip the
 		// child's extension tools), and no model/thinking was set or inherited.
 		expect(backend.paneCalls[0]?.tools).toBeUndefined();
 
 		backend.paneEmitters[0]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "visible result" } });
-		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("done"));
+		await vi.waitFor(() => expect(harness.manager.get("sa-visible-worker-1")?.status).toBe("done"));
 		harness.setIdle(true);
 		harness.fire("agent_end");
 		harness.fire("agent_end");
@@ -369,11 +369,11 @@ describe("subagent result delivery", () => {
 		backend.emitters[0]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "inline result" } });
 
 		// SAFETY: the ctx double carries only the members subagent_wait reads.
-		await harness.tool("subagent_wait").execute("tc", { ids: ["sa-1"] }, undefined, undefined, harness.ctx as never);
+		await harness.tool("subagent_wait").execute("tc", { ids: ["sa-worker-1"] }, undefined, undefined, harness.ctx as never);
 		harness.setIdle(true);
 		harness.fire("agent_end");
 
-		expect(harness.manager.consumedIds.has("sa-1")).toBe(true);
+		expect(harness.manager.consumedIds.has("sa-worker-1")).toBe(true);
 		expect(harness.sendMessage).not.toHaveBeenCalled();
 	});
 
@@ -383,11 +383,11 @@ describe("subagent result delivery", () => {
 		harness.fire("agent_start");
 		await spawn(harness.manager);
 
-		await harness.tool("subagent_cancel").execute("tc", { ids: ["sa-1"] });
+		await harness.tool("subagent_cancel").execute("tc", { ids: ["sa-worker-1"] });
 		harness.setIdle(true);
 		harness.fire("agent_end");
 
-		expect(harness.manager.consumedIds.has("sa-1")).toBe(true);
+		expect(harness.manager.consumedIds.has("sa-worker-1")).toBe(true);
 		expect(harness.sendMessage).not.toHaveBeenCalled();
 	});
 
@@ -400,7 +400,7 @@ describe("subagent result delivery", () => {
 			kind: "run-settled",
 			outcome: { kind: "failed", errorText: "pi killed by SIGKILL", partialText: "partial progress" },
 		});
-		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("error"));
+		await vi.waitFor(() => expect(harness.manager.get("sa-failing-worker-1")?.status).toBe("error"));
 
 		harness.setIdle(true);
 		harness.fire("agent_end");
@@ -409,7 +409,7 @@ describe("subagent result delivery", () => {
 			expect.objectContaining({
 				customType: "subagent-result",
 				content: expect.stringMatching(/failed[.]\n\nError: pi killed by SIGKILL\n\npartial progress/),
-				details: expect.objectContaining({ id: "sa-1", title: "failing worker", status: "error", manifest: expect.objectContaining({ exit: "failed" }) }),
+				details: expect.objectContaining({ id: "sa-failing-worker-1", title: "failing worker", status: "error", manifest: expect.objectContaining({ exit: "failed" }) }),
 			}),
 			{ deliverAs: "followUp", triggerTurn: true },
 		);
@@ -426,7 +426,7 @@ describe("subagent result delivery", () => {
 		await spawn(harness.manager, "post-switch");
 		backend.emitters.at(-1)?.({ kind: "message-end", role: "assistant", text: "after switch" });
 		backend.emitters.at(-1)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "after switch" } });
-		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("done"));
+		await vi.waitFor(() => expect(harness.manager.get("sa-post-switch-1")?.status).toBe("done"));
 		harness.fire("agent_end");
 		expect(harness.sendMessage).toHaveBeenCalledTimes(1);
 		// SAFETY: sendMessage is always called with a single message payload argument.
@@ -462,14 +462,14 @@ describe("subagent result delivery", () => {
 	it("cancelling an unknown id does not poison a later real child with that id", async () => {
 		const harness = createHarness();
 		harness.setIdle(false);
-		// Cancel sa-1 before it exists — manager reports unknown, and the
-		// delivery buffer must NOT record sa-1 as consumed.
+		// Cancel sa-real-sa-1-1 before it exists — manager reports unknown, and the
+		// delivery buffer must NOT record sa-real-sa-1-1 as consumed.
 			// SAFETY: the ctx double carries only the members subagent_cancel reads.
-			await harness.tool("subagent_cancel").execute("tc", { ids: ["sa-1"] }, undefined, undefined, harness.ctx as never);
-		// Now the real sa-1 spawns, settles, and must still auto-deliver.
+			await harness.tool("subagent_cancel").execute("tc", { ids: ["sa-real-sa-1-1"] }, undefined, undefined, harness.ctx as never);
+		// Now the real sa-real-sa-1-1 spawns, settles, and must still auto-deliver.
 		await spawn(harness.manager, "real-sa-1");
 		backend.emitters.at(-1)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
-		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("done"));
+		await vi.waitFor(() => expect(harness.manager.get("sa-real-sa-1-1")?.status).toBe("done"));
 		harness.fire("agent_end");
 		expect(harness.sendMessage).toHaveBeenCalledTimes(1);
 		// SAFETY: sendMessage is always called with a single message payload argument.
@@ -507,7 +507,7 @@ describe("subagent result delivery", () => {
 		harness.setIdle(false);
 		await spawn(harness.manager, "deferred worker");
 		backend.emitters.at(-1)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "deferred findings" } });
-		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("done"));
+		await vi.waitFor(() => expect(harness.manager.get("sa-deferred-worker-1")?.status).toBe("done"));
 		harness.setIdle(true);
 		await harness.fireSessionStart("replacement");
 		expect(harness.sendMessage).toHaveBeenCalledTimes(1);

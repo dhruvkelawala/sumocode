@@ -6,7 +6,7 @@ import { captureProcessBirthTime, systemProcessTree, type ProcessTreeOperations 
 import { acquireRetained, reconstructRetained, verifyRetained, sameRetainedEvidence, type RetainedSubagent } from "./retained-adoption.js";
 import { RetainedLaunchRefusal } from "./retained-runtime.js";
 import type { RegistryWriter, SubagentRecord } from "./registry.js";
-import { createWorktree, resolveCreateOptions, type CreateWorktreeOptions, type CreateWorktreeResult } from "../git/worktree.js";
+import { createWorktree, resolveCreateOptions, slugifyBranch, type CreateWorktreeOptions, type CreateWorktreeResult } from "../git/worktree.js";
 import type { AgentPanePlacement, PiExecLike, TerminalHost } from "../terminal-host/types.js";
 import type { SpawnedChild } from "./backend-pi.js";
 import { SUBAGENT_MAX_QUEUED, SUBAGENT_MAX_RUNNING, type LiveToolState, type RunOutcome, type SubagentEvent, type SubagentLaunchFailure, type SubagentPaneRef, type SubagentRecoveryReason, type SubagentSnapshot, type SubagentWorktreeRef } from "./domain.js";
@@ -452,9 +452,11 @@ export class SubagentManager {
 		observe(entry.supervisor.record);
 	}
 
-	private allocateId(): string {
+	/** Readable, host-safe subagent id: `sa-<slugified title>-<n>`, plus a literal 4-char namespace suffix under retention. */
+	private allocateId(title: string): string {
+		const slug = slugifyBranch(title);
 		let id: string;
-		do { id = `sa-${this.idNamespace ? `${this.idNamespace}-` : ""}${this.nextId++}`; } while (this.snapshots.has(id) || this.retained.has(id));
+		do { id = `sa-${slug}-${this.nextId++}${this.idNamespace ? `-${this.idNamespace}` : ""}`; } while (this.snapshots.has(id) || this.retained.has(id));
 		return id;
 	}
 
@@ -474,7 +476,7 @@ export class SubagentManager {
 					retryHint: "queue is full — do NOT retry in a loop; cancel something or end your turn and respawn later",
 				};
 			}
-			const id = this.allocateId();
+			const id = this.allocateId(task.title);
 			const createdAt = Date.now();
 			const snapshot = makeInitialSnapshot(task, id, createdAt, "HEAD", task.cwd, undefined, undefined, "queued");
 			this.queuedTasks.push({ task, id, createdAt, generation });
@@ -484,7 +486,7 @@ export class SubagentManager {
 			return snapshot;
 		}
 
-		const id = this.allocateId();
+		const id = this.allocateId(task.title);
 		const snapshot = await this.startTask(task, id, Date.now(), generation);
 		// A direct spawn can fail setup after later calls have filled the queue.
 		// Drain immediately instead of leaving accepted work parked until an

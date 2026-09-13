@@ -151,7 +151,7 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 		});
 		return retention ? { ...child, retentionUnsupported: true } : child;
 	}, {
-		idNamespace: retention ? randomUUID() : undefined,
+		idNamespace: retention ? randomUUID().slice(0, 4) : undefined,
 		terminalHost: host,
 		pi,
 		// Herdr injects the caller tab into the RPC child. Seed visible placement

@@ -174,20 +174,20 @@ describe("simulated process-boundary visible pane reclamation", () => {
 		const ctx = { cwd: worktree, model: { provider: "openai", id: "gpt-5" } };
 
 		const first = await tool("subagent_spawn").execute("spawn-1", { prompt: "first", name: "cheap one", role: "implement-cheap", visible: true }, undefined, undefined, ctx);
-		expect(first.content[0].text).toContain("Started sa-1");
-		await waitFor(() => herdr.liveChildPanes().length === 1 && manager.get("sa-1")?.pane?.paneId !== undefined);
-		const firstPane = manager.get("sa-1")!.pane!.paneId!;
+		expect(first.content[0].text).toContain("Started sa-cheap-one-1");
+		await waitFor(() => herdr.liveChildPanes().length === 1 && manager.get("sa-cheap-one-1")?.pane?.paneId !== undefined);
+		const firstPane = manager.get("sa-cheap-one-1")!.pane!.paneId!;
 
-		await tool("subagent_close").execute("close-1", { ids: ["sa-1"] });
+		await tool("subagent_close").execute("close-1", { ids: ["sa-cheap-one-1"] });
 		await waitFor(() => herdr.liveChildPanes().length === 0);
 
 		const second = await tool("subagent_spawn").execute("spawn-2", { prompt: "second", name: "cheap two", role: "implement-cheap", visible: true }, undefined, undefined, ctx);
-		expect(second.content[0].text).toContain("Started sa-2");
-		await waitFor(() => herdr.liveChildPanes().length === 1 && manager.get("sa-2")?.pane?.paneId !== undefined);
-		const secondPane = manager.get("sa-2")!.pane!.paneId!;
+		expect(second.content[0].text).toContain("Started sa-cheap-two-2");
+		await waitFor(() => herdr.liveChildPanes().length === 1 && manager.get("sa-cheap-two-2")?.pane?.paneId !== undefined);
+		const secondPane = manager.get("sa-cheap-two-2")!.pane!.paneId!;
 		expect(secondPane).not.toBe(firstPane);
 
-		await tool("subagent_close").execute("close-2", { ids: ["sa-2"] });
+		await tool("subagent_close").execute("close-2", { ids: ["sa-cheap-two-2"] });
 		await waitFor(() => herdr.liveChildPanes().length === 0);
 		await herdr.auditZeroOrphans();
 	}, 15_000);

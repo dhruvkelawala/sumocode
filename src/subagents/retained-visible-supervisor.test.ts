@@ -109,7 +109,7 @@ describe("retained visible owner", () => {
 				errorCode: "pane_unavailable",
 				errorReason: "herdr tab create failed; cleanup: close refused",
 				paneStillOpen: true,
-				orphanPane: { agentName: "worker", paneId: "pane:9", tabId: "w9:t9", workspaceId: "w9" },
+				orphanPane: { agentName: "sa-visible", paneId: "pane:9", tabId: "w9:t9", workspaceId: "w9" },
 			},
 		});
 		expect(f.host.inspectPane).not.toHaveBeenCalled();

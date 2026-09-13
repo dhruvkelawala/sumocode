@@ -2,7 +2,24 @@
 
 > Active strategy: SumoCode uses the RPC host for interactive runtime ownership. The old private Pi constructor patch is retired; see `docs/SUMO_TUI_PI_PATCH_STRATEGY.md` for the historical note.
 
-SumoCode currently pins Pi `0.83.0`. Pi `0.83.x` requires Node `>=22.19.0`, so SumoCode's `engines.node` tracks that floor.
+SumoCode currently pins Pi `0.85.1`. Pi `0.85.1` requires Node `>=22.19.0`; SumoCode's own `engines.node` floor is `>=23.11.0`.
+
+## Pinned RPC contract (Pi 0.85.1)
+
+Verified against the installed package, not Pi main:
+
+- `clear_queue` returns and removes the two pending text queues as
+  `{ steering: string[], followUp: string[] }`. Queued images are not returned.
+- `get_available_thinking_levels` returns the active model's typed capability
+  list as `{ levels: ThinkingLevel[] }`; an empty list is representable.
+- `set_thinking_level` is a void success: it acknowledges the request after
+  Pi's clamp and carries no effective level. The authoritative level is
+  `get_state.thinkingLevel` or the `thinking_level_changed` event.
+- `thinking_level_changed` is emitted only when the effective level differs
+  from the previous one.
+- RPC model/thinking mutations are session-only: `ModelMutationOptions.persist`
+  defaults to session-only and the RPC dispatch passes no options, so RPC never
+  writes global defaults. Saved-default parity needs a separate seam.
 
 ## Current activation model
 

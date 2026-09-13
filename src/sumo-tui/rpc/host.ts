@@ -1498,7 +1498,8 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		requestExit: (code) => requestHostExit(code),
 		isTreeBusy: () => treeNavigationBusy,
 		submit: async (message, delivery) => {
-			if (await submitDirectBash(message)) return;
+			// Do not yield ordinary Enter submissions before dispatch; a following shortcut must not overtake them.
+			if (message.startsWith("!") && await submitDirectBash(message)) return;
 			await submitRpcPrompt(message, {
 				visualFixture,
 				scheduler,

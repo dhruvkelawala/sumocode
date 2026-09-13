@@ -21,3 +21,12 @@ export function claudeAccountProviderId(index: number): string {
 export function isClaudeAccountProvider(providerId: string): boolean {
 	return /^anthropic-[1-9]\d*$/.test(providerId);
 }
+
+/**
+ * True for the built-in provider and the extra-account providers the adapter
+ * registers (`anthropic`, `anthropic-2`, …) — one owner for the base-or-account
+ * question the accounts command and the footer both ask.
+ */
+export function isClaudeProvider(providerId: string): boolean {
+	return providerId === CLAUDE_BASE_PROVIDER || isClaudeAccountProvider(providerId);
+}

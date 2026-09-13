@@ -9,6 +9,7 @@ import {
 } from "../../cathedral/input-frame.js";
 import { splashInvocationHint } from "../../cathedral/input-hints.js";
 import { compactionStatusLabelForReason, renderCompactionStatusRow } from "../../compaction-status-row.js";
+import { hasPublishedClaudeAccount } from "../../claude-account-status-publication.js";
 import { hasActiveFastModeStatus } from "../../fast-mode-status.js";
 import {
 	colorHex,
@@ -667,7 +668,12 @@ function sidebarSnapshot(state: RpcHostChromeState): SidebarSnapshot {
 	};
 }
 
-function footerSnapshot(state: RpcHostChromeState, isSplash: boolean, showFastMode = false): FooterSnapshot {
+function footerSnapshot(
+	state: RpcHostChromeState,
+	isSplash: boolean,
+	showFastMode = false,
+	claudeAccount: FooterSnapshot["claudeAccount"] = undefined,
+): FooterSnapshot {
 	if (isVisualHarness() && !isSplash) {
 		// Tokens/cost/branch are frozen here because they're genuinely
 		// non-deterministic across real sessions (see VISUAL_SIDEBAR_* above).
@@ -693,6 +699,7 @@ function footerSnapshot(state: RpcHostChromeState, isSplash: boolean, showFastMo
 			modelId: footerModelId(state.modelLabel) ?? VISUAL_MODEL_LABEL,
 			thinkingLevel: normalizeThinkingLevel(state.thinkingLevel),
 			showFastMode,
+			claudeAccount,
 			isSplash,
 		};
 	}
@@ -709,6 +716,7 @@ function footerSnapshot(state: RpcHostChromeState, isSplash: boolean, showFastMo
 		modelId: footerModelId(state.modelLabel) ?? "no-model",
 		thinkingLevel: normalizeThinkingLevel(state.thinkingLevel),
 		showFastMode,
+		claudeAccount,
 		isSplash,
 	};
 }
@@ -889,10 +897,12 @@ class RpcFooterComponent implements ShellRenderable {
 			const version = renderSplashVersionLine(width);
 			return version ? [version] : [""];
 		}
+		const statuses = this.adapter.getExtensionStatuses();
 		return renderFooterBlock(footerSnapshot(
 			this.adapter.getState(),
 			false,
-			hasActiveFastModeStatus(this.adapter.getExtensionStatuses()),
+			hasActiveFastModeStatus(statuses),
+			hasPublishedClaudeAccount(statuses),
 		), width);
 	}
 }

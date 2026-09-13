@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { SubagentManager } from "./subagents/manager.js";
 import { registerCursorCommand } from "./commands/cursor.js";
 import { registerDiffCommand } from "./commands/diff.js";
@@ -123,6 +123,8 @@ export interface InstallSumoInteractionsOptions {
 	readonly subagentManager?: SubagentManager;
 	readonly resolveWorktreeResultRegistry?: WorktreeCommandOptions["resolveResultRegistry"];
 	readonly installUiSurfaces: ((registry: InteractionRegistry) => void) | false;
+	/** Repaint hook for commands that change account config outside an agent turn. */
+	readonly refreshAccountStatus?: (ctx: ExtensionCommandContext) => void;
 }
 
 export function createInteractionRegistry(pi: ExtensionAPI, reporter?: InteractionDiagnosticReporter): InteractionRegistry {
@@ -141,7 +143,9 @@ export function installSumoInteractions(pi: ExtensionAPI, options: InstallSumoIn
 	registry.install("commands.review", (targetPi) => registerReviewCommand(targetPi, { subagentSpawner: options.subagentManager }));
 	registry.install("commands.ship", registerShipCommand);
 	registry.install("commands.spinner", registerSpinnerCommand);
-	registry.install("commands.sync", registerSumoSyncCommand);
+	// `/sumo:sync` and `/sumo:bootstrap` re-link claude-accounts.json and finish
+	// without an agent turn, so the account chrome repaints from the command.
+	registry.install("commands.sync", (targetPi) => registerSumoSyncCommand(targetPi, { refreshAccountStatus: options.refreshAccountStatus }));
 	registry.install("commands.tabs", registerTabsCommand);
 	registry.install("commands.theme", registerThemeCommand);
 	registry.install("commands.theme-check", registerThemeCheckCommand);

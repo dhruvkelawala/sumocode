@@ -233,6 +233,33 @@
 			]
 		},
 		{
+			"id": "footer-claude-account-component",
+			"lane": "component",
+			"status": "review",
+			"component": {
+				"kind": "footer-claude-account"
+			},
+			"dimensions": {
+				"cols": 160,
+				"rows": 1
+			},
+			"bibleTarget": "05-footer-idle.png",
+			"crops": [
+				{
+					"id": "full",
+					"targetCrop": "full",
+					"runtimeCrop": "full"
+				},
+				{
+					"id": "footer",
+					"targetCrop": "footer-component",
+					"runtimeCrop": "footer-component",
+					"status": "required",
+					"threshold": 0.045
+				}
+			]
+		},
+		{
 			"id": "top-bar-default-component",
 			"lane": "component",
 			"status": "review",

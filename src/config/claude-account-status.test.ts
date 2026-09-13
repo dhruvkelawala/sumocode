@@ -1,0 +1,125 @@
+import { describe, expect, it, vi } from "vitest";
+import type { Model } from "@earendil-works/pi-ai";
+import {
+	claudeAccountLabel,
+	formatClaudeAccountChip,
+	resolveClaudeAccountStatus,
+} from "./claude-account-status.js";
+
+function model(provider: string, id = "claude-opus-5"): Model<never> {
+	// SAFETY: the resolver reads only provider/id; the rest of the Model shape is irrelevant here.
+	return { provider, id } as never;
+}
+
+describe("claudeAccountLabel", () => {
+	it("labels the built-in provider default", () => {
+		expect(claudeAccountLabel("anthropic", "personal")).toBe("default");
+	});
+
+	it("lowercases the subscription label", () => {
+		expect(claudeAccountLabel("anthropic-2", "company")).toBe("company");
+		expect(claudeAccountLabel("anthropic-3", "Work Account")).toBe("work account");
+	});
+
+	it("falls back to the account number, then the provider id", () => {
+		expect(claudeAccountLabel("anthropic-2", undefined)).toBe("#2");
+		expect(claudeAccountLabel("anthropic-42", "")).toBe("#42");
+		expect(claudeAccountLabel("custom-provider", undefined)).toBe("custom-provider");
+	});
+
+	it("drops control characters a hand-edited label can carry", () => {
+		expect(claudeAccountLabel("anthropic-2", "com\npany")).toBe("company");
+		expect(claudeAccountLabel("anthropic-2", "company\u001b")).toBe("company");
+		expect(claudeAccountLabel("anthropic-2", "company\u009b31m")).toBe("company31m");
+		expect(claudeAccountLabel("anthropic-2", "\u0007")).toBe("#2");
+	});
+});
+
+describe("formatClaudeAccountChip", () => {
+	it("renders the lowercase chip", () => {
+		expect(formatClaudeAccountChip({ label: "company" })).toBe("claude company");
+	});
+
+	it("clips a long label to the eight-column budget", () => {
+		expect(formatClaudeAccountChip({ label: "work-account" })).toBe("claude work-ac…");
+		expect(formatClaudeAccountChip({ label: "personal" })).toBe("claude personal");
+	});
+
+	it("clips by grapheme, never splitting a surrogate pair or combining mark", () => {
+		const emoji = formatClaudeAccountChip({ label: "😀😀😀😀😀😀😀😀😀" });
+		expect(emoji).toBe("claude 😀😀😀😀😀😀😀…");
+		// No lone surrogate survives the clip.
+		expect(emoji).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+		expect(emoji).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+		// A combining mark travels with its base character.
+		expect(formatClaudeAccountChip({ label: "ééééééééé" })).toBe("claude ééééééé…");
+	});
+});
+
+describe("resolveClaudeAccountStatus", () => {
+	it("returns undefined when no Claude model is reachable", () => {
+		expect(resolveClaudeAccountStatus({ models: [model("openai-codex", "gpt-5.6")] })).toBeUndefined();
+		expect(resolveClaudeAccountStatus({ models: [] })).toBeUndefined();
+	});
+
+	it("resolves the first Claude model to its account when the current model is not Claude", () => {
+		const status = resolveClaudeAccountStatus({
+			models: [model("anthropic"), model("anthropic-2")],
+			currentProvider: "openai-codex",
+			subscriptionLabel: (providerId) => (providerId === "anthropic-2" ? "company" : undefined),
+		});
+		expect(status).toEqual({ providerId: "anthropic", label: "default", active: false });
+	});
+
+	it("resolves an extra account when the base provider is not available", () => {
+		const status = resolveClaudeAccountStatus({
+			models: [model("anthropic-2")],
+			currentProvider: "deepseek",
+			subscriptionLabel: () => "company",
+		});
+		expect(status).toEqual({ providerId: "anthropic-2", label: "company", active: false });
+	});
+
+	it("reports the live account as active when the current model is Claude", () => {
+		const status = resolveClaudeAccountStatus({
+			models: [model("anthropic"), model("anthropic-2")],
+			currentProvider: "anthropic-2",
+			subscriptionLabel: () => "company",
+		});
+		expect(status).toEqual({ providerId: "anthropic-2", label: "company", active: true });
+	});
+
+	it("keeps the live account when its own models are filtered out of the enabled set", () => {
+		const status = resolveClaudeAccountStatus({
+			models: [model("anthropic")],
+			currentProvider: "anthropic-2",
+			subscriptionLabel: () => "company",
+		});
+		expect(status).toEqual({ providerId: "anthropic-2", label: "company", active: true });
+	});
+
+	it("reports no account when the model is not Claude and none is enabled", () => {
+		expect(resolveClaudeAccountStatus({ models: [model("openai-codex")], currentProvider: "openai-codex" })).toBeUndefined();
+	});
+
+	it("reads the subscription label once per call", () => {
+		const subscriptionLabel = vi.fn(() => "company");
+		resolveClaudeAccountStatus({ models: [model("anthropic-2")], currentProvider: "openai", subscriptionLabel });
+		expect(subscriptionLabel).toHaveBeenCalledTimes(1);
+		expect(subscriptionLabel).toHaveBeenCalledWith("anthropic-2");
+	});
+
+	it("orders accounts explicitly: base first, then by index, not by registry order", () => {
+		const status = resolveClaudeAccountStatus({
+			models: [model("anthropic-3"), model("anthropic-2"), model("anthropic")],
+			currentProvider: "openai-codex",
+		});
+		expect(status?.providerId).toBe("anthropic");
+
+		const withoutBase = resolveClaudeAccountStatus({
+			models: [model("anthropic-3"), model("anthropic-2")],
+			currentProvider: "openai-codex",
+		});
+		expect(withoutBase?.providerId).toBe("anthropic-2");
+	});
+});

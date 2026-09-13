@@ -294,6 +294,44 @@ describe("SumoRpcClient", () => {
 		await client.stop();
 	});
 
+	it("exposes local write acknowledgement and permits a no-timeout request", async () => {
+		vi.useFakeTimers();
+		try {
+			const child = new FakeRpcChild();
+			let acknowledge!: (error?: Error) => void;
+			child.stdin.write.mockImplementation((_data: string, callback?: (error?: Error) => void) => {
+				acknowledge = callback!;
+				return true;
+			});
+			const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child), requestTimeoutMs: 10 });
+			await client.start();
+			const request = client.sendWithWriteAck({ type: "bash", id: "long", command: "sleep 60" }, null);
+			let written = false;
+			void request.written.then(() => { written = true; });
+			await vi.advanceTimersByTimeAsync(60_000);
+			expect(written).toBe(false);
+			acknowledge();
+			await request.written;
+			child.stdout.emit("data", '{"type":"response","id":"long","command":"bash","success":true,"data":{"output":"","cancelled":false,"truncated":false}}\n');
+			await expect(request.response).resolves.toMatchObject({ command: "bash", success: true });
+			await client.stop();
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("rejects both staged promises when the local write fails", async () => {
+		const child = new FakeRpcChild();
+		child.stdin.write.mockImplementation(() => { throw new Error("pipe closed"); });
+		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
+		await client.start();
+		const request = client.sendWithWriteAck({ type: "bash", command: "pwd" }, null);
+		await expect(request.written).rejects.toThrow("pipe closed");
+		await expect(request.response).rejects.toThrow("pipe closed");
+		await client.stop();
+	});
+
 	it("bounds the shared reap when an exited child's stdio never closes", async () => {
 		vi.useFakeTimers();
 		try {

@@ -60,8 +60,12 @@ jobs:
           node --input-type=module <<'JS'
           import { readFileSync, writeFileSync } from 'node:fs';
           const changelog = readFileSync('CHANGELOG.md', 'utf8');
-          const notes = changelog.split('## [Unreleased]\n')[1]?.split('\n## [')[0]?.trim();
-          if (!notes) throw new Error('Missing Unreleased changelog notes');
+          const version = process.env.RELEASE_TAG.slice(1);
+          const section = (heading) => changelog.split(heading)[1]?.split('\n## [')[0]?.trim();
+          // Keep-a-Changelog: the tagged version has its own section; fall back to
+          // Unreleased for a tag cut before the section was promoted.
+          const notes = section(`## [${version}]`) || section('## [Unreleased]\n');
+          if (!notes) throw new Error(`Missing changelog notes for ${version} (and no Unreleased notes)`);
           writeFileSync('release-notes.md', notes + '\n');
           JS
 

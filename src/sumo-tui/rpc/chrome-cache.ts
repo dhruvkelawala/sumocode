@@ -6,6 +6,7 @@ import {
 	readPrivateJson,
 	withPrivateFileLock,
 } from "../../activity/persistence.js";
+import { isRpcThinkingLevel, type RpcThinkingLevel } from "./thinking-level.js";
 
 const CACHE_VERSION = 1 as const;
 const MAX_CACHED_CWDS = 20;
@@ -21,7 +22,7 @@ export interface CachedModelRef {
 
 export interface CachedChrome {
 	modelLabel?: string;
-	thinkingLevel?: string;
+	thinkingLevel?: RpcThinkingLevel;
 	/**
 	 * Enabled-model ring from the last hydrate. Initial hydration owns the
 	 * authoritative chrome, so before it settles the cycle keys step through
@@ -30,13 +31,13 @@ export interface CachedChrome {
 	 */
 	models?: readonly CachedModelRef[];
 	/** Available thinking levels from the last hydrate; same pre-hydration seam. */
-	thinkingLevels?: readonly string[];
+	thinkingLevels?: readonly RpcThinkingLevel[];
 }
 
 interface CachedChromeEntry {
 	readonly savedAt: number;
 	modelLabel?: string;
-	thinkingLevel?: string;
+	thinkingLevel?: RpcThinkingLevel;
 }
 
 interface ChromeCacheFile {
@@ -45,7 +46,7 @@ interface ChromeCacheFile {
 	// The child reports one model list per process, not per project, so the
 	// cycle rings are stored once instead of duplicated into every cwd entry.
 	readonly models?: readonly CachedModelRef[];
-	readonly thinkingLevels?: readonly string[];
+	readonly thinkingLevels?: readonly RpcThinkingLevel[];
 	/** Model label the stored thinking ring was reported for. */
 	readonly thinkingLevelsFor?: string;
 }
@@ -87,9 +88,9 @@ function cachedModelRefs(value: JsonValue | undefined): CachedModelRef[] | undef
 	return models;
 }
 
-function cachedThinkingLevels(value: JsonValue | undefined): string[] | undefined {
+function cachedThinkingLevels(value: JsonValue | undefined): RpcThinkingLevel[] | undefined {
 	if (!Array.isArray(value) || value.length === 0 || value.length > MAX_CACHED_THINKING_LEVELS) return undefined;
-	return value.every(isString) ? [...value] : undefined;
+	return value.every(isRpcThinkingLevel) ? [...value] : undefined;
 }
 
 /** Drops an oversized ring: one huge entry would push the whole file past MAX_CACHE_BYTES and disable the cache. */
@@ -108,7 +109,7 @@ function readCacheFile(options: ChromeCacheOptions): ChromeCacheFile | undefined
 			if (!isJsonObject(value) || !isNumber(value["savedAt"]) || !Number.isFinite(value["savedAt"])) continue;
 			const entry: CachedChromeEntry = { savedAt: value["savedAt"] };
 			if (isString(value["modelLabel"])) entry.modelLabel = value["modelLabel"];
-			if (isString(value["thinkingLevel"])) entry.thinkingLevel = value["thinkingLevel"];
+			if (isRpcThinkingLevel(value["thinkingLevel"])) entry.thinkingLevel = value["thinkingLevel"];
 			byCwd[cwd] = entry;
 		}
 		const models = cachedModelRefs(parsed["models"]);

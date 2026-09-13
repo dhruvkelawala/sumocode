@@ -24,7 +24,7 @@ import { RpcChildExitError, SumoRpcClient, truncateForNotification } from "./cli
 import { ChromeCacheWorkerClient } from "./chrome-cache-worker-client.js";
 import type { CachedChrome } from "./chrome-cache.js";
 import { RpcHostLifecycle, writeExitCodeFile } from "./host-lifecycle.js";
-import { modelOptionsFrom, RpcHostControls, type RpcModelOption } from "./controls.js";
+import { modelOptionsFrom, RpcHostControls, type RpcModelOption, type RpcThinkingLevel } from "./controls.js";
 import { createRpcKeybindingsManager, RpcHostEditorController } from "./editor.js";
 import { createRpcExtensionUiResponder } from "./extension-ui-responder.js";
 import { InMemoryRpcTreeNavigationOutcomeBroker, type RpcTreeNavigationRequest } from "../pi-compat/tree-navigation-command.js";
@@ -821,11 +821,11 @@ export interface RpcHostCachedCycleDependencies {
 	/** Enabled ring from the chrome cache, active-flagged against the live label. */
 	readonly models: () => readonly RpcModelOption[] | undefined;
 	/** Available thinking levels from the chrome cache. */
-	readonly thinkingLevels: () => readonly string[] | undefined;
-	readonly currentThinkingLevel: () => string | undefined;
+	readonly thinkingLevels: () => readonly RpcThinkingLevel[] | undefined;
+	readonly currentThinkingLevel: () => RpcThinkingLevel | undefined;
 	/** Paints a cached pick optimistically; the store's label drives the next step. */
 	readonly previewModel: (model: RpcModelOption) => void;
-	readonly previewThinkingLevel: (level: string) => void;
+	readonly previewThinkingLevel: (level: RpcThinkingLevel) => void;
 }
 
 async function applyModelCycleStep(deps: RpcHostModelCycleDependencies, direction: -1 | 1): Promise<void> {

@@ -1,6 +1,7 @@
 # Dependency advisory remediation inventory — issue #396 / Plan 102
 
 **Status:** public evidence record for [issue #396](https://github.com/dhruvkelawala/sumocode/issues/396). **Local development graph remediated; consumer-runtime graph still upstream-blocked** (correction notice below and §9). **Post-publication advisory 1193945 (`smol-toml`, local-development only) is recorded in §13** — remediated by a narrow override after the v0.5.1 baseline.
+**Post-publication re-check at Pi `0.85.1` (recorded 2026-09-11, §14):** the six local overrides are retired as redundant, the local graph audits clean without them, and the consumer-runtime blocker is unchanged.
 **Commit range:** baseline `397be093` → candidate `514da877` ([PR #453](https://github.com/dhruvkelawala/sumocode/pull/453), branch `fix/396-dependency-audit-policy`)
 **Tail repair:** spec finding SA123 — the per-advisory public map required by issue #396 was not present in the published PR #453 diff/body, which described remediation only in aggregate. This file supplies that map.
 **Correction:** the first published version of this map (head `7519bab9`, PR #467) presented the nine consumer-runtime advisories as remediated by the Pi `0.84.4` peer floor. Codex P1 (PR #467 discussion 3941838506) correctly rejected that framing: the floor does not enforce the patched transitives in consumer graphs, the empty local policy `records[]` describes only this repository's own overridden graph, and this repo's CI does not audit consumer graphs. This page corrects those claims, keeps the valid 15-advisory map and the historical counts, marks Plan 102 **incomplete / consumer-upstream-blocked** on its consumer-runtime criterion, and adds explicit user-facing remediation guidance (§10). A proper consumer-graph gate is a separate implementation queued by the coordinating parent; **this documentation correction is not the security fix**.
@@ -162,8 +163,8 @@ The audit policy's classification rule (see `scripts/check-dependency-audit.mjs`
 The verification owner is the **automated gate**, not a human assignment:
 
 - **Policy module:** `scripts/check-dependency-audit.mjs` — fail-closed CLI. It rejects unclassified, stale, expired, package/fixed-version/upstream/dependency-chain-mismatched, duplicate, local-path, and unremediated high/critical records, and hard-fails on audit errors (registry/network), not just findings (`83231ad6`, `514da877`).
-- **Tests:** `scripts/check-dependency-audit.test.mjs` — 17 cases including multi-chain matching and local-path rejection added by the final commit.
-- **CI gate:** `.github/workflows/ci.yml`, job `typecheck-and-test`, step `Dependency audit policy` (`node scripts/check-dependency-audit.mjs`) runs after `pnpm install --frozen-lockfile` on every pull request and `main` push. **The audited graph is this repository's own** — the frozen lock with its local overrides applied. CI evidence: run [33907877057](https://github.com/dhruvkelawala/sumocode/actions/runs/33907877057) (head `514da877`, 2026-09-04) logs `dependency audit policy passed; consumer-runtime upstream-blocked: 0; local-development high/critical: 0` and the 17-test focused file green. That log counts high/critical findings in the **local** audit only; with the overridden local graph clean it reports `0`, and it says nothing about any consumer graph. The separate `Pi compatibility` workflow run [33907877078](https://github.com/dhruvkelawala/sumocode/actions/runs/33907877078) on the same head covers the Plan 101 matrix gate for the `0.84.4` floor — a compatibility gate, not a consumer-security gate.
+- **Tests:** `scripts/check-dependency-audit.test.mjs` — 17 cases at `514da877` including multi-chain matching and local-path rejection added by the final commit, 18 at current head with the vitest-floor case (§14).
+- **CI gate:** `.github/workflows/ci.yml`, job `typecheck-and-test`, step `Dependency audit policy` (`node scripts/check-dependency-audit.mjs`) runs after `pnpm install --frozen-lockfile` on every pull request and `main` push. **The audited graph is this repository's own** — at `514da877` the frozen lock with its local overrides applied (at current head the same frozen lock with the redundant overrides retired, §14). CI evidence: run [33907877057](https://github.com/dhruvkelawala/sumocode/actions/runs/33907877057) (head `514da877`, 2026-09-04) logs `dependency audit policy passed; consumer-runtime upstream-blocked: 0; local-development high/critical: 0` and the 17-test focused file green. That log counts high/critical findings in the **local** audit only; with the overridden local graph clean it reports `0`, and it says nothing about any consumer graph. The separate `Pi compatibility` workflow run [33907877078](https://github.com/dhruvkelawala/sumocode/actions/runs/33907877078) on the same head covers the Plan 101 matrix gate for the `0.84.4` floor — a compatibility gate, not a consumer-security gate.
 - **Human-touch fields:** the only owner/expiry fields in the policy schema belong to upstream-blocked records; none exist in the final policy (§9). That means no expiry obligation for this repository's own policy. It does **not** mean the consumer-side finding is resolved: the local policy cannot represent a finding absent from its audited (local) graph — a re-added upstream-blocked record would fail the gate's own stale-record check — so the consumer blocker is recorded here as status only (§9), with no invented owner or expiry. Real consumer-side records with owner/expiry belong to the separately queued consumer-graph gate.
 
 ## 9. Policy state — empty local record set, and what it does and does not mean
@@ -208,7 +209,7 @@ Maintainer-side remedy (not delivered here): the durable fix is an upstream Pi r
 - **Severity drift:** all 15 are GHSA-reviewed `high` as of 2026-09-05; re-check before relying past that date.
 - **Consumer-runtime reachability** is dependency-presence based (§7); this inventory does not assert exploitability of any optional provider path.
 - **Fresh-consumer observation is historical and non-enforcing.** The fresh-consumer Pi `0.84.4` graph verification claimed in PR #453 was not re-executed for this correction (no heavy installs while the Plan 112 lane is active). Even re-run at zero findings, a fresh resolution would not clear retained consumer locks (§6); only a consumer-graph gate can enforce that, and it is queued separately.
-- **Remaining consumer security blocker.** Until an upstream Pi release constrains the patched transitives or a consumer-graph gate is in place, consumers on retained locks can still carry the nine high advisories (§9). This repository's gate re-runs only against its own frozen (overridden) lock on every PR/`main` push and fails on any new high/critical finding in that graph; it does not measure consumer graphs. Keep issue #396 open and the Codex thread unresolved until the consumer-side remedy is evidenced.
+- **Remaining consumer security blocker.** Until an upstream Pi release constrains the patched transitives or a consumer-graph gate is in place, consumers on retained locks can still carry the nine high advisories (§9). This repository's gate re-runs only against its own frozen lock (overridden at `514da877`; unoverridden at current head, §14) on every PR/`main` push and fails on any new high/critical finding in that graph; it does not measure consumer graphs. Keep issue #396 open and the Codex thread unresolved until the consumer-side remedy is evidenced.
 
 ## 12. Sources
 
@@ -265,3 +266,42 @@ The verification owner is the **automated gate**, not a human assignment (same a
 No owner/expiry record is added because the finding is removed from the audited graph, not waived. Untouched: the §9 consumer-runtime blocker and the separately queued consumer-graph gate remain as stated.
 
 **Sources:** `pnpm audit --json` advisory 1193945 and `pnpm why smol-toml` (run 2026-09-10 against the frozen baseline lock); `node_modules/knip/dist/util/fs.js` and `loader.js` (`loadTOML` call site); `scripts/build-native.mjs`, `scripts/build-extension.mjs`; npm registry metadata for `knip@5.88.1`/`6.28.0`/`6.30.0`/`6.35.1` and `smol-toml@1.7.1`; `pnpm-lock.yaml` @ `1a3a05b1`; GHSA-7w5x-hrqm-74c2.
+
+## 14. Pi `0.85.1` re-check — redundant overrides retired (recorded 2026-09-11)
+
+**Status:** re-verification of the §4 remediation against the current `main` lockfile after the Pi `0.85.1` integration, as the §11 follow-up requires. **No policy record, no waiver, no suppression — `records[]` stays empty (§9).** The nine consumer-runtime advisories remain upstream-blocked; nothing here changes consumer-side status.
+
+**Baseline:** `d4f35f5e` (`origin/main`), Pi peers/dev at `~0.85.1` / `0.85.1` (unchanged by this re-check). Tooling: pnpm `10.29.2`.
+
+### 14.1 Re-run result
+
+| Check | Command | Result |
+|---|---|---|
+| Live audit | `pnpm audit --json` | exit `0`, **0 findings** (base lock: exit `1`, 2 moderate vitest findings `1193683`/`1193684`) |
+| Policy gate | `node scripts/check-dependency-audit.mjs` | `dependency audit policy passed; consumer-runtime upstream-blocked: 0; local-development high/critical: 0` |
+| Checker tests | `pnpm vitest run scripts/check-dependency-audit.test.mjs` | 18/18 (17 at the pre-test re-run, plus the vitest-floor case added by `c7232cfb`) |
+
+### 14.2 Override review — all six retired as redundant
+
+Each override was added in `f5151994`/`22ef1aa0` to force a fixed patch over a **stale lock**, not to correct a declared range (§4, §6.2). At this baseline the committed lock already resolves every module at or above its first-patched floor, and a from-scratch resolution *without* the overrides also lands on a fixed version — so each override is a no-op for resolution and was removed.
+
+| Override (removed) | Parent declaration | Committed lock | Fresh resolve without override | First patched | Verdict |
+|---|---|---|---|---|---|
+| `@google/genai>protobufjs: 7.6.5` | `@google/genai@1.52.0` → `protobufjs ^7.5.4` | `7.6.5` | `7.6.6` | `>=7.6.1` | removed |
+| `@google/genai>ws: 8.21.0` | `@google/genai@1.52.0` → `ws ^8.18.0` | `8.21.0` | `8.21.3` | `>=8.21.0` | removed |
+| `knip>smol-toml: 1.7.1` | `knip@5.88.1` → `smol-toml ^1.5.2` | `1.7.1` | `1.8.0` | `>=1.7.1` | removed |
+| `minimatch>brace-expansion: 5.0.9` | `minimatch@10.2.5` → `brace-expansion ^5.0.5` | `5.0.9` | `5.0.9` | `>=5.0.9` | removed |
+| `vite>postcss: 8.5.23` | `vite@8.0.16` → `postcss ^8.5.15` | `8.5.23` | `8.5.28` | `>=8.5.18` | removed |
+| `postcss>nanoid: 3.3.18` | `postcss@8.5.23` → `nanoid ^3.3.16` | `3.3.18` | `3.3.19` | `>=3.3.18` | removed |
+
+Removal evidence: `pnpm install --lockfile-only` with `package.json#pnpm.overrides` deleted reproduces the same six resolved versions (the lockfile diff is the override block only) and `pnpm audit --json` stays at 0 findings. A future regression is caught by the CI policy gate, which fails any unclassified high/critical finding in this graph (§8). The §4.4 `vite: 8.0.16` devDependency pin is a direct specifier, not an override, and is unchanged.
+
+### 14.3 Moderate `vitest` findings — remediated in range
+
+At the re-check baseline `pnpm audit` reported exactly two findings, both **moderate** and **local-development only**: `vitest` `1193683` and `@vitest/mocker` `1193684` (`>=2.1.0 <4.1.11` → `>=4.1.11`), reached through the vitest dev toolchain. They are fixed by an in-range re-resolution, so the devDependency floor moved to the fixed patch — `vitest: ^4.1.5` → `^4.1.11`, lock `4.1.11` — and the audit is empty. No override, no suppression: a floor.
+
+### 14.4 Consumer-runtime status — unchanged, still upstream-blocked
+
+Pi `0.85.1` still does not constrain the patched transitives. `@earendil-works/pi-ai@0.85.1` pins `@google/genai: 1.52.0` exactly, and `@google/genai@1.52.0` declares `protobufjs ^7.5.4` / `ws ^8.18.0`; `@earendil-works/pi-coding-agent@0.85.1` pins `minimatch: 10.2.5` exactly, and `minimatch@10.2.5` declares `brace-expansion ^5.0.5`. Those ranges permit the vulnerable patches, so a retained consumer lock can still carry the §9 advisories; the peer floor is a compatibility statement, not a security constraint (§6). A **fresh** consumer resolution of the Pi `0.85.1` trio was re-run for this record and audited clean (`protobufjs 7.6.6`, `ws 8.21.3`, `brace-expansion 5.0.9`; `pnpm audit --json` exit `0`) — a resolution-time observation only (§6, §11), not consumer remediation. Consumer guidance remains §10.
+
+**Sources:** `pnpm audit --json`, `pnpm install --lockfile-only`, `node scripts/check-dependency-audit.mjs`, `pnpm vitest run scripts/check-dependency-audit.test.mjs` (run 2026-09-11 against `d4f35f5e` and this re-check's lock); `package.json#pnpm.overrides` at `d4f35f5e`; npm registry manifests for `@earendil-works/pi-ai@0.85.1`, `@earendil-works/pi-coding-agent@0.85.1`, `@google/genai@1.52.0`, `minimatch@10.2.5`, `knip@5.88.1`, `vite@8.0.16`, `postcss@8.5.23`; fresh-consumer probe resolved from `pi-ai`/`pi-coding-agent`/`pi-tui` `0.85.1` + `typebox` (pnpm 10.29.2).

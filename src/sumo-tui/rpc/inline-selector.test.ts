@@ -112,6 +112,29 @@ describe("InlineSelectorComponent", () => {
 		stripped = component.render(80).join("\n").replace(/\[[0-9;]*m/g, "");
 		expect(stripped).not.toContain("disabled/outside-scope");
 	});
+
+	it("yields a tab's narrow label rather than clipping the strip's badges when the tabs do not fit", () => {
+		const tabs = [
+			{ id: "project", label: "current project", narrowLabel: "this project", options: Array.from({ length: 10 }, (_, index) => `project-${index}`) },
+			{ id: "all", label: "all sessions · recent +current", options: Array.from({ length: 100 }, (_, index) => `session-${index}`) },
+		];
+		const tabRow = (width: number): string => new InlineSelectorComponent("Resume session", [], () => undefined, { tabs })
+			.render(width)
+			.map((line) => line.replace(/\[[0-9;]*m/g, ""))
+			.find((line) => line.includes("PROJECT"))!;
+
+		// Wide enough for the whole strip: both full labels render.
+		expect(tabRow(120)).toContain("CURRENT PROJECT 10");
+		expect(tabRow(120)).toContain("ALL SESSIONS · RECENT +CURRENT 100");
+
+		// A two-digit project count fills the portrait bar, so the strip's tabs
+		// yield their narrow labels -- taking neither the row counts nor the
+		// pinned marker with them.
+		const portrait = tabRow(60);
+		expect(portrait).toContain("THIS PROJECT 10");
+		expect(portrait).toContain("ALL SESSIONS · RECENT +CURRENT 100");
+		expect(portrait).not.toContain("…");
+	});
 });
 
 describe("InlineSelectorComponent Cathedral styling (plan 037)", () => {
@@ -193,6 +216,42 @@ describe("InlineSelectorComponent Cathedral styling (plan 037)", () => {
 		const otherRow = rows.find((row) => row.includes("anthropic/opus"));
 		expect(currentRow).toContain("●"); // "●" current-value dot
 		expect(otherRow).not.toContain("●");
+	});
+
+	it("P2: a portrait row yields the label to the description instead of clipping its suffix", () => {
+		const label = "a very long session title that cannot fit beside the identifier block";
+		const description = "~/code/sumocode · 1a2b3c4d · 12 msgs · 3h";
+		const component = new InlineSelectorComponent("Resume session", [{ value: "/session", label, description }], () => undefined);
+
+		const row = component.render(60).find((line) => line.includes("1a2b3c4d"));
+		expect(row).toBeDefined();
+		const stripped = row!.replace(/\u001b\[[0-9;]*m/g, "");
+		// The label is what yields, and its cut is marked with an ellipsis...
+		expect(stripped).toContain("…");
+		expect(stripped).not.toContain(label);
+		// ...so the whole description column (id, count, age) survives intact and
+		// the row still fills exactly the width it was rendered at.
+		expect(stripped).toContain(description);
+		expect(PiTui.visibleWidth(stripped)).toBe(60);
+	});
+
+	it("P2: a row whose label had to yield keeps the description column aligned with one whose label fit", () => {
+		const description = "~/code/sumocode · 1a2b3c4d · 12 msgs · 3h";
+		const component = new InlineSelectorComponent("Resume session", [
+			{ value: "/long", label: "a very long session title that cannot fit beside the identifier block", description },
+			{ value: "/short", label: "short title", description },
+		], () => undefined);
+
+		// Wide enough for the short label but not the long one, so the two rows
+		// exercise both sides of the budget.
+		const rows = component.render(70).map((line) => line.replace(/\u001b\[[0-9;]*m/g, ""));
+		const described = rows.filter((line) => line.includes("1a2b3c4d"));
+		expect(described).toHaveLength(2);
+
+		// Both descriptions end in the same column, 5 cells from the panel edge --
+		// a truncated label takes its cut, not the column alignment.
+		for (const row of described) expect(PiTui.visibleWidth(row.trimEnd())).toBe(65);
+		expect(described[0]!.indexOf(description)).toBe(described[1]!.indexOf(description));
 	});
 
 	it("P2: the scroll-overflow indicator picks up the panel background and an explicit dim foreground", () => {

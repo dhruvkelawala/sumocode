@@ -500,6 +500,37 @@ describe("session-reader", () => {
 				// The cap dropped candidates, so the picker must say the list is a window.
 				expect(truncated).toBe(true);
 			});
+
+			it("reports whether the capped window had to pin the current session", async () => {
+				const projectDir = join(dir, "sessions", "--repo--");
+				mkdirSync(projectDir, { recursive: true });
+				const write = (offsetMinutes: number, id: string): string => {
+					const file = writeSession(join(projectDir, fileNameFor(offsetMinutes, id)), id, isoAt(offsetMinutes), "/repo");
+					// Candidate ranking reads file mtimes, so pin them explicitly rather
+					// than relying on write order.
+					const stamp = new Date(Date.UTC(2026, 6, 2, 20, offsetMinutes));
+					utimesSync(file, stamp, stamp);
+					return file;
+				};
+				// Stamped oldest, so the current session is outside the newest-100 window.
+				const currentFile = write(0, "current");
+				for (let index = 1; index <= DEFAULT_MAX_ALL_SESSIONS; index += 1) write(index, `bulk-${index}`);
+
+				const pinnedWindow = await listAllSessionsForSession(currentFile);
+
+				expect(pinnedWindow.truncated).toBe(true);
+				expect(pinnedWindow.pinnedCurrent).toBe(true);
+				expect(pinnedWindow.sessions.map((session) => session.id)).toContain("current");
+
+				// The newest session is inside the window already, so the same cap drops
+				// candidates without pinning anything.
+				const newestFile = write(DEFAULT_MAX_ALL_SESSIONS + 1, "newest");
+				const windowed = await listAllSessionsForSession(newestFile);
+
+				expect(windowed.truncated).toBe(true);
+				expect(windowed.pinnedCurrent).toBe(false);
+				expect(windowed.sessions.map((session) => session.id)).toContain("newest");
+			});
 		});
 	});
 

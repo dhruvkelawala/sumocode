@@ -397,10 +397,14 @@ async function readRankedSessionInfos(files: readonly string[], concurrency: num
  * The all-sessions window: `sessions` is what the picker shows, and
  * `truncated` says candidate files were dropped to stay inside the row cap, so
  * the list is a newest-N window rather than every session on disk.
+ * `pinnedCurrent` says the current session was one of those dropped candidates
+ * and took the window's last row slot, so the window holds newest-(N-1) plus
+ * the current session rather than a pure newest-N.
  */
 export interface SessionWindow {
 	readonly sessions: readonly SessionListInfo[];
 	readonly truncated: boolean;
+	readonly pinnedCurrent: boolean;
 }
 
 /**
@@ -413,16 +417,18 @@ export interface SessionWindow {
 async function listSessionsFromRankedFiles(rankedFiles: readonly string[], { concurrency = 8, reader = readSessionInfo, maxSessions = DEFAULT_MAX_ALL_SESSIONS, currentSessionFile, currentSessionInfo }: ListAllSessionsOptions = {}): Promise<SessionWindow> {
 	const limit = Number.isFinite(maxSessions) ? Math.max(0, Math.floor(maxSessions)) : DEFAULT_MAX_ALL_SESSIONS;
 	const sessions = limit > 0 ? await readRankedSessionInfos(rankedFiles, concurrency, reader, limit) : [];
+	let pinnedCurrent = false;
 	if (limit > 0 && currentSessionFile && !sessions.some((session) => session.path === currentSessionFile)) {
 		const pinned = currentSessionInfo ?? await reader(currentSessionFile);
 		if (pinned) {
 			sessions.push(pinned);
+			pinnedCurrent = true;
 			if (sessions.length > limit) sessions.splice(limit - 1, 1);
 		}
 	}
 	sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
 	// A cap of 0 keeps no rows at all; `truncated` applies only to a positive cap.
-	return { sessions, truncated: limit > 0 && rankedFiles.length > limit };
+	return { sessions, truncated: limit > 0 && rankedFiles.length > limit, pinnedCurrent };
 }
 
 /**

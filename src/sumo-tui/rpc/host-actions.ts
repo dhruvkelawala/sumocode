@@ -426,7 +426,10 @@ function renderHotkeysOverlay(theme: ThemeReader, width: number): string[] {
  * session id, message count, relative age — so two sessions with the same
  * title remain distinguishable (the old single-string label had no id at
  * all). Count and age are padded to per-list column widths so the
- * description blocks line up as real columns instead of a ragged edge.
+ * description blocks line up as real columns instead of a ragged edge; the
+ * message count is project-scope only, because at the canonical 60-column
+ * portrait width the all-sessions row spends that column on the project
+ * directory that tells same-titled sessions from different projects apart.
  *
  * Labels are width-bounded because the selector lays the description out
  * after the full label: an unbounded label pushes the description (and, in
@@ -446,8 +449,11 @@ function resumeSessionRows(sessions: readonly SessionListInfo[], now: Date = new
 		label: sessionExcerpt(session.name?.trim() || session.firstMessage, labelWidth) || "(empty session)",
 		// `showProjectDirectory` is the all-sessions scope: every row there can
 		// come from a different project, so the directory leads the identifier
-		// block (the position Pi's own session list uses).
-		description: `${showProjectDirectory && session.cwd ? `${displaySessionCwd(session.cwd)} · ` : ""}${session.id.slice(0, 8)} · ${counts[index]!.padStart(countWidth)} · ${ages[index]!.padStart(ageWidth)}`,
+		// block (the position Pi's own session list uses) and the message count
+		// yields its column to it.
+		description: showProjectDirectory
+			? `${session.cwd ? `${displaySessionCwd(session.cwd)} · ` : ""}${session.id.slice(0, 8)} · ${ages[index]!.padStart(ageWidth)}`
+			: `${session.id.slice(0, 8)} · ${counts[index]!.padStart(countWidth)} · ${ages[index]!.padStart(ageWidth)}`,
 	}));
 }
 
@@ -1165,11 +1171,27 @@ export class RpcHostActions {
 			notify(this.notifications, "no sessions found", "warning");
 			return;
 		}
+		// The tab badge appends the row count, so a capped list reads as
+		// "all sessions · recent <rows shown>" instead of an exhaustive list. When
+		// the current session was pinned into that window from outside it, the
+		// label says so too: the rows are then recent sessions *plus* the current
+		// one, not a pure newest-N window.
+		const allSessionsLabel = allSessionsWindow.truncated ? "all sessions · recent" : "all sessions";
 		const tabs: InlineSelectorTab[] = [
-			{ id: "project", label: "current project", options: resumeSessionItems(projectSessions, sessionFile) },
-			// The tab badge appends the row count, so a capped list reads as
-			// "all sessions · recent <rows shown>" instead of an exhaustive list.
-			{ id: "all", label: allSessionsWindow.truncated ? "all sessions · recent" : "all sessions", options: resumeSessionItems(allSessions, sessionFile, { showProjectDirectory: true }) },
+			{
+				id: "project",
+				label: "current project",
+				// The project tab yields a word before either tab's row count or the
+				// all-sessions pinned marker is dropped: a two-digit project count
+				// already fills the canonical 60-column portrait tab bar.
+				narrowLabel: "this project",
+				options: resumeSessionItems(projectSessions, sessionFile),
+			},
+			{
+				id: "all",
+				label: allSessionsWindow.pinnedCurrent ? `${allSessionsLabel} +current` : allSessionsLabel,
+				options: resumeSessionItems(allSessions, sessionFile, { showProjectDirectory: true }),
+			},
 		];
 		// Nothing to resume inside this project? Open where the sessions are
 		// (same default-tab rule the model chooser uses for an empty enabled list).

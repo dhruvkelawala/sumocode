@@ -1160,15 +1160,78 @@ describe("RpcHostActions", () => {
 				await waitForInlineSelector(inlineSelectors, "Resume session");
 				const projectScope = inlineSelectorText(inlineSelectors);
 				expect(projectScope).toContain("◆ CURRENT PROJECT 1");
-				// The capped scope says so; the exhaustive project scope does not.
-				expect(projectScope).toContain("◇ ALL SESSIONS · RECENT 100");
+				// The capped scope says so, and it names the pinned current session it
+				// holds in place of the newest dropped row; the exhaustive project scope
+				// does not.
+				expect(projectScope).toContain("◇ ALL SESSIONS · RECENT +CURRENT 100");
 				// Narrow (portrait) widths must not push the other tab out of the bar.
 				const narrow = inlineSelectorText(inlineSelectors, 60);
-				expect(narrow).toContain("ALL SESSIONS · RECENT 100");
+				expect(narrow).toContain("ALL SESSIONS · RECENT +CURRENT 100");
 				expect(narrow).toContain("CURRENT PROJECT 1");
 
 				inlineSelectors.handleInput(SELECTOR_TAB);
-				expect(inlineSelectorText(inlineSelectors)).toContain("◆ ALL SESSIONS · RECENT 100");
+				expect(inlineSelectorText(inlineSelectors)).toContain("◆ ALL SESSIONS · RECENT +CURRENT 100");
+
+				inlineSelectors.handleInput(SELECTOR_ESCAPE);
+				await resumePromise;
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+
+		it("yields the project tab's narrow label so the pinned-current marker and badges survive at portrait width", async () => {
+			const root = mkdtempSync(join(tmpdir(), "sumocode-resume-pinned-marker-fit-test-"));
+			try {
+				// A two-digit project count alone fills the portrait tab bar.
+				for (let index = 0; index < 10; index += 1) {
+					const minute = String(index).padStart(2, "0");
+					writeFixtureSession(root, `2026-07-02T19-${minute}-00-000Z_project-${index}.jsonl`, `project-${index}`, "2026-07-02T19:00:00.000Z", `project first message ${index}`);
+				}
+				const currentFile = writeFixtureSession(root, "2026-07-02T20-00-00-000Z_current.jsonl", "current", "2026-07-02T20:00:00.000Z", "current session first message");
+				for (let index = 0; index <= DEFAULT_MAX_ALL_SESSIONS; index += 1) {
+					const minute = String(index % 60).padStart(2, "0");
+					writeFixtureSession(root, `2026-07-02T21-${minute}-00-000Z_bulk-${index}.jsonl`, `bulk-${index}`, "2026-07-02T21:00:01.000Z", `bulk first message ${index}`, { projectDir: "--other--", cwd: "/repo-other" });
+				}
+				const { actions, inlineSelectors } = setup({ sessionFile: currentFile });
+
+				const resumePromise = actions.handleSubmittedText("/resume");
+				await waitForInlineSelector(inlineSelectors, "Resume session");
+				// Wide: the pinned current session is named.
+				expect(inlineSelectorText(inlineSelectors)).toContain("ALL SESSIONS · RECENT +CURRENT 100");
+
+				// Portrait: the tab strip yields its narrow project label instead of
+				// pushing the marker or a row count past the panel edge, where
+				// `fitLine` would clip one of them.
+				const portrait = inlineSelectorText(inlineSelectors, 60).split("\n").find((line) => line.includes("PROJECT"))!;
+				expect(portrait).toContain("THIS PROJECT 11");
+				expect(portrait).toContain("ALL SESSIONS · RECENT +CURRENT 100");
+				expect(portrait).not.toContain("…");
+
+				inlineSelectors.handleInput(SELECTOR_ESCAPE);
+				await resumePromise;
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+
+		it("keeps the plain recent label when the cap drops rows but the current session is in the window", async () => {
+			const root = mkdtempSync(join(tmpdir(), "sumocode-resume-windowed-label-test-"));
+			try {
+				// One more session than the window holds, all older than the current
+				// one: the cap still drops rows, but the current session is already
+				// inside the window, so nothing was pinned into it.
+				for (let index = 0; index <= DEFAULT_MAX_ALL_SESSIONS; index += 1) {
+					const minute = String(index % 60).padStart(2, "0");
+					writeFixtureSession(root, `2026-07-02T20-${minute}-00-000Z_bulk-${index}.jsonl`, `bulk-${index}`, "2026-07-02T20:00:01.000Z", `bulk first message ${index}`, { projectDir: "--other--", cwd: "/repo-other" });
+				}
+				// Written last, so it is the newest active session.
+				const currentFile = writeFixtureSession(root, "2026-07-02T22-00-00-000Z_current.jsonl", "current", "2026-07-02T22:00:00.000Z", "current session first message");
+				const { actions, inlineSelectors } = setup({ sessionFile: currentFile });
+
+				const resumePromise = actions.handleSubmittedText("/resume");
+				await waitForInlineSelector(inlineSelectors, "Resume session");
+				expect(inlineSelectorText(inlineSelectors)).toContain("ALL SESSIONS · RECENT 100");
+				expect(inlineSelectorText(inlineSelectors)).not.toContain("+CURRENT");
 
 				inlineSelectors.handleInput(SELECTOR_ESCAPE);
 				await resumePromise;
@@ -1196,6 +1259,39 @@ describe("RpcHostActions", () => {
 				// survive the label rather than being pushed past the row's right edge.
 				const portrait = inlineSelectorText(inlineSelectors, 60);
 
+				expect(portrait).toContain("code/sumocode");
+
+				inlineSelectors.handleInput(SELECTOR_ESCAPE);
+				await resumePromise;
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+
+		it("drops the message count from all-sessions rows and keeps their identifier suffix at portrait width", async () => {
+			const root = mkdtempSync(join(tmpdir(), "sumocode-resume-all-scope-row-test-"));
+			try {
+				const currentFile = writeFixtureSession(root, "2026-07-02T20-00-00-000Z_current.jsonl", "current", "2026-07-02T20:00:00.000Z", "current session first message");
+				// A long label and a long path: both want the portrait row's columns.
+				writeFixtureSession(root, "2026-07-02T21-00-00-000Z_other.jsonl", "other123", "2026-07-02T21:00:00.000Z", "another message whose label would push the identifier block off a portrait row", { projectDir: "--other--", cwd: "/Volumes/SumoDeus NVMe/code/sumocode" });
+
+				const { actions, inlineSelectors } = setup({ sessionFile: currentFile });
+
+				const resumePromise = actions.handleSubmittedText("/resume");
+				await waitForInlineSelector(inlineSelectors, "Resume session");
+				// The project scope keeps the message count...
+				expect(inlineSelectorText(inlineSelectors)).toContain("1 msg");
+
+				inlineSelectors.handleInput(SELECTOR_TAB);
+				// ...the all-sessions scope drops it: those rows carry the project
+				// directory in the same column instead.
+				expect(inlineSelectorText(inlineSelectors)).not.toMatch(/\d+\+? msgs?\b/);
+
+				// At portrait width the label yields, so the identifier block -- the id
+				// and the directory that tell same-titled sessions apart -- stays on
+				// the row instead of falling off its right edge.
+				const portrait = inlineSelectorText(inlineSelectors, 60);
+				expect(portrait).toContain("other123");
 				expect(portrait).toContain("code/sumocode");
 
 				inlineSelectors.handleInput(SELECTOR_ESCAPE);

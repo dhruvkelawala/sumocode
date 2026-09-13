@@ -1,3 +1,5 @@
+> **Status: historical/superseded as of 2026-09-12** — [Current authority](../../scripts/perf-real-world.mjs). Archived when the readiness aliases were removed (#424): this snapshot records the retired `startup_ms` / `app_ready_ms` schema, not the current `editor_ready` / `command_ready` one. Regenerate with `pnpm perf:real-world`.
+
 # SumoCode real-world startup perf snapshot
 
 Report-only measurements from herdr using the operator's real SumoCode configuration and installed extension set. Results are machine-dependent and are not CI gates.

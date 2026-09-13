@@ -160,6 +160,15 @@ describe("launcher help (plan 117 shared contract)", () => {
 		expect(runCommand(["-h"]).stdout).toBe(runCommand(["--help"]).stdout);
 	});
 
+	it("documents the truthful readiness events without the removed aliases", () => {
+		const help = renderLauncherHelp();
+		for (const event of ["boot_screen_frame", "editor_ready", "stable_chrome_ready", "command_ready"]) {
+			expect(help).toContain(event);
+		}
+		expect(help).not.toContain("input_ready");
+		expect(help).not.toContain("app_ready");
+	});
+
 	it("fails with a stderr diagnostic when node cannot render the shared spec", () => {
 		// A shim `node` that exits non-zero stands in for a Node without type
 		// stripping (or a layout where the spec import fails): the launcher must

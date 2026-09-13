@@ -290,7 +290,7 @@ describe.skipIf(!LIVE_HERDR)("live Herdr visible pane reclamation", () => {
 			const pgid = await waitFor(() => processGroupForPane(sessionName, paneId), 10_000, `${id} process group`);
 			childPaneIds.push(paneId);
 			childPgids.push(pgid);
-			await waitForDiagnosticCount(rpcDiagnostics, "app_ready", sequence);
+			await waitForDiagnosticCount(rpcDiagnostics, "stable_chrome_ready", sequence);
 			await waitForTaskResponse(taskDir, id);
 			return id;
 		};
@@ -330,7 +330,7 @@ describe.skipIf(!LIVE_HERDR)("live Herdr visible pane reclamation", () => {
 			expect(worktreeList.stdout).toContain(`worktree ${retainedWorktreePath}`);
 		}
 		const diagnostics = await readFile(rpcDiagnostics, "utf8");
-		expect((diagnostics.match(/"event":"app_ready"/g) ?? []).length).toBeGreaterThanOrEqual(3);
+		expect((diagnostics.match(/"event":"stable_chrome_ready"/g) ?? []).length).toBeGreaterThanOrEqual(3);
 		expect(diagnostics).not.toContain("Timed out waiting for get_state response");
 
 		const serverPgid = ownedServer.pid;

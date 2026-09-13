@@ -9,6 +9,11 @@ export interface EditorImageAttachment {
 	readonly path: string;
 }
 
+export interface RpcEditorSubmissionDraft {
+	readonly text: string;
+	readonly images: readonly EditorImageAttachment[];
+}
+
 /**
  * Pasted text that should collapse into an `[Image N]` token: pi/SumoCode
  * clipboard temp files (`pi-clipboard-<uuid>.<ext>`, any directory), or any
@@ -21,6 +26,7 @@ const IMAGE_PATH_PATTERN = /^(?:(?:\/|~\/|\.\.?\/)[^\n]+|(?:[^\n/]*\/)?pi-clipbo
 export class EditorImageDraftState {
 	private nextImageIndex = 1;
 	private readonly images = new Map<string, string>();
+	private readonly submitted = new Map<string, readonly EditorImageAttachment[]>();
 
 	addImage(path: string): string {
 		const token = `[Image ${this.nextImageIndex}]`;
@@ -48,7 +54,34 @@ export class EditorImageDraftState {
 
 	clear(): void {
 		this.images.clear();
-		this.nextImageIndex = 1;
+		if (this.submitted.size === 0) this.nextImageIndex = 1;
+	}
+
+	captureRpcSubmission(text: string): RpcEditorSubmissionDraft {
+		this.pruneMissingTokens(text);
+		return { text, images: this.list() };
+	}
+
+	commitRpcSubmission(draft: RpcEditorSubmissionDraft): void {
+		const historyText = draft.text.trim();
+		this.submitted.delete(historyText);
+		this.submitted.set(historyText, draft.images);
+		while (this.submitted.size > 100) {
+			const oldest = this.submitted.keys().next();
+			if (oldest.done) break;
+			this.submitted.delete(oldest.value);
+		}
+		for (const attachment of draft.images) {
+			if (this.images.get(attachment.token) === attachment.path) this.images.delete(attachment.token);
+		}
+	}
+
+	restoreSubmittedTokens(text: string): void {
+		for (const attachment of this.submitted.get(text.trim()) ?? []) {
+			if (text.includes(attachment.token) && !this.images.has(attachment.token)) {
+				this.images.set(attachment.token, attachment.path);
+			}
+		}
 	}
 
 	list(): EditorImageAttachment[] {

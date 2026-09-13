@@ -644,6 +644,26 @@ describe("RPC editor image paste collapse", () => {
 		expect(submitted).toEqual(['"/Users/me/Desktop/Screenshot 2026-07-08 at 12.10.57.png"']);
 	});
 
+	it("captures native image attachments without path expansion or early clearing", async () => {
+		const submitted: unknown[] = [];
+		const controller = new RpcHostEditorController({
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: fakeKeybindings(),
+			onSubmitDraft: (draft) => { submitted.push(draft); },
+		});
+
+		controller.editor.insertTextAtCursor("/tmp/pi-clipboard-native.png");
+		await new Promise((resolve) => setTimeout(resolve, 60));
+		controller.editor.handleInput("\r");
+
+		expect(submitted).toEqual([{
+			text: "[Image 1]",
+			images: [{ token: "[Image 1]", path: "/tmp/pi-clipboard-native.png" }],
+		}]);
+		expect(controller.getText()).toBe("[Image 1]");
+	});
+
 	it("collapses macOS screencapture temp paths pasted via bracketed paste", async () => {
 		const controller = new RpcHostEditorController({
 			tui: fakeTui(),

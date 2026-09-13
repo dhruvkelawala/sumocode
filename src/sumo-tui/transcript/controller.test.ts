@@ -804,7 +804,6 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		const chat = fakeChatSink();
 		const delegate = createTranscriptViewModelMapper();
 		const mapper = {
-			reset: vi.fn(() => delegate.reset()),
 			messageFromPiMessage: vi.fn(delegate.messageFromPiMessage.bind(delegate)),
 			transcriptFromSessionContext: delegate.transcriptFromSessionContext.bind(delegate),
 		};

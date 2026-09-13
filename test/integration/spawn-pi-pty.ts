@@ -75,6 +75,23 @@ function ensureNodePtySpawnHelperExecutable(): void {
 	chmodSync(spawnHelper, 0o755);
 }
 
+// The signals this harness and its tests use to terminate a child. SIGINT is
+// included because the RPC host exits 130 on it: an unlatched deliberate
+// teardown must not look like a failure (issue #423).
+const TERMINATING_SIGNALS: ReadonlySet<NodeJS.Signals> = new Set(["SIGTERM", "SIGKILL", "SIGHUP", "SIGINT"]);
+
+/**
+ * Evidence is retained only for an exit the harness never asked for and that
+ * is abnormal: a clean exit between waits is the child finishing its work,
+ * not a failure (issue #423).
+ */
+export function isUnexpectedPtyFailure(
+	exit: { readonly exitCode: number; readonly signal?: number },
+	terminationRequested: boolean,
+): boolean {
+	return !terminationRequested && (exit.exitCode !== 0 || (exit.signal ?? 0) !== 0);
+}
+
 function isStringPattern(pattern: string | RegExp): pattern is string {
 	return typeof pattern === "string";
 }
@@ -272,6 +289,9 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 	}
 
 	let output = "";
+	// Set before any harness-initiated kill: an exit this process asked for is
+	// not a failure and must not retain evidence (issue #423).
+	let terminationRequested = false;
 	const waiters: Waiter[] = [];
 
 	function settleWaiters(): void {
@@ -316,10 +336,10 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 
 	child.onExit(({ exitCode, signal }) => {
 		if (supervision) recordPtyExit(supervision.pid, supervision.pgid, exitCode, signal, childEnv);
-		resolveExit?.();
 		void (async () => {
 			try {
-				for (const waiter of waiters.splice(0)) {
+				const pending = waiters.splice(0);
+				for (const waiter of pending) {
 					clearTimeout(waiter.timer);
 					if (matches(output, waiter.pattern)) {
 						waiter.resolve(output);
@@ -328,13 +348,28 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 						waiter.reject(new Error(`pi pty exited before output matched ${String(waiter.pattern)} (exitCode=${exitCode}, signal=${signal}). Evidence: ${evidenceDir}`));
 					}
 				}
+				// A PTY that dies between waits is a failure with no waiter to
+				// reject: capture before the focused harness decides to delete the
+				// run (issue #423).
+				if (pending.length === 0 && supervision !== undefined && isUnexpectedPtyFailure({ exitCode, signal }, terminationRequested)) {
+					try {
+						await capture();
+					} catch (error) {
+						recordHarnessAuditFailure("pty exit evidence", child.pid, child.pid, childEnv, String(error));
+					}
+				}
 			} finally {
-				removeOwnedAgentDir(ownedAgentDir);
+				try {
+					removeOwnedAgentDir(ownedAgentDir);
+				} finally {
+					resolveExit?.();
+				}
 			}
 		})();
 	});
 
 	function requestCleanup(): void {
+		terminationRequested = true;
 		for (const waiter of waiters.splice(0)) {
 			clearTimeout(waiter.timer);
 			waiter.reject(new Error("pi pty cleaned up before matcher completed"));
@@ -377,6 +412,10 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 			}
 		},
 		sendSignal(signal: NodeJS.Signals): void {
+			// Raw signal channel: only a termination signal marks the exit as
+			// deliberate, so a probe like SIGWINCH cannot suppress a later crash's
+			// evidence (issue #423).
+			if (TERMINATING_SIGNALS.has(signal)) terminationRequested = true;
 			child.kill(signal);
 		},
 		getCurrentTerminalState(): TerminalStateProbe {
@@ -397,6 +436,7 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 			requestCleanup();
 		},
 		async cleanupAndWait(): Promise<void> {
+			terminationRequested = true;
 			for (const waiter of waiters.splice(0)) {
 				clearTimeout(waiter.timer);
 				waiter.reject(new Error("pi pty cleaned up before matcher completed"));

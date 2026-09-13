@@ -378,7 +378,7 @@ describe("installTaskModeAutoExit", () => {
 		expect(readFileSync(responseFile, "utf8").trim()).toBe("done x");
 	});
 
-	it("updates response.md on later agent_end events while re-arming the countdown", () => {
+	it("atomically replaces response.md on later agent_end events while re-arming the countdown", () => {
 		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
 		const responseFile = join(workDir, "response.md");
 		makeControlDir(join(workDir, "control"));
@@ -397,9 +397,11 @@ describe("installTaskModeAutoExit", () => {
 		const ctx = buildCtxStub();
 		const onAgentEnd = handlers.get("agent_end")?.[0];
 		onAgentEnd?.({ messages: [{ role: "assistant", content: [{ type: "text", text: "first" }] }] }, ctx);
+		const firstInode = lstatSync(responseFile).ino;
 		onAgentEnd?.({ messages: [{ role: "assistant", content: [{ type: "text", text: "second" }] }] }, ctx);
 
 		expect(readFileSync(responseFile, "utf8").trim()).toBe("second");
+		expect(lstatSync(responseFile).ino).not.toBe(firstInode);
 		// Both agent_end events armed/re-armed the countdown status (the re-arm
 		// first clears the status line via cancelPending, then writes the copy).
 		expect(ctx.ui.setStatus).toHaveBeenCalledTimes(3);

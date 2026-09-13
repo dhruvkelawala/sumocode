@@ -24,7 +24,7 @@
  * (for example subagent cancellation).
  */
 
-import { appendFileSync, existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import {
 	assertArtifactInsideDir,
@@ -173,6 +173,18 @@ function writeOwnedTaskArtifact(file: string, contents: string, label: string, t
 	writeFileSync(file, contents, { mode: PRIVATE_FILE_MODE });
 }
 
+function replaceOwnedTaskArtifact(file: string, contents: string, label: string, taskDir?: string): void {
+	const parentDir = taskDir ?? dirname(file);
+	validatedArtifactStat(artifactFs, file, parentDir, label);
+	const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
+	try {
+		writeFileSync(temporary, contents, { mode: PRIVATE_FILE_MODE, flag: "wx" });
+		renameSync(temporary, file);
+	} finally {
+		try { unlinkSync(temporary); } catch { /* renamed or best-effort cleanup */ }
+	}
+}
+
 interface DiagDetail {
 	readonly reason?: string;
 	readonly file?: string;
@@ -271,7 +283,7 @@ function persistResponse(messages: unknown[]): void {
 		return;
 	}
 	try {
-		writeOwnedTaskArtifact(file, `${text}\n`, "task response artifact", taskDirFromMarkers(capturedMarkerEnv));
+		replaceOwnedTaskArtifact(file, `${text}\n`, "task response artifact", taskDirFromMarkers(capturedMarkerEnv));
 		diagLog("response_written", { file, bytes: text.length });
 	} catch (error) {
 		diagLog("response_write_failed", {

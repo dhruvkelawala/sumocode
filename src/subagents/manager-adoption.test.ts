@@ -64,6 +64,7 @@ function fixture(backend: "headless" | "visible" = "headless", worktreeResult = 
 	const supervisorProcess = { identity: { pid: process.pid, processGroupId: process.pid, processStartTime: "host-command" }, verification: { members: [{ pid: process.pid, processStartTime: "host-birth" }] } };
 	let supervisor: NonNullable<RetainedSubagent["supervisor"]>;
 	let finish: () => Promise<void>;
+	let publishTurn = (_text: string): void => undefined;
 	let observerCount = 0;
 	let maxObservers = 0;
 	if (backend === "headless") {
@@ -98,6 +99,14 @@ function fixture(backend: "headless" | "visible" = "headless", worktreeResult = 
 			controllerChild: (authority) => ({ events: () => undefined, interrupt: () => { if (registry.inspectControl(authority)) return interrupt(); },
 				send: async (text) => { if (registry.inspectControl(authority)) await send(text); }, requestClose: () => { if (registry.inspectControl(authority)) requestClose(); } }),
 			subscribe: (listener) => { listeners.add(listener); maxObservers = Math.max(maxObservers, listeners.size); return () => { listeners.delete(listener); }; },
+		};
+		publishTurn = (text) => {
+			writeFileSync(join(taskDir, "response.md"), `${text}\n`, { mode: 0o600 });
+			const current = registry.get(record.id)!;
+			const updated = registry.transition(current.id, current.revision, current.writerLease!.generation, (r) => ({ ...r,
+				telemetry: { startedAt: 1000, lastProgressAt: 1000, turnState: "idle", turnSequence: 1 },
+			}));
+			for (const listener of listeners) listener(updated);
 		};
 		finish = async () => {
 			const current = registry.get(record.id)!;
@@ -136,7 +145,7 @@ function fixture(backend: "headless" | "visible" = "headless", worktreeResult = 
 		await runtime.manager.trackRetained({ registry: registry.forController(runtime.manager.controllerIdentity), supervisor, snapshot, authority: controlAuthority(granted) });
 		return controlAuthority(granted);
 	}
-	return { root, registry, record, operations, host, interrupt, send, requestClose, spawn, subscriptions, supervisor, finish, install, track,
+	return { root, registry, record, operations, host, interrupt, send, requestClose, spawn, subscriptions, supervisor, finish, publishTurn, install, track,
 		maxObservers: () => maxObservers, writerState: (value: typeof writerState) => { writerState = value; }, successorState: (value: typeof successorState) => { successorState = value; },
 		originState: (value: typeof originState) => { originState = value; }, setIdle: (value: boolean) => { idle = value; } };
 }
@@ -147,6 +156,24 @@ function expectArtifacts(f: ReturnType<typeof fixture>): void {
 }
 
 describe("durable sender delivery", () => {
+	it("retries retained visible turn delivery after a synchronous send failure", async () => {
+		const f = fixture("visible");
+		const runtime = f.install("origin");
+		await runtime.fire("session_start");
+		await f.track(runtime);
+		f.setIdle(false);
+		f.publishTurn("idle report");
+		runtime.delivery.mockImplementationOnce(() => { throw new Error("transient send failure"); });
+
+		f.setIdle(true);
+		await runtime.fire("agent_end");
+		await Promise.resolve();
+		expect(runtime.delivery).toHaveBeenCalledTimes(2);
+		expect(runtime.manager.get("sa-worker-1")).toMatchObject({ status: "running", deliveredTurnSequence: 1, deliveredTurnText: "idle report\n" });
+		f.publishTurn("same sequence must not reread");
+		expect(runtime.manager.get("sa-worker-1")?.finalText).toBe("idle report\n");
+	});
+
 	it("records lost work when disk recovery takes over an expired dead writer", async () => {
 		const f = fixture();
 		const old = f.install("origin");

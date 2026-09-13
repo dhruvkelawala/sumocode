@@ -99,6 +99,27 @@ describe("SubagentManager", () => {
 		await expect(spawning).resolves.toMatchObject({ status: "error", errorText: "interrupted" });
 		expect(interrupt).toHaveBeenCalledOnce();
 	});
+	it("keeps a completed visible turn running and returns to working when steered", async () => {
+		vi.useFakeTimers();
+		let emit: (event: SubagentEvent) => void = () => undefined;
+		const send = vi.fn(async () => undefined);
+		const manager = new SubagentManager(() => ({ events: (listener) => { emit = listener; listener({ kind: "run-started" }); }, interrupt: vi.fn(), send, requestClose: vi.fn() }), {
+			captureGitContext: async () => ({ baseRef: "base-ref" }),
+			terminalHost: { kind: "herdr", openCommandInSplit: vi.fn(), closePane: vi.fn(), notify: vi.fn() },
+			pi: { exec: vi.fn() },
+		});
+		try {
+			await manager.spawn({ ...makeTask("visible turn"), visible: true });
+			emit({ kind: "turn-finished", finalText: "report", at: 1_234 });
+			expect(manager.get("sa-visible-turn-1")).toMatchObject({ status: "running", turnState: "idle", turnSequence: 1, finalText: "report", lastProgressAt: 1_234 });
+
+			await manager.sendTo("sa-visible-turn-1", "follow up");
+
+			expect(send).toHaveBeenCalledWith("follow up");
+			expect(manager.get("sa-visible-turn-1")).toMatchObject({ status: "running", turnState: "working", lastProgressAt: Date.now() });
+		} finally { manager.disposeAll(); vi.useRealTimers(); }
+	});
+
 	it("distinguishes visible heartbeat from progress and warns only after observed heartbeat silence", async () => {
 		vi.useFakeTimers();
 		let emit: (event: SubagentEvent) => void = () => undefined;
@@ -111,10 +132,11 @@ describe("SubagentManager", () => {
 		});
 		try {
 			await manager.spawn({ ...makeTask("visible"), visible: true });
+			const startedProgress = manager.get("sa-visible-1")?.lastProgressAt;
 			await vi.advanceTimersByTimeAsync(120_000);
-			expect(manager.get("sa-visible-1")).toMatchObject({ health: "quiet", liveness: "unknown", lastProgressAt: null });
+			expect(manager.get("sa-visible-1")).toMatchObject({ health: "quiet", liveness: "unknown", lastProgressAt: startedProgress });
 			emit({ kind: "heartbeat", at: Date.now() });
-			expect(manager.get("sa-visible-1")).toMatchObject({ health: "active", lastHeartbeatAt: Date.now(), lastProgressAt: null, liveness: "unknown" });
+			expect(manager.get("sa-visible-1")).toMatchObject({ health: "active", lastHeartbeatAt: Date.now(), lastProgressAt: startedProgress, liveness: "unknown" });
 			await vi.advanceTimersByTimeAsync(120_000);
 			expect(manager.get("sa-visible-1")?.health).toBe("stalled-warning");
 			emit({ kind: "heartbeat", at: Date.now() });

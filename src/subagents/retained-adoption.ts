@@ -107,6 +107,8 @@ export async function reconstructRetained(registry: SubagentRegistry, successor:
 			baseRef: initial.worktree?.baseRef ?? "HEAD", status: "running", createdAt: initial.createdAt, visible: initial.backend === "visible",
 			roleId: initial.roleId ?? undefined, modelLabel: initial.modelLabel ?? undefined, sessionFilePath: initial.sessionFilePath ?? undefined,
 			pane: initial.pane ?? undefined, worktree: initial.worktree ?? undefined, budget: initial.budget,
+			turnState: initial.backend === "visible" ? initial.telemetry?.turnState ?? "working" : undefined,
+			turnSequence: initial.backend === "visible" ? initial.telemetry?.turnSequence ?? 0 : undefined,
 			usage: { turns: 0 }, transcript: [], liveText: "", liveTools: [], finalText: "" };
 		let entry: RetainedSubagent = { registry: controller, authority: controlAuthority(initial), snapshot };
 		let classification: "adopted" | "persist-only" | "lost" | "ambiguous" = "ambiguous";

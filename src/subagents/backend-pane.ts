@@ -34,6 +34,7 @@ import {
 	validatedArtifactStat,
 	PRIVATE_DIR_MODE,
 	PRIVATE_FILE_MODE,
+	PRIVATE_RESPONSE_MAX_BYTES,
 } from "../private-artifact.js";
 import type { SpawnedChild } from "./backend-pi.js";
 import type { SubagentEvent, SubagentLaunchFailure } from "./domain.js";
@@ -268,6 +269,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	let pane: PaneRef | undefined;
 	let pollTimer: ReturnType<typeof setInterval> | undefined;
 	let lastHeartbeatAt = 0;
+	let observedResponseSignature: string | undefined;
 	let interrupted = false;
 	let settled = false;
 	let steerSeq = 0;
@@ -398,6 +400,21 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		}
 	};
 
+	const observeCompletedTurn = (): void => {
+		try {
+			const stat = validatedArtifactStat(fs, paths.responseFile, taskDir, "visible-subagent response artifact");
+			if (!stat || !stat.isFile() || stat.size !== undefined && stat.size > PRIVATE_RESPONSE_MAX_BYTES) return;
+			const finalText = fs.readFileSync(paths.responseFile, "utf8");
+			const signature = `${stat.mtimeMs ?? ""}:${finalText}`;
+			if (!finalText || signature === observedResponseSignature) return;
+			observedResponseSignature = signature;
+			const observedAt = stat.mtimeMs === undefined || !Number.isFinite(stat.mtimeMs)
+				? now()
+				: Math.min(now(), Math.max(0, Math.floor(stat.mtimeMs)));
+			emitEvent?.({ kind: "turn-finished", finalText, at: observedAt });
+		} catch { /* A refused response cannot prove a completed turn. Exit settlement reports the tamper. */ }
+	};
+
 	const poll = (): void => {
 		if (settled || interrupted || authorityLost) return;
 		try { assertAuthority(); }
@@ -422,7 +439,10 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		} catch {
 			exitStat = undefined;
 		}
-		if (!exitStat) return;
+		if (!exitStat) {
+			observeCompletedTurn();
+			return;
+		}
 		if (!exitStat.isFile()) {
 			settle({ kind: "run-settled", outcome: { kind: "failed", errorText: "visible child exit marker replaced by a non-regular entry" } });
 			return;
@@ -530,6 +550,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		catch { return Promise.reject(authorityError()); }
 		beforeEffect?.();
 		fs.renameSync(`${finalPath}.tmp`, finalPath);
+		emitEvent?.({ kind: "turn-started", at: now() });
 		try { assertAuthority(); }
 		catch { return Promise.reject(authorityError()); }
 		const ackPollMs = dependencies.sendAckPollMs ?? SEND_ACK_POLL_MS;

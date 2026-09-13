@@ -149,7 +149,7 @@ function prepareLaunch(
 			if (phase !== "admitted" || !current.child || !current.pane?.paneId) throw new Error("pane-unverified");
 			assertLive(current.child);
 			fence();
-			transition((record) => ({ ...record, status: "running", telemetry: { ...record.telemetry, startedAt: record.updatedAt, lastProgressAt: null } }));
+			transition((record) => ({ ...record, status: "running", telemetry: { ...record.telemetry, startedAt: record.updatedAt, lastProgressAt: record.updatedAt, turnState: "working", turnSequence: 0 } }));
 			phase = "released";
 		},
 		beforeEffect() {
@@ -382,7 +382,9 @@ class RetainedSupervisor {
 			}
 			if (!["run-started", "run-settled", "pane-attached", "heartbeat"].includes(event.kind)) {
 				this.authority.transition((record) => {
-					const telemetry = { ...record.telemetry, startedAt: record.telemetry?.startedAt ?? null, lastProgressAt: record.updatedAt };
+					let telemetry = { ...record.telemetry, startedAt: record.telemetry?.startedAt ?? null, lastProgressAt: record.updatedAt };
+					if (event.kind === "turn-started") telemetry = { ...telemetry, turnState: "working" };
+					else if (event.kind === "turn-finished") telemetry = { ...telemetry, turnState: "idle", turnSequence: (telemetry.turnSequence ?? 0) + 1 };
 					return { ...record, telemetry: event.kind === "usage" ? {
 						...telemetry,
 						reportedTokens: addReportedSubagentUsage(telemetry.reportedTokens, event.tokens),

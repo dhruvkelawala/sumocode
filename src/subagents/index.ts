@@ -39,13 +39,36 @@ interface SettledSubagentDetails {
 	pane: SubagentSnapshot["pane"];
 }
 
-const settledPayload = (snapshot: SubagentSnapshot): DeliveryPayload => {
+const turnDonePayload = (snapshot: SubagentSnapshot): DeliveryPayload => ({
+	id: snapshot.id,
+	title: snapshot.title,
+	status: "turn_done",
+	turnSequence: snapshot.turnSequence,
+	turnText: snapshot.finalText,
+	content: buildSubagentResultMessage({
+		id: snapshot.id,
+		title: snapshot.title,
+		status: "turn_done",
+		output: snapshot.finalText,
+		sessionFilePath: snapshot.sessionFilePath,
+	}),
+	details: {
+		id: snapshot.id,
+		title: snapshot.title,
+		status: snapshot.status,
+		roleId: snapshot.roleId,
+		activity: activityFromSubagentSnapshot(snapshot),
+		pane: snapshot.pane,
+	},
+});
+
+const settledPayload = (snapshot: SubagentSnapshot, repeatOutput = true): DeliveryPayload => {
 	const result = buildSubagentResultMessage({
 		id: snapshot.id,
 		title: snapshot.title,
 		status: snapshot.status === "done" ? "done" : "error",
 		errorText: snapshot.errorText,
-		output: snapshot.finalText,
+		output: repeatOutput ? snapshot.finalText : "",
 		sessionFilePath: snapshot.sessionFilePath,
 		manifest: snapshot.manifest,
 	});
@@ -162,7 +185,7 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 		...options.managerDependencies,
 	});
 	const delivery = createDeferredResultDelivery();
-	const observedSettledIds = new Set<string>();
+	const observedResultKeys = new Set<string>();
 	let latestContext: ExtensionContext | undefined;
 	let unsubscribe: (() => void) | undefined;
 	let statusWidgetVisible = false;
@@ -253,17 +276,33 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 
 	const onManagerChange = (): void => {
 		for (const snapshot of manager.list()) {
-			if (snapshot.status === "running" || snapshot.status === "queued" || observedSettledIds.has(snapshot.id)) continue;
-			observedSettledIds.add(snapshot.id);
-			if (manager.consumedIds.has(snapshot.id) || !manager.canDeliver(snapshot.id)) delivery.consume(snapshot.id);
-			else delivery.defer(snapshot.id, () => settledPayload(snapshot));
+			if (snapshot.status === "queued") continue;
+			if (snapshot.status === "running") {
+				if (snapshot.turnState !== "idle" || !snapshot.turnSequence || snapshot.deliveredTurnSequence === snapshot.turnSequence || !manager.canDeliver(snapshot.id)) continue;
+				const key = `${snapshot.id}:turn:${snapshot.turnSequence}`;
+				if (observedResultKeys.has(key)) continue;
+				observedResultKeys.add(key);
+				delivery.defer(key, () => turnDonePayload(snapshot));
+				continue;
+			}
+			const key = `${snapshot.id}:settled`;
+			if (observedResultKeys.has(key)) continue;
+			observedResultKeys.add(key);
+			if (manager.consumedIds.has(snapshot.id) || !manager.canDeliver(snapshot.id)) {
+				delivery.consume(snapshot.id);
+				continue;
+			}
+			// Always close the lifecycle and retained delivery record. If the final
+			// output was already reported at idle, send only the terminal envelope.
+			delivery.defer(key, () => settledPayload(snapshot, snapshot.status === "error" || snapshot.deliveredTurnText !== snapshot.finalText));
 		}
 		// Prune the mirror sets in lockstep with the manager's MAX_TRACKED prune
 		// so a long-lived session's per-spawn tracking cannot grow unbounded.
 		const liveIds = new Set(manager.list().map((snapshot) => snapshot.id));
-		for (const id of observedSettledIds) {
+		for (const key of observedResultKeys) {
+			const id = key.slice(0, key.indexOf(":"));
 			if (!liveIds.has(id)) {
-				observedSettledIds.delete(id);
+				observedResultKeys.delete(key);
 				delivery.forget(id);
 			}
 		}
@@ -282,7 +321,7 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 		if (unsubscribe) return;
 		for (const snapshot of manager.list()) {
 			if (snapshot.status !== "done" && snapshot.status !== "error") continue;
-			observedSettledIds.add(snapshot.id);
+			observedResultKeys.add(`${snapshot.id}:settled`);
 			delivery.consume(snapshot.id);
 		}
 		unsubscribe = manager.addChangeListener(onManagerChange);

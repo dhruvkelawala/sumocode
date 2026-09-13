@@ -78,7 +78,8 @@ const formatSnapshotLine = (snapshot: SubagentSnapshot, includeBranch = false): 
 	const identity = [snapshot.roleId, model].filter((part): part is string => part !== undefined).join(", ");
 	const branch = includeBranch && snapshot.worktree ? ` · ${snapshot.worktree.branch}` : "";
 	const pane = snapshot.pane ? ` · pane ${snapshot.pane.paneId ?? snapshot.pane.tabId ?? snapshot.pane.workspaceId ?? "unknown"} · agent ${snapshot.pane.agentName}` : "";
-	return [`${snapshot.id} [${snapshot.status}] "${snapshot.title}" (${identity}, ${formatDuration(Date.now() - snapshot.createdAt)}, ${snapshot.cwd})${branch}${pane}`, formatSubagentBudget(snapshot)].filter(Boolean).join("\n  ");
+	const turn = snapshot.turnState ? ` · turn ${snapshot.turnState}` : "";
+	return [`${snapshot.id} [${snapshot.status}] "${snapshot.title}" (${identity}, ${formatDuration(Date.now() - snapshot.createdAt)}, ${snapshot.cwd})${turn}${branch}${pane}`, formatSubagentBudget(snapshot)].filter(Boolean).join("\n  ");
 };
 
 const manifestSummary = (snapshot: SubagentSnapshot): string | undefined => snapshot.manifest

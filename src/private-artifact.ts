@@ -19,6 +19,8 @@ import { dirname } from "node:path";
 export const PRIVATE_DIR_MODE = 0o700;
 /** Owner-only files: private artifacts and control files. */
 export const PRIVATE_FILE_MODE = 0o600;
+/** Hard ceiling for model-response artifacts read synchronously by the parent. */
+export const PRIVATE_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
 
 /** Structural subset of `fs.Stats` the validators consume. */
 export interface PrivateArtifactStat {
@@ -26,6 +28,9 @@ export interface PrivateArtifactStat {
 	isDirectory(): boolean;
 	mode: number;
 	uid: number;
+	/** Present on Node fs.Stats; optional so narrow test doubles stay valid. */
+	mtimeMs?: number;
+	size?: number;
 }
 
 export interface PrivateArtifactFs {

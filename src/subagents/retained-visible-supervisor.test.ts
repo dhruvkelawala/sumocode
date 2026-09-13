@@ -182,12 +182,29 @@ describe("retained visible owner", () => {
 		await refused;
 		expect(f.operations.signalTree).not.toHaveBeenCalled();
 	});
+	it("persists the visible turn state before process settlement", async () => {
+		const f = fixture(); await f.start();
+		writeFileSync(join(f.taskDir, "response.md"), "answer", { mode: 0o600 });
+
+		await vi.advanceTimersByTimeAsync(750);
+
+		expect(f.owner.record).toMatchObject({ status: "running", telemetry: { turnState: "idle", turnSequence: 1, lastProgressAt: expect.any(Number) } });
+		expect(f.owner.completion).toBeUndefined();
+		const idleProgress = f.owner.record.telemetry?.lastProgressAt;
+		const { child } = f.control();
+		const steer = child.send!("continue");
+		expect(f.owner.record.telemetry).toMatchObject({ turnState: "working", lastProgressAt: idleProgress });
+		renameSync(join(f.taskDir, "control", "steer-1.txt"), join(f.taskDir, "control", "steer-1.consumed"));
+		await vi.advanceTimersByTimeAsync(250);
+		await steer;
+	});
+
 	it("persists heartbeat observations and permits an authorized graceful close", async () => {
 		const f = fixture(); await f.start();
 		const { child } = f.control();
 		writeFileSync(join(f.taskDir, "control", "heartbeat"), "1050\n", { mode: 0o600 });
 		await vi.advanceTimersByTimeAsync(750);
-		expect(f.owner.record.telemetry).toMatchObject({ lastHeartbeatAt: 1050, lastProgressAt: null });
+		expect(f.owner.record.telemetry).toMatchObject({ lastHeartbeatAt: 1050, lastProgressAt: 1050, turnState: "working" });
 		child.requestClose!();
 		expect(readFileSync(join(f.taskDir, "control", "close.request"), "utf8")).toBe("1");
 		await f.finish();

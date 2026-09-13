@@ -508,6 +508,7 @@ describe("sumocode extension", () => {
 		expect(toolNames.filter((name) => name.startsWith("subagent_"))).toEqual([
 			"subagent_spawn",
 			"subagent_send",
+			"subagent_reply",
 			"subagent_check",
 			"subagent_wait",
 			"subagent_cancel",

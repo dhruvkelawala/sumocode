@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { lstatSync, realpathSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { systemProcessTree } from "../background-tasks/process-tree.js";
 import { assertPrivateDir, nodeArtifactFs } from "../private-artifact.js";
@@ -57,7 +57,9 @@ export async function runRetainedSupervisorEntry(
 		}, { ...dependencies, spawn: dependencies.spawnPane ?? createPaneChildSpawner({ resolveLauncher: () => config.visible!.launcher }) })
 			: new RetainedHeadlessSupervisor({ ...owner,
 			launch: { cwd: config.cwd, prompt, retainedBootstrap: descriptor, model: config.model.label,
-				thinking: config.thinking, builtInTools: config.builtInTools, inherited: {} },
+				thinking: config.thinking, builtInTools: config.builtInTools, inherited: {},
+				sessionDir: initial.sessionFilePath ? undefined : join(taskDir, "session"),
+				resumeSessionFile: initial.sessionFilePath ?? undefined },
 		}, { ...dependencies, spawn: dependencies.spawn ?? createPiChildSpawner(undefined, undefined, () => config.pi) });
 		if (await controller.settlement !== "settled") throw new Error();
 		// Production controllers may still need to transfer an undelivered completion.

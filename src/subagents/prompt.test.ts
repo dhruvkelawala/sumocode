@@ -47,7 +47,7 @@ describe("subagent prompt guidance", () => {
 		// bare promise.
 		expect(guidance).toMatch(/does not prove the text was delivered as a Pi steering message/);
 		expect(guidance).toContain("not typed into its terminal");
-		expect(guidance).toContain("Headless or settled children cannot receive input");
+		expect(guidance).toContain("running headless children cannot receive input");
 		expect(guidance).toContain("visible children stay open while active and auto-close after 30s of silence");
 		expect(guidance).toContain("use subagent_close to end one deliberately");
 		expect(SUBAGENT_TOOL_DESCRIPTIONS.send).toContain("control consumption and synchronous submission");
@@ -56,6 +56,8 @@ describe("subagent prompt guidance", () => {
 		expect(SUBAGENT_TOOL_DESCRIPTIONS.close).toContain("Gracefully close visible subagents");
 		expect(SUBAGENT_TOOL_DESCRIPTIONS.close).toContain("Use subagent_cancel only to abort work");
 		expect(SUBAGENT_TOOL_DESCRIPTIONS.spawn).toContain("visible=true");
+		expect(guidance).toContain("prefer subagent_reply over respawning");
+		expect(SUBAGENT_TOOL_DESCRIPTIONS.reply).toContain("settled headless subagent");
 	});
 
 	it("teaches role isolation defaults and the dirty-checkout visibility boundary", () => {

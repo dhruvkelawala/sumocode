@@ -68,7 +68,7 @@ export class RetainedRuntime {
 		const initial: SubagentRecord = {
 			schemaVersion: 2, revision: 1, id: task.id, ownerSessionId: sessionId, backend: task.visible ? "visible" : "headless",
 			status: "starting", taskDir, child: null, supervisor: null, pane: null, worktree: task.worktreeRef ?? null,
-			sessionFilePath: null, modelLabel: model.model.label, roleId: task.roleId ?? null, budget: task.budget,
+			sessionFilePath: task.resume?.sessionFilePath ?? null, modelLabel: model.model.label, roleId: task.roleId ?? null, budget: task.budget,
 			createdAt: now, updatedAt: now, settledAt: null, completionId: null, outcome: null,
 			delivery: { state: "none", claim: null }, result: null, manifest: null, writerLease: null, controlLease: null, controlHead: 0,
 		};

@@ -120,6 +120,99 @@ describe("SubagentManager", () => {
 		} finally { manager.disposeAll(); vi.useRealTimers(); }
 	});
 
+	it("replies to a settled headless child by resuming its session in a new child", async () => {
+		const launches: Array<SpawnSubagentTask & { id: string }> = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const manager = new SubagentManager((task) => {
+			launches.push(task);
+			return { events: (emit) => { emitters.set(task.id, emit); emit({ kind: "run-started" }); }, interrupt: vi.fn() };
+		}, {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "current-head" }),
+			createWorktree: async () => ({ ok: true, path: "/isolated/conversation", branch: "sumo/conversation", baseRef: "HEAD" }),
+			resolveWorktreeBaseRef: async () => "worktree-base",
+			buildCompletionManifest: fakeManifestBuilder,
+		});
+		try {
+			const original = await manager.spawn({ ...makeTask("conversation"), roleId: "research", worktree: true });
+			if (!("id" in original)) throw new Error("unexpected capacity refusal");
+			emitters.get(original.id)?.({ kind: "session-located", sessionFilePath: "/tmp/session/child.jsonl" });
+			emitters.get(original.id)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "first result" } });
+			await vi.waitFor(() => expect(manager.get(original.id)?.status).toBe("done"));
+
+			const reply = await manager.reply(original.id, "clarify point 3", { model: "provider/model", thinking: "high", builtInTools: ["read"] });
+
+			expect(reply).toMatchObject({ status: "running", repliesTo: original.id, sessionFilePath: "/tmp/session/child.jsonl", baseRef: "worktree-base" });
+			expect(launches[1]).toMatchObject({
+				prompt: "clarify point 3", title: "re: conversation", roleId: "research", cwd: "/isolated/conversation",
+				model: "provider/model", thinking: "high", builtInTools: ["read"], visible: undefined,
+				resume: {
+					sessionFilePath: "/tmp/session/child.jsonl", repliesTo: original.id, baseRef: "worktree-base",
+					worktree: { path: "/isolated/conversation", branch: "sumo/conversation", baseRef: "worktree-base", repoRoot: "/repo" },
+				},
+			});
+			await expect(manager.reply(original.id, "duplicate")).rejects.toThrow(`already in flight (${"id" in reply ? reply.id : "missing"})`);
+		} finally { manager.disposeAll(); }
+	});
+
+	it("reserves a session before asynchronous reply setup", async () => {
+		let blockReply = false;
+		let release!: () => void;
+		const setupGate = new Promise<void>((resolve) => { release = resolve; });
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => { emitters.set(task.id, emit); emit({ kind: "run-started" }); }, interrupt: vi.fn(),
+		}), {
+			captureGitContext: async () => { if (blockReply) await setupGate; return { baseRef: "base-ref" }; },
+			buildCompletionManifest: fakeManifestBuilder,
+		});
+		try {
+			const original = await manager.spawn(makeTask("parallel"));
+			if (!("id" in original)) throw new Error("unexpected capacity refusal");
+			emitters.get(original.id)?.({ kind: "session-located", sessionFilePath: "/tmp/session/parallel.jsonl" });
+			emitters.get(original.id)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+			await vi.waitFor(() => expect(manager.get(original.id)?.status).toBe("done"));
+			blockReply = true;
+
+			const first = manager.reply(original.id, "first");
+			await expect(manager.reply(original.id, "second")).rejects.toThrow("already in flight");
+			release();
+			await expect(first).resolves.toMatchObject({ status: "running" });
+		} finally { manager.disposeAll(); }
+	});
+
+	it("rejects a second reply while the first continuation is queued", async () => {
+		const { manager, emitters } = deferredBackend();
+		try {
+			const original = await manager.spawn(makeTask("original"));
+			if (!("id" in original)) throw new Error("unexpected capacity refusal");
+			emitters.get(original.id)?.({ kind: "session-located", sessionFilePath: "/tmp/session/child.jsonl" });
+			emitters.get(original.id)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+			await vi.waitFor(() => expect(manager.get(original.id)?.status).toBe("done"));
+			for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await manager.spawn(makeTask(`busy-${index}`));
+
+			const queued = await manager.reply(original.id, "first reply");
+			expect(queued).toMatchObject({ status: "queued", sessionFilePath: "/tmp/session/child.jsonl" });
+			await expect(manager.reply(original.id, "second reply")).rejects.toThrow("already in flight");
+		} finally { manager.disposeAll(); }
+	});
+
+	it("rejects replies to running, visible, and sessionless children", async () => {
+		const { manager, emitters } = deferredBackend();
+		try {
+			const running = await manager.spawn(makeTask("running"));
+			if (!("id" in running)) throw new Error("unexpected capacity refusal");
+			await expect(manager.reply(running.id, "more")).rejects.toThrow("still running");
+
+			const visible = await manager.spawn({ ...makeTask("visible"), visible: true });
+			if (!("id" in visible)) throw new Error("unexpected capacity refusal");
+			await expect(manager.reply(visible.id, "more")).rejects.toThrow("visible child");
+
+			emitters.get(running.id)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+			await vi.waitFor(() => expect(manager.get(running.id)?.status).toBe("done"));
+			await expect(manager.reply(running.id, "more")).rejects.toThrow("has no captured session");
+		} finally { manager.disposeAll(); }
+	});
+
 	it("distinguishes visible heartbeat from progress and warns only after observed heartbeat silence", async () => {
 		vi.useFakeTimers();
 		let emit: (event: SubagentEvent) => void = () => undefined;
@@ -397,6 +490,23 @@ describe("SubagentManager", () => {
 		expect(replacement).toMatchObject({ id: "sa-replacement-11", status: "running" });
 		resolveManifest({ baseRef: "base-ref", changedPaths: [], dirty: false, commits: 0, exit: "completed", durationMs: 1 });
 		await vi.waitFor(() => expect(manager.get("sa-0-1")?.status).toBe("done"));
+	});
+
+	it("settles a child when a synchronous event subscription throws", async () => {
+		const interrupt = vi.fn();
+		const manager = new SubagentManager(() => ({
+			events: () => { throw new Error("subscription failed"); },
+			interrupt,
+		}), { captureGitContext: async () => ({ baseRef: "base-ref" }), buildCompletionManifest: fakeManifestBuilder });
+
+		const child = await manager.spawn(makeTask("worker"));
+		if (child.status === "at_capacity") throw new Error("unexpected capacity refusal");
+
+		await vi.waitFor(() => expect(manager.get(child.id)).toMatchObject({
+			status: "error",
+			errorText: "subagent event stream failed: subscription failed",
+		}));
+		expect(interrupt).toHaveBeenCalledOnce();
 	});
 
 	it("contains async iterator rejection", async () => {

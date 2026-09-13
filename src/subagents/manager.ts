@@ -44,6 +44,13 @@ export interface AtCapacityDetails {
 
 export interface SpawnSubagentTask {
 	readonly budget?: SubagentBudget;
+	/** Internal continuation metadata; callers use reply() rather than setting this directly. */
+	readonly resume?: {
+		readonly sessionFilePath: string;
+		readonly repliesTo: string;
+		readonly worktree?: SubagentWorktreeRef;
+		readonly baseRef?: string;
+	};
 	readonly sourceId?: string;
 	readonly prompt: string;
 	readonly title: string;
@@ -155,7 +162,7 @@ const makeInitialSnapshot = (
 		createdAt,
 		modelLabel: task.model ?? (task.inherited?.model ? `${task.inherited.model.provider}/${task.inherited.model.id}` : undefined),
 		thinkingLabel: task.thinking ?? task.inherited?.thinking,
-		sessionFilePath,
+		sessionFilePath: task.resume?.sessionFilePath ?? sessionFilePath,
 		usage: { turns: 0 },
 		transcript: [],
 		liveText: "",
@@ -163,6 +170,7 @@ const makeInitialSnapshot = (
 		finalText: "",
 	};
 	if (task.sourceId !== undefined) snapshot.sourceId = task.sourceId;
+	if (task.resume !== undefined) snapshot.repliesTo = task.resume.repliesTo;
 	if (task.roleId !== undefined) snapshot.roleId = task.roleId;
 	if (task.visible) {
 		snapshot.visible = true;
@@ -217,6 +225,7 @@ export class SubagentManager {
 	private readonly settlingIds = new Set<string>();
 	private readonly settlingPromises = new Map<string, Promise<void>>();
 	private readonly settlingOutcomes = new Map<string, RunOutcome>();
+	private readonly replyingSessions = new Set<string>();
 	private readonly startedIds = new Set<string>();
 	private readonly cancelledSetupIds = new Set<string>();
 	private readonly workspacePlacedIds = new Set<string>();
@@ -441,6 +450,7 @@ export class SubagentManager {
 				catch { turnState = current.turnState; }
 			}
 			let next: SubagentSnapshot = { ...current, startedAt: telemetry?.startedAt ?? current.startedAt,
+				sessionFilePath: record.sessionFilePath ?? current.sessionFilePath,
 				lastProgressAt: telemetry?.lastProgressAt ?? current.lastProgressAt,
 				lastHeartbeatAt: telemetry?.lastHeartbeatAt ?? current.lastHeartbeatAt,
 				turnState, turnSequence, finalText,
@@ -557,20 +567,24 @@ export class SubagentManager {
 		};
 		try {
 			const gitContext = await this.captureGitContextImpl(task.cwd);
-			const baseRef = gitContext.baseRef ?? "HEAD";
+			const baseRef = task.resume?.baseRef ?? gitContext.baseRef ?? "HEAD";
 			if (this.setupInterrupted(id, generation)) {
 				releasePending();
 				return this.recordSetupInterruption(task, id, createdAt, baseRef, "interrupted during setup");
 			}
 			let manifestBaseRef = baseRef;
+			if (task.resume && (task.worktree || task.branch)) {
+				releasePending();
+				return this.recordSpawnFailure(task, id, createdAt, baseRef, "session resume cannot create a new worktree or branch");
+			}
 			if (task.branch && !task.worktree) {
 				releasePending();
 				return this.recordSpawnFailure(task, id, createdAt, baseRef, "branch requires worktree: true; refusing to ignore the isolation request");
 			}
 			let childCwd = task.cwd;
-			let worktree: SubagentWorktreeRef | undefined;
+			let worktree: SubagentWorktreeRef | undefined = task.resume?.worktree;
 
-			if (task.worktree) {
+			if (task.worktree && !task.resume) {
 				if (!gitContext.repoRoot || !gitContext.baseRef) {
 					releasePending();
 					return this.recordSpawnFailure(task, id, createdAt, baseRef, "unable to create worktree: the spawn cwd is not a readable git checkout");
@@ -769,6 +783,32 @@ export class SubagentManager {
 			this.cancelledSetupIds.delete(id);
 			releaseVisibleSpawn?.();
 			releasePending();
+		}
+	}
+
+	public async reply(id: string, text: string, overrides: Pick<SpawnSubagentTask, "sourceId" | "appendSystemPrompt" | "model" | "thinking" | "inherited" | "builtInTools"> = {}): Promise<SubagentSnapshot | AtCapacityDetails> {
+		const original = this.snapshots.get(id);
+		if (!original) throw new Error(`Unknown subagent id: ${id}. Known ids: ${this.list().map((snapshot) => snapshot.id).join(", ") || "(none)"}`);
+		if (original.visible) throw new Error(`${id} is a visible child — it converses live via subagent_send while open; reply-after-close is not supported`);
+		if (!isSettled(original)) throw new Error(`${id} is still ${original.status} — steer it with subagent_send (visible) or wait for it to settle`);
+		if (!original.sessionFilePath) throw new Error(`${id} has no captured session (spawned before session persistence, or discovery failed) — respawn instead`);
+		const active = this.list().find((snapshot) => snapshot.id !== id && snapshot.sessionFilePath === original.sessionFilePath && !isSettled(snapshot));
+		if (this.replyingSessions.has(original.sessionFilePath) || active) throw new Error(`a reply to ${id} is already in flight${active ? ` (${active.id})` : ""}`);
+		this.replyingSessions.add(original.sessionFilePath);
+		try {
+			return await this.spawn({
+				...overrides,
+				prompt: text,
+				title: original.title.startsWith("re: ") ? original.title : `re: ${original.title}`,
+				roleId: original.roleId,
+				cwd: original.cwd,
+				model: overrides.model ?? original.modelLabel,
+				thinking: overrides.thinking ?? original.thinkingLabel,
+				visible: undefined,
+				resume: { sessionFilePath: original.sessionFilePath, repliesTo: id, worktree: original.worktree, baseRef: original.baseRef },
+			});
+		} finally {
+			this.replyingSessions.delete(original.sessionFilePath);
 		}
 	}
 
@@ -1180,15 +1220,8 @@ export class SubagentManager {
 
 	private consumeEvents(id: string, events: SpawnedChild["events"]): void {
 		const emit = (event: SubagentEvent) => this.fold(id, event);
-		if (!(Symbol.asyncIterator in events)) {
-			events(emit);
-			return;
-		}
-		const consume = async (): Promise<void> => {
-			for await (const event of events) emit(event);
-		};
-		// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Promise rejection boundary: backend async iterators may reject with any JavaScript value.
-		void consume().catch((error: unknown) => {
+		// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Backend subscriptions and async iterators may fail with any JavaScript value.
+		const fail = (error: unknown): void => {
 			const current = this.snapshots.get(id);
 			if (!current || isSettled(current)) return;
 			const message = error instanceof Error ? error.message : String(error);
@@ -1208,7 +1241,19 @@ export class SubagentManager {
 					// Diagnostics must not reopen a contained backend failure.
 				}
 			}
-		});
+		};
+		if (!(Symbol.asyncIterator in events)) {
+			try {
+				events(emit);
+			} catch (error) {
+				fail(error);
+			}
+			return;
+		}
+		const consume = async (): Promise<void> => {
+			for await (const event of events) emit(event);
+		};
+		void consume().catch(fail);
 	}
 
 	/**
@@ -1347,6 +1392,11 @@ export class SubagentManager {
 		if (!current) return;
 		if (event.kind === "pane-attached") {
 			this.snapshots.set(id, this.attachPane(id, current, event.pane));
+			this.notify();
+			return;
+		}
+		if (event.kind === "session-located") {
+			this.snapshots.set(id, { ...current, sessionFilePath: event.sessionFilePath });
 			this.notify();
 			return;
 		}

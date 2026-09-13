@@ -374,6 +374,9 @@ class RetainedSupervisor {
 		try {
 			this.authority.fence();
 			this.artifacts.append(event);
+			if (event.kind === "session-located") {
+				this.authority.transition((record) => ({ ...record, sessionFilePath: event.sessionFilePath }));
+			}
 			if (event.kind === "heartbeat") {
 				this.authority.transition((record) => ({ ...record, telemetry: {
 					...record.telemetry, startedAt: record.telemetry?.startedAt ?? null,

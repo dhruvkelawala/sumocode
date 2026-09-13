@@ -153,9 +153,9 @@ describe("subagent tools", () => {
 		} finally { manager.disposeAll(); vi.useRealTimers(); }
 	});
 
-	it("registers the seven subagent tools and exposes visible spawning with baseRef", () => {
+	it("registers the eight subagent tools and exposes visible spawning with baseRef", () => {
 		const { registered, tool } = createHarness();
-		expect(registered.map((entry) => entry.name)).toEqual(["subagent_spawn", "subagent_send", "subagent_check", "subagent_wait", "subagent_cancel", "subagent_close", "subagent_list"]);
+		expect(registered.map((entry) => entry.name)).toEqual(["subagent_spawn", "subagent_send", "subagent_reply", "subagent_check", "subagent_wait", "subagent_cancel", "subagent_close", "subagent_list"]);
 		const spawnSchema = JSON.stringify(tool("subagent_spawn").parameters);
 		expect(spawnSchema).toContain("visible");
 		expect(spawnSchema).toContain("baseRef");
@@ -163,6 +163,26 @@ describe("subagent tools", () => {
 		for (const name of ["subagent_send", "subagent_check"]) {
 			expect(JSON.stringify(tool(name).parameters)).toContain("e.g. sa-issue-to-pr-426-2");
 		}
+	});
+
+	it("continues a settled headless session and re-resolves its role", async () => {
+		const role: SubagentRole = { id: "research", label: "Research", description: "research", systemPrompt: "fresh role instructions", tools: ["read"] };
+		const { manager, emitters, tool, ctx, spawnedTasks } = createHarness("herdr", [role]);
+		try {
+			await tool("subagent_spawn").execute("spawn", { prompt: "first", name: "worker", role: "research" }, undefined, undefined, ctx);
+			emitters.get("sa-worker-1")?.({ kind: "session-located", sessionFilePath: "/tmp/session/child.jsonl" });
+			emitters.get("sa-worker-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "first result" } });
+			await vi.waitFor(() => expect(manager.get("sa-worker-1")?.status).toBe("done"));
+
+			const result = await tool("subagent_reply").execute("reply", { id: "sa-worker-1", text: "clarify" }, undefined, undefined, ctx);
+
+			expect(textOf(result)).toContain("Started sa-re-worker-2 continuing sa-worker-1's session");
+			expect(spawnedTasks[1]).toMatchObject({
+				prompt: "clarify", roleId: "research", appendSystemPrompt: "fresh role instructions", builtInTools: ["read"],
+				resume: { sessionFilePath: "/tmp/session/child.jsonl", repliesTo: "sa-worker-1" },
+			});
+			expect(textOf(await tool("subagent_list").execute("list", {}))).toContain("re: sa-worker-1");
+		} finally { manager.disposeAll(); }
 	});
 
 	it("enumerates loaded roles with their resolved model in the spawn schema", () => {

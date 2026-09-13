@@ -90,13 +90,34 @@ describe("planPlacement", () => {
 		});
 	});
 
-	it("prefers a live under-capacity tab over the empty caller tab", () => {
+	it("prefers the caller tab over a live under-capacity tab when both have room", () => {
 		const cachedTab = Array.from({ length: 4 }, (_, index) => pane("w1:t2", index + 1));
 		const olderTab = [pane("w1:t1", 5), pane("w1:t1", 6)];
 		expect(planPlacement({ hostKind: "herdr", isolated: false, visiblePanes: [...cachedTab, ...olderTab], sessionTabId: "w1:t2", callerTabId: "w1:t0" })).toEqual({
 			kind: "tab",
+			tabId: "w1:t0",
+			direction: "right",
+		});
+	});
+
+	it("reclaims the caller tab while the cached overflow tab still has room", () => {
+		// Four children filled the caller tab and overflowed into w1:t2, which
+		// the attach cache now points at. The caller-tab children have settled
+		// but the parent session pane keeps w1:t1 alive.
+		const overflowTab = [pane("w1:t2", 1), pane("w1:t2", 2)];
+		expect(planPlacement({ hostKind: "herdr", isolated: false, visiblePanes: overflowTab, sessionTabId: "w1:t2", callerTabId: "w1:t1" })).toEqual({
+			kind: "tab",
 			tabId: "w1:t1",
 			direction: "right",
+		});
+	});
+
+	it("keeps counting the caller tab's live children toward its capacity", () => {
+		const callerTab = [pane("w1:t1", 1), pane("w1:t1", 2), pane("w1:t1", 3)];
+		expect(planPlacement({ hostKind: "herdr", isolated: false, visiblePanes: callerTab, sessionTabId: "w1:t2", callerTabId: "w1:t1" })).toEqual({
+			kind: "tab",
+			tabId: "w1:t1",
+			direction: "down",
 		});
 	});
 

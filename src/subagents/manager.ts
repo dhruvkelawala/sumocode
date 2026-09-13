@@ -198,6 +198,8 @@ export class SubagentManager {
 	private subagentsTabId?: string;
 	private visibleSpawnReserved = false;
 	private readonly visibleSpawnWaiters: VisibleSpawnWaiter[] = [];
+	/** Serializes worktree creation; see withWorktreeCreation. */
+	private worktreeGate: Promise<void> = Promise.resolve();
 	private dequeueTail: Promise<void> = Promise.resolve();
 	private readonly settlingIds = new Set<string>();
 	private readonly settlingPromises = new Map<string, Promise<void>>();
@@ -538,19 +540,32 @@ export class SubagentManager {
 					releasePending();
 					return this.recordSpawnFailure(task, id, createdAt, baseRef, "unable to create worktree: the spawn cwd is not a readable git checkout");
 				}
+				// Captured before the closure so the narrowed non-undefined repo root
+				// survives into withWorktreeCreation's callback.
+				const repoRoot = gitContext.repoRoot;
 				const resolved = resolveCreateOptions({
-					repoRoot: gitContext.repoRoot,
+					repoRoot,
 					branch: task.branch,
 					baseRef: task.baseRef ?? "HEAD",
 					task: task.title,
 				});
-				const created = await this.createWorktreeImpl({
-					repoRoot: gitContext.repoRoot,
-					branch: resolved.branch,
-					baseRef: resolved.baseRef,
-					path: resolved.path,
-					task: task.title,
+				const created = await this.withWorktreeCreation(async () => {
+					// The gate can queue a spawn behind another creation. A setup that
+					// was interrupted while waiting must not create (and preserve) a
+					// worktree it will never run.
+					if (this.setupInterrupted(id, generation)) return undefined;
+					return this.createWorktreeImpl({
+						repoRoot,
+						branch: resolved.branch,
+						baseRef: resolved.baseRef,
+						path: resolved.path,
+						task: task.title,
+					});
 				});
+				if (!created) {
+					releasePending();
+					return this.recordSetupInterruption(task, id, createdAt, baseRef, "interrupted during setup");
+				}
 				if (!created.ok) {
 					releasePending();
 					return this.recordSpawnFailure(task, id, createdAt, baseRef, `unable to create worktree: ${created.message}`);
@@ -1028,6 +1043,25 @@ export class SubagentManager {
 		// Never overwrite that terminal snapshot with a second failure record.
 		if (current && isSettled(current)) return current;
 		return this.recordSpawnFailure(task, id, createdAt, baseRef, errorText, cwd, worktree);
+	}
+
+	/**
+	 * `git worktree add` writes the shared repository config, so concurrent
+	 * isolated spawns can reject with `could not lock config file .git/config`
+	 * and fail a spawn that would otherwise succeed. One in-process queue
+	 * serializes creation; every holder releases in `finally`, so a failed add
+	 * cannot wedge the queue.
+	 */
+	private async withWorktreeCreation<T>(run: () => Promise<T>): Promise<T> {
+		const waitForTurn = this.worktreeGate;
+		let release: () => void = () => undefined;
+		this.worktreeGate = new Promise<void>((resolve) => { release = resolve; });
+		await waitForTurn;
+		try {
+			return await run();
+		} finally {
+			release();
+		}
 	}
 
 	private reserveVisibleSpawn(expiresAt: number): Promise<(() => void) | undefined> {

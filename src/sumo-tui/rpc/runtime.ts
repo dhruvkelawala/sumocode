@@ -112,7 +112,6 @@ const FALLBACK_STATE: RpcHostChromeState = {
 	messageCount: 0,
 	pendingMessageCount: 0,
 	hasMessages: false,
-	taskPartialCount: 0,
 	costUsd: 0,
 };
 

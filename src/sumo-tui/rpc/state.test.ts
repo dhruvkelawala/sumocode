@@ -259,38 +259,26 @@ describe("RpcHostStateStore", () => {
 		expect(store.handleAgentEvent({ type: "queue_update", steering: [], followUp: [] }).queuedMessages).toEqual([]);
 	});
 
-	it("tracks session/thinking updates and task partial counts", () => {
+	it("tracks session and thinking updates", () => {
 		const store = new RpcHostStateStore();
 
 		store.handleAgentEvent({ type: "session_info_changed", name: "Renamed" });
 		store.handleAgentEvent({ type: "thinking_level_changed", level: "minimal" });
-		const state = store.handleAgentEvent({
-			type: "tool_execution_update",
-			toolCallId: "task-1",
-			toolName: "task",
-			partialResult: { content: [{ type: "text", text: "partial" }] },
-		});
+		const state = store.handleAgentEvent({ type: "message_start", message: { role: "assistant" } });
 
 		expect(state).toMatchObject({
 			sessionName: "Renamed",
 			thinkingLevel: "minimal",
-			taskPartialCount: 1,
-			lastEventType: "tool_execution_update",
+			lastEventType: "message_start",
 		});
 	});
 
 	it("resets transient event chrome when hydrating fresh RPC state", () => {
 		const store = new RpcHostStateStore();
 
-		const beforeHydrate = store.handleAgentEvent({
-			type: "tool_execution_update",
-			toolCallId: "task-1",
-			toolName: "task",
-			partialResult: { content: [{ type: "text", text: "partial" }] },
-		});
+		const beforeHydrate = store.handleAgentEvent({ type: "message_start", message: { role: "assistant" } });
 		expect(beforeHydrate).toMatchObject({
-			taskPartialCount: 1,
-			lastEventType: "tool_execution_update",
+			lastEventType: "message_start",
 		});
 
 		const hydrated = store.hydrateFromRpcState(asRpcSessionState({
@@ -309,7 +297,6 @@ describe("RpcHostStateStore", () => {
 
 		expect(hydrated).toMatchObject({
 			isStreaming: true,
-			taskPartialCount: 0,
 		});
 		expect(hydrated.lastEventType).toBeUndefined();
 	});

@@ -1,6 +1,5 @@
 import { parseSkillBlock } from "@earendil-works/pi-coding-agent";
 import { parseActivitySnapshot, type ActivitySnapshot, type ActivityStatus } from "../../activity/domain.js";
-import { activityFromNativeTaskRecord } from "../../activity/native-task-adapter.js";
 import { projectPiToolActivity } from "../../activity/pi-projector.js";
 import {
 	activitiesFromSubagentToolRecord,
@@ -413,101 +412,11 @@ function parseDelegationTools(value: SessionValue): ToolCallViewModel[] {
 	return results;
 }
 
-interface TaskMetadata {
-	readonly id: string;
-	readonly arguments?: SessionRecord;
-	readonly prompt?: string;
-	readonly model?: string;
-	readonly thinking?: string;
-}
-
-function taskRecordId(record: SessionRecord): string | undefined {
-	return firstString(record.id, record.toolCallId);
-}
-
-function isTaskToolRecord(record: SessionRecord): boolean {
-	return firstString(record.name, record.toolName) === "task";
-}
-
-function taskArgumentsFromRecord(record: SessionRecord) {
-	return asRecord(record.arguments ?? record.input);
-}
-
-function firstTaskFromArgs(args: SessionRecord | undefined) {
-	const tasks = Array.isArray(args?.tasks) ? args.tasks : [];
-	return asRecord(tasks[0]);
-}
-
-function taskMetadataFromRecord(record: SessionRecord): TaskMetadata | undefined {
-	if (!isTaskToolRecord(record)) return undefined;
-	const id = taskRecordId(record);
-	if (!id) return undefined;
-	const args = taskArgumentsFromRecord(record);
-	const firstTask = firstTaskFromArgs(args);
-	return {
-		id,
-		arguments: args,
-		prompt: firstString(firstTask?.prompt, firstTask?.task, args?.prompt, args?.task, record.prompt, record.task),
-		model: firstString(firstTask?.model, args?.model, record.model),
-		thinking: firstString(firstTask?.thinking, args?.thinking, record.thinking),
-	};
-}
-
-function collectTaskMetadataFromRecord(record: SessionRecord, cache: Map<string, TaskMetadata>): void {
-	const metadata = taskMetadataFromRecord(record);
-	if (metadata && (metadata.arguments || metadata.prompt || metadata.model || metadata.thinking)) cache.set(metadata.id, metadata);
-	if (!Array.isArray(record.content)) return;
-	for (const part of record.content) {
-		const partRecord = asRecord(part);
-		if (partRecord) collectTaskMetadataFromRecord(partRecord, cache);
-	}
-}
-
-function enrichTaskRecordFromCache(record: SessionRecord, cache: Map<string, TaskMetadata>) {
-	const id = taskRecordId(record);
-	if (!id || !isTaskToolRecord(record)) return record;
-	const metadata = cache.get(id);
-	if (!metadata) return record;
-	return {
-		...record,
-		arguments: record.arguments ?? record.input ?? metadata.arguments,
-		prompt: record.prompt ?? metadata.prompt,
-		model: record.model ?? metadata.model,
-		thinking: record.thinking ?? metadata.thinking,
-	};
-}
-
-function enrichTaskResultsFromCache(record: SessionRecord, cache: Map<string, TaskMetadata>) {
-	const enriched = enrichTaskRecordFromCache(record, cache);
-	if (!Array.isArray(enriched.content)) return enriched;
-	return {
-		...enriched,
-		content: enriched.content.map((part) => {
-			const partRecord = asRecord(part);
-			return partRecord ? enrichTaskRecordFromCache(partRecord, cache) : part;
-		}),
-	};
-}
-
 function scopedToolCallId(
 	record: SessionRecord,
 	scope: { readonly messageId: string; readonly blockIndex: number },
 ): string {
 	return firstString(record.toolCallId, record.id) ?? `pi-tool:${scope.messageId}:${Math.max(0, Math.floor(scope.blockIndex))}`;
-}
-
-function nativeTaskBlockFromRecord(
-	record: SessionRecord,
-	fallbackStatus: ToolStatus,
-	scope: { readonly messageId: string; readonly blockIndex: number },
-): ChatBlock {
-	return {
-		type: "activity",
-		activity: activityFromNativeTaskRecord(record, {
-			toolCallId: scopedToolCallId(record, scope),
-			fallbackStatus: ACTIVITY_STATUS_FROM_TOOL[fallbackStatus],
-		}),
-	};
 }
 
 function subagentBlocksFromRecord(
@@ -574,7 +483,6 @@ function blocksFromContentPart(
 			const terminal = terminalBlocksFromRecord(record, fallback, scope);
 			if (terminal) return terminal;
 			const toolName = firstString(record.name, record.toolName);
-			if (toolName === "task") return [nativeTaskBlockFromRecord(record, "running", scope)];
 			if (toolName?.startsWith("subagent_")) return subagentBlocksFromRecord(record, fallback, scope);
 			return [activityBlockFromRecord(record, fallback, scope)];
 		}
@@ -583,7 +491,6 @@ function blocksFromContentPart(
 			const terminal = terminalBlocksFromRecord(record, "success", scope);
 			if (terminal) return terminal;
 			const toolName = firstString(record.name, record.toolName);
-			if (toolName === "task") return [nativeTaskBlockFromRecord(record, "success", scope)];
 			if (toolName?.startsWith("subagent_")) return subagentBlocksFromRecord(record, "success", scope);
 			return [activityBlockFromRecord(record, "success", scope), ...imageBlocksFromContent(record.content)];
 		}
@@ -621,7 +528,6 @@ function blocksFromMessage(record: SessionRecord, messageScope: string, options:
 		const terminal = terminalBlocksFromRecord(record, "success", scope);
 		if (terminal) return terminal;
 		const toolName = firstString(record.toolName, record.name);
-		if (toolName === "task") return [nativeTaskBlockFromRecord(record, "success", scope)];
 		if (toolName?.startsWith("subagent_")) return subagentBlocksFromRecord(record, "success", scope);
 		return [activityBlockFromRecord(record, "success", scope), ...imageBlocksFromContent(record.content)];
 	}
@@ -687,26 +593,18 @@ export function chatMessageViewModelFromPiMessage<T>(
 }
 
 export interface TranscriptViewModelMapper {
-	reset(): void;
 	messageFromPiMessage<T>(message: T, index?: number, options?: MarkdownBlockParseOptions): ChatMessageViewModel | undefined;
 	transcriptFromSessionContext<T>(sessionContext: T): TranscriptViewModel;
 }
 
 export function createTranscriptViewModelMapper(): TranscriptViewModelMapper {
-	const taskMetadata = new Map<string, TaskMetadata>();
 	return {
-		reset(): void {
-			taskMetadata.clear();
-		},
 		messageFromPiMessage<T>(message: T, index = 0, options: MarkdownBlockParseOptions = {}): ChatMessageViewModel | undefined {
 			// SAFETY: T forwards the caller's raw payload verbatim; asRecord
 			// re-validates the object shape at runtime before any field reads.
 			const record = asRecord(message as SessionValue);
 			if (!record) return undefined;
-			const enriched = enrichTaskResultsFromCache(record, taskMetadata);
-			const viewModel = chatMessageViewModelFromPiMessage(enriched, index, options);
-			collectTaskMetadataFromRecord(enriched, taskMetadata);
-			return viewModel;
+			return chatMessageViewModelFromPiMessage(record, index, options);
 		},
 		transcriptFromSessionContext<T>(sessionContext: T): TranscriptViewModel {
 			// SAFETY: T forwards the caller's raw session payload verbatim;

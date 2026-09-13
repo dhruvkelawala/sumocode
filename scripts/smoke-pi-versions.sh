@@ -270,7 +270,7 @@ import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 const [pi, extension, mcpExtension, probe, output, home] = process.argv.slice(2);
 const child = spawn(pi, ["--mode", "rpc", "-e", probe, "-e", extension, "-e", mcpExtension, "--offline", "--no-session", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files"], {
-	env: { ...process.env, HOME: home, SUMOCODE_RPC_CHILD: "1", SUMOCODE_NATIVE_TASK: "1" },
+	env: { ...process.env, HOME: home, SUMOCODE_RPC_CHILD: "1" },
 	stdio: ["pipe", "pipe", "pipe"],
 });
 let stdout = "";

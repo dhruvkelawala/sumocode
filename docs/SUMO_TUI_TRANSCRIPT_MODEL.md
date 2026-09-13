@@ -16,7 +16,7 @@ Before this slice, retained chat rendering mostly flattened Pi/session messages 
 - tool calls/results and future tool ledgers
 - inline skill pills
 - Divine Query/question blocks
-- nested task/subagent Activity progress
+- nested subagent Activity progress
 - deterministic completed-response states (#90)
 
 The structured transcript model separates **message identity/role** from **typed renderable blocks**.
@@ -60,7 +60,6 @@ The converter accepts current Pi/session message shapes as `unknown` and normali
 - `bashExecution` messages → terminal-bodied `activity` block named `bash`
 - custom/explicit `skill` parts → `skill` block
 - custom/explicit `question` parts → `question` block
-- native `task` calls/results → `activity` blocks via `native-task-adapter.ts`
 - `subagent_spawn/check/wait/cancel` envelopes and passive completions → canonical `activity` blocks via `subagent-adapter.ts`
 - custom/explicit legacy `delegation` / `scroll` / `subagent` parts → compatibility `delegation` blocks
 
@@ -101,9 +100,9 @@ const transcript: TranscriptViewModel = {
 
 ## Activity identity and presentation state
 
-Ordinary tools project into the renderer-neutral `ActivitySnapshot` contract in `src/activity/domain.ts`. Native tasks project structurally through `src/activity/native-task-adapter.ts`; subagent manager snapshots and bounded tool-result envelopes project through `src/activity/subagent-adapter.ts`. The adapters never import private execution result types, renderer modules, or unbounded transcripts.
+Ordinary tools project into the renderer-neutral `ActivitySnapshot` contract in `src/activity/domain.ts`. Subagent manager snapshots and bounded tool-result envelopes project through `src/activity/subagent-adapter.ts`. The adapters never import private execution result types, renderer modules, or unbounded transcripts.
 
-Live records require a stable tool-call ID. Historical ordinary tools without one receive deterministic message-and-block-scoped IDs, never a name-only ID. Native chain/parallel children and name-only nested tools receive parent/index-scoped IDs. Subagents adopt `subagent:<sa-id>` after the successful spawn result correlates it to the spawn tool-call ID. Passive completion then uses that canonical ID; historical completions without correlation remain standalone rather than guessing.
+Live records require a stable tool-call ID. Historical ordinary tools without one receive deterministic message-and-block-scoped IDs, never a name-only ID. Name-only nested tools receive parent/index-scoped IDs. Subagents adopt `subagent:<sa-id>` after the successful spawn result correlates it to the spawn tool-call ID. Passive completion then uses that canonical ID; historical completions without correlation remain standalone rather than guessing.
 
 Both retained controller paths use the shared Activity block matcher/merger. Reducers merge children and updates by stable ID through `sameActivity()` / `mergeActivitySnapshot()`; terminal states cannot regress to queued or running.
 
@@ -119,4 +118,4 @@ Output in the feed is control-stripped, redacted for known credential patterns, 
 
 ## Legacy bridge
 
-`chatMessageViewModelToPlainText()` exists only as a bridge for string consumers. Retained V2 chat renderers consume `ChatMessageViewModel` and `ChatBlock` directly. `tool-renderer.ts` remains a forwarding compatibility wrapper for legacy `ToolCallViewModel` callers. `scroll-renderer.ts` likewise projects legacy `DelegationViewModel` values into `ActivitySnapshot` and forwards to the universal Activity renderer; it is not a second implementation. Ordinary, native-task, and subagent transcript records emit `activity` blocks.
+`chatMessageViewModelToPlainText()` exists only as a bridge for string consumers. Retained V2 chat renderers consume `ChatMessageViewModel` and `ChatBlock` directly. `tool-renderer.ts` remains a forwarding compatibility wrapper for legacy `ToolCallViewModel` callers. `scroll-renderer.ts` likewise projects legacy `DelegationViewModel` values into `ActivitySnapshot` and forwards to the universal Activity renderer; it is not a second implementation. Ordinary and subagent transcript records emit `activity` blocks.

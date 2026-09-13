@@ -1379,7 +1379,7 @@ describe("spawnPiChild", () => {
 		expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "failed", errorText: "pi killed by SIGTERM", partialText: undefined } });
 	});
 
-	it("treats exit 0 with empty final text as completed, matching native-task semantics", () => {
+	it("treats exit 0 with empty final text as completed", () => {
 		const proc = new FakeProcess();
 		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
 		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });

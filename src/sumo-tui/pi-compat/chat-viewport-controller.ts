@@ -464,10 +464,7 @@ export class ChatViewportController {
 		const messages = measureMaybe(profile, "session_scan", () => sessionMessages(context));
 		this.markRenderDirty();
 		this.runtime.setEmptyChatQuoteState({ active: messages.length === 0, userMessageCount: countUserMessages(messages) });
-		const transcript = measureMaybe(profile, "transcript_model", () => {
-			this.viewModelMapper.reset();
-			return this.viewModelMapper.transcriptFromSessionContext(context);
-		});
+		const transcript = measureMaybe(profile, "transcript_model", () => this.viewModelMapper.transcriptFromSessionContext(context));
 		const stats = measureMaybe(profile, "transcript_hydrate", () => this.chat.replaceViewModels(transcript.messages));
 		if (profile) {
 			this.runtime.completeResumeHydration?.(profile, {

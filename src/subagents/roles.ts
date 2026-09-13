@@ -4,7 +4,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { BUILT_IN_TOOLS } from "../native-task-config.js";
+import { BUILT_IN_TOOLS } from "./task-config.js";
 
 const MAX_ROLES_FILE_BYTES = 256 * 1024;
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;

@@ -116,7 +116,7 @@ Do not casually change the launcher runtime selection, `SUMO_RPC`, `SUMO_TUI`, o
 
 Read `docs/PI_TOOL_ARCHITECTURE.md` before adding, overriding, or intercepting tools. Key rules:
 
-- **Built-in tools** (`bash`, `read`, `write`, `edit`, `mcp`): never re-register. Observe via `pi.on("tool_call")` for UI state; render via the transcript view-model pipeline. SumoCode owns the `task`, `subagent_*`, and `terminal_*` tools.
+- **Built-in tools** (`bash`, `read`, `write`, `edit`, `mcp`): never re-register. Observe via `pi.on("tool_call")` for UI state; render via the transcript view-model pipeline. SumoCode owns the `subagent_*` and `terminal_*` tools.
 - **Pi example extensions** (e.g. `question`): override by registering a tool with the same `name` in SumoCode. SumoCode's version replaces Pi's.
 - **Pi internal UI**: classic Pi selectors remain Pi-owned. SumoCode code calls `showDivineQuery()`; in RPC mode it uses `ctx.ui.select` and the host handles `extension_ui_request` through `src/sumo-tui/rpc/extension-ui-responder.ts` and its modal manager.
 - **Approval policy**: [Plan 076](plans/076-disable-approval-gate.md) retired active approval installation/registration. Dormant approval modules and tests remain; external Pi/operator trust policy owns approval. Do not wire them back into the runtime.

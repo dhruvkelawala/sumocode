@@ -17,7 +17,6 @@ function state(overrides: Partial<RpcHostChromeState> = {}): RpcHostChromeState 
 		messageCount: 0,
 		pendingMessageCount: 0,
 		hasMessages: true,
-		taskPartialCount: 0,
 		costUsd: 0,
 		...overrides,
 	};

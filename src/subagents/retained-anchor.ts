@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { lstatSync, realpathSync } from "node:fs";
 import { basename, isAbsolute } from "node:path";
 import type { ProcessTreeMemberAnchor } from "../background-tasks/process-tree.js";
-import { isRecord } from "../native-task-params.js";
+import { isRecord } from "./task-params.js";
 
 // oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof -- IPC boundary parser: anchor messages are untrusted process payloads validated before callbacks.
 /** The original handle owns a stable group leader, never Pi's mutable title.

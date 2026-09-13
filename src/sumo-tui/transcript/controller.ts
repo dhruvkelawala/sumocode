@@ -25,17 +25,9 @@ import {
 /** Result of a fire-and-forget chat sink mutation (pager node, success flag, or nothing). */
 export type ChatSinkMutationResult = ChatMessage | boolean | undefined;
 
-export interface TaskPartialUpdate {
-	readonly toolCallId: string;
-	readonly toolName: string;
-	readonly args?: unknown;
-	readonly partialResult: unknown;
-}
-
 export interface TranscriptControllerLiveStateSnapshot {
 	readonly draftMessage: boolean;
 	readonly liveTools: number;
-	readonly taskPartials: number;
 	readonly committedCacheMessages: number;
 }
 
@@ -105,7 +97,7 @@ function eventMessage(event: SessionValue): SessionValue | undefined {
  * Maximum zero-based `contentIndex` one streamed assistant message may declare.
  * Pi's per-message fan-out (text, thinking, tool calls) is a handful of parts;
  * 64 matches the scale of the sibling activity adapters (`pi-projector`,
- * `native-task-adapter`, `subagent-adapter`) and leaves headroom. `contentIndex`
+ * `subagent-adapter`) and leaves headroom. `contentIndex`
  * is producer-controlled, so anything past this is a protocol error rather than
  * a size to allocate to.
  */
@@ -228,21 +220,6 @@ function messageProgressScore(message: SessionValue): number {
 	}
 }
 
-function taskPartialFromEvent(event: SessionValue): TaskPartialUpdate | undefined {
-	const record = asRecord(event);
-	if (!record || record.type !== "tool_execution_update") return undefined;
-	if (record.toolName !== "task") return undefined;
-	if (record.partialResult === undefined) return undefined;
-	const toolCallId = isString(record.toolCallId) && record.toolCallId.length > 0 ? record.toolCallId : undefined;
-	if (!toolCallId) return undefined;
-	return {
-		toolCallId,
-		toolName: "task",
-		args: record.args,
-		partialResult: record.partialResult,
-	};
-}
-
 function liveToolExecutionFromEvent(event: SessionValue): LiveToolExecution | undefined {
 	const record = asRecord(event);
 	if (!record || (record.type !== "tool_execution_start" && record.type !== "tool_execution_update" && record.type !== "tool_execution_end")) return undefined;
@@ -349,7 +326,6 @@ export class TranscriptController {
 	} | undefined;
 	private pendingLiveToolProjection: LiveToolExecution | undefined;
 	private draftMessage: SessionValue | undefined;
-	private readonly taskPartials = new Map<string, TaskPartialUpdate>();
 	private readonly liveTools = new Map<string, LiveToolExecution>();
 	private lastTranscript: TranscriptViewModel = { messages: [] };
 	/**
@@ -425,8 +401,6 @@ export class TranscriptController {
 		// the string check below re-validate shape at runtime.
 		const record = asRecord(event as SessionValue);
 		if (!record || !isString(record.type)) return this.lastTranscript;
-		const taskPartial = taskPartialFromEvent(record);
-		if (taskPartial) this.taskPartials.set(taskPartial.toolCallId, taskPartial);
 		const liveTool = liveToolExecutionFromEvent(record);
 		if (liveTool) {
 			this.pendingChatOp = "incremental";
@@ -545,7 +519,6 @@ export class TranscriptController {
 				this.draftMessage = undefined;
 				this.liveTools.clear();
 				this.liveProjectionCache = undefined;
-				this.taskPartials.clear();
 				break;
 			}
 			case "compaction_start":
@@ -614,15 +587,10 @@ export class TranscriptController {
 		return { messages };
 	}
 
-	public getTaskPartials(): readonly TaskPartialUpdate[] {
-		return [...this.taskPartials.values()];
-	}
-
 	public getLiveStateSnapshot(): TranscriptControllerLiveStateSnapshot {
 		return {
 			draftMessage: this.draftMessage !== undefined,
 			liveTools: this.liveTools.size,
-			taskPartials: this.taskPartials.size,
 			committedCacheMessages: this.committedViewModelCache?.length ?? 0,
 		};
 	}
@@ -647,7 +615,6 @@ export class TranscriptController {
 		this.draftMessage = undefined;
 		this.pendingChatOp = undefined;
 		this.liveTools.clear();
-		this.taskPartials.clear();
 		this.invalidateCommittedCache();
 	}
 
@@ -659,7 +626,6 @@ export class TranscriptController {
 
 	private ensureCommittedViewModels(): readonly ChatMessageViewModel[] {
 		if (this.committedViewModelCache) return this.committedViewModelCache;
-		this.mapper.reset();
 		let messages: ChatMessageViewModel[] = [];
 		for (const sourceMessage of this.committedMessages) {
 			const message = this.mapper.messageFromPiMessage(sourceMessage, messages.length);

@@ -206,48 +206,9 @@ describe("TranscriptController agent_end reconciliation", () => {
 });
 
 describe("TranscriptController Activity folding", () => {
-	it("replays task metadata after a structural committed change", () => {
+	it("rebuilds the fold index after compaction insertion", () => {
 		const delegate = createTranscriptViewModelMapper();
 		const mapper = {
-			reset: vi.fn(() => delegate.reset()),
-			messageFromPiMessage: vi.fn(delegate.messageFromPiMessage.bind(delegate)),
-			transcriptFromSessionContext: delegate.transcriptFromSessionContext.bind(delegate),
-		};
-		const controller = new TranscriptController({ mapper });
-		const taskCall = {
-			id: "task-owner",
-			role: "assistant",
-			content: [{ type: "toolCall", id: "task-1", name: "task", arguments: {
-				type: "single",
-				tasks: [{ prompt: "## Indexed task\n\nDo work.", model: "openai-codex/gpt-5.5", thinking: "high" }],
-			} }],
-		};
-		controller.replaceFromMessages([taskCall]);
-		mapper.reset.mockClear();
-		mapper.messageFromPiMessage.mockClear();
-
-		const transcript = controller.handleAgentEvent({
-			type: "message_end",
-			message: {
-				role: "toolResult",
-				toolCallId: "task-1",
-				toolName: "task",
-				content: [{ type: "text", text: "done" }],
-			},
-		});
-
-		expect(mapper.reset).toHaveBeenCalledTimes(1);
-		expect(mapper.messageFromPiMessage).toHaveBeenCalledTimes(2);
-		expect(transcript.messages[0]?.blocks[0]).toMatchObject({
-			type: "activity",
-			activity: { id: "task-1", title: "Indexed task", model: "openai-codex/gpt-5.5", status: "succeeded" },
-		});
-	});
-
-	it("resets mapper state and rebuilds the fold index after compaction insertion", () => {
-		const delegate = createTranscriptViewModelMapper();
-		const mapper = {
-			reset: vi.fn(() => delegate.reset()),
 			messageFromPiMessage: vi.fn(delegate.messageFromPiMessage.bind(delegate)),
 			transcriptFromSessionContext: delegate.transcriptFromSessionContext.bind(delegate),
 		};
@@ -257,7 +218,6 @@ describe("TranscriptController Activity folding", () => {
 			role: "assistant",
 			content: [{ type: "toolCall", id: "read-before-compaction", name: "read", arguments: { path: "before.ts" } }],
 		}]);
-		mapper.reset.mockClear();
 		mapper.messageFromPiMessage.mockClear();
 
 		const compacted = controller.handleAgentEvent({
@@ -265,10 +225,8 @@ describe("TranscriptController Activity folding", () => {
 			result: { summary: "Earlier context", tokensBefore: 10_000 },
 		});
 
-		expect(mapper.reset).toHaveBeenCalledTimes(1);
 		expect(mapper.messageFromPiMessage).toHaveBeenCalledTimes(2);
 		expect(compacted.messages).toHaveLength(2);
-		mapper.reset.mockClear();
 		mapper.messageFromPiMessage.mockClear();
 		const updated = controller.handleAgentEvent({
 			type: "tool_execution_update",
@@ -277,7 +235,6 @@ describe("TranscriptController Activity folding", () => {
 			args: { path: "before.ts" },
 			partialResult: { content: [{ type: "text", text: "current" }] },
 		});
-		expect(mapper.reset).not.toHaveBeenCalled();
 		expect(mapper.messageFromPiMessage).not.toHaveBeenCalled();
 		expect(updated.messages[0]?.blocks[0]).toMatchObject({
 			type: "activity",
@@ -562,7 +519,7 @@ describe("TranscriptController live-state clearing", () => {
 			messages: [{ id: "final", role: "assistant", content: "done" }],
 		});
 
-		expect(controller.getLiveStateSnapshot()).toMatchObject({ liveTools: 0, taskPartials: 0, draftMessage: false });
+		expect(controller.getLiveStateSnapshot()).toMatchObject({ liveTools: 0, draftMessage: false });
 	});
 
 	it("clears a tool still mid-execution when agent_end fires (e.g. an aborted run)", () => {
@@ -588,21 +545,21 @@ describe("TranscriptController live-state clearing", () => {
 		expect(controller.getLiveStateSnapshot()).toMatchObject({ liveTools: 0 });
 	});
 
-	it("clears live task partials on rehydrate", () => {
+	it("clears live tool state on rehydrate", () => {
 		const controller = new TranscriptController();
 		controller.handleAgentEvent({
 			type: "tool_execution_update",
-			toolCallId: "task-1",
-			toolName: "task",
-			args: { prompt: "do work" },
+			toolCallId: "read-1",
+			toolName: "read",
+			args: { path: "src/auth.ts" },
 			partialResult: { content: [{ type: "text", text: "partial" }] },
 		});
 
-		expect(controller.getLiveStateSnapshot()).toMatchObject({ liveTools: 1, taskPartials: 1 });
+		expect(controller.getLiveStateSnapshot()).toMatchObject({ liveTools: 1 });
 
 		controller.replaceFromMessages([{ id: "rehydrated", role: "user", content: "hi" }]);
 
-		expect(controller.getLiveStateSnapshot()).toMatchObject({ liveTools: 0, taskPartials: 0, draftMessage: false });
+		expect(controller.getLiveStateSnapshot()).toMatchObject({ liveTools: 0, draftMessage: false });
 	});
 });
 

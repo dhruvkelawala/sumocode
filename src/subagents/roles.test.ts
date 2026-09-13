@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BUILT_IN_TOOLS } from "../native-task-config.js";
+import { BUILT_IN_TOOLS } from "./task-config.js";
 import { BUILT_IN_ROLES, loadRoles, resolveRolesPath } from "./roles.js";
 
 // oxlint-disable-next-line anti-slop/no-unknown-parameters -- test helper: serializes arbitrary JSON fixtures into the roles.json read boundary.

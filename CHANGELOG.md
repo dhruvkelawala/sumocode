@@ -49,6 +49,13 @@ merge.
   exits (0 and the reload code 100) now exit the host immediately, with no
   crash notice and no shutdown delay; genuine crashes are unchanged. #505 #507
 
+### Removed
+- **The `task` tool** — delegation runs only through `subagent_*`. The isolated
+  Pi subprocess task tool, its skill-wrapper system-prompt patch, its
+  `SUMOCODE_NATIVE_TASK` override, and its native-task transcript/Activity
+  adapter are deleted. The visible-child launcher command and the child-side
+  task-mode watcher remain. #513
+
 ### Fixed
 - **Producer-controlled stream indices are bounded** — an assistant
   `message_update` carrying an out-of-range, fractional or negative

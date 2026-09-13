@@ -1,5 +1,5 @@
-import type { ProviderModel, TaskThinking, TaskWorkItem, ThinkingLevel } from "./native-task-params.js";
-import { resolveModel } from "./native-task-params.js";
+import type { ProviderModel, TaskThinking, ThinkingLevel } from "./task-params.js";
+import { resolveModel } from "./task-params.js";
 
 export const BUILT_IN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const;
 
@@ -43,7 +43,7 @@ const buildSubprocessArgs = (options: {
 };
 
 export const resolveTaskConfig = (options: {
-	item: TaskWorkItem;
+	item: { model?: string; thinking?: TaskThinking };
 	defaultModel: string | undefined;
 	defaultThinking: TaskThinking;
 	inheritedThinking: ThinkingLevel;

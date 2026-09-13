@@ -3,8 +3,8 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpat
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { writePrivateJsonExclusive } from "../activity/persistence.js";
 import type { ExecutableProvenance } from "../executable-provenance.js";
-import { BUILT_IN_TOOLS, type BuiltInToolName } from "../native-task-config.js";
-import { VALID_THINKING_LEVELS, type ProviderModel, type ThinkingLevel } from "../native-task-params.js";
+import { BUILT_IN_TOOLS, type BuiltInToolName } from "./task-config.js";
+import { VALID_THINKING_LEVELS, type ProviderModel, type ThinkingLevel } from "./task-params.js";
 import { assertPrivateArtifact, assertPrivateDir, isOwnedByUs, nodeArtifactFs, validatedArtifactStat } from "../private-artifact.js";
 import type { AgentPanePlacement } from "../terminal-host/types.js";
 import type { SubagentRole } from "./roles.js";

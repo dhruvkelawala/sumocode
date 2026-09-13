@@ -157,6 +157,25 @@ describe("renderInputHints", () => {
 		expect(line).toContain("\u001b[38;2;139;122;99m");
 	});
 
+	it("keeps the delivery badge ahead of project context", () => {
+		const steer = stripAnsi(renderInputHints(60, { deliveryMode: "steer", leftHint: "sumocode (main)", leftHintOverflow: "truncate" }));
+		const followUp = stripAnsi(renderInputHints(60, { deliveryMode: "followUp", leftHint: "sumocode (main)", leftHintOverflow: "truncate" }));
+		expect(steer.indexOf("STEER")).toBeLessThan(steer.indexOf("sumocode"));
+		expect(followUp).toContain("FOLLOW-UP");
+		expect(followUp).toHaveLength(60);
+	});
+
+	it("preserves the delivery badge when project context truncates at portrait width", () => {
+		const line = stripAnsi(renderInputHints(60, {
+			deliveryMode: "steer",
+			leftHint: "sumocode (feat/a-very-long-branch-name-that-cannot-fit)",
+			leftHintOverflow: "truncate",
+		}));
+		expect(line).toContain("STEER");
+		expect(line).toContain("…");
+		expect(line).toHaveLength(60);
+	});
+
 	it("at narrow width, drops left hint first", () => {
 		// Only enough room for keybinds
 		const line = stripAnsi(renderInputHints(30, { leftHint: SPLASH_HINT }));

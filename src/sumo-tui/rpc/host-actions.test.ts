@@ -337,6 +337,7 @@ function setup(options: {
 	readonly mermaidMode?: "off" | "final" | "streaming";
 	readonly onMermaidModeChange?: (mode: "off" | "final" | "streaming") => void;
 	readonly onRenderRequest?: () => void;
+	readonly beforeSessionChange?: () => void | Promise<void>;
 	readonly beforeTreeNavigation?: (request: RpcTreeNavigationRequest) => Promise<void>;
 	readonly reconcileTreeNavigation?: (outcome?: RpcTreeNavigationOutcome) => Promise<void>;
 	readonly setTreeNavigationBusy?: (busy: boolean) => void;
@@ -399,6 +400,7 @@ function setup(options: {
 		getMermaidRenderingMode: () => options.mermaidMode ?? "streaming",
 		setMermaidRenderingMode: (mode) => options.onMermaidModeChange?.(mode),
 		rehydrateTranscript,
+		beforeSessionChange: options.beforeSessionChange,
 		beforeTreeNavigation: options.beforeTreeNavigation,
 		reconcileTreeNavigation: options.reconcileTreeNavigation,
 		setTreeNavigationBusy: options.setTreeNavigationBusy,
@@ -824,6 +826,19 @@ describe("RpcHostActions", () => {
 		]);
 		expect(editorText.getText()).toBe("fork from here");
 		expect(rehydrateCalls).toHaveLength(1);
+	});
+
+	it("keeps queue text restored before a successful fork prefill", async () => {
+		let editorText: FakeEditorText;
+		const fixture = setup({ beforeSessionChange: () => editorText.setText("restored queue") });
+		editorText = fixture.editorText;
+
+		const forkPromise = fixture.actions.handleSubmittedText("/fork");
+		await flush();
+		fixture.inlineSelectors.handleInput(SELECTOR_ENTER);
+		await forkPromise;
+
+		expect(editorText.getText()).toBe("restored queue\n\nfork from here");
 	});
 
 	it("rehydrates the transcript exactly once after /new, /clone, switch, and a successful fork", async () => {

@@ -61,7 +61,7 @@ jobs:
           import { readFileSync, writeFileSync } from 'node:fs';
           const changelog = readFileSync('CHANGELOG.md', 'utf8');
           const version = process.env.RELEASE_TAG.slice(1);
-          const section = (heading) => changelog.split(heading)[1]?.split('\n## [')[0]?.trim();
+          const section = (heading) => changelog.split(heading)[1]?.split('\n## [')[0]?.replace(/^[^\n]*\n/, '').trim();
           // Keep-a-Changelog: the tagged version has its own section; fall back to
           // Unreleased for a tag cut before the section was promoted.
           const notes = section(`## [${version}]`) || section('## [Unreleased]\n');

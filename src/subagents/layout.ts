@@ -82,3 +82,37 @@ export function planPlacement(input: PlacementInput): Placement {
 	const nextTabNumber = Math.floor(input.visiblePanes.length / MAX_PANES_PER_TAB) + 1;
 	return { kind: "new-tab", label: `subagents ${nextTabNumber}` };
 }
+
+/** A pane's cell geometry as reported by the terminal host's layout query. */
+export interface PaneRect {
+	paneId: string;
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+}
+
+export interface PaneSplitChoice {
+	paneId: string;
+	direction: SplitDirection;
+}
+
+/**
+ * Tiling rule: split the largest pane along its longer axis. A terminal cell is
+ * roughly twice as tall as it is wide, so splitting along the width keeps
+ * readable columns only while `width >= 2 * height`; below that the axis flips
+ * to rows. Equal areas keep the first pane in reading order. Returns undefined
+ * when no pane reports a usable rect, and the caller keeps its planned
+ * direction.
+ */
+export function chooseSplitAnchor(panes: readonly PaneRect[]): PaneSplitChoice | undefined {
+	let anchor: PaneRect | undefined;
+	// Hosts report panes in tree order, not reading order, so sort a copy before
+	// the first-wins tie-break instead of trusting the input order.
+	for (const pane of [...panes].sort((a, b) => a.y - b.y || a.x - b.x)) {
+		if (!(pane.width > 0) || !(pane.height > 0)) continue;
+		if (anchor === undefined || pane.width * pane.height > anchor.width * anchor.height) anchor = pane;
+	}
+	if (anchor === undefined) return undefined;
+	return { paneId: anchor.paneId, direction: anchor.width >= 2 * anchor.height ? "right" : "down" };
+}

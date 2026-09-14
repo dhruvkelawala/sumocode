@@ -1,4 +1,4 @@
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { Image, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
 	isSettledActivityStatus,
 	safeValuePreview,
@@ -7,9 +7,10 @@ import {
 	type ActivityStatus,
 } from "../../activity/domain.js";
 import { activeThemeApplicationRoles, activeThemeColors, type ThemeApplicationRoles } from "../../themes/index.js";
+import { fgHex, RESET } from "../cathedral/ansi.js";
 import { lineToAnsi, lineWidth, span, textLine, truncateLine, wrapLine, type Span } from "../render/primitives.js";
 import { expandKey } from "./expand-key.js";
-import type { SessionRecord } from "./view-model.js";
+import type { ImageBlock, SessionRecord } from "./view-model.js";
 
 const STATUS_GLYPH = {
 	queued: "○",
@@ -528,17 +529,39 @@ function renderActivityBody(activity: ActivitySnapshot, width: number, roles: Ac
 	return renderStreamBody(activity, width, roles, true);
 }
 
-export function renderActivityLedgerRows(activity: ActivitySnapshot, width: number): string[] {
+export function renderImageRows(block: ImageBlock, width: number): string[] {
+	const image = new Image(
+		block.data,
+		block.mime,
+		{ fallbackColor: (value) => `${fgHex(activeThemeColors().foregroundDim)}${value}${RESET}` },
+		{ maxWidthCells: Math.max(1, width), maxHeightCells: 24, filename: block.filename },
+	);
+	return image.render(width).map((row) => visibleWidth(row) > width ? truncateToWidth(row, width, "") : row);
+}
+
+/**
+ * Image rows inside the ledger frame: each row keeps the `│ ` gutter so the
+ * border stays continuous through the reserved Kitty rows. The gutter text
+ * precedes the APC sequence, which shifts the placement column right by the
+ * gutter width (see CellBuffer.paintRow). Not subject to BODY_MAX_ROWS: a
+ * clipped image would leave a partial placement.
+ */
+function renderImageBodyRows(images: readonly ImageBlock[], width: number, roles: ActivityLedgerRoles): string[] {
+	const gutter = lineToAnsi(textLine([span("│", { fg: roles.border }), span(" ")]), { style: ledgerStyle(roles) });
+	return images.flatMap((image) => renderImageRows(image, Math.max(1, width - 2)).map((row) => `${gutter}${row}`));
+}
+
+export function renderActivityLedgerRows(activity: ActivitySnapshot, width: number, images: readonly ImageBlock[] = []): string[] {
 	const safeWidth = Math.max(1, Math.floor(width));
 	if (safeWidth < 20) return [padAnsi(renderCompactActivityPill(activity), safeWidth)];
 	const roles = activeThemeApplicationRoles().toolLedger;
 	const body = renderActivityBody(activity, safeWidth, roles).slice(0, BODY_MAX_ROWS);
-	return [renderHeader(activity, safeWidth, roles), ...body, renderBottom(safeWidth, roles)];
+	return [renderHeader(activity, safeWidth, roles), ...body, ...renderImageBodyRows(images, safeWidth, roles), renderBottom(safeWidth, roles)];
 }
 
-export function renderActivityBlockRows(activity: ActivitySnapshot, width: number, options: { readonly expanded?: boolean } = {}): string[] {
+export function renderActivityBlockRows(activity: ActivitySnapshot, width: number, options: { readonly expanded?: boolean; readonly images?: readonly ImageBlock[] } = {}): string[] {
 	const safeWidth = Math.max(1, Math.floor(width));
 	return options.expanded === false
 		? [padAnsi(renderCompactActivityPill(activity), safeWidth)]
-		: renderActivityLedgerRows(activity, safeWidth);
+		: renderActivityLedgerRows(activity, safeWidth, options.images);
 }

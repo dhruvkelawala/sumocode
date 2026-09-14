@@ -211,7 +211,7 @@ describe("structured transcript view model", () => {
 		]);
 	});
 
-	it("keeps image parts from tool results as sibling image blocks (Read on a PNG)", () => {
+	it("folds image parts from tool results into the activity block (Read on a PNG)", () => {
 		const message = chatMessageViewModelFromPiMessage({
 			role: "toolResult",
 			toolCallId: "call-1",
@@ -222,8 +222,13 @@ describe("structured transcript view model", () => {
 			],
 			isError: false,
 		});
-		expect(message?.blocks.some((block) => block.type === "activity")).toBe(true);
-		expect(message?.blocks).toContainEqual({ type: "image", data: "iVBORw0KGgo=", mime: "image/png", filename: "shot.png" });
+		expect(message?.blocks).toEqual([
+			expect.objectContaining({
+				type: "activity",
+				images: [{ type: "image", data: "iVBORw0KGgo=", mime: "image/png", filename: "shot.png" }],
+			}),
+		]);
+		expect(message?.blocks.some((block) => block.type === "image")).toBe(false);
 	});
 
 	it("maps image content parts instead of dropping them", () => {

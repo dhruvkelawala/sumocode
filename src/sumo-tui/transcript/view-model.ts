@@ -72,12 +72,14 @@ export interface DelegationViewModel {
 	readonly elapsedMs?: number;
 }
 
+export type ImageBlock = Extract<ChatBlock, { type: "image" }>;
+
 export type ChatBlock =
 	| { readonly type: "markdown"; readonly text: string }
 	| { readonly type: "thinking"; readonly text: string; readonly hidden?: boolean }
 	| { readonly type: "code"; readonly lang: string; readonly source: string; readonly collapsed?: boolean; readonly open?: boolean }
 	| { readonly type: "image"; readonly data: string; readonly mime: string; readonly filename?: string }
-	| { readonly type: "activity"; readonly activity: ActivitySnapshot }
+	| { readonly type: "activity"; readonly activity: ActivitySnapshot; readonly images?: readonly ImageBlock[] }
 	| { readonly type: "skill"; readonly name: string; readonly expanded: boolean; readonly content?: string }
 	| { readonly type: "summary"; readonly kind: "branch" | "compaction" | "subagent" | "terminal"; readonly label: string; readonly content: string; readonly expanded: boolean }
 	| { readonly type: "question"; readonly question: QuestionViewModel }
@@ -275,6 +277,11 @@ function activityBlockFromRecord(
 	return { type: "activity", activity };
 }
 
+/** Tool-result images render INSIDE the activity card (below its body). */
+function withActivityImages(block: ChatBlock, images: readonly ImageBlock[]): ChatBlock {
+	return images.length > 0 && block.type === "activity" ? { ...block, images } : block;
+}
+
 function skillBlockFromRecord(record: SessionRecord): ChatBlock {
 	return {
 		type: "skill",
@@ -340,7 +347,7 @@ function terminalResultBlockFromRecord(record: SessionRecord): ChatBlock {
 	};
 }
 
-function imageBlockFromRecord(record: SessionRecord): ChatBlock[] {
+function imageBlockFromRecord(record: SessionRecord): ImageBlock[] {
 	const source = asRecord(record.source);
 	const data = firstString(record.data, record.base64, record.base64Data, source?.data, source?.base64, source?.base64Data);
 	const mime = firstString(record.mime, record.mimeType, record.mediaType, record.media_type, source?.mime, source?.mimeType, source?.mediaType, source?.media_type);
@@ -373,7 +380,7 @@ export function collapseImagePathsForDisplay(text: string): string {
  * become sibling image blocks so the chat card renders them (inline pixels
  * where supported, `[Image: …]` chip otherwise).
  */
-function imageBlocksFromContent(content: SessionValue): ChatBlock[] {
+function imageBlocksFromContent(content: SessionValue): ImageBlock[] {
 	if (!Array.isArray(content)) return [];
 	return content.flatMap((part) => {
 		const record = asRecord(part);
@@ -492,7 +499,7 @@ function blocksFromContentPart(
 			if (terminal) return terminal;
 			const toolName = firstString(record.name, record.toolName);
 			if (toolName?.startsWith("subagent_")) return subagentBlocksFromRecord(record, "success", scope);
-			return [activityBlockFromRecord(record, "success", scope), ...imageBlocksFromContent(record.content)];
+			return [withActivityImages(activityBlockFromRecord(record, "success", scope), imageBlocksFromContent(record.content))];
 		}
 		case "skill":
 		case "skill_invocation":
@@ -529,7 +536,7 @@ function blocksFromMessage(record: SessionRecord, messageScope: string, options:
 		if (terminal) return terminal;
 		const toolName = firstString(record.toolName, record.name);
 		if (toolName?.startsWith("subagent_")) return subagentBlocksFromRecord(record, "success", scope);
-		return [activityBlockFromRecord(record, "success", scope), ...imageBlocksFromContent(record.content)];
+		return [withActivityImages(activityBlockFromRecord(record, "success", scope), imageBlocksFromContent(record.content))];
 	}
 	const customType = asString(record.customType);
 	if (record.role === "custom" && customType !== undefined) {

@@ -467,7 +467,7 @@ describe("ChatViewportController", () => {
 		root.dispose();
 	});
 
-	it("folds an image-bearing result once beside its Activity", async () => {
+	it("folds an image-bearing result once into its Activity", async () => {
 		const { root, chat, controller } = await makeController();
 		const call = { type: "toolCall", id: "image-read", name: "read", arguments: { path: "shot.png" } };
 		controller.handleAgentEvent({ type: "message_start", message: { id: "assistant-image", role: "assistant", content: [call] } });
@@ -486,9 +486,10 @@ describe("ChatViewportController", () => {
 
 		const blocks = chat.getRenderedMessages()[0]?.toSnapshot().blocks ?? [];
 		expect(blocks.filter((block) => block.type === "activity")).toHaveLength(1);
-		expect(blocks.filter((block) => block.type === "image")).toEqual([
-			{ type: "image", data: "iVBORw0KGgo=", mime: "image/png", filename: "shot.png" },
-		]);
+		expect(blocks.filter((block) => block.type === "activity")[0]).toEqual(expect.objectContaining({
+			images: [{ type: "image", data: "iVBORw0KGgo=", mime: "image/png", filename: "shot.png" }],
+		}));
+		expect(blocks.filter((block) => block.type === "image")).toHaveLength(0);
 		root.dispose();
 	});
 

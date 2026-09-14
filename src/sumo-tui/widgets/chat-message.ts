@@ -1,4 +1,4 @@
-import { Image, Markdown, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { Markdown, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { DEFAULT_SUMOCODE_CONFIG } from "../../config/sumocode-config.js";
 import { activeThemeChrome, activeThemeColors, getThemeVersion } from "../../themes/index.js";
 import { fgHex, RESET } from "../cathedral/ansi.js";
@@ -11,7 +11,7 @@ import { expandKey } from "../transcript/expand-key.js";
 import { cathedralMarkdownTheme } from "../transcript/markdown-theme.js";
 import { renderCathedralMermaid } from "../transcript/mermaid-renderer.js";
 import { isMermaidLanguage, type MermaidRenderingMode } from "../transcript/mermaid.js";
-import { renderActivityBlockRows } from "../transcript/activity-renderer.js";
+import { renderActivityBlockRows, renderImageRows } from "../transcript/activity-renderer.js";
 import { renderScrollBlock } from "../transcript/scroll-renderer.js";
 import type { ChatBlock } from "../transcript/view-model.js";
 
@@ -237,16 +237,6 @@ function renderQuestionRows(block: Extract<ChatBlock, { type: "question" }>, wid
 	];
 }
 
-function renderImageRows(block: Extract<ChatBlock, { type: "image" }>, width: number): string[] {
-	const image = new Image(
-		block.data,
-		block.mime,
-		{ fallbackColor: (value) => `${fgHex(activeThemeColors().foregroundDim)}${value}${RESET}` },
-		{ maxWidthCells: Math.max(1, width), maxHeightCells: 24, filename: block.filename },
-	);
-	return image.render(width).map((row) => visibleWidth(row) > width ? truncateToWidth(row, width, "") : row);
-}
-
 function renderDelegationRows(block: Extract<ChatBlock, { type: "delegation" }>, width: number): string[] {
 	return renderScrollBlock(block.delegation, width);
 }
@@ -313,7 +303,7 @@ function renderBlockRows(
 				rows.push(...renderImageRows(block, width));
 				break;
 			case "activity":
-				rows.push(...renderActivityBlockRows(block.activity, width, { expanded: activityExpansion.get(block.activity.id) }));
+				rows.push(...renderActivityBlockRows(block.activity, width, { expanded: activityExpansion.get(block.activity.id), images: block.images }));
 				break;
 			case "skill":
 				rows.push(...renderSkillRows(block, width));

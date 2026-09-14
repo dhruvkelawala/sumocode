@@ -13,7 +13,7 @@
  * session start / model select instead of touching the filesystem per render.
  */
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { CLAUDE_BASE_PROVIDER, claudeProviderRank, isClaudeProvider } from "./claude-providers.js";
+import { CLAUDE_BASE_PROVIDER, claudeAccountIndex, claudeProviderRank, isClaudeProvider } from "./claude-providers.js";
 
 /** Footer chip budget: `claude ` plus at most this many label columns, ellipsis included. */
 const MAX_LABEL_COLUMNS = 8;
@@ -56,8 +56,8 @@ export function claudeAccountLabel(providerId: string, subscriptionLabel: string
 	if (providerId === CLAUDE_BASE_PROVIDER) return "default";
 	const labelled = withoutControlCharacters(subscriptionLabel ?? "").trim();
 	if (labelled) return labelled.toLowerCase();
-	const index = /^anthropic-(\d+)$/.exec(providerId)?.[1];
-	return index ? `#${index}` : providerId;
+	const index = claudeAccountIndex(providerId);
+	return index === undefined ? providerId : `#${index}`;
 }
 
 /**

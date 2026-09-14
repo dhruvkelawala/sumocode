@@ -1170,8 +1170,8 @@ function applyCachedModelStep(
 	// One latest intent per key: successive pre-hydration presses normally
 	// collapse into a single live apply of the final choice. When the latest
 	// intent cannot act (thin ring, drift, or a caught error) `runWithFallback`
-	// replays the previous intent instead of dropping the press, and
-	// `whenSettled()` still awaits the whole drain.
+	// replays the presses it superseded, newest first, until one applies; the
+	// press is never dropped, and `whenSettled()` awaits the whole drain.
 	cached.gate.runWithFallback(DEFERRED_MODEL_CYCLE_ACTION_KEY, async () => {
 		let applied = false;
 		await notifyOnError(async () => {

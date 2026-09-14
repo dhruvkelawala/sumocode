@@ -1,4 +1,5 @@
 export type DeferredHydrationAction = () => void | Promise<void>;
+export type DeferredHydrationConditionalAction = () => boolean | Promise<boolean>;
 
 export interface InitialHydrationActionGateOptions {
 	readonly onReady?: () => void;
@@ -54,6 +55,18 @@ export class InitialHydrationActionGate {
 			return;
 		}
 		this.pending.set(key, action);
+	}
+
+	/** Replace an intent only when the replacement can act on hydrated state. */
+	public runWithFallback(key: string, action: DeferredHydrationConditionalAction): void {
+		if (this.ready) {
+			void action();
+			return;
+		}
+		const fallback = this.pending.get(key);
+		this.pending.set(key, async () => {
+			if (!(await action())) await fallback?.();
+		});
 	}
 
 	/** Resolves after hydration commits and every deferred intent has drained. */

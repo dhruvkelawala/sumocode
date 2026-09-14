@@ -1059,7 +1059,7 @@ export interface RpcHostModelCycleDependencies {
  * applied model/level.
  */
 export interface RpcHostCachedCycleDependencies {
-	readonly gate: Pick<InitialHydrationActionGate, "isReady" | "run">;
+	readonly gate: Pick<InitialHydrationActionGate, "isReady" | "run" | "runWithFallback">;
 	/** Enabled ring from the chrome cache, active-flagged against the live label. */
 	readonly models: () => readonly RpcModelOption[] | undefined;
 	/** Available thinking levels from the chrome cache. */
@@ -1084,7 +1084,9 @@ function logicalModelRing(models: readonly RpcModelOption[]): readonly RpcModelO
 function claudeAccountRing(models: readonly RpcModelOption[]): readonly RpcModelOption[] {
 	const active = models.find((model) => model.active);
 	if (!active || !isClaudeProvider(active.provider)) return [];
-	return models.filter((model) => model.id === active.id && isClaudeProvider(model.provider));
+	return models
+		.filter((model) => model.id === active.id && isClaudeProvider(model.provider))
+		.sort((a, b) => claudeProviderRank(a.provider) - claudeProviderRank(b.provider));
 }
 
 function notifyNoModelChange(
@@ -1102,12 +1104,12 @@ async function applyModelCycleStep(
 	direction: -1 | 1,
 	ring: ModelCycleRing,
 	noChangeMessage?: NoModelChangeMessage,
-): Promise<void> {
+): Promise<boolean> {
 	const availableModels = await deps.controls.getEnabledModels();
 	const models = ring(availableModels);
 	if (models.length <= 1) {
 		notifyNoModelChange(deps, availableModels, models, noChangeMessage);
-		return;
+		return false;
 	}
 	const activeIndex = models.findIndex((model) => model.active);
 	const baseIndex = activeIndex < 0 ? 0 : activeIndex;
@@ -1115,6 +1117,25 @@ async function applyModelCycleStep(
 	const next = models[nextIndex];
 	const state = await deps.controls.setModel(next.provider, next.id);
 	deps.onStateChange?.(state);
+	return true;
+}
+
+function deferModelCycleStep(
+	deps: RpcHostModelCycleDependencies,
+	cached: RpcHostCachedCycleDependencies,
+	direction: -1 | 1,
+	ring: ModelCycleRing,
+	noChangeMessage?: NoModelChangeMessage,
+): void {
+	const action = async (): Promise<boolean> => {
+		let applied = true;
+		await notifyOnError(async () => {
+			applied = await applyModelCycleStep(deps, direction, ring, noChangeMessage);
+		}, deps.notifications);
+		return applied;
+	};
+	if (noChangeMessage) cached.gate.runWithFallback(DEFERRED_MODEL_CYCLE_ACTION_KEY, action);
+	else cached.gate.run(DEFERRED_MODEL_CYCLE_ACTION_KEY, async () => { await action(); });
 }
 
 /**
@@ -1134,23 +1155,13 @@ function applyCachedModelStep(
 	if (!availableModels) {
 		// No cached ring yet: defer rather than let a live step land under
 		// hydration's authoritative commit, which would clobber it.
-		cached.gate.run(DEFERRED_MODEL_CYCLE_ACTION_KEY, () => notifyOnError(async () => {
-			await applyModelCycleStep(deps, direction, ring, noChangeMessage);
-		}, deps.notifications));
+		deferModelCycleStep(deps, cached, direction, ring, noChangeMessage);
 		return true;
 	}
 	const models = ring(availableModels);
 	if (models.length <= 1) {
-		const activeClaude = availableModels.some((model) => model.active && isClaudeProvider(model.provider));
-		if (noChangeMessage && !activeClaude) {
-			// Account cycling is certainly unavailable off Claude; do not replace a pending model intent.
-			notifyNoModelChange(deps, availableModels, models, noChangeMessage);
-			return true;
-		}
 		// A thin cached ring may be stale; replay against live state before deciding.
-		cached.gate.run(DEFERRED_MODEL_CYCLE_ACTION_KEY, () => notifyOnError(async () => {
-			await applyModelCycleStep(deps, direction, ring, noChangeMessage);
-		}, deps.notifications));
+		deferModelCycleStep(deps, cached, direction, ring, noChangeMessage);
 		return true;
 	}
 	const activeIndex = models.findIndex((model) => model.active);

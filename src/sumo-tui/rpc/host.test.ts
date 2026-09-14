@@ -1440,6 +1440,7 @@ describe("createClaudeAccountCycleHandler (app.model.cycleAccount)", () => {
 	it("cycles accounts without changing the Claude model", async () => {
 		const controls = {
 			getEnabledModels: vi.fn(async () => [
+				{ provider: "anthropic-3", id: "claude-opus-4", label: "anthropic-3/claude-opus-4", active: false },
 				{ provider: "anthropic", id: "claude-opus-4", label: "anthropic/claude-opus-4", active: true },
 				{ provider: "anthropic-2", id: "claude-opus-4", label: "anthropic-2/claude-opus-4", active: false },
 				{ provider: "anthropic-2", id: "claude-sonnet-4", label: "anthropic-2/claude-sonnet-4", active: false },
@@ -1743,6 +1744,29 @@ describe("cached pre-hydration cycle (issue 448: cycle keys answer before hydrat
 		await gate.whenSettled();
 
 		expect(controls.setModel).toHaveBeenCalledExactlyOnceWith("anthropic", "claude-sonnet-4");
+	});
+
+	it("replays account cycling when cached and live active providers differ", async () => {
+		const cachedRing: readonly RpcModelOption[] = [
+			{ provider: "openai", id: "gpt-5", label: "openai/gpt-5", active: true },
+		];
+		const liveRing: readonly RpcModelOption[] = [
+			{ provider: "anthropic", id: "claude-opus-4", label: "anthropic/claude-opus-4", active: true },
+			{ provider: "anthropic-2", id: "claude-opus-4", label: "anthropic-2/claude-opus-4", active: false },
+		];
+		const { cachedCycle, gate, release } = cycleFixture({ models: cachedRing, currentModelLabel: "openai/gpt-5" });
+		const controls = {
+			getEnabledModels: vi.fn(async () => liveRing),
+			setModel: vi.fn(async () => asNever({ modelLabel: "anthropic-2/claude-opus-4" })),
+		};
+		// SAFETY: partial fixture; unread members of the target type are unused here.
+		const handle = createClaudeAccountCycleHandler({ controls: controls as never, notifications: { notify: vi.fn() }, cachedCycle });
+
+		handle();
+		release();
+		await gate.whenSettled();
+
+		expect(controls.setModel).toHaveBeenCalledExactlyOnceWith("anthropic-2", "claude-opus-4");
 	});
 
 	it("replays account cycling when the cached account ring is stale", async () => {

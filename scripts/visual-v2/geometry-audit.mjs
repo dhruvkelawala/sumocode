@@ -37,7 +37,7 @@ function classifyRow(line) {
 	// Footer before hint-row: the landscape footer (issue #559) carries the
 	// `CTRL+/ · COMMANDS` keybind in its right zone. Its `● STATE` left zone is
 	// what makes it a footer; portrait/splash hint rows have no state dot.
-	if (/^●\s/.test(trimmed) || /^[●○]\s*(READY|MEDITATING|ILLUMINATING|DEFERRING|INSCRIBING)/.test(trimmed)) return "footer";
+	if (/^[●○]\s*(READY|MEDITATING|ILLUMINATING|DEFERRING|INSCRIBING)\b/i.test(trimmed)) return "footer";
 	if (trimmed.includes("CTRL+/") && trimmed.includes("COMMANDS")) return "hint-row";
 	if (trimmed.includes("REGISTRY") || trimmed.includes("CONTEXT") || trimmed.includes("MEMORY")) return "sidebar";
 	if (trimmed.includes("Working...")) return "working";

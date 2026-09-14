@@ -503,9 +503,8 @@ function buildScene(variant) {
 	const hintRowHTML = sidebarVisible ? "" : `\n    <pre class="grid" style="grid-row: 7;">${hintRow}</pre>`;
 	const footerGridRow = sidebarVisible ? 7 : 8;
 	// One --cell-h track per scene row: 8 in landscape (no hint), 9 in portrait.
-	const sceneRowTracks = sidebarVisible
-		? `var(--cell-h) var(--cell-h) var(--cell-h) ${middleTrack} var(--cell-h) calc(var(--cell-h) * 3) var(--cell-h) var(--cell-h)`
-		: `var(--cell-h) var(--cell-h) var(--cell-h) ${middleTrack} var(--cell-h) calc(var(--cell-h) * 3) var(--cell-h) var(--cell-h) var(--cell-h)`;
+	const landscapeTracks = `var(--cell-h) var(--cell-h) var(--cell-h) ${middleTrack} var(--cell-h) calc(var(--cell-h) * 3) var(--cell-h) var(--cell-h)`;
+	const sceneRowTracks = sidebarVisible ? landscapeTracks : `${landscapeTracks} var(--cell-h)`;
 	const runtimeTargetCss = isRuntimeTarget
 		? `
   body.runtime-target { background: var(--background); }

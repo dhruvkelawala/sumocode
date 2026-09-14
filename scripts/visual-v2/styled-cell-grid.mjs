@@ -313,6 +313,9 @@ function splitTracks(template) {
 		track += ch;
 	}
 	if (track) tracks.push(track);
+	if (depth !== 0) {
+		throw new Error(`styled-cell-grid: unbalanced parentheses in grid-template-rows ${JSON.stringify(template)}`);
+	}
 	return tracks;
 }
 
@@ -325,13 +328,15 @@ function trackRows(track) {
 }
 
 /**
- * Middle-pane height for a scene grid. The `.middle` pane (`grid-row: 4`) is
- * the track the layout sizes; every other track is a fixed chrome row whose
- * height comes from the template itself, so a taller input frame or an extra
- * chrome track moves the crops with the layout instead of silently shifting
- * them. Landscape (issue #559) drops the hint row, portrait keeps it.
+ * Scene grid geometry derived from the template: the middle-pane height and the
+ * physical start row of every `grid-row` the scene uses. The `.middle` pane
+ * (`grid-row: 4`) is the track the layout sizes; every other track is a fixed
+ * chrome row whose height comes from the template itself, so a taller input
+ * frame or an extra chrome track moves the crops with the layout instead of
+ * silently shifting them. Landscape (issue #559) drops the hint row, portrait
+ * keeps it.
  */
-function sceneMiddleRows(html, rows) {
+function sceneGeometry(html, rows) {
 	const template = html.match(/\.scene\s*\{[^}]*grid-template-rows:\s*([^;]+);/)?.[1];
 	if (!template) {
 		// A silent portrait fallback would shift every crop below the middle
@@ -347,31 +352,22 @@ function sceneMiddleRows(html, rows) {
 	if (middleIndex >= tracks.length) {
 		throw new Error(`styled-cell-grid: .middle grid-row ${middleGridRow} is outside the ${tracks.length}-track scene grid`);
 	}
-	let chromeRows = 0;
-	for (const [index, track] of tracks.entries()) {
-		if (index === middleIndex) continue;
+	const heights = tracks.map((track, index) => {
+		if (index === middleIndex) return null; // sized by the layout, not the template
 		const height = trackRows(track);
 		if (height === null) {
 			throw new Error(`styled-cell-grid: scene track ${index + 1} (${track}) has no fixed row height`);
 		}
-		chromeRows += height;
-	}
-	return rows - chromeRows;
-}
-
-function sceneGridRowStarts(middleRows) {
-	return new Map([
-		[1, 0],
-		[2, 1],
-		[3, 2],
-		[4, 3],
-		[5, 3 + middleRows],
-		[6, 4 + middleRows],
-		[7, 7 + middleRows],
-		[8, 8 + middleRows],
-		[9, 9 + middleRows],
-		[10, 10 + middleRows],
-	]);
+		return height;
+	});
+	const middleRows = rows - heights.reduce((sum, height) => sum + (height ?? 0), 0);
+	const rowStarts = new Map();
+	let row = 0;
+	heights.forEach((height, index) => {
+		rowStarts.set(index + 1, row);
+		row += height ?? middleRows;
+	});
+	return { middleRows, rowStarts };
 }
 
 function parseMiddleColumns(html, cols) {
@@ -392,8 +388,7 @@ function writeCellsClipped(target, startRow, startCol, sourceRows, maxRows) {
 
 function parseSceneGrid(html, cols, rows) {
 	const grid = emptyStyledGrid(cols, rows);
-	const middleRows = sceneMiddleRows(html, rows);
-	const rowStarts = sceneGridRowStarts(middleRows);
+	const { middleRows, rowStarts } = sceneGeometry(html, rows);
 	const { sidebarStart } = parseMiddleColumns(html, cols);
 
 	const chatMatch = html.match(/<div class="chat-col">([\s\S]*?)<\/div>\s*<div class="gutter-col">/);
@@ -428,7 +423,7 @@ function parseSceneGrid(html, cols, rows) {
 
 function parseScenePaletteOverlayGrid(html, cols, rows) {
 	const grid = emptyStyledGrid(cols, rows);
-	const gridRowStarts = sceneGridRowStarts(sceneMiddleRows(html, rows));
+	const { rowStarts: gridRowStarts } = sceneGeometry(html, rows);
 
 	for (const match of html.matchAll(PRE_GRID_PATTERN)) {
 		const attrs = match[1] ?? "";

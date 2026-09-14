@@ -43,6 +43,22 @@ describe("geometry-audit row classification", () => {
 		expect(audit.rows[0].category).toBe("footer");
 	});
 
+	it("keeps a ●-prefixed content row out of the footer category", () => {
+		// Only a state dot followed by a Cathedral state verb is a footer; a bare
+		// bullet in chat content or a card line stays content.
+		const audit = auditGeometry(snapshot([
+			" ● Track D smoke session                                                                                      ",
+		]));
+		expect(audit.rows[0].category).toBe("content");
+	});
+
+	it("accepts a lowercase state label as a footer", () => {
+		const audit = auditGeometry(snapshot([
+			" ● ready · claude-opus-4-6 · high                                                         42k/200k · $0.42 ",
+		]));
+		expect(audit.rows[0].category).toBe("footer");
+	});
+
 	it("passes a geometry spec that expects the landscape footer category", () => {
 		const audit = auditGeometry(
 			snapshot([" ● READY · gpt-5.5 · medium                                                                   CTRL+/ · COMMANDS "]),

@@ -244,7 +244,7 @@ describe("V2 visual parity contract", () => {
 		expect(scenario("active-portrait-runtime").dimensions).toEqual({ cols: 60, rows: 100 });
 		expect(scenario("fixture-completed-landscape").dimensions).toEqual({ cols: 160, rows: 45 });
 		expect(scenario("fixture-completed-portrait").dimensions).toEqual({ cols: 60, rows: 100 });
-		expect(cropDefinition("sidebar")).toEqual({ x: 130, y: 3, cols: 30, rows: 34 });
+		expect(cropDefinition("sidebar")).toEqual({ x: 130, y: 3, cols: 30, rows: 35 });
 		expect(cropDefinition("chat-area")).toEqual({ x: 0, y: 3, cols: 128, rows: 35 });
 		expect(cropDefinition("input-frame")).toEqual({ x: 0, y: 39, cols: 160, rows: 3 });
 		expect(cropDefinition("footer")).toEqual({ x: 0, y: 43, cols: 160, rows: 1 });

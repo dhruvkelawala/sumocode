@@ -323,9 +323,14 @@ function gridTrackCount(template) {
  * the hint row and has 9 tracks; portrait keeps it with 10.
  */
 function sceneMiddleRows(html, rows) {
-	const template = html.match(/\.scene\s*\{[^}]*grid-template-rows:\s*([^;]+);/)?.[1] ?? "";
+	const template = html.match(/\.scene\s*\{[^}]*grid-template-rows:\s*([^;]+);/)?.[1];
+	if (!template) {
+		// A silent portrait fallback would shift every crop below the middle
+		// pane by one row with no error; fail loudly instead.
+		throw new Error("styled-cell-grid: scene has no .scene grid-template-rows to count tracks from");
+	}
 	// tracks + 1: the input-frame track is three content rows tall, not one.
-	const trackCount = gridTrackCount(template) || 10;
+	const trackCount = gridTrackCount(template);
 	return rows - (trackCount + 1);
 }
 

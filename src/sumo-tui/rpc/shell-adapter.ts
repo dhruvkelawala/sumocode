@@ -792,6 +792,9 @@ function renderActiveHint(state: RpcHostChromeState, width: number, sidebarVisib
 		leftHint,
 		leftHintOverflow: "truncate",
 		leftHintStyle: notice !== undefined ? "dim" : "project-branch",
+		// Landscape names the keybind in the footer right zone, so a row
+		// re-opened by a notice paints the notice alone — never a duplicate.
+		suppressKeybinds: sidebarVisible,
 	});
 	return `${" ".repeat(pad)}${hint}${" ".repeat(pad)}`;
 }

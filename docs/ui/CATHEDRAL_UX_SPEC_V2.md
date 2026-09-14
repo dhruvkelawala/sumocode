@@ -75,9 +75,12 @@ Rows 4..N-7      : 2-pane content
                    - right (registry sidebar):                cols (W-29)..W
 Row N-6          : blank
 Rows N-5..N-3    : input frame (3 rows)
-Row N-2          : hint row
-Row N-1          : registry footer (Element 5)
+Row N-2          : registry footer (Element 5)
 Row N            : blank breathing row
+
+(Landscape, W≥120, has no hint row at all: issue #559 collapsed it and its
+keybind moved into the footer right zone, so the input stack is one row
+shorter and the transcript one row taller. Portrait keeps the hint row.)
 Splash extra     : version line only on splash, above bottom breathing row
 ```
 
@@ -324,7 +327,7 @@ Disappears on first keystroke.
 
 **Left zone**: `● <STATE>` (uppercase) `· <model-id>` (lowercase) `· <thinking-level>` (lowercase). State dot color = agent state.
 
-**Right zone**: `<ctx-tokens>/<ctx-window> · $<session-cost>`. Project/branch live in the sidebar when visible and the hint row when the sidebar is hidden; footer must not duplicate them.
+**Right zone**: `<ctx-tokens>/<ctx-window> · $<session-cost>` (portrait). Landscape (W≥120) instead paints the palette keybind `CTRL+/ · COMMANDS` — context and cost are sidebar-owned there and never leak back into the footer. Project/branch live in the sidebar when visible and the hint row when the sidebar is hidden; footer must not duplicate them.
 
 **Cathedral state labels**:
 | internal | UI label |
@@ -337,7 +340,7 @@ Disappears on first keystroke.
 
 **Same shape regardless of sidebar visibility** (single-row always).
 
-**When sidebar is hidden** (W<120 OR `/sidebar hide`): the hint row carries project/branch. Footer right zone remains ctx + cost. Sidebar (when visible) shows fuller view: project/branch, bar visualization, and cumulative session totals — NOT in footer.
+**When sidebar is hidden** (W<120 OR `/sidebar hide`): the hint row carries project/branch. Footer right zone remains ctx + cost. When the sidebar is visible (landscape), the hint row is collapsed and the footer right zone carries the palette keybind instead. Sidebar (when visible) shows fuller view: project/branch, bar visualization, and cumulative session totals — NOT in footer.
 
 **Bottom version line on splash only**:
 ```

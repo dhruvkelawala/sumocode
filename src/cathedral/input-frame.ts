@@ -188,6 +188,12 @@ export type InputHintsOptions = {
 	leftHintOverflow?: "drop" | "truncate";
 	/** Project context renders project in foreground and branch in dim; splash invocation highlights model with theme accent. */
 	leftHintStyle?: "dim" | "project-branch" | "model-thinking";
+	/**
+	 * Skip the right-aligned keybind hint. The landscape shell carries the
+	 * keybind in its footer right zone, so a re-opened hint row (a transient
+	 * notice) must not paint it twice.
+	 */
+	suppressKeybinds?: boolean;
 };
 
 /**
@@ -202,15 +208,18 @@ export type InputHintsOptions = {
 export function renderInputHints(width: number, options: InputHintsOptions = {}): string {
 	if (width <= 0) return "";
 
+	// The landscape shell owns the keybind through its footer right zone, so a
+	// hint row re-opened there (a transient notice) must not paint it twice.
+	const suppressKeybinds = options.suppressKeybinds === true;
 	const rightPlain = INPUT_FRAME_HINT_KEYBINDS;
-	const rightLen = rightPlain.length;
+	const rightLen = suppressKeybinds ? 0 : rightPlain.length;
 	const left = options.leftHint;
 
 	const dimFg = fg(activeThemeColors().foregroundDim);
 	const accent = fg(activeThemeColors().accent);
 
 	// Build the colored right-hand string: CTRL+/ in accent, label in dim.
-	const rightColored = `${accent}CTRL+/${RESET} ${dimFg}· COMMANDS${RESET}`;
+	const rightColored = suppressKeybinds ? "" : `${accent}CTRL+/${RESET} ${dimFg}· COMMANDS${RESET}`;
 	const colorLeftHint = (text: string): string => {
 		if (options.leftHintStyle === "model-thinking") {
 			const prefix = "╰─ ";

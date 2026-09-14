@@ -1503,6 +1503,35 @@ describe("RpcShellAdapter landscape bottom stack", () => {
 		}
 	});
 
+	it("re-opens the collapsed row for a transient notice without duplicating the footer keybind", async () => {
+		const notifications = new NotificationCenter();
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 160, rows: 45 },
+			initialState: state({ modelLabel: "openai/gpt-5.5", thinkingLevel: "high" }),
+			initialTranscript: { messages: [{ id: "m1", role: "user", displayName: "YOU", blocks: [{ type: "markdown", text: "hello" }] }] },
+			notifications,
+		});
+		try {
+			notifications.notify("Queue mode: follow-up");
+			adapter.render();
+			const frame = adapter.getLastFrame();
+			expect(frame).toBeDefined();
+			const rows = Array.from({ length: 45 }, (_value, row) => frame!.toPlainRow(row));
+			const text = rows.join("\n");
+
+			// The notice owns the re-opened row; the keybind appears exactly once
+			// overall — in the footer, never beside the notice.
+			expect(text.split("CTRL+/ · COMMANDS")).toHaveLength(2);
+			const noticeRow = findText(frame!, "Queue mode: follow-up");
+			expect(rows[noticeRow.row]!.includes("CTRL+/")).toBe(false);
+			const footer = findText(frame!, "READY");
+			expect(rows[footer.row]!).toContain("CTRL+/ · COMMANDS");
+		} finally {
+			adapter.dispose();
+		}
+	});
+
 	it("keeps portrait exactly as before: hint row with keybinds, footer right zone tokens/cost", async () => {
 		const adapter = await RpcShellAdapter.create({
 			terminal: { writeFramePatches: () => undefined },

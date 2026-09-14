@@ -501,8 +501,8 @@ async function renderFixtureScene(scenario, fixture) {
 		}, chatWidth)
 		: [];
 	// Bible bottom stack, portrait: queued cards, blank, input(3), hint, blank,
-	// footer, blank. Landscape drops the hint row and one breathing blank, so
-	// the chat pane grows by one row.
+	// footer, blank. Landscape drops only the hint row; the breathing blank
+	// stays, so the chat pane grows by exactly one row.
 	const bottomRows = [...queueRows, "", ...inputRows, ...(hintRow === undefined ? [] : [hintRow]), "", ...footerRows, ""];
 	const chatHeight = Math.max(1, rows - topRows.length - bottomRows.length);
 

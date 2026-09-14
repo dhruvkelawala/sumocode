@@ -30,3 +30,10 @@ export function isClaudeAccountProvider(providerId: string): boolean {
 export function isClaudeProvider(providerId: string): boolean {
 	return providerId === CLAUDE_BASE_PROVIDER || isClaudeAccountProvider(providerId);
 }
+
+/** Built-in account first, then extra accounts by numeric index. */
+export function claudeProviderRank(providerId: string): number {
+	if (providerId === CLAUDE_BASE_PROVIDER) return 0;
+	const index = /^anthropic-(\d+)$/.exec(providerId)?.[1];
+	return index ? Number(index) : Number.MAX_SAFE_INTEGER;
+}

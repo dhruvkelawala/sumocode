@@ -17,6 +17,7 @@ import { RpcHostStateStore, toggleRpcPromptDelivery } from "./state.js";
 import { DirectBashController, type DirectBashResult } from "./direct-bash.js";
 import {
 	activitySnapshotMatchesSession,
+	createClaudeAccountCycleHandler,
 	createEditorSubmitHandlers,
 	createLazyChatSink,
 	createModelCycleBackwardHandler,
@@ -1258,6 +1259,85 @@ describe("app.interrupt action wiring reuses the interrupt tier module", () => {
 // (the handler now calls through to the real RpcHostControls/runtime
 // methods) behavior for each of the 4 host-side actions wired via host.ts.
 describe("createModelCycleForwardHandler (app.model.cycleForward)", () => {
+	it("treats Claude account providers as one logical model", async () => {
+		const controls = {
+			getEnabledModels: vi.fn(async () => [
+				{ provider: "anthropic", id: "claude-opus-4", label: "anthropic/claude-opus-4", active: true },
+				{ provider: "anthropic-2", id: "claude-opus-4", label: "anthropic-2/claude-opus-4", active: false },
+				{ provider: "openai", id: "gpt-5", label: "openai/gpt-5", active: false },
+			]),
+			setModel: vi.fn(async () => asNever({ modelLabel: "openai/gpt-5" })),
+		};
+		const handle = createModelCycleForwardHandler({
+			// SAFETY: partial fixture; unread members of the target type are unused here.
+			controls: controls as never,
+			notifications: { notify: vi.fn() },
+		});
+
+		handle();
+		await flush();
+
+		expect(controls.setModel).toHaveBeenCalledExactlyOnceWith("openai", "gpt-5");
+	});
+
+	it("keeps the selected Claude account while changing Claude models", async () => {
+		const controls = {
+			getEnabledModels: vi.fn(async () => [
+				{ provider: "anthropic", id: "claude-opus-4", label: "anthropic/claude-opus-4", active: false },
+				{ provider: "anthropic", id: "claude-sonnet-4", label: "anthropic/claude-sonnet-4", active: false },
+				{ provider: "anthropic-2", id: "claude-opus-4", label: "anthropic-2/claude-opus-4", active: true },
+				{ provider: "anthropic-2", id: "claude-sonnet-4", label: "anthropic-2/claude-sonnet-4", active: false },
+			]),
+			setModel: vi.fn(async () => asNever({ modelLabel: "anthropic-2/claude-sonnet-4" })),
+		};
+		const handle = createModelCycleForwardHandler({
+			// SAFETY: partial fixture; unread members of the target type are unused here.
+			controls: controls as never,
+			notifications: { notify: vi.fn() },
+		});
+
+		handle();
+		await flush();
+
+		expect(controls.setModel).toHaveBeenCalledExactlyOnceWith("anthropic-2", "claude-sonnet-4");
+	});
+
+	it("does not borrow a Claude model from another account when account model sets differ", async () => {
+		const controls = {
+			getEnabledModels: vi.fn(async () => [
+				{ provider: "anthropic-3", id: "claude-opus-4", label: "anthropic-3/claude-opus-4", active: true },
+				{ provider: "anthropic-2", id: "claude-sonnet-4", label: "anthropic-2/claude-sonnet-4", active: false },
+				{ provider: "openai", id: "gpt-5", label: "openai/gpt-5", active: false },
+			]),
+			setModel: vi.fn(async () => asNever({ modelLabel: "openai/gpt-5" })),
+		};
+		// SAFETY: partial fixture; unread members of the target type are unused here.
+		const handle = createModelCycleForwardHandler({ controls: controls as never, notifications: { notify: vi.fn() } });
+
+		handle();
+		await flush();
+
+		expect(controls.setModel).toHaveBeenCalledExactlyOnceWith("openai", "gpt-5");
+	});
+
+	it("falls back to the first reachable Claude account from a non-Claude model", async () => {
+		const controls = {
+			getEnabledModels: vi.fn(async () => [
+				{ provider: "openai", id: "gpt-5", label: "openai/gpt-5", active: true },
+				{ provider: "anthropic-3", id: "claude-opus-4", label: "anthropic-3/claude-opus-4", active: false },
+				{ provider: "anthropic-2", id: "claude-opus-4", label: "anthropic-2/claude-opus-4", active: false },
+			]),
+			setModel: vi.fn(async () => asNever({ modelLabel: "anthropic-2/claude-opus-4" })),
+		};
+		// SAFETY: partial fixture; unread members of the target type are unused here.
+		const handle = createModelCycleForwardHandler({ controls: controls as never, notifications: { notify: vi.fn() } });
+
+		handle();
+		await flush();
+
+		expect(controls.setModel).toHaveBeenCalledExactlyOnceWith("anthropic-2", "claude-opus-4");
+	});
+
 	it("moves forward within the enabled model ring with wraparound instead of calling Pi's full-list cycle_model", async () => {
 		const enabledModels = [
 			{ provider: "anthropic", id: "claude-opus-4", label: "anthropic/claude-opus-4", active: false },
@@ -1337,6 +1417,45 @@ describe("createModelCycleForwardHandler (app.model.cycleForward)", () => {
 		// home B); the failure then raises its own notice, which survives.
 		expect(notifications.dismissSticky).toHaveBeenCalledTimes(1);
 		expect(notifications.dismissSticky.mock.invocationCallOrder[0]!).toBeLessThan(notifications.notify.mock.invocationCallOrder[0]!);
+	});
+});
+
+describe("createClaudeAccountCycleHandler (app.model.cycleAccount)", () => {
+	it.each([
+		["a non-Claude model", { provider: "openai", id: "gpt-5", label: "openai/gpt-5", active: true }, "select a Claude model before cycling accounts"],
+		["one Claude account", { provider: "anthropic", id: "claude-opus-4", label: "anthropic/claude-opus-4", active: true }, "no other Claude accounts available"],
+	] as const)("warns instead of changing %s", async (_case, model, message) => {
+		const notifications = { notify: vi.fn() };
+		const controls = { getEnabledModels: vi.fn(async () => [model]), setModel: vi.fn() };
+		// SAFETY: partial fixture; unread members of the target type are unused here.
+		const handle = createClaudeAccountCycleHandler({ controls: controls as never, notifications });
+
+		handle();
+		await flush();
+
+		expect(controls.setModel).not.toHaveBeenCalled();
+		expect(notifications.notify).toHaveBeenCalledWith(message, "warning");
+	});
+
+	it("cycles accounts without changing the Claude model", async () => {
+		const controls = {
+			getEnabledModels: vi.fn(async () => [
+				{ provider: "anthropic", id: "claude-opus-4", label: "anthropic/claude-opus-4", active: true },
+				{ provider: "anthropic-2", id: "claude-opus-4", label: "anthropic-2/claude-opus-4", active: false },
+				{ provider: "anthropic-2", id: "claude-sonnet-4", label: "anthropic-2/claude-sonnet-4", active: false },
+			]),
+			setModel: vi.fn(async () => asNever({ modelLabel: "anthropic-2/claude-opus-4" })),
+		};
+		const handle = createClaudeAccountCycleHandler({
+			// SAFETY: partial fixture; unread members of the target type are unused here.
+			controls: controls as never,
+			notifications: { notify: vi.fn() },
+		});
+
+		handle();
+		await flush();
+
+		expect(controls.setModel).toHaveBeenCalledExactlyOnceWith("anthropic-2", "claude-opus-4");
 	});
 });
 
@@ -1564,6 +1683,90 @@ describe("cached pre-hydration cycle (issue 448: cycle keys answer before hydrat
 		expect(controls.setModel).toHaveBeenCalledExactlyOnceWith("openai", "gpt-5");
 		expect(onStateChange).toHaveBeenCalledWith({ modelLabel: "openai/gpt-5" });
 		expect(notifications.notify).not.toHaveBeenCalled();
+	});
+
+	it("replays only the latest model/account intent against the raw live list", async () => {
+		const ring: readonly RpcModelOption[] = [
+			{ provider: "anthropic", id: "claude-opus-4", label: "anthropic/claude-opus-4", active: true },
+			{ provider: "anthropic", id: "claude-sonnet-4", label: "anthropic/claude-sonnet-4", active: false },
+			{ provider: "anthropic-2", id: "claude-opus-4", label: "anthropic-2/claude-opus-4", active: false },
+			{ provider: "anthropic-2", id: "claude-sonnet-4", label: "anthropic-2/claude-sonnet-4", active: false },
+		];
+		const { cachedCycle, gate, release, previewModel } = cycleFixture({ models: ring, currentModelLabel: "anthropic/claude-opus-4" });
+		const controls = {
+			getEnabledModels: vi.fn(async () => ring),
+			setModel: vi.fn(async () => asNever({ modelLabel: "anthropic-2/claude-opus-4" })),
+		};
+		// SAFETY: partial fixture; unread members of the target type are unused here.
+		const deps = { controls: controls as never, notifications: { notify: vi.fn() }, cachedCycle };
+		const cycleModel = createModelCycleForwardHandler(deps);
+		const cycleAccount = createClaudeAccountCycleHandler(deps);
+
+		cycleModel();
+		cycleAccount();
+		cycleModel();
+		expect(previewModel.mock.calls.map((call) => call[0].label)).toEqual([
+			"anthropic/claude-sonnet-4",
+			"anthropic-2/claude-sonnet-4",
+			"anthropic-2/claude-opus-4",
+		]);
+
+		release();
+		await gate.whenSettled();
+
+		expect(controls.setModel).toHaveBeenCalledExactlyOnceWith("anthropic-2", "claude-opus-4");
+		expect(deps.notifications.notify).not.toHaveBeenCalled();
+	});
+
+	it("replays a model cycle when the cached logical ring is thinner than the live ring", async () => {
+		const cachedRing: readonly RpcModelOption[] = [
+			{ provider: "anthropic", id: "claude-opus-4", label: "anthropic/claude-opus-4", active: true },
+			{ provider: "anthropic-2", id: "claude-opus-4", label: "anthropic-2/claude-opus-4", active: false },
+		];
+		const liveRing: readonly RpcModelOption[] = [
+			...cachedRing,
+			{ provider: "anthropic", id: "claude-sonnet-4", label: "anthropic/claude-sonnet-4", active: false },
+			{ provider: "anthropic-2", id: "claude-sonnet-4", label: "anthropic-2/claude-sonnet-4", active: false },
+		];
+		const { cachedCycle, gate, release, previewModel } = cycleFixture({ models: cachedRing, currentModelLabel: "anthropic/claude-opus-4" });
+		const controls = {
+			getEnabledModels: vi.fn(async () => liveRing),
+			setModel: vi.fn(async () => asNever({ modelLabel: "anthropic/claude-sonnet-4" })),
+		};
+		// SAFETY: partial fixture; unread members of the target type are unused here.
+		const handle = createModelCycleForwardHandler({ controls: controls as never, notifications: { notify: vi.fn() }, cachedCycle });
+
+		handle();
+		expect(previewModel).not.toHaveBeenCalled();
+
+		release();
+		await gate.whenSettled();
+
+		expect(controls.setModel).toHaveBeenCalledExactlyOnceWith("anthropic", "claude-sonnet-4");
+	});
+
+	it("does not let an account-cycle no-op replace a pending model change", async () => {
+		const ring: readonly RpcModelOption[] = [
+			{ provider: "openai", id: "gpt-5", label: "openai/gpt-5", active: true },
+			{ provider: "openai", id: "gpt-4", label: "openai/gpt-4", active: false },
+		];
+		const { cachedCycle, gate, release, previewModel } = cycleFixture({ models: ring, currentModelLabel: "openai/gpt-5" });
+		const controls = {
+			getEnabledModels: vi.fn(async () => ring),
+			setModel: vi.fn(async () => asNever({ modelLabel: "openai/gpt-4" })),
+		};
+		// SAFETY: partial fixture; unread members of the target type are unused here.
+		const deps = { controls: controls as never, notifications: { notify: vi.fn() }, cachedCycle };
+
+		createModelCycleForwardHandler(deps)();
+		createClaudeAccountCycleHandler(deps)();
+		expect(previewModel).toHaveBeenCalledExactlyOnceWith(ring[1]);
+
+		release();
+		await gate.whenSettled();
+
+		expect(controls.setModel).toHaveBeenCalledExactlyOnceWith("openai", "gpt-4");
+		expect(deps.notifications.notify).toHaveBeenCalledWith("select a Claude model before cycling accounts", "warning");
 	});
 
 	it("uses the live ring, never the cache, once hydration has settled", async () => {

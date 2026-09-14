@@ -205,13 +205,17 @@ describe("RetainedShellRenderer", () => {
 	describe("kitty graphics", () => {
 		it("turns the APC-stripped blank chat rows into one transmission then placement-only frames", async () => {
 			setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
-			const { chat, terminal, renderer } = await createHarness();
+			const { chat, terminal, renderer } = await createHarness({ viewport: { columns: COLS, rows: 30 } });
 			try {
 				addImage(chat);
 				renderer.render();
 
+				const rows = frameRows(renderer);
+				const userTop = rowsContaining(rows, "USER")[0];
+				expect(userTop).toBeDefined();
+				expect(rows[(userTop ?? 0) + 1]).toMatch(/^│ +│$/);
+				expect(rows.join("\n")).not.toContain("\x1b_G");
 				const first = terminal.graphics.at(-1) ?? "";
-				expect(renderer.getLastFrame()?.toPlainRow(1)).not.toContain("\x1b_G");
 				expect(first.split("\x1b_Ga=T")).toHaveLength(2);
 				const imageId = /(?:^|,)i=(\d+)/.exec(first)?.[1];
 				expect(imageId).toBeDefined();
@@ -288,22 +292,38 @@ describe("RetainedShellRenderer", () => {
 			}
 		});
 
-		it("deletes live placements on transcript reset and renderer disposal", async () => {
+		it("deletes live placements on transcript replacement, reset, and renderer disposal", async () => {
 			setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
 			const { chat, terminal, renderer } = await createHarness();
 			addImage(chat);
 			renderer.render();
-			const firstId = /(?:^|,)i=(\d+)/.exec(terminal.graphics.at(-1) ?? "")?.[1];
+			const sessionImageId = /(?:^|,)i=(\d+)/.exec(terminal.graphics.at(-1) ?? "")?.[1];
+			expect(sessionImageId).toBeDefined();
+
+			chat.replaceViewModels([{
+				id: "replacement-session",
+				role: "user",
+				displayName: "USER",
+				blocks: [{ type: "markdown", text: "replacement session" }],
+			}]);
+			renderer.render();
+			expect(terminal.graphics.at(-1)).toContain(`a=d,d=I,i=${sessionImageId}`);
 
 			chat.clearMessages();
+			addImage(chat);
 			renderer.render();
-			expect(terminal.graphics.at(-1)).toContain(`a=d,d=I,i=${firstId}`);
+			const resetImageId = /(?:^|,)i=(\d+)/.exec(terminal.graphics.at(-1) ?? "")?.[1];
+			expect(resetImageId).toBeDefined();
+			chat.clearMessages();
+			renderer.render();
+			expect(terminal.graphics.at(-1)).toContain(`a=d,d=I,i=${resetImageId}`);
 
 			addImage(chat);
 			renderer.render();
-			const secondId = /(?:^|,)i=(\d+)/.exec(terminal.graphics.at(-1) ?? "")?.[1];
+			const disposeImageId = /(?:^|,)i=(\d+)/.exec(terminal.graphics.at(-1) ?? "")?.[1];
+			expect(disposeImageId).toBeDefined();
 			renderer.dispose();
-			expect(terminal.graphics.at(-1)).toContain(`a=d,d=I,i=${secondId}`);
+			expect(terminal.graphics.at(-1)).toContain(`a=d,d=I,i=${disposeImageId}`);
 		});
 	});
 

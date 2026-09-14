@@ -377,8 +377,8 @@ export function collapseImagePathsForDisplay(text: string): string {
  * Extract just the image blocks from a content array. Used for tool results
  * (e.g. Read on a PNG), whose text is folded into the tool pill's `output`
  * while any image parts would otherwise be dropped on the floor — they
- * become sibling image blocks so the chat card renders them (inline pixels
- * where supported, `[Image: …]` chip otherwise).
+ * attach to the activity block (`images`) and render inside its card
+ * (inline pixels where supported, `[Image: …]` chip otherwise).
  */
 function imageBlocksFromContent(content: SessionValue): ImageBlock[] {
 	if (!Array.isArray(content)) return [];

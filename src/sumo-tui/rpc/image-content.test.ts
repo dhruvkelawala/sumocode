@@ -19,6 +19,19 @@ function root(): string {
 	return path;
 }
 
+function screenshotPng(): Buffer {
+	const screenshot = new PngImage({ width: 2560, height: 1600 });
+	let noise = 0x12345678;
+	for (let index = 0; index < screenshot.data.length; index += 4) {
+		noise ^= noise << 13; noise ^= noise >>> 17; noise ^= noise << 5;
+		screenshot.data[index] = noise;
+		screenshot.data[index + 1] = noise >>> 8;
+		screenshot.data[index + 2] = noise >>> 16;
+		screenshot.data[index + 3] = 255;
+	}
+	return PngImage.sync.write(screenshot);
+}
+
 afterEach(() => {
 	for (const path of roots.splice(0)) rmSync(path, { recursive: true, force: true });
 });
@@ -48,16 +61,7 @@ describe("loadRpcImages", () => {
 
 	it("resizes a macOS screenshot-sized PNG before applying the RPC payload limit", async () => {
 		const cwd = root();
-		const screenshot = new PngImage({ width: 2560, height: 1600 });
-		let noise = 0x12345678;
-		for (let index = 0; index < screenshot.data.length; index += 4) {
-			noise ^= noise << 13; noise ^= noise >>> 17; noise ^= noise << 5;
-			screenshot.data[index] = noise;
-			screenshot.data[index + 1] = noise >>> 8;
-			screenshot.data[index + 2] = noise >>> 16;
-			screenshot.data[index + 3] = 255;
-		}
-		const source = PngImage.sync.write(screenshot);
+		const source = screenshotPng();
 		expect(source.byteLength).toBeGreaterThan(MAX_RPC_IMAGE_BYTES);
 		writeFileSync(join(cwd, "Screenshot 2026-03-29 at 22.54.26.png"), source);
 
@@ -88,6 +92,18 @@ describe("loadRpcImages", () => {
 		expect(images).toHaveLength(2);
 		expect(images.map((entry) => entry.data)).toEqual([PNG.toString("base64"), PNG.toString("base64")]);
 	});
+
+	it("applies the aggregate limit to resized image bytes", async () => {
+		const cwd = root();
+		const source = screenshotPng();
+		writeFileSync(join(cwd, "one.png"), source);
+		writeFileSync(join(cwd, "two.png"), source);
+
+		await expect(loadRpcImages([
+			{ token: "[Image 1]", path: "./one.png" },
+			{ token: "[Image 2]", path: "./two.png" },
+		], { cwd })).rejects.toThrow(`images exceed ${MAX_RPC_IMAGE_TOTAL_BYTES} byte total limit`);
+	}, 15_000);
 
 	it("rejects multiple individually valid images that cross the aggregate limit", async () => {
 		const cwd = root();

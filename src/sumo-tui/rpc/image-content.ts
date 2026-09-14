@@ -8,7 +8,7 @@ import type { EditorImageAttachment } from "../../cathedral/editor-draft-state.j
 export const MAX_RPC_IMAGE_BYTES = 3 * 1024 * 1024;
 export const MAX_RPC_IMAGE_TOTAL_BYTES = 5 * 1024 * 1024;
 // Source screenshots may be much larger than the safe RPC payload; resize them before enforcing transport limits.
-const MAX_RPC_IMAGE_SOURCE_BYTES = 20 * 1024 * 1024;
+const MAX_RPC_IMAGE_SOURCE_BYTES = 50 * 1024 * 1024;
 // Pi's resizer measures encoded base64 bytes, while our transport limits measure decoded image bytes.
 const MAX_RPC_IMAGE_BASE64_BYTES = Math.floor(MAX_RPC_IMAGE_BYTES / 3) * 4;
 
@@ -55,7 +55,7 @@ export async function loadRpcImages(
 	return images;
 }
 
-async function readBoundedImage(path: string, attachment: EditorImageAttachment, maxBytes: number): Promise<Buffer> {
+async function readBoundedImage(path: string, attachment: EditorImageAttachment, maxSourceBytes: number): Promise<Buffer> {
 	let file;
 	try {
 		file = await open(path, "r");
@@ -65,7 +65,7 @@ async function readBoundedImage(path: string, attachment: EditorImageAttachment,
 	try {
 		const metadata = await file.stat();
 		if (!metadata.isFile()) throw new RpcImageLoadError(attachment, "path is not a regular file");
-		if (metadata.size > maxBytes) throw new RpcImageLoadError(attachment, `image exceeds ${maxBytes} byte limit`);
+		if (metadata.size > maxSourceBytes) throw new RpcImageLoadError(attachment, `image exceeds ${maxSourceBytes} byte limit`);
 		const buffer = Buffer.alloc(metadata.size + 1);
 		let bytesRead = 0;
 		while (bytesRead < buffer.length) {

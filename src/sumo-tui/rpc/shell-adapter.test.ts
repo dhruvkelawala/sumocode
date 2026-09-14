@@ -1494,10 +1494,9 @@ describe("RpcShellAdapter landscape bottom stack", () => {
 			expect(rows[footer.row]!).not.toContain("42k/200k");
 			expect(rows[footer.row]!).not.toContain("$0.42");
 
-			// The idle hint row collapsed: the row above the footer breathing
-			// gap is the input frame's bottom border, not a hint row.
-			expect(rows[footer.row - 1]!.trim()).toBe("");
-			expect(rows[footer.row - 2]!.trimStart().startsWith("└")).toBe(true);
+			// The idle hint row collapsed and the pre-footer breathing row is
+			// gone: the input frame's bottom border sits directly on the footer.
+			expect(rows[footer.row - 1]!.trimStart().startsWith("└")).toBe(true);
 		} finally {
 			adapter.dispose();
 		}
@@ -1558,7 +1557,8 @@ describe("RpcShellAdapter landscape bottom stack", () => {
 			expect(rows[footer.row]!).not.toContain("COMMANDS");
 			expect(text).toContain("CTRL+/ · COMMANDS");
 			// Portrait keeps its hint row between input frame and footer gap.
-			expect(rows[footer.row - 2]!.trim()).not.toBe("");
+			// Portrait keeps its hint row, now directly above the footer.
+			expect(rows[footer.row - 1]!.trim()).not.toBe("");
 		} finally {
 			adapter.dispose();
 		}

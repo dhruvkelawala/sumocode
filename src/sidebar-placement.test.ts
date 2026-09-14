@@ -6,6 +6,7 @@ import {
 	SIDEBAR_OVERLAY_TOP_MARGIN_ROWS,
 	SIDEBAR_WIDTH,
 	SIDEBAR_GUTTER_WIDTH,
+	sidebarOverlayTargetRows,
 	StaticSidebarDock,
 	sidebarGutterWidth,
 	chooseSidebarAnchor,
@@ -113,5 +114,13 @@ describe("sidebar placement", () => {
 		expect(options.visible?.(SIDEBAR_MIN_TERMINAL_WIDTH - 1, 24)).toBe(false);
 		expect(options.visible?.(60, 100)).toBe(false);
 		expect(tui.requestRender).toHaveBeenCalledWith(true);
+	});
+});
+
+describe("sidebarOverlayTargetRows", () => {
+	it("reserves the classic bottom stack by default and honours a shell-specific budget", () => {
+		expect(sidebarOverlayTargetRows(45)).toBe(45 - 2 - 8);
+		expect(sidebarOverlayTargetRows(45, 6)).toBe(45 - 2 - 6);
+		expect(sidebarOverlayTargetRows(1)).toBe(1);
 	});
 });

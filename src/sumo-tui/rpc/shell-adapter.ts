@@ -472,7 +472,11 @@ export class RpcShellAdapter {
 			// see `RpcHostRuntime.start`'s `viewport: this.output`) exposes the same
 			// current row count, so read it here instead -- same target, same
 			// formula, without widening `ShellRenderable.render` to take a height.
-			() => sidebarOverlayTargetRows(this.viewport.rows ?? 24),
+			// The RPC shell's landscape bottom stack is blank(1) + input(3) +
+			// footer(1) + safe(1): no hint row (collapsed, #559) and no pre-footer
+			// gap. Reserving the classic 8 here would leave the sidebar two rows
+			// short of the space the transcript actually gets.
+			() => sidebarOverlayTargetRows(this.viewport.rows ?? 24, RPC_SHELL_SIDEBAR_BOTTOM_RESERVED_ROWS),
 		);
 	}
 
@@ -662,6 +666,9 @@ function sidebarSnapshot(state: RpcHostChromeState): SidebarSnapshot {
 		sessions: [{ name: sessionLabel(state), branch: state.gitBranch, active: true }],
 	};
 }
+
+/** Landscape bottom rows the sidebar must leave for the shell: blank(1) + input(3) + footer(1) + safe(1). */
+const RPC_SHELL_SIDEBAR_BOTTOM_RESERVED_ROWS = 6;
 
 function footerSnapshot(
 	state: RpcHostChromeState,

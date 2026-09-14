@@ -15,7 +15,6 @@
  *   ├── blank              (h: 1)
  *   ├── input-frame        (measured by PiEditorLeaf)
  *   ├── hint-row           (h: 0–1, measured: collapsed when its component renders no rows)
- *   ├── blank              (h: 1)
  *   ├── footer             (h: 1)
  *   └── blank              (h: 1)
  *
@@ -68,7 +67,6 @@ interface ShellLeafRenderable extends ShellRenderable {
 const SPLASH_EDITOR_FRAME_WIDTH = 60;
 const SHELL_TOP_CHROME_GAP_ROW = 1;
 const SHELL_BLANK_ROW = 1;
-const SHELL_FOOTER_GAP_ROW = 1;
 const SHELL_FOOTER_ROW = 1;
 const SHELL_BOTTOM_SAFE_ROW = 1;
 
@@ -272,10 +270,12 @@ export class RetainedShellRenderer {
 		// flow back to the transcript instead of staying reserved.
 		this.hintLeaf = PiComponentLeaf.create(this.yoga, hintProxy, this.root);
 
-		// 6) breathing row between hint and footer. This preserves the V2 Bible
-		// contract from #188: active input must not visually crowd the status footer.
 		this.footerGapSpacer = new SumoNode(this.yoga.Node.create(), this.root);
-		this.footerGapSpacer.height = SHELL_FOOTER_GAP_ROW;
+		// 6) footer follows the input stack directly (maintainer decision on
+		// #559): the pre-footer breathing row is gone and its row belongs to
+		// the transcript. Kept as a node so splash/active remounts and the
+		// diagnostic rect map stay stable at height 0.
+		this.footerGapSpacer.height = 0;
 
 		// 7) footer
 		this.footerLeaf = PiComponentLeaf.create(this.yoga, footerProxy, this.root);

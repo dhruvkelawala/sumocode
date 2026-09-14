@@ -191,32 +191,13 @@ function buildInputFrameRows(cols) {
 // ─── Chrome rows (identical structure to the Cathedral runtime target) ─
 const PAD = 1;
 
-function buildHintRow(cols) {
-	const rightHTML =
-		`<span class="fg-accent">CTRL+/</span>` +
-		`<span class="fg-dim"> \u00b7 COMMANDS</span>`;
-	const rightLen = 17;
-	const lead = cols - rightLen - PAD * 2;
-	return rep(" ", PAD) + rep(" ", Math.max(0, lead)) + rightHTML + rep(" ", PAD);
-}
-
 function buildFooterRow(cols) {
 	const left = `<span class="fg-idle">\u25cf</span> <span class="fg-fg">READY</span><span class="fg-dim"> \u00b7 </span><span class="fg-fg">gpt-5.5</span><span class="fg-dim"> \u00b7 </span><span class="fg-fg">medium</span>`;
 	const leftLen = visibleLen(left);
-	const tokens = [
-		{ html: `<span class="fg-fg">42k/200k</span>`, len: 8 },
-		{ html: `<span class="fg-fg">$0.42</span>`, len: 5 },
-	];
-	let rightHTML = "";
-	let rightLen = 0;
-	for (let i = 0; i < tokens.length; i++) {
-		if (i > 0) {
-			rightHTML += `<span class="fg-dim"> \u00b7 </span>`;
-			rightLen += 3;
-		}
-		rightHTML += tokens[i].html;
-		rightLen += tokens[i].len;
-	}
+	// Landscape footer right zone is the palette keybind (#559); the sidebar
+	// already carries context tokens and cost there.
+	const rightHTML = `<span class="fg-accent">CTRL+/</span><span class="fg-dim"> \u00b7 COMMANDS</span>`;
+	const rightLen = 17;
 	const middle = cols - PAD * 2 - leftLen - rightLen;
 	return rep(" ", PAD) + left + rep(" ", Math.max(1, middle)) + rightHTML + rep(" ", PAD);
 }
@@ -238,11 +219,12 @@ function buildScene() {
 	const sidebarRows = buildSidebarRows();
 	const chatHTML = buildChatHTML(CHAT_COLS);
 	const inputRows = buildInputFrameRows(COLS);
-	const hintRow = buildHintRow(COLS);
 	const footerRow = buildFooterRow(COLS);
 	const topBarRow = buildTopBarPlaceholder(COLS);
 
-	const middleRows = ROWS - 11;
+	// Landscape has no hint row (#559): the bottom stack is one row shorter
+	// than portrait's, and that freed row goes to the chat pane.
+	const middleRows = ROWS - 10;
 
 	return `<!doctype html>
 <html>
@@ -268,7 +250,7 @@ function buildScene() {
     --state-approval:  ${HERDR.stateApproval};
     --state-learning:  ${HERDR.stateLearning};
   }
-  .scene { display: grid; grid-template-rows: var(--cell-h) var(--cell-h) var(--cell-h) calc(var(--cell-h) * ${middleRows}) var(--cell-h) calc(var(--cell-h) * 3) var(--cell-h) var(--cell-h) var(--cell-h) var(--cell-h); }
+  .scene { display: grid; grid-template-rows: var(--cell-h) var(--cell-h) var(--cell-h) calc(var(--cell-h) * ${middleRows}) var(--cell-h) calc(var(--cell-h) * 3) var(--cell-h) var(--cell-h) var(--cell-h); }
   .scene .middle { display: grid; grid-template-columns: ${CHAT_COLS}ch ${GUTTER}ch ${SIDEBAR_COLS}ch; grid-row: 4; min-height: 0; overflow: hidden; }
   .scene .middle .chat-col, .scene .middle .sidebar-col { overflow: hidden; min-height: 0; }
   .scene .middle pre { margin: 0; }
@@ -289,10 +271,9 @@ function buildScene() {
     </div>
     <pre class="grid" style="grid-row: 5;"> </pre>
     <pre class="grid" style="grid-row: 6;">${inputRows.join("\n")}</pre>
-    <pre class="grid" style="grid-row: 7;">${hintRow}</pre>
-    <pre class="grid" style="grid-row: 8;"> </pre>
-    <pre class="grid" style="grid-row: 9;">${footerRow}</pre>
-    <pre class="grid" style="grid-row: 10;"> </pre>
+    <pre class="grid" style="grid-row: 7;"> </pre>
+    <pre class="grid" style="grid-row: 8;">${footerRow}</pre>
+    <pre class="grid" style="grid-row: 9;"> </pre>
   </div>
 </div>
 </body>

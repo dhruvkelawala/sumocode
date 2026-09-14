@@ -40,6 +40,18 @@ describe("loadRpcImages", () => {
 		await expect(loadRpcImages([{ token: "[Image 1]", path: `./${name}` }], { cwd })).rejects.not.toThrow("secret-image-payload");
 	});
 
+	it("resizes a macOS screenshot-sized PNG before applying the RPC payload limit", async () => {
+		const cwd = root();
+		const smallPng = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
+		const screenshot = Buffer.concat([smallPng, Buffer.alloc(MAX_RPC_IMAGE_BYTES)]);
+		writeFileSync(join(cwd, "Screenshot 2026-03-29 at 22.54.26.png"), screenshot);
+
+		const [image] = await loadRpcImages([{ token: "[Image 1]", path: "./Screenshot 2026-03-29 at 22.54.26.png" }], { cwd });
+
+		expect(image?.mimeType).toBe("image/png");
+		expect(Buffer.byteLength(image?.data ?? "", "base64")).toBeLessThanOrEqual(MAX_RPC_IMAGE_BYTES);
+	});
+
 	it("loads multiple images while keeping the aggregate below the RPC frame ceiling", async () => {
 		const cwd = root();
 		writeFileSync(join(cwd, "one.png"), PNG);

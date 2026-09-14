@@ -2,10 +2,14 @@ import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, extname, resolve } from "node:path";
 import type { ImageContent } from "@earendil-works/pi-ai";
+import { resizeImage } from "@earendil-works/pi-coding-agent";
 import type { EditorImageAttachment } from "../../cathedral/editor-draft-state.js";
 
 export const MAX_RPC_IMAGE_BYTES = 3 * 1024 * 1024;
 export const MAX_RPC_IMAGE_TOTAL_BYTES = 5 * 1024 * 1024;
+// Source screenshots may be much larger than the safe RPC payload; resize them before enforcing transport limits.
+const MAX_RPC_IMAGE_SOURCE_BYTES = 50 * 1024 * 1024;
+const MAX_RPC_IMAGE_BASE64_BYTES = Math.floor(MAX_RPC_IMAGE_BYTES / 3) * 4;
 
 interface LoadRpcImagesOptions {
 	readonly cwd?: string;
@@ -28,17 +32,23 @@ export async function loadRpcImages(
 	let totalBytes = 0;
 	for (const attachment of attachments) {
 		const path = resolveImagePath(attachment.path, options.cwd ?? process.cwd(), options.home ?? homedir());
-		const maxBytes = options.maxBytes ?? MAX_RPC_IMAGE_BYTES;
-		const bytes = await readBoundedImage(path, attachment, maxBytes);
-		totalBytes += bytes.byteLength;
-		if (totalBytes > MAX_RPC_IMAGE_TOTAL_BYTES) {
-			throw new RpcImageLoadError(attachment, `images exceed ${MAX_RPC_IMAGE_TOTAL_BYTES} byte total limit`);
-		}
+		const bytes = await readBoundedImage(path, attachment, options.maxBytes ?? MAX_RPC_IMAGE_SOURCE_BYTES);
 		const detected = detectImageMime(bytes);
 		const expected = mimeForExtension(extname(path));
 		if (!detected || !expected) throw new RpcImageLoadError(attachment, "file does not contain a supported image");
 		if (detected !== expected) throw new RpcImageLoadError(attachment, `file content is ${detected}, not ${expected}`);
-		images.push({ type: "image", data: bytes.toString("base64"), mimeType: detected });
+		const resized = bytes.byteLength > MAX_RPC_IMAGE_BYTES
+			? await resizeImage(bytes, detected, { maxBytes: MAX_RPC_IMAGE_BASE64_BYTES })
+			: undefined;
+		if (bytes.byteLength > MAX_RPC_IMAGE_BYTES && !resized) {
+			throw new RpcImageLoadError(attachment, `image could not be resized below ${MAX_RPC_IMAGE_BYTES} byte limit`);
+		}
+		const data = resized?.data ?? bytes.toString("base64");
+		totalBytes += Buffer.byteLength(data, "base64");
+		if (totalBytes > MAX_RPC_IMAGE_TOTAL_BYTES) {
+			throw new RpcImageLoadError(attachment, `images exceed ${MAX_RPC_IMAGE_TOTAL_BYTES} byte total limit`);
+		}
+		images.push({ type: "image", data, mimeType: resized?.mimeType ?? detected });
 	}
 	return images;
 }

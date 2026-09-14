@@ -1232,7 +1232,8 @@ export function createToolsExpandToggleHandler(deps: RpcHostToolsExpandDependenc
 }
 
 export function resolveRpcImageProtocol(env: NodeJS.ProcessEnv, detected: ImageProtocol): ImageProtocol {
-	if (env.SUMOCODE_NO_INLINE_IMAGES === "1") return null;
+	const override = env.PI_IMAGE_PROTOCOL?.toLowerCase();
+	if (env.SUMOCODE_NO_INLINE_IMAGES === "1" || override === "none" || override === "0") return null;
 	const protocol = detected ?? (env.HERDR_ENV === "1" ? "kitty" : null);
 	return protocol === "kitty" ? protocol : null;
 }

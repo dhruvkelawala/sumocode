@@ -484,7 +484,7 @@ export class RetainedShellRenderer {
 		const compositeStart = performance.now();
 		const frame = new CellBuffer(rows, cols);
 		const result = composite(this.root, frame, this.selection ? { selection: this.selection } : {});
-		this.paintPendingMessages(frame, cols);
+		const pendingMessagesTop = this.paintPendingMessages(frame, cols);
 		const overlayCount = this.compositeOverlays(frame, cols, rows);
 		const compositeMs = performance.now() - compositeStart;
 
@@ -497,7 +497,7 @@ export class RetainedShellRenderer {
 		// footer). Terminal scroll-region optimization moves the whole screen and
 		// corrupts those siblings during ChatPager scroll. Use row diffs only.
 		const patches = diffFrames(this.previousFrame, frame, { detectScroll: false });
-		const graphics = this.buildKittyGraphics(frame, overlayCount);
+		const graphics = this.buildKittyGraphics(frame, overlayCount, pendingMessagesTop);
 		this.terminal.writeFramePatches(patches, cursor, graphics);
 		this.previousFrame = this.cloneFrame(frame);
 		this.lastFrame = frame;
@@ -604,13 +604,15 @@ export class RetainedShellRenderer {
 		});
 	}
 
-	private buildKittyGraphics(frame: CellBuffer, overlayCount: number): string {
+	private buildKittyGraphics(frame: CellBuffer, overlayCount: number, pendingMessagesTop?: number): string {
 		const chatRect = this.getChatRect();
 		const frameRows = frame.getDimensions().rows;
 		const visible = new Map<number, VisibleKittyPlacement>();
 		if (overlayCount === 0 && chatRect) {
 			const viewportTop = Math.max(0, chatRect.top);
-			const viewportBottom = Math.min(frameRows, chatRect.top + chatRect.height);
+			let viewportBottom = Math.min(frameRows, chatRect.top + chatRect.height);
+			if (this.chat.scrollBox.manualScroll && !this.chat.scrollBox.isAtBottom()) viewportBottom -= 1;
+			if (pendingMessagesTop !== undefined) viewportBottom = Math.min(viewportBottom, pendingMessagesTop);
 			for (const placement of frame.getKittyImagePlacements()) {
 				const top = Math.max(viewportTop, placement.row);
 				const bottom = Math.min(viewportBottom, placement.row + placement.rows);
@@ -704,7 +706,7 @@ export class RetainedShellRenderer {
 	 * bottom of the chat area. The banner overlays the last N rows of the
 	 * chat pager region without shifting the Yoga layout.
 	 */
-	private paintPendingMessages(frame: CellBuffer, _cols: number): void {
+	private paintPendingMessages(frame: CellBuffer, _cols: number): number | undefined {
 		if (!this.resolvePendingMessages) return;
 		try {
 			const container = this.resolvePendingMessages();
@@ -727,6 +729,7 @@ export class RetainedShellRenderer {
 				const padded = plain.length < chatWidth ? `${plain}${" ".repeat(chatWidth - plain.length)}` : plain.slice(0, chatWidth);
 				frame.paintRow(top + i, withPersistentStyle(padded, T.foregroundDim, T.surfaceLifted), chatLeft, chatWidth);
 			}
+			return top;
 		} catch {
 			// Container may not be ready yet
 		}

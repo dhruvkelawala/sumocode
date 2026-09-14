@@ -138,6 +138,8 @@ describe("RPC inline image capability", () => {
 	it.each([
 		["Herdr", { HERDR_ENV: "1" }, null, "kitty"],
 		["Pi Kitty override", { PI_IMAGE_PROTOCOL: "kitty" }, "kitty", "kitty"],
+		["Pi none opt-out under Herdr", { HERDR_ENV: "1", PI_IMAGE_PROTOCOL: "none" }, null, null],
+		["Pi zero opt-out under Herdr", { HERDR_ENV: "1", PI_IMAGE_PROTOCOL: "0" }, null, null],
 		["explicit opt-out", { HERDR_ENV: "1", SUMOCODE_NO_INLINE_IMAGES: "1" }, "kitty", null],
 		["unknown terminal", {}, null, null],
 		["iTerm2", {}, "iterm2", null],

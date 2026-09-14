@@ -177,6 +177,13 @@ function rowsContaining(rows: readonly string[], needle: string): number[] {
 	return rows.flatMap((row, index) => (row.includes(needle) ? [index] : []));
 }
 
+function kittyPlacementBottom(graphics: string): number | undefined {
+	// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for the Kitty placement cursor
+	const cursorRow = /\x1b\[(\d+);\d+H\x1b_G/.exec(graphics)?.[1];
+	const visibleRows = /(?:^|,)r=(\d+)/.exec(graphics)?.[1];
+	return cursorRow && visibleRows ? Number(cursorRow) - 1 + Number(visibleRows) : undefined;
+}
+
 describe("RetainedShellRenderer", () => {
 	describe("first render", () => {
 		it("emits a full frame of row patches through the terminal contract", async () => {
@@ -242,7 +249,28 @@ describe("RetainedShellRenderer", () => {
 
 				chat.scrollBox.scrollTo(0);
 				renderer.render();
-				expect(terminal.graphics.at(-1)).toMatch(/a=p[^;]*y=0,h=\d+,r=\d+/);
+				const bottomCrop = terminal.graphics.at(-1) ?? "";
+				expect(bottomCrop).toMatch(/a=p[^;]*y=0,h=\d+,r=\d+/);
+				const bannerRow = rowsContaining(frameRows(renderer), "new messages")[0];
+				expect(bannerRow).toBeDefined();
+				expect(kittyPlacementBottom(bottomCrop)).toBeLessThanOrEqual(bannerRow ?? -1);
+			} finally {
+				renderer.dispose();
+			}
+		});
+
+		it("crops placements above pending-message banners", async () => {
+			setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+			const { chat, terminal, renderer } = await createHarness({
+				pendingMessageWidgets: () => new StaticComponent(["PENDING 1", "PENDING 2"]),
+			});
+			try {
+				addImage(chat);
+				renderer.render();
+
+				const bannerRow = rowsContaining(frameRows(renderer), "PENDING")[0];
+				expect(bannerRow).toBeDefined();
+				expect(kittyPlacementBottom(terminal.graphics.at(-1) ?? "")).toBeLessThanOrEqual(bannerRow ?? -1);
 			} finally {
 				renderer.dispose();
 			}

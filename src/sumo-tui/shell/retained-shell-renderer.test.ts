@@ -401,7 +401,10 @@ describe("RetainedShellRenderer", () => {
 					overlayStack: [
 						{
 							component: new StaticComponent(["MODAL"]),
-							options: { width: 10, anchor: "center" },
+							// Anchored off the above-editor block (rows 6-7 in this harness) so
+							// the narrow repaint's changed cell is observable instead of hidden
+							// under the overlay. Overlay/leaf intersection is covered below.
+							options: { width: 10, anchor: "top-left", row: 2 },
 						},
 					],
 				},

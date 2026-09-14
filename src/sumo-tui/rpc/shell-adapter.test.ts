@@ -6,6 +6,7 @@ import { activeThemeColors, resetThemeRegistryForTests, setActiveTheme } from ".
 import { ULTRAVIOLET_CORE_INDICATOR_INTERVAL_MS, ULTRAVIOLET_RUNCAT_FRAMES, ULTRAVIOLET_RUNCAT_INTERVAL_MS } from "../../themes/ultraviolet-core.js";
 import { ChatPager } from "../widgets/chat-pager.js";
 import { NotificationCenter } from "../widgets/notification.js";
+import { SIDEBAR_WIDTH } from "../../sidebar-placement.js";
 import { InlineSelectorHost } from "./inline-selector.js";
 import { RpcShellAdapter } from "./shell-adapter.js";
 import type { RpcHostChromeState } from "./state.js";
@@ -1561,6 +1562,77 @@ describe("RpcShellAdapter landscape bottom stack", () => {
 			expect(rows[footer.row - 1]!.trim()).not.toBe("");
 		} finally {
 			adapter.dispose();
+		}
+	});
+
+	it("pins the above-editor block so the sidebar bottom never jumps between idle and busy", async () => {
+		const build = async (overrides: Partial<RpcHostChromeState>) => {
+			const adapter = await RpcShellAdapter.create({
+				terminal: { writeFramePatches: () => undefined },
+				viewport: { columns: 160, rows: 45 },
+				initialState: state({ modelLabel: "openai/gpt-5.5", thinkingLevel: "high", ...overrides }),
+				initialTranscript: transcript(),
+			});
+			adapter.render();
+			return { adapter, frame: adapter.getLastFrame()! };
+		};
+		const frameRows = (frame: CellBuffer): string[] => Array.from({ length: 45 }, (_value, row) => frame.toPlainRow(row));
+		const surface = activeThemeColors().surface.toLowerCase();
+		// The sidebar paints its surface across its full reserved height; the
+		// pinned block and the input frame below it stay on the default/editor
+		// background, so the last surface row is the sidebar's painted bottom.
+		const sidebarBottom = (frame: CellBuffer): number => {
+			let bottom = -1;
+			for (let row = 0; row < 45; row += 1) {
+				if (frame.getCell(row, 159).bg?.toLowerCase() === surface && frame.getCell(row, 0).bg?.toLowerCase() !== surface) bottom = row;
+			}
+			return bottom;
+		};
+		type ShellRenderInternals = {
+			readonly renderer: {
+				readonly chatRow: { getComputedHeight(): number };
+				readonly resolveSidebarPublication: () => { readonly component: { render(width: number): string[] } } | undefined;
+			};
+		};
+		const sidebarMetrics = (adapter: RpcShellAdapter) => {
+			// oxlint-disable-next-line anti-slop/no-chained-type-assertions, anti-slop/require-safety-comment-for-type-assertion -- SAFETY: test-only read of the private shell renderer to compare the sidebar's own target rows against the chat-row rect; both values are asserted below.
+			const internals = adapter as unknown as ShellRenderInternals;
+			const publication = internals.renderer.resolveSidebarPublication();
+			if (!publication) throw new Error("sidebar publication missing in the active landscape shell");
+			return {
+				targetRows: publication.component.render(SIDEBAR_WIDTH).length,
+				chatRowHeight: Math.floor(internals.renderer.chatRow.getComputedHeight()),
+			};
+		};
+
+		const idle = await build({});
+		const busy = await build({ isStreaming: true });
+		try {
+			const idleRows = frameRows(idle.frame);
+			const busyRows = frameRows(busy.frame);
+
+			// Busy keeps the exact pre-pin rows: indicator 38, gap 39, input 40-42, footer 43.
+			expect(findText(busy.frame, "Working…").row).toBe(38);
+			expect(busyRows[39]!.trim()).toBe("");
+			expect(busyRows[40]!.trimStart().startsWith("┌")).toBe(true);
+			expect(findText(busy.frame, "CTRL+/ · COMMANDS").row).toBe(43);
+
+			// Idle reserves the same two rows as blanks instead of collapsing to
+			// one and handing the freed row to the transcript.
+			expect(idleRows[38]!.trim()).toBe("");
+			expect(idleRows[39]!.trim()).toBe("");
+			expect(idleRows[40]!.trimStart().startsWith("┌")).toBe(true);
+			expect(findText(idle.frame, "CTRL+/ · COMMANDS").row).toBe(43);
+
+			// Pre-pin idle ended at row 38 and busy at row 36: the sidebar's reserved
+			// height must match the chat row in both states, which is what stops the jump.
+			expect(sidebarBottom(idle.frame)).toBe(37);
+			expect(sidebarBottom(busy.frame)).toBe(37);
+			expect(sidebarMetrics(idle.adapter)).toEqual({ targetRows: 36, chatRowHeight: 36 });
+			expect(sidebarMetrics(busy.adapter)).toEqual({ targetRows: 36, chatRowHeight: 36 });
+		} finally {
+			idle.adapter.dispose();
+			busy.adapter.dispose();
 		}
 	});
 });

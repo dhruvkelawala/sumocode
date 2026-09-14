@@ -69,6 +69,13 @@ const SHELL_TOP_CHROME_GAP_ROW = 1;
 const SHELL_BLANK_ROW = 1;
 const SHELL_FOOTER_ROW = 1;
 const SHELL_BOTTOM_SAFE_ROW = 1;
+/**
+ * Constant active above-editor footprint (issue #559 follow-up): live content
+ * row(s) plus a trailing gap, or two blank rows when idle. Pinning the height
+ * keeps agent_start/agent_end from resizing the chat row (and with it the
+ * sidebar) by two rows.
+ */
+const SHELL_ABOVE_EDITOR_MIN_ROWS = 2;
 
 /**
  * Owns the full-screen Yoga layout per issue #161 Slice A.
@@ -218,13 +225,24 @@ export class RetainedShellRenderer {
 					render: (w: number) => {
 						const raw = aboveSource.render(w);
 						// Drop Pi's leading Spacer(1). If nothing remains, no above-editor
-						// widget is installed, so collapse to zero rows. If a widget remains
-						// but renders blank (the retained working indicator's idle state),
-						// still reserve the block height so agent_start/agent_end does not
-						// shift the editor. Leading blank provided here; trailing gap is
-						// provided by belowIndicatorSpacer (always SHELL_BLANK_ROW).
+						// widget is installed; the pin below still reserves the active block.
 						const content = raw.length > 1 ? raw.slice(1) : [];
-						return content.length > 0 ? ["", ...content] : [];
+						// Splash keeps the dynamic shape (leading blank + content, zero rows
+						// when empty): the splash branch of syncInputPlacement restores both
+						// breathing spacers, so this proxy only supplies the leading blank
+						// Pi's container would have painted.
+						if (this.inputMountedInSplash) {
+							return content.length > 0 ? ["", ...content] : [];
+						}
+						// Active layout pins the block to a constant footprint so
+						// agent_start/agent_end cannot resize the chat row: live content
+						// (working indicator, sticky notice, queued cards) paints first, the
+						// trailing gap keeps it off the editor, and idle pads to two blanks.
+						// The active branch of syncInputPlacement zeroes both breathing
+						// spacers, so this leaf owns the whole footprint.
+						const rows = [...content, ""];
+						while (rows.length < SHELL_ABOVE_EDITOR_MIN_ROWS) rows.unshift("");
+						return rows;
 					},
 					invalidate: () => aboveSource.invalidate?.(),
 				}
@@ -343,7 +361,8 @@ export class RetainedShellRenderer {
 			// no-notice splash geometry is unchanged. Both indicator spacers are
 			// repurposed: belowIndicatorSpacer provides breathing above the editor,
 			// aboveIndicatorSpacer provides the gap between editor and hint row.
-			// Restore both to SHELL_BLANK_ROW because active-layout may have zeroed one.
+			// Restore both to SHELL_BLANK_ROW because the active layout zeroes them
+			// (the above-editor leaf owns the pinned footprint there).
 			this.aboveIndicatorSpacer.height = SHELL_BLANK_ROW;
 			this.belowIndicatorSpacer.height = SHELL_BLANK_ROW;
 			// Above-editor block sits before the below-editor spacer so a live
@@ -360,10 +379,12 @@ export class RetainedShellRenderer {
 		} else {
 			if (this.splash && this.splash.bottomSpacer.parent !== this.splash.root) this.splash.root.addChild(this.splash.bottomSpacer);
 			if (this.hasAboveEditorContainer) this.root.addChild(this.aboveEditorLeaf);
-			// Always 1 explicit blank row between the above-editor block and the
-			// editor. The aboveProxy provides a leading blank; this spacer provides
-			// the trailing gap so the bar / indicator never touches the input frame.
-			this.belowIndicatorSpacer.height = SHELL_BLANK_ROW;
+			// The active above-editor leaf owns the whole pinned footprint
+			// (`[...content, trailing gap]` padded to SHELL_ABOVE_EDITOR_MIN_ROWS),
+			// so both breathing spacers collapse to zero and their rows stay with
+			// the transcript in every agent state. The splash branch restores both.
+			this.aboveIndicatorSpacer.height = 0;
+			this.belowIndicatorSpacer.height = 0;
 			this.root.addChild(this.belowIndicatorSpacer);
 			this.root.addChild(this.editorRow);
 			this.root.addChild(this.hintLeaf);

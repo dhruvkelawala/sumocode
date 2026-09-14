@@ -894,8 +894,9 @@ Each message renders as a self-contained closed-frame box:
 | `Ctrl+,` | settings overlay (top-bar `[⚙]` icon) | 2 |
 | `⌘M` (Mac) | open memory editor | 7 |
 | **Pi defaults preserved** | | |
-| `Ctrl+P` | model cycle forward | Pi |
-| `Ctrl+Shift+P` | model cycle backward | Pi |
+| `Ctrl+P` | logical model cycle forward (Claude account unchanged) | Pi + SumoCode |
+| `Ctrl+Shift+P` | logical model cycle backward (Claude account unchanged) | Pi + SumoCode |
+| `Alt+A` | Claude account cycle (model unchanged) | SumoCode |
 | `Ctrl+K` | delete to line end | pi-tui |
 | `Ctrl+T` | thinking-level cycle | Pi (currently broken — investigate) |
 | `Ctrl+M` | model selector | Pi |

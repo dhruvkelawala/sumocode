@@ -1229,6 +1229,20 @@ describe("RPC editor controller app-level action wiring", () => {
 		expect(onModelCycleForward).toHaveBeenCalledTimes(1);
 	});
 
+	it("invokes onClaudeAccountCycle via Alt+A", () => {
+		const onClaudeAccountCycle = vi.fn();
+		const controller = new RpcHostEditorController({
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: createRpcKeybindingsManager({ env: {} }),
+			onClaudeAccountCycle,
+		});
+
+		controller.handleInput("\x1ba"); // alt+a
+		expect(onClaudeAccountCycle).toHaveBeenCalledTimes(1);
+		expect(controller.getText()).toBe("");
+	});
+
 	it("invokes onModelCycleBackward via Shift+Ctrl+P (the other exact reported-broken chord)", () => {
 		const onModelCycleBackward = vi.fn();
 		const controller = new RpcHostEditorController({

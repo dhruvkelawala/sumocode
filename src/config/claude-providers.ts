@@ -12,6 +12,15 @@ export function claudeAccountProviderId(index: number): string {
 	return `${CLAUDE_BASE_PROVIDER}-${index}`;
 }
 
+/** Extra-account provider ids: `anthropic-2`, `anthropic-3`, …; the base provider is unnumbered. */
+const CLAUDE_ACCOUNT_PROVIDER_RE = /^anthropic-([1-9]\d*)$/;
+
+/** Numeric index of an extra-account provider id, or `undefined` for every other provider. */
+export function claudeAccountIndex(providerId: string): number | undefined {
+	const index = CLAUDE_ACCOUNT_PROVIDER_RE.exec(providerId)?.[1];
+	return index ? Number(index) : undefined;
+}
+
 /**
  * True for provider ids the adapter registers for extra Claude accounts
  * (`anthropic-2`, `anthropic-3`, …). Their models are clones of the base
@@ -19,7 +28,7 @@ export function claudeAccountProviderId(index: number): string {
  * to them by the same model id.
  */
 export function isClaudeAccountProvider(providerId: string): boolean {
-	return /^anthropic-[1-9]\d*$/.test(providerId);
+	return claudeAccountIndex(providerId) !== undefined;
 }
 
 /**
@@ -29,4 +38,10 @@ export function isClaudeAccountProvider(providerId: string): boolean {
  */
 export function isClaudeProvider(providerId: string): boolean {
 	return providerId === CLAUDE_BASE_PROVIDER || isClaudeAccountProvider(providerId);
+}
+
+/** Built-in account first, then extra accounts by numeric index. */
+export function claudeProviderRank(providerId: string): number {
+	if (providerId === CLAUDE_BASE_PROVIDER) return 0;
+	return claudeAccountIndex(providerId) ?? Number.MAX_SAFE_INTEGER;
 }

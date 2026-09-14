@@ -71,6 +71,38 @@ describe("InitialHydrationActionGate", () => {
 		expect(dequeue).toHaveBeenCalledOnce();
 	});
 
+	it("falls back to the previous intent when the latest intent cannot act", async () => {
+		let release!: () => void;
+		const hydration = new Promise<void>((resolve) => { release = resolve; });
+		const gate = new InitialHydrationActionGate(hydration);
+		const previous = vi.fn();
+		const latest = vi.fn(async () => false);
+
+		gate.run("model", previous);
+		gate.runWithFallback("model", latest);
+		release();
+		await gate.whenSettled();
+
+		expect(latest).toHaveBeenCalledOnce();
+		expect(previous).toHaveBeenCalledOnce();
+	});
+
+	it("keeps the latest conditional intent when it can act", async () => {
+		let release!: () => void;
+		const hydration = new Promise<void>((resolve) => { release = resolve; });
+		const gate = new InitialHydrationActionGate(hydration);
+		const previous = vi.fn();
+		const latest = vi.fn(async () => true);
+
+		gate.run("model", previous);
+		gate.runWithFallback("model", latest);
+		release();
+		await gate.whenSettled();
+
+		expect(latest).toHaveBeenCalledOnce();
+		expect(previous).not.toHaveBeenCalled();
+	});
+
 	it("only settles after an async deferred intent fully completes", async () => {
 		let release!: () => void;
 		const hydration = new Promise<void>((resolve) => { release = resolve; });

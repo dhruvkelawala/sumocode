@@ -10,6 +10,15 @@ landed between the original scaffold and this release.
 
 ## [Unreleased]
 
+### Added
+- **Claude account cycle key** — `Alt+A` cycles signed-in Claude accounts while
+  preserving the active Claude model. #558
+
+### Fixed
+- **Logical model cycling** — `Ctrl+P` / `Ctrl+Shift+P` no longer switch between
+  Claude accounts registered as `anthropic`, `anthropic-2`, and later clones.
+  #558
+
 ## [0.7.1] — 2026-09-14
 
 Steering becomes a named, switchable choice instead of a keybinding and a

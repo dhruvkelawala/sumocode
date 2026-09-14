@@ -13,7 +13,7 @@
  * session start / model select instead of touching the filesystem per render.
  */
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { CLAUDE_BASE_PROVIDER, isClaudeProvider } from "./claude-providers.js";
+import { CLAUDE_BASE_PROVIDER, claudeAccountIndex, claudeProviderRank, isClaudeProvider } from "./claude-providers.js";
 
 /** Footer chip budget: `claude ` plus at most this many label columns, ellipsis included. */
 const MAX_LABEL_COLUMNS = 8;
@@ -56,8 +56,8 @@ export function claudeAccountLabel(providerId: string, subscriptionLabel: string
 	if (providerId === CLAUDE_BASE_PROVIDER) return "default";
 	const labelled = withoutControlCharacters(subscriptionLabel ?? "").trim();
 	if (labelled) return labelled.toLowerCase();
-	const index = /^anthropic-(\d+)$/.exec(providerId)?.[1];
-	return index ? `#${index}` : providerId;
+	const index = claudeAccountIndex(providerId);
+	return index === undefined ? providerId : `#${index}`;
 }
 
 /**
@@ -72,19 +72,9 @@ function withoutControlCharacters(text: string): string {
 	return text.replace(/[\x00-\x1f\x7f-\x9f]/gu, "");
 }
 
-/**
- * Resolution order, made explicit rather than inherited from registry
- * insertion order: the built-in provider first, then extra accounts by index.
- */
-function accountRank(providerId: string): number {
-	if (providerId === CLAUDE_BASE_PROVIDER) return 0;
-	const index = /^anthropic-(\d+)$/.exec(providerId)?.[1];
-	return index ? Number(index) : Number.MAX_SAFE_INTEGER;
-}
-
 /** The account a Claude model with no explicit provider resolves to. */
 function firstResolvedAccount(models: readonly Model<Api>[]): string {
-	return [...models].sort((a, b) => accountRank(a.provider) - accountRank(b.provider))[0].provider;
+	return [...models].sort((a, b) => claudeProviderRank(a.provider) - claudeProviderRank(b.provider))[0].provider;
 }
 
 export function resolveClaudeAccountStatus(inputs: ClaudeAccountStatusInputs): ClaudeAccountStatus | undefined {

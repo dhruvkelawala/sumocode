@@ -78,6 +78,8 @@ export interface RpcHostEditorControllerOptions extends RpcAutocompleteProviderO
 	readonly onModelCycleForward?: () => void;
 	/** `app.model.cycleBackward` (Shift+Ctrl+P by default). */
 	readonly onModelCycleBackward?: () => void;
+	/** SumoCode `app.model.cycleAccount` (Alt+A by default). */
+	readonly onClaudeAccountCycle?: () => void;
 	/** `app.model.select` (Ctrl+L by default). */
 	readonly onModelSelect?: () => void;
 	/** `app.thinking.cycle` (Shift+Tab by default). */
@@ -309,6 +311,10 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 		// see each option's doc comment above.
 		if (options.onModelCycleForward) this.editor.onAction("app.model.cycleForward", options.onModelCycleForward);
 		if (options.onModelCycleBackward) this.editor.onAction("app.model.cycleBackward", options.onModelCycleBackward);
+		if (options.onClaudeAccountCycle) {
+			// SAFETY: SumoCode custom actions use the runtime string-keyed map.
+			(this.editor.onAction as (action: string, handler: () => void) => void)("app.model.cycleAccount", options.onClaudeAccountCycle);
+		}
 		if (options.onModelSelect) this.editor.onAction("app.model.select", options.onModelSelect);
 		if (options.onThinkingCycle) this.editor.onAction("app.thinking.cycle", options.onThinkingCycle);
 		if (options.onToolsExpandToggle) this.editor.onAction("app.tools.expand", options.onToolsExpandToggle);
@@ -594,6 +600,7 @@ const APP_KEYBINDING_DEFINITIONS: KeybindingDefinitions = {
 	"app.thinking.cycle": { defaultKeys: "shift+tab", description: "Cycle thinking level" },
 	"app.model.cycleForward": { defaultKeys: "ctrl+p", description: "Cycle to next model" },
 	"app.model.cycleBackward": { defaultKeys: "shift+ctrl+p", description: "Cycle to previous model" },
+	"app.model.cycleAccount": { defaultKeys: "alt+a", description: "Cycle Claude account" },
 	"app.model.select": { defaultKeys: "ctrl+l", description: "Open model selector" },
 	"app.tools.expand": { defaultKeys: "ctrl+o", description: "Toggle tool output" },
 	"app.thinking.toggle": { defaultKeys: "ctrl+t", description: "Toggle thinking blocks" },

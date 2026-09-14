@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:f
 import { dirname, resolve } from "node:path";
 import { defaultActivityStateRoot } from "../../activity/persistence.js";
 import { filterToEnabled, readEnabledModelPatterns } from "../../config/enabled-models.js";
+import { claudeProviderRank, isClaudeProvider } from "../../config/claude-providers.js";
 import { CHILD_JSON_FRAME_MAX_BYTES } from "../../child-protocol.js";
 import { FileActivityStore, type ActivityStoreSnapshot } from "../../activity/store.js";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
@@ -1058,7 +1059,7 @@ export interface RpcHostModelCycleDependencies {
  * applied model/level.
  */
 export interface RpcHostCachedCycleDependencies {
-	readonly gate: Pick<InitialHydrationActionGate, "isReady" | "run">;
+	readonly gate: Pick<InitialHydrationActionGate, "isReady" | "run" | "runWithFallback">;
 	/** Enabled ring from the chrome cache, active-flagged against the live label. */
 	readonly models: () => readonly RpcModelOption[] | undefined;
 	/** Available thinking levels from the chrome cache. */
@@ -1069,11 +1070,46 @@ export interface RpcHostCachedCycleDependencies {
 	readonly previewThinkingLevel: (level: RpcThinkingLevel) => void;
 }
 
-async function applyModelCycleStep(deps: RpcHostModelCycleDependencies, direction: -1 | 1): Promise<void> {
-	const models = await deps.controls.getEnabledModels();
+type ModelCycleRing = (models: readonly RpcModelOption[]) => readonly RpcModelOption[];
+type NoModelChangeMessage = (models: readonly RpcModelOption[]) => string | undefined;
+
+function logicalModelRing(models: readonly RpcModelOption[]): readonly RpcModelOption[] {
+	const activeProvider = models.find((model) => model.active)?.provider;
+	const claudeProvider = activeProvider && isClaudeProvider(activeProvider)
+		? activeProvider
+		: models.filter((model) => isClaudeProvider(model.provider)).sort((a, b) => claudeProviderRank(a.provider) - claudeProviderRank(b.provider))[0]?.provider;
+	return models.filter((model) => !isClaudeProvider(model.provider) || model.provider === claudeProvider);
+}
+
+function claudeAccountRing(models: readonly RpcModelOption[]): readonly RpcModelOption[] {
+	const active = models.find((model) => model.active);
+	if (!active || !isClaudeProvider(active.provider)) return [];
+	return models
+		.filter((model) => model.id === active.id && isClaudeProvider(model.provider))
+		.sort((a, b) => claudeProviderRank(a.provider) - claudeProviderRank(b.provider));
+}
+
+function notifyNoModelChange(
+	deps: RpcHostModelCycleDependencies,
+	availableModels: readonly RpcModelOption[],
+	models: readonly RpcModelOption[],
+	message?: NoModelChangeMessage,
+): void {
+	const text = message?.(availableModels) ?? (models.length === 0 ? "no models available" : undefined);
+	if (text) deps.notifications.notify(text, "warning");
+}
+
+async function applyModelCycleStep(
+	deps: RpcHostModelCycleDependencies,
+	direction: -1 | 1,
+	ring: ModelCycleRing,
+	noChangeMessage?: NoModelChangeMessage,
+): Promise<boolean> {
+	const availableModels = await deps.controls.getEnabledModels();
+	const models = ring(availableModels);
 	if (models.length <= 1) {
-		if (models.length === 0) deps.notifications.notify("no models available", "warning");
-		return;
+		notifyNoModelChange(deps, availableModels, models, noChangeMessage);
+		return false;
 	}
 	const activeIndex = models.findIndex((model) => model.active);
 	const baseIndex = activeIndex < 0 ? 0 : activeIndex;
@@ -1081,6 +1117,24 @@ async function applyModelCycleStep(deps: RpcHostModelCycleDependencies, directio
 	const next = models[nextIndex];
 	const state = await deps.controls.setModel(next.provider, next.id);
 	deps.onStateChange?.(state);
+	return true;
+}
+
+function deferModelCycleStep(
+	deps: RpcHostModelCycleDependencies,
+	cached: RpcHostCachedCycleDependencies,
+	direction: -1 | 1,
+	ring: ModelCycleRing,
+	noChangeMessage?: NoModelChangeMessage,
+): void {
+	const action = async (): Promise<boolean> => {
+		let applied = false;
+		await notifyOnError(async () => {
+			applied = await applyModelCycleStep(deps, direction, ring, noChangeMessage);
+		}, deps.notifications);
+		return applied;
+	};
+	cached.gate.runWithFallback(DEFERRED_MODEL_CYCLE_ACTION_KEY, action);
 }
 
 /**
@@ -1088,50 +1142,80 @@ async function applyModelCycleStep(deps: RpcHostModelCycleDependencies, directio
  * when it owned the press (cached ring, or nothing cached yet so the press
  * stays deferred exactly as before).
  */
-function applyCachedModelStep(deps: RpcHostModelCycleDependencies, direction: -1 | 1): boolean {
+function applyCachedModelStep(
+	deps: RpcHostModelCycleDependencies,
+	direction: -1 | 1,
+	ring: ModelCycleRing,
+	noChangeMessage?: NoModelChangeMessage,
+): boolean {
 	const cached = deps.cachedCycle;
 	if (!cached || cached.gate.isReady) return false;
-	const models = cached.models();
-	if (!models || models.length <= 1) {
+	const availableModels = cached.models();
+	if (!availableModels) {
 		// No cached ring yet: defer rather than let a live step land under
 		// hydration's authoritative commit, which would clobber it.
-		cached.gate.run(DEFERRED_MODEL_CYCLE_ACTION_KEY, () => notifyOnError(async () => {
-			await applyModelCycleStep(deps, direction);
-		}, deps.notifications));
+		deferModelCycleStep(deps, cached, direction, ring, noChangeMessage);
+		return true;
+	}
+	const models = ring(availableModels);
+	if (models.length <= 1) {
+		// A thin cached ring may be stale; replay against live state before deciding.
+		deferModelCycleStep(deps, cached, direction, ring, noChangeMessage);
 		return true;
 	}
 	const activeIndex = models.findIndex((model) => model.active);
 	const baseIndex = activeIndex < 0 ? 0 : activeIndex;
 	const next = models[(baseIndex + direction + models.length) % models.length];
 	cached.previewModel(next);
-	// One latest intent per key: successive pre-hydration presses collapse into
-	// a single live apply of the final choice, which `whenSettled()` still awaits.
-	cached.gate.run(DEFERRED_MODEL_CYCLE_ACTION_KEY, () => notifyOnError(async () => {
-		const live = await deps.controls.getEnabledModels();
-		const target = live.find((model) => model.provider === next.provider && model.id === next.id);
-		if (!target) {
-			// The cached ring drifted: converge on the live list, loudly.
-			deps.notifications.notify(`model ${next.label} is no longer available`, "warning");
-			return;
-		}
-		const state = await deps.controls.setModel(target.provider, target.id);
-		deps.onStateChange?.(state);
-	}, deps.notifications));
+	// One latest intent per key: successive pre-hydration presses normally
+	// collapse into a single live apply of the final choice. When the latest
+	// intent cannot act (thin ring, drift, or a caught error) `runWithFallback`
+	// replays the presses it superseded, newest first, until one applies; the
+	// press is never dropped, and `whenSettled()` awaits the whole drain.
+	cached.gate.runWithFallback(DEFERRED_MODEL_CYCLE_ACTION_KEY, async () => {
+		let applied = false;
+		await notifyOnError(async () => {
+			const live = await deps.controls.getEnabledModels();
+			const target = live.find((model) => model.provider === next.provider && model.id === next.id);
+			if (!target) {
+				// The cached ring drifted: converge on the previous actionable intent, loudly.
+				deps.notifications.notify(`model ${next.label} is no longer available`, "warning");
+				return;
+			}
+			const state = await deps.controls.setModel(target.provider, target.id);
+			deps.onStateChange?.(state);
+			applied = true;
+		}, deps.notifications);
+		return applied;
+	});
 	return true;
 }
 
 /**
  * Builds the `app.model.cycleForward` (Ctrl+P by default) action handler.
- * Forward and backward cycling both step through the host-resolved
- * enabledModels list so the hotkeys and `/model` selector share one visible
- * ring. The footer reflects the model change, so this handler deliberately
- * stays toast-free on success.
+ * Forward and backward cycling collapse Claude account clones into the
+ * currently selected account. `/model` remains the explicit selector for the
+ * full provider/model list. The footer reflects successful changes, so this
+ * handler deliberately stays toast-free on success.
  */
 export function createModelCycleForwardHandler(deps: RpcHostModelCycleDependencies): () => Promise<void> {
 	return (): Promise<void> => {
-		if (applyCachedModelStep(deps, 1)) return Promise.resolve();
+		if (applyCachedModelStep(deps, 1, logicalModelRing)) return Promise.resolve();
 		return notifyOnError(async () => {
-			await applyModelCycleStep(deps, 1);
+			await applyModelCycleStep(deps, 1, logicalModelRing);
+		}, deps.notifications);
+	};
+}
+
+/** Builds the SumoCode `app.model.cycleAccount` (Alt+A) action handler. */
+export function createClaudeAccountCycleHandler(deps: RpcHostModelCycleDependencies): () => Promise<void> {
+	return (): Promise<void> => {
+		const noChangeMessage: NoModelChangeMessage = (models) => models.some((model) => model.active && isClaudeProvider(model.provider))
+			? "no other Claude accounts available"
+			: "select a Claude model before cycling accounts";
+		if (applyCachedModelStep(deps, 1, claudeAccountRing, noChangeMessage)) return Promise.resolve();
+		return notifyOnError(async () => {
+			await applyModelCycleStep(deps, 1, claudeAccountRing, noChangeMessage);
 		}, deps.notifications);
 	};
 }
@@ -1147,9 +1231,9 @@ export function createModelCycleForwardHandler(deps: RpcHostModelCycleDependenci
  */
 export function createModelCycleBackwardHandler(deps: RpcHostModelCycleDependencies): () => Promise<void> {
 	return (): Promise<void> => {
-		if (applyCachedModelStep(deps, -1)) return Promise.resolve();
+		if (applyCachedModelStep(deps, -1, logicalModelRing)) return Promise.resolve();
 		return notifyOnError(async () => {
-			await applyModelCycleStep(deps, -1);
+			await applyModelCycleStep(deps, -1, logicalModelRing);
 		}, deps.notifications);
 	};
 }
@@ -1539,6 +1623,12 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		onStateChange: pushStateAndCacheChrome,
 		cachedCycle: cachedCycleDependencies,
 	});
+	const handleClaudeAccountCycle = createClaudeAccountCycleHandler({
+		controls,
+		notifications,
+		onStateChange: pushStateAndCacheChrome,
+		cachedCycle: cachedCycleDependencies,
+	});
 	const handleModelCycleBackward = createModelCycleBackwardHandler({
 		controls,
 		notifications,
@@ -1594,6 +1684,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		// comments) rather than a dedicated callback prop.
 		onModelCycleForward: () => { void handleModelCycleForward(); },
 		onModelCycleBackward: () => { void handleModelCycleBackward(); },
+		onClaudeAccountCycle: () => { void handleClaudeAccountCycle(); },
 		// app.model.select (Ctrl+L by default): opens the same in-place model
 		// selector `/model` with no args and the command palette's "MODEL"
 		// entry both already use. `actions` is a forward reference (assigned

@@ -30,7 +30,7 @@ import { loadYoga, type Yoga } from "../layout/yoga.js";
 import type { CellBuffer } from "../render/buffer.js";
 import type { HeapSampleCounters } from "../runtime/heap-monitor.js";
 import type { ShellOverlayEntry, ShellRenderable, ShellTerminalSessionOwner, ShellViewport } from "../shell/contracts.js";
-import { RetainedShellRenderer } from "../shell/retained-shell-renderer.js";
+import { RetainedShellRenderer, SHELL_BOTTOM_RESERVED_ROWS } from "../shell/retained-shell-renderer.js";
 import type { TranscriptControllerChatSink } from "../transcript/controller.js";
 import type { ActivityPresentationSnapshot } from "../transcript/activity-view-model.js";
 import type { TranscriptViewModel } from "../transcript/view-model.js";
@@ -472,12 +472,12 @@ export class RpcShellAdapter {
 			// see `RpcHostRuntime.start`'s `viewport: this.output`) exposes the same
 			// current row count, so read it here instead -- same target, same
 			// formula, without widening `ShellRenderable.render` to take a height.
-			// The RPC shell's landscape bottom stack is the pinned above-editor block
-			// (2 rows: content + trailing gap, or two blanks when idle) + input(3) +
-			// footer(1) + safe(1) = 7: no hint row (collapsed, #559) and no pre-footer
-			// gap. Reserving the classic 8 here would leave the sidebar one row short
-			// of the space the transcript actually gets.
-			() => sidebarOverlayTargetRows(this.viewport.rows ?? 24, RPC_SHELL_SIDEBAR_BOTTOM_RESERVED_ROWS),
+			// The RPC shell's landscape bottom stack is SHELL_BOTTOM_RESERVED_ROWS
+			// (pinned above-editor block + input frame + footer + safe row): no hint
+			// row (collapsed, #559) and no pre-footer gap. Reserving the classic 8
+			// here would leave the sidebar one row short of the space the transcript
+			// actually gets.
+			() => sidebarOverlayTargetRows(this.viewport.rows ?? 24, SHELL_BOTTOM_RESERVED_ROWS),
 		);
 	}
 
@@ -668,17 +668,12 @@ function sidebarSnapshot(state: RpcHostChromeState): SidebarSnapshot {
 	};
 }
 
-/**
- * Landscape bottom rows the sidebar must leave for the shell: the pinned
- * above-editor block(2) + input(3) + footer(1) + safe(1) = 7.
- */
-const RPC_SHELL_SIDEBAR_BOTTOM_RESERVED_ROWS = 7;
-
 function footerSnapshot(
 	state: RpcHostChromeState,
 	isSplash: boolean,
 	showFastMode = false,
 	claudeAccount: FooterSnapshot["claudeAccount"] = undefined,
+	rightZone: FooterSnapshot["rightZone"] = undefined,
 ): FooterSnapshot {
 	if (isVisualHarness() && !isSplash) {
 		// Tokens/cost/branch are frozen here because they're genuinely
@@ -707,6 +702,7 @@ function footerSnapshot(
 			showFastMode,
 			claudeAccount,
 			isSplash,
+			rightZone,
 		};
 	}
 	const contextTokens = state.contextTokens ?? 0;
@@ -724,6 +720,7 @@ function footerSnapshot(
 		showFastMode,
 		claudeAccount,
 		isSplash,
+		rightZone,
 	};
 }
 
@@ -917,9 +914,9 @@ class RpcFooterComponent implements ShellRenderable {
 			false,
 			hasActiveFastModeStatus(statuses),
 			hasPublishedClaudeAccount(statuses),
+			// Landscape trades tokens/cost (sidebar-owned) for the palette keybind.
+			width >= SIDEBAR_MIN_TERMINAL_WIDTH ? "command-hint" : undefined,
 		);
-		// Landscape trades tokens/cost (sidebar-owned) for the palette keybind.
-		if (width >= SIDEBAR_MIN_TERMINAL_WIDTH) snapshot.rightZone = "command-hint";
 		return renderFooterBlock(snapshot, width);
 	}
 }

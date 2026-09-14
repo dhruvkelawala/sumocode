@@ -69,6 +69,8 @@ const SHELL_TOP_CHROME_GAP_ROW = 1;
 const SHELL_BLANK_ROW = 1;
 const SHELL_FOOTER_ROW = 1;
 const SHELL_BOTTOM_SAFE_ROW = 1;
+/** Rows the input frame paints: top border, content, bottom border. */
+const SHELL_INPUT_FRAME_ROWS = 3;
 /**
  * Constant active above-editor footprint (issue #559 follow-up): live content
  * row(s) plus a trailing gap, or two blank rows when idle. Pinning the height
@@ -76,6 +78,15 @@ const SHELL_BOTTOM_SAFE_ROW = 1;
  * sidebar) by two rows.
  */
 const SHELL_ABOVE_EDITOR_MIN_ROWS = 2;
+/**
+ * Rows the landscape shell owns below the chat — no hint row (collapsed, #559)
+ * and no pre-footer gap: the above-editor footprint + input frame + footer +
+ * bottom safe row. The sidebar's overlay reservation derives from this so the
+ * two cannot drift; it matches the *idle* footprint, since live above-editor
+ * content may briefly grow the block.
+ */
+export const SHELL_BOTTOM_RESERVED_ROWS =
+	SHELL_ABOVE_EDITOR_MIN_ROWS + SHELL_INPUT_FRAME_ROWS + SHELL_FOOTER_ROW + SHELL_BOTTOM_SAFE_ROW;
 
 /**
  * Owns the full-screen Yoga layout per issue #161 Slice A.
@@ -239,7 +250,10 @@ export class RetainedShellRenderer {
 						// (working indicator, sticky notice, queued cards) paints first, the
 						// trailing gap keeps it off the editor, and idle pads to two blanks.
 						// The active branch of syncInputPlacement zeroes both breathing
-						// spacers, so this leaf owns the whole footprint.
+						// spacers, so this leaf owns the whole footprint. The pin guarantees
+						// a stable idle footprint, not a hard cap — longer live content grows
+						// the block, and the sidebar reservation (SHELL_BOTTOM_RESERVED_ROWS)
+						// matches the idle footprint only.
 						const rows = [...content, ""];
 						while (rows.length < SHELL_ABOVE_EDITOR_MIN_ROWS) rows.unshift("");
 						return rows;

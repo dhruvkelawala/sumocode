@@ -433,8 +433,10 @@ function buildFooterRow(cols, sidebarVisible, options = {}) {
 	// Project + branch live in the hint row when sidebar hidden, in the
 	// sidebar otherwise. Portrait footer right zone is just ctx tokens + cost.
 	const tokens = [];
-	if (cols >= 50) tokens.push({ html: `<span class="fg-fg">42k/200k</span>`, len: 8 });
-	if (cols >= 50) tokens.push({ html: `<span class="fg-fg">$0.42</span>`, len: 5 });
+	if (cols >= 50) {
+		tokens.push({ html: `<span class="fg-fg">42k/200k</span>`, len: 8 });
+		tokens.push({ html: `<span class="fg-fg">$0.42</span>`, len: 5 });
+	}
 
 	let rightHTML = "";
 	let rightLen = 0;

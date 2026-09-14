@@ -223,9 +223,8 @@ function buildScene() {
 	const footerRow = buildFooterRow(COLS);
 	const topBarRow = buildTopBarPlaceholder(COLS);
 
-	// Landscape has no hint row (#559), and neither orientation keeps the
-	// pre-footer breathing row: its row belongs to the chat pane. Landscape
-	// reserves 9 rows, portrait 10.
+	// Landscape has no hint row (#559) and no pre-footer breathing row: that
+	// row belongs to the chat pane. Landscape reserves 9 rows.
 	const middleRows = ROWS - 9;
 
 	return `<!doctype html>

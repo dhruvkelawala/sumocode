@@ -215,9 +215,8 @@ function buildTopBar() {
 }
 
 function buildScene(kind, title) {
-	// Landscape has no hint row (#559), and neither orientation keeps the
-	// pre-footer breathing row: its row belongs to the chat pane. Landscape
-	// reserves 9 rows, portrait 10.
+	// Landscape has no hint row (#559) and no pre-footer breathing row: that
+	// row belongs to the chat pane. Landscape reserves 9 rows.
 	const middleRows = ROWS - 9;
 	const chatKind = kind === "runcat-active" ? "active" : kind;
 	const chatRows = buildChatRows(chatKind).slice(0, middleRows);

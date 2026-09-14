@@ -241,8 +241,9 @@ export function renderInputHints(width: number, options: InputHintsOptions = {})
 	};
 
 	// At narrow widths, drop the left hint first unless the caller explicitly
-	// asks for truncation (portrait active context path).
-	const minGap = 4;
+	// asks for truncation (portrait active context path). No gap is reserved
+	// when the right zone is suppressed — nothing sits beside the notice.
+	const minGap = rightLen === 0 ? 0 : 4;
 	const leftFitsAlongside = left !== undefined && rightLen + minGap + left.length <= width;
 
 	if (leftFitsAlongside) {

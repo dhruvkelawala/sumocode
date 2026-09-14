@@ -70,18 +70,28 @@ OSC 11 (`\x1b]11;#1A1511\x1b\\`) painted on altscreen entry. OSC 111 reset on ex
 Row 1            : blank breathing row
 Row 2            : top chrome bar (Element 2)
 Row 3            : blank
-Rows 4..N-7      : 2-pane content
+Rows 4..N-7      : 2-pane content (portrait; landscape content runs to N-6)
                    - left  (chat / tool pills / code blocks): cols 1..(W-30)
                    - right (registry sidebar):                cols (W-29)..W
-Row N-6          : blank
-Rows N-5..N-3    : input frame (3 rows)
-Row N-2          : hint row (portrait) / blank (landscape)
+
+Landscape (W≥120):
+Row N-5          : blank
+Rows N-4..N-2    : input frame (3 rows)
 Row N-1          : registry footer (Element 5)
 Row N            : blank breathing row
 
-(In the SUMO_TUI RPC shell, landscape (W≥120) has no hint row: issue #559
-collapsed it and moved its keybind into the footer right zone, so the
-transcript is one row taller. Portrait keeps the hint row. The classic
+Portrait (W<120):
+Row N-6          : blank
+Rows N-5..N-3    : input frame (3 rows)
+Row N-2          : hint row
+Row N-1          : registry footer (Element 5)
+Row N            : blank breathing row
+
+(Neither orientation keeps a pre-footer breathing row: issue #559's follow-up
+returned that row to the transcript. In the SUMO_TUI RPC shell, landscape
+(W≥120) also has no hint row: issue #559 collapsed it and moved its keybind
+into the footer right zone, so the landscape transcript is two rows taller
+than the pre-#559 layout. Portrait keeps the hint row. The classic
 Pi-extension shell still paints the pre-#559 layout.)
 Splash extra     : version line only on splash, above bottom breathing row
 ```

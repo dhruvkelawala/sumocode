@@ -209,7 +209,7 @@ Required crops gate against committed approved runtime goldens. Bible diffs rema
 - Wide sidebar layout starts at `SIDEBAR_MIN_TERMINAL_WIDTH = 120`.
 - Canonical portrait runtime is `60 × 100` and **no-sidebar** for V1. See `docs/SUMO_TUI_PORTRAIT_SIDEBAR_POLICY.md`.
 - Active V2 input frame is label-less; do not reintroduce `SCRIPTOR INPUT` or legacy input labels.
-- Footer right zone: landscape (sidebar visible) paints the palette keybind (`CTRL+/ · COMMANDS`) with context/window + cost sidebar-owned; portrait keeps context/window + cost in the footer and the hint row (project/branch left, keybind right). In the retained RPC shell, landscape has no hint row — the freed row returns to the transcript. The classic Pi-extension shell still paints the pre-#559 layout (hint row + ctx/cost footer).
+- Footer right zone: landscape (sidebar visible) paints the palette keybind (`CTRL+/ · COMMANDS`) with context/window + cost sidebar-owned; portrait keeps context/window + cost in the footer and the hint row (project/branch left, keybind right). In the retained RPC shell, landscape has no hint row — the freed row returns to the transcript — and the pre-footer breathing row is gone in both orientations, so two rows return to the transcript in landscape. The classic Pi-extension shell still paints the pre-#559 layout (hint row + ctx/cost footer).
 - Top bar active dot is a static session marker; agent state lives in the footer dot.
 
 ## Conventions

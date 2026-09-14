@@ -10,6 +10,7 @@ logs/
 .local/
 .claude/worktrees/
 tmp/
+.evidence/
 scratch/rpc-spike/
 test/fixtures/pi-agent-*/state/
 

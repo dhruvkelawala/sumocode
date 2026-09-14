@@ -20,6 +20,8 @@
 - **Depends on**: nothing hard; coordinate with any renderer perf plans in flight
 - **Category**: feature / renderer
 - **Planned at**: 2026-07-08, after the Tier-1 image-chip fix
+- **Refreshed at**: 2026-09-14, after native image prompts (#550) and
+  pi-tui 0.85.1 placement/crop helpers; Herdr detection added
 
 ## Why this matters
 
@@ -35,6 +37,12 @@ auto-detected) or, after the Tier-1 fix, a `[Image: …]` fallback chip.
 
 Feature parity with pi's chat is a stated product goal; screenshots-in-chat
 is a high-visibility gap.
+
+Since #550 the editor sends pasted screenshots as native `ImageContent`
+parts on the user prompt, so the **user message card itself** now carries
+`image` ChatBlocks (`view-model.ts` content-part `case "image"`), not only
+tool-result cards. Both surfaces render through the same `renderImageRows`;
+this plan covers both.
 
 ## Current state (as of this plan's writing)
 
@@ -53,11 +61,20 @@ is a high-visibility gap.
   writes patches through `terminal.writeFramePatches`. No escape-sequence
   passthrough of any kind. `compositeOverlays` paints overlay rows into the
   same buffer.
-- pi-tui public exports available: `Image`, `renderImage`, `isImageLine`,
-  `encodeKitty`, `deleteKittyImage`, `deleteAllKittyImages`,
-  `getCellDimensions`, `calculateImageCellSize`, `detectCapabilities`,
-  `getCapabilities`, `setCapabilities` (see
+- pi-tui 0.85.1 public exports available: `Image`, `renderImage`,
+  `isImageLine`, `encodeKitty`, `deleteKittyImage`, `deleteAllKittyImages`,
+  `deleteAllKittyPlacements`, `registerKittyImageMetadata`,
+  `getKittyImageMetadata`, `getKittyImagePlacement` (placement-only `a=p`
+  re-emission for an already-transmitted id), `cropKittyImageLine` (source
+  rect `y/h/r` crop for partially visible rows), `getCellDimensions`,
+  `setCellDimensions`, `calculateImageCellSize`, `detectCapabilities`,
+  `getCapabilities`, `setCapabilities`, `setCapabilityOverrides` (see
   `@earendil-works/pi-tui/dist/terminal-image.d.ts`).
+- Capability detection under Herdr: the host shell sees
+  `TERM=xterm-256color`, `COLORTERM=truecolor`, `HERDR_ENV=1`, and no
+  `TERM_PROGRAM`/`KITTY_WINDOW_ID`/`GHOSTTY_*`, so pi-tui's
+  `detectCapabilitiesFromEnvironment` returns `images: null`. Auto-detection
+  alone will NOT light up Herdr; pi-tui does honor `PI_IMAGE_PROTOCOL=kitty`.
 
 ## Design
 
@@ -71,29 +88,32 @@ runs after cell patches:
    reserved blank rows, where N comes from `calculateImageCellSize`. The
    pager/renderer resolves each sentinel to `{ imageId, base64, cols, rows,
    viewportRow, viewportCol }` during composition.
-2. **Graphics emission.** After `writeFramePatches`, emit for each visible
-   placement: cursor save → move to placement cell → Kitty `encodeKitty`
-   (with stable `imageId` per block, `moveCursor: false`) → cursor restore.
-   Track live placements; when a placement leaves the viewport (scroll,
-   collapse, session switch, modal covering it is fine — Kitty draws under
-   text? it does NOT; see risks) emit `deleteKittyImage(imageId)`.
-3. **Clipping rule.** Kitty cannot clip an image to a partial row range.
-   If the placement's row span is not fully inside the chat viewport, do not
-   draw it — render the fallback chip row instead ("image scrolled; fully
-   visible only"). This is the pragmatic v1; unicode-placeholder mode
-   (U+10EEEE grid) is the eventual full answer and is explicitly out of
-   scope here.
-4. **Capability gate.** Replace the `images: null` pin in `runRpcHost` with
-   real detection (`detectCapabilities()`), but keep a
-   `SUMOCODE_NO_INLINE_IMAGES=1` escape hatch env var. tmux passthrough is
-   out of scope (detect and fall back).
+2. **Graphics emission.** After the cell patches, inside the same
+   `\x1b[?2026h … \x1b[?2026l` synchronized frame, emit for each visible
+   placement: move to placement cell → Kitty sequence → the normal cursor
+   reposition `writeFramePatches` already does. Transmit the image data
+   **once** per `imageId` (`encodeKitty`, `moveCursor: false`, stable id
+   allocated per block); on later frames re-place with
+   `getKittyImagePlacement` (`a=p`), never re-send pixels. Track live
+   placements; when a placement leaves the viewport (scroll, collapse,
+   session switch) or an overlay covers it, emit `deleteKittyImage(imageId)`
+   (Kitty draws images OVER text; see risks).
+3. **Clipping rule.** Partially visible placements are cropped, not hidden:
+   use `cropKittyImageLine(line, hiddenRows, visibleRows)` so a placement
+   whose row span crosses the chat viewport edge draws only its visible
+   source rect. Unicode-placeholder mode (U+10EEEE grid) stays out of scope.
+4. **Capability gate.** Replace the `images: null` pin in `runRpcHost`:
+   `images = env.SUMOCODE_NO_INLINE_IMAGES === "1" ? null
+   : detectCapabilities().images ?? (env.HERDR_ENV === "1" ? "kitty" : null)`.
+   `PI_IMAGE_PROTOCOL` keeps working through `detectCapabilities`. tmux
+   passthrough is out of scope (detect and fall back).
 5. **Overlays above images.** When any overlay/modal intersects a placement,
    delete the image for the duration (text does not reliably render over
    Kitty images across terminals). Simplest correct rule: any active overlay
    → delete all placements for that frame; re-emit when overlays clear.
-6. **iTerm2**: only if cheap — iTerm2 protocol lacks IDs/deletion, so v1 may
-   be Kitty-only (Ghostty, Kitty, WezTerm cover the user base; Herdr is
-   Ghostty-based).
+6. **iTerm2**: out of scope for v1 — the protocol lacks IDs/deletion, so the
+   lifecycle above cannot be implemented. Treat `images: "iterm2"` as `null`
+   (chip fallback). Kitty covers Herdr, Ghostty, Kitty, WezTerm.
 
 ## Steps
 
@@ -104,23 +124,28 @@ runs after cell patches:
    invalidate on virtualization).
 3. Implement the post-patch graphics pass in `retained-shell-renderer.ts`
    behind the capability gate, with imageId lifecycle (allocate once per
-   block, delete on hide/dispose/session-switch/reload).
-4. Flip the `runRpcHost` pin to detection + env escape hatch.
-5. Tests: placement math (full visibility rule), lifecycle (delete on
-   scroll-out, re-emit on scroll-in), overlay suppression, capability-off
-   fallback unchanged (Tier-1 chip tests keep passing).
-6. Manual verification matrix: Ghostty, Kitty, iTerm2 (fallback),
-   Terminal.app (fallback), narrow portrait pane, `/reload` mid-image,
-   session switch, scroll during stream with an image on screen.
+   block, transmit once, `a=p` re-place, crop at viewport edges, delete on
+   hide/overlay/dispose/session-switch/reload).
+4. Flip the `runRpcHost` pin to the gate in Design §4.
+5. Tests: placement math (crop at top/bottom edge), transmit-once then
+   place-only, lifecycle (delete on scroll-out, re-place on scroll-in),
+   overlay suppression, `SUMOCODE_NO_INLINE_IMAGES=1` and non-Herdr unknown
+   terminal keep the Tier-1 chip (existing chip tests keep passing),
+   `HERDR_ENV=1` selects kitty, iterm2 maps to chip.
+6. Manual verification matrix: Herdr (primary), Ghostty, Kitty, iTerm2
+   (fallback), Terminal.app (fallback), narrow portrait pane, `/reload`
+   mid-image, session switch, scroll during stream with an image on screen,
+   paste a screenshot with Ctrl+V and confirm pixels in the USER card.
 
 ## Verification
 
 - `npx vitest run src/sumo-tui/` green.
 - `npm run typecheck` green.
-- Manual: `sumocode` in Herdr → ask the agent to Read a PNG → pixels render
-  in the tool card; scroll it off and back; open the command palette over
-  it; `/new`; `/reload`. No ghost images, no blank holes, no garbled
-  frames.
+- Manual: `sumocode` in Herdr → Ctrl+V a screenshot and send → pixels
+  render in the user card; ask the agent to Read a PNG → pixels in the tool
+  card; scroll each off and back (partial rows crop cleanly); open the
+  command palette over it; `/new`; `/reload`. No ghost images, no blank
+  holes, no garbled frames.
 - Visual parity suite (`npm run visual:ci`) unaffected (captures run with
   capabilities off).
 
@@ -138,7 +163,5 @@ runs after cell patches:
 
 - Kitty unicode-placeholder (U+10EEEE) rendering.
 - tmux graphics passthrough.
-- Rendering images inside user-message cards for pasted paths (the token
-  expands to a path; the agent Reads it — the tool card is where pixels
-  appear, matching pi).
+- iTerm2 inline images (chip fallback).
 - Sixel.

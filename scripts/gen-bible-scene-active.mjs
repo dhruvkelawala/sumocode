@@ -494,15 +494,17 @@ function buildScene(variant) {
 		? `${CHAT_COLS}ch ${GUTTER}ch ${sidebarCols}ch`
 		: `${CHAT_COLS}ch ${GUTTER}ch`;
 	// Landscape drops the hint row (#559): its bottom stack is one row shorter
-	// than portrait's, and that freed row goes to the chat pane.
-	const middleRows = TERM_ROWS - (sidebarVisible ? 10 : 11);
+	// than portrait's. Neither orientation keeps a pre-footer breathing row —
+	// that row went to the chat pane too — so landscape reserves 9 rows and
+	// portrait 10.
+	const middleRows = TERM_ROWS - (sidebarVisible ? 9 : 10);
 	const middleTrack = isRuntimeTarget ? `calc(var(--cell-h) * ${middleRows})` : "auto";
 	const hintRowHTML = sidebarVisible ? "" : `\n    <pre class="grid" style="grid-row: 7;">${hintRow}</pre>`;
-	const footerGridRow = sidebarVisible ? 8 : 9;
-	// One --cell-h track per scene row: 9 in landscape (no hint), 10 in portrait.
+	const footerGridRow = sidebarVisible ? 7 : 8;
+	// One --cell-h track per scene row: 8 in landscape (no hint), 9 in portrait.
 	const sceneRowTracks = sidebarVisible
-		? `var(--cell-h) var(--cell-h) var(--cell-h) ${middleTrack} var(--cell-h) calc(var(--cell-h) * 3) var(--cell-h) var(--cell-h) var(--cell-h)`
-		: `var(--cell-h) var(--cell-h) var(--cell-h) ${middleTrack} var(--cell-h) calc(var(--cell-h) * 3) var(--cell-h) var(--cell-h) var(--cell-h) var(--cell-h)`;
+		? `var(--cell-h) var(--cell-h) var(--cell-h) ${middleTrack} var(--cell-h) calc(var(--cell-h) * 3) var(--cell-h) var(--cell-h)`
+		: `var(--cell-h) var(--cell-h) var(--cell-h) ${middleTrack} var(--cell-h) calc(var(--cell-h) * 3) var(--cell-h) var(--cell-h) var(--cell-h)`;
 	const runtimeTargetCss = isRuntimeTarget
 		? `
   body.runtime-target { background: var(--background); }
@@ -564,7 +566,6 @@ ${stageIntroHTML}  <div data-render-rect class="term scene" style="--term-cols: 
 ${sidebarColumnHTML}    </div>
     <pre class="grid" style="grid-row: 5;"> </pre>
     <pre class="grid" style="grid-row: 6;">${inputRows.join("\n")}</pre>${hintRowHTML}
-    <pre class="grid" style="grid-row: ${footerGridRow - 1};"> </pre>
     <pre class="grid" style="grid-row: ${footerGridRow};">${footerRow}</pre>
     <pre class="grid" style="grid-row: ${footerGridRow + 1};"> </pre>
   </div>

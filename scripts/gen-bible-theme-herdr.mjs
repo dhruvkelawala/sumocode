@@ -222,9 +222,10 @@ function buildScene() {
 	const footerRow = buildFooterRow(COLS);
 	const topBarRow = buildTopBarPlaceholder(COLS);
 
-	// Landscape has no hint row (#559): the bottom stack is one row shorter
-	// than portrait's, and that freed row goes to the chat pane.
-	const middleRows = ROWS - 10;
+	// Landscape has no hint row (#559), and neither orientation keeps the
+	// pre-footer breathing row: its row belongs to the chat pane. Landscape
+	// reserves 9 rows, portrait 10.
+	const middleRows = ROWS - 9;
 
 	return `<!doctype html>
 <html>
@@ -250,7 +251,7 @@ function buildScene() {
     --state-approval:  ${HERDR.stateApproval};
     --state-learning:  ${HERDR.stateLearning};
   }
-  .scene { display: grid; grid-template-rows: var(--cell-h) var(--cell-h) var(--cell-h) calc(var(--cell-h) * ${middleRows}) var(--cell-h) calc(var(--cell-h) * 3) var(--cell-h) var(--cell-h) var(--cell-h); }
+  .scene { display: grid; grid-template-rows: var(--cell-h) var(--cell-h) var(--cell-h) calc(var(--cell-h) * ${middleRows}) var(--cell-h) calc(var(--cell-h) * 3) var(--cell-h) var(--cell-h); }
   .scene .middle { display: grid; grid-template-columns: ${CHAT_COLS}ch ${GUTTER}ch ${SIDEBAR_COLS}ch; grid-row: 4; min-height: 0; overflow: hidden; }
   .scene .middle .chat-col, .scene .middle .sidebar-col { overflow: hidden; min-height: 0; }
   .scene .middle pre { margin: 0; }
@@ -271,9 +272,8 @@ function buildScene() {
     </div>
     <pre class="grid" style="grid-row: 5;"> </pre>
     <pre class="grid" style="grid-row: 6;">${inputRows.join("\n")}</pre>
-    <pre class="grid" style="grid-row: 7;"> </pre>
-    <pre class="grid" style="grid-row: 8;">${footerRow}</pre>
-    <pre class="grid" style="grid-row: 9;"> </pre>
+    <pre class="grid" style="grid-row: 7;">${footerRow}</pre>
+    <pre class="grid" style="grid-row: 8;"> </pre>
   </div>
 </div>
 </body>

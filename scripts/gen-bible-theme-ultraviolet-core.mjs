@@ -214,9 +214,10 @@ function buildTopBar() {
 }
 
 function buildScene(kind, title) {
-	// Landscape has no hint row (#559): the bottom stack is one row shorter
-	// than portrait's, and that freed row goes to the chat pane.
-	const middleRows = ROWS - 10;
+	// Landscape has no hint row (#559), and neither orientation keeps the
+	// pre-footer breathing row: its row belongs to the chat pane. Landscape
+	// reserves 9 rows, portrait 10.
+	const middleRows = ROWS - 9;
 	const chatKind = kind === "runcat-active" ? "active" : kind;
 	const chatRows = buildChatRows(chatKind).slice(0, middleRows);
 	while (chatRows.length < middleRows) chatRows.push("");
@@ -254,7 +255,7 @@ function buildScene(kind, title) {
   }
   .fg-tool-border { color: var(--tool-ledger-border); } .fg-tool-label { color: var(--tool-ledger-label); } .fg-tool-target { color: var(--tool-ledger-target); } .fg-tool-body { color: var(--tool-ledger-body); } .fg-tool-muted { color: var(--tool-ledger-muted); }
   .fg-code-border { color: var(--code-border); } .fg-code { color: var(--code-foreground); } .fg-code-gutter { color: var(--code-gutter); } .fg-code-comment { color: var(--code-comment); } .fg-code-keyword { color: var(--code-keyword); } .fg-code-string { color: var(--code-string); } .fg-code-number { color: var(--code-number); } .fg-code-function { color: var(--code-function); }
-  .scene { display: grid; grid-template-rows: var(--cell-h) var(--cell-h) var(--cell-h) calc(var(--cell-h) * ${middleRows}) var(--cell-h) calc(var(--cell-h) * 3) var(--cell-h) var(--cell-h) var(--cell-h); }
+  .scene { display: grid; grid-template-rows: var(--cell-h) var(--cell-h) var(--cell-h) calc(var(--cell-h) * ${middleRows}) var(--cell-h) calc(var(--cell-h) * 3) var(--cell-h) var(--cell-h); }
   .scene .middle { display: grid; grid-template-columns: ${CHAT_COLS}ch ${GUTTER}ch ${SIDEBAR_COLS}ch; grid-row: 4; min-height: 0; overflow: hidden; }
   .scene .middle .chat-col, .scene .middle .sidebar-col { overflow: hidden; min-height: 0; }
   .scene .middle pre { margin: 0; }
@@ -271,7 +272,6 @@ function buildScene(kind, title) {
     <div class="middle"><div class="chat-col"><pre class="grid">${chatLines.join("\n")}</pre></div><div class="gutter-col"></div><div class="sidebar-col"><pre class="grid">${sidebarLines.join("\n")}</pre></div></div>
     ${gridLine(" ")}
     ${gridLine(inputRows.join("\n"))}
-    ${gridLine(" ")}
     ${gridLine(buildFooterRow())}
     ${gridLine(" ")}
   </div>

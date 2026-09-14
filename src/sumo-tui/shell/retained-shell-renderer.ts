@@ -72,6 +72,12 @@ const SHELL_BOTTOM_SAFE_ROW = 1;
 /** Rows the input frame paints: top border, content, bottom border. */
 const SHELL_INPUT_FRAME_ROWS = 3;
 /**
+ * Pre-footer breathing row, kept for the splash only. The active layout gives
+ * the row to the transcript (#559); the centered splash geometry is a Bible
+ * contract (`03-splash`) and `rpc-splash-centering` pins its rows.
+ */
+const SHELL_SPLASH_FOOTER_GAP_ROW = 1;
+/**
  * Constant active above-editor footprint (issue #559 follow-up): live content
  * row(s) plus a trailing gap, or two blank rows when idle. Pinning the height
  * keeps agent_start/agent_end from resizing the chat row (and with it the
@@ -387,6 +393,7 @@ export class RetainedShellRenderer {
 			this.splash.root.addChild(this.aboveIndicatorSpacer);
 			this.splash.root.addChild(this.hintLeaf);
 			this.splash.root.addChild(this.splash.bottomSpacer);
+			this.footerGapSpacer.height = SHELL_SPLASH_FOOTER_GAP_ROW;
 			this.root.addChild(this.footerGapSpacer);
 			this.root.addChild(this.footerLeaf);
 			this.root.addChild(this.bottomSafeSpacer);
@@ -397,8 +404,12 @@ export class RetainedShellRenderer {
 			// (`[...content, trailing gap]` padded to SHELL_ABOVE_EDITOR_MIN_ROWS),
 			// so both breathing spacers collapse to zero and their rows stay with
 			// the transcript in every agent state. The splash branch restores both.
-			this.aboveIndicatorSpacer.height = 0;
-			this.belowIndicatorSpacer.height = 0;
+			// Without an above-editor container there is no pinned leaf to own the
+			// footprint, so the spacers keep the pre-pin row instead of handing it
+			// to the transcript.
+			this.aboveIndicatorSpacer.height = this.hasAboveEditorContainer ? 0 : SHELL_BLANK_ROW;
+			this.belowIndicatorSpacer.height = this.hasAboveEditorContainer ? 0 : SHELL_BLANK_ROW;
+			this.footerGapSpacer.height = 0;
 			this.root.addChild(this.belowIndicatorSpacer);
 			this.root.addChild(this.editorRow);
 			this.root.addChild(this.hintLeaf);

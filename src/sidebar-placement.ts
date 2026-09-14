@@ -42,7 +42,8 @@ export const SIDEBAR_OVERLAY_BOTTOM_RESERVED_ROWS = 8;
  * The classic Pi-TUI sidebar reserves the default bottom stack (blank +
  * input 3 + hint + gap + footer + safe). Shells with a different bottom
  * stack pass their own reserved count: the retained RPC shell drops the
- * hint row and the pre-footer gap in landscape, reserving 6 rows instead.
+ * hint row and the pre-footer gap in landscape but keeps the pinned 2-row
+ * above-editor block, so it reserves 7.
  */
 export function sidebarOverlayTargetRows(termHeight: number, reservedRows: number = SIDEBAR_OVERLAY_BOTTOM_RESERVED_ROWS): number {
 	return Math.max(1, Math.floor(termHeight) - SIDEBAR_OVERLAY_TOP_MARGIN_ROWS - reservedRows);

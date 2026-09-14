@@ -10,6 +10,29 @@ landed between the original scaffold and this release.
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-09-14
+
+Steering becomes a named, switchable choice instead of a keybinding and a
+permanent badge.
+
+### Added
+- **`/queue` delivery command** — `/queue` toggles how a busy-turn submission
+  is delivered between steering the running turn (`steer`, the default) and
+  queueing a new turn (`follow-up`); `/queue steer` and `/queue follow-up` set
+  it explicitly for the session. The selection is named once through the
+  transient hint-row notice, and `Command+Enter` routes through the same path.
+  #557
+
+### Changed
+- **No permanent delivery badge** — the hint row no longer paints `STEER` /
+  `FOLLOW-UP` ahead of project and branch context, so the row is
+  character-identical to the Bible target. #557
+
+### Fixed
+- **Native release notes** — the release workflow reads the tagged version's
+  own changelog section first and only falls back to `Unreleased`, so a
+  promoted `## [x.y.z]` heading no longer fails the build. #555
+
 ## [0.7.0] — 2026-09-12
 
 Native Pi RPC and one delegation path. Prompt delivery, direct bash and images

@@ -297,8 +297,39 @@ function extractPreGridRows(html, parentBg = DEFAULT_BG) {
 	return [...html.matchAll(PRE_GRID_PATTERN)].flatMap((match) => parseGridContent(match[2], parentBgFromAttrs(match[1]) ?? parentBg));
 }
 
-function sceneGridRowStarts(rows) {
-	const middleRows = rows - 11;
+/** Count `.scene` grid tracks; a `calc(var(--cell-h) * N)` token counts once. */
+function gridTrackCount(template) {
+	let tracks = 0;
+	let depth = 0;
+	let inToken = false;
+	for (const ch of template.trim()) {
+		if (ch === "(") depth += 1;
+		else if (ch === ")") depth -= 1;
+		if (/\s/.test(ch) && depth === 0) {
+			inToken = false;
+			continue;
+		}
+		if (!inToken) {
+			tracks += 1;
+			inToken = true;
+		}
+	}
+	return tracks;
+}
+
+/**
+ * Middle-pane height for a scene grid. The `.scene` template carries one track
+ * per row, so its track count decides the layout: landscape (issue #559) drops
+ * the hint row and has 9 tracks; portrait keeps it with 10.
+ */
+function sceneMiddleRows(html, rows) {
+	const template = html.match(/\.scene\s*\{[^}]*grid-template-rows:\s*([^;]+);/)?.[1] ?? "";
+	// tracks + 1: the input-frame track is three content rows tall, not one.
+	const trackCount = gridTrackCount(template) || 10;
+	return rows - (trackCount + 1);
+}
+
+function sceneGridRowStarts(middleRows) {
 	return new Map([
 		[1, 0],
 		[2, 1],
@@ -331,8 +362,8 @@ function writeCellsClipped(target, startRow, startCol, sourceRows, maxRows) {
 
 function parseSceneGrid(html, cols, rows) {
 	const grid = emptyStyledGrid(cols, rows);
-	const rowStarts = sceneGridRowStarts(rows);
-	const middleRows = rows - 11;
+	const middleRows = sceneMiddleRows(html, rows);
+	const rowStarts = sceneGridRowStarts(middleRows);
 	const { sidebarStart } = parseMiddleColumns(html, cols);
 
 	const chatMatch = html.match(/<div class="chat-col">([\s\S]*?)<\/div>\s*<div class="gutter-col">/);
@@ -367,7 +398,7 @@ function parseSceneGrid(html, cols, rows) {
 
 function parseScenePaletteOverlayGrid(html, cols, rows) {
 	const grid = emptyStyledGrid(cols, rows);
-	const gridRowStarts = sceneGridRowStarts(rows);
+	const gridRowStarts = sceneGridRowStarts(sceneMiddleRows(html, rows));
 
 	for (const match of html.matchAll(PRE_GRID_PATTERN)) {
 		const attrs = match[1] ?? "";

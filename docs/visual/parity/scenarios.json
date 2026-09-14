@@ -26,11 +26,11 @@
 			"x": 0,
 			"y": 3,
 			"cols": 128,
-			"rows": 34
+			"rows": 35
 		},
 		"input-frame": {
 			"x": 0,
-			"y": 38,
+			"y": 39,
 			"cols": 160,
 			"rows": 3
 		},
@@ -39,12 +39,6 @@
 			"y": 0,
 			"cols": 160,
 			"rows": 3
-		},
-		"hint-row": {
-			"x": 0,
-			"y": 41,
-			"cols": 160,
-			"rows": 1
 		},
 		"footer": {
 			"x": 0,
@@ -526,12 +520,6 @@
 					"threshold": 0.04
 				},
 				{
-					"id": "hint-row",
-					"targetCrop": "hint-row",
-					"runtimeCrop": "hint-row",
-					"status": "required"
-				},
-				{
 					"id": "footer",
 					"targetCrop": "footer",
 					"runtimeCrop": "footer",
@@ -866,11 +854,6 @@
 					"runtimeCrop": "input-frame"
 				},
 				{
-					"id": "hint-row",
-					"targetCrop": "hint-row",
-					"runtimeCrop": "hint-row"
-				},
-				{
 					"id": "footer",
 					"targetCrop": "footer",
 					"runtimeCrop": "footer"
@@ -997,11 +980,6 @@
 					"runtimeCrop": "input-frame"
 				},
 				{
-					"id": "hint-row",
-					"targetCrop": "hint-row",
-					"runtimeCrop": "hint-row"
-				},
-				{
 					"id": "footer",
 					"targetCrop": "footer",
 					"runtimeCrop": "footer"
@@ -1009,19 +987,19 @@
 			],
 			"finalCellAssertions": [
 				{
-					"row": 36,
+					"row": 37,
 					"col": 1,
 					"charPattern": "[.:oO@]",
 					"width": 1,
 					"fg": "#B974FF"
 				},
 				{
-					"row": 36,
+					"row": 37,
 					"col": 2,
 					"text": " "
 				},
 				{
-					"row": 36,
+					"row": 37,
 					"col": 3,
 					"text": "Working…"
 				}
@@ -1148,11 +1126,6 @@
 					"runtimeCrop": "input-frame"
 				},
 				{
-					"id": "hint-row",
-					"targetCrop": "hint-row",
-					"runtimeCrop": "hint-row"
-				},
-				{
 					"id": "footer",
 					"targetCrop": "footer",
 					"runtimeCrop": "footer"
@@ -1160,24 +1133,24 @@
 			],
 			"finalCellAssertions": [
 				{
-					"row": 36,
+					"row": 37,
 					"col": 1,
 					"charPattern": "[\\uE900-\\uE904]",
 					"width": 1,
 					"fg": "#B974FF"
 				},
 				{
-					"row": 36,
+					"row": 37,
 					"col": 2,
 					"text": " "
 				},
 				{
-					"row": 36,
+					"row": 37,
 					"col": 3,
 					"text": " "
 				},
 				{
-					"row": 36,
+					"row": 37,
 					"col": 4,
 					"text": "Working…"
 				}
@@ -1225,11 +1198,6 @@
 						"rows": 4
 					},
 					"runtimeCrop": "input-frame"
-				},
-				{
-					"id": "hint-row",
-					"targetCrop": "hint-row",
-					"runtimeCrop": "hint-row"
 				},
 				{
 					"id": "footer",
@@ -1621,11 +1589,6 @@
 					"runtimeCrop": "input-frame"
 				},
 				{
-					"id": "hint-row",
-					"targetCrop": "hint-row",
-					"runtimeCrop": "hint-row"
-				},
-				{
 					"id": "footer",
 					"targetCrop": "footer",
 					"runtimeCrop": "footer"
@@ -1675,11 +1638,6 @@
 						"rows": 4
 					},
 					"runtimeCrop": "input-frame"
-				},
-				{
-					"id": "hint-row",
-					"targetCrop": "hint-row",
-					"runtimeCrop": "hint-row"
 				},
 				{
 					"id": "footer",
@@ -1902,8 +1860,7 @@
 			"bibleTarget": "scene-active.png",
 			"fixture": { "id": "native-queues-followup" },
 			"crops": [
-				{ "id": "full", "targetCrop": "full", "runtimeCrop": "full" },
-				{ "id": "hint-row", "targetCrop": "hint-row", "runtimeCrop": "hint-row" }
+				{ "id": "full", "targetCrop": "full", "runtimeCrop": "full" }
 			]
 		},
 		{

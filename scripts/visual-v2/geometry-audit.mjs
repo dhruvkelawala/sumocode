@@ -28,12 +28,17 @@ function classifyRow(line) {
 	// Overlays are spliced into existing rows; detect them before chat frame rows.
 	if (trimmed.includes("COMMAND PALETTE")) return "overlay";
 	if (/^╭\s*(USER|SUMO|TOOL)/.test(trimmed)) return "chat-frame-top";
-	if (trimmed.startsWith("╰─")) return "chat-frame-bottom";
+	// The splash hint row also opens with `╰─`; only a chat frame bottom closes
+	// the frame with `╯`.
+	if (trimmed.startsWith("╰─") && trimmed.endsWith("╯")) return "chat-frame-bottom";
 	if (trimmed.startsWith("│") && /│\s*$/.test(trimmed)) return "chat-frame-body";
 	if (/^[┌┐└┘╭╮╰╯─│]+$/.test(trimmed)) return "frame-border";
 	if (trimmed.includes("SUMOCODE") && trimmed.includes("║")) return "top-bar";
-	if (trimmed.includes("CTRL+/") && trimmed.includes("COMMANDS")) return "hint-row";
+	// Footer before hint-row: the landscape footer (issue #559) carries the
+	// `CTRL+/ · COMMANDS` keybind in its right zone. Its `● STATE` left zone is
+	// what makes it a footer; portrait/splash hint rows have no state dot.
 	if (/^●\s/.test(trimmed) || /^[●○]\s*(READY|MEDITATING|ILLUMINATING|DEFERRING|INSCRIBING)/.test(trimmed)) return "footer";
+	if (trimmed.includes("CTRL+/") && trimmed.includes("COMMANDS")) return "hint-row";
 	if (trimmed.includes("REGISTRY") || trimmed.includes("CONTEXT") || trimmed.includes("MEMORY")) return "sidebar";
 	if (trimmed.includes("Working...")) return "working";
 	return "content";

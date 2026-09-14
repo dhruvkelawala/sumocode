@@ -245,6 +245,9 @@ describe("V2 visual parity contract", () => {
 		expect(scenario("fixture-completed-landscape").dimensions).toEqual({ cols: 160, rows: 45 });
 		expect(scenario("fixture-completed-portrait").dimensions).toEqual({ cols: 60, rows: 100 });
 		expect(cropDefinition("sidebar")).toEqual({ x: 130, y: 3, cols: 30, rows: 34 });
+		expect(cropDefinition("chat-area")).toEqual({ x: 0, y: 3, cols: 128, rows: 35 });
+		expect(cropDefinition("input-frame")).toEqual({ x: 0, y: 39, cols: 160, rows: 3 });
+		expect(cropDefinition("footer")).toEqual({ x: 0, y: 43, cols: 160, rows: 1 });
 	});
 
 	it("keeps splash runtime capture on the user-facing invocation contract", () => {
@@ -288,13 +291,14 @@ describe("V2 visual parity contract", () => {
 		]);
 		expect(active.runtime?.env).not.toHaveProperty("SUMOCODE_VISUAL_RPC_FIXTURE");
 		assertActiveRuntimeInputContract(active);
+		// Landscape (#559) has no hint row: the keybind lives in the footer right
+		// zone and the freed row returns to the chat pane.
 		expect(active.crops.map((crop) => crop.id)).toEqual([
 			"full",
 			"top-bar",
 			"sidebar",
 			"chat-area",
 			"input-frame",
-			"hint-row",
 			"footer",
 		]);
 		expect(active.rejectIfOutputMatches).not.toEqual(expect.arrayContaining([
@@ -315,7 +319,6 @@ describe("V2 visual parity contract", () => {
 		expect(requiredCropIds("active-landscape-runtime")).toEqual([
 			"top-bar",
 			"chat-area",
-			"hint-row",
 			"footer",
 		]);
 	});
@@ -410,7 +413,6 @@ describe("V2 visual parity contract", () => {
 			"sidebar",
 			"chat-area",
 			"input-frame",
-			"hint-row",
 			"footer",
 		]);
 		// Review-only for now: no required crops, no golden gating without an
@@ -444,9 +446,9 @@ describe("V2 visual parity contract", () => {
 		]);
 		expect(ultraviolet.requireRawOutputMatches).toEqual(["\\x1b\\]11;#06050B", "\\x1b\\]12;#B974FF"]);
 		expect(ultraviolet.finalCellAssertions).toEqual([
-			{ row: 36, col: 1, charPattern: "[.:oO@]", width: 1, fg: "#B974FF" },
-			{ row: 36, col: 2, text: " " },
-			{ row: 36, col: 3, text: "Working…" },
+			{ row: 37, col: 1, charPattern: "[.:oO@]", width: 1, fg: "#B974FF" },
+			{ row: 37, col: 2, text: " " },
+			{ row: 37, col: 3, text: "Working…" },
 		]);
 		expect(ultraviolet.rejectIfFinalScreenMatches).toEqual(expect.arrayContaining([
 			"No API key found",
@@ -461,7 +463,6 @@ describe("V2 visual parity contract", () => {
 			"sidebar",
 			"chat-area",
 			"input-frame",
-			"hint-row",
 			"footer",
 		]);
 		expect(requiredCropIds("ultraviolet-core-active-runtime")).toEqual([]);
@@ -480,11 +481,11 @@ describe("V2 visual parity contract", () => {
 		expect(fallback.runtime?.env?.SUMOCODE_RUNCAT_FONT).toBe("0");
 		expect(runcat.bibleTarget).toBe("theme-ultraviolet-core-runcat-active.png");
 		expect(runcat.finalCellAssertions).toEqual([
-			{ row: 36, col: 1, charPattern: "[\\uE900-\\uE904]", width: 1, fg: "#B974FF" },
+			{ row: 37, col: 1, charPattern: "[\\uE900-\\uE904]", width: 1, fg: "#B974FF" },
 			// Two-cell gap: the icomoon glyph overdraws its cell (labelGapCells: 2).
-			{ row: 36, col: 2, text: " " },
-			{ row: 36, col: 3, text: " " },
-			{ row: 36, col: 4, text: "Working…" },
+			{ row: 37, col: 2, text: " " },
+			{ row: 37, col: 3, text: " " },
+			{ row: 37, col: 4, text: "Working…" },
 		]);
 		expect(runcat.requireRawOutputMatches).toEqual([...fallback.requireRawOutputMatches!, "[\\uE900-\\uE904]"]);
 		expect(runcat.crops.map((crop) => crop.id)).toEqual(fallback.crops.map((crop) => crop.id));
@@ -497,7 +498,7 @@ describe("V2 visual parity contract", () => {
 		const script = `
 			import { parseBibleStyledGrid } from ${JSON.stringify(parserUrl)};
 			const parsed = parseBibleStyledGrid(${JSON.stringify(htmlPath)});
-			const rows = [38, 39, 40].map((row) => ({
+			const rows = [39, 40, 41].map((row) => ({
 				text: parsed.grid[row].map((cell) => cell.char).join(""),
 				cursorBg: parsed.grid[row][4]?.bg,
 			}));
@@ -611,7 +612,6 @@ describe("V2 visual parity contract", () => {
 			"sidebar",
 			"chat-area",
 			"input-frame",
-			"hint-row",
 			"footer",
 		]);
 		expect(scenario("fixture-command-palette-overlay").crops.map((crop) => crop.id)).toEqual(["full", "overlay-center"]);
@@ -621,7 +621,6 @@ describe("V2 visual parity contract", () => {
 			"sidebar",
 			"chat-area",
 			"input-frame",
-			"hint-row",
 			"footer",
 		]);
 		expect(scenario("fixture-ultraviolet-core-code-block").crops.map((crop) => crop.id)).toEqual(["full", "chat-area"]);
@@ -1022,7 +1021,6 @@ describe("V2 visual parity contract", () => {
 			"splash-runtime/full",
 			"active-landscape-runtime/top-bar",
 			"active-landscape-runtime/chat-area",
-			"active-landscape-runtime/hint-row",
 			"active-landscape-runtime/footer",
 			"active-portrait-runtime/top-bar",
 			"active-portrait-runtime/chat-area",

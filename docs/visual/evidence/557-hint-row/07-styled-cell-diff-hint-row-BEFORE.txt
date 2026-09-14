@@ -1,0 +1,15 @@
+Styled cell diff: 1 row(s) differ out of 1
+
+row   0  (160 cell diffs)
+  target:  "                                                                                "
+  runtime: " STEER                                                                          "
+    col   0: fg: #F5E6C8→#d4b896  bg: #1A1511→#050308
+    col   1: char: " "→"S"  fg: #F5E6C8→#f0b400  bg: #1A1511→#050308
+    col   2: char: " "→"T"  fg: #F5E6C8→#f0b400  bg: #1A1511→#050308
+    col   3: char: " "→"E"  fg: #F5E6C8→#f0b400  bg: #1A1511→#050308
+    col   4: char: " "→"E"  fg: #F5E6C8→#f0b400  bg: #1A1511→#050308
+    col   5: char: " "→"R"  fg: #F5E6C8→#f0b400  bg: #1A1511→#050308
+    col   6: fg: #F5E6C8→#d4b896  bg: #1A1511→#050308
+    col   7: fg: #F5E6C8→#d4b896  bg: #1A1511→#050308
+    col   8: fg: #F5E6C8→#d4b896  bg: #1A1511→#050308
+    col   9: fg: #F5E6C8→#d4b896  bg: #1A1511→#050308

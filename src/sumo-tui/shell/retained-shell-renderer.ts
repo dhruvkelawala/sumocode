@@ -25,6 +25,12 @@
  */
 
 import type { CustomEditor } from "@earendil-works/pi-coding-agent";
+import {
+	cropKittyImageLine,
+	deleteAllKittyPlacements,
+	deleteKittyImage,
+	getKittyImagePlacement,
+} from "@earendil-works/pi-tui/dist/terminal-image.js";
 
 import { SumoNode } from "../layout/node.js";
 import {
@@ -37,7 +43,7 @@ import {
 } from "../layout/yoga.js";
 import { activeThemeColors } from "../../themes/index.js";
 import { withPersistentStyle } from "../render/primitives.js";
-import { CellBuffer, type Rect } from "../render/buffer.js";
+import { CellBuffer, type KittyImageCellPlacement, type Rect } from "../render/buffer.js";
 import { composite, dispatchMouseEvent, type CompositeSelectionPass, type HardwareCursor } from "../render/compositor.js";
 import { cellRowToAnsi } from "../render/ansi-writer.js";
 import { diffFrames, type FrameDiffPatch } from "../render/diff.js";
@@ -72,6 +78,19 @@ const SHELL_HINT_ROW = 1;
 const SHELL_FOOTER_GAP_ROW = 1;
 const SHELL_FOOTER_ROW = 1;
 const SHELL_BOTTOM_SAFE_ROW = 1;
+
+interface VisibleKittyPlacement {
+	readonly placement: KittyImageCellPlacement;
+	readonly top: number;
+	readonly hiddenRows: number;
+	readonly visibleRows: number;
+}
+
+function kittyTransmission(line: string): string | undefined {
+	const placement = getKittyImagePlacement(line);
+	const start = line.indexOf("\x1b_G");
+	return placement && start !== -1 ? line.slice(start, start + placement.transmissionBytes) : undefined;
+}
 
 /**
  * Owns the full-screen Yoga layout per issue #161 Slice A.
@@ -142,6 +161,7 @@ export class RetainedShellRenderer {
 	private mountedChatChild: "chat" | "splash" | undefined;
 	private mountedSidebar = false;
 	private inputMountedInSplash: boolean | undefined;
+	private readonly liveKittyImageIds = new Set<number>();
 	private disposed = false;
 
 	public constructor(options: RetainedShellRendererOptions) {
@@ -477,7 +497,8 @@ export class RetainedShellRenderer {
 		// footer). Terminal scroll-region optimization moves the whole screen and
 		// corrupts those siblings during ChatPager scroll. Use row diffs only.
 		const patches = diffFrames(this.previousFrame, frame, { detectScroll: false });
-		this.terminal.writeFramePatches(patches, cursor);
+		const graphics = this.buildKittyGraphics(frame, overlayCount);
+		this.terminal.writeFramePatches(patches, cursor, graphics);
 		this.previousFrame = this.cloneFrame(frame);
 		this.lastFrame = frame;
 
@@ -581,6 +602,51 @@ export class RetainedShellRenderer {
 			repaintMs: diagnosticsEnabled ? Math.round((performance.now() - repaintStart) * 100) / 100 : 0,
 			segmentationCalls: diagnosticsEnabled ? graphemeSegmentationCount() - segmentStart : 0,
 		});
+	}
+
+	private buildKittyGraphics(frame: CellBuffer, overlayCount: number): string {
+		const chatRect = this.getChatRect();
+		const frameRows = frame.getDimensions().rows;
+		const visible = new Map<number, VisibleKittyPlacement>();
+		if (overlayCount === 0 && chatRect) {
+			const viewportTop = Math.max(0, chatRect.top);
+			const viewportBottom = Math.min(frameRows, chatRect.top + chatRect.height);
+			for (const placement of frame.getKittyImagePlacements()) {
+				const top = Math.max(viewportTop, placement.row);
+				const bottom = Math.min(viewportBottom, placement.row + placement.rows);
+				if (bottom <= top) continue;
+				visible.set(placement.imageId, {
+					placement,
+					top,
+					hiddenRows: top - placement.row,
+					visibleRows: bottom - top,
+				});
+			}
+		}
+
+		let graphics = "";
+		for (const imageId of this.liveKittyImageIds) {
+			if (!visible.has(imageId)) graphics += deleteKittyImage(imageId);
+		}
+		if ([...visible.keys()].some((imageId) => this.liveKittyImageIds.has(imageId))) {
+			// Placement-only commands add placements; clear the old coordinates first
+			// while retaining uploaded image data for this frame's a=p commands.
+			graphics += deleteAllKittyPlacements();
+		}
+
+		const nextLiveIds = new Set<number>();
+		for (const { placement, top, hiddenRows, visibleRows } of visible.values()) {
+			const cropped = cropKittyImageLine(placement.line, hiddenRows, visibleRows);
+			const sequence = this.liveKittyImageIds.has(placement.imageId)
+				? getKittyImagePlacement(cropped)?.sequence
+				: kittyTransmission(cropped);
+			if (!sequence) continue;
+			graphics += `\x1b[${top + 1};${placement.col + 1}H${sequence}`;
+			nextLiveIds.add(placement.imageId);
+		}
+		this.liveKittyImageIds.clear();
+		for (const imageId of nextLiveIds) this.liveKittyImageIds.add(imageId);
+		return graphics;
 	}
 
 	private paintSoftwareCursor(frame: CellBuffer, cursor: HardwareCursor): void {
@@ -804,6 +870,11 @@ export class RetainedShellRenderer {
 	public dispose(): void {
 		if (this.disposed) return;
 		this.disposed = true;
+		if (this.liveKittyImageIds.size > 0) {
+			const graphics = [...this.liveKittyImageIds].map((imageId) => deleteKittyImage(imageId)).join("");
+			this.terminal.writeFramePatches([], null, graphics);
+			this.liveKittyImageIds.clear();
+		}
 		this.headerLeaf.dispose();
 		this.topChromeGapSpacer.dispose();
 		this.editorLeaf.dispose();

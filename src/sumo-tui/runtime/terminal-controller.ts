@@ -292,7 +292,7 @@ export class TerminalSessionOwner {
 		return true;
 	}
 
-	public writeFramePatches(patches: readonly TerminalPatch[], cursor: TerminalCursor | null): void {
+	public writeFramePatches(patches: readonly TerminalPatch[], cursor: TerminalCursor | null, graphics = ""): void {
 		if (!this.isTTY() || this.restored) return;
 		// Lazy frame-start (OpenTUI port, see `lastEmittedCursor` comment): if no
 		// cells changed AND the cursor would land where it already is, emit zero
@@ -304,7 +304,7 @@ export class TerminalSessionOwner {
 			cursor.col !== this.lastEmittedCursor.col
 		);
 		const shouldHideCursor = cursor === null && this.hardwareCursorVisible;
-		if (patches.length === 0 && !cursorMoved && !shouldHideCursor) return;
+		if (patches.length === 0 && graphics.length === 0 && !cursorMoved && !shouldHideCursor) return;
 
 		let output = "\x1b[?2026h";
 		for (const patch of patches) {
@@ -320,12 +320,12 @@ export class TerminalSessionOwner {
 			if (startCol === 0 && patch.type !== "scroll") output += "\x1b[K";
 			output += patch.ansi;
 		}
-		// Cursor-write elision is safe ONLY for true no-op frames. When
-		// `patches.length > 0`, every `\x1b[r;c+1H<ansi>` in the loop above
-		// physically moved the terminal cursor; skipping the reposition here
-		// would leave the visible caret parked at the end of the last patch
-		// instead of at `cursor`. Always re-emit when patches were written.
-		if (cursor && (patches.length > 0 || cursorMoved)) {
+		// Graphics are ordered after cell patches but before the logical cursor,
+		// all inside one synchronized frame. Kitty commands move the terminal
+		// cursor just like row patches, so either kind of output requires the
+		// final cursor reposition below.
+		output += graphics;
+		if (cursor && (patches.length > 0 || graphics.length > 0 || cursorMoved)) {
 			output += `\x1b[${cursor.row + 1};${cursor.col + 1}H\x1b[?25h`;
 			this.lastEmittedCursor = { row: cursor.row, col: cursor.col };
 			this.hardwareCursorVisible = true;

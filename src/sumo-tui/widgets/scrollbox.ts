@@ -207,6 +207,13 @@ export class ScrollBox extends SumoNode {
 				if (selectionMeta) buffer.setSelectionMeta(targetRow, targetCol, selectionMeta);
 			}
 		}
+		for (const placement of viewportBuffer.getKittyImagePlacements()) {
+			buffer.addKittyImagePlacement({
+				...placement,
+				row: rect.top + placement.row,
+				col: rect.left + placement.col,
+			});
+		}
 	}
 
 	public getHardwareCursor(): HardwareCursor | null {

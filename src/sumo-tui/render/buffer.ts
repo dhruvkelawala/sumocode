@@ -1,4 +1,5 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { getKittyImageMetadata } from "@earendil-works/pi-tui/dist/terminal-image.js";
 import { recordGraphemeSegmentation } from "../runtime/diagnostics.js";
 import { BLANK_CELL, attrsEqual, attrsToMask, createAttrs, maskToAttrs, type Cell } from "./cell.js";
 import { indexedColor, isColorByte, normalizeHexColor } from "./truecolor.js";
@@ -12,6 +13,16 @@ export interface Rect {
 
 export interface SelectionCellMeta {
 	readonly selectable: true;
+}
+
+/** Zero-width Kitty payload captured before ANSI parsing strips it from cells. */
+export interface KittyImageCellPlacement {
+	readonly imageId: number;
+	readonly line: string;
+	readonly row: number;
+	readonly col: number;
+	readonly rows: number;
+	readonly columns: number;
 }
 
 interface TextSegmenter {
@@ -55,6 +66,7 @@ export class CellBuffer {
 	private readonly hyperlinks = new Map<number, string>();
 	private readonly attrs = new Map<number, number>();
 	private readonly selectionMeta = new Map<number, SelectionCellMeta>();
+	private readonly kittyImagePlacements: KittyImageCellPlacement[] = [];
 	private defaultBg: string | null = null;
 	private defaultFg: string | null = null;
 
@@ -196,6 +208,14 @@ export class CellBuffer {
 		return this.selectionMeta.size > 0;
 	}
 
+	public addKittyImagePlacement(placement: KittyImageCellPlacement): void {
+		this.kittyImagePlacements.push(placement);
+	}
+
+	public getKittyImagePlacements(): readonly KittyImageCellPlacement[] {
+		return this.kittyImagePlacements;
+	}
+
 	public clear(rect?: Rect): void {
 		const area = rect ? clampRect(rect, this.rows, this.cols) : { top: 0, left: 0, width: this.cols, height: this.rows };
 		for (let row = area.top; row < area.top + area.height; row += 1) {
@@ -215,6 +235,18 @@ export class CellBuffer {
 	}
 
 	public paintRow(row: number, ansiString: string, startCol = 0, maxCols = this.cols - startCol): void {
+		const metadata = getKittyImageMetadata(ansiString);
+		if (metadata) {
+			const sequenceStart = ansiString.indexOf("\x1b_G");
+			this.addKittyImagePlacement({
+				imageId: metadata.imageId,
+				line: ansiString,
+				row,
+				col: Math.max(0, Math.floor(startCol)) + visibleWidth(ansiString.slice(0, sequenceStart)),
+				rows: metadata.rows,
+				columns: metadata.columns,
+			});
+		}
 		if (row < 0 || row >= this.rows || maxCols <= 0) return;
 		let col = Math.max(0, Math.floor(startCol));
 		const endCol = Math.min(this.cols, col + Math.floor(maxCols));
@@ -275,6 +307,7 @@ export class CellBuffer {
 		for (const [key, value] of this.hyperlinks) next.hyperlinks.set(key, value);
 		for (const [key, value] of this.attrs) next.attrs.set(key, value);
 		for (const [key, value] of this.selectionMeta) next.selectionMeta.set(key, value);
+		next.kittyImagePlacements.push(...this.kittyImagePlacements);
 		return next;
 	}
 

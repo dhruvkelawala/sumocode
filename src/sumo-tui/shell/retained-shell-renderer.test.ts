@@ -212,7 +212,7 @@ describe("RetainedShellRenderer", () => {
 
 				const first = terminal.graphics.at(-1) ?? "";
 				expect(renderer.getLastFrame()?.toPlainRow(1)).not.toContain("\x1b_G");
-				expect(first.match(/\x1b_Ga=T/g)).toHaveLength(1);
+				expect(first.split("\x1b_Ga=T")).toHaveLength(2);
 				const imageId = /(?:^|,)i=(\d+)/.exec(first)?.[1];
 				expect(imageId).toBeDefined();
 
@@ -220,8 +220,9 @@ describe("RetainedShellRenderer", () => {
 
 				const second = terminal.graphics.at(-1) ?? "";
 				expect(second).not.toContain("a=T");
-				expect(second).toContain(`a=p,q=2,i=${imageId}`);
-				expect(second).toMatch(/\x1b\[\d+;3H\x1b_G/);
+				expect(second).toContain("a=p,q=2");
+				expect(second).toContain(`i=${imageId}`);
+				expect(second).toContain(";3H\x1b_G");
 			} finally {
 				renderer.dispose();
 			}

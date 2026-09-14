@@ -14,7 +14,11 @@ export interface ShellViewport {
 }
 
 export interface ShellTerminalSessionOwner {
-	writeFramePatches(patches: readonly TerminalPatch[], cursor: { row: number; col: number } | null): void;
+	writeFramePatches(
+		patches: readonly TerminalPatch[],
+		cursor: { row: number; col: number } | null,
+		graphics?: string,
+	): void;
 	/**
 	 * Writes a raw OSC52 clipboard sequence to the terminal. Optional: the
 	 * real `TerminalSessionOwner` implements this (see

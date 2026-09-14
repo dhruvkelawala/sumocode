@@ -9,7 +9,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { SettingsManager, type AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { RpcEditorSubmissionDraft } from "../../cathedral/editor-draft-state.js";
-import { getCapabilities, setCapabilities } from "@earendil-works/pi-tui";
+import { detectCapabilities, setCapabilities, type ImageProtocol } from "@earendil-works/pi-tui";
 import { SUMOCODE_RELOAD_EXIT_CODE } from "../../commands/reload.js";
 import { containsCtrlCToken, isEscapeInput } from "../input/shared-input-router.js";
 import { createOsc52Sequence } from "../input/selection.js";
@@ -1231,16 +1231,17 @@ export function createToolsExpandToggleHandler(deps: RpcHostToolsExpandDependenc
 	};
 }
 
+export function resolveRpcImageProtocol(env: NodeJS.ProcessEnv, detected: ImageProtocol): ImageProtocol {
+	const override = env.PI_IMAGE_PROTOCOL?.toLowerCase();
+	if (env.SUMOCODE_NO_INLINE_IMAGES === "1" || override === "none" || override === "0") return null;
+	const protocol = detected ?? (env.HERDR_ENV === "1" ? "kitty" : null);
+	return protocol === "kitty" ? protocol : null;
+}
+
 export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<number> {
 	const env = options.env ?? process.env;
-	// Pin pi-tui's terminal image capability OFF for the host: the retained
-	// CellBuffer renderer diffs styled cells and cannot pass Kitty/iTerm2
-	// graphics escape sequences through (verified: the APC payload is
-	// stripped, leaving a blank hole where auto-detection promised pixels).
-	// With images:null, pi-tui's Image component renders its `[Image: …]`
-	// fallback chip deterministically instead. Lift this once the renderer
-	// grows a graphics-passthrough overlay pass (see plans/inline-images).
-	setCapabilities({ ...getCapabilities(), images: null });
+	const capabilities = detectCapabilities();
+	setCapabilities({ ...capabilities, images: resolveRpcImageProtocol(env, capabilities.images) });
 	const stdout = options.stdout ?? process.stdout;
 	const stdin = options.stdin ?? process.stdin;
 	const stderr = options.stderr ?? process.stderr;

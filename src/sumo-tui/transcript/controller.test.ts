@@ -266,7 +266,7 @@ describe("TranscriptController Activity folding", () => {
 		expect(activities.map((block) => block.activity.outputTail)).toEqual(["alpha", "beta"]);
 	});
 
-	it("folds an image-bearing tool result into one Activity and one deduplicated sibling image", () => {
+	it("folds an image-bearing tool result into its Activity", () => {
 		const controller = new TranscriptController();
 		controller.replaceFromMessages([{
 			id: "assistant-tools",
@@ -288,9 +288,11 @@ describe("TranscriptController Activity folding", () => {
 
 		expect(transcript.messages).toHaveLength(1);
 		expect(transcript.messages[0]?.blocks.filter((block) => block.type === "activity")).toHaveLength(1);
-		expect(transcript.messages[0]?.blocks.filter((block) => block.type === "image")).toEqual([
-			{ type: "image", data: "iVBORw0KGgo=", mime: "image/png", filename: "shot.png" },
-		]);
+		expect(transcript.messages[0]?.blocks).toContainEqual(expect.objectContaining({
+			type: "activity",
+			images: [{ type: "image", data: "iVBORw0KGgo=", mime: "image/png", filename: "shot.png" }],
+		}));
+		expect(transcript.messages[0]?.blocks.filter((block) => block.type === "image")).toHaveLength(0);
 	});
 
 	it("does not regress a live Activity after a terminal event", () => {

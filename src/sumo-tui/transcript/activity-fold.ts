@@ -81,7 +81,7 @@ export function matchingActivityBlockIndex(blocks: readonly ChatBlock[], incomin
 }
 
 export function mergeActivityBlock(existing: ActivityBlock, incoming: ActivityBlock): ActivityBlock {
-	return { type: "activity", activity: mergeActivitySnapshot(existing.activity, incoming.activity) };
+	return { type: "activity", activity: mergeActivitySnapshot(existing.activity, incoming.activity), images: incoming.images ?? existing.images };
 }
 
 export function upsertActivityBlock(blocks: readonly ChatBlock[], incoming: ActivityBlock): ChatBlock[] {

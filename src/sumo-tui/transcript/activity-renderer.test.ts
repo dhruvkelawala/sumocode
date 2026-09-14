@@ -1,4 +1,4 @@
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { resetCapabilitiesCache, setCapabilities, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import type { ActivitySnapshot } from "../../activity/domain.js";
 import { projectPiToolActivity } from "../../activity/pi-projector.js";
@@ -20,6 +20,14 @@ function activity(overrides: Partial<ActivitySnapshot> = {}): ActivitySnapshot {
 
 function plain(rows: readonly string[]): string {
 	return rows.map(stripAnsi).join("\n");
+}
+
+function pngData(width = 90, height = 72): string {
+	const bytes = Buffer.alloc(24);
+	Buffer.from([0x89, 0x50, 0x4e, 0x47]).copy(bytes);
+	bytes.writeUInt32BE(width, 16);
+	bytes.writeUInt32BE(height, 20);
+	return bytes.toString("base64");
 }
 
 describe("Activity renderer", () => {
@@ -272,5 +280,31 @@ describe("Activity renderer", () => {
 		expect(compact).toContain("22 tests, 1.2s");
 		expect(rows).toHaveLength(1);
 		expect(visibleWidth(rows[0]!)).toBe(70);
+	});
+
+	it("renders tool-result images inside the ledger frame", () => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		try {
+			const settled = activity({
+				status: "succeeded",
+				title: "read",
+				subject: "shot.png",
+				body: { kind: "text", text: "Read image file [image/png]" },
+			});
+			const png = { type: "image", data: pngData(), mime: "image/png", filename: "shot.png" } as const;
+
+			const rows = renderActivityBlockRows(settled, 70, { images: [png] });
+			const imageRowIndex = rows.findIndex((row) => row.includes("\x1b_G"));
+			expect(imageRowIndex).toBeGreaterThan(-1);
+			expect(stripAnsi(rows[imageRowIndex]!)).toMatch(/^│ /);
+			expect(stripAnsi(rows.at(-1)!)).toMatch(/^╰/);
+			expect(rows.slice(imageRowIndex, -1).every((row) => stripAnsi(row).startsWith("│"))).toBe(true);
+
+			const collapsed = renderActivityBlockRows(settled, 70, { expanded: false, images: [png] });
+			expect(collapsed).toHaveLength(1);
+			expect(collapsed.join("")).not.toContain("\x1b_G");
+		} finally {
+			resetCapabilitiesCache();
+		}
 	});
 });

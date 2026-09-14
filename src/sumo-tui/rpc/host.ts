@@ -1141,14 +1141,16 @@ function applyCachedModelStep(
 	}
 	const models = ring(availableModels);
 	if (models.length <= 1) {
-		if (noChangeMessage) {
+		const activeClaude = availableModels.some((model) => model.active && isClaudeProvider(model.provider));
+		if (noChangeMessage && !activeClaude) {
+			// Account cycling is certainly unavailable off Claude; do not replace a pending model intent.
 			notifyNoModelChange(deps, availableModels, models, noChangeMessage);
-		} else {
-			// A thin cached ring may be stale; replay model cycling against live state.
-			cached.gate.run(DEFERRED_MODEL_CYCLE_ACTION_KEY, () => notifyOnError(async () => {
-				await applyModelCycleStep(deps, direction, ring);
-			}, deps.notifications));
+			return true;
 		}
+		// A thin cached ring may be stale; replay against live state before deciding.
+		cached.gate.run(DEFERRED_MODEL_CYCLE_ACTION_KEY, () => notifyOnError(async () => {
+			await applyModelCycleStep(deps, direction, ring, noChangeMessage);
+		}, deps.notifications));
 		return true;
 	}
 	const activeIndex = models.findIndex((model) => model.active);

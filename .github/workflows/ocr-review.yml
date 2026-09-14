@@ -92,10 +92,13 @@ jobs:
             });
             core.setOutput('base_ref', pullRequest.base.ref);
             core.setOutput('head_sha', pullRequest.head.sha);
+            core.setOutput('title', pullRequest.title);
 
       - name: Run OpenCodeReview
-        uses: alibaba/open-code-review@main
+        # Pinned to upstream main @ 6e5cd8cf (2026-09-14). Bump the SHA deliberately.
+        uses: alibaba/open-code-review@6e5cd8cf2578768b6c6d1fafa1d14f66801d5f2b # v1.12.1 era
         with:
+          ocr_version: '1.12.1'
           llm_url: ${{ secrets.OCR_LLM_URL }}
           llm_auth_token: ${{ secrets.OCR_LLM_AUTH_TOKEN }}
           llm_model: ${{ vars.OCR_LLM_MODEL }}
@@ -104,7 +107,9 @@ jobs:
           head_sha: ${{ steps.pr-context.outputs.head_sha }}
           effort: high
           # PR title follows conventional commits, so it is high-leverage context.
-          background: ${{ github.event.pull_request.title }}
+          # github.event.pull_request is absent on issue_comment runs — fall back
+          # to the title resolved in Get PR context.
+          background: ${{ github.event.pull_request.title || steps.pr-context.outputs.title }}
           # glm-5.3 accepts the reasoning_effort request field (OpenAI-compatible).
           llm_reasoning_effort: low
           stream_progress: 'true'

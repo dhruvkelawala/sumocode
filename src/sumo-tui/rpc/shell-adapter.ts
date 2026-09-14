@@ -859,6 +859,11 @@ class RpcHintComponent implements ShellRenderable {
 		}
 		if (!this.adapter.isActive()) return [renderSplashHint(this.adapter.getState(), width, hint)];
 		const sidebarVisible = width >= SIDEBAR_MIN_TERMINAL_WIDTH;
+		// Landscape collapses the idle hint row: the sidebar already carries
+		// project/branch, the palette keybind moved into the footer right zone,
+		// and the freed row returns to the transcript. A live notice (or an
+		// extension's belowEditor widget) still re-opens the row.
+		if (sidebarVisible && hint === undefined) return [];
 		return [renderActiveHint(this.adapter.getState(), width, sidebarVisible, hint)];
 	}
 }
@@ -893,12 +898,15 @@ class RpcFooterComponent implements ShellRenderable {
 			return version ? [version] : [""];
 		}
 		const statuses = this.adapter.getExtensionStatuses();
-		return renderFooterBlock(footerSnapshot(
+		const snapshot = footerSnapshot(
 			this.adapter.getState(),
 			false,
 			hasActiveFastModeStatus(statuses),
 			hasPublishedClaudeAccount(statuses),
-		), width);
+		);
+		// Landscape trades tokens/cost (sidebar-owned) for the palette keybind.
+		if (width >= SIDEBAR_MIN_TERMINAL_WIDTH) snapshot.rightZone = "command-hint";
+		return renderFooterBlock(snapshot, width);
 	}
 }
 

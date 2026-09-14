@@ -9,6 +9,7 @@ import { NotificationCenter } from "../widgets/notification.js";
 import { InlineSelectorHost } from "./inline-selector.js";
 import { RpcShellAdapter } from "./shell-adapter.js";
 import type { RpcHostChromeState } from "./state.js";
+import type { TranscriptViewModel } from "../transcript/view-model.js";
 
 function state(overrides: Partial<RpcHostChromeState> = {}): RpcHostChromeState {
 	return {
@@ -1456,6 +1457,79 @@ describe("RpcShellAdapter heap counters", () => {
 			adapter.render();
 			expect(adapter.getHeapCounters()).toMatchObject({ transcriptBlocks: 3, retainedFrames: 2, cloneCount: 1 });
 			expect(adapter.getHeapCounters().viewModelRows).toBeGreaterThan(0);
+		} finally {
+			adapter.dispose();
+		}
+	});
+});
+
+describe("RpcShellAdapter landscape bottom stack", () => {
+	const transcript = (): TranscriptViewModel => ({ messages: [{ id: "m1", role: "user", displayName: "YOU", blocks: [{ type: "markdown", text: "hello" }] }] });
+
+	it("moves the palette keybind into the footer right zone and collapses the idle hint row", async () => {
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 160, rows: 45 },
+			initialState: state({
+				contextTokens: 42000,
+				contextWindow: 200000,
+				costUsd: 0.42,
+				modelLabel: "openai/gpt-5.5",
+				thinkingLevel: "high",
+			}),
+			initialTranscript: transcript(),
+		});
+		try {
+			adapter.render();
+			const frame = adapter.getLastFrame();
+			expect(frame).toBeDefined();
+			const rows = Array.from({ length: 45 }, (_value, row) => frame!.toPlainRow(row));
+			const text = rows.join("\n");
+
+			// The keybind lives exactly once — in the footer row — and the
+			// sidebar-owned metrics never leak back into the footer.
+			expect(text.split("CTRL+/ · COMMANDS")).toHaveLength(2);
+			const footer = findText(frame!, "READY");
+			expect(rows[footer.row]!).toContain("CTRL+/ · COMMANDS");
+			expect(rows[footer.row]!).not.toContain("42k/200k");
+			expect(rows[footer.row]!).not.toContain("$0.42");
+
+			// The idle hint row collapsed: the row above the footer breathing
+			// gap is the input frame's bottom border, not a hint row.
+			expect(rows[footer.row - 1]!.trim()).toBe("");
+			expect(rows[footer.row - 2]!.trimStart().startsWith("└")).toBe(true);
+		} finally {
+			adapter.dispose();
+		}
+	});
+
+	it("keeps portrait exactly as before: hint row with keybinds, footer right zone tokens/cost", async () => {
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 100, rows: 30 },
+			initialState: state({
+				contextTokens: 42000,
+				contextWindow: 200000,
+				costUsd: 0.42,
+				modelLabel: "openai/gpt-5.5",
+				thinkingLevel: "high",
+			}),
+			initialTranscript: transcript(),
+		});
+		try {
+			adapter.render();
+			const frame = adapter.getLastFrame();
+			expect(frame).toBeDefined();
+			const rows = Array.from({ length: 30 }, (_value, row) => frame!.toPlainRow(row));
+			const text = rows.join("\n");
+
+			const footer = findText(frame!, "READY");
+			expect(rows[footer.row]!).toContain("42k/200k");
+			expect(rows[footer.row]!).toContain("$0.42");
+			expect(rows[footer.row]!).not.toContain("COMMANDS");
+			expect(text).toContain("CTRL+/ · COMMANDS");
+			// Portrait keeps its hint row between input frame and footer gap.
+			expect(rows[footer.row - 2]!.trim()).not.toBe("");
 		} finally {
 			adapter.dispose();
 		}

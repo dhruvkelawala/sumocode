@@ -14,7 +14,7 @@
  *   │   └── chat-or-splash (flexGrow: 1)   ← splash when no messages, ChatPager when active
  *   ├── blank              (h: 1)
  *   ├── input-frame        (measured by PiEditorLeaf)
- *   ├── hint-row           (h: 1)
+ *   ├── hint-row           (h: 0–1, measured: collapsed when its component renders no rows)
  *   ├── blank              (h: 1)
  *   ├── footer             (h: 1)
  *   └── blank              (h: 1)
@@ -68,7 +68,6 @@ interface ShellLeafRenderable extends ShellRenderable {
 const SPLASH_EDITOR_FRAME_WIDTH = 60;
 const SHELL_TOP_CHROME_GAP_ROW = 1;
 const SHELL_BLANK_ROW = 1;
-const SHELL_HINT_ROW = 1;
 const SHELL_FOOTER_GAP_ROW = 1;
 const SHELL_FOOTER_ROW = 1;
 const SHELL_BOTTOM_SAFE_ROW = 1;
@@ -76,8 +75,11 @@ const SHELL_BOTTOM_SAFE_ROW = 1;
 /**
  * Owns the full-screen Yoga layout per issue #161 Slice A.
  *
- * Composition: top-chrome → gap → chat-row → blank → input → hint → footer. Footer
- * is pinned to the last row by the column flex constraint, not by row counting.
+ * Composition: top-chrome → gap → chat-row → blank → input → hint → footer. The
+ * hint row's height follows its rendered rows (0 in the landscape RPC shell's
+ * idle state, 1 otherwise), so a collapsed hint row returns its row to the
+ * chat. Footer is pinned to the last row by the column flex constraint, not by
+ * row counting.
  */
 export class RetainedShellRenderer {
 	public readonly root: SumoNode;
@@ -264,9 +266,11 @@ export class RetainedShellRenderer {
 		this.editorRightSpacer.flexShrink = 1;
 		this.syncEditorRowChildren(this.dimensions.columns ?? 80);
 
-		// 5) hint row
+		// 5) hint row. Height is measured, not fixed: the landscape RPC shell
+		// collapses the idle hint row (RpcHintComponent returns no rows when the
+		// sidebar is visible and nothing needs the row), and the freed row must
+		// flow back to the transcript instead of staying reserved.
 		this.hintLeaf = PiComponentLeaf.create(this.yoga, hintProxy, this.root);
-		this.hintLeaf.height = SHELL_HINT_ROW;
 
 		// 6) breathing row between hint and footer. This preserves the V2 Bible
 		// contract from #188: active input must not visually crowd the status footer.

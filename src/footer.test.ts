@@ -295,6 +295,33 @@ describe("formatFooterLine — cathedral coloring", () => {
 	});
 });
 
+describe("formatFooterLine — right zone selection", () => {
+	it("defaults to tokens and cost", () => {
+		const line = withoutAnsi(formatFooterLine(snapshot(), 160));
+		expect(line).toContain("42k/200k");
+		expect(line).toContain("$0.42");
+		expect(line).not.toContain("COMMANDS");
+	});
+
+	it("paints the palette keybind instead of tokens/cost for command-hint", () => {
+		const line = formatFooterLine(snapshot({ rightZone: "command-hint" }), 160);
+		const plain = withoutAnsi(line);
+		expect(plain).toContain("CTRL+/ · COMMANDS");
+		expect(plain).not.toContain("42k/200k");
+		expect(plain).not.toContain("$0.42");
+		// Same two-tone paint as the hint row: CTRL+/ accent, label dim.
+		expect(line).toContain(`\u001b[38;2;217;119;6mCTRL+/`);
+		expect(plain.indexOf("CTRL+/")).toBeGreaterThan(plain.indexOf("READY"));
+	});
+
+	it("degrades the command hint to an empty zone instead of tokens at narrow widths", () => {
+		const line = withoutAnsi(formatFooterLine(snapshot({ rightZone: "command-hint" }), 40));
+		expect(line).toContain("READY");
+		expect(line).not.toContain("COMMANDS");
+		expect(line).not.toContain("42k/200k");
+	});
+});
+
 describe("formatCwd", () => {
 	it("replaces $HOME with ~", () => {
 		const home = process.env.HOME ?? "/Users/dev";

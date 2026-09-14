@@ -500,10 +500,10 @@ async function renderFixtureScene(scenario, fixture) {
 			},
 		}, chatWidth)
 		: [];
-	// Bible bottom stack, portrait: queued cards, blank, input(3), hint, blank,
-	// footer, blank. Landscape drops only the hint row; the breathing blank
-	// stays, so the chat pane grows by exactly one row.
-	const bottomRows = [...queueRows, "", ...inputRows, ...(hintRow === undefined ? [] : [hintRow]), "", ...footerRows, ""];
+	// Bible bottom stack, portrait: queued cards, blank, input(3), hint, footer,
+	// blank. Landscape drops the hint row. Neither orientation keeps a
+	// pre-footer breathing row, so the chat pane grows by exactly one row.
+	const bottomRows = [...queueRows, "", ...inputRows, ...(hintRow === undefined ? [] : [hintRow]), ...footerRows, ""];
 	const chatHeight = Math.max(1, rows - topRows.length - bottomRows.length);
 
 	const yoga = await yogaMod.loadYoga();

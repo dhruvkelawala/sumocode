@@ -320,7 +320,8 @@ function gridTrackCount(template) {
 /**
  * Middle-pane height for a scene grid. The `.scene` template carries one track
  * per row, so its track count decides the layout: landscape (issue #559) drops
- * the hint row and has 9 tracks; portrait keeps it with 10.
+ * the hint row and has 8 tracks; portrait keeps it with 9. Neither orientation
+ * keeps a pre-footer breathing row — those rows belong to the middle pane.
  */
 function sceneMiddleRows(html, rows) {
 	const template = html.match(/\.scene\s*\{[^}]*grid-template-rows:\s*([^;]+);/)?.[1];

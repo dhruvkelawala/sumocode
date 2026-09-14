@@ -20,17 +20,17 @@
 			"x": 130,
 			"y": 3,
 			"cols": 30,
-			"rows": 35
+			"rows": 36
 		},
 		"chat-area": {
 			"x": 0,
 			"y": 3,
 			"cols": 128,
-			"rows": 35
+			"rows": 36
 		},
 		"input-frame": {
 			"x": 0,
-			"y": 39,
+			"y": 40,
 			"cols": 160,
 			"rows": 3
 		},
@@ -60,13 +60,13 @@
 		},
 		"portrait-input-frame": {
 			"x": 0,
-			"y": 93,
+			"y": 94,
 			"cols": 60,
 			"rows": 3
 		},
 		"portrait-hint-row": {
 			"x": 0,
-			"y": 96,
+			"y": 97,
 			"cols": 60,
 			"rows": 1
 		},
@@ -693,26 +693,21 @@
 						"category": "blank"
 					},
 					{
-						"startRow": 93,
-						"endRow": 93,
+						"startRow": 94,
+						"endRow": 94,
 						"category": "input-top"
-					},
-					{
-						"startRow": 95,
-						"endRow": 95,
-						"category": "input-bottom"
 					},
 					{
 						"startRow": 96,
 						"endRow": 96,
-						"category": "hint-row",
-						"firstCol": 1,
-						"lastCol": 58
+						"category": "input-bottom"
 					},
 					{
 						"startRow": 97,
 						"endRow": 97,
-						"category": "blank"
+						"category": "hint-row",
+						"firstCol": 1,
+						"lastCol": 58
 					},
 					{
 						"startRow": 98,
@@ -987,19 +982,19 @@
 			],
 			"finalCellAssertions": [
 				{
-					"row": 37,
+					"row": 38,
 					"col": 1,
 					"charPattern": "[.:oO@]",
 					"width": 1,
 					"fg": "#B974FF"
 				},
 				{
-					"row": 37,
+					"row": 38,
 					"col": 2,
 					"text": " "
 				},
 				{
-					"row": 37,
+					"row": 38,
 					"col": 3,
 					"text": "Working…"
 				}
@@ -1133,24 +1128,24 @@
 			],
 			"finalCellAssertions": [
 				{
-					"row": 37,
+					"row": 38,
 					"col": 1,
 					"charPattern": "[\\uE900-\\uE904]",
 					"width": 1,
 					"fg": "#B974FF"
 				},
 				{
-					"row": 37,
+					"row": 38,
 					"col": 2,
 					"text": " "
 				},
 				{
-					"row": 37,
+					"row": 38,
 					"col": 3,
 					"text": " "
 				},
 				{
-					"row": 37,
+					"row": 38,
 					"col": 4,
 					"text": "Working…"
 				}
@@ -1294,26 +1289,21 @@
 						"category": "blank"
 					},
 					{
-						"startRow": 93,
-						"endRow": 93,
+						"startRow": 94,
+						"endRow": 94,
 						"category": "input-top"
-					},
-					{
-						"startRow": 95,
-						"endRow": 95,
-						"category": "input-bottom"
 					},
 					{
 						"startRow": 96,
 						"endRow": 96,
-						"category": "hint-row",
-						"firstCol": 1,
-						"lastCol": 58
+						"category": "input-bottom"
 					},
 					{
 						"startRow": 97,
 						"endRow": 97,
-						"category": "blank"
+						"category": "hint-row",
+						"firstCol": 1,
+						"lastCol": 58
 					},
 					{
 						"startRow": 98,
@@ -1487,8 +1477,8 @@
 						"lastCol": 58
 					},
 					{
-						"startRow": 93,
-						"endRow": 93,
+						"startRow": 94,
+						"endRow": 94,
 						"category": "input-top"
 					},
 					{

@@ -244,9 +244,9 @@ describe("V2 visual parity contract", () => {
 		expect(scenario("active-portrait-runtime").dimensions).toEqual({ cols: 60, rows: 100 });
 		expect(scenario("fixture-completed-landscape").dimensions).toEqual({ cols: 160, rows: 45 });
 		expect(scenario("fixture-completed-portrait").dimensions).toEqual({ cols: 60, rows: 100 });
-		expect(cropDefinition("sidebar")).toEqual({ x: 130, y: 3, cols: 30, rows: 35 });
-		expect(cropDefinition("chat-area")).toEqual({ x: 0, y: 3, cols: 128, rows: 35 });
-		expect(cropDefinition("input-frame")).toEqual({ x: 0, y: 39, cols: 160, rows: 3 });
+		expect(cropDefinition("sidebar")).toEqual({ x: 130, y: 3, cols: 30, rows: 36 });
+		expect(cropDefinition("chat-area")).toEqual({ x: 0, y: 3, cols: 128, rows: 36 });
+		expect(cropDefinition("input-frame")).toEqual({ x: 0, y: 40, cols: 160, rows: 3 });
 		expect(cropDefinition("footer")).toEqual({ x: 0, y: 43, cols: 160, rows: 1 });
 	});
 
@@ -373,7 +373,7 @@ describe("V2 visual parity contract", () => {
 			"chat-area",
 		]);
 		expect(cropDefinition("portrait-top-bar")).toEqual({ x: 0, y: 1, cols: 60, rows: 1 });
-		expect(cropDefinition("portrait-input-frame")).toEqual({ x: 0, y: 93, cols: 60, rows: 3 });
+		expect(cropDefinition("portrait-input-frame")).toEqual({ x: 0, y: 94, cols: 60, rows: 3 });
 		expect(cropDefinition("portrait-footer")).toEqual({ x: 0, y: 98, cols: 60, rows: 1 });
 	});
 
@@ -446,9 +446,9 @@ describe("V2 visual parity contract", () => {
 		]);
 		expect(ultraviolet.requireRawOutputMatches).toEqual(["\\x1b\\]11;#06050B", "\\x1b\\]12;#B974FF"]);
 		expect(ultraviolet.finalCellAssertions).toEqual([
-			{ row: 37, col: 1, charPattern: "[.:oO@]", width: 1, fg: "#B974FF" },
-			{ row: 37, col: 2, text: " " },
-			{ row: 37, col: 3, text: "Working…" },
+			{ row: 38, col: 1, charPattern: "[.:oO@]", width: 1, fg: "#B974FF" },
+			{ row: 38, col: 2, text: " " },
+			{ row: 38, col: 3, text: "Working…" },
 		]);
 		expect(ultraviolet.rejectIfFinalScreenMatches).toEqual(expect.arrayContaining([
 			"No API key found",
@@ -481,11 +481,11 @@ describe("V2 visual parity contract", () => {
 		expect(fallback.runtime?.env?.SUMOCODE_RUNCAT_FONT).toBe("0");
 		expect(runcat.bibleTarget).toBe("theme-ultraviolet-core-runcat-active.png");
 		expect(runcat.finalCellAssertions).toEqual([
-			{ row: 37, col: 1, charPattern: "[\\uE900-\\uE904]", width: 1, fg: "#B974FF" },
+			{ row: 38, col: 1, charPattern: "[\\uE900-\\uE904]", width: 1, fg: "#B974FF" },
 			// Two-cell gap: the icomoon glyph overdraws its cell (labelGapCells: 2).
-			{ row: 37, col: 2, text: " " },
-			{ row: 37, col: 3, text: " " },
-			{ row: 37, col: 4, text: "Working…" },
+			{ row: 38, col: 2, text: " " },
+			{ row: 38, col: 3, text: " " },
+			{ row: 38, col: 4, text: "Working…" },
 		]);
 		expect(runcat.requireRawOutputMatches).toEqual([...fallback.requireRawOutputMatches!, "[\\uE900-\\uE904]"]);
 		expect(runcat.crops.map((crop) => crop.id)).toEqual(fallback.crops.map((crop) => crop.id));
@@ -498,7 +498,7 @@ describe("V2 visual parity contract", () => {
 		const script = `
 			import { parseBibleStyledGrid } from ${JSON.stringify(parserUrl)};
 			const parsed = parseBibleStyledGrid(${JSON.stringify(htmlPath)});
-			const rows = [39, 40, 41].map((row) => ({
+			const rows = [40, 41, 42].map((row) => ({
 				text: parsed.grid[row].map((cell) => cell.char).join(""),
 				cursorBg: parsed.grid[row][4]?.bg,
 			}));

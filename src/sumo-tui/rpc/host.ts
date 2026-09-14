@@ -1128,7 +1128,7 @@ function deferModelCycleStep(
 	noChangeMessage?: NoModelChangeMessage,
 ): void {
 	const action = async (): Promise<boolean> => {
-		let applied = true;
+		let applied = false;
 		await notifyOnError(async () => {
 			applied = await applyModelCycleStep(deps, direction, ring, noChangeMessage);
 		}, deps.notifications);

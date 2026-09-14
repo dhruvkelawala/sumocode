@@ -1892,6 +1892,34 @@ describe("cached pre-hydration cycle (issue 448: cycle keys answer before hydrat
 		expect(settled).toBe(true);
 	});
 
+	it("falls back to a pending model cycle when a deferred account cycle errors", async () => {
+		const liveRing: readonly RpcModelOption[] = [
+			{ provider: "anthropic", id: "claude-opus-4", label: "anthropic/claude-opus-4", active: true },
+			{ provider: "anthropic", id: "claude-sonnet-4", label: "anthropic/claude-sonnet-4", active: false },
+			{ provider: "anthropic-2", id: "claude-opus-4", label: "anthropic-2/claude-opus-4", active: false },
+		];
+		const { cachedCycle, gate, release } = cycleFixture({});
+		const controls = {
+			getEnabledModels: vi.fn(async () => liveRing),
+			setModel: vi.fn()
+				.mockRejectedValueOnce(new Error("account switch failed"))
+				.mockResolvedValueOnce(asNever({ modelLabel: "anthropic/claude-sonnet-4" })),
+		};
+		// SAFETY: partial fixture; unread members of the target type are unused here.
+		const deps = { controls: controls as never, notifications: { notify: vi.fn() }, cachedCycle };
+
+		createModelCycleForwardHandler(deps)();
+		createClaudeAccountCycleHandler(deps)();
+		release();
+		await gate.whenSettled();
+
+		expect(controls.setModel.mock.calls).toEqual([
+			["anthropic-2", "claude-opus-4"],
+			["anthropic", "claude-sonnet-4"],
+		]);
+		expect(deps.notifications.notify).toHaveBeenCalledWith(expect.stringContaining("account switch failed"), "error");
+	});
+
 	it("keeps the old deferred live cycle when no cached ring has landed yet", async () => {
 		const { cachedCycle, gate, release } = cycleFixture({});
 		const controls = {

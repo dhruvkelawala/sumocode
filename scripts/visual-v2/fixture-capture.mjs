@@ -465,12 +465,14 @@ async function renderFixtureScene(scenario, fixture) {
 	const topRows = ["", topBarLine, ""];
 
 	const inputRows = inputFrame.renderInputFrame("", cols, { promptColor: "accent" });
-	// Portrait hint already includes its own breathing blank row. The delivery
-	// selection is not painted here: it is named once, transiently, when it
-	// changes (see `RpcHostActions.setQueueDeliveryMode`).
+	// Portrait keeps its hint row (project/branch context + keybinds, since the
+	// sidebar is hidden). Landscape collapses it — the sidebar carries
+	// project/branch and the keybind moved into the footer right zone — so the
+	// freed row returns to the chat. The delivery selection is never painted
+	// here: it is named once, transiently, on change (RpcHostActions).
 	const hintRow = portrait
 		? ` ${inputFrame.renderInputHints(cols - 2, { leftHint: "sumocode (main)", leftHintStyle: "project-branch" })} `
-		: inputFrame.renderInputHints(cols);
+		: undefined;
 	const footerRows = footer.renderFooterBlock({
 		cwd: "/Users/dev/projects/sumocode",
 		branch: "main",
@@ -482,6 +484,9 @@ async function renderFixtureScene(scenario, fixture) {
 		state: "idle",
 		modelId: "gpt-5.5",
 		thinkingLevel: "medium",
+		// Landscape footer right zone is the palette keybind; tokens/cost are
+		// sidebar-owned there (see RpcFooterComponent).
+		rightZone: portrait ? undefined : "command-hint",
 	}, cols);
 	const shellAdapter = scenario.fixture?.id === "native-queues-followup"
 		? await jiti.import(`${repoRoot}/src/sumo-tui/rpc/shell-adapter.ts`)
@@ -495,8 +500,11 @@ async function renderFixtureScene(scenario, fixture) {
 			},
 		}, chatWidth)
 		: [];
-	// Bible bottom stack: queued cards, blank, input(3), hint, blank, footer, blank
-	const bottomRows = [...queueRows, "", ...inputRows, hintRow, "", ...footerRows, ""];
+	// Bible bottom stack, portrait: queued cards, blank, input(3), hint, footer,
+	// blank. Landscape drops the hint row and neither orientation keeps a
+	// pre-footer breathing row, so the landscape chat pane grows by two rows
+	// (hint + pre-footer) and the portrait pane by one.
+	const bottomRows = [...queueRows, "", ...inputRows, ...(hintRow === undefined ? [] : [hintRow]), ...footerRows, ""];
 	const chatHeight = Math.max(1, rows - topRows.length - bottomRows.length);
 
 	const yoga = await yogaMod.loadYoga();

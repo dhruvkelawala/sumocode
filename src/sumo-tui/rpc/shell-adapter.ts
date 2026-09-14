@@ -30,7 +30,7 @@ import { loadYoga, type Yoga } from "../layout/yoga.js";
 import type { CellBuffer } from "../render/buffer.js";
 import type { HeapSampleCounters } from "../runtime/heap-monitor.js";
 import type { ShellOverlayEntry, ShellRenderable, ShellTerminalSessionOwner, ShellViewport } from "../shell/contracts.js";
-import { RetainedShellRenderer } from "../shell/retained-shell-renderer.js";
+import { RetainedShellRenderer, SHELL_BOTTOM_RESERVED_ROWS } from "../shell/retained-shell-renderer.js";
 import type { TranscriptControllerChatSink } from "../transcript/controller.js";
 import type { ActivityPresentationSnapshot } from "../transcript/activity-view-model.js";
 import type { TranscriptViewModel } from "../transcript/view-model.js";
@@ -472,7 +472,12 @@ export class RpcShellAdapter {
 			// see `RpcHostRuntime.start`'s `viewport: this.output`) exposes the same
 			// current row count, so read it here instead -- same target, same
 			// formula, without widening `ShellRenderable.render` to take a height.
-			() => sidebarOverlayTargetRows(this.viewport.rows ?? 24),
+			// The RPC shell's landscape bottom stack is SHELL_BOTTOM_RESERVED_ROWS
+			// (pinned above-editor block + input frame + footer + safe row): no hint
+			// row (collapsed, #559) and no pre-footer gap. Reserving the classic 8
+			// here would leave the sidebar one row short of the space the transcript
+			// actually gets.
+			() => sidebarOverlayTargetRows(this.viewport.rows ?? 24, SHELL_BOTTOM_RESERVED_ROWS),
 		);
 	}
 
@@ -668,6 +673,7 @@ function footerSnapshot(
 	isSplash: boolean,
 	showFastMode = false,
 	claudeAccount: FooterSnapshot["claudeAccount"] = undefined,
+	rightZone: FooterSnapshot["rightZone"] = undefined,
 ): FooterSnapshot {
 	if (isVisualHarness() && !isSplash) {
 		// Tokens/cost/branch are frozen here because they're genuinely
@@ -696,6 +702,7 @@ function footerSnapshot(
 			showFastMode,
 			claudeAccount,
 			isSplash,
+			rightZone,
 		};
 	}
 	const contextTokens = state.contextTokens ?? 0;
@@ -713,6 +720,7 @@ function footerSnapshot(
 		showFastMode,
 		claudeAccount,
 		isSplash,
+		rightZone,
 	};
 }
 
@@ -792,6 +800,9 @@ function renderActiveHint(state: RpcHostChromeState, width: number, sidebarVisib
 		leftHint,
 		leftHintOverflow: "truncate",
 		leftHintStyle: notice !== undefined ? "dim" : "project-branch",
+		// Landscape names the keybind in the footer right zone, so a row
+		// re-opened by a notice paints the notice alone — never a duplicate.
+		suppressKeybinds: sidebarVisible,
 	});
 	return `${" ".repeat(pad)}${hint}${" ".repeat(pad)}`;
 }
@@ -859,6 +870,11 @@ class RpcHintComponent implements ShellRenderable {
 		}
 		if (!this.adapter.isActive()) return [renderSplashHint(this.adapter.getState(), width, hint)];
 		const sidebarVisible = width >= SIDEBAR_MIN_TERMINAL_WIDTH;
+		// Landscape collapses the idle hint row: the sidebar already carries
+		// project/branch, the palette keybind moved into the footer right zone,
+		// and the freed row returns to the transcript. A live notice (or an
+		// extension's belowEditor widget) still re-opens the row.
+		if (sidebarVisible && hint === undefined) return [];
 		return [renderActiveHint(this.adapter.getState(), width, sidebarVisible, hint)];
 	}
 }
@@ -893,12 +909,15 @@ class RpcFooterComponent implements ShellRenderable {
 			return version ? [version] : [""];
 		}
 		const statuses = this.adapter.getExtensionStatuses();
-		return renderFooterBlock(footerSnapshot(
+		const snapshot = footerSnapshot(
 			this.adapter.getState(),
 			false,
 			hasActiveFastModeStatus(statuses),
 			hasPublishedClaudeAccount(statuses),
-		), width);
+			// Landscape trades tokens/cost (sidebar-owned) for the palette keybind.
+			width >= SIDEBAR_MIN_TERMINAL_WIDTH ? "command-hint" : undefined,
+		);
+		return renderFooterBlock(snapshot, width);
 	}
 }
 

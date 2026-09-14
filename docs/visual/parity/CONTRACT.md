@@ -153,12 +153,11 @@ The RPC-default original-UX runtime scenarios also have required gates before go
 - `splash-runtime/full`
 - `active-landscape-runtime/top-bar`
 - `active-landscape-runtime/chat-area`
-- `active-landscape-runtime/hint-row`
 - `active-landscape-runtime/footer`
 - `active-portrait-runtime/top-bar`
 - `active-portrait-runtime/chat-area`
 
-Active-runtime sidebar, input-frame, portrait hint-row, and portrait footer crops remain review evidence until their palette/content drift has explicit visual approval or committed runtime goldens.
+Active-runtime sidebar, input-frame, portrait hint-row, and portrait footer crops remain review evidence until their palette/content drift has explicit visual approval or committed runtime goldens. Landscape has no hint-row crop at all (issue #559 collapsed the row; its keybind lives in the footer right zone, which is gated).
 
 Sidebar editorial parity is review-approved by inspection but not yet promoted as a required crop.
 

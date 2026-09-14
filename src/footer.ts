@@ -4,6 +4,7 @@ import { basename } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, ReadonlyFooterDataProvider } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { INPUT_FRAME_HINT_KEYS, INPUT_FRAME_HINT_LABEL } from "./cathedral/input-frame.js";
 
 /**
  * Pi's thinking-level union, aliased from the canonical `@earendil-works/pi-ai`
@@ -54,6 +55,13 @@ export type FooterSnapshot = {
 	 * footer row. Per Q5.2, this only happens on the splash empty state.
 	 */
 	isSplash?: boolean;
+	/**
+	 * Right-zone content. The default (and the classic Pi footer) paints context
+	 * tokens and cost; `command-hint` paints the palette keybind hint instead —
+	 * the landscape RPC shell, where the sidebar already carries context and
+	 * cost and the dedicated hint row is collapsed.
+	 */
+	rightZone?: "tokens-cost" | "command-hint";
 };
 
 /**
@@ -181,11 +189,17 @@ function formatFooterLineInner(snapshot: FooterSnapshot, width: number): string 
 	// ahead of the model id: the model is visible in the input hints and the
 	// model picker, while the account is visible nowhere else on a non-Claude
 	// model, and a session metric is not worth losing it for.
-	const rightCandidates: string[][] = [
-		[tokens, cost],
-		[tokens],
-		[],
-	];
+	//
+	// The command-hint zone (landscape RPC shell) takes the palette keybind that
+	// used to live in the collapsed hint row; if it cannot fit it degrades to an
+	// empty zone — tokens and cost never leak back, the sidebar owns them.
+	const rightCandidates: string[][] = snapshot.rightZone === "command-hint"
+		? [[`${colorHex(INPUT_FRAME_HINT_KEYS, activeThemeColors().accent)} ${colorHex(`· ${INPUT_FRAME_HINT_LABEL}`, activeThemeColors().foregroundDim)}`], []]
+		: [
+			[tokens, cost],
+			[tokens],
+			[],
+		];
 
 	const MIN_GAP = 3; // minimum spaces between zones
 	for (const left of leftCandidates) {

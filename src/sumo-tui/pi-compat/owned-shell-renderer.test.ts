@@ -237,7 +237,10 @@ describe("OwnedShellRenderer", () => {
 		});
 
 		renderer.render();
-		expect(fakeTerminal.cursors.at(-1)).toEqual({ row: 6, col: 4 });
+		// The editor stack is bottom-anchored below the chat row: hint + footer +
+		// safe (3 rows) place the 3-row editor frame at rows 6-8, so the cursor
+		// marker lands on its middle row.
+		expect(fakeTerminal.cursors.at(-1)).toEqual({ row: 7, col: 4 });
 		renderer.dispose();
 	});
 

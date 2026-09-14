@@ -10,6 +10,7 @@
 import { writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { COMMAND_HINT_HTML, COMMAND_HINT_LEN } from "./lib/bible-command-hint.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const out = resolve(repoRoot, "docs", "ui", "bible");
@@ -395,24 +396,16 @@ function buildInputFrameRows(cols) {
 	return [cell(top), cell(cursorRow), cell(bot)];
 }
 
-// ─── Hint row (right-aligned keybinds, 1-char l/r padding) ─────────────
+// ─── Hint row (portrait only: project/branch left, keybinds right) ─────
 const PAD = 1; // 1-char l/r padding for chrome rows
 
-// In portrait (sidebar hidden), hint row carries the project name + branch
-// on the LEFT (since sidebar can't show them). In landscape, hint row is
-// right-keybinds-only (sidebar shows project).
-function buildHintRow(cols, sidebarVisible) {
-	const rightHTML =
-		`<span class="fg-accent">CTRL+/</span>` +
-		`<span class="fg-dim"> \u00b7 COMMANDS</span>`;
-	const rightLen = 17;
+// Landscape (sidebar visible) has no hint row — the sidebar owns project/branch
+// context and the palette keybind moved into the footer right zone (#559).
+// Portrait keeps the row: project + branch left, keybind right-aligned.
+function buildHintRow(cols) {
+	const rightHTML = COMMAND_HINT_HTML;
+	const rightLen = COMMAND_HINT_LEN;
 
-	if (sidebarVisible) {
-		const lead = cols - rightLen - PAD * 2;
-		return rep(" ", PAD) + rep(" ", Math.max(0, lead)) + rightHTML + rep(" ", PAD);
-	}
-
-	// Sidebar hidden: project + branch on the left
 	const leftHTML = `<span class="fg-fg">sumocode</span> <span class="fg-dim">(main)</span>`;
 	const leftLen = visibleLen(leftHTML);
 	const middle = cols - PAD * 2 - leftLen - rightLen;
@@ -428,11 +421,22 @@ function buildFooterRow(cols, sidebarVisible, options = {}) {
 		: `<span class="fg-idle">\u25cf</span> <span class="fg-fg">READY</span><span class="fg-dim"> \u00b7 </span><span class="fg-fg">claude-opus-4-7</span><span class="fg-dim"> \u00b7 </span><span class="fg-fg">xhigh</span>`;
 	const leftLen = visibleLen(left);
 
+	// Landscape right zone is the palette keybind (#559): the sidebar already
+	// carries context tokens and cost there.
+	if (sidebarVisible) {
+		const rightHTML = COMMAND_HINT_HTML;
+		const rightLen = COMMAND_HINT_LEN;
+		const middle = cols - PAD * 2 - leftLen - rightLen;
+		return rep(" ", PAD) + left + rep(" ", Math.max(1, middle)) + rightHTML + rep(" ", PAD);
+	}
+
 	// Project + branch live in the hint row when sidebar hidden, in the
-	// sidebar otherwise. Footer right zone is just ctx tokens + cost.
+	// sidebar otherwise. Portrait footer right zone is just ctx tokens + cost.
 	const tokens = [];
-	if (cols >= 50) tokens.push({ html: `<span class="fg-fg">42k/200k</span>`, len: 8 });
-	if (cols >= 50) tokens.push({ html: `<span class="fg-fg">$0.42</span>`, len: 5 });
+	if (cols >= 50) {
+		tokens.push({ html: `<span class="fg-fg">42k/200k</span>`, len: 8 });
+		tokens.push({ html: `<span class="fg-fg">$0.42</span>`, len: 5 });
+	}
 
 	let rightHTML = "";
 	let rightLen = 0;
@@ -483,15 +487,24 @@ function buildScene(variant) {
 	const chatHTML = buildChatHTML(CHAT_COLS, toolStyle);
 	const chatLeadHTML = isRuntimeTarget && !sidebarVisible ? `<pre class="grid"> </pre>\n` : "";
 	const inputRows = buildInputFrameRows(cols);
-	const hintRow = buildHintRow(cols, sidebarVisible);
+	const hintRow = sidebarVisible ? "" : buildHintRow(cols);
 	const footerRow = buildFooterRow(cols, sidebarVisible, { visualHarnessFooter: isRuntimeTarget });
 	const topBarRow = buildTopBarPlaceholder(cols);
 
 	const middleCols = sidebarVisible
 		? `${CHAT_COLS}ch ${GUTTER}ch ${sidebarCols}ch`
 		: `${CHAT_COLS}ch ${GUTTER}ch`;
-	const middleRows = TERM_ROWS - 11;
+	// Landscape drops the hint row (#559): its bottom stack is one row shorter
+	// than portrait's. Neither orientation keeps a pre-footer breathing row —
+	// that row went to the chat pane too — so landscape reserves 9 rows and
+	// portrait 10.
+	const middleRows = TERM_ROWS - (sidebarVisible ? 9 : 10);
 	const middleTrack = isRuntimeTarget ? `calc(var(--cell-h) * ${middleRows})` : "auto";
+	const hintRowHTML = sidebarVisible ? "" : `\n    <pre class="grid" style="grid-row: 7;">${hintRow}</pre>`;
+	const footerGridRow = sidebarVisible ? 7 : 8;
+	// One --cell-h track per scene row: 8 in landscape (no hint), 9 in portrait.
+	const landscapeTracks = `var(--cell-h) var(--cell-h) var(--cell-h) ${middleTrack} var(--cell-h) calc(var(--cell-h) * 3) var(--cell-h) var(--cell-h)`;
+	const sceneRowTracks = sidebarVisible ? landscapeTracks : `${landscapeTracks} var(--cell-h)`;
 	const runtimeTargetCss = isRuntimeTarget
 		? `
   body.runtime-target { background: var(--background); }
@@ -535,7 +548,7 @@ function buildScene(variant) {
 <link rel="stylesheet" href="_assets/tokens.css">
 <style>
   .stage-blurb { max-width: ${Math.max(60, CHAT_COLS)}ch; color: var(--foreground-dim); font-size: 11px; line-height: 1.6; padding: 0 8px; text-align: center; }
-  .scene { display: grid; grid-template-rows: var(--cell-h) var(--cell-h) var(--cell-h) ${middleTrack} var(--cell-h) calc(var(--cell-h) * 3) var(--cell-h) var(--cell-h) var(--cell-h) var(--cell-h); }
+  .scene { display: grid; grid-template-rows: ${sceneRowTracks}; }
   .scene .middle { display: grid; grid-template-columns: ${middleCols}; grid-row: 4; min-height: 0; overflow: hidden; }
   .scene .middle .chat-col, .scene .middle .sidebar-col { overflow: hidden; min-height: 0; }
   .scene .middle pre { margin: 0; }${runtimeTargetCss}
@@ -552,11 +565,9 @@ ${stageIntroHTML}  <div data-render-rect class="term scene" style="--term-cols: 
       <div class="gutter-col"></div>
 ${sidebarColumnHTML}    </div>
     <pre class="grid" style="grid-row: 5;"> </pre>
-    <pre class="grid" style="grid-row: 6;">${inputRows.join("\n")}</pre>
-    <pre class="grid" style="grid-row: 7;">${hintRow}</pre>
-    <pre class="grid" style="grid-row: 8;"> </pre>
-    <pre class="grid" style="grid-row: 9;">${footerRow}</pre>
-    <pre class="grid" style="grid-row: 10;"> </pre>
+    <pre class="grid" style="grid-row: 6;">${inputRows.join("\n")}</pre>${hintRowHTML}
+    <pre class="grid" style="grid-row: ${footerGridRow};">${footerRow}</pre>
+    <pre class="grid" style="grid-row: ${footerGridRow + 1};"> </pre>
   </div>
 </div>
 </body>

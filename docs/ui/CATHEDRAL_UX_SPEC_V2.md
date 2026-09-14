@@ -70,14 +70,29 @@ OSC 11 (`\x1b]11;#1A1511\x1b\\`) painted on altscreen entry. OSC 111 reset on ex
 Row 1            : blank breathing row
 Row 2            : top chrome bar (Element 2)
 Row 3            : blank
-Rows 4..N-7      : 2-pane content
+Rows 4..N-7      : 2-pane content (portrait; landscape content runs to N-6)
                    - left  (chat / tool pills / code blocks): cols 1..(W-30)
                    - right (registry sidebar):                cols (W-29)..W
+
+Landscape (W≥120):
+Row N-5          : blank
+Rows N-4..N-2    : input frame (3 rows)
+Row N-1          : registry footer (Element 5)
+Row N            : blank breathing row
+
+Portrait (W<120):
 Row N-6          : blank
 Rows N-5..N-3    : input frame (3 rows)
 Row N-2          : hint row
 Row N-1          : registry footer (Element 5)
 Row N            : blank breathing row
+
+(Neither orientation keeps a pre-footer breathing row: issue #559's follow-up
+returned that row to the transcript. In the SUMO_TUI RPC shell, landscape
+(W≥120) also has no hint row: issue #559 collapsed it and moved its keybind
+into the footer right zone, so the landscape transcript is two rows taller
+than the pre-#559 layout. Portrait keeps the hint row. The classic
+Pi-extension shell still paints the pre-#559 layout.)
 Splash extra     : version line only on splash, above bottom breathing row
 ```
 
@@ -324,7 +339,7 @@ Disappears on first keystroke.
 
 **Left zone**: `● <STATE>` (uppercase) `· <model-id>` (lowercase) `· <thinking-level>` (lowercase). State dot color = agent state.
 
-**Right zone**: `<ctx-tokens>/<ctx-window> · $<session-cost>`. Project/branch live in the sidebar when visible and the hint row when the sidebar is hidden; footer must not duplicate them.
+**Right zone**: `<ctx-tokens>/<ctx-window> · $<session-cost>` (portrait). In the SUMO_TUI RPC shell, landscape (W≥120) instead paints the palette keybind `CTRL+/ · COMMANDS` — context and cost are sidebar-owned there and never leak back into the footer. Project/branch live in the sidebar when visible and the hint row when the sidebar is hidden; footer must not duplicate them.
 
 **Cathedral state labels**:
 | internal | UI label |
@@ -337,7 +352,7 @@ Disappears on first keystroke.
 
 **Same shape regardless of sidebar visibility** (single-row always).
 
-**When sidebar is hidden** (W<120 OR `/sidebar hide`): the hint row carries project/branch. Footer right zone remains ctx + cost. Sidebar (when visible) shows fuller view: project/branch, bar visualization, and cumulative session totals — NOT in footer.
+**When sidebar is hidden** (W<120 OR `/sidebar hide`): the hint row carries project/branch. Footer right zone remains ctx + cost. In the SUMO_TUI RPC shell, when the sidebar is visible (landscape) the hint row is collapsed and the footer right zone carries the palette keybind instead (the classic extension path keeps the hint row and ctx/cost footer). Sidebar (when visible) shows fuller view: project/branch, bar visualization, and cumulative session totals — NOT in footer.
 
 **Bottom version line on splash only**:
 ```

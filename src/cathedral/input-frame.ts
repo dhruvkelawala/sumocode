@@ -40,7 +40,13 @@ const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 export const INPUT_FRAME_LABEL_SPLASH = "DIVINE INVOCATION";
 export const INPUT_FRAME_LABEL_ACTIVE = "";
 export const INPUT_FRAME_PLACEHOLDER = 'Ask anything... "Refactor the auth flow."';
-export const INPUT_FRAME_HINT_KEYBINDS = "CTRL+/ · COMMANDS";
+/**
+ * Palette keybind split into its accent (keys) and dim (label) parts so both
+ * consumers can paint it without re-parsing the joined form.
+ */
+export const INPUT_FRAME_HINT_KEYS = "CTRL+/";
+export const INPUT_FRAME_HINT_LABEL = "COMMANDS";
+export const INPUT_FRAME_HINT_KEYBINDS = `${INPUT_FRAME_HINT_KEYS} · ${INPUT_FRAME_HINT_LABEL}`;
 
 function visibleLength(text: string): number {
 	return text.replace(ANSI_PATTERN, "").length;
@@ -188,6 +194,12 @@ export type InputHintsOptions = {
 	leftHintOverflow?: "drop" | "truncate";
 	/** Project context renders project in foreground and branch in dim; splash invocation highlights model with theme accent. */
 	leftHintStyle?: "dim" | "project-branch" | "model-thinking";
+	/**
+	 * Skip the right-aligned keybind hint. The landscape shell carries the
+	 * keybind in its footer right zone, so a re-opened hint row (a transient
+	 * notice) must not paint it twice.
+	 */
+	suppressKeybinds?: boolean;
 };
 
 /**
@@ -202,15 +214,18 @@ export type InputHintsOptions = {
 export function renderInputHints(width: number, options: InputHintsOptions = {}): string {
 	if (width <= 0) return "";
 
+	// The landscape shell owns the keybind through its footer right zone, so a
+	// hint row re-opened there (a transient notice) must not paint it twice.
+	const suppressKeybinds = options.suppressKeybinds === true;
 	const rightPlain = INPUT_FRAME_HINT_KEYBINDS;
-	const rightLen = rightPlain.length;
+	const rightLen = suppressKeybinds ? 0 : rightPlain.length;
 	const left = options.leftHint;
 
 	const dimFg = fg(activeThemeColors().foregroundDim);
 	const accent = fg(activeThemeColors().accent);
 
 	// Build the colored right-hand string: CTRL+/ in accent, label in dim.
-	const rightColored = `${accent}CTRL+/${RESET} ${dimFg}· COMMANDS${RESET}`;
+	const rightColored = suppressKeybinds ? "" : `${accent}${INPUT_FRAME_HINT_KEYS}${RESET} ${dimFg}· ${INPUT_FRAME_HINT_LABEL}${RESET}`;
 	const colorLeftHint = (text: string): string => {
 		if (options.leftHintStyle === "model-thinking") {
 			const prefix = "╰─ ";
@@ -232,8 +247,9 @@ export function renderInputHints(width: number, options: InputHintsOptions = {})
 	};
 
 	// At narrow widths, drop the left hint first unless the caller explicitly
-	// asks for truncation (portrait active context path).
-	const minGap = 4;
+	// asks for truncation (portrait active context path). No gap is reserved
+	// when the right zone is suppressed — nothing sits beside the notice.
+	const minGap = rightLen === 0 ? 0 : 4;
 	const leftFitsAlongside = left !== undefined && rightLen + minGap + left.length <= width;
 
 	if (leftFitsAlongside) {

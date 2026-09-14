@@ -6,9 +6,11 @@ import { activeThemeColors, resetThemeRegistryForTests, setActiveTheme } from ".
 import { ULTRAVIOLET_CORE_INDICATOR_INTERVAL_MS, ULTRAVIOLET_RUNCAT_FRAMES, ULTRAVIOLET_RUNCAT_INTERVAL_MS } from "../../themes/ultraviolet-core.js";
 import { ChatPager } from "../widgets/chat-pager.js";
 import { NotificationCenter } from "../widgets/notification.js";
+import { SIDEBAR_WIDTH } from "../../sidebar-placement.js";
 import { InlineSelectorHost } from "./inline-selector.js";
 import { RpcShellAdapter } from "./shell-adapter.js";
 import type { RpcHostChromeState } from "./state.js";
+import type { TranscriptViewModel } from "../transcript/view-model.js";
 
 function state(overrides: Partial<RpcHostChromeState> = {}): RpcHostChromeState {
 	return {
@@ -1458,6 +1460,179 @@ describe("RpcShellAdapter heap counters", () => {
 			expect(adapter.getHeapCounters().viewModelRows).toBeGreaterThan(0);
 		} finally {
 			adapter.dispose();
+		}
+	});
+});
+
+describe("RpcShellAdapter landscape bottom stack", () => {
+	const transcript = (): TranscriptViewModel => ({ messages: [{ id: "m1", role: "user", displayName: "YOU", blocks: [{ type: "markdown", text: "hello" }] }] });
+
+	it("moves the palette keybind into the footer right zone and collapses the idle hint row", async () => {
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 160, rows: 45 },
+			initialState: state({
+				contextTokens: 42000,
+				contextWindow: 200000,
+				costUsd: 0.42,
+				modelLabel: "openai/gpt-5.5",
+				thinkingLevel: "high",
+			}),
+			initialTranscript: transcript(),
+		});
+		try {
+			adapter.render();
+			const frame = adapter.getLastFrame();
+			expect(frame).toBeDefined();
+			const rows = Array.from({ length: 45 }, (_value, row) => frame!.toPlainRow(row));
+			const text = rows.join("\n");
+
+			// The keybind lives exactly once — in the footer row — and the
+			// sidebar-owned metrics never leak back into the footer.
+			expect(text.split("CTRL+/ · COMMANDS")).toHaveLength(2);
+			const footer = findText(frame!, "READY");
+			expect(rows[footer.row]!).toContain("CTRL+/ · COMMANDS");
+			expect(rows[footer.row]!).not.toContain("42k/200k");
+			expect(rows[footer.row]!).not.toContain("$0.42");
+
+			// The idle hint row collapsed and the pre-footer breathing row is
+			// gone: the input frame's bottom border sits directly on the footer.
+			expect(rows[footer.row - 1]!.trimStart().startsWith("└")).toBe(true);
+		} finally {
+			adapter.dispose();
+		}
+	});
+
+	it("re-opens the collapsed row for a transient notice without duplicating the footer keybind", async () => {
+		const notifications = new NotificationCenter();
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 160, rows: 45 },
+			initialState: state({ modelLabel: "openai/gpt-5.5", thinkingLevel: "high" }),
+			initialTranscript: { messages: [{ id: "m1", role: "user", displayName: "YOU", blocks: [{ type: "markdown", text: "hello" }] }] },
+			notifications,
+		});
+		try {
+			notifications.notify("Queue mode: follow-up");
+			adapter.render();
+			const frame = adapter.getLastFrame();
+			expect(frame).toBeDefined();
+			const rows = Array.from({ length: 45 }, (_value, row) => frame!.toPlainRow(row));
+			const text = rows.join("\n");
+
+			// The notice owns the re-opened row; the keybind appears exactly once
+			// overall — in the footer, never beside the notice.
+			expect(text.split("CTRL+/ · COMMANDS")).toHaveLength(2);
+			const noticeRow = findText(frame!, "Queue mode: follow-up");
+			expect(rows[noticeRow.row]!.includes("CTRL+/")).toBe(false);
+			const footer = findText(frame!, "READY");
+			expect(rows[footer.row]!).toContain("CTRL+/ · COMMANDS");
+		} finally {
+			adapter.dispose();
+		}
+	});
+
+	it("keeps portrait exactly as before: hint row with keybinds, footer right zone tokens/cost", async () => {
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 100, rows: 30 },
+			initialState: state({
+				contextTokens: 42000,
+				contextWindow: 200000,
+				costUsd: 0.42,
+				modelLabel: "openai/gpt-5.5",
+				thinkingLevel: "high",
+			}),
+			initialTranscript: transcript(),
+		});
+		try {
+			adapter.render();
+			const frame = adapter.getLastFrame();
+			expect(frame).toBeDefined();
+			const rows = Array.from({ length: 30 }, (_value, row) => frame!.toPlainRow(row));
+			const text = rows.join("\n");
+
+			const footer = findText(frame!, "READY");
+			expect(rows[footer.row]!).toContain("42k/200k");
+			expect(rows[footer.row]!).toContain("$0.42");
+			expect(rows[footer.row]!).not.toContain("COMMANDS");
+			expect(text).toContain("CTRL+/ · COMMANDS");
+			// Portrait keeps its hint row between input frame and footer gap.
+			// Portrait keeps its hint row, now directly above the footer.
+			expect(rows[footer.row - 1]!.trim()).not.toBe("");
+		} finally {
+			adapter.dispose();
+		}
+	});
+
+	it("pins the above-editor block so the sidebar bottom never jumps between idle and busy", async () => {
+		const build = async (overrides: Partial<RpcHostChromeState>) => {
+			const adapter = await RpcShellAdapter.create({
+				terminal: { writeFramePatches: () => undefined },
+				viewport: { columns: 160, rows: 45 },
+				initialState: state({ modelLabel: "openai/gpt-5.5", thinkingLevel: "high", ...overrides }),
+				initialTranscript: transcript(),
+			});
+			adapter.render();
+			return { adapter, frame: adapter.getLastFrame()! };
+		};
+		const frameRows = (frame: CellBuffer): string[] => Array.from({ length: 45 }, (_value, row) => frame.toPlainRow(row));
+		const surface = activeThemeColors().surface.toLowerCase();
+		// The sidebar paints its surface across its full reserved height; the
+		// pinned block and the input frame below it stay on the default/editor
+		// background, so the last surface row is the sidebar's painted bottom.
+		const sidebarBottom = (frame: CellBuffer): number => {
+			let bottom = -1;
+			for (let row = 0; row < 45; row += 1) {
+				if (frame.getCell(row, 159).bg?.toLowerCase() === surface && frame.getCell(row, 0).bg?.toLowerCase() !== surface) bottom = row;
+			}
+			return bottom;
+		};
+		type ShellRenderInternals = {
+			readonly renderer: {
+				readonly chatRow: { getComputedHeight(): number };
+				readonly resolveSidebarPublication: () => { readonly component: { render(width: number): string[] } } | undefined;
+			};
+		};
+		const sidebarMetrics = (adapter: RpcShellAdapter) => {
+			// oxlint-disable-next-line anti-slop/no-chained-type-assertions, anti-slop/require-safety-comment-for-type-assertion -- SAFETY: test-only read of the private shell renderer to compare the sidebar's own target rows against the chat-row rect; both values are asserted below.
+			const internals = adapter as unknown as ShellRenderInternals;
+			const publication = internals.renderer.resolveSidebarPublication();
+			if (!publication) throw new Error("sidebar publication missing in the active landscape shell");
+			return {
+				targetRows: publication.component.render(SIDEBAR_WIDTH).length,
+				chatRowHeight: Math.floor(internals.renderer.chatRow.getComputedHeight()),
+			};
+		};
+
+		const idle = await build({});
+		const busy = await build({ isStreaming: true });
+		try {
+			const idleRows = frameRows(idle.frame);
+			const busyRows = frameRows(busy.frame);
+
+			// Busy keeps the exact pre-pin rows: indicator 38, gap 39, input 40-42, footer 43.
+			expect(findText(busy.frame, "Working…").row).toBe(38);
+			expect(busyRows[39]!.trim()).toBe("");
+			expect(busyRows[40]!.trimStart().startsWith("┌")).toBe(true);
+			expect(findText(busy.frame, "CTRL+/ · COMMANDS").row).toBe(43);
+
+			// Idle reserves the same two rows as blanks instead of collapsing to
+			// one and handing the freed row to the transcript.
+			expect(idleRows[38]!.trim()).toBe("");
+			expect(idleRows[39]!.trim()).toBe("");
+			expect(idleRows[40]!.trimStart().startsWith("┌")).toBe(true);
+			expect(findText(idle.frame, "CTRL+/ · COMMANDS").row).toBe(43);
+
+			// Pre-pin idle ended at row 38 and busy at row 36: the sidebar's reserved
+			// height must match the chat row in both states, which is what stops the jump.
+			expect(sidebarBottom(idle.frame)).toBe(37);
+			expect(sidebarBottom(busy.frame)).toBe(37);
+			expect(sidebarMetrics(idle.adapter)).toEqual({ targetRows: 36, chatRowHeight: 36 });
+			expect(sidebarMetrics(busy.adapter)).toEqual({ targetRows: 36, chatRowHeight: 36 });
+		} finally {
+			idle.adapter.dispose();
+			busy.adapter.dispose();
 		}
 	});
 });

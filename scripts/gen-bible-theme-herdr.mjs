@@ -17,6 +17,7 @@
 import { writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { COMMAND_HINT_HTML, COMMAND_HINT_LEN } from "./lib/bible-command-hint.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const out = resolve(repoRoot, "docs", "ui", "bible");
@@ -196,8 +197,8 @@ function buildFooterRow(cols) {
 	const leftLen = visibleLen(left);
 	// Landscape footer right zone is the palette keybind (#559); the sidebar
 	// already carries context tokens and cost there.
-	const rightHTML = `<span class="fg-accent">CTRL+/</span><span class="fg-dim"> \u00b7 COMMANDS</span>`;
-	const rightLen = 17;
+	const rightHTML = COMMAND_HINT_HTML;
+	const rightLen = COMMAND_HINT_LEN;
 	const middle = cols - PAD * 2 - leftLen - rightLen;
 	return rep(" ", PAD) + left + rep(" ", Math.max(1, middle)) + rightHTML + rep(" ", PAD);
 }

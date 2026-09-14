@@ -297,31 +297,39 @@ function extractPreGridRows(html, parentBg = DEFAULT_BG) {
 	return [...html.matchAll(PRE_GRID_PATTERN)].flatMap((match) => parseGridContent(match[2], parentBgFromAttrs(match[1]) ?? parentBg));
 }
 
-/** Count `.scene` grid tracks; a `calc(var(--cell-h) * N)` token counts once. */
-function gridTrackCount(template) {
-	let tracks = 0;
+/** Splits a `grid-template-rows` value into tracks on whitespace outside parentheses. */
+function splitTracks(template) {
+	const tracks = [];
 	let depth = 0;
-	let inToken = false;
+	let track = "";
 	for (const ch of template.trim()) {
 		if (ch === "(") depth += 1;
 		else if (ch === ")") depth -= 1;
 		if (/\s/.test(ch) && depth === 0) {
-			inToken = false;
+			if (track) tracks.push(track);
+			track = "";
 			continue;
 		}
-		if (!inToken) {
-			tracks += 1;
-			inToken = true;
-		}
+		track += ch;
 	}
+	if (track) tracks.push(track);
 	return tracks;
 }
 
+/** Rows a fixed `.scene` track occupies; `null` when the layout sizes it instead. */
+function trackRows(track) {
+	const multiplier = /^calc\(\s*var\(--cell-h\)\s*\*\s*(\d+)\s*\)$/.exec(track);
+	if (multiplier) return Number(multiplier[1]);
+	if (/^var\(--cell-h\)$/.test(track)) return 1;
+	return null;
+}
+
 /**
- * Middle-pane height for a scene grid. The `.scene` template carries one track
- * per row, so its track count decides the layout: landscape (issue #559) drops
- * the hint row and has 8 tracks; portrait keeps it with 9. Neither orientation
- * keeps a pre-footer breathing row — those rows belong to the middle pane.
+ * Middle-pane height for a scene grid. The `.middle` pane (`grid-row: 4`) is
+ * the track the layout sizes; every other track is a fixed chrome row whose
+ * height comes from the template itself, so a taller input frame or an extra
+ * chrome track moves the crops with the layout instead of silently shifting
+ * them. Landscape (issue #559) drops the hint row, portrait keeps it.
  */
 function sceneMiddleRows(html, rows) {
 	const template = html.match(/\.scene\s*\{[^}]*grid-template-rows:\s*([^;]+);/)?.[1];
@@ -330,9 +338,25 @@ function sceneMiddleRows(html, rows) {
 		// pane by one row with no error; fail loudly instead.
 		throw new Error("styled-cell-grid: scene has no .scene grid-template-rows to count tracks from");
 	}
-	// tracks + 1: the input-frame track is three content rows tall, not one.
-	const trackCount = gridTrackCount(template);
-	return rows - (trackCount + 1);
+	const middleGridRow = html.match(/\.middle\s*\{[^}]*grid-row:\s*(\d+)/)?.[1];
+	if (!middleGridRow) {
+		throw new Error("styled-cell-grid: scene has no .middle grid-row to locate the middle pane");
+	}
+	const tracks = splitTracks(template);
+	const middleIndex = Number(middleGridRow) - 1;
+	if (middleIndex >= tracks.length) {
+		throw new Error(`styled-cell-grid: .middle grid-row ${middleGridRow} is outside the ${tracks.length}-track scene grid`);
+	}
+	let chromeRows = 0;
+	for (const [index, track] of tracks.entries()) {
+		if (index === middleIndex) continue;
+		const height = trackRows(track);
+		if (height === null) {
+			throw new Error(`styled-cell-grid: scene track ${index + 1} (${track}) has no fixed row height`);
+		}
+		chromeRows += height;
+	}
+	return rows - chromeRows;
 }
 
 function sceneGridRowStarts(middleRows) {

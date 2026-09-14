@@ -40,7 +40,13 @@ const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 export const INPUT_FRAME_LABEL_SPLASH = "DIVINE INVOCATION";
 export const INPUT_FRAME_LABEL_ACTIVE = "";
 export const INPUT_FRAME_PLACEHOLDER = 'Ask anything... "Refactor the auth flow."';
-export const INPUT_FRAME_HINT_KEYBINDS = "CTRL+/ · COMMANDS";
+/**
+ * Palette keybind split into its accent (keys) and dim (label) parts so both
+ * consumers can paint it without re-parsing the joined form.
+ */
+export const INPUT_FRAME_HINT_KEYS = "CTRL+/";
+export const INPUT_FRAME_HINT_LABEL = "COMMANDS";
+export const INPUT_FRAME_HINT_KEYBINDS = `${INPUT_FRAME_HINT_KEYS} · ${INPUT_FRAME_HINT_LABEL}`;
 
 function visibleLength(text: string): number {
 	return text.replace(ANSI_PATTERN, "").length;
@@ -219,7 +225,7 @@ export function renderInputHints(width: number, options: InputHintsOptions = {})
 	const accent = fg(activeThemeColors().accent);
 
 	// Build the colored right-hand string: CTRL+/ in accent, label in dim.
-	const rightColored = suppressKeybinds ? "" : `${accent}CTRL+/${RESET} ${dimFg}· COMMANDS${RESET}`;
+	const rightColored = suppressKeybinds ? "" : `${accent}${INPUT_FRAME_HINT_KEYS}${RESET} ${dimFg}· ${INPUT_FRAME_HINT_LABEL}${RESET}`;
 	const colorLeftHint = (text: string): string => {
 		if (options.leftHintStyle === "model-thinking") {
 			const prefix = "╰─ ";

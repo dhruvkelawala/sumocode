@@ -10,6 +10,7 @@
 import { writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { COMMAND_HINT_HTML, COMMAND_HINT_LEN } from "./lib/bible-command-hint.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const out = resolve(repoRoot, "docs", "ui", "bible");
@@ -402,10 +403,8 @@ const PAD = 1; // 1-char l/r padding for chrome rows
 // context and the palette keybind moved into the footer right zone (#559).
 // Portrait keeps the row: project + branch left, keybind right-aligned.
 function buildHintRow(cols) {
-	const rightHTML =
-		`<span class="fg-accent">CTRL+/</span>` +
-		`<span class="fg-dim"> \u00b7 COMMANDS</span>`;
-	const rightLen = 17;
+	const rightHTML = COMMAND_HINT_HTML;
+	const rightLen = COMMAND_HINT_LEN;
 
 	const leftHTML = `<span class="fg-fg">sumocode</span> <span class="fg-dim">(main)</span>`;
 	const leftLen = visibleLen(leftHTML);
@@ -425,8 +424,8 @@ function buildFooterRow(cols, sidebarVisible, options = {}) {
 	// Landscape right zone is the palette keybind (#559): the sidebar already
 	// carries context tokens and cost there.
 	if (sidebarVisible) {
-		const rightHTML = `<span class="fg-accent">CTRL+/</span><span class="fg-dim"> \u00b7 COMMANDS</span>`;
-		const rightLen = 17;
+		const rightHTML = COMMAND_HINT_HTML;
+		const rightLen = COMMAND_HINT_LEN;
 		const middle = cols - PAD * 2 - leftLen - rightLen;
 		return rep(" ", PAD) + left + rep(" ", Math.max(1, middle)) + rightHTML + rep(" ", PAD);
 	}

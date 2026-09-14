@@ -4,7 +4,7 @@ import { basename } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, ReadonlyFooterDataProvider } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { INPUT_FRAME_HINT_KEYBINDS } from "./cathedral/input-frame.js";
+import { INPUT_FRAME_HINT_KEYS, INPUT_FRAME_HINT_LABEL } from "./cathedral/input-frame.js";
 
 /**
  * Pi's thinking-level union, aliased from the canonical `@earendil-works/pi-ai`
@@ -63,9 +63,6 @@ export type FooterSnapshot = {
 	 */
 	rightZone?: "tokens-cost" | "command-hint";
 };
-
-/** `CTRL+/ · COMMANDS` split into its accent and dim segments for the footer right zone. */
-const [COMMAND_HINT_KEYS, COMMAND_HINT_LABEL] = INPUT_FRAME_HINT_KEYBINDS.split(" · ");
 
 /**
  * SumoCode version line for splash state (Q5.2 from CATHEDRAL_DECISIONS.md).
@@ -196,9 +193,8 @@ function formatFooterLineInner(snapshot: FooterSnapshot, width: number): string 
 	// The command-hint zone (landscape RPC shell) takes the palette keybind that
 	// used to live in the collapsed hint row; if it cannot fit it degrades to an
 	// empty zone — tokens and cost never leak back, the sidebar owns them.
-	const commandHint = `${colorHex(COMMAND_HINT_KEYS, activeThemeColors().accent)} ${colorHex(`· ${COMMAND_HINT_LABEL}`, activeThemeColors().foregroundDim)}`;
 	const rightCandidates: string[][] = snapshot.rightZone === "command-hint"
-		? [[commandHint], []]
+		? [[`${colorHex(INPUT_FRAME_HINT_KEYS, activeThemeColors().accent)} ${colorHex(`· ${INPUT_FRAME_HINT_LABEL}`, activeThemeColors().foregroundDim)}`], []]
 		: [
 			[tokens, cost],
 			[tokens],

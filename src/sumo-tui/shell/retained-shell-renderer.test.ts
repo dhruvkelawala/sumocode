@@ -1,14 +1,15 @@
-import { CURSOR_MARKER } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, resetCapabilitiesCache, setCapabilities } from "@earendil-works/pi-tui";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAttrs } from "../render/cell.js";
 import { loadYoga, type Yoga } from "../layout/yoga.js";
 import type { TerminalPatch } from "../runtime/terminal-controller.js";
 import { ChatPager } from "../widgets/chat-pager.js";
 import type {
 	RetainedShellRendererOptions,
+	ShellOverlayEntry,
 	ShellRenderable,
 	ShellSelectionPass,
 	ShellTerminalSessionOwner,
@@ -81,9 +82,16 @@ class FakeShellTerminal implements ShellTerminalSessionOwner {
 	public patches: TerminalPatch[] = [];
 	/** One entry per writeFramePatches call (doubles as a call counter). */
 	public cursors: ({ row: number; col: number } | null)[] = [];
-	public writeFramePatches(patches: readonly TerminalPatch[], cursor: { row: number; col: number } | null): void {
+	/** Kitty graphics bytes paired with each synchronized frame. */
+	public graphics: string[] = [];
+	public writeFramePatches(
+		patches: readonly TerminalPatch[],
+		cursor: { row: number; col: number } | null,
+		graphics = "",
+	): void {
 		this.patches = [...patches];
 		this.cursors.push(cursor);
+		this.graphics.push(graphics);
 	}
 }
 
@@ -96,6 +104,25 @@ interface Harness {
 
 const COLS = 30;
 const ROWS = 14;
+
+function pngData(width = 90, height = 72): string {
+	const bytes = Buffer.alloc(24);
+	Buffer.from([0x89, 0x50, 0x4e, 0x47]).copy(bytes);
+	bytes.writeUInt32BE(width, 16);
+	bytes.writeUInt32BE(height, 20);
+	return bytes.toString("base64");
+}
+
+function addImage(chat: ChatPager): void {
+	chat.addViewModel({
+		id: "image-message",
+		role: "user",
+		displayName: "USER",
+		blocks: [{ type: "image", data: pngData(), mime: "image/png", filename: "fixture.png" }],
+	});
+}
+
+afterEach(() => resetCapabilitiesCache());
 
 async function createHarness(
 	overrides: Partial<RetainedShellRendererOptions> = {},
@@ -172,6 +199,110 @@ describe("RetainedShellRenderer", () => {
 			expect(renderer.getLastFrame()?.getDimensions()).toEqual({ rows: ROWS, cols: COLS });
 
 			renderer.dispose();
+		});
+	});
+
+	describe("kitty graphics", () => {
+		it("turns the APC-stripped blank chat rows into one transmission then placement-only frames", async () => {
+			setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+			const { chat, terminal, renderer } = await createHarness();
+			try {
+				addImage(chat);
+				renderer.render();
+
+				const first = terminal.graphics.at(-1) ?? "";
+				expect(renderer.getLastFrame()?.toPlainRow(1)).not.toContain("\x1b_G");
+				expect(first.match(/\x1b_Ga=T/g)).toHaveLength(1);
+				const imageId = /(?:^|,)i=(\d+)/.exec(first)?.[1];
+				expect(imageId).toBeDefined();
+
+				renderer.render();
+
+				const second = terminal.graphics.at(-1) ?? "";
+				expect(second).not.toContain("a=T");
+				expect(second).toContain(`a=p,q=2,i=${imageId}`);
+				expect(second).toMatch(/\x1b\[\d+;3H\x1b_G/);
+			} finally {
+				renderer.dispose();
+			}
+		});
+
+		it("crops placements crossing both chat viewport edges", async () => {
+			setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+			const { chat, terminal, renderer } = await createHarness();
+			try {
+				addImage(chat);
+				renderer.render();
+				expect(terminal.graphics.at(-1)).toMatch(/y=[1-9]\d*,h=\d+,r=\d+/);
+
+				chat.scrollBox.scrollTo(0);
+				renderer.render();
+				expect(terminal.graphics.at(-1)).toMatch(/a=p[^;]*y=0,h=\d+,r=\d+/);
+			} finally {
+				renderer.dispose();
+			}
+		});
+
+		it("deletes an image that scrolls out and retransmits it when it returns", async () => {
+			setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+			const { chat, terminal, renderer } = await createHarness();
+			try {
+				addImage(chat);
+				renderer.render();
+				const imageId = /(?:^|,)i=(\d+)/.exec(terminal.graphics.at(-1) ?? "")?.[1];
+				expect(imageId).toBeDefined();
+
+				chat.addMessage("user", "later message");
+				renderer.render();
+				expect(terminal.graphics.at(-1)).toContain(`a=d,d=I,i=${imageId}`);
+
+				chat.scrollBox.scrollTo(0);
+				renderer.render();
+				expect(terminal.graphics.at(-1)).toContain(`a=T,f=100,q=2,C=1`);
+				expect(terminal.graphics.at(-1)).toContain(`i=${imageId}`);
+			} finally {
+				renderer.dispose();
+			}
+		});
+
+		it("deletes placements under overlays and restores them when the overlay closes", async () => {
+			setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+			const overlays: ShellOverlayEntry[] = [];
+			const { chat, terminal, renderer } = await createHarness({ overlayHost: { overlayStack: overlays } });
+			try {
+				addImage(chat);
+				renderer.render();
+				const imageId = /(?:^|,)i=(\d+)/.exec(terminal.graphics.at(-1) ?? "")?.[1];
+				expect(imageId).toBeDefined();
+
+				overlays.push({ component: new StaticComponent(["MODAL"]), options: { width: 10 } });
+				renderer.render();
+				expect(terminal.graphics.at(-1)).toContain(`a=d,d=I,i=${imageId}`);
+
+				overlays.length = 0;
+				renderer.render();
+				expect(terminal.graphics.at(-1)).toContain("a=T");
+			} finally {
+				renderer.dispose();
+			}
+		});
+
+		it("deletes live placements on transcript reset and renderer disposal", async () => {
+			setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+			const { chat, terminal, renderer } = await createHarness();
+			addImage(chat);
+			renderer.render();
+			const firstId = /(?:^|,)i=(\d+)/.exec(terminal.graphics.at(-1) ?? "")?.[1];
+
+			chat.clearMessages();
+			renderer.render();
+			expect(terminal.graphics.at(-1)).toContain(`a=d,d=I,i=${firstId}`);
+
+			addImage(chat);
+			renderer.render();
+			const secondId = /(?:^|,)i=(\d+)/.exec(terminal.graphics.at(-1) ?? "")?.[1];
+			renderer.dispose();
+			expect(terminal.graphics.at(-1)).toContain(`a=d,d=I,i=${secondId}`);
 		});
 	});
 

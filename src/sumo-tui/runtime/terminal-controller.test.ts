@@ -186,6 +186,21 @@ describe("TerminalSessionOwner", () => {
 		expect(output.writes).toEqual(["\x1b[?2026h\x1b[2;1H\x1b[Khello\x1b[3;5H\x1b[?25h\x1b[?2026l"]);
 	});
 
+	it("writes graphics after cell patches inside the same synchronized frame", () => {
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		terminal.writeFramePatches(
+			[{ row: 1, ansi: "cells" }],
+			{ row: 2, col: 4 },
+			"\x1b[2;3H\x1b_Ga=T,f=100,q=2,C=1,i=7;pixels\x1b\\",
+		);
+
+		expect(output.writes).toEqual([
+			"\x1b[?2026h\x1b[2;1H\x1b[Kcells\x1b[2;3H\x1b_Ga=T,f=100,q=2,C=1,i=7;pixels\x1b\\\x1b[3;5H\x1b[?25h\x1b[?2026l",
+		]);
+	});
+
 	it("drops writes after exitTerminal so post-cleanup renders cannot leak into main screen", () => {
 		const output = outputStub();
 		const terminal = new TerminalSessionOwner({ output });

@@ -24,6 +24,7 @@ import {
 	createRpcExitHandler,
 	createRpcHostInterruptHandler,
 	createRpcImageDraftSubmitter,
+	resolveRpcImageProtocol,
 	createRpcQueueRestoreTransaction,
 	createRpcTreeNavigationRetryScheduler,
 	createThinkingCycleHandler,
@@ -132,6 +133,18 @@ function interruptDeps(overrides: Partial<RpcHostInterruptDependencies> = {}): R
 
 const CTRL_C = "";
 const ESCAPE = "";
+
+describe("RPC inline image capability", () => {
+	it.each([
+		["Herdr", { HERDR_ENV: "1" }, null, "kitty"],
+		["Pi Kitty override", { PI_IMAGE_PROTOCOL: "kitty" }, "kitty", "kitty"],
+		["explicit opt-out", { HERDR_ENV: "1", SUMOCODE_NO_INLINE_IMAGES: "1" }, "kitty", null],
+		["unknown terminal", {}, null, null],
+		["iTerm2", {}, "iterm2", null],
+	] as const)("selects the expected protocol for %s", (_name, env, detected, expected) => {
+		expect(resolveRpcImageProtocol(env, detected)).toBe(expected);
+	});
+});
 
 describe("Pi-native direct bash submission", () => {
 	function bashEditor(text: string) {

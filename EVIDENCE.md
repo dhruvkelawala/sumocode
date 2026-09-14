@@ -12,7 +12,7 @@ How to prove a change works in this repository. Agents read this before writing 
 | CLI launcher | `bin/sumocode.sh`, `src/cli/` | `./bin/sumocode.sh <subcommand>` | manual: run the command | transcript `.txt` |
 | Classic Pi extension (non-TTY / `--print` / `--mode rpc`) | `src/extension.ts`, `src/commands/` | `pi -e . --print "<prompt>"` | manual: run the command | transcript `.txt` |
 | Runtime diagnostics | `SUMO_TUI_DIAG_FILE` JSONL | `./bin/sumocode.sh -d .` | manual: reproduce the interaction in the TUI | `sumocode diag` summary `.txt` |
-| Visual Bible (design targets) | `docs/ui/bible/*.html` | `pnpm render:bible` | harness | `docs/ui/bible/renders/*.png` (committed by the gen script; PR diff is the evidence) |
+| Visual Bible (design targets) | `docs/ui/bible/*.html` | `pnpm render:bible` | harness | rendered `docs/ui/bible/renders/<target>.png` copied to `.evidence/` (renders are gitignored) |
 
 ## Launch
 
@@ -98,7 +98,14 @@ Use this for input-recovery, resize, paste, and signal work where the JSONL trac
 
 ### Visual Bible
 
-`pnpm render:bible` regenerates `docs/ui/bible/renders/*.png`; commit the PNG diff. The PR's "Files changed" render of the PNG is the evidence; no separate capture.
+`docs/ui/bible/renders/` is gitignored; never commit under it. The committed `docs/ui/bible/*.html` diff is the source change; the rendered PNG is the evidence:
+
+```bash
+pnpm render:bible
+cp docs/ui/bible/renders/<target>.png .evidence/09-<slug>-bible-AFTER.png
+```
+
+CI's `visual-bible` workflow also uploads every render as the `cathedral-visual-bible-static` artifact; link that run when a local Chromium is unavailable.
 
 ## Publish
 

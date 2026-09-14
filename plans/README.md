@@ -352,7 +352,7 @@ Pi child boot (~2.3s) which 063 investigates.
 
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
-| 064 | [Inline images in the retained renderer](064-inline-images-in-retained-renderer.md) | P2 | L | — (coordinate with renderer perf work) | TODO |
+| 064 | [Inline images in the retained renderer](064-inline-images-in-retained-renderer.md) | P2 | L | — (coordinate with renderer perf work) | DONE — `f12ef947` refreshed the plan; `e3da03af` added retained-renderer, terminal-envelope, lifecycle, crop, and capability characterization; `2be06588` added the CellBuffer placement side channel, synchronized Kitty graphics pass, capability gate, and cleanup lifecycle. Kitty transmits once per visible lifetime, re-places with `a=p`, crops at chat edges, and deletes on scroll-out, overlays, transcript reset/session replacement, reload/dispose; iTerm2/unknown/explicit opt-out retain the image chip. |
 
 Context: the retained CellBuffer renderer strips Kitty/iTerm2 graphics escapes, so
 images can't render inline (verified empirically — blank rows, no APC in patches).

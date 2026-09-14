@@ -795,10 +795,6 @@ export function handleRpcMessageFollowUp(deps: RpcMessageFollowUpDependencies): 
 	}, deps.notifications);
 }
 
-export function toggleRpcPromptDelivery(mode: RpcPromptDeliveryMode): RpcPromptDeliveryMode {
-	return mode === "steer" ? "followUp" : "steer";
-}
-
 export interface RpcQueueRestoreDependencies {
 	readonly editor: Pick<RpcHostEditorController, "getText" | "setText">;
 	readonly scheduler: Pick<RpcPromptScheduler, "restoreAll">;
@@ -1569,10 +1565,9 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 			submitDirectBash,
 			submitImageDraft,
 		});
-	const handleMessageToggleDelivery = (): void => {
-		const current = stateStore.getSnapshot().promptDeliveryMode ?? "steer";
-		pushState(stateStore.setPromptDeliveryMode(toggleRpcPromptDelivery(current)));
-	};
+	// The mode change (state + its transient hint-row notice) lives with the
+	// `/queue` command so the keybinding and the command cannot drift apart.
+	const handleMessageToggleDelivery = (): void => actions!.toggleQueueDeliveryMode();
 	let queueOwnerGeneration = 0;
 	let clearAndRestoreQueue: (abortAfterRestore?: boolean) => Promise<void> = async () => undefined;
 	const handleMessageDequeue = (): Promise<void> => notifyOnError(() => clearAndRestoreQueue(), notifications);

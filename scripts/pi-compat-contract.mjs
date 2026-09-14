@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 export const EXPECTED_HOST_COMMANDS = Object.freeze([
-	"settings", "login", "model", "thinking", "theme", "sumo:theme", "compact", "new", "clone", "fork", "sessions", "resume",
+	"settings", "login", "model", "thinking", "queue", "theme", "sumo:theme", "compact", "new", "clone", "fork", "sessions", "resume",
 	"tree", "session", "name", "copy", "export", "quit", "sumo:memory", "sumo:theme-check", "sumo:palette", "hotkeys", "lovely-web", "changelog",
 ]);
 const EXPECTED_PI_BUILTIN_COMMANDS = Object.freeze([
@@ -13,7 +13,7 @@ const EXPECTED_PI_BUILTIN_COMMANDS = Object.freeze([
 const PI_MIRRORED_HOST_COMMANDS = Object.freeze([
 	"settings", "login", "model", "thinking", "compact", "new", "clone", "fork", "resume", "tree", "session", "name", "copy", "export", "quit", "hotkeys", "changelog",
 ]);
-const HOST_OWNED_COMMANDS = Object.freeze(["theme", "sumo:theme", "sessions", "sumo:memory", "sumo:theme-check", "sumo:palette", "lovely-web"]);
+const HOST_OWNED_COMMANDS = Object.freeze(["theme", "sumo:theme", "sessions", "sumo:memory", "sumo:theme-check", "sumo:palette", "lovely-web", "queue"]);
 const EXPECTED_ROUTED_CHILD_COMMANDS = Object.freeze(["mcp", "mcp-auth"]);
 export const EXPECTED_SUMOCODE_EXTENSION_COMMANDS = Object.freeze([
 	"login", "sumo:login-cancel", "sumo:rpc-tree-navigate", "fast", "answer", "reload", "sumo:roles", "accounts", "sumo:cursor", "sumo:diff",

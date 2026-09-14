@@ -55,7 +55,8 @@ import type { MermaidRenderingMode } from "../transcript/mermaid.js";
 import { listAllSessionsForSession, listProjectSessions, type SessionListInfo } from "./session-reader.js";
 import { buildSessionTreeFromEntries, currentTreeSelection, entryTimestampsFromEntries, flattenSessionTree, formatRelativeTime, sessionExcerpt, treeNodeSummary, treeRowTimestamp } from "./session-tree.js";
 import { readAuthoritativeSessionSnapshot } from "./session-snapshot.js";
-import type { RpcHostChromeState, RpcHostStateStore } from "./state.js";
+import { RPC_PROMPT_DELIVERY_LABELS, rpcPromptDeliveryModeFrom, toggleRpcPromptDelivery, type RpcHostChromeState, type RpcHostStateStore } from "./state.js";
+import type { RpcPromptDeliveryMode } from "./prompt-scheduler.js";
 
 export const RPC_HOST_COMMAND_PALETTE_INPUT = "\u001f";
 
@@ -148,6 +149,7 @@ export const RPC_HOST_SLASH_COMMANDS: readonly RpcHostSlashCommand[] = Object.fr
 	{ name: "login", description: "Configure provider authentication" },
 	{ name: "model", description: "Select model or set provider/model" },
 	{ name: "thinking", description: "Select thinking level" },
+	{ name: "queue", description: "Set prompt delivery: steer or follow-up" },
 	{ name: "theme", description: "Select SumoCode theme" },
 	{ name: "sumo:theme", description: "Select SumoCode theme" },
 	{ name: "compact", description: "Manually compact the session context" },
@@ -633,6 +635,9 @@ export class RpcHostActions {
 				if (args.trim()) await this.setThinkingFromText(args.trim());
 				else await this.openThinkingSelector();
 				return true;
+			case "/queue":
+				this.handleQueueMode(args);
+				return true;
 			case "/theme":
 			case "/sumo:theme":
 				if (args.trim()) this.setThemeFromText(args.trim());
@@ -714,6 +719,39 @@ export class RpcHostActions {
 				}
 				return false;
 		}
+	}
+
+	/**
+	 * Select how a busy-turn submission is delivered: `steer` (default) injects
+	 * it into the running turn, `follow-up` queues a new turn. Session-scoped:
+	 * the selection lives in chrome state only and is never persisted.
+	 */
+	public toggleQueueDeliveryMode(): void {
+		this.setQueueDeliveryMode(toggleRpcPromptDelivery(this.currentQueueDeliveryMode()));
+	}
+
+	private currentQueueDeliveryMode(): RpcPromptDeliveryMode {
+		return this.stateStore.getSnapshot().promptDeliveryMode ?? "steer";
+	}
+
+	private setQueueDeliveryMode(mode: RpcPromptDeliveryMode): void {
+		this.onStateChange(this.stateStore.setPromptDeliveryMode(mode));
+		// Transient (the notification centre expires it): the mode is worth naming
+		// at the moment it changes, not in every hint row afterwards.
+		notify(this.notifications, `Queue mode: ${RPC_PROMPT_DELIVERY_LABELS[mode]}`);
+	}
+
+	private handleQueueMode(args: string): void {
+		const requested = rpcPromptDeliveryModeFrom(args);
+		if (requested !== undefined) {
+			this.setQueueDeliveryMode(requested);
+			return;
+		}
+		if (args.trim()) {
+			notify(this.notifications, "queue mode takes steer or follow-up", "warning");
+			return;
+		}
+		this.toggleQueueDeliveryMode();
 	}
 
 	private async handleMcpCommand(args: string): Promise<void> {

@@ -97,7 +97,6 @@ export function rpcVisualFixtureFromEnv(env: NodeJS.ProcessEnv): RpcVisualFixtur
 		? {
 			...COMPLETED_ACTIVE_STATE,
 			isStreaming: true,
-			promptDeliveryMode: "followUp" as const,
 			steeringMessages: ["steer after the current tool"],
 			followUpMessages: ["run verification when settled"],
 			pendingMessageCount: 2,

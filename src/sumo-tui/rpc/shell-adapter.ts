@@ -789,7 +789,6 @@ function renderActiveHint(state: RpcHostChromeState, width: number, sidebarVisib
 	// visible even when the sidebar owns the project/branch context.
 	const leftHint = notice ?? (sidebarVisible ? undefined : branch ? `${project} (${branch})` : project);
 	const hint = renderInputHints(innerWidth, {
-		deliveryMode: state.promptDeliveryMode ?? "steer",
 		leftHint,
 		leftHintOverflow: "truncate",
 		leftHintStyle: notice !== undefined ? "dim" : "project-branch",

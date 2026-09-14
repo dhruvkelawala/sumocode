@@ -128,7 +128,9 @@ describe("RPC Pi-native prompt queues", () => {
 		await app.waitForOutput("MEDITATING", 5_000);
 		app.sendInput("draft B");
 		app.sendInput(SUPER_ENTER);
-		await waitForScreen(app, (screen) => screen.text.includes("FOLLOW-UP") && screen.text.includes("draft B"), { cols: COLS, rows: ROWS, timeoutMs: 5_000 });
+		// The selected mode is painted once, transiently, instead of living as a
+		// permanent badge in the hint row. The draft must survive the toggle.
+		await waitForScreen(app, (screen) => screen.text.includes("Queue mode: follow-up") && screen.text.includes("draft B"), { cols: COLS, rows: ROWS, timeoutMs: 5_000 });
 		expect((await commands(booted.logPath)).filter((item) => item.type === "prompt")).toHaveLength(1);
 
 		app.sendInput(ENTER);

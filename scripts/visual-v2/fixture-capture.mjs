@@ -465,11 +465,12 @@ async function renderFixtureScene(scenario, fixture) {
 	const topRows = ["", topBarLine, ""];
 
 	const inputRows = inputFrame.renderInputFrame("", cols, { promptColor: "accent" });
-	const deliveryMode = scenario.fixture?.id === "native-queues-followup" ? "followUp" : undefined;
-	// Portrait hint already includes its own breathing blank row.
+	// Portrait hint already includes its own breathing blank row. The delivery
+	// selection is not painted here: it is named once, transiently, when it
+	// changes (see `RpcHostActions.setQueueDeliveryMode`).
 	const hintRow = portrait
-		? ` ${inputFrame.renderInputHints(cols - 2, { deliveryMode, leftHint: "sumocode (main)", leftHintStyle: "project-branch" })} `
-		: inputFrame.renderInputHints(cols, { deliveryMode });
+		? ` ${inputFrame.renderInputHints(cols - 2, { leftHint: "sumocode (main)", leftHintStyle: "project-branch" })} `
+		: inputFrame.renderInputHints(cols);
 	const footerRows = footer.renderFooterBlock({
 		cwd: "/Users/dev/projects/sumocode",
 		branch: "main",

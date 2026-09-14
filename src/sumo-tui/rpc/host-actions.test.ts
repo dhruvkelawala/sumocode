@@ -568,6 +568,39 @@ describe("RpcHostActions", () => {
 		expect(notifications).toEqual([]);
 	});
 
+	it("changes the session queue delivery mode through /queue", async () => {
+		const { actions, notifications, stateChanges } = setup();
+
+		// Bare /queue toggles from the session default (steer).
+		await expect(actions.handleSubmittedText("/queue")).resolves.toBe(true);
+		expect(stateChanges.at(-1)?.promptDeliveryMode).toBe("followUp");
+		await expect(actions.handleSubmittedText("/queue steer")).resolves.toBe(true);
+		expect(stateChanges.at(-1)?.promptDeliveryMode).toBe("steer");
+		// Pi spells the id `followUp`; the command accepts the label spellings.
+		await expect(actions.handleSubmittedText("/queue follow-up")).resolves.toBe(true);
+		expect(stateChanges.at(-1)?.promptDeliveryMode).toBe("followUp");
+
+		// The selection is named once per change — never repainted in the hint row.
+		expect(notifications).toEqual([
+			{ message: "Queue mode: follow-up", level: "info" },
+			{ message: "Queue mode: steer", level: "info" },
+			{ message: "Queue mode: follow-up", level: "info" },
+		]);
+
+		await expect(actions.handleSubmittedText("/queue sideways")).resolves.toBe(true);
+		expect(stateChanges).toHaveLength(3);
+		expect(notifications.at(-1)).toEqual({ message: "queue mode takes steer or follow-up", level: "warning" });
+	});
+
+	it("routes the delivery-toggle keybinding through the same /queue path", () => {
+		const { actions, notifications, stateChanges } = setup();
+
+		actions.toggleQueueDeliveryMode();
+
+		expect(stateChanges.at(-1)?.promptDeliveryMode).toBe("followUp");
+		expect(notifications).toEqual([{ message: "Queue mode: follow-up", level: "info" }]);
+	});
+
 	it("persists Mermaid mode through RPC settings and requests an immediate repaint", async () => {
 		const changes: string[] = [];
 		let renders = 0;

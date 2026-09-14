@@ -13,7 +13,7 @@ import { RpcChildExitError, SumoRpcClient } from "./client.js";
 import { RpcHostOverlayManager } from "./host-overlays.js";
 import { RpcHostLifecycle } from "./host-lifecycle.js";
 import { RpcHostControls, type RpcAvailableModel, type RpcModelOption, type RpcThinkingLevel } from "./controls.js";
-import { RpcHostStateStore } from "./state.js";
+import { RpcHostStateStore, toggleRpcPromptDelivery } from "./state.js";
 import { DirectBashController, type DirectBashResult } from "./direct-bash.js";
 import {
 	activitySnapshotMatchesSession,
@@ -38,7 +38,6 @@ import {
 	submitInitialPromptFromFile,
 	submitRpcDirectBash,
 	submitRpcImageDraft,
-	toggleRpcPromptDelivery,
 	main,
 	writeExitCodeFile,
 	type RpcHostExitDependencies,

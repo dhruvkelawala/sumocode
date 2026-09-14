@@ -1,6 +1,26 @@
 import type { AgentSessionEvent, RpcSessionState, SessionStats } from "@earendil-works/pi-coding-agent";
 import type { CompactionReason } from "../../compaction-state.js";
+import type { RpcPromptDeliveryMode } from "./prompt-scheduler.js";
 import { isRpcThinkingLevel, type RpcThinkingLevel } from "./thinking-level.js";
+
+/** Hint-row copy for a delivery selection (`followUp` is Pi's id, not its label). */
+export const RPC_PROMPT_DELIVERY_LABELS = { steer: "steer", followUp: "follow-up" } as const satisfies Record<RpcPromptDeliveryMode, string>;
+
+/** Flip the steering selection between Pi's two `deliverAs` values. */
+export function toggleRpcPromptDelivery(mode: RpcPromptDeliveryMode): RpcPromptDeliveryMode {
+	return mode === "steer" ? "followUp" : "steer";
+}
+
+/** Parse a `/queue` argument; undefined when the text names no known mode. */
+export function rpcPromptDeliveryModeFrom(text: string): RpcPromptDeliveryMode | undefined {
+	switch (text.trim().toLowerCase()) {
+		case "steer": return "steer";
+		case "follow-up":
+		case "follow_up":
+		case "followup": return "followUp";
+		default: return undefined;
+	}
+}
 
 export interface RpcHostChromeState {
 	readonly sessionId?: string;
@@ -27,7 +47,7 @@ export interface RpcHostChromeState {
 	readonly compactionReason?: CompactionReason;
 	readonly messageCount: number;
 	readonly pendingMessageCount: number;
-	readonly promptDeliveryMode?: "steer" | "followUp";
+	readonly promptDeliveryMode?: RpcPromptDeliveryMode;
 	readonly hasMessages: boolean;
 	readonly gitBranch?: string;
 	readonly lastEventType?: string;
@@ -260,7 +280,7 @@ export class RpcHostStateStore {
 		return this.getSnapshot();
 	}
 
-	public setPromptDeliveryMode(promptDeliveryMode: "steer" | "followUp"): RpcHostChromeState {
+	public setPromptDeliveryMode(promptDeliveryMode: RpcPromptDeliveryMode): RpcHostChromeState {
 		this.state = { ...this.state, promptDeliveryMode };
 		return this.getSnapshot();
 	}

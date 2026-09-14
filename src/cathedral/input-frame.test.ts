@@ -157,21 +157,20 @@ describe("renderInputHints", () => {
 		expect(line).toContain("\u001b[38;2;139;122;99m");
 	});
 
-	it("keeps the delivery badge ahead of project context", () => {
-		const steer = stripAnsi(renderInputHints(60, { deliveryMode: "steer", leftHint: "sumocode (main)", leftHintOverflow: "truncate" }));
-		const followUp = stripAnsi(renderInputHints(60, { deliveryMode: "followUp", leftHint: "sumocode (main)", leftHintOverflow: "truncate" }));
-		expect(steer.indexOf("STEER")).toBeLessThan(steer.indexOf("sumocode"));
-		expect(followUp).toContain("FOLLOW-UP");
-		expect(followUp).toHaveLength(60);
+	it("keeps project context in the left slot — delivery mode is not badge-painted here", () => {
+		const steer = stripAnsi(renderInputHints(60, { leftHint: "sumocode (main)", leftHintOverflow: "truncate" }));
+		expect(steer).not.toContain("STEER");
+		expect(steer).not.toContain("FOLLOW-UP");
+		expect(steer.startsWith("sumocode")).toBe(true);
+		expect(steer).toHaveLength(60);
 	});
 
-	it("preserves the delivery badge when project context truncates at portrait width", () => {
+	it("truncates project context at portrait width", () => {
 		const line = stripAnsi(renderInputHints(60, {
-			deliveryMode: "steer",
 			leftHint: "sumocode (feat/a-very-long-branch-name-that-cannot-fit)",
 			leftHintOverflow: "truncate",
 		}));
-		expect(line).toContain("STEER");
+		expect(line.startsWith("sumocode")).toBe(true);
 		expect(line).toContain("…");
 		expect(line).toHaveLength(60);
 	});

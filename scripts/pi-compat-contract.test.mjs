@@ -76,7 +76,7 @@ function validInput() {
 
 describe("Pi compatibility contract", () => {
 	it("accepts the current ownership-separated contract with prompt/skill noise", () => {
-		expect(assertCompatibilityContract(validInput())).toEqual({ version: "0.84.4", hostCommands: 24, extensionCommands: 24 });
+		expect(assertCompatibilityContract(validInput())).toEqual({ version: "0.84.4", hostCommands: 25, extensionCommands: 24 });
 	});
 
 	it("accepts the current repository and installed Pi contract surfaces", () => {
@@ -90,7 +90,7 @@ describe("Pi compatibility contract", () => {
 		input.hostActionsSource = readFileSync("src/sumo-tui/rpc/host-actions.ts", "utf8");
 		input.extensionSource = readFileSync("src/extension.ts", "utf8");
 		input.interactionRegistrySource = readFileSync("src/interaction-registry.ts", "utf8");
-		expect(assertCompatibilityContract(input)).toMatchObject({ hostCommands: 24, extensionCommands: 24 });
+		expect(assertCompatibilityContract(input)).toMatchObject({ hostCommands: 25, extensionCommands: 24 });
 	});
 
 	it("rejects misaligned Pi package versions", () => {

@@ -38,13 +38,15 @@ export async function loadRpcImages(
 		const expected = mimeForExtension(extname(path));
 		if (!detected || !expected) throw new RpcImageLoadError(attachment, "file does not contain a supported image");
 		if (detected !== expected) throw new RpcImageLoadError(attachment, `file content is ${detected}, not ${expected}`);
-		let data = bytes.toString("base64");
+		let data: string;
 		let mimeType = detected;
 		if (bytes.byteLength > MAX_RPC_IMAGE_BYTES) {
 			const resized = await resizeImage(bytes, detected, { maxBytes: MAX_RPC_IMAGE_BASE64_BYTES });
 			if (!resized) throw new RpcImageLoadError(attachment, `image could not be resized below ${MAX_RPC_IMAGE_BYTES} byte limit`);
 			data = resized.data;
 			mimeType = resized.mimeType;
+		} else {
+			data = bytes.toString("base64");
 		}
 		totalBytes += Buffer.byteLength(data, "base64");
 		if (totalBytes > MAX_RPC_IMAGE_TOTAL_BYTES) {

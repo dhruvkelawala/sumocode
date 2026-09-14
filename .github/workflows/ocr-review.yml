@@ -1,0 +1,120 @@
+# OpenCodeReview — AI code review on every PR (external second opinion).
+#
+# Upstream workflow: https://github.com/alibaba/open-code-review/blob/main/examples/github_actions/ocr-review.yml
+#
+# Required secrets/vars (Settings -> Secrets and variables -> Actions):
+#   secret    OCR_LLM_URL            LLM API endpoint
+#   secret    OCR_LLM_AUTH_TOKEN     LLM auth token (mapped to OCR_LLM_TOKEN)
+#   variable  OCR_LLM_MODEL          model name (glm-5.3)
+#   variable  OCR_LLM_USE_ANTHROPIC  'false' (OpenAI-compatible endpoint)
+#
+# Re-run a review by commenting '/open-code-review' on the PR
+# (MEMBER/OWNER/COLLABORATOR only — bot comments are ignored).
+
+name: OpenCodeReview PR Review
+
+# Conditional concurrency group (mirrors upstream): matching events share a
+# per-PR group so a fresh review cancels a stale one; unrelated comments land
+# in a unique noop-<run_id> group and are skipped instantly.
+concurrency:
+  group: >-
+    ${{
+      (
+        github.event_name == 'pull_request_target'
+        || (
+          github.event_name == 'issue_comment'
+          && github.event.issue.pull_request
+          && github.event.comment.user.type != 'Bot'
+          && (
+            github.event.comment.author_association == 'MEMBER'
+            || github.event.comment.author_association == 'OWNER'
+            || github.event.comment.author_association == 'COLLABORATOR'
+          )
+          && (
+            startsWith(github.event.comment.body, '/open-code-review')
+            || startsWith(github.event.comment.body, '@open-code-review')
+          )
+        )
+      )
+      && format('ocr-{0}', github.event.pull_request.number || github.event.issue.number)
+      || format('noop-{0}', github.run_id)
+    }}
+  cancel-in-progress: true
+
+on:
+  # pull_request_target keeps secrets available; safe here because the action
+  # only reads the diff and never executes PR code.
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  code-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # PR events run; issue_comment triggers only for human-authored
+    # /open-code-review or @open-code-review comments.
+    if: |
+      github.event_name == 'pull_request_target'
+      || (
+        github.event_name == 'issue_comment'
+        && github.event.issue.pull_request
+        && github.event.comment.user.type != 'Bot'
+        && (
+          github.event.comment.author_association == 'MEMBER'
+          || github.event.comment.author_association == 'OWNER'
+          || github.event.comment.author_association == 'COLLABORATOR'
+        )
+        && (
+          startsWith(github.event.comment.body, '/open-code-review')
+          || startsWith(github.event.comment.body, '@open-code-review')
+        )
+      )
+    steps:
+      - name: Get PR context
+        id: pr-context
+        if: github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // issue_comment events carry no pull_request payload fields, so
+            // resolve PR base/head here for the comment-trigger path.
+            const prNumber = context.issue.number;
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+            core.setOutput('base_ref', pullRequest.base.ref);
+            core.setOutput('head_sha', pullRequest.head.sha);
+            core.setOutput('title', pullRequest.title);
+
+      - name: Run OpenCodeReview
+        # Pinned to upstream main @ 6e5cd8cf (2026-09-14). Bump the SHA deliberately.
+        uses: alibaba/open-code-review@6e5cd8cf2578768b6c6d1fafa1d14f66801d5f2b # v1.12.1 era
+        with:
+          ocr_version: '1.12.1'
+          llm_url: ${{ secrets.OCR_LLM_URL }}
+          llm_auth_token: ${{ secrets.OCR_LLM_AUTH_TOKEN }}
+          llm_model: ${{ vars.OCR_LLM_MODEL }}
+          llm_use_anthropic: ${{ vars.OCR_LLM_USE_ANTHROPIC }}
+          base_ref: ${{ steps.pr-context.outputs.base_ref }}
+          head_sha: ${{ steps.pr-context.outputs.head_sha }}
+          effort: high
+          # PR title follows conventional commits, so it is high-leverage context.
+          # github.event.pull_request is absent on issue_comment runs — fall back
+          # to the title resolved in Get PR context.
+          background: ${{ github.event.pull_request.title || steps.pr-context.outputs.title }}
+          # glm-5.3 accepts the reasoning_effort request field (OpenAI-compatible).
+          llm_reasoning_effort: low
+          stream_progress: 'true'
+          # One rolling summary comment instead of one per push.
+          sticky_summary: 'true'
+          # On synchronize, only post inline comments for lines not already covered.
+          incremental: 'true'
+          upload_artifacts: 'true'

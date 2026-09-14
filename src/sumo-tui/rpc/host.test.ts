@@ -1794,6 +1794,29 @@ describe("cached pre-hydration cycle (issue 448: cycle keys answer before hydrat
 		expect(controls.setModel).toHaveBeenCalledExactlyOnceWith("anthropic-2", "claude-opus-4");
 	});
 
+	it("does not let a model-cycle no-op replace a pending account change", async () => {
+		const ring: readonly RpcModelOption[] = [
+			{ provider: "anthropic", id: "claude-opus-4", label: "anthropic/claude-opus-4", active: true },
+			{ provider: "anthropic-2", id: "claude-opus-4", label: "anthropic-2/claude-opus-4", active: false },
+		];
+		const { cachedCycle, gate, release, previewModel } = cycleFixture({ models: ring, currentModelLabel: "anthropic/claude-opus-4" });
+		const controls = {
+			getEnabledModels: vi.fn(async () => ring),
+			setModel: vi.fn(async () => asNever({ modelLabel: "anthropic-2/claude-opus-4" })),
+		};
+		// SAFETY: partial fixture; unread members of the target type are unused here.
+		const deps = { controls: controls as never, notifications: { notify: vi.fn() }, cachedCycle };
+
+		createClaudeAccountCycleHandler(deps)();
+		createModelCycleForwardHandler(deps)();
+		expect(previewModel).toHaveBeenCalledExactlyOnceWith(ring[1]);
+
+		release();
+		await gate.whenSettled();
+
+		expect(controls.setModel).toHaveBeenCalledExactlyOnceWith("anthropic-2", "claude-opus-4");
+	});
+
 	it("does not let an account-cycle no-op replace a pending model change", async () => {
 		const ring: readonly RpcModelOption[] = [
 			{ provider: "openai", id: "gpt-5", label: "openai/gpt-5", active: true },

@@ -1134,8 +1134,7 @@ function deferModelCycleStep(
 		}, deps.notifications);
 		return applied;
 	};
-	if (noChangeMessage) cached.gate.runWithFallback(DEFERRED_MODEL_CYCLE_ACTION_KEY, action);
-	else cached.gate.run(DEFERRED_MODEL_CYCLE_ACTION_KEY, async () => { await action(); });
+	cached.gate.runWithFallback(DEFERRED_MODEL_CYCLE_ACTION_KEY, action);
 }
 
 /**
@@ -1170,17 +1169,22 @@ function applyCachedModelStep(
 	cached.previewModel(next);
 	// One latest intent per key: successive pre-hydration presses collapse into
 	// a single live apply of the final choice, which `whenSettled()` still awaits.
-	cached.gate.run(DEFERRED_MODEL_CYCLE_ACTION_KEY, () => notifyOnError(async () => {
-		const live = await deps.controls.getEnabledModels();
-		const target = live.find((model) => model.provider === next.provider && model.id === next.id);
-		if (!target) {
-			// The cached ring drifted: converge on the live list, loudly.
-			deps.notifications.notify(`model ${next.label} is no longer available`, "warning");
-			return;
-		}
-		const state = await deps.controls.setModel(target.provider, target.id);
-		deps.onStateChange?.(state);
-	}, deps.notifications));
+	cached.gate.runWithFallback(DEFERRED_MODEL_CYCLE_ACTION_KEY, async () => {
+		let applied = false;
+		await notifyOnError(async () => {
+			const live = await deps.controls.getEnabledModels();
+			const target = live.find((model) => model.provider === next.provider && model.id === next.id);
+			if (!target) {
+				// The cached ring drifted: converge on the previous actionable intent, loudly.
+				deps.notifications.notify(`model ${next.label} is no longer available`, "warning");
+				return;
+			}
+			const state = await deps.controls.setModel(target.provider, target.id);
+			deps.onStateChange?.(state);
+			applied = true;
+		}, deps.notifications);
+		return applied;
+	});
 	return true;
 }
 

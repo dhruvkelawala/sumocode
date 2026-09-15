@@ -15,6 +15,10 @@ import type { McpServerSnapshot } from "./sumo-tui/cathedral/sidebar-rendering.j
  *   5. `<cwd>/.mcp.json`               — project-local shared MCP config
  *   6. `<cwd>/.pi/mcp.json`            — Pi project override
  *
+ * `<cwd>/.mcp.json` and `<cwd>/.pi/mcp.json` are project-scoped: they merge
+ * ABOVE every global source, so a caller that must bound the resulting roster
+ * has to account for them explicitly rather than by disabling entries.
+ *
  * Files are read in that order; later sources merge over earlier ones by
  * server name. The result is a roster of configured servers, each with a
  * status of `"idle"`. Pi 0.74's `ExtensionAPI` does not expose runtime MCP
@@ -149,18 +153,7 @@ export function setMcpDiagnosticHandler(handler: McpDiagnosticHandler | undefine
  * than adding to it.
  */
 export function loadConfiguredMcpServerDefinitions(opts: LoadMcpServersOptions): readonly ConfiguredMcpServer[] {
-	const merged = new Map<string, McpServerDefinition>();
-	for (const path of resolveMcpConfigCandidates(opts)) {
-		const servers = mcpServersOf(readMcpConfig(path));
-		if (!servers) continue;
-		for (const [name, definition] of Object.entries(servers)) {
-			if (!isPlainObject(definition)) continue;
-			// SAFETY: isPlainObject verified a non-array object; definitions are
-			// re-serialized verbatim and never interpreted by this module.
-			merged.set(name, definition as McpServerDefinition);
-		}
-	}
-	return [...merged].map(([name, definition]) => ({ name, definition }));
+	return mergeMcpServerDefinitions(inspectMcpConfigSources(opts));
 }
 
 export interface McpConfigSource {
@@ -168,7 +161,23 @@ export interface McpConfigSource {
 	/** Project-local sources are resolved against the child's cwd, so they are repo-controlled. */
 	readonly scope: "global" | "project";
 	readonly servers: readonly string[];
+	readonly definitions: readonly ConfiguredMcpServer[];
 	readonly imports: readonly string[];
+}
+
+/**
+ * Merge one read of the chain into the effective roster.
+ *
+ * Callers that must validate and then materialise the same roster take BOTH
+ * from one `inspectMcpConfigSources` result: re-reading would let an edit
+ * between the reads serialize definitions the validation never saw.
+ */
+export function mergeMcpServerDefinitions(sources: readonly McpConfigSource[]): readonly ConfiguredMcpServer[] {
+	const merged = new Map<string, McpServerDefinition>();
+	for (const source of sources) {
+		for (const server of source.definitions) merged.set(server.name, server.definition);
+	}
+	return [...merged].map(([name, definition]) => ({ name, definition }));
 }
 
 /**
@@ -182,10 +191,18 @@ export function inspectMcpConfigSources(opts: LoadMcpServersOptions): readonly M
 	return resolveMcpConfigCandidates(opts).map((path) => {
 		const cfg = readMcpConfig(path);
 		const servers = mcpServersOf(cfg);
+		const definitions: ConfiguredMcpServer[] = [];
+		for (const [name, definition] of Object.entries(servers ?? {})) {
+			if (!isPlainObject(definition)) continue;
+			// SAFETY: isPlainObject verified a non-array object; definitions are
+			// re-serialized verbatim and never interpreted by this module.
+			definitions.push({ name, definition: definition as McpServerDefinition });
+		}
 		return {
 			path,
 			scope: projectPaths.has(path) ? "project" as const : "global" as const,
-			servers: servers ? Object.keys(servers) : [],
+			servers: definitions.map((server) => server.name),
+			definitions,
 			imports: Array.isArray(cfg?.imports) ? cfg.imports.filter((value): value is string => typeof value === "string") : [],
 		};
 	}).filter((source) => source.servers.length > 0 || source.imports.length > 0);

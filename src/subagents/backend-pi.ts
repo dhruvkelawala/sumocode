@@ -613,6 +613,16 @@ export function resolveMcpChildBootstrapEntry(
 }
 
 /**
+ * A re-spawned task resolves a fresh capability, so presence alone would let a
+ * launcher mount a config the descriptor never authorised. Compare identity.
+ */
+function sameMcpGrant(option: McpLaunchCapability | undefined, expected: McpLaunchCapability | null): boolean {
+	if (expected === null) return option === undefined;
+	return option !== undefined && option.configPath === expected.configPath
+		&& option.adapterEntry === expected.adapterEntry && option.guardEntry === expected.guardEntry;
+}
+
+/**
  * Argv that mounts an MCP grant: the SumoCode-owned guard, the adapter that
  * registers `mcp`, and the generated scoped config.
  *
@@ -803,7 +813,7 @@ export const createPiChildSpawner = (
 			if (options.cwd !== expected.cwd || binary !== expected.pi || options.prompt !== data.prompt
 				|| config.modelLabel !== expected.model.label || config.thinkingLevel !== expected.thinking
 				|| JSON.stringify(options.tools ?? BUILT_IN_TOOLS) !== JSON.stringify(expected.tools)
-				|| Boolean(options.mcp) !== Boolean(expected.mcp)
+				|| !sameMcpGrant(options.mcp, expected.mcp)
 				|| Boolean(childModel) !== Boolean(bootstrapEntry)) throw new Error("retained bootstrap options mismatch");
 			hookArgs.push("-e", retainedSourceHook(binary));
 			assertNoFactoryReceipt(binding);

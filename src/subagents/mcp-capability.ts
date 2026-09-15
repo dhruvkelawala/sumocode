@@ -3,7 +3,7 @@ import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { defaultActivityStateRoot, ensurePrivateSumocodeDirectory, writePrivateJsonExclusive } from "../activity/persistence.js";
-import { inspectMcpConfigSources, loadConfiguredMcpServerDefinitions, type McpServerDefinition } from "../mcp-config-reader.js";
+import { inspectMcpConfigSources, mergeMcpServerDefinitions, type McpServerDefinition } from "../mcp-config-reader.js";
 import { adapterEntryFromPackageDir, packageDirsFromSettings, resolveMcpChildBootstrapEntry } from "./backend-pi.js";
 
 /**
@@ -60,7 +60,9 @@ export function resolveMcpAdapterEntry(env: NodeJS.ProcessEnv = process.env): st
 			if (stat.isFile()) return override;
 			if (stat.isDirectory()) return adapterEntryFromPackageDir(override);
 		} catch {
-			// Unreadable override falls through to configured candidates.
+			// An explicit override that cannot be read fails closed: silently
+			// falling back to a different adapter would mount something the
+			// operator did not name.
 		}
 		return undefined;
 	}
@@ -117,7 +119,9 @@ const validServerName = (name: string): boolean =>
  * are not garbage-collected yet.
  */
 export function resolveMcpLaunchCapability(request: McpCapabilityRequest): McpCapabilityResolution {
-	const servers = normalizeServers(request.servers);
+	const normalized = normalizeServers(request.servers);
+	if (!normalized.ok) return { ok: false, error: normalized.error };
+	const servers = normalized.names;
 	if (!request.gatewayRequested) {
 		return servers.length > 0
 			? { ok: false, error: `MCP servers ${servers.join(", ")} were selected without granting the ${MCP_GATEWAY_TOOL} tool` }
@@ -158,11 +162,12 @@ export function resolveMcpLaunchCapability(request: McpCapabilityRequest): McpCa
 		const detail = unbounded.map((entry) => `${entry.name} (${entry.path})`).join(", ");
 		return { ok: false, error: `MCP cannot be scoped while project configuration defines unselected server(s): ${detail}. Select them explicitly or remove them` };
 	}
-	const configured = loadConfiguredMcpServerDefinitions(chain);
-	const available = new Map(configured.map((server) => [server.name, server.definition]));
+	// One read feeds both the refusals above and the file below: a second read
+	// could hand the child definitions the validation never saw.
+	const available = new Map(mergeMcpServerDefinitions(sources).map((server) => [server.name, server.definition]));
 	const missing = servers.filter((name) => !available.has(name));
 	if (missing.length > 0) {
-		const known = configured.map((server) => server.name).sort().join(", ") || "(none)";
+		const known = [...available.keys()].sort().join(", ") || "(none)";
 		return { ok: false, error: `MCP server(s) not configured for ${request.cwd}: ${missing.join(", ")}. Configured servers: ${known}` };
 	}
 	try {
@@ -205,14 +210,24 @@ function writeScopedMcpConfig(
 	return configPath;
 }
 
-function normalizeServers(servers: readonly string[] | undefined): string[] {
-	if (!servers) return [];
+/**
+ * A role's server list is a grant, so a name the resolver cannot honour is a
+ * refusal, never a quiet narrowing: an operator who mistypes a server must not
+ * receive a child with a different capability than they asked for.
+ */
+function normalizeServers(servers: readonly string[] | undefined): { ok: true; names: string[] } | { ok: false; error: string } {
+	if (!servers) return { ok: true, names: [] };
 	const names: string[] = [];
+	const invalid: string[] = [];
 	for (const raw of servers) {
 		const name = raw.trim();
-		if (!validServerName(name) || names.includes(name)) continue;
-		names.push(name);
-		if (names.length >= MAX_MCP_SERVERS) break;
+		if (!validServerName(name)) {
+			invalid.push(JSON.stringify(raw));
+			continue;
+		}
+		if (!names.includes(name)) names.push(name);
 	}
-	return names;
+	if (invalid.length > 0) return { ok: false, error: `invalid MCP server name(s): ${invalid.join(", ")}` };
+	if (names.length > MAX_MCP_SERVERS) return { ok: false, error: `too many MCP servers selected: ${names.length} exceeds the ${MAX_MCP_SERVERS} limit` };
+	return { ok: true, names };
 }

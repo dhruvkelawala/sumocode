@@ -6,9 +6,10 @@
  * image block reaches the child's message stream.
  *
  * `node scripts/mcp-capability-proof.mjs` prints a transcript and exits non-zero
- * unless the fixture was actually called and the image block arrived. Model
- * selection comes from MCP_PROOF_PROVIDER / MCP_PROOF_MODEL (default
- * deepseek/deepseek-flash), so this is a live run, not a CI test.
+ * unless the fixture was actually called and the image block arrived.
+ * MCP_PROOF_MODEL selects the provider/model (default deepseek/deepseek-flash)
+ * and MCP_PROOF_ADAPTER overrides the adapter package directory, so this is a
+ * live run, not a CI test.
  */
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, existsSync } from "node:fs";
@@ -85,8 +86,14 @@ let stdout = "";
 let stderr = "";
 child.stdout.on("data", (chunk) => { stdout += chunk; });
 child.stderr.on("data", (chunk) => { stderr += chunk; });
+// A live model turn can hang; without a watchdog the script would block forever
+// and leave the fixture server's stdio pipe open.
+const timeoutMs = Number(process.env.MCP_PROOF_TIMEOUT_MS ?? 180_000);
+const watchdog = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
+watchdog.unref?.();
 child.stdin.end(`${prompt}\n`);
 const exitCode = await new Promise((resolve) => child.once("close", resolve));
+clearTimeout(watchdog);
 
 const lines = stdout.split("\n").filter(Boolean);
 const parsed = lines.map((line) => { try { return JSON.parse(line); } catch { return undefined; } }).filter(Boolean);

@@ -4,10 +4,9 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { MCP_GATEWAY_TOOL, isChildToolName } from "./task-config.js";
+import { MCP_GATEWAY_TOOL, MAX_MCP_SERVERS, isChildToolName } from "./task-config.js";
 
 const MAX_ROLES_FILE_BYTES = 256 * 1024;
-const MAX_ROLE_MCP_SERVERS = 64;
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const ROLE_FIELDS = new Set(["id", "label", "description", "systemPrompt", "model", "thinking", "tools", "mcpServers", "defaultWorktree", "defaultVisible"]);
 
@@ -188,16 +187,28 @@ function normalizedOverlay(value: unknown, index: number, builtIn: boolean, warn
 				warn(`role ${id} ignores invalid mcp server ${String(server)}`, false);
 				continue;
 			}
-			if (!servers.includes(server) && servers.length < MAX_ROLE_MCP_SERVERS) servers.push(server);
+			if (!servers.includes(server) && servers.length < MAX_MCP_SERVERS) servers.push(server);
 		}
-		overlay.mcpServers = servers;
-	}
-	if (overlay.mcpServers !== undefined && overlay.mcpServers.length > 0 && !overlay.tools?.includes(MCP_GATEWAY_TOOL)) {
-		// Surfacing this while the configuration loads keeps the diagnosis next to
-		// the file the operator wrote instead of their first delegation.
-		warn(`role ${id} selects MCP servers without granting the ${MCP_GATEWAY_TOOL} tool`, false);
+		if (servers.length === 0) {
+			// An empty list must not shadow a base role's selection: the overlay
+			// merge would otherwise drop a grant the operator never revoked.
+			warn(`role ${id} has an empty mcpServers list; keeping the base role selection`, false);
+		} else {
+			overlay.mcpServers = servers;
+		}
 	}
 	return overlay;
+}
+
+/**
+ * A selection without the gateway (or vice versa) is only visible once the
+ * overlay has merged with its base role, so the coherence check runs there.
+ */
+function warnOnUngrantedMcpServers(role: SubagentRole, warnings: RoleWarning[]): void {
+	if (!role.mcpServers || role.mcpServers.length === 0) return;
+	if (role.tools?.includes(MCP_GATEWAY_TOOL)) return;
+	warnings.push({ scope: "role", roleId: role.id, blocksRole: false,
+		message: `role ${role.id} selects MCP servers without granting the ${MCP_GATEWAY_TOOL} tool` });
 }
 
 export function loadRoles(dependencies: LoadRolesDependencies = {}): LoadedRoles {
@@ -235,6 +246,7 @@ export function loadRoles(dependencies: LoadRolesDependencies = {}): LoadedRoles
 		if (!overlay) continue;
 		if (roleIndex >= 0) {
 			roles[roleIndex] = { ...roles[roleIndex], ...overlay } as SubagentRole;
+			warnOnUngrantedMcpServers(roles[roleIndex]!, warnings);
 			continue;
 		}
 		roles.push((() => {
@@ -250,6 +262,7 @@ export function loadRoles(dependencies: LoadRolesDependencies = {}): LoadedRoles
 			if (overlay.mcpServers !== undefined) role.mcpServers = overlay.mcpServers;
 			if (overlay.defaultWorktree !== undefined) role.defaultWorktree = overlay.defaultWorktree;
 			if (overlay.defaultVisible !== undefined) role.defaultVisible = overlay.defaultVisible;
+			warnOnUngrantedMcpServers(role as SubagentRole, warnings);
 			return role as SubagentRole;
 		})());
 	}

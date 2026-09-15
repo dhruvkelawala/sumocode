@@ -60,11 +60,24 @@ it("grants nothing and writes nothing when the gateway was not requested", () =>
 
 it("refuses a gateway grant that does not name its servers", () => {
 	const f = fixture();
-	for (const servers of [undefined, [], ["   "]]) {
+	for (const servers of [undefined, []]) {
 		const result = resolve(f, servers);
 		expect(result.ok).toBe(false);
 		expect(result.ok === false && result.error).toContain("explicit mcpServers list");
 	}
+});
+
+it("refuses rather than silently narrowing a malformed or oversized selection", () => {
+	const f = fixture();
+	for (const servers of [["   "], ["fixture", "bad\nname"], ["fixture", ""]]) {
+		const result = resolve(f, servers);
+		expect(result.ok).toBe(false);
+		expect(result.ok === false && result.error).toContain("invalid MCP server name");
+	}
+	const oversized = Array.from({ length: 257 }, (_value, index) => `server-${index}`);
+	const result = resolve(f, oversized);
+	expect(result.ok).toBe(false);
+	expect(result.ok === false && result.error).toContain("too many MCP servers selected");
 });
 
 it("refuses server names that were selected without granting the gateway", () => {

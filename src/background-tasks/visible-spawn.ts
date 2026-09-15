@@ -115,6 +115,17 @@ function buildVisibleAgentArgs(options: VisibleAgentCommandOptions): string[] {
 	return ["task", ...modelFlags, ...thinkingFlags, ...toolsFlags, ...mcpFlags, "--task-dir", dirname(options.paths.promptFile)];
 }
 
+/**
+ * `env` wrapper for the agent command. `exec env -u …` is always needed when an
+ * MCP grant is mounted, because the pane inherits the operator's shell
+ * environment and `PI_MCP_CONFIG_MODE=exclusive` would void the grant's scope.
+ */
+function envPrefix(piBin: string | undefined, mountedMcp: boolean): string[] {
+	const flags = mountedMcp ? ["-u", "PI_MCP_CONFIG_MODE"] : [];
+	if (!piBin) return flags.length > 0 ? ["env", ...flags] : [];
+	return ["env", ...flags, shellEscape(`PI_BIN=${piBin}`)];
+}
+
 export function buildVisibleAgentCommand(options: VisibleAgentCommandOptions): string {
 	const launcher = options.launcher?.trim();
 	const piBin = options.piBin?.trim();
@@ -123,9 +134,7 @@ export function buildVisibleAgentCommand(options: VisibleAgentCommandOptions): s
 		shellEscape(options.cwd),
 		"&&",
 		"exec",
-		...(piBin
-			? ["env", ...(options.mcp ? ["-u", "PI_MCP_CONFIG_MODE"] : []), shellEscape(`PI_BIN=${piBin}`)]
-			: options.mcp ? ["env", "-u", "PI_MCP_CONFIG_MODE"] : []),
+		...envPrefix(piBin, options.mcp !== undefined),
 		launcher && launcher !== "sumocode" ? shellEscape(launcher) : "sumocode",
 		...buildVisibleAgentArgs(options).map(shellEscape),
 	].join(" ");

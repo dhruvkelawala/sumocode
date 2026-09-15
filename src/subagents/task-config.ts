@@ -21,6 +21,9 @@ export const MCP_GATEWAY_TOOL = "mcp";
 export const APPROVABLE_EXTENSION_TOOLS = [MCP_GATEWAY_TOOL] as const;
 
 export type ApprovableExtensionTool = (typeof APPROVABLE_EXTENSION_TOOLS)[number];
+
+/** Bound on the MCP server list a role may select. One limit for every stage. */
+export const MAX_MCP_SERVERS = 256;
 export type ChildToolName = BuiltInToolName | ApprovableExtensionTool;
 
 const isBuiltInToolName = (toolName: string): toolName is BuiltInToolName => {

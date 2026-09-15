@@ -78,10 +78,7 @@ export function prepareRetainedBootstrap(
 			config: structuredClone(config), prompt: pointer(PROMPT_FILE, prompts.prompt),
 			systemPrompt: prompts.systemPrompt === null ? null : pointer(SYSTEM_FILE, prompts.systemPrompt),
 		};
-		// A granted gateway and its scoped config are one capability: a surface
-		// that lists `mcp` without a resolved grant (or a grant nothing can use)
-		// is a descriptor that would launch a child the parent never authorized.
-		if (!validDescriptor(descriptor) || (descriptor.config.mcp === null) !== !descriptor.config.tools.includes(MCP_GATEWAY_TOOL) || descriptor.config.role?.id !== (record.roleId ?? undefined)
+		if (!validDescriptor(descriptor) || !grantMatchesSurface(descriptor.config) || descriptor.config.role?.id !== (record.roleId ?? undefined)
 			|| (record.modelLabel !== null && record.modelLabel !== descriptor.config.model.label)
 			|| Buffer.byteLength(serialize(descriptor)) > MAX_DESCRIPTOR_BYTES) throw new Error(FAILURE);
 		const directory = assertDirectory(record.taskDir);
@@ -125,6 +122,15 @@ export function readRetainedBootstrap(expected: BootstrapBinding, nonce: string)
 		assertDirectory(expected.taskDir, directory);
 		return Object.freeze({ descriptor: freeze(descriptor), prompt, systemPrompt });
 	} catch { throw new Error(FAILURE); }
+}
+
+/**
+ * A granted gateway and its scoped config are one capability: a surface that
+ * lists `mcp` without a resolved grant (or a grant nothing can use) is a
+ * descriptor that would launch a child the parent never authorized.
+ */
+function grantMatchesSurface(config: RetainedBootstrapConfiguration): boolean {
+	return (config.mcp === null) === !config.tools.includes(MCP_GATEWAY_TOOL);
 }
 
 function serialize(value: RetainedBootstrapDescriptor | string): string { return `${JSON.stringify(value, null, 2)}\n`; }

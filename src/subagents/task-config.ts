@@ -30,6 +30,9 @@ const isBuiltInToolName = (toolName: string): toolName is BuiltInToolName => {
 };
 
 export const isApprovableExtensionTool = (toolName: string): toolName is ApprovableExtensionTool => {
+	// SAFETY: widening the APPROVABLE_EXTENSION_TOOLS literal tuple to readonly string[] only
+	// relaxes the element type for `includes`; membership still proves toolName is
+	// an ApprovableExtensionTool.
 	return (APPROVABLE_EXTENSION_TOOLS as readonly string[]).includes(toolName);
 };
 

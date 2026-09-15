@@ -41,14 +41,12 @@ import type { McpServerSnapshot } from "./sumo-tui/cathedral/sidebar-rendering.j
  * traces.
  */
 
-interface McpServerConfig {
-	readonly command?: string;
-	readonly args?: readonly string[];
-}
+/** A JSON value as written in a config file; definitions are re-serialized verbatim. */
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
 interface McpConfigFile {
-	readonly mcpServers?: Record<string, McpServerConfig>;
-	readonly "mcp-servers"?: Record<string, McpServerConfig>;
+	readonly mcpServers?: Record<string, JsonValue>;
+	readonly "mcp-servers"?: Record<string, JsonValue>;
 	readonly imports?: unknown;
 }
 
@@ -58,7 +56,7 @@ export interface LoadMcpServersOptions {
 }
 
 /** A configured MCP server definition exactly as written in a config file. */
-export type McpServerDefinition = Readonly<Record<string, unknown>>;
+export type McpServerDefinition = Readonly<Record<string, JsonValue>>;
 
 export interface ConfiguredMcpServer {
 	readonly name: string;
@@ -193,7 +191,7 @@ export function inspectMcpConfigSources(opts: LoadMcpServersOptions): readonly M
 	}).filter((source) => source.servers.length > 0 || source.imports.length > 0);
 }
 
-function mcpServersOf(cfg: McpConfigFile | undefined): Record<string, McpServerConfig> | undefined {
+function mcpServersOf(cfg: McpConfigFile | undefined): Record<string, JsonValue> | undefined {
 	if (!cfg) return undefined;
 	if (isPlainObject(cfg.mcpServers)) return cfg.mcpServers;
 	const alias = cfg["mcp-servers"];

@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+/* oxlint-disable anti-slop/no-chained-type-assertions -- the harness casts a minimal stub to the Pi ExtensionAPI the guard reads. */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import installMcpChildBootstrap from "./mcp-child-bootstrap.js";
 
@@ -17,6 +18,7 @@ function harness(activeTools: readonly string[]): Harness {
 	const terminate = vi.fn((_message: string): never => {
 		throw new Error("child terminated");
 	});
+	// SAFETY: the double supplies the on() and getActiveTools() surfaces the guard reads.
 	installMcpChildBootstrap(api as unknown as ExtensionAPI, terminate);
 	return {
 		fire: () => { try { handlers.get("before_agent_start")!(); } catch { /* the guard exited the child */ } },

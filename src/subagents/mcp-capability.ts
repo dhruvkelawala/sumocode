@@ -188,8 +188,11 @@ function writeScopedMcpConfig(
 	selected: readonly string[],
 	env: NodeJS.ProcessEnv,
 ): string {
-	const mcpServers = Object.create(null) as Record<string, unknown>;
-	for (const name of selected) mcpServers[name] = available.get(name);
+	const mcpServers: Record<string, McpServerDefinition | { readonly disabled: true }> = Object.create(null);
+	for (const name of selected) {
+		const definition = available.get(name);
+		if (definition !== undefined) mcpServers[name] = definition;
+	}
 	for (const name of available.keys()) {
 		if (!selected.includes(name)) mcpServers[name] = { disabled: true };
 	}

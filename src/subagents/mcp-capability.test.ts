@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { loadConfiguredMcpServerDefinitions } from "../mcp-config-reader.js";
+import { loadConfiguredMcpServerDefinitions, type McpServerDefinition } from "../mcp-config-reader.js";
 import { resolveMcpAdapterEntry, resolveMcpLaunchCapability } from "./mcp-capability.js";
 
 afterEach(() => { vi.unstubAllEnvs(); });
@@ -98,7 +98,8 @@ it("writes a private config that enables exactly the selected servers and fences
 	expect(result.capability.adapterEntry).toBe(f.adapterEntry);
 	// The artifact is owner-only and confined to the private capability root.
 	expect(statSync(result.capability.configPath).mode & 0o777).toBe(0o600);
-	const written = JSON.parse(readFileSync(result.capability.configPath, "utf8")) as { mcpServers: Record<string, unknown> };
+	// SAFETY: the generated config is the JSON this resolver just wrote.
+	const written = JSON.parse(readFileSync(result.capability.configPath, "utf8")) as { mcpServers: Record<string, McpServerDefinition> };
 	expect(written.mcpServers.fixture).toEqual({ command: "node", args: ["./fixture-server.mjs"] });
 	expect(written.mcpServers.other).toEqual({ disabled: true });
 });
@@ -110,7 +111,8 @@ it("resolves project-local configuration from the child cwd, including an isolat
 	writeFileSync(join(worktree, ".mcp.json"), JSON.stringify({ mcpServers: { "worktree-only": { command: "node" } } }), { mode: 0o600 });
 	const result = resolveMcpLaunchCapability({ gatewayRequested: true, servers: ["worktree-only"], cwd: worktree, key: "sa-worktree" });
 	if (!result.ok || !result.capability) throw new Error(`expected a granted capability: ${result.ok === false ? result.error : ""}`);
-	const written = JSON.parse(readFileSync(result.capability.configPath, "utf8")) as { mcpServers: Record<string, unknown> };
+	// SAFETY: the generated config is the JSON this resolver just wrote.
+	const written = JSON.parse(readFileSync(result.capability.configPath, "utf8")) as { mcpServers: Record<string, McpServerDefinition> };
 	expect(written.mcpServers["worktree-only"]).toEqual({ command: "node" });
 });
 
@@ -144,6 +146,7 @@ it("pins the settings that could re-add servers after the file chain merges", ()
 	const f = fixture();
 	const result = resolve(f, ["fixture"]);
 	if (!result.ok || !result.capability) throw new Error("expected a granted capability");
+	// SAFETY: the generated config is the JSON this resolver just wrote.
 	const written = JSON.parse(readFileSync(result.capability.configPath, "utf8")) as { settings: unknown };
 	expect(written.settings).toEqual({ hostConfigDiscovery: "off", agentPluginPaths: [] });
 });

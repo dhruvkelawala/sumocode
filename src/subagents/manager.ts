@@ -753,8 +753,9 @@ export class SubagentManager {
 			if (placement !== undefined) this.placementByTask.set(id, placement);
 			let child: SpawnedChild;
 			try {
-				child = await this.backendFactory({ ...task, cwd: childCwd, id, signal: controller.signal, placement,
-					baseRef: manifestBaseRef, worktreeRef: worktree, provisioningTimeoutMs, ...(mcp ? { mcp } : {}) });
+				const spawnInput = { ...task, cwd: childCwd, id, signal: controller.signal, placement,
+					baseRef: manifestBaseRef, worktreeRef: worktree, provisioningTimeoutMs };
+				child = await this.backendFactory(mcp ? { ...spawnInput, mcp } : spawnInput);
 			} catch (error) {
 				this.workspacePlacedIds.delete(id);
 				// The construction never emits run-settled, so the placement would

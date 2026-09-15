@@ -15,6 +15,11 @@
  * afterwards. Callers that want the one corrected repaint subscribe via
  * `onHighlighterReady`.
  *
+ * Warm-up is not free: compiling a grammar's regexes costs ~150 ms on Node and
+ * ~900 ms on Bun (the native host is bun-compiled), paid once per language,
+ * asynchronously, after the first code block in that language appears. Frames
+ * during that window use the fallback tokenizer.
+ *
  * Measured on this machine (node 25, M-series): importing `shiki/core` +
  * `shiki/engine/javascript` costs ~31 ms and the five common grammars a
  * further ~5 ms, so fully synchronous startup init (`createHighlighterCoreSync`
@@ -132,7 +137,10 @@ function sumoTextMateTheme(roles: CodeRoles, name: string): ThemeRegistration {
 			{ scope: ["comment", "punctuation.definition.comment"], settings: { foreground: roles.comment } },
 			{ scope: ["string", "string.template", "punctuation.definition.string"], settings: { foreground: roles.string } },
 			{ scope: ["constant.numeric"], settings: { foreground: roles.number } },
-			{ scope: ["keyword", "storage", "keyword.operator.new"], settings: { foreground: roles.keyword } },
+			// `constant.language` (null/true/false) is not in the role vocabulary but
+			// the Bible target paints those words with the keyword colour, which the
+			// old tokenizer did by keeping them in its keyword set.
+			{ scope: ["keyword", "storage", "keyword.operator.new", "constant.language"], settings: { foreground: roles.keyword } },
 			{ scope: ["entity.name.function", "support.function"], settings: { foreground: roles.function } },
 			{ scope: ["entity.name.type", "support.type", "support.class"], settings: { foreground: roles.function } },
 			{ scope: ["variable.parameter", "punctuation"], settings: { foreground: roles.foreground } },
@@ -152,6 +160,13 @@ const pendingLanguages = new Map<string, Promise<void>>();
 const failedLanguages = new Set<string>();
 const readyListeners = new Set<() => void>();
 let generation = 0;
+/**
+ * Throwaway snippet tokenized when a grammar lands; see the warm-up note below.
+ * It is deliberately broad (declaration, call, string, number, comment, block
+ * punctuation) because the regex engine compiles patterns on first match, and
+ * whatever it skips here is paid on the first real line instead.
+ */
+const WARMUP_SNIPPET = 'export function fn(a: string) {\n\tconst b = { x: 1, y: "s" }; // c\n\treturn [a, b];\n}';
 /** Tokenized lines keyed by theme+language+content. Bounded, cleared wholesale. */
 const tokenCache = new Map<string, readonly SyntaxSpan[]>();
 const TOKEN_CACHE_LIMIT = 4096;
@@ -241,9 +256,13 @@ export function ensureLanguage(id: string, roles: CodeRoles): Promise<void> | un
 			const grammar = await loader();
 			// SAFETY: Shiki's own grammar modules; `loadLanguageSync` validates shape.
 			core.loadLanguageSync(grammar.default as Parameters<HighlighterCore["loadLanguageSync"]>[0]);
-			// The JS regex engine compiles grammar patterns on first tokenize
-			// (~125 ms for TypeScript). Pay it here, off the render path.
-			core.codeToTokens("", { lang: id, theme: syncTheme(core, roles) });
+			// Two reasons to tokenize a throwaway line here rather than on the
+			// render path: the JS regex engine compiles grammar patterns on first
+			// use (~125 ms for TypeScript), and on Bun (which compiles the native
+			// host) the process's very first tokenize returns one unscoped token
+			// for the whole line — silently, no pattern error. Burning that first
+			// call on a sample keeps real lines correct on both runtimes.
+			core.codeToTokens(WARMUP_SNIPPET, { lang: id, theme: syncTheme(core, roles) });
 			loadedLanguages.add(id);
 		} catch {
 			failedLanguages.add(id);

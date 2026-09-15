@@ -101,20 +101,22 @@ const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly Su
 const textOf = <T extends { content: Array<{ text: string }> }>(result: T): string => result.content[0]!.text;
 
 /** Hermetic HOME/agent-dir/state-dir plus a fake adapter and a project .mcp.json. */
-function mcpFixtureEnv(options: { readonly withServers?: boolean } = {}) {
+function mcpFixtureEnv(options: { readonly withServers?: boolean; readonly withAdapter?: boolean } = {}) {
 	const root = realpathSync(mkdtempSync(join(tmpdir(), "sumocode-tools-mcp-")));
 	const project = join(root, "project");
 	const agentDir = join(root, ".pi", "agent");
 	const adapterDir = join(root, "adapter");
 	for (const dir of [project, agentDir, adapterDir]) mkdirSync(dir, { recursive: true, mode: 0o700 });
-	writeFileSync(join(adapterDir, "package.json"), JSON.stringify({ name: "pi-mcp-adapter", pi: { extensions: ["./index.ts"] } }), { mode: 0o600 });
 	const adapterEntry = join(adapterDir, "index.ts");
-	writeFileSync(adapterEntry, "export default () => undefined;\n", { mode: 0o600 });
+	if (options.withAdapter !== false) {
+		writeFileSync(join(adapterDir, "package.json"), JSON.stringify({ name: "pi-mcp-adapter", pi: { extensions: ["./index.ts"] } }), { mode: 0o600 });
+		writeFileSync(adapterEntry, "export default () => undefined;\n", { mode: 0o600 });
+		vi.stubEnv("SUMOCODE_MCP_ADAPTER", adapterDir);
+	}
 	if (options.withServers !== false) writeFileSync(join(project, ".mcp.json"), JSON.stringify({ mcpServers: { fixture: { command: "node" } } }), { mode: 0o600 });
 	vi.stubEnv("HOME", root);
 	vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
 	vi.stubEnv("SUMOCODE_STATE_DIR", join(root, "state"));
-	vi.stubEnv("SUMOCODE_MCP_ADAPTER", adapterDir);
 	return { root, project, adapterEntry };
 }
 
@@ -240,6 +242,58 @@ describe("subagent tools", () => {
 			const ambient = (spawnedTasks[1] as { mcp?: McpLaunchCapability } | undefined)?.mcp;
 			expect(ambient).toMatchObject({ servers: [], adapterEntry: env.adapterEntry });
 			expect(ambient?.configPath).toBeUndefined();
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("opts a role out of the inherited gateway with an empty mcpServers list", async () => {
+		const env = mcpFixtureEnv();
+		try {
+			const role: SubagentRole = {
+				id: "no-mcp", label: "No MCP", description: "stays off the integrations",
+				systemPrompt: "no mcp", tools: ["read", "bash"], mcpServers: [],
+			};
+			const { tool, ctx, spawnedTasks } = createHarness("herdr", [role], [], ["read", "bash", "mcp"]);
+			await tool("subagent_spawn").execute("tc", { prompt: "plain", name: "offline", role: "no-mcp", working_dir: join(env.root, "project") }, undefined, undefined, ctx as never);
+			const launched = spawnedTasks[0] as (SpawnSubagentTask & { id: string; mcp?: McpLaunchCapability; mcpExplicit?: boolean }) | undefined;
+			expect(launched?.tools).toEqual(["read", "bash"]);
+			expect(launched?.mcp).toBeUndefined();
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("degrades an inherited grant instead of failing the spawn when the adapter is unresolvable", async () => {
+		const env = mcpFixtureEnv({ withAdapter: false });
+		try {
+			// The parent has the gateway active; nobody asked for it by name; the
+			// adapter is not in the trusted global scope. The spawn must still
+			// succeed, without the gateway in the child's surface.
+			const { tool, ctx, spawnedTasks } = createHarness("herdr", undefined, [], ["read", "bash", "mcp"]);
+			const result = await tool("subagent_spawn").execute("tc", { prompt: "plain", name: "plain", working_dir: join(env.root, "project") }, undefined, undefined, ctx as never);
+			expect(textOf(result)).toContain("Started");
+			const launched = spawnedTasks[0] as (SpawnSubagentTask & { id: string; mcp?: McpLaunchCapability; mcpExplicit?: boolean }) | undefined;
+			expect(launched?.tools).toEqual(["read", "bash"]);
+			expect(launched?.mcp).toBeUndefined();
+			expect(launched?.mcpExplicit).toBe(false);
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("marks an explicit grant so an unresolvable adapter refuses the spawn", async () => {
+		const env = mcpFixtureEnv({ withAdapter: false });
+		try {
+			const role: SubagentRole = {
+				id: "fixture-scout", label: "Fixture Scout", description: "use for mcp fixtures",
+				systemPrompt: "call the fixture", tools: ["read", "mcp"], mcpServers: ["fixture"],
+			};
+			const { tool, ctx, spawnedTasks } = createHarness("herdr", [role], [], ["read", "bash", "mcp"]);
+			const result = await tool("subagent_spawn").execute("tc", { prompt: "use mcp", name: "scout", role: "fixture-scout", working_dir: join(env.root, "project") }, undefined, undefined, ctx as never);
+			expect(textOf(result)).toContain("MCP capability unavailable");
+			expect(textOf(result)).toContain("SUMOCODE_MCP_ADAPTER");
+			expect(spawnedTasks).toEqual([]);
 		} finally {
 			vi.unstubAllEnvs();
 		}

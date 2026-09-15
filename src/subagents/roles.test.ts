@@ -106,6 +106,12 @@ describe("subagent roles", () => {
 			.toContain("invalid mcpServers list");
 	});
 
+	it("treats an empty mcpServers list as an explicit opt-out that shadows the base role", () => {
+		const loaded = fromJson({ roles: [{ id: "review", mcpServers: [] }] });
+		expect(loaded.roles.find((role) => role.id === "review")?.mcpServers).toEqual([]);
+		expect(loaded.warnings).toEqual([]);
+	});
+
 	it("normalizes explicit inheritance sentinels over built-in defaults", () => {
 		const loaded = fromJson({ roles: [
 			{ id: "research", model: "inherit", tools: "inherit" },

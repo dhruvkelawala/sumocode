@@ -111,11 +111,19 @@ it("fails with the configured roster when a selected server is not configured fo
 	expect(result.ok === false && result.error).toContain("Configured servers: fixture, other");
 });
 
-it("fails clearly when the adapter is not installed in the trusted global scope", () => {
+it("degrades an inherited grant but refuses an explicit one when the adapter is missing", () => {
 	const f = fixture({ withAdapter: false });
-	const result = resolve(f, ["fixture"]);
-	expect(result.ok).toBe(false);
-	expect(result.ok === false && result.error).toContain("pi-mcp-adapter");
+	// Inherited: no role named the gateway, so a child without MCP is the
+	// status quo, not a failure — and definitely not a failed spawn.
+	const inherited = resolveMcpLaunchCapability({ gatewayRequested: true, servers: undefined, cwd: f.cwd, key: "sa-degraded" });
+	expect(inherited).toEqual({ ok: true, capability: undefined });
+	// Explicit: the operator asked, so the refusal names the escape hatch.
+	for (const servers of [["fixture"], undefined]) {
+		const explicit = resolveMcpLaunchCapability({ gatewayRequested: true, servers, cwd: f.cwd, key: "sa-explicit", explicit: true });
+		expect(explicit.ok).toBe(false);
+		expect(explicit.ok === false && explicit.error).toContain("pi-mcp-adapter");
+		expect(explicit.ok === false && explicit.error).toContain("SUMOCODE_MCP_ADAPTER");
+	}
 });
 
 it("writes a private config that enables exactly the selected servers and fences the rest", () => {

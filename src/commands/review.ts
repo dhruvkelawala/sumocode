@@ -219,9 +219,9 @@ export function registerReviewCommand(pi: ExtensionAPI, options: RegisterReviewC
 					thinking: "xhigh",
 					// Mirror the subagent_spawn tool: a narrowed parent session (e.g.
 					// `--tools read`) must narrow the visible reviewer too, or it would
-					// launch unrestricted. The reviewer is granted the parent's built-in
-					// surface only — extension tools (the MCP gateway included) require
-					// an explicit role grant, and this command has no role to read one from.
+					// launch unrestricted. The reviewer resolves the same surface any
+					// role-free child gets — built-ins plus the inherited MCP gateway,
+					// which degrades away when it cannot be mounted.
 					tools: resolveChildToolSurface({ roleTools: undefined, parentActiveTools: pi.getActiveTools() }),
 				});
 				if (subagent.status === "at_capacity") {

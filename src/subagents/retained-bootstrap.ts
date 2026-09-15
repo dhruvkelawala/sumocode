@@ -129,8 +129,9 @@ export function readRetainedBootstrap(expected: BootstrapBinding, nonce: string)
  * lists `mcp` without a resolved grant (or a grant nothing can use) is a
  * descriptor that would launch a child the parent never authorized.
  */
-function grantMatchesSurface(config: RetainedBootstrapConfiguration): boolean {
-	return (config.mcp === null) === !config.tools.includes(MCP_GATEWAY_TOOL);
+function grantMatchesSurface(config: Readonly<{ mcp: unknown; tools: unknown }>): boolean {
+	const surface = Array.isArray(config.tools) ? config.tools : [];
+	return (config.mcp === null) === !surface.includes(MCP_GATEWAY_TOOL);
 }
 
 function serialize(value: RetainedBootstrapDescriptor | string): string { return `${JSON.stringify(value, null, 2)}\n`; }
@@ -268,7 +269,8 @@ function validDescriptor(value: unknown): value is RetainedBootstrapDescriptor {
 		|| !VALID_THINKING_LEVELS.some((level) => level === c.thinking) || !validToolSurface(c.tools) || !validMcpGrant(c.mcp)
 		|| !(c.role === null || (object(c.role, "id label") && text(c.role.id) && text(c.role.label)))
 		|| !pathValue(c.pi) || !(c.adapterEntry === null || pathValue(c.adapterEntry))
-		|| !(c.modelBootstrapEntry === null || pathValue(c.modelBootstrapEntry))) return false;
+		|| !(c.modelBootstrapEntry === null || pathValue(c.modelBootstrapEntry))
+		|| !grantMatchesSurface({ mcp: c.mcp, tools: c.tools })) return false;
 	if (value.backend === "headless" ? c.visible !== null : !(object(c.visible, "name placement launcher", "provisioningTimeoutMs")
 		&& text(c.visible.name) && placement(c.visible.placement) && pathValue(c.visible.launcher)
 		&& (c.visible.provisioningTimeoutMs === undefined || typeof c.visible.provisioningTimeoutMs === "number"

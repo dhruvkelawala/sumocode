@@ -18,7 +18,12 @@ export interface SubagentRole {
 	readonly model?: string;
 	readonly thinking?: (typeof THINKING_LEVELS)[number];
 	readonly tools?: readonly string[];
-	/** MCP servers this role may reach. Requires `mcp` in `tools`; never inherited. */
+	/**
+	 * MCP servers this role may reach. The gateway itself is inherited from the
+	 * parent session; this list only shapes it: `undefined` keeps the ambient
+	 * scope, a non-empty list fences it to those servers, and `[]` opts the
+	 * role out entirely.
+	 */
 	readonly mcpServers?: readonly string[];
 	readonly defaultWorktree?: boolean;
 	readonly defaultVisible?: boolean;
@@ -189,13 +194,9 @@ function normalizedOverlay(value: unknown, index: number, builtIn: boolean, warn
 			}
 			if (!servers.includes(server) && servers.length < MAX_MCP_SERVERS) servers.push(server);
 		}
-		if (servers.length === 0) {
-			// An empty list must not shadow a base role's selection: the overlay
-			// merge would otherwise drop a grant the operator never revoked.
-			warn(`role ${id} has an empty mcpServers list; keeping the base role selection`, false);
-		} else {
-			overlay.mcpServers = servers;
-		}
+		// An empty list is the explicit opt-out: it shadows the base role's
+		// selection on purpose, because the operator asked for no MCP here.
+		overlay.mcpServers = servers;
 	}
 	return overlay;
 }

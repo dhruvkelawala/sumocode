@@ -6,15 +6,10 @@ import { defaultActivityStateRoot, ensurePrivateSumocodeDirectory, writePrivateJ
 import { inspectMcpConfigSources, mergeMcpServerDefinitions, type McpServerDefinition } from "../mcp-config-reader.js";
 import { adapterEntryFromPackageDir, packageDirsFromSettings, resolveMcpChildBootstrapEntry } from "./backend-pi.js";
 
-/**
- * The MCP gateway tool registered by `pi-mcp-adapter`. MCP is not a Pi
- * built-in: without that extension loaded and this name in `--tools`, a child
- * has no MCP surface at all.
- */
-export const MCP_GATEWAY_TOOL = "mcp";
+import { MCP_GATEWAY_TOOL, MAX_MCP_SERVERS } from "./task-config.js";
+
 const MCP_ADAPTER_PACKAGE = "pi-mcp-adapter";
 /** Servers a role may name in one delegation. Bounds the generated config. */
-const MAX_MCP_SERVERS = 256;
 const MAX_SERVER_NAME_BYTES = 128;
 const CAPABILITIES_DIR = ["subagents", "capabilities"] as const;
 
@@ -42,6 +37,13 @@ export type McpCapabilityResolution =
 export interface McpCapabilityRequest {
 	/** Whether the resolved child tool surface includes the MCP gateway. */
 	readonly gatewayRequested: boolean;
+	/**
+	 * True when somebody asked for the gateway by name: a role's `tools` listed
+	 * `mcp`, or a non-empty `mcpServers` selection fenced its scope. Only an
+	 * explicit grant refuses the spawn when it cannot be honoured; the inherited
+	 * one degrades to a child without MCP, which is the pre-#569 status quo.
+	 */
+	readonly explicit?: boolean;
 	/** Servers the role explicitly selected; `undefined` when the role named none. */
 	readonly servers: readonly string[] | undefined;
 	/** The child's final cwd (after any worktree remap), which selects project config. */
@@ -137,14 +139,17 @@ export function resolveMcpLaunchCapability(request: McpCapabilityRequest): McpCa
 	}
 	const env = request.env ?? process.env;
 	const adapterEntry = resolveMcpAdapterEntry(env);
-	if (!adapterEntry) {
-		return { ok: false, error: `MCP was granted but the ${MCP_ADAPTER_PACKAGE} extension could not be located in the trusted global scope` };
-	}
 	const guardEntry = resolveMcpChildBootstrapEntry(env);
-	if (!guardEntry) {
-		// Fail closed rather than launch a child that would silently keep the
-		// gateway scope nobody validated at startup.
-		return { ok: false, error: "MCP was granted but the child-side capability guard could not be located" };
+	if (!adapterEntry || !guardEntry) {
+		const reason = !adapterEntry
+			? `the ${MCP_ADAPTER_PACKAGE} extension could not be located in the trusted global scope (set SUMOCODE_MCP_ADAPTER to its package directory to name it explicitly)`
+			: "the child-side capability guard could not be located";
+		if (request.explicit !== true) {
+			// Inherited, not asked for: a child without MCP is the status quo
+			// this delegation always had, not a failure worth refusing over.
+			return { ok: true, capability: undefined };
+		}
+		return { ok: false, error: `MCP was requested explicitly but ${reason}` };
 	}
 	const chain = { cwd: request.cwd, piAgentDir: env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent") };
 	// Scoped grants only: the ambient path deliberately reads nothing, because

@@ -204,7 +204,7 @@ describe("/sumo:review", () => {
 				model: "openai-codex/gpt-5.3-codex",
 				thinking: "xhigh",
 				// Parent tool allowlist forwarded so a narrowed session narrows the reviewer.
-				builtInTools: ["read", "bash", "edit", "write", "grep", "find", "ls"],
+				tools: ["read", "bash", "edit", "write", "grep", "find", "ls"],
 			});
 			expect(notify).toHaveBeenCalledWith(expect.stringContaining("review started: sa-42"), "info");
 			expect(notify).toHaveBeenCalledWith(expect.stringContaining("watchable herdr pane"), "info");
@@ -220,7 +220,7 @@ describe("/sumo:review", () => {
 			// SAFETY: test double only exercises the members this test asserts on.
 			registerReviewCommand({ registerCommand, sendUserMessage: vi.fn(), getActiveTools } as never, { subagentSpawner: subagentSpawner as never });
 			await handler?.("src/foo.ts", { hasUI: true, cwd: "/tmp/sumo-fixture", ui: { notify: vi.fn() } });
-			expect(subagentSpawner.spawn).toHaveBeenCalledWith(expect.objectContaining({ builtInTools: ["read", "grep"] }));
+			expect(subagentSpawner.spawn).toHaveBeenCalledWith(expect.objectContaining({ tools: ["read", "grep"] }));
 		});
 
 		it("includes scope label in the subagent title and notice for PR args", async () => {

@@ -178,7 +178,7 @@ describe("subagent tools", () => {
 
 			expect(textOf(result)).toContain("Started sa-re-worker-2 continuing sa-worker-1's session");
 			expect(spawnedTasks[1]).toMatchObject({
-				prompt: "clarify", roleId: "research", appendSystemPrompt: "fresh role instructions", builtInTools: ["read"],
+				prompt: "clarify", roleId: "research", appendSystemPrompt: "fresh role instructions", tools: ["read"],
 				resume: { sessionFilePath: "/tmp/session/child.jsonl", repliesTo: "sa-worker-1" },
 			});
 			expect(textOf(await tool("subagent_list").execute("list", {}))).toContain("re: sa-worker-1");
@@ -219,7 +219,7 @@ describe("subagent tools", () => {
 			appendSystemPrompt: "audit carefully",
 			model: "openai/explicit",
 			thinking: "minimal",
-			builtInTools: ["read"],
+			tools: ["read"],
 		});
 		expect(manager.get("sa-auditor-1")).toMatchObject({ roleId: "audit", modelLabel: "openai/explicit", thinkingLabel: "minimal" });
 	});

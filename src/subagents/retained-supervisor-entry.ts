@@ -50,14 +50,15 @@ export async function runRetainedSupervisorEntry(
 			baseRef: config.baseRef, controller: config.controller };
 		const controller = config.visible ? new RetainedVisibleSupervisor({ ...owner,
 			launch: { cwd: config.cwd, prompt, appendSystemPrompt: systemPrompt ?? undefined, name: config.visible.name,
-				id, model: config.model.label, thinking: config.thinking, tools: config.builtInTools,
+				id, model: config.model.label, thinking: config.thinking, tools: config.tools,
+				mcp: config.mcp ?? undefined,
 				placement: config.visible.placement, provisioningTimeoutMs: config.visible.provisioningTimeoutMs,
 				host: dependencies.host ?? getTerminalHost(),
 				pi: dependencies.executor ?? terminalExecutor },
 		}, { ...dependencies, spawn: dependencies.spawnPane ?? createPaneChildSpawner({ resolveLauncher: () => config.visible!.launcher }) })
 			: new RetainedHeadlessSupervisor({ ...owner,
 			launch: { cwd: config.cwd, prompt, retainedBootstrap: descriptor, model: config.model.label,
-				thinking: config.thinking, builtInTools: config.builtInTools, inherited: {},
+				thinking: config.thinking, tools: config.tools, mcp: config.mcp ?? undefined, inherited: {},
 				sessionDir: initial.sessionFilePath ? undefined : join(taskDir, "session"),
 				resumeSessionFile: initial.sessionFilePath ?? undefined },
 		}, { ...dependencies, spawn: dependencies.spawn ?? createPiChildSpawner(undefined, undefined, () => config.pi) });

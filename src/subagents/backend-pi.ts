@@ -15,7 +15,8 @@ import {
 	boundStableIdentifier,
 } from "../child-protocol.js";
 import { resolveExecutableProvenance } from "../executable-provenance.js";
-import { type BuiltInToolName, resolveTaskConfig } from "./task-config.js";
+import { BUILT_IN_TOOLS, type ChildToolName, resolveTaskConfig } from "./task-config.js";
+import type { McpLaunchCapability } from "./mcp-capability.js";
 import { isRecord, type TaskThinking, type ThinkingLevel } from "./task-params.js";
 import { systemProcessTree, terminateProcessTree, type ProcessTreeOperations, type ProcessTreeIdentity, type ProcessTreeVerification, type ProcessTreeMemberAnchor } from "../background-tasks/process-tree.js";
 import { CHILD_MODEL_ID_ENV, CHILD_MODEL_PROVIDER_ENV } from "./pi-child-model-bootstrap.js";
@@ -26,9 +27,6 @@ import { RETAINED_BOOTSTRAP_ENV, assertNoFactoryReceipt, createBootstrapBinding,
 /** Runtime string discriminator for decoded child-process payloads. */
 const isString = <T>(value: T): value is T & string => typeof value === "string";
 
-/** Fallback only — callers should thread the parent's active tool set through. */
-// SAFETY: every entry is a literal from the BuiltInToolName union.
-const DEFAULT_BUILT_IN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const satisfies readonly BuiltInToolName[];
 const PREVIEW_MAX = 160;
 const TOOL_IDENTIFIER_MAX_BYTES = 256;
 const ERROR_MAX = 4096;
@@ -42,7 +40,7 @@ const CLAUDE_OAUTH_ADAPTER_PACKAGE = "pi-claude-oauth-adapter";
 const MULTI_ACCOUNT_ADAPTER_SOURCE = "git:github.com/dhruvkelawala/pi-claude-oauth-adapter@multi-account";
 const NUMBERED_ANTHROPIC_PROVIDER = /^anthropic-\d+$/;
 
-function adapterEntryFromPackageDir(packageDir: string): string | undefined {
+export function adapterEntryFromPackageDir(packageDir: string): string | undefined {
 	try {
 		// SAFETY: malformed manifests reject into the catch below; only the optional extensions list is read.
 		const manifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8")) as { pi?: { extensions?: unknown } };
@@ -83,8 +81,8 @@ function gitPackageDir(source: string, agentDir: string): string | undefined {
 	return join(agentDir, "git", host, ...segments);
 }
 
-/** Trusted global package directories from settings that look like the adapter. */
-function adapterPackageDirsFromSettings(settingsPath: string, agentDir: string): string[] {
+/** Trusted global package directories from settings that name `packageName`. */
+export function packageDirsFromSettings(settingsPath: string, agentDir: string, packageName: string, preferredSource?: string): string[] {
 	try {
 		// SAFETY: malformed settings files reject into the catch below.
 		const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as { packages?: unknown };
@@ -92,10 +90,10 @@ function adapterPackageDirsFromSettings(settingsPath: string, agentDir: string):
 		// SAFETY: package entries may be plain strings or { source } objects.
 		const sources = settings.packages
 			.map((entry) => isString(entry) ? entry : (entry as { source?: unknown })?.source)
-			.filter((source): source is string => isString(source) && source.includes(CLAUDE_OAUTH_ADAPTER_PACKAGE))
-			// The numbered-provider fork must win over stale upstream/configured
-			// variants that share the same package name.
-			.sort((left, right) => Number(right.trim() === MULTI_ACCOUNT_ADAPTER_SOURCE) - Number(left.trim() === MULTI_ACCOUNT_ADAPTER_SOURCE));
+			.filter((source): source is string => isString(source) && source.includes(packageName))
+			// A preferred fork must win over stale upstream/configured variants that
+			// share the same package name.
+			.sort((left, right) => Number(right.trim() === preferredSource) - Number(left.trim() === preferredSource));
 		return sources.flatMap((source) => {
 			const gitDir = gitPackageDir(source, agentDir);
 			if (gitDir) return [gitDir];
@@ -108,6 +106,10 @@ function adapterPackageDirsFromSettings(settingsPath: string, agentDir: string):
 	} catch {
 		return [];
 	}
+}
+
+function adapterPackageDirsFromSettings(settingsPath: string, agentDir: string): string[] {
+	return packageDirsFromSettings(settingsPath, agentDir, CLAUDE_OAUTH_ADAPTER_PACKAGE, MULTI_ACCOUNT_ADAPTER_SOURCE);
 }
 
 /**
@@ -599,15 +601,45 @@ export function resolvePiChildModelBootstrapEntry(
 	env: NodeJS.ProcessEnv = process.env,
 	moduleUrl: string = import.meta.url,
 ): string | undefined {
-	const override = env.SUMOCODE_CHILD_MODEL_BOOTSTRAP?.trim();
+	return resolveChildEntry("SUMOCODE_CHILD_MODEL_BOOTSTRAP", "pi-child-model-bootstrap.ts", env, moduleUrl);
+}
+
+/** The child-side MCP capability guard; loaded alongside the MCP adapter. */
+export function resolveMcpChildBootstrapEntry(
+	env: NodeJS.ProcessEnv = process.env,
+	moduleUrl: string = import.meta.url,
+): string | undefined {
+	return resolveChildEntry("SUMOCODE_MCP_CHILD_BOOTSTRAP", "mcp-child-bootstrap.ts", env, moduleUrl);
+}
+
+/**
+ * Argv that mounts an MCP grant: the SumoCode-owned guard, the adapter that
+ * registers `mcp`, and the generated scoped config.
+ *
+ * `--mcp-config` is registered by the adapter itself, so it is only accepted
+ * once that `-e` path is in the same argv. That coupling is deliberate: a
+ * missing adapter makes the child exit with an unknown-option error instead of
+ * launching a child whose task metadata claims an MCP surface it never had.
+ */
+export function mcpLaunchArgs(mcp: McpLaunchCapability, guardEntry: string | undefined): string[] {
+	return [...(guardEntry ? ["-e", guardEntry] : []), "-e", mcp.adapterEntry, "--mcp-config", mcp.configPath];
+}
+
+function resolveChildEntry(
+	overrideVariable: string,
+	fileName: string,
+	env: NodeJS.ProcessEnv,
+	moduleUrl: string,
+): string | undefined {
+	const override = env[overrideVariable]?.trim();
 	const moduleDir = dirname(fileURLToPath(moduleUrl));
 	const candidates = [
 		override,
-		env.SUMOCODE_ROOT_DIR ? join(env.SUMOCODE_ROOT_DIR, "src", "subagents", "pi-child-model-bootstrap.ts") : undefined,
-		join(moduleDir, "pi-child-model-bootstrap.ts"),
-		// A generated extension bundle lives at dist/extension/*.mjs while this
-		// child-only entry remains executable TypeScript under src/subagents.
-		resolve(moduleDir, "..", "..", "src", "subagents", "pi-child-model-bootstrap.ts"),
+		env.SUMOCODE_ROOT_DIR ? join(env.SUMOCODE_ROOT_DIR, "src", "subagents", fileName) : undefined,
+		join(moduleDir, fileName),
+		// A generated extension bundle lives at dist/extension/*.mjs while these
+		// child-only entries remain executable TypeScript under src/subagents.
+		resolve(moduleDir, "..", "..", "src", "subagents", fileName),
 	];
 	return candidates.find((candidate): candidate is string => !!candidate && existsSync(candidate));
 }
@@ -663,7 +695,9 @@ export const createPiChildSpawner = (
 	model?: string;
 	thinking?: string;
 	inherited: { model?: { provider: string; id: string }; thinking?: string };
-	builtInTools?: readonly BuiltInToolName[];
+	tools?: readonly ChildToolName[];
+	/** Resolved MCP grant; the launcher loads the adapter and its scoped config. */
+	mcp?: McpLaunchCapability;
 	appendSystemPrompt?: string;
 	signal?: AbortSignal;
 	launchGate?: HeadlessLaunchGate;
@@ -680,8 +714,8 @@ export const createPiChildSpawner = (
 		// SAFETY: inherited thinking strings are validated by resolveTaskConfig below.
 		inheritedThinking: (options.inherited.thinking ?? "low") as ThinkingLevel,
 		ctxModel: options.inherited.model,
-		// Children inherit the PARENT's active built-in tool set so a narrowed
-		// parent session cannot spawn children with broader tool access.
+		// Children inherit the PARENT's resolved child surface so a narrowed parent
+		// session cannot spawn children with broader tool access.
 		//
 		// TRUST MODEL (conscious, documented): children
 		// run --no-extensions, so SumoCode's approval gate is NOT installed in
@@ -690,7 +724,7 @@ export const createPiChildSpawner = (
 		// work. The model-facing guidelines warn against delegating destructive
 		// commands; a non-interactive child-side deny-list is a possible future
 		// opt-in, tracked in plan 065's maintenance notes.
-		builtInTools: [...(options.builtInTools ?? DEFAULT_BUILT_IN_TOOLS)],
+		tools: [...(options.tools ?? BUILT_IN_TOOLS)],
 	});
 	if (!config.ok) {
 		return {
@@ -730,6 +764,12 @@ export const createPiChildSpawner = (
 		const roleArgs = options.appendSystemPrompt ? ["--append-system-prompt", options.appendSystemPrompt] : [];
 		const adapterArgs = adapterEntry ? ["-e", adapterEntry] : [];
 		const bootstrapArgs = bootstrapEntry ? ["-e", bootstrapEntry] : [];
+		// The MCP gateway is an extension tool, so the grant has two halves: the
+		// adapter (which registers `mcp`) and the scoped config (which bounds what
+		// the gateway can reach). Both come from the resolved capability, and both
+		// must sit in argv before the launch fence below.
+		const mcp = options.retainedBootstrap ? options.retainedBootstrap.config.mcp ?? undefined : options.mcp;
+		const mcpArgs = mcp ? mcpLaunchArgs(mcp, resolveMcpChildBootstrapEntry()) : [];
 		const configuredArgs = childModel ? removeCliModelSelection(config.subprocessArgs) : config.subprocessArgs;
 		const sessionDir = options.resumeSessionFile ? dirname(options.resumeSessionFile) : options.sessionDir;
 		if (options.resumeSessionFile && !existsSync(options.resumeSessionFile)) throw new Error("resume session file is unavailable");
@@ -748,7 +788,8 @@ export const createPiChildSpawner = (
 			const expected = data.descriptor.config;
 			if (options.cwd !== expected.cwd || binary !== expected.pi || options.prompt !== data.prompt
 				|| config.modelLabel !== expected.model.label || config.thinkingLevel !== expected.thinking
-				|| JSON.stringify(options.builtInTools ?? DEFAULT_BUILT_IN_TOOLS) !== JSON.stringify(expected.builtInTools)
+				|| JSON.stringify(options.tools ?? BUILT_IN_TOOLS) !== JSON.stringify(expected.tools)
+				|| Boolean(options.mcp) !== Boolean(expected.mcp)
 				|| Boolean(childModel) !== Boolean(bootstrapEntry)) throw new Error("retained bootstrap options mismatch");
 			hookArgs.push("-e", retainedSourceHook(binary));
 			assertNoFactoryReceipt(binding);
@@ -759,7 +800,7 @@ export const createPiChildSpawner = (
 		// retained work there until a per-taskkill seam exists. Ungated is unchanged.
 		if (options.launchGate && process.platform === "win32") throw new Error("retained headless requires POSIX signal fencing");
 		const anchorNonce = options.launchGate?.beforeSpawn();
-		const args = [...subprocessArgs, ...roleArgs, ...adapterArgs, ...bootstrapArgs, ...hookArgs];
+		const args = [...subprocessArgs, ...roleArgs, ...adapterArgs, ...bootstrapArgs, ...mcpArgs, ...hookArgs];
 		let piExit: { code: number | null; signal: string | null } | undefined;
 		let piChild: ProcessTreeMemberAnchor | undefined;
 		const anchor = options.launchGate ? new RetainedAnchor(spawnImpl, binary, args, { cwd: options.cwd, env: childEnv, nonce: anchorNonce || undefined }, {

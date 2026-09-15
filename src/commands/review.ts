@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SubagentSnapshot } from "../subagents/domain.js";
 import type { AtCapacityDetails, SpawnSubagentTask } from "../subagents/manager.js";
+import { resolveChildToolSurface } from "../subagents/task-config.js";
 
 export const DEFAULT_REVIEW_MODEL = "openai-codex/gpt-5.3-codex";
 
@@ -218,9 +219,10 @@ export function registerReviewCommand(pi: ExtensionAPI, options: RegisterReviewC
 					thinking: "xhigh",
 					// Mirror the subagent_spawn tool: a narrowed parent session (e.g.
 					// `--tools read`) must narrow the visible reviewer too, or it would
-					// launch unrestricted. model/thinking are always explicit here, so
-					// only the tool allowlist needs threading.
-					builtInTools: pi.getActiveTools(),
+					// launch unrestricted. The reviewer is granted the parent's built-in
+					// surface only — extension tools (the MCP gateway included) require
+					// an explicit role grant, and this command has no role to read one from.
+					tools: resolveChildToolSurface({ roleTools: undefined, parentActiveTools: pi.getActiveTools() }),
 				});
 				if (subagent.status === "at_capacity") {
 					notify(ctx, `/sumo:review is at capacity (${subagent.runningCount}/${subagent.capacity}): ${subagent.retryHint}`, "warning");

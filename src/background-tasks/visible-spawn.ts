@@ -6,6 +6,7 @@
  */
 
 import { dirname, join } from "node:path";
+import type { McpLaunchCapability } from "../subagents/mcp-capability.js";
 
 export interface VisibleTaskPaths {
 	/** The task directory itself; artifact confinement is relative to it. */
@@ -36,6 +37,8 @@ interface VisibleAgentCommandOptions {
 	model?: string;
 	thinking?: string;
 	tools?: readonly string[];
+	/** Resolved MCP grant; adds the adapter, its startup guard, and its scoped config. */
+	mcp?: McpLaunchCapability;
 }
 
 export function visibleTaskPathsInDir(dir: string): VisibleTaskPaths {
@@ -100,7 +103,15 @@ function buildVisibleAgentArgs(options: VisibleAgentCommandOptions): string[] {
 		: options.tools.length === 0
 			? ["--no-tools"]
 			: ["--tools", options.tools.join(",")];
-	return ["task", ...modelFlags, ...thinkingFlags, ...toolsFlags, "--task-dir", dirname(options.paths.promptFile)];
+	// A visible child runs a full SumoCode launcher session, so unlike the
+	// headless path it already has extension discovery. The grant is therefore
+	// carried the same way the operator would carry it by hand: load the
+	// adapter explicitly and point it at the scoped config, which bounds the
+	// gateway to the selected servers.
+	const mcpFlags = options.mcp
+		? ["-e", options.mcp.adapterEntry, "--mcp-config", options.mcp.configPath]
+		: [];
+	return ["task", ...modelFlags, ...thinkingFlags, ...toolsFlags, ...mcpFlags, "--task-dir", dirname(options.paths.promptFile)];
 }
 
 export function buildVisibleAgentCommand(options: VisibleAgentCommandOptions): string {

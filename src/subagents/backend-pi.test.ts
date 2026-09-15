@@ -231,7 +231,7 @@ function effectFixture(retainedBootstrap?: RetainedBootstrapDescriptor) {
 	const child = createPiChildSpawner(spawn as never, () => undefined, () => retainedBootstrap?.config.pi ?? "/selected/pi", () => undefined, operations)({
 		prompt: retainedBootstrap ? "private task payload" : "private", cwd: retainedBootstrap?.config.cwd ?? "/workspace", inherited: {}, signal: controller.signal, launchGate: gate,
 		retainedBootstrap, model: retainedBootstrap ? "provider/model" : undefined,
-		thinking: retainedBootstrap ? "low" : undefined, builtInTools: retainedBootstrap ? ["read"] : undefined,
+		thinking: retainedBootstrap ? "low" : undefined, tools: retainedBootstrap ? ["read"] : undefined,
 	});
 	const events = collect(child.events);
 	return { proc, controller, child, events, signals, refused, operations, spawn, gate,
@@ -253,7 +253,7 @@ function sourceBootstrap() {
 	};
 	return prepareRetainedBootstrap(record, {
 		cwd: root, baseRef: "HEAD", model: { provider: "provider", modelId: "model", label: "provider/model" },
-		thinking: "low", builtInTools: ["read"], role: null, pi, adapterEntry: null, modelBootstrapEntry: null, visible: null,
+		thinking: "low", tools: ["read"], role: null, pi, adapterEntry: null, modelBootstrapEntry: null, mcp: null, visible: null,
 	}, { prompt: "private task payload", systemPrompt: "secret role λ" });
 }
 
@@ -332,7 +332,7 @@ describe("retained source factory readiness", () => {
 		// SAFETY: no process may be spawned on any rejected launch.
 		const child = createPiChildSpawner(spawn as never, () => undefined, () => descriptor.config.pi)({
 			prompt: cut === "mismatch" ? "wrong" : "private task payload", cwd: descriptor.config.cwd, inherited: {},
-			model: "provider/model", thinking: "low", builtInTools: ["read"],
+			model: "provider/model", thinking: "low", tools: ["read"],
 			launchGate: { ...passiveFences, beforeSpawn: vi.fn(), beforePrompt: vi.fn() },
 			retainedBootstrap: cut === "unbound" ? undefined : descriptor,
 			appendSystemPrompt: cut === "ambiguous" || cut === "unbound" ? "secret role λ" : undefined,

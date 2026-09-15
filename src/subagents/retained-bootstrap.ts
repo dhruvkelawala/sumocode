@@ -3,7 +3,8 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpat
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { writePrivateJsonExclusive } from "../activity/persistence.js";
 import type { ExecutableProvenance } from "../executable-provenance.js";
-import { BUILT_IN_TOOLS, type BuiltInToolName } from "./task-config.js";
+import { BUILT_IN_TOOLS, APPROVABLE_EXTENSION_TOOLS, MCP_GATEWAY_TOOL, isChildToolName, type ChildToolName } from "./task-config.js";
+import type { McpLaunchCapability } from "./mcp-capability.js";
 import { VALID_THINKING_LEVELS, type ProviderModel, type ThinkingLevel } from "./task-params.js";
 import { assertPrivateArtifact, assertPrivateDir, isOwnedByUs, nodeArtifactFs, validatedArtifactStat } from "../private-artifact.js";
 import type { AgentPanePlacement } from "../terminal-host/types.js";
@@ -17,7 +18,9 @@ export interface RetainedBootstrapConfiguration {
 	readonly baseRef: string;
 	readonly model: Readonly<ProviderModel>;
 	readonly thinking: ThinkingLevel;
-	readonly builtInTools: readonly BuiltInToolName[];
+	readonly tools: readonly ChildToolName[];
+	/** Resolved MCP grant, or null when the child has no MCP surface. */
+	readonly mcp: McpLaunchCapability | null;
 	readonly role: Pick<SubagentRole, "id" | "label"> | null;
 	readonly pi: ExecutableProvenance["pi"];
 	readonly adapterEntry: string | null;
@@ -75,7 +78,10 @@ export function prepareRetainedBootstrap(
 			config: structuredClone(config), prompt: pointer(PROMPT_FILE, prompts.prompt),
 			systemPrompt: prompts.systemPrompt === null ? null : pointer(SYSTEM_FILE, prompts.systemPrompt),
 		};
-		if (!validDescriptor(descriptor) || descriptor.config.role?.id !== (record.roleId ?? undefined)
+		// A granted gateway and its scoped config are one capability: a surface
+		// that lists `mcp` without a resolved grant (or a grant nothing can use)
+		// is a descriptor that would launch a child the parent never authorized.
+		if (!validDescriptor(descriptor) || (descriptor.config.mcp === null) !== !descriptor.config.tools.includes(MCP_GATEWAY_TOOL) || descriptor.config.role?.id !== (record.roleId ?? undefined)
 			|| (record.modelLabel !== null && record.modelLabel !== descriptor.config.model.label)
 			|| Buffer.byteLength(serialize(descriptor)) > MAX_DESCRIPTOR_BYTES) throw new Error(FAILURE);
 		const directory = assertDirectory(record.taskDir);
@@ -175,7 +181,8 @@ function assertConfigurationPaths(descriptor: RetainedBootstrapDescriptor): void
 		if (realpathSync(path) !== path || !lstatSync(path).isDirectory()) throw new Error(FAILURE);
 	}
 	for (const [path, executable] of [[config.pi, true], [config.adapterEntry, false],
-		[config.modelBootstrapEntry, false], [config.visible?.launcher ?? null, true]] as const) {
+		[config.modelBootstrapEntry, false], [config.mcp?.adapterEntry ?? null, false],
+		[config.mcp?.configPath ?? null, false], [config.visible?.launcher ?? null, true]] as const) {
 		if (path === null) continue;
 		const fromTask = relative(taskDir, path);
 		const stat = lstatSync(path);
@@ -208,6 +215,19 @@ function promptText(value: unknown): value is string {
 	return typeof value === "string" && Buffer.byteLength(value) <= MAX_TEXT_BYTES
 		&& Buffer.from(value).toString("utf8") === value && !value.includes("\0");
 }
+function validToolSurface(value: unknown): boolean {
+	if (!Array.isArray(value) || value.length > BUILT_IN_TOOLS.length + APPROVABLE_EXTENSION_TOOLS.length
+		|| new Set(value).size !== value.length) return false;
+	return value.every((tool): boolean => typeof tool === "string" && isChildToolName(tool));
+}
+
+function validMcpGrant(value: unknown): boolean {
+	if (value === null) return true;
+	if (!object(value, "servers adapterEntry configPath") || !pathValue(value.adapterEntry) || !pathValue(value.configPath)) return false;
+	return Array.isArray(value.servers) && value.servers.length > 0 && new Set(value.servers).size === value.servers.length
+		&& value.servers.every((server): boolean => typeof server === "string" && text(server));
+}
+
 function validPointer(value: unknown, file: string): value is PromptPointer {
 	return object(value, "file bytes sha256") && value.file === file && typeof value.bytes === "number"
 		&& Number.isSafeInteger(value.bytes) && value.bytes >= 3 && value.bytes <= MAX_PROMPT_FILE_BYTES
@@ -225,15 +245,13 @@ function validDescriptor(value: unknown): value is RetainedBootstrapDescriptor {
 		|| (value.backend !== "headless" && value.backend !== "visible") || !validPointer(value.prompt, PROMPT_FILE)
 		|| !(value.systemPrompt === null || validPointer(value.systemPrompt, SYSTEM_FILE))) return false;
 	const c = value.config;
-	if (!object(c, "cwd baseRef model thinking builtInTools role pi adapterEntry modelBootstrapEntry visible", "controller")
+	if (!object(c, "cwd baseRef model thinking tools role pi adapterEntry modelBootstrapEntry visible mcp", "controller")
 		|| !(c.controller === undefined || (object(c.controller, "token pid processStartTime")
 			&& text(c.controller.token) && Number.isSafeInteger(c.controller.pid) && Number(c.controller.pid) > 0
 			&& text(c.controller.processStartTime)))
 		|| !pathValue(c.cwd) || !text(c.baseRef) || !object(c.model, "provider modelId label")
 		|| !text(c.model.provider) || !text(c.model.modelId) || c.model.label !== `${c.model.provider}/${c.model.modelId}`
-		|| !VALID_THINKING_LEVELS.some((level) => level === c.thinking) || !Array.isArray(c.builtInTools)
-		|| c.builtInTools.length > BUILT_IN_TOOLS.length || new Set(c.builtInTools).size !== c.builtInTools.length
-		|| !c.builtInTools.every((tool) => BUILT_IN_TOOLS.some((allowed) => allowed === tool))
+		|| !VALID_THINKING_LEVELS.some((level) => level === c.thinking) || !validToolSurface(c.tools) || !validMcpGrant(c.mcp)
 		|| !(c.role === null || (object(c.role, "id label") && text(c.role.id) && text(c.role.label)))
 		|| !pathValue(c.pi) || !(c.adapterEntry === null || pathValue(c.adapterEntry))
 		|| !(c.modelBootstrapEntry === null || pathValue(c.modelBootstrapEntry))) return false;

@@ -16,6 +16,8 @@ import { planPlacement } from "./layout.js";
 import { addReportedSubagentUsage, evaluateSubagentBudget, validateSubagentBudget, type SubagentBudget } from "./budget-policy.js";
 import { buildCompletionManifest, type CompletionManifestEvidence } from "./manifest.js";
 import type { DeliveryPayload } from "./delivery.js";
+import { MCP_GATEWAY_TOOL, type ChildToolName } from "./task-config.js";
+import { resolveMcpLaunchCapability, type McpLaunchCapability } from "./mcp-capability.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -64,7 +66,10 @@ export interface SpawnSubagentTask {
 	readonly model?: string;
 	readonly thinking?: string;
 	readonly inherited?: { model?: { provider: string; id: string }; thinking?: string };
-	readonly builtInTools?: readonly string[];
+	/** Resolved child tool surface: role policy intersected with the parent's active tools. */
+	readonly tools?: readonly ChildToolName[];
+	/** MCP servers the role selected. Requires `mcp` in `tools`. */
+	readonly mcpServers?: readonly string[];
 }
 
 export type SubagentLaunch = SpawnSubagentTask & {
@@ -73,6 +78,8 @@ export type SubagentLaunch = SpawnSubagentTask & {
 	readonly baseRef: string;
 	readonly worktreeRef?: SubagentWorktreeRef;
 	readonly placement?: AgentPanePlacement;
+	/** Resolved once the child cwd is final; launchers consume it, callers never set it. */
+	readonly mcp?: McpLaunchCapability;
 };
 type BackendFactory = (task: SubagentLaunch & { provisioningTimeoutMs?: number }) => SpawnedChild | Promise<SpawnedChild>;
 type Listener = () => void;
@@ -654,6 +661,20 @@ export class SubagentManager {
 			}
 
 			let placement: AgentPanePlacement | undefined;
+			// Resolve the MCP grant before any pane is provisioned: a role that asks
+			// for MCP it cannot have must fail as a capability error, not as a child
+			// that quietly runs without the tool.
+			const mcpResolution = resolveMcpLaunchCapability({
+				gatewayRequested: task.tools?.includes(MCP_GATEWAY_TOOL) === true,
+				servers: task.mcpServers,
+				cwd: childCwd,
+				key: id,
+			});
+			if (!mcpResolution.ok) {
+				releasePending();
+				return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, `MCP capability unavailable: ${mcpResolution.error}`, childCwd, worktree, { errorCode: "mcp_unavailable" });
+			}
+			const mcp = mcpResolution.capability;
 			if (task.visible) {
 				// Git/worktree preparation is a separate preflight. The user-facing
 				// terminal-provisioning budget begins immediately before placement
@@ -733,7 +754,7 @@ export class SubagentManager {
 			let child: SpawnedChild;
 			try {
 				child = await this.backendFactory({ ...task, cwd: childCwd, id, signal: controller.signal, placement,
-					baseRef: manifestBaseRef, worktreeRef: worktree, provisioningTimeoutMs });
+					baseRef: manifestBaseRef, worktreeRef: worktree, provisioningTimeoutMs, ...(mcp ? { mcp } : {}) });
 			} catch (error) {
 				this.workspacePlacedIds.delete(id);
 				// The construction never emits run-settled, so the placement would
@@ -786,7 +807,7 @@ export class SubagentManager {
 		}
 	}
 
-	public async reply(id: string, text: string, overrides: Pick<SpawnSubagentTask, "sourceId" | "appendSystemPrompt" | "model" | "thinking" | "inherited" | "builtInTools"> = {}): Promise<SubagentSnapshot | AtCapacityDetails> {
+	public async reply(id: string, text: string, overrides: Pick<SpawnSubagentTask, "sourceId" | "appendSystemPrompt" | "model" | "thinking" | "inherited" | "tools" | "mcpServers"> = {}): Promise<SubagentSnapshot | AtCapacityDetails> {
 		const original = this.snapshots.get(id);
 		if (!original) throw new Error(`Unknown subagent id: ${id}. Known ids: ${this.list().map((snapshot) => snapshot.id).join(", ") || "(none)"}`);
 		if (original.visible) throw new Error(`${id} is a visible child — it converses live via subagent_send while open; reply-after-close is not supported`);

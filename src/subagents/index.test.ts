@@ -467,7 +467,7 @@ describe("subagent result delivery", () => {
 			cwd: "/tmp/project",
 			visible: true,
 			inherited: { model: { provider: "openai-codex", id: "gpt-5.6-sol" }, thinking: "high" },
-			builtInTools: ["read", "grep"],
+			tools: ["read", "grep"],
 		});
 		expect(backend.paneCalls).toHaveLength(1);
 		expect(backend.paneCalls[0]?.model).toBe("openai-codex/gpt-5.6-sol");

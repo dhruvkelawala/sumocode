@@ -10,6 +10,7 @@ import { renderCathedralCodeBlock } from "../transcript/code-renderer.js";
 import { expandKey } from "../transcript/expand-key.js";
 import { cathedralMarkdownTheme } from "../transcript/markdown-theme.js";
 import { renderCathedralMermaid } from "../transcript/mermaid-renderer.js";
+import { syntaxHighlightGeneration } from "../transcript/syntax-highlight.js";
 import { isMermaidLanguage, type MermaidRenderingMode } from "../transcript/mermaid.js";
 import { renderActivityBlockRows, renderImageRows } from "../transcript/activity-renderer.js";
 import { renderScrollBlock } from "../transcript/scroll-renderer.js";
@@ -50,6 +51,8 @@ interface RenderRowsCacheEntry {
 	width: number;
 	contentVersion: number;
 	themeVersion: number;
+	/** Lazy syntax grammars land after the first paint; see syntaxHighlightGeneration. */
+	highlightGeneration: number;
 	rows: string[];
 	/** Unframed rows retained only for incrementally appended plain text. */
 	plainBodyRows?: string[];
@@ -595,8 +598,12 @@ export class ChatMessage extends SumoNode {
 	private renderRows(width: number): string[] {
 		const renderWidth = normalizeWidth(width);
 		const themeVersion = getThemeVersion();
+		const highlightGeneration = syntaxHighlightGeneration();
 		const cached = this.renderRowsCache.find(
-			(entry) => entry.width === renderWidth && entry.contentVersion === this.contentVersion && entry.themeVersion === themeVersion,
+			(entry) => entry.width === renderWidth
+				&& entry.contentVersion === this.contentVersion
+				&& entry.themeVersion === themeVersion
+				&& entry.highlightGeneration === highlightGeneration,
 		);
 		if (cached) return cached.rows;
 
@@ -604,7 +611,7 @@ export class ChatMessage extends SumoNode {
 			? wrapPlainText(this.text, Math.max(1, renderWidth - 4))
 			: undefined;
 		const rows = this.computeRenderRows(renderWidth, plainBodyRows);
-		const entry: RenderRowsCacheEntry = { width: renderWidth, contentVersion: this.contentVersion, themeVersion, rows, plainBodyRows };
+		const entry: RenderRowsCacheEntry = { width: renderWidth, contentVersion: this.contentVersion, themeVersion, highlightGeneration, rows, plainBodyRows };
 		this.renderRowsCache = [entry, ...this.renderRowsCache.filter((existing) => existing.width !== renderWidth)].slice(0, RENDER_ROWS_CACHE_LIMIT);
 		return rows;
 	}

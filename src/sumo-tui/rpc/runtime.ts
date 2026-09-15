@@ -11,6 +11,7 @@ import type { TranscriptControllerChatSink } from "../transcript/controller.js";
 import type { ActivityPresentationSnapshot } from "../transcript/activity-view-model.js";
 import type { TranscriptViewModel } from "../transcript/view-model.js";
 import type { MermaidRenderingMode } from "../transcript/mermaid.js";
+import { onHighlighterReady } from "../transcript/syntax-highlight.js";
 import { containsCtrlCToken, isAppleTerminalSession, isEscapeInput, normalizeAppleTerminalInput, SharedInputRouter } from "../input/shared-input-router.js";
 import { RpcShellAdapter, type RpcShellAdapterSnapshot } from "./shell-adapter.js";
 import type { RpcHostChromeState } from "./state.js";
@@ -199,6 +200,7 @@ export class RpcHostRuntime {
 	/** Stops for the host's optional heap diagnostics (#521): sampler + snapshot signal. */
 	private readonly heapDiagnosticsStops: Array<() => void> = [];
 	private themeUnsubscribe: (() => void) | undefined;
+	private highlighterUnsubscribe: (() => void) | undefined;
 	private started = false;
 	private inputStarted = false;
 	private stopped = false;
@@ -371,6 +373,10 @@ export class RpcHostRuntime {
 			this.terminal.applyPalette?.(terminalPaletteFromColors(theme.tokens.colors));
 			this.scheduleRender();
 		});
+		// Same seam, one rung down: a code block paints with the fallback
+		// tokenizer until its Shiki grammar finishes loading, then asks for the
+		// single corrected repaint (the render memo keys on the generation).
+		this.highlighterUnsubscribe ??= onHighlighterReady(() => this.scheduleRender());
 		this.terminal.startRetainedSession();
 		// Mirrors pi-tui's ProcessTerminal: UTF-8 decoding lets Node reassemble
 		// multibyte codepoints split across data events. Reloads may start this
@@ -551,6 +557,8 @@ export class RpcHostRuntime {
 		this.notifications.dispose?.();
 		this.themeUnsubscribe?.();
 		this.themeUnsubscribe = undefined;
+		this.highlighterUnsubscribe?.();
+		this.highlighterUnsubscribe = undefined;
 		if (!options.preserveTerminal) this.terminal.exitTerminal();
 		for (const resolve of this.waiters.splice(0)) resolve(code);
 	}

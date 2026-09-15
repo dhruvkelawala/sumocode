@@ -312,6 +312,11 @@ function collapseMarker(reasons: readonly string[], width: number): string | und
 	return visibleWidth(detailed) <= Math.max(1, width - 2) ? detailed : "… content collapsed";
 }
 
+// TODO(syntax-highlight): source folds could route each line through
+// `highlightLine(line, langFromPath(activity.target), activeThemeApplicationRoles().code)`.
+// Not a one-line change: this renderer paints with `ActivityLedgerRoles`
+// (body/bodyMuted), the snapshot carries no language, and the ledger body has
+// no `code` role surface. Seam: `renderBodyLine` spans below.
 function renderSourceBody(activity: ActivitySnapshot, width: number, roles: ActivityLedgerRoles): string[] {
 	if (activity.body?.kind !== "source") return [];
 	const lines = sourceContentLines(activity.body.text);
@@ -354,6 +359,10 @@ function renderDiffSummaryText(text: string, width: number, roles: ActivityLedge
 	], width, roles);
 }
 
+// TODO(syntax-highlight): edit-ledger diffs keep their +/- state colouring.
+// Shiki's `diff` grammar only scopes `markup.inserted`/`markup.deleted`, which
+// the theme's `code` roles do not cover, and per-line syntax under the +/- tint
+// needs a blend rule first. Seam: the `visible.map` span builder below.
 function renderDiffBody(activity: ActivitySnapshot, width: number, roles: ActivityLedgerRoles): string[] {
 	if (activity.body?.kind !== "diff") return [];
 	const allLines = contentLines(activity.body.text);

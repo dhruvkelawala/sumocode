@@ -1,4 +1,4 @@
-$ signed-in surface: scoped MCP config written by the capability resolver
+$ scoped MCP config written by the capability resolver:
   {
     "mcpServers": {
       "fixture": {
@@ -7,7 +7,7 @@ $ signed-in surface: scoped MCP config written by the capability resolver
           "/Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/sumo__wt-mu2qdem2/test/integration/fixtures/mcp-fixture-server.mjs"
         ],
         "env": {
-          "MCP_FIXTURE_LOG": "/private/var/folders/jy/3j8rk22d6cg47dgvfjs016gw0000gn/T/sumocode-mcp-proof-W79Hyz/fixture-calls.jsonl"
+          "MCP_FIXTURE_LOG": "/private/var/folders/jy/3j8rk22d6cg47dgvfjs016gw0000gn/T/sumocode-mcp-proof-IheWVm/fixture-calls.jsonl"
         }
       },
       "rn": {

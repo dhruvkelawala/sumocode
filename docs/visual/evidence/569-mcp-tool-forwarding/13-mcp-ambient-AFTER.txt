@@ -1,0 +1,17 @@
+$ ambient scope: no config generated; the child resolves its own chain
+  {
+    "mcpServers": {}
+  }
+$ argv: /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/sumo__wt-mu2qdem2/node_modules/.bin/pi --mode json -p --no-session --no-extensions --provider deepseek --model deepseek-flash --thinking low --tools read,bash,mcp -e "/Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/sumo__wt-mu2qdem2/src/subagents/mcp-child-bootstrap.ts" -e /Users/sumo-deus/.pi/agent/npm/node_modules/pi-mcp-adapter/index.ts
+$ child exit: 0
+$ tool calls: ["mcp"]
+$ fixture server calls: ["{\"server\":\"fixture\",\"tool\":\"image\",\"arguments\":{}}"]
+$ ambient global servers fenced: []
+$ image content blocks on the child's message stream: 5
+$ text metadata blocks: 8
+$ child stderr: Warning: No models match pattern "cursor/grok-4.6"
+PASS: child called the MCP gateway
+PASS: fixture server received a tools/call
+PASS: the ambient grant carries no scoped config
+PASS: the synthetic image arrived as a native image block
+PASS: the image's text metadata survived

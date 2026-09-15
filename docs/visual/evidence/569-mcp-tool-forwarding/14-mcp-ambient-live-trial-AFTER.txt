@@ -1,0 +1,16 @@
+$ live integrated trial: unpatched role, real manager + retained path, host restarted at 1dbc5fd0
+$ role: implement-cheap (~/.pi/agent/sumocode/roles.json restored: tools = read,bash,edit,write,grep,find,ls; no mcp, no mcpServers)
+$ parent session: mcp active, ambient globals rn + plan configured (disconnected)
+$ spawn: subagent_spawn role=implement-cheap working_dir=/tmp/sumo-mcp-trial (project .mcp.json defines only "fixture")
+
+child report:
+1. mcp tool present: yes (inherited, not granted by any role field)
+2. mcp({}) status: 3 servers visible - rn, plan, fixture (ambient scope: nothing fenced, unlike the scoped trial where rn/plan were disabled)
+3. fixture echo {"value":"trial-ambient"} returned exactly: echo:trial-ambient
+4. fixture image {} : image content block reached the model (rendered as an attached image) + text metadata: fixture-image-metadata
+
+fixture server call log (transport, independent of the model's report):
+{"server":"fixture","tool":"echo","arguments":{"value":"trial-ambient"}}
+{"server":"fixture","tool":"image","arguments":{}}
+
+capability artifacts written for this spawn: 0 (ambient scope writes no file)

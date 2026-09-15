@@ -182,7 +182,8 @@ function assertConfigurationPaths(descriptor: RetainedBootstrapDescriptor): void
 	}
 	for (const [path, executable] of [[config.pi, true], [config.adapterEntry, false],
 		[config.modelBootstrapEntry, false], [config.mcp?.adapterEntry ?? null, false],
-		[config.mcp?.configPath ?? null, false], [config.visible?.launcher ?? null, true]] as const) {
+		[config.mcp?.guardEntry ?? null, false], [config.mcp?.configPath ?? null, false],
+		[config.visible?.launcher ?? null, true]] as const) {
 		if (path === null) continue;
 		const fromTask = relative(taskDir, path);
 		const stat = lstatSync(path);
@@ -223,7 +224,8 @@ function validToolSurface(value: unknown): boolean {
 
 function validMcpGrant(value: unknown): boolean {
 	if (value === null) return true;
-	if (!object(value, "servers adapterEntry configPath") || !pathValue(value.adapterEntry) || !pathValue(value.configPath)) return false;
+	if (!object(value, "servers adapterEntry guardEntry configPath") || !pathValue(value.adapterEntry)
+		|| !pathValue(value.guardEntry) || !pathValue(value.configPath)) return false;
 	return Array.isArray(value.servers) && value.servers.length > 0 && new Set(value.servers).size === value.servers.length
 		&& value.servers.every((server): boolean => typeof server === "string" && text(server));
 }

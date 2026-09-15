@@ -6,6 +6,7 @@
  */
 
 import { dirname, join } from "node:path";
+import { mcpLaunchArgs } from "../subagents/backend-pi.js";
 import type { McpLaunchCapability } from "../subagents/mcp-capability.js";
 
 export interface VisibleTaskPaths {
@@ -108,9 +109,9 @@ function buildVisibleAgentArgs(options: VisibleAgentCommandOptions): string[] {
 	// carried the same way the operator would carry it by hand: load the
 	// adapter explicitly and point it at the scoped config, which bounds the
 	// gateway to the selected servers.
-	const mcpFlags = options.mcp
-		? ["-e", options.mcp.adapterEntry, "--mcp-config", options.mcp.configPath]
-		: [];
+	// The pane inherits the operator's shell environment, so the grant's scope has
+	// to be defended here too (see mcpChildEnv for why that flag matters).
+	const mcpFlags = options.mcp ? mcpLaunchArgs(options.mcp) : [];
 	return ["task", ...modelFlags, ...thinkingFlags, ...toolsFlags, ...mcpFlags, "--task-dir", dirname(options.paths.promptFile)];
 }
 
@@ -122,7 +123,9 @@ export function buildVisibleAgentCommand(options: VisibleAgentCommandOptions): s
 		shellEscape(options.cwd),
 		"&&",
 		"exec",
-		...(piBin ? ["env", shellEscape(`PI_BIN=${piBin}`)] : []),
+		...(piBin
+			? ["env", ...(options.mcp ? ["-u", "PI_MCP_CONFIG_MODE"] : []), shellEscape(`PI_BIN=${piBin}`)]
+			: options.mcp ? ["env", "-u", "PI_MCP_CONFIG_MODE"] : []),
 		launcher && launcher !== "sumocode" ? shellEscape(launcher) : "sumocode",
 		...buildVisibleAgentArgs(options).map(shellEscape),
 	].join(" ");

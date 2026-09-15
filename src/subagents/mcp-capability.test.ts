@@ -37,10 +37,11 @@ function fixture(options: { readonly withAdapter?: boolean; readonly withServer?
 	}
 	if (options.withServer !== false) {
 		writeFileSync(join(cwd, ".mcp.json"), JSON.stringify({
-			mcpServers: {
-				fixture: { command: "node", args: ["./fixture-server.mjs"] },
-				other: { command: "node", args: ["./other-server.mjs"] },
-			},
+			mcpServers: { fixture: { command: "node", args: ["./fixture-server.mjs"] } },
+		}), { mode: 0o600 });
+		// Ambient global roster, which a scoped grant must fence off.
+		writeFileSync(join(agentDir, "mcp.json"), JSON.stringify({
+			mcpServers: { other: { command: "node", args: ["./other-server.mjs"] } },
 		}), { mode: 0o600 });
 	}
 	return { root, cwd, agentDir, adapterEntry };
@@ -113,6 +114,40 @@ it("resolves project-local configuration from the child cwd, including an isolat
 	expect(written.mcpServers["worktree-only"]).toEqual({ command: "node" });
 });
 
+it("refuses a grant while a project config defines an unselected server", () => {
+	// Project files merge ABOVE the generated one, so they can clear the
+	// `disabled` fence; a repo must not be able to widen an operator's grant.
+	const f = fixture();
+	writeFileSync(join(f.cwd, ".mcp.json"), JSON.stringify({
+		mcpServers: { fixture: { command: "node" }, sneaky: { command: "node" } },
+	}), { mode: 0o600 });
+	const result = resolve(f, ["fixture"]);
+	expect(result.ok).toBe(false);
+	expect(result.ok === false && result.error).toContain("unselected server(s)");
+	expect(result.ok === false && result.error).toContain("sneaky");
+});
+
+it("refuses a grant while any source pulls servers in through imports", () => {
+	// `imports` expands host configs the reader deliberately does not parse, so
+	// those servers could not be fenced either.
+	const f = fixture();
+	writeFileSync(join(f.agentDir, "mcp.json"), JSON.stringify({
+		mcpServers: {}, imports: ["claude-code"],
+	}), { mode: 0o600 });
+	const result = resolve(f, ["fixture"]);
+	expect(result.ok).toBe(false);
+	expect(result.ok === false && result.error).toContain("imports");
+	expect(result.ok === false && result.error).toContain("pi-mcp-adapter init");
+});
+
+it("pins the settings that could re-add servers after the file chain merges", () => {
+	const f = fixture();
+	const result = resolve(f, ["fixture"]);
+	if (!result.ok || !result.capability) throw new Error("expected a granted capability");
+	const written = JSON.parse(readFileSync(result.capability.configPath, "utf8")) as { settings: unknown };
+	expect(written.settings).toEqual({ hostConfigDiscovery: "off", agentPluginPaths: [] });
+});
+
 it("prefers a higher-precedence project file over the user-global one", () => {
 	const f = fixture();
 	writeFileSync(join(f.agentDir, "mcp.json"), JSON.stringify({ mcpServers: { fixture: { command: "global" } } }), { mode: 0o600 });
@@ -120,12 +155,16 @@ it("prefers a higher-precedence project file over the user-global one", () => {
 	expect(definitions.find((server) => server.name === "fixture")?.definition).toEqual({ command: "node", args: ["./fixture-server.mjs"] });
 });
 
-it("never reuses a capability filename for a second child", () => {
+it("gives every grant its own config file even when the caller key repeats", () => {
+	// Subagent ids restart their counter per process, so an id-only filename
+	// would hard-fail the second session that spawns the same title.
 	const f = fixture();
-	expect(resolve(f, ["fixture"], "sa-once").ok).toBe(true);
+	const first = resolve(f, ["fixture"], "sa-once");
 	const second = resolve(f, ["fixture"], "sa-once");
-	expect(second.ok).toBe(false);
-	expect(second.ok === false && second.error).toContain("already exists");
+	if (!first.ok || !first.capability || !second.ok || !second.capability) throw new Error("expected two grants");
+	expect(first.capability.configPath).not.toBe(second.capability.configPath);
+	expect(existsSync(first.capability.configPath)).toBe(true);
+	expect(existsSync(second.capability.configPath)).toBe(true);
 });
 
 it("resolves the adapter entry from global settings packages and rejects project-scoped candidates", () => {

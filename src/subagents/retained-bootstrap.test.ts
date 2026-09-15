@@ -44,11 +44,11 @@ it("carries an MCP grant through the descriptor without embedding server definit
 	writeFileSync(adapterEntry, "export default () => undefined;\n", { mode: 0o600 });
 	writeFileSync(configPath, '{}\n', { mode: 0o600 });
 	const granted: RetainedBootstrapConfiguration = { ...config, tools: ["read", "mcp"],
-		mcp: { servers: ["fixture"], adapterEntry, configPath } };
+		mcp: { servers: ["fixture"], adapterEntry, guardEntry: adapterEntry, configPath } };
 	const descriptor = prepareRetainedBootstrap(record, granted, secrets);
-	expect(descriptor.config.mcp).toEqual({ servers: ["fixture"], adapterEntry, configPath });
+	expect(descriptor.config.mcp).toEqual({ servers: ["fixture"], adapterEntry, guardEntry: adapterEntry, configPath });
 	expect(JSON.stringify(descriptor)).not.toContain("private prompt");
-	expect(readRetainedBootstrap(record, descriptor.nonce).descriptor.config.mcp).toEqual({ servers: ["fixture"], adapterEntry, configPath });
+	expect(readRetainedBootstrap(record, descriptor.nonce).descriptor.config.mcp).toEqual({ servers: ["fixture"], adapterEntry, guardEntry: adapterEntry, configPath });
 });
 
 it("rejects a tool surface and MCP grant that disagree", () => {

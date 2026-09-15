@@ -165,6 +165,34 @@ export function loadConfiguredMcpServerDefinitions(opts: LoadMcpServersOptions):
 	return [...merged].map(([name, definition]) => ({ name, definition }));
 }
 
+export interface McpConfigSource {
+	readonly path: string;
+	/** Project-local sources are resolved against the child's cwd, so they are repo-controlled. */
+	readonly scope: "global" | "project";
+	readonly servers: readonly string[];
+	readonly imports: readonly string[];
+}
+
+/**
+ * Per-file view of the chain, for callers that must reason about a source
+ * rather than the merged roster: a config that names servers this resolver did
+ * not select (or that pulls servers in through `imports`) cannot be bounded by
+ * a generated lower-precedence file.
+ */
+export function inspectMcpConfigSources(opts: LoadMcpServersOptions): readonly McpConfigSource[] {
+	const projectPaths = new Set([join(opts.cwd, ".mcp.json"), join(opts.cwd, ".pi", "mcp.json")]);
+	return resolveMcpConfigCandidates(opts).map((path) => {
+		const cfg = readMcpConfig(path);
+		const servers = mcpServersOf(cfg);
+		return {
+			path,
+			scope: projectPaths.has(path) ? "project" as const : "global" as const,
+			servers: servers ? Object.keys(servers) : [],
+			imports: Array.isArray(cfg?.imports) ? cfg.imports.filter((value): value is string => typeof value === "string") : [],
+		};
+	}).filter((source) => source.servers.length > 0 || source.imports.length > 0);
+}
+
 function mcpServersOf(cfg: McpConfigFile | undefined): Record<string, McpServerConfig> | undefined {
 	if (!cfg) return undefined;
 	if (isPlainObject(cfg.mcpServers)) return cfg.mcpServers;

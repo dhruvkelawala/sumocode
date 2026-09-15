@@ -621,8 +621,21 @@ export function resolveMcpChildBootstrapEntry(
  * missing adapter makes the child exit with an unknown-option error instead of
  * launching a child whose task metadata claims an MCP surface it never had.
  */
-export function mcpLaunchArgs(mcp: McpLaunchCapability, guardEntry: string | undefined): string[] {
-	return [...(guardEntry ? ["-e", guardEntry] : []), "-e", mcp.adapterEntry, "--mcp-config", mcp.configPath];
+export function mcpLaunchArgs(mcp: McpLaunchCapability): string[] {
+	return ["-e", mcp.guardEntry, "-e", mcp.adapterEntry, "--mcp-config", mcp.configPath];
+}
+
+/**
+ * The adapter treats `PI_MCP_CONFIG_MODE=exclusive` as "read only
+ * <agentDir>/mcp.json and ignore --mcp-config", which would hand the child the
+ * operator's entire global roster and silently void the grant's scope. Children
+ * inherit the parent's environment, so a mounted grant must clear it.
+ */
+export function mcpChildEnv(env: NodeJS.ProcessEnv, mounted: boolean): NodeJS.ProcessEnv {
+	if (!mounted || !("PI_MCP_CONFIG_MODE" in env)) return env;
+	const cleaned = { ...env };
+	delete cleaned.PI_MCP_CONFIG_MODE;
+	return cleaned;
 }
 
 function resolveChildEntry(
@@ -769,7 +782,7 @@ export const createPiChildSpawner = (
 		// the gateway can reach). Both come from the resolved capability, and both
 		// must sit in argv before the launch fence below.
 		const mcp = options.retainedBootstrap ? options.retainedBootstrap.config.mcp ?? undefined : options.mcp;
-		const mcpArgs = mcp ? mcpLaunchArgs(mcp, resolveMcpChildBootstrapEntry()) : [];
+		const mcpArgs = mcp ? mcpLaunchArgs(mcp) : [];
 		const configuredArgs = childModel ? removeCliModelSelection(config.subprocessArgs) : config.subprocessArgs;
 		const sessionDir = options.resumeSessionFile ? dirname(options.resumeSessionFile) : options.sessionDir;
 		if (options.resumeSessionFile && !existsSync(options.resumeSessionFile)) throw new Error("resume session file is unavailable");
@@ -777,9 +790,10 @@ export const createPiChildSpawner = (
 		const subprocessArgs = sessionDir
 			? [...configuredArgs.filter((arg) => arg !== "--no-session"), ...(options.resumeSessionFile ? ["--session", options.resumeSessionFile] : []), "--session-dir", sessionDir]
 			: configuredArgs;
+		const baseEnv = mcpChildEnv(process.env, mcp !== undefined);
 		let childEnv = childModel
-			? { ...process.env, [CHILD_MODEL_PROVIDER_ENV]: childModel.provider, [CHILD_MODEL_ID_ENV]: childModel.modelId }
-			: process.env;
+			? { ...baseEnv, [CHILD_MODEL_PROVIDER_ENV]: childModel.provider, [CHILD_MODEL_ID_ENV]: childModel.modelId }
+			: baseEnv;
 		const binary = resolveBinary();
 		if (options.launchGate && !isAbsolute(binary)) throw new Error("retained launch requires absolute Pi provenance");
 		const hookArgs: string[] = [];

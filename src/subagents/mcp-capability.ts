@@ -1,9 +1,10 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { ensurePrivateSumocodeDirectory, writePrivateJsonExclusive } from "../activity/persistence.js";
-import { loadConfiguredMcpServerDefinitions } from "../mcp-config-reader.js";
-import { adapterEntryFromPackageDir, packageDirsFromSettings } from "./backend-pi.js";
+import { defaultActivityStateRoot, ensurePrivateSumocodeDirectory, writePrivateJsonExclusive } from "../activity/persistence.js";
+import { inspectMcpConfigSources, loadConfiguredMcpServerDefinitions, type ConfiguredMcpServer } from "../mcp-config-reader.js";
+import { adapterEntryFromPackageDir, packageDirsFromSettings, resolveMcpChildBootstrapEntry } from "./backend-pi.js";
 
 /**
  * The MCP gateway tool registered by `pi-mcp-adapter`. MCP is not a Pi
@@ -21,6 +22,8 @@ const CAPABILITIES_DIR = ["subagents", "capabilities"] as const;
 export interface McpLaunchCapability {
 	readonly servers: readonly string[];
 	readonly adapterEntry: string;
+	/** SumoCode-owned guard that exits a child whose gateway never registered. */
+	readonly guardEntry: string;
 	readonly configPath: string;
 }
 
@@ -90,8 +93,20 @@ const validServerName = (name: string): boolean =>
  * underneath, and a higher-precedence project file may redefine a disabled
  * server's transport, but `disabled` is inherited by those partial overrides.
  *
- * Residual (documented in the PR): servers contributed by package manifests
- * (`pi.mcp`) or Agent Plugin directories are outside this resolver's chain.
+ * Two ambient sources cannot be bounded from here and are REFUSED instead of
+ * fenced, because a silently wider child is worse than a refused spawn:
+ *   - `imports`: the adapter expands host configs (`~/.claude.json`, cursor,
+ *     codex, …) per source, which this reader deliberately does not parse.
+ *   - any project-scoped file (`<cwd>/.mcp.json`, `<cwd>/.pi/mcp.json`)
+ *     naming a server that was not selected: project files merge ABOVE this
+ *     one, so they can drop the `disabled` fence.
+ * The generated file also pins `hostConfigDiscovery` off and clears
+ * `agentPluginPaths`, which are the two settings that could otherwise add
+ * servers after the file chain is merged.
+ *
+ * Known residual, documented in the PR: servers contributed by package
+ * manifests (`pi.mcp`) and settings from higher-precedence project files are
+ * outside this resolver's chain.
  *
  * The file repeats whatever the source config held, including inline
  * credentials (`bearerToken`, `headers`, `env`). That is deliberate — the
@@ -120,30 +135,70 @@ export function resolveMcpLaunchCapability(request: McpCapabilityRequest): McpCa
 	if (!adapterEntry) {
 		return { ok: false, error: `MCP was granted but the ${MCP_ADAPTER_PACKAGE} extension could not be located in the trusted global scope` };
 	}
-	const configured = loadConfiguredMcpServerDefinitions({
-		cwd: request.cwd,
-		piAgentDir: env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"),
-	});
+	const guardEntry = resolveMcpChildBootstrapEntry(env);
+	if (!guardEntry) {
+		// Fail closed rather than launch a child that would silently keep the
+		// gateway scope nobody validated at startup.
+		return { ok: false, error: "MCP was granted but the child-side capability guard could not be located" };
+	}
+	const chain = { cwd: request.cwd, piAgentDir: env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent") };
+	const unsupportedImports = inspectMcpConfigSources(chain).filter((source) => source.imports.length > 0);
+	if (unsupportedImports.length > 0) {
+		const paths = unsupportedImports.map((source) => source.path).sort().join(", ");
+		return { ok: false, error: `MCP cannot be scoped while ${paths} uses \`imports\`; run \`pi-mcp-adapter init\` to expand them into mcpServers first` };
+	}
+	const unbounded = inspectMcpConfigSources(chain)
+		.filter((source) => source.scope === "project")
+		.flatMap((source) => source.servers.filter((name) => !servers.includes(name)).map((name) => ({ name, path: source.path })));
+	if (unbounded.length > 0) {
+		// Project files merge above the generated one, so they can clear a
+		// `disabled` fence; a repo could otherwise reach the gateway this grant
+		// was supposed to bound.
+		const detail = unbounded.map((entry) => `${entry.name} (${entry.path})`).join(", ");
+		return { ok: false, error: `MCP cannot be scoped while project configuration defines unselected server(s): ${detail}. Select them explicitly or remove them` };
+	}
+	const configured = loadConfiguredMcpServerDefinitions(chain);
 	const available = new Map(configured.map((server) => [server.name, server.definition]));
 	const missing = servers.filter((name) => !available.has(name));
 	if (missing.length > 0) {
 		const known = configured.map((server) => server.name).sort().join(", ") || "(none)";
 		return { ok: false, error: `MCP server(s) not configured for ${request.cwd}: ${missing.join(", ")}. Configured servers: ${known}` };
 	}
-	const mcpServers: Record<string, unknown> = {};
-	for (const server of configured) {
-		if (!servers.includes(server.name)) mcpServers[server.name] = { disabled: true };
-	}
-	for (const name of servers) mcpServers[name] = available.get(name);
-	const directory = ensurePrivateSumocodeDirectory([...CAPABILITIES_DIR]);
-	const configPath = join(directory, `${request.key}.json`);
 	try {
-		if (existsSync(configPath)) throw new Error(`capability config already exists for ${request.key}`);
-		writePrivateJsonExclusive(configPath, { mcpServers });
+		const configPath = writeScopedMcpConfig(request.key, configured, servers, env);
+		return { ok: true, capability: { servers, adapterEntry, guardEntry, configPath } };
 	} catch (error) {
 		return { ok: false, error: `unable to write the MCP capability config: ${error instanceof Error ? error.message : String(error)}` };
 	}
-	return { ok: true, capability: { servers, adapterEntry, configPath } };
+}
+
+/**
+ * Publish the per-child config: the selected servers verbatim, every other
+ * server this resolver saw explicitly disabled, and the two settings that
+ * could re-add servers after the file chain merges.
+ *
+ * A null-prototype map keeps a server literally named `__proto__` a real key
+ * instead of an assignment to the object's prototype (which would silently
+ * drop it from the file).
+ */
+function writeScopedMcpConfig(
+	key: string,
+	configured: readonly ConfiguredMcpServer[],
+	selected: readonly string[],
+	env: NodeJS.ProcessEnv,
+): string {
+	const mcpServers = Object.create(null) as Record<string, unknown>;
+	for (const name of selected) mcpServers[name] = configured.find((server) => server.name === name)?.definition;
+	for (const server of configured) {
+		if (!selected.includes(server.name)) mcpServers[server.name] = { disabled: true };
+	}
+	const directory = ensurePrivateSumocodeDirectory([...CAPABILITIES_DIR], defaultActivityStateRoot(env));
+	// A nonce keeps the exclusive create honest across processes: subagent ids
+	// restart their counter, and nothing reuses a task directory.
+	const configPath = join(directory, `${key}-${randomUUID()}.json`);
+	if (existsSync(configPath)) throw new Error(`capability config already exists for ${key}`);
+	writePrivateJsonExclusive(configPath, { mcpServers, settings: { hostConfigDiscovery: "off", agentPluginPaths: [] } });
+	return configPath;
 }
 
 function normalizeServers(servers: readonly string[] | undefined): string[] {

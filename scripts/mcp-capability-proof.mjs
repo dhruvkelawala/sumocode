@@ -14,7 +14,7 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 
 const repo = realpathSync(join(dirname(fileURLToPath(import.meta.url)), ".."));
@@ -22,17 +22,15 @@ const root = realpathSync(mkdtempSync(join(tmpdir(), "sumocode-mcp-proof-")));
 const project = join(root, "project");
 const stateDir = join(root, "state");
 const fixtureLog = join(root, "fixture-calls.jsonl");
-const decoyLog = join(root, "decoy-calls.jsonl");
 for (const dir of [project, stateDir]) mkdirSync(dir, { recursive: true, mode: 0o700 });
 
 const fixtureServer = join(repo, "test", "integration", "fixtures", "mcp-fixture-server.mjs");
-writeFileSync(join(project, ".mcp.json"), JSON.stringify({
-	mcpServers: {
-		fixture: { command: process.execPath, args: [fixtureServer], env: { MCP_FIXTURE_LOG: fixtureLog } },
-		// Present in the project config on purpose: a scoped grant must fence it.
-		decoy: { command: process.execPath, args: [fixtureServer], env: { MCP_FIXTURE_LOG: decoyLog } },
-	},
-}, null, 2));
+// `--project-decoy` adds a server the grant does not select: project files merge
+// above the generated one, so that must be refused rather than fenced.
+const projectDecoy = process.argv.includes("--project-decoy");
+const projectServers = { fixture: { command: process.execPath, args: [fixtureServer], env: { MCP_FIXTURE_LOG: fixtureLog } } };
+if (projectDecoy) projectServers.sneaky = { command: process.execPath, args: [fixtureServer] };
+writeFileSync(join(project, ".mcp.json"), JSON.stringify({ mcpServers: projectServers }, null, 2));
 
 // The child needs the operator's real agent dir for provider credentials, so
 // only the state directory is sandboxed. The project directory (and therefore
@@ -43,11 +41,17 @@ if (process.env.MCP_PROOF_ADAPTER) env.SUMOCODE_MCP_ADAPTER = process.env.MCP_PR
 const jiti = createJiti(import.meta.url, { tryNative: false, fsCache: false });
 const { resolveMcpLaunchCapability } = await jiti.import(join(repo, "src", "subagents", "mcp-capability.ts"));
 const { resolveTaskConfig } = await jiti.import(join(repo, "src", "subagents", "task-config.ts"));
-const { mcpLaunchArgs, resolveMcpChildBootstrapEntry, resolvePiBinary } = await jiti.import(join(repo, "src", "subagents", "backend-pi.ts"));
+const { mcpLaunchArgs, resolvePiBinary } = await jiti.import(join(repo, "src", "subagents", "backend-pi.ts"));
 
 const capability = resolveMcpLaunchCapability({
 	gatewayRequested: true, servers: ["fixture"], cwd: project, key: `proof-${Date.now().toString(36)}`, env,
 });
+if (projectDecoy) {
+	const refused = capability.ok === false && capability.error.includes("unselected server(s)") && capability.error.includes("sneaky");
+	console.log(`$ project-decoy refusal: ${capability.ok === false ? capability.error : "GRANT ALLOWED (wrong)"}`);
+	console.log(`${refused ? "PASS" : "FAIL"}: a project config naming an unselected server refuses the grant with a clear error`);
+	process.exit(refused ? 0 : 1);
+}
 if (!capability.ok || !capability.capability) {
 	console.log(`FAIL: capability resolution refused the grant: ${capability.ok === false ? capability.error : "no capability"}`);
 	process.exit(1);
@@ -61,13 +65,8 @@ const config = resolveTaskConfig({
 	ctxModel: undefined, tools: ["read", "bash", "mcp"],
 });
 if (!config.ok) throw new Error(config.error);
-// Production resolves the guard relative to src/subagents/backend-pi.ts; the
-// proof passes that same module url so the emitted argv matches the real one.
-const backendUrl = pathToFileURL(join(repo, "src", "subagents", "backend-pi.ts")).href;
 const denyGrant = process.argv.includes("--deny-grant");
-const args = denyGrant
-	? config.subprocessArgs
-	: [...config.subprocessArgs, ...mcpLaunchArgs(grant, resolveMcpChildBootstrapEntry(env, backendUrl))];
+const args = denyGrant ? config.subprocessArgs : [...config.subprocessArgs, ...mcpLaunchArgs(grant)];
 
 console.log("$ signed-in surface: scoped MCP config written by the capability resolver");
 console.log(JSON.stringify(scoped, null, 2).split("\n").map((line) => `  ${line}`).join("\n"));
@@ -95,12 +94,15 @@ const toolCalls = parsed.filter((event) => event.type === "tool_execution_start"
 const imageBlocks = parsed.filter((event) => JSON.stringify(event).includes('"type":"image"'));
 const imageText = parsed.filter((event) => JSON.stringify(event).includes("fixture-image-metadata"));
 const fixtureCalls = existsSync(fixtureLog) ? readFileSync(fixtureLog, "utf8").trim().split("\n").filter(Boolean) : [];
-const decoyCalls = existsSync(decoyLog) ? readFileSync(decoyLog, "utf8").trim().split("\n").filter(Boolean) : [];
+// Every ambient global server the resolver saw must be fenced in the child's
+	// config: the gateway proxy reaches whatever that file enables.
+const fenced = Object.entries(scoped.mcpServers).filter(([name, value]) => name !== "fixture" && value?.disabled === true).map(([name]) => name);
+const unfenced = Object.entries(scoped.mcpServers).filter(([name, value]) => name !== "fixture" && value?.disabled !== true).map(([name]) => name);
 
 console.log(`$ child exit: ${exitCode}`);
 console.log(`$ tool calls: ${JSON.stringify(toolCalls)}`);
 console.log(`$ fixture server calls: ${JSON.stringify(fixtureCalls)}`);
-console.log(`$ decoy server calls (must be zero): ${decoyCalls.length}`);
+console.log(`$ ambient global servers fenced: ${JSON.stringify(fenced)}`);
 console.log(`$ image content blocks on the child's message stream: ${imageBlocks.length}`);
 console.log(`$ text metadata blocks: ${imageText.length}`);
 if (stderr.trim()) console.log(`$ child stderr: ${stderr.trim().split("\n").slice(0, 5).join("\n")}`);
@@ -114,7 +116,7 @@ const checks = denyGrant
 	: [
 		["child called the MCP gateway", toolCalls.includes("mcp")],
 		["fixture server received a tools/call", fixtureCalls.some((line) => JSON.parse(line).tool === "image")],
-		["the unselected decoy server was never reached", decoyCalls.length === 0],
+		["every unselected ambient server is fenced off", unfenced.length === 0],
 		["the synthetic image arrived as a native image block", imageBlocks.length > 0],
 		["the image's text metadata survived", imageText.length > 0],
 	];

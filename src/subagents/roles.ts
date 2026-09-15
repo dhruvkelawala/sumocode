@@ -4,7 +4,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { isChildToolName } from "./task-config.js";
+import { MCP_GATEWAY_TOOL, isChildToolName } from "./task-config.js";
 
 const MAX_ROLES_FILE_BYTES = 256 * 1024;
 const MAX_ROLE_MCP_SERVERS = 64;
@@ -191,6 +191,11 @@ function normalizedOverlay(value: unknown, index: number, builtIn: boolean, warn
 			if (!servers.includes(server) && servers.length < MAX_ROLE_MCP_SERVERS) servers.push(server);
 		}
 		overlay.mcpServers = servers;
+	}
+	if (overlay.mcpServers !== undefined && overlay.mcpServers.length > 0 && !overlay.tools?.includes(MCP_GATEWAY_TOOL)) {
+		// Surfacing this while the configuration loads keeps the diagnosis next to
+		// the file the operator wrote instead of their first delegation.
+		warn(`role ${id} selects MCP servers without granting the ${MCP_GATEWAY_TOOL} tool`, false);
 	}
 	return overlay;
 }

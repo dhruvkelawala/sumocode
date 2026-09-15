@@ -676,6 +676,15 @@ it("forwards the surface to a visible child only when it must bound it", async (
 		const optedOutCtx = optedOut.ctx as never;
 		await optedOut.tool("subagent_spawn").execute("tc", { prompt: "p", name: "off", role: "off", visible: true }, undefined, undefined, optedOutCtx);
 		expect(backend.paneCalls.at(-1)?.tools).toEqual([...BUILT_IN_TOOLS]);
+
+		// A grant the resolver could not mount is NOT a refusal: this session has
+		// the gateway, so the child's own discovery is no wider than its parent,
+		// and fencing here would strip its extensions for nothing.
+		const degraded = createHarness(false, "tui", { activeTools: [...BUILT_IN_TOOLS, "mcp"] });
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const degradedCtx = degraded.ctx as never;
+		await degraded.tool("subagent_spawn").execute("tc", { prompt: "p", name: "degraded", visible: true }, undefined, undefined, degradedCtx);
+		expect(backend.paneCalls.at(-1)?.tools).toBeUndefined();
 	} finally {
 		vi.unstubAllEnvs();
 	}

@@ -136,14 +136,15 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 			// tool the child would otherwise keep. The grant itself always travels as
 			// its own -e/--mcp-config argv, never as an allowlist entry.
 			// Forward the surface only when it must bound the child: a narrowed
-			// parent, or a gateway the manager deliberately fenced. A full built-in
-			// surface with nothing to fence rides bare, so the child keeps its own
+			// parent, or a role that explicitly refused the gateway (which the
+			// child's own discovery would otherwise refill). A full built-in surface
+			// with nothing to fence rides bare, so the child keeps its own
 			// extensions — including when this session simply has no MCP adapter.
 			// SAFETY: widening the literal tuple to readonly string[] only relaxes
 			// the element type for `includes`; membership still proves the name.
 			const builtInNames: readonly string[] = BUILT_IN_TOOLS;
 			const builtInTools = (task.tools ?? []).filter((name) => builtInNames.includes(name));
-			const paneTools = task.mcpFenced === true || builtInTools.length < BUILT_IN_TOOLS.length ? task.tools : undefined;
+			const paneTools = task.mcpOptOut === true || builtInTools.length < BUILT_IN_TOOLS.length ? task.tools : undefined;
 			const child = spawnPane({
 				prompt: task.prompt,
 				name: task.title,

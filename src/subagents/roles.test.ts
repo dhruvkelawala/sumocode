@@ -66,30 +66,50 @@ describe("subagent roles", () => {
 	it("skips invalid entries, ignores unknown fields, and drops invalid tools", () => {
 		const loaded = fromJson({ roles: [
 			{ id: "research", thinking: "enormous" },
-			{ id: "review", tools: ["read", "mcp", 42, "read"], futureField: true },
+			{ id: "review", tools: ["read", "mcp", 42, "terminal_start", "read"], futureField: true },
 			"invalid",
 		] });
 		expect(loaded.roles.find((role) => role.id === "research")?.thinking).toBeUndefined();
-		expect(loaded.roles.find((role) => role.id === "review")?.tools).toEqual(["read"]);
+		expect(loaded.roles.find((role) => role.id === "review")?.tools).toEqual(["read", "mcp"]);
 		const warningText = loaded.warnings.map((warning) => warning.message).join("\n");
 		expect(warningText).toContain("invalid thinking");
 		expect(warningText).toContain("unknown field futureField");
-		expect(warningText).toContain("invalid tool mcp");
+		expect(warningText).toContain("invalid tool terminal_start");
 		expect(warningText).toContain("must be an object");
 	});
 
 	it("scopes role warnings to an affected role or the whole file", () => {
 		const loaded = fromJson({ roles: [
 			{ id: "research", thinking: "enormous" },
-			{ id: "review", tools: ["read", "mcp"] },
+			{ id: "review", tools: ["read", "terminal_start"] },
 			"invalid",
 		] });
 
 		expect(loaded.warnings).toEqual([
 			{ scope: "role", roleId: "research", blocksRole: true, message: "role research has an invalid thinking level; entry skipped" },
-			{ scope: "role", roleId: "review", blocksRole: false, message: "role review ignores invalid tool mcp" },
+			{ scope: "role", roleId: "review", blocksRole: false, message: "role review ignores invalid tool terminal_start" },
 			{ scope: "file", blocksOverlays: false, message: "roles[2] must be an object; entry skipped" },
 		]);
+	});
+
+	it("carries an explicit MCP server selection beside the gateway grant", () => {
+		const loaded = fromJson({ roles: [
+			{ id: "review", tools: ["read", "mcp"], mcpServers: ["fixture", "fixture", "  ", 7, "other"] },
+		] });
+		const review = loaded.roles.find((role) => role.id === "review");
+		expect(review?.tools).toEqual(["read", "mcp"]);
+		expect(review?.mcpServers).toEqual(["fixture", "other"]);
+		expect(loaded.warnings.map((warning) => warning.message).join("\n")).toContain("ignores invalid mcp server");
+		const inherited = fromJson({ roles: [{ id: "review", mcpServers: "inherit" }] });
+		expect(inherited.roles.find((role) => role.id === "review")).toHaveProperty("mcpServers", undefined);
+		expect(fromJson({ roles: [{ id: "review", mcpServers: {} }] }).warnings.map((warning) => warning.message).join("\n"))
+			.toContain("invalid mcpServers list");
+	});
+
+	it("treats an empty mcpServers list as an explicit opt-out that shadows the base role", () => {
+		const loaded = fromJson({ roles: [{ id: "review", mcpServers: [] }] });
+		expect(loaded.roles.find((role) => role.id === "review")?.mcpServers).toEqual([]);
+		expect(loaded.warnings).toEqual([]);
 	});
 
 	it("normalizes explicit inheritance sentinels over built-in defaults", () => {

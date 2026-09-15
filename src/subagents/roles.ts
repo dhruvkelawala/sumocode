@@ -4,11 +4,11 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { BUILT_IN_TOOLS } from "./task-config.js";
+import { isChildToolName } from "./task-config.js";
 
 const MAX_ROLES_FILE_BYTES = 256 * 1024;
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
-const ROLE_FIELDS = new Set(["id", "label", "description", "systemPrompt", "model", "thinking", "tools", "defaultWorktree", "defaultVisible"]);
+const ROLE_FIELDS = new Set(["id", "label", "description", "systemPrompt", "model", "thinking", "tools", "mcpServers", "defaultWorktree", "defaultVisible"]);
 
 export interface SubagentRole {
 	readonly id: string;
@@ -18,6 +18,13 @@ export interface SubagentRole {
 	readonly model?: string;
 	readonly thinking?: (typeof THINKING_LEVELS)[number];
 	readonly tools?: readonly string[];
+	/**
+	 * MCP servers this role may reach. The gateway itself is inherited from the
+	 * parent session; this list only shapes it: `undefined` keeps the ambient
+	 * scope, a non-empty list fences it to those servers, and `[]` opts the
+	 * role out entirely.
+	 */
+	readonly mcpServers?: readonly string[];
 	readonly defaultWorktree?: boolean;
 	readonly defaultVisible?: boolean;
 }
@@ -105,6 +112,7 @@ interface MutableRoleOverlay {
 	model?: string;
 	thinking?: SubagentRole["thinking"];
 	tools?: string[];
+	mcpServers?: string[];
 	defaultWorktree?: boolean;
 	defaultVisible?: boolean;
 }
@@ -151,6 +159,10 @@ function normalizedOverlay(value: unknown, index: number, builtIn: boolean, warn
 		warn(`role ${id} has an invalid tools list; entry skipped`);
 		return undefined;
 	}
+	if (hasOwn(value, "mcpServers") && !Array.isArray(value.mcpServers) && value.mcpServers !== "inherit") {
+		warn(`role ${id} has an invalid mcpServers list; entry skipped`);
+		return undefined;
+	}
 
 	const overlay: MutableRoleOverlay = { id };
 	for (const field of ["label", "description", "systemPrompt"] as const) {
@@ -164,13 +176,27 @@ function normalizedOverlay(value: unknown, index: number, builtIn: boolean, warn
 	else if (Array.isArray(value.tools)) {
 		const tools: string[] = [];
 		for (const tool of value.tools) {
-			if (typeof tool !== "string" || !(BUILT_IN_TOOLS as readonly string[]).includes(tool)) {
+			if (typeof tool !== "string" || !isChildToolName(tool)) {
 				warn(`role ${id} ignores invalid tool ${String(tool)}`, false);
 				continue;
 			}
 			if (!tools.includes(tool)) tools.push(tool);
 		}
 		overlay.tools = tools;
+	}
+	if (value.mcpServers === "inherit") overlay.mcpServers = undefined;
+	else if (Array.isArray(value.mcpServers)) {
+		const servers: string[] = [];
+		for (const server of value.mcpServers) {
+			if (typeof server !== "string" || !server.trim() || server !== server.trim()) {
+				warn(`role ${id} ignores invalid mcp server ${String(server)}`, false);
+				continue;
+			}
+			if (!servers.includes(server)) servers.push(server);
+		}
+		// An empty list is the explicit opt-out: it shadows the base role's
+		// selection on purpose, because the operator asked for no MCP here.
+		overlay.mcpServers = servers;
 	}
 	return overlay;
 }
@@ -222,6 +248,7 @@ export function loadRoles(dependencies: LoadRolesDependencies = {}): LoadedRoles
 			if (hasOwn(overlay, "model")) role.model = overlay.model;
 			if (overlay.thinking !== undefined) role.thinking = overlay.thinking;
 			if (overlay.tools !== undefined) role.tools = overlay.tools;
+			if (overlay.mcpServers !== undefined) role.mcpServers = overlay.mcpServers;
 			if (overlay.defaultWorktree !== undefined) role.defaultWorktree = overlay.defaultWorktree;
 			if (overlay.defaultVisible !== undefined) role.defaultVisible = overlay.defaultVisible;
 			return role as SubagentRole;

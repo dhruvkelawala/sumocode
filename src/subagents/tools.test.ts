@@ -1,4 +1,5 @@
 import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -12,6 +13,7 @@ import { SUBAGENT_MAX_RUNNING, type SubagentEvent, type SubagentSnapshot } from 
 import { SubagentManager, type SpawnSubagentTask } from "./manager.js";
 import { loadRoles, type RoleWarning, type SubagentRole } from "./roles.js";
 import { registerSubagentTools } from "./tools.js";
+import type { McpLaunchCapability } from "./mcp-capability.js";
 
 /** Tool result shape returned by every subagent tool. */
 interface ToolResult {
@@ -27,7 +29,7 @@ type FakeSpawnedChild = {
 	requestClose?: () => void;
 };
 
-const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly SubagentRole[], roleWarnings: readonly RoleWarning[] = []) => {
+const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly SubagentRole[], roleWarnings: readonly RoleWarning[] = [], activeTools: readonly string[] = ["read", "bash"]) => {
 	const registered: Array<{ name: string; parameters?: unknown; promptGuidelines?: readonly string[]; execute: (...args: unknown[]) => Promise<ToolResult> }> = [];
 	const emitters = new Map<string, (event: SubagentEvent) => void>();
 	const childSends = new Map<string, ReturnType<typeof vi.fn>>();
@@ -86,7 +88,7 @@ const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly Su
 			durationMs: 10,
 		}),
 	});
-	const pi = { registerTool: vi.fn((tool) => registered.push(tool)), on: vi.fn(), getThinkingLevel: vi.fn(() => "medium"), getActiveTools: vi.fn(() => ["read", "bash"]) };
+	const pi = { registerTool: vi.fn((tool) => registered.push(tool)), on: vi.fn(), getThinkingLevel: vi.fn(() => "medium"), getActiveTools: vi.fn(() => [...activeTools]) };
 	// Each call snapshots the caller's array, matching loadRoles() returning a fresh list per call.
 	const roleLoader: typeof loadRoles = roles ? (() => ({ roles: [...roles], warnings: roleWarnings })) : loadRoles;
 	// SAFETY: the double implements registerTool/on/getThinkingLevel/getActiveTools, all registerSubagentTools uses.
@@ -97,6 +99,26 @@ const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly Su
 };
 
 const textOf = <T extends { content: Array<{ text: string }> }>(result: T): string => result.content[0]!.text;
+
+/** Hermetic HOME/agent-dir/state-dir plus a fake adapter and a project .mcp.json. */
+function mcpFixtureEnv(options: { readonly withServers?: boolean; readonly withAdapter?: boolean } = {}) {
+	const root = realpathSync(mkdtempSync(join(tmpdir(), "sumocode-tools-mcp-")));
+	const project = join(root, "project");
+	const agentDir = join(root, ".pi", "agent");
+	const adapterDir = join(root, "adapter");
+	for (const dir of [project, agentDir, adapterDir]) mkdirSync(dir, { recursive: true, mode: 0o700 });
+	const adapterEntry = join(adapterDir, "index.ts");
+	if (options.withAdapter !== false) {
+		writeFileSync(join(adapterDir, "package.json"), JSON.stringify({ name: "pi-mcp-adapter", pi: { extensions: ["./index.ts"] } }), { mode: 0o600 });
+		writeFileSync(adapterEntry, "export default () => undefined;\n", { mode: 0o600 });
+		vi.stubEnv("SUMOCODE_MCP_ADAPTER", adapterDir);
+	}
+	if (options.withServers !== false) writeFileSync(join(project, ".mcp.json"), JSON.stringify({ mcpServers: { fixture: { command: "node" } } }), { mode: 0o600 });
+	vi.stubEnv("HOME", root);
+	vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+	vi.stubEnv("SUMOCODE_STATE_DIR", join(root, "state"));
+	return { root, project, adapterEntry };
+}
 
 const publicSpawnTool = (manager: SubagentManager, host: TerminalHost, roles: readonly SubagentRole[] = []) => {
 	const registered: Array<{ name: string; execute: (...args: unknown[]) => Promise<ToolResult> }> = [];
@@ -178,7 +200,7 @@ describe("subagent tools", () => {
 
 			expect(textOf(result)).toContain("Started sa-re-worker-2 continuing sa-worker-1's session");
 			expect(spawnedTasks[1]).toMatchObject({
-				prompt: "clarify", roleId: "research", appendSystemPrompt: "fresh role instructions", builtInTools: ["read"],
+				prompt: "clarify", roleId: "research", appendSystemPrompt: "fresh role instructions", tools: ["read"],
 				resume: { sessionFilePath: "/tmp/session/child.jsonl", repliesTo: "sa-worker-1" },
 			});
 			expect(textOf(await tool("subagent_list").execute("list", {}))).toContain("re: sa-worker-1");
@@ -191,6 +213,156 @@ describe("subagent tools", () => {
 		const spawnSchema = JSON.stringify(tool("subagent_spawn").parameters);
 		expect(spawnSchema).toContain("audit — use for audits (openai-codex/gpt-5.6-sol, worktree)");
 		expect(spawnSchema).toContain("Explicit spawn parameters override role defaults");
+	});
+
+	it("grants the MCP gateway, its server selection, and the resolved capability to the launcher", async () => {
+		const env = mcpFixtureEnv();
+		try {
+			const role: SubagentRole = {
+				id: "fixture-scout", label: "Fixture Scout", description: "use for mcp fixtures",
+				systemPrompt: "call the fixture", tools: ["read", "mcp"], mcpServers: ["fixture"],
+			};
+			const { tool, ctx, spawnedTasks } = createHarness("herdr", [role], [], ["read", "bash", "mcp"]);
+			const cwd = join(env.root, "project");
+			// SAFETY: the ctx double carries only the fields the tool handlers read.
+			await tool("subagent_spawn").execute("tc", { prompt: "use mcp", name: "scout", role: "fixture-scout", working_dir: cwd }, undefined, undefined, ctx as never);
+			// SAFETY: spawnedTasks records the SpawnSubagentTask the manager received, including the resolved capability.
+			const launched = spawnedTasks[0] as (SpawnSubagentTask & { id: string; mcp?: McpLaunchCapability }) | undefined;
+			expect(launched).toMatchObject({ tools: ["read", "mcp"], mcpServers: ["fixture"] });
+			expect(launched?.mcp).toMatchObject({ servers: ["fixture"], adapterEntry: env.adapterEntry });
+			expect(launched?.mcp?.configPath !== undefined && launched.mcp.configPath.startsWith(env.root)).toBe(true);
+
+			// A role-free spawn inherits the gateway like a built-in, at ambient
+			// scope: no server list, no config file — the child resolves the same
+			// chain its parent resolves for that cwd.
+			// SAFETY: the ctx double carries only the fields the tool handlers read.
+			await tool("subagent_spawn").execute("tc2", { prompt: "plain", name: "plain", working_dir: cwd }, undefined, undefined, ctx as never);
+			expect(spawnedTasks[1]).toMatchObject({ tools: ["read", "bash", "mcp"] });
+			// SAFETY: the cast only lets the assertion read the optional capability field off the same recorded task.
+			const ambient = (spawnedTasks[1] as { mcp?: McpLaunchCapability } | undefined)?.mcp;
+			expect(ambient).toMatchObject({ servers: [], adapterEntry: env.adapterEntry });
+			expect(ambient?.configPath).toBeUndefined();
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("opts a role out of the inherited gateway with an empty mcpServers list", async () => {
+		const env = mcpFixtureEnv();
+		try {
+			const role: SubagentRole = {
+				id: "no-mcp", label: "No MCP", description: "stays off the integrations",
+				systemPrompt: "no mcp", tools: ["read", "bash"], mcpServers: [],
+			};
+			const { tool, ctx, spawnedTasks } = createHarness("herdr", [role], [], ["read", "bash", "mcp"]);
+			// SAFETY: the ctx double carries only the fields the tool handlers read.
+			await tool("subagent_spawn").execute("tc", { prompt: "plain", name: "offline", role: "no-mcp", working_dir: join(env.root, "project") }, undefined, undefined, ctx as never);
+			// SAFETY: the cast only reads the optional capability fields off the recorded task.
+			const launched = spawnedTasks[0] as (SpawnSubagentTask & { id: string; mcp?: McpLaunchCapability; mcpExplicit?: boolean }) | undefined;
+			expect(launched?.tools).toEqual(["read", "bash"]);
+			expect(launched?.mcp).toBeUndefined();
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("keeps a role's MCP opt-out on reply, so a continuation is never broader than its spawn", async () => {
+		const env = mcpFixtureEnv();
+		const role: SubagentRole = {
+			id: "no-mcp", label: "No MCP", description: "stays off the integrations",
+			systemPrompt: "no mcp", tools: ["read", "bash"], mcpServers: [],
+		};
+		const harness = createHarness("herdr", [role], [], ["read", "bash", "mcp"]);
+		try {
+			// SAFETY: the ctx double carries only the fields the tool handlers read.
+			await harness.tool("subagent_spawn").execute("spawn", { prompt: "first", name: "offline", role: "no-mcp", working_dir: join(env.root, "project") }, undefined, undefined, harness.ctx as never);
+			harness.emitters.get("sa-offline-1")?.({ kind: "session-located", sessionFilePath: "/tmp/session/child.jsonl" });
+			harness.emitters.get("sa-offline-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "first" } });
+			await vi.waitFor(() => expect(harness.manager.get("sa-offline-1")?.status).toBe("done"));
+
+			// SAFETY: the ctx double carries only the fields the tool handlers read.
+			const result = await harness.tool("subagent_reply").execute("reply", { id: "sa-offline-1", text: "continue" }, undefined, undefined, harness.ctx as never);
+
+			expect(textOf(result)).toContain("Started");
+			// The reply keeps the opt-out: no gateway in the surface, no ambient
+			// capability for the continuation.
+			// SAFETY: the cast only reads the optional capability fields off the recorded task.
+			const continuation = harness.spawnedTasks[1] as (SpawnSubagentTask & { id: string; mcp?: McpLaunchCapability; mcpExplicit?: boolean }) | undefined;
+			expect(continuation).toMatchObject({ tools: ["read", "bash"], mcpServers: [] });
+			expect(continuation?.mcp).toBeUndefined();
+			expect(continuation?.mcpExplicit).toBe(false);
+		} finally {
+			harness.manager.disposeAll();
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("degrades an inherited grant instead of failing the spawn when the adapter is unresolvable", async () => {
+		const env = mcpFixtureEnv({ withAdapter: false });
+		try {
+			// The parent has the gateway active; nobody asked for it by name; the
+			// adapter is not in the trusted global scope. The spawn must still
+			// succeed, without the gateway in the child's surface.
+			const { tool, ctx, spawnedTasks } = createHarness("herdr", undefined, [], ["read", "bash", "mcp"]);
+			// SAFETY: the ctx double carries only the fields the tool handlers read.
+			const result = await tool("subagent_spawn").execute("tc", { prompt: "plain", name: "plain", working_dir: join(env.root, "project") }, undefined, undefined, ctx as never);
+			expect(textOf(result)).toContain("Started");
+			// SAFETY: the cast only reads the optional capability fields off the recorded task.
+			const launched = spawnedTasks[0] as (SpawnSubagentTask & { id: string; mcp?: McpLaunchCapability; mcpExplicit?: boolean }) | undefined;
+			expect(launched?.tools).toEqual(["read", "bash"]);
+			expect(launched?.mcp).toBeUndefined();
+			expect(launched?.mcpExplicit).toBe(false);
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("marks an explicit grant so an unresolvable adapter refuses the spawn", async () => {
+		const env = mcpFixtureEnv({ withAdapter: false });
+		try {
+			const role: SubagentRole = {
+				id: "fixture-scout", label: "Fixture Scout", description: "use for mcp fixtures",
+				systemPrompt: "call the fixture", tools: ["read", "mcp"], mcpServers: ["fixture"],
+			};
+			const { tool, ctx, spawnedTasks } = createHarness("herdr", [role], [], ["read", "bash", "mcp"]);
+			// SAFETY: the ctx double carries only the fields the tool handlers read.
+			const result = await tool("subagent_spawn").execute("tc", { prompt: "use mcp", name: "scout", role: "fixture-scout", working_dir: join(env.root, "project") }, undefined, undefined, ctx as never);
+			expect(textOf(result)).toContain("MCP capability unavailable");
+			expect(textOf(result)).toContain("SUMOCODE_MCP_ADAPTER");
+			expect(spawnedTasks).toEqual([]);
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("fails the spawn with a clear capability error when a selected server is not configured for the child cwd", async () => {
+		const env = mcpFixtureEnv({ withServers: false });
+		try {
+			const role: SubagentRole = {
+				id: "fixture-scout", label: "Fixture Scout", description: "use for mcp fixtures",
+				systemPrompt: "call the fixture", tools: ["read", "mcp"], mcpServers: ["fixture"],
+			};
+			const { tool, ctx, spawnedTasks } = createHarness("herdr", [role], [], ["read", "bash", "mcp"]);
+			// SAFETY: the ctx double carries only the fields the tool handlers read.
+			const result = await tool("subagent_spawn").execute("tc", { prompt: "use mcp", name: "scout", role: "fixture-scout", working_dir: join(env.root, "project") }, undefined, undefined, ctx as never);
+			expect(textOf(result)).toContain("MCP capability unavailable");
+			expect(textOf(result)).toContain("not configured");
+			expect(spawnedTasks).toEqual([]);
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("refuses an MCP grant the parent session cannot itself use", async () => {
+		const role: SubagentRole = {
+			id: "fixture-scout", label: "Fixture Scout", description: "use for mcp fixtures",
+			systemPrompt: "call the fixture", tools: ["read", "mcp"], mcpServers: ["fixture"],
+		};
+		const { tool, ctx, spawnedTasks } = createHarness("herdr", [role], [], ["read", "bash"]);
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const result = await tool("subagent_spawn").execute("tc", { prompt: "use mcp", name: "scout", role: "fixture-scout" }, undefined, undefined, ctx as never);
+		expect(textOf(result)).toContain("MCP access denied");
+		expect(spawnedTasks).toEqual([]);
 	});
 
 	it("applies role defaults, preserves explicit precedence, and only narrows parent tools", async () => {
@@ -219,7 +391,7 @@ describe("subagent tools", () => {
 			appendSystemPrompt: "audit carefully",
 			model: "openai/explicit",
 			thinking: "minimal",
-			builtInTools: ["read"],
+			tools: ["read"],
 		});
 		expect(manager.get("sa-auditor-1")).toMatchObject({ roleId: "audit", modelLabel: "openai/explicit", thinkingLabel: "minimal" });
 	});

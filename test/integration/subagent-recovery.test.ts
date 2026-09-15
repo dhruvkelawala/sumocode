@@ -114,7 +114,7 @@ function fixture(cut?: "starting" | "pre-release", backend: "headless" | "visibl
 		} };
 	});
 	const owner = backend === "headless" ? new RetainedHeadlessSupervisor({ registry, initial: record, supervisor,
-		launch: { prompt: "synthetic task", cwd: taskDir, inherited: {}, builtInTools: [] }, baseRef: "HEAD",
+		launch: { prompt: "synthetic task", cwd: taskDir, inherited: {}, tools: [] }, baseRef: "HEAD",
 	}, { operations, spawn, buildManifest }) : new RetainedVisibleSupervisor({ registry, initial: record, supervisor,
 		launch: { prompt: "synthetic task", cwd: taskDir, id: record.id, name: "worker", host, pi: { exec: vi.fn() }, placement: { kind: "new-tab", label: "worker" } }, baseRef: "HEAD",
 	}, { operations, spawn: visibleSpawn, buildManifest });

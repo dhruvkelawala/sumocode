@@ -49,7 +49,7 @@ async function fixture() {
 	const owner = new RetainedHeadlessSupervisor({ registry, initial,
 		supervisor: { identity: { pid: process.pid, processGroupId: process.pid, processStartTime: "supervisor-command" },
 			verification: { members: [{ pid: process.pid, processStartTime: "supervisor-birth" }] } },
-		launch: { prompt: "private prompt", cwd: taskDir, inherited: {}, builtInTools: [] }, baseRef: "HEAD",
+		launch: { prompt: "private prompt", cwd: taskDir, inherited: {}, tools: [] }, baseRef: "HEAD",
 	}, { operations, spawn: (options) => {
 		options.launchGate!.beforeSpawn(); options.launchGate!.beforePrompt(4242);
 		return { events: (listener) => { emit = listener; emit({ kind: "run-started" }); }, send, interrupt, requestClose: close };

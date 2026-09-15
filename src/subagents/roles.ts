@@ -4,7 +4,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { MAX_MCP_SERVERS, isChildToolName } from "./task-config.js";
+import { isChildToolName } from "./task-config.js";
 
 const MAX_ROLES_FILE_BYTES = 256 * 1024;
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -192,7 +192,7 @@ function normalizedOverlay(value: unknown, index: number, builtIn: boolean, warn
 				warn(`role ${id} ignores invalid mcp server ${String(server)}`, false);
 				continue;
 			}
-			if (!servers.includes(server) && servers.length < MAX_MCP_SERVERS) servers.push(server);
+			if (!servers.includes(server)) servers.push(server);
 		}
 		// An empty list is the explicit opt-out: it shadows the base role's
 		// selection on purpose, because the operator asked for no MCP here.

@@ -264,6 +264,35 @@ describe("subagent tools", () => {
 		}
 	});
 
+	it("keeps a role's MCP opt-out on reply, so a continuation is never broader than its spawn", async () => {
+		const env = mcpFixtureEnv();
+		const role: SubagentRole = {
+			id: "no-mcp", label: "No MCP", description: "stays off the integrations",
+			systemPrompt: "no mcp", tools: ["read", "bash"], mcpServers: [],
+		};
+		const harness = createHarness("herdr", [role], [], ["read", "bash", "mcp"]);
+		try {
+			await harness.tool("subagent_spawn").execute("spawn", { prompt: "first", name: "offline", role: "no-mcp", working_dir: join(env.root, "project") }, undefined, undefined, harness.ctx as never);
+			harness.emitters.get("sa-offline-1")?.({ kind: "session-located", sessionFilePath: "/tmp/session/child.jsonl" });
+			harness.emitters.get("sa-offline-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "first" } });
+			await vi.waitFor(() => expect(harness.manager.get("sa-offline-1")?.status).toBe("done"));
+
+			const result = await harness.tool("subagent_reply").execute("reply", { id: "sa-offline-1", text: "continue" }, undefined, undefined, harness.ctx as never);
+
+			expect(textOf(result)).toContain("Started");
+			// The reply keeps the opt-out: no gateway in the surface, no ambient
+			// capability for the continuation.
+			// SAFETY: the cast only reads the optional capability fields off the recorded task.
+			const continuation = harness.spawnedTasks[1] as (SpawnSubagentTask & { id: string; mcp?: McpLaunchCapability; mcpExplicit?: boolean }) | undefined;
+			expect(continuation).toMatchObject({ tools: ["read", "bash"], mcpServers: [] });
+			expect(continuation?.mcp).toBeUndefined();
+			expect(continuation?.mcpExplicit).toBe(false);
+		} finally {
+			harness.manager.disposeAll();
+			vi.unstubAllEnvs();
+		}
+	});
+
 	it("degrades an inherited grant instead of failing the spawn when the adapter is unresolvable", async () => {
 		const env = mcpFixtureEnv({ withAdapter: false });
 		try {
@@ -273,6 +302,7 @@ describe("subagent tools", () => {
 			const { tool, ctx, spawnedTasks } = createHarness("herdr", undefined, [], ["read", "bash", "mcp"]);
 			const result = await tool("subagent_spawn").execute("tc", { prompt: "plain", name: "plain", working_dir: join(env.root, "project") }, undefined, undefined, ctx as never);
 			expect(textOf(result)).toContain("Started");
+			// SAFETY: the cast only reads the optional capability fields off the recorded task.
 			const launched = spawnedTasks[0] as (SpawnSubagentTask & { id: string; mcp?: McpLaunchCapability; mcpExplicit?: boolean }) | undefined;
 			expect(launched?.tools).toEqual(["read", "bash"]);
 			expect(launched?.mcp).toBeUndefined();

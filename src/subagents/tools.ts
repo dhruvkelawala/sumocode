@@ -11,7 +11,7 @@ import { type AtCapacityDetails, SubagentManager } from "./manager.js";
 import { buildSubagentPromptGuidelines, formatCompletionManifestSummary, formatRoleTable, SUBAGENT_PROMPT_SNIPPET, SUBAGENT_TOOL_DESCRIPTIONS } from "./prompt.js";
 import { BUILT_IN_ROLES, loadRoles } from "./roles.js";
 import type { SubagentRole } from "./roles.js";
-import { MCP_GATEWAY_TOOL, resolveChildToolSurface } from "./task-config.js";
+import { MCP_GATEWAY_TOOL, resolveChildToolSurface, type ChildToolName } from "./task-config.js";
 
 const StringEnum = <T extends readonly string[]>(values: T, options?: { description?: string }) => {
 	const schema = { type: "string" as const, enum: [...values] };
@@ -28,6 +28,30 @@ const activityEnvelope = (snapshot: SubagentSnapshot, sourceId?: string) => {
 };
 
 const isAtCapacity = (value: SubagentSnapshot | AtCapacityDetails): value is AtCapacityDetails => "status" in value && value.status === "at_capacity";
+
+/**
+ * Resolve one role's child surface: the ambient gateway inherited from the
+ * parent, minus an explicit `mcpServers: []` opt-out, plus whether the gateway
+ * was asked for by name (only an explicit grant may refuse the spawn when it
+ * cannot be honoured). Shared by spawn and reply so a continuation can never
+ * be more privileged than the turn it continues.
+ */
+interface RoleSurface {
+	readonly tools: readonly ChildToolName[];
+	readonly mcpExplicit: boolean;
+}
+
+const resolveRoleSurface = (role: SubagentRole | undefined, parentActiveTools: readonly string[]): RoleSurface => {
+	const optedOutOfMcp = role?.mcpServers !== undefined && role.mcpServers.length === 0;
+	const surface = resolveChildToolSurface({ roleTools: role?.tools, parentActiveTools });
+	const tools: ChildToolName[] = [];
+	for (const name of surface) {
+		if (!(optedOutOfMcp && name === MCP_GATEWAY_TOOL)) tools.push(name);
+	}
+	const mcpExplicit = role?.tools?.includes(MCP_GATEWAY_TOOL) === true
+		|| (role?.mcpServers !== undefined && role.mcpServers.length > 0);
+	return { tools, mcpExplicit };
+};
 
 /**
  * Fail closed when a role grants the MCP gateway this session cannot itself
@@ -207,13 +231,7 @@ export function registerSubagentTools(
 			if (denial) {
 				return makeToolResult(denial, { action: "spawn", status: "mcp_unavailable", role: role?.id });
 			}
-			// A role's empty mcpServers list is an explicit opt-out; anything else
-			// inherits the gateway from the parent like a built-in.
-			const optedOutOfMcp = role?.mcpServers !== undefined && role.mcpServers.length === 0;
-			const tools = resolveChildToolSurface({ roleTools: role?.tools, parentActiveTools })
-				.filter((name) => !(optedOutOfMcp && name === MCP_GATEWAY_TOOL));
-			const mcpExplicit = role?.tools?.includes(MCP_GATEWAY_TOOL) === true
-				|| (role?.mcpServers !== undefined && role.mcpServers.length > 0);
+			const { tools, mcpExplicit } = resolveRoleSurface(role, parentActiveTools);
 			const spawned = await manager.spawn({
 				sourceId: toolCallId,
 				budget: params.budget,
@@ -323,10 +341,8 @@ export function registerSubagentTools(
 					model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
 					thinking: pi.getThinkingLevel(),
 				},
-				tools: resolveChildToolSurface({ roleTools: role?.tools, parentActiveTools }),
+				...resolveRoleSurface(role, parentActiveTools),
 				mcpServers: role?.mcpServers,
-				mcpExplicit: role?.tools?.includes(MCP_GATEWAY_TOOL) === true
-					|| (role?.mcpServers !== undefined && role.mcpServers.length > 0),
 			});
 			if (isAtCapacity(spawned)) return formatAtCapacity(spawned, "reply");
 			if (spawned.status === "queued") return makeToolResult(`Queued ${spawned.id} continuing ${params.id}'s session. It starts automatically when a slot frees.`, {

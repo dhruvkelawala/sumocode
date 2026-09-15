@@ -74,7 +74,7 @@ function agentsGlobalConfigPaths(): readonly string[] {
 }
 
 /**
- * Resolve the four candidate config paths in precedence order.
+ * Resolve the six candidate config paths in precedence order.
  *
  * Exposed for tests; production callers should use `loadConfiguredMcpServers`.
  */

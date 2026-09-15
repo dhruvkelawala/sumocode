@@ -94,7 +94,7 @@ interface ToolResult {
 /** Minimal tool-definition shape captured from registerTool. */
 type Tool = { name: string; execute: (...args: unknown[]) => Promise<ToolResult> };
 
-const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui", options: { retainedRegistry?: SubagentRegistry; retention?: false } = {}) => {
+const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui", options: { retainedRegistry?: SubagentRegistry; retention?: false; activeTools?: readonly string[] } = {}) => {
 	let idle = true;
 	const handlers = new Map<string, Handler[]>();
 	const tools = new Map<string, Tool>();
@@ -104,7 +104,7 @@ const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui", options: { re
 		on: vi.fn((event: string, handler: Handler) => handlers.set(event, [...(handlers.get(event) ?? []), handler])),
 		registerTool: vi.fn((tool: Tool) => tools.set(tool.name, tool)),
 		sendMessage,
-		getActiveTools: vi.fn((): string[] => ["read", "bash"]),
+		getActiveTools: vi.fn((): string[] => [...(options.activeTools ?? ["read", "bash"])]),
 		getThinkingLevel: vi.fn((): string => "medium"),
 	};
 	// SAFETY: the double implements every ExtensionAPI member installSubagents touches.
@@ -637,4 +637,20 @@ describe("subagent result delivery", () => {
 		await harness.fireSessionStart("replacement");
 		expect(harness.sendMessage).toHaveBeenCalledTimes(1);
 	});
+});
+
+it("forwards the surface to a visible child only when it must bound it", async () => {
+	const full = ["read", "bash", "edit", "write", "grep", "find", "ls", "mcp"];
+	const { tool, ctx } = createHarness(false, "tui", { activeTools: full });
+
+	// Full built-ins plus the gateway: the child keeps its own extension tools
+	// and the grant rides its own argv, so no allowlist is forwarded at all.
+	await tool("subagent_spawn").execute("tc", { prompt: "p", name: "full", visible: true }, undefined, undefined, ctx as never);
+	expect(backend.paneCalls.at(-1)?.tools).toBeUndefined();
+
+	// A surface without the gateway must be forwarded, or the child's own
+	// extension discovery would hand the gateway back (opt-out or degraded).
+	const { tool: narrowedTool, ctx: narrowedCtx } = createHarness(false, "tui", { activeTools: ["read"] });
+	await narrowedTool("subagent_spawn").execute("tc", { prompt: "p", name: "narrow", visible: true }, undefined, undefined, narrowedCtx as never);
+	expect(backend.paneCalls.at(-1)?.tools).toEqual(["read"]);
 });

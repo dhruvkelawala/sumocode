@@ -6,7 +6,7 @@ import { activityFromSubagentSnapshot } from "../activity/subagent-adapter.js";
 import { ensurePrivateSumocodeDirectory } from "../activity/persistence.js";
 import { renderSubagentStatusRow, type SubagentStatusRunningEntry } from "../subagent-status-row.js";
 import { logDiagnostic } from "../sumo-tui/runtime/diagnostics.js";
-import { BUILT_IN_TOOLS } from "./task-config.js";
+import { BUILT_IN_TOOLS, MCP_GATEWAY_TOOL } from "./task-config.js";
 import { getTerminalHost } from "../terminal-host/index.js";
 import type { TerminalHost } from "../terminal-host/types.js";
 import { spawnPaneChild } from "./backend-pane.js";
@@ -131,11 +131,17 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 			// the parent session's model/thinking flow through (PR #335 review —
 			// visible children must not silently reset to defaults).
 			const inheritedModel = task.inherited?.model ? `${task.inherited.model.provider}/${task.inherited.model.id}` : undefined;
-			// The resolved surface is explicit, so a visible child gets exactly what
-			// the delegation granted. `--tools` spans built-in AND extension tools:
-			// forwarding only the built-ins would strip the child's own extensions,
-			// while forwarding the parent's full surface would grant tools (the MCP
-			// gateway among them) that were never delegated.
+			// A visible child runs a full launcher session with extension discovery,
+			// so an allowlist is also a strip-list: passing one removes every
+			// extension tool the child would otherwise keep. Forward the surface
+			// only when it must bound the child — a narrowed parent, or a child
+			// that must be kept off the gateway its own discovery would grant
+			// (an opt-out or a degraded grant). A full surface with the gateway
+			// rides bare: the child keeps its extensions, and the grant already
+			// travels as its own -e/--mcp-config argv.
+			const keepsOwnSurface = (task.tools ?? []).filter((name) => name !== MCP_GATEWAY_TOOL).length >= BUILT_IN_TOOLS.length
+				&& (task.mcp !== undefined || task.tools?.includes(MCP_GATEWAY_TOOL) === true);
+			const paneTools = keepsOwnSurface ? undefined : task.tools;
 			const child = spawnPane({
 				prompt: task.prompt,
 				name: task.title,
@@ -143,7 +149,7 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 				id: task.id,
 				model: task.model ?? inheritedModel,
 				thinking: task.thinking ?? task.inherited?.thinking,
-				tools: task.tools,
+				tools: paneTools,
 				mcp: task.mcp,
 				appendSystemPrompt: task.appendSystemPrompt,
 				signal: task.signal,

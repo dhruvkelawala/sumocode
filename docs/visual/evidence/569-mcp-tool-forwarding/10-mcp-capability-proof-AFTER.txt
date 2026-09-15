@@ -1,4 +1,4 @@
-$ signed-in surface: scoped MCP config written by the capability resolver
+$ scoped MCP config written by the capability resolver:
   {
     "mcpServers": {
       "fixture": {
@@ -7,7 +7,7 @@ $ signed-in surface: scoped MCP config written by the capability resolver
           "/Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/sumo__wt-mu2qdem2/test/integration/fixtures/mcp-fixture-server.mjs"
         ],
         "env": {
-          "MCP_FIXTURE_LOG": "/private/var/folders/jy/3j8rk22d6cg47dgvfjs016gw0000gn/T/sumocode-mcp-proof-OIuOdh/fixture-calls.jsonl"
+          "MCP_FIXTURE_LOG": "/private/var/folders/jy/3j8rk22d6cg47dgvfjs016gw0000gn/T/sumocode-mcp-proof-bGevOO/fixture-calls.jsonl"
         }
       },
       "rn": {
@@ -22,7 +22,7 @@ $ signed-in surface: scoped MCP config written by the capability resolver
       "agentPluginPaths": []
     }
   }
-$ argv: /Users/sumo-deus/.local/lib/sumocode/sumocode-0.7.1-macos-arm64/bin/sumocode-pi --mode json -p --no-session --no-extensions --provider deepseek --model deepseek-flash --thinking low --tools read,bash,mcp -e "/Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/sumo__wt-mu2qdem2/src/subagents/mcp-child-bootstrap.ts" -e /Users/sumo-deus/.pi/agent/npm/node_modules/pi-mcp-adapter/index.ts --mcp-config /private/var/folders/jy/3j8rk22d6cg47dgvfjs016gw0000gn/T/sumocode-mcp-proof-OIuOdh/state/sumocode/subagents/capabilities/proof-mu2s84si-55378f8e-8dd2-4a76-9f2f-7434ab8118f9.json
+$ argv: /Users/sumo-deus/.local/lib/sumocode/sumocode-0.7.1-macos-arm64/bin/sumocode-pi --mode json -p --no-session --no-extensions --provider deepseek --model deepseek-flash --thinking low --tools read,bash,mcp -e "/Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/sumo__wt-mu2qdem2/src/subagents/mcp-child-bootstrap.ts" -e /Users/sumo-deus/.pi/agent/npm/node_modules/pi-mcp-adapter/index.ts --mcp-config /private/var/folders/jy/3j8rk22d6cg47dgvfjs016gw0000gn/T/sumocode-mcp-proof-bGevOO/state/sumocode/subagents/capabilities/proof-mu2shlmu-c7ffa8a7-c549-43f6-8080-a08cb202756d.json
 $ child exit: 0
 $ tool calls: ["mcp"]
 $ fixture server calls: ["{\"server\":\"fixture\",\"tool\":\"image\",\"arguments\":{}}"]

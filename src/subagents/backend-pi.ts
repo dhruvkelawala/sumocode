@@ -619,7 +619,8 @@ export function resolveMcpChildBootstrapEntry(
 function sameMcpGrant(option: McpLaunchCapability | undefined, expected: McpLaunchCapability | null): boolean {
 	if (expected === null) return option === undefined;
 	return option !== undefined && option.configPath === expected.configPath
-		&& option.adapterEntry === expected.adapterEntry && option.guardEntry === expected.guardEntry;
+		&& option.adapterEntry === expected.adapterEntry && option.guardEntry === expected.guardEntry
+		&& option.servers.length === expected.servers.length;
 }
 
 /**
@@ -632,17 +633,20 @@ function sameMcpGrant(option: McpLaunchCapability | undefined, expected: McpLaun
  * launching a child whose task metadata claims an MCP surface it never had.
  */
 export function mcpLaunchArgs(mcp: McpLaunchCapability): string[] {
-	return ["-e", mcp.guardEntry, "-e", mcp.adapterEntry, "--mcp-config", mcp.configPath];
+	// The scoped grant carries its config explicitly; the ambient grant lets the
+	// adapter resolve the same chain the parent session resolves for that cwd.
+	return ["-e", mcp.guardEntry, "-e", mcp.adapterEntry, ...(mcp.configPath ? ["--mcp-config", mcp.configPath] : [])];
 }
 
 /**
  * The adapter treats `PI_MCP_CONFIG_MODE=exclusive` as "read only
- * <agentDir>/mcp.json and ignore --mcp-config", which would hand the child the
- * operator's entire global roster and silently void the grant's scope. Children
- * inherit the parent's environment, so a mounted grant must clear it.
+ * <agentDir>/mcp.json and ignore --mcp-config", which would silently void a
+ * scoped grant. Only the scoped path clears it: an ambient child must resolve
+ * the same chain as its parent, exclusive mode included, or the child could end
+ * up broader than the session that delegated to it.
  */
-export function mcpChildEnv(env: NodeJS.ProcessEnv, mounted: boolean): NodeJS.ProcessEnv {
-	if (!mounted || !("PI_MCP_CONFIG_MODE" in env)) return env;
+export function mcpChildEnv(env: NodeJS.ProcessEnv, scoped: boolean): NodeJS.ProcessEnv {
+	if (!scoped || !("PI_MCP_CONFIG_MODE" in env)) return env;
 	const cleaned = { ...env };
 	delete cleaned.PI_MCP_CONFIG_MODE;
 	return cleaned;
@@ -800,7 +804,7 @@ export const createPiChildSpawner = (
 		const subprocessArgs = sessionDir
 			? [...configuredArgs.filter((arg) => arg !== "--no-session"), ...(options.resumeSessionFile ? ["--session", options.resumeSessionFile] : []), "--session-dir", sessionDir]
 			: configuredArgs;
-		const baseEnv = mcpChildEnv(process.env, mcp !== undefined);
+		const baseEnv = mcpChildEnv(process.env, mcp?.configPath !== undefined);
 		let childEnv = childModel
 			? { ...baseEnv, [CHILD_MODEL_PROVIDER_ENV]: childModel.provider, [CHILD_MODEL_ID_ENV]: childModel.modelId }
 			: baseEnv;

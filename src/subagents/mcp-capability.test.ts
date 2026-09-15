@@ -58,13 +58,28 @@ it("grants nothing and writes nothing when the gateway was not requested", () =>
 	expect(existsSync(join(f.root, "state", "sumocode", "subagents", "capabilities"))).toBe(false);
 });
 
-it("refuses a gateway grant that does not name its servers", () => {
+it("grants the ambient scope when no servers are named", () => {
 	const f = fixture();
 	for (const servers of [undefined, []]) {
-		const result = resolve(f, servers);
-		expect(result.ok).toBe(false);
-		expect(result.ok === false && result.error).toContain("explicit mcpServers list");
+		const result = resolve(f, servers, "sa-ambient");
+		if (!result.ok || !result.capability) throw new Error(`expected an ambient grant: ${result.ok === false ? result.error : ""}`);
+		// Ambient reads nothing, fences nothing, and writes nothing: the child
+		// resolves the same chain its parent resolves for that cwd.
+		expect(result.capability.servers).toEqual([]);
+		expect(result.capability.configPath).toBeUndefined();
 	}
+	// Nothing was created: ambient grants touch no state.
+	expect(existsSync(join(f.root, "state", "sumocode", "subagents", "capabilities"))).toBe(false);
+});
+
+it("keeps the ambient grant free of the scoped path's refusals", () => {
+	const f = fixture();
+	// Sources the scoped path refuses (imports, unselected project servers)
+	// cannot widen an ambient child: it never reads them to begin with.
+	writeFileSync(join(f.agentDir, "mcp.json"), JSON.stringify({ mcpServers: {}, imports: ["claude-code"] }), { mode: 0o600 });
+	writeFileSync(join(f.cwd, ".mcp.json"), JSON.stringify({ mcpServers: { sneaky: { command: "node" } } }), { mode: 0o600 });
+	const result = resolve(f, undefined, "sa-ambient-2");
+	expect(result.ok).toBe(true);
 });
 
 it("refuses rather than silently narrowing a malformed or oversized selection", () => {
@@ -106,7 +121,7 @@ it("fails clearly when the adapter is not installed in the trusted global scope"
 it("writes a private config that enables exactly the selected servers and fences the rest", () => {
 	const f = fixture();
 	const result = resolve(f, ["fixture"]);
-	if (!result.ok || !result.capability) throw new Error("expected a granted capability");
+	if (!result.ok || !result.capability?.configPath) throw new Error("expected a scoped grant");
 	expect(result.capability.servers).toEqual(["fixture"]);
 	expect(result.capability.adapterEntry).toBe(f.adapterEntry);
 	// The artifact is owner-only and confined to the private capability root.
@@ -123,7 +138,7 @@ it("resolves project-local configuration from the child cwd, including an isolat
 	mkdirSync(worktree, { mode: 0o700 });
 	writeFileSync(join(worktree, ".mcp.json"), JSON.stringify({ mcpServers: { "worktree-only": { command: "node" } } }), { mode: 0o600 });
 	const result = resolveMcpLaunchCapability({ gatewayRequested: true, servers: ["worktree-only"], cwd: worktree, key: "sa-worktree" });
-	if (!result.ok || !result.capability) throw new Error(`expected a granted capability: ${result.ok === false ? result.error : ""}`);
+	if (!result.ok || !result.capability?.configPath) throw new Error(`expected a scoped grant: ${result.ok === false ? result.error : ""}`);
 	// SAFETY: the generated config is the JSON this resolver just wrote.
 	const written = JSON.parse(readFileSync(result.capability.configPath, "utf8")) as { mcpServers: Record<string, McpServerDefinition> };
 	expect(written.mcpServers["worktree-only"]).toEqual({ command: "node" });
@@ -159,6 +174,7 @@ it("pins the settings that could re-add servers after the file chain merges", ()
 	const f = fixture();
 	const result = resolve(f, ["fixture"]);
 	if (!result.ok || !result.capability) throw new Error("expected a granted capability");
+	if (!result.capability.configPath) throw new Error("scoped grant must carry a config path");
 	// SAFETY: the generated config is the JSON this resolver just wrote.
 	const written = JSON.parse(readFileSync(result.capability.configPath, "utf8")) as { settings: unknown };
 	expect(written.settings).toEqual({ hostConfigDiscovery: "off", agentPluginPaths: [] });
@@ -177,7 +193,7 @@ it("gives every grant its own config file even when the caller key repeats", () 
 	const f = fixture();
 	const first = resolve(f, ["fixture"], "sa-once");
 	const second = resolve(f, ["fixture"], "sa-once");
-	if (!first.ok || !first.capability || !second.ok || !second.capability) throw new Error("expected two grants");
+	if (!first.ok || !first.capability?.configPath || !second.ok || !second.capability?.configPath) throw new Error("expected two scoped grants");
 	expect(first.capability.configPath).not.toBe(second.capability.configPath);
 	expect(existsSync(first.capability.configPath)).toBe(true);
 	expect(existsSync(second.capability.configPath)).toBe(true);

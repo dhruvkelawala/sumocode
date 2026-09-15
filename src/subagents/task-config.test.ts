@@ -1,14 +1,15 @@
 import { expect, it } from "vitest";
 import { BUILT_IN_TOOLS, resolveChildToolSurface, resolveTaskConfig } from "./task-config.js";
 
-it("inherits only built-ins when no role narrowed the surface", () => {
-	// The parent's own session routinely has extension tools active (the MCP
-	// gateway among them); a role-free delegation never inherits those.
+it("inherits the parent's built-ins plus the MCP gateway, and nothing else", () => {
+	// The gateway is ambient like a built-in: a child of a session that has it
+	// gets it. Other extension tools are still never inherited implicitly.
 	const surface = resolveChildToolSurface({
 		roleTools: undefined,
 		parentActiveTools: ["read", "bash", "mcp", "mcpScript", "terminal_start"],
 	});
-	expect(surface).toEqual(["read", "bash"]);
+	expect(surface).toEqual(["read", "bash", "mcp"]);
+	expect(resolveChildToolSurface({ roleTools: undefined, parentActiveTools: ["read", "bash"] })).toEqual(["read", "bash"]);
 });
 
 it("grants an approvable extension tool only when the role asks for it and the parent has it", () => {
@@ -23,6 +24,12 @@ it("drops tools outside the approvable set and de-duplicates the surface", () =>
 		parentActiveTools: ["read", "bash", "mcp", "terminal_start", "not-a-tool"],
 	});
 	expect(surface).toEqual(["read", "mcp", "bash"]);
+});
+
+it("cannot narrow the gateway away with a role's tool list", () => {
+	// A role scopes file/shell primitives, not the session's integrations; a
+	// parent that has MCP delegates MCP. Narrowing is `mcpServers`'s job.
+	expect(resolveChildToolSurface({ roleTools: ["read"], parentActiveTools: ["read", "bash", "mcp"] })).toEqual(["read", "mcp"]);
 });
 
 it("refuses every tool when the role names tools the parent has nothing active for", () => {

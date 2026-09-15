@@ -4,7 +4,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { MCP_GATEWAY_TOOL, MAX_MCP_SERVERS, isChildToolName } from "./task-config.js";
+import { MAX_MCP_SERVERS, isChildToolName } from "./task-config.js";
 
 const MAX_ROLES_FILE_BYTES = 256 * 1024;
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -200,17 +200,6 @@ function normalizedOverlay(value: unknown, index: number, builtIn: boolean, warn
 	return overlay;
 }
 
-/**
- * A selection without the gateway (or vice versa) is only visible once the
- * overlay has merged with its base role, so the coherence check runs there.
- */
-function warnOnUngrantedMcpServers(role: SubagentRole, warnings: RoleWarning[]): void {
-	if (!role.mcpServers || role.mcpServers.length === 0) return;
-	if (role.tools?.includes(MCP_GATEWAY_TOOL)) return;
-	warnings.push({ scope: "role", roleId: role.id, blocksRole: false,
-		message: `role ${role.id} selects MCP servers without granting the ${MCP_GATEWAY_TOOL} tool` });
-}
-
 export function loadRoles(dependencies: LoadRolesDependencies = {}): LoadedRoles {
 	const readFile = dependencies.readFile ?? readFileSync;
 	const path = resolveRolesPath(dependencies.env);
@@ -246,7 +235,6 @@ export function loadRoles(dependencies: LoadRolesDependencies = {}): LoadedRoles
 		if (!overlay) continue;
 		if (roleIndex >= 0) {
 			roles[roleIndex] = { ...roles[roleIndex], ...overlay } as SubagentRole;
-			warnOnUngrantedMcpServers(roles[roleIndex]!, warnings);
 			continue;
 		}
 		roles.push((() => {
@@ -262,7 +250,6 @@ export function loadRoles(dependencies: LoadRolesDependencies = {}): LoadedRoles
 			if (overlay.mcpServers !== undefined) role.mcpServers = overlay.mcpServers;
 			if (overlay.defaultWorktree !== undefined) role.defaultWorktree = overlay.defaultWorktree;
 			if (overlay.defaultVisible !== undefined) role.defaultVisible = overlay.defaultVisible;
-			warnOnUngrantedMcpServers(role as SubagentRole, warnings);
 			return role as SubagentRole;
 		})());
 	}

@@ -18,13 +18,21 @@ const MAX_MCP_SERVERS = 256;
 const MAX_SERVER_NAME_BYTES = 128;
 const CAPABILITIES_DIR = ["subagents", "capabilities"] as const;
 
-/** Resolved grant handed to a child launcher. Paths, never secret values. */
+/**
+ * Resolved grant handed to a child launcher. Paths, never secret values.
+ *
+ * An absent `configPath` is the ambient scope: the child loads the adapter and
+ * resolves its own config chain for its cwd, exactly as the parent session
+ * does, so delegation never grants more than the operator already has. A
+ * non-empty `servers` list switches to the fenced scope below.
+ */
 export interface McpLaunchCapability {
+	/** Empty means ambient (the whole roster configured for the child's cwd). */
 	readonly servers: readonly string[];
 	readonly adapterEntry: string;
 	/** SumoCode-owned guard that exits a child whose gateway never registered. */
 	readonly guardEntry: string;
-	readonly configPath: string;
+	readonly configPath?: string;
 }
 
 export type McpCapabilityResolution =
@@ -127,13 +135,6 @@ export function resolveMcpLaunchCapability(request: McpCapabilityRequest): McpCa
 			? { ok: false, error: `MCP servers ${servers.join(", ")} were selected without granting the ${MCP_GATEWAY_TOOL} tool` }
 			: { ok: true, capability: undefined };
 	}
-	if (servers.length === 0) {
-		// Fail closed: granting the gateway without naming servers would expose
-		// every configured server through the proxy, which is the exact
-		// "unrestricted proxy over ambient configuration" this capability exists
-		// to prevent.
-		return { ok: false, error: `the ${MCP_GATEWAY_TOOL} tool requires an explicit mcpServers list naming the servers this child may use` };
-	}
 	const env = request.env ?? process.env;
 	const adapterEntry = resolveMcpAdapterEntry(env);
 	if (!adapterEntry) {
@@ -146,7 +147,9 @@ export function resolveMcpLaunchCapability(request: McpCapabilityRequest): McpCa
 		return { ok: false, error: "MCP was granted but the child-side capability guard could not be located" };
 	}
 	const chain = { cwd: request.cwd, piAgentDir: env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent") };
-	const sources = inspectMcpConfigSources(chain);
+	// Scoped grants only: the ambient path deliberately reads nothing, because
+	// it fences nothing.
+	const sources = servers.length > 0 ? inspectMcpConfigSources(chain) : [];
 	const unsupportedImports = sources.filter((source) => source.imports.length > 0);
 	if (unsupportedImports.length > 0) {
 		const paths = unsupportedImports.map((source) => source.path).sort().join(", ");
@@ -169,6 +172,12 @@ export function resolveMcpLaunchCapability(request: McpCapabilityRequest): McpCa
 	if (missing.length > 0) {
 		const known = [...available.keys()].sort().join(", ") || "(none)";
 		return { ok: false, error: `MCP server(s) not configured for ${request.cwd}: ${missing.join(", ")}. Configured servers: ${known}` };
+	}
+	if (servers.length === 0) {
+		// Ambient scope: the child resolves the same chain its parent resolves
+		// for that cwd, so it can reach nothing the operator could not. No file
+		// is written and nothing is fenced.
+		return { ok: true, capability: { servers: [], adapterEntry, guardEntry } };
 	}
 	try {
 		const configPath = writeScopedMcpConfig(request.key, available, servers, env);

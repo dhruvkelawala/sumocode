@@ -46,25 +46,34 @@ export const isChildToolName = (toolName: string): toolName is ChildToolName =>
  * Resolve what a child may use: role policy intersected with the parent's own
  * active tools, so delegation can only narrow.
  *
- * Two fail-closed rules live here rather than in the launchers:
- *   - A role that grants nothing inherits the parent's BUILT-INS only. Extension
- *     tools are never inherited implicitly, because the parent's own surface
- *     (an interactive operator session) routinely includes tools a delegated
- *     child was never granted.
- *   - An explicitly granted extension tool still requires the parent to have it
- *     active, so a narrowed parent cannot widen its child.
+ * Fail-closed rules that live here rather than in the launchers:
+ *   - A role list can only name built-ins and approvable extension tools that
+ *     the parent itself has active, so a narrowed parent cannot widen its child.
+ *   - The MCP gateway is inherited whenever the parent has it active. Delegation
+ *     never grants more than the parent, and a parent without the gateway
+ *     cannot conjure one for its children.
  */
 export const resolveChildToolSurface = (options: {
 	readonly roleTools: readonly string[] | undefined;
 	readonly parentActiveTools: readonly string[];
 }): ChildToolName[] => {
 	const parentActive = new Set(options.parentActiveTools);
-	if (options.roleTools === undefined) return options.parentActiveTools.filter(isBuiltInToolName);
 	const surface: ChildToolName[] = [];
-	for (const toolName of options.roleTools) {
-		if (!isChildToolName(toolName) || !parentActive.has(toolName) || surface.includes(toolName)) continue;
-		surface.push(toolName);
+	const push = (toolName: string): void => {
+		if (isChildToolName(toolName) && parentActive.has(toolName) && !surface.includes(toolName)) surface.push(toolName);
+	};
+	if (options.roleTools === undefined) {
+		for (const toolName of options.parentActiveTools) {
+			if (isBuiltInToolName(toolName)) push(toolName);
+		}
+	} else {
+		for (const toolName of options.roleTools) push(toolName);
 	}
+	// The MCP gateway is ambient, like a built-in: every child of a session that
+	// has it gets it, whatever the role narrows, because a role's tool list
+	// scopes file/shell primitives, not the session's integrations. A role that
+	// wants fewer servers narrows with `mcpServers`, not by dropping the tool.
+	if (parentActive.has(MCP_GATEWAY_TOOL)) push(MCP_GATEWAY_TOOL);
 	return surface;
 };
 

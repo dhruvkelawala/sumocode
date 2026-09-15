@@ -44,8 +44,11 @@ const { resolveMcpLaunchCapability } = await jiti.import(join(repo, "src", "suba
 const { resolveTaskConfig } = await jiti.import(join(repo, "src", "subagents", "task-config.ts"));
 const { mcpLaunchArgs, resolvePiBinary } = await jiti.import(join(repo, "src", "subagents", "backend-pi.ts"));
 
+// `--ambient` proves the inherited scope: no server list, no generated config,
+// the child resolves the same chain its parent would for that cwd.
+const ambient = process.argv.includes("--ambient");
 const capability = resolveMcpLaunchCapability({
-	gatewayRequested: true, servers: ["fixture"], cwd: project, key: `proof-${Date.now().toString(36)}`, env,
+	gatewayRequested: true, servers: ambient ? [] : ["fixture"], cwd: project, key: `proof-${Date.now().toString(36)}`, env,
 });
 if (projectDecoy) {
 	const refused = capability.ok === false && capability.error.includes("unselected server(s)") && capability.error.includes("sneaky");
@@ -58,7 +61,11 @@ if (!capability.ok || !capability.capability) {
 	process.exit(1);
 }
 const grant = capability.capability;
-const scoped = JSON.parse(readFileSync(grant.configPath, "utf8"));
+if (ambient && grant.configPath !== undefined) {
+	console.log("FAIL: the ambient grant must not carry a scoped config");
+	process.exit(1);
+}
+const scoped = grant.configPath === undefined ? { mcpServers: {} } : JSON.parse(readFileSync(grant.configPath, "utf8"));
 
 const model = process.env.MCP_PROOF_MODEL ?? "deepseek/deepseek-flash";
 const config = resolveTaskConfig({
@@ -69,7 +76,8 @@ if (!config.ok) throw new Error(config.error);
 const denyGrant = process.argv.includes("--deny-grant");
 const args = denyGrant ? config.subprocessArgs : [...config.subprocessArgs, ...mcpLaunchArgs(grant)];
 
-console.log("$ scoped MCP config written by the capability resolver:");
+if (grant.configPath === undefined) console.log("$ ambient scope: no config generated; the child resolves its own chain");
+else console.log("$ scoped MCP config written by the capability resolver:");
 console.log(JSON.stringify(scoped, null, 2).split("\n").map((line) => `  ${line}`).join("\n"));
 console.log(`$ argv: ${resolvePiBinary(env)} ${args.map((arg) => (arg.includes(" ") ? JSON.stringify(arg) : arg)).join(" ")}`);
 
@@ -123,7 +131,9 @@ const checks = denyGrant
 	: [
 		["child called the MCP gateway", toolCalls.includes("mcp")],
 		["fixture server received a tools/call", fixtureCalls.some((line) => JSON.parse(line).tool === "image")],
-		["every unselected ambient server is fenced off", unfenced.length === 0],
+		...(ambient
+			? [["the ambient grant carries no scoped config", grant.configPath === undefined]]
+			: [["every unselected ambient server is fenced off", unfenced.length === 0]]),
 		["the synthetic image arrived as a native image block", imageBlocks.length > 0],
 		["the image's text metadata survived", imageText.length > 0],
 	];

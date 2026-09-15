@@ -116,12 +116,14 @@ function buildVisibleAgentArgs(options: VisibleAgentCommandOptions): string[] {
 }
 
 /**
- * `env` wrapper for the agent command. `exec env -u …` is always needed when an
- * MCP grant is mounted, because the pane inherits the operator's shell
- * environment and `PI_MCP_CONFIG_MODE=exclusive` would void the grant's scope.
+ * `env` wrapper for the agent command. `exec env -u …` is needed for a scoped
+ * MCP grant, because the pane inherits the operator's shell environment and
+ * `PI_MCP_CONFIG_MODE=exclusive` would void the grant's scope. The ambient
+ * grant keeps the operator's environment untouched so it resolves the same
+ * chain the parent session does.
  */
-function envPrefix(piBin: string | undefined, mountedMcp: boolean): string[] {
-	const flags = mountedMcp ? ["-u", "PI_MCP_CONFIG_MODE"] : [];
+function envPrefix(piBin: string | undefined, scopedMcp: boolean): string[] {
+	const flags = scopedMcp ? ["-u", "PI_MCP_CONFIG_MODE"] : [];
 	if (!piBin) return flags.length > 0 ? ["env", ...flags] : [];
 	return ["env", ...flags, shellEscape(`PI_BIN=${piBin}`)];
 }
@@ -134,7 +136,7 @@ export function buildVisibleAgentCommand(options: VisibleAgentCommandOptions): s
 		shellEscape(options.cwd),
 		"&&",
 		"exec",
-		...envPrefix(piBin, options.mcp !== undefined),
+		...envPrefix(piBin, options.mcp?.configPath !== undefined),
 		launcher && launcher !== "sumocode" ? shellEscape(launcher) : "sumocode",
 		...buildVisibleAgentArgs(options).map(shellEscape),
 	].join(" ");

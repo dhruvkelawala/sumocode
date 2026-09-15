@@ -231,9 +231,12 @@ function validToolSurface(value: unknown): boolean {
 function validMcpGrant(value: unknown): boolean {
 	if (value === null) return true;
 	if (!object(value, "servers adapterEntry guardEntry configPath") || !pathValue(value.adapterEntry)
-		|| !pathValue(value.guardEntry) || !pathValue(value.configPath)) return false;
-	return Array.isArray(value.servers) && value.servers.length > 0 && new Set(value.servers).size === value.servers.length
-		&& value.servers.every((server): boolean => typeof server === "string" && text(server));
+		|| !pathValue(value.guardEntry) || !(value.configPath === undefined || pathValue(value.configPath))) return false;
+	if (!Array.isArray(value.servers) || new Set(value.servers).size !== value.servers.length
+		|| !value.servers.every((server): boolean => typeof server === "string" && text(server))) return false;
+	// A fenced scope names at least one server and carries the config that
+	// fences them; the ambient scope selects nothing and carries no config.
+	return value.configPath === undefined ? value.servers.length === 0 : value.servers.length > 0;
 }
 
 function validPointer(value: unknown, file: string): value is PromptPointer {

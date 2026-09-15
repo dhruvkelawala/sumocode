@@ -106,14 +106,6 @@ describe("subagent roles", () => {
 			.toContain("invalid mcpServers list");
 	});
 
-	it("warns when a role selects MCP servers without granting the gateway", () => {
-		const loaded = fromJson({ roles: [{ id: "review", mcpServers: ["fixture"] }] });
-		expect(loaded.roles.find((role) => role.id === "review")?.mcpServers).toEqual(["fixture"]);
-		expect(loaded.warnings).toEqual([
-			{ scope: "role", roleId: "review", blocksRole: false, message: "role review selects MCP servers without granting the mcp tool" },
-		]);
-	});
-
 	it("normalizes explicit inheritance sentinels over built-in defaults", () => {
 		const loaded = fromJson({ roles: [
 			{ id: "research", model: "inherit", tools: "inherit" },

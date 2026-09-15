@@ -228,15 +228,18 @@ describe("subagent tools", () => {
 			const launched = spawnedTasks[0] as (SpawnSubagentTask & { id: string; mcp?: McpLaunchCapability }) | undefined;
 			expect(launched).toMatchObject({ tools: ["read", "mcp"], mcpServers: ["fixture"] });
 			expect(launched?.mcp).toMatchObject({ servers: ["fixture"], adapterEntry: env.adapterEntry });
-			expect(launched?.mcp?.configPath.startsWith(env.root)).toBe(true);
+			expect(launched?.mcp?.configPath !== undefined && launched.mcp.configPath.startsWith(env.root)).toBe(true);
 
-			// A role-free spawn inherits built-ins only: the parent's active MCP
-			// gateway is never handed to a child nobody granted it to.
+			// A role-free spawn inherits the gateway like a built-in, at ambient
+			// scope: no server list, no config file — the child resolves the same
+			// chain its parent resolves for that cwd.
 			// SAFETY: the ctx double carries only the fields the tool handlers read.
 			await tool("subagent_spawn").execute("tc2", { prompt: "plain", name: "plain", working_dir: cwd }, undefined, undefined, ctx as never);
-			expect(spawnedTasks[1]).toMatchObject({ tools: ["read", "bash"] });
+			expect(spawnedTasks[1]).toMatchObject({ tools: ["read", "bash", "mcp"] });
 			// SAFETY: the cast only lets the assertion read the optional capability field off the same recorded task.
-			expect((spawnedTasks[1] as { mcp?: unknown } | undefined)?.mcp).toBeUndefined();
+			const ambient = (spawnedTasks[1] as { mcp?: McpLaunchCapability } | undefined)?.mcp;
+			expect(ambient).toMatchObject({ servers: [], adapterEntry: env.adapterEntry });
+			expect(ambient?.configPath).toBeUndefined();
 		} finally {
 			vi.unstubAllEnvs();
 		}

@@ -280,6 +280,7 @@ will hit us), **Mitigation**, **Test**.
 - **Description**: `yoga-layout` (FFI native) must build native binary on `pnpm install`. May fail on user's machine.
 - **Phase**: 0-2.
 - **Mitigation**: Use `yoga-wasm-web` (pure WASM, no native deps) for v1. Later evaluate `yoga-layout` for performance.
+- **Superseded**: SumoCode now uses `yoga-layout` v3, which ships WASM base64-embedded in JS — still no native build step, and no `share/yoga.wasm` sidecar.
 - **Test**: unit — fresh `pnpm install` on Mac mini and MacBook, verify works.
 
 ### 11.2 Pi version drift

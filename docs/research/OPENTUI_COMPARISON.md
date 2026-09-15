@@ -24,7 +24,7 @@ This doc records the comparison so we can decide what to port without re-doing t
 |---|---|---|
 | Language | TypeScript (~7 kLOC `buffer.ts`/`renderer.ts`) + Zig (~24 kLOC native core) | TypeScript only (~15.2 kLOC total, ~1.85 kLOC for the kernel modules studied) |
 | Runtime | Bun ≥ 1.3.0 (FFI + WebGPU) | Node ≥ 22.19.0 + jiti |
-| Layout | Yoga (via Zig FFI) | Yoga (yoga-wasm-web) |
+| Layout | Yoga (via Zig FFI) | Yoga (`yoga-layout` v3, base64-embedded WASM) |
 | Distribution | Pre-built per-platform `.so`/`.dylib` (`@opentui/core-darwin-arm64`, etc.) | Pure TS, no native deps |
 | License | MIT | MIT |
 | Cell buffer | Packed FFI memory: `Uint32Array(char) + Uint16Array(fg) + Uint16Array(bg) + Uint32Array(attrs)` (`buffer.ts:74-91`) | `CellBuffer` class with sparse `Map<number, string\|number>` style storage |

@@ -147,7 +147,7 @@ Build the core retained renderer: Yoga-laid-out tree of nodes, cell buffer compo
 ### Tasks
 
 #### Day 1 — Yoga setup + node primitive
-1. Add `yoga-wasm-web` to dependencies (decision per edge case 11.1; faster install, no native module concerns).
+1. Add `yoga-wasm-web` to dependencies (decision per edge case 11.1; faster install, no native module concerns). *(Historical: the binding is now `yoga-layout` v3 — see EDGE_CASES.md 11.1.)*
 2. `src/sumo-tui/layout/yoga.ts` — singleton init, type re-exports, `freeRecursive` helper.
 3. `src/sumo-tui/layout/node.ts` — SumoNode class:
    - Constructor takes Yoga node, parent, optional handlers

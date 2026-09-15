@@ -645,6 +645,31 @@ describe("spawnPiChild", () => {
 		expect(proc.stdout.listenerCount("data")).toBe(0);
 	});
 
+	it("mounts the MCP adapter, its startup guard, and the scoped config in the child argv", () => {
+		const proc = new FakeProcess();
+		const spawn = vi.fn((_command: string, _args: readonly string[]) => proc);
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		const child = createPiChildSpawner(spawn as never)({
+			prompt: "use the fixture",
+			cwd: "/tmp/project",
+			inherited: { thinking: "low" },
+			tools: ["read", "bash", "mcp"],
+			mcp: { servers: ["fixture"], adapterEntry: "/adapter/index.ts", configPath: "/state/capabilities/sa-x.json" },
+		});
+		collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+
+		const argv = spawn.mock.calls[0]?.[1] ?? [];
+		// The gateway is an extension tool: it survives --no-extensions only
+		// because the adapter is loaded explicitly, and its allowlist entry is
+		// what actually enables it.
+		expect(argv).toContain("--no-extensions");
+		expect(argv[argv.indexOf("--tools") + 1]).toBe("read,bash,mcp");
+		expect(argv[argv.indexOf("--mcp-config") + 1]).toBe("/state/capabilities/sa-x.json");
+		const extensions = argv.flatMap((arg, index) => arg === "-e" ? [argv[index + 1] ?? ""] : []);
+		expect(extensions).toContain("/adapter/index.ts");
+		expect(extensions.some((entry) => entry.endsWith("mcp-child-bootstrap.ts"))).toBe(true);
+	});
+
 	it("delivers the delegated prompt via stdin and keeps it out of child argv", () => {
 		// Issue 391: delegated prompts can carry sensitive material. Pinned Pi
 		// (0.85.x) print mode reads piped stdin as the initial message

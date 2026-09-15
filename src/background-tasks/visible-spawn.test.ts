@@ -79,6 +79,22 @@ describe("visible-spawn", () => {
 		expect(command).toBe("cd '/repo.worktrees/cheap' && exec env 'PI_BIN=/opt/Pi Current/bin/pi' '/opt/Sumo Code/bin/sumocode.sh' 'task' '--thinking' 'low' '--task-dir' '/tmp/subagents/sa-7-123'");
 	});
 
+	it("carries an MCP grant to a visible child as adapter plus scoped config", () => {
+		const paths = buildVisibleTaskPaths("sa-8", 123, "/tmp/subagents");
+		const command = buildVisibleAgentCommand({
+			cwd: "/repo",
+			paths,
+			tools: ["read", "bash", "mcp"],
+			mcp: { servers: ["fixture"], adapterEntry: "/adapter/index.ts", configPath: "/state/capabilities/sa-8.json" },
+		});
+
+		// The launcher forwards unknown flags to Pi, so the adapter and its
+		// config path reach the child as ordinary Pi argv.
+		expect(command).toContain("'--tools' 'read,bash,mcp'");
+		expect(command).toContain("'-e' '/adapter/index.ts'");
+		expect(command).toContain("'--mcp-config' '/state/capabilities/sa-8.json'");
+	});
+
 	it("uses bash pipefail for visible shell tasks", () => {
 		const paths = buildVisibleTaskPaths("bg-2", 123, "/tmp/test-bg");
 		const script = buildVisibleTaskScript({

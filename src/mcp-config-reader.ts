@@ -80,7 +80,7 @@ export function resolveMcpConfigCandidates(opts: LoadMcpServersOptions): readonl
 	const home = homedir();
 	return [
 		join(home, ".config", "mcp", "mcp.json"),
-		...agentsGlobalConfigPaths().filter((path) => path !== opts.piAgentDir),
+		...agentsGlobalConfigPaths().filter((path) => path !== join(opts.piAgentDir, "mcp.json")),
 		join(opts.piAgentDir, "mcp.json"),
 		join(opts.cwd, ".mcp.json"),
 		join(opts.cwd, ".pi", "mcp.json"),

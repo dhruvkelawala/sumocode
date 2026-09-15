@@ -1,4 +1,5 @@
 import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -12,6 +13,7 @@ import { SUBAGENT_MAX_RUNNING, type SubagentEvent, type SubagentSnapshot } from 
 import { SubagentManager, type SpawnSubagentTask } from "./manager.js";
 import { loadRoles, type RoleWarning, type SubagentRole } from "./roles.js";
 import { registerSubagentTools } from "./tools.js";
+import type { McpLaunchCapability } from "./mcp-capability.js";
 
 /** Tool result shape returned by every subagent tool. */
 interface ToolResult {
@@ -27,7 +29,7 @@ type FakeSpawnedChild = {
 	requestClose?: () => void;
 };
 
-const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly SubagentRole[], roleWarnings: readonly RoleWarning[] = []) => {
+const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly SubagentRole[], roleWarnings: readonly RoleWarning[] = [], activeTools: readonly string[] = ["read", "bash"]) => {
 	const registered: Array<{ name: string; parameters?: unknown; promptGuidelines?: readonly string[]; execute: (...args: unknown[]) => Promise<ToolResult> }> = [];
 	const emitters = new Map<string, (event: SubagentEvent) => void>();
 	const childSends = new Map<string, ReturnType<typeof vi.fn>>();
@@ -86,7 +88,7 @@ const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly Su
 			durationMs: 10,
 		}),
 	});
-	const pi = { registerTool: vi.fn((tool) => registered.push(tool)), on: vi.fn(), getThinkingLevel: vi.fn(() => "medium"), getActiveTools: vi.fn(() => ["read", "bash"]) };
+	const pi = { registerTool: vi.fn((tool) => registered.push(tool)), on: vi.fn(), getThinkingLevel: vi.fn(() => "medium"), getActiveTools: vi.fn(() => [...activeTools]) };
 	// Each call snapshots the caller's array, matching loadRoles() returning a fresh list per call.
 	const roleLoader: typeof loadRoles = roles ? (() => ({ roles: [...roles], warnings: roleWarnings })) : loadRoles;
 	// SAFETY: the double implements registerTool/on/getThinkingLevel/getActiveTools, all registerSubagentTools uses.
@@ -97,6 +99,24 @@ const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly Su
 };
 
 const textOf = <T extends { content: Array<{ text: string }> }>(result: T): string => result.content[0]!.text;
+
+/** Hermetic HOME/agent-dir/state-dir plus a fake adapter and a project .mcp.json. */
+function mcpFixtureEnv(options: { readonly withServers?: boolean } = {}) {
+	const root = realpathSync(mkdtempSync(join(tmpdir(), "sumocode-tools-mcp-")));
+	const project = join(root, "project");
+	const agentDir = join(root, ".pi", "agent");
+	const adapterDir = join(root, "adapter");
+	for (const dir of [project, agentDir, adapterDir]) mkdirSync(dir, { recursive: true, mode: 0o700 });
+	writeFileSync(join(adapterDir, "package.json"), JSON.stringify({ name: "pi-mcp-adapter", pi: { extensions: ["./index.ts"] } }), { mode: 0o600 });
+	const adapterEntry = join(adapterDir, "index.ts");
+	writeFileSync(adapterEntry, "export default () => undefined;\n", { mode: 0o600 });
+	if (options.withServers !== false) writeFileSync(join(project, ".mcp.json"), JSON.stringify({ mcpServers: { fixture: { command: "node" } } }), { mode: 0o600 });
+	vi.stubEnv("HOME", root);
+	vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+	vi.stubEnv("SUMOCODE_STATE_DIR", join(root, "state"));
+	vi.stubEnv("SUMOCODE_MCP_ADAPTER", adapterDir);
+	return { root, project, adapterEntry };
+}
 
 const publicSpawnTool = (manager: SubagentManager, host: TerminalHost, roles: readonly SubagentRole[] = []) => {
 	const registered: Array<{ name: string; execute: (...args: unknown[]) => Promise<ToolResult> }> = [];
@@ -191,6 +211,59 @@ describe("subagent tools", () => {
 		const spawnSchema = JSON.stringify(tool("subagent_spawn").parameters);
 		expect(spawnSchema).toContain("audit — use for audits (openai-codex/gpt-5.6-sol, worktree)");
 		expect(spawnSchema).toContain("Explicit spawn parameters override role defaults");
+	});
+
+	it("grants the MCP gateway, its server selection, and the resolved capability to the launcher", async () => {
+		const env = mcpFixtureEnv();
+		try {
+			const role: SubagentRole = {
+				id: "fixture-scout", label: "Fixture Scout", description: "use for mcp fixtures",
+				systemPrompt: "call the fixture", tools: ["read", "mcp"], mcpServers: ["fixture"],
+			};
+			const { tool, ctx, spawnedTasks } = createHarness("herdr", [role], [], ["read", "bash", "mcp"]);
+			const cwd = join(env.root, "project");
+			await tool("subagent_spawn").execute("tc", { prompt: "use mcp", name: "scout", role: "fixture-scout", working_dir: cwd }, undefined, undefined, ctx as never);
+			const launched = spawnedTasks[0] as (SpawnSubagentTask & { id: string; mcp?: McpLaunchCapability }) | undefined;
+			expect(launched).toMatchObject({ tools: ["read", "mcp"], mcpServers: ["fixture"] });
+			expect(launched?.mcp).toMatchObject({ servers: ["fixture"], adapterEntry: env.adapterEntry });
+			expect(launched?.mcp?.configPath.startsWith(env.root)).toBe(true);
+
+			// A role-free spawn inherits built-ins only: the parent's active MCP
+			// gateway is never handed to a child nobody granted it to.
+			await tool("subagent_spawn").execute("tc2", { prompt: "plain", name: "plain", working_dir: cwd }, undefined, undefined, ctx as never);
+			expect(spawnedTasks[1]).toMatchObject({ tools: ["read", "bash"] });
+			expect((spawnedTasks[1] as { mcp?: unknown } | undefined)?.mcp).toBeUndefined();
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("fails the spawn with a clear capability error when a selected server is not configured for the child cwd", async () => {
+		const env = mcpFixtureEnv({ withServers: false });
+		try {
+			const role: SubagentRole = {
+				id: "fixture-scout", label: "Fixture Scout", description: "use for mcp fixtures",
+				systemPrompt: "call the fixture", tools: ["read", "mcp"], mcpServers: ["fixture"],
+			};
+			const { tool, ctx, spawnedTasks } = createHarness("herdr", [role], [], ["read", "bash", "mcp"]);
+			const result = await tool("subagent_spawn").execute("tc", { prompt: "use mcp", name: "scout", role: "fixture-scout", working_dir: join(env.root, "project") }, undefined, undefined, ctx as never);
+			expect(textOf(result)).toContain("MCP capability unavailable");
+			expect(textOf(result)).toContain("not configured");
+			expect(spawnedTasks).toEqual([]);
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("refuses an MCP grant the parent session cannot itself use", async () => {
+		const role: SubagentRole = {
+			id: "fixture-scout", label: "Fixture Scout", description: "use for mcp fixtures",
+			systemPrompt: "call the fixture", tools: ["read", "mcp"], mcpServers: ["fixture"],
+		};
+		const { tool, ctx, spawnedTasks } = createHarness("herdr", [role], [], ["read", "bash"]);
+		const result = await tool("subagent_spawn").execute("tc", { prompt: "use mcp", name: "scout", role: "fixture-scout" }, undefined, undefined, ctx as never);
+		expect(textOf(result)).toContain("MCP access denied");
+		expect(spawnedTasks).toEqual([]);
 	});
 
 	it("applies role defaults, preserves explicit precedence, and only narrows parent tools", async () => {

@@ -37,6 +37,28 @@ function fixture() {
 
 const secrets = { prompt: "private prompt 🦉\nsecond line", systemPrompt: "private system instruction" };
 
+it("carries an MCP grant through the descriptor without embedding server definitions or secrets", () => {
+	const { root, record, config } = fixture();
+	const adapterEntry = join(root, "adapter.ts");
+	const configPath = join(root, "capability.json");
+	writeFileSync(adapterEntry, "export default () => undefined;\n", { mode: 0o600 });
+	writeFileSync(configPath, '{}\n', { mode: 0o600 });
+	const granted: RetainedBootstrapConfiguration = { ...config, tools: ["read", "mcp"],
+		mcp: { servers: ["fixture"], adapterEntry, configPath } };
+	const descriptor = prepareRetainedBootstrap(record, granted, secrets);
+	expect(descriptor.config.mcp).toEqual({ servers: ["fixture"], adapterEntry, configPath });
+	expect(JSON.stringify(descriptor)).not.toContain("private prompt");
+	expect(readRetainedBootstrap(record, descriptor.nonce).descriptor.config.mcp).toEqual({ servers: ["fixture"], adapterEntry, configPath });
+});
+
+it("rejects a tool surface and MCP grant that disagree", () => {
+	for (const patch of [{ tools: ["read", "mcp"] as const, mcp: null }, { tools: ["read"] as const, mcp: { servers: ["fixture"], adapterEntry: "x", configPath: "y" } }]) {
+		const { record, config } = fixture();
+		Object.assign(config, patch);
+		expect(() => prepareRetainedBootstrap(record, config, secrets)).toThrow("unsafe retained bootstrap");
+	}
+});
+
 describe("retained bootstrap private protocol", () => {
 	it("preserves a working directory nested inside the captured worktree", () => {
 		const { root, record, config } = fixture();

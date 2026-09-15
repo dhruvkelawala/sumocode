@@ -92,6 +92,20 @@ describe("subagent roles", () => {
 		]);
 	});
 
+	it("carries an explicit MCP server selection beside the gateway grant", () => {
+		const loaded = fromJson({ roles: [
+			{ id: "review", tools: ["read", "mcp"], mcpServers: ["fixture", "fixture", "  ", 7, "other"] },
+		] });
+		const review = loaded.roles.find((role) => role.id === "review");
+		expect(review?.tools).toEqual(["read", "mcp"]);
+		expect(review?.mcpServers).toEqual(["fixture", "other"]);
+		expect(loaded.warnings.map((warning) => warning.message).join("\n")).toContain("ignores invalid mcp server");
+		const inherited = fromJson({ roles: [{ id: "review", mcpServers: "inherit" }] });
+		expect(inherited.roles.find((role) => role.id === "review")).toHaveProperty("mcpServers", undefined);
+		expect(fromJson({ roles: [{ id: "review", mcpServers: {} }] }).warnings.map((warning) => warning.message).join("\n"))
+			.toContain("invalid mcpServers list");
+	});
+
 	it("normalizes explicit inheritance sentinels over built-in defaults", () => {
 		const loaded = fromJson({ roles: [
 			{ id: "research", model: "inherit", tools: "inherit" },

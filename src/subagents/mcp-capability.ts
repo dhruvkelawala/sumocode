@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { defaultActivityStateRoot, ensurePrivateSumocodeDirectory, writePrivateJsonExclusive } from "../activity/persistence.js";
-import { inspectMcpConfigSources, loadConfiguredMcpServerDefinitions, type ConfiguredMcpServer } from "../mcp-config-reader.js";
+import { inspectMcpConfigSources, loadConfiguredMcpServerDefinitions, type McpServerDefinition } from "../mcp-config-reader.js";
 import { adapterEntryFromPackageDir, packageDirsFromSettings, resolveMcpChildBootstrapEntry } from "./backend-pi.js";
 
 /**
@@ -142,12 +142,13 @@ export function resolveMcpLaunchCapability(request: McpCapabilityRequest): McpCa
 		return { ok: false, error: "MCP was granted but the child-side capability guard could not be located" };
 	}
 	const chain = { cwd: request.cwd, piAgentDir: env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent") };
-	const unsupportedImports = inspectMcpConfigSources(chain).filter((source) => source.imports.length > 0);
+	const sources = inspectMcpConfigSources(chain);
+	const unsupportedImports = sources.filter((source) => source.imports.length > 0);
 	if (unsupportedImports.length > 0) {
 		const paths = unsupportedImports.map((source) => source.path).sort().join(", ");
 		return { ok: false, error: `MCP cannot be scoped while ${paths} uses \`imports\`; run \`pi-mcp-adapter init\` to expand them into mcpServers first` };
 	}
-	const unbounded = inspectMcpConfigSources(chain)
+	const unbounded = sources
 		.filter((source) => source.scope === "project")
 		.flatMap((source) => source.servers.filter((name) => !servers.includes(name)).map((name) => ({ name, path: source.path })));
 	if (unbounded.length > 0) {
@@ -165,7 +166,7 @@ export function resolveMcpLaunchCapability(request: McpCapabilityRequest): McpCa
 		return { ok: false, error: `MCP server(s) not configured for ${request.cwd}: ${missing.join(", ")}. Configured servers: ${known}` };
 	}
 	try {
-		const configPath = writeScopedMcpConfig(request.key, configured, servers, env);
+		const configPath = writeScopedMcpConfig(request.key, available, servers, env);
 		return { ok: true, capability: { servers, adapterEntry, guardEntry, configPath } };
 	} catch (error) {
 		return { ok: false, error: `unable to write the MCP capability config: ${error instanceof Error ? error.message : String(error)}` };
@@ -183,20 +184,20 @@ export function resolveMcpLaunchCapability(request: McpCapabilityRequest): McpCa
  */
 function writeScopedMcpConfig(
 	key: string,
-	configured: readonly ConfiguredMcpServer[],
+	available: ReadonlyMap<string, McpServerDefinition>,
 	selected: readonly string[],
 	env: NodeJS.ProcessEnv,
 ): string {
 	const mcpServers = Object.create(null) as Record<string, unknown>;
-	for (const name of selected) mcpServers[name] = configured.find((server) => server.name === name)?.definition;
-	for (const server of configured) {
-		if (!selected.includes(server.name)) mcpServers[server.name] = { disabled: true };
+	for (const name of selected) mcpServers[name] = available.get(name);
+	for (const name of available.keys()) {
+		if (!selected.includes(name)) mcpServers[name] = { disabled: true };
 	}
 	const directory = ensurePrivateSumocodeDirectory([...CAPABILITIES_DIR], defaultActivityStateRoot(env));
-	// A nonce keeps the exclusive create honest across processes: subagent ids
-	// restart their counter, and nothing reuses a task directory.
+	// A nonce, not just the subagent id: ids restart their counter per process,
+	// so an id-only filename would collide the second session that spawns the
+	// same title against an artifact nothing deletes.
 	const configPath = join(directory, `${key}-${randomUUID()}.json`);
-	if (existsSync(configPath)) throw new Error(`capability config already exists for ${key}`);
 	writePrivateJsonExclusive(configPath, { mcpServers, settings: { hostConfigDiscovery: "off", agentPluginPaths: [] } });
 	return configPath;
 }

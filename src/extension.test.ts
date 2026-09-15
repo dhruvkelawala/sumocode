@@ -48,6 +48,39 @@ interface RealpathTable {
 	readonly [key: string]: string;
 }
 
+/** The one member the abort-responsive inventory guard invokes on a recorded tool. */
+interface AbortProbeTool {
+	execute(
+		toolCallId: string,
+		params: never,
+		signal: AbortSignal,
+		onUpdate: undefined,
+		ctx: never,
+	): Promise<{ terminate?: boolean }>;
+}
+
+/**
+ * Every tool a profile registers must stop waiting when its turn is
+ * interrupted. An installer that bypassed the abort-responsive view would hold
+ * the turn open until its own wait finished, which is what made Escape unable
+ * to stop the agent. Both profiles are wired by hand and independently, so both
+ * are asserted by this one invariant rather than by review. The already-aborted
+ * signal also proves the real execute never runs, so the whole inventory is
+ * probed without spawning a subagent or cutting a worktree.
+ */
+async function expectEveryToolAbandonsOnAbort(registerToolCalls: readonly (readonly unknown[])[]): Promise<void> {
+	expect(registerToolCalls.length).toBeGreaterThan(0);
+	for (const call of registerToolCalls) {
+		// SAFETY: registerTool records tool definitions; this reads only execute,
+		// whose signature is identical across every generic instantiation.
+		const tool = call[0] as AbortProbeTool;
+		// SAFETY: the aborted signal returns before execute reads params or ctx.
+		const unreadArgument = {} as never;
+		await expect(tool.execute("abort-probe", unreadArgument, AbortSignal.abort(), undefined, unreadArgument))
+			.resolves.toMatchObject({ terminate: true });
+	}
+}
+
 let ambientEnvSnapshot: Map<string, string | undefined>;
 let piCodingAgentDirSnapshot: string | undefined;
 let temporaryPiAgentDir: string | undefined;
@@ -388,6 +421,24 @@ describe("rpc child profile", () => {
 		expect(isRpcChildProfile({ env: { SUMOCODE_RPC_CHILD: "0" } })).toBe(false);
 	});
 
+	it("registers every rpc-child tool through the abort-responsive view", async () => {
+		const previousRpc = process.env.SUMOCODE_RPC_CHILD;
+		process.env.SUMOCODE_RPC_CHILD = "1";
+		try {
+			const { pi } = buildPiStub();
+			// SAFETY: the pi double supplies the register*/on surfaces the source entry installs on.
+			rpcChildSumocode(pi as never);
+
+			// This is the profile the reported `Timed out waiting for abort response`
+			// came from: the host deadline only ever fired because a tool here held
+			// the turn open.
+			await expectEveryToolAbandonsOnAbort(pi.registerTool.mock.calls);
+		} finally {
+			if (previousRpc === undefined) delete process.env.SUMOCODE_RPC_CHILD;
+			else process.env.SUMOCODE_RPC_CHILD = previousRpc;
+		}
+	});
+
 	it("loads the same headless profile through the source-only entry", async () => {
 		const previousRpc = process.env.SUMOCODE_RPC_CHILD;
 		process.env.SUMOCODE_RPC_CHILD = "1";
@@ -519,6 +570,15 @@ describe("sumocode extension", () => {
 		expect(toolNames.filter((name) => name.startsWith("bg_"))).toEqual([]);
 		expect(toolNames).not.toContain("task");
 		expect(toolNames).not.toContain(["bg", "task"].join("_"));
+	});
+
+	it("registers every tool through the abort-responsive view", async () => {
+		const { pi } = buildPiStub();
+
+		// SAFETY: the pi double supplies the register*/on surfaces the extension installs on.
+		sumocode(pi as never);
+
+		await expectEveryToolAbandonsOnAbort(pi.registerTool.mock.calls);
 	});
 
 	it("registers the v0.4 slash commands during full extension install", () => {

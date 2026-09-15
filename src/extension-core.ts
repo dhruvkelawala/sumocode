@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { withAbortResponsiveTools } from "./abort-responsive-tools.js";
 import { installActivityManagerBridge } from "./activity/manager-bridge.js";
 import { installAnswerTool } from "./answer-tool.js";
 import { installBackgroundTasks, installTerminalTools } from "./background-tasks/index.js";
@@ -124,6 +125,9 @@ export function claudeAccountSubscriptionLabel(providerId: string): string | und
 }
 
 export function installRpcChildProfile(pi: ExtensionAPI): void {
+	// Every SumoCode tool registers through this view so an interrupt ends the
+	// turn even while a tool is still waiting. See abort-responsive-tools.ts.
+	const toolPi = withAbortResponsiveTools(pi);
 	installHerdrRpcBridge(pi);
 	// The retained host draws the footer, so the resolved account travels as an
 	// extension status instead of through installFooter.
@@ -140,9 +144,9 @@ export function installRpcChildProfile(pi: ExtensionAPI): void {
 	registerRpcTreeNavigationCommand(pi);
 	installMemoryExtraction(pi);
 	installFastMode(pi);
-	installQuestionTool(pi);
-	installAnswerTool(pi);
-	const { subagentManager } = installOrchestrationTools(pi, true);
+	installQuestionTool(toolPi);
+	installAnswerTool(toolPi);
+	const { subagentManager } = installOrchestrationTools(toolPi, true);
 	installTaskModeAutoExit(pi);
 	registerSumoReloadCommand(pi);
 	registerRolesCommand(pi);
@@ -151,7 +155,7 @@ export function installRpcChildProfile(pi: ExtensionAPI): void {
 	registerAccountsCommand(pi, {
 		refreshAccountStatus: (ctx) => publishClaudeAccountStatus(ctx, { subscriptionLabel: claudeAccountSubscriptionLabel }),
 	});
-	installSumoInteractions(pi, {
+	installSumoInteractions(toolPi, {
 		subagentManager,
 		installUiSurfaces: false,
 		refreshAccountStatus: (ctx) => publishClaudeAccountStatus(ctx, { subscriptionLabel: claudeAccountSubscriptionLabel }),

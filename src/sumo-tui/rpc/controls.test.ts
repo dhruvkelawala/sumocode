@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { modelOptionsFrom, RpcHostControls, TREE_NAVIGATION_TIMEOUT_MS, type RpcAvailableModel, type RpcCommandClient } from "./controls.js";
+import { ABORT_SETTLE_TIMEOUT_MS, modelOptionsFrom, RpcHostControls, TREE_NAVIGATION_TIMEOUT_MS, type RpcAvailableModel, type RpcCommandClient } from "./controls.js";
 import { decodeRpcTreeNavigationPayload, InMemoryRpcTreeNavigationOutcomeBroker, type RpcTreeNavigationOutcome, type RpcTreeNavigationOutcomeBroker, type RpcTreeNavigationRequest } from "../pi-compat/tree-navigation-command.js";
 import { RpcHostStateStore, type RpcHostChromeState } from "./state.js";
 
@@ -727,6 +727,11 @@ describe("RpcHostControls", () => {
 
 		await expect(controls.abort()).resolves.toBeUndefined();
 		expect(client.commands).toEqual([{ type: "abort" }]);
+		// Pi replies only after the agent reaches idle, which waits on whatever tool
+		// is mid-flight, so the settle gets its own budget instead of the round-trip
+		// default that reported a delivered abort as failed.
+		expect(client.timeouts).toEqual([ABORT_SETTLE_TIMEOUT_MS]);
+		expect(ABORT_SETTLE_TIMEOUT_MS).toBeGreaterThan(30_000);
 	});
 
 	it("throws Pi error responses with the failed command and server text", async () => {
@@ -860,12 +865,13 @@ describe("RpcHostControls", () => {
 	it("leaves quick getters and setters on the client's default timeout", async () => {
 		const client = new FakeClient(
 			stateResponse(),
-			{ type: "response", command: "abort", success: true },
+			{ type: "response", command: "clear_queue", success: true, data: { steering: [], followUp: [] } },
 		);
 		const controls = new RpcHostControls(client);
 
 		await controls.refreshState();
-		await controls.abort();
+		// clear_queue, unlike abort, is answered synchronously by Pi.
+		await controls.clearQueue();
 
 		expect(client.timeouts).toEqual([undefined, undefined]);
 	});

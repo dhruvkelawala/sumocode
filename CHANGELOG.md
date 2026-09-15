@@ -15,6 +15,14 @@ landed between the original scaffold and this release.
   preserving the active Claude model. #558
 
 ### Fixed
+- **Escape aborts a turn that is waiting on a tool** — pressing Escape while
+  `subagent_spawn`, `terminal_start`, `question`, or any other SumoCode tool was
+  still waiting left the agent working until that tool finished on its own, then
+  reported `rpc error: Timed out waiting for abort response after 30000ms`.
+  SumoCode's tools now stop waiting as soon as the turn is interrupted. Work
+  they had already started is abandoned, not cancelled: spawned subagents,
+  managed terminals and created worktrees keep running in the background, while
+  an open `question` prompt is dismissed with the turn it belonged to.
 - **Logical model cycling** — `Ctrl+P` / `Ctrl+Shift+P` no longer switch between
   Claude accounts registered as `anthropic`, `anthropic-2`, and later clones.
   #558

@@ -7,7 +7,7 @@ $ scoped MCP config written by the capability resolver:
           "/Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/sumo__wt-mu2qdem2/test/integration/fixtures/mcp-fixture-server.mjs"
         ],
         "env": {
-          "MCP_FIXTURE_LOG": "/private/var/folders/jy/3j8rk22d6cg47dgvfjs016gw0000gn/T/sumocode-mcp-proof-IheWVm/fixture-calls.jsonl"
+          "MCP_FIXTURE_LOG": "/private/var/folders/jy/3j8rk22d6cg47dgvfjs016gw0000gn/T/sumocode-mcp-proof-dN2who/fixture-calls.jsonl"
         }
       },
       "rn": {
@@ -22,7 +22,7 @@ $ scoped MCP config written by the capability resolver:
       "agentPluginPaths": []
     }
   }
-$ argv: /Users/sumo-deus/.local/lib/sumocode/sumocode-0.7.1-macos-arm64/bin/sumocode-pi --mode json -p --no-session --no-extensions --provider deepseek --model deepseek-flash --thinking low --tools read,bash,mcp
+$ argv: /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/sumo__wt-mu2qdem2/node_modules/.bin/pi --mode json -p --no-session --no-extensions --provider deepseek --model deepseek-flash --thinking low --tools read,bash,mcp
 $ child exit: 0
 $ tool calls: []
 $ fixture server calls: []

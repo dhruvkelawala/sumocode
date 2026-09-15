@@ -1,0 +1,35 @@
+$ signed-in surface: scoped MCP config written by the capability resolver
+  {
+    "mcpServers": {
+      "fixture": {
+        "command": "/opt/homebrew/Cellar/node/25.6.1/bin/node",
+        "args": [
+          "/Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/sumo__wt-mu2qdem2/test/integration/fixtures/mcp-fixture-server.mjs"
+        ],
+        "env": {
+          "MCP_FIXTURE_LOG": "/private/var/folders/jy/3j8rk22d6cg47dgvfjs016gw0000gn/T/sumocode-mcp-proof-W79Hyz/fixture-calls.jsonl"
+        }
+      },
+      "rn": {
+        "disabled": true
+      },
+      "plan": {
+        "disabled": true
+      }
+    },
+    "settings": {
+      "hostConfigDiscovery": "off",
+      "agentPluginPaths": []
+    }
+  }
+$ argv: /Users/sumo-deus/.local/lib/sumocode/sumocode-0.7.1-macos-arm64/bin/sumocode-pi --mode json -p --no-session --no-extensions --provider deepseek --model deepseek-flash --thinking low --tools read,bash,mcp
+$ child exit: 0
+$ tool calls: []
+$ fixture server calls: []
+$ ambient global servers fenced: ["rn","plan"]
+$ image content blocks on the child's message stream: 0
+$ text metadata blocks: 0
+$ child stderr: Warning: No models match pattern "cursor/grok-4.6"
+PASS: a child without the MCP grant has no MCP tool
+PASS: the fixture server was never reached
+PASS: the child reported the missing capability instead of pretending

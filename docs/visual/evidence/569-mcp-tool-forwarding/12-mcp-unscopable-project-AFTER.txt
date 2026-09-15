@@ -1,0 +1,2 @@
+$ project-decoy refusal: MCP cannot be scoped while project configuration defines unselected server(s): sneaky (/private/var/folders/jy/3j8rk22d6cg47dgvfjs016gw0000gn/T/sumocode-mcp-proof-ZtVhqW/project/.mcp.json). Select them explicitly or remove them
+PASS: a project config naming an unselected server refuses the grant with a clear error

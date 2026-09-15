@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,6 +6,7 @@ import { SUBAGENT_MAX_RUNNING, type SubagentEvent } from "./domain.js";
 import type { SpawnedChild } from "./backend-pi.js";
 import type { TerminalHost } from "../terminal-host/types.js";
 import { installSubagents, SubagentManager } from "./index.js";
+import { BUILT_IN_TOOLS } from "./task-config.js";
 import { SubagentRegistry } from "./registry.js";
 
 type ChildEmitter = (event: SubagentEvent) => void;
@@ -640,17 +641,42 @@ describe("subagent result delivery", () => {
 });
 
 it("forwards the surface to a visible child only when it must bound it", async () => {
-	const full = ["read", "bash", "edit", "write", "grep", "find", "ls", "mcp"];
-	const { tool, ctx } = createHarness(false, "tui", { activeTools: full });
+	// Hermetic: no adapter is discoverable, so this test cannot flip on whether
+	// the host machine happens to have pi-mcp-adapter installed.
+	const root = realpathSync(mkdtempSync(join(tmpdir(), "sumocode-index-mcp-")));
+	vi.stubEnv("HOME", root);
+	vi.stubEnv("PI_CODING_AGENT_DIR", join(root, "agent"));
+	vi.stubEnv("SUMOCODE_STATE_DIR", join(root, "state"));
+	vi.stubEnv("SUMOCODE_MCP_ADAPTER", "");
+	try {
+		// Full built-in surface, no gateway anywhere: the child keeps its own
+		// extension tools, so no allowlist is forwarded.
+		const plain = createHarness(false, "tui", { activeTools: [...BUILT_IN_TOOLS] });
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const plainCtx = plain.ctx as never;
+		await plain.tool("subagent_spawn").execute("tc", { prompt: "p", name: "plain", visible: true }, undefined, undefined, plainCtx);
+		expect(backend.paneCalls.at(-1)?.tools).toBeUndefined();
 
-	// Full built-ins plus the gateway: the child keeps its own extension tools
-	// and the grant rides its own argv, so no allowlist is forwarded at all.
-	await tool("subagent_spawn").execute("tc", { prompt: "p", name: "full", visible: true }, undefined, undefined, ctx as never);
-	expect(backend.paneCalls.at(-1)?.tools).toBeUndefined();
+		// A narrowed parent must still bound its child.
+		const narrowed = createHarness(false, "tui", { activeTools: ["read"] });
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const narrowedCtx = narrowed.ctx as never;
+		await narrowed.tool("subagent_spawn").execute("tc", { prompt: "p", name: "narrow", visible: true }, undefined, undefined, narrowedCtx);
+		expect(backend.paneCalls.at(-1)?.tools).toEqual(["read"]);
 
-	// A surface without the gateway must be forwarded, or the child's own
-	// extension discovery would hand the gateway back (opt-out or degraded).
-	const { tool: narrowedTool, ctx: narrowedCtx } = createHarness(false, "tui", { activeTools: ["read"] });
-	await narrowedTool("subagent_spawn").execute("tc", { prompt: "p", name: "narrow", visible: true }, undefined, undefined, narrowedCtx as never);
-	expect(backend.paneCalls.at(-1)?.tools).toEqual(["read"]);
+		// A role that opted out must be bounded too, or the child's own extension
+		// discovery would hand back the gateway its role refused.
+		// The default role loader reads roles.json from the stubbed agent dir.
+		mkdirSync(join(root, "agent", "sumocode"), { recursive: true, mode: 0o700 });
+		writeFileSync(join(root, "agent", "sumocode", "roles.json"), JSON.stringify({ roles: [
+			{ id: "off", label: "Off", description: "no mcp", systemPrompt: "off", tools: [...BUILT_IN_TOOLS], mcpServers: [] },
+		] }), { mode: 0o600 });
+		const optedOut = createHarness(false, "tui", { activeTools: [...BUILT_IN_TOOLS, "mcp"] });
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const optedOutCtx = optedOut.ctx as never;
+		await optedOut.tool("subagent_spawn").execute("tc", { prompt: "p", name: "off", role: "off", visible: true }, undefined, undefined, optedOutCtx);
+		expect(backend.paneCalls.at(-1)?.tools).toEqual([...BUILT_IN_TOOLS]);
+	} finally {
+		vi.unstubAllEnvs();
+	}
 });

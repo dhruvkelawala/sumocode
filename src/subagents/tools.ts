@@ -39,6 +39,7 @@ const isAtCapacity = (value: SubagentSnapshot | AtCapacityDetails): value is AtC
 interface RoleSurface {
 	readonly tools: readonly ChildToolName[];
 	readonly mcpExplicit: boolean;
+	readonly mcpOptOut: boolean;
 }
 
 const resolveRoleSurface = (role: SubagentRole | undefined, parentActiveTools: readonly string[]): RoleSurface => {
@@ -50,7 +51,7 @@ const resolveRoleSurface = (role: SubagentRole | undefined, parentActiveTools: r
 	}
 	const mcpExplicit = role?.tools?.includes(MCP_GATEWAY_TOOL) === true
 		|| (role?.mcpServers !== undefined && role.mcpServers.length > 0);
-	return { tools, mcpExplicit };
+	return { tools, mcpExplicit, mcpOptOut: optedOutOfMcp };
 };
 
 /**
@@ -231,7 +232,8 @@ export function registerSubagentTools(
 			if (denial) {
 				return makeToolResult(denial, { action: "spawn", status: "mcp_unavailable", role: role?.id });
 			}
-			const { tools, mcpExplicit } = resolveRoleSurface(role, parentActiveTools);
+			const roleSurface = resolveRoleSurface(role, parentActiveTools);
+			const { tools, mcpExplicit, mcpOptOut } = roleSurface;
 			const spawned = await manager.spawn({
 				sourceId: toolCallId,
 				budget: params.budget,
@@ -256,6 +258,7 @@ export function registerSubagentTools(
 				tools,
 				mcpServers: role?.mcpServers,
 				mcpExplicit,
+				mcpOptOut,
 			});
 			if (isAtCapacity(spawned)) return formatAtCapacity(spawned);
 			if (spawned.status === "queued") {

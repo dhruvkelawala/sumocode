@@ -75,6 +75,8 @@ export interface SpawnSubagentTask {
 	readonly mcpServers?: readonly string[];
 	/** Set when the gateway was asked for by name rather than merely inherited. */
 	readonly mcpExplicit?: boolean;
+	/** Set when the role explicitly refused the gateway (an empty `mcpServers`). */
+	readonly mcpOptOut?: boolean;
 }
 
 export type SubagentLaunch = SpawnSubagentTask & {
@@ -85,6 +87,14 @@ export type SubagentLaunch = SpawnSubagentTask & {
 	readonly placement?: AgentPanePlacement;
 	/** Resolved once the child cwd is final; launchers consume it, callers never set it. */
 	readonly mcp?: McpLaunchCapability;
+	/**
+	 * Set when the manager deliberately removed the gateway from the surface —
+	 * an opt-out or a grant it could not mount. A later launcher must then bound
+	 * the child's own surface rather than let its discovery hand the gateway
+	 * back. Absent means the gateway was simply never part of this delegation,
+	 * which is not something a launcher should fence anything for.
+	 */
+	readonly mcpFenced?: boolean;
 };
 type BackendFactory = (task: SubagentLaunch & { provisioningTimeoutMs?: number }) => SpawnedChild | Promise<SpawnedChild>;
 type Listener = () => void;
@@ -685,7 +695,11 @@ export class SubagentManager {
 			// A degraded inherited grant leaves `mcp` in the surface but nothing to
 			// mount: drop it, or a discovery-loaded visible child would still get
 			// the ambient gateway its parent never explicitly handed it.
-			const tools = mcp === undefined && mcpRequested
+			// Two ways a launcher must bound the child: the role refused the gateway,
+			// or the grant could not be mounted. Both leave the surface gateway-free,
+			// which a discovery-loaded visible child would otherwise refill.
+			const mcpFenced = task.mcpOptOut === true || (mcp === undefined && mcpRequested);
+			const tools = mcpFenced
 				? (task.tools ?? []).filter((name) => name !== MCP_GATEWAY_TOOL)
 				: task.tools;
 			if (task.visible) {
@@ -766,7 +780,7 @@ export class SubagentManager {
 			if (placement !== undefined) this.placementByTask.set(id, placement);
 			let child: SpawnedChild;
 			try {
-				const spawnInput = { ...task, tools, cwd: childCwd, id, signal: controller.signal, placement,
+				const spawnInput = { ...task, tools, mcpFenced, cwd: childCwd, id, signal: controller.signal, placement,
 					baseRef: manifestBaseRef, worktreeRef: worktree, provisioningTimeoutMs };
 				child = await this.backendFactory(mcp ? { ...spawnInput, mcp } : spawnInput);
 			} catch (error) {

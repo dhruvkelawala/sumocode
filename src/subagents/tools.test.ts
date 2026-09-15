@@ -255,7 +255,9 @@ describe("subagent tools", () => {
 				systemPrompt: "no mcp", tools: ["read", "bash"], mcpServers: [],
 			};
 			const { tool, ctx, spawnedTasks } = createHarness("herdr", [role], [], ["read", "bash", "mcp"]);
+			// SAFETY: the ctx double carries only the fields the tool handlers read.
 			await tool("subagent_spawn").execute("tc", { prompt: "plain", name: "offline", role: "no-mcp", working_dir: join(env.root, "project") }, undefined, undefined, ctx as never);
+			// SAFETY: the cast only reads the optional capability fields off the recorded task.
 			const launched = spawnedTasks[0] as (SpawnSubagentTask & { id: string; mcp?: McpLaunchCapability; mcpExplicit?: boolean }) | undefined;
 			expect(launched?.tools).toEqual(["read", "bash"]);
 			expect(launched?.mcp).toBeUndefined();
@@ -272,11 +274,13 @@ describe("subagent tools", () => {
 		};
 		const harness = createHarness("herdr", [role], [], ["read", "bash", "mcp"]);
 		try {
+			// SAFETY: the ctx double carries only the fields the tool handlers read.
 			await harness.tool("subagent_spawn").execute("spawn", { prompt: "first", name: "offline", role: "no-mcp", working_dir: join(env.root, "project") }, undefined, undefined, harness.ctx as never);
 			harness.emitters.get("sa-offline-1")?.({ kind: "session-located", sessionFilePath: "/tmp/session/child.jsonl" });
 			harness.emitters.get("sa-offline-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "first" } });
 			await vi.waitFor(() => expect(harness.manager.get("sa-offline-1")?.status).toBe("done"));
 
+			// SAFETY: the ctx double carries only the fields the tool handlers read.
 			const result = await harness.tool("subagent_reply").execute("reply", { id: "sa-offline-1", text: "continue" }, undefined, undefined, harness.ctx as never);
 
 			expect(textOf(result)).toContain("Started");
@@ -300,6 +304,7 @@ describe("subagent tools", () => {
 			// adapter is not in the trusted global scope. The spawn must still
 			// succeed, without the gateway in the child's surface.
 			const { tool, ctx, spawnedTasks } = createHarness("herdr", undefined, [], ["read", "bash", "mcp"]);
+			// SAFETY: the ctx double carries only the fields the tool handlers read.
 			const result = await tool("subagent_spawn").execute("tc", { prompt: "plain", name: "plain", working_dir: join(env.root, "project") }, undefined, undefined, ctx as never);
 			expect(textOf(result)).toContain("Started");
 			// SAFETY: the cast only reads the optional capability fields off the recorded task.
@@ -320,6 +325,7 @@ describe("subagent tools", () => {
 				systemPrompt: "call the fixture", tools: ["read", "mcp"], mcpServers: ["fixture"],
 			};
 			const { tool, ctx, spawnedTasks } = createHarness("herdr", [role], [], ["read", "bash", "mcp"]);
+			// SAFETY: the ctx double carries only the fields the tool handlers read.
 			const result = await tool("subagent_spawn").execute("tc", { prompt: "use mcp", name: "scout", role: "fixture-scout", working_dir: join(env.root, "project") }, undefined, undefined, ctx as never);
 			expect(textOf(result)).toContain("MCP capability unavailable");
 			expect(textOf(result)).toContain("SUMOCODE_MCP_ADAPTER");

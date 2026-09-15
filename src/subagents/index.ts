@@ -6,7 +6,7 @@ import { activityFromSubagentSnapshot } from "../activity/subagent-adapter.js";
 import { ensurePrivateSumocodeDirectory } from "../activity/persistence.js";
 import { renderSubagentStatusRow, type SubagentStatusRunningEntry } from "../subagent-status-row.js";
 import { logDiagnostic } from "../sumo-tui/runtime/diagnostics.js";
-import { BUILT_IN_TOOLS, MCP_GATEWAY_TOOL } from "./task-config.js";
+import { BUILT_IN_TOOLS } from "./task-config.js";
 import { getTerminalHost } from "../terminal-host/index.js";
 import type { TerminalHost } from "../terminal-host/types.js";
 import { spawnPaneChild } from "./backend-pane.js";
@@ -132,16 +132,18 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 			// visible children must not silently reset to defaults).
 			const inheritedModel = task.inherited?.model ? `${task.inherited.model.provider}/${task.inherited.model.id}` : undefined;
 			// A visible child runs a full launcher session with extension discovery,
-			// so an allowlist is also a strip-list: passing one removes every
-			// extension tool the child would otherwise keep. Forward the surface
-			// only when it must bound the child — a narrowed parent, or a child
-			// that must be kept off the gateway its own discovery would grant
-			// (an opt-out or a degraded grant). A full surface with the gateway
-			// rides bare: the child keeps its extensions, and the grant already
-			// travels as its own -e/--mcp-config argv.
-			const keepsOwnSurface = (task.tools ?? []).filter((name) => name !== MCP_GATEWAY_TOOL).length >= BUILT_IN_TOOLS.length
-				&& (task.mcp !== undefined || task.tools?.includes(MCP_GATEWAY_TOOL) === true);
-			const paneTools = keepsOwnSurface ? undefined : task.tools;
+			// so an allowlist is also a strip-list: `--tools` removes every extension
+			// tool the child would otherwise keep. The grant itself always travels as
+			// its own -e/--mcp-config argv, never as an allowlist entry.
+			// Forward the surface only when it must bound the child: a narrowed
+			// parent, or a gateway the manager deliberately fenced. A full built-in
+			// surface with nothing to fence rides bare, so the child keeps its own
+			// extensions — including when this session simply has no MCP adapter.
+			// SAFETY: widening the literal tuple to readonly string[] only relaxes
+			// the element type for `includes`; membership still proves the name.
+			const builtInNames: readonly string[] = BUILT_IN_TOOLS;
+			const builtInTools = (task.tools ?? []).filter((name) => builtInNames.includes(name));
+			const paneTools = task.mcpFenced === true || builtInTools.length < BUILT_IN_TOOLS.length ? task.tools : undefined;
 			const child = spawnPane({
 				prompt: task.prompt,
 				name: task.title,

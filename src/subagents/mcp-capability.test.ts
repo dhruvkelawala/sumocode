@@ -99,7 +99,7 @@ it("refuses server names that were selected without granting the gateway", () =>
 	const f = fixture();
 	const result = resolveMcpLaunchCapability({ gatewayRequested: false, servers: ["fixture"], cwd: f.cwd, key: "sa-mismatch" });
 	expect(result.ok).toBe(false);
-	expect(result.ok === false && result.error).toContain("without granting the mcp tool");
+	expect(result.ok === false && result.error).toContain("no active mcp tool to scope them to");
 });
 
 it("fails with the configured roster when a selected server is not configured for the child cwd", () => {

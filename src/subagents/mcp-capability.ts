@@ -134,7 +134,7 @@ export function resolveMcpLaunchCapability(request: McpCapabilityRequest): McpCa
 	const servers = normalized.names;
 	if (!request.gatewayRequested) {
 		return servers.length > 0
-			? { ok: false, error: `MCP servers ${servers.join(", ")} were selected without granting the ${MCP_GATEWAY_TOOL} tool` }
+			? { ok: false, error: `MCP servers ${servers.join(", ")} were selected, but this session has no active ${MCP_GATEWAY_TOOL} tool to scope them to` }
 			: { ok: true, capability: undefined };
 	}
 	const env = request.env ?? process.env;

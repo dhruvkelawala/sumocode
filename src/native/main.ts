@@ -456,8 +456,8 @@ function runDoctor(parsed: ParsedLaunch): never {
 	check(isExecutableFile(PI_BIN), `Pi binary: ${PI_BIN}`, "Pi binary: not found or not executable");
 	check(existsSync(EXTENSION_ENTRY), `Extension bundle: ${EXTENSION_ENTRY}`, "Extension bundle: missing");
 	check(existsSync(RPC_EXTENSION_ENTRY), `RPC extension bundle: ${RPC_EXTENSION_ENTRY}`, "RPC extension bundle: missing");
-	const yogaWasm = join(NATIVE_DIR, "share/yoga.wasm");
-	check(existsSync(yogaWasm), `Yoga wasm: ${yogaWasm}`, "Yoga wasm: missing");
+	const faceAsset = join(NATIVE_DIR, "share/sumo-face.ans");
+	check(existsSync(faceAsset), `Sidecar assets: ${faceAsset}`, "Sidecar assets: share/sumo-face.ans missing");
 	const diagPath = parsed.diagFile !== "" ? parsed.diagFile : process.env.SUMO_TUI_DIAG_FILE ?? "/tmp/sumocode-manual.jsonl";
 	const diagProbe = join(dirname(diagPath), `.sumocode-doctor-${process.pid}-${Math.random().toString(36).slice(2, 10)}`);
 	let diagWritable = false;

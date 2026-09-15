@@ -364,7 +364,7 @@ nativeDescribe("native executable contract", () => {
 	it("rejects an install missing the RPC extension bundle", () => {
 		const root = tempRoot("sumocode-native-incomplete-install-");
 		for (const directory of ["bin", "extension", "share"]) mkdirSync(join(root, directory));
-		for (const file of ["bin/sumocode", "bin/sumocode-pi", "extension/sumocode-extension.bundle.mjs", "share/yoga.wasm", "share/sumo-face.ans"]) {
+		for (const file of ["bin/sumocode", "bin/sumocode-pi", "extension/sumocode-extension.bundle.mjs", "share/sumo-face.ans"]) {
 			writeFileSync(join(root, file), "");
 		}
 		chmodSync(join(root, "bin/sumocode"), 0o755);

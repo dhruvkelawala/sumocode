@@ -36,6 +36,7 @@ function fixture() {
 }
 
 const secrets = { prompt: "private prompt 🦉\nsecond line", systemPrompt: "private system instruction" };
+const root_of = (config: RetainedBootstrapConfiguration): string => config.cwd;
 
 it("carries an MCP grant through the descriptor without embedding server definitions or secrets", () => {
 	const { root, record, config } = fixture();
@@ -49,6 +50,31 @@ it("carries an MCP grant through the descriptor without embedding server definit
 	expect(descriptor.config.mcp).toEqual({ servers: ["fixture"], adapterEntry, guardEntry: adapterEntry, configPath });
 	expect(JSON.stringify(descriptor)).not.toContain("private prompt");
 	expect(readRetainedBootstrap(record, descriptor.nonce).descriptor.config.mcp).toEqual({ servers: ["fixture"], adapterEntry, guardEntry: adapterEntry, configPath });
+});
+
+it("round-trips an ambient MCP grant whose optional config path serializes away", () => {
+	const { record, config } = fixture();
+	const adapterEntry = join(root_of(config), "adapter.ts");
+	const guardEntry = join(root_of(config), "guard.ts");
+	writeFileSync(adapterEntry, "export default () => undefined;\n", { mode: 0o600 });
+	writeFileSync(guardEntry, "export default () => undefined;\n", { mode: 0o600 });
+	const ambient: RetainedBootstrapConfiguration = { ...config, tools: ["read", "mcp"],
+		mcp: { servers: [], adapterEntry, guardEntry } };
+	// JSON.stringify drops the undefined configPath, so the descriptor that comes
+	// back off disk must still validate without it.
+	const descriptor = prepareRetainedBootstrap(record, ambient, secrets);
+	expect(descriptor.config.mcp).toEqual({ servers: [], adapterEntry, guardEntry });
+	expect(JSON.stringify(descriptor)).not.toContain("configPath");
+	expect(readRetainedBootstrap(record, descriptor.nonce).descriptor.config.mcp).toEqual({ servers: [], adapterEntry, guardEntry });
+});
+
+it("rejects a fenced grant that names no server", () => {
+	const { record, config } = fixture();
+	const entry = join(root_of(config), "adapter.ts");
+	writeFileSync(entry, "export default () => undefined;\n", { mode: 0o600 });
+	const fenced: RetainedBootstrapConfiguration = { ...config, tools: ["read", "mcp"],
+		mcp: { servers: [], adapterEntry: entry, guardEntry: entry, configPath: entry } };
+	expect(() => prepareRetainedBootstrap(record, fenced, secrets)).toThrow("unsafe retained bootstrap");
 });
 
 it("rejects a tool surface and MCP grant that disagree", () => {

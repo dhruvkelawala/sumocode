@@ -230,7 +230,10 @@ function validToolSurface(value: unknown): boolean {
 
 function validMcpGrant(value: unknown): boolean {
 	if (value === null) return true;
-	if (!object(value, "servers adapterEntry guardEntry configPath") || !pathValue(value.adapterEntry)
+	// `configPath` is optional (absent = ambient scope) and must therefore also be
+	// OPTIONAL for `object`: JSON.stringify drops undefined keys, so a required
+	// listing would reject the round-tripped descriptor the in-memory one passed.
+	if (!object(value, "servers adapterEntry guardEntry", "configPath") || !pathValue(value.adapterEntry)
 		|| !pathValue(value.guardEntry) || !(value.configPath === undefined || pathValue(value.configPath))) return false;
 	if (!Array.isArray(value.servers) || new Set(value.servers).size !== value.servers.length
 		|| !value.servers.every((server): boolean => typeof server === "string" && text(server))) return false;

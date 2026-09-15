@@ -60,6 +60,57 @@ describe("question tool options", () => {
 		expect(result.content[0]?.text).toBe("User answered: Keep it high-level");
 	});
 
+	it("dismisses the cathedral overlay when the turn is interrupted", async () => {
+		let tool: { execute: (...args: unknown[]) => Promise<{ details: { cancelled?: boolean } }> } | undefined;
+		const pi = { registerTool: vi.fn((definition) => { tool = definition; }) };
+		const controller = new AbortController();
+		let disposed = false;
+		// Mirrors Pi's `showExtensionCustom`: the factory receives `done`, `done`
+		// closes the overlay exactly once, and closing disposes the component.
+		const custom = vi.fn((factory) => new Promise((resolve) => {
+			let closed = false;
+			let component: { dispose?: () => void } | undefined;
+			const done = (result: { answer: string; wasCustom: boolean } | null): void => {
+				if (closed) return;
+				closed = true;
+				resolve(result);
+				component?.dispose?.();
+			};
+			component = factory({ requestRender: vi.fn(), terminal: { rows: 24 } }, themeStub(), {}, done);
+			disposed = false;
+			// The overlay is up and owns the keyboard; nobody has answered it.
+			const originalDispose = component?.dispose;
+			if (component) component.dispose = (): void => { disposed = true; originalDispose?.call(component); };
+			controller.abort();
+		}));
+
+		// SAFETY: the double implements only the registerTool surface these tests read.
+		installQuestionTool(pi as never);
+		const result = await tool!.execute("call-1", { question: "Ship it?" }, controller.signal, undefined, {
+			hasUI: true,
+			ui: { custom },
+		});
+
+		expect(result.details).toMatchObject({ cancelled: true });
+		expect(disposed).toBe(true);
+	});
+
+	it("skips the overlay entirely when the turn is already interrupted", async () => {
+		let tool: { execute: (...args: unknown[]) => Promise<{ details: { cancelled?: boolean } }> } | undefined;
+		const pi = { registerTool: vi.fn((definition) => { tool = definition; }) };
+		const custom = vi.fn();
+
+		// SAFETY: the double implements only the registerTool surface these tests read.
+		installQuestionTool(pi as never);
+		const result = await tool!.execute("call-1", { question: "Ship it?" }, AbortSignal.abort(), undefined, {
+			hasUI: true,
+			ui: { custom },
+		});
+
+		expect(custom).not.toHaveBeenCalled();
+		expect(result.details).toMatchObject({ cancelled: true });
+	});
+
 	it("returns the raw option label when an object option has helper text", async () => {
 		let tool: { execute: (...args: unknown[]) => Promise<{ content: { text: string }[]; details: { answer?: string; wasCustom?: boolean } }> } | undefined;
 		const pi = {
@@ -202,10 +253,35 @@ describe("question tool RPC primitives", () => {
 			ui: { select, input, custom },
 		});
 
-		expect(select).toHaveBeenCalledWith("Approve?", ["approve — safe to proceed", "Type something…"]);
+		// The third argument carries the turn's abort signal so an interrupt dismisses
+		// the dialog instead of stranding it; this call has no signal to forward.
+		expect(select).toHaveBeenCalledWith("Approve?", ["approve — safe to proceed", "Type something…"], { signal: undefined });
 		expect(input).not.toHaveBeenCalled();
 		expect(custom).not.toHaveBeenCalled();
 		expect(result.details).toMatchObject({ cancelled: false, answer: "approve", wasCustom: false });
+	});
+
+	it("forwards the turn's abort signal so an interrupt dismisses the dialog", async () => {
+		const tool = registerTool();
+		const custom = vi.fn();
+		const controller = new AbortController();
+		// Pi dismisses a dialog when this signal fires and resolves it as cancelled.
+		const select = vi.fn(async (_title: string, _options: string[], opts?: { signal?: AbortSignal }) => {
+			controller.abort();
+			return opts?.signal?.aborted === true ? undefined : "approve";
+		});
+
+		const result = await tool.execute("call-1", {
+			question: "Approve?",
+			options: ["approve"],
+		}, controller.signal, undefined, {
+			hasUI: true,
+			mode: "rpc",
+			ui: { select, input: vi.fn(), custom },
+		});
+
+		expect(select).toHaveBeenCalledWith("Approve?", expect.any(Array), { signal: controller.signal });
+		expect(result.details).toMatchObject({ cancelled: true });
 	});
 
 	it("collects free-text after the sentinel is selected", async () => {
@@ -223,7 +299,7 @@ describe("question tool RPC primitives", () => {
 			ui: { select, input, custom },
 		});
 
-		expect(input).toHaveBeenCalledWith("Preferred framing?", "type your answer");
+		expect(input).toHaveBeenCalledWith("Preferred framing?", "type your answer", { signal: undefined });
 		expect(custom).not.toHaveBeenCalled();
 		expect(result.details).toMatchObject({ cancelled: false, answer: "ship the narrow fix", wasCustom: true });
 	});

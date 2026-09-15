@@ -110,6 +110,7 @@ async function showCathedralQuestion(
 	ctx: ExtensionContext,
 	title: string,
 	options: readonly DialogOption[],
+	signal: AbortSignal | undefined,
 ): Promise<QuestionResult | null> {
 	// If the only option is the free-text sentinel, start directly in edit mode
 	// so the user sees an auto-focused input — no dummy "A) Type something…" row.
@@ -134,6 +135,17 @@ async function showCathedralQuestion(
 				},
 			};
 			const editor = new Editor(tui, editorTheme);
+
+			// An interrupted turn takes this prompt with it. Without this the overlay
+			// would keep the user's keyboard after the tool call it belongs to has
+			// been abandoned, and any answer typed into it would go nowhere.
+			// Pi calls `dispose` when the overlay closes (`showExtensionCustom` ->
+			// `close`), so the listener never outlives its `done`.
+			const dismiss = (): void => done(null);
+			signal?.addEventListener("abort", dismiss, { once: true });
+			// An abort between `askQuestion`'s check and this factory body would never
+			// reach that listener, leaving the overlay up after the tool call resolved.
+			if (signal?.aborted) dismiss();
 
 			editor.onSubmit = (value) => {
 				const trimmed = value.trim();
@@ -218,6 +230,7 @@ async function showCathedralQuestion(
 				render,
 				invalidate: () => { cachedLines = undefined; },
 				handleInput,
+				dispose: () => signal?.removeEventListener("abort", dismiss),
 			};
 		},
 		{ overlay: true, overlayOptions: DIVINE_QUERY_OVERLAY_OPTIONS },
@@ -228,11 +241,15 @@ async function showRpcQuestion(
 	ctx: ExtensionContext,
 	title: string,
 	options: readonly DialogOption[],
+	signal: AbortSignal | undefined,
 ): Promise<QuestionResult | null> {
 	const realOptions = options.filter((option) => !option.isFreeText);
+	// Pi dismisses a dialog when this signal fires and resolves it as cancelled,
+	// so an interrupted turn does not strand a prompt on the user's screen.
+	const dialogOptions = { signal };
 
 	async function askForText(): Promise<QuestionResult | null> {
-		const answer = await ctx.ui.input(title, "type your answer");
+		const answer = await ctx.ui.input(title, "type your answer", dialogOptions);
 		const trimmed = answer?.trim() ?? "";
 		if (!trimmed) return null;
 		return { answer: trimmed, wasCustom: true };
@@ -243,7 +260,7 @@ async function showRpcQuestion(
 	const selected = await ctx.ui.select(title, [
 		...realOptions.map((option) => option.label),
 		FREE_TEXT_LABEL,
-	]);
+	], dialogOptions);
 	if (selected === undefined) return null;
 
 	const selectedOption = realOptions.find((option) => option.label === selected);
@@ -256,9 +273,14 @@ async function askQuestion(
 	ctx: ExtensionContext,
 	title: string,
 	options: readonly DialogOption[],
+	signal: AbortSignal | undefined,
 ): Promise<QuestionResult | null> {
-	if (ctx.mode === "rpc") return showRpcQuestion(ctx, title, options);
-	return showCathedralQuestion(ctx, title, options);
+	// Checked before the surface opens, not only inside it: a sequence of
+	// questions can be interrupted between two of them, and the Cathedral path
+	// can only dismiss an overlay its factory has already built.
+	if (signal?.aborted) return null;
+	if (ctx.mode === "rpc") return showRpcQuestion(ctx, title, options, signal);
+	return showCathedralQuestion(ctx, title, options, signal);
 }
 
 export function installQuestionTool(pi: ExtensionAPI): void {
@@ -268,7 +290,7 @@ export function installQuestionTool(pi: ExtensionAPI): void {
 		description: "Ask the user a question and let them pick from options, or omit options for free-text input. Use when you need user input to proceed. Do NOT prefix options with A)/B)/1./2. — the Cathedral UI adds labels automatically.",
 		parameters: QuestionParams,
 
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			if (!ctx.hasUI) {
 				return {
 					content: [{ type: "text", text: "Error: UI not available" }],
@@ -296,7 +318,7 @@ export function installQuestionTool(pi: ExtensionAPI): void {
 			if (questions.length === 1) {
 				const q = questions[0];
 				const title = q.context ? `${q.question}\n${q.context}` : q.question;
-				const result = await askQuestion(ctx, title, dialogOptionsFor(q.options));
+				const result = await askQuestion(ctx, title, dialogOptionsFor(q.options), signal);
 
 				if (!result) {
 					return {
@@ -315,7 +337,7 @@ export function installQuestionTool(pi: ExtensionAPI): void {
 			const answers: { question: string; answer: string }[] = [];
 			for (const q of questions) {
 				const title = q.context ? `${q.question}\n${q.context}` : q.question;
-				const result = await askQuestion(ctx, title, dialogOptionsFor(q.options));
+				const result = await askQuestion(ctx, title, dialogOptionsFor(q.options), signal);
 
 				if (!result) {
 					return {

@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { withAbortResponsiveTools } from "./abort-responsive-tools.js";
 import { installAnswerTool } from "./answer-tool.js";
 import { installInputHints } from "./cathedral/input-hints.js";
 import { installAltscreen } from "./cathedral/altscreen.js";
@@ -246,6 +247,9 @@ export default function sumocode(pi: ExtensionAPI): void {
 	// when those modules wire their components. No-op unless `SUMO_TUI_DIAG_FILE`
 	// is set (i.e. `sumocode -d`).
 	installRenderDiagnostics(pi);
+	// Every SumoCode tool registers through this view so an interrupt ends the
+	// turn even while a tool is still waiting. See abort-responsive-tools.ts.
+	const toolPi = withAbortResponsiveTools(pi);
 	// Cache must install before any consumer (footer/sidebar/top-chrome) so its
 	// invalidation handlers run alongside their state updates on lifecycle events.
 	installSessionCache(pi);
@@ -272,9 +276,9 @@ export default function sumocode(pi: ExtensionAPI): void {
 	installCathedralEditor(pi);
 	installInputHints(pi);
 	installSkillInlineExpansion(pi);
-	installQuestionTool(pi);
-	installAnswerTool(pi);
-	const { terminalTaskManager, subagentManager } = installOrchestrationTools(pi);
+	installQuestionTool(toolPi);
+	installAnswerTool(toolPi);
+	const { terminalTaskManager, subagentManager } = installOrchestrationTools(toolPi);
 	installTaskModeAutoExit(pi);
 
 	installWorkingIndicator(pi);
@@ -282,7 +286,7 @@ export default function sumocode(pi: ExtensionAPI): void {
 	registerSumoReloadCommand(pi);
 	registerRolesCommand(pi);
 	registerAccountsCommand(pi);
-	installSumoInteractions(pi, {
+	installSumoInteractions(toolPi, {
 		subagentManager,
 		installUiSurfaces: installSumoUiSurfaces,
 		// Classic mode renders the footer from its own memoized context, and these

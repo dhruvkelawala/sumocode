@@ -60,6 +60,13 @@ const COMPACT_TIMEOUT_MS = 300_000;
 const LOGIN_TIMEOUT_MS = 1_200_000;
 export const TREE_NAVIGATION_TIMEOUT_MS = 1_200_000;
 const SESSION_COMMAND_TIMEOUT_MS = 60_000;
+// Pi answers `abort` only once the agent is idle again, and reaching idle waits
+// on the in-flight tool call, so this budget covers a tool unwinding rather than
+// a round trip. SumoCode's own tools release as soon as the signal fires (see
+// abort-responsive-tools.ts) and Pi's built-ins abort in seconds; anything still
+// running after this is genuinely stuck, and reporting that beats waiting
+// forever with a dead Escape key.
+export const ABORT_SETTLE_TIMEOUT_MS = 120_000;
 
 function validateBashResult(result: DirectBashResult): DirectBashResult {
 	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- validate untrusted RPC data at the control boundary.
@@ -244,8 +251,20 @@ export class RpcHostControls {
 		return { steering: [...data.steering], followUp: [...data.followUp] };
 	}
 
+	/**
+	 * Pi answers `abort` only once the agent is idle again: `AgentSession.abort()`
+	 * signals the agent and then `await waitForIdle()`s before the RPC handler
+	 * replies. How long that takes belongs to whichever tool is mid-flight -- a
+	 * spawn, a terminal, an MCP call. The signal itself lands when the command is
+	 * written, so the client's default 30s deadline could not make an abort
+	 * arrive sooner; it only turned a delivered abort into a false
+	 * `rpc error: Timed out waiting for abort response after 30000ms` whenever a
+	 * tool took longer than that to release. Give the settle its own budget
+	 * instead -- a dead or stopped child still rejects this through the client's
+	 * pending-request teardown.
+	 */
 	public async abort(): Promise<void> {
-		responseData(await this.client.send({ type: "abort" }), "abort");
+		responseData(await this.client.send({ type: "abort" }, ABORT_SETTLE_TIMEOUT_MS), "abort");
 	}
 
 	public runBash(command: string, excludeFromContext: boolean, id: string): RpcBashRequest {

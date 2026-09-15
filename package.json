@@ -90,7 +90,7 @@
   "dependencies": {
     "grok-mermaid": "0.2.2",
     "jiti": "^2.7.0",
-    "yoga-wasm-web": "^0.3.3"
+    "yoga-layout": "^3.2.1"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

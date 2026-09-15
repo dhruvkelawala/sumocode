@@ -72,6 +72,21 @@ describe("SumoNode", () => {
 		expect(child.children).toEqual([]);
 	});
 
+	it("frees a real Yoga tree even though getChild() hands back fresh wrappers (yoga#1858)", async () => {
+		const yoga = await loadYoga();
+		const root = yoga.Node.create();
+		const child = yoga.Node.create();
+		const grandchild = yoga.Node.create();
+		child.insertChild(grandchild, 0);
+		root.insertChild(child, 0);
+
+		// Embind wrappers are not identity-stable, so freeRecursive must route
+		// removal through the native pointer, never a JS object comparison.
+		expect(root.getChild(0)).not.toBe(root.getChild(0));
+
+		freeRecursive(root);
+	});
+
 	it("disposes wrapper trees idempotently", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());

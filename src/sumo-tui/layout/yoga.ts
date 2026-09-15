@@ -1,17 +1,19 @@
-import { readFile } from "node:fs/promises";
-import { createRequire } from "node:module";
-import initYoga from "yoga-wasm-web";
-import { resolveAsset } from "../../native/paths.js";
-import type {
+import YogaDefault, {
 	Align,
+	Direction,
 	Edge,
 	FlexDirection,
 	Justify,
 	MeasureMode,
-	Node as YogaNode,
 	PositionType,
-	Yoga,
-} from "yoga-wasm-web";
+} from "yoga-layout";
+import type { Node as YogaNode } from "yoga-layout";
+
+/**
+ * The upstream `Yoga` object type is not re-exported from the package root,
+ * so derive it from the default export.
+ */
+export type Yoga = typeof YogaDefault;
 
 export type {
 	Align,
@@ -23,47 +25,50 @@ export type {
 	MeasureMode,
 	Node as YogaNode,
 	PositionType,
-	Yoga,
-} from "yoga-wasm-web";
+} from "yoga-layout";
 
-export {
-	ALIGN_AUTO,
-	ALIGN_BASELINE,
-	ALIGN_CENTER,
-	ALIGN_FLEX_END,
-	ALIGN_FLEX_START,
-	ALIGN_SPACE_AROUND,
-	ALIGN_SPACE_BETWEEN,
-	ALIGN_STRETCH,
-	DIRECTION_INHERIT,
-	DIRECTION_LTR,
-	DIRECTION_RTL,
-	EDGE_ALL,
-	EDGE_BOTTOM,
-	EDGE_END,
-	EDGE_HORIZONTAL,
-	EDGE_LEFT,
-	EDGE_RIGHT,
-	EDGE_START,
-	EDGE_TOP,
-	EDGE_VERTICAL,
-	FLEX_DIRECTION_COLUMN,
-	FLEX_DIRECTION_COLUMN_REVERSE,
-	FLEX_DIRECTION_ROW,
-	FLEX_DIRECTION_ROW_REVERSE,
-	JUSTIFY_CENTER,
-	JUSTIFY_FLEX_END,
-	JUSTIFY_FLEX_START,
-	JUSTIFY_SPACE_AROUND,
-	JUSTIFY_SPACE_BETWEEN,
-	JUSTIFY_SPACE_EVENLY,
-	MEASURE_MODE_AT_MOST,
-	MEASURE_MODE_EXACTLY,
-	MEASURE_MODE_UNDEFINED,
-	POSITION_TYPE_ABSOLUTE,
-	POSITION_TYPE_RELATIVE,
-	POSITION_TYPE_STATIC,
-} from "yoga-wasm-web";
+/**
+ * Yoga 3 ships TypeScript enums (`Align.Center`) where the old binding shipped
+ * SCREAMING_CASE constants. Yoga's own `YGEnums` default export carries this
+ * table, but the package root only re-exports the enums, so the mapping lives
+ * here. Importers keep using the constant names.
+ */
+export const ALIGN_AUTO = Align.Auto;
+export const ALIGN_BASELINE = Align.Baseline;
+export const ALIGN_CENTER = Align.Center;
+export const ALIGN_FLEX_END = Align.FlexEnd;
+export const ALIGN_FLEX_START = Align.FlexStart;
+export const ALIGN_SPACE_AROUND = Align.SpaceAround;
+export const ALIGN_SPACE_BETWEEN = Align.SpaceBetween;
+export const ALIGN_STRETCH = Align.Stretch;
+export const DIRECTION_INHERIT = Direction.Inherit;
+export const DIRECTION_LTR = Direction.LTR;
+export const DIRECTION_RTL = Direction.RTL;
+export const EDGE_ALL = Edge.All;
+export const EDGE_BOTTOM = Edge.Bottom;
+export const EDGE_END = Edge.End;
+export const EDGE_HORIZONTAL = Edge.Horizontal;
+export const EDGE_LEFT = Edge.Left;
+export const EDGE_RIGHT = Edge.Right;
+export const EDGE_START = Edge.Start;
+export const EDGE_TOP = Edge.Top;
+export const EDGE_VERTICAL = Edge.Vertical;
+export const FLEX_DIRECTION_COLUMN = FlexDirection.Column;
+export const FLEX_DIRECTION_COLUMN_REVERSE = FlexDirection.ColumnReverse;
+export const FLEX_DIRECTION_ROW = FlexDirection.Row;
+export const FLEX_DIRECTION_ROW_REVERSE = FlexDirection.RowReverse;
+export const JUSTIFY_CENTER = Justify.Center;
+export const JUSTIFY_FLEX_END = Justify.FlexEnd;
+export const JUSTIFY_FLEX_START = Justify.FlexStart;
+export const JUSTIFY_SPACE_AROUND = Justify.SpaceAround;
+export const JUSTIFY_SPACE_BETWEEN = Justify.SpaceBetween;
+export const JUSTIFY_SPACE_EVENLY = Justify.SpaceEvenly;
+export const MEASURE_MODE_AT_MOST = MeasureMode.AtMost;
+export const MEASURE_MODE_EXACTLY = MeasureMode.Exactly;
+export const MEASURE_MODE_UNDEFINED = MeasureMode.Undefined;
+export const POSITION_TYPE_ABSOLUTE = PositionType.Absolute;
+export const POSITION_TYPE_RELATIVE = PositionType.Relative;
+export const POSITION_TYPE_STATIC = PositionType.Static;
 
 export type SumoYogaNode = YogaNode;
 export type SumoYoga = Yoga;
@@ -74,37 +79,29 @@ export type SumoYogaAlign = Align;
 export type SumoYogaPositionType = PositionType;
 export type SumoYogaMeasureMode = MeasureMode;
 
-let yogaPromise: Promise<Yoga> | undefined;
+const yogaPromise: Promise<Yoga> = Promise.resolve(YogaDefault);
 
 /**
- * Load `yoga-wasm-web` once and share the WASM module across the renderer.
+ * Share one initialized Yoga module across the renderer.
  *
- * Source note: Phase 2 deliberately uses `yoga-wasm-web` (pure WASM, no native
- * build step) per the issue's Edge Case 11.1 gate. The package's default export
- * is async, so this caches the initialized module on first use.
+ * Source note: `yoga-layout` v3 (Meta's official binding) embeds its WASM as
+ * base64 inside JS and initializes it with a top-level await, so the module is
+ * ready by the time this file finishes evaluating — no sidecar `.wasm` asset
+ * and no runtime file read. The promise wrapper is kept so every caller keeps
+ * the same async seam it had under the previous binding.
  */
 export function loadYoga(): Promise<Yoga> {
-	if (!yogaPromise) {
-		// Resolution seam (plan 117): native archive share/yoga.wasm, else the
-		// Node-resolved package asset. The thunk keeps require.resolve off the
-		// compiled binary, where the package path does not exist.
-		const wasmPath = resolveAsset("yoga.wasm", () => createRequire(import.meta.url).resolve("yoga-wasm-web/dist/yoga.wasm"));
-		yogaPromise = readFile(wasmPath).then((wasm) => initYoga(wasm));
-	}
 	return yogaPromise;
 }
-
-// Pre-warm Yoga during module evaluation. SumoTUI always needs layout, so
-// starting the WASM read/compile here overlaps it with the rest of startup.
-// Attach a rejection handler now so a missing/unreadable WASM file is still
-// surfaced by the later awaited loadYoga() call instead of as an unhandled
-// fire-and-forget rejection during module import.
-void loadYoga().catch(() => undefined);
 
 /**
  * Free a Yoga node and all descendants without relying on the binding's
  * built-in `freeRecursive()`. Walking children ourselves makes leak tests able
  * to mock the FFI surface and verifies Edge Case 9.2 explicitly.
+ *
+ * Embind may hand back a fresh JS wrapper for the same underlying node on each
+ * `getChild()` call (yoga upstream #1858), so this must never compare node
+ * identity — `removeChild`/`free` route through the native pointer instead.
  */
 export function freeRecursive(node: YogaNode): void {
 	const children: YogaNode[] = [];

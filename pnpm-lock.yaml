@@ -14,9 +14,9 @@ importers:
       jiti:
         specifier: ^2.7.0
         version: 2.7.0
-      yoga-wasm-web:
-        specifier: ^0.3.3
-        version: 0.3.3
+      yoga-layout:
+        specifier: ^3.2.1
+        version: 3.2.1
     devDependencies:
       '@earendil-works/pi-ai':
         specifier: 0.85.1
@@ -2145,8 +2145,8 @@ packages:
     engines: {node: '>= 14.6'}
     hasBin: true
 
-  yoga-wasm-web@0.3.3:
-    resolution: {integrity: sha512-N+d4UJSJbt/R3wqY7Coqs5pcV0aUj2j9IaQ3rNj9bVCLld8tTGKRa2USARjnvZJWVx1NDmQev8EknoczaOQDOA==}
+  yoga-layout@3.2.1:
+    resolution: {integrity: sha512-0LPOt3AxKqMdFBZA3HBAt/t/8vIKq7VaQYbuA8WxCgung+p9TVyKRYdpvCb80HcdTN2NkbIKbhNwKUfm3tQywQ==}
 
   zod@4.3.6:
     resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
@@ -4341,7 +4341,7 @@ snapshots:
 
   yaml@2.9.0: {}
 
-  yoga-wasm-web@0.3.3: {}
+  yoga-layout@3.2.1: {}
 
   zod@4.3.6: {}
 

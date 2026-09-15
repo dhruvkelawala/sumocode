@@ -92,6 +92,14 @@ const validServerName = (name: string): boolean =>
  *
  * Residual (documented in the PR): servers contributed by package manifests
  * (`pi.mcp`) or Agent Plugin directories are outside this resolver's chain.
+ *
+ * The file repeats whatever the source config held, including inline
+ * credentials (`bearerToken`, `headers`, `env`). That is deliberate — the
+ * adapter needs usable definitions, not references — and it stays inside the
+ * same owner-only artifact boundary as the original config. The descriptor that
+ * crosses into task metadata carries only the path and the server names, never
+ * a definition. These artifacts are retained alongside their task evidence and
+ * are not garbage-collected yet.
  */
 export function resolveMcpLaunchCapability(request: McpCapabilityRequest): McpCapabilityResolution {
 	const servers = normalizeServers(request.servers);

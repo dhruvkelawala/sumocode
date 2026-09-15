@@ -140,7 +140,7 @@ export async function runSourceController(root: string, mode: string, pi: string
 		result: null, manifest: null, writerLease: null, controlLease: null, controlHead: 0,
 	};
 	const descriptor = visible ? undefined : prepareRetainedBootstrap(initial, {
-		cwd: join(root, "cwd"), baseRef: "HEAD", pi, adapterEntry: provider, modelBootstrapEntry: null, visible: null,
+		cwd: join(root, "cwd"), baseRef: "HEAD", pi, adapterEntry: provider, modelBootstrapEntry: null, mcp: null, visible: null,
 		model: { provider: "source-proof", modelId: "fixed", label: "source-proof/fixed" }, thinking: "off", tools: [],
 		role: { id: "synthetic-role", label: "synthetic role" },
 	}, { prompt: "synthetic recovery task", systemPrompt: "synthetic private role" });

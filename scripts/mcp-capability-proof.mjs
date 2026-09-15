@@ -68,7 +68,7 @@ if (!config.ok) throw new Error(config.error);
 const denyGrant = process.argv.includes("--deny-grant");
 const args = denyGrant ? config.subprocessArgs : [...config.subprocessArgs, ...mcpLaunchArgs(grant)];
 
-console.log("$ signed-in surface: scoped MCP config written by the capability resolver");
+console.log("$ scoped MCP config written by the capability resolver:");
 console.log(JSON.stringify(scoped, null, 2).split("\n").map((line) => `  ${line}`).join("\n"));
 console.log(`$ argv: ${resolvePiBinary(env)} ${args.map((arg) => (arg.includes(" ") ? JSON.stringify(arg) : arg)).join(" ")}`);
 

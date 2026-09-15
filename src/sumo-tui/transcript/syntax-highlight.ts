@@ -3,9 +3,10 @@
  *
  * Two tokenizers live here:
  *
- *   1. Shiki (`shiki/core` + the pure-JS regex engine — no wasm/oniguruma, so
- *      the native archive needs no extra sidecar). Grammars load lazily, one
- *      dynamic import per language on first use.
+ *   1. Shiki (`shiki/core` + the Oniguruma engine, whose wasm is base64-inlined
+ *      into `shiki/wasm`, so the native archive still needs no sidecar file —
+ *      see `createEngine` for why not the pure-JS engine). Grammars load
+ *      lazily, one dynamic import per language on first use.
  *   2. The original hand-rolled regex tokenizer, kept as the synchronous
  *      fallback for the frames rendered before a grammar lands.
  *
@@ -15,19 +16,15 @@
  * afterwards. Callers that want the one corrected repaint subscribe via
  * `onHighlighterReady`.
  *
- * Warm-up is not free: compiling a grammar's regexes costs ~150 ms on Node and
- * ~900 ms on Bun (the native host is bun-compiled), paid once per language,
+ * Bringing a language up costs ~100 ms on either runtime (module imports, a
+ * one-time 24 ms wasm instantiation, grammar compile), paid once per language,
  * asynchronously, after the first code block in that language appears. Frames
  * during that window use the fallback tokenizer.
  *
- * Measured on this machine (node 25, M-series): importing `shiki/core` +
- * `shiki/engine/javascript` costs ~31 ms and the five common grammars a
- * further ~5 ms, so fully synchronous startup init (`createHighlighterCoreSync`
- * with pre-imported grammars) would add ~38 ms to every launch — over the
- * ~30 ms budget, and paid even by sessions that never render a code block.
- * The first tokenize compiles the grammar's regexes (~125 ms for TypeScript),
- * which is why the warm-up runs inside the async load task rather than on the
- * first render frame.
+ * Nothing is imported until a code block renders, deliberately: importing
+ * `shiki/core` plus an engine and the five common grammars costs ~38 ms, which
+ * as startup init would be over budget and paid even by sessions that never
+ * show code.
  *
  * Colours are always theme roles — this module never emits a hardcoded hex.
  */
@@ -166,7 +163,7 @@ let generation = 0;
  * punctuation) because the regex engine compiles patterns on first match, and
  * whatever it skips here is paid on the first real line instead.
  */
-const WARMUP_SNIPPET = 'export function fn(a: string) {\n\tconst b = { x: 1, y: "s" }; // c\n\treturn [a, b];\n}';
+const WARMUP_SNIPPET = 'export async function fn<T>(a: string, b: Record<string, number>): Promise<T> {\n\tconst c = { x: 1, y: "s" }; // c\n\treturn [a, b, c].map((v) => v);\n}';
 /** Tokenized lines keyed by theme+language+content. Bounded, cleared wholesale. */
 const tokenCache = new Map<string, readonly SyntaxSpan[]>();
 const TOKEN_CACHE_LIMIT = 4096;
@@ -191,16 +188,35 @@ export function onHighlighterReady(listener: () => void): () => void {
 	return () => readyListeners.delete(listener);
 }
 
+/**
+ * Oniguruma (wasm) on every runtime. Its wasm is base64-inlined into
+ * `shiki/wasm`, so the native archive still needs no sidecar file.
+ *
+ * Measured, typescript grammar, node 25.6 / bun 1.4, M-series (ms):
+ *
+ * | engine     | runtime | import | engine init | grammar+warm-up | 1st line | 20 lines | 2nd grammar |
+ * | JS         | node    |   31.4 |         0.4 |           146.7 |     1.39 |     1.45 |        38.5 |
+ * | Oniguruma  | node    |   13.9 |        24.0 |            63.6 |     0.23 |     1.83 |         3.5 |
+ * | JS         | bun     |   70.8 |         1.8 |           952.5 |     0.14 |     1.19 |        12.8 |
+ * | Oniguruma  | bun     |   15.6 |        23.8 |            69.8 |     0.22 |     1.29 |         5.3 |
+ *
+ * The JS engine costs ~950 ms of blocked main thread per language on Bun,
+ * which is what the native host compiles to, and it also mis-tokenizes the
+ * process's very first call there (one unscoped token for the whole line, no
+ * error). Oniguruma has neither problem, is faster cold on Node too, and pays
+ * for it only in steady-state throughput (1.83 vs 1.45 ms per 20 lines, 1.26x)
+ * and a one-time 24 ms wasm instantiation. One engine, both runtimes.
+ */
+async function createEngine(): Promise<Parameters<typeof import("shiki/core").createHighlighterCore>[0]["engine"]> {
+	const { createOnigurumaEngine } = await import("shiki/engine/oniguruma");
+	return createOnigurumaEngine(import("shiki/wasm"));
+}
+
 async function loadCore(roles: CodeRoles): Promise<HighlighterCore> {
-	const [{ createHighlighterCoreSync }, { createJavaScriptRegexEngine }] = await Promise.all([
-		import("shiki/core"),
-		import("shiki/engine/javascript"),
-	]);
+	const [{ createHighlighterCore }, engine] = await Promise.all([import("shiki/core"), createEngine()]);
 	const name = themeNameForVersion(getThemeVersion());
-	const created = createHighlighterCoreSync({
-		// Default options keep `forgiving: true`, so a pattern the JS engine
-		// cannot express degrades that rule instead of throwing mid-render.
-		engine: createJavaScriptRegexEngine(),
+	const created = await createHighlighterCore({
+		engine,
 		themes: [sumoTextMateTheme(roles, name)],
 		langs: [],
 	});
@@ -254,14 +270,10 @@ export function ensureLanguage(id: string, roles: CodeRoles): Promise<void> | un
 			corePromise ??= loadCore(roles);
 			const core = await corePromise;
 			const grammar = await loader();
-			// SAFETY: Shiki's own grammar modules; `loadLanguageSync` validates shape.
-			core.loadLanguageSync(grammar.default as Parameters<HighlighterCore["loadLanguageSync"]>[0]);
-			// Two reasons to tokenize a throwaway line here rather than on the
-			// render path: the JS regex engine compiles grammar patterns on first
-			// use (~125 ms for TypeScript), and on Bun (which compiles the native
-			// host) the process's very first tokenize returns one unscoped token
-			// for the whole line — silently, no pattern error. Burning that first
-			// call on a sample keeps real lines correct on both runtimes.
+			// SAFETY: Shiki's own grammar modules; `loadLanguage` validates shape.
+			await core.loadLanguage(grammar.default as Parameters<HighlighterCore["loadLanguage"]>[0]);
+			// The engine compiles grammar patterns on first match, so tokenize a
+			// throwaway snippet here rather than paying it on the render path.
 			core.codeToTokens(WARMUP_SNIPPET, { lang: id, theme: syncTheme(core, roles) });
 			loadedLanguages.add(id);
 		} catch {

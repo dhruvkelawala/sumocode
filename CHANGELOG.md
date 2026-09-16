@@ -10,22 +10,41 @@ landed between the original scaffold and this release.
 
 ## [Unreleased]
 
+## [0.7.2] — 2026-09-16
+
+Inline images arrive in the retained terminal, landscape gives another row back
+to the transcript, and model/account controls stay independent. Delegated
+children can carry the parent's MCP gateway in source installs.
+
 ### Added
+- **Inline Kitty images** — prompt and tool-result images render in place in
+  Kitty-compatible retained terminals, with viewport cropping and deterministic
+  cleanup; other terminals retain the image-chip fallback. #560 #567
 - **Claude account cycle key** — `Alt+A` cycles signed-in Claude accounts while
-  preserving the active Claude model. #558
+  preserving the active Claude model. #558 #563
+- **MCP-enabled delegated children** — source-mode children inherit an active MCP
+  gateway; roles can opt out or fence access to named servers. #568 #569
+
+### Changed
+- **One more landscape transcript row** — when the sidebar is visible, the
+  permanent hint row is removed and `CTRL+/ · COMMANDS` moves into the footer;
+  portrait layout is unchanged. #559 #566
+- **Tag-driven native releases** — pushing a `vX.Y.Z` tag starts the native
+  release workflow; manual dispatch remains available as a fallback. #556
 
 ### Fixed
-- **Escape aborts a turn that is waiting on a tool** — pressing Escape while
-  `subagent_spawn`, `terminal_start`, `question`, or any other SumoCode tool was
-  still waiting left the agent working until that tool finished on its own, then
-  reported `rpc error: Timed out waiting for abort response after 30000ms`.
-  SumoCode's tools now stop waiting as soon as the turn is interrupted. Work
-  they had already started is abandoned, not cancelled: spawned subagents,
-  managed terminals and created worktrees keep running in the background, while
-  an open `question` prompt is dismissed with the turn it belonged to.
+- **Large native screenshots** — supported image sources are resized before the
+  RPC transport limits are applied, while the existing decoded-payload caps
+  remain enforced. #561 #564
+- **Escape aborts a turn that is waiting on a tool** — SumoCode tools stop
+  waiting as soon as the turn is interrupted. Started subagents, terminals and
+  worktrees continue in the background; an open question prompt is dismissed.
+  #570
 - **Logical model cycling** — `Ctrl+P` / `Ctrl+Shift+P` no longer switch between
   Claude accounts registered as `anthropic`, `anthropic-2`, and later clones.
-  #558
+  #558 #563
+- **Single-source version banner** — the splash derives its version from
+  `package.json`, so future releases only bump the manifest and changelog. #556
 
 ## [0.7.1] — 2026-09-14
 

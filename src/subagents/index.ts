@@ -21,11 +21,24 @@ import { RetainedRuntime } from "./retained-runtime.js";
 export { SubagentManager } from "./manager.js";
 export type { AtCapacityDetails, SpawnSubagentTask } from "./manager.js";
 
-const LIFECYCLE_KEY = Symbol.for("@dhruvkelawala/sumocode/subagent-replacements");
-function pendingReplacements(): Set<SubagentManager> {
+interface PendingReplacement {
+	readonly manager: SubagentManager;
+	readonly reason: "reload" | "new" | "resume" | "fork";
+	readonly sourceSessionId?: string;
+	readonly targetSessionFile?: string;
+}
+
+const LIFECYCLE_KEY = Symbol.for("@dhruvkelawala/sumocode/subagent-replacements-v2");
+function pendingReplacements(): Set<PendingReplacement> {
 	// SAFETY: only this module writes this namespaced host-owned set, including across reloads.
-	const state = globalThis as typeof globalThis & { [LIFECYCLE_KEY]?: Set<SubagentManager> };
+	const state = globalThis as typeof globalThis & { [LIFECYCLE_KEY]?: Set<PendingReplacement> };
 	return state[LIFECYCLE_KEY] ??= new Set();
+}
+
+function isReplacementTarget(replacement: PendingReplacement, ctx: ExtensionContext): boolean {
+	const targetSessionFile = ctx.sessionManager.getSessionFile();
+	if (replacement.targetSessionFile !== undefined) return replacement.targetSessionFile === targetSessionFile;
+	return replacement.reason === "reload" && replacement.sourceSessionId === ctx.sessionManager.getSessionId();
 }
 
 const SUBAGENT_STATUS_WIDGET_KEY = "sumocode-subagents";
@@ -336,14 +349,15 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 	pi.on("session_start", async (_event, ctx) => {
 		latestContext = ctx;
 		armDelivery();
-		for (const previous of pendingReplacements()) {
+		for (const replacement of pendingReplacements()) {
+			if (!isReplacementTarget(replacement, ctx)) continue;
 			try {
-				await manager.adoptFrom(previous, ctx.sessionManager.getSessionId());
+				await manager.adoptFrom(replacement.manager, ctx.sessionManager.getSessionId());
 			} catch {
 				// A corrupt or conflicting replacement must degrade this startup, not wedge every later replacement.
 				logDiagnostic("subagent_startup_recovery_refused", { scope: "adoption" });
 			} finally {
-				pendingReplacements().delete(previous);
+				pendingReplacements().delete(replacement);
 			}
 		}
 		if (options.retainedRegistry || retention) {
@@ -365,14 +379,18 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 	});
 	pi.on("session_shutdown", (event) => {
 		clearStatusWidget(latestContext);
+		const sourceSessionId = latestContext?.sessionManager.getSessionId();
 		latestContext = undefined;
 		unsubscribe?.();
 		unsubscribe = undefined;
 		delivery.clear();
-		if (["new", "fork", "resume", "reload"].includes(event.reason)) {
-			// Defer detachment until session_start identifies a distinct successor; Pi may reuse this manager.
+		if (event.reason !== "quit") {
+			// Defer detachment only for the successor Pi identified. An unrelated
+			// session in the same process must never inherit this manager's results.
 			manager.prepareForReplacement();
-			pendingReplacements().add(manager);
+			if (event.targetSessionFile !== undefined || event.reason === "reload" && sourceSessionId !== undefined) {
+				pendingReplacements().add({ manager, reason: event.reason, sourceSessionId, targetSessionFile: event.targetSessionFile });
+			} else manager.detachForReplacement();
 		} else manager.disposeAll();
 	});
 	return manager;

@@ -18,6 +18,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { instrumentPiStartup } from "./instrument-pi-startup.mjs";
+import { writeNativeBuildIdentity } from "./lib/native-artifact.mjs";
 import { assertNoEffectInEagerClosure, assertNoProductionDependencyLeakage, bundleJavaScriptText, moduleSpecifiers } from "./lib/production-boundaries.mjs";
 
 const root = resolve(import.meta.dirname, "..");
@@ -385,7 +386,12 @@ async function main() {
 	copyFileSync(resolve(root, "CHANGELOG.md"), join(outDir, "CHANGELOG.md"));
 	copyFileSync(resolve(root, "install.sh"), join(outDir, "install.sh"));
 
-	// 5. SHA256SUMS over the archive contents.
+	// 5. Bind this archive to its source tree before checksumming every output.
+	// Dirty builds remain useful for development, but the comparison harness
+	// rejects them because a commit SHA alone would not identify their inputs.
+	await writeNativeBuildIdentity(root, outDir);
+
+	// 6. SHA256SUMS over the archive contents.
 	const checksumLines = [];
 	function walk(dir) {
 		for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {

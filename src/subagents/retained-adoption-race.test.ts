@@ -53,7 +53,7 @@ function fixture() {
 				duringInspection();
 				return { ok: true, shellPid: 4242, foregroundProcessGroupId: 4242, foregroundPids: [4343] };
 			} };
-		return reconstructRetained(registry, next, "successor", operations, host,
+		return reconstructRetained(registry, next, "origin", operations, host,
 			{ exec: vi.fn(async () => ({ code: 0, stdout: "", stderr: "", killed: false })) });
 	};
 	return { registry, record, next, operations, inspectWriter, update, recover, recordPath: join(root, "registry", `${record.id}.json`) };
@@ -90,7 +90,7 @@ it("retries a heartbeat between the final read and real recovery CAS", async () 
 	expect(attempts()).toBe(2);
 	expect(f.registry.get(f.record.id)).toMatchObject({ revision: f.record.revision + 2,
 		telemetry: { lastHeartbeatAt: 2001, reportedTokens: 42, reportedCostUsd: 0.03 },
-		controllerGeneration: 1, controllerSessionId: "successor", writerLease: f.record.writerLease,
+		controllerGeneration: 1, controllerSessionId: "origin", writerLease: f.record.writerLease,
 		child: f.record.child, supervisor: f.record.supervisor });
 	expect(f.operations.signalTree).not.toHaveBeenCalled();
 });
@@ -109,7 +109,7 @@ it.each([false, true])("adopts with writer heartbeat during pane inspection: %s"
 	}
 	expect(result).toMatchObject({ classification: "adopted", reason: undefined });
 	expect(f.registry.get(f.record.id)).toMatchObject({ writerLease: f.record.writerLease, child: f.record.child,
-		supervisor: f.record.supervisor, controllerGeneration: 1, controllerSessionId: "successor",
+		supervisor: f.record.supervisor, controllerGeneration: 1, controllerSessionId: "origin",
 		revision: inspectedRevision + 1 });
 	expect(f.operations.signalTree).not.toHaveBeenCalled();
 });
@@ -192,7 +192,7 @@ it.each([4242, 10001])("adopts with writer heartbeat during the final anchor che
 	expect(checks).toBe(2);
 	expect(result.classification).toBe("adopted");
 	expect(f.registry.get(f.record.id)).toMatchObject({ telemetry: changed.telemetry,
-		revision: changed.revision + 1, controllerGeneration: 1, controllerSessionId: "successor",
+		revision: changed.revision + 1, controllerGeneration: 1, controllerSessionId: "origin",
 		writerLease: f.record.writerLease, child: f.record.child, supervisor: f.record.supervisor });
 	expect(f.operations.signalTree).not.toHaveBeenCalled();
 });
@@ -213,7 +213,7 @@ it("adopts with writer heartbeat during controller liveness inspection", async (
 	expect(injected).toBe(true);
 	expect(result.classification).toBe("adopted");
 	expect(f.registry.get(f.record.id)).toMatchObject({ telemetry: changed.telemetry,
-		revision: changed.revision + 1, controllerGeneration: 1, controllerSessionId: "successor",
+		revision: changed.revision + 1, controllerGeneration: 1, controllerSessionId: "origin",
 		writerLease: f.record.writerLease, child: f.record.child, supervisor: f.record.supervisor });
 	expect(f.operations.signalTree).not.toHaveBeenCalled();
 });

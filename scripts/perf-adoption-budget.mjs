@@ -255,7 +255,7 @@ async function defaultCollectMeasurements(nativeArtifact) {
 			? { ok: false, failure: "process-failed" }
 			: { ok: true, durationMs: sample.durationMs }));
 		for (const [name, bundle] of Object.entries(bundles)) {
-			const path = join(workDir, `${name.endsWith("rpc") ? "rpc" : "classic"}.mjs`);
+			const path = join(workDir, `${name}.mjs`);
 			await writeFile(path, instrumentExtensionBundle(bundle.source));
 			measurements[`${name}-extension-bytes`] = sizeMeasurement(Buffer.byteLength(bundle.source));
 			measurements[`${name}-extension-eval-ms`] = await evaluateBundle(bundle.command, path, bundle.root, bundle.native, workDir);
@@ -280,7 +280,8 @@ async function defaultMachineMetadata() {
 function markdown(report, policy) {
 	const rows = Object.entries(report.measurements).map(([name, measurement]) => {
 		const observed = measurement.kind === "timing" ? `${measurement.medianMs}ms` : `${measurement.value} bytes`;
-		return `| ${name} | ${policy.budgets[name].baseline} | ${policy.budgets[name].max} | ${observed} |`;
+		const budget = policy.budgets[name];
+		return `| ${name} | ${budget?.baseline ?? "—"} | ${budget?.max ?? "—"} | ${observed} |`;
 	});
 	return `# Effect adoption performance budget\n\n- source: \`${report.source.sourceCommit}\` (clean: ${report.source.sourceClean})\n- native artifact: \`${report.nativeArtifact.artifactSha256}\` from \`${report.nativeArtifact.sourceCommit}\`\n- samples per timing measurement: ${SAMPLES}\n\n| measurement | baseline | reviewed max | observed |\n| --- | ---: | ---: | ---: |\n${rows.join("\n")}\n\nGate: **${report.gate.verdict.toUpperCase()}**${report.gate.failedChecks.length ? ` — ${report.gate.failedChecks.join(", ")}` : ""}.\n`;
 }

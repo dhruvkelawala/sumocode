@@ -91,6 +91,24 @@ describe("adoption performance budget", () => {
 		expect(source.indexOf('"sumocode_extension_eval_end"')).toBeGreaterThan(source.indexOf("export default"));
 	});
 
+	it("reports a missing reviewed budget as a policy failure", async () => {
+		const outDir = await mkdtemp(join(tmpdir(), "sumocode-adoption-missing-policy-"));
+		roots.push(outDir);
+		const baseline = policy();
+		delete baseline.budgets["source-host-import-ms"];
+		const baselinePath = join(outDir, "baseline.json");
+		await writeFile(baselinePath, `${JSON.stringify(baseline)}\n`);
+		const reportDir = join(outDir, "report");
+		const report = await runAdoptionBudget({ nativeDir: "/native", baselinePath, outDir: reportDir }, {
+			readSourceIdentity: async () => ({ sourceCommit: "b".repeat(40), sourceClean: true }),
+			readArtifact: async () => ({ artifactDir: "/native", sourceCommit: "b".repeat(40), sourceClean: true, artifactSha256: "2".repeat(64) }),
+			collectMeasurements: async () => measurements(),
+			machineMetadata: async () => ({ platform: "test", arch: "test", node: "test", bun: "test" }),
+		});
+		expect(report.gate.failedChecks).toContain("source-host-import-ms:policy");
+		expect(await readFile(join(reportDir, "report.md"), "utf8")).toContain("| source-host-import-ms | — | — | 100ms |");
+	});
+
 	it("records source and native identities without an automatic baseline refresh path", async () => {
 		const outDir = await mkdtemp(join(tmpdir(), "sumocode-adoption-budget-"));
 		roots.push(outDir);

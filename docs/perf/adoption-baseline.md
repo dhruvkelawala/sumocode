@@ -38,7 +38,7 @@ pnpm perf:adoption -- --native dist/native/sumocode-0.7.2-macos-arm64 --out "$ou
 node scripts/check-tsc-budget.mjs
 ```
 
-The first command measures 15 source host imports and evaluates classic/RPC source-built and native-distributed extension bundles inside the corresponding Pi child. It also gates executable bundle bytes. The reviewed ceilings allow 100 ms for source host-import drift, 512 KiB per extension bundle for the first Effect slices, and 25 ms of extension evaluation growth. The second command is the already-shipped full-pass compiler gate over [`typecheck.json`](typecheck.json); no incremental cache or replacement baseline is added here.
+The first command measures 15 source host imports and evaluates classic/RPC source-built and native-distributed extension bundles inside the corresponding Pi child. It also gates emitted extension-bundle bytes. The reviewed ceilings allow 10% (130 ms) for source host-import drift, 512 KiB per extension bundle for the first Effect slices, and 25 ms of extension evaluation growth. The second command is the already-shipped full-pass compiler gate over [`typecheck.json`](typecheck.json); no incremental cache or replacement baseline is added here.
 
 Also retain the existing source startup comparison for startup-path slices:
 

@@ -143,9 +143,9 @@ function fixture(backend: "headless" | "visible" = "headless", worktreeResult = 
 		};
 		return { manager, delivery, fire };
 	}
-	async function track(runtime: ReturnType<typeof install>) {
+	async function track(runtime: ReturnType<typeof install>, controlDurationMs = 60_000) {
 		const current = registry.get(record.id)!;
-		const granted = registry.acquireControl(record.id, current.revision, current.writerLease!.generation, current.controlHead, runtime.manager.controllerIdentity, 60_000);
+		const granted = registry.acquireControl(record.id, current.revision, current.writerLease!.generation, current.controlHead, runtime.manager.controllerIdentity, controlDurationMs);
 		await runtime.manager.trackRetained({ registry: registry.forController(runtime.manager.controllerIdentity), supervisor, snapshot, authority: controlAuthority(granted) });
 		return controlAuthority(granted);
 	}
@@ -178,10 +178,10 @@ describe("durable sender delivery", () => {
 		expect(runtime.manager.get("sa-worker-1")?.finalText).toBe("idle report\n");
 	});
 
-	it("retries same-session disk recovery after a dead controller lease expires", async () => {
+	it("retries same-session disk recovery after both dead-owner leases expire", async () => {
 		const f = fixture();
 		const old = f.install("origin");
-		await f.track(old);
+		await f.track(old, 10_000);
 		await f.finish();
 		old.manager.detachForReplacement();
 		f.writerState("dead");
@@ -191,7 +191,9 @@ describe("durable sender delivery", () => {
 		await next.manager.reconstruct(f.registry, "origin");
 		expect(next.manager.get("sa-worker-1")).toBeUndefined();
 
-		await vi.advanceTimersByTimeAsync(60_001);
+		await vi.advanceTimersByTimeAsync(10_001);
+		expect(next.manager.get("sa-worker-1")).toBeUndefined();
+		await vi.advanceTimersByTimeAsync(50_000);
 		expect(next.manager.get("sa-worker-1")).toMatchObject({ recovery: "adopted", status: "done", finalText: "answer" });
 		await next.fire("agent_end");
 		await next.fire("agent_end");
@@ -373,6 +375,29 @@ describe("durable sender delivery", () => {
 		expect(final.delivery).not.toHaveBeenCalled();
 		expect(f.registry.get("sa-worker-1")?.delivery).toMatchObject({ state: "delivery-uncertain", notice: { state: "delivery-uncertain" } });
 		expectArtifacts(f);
+	});
+
+	it("retries successor admission when the writer heartbeats after reserving control", async () => {
+		const f = fixture();
+		const old = f.install("origin");
+		await f.track(old);
+		const reserve = f.supervisor.reserveControl.bind(f.supervisor);
+		vi.spyOn(f.supervisor, "reserveControl").mockImplementation(async (authority, successor) => {
+			const reserved = await reserve(authority, successor);
+			const current = f.registry.get("sa-worker-1")!;
+			f.registry.transition(current.id, current.revision, current.writerLease!.generation, (record) => ({
+				...record,
+				telemetry: { ...record.telemetry!, lastHeartbeatAt: 1000 },
+			}));
+			return reserved;
+		});
+
+		await old.fire("session_shutdown", "new");
+		const next = f.install("successor");
+		await next.fire("session_start", "new");
+
+		expect(next.manager.get("sa-worker-1")).toMatchObject({ recovery: "adopted", status: "running" });
+		expect(f.registry.get("sa-worker-1")).toMatchObject({ controllerSessionId: "successor", controllerGeneration: 1 });
 	});
 
 	it.each(["new", "fork", "resume"])("/%s reservation fences the old sender before successor admission", async (reason) => {

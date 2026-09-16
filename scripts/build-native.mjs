@@ -5,7 +5,7 @@
 //     bin/sumocode              Bun-compiled host executable
 //     bin/sumocode-pi           Bun-compiled Pi child
 //     theme/ assets/ export-html/ photon_rs_bg.wasm package.json   (Pi sidecars)
-//     share/yoga.wasm  share/sumo-face.ans                         (host sidecars)
+//     share/sumo-face.ans                                          (host sidecar)
 //     extension/sumocode-extension.bundle.mjs                      (child extension)
 //     SHA256SUMS
 //
@@ -382,7 +382,6 @@ async function main() {
 	assertMetafileContainment(JSON.parse(readFileSync(hostMetafile, "utf8")));
 
 	// 4. Host sidecar assets and installer.
-	copyFileSync(require.resolve("yoga-wasm-web/dist/yoga.wasm"), join(shareDir, "yoga.wasm"));
 	copyFileSync(resolve(root, "src/assets/sumo-face.ans"), join(shareDir, "sumo-face.ans"));
 	// /changelog reads CHANGELOG.md from the archive root in native launches.
 	copyFileSync(resolve(root, "CHANGELOG.md"), join(outDir, "CHANGELOG.md"));

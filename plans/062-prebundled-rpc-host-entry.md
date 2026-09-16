@@ -75,6 +75,8 @@ automatic fallback whenever the bundle is missing or stale, so the dev loop
     (`yoga-wasm-web`, a pi-tui native module). From `dist/host/` these still
     resolve the same `node_modules` (same package root) — no action needed,
     but the smoke test must prove yoga loads.
+    *(Historical: the yoga seam no longer resolves a package path at all —
+    `yoga-layout` v3 embeds its WASM in JS.)*
   - `src/sumo-tui/rpc/host-actions.ts:748` reads `CHANGELOG.md` via an
     injected `changelogRoot` (env-derived, not module-relative) — unaffected.
   - Plan 061's `src/sumo-tui/rpc/spawn-child.mjs` is plain JS imported

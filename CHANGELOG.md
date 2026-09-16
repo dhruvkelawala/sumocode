@@ -14,6 +14,14 @@ landed between the original scaffold and this release.
 - **Claude account cycle key** — `Alt+A` cycles signed-in Claude accounts while
   preserving the active Claude model. #558
 
+### Changed
+- **Yoga 3 layout engine** — the retained renderer now uses Meta's official
+  `yoga-layout` v3 instead of the abandoned `yoga-wasm-web` (last published
+  2023). The new binding embeds its WASM in JavaScript, so native releases no
+  longer ship a `share/yoga.wasm` sidecar. Layout output is unchanged: every
+  geometry audit and styled-cell diff in the visual parity pack is byte
+  identical before and after.
+
 ### Fixed
 - **Escape aborts a turn that is waiting on a tool** — pressing Escape while
   `subagent_spawn`, `terminal_start`, `question`, or any other SumoCode tool was

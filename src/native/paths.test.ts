@@ -20,7 +20,7 @@ describe("native paths seam", () => {
 			SUMOCODE_NATIVE_DIR: "/opt/sumocode",
 			[ASSET_DIR_OVERRIDE_ENV_KEY]: "/tmp/assets",
 		};
-		expect(resolveAsset("yoga.wasm", () => "/dev/source/yoga.wasm", env)).toBe("/tmp/assets/yoga.wasm");
+		expect(resolveAsset("sumo-face.ans", () => "/dev/source/sumo-face.ans", env)).toBe("/tmp/assets/sumo-face.ans");
 	});
 
 	it("resolves assets under share/ of the native dir", () => {
@@ -29,17 +29,17 @@ describe("native paths seam", () => {
 	});
 
 	it("falls back to the dev path off the native runtime, supporting lazy thunks", () => {
-		expect(resolveAsset("yoga.wasm", () => "/dev/source/yoga.wasm", {})).toBe("/dev/source/yoga.wasm");
+		expect(resolveAsset("sumo-face.ans", () => "/dev/source/sumo-face.ans", {})).toBe("/dev/source/sumo-face.ans");
 		let called = 0;
-		expect(resolveAsset("yoga.wasm", () => {
+		expect(resolveAsset("sumo-face.ans", () => {
 			called += 1;
-			return "/dev/thunk/yoga.wasm";
-		}, {})).toBe("/dev/thunk/yoga.wasm");
+			return "/dev/thunk/sumo-face.ans";
+		}, {})).toBe("/dev/thunk/sumo-face.ans");
 		expect(called).toBe(1);
 		// The thunk never runs when native resolution wins.
-		resolveAsset("yoga.wasm", () => {
+		resolveAsset("sumo-face.ans", () => {
 			called += 1;
-			return "/dev/thunk/yoga.wasm";
+			return "/dev/thunk/sumo-face.ans";
 		}, { SUMOCODE_NATIVE_DIR: "/opt/sumocode" });
 		expect(called).toBe(1);
 	});

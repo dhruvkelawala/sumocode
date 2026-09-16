@@ -30,7 +30,7 @@ function positiveInteger(value, flag) {
 }
 
 export function nativeCompareOptions(argv) {
-	const options = { samples: DEFAULT_SAMPLES, fixtureCount: 0, baselineRecord: DEFAULT_BASELINE_RECORD };
+	const options = { fixtureCount: 0, baselineRecord: DEFAULT_BASELINE_RECORD };
 	for (let index = argv[0] === "--" ? 1 : 0; index < argv.length; index += 1) {
 		const arg = argv[index];
 		if (arg === "-h" || arg === "--help") return { ...options, help: true };

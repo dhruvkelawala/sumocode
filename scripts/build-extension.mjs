@@ -8,6 +8,7 @@ import {
 	extensionInputManifestsMatch,
 	extensionOutputsHash,
 } from "./lib/extension-bundle.mjs";
+import { assertNoProductionDependencyLeakage, bundleJavaScriptText } from "./lib/production-boundaries.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const outDir = resolve(root, "dist/extension");
@@ -59,6 +60,11 @@ const beforeBuild = await createExtensionInputManifest(root, Object.keys(probe.m
 await atomicWrite(manifestPath, `${JSON.stringify({ version: 0, inputs: [], hash: "build-in-progress" }, null, 2)}\n`);
 
 const result = await build(buildOptions);
+assertNoProductionDependencyLeakage(
+	result.metafile,
+	"extension bundle",
+	bundleJavaScriptText(result.outputFiles),
+);
 const inputManifest = await createExtensionInputManifest(root, Object.keys(result.metafile.inputs));
 if (!extensionInputManifestsMatch(beforeBuild, inputManifest)) {
 	throw new Error("Extension bundle inputs changed during build; retry from a stable checkout");

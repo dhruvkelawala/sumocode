@@ -196,7 +196,7 @@ async function evaluationSample({ command, bundlePath, root, native, workDir, in
 			if (settled) return;
 			settled = true;
 			clearTimeout(timer);
-			const reaped = await stopChild(child);
+			const reaped = await stopChild(child).catch(() => false);
 			resolveSample(reaped ? sample : { ok: false, failure: "shutdown-failed" });
 		};
 		const inspect = async () => {
@@ -219,6 +219,7 @@ async function evaluationSample({ command, bundlePath, root, native, workDir, in
 		child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf8"); void inspect(); });
 		child.on("error", () => settle({ ok: false, failure: "process-failed" }));
 		child.on("exit", () => settle({ ok: false, failure: "process-failed" }));
+		child.stdin.on("error", () => settle({ ok: false, failure: "process-failed" }));
 		child.stdin.write(`${JSON.stringify({ type: "get_state", id: "budget-probe" })}\n`);
 	});
 	return result;
@@ -251,7 +252,7 @@ async function defaultCollectMeasurements(nativeArtifact) {
 		const measurements = {};
 		const hostImport = await measureHostImport(SAMPLES);
 		measurements["source-host-import-ms"] = timingMeasurement(hostImport.samples.map((sample) => sample.ok === false
-			? { ok: false, failure: "process-failed" }
+			? { ok: false, failure: sample.failure }
 			: { ok: true, durationMs: sample.durationMs }));
 		for (const [name, bundle] of Object.entries(bundles)) {
 			const path = join(workDir, `${name}.mjs`);

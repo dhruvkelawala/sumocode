@@ -57,11 +57,14 @@ describe("native artifact identity", () => {
 		expect(identity.files).toHaveLength(5);
 	});
 
-	it("rejects dirty or mutated artifacts", async () => {
+	it("rejects dirty, mutated, or unlisted artifacts", async () => {
 		await expect(readNativeArtifactIdentity(await fixtureArtifact(false))).rejects.toThrow("dirty source");
-		const root = await fixtureArtifact();
-		await writeFile(join(root, "bin/sumocode"), "rebuilt after checksums\n");
-		await expect(readNativeArtifactIdentity(root)).rejects.toThrow("checksum mismatch");
+		const mutated = await fixtureArtifact();
+		await writeFile(join(mutated, "bin/sumocode"), "rebuilt after checksums\n");
+		await expect(readNativeArtifactIdentity(mutated)).rejects.toThrow("checksum mismatch");
+		const unlisted = await fixtureArtifact();
+		await writeFile(join(unlisted, "bin/injected"), "extra\n");
+		await expect(readNativeArtifactIdentity(unlisted)).rejects.toThrow("unlisted file");
 	});
 
 	it("writes source identity without requiring a clean developer checkout", async () => {

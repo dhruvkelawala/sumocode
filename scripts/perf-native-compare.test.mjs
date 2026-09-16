@@ -138,5 +138,8 @@ describe("native regression verdict", () => {
 			failedChecks: expect.arrayContaining(["collection"]),
 		});
 		expect(evaluateNativeGate(report({ candidate: arm(100, 200, 100, { count: 14 }) })).failedChecks).toContain("collection");
+		const missingMetric = arm(100, 200, 100);
+		delete missingMetric.samples[0].commandReadyMs;
+		expect(evaluateNativeGate(report({ candidate: missingMetric })).failedChecks).toContain("collection");
 	});
 });

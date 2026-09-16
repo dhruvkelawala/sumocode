@@ -57,6 +57,14 @@ jobs:
   code-review:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      # Defuse ocr's detached npm auto-updater (upstream #703): the registry
+      # latest is newer than the pinned 1.12.1, so every `ocr` call spawns a
+      # background `npm i -g` whose delete-then-install gap makes the `ocr`
+      # binary vanish mid-job — intermittent exit 127 at review start.
+      # Upstream #1204 will do this in the action itself; until then set it
+      # here (10/10 clean runs in the reporter's controlled test).
+      OCR_NO_UPDATE: "1"
     # PR events run; issue_comment triggers only for human-authored
     # /open-code-review or @open-code-review comments.
     if: |

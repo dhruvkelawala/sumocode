@@ -90,15 +90,21 @@ export function sameRetainedEvidence(first: SubagentRecord, second: SubagentReco
 	return isDeepStrictEqual(recoveryEvidence(first), recoveryEvidence(second));
 }
 
+export interface RetainedRecoveryHooks {
+	readonly onDeferred?: (retryAt: number) => void;
+	readonly canRecover?: () => boolean;
+}
+
 /** Recover only this session's records; defer takeover until a dead controller's lease expires. */
 export async function reconstructRetained(registry: SubagentRegistry, successor: RegistryWriter, sessionId: string,
-	operations: ProcessTreeOperations, host?: TerminalHost, pi?: PiExecLike, onDeferred?: (retryAt: number) => void,
+	operations: ProcessTreeOperations, host?: TerminalHost, pi?: PiExecLike, hooks?: RetainedRecoveryHooks,
 ): Promise<Array<{ entry: RetainedSubagent; classification: "adopted" | "persist-only" | "lost" | "ambiguous"; reason?: SubagentRecoveryReason }>> {
 	const results: Array<{ entry: RetainedSubagent; classification: "adopted" | "persist-only" | "lost" | "ambiguous"; reason?: SubagentRecoveryReason }> = [];
 	for (const { registry: discovered, record: initial, launch } of censusRetained(registry, operations)) {
+		if (hooks?.canRecover?.() === false) return results;
 		if ((initial.controllerSessionId ?? initial.ownerSessionId) !== sessionId) continue;
 		if (initial.controlLease && initial.controlLease.expiresAt > Date.now() && discovered.controllerState(initial.id) === "dead") {
-			onDeferred?.(initial.controlLease.expiresAt);
+			hooks?.onDeferred?.(initial.controlLease.expiresAt);
 			continue;
 		}
 		if (!initial.controlLease) {
@@ -120,11 +126,12 @@ export async function reconstructRetained(registry: SubagentRegistry, successor:
 		let reason: SubagentRecoveryReason | undefined;
 		try {
 			const verification = await verifyRetained(initial, operations, host, pi);
+			if (hooks?.canRecover?.() === false) return results;
 			const verified = verification.classification;
 			reason = verification.reason;
 			classification = verified === "lost" ? "lost" : "ambiguous";
 			if (initial.status !== "settled" && controller.writerState(initial.id) === "dead") {
-				results.push(await acquireRetained(entry, successor, sessionId, operations, host, pi));
+				results.push(await acquireRetained(entry, successor, sessionId, operations, host, pi, hooks?.canRecover));
 				continue;
 			}
 			if (initial.status !== "settled") {
@@ -166,7 +173,7 @@ export async function reconstructRetained(registry: SubagentRegistry, successor:
 
 export async function acquireRetained(
 	entry: RetainedSubagent, successor: RegistryWriter, sessionId: string,
-	operations: ProcessTreeOperations, host?: TerminalHost, pi?: PiExecLike,
+	operations: ProcessTreeOperations, host?: TerminalHost, pi?: PiExecLike, canAcquire?: () => boolean,
 ): Promise<{ entry: RetainedSubagent; classification: "adopted" | "lost" | "ambiguous"; reason?: SubagentRecoveryReason }> {
 	const registry = entry.registry.forController(successor);
 	let classification: "adopted" | "lost" | "ambiguous" = "ambiguous";
@@ -174,7 +181,9 @@ export async function acquireRetained(
 	try {
 		let record = registry.get(entry.snapshot.id);
 		if (!record) throw new Error("owned subagent record missing");
+		if (canAcquire?.() === false) throw new Error("retained acquisition superseded");
 		const verification = await verifyRetained(record, operations, host, pi);
+		if (canAcquire?.() === false) throw new Error("retained acquisition superseded");
 		reason = verification.reason;
 		if (verification.classification !== "verified") classification = verification.classification;
 		else if (registry.writerState(record.id) === "alive" && entry.supervisor && record.supervisor) {

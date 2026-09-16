@@ -174,6 +174,17 @@ it.each(["alive", "unknown"] as const)("does not acquire control when the old ho
 	expect(f.send).not.toHaveBeenCalled(); expect(f.operations.signalTree).not.toHaveBeenCalled();
 });
 
+it("stops reconstruction before takeover when its caller is superseded", async () => {
+	const f = await fixture();
+	const before = f.registry.get("sa-proof");
+	let checks = 0;
+
+	expect(await reconstructRetained(f.registry, f.next, "origin", f.operations, undefined, undefined, {
+		canRecover: () => ++checks === 1,
+	})).toEqual([]);
+	expect(f.registry.get("sa-proof")).toEqual(before);
+});
+
 it("defers proved-dead control until expiry, then fences two successor CAS contenders", async () => {
 	const f = await fixture(); vi.setSystemTime(1999);
 	expect(await f.recover()).toEqual([]);

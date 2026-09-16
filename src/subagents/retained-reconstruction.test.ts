@@ -207,8 +207,22 @@ it.each(["different", "unknown"] as const)("refuses %s supervisor or child evide
 	}
 });
 
-it.each(["dead", "unknown"] as const)("never adopts a %s supervisor writer", async (state) => {
-	const f = await fixture(); f.writerState(state);
+it("defers a dead supervisor writer until its lease expires", async () => {
+	const f = await fixture(); f.writerState("dead");
+	const before = f.owner.record;
+	const deferred: number[] = [];
+	expect(await reconstructRetained(f.registry, f.next, "origin", f.operations, undefined, undefined, {
+		onDeferred: (retryAt) => deferred.push(retryAt),
+	})).toEqual([]);
+	expect(deferred).toEqual([before.writerLease!.expiresAt]);
+	expect(f.owner.record).toEqual(before);
+
+	vi.setSystemTime(before.writerLease!.expiresAt + 1);
+	expect((await f.recover())[0].classification).toBe("lost");
+});
+
+it("never adopts an unknown supervisor writer", async () => {
+	const f = await fixture(); f.writerState("unknown");
 	const before = f.owner.record;
 	expect((await f.recover())[0].classification).toBe("ambiguous");
 	expect(f.owner.record).toEqual(before);

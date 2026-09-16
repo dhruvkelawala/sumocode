@@ -103,9 +103,16 @@ export async function reconstructRetained(registry: SubagentRegistry, successor:
 	for (const { registry: discovered, record: initial, launch } of censusRetained(registry, operations)) {
 		if (hooks?.canRecover?.() === false) return results;
 		if ((initial.controllerSessionId ?? initial.ownerSessionId) !== sessionId) continue;
-		if (initial.controlLease && initial.controlLease.expiresAt > Date.now() && discovered.controllerState(initial.id) === "dead") {
-			hooks?.onDeferred?.(initial.controlLease.expiresAt);
-			continue;
+		if (initial.controlLease && discovered.controllerState(initial.id) === "dead") {
+			const now = Date.now();
+			const writerExpiry = initial.writerLease && discovered.writerState(initial.id) === "dead"
+				? initial.writerLease.expiresAt
+				: 0;
+			const retryAt = Math.max(initial.controlLease.expiresAt, writerExpiry);
+			if (retryAt > now) {
+				hooks?.onDeferred?.(retryAt);
+				continue;
+			}
 		}
 		if (!initial.controlLease) {
 			// Pre-control crashes still need durable successor accounting, not adoption.
@@ -189,8 +196,16 @@ export async function acquireRetained(
 		else if (registry.writerState(record.id) === "alive" && entry.supervisor && record.supervisor) {
 			if (!sameAnchor(record.supervisor, operations)) throw new Error("retained supervisor identity unverified");
 			if (!sameRetainedEvidence(entry.supervisor.record, registry.get(record.id)!)) throw new Error("retained owner record changed");
-			const reserved = await entry.supervisor.reserveControl(entry.authority, { owner: successor, sessionId });
-			record = registry.acquireControl(record.id, reserved.revision, reserved.writerLease!.generation, reserved.controlHead, successor, 60_000, sessionId);
+			let reserved = await entry.supervisor.reserveControl(entry.authority, { owner: successor, sessionId });
+			for (let attempt = 1; ; attempt++) {
+				try {
+					record = registry.acquireControl(record.id, reserved.revision, reserved.writerLease!.generation, reserved.controlHead, successor, 60_000, sessionId);
+					break;
+				} catch (error) {
+					if (!(error instanceof SubagentRevisionConflict) || attempt >= 3) throw error;
+					reserved = registry.get(record.id)!;
+				}
+			}
 			const supervisor = record.supervisor?.identity.pid === process.pid ? entry.supervisor : observeRemoteRetained(registry, record, operations);
 			return { entry: { ...entry, registry, authority: controlAuthority(record), supervisor }, classification: "adopted" };
 		} else if (registry.writerState(record.id) === "dead") {

@@ -16,6 +16,8 @@ function importedPackage(path, packageNames) {
 }
 
 function outputSpecifiers(outputText) {
+	// Metafiles are authoritative for normal imports. Scan emitted code too so
+	// a bundler-rewritten surviving import fails closed rather than shipping.
 	const specifiers = [];
 	for (const pattern of [
 		/\bfrom\s*["']([^"'\n]+)["']/gu,

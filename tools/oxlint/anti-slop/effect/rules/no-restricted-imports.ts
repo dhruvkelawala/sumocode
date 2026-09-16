@@ -3,7 +3,7 @@ import { defineRule } from "@oxlint/plugins";
 import type { ESTree } from "@oxlint/plugins";
 
 const TEST_FILE = /(?:\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)(?:test|tests|testing)(?:\/|$))/u;
-const PLATFORM_BARREL = /^@effect\/platform-[^/]+$/u;
+const PLATFORM_BARREL = /^@effect\/platform(?:-[^/]+)?$/u;
 
 function restriction(source: string, isTestFile: boolean): "platformBarrel" | "rootBarrel" | "testOnly" | "unstable" | undefined {
 	if (source === "effect") return "rootBarrel";

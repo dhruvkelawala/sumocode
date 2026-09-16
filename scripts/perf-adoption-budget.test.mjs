@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -95,8 +95,6 @@ describe("adoption performance budget", () => {
 		roots.push(outDir);
 		const baseline = policy();
 		delete baseline.budgets["source-host-import-ms"];
-		const baselinePath = join(outDir, "baseline.json");
-		await writeFile(baselinePath, `${JSON.stringify(baseline)}\n`);
 		const reportDir = join(outDir, "report");
 		const report = await runAdoptionBudget({ nativeDir: "/native", outDir: reportDir }, {
 			readBaseline: async () => baseline,
@@ -109,12 +107,10 @@ describe("adoption performance budget", () => {
 		expect(await readFile(join(reportDir, "report.md"), "utf8")).toContain("| source-host-import-ms | — | — | 100ms |");
 	});
 
-	it("records source and native identities without an automatic baseline refresh path", async () => {
+	it("records source and native identities without a baseline write path", async () => {
 		const outDir = await mkdtemp(join(tmpdir(), "sumocode-adoption-budget-"));
 		roots.push(outDir);
 		const baseline = policy();
-		const baselinePath = join(outDir, "baseline.json");
-		await writeFile(baselinePath, `${JSON.stringify(baseline)}\n`);
 		const reportDir = join(outDir, "report");
 		const observed = measurements();
 		const report = await runAdoptionBudget({ nativeDir: "/native", outDir: reportDir }, {
@@ -129,7 +125,6 @@ describe("adoption performance budget", () => {
 			nativeArtifact: { sourceCommit: "b".repeat(40), artifactSha256: "2".repeat(64) },
 			gate: { verdict: "passed" },
 		});
-		expect(await readFile(baselinePath, "utf8")).toBe(`${JSON.stringify(baseline)}\n`);
 		expect(JSON.parse(await readFile(join(reportDir, "results.json"), "utf8"))).not.toHaveProperty("nativeArtifact.artifactDir");
 	});
 });

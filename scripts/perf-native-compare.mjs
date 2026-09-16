@@ -108,6 +108,17 @@ async function editorProbe(output) {
 	} finally { terminal.dispose(); }
 }
 
+function sampleFailure({ childPid, exitedBeforeShutdown, aliveBeforeShutdown, missingEvents, fixtureMatches, editorResponsive, editorTs, commandTs }) {
+	if (treeAlive(childPid)) return "shutdown-failed";
+	if (exitedBeforeShutdown || !aliveBeforeShutdown) return "process-failed";
+	if (missingEvents.length > 0) return `missing-events:${missingEvents.join(",")}`;
+	if (!fixtureMatches) return "fixture-mismatch";
+	if (!editorResponsive) return "editor-probe-failed";
+	if (!Number.isFinite(editorTs) || !Number.isFinite(commandTs)) return "invalid-timestamp";
+	if (commandTs < editorTs) return "event-order";
+	return "invalid-sample";
+}
+
 async function runSampleProcess({ artifact, agentDir, diagFile, fixtureCount, index }) {
 	await resetFixture(agentDir, fixtureCount);
 	const startedAt = Date.now();
@@ -165,12 +176,18 @@ async function runSampleProcess({ artifact, agentDir, diagFile, fixtureCount, in
 				terminalIndexMs: terminalReady.durationMs,
 			}
 		: {
-				index, ok: false,
-				failure: treeAlive(child.pid) ? "shutdown-failed"
-					: exitedBeforeShutdown || !aliveBeforeShutdown ? "process-failed"
-						: missingEvents.length > 0 ? `missing-events:${missingEvents.join(",")}`
-							: !fixtureMatches ? `fixture-mismatch:${String(terminalReady?.snapshotCount)}`
-								: !editorResponsive ? "editor-probe-failed" : "invalid-timestamp",
+				index,
+				ok: false,
+				failure: sampleFailure({
+					childPid: child.pid,
+					exitedBeforeShutdown,
+					aliveBeforeShutdown,
+					missingEvents,
+					fixtureMatches,
+					editorResponsive,
+					editorTs,
+					commandTs,
+				}),
 			};
 }
 
@@ -211,7 +228,8 @@ export function evaluateNativeGate(report) {
 		&& report.arms.baseline.samples.length === DEFAULT_SAMPLES
 		&& report.arms.candidate.samples.length === DEFAULT_SAMPLES
 		&& baseline.failures === 0 && candidate.failures === 0
-		&& [baseline, candidate].every((arm) => [arm.editorReady.medianMs, arm.commandReady.medianMs, arm.editorToCommandGap.medianMs].every(Number.isFinite));
+		&& [baseline, candidate].every((arm) => [arm.editorReady, arm.commandReady, arm.editorToCommandGap]
+			.every((metric) => metric.values.length === DEFAULT_SAMPLES && Number.isFinite(metric.medianMs)));
 	const failedChecks = [];
 	if (!collectionComplete) failedChecks.push("collection");
 	const editorLimitMs = baseline.editorReady.medianMs === null || baseline.editorReady.madMs === null

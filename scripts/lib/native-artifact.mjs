@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstat, readFile, realpath, writeFile } from "node:fs/promises";
+import { lstat, readFile, readdir, realpath, writeFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 
@@ -39,6 +39,16 @@ function checkedRelativePath(path) {
 	return normalized;
 }
 
+async function archiveFiles(root, dir = root) {
+	const files = [];
+	for (const entry of await readdir(dir, { withFileTypes: true })) {
+		const absolute = resolve(dir, entry.name);
+		if (entry.isDirectory()) files.push(...await archiveFiles(root, absolute));
+		else files.push(relative(root, absolute).replaceAll("\\", "/"));
+	}
+	return files;
+}
+
 /** Verify an immutable native archive and return the source/artifact identity used in reports. */
 export async function readNativeArtifactIdentity(archiveDir) {
 	const root = await realpath(archiveDir);
@@ -69,6 +79,9 @@ export async function readNativeArtifactIdentity(archiveDir) {
 	}
 	for (const path of REQUIRED_FILES) {
 		if (!seen.has(path)) throw new Error(`native artifact checksum is missing required file: ${path}`);
+	}
+	for (const path of await archiveFiles(root)) {
+		if (path !== "SHA256SUMS" && !seen.has(path)) throw new Error(`native artifact contains unlisted file: ${path}`);
 	}
 	return {
 		artifactDir: root,

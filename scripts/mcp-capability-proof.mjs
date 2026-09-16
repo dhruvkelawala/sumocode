@@ -51,7 +51,9 @@ const capability = resolveMcpLaunchCapability({
 	gatewayRequested: true, servers: ambient ? [] : ["fixture"], cwd: project, key: `proof-${Date.now().toString(36)}`, env,
 });
 if (projectDecoy) {
-	const refused = capability.ok === false && capability.error.includes("unselected server(s)") && capability.error.includes("sneaky");
+	const refused = capability.ok === false
+		&& capability.error.includes("MCP cannot be scoped while project configuration defines")
+		&& capability.error.includes("sneaky");
 	console.log(`$ project-decoy refusal: ${capability.ok === false ? capability.error : "GRANT ALLOWED (wrong)"}`);
 	console.log(`${refused ? "PASS" : "FAIL"}: a project config naming an unselected server refuses the grant with a clear error`);
 	process.exit(refused ? 0 : 1);

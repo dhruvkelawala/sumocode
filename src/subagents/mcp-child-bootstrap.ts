@@ -40,7 +40,11 @@ export default function installMcpChildBootstrap(
 		// instead of refusing, and an adapter that fails to register (a malformed
 		// project config, a renamed tool, no reachable servers) must not kill
 		// every delegation in the session.
-		if (process.env[MCP_REQUIRED_ENV] === "1") terminate(message);
+		// Consumed here: an inherited value must not follow the child into the
+		// processes it starts, where nothing is waiting for this gateway.
+		const required = process.env[MCP_REQUIRED_ENV] === "1";
+		delete process.env[MCP_REQUIRED_ENV];
+		if (required) terminate(message);
 		else report(`${message}; continuing without it`);
 	});
 }

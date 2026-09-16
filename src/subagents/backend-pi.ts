@@ -621,7 +621,7 @@ function sameMcpGrant(option: McpLaunchCapability | undefined, expected: McpLaun
 	if (expected === null) return option === undefined;
 	return option !== undefined && option.configPath === expected.configPath
 		&& option.adapterEntry === expected.adapterEntry && option.guardEntry === expected.guardEntry
-		&& option.servers.length === expected.servers.length;
+		&& option.servers.join("\u0000") === expected.servers.join("\u0000");
 }
 
 /**

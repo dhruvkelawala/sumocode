@@ -110,11 +110,12 @@ const validServerName = (name: string): boolean =>
  * underneath, and a higher-precedence project file may redefine a disabled
  * server's transport, but `disabled` is inherited by those partial overrides.
  *
- * The fenced scope bounds WHICH servers a child can reach; it does not claim the
- * definitions are operator-authored, because project-local MCP is the intended
- * source for a project's own servers (issue #568). It does refuse to let a
- * project file REDEFINE a globally configured name, so a repository cannot
- * repoint a trusted server at a command of its choosing.
+ * The fenced scope bounds which servers a child can reach AND which definitions
+ * reach it: project-local MCP is the intended source for a checkout's own
+ * servers (issue #568), so a project may introduce names, but it may neither
+ * name a server the grant does not select nor redefine a name this session
+ * defines globally. Both are refused, because project files merge above the
+ * generated one and would win at runtime.
  *
  * Two ambient sources cannot be bounded from here and are REFUSED instead of
  * fenced, because a silently wider child is worse than a refused spawn:
@@ -171,27 +172,29 @@ export function resolveMcpLaunchCapability(request: McpCapabilityRequest): McpCa
 		const paths = unsupportedImports.map((source) => source.path).sort().join(", ");
 		return { ok: false, error: `MCP cannot be scoped while ${paths} uses \`imports\`; run \`pi-mcp-adapter init\` to expand them into mcpServers first` };
 	}
-	const unbounded = sources
-		.filter((source) => source.scope === "project")
-		.flatMap((source) => source.servers.filter((name) => !servers.includes(name)).map((name) => ({ name, path: source.path })));
+	// Project files merge ABOVE the generated one, so they are outside the fence:
+	// they can disable:false a fenced name, and they override a selected name's
+	// definition outright — including one this session already defines globally,
+	// whose credentials a partial override would then inherit. Refuse both,
+	// because a name a repository can repoint is not the server the operator
+	// selected.
+	const globalNames = new Set(mergeMcpServerDefinitions(sources.filter((source) => source.scope === "global")).map((server) => server.name));
+	const projectNames = sources.filter((source) => source.scope === "project");
+	const unbounded = projectNames.flatMap((source) => source.servers
+		.filter((name) => !servers.includes(name) || globalNames.has(name))
+		.map((name) => ({ name, path: source.path, repoints: globalNames.has(name) && servers.includes(name) })));
 	if (unbounded.length > 0) {
-		// Project files merge above the generated one, so they can clear a
-		// `disabled` fence; a repo could otherwise reach the gateway this grant
-		// was supposed to bound.
 		const detail = unbounded.map((entry) => `${entry.name} (${entry.path})`).join(", ");
-		return { ok: false, error: `MCP cannot be scoped while project configuration defines unselected server(s): ${detail}. Select them explicitly or remove them` };
+		return { ok: false, error: `MCP cannot be scoped while project configuration defines ${detail}. Project files name servers this grant does not select, or redefine one this session already defines; select them explicitly or remove them` };
 	}
 	// One read feeds both the refusals above and the file below: a second read
 	// could hand the child definitions the validation never saw.
 	//
-	// Global sources win for a selected name. A project file may INTRODUCE a
-	// server (project-local MCP is the intended source for the operator's own
-	// checkout), but it may not REDEFINE one the operator already configures
-	// globally: a repository would otherwise repoint a trusted name — and its
-	// credentials — at a command of its choosing.
-	const globals = mergeMcpServerDefinitions(sources.filter((source) => source.scope === "global"));
+	// A project file may INTRODUCE a server the operator does not define —
+	// project-local MCP is the intended source for a checkout's own servers —
+	// but a name it redefines was already refused above, so nothing here can
+	// hand the child a repository-authored definition of a trusted name.
 	const available = new Map(mergeMcpServerDefinitions(sources).map((server) => [server.name, server.definition]));
-	for (const server of globals) available.set(server.name, server.definition);
 	const missing = servers.filter((name) => !available.has(name));
 	if (missing.length > 0) {
 		const known = [...available.keys()].sort().join(", ") || "(none)";

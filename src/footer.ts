@@ -18,6 +18,7 @@ import { shouldApplyFastMode, type FastModeState } from "./fast-mode.js";
 import { getSessionUsage as getCachedSessionUsage, sessionHasMessages as cachedSessionHasMessages, linkGitBranchProvider } from "./session-cache.js";
 import { activeThemeColors, type SumoCodeState } from "./themes/index.js";
 import { VOICE } from "./voice.js";
+import packageJson from "../package.json";
 
 /** The render-facing pair the footer paints; the resolver owns the provider id. */
 export interface FooterClaudeAccount {
@@ -67,7 +68,7 @@ export type FooterSnapshot = {
 /**
  * SumoCode version line for splash state (Q5.2 from CATHEDRAL_DECISIONS.md).
  */
-export const SPLASH_VERSION_LINE = "SUMOCODE V0.7.1 · CATHEDRAL · 160 × 45 MONOSPACE";
+export const SPLASH_VERSION_LINE = `SUMOCODE V${packageJson.version} · CATHEDRAL · 160 × 45 MONOSPACE`;
 
 type GitRunner = (args: string[], cwd: string) => string;
 

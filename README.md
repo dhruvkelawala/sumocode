@@ -6,7 +6,7 @@
 SumoTUI owns the foreground experience; Pi runs behind it over RPC.
 
 [![MIT License](https://img.shields.io/badge/license-MIT-2D211A?style=flat-square)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-0.5.0-B974FF?style=flat-square)](./CHANGELOG.md)
+[![Version](https://img.shields.io/github/v/release/dhruvkelawala/sumocode?style=flat-square&label=version&color=B974FF)](./CHANGELOG.md)
 [![Pi](https://img.shields.io/badge/Pi-0.85.1-75E8FF?style=flat-square)](https://github.com/earendil-works/pi)
 [![Node](https://img.shields.io/badge/Node-%3E%3D23.11-87B58E?style=flat-square)](./package.json)
 
@@ -77,7 +77,8 @@ The current launcher workflow lives in [DEV_LOOP.md](DEV_LOOP.md). The [patch st
 macOS arm64 releases contain the compiled SumoCode host, compiled Pi child, extension bundle, and required sidecar assets. Node, pnpm, and a separate Pi install are not required.
 
 ```bash
-VERSION=0.5.0
+VERSION="$(curl -fsSL https://api.github.com/repos/dhruvkelawala/sumocode/releases/latest | sed -n 's/.*"tag_name": "v\([^"]*\)".*/\1/p')"
+test -n "$VERSION"
 curl -LO "https://github.com/dhruvkelawala/sumocode/releases/download/v${VERSION}/sumocode-${VERSION}-macos-arm64.tar.gz"
 curl -LO "https://github.com/dhruvkelawala/sumocode/releases/download/v${VERSION}/SHA256SUMS"
 shasum -a 256 -c SHA256SUMS

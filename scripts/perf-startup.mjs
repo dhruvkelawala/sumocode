@@ -250,9 +250,9 @@ await jiti.import(process.env.PERF_ROOT + "/src/sumo-tui/rpc/host.ts");
 console.log(Math.round(performance.now() - t));
 `;
 
-async function measureHostImport() {
+export async function measureHostImport(runs = RUNS) {
 	const samples = [];
-	for (let index = 0; index < RUNS; index += 1) {
+	for (let index = 0; index < runs; index += 1) {
 		const start = nowMs();
 		const child = spawn(process.execPath, ["--input-type=module", "-e", HOST_IMPORT_SNIPPET], {
 			cwd: ROOT,

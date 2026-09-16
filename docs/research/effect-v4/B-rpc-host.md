@@ -343,7 +343,7 @@ Issue #589 replaced the old Node-bundle-versus-native improvement benchmark with
 **Effect-campaign gate, per applicable slice:**
 
 1. Build the candidate native archive from a clean commit and compare it with the pinned pre-adoption archive using `pnpm perf:native:compare -- --baseline <archive> --candidate <archive> --out <dir>`.
-2. Run `pnpm perf:adoption -- --native <candidate-archive> --out <dir>` and the existing full-pass compiler budget checker.
+2. On a machine matching the recorded platform, architecture, Node, Bun, and CPU, run `pnpm perf:adoption -- --native <candidate-archive> --out <dir>` and the existing full-pass compiler budget checker.
 3. Run `pnpm perf:startup:compare -- --base <pre-adoption-ref> --samples 15 --out <dir>` for source startup.
 
 **Migrate first, without touching startup latency: B4 (prompt scheduler) and B3 (hydration gate).** B4 is genuinely off-path, has the strongest race evidence (four named tests), and is 293 LOC in one file with a 758-line test. B3 is 63 LOC with a dedicated test file. Together they force the `effect` dependency into the graph, which lets you *measure the module-eval floor in isolation* before any on-path logic changes — that measurement is the real gate on whether B1/B2/B6 happen at all.

@@ -20,6 +20,7 @@ function harness(activeTools: readonly string[]): Harness {
 		throw new Error("child terminated");
 	});
 	const report = vi.fn();
+	// SAFETY: the double implements on/getActiveTools, the only ExtensionAPI members the guard reads.
 	installMcpChildBootstrap(api as unknown as ExtensionAPI, terminate, report);
 	return {
 		fire: () => { try { handlers.get("before_agent_start")!(); } catch { /* the guard exited the child */ } },

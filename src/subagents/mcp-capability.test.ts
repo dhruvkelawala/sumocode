@@ -47,6 +47,11 @@ function fixture(options: { readonly withAdapter?: boolean; readonly withServer?
 	return { root, cwd, agentDir, adapterEntry };
 }
 
+/** Fields a generated definition can carry; the tests only ever read these. */
+interface WrittenConfig {
+	readonly mcpServers: Record<string, { readonly command?: string; readonly args?: readonly string[]; readonly disabled?: boolean }>;
+}
+
 const resolve = (f: Fixture, servers: readonly string[] | undefined, key = "sa-test") => resolveMcpLaunchCapability({
 	gatewayRequested: true, servers, cwd: f.cwd, key, env: process.env,
 });
@@ -163,7 +168,9 @@ it("still lets a repository introduce a server the operator does not define", ()
 	// Project-local MCP is the intended source for a project's own servers.
 	const result = resolve(f, ["fixture"]);
 	if (!result.ok || !result.capability?.configPath) throw new Error("expected a scoped grant");
-	const written = JSON.parse(readFileSync(result.capability.configPath, "utf8")) as { mcpServers: Record<string, unknown> };
+	// SAFETY: the generated config is the JSON this resolver just wrote, and the
+	// assertion below reads only the fields a written definition can carry.
+	const written = JSON.parse(readFileSync(result.capability.configPath, "utf8")) as WrittenConfig;
 	expect(written.mcpServers.fixture).toEqual({ command: "node", args: ["./fixture-server.mjs"] });
 });
 

@@ -71,8 +71,12 @@ export function evaluateAdoptionBudget(report, policy) {
 	const measurements = report.measurements ?? {};
 	for (const [name, budget] of Object.entries(policy.budgets ?? {})) {
 		const observed = measurements[name];
-		if (!observed || !Number.isFinite(budget?.max)) {
+		if (!Number.isFinite(budget?.max)) {
 			failedChecks.push(`${name}:policy`);
+			continue;
+		}
+		if (!observed) {
+			failedChecks.push(`${name}:collection`);
 			continue;
 		}
 		if (observed.kind === "timing") {

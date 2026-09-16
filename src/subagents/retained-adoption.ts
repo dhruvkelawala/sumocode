@@ -95,7 +95,7 @@ export interface RetainedRecoveryHooks {
 	readonly canRecover?: () => boolean;
 }
 
-/** Recover only this session's records; defer takeover until a dead controller's lease expires. */
+/** Recover only this session's records; defer takeover until dead owners' leases expire. */
 export async function reconstructRetained(registry: SubagentRegistry, successor: RegistryWriter, sessionId: string,
 	operations: ProcessTreeOperations, host?: TerminalHost, pi?: PiExecLike, hooks?: RetainedRecoveryHooks,
 ): Promise<Array<{ entry: RetainedSubagent; classification: "adopted" | "persist-only" | "lost" | "ambiguous"; reason?: SubagentRecoveryReason }>> {

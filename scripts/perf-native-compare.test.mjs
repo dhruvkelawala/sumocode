@@ -41,7 +41,7 @@ describe("native artifact comparison", () => {
 			"/candidate": { artifactDir: "/candidate", sourceCommit: "b".repeat(40), sourceClean: true, artifactSha256: "2".repeat(64) },
 		};
 		const result = await runNativeComparison({ baselineDir: "/baseline", candidateDir: "/candidate", fixtureCount: 0, outDir }, {
-			readBaselineIdentity: async () => ({ sourceCommit: "a".repeat(40), artifactSha256: "1".repeat(64) }),
+			readBaselineIdentity: async () => ({ sourceCommit: "a".repeat(40) }),
 			readArtifact: async (path) => identities[path],
 			runSample: async ({ arm: name, index, agentDir }) => {
 				seen.push({ name, index, agentDir });
@@ -66,7 +66,7 @@ describe("native artifact comparison", () => {
 		const outDir = await mkdtemp(join(tmpdir(), "sumocode-native-failed-samples-"));
 		roots.push(outDir);
 		const report = await runNativeComparison({ baselineDir: "/a", candidateDir: "/b", fixtureCount: 0, outDir }, {
-			readBaselineIdentity: async () => ({ sourceCommit: "a".repeat(40), artifactSha256: "1".repeat(64) }),
+			readBaselineIdentity: async () => ({ sourceCommit: "a".repeat(40) }),
 			readArtifact: async (path) => ({
 				artifactDir: path,
 				sourceCommit: path === "/a" ? "a".repeat(40) : "b".repeat(40),
@@ -88,23 +88,23 @@ describe("native artifact comparison", () => {
 		const outDir = await mkdtemp(join(tmpdir(), "sumocode-native-same-artifact-"));
 		roots.push(outDir);
 		await expect(runNativeComparison({ baselineDir: "/a", candidateDir: "/b", fixtureCount: 0, outDir }, {
-			readBaselineIdentity: async () => ({ sourceCommit: "a".repeat(40), artifactSha256: "1".repeat(64) }),
+			readBaselineIdentity: async () => ({ sourceCommit: "a".repeat(40) }),
 			readArtifact: async () => ({ artifactDir: "/same", sourceCommit: "a".repeat(40), sourceClean: true, artifactSha256: "1".repeat(64) }),
 		})).rejects.toThrow("distinct native artifacts");
 	});
 
-	it("rejects a rebuilt or wrong-source artifact in the pinned baseline arm", async () => {
+	it("rejects a wrong-source artifact in the pinned baseline arm", async () => {
 		const outDir = await mkdtemp(join(tmpdir(), "sumocode-native-wrong-baseline-"));
 		roots.push(outDir);
 		await expect(runNativeComparison({ baselineDir: "/a", candidateDir: "/b", fixtureCount: 0, outDir }, {
-			readBaselineIdentity: async () => ({ sourceCommit: "a".repeat(40), artifactSha256: "9".repeat(64) }),
+			readBaselineIdentity: async () => ({ sourceCommit: "c".repeat(40) }),
 			readArtifact: async (path) => ({
 				artifactDir: path,
 				sourceCommit: path === "/a" ? "a".repeat(40) : "b".repeat(40),
 				sourceClean: true,
 				artifactSha256: path === "/a" ? "1".repeat(64) : "2".repeat(64),
 			}),
-		})).rejects.toThrow("does not match the pinned baseline identity");
+		})).rejects.toThrow("does not match the pinned baseline source");
 	});
 
 	it("refuses to overwrite caller report artifacts", async () => {

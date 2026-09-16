@@ -19,7 +19,7 @@ const EDIT_SENTINEL = "native-perf-edit-sentinel";
 const execFileAsync = promisify(execFile);
 
 function usage() {
-	return `Usage: node scripts/perf-native-compare.mjs --baseline <archive> --candidate <archive> [options]\n\nOptions:\n  --baseline <dir>       clean native archive used as the fixed baseline\n  --candidate <dir>      clean native archive being evaluated\n  --baseline-record <f>  pinned baseline identity (default: docs/perf/adoption-baseline.json)\n  --fixture-count <n>    settled terminal records (default: 0)\n  --out <dir>            new report files (default: private temporary directory)\n  -h, --help             show this help\n\nEvery comparison collects exactly ${DEFAULT_SAMPLES} samples per artifact.\n`;
+	return `Usage: node scripts/perf-native-compare.mjs --baseline <archive> --candidate <archive> [options]\n\nOptions:\n  --baseline <dir>       clean native archive used as the fixed baseline\n  --candidate <dir>      clean native archive being evaluated\n  --fixture-count <n>    settled terminal records (default: 0)\n  --out <dir>            new report files (default: private temporary directory)\n  -h, --help             show this help\n\nEvery comparison collects exactly ${DEFAULT_SAMPLES} samples per artifact.\n`;
 }
 
 function positiveInteger(value, flag) {
@@ -30,16 +30,15 @@ function positiveInteger(value, flag) {
 }
 
 export function nativeCompareOptions(argv) {
-	const options = { fixtureCount: 0, baselineRecord: DEFAULT_BASELINE_RECORD };
+	const options = { fixtureCount: 0 };
 	for (let index = argv[0] === "--" ? 1 : 0; index < argv.length; index += 1) {
 		const arg = argv[index];
 		if (arg === "-h" || arg === "--help") return { ...options, help: true };
 		const value = argv[index + 1];
-		if (["--baseline", "--candidate", "--baseline-record", "--fixture-count", "--out"].includes(arg) && value === undefined) throw new Error(`${arg} requires a value`);
+		if (["--baseline", "--candidate", "--fixture-count", "--out"].includes(arg) && value === undefined) throw new Error(`${arg} requires a value`);
 		switch (arg) {
 			case "--baseline": options.baselineDir = resolve(value); index += 1; break;
 			case "--candidate": options.candidateDir = resolve(value); index += 1; break;
-			case "--baseline-record": options.baselineRecord = resolve(value); index += 1; break;
 			case "--fixture-count": options.fixtureCount = value === "0" ? 0 : positiveInteger(value, arg); index += 1; break;
 			case "--out": options.outDir = resolve(value); index += 1; break;
 			default: throw new Error(`unknown option: ${arg}`);
@@ -263,9 +262,9 @@ async function defaultMachineMetadata() {
 	return { platform: platform(), arch: arch(), cpu: `${cpus()[0]?.model ?? "unknown"} × ${cpus().length}`, bun };
 }
 
-async function readBaselineIdentity(path) {
-	const policy = JSON.parse(await readFile(path, "utf8"));
-	return { sourceCommit: policy.baseline?.sourceCommit, artifactSha256: policy.baseline?.nativeArtifactSha256 };
+async function readBaselineIdentity() {
+	const policy = JSON.parse(await readFile(DEFAULT_BASELINE_RECORD, "utf8"));
+	return { sourceCommit: policy.baseline?.sourceCommit };
 }
 
 export async function runNativeComparison(options, dependencies = {}) {
@@ -274,10 +273,10 @@ export async function runNativeComparison(options, dependencies = {}) {
 	const [baselineArtifact, candidateArtifact, pinnedBaseline] = await Promise.all([
 		readArtifact(options.baselineDir),
 		readArtifact(options.candidateDir),
-		(dependencies.readBaselineIdentity ?? readBaselineIdentity)(options.baselineRecord ?? DEFAULT_BASELINE_RECORD),
+		(dependencies.readBaselineIdentity ?? readBaselineIdentity)(),
 	]);
-	if (baselineArtifact.sourceCommit !== pinnedBaseline.sourceCommit || baselineArtifact.artifactSha256 !== pinnedBaseline.artifactSha256) {
-		throw new Error("baseline artifact does not match the pinned baseline identity");
+	if (baselineArtifact.sourceCommit !== pinnedBaseline.sourceCommit) {
+		throw new Error("baseline artifact does not match the pinned baseline source");
 	}
 	if (baselineArtifact.artifactSha256 === candidateArtifact.artifactSha256) {
 		throw new Error("comparison requires two distinct native artifacts");

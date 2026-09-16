@@ -3,7 +3,6 @@
   "recordedAt": "2026-09-16T11:55:01.941Z",
   "baseline": {
     "sourceCommit": "8135d0512bb5bcfa0f056e54bd7c484c54968ab0",
-    "nativeArtifactSha256": "5464ad17cd2ad3246aba3a54015f870d664379a4bd4a27ab88751db5d743f360",
     "samples": 15,
     "machine": {
       "platform": "darwin",

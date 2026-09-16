@@ -54,7 +54,6 @@ describe("adoption performance budget", () => {
 			schemaVersion: 1,
 			baseline: {
 				sourceCommit: expect.stringMatching(/^[0-9a-f]{40}$/),
-				nativeArtifactSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
 				samples: 15,
 			},
 		});

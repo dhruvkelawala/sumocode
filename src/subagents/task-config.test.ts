@@ -26,10 +26,14 @@ it("drops tools outside the approvable set and de-duplicates the surface", () =>
 	expect(surface).toEqual(["read", "mcp", "bash"]);
 });
 
-it("cannot narrow the gateway away with a role's tool list", () => {
-	// A role scopes file/shell primitives, not the session's integrations; a
-	// parent that has MCP delegates MCP. Narrowing is `mcpServers`'s job.
-	expect(resolveChildToolSurface({ roleTools: ["read"], parentActiveTools: ["read", "bash", "mcp"] })).toEqual(["read", "mcp"]);
+it("inherits the gateway only where a subprocess is already reachable", () => {
+	// A gateway server is a command, so a role narrowed away from shell access
+	// must not receive one implicitly — that would hand back the authority its
+	// role removed. A role that still has bash loses nothing.
+	expect(resolveChildToolSurface({ roleTools: ["read"], parentActiveTools: ["read", "bash", "mcp"] })).toEqual(["read"]);
+	expect(resolveChildToolSurface({ roleTools: ["read", "bash"], parentActiveTools: ["read", "bash", "mcp"] })).toEqual(["read", "bash", "mcp"]);
+	// Asking for it by name always works.
+	expect(resolveChildToolSurface({ roleTools: ["read"], parentActiveTools: ["read", "bash", "mcp"], mcpExplicit: true })).toEqual(["read", "mcp"]);
 });
 
 it("refuses every tool when the role names tools the parent has nothing active for", () => {

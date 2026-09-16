@@ -656,7 +656,7 @@ describe("spawnPiChild", () => {
 			cwd: "/tmp/project",
 			inherited: { thinking: "low" },
 			tools: ["read", "bash", "mcp"],
-			mcp: { servers: ["fixture"], adapterEntry: "/adapter/index.ts", guardEntry: "/guard.ts", configPath: "/state/capabilities/sa-x.json" },
+			mcp: { servers: ["fixture"], adapterEntry: "/adapter/index.ts", guardEntry: "/guard.ts", required: true, configPath: "/state/capabilities/sa-x.json" },
 		});
 		// SAFETY: the double exposes events as the collector callable the backend registers.
 		collect(child.events as (emit: (event: SubagentEvent) => void) => void);
@@ -685,7 +685,7 @@ describe("spawnPiChild", () => {
 			// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
 			const child = createPiChildSpawner(spawn as never, () => undefined)({
 				prompt: "use the fixture", cwd: "/tmp/project", inherited: { thinking: "low" }, tools: ["read", "mcp"],
-				mcp: { servers: ["fixture"], adapterEntry: "/adapter/index.ts", guardEntry: "/guard.ts", configPath: "/state/capabilities/sa-x.json" },
+				mcp: { servers: ["fixture"], adapterEntry: "/adapter/index.ts", guardEntry: "/guard.ts", required: true, configPath: "/state/capabilities/sa-x.json" },
 			});
 			// SAFETY: the double exposes events as the collector callable the backend registers.
 			collect(child.events as (emit: (event: SubagentEvent) => void) => void);

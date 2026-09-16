@@ -45,11 +45,11 @@ it("carries an MCP grant through the descriptor without embedding server definit
 	writeFileSync(adapterEntry, "export default () => undefined;\n", { mode: 0o600 });
 	writeFileSync(configPath, '{}\n', { mode: 0o600 });
 	const granted: RetainedBootstrapConfiguration = { ...config, tools: ["read", "mcp"],
-		mcp: { servers: ["fixture"], adapterEntry, guardEntry: adapterEntry, configPath } };
+		mcp: { servers: ["fixture"], adapterEntry, guardEntry: adapterEntry, required: false, configPath } };
 	const descriptor = prepareRetainedBootstrap(record, granted, secrets);
-	expect(descriptor.config.mcp).toEqual({ servers: ["fixture"], adapterEntry, guardEntry: adapterEntry, configPath });
+	expect(descriptor.config.mcp).toEqual({ servers: ["fixture"], adapterEntry, guardEntry: adapterEntry, configPath, required: false });
 	expect(JSON.stringify(descriptor)).not.toContain("private prompt");
-	expect(readRetainedBootstrap(record, descriptor.nonce).descriptor.config.mcp).toEqual({ servers: ["fixture"], adapterEntry, guardEntry: adapterEntry, configPath });
+	expect(readRetainedBootstrap(record, descriptor.nonce).descriptor.config.mcp).toEqual({ servers: ["fixture"], adapterEntry, guardEntry: adapterEntry, configPath, required: false });
 });
 
 it("round-trips an ambient MCP grant whose optional config path serializes away", () => {
@@ -59,13 +59,13 @@ it("round-trips an ambient MCP grant whose optional config path serializes away"
 	writeFileSync(adapterEntry, "export default () => undefined;\n", { mode: 0o600 });
 	writeFileSync(guardEntry, "export default () => undefined;\n", { mode: 0o600 });
 	const ambient: RetainedBootstrapConfiguration = { ...config, tools: ["read", "mcp"],
-		mcp: { servers: [], adapterEntry, guardEntry } };
+		mcp: { servers: [], adapterEntry, guardEntry, required: false } };
 	// JSON.stringify drops the undefined configPath, so the descriptor that comes
 	// back off disk must still validate without it.
 	const descriptor = prepareRetainedBootstrap(record, ambient, secrets);
-	expect(descriptor.config.mcp).toEqual({ servers: [], adapterEntry, guardEntry });
+	expect(descriptor.config.mcp).toEqual({ servers: [], adapterEntry, guardEntry, required: false });
 	expect(JSON.stringify(descriptor)).not.toContain("configPath");
-	expect(readRetainedBootstrap(record, descriptor.nonce).descriptor.config.mcp).toEqual({ servers: [], adapterEntry, guardEntry });
+	expect(readRetainedBootstrap(record, descriptor.nonce).descriptor.config.mcp).toEqual({ servers: [], adapterEntry, guardEntry, required: false });
 });
 
 it("rejects a fenced grant that names no server", () => {
@@ -73,7 +73,7 @@ it("rejects a fenced grant that names no server", () => {
 	const entry = join(root_of(config), "adapter.ts");
 	writeFileSync(entry, "export default () => undefined;\n", { mode: 0o600 });
 	const fenced: RetainedBootstrapConfiguration = { ...config, tools: ["read", "mcp"],
-		mcp: { servers: [], adapterEntry: entry, guardEntry: entry, configPath: entry } };
+		mcp: { servers: [], adapterEntry: entry, guardEntry: entry, required: false, configPath: entry } };
 	expect(() => prepareRetainedBootstrap(record, fenced, secrets)).toThrow("unsafe retained bootstrap");
 });
 

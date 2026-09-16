@@ -85,7 +85,7 @@ describe("visible-spawn", () => {
 			cwd: "/repo",
 			paths,
 			tools: ["read", "bash", "mcp"],
-			mcp: { servers: ["fixture"], adapterEntry: "/adapter/index.ts", guardEntry: "/guard.ts", configPath: "/state/capabilities/sa-8.json" },
+			mcp: { servers: ["fixture"], adapterEntry: "/adapter/index.ts", guardEntry: "/guard.ts", required: true, configPath: "/state/capabilities/sa-8.json" },
 		});
 
 		// The launcher forwards unknown flags to Pi, so the adapter and its

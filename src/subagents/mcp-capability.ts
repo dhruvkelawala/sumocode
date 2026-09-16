@@ -28,6 +28,11 @@ export interface McpLaunchCapability {
 	/** SumoCode-owned guard that exits a child whose gateway never registered. */
 	readonly guardEntry: string;
 	readonly configPath?: string;
+	/**
+	 * True when a role asked for the gateway by name. A required grant that does
+	 * not register stops the child; an inherited one only warns.
+	 */
+	readonly required: boolean;
 }
 
 export type McpCapabilityResolution =
@@ -105,6 +110,12 @@ const validServerName = (name: string): boolean =>
  * underneath, and a higher-precedence project file may redefine a disabled
  * server's transport, but `disabled` is inherited by those partial overrides.
  *
+ * The fenced scope bounds WHICH servers a child can reach; it does not claim the
+ * definitions are operator-authored, because project-local MCP is the intended
+ * source for a project's own servers (issue #568). It does refuse to let a
+ * project file REDEFINE a globally configured name, so a repository cannot
+ * repoint a trusted server at a command of its choosing.
+ *
  * Two ambient sources cannot be bounded from here and are REFUSED instead of
  * fenced, because a silently wider child is worse than a refused spawn:
  *   - `imports`: the adapter expands host configs (`~/.claude.json`, cursor,
@@ -172,7 +183,15 @@ export function resolveMcpLaunchCapability(request: McpCapabilityRequest): McpCa
 	}
 	// One read feeds both the refusals above and the file below: a second read
 	// could hand the child definitions the validation never saw.
+	//
+	// Global sources win for a selected name. A project file may INTRODUCE a
+	// server (project-local MCP is the intended source for the operator's own
+	// checkout), but it may not REDEFINE one the operator already configures
+	// globally: a repository would otherwise repoint a trusted name — and its
+	// credentials — at a command of its choosing.
+	const globals = mergeMcpServerDefinitions(sources.filter((source) => source.scope === "global"));
 	const available = new Map(mergeMcpServerDefinitions(sources).map((server) => [server.name, server.definition]));
+	for (const server of globals) available.set(server.name, server.definition);
 	const missing = servers.filter((name) => !available.has(name));
 	if (missing.length > 0) {
 		const known = [...available.keys()].sort().join(", ") || "(none)";
@@ -194,11 +213,11 @@ export function resolveMcpLaunchCapability(request: McpCapabilityRequest): McpCa
 		//     `bash`, so ambient MCP grants the child no authority it lacked.
 		// A caller who wants the project config fenced names servers in the
 		// role's `mcpServers`, which takes the strict branch below.
-		return { ok: true, capability: { servers: [], adapterEntry, guardEntry } };
+		return { ok: true, capability: { servers: [], adapterEntry, guardEntry, required: request.explicit === true } };
 	}
 	try {
 		const configPath = writeScopedMcpConfig(request.key, available, servers, env);
-		return { ok: true, capability: { servers, adapterEntry, guardEntry, configPath } };
+		return { ok: true, capability: { servers, adapterEntry, guardEntry, configPath, required: request.explicit === true } };
 	} catch (error) {
 		return { ok: false, error: `unable to write the MCP capability config: ${error instanceof Error ? error.message : String(error)}` };
 	}

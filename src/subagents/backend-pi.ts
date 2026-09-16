@@ -16,6 +16,7 @@ import {
 } from "../child-protocol.js";
 import { resolveExecutableProvenance } from "../executable-provenance.js";
 import { BUILT_IN_TOOLS, type ChildToolName, resolveTaskConfig } from "./task-config.js";
+import { MCP_REQUIRED_ENV } from "./mcp-child-bootstrap.js";
 import type { McpLaunchCapability } from "./mcp-capability.js";
 import { isRecord, type TaskThinking, type ThinkingLevel } from "./task-params.js";
 import { systemProcessTree, terminateProcessTree, type ProcessTreeOperations, type ProcessTreeIdentity, type ProcessTreeVerification, type ProcessTreeMemberAnchor } from "../background-tasks/process-tree.js";
@@ -652,6 +653,11 @@ export function mcpChildEnv(env: NodeJS.ProcessEnv, scoped: boolean): NodeJS.Pro
 	return cleaned;
 }
 
+/** The guard reads this; a grant asked for by name must register or the child stops. */
+export function mcpRequiredEnv(env: NodeJS.ProcessEnv, explicit: boolean): NodeJS.ProcessEnv {
+	return explicit ? { ...env, [MCP_REQUIRED_ENV]: "1" } : env;
+}
+
 function resolveChildEntry(
 	overrideVariable: string,
 	fileName: string,
@@ -725,6 +731,7 @@ export const createPiChildSpawner = (
 	tools?: readonly ChildToolName[];
 	/** Resolved MCP grant; the launcher loads the adapter and its scoped config. */
 	mcp?: McpLaunchCapability;
+
 	appendSystemPrompt?: string;
 	signal?: AbortSignal;
 	launchGate?: HeadlessLaunchGate;
@@ -796,6 +803,7 @@ export const createPiChildSpawner = (
 		// the gateway can reach). Both come from the resolved capability, and both
 		// must sit in argv before the launch fence below.
 		const mcp = options.retainedBootstrap ? options.retainedBootstrap.config.mcp ?? undefined : options.mcp;
+		const mcpRequired = mcp?.required === true;
 		const mcpArgs = mcp ? mcpLaunchArgs(mcp) : [];
 		const configuredArgs = childModel ? removeCliModelSelection(config.subprocessArgs) : config.subprocessArgs;
 		const sessionDir = options.resumeSessionFile ? dirname(options.resumeSessionFile) : options.sessionDir;
@@ -804,7 +812,7 @@ export const createPiChildSpawner = (
 		const subprocessArgs = sessionDir
 			? [...configuredArgs.filter((arg) => arg !== "--no-session"), ...(options.resumeSessionFile ? ["--session", options.resumeSessionFile] : []), "--session-dir", sessionDir]
 			: configuredArgs;
-		const baseEnv = mcpChildEnv(process.env, mcp?.configPath !== undefined);
+		const baseEnv = mcpRequiredEnv(mcpChildEnv(process.env, mcp?.configPath !== undefined), mcpRequired);
 		let childEnv = childModel
 			? { ...baseEnv, [CHILD_MODEL_PROVIDER_ENV]: childModel.provider, [CHILD_MODEL_ID_ENV]: childModel.modelId }
 			: baseEnv;

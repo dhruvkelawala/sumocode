@@ -44,13 +44,13 @@ interface RoleSurface {
 
 const resolveRoleSurface = (role: SubagentRole | undefined, parentActiveTools: readonly string[]): RoleSurface => {
 	const optedOutOfMcp = role?.mcpServers !== undefined && role.mcpServers.length === 0;
-	const surface = resolveChildToolSurface({ roleTools: role?.tools, parentActiveTools });
+	const mcpExplicit = role?.tools?.includes(MCP_GATEWAY_TOOL) === true
+		|| (role?.mcpServers !== undefined && role.mcpServers.length > 0);
+	const surface = resolveChildToolSurface({ roleTools: role?.tools, parentActiveTools, mcpExplicit });
 	const tools: ChildToolName[] = [];
 	for (const name of surface) {
 		if (!(optedOutOfMcp && name === MCP_GATEWAY_TOOL)) tools.push(name);
 	}
-	const mcpExplicit = role?.tools?.includes(MCP_GATEWAY_TOOL) === true
-		|| (role?.mcpServers !== undefined && role.mcpServers.length > 0);
 	return { tools, mcpExplicit, mcpOptOut: optedOutOfMcp };
 };
 

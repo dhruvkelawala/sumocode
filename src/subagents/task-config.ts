@@ -56,6 +56,8 @@ export const isChildToolName = (toolName: string): toolName is ChildToolName =>
 export const resolveChildToolSurface = (options: {
 	readonly roleTools: readonly string[] | undefined;
 	readonly parentActiveTools: readonly string[];
+	/** True when a role asked for the gateway by name; see the implicit rule below. */
+	readonly mcpExplicit?: boolean;
 }): ChildToolName[] => {
 	const parentActive = new Set(options.parentActiveTools);
 	const surface: ChildToolName[] = [];
@@ -69,11 +71,14 @@ export const resolveChildToolSurface = (options: {
 	} else {
 		for (const toolName of options.roleTools) push(toolName);
 	}
-	// The MCP gateway is ambient, like a built-in: every child of a session that
-	// has it gets it, whatever the role narrows, because a role's tool list
-	// scopes file/shell primitives, not the session's integrations. A role that
-	// wants fewer servers narrows with `mcpServers`, not by dropping the tool.
-	if (parentActive.has(MCP_GATEWAY_TOOL)) push(MCP_GATEWAY_TOOL);
+	// The MCP gateway is inherited, like a built-in, on one condition: the child
+	// can already start a subprocess. A gateway server is a command, so granting
+	// it to a surface without `bash` would hand a role that was deliberately
+	// narrowed away from shell access the very authority its role removed. A
+	// role may always ask for it by name, and `mcpServers` narrows the scope.
+	if (parentActive.has(MCP_GATEWAY_TOOL) && (options.mcpExplicit === true || surface.includes("bash"))) {
+		push(MCP_GATEWAY_TOOL);
+	}
 	return surface;
 };
 

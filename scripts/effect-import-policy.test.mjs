@@ -45,6 +45,13 @@ describe("Effect import policy", () => {
 		expect(result.output).toContain("Import Effect through a deep subpath");
 	});
 
+	it("rejects the generic platform package barrel", () => {
+		const result = runLint("production.ts", 'import "@effect/platform";\n');
+
+		expect(result.status).toBe(1);
+		expect(result.output).toContain("Import platform packages through a deep subpath");
+	});
+
 	it("rejects heavyweight and unapproved Effect imports in production", () => {
 		const result = runLint("production.ts", `
 import * as Root from "effect";

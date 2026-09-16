@@ -108,11 +108,11 @@ async function editorProbe(output) {
 	} finally { terminal.dispose(); }
 }
 
-function sampleFailure({ childPid, exitedBeforeShutdown, aliveBeforeShutdown, missingEvents, fixtureMatches, editorResponsive, editorTs, commandTs }) {
+function sampleFailure({ childPid, exitedBeforeShutdown, aliveBeforeShutdown, missingEvents, fixtureMatches, snapshotCount, editorResponsive, editorTs, commandTs }) {
 	if (treeAlive(childPid)) return "shutdown-failed";
 	if (exitedBeforeShutdown || !aliveBeforeShutdown) return "process-failed";
 	if (missingEvents.length > 0) return `missing-events:${missingEvents.join(",")}`;
-	if (!fixtureMatches) return "fixture-mismatch";
+	if (!fixtureMatches) return `fixture-mismatch:${String(snapshotCount)}`;
 	if (!editorResponsive) return "editor-probe-failed";
 	if (!Number.isFinite(editorTs) || !Number.isFinite(commandTs)) return "invalid-timestamp";
 	if (commandTs < editorTs) return "event-order";
@@ -184,6 +184,7 @@ async function runSampleProcess({ artifact, agentDir, diagFile, fixtureCount, in
 					aliveBeforeShutdown,
 					missingEvents,
 					fixtureMatches,
+					snapshotCount: terminalReady?.snapshotCount,
 					editorResponsive,
 					editorTs,
 					commandTs,
@@ -302,6 +303,7 @@ export async function runNativeComparison(options, dependencies = {}) {
 	if (baselineArtifact.artifactSha256 === candidateArtifact.artifactSha256) {
 		throw new Error("comparison requires two distinct native artifacts");
 	}
+	const machine = await (dependencies.machineMetadata ?? defaultMachineMetadata)();
 	const agentDir = await mkdtemp(join(tmpdir(), "sumocode-native-regression-agent-"));
 	const raw = { baseline: [], candidate: [] };
 	const runSample = dependencies.runSample ?? runSampleProcess;
@@ -330,7 +332,7 @@ export async function runNativeComparison(options, dependencies = {}) {
 			samplesPerArm: DEFAULT_SAMPLES,
 			flags: [...FLAGS],
 			artifacts: { baseline: reportIdentity(baselineArtifact), candidate: reportIdentity(candidateArtifact) },
-			machine: await (dependencies.machineMetadata ?? defaultMachineMetadata)(),
+			machine,
 			arms: { baseline: summarizeArm(raw.baseline), candidate: summarizeArm(raw.candidate) },
 		};
 		report.gate = evaluateNativeGate({

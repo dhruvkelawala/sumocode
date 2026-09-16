@@ -26,9 +26,16 @@ type PendingReplacement =
 	| { readonly manager: SubagentManager; readonly reloadSessionId: string };
 
 const LIFECYCLE_KEY = Symbol.for("@dhruvkelawala/sumocode/subagent-replacements-v2");
+const LEGACY_LIFECYCLE_KEY = Symbol.for("@dhruvkelawala/sumocode/subagent-replacements");
 function pendingReplacements(): Set<PendingReplacement> {
-	// SAFETY: only this module writes this namespaced host-owned set, including across reloads.
-	const state = globalThis as typeof globalThis & { [LIFECYCLE_KEY]?: Set<PendingReplacement> };
+	// SAFETY: only this module writes these namespaced host-owned sets, including across reloads.
+	const state = globalThis as typeof globalThis & {
+		[LIFECYCLE_KEY]?: Set<PendingReplacement>;
+		[LEGACY_LIFECYCLE_KEY]?: Set<SubagentManager>;
+	};
+	// Legacy entries had no destination identity, so release rather than migrate them.
+	state[LEGACY_LIFECYCLE_KEY]?.clear();
+	delete state[LEGACY_LIFECYCLE_KEY];
 	return state[LIFECYCLE_KEY] ??= new Set();
 }
 

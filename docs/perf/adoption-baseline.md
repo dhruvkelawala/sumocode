@@ -4,9 +4,10 @@ This is the reviewed pre-adoption baseline for Plan 118. Raw samples, source ide
 
 ## Build the pinned native baseline
 
-The comparison accepts only the clean archive whose source commit and checksum identity match the JSON record. Rebuild it in a detached clean checkout with the repository's pinned Bun version:
+The comparison accepts only the clean archive whose source commit and checksum identity match the JSON record. PR [#597](https://github.com/dhruvkelawala/sumocode/pull/597) retains the pinned commit after branch deletion or squash merge. Fetch its read-only pull ref, then rebuild in a detached clean checkout with the repository's pinned Bun version:
 
 ```bash
+git fetch origin refs/pull/597/head:refs/remotes/origin/pr-597
 git worktree add --detach /tmp/sumocode-effect-baseline 8135d0512bb5bcfa0f056e54bd7c484c54968ab0
 pnpm --dir /tmp/sumocode-effect-baseline install --frozen-lockfile
 pnpm --dir /tmp/sumocode-effect-baseline build:native

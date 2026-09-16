@@ -203,7 +203,9 @@ export async function acquireRetained(
 					break;
 				} catch (error) {
 					if (!(error instanceof SubagentRevisionConflict) || attempt >= 3) throw error;
-					reserved = registry.get(record.id)!;
+					const fresh = registry.get(record.id);
+					if (!fresh || !sameRetainedEvidence(reserved, fresh)) throw error;
+					reserved = fresh;
 				}
 			}
 			const supervisor = record.supervisor?.identity.pid === process.pid ? entry.supervisor : observeRemoteRetained(registry, record, operations);

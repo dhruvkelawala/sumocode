@@ -22,11 +22,11 @@ Build the candidate from a clean commit, then compare exact archives:
 out="$(mktemp -d /tmp/sumocode-native-regression.XXXXXX)"
 pnpm perf:native:compare -- \
   --baseline /tmp/sumocode-effect-baseline/dist/native/sumocode-0.7.2-macos-arm64 \
-  --candidate dist/native/sumocode-0.7.2-macos-arm64 \
+  --candidate <candidate-archive> \
   --out "$out"
 ```
 
-The harness alternates 15 samples per artifact under one fixture and environment. It fails on any incomplete sample, candidate editor-ready median above baseline median + baseline MAD, any command-ready median increase, or any widening of the editor-to-command gap. `results.json` keeps every raw timing sample and both identities.
+The harness alternates 15 samples per artifact under one fixture and environment. It fails on any incomplete sample, candidate editor-ready median above baseline median + baseline MAD, any command-ready median increase, or any widening of the editor-to-command gap. `results.json` keeps every raw timing sample and both identities. Failed samples also retain their private JSONL diagnostics in `--out`; successful-sample diagnostics are deleted.
 
 ## Source and extension budgets
 

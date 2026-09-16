@@ -18,6 +18,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { instrumentPiStartup } from "./instrument-pi-startup.mjs";
+import { assertEagerClosureExcludesPackages } from "./lib/production-boundaries.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
@@ -391,7 +392,9 @@ async function main() {
 		join(root, "src/sumo-tui/rpc/chrome-cache-worker.ts"),
 	]);
 	resignAdHoc(join(binDir, "sumocode"));
-	assertMetafileContainment(JSON.parse(readFileSync(hostMetafile, "utf8")));
+	const nativeHostBuild = JSON.parse(readFileSync(hostMetafile, "utf8"));
+	assertMetafileContainment(nativeHostBuild);
+	assertEagerClosureExcludesPackages(nativeHostBuild, "src/native/main.ts", ["effect"], "native launcher");
 
 	// 4. Host sidecar assets and installer.
 	copyFileSync(resolve(root, "src/assets/sumo-face.ans"), join(shareDir, "sumo-face.ans"));

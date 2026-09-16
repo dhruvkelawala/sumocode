@@ -4,7 +4,7 @@ Run contributor commands from your source checkout. The maintainer's canonical p
 
 ## Setup and launch
 
-Use the Node engine and Pi peer versions declared in [package.json](package.json). CI uses Node 24 and pnpm 10.29.2; the current development Pi pin is 0.84.4.
+Use the Node engine and Pi peer versions declared in [package.json](package.json). CI uses Node 24 and pnpm 10.29.2; the current development Pi pin is 0.85.1.
 
 ```bash
 pnpm install
@@ -50,7 +50,7 @@ Read styled-cell and geometry reports before PNGs. The [V2 contract](docs/visual
 
 ## Releases and source consumers
 
-Version authority is `package.json`; the native builder injects that version into the executable. Update release notes and any versioned product copy together. Run required checks before creating and pushing a version tag. Releases are manual: in Actions → Native release → Run workflow, enter the existing tag matching `package.json` (for example `v0.5.0`). The workflow checks out that immutable tag, validates its version, builds and tests the macOS arm64 archive, verifies checksums, and publishes it with the tagged `CHANGELOG.md` Unreleased section plus GitHub-generated contributor notes. CLI equivalent: `gh workflow run release.yml --ref main -f tag=v0.5.0`. Existing releases are never overwritten; use a new version for corrections. Consumers install that archive as described in README.md. Pushes to main do not replace an installed native archive.
+Version authority is `package.json`; the splash and native builder both derive their version from it. Promote the release notes to a matching version section, bump `package.json`, run the required checks, and merge that release commit to `main` before tagging that exact commit as `vX.Y.Z`. A pushed version tag starts the Native release workflow, which checks out that immutable tag, validates it against `package.json`, builds and tests the macOS arm64 archive, verifies checksums, and publishes it with notes from the tagged changelog section plus GitHub-generated contributor notes. Actions → Native release → Run workflow remains the fallback for an existing tag. Existing releases are never overwritten; use a new version for corrections. Consumers install that archive as described in README.md. Pushes to main do not replace an installed native archive.
 
 Pi git-package installs remain a separate source path. An unpinned install/update follows the upstream branch rather than selecting the newest release tag. To reproduce a source release, use an explicit tag:
 

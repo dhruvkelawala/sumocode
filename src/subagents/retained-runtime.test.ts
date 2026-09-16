@@ -7,6 +7,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { captureProcessBirthTime, systemProcessTree, type ProcessTreeOperations } from "../background-tasks/process-tree.js";
 import type { AgentPanePlacement, TerminalHost } from "../terminal-host/types.js";
 import { installSubagents } from "./index.js";
+import type { SpawnSubagentTask } from "./manager.js";
 import { readRetainedBootstrap } from "./retained-bootstrap.js";
 import { controlAuthority, serveRetainedControl } from "./retained-control.js";
 import { observeRemoteRetained } from "./retained-adoption.js";
@@ -35,7 +36,7 @@ function fixture(configuredPi?: string) {
 		expect(initial).toMatchObject({ status: "starting", child: null, writerLease: null, controlLease: null });
 		const { descriptor, prompt } = readRetainedBootstrap(initial, args[args.indexOf("--nonce") + 1]);
 		expect(prompt).toBe("private task text");
-		expect(descriptor.config).toMatchObject({ controller, model: { label: "provider/model" }, builtInTools: ["read"] });
+		expect(descriptor.config).toMatchObject({ controller, model: { label: "provider/model" }, tools: ["read"] });
 		const visible = descriptor.config.visible;
 		if (visible) {
 			visibleLaunches.push({ id, placement: visible.placement, provisioningTimeoutMs: visible.provisioningTimeoutMs });
@@ -70,8 +71,8 @@ function fixture(configuredPi?: string) {
 		const fire = (event: string, reason = "startup") => handlers.get(event)!({ reason } as never, context);
 		return { manager, fire, sendMessage };
 	}
-	const task = { prompt: "private task text", title: "worker", cwd: root,
-		inherited: { model: { provider: "provider", id: "model" }, thinking: "low" }, builtInTools: ["read"] };
+	const task: SpawnSubagentTask = { prompt: "private task text", title: "worker", cwd: root,
+		inherited: { model: { provider: "provider", id: "model" }, thinking: "low" }, tools: ["read"] };
 	return { root, controller, writer, retention, operations, spawnOwner, disposable, install, task, visibleLaunches };
 }
 

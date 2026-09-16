@@ -6,7 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { ensurePrivateSumocodeDirectory } from "../activity/persistence.js";
 import { systemProcessTree, type ProcessTreeOperations } from "../background-tasks/process-tree.js";
 import { resolveExecutableProvenance, type ExecutableProvenance } from "../executable-provenance.js";
-import { BUILT_IN_TOOLS, getBuiltInToolsFromActiveTools } from "./task-config.js";
+import { BUILT_IN_TOOLS } from "./task-config.js";
 import { resolveModel, VALID_THINKING_LEVELS } from "./task-params.js";
 import { resolveClaudeOauthAdapterEntry, resolvePiChildModelBootstrapEntry, type SpawnedChild } from "./backend-pi.js";
 import type { SubagentLaunch } from "./manager.js";
@@ -79,7 +79,8 @@ export class RetainedRuntime {
 		if (numberedModel && (!adapter || !bootstrap)) throw new Error("retained model adapter unavailable");
 		const descriptor = prepareRetainedBootstrap(initial, {
 			controller, cwd: realpathSync(task.cwd), baseRef: task.baseRef, model: model.model, thinking,
-			builtInTools: task.builtInTools === undefined ? BUILT_IN_TOOLS : getBuiltInToolsFromActiveTools([...task.builtInTools]),
+			tools: task.tools ?? BUILT_IN_TOOLS,
+			mcp: task.mcp ?? null,
 			role: task.roleId ? { id: task.roleId, label: task.roleId } : null,
 			pi: source.pi, adapterEntry: adapter ? realpathSync(adapter) : null, modelBootstrapEntry: bootstrap ? realpathSync(bootstrap) : null,
 			visible: task.visible ? { name: task.title, placement: task.placement!, launcher: source.sumocode,

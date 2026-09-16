@@ -73,7 +73,7 @@ function retainedFixture(attach = false, onManifestWritten?: () => void) {
 	const owner = new RetainedHeadlessSupervisor({
 		registry: f.registry, initial: f.record, supervisor: f.supervisor,
 		attach: attach ? { cwd: f.record.taskDir } : undefined,
-		launch: { prompt: "prompt-secret", cwd: f.record.taskDir, inherited: {}, builtInTools: ["read"], sessionDir: join(f.record.taskDir, "session") }, baseRef: "host-base",
+		launch: { prompt: "prompt-secret", cwd: f.record.taskDir, inherited: {}, tools: ["read"], sessionDir: join(f.record.taskDir, "session") }, baseRef: "host-base",
 	}, {
 		operations: f.operations,
 		spawn: (options) => {

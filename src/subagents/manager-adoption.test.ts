@@ -69,7 +69,7 @@ function fixture(backend: "headless" | "visible" = "headless", worktreeResult = 
 	let maxObservers = 0;
 	if (backend === "headless") {
 		const owner = new RetainedHeadlessSupervisor({ registry, initial: record, supervisor: supervisorProcess,
-			launch: { prompt: "task", cwd: taskDir, inherited: {}, builtInTools: [] }, baseRef: "HEAD" },
+			launch: { prompt: "task", cwd: taskDir, inherited: {}, tools: [] }, baseRef: "HEAD" },
 		{ operations, spawn, buildManifest: async () => ({ baseRef: "HEAD", branch: worktree?.branch, worktreePath: worktree?.path, changedPaths: [], commits: 0, exit: "completed", durationMs: 1 }) });
 		supervisor = { get record() { return owner.record; }, get completion() { return owner.completion; },
 			reserveControl: (authority, successor) => owner.reserveControl(authority, successor),

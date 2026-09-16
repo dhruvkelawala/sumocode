@@ -43,7 +43,7 @@ function fixture(controller?: RegistryWriter, visible = false) {
 	const descriptor = prepareRetainedBootstrap(record, {
 		controller,
 		cwd: root, baseRef: "HEAD", model: { provider: "openai", modelId: "test", label: "openai/test" }, thinking: "low",
-		builtInTools: ["read"], role: { id: "reviewer", label: "reviewer" }, pi, adapterEntry: null, modelBootstrapEntry: null,
+		tools: ["read"], role: { id: "reviewer", label: "reviewer" }, pi, adapterEntry: null, modelBootstrapEntry: null, mcp: null,
 		visible: visible ? { name: "visible worker", placement: { kind: "new-tab", label: "subagents" }, launcher: pi, provisioningTimeoutMs: 1_234 } : null,
 	}, { prompt: "private task text", systemPrompt: "private role text" });
 	const args = ["--task-dir", taskDir, "--registry-dir", registryDir, "--id", record.id, "--owner-session", record.ownerSessionId, "--nonce", descriptor.nonce];

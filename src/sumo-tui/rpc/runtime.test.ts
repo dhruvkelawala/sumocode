@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { INPUT_FRAME_PLACEHOLDER } from "../../cathedral/input-frame.js";
+import { SPLASH_VERSION_LINE } from "../../footer.js";
 import { activeThemeColors, resetThemeRegistryForTests, setActiveTheme } from "../../themes/index.js";
 import { SharedInputRouter } from "../input/shared-input-router.js";
 import { TerminalSessionOwner } from "../runtime/terminal-controller.js";
@@ -153,7 +154,7 @@ describe("RPC host retained runtime frame", () => {
 
 		const plain = Array.from({ length: 45 }, (_, row) => frame.toPlainRow(row)).join("\n");
 		expect(plain).toContain('"Meow meow meow... meow meow"');
-		expect(plain).toContain("SUMOCODE V0.7.1");
+		expect(plain).toContain(SPLASH_VERSION_LINE);
 		expect(plain).not.toContain("SUMOCODE RPC");
 		expect(plain).not.toContain("empty transcript");
 		expect(plain).not.toContain("rpc host");

@@ -6,7 +6,7 @@ import { activityFromSubagentSnapshot } from "../activity/subagent-adapter.js";
 import { ensurePrivateSumocodeDirectory } from "../activity/persistence.js";
 import { renderSubagentStatusRow, type SubagentStatusRunningEntry } from "../subagent-status-row.js";
 import { logDiagnostic } from "../sumo-tui/runtime/diagnostics.js";
-import { BUILT_IN_TOOLS, getBuiltInToolsFromActiveTools } from "./task-config.js";
+import { BUILT_IN_TOOLS } from "./task-config.js";
 import { getTerminalHost } from "../terminal-host/index.js";
 import type { TerminalHost } from "../terminal-host/types.js";
 import { spawnPaneChild } from "./backend-pane.js";
@@ -131,23 +131,20 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 			// the parent session's model/thinking flow through (PR #335 review —
 			// visible children must not silently reset to defaults).
 			const inheritedModel = task.inherited?.model ? `${task.inherited.model.provider}/${task.inherited.model.id}` : undefined;
-			// pi's --tools is an allowlist across built-in AND extension tools, so
-			// forwarding the parent's full built-in set would strip the child's
-			// extension tools for nothing. Only a NARROWED parent narrows the
-			// child (fail-closed: the restricted child also loses extension tools,
-			// which is the conservative direction — extension tools like terminal_start
-			// are shell-execution escapes a --tools read parent must not grant).
-			const paneBuiltIn = getBuiltInToolsFromActiveTools([...(task.builtInTools ?? [])]);
-			// Derived from the canonical list: a literal count would fail OPEN if
-			// the built-in set ever grows (full-set parents would look narrowed-
-			// by-one and vice versa).
-			//
-			// Known conservative edge: a parent whose config disables some built-in
-			// (without any security intent) also counts as "narrowed", so its
-			// visible children get --tools and lose extension tools. That degrades
-			// toward LESS access, never more — acceptable until pi grows a
-			// built-ins-only restriction flag.
-			const paneNarrowed = task.builtInTools !== undefined && paneBuiltIn.length < BUILT_IN_TOOLS.length;
+			// A visible child runs a full launcher session with extension discovery,
+			// so an allowlist is also a strip-list: `--tools` removes every extension
+			// tool the child would otherwise keep. The grant itself always travels as
+			// its own -e/--mcp-config argv, never as an allowlist entry.
+			// Forward the surface only when it must bound the child: a narrowed
+			// parent, or a role that explicitly refused the gateway (which the
+			// child's own discovery would otherwise refill). A full built-in surface
+			// with nothing to fence rides bare, so the child keeps its own
+			// extensions — including when this session simply has no MCP adapter.
+			// SAFETY: widening the literal tuple to readonly string[] only relaxes
+			// the element type for `includes`; membership still proves the name.
+			const builtInNames: readonly string[] = BUILT_IN_TOOLS;
+			const builtInTools = (task.tools ?? []).filter((name) => builtInNames.includes(name));
+			const paneTools = task.mcpOptOut === true || builtInTools.length < BUILT_IN_TOOLS.length ? task.tools : undefined;
 			const child = spawnPane({
 				prompt: task.prompt,
 				name: task.title,
@@ -155,7 +152,8 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 				id: task.id,
 				model: task.model ?? inheritedModel,
 				thinking: task.thinking ?? task.inherited?.thinking,
-				tools: paneNarrowed ? paneBuiltIn : undefined,
+				tools: paneTools,
+				mcp: task.mcp,
 				appendSystemPrompt: task.appendSystemPrompt,
 				signal: task.signal,
 				host,
@@ -171,7 +169,8 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 			model: task.model,
 			thinking: task.thinking,
 			inherited: task.inherited ?? {},
-			builtInTools: getBuiltInToolsFromActiveTools([...(task.builtInTools ?? [])]),
+			tools: [...(task.tools ?? BUILT_IN_TOOLS)],
+			mcp: task.mcp,
 			appendSystemPrompt: task.appendSystemPrompt,
 			signal: task.signal,
 			sessionDir: task.resume ? undefined : mkdtempSync(join(ensurePrivateSumocodeDirectory(["subagents", "sessions"]), `${task.id}-`)),

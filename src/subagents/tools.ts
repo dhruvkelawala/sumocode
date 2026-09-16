@@ -10,6 +10,8 @@ import { formatSubagentBudget, SUBAGENT_BUDGET_MAX } from "./budget-policy.js";
 import { type AtCapacityDetails, SubagentManager } from "./manager.js";
 import { buildSubagentPromptGuidelines, formatCompletionManifestSummary, formatRoleTable, SUBAGENT_PROMPT_SNIPPET, SUBAGENT_TOOL_DESCRIPTIONS } from "./prompt.js";
 import { BUILT_IN_ROLES, loadRoles } from "./roles.js";
+import type { SubagentRole } from "./roles.js";
+import { MCP_GATEWAY_TOOL, resolveChildToolSurface, type ChildToolName } from "./task-config.js";
 
 const StringEnum = <T extends readonly string[]>(values: T, options?: { description?: string }) => {
 	const schema = { type: "string" as const, enum: [...values] };
@@ -26,6 +28,42 @@ const activityEnvelope = (snapshot: SubagentSnapshot, sourceId?: string) => {
 };
 
 const isAtCapacity = (value: SubagentSnapshot | AtCapacityDetails): value is AtCapacityDetails => "status" in value && value.status === "at_capacity";
+
+/**
+ * Resolve one role's child surface: the ambient gateway inherited from the
+ * parent, minus an explicit `mcpServers: []` opt-out, plus whether the gateway
+ * was asked for by name (only an explicit grant may refuse the spawn when it
+ * cannot be honoured). Shared by spawn and reply so a continuation can never
+ * be more privileged than the turn it continues.
+ */
+interface RoleSurface {
+	readonly tools: readonly ChildToolName[];
+	readonly mcpExplicit: boolean;
+	readonly mcpOptOut: boolean;
+}
+
+const resolveRoleSurface = (role: SubagentRole | undefined, parentActiveTools: readonly string[]): RoleSurface => {
+	const optedOutOfMcp = role?.mcpServers !== undefined && role.mcpServers.length === 0;
+	const mcpExplicit = role?.tools?.includes(MCP_GATEWAY_TOOL) === true
+		|| (role?.mcpServers !== undefined && role.mcpServers.length > 0);
+	const surface = resolveChildToolSurface({ roleTools: role?.tools, parentActiveTools, mcpExplicit });
+	const tools: ChildToolName[] = [];
+	for (const name of surface) {
+		if (!(optedOutOfMcp && name === MCP_GATEWAY_TOOL)) tools.push(name);
+	}
+	return { tools, mcpExplicit, mcpOptOut: optedOutOfMcp };
+};
+
+/**
+ * Fail closed when a role grants the MCP gateway this session cannot itself
+ * use. The intersection in `resolveChildToolSurface` would silently drop the
+ * grant, and a child that was promised MCP but launched without it is worse
+ * than a refused spawn.
+ */
+const mcpGrantDenial = (role: SubagentRole | undefined, parentActiveTools: readonly string[]): string | undefined => {
+	if (!role?.tools?.includes(MCP_GATEWAY_TOOL) || parentActiveTools.includes(MCP_GATEWAY_TOOL)) return undefined;
+	return `MCP access denied: role ${role.id} grants the ${MCP_GATEWAY_TOOL} tool, but this session does not have it active. Enable the pi-mcp-adapter extension for the parent session, then retry.`;
+};
 
 const isSettledSnapshot = (snapshot: SubagentSnapshot): boolean => snapshot.status !== "running" && snapshot.status !== "queued";
 
@@ -189,10 +227,13 @@ export function registerSubagentTools(
 			if (visible === true && host.kind === "none") {
 				throw new Error("visible subagents require a running herdr terminal host");
 			}
-			const activeTools = pi.getActiveTools();
-			const builtInTools = role?.tools
-				? role.tools.filter((tool) => activeTools.includes(tool))
-				: activeTools;
+			const parentActiveTools = pi.getActiveTools();
+			const denial = mcpGrantDenial(role, parentActiveTools);
+			if (denial) {
+				return makeToolResult(denial, { action: "spawn", status: "mcp_unavailable", role: role?.id });
+			}
+			const roleSurface = resolveRoleSurface(role, parentActiveTools);
+			const { tools, mcpExplicit, mcpOptOut } = roleSurface;
 			const spawned = await manager.spawn({
 				sourceId: toolCallId,
 				budget: params.budget,
@@ -214,7 +255,10 @@ export function registerSubagentTools(
 					// call overrides it, instead of silently defaulting to "low".
 					thinking: pi.getThinkingLevel(),
 				},
-				builtInTools,
+				tools,
+				mcpServers: role?.mcpServers,
+				mcpExplicit,
+				mcpOptOut,
 			});
 			if (isAtCapacity(spawned)) return formatAtCapacity(spawned);
 			if (spawned.status === "queued") {
@@ -288,7 +332,9 @@ export function registerSubagentTools(
 			if (!params.text.trim()) throw new Error("subagent_reply text is required: blank or whitespace-only replies are rejected");
 			const original = manager.get(params.id);
 			const role = original?.roleId ? roleLoader().roles.find((candidate) => candidate.id === original.roleId) : undefined;
-			const activeTools = pi.getActiveTools();
+			const parentActiveTools = pi.getActiveTools();
+			const denial = mcpGrantDenial(role, parentActiveTools);
+			if (denial) return makeToolResult(denial, { action: "reply", status: "mcp_unavailable", id: params.id, role: role?.id });
 			const spawned = await manager.reply(params.id, params.text, {
 				sourceId: toolCallId,
 				appendSystemPrompt: role?.systemPrompt,
@@ -298,7 +344,8 @@ export function registerSubagentTools(
 					model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
 					thinking: pi.getThinkingLevel(),
 				},
-				builtInTools: role?.tools ? role.tools.filter((name) => activeTools.includes(name)) : activeTools,
+				...resolveRoleSurface(role, parentActiveTools),
+				mcpServers: role?.mcpServers,
 			});
 			if (isAtCapacity(spawned)) return formatAtCapacity(spawned, "reply");
 			if (spawned.status === "queued") return makeToolResult(`Queued ${spawned.id} continuing ${params.id}'s session. It starts automatically when a slot frees.`, {

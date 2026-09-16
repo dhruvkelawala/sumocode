@@ -1,10 +1,13 @@
 name: Native release
 
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing version tag (must match package.json, e.g. v0.5.0)
+        description: Existing version tag (must match package.json, e.g. v0.7.2)
         required: true
         type: string
 
@@ -12,7 +15,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: native-release-${{ inputs.tag }}
+  group: native-release-${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
   cancel-in-progress: false
 
 jobs:
@@ -21,7 +24,7 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 20
     env:
-      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
 
     steps:
       - name: Validate tag input
@@ -33,7 +36,7 @@ jobs:
       - name: Checkout release tag
         uses: actions/checkout@v4
         with:
-          ref: refs/tags/${{ inputs.tag }}
+          ref: refs/tags/${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
           fetch-depth: 0
 
       - name: Setup pnpm
@@ -66,7 +69,24 @@ jobs:
           // Unreleased for a tag cut before the section was promoted.
           const notes = section(`## [${version}]`) || section('## [Unreleased]\n');
           if (!notes) throw new Error(`Missing changelog notes for ${version} (and no Unreleased notes)`);
-          writeFileSync('release-notes.md', notes + '\n');
+          // Release bodies render source newlines as hard breaks. Join prose and
+          // list continuations while preserving Markdown block boundaries.
+          const lines = notes.split('\n');
+          const unwrapped = [];
+          let fenced = false;
+          for (const line of lines) {
+            if (/^\s*(?:```|~~~)/u.test(line)) {
+              fenced = !fenced;
+              unwrapped.push(line);
+            } else if (fenced || line === '' || /^(?:#{1,6}\s|[-*+]\s|\d+[.)]\s|>|\||\[[^\]]+\]:| {4}\S)/u.test(line)) {
+              unwrapped.push(line);
+            } else if (unwrapped.length > 0 && unwrapped.at(-1) !== '' && !unwrapped.at(-1).endsWith('  ')) {
+              unwrapped[unwrapped.length - 1] += ` ${line.trimStart()}`;
+            } else {
+              unwrapped.push(line);
+            }
+          }
+          writeFileSync('release-notes.md', unwrapped.join('\n') + '\n');
           JS
 
       - name: Install dependencies

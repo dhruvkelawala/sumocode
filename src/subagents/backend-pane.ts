@@ -37,6 +37,7 @@ import {
 	PRIVATE_RESPONSE_MAX_BYTES,
 } from "../private-artifact.js";
 import type { SpawnedChild } from "./backend-pi.js";
+import type { McpLaunchCapability } from "./mcp-capability.js";
 import type { SubagentEvent, SubagentLaunchFailure } from "./domain.js";
 
 const RESPONSE_POLL_INTERVAL_MS = 750;
@@ -98,6 +99,8 @@ export interface PaneChildOptions {
 	/** Remaining shared manager budget after visible-placement reservation. */
 	provisioningTimeoutMs?: number;
 	readonly tools?: readonly string[];
+	/** Resolved MCP grant; forwarded to the launcher as adapter + scoped config. */
+	readonly mcp?: McpLaunchCapability;
 	readonly appendSystemPrompt?: string;
 	readonly launchGate?: VisibleLaunchGate;
 	/** Existing private directory bound to the retained starting record. */
@@ -213,6 +216,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		model: options.model,
 		thinking: options.thinking,
 		tools: options.tools,
+		mcp: options.mcp,
 	};
 	const gate = options.launchGate;
 	if (gate && (!isAbsolute(commandOptions.launcher) || !["darwin", "linux"].includes(process.platform))) {

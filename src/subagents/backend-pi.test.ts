@@ -231,7 +231,7 @@ function effectFixture(retainedBootstrap?: RetainedBootstrapDescriptor) {
 	const child = createPiChildSpawner(spawn as never, () => undefined, () => retainedBootstrap?.config.pi ?? "/selected/pi", () => undefined, operations)({
 		prompt: retainedBootstrap ? "private task payload" : "private", cwd: retainedBootstrap?.config.cwd ?? "/workspace", inherited: {}, signal: controller.signal, launchGate: gate,
 		retainedBootstrap, model: retainedBootstrap ? "provider/model" : undefined,
-		thinking: retainedBootstrap ? "low" : undefined, builtInTools: retainedBootstrap ? ["read"] : undefined,
+		thinking: retainedBootstrap ? "low" : undefined, tools: retainedBootstrap ? ["read"] : undefined,
 	});
 	const events = collect(child.events);
 	return { proc, controller, child, events, signals, refused, operations, spawn, gate,
@@ -253,7 +253,7 @@ function sourceBootstrap() {
 	};
 	return prepareRetainedBootstrap(record, {
 		cwd: root, baseRef: "HEAD", model: { provider: "provider", modelId: "model", label: "provider/model" },
-		thinking: "low", builtInTools: ["read"], role: null, pi, adapterEntry: null, modelBootstrapEntry: null, visible: null,
+		thinking: "low", tools: ["read"], role: null, pi, adapterEntry: null, modelBootstrapEntry: null, mcp: null, visible: null,
 	}, { prompt: "private task payload", systemPrompt: "secret role λ" });
 }
 
@@ -332,7 +332,7 @@ describe("retained source factory readiness", () => {
 		// SAFETY: no process may be spawned on any rejected launch.
 		const child = createPiChildSpawner(spawn as never, () => undefined, () => descriptor.config.pi)({
 			prompt: cut === "mismatch" ? "wrong" : "private task payload", cwd: descriptor.config.cwd, inherited: {},
-			model: "provider/model", thinking: "low", builtInTools: ["read"],
+			model: "provider/model", thinking: "low", tools: ["read"],
 			launchGate: { ...passiveFences, beforeSpawn: vi.fn(), beforePrompt: vi.fn() },
 			retainedBootstrap: cut === "unbound" ? undefined : descriptor,
 			appendSystemPrompt: cut === "ambiguous" || cut === "unbound" ? "secret role λ" : undefined,
@@ -643,6 +643,57 @@ describe("spawnPiChild", () => {
 			outcome: { kind: "interrupted", partialText: "after replacement" },
 		});
 		expect(proc.stdout.listenerCount("data")).toBe(0);
+	});
+
+	it("mounts the MCP adapter, its startup guard, and the scoped config in the child argv", () => {
+		const proc = new FakeProcess();
+		const spawn = vi.fn((_command: string, _args: readonly string[]) => proc);
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+		// The OAuth adapter resolver is pinned off so the argv is deterministic on
+		// a developer machine that also has that package installed.
+		const child = createPiChildSpawner(spawn as never, () => undefined)({
+			prompt: "use the fixture",
+			cwd: "/tmp/project",
+			inherited: { thinking: "low" },
+			tools: ["read", "bash", "mcp"],
+			mcp: { servers: ["fixture"], adapterEntry: "/adapter/index.ts", guardEntry: "/guard.ts", required: true, configPath: "/state/capabilities/sa-x.json" },
+		});
+		// SAFETY: the double exposes events as the collector callable the backend registers.
+		collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+
+		const argv = spawn.mock.calls[0]?.[1] ?? [];
+		// The gateway is an extension tool: it survives --no-extensions only
+		// because the adapter is loaded explicitly, and its allowlist entry is
+		// what actually enables it.
+		expect(argv).toContain("--no-extensions");
+		expect(argv[argv.indexOf("--tools") + 1]).toBe("read,bash,mcp");
+		expect(argv[argv.indexOf("--mcp-config") + 1]).toBe("/state/capabilities/sa-x.json");
+		const extensions = argv.flatMap((arg, index) => arg === "-e" ? [argv[index + 1] ?? ""] : []);
+	// The guard rides the same argv exactly once; without it a child whose
+	// gateway never registered would run with a silently absent capability.
+	expect(extensions).toEqual(["/guard.ts", "/adapter/index.ts"]);
+	});
+
+	it("clears the exclusive-config mode that would void a mounted MCP grant", () => {
+		// `PI_MCP_CONFIG_MODE=exclusive` makes the adapter ignore --mcp-config and
+		// read the operator's whole global roster instead.
+		const previous = process.env.PI_MCP_CONFIG_MODE;
+		process.env.PI_MCP_CONFIG_MODE = "exclusive";
+		try {
+			const proc = new FakeProcess();
+			const spawn = vi.fn((_command: string, _args: readonly string[], _options: { env: NodeJS.ProcessEnv }) => proc);
+			// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
+			const child = createPiChildSpawner(spawn as never, () => undefined)({
+				prompt: "use the fixture", cwd: "/tmp/project", inherited: { thinking: "low" }, tools: ["read", "mcp"],
+				mcp: { servers: ["fixture"], adapterEntry: "/adapter/index.ts", guardEntry: "/guard.ts", required: true, configPath: "/state/capabilities/sa-x.json" },
+			});
+			// SAFETY: the double exposes events as the collector callable the backend registers.
+			collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+			expect(spawn.mock.calls[0]?.[2].env).not.toHaveProperty("PI_MCP_CONFIG_MODE");
+		} finally {
+			if (previous === undefined) delete process.env.PI_MCP_CONFIG_MODE;
+			else process.env.PI_MCP_CONFIG_MODE = previous;
+		}
 	});
 
 	it("delivers the delegated prompt via stdin and keeps it out of child argv", () => {

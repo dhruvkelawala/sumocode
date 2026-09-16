@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	clearCachedMcpRoster,
 	getCachedMcpRoster,
+	loadConfiguredMcpServerDefinitions,
 	loadConfiguredMcpServers,
 	resolveMcpConfigCandidates,
 	setMcpDiagnosticHandler,
@@ -49,20 +50,35 @@ function writeJson(path: string, value: JsonValue): void {
 }
 
 describe("resolveMcpConfigCandidates", () => {
-	it("returns the four candidate paths in pi-mcp-adapter precedence order", () => {
+	it("returns the six candidate paths in pi-mcp-adapter precedence order", () => {
 		const cwd = "/tmp/some-project";
 		const piAgentDir = "/tmp/.pi/agent";
 		const candidates = resolveMcpConfigCandidates({ cwd, piAgentDir });
-		expect(candidates).toHaveLength(4);
 		// User-global shared MCP config wins lowest precedence. `homedir()` is
-		// sandboxed to `tmpRoot` in beforeEach, so this candidate lives there.
-		expect(candidates[0]).toBe(join(tmpRoot, ".config", "mcp", "mcp.json"));
-		// Pi global override second.
-		expect(candidates[1]).toBe("/tmp/.pi/agent/mcp.json");
-		// Project-local shared third.
-		expect(candidates[2]).toBe("/tmp/some-project/.mcp.json");
-		// Pi project override last (highest precedence).
-		expect(candidates[3]).toBe("/tmp/some-project/.pi/mcp.json");
+		// sandboxed to `tmpRoot` in beforeEach, so these candidates live there.
+		// The two user-global `.agents` files sit between it and the Pi override,
+		// matching the adapter's own chain.
+		expect(candidates).toEqual([
+			join(tmpRoot, ".config", "mcp", "mcp.json"),
+			join(tmpRoot, ".agents", "mcp.json"),
+			join(tmpRoot, ".agents", "mcp", "mcp.json"),
+			"/tmp/.pi/agent/mcp.json",
+			"/tmp/some-project/.mcp.json",
+			"/tmp/some-project/.pi/mcp.json",
+		]);
+	});
+
+	it("drops an .agents candidate that would duplicate the Pi global override", () => {
+		// `~/.agents/mcp/mcp.json` IS the Pi global file when PI_CODING_AGENT_DIR
+		// points at `~/.agents/mcp`, so the chain must not read it twice.
+		const piAgentDir = join(tmpRoot, ".agents", "mcp");
+		expect(resolveMcpConfigCandidates({ cwd: "/tmp/some-project", piAgentDir })).toEqual([
+			join(tmpRoot, ".config", "mcp", "mcp.json"),
+			join(tmpRoot, ".agents", "mcp.json"),
+			join(piAgentDir, "mcp.json"),
+			"/tmp/some-project/.mcp.json",
+			"/tmp/some-project/.pi/mcp.json",
+		]);
 	});
 });
 
@@ -207,6 +223,24 @@ describe("loadConfiguredMcpServers", () => {
 
 		writeJson(join(piAgentDir, "mcp.json"), { mcpServers: null });
 		expect(loadConfiguredMcpServers({ cwd, piAgentDir })).toEqual([]);
+	});
+});
+
+describe("loadConfiguredMcpServerDefinitions", () => {
+	it("keeps definitions verbatim and merges later sources over earlier ones", () => {
+		const cwd = join(tmpRoot, "project");
+		const piAgentDir = join(tmpRoot, ".pi", "agent");
+		const shared = join(tmpRoot, ".config", "mcp");
+		for (const dir of [cwd, piAgentDir, shared]) mkdirSync(dir, { recursive: true });
+		writeFileSync(join(shared, "mcp.json"), JSON.stringify({ mcpServers: { "agents-only": { command: "agents" } } }));
+		writeFileSync(join(piAgentDir, "mcp.json"), JSON.stringify({ mcpServers: { shared: { command: "global" }, overridden: { command: "global" } } }));
+		writeFileSync(join(cwd, ".mcp.json"), JSON.stringify({ "mcp-servers": { overridden: { command: "project", args: ["--flag"] } } }));
+
+		const definitions = new Map(loadConfiguredMcpServerDefinitions({ cwd, piAgentDir }).map((server) => [server.name, server.definition]));
+		expect(definitions.get("agents-only")).toEqual({ command: "agents" });
+		expect(definitions.get("shared")).toEqual({ command: "global" });
+		// The project file wins by name and the `mcp-servers` alias is honoured.
+		expect(definitions.get("overridden")).toEqual({ command: "project", args: ["--flag"] });
 	});
 });
 

@@ -139,12 +139,12 @@ describe("SubagentManager", () => {
 			emitters.get(original.id)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "first result" } });
 			await vi.waitFor(() => expect(manager.get(original.id)?.status).toBe("done"));
 
-			const reply = await manager.reply(original.id, "clarify point 3", { model: "provider/model", thinking: "high", builtInTools: ["read"] });
+			const reply = await manager.reply(original.id, "clarify point 3", { model: "provider/model", thinking: "high", tools: ["read"] });
 
 			expect(reply).toMatchObject({ status: "running", repliesTo: original.id, sessionFilePath: "/tmp/session/child.jsonl", baseRef: "worktree-base" });
 			expect(launches[1]).toMatchObject({
 				prompt: "clarify point 3", title: "re: conversation", roleId: "research", cwd: "/isolated/conversation",
-				model: "provider/model", thinking: "high", builtInTools: ["read"], visible: undefined,
+				model: "provider/model", thinking: "high", tools: ["read"], visible: undefined,
 				resume: {
 					sessionFilePath: "/tmp/session/child.jsonl", repliesTo: original.id, baseRef: "worktree-base",
 					worktree: { path: "/isolated/conversation", branch: "sumo/conversation", baseRef: "worktree-base", repoRoot: "/repo" },

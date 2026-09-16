@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import packageJson from "../package.json";
 import type { ExtensionContext, ReadonlyFooterDataProvider, Theme } from "@earendil-works/pi-coding-agent";
 import { SUMOCODE_STATES, type SumoCodeState } from "./tokens.js";
 import {
@@ -362,9 +363,9 @@ describe("renderFooterBlock — splash renders Bible version block", () => {
 });
 
 describe("renderSplashVersionLine", () => {
-	it("renders the SUMOCODE V0.7.1 version string", () => {
+	it("renders the package-derived SumoCode version string", () => {
 		const line = renderSplashVersionLine(160).replace(ANSI, "");
-		expect(line).toContain("SUMOCODE V0.7.1");
+		expect(line).toContain(`SUMOCODE V${packageJson.version}`);
 		expect(line).toContain("CATHEDRAL");
 		expect(line).toContain("160 \u00d7 45 MONOSPACE");
 	});

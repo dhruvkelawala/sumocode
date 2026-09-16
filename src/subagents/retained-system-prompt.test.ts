@@ -27,7 +27,7 @@ function fixture() {
 	};
 	const descriptor = prepareRetainedBootstrap(record, {
 		cwd: root, baseRef: "HEAD", model: { provider: "provider", modelId: "model", label: "provider/model" },
-		thinking: "low", builtInTools: ["read"], role: null, pi, adapterEntry: null, modelBootstrapEntry: null, visible: null,
+		thinking: "low", tools: ["read"], role: null, pi, adapterEntry: null, modelBootstrapEntry: null, mcp: null, visible: null,
 	}, { prompt: "private task λ\nnext", systemPrompt: "private role instruction" });
 	const binding = createBootstrapBinding(descriptor);
 	vi.stubEnv(RETAINED_BOOTSTRAP_ENV, JSON.stringify(binding));

@@ -637,8 +637,8 @@ describe("subagent result delivery", () => {
 
 	it("drops a failed replacement instead of retrying it on every session start", async () => {
 		const harness = createHarness();
-		// SAFETY: the test manipulates the documented process-global replacement set, then removes its entry.
 		type Replacement = { manager: SubagentManager; reason: "new"; targetSessionFile: string };
+		// SAFETY: the test manipulates the documented process-global replacement set, then removes its entry.
 		const globals = globalThis as { [key: symbol]: Set<Replacement> | undefined };
 		const key = Symbol.for("@dhruvkelawala/sumocode/subagent-replacements-v2");
 		// SAFETY: an existing process-global set is reused only when it already holds replacement records.

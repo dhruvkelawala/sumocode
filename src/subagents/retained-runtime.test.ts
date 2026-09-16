@@ -66,9 +66,11 @@ function fixture(configuredPi?: string) {
 			terminalHost: host,
 			managerDependencies: { controllerIdentity: identity, processOperations: operations, captureGitContext: async () => ({ baseRef: "base-sha" }) } });
 		// SAFETY: lifecycle handlers use only these context members when UI is disabled.
-		const context = { cwd: root, hasUI: false, isIdle: () => true, sessionManager: { getSessionId: () => session } } as never;
-		// SAFETY: both exercised lifecycle handlers only read the event reason.
-		const fire = (event: string, reason = "startup") => handlers.get(event)!({ reason } as never, context);
+		const context = { cwd: root, hasUI: false, isIdle: () => true, sessionManager: {
+			getSessionId: () => session, getSessionFile: () => join(root, `${session}.jsonl`),
+		} } as never;
+		// SAFETY: both exercised lifecycle handlers read only the replacement reason and target.
+		const fire = (event: string, reason = "startup", targetSessionFile?: string) => handlers.get(event)!({ reason, targetSessionFile } as never, context);
 		return { manager, fire, sendMessage };
 	}
 	const task: SpawnSubagentTask = { prompt: "private task text", title: "worker", cwd: root,
@@ -215,7 +217,7 @@ it.each(["before", "during", "after"] as const)("delivers a production child's c
 	});
 	const next = f.install({ token: "successor", pid: 9876, processStartTime: "next-birth" }, "replacement");
 	try {
-		await previous.fire("session_shutdown", "new");
+		await previous.fire("session_shutdown", "new", join(f.root, "replacement.jsonl"));
 		await next.fire("session_start");
 		expect(next.manager.get(result.id)).toMatchObject({ status: "running", recovery: "adopted" });
 		const running = registry.get(result.id)!;

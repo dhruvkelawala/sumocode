@@ -237,3 +237,5 @@ The renderer and orchestration system were built with substantial assistance fro
 ## License
 
 MIT — see [LICENSE](./LICENSE).
+
+CI note: the OpenCodeReview workflow runs with OCR_NO_UPDATE=1 (upstream #703).

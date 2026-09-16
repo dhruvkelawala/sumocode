@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const root = resolve(import.meta.dirname, "..");
@@ -9,7 +9,7 @@ const temporaryDirectories = [];
 
 function runLint(filename, source, useRepositoryConfig = false) {
 	const directory = mkdtempSync(useRepositoryConfig
-		? resolve(root, ".local/sumocode-effect-lint-")
+		? resolve(root, ".sumocode-effect-lint-")
 		: join(tmpdir(), "sumocode-effect-lint-"));
 	temporaryDirectories.push(directory);
 	if (!useRepositoryConfig) {
@@ -23,6 +23,7 @@ export default defineConfig({
 `);
 	}
 	const input = join(directory, filename);
+	mkdirSync(dirname(input), { recursive: true });
 	writeFileSync(input, source);
 	const args = useRepositoryConfig ? [input] : ["--config", join(directory, "oxlint.config.ts"), input];
 	const result = spawnSync(resolve(root, "node_modules/.bin/oxlint"), args, {
@@ -74,8 +75,13 @@ import * as Ndjson from "effect/unstable/encoding/Ndjson";
 void FastCheck;
 void Ndjson;
 `);
+		const testSupport = runLint("test/integration/harness.ts", `
+import * as FastCheck from "effect/testing/FastCheck";
+void FastCheck;
+`);
 
 		expect(production.status, production.output).toBe(0);
 		expect(test.status, test.output).toBe(0);
+		expect(testSupport.status, testSupport.output).toBe(0);
 	});
 });

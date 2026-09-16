@@ -4,7 +4,7 @@ This is the reviewed pre-adoption baseline for Plan 118. Raw samples, source ide
 
 ## Build the pinned native baseline
 
-The comparison accepts only the clean archive whose source commit and checksum identity match the JSON record. PR [#597](https://github.com/dhruvkelawala/sumocode/pull/597) retains the pinned commit after branch deletion or squash merge. Fetch its read-only pull ref, then rebuild in a detached clean checkout with the repository's pinned Bun version:
+The comparison accepts only a checksum-verified clean archive built from the source commit pinned in the JSON record. PR [#597](https://github.com/dhruvkelawala/sumocode/pull/597) retains that commit after branch deletion or squash merge. Fetch its read-only pull ref, then rebuild in a detached clean checkout with the repository's pinned Bun version:
 
 ```bash
 git fetch origin refs/pull/597/head:refs/remotes/origin/pr-597
@@ -13,7 +13,7 @@ pnpm --dir /tmp/sumocode-effect-baseline install --frozen-lockfile
 pnpm --dir /tmp/sumocode-effect-baseline build:native
 ```
 
-`build.json` binds the archive to the clean source commit. `SHA256SUMS` binds every distributed file. The comparison rechecks every file and requires artifact identity `5464ad17cd2ad3246aba3a54015f870d664379a4bd4a27ab88751db5d743f360`; a dirty, mutated, wrong-source, or differently rebuilt baseline fails before sampling.
+`build.json` binds the archive to the clean source commit. `SHA256SUMS` binds every distributed file, and the comparison rechecks every file before sampling. Bun embeds build paths, so a clean rebuild elsewhere can have a different reported artifact checksum; the reviewed policy pins the source commit rather than one machine's path-dependent archive bytes. Dirty, mutated-after-build, or wrong-source archives still fail before sampling.
 
 ## Native regression gate
 
@@ -49,4 +49,4 @@ pnpm perf:startup:compare -- --base <pre-adoption-ref> --samples 15 --out "$(mkt
 
 ## Baseline refresh policy
 
-There is no record/update flag. A run writes only to `--out`; it never edits the committed baseline. Refreshing `adoption-baseline.json` requires a clean pre-adoption artifact, the full raw 15-sample observations, an explicit review of every new ceiling, and a normal code-review diff. A regression cannot turn itself green by running the tool again.
+There is no record/update or alternate-record flag. A run always loads the committed baseline, writes only to `--out`, and never edits the record. Refreshing `adoption-baseline.json` requires a clean pre-adoption artifact, the full raw 15-sample observations, an explicit review of every new ceiling, and a normal code-review diff. A regression cannot turn itself green by running the tool again.

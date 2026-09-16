@@ -7,10 +7,9 @@ import { afterEach, describe, expect, it } from "vitest";
 const root = resolve(import.meta.dirname, "..");
 const temporaryDirectories = [];
 
-function runLint(filename, source, useRepositoryConfig = false) {
-	const directory = mkdtempSync(useRepositoryConfig
-		? resolve(root, ".sumocode-effect-lint-")
-		: join(tmpdir(), "sumocode-effect-lint-"));
+function runLint(filename, source, useRepositoryConfig = false, parent = tmpdir()) {
+	mkdirSync(parent, { recursive: true });
+	const directory = mkdtempSync(join(parent, "sumocode-effect-lint-"));
 	temporaryDirectories.push(directory);
 	if (!useRepositoryConfig) {
 		symlinkSync(resolve(root, "node_modules"), join(directory, "node_modules"), "dir");
@@ -25,9 +24,11 @@ export default defineConfig({
 	const input = join(directory, filename);
 	mkdirSync(dirname(input), { recursive: true });
 	writeFileSync(input, source);
-	const args = useRepositoryConfig ? [input] : ["--config", join(directory, "oxlint.config.ts"), input];
+	const args = useRepositoryConfig
+		? ["--config", resolve(root, "oxlint.config.ts"), input]
+		: ["--config", join(directory, "oxlint.config.ts"), input];
 	const result = spawnSync(resolve(root, "node_modules/.bin/oxlint"), args, {
-		cwd: root,
+		cwd: useRepositoryConfig ? root : directory,
 		encoding: "utf8",
 	});
 	return { status: result.status, output: `${result.stdout}${result.stderr}` };
@@ -43,6 +44,25 @@ describe("Effect import policy", () => {
 
 		expect(result.status).toBe(1);
 		expect(result.output).toContain("Import Effect through a deep subpath");
+	});
+
+	it("does not treat an ancestor checkout directory as test code", () => {
+		const result = runLint(
+			"src/production.ts",
+			'import "effect/unstable/encoding/Ndjson";\n',
+			false,
+			join(tmpdir(), "tests"),
+		);
+
+		expect(result.status).toBe(1);
+		expect(result.output).toContain("Unstable Effect modules require explicit production approval");
+	});
+
+	it("keeps all Effect imports out of plain launcher execution", () => {
+		const result = runLint("src/native/main.ts", 'import * as Effect from "effect/Effect";\nvoid Effect;\n');
+
+		expect(result.status).toBe(1);
+		expect(result.output).toContain("Effect is not allowed in launcher, rendering, or plain security primitives");
 	});
 
 	it("rejects the generic platform package barrel", () => {

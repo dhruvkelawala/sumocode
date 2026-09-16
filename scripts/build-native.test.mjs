@@ -26,7 +26,7 @@ function write(path, contents) {
 	writeFileSync(path, contents);
 }
 
-function bunBundleInputs(entryPoint, root) {
+function bunBundleMetafile(entryPoint, root) {
 	const metafile = join(root, "metafile.json");
 	const result = spawnSync(bunBin, [
 		"--no-install", "--no-env-file", "build",
@@ -35,7 +35,11 @@ function bunBundleInputs(entryPoint, root) {
 	if (result.error || result.status !== 0) {
 		throw new Error(`bun build failed${result.status !== null ? ` with exit ${result.status}` : ""}: ${result.error?.message ?? result.stderr.trim()}`);
 	}
-	return Object.keys(JSON.parse(readFileSync(metafile, "utf8")).inputs)
+	return JSON.parse(readFileSync(metafile, "utf8"));
+}
+
+function bunBundleInputs(entryPoint, root) {
+	return Object.keys(bunBundleMetafile(entryPoint, root).inputs)
 		.map((input) => realpathSync(resolve(root, input)));
 }
 
@@ -198,6 +202,21 @@ describe("native build entry", () => {
 });
 
 describe("native build input containment", () => {
+	describe.runIf(bunPresent)("Bun metafile contract", () => {
+		it("marks the lazy host edge as a dynamic import", () => {
+			const directory = realpathSync(mkdtempSync(join(tmpdir(), "sumocode-native-metafile-")));
+			temporaryDirectories.push(directory);
+			write(join(directory, "main.ts"), 'await import("./host.js");\n');
+			write(join(directory, "host.ts"), "export const host = true;\n");
+
+			const metafile = bunBundleMetafile(join(directory, "main.ts"), directory);
+			expect(metafile.inputs["main.ts"].imports).toContainEqual(expect.objectContaining({
+				path: "host.ts",
+				kind: "dynamic-import",
+			}));
+		});
+	});
+
 	it("accepts checkout and staged inputs but rejects an escaped realpath", () => {
 		const { directory, root, piPkg } = fixture("pnpm");
 		const stage = join(directory, "stage");

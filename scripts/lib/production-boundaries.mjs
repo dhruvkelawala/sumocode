@@ -15,6 +15,15 @@ function importedPackage(path, packageNames) {
 	return undefined;
 }
 
+function effectPackage(path) {
+	const normalized = normalizePath(path);
+	if (normalized === "effect" || normalized.startsWith("effect/")) return "effect";
+	const external = normalized.match(/^(@effect\/[^/]+)/u);
+	if (external) return external[1];
+	const bundled = `/${normalized}`.match(/\/node_modules\/(effect|@effect\/[^/]+)(?:\/|$)/u);
+	return bundled?.[1];
+}
+
 function outputSpecifiers(outputText) {
 	// Metafiles are authoritative for normal imports. Scan emitted code too so
 	// a bundler-rewritten surviving import fails closed rather than shipping.
@@ -66,9 +75,8 @@ export function assertNoEffectInEagerClosure(metafile, entryPoint, artifact) {
 		visited.add(current.input);
 
 		for (const imported of inputs[current.input]?.imports ?? []) {
-			const forbidden = importedPackage(imported.path, ["effect"]);
-			if (forbidden) {
-				throw new Error(`${artifact} eager closure includes forbidden package ${forbidden} via ${[...current.trace, imported.path].join(" -> ")}`);
+			if (effectPackage(imported.path)) {
+				throw new Error(`${artifact} eager closure includes forbidden package via ${[...current.trace, imported.path].join(" -> ")}`);
 			}
 			if (imported.kind === "dynamic-import" || imported.external) continue;
 			const target = inputKeys.get(normalizePath(imported.path));

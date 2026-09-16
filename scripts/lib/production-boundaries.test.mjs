@@ -55,11 +55,15 @@ describe("native eager/pre-adoption closure", () => {
 		)).not.toThrow();
 	});
 
-	it("rejects a forbidden package imported by an eager pre-adoption module", () => {
-		expect(() => assertNoEffectInEagerClosure(
-			nativeMetafile({ path: "effect/Effect", kind: "import-statement", external: true }),
-			"src/native/main.ts",
-			"native launcher",
-		)).toThrow("native launcher eager closure includes forbidden package effect via src/native/main.ts -> src/native/preflight.ts -> effect/Effect");
-	});
+	it.each(["effect/Effect", "@effect/platform-node/NodeRuntime"])(
+		"rejects %s when imported by an eager pre-adoption module",
+		(specifier) => {
+			expect(() => assertNoEffectInEagerClosure(
+				nativeMetafile({ path: specifier, kind: "import-statement", external: true }),
+				"src/native/main.ts",
+				"native launcher",
+			)).toThrow(`native launcher eager closure includes forbidden package via src/native/main.ts -> src/native/preflight.ts -> ${specifier}`);
+		},
+	);
+
 });

@@ -225,8 +225,8 @@ async function replaceAndComplete(reason: string, beforeSettle = true, backend: 
 	await old.fire("agent_end");
 	await next.fire("agent_end");
 	await next.fire("agent_end");
-	expect(old.delivery).not.toHaveBeenCalled();
-	expect(next.delivery).toHaveBeenCalledTimes(1);
+	expect(old.delivery).toHaveBeenCalledTimes(beforeSettle ? 0 : 1);
+	expect(next.delivery).toHaveBeenCalledTimes(beforeSettle ? 1 : 0);
 	await next.fire("session_shutdown", "new", "final");
 	const final = f.install("final");
 	await final.fire("session_start", "new");

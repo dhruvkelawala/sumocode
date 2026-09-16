@@ -39,7 +39,11 @@ function measurements() {
 function policy() {
 	return {
 		schemaVersion: 1,
-		baseline: { sourceCommit: "a".repeat(40), samples: 15 },
+		baseline: {
+			sourceCommit: "a".repeat(40),
+			samples: 15,
+			machine: { platform: "test", arch: "test", node: "test", bun: "test", cpu: "test" },
+		},
 		budgets: Object.fromEntries(Object.entries(measurements()).map(([name, measurement]) => [name, {
 			baseline: measurement.kind === "timing" ? measurement.medianMs : measurement.value,
 			max: measurement.kind === "timing" ? measurement.medianMs + 5 : measurement.value + 100,
@@ -102,10 +106,22 @@ describe("adoption performance budget", () => {
 			readSourceIdentity: async () => ({ sourceCommit: "b".repeat(40), sourceClean: true }),
 			readArtifact: async () => ({ artifactDir: "/native", sourceCommit: "b".repeat(40), sourceClean: true, artifactSha256: "2".repeat(64) }),
 			collectMeasurements: async () => measurements(),
-			machineMetadata: async () => ({ platform: "test", arch: "test", node: "test", bun: "test" }),
+			machineMetadata: async () => ({ platform: "test", arch: "test", node: "test", bun: "test", cpu: "test" }),
 		});
 		expect(report.gate.failedChecks).toContain("source-host-import-ms:policy");
 		expect(await readFile(join(reportDir, "report.md"), "utf8")).toContain("| source-host-import-ms | — | — | 100ms |");
+	});
+
+	it("rejects a different measurement machine before collection", async () => {
+		const outDir = await mkdtemp(join(tmpdir(), "sumocode-adoption-machine-"));
+		roots.push(outDir);
+		await expect(runAdoptionBudget({ nativeDir: "/native", outDir }, {
+			readBaseline: async () => policy(),
+			readSourceIdentity: async () => ({ sourceCommit: "b".repeat(40), sourceClean: true }),
+			readArtifact: async () => ({ artifactDir: "/native", sourceCommit: "b".repeat(40), sourceClean: true, artifactSha256: "2".repeat(64) }),
+			machineMetadata: async () => ({ platform: "other", arch: "test", node: "test", bun: "test", cpu: "test" }),
+			collectMeasurements: async () => { throw new Error("must not collect"); },
+		})).rejects.toThrow("machine mismatch: platform");
 	});
 
 	it("records source and native identities without a baseline write path", async () => {
@@ -119,7 +135,7 @@ describe("adoption performance budget", () => {
 			readSourceIdentity: async () => ({ sourceCommit: "b".repeat(40), sourceClean: true }),
 			readArtifact: async () => ({ artifactDir: "/native", sourceCommit: "b".repeat(40), sourceClean: true, artifactSha256: "2".repeat(64) }),
 			collectMeasurements: async () => observed,
-			machineMetadata: async () => ({ platform: "test", arch: "test", node: "test", bun: "test" }),
+			machineMetadata: async () => ({ platform: "test", arch: "test", node: "test", bun: "test", cpu: "test" }),
 		});
 		expect(report).toMatchObject({
 			source: { sourceCommit: "b".repeat(40), sourceClean: true },

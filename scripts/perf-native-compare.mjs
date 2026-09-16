@@ -289,12 +289,17 @@ export async function runNativeComparison(options, dependencies = {}) {
 		for (let index = 0; index < DEFAULT_SAMPLES; index += 1) {
 			const order = index % 2 === 0 ? ["baseline", "candidate"] : ["candidate", "baseline"];
 			for (const arm of order) {
-				const diagFile = join(agentDir, `${String(index).padStart(2, "0")}-${arm}.jsonl`);
+				const diagFile = join(outDir, `${String(index).padStart(2, "0")}-${arm}.jsonl`);
 				const artifact = arm === "baseline" ? baselineArtifact : candidateArtifact;
 				let sample;
-				try { sample = await runSample({ arm, artifact, agentDir, diagFile, fixtureCount: options.fixtureCount, index }); }
-				catch { sample = { index, ok: false, failure: "process-failed" }; }
+				try {
+					sample = await runSample({ arm, artifact, agentDir, diagFile, fixtureCount: options.fixtureCount, index });
+				} catch (error) {
+					sample = { index, ok: false, failure: "harness-error" };
+					console.error(`[native regression] sample=${index + 1}/${DEFAULT_SAMPLES} arm=${arm} harness error: ${error instanceof Error ? error.message : String(error)}`);
+				}
 				raw[arm].push(sample);
+				if (sample.ok) await rm(diagFile, { force: true });
 				console.error(`[native regression] sample=${index + 1}/${DEFAULT_SAMPLES} arm=${arm} ${sample.ok ? "ok" : sample.failure}`);
 			}
 		}

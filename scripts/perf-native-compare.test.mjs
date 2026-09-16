@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -59,6 +59,29 @@ describe("native artifact comparison", () => {
 		expect(seen.slice(0, 4).map(({ name }) => name)).toEqual(["baseline", "candidate", "candidate", "baseline"]);
 		expect(new Set(seen.map(({ agentDir }) => agentDir)).size).toBe(1);
 		expect(JSON.parse(await readFile(join(outDir, "results.json"), "utf8"))).toMatchObject({ gate: { verdict: "passed" } });
+		expect((await readdir(outDir)).filter((name) => name.endsWith(".jsonl"))).toEqual([]);
+	});
+
+	it("retains failed-sample diagnostics and reports harness errors visibly", async () => {
+		const outDir = await mkdtemp(join(tmpdir(), "sumocode-native-failed-samples-"));
+		roots.push(outDir);
+		const report = await runNativeComparison({ baselineDir: "/a", candidateDir: "/b", fixtureCount: 0, outDir }, {
+			readBaselineIdentity: async () => ({ sourceCommit: "a".repeat(40), artifactSha256: "1".repeat(64) }),
+			readArtifact: async (path) => ({
+				artifactDir: path,
+				sourceCommit: path === "/a" ? "a".repeat(40) : "b".repeat(40),
+				sourceClean: true,
+				artifactSha256: path === "/a" ? "1".repeat(64) : "2".repeat(64),
+			}),
+			runSample: async ({ diagFile }) => {
+				await writeFile(diagFile, "failure evidence\n");
+				throw new Error("spawn failed");
+			},
+			machineMetadata: async () => ({ platform: "test", arch: "test", cpu: "test", bun: "test" }),
+		});
+		expect(report.gate.failedChecks).toContain("collection");
+		expect(report.arms.baseline.samples[0]).toMatchObject({ ok: false, failure: "harness-error" });
+		expect(await readFile(join(outDir, "00-baseline.jsonl"), "utf8")).toBe("failure evidence\n");
 	});
 
 	it("rejects one artifact presented as both arms", async () => {

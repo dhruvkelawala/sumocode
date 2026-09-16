@@ -281,8 +281,11 @@ async function defaultMachineMetadata() {
 }
 
 async function readBaselineIdentity() {
-	const policy = JSON.parse(await readFile(DEFAULT_BASELINE_RECORD, "utf8"));
-	return { sourceCommit: policy.baseline?.sourceCommit };
+	let policy;
+	try { policy = JSON.parse(await readFile(DEFAULT_BASELINE_RECORD, "utf8")); }
+	catch (error) { throw new Error(`failed to read pinned baseline record: ${error instanceof Error ? error.message : String(error)}`); }
+	if (!/^[0-9a-f]{40}$/.test(policy.baseline?.sourceCommit ?? "")) throw new Error("pinned baseline record is invalid");
+	return { sourceCommit: policy.baseline.sourceCommit };
 }
 
 export async function runNativeComparison(options, dependencies = {}) {

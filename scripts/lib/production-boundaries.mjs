@@ -1,3 +1,5 @@
+// Effect itself is an approved production dependency; only its property-test
+// and serialization transitive dependencies must stay out of shipped graphs.
 const FORBIDDEN_PRODUCTION_PACKAGES = ["fast-check", "msgpackr"];
 
 function normalizePath(path) {

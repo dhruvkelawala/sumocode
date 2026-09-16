@@ -2,7 +2,7 @@
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { cpus, platform, arch, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import xterm from "@xterm/headless";
@@ -11,6 +11,7 @@ import { readNativeArtifactIdentity } from "./lib/native-artifact.mjs";
 import { resetFixture } from "./perf-startup-compare.mjs";
 
 const DEFAULT_SAMPLES = 15;
+const DEFAULT_BASELINE_RECORD = join(resolve(dirname(fileURLToPath(import.meta.url)), ".."), "docs/perf/adoption-baseline.json");
 const SAMPLE_TIMEOUT_MS = 30_000;
 const FLAGS = Object.freeze(["--offline", "--no-extensions", "--no-session", "--approve"]);
 const REQUIRED_EVENTS = Object.freeze(["terminal_index_ready", "editor_ready", "hydration_committed", "command_ready"]);
@@ -18,7 +19,7 @@ const EDIT_SENTINEL = "native-perf-edit-sentinel";
 const execFileAsync = promisify(execFile);
 
 function usage() {
-	return `Usage: node scripts/perf-native-compare.mjs --baseline <archive> --candidate <archive> [options]\n\nOptions:\n  --baseline <dir>       clean native archive used as the fixed baseline\n  --candidate <dir>      clean native archive being evaluated\n  --fixture-count <n>    settled terminal records (default: 0)\n  --out <dir>            new report files (default: private temporary directory)\n  -h, --help             show this help\n\nEvery comparison collects exactly ${DEFAULT_SAMPLES} samples per artifact.\n`;
+	return `Usage: node scripts/perf-native-compare.mjs --baseline <archive> --candidate <archive> [options]\n\nOptions:\n  --baseline <dir>       clean native archive used as the fixed baseline\n  --candidate <dir>      clean native archive being evaluated\n  --baseline-record <f>  pinned baseline identity (default: docs/perf/adoption-baseline.json)\n  --fixture-count <n>    settled terminal records (default: 0)\n  --out <dir>            new report files (default: private temporary directory)\n  -h, --help             show this help\n\nEvery comparison collects exactly ${DEFAULT_SAMPLES} samples per artifact.\n`;
 }
 
 function positiveInteger(value, flag) {
@@ -29,15 +30,16 @@ function positiveInteger(value, flag) {
 }
 
 export function nativeCompareOptions(argv) {
-	const options = { samples: DEFAULT_SAMPLES, fixtureCount: 0 };
+	const options = { samples: DEFAULT_SAMPLES, fixtureCount: 0, baselineRecord: DEFAULT_BASELINE_RECORD };
 	for (let index = argv[0] === "--" ? 1 : 0; index < argv.length; index += 1) {
 		const arg = argv[index];
 		if (arg === "-h" || arg === "--help") return { ...options, help: true };
 		const value = argv[index + 1];
-		if (["--baseline", "--candidate", "--fixture-count", "--out"].includes(arg) && value === undefined) throw new Error(`${arg} requires a value`);
+		if (["--baseline", "--candidate", "--baseline-record", "--fixture-count", "--out"].includes(arg) && value === undefined) throw new Error(`${arg} requires a value`);
 		switch (arg) {
 			case "--baseline": options.baselineDir = resolve(value); index += 1; break;
 			case "--candidate": options.candidateDir = resolve(value); index += 1; break;
+			case "--baseline-record": options.baselineRecord = resolve(value); index += 1; break;
 			case "--fixture-count": options.fixtureCount = value === "0" ? 0 : positiveInteger(value, arg); index += 1; break;
 			case "--out": options.outDir = resolve(value); index += 1; break;
 			default: throw new Error(`unknown option: ${arg}`);
@@ -261,13 +263,22 @@ async function defaultMachineMetadata() {
 	return { platform: platform(), arch: arch(), cpu: `${cpus()[0]?.model ?? "unknown"} × ${cpus().length}`, bun };
 }
 
+async function readBaselineIdentity(path) {
+	const policy = JSON.parse(await readFile(path, "utf8"));
+	return { sourceCommit: policy.baseline?.sourceCommit, artifactSha256: policy.baseline?.nativeArtifactSha256 };
+}
+
 export async function runNativeComparison(options, dependencies = {}) {
 	const outDir = await prepareReportDirectory(options.outDir, options.fixtureCount);
 	const readArtifact = dependencies.readArtifact ?? readNativeArtifactIdentity;
-	const [baselineArtifact, candidateArtifact] = await Promise.all([
+	const [baselineArtifact, candidateArtifact, pinnedBaseline] = await Promise.all([
 		readArtifact(options.baselineDir),
 		readArtifact(options.candidateDir),
+		(dependencies.readBaselineIdentity ?? readBaselineIdentity)(options.baselineRecord ?? DEFAULT_BASELINE_RECORD),
 	]);
+	if (baselineArtifact.sourceCommit !== pinnedBaseline.sourceCommit || baselineArtifact.artifactSha256 !== pinnedBaseline.artifactSha256) {
+		throw new Error("baseline artifact does not match the pinned baseline identity");
+	}
 	if (baselineArtifact.artifactSha256 === candidateArtifact.artifactSha256) {
 		throw new Error("comparison requires two distinct native artifacts");
 	}

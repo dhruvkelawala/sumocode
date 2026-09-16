@@ -1,0 +1,11 @@
+$ ./node_modules/.bin/vitest run test/integration/subagent-recovery.test.ts --fileParallelism=false
+
+ RUN  v4.1.5 /Users/dhruvkelawala/development/sumocode
+
+
+ Test Files  1 passed (1)
+      Tests  38 passed (38)
+   Start at  13:31:27
+   Duration  22.90s (transform 302ms, setup 0ms, import 466ms, tests 22.33s, environment 0ms)
+
+exit=0

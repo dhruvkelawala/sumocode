@@ -20,3 +20,6 @@ package-lock.json
 
 # local-files visual-plan bridge token files (written by `plan local serve`)
 .plan-url
+scratch/tui-audit/proto/renders/
+scratch/tui-audit/proto/_assets/
+scratch/tui-audit/*.woff2

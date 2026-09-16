@@ -1,0 +1,86 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>edit ledger — diff policy options</title>
+<style>
+  @font-face { font-family: "JetBrains Mono"; src: url("jetbrains-mono-nerd.woff2") format("woff2"); }
+  :root { --bg:#06050B; --fg:#DCC7FF; --dim:#9B7BBE; --divider:#56347A; --accent:#B974FF; --tool:#FFC857; --approval:#FF668F; --learning:#75E8FF; --ledger:#100A1D; }
+  body { margin:0; background:var(--bg); color:var(--fg); font-family:"JetBrains Mono",ui-monospace,monospace; font-size:13px; line-height:1.4; font-variant-ligatures:none; padding:32px 40px 60px; }
+  h1 { font-size:13px; font-weight:400; letter-spacing:.25em; color:var(--accent); margin:0 0 6px; }
+  .sub { color:var(--dim); margin:0 0 28px; max-width:110ch; }
+  .grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:28px 32px; }
+  @media (max-width:1700px) { .grid { grid-template-columns:1fr; } }
+  header { display:flex; gap:12px; margin-bottom:8px; } header .k { color:var(--accent); } header .rows { color:var(--dim); margin-left:auto; }
+  .note { color:var(--dim); margin:8px 0 0; font-size:12px; line-height:1.5; } .note b { color:var(--fg); font-weight:400; }
+  pre { margin:0; background:var(--ledger); white-space:pre; overflow-x:auto; }
+  .d{color:var(--divider)} .m{color:var(--dim)} .a{color:var(--accent)} .f{color:var(--fg)} .x{color:var(--approval)} .p{color:var(--learning)}
+</style>
+</head>
+<body>
+<h1>EDIT LEDGER · DIFF POLICY</h1>
+<p class="sub">Same edit in each: <span class="f">src/auth/session.ts</span>, 3 hunks, +14 −6 (28 diff lines total). <span class="x">−</span> approval pink, <span class="p">+</span> learning cyan, <span class="m">@@</span> dim.</p>
+
+<div class="grid">
+
+<div>
+  <header><span class="k">A</span><span class="f">first hunk, cap 12</span><span class="rows">9 rows</span></header>
+<pre><span class="d">├─</span> <span class="a">[edit]</span> <span class="f">src/auth/session.ts</span> <span class="d">──────────────────</span> <span class="f">✓ +14 −6 · 3 hunks</span> <span class="d">─┤</span>
+<span class="d">│</span> <span class="m">@@ 41,7 @@ export function getSession</span>                          <span class="d">│</span>
+<span class="d">│</span> <span class="x">-   return user;</span>                                                <span class="d">│</span>
+<span class="d">│</span> <span class="p">+   if (!user) return Result.err("missing");</span>                    <span class="d">│</span>
+<span class="d">│</span> <span class="p">+   return Result.ok(user);</span>                                     <span class="d">│</span>
+<span class="d">│</span>     }                                                           <span class="d">│</span>
+<span class="d">│</span> <span class="m">↓ 2 more hunks · 22 lines</span>                                       <span class="d">│</span>
+<span class="d">│</span>                                                                 <span class="d">│</span></pre>
+  <p class="note"><b>The intent, once.</b> First hunk is usually the reason the edit exists; the rest are follow-through. Predictable height per edit. <b>^O</b> shows all.</p>
+</div>
+
+<div>
+  <header><span class="k">B</span><span class="f">all hunks, cap 12 total</span><span class="rows">15 rows</span></header>
+<pre><span class="d">├─</span> <span class="a">[edit]</span> <span class="f">src/auth/session.ts</span> <span class="d">──────────────────</span> <span class="f">✓ +14 −6 · 3 hunks</span> <span class="d">─┤</span>
+<span class="d">│</span> <span class="m">@@ 41,7 @@ export function getSession</span>                          <span class="d">│</span>
+<span class="d">│</span> <span class="x">-   return user;</span>                                                <span class="d">│</span>
+<span class="d">│</span> <span class="p">+   if (!user) return Result.err("missing");</span>                    <span class="d">│</span>
+<span class="d">│</span> <span class="p">+   return Result.ok(user);</span>                                     <span class="d">│</span>
+<span class="d">│</span> <span class="m">@@ 88,4 @@ export async function refresh</span>                        <span class="d">│</span>
+<span class="d">│</span> <span class="x">-   const session = await store.get(token);</span>                     <span class="d">│</span>
+<span class="d">│</span> <span class="p">+   const session = (await store.get(token)).unwrap();</span>          <span class="d">│</span>
+<span class="d">│</span> <span class="p">+   if (session.exp &lt; now()) return Result.err("expired");</span>      <span class="d">│</span>
+<span class="d">│</span> <span class="m">@@ 130,12 @@ function revoke</span>                                     <span class="d">│</span>
+<span class="d">│</span> <span class="x">-   delete cache[token];</span>                                        <span class="d">│</span>
+<span class="d">│</span> <span class="x">-   delete cache[session.id];</span>                                   <span class="d">│</span>
+<span class="d">│</span> <span class="m">↓ 16 more lines</span>                                                 <span class="d">│</span>
+<span class="d">│</span>                                                                 <span class="d">│</span></pre>
+  <p class="note"><b>Shape of the whole edit</b> — you see every function it touched, but each hunk is cut short and the 12-row budget is spent on headers. Third hunk lands mid-thought.</p>
+</div>
+
+<div>
+  <header><span class="k">C</span><span class="f">all hunks, uncapped</span><span class="rows">31 rows</span></header>
+<pre><span class="d">├─</span> <span class="a">[edit]</span> <span class="f">src/auth/session.ts</span> <span class="d">──────────────────</span> <span class="f">✓ +14 −6 · 3 hunks</span> <span class="d">─┤</span>
+<span class="d">│</span> <span class="m">@@ 41,7 @@ export function getSession</span>                          <span class="d">│</span>
+<span class="d">│</span> <span class="x">-   return user;</span>                                                <span class="d">│</span>
+<span class="d">│</span> <span class="p">+   if (!user) return Result.err("missing");</span>                    <span class="d">│</span>
+<span class="d">│</span> <span class="p">+   return Result.ok(user);</span>                                     <span class="d">│</span>
+<span class="d">│</span>     }                                                           <span class="d">│</span>
+<span class="d">│</span> <span class="m">@@ 88,4 @@ export async function refresh</span>                        <span class="d">│</span>
+<span class="d">│</span> <span class="x">-   const session = await store.get(token);</span>                     <span class="d">│</span>
+<span class="d">│</span> <span class="p">+   const session = (await store.get(token)).unwrap();</span>          <span class="d">│</span>
+<span class="d">│</span> <span class="p">+   if (session.exp &lt; now()) return Result.err("expired");</span>      <span class="d">│</span>
+<span class="d">│</span>     const next = rotate(session);                               <span class="d">│</span>
+<span class="d">│</span> <span class="m">@@ 130,12 @@ function revoke</span>                                     <span class="d">│</span>
+<span class="d">│</span> <span class="x">-   delete cache[token];</span>                                        <span class="d">│</span>
+<span class="d">│</span> <span class="x">-   delete cache[session.id];</span>                                   <span class="d">│</span>
+<span class="d">│</span> <span class="x">-   delete cache[session.userId];</span>                               <span class="d">│</span>
+<span class="d">│</span> <span class="p">+   cache.evict(session);</span>                                       <span class="d">│</span>
+<span class="d">│</span> <span class="p">+   audit.record("revoke", session.id);</span>                         <span class="d">│</span>
+<span class="d">│</span> <span class="p">+   audit.record("revoke", session.userId);</span>                     <span class="d">│</span>
+<span class="d">│</span> <span class="p">+   return Result.ok(undefined);</span>                                <span class="d">│</span>
+<span class="d">│</span>     }                                                           <span class="d">│</span>
+<span class="d">│</span>   <span class="m">⋮ 11 more rows in this ledger ⋮</span>                                <span class="d">│</span></pre>
+  <p class="note"><b>Nothing hidden</b> — but a 200-line refactor is a 200-row ledger, and a turn with 5 edits pushes the SUMO frame past the viewport. Review is what <b>/sumo:diff</b> and the PR are for.</p>
+</div>
+
+</div>
+</body>
+</html>

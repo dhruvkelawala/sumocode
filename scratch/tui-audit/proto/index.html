@@ -1,0 +1,206 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>SumoCode TUI · Ultraviolet prototypes</title>
+<link rel="stylesheet" href="_assets/tokens.css">
+<style>
+  :root { --background: #06050B; --surface: #0D0917; --foreground: #DCC7FF; --foreground-dim: #9B7BBE; --divider: #56347A; --accent: #B974FF; }
+  html, body { background: #06050B; color: #DCC7FF; }
+  body { padding: 48px clamp(16px, 4vw, 72px) 96px; }
+  h1 { font-size: 22px; letter-spacing: 0.18em; color: #B974FF; margin: 0 0 6px; text-transform: uppercase; }
+  .lede { color: #9B7BBE; font-size: 13px; margin: 0 0 40px; max-width: 90ch; line-height: 1.7; }
+  h2 { font-size: 13px; letter-spacing: 0.16em; text-transform: uppercase; color: #B974FF; margin: 0 0 4px; }
+  p { color: #9B7BBE; font-size: 13px; margin: 0 0 12px; line-height: 1.6; }
+  img { width: 100%; display: block; border: 1px solid #56347A; }
+  a { color: #B974FF; text-decoration: none; }
+  a.src { display: inline-block; margin-top: 8px; font-size: 12px; color: #9B7BBE; }
+  a.src:hover { color: #B974FF; }
+  .card { margin: 0 0 56px; }
+  .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin: 0 0 64px; }
+  .compare .card { margin: 0; }
+  .rule { border: 0; border-top: 1px solid #56347A; margin: 0 0 40px; }
+</style>
+</head>
+<body>
+<h1>SumoCode TUI · Ultraviolet prototypes</h1>
+<p class="lede">2026-09 TUI audit explorations. Theme: ultraviolet-core only. Cathedral canon stays — framed messages, Scriptorium panels, five preattentive states, restrained palette. These are not the Bible; winners get promoted.</p>
+<div class="compare">
+    <section class="card">
+      <h2>00-baseline</h2>
+      <p>Before — today's ultraviolet runtime, reproduced faithfully.</p>
+      <a href="00-baseline.html"><img src="renders/00-baseline.png" alt="00-baseline"></a>
+      <a class="src" href="00-baseline.html">open 00-baseline.html →</a>
+    </section>
+    <section class="card">
+      <h2>01-rhythm</h2>
+      <p>After — new chrome, the 0/1/2 spacing scale, one closed ledger stack per turn.</p>
+      <a href="01-rhythm.html"><img src="renders/01-rhythm.png" alt="01-rhythm"></a>
+      <a class="src" href="01-rhythm.html">open 01-rhythm.html →</a>
+    </section>
+</div>
+<hr class="rule">
+    <section class="card">
+      <h2>01b-rhythm-compact-user</h2>
+      <p>01 with unframed compact USER rows: four rows back per turn.</p>
+      <a href="01b-rhythm-compact-user.html"><img src="renders/01b-rhythm-compact-user.png" alt="01b-rhythm-compact-user"></a>
+      <a class="src" href="01b-rhythm-compact-user.html">open 01b-rhythm-compact-user.html →</a>
+    </section>
+    <section class="card">
+      <h2>02-ledger-states</h2>
+      <p>Every ledger body policy and status glyph in one stack.</p>
+      <a href="02-ledger-states.html"><img src="renders/02-ledger-states.png" alt="02-ledger-states"></a>
+      <a class="src" href="02-ledger-states.html">open 02-ledger-states.html →</a>
+    </section>
+    <section class="card">
+      <h2>02b-failure-ink</h2>
+      <p>Failure ink: A — violet border, pink glyph/ink only (recommended). B — the failed card's border goes pink too.</p>
+      <a href="02b-failure-ink.html"><img src="renders/02b-failure-ink.png" alt="02b-failure-ink"></a>
+      <a class="src" href="02b-failure-ink.html">open 02b-failure-ink.html →</a>
+    </section>
+    <section class="card">
+      <h2>02c-subagent-ledgers</h2>
+      <p>Subagent ledgers: headless running (activity lines), pane running (a: one row / b: explained), settled (manifest + first line), stalled (◆ pink).</p>
+      <a href="02c-subagent-ledgers.html"><img src="renders/02c-subagent-ledgers.png" alt="02c-subagent-ledgers"></a>
+      <a class="src" href="02c-subagent-ledgers.html">open 02c-subagent-ledgers.html →</a>
+    </section>
+    <section class="card">
+      <h2>03-thinking-reasoning</h2>
+      <p>Thinking on (default): reasoning streams visibly in dim under its header; @ elapsed in the frame header.</p>
+      <a href="03-thinking-reasoning.html"><img src="renders/03-thinking-reasoning.png" alt="03-thinking-reasoning"></a>
+      <a class="src" href="03-thinking-reasoning.html">open 03-thinking-reasoning.html →</a>
+    </section>
+    <section class="card">
+      <h2>03b-thinking-answer</h2>
+      <p>Reasoning finished and stays visible while the answer streams and a tool runs.</p>
+      <a href="03b-thinking-answer.html"><img src="renders/03b-thinking-answer.png" alt="03b-thinking-answer"></a>
+      <a class="src" href="03b-thinking-answer.html">open 03b-thinking-answer.html →</a>
+    </section>
+    <section class="card">
+      <h2>03c-thinking-settled</h2>
+      <p>Turn settled: reasoning folds to `· thinking 1.2k tokens · 4s  ^O`; ^O unfolds it like a ledger.</p>
+      <a href="03c-thinking-settled.html"><img src="renders/03c-thinking-settled.png" alt="03c-thinking-settled"></a>
+      <a class="src" href="03c-thinking-settled.html">open 03c-thinking-settled.html →</a>
+    </section>
+    <section class="card">
+      <h2>03d-thinking-off</h2>
+      <p>Thinking disabled: a single `@ Sumo is thinking…` row until the first token lands.</p>
+      <a href="03d-thinking-off.html"><img src="renders/03d-thinking-off.png" alt="03d-thinking-off"></a>
+      <a class="src" href="03d-thinking-off.html">open 03d-thinking-off.html →</a>
+    </section>
+    <section class="card">
+      <h2>04-divine-query-docked</h2>
+      <p>Divine Query docked in the input band — transcript stays visible.</p>
+      <a href="04-divine-query-docked.html"><img src="renders/04-divine-query-docked.png" alt="04-divine-query-docked"></a>
+      <a class="src" href="04-divine-query-docked.html">open 04-divine-query-docked.html →</a>
+    </section>
+    <section class="card">
+      <h2>04b-approval-docked</h2>
+      <p>Approval docked, command in a recess box, deny focused in approval pink.</p>
+      <a href="04b-approval-docked.html"><img src="renders/04b-approval-docked.png" alt="04b-approval-docked"></a>
+      <a class="src" href="04b-approval-docked.html">open 04b-approval-docked.html →</a>
+    </section>
+    <section class="card">
+      <h2>05-resume-docked</h2>
+      <p>/resume docked: search, TODAY / YESTERDAY / OLDER, 8 sessions.</p>
+      <a href="05-resume-docked.html"><img src="renders/05-resume-docked.png" alt="05-resume-docked"></a>
+      <a class="src" href="05-resume-docked.html">open 05-resume-docked.html →</a>
+    </section>
+    <section class="card">
+      <h2>04-divine-query-docked-chat-width</h2>
+      <p>Q11 (b): Divine Query at chat width (128) — panel aligns with the frames above; sidebar stays visible beside it.</p>
+      <a href="04-divine-query-docked-chat-width.html"><img src="renders/04-divine-query-docked-chat-width.png" alt="04-divine-query-docked-chat-width"></a>
+      <a class="src" href="04-divine-query-docked-chat-width.html">open 04-divine-query-docked-chat-width.html →</a>
+    </section>
+    <section class="card">
+      <h2>04b-approval-docked-chat-width</h2>
+      <p>Q11 (b): approval at chat width.</p>
+      <a href="04b-approval-docked-chat-width.html"><img src="renders/04b-approval-docked-chat-width.png" alt="04b-approval-docked-chat-width"></a>
+      <a class="src" href="04b-approval-docked-chat-width.html">open 04b-approval-docked-chat-width.html →</a>
+    </section>
+    <section class="card">
+      <h2>05-resume-docked-chat-width</h2>
+      <p>Q11 (b): /resume at chat width — metadata columns tighten.</p>
+      <a href="05-resume-docked-chat-width.html"><img src="renders/05-resume-docked-chat-width.png" alt="05-resume-docked-chat-width"></a>
+      <a class="src" href="05-resume-docked-chat-width.html">open 05-resume-docked-chat-width.html →</a>
+    </section>
+    <section class="card">
+      <h2>06-tree-docked-chat-width</h2>
+      <p>Q11 (b): /tree at chat width.</p>
+      <a href="06-tree-docked-chat-width.html"><img src="renders/06-tree-docked-chat-width.png" alt="06-tree-docked-chat-width"></a>
+      <a class="src" href="06-tree-docked-chat-width.html">open 06-tree-docked-chat-width.html →</a>
+    </section>
+    <section class="card">
+      <h2>06-tree-docked</h2>
+      <p>/tree docked: connectors in border colour, current node in accent.</p>
+      <a href="06-tree-docked.html"><img src="renders/06-tree-docked.png" alt="06-tree-docked"></a>
+      <a class="src" href="06-tree-docked.html">open 06-tree-docked.html →</a>
+    </section>
+    <section class="card">
+      <h2>07-portrait</h2>
+      <p>60×100 portrait: no sidebar, ledger stack wraps, two-row footer.</p>
+      <a href="07-portrait.html"><img src="renders/07-portrait.png" alt="07-portrait"></a>
+      <a class="src" href="07-portrait.html">open 07-portrait.html →</a>
+    </section>
+    <section class="card">
+      <h2>07-portrait-agents</h2>
+      <p>Q15 (b): portrait footer carries `● 3 agents` in the left zone.</p>
+      <a href="07-portrait-agents.html"><img src="renders/07-portrait-agents.png" alt="07-portrait-agents"></a>
+      <a class="src" href="07-portrait-agents.html">open 07-portrait-agents.html →</a>
+    </section>
+    <section class="card">
+      <h2>07-portrait-agents-stalled</h2>
+      <p>Q15 (b): same, one child stalled → `◆ 3 agents` in approval pink.</p>
+      <a href="07-portrait-agents-stalled.html"><img src="renders/07-portrait-agents-stalled.png" alt="07-portrait-agents-stalled"></a>
+      <a class="src" href="07-portrait-agents-stalled.html">open 07-portrait-agents-stalled.html →</a>
+    </section>
+    <section class="card">
+      <h2>10-splash-today</h2>
+      <p>Splash today: hardcoded version line, ┌┐ frame, model/keybind row under the frame.</p>
+      <a href="10-splash-today.html"><img src="renders/10-splash-today.png" alt="10-splash-today"></a>
+      <a class="src" href="10-splash-today.html">open 10-splash-today.html →</a>
+    </section>
+    <section class="card">
+      <h2>10b-splash-proposed</h2>
+      <p>Splash items 1+2+4: live version · theme · size line, ╭╮ frame with ❯, chord legend replaces the model row.</p>
+      <a href="10b-splash-proposed.html"><img src="renders/10b-splash-proposed.png" alt="10b-splash-proposed"></a>
+      <a class="src" href="10b-splash-proposed.html">open 10b-splash-proposed.html →</a>
+    </section>
+    <section class="card">
+      <h2>10c-splash-recents</h2>
+      <p>Splash + item 3: three recent sessions under the frame (only when the project has history).</p>
+      <a href="10c-splash-recents.html"><img src="renders/10c-splash-recents.png" alt="10c-splash-recents"></a>
+      <a class="src" href="10c-splash-recents.html">open 10c-splash-recents.html →</a>
+    </section>
+    <section class="card">
+      <h2>09a-sidebar-editorial</h2>
+      <p>Sidebar A · EDITORIAL — the Bible's locked masthead voice in ultraviolet: tracked-out labels, thick ━ rules, no sigils.</p>
+      <a href="09a-sidebar-editorial.html"><img src="renders/09a-sidebar-editorial.png" alt="09a-sidebar-editorial"></a>
+      <a class="src" href="09a-sidebar-editorial.html">open 09a-sidebar-editorial.html →</a>
+    </section>
+    <section class="card">
+      <h2>09b-sidebar-ledger</h2>
+      <p>Sidebar B · LEDGER — every section a two-column ledger; agents carry a budget bar; counts on every heading.</p>
+      <a href="09b-sidebar-ledger.html"><img src="renders/09b-sidebar-ledger.png" alt="09b-sidebar-ledger"></a>
+      <a class="src" href="09b-sidebar-ledger.html">open 09b-sidebar-ledger.html →</a>
+    </section>
+    <section class="card">
+      <h2>09c-sidebar-quiet</h2>
+      <p>Sidebar C · QUIET — no rules, no sigils, lowercase dim labels, double air. Sidebar recedes; transcript leads.</p>
+      <a href="09c-sidebar-quiet.html"><img src="renders/09c-sidebar-quiet.png" alt="09c-sidebar-quiet"></a>
+      <a class="src" href="09c-sidebar-quiet.html">open 09c-sidebar-quiet.html →</a>
+    </section>
+    <section class="card">
+      <h2>09d-sidebar-monitor</h2>
+      <p>Sidebar D · MONITOR — agents and terminals get a second row with their last activity line. Built for watching.</p>
+      <a href="09d-sidebar-monitor.html"><img src="renders/09d-sidebar-monitor.png" alt="09d-sidebar-monitor"></a>
+      <a class="src" href="09d-sidebar-monitor.html">open 09d-sidebar-monitor.html →</a>
+    </section>
+    <section class="card">
+      <h2>09e-sidebar-hybrid</h2>
+      <p>Sidebar E · HYBRID — B's counts + D's second row only for headless children (they stream events); pane children get one row with a ⧉ pane id; a stalled child flips to ◆ in approval pink.</p>
+      <a href="09e-sidebar-hybrid.html"><img src="renders/09e-sidebar-hybrid.png" alt="09e-sidebar-hybrid"></a>
+      <a class="src" href="09e-sidebar-hybrid.html">open 09e-sidebar-hybrid.html →</a>
+    </section>
+</body>
+</html>

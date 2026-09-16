@@ -1,0 +1,118 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Expanded ledger body — four options</title>
+<style>
+  @font-face { font-family: "JetBrains Mono"; src: url("jetbrains-mono-nerd.woff2") format("woff2"); }
+  :root {
+    --bg: #06050B; --surface: #0D0917; --recess: #0A0711; --lifted: #1B102E;
+    --fg: #DCC7FF; --dim: #9B7BBE; --divider: #56347A; --accent: #B974FF;
+    --tool: #FFC857; --approval: #FF668F; --learning: #75E8FF; --idle: #DCC7FF;
+    --ledger-surface: #100A1D;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 13px; line-height: 1.4; font-variant-ligatures: none; padding: 32px 40px 60px; }
+  h1 { font-size: 13px; font-weight: 400; letter-spacing: .25em; color: var(--accent); margin: 0 0 6px; }
+  .sub { color: var(--dim); margin: 0 0 28px; max-width: 110ch; }
+  .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px 32px; }
+  @media (max-width: 1300px) { .grid { grid-template-columns: 1fr; } }
+  .opt { min-width: 0; }
+  .opt header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px; }
+  .opt header .k { color: var(--accent); }
+  .opt header .t { color: var(--fg); }
+  .opt header .rows { color: var(--dim); margin-left: auto; }
+  .opt .note { color: var(--dim); margin: 8px 0 0; font-size: 12px; line-height: 1.5; }
+  .opt .note b { color: var(--fg); font-weight: 400; }
+  .opt .note .good { color: var(--learning); }
+  .opt .note .bad { color: var(--approval); }
+  pre.term { margin: 0; background: var(--ledger-surface); padding: 0; white-space: pre; overflow-x: auto; border-radius: 0; }
+  .d { color: var(--divider); } .m { color: var(--dim); } .a { color: var(--accent); } .t { color: var(--tool); }
+  .ok { color: var(--learning); } .x { color: var(--approval); } .f { color: var(--fg); }
+  .fold { color: var(--dim); }
+  .hl { background: var(--lifted); }
+  .cur { background: var(--accent); color: var(--bg); }
+  .frame-line { color: var(--divider); }
+  .scroll-note { position: relative; }
+  .scroll-note::after { content: "▲ transcript scroll continues ▲"; display: block; color: var(--divider); text-align: center; padding: 4px 0 0; letter-spacing: .15em; font-size: 11px; }
+</style>
+</head>
+<body>
+<h1>EXPANDED LEDGER · BODY POLICY</h1>
+<p class="sub">Same tool call in each: <span style="color:var(--fg)">[bash] pnpm test src/auth</span>, 242 lines of output, 12-row body budget. Frames are the proposed closed ultraviolet ledger (<span class="a">A</span> from the audit). The only variable is <b>which lines you see</b>.</p>
+
+<div class="grid">
+
+<div class="opt">
+  <header><span class="k">1</span><span class="t">TAIL + fold at top</span><span class="rows">12 rows</span></header>
+<pre class="term"><span class="d">╭─</span> <span class="t">[bash]</span> <span class="f">pnpm test src/auth</span> <span class="d">──────────────────────────────────</span> <span class="ok">✓</span> <span class="m">1.2s</span> <span class="d">─╮</span>
+<span class="d">│</span> <span class="fold">↑ 230 earlier lines</span>                                                  <span class="d">│</span>
+<span class="d">│</span> <span class="m">✓ src/auth/session.test.ts &gt; refresh &gt; rotates the token</span>            <span class="d">│</span>
+<span class="d">│</span> <span class="m">✓ src/auth/session.test.ts &gt; refresh &gt; rejects expired</span>              <span class="d">│</span>
+<span class="d">│</span> <span class="m">✓ src/auth/session.test.ts &gt; revoke &gt; clears cookie</span>                 <span class="d">│</span>
+<span class="d">│</span> <span class="m">✓ src/auth/session.test.ts &gt; revoke &gt; idempotent</span>                    <span class="d">│</span>
+<span class="d">│</span>                                                                      <span class="d">│</span>
+<span class="d">│</span> <span class="f"> Test Files  1 passed (1)</span>                                            <span class="d">│</span>
+<span class="d">│</span> <span class="f">      Tests  22 passed (22)</span>                                          <span class="d">│</span>
+<span class="d">│</span> <span class="m">   Start at  11:43:02</span>                                                <span class="d">│</span>
+<span class="d">│</span> <span class="m">   Duration  1.21s</span>                                                   <span class="d">│</span>
+<span class="d">╰──────────────────────────────────────────────────────────────────────╯</span></pre>
+  <p class="note"><span class="good">✓</span> The result line is always in view; while running, the body <b>scrolls like a terminal</b> — newest at the bottom. <span class="bad">✗</span> You lose the invocation echo and any early warnings unless you expand further.</p>
+</div>
+
+<div class="opt">
+  <header><span class="k">2</span><span class="t">HEAD + TAIL, middle fold</span><span class="rows">12 rows</span></header>
+<pre class="term"><span class="d">╭─</span> <span class="t">[bash]</span> <span class="f">pnpm test src/auth</span> <span class="d">──────────────────────────────────</span> <span class="ok">✓</span> <span class="m">1.2s</span> <span class="d">─╮</span>
+<span class="d">│</span> <span class="a">&gt;</span> <span class="f">pnpm test src/auth</span>                                                 <span class="d">│</span>
+<span class="d">│</span> <span class="m">RUN  v3.2.4  /Volumes/SumoDeus NVMe/code/sumocode</span>                   <span class="d">│</span>
+<span class="d">│</span> <span class="t">⚠ deprecated option `threads`, use `pool` (vitest.config.ts)</span>        <span class="d">│</span>
+<span class="d">│</span> <span class="m">✓ src/auth/session.test.ts &gt; create &gt; issues a session</span>              <span class="d">│</span>
+<span class="d">│</span> <span class="fold">· · · 232 lines · · ·</span>                                               <span class="d">│</span>
+<span class="d">│</span> <span class="m">✓ src/auth/session.test.ts &gt; revoke &gt; idempotent</span>                    <span class="d">│</span>
+<span class="d">│</span>                                                                      <span class="d">│</span>
+<span class="d">│</span> <span class="f"> Test Files  1 passed (1)</span>                                            <span class="d">│</span>
+<span class="d">│</span> <span class="f">      Tests  22 passed (22)</span>                                          <span class="d">│</span>
+<span class="d">│</span> <span class="m">   Duration  1.21s</span>                                                   <span class="d">│</span>
+<span class="d">╰──────────────────────────────────────────────────────────────────────╯</span></pre>
+  <p class="note"><span class="good">✓</span> Context (what ran, early warnings) <b>and</b> outcome. Best information-per-row. <span class="bad">✗</span> Two fold points; while running the tail region is the only thing moving, so the head takes 4 rows of static space.</p>
+</div>
+
+<div class="opt scroll-note">
+  <header><span class="k">3</span><span class="t">FULL OUTPUT, no cap</span><span class="rows">244 rows</span></header>
+<pre class="term"><span class="d">╭─</span> <span class="t">[bash]</span> <span class="f">pnpm test src/auth</span> <span class="d">──────────────────────────────────</span> <span class="ok">✓</span> <span class="m">1.2s</span> <span class="d">─╮</span>
+<span class="d">│</span> <span class="a">&gt;</span> <span class="f">pnpm test src/auth</span>                                                 <span class="d">│</span>
+<span class="d">│</span> <span class="m">RUN  v3.2.4  /Volumes/SumoDeus NVMe/code/sumocode</span>                   <span class="d">│</span>
+<span class="d">│</span> <span class="t">⚠ deprecated option `threads`, use `pool` (vitest.config.ts)</span>        <span class="d">│</span>
+<span class="d">│</span> <span class="m">✓ src/auth/session.test.ts &gt; create &gt; issues a session</span>              <span class="d">│</span>
+<span class="d">│</span> <span class="m">✓ src/auth/session.test.ts &gt; create &gt; sets expiry</span>                   <span class="d">│</span>
+<span class="d">│</span> <span class="m">✓ src/auth/session.test.ts &gt; create &gt; signs payload</span>                 <span class="d">│</span>
+<span class="d">│</span> <span class="m">✓ src/auth/session.test.ts &gt; create &gt; rejects empty user</span>            <span class="d">│</span>
+<span class="d">│</span> <span class="m">✓ src/auth/session.test.ts &gt; refresh &gt; rotates the token</span>            <span class="d">│</span>
+<span class="d">│</span> <span class="m">✓ src/auth/session.test.ts &gt; refresh &gt; keeps user id</span>                <span class="d">│</span>
+<span class="d">│</span> <span class="m">✓ src/auth/session.test.ts &gt; refresh &gt; rejects expired</span>              <span class="d">│</span>
+<span class="d">│</span> <span class="m">  ⋮  232 more rows — frame keeps growing  ⋮</span>                          <span class="d">│</span></pre>
+  <p class="note"><span class="good">✓</span> Nothing hidden, no fold semantics to learn. <span class="bad">✗</span> One `pnpm install` or a failing build pushes the SUMO frame to hundreds of rows; the outcome line ends up <b>below the fold of the viewport</b> anyway, and the transcript becomes mostly tool noise. Scrolling the transcript ≠ scrolling the tool.</p>
+</div>
+
+<div class="opt">
+  <header><span class="k">4</span><span class="t">HEAD only, raised cap (current behaviour)</span><span class="rows">12 rows</span></header>
+<pre class="term"><span class="d">╭─</span> <span class="t">[bash]</span> <span class="f">pnpm test src/auth</span> <span class="d">──────────────────────────────────</span> <span class="ok">✓</span> <span class="m">1.2s</span> <span class="d">─╮</span>
+<span class="d">│</span> <span class="a">&gt;</span> <span class="f">pnpm test src/auth</span>                                                 <span class="d">│</span>
+<span class="d">│</span> <span class="m">RUN  v3.2.4  /Volumes/SumoDeus NVMe/code/sumocode</span>                   <span class="d">│</span>
+<span class="d">│</span> <span class="t">⚠ deprecated option `threads`, use `pool` (vitest.config.ts)</span>        <span class="d">│</span>
+<span class="d">│</span> <span class="m">✓ src/auth/session.test.ts &gt; create &gt; issues a session</span>              <span class="d">│</span>
+<span class="d">│</span> <span class="m">✓ src/auth/session.test.ts &gt; create &gt; sets expiry</span>                   <span class="d">│</span>
+<span class="d">│</span> <span class="m">✓ src/auth/session.test.ts &gt; create &gt; signs payload</span>                 <span class="d">│</span>
+<span class="d">│</span> <span class="m">✓ src/auth/session.test.ts &gt; create &gt; rejects empty user</span>            <span class="d">│</span>
+<span class="d">│</span> <span class="m">✓ src/auth/session.test.ts &gt; refresh &gt; rotates the token</span>            <span class="d">│</span>
+<span class="d">│</span> <span class="m">✓ src/auth/session.test.ts &gt; refresh &gt; keeps user id</span>                <span class="d">│</span>
+<span class="d">│</span> <span class="fold">↓ 232 more lines</span>                                                     <span class="d">│</span>
+<span class="d">╰──────────────────────────────────────────────────────────────────────╯</span></pre>
+  <p class="note"><span class="good">✓</span> Simplest; matches today's mental model. <span class="bad">✗</span> The pass/fail summary — <b>the line you are watching for</b> — is exactly what gets cut. Raising the cap just moves where it gets cut.</p>
+</div>
+
+</div>
+
+<p class="sub" style="margin-top:36px">The same policy applies to <span class="f">[read]</span> (head is natural: file starts at line 1), <span class="f">[edit]</span> (hunks: head + tail rarely helps — show first N hunks), and <span class="f">subagent</span> ledgers (tail is natural: latest activity line). So the real choice is only for <b>streaming process output</b>: bash, terminal_*, test/build runners.</p>
+</body>
+</html>

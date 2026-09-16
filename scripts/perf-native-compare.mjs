@@ -1,26 +1,24 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { cpus, platform, arch, tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import xterm from "@xterm/headless";
 import { spawn as spawnPty } from "node-pty";
+import { readNativeArtifactIdentity } from "./lib/native-artifact.mjs";
 import { resetFixture } from "./perf-startup-compare.mjs";
 
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_SAMPLES = 15;
 const SAMPLE_TIMEOUT_MS = 30_000;
-const EDITOR_IMPROVEMENT_GATE_MS = 250;
 const FLAGS = Object.freeze(["--offline", "--no-extensions", "--no-session", "--approve"]);
 const REQUIRED_EVENTS = Object.freeze(["terminal_index_ready", "editor_ready", "hydration_committed", "command_ready"]);
 const EDIT_SENTINEL = "native-perf-edit-sentinel";
 const execFileAsync = promisify(execFile);
 
 function usage() {
-	return `Usage: node scripts/perf-native-compare.mjs [options]\n\nOptions:\n  --samples <count>       samples per arm (default: ${DEFAULT_SAMPLES})\n  --fixture-count <count> settled terminal records (default: 0)\n  --out <dir>             new report files in this directory (default: private temporary directory)\n  -h, --help              show this help\n`;
+	return `Usage: node scripts/perf-native-compare.mjs --baseline <archive> --candidate <archive> [options]\n\nOptions:\n  --baseline <dir>       clean native archive used as the fixed baseline\n  --candidate <dir>      clean native archive being evaluated\n  --fixture-count <n>    settled terminal records (default: 0)\n  --out <dir>            new report files (default: private temporary directory)\n  -h, --help             show this help\n\nEvery comparison collects exactly ${DEFAULT_SAMPLES} samples per artifact.\n`;
 }
 
 function positiveInteger(value, flag) {
@@ -36,27 +34,18 @@ export function nativeCompareOptions(argv) {
 		const arg = argv[index];
 		if (arg === "-h" || arg === "--help") return { ...options, help: true };
 		const value = argv[index + 1];
-		if (["--samples", "--fixture-count", "--out"].includes(arg) && value === undefined) throw new Error(`${arg} requires a value`);
+		if (["--baseline", "--candidate", "--fixture-count", "--out"].includes(arg) && value === undefined) throw new Error(`${arg} requires a value`);
 		switch (arg) {
-			case "--samples": options.samples = positiveInteger(value, arg); index += 1; break;
+			case "--baseline": options.baselineDir = resolve(value); index += 1; break;
+			case "--candidate": options.candidateDir = resolve(value); index += 1; break;
 			case "--fixture-count": options.fixtureCount = value === "0" ? 0 : positiveInteger(value, arg); index += 1; break;
 			case "--out": options.outDir = resolve(value); index += 1; break;
 			default: throw new Error(`unknown option: ${arg}`);
 		}
 	}
+	if (!options.help && !options.baselineDir) throw new Error("--baseline is required");
+	if (!options.help && !options.candidateDir) throw new Error("--candidate is required");
 	return options;
-}
-
-function nativeArchive() {
-	const pkg = JSON.parse(requireText(join(ROOT, "package.json")));
-	const tag = `${process.platform === "darwin" ? "macos" : process.platform}-${process.arch}`;
-	return join(ROOT, "dist/native", `sumocode-${pkg.version}-${tag}`);
-}
-
-function requireText(path) {
-	// This startup-only read stays synchronous so option/build failures surface
-	// before any fixture or PTY process is created.
-	return readFileSync(path, "utf8");
 }
 
 async function readEvents(path) {
@@ -66,22 +55,19 @@ async function readEvents(path) {
 				const value = JSON.parse(line);
 				// oxlint-disable-next-line anti-slop/no-runtime-typeof -- parsed diagnostics JSONL boundary
 				return value && typeof value === "object" ? [value] : [];
-			} catch {
-				return [];
-			}
+			} catch { return []; }
 		});
-	} catch {
-		return [];
-	}
+	} catch { return []; }
 }
 
-function isolatedEnv(agentDir, diagFile, arm) {
+function isolatedEnv(agentDir, diagFile) {
 	const env = {};
 	for (const key of ["PATH", "LANG", "LC_ALL", "TZ", "SHELL"]) {
 		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- ProcessEnv child-process boundary
 		if (typeof process.env[key] === "string") env[key] = process.env[key];
 	}
-	Object.assign(env, {
+	return {
+		...env,
 		HOME: join(agentDir, "home"),
 		PI_CODING_AGENT_DIR: agentDir,
 		SUMOCODE_STATE_DIR: join(agentDir, "sumocode-state"),
@@ -89,40 +75,20 @@ function isolatedEnv(agentDir, diagFile, arm) {
 		SUMO_TUI_DIAG_FILE: diagFile,
 		SUMOCODE_PUBLIC_STARTUP_DIAGNOSTICS: "1",
 		SUMO_TUI_DEBUG: "0",
+		PI_BIN: "",
 		TMPDIR: join(agentDir, "tmp"),
 		TERM: "xterm-256color",
-	});
-	if (arm === "native") {
-		env.PI_BIN = "";
-	} else {
-		env.PI_BIN = join(ROOT, "node_modules/.bin/pi");
-		env.NODE_COMPILE_CACHE = join(agentDir, "compile-cache");
-		env.NODE_OPTIONS = `--require "${join(ROOT, "scripts/startup-diagnostics-preload.cjs")}"`;
-		env.SUMOCODE_HOST_BUNDLE = arm === "node-bundle" ? "1" : "0";
-		env.SUMOCODE_EXTENSION_BUNDLE = arm === "node-bundle" ? "1" : "0";
-	}
-	return env;
-}
-
-function armCommand(arm) {
-	return arm === "native" ? join(nativeArchive(), "bin/sumocode") : join(ROOT, "bin/sumocode.sh");
+	};
 }
 
 function signalTree(child, signal) {
-	try {
-		process.kill(-child.pid, signal);
-	} catch (error) {
-		if (error?.code !== "ESRCH") throw error;
-	}
+	try { process.kill(-child.pid, signal); }
+	catch (error) { if (error?.code !== "ESRCH") throw error; }
 }
 
 function treeAlive(pid) {
-	try {
-		process.kill(-pid, 0);
-		return true;
-	} catch {
-		return false;
-	}
+	try { process.kill(-pid, 0); return true; }
+	catch { return false; }
 }
 
 async function waitForTreeExit(pid, timeoutMs) {
@@ -130,35 +96,22 @@ async function waitForTreeExit(pid, timeoutMs) {
 	while (treeAlive(pid) && Date.now() < deadline) await new Promise((resolveDelay) => setTimeout(resolveDelay, 20));
 }
 
-async function replay(output) {
-	const terminal = new xterm.Terminal({ cols: 100, rows: 30, allowProposedApi: true, scrollback: 0 });
-	await new Promise((resolveWrite) => terminal.write(output, resolveWrite));
-	return terminal;
-}
-
 async function editorProbe(output) {
-	const terminal = await replay(output);
+	const terminal = new xterm.Terminal({ cols: 100, rows: 30, allowProposedApi: true, scrollback: 0 });
 	try {
+		await new Promise((resolveWrite) => terminal.write(output, resolveWrite));
 		const buffer = terminal.buffer.active;
-		const cursorY = buffer.cursorY;
-		const cursorX = buffer.cursorX;
-		const line = buffer.getLine(cursorY)?.translateToString(true) ?? "";
+		const line = buffer.getLine(buffer.cursorY)?.translateToString(true) ?? "";
 		const sentinelStart = line.indexOf(EDIT_SENTINEL);
-		return sentinelStart >= 0 && cursorX >= sentinelStart + EDIT_SENTINEL.length;
-	} finally {
-		terminal.dispose();
-	}
+		return sentinelStart >= 0 && buffer.cursorX >= sentinelStart + EDIT_SENTINEL.length;
+	} finally { terminal.dispose(); }
 }
 
-async function runSample({ arm, agentDir, diagFile, fixtureCount, index }) {
+async function runSampleProcess({ artifact, agentDir, diagFile, fixtureCount, index }) {
 	await resetFixture(agentDir, fixtureCount);
 	const startedAt = Date.now();
-	const child = spawnPty(armCommand(arm), [...FLAGS], {
-		name: "xterm-256color",
-		cols: 100,
-		rows: 30,
-		cwd: join(agentDir, "project"),
-		env: isolatedEnv(agentDir, diagFile, arm),
+	const child = spawnPty(join(artifact.artifactDir, "bin/sumocode"), [...FLAGS], {
+		name: "xterm-256color", cols: 100, rows: 30, cwd: join(agentDir, "project"), env: isolatedEnv(agentDir, diagFile),
 	});
 	let output = "";
 	let exited = false;
@@ -182,16 +135,10 @@ async function runSample({ arm, agentDir, diagFile, fixtureCount, index }) {
 		child.write(EDIT_SENTINEL);
 		const editDeadline = Date.now() + 3_000;
 		while (!exited && Date.now() < editDeadline) {
-			if (await editorProbe(output)) {
-				editorResponsive = true;
-				break;
-			}
+			if (await editorProbe(output)) { editorResponsive = true; break; }
 			await new Promise((resolveDelay) => setTimeout(resolveDelay, 20));
 		}
 	}
-	// Snapshot natural exit immediately before harness shutdown. The exit
-	// callback will (correctly) fire after SIGINT and must not retroactively
-	// classify a clean sample as process-failed.
 	const exitedBeforeShutdown = exited;
 	const aliveBeforeShutdown = treeAlive(child.pid);
 	if (aliveBeforeShutdown) signalTree(child, "SIGINT");
@@ -202,32 +149,28 @@ async function runSample({ arm, agentDir, diagFile, fixtureCount, index }) {
 	await waitForTreeExit(child.pid, 250);
 
 	const terminalReady = byName.get("terminal_index_ready");
-	const fixtureMatches = terminalReady?.snapshotCount === fixtureCount;
 	const editorTs = byName.get("editor_ready")?.ts;
 	const commandTs = byName.get("command_ready")?.ts;
-	const ok = aliveBeforeShutdown
-		&& !exitedBeforeShutdown
-		&& !treeAlive(child.pid)
-		&& missingEvents.length === 0
-		&& fixtureMatches
-		&& editorResponsive
-		&& Number.isFinite(editorTs)
-		&& Number.isFinite(commandTs);
+	const fixtureMatches = terminalReady?.snapshotCount === fixtureCount;
+	const ok = aliveBeforeShutdown && !exitedBeforeShutdown && !treeAlive(child.pid)
+		&& missingEvents.length === 0 && fixtureMatches && editorResponsive
+		&& Number.isFinite(editorTs) && Number.isFinite(commandTs) && commandTs >= editorTs;
 	return ok
 		? {
-			index, arm, ok: true,
-			editorReadyMs: editorTs - startedAt,
-			commandReadyMs: commandTs - startedAt,
-			terminalIndexMs: terminalReady.durationMs,
-		}
+				index, ok: true,
+				editorReadyMs: editorTs - startedAt,
+				commandReadyMs: commandTs - startedAt,
+				editorToCommandGapMs: commandTs - editorTs,
+				terminalIndexMs: terminalReady.durationMs,
+			}
 		: {
-			index, arm, ok: false,
-			failure: treeAlive(child.pid) ? "shutdown-failed"
-				: exitedBeforeShutdown || !aliveBeforeShutdown ? "process-failed"
-					: missingEvents.length > 0 ? `missing-events:${missingEvents.join(",")}`
-						: !fixtureMatches ? `fixture-mismatch:${String(terminalReady?.snapshotCount)}`
-							: !editorResponsive ? "editor-probe-failed" : "invalid-timestamp",
-		};
+				index, ok: false,
+				failure: treeAlive(child.pid) ? "shutdown-failed"
+					: exitedBeforeShutdown || !aliveBeforeShutdown ? "process-failed"
+						: missingEvents.length > 0 ? `missing-events:${missingEvents.join(",")}`
+							: !fixtureMatches ? `fixture-mismatch:${String(terminalReady?.snapshotCount)}`
+								: !editorResponsive ? "editor-probe-failed" : "invalid-timestamp",
+			};
 }
 
 function round(value) {
@@ -242,120 +185,125 @@ function median(values) {
 }
 
 function stats(samples, field) {
-	const values = samples.flatMap((sample) => sample.ok ? [sample[field]] : []);
+	const values = samples.flatMap((sample) => sample.ok && Number.isFinite(sample[field]) ? [sample[field]] : []);
 	const center = median(values);
 	const mad = center === null ? null : median(values.map((value) => Math.abs(value - center)));
+	return { medianMs: center === null ? null : round(center), madMs: mad === null ? null : round(mad), values: values.map(round) };
+}
+
+function summarizeArm(samples) {
 	return {
-		medianMs: center === null ? null : round(center),
-		madMs: mad === null ? null : round(mad),
-		failures: samples.length - values.length,
-		values: values.map(round),
+		failures: samples.filter((sample) => !sample.ok).length,
+		editorReady: stats(samples, "editorReadyMs"),
+		commandReady: stats(samples, "commandReadyMs"),
+		editorToCommandGap: stats(samples, "editorToCommandGapMs"),
+		terminalIndex: stats(samples, "terminalIndexMs"),
+		samples,
 	};
 }
 
+/** Deterministic native adoption policy; wall-clock collection stays outside this function. */
 export function evaluateNativeGate(report) {
-	const baseline = report.arms["node-bundle"];
-	const native = report.arms.native;
-	const failures = Object.values(report.arms).reduce((count, arm) => count + arm.failures, 0);
-	const mediansValid = [
-		baseline.commandReady.medianMs,
-		native.commandReady.medianMs,
-		baseline.editorReady.medianMs,
-		native.editorReady.medianMs,
-	].every(Number.isFinite);
-	const editorImprovementMs = mediansValid ? baseline.editorReady.medianMs - native.editorReady.medianMs : 0;
-	const commandRegressionMs = mediansValid ? native.commandReady.medianMs - baseline.commandReady.medianMs : 0;
-	const improved = mediansValid
-		&& failures === 0
-		&& editorImprovementMs >= EDITOR_IMPROVEMENT_GATE_MS
-		&& commandRegressionMs <= 0;
+	const baseline = summarizeArm(report.arms.baseline.samples);
+	const candidate = summarizeArm(report.arms.candidate.samples);
+	const collectionComplete = report.samplesPerArm === DEFAULT_SAMPLES
+		&& report.arms.baseline.samples.length === DEFAULT_SAMPLES
+		&& report.arms.candidate.samples.length === DEFAULT_SAMPLES
+		&& baseline.failures === 0 && candidate.failures === 0
+		&& [baseline, candidate].every((arm) => [arm.editorReady.medianMs, arm.commandReady.medianMs, arm.editorToCommandGap.medianMs].every(Number.isFinite));
+	const failedChecks = [];
+	if (!collectionComplete) failedChecks.push("collection");
+	const editorLimitMs = baseline.editorReady.medianMs === null || baseline.editorReady.madMs === null
+		? null : round(baseline.editorReady.medianMs + baseline.editorReady.madMs);
+	if (collectionComplete && candidate.editorReady.medianMs > editorLimitMs) failedChecks.push("editor-ready");
+	if (collectionComplete && candidate.commandReady.medianMs > baseline.commandReady.medianMs) failedChecks.push("command-ready");
+	if (collectionComplete && candidate.editorToCommandGap.medianMs > baseline.editorToCommandGap.medianMs) failedChecks.push("editor-to-command-gap");
 	return {
-		verdict: improved ? "improved" : "failed",
-		editorImprovementMs: round(editorImprovementMs),
-		commandRegressionMs: round(commandRegressionMs),
-		zeroFailures: failures === 0,
-		reason: improved
-			? `native editor-ready improved ${round(editorImprovementMs)}ms vs Node bundles; command-ready changed ${round(commandRegressionMs)}ms`
-			: `requires >=${EDITOR_IMPROVEMENT_GATE_MS}ms editor improvement, no command regression, and zero failures; observed editor ${round(editorImprovementMs)}ms, command ${round(commandRegressionMs)}ms, failures ${failures}`,
+		verdict: failedChecks.length === 0 ? "passed" : "failed",
+		failedChecks,
+		limits: {
+			editorReadyMs: editorLimitMs,
+			commandReadyMs: baseline.commandReady.medianMs,
+			editorToCommandGapMs: baseline.editorToCommandGap.medianMs,
+		},
+		observed: {
+			editorReadyMs: candidate.editorReady.medianMs,
+			commandReadyMs: candidate.commandReady.medianMs,
+			editorToCommandGapMs: candidate.editorToCommandGap.medianMs,
+		},
 	};
 }
 
-async function gitSha() {
-	return (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" })).stdout.trim();
-}
-
-async function bunVersion() {
-	const candidate = process.env.BUN_BIN ?? "bun";
-	return (await execFileAsync(candidate, ["--version"], { encoding: "utf8" })).stdout.trim();
+function reportIdentity(identity) {
+	return { sourceCommit: identity.sourceCommit, sourceClean: identity.sourceClean, artifactSha256: identity.artifactSha256 };
 }
 
 function markdown(report) {
-	const rows = ["dev-source", "node-bundle", "native"].map((name) => {
+	const row = (name) => {
 		const arm = report.arms[name];
-		return `| ${name} | ${arm.commandReady.medianMs} ± ${arm.commandReady.madMs} | ${arm.editorReady.medianMs} ± ${arm.editorReady.madMs} | ${arm.failures} |`;
-	}).join("\n");
-	return `# Native startup comparison\n\n- commit: \`${report.commit}\`\n- platform: ${report.machine.platform}-${report.machine.arch}\n- CPU: ${report.machine.cpu}\n- Bun: ${report.machine.bun}\n- fixture records: ${report.fixtureCount}\n- samples per arm: ${report.samplesPerArm}\n- execution: sequential, alternating dev source / Node bundle / native artifacts\n\n| arm | command-ready median ± MAD (ms) | editor-ready median ± MAD (ms) | failures |\n| --- | ---: | ---: | ---: |\n${rows}\n\nGate: **${report.gate.verdict}** — ${report.gate.reason}.\n`;
+		return `| ${name} | \`${report.artifacts[name].sourceCommit.slice(0, 12)}\` | \`${report.artifacts[name].artifactSha256.slice(0, 12)}\` | ${arm.editorReady.medianMs} ± ${arm.editorReady.madMs} | ${arm.commandReady.medianMs} ± ${arm.commandReady.madMs} | ${arm.editorToCommandGap.medianMs} ± ${arm.editorToCommandGap.madMs} | ${arm.failures} |`;
+	};
+	return `# Native startup regression comparison\n\n- samples per artifact: ${report.samplesPerArm}\n- fixture records: ${report.fixtureCount}\n- execution: alternating baseline/candidate artifacts under one isolated fixture environment\n- platform: ${report.machine.platform}-${report.machine.arch}\n\n| arm | source | artifact | editor-ready median ± MAD | command-ready median ± MAD | editor→command median ± MAD | failures |\n| --- | --- | --- | ---: | ---: | ---: | ---: |\n${row("baseline")}\n${row("candidate")}\n\nGate: **${report.gate.verdict.toUpperCase()}**${report.gate.failedChecks.length > 0 ? ` — ${report.gate.failedChecks.join(", ")}` : ""}.\n`;
 }
 
-async function prepareNativeReportDirectory(outDir, fixtureCount) {
-	if (outDir === undefined) return await mkdtemp(join(tmpdir(), `sumocode-native-perf-${fixtureCount}-`));
-	await mkdir(outDir, { recursive: true, mode: 0o700 });
-	const entries = new Set(await readdir(outDir));
+async function prepareReportDirectory(outDir, fixtureCount) {
+	const target = outDir ?? await mkdtemp(join(tmpdir(), `sumocode-native-regression-${fixtureCount}-`));
+	await mkdir(target, { recursive: true, mode: 0o700 });
+	const entries = new Set(await readdir(target));
 	for (const name of ["results.json", "report.md"]) {
 		if (entries.has(name)) throw new Error(`--out already contains ${name}; refusing to overwrite it`);
 	}
-	return outDir;
+	return target;
 }
 
-export async function runNativeComparison(options) {
-	const outDir = await prepareNativeReportDirectory(options.outDir, options.fixtureCount);
-	const archive = nativeArchive();
-	for (const path of [
-		join(archive, "bin/sumocode"),
-		join(ROOT, "dist/host/sumo-rpc-host.bundle.mjs"),
-		join(ROOT, "dist/extension/sumocode-extension.bundle.mjs"),
-	]) {
-		try { await chmod(path, 0o755); } catch { throw new Error(`required artifact missing: ${path}; run pnpm build:bundles && pnpm build:native`); }
+async function defaultMachineMetadata() {
+	const bun = (await execFileAsync(process.env.BUN_BIN ?? "bun", ["--version"], { encoding: "utf8" })).stdout.trim();
+	return { platform: platform(), arch: arch(), cpu: `${cpus()[0]?.model ?? "unknown"} × ${cpus().length}`, bun };
+}
+
+export async function runNativeComparison(options, dependencies = {}) {
+	const outDir = await prepareReportDirectory(options.outDir, options.fixtureCount);
+	const readArtifact = dependencies.readArtifact ?? readNativeArtifactIdentity;
+	const [baselineArtifact, candidateArtifact] = await Promise.all([
+		readArtifact(options.baselineDir),
+		readArtifact(options.candidateDir),
+	]);
+	if (baselineArtifact.artifactSha256 === candidateArtifact.artifactSha256) {
+		throw new Error("comparison requires two distinct native artifacts");
 	}
-	const agentDir = await mkdtemp(join(outDir, "fixture-agent-"));
-	const raw = { "dev-source": [], "node-bundle": [], native: [] };
-	const armOrders = [
-		["dev-source", "node-bundle", "native"],
-		["native", "node-bundle", "dev-source"],
-	];
+	const agentDir = await mkdtemp(join(tmpdir(), "sumocode-native-regression-agent-"));
+	const raw = { baseline: [], candidate: [] };
+	const runSample = dependencies.runSample ?? runSampleProcess;
 	try {
-		for (let index = 0; index < options.samples; index += 1) {
-			for (const arm of armOrders[index % armOrders.length]) {
-				const diagFile = join(outDir, `${String(index).padStart(2, "0")}-${arm}.jsonl`);
-				const sample = await runSample({ arm, agentDir, diagFile, fixtureCount: options.fixtureCount, index });
+		for (let index = 0; index < DEFAULT_SAMPLES; index += 1) {
+			const order = index % 2 === 0 ? ["baseline", "candidate"] : ["candidate", "baseline"];
+			for (const arm of order) {
+				const diagFile = join(agentDir, `${String(index).padStart(2, "0")}-${arm}.jsonl`);
+				const artifact = arm === "baseline" ? baselineArtifact : candidateArtifact;
+				let sample;
+				try { sample = await runSample({ arm, artifact, agentDir, diagFile, fixtureCount: options.fixtureCount, index }); }
+				catch { sample = { index, ok: false, failure: "process-failed" }; }
 				raw[arm].push(sample);
-				console.error(`[native perf] fixture=${options.fixtureCount} sample=${index + 1}/${options.samples} arm=${arm} ${sample.ok ? "ok" : sample.failure}`);
+				console.error(`[native regression] sample=${index + 1}/${DEFAULT_SAMPLES} arm=${arm} ${sample.ok ? "ok" : sample.failure}`);
 			}
 		}
-		const arms = Object.fromEntries(Object.entries(raw).map(([name, samples]) => [name, {
-			failures: samples.filter((sample) => !sample.ok).length,
-			editorReady: stats(samples, "editorReadyMs"),
-			commandReady: stats(samples, "commandReadyMs"),
-			terminalIndex: stats(samples, "terminalIndexMs"),
-			samples,
-		}]));
 		const report = {
-			commit: await gitSha(),
+			schemaVersion: 1,
 			generatedAt: new Date().toISOString(),
 			fixtureCount: options.fixtureCount,
-			samplesPerArm: options.samples,
-			machine: {
-				platform: platform(), arch: arch(),
-				cpu: `${cpus()[0]?.model ?? "unknown"} × ${cpus().length}`,
-				node: process.version,
-				bun: await bunVersion(),
-			},
-			arms,
+			samplesPerArm: DEFAULT_SAMPLES,
+			flags: [...FLAGS],
+			artifacts: { baseline: reportIdentity(baselineArtifact), candidate: reportIdentity(candidateArtifact) },
+			machine: await (dependencies.machineMetadata ?? defaultMachineMetadata)(),
+			arms: { baseline: summarizeArm(raw.baseline), candidate: summarizeArm(raw.candidate) },
 		};
-		report.gate = evaluateNativeGate(report);
+		report.gate = evaluateNativeGate({
+			samplesPerArm: report.samplesPerArm,
+			arms: { baseline: { samples: raw.baseline }, candidate: { samples: raw.candidate } },
+		});
 		await writeFile(join(outDir, "results.json"), `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600, flag: "wx" });
 		await writeFile(join(outDir, "report.md"), markdown(report), { mode: 0o600, flag: "wx" });
-		console.error(`[native perf] artifacts: ${outDir}`);
+		console.error(`[native regression] artifacts: ${outDir}`);
 		return report;
 	} finally {
 		await rm(agentDir, { recursive: true, force: true });
@@ -364,19 +312,16 @@ export async function runNativeComparison(options) {
 
 export async function main(argv = process.argv.slice(2)) {
 	const options = nativeCompareOptions(argv);
-	if (options.help) {
-		console.log(usage());
-		return undefined;
-	}
+	if (options.help) { console.log(usage()); return undefined; }
 	const report = await runNativeComparison(options);
 	console.log(markdown(report));
-	if (report.gate.verdict !== "improved") throw new Error(report.gate.reason);
+	if (report.gate.verdict !== "passed") throw new Error(`native startup regression: ${report.gate.failedChecks.join(", ")}`);
 	return report;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
 	main().catch((error) => {
-		console.error(`[native perf] failed: ${error instanceof Error ? error.message : String(error)}`);
+		console.error(`[native regression] failed: ${error instanceof Error ? error.message : String(error)}`);
 		process.exitCode = 1;
 	});
 }

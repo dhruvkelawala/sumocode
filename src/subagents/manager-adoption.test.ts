@@ -122,7 +122,7 @@ function fixture(backend: "headless" | "visible" = "headless", worktreeResult = 
 	const snapshot: SubagentSnapshot = { id: record.id, title: "worker", prompt: "task", cwd: taskDir, baseRef: "HEAD", status: "running", createdAt: 1000,
 		visible: backend === "visible", pane: supervisor.record.pane ?? undefined, usage: { turns: 0 }, transcript: [], liveText: "", liveTools: [], finalText: "" };
 	function install(session: string, retainedLaunch = false, token = session) {
-		type Handler = (event: { type: string; reason: string }, ctx: ExtensionContext) => void | Promise<void>;
+		type Handler = (event: { type: string; reason: string; targetSessionFile?: string }, ctx: ExtensionContext) => void | Promise<void>;
 		const handlers = new Map<string, Handler>();
 		const delivery = vi.fn();
 		const api = { on: (name: string, handler: Handler) => { handlers.set(name, handler); }, registerTool: vi.fn(), sendMessage: delivery, exec: vi.fn() };
@@ -133,9 +133,13 @@ function fixture(backend: "headless" | "visible" = "headless", worktreeResult = 
 			return supervisor.controllerChild(controlAuthority(granted));
 		} : spawn,
 			managerDependencies: { controllerIdentity: identities(token), processOperations: operations, captureGitContext: async () => ({}), buildCompletionManifest: async () => ({ baseRef: "HEAD", changedPaths: [], commits: 0, exit: "interrupted", durationMs: 1 }) } });
-		const fire = async (name: string, reason = "startup") => {
-			// SAFETY: these lifecycle handlers read only idle/UI flags and the session ID.
-			await handlers.get(name)?.({ type: name, reason }, { isIdle: () => idle, hasUI: false, sessionManager: { getSessionId: () => session } } as never);
+		const fire = async (name: string, reason = "startup", targetSession = session === "origin" ? "successor" : "final") => {
+			// SAFETY: these lifecycle handlers read only idle/UI flags and session identity.
+			await handlers.get(name)?.({ type: name, reason,
+				targetSessionFile: name === "session_shutdown" ? join(root, `${targetSession}.jsonl`) : undefined,
+			}, { isIdle: () => idle, hasUI: false, sessionManager: {
+				getSessionId: () => session, getSessionFile: () => join(root, `${session}.jsonl`),
+			} } as never);
 		};
 		return { manager, delivery, fire };
 	}
@@ -172,6 +176,26 @@ describe("durable sender delivery", () => {
 		expect(runtime.manager.get("sa-worker-1")).toMatchObject({ status: "running", deliveredTurnSequence: 1, deliveredTurnText: "idle report\n" });
 		f.publishTurn("same sequence must not reread");
 		expect(runtime.manager.get("sa-worker-1")?.finalText).toBe("idle report\n");
+	});
+
+	it("retries same-session disk recovery after a dead controller lease expires", async () => {
+		const f = fixture();
+		const old = f.install("origin");
+		await f.track(old);
+		await f.finish();
+		old.manager.detachForReplacement();
+		f.writerState("dead");
+		f.originState("dead");
+		const next = f.install("origin", false, "successor");
+
+		await next.manager.reconstruct(f.registry, "origin");
+		expect(next.manager.get("sa-worker-1")).toBeUndefined();
+
+		await vi.advanceTimersByTimeAsync(60_001);
+		expect(next.manager.get("sa-worker-1")).toMatchObject({ recovery: "adopted", status: "done", finalText: "answer" });
+		await next.fire("agent_end");
+		await next.fire("agent_end");
+		expect(next.delivery).toHaveBeenCalledOnce();
 	});
 
 	it("records lost work when disk recovery takes over an expired dead writer", async () => {
@@ -467,7 +491,7 @@ describe("manager replacement adoption", () => {
 		await runtime.fire("session_start");
 		await f.track(runtime);
 		f.setIdle(false);
-		await runtime.fire("session_shutdown", "new");
+		await runtime.fire("session_shutdown", "new", "origin");
 		await runtime.fire("session_start", "new");
 		await f.finish();
 		expect(runtime.delivery).not.toHaveBeenCalled();
@@ -570,7 +594,7 @@ describe("manager replacement adoption", () => {
 		const f = fixture();
 		const old = f.install("origin");
 		const authority = await f.track(old);
-		await old.fire("session_shutdown", "reload");
+		await old.fire("session_shutdown", "reload", "origin");
 		const next = f.install("origin", false, "reload-controller");
 		await next.fire("session_start", "reload");
 		expect(f.registry.get("sa-worker-1")).toMatchObject({ ownerSessionId: "origin", controllerSessionId: "origin", controllerGeneration: 1, controlLease: { owner: { token: "reload-controller" } } });

@@ -174,9 +174,9 @@ it.each(["alive", "unknown"] as const)("does not acquire control when the old ho
 	expect(f.send).not.toHaveBeenCalled(); expect(f.operations.signalTree).not.toHaveBeenCalled();
 });
 
-it("requires expiry as well as proved death, and fences two successor CAS contenders", async () => {
+it("defers proved-dead control until expiry, then fences two successor CAS contenders", async () => {
 	const f = await fixture(); vi.setSystemTime(1999);
-	expect((await f.recover())[0].classification).toBe("ambiguous");
+	expect(await f.recover()).toEqual([]);
 	vi.setSystemTime(2001);
 	const current = f.owner.record;
 	const registry = f.registry.forController(f.next);

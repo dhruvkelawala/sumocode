@@ -215,6 +215,7 @@ export class SubagentManager {
 	private nextId = 1;
 	private readonly idNamespace?: string;
 	private healthTimer?: ReturnType<typeof setInterval>;
+	private recoveryTimer?: ReturnType<typeof setTimeout>;
 	private readonly pendingSpawns = new Map<string, { title: string; createdAt: number }>();
 	private readonly launching = new Map<string, { controller: AbortController; done: Promise<void> }>();
 	private readonly queuedTasks: Array<{ task: SpawnSubagentTask; id: string; createdAt: number; generation: number }> = [];
@@ -352,7 +353,9 @@ export class SubagentManager {
 
 	/** Installation-scoped disk discovery; no prior manager or backend handle is accepted. */
 	public async reconstruct(registry: RetainedSubagent["registry"], sessionId: string): Promise<void> {
-		for (const result of await reconstructRetained(registry, this.controllerIdentity, sessionId, this.operations, this.terminalHost, this.pi)) {
+		let retryAt: number | undefined;
+		for (const result of await reconstructRetained(registry, this.controllerIdentity, sessionId, this.operations, this.terminalHost, this.pi,
+			(candidate) => { retryAt = Math.min(retryAt ?? candidate, candidate); })) {
 			const id = result.entry.snapshot.id;
 			if (this.detached || this.snapshots.has(id)) continue;
 			this.retained.set(id, { entry: result.entry, blocked: true });
@@ -361,7 +364,22 @@ export class SubagentManager {
 				try { this.bindRetained(result.entry, result.classification === "persist-only"); } catch { this.blockRetained(id, "ambiguous"); }
 			} else this.blockRetained(id, result.classification, result.reason);
 		}
+		this.scheduleRecoveryRetry(registry, sessionId, retryAt);
 		this.notify();
+	}
+
+	private scheduleRecoveryRetry(registry: RetainedSubagent["registry"], sessionId: string, retryAt: number | undefined): void {
+		clearTimeout(this.recoveryTimer);
+		this.recoveryTimer = undefined;
+		if (retryAt === undefined || this.detached) return;
+		this.recoveryTimer = setTimeout(() => {
+			this.recoveryTimer = undefined;
+			void this.reconstruct(registry, sessionId).catch(() => {
+				try { this.onDiagnostic?.({ kind: "listener", message: "retained recovery retry failed" }); }
+				catch { /* Diagnostics cannot restore refused recovery. */ }
+			});
+		}, Math.max(1, retryAt - Date.now() + 1));
+		this.recoveryTimer.unref();
 	}
 
 	public canDeliver(id: string): boolean {
@@ -1104,6 +1122,8 @@ export class SubagentManager {
 		for (const launch of this.launching.values()) launch.controller.abort();
 		clearInterval(this.healthTimer);
 		this.healthTimer = undefined;
+		clearTimeout(this.recoveryTimer);
+		this.recoveryTimer = undefined;
 		// In-flight setup cannot be synchronously interrupted, so advance the
 		// generation first. Every awaited setup path checks this token before it
 		// may construct a backend, preventing post-shutdown orphan children while

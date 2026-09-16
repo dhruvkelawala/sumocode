@@ -333,19 +333,18 @@ Mitigations that are genuinely available: `"sideEffects": []` (`effect/package.j
 
 ### 3.4 The gate
 
-`scripts/perf-native-compare.mjs` is the right instrument and it is already a hard gate:
+Issue #589 replaced the old Node-bundle-versus-native improvement benchmark with the reproducible adoption gate documented in [`docs/perf/adoption-baseline.md`](../../perf/adoption-baseline.md):
 
-- `evaluateNativeGate` (`perf-native-compare.mjs:256-280`) requires `editorImprovementMs >= EDITOR_IMPROVEMENT_GATE_MS` (**250 ms**, `:16`), `commandRegressionMs <= 0`, and **zero failures** across all three arms (`dev-source`, `node-bundle`, `native`), using **median ± MAD over 15 samples** (`:14,244-253`).
-- Required events per sample: `terminal_index_ready`, `editor_ready`, `hydration_committed`, `command_ready` (`:18`), collected through a real node-pty run with `--offline --no-extensions --no-session --approve` (`:17`).
-- `scripts/perf-startup-compare.mjs` is the *directional* gate for source-arm changes: `metricComparison` (`:453-470`) calls a metric `regressed` only when the candidate's `[median−MAD, median+MAD]` interval sits entirely above the baseline's; `overallVerdict` (`:472-483`) requires `MIN_DIRECTIONAL_SAMPLES` and zero failures.
-- `scripts/perf-startup.mjs` is explicitly **report-only, not a CI gate** (`:457`).
+- `scripts/perf-native-compare.mjs` requires two checksum-verified native archives. The baseline archive must match the pinned clean source commit, and each run records both archives' exact checksum identities; the harness alternates exactly 15 samples per artifact under one isolated fixture/environment.
+- `evaluateNativeGate` fails if any sample is missing or incomplete, if candidate `editor_ready` exceeds baseline median + baseline MAD, if `command_ready` rises at all, or if `editorToCommandGapMs` widens.
+- `scripts/perf-adoption-budget.mjs` gates source `host-import` plus classic/RPC extension bundle bytes and in-Pi-child evaluation for both source-built and native-distributed bundles.
+- `scripts/perf-startup-compare.mjs` remains the directional source-arm gate; its verdict must not be `REGRESSED`. `scripts/perf-startup.mjs` remains report-only.
 
-**Proposed Effect-campaign gate, per slice:**
+**Effect-campaign gate, per applicable slice:**
 
-1. Baseline `scripts/perf-native-compare.mjs --samples 15` on the pre-slice commit; record `native.editorReady.medianMs` and `native.commandReady.medianMs`.
-2. After the slice, rerun. **Fail the slice if `native.editorReady` median rises by more than 1 MAD, or if `commandReady` median rises at all.** (The existing 250 ms improvement gate is written against the *node-bundle vs native* comparison and stays as-is; the Effect campaign adds a native-vs-native regression check on top.)
-3. Run `scripts/perf-startup-compare.mjs` for the source arm and require verdict ≠ `REGRESSED`.
-4. Add one new invariant the current harness does not check: **`editorToCommandGapMs`** (already computed at `perf-startup.mjs:69-76`) must not widen — that is where B5's retry-policy change would show.
+1. Build the candidate native archive from a clean commit and compare it with the pinned pre-adoption archive using `pnpm perf:native:compare -- --baseline <archive> --candidate <archive> --out <dir>`.
+2. On a machine matching the recorded platform, architecture, Node, Bun, and CPU, run `pnpm perf:adoption -- --native <candidate-archive> --out <dir>` and the existing full-pass compiler budget checker.
+3. Run `pnpm perf:startup:compare -- --base <pre-adoption-ref> --samples 15 --out <dir>` for source startup.
 
 **Migrate first, without touching startup latency: B4 (prompt scheduler) and B3 (hydration gate).** B4 is genuinely off-path, has the strongest race evidence (four named tests), and is 293 LOC in one file with a 758-line test. B3 is 63 LOC with a dedicated test file. Together they force the `effect` dependency into the graph, which lets you *measure the module-eval floor in isolation* before any on-path logic changes — that measurement is the real gate on whether B1/B2/B6 happen at all.
 
@@ -461,7 +460,7 @@ Every slice keeps `runRpcHost(options): Promise<number>` and the four diagnostic
 
 ## 8. Honest section — where Effect will not help, or will hurt
 
-**Startup milliseconds.** This is the real risk and it is not hypothetical. Plan 117 spent an XL-effort campaign to get native `editor_ready` from 549 ms to 182 ms, and its gate demands ≥250 ms of improvement with zero command-ready regression. Effect's core is 257 KB (`Effect.js`) + 117 KB (`internal/effect.js`) of JS to parse before the first frame, and the Node arm doesn't even bundle it (`build-host.mjs:23` `packages: "external"`). Slice 1 exists specifically to measure this before committing. If it costs 20 ms, that is >10% of a hard-won budget for zero user-visible benefit.
+**Startup milliseconds.** This is the real risk and it is not hypothetical. Plan 117 spent an XL-effort campaign to get native `editor_ready` from 549 ms to 182 ms; its historical release gate demanded ≥250 ms of improvement with zero command-ready regression, while the current adoption gate is the native-vs-native policy in §3.4. Effect's core is 257 KB (`Effect.js`) + 117 KB (`internal/effect.js`) of JS to parse before the first frame, and the Node arm doesn't even bundle it (`build-host.mjs:23` `packages: "external"`). Slice 1 exists specifically to measure this before committing. If it costs 20 ms, that is >10% of a hard-won budget for zero user-visible benefit.
 
 **Bundle size inside the Bun executable.** `bun build --compile` runs with no `--minify` (`build-native.mjs:206-219`). Tree-shaking will work (`"sideEffects": []`), but `Effect.js`, `Layer.js`, `Queue.js`, `Deferred.js`, `Latch.js`, `FiberHandle.js` and their shared `internal/*` graph are heavily cross-referential; expect a meaningful fraction of the 374 KB core to survive. `Schema.js` at 332 KB should be treated as opt-in per-message-type, never as the default decoder.
 

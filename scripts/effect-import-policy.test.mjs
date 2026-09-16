@@ -31,6 +31,7 @@ export default defineConfig({
 		cwd: useRepositoryConfig ? root : directory,
 		encoding: "utf8",
 	});
+	if (result.error) throw result.error;
 	return { status: result.status, output: `${result.stdout}${result.stderr}` };
 }
 
@@ -61,7 +62,11 @@ describe("Effect import policy", () => {
 	it.each([
 		["src/native/main.ts", tmpdir()],
 		["sumo-rpc-host.js", join(tmpdir(), "src")],
-	])("keeps all Effect imports out of plain launcher execution: %s", (filename, parent) => {
+		["src/footer.ts", tmpdir()],
+		["src/top-chrome.ts", tmpdir()],
+		["src/themes/cathedral.ts", tmpdir()],
+		["src/sumo-tui/pi-compat/tree-navigation-command.ts", tmpdir()],
+	])("keeps all Effect imports out of plain launcher/render execution: %s", (filename, parent) => {
 		const result = runLint(filename, 'import * as Effect from "effect/Effect";\nvoid Effect;\n', false, parent);
 
 		expect(result.status).toBe(1);
@@ -105,10 +110,10 @@ import * as Ndjson from "effect/unstable/encoding/Ndjson";
 void FastCheck;
 void Ndjson;
 `);
-		const testSupport = runLint("test/integration/harness.ts", `
+		const testSupport = runLint("test/src/harness.ts", `
 import * as FastCheck from "effect/testing/FastCheck";
 void FastCheck;
-`);
+`, false, join(tmpdir(), "src"));
 
 		expect(production.status, production.output).toBe(0);
 		expect(test.status, test.output).toBe(0);

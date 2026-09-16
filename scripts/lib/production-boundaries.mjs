@@ -6,10 +6,10 @@ function normalizePath(path) {
 	return path.replaceAll("\\", "/");
 }
 
-function importedPackage(path, packageNames) {
+function importedPackage(path, packageNames, allowBareSpecifier) {
 	const normalized = normalizePath(path);
 	for (const packageName of packageNames) {
-		if (normalized === packageName || normalized.startsWith(`${packageName}/`)) return packageName;
+		if (allowBareSpecifier && (normalized === packageName || normalized.startsWith(`${packageName}/`))) return packageName;
 		if (`/${normalized}`.includes(`/node_modules/${packageName}/`) || normalized.endsWith(`/node_modules/${packageName}`)) return packageName;
 	}
 	return undefined;
@@ -48,12 +48,15 @@ export function bundleJavaScriptText(outputFiles) {
 /** Reject forbidden dependencies whether bundled or left as artifact imports. */
 export function assertNoProductionDependencyLeakage(metafile, artifact, outputText = "") {
 	const candidates = [
-		...Object.keys(metafile.inputs ?? {}),
-		...Object.values(metafile.outputs ?? {}).flatMap((output) => (output.imports ?? []).map((imported) => imported.path)),
-		...moduleSpecifiers(outputText),
+		...Object.keys(metafile.inputs ?? {}).map((path) => ({ path, allowBareSpecifier: false })),
+		...Object.values(metafile.outputs ?? {}).flatMap((output) => (output.imports ?? []).map((imported) => ({
+			path: imported.path,
+			allowBareSpecifier: true,
+		}))),
+		...moduleSpecifiers(outputText).map((path) => ({ path, allowBareSpecifier: true })),
 	];
-	const leaks = candidates.flatMap((path) => {
-		const packageName = importedPackage(path, FORBIDDEN_PRODUCTION_PACKAGES);
+	const leaks = candidates.flatMap(({ path, allowBareSpecifier }) => {
+		const packageName = importedPackage(path, FORBIDDEN_PRODUCTION_PACKAGES, allowBareSpecifier);
 		return packageName ? [{ packageName, path }] : [];
 	});
 	if (leaks.length === 0) return;

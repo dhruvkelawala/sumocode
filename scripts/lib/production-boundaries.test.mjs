@@ -27,9 +27,12 @@ describe("production artifact dependency boundary", () => {
 		])).toBe('import "effect/Effect";');
 	});
 
-	it("accepts ordinary production inputs", () => {
+	it("accepts ordinary production inputs and similarly named source directories", () => {
 		expect(() => assertNoProductionDependencyLeakage({
-			inputs: { "node_modules/effect/dist/Effect.js": { imports: [] } },
+			inputs: {
+				"node_modules/effect/dist/Effect.js": { imports: [] },
+				"msgpackr/compat.ts": { imports: [] },
+			},
 			outputs: { "dist/bundle.js": { imports: [] } },
 		}, "host bundle")).not.toThrow();
 	});

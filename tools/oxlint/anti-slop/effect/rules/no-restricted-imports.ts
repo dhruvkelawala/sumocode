@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { defineRule } from "@oxlint/plugins";
 
 import type { ESTree } from "@oxlint/plugins";
@@ -9,8 +11,11 @@ const PLAIN_EFFECT_FILES = new Set([
 	"src/background-tasks/process-tree.ts",
 	"src/background-tasks/task-store.ts",
 	"src/child-protocol.ts",
+	"src/footer.ts",
 	"src/native/main.ts",
+	"src/sumo-tui/pi-compat/tree-navigation-command.ts",
 	"src/sumo-tui/rpc/spawn-child.mjs",
+	"src/top-chrome.ts",
 	"sumo-rpc-host.js",
 ]);
 const PLAIN_EFFECT_DIRECTORIES = [
@@ -21,20 +26,29 @@ const PLAIN_EFFECT_DIRECTORIES = [
 	"src/sumo-tui/render/",
 	"src/sumo-tui/transcript/",
 	"src/sumo-tui/widgets/",
+	"src/themes/",
 ];
 
 function repositoryPath(filename: string): string {
-	// Oxlint supplies an absolute filename. Anchor at the owned source root so a
-	// checkout beneath an ancestor named tests/ cannot disable production rules.
+	// Oxlint supplies an absolute filename. Anchor at the nearest project config
+	// so ancestor or nested directories named src/tests cannot change policy.
 	const normalized = filename.replaceAll("\\", "/");
+	for (let directory = dirname(filename);;) {
+		if (existsSync(join(directory, "oxlint.config.ts"))) {
+			return relative(directory, filename).replaceAll("\\", "/");
+		}
+		const parent = dirname(directory);
+		if (parent === directory) break;
+		directory = parent;
+	}
 	if (normalized === "sumo-rpc-host.js" || normalized.endsWith("/sumo-rpc-host.js")) return "sumo-rpc-host.js";
+	let rootIndex = -1;
 	for (const root of ["src", "test", "scripts", "tools"]) {
-		const marker = `/${root}/`;
-		const index = normalized.lastIndexOf(marker);
-		if (index >= 0) return normalized.slice(index + 1);
+		const index = normalized.lastIndexOf(`/${root}/`);
+		if (index > rootIndex) rootIndex = index;
 		if (normalized.startsWith(`${root}/`)) return normalized;
 	}
-	return normalized;
+	return rootIndex >= 0 ? normalized.slice(rootIndex + 1) : normalized;
 }
 
 function isEffectImport(source: string): boolean {

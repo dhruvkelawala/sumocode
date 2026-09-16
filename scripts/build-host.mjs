@@ -7,6 +7,7 @@ import {
 	hostOutputsHash,
 	HOST_INPUT_MANIFEST_OUTPUT,
 } from "./lib/host-bundle.mjs";
+import { assertNoProductionDependencyLeakage } from "./lib/production-boundaries.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const outDir = resolve(root, "dist/host");
@@ -52,6 +53,11 @@ const beforeBuild = await createHostInputManifest(root, Object.keys(probe.metafi
 await atomicWrite(manifestPath, `${JSON.stringify({ version: 0, inputs: [], hash: "build-in-progress" }, null, 2)}\n`);
 
 const result = await build(buildOptions);
+assertNoProductionDependencyLeakage(
+	result.metafile,
+	"host bundle",
+	result.outputFiles.filter((file) => !file.path.endsWith(".map")).map((file) => file.text).join("\n"),
+);
 const inputManifest = await createHostInputManifest(root, Object.keys(result.metafile.inputs));
 if (!hostInputManifestsMatch(beforeBuild, inputManifest)) {
 	throw new Error("Host bundle inputs changed during build; retry from a stable checkout");

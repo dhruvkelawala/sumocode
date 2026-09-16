@@ -27,13 +27,13 @@ function repositoryPath(filename: string): string {
 	// Oxlint supplies an absolute filename. Anchor at the owned source root so a
 	// checkout beneath an ancestor named tests/ cannot disable production rules.
 	const normalized = filename.replaceAll("\\", "/");
+	if (normalized === "sumo-rpc-host.js" || normalized.endsWith("/sumo-rpc-host.js")) return "sumo-rpc-host.js";
 	for (const root of ["src", "test", "scripts", "tools"]) {
 		const marker = `/${root}/`;
 		const index = normalized.lastIndexOf(marker);
 		if (index >= 0) return normalized.slice(index + 1);
 		if (normalized.startsWith(`${root}/`)) return normalized;
 	}
-	if (normalized.endsWith("/sumo-rpc-host.js")) return "sumo-rpc-host.js";
 	return normalized;
 }
 

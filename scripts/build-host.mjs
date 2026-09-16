@@ -7,7 +7,7 @@ import {
 	hostOutputsHash,
 	HOST_INPUT_MANIFEST_OUTPUT,
 } from "./lib/host-bundle.mjs";
-import { assertNoProductionDependencyLeakage } from "./lib/production-boundaries.mjs";
+import { assertNoProductionDependencyLeakage, bundleJavaScriptText } from "./lib/production-boundaries.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const outDir = resolve(root, "dist/host");
@@ -56,7 +56,7 @@ const result = await build(buildOptions);
 assertNoProductionDependencyLeakage(
 	result.metafile,
 	"host bundle",
-	result.outputFiles.filter((file) => !file.path.endsWith(".map")).map((file) => file.text).join("\n"),
+	bundleJavaScriptText(result.outputFiles),
 );
 const inputManifest = await createHostInputManifest(root, Object.keys(result.metafile.inputs));
 if (!hostInputManifestsMatch(beforeBuild, inputManifest)) {

@@ -24,7 +24,7 @@ function effectPackage(path) {
 	return bundled?.[1];
 }
 
-function outputSpecifiers(outputText) {
+export function moduleSpecifiers(outputText) {
 	// Metafiles are authoritative for normal imports. Scan emitted code too so
 	// a bundler-rewritten surviving import fails closed rather than shipping.
 	const specifiers = [];
@@ -41,12 +41,16 @@ function outputSpecifiers(outputText) {
 	return specifiers;
 }
 
+export function bundleJavaScriptText(outputFiles) {
+	return outputFiles.filter((file) => !file.path.endsWith(".map")).map((file) => file.text).join("\n");
+}
+
 /** Reject forbidden dependencies whether bundled or left as artifact imports. */
 export function assertNoProductionDependencyLeakage(metafile, artifact, outputText = "") {
 	const candidates = [
 		...Object.keys(metafile.inputs ?? {}),
 		...Object.values(metafile.outputs ?? {}).flatMap((output) => (output.imports ?? []).map((imported) => imported.path)),
-		...outputSpecifiers(outputText),
+		...moduleSpecifiers(outputText),
 	];
 	const leaks = candidates.flatMap((path) => {
 		const packageName = importedPackage(path, FORBIDDEN_PRODUCTION_PACKAGES);

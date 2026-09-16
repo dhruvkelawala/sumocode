@@ -8,7 +8,7 @@ import {
 	extensionInputManifestsMatch,
 	extensionOutputsHash,
 } from "./lib/extension-bundle.mjs";
-import { assertNoProductionDependencyLeakage } from "./lib/production-boundaries.mjs";
+import { assertNoProductionDependencyLeakage, bundleJavaScriptText } from "./lib/production-boundaries.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const outDir = resolve(root, "dist/extension");
@@ -63,7 +63,7 @@ const result = await build(buildOptions);
 assertNoProductionDependencyLeakage(
 	result.metafile,
 	"extension bundle",
-	result.outputFiles.filter((file) => !file.path.endsWith(".map")).map((file) => file.text).join("\n"),
+	bundleJavaScriptText(result.outputFiles),
 );
 const inputManifest = await createExtensionInputManifest(root, Object.keys(result.metafile.inputs));
 if (!extensionInputManifestsMatch(beforeBuild, inputManifest)) {

@@ -58,8 +58,11 @@ describe("Effect import policy", () => {
 		expect(result.output).toContain("Unstable Effect modules require explicit production approval");
 	});
 
-	it("keeps all Effect imports out of plain launcher execution", () => {
-		const result = runLint("src/native/main.ts", 'import * as Effect from "effect/Effect";\nvoid Effect;\n');
+	it.each([
+		["src/native/main.ts", tmpdir()],
+		["sumo-rpc-host.js", join(tmpdir(), "src")],
+	])("keeps all Effect imports out of plain launcher execution: %s", (filename, parent) => {
+		const result = runLint(filename, 'import * as Effect from "effect/Effect";\nvoid Effect;\n', false, parent);
 
 		expect(result.status).toBe(1);
 		expect(result.output).toContain("Effect is not allowed in launcher, rendering, or plain security primitives");

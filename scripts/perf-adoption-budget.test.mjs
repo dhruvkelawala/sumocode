@@ -39,7 +39,7 @@ function measurements() {
 function policy() {
 	return {
 		schemaVersion: 1,
-		baseline: { sourceCommit: "a".repeat(40), nativeArtifactSha256: "1".repeat(64), samples: 15 },
+		baseline: { sourceCommit: "a".repeat(40), samples: 15 },
 		budgets: Object.fromEntries(Object.entries(measurements()).map(([name, measurement]) => [name, {
 			baseline: measurement.kind === "timing" ? measurement.medianMs : measurement.value,
 			max: measurement.kind === "timing" ? measurement.medianMs + 5 : measurement.value + 100,
@@ -98,7 +98,8 @@ describe("adoption performance budget", () => {
 		const baselinePath = join(outDir, "baseline.json");
 		await writeFile(baselinePath, `${JSON.stringify(baseline)}\n`);
 		const reportDir = join(outDir, "report");
-		const report = await runAdoptionBudget({ nativeDir: "/native", baselinePath, outDir: reportDir }, {
+		const report = await runAdoptionBudget({ nativeDir: "/native", outDir: reportDir }, {
+			readBaseline: async () => baseline,
 			readSourceIdentity: async () => ({ sourceCommit: "b".repeat(40), sourceClean: true }),
 			readArtifact: async () => ({ artifactDir: "/native", sourceCommit: "b".repeat(40), sourceClean: true, artifactSha256: "2".repeat(64) }),
 			collectMeasurements: async () => measurements(),
@@ -116,7 +117,8 @@ describe("adoption performance budget", () => {
 		await writeFile(baselinePath, `${JSON.stringify(baseline)}\n`);
 		const reportDir = join(outDir, "report");
 		const observed = measurements();
-		const report = await runAdoptionBudget({ nativeDir: "/native", baselinePath, outDir: reportDir }, {
+		const report = await runAdoptionBudget({ nativeDir: "/native", outDir: reportDir }, {
+			readBaseline: async () => baseline,
 			readSourceIdentity: async () => ({ sourceCommit: "b".repeat(40), sourceClean: true }),
 			readArtifact: async () => ({ artifactDir: "/native", sourceCommit: "b".repeat(40), sourceClean: true, artifactSha256: "2".repeat(64) }),
 			collectMeasurements: async () => observed,

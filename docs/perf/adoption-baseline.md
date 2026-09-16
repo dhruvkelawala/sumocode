@@ -1,6 +1,6 @@
 # Effect adoption performance baseline
 
-This is the reviewed pre-adoption baseline for Plan 118. Raw samples, source identity, native artifact identity, and numeric ceilings live in [`adoption-baseline.json`](adoption-baseline.json). These numbers were collected after the production-boundary work and do not reuse the historical rc.112 research runs.
+This is the reviewed pre-adoption baseline for Plan 118. Raw samples, pinned source identity, and numeric ceilings live in [`adoption-baseline.json`](adoption-baseline.json). These numbers were collected after the production-boundary work and do not reuse the historical rc.112 research runs.
 
 ## Build the pinned native baseline
 

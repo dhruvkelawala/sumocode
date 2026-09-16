@@ -17,19 +17,18 @@ const EVAL_END = "sumocode_extension_eval_end";
 const execFileAsync = promisify(execFile);
 
 function usage() {
-	return `Usage: node scripts/perf-adoption-budget.mjs --native <archive> [options]\n\nOptions:\n  --native <dir>      native archive built from the current clean source commit\n  --baseline <file>   reviewed baseline and ceilings (default: docs/perf/adoption-baseline.json)\n  --out <dir>         new report directory (required)\n  -h, --help          show this help\n\nThe command never rewrites the reviewed baseline.\n`;
+	return `Usage: node scripts/perf-adoption-budget.mjs --native <archive> [options]\n\nOptions:\n  --native <dir>      native archive built from the current clean source commit\n  --out <dir>         new report directory (required)\n  -h, --help          show this help\n\nThe command always loads and never rewrites the committed baseline.\n`;
 }
 
 export function adoptionBudgetOptions(argv) {
-	const options = { baselinePath: DEFAULT_BASELINE };
+	const options = {};
 	for (let index = argv[0] === "--" ? 1 : 0; index < argv.length; index += 1) {
 		const arg = argv[index];
 		if (arg === "-h" || arg === "--help") return { ...options, help: true };
 		const value = argv[index + 1];
-		if (["--native", "--baseline", "--out"].includes(arg) && value === undefined) throw new Error(`${arg} requires a value`);
+		if (["--native", "--out"].includes(arg) && value === undefined) throw new Error(`${arg} requires a value`);
 		switch (arg) {
 			case "--native": options.nativeDir = resolve(value); index += 1; break;
-			case "--baseline": options.baselinePath = resolve(value); index += 1; break;
 			case "--out": options.outDir = resolve(value); index += 1; break;
 			default: throw new Error(`unknown option: ${arg}`);
 		}
@@ -289,7 +288,7 @@ function markdown(report, policy) {
 export async function runAdoptionBudget(options, dependencies = {}) {
 	await prepareOut(options.outDir);
 	const [policy, source, nativeArtifact] = await Promise.all([
-		readFile(options.baselinePath, "utf8").then(JSON.parse),
+		(dependencies.readBaseline ?? (() => readFile(DEFAULT_BASELINE, "utf8").then(JSON.parse)))(),
 		(dependencies.readSourceIdentity ?? sourceIdentity)(),
 		(dependencies.readArtifact ?? readNativeArtifactIdentity)(options.nativeDir),
 	]);

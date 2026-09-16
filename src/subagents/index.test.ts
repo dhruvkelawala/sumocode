@@ -237,6 +237,15 @@ describe("subagent result delivery", () => {
 		harness.fire("session_shutdown", "quit");
 	});
 
+	it("uses the shutdown context for targetless reload before session start", async () => {
+		const harness = createHarness();
+		const detach = vi.spyOn(harness.manager, "detachForReplacement");
+
+		harness.fire("session_shutdown", "reload");
+		expect(detach).not.toHaveBeenCalled();
+		await harness.fireSessionStart();
+	});
+
 	it("never calls setWidget without UI", async () => {
 		const harness = createHarness(false);
 		harness.fire("session_start");

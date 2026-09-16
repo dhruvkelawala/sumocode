@@ -198,6 +198,25 @@ describe("durable sender delivery", () => {
 		expect(next.delivery).toHaveBeenCalledOnce();
 	});
 
+	it("stops a deferred recovery when its manager prepares for replacement", async () => {
+		const f = fixture();
+		const old = f.install("origin");
+		await f.track(old);
+		await f.finish();
+		old.manager.detachForReplacement();
+		f.writerState("dead");
+		f.originState("dead");
+		const next = f.install("origin", false, "successor");
+		const before = f.registry.get("sa-worker-1");
+
+		await next.manager.reconstruct(f.registry, "origin");
+		next.manager.prepareForReplacement();
+		await vi.advanceTimersByTimeAsync(60_001);
+
+		expect(next.manager.get("sa-worker-1")).toBeUndefined();
+		expect(f.registry.get("sa-worker-1")).toEqual(before);
+	});
+
 	it("records lost work when disk recovery takes over an expired dead writer", async () => {
 		const f = fixture();
 		const old = f.install("origin");

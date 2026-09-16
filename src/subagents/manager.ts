@@ -353,17 +353,21 @@ export class SubagentManager {
 
 	/** Installation-scoped disk discovery; no prior manager or backend handle is accepted. */
 	public async reconstruct(registry: RetainedSubagent["registry"], sessionId: string): Promise<void> {
+		const generation = this.lifecycleGeneration;
 		let retryAt: number | undefined;
-		for (const result of await reconstructRetained(registry, this.controllerIdentity, sessionId, this.operations, this.terminalHost, this.pi,
-			(candidate) => { retryAt = Math.min(retryAt ?? candidate, candidate); })) {
+		for (const result of await reconstructRetained(registry, this.controllerIdentity, sessionId, this.operations, this.terminalHost, this.pi, {
+			onDeferred: (candidate) => { retryAt = Math.min(retryAt ?? candidate, candidate); },
+			canRecover: () => generation === this.lifecycleGeneration && !this.detached,
+		})) {
 			const id = result.entry.snapshot.id;
-			if (this.detached || this.snapshots.has(id)) continue;
+			if (generation !== this.lifecycleGeneration || this.detached || this.snapshots.has(id)) continue;
 			this.retained.set(id, { entry: result.entry, blocked: true });
 			this.snapshots.set(id, result.entry.snapshot);
 			if (result.classification === "adopted" || result.classification === "persist-only") {
 				try { this.bindRetained(result.entry, result.classification === "persist-only"); } catch { this.blockRetained(id, "ambiguous"); }
 			} else this.blockRetained(id, result.classification, result.reason);
 		}
+		if (generation !== this.lifecycleGeneration || this.detached) return;
 		this.scheduleRecoveryRetry(registry, sessionId, retryAt);
 		this.notify();
 	}
@@ -1105,6 +1109,8 @@ export class SubagentManager {
 	/** Stop legacy work while leaving retained children live until session_start identifies the successor manager. */
 	public prepareForReplacement(): void {
 		this.lifecycleGeneration += 1;
+		clearTimeout(this.recoveryTimer);
+		this.recoveryTimer = undefined;
 		const queuedIds = this.queuedTasks.map((queued) => queued.id);
 		this.queuedTasks.length = 0;
 		for (const id of queuedIds) void this.startSettle(id, { kind: "interrupted" });

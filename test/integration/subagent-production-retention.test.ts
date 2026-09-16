@@ -45,9 +45,11 @@ it.each(["running", "settled"] as const)("production installer transfers a %s re
 		});
 		managers.push(manager);
 		// SAFETY: noninteractive lifecycle handlers only use these context fields.
-		const ctx = { cwd: join(root, "cwd"), isIdle: () => idle, hasUI: false, sessionManager: { getSessionId: () => session } } as never;
-		// SAFETY: the exercised lifecycle events use only the reason field.
-		const fire = (name: string, reason = "startup") => handlers.get(name)!({ reason } as never, ctx);
+		const ctx = { cwd: join(root, "cwd"), isIdle: () => idle, hasUI: false, sessionManager: {
+			getSessionId: () => session, getSessionFile: () => join(root, `${session}.jsonl`),
+		} } as never;
+		// SAFETY: the exercised lifecycle events use only the replacement reason and target.
+		const fire = (name: string, reason = "startup", targetSessionFile?: string) => handlers.get(name)!({ reason, targetSessionFile } as never, ctx);
 		return { manager, delivery, fire };
 	};
 	try {
@@ -65,7 +67,7 @@ it.each(["running", "settled"] as const)("production installer transfers a %s re
 			await vi.waitFor(() => expect(retention.registry("origin").get(child.id)?.status).toBe("settled"), { timeout: 20_000 });
 			expect(old.delivery).not.toHaveBeenCalled();
 		}
-		await old.fire("session_shutdown", "new");
+		await old.fire("session_shutdown", "new", join(root, "successor.jsonl"));
 		const next = install("successor");
 		await next.fire("session_start", "new");
 		expect(next.manager.get(child.id)).toMatchObject({ status: phase === "settled" ? "done" : "running", recovery: "adopted" });

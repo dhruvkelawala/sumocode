@@ -28,6 +28,7 @@ export const EXTENSION_RUNTIME_OUTPUTS = [
 export const EXTENSION_RECIPE_INPUTS = [
 	"scripts/build-extension.mjs",
 	"scripts/lib/extension-bundle.mjs",
+	"scripts/lib/production-boundaries.mjs",
 	"tsconfig.json",
 	// package.json ships in npm/pnpm tarballs and pins the exact esbuild version.
 	"package.json",

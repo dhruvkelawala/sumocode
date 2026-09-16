@@ -14,11 +14,13 @@ afterEach(async () => {
 });
 
 describe("host bundle input manifest", () => {
-	it("tracks the dynamically loaded chrome-cache worker module", () => {
-		// host.ts hands this path to the jiti worker as a string, so esbuild never
-		// records it; it must be tracked explicitly to force the source fallback.
-		expect(HOST_EXTRA_INPUTS).toContain("src/sumo-tui/rpc/chrome-cache.ts");
-		expect(hostInputFiles(repoRoot, ["src/sumo-tui/rpc/host.ts"])).toContain("src/sumo-tui/rpc/chrome-cache.ts");
+	it("tracks non-graph inputs that can change build acceptance or output", () => {
+		// host.ts hands the worker path to jiti as a string, while the production
+		// boundary is build policy. Neither appears in the runtime bundle graph.
+		for (const path of ["src/sumo-tui/rpc/chrome-cache.ts", "scripts/lib/production-boundaries.mjs"]) {
+			expect(HOST_EXTRA_INPUTS).toContain(path);
+			expect(hostInputFiles(repoRoot, ["src/sumo-tui/rpc/host.ts"])).toContain(path);
+		}
 	});
 
 	it("rejects a graph or content change across the writing build", () => {

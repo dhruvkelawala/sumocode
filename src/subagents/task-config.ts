@@ -49,9 +49,11 @@ export const isChildToolName = (toolName: string): toolName is ChildToolName =>
  * Fail-closed rules that live here rather than in the launchers:
  *   - A role list can only name built-ins and approvable extension tools that
  *     the parent itself has active, so a narrowed parent cannot widen its child.
- *   - The MCP gateway is inherited whenever the parent has it active. Delegation
- *     never grants more than the parent, and a parent without the gateway
- *     cannot conjure one for its children.
+ *   - The MCP gateway is inherited when the parent has it active AND the surface
+ *     already reaches a subprocess, or when the role asks for it by name. Since
+ *     a gateway server is a command, an unconditional grant would hand a role
+ *     narrowed away from shell access the authority its role removed. Delegation
+ *     never grants more than the parent either way.
  */
 export const resolveChildToolSurface = (options: {
 	readonly roleTools: readonly string[] | undefined;

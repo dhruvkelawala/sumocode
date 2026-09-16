@@ -212,8 +212,10 @@ export function resolveMcpLaunchCapability(request: McpCapabilityRequest): McpCa
 		// project-scoped candidates for `-e`. The asymmetry is deliberate:
 		//   - an extension runs arbitrary code inside the child process, before
 		//     any tool gate, so it stays trusted-scope only;
-		//   - a server command is a subprocess, and every role already holds
-		//     `bash`, so ambient MCP grants the child no authority it lacked.
+		//   - a server command is a subprocess, and the implicit gateway is only
+		//     inherited by a surface that already reaches a subprocess (or by a
+		//     role that asked for it), so ambient MCP grants no authority the
+		//     child could not already exercise.
 		// A caller who wants the project config fenced names servers in the
 		// role's `mcpServers`, which takes the strict branch below.
 		return { ok: true, capability: { servers: [], adapterEntry, guardEntry, required: request.explicit === true } };

@@ -655,7 +655,13 @@ export function mcpChildEnv(env: NodeJS.ProcessEnv, scoped: boolean): NodeJS.Pro
 
 /** The guard reads this; a grant asked for by name must register or the child stops. */
 export function mcpRequiredEnv(env: NodeJS.ProcessEnv, explicit: boolean): NodeJS.ProcessEnv {
-	return explicit ? { ...env, [MCP_REQUIRED_ENV]: "1" } : env;
+	if (explicit) return { ...env, [MCP_REQUIRED_ENV]: "1" };
+	// An inherited value must not survive: a child launched with a required grant
+	// that later delegates would otherwise terminate its own grandchild.
+	if (!(MCP_REQUIRED_ENV in env)) return env;
+	const cleaned = { ...env };
+	delete cleaned[MCP_REQUIRED_ENV];
+	return cleaned;
 }
 
 function resolveChildEntry(

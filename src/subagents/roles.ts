@@ -195,8 +195,15 @@ function normalizedOverlay(value: unknown, index: number, builtIn: boolean, warn
 			if (!servers.includes(server)) servers.push(server);
 		}
 		// An empty list is the explicit opt-out: it shadows the base role's
-		// selection on purpose, because the operator asked for no MCP here.
-		overlay.mcpServers = servers;
+		// selection on purpose, because the operator asked for no MCP here. A list
+		// whose every entry was dropped is NOT that — the operator asked for
+		// servers, so it must not read as a request for none.
+		const listed = Array.isArray(value.mcpServers) ? value.mcpServers.length : 0;
+		if (listed > 0 && servers.length === 0) {
+			warn(`role ${id} has no valid mcp server names; ignoring the list`, false);
+		} else {
+			overlay.mcpServers = servers;
+		}
 	}
 	return overlay;
 }

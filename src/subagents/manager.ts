@@ -687,11 +687,10 @@ export class SubagentManager {
 			// A degraded inherited grant leaves `mcp` in the surface but nothing to
 			// mount: drop it, or a discovery-loaded visible child would still get
 			// the ambient gateway its parent never explicitly handed it.
-			// A grant that could not be mounted is not a refusal: the parent still
-			// has the gateway, so a visible child's own discovery finding it grants
-			// nothing the delegating session did not already hold. The surface is
-			// still corrected here, because a child that runs its own discovery
-			// would otherwise refill a gateway this delegation has no adapter for.
+			// The surface is corrected whenever the gateway is not mounted, so a
+			// headless child's allowlist never names a tool it cannot have. A
+			// launcher decides separately whether that absence must be fenced; see
+			// `mcpOptOut` for the only case where it must.
 			const tools = mcp === undefined && mcpRequested
 				? (task.tools ?? []).filter((name) => name !== MCP_GATEWAY_TOOL)
 				: task.tools;
@@ -828,7 +827,7 @@ export class SubagentManager {
 		}
 	}
 
-	public async reply(id: string, text: string, overrides: Pick<SpawnSubagentTask, "sourceId" | "appendSystemPrompt" | "model" | "thinking" | "inherited" | "tools" | "mcpServers" | "mcpExplicit"> = {}): Promise<SubagentSnapshot | AtCapacityDetails> {
+	public async reply(id: string, text: string, overrides: Pick<SpawnSubagentTask, "sourceId" | "appendSystemPrompt" | "model" | "thinking" | "inherited" | "tools" | "mcpServers" | "mcpExplicit" | "mcpOptOut"> = {}): Promise<SubagentSnapshot | AtCapacityDetails> {
 		const original = this.snapshots.get(id);
 		if (!original) throw new Error(`Unknown subagent id: ${id}. Known ids: ${this.list().map((snapshot) => snapshot.id).join(", ") || "(none)"}`);
 		if (original.visible) throw new Error(`${id} is a visible child — it converses live via subagent_send while open; reply-after-close is not supported`);

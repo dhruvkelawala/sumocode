@@ -4,7 +4,7 @@ import { defineRule } from "@oxlint/plugins";
 
 import type { ESTree } from "@oxlint/plugins";
 
-const TEST_FILE = /(?:\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)(?:test|tests|testing)(?:\/|$))/u;
+const TEST_FILE = /(?:\.(?:test|spec)\.[cm]?[jt]sx?$|^(?:test|tests|testing)(?:\/|$))/u;
 const PLATFORM_BARREL = /^@effect\/platform(?:-[^/]+)?$/u;
 const PLAIN_EFFECT_FILES = new Set([
 	"src/activity/persistence.ts",

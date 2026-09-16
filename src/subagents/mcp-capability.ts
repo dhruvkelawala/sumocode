@@ -179,9 +179,21 @@ export function resolveMcpLaunchCapability(request: McpCapabilityRequest): McpCa
 		return { ok: false, error: `MCP server(s) not configured for ${request.cwd}: ${missing.join(", ")}. Configured servers: ${known}` };
 	}
 	if (servers.length === 0) {
-		// Ambient scope: the child resolves the same chain its parent resolves
-		// for that cwd, so it can reach nothing the operator could not. No file
-		// is written and nothing is fenced.
+		// Ambient scope: the child resolves the same chain a session in its own
+		// cwd resolves, so it reaches nothing the operator could not reach there.
+		// No file is written and nothing is fenced.
+		//
+		// ACCEPTED RISK (owner decision, #569): the child's cwd is chosen by the
+		// delegating model (`working_dir`) or by a worktree remap, so a project
+		// `<cwd>/.mcp.json` becomes a command line the child starts without an
+		// approval gate — while `resolveMcpAdapterEntry` below refuses
+		// project-scoped candidates for `-e`. The asymmetry is deliberate:
+		//   - an extension runs arbitrary code inside the child process, before
+		//     any tool gate, so it stays trusted-scope only;
+		//   - a server command is a subprocess, and every role already holds
+		//     `bash`, so ambient MCP grants the child no authority it lacked.
+		// A caller who wants the project config fenced names servers in the
+		// role's `mcpServers`, which takes the strict branch below.
 		return { ok: true, capability: { servers: [], adapterEntry, guardEntry } };
 	}
 	try {

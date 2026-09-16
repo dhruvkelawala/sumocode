@@ -120,6 +120,7 @@ Read `docs/PI_TOOL_ARCHITECTURE.md` before adding, overriding, or intercepting t
 - **Pi example extensions** (e.g. `question`): override by registering a tool with the same `name` in SumoCode. SumoCode's version replaces Pi's.
 - **Pi internal UI**: classic Pi selectors remain Pi-owned. SumoCode code calls `showDivineQuery()`; in RPC mode it uses `ctx.ui.select` and the host handles `extension_ui_request` through `src/sumo-tui/rpc/extension-ui-responder.ts` and its modal manager.
 - **Approval policy**: [Plan 076](plans/076-disable-approval-gate.md) retired active approval installation/registration. Dormant approval modules and tests remain; external Pi/operator trust policy owns approval. Do not wire them back into the runtime.
+- **MCP grants to children**: MCP is not a Pi built-in — `mcp` is registered by the third-party `pi-mcp-adapter` extension, so a child receives it only when the adapter and SumoCode's child-side guard both resolve. The gateway is inherited like a built-in (a session with `mcp` active delegates it); a role opts out with `mcpServers: []`, and a non-empty `mcpServers` list switches to the fenced scope that writes a private per-child config and refuses anything it cannot bound. Ambient grants deliberately read the child cwd's own chain, project files included (accepted risk, [#569](https://github.com/dhruvkelawala/sumocode/pull/569)); the adapter itself always resolves from the trusted global scope. See `src/subagents/mcp-capability.ts`.
 
 ## Cathedral rendering
 

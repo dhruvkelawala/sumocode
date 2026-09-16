@@ -200,6 +200,7 @@ async function evaluateBundle(command, bundlePath, root, native, workDir) {
 }
 
 async function defaultCollectMeasurements(nativeArtifact) {
+	await mkdir(join(ROOT, ".local"), { recursive: true });
 	const workDir = await mkdtemp(join(ROOT, ".local/perf-adoption-"));
 	try {
 		const sourceClassic = await buildSourceBundle("src/extension.ts");

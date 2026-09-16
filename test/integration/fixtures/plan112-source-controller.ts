@@ -140,8 +140,8 @@ export async function runSourceController(root: string, mode: string, pi: string
 		result: null, manifest: null, writerLease: null, controlLease: null, controlHead: 0,
 	};
 	const descriptor = visible ? undefined : prepareRetainedBootstrap(initial, {
-		cwd: join(root, "cwd"), baseRef: "HEAD", pi, adapterEntry: provider, modelBootstrapEntry: null, visible: null,
-		model: { provider: "source-proof", modelId: "fixed", label: "source-proof/fixed" }, thinking: "off", builtInTools: [],
+		cwd: join(root, "cwd"), baseRef: "HEAD", pi, adapterEntry: provider, modelBootstrapEntry: null, mcp: null, visible: null,
+		model: { provider: "source-proof", modelId: "fixed", label: "source-proof/fixed" }, thinking: "off", tools: [],
 		role: { id: "synthetic-role", label: "synthetic role" },
 	}, { prompt: "synthetic recovery task", systemPrompt: "synthetic private role" });
 	let backend!: SpawnedChild;
@@ -155,7 +155,7 @@ export async function runSourceController(root: string, mode: string, pi: string
 			name: "plan112 recovery", id: initial.id, host: pane.host, pi: pane.pi, placement: { kind: "new-tab", label: "plan112 recovery" },
 			model: "source-proof/fixed", thinking: "off", tools: [] },
 	}, { onFailure, spawn: (options) => { backend = pane.spawn(options); return backend; } }) : new RetainedHeadlessSupervisor({ registry, initial, supervisor: captureBirth(process.pid), baseRef: "HEAD",
-		launch: { cwd: join(root, "cwd"), prompt: "synthetic recovery task", inherited: {}, builtInTools: [], thinking: "off",
+		launch: { cwd: join(root, "cwd"), prompt: "synthetic recovery task", inherited: {}, tools: [], thinking: "off",
 			model: "source-proof/fixed", retainedBootstrap: descriptor },
 	}, {
 		onFailure,

@@ -5,14 +5,83 @@ export const BUILT_IN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", 
 
 export type BuiltInToolName = (typeof BUILT_IN_TOOLS)[number];
 
+/**
+ * The MCP gateway tool. MCP is not a Pi built-in — the name only resolves when
+ * the `pi-mcp-adapter` extension registers it — but Pi's `--tools` allowlist
+ * spans built-in, extension, and custom tools, so a child that loads the
+ * adapter and lists this name gets the gateway.
+ */
+export const MCP_GATEWAY_TOOL = "mcp";
+
+/**
+ * Extension tools a role may explicitly grant. Deliberately a closed set: every
+ * name here is a capability whose blast radius the caller must opt into, and
+ * widening it is a review decision, not a configuration one.
+ */
+export const APPROVABLE_EXTENSION_TOOLS = [MCP_GATEWAY_TOOL] as const;
+
+export type ApprovableExtensionTool = (typeof APPROVABLE_EXTENSION_TOOLS)[number];
+
+/** Bound on the MCP server list a role may select. One limit for every stage. */
+export const MAX_MCP_SERVERS = 256;
+export type ChildToolName = BuiltInToolName | ApprovableExtensionTool;
+
 const isBuiltInToolName = (toolName: string): toolName is BuiltInToolName => {
 	// SAFETY: widening the BUILT_IN_TOOLS literal tuple to readonly string[] only relaxes the
 	// element type for `includes`; membership still proves toolName is a BuiltInToolName.
 	return (BUILT_IN_TOOLS as readonly string[]).includes(toolName);
 };
 
-export const getBuiltInToolsFromActiveTools = (activeTools: string[]): BuiltInToolName[] => {
-	return activeTools.filter(isBuiltInToolName);
+export const isApprovableExtensionTool = (toolName: string): toolName is ApprovableExtensionTool => {
+	// SAFETY: widening the APPROVABLE_EXTENSION_TOOLS literal tuple to readonly string[] only
+	// relaxes the element type for `includes`; membership still proves toolName is
+	// an ApprovableExtensionTool.
+	return (APPROVABLE_EXTENSION_TOOLS as readonly string[]).includes(toolName);
+};
+
+export const isChildToolName = (toolName: string): toolName is ChildToolName =>
+	isBuiltInToolName(toolName) || isApprovableExtensionTool(toolName);
+
+/**
+ * Resolve what a child may use: role policy intersected with the parent's own
+ * active tools, so delegation can only narrow.
+ *
+ * Fail-closed rules that live here rather than in the launchers:
+ *   - A role list can only name built-ins and approvable extension tools that
+ *     the parent itself has active, so a narrowed parent cannot widen its child.
+ *   - The MCP gateway is inherited when the parent has it active AND the surface
+ *     already reaches a subprocess, or when the role asks for it by name. Since
+ *     a gateway server is a command, an unconditional grant would hand a role
+ *     narrowed away from shell access the authority its role removed. Delegation
+ *     never grants more than the parent either way.
+ */
+export const resolveChildToolSurface = (options: {
+	readonly roleTools: readonly string[] | undefined;
+	readonly parentActiveTools: readonly string[];
+	/** True when a role asked for the gateway by name; see the implicit rule below. */
+	readonly mcpExplicit?: boolean;
+}): ChildToolName[] => {
+	const parentActive = new Set(options.parentActiveTools);
+	const surface: ChildToolName[] = [];
+	const push = (toolName: string): void => {
+		if (isChildToolName(toolName) && parentActive.has(toolName) && !surface.includes(toolName)) surface.push(toolName);
+	};
+	if (options.roleTools === undefined) {
+		for (const toolName of options.parentActiveTools) {
+			if (isBuiltInToolName(toolName)) push(toolName);
+		}
+	} else {
+		for (const toolName of options.roleTools) push(toolName);
+	}
+	// The MCP gateway is inherited, like a built-in, on one condition: the child
+	// can already start a subprocess. A gateway server is a command, so granting
+	// it to a surface without `bash` would hand a role that was deliberately
+	// narrowed away from shell access the very authority its role removed. A
+	// role may always ask for it by name, and `mcpServers` narrows the scope.
+	if (parentActive.has(MCP_GATEWAY_TOOL) && (options.mcpExplicit === true || surface.includes("bash"))) {
+		push(MCP_GATEWAY_TOOL);
+	}
+	return surface;
 };
 
 const resolveThinkingLevel = (thinking: TaskThinking, inherited: ThinkingLevel): ThinkingLevel => {
@@ -22,7 +91,7 @@ const resolveThinkingLevel = (thinking: TaskThinking, inherited: ThinkingLevel):
 const buildSubprocessArgs = (options: {
 	model: ProviderModel | undefined;
 	thinkingLevel: ThinkingLevel;
-	builtInTools: BuiltInToolName[];
+	tools: readonly string[];
 }): string[] => {
 	const args: string[] = ["--mode", "json", "-p", "--no-session", "--no-extensions"];
 
@@ -33,10 +102,10 @@ const buildSubprocessArgs = (options: {
 
 	args.push("--thinking", options.thinkingLevel);
 
-	if (options.builtInTools.length === 0) {
+	if (options.tools.length === 0) {
 		args.push("--no-tools");
 	} else {
-		args.push("--tools", options.builtInTools.join(","));
+		args.push("--tools", options.tools.join(","));
 	}
 
 	return args;
@@ -48,7 +117,7 @@ export const resolveTaskConfig = (options: {
 	defaultThinking: TaskThinking;
 	inheritedThinking: ThinkingLevel;
 	ctxModel: { provider: string; id: string } | undefined;
-	builtInTools: BuiltInToolName[];
+	tools: readonly ChildToolName[];
 }):
 	| { ok: true; thinkingLevel: ThinkingLevel; subprocessArgs: string[]; modelLabel: string | undefined }
 	| { ok: false; error: string } => {
@@ -60,7 +129,7 @@ export const resolveTaskConfig = (options: {
 	const subprocessArgs = buildSubprocessArgs({
 		model: modelResolution.model,
 		thinkingLevel: thinking,
-		builtInTools: options.builtInTools,
+		tools: options.tools,
 	});
 
 	return { ok: true, thinkingLevel: thinking, subprocessArgs, modelLabel: modelResolution.model?.label };

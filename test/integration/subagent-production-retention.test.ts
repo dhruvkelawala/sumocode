@@ -54,7 +54,7 @@ it.each(["running", "settled"] as const)("production installer transfers a %s re
 		const old = install("origin");
 		await old.fire("session_start");
 		const child = await old.manager.spawn({ cwd: join(root, "cwd"), title: "worker", prompt: "synthetic recovery task",
-			appendSystemPrompt: "synthetic private role", builtInTools: [], inherited: { model: { provider: "source-proof", id: "fixed" }, thinking: "off" } });
+			appendSystemPrompt: "synthetic private role", tools: [], inherited: { model: { provider: "source-proof", id: "fixed" }, thinking: "off" } });
 		if (!("id" in child)) throw new Error("production child was not admitted");
 		rememberOwned();
 		expect(child).toMatchObject({ status: "running", recovery: "adopted" });

@@ -29,13 +29,61 @@ function fixture() {
 	registry.create(record);
 	const config: RetainedBootstrapConfiguration = {
 		cwd: root, baseRef: "HEAD", model: { provider: "provider", modelId: "model", label: "provider/model" },
-		thinking: "low", builtInTools: ["read"], role: null, pi,
-		adapterEntry: null, modelBootstrapEntry: null, visible: null,
+		thinking: "low", tools: ["read"], role: null, pi,
+		adapterEntry: null, modelBootstrapEntry: null, mcp: null, visible: null,
 	};
 	return { root, record, registry, config };
 }
 
 const secrets = { prompt: "private prompt 🦉\nsecond line", systemPrompt: "private system instruction" };
+const root_of = (config: RetainedBootstrapConfiguration): string => config.cwd;
+
+it("carries an MCP grant through the descriptor without embedding server definitions or secrets", () => {
+	const { root, record, config } = fixture();
+	const adapterEntry = join(root, "adapter.ts");
+	const configPath = join(root, "capability.json");
+	writeFileSync(adapterEntry, "export default () => undefined;\n", { mode: 0o600 });
+	writeFileSync(configPath, '{}\n', { mode: 0o600 });
+	const granted: RetainedBootstrapConfiguration = { ...config, tools: ["read", "mcp"],
+		mcp: { servers: ["fixture"], adapterEntry, guardEntry: adapterEntry, required: false, configPath } };
+	const descriptor = prepareRetainedBootstrap(record, granted, secrets);
+	expect(descriptor.config.mcp).toEqual({ servers: ["fixture"], adapterEntry, guardEntry: adapterEntry, configPath, required: false });
+	expect(JSON.stringify(descriptor)).not.toContain("private prompt");
+	expect(readRetainedBootstrap(record, descriptor.nonce).descriptor.config.mcp).toEqual({ servers: ["fixture"], adapterEntry, guardEntry: adapterEntry, configPath, required: false });
+});
+
+it("round-trips an ambient MCP grant whose optional config path serializes away", () => {
+	const { record, config } = fixture();
+	const adapterEntry = join(root_of(config), "adapter.ts");
+	const guardEntry = join(root_of(config), "guard.ts");
+	writeFileSync(adapterEntry, "export default () => undefined;\n", { mode: 0o600 });
+	writeFileSync(guardEntry, "export default () => undefined;\n", { mode: 0o600 });
+	const ambient: RetainedBootstrapConfiguration = { ...config, tools: ["read", "mcp"],
+		mcp: { servers: [], adapterEntry, guardEntry, required: false } };
+	// JSON.stringify drops the undefined configPath, so the descriptor that comes
+	// back off disk must still validate without it.
+	const descriptor = prepareRetainedBootstrap(record, ambient, secrets);
+	expect(descriptor.config.mcp).toEqual({ servers: [], adapterEntry, guardEntry, required: false });
+	expect(JSON.stringify(descriptor)).not.toContain("configPath");
+	expect(readRetainedBootstrap(record, descriptor.nonce).descriptor.config.mcp).toEqual({ servers: [], adapterEntry, guardEntry, required: false });
+});
+
+it("rejects a fenced grant that names no server", () => {
+	const { record, config } = fixture();
+	const entry = join(root_of(config), "adapter.ts");
+	writeFileSync(entry, "export default () => undefined;\n", { mode: 0o600 });
+	const fenced: RetainedBootstrapConfiguration = { ...config, tools: ["read", "mcp"],
+		mcp: { servers: [], adapterEntry: entry, guardEntry: entry, required: false, configPath: entry } };
+	expect(() => prepareRetainedBootstrap(record, fenced, secrets)).toThrow("unsafe retained bootstrap");
+});
+
+it("rejects a tool surface and MCP grant that disagree", () => {
+	for (const patch of [{ tools: ["read", "mcp"] as const, mcp: null }, { tools: ["read"] as const, mcp: { servers: ["fixture"], adapterEntry: "x", configPath: "y" } }]) {
+		const { record, config } = fixture();
+		Object.assign(config, patch);
+		expect(() => prepareRetainedBootstrap(record, config, secrets)).toThrow("unsafe retained bootstrap");
+	}
+});
 
 describe("retained bootstrap private protocol", () => {
 	it("preserves a working directory nested inside the captured worktree", () => {
@@ -89,7 +137,9 @@ describe("retained bootstrap private protocol", () => {
 	});
 
 	it.each([
-		{ thinking: "inherit" }, { builtInTools: ["mcp"] }, { builtInTools: ["read", "read"] },
+		{ thinking: "inherit" }, { tools: ["mcp"] }, { tools: ["terminal_start"] }, { tools: ["read", "read"] },
+		{ mcp: { servers: [], adapterEntry: null, configPath: null } },
+		{ mcp: { servers: ["memory"], adapterEntry: "relative.ts", configPath: "/tmp/mcp.json" } },
 		{ model: null }, { model: { provider: "p", modelId: "m", label: "different" } },
 		{ role: { id: "review", label: "review", systemPrompt: "private system instruction" } },
 		{ adapterEntry: "relative.ts" }, { pi: "pi" }, { visible: {} }, { appendSystemPrompt: "private system instruction" },
@@ -150,11 +200,11 @@ describe("retained bootstrap private protocol", () => {
 
 	it("supports the exact byte cap, empty tool allowlist, and absent optional system/role/code", () => {
 		const { record, config } = fixture();
-		const descriptor = prepareRetainedBootstrap(record, { ...config, builtInTools: [] }, { prompt: "\t".repeat(256 * 1024), systemPrompt: null });
+		const descriptor = prepareRetainedBootstrap(record, { ...config, tools: [] }, { prompt: "\t".repeat(256 * 1024), systemPrompt: null });
 		const loaded = readRetainedBootstrap(record, descriptor.nonce);
 		expect(Buffer.byteLength(loaded.prompt)).toBe(256 * 1024);
 		expect(loaded.systemPrompt).toBeNull();
-		expect(loaded.descriptor.config.builtInTools).toEqual([]);
+		expect(loaded.descriptor.config.tools).toEqual([]);
 		expect(loaded.descriptor.config.role).toBeNull();
 		expect(loaded.descriptor.config.adapterEntry).toBeNull();
 		expect(readdirSync(record.taskDir).sort()).toEqual(["bootstrap-prompt.json", "bootstrap.json"]);
@@ -252,12 +302,12 @@ describe("retained bootstrap private protocol", () => {
 	it("round-trips resolved inputs without metadata secrets or registry authority", () => {
 		const { root, record, registry, config } = fixture();
 		const descriptor = prepareRetainedBootstrap(record, config, secrets);
-		Object.assign(config, { builtInTools: [] });
+		Object.assign(config, { tools: [] });
 		const loaded = readRetainedBootstrap(record, descriptor.nonce);
 		expect(loaded.prompt).toBe(secrets.prompt);
 		expect(loaded.systemPrompt).toBe(secrets.systemPrompt);
-		expect(loaded.descriptor.config.builtInTools).toEqual(["read"]);
-		expect(Object.isFrozen(loaded.descriptor.config.builtInTools)).toBe(true);
+		expect(loaded.descriptor.config.tools).toEqual(["read"]);
+		expect(Object.isFrozen(loaded.descriptor.config.tools)).toBe(true);
 		expect(registry.get(record.id)).toEqual(record);
 		const serialized = readFileSync(join(record.taskDir, "bootstrap.json"), "utf8");
 		for (const secret of Object.values(secrets)) expect(serialized).not.toContain(secret);

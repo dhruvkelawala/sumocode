@@ -6,6 +6,8 @@
  */
 
 import { dirname, join } from "node:path";
+import { mcpLaunchArgs } from "../subagents/backend-pi.js";
+import type { McpLaunchCapability } from "../subagents/mcp-capability.js";
 
 export interface VisibleTaskPaths {
 	/** The task directory itself; artifact confinement is relative to it. */
@@ -36,6 +38,8 @@ interface VisibleAgentCommandOptions {
 	model?: string;
 	thinking?: string;
 	tools?: readonly string[];
+	/** Resolved MCP grant; adds the adapter, its startup guard, and its scoped config. */
+	mcp?: McpLaunchCapability;
 }
 
 export function visibleTaskPathsInDir(dir: string): VisibleTaskPaths {
@@ -100,7 +104,31 @@ function buildVisibleAgentArgs(options: VisibleAgentCommandOptions): string[] {
 		: options.tools.length === 0
 			? ["--no-tools"]
 			: ["--tools", options.tools.join(",")];
-	return ["task", ...modelFlags, ...thinkingFlags, ...toolsFlags, "--task-dir", dirname(options.paths.promptFile)];
+	// A visible child runs a full SumoCode launcher session, so unlike the
+	// headless path it already has extension discovery. The grant is therefore
+	// carried the same way the operator would carry it by hand: load the
+	// adapter explicitly and point it at the scoped config, which bounds the
+	// gateway to the selected servers.
+	// The pane inherits the operator's shell environment, so the grant's scope has
+	// to be defended here too (see mcpChildEnv for why that flag matters).
+	const mcpFlags = options.mcp ? mcpLaunchArgs(options.mcp) : [];
+	return ["task", ...modelFlags, ...thinkingFlags, ...toolsFlags, ...mcpFlags, "--task-dir", dirname(options.paths.promptFile)];
+}
+
+/**
+ * `env` wrapper for the agent command. `exec env -u …` is needed for a scoped
+ * MCP grant, because the pane inherits the operator's shell environment and
+ * `PI_MCP_CONFIG_MODE=exclusive` would void the grant's scope. The ambient
+ * grant keeps the operator's environment untouched so it resolves the same
+ * chain the parent session does.
+ */
+function envPrefix(piBin: string | undefined, scopedMcp: boolean, requiredMcp: boolean): string[] {
+	const flags = [
+		...(scopedMcp ? ["-u", "PI_MCP_CONFIG_MODE"] : []),
+		...(requiredMcp ? ["SUMOCODE_MCP_REQUIRED=1"] : []),
+	];
+	if (!piBin) return flags.length > 0 ? ["env", ...flags] : [];
+	return ["env", ...flags, shellEscape(`PI_BIN=${piBin}`)];
 }
 
 export function buildVisibleAgentCommand(options: VisibleAgentCommandOptions): string {
@@ -111,7 +139,7 @@ export function buildVisibleAgentCommand(options: VisibleAgentCommandOptions): s
 		shellEscape(options.cwd),
 		"&&",
 		"exec",
-		...(piBin ? ["env", shellEscape(`PI_BIN=${piBin}`)] : []),
+		...envPrefix(piBin, options.mcp?.configPath !== undefined, options.mcp?.required === true),
 		launcher && launcher !== "sumocode" ? shellEscape(launcher) : "sumocode",
 		...buildVisibleAgentArgs(options).map(shellEscape),
 	].join(" ");

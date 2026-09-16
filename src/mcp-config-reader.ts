@@ -9,9 +9,15 @@ import type { McpServerSnapshot } from "./sumo-tui/cathedral/sidebar-rendering.j
  * order documented by `pi-mcp-adapter`:
  *
  *   1. `~/.config/mcp/mcp.json`        — user-global shared MCP config
- *   2. `<Pi agent dir>/mcp.json`       — Pi global override (default `~/.pi/agent/mcp.json`)
- *   3. `<cwd>/.mcp.json`               — project-local shared MCP config
- *   4. `<cwd>/.pi/mcp.json`            — Pi project override
+ *   2. `~/.agents/mcp.json`            — user-global `.agents` MCP config
+ *   3. `~/.agents/mcp/mcp.json`        — user-global nested `.agents` MCP config
+ *   4. `<Pi agent dir>/mcp.json`       — Pi global override (default `~/.pi/agent/mcp.json`)
+ *   5. `<cwd>/.mcp.json`               — project-local shared MCP config
+ *   6. `<cwd>/.pi/mcp.json`            — Pi project override
+ *
+ * `<cwd>/.mcp.json` and `<cwd>/.pi/mcp.json` are project-scoped: they merge
+ * ABOVE every global source, so a caller that must bound the resulting roster
+ * has to account for them explicitly rather than by disabling entries.
  *
  * Files are read in that order; later sources merge over earlier ones by
  * server name. The result is a roster of configured servers, each with a
@@ -39,13 +45,12 @@ import type { McpServerSnapshot } from "./sumo-tui/cathedral/sidebar-rendering.j
  * traces.
  */
 
-interface McpServerConfig {
-	readonly command?: string;
-	readonly args?: readonly string[];
-}
+/** A JSON value as written in a config file; definitions are re-serialized verbatim. */
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
 interface McpConfigFile {
-	readonly mcpServers?: Record<string, McpServerConfig>;
+	readonly mcpServers?: Record<string, JsonValue>;
+	readonly "mcp-servers"?: Record<string, JsonValue>;
 	readonly imports?: unknown;
 }
 
@@ -54,8 +59,22 @@ export interface LoadMcpServersOptions {
 	readonly piAgentDir: string;
 }
 
+/** A configured MCP server definition exactly as written in a config file. */
+export type McpServerDefinition = Readonly<Record<string, JsonValue>>;
+
+export interface ConfiguredMcpServer {
+	readonly name: string;
+	readonly definition: McpServerDefinition;
+}
+
+/** `~/.agents` global config paths, mirroring `pi-mcp-adapter`'s own candidate list. */
+function agentsGlobalConfigPaths(): readonly string[] {
+	const home = homedir();
+	return [join(home, ".agents", "mcp.json"), join(home, ".agents", "mcp", "mcp.json")];
+}
+
 /**
- * Resolve the four candidate config paths in precedence order.
+ * Resolve the six candidate config paths in precedence order.
  *
  * Exposed for tests; production callers should use `loadConfiguredMcpServers`.
  */
@@ -63,6 +82,7 @@ export function resolveMcpConfigCandidates(opts: LoadMcpServersOptions): readonl
 	const home = homedir();
 	return [
 		join(home, ".config", "mcp", "mcp.json"),
+		...agentsGlobalConfigPaths().filter((path) => path !== join(opts.piAgentDir, "mcp.json")),
 		join(opts.piAgentDir, "mcp.json"),
 		join(opts.cwd, ".mcp.json"),
 		join(opts.cwd, ".pi", "mcp.json"),
@@ -123,6 +143,78 @@ export function setMcpDiagnosticHandler(handler: McpDiagnosticHandler | undefine
 	mcpDiagnosticHandler = handler;
 }
 
+/**
+ * Merge configured server definitions across the precedence chain, later
+ * sources overriding earlier ones by server name.
+ *
+ * Unlike the sidebar roster this keeps the definitions: the subagent
+ * capability hand-off must reproduce a selected server's definition verbatim,
+ * because the child's generated config REPLACES its Pi-global layer rather
+ * than adding to it.
+ */
+export function loadConfiguredMcpServerDefinitions(opts: LoadMcpServersOptions): readonly ConfiguredMcpServer[] {
+	return mergeMcpServerDefinitions(inspectMcpConfigSources(opts));
+}
+
+export interface McpConfigSource {
+	readonly path: string;
+	/** Project-local sources are resolved against the child's cwd, so they are repo-controlled. */
+	readonly scope: "global" | "project";
+	readonly servers: readonly string[];
+	readonly definitions: readonly ConfiguredMcpServer[];
+	readonly imports: readonly string[];
+}
+
+/**
+ * Merge one read of the chain into the effective roster.
+ *
+ * Callers that must validate and then materialise the same roster take BOTH
+ * from one `inspectMcpConfigSources` result: re-reading would let an edit
+ * between the reads serialize definitions the validation never saw.
+ */
+export function mergeMcpServerDefinitions(sources: readonly McpConfigSource[]): readonly ConfiguredMcpServer[] {
+	const merged = new Map<string, McpServerDefinition>();
+	for (const source of sources) {
+		for (const server of source.definitions) merged.set(server.name, server.definition);
+	}
+	return [...merged].map(([name, definition]) => ({ name, definition }));
+}
+
+/**
+ * Per-file view of the chain, for callers that must reason about a source
+ * rather than the merged roster: a config that names servers this resolver did
+ * not select (or that pulls servers in through `imports`) cannot be bounded by
+ * a generated lower-precedence file.
+ */
+export function inspectMcpConfigSources(opts: LoadMcpServersOptions): readonly McpConfigSource[] {
+	const projectPaths = new Set([join(opts.cwd, ".mcp.json"), join(opts.cwd, ".pi", "mcp.json")]);
+	return resolveMcpConfigCandidates(opts).map((path) => {
+		const cfg = readMcpConfig(path);
+		const servers = mcpServersOf(cfg);
+		const definitions: ConfiguredMcpServer[] = [];
+		for (const [name, definition] of Object.entries(servers ?? {})) {
+			if (!isPlainObject(definition)) continue;
+			// SAFETY: isPlainObject verified a non-array object; definitions are
+			// re-serialized verbatim and never interpreted by this module.
+			definitions.push({ name, definition: definition as McpServerDefinition });
+		}
+		return {
+			path,
+			scope: projectPaths.has(path) ? "project" as const : "global" as const,
+			servers: definitions.map((server) => server.name),
+			definitions,
+			imports: Array.isArray(cfg?.imports) ? cfg.imports.filter((value): value is string => typeof value === "string") : [],
+		};
+	}).filter((source) => source.servers.length > 0 || source.imports.length > 0);
+}
+
+function mcpServersOf(cfg: McpConfigFile | undefined): Record<string, JsonValue> | undefined {
+	if (!cfg) return undefined;
+	if (isPlainObject(cfg.mcpServers)) return cfg.mcpServers;
+	const alias = cfg["mcp-servers"];
+	return isPlainObject(alias) ? alias : undefined;
+}
+
 export function loadConfiguredMcpServers(opts: LoadMcpServersOptions): readonly McpServerSnapshot[] {
 	const merged = new Map<string, McpServerSnapshot>();
 	for (const path of resolveMcpConfigCandidates(opts)) {
@@ -141,8 +233,9 @@ export function loadConfiguredMcpServers(opts: LoadMcpServersOptions): readonly 
 		// Guard against `mcpServers` being any non-object shape (string, array, number).
 		// `Object.keys("oops")` produces synthetic numeric keys; `Object.keys(["github"])`
 		// produces `["0"]`. Either would corrupt the roster with bogus server names.
-		if (!isPlainObject(cfg.mcpServers)) continue;
-		for (const name of Object.keys(cfg.mcpServers)) {
+		const servers = mcpServersOf(cfg);
+		if (!servers) continue;
+		for (const name of Object.keys(servers)) {
 			merged.set(name, { name, status: "idle" });
 		}
 	}

@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,6 +6,7 @@ import { SUBAGENT_MAX_RUNNING, type SubagentEvent } from "./domain.js";
 import type { SpawnedChild } from "./backend-pi.js";
 import type { TerminalHost } from "../terminal-host/types.js";
 import { installSubagents, SubagentManager } from "./index.js";
+import { BUILT_IN_TOOLS } from "./task-config.js";
 import { SubagentRegistry } from "./registry.js";
 
 type ChildEmitter = (event: SubagentEvent) => void;
@@ -94,7 +95,7 @@ interface ToolResult {
 /** Minimal tool-definition shape captured from registerTool. */
 type Tool = { name: string; execute: (...args: unknown[]) => Promise<ToolResult> };
 
-const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui", options: { retainedRegistry?: SubagentRegistry; retention?: false } = {}) => {
+const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui", options: { retainedRegistry?: SubagentRegistry; retention?: false; activeTools?: readonly string[] } = {}) => {
 	let idle = true;
 	const handlers = new Map<string, Handler[]>();
 	const tools = new Map<string, Tool>();
@@ -104,7 +105,7 @@ const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui", options: { re
 		on: vi.fn((event: string, handler: Handler) => handlers.set(event, [...(handlers.get(event) ?? []), handler])),
 		registerTool: vi.fn((tool: Tool) => tools.set(tool.name, tool)),
 		sendMessage,
-		getActiveTools: vi.fn((): string[] => ["read", "bash"]),
+		getActiveTools: vi.fn((): string[] => [...(options.activeTools ?? ["read", "bash"])]),
 		getThinkingLevel: vi.fn((): string => "medium"),
 	};
 	// SAFETY: the double implements every ExtensionAPI member installSubagents touches.
@@ -467,7 +468,7 @@ describe("subagent result delivery", () => {
 			cwd: "/tmp/project",
 			visible: true,
 			inherited: { model: { provider: "openai-codex", id: "gpt-5.6-sol" }, thinking: "high" },
-			builtInTools: ["read", "grep"],
+			tools: ["read", "grep"],
 		});
 		expect(backend.paneCalls).toHaveLength(1);
 		expect(backend.paneCalls[0]?.model).toBe("openai-codex/gpt-5.6-sol");
@@ -637,4 +638,54 @@ describe("subagent result delivery", () => {
 		await harness.fireSessionStart("replacement");
 		expect(harness.sendMessage).toHaveBeenCalledTimes(1);
 	});
+});
+
+it("forwards the surface to a visible child only when it must bound it", async () => {
+	// Hermetic: no adapter is discoverable, so this test cannot flip on whether
+	// the host machine happens to have pi-mcp-adapter installed.
+	const root = realpathSync(mkdtempSync(join(tmpdir(), "sumocode-index-mcp-")));
+	vi.stubEnv("HOME", root);
+	vi.stubEnv("PI_CODING_AGENT_DIR", join(root, "agent"));
+	vi.stubEnv("SUMOCODE_STATE_DIR", join(root, "state"));
+	vi.stubEnv("SUMOCODE_MCP_ADAPTER", "");
+	try {
+		// Full built-in surface, no gateway anywhere: the child keeps its own
+		// extension tools, so no allowlist is forwarded.
+		const plain = createHarness(false, "tui", { activeTools: [...BUILT_IN_TOOLS] });
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const plainCtx = plain.ctx as never;
+		await plain.tool("subagent_spawn").execute("tc", { prompt: "p", name: "plain", visible: true }, undefined, undefined, plainCtx);
+		expect(backend.paneCalls.at(-1)?.tools).toBeUndefined();
+
+		// A narrowed parent must still bound its child.
+		const narrowed = createHarness(false, "tui", { activeTools: ["read"] });
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const narrowedCtx = narrowed.ctx as never;
+		await narrowed.tool("subagent_spawn").execute("tc", { prompt: "p", name: "narrow", visible: true }, undefined, undefined, narrowedCtx);
+		expect(backend.paneCalls.at(-1)?.tools).toEqual(["read"]);
+
+		// A role that opted out must be bounded too, or the child's own extension
+		// discovery would hand back the gateway its role refused.
+		// The default role loader reads roles.json from the stubbed agent dir.
+		mkdirSync(join(root, "agent", "sumocode"), { recursive: true, mode: 0o700 });
+		writeFileSync(join(root, "agent", "sumocode", "roles.json"), JSON.stringify({ roles: [
+			{ id: "off", label: "Off", description: "no mcp", systemPrompt: "off", tools: [...BUILT_IN_TOOLS], mcpServers: [] },
+		] }), { mode: 0o600 });
+		const optedOut = createHarness(false, "tui", { activeTools: [...BUILT_IN_TOOLS, "mcp"] });
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const optedOutCtx = optedOut.ctx as never;
+		await optedOut.tool("subagent_spawn").execute("tc", { prompt: "p", name: "off", role: "off", visible: true }, undefined, undefined, optedOutCtx);
+		expect(backend.paneCalls.at(-1)?.tools).toEqual([...BUILT_IN_TOOLS]);
+
+		// A grant the resolver could not mount is NOT a refusal: this session has
+		// the gateway, so the child's own discovery is no wider than its parent,
+		// and fencing here would strip its extensions for nothing.
+		const degraded = createHarness(false, "tui", { activeTools: [...BUILT_IN_TOOLS, "mcp"] });
+		// SAFETY: the ctx double carries only the fields the tool handlers read.
+		const degradedCtx = degraded.ctx as never;
+		await degraded.tool("subagent_spawn").execute("tc", { prompt: "p", name: "degraded", visible: true }, undefined, undefined, degradedCtx);
+		expect(backend.paneCalls.at(-1)?.tools).toBeUndefined();
+	} finally {
+		vi.unstubAllEnvs();
+	}
 });

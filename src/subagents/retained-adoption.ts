@@ -90,6 +90,14 @@ export function sameRetainedEvidence(first: SubagentRecord, second: SubagentReco
 	return isDeepStrictEqual(recoveryEvidence(first), recoveryEvidence(second));
 }
 
+function sameAdmissionEvidence(first: SubagentRecord, second: SubagentRecord): boolean {
+	const before = first.writerLease;
+	const after = second.writerLease;
+	return before !== null && after !== null && isDeepStrictEqual(before.owner, after.owner)
+		&& after.generation >= before.generation && after.renewedAt >= before.renewedAt && after.expiresAt >= before.expiresAt
+		&& sameRetainedEvidence(first, { ...second, writerLease: before });
+}
+
 export interface RetainedRecoveryHooks {
 	readonly onDeferred?: (retryAt: number) => void;
 	readonly canRecover?: () => boolean;
@@ -204,7 +212,7 @@ export async function acquireRetained(
 				} catch (error) {
 					if (!(error instanceof SubagentRevisionConflict) || attempt >= 3) throw error;
 					const fresh = registry.get(record.id);
-					if (!fresh || !sameRetainedEvidence(reserved, fresh)) throw error;
+					if (!fresh || !sameAdmissionEvidence(reserved, fresh)) throw error;
 					reserved = fresh;
 				}
 			}

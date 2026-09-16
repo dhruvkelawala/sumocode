@@ -62,7 +62,7 @@ async function fixture() {
 	vi.setSystemTime(2001);
 	disposals.push(() => { vi.mocked(operations.identityMatches).mockReturnValue("unknown"); try { owner.renew(); } catch { /* Fake owner lifetime only. */ } });
 	return { registry, owner, next, operations, send, interrupt, close, taskDir, granted,
-		recover: () => reconstructRetained(registry, next, "next-session", operations),
+		recover: () => reconstructRetained(registry, next, "origin", operations),
 		oldState: (state: typeof oldState) => { oldState = state; }, writerState: (state: typeof writerState) => { writerState = state; },
 		finish: async () => { emit({ kind: "run-settled", outcome: { kind: "completed", finalText: "durable answer" } }); await owner.settlement; } };
 }
@@ -225,15 +225,15 @@ it("refuses a queued stale control before the supervisor touches the backend", a
 	expect(f.send).not.toHaveBeenCalled();
 });
 
-it("discovers prior sessions only inside the configured installation directory", async () => {
+it("leaves another session's retained record untouched", async () => {
 	const f = await fixture();
 	const fresh = new SubagentRegistry(join(dirname(f.taskDir), "registry"), "unrelated-session", {
 		writerIdentity: f.next, inspectWriter: (identity) => identity.token === "old" ? "dead" : "alive",
 	});
+	const before = f.registry.get("sa-proof");
 	expect(() => fresh.get("sa-proof")).toThrow("owner mismatch");
-	const [recovered] = await reconstructRetained(fresh, f.next, "unrelated-session", f.operations);
-	expect(recovered.classification).toBe("adopted");
-	expect(recovered.entry.authority.ownerSessionId).toBe("origin");
+	expect(await reconstructRetained(fresh, f.next, "unrelated-session", f.operations)).toEqual([]);
+	expect(f.registry.get("sa-proof")).toEqual(before);
 });
 
 it("rejects writer expiry during the takeover identity inspection", async () => {
@@ -261,7 +261,7 @@ it("keeps a live-controller manager mirror readable but unable to send, cancel, 
 	const f = await fixture(); f.oldState("alive");
 	const manager = new SubagentManager(() => { throw new Error("no respawn"); }, { controllerIdentity: f.next, processOperations: f.operations });
 	disposals.push(() => manager.detachForReplacement());
-	await manager.reconstruct(f.registry, "next-session");
+	await manager.reconstruct(f.registry, "origin");
 	expect(manager.get("sa-proof")?.recovery).toBe("persist-only");
 	expect(manager.canDeliver("sa-proof")).toBe(false);
 	await expect(manager.sendTo("sa-proof", "forbidden")).rejects.toThrow();
@@ -276,7 +276,7 @@ it("observes a persist-only completion that settles after its anchors are gone",
 	const f = await fixture(); f.oldState("alive");
 	const manager = new SubagentManager(() => { throw new Error("no respawn"); }, { controllerIdentity: f.next, processOperations: f.operations });
 	disposals.push(() => manager.detachForReplacement());
-	await manager.reconstruct(f.registry, "next-session");
+	await manager.reconstruct(f.registry, "origin");
 	expect(manager.get("sa-proof")?.recovery).toBe("persist-only");
 	await f.finish();
 	vi.mocked(f.operations.identityMatches).mockReturnValue("different");

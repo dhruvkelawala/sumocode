@@ -1106,7 +1106,7 @@ export class SubagentManager {
 		return ids.map((id) => lines.get(id) ?? `${id} is unknown`);
 	}
 
-	/** Stop legacy work while leaving retained children live until session_start identifies the successor manager. */
+	/** Stop legacy work and freeze retained recovery before targeted handoff or immediate detachment. */
 	public prepareForReplacement(): void {
 		this.lifecycleGeneration += 1;
 		clearTimeout(this.recoveryTimer);

@@ -206,8 +206,9 @@ export async function acquireRetained(
 			if (!sameRetainedEvidence(entry.supervisor.record, registry.get(record.id)!)) throw new Error("retained owner record changed");
 			let reserved = await entry.supervisor.reserveControl(entry.authority, { owner: successor, sessionId });
 			for (let attempt = 1; ; attempt++) {
+				if (!reserved.writerLease) throw new Error("reserved writer lease missing");
 				try {
-					record = registry.acquireControl(record.id, reserved.revision, reserved.writerLease!.generation, reserved.controlHead, successor, 60_000, sessionId);
+					record = registry.acquireControl(record.id, reserved.revision, reserved.writerLease.generation, reserved.controlHead, successor, 60_000, sessionId);
 					break;
 				} catch (error) {
 					if (!(error instanceof SubagentRevisionConflict) || attempt >= 3) throw error;

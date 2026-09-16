@@ -6,8 +6,8 @@ $ ./node_modules/.bin/vitest run test/integration/subagent-recovery.test.ts --fi
 
  Test Files  1 passed (1)
       Tests  38 passed (38)
-   Start at  15:06:02
-   Duration  17.44s (transform 255ms, setup 0ms, import 390ms, tests 16.95s, environment 0ms)
+   Start at  15:13:36
+   Duration  17.70s (transform 261ms, setup 0ms, import 457ms, tests 17.15s, environment 0ms)
 
 
 exit=0

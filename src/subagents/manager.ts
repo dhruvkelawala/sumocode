@@ -376,7 +376,7 @@ export class SubagentManager {
 			this.recoveryTimer = undefined;
 			void this.reconstruct(registry, sessionId).catch(() => {
 				try { this.onDiagnostic?.({ kind: "listener", message: "retained recovery retry failed" }); }
-				catch { /* Diagnostics cannot restore refused recovery. */ }
+				catch { /* Diagnostics must not throw from a timer. */ }
 			});
 		}, Math.max(1, retryAt - Date.now() + 1));
 		this.recoveryTimer.unref();

@@ -21,12 +21,9 @@ import { RetainedRuntime } from "./retained-runtime.js";
 export { SubagentManager } from "./manager.js";
 export type { AtCapacityDetails, SpawnSubagentTask } from "./manager.js";
 
-interface PendingReplacement {
-	readonly manager: SubagentManager;
-	readonly reason: "reload" | "new" | "resume" | "fork";
-	readonly sourceSessionId?: string;
-	readonly targetSessionFile?: string;
-}
+type PendingReplacement =
+	| { readonly manager: SubagentManager; readonly targetSessionFile: string }
+	| { readonly manager: SubagentManager; readonly reloadSessionId: string };
 
 const LIFECYCLE_KEY = Symbol.for("@dhruvkelawala/sumocode/subagent-replacements-v2");
 function pendingReplacements(): Set<PendingReplacement> {
@@ -36,9 +33,8 @@ function pendingReplacements(): Set<PendingReplacement> {
 }
 
 function isReplacementTarget(replacement: PendingReplacement, ctx: ExtensionContext): boolean {
-	const targetSessionFile = ctx.sessionManager.getSessionFile();
-	if (replacement.targetSessionFile !== undefined) return replacement.targetSessionFile === targetSessionFile;
-	return replacement.reason === "reload" && replacement.sourceSessionId === ctx.sessionManager.getSessionId();
+	if ("targetSessionFile" in replacement) return replacement.targetSessionFile === ctx.sessionManager.getSessionFile();
+	return replacement.reloadSessionId === ctx.sessionManager.getSessionId();
 }
 
 const SUBAGENT_STATUS_WIDGET_KEY = "sumocode-subagents";
@@ -388,9 +384,9 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 			// Defer detachment only for the successor Pi identified. An unrelated
 			// session in the same process must never inherit this manager's results.
 			manager.prepareForReplacement();
-			if (event.targetSessionFile !== undefined || event.reason === "reload" && sourceSessionId !== undefined) {
-				pendingReplacements().add({ manager, reason: event.reason, sourceSessionId, targetSessionFile: event.targetSessionFile });
-			} else manager.detachForReplacement();
+			if (event.targetSessionFile !== undefined) pendingReplacements().add({ manager, targetSessionFile: event.targetSessionFile });
+			else if (event.reason === "reload" && sourceSessionId !== undefined) pendingReplacements().add({ manager, reloadSessionId: sourceSessionId });
+			else manager.detachForReplacement();
 		} else manager.disposeAll();
 	});
 	return manager;

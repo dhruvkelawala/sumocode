@@ -90,7 +90,7 @@ export function sameRetainedEvidence(first: SubagentRecord, second: SubagentReco
 	return isDeepStrictEqual(recoveryEvidence(first), recoveryEvidence(second));
 }
 
-/** A new host needs only its private registry namespace, never an old JS handle. */
+/** Recover only this session's records; defer takeover until a dead controller's lease expires. */
 export async function reconstructRetained(registry: SubagentRegistry, successor: RegistryWriter, sessionId: string,
 	operations: ProcessTreeOperations, host?: TerminalHost, pi?: PiExecLike, onDeferred?: (retryAt: number) => void,
 ): Promise<Array<{ entry: RetainedSubagent; classification: "adopted" | "persist-only" | "lost" | "ambiguous"; reason?: SubagentRecoveryReason }>> {

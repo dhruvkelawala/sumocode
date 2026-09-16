@@ -637,14 +637,14 @@ describe("subagent result delivery", () => {
 
 	it("drops a failed replacement instead of retrying it on every session start", async () => {
 		const harness = createHarness();
-		type Replacement = { manager: SubagentManager; reason: "new"; targetSessionFile: string };
+		type Replacement = { manager: SubagentManager; targetSessionFile: string };
 		// SAFETY: the test manipulates the documented process-global replacement set, then removes its entry.
 		const globals = globalThis as { [key: symbol]: Set<Replacement> | undefined };
 		const key = Symbol.for("@dhruvkelawala/sumocode/subagent-replacements-v2");
 		// SAFETY: an existing process-global set is reused only when it already holds replacement records.
 		const replacements = globals[key] instanceof Set ? (globals[key] as Set<Replacement>) : new Set<Replacement>();
 		globals[key] = replacements;
-		const replacement = { manager: createHarness().manager, reason: "new" as const, targetSessionFile: "/tmp/replacement.jsonl" };
+		const replacement = { manager: createHarness().manager, targetSessionFile: "/tmp/replacement.jsonl" };
 		replacements.add(replacement);
 		const adopt = vi.spyOn(harness.manager, "adoptFrom").mockRejectedValueOnce(new Error("retained subagent id conflicts with successor work"));
 		try {

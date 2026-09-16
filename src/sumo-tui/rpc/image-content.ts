@@ -1,6 +1,7 @@
 import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, extname, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { resizeImage } from "@earendil-works/pi-coding-agent";
 import type { EditorImageAttachment } from "../../cathedral/editor-draft-state.js";
@@ -59,10 +60,21 @@ export async function loadRpcImages(
 
 async function readBoundedImage(path: string, attachment: EditorImageAttachment, maxSourceBytes: number): Promise<Buffer> {
 	let file;
-	try {
-		file = await open(path, "r");
-	} catch {
-		throw new RpcImageLoadError(attachment, "file not found or unreadable");
+	const promisedFileDeadline = Date.now() + 500;
+	for (;;) {
+		try {
+			file = await open(path, "r");
+			break;
+		} catch (error) {
+			// macOS file drops can publish a promised screenshot path shortly
+			// before screencaptureui has materialized the file. The former text
+			// path gained this delay naturally while the model started; native
+			// image submission reads immediately and must wait here instead.
+			if (!(error instanceof Error && "code" in error && error.code === "ENOENT") || Date.now() >= promisedFileDeadline) {
+				throw new RpcImageLoadError(attachment, "file not found or unreadable");
+			}
+			await delay(25);
+		}
 	}
 	try {
 		const metadata = await file.stat();

@@ -46,6 +46,22 @@ describe("loadRpcImages", () => {
 		]);
 	});
 
+	it("waits briefly for a macOS promised screenshot file to materialize", async () => {
+		const cwd = root();
+		const path = join(cwd, "Screenshot 2026-09-16 at 15.48.45.png");
+		const materialized = new Promise<void>((resolve) => {
+			setTimeout(() => {
+				writeFileSync(path, PNG);
+				resolve();
+			}, 25);
+		});
+
+		await expect(loadRpcImages([{ token: "[Image 1]", path }], { cwd })).resolves.toEqual([
+			{ type: "image", mimeType: "image/png", data: PNG.toString("base64") },
+		]);
+		await materialized;
+	});
+
 	it.each([
 		["missing.png", "not found"],
 		["folder.png", "regular file"],

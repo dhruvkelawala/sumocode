@@ -144,9 +144,38 @@ function evaluationEnvironment(agentDir, diagFile, root, native) {
 	return env;
 }
 
-function stopChild(child) {
-	try { child.kill("SIGTERM"); } catch {}
-	setTimeout(() => { try { child.kill("SIGKILL"); } catch {} }, 250).unref?.();
+function signalChildTree(child, signal) {
+	try {
+		if (process.platform !== "win32" && Number.isInteger(child.pid)) process.kill(-child.pid, signal);
+		else child.kill(signal);
+	} catch (error) {
+		if (error?.code !== "ESRCH") throw error;
+	}
+}
+
+async function waitForChildExit(child, timeoutMs) {
+	if (child.exitCode !== null || child.signalCode !== null) return true;
+	return new Promise((resolveExit) => {
+		let settled = false;
+		const finish = (exited) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			child.removeListener("exit", onExit);
+			resolveExit(exited);
+		};
+		const onExit = () => finish(true);
+		const timer = setTimeout(() => finish(child.exitCode !== null || child.signalCode !== null), timeoutMs);
+		child.once("exit", onExit);
+	});
+}
+
+async function stopChild(child) {
+	if (child.exitCode !== null || child.signalCode !== null) return true;
+	signalChildTree(child, "SIGTERM");
+	if (await waitForChildExit(child, 500)) return true;
+	signalChildTree(child, "SIGKILL");
+	return waitForChildExit(child, 500);
 }
 
 async function evaluationSample({ command, bundlePath, root, native, workDir, index }) {
@@ -159,6 +188,7 @@ async function evaluationSample({ command, bundlePath, root, native, workDir, in
 		cwd: join(agentDir, "project"),
 		env: evaluationEnvironment(agentDir, diagFile, root, native),
 		stdio: ["pipe", "pipe", "ignore"],
+		detached: process.platform !== "win32",
 	});
 	let stdout = "";
 	let settled = false;
@@ -167,8 +197,8 @@ async function evaluationSample({ command, bundlePath, root, native, workDir, in
 			if (settled) return;
 			settled = true;
 			clearTimeout(timer);
-			stopChild(child);
-			resolveSample(sample);
+			const reaped = await stopChild(child);
+			resolveSample(reaped ? sample : { ok: false, failure: "shutdown-failed" });
 		};
 		const inspect = async () => {
 			const events = (await readFile(diagFile, "utf8").catch(() => "")).split("\n").filter(Boolean).flatMap((line) => {
@@ -176,7 +206,13 @@ async function evaluationSample({ command, bundlePath, root, native, workDir, in
 			});
 			const start = events.find((event) => event.event === EVAL_START)?.ts;
 			const end = events.find((event) => event.event === EVAL_END)?.ts;
-			if (Number.isFinite(start) && Number.isFinite(end) && end >= start && stdout.includes('"type":"response"')) {
+			const responseReady = stdout.split("\n").some((line) => {
+				try {
+					const response = JSON.parse(line);
+					return response?.type === "response" && response.id === "budget-probe" && response.command === "get_state" && response.success === true;
+				} catch { return false; }
+			});
+			if (Number.isFinite(start) && Number.isFinite(end) && end >= start && responseReady) {
 				await settle({ ok: true, durationMs: end - start });
 			}
 		};

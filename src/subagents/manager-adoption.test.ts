@@ -400,6 +400,30 @@ describe("durable sender delivery", () => {
 		expect(f.registry.get("sa-worker-1")).toMatchObject({ controllerSessionId: "successor", controllerGeneration: 1 });
 	});
 
+	it("refuses successor admission when retained evidence changes after reservation", async () => {
+		const f = fixture();
+		const old = f.install("origin");
+		await f.track(old);
+		const reserve = f.supervisor.reserveControl.bind(f.supervisor);
+		vi.spyOn(f.supervisor, "reserveControl").mockImplementation(async (authority, successor) => {
+			const reserved = await reserve(authority, successor);
+			const current = f.registry.get("sa-worker-1")!;
+			f.registry.transition(current.id, current.revision, current.writerLease!.generation, (record) => ({
+				...record,
+				sessionFilePath: join(f.root, "changed.jsonl"),
+			}));
+			return reserved;
+		});
+
+		await old.fire("session_shutdown", "new");
+		const next = f.install("successor");
+		await next.fire("session_start", "new");
+
+		expect(next.manager.get("sa-worker-1")?.recovery).toBe("ambiguous");
+		expect(f.registry.get("sa-worker-1")).toMatchObject({ controlLease: null, sessionFilePath: join(f.root, "changed.jsonl") });
+		expect(f.registry.get("sa-worker-1")?.controllerGeneration).toBeUndefined();
+	});
+
 	it.each(["new", "fork", "resume"])("/%s reservation fences the old sender before successor admission", async (reason) => {
 		const f = fixture();
 		const old = f.install("origin");

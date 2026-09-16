@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertNoEffectInEagerClosure, assertNoProductionDependencyLeakage } from "./production-boundaries.mjs";
+import { assertNoEffectInEagerClosure, assertNoProductionDependencyLeakage, bundleJavaScriptText } from "./production-boundaries.mjs";
 
 function nativeMetafile(preflightImport) {
 	return {
@@ -20,6 +20,13 @@ function nativeMetafile(preflightImport) {
 }
 
 describe("production artifact dependency boundary", () => {
+	it("scans JavaScript outputs without treating source maps as artifacts", () => {
+		expect(bundleJavaScriptText([
+			{ path: "dist/bundle.js", text: 'import "effect/Effect";' },
+			{ path: "dist/bundle.js.map", text: 'import "msgpackr";' },
+		])).toBe('import "effect/Effect";');
+	});
+
 	it("accepts ordinary production inputs", () => {
 		expect(() => assertNoProductionDependencyLeakage({
 			inputs: { "node_modules/effect/dist/Effect.js": { imports: [] } },

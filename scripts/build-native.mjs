@@ -18,7 +18,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { instrumentPiStartup } from "./instrument-pi-startup.mjs";
-import { assertNoEffectInEagerClosure, assertNoProductionDependencyLeakage } from "./lib/production-boundaries.mjs";
+import { assertNoEffectInEagerClosure, assertNoProductionDependencyLeakage, bundleJavaScriptText, moduleSpecifiers } from "./lib/production-boundaries.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
@@ -98,26 +98,13 @@ async function buildExtensionBundle(entryPoint, outPath) {
 	assertNoProductionDependencyLeakage(
 		result.metafile,
 		`native extension bundle ${entryPoint}`,
-		result.outputFiles.map((file) => file.text).join("\n"),
+		bundleJavaScriptText(result.outputFiles),
 	);
 	const output = result.outputFiles[0];
 	// Regression guard (plan step 2.3): every bare import in the bundle must be
 	// a Pi virtual module. Relative imports (./, ../, /) are inlined paths.
-	const bareImports = new Set();
-	const specifierPatterns = [
-		/\bfrom\s*["']([^"'\n]+)["']/g,
-		/\bimport\s*\(\s*["']([^"'\n]+)["']\s*\)/g,
-		/\bimport\s*["']([^"'\n]+)["']/g,
-		/\brequire\s*\(\s*["']([^"'\n]+)["']\s*\)/g,
-	];
-	for (const pattern of specifierPatterns) {
-		for (const match of output.text.matchAll(pattern)) {
-			const specifier = match[1];
-			if (specifier === undefined) continue;
-			if (specifier.startsWith(".") || specifier.startsWith("/")) continue;
-			bareImports.add(specifier);
-		}
-	}
+	const bareImports = new Set(moduleSpecifiers(output.text)
+		.filter((specifier) => !specifier.startsWith(".") && !specifier.startsWith("/")));
 	const offenders = [...bareImports].filter((specifier) =>
 		!specifier.startsWith("@earendil-works/")
 		&& specifier !== "typebox"

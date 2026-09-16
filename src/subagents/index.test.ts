@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SUBAGENT_MAX_RUNNING, type SubagentEvent } from "./domain.js";
 import type { SpawnedChild } from "./backend-pi.js";
 import type { TerminalHost } from "../terminal-host/types.js";
-import { installSubagents, SubagentManager } from "./index.js";
+import { installSubagents } from "./index.js";
 import { BUILT_IN_TOOLS } from "./task-config.js";
 import { SubagentRegistry } from "./registry.js";
 
@@ -636,26 +636,16 @@ describe("subagent result delivery", () => {
 	});
 
 	it("drops a failed replacement instead of retrying it on every session start", async () => {
-		const harness = createHarness();
-		type Replacement = { manager: SubagentManager; targetSessionFile: string };
-		// SAFETY: the test manipulates the documented process-global replacement set, then removes its entry.
-		const globals = globalThis as { [key: symbol]: Set<Replacement> | undefined };
-		const key = Symbol.for("@dhruvkelawala/sumocode/subagent-replacements-v2");
-		// SAFETY: an existing process-global set is reused only when it already holds replacement records.
-		const replacements = globals[key] instanceof Set ? (globals[key] as Set<Replacement>) : new Set<Replacement>();
-		globals[key] = replacements;
-		const replacement = { manager: createHarness().manager, targetSessionFile: "/tmp/replacement.jsonl" };
-		replacements.add(replacement);
-		const adopt = vi.spyOn(harness.manager, "adoptFrom").mockRejectedValueOnce(new Error("retained subagent id conflicts with successor work"));
-		try {
-			await harness.fireSessionStart("replacement");
-			await harness.fireSessionStart("replacement");
-			expect(adopt).toHaveBeenCalledTimes(1);
-			expect(replacements.has(replacement)).toBe(false);
-		} finally {
-			replacements.delete(replacement);
-			adopt.mockRestore();
-		}
+		const origin = createHarness();
+		const successor = createHarness();
+		await origin.fireSessionStart("origin", "/tmp/origin.jsonl");
+		origin.fire("session_shutdown", "new", "/tmp/replacement.jsonl");
+		const adopt = vi.spyOn(successor.manager, "adoptFrom").mockRejectedValueOnce(new Error("retained subagent id conflicts with successor work"));
+
+		await successor.fireSessionStart("replacement");
+		await successor.fireSessionStart("replacement");
+
+		expect(adopt).toHaveBeenCalledTimes(1);
 	});
 
 	it("contains corrupt retained recovery during session start and still flushes delivery", async () => {

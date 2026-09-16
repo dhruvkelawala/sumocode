@@ -133,10 +133,10 @@ function fixture(backend: "headless" | "visible" = "headless", worktreeResult = 
 			return supervisor.controllerChild(controlAuthority(granted));
 		} : spawn,
 			managerDependencies: { controllerIdentity: identities(token), processOperations: operations, captureGitContext: async () => ({}), buildCompletionManifest: async () => ({ baseRef: "HEAD", changedPaths: [], commits: 0, exit: "interrupted", durationMs: 1 }) } });
-		const fire = async (name: string, reason = "startup", targetSession = session === "origin" ? "successor" : "final") => {
+		const fire = async (name: string, reason = "startup", targetSession: string | undefined = reason === "reload" ? undefined : session === "origin" ? "successor" : "final") => {
 			// SAFETY: these lifecycle handlers read only idle/UI flags and session identity.
 			await handlers.get(name)?.({ type: name, reason,
-				targetSessionFile: name === "session_shutdown" ? join(root, `${targetSession}.jsonl`) : undefined,
+				targetSessionFile: name === "session_shutdown" && targetSession !== undefined ? join(root, `${targetSession}.jsonl`) : undefined,
 			}, { isIdle: () => idle, hasUI: false, sessionManager: {
 				getSessionId: () => session, getSessionFile: () => join(root, `${session}.jsonl`),
 			} } as never);
@@ -286,11 +286,12 @@ describe("durable sender delivery", () => {
 		f.writerState("dead"); f.originState("dead");
 		vi.setSystemTime(61_001);
 		vi.mocked(f.operations.identityMatches).mockReturnValue("different");
-		const next = f.install("successor");
+		const nextSession = reason === "reload" ? "origin" : "successor";
+		const next = f.install(nextSession, false, "successor");
 		await next.fire("session_start", reason);
 		await next.fire("agent_end");
 		expect(f.registry.get("sa-worker-1")).toMatchObject({ status: "settled", completionId: settled.completionId,
-			result: settled.result, manifest: settled.manifest, delivery: settled.delivery, controllerSessionId: "successor" });
+			result: settled.result, manifest: settled.manifest, delivery: settled.delivery, controllerSessionId: nextSession });
 		expect(f.registry.worktreeResult("sa-worker-1")).toMatchObject({ completionId: result.completionId, disposition: "inspected" });
 		expect(next.manager.get("sa-worker-1")).toMatchObject({ status: "done", recovery: "adopted", finalText: "answer" });
 		expect(next.delivery).not.toHaveBeenCalled();
@@ -348,7 +349,7 @@ describe("durable sender delivery", () => {
 		]);
 		expect(f.registry.get("sa-worker-1")?.delivery).toMatchObject({ state: "delivery-uncertain", notice: { state: "sent" } });
 		await next.fire("session_shutdown", "reload");
-		const final = f.install("final");
+		const final = f.install("successor", false, "final");
 		await final.fire("session_start", "reload");
 		expect(final.delivery).not.toHaveBeenCalled();
 		expectArtifacts(f);
@@ -484,11 +485,11 @@ describe("manager replacement adoption", () => {
 			const authority = await f.track(old);
 			const writer = f.registry.get("sa-worker-1")!.writerLease;
 			await old.fire("session_shutdown", reason);
-			const next = f.install("successor");
+			const nextSession = reason === "reload" ? "origin" : "successor";
+			const next = f.install(nextSession, false, "successor");
 			await next.fire("session_start", reason);
 			await next.fire("session_start", reason);
-			await next.manager.adoptFrom(old.manager, "successor");
-			expect(f.registry.get("sa-worker-1")).toMatchObject({ writerLease: writer, ownerSessionId: "origin", controllerSessionId: "successor", controllerGeneration: 1 });
+			expect(f.registry.get("sa-worker-1")).toMatchObject({ writerLease: writer, ownerSessionId: "origin", controllerSessionId: nextSession, controllerGeneration: 1 });
 			expect(f.registry.inspectControl(authority)).toBe(false);
 			expect(next.manager.canDeliver("sa-worker-1")).toBe(true);
 			expect(f.maxObservers()).toBe(1);
@@ -612,8 +613,9 @@ describe("manager replacement adoption", () => {
 	it("advances controller generation on reload even when the session ID does not change", async () => {
 		const f = fixture();
 		const old = f.install("origin");
+		await old.fire("session_start");
 		const authority = await f.track(old);
-		await old.fire("session_shutdown", "reload", "origin");
+		await old.fire("session_shutdown", "reload");
 		const next = f.install("origin", false, "reload-controller");
 		await next.fire("session_start", "reload");
 		expect(f.registry.get("sa-worker-1")).toMatchObject({ ownerSessionId: "origin", controllerSessionId: "origin", controllerGeneration: 1, controlLease: { owner: { token: "reload-controller" } } });
@@ -681,7 +683,7 @@ describe("manager replacement adoption", () => {
 		expect(renewed.writerLease?.owner.token).toBe("writer");
 		expect(renewed.controllerGeneration).toBe(1);
 		await next.fire("session_shutdown", "reload");
-		const final = f.install("final");
+		const final = f.install("successor", false, "final");
 		await final.fire("session_start", "reload");
 		expect(f.registry.get("sa-worker-1")?.controllerGeneration).toBe(2);
 		expect(f.registry.inspectControl(controlAuthority(renewed))).toBe(false);

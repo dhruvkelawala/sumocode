@@ -139,13 +139,13 @@ function fixture(cut?: "starting" | "pre-release", backend: "headless" | "visibl
 			retainedRegistry: diskRecovery ? registry.forController(controller) : undefined,
 			managerDependencies: { controllerIdentity: controller, processOperations: operations },
 		});
-		const fire = async (name: string, reason = "startup", targetSession = session === "origin" ? "successor" : "final") => {
+		const fire = async (name: string, reason = "startup", targetSession: string | undefined = reason === "reload" ? undefined : session === "origin" ? "successor" : "final") => {
 			// SAFETY: lifecycle handlers use only idle/UI flags and session identity.
 			const context = { isIdle: () => true, hasUI: false, sessionManager: {
 				getSessionId: () => session, getSessionFile: () => join(directory, `${session}.jsonl`),
 			} } as ExtensionContext;
 			await handlers.get(name)?.({ type: name, reason,
-				targetSessionFile: name === "session_shutdown" ? join(directory, `${targetSession}.jsonl`) : undefined,
+				targetSessionFile: name === "session_shutdown" && targetSession !== undefined ? join(directory, `${targetSession}.jsonl`) : undefined,
 			}, context);
 		};
 		const runtime = { manager, delivery, fire, tools };
@@ -202,10 +202,11 @@ async function blocked(f: Fixture, runtime: ReturnType<Fixture["install"]>): Pro
 async function replaceAndComplete(reason: string, beforeSettle = true, backend: "headless" | "visible" = "headless"): Promise<void> {
 	const f = fixture(undefined, backend);
 	const old = f.install("origin");
+	await old.fire("session_start");
 	const authority = await f.track(old);
 	const initial = f.owner.record;
 	if (!beforeSettle) await f.finish();
-	await old.fire("session_shutdown", reason, reason === "reload" ? "origin" : "successor");
+	await old.fire("session_shutdown", reason);
 	const next = f.install(reason === "reload" ? "origin" : "successor", "successor");
 	await next.fire("session_start", reason);
 	expect(f.registry.inspectControl(authority)).toBe(false);
@@ -490,7 +491,7 @@ describe("sender exact-once with explicit uncertainty", () => {
 			expect(next.delivery).toHaveBeenCalledTimes(1);
 			expect(next.delivery.mock.calls[0]?.[0]).toMatchObject({ customType: "subagent-delivery-uncertain", content: `delivery of ${f.record.id} uncertain; result manifest available at ${join(f.taskDir, "manifest.json")}; use inspect` });
 			await next.fire("session_shutdown", "reload");
-			const final = f.install("final");
+			const final = f.install("successor", "final");
 			await final.fire("session_start", "reload");
 			await final.fire("agent_end");
 			expect(final.delivery).not.toHaveBeenCalled();

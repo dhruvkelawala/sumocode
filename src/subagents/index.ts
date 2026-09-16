@@ -373,9 +373,9 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 		latestContext = ctx;
 		flush();
 	});
-	pi.on("session_shutdown", (event) => {
+	pi.on("session_shutdown", (event, ctx) => {
 		clearStatusWidget(latestContext);
-		const sourceSessionId = latestContext?.sessionManager.getSessionId();
+		const sourceSessionId = ctx.sessionManager.getSessionId();
 		latestContext = undefined;
 		unsubscribe?.();
 		unsubscribe = undefined;

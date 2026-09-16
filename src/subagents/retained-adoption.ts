@@ -92,11 +92,15 @@ export function sameRetainedEvidence(first: SubagentRecord, second: SubagentReco
 
 /** A new host needs only its private registry namespace, never an old JS handle. */
 export async function reconstructRetained(registry: SubagentRegistry, successor: RegistryWriter, sessionId: string,
-	operations: ProcessTreeOperations, host?: TerminalHost, pi?: PiExecLike,
+	operations: ProcessTreeOperations, host?: TerminalHost, pi?: PiExecLike, onDeferred?: (retryAt: number) => void,
 ): Promise<Array<{ entry: RetainedSubagent; classification: "adopted" | "persist-only" | "lost" | "ambiguous"; reason?: SubagentRecoveryReason }>> {
 	const results: Array<{ entry: RetainedSubagent; classification: "adopted" | "persist-only" | "lost" | "ambiguous"; reason?: SubagentRecoveryReason }> = [];
 	for (const { registry: discovered, record: initial, launch } of censusRetained(registry, operations)) {
 		if ((initial.controllerSessionId ?? initial.ownerSessionId) !== sessionId) continue;
+		if (initial.controlLease && initial.controlLease.expiresAt > Date.now() && discovered.controllerState(initial.id) === "dead") {
+			onDeferred?.(initial.controlLease.expiresAt);
+			continue;
+		}
 		if (!initial.controlLease) {
 			// Pre-control crashes still need durable successor accounting, not adoption.
 			const lost = discovered.writerState(initial.id) === "dead" && (launch === "never-launched" || launch === "empty");

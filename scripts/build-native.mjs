@@ -18,7 +18,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { instrumentPiStartup } from "./instrument-pi-startup.mjs";
-import { assertEagerClosureExcludesPackages } from "./lib/production-boundaries.mjs";
+import { assertNoEffectInEagerClosure, assertNoProductionDependencyLeakage } from "./lib/production-boundaries.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
@@ -105,6 +105,11 @@ async function buildExtensionBundle(entryPoint, outPath) {
 		logLevel: "warning",
 	});
 	assertMetafileContainment(result.metafile);
+	assertNoProductionDependencyLeakage(
+		result.metafile,
+		`native extension bundle ${entryPoint}`,
+		result.outputFiles.map((file) => file.text).join("\n"),
+	);
 	const output = result.outputFiles[0];
 	// Regression guard (plan step 2.3): every bare import in the bundle must be
 	// a Pi virtual module. Relative imports (./, ../, /) are inlined paths.
@@ -354,6 +359,7 @@ async function main() {
 	resignAdHoc(join(binDir, "sumocode-pi"));
 	const piBuildMetafile = JSON.parse(readFileSync(piMetafile, "utf8"));
 	assertMetafileContainment(piBuildMetafile, root, piBuildDir);
+	assertNoProductionDependencyLeakage(piBuildMetafile, "native Pi child");
 	rmSync(piBuildDir, { recursive: true, force: true });
 	const includedBedrockInputs = bedrockInputs(piBuildMetafile);
 	if (includedBedrockInputs.length > 0) fail(`compiled Pi child still includes Bedrock: ${includedBedrockInputs.join(", ")}`);
@@ -394,7 +400,8 @@ async function main() {
 	resignAdHoc(join(binDir, "sumocode"));
 	const nativeHostBuild = JSON.parse(readFileSync(hostMetafile, "utf8"));
 	assertMetafileContainment(nativeHostBuild);
-	assertEagerClosureExcludesPackages(nativeHostBuild, "src/native/main.ts", ["effect"], "native launcher");
+	assertNoProductionDependencyLeakage(nativeHostBuild, "native host");
+	assertNoEffectInEagerClosure(nativeHostBuild, "src/native/main.ts", "native launcher");
 
 	// 4. Host sidecar assets and installer.
 	copyFileSync(resolve(root, "src/assets/sumo-face.ans"), join(shareDir, "sumo-face.ans"));

@@ -96,6 +96,7 @@ export async function reconstructRetained(registry: SubagentRegistry, successor:
 ): Promise<Array<{ entry: RetainedSubagent; classification: "adopted" | "persist-only" | "lost" | "ambiguous"; reason?: SubagentRecoveryReason }>> {
 	const results: Array<{ entry: RetainedSubagent; classification: "adopted" | "persist-only" | "lost" | "ambiguous"; reason?: SubagentRecoveryReason }> = [];
 	for (const { registry: discovered, record: initial, launch } of censusRetained(registry, operations)) {
+		if ((initial.controllerSessionId ?? initial.ownerSessionId) !== sessionId) continue;
 		if (!initial.controlLease) {
 			// Pre-control crashes still need durable successor accounting, not adoption.
 			const lost = discovered.writerState(initial.id) === "dead" && (launch === "never-launched" || launch === "empty");

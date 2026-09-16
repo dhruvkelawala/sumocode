@@ -182,7 +182,7 @@ describe("durable sender delivery", () => {
 		f.writerState("dead"); f.originState("dead");
 		vi.setSystemTime(61_001);
 		const next = f.install("successor");
-		await next.manager.reconstruct(f.registry, "successor");
+		await next.manager.reconstruct(f.registry, "origin");
 		expect(f.registry.get("sa-worker-1")).toMatchObject({ status: "lost", writerLease: { generation: 2 } });
 		expect(next.manager.get("sa-worker-1")?.recovery).toBe("lost");
 		expect(f.operations.signalTree).not.toHaveBeenCalled();
@@ -201,7 +201,7 @@ describe("durable sender delivery", () => {
 		vi.mocked(f.operations.identityMatches).mockReturnValue("different");
 		vi.mocked(f.operations.verificationMatches!).mockReturnValue("different");
 		const next = f.install("successor");
-		await next.manager.reconstruct(f.registry, "successor");
+		await next.manager.reconstruct(f.registry, "origin");
 		expect(next.manager.get("sa-worker-1")).toMatchObject({ recovery: "adopted", status: "done", finalText: "answer" });
 		expect(f.registry.inspectControl(authority)).toBe(false);
 		await next.fire("agent_end"); await next.fire("agent_end");

@@ -61,7 +61,7 @@ export async function readNativeArtifactIdentity(archiveDir) {
 
 	const files = [];
 	const seen = new Set();
-	for (const line of checksumBytes.toString("utf8").split("\n").filter(Boolean)) {
+	for (const line of checksumBytes.toString("utf8").split("\n").filter(Boolean).map((value) => value.replace(/\r$/u, ""))) {
 		const match = line.match(/^([0-9a-f]{64})  (.+)$/u);
 		if (!match) throw new Error(`invalid native artifact checksum line: ${line}`);
 		const path = checkedRelativePath(match[2]);

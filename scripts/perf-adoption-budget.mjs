@@ -17,7 +17,7 @@ const EVAL_END = "sumocode_extension_eval_end";
 const execFileAsync = promisify(execFile);
 
 function usage() {
-	return `Usage: node scripts/perf-adoption-budget.mjs --native <archive> [options]\n\nOptions:\n  --native <dir>      native archive built from the current clean source commit\n  --out <dir>         new report directory (required)\n  -h, --help          show this help\n\nThe command always loads and never rewrites the committed baseline.\n`;
+	return `Usage: node scripts/perf-adoption-budget.mjs --native <dir> [options]\n\nOptions:\n  --native <dir>      native archive built from the current clean source commit\n  --out <dir>         new report directory (required)\n  -h, --help          show this help\n\nThe command always loads and never rewrites the committed baseline.\n`;
 }
 
 export function adoptionBudgetOptions(argv) {
@@ -68,8 +68,9 @@ function sizeMeasurement(value) {
 
 export function evaluateAdoptionBudget(report, policy) {
 	const failedChecks = [];
+	const measurements = report.measurements ?? {};
 	for (const [name, budget] of Object.entries(policy.budgets ?? {})) {
-		const observed = report.measurements[name];
+		const observed = measurements[name];
 		if (!observed || !Number.isFinite(budget?.max)) {
 			failedChecks.push(`${name}:policy`);
 			continue;
@@ -85,7 +86,7 @@ export function evaluateAdoptionBudget(report, policy) {
 			else if (observed.value > budget.max) failedChecks.push(`${name}:budget`);
 		} else failedChecks.push(`${name}:collection`);
 	}
-	for (const name of Object.keys(report.measurements)) {
+	for (const name of Object.keys(measurements)) {
 		if (!Object.hasOwn(policy.budgets ?? {}, name)) failedChecks.push(`${name}:policy`);
 	}
 	return { verdict: failedChecks.length === 0 ? "passed" : "failed", failedChecks };
@@ -216,7 +217,7 @@ async function evaluationSample({ command, bundlePath, root, native, workDir, in
 			}
 		};
 		const timer = setTimeout(() => settle({ ok: false, failure: "timeout" }), 30_000);
-		child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf8"); void inspect(); });
+		child.stdout.on("data", (chunk) => { stdout = `${stdout}${chunk.toString("utf8")}`.slice(-4_000); void inspect(); });
 		child.on("error", () => settle({ ok: false, failure: "process-failed" }));
 		child.on("exit", () => settle({ ok: false, failure: "process-failed" }));
 		child.stdin.on("error", () => settle({ ok: false, failure: "process-failed" }));
@@ -279,7 +280,9 @@ async function defaultMachineMetadata() {
 
 function markdown(report, policy) {
 	const rows = Object.entries(report.measurements).map(([name, measurement]) => {
-		const observed = measurement.kind === "timing" ? `${measurement.medianMs}ms` : `${measurement.value} bytes`;
+		const observed = measurement.kind === "timing"
+			? (measurement.medianMs === null ? "failed" : `${measurement.medianMs}ms`)
+			: `${measurement.value} bytes`;
 		const budget = policy.budgets[name];
 		return `| ${name} | ${budget?.baseline ?? "—"} | ${budget?.max ?? "—"} | ${observed} |`;
 	});
@@ -296,13 +299,14 @@ export async function runAdoptionBudget(options, dependencies = {}) {
 	if (policy.schemaVersion !== 1 || policy.baseline?.samples !== SAMPLES) throw new Error("adoption baseline policy is invalid");
 	if (!source.sourceClean) throw new Error("adoption budget requires a clean source checkout");
 	if (source.sourceCommit !== nativeArtifact.sourceCommit) throw new Error("source checkout and native artifact commits differ");
+	const machine = await (dependencies.machineMetadata ?? defaultMachineMetadata)();
 	const measurements = await (dependencies.collectMeasurements ?? defaultCollectMeasurements)(nativeArtifact);
 	const report = {
 		schemaVersion: 1,
 		generatedAt: new Date().toISOString(),
 		source,
 		nativeArtifact: { sourceCommit: nativeArtifact.sourceCommit, sourceClean: nativeArtifact.sourceClean, artifactSha256: nativeArtifact.artifactSha256 },
-		machine: await (dependencies.machineMetadata ?? defaultMachineMetadata)(),
+		machine,
 		measurements,
 	};
 	report.gate = evaluateAdoptionBudget(report, policy);

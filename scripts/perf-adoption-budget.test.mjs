@@ -82,6 +82,7 @@ describe("adoption performance budget", () => {
 				"native-classic-extension-bytes:budget",
 			],
 		});
+		expect(evaluateAdoptionBudget({}, policy()).verdict).toBe("failed");
 	});
 
 	it("wraps bundle evaluation marks around the emitted module body", () => {

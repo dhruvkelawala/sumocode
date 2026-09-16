@@ -33,17 +33,18 @@ export default function installMcpChildBootstrap(
 	report: Warn = warn,
 ): void {
 	pi.on("before_agent_start", () => {
-		if (pi.getActiveTools().includes(MCP_GATEWAY_TOOL)) return;
-		const message = `MCP capability unavailable: the ${MCP_GATEWAY_TOOL} tool was not registered for this child`;
-		// A gateway someone asked for by name must work or the child must not
-		// run. An inherited one is best-effort: the resolver already degrades
-		// instead of refusing, and an adapter that fails to register (a malformed
-		// project config, a renamed tool, no reachable servers) must not kill
-		// every delegation in the session.
-		// Consumed here: an inherited value must not follow the child into the
-		// processes it starts, where nothing is waiting for this gateway.
+		// Consumed unconditionally, before any early return: this marker describes
+		// THIS child's grant, so it must not reach the child's own children, where
+		// a delegation that merely inherits the gateway would be terminated by it.
 		const required = process.env[MCP_REQUIRED_ENV] === "1";
 		delete process.env[MCP_REQUIRED_ENV];
+		if (pi.getActiveTools().includes(MCP_GATEWAY_TOOL)) return;
+		const message = `MCP capability unavailable: the ${MCP_GATEWAY_TOOL} tool was not registered for this child`;
+		// A gateway someone asked for by name must work or the child must not run.
+		// An inherited one is best-effort: the resolver already degrades instead of
+		// refusing, and an adapter that fails to register (a malformed project
+		// config, a renamed tool, no reachable servers) must not kill every
+		// delegation in the session.
 		if (required) terminate(message);
 		else report(`${message}; continuing without it`);
 	});

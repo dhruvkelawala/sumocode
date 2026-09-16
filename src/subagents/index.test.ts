@@ -237,6 +237,20 @@ describe("subagent result delivery", () => {
 		harness.fire("session_shutdown", "quit");
 	});
 
+	it("releases legacy unscoped replacements instead of adopting them", async () => {
+		const key = Symbol.for("@dhruvkelawala/sumocode/subagent-replacements");
+		// SAFETY: the test owns this namespaced symbol and restores it by exercising cleanup.
+		const state = globalThis as typeof globalThis & { [key]?: Set<unknown> };
+		const legacy = new Set<unknown>([{}]);
+		state[key] = legacy;
+
+		const harness = createHarness();
+		await harness.fireSessionStart();
+
+		expect(legacy.size).toBe(0);
+		expect(state[key]).toBeUndefined();
+	});
+
 	it("uses the shutdown context for targetless reload before session start", async () => {
 		const harness = createHarness();
 		const detach = vi.spyOn(harness.manager, "detachForReplacement");

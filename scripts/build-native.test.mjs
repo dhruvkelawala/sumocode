@@ -156,6 +156,9 @@ describe("native build entry", () => {
 			write(join(root, ".bun-version"), "fixture-only");
 			mkdirSync(dirname(script), { recursive: true });
 			copyFileSync(new URL("./build-native.mjs", import.meta.url), script);
+			const productionBoundaries = join(root, "scripts/lib/production-boundaries.mjs");
+			mkdirSync(dirname(productionBoundaries), { recursive: true });
+			copyFileSync(new URL("./lib/production-boundaries.mjs", import.meta.url), productionBoundaries);
 			write(join(root, "node_modules/esbuild/package.json"), '{"type":"module","exports":"./index.js"}');
 			write(join(root, "node_modules/esbuild/index.js"), 'export function build() { throw new Error("unexpected-build"); }');
 			write(join(root, "scripts/instrument-pi-startup.mjs"), "export function instrumentPiStartup() {}\n");

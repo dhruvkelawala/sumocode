@@ -114,9 +114,15 @@ void Ndjson;
 import * as FastCheck from "effect/testing/FastCheck";
 void FastCheck;
 `, false, join(tmpdir(), "src"));
+		const productionTestingDirectory = runLint("src/testing/helper.ts", `
+import * as FastCheck from "effect/testing/FastCheck";
+void FastCheck;
+`);
 
 		expect(production.status, production.output).toBe(0);
 		expect(test.status, test.output).toBe(0);
 		expect(testSupport.status, testSupport.output).toBe(0);
+		expect(productionTestingDirectory.status).toBe(1);
+		expect(productionTestingDirectory.output).toContain("Effect testing modules are test-only");
 	});
 });

@@ -335,7 +335,7 @@ Mitigations that are genuinely available: `"sideEffects": []` (`effect/package.j
 
 Issue #589 replaced the old Node-bundle-versus-native improvement benchmark with the reproducible adoption gate documented in [`docs/perf/adoption-baseline.md`](../../perf/adoption-baseline.md):
 
-- `scripts/perf-native-compare.mjs` requires two checksum-verified native archives. The baseline archive must match the pinned clean source commit and artifact identity; the harness alternates exactly 15 samples per artifact under one isolated fixture/environment.
+- `scripts/perf-native-compare.mjs` requires two checksum-verified native archives. The baseline archive must match the pinned clean source commit, and each run records both archives' exact checksum identities; the harness alternates exactly 15 samples per artifact under one isolated fixture/environment.
 - `evaluateNativeGate` fails if any sample is missing or incomplete, if candidate `editor_ready` exceeds baseline median + baseline MAD, if `command_ready` rises at all, or if `editorToCommandGapMs` widens.
 - `scripts/perf-adoption-budget.mjs` gates source `host-import` plus classic/RPC extension bundle bytes and in-Pi-child evaluation for both source-built and native-distributed bundles.
 - `scripts/perf-startup-compare.mjs` remains the directional source-arm gate; its verdict must not be `REGRESSED`. `scripts/perf-startup.mjs` remains report-only.

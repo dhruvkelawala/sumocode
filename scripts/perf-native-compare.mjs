@@ -285,7 +285,8 @@ async function readBaselineIdentity() {
 	let policy;
 	try { policy = JSON.parse(await readFile(DEFAULT_BASELINE_RECORD, "utf8")); }
 	catch (error) { throw new Error(`failed to read pinned baseline record: ${error instanceof Error ? error.message : String(error)}`); }
-	if (!/^[0-9a-f]{40}$/.test(policy.baseline?.sourceCommit ?? "")) throw new Error("pinned baseline record is invalid");
+	if (policy.schemaVersion !== 1 || policy.baseline?.samples !== DEFAULT_SAMPLES
+		|| !/^[0-9a-f]{40}$/.test(policy.baseline?.sourceCommit ?? "")) throw new Error("pinned baseline record is invalid");
 	return { sourceCommit: policy.baseline.sourceCommit };
 }
 

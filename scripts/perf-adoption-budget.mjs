@@ -197,10 +197,12 @@ async function evaluationSample({ command, bundlePath, root, native, workDir, in
 	let stdout = "";
 	let settled = false;
 	const result = await new Promise((resolveSample) => {
+		let poll;
 		const settle = async (sample) => {
 			if (settled) return;
 			settled = true;
 			clearTimeout(timer);
+			clearInterval(poll);
 			const reaped = await stopChild(child).catch(() => false);
 			resolveSample(reaped ? sample : { ok: false, failure: "shutdown-failed" });
 		};
@@ -221,6 +223,7 @@ async function evaluationSample({ command, bundlePath, root, native, workDir, in
 			}
 		};
 		const timer = setTimeout(() => settle({ ok: false, failure: "timeout" }), 30_000);
+		poll = setInterval(() => { void inspect(); }, 25);
 		child.stdout.on("data", (chunk) => { stdout = `${stdout}${chunk.toString("utf8")}`.slice(-4_000); void inspect(); });
 		child.on("error", () => settle({ ok: false, failure: "process-failed" }));
 		child.on("exit", () => settle({ ok: false, failure: "process-failed" }));
@@ -302,8 +305,12 @@ export async function runAdoptionBudget(options, dependencies = {}) {
 	]);
 	if (policy.schemaVersion !== 1 || policy.baseline?.samples !== SAMPLES) throw new Error("adoption baseline policy is invalid");
 	if (!source.sourceClean) throw new Error("adoption budget requires a clean source checkout");
+	if (nativeArtifact.sourceClean !== true) throw new Error("adoption budget requires a clean native artifact");
 	if (source.sourceCommit !== nativeArtifact.sourceCommit) throw new Error("source checkout and native artifact commits differ");
 	const machine = await (dependencies.machineMetadata ?? defaultMachineMetadata)();
+	for (const key of ["platform", "arch", "node", "bun", "cpu"]) {
+		if (machine[key] !== policy.baseline.machine?.[key]) throw new Error(`adoption budget machine mismatch: ${key}`);
+	}
 	const measurements = await (dependencies.collectMeasurements ?? defaultCollectMeasurements)(nativeArtifact);
 	const report = {
 		schemaVersion: 1,

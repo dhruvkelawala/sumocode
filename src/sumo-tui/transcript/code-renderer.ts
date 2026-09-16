@@ -13,6 +13,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { activeThemeApplicationRoles, type ThemeApplicationRoles } from "../../themes/index.js";
 import { lineToAnsi, lineWidth, span, textLine, truncateLine, withPersistentStyle, wrapLine, type Span } from "../render/primitives.js";
 import { expandKey } from "./expand-key.js";
+import { highlightLine } from "./syntax-highlight.js";
 
 const MAX_SOURCE_LINES = 20;
 const MAX_VISIBLE_ROWS = 20;
@@ -22,126 +23,10 @@ const MIN_GUTTER_WIDTH = 4; // "  1 " — 4 chars (right-aligned 3 + space)
 // tables, trees, and other structure-sensitive text.
 const WRAPPED_TEXT_LANGUAGES = new Set(["txt", "text", "plain", "plaintext"]);
 
-// ── Syntax highlighting ──────────────────────────────────────
-
-interface KeywordSets {
-	[lang: string]: ReadonlySet<string>;
-}
-
-const KEYWORD_SETS: KeywordSets = {
-	ts: new Set(["async", "await", "const", "let", "var", "function", "return", "if", "else", "for", "while", "do", "switch", "case", "break", "continue", "throw", "try", "catch", "finally", "class", "extends", "implements", "import", "export", "from", "default", "new", "typeof", "instanceof", "in", "of", "null", "undefined", "true", "false", "void", "type", "interface", "enum", "as", "is", "keyof", "readonly", "declare", "module", "namespace", "abstract", "private", "protected", "public", "static", "yield", "delete", "super", "this", "debugger", "with"]),
-	typescript: new Set(["async", "await", "const", "let", "var", "function", "return", "if", "else", "for", "while", "do", "switch", "case", "break", "continue", "throw", "try", "catch", "finally", "class", "extends", "implements", "import", "export", "from", "default", "new", "typeof", "instanceof", "in", "of", "null", "undefined", "true", "false", "void", "type", "interface", "enum", "as", "is", "keyof", "readonly", "declare", "module", "namespace", "abstract", "private", "protected", "public", "static", "yield", "delete", "super", "this", "debugger", "with"]),
-	js: new Set(["async", "await", "const", "let", "var", "function", "return", "if", "else", "for", "while", "do", "switch", "case", "break", "continue", "throw", "try", "catch", "finally", "class", "extends", "import", "export", "from", "default", "new", "typeof", "instanceof", "in", "of", "null", "undefined", "true", "false", "void", "yield", "delete", "super", "this", "debugger", "with"]),
-	javascript: new Set(["async", "await", "const", "let", "var", "function", "return", "if", "else", "for", "while", "do", "switch", "case", "break", "continue", "throw", "try", "catch", "finally", "class", "extends", "import", "export", "from", "default", "new", "typeof", "instanceof", "in", "of", "null", "undefined", "true", "false", "void", "yield", "delete", "super", "this", "debugger", "with"]),
-	bash: new Set(["if", "then", "else", "elif", "fi", "for", "in", "do", "done", "while", "until", "case", "esac", "function", "return", "local", "export", "readonly", "declare", "typeset", "unset", "shift", "exit", "break", "continue", "source", "eval", "exec", "set", "trap"]),
-	sh: new Set(["if", "then", "else", "elif", "fi", "for", "in", "do", "done", "while", "until", "case", "esac", "function", "return", "local", "export", "readonly", "declare", "typeset", "unset", "shift", "exit", "break", "continue", "source", "eval", "exec", "set", "trap"]),
-	python: new Set(["def", "class", "return", "if", "elif", "else", "for", "while", "break", "continue", "import", "from", "as", "with", "try", "except", "finally", "raise", "pass", "yield", "lambda", "and", "or", "not", "in", "is", "True", "False", "None", "global", "nonlocal", "del", "assert", "async", "await"]),
-	py: new Set(["def", "class", "return", "if", "elif", "else", "for", "while", "break", "continue", "import", "from", "as", "with", "try", "except", "finally", "raise", "pass", "yield", "lambda", "and", "or", "not", "in", "is", "True", "False", "None", "global", "nonlocal", "del", "assert", "async", "await"]),
-};
-
-interface SyntaxSpan {
-	text: string;
-	color: string;
-}
+// Syntax highlighting (Shiki + synchronous fallback) lives in
+// ./syntax-highlight.ts.
 
 type CodeRoles = ThemeApplicationRoles["code"];
-
-function isFunctionCall(rest: string): boolean {
-	return /^\s*\(/.test(rest);
-}
-
-/**
- * Tokenize a source line into colored spans.
- * Handles: comments (#, //), strings ("…", '…'), numbers, keywords, function calls.
- */
-function highlightLine(line: string, lang: string, roles: CodeRoles): SyntaxSpan[] {
-	const spans: SyntaxSpan[] = [];
-	const fg = roles.foreground;
-	const kw = roles.keyword;
-	const str = roles.string;
-	const num = roles.number;
-	const fn = roles.function;
-	const comment = roles.comment;
-
-	let i = 0;
-	let current = "";
-	let currentColor = fg;
-
-	function flush(): void {
-		if (current.length > 0) {
-			spans.push({ text: current, color: currentColor });
-			current = "";
-		}
-	}
-
-	function pushColored(text: string, color: string): void {
-		flush();
-		spans.push({ text, color });
-		currentColor = fg;
-	}
-
-	while (i < line.length) {
-		const ch = line[i]!;
-
-		// Line comments: // or #
-		if ((ch === "/" && line[i + 1] === "/") || (ch === "#" && (lang === "bash" || lang === "sh" || lang === "python" || lang === "py"))) {
-			flush();
-			spans.push({ text: line.slice(i), color: comment });
-			return spans.length > 0 ? spans : [{ text: line, color: fg }];
-		}
-
-		// Strings
-		if (ch === '"' || ch === "'" || ch === "`") {
-			flush();
-			let j = i + 1;
-			while (j < line.length && line[j] !== ch) {
-				if (line[j] === "\\") j += 1;
-				j += 1;
-			}
-			j = Math.min(j + 1, line.length);
-			pushColored(line.slice(i, j), str);
-			i = j;
-			continue;
-		}
-
-		// Numbers
-		if (/[0-9]/.test(ch) && (i === 0 || /[\s(,=:<>!&|+\-*/[\]{};]/.test(line[i - 1] ?? ""))) {
-			flush();
-			let j = i;
-			while (j < line.length && /[0-9._xXa-fA-FeEn]/.test(line[j]!)) j += 1;
-			pushColored(line.slice(i, j), num);
-			i = j;
-			continue;
-		}
-
-		// Words (identifiers / keywords)
-		if (/[a-zA-Z_$]/.test(ch)) {
-			flush();
-			let j = i;
-			while (j < line.length && /[a-zA-Z0-9_$]/.test(line[j]!)) j += 1;
-			const word = line.slice(i, j);
-			const after = line.slice(j);
-				const keywords: ReadonlySet<string> | undefined = KEYWORD_SETS[lang];
-				if (keywords?.has(word)) {
-				pushColored(word, kw);
-			} else if (isFunctionCall(after)) {
-				pushColored(word, fn);
-			} else {
-				pushColored(word, fg);
-			}
-			i = j;
-			continue;
-		}
-
-		// Default: accumulate as foreground
-		current += ch;
-		currentColor = fg;
-		i += 1;
-	}
-
-	flush();
-	return spans.length > 0 ? spans : [{ text: line, color: fg }];
-}
 
 // ── Frame rendering ──────────────────────────────────────────
 

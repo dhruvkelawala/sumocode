@@ -90,6 +90,7 @@
   "dependencies": {
     "grok-mermaid": "0.2.2",
     "jiti": "^2.7.0",
+    "shiki": "4.4.3",
     "yoga-layout": "^3.2.1"
   },
   "pnpm": {

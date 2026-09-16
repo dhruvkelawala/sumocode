@@ -48,6 +48,24 @@ function policy() {
 }
 
 describe("adoption performance budget", () => {
+	it("commits a complete reviewed pre-adoption record", async () => {
+		const committed = JSON.parse(await readFile(new URL("../docs/perf/adoption-baseline.json", import.meta.url), "utf8"));
+		expect(committed).toMatchObject({
+			schemaVersion: 1,
+			baseline: {
+				sourceCommit: expect.stringMatching(/^[0-9a-f]{40}$/),
+				nativeArtifactSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+				samples: 15,
+			},
+		});
+		for (const [name, budget] of Object.entries(committed.budgets)) {
+			expect(budget.max, name).toBeGreaterThanOrEqual(budget.baseline);
+			const observation = committed.baseline.measurements[name];
+			if (name.endsWith("-ms")) expect(observation.samples, name).toHaveLength(15);
+			else expect(observation, name).toBe(budget.baseline);
+		}
+	});
+
 	it("passes complete observations within every reviewed ceiling", () => {
 		expect(evaluateAdoptionBudget({ measurements: measurements() }, policy())).toEqual({ verdict: "passed", failedChecks: [] });
 	});

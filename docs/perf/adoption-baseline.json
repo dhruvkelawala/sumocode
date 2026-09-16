@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-09-16T11:55:01.941Z",
+  "baseline": {
+    "sourceCommit": "8135d0512bb5bcfa0f056e54bd7c484c54968ab0",
+    "nativeArtifactSha256": "5464ad17cd2ad3246aba3a54015f870d664379a4bd4a27ab88751db5d743f360",
+    "samples": 15,
+    "machine": {
+      "platform": "darwin",
+      "arch": "arm64",
+      "node": "v25.6.1",
+      "bun": "1.4.0",
+      "cpu": "Apple M4 × 10"
+    },
+    "measurements": {
+      "source-host-import-ms": {
+        "samples": [2771, 1293, 1361, 1299, 1290, 1292, 1296, 1287, 1320, 1348, 1305, 1314, 1321, 1307, 1305],
+        "failures": 0,
+        "medianMs": 1305,
+        "madMs": 13
+      },
+      "source-classic-extension-bytes": 1013962,
+      "source-classic-extension-eval-ms": {
+        "samples": [2, 2, 2, 1, 1, 2, 1, 1, 1, 1, 1, 2, 2, 2, 1],
+        "failures": 0,
+        "medianMs": 1,
+        "madMs": 0
+      },
+      "source-rpc-extension-bytes": 884679,
+      "source-rpc-extension-eval-ms": {
+        "samples": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1],
+        "failures": 0,
+        "medianMs": 1,
+        "madMs": 0
+      },
+      "native-classic-extension-bytes": 1013962,
+      "native-classic-extension-eval-ms": {
+        "samples": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1],
+        "failures": 0,
+        "medianMs": 1,
+        "madMs": 0
+      },
+      "native-rpc-extension-bytes": 884679,
+      "native-rpc-extension-eval-ms": {
+        "samples": [0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1],
+        "failures": 0,
+        "medianMs": 0,
+        "madMs": 0
+      }
+    }
+  },
+  "budgets": {
+    "source-host-import-ms": { "baseline": 1305, "max": 1435 },
+    "source-classic-extension-bytes": { "baseline": 1013962, "max": 1538250 },
+    "source-classic-extension-eval-ms": { "baseline": 1, "max": 26 },
+    "source-rpc-extension-bytes": { "baseline": 884679, "max": 1408967 },
+    "source-rpc-extension-eval-ms": { "baseline": 1, "max": 26 },
+    "native-classic-extension-bytes": { "baseline": 1013962, "max": 1538250 },
+    "native-classic-extension-eval-ms": { "baseline": 1, "max": 26 },
+    "native-rpc-extension-bytes": { "baseline": 884679, "max": 1408967 },
+    "native-rpc-extension-eval-ms": { "baseline": 0, "max": 25 }
+  }
+}

@@ -380,7 +380,7 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 		unsubscribe?.();
 		unsubscribe = undefined;
 		delivery.clear();
-		if (event.reason !== "quit") {
+		if (event.reason === "new" || event.reason === "fork" || event.reason === "resume" || event.reason === "reload") {
 			// Defer detachment only for the successor Pi identified. An unrelated
 			// session in the same process must never inherit this manager's results.
 			manager.prepareForReplacement();

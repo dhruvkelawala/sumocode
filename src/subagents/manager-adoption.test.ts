@@ -385,10 +385,7 @@ describe("durable sender delivery", () => {
 		vi.spyOn(f.supervisor, "reserveControl").mockImplementation(async (authority, successor) => {
 			const reserved = await reserve(authority, successor);
 			const current = f.registry.get("sa-worker-1")!;
-			f.registry.transition(current.id, current.revision, current.writerLease!.generation, (record) => ({
-				...record,
-				telemetry: { ...record.telemetry!, lastHeartbeatAt: 1000 },
-			}));
+			f.registry.acquireWriter(current.id, current.revision, 60_000);
 			return reserved;
 		});
 

@@ -566,7 +566,9 @@ describe("subagent result delivery", () => {
 		await spawn(harness.manager, "pre-switch");
 		// Child is still running when the session switches; disposeAll interrupts
 		// it and the fold lands AFTER shutdown (real SIGTERM timing).
+		const dispose = vi.spyOn(harness.manager, "disposeAll");
 		harness.fire("session_shutdown");
+		expect(dispose).toHaveBeenCalledOnce();
 		backend.emitters.at(-1)?.({ kind: "run-settled", outcome: { kind: "interrupted" } });
 		harness.fire("session_start");
 		harness.fire("agent_end");

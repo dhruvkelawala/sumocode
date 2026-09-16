@@ -130,8 +130,8 @@ const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui", options: { re
 		for (const handler of handlers.get(event) ?? []) handler({ type: event, reason, targetSessionFile }, ctx);
 	};
 	const fireSessionStart = async (sessionId = "test-session", sessionFile = `/tmp/${sessionId}.jsonl`) => {
-		const sessionCtx = { ...ctx, sessionManager: { getSessionId: () => sessionId, getSessionFile: () => sessionFile } };
-		for (const handler of handlers.get("session_start") ?? []) await handler({ type: "session_start" }, sessionCtx);
+		ctx.sessionManager = { getSessionId: () => sessionId, getSessionFile: () => sessionFile };
+		for (const handler of handlers.get("session_start") ?? []) await handler({ type: "session_start" }, ctx);
 	};
 	return {
 		manager,

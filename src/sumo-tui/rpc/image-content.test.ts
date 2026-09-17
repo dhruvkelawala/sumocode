@@ -2,16 +2,17 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { getImageDimensions } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it } from "vitest";
 import { MAX_RPC_IMAGE_BYTES, MAX_RPC_IMAGE_TOTAL_BYTES, loadRpcImages } from "./image-content.js";
 
 const roots: string[] = [];
-const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
 const require = createRequire(import.meta.url);
 type PngInstance = { readonly data: Buffer };
 type PngCtor = (new (options: { width: number; height: number }) => PngInstance) & { readonly sync: { write(png: PngInstance): Buffer } };
 // SAFETY: pngjs has no declarations; this is the same constructor/data/sync.write subset used by the visual parity tests.
 const { PNG: PngImage } = require("pngjs") as { PNG: PngCtor };
+const PNG = PngImage.sync.write(new PngImage({ width: 1, height: 1 }));
 
 function root(): string {
 	const path = mkdtempSync(join(tmpdir(), "sumocode-rpc-image-"));
@@ -19,8 +20,8 @@ function root(): string {
 	return path;
 }
 
-function screenshotPng(): Buffer {
-	const screenshot = new PngImage({ width: 2560, height: 1600 });
+function screenshotPng(width = 2560, height = 1600): Buffer {
+	const screenshot = new PngImage({ width, height });
 	let noise = 0x12345678;
 	for (let index = 0; index < screenshot.data.length; index += 4) {
 		noise ^= noise << 13; noise ^= noise >>> 17; noise ^= noise << 5;
@@ -56,10 +57,13 @@ describe("loadRpcImages", () => {
 			}, 25);
 		});
 
-		await expect(loadRpcImages([{ token: "[Image 1]", path }], { cwd })).resolves.toEqual([
-			{ type: "image", mimeType: "image/png", data: PNG.toString("base64") },
-		]);
-		await materialized;
+		try {
+			await expect(loadRpcImages([{ token: "[Image 1]", path }], { cwd })).resolves.toEqual([
+				{ type: "image", mimeType: "image/png", data: PNG.toString("base64") },
+			]);
+		} finally {
+			await materialized;
+		}
 	});
 
 	it.each([
@@ -75,6 +79,23 @@ describe("loadRpcImages", () => {
 		await expect(loadRpcImages([{ token: "[Image 1]", path: `./${name}` }], { cwd })).rejects.not.toThrow("secret-image-payload");
 	});
 
+	it.each([
+		[2400, 1200, 2000, 1000],
+		[1200, 2400, 1000, 2000],
+	])("bounds a %i × %i screenshot even below the byte limit", async (width, height, expectedWidth, expectedHeight) => {
+		const cwd = root();
+		const screenshot = new PngImage({ width, height });
+		screenshot.data.fill(255);
+		const source = PngImage.sync.write(screenshot);
+		expect(source.byteLength).toBeLessThan(MAX_RPC_IMAGE_BYTES);
+		writeFileSync(join(cwd, "compressed.png"), source);
+
+		const [image] = await loadRpcImages([{ token: "[Image 1]", path: "./compressed.png" }], { cwd });
+
+		expect(getImageDimensions(image!.data, image!.mimeType)).toEqual({ widthPx: expectedWidth, heightPx: expectedHeight });
+		expect(Buffer.byteLength(image!.data, "base64")).toBeLessThanOrEqual(MAX_RPC_IMAGE_BYTES);
+	});
+
 	it("resizes a macOS screenshot-sized PNG before applying the RPC payload limit", async () => {
 		const cwd = root();
 		const source = screenshotPng();
@@ -87,10 +108,10 @@ describe("loadRpcImages", () => {
 		expect(Buffer.byteLength(image?.data ?? "", "base64")).toBeLessThanOrEqual(MAX_RPC_IMAGE_BYTES);
 	}, 15_000);
 
-	it("rejects oversized image data that cannot be decoded for resizing", async () => {
+	it.each([16, MAX_RPC_IMAGE_BYTES + 1])("rejects undecodable image data of %i bytes", async (size) => {
 		const cwd = root();
-		const malformed = Buffer.alloc(MAX_RPC_IMAGE_BYTES + 1);
-		PNG.copy(malformed);
+		const malformed = Buffer.alloc(size);
+		PNG.subarray(0, 16).copy(malformed);
 		writeFileSync(join(cwd, "malformed.png"), malformed);
 
 		await expect(loadRpcImages([{ token: "[Image 1]", path: "./malformed.png" }], { cwd })).rejects.toThrow("could not be resized");
@@ -123,8 +144,9 @@ describe("loadRpcImages", () => {
 
 	it("rejects multiple individually valid images that cross the aggregate limit", async () => {
 		const cwd = root();
-		const large = Buffer.alloc(Math.floor(MAX_RPC_IMAGE_TOTAL_BYTES / 2) + 1);
-		PNG.copy(large);
+		const large = screenshotPng(1000, 850);
+		expect(large.byteLength).toBeGreaterThan(MAX_RPC_IMAGE_TOTAL_BYTES / 2);
+		expect(large.byteLength).toBeLessThan(MAX_RPC_IMAGE_BYTES);
 		writeFileSync(join(cwd, "one.png"), large);
 		writeFileSync(join(cwd, "two.png"), large);
 

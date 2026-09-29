@@ -65,6 +65,16 @@ function run(command, args) {
 	}
 }
 
+// Bun's --compile leaves an invalid ad-hoc signature on macOS arm64, and the
+// kernel SIGKILLs such executables at launch. Replace it with a valid one.
+// ponytail: ad-hoc only (integrity, no identity); Developer ID + notarization is #602.
+function resignAdHoc(executable) {
+	if (process.platform !== "darwin") return;
+	run("codesign", ["--remove-signature", executable]);
+	run("codesign", ["--sign", "-", executable]);
+	run("codesign", ["--verify", "--strict", executable]);
+}
+
 function copyMatchingFiles(source, destination, includePattern) {
 	mkdirSync(destination, { recursive: true });
 	for (const entry of readdirSync(source, { withFileTypes: true })) {
@@ -340,6 +350,7 @@ async function main() {
 		join(piBuildDir, "dist/bun/cli.js"),
 		join(piBuildDir, "dist/utils/image-resize-worker.js"),
 	]);
+	resignAdHoc(join(binDir, "sumocode-pi"));
 	const piBuildMetafile = JSON.parse(readFileSync(piMetafile, "utf8"));
 	assertMetafileContainment(piBuildMetafile, root, piBuildDir);
 	rmSync(piBuildDir, { recursive: true, force: true });
@@ -379,6 +390,7 @@ async function main() {
 		join(root, "src/native/main.ts"),
 		join(root, "src/sumo-tui/rpc/chrome-cache-worker.ts"),
 	]);
+	resignAdHoc(join(binDir, "sumocode"));
 	assertMetafileContainment(JSON.parse(readFileSync(hostMetafile, "utf8")));
 
 	// 4. Host sidecar assets and installer.

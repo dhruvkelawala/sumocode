@@ -333,6 +333,13 @@ nativeDescribe("native executable contract", () => {
 		expect(spawnSync(NATIVE_PI, ["--version"], { encoding: "utf8" }).stdout.trim()).toBe("0.87.1");
 	});
 
+	it.runIf(process.platform === "darwin")("ships macOS executables with a valid code signature", () => {
+		for (const executable of [NATIVE_BIN, NATIVE_PI]) {
+			const verify = spawnSync("codesign", ["--verify", "--strict", executable], { encoding: "utf8" });
+			expect(verify.status, verify.stderr).toBe(0);
+		}
+	});
+
 	it("forwards Pi option values that collide with launcher subcommands", () => {
 		const nameValue = runNative(["--dry-run", "--name", "task"]);
 		expect(nameValue.status).toBe(0);

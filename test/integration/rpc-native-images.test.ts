@@ -82,7 +82,7 @@ describe("native RPC images", () => {
 		expect(log).not.toContain(image.data);
 	});
 
-	it.each([["text and image", "inspect [Image 1]"], ["image only", ""]] as const)("Pi 0.85.1 accepts %s prompts", async (_case, message) => {
+	it.each([["text and image", "inspect [Image 1]"], ["image only", ""]] as const)("Pi 0.87.1 accepts %s prompts", async (_case, message) => {
 		const dir = await mkdtemp(join(tmpdir(), "sumocode-native-image-provider-"));
 		fixtureDirs.push(dir);
 		const extension = join(dir, "provider.mjs");

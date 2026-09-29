@@ -8,7 +8,7 @@ export const EXPECTED_HOST_COMMANDS = Object.freeze([
 ]);
 const EXPECTED_PI_BUILTIN_COMMANDS = Object.freeze([
 	"settings", "model", "tree", "thinking", "scoped-models", "export", "import", "share", "copy", "name", "session", "changelog", "hotkeys",
-	"fork", "clone", "trust", "login", "logout", "new", "compact", "resume", "reload", "quit",
+	"fork", "clone", "trust", "login", "logout", "new", "compact", "resume", "reload", "bug", "quit",
 ]);
 const PI_MIRRORED_HOST_COMMANDS = Object.freeze([
 	"settings", "login", "model", "thinking", "compact", "new", "clone", "fork", "resume", "tree", "session", "name", "copy", "export", "quit", "hotkeys", "changelog",

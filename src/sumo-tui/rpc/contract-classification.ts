@@ -3,7 +3,7 @@ import { RPC_THINKING_LEVELS } from "./thinking-level.js";
 
 /**
  * Compile-exhaustive disposition matrix for the pinned Pi RPC release
- * (`@earendil-works/pi-coding-agent` 0.87.1, Plan 088).
+ * (`@earendil-works/pi-coding-agent` 0.99.1, Plan 088).
  *
  * This module is a classification gate, not an executor: nothing here sends a
  * command, mutates state, or answers a request. Each map is checked with

@@ -7,7 +7,7 @@ SumoTUI owns the foreground experience; Pi runs behind it over RPC.
 
 [![MIT License](https://img.shields.io/badge/license-MIT-2D211A?style=flat-square)](./LICENSE)
 [![Version](https://img.shields.io/github/v/release/dhruvkelawala/sumocode?style=flat-square&label=version&color=B974FF)](./CHANGELOG.md)
-[![Pi](https://img.shields.io/badge/Pi-0.87.1-75E8FF?style=flat-square)](https://github.com/earendil-works/pi)
+[![Pi](https://img.shields.io/badge/Pi-0.99.1-75E8FF?style=flat-square)](https://github.com/earendil-works/pi)
 [![Node](https://img.shields.io/badge/Node-%3E%3D23.11-87B58E?style=flat-square)](./package.json)
 
 <br>

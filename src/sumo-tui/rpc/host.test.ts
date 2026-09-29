@@ -872,7 +872,7 @@ describe("native image prompt submission", () => {
 			notifications: { notify: vi.fn() },
 			isAgentBusy: () => false,
 			loadImages: vi.fn(async () => [{ type: "image" as const, mimeType: "image/png", data: "c2FmZQ==" }]),
-			client: { send: vi.fn(async () => ({ type: "response", command: "prompt", success: true, data: {} } as const)) },
+			client: { send: vi.fn(async () => ({ type: "response", command: "prompt", success: true, data: { disposition: "started" } } as const)) },
 			...overrides,
 		};
 	}
@@ -946,7 +946,7 @@ describe("native image prompt submission", () => {
 
 describe("sendRpcPrompt payloads", () => {
 	it("sends the ordinary prompt payload without a streaming behavior", async () => {
-		const client = { send: vi.fn(async () => ({ type: "response", command: "prompt", success: true, data: {} } as const)) };
+		const client = { send: vi.fn(async () => ({ type: "response", command: "prompt", success: true, data: { disposition: "started" } } as const)) };
 
 		await sendRpcPrompt("ordinary", { client });
 
@@ -954,7 +954,7 @@ describe("sendRpcPrompt payloads", () => {
 	});
 
 	it("sends native images without a streaming behavior", async () => {
-		const client = { send: vi.fn(async () => ({ type: "response", command: "prompt", success: true, data: {} } as const)) };
+		const client = { send: vi.fn(async () => ({ type: "response", command: "prompt", success: true, data: { disposition: "started" } } as const)) };
 		const images = [{ type: "image" as const, mimeType: "image/png", data: "c2FmZQ==" }];
 
 		await sendRpcPrompt("[Image 1]", { client, images });
@@ -963,7 +963,7 @@ describe("sendRpcPrompt payloads", () => {
 	});
 
 	it("adds either native delivery mode when explicit", async () => {
-		const client = { send: vi.fn(async () => ({ type: "response", command: "prompt", success: true, data: {} } as const)) };
+		const client = { send: vi.fn(async () => ({ type: "response", command: "prompt", success: true, data: { disposition: "started" } } as const)) };
 
 		await sendRpcPrompt("later", { client, delivery: { streamingBehavior: "followUp" } });
 
@@ -971,7 +971,7 @@ describe("sendRpcPrompt payloads", () => {
 	});
 
 	it("adds steer only for an explicit steering delivery", async () => {
-		const client = { send: vi.fn(async () => ({ type: "response", command: "prompt", success: true, data: {} } as const)) };
+		const client = { send: vi.fn(async () => ({ type: "response", command: "prompt", success: true, data: { disposition: "started" } } as const)) };
 
 		await sendRpcPrompt("steer me", { client, delivery: { streamingBehavior: "steer" } });
 

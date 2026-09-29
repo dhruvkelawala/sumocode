@@ -14,7 +14,8 @@ import { buildSpawnEnv } from "./spawn-pi-pty.js";
 const clients: SumoRpcClient[] = [];
 const children: SupervisedProcess[] = [];
 const fixtureDirs: string[] = [];
-const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
+// A real 1x1 PNG. Pi 0.87.1 decodes prompt images to resize them, so a truncated header is dropped instead of forwarded.
+const bytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
 const image = { type: "image" as const, mimeType: "image/png", data: bytes.toString("base64") };
 
 afterEach(async () => {

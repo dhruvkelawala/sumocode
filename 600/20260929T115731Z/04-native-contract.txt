@@ -1,0 +1,13 @@
+$ BUN_BIN=bun@1.4.0 pnpm build:native  # then: codesign --remove-signature + codesign -s - on bin/sumocode{,-pi} (pre-existing invalid ad-hoc signature, see #600 follow-up)
+$ dist/native/sumocode-0.7.2-macos-arm64/bin/sumocode-pi --version
+0.87.1
+$ node scripts/run-integration-harness.mjs --native-only
+     × keeps retained diagnostics output owner-only while summarizing a separate input 51ms
+     × selects explicit then inherited diagnostics output independently of diag input 49ms
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+ FAIL  test/integration/native-contract.test.ts > native executable contract > keeps retained diagnostics output owner-only while summarizing a separate input
+ FAIL  test/integration/native-contract.test.ts > native executable contract > selects explicit then inherited diagnostics output independently of diag input
+ Test Files  1 failed (1)
+      Tests  2 failed | 104 passed (106)
+exit=1
+(104 passed; 2 failures are umask-dependent file-mode asserts on the diag input, unrelated to Pi)

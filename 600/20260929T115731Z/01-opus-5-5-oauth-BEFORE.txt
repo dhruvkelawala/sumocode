@@ -1,0 +1,6 @@
+$ env -u PI_CLAUDE_CODE_VERSION node_modules/.bin/pi --version
+0.85.1
+$ env -u PI_CLAUDE_CODE_VERSION node_modules/.bin/pi --no-extensions --no-session --model anthropic/claude-opus-5-5 -p "reply with the single word ready"
+Warning: No models match pattern "cursor/grok-4.6"
+400 {"type":"error","error":{"type":"invalid_request_error","message":"Claude Code 2.1.251 does not support this model; version 2.1.280 or newer is required. Run 'claude update', or update the Claude desktop app, then try again.","details":{"error_code":"claude_code_version_too_old"}},"request_id":"req_011CfXfKea7eYVvc55dBzzS2"}
+exit=1

@@ -1,0 +1,6 @@
+$ env -u PI_CLAUDE_CODE_VERSION node_modules/.bin/pi --version
+0.87.1
+$ env -u PI_CLAUDE_CODE_VERSION node_modules/.bin/pi --no-extensions --no-session --model anthropic/claude-opus-5-5 -p "reply with the single word ready"
+Warning: No models match pattern "cursor/grok-4.6"
+400 {"type":"error","error":{"type":"invalid_request_error","message":"You're out of extra usage. Add more at claude.ai/settings/usage and keep going."},"request_id":"req_011CfXfKE8h9kTwBrsBUmNsu"}
+exit=1

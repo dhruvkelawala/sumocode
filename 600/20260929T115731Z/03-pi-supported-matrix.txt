@@ -1,0 +1,5 @@
+$ scripts/smoke-pi-versions.sh --supported-matrix
+Nested executable provenance: PASS
+Pi compatibility contract 0.87.1: PASS
+sumocode Pi compatibility 0.87.1: PASS
+exit=0

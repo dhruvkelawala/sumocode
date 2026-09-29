@@ -1,0 +1,21 @@
+$ pnpm test:integration   # branch
+      Tests  83 passed (83)
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 5 ⎯⎯⎯⎯⎯⎯⎯
+ FAIL  test/integration/rpc-activity-cards.test.ts > RPC durable Activity cards > proves real Pi get_state ownership and the installed bridge's terminal lifecycle on one card
+ FAIL  test/integration/terminal-completion-recovery.test.ts > terminal completion delivery recovery > delivers a passive terminal once through the real coordinator
+ FAIL  test/integration/terminal-completion-recovery.test.ts > terminal completion delivery recovery > defers replacement delivery until the terminal index is ready
+ FAIL  test/integration/terminal-completion-recovery.test.ts > terminal completion delivery recovery > lets terminal_check win an observation race without a duplicate completion
+ FAIL  test/integration/terminal-completion-recovery.test.ts > terminal completion delivery recovery > lets terminal_wait win an observation race without a duplicate completion
+      Tests  5 failed | 343 passed | 107 skipped (455)
+exit=1
+
+$ pnpm test:integration   # origin/main e5338762 (baseline)
+      Tests  83 passed (83)
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 5 ⎯⎯⎯⎯⎯⎯⎯
+ FAIL  test/integration/rpc-activity-cards.test.ts > RPC durable Activity cards > proves real Pi get_state ownership and the installed bridge's terminal lifecycle on one card
+ FAIL  test/integration/terminal-completion-recovery.test.ts > terminal completion delivery recovery > delivers a passive terminal once through the real coordinator
+ FAIL  test/integration/terminal-completion-recovery.test.ts > terminal completion delivery recovery > defers replacement delivery until the terminal index is ready
+ FAIL  test/integration/terminal-completion-recovery.test.ts > terminal completion delivery recovery > lets terminal_check win an observation race without a duplicate completion
+ FAIL  test/integration/terminal-completion-recovery.test.ts > terminal completion delivery recovery > lets terminal_wait win an observation race without a duplicate completion
+      Tests  5 failed | 343 passed | 107 skipped (455)
+exit=1

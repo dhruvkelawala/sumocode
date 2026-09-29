@@ -23,9 +23,9 @@ const root = resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
 
 const BUN_PIN = readFileSync(resolve(root, ".bun-version"), "utf8").trim();
-const PI_PIN = "0.85.1";
+const PI_PIN = "0.87.1";
 const { version } = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
-// Pi 0.85.1 registers Bedrock inside bun/runtime-setup.js (0.84.4 used a
+// Pi 0.85.1+ registers Bedrock inside bun/runtime-setup.js (0.84.4 used a
 // dynamic register-bedrock.js import in bun/cli.js). The child strips only these
 // three Bedrock lines: runtime-setup also owns process.title and the Bun OAuth
 // flows, which the compiled child must keep.
@@ -63,6 +63,16 @@ function run(command, args) {
 	if (result.error || result.status !== 0) {
 		fail(`${command} ${args.join(" ")} failed${result.status !== null ? ` with exit ${result.status}` : ""}`);
 	}
+}
+
+// Bun's --compile leaves an invalid ad-hoc signature on macOS arm64, and the
+// kernel SIGKILLs such executables at launch. Replace it with a valid one.
+// ponytail: ad-hoc only (integrity, no identity); Developer ID + notarization is #602.
+function resignAdHoc(executable) {
+	if (process.platform !== "darwin") return;
+	run("codesign", ["--remove-signature", executable]);
+	run("codesign", ["--sign", "-", executable]);
+	run("codesign", ["--verify", "--strict", executable]);
 }
 
 function copyMatchingFiles(source, destination, includePattern) {
@@ -340,6 +350,7 @@ async function main() {
 		join(piBuildDir, "dist/bun/cli.js"),
 		join(piBuildDir, "dist/utils/image-resize-worker.js"),
 	]);
+	resignAdHoc(join(binDir, "sumocode-pi"));
 	const piBuildMetafile = JSON.parse(readFileSync(piMetafile, "utf8"));
 	assertMetafileContainment(piBuildMetafile, root, piBuildDir);
 	rmSync(piBuildDir, { recursive: true, force: true });
@@ -379,6 +390,7 @@ async function main() {
 		join(root, "src/native/main.ts"),
 		join(root, "src/sumo-tui/rpc/chrome-cache-worker.ts"),
 	]);
+	resignAdHoc(join(binDir, "sumocode"));
 	assertMetafileContainment(JSON.parse(readFileSync(hostMetafile, "utf8")));
 
 	// 4. Host sidecar assets and installer.

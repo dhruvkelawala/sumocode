@@ -127,10 +127,10 @@ async function runTerminalRunnerRole(): Promise<boolean> {
 }
 
 // ── Pi parseArgs consumption-class tables (mirrors bin/sumocode.sh, pinned by
-// test/integration/spawn-pi-pty.test.ts against pi-coding-agent 0.85.1) ────
+// test/integration/spawn-pi-pty.test.ts against pi-coding-agent 0.87.1) ────
 
 const PI_UNCONDITIONAL_VALUE_FLAGS = new Set([
-	"--mode", "--provider", "--model", "--api-key", "--system-prompt",
+	"--provider", "--model", "--api-key", "--system-prompt",
 	"--append-system-prompt", "--name", "-n", "--session", "--session-id", "--fork",
 	"--session-dir", "--models", "--tools", "-t", "--exclude-tools", "-xt", "--thinking",
 	"--export", "--extension", "-e", "--skill", "--prompt-template", "--theme",
@@ -193,7 +193,7 @@ function firstPositionalIndex(args: readonly string[]): number {
 			if (next !== undefined && !next.startsWith("-") && !next.startsWith("@")) i += 1;
 			continue;
 		}
-		if (arg === "--tui-mode") {
+		if (arg === "--mode" || arg === "--tui-mode") {
 			const next = i + 1 < args.length ? args[i + 1]! : undefined;
 			if (next !== undefined && !next.startsWith("-")) i += 1;
 			continue;
@@ -423,7 +423,7 @@ function parseLauncherArgv(argv: readonly string[]): ParsedLaunch {
 				? !next.startsWith("@") && (!next.startsWith("-") || next.startsWith("---"))
 				: true;
 			if (consumes) parsed.forwardedArgs.push(args.shift()!);
-		} else if ((arg === "--list-models" || arg === "--tui-mode" || arg === "--use-theme") && !next.startsWith("-")) {
+		} else if ((arg === "--list-models" || arg === "--mode" || arg === "--tui-mode" || arg === "--use-theme") && !next.startsWith("-")) {
 			parsed.forwardedArgs.push(args.shift()!);
 		} else if (arg.startsWith("--") && !arg.includes("=") && !PI_BOOLEAN_FLAGS.has(arg) && !next.startsWith("-") && !next.startsWith("@")) {
 			// Generic Pi long option: Pi's parseArgs() consumes one dash-free value,

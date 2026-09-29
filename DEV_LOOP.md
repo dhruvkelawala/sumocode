@@ -4,7 +4,7 @@ Run contributor commands from your source checkout. The maintainer's canonical p
 
 ## Setup and launch
 
-Use the Node engine and Pi peer versions declared in [package.json](package.json). CI uses Node 24 and pnpm 10.29.2; the current development Pi pin is 0.85.1.
+Use the Node engine and Pi peer versions declared in [package.json](package.json). CI uses Node 24 and pnpm 10.29.2; the current development Pi pin is 0.87.1.
 
 ```bash
 pnpm install

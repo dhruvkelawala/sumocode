@@ -330,7 +330,14 @@ nativeDescribe("native executable contract", () => {
 		expect(readFileSync(NATIVE_PI).includes("bedrock-provider")).toBe(false);
 		expect(readFileSync(join(ROOT, "node_modules/@earendil-works/pi-coding-agent/dist/bun/runtime-setup.js"), "utf8")).toContain("setBedrockProviderModule(bedrockProviderModule)");
 		expect(runNative(["--version"]).stdout).toContain(`sumocode ${PACKAGE_VERSION}`);
-		expect(spawnSync(NATIVE_PI, ["--version"], { encoding: "utf8" }).stdout.trim()).toBe("0.85.1");
+		expect(spawnSync(NATIVE_PI, ["--version"], { encoding: "utf8" }).stdout.trim()).toBe("0.87.1");
+	});
+
+	it.runIf(process.platform === "darwin")("ships macOS executables with a valid code signature", () => {
+		for (const executable of [NATIVE_BIN, NATIVE_PI]) {
+			const verify = spawnSync("codesign", ["--verify", "--strict", executable], { encoding: "utf8" });
+			expect(verify.status, verify.stderr).toBe(0);
+		}
 	});
 
 	it("forwards Pi option values that collide with launcher subcommands", () => {

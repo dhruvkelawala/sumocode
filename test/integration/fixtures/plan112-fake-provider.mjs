@@ -7,7 +7,7 @@ export function generateFakeProvider(directory, aiEntry) {
 	if (!stat.isDirectory() || realpathSync(directory) !== directory || (stat.mode & 0o777) !== 0o700
 		|| stat.uid !== process.getuid()) throw new Error("provider requires a private owned directory");
 	const entry = join(directory, "provider.mjs");
-	writeFileSync(entry, `import { createAssistantMessageEventStream } from ${JSON.stringify(aiEntry)};
+	writeFileSync(entry, `import { createAssistantMessageEventStream, getCurrentSystemPrompt, getCurrentTools } from ${JSON.stringify(aiEntry)};
 import { existsSync, renameSync, writeFileSync } from "node:fs";
 const directory = ${JSON.stringify(directory)};
 export default function(pi) {
@@ -18,8 +18,8 @@ export default function(pi) {
 		streamSimple(model, context) {
 			writeFileSync(directory + "/provider-called.pending", JSON.stringify({
 				promptPresent: JSON.stringify(context.messages).includes("synthetic recovery task"),
-				privateRolePresent: (existsSync(directory + "/visible") ? JSON.stringify(context.messages) : context.systemPrompt).includes("synthetic private role"),
-				toolsEmpty: !context.tools?.length,
+				privateRolePresent: (existsSync(directory + "/visible") ? JSON.stringify(context.messages) : getCurrentSystemPrompt(context.messages)).includes("synthetic private role"),
+				toolsEmpty: getCurrentTools(context.messages).length === 0,
 			}), { mode: 0o600, flag: "wx" });
 			renameSync(directory + "/provider-called.pending", directory + "/provider-called.json");
 			const stream = createAssistantMessageEventStream();

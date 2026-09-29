@@ -44,11 +44,11 @@ function fixture(layout) {
 	temporaryDirectories.push(directory);
 	const root = join(directory, "package");
 	const piPkg = layout === "pnpm"
-		? join(root, "node_modules/.pnpm/pi@0.85.1/node_modules/@earendil-works/pi-coding-agent")
+		? join(root, "node_modules/.pnpm/pi@0.87.1/node_modules/@earendil-works/pi-coding-agent")
 		: join(root, "node_modules/@earendil-works/pi-coding-agent");
 	const neighborhood = layout === "pnpm" ? join(piPkg, "../..") : join(piPkg, "node_modules");
 	write(join(piPkg, "package.json"), JSON.stringify({
-		name: "@earendil-works/pi-coding-agent", version: "0.85.1", type: "module",
+		name: "@earendil-works/pi-coding-agent", version: "0.87.1", type: "module",
 		dependencies: {
 			"proper-lockfile": "1.0.0",
 			"@earendil-works/pi-agent-core": "1.0.0",
@@ -89,7 +89,7 @@ function fixture(layout) {
 		+ "async function loadExtension(extensionPath,cwd,eventBus,runtime,cacheToken){let resolvedPath=resolvePath(extensionPath,cwd,{normalizeUnicodeSpaces:!0});try{let factory=await loadExtensionModule(resolvedPath,cacheToken);\n"
 		+ "async function runRpcMode(runtimeHost){takeOverStdout();\n"
 		+ 'case"get_state":{let state2=\n');
-	write(join(piPkg, "dist/bundle/cli.js"), "process.title=APP_NAME,\n");
+	write(join(piPkg, "dist/bundle/cli-runtime.js"), "process.title=APP_NAME,\n");
 	const lockPkg = join(root, "node_modules/.pnpm/lock@1/node_modules/proper-lockfile");
 	write(join(lockPkg, "package.json"), JSON.stringify({ name: "proper-lockfile", main: "index.cjs" }));
 	write(join(lockPkg, "index.cjs"), 'module.exports = require("private-transitive");\n');
@@ -115,7 +115,7 @@ function fixture(layout) {
 const instrumentedFiles = [
 	"bun/cli.js",
 	"bundle/chunks/chunk-fixture.js",
-	"bundle/cli.js",
+	"bundle/cli-runtime.js",
 	"core/agent-session-services.js",
 	"core/extensions/loader.js",
 	"core/model-runtime.js",

@@ -9,7 +9,7 @@ import {
 	streamSimpleOpenAIResponses,
 	type Api,
 	type AssistantMessageEventStream,
-	type Context,
+	type TranscriptContext,
 	type Model,
 	type OpenAICodexResponsesOptions,
 	type OpenAIResponsesOptions,
@@ -43,7 +43,7 @@ type FastModeStreamers = {
 	streamSimpleOpenAIResponses: typeof streamSimpleOpenAIResponses;
 	streamOpenAICodexResponses: typeof streamOpenAICodexResponses;
 	streamSimpleOpenAICodexResponses: typeof streamSimpleOpenAICodexResponses;
-	streamUnsupportedApi: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream;
+	streamUnsupportedApi: (model: Model<Api>, context: TranscriptContext, options?: SimpleStreamOptions) => AssistantMessageEventStream;
 };
 
 export type FastModeState = {
@@ -51,7 +51,7 @@ export type FastModeState = {
 	models: readonly string[];
 };
 
-function streamNativeApiProvider(model: Model<Api>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream {
+function streamNativeApiProvider(model: Model<Api>, context: TranscriptContext, options?: SimpleStreamOptions): AssistantMessageEventStream {
 	const provider = getApiProvider(model.api);
 	if (!provider) throw new Error(`sumocode fast mode: unsupported API override ${String(model.api)}`);
 	return provider.streamSimple(model, context, options);
@@ -152,7 +152,7 @@ export function buildOpenAICodexResponsesFastOptions(model: Model<Api>, options:
 }
 
 function createFastModeStream(config: () => FastModeConfig, streamers: FastModeStreamers) {
-	return (model: Model<Api>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream => {
+	return (model: Model<Api>, context: TranscriptContext, options?: SimpleStreamOptions): AssistantMessageEventStream => {
 		const currentConfig = config();
 		if (model.api === "openai-responses") {
 			// SAFETY: the api discriminator above narrowed the provider; the

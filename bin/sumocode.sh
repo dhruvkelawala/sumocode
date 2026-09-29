@@ -86,7 +86,7 @@ _sumocode_arg_in() {
 # mode selection and prompt extraction cannot disagree about a value-consuming
 # bare `--` token.
 SUMOCODE_PI_UNCONDITIONAL_VALUE_FLAGS=(
-	--mode --provider --model --api-key --system-prompt
+	--provider --model --api-key --system-prompt
 	--append-system-prompt --name -n --session --session-id --fork
 	--session-dir --models --tools -t --exclude-tools -xt --thinking
 	--export --extension -e --skill --prompt-template --theme
@@ -124,7 +124,7 @@ _sumocode_pi_flag_consumes_value() {
 		[[ "${next:0:1}" != "-" || "${next}" == "---"* ]]
 		return
 	fi
-	if [[ "${flag}" == "--list-models" || "${flag}" == "--tui-mode" || "${flag}" == "--use-theme" ]]; then
+	if [[ "${flag}" == "--list-models" || "${flag}" == "--mode" || "${flag}" == "--tui-mode" || "${flag}" == "--use-theme" ]]; then
 		[[ "${next:0:1}" != "-" ]]
 		return
 	fi
@@ -390,7 +390,7 @@ _sumocode_first_positional_index() {
 			continue
 		fi
 
-		if [[ "${arg}" == --tui-mode ]]; then
+		if [[ "${arg}" == --mode || "${arg}" == --tui-mode ]]; then
 			if [[ $((i + 1)) -lt "${n}" ]]; then
 				next="${SUMOCODE_ARGS[i+1]}"
 				if [[ "${next}" != -* ]]; then
@@ -687,7 +687,7 @@ args_request_noninteractive_pi() {
 #
 # OPTION-CONSUMPTION CLASS TABLE -- mirrors
 # node_modules/@earendil-works/pi-coding-agent/dist/cli/args.js parseArgs()
-# (pi-coding-agent 0.85.1) EXACTLY, so that this wrapper skips a flag's value
+# (pi-coding-agent 0.87.1) EXACTLY, so that this wrapper skips a flag's value
 # together with the flag itself instead of mistaking the value for the first
 # actual message. Every flag/value token stays in the forwarded argv; only
 # the first real positional message is extracted. This is the same reason the
@@ -697,7 +697,7 @@ args_request_noninteractive_pi() {
 # flags need a table here, since extension flags reach Pi through args.js's
 # generic unknown-long-option branch, which is mirrored as class 6 below.
 #
-# PI-BUMP NOTE (pinned: pi-coding-agent 0.85.1, dist/cli/args.js): if
+# PI-BUMP NOTE (pinned: pi-coding-agent 0.87.1, dist/cli/args.js): if
 # @earendil-works/pi-coding-agent is upgraded, re-read parseArgs() in the NEW
 # dist/cli/args.js and re-diff every consumption class below (`git diff` the
 # file, or just re-read it) -- any newly added value-taking flag, changed
@@ -713,9 +713,8 @@ args_request_noninteractive_pi() {
 #
 # Class 2 -- unconditional space-form value flags: consume `args[++i]`
 #   whenever a next token EXISTS (args.js checks `i + 1 < args.length` before
-#   validity, so dash/@/invalid values are still consumed; --mode consumes
-#   its next token even when the value is invalid):
-#     --mode, --provider, --model, --api-key, --system-prompt,
+#   validity, so dash/@/invalid values are still consumed):
+#     --provider, --model, --api-key, --system-prompt,
 #     --append-system-prompt, --name/-n, --session, --session-id, --fork,
 #     --session-dir, --models, --tools/-t, --exclude-tools/-xt, --thinking,
 #     --export, --extension/-e, --skill, --prompt-template, --theme
@@ -740,6 +739,9 @@ args_request_noninteractive_pi() {
 #                 or `fullscreen`; a missing or dash-following value is NOT
 #                 consumed (Pi errors); any other non-dash value, including
 #                 @file, IS consumed as invalid.
+#   --mode        (0.87.1+) consumes the next token unless it starts with
+#                 `-`; a missing or dash-following value is not consumed and
+#                 an invalid non-dash value is consumed (Pi errors either way).
 #   --use-theme   consumes the next token unless it starts with `-`
 #                 (@-prefixed theme names included); a missing or
 #                 dash-following value is not consumed (Pi errors).

@@ -10,6 +10,24 @@ landed between the original scaffold and this release.
 
 ## [Unreleased]
 
+## [0.7.3] — 2026-09-29
+
+Claude OAuth works again on `claude-opus-5-5`, and the macOS native binaries
+launch instead of being killed at startup.
+
+### Changed
+- **Pi 0.87.1** — SumoCode now targets Pi `0.87.1` (peers `~0.87.1`). Its
+  bundled Claude Code identity is `2.1.280`, the minimum the Anthropic API
+  requires for Claude OAuth sessions on `claude-opus-5-5`; 0.85.1 sent
+  `2.1.251` and every such request failed with `claude_code_version_too_old`.
+  #600 #601
+
+### Fixed
+- **macOS native binaries launch** — `bin/sumocode` and `bin/sumocode-pi` are
+  re-signed with a valid ad-hoc signature after Bun compiles them; 0.7.2
+  shipped Bun's invalid signature, which macOS kills with `SIGKILL (Code
+  Signature Invalid)`. Developer ID signing and notarization: #602.
+
 ## [0.7.2] — 2026-09-16
 
 Inline images arrive in the retained terminal, landscape gives another row back

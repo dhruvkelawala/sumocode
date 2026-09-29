@@ -10,6 +10,13 @@ landed between the original scaffold and this release.
 
 ## [Unreleased]
 
+### Fixed
+- **No empty SYSTEM cards**: Pi 0.86+ records prompt and tool updates as
+  transcript `system` messages. They are model context, not chat, and
+  SumoCode showed each one as an empty SYSTEM card, for example before a
+  prompt with an `[Image 1]` attachment. They are now hidden, as in Pi's own
+  interactive mode.
+
 ## [0.7.4] — 2026-09-29
 
 SumoCode now runs on Pi 0.99.1.

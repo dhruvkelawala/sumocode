@@ -51,11 +51,11 @@ describe("dependency audit policy", () => {
 	it("enforces the aligned fixed Pi minimum", () => {
 		const packageJson = JSON.parse(readFileSync(join(import.meta.dirname, "../package.json"), "utf8"));
 		for (const name of ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"]) {
-			expect(packageJson.peerDependencies[name]).toBe("~0.87.1");
-			expect(packageJson.devDependencies[name]).toBe("0.87.1");
+			expect(packageJson.peerDependencies[name]).toBe("~0.99.1");
+			expect(packageJson.devDependencies[name]).toBe("0.99.1");
 		}
-		expect(readFileSync(join(import.meta.dirname, "build-native.mjs"), "utf8")).toContain('const PI_PIN = "0.87.1"');
-		expect(readFileSync(join(import.meta.dirname, "smoke-pi-versions.sh"), "utf8")).toContain('VERSIONS=("0.87.1")');
+		expect(readFileSync(join(import.meta.dirname, "build-native.mjs"), "utf8")).toContain('const PI_PIN = "0.99.1"');
+		expect(readFileSync(join(import.meta.dirname, "smoke-pi-versions.sh"), "utf8")).toContain('VERSIONS=("0.99.1")');
 	});
 
 	it("keeps the vitest dev floor at the patched release", () => {

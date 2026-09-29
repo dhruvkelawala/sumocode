@@ -670,8 +670,8 @@ describe("RpcHostControls", () => {
 
 	it("executes login as a long-running child extension command outside the scheduler", async () => {
 		const client = new FakeClient(
-			{ type: "response", command: "prompt", success: true },
-			{ type: "response", command: "prompt", success: true },
+			{ type: "response", command: "prompt", success: true, data: { disposition: "started" } },
+			{ type: "response", command: "prompt", success: true, data: { disposition: "started" } },
 		);
 		const controls = new RpcHostControls(client);
 
@@ -786,7 +786,7 @@ describe("RpcHostControls", () => {
 	});
 
 	it("rejects an oversized request before registering a waiter or sending a prompt", async () => {
-		const client = new FakeClient({ type: "response", command: "prompt", success: true });
+		const client = new FakeClient({ type: "response", command: "prompt", success: true, data: { disposition: "started" } });
 		const broker: RpcTreeNavigationOutcomeBroker = {
 			register: vi.fn(async () => ({ requestId: "unused", status: "error" as const, leafId: null })),
 			publish: vi.fn(),
@@ -819,7 +819,7 @@ describe("RpcHostControls", () => {
 	});
 
 	it("propagates an outcome rejection while still cleaning the waiter", async () => {
-		const client = new FakeClient({ type: "response", command: "prompt", success: true });
+		const client = new FakeClient({ type: "response", command: "prompt", success: true, data: { disposition: "started" } });
 		const cancel = vi.fn();
 		const broker: RpcTreeNavigationOutcomeBroker = {
 			register: vi.fn(() => Promise.reject(new Error("outcome timed out"))),
@@ -846,7 +846,7 @@ describe("RpcHostControls", () => {
 	});
 
 	it("registers the navigation waiter before sending the hidden prompt and waits for its correlated outcome", async () => {
-		const client = new FakeClient({ type: "response", command: "prompt", success: true });
+		const client = new FakeClient({ type: "response", command: "prompt", success: true, data: { disposition: "started" } });
 		const broker = new InMemoryRpcTreeNavigationOutcomeBroker();
 		const controls = new RpcHostControls(client, new RpcHostStateStore(), { treeNavigationOutcomeBroker: broker });
 		const request = { requestId: "019f8a78-b4f5-7b7b-b774-2d2e4bce9001", targetId: "entry-1", summarize: true as const, customInstructions: "line 1\nline 2" };

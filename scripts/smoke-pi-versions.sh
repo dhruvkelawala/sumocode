@@ -50,7 +50,7 @@ case "${1:-}" in
 			"${ROOT_DIR}/package.json" "${REGISTRY_DIR}/pi-ai.json" "${REGISTRY_DIR}/pi-coding-agent.json" "${REGISTRY_DIR}/pi-tui.json")
 		;;
 	"")
-		VERSIONS=("0.87.1")
+		VERSIONS=("0.99.1")
 		;;
 	*)
 		VERSIONS=("$@")
@@ -63,7 +63,7 @@ if [[ "${#VERSIONS[@]}" -eq 0 ]]; then
 fi
 
 # The canonical compatibility gate is --supported-matrix. Explicit versions are
-# intentionally retained for a pending bump: scripts/smoke-pi-versions.sh 0.87.0
+# intentionally retained for a pending bump: scripts/smoke-pi-versions.sh 0.99.0
 for VERSION in "${VERSIONS[@]}"; do
 	if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 		echo "invalid Pi version: ${VERSION}" >&2

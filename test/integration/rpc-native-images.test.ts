@@ -14,7 +14,7 @@ import { buildSpawnEnv } from "./spawn-pi-pty.js";
 const clients: SumoRpcClient[] = [];
 const children: SupervisedProcess[] = [];
 const fixtureDirs: string[] = [];
-// A real 1x1 PNG. Pi 0.87.1 decodes prompt images to resize them, so a truncated header is dropped instead of forwarded.
+// A real 1x1 PNG. Pi 0.99.1 decodes prompt images to resize them, so a truncated header is dropped instead of forwarded.
 const bytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
 const image = { type: "image" as const, mimeType: "image/png", data: bytes.toString("base64") };
 
@@ -83,7 +83,7 @@ describe("native RPC images", () => {
 		expect(log).not.toContain(image.data);
 	});
 
-	it.each([["text and image", "inspect [Image 1]"], ["image only", ""]] as const)("Pi 0.87.1 accepts %s prompts", async (_case, message) => {
+	it.each([["text and image", "inspect [Image 1]"], ["image only", ""]] as const)("Pi 0.99.1 accepts %s prompts", async (_case, message) => {
 		const dir = await mkdtemp(join(tmpdir(), "sumocode-native-image-provider-"));
 		fixtureDirs.push(dir);
 		const extension = join(dir, "provider.mjs");

@@ -10,6 +10,13 @@ landed between the original scaffold and this release.
 
 ## [Unreleased]
 
+### Changed
+- **Pi 0.87.1** — SumoCode now targets Pi `0.87.1` (peers `~0.87.1`). Its
+  bundled Claude Code identity is `2.1.280`, the minimum the Anthropic API
+  requires for Claude OAuth sessions on `claude-opus-5-5`; 0.85.1 sent
+  `2.1.251` and every such request failed with `claude_code_version_too_old`.
+  #600
+
 ## [0.7.2] — 2026-09-16
 
 Inline images arrive in the retained terminal, landscape gives another row back

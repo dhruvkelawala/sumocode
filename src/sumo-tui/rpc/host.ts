@@ -450,7 +450,7 @@ export interface RpcPromptSendOptions {
 }
 
 export async function sendRpcPrompt(message: string, options: RpcPromptSendOptions): Promise<void> {
-	// Pi 0.85.1 clear_queue returns text only. Image prompts must omit
+	// Pi 0.85.1+ clear_queue returns text only. Image prompts must omit
 	// streamingBehavior so Pi atomically rejects an idle-to-busy race instead
 	// of creating an attachment queue entry SumoCode cannot recover.
 	const command = options.images

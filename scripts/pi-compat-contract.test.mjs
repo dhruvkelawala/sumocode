@@ -14,7 +14,7 @@ import {
 
 const PI_BUILTINS = [
 	"settings", "model", "tree", "thinking", "scoped-models", "export", "import", "share", "copy", "name", "session", "changelog", "hotkeys",
-	"fork", "clone", "trust", "login", "logout", "new", "compact", "resume", "reload", "quit",
+	"fork", "clone", "trust", "login", "logout", "new", "compact", "resume", "reload", "bug", "quit",
 ];
 function rpcTypes(commands = RPC_COMMANDS) {
 	return `export type RpcCommand = ${commands.map((name) => `{ type: "${name}" }`).join(" | ")};\n`

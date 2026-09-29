@@ -41,7 +41,7 @@ export function instrumentPiStartup(piDist = installedPiDist()) {
 		}
 	}
 
-	// Pi 0.85.1 loads bun/cli.js through three static imports (sandbox-env-setup,
+	// Pi 0.85.1+ loads bun/cli.js through three static imports (sandbox-env-setup,
 	// runtime-setup, cli). Static imports hoist above any injected body code, so
 	// the marks require converting runtime-setup/cli to dynamic imports; the env
 	// restore stays static-first because later modules read process.env at load.
@@ -131,7 +131,9 @@ export function instrumentPiStartup(piDist = installedPiDist()) {
 		'case"get_state":{let state2=',
 		'case"get_state":{globalThis.__sumocodeStartupMark?.("first_get_state_received");let state2=');
 
-	replaceOnce("bundle/cli.js",
+	// Pi 0.86.0+ bundle/cli.js only enables the compile cache and requires
+	// cli-runtime.js, which now carries the CLI body.
+	replaceOnce("bundle/cli-runtime.js",
 		"process.title=APP_NAME,",
 		'globalThis.__sumocodeStartupMark?.("after_cli_import");process.title=APP_NAME,');
 

@@ -13,13 +13,13 @@ function decodeFrame(json: string): RpcResponse {
 }
 
 /**
- * Compile-time anchors for the pinned Pi 0.85.1 wire contract. `src/**` is the
+ * Compile-time anchors for the pinned Pi 0.87.1 wire contract. `src/**` is the
  * only tree `pnpm exec tsc --noEmit` checks, so the type-level half of the
  * contract lives here; each anchor fails typecheck if a Pi bump changes a
  * payload SumoCode consumes. The installed worker's runtime shapes are proven
  * in `test/integration/rpc-contract.test.ts`.
  */
-it("pins the 0.85.1 queue and thinking wire shapes", () => {
+it("pins the 0.87.1 queue and thinking wire shapes", () => {
 	expectTypeOf<RpcResponseData<"clear_queue">>().toEqualTypeOf<{ steering: string[]; followUp: string[] }>();
 	expectTypeOf<RpcResponseData<"bash">>().toMatchTypeOf<{ output: string; cancelled: boolean; truncated: boolean }>();
 	expectTypeOf<RpcResponseData<"get_available_thinking_levels">>().toEqualTypeOf<{ levels: RpcSessionState["thinkingLevel"][] }>();

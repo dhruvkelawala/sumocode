@@ -255,7 +255,7 @@ export class LifecycleRuntime {
 		if (this.piEventsInstrumented) return;
 		const instrumentation = createPiEventInstrumentation();
 		if (!instrumentation) return;
-		type Registrar = (eventName: string, listener: (...args: never[]) => void, ...rest: readonly unknown[]) => void;
+		type Registrar = (eventName: string, listener: (...args: never[]) => void, ...rest: readonly unknown[]) => () => void;
 		// SAFETY: pi.on is an overloaded event registrar; the widened closure
 		// forwards every overload unchanged except for wrapping the listener.
 		const registrar = pi.on.bind(pi) as Registrar;

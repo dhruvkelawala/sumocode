@@ -586,6 +586,9 @@ export function chatMessageViewModelFromPiMessage<T>(
 	const record = asRecord(message as SessionValue);
 	if (!record) return undefined;
 	if (record.role === "custom" && record.display === false) return undefined;
+	// Pi 0.86+ transcript system messages carry model-context prompt and tool
+	// updates, not chat; Pi's interactive mode skips them too.
+	if (record.role === "system") return undefined;
 
 	const role = roleFromMessage(record);
 	const id = messageId(record, index);

@@ -41,7 +41,7 @@ export function instrumentPiStartup(piDist = installedPiDist()) {
 		}
 	}
 
-	// Pi 0.85.1 loads bun/cli.js through three static imports (sandbox-env-setup,
+	// Pi 0.85.1+ loads bun/cli.js through three static imports (sandbox-env-setup,
 	// runtime-setup, cli). Static imports hoist above any injected body code, so
 	// the marks require converting runtime-setup/cli to dynamic imports; the env
 	// restore stays static-first because later modules read process.env at load.

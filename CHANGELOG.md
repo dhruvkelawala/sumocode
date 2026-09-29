@@ -10,6 +10,17 @@ landed between the original scaffold and this release.
 
 ## [Unreleased]
 
+## [0.7.4] — 2026-09-29
+
+SumoCode now runs on Pi 0.99.1.
+
+### Changed
+- **Pi 0.99.1**: SumoCode now targets Pi `0.99.1` (peers `~0.99.1`) and
+  handles the new per-input `disposition` on RPC `prompt`, `steer` and
+  `follow_up` responses. It keeps using `pi-mcp-adapter` for MCP. While the
+  adapter is installed, Pi skips its new built-in MCP extension and shows a
+  startup warning saying so. Moving to the built-in MCP is tracked in #604.
+
 ## [0.7.3] — 2026-09-29
 
 Claude OAuth works again on `claude-opus-5-5`, and the macOS native binaries

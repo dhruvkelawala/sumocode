@@ -1,6 +1,6 @@
 {
   "name": "@dhruvkelawala/sumocode",
-  "version": "0.7.3",
+  "version": "0.7.4",
   "description": "SumoCode — a Pi extension that makes the terminal AI coding experience feel personal. OpenCode visual language + persistent memory + preattentive status signals.",
   "keywords": [
     "pi-package",
@@ -25,18 +25,18 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "~0.87.1",
-    "@earendil-works/pi-coding-agent": "~0.87.1",
-    "@earendil-works/pi-tui": "~0.87.1",
+    "@earendil-works/pi-ai": "~0.99.1",
+    "@earendil-works/pi-coding-agent": "~0.99.1",
+    "@earendil-works/pi-tui": "~0.99.1",
     "typebox": "*"
   },
   "engines": {
     "node": ">=23.11.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.87.1",
-    "@earendil-works/pi-coding-agent": "0.87.1",
-    "@earendil-works/pi-tui": "0.87.1",
+    "@earendil-works/pi-ai": "0.99.1",
+    "@earendil-works/pi-coding-agent": "0.99.1",
+    "@earendil-works/pi-tui": "0.99.1",
     "@mdx-js/mdx": "3.1.1",
     "@oxlint/plugins": "1.80.0",
     "@types/node": "^25.6.0",

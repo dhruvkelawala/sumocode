@@ -1347,6 +1347,7 @@ describe("RPC host retained runtime frame", () => {
 			id: "prompt",
 			command: "prompt",
 			success: true,
+			data: { disposition: "started" },
 		}));
 
 		const onBeforeSend = vi.fn();

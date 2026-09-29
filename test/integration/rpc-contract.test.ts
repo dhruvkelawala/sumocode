@@ -158,7 +158,7 @@ describe("installed Pi worker contract", () => {
 		// still be one of the shipped literals.
 		for (const level of levels) expect(PINNED_THINKING_LEVELS).toContain(level);
 
-		// 0.87.1 acknowledges the (possibly clamped) level with a void success and
+		// 0.99.1 acknowledges the (possibly clamped) level with a void success and
 		// carries no effective-level payload, so the event and the next get_state are
 		// the authoritative reconciliation. When the active model exposes a second
 		// level, force the change and prove both agree; a single or empty capability

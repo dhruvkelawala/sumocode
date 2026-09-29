@@ -23,7 +23,7 @@ const root = resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
 
 const BUN_PIN = readFileSync(resolve(root, ".bun-version"), "utf8").trim();
-const PI_PIN = "0.87.1";
+const PI_PIN = "0.99.1";
 const { version } = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
 // Pi 0.85.1+ registers Bedrock inside bun/runtime-setup.js (0.84.4 used a
 // dynamic register-bedrock.js import in bun/cli.js). The child strips only these

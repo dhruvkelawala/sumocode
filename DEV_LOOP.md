@@ -33,6 +33,14 @@ TypeScript runs through jiti during source development, so build is a typecheck.
 
 CI workflows in `.github/workflows/` also define dependency auditing, native contracts, compatibility, visual checks and report-only dead-code analysis. Prefer the workflow and package scripts over mutable test totals. `pnpm dead-code` reports findings; it is not a cleanup command.
 
+For a bounded source integration check, select one existing test file:
+
+```bash
+pnpm test:integration -- --file test/integration/rpc-contract.test.ts
+```
+
+This runs the mandatory verification-harness seam, then exactly that file; output and retained `selection.json` label it **partial**, not full integration/native certification. Preflight, private package builds, ownership/signing, process supervision and the survivor audit still apply. Only a canonical repository-relative `test/integration/*.test.ts` file path is accepted; missing files, traversal, symlink escapes, patterns, extra flags/files and `--native-only` combinations fail before owner startup. No arguments and standalone `--native-only` preserve their existing lanes.
+
 Generated bundles and binaries stay ignored. `pnpm build:bundles` produces optional local host/extension bundles; `pnpm build:native` builds a native archive. Rebuild after integration when a plan requires it. Never commit generated dist output.
 
 ## Diagnostics and visual review

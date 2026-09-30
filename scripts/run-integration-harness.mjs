@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
-import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { randomBytes, randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { reapHarnessProcessGroup, runIntegrationPreflight } from "./preflight-integration.mjs";
 import {
@@ -17,6 +17,41 @@ import {
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const RUNNER_TERM_GRACE_MS = 1_000;
 const AUDIT_FAILURES_FILE = "audit-failures.jsonl";
+
+/** Validate before owner re-exec or preflight; unknown argv must never select the full lane. */
+export async function resolveHarnessRunPlan(argv) {
+	// pnpm run forwards its optional delimiter to node scripts.
+	const args = argv[0] === "--" ? argv.slice(1) : argv;
+	const nativeOnly = args.length === 1 && args[0] === "--native-only";
+	let selectedFile;
+	if (args.length === 2 && args[0] === "--file") {
+		selectedFile = args[1];
+		if (!selectedFile.endsWith(".test.ts") || !/^test\/integration\/(?:[A-Za-z0-9_-][A-Za-z0-9._-]*\/)*[A-Za-z0-9_-][A-Za-z0-9._-]*\.test\.ts$/.test(selectedFile)) {
+			throw new Error("--file requires one canonical test/integration/*.test.ts path (no traversal or patterns)");
+		}
+		let target;
+		try {
+			target = await realpath(join(ROOT, selectedFile));
+			if (!(await stat(target)).isFile()) throw new Error("not a regular file");
+		} catch {
+			throw new Error("--file requires an existing regular integration test file");
+		}
+		const integrationRoot = join(await realpath(ROOT), "test", "integration");
+		if (!target.startsWith(`${integrationRoot}${sep}`)) throw new Error("--file resolves outside test/integration");
+	} else if (!nativeOnly && (args.length > 0 || argv.length > 0)) {
+		throw new Error("expected no args, --native-only, or --file <test/integration/path.test.ts>");
+	}
+	return {
+		nativeOnly,
+		selectedFile,
+		seamArgs: nativeOnly ? null : ["run", "test/integration/verification-harness.test.ts", "--fileParallelism=false"],
+		integrationArgs: nativeOnly
+			? ["run", "test/integration/native-", "--fileParallelism=false"]
+			: selectedFile
+				? ["run", selectedFile, "--fileParallelism=false"]
+				: ["run", "test/integration/", "--fileParallelism=false", "--exclude", "test/integration/verification-harness.test.ts"],
+	};
+}
 
 function groupAlive(pgid) {
 	try { process.kill(-pgid, 0); return true; } catch { return false; }
@@ -160,10 +195,11 @@ async function runVitest(vitestEntry, args, env) {
 	return { ...status, interrupted };
 }
 
-async function main(ownerToken) {
+async function main(ownerToken, plan) {
+	if (plan.selectedFile) process.stdout.write(`[integration harness] selected-file scope (partial; not full integration/native certification): ${plan.selectedFile}\n`);
 	if (!await runIntegrationPreflight()) return 1;
 	const auth = { runId: randomUUID(), signingKey: randomBytes(32).toString("hex") };
-	const nativeOnly = process.argv.includes("--native-only");
+	const nativeOnly = plan.nativeOnly;
 	const runRoot = await mkdtemp(join(tmpdir(), "sumocode-harness-v2-run-"));
 	const manifest = join(runRoot, "children.jsonl");
 	const tempRoot = join(runRoot, "tmp");
@@ -179,9 +215,16 @@ async function main(ownerToken) {
 		root: ROOT,
 		startedAt: new Date().toISOString(),
 	}, null, 2)}\n`, { mode: 0o600 });
+	if (plan.selectedFile) await writeFile(join(runRoot, "selection.json"), `${JSON.stringify({
+		scope: "selected-file (partial; not full integration/native certification)",
+		selectedFile: plan.selectedFile,
+		seamArgs: plan.seamArgs,
+		integrationArgs: plan.integrationArgs,
+	}, null, 2)}\n`, { mode: 0o600 });
 	const env = { ...process.env };
 	for (const key of Object.keys(env)) {
 		if (key === HARNESS_OWNER_TOKEN_ENV_KEY || key === HARNESS_RUN_ID_ENV_KEY || key === HARNESS_SIGNING_KEY_ENV_KEY
+			|| key === "SUMOCODE_INTEGRATION_SELECTED_FILE"
 			|| key === "NODE_PATH" || key === "NODE_OPTIONS" || key.startsWith("HERDR_") || key.startsWith("PI_SESSION")) delete env[key];
 	}
 	Object.assign(env, {
@@ -201,11 +244,7 @@ async function main(ownerToken) {
 		env.SUMOCODE_INTEGRATION_PACKAGE_ROOT = ROOT;
 		env.SUMOCODE_NATIVE_CONTRACT = "1";
 		process.stdout.write("[integration harness] native contract tests\n");
-		integrationStatus = await runVitest(vitestEntry, [
-			"run",
-			"test/integration/native-",
-			"--fileParallelism=false",
-		], env);
+		integrationStatus = await runVitest(vitestEntry, plan.integrationArgs, env);
 	} else {
 		let packageRoot;
 		try {
@@ -217,16 +256,13 @@ async function main(ownerToken) {
 		}
 		env.SUMOCODE_INTEGRATION_PACKAGE_ROOT = packageRoot;
 		process.stdout.write("[integration harness] seam tests\n");
-		seamStatus = await runVitest(vitestEntry, ["run", "test/integration/verification-harness.test.ts", "--fileParallelism=false"], env);
+		seamStatus = await runVitest(vitestEntry, plan.seamArgs, env);
 		if (seamStatus.code === 0 && !seamStatus.interrupted) {
 			process.stdout.write("[integration harness] integration tests\n");
-			integrationStatus = await runVitest(vitestEntry, [
-				"run",
-				"test/integration/",
-				"--fileParallelism=false",
-				"--exclude",
-				"test/integration/verification-harness.test.ts",
-			], env);
+			// Positional Vitest filters are substrings; the config narrows include
+			// to this validated literal path only after the mandatory seam succeeds.
+			if (plan.selectedFile) env.SUMOCODE_INTEGRATION_SELECTED_FILE = plan.selectedFile;
+			integrationStatus = await runVitest(vitestEntry, plan.integrationArgs, env);
 		}
 	}
 	const auditPassed = await auditAndReap(manifest, ownerToken, auth);
@@ -260,8 +296,15 @@ export function resolveHarnessExitCode({ seamStatus, integrationStatus, auditPas
 }
 
 async function runOwnedHarness() {
+	let plan;
+	try {
+		plan = await resolveHarnessRunPlan(process.argv.slice(2));
+	} catch (error) {
+		process.stderr.write(`[integration harness] invalid integration selection: ${error.message}\n`);
+		return 2;
+	}
 	const ownerToken = process.env[HARNESS_OWNER_TOKEN_ENV_KEY];
-	if (ownerToken) return main(ownerToken);
+	if (ownerToken) return main(ownerToken, plan);
 
 	const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...process.argv.slice(2)], {
 		cwd: process.cwd(),

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 import { RpcChildExitError } from "./client.js";
+import { BoundedUtf8Tail, CHILD_STDERR_TAIL_MAX_BYTES } from "../../child-protocol.js";
 import { RpcHostLifecycle } from "./host-lifecycle.js";
 import { createRpcExitHandler } from "./host.js";
 
@@ -115,6 +116,73 @@ describe("RpcHostLifecycle", () => {
 		} finally { vi.useRealTimers(); }
 	});
 
+	it.each(["SIGTERM", "SIGINT", "quit", "reload", "runtime-exit"])("prints the first crash once when %s cuts short the toast delay", async (request) => {
+		vi.useFakeTimers();
+		try {
+			const f = fixture();
+			f.lifecycle.ownClient({ stop: async () => undefined, stderr: "final diagnostic\n" });
+			f.lifecycle.childAdopted();
+			f.lifecycle.ownRuntime(f.runtime);
+			const handle = childExitHandler(f.lifecycle);
+			handle(new RpcChildExitError("first crash", { code: 2, signal: null }));
+			handle(new RpcChildExitError("duplicate crash", { code: 3, signal: null }));
+			if (request === "SIGTERM" || request === "SIGINT") f.signals.emit(request);
+			else if (request === "reload") handle(new RpcChildExitError("reload", { code: 100, signal: null }));
+			else if (request === "runtime-exit") f.runtimeExit(0);
+			else void f.lifecycle.stop(0, request);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(await f.lifecycle.waitForExit()).toBe(1);
+			expect(f.writes).toEqual([{
+				terminalRestored: true,
+				text: "[sumocode-rpc] RPC child exited unexpectedly code=2 signal=null: first crash\nfinal diagnostic\n",
+			}]);
+			await f.lifecycle.stop(0);
+			await vi.runAllTimersAsync();
+			expect(f.writes).toHaveLength(1);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.useRealTimers(); }
+	});
+
+	it("sanitizes and bounds crash output without disclosing a truncated credential row", async () => {
+		vi.useFakeTimers();
+		try {
+			const f = fixture();
+			const tail = new BoundedUtf8Tail();
+			tail.append(`password=${"a".repeat(70_000)}\nAuthorization: Bearer synthetic-credential\n\u001b]52;c;synthetic-clipboard\u0007\u001b[31mfailure\u001b[0m\nfinal diagnostic\n`);
+			f.lifecycle.ownClient({ stop: async () => undefined, stderr: tail.toString() });
+			f.lifecycle.childAdopted();
+			f.lifecycle.ownRuntime(f.runtime);
+			childExitHandler(f.lifecycle)(new RpcChildExitError(`RPC child exited code=2 signal=null. stderr=${tail.toString()}`, { code: 2, signal: null }));
+			await vi.runAllTimersAsync();
+			await f.lifecycle.waitForExit();
+			const output = f.writes.map((write) => write.text).join("");
+			expect(output).toContain("Authorization: [REDACTED]\nfailure\nfinal diagnostic\n");
+			expect(output).not.toMatch(/synthetic-credential|synthetic-clipboard|aaaa/u);
+			expect(output).not.toContain("\u001b");
+			expect(Buffer.byteLength(output)).toBeLessThan(CHILD_STDERR_TAIL_MAX_BYTES + 600);
+			expect(f.writes).toHaveLength(1);
+		} finally { vi.useRealTimers(); }
+	});
+
+	it("restores an inherited terminal before reporting a pre-adoption child crash", async () => {
+		vi.useFakeTimers();
+		try {
+			const f = fixture({ SUMOCODE_RELOAD: "1" });
+			const error = new RpcChildExitError("died before adoption", { code: 2, signal: null });
+			const running = f.lifecycle.start(async () => {
+				f.lifecycle.ownClient({ stop: async () => undefined, stderr: "startup diagnostic" });
+				childExitHandler(f.lifecycle)(error);
+				throw error;
+			});
+			await vi.runAllTimersAsync();
+			expect(await running).toBe(1);
+			expect(f.writes).toEqual([{
+				terminalRestored: true,
+				text: "[sumocode-rpc] RPC child exited unexpectedly code=2 signal=null: died before adoption\nstartup diagnostic\n",
+			}]);
+		} finally { vi.useRealTimers(); }
+	});
+
 	it("arms host signals before releasing the entry owner", async () => {
 		const signals = new EventEmitter();
 		const entry = () => undefined;
@@ -158,6 +226,7 @@ describe("RpcHostLifecycle", () => {
 			throw new RpcChildExitError("RPC child exited before host adoption code=100 signal=null.", { code: 100, signal: null });
 		})).toBe(100);
 		expect(f.trace).toContain("exit:100");
+		expect(f.writes).toEqual([]);
 	});
 
 	it("starts once and stops an idle runtime exit once", async () => {
@@ -325,6 +394,7 @@ describe("RpcHostLifecycle", () => {
 		expect(f.trace.slice(-6)).toEqual(code === 100 ? ["terminal:preserve", ...shutdown.slice(1)] : shutdown);
 		expect(f.lifecycle.phase).toBe("stopped");
 		expect(f.signals.eventNames()).toEqual([]);
+		expect(f.writes).toEqual([]);
 	});
 
 	it.each([["SIGINT", 130], ["SIGTERM", 0]] as const)("characterizes lifecycle order: %s", async (signal, code) => {

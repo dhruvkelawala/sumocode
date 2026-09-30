@@ -1,0 +1,3 @@
+# HEAD 6e4720d5
+ Test Files  2 passed (2)
+      Tests  24 passed (24)

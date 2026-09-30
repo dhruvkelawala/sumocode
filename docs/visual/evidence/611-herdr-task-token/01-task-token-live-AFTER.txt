@@ -1,0 +1,14 @@
+# live Herdr capture: sumocode source build at 6e4720d5, herdr 0.9.1, pane w37:pC
+# naming model: implement-cheap = opencode-go/deepseek-v4.1-flash
+$ herdr agent get w37:pC   # AC1: fresh unnamed session
+{"display_agent":"sumocode","task":null}
+$ herdr agent get w37:pC   # AC3: after the first prompt
+{"display_agent":"sumocode","task":"payment webhook retry handling"}
+$ herdr agent get w37:pC   # AC2: after /name → "payment webhook retries v2"
+{"display_agent":"sumocode","task":"payment webhook retries v2"}
+$ herdr agent get w37:pC   # AC3: second prompt does not rename
+{"display_agent":"sumocode","task":"payment webhook retries v2"}
+$ herdr agent get w37:pC   # AC1: after /new, unnamed session clears the task
+{"display_agent":"sumocode","task":null}
+$ herdr agent get w37:pC   # AC4: skill-expanded first prompt
+{"display_agent":"sumocode","task":"eli25 kubernetes pod networking"}

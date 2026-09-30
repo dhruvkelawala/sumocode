@@ -1,0 +1,7 @@
+# base impl (6f910303) + tests from 0ede6f42
+     × reports the session name as the task token, clearing it for unnamed sessions 3ms
+     × re-reports the task when the session is renamed 1ms
+     × delivers a rename that arrives while the previous report is in flight 4ms
+     × names an unnamed session once, from its first prompt 1ms
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+      Tests  4 failed | 12 passed (16)

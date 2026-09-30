@@ -4,9 +4,11 @@ import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 import { RpcChildExitError } from "./client.js";
 import { RpcHostLifecycle } from "./host-lifecycle.js";
+import { createRpcExitHandler } from "./host.js";
 
 function fixture(env: NodeJS.ProcessEnv = {}) {
 	const trace: string[] = [];
+	const writes: Array<{ text: string; terminalRestored: boolean }> = [];
 	const signals = new EventEmitter();
 	let runtimeExit!: (code: number) => void;
 	const runtimeExited = new Promise<number>((resolve) => { runtimeExit = resolve; });
@@ -29,7 +31,7 @@ function fixture(env: NodeJS.ProcessEnv = {}) {
 			adoptRetainedSession: () => { trace.push("terminal:adopt"); },
 			exitTerminal: () => { trace.push("terminal:restore"); },
 		},
-		stderr: { write: () => true },
+		stderr: { write: (text: string) => { writes.push({ text, terminalRestored: trace.includes("terminal:restore") }); return true; } },
 		exit: (code) => { trace.push(`exit:${code}`); },
 	});
 	const acquire = async () => {
@@ -45,10 +47,23 @@ function fixture(env: NodeJS.ProcessEnv = {}) {
 		lifecycle.markCommandReady();
 		return lifecycle.waitForExit();
 	};
-	return { lifecycle, signals, trace, acquire, runtimeExit, runtime };
+	return { lifecycle, signals, trace, writes, acquire, runtimeExit, runtime };
 }
 
 const shutdown = ["terminal:restore", "regions:dispose", "activity:unsubscribe", "activity:dispose", "child:stop", "cache:dispose"];
+
+function childExitHandler(lifecycle: RpcHostLifecycle) {
+	return createRpcExitHandler({
+		modals: { close: vi.fn() }, overlays: { drain: vi.fn() },
+		stateStore: { getSnapshot: () => ({ isStreaming: false, isCompacting: false, messageCount: 0, pendingMessageCount: 0, hydrated: false, hasMessages: false, costUsd: 0 }) },
+		notifications: { notify: vi.fn() }, requestRender: vi.fn(), updateRuntimeState: vi.fn(),
+		recordExitCode: (code) => lifecycle.recordExitCode(code),
+		recordChildCrash: (error) => lifecycle.recordChildCrash(error),
+		stopHost: (code) => lifecycle.stop(code, "child-exit"), exit: (code) => lifecycle.exit(code),
+		// SAFETY: the handler passes only a zero-argument callback and delay, as in host wiring.
+		setTimeout: ((callback: () => void, delay: number) => lifecycle.scheduleTimeout("child-exit", callback, delay)) as typeof setTimeout,
+	});
+}
 
 describe("RpcHostLifecycle", () => {
 	it("keeps lifecycle ownership behind RpcHostLifecycle", () => {
@@ -77,6 +92,27 @@ describe("RpcHostLifecycle", () => {
 		expect(violations('async function runRpcHost() { process.once("SIGTERM", stop); }')).toEqual(["process.once"]);
 		expect(violations('async function runRpcHost() { const stopPromise = runtime.stop(); }')).toEqual(["stopPromise", "runtime.stop"]);
 		expect(violations('async function runRpcHost() {} async function runRpcHostSession() { client.stop(); }')).toEqual(["client.stop"]);
+	});
+
+	it.each([{ code: 2, signal: null }, { code: null, signal: "SIGKILL" }] as const)("prints the child crash and last 20 stderr lines after terminal restore: %j", async (info) => {
+		vi.useFakeTimers();
+		try {
+			const f = fixture();
+			const stderr = `${Array.from({ length: 24 }, (_, index) => `diagnostic ${index + 1}`).join("\n")}\n`;
+			f.lifecycle.ownClient({ stop: async () => undefined, stderr });
+			f.lifecycle.childAdopted();
+			f.lifecycle.ownRuntime(f.runtime);
+			const handle = childExitHandler(f.lifecycle);
+			handle(new RpcChildExitError(`RPC child exited code=${info.code} signal=${info.signal}. stderr=${stderr}`, info));
+			expect(f.writes).toEqual([]);
+			await vi.runAllTimersAsync();
+			await f.lifecycle.waitForExit();
+			expect(f.writes).toEqual([{
+				terminalRestored: true,
+				text: `[sumocode-rpc] RPC child exited unexpectedly code=${info.code} signal=${info.signal}: RPC child exited code=${info.code} signal=${info.signal}\n${Array.from({ length: 20 }, (_, index) => `diagnostic ${index + 5}`).join("\n")}\n`,
+			}]);
+			expect(f.trace.at(-1)).toBe("exit:1");
+		} finally { vi.useRealTimers(); }
 	});
 
 	it("arms host signals before releasing the entry owner", async () => {

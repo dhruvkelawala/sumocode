@@ -1,7 +1,8 @@
 import type { EventEmitter } from "node:events";
 import { rmSync, writeFileSync } from "node:fs";
 import { SUMOCODE_RELOAD_EXIT_CODE } from "../../commands/reload.js";
-import { boundRetainedResult } from "../../child-protocol.js";
+import { boundRetainedResult, CHILD_STDERR_TAIL_MAX_BYTES, TRUNCATED_TAIL_MARKER } from "../../child-protocol.js";
+import { redactActivityOutputTail, redactActivitySecrets } from "../../activity/feed-publisher.js";
 import { defaultTerminalSessionOwner } from "../runtime/terminal-controller.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import { drainChromeCacheForShutdown, type ChromeCacheWorkerClient } from "./chrome-cache-worker-client.js";
@@ -34,6 +35,7 @@ export class RpcHostLifecycle {
 	private exited = false;
 	private childOwned = false;
 	private childStopFailed = false;
+	private childCrash: Error | undefined;
 	private readonly resources: Finalizer[] = [];
 	private readonly subscriptions: Finalizer[] = [];
 	private readonly timers = new Map<TimerName, NodeJS.Timeout>();
@@ -231,6 +233,11 @@ export class RpcHostLifecycle {
 	/** First root intent wins, even when notification visibility delays cleanup. */
 	public recordExitCode(code: number): void { this.code ??= code; }
 
+	/** Capture before the toast delay: every stop path must retain the first crash. */
+	public recordChildCrash(error: Error): void {
+		if (!this.stopping) this.childCrash ??= error;
+	}
+
 	public stop(code = 0, reason = "exit"): Promise<void> {
 		if (this.stopPromise) return this.stopPromise;
 		this.recordExitCode(code);
@@ -240,6 +247,7 @@ export class RpcHostLifecycle {
 		let resolveStop!: () => void;
 		this.stopPromise = new Promise<void>((resolve) => { resolveStop = resolve; });
 		void this.finalizeHost().catch((error) => this.report("host", error)).finally(() => {
+			this.reportChildCrash();
 			this.currentPhase = "stopped";
 			this.removeListeners();
 			this.resolveExit(this.code ?? code);
@@ -272,7 +280,7 @@ export class RpcHostLifecycle {
 		this.timers.clear();
 		if (this.treeRetry) this.finalize({ name: "tree-retry", run: () => this.treeRetry!.clear() });
 		if (this.gitWatcher) this.finalize({ name: "git-watcher", run: this.gitWatcher });
-		if (this.childOwned && !this.runtime && this.options.env.SUMOCODE_RELOAD === "1") this.restoreTerminal();
+		if ((this.childOwned || this.childCrash) && !this.runtime && this.options.env.SUMOCODE_RELOAD === "1") this.restoreTerminal();
 		for (const finalizer of this.resources.splice(0).reverse()) this.finalize(finalizer);
 		try { await this.client?.stop(); } catch (error) {
 			this.childStopFailed = true;
@@ -290,6 +298,26 @@ export class RpcHostLifecycle {
 		if (this.cache) await drainChromeCacheForShutdown(() => this.flushChrome(), () => this.cache!.dispose());
 		if (this.cacheImmediate) clearImmediate(this.cacheImmediate);
 		this.cacheImmediate = undefined;
+	}
+
+	private reportChildCrash(): void {
+		const error = this.childCrash;
+		this.childCrash = undefined;
+		if (!error) return;
+		try {
+			const code = error instanceof RpcChildExitError ? String(error.code) : "unknown";
+			const signal = error instanceof RpcChildExitError ? String(error.signal) : "unknown";
+			// The client's legacy error message embeds stderr. Keep it out of the
+			// reason so older rows cannot bypass the last-20-lines limit below.
+			const reason = error instanceof RpcChildExitError ? error.message.split(". stderr=", 1)[0]! : error.message;
+			const raw = this.client?.stderr ?? "";
+			const truncated = raw.startsWith(TRUNCATED_TAIL_MARKER);
+			const tail = redactActivityOutputTail((truncated ? raw.slice(TRUNCATED_TAIL_MARKER.length) : raw).replace(/\n$/u, ""), {
+				maxBytes: CHILD_STDERR_TAIL_MAX_BYTES, contextBytes: CHILD_STDERR_TAIL_MAX_BYTES, maxLines: 20,
+				truncated, truncatedLineReplacement: "[truncated line redacted]",
+			});
+			this.options.stderr.write(`[sumocode-rpc] RPC child exited unexpectedly code=${code} signal=${signal}: ${boundRetainedResult(redactActivitySecrets(reason), 500)}\n${tail ? `${tail}\n` : ""}`);
+		} catch { /* Diagnostic I/O must not prevent terminal cleanup or exit. */ }
 	}
 
 	private register(stack: Finalizer[], finalizer: Finalizer): void {

@@ -10,6 +10,31 @@ landed between the original scaffold and this release.
 
 ## [Unreleased]
 
+## [0.7.5] — 2026-09-30
+
+The retained TUI no longer shows empty SYSTEM cards on Pi 0.86 and newer.
+
+### Fixed
+- **No empty SYSTEM cards**: Pi 0.86+ records prompt and tool updates as
+  transcript `system` messages. They are model context, not chat, and
+  SumoCode showed each one as an empty SYSTEM card, for example before a
+  prompt with an `[Image 1]` attachment. They are now hidden, as in Pi's own
+  interactive mode. #607
+- **Dependency audit is clean**: `brace-expansion` 5.0.9 → 5.0.12, pulled in
+  through Pi's `minimatch`. This fixes two high-severity denial-of-service
+  advisories: GHSA-qhr7-859c-m2p7 and GHSA-6j4f-fj2g-mc7p.
+
+## [0.7.4] — 2026-09-29
+
+SumoCode now runs on Pi 0.99.1.
+
+### Changed
+- **Pi 0.99.1**: SumoCode now targets Pi `0.99.1` (peers `~0.99.1`) and
+  handles the new per-input `disposition` on RPC `prompt`, `steer` and
+  `follow_up` responses. It keeps using `pi-mcp-adapter` for MCP. While the
+  adapter is installed, Pi skips its new built-in MCP extension and shows a
+  startup warning saying so. Moving to the built-in MCP is tracked in #604.
+
 ## [0.7.3] — 2026-09-29
 
 Claude OAuth works again on `claude-opus-5-5`, and the macOS native binaries

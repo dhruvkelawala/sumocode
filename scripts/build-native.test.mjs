@@ -44,11 +44,11 @@ function fixture(layout) {
 	temporaryDirectories.push(directory);
 	const root = join(directory, "package");
 	const piPkg = layout === "pnpm"
-		? join(root, "node_modules/.pnpm/pi@0.87.1/node_modules/@earendil-works/pi-coding-agent")
+		? join(root, "node_modules/.pnpm/pi@0.99.1/node_modules/@earendil-works/pi-coding-agent")
 		: join(root, "node_modules/@earendil-works/pi-coding-agent");
 	const neighborhood = layout === "pnpm" ? join(piPkg, "../..") : join(piPkg, "node_modules");
 	write(join(piPkg, "package.json"), JSON.stringify({
-		name: "@earendil-works/pi-coding-agent", version: "0.87.1", type: "module",
+		name: "@earendil-works/pi-coding-agent", version: "0.99.1", type: "module",
 		dependencies: {
 			"proper-lockfile": "1.0.0",
 			"@earendil-works/pi-agent-core": "1.0.0",

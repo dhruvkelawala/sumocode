@@ -10,12 +10,16 @@ landed between the original scaffold and this release.
 
 ## [Unreleased]
 
+## [0.7.5] — 2026-09-30
+
+The retained TUI no longer shows empty SYSTEM cards on Pi 0.86 and newer.
+
 ### Fixed
 - **No empty SYSTEM cards**: Pi 0.86+ records prompt and tool updates as
   transcript `system` messages. They are model context, not chat, and
   SumoCode showed each one as an empty SYSTEM card, for example before a
   prompt with an `[Image 1]` attachment. They are now hidden, as in Pi's own
-  interactive mode.
+  interactive mode. #607
 
 ## [0.7.4] — 2026-09-29
 

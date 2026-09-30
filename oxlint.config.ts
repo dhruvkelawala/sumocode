@@ -22,7 +22,8 @@ export default defineConfig({
 	],
 	rules: {
 		"anti-slop-effect/no-restricted-imports": "error",
-		"anti-slop-effect/no-service-constructor-imports": "error",
+		// Enable no-service-constructor-imports only in reviewed Effect-adopting
+		// scopes at #590; plain TypeScript make helpers are not Effect services.
 		"anti-slop/no-chained-type-assertions": "error",
 		"anti-slop/no-conditional-empty-object-spread": "error",
 		"anti-slop/no-known-value-widening": "error",

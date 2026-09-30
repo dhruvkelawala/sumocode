@@ -47,6 +47,12 @@ describe("Effect import policy", () => {
 		expect(result.output).toContain("Import Effect through a deep subpath");
 	});
 
+	it("allows plain TypeScript local make helpers with the repository configuration", () => {
+		const result = runLint("src/production.ts", 'import { makeLabel } from "./label";\nvoid makeLabel;\n', true);
+
+		expect(result.status, result.output).toBe(0);
+	});
+
 	it("does not treat an ancestor checkout directory as test code", () => {
 		const result = runLint(
 			"src/production.ts",

@@ -67,6 +67,7 @@ export function assertNoProductionDependencyLeakage(metafile, artifact, outputTe
 /**
  * Follow only eager imports from an entry point. Dynamic local imports are lazy
  * boundaries, but a direct dynamic import of a forbidden package still fails.
+ * Static non-external edges must resolve to an input; a graph miss is not lazy.
  */
 export function assertNoEffectInEagerClosure(metafile, entryPoint, artifact) {
 	const inputs = metafile.inputs ?? {};
@@ -87,7 +88,10 @@ export function assertNoEffectInEagerClosure(metafile, entryPoint, artifact) {
 			}
 			if (imported.kind === "dynamic-import" || imported.external) continue;
 			const target = inputKeys.get(normalizePath(imported.path));
-			if (target) pending.push({ input: target, trace: [...current.trace, target] });
+			if (!target) {
+				throw new Error(`${artifact} eager closure has unresolved static import via ${[...current.trace, imported.path].join(" -> ")}`);
+			}
+			pending.push({ input: target, trace: [...current.trace, target] });
 		}
 	}
 }

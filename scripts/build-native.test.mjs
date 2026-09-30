@@ -7,6 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { assertMetafileContainment, createBunResolver, makeNativePiBuildCopy, validatePiBuildGraph } from "./build-native.mjs";
+import { assertNoEffectInEagerClosure } from "./lib/production-boundaries.mjs";
 
 const temporaryDirectories = [];
 const bunBin = process.env.BUN_BIN ?? "bun";
@@ -203,17 +204,24 @@ describe("native build entry", () => {
 
 describe("native build input containment", () => {
 	describe.runIf(bunPresent)("Bun metafile contract", () => {
-		it("marks the lazy host edge as a dynamic import", () => {
+		it("resolves eager static edges and marks the lazy host edge as a dynamic import", () => {
 			const directory = realpathSync(mkdtempSync(join(tmpdir(), "sumocode-native-metafile-")));
 			temporaryDirectories.push(directory);
-			write(join(directory, "main.ts"), 'await import("./host.js");\n');
+			write(join(directory, "main.ts"), 'import { ready } from "./preflight.js";\nconsole.log(ready);\nawait import("./host.js");\n');
+			write(join(directory, "preflight.ts"), "export const ready = true;\n");
 			write(join(directory, "host.ts"), "export const host = true;\n");
 
 			const metafile = bunBundleMetafile(join(directory, "main.ts"), directory);
 			expect(metafile.inputs["main.ts"].imports).toContainEqual(expect.objectContaining({
+				path: "preflight.ts",
+				kind: "import-statement",
+			}));
+			expect(metafile.inputs).toHaveProperty("preflight.ts");
+			expect(metafile.inputs["main.ts"].imports).toContainEqual(expect.objectContaining({
 				path: "host.ts",
 				kind: "dynamic-import",
 			}));
+			expect(() => assertNoEffectInEagerClosure(metafile, "main.ts", "native launcher fixture")).not.toThrow();
 		});
 	});
 

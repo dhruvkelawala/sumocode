@@ -65,6 +65,40 @@ describe("native eager/pre-adoption closure", () => {
 		)).not.toThrow();
 	});
 
+	it("fails closed when the entry point is missing", () => {
+		expect(() => assertNoEffectInEagerClosure(
+			nativeMetafile(),
+			"src/native/absent.ts",
+			"native launcher",
+		)).toThrow("native launcher metafile is missing entry point src/native/absent.ts");
+	});
+
+	it.each(["effect/Effect", "@effect/platform-node/NodeRuntime"])(
+		"rejects a direct dynamic import of %s from the eager closure",
+		(specifier) => {
+			expect(() => assertNoEffectInEagerClosure(
+				nativeMetafile({ path: specifier, kind: "dynamic-import", external: true }),
+				"src/native/main.ts",
+				"native launcher",
+			)).toThrow(`native launcher eager closure includes forbidden package via src/native/main.ts -> src/native/preflight.ts -> ${specifier}`);
+		},
+	);
+
+	it.each(["src/native/missing.ts", "./bridge.ts"])(
+		"fails closed when an eager static edge cannot resolve: %s",
+		(path) => {
+			const metafile = nativeMetafile({ path, kind: "import-statement" });
+			metafile.inputs["src/native/bridge.ts"] = {
+				imports: [{ path: "node_modules/effect/dist/Effect.js", kind: "import-statement" }],
+			};
+			expect(() => assertNoEffectInEagerClosure(
+				metafile,
+				"src/native/main.ts",
+				"native launcher",
+			)).toThrow(`native launcher eager closure has unresolved static import via src/native/main.ts -> src/native/preflight.ts -> ${path}`);
+		},
+	);
+
 	it.each(["effect/Effect", "@effect/platform-node/NodeRuntime"])(
 		"rejects %s when imported by an eager pre-adoption module",
 		(specifier) => {
@@ -75,5 +109,4 @@ describe("native eager/pre-adoption closure", () => {
 			)).toThrow(`native launcher eager closure includes forbidden package via src/native/main.ts -> src/native/preflight.ts -> ${specifier}`);
 		},
 	);
-
 });

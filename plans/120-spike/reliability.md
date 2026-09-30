@@ -138,4 +138,118 @@ NOT RUN, coordinator lease required: `pnpm test`, `pnpm test:integration` (inclu
 
 Review-ready design check used `~/.pi/agent/skills/review-ready/contract.md`: caller-knowledge—host records crash intent, lifecycle owns reporting; deletion—removing lifecycle would spread teardown/reporting across callers; ownership—client owns bounded capture/reap, host owns exit classification, lifecycle owns post-restore publication; test-surface—public reconstruction, exit-handler, lifecycle and client interfaces with synthetic process/time/terminal boundaries. Simplification: reused reviewed recovery and shared redactors; no new framework, module, runtime selection, or configurable subsystem. Full review-ready gate remains pending independent review and coordinator heavy gates; no review loop was run here.
 
-Next action: coordinator grants the sequential heavy-verification lease, then independent review and owner adoption.
+Next action for the original candidate: coordinator grants the sequential heavy-verification lease, then independent review and owner adoption. The isolated revision below supersedes this candidate for the next independent review.
+
+## Bounded follow-up revision1of2
+
+Status: COMPLETE for the authorized bounded implementation and focused checks only. Candidate independent re-review is next; owner adoption remains pending. This is not independent approval, a heavy-gate result, or a release decision.
+
+Identity:
+
+- Own path: `/Users/sumodeus/code/sumocode.sumo-worktrees/sumo__v08-reliability-revision-1`; branch: `sumo/v08-reliability-revision-1`.
+- Fresh preserved immutable base: `15ab38b036bfdf9e5e453d660f355f9103cc0f47`; approved runtime ancestor remains `8ac67f6c82d7c0ae7d62ff7fcb4401dc2f9edd39`, Pi 0.99.1.
+- Revised source/test head: `734a0fcd89503cec595471d1d1e881b1b23b90d0` (`fix(reliability): secure startup reports and detach legacy views`). The subsequent evidence-only commit has this source head as its parent.
+- Source/test changes only: `src/sumo-tui/rpc/host-lifecycle.ts`, its colocated test, `src/subagents/index.ts`, its colocated test. Evidence changes only in this document. Original 16 #595 commits and their assertions remain in ancestry, with no original assertion removed or weakened.
+- Parent/old candidate/remote branch untouched. No manager, recovery authority, schema, Effect, MCP, dependency pin, launcher, native entry, DAG, README, or golden changes.
+
+### Finding 1 — REJECTED: suppressing the reload cleanup acknowledgment
+
+The suggested `restoreTerminal(false)` would confuse terminal responsibility with UI startup success. `bin/sumocode.sh:1276-1293` restores original termios but skips terminal mode fallback when the marker is `ready`; `:1333-1335` explicitly defines the marker as the terminal owner's responsibility acknowledgment. `:1393-1396` invokes that fallback after any non-100 host exit, including failure. `src/native/main.ts:693-708` likewise reads `ready` to skip fallback. `sumo-rpc-host.js:152-160` intentionally writes `ready` after failed-reload terminal cleanup; its failure callers are `:267-276` and `:307-321`. All marker consumers and their surrounding control flow were read; there is no contradictory startup-success contract.
+
+No production marker change. Public lifecycle test `host-lifecycle.test.ts:267` observes an empty marker at the terminal restore boundary, then `ready` before child reap, exit side-channel `1`, phase `stopped`, one post-restore report, and no runtime/input/editor/command-ready operations. It passed before any marker edit (none was made). The rejecting entry still owns generic pre-adoption setup failures, as the original assertion requires. Omitting the acknowledgment could trigger a second outer cleanup after the persistent diagnostic is printed; the bounded test is an ordering oracle, not live PTY proof.
+
+### Finding 2 — REJECTED: speculative pathname canonicalization
+
+Pi 0.99.1 public shutdown types only promise a destination pathname (`node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts:603-609`). Its implementation provides the stronger relevant property: `agent-session-runtime.js:128-145` opens one successor `SessionManager`, emits that manager's `getSessionFile()` via `teardownCurrent`, and passes the **same manager** to runtime creation. `/new`, persisted `/fork`, and import do the same at `:147-172`, `:206-230`, and `:278-290`; reload is targetless (`agent-session.js:2870`).
+
+This is identical-string routing, **not a realpath guarantee**. `session-manager.js:665-666,782-784` stores `resolvePath(sessionFile)` and returns it unchanged; `utils/paths.js:82-86` resolves relative inputs without following symlinks. Aliases are not converted between shutdown and startup by this flow, so there is no evidence-based legitimate alias miss to fix. Guessing nonexistent future paths, using the predecessor cwd for a successor path, or widening target identity to guessed filesystem aliases is unnecessary.
+
+Public contract tests `index.test.ts:731` invoke the installed Pi's actual `AgentSessionRuntime.switchSession` and actual `SessionManager` with relative and directory-symlink inputs, across cwd changes, routing their events through `installSubagents`. Both passed with the original exact comparator: the symlink spelling deliberately differs from `realpathSync(file)`, yet the shutdown and successor strings match and retained control adopts exactly once, without signalling or interruption. The test runtime-creation boundary is synthetic; no provider is contacted.
+
+Added opt-in `subagent_replacement_parked` diagnostic in `index.ts:360-364`: only the enum `target=session-file|session-id`, never session contents, credentials, IDs, or paths. `index.test.ts:780` first failed because this diagnostic did not exist, then passed: a different target leaves the full registry record unchanged, does not detach the origin or offer it to the foreign manager, and later adopts once at the exact not-yet-created destination. Unmatched replacements remain parked until their destination starts or process exit, an explicitly accepted tradeoff. No expiry, foreign detach, or abandoned-target auto-recovery claim.
+
+### Finding 3 — FIXED: raw, pre-cleanup owned startup reporting
+
+Root cause: `RpcHostLifecycle.run` wrote the thrown message and raw client stderr before its `finally` stop. The reachable `childOwned && code === undefined` path now records the failure through `recordChildCrash` and leaves output to the existing post-finalization report (`host-lifecycle.ts:115-125,237-252,304-328`). A plain setup failure is labelled `RPC host startup failed`, with code/signal `unknown`; only `RpcChildExitError` supplies a process identity. No invented exit code or unsupported child-blame claim.
+
+Public `lifecycle.start` regression at `host-lifecycle.test.ts:169`, with and without a runtime, throws a real `Error` while the client/child are owned. Its real bounded UTF-8 tail includes a byte-truncated credential first row, more than 20 lines, an authorization credential, OSC clipboard data and CSI styling. The child stop boundary is held pending: terminal restore has occurred but output must remain empty until reap completes and contributes its final stderr row. Red: **2 failed / 46 skipped (48)**, raw writes were already present. Green after the fix: **48 passed**, including the two startup cases. Final expected report has exactly the newest 20 sanitized rows, no synthetic credential/control payload or duplicate, and exit 1.
+
+Additional public guard tests `:203` and `:216` preserve deliberate exit 0/100 silence and the exit handler's first crash during startup rejection. Original urgent-signal/quit/reload/runtime-exit, duplicate-event, unknown-identity, pre-adoption-root-intent and seven reap-failure cases remain unchanged and green. The initialization/reap-failure case confirms a throwing child stop does not wedge cleanup, cache disposal, listener removal, or exactly-once exit.
+
+### Finding 4 — FIXED: plain-error embedded stderr bypass
+
+`SumoRpcClient.start` can throw a plain `Error('RPC child exited during startup. stderr=...')` (`client.ts:322`), not only `RpcChildExitError`. Shared formatting now splits `. stderr=` unconditionally at `host-lifecycle.ts:314`, before the separate reason redaction/500-byte bound. All existing tail redaction, byte bound, conservative truncated-row handling and last-20-line limits remain shared; no new buffer/logger.
+
+Public exit-handler/lifecycle regression `host-lifecycle.test.ts:232` supplies that exact plain-error shape with an embedded old payload and a truncated credential tail. Red: **1 failed / 45 skipped (46)**; older rows and embedded payload bypassed the independent tail limit through the reason. Green: **1 passed / 45 skipped (46)**. The expected report contains only the plain reason and newest 20 tail rows, with unavailable identity honestly `unknown`.
+
+### Finding 5 — FIXED: detach safe v1 manager views before dropping state
+
+Validated the earlier v1 manager's public API directly with `git show 8ac67f6c:src/subagents/manager.ts`: `detachForReplacement` at `:305-321` has the same retained-view semantics as current `manager.ts:306-322`. It unsubscribes retained observers and removes retained children from the disposable child map **before** `disposeAll`; retained persistence owners, leases and process trees are not terminated or newly claimed. Disposable/non-retained work remains unsupported, as before.
+
+`index.ts:36-44` now calls that public API best-effort for each legacy entry before clear/delete. A malformed entry or throwing detach is contained per entry and optionally diagnosed with `scope=legacy-detach`; no reflection, unchecked optional-method cast, migration or adoption was introduced. A legacy shape lacking the API is dropped after its call fails; this does not signal an unknown process.
+
+Public installer regression `index.test.ts:306` places a real manager with a real retained registry/control grant and supervisor boundary in the v1 set, alongside `{}`, `null` and a throwing entry. Its detach spy calls the real API. Red after correcting the test-owned record to satisfy the unchanged schema: **1 failed / 32 skipped (33)** because detach was never called. Green: **1 passed / 32 skipped (33)**. Startup continues; observers go from one to zero, old snapshots disappear and cannot deliver, the legacy set is cleared/deleted, and no adoption, interruption or tree signal occurs. The entire retained record is unchanged. No native/Bun retention support added.
+
+### Revision verification and retained evidence
+
+Fresh own-tree `pnpm 10.29.2 install --frozen-lockfile` passed with no lockfile/dependency edits. Initial source test/type/build/lint commands used this command-local prefix (flags before assignments); post-commit commands also set `LEFTHOOK=0` as explained below:
+
+```bash
+env -u SUMOCODE_NATIVE_DIR -u HERDR_ENV -u HERDR_PANE_ID LEFHOOK=0 npx --yes pnpm@10.29.2 <command>
+```
+
+Required focused suite (PASS, **6 files / 387 tests**, original 380 plus 7 new lifecycle cases):
+
+```bash
+pnpm vitest run src/subagents/retained-reconstruction.test.ts src/subagents/retained-adoption-race.test.ts src/subagents/manager.test.ts src/sumo-tui/rpc/host.test.ts src/sumo-tui/rpc/host-lifecycle.test.ts src/sumo-tui/rpc/client.test.ts
+```
+
+Recovery/installer and host-adjacent suite (PASS, **6 files / 138 tests**):
+
+```bash
+pnpm vitest run src/subagents/index.test.ts src/subagents/manager-adoption.test.ts src/subagents/retained-runtime.test.ts src/sumo-tui/rpc/host-cleanup.test.ts src/sumo-tui/rpc/host-protocol-errors.test.ts src/sumo-tui/rpc/host-entry.test.ts
+```
+
+Required adjacent host-only rerun (PASS, **3 files / 25 tests**, subset of the preceding 138, not extra unique tests):
+
+```bash
+pnpm vitest run src/sumo-tui/rpc/host-cleanup.test.ts src/sumo-tui/rpc/host-protocol-errors.test.ts src/sumo-tui/rpc/host-entry.test.ts
+```
+
+Total: **525 unique tests in 12 files passed**. `pnpm exec tsc --noEmit && pnpm build && pnpm lint`: PASS; only the same four unused-variable warnings in unchanged `scratch/tui-audit/proto/gen.mjs`. `git diff --check`: PASS. No assertion/timeout weakening or lint/policy waiver. No paid provider/private session used.
+
+Local runner logs are `/tmp/sumo-reliability-revision1-{reason-red,reason-green,startup-red,startup-green,marker-green,legacy-red,legacy-green,path-contract,installer-green,types,focused,adjacent,host-adjacent,build-lint}.log`. `path-contract` records the two passing Pi path probes and missing-diagnostic red; the complete installer-green log contains its subsequent green. Test payloads are synthetic; raw red-run fixtures/control bytes are not copied into this document. First legacy attempt failed on test fixture schema, then a real detach regression was obtained before changing source.
+
+Hook caveat: the literal requested `LEFHOOK=0` did not suppress the installed global Lefthook shell hooks on the source commit; those hooks check `LEFTHOOK=0`. Their fallback printed missing-config/missing-executable messages, created an untracked `.build/` cache, and disrupted this own tree's dependency links. The cache is preserved, not cleaned or committed. Own-tree pinned frozen reinstall restored the links without lockfile changes; all 12 selected files were rerun together at source head `734a0fcd` (**525 passed**) and `tsc --noEmit && build && lint` reran successfully with the same four unchanged warnings. Additional logs: `/tmp/sumo-reliability-revision1-{reinstall,postcommit-focused,postcommit-build-lint}.log`. Subsequent commit uses both variables command-locally; no agent environment, global Git config, parent tree, or installed hook file was changed. Explicit pinned checks, not hook output, are the verification evidence.
+
+NOT RUN in this revision by the authorized lease boundary: full `pnpm test`, `pnpm test:native`, `pnpm test:integration`/preflight/zero-survivor audit, `pnpm visual:ci`, `pnpm render:bible`/visual review/promotion, real PTY crash capture, native archive/bundle builds and provenance guards, supported Pi compatibility matrix, dependency audit/dead-code CI, and performance benchmarks. Verification17's separate heavy run is not evidence for this changed HEAD; the coordinator must schedule any required heavy re-verification. No cleanup/purge, publication, push, merge, tag or release performed.
+
+### Review-ready gate (bounded source scope, not independent approval)
+
+Contract: `/Users/sumodeus/.pi/agent/skills/review-ready/contract.md`. All changed source/test files were reread top-to-bottom after the final green runs; this evidence-only update was also reread before commit.
+
+Changed seam: `RpcHostLifecycle.start/stop` reporting and `installSubagents` session shutdown/start replacement routing. Narrative entry points and owners remain the existing lifecycle and installer modules.
+
+Trace: owned startup throw → capture failure only if no prior root intent → finally stop → terminal restore → child reap/final stderr drain → shared sanitized report once → stopped/exit 1. Pi relative/symlink resume → successor manager's exact pathname → shutdown pending handoff → matching installer startup → existing fenced adoption once. v1 set → best-effort public detach → drop unscoped state, never adopt.
+
+#### Caller-knowledge
+
+Existing host callers still record a child crash with one `Error`; the default kind and all output policy remain lifecycle-owned. Only its own startup catch chooses the honest startup label. Installer callers need no new setting or guessed path transform.
+
+#### Deletion
+
+Removing lifecycle reporting would spread privacy/order logic across startup and exit callers. The fix deletes the raw catch formatter and reuses its existing deep reporting/teardown seam. Removing the installer routing would spread destination/detach policy into managers; none was moved there.
+
+#### Ownership
+
+Client owns bounded capture/reap; lifecycle owns root-intent precedence, classification and post-cleanup publication; installer owns pending destination routing and safe legacy-state release; manager/registry retain unchanged authority, identity and CAS fences.
+
+#### Test-surface
+
+New checks enter through `lifecycle.start`, the public exit handler, public installer events, and installed Pi's public runtime/session manager. Registry is real; time, terminal, process/supervisor and runtime-creation boundaries are synthetic. No production helper is exported for tests, no private method is called, and no whole-module mock added.
+
+Simplification pass: retain one report formatter/tail, add only a local failure-kind discriminator for truthful classification, reuse the existing public detach and opt-in diagnostic sink, keep exact routing after evidence disproved a legitimate alias miss. No new expiry/recovery subsystem, filesystem-normalization pass, logger, schema or authority API.
+
+Verification: all authorized bounded checks above pass. Exceptions: none in the changed design scope; heavy/live/native/visual gates are explicitly deferred by coordinator ownership, not waived or claimed passed. Arbitrary opaque secrets remain outside heuristic redaction guarantees; unit ordering is not PTY/native proof; unmatched destinations remain parked; unknown legacy shapes receive no assumed authority.
+
+Next action: independently re-review this revision candidate, then let the coordinator schedule required changed-HEAD heavy evidence and seek owner adoption.

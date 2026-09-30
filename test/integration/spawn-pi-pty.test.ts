@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -195,6 +195,122 @@ describe("buildSpawnEnv", () => {
 		const env = buildSpawnEnv({ HOME: "/Users/parent" }, { PI_CODING_AGENT_DIR: "/tmp/foo" });
 		expect(env.HOME).toBe("/Users/parent");
 		expect(env.PI_CODING_AGENT_DIR).toBe("/tmp/foo");
+	});
+});
+
+describe("native fixture environment isolation", () => {
+	it("defaults final child agent and diagnostics paths without changing HOME or the parent", () => {
+		const root = mkdtempSync(join(tmpdir(), "sumocode-native-env-"));
+		const parent = {
+			HOME: "/Users/parent",
+			PI_CODING_AGENT_DIR: "/outside/agent",
+			SUMOCODE_STATE_DIR: "/outside/state",
+			SUMO_TUI_DIAG_FILE: "/outside/diag.jsonl",
+			GIT_CONFIG_COUNT: "1",
+			GIT_CONFIG_KEY_0: "test.sentinel",
+			GIT_CONFIG_VALUE_0: "unchanged",
+		};
+		const original = { ...parent };
+		try {
+			const env = buildSpawnEnv(parent, { PI_BIN: "" }, { agentDir: root, roots: [root] });
+			expect(env.PI_CODING_AGENT_DIR).toBe(root);
+			// Leave state unset so the real chrome/activity fallback remains agent/state.
+			expect(env.SUMOCODE_STATE_DIR).toBeUndefined();
+			expect(env.SUMO_TUI_DIAG_FILE).toBe(join(root, "diagnostics.jsonl"));
+			expect(env.TMPDIR).toBe(root);
+			expect(statSync(root).mode & 0o777).toBe(0o700);
+			expect(env.HOME).toBe(parent.HOME);
+			expect(parent).toEqual(original);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps the agent/state fallback contained after public harness evidence setup", () => {
+		const root = mkdtempSync(join(tmpdir(), "sumocode-native-env-"));
+		const parent = { ...process.env };
+		try {
+			const env = buildSpawnEnv(process.env, { PI_BIN: "" }, { agentDir: root, roots: [root] });
+			const evidence = createChildEvidenceContext(["unused-native-env-probe"], env);
+			env.SUMO_TUI_DIAG_FILE = evidence.diagPath;
+			env[HARNESS_SIGNATURE_ENV_KEY] = HARNESS_SIGNATURE;
+			requireHarnessAuth(env);
+			expect(env.PI_CODING_AGENT_DIR).toBe(root);
+			expect(env.SUMOCODE_STATE_DIR).toBeUndefined();
+			expect(env.SUMO_TUI_DIAG_FILE).toBe(join(evidence.evidenceDir, "diagnostics-live.jsonl"));
+			expect(env.TMPDIR).toBe(join(resolve(evidence.evidenceDir, "../../.."), "tmp"));
+			expect(statSync(evidence.evidenceDir).mode & 0o777).toBe(0o700);
+			// Booleans avoid disclosing real HOME/Git or any other ambient values on failure.
+			expect(env.HOME === parent.HOME).toBe(true);
+			expect(JSON.stringify(process.env) === JSON.stringify(parent)).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("preserves separate fixture-owned agent, state and diagnostic overrides", () => {
+		const root = mkdtempSync(join(tmpdir(), "sumocode-native-env-"));
+		const other = mkdtempSync(join(tmpdir(), "sumocode-native-env-other-"));
+		try {
+			const overrides = {
+				PI_CODING_AGENT_DIR: other,
+				SUMOCODE_STATE_DIR: join(root, "separate-state"),
+				SUMOCODE_CONFIG_DIR: join(other, "config"),
+				SUMO_TUI_DIAG_FILE: join(other, "diag.jsonl"),
+				TMPDIR: other,
+				NODE_COMPILE_CACHE: join(root, "cache"),
+				NODE_ENV: "test",
+				SUMOCODE_TEST_PRE_ADOPTION_DELAY_MS: "5000",
+			};
+			const env = buildSpawnEnv({ HOME: "/Users/parent" }, overrides, { agentDir: root, roots: [root, other] });
+			expect(env).toMatchObject(overrides);
+			expect(env.HOME).toBe("/Users/parent");
+			const runEnv = buildSpawnEnv({ SUMOCODE_INTEGRATION_RUN_ROOT: root }, overrides, { agentDir: other, roots: [other] });
+			expect(runEnv.PI_CODING_AGENT_DIR).toBe(other);
+			expect(runEnv.SUMOCODE_STATE_DIR).toBe(overrides.SUMOCODE_STATE_DIR);
+			expect(runEnv.TMPDIR).toBe(join(root, "tmp"));
+			expect(runEnv.NODE_COMPILE_CACHE).toBe(join(root, "node-compile-cache"));
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(other, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects malformed, outside-root and symlink-escape overrides before any spawn", () => {
+		const root = mkdtempSync(join(tmpdir(), "sumocode-native-env-"));
+		const outside = mkdtempSync(join(tmpdir(), "sumocode-native-env-outside-"));
+		try {
+			symlinkSync(outside, join(root, "escape"));
+			symlinkSync(join(outside, "missing"), join(root, "dangling"));
+			for (const key of [
+				"PI_CODING_AGENT_DIR", "SUMOCODE_STATE_DIR", "SUMOCODE_CONFIG_DIR", "SUMO_TUI_DIAG_FILE",
+				"TMPDIR", "NODE_COMPILE_CACHE", "SUMOCODE_TERMINAL_INDEX_GATE",
+				"SUMOCODE_INTEGRATION_RUN_ROOT", "SUMOCODE_INTEGRATION_MANIFEST",
+				"SUMOCODE_TASK_RESPONSE_FILE", "SUMOCODE_TASK_EXIT_FILE", "SUMOCODE_TASK_STARTED_FILE",
+				"SUMOCODE_TASK_DIAG_FILE", "SUMOCODE_TASK_CONTROL_DIR", "SUMOCODE_EXIT_CODE_FILE",
+				"SUMOCODE_RELOAD_READY_FILE", "SUMOCODE_INITIAL_PROMPT_FILE",
+			]) {
+				for (const value of ["", " ", "relative", `${root}\0invalid`, outside, `${root}-sibling`, join(root, "../escape"), join(root, "escape/new/file"), join(root, "dangling/file")]) {
+					expect(() => buildSpawnEnv({}, { [key]: value }, { agentDir: root, roots: [root] }), key).toThrow(/native fixture/);
+				}
+			}
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(outside, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects raw traversal through a symlink before lexical normalization can hide it", () => {
+		const root = mkdtempSync(join(tmpdir(), "sumocode-native-env-"));
+		const outside = mkdtempSync(join(tmpdir(), "sumocode-native-env-outside-"));
+		try {
+			symlinkSync(outside, join(root, "escape"));
+			expect(() => buildSpawnEnv({}, { SUMO_TUI_DIAG_FILE: `${root}/escape/../diag.jsonl` }, { agentDir: root, roots: [root] }))
+				.toThrow(/native fixture/);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(outside, { recursive: true, force: true });
+		}
 	});
 });
 

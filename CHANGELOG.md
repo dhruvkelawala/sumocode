@@ -10,6 +10,20 @@ landed between the original scaffold and this release.
 
 ## [Unreleased]
 
+## [0.7.6] — 2026-09-30
+
+The Herdr sidebar can show what each SumoCode agent is working on.
+
+### Added
+- **Task names in Herdr**: SumoCode reports the Pi session name to Herdr as
+  the `$task` pane token. A session without a name gets a 2–4 word title from
+  its first prompt, written by the `implement-cheap` role's model, or by the
+  session's model when that role has none. A name set with `/name` always
+  wins, and subagent panes are not renamed. To show it, add `$task` to a
+  Herdr agent row in the client's `config.toml`, for example
+  `[ui.sidebar.agents.rows_by_agent] pi = [["state_icon", "$task"], ["machine", "workspace"]]`.
+  #611
+
 ## [0.7.5] — 2026-09-30
 
 The retained TUI no longer shows empty SYSTEM cards on Pi 0.86 and newer.

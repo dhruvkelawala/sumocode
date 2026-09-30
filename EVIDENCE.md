@@ -16,6 +16,8 @@ How to prove a change works in this repository. Agents read this before writing 
 
 ## Launch
 
+For isolated retained-TUI launch, instance doctor, drive, and the feature map, follow [verify-sumocode](.agents/skills/verify-sumocode/SKILL.md).
+
 ### Retained TUI
 
 ```bash

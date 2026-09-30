@@ -1,5 +1,6 @@
 import net from "node:net";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { generateTaskTitle, type TaskTitleContext } from "./session-task-name.js";
 
 const SOURCE = "herdr:pi";
 const AGENT = "pi";
@@ -27,6 +28,8 @@ interface HerdrRequestParams {
 	readonly agent_session_path?: string;
 	readonly agent_session_id?: string;
 	readonly display_agent?: string;
+	/** Pane tokens Herdr renders as `$name` in sidebar rows; `null` clears a key. */
+	readonly tokens?: { readonly task: string | null };
 }
 
 type SendRequestAttempt = (request: HerdrSocketRequest, timeoutMs: number) => Promise<boolean>;
@@ -40,6 +43,7 @@ interface QueuedState {
 interface HerdrRpcBridgeOptions {
 	readonly env?: NodeJS.ProcessEnv;
 	readonly sendRequestAttempt?: SendRequestAttempt;
+	readonly generateTaskTitle?: typeof generateTaskTitle;
 }
 
 interface SessionContext {
@@ -47,6 +51,7 @@ interface SessionContext {
 	readonly sessionManager?: {
 		readonly getSessionFile?: () => string | undefined;
 		readonly getSessionId?: () => string | undefined;
+		readonly getSessionName?: () => string | undefined;
 	};
 }
 
@@ -89,6 +94,7 @@ const isAbsolutePath = (value: string | undefined): value is string =>
 	typeof value === "string" && value.startsWith("/");
 const isNonEmptyString = (value: string | undefined): value is string =>
 	typeof value === "string" && value.length > 0;
+const sessionName = (ctx: SessionContext): string | undefined => ctx.sessionManager?.getSessionName?.();
 
 function sessionRef(ctx: SessionContext): SessionRef {
 	try {
@@ -119,6 +125,7 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 
 	const attempt = options.sendRequestAttempt ?? ((request, timeoutMs) => sendSocketRequestAttempt(path, request, timeoutMs));
 	const send = (request: HerdrSocketRequest) => sendRequest(attempt, request);
+	const nameTask = options.generateTaskTitle ?? generateTaskTitle;
 	let seq = Date.now() * 1000;
 	let active = false;
 	let blockedCount = 0;
@@ -151,8 +158,8 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 	// Herdr grants full lifecycle authority only to the hardcoded
 	// ("herdr:pi", "pi") pair, so the semantic agent must stay "pi". The
 	// display name is presentation-only and can be renamed without touching
-	// that authority.
-	const buildDisplayNameRequest = () => ({
+	// that authority. The session name rides along as the `$task` token.
+	const buildDisplayNameRequest = (task: string | undefined) => ({
 		id: requestId("display"),
 		method: "pane.report_metadata",
 		params: {
@@ -160,6 +167,7 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 			source: DISPLAY_SOURCE,
 			agent: AGENT,
 			display_agent: DISPLAY_AGENT,
+			tokens: { task: task ?? null },
 			seq: nextSeq(),
 		},
 	});
@@ -180,23 +188,44 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 	const drainDisplayReport = async (): Promise<void> => {
 		if (stopped || displaySendInFlight || displayRetryTimer !== undefined || displayRequest === undefined) return;
 		displaySendInFlight = true;
+		const request = displayRequest;
+		let delivered = false;
 		try {
-			let delivered = false;
 			try {
-				delivered = await send(displayRequest);
+				delivered = await send(request);
 			} catch {
 				// Treat transport errors like dropped reports.
 			}
-			if (delivered) displayRequest = undefined;
+			if (delivered && displayRequest === request) displayRequest = undefined;
 		} finally {
 			displaySendInFlight = false;
-			if (!stopped && displayRequest !== undefined) scheduleDisplayRetry();
+			if (!stopped && displayRequest !== undefined) {
+				// A newer name arrived mid-send: deliver it now, not after the retry delay.
+				if (delivered) void drainDisplayReport();
+				else scheduleDisplayRetry();
+			}
 		}
 	};
 
-	const reportDisplayName = async () => {
-		displayRequest ??= buildDisplayNameRequest();
+	// The newest name replaces any undelivered report.
+	const reportDisplayName = async (task: string | undefined) => {
+		displayRequest = buildDisplayNameRequest(task);
 		await drainDisplayReport();
+	};
+
+	// Subagent children are already labelled by their spawner (pane name =
+	// subagent id), so only interactive sessions spend a naming request.
+	let namingAttempted = env.SUMOCODE_TASK_MODE === "1";
+	const nameSessionFromPrompt = async (prompt: string, ctx: TaskTitleContext & SessionContext) => {
+		if (namingAttempted || sessionName(ctx)) return;
+		namingAttempted = true;
+		try {
+			const title = await nameTask(prompt, ctx);
+			// A manual /name that landed while the model ran wins.
+			if (title && !stopped && !sessionName(ctx)) pi.setSessionName(title);
+		} catch {
+			// Naming is cosmetic; an unavailable model leaves the session unnamed.
+		}
 	};
 
 	// Keep the head until delivery. Dropping a settled report leaves Herdr
@@ -282,8 +311,14 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 		currentContext = ctx as SessionContext;
 		active = ctx.isIdle?.() === false;
 		await reportSession(currentContext, event.reason);
-		await reportDisplayName();
+		await reportDisplayName(sessionName(currentContext));
 		publishState(true);
+	});
+	pi.on("session_info_changed", (event) => {
+		void reportDisplayName(event.name);
+	});
+	pi.on("before_agent_start", (event, ctx) => {
+		void nameSessionFromPrompt(event.prompt, ctx);
 	});
 	pi.on("agent_start", (_event, ctx) => {
 		// SAFETY: Pi's agent context is the same shape the bridge reads; only

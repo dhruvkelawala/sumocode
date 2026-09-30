@@ -1,5 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installHerdrRpcBridge } from "./herdr-rpc-bridge.js";
+import type { generateTaskTitle } from "./session-task-name.js";
+
+const generateTaskTitleMock = vi.fn<typeof generateTaskTitle>();
 
 function createHarness(
 	env: NodeJS.ProcessEnv = {},
@@ -11,10 +14,12 @@ function createHarness(
 	const pi = {
 		on: vi.fn((name: string, handler: (event: any, ctx: any) => void) => handlers.set(name, handler)),
 		events: { on: vi.fn((name: string, handler: (data: any) => void) => eventHandlers.set(name, handler)) },
+		setSessionName: vi.fn(),
 	};
 	// SAFETY: the double supplies the on/events registrar surface the bridge reads.
 	installHerdrRpcBridge(pi as never, {
 		env,
+		generateTaskTitle: generateTaskTitleMock,
 		sendRequestAttempt: async (request, timeoutMs) => {
 			attempts.push({ request, timeoutMs });
 			return sendRequestAttempt(request, timeoutMs);
@@ -270,5 +275,100 @@ describe("installHerdrRpcBridge", () => {
 		await flush();
 		expect(harness.requests).toHaveLength(1);
 		expect(harness.requests[0]).toMatchObject({ method: "pane.release_agent" });
+	});
+});
+
+describe("herdr task token", () => {
+	beforeEach(() => {
+		generateTaskTitleMock.mockReset();
+	});
+
+	const named = (name: string | undefined) => ({
+		...context,
+		sessionManager: { ...context.sessionManager, getSessionName: () => name },
+	});
+	const taskTokens = (harness: ReturnType<typeof createHarness>) =>
+		harness.requests.filter((request) => request.method === "pane.report_metadata").map((request) => request.params.tokens.task);
+
+	it("reports the session name as the task token, clearing it for unnamed sessions", async () => {
+		const unnamed = createHarness(enabledEnv);
+		await unnamed.handlers.get("session_start")?.({ reason: "startup" }, named(undefined));
+		expect(taskTokens(unnamed)).toEqual([null]);
+
+		const harness = createHarness(enabledEnv);
+		await harness.handlers.get("session_start")?.({ reason: "resume" }, named("lore iOS evidence"));
+		expect(taskTokens(harness)).toEqual(["lore iOS evidence"]);
+	});
+
+	it("re-reports the task when the session is renamed", async () => {
+		const harness = createHarness(enabledEnv);
+		await harness.handlers.get("session_start")?.({ reason: "startup" }, named(undefined));
+		harness.handlers.get("session_info_changed")?.({ type: "session_info_changed", name: "v0.8 consumer fix" }, context);
+		await flush();
+		expect(taskTokens(harness)).toEqual([null, "v0.8 consumer fix"]);
+	});
+
+	it("delivers a rename that arrives while the previous report is in flight", async () => {
+		let release: ((delivered: boolean) => void) | undefined;
+		const harness = createHarness(enabledEnv, (request) =>
+			request.method === "pane.report_metadata" && release === undefined
+				? new Promise<boolean>((resolve) => { release = resolve; })
+				: Promise.resolve(true));
+		const started = harness.handlers.get("session_start")?.({ reason: "startup" }, named(undefined));
+		await flush();
+		harness.handlers.get("session_info_changed")?.({ type: "session_info_changed", name: "herdr task naming" }, context);
+		release?.(true);
+		await started;
+		await flush();
+		expect(taskTokens(harness)).toEqual([null, "herdr task naming"]);
+	});
+
+	it("names an unnamed session once, from its first prompt", async () => {
+		generateTaskTitleMock.mockResolvedValue("herdr task naming");
+		const harness = createHarness(enabledEnv);
+		await harness.handlers.get("session_start")?.({ reason: "startup" }, named(undefined));
+		harness.handlers.get("before_agent_start")?.({ prompt: "better names in herdr" }, named(undefined));
+		harness.handlers.get("before_agent_start")?.({ prompt: "second prompt" }, named(undefined));
+		await flush();
+
+		expect(generateTaskTitleMock).toHaveBeenCalledTimes(1);
+		expect(generateTaskTitleMock.mock.calls[0]?.[0]).toBe("better names in herdr");
+		expect(harness.pi.setSessionName).toHaveBeenCalledWith("herdr task naming");
+	});
+
+	it("never overwrites a manual name", async () => {
+		const harness = createHarness(enabledEnv);
+		await harness.handlers.get("session_start")?.({ reason: "startup" }, named("mine"));
+		harness.handlers.get("before_agent_start")?.({ prompt: "anything" }, named("mine"));
+		await flush();
+		expect(generateTaskTitleMock).not.toHaveBeenCalled();
+
+		let current: string | undefined;
+		const racing = { ...context, sessionManager: { ...context.sessionManager, getSessionName: () => current } };
+		generateTaskTitleMock.mockImplementation(async () => {
+			current = "typed during naming";
+			return "generated";
+		});
+		const second = createHarness(enabledEnv);
+		second.handlers.get("before_agent_start")?.({ prompt: "anything" }, racing);
+		await flush();
+		expect(second.pi.setSessionName).not.toHaveBeenCalled();
+	});
+
+	it("does not spend a naming request in subagent task mode", async () => {
+		generateTaskTitleMock.mockResolvedValue("should not appear");
+		const harness = createHarness({ ...enabledEnv, SUMOCODE_TASK_MODE: "1" });
+		harness.handlers.get("before_agent_start")?.({ prompt: "anything" }, named(undefined));
+		await flush();
+		expect(generateTaskTitleMock).not.toHaveBeenCalled();
+		expect(harness.pi.setSessionName).not.toHaveBeenCalled();
+	});
+
+	it("leaves the session unnamed when naming fails", async () => {
+		generateTaskTitleMock.mockRejectedValue(new Error("model unavailable"));
+		const harness = createHarness(enabledEnv);
+		harness.handlers.get("before_agent_start")?.({ prompt: "anything" }, named(undefined));
+		await flush();
+		expect(harness.pi.setSessionName).not.toHaveBeenCalled();
 	});
 });

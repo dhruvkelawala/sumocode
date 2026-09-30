@@ -388,3 +388,171 @@ command-locally for focused commits; no shared git configuration was changed.
 
 **Next action:** independently rereview the exact revised publication head. Stop
 at #588 candidate-ready; this evidence does not unlock #589 or approve adoption.
+
+## Revised-head exclusive verification — stopped at native sandbox boundary
+
+**2026-09-30: INCOMPLETE. Default full suite FAIL; full serial suite PASS.**
+Reviewer16's independent code approval was supplied by the coordinator, not
+reperformed here. No source/package/test/configuration changed during this run.
+The old 35-failure result remains historical red evidence, not overwritten or
+converted to green. This record does not approve #589, adoption or release.
+
+### Exact identity and environment
+
+- Branch: `sumo/v08-guards-clean-verification`; fresh isolated worktree:
+  `/Users/sumodeus/code/sumocode.sumo-worktrees/sumo__v08-guards-clean-verification`.
+- Tested candidate: `3393198c5f97ae59ba6eed4a600d4377f30bb5ad`;
+  repair source: `4400fd949b38fb143fafe9e58d7937bc217f9b22`;
+  approved runtime base: `8ac67f6c82d7c0ae7d62ff7fcb4401dc2f9edd39`.
+  Only this plan differs between repair source and tested candidate.
+  Candidate tree: `e42bb6010a08bfe7b55ae7ce1f75c78c4a1df4a6`.
+- macOS arm64; cached command-local Node **24.15.0**, pnpm **10.29.2**,
+  Bun **1.4.0**, TypeScript **6.0.3**, Oxlint **1.80.0**, Vitest **4.1.11**;
+  SumoCode **0.7.5**, Pi **0.99.1**. No global installation/version switch,
+  dependency/pin change, release-age relaxation or broad build approval.
+- Every verification child used flags-first BSD-compatible normalization:
+  `env -u SUMOCODE_NATIVE_DIR -u HERDR_ENV -u HERDR_PANE_ID LEFTHOOK=0 CI=1`
+  with command-local cached-tool `PATH` and pinned `BUN_BIN`. Agent environment
+  remained intact. Default suite additionally used
+  `env -u VITEST_MAX_WORKERS -u VITEST_MIN_WORKERS pnpm test`;
+  serial suite used `env -u VITEST_MIN_WORKERS VITEST_MAX_WORKERS=1 pnpm test`.
+  No other inherited names were blanket-unset; no Git identity, credential
+  configuration or `GIT_CONFIG_COUNT` override. Environment inventory records
+  names and set/unset only, not values/secrets.
+- SHA-256: `package.json`
+  `fd801f64662fda1405cde5516ba94bc43029886d49e6be58739eb783bb9200ca`;
+  `pnpm-lock.yaml`
+  `d26fa61985b54bb2be474463794ff5d4ded738fef7d6f8e6403a23d99696f048`;
+  `.bun-version`
+  `78b591400c56b7b67b8cb3b2b8a8e65e9093897f02ce0878e6b5405c68620fa7`.
+  Byte-hash inventory of every tracked file except this append-only plan remained
+  identical before/after gates. Runtime/package pins also match the approved base.
+
+### Stage A — measured triage probes
+
+**PASS** frozen install in this worktree only; existing ignored build-script
+warnings for esbuild/protobufjs/@google/genai were retained.
+
+D1 **NOT RUN**, deliberately avoided invoking the external hook again; old red
+has its evidence. D2 **PASS**: retained owned repo
+`/tmp/sumocode-588-d2-ZqOGOKtr`, empty commit with `LEFTHOOK=0`, porcelain
+**0 bytes**, no `.build`. Fixture not deleted.
+
+D3 **PASS**: Herdr/chrome-worker/manifest/worktree-command, **4 files / 98 tests**.
+D4 **PASS**: private-artifact runner assertion, **1 passed / 92 name-filtered**.
+D5 **PASS**: detached-revision startup smoke, **1 passed / 29 name-filtered**;
+its sampler is injected, not a real performance baseline/campaign.
+D6 **PASS**: manager/store/reconstruction/supervisor, **4 files / 211 tests**.
+D7 **PASS**: worktree disposition, **26 tests**. All ran single-worker.
+Focused guards **PASS**, **5 files / 100 tests, no skips**, including actual tiny
+Bun static-preflight/dynamic-host metafile and public eager-guard acceptance;
+loader **PASS**, **6 tests**. `tsc --noEmit && pnpm build` **PASS**;
+`pnpm lint` **PASS**, four existing scratch unused warnings.
+
+These outcomes support the three ambient-environment hypotheses jointly under
+minimal normalization. D1 was not repeated and each environment name was not
+individually toggled, so this is not a new isolated causal A/B proof. No oracle
+was changed, no paid provider or external server fixture was introduced.
+
+### Stage B — distinct default failure and serial success
+
+**FAIL** default `pnpm test`, exit **1**: **5 failed / 4,358 passed tests**,
+**5 failed / 250 passed files**, **101.84s**. Every failure was a configured
+test/hook timeout in a byte-identical-to-base file:
+`task-manager` (20s), `task-store` afterEach (10s), `worktree-disposition`
+ignored-dependency fixture (15s), `retained-reconstruction` (15s), and
+`retained-supervisor` (30s). No non-timing assertion or changed-file failure.
+The worktree ignored-dependency timeout is additional to the old triage's four
+pure-timeout predictions; it is not silently classified as a prior failure.
+
+Each failed **entire file** was then run alone with `--maxWorkers=1`: manager
+**93**, store **28**, worktree **26**, reconstruction **22**, supervisor **68**
+tests, all **PASS**, no skips. Source hashes remained unchanged and
+focused/types/build/lint were green. Only then, under the coordinator's narrow
+timing-adjudication permission, full serial `pnpm test` **PASS**, exit **0**:
+**255 files / 4,363 tests, no skips**, **283.24s**. These satisfy the stated
+conditions for proceeding to C; they do not make the default suite green or
+establish that contention is the only possible cause. Coordinator acceptance
+remains independent.
+
+### Stage C/D — bundle pass; mandatory safety stop before native execution
+
+`pnpm build:bundles` **PASS**: source host **971,337 bytes**, classic extension
+**153 inputs**. Both builders' shared production-leakage assertions completed.
+Ignored local artifacts were preserved, never staged. SHA-256:
+`dist/host/sumo-rpc-host.bundle.mjs`
+`b130eddedf402231c124e21a571a42a655b15f6568b4fff994fb8025928e8a7c`;
+`dist/extension/sumocode-extension.bundle.mjs`
+`2129e44a5e2f9f1d47e7f93c64d66544c69da5bd16d458b18ef82bb6dac6a749`.
+These are ordinary source bundles, not native/classic/RPC archive proof.
+
+**STOP / authorization required:** read-only native-harness tracing found a
+user-directory escape before `pnpm test:native` was started:
+
+- `native-contract.test.ts:86-102` constructs native PTY env with
+  `buildSpawnEnv(process.env, { PI_BIN: "", ...options.env })`; unlike
+  `spawnPiPty`, it does not default to an owned agent directory. Several fake-Pi
+  post-adoption/test-gate cases (`:817-870`) omit `PI_CODING_AGENT_DIR`.
+- `spawn-pi-pty.ts:180-239` allowlists inherited `HOME`, but not
+  `PI_CODING_AGENT_DIR`/`SUMOCODE_STATE_DIR`. The outer harness namespaces
+  TMPDIR/compile cache, not HOME or the native helper's default agent directory.
+- `host.ts:1349-1361` resolves settings and chrome state; `persistence.ts:187-190`
+  precedence is `SUMOCODE_STATE_DIR` → `PI_CODING_AGENT_DIR/state` →
+  `homedir()/.pi/agent/state`. Native main does not supply an agent-dir override.
+- `chrome-cache.ts:62-64` invokes private-directory creation even on cache-path
+  resolution; hydration/shutdown reaches cache writes through
+  `host-lifecycle.ts:335`. These cases can therefore read/create/chmod/write
+  the real user's state rather than solely harness-owned fixtures.
+
+This is a source-traced safety risk, not a native test failure or observed write
+from this run. No additional environment normalization was applied speculatively,
+no private configuration inspected/changed, and no harness/code fix was made.
+Authorize a narrowly scoped owned native-child sandbox preserving Git identity
+and credential configuration before resuming. Merely setting the parent's
+`PI_CODING_AGENT_DIR` is insufficient: `buildSpawnEnv` drops it unless a test
+supplies it explicitly.
+
+**NOT RUN after safety stop:** native build/contracts/preflight and supervised
+native zero-survivor audit; full integration/preflight and its distinct supervised
+zero-survivor audit; visual CI/captures. Thus actual native host/Pi-child metafile
+paths/hashes/static-edge identity, both native extension external/leakage guards,
+signatures, archive/checksums/provenance are **NOT PRODUCED / NOT VERIFIED** here.
+`dist/native` is absent in this fresh tree; installed 0.7.4 was never reused.
+Compiler-budget, repository dependency audit, visual-recap validator, supported
+Pi matrix and report-only dead-code commands are **NOT RUN** in this stopped run.
+No dependency-policy `records: []` consumer #396 clearance claim; no performance
+sampling/baseline reset, golden promotion, preflight fix/purge or publication.
+
+### Retained evidence, disposition and lease release
+
+Evidence root: `/tmp/sumocode-588-revised-verification-DGBJdea5` (private local
+handles). `gates.tsv` and `*.command` record serial commands/exits/timestamps;
+`01-d2.log` through `08-loader.log` retain probes, `09-types-build.log` and
+`10-lint.log` retain required static gates, `11-full-default.log` is the new red
+baseline, `12-isolated-manager.log` through `16-isolated-supervisor.log` retain
+all-file isolated adjudication, `17-full-serial.log` retains separate green,
+`18-bundles.log` retains ordinary bundle output. `raw-log-sha256.json` hashes all
+raw logs; `env-names.txt` contains names/status only. No environment-value dump.
+`tracked-initial-sha256.json` plus precommit/final read-only audits establish source
+immutability. `final-identity.json` resolves the subsequent evidence-only commit
+without a self-referential commit hash in this file.
+
+Old source `26d635d6b89e8b93b51cfcb285fa5d32f9752897` and evidence head
+`4f6c98bcc2b5a8f934568ecca169622e4161b352` remain unchanged. Its retained
+`/tmp/sumocode-588-verification-vpuixOtp/05-full-default.log` SHA-256 remains
+`b8254e5d2d9ef8c0a5071794a2d05997793f72246428982a7f327c111edecb78`.
+All pre-existing worktrees/artifacts, including the old untracked `.build`, were
+preserved. Only standard existing test-owned fixture lifecycle ran.
+
+All launched verification commands exited and read-only path/name-filtered
+process audits found **0 matching non-ancestor processes** after A, B and the
+stop. This is **not** an actual supervised native/integration zero-survivor
+verdict: those harnesses never ran. No process-signaling/cleanup intervention.
+**HEAVY-VERIFICATION LEASE RELEASED** for this stopped run; no verification job
+remains active. Review-ready default contract
+`/Users/sumodeus/.pi/agent/skills/review-ready/contract.md` is not applicable to
+this evidence-only Markdown append (no behavior seam changed).
+
+**Next action:** coordinator authorize an owned native-child sandbox preserving
+Git config, then reacquire the exclusive lease and resume C/D on this exact
+unchanged tested source. Verification remains incomplete; #589 stays blocked.

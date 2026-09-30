@@ -271,6 +271,8 @@ export function buildSpawnEnv(
 	}
 	if (nativeFixture !== undefined) {
 		env.PI_CODING_AGENT_DIR ??= nativeFixture.agentDir;
+		// Account-label reads may create managed links; keep config with the selected owned agent.
+		env.SUMOCODE_CONFIG_DIR ??= join(env.PI_CODING_AGENT_DIR, "config");
 		env.SUMO_TUI_DIAG_FILE ??= join(nativeFixture.agentDir, "diagnostics.jsonl");
 		env.TMPDIR ??= nativeFixture.agentDir;
 		const roots = [...nativeFixture.roots, ...(runRoot === undefined ? [] : [runRoot])];

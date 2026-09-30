@@ -496,6 +496,18 @@ describe("structured transcript view model", () => {
 		expect(message).toBeUndefined();
 	});
 
+	it("hides Pi transcript system messages like Pi's own interactive mode", () => {
+		const transcript = transcriptFromSessionContext({
+			messages: [
+				{ role: "system", content: "", toolsAdded: [{ name: "read", description: "Read", parameters: {} }], timestamp: 1 },
+				{ role: "system", content: "updated instructions", timestamp: 2 },
+				{ role: "user", content: "[Image 1] what is this?", timestamp: 3 },
+			],
+		});
+
+		expect(transcript.messages.map((message) => message.role)).toEqual(["user"]);
+	});
+
 	it("converts session contexts into transcript view models and skips hidden custom messages", () => {
 		const transcript = transcriptFromSessionContext({
 			messages: [

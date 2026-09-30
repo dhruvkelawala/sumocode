@@ -35,7 +35,7 @@ export class RpcHostLifecycle {
 	private exited = false;
 	private childOwned = false;
 	private childStopFailed = false;
-	private childCrash: Error | undefined;
+	private childCrash: { readonly error: Error; readonly kind: "child-exit" | "startup" } | undefined;
 	private readonly resources: Finalizer[] = [];
 	private readonly subscriptions: Finalizer[] = [];
 	private readonly timers = new Map<TimerName, NodeJS.Timeout>();
@@ -114,8 +114,9 @@ export class RpcHostLifecycle {
 			// catch must receive startup rejection so it can reap before exiting.
 			if (!this.childOwned && !exitHandlerOwnsOutcome) throw error;
 			if (this.childOwned && this.code === undefined) {
-				this.options.stderr.write(`[sumocode-rpc] ${error instanceof Error ? error.message : String(error)}\n`);
-				if (this.client?.stderr) this.options.stderr.write(`${this.client.stderr.trim()}\n`);
+				// Setup can fail while Pi is still alive. Share post-restore reporting
+				// without inventing a child exit identity or overriding root intent.
+				this.recordChildCrash(error instanceof Error ? error : new Error(String(error)), error instanceof RpcChildExitError ? "child-exit" : "startup");
 			}
 		} finally {
 			await this.stop(code, "return");
@@ -234,8 +235,8 @@ export class RpcHostLifecycle {
 	public recordExitCode(code: number): void { this.code ??= code; }
 
 	/** Capture before the toast delay: every stop path must retain the first crash. */
-	public recordChildCrash(error: Error): void {
-		if (!this.stopping) this.childCrash ??= error;
+	public recordChildCrash(error: Error, kind: "child-exit" | "startup" = "child-exit"): void {
+		if (!this.stopping) this.childCrash ??= { error, kind };
 	}
 
 	public stop(code = 0, reason = "exit"): Promise<void> {
@@ -301,22 +302,24 @@ export class RpcHostLifecycle {
 	}
 
 	private reportChildCrash(): void {
-		const error = this.childCrash;
+		const crash = this.childCrash;
 		this.childCrash = undefined;
-		if (!error) return;
+		if (!crash) return;
+		const { error, kind } = crash;
 		try {
 			const code = error instanceof RpcChildExitError ? String(error.code) : "unknown";
 			const signal = error instanceof RpcChildExitError ? String(error.signal) : "unknown";
 			// The client's legacy error message embeds stderr. Keep it out of the
 			// reason so older rows cannot bypass the last-20-lines limit below.
-			const reason = error instanceof RpcChildExitError ? error.message.split(". stderr=", 1)[0]! : error.message;
+			const reason = error.message.split(". stderr=", 1)[0]!;
 			const raw = this.client?.stderr ?? "";
 			const truncated = raw.startsWith(TRUNCATED_TAIL_MARKER);
 			const tail = redactActivityOutputTail((truncated ? raw.slice(TRUNCATED_TAIL_MARKER.length) : raw).replace(/\n$/u, ""), {
 				maxBytes: CHILD_STDERR_TAIL_MAX_BYTES, contextBytes: CHILD_STDERR_TAIL_MAX_BYTES, maxLines: 20,
 				truncated, truncatedLineReplacement: "[truncated line redacted]",
 			});
-			this.options.stderr.write(`[sumocode-rpc] RPC child exited unexpectedly code=${code} signal=${signal}: ${boundRetainedResult(redactActivitySecrets(reason), 500)}\n${tail ? `${tail}\n` : ""}`);
+			const label = kind === "startup" ? "RPC host startup failed" : "RPC child exited unexpectedly";
+			this.options.stderr.write(`[sumocode-rpc] ${label} code=${code} signal=${signal}: ${boundRetainedResult(redactActivitySecrets(reason), 500)}\n${tail ? `${tail}\n` : ""}`);
 		} catch { /* Diagnostic I/O must not prevent terminal cleanup or exit. */ }
 	}
 

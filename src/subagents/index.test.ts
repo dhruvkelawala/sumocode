@@ -1,13 +1,18 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
+import { AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
+import type { SessionShutdownEvent } from "@earendil-works/pi-coding-agent";
+import type { ProcessTreeOperations } from "../background-tasks/process-tree.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SUBAGENT_MAX_RUNNING, type SubagentEvent } from "./domain.js";
 import type { SpawnedChild } from "./backend-pi.js";
 import type { TerminalHost } from "../terminal-host/types.js";
 import { installSubagents } from "./index.js";
 import { BUILT_IN_TOOLS } from "./task-config.js";
-import { SubagentRegistry } from "./registry.js";
+import { SubagentRegistry, type SubagentRecord } from "./registry.js";
+import { controlAuthority, type RetainedSubagent } from "./retained-adoption.js";
+import type { SubagentManagerDependencies } from "./manager.js";
 
 type ChildEmitter = (event: SubagentEvent) => void;
 
@@ -95,7 +100,7 @@ interface ToolResult {
 /** Minimal tool-definition shape captured from registerTool. */
 type Tool = { name: string; execute: (...args: unknown[]) => Promise<ToolResult> };
 
-const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui", options: { retainedRegistry?: SubagentRegistry; retention?: false; activeTools?: readonly string[] } = {}) => {
+const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui", options: { retainedRegistry?: SubagentRegistry; retention?: false; activeTools?: readonly string[]; managerDependencies?: SubagentManagerDependencies } = {}) => {
 	let idle = true;
 	const handlers = new Map<string, Handler[]>();
 	const tools = new Map<string, Tool>();
@@ -150,6 +155,53 @@ const spawn = (manager: ReturnType<typeof installSubagents>, title = "worker") =
 	title,
 	cwd: "/tmp/project",
 });
+
+async function retainedHarness() {
+	const root = realpathSync(mkdtempSync(join(tmpdir(), "sumocode-installer-retained-")));
+	const taskDir = join(root, "task");
+	mkdirSync(taskDir, { mode: 0o700 });
+	const operations: ProcessTreeOperations = {
+		captureStartTime: vi.fn(() => "child-command"), identityMatches: vi.fn(() => "same" as const),
+		captureTreeVerification: vi.fn(() => ({ members: [{ pid: 42, processStartTime: "child-birth" }] })),
+		verificationMatches: vi.fn(() => "same" as const), isTreeEmpty: vi.fn(() => false),
+		signalTree: vi.fn(async () => ({ ok: true, gone: true })), waitForTreeEmpty: vi.fn(async () => false),
+	};
+	const origin = createHarness(false, "rpc", { managerDependencies: { processOperations: operations } });
+	await origin.fireSessionStart("origin");
+	const writer = { token: "writer", pid: process.pid, processStartTime: "writer-birth" };
+	const registry = new SubagentRegistry(join(root, "registry"), "origin", { writerIdentity: writer, inspectWriter: () => "alive" });
+	const initial: SubagentRecord = {
+		schemaVersion: 2, revision: 1, id: "sa-retained-1", ownerSessionId: "origin", backend: "headless", status: "starting", taskDir,
+		child: null, supervisor: null, pane: null, worktree: null, sessionFilePath: null, modelLabel: null, roleId: null,
+		createdAt: Date.now(), updatedAt: Date.now(), settledAt: null, completionId: null, outcome: null,
+		delivery: { state: "none", claim: null }, result: null, manifest: null, writerLease: null, controlLease: null, controlHead: 0,
+	};
+	registry.create(initial);
+	let record = registry.acquireWriter(initial.id, 1, 60_000);
+	record = registry.transition(record.id, record.revision, record.writerLease!.generation, (current) => ({ ...current, status: "running",
+		child: { identity: { pid: 42, processGroupId: 42, processStartTime: "child-command" }, verification: { members: [{ pid: 42, processStartTime: "child-birth" }] } },
+		supervisor: { identity: { pid: process.pid, processGroupId: process.pid, processStartTime: "supervisor-command" }, verification: { members: [{ pid: process.pid, processStartTime: "supervisor-birth" }] } },
+	}));
+	record = registry.acquireControl(record.id, record.revision, record.writerLease!.generation, 0, origin.manager.controllerIdentity, 60_000);
+	const listeners = new Set<(record: SubagentRecord) => void>();
+	const interrupt = vi.fn();
+	const entry: RetainedSubagent = {
+		registry: registry.forController(origin.manager.controllerIdentity), authority: controlAuthority(record),
+		snapshot: { id: initial.id, title: "retained", prompt: "task", cwd: taskDir, baseRef: "HEAD", status: "running", createdAt: initial.createdAt,
+			usage: { turns: 0 }, transcript: [], liveText: "", liveTools: [], finalText: "" },
+		supervisor: {
+			get record() { return registry.get(initial.id)!; }, completion: undefined,
+			controllerChild: () => ({ events: () => undefined, interrupt }),
+			subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+			reserveControl: (authority, successor) => {
+				const current = registry.get(initial.id)!;
+				return registry.reserveControl(current.revision, authority, `${initial.id}:${authority.head + 1}`, { ...successor, writerGeneration: current.writerLease!.generation });
+			},
+		},
+	};
+	await origin.manager.trackRetained(entry);
+	return { root, origin, registry, record, listeners, interrupt, operations };
+}
 
 beforeEach(() => {
 	backend.emitters.length = 0;
@@ -249,6 +301,38 @@ describe("subagent result delivery", () => {
 
 		expect(legacy.size).toBe(0);
 		expect(state[key]).toBeUndefined();
+	});
+
+	it("detaches legacy retained views without adopting or terminating their children", async () => {
+		const f = await retainedHarness();
+		const key = Symbol.for("@dhruvkelawala/sumocode/subagent-replacements");
+		// SAFETY: this test owns the legacy symbol, including deliberately malformed entries.
+		const state = globalThis as typeof globalThis & { [key]?: Set<unknown> };
+		const throwing = vi.fn(() => { throw new Error("legacy detach failed"); });
+		const legacy = new Set<unknown>([{}, null, { detachForReplacement: throwing }, f.origin.manager]);
+		state[key] = legacy;
+		const detach = vi.spyOn(f.origin.manager, "detachForReplacement");
+		const successor = createHarness();
+		const adopt = vi.spyOn(successor.manager, "adoptFrom");
+		try {
+			expect(f.listeners.size).toBe(1);
+			await successor.fireSessionStart("successor");
+			expect(throwing).toHaveBeenCalledOnce();
+			expect(detach).toHaveBeenCalledOnce();
+			expect(legacy.size).toBe(0);
+			expect(state[key]).toBeUndefined();
+			expect(adopt).not.toHaveBeenCalled();
+			expect(f.listeners.size).toBe(0);
+			expect(f.origin.manager.list()).toEqual([]);
+			expect(f.origin.manager.canDeliver(f.record.id)).toBe(false);
+			expect(f.registry.get(f.record.id)).toEqual(f.record);
+			expect(f.interrupt).not.toHaveBeenCalled();
+			expect(f.operations.signalTree).not.toHaveBeenCalled();
+		} finally {
+			f.origin.manager.detachForReplacement();
+			successor.manager.disposeAll();
+			delete state[key];
+		}
 	});
 
 	it("uses the shutdown context for targetless reload before session start", async () => {
@@ -642,6 +726,93 @@ describe("subagent result delivery", () => {
 
 		await successor.fireSessionStart("successor", "/tmp/successor.jsonl");
 		expect(successorAdopt).toHaveBeenCalledExactlyOnceWith(origin.manager, "successor");
+	});
+
+	it.each(["symlink", "relative"])("adopts Pi's exact shutdown target once for a %s resume path across cwd changes", async (pathKind) => {
+		const f = await retainedHarness();
+		const successor = createHarness(false, "rpc", { managerDependencies: { processOperations: f.operations } });
+		const successorAdopt = vi.spyOn(successor.manager, "adoptFrom");
+		const sessions = join(f.root, "sessions");
+		const nextCwd = join(f.root, "next-project");
+		mkdirSync(sessions);
+		mkdirSync(nextCwd);
+		symlinkSync(sessions, join(f.root, "alias"), "dir");
+		const id = "11111111-2222-4333-8444-555555555555";
+		writeFileSync(join(sessions, "next.jsonl"), `${JSON.stringify({ type: "session", version: 3, id, timestamp: new Date().toISOString(), cwd: nextCwd })}\n`);
+		const inputPath = pathKind === "symlink" ? join(f.root, "alias", "next.jsonl") : relative(process.cwd(), join(sessions, "next.jsonl"));
+		f.origin.ctx.cwd = f.root;
+		let shutdownTarget: string | undefined;
+		// SAFETY: the Pi double implements only switchSession's outgoing session/services boundary; the actual path and replacement orchestration are Pi-owned.
+		const runtime = new AgentSessionRuntime({
+			sessionFile: f.origin.ctx.sessionManager.getSessionFile(), abort: async () => undefined, dispose: () => undefined,
+			extensionRunner: {
+				hasHandlers: (event: string) => event === "session_shutdown",
+				emit: async (event: SessionShutdownEvent) => {
+					shutdownTarget = event.targetSessionFile;
+					f.origin.fire("session_shutdown", event.reason, event.targetSessionFile);
+				},
+			},
+		} as never,
+		// SAFETY: switchSession reads only cwd and agentDir from these outgoing services.
+		{ cwd: f.root, agentDir: join(f.root, "agent") } as never,
+		async ({ sessionManager }) => {
+			const file = sessionManager.getSessionFile()!;
+			expect(shutdownTarget).toBe(file);
+			expect(sessionManager.getCwd()).toBe(nextCwd);
+			if (pathKind === "symlink") expect(file).not.toBe(realpathSync(file));
+			successor.ctx.cwd = sessionManager.getCwd();
+			await successor.fireSessionStart(sessionManager.getSessionId(), file);
+			// SAFETY: without rebind/withSession, Pi apply needs only session and services; path identity came from the real SessionManager.
+			return { session: { sessionManager, sessionFile: file }, services: { cwd: nextCwd, agentDir: join(f.root, "agent") }, diagnostics: [] } as never;
+		});
+		try {
+			await runtime.switchSession(inputPath);
+			await successor.fireSessionStart(id, shutdownTarget!);
+			expect(successorAdopt).toHaveBeenCalledExactlyOnceWith(f.origin.manager, id);
+			expect(f.origin.manager.list()).toEqual([]);
+			expect(successor.manager.get(f.record.id)).toMatchObject({ status: "running", recovery: "adopted" });
+			expect(f.registry.get(f.record.id)?.controllerSessionId).toBe(id);
+			expect(f.interrupt).not.toHaveBeenCalled();
+			expect(f.operations.signalTree).not.toHaveBeenCalled();
+		} finally { f.origin.manager.detachForReplacement(); successor.manager.detachForReplacement(); }
+	});
+
+	it("parks a different target without mutating retained records and diagnoses without path dumps", async () => {
+		const f = await retainedHarness();
+		const unrelated = createHarness();
+		const successor = createHarness(false, "rpc", { managerDependencies: { processOperations: f.operations } });
+		const target = join(f.root, "not-created-yet.jsonl");
+		const diagnosticFile = join(f.root, "diagnostics.jsonl");
+		const detach = vi.spyOn(f.origin.manager, "detachForReplacement");
+		const unrelatedAdopt = vi.spyOn(unrelated.manager, "adoptFrom");
+		const successorAdopt = vi.spyOn(successor.manager, "adoptFrom");
+		f.origin.fire("session_shutdown", "new", target);
+		vi.stubEnv("SUMO_TUI_DIAG_FILE", diagnosticFile);
+		try {
+			await unrelated.fireSessionStart("unrelated", join(f.root, "different.jsonl"));
+			expect(unrelatedAdopt).not.toHaveBeenCalled();
+			expect(detach).not.toHaveBeenCalled();
+			expect(f.registry.get(f.record.id)).toEqual(f.record);
+			expect(f.origin.manager.get(f.record.id)?.status).toBe("running");
+			expect(f.listeners.size).toBe(1);
+			const diagnostic = readFileSync(diagnosticFile, "utf8");
+			expect(diagnostic).toContain('"event":"subagent_replacement_parked"');
+			expect(diagnostic).toContain('"target":"session-file"');
+			expect(diagnostic).not.toMatch(/not-created-yet|different\.jsonl|origin|writer-birth/u);
+			expect(diagnostic).not.toContain(f.root);
+			// A new Pi session may not have a file yet. Exact target identity still
+			// suffices; do not guess a future realpath or expire the parked handoff.
+			await successor.fireSessionStart("successor", target);
+			await successor.fireSessionStart("successor", target);
+			expect(successorAdopt).toHaveBeenCalledExactlyOnceWith(f.origin.manager, "successor");
+			expect(f.interrupt).not.toHaveBeenCalled();
+			expect(f.operations.signalTree).not.toHaveBeenCalled();
+		} finally {
+			vi.unstubAllEnvs();
+			f.origin.manager.detachForReplacement();
+			successor.manager.detachForReplacement();
+			unrelated.manager.disposeAll();
+		}
 	});
 
 	it("limits a targetless reload fallback to the same session id", async () => {

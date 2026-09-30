@@ -33,7 +33,12 @@ function pendingReplacements(): Set<PendingReplacement> {
 		[LIFECYCLE_KEY]?: Set<PendingReplacement>;
 		[LEGACY_LIFECYCLE_KEY]?: Set<SubagentManager>;
 	};
-	// Legacy entries had no destination identity, so release rather than migrate them.
+	// The v1 public detach stops views, not retained persistence owners. No
+	// destination identity exists, so detach best-effort without adopting them.
+	for (const manager of state[LEGACY_LIFECYCLE_KEY] ?? []) {
+		try { manager.detachForReplacement(); }
+		catch { logDiagnostic("subagent_startup_recovery_refused", { scope: "legacy-detach" }); }
+	}
 	state[LEGACY_LIFECYCLE_KEY]?.clear();
 	delete state[LEGACY_LIFECYCLE_KEY];
 	return state[LIFECYCLE_KEY] ??= new Set();
@@ -353,7 +358,10 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 		latestContext = ctx;
 		armDelivery();
 		for (const replacement of pendingReplacements()) {
-			if (!isReplacementTarget(replacement, ctx)) continue;
+			if (!isReplacementTarget(replacement, ctx)) {
+				logDiagnostic("subagent_replacement_parked", { target: "targetSessionFile" in replacement ? "session-file" : "session-id" });
+				continue;
+			}
 			try {
 				await manager.adoptFrom(replacement.manager, ctx.sessionManager.getSessionId());
 			} catch {

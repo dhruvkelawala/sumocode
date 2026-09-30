@@ -355,6 +355,15 @@ describe("herdr task token", () => {
 		expect(second.pi.setSessionName).not.toHaveBeenCalled();
 	});
 
+	it("does not spend a naming request in subagent task mode", async () => {
+		generateTaskTitleMock.mockResolvedValue("should not appear");
+		const harness = createHarness({ ...enabledEnv, SUMOCODE_TASK_MODE: "1" });
+		harness.handlers.get("before_agent_start")?.({ prompt: "anything" }, named(undefined));
+		await flush();
+		expect(generateTaskTitleMock).not.toHaveBeenCalled();
+		expect(harness.pi.setSessionName).not.toHaveBeenCalled();
+	});
+
 	it("leaves the session unnamed when naming fails", async () => {
 		generateTaskTitleMock.mockRejectedValue(new Error("model unavailable"));
 		const harness = createHarness(enabledEnv);

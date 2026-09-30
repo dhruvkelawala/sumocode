@@ -1,6 +1,6 @@
 import net from "node:net";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { generateTaskTitle } from "./session-task-name.js";
+import { generateTaskTitle, type TaskTitleContext } from "./session-task-name.js";
 
 const SOURCE = "herdr:pi";
 const AGENT = "pi";
@@ -94,6 +94,7 @@ const isAbsolutePath = (value: string | undefined): value is string =>
 	typeof value === "string" && value.startsWith("/");
 const isNonEmptyString = (value: string | undefined): value is string =>
 	typeof value === "string" && value.length > 0;
+const sessionName = (ctx: SessionContext): string | undefined => ctx.sessionManager?.getSessionName?.();
 
 function sessionRef(ctx: SessionContext): SessionRef {
 	try {
@@ -212,14 +213,16 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 		await drainDisplayReport();
 	};
 
-	let namingAttempted = false;
-	const nameSessionFromPrompt = async (prompt: string, ctx: Parameters<typeof generateTaskTitle>[1] & SessionContext) => {
-		if (namingAttempted || ctx.sessionManager?.getSessionName?.()) return;
+	// Subagent children are already labelled by their spawner (pane name =
+	// subagent id), so only interactive sessions spend a naming request.
+	let namingAttempted = env.SUMOCODE_TASK_MODE === "1";
+	const nameSessionFromPrompt = async (prompt: string, ctx: TaskTitleContext & SessionContext) => {
+		if (namingAttempted || sessionName(ctx)) return;
 		namingAttempted = true;
 		try {
 			const title = await nameTask(prompt, ctx);
 			// A manual /name that landed while the model ran wins.
-			if (title && !stopped && !ctx.sessionManager?.getSessionName?.()) pi.setSessionName(title);
+			if (title && !stopped && !sessionName(ctx)) pi.setSessionName(title);
 		} catch {
 			// Naming is cosmetic; an unavailable model leaves the session unnamed.
 		}
@@ -308,7 +311,7 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 		currentContext = ctx as SessionContext;
 		active = ctx.isIdle?.() === false;
 		await reportSession(currentContext, event.reason);
-		await reportDisplayName(currentContext.sessionManager?.getSessionName?.());
+		await reportDisplayName(sessionName(currentContext));
 		publishState(true);
 	});
 	pi.on("session_info_changed", (event) => {

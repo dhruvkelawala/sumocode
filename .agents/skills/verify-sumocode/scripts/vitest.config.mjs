@@ -4,6 +4,7 @@ export default defineConfig({
 	test: {
 		include: [".agents/skills/verify-sumocode/scripts/drive.test.ts"],
 		fileParallelism: false,
-		testTimeout: 30_000,
+		// Three sequential 15s waits must leave time for failure capture and teardown.
+		testTimeout: 90_000,
 	},
 });

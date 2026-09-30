@@ -7,11 +7,11 @@ description: Launch and drive SumoCode's retained RPC terminal UI in an isolated
 
 Run from the source checkout root. Read [AGENTS.md](../../../AGENTS.md), [DEV_LOOP.md](../../../DEV_LOOP.md), and [EVIDENCE.md](../../../EVIDENCE.md) first. Read [the feature index](features/README.md) before picking a drive. This skill covers the retained RPC host, not the classic extension or native release archive.
 
-Pi 0.87.1 accepts this skill's frontmatter but does not auto-scan `.agents/skills/` in its actual loader. Load it explicitly with `node_modules/.bin/pi --skill "$PWD/.agents/skills/verify-sumocode"`, then `/skill:verify-sumocode`, or read this file directly in an existing session. The helper also passes that absolute `--skill` path; no user settings or legacy skill-directory copies are needed.
+Pi 0.87.1 accepts this skill's frontmatter but does not auto-scan `.agents/skills/` in its actual loader. Pi 0.99.1 discovers trusted project `.agents/skills/` directories, but the helper launches outside the checkout. Load it explicitly with `node_modules/.bin/pi --skill "$PWD/.agents/skills/verify-sumocode"`, then `/skill:verify-sumocode`, or read this file directly in an existing session. The helper also passes that absolute `--skill` path; no user settings or legacy skill-directory copies are needed.
 
 ## Launch
 
-Use Node >=23.11 and the locked Pi peer (currently 0.87.1). `pnpm install --frozen-lockfile` is the documented setup; CI uses pnpm 10.29.2. Check `package.json` for current versions. On pnpm 12, ignored dependency builds can fail installation after packages have been materialized. Do not auto-approve scripts or reinstall/remove an existing dependency tree. Report the install failure; continue only after native loading, typecheck, and an actual PTY launch succeed. A fresh checkout without working dependencies is blocked.
+Use Node >=23.11 and the locked Pi peer declared in `package.json`. `pnpm install --frozen-lockfile` is the documented setup; CI uses pnpm 10.29.2. If a newer pnpm tries to reinstall dependencies before running checks, use CI's version explicitly: `npx --yes pnpm@10.29.2 <command>`. On pnpm 12, ignored dependency builds can fail installation after packages have been materialized. Do not auto-approve scripts or reinstall/remove an existing dependency tree. Report the install failure; continue only after native loading, typecheck, and an actual PTY launch succeed. A fresh checkout without working dependencies is blocked.
 
 ```bash
 node --input-type=module -e 'import pty from "node-pty"; console.log(typeof pty.spawn)'

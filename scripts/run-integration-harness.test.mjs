@@ -22,6 +22,14 @@ function fixtureRoot(parent = join(root, "test/integration")) {
 	return path;
 }
 
+function listFiles(args, env = process.env) {
+	const result = spawnSync(process.execPath, [join(root, "node_modules/vitest/vitest.mjs"), "list", ...args, "--filesOnly", "--json"], {
+		cwd: root, env, encoding: "utf8",
+	});
+	expect(result.status, result.stderr).toBe(0);
+	return JSON.parse(result.stdout).map((entry) => relative(root, entry.file)).sort();
+}
+
 function publicCli(args, owned = false) {
 	// Deny child processes: a regression cannot accidentally start the broad lane.
 	return spawnSync(process.execPath, [
@@ -130,16 +138,39 @@ it("lists exactly the selected target with actual Vitest semantics despite subst
 	writeFileSync(join(root, selected), "throw new Error('file-only listing must not evaluate test modules');\n");
 	writeFileSync(join(root, lookalike), "throw new Error('must not schedule substring lookalike');\n");
 	const plan = await resolveHarnessRunPlan(["--file", selected]);
-	const list = (args, selectedFile) => {
-		const env = { ...process.env };
-		delete env.SUMOCODE_INTEGRATION_SELECTED_FILE;
-		if (selectedFile) env.SUMOCODE_INTEGRATION_SELECTED_FILE = selectedFile;
-		const result = spawnSync(process.execPath, [join(root, "node_modules/vitest/vitest.mjs"), "list", ...args, "--filesOnly", "--json"], {
-			cwd: root, env, encoding: "utf8",
-		});
-		expect(result.status, result.stderr).toBe(0);
-		return JSON.parse(result.stdout).map((entry) => relative(root, entry.file));
-	};
-	expect(list([selected])).toEqual(expect.arrayContaining([selected, lookalike]));
-	expect(list(plan.integrationArgs.slice(1), plan.selectedFile)).toEqual([selected]);
+	expect(listFiles([selected])).toEqual([selected, lookalike]);
+	const env = { ...process.env, SUMOCODE_INTEGRATION_SELECTED_FILE: plan.selectedFile };
+	expect(listFiles(plan.integrationArgs.slice(1), env)).toEqual([selected]);
+	// Multiple filters must retain Vitest's union, including the substring collision.
+	expect(listFiles([selected, "src/footer.test.ts"], env)).toEqual(listFiles([selected, "src/footer.test.ts"]));
+});
+
+it.each([
+	["default units / unit marker", [], "src/footer.test.ts"],
+	["default units / integration marker", [], "test/integration/rpc-contract.test.ts"],
+	["directory", ["test/integration/"], "test/integration/rpc-contract.test.ts"],
+	["full", ["test/integration/", "--exclude", "test/integration/verification-harness.test.ts"], "test/integration/rpc-contract.test.ts"],
+	["native prefix", ["test/integration/native-"], "test/integration/rpc-contract.test.ts"],
+	["unrelated unit", ["src/footer.test.ts"], "test/integration/rpc-contract.test.ts"],
+	["conflicting file", ["test/integration/verification-harness.test.ts"], "test/integration/rpc-contract.test.ts"],
+	["mixed files", ["test/integration/rpc-contract.test.ts", "src/footer.test.ts"], "test/integration/rpc-contract.test.ts"],
+	["multiple integration files", ["test/integration/rpc-contract.test.ts", "test/integration/verification-harness.test.ts"], "test/integration/rpc-contract.test.ts"],
+	["duplicate selection", ["test/integration/rpc-contract.test.ts", "test/integration/rpc-contract.test.ts"], "test/integration/rpc-contract.test.ts"],
+	["option value, not a filter", ["--exclude", "test/integration/rpc-contract.test.ts"], "test/integration/rpc-contract.test.ts"],
+	["test-name value, not a filter", ["-t", "test/integration/rpc-contract.test.ts"], "test/integration/rpc-contract.test.ts"],
+	["unrelated substring", ["rpc-contract"], "test/integration/rpc-contract.test.ts"],
+	["noncanonical absolute", [join(root, "test/integration/rpc-contract.test.ts")], join(root, "test/integration/rpc-contract.test.ts")],
+	["noncanonical double slash", ["test/integration//rpc-contract.test.ts"], "test/integration//rpc-contract.test.ts"],
+	["noncanonical dot prefix", ["./test/integration/rpc-contract.test.ts"], "./test/integration/rpc-contract.test.ts"],
+	["noncanonical traversal", ["test/integration/../integration/rpc-contract.test.ts"], "test/integration/../integration/rpc-contract.test.ts"],
+	["noncanonical glob", ["test/integration/*.test.ts"], "test/integration/*.test.ts"],
+	["unit selection", ["src/footer.test.ts"], "src/footer.test.ts"],
+	["noncanonical marker", ["test/integration/rpc-contract.test.ts"], "./test/integration/rpc-contract.test.ts"],
+])("keeps public file-only discovery unchanged with an inherited marker: %s", (_name, args, marker) => {
+	const expected = listFiles(args);
+	if (args.length === 0) {
+		expect(expected).toContain("src/footer.test.ts");
+		expect(expected.some((file) => file.startsWith("test/integration/"))).toBe(false);
+	}
+	expect(listFiles(args, { ...process.env, SUMOCODE_INTEGRATION_SELECTED_FILE: marker })).toEqual(expected);
 });

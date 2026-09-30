@@ -1,6 +1,6 @@
 # #588 effect-guards — isolated candidate evidence
 
-**Status: revision1 candidate-ready, not release-verified.** The original candidate received REVISE. Bounded repairs and permitted verification are recorded below; independent rereview and heavy gates remain coordinator-owned. No Effect dependency/runtime or #589/#590 implementation was added. This does not unlock #589.
+**Status: revision1 candidate-ready, not release-verified.** The original candidate received REVISE and failed its default full suite. That prior-head failure is recorded separately below, not adjudicated as a revised-head verdict. Bounded repairs and permitted verification are recorded below; independent rereview and heavy gates remain coordinator-owned. No Effect dependency/runtime or #589/#590 implementation was added. This does not unlock #589.
 
 ## Original candidate evidence (historical)
 
@@ -299,6 +299,55 @@ on command-local PATH and `BUN_BIN` selected the exact cached 1.4.0 binary.
 Reproduction uses the original five-file focused command above, followed by the
 loader, typecheck/build, lint, compiler-budget and ordinary-bundle commands, with
 pnpm 10.29.2 and `BUN_BIN` 1.4.0. No full native executable was built or executed.
+
+### Prior-head full-suite failure — separate verification provenance
+
+Read-only follow-up reviewed the old worktree's evidence continuation at
+`/Users/sumodeus/code/sumocode.sumo-worktrees/sumo__v08-effect-guards/plans/120-spike/effect-guards.md`
+and selected failure/summary excerpts in
+`/tmp/sumocode-588-verification-vpuixOtp/05-full-default.log`.
+Tested old source head: `26d635d6b89e8b93b51cfcb285fa5d32f9752897`.
+Old branch's evidence-only head: `4f6c98bcc2b5a8f934568ecca169622e4161b352`.
+
+**FAIL at that old source head:** default `pnpm test`, exit 1, **35 failed /
+4,322 passed tests; 10 failed / 245 passed files**. A read-only path-limited Git
+diff confirms all ten failed test files are untouched between approved base
+`8ac67f6c82d7c0ae7d62ff7fcb4401dc2f9edd39` and the old source head.
+That fact alone does not establish root cause or a baseline/revision regression.
+
+The failures include non-timing assertions: global-hook `.build` fixture
+contamination reported in the continuation, installed-native runner selection
+instead of `bounded-terminal-runner.mjs`, Herdr executor call count 2 versus 1,
+and chrome-worker missing-write/undefined-result/early-completion assertions.
+They are **not load-only adjudicable**. Read-only triage worker 12 is investigating;
+this revision makes no root-cause verdict, unrelated fix or oracle change.
+
+This is a **prior-head failure**, not a full-suite pass/fail for revision1.
+No failed file was rerun here, no serial full suite was attempted, and no heavy
+lease was granted. The prior failure remains unresolved; revised-head full,
+native, integration, visual and performance gates remain unrun.
+
+### Follow-up actual Bun static-edge proof
+
+At evidence-only head `62a2bdf774c44040ff07c52cca3ebde33811508c` (repair source
+still `4400fd949b38fb143fafe9e58d7937bc217f9b22`), the permitted focused command
+was rerun with `CI=1`, pnpm `10.29.2` and `BUN_BIN` selecting Bun `1.4.0`:
+
+```bash
+pnpm vitest run scripts/build-native.test.mjs -t 'Bun metafile contract' \
+  --maxWorkers=1 --reporter=verbose
+```
+
+**PASS:** `resolves eager static edges and marks the lazy host edge as a dynamic
+import`; one test passed, 64 deliberately name-filtered, exit 0. The test builds
+an actual tiny Bun graph and asserts `main.ts` imports
+`{ path: "preflight.ts", kind: "import-statement" }`, that the matching input key
+exists, and `{ path: "host.ts", kind: "dynamic-import" }`; the public eager guard
+accepts it. Existing successful-fixture teardown remains unchanged. This proves
+the observed static/dynamic graph contract, not a retained full native metafile,
+compiled artifact or evaluation timing. No source change or additional heavy
+check was made for this evidence update; prior revision type/build/lint results
+remain as recorded above.
 
 ### Revision1 review-ready gate
 

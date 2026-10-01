@@ -849,6 +849,7 @@ export interface RpcHostExitDependencies {
 	readonly notifications: Pick<NotificationCenter, "notify">;
 	readonly requestRender: () => void;
 	readonly recordExitCode: (code: number) => void;
+	readonly recordChildCrash: (error: Error) => void;
 	readonly stopHost: (code: number) => Promise<void>;
 	readonly exit: (code: number) => void;
 	readonly updateRuntimeState: (state: RpcHostChromeState) => void;
@@ -890,6 +891,7 @@ export function createRpcExitHandler(deps: RpcHostExitDependencies): (error: Err
 		const childCode = error instanceof RpcChildExitError ? error.code : undefined;
 		const deliberateCode = childCode === 0 || childCode === SUMOCODE_RELOAD_EXIT_CODE ? childCode : undefined;
 		deps.recordExitCode(deliberateCode ?? exitCode);
+		if (deliberateCode === undefined) deps.recordChildCrash(error);
 		deps.modals.close();
 		deps.overlays.drain();
 		deps.selector?.close();
@@ -2144,6 +2146,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		notifications,
 		requestRender,
 		recordExitCode: (code) => lifecycle.recordExitCode(code),
+		recordChildCrash: (error) => lifecycle.recordChildCrash(error),
 		stopHost: (code) => lifecycle.stop(code, "child-exit"),
 		exit: (code) => lifecycle.exit(code),
 		// SAFETY: createRpcExitHandler only calls this private adapter with a

@@ -1,12 +1,17 @@
 import { EventEmitter } from "node:events";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 import { RpcChildExitError } from "./client.js";
+import { BoundedUtf8Tail, CHILD_STDERR_TAIL_MAX_BYTES } from "../../child-protocol.js";
 import { RpcHostLifecycle } from "./host-lifecycle.js";
+import { createRpcExitHandler } from "./host.js";
 
-function fixture(env: NodeJS.ProcessEnv = {}) {
+function fixture(env: NodeJS.ProcessEnv = {}, beforeTerminalRestore?: () => void) {
 	const trace: string[] = [];
+	const writes: Array<{ text: string; terminalRestored: boolean }> = [];
 	const signals = new EventEmitter();
 	let runtimeExit!: (code: number) => void;
 	const runtimeExited = new Promise<number>((resolve) => { runtimeExit = resolve; });
@@ -27,9 +32,9 @@ function fixture(env: NodeJS.ProcessEnv = {}) {
 		input: { setRawMode: () => { trace.push("raw:off"); } },
 		terminal: {
 			adoptRetainedSession: () => { trace.push("terminal:adopt"); },
-			exitTerminal: () => { trace.push("terminal:restore"); },
+			exitTerminal: () => { beforeTerminalRestore?.(); trace.push("terminal:restore"); },
 		},
-		stderr: { write: () => true },
+		stderr: { write: (text: string) => { writes.push({ text, terminalRestored: trace.includes("terminal:restore") }); return true; } },
 		exit: (code) => { trace.push(`exit:${code}`); },
 	});
 	const acquire = async () => {
@@ -45,10 +50,23 @@ function fixture(env: NodeJS.ProcessEnv = {}) {
 		lifecycle.markCommandReady();
 		return lifecycle.waitForExit();
 	};
-	return { lifecycle, signals, trace, acquire, runtimeExit, runtime };
+	return { lifecycle, signals, trace, writes, acquire, runtimeExit, runtime };
 }
 
 const shutdown = ["terminal:restore", "regions:dispose", "activity:unsubscribe", "activity:dispose", "child:stop", "cache:dispose"];
+
+function childExitHandler(lifecycle: RpcHostLifecycle) {
+	return createRpcExitHandler({
+		modals: { close: vi.fn() }, overlays: { drain: vi.fn() },
+		stateStore: { getSnapshot: () => ({ isStreaming: false, isCompacting: false, messageCount: 0, pendingMessageCount: 0, hydrated: false, hasMessages: false, costUsd: 0 }) },
+		notifications: { notify: vi.fn() }, requestRender: vi.fn(), updateRuntimeState: vi.fn(),
+		recordExitCode: (code) => lifecycle.recordExitCode(code),
+		recordChildCrash: (error) => lifecycle.recordChildCrash(error),
+		stopHost: (code) => lifecycle.stop(code, "child-exit"), exit: (code) => lifecycle.exit(code),
+		// SAFETY: the handler passes only a zero-argument callback and delay, as in host wiring.
+		setTimeout: ((callback: () => void, delay: number) => lifecycle.scheduleTimeout("child-exit", callback, delay)) as typeof setTimeout,
+	});
+}
 
 describe("RpcHostLifecycle", () => {
 	it("keeps lifecycle ownership behind RpcHostLifecycle", () => {
@@ -77,6 +95,201 @@ describe("RpcHostLifecycle", () => {
 		expect(violations('async function runRpcHost() { process.once("SIGTERM", stop); }')).toEqual(["process.once"]);
 		expect(violations('async function runRpcHost() { const stopPromise = runtime.stop(); }')).toEqual(["stopPromise", "runtime.stop"]);
 		expect(violations('async function runRpcHost() {} async function runRpcHostSession() { client.stop(); }')).toEqual(["client.stop"]);
+	});
+
+	it.each([{ code: 2, signal: null }, { code: null, signal: "SIGKILL" }] as const)("prints the child crash and last 20 stderr lines after terminal restore: %j", async (info) => {
+		vi.useFakeTimers();
+		try {
+			const f = fixture();
+			const stderr = `${Array.from({ length: 24 }, (_, index) => `diagnostic ${index + 1}`).join("\n")}\n`;
+			f.lifecycle.ownClient({ stop: async () => undefined, stderr });
+			f.lifecycle.childAdopted();
+			f.lifecycle.ownRuntime(f.runtime);
+			const handle = childExitHandler(f.lifecycle);
+			handle(new RpcChildExitError(`RPC child exited code=${info.code} signal=${info.signal}. stderr=${stderr}`, info));
+			expect(f.writes).toEqual([]);
+			await vi.runAllTimersAsync();
+			await f.lifecycle.waitForExit();
+			expect(f.writes).toEqual([{
+				terminalRestored: true,
+				text: `[sumocode-rpc] RPC child exited unexpectedly code=${info.code} signal=${info.signal}: RPC child exited code=${info.code} signal=${info.signal}\n${Array.from({ length: 20 }, (_, index) => `diagnostic ${index + 5}`).join("\n")}\n`,
+			}]);
+			expect(f.trace.at(-1)).toBe("exit:1");
+		} finally { vi.useRealTimers(); }
+	});
+
+	it.each(["SIGTERM", "SIGINT", "quit", "reload", "runtime-exit"])("prints the first crash once when %s cuts short the toast delay", async (request) => {
+		vi.useFakeTimers();
+		try {
+			const f = fixture();
+			f.lifecycle.ownClient({ stop: async () => undefined, stderr: "final diagnostic\n" });
+			f.lifecycle.childAdopted();
+			f.lifecycle.ownRuntime(f.runtime);
+			const handle = childExitHandler(f.lifecycle);
+			handle(new RpcChildExitError("first crash", { code: 2, signal: null }));
+			handle(new RpcChildExitError("duplicate crash", { code: 3, signal: null }));
+			if (request === "SIGTERM" || request === "SIGINT") f.signals.emit(request);
+			else if (request === "reload") handle(new RpcChildExitError("reload", { code: 100, signal: null }));
+			else if (request === "runtime-exit") f.runtimeExit(0);
+			else void f.lifecycle.stop(0, request);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(await f.lifecycle.waitForExit()).toBe(1);
+			expect(f.writes).toEqual([{
+				terminalRestored: true,
+				text: "[sumocode-rpc] RPC child exited unexpectedly code=2 signal=null: first crash\nfinal diagnostic\n",
+			}]);
+			await f.lifecycle.stop(0);
+			await vi.runAllTimersAsync();
+			expect(f.writes).toHaveLength(1);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.useRealTimers(); }
+	});
+
+	it("sanitizes and bounds crash output without disclosing a truncated credential row", async () => {
+		vi.useFakeTimers();
+		try {
+			const f = fixture();
+			const tail = new BoundedUtf8Tail();
+			tail.append(`password=${"a".repeat(70_000)}\nAuthorization: Bearer synthetic-credential\n\u001b]52;c;synthetic-clipboard\u0007\u001b[31mfailure\u001b[0m\nfinal diagnostic\n`);
+			f.lifecycle.ownClient({ stop: async () => undefined, stderr: tail.toString() });
+			f.lifecycle.childAdopted();
+			f.lifecycle.ownRuntime(f.runtime);
+			childExitHandler(f.lifecycle)(new RpcChildExitError(`RPC child exited code=2 signal=null. stderr=${tail.toString()}`, { code: 2, signal: null }));
+			await vi.runAllTimersAsync();
+			await f.lifecycle.waitForExit();
+			const output = f.writes.map((write) => write.text).join("");
+			expect(output).toContain("Authorization: [REDACTED]\nfailure\nfinal diagnostic\n");
+			expect(output).not.toMatch(/synthetic-credential|synthetic-clipboard|aaaa/u);
+			expect(output).not.toContain("\u001b");
+			expect(Buffer.byteLength(output)).toBeLessThan(CHILD_STDERR_TAIL_MAX_BYTES + 600);
+			expect(f.writes).toHaveLength(1);
+		} finally { vi.useRealTimers(); }
+	});
+
+	it.each([false, true])("reports owned startup failure only after restore and reap (runtime=%s)", async (withRuntime) => {
+		const f = fixture({ SUMOCODE_RELOAD: "1" });
+		const tail = new BoundedUtf8Tail();
+		tail.append(`password=${"a".repeat(70_000)}\n${Array.from({ length: 24 }, (_, index) => `diagnostic ${index + 1}`).join("\n")}\nAuthorization: Bearer synthetic-credential\n\u001b]52;c;synthetic-clipboard\u0007\u001b[31mfailure\u001b[0m\n`);
+		let releaseChild!: () => void;
+		const childStopped = new Promise<void>((resolve) => { releaseChild = resolve; });
+		const running = f.lifecycle.start(async () => {
+			f.lifecycle.ownClient({
+				get stderr() { return tail.toString(); },
+				stop: async () => {
+					f.trace.push("child:stop");
+					await childStopped;
+					tail.append("final diagnostic\n");
+				},
+			});
+			f.lifecycle.childAdopted();
+			if (withRuntime) f.lifecycle.ownRuntime(f.runtime);
+			throw new Error(`setup failed password=synthetic-setup-secret\u001b[31m. stderr=old-secret\n${tail.toString()}`);
+		});
+		try {
+			await vi.waitFor(() => expect(f.trace).toContain("child:stop"));
+			expect(f.trace).toContain("terminal:restore");
+			expect(f.writes).toEqual([]);
+		} finally { releaseChild(); }
+		expect(await running).toBe(1);
+		expect(f.writes).toEqual([{
+			terminalRestored: true,
+			text: `[sumocode-rpc] RPC host startup failed code=unknown signal=unknown: setup failed password=[REDACTED]\n${Array.from({ length: 17 }, (_, index) => `diagnostic ${index + 8}`).join("\n")}\nAuthorization: [REDACTED]\nfailure\nfinal diagnostic\n`,
+		}]);
+		await f.lifecycle.stop(0);
+		expect(f.writes).toHaveLength(1);
+		expect(f.signals.eventNames()).toEqual([]);
+	});
+
+	it.each([0, 100])("keeps deliberate owned exit %i quiet when startup subsequently rejects", async (code) => {
+		const f = fixture();
+		expect(await f.lifecycle.start(async () => {
+			f.lifecycle.ownClient({ stop: async () => { f.trace.push("child:stop"); }, stderr: "password=synthetic-secret" });
+			f.lifecycle.childAdopted();
+			f.lifecycle.ownRuntime(f.runtime);
+			f.lifecycle.recordExitCode(code);
+			throw new Error("startup rejected after deliberate exit");
+		})).toBe(code);
+		expect(f.writes).toEqual([]);
+		expect(f.trace).toEqual([code === 100 ? "terminal:preserve" : "terminal:restore", "child:stop"]);
+	});
+
+	it("preserves the exit handler's first crash when owned startup rejects during its toast delay", async () => {
+		const f = fixture();
+		expect(await f.lifecycle.start(async () => {
+			f.lifecycle.ownClient({ stop: async () => { f.trace.push("child:stop"); }, stderr: "final diagnostic" });
+			f.lifecycle.childAdopted();
+			f.lifecycle.ownRuntime(f.runtime);
+			childExitHandler(f.lifecycle)(new RpcChildExitError("first crash", { code: 2, signal: null }));
+			throw new Error("startup rejection must not replace the crash");
+		})).toBe(1);
+		expect(f.writes).toEqual([{
+			terminalRestored: true,
+			text: "[sumocode-rpc] RPC child exited unexpectedly code=2 signal=null: first crash\nfinal diagnostic\n",
+		}]);
+		expect(f.trace).toEqual(["terminal:restore", "child:stop"]);
+	});
+
+	it("keeps embedded stderr out of a plain startup error's reason window", async () => {
+		const f = fixture();
+		const tail = new BoundedUtf8Tail();
+		tail.append(`password=${"a".repeat(70_000)}\n${Array.from({ length: 24 }, (_, index) => `diagnostic ${index + 1}`).join("\n")}\n`);
+		f.lifecycle.ownClient({ stop: async () => { f.trace.push("child:stop"); }, stderr: tail.toString() });
+		f.lifecycle.childAdopted();
+		f.lifecycle.ownRuntime(f.runtime);
+		childExitHandler(f.lifecycle)(new Error(`RPC child exited during startup. stderr=old-secret\n${tail.toString()}`));
+		await f.lifecycle.stop(1);
+		expect(f.writes).toEqual([{
+			terminalRestored: true,
+			text: `[sumocode-rpc] RPC child exited unexpectedly code=unknown signal=unknown: RPC child exited during startup\n${Array.from({ length: 20 }, (_, index) => `diagnostic ${index + 5}`).join("\n")}\n`,
+		}]);
+		expect(f.trace).toContain("child:stop");
+	});
+
+	it("restores an inherited terminal before reporting a pre-adoption child crash", async () => {
+		vi.useFakeTimers();
+		try {
+			const f = fixture({ SUMOCODE_RELOAD: "1" });
+			const error = new RpcChildExitError("died before adoption", { code: 2, signal: null });
+			const running = f.lifecycle.start(async () => {
+				f.lifecycle.ownClient({ stop: async () => undefined, stderr: "startup diagnostic" });
+				childExitHandler(f.lifecycle)(error);
+				throw error;
+			});
+			await vi.runAllTimersAsync();
+			expect(await running).toBe(1);
+			expect(f.writes).toEqual([{
+				terminalRestored: true,
+				text: "[sumocode-rpc] RPC child exited unexpectedly code=2 signal=null: died before adoption\nstartup diagnostic\n",
+			}]);
+		} finally { vi.useRealTimers(); }
+	});
+
+	it("acknowledges failed pre-adoption reload cleanup after restore without UI readiness", async () => {
+		const root = mkdtempSync(join(tmpdir(), "sumocode-reload-ack-"));
+		const readyFile = join(root, "ready");
+		const exitFile = join(root, "exit-code");
+		writeFileSync(readyFile, "", { mode: 0o600 });
+		const beforeRestore = vi.fn(() => { expect(readFileSync(readyFile, "utf8")).toBe(""); });
+		const f = fixture({ SUMOCODE_RELOAD: "1", SUMOCODE_RELOAD_READY_FILE: readyFile, SUMOCODE_EXIT_CODE_FILE: exitFile }, beforeRestore);
+		try {
+			const error = new RpcChildExitError("died before adoption", { code: 2, signal: null });
+			expect(await f.lifecycle.start(async () => {
+				f.lifecycle.ownClient({ stop: async () => {
+					expect(readFileSync(readyFile, "utf8")).toBe("ready");
+					f.trace.push("child:stop");
+				}, stderr: "startup diagnostic" });
+				childExitHandler(f.lifecycle)(error);
+				await f.lifecycle.stop(1);
+				throw error;
+			})).toBe(1);
+			expect(beforeRestore).toHaveBeenCalledOnce();
+			expect(readFileSync(readyFile, "utf8")).toBe("ready");
+			expect(readFileSync(exitFile, "utf8")).toBe("1");
+			expect(f.lifecycle.phase).toBe("stopped");
+			expect(f.trace).toEqual(["raw:off", "terminal:adopt", "terminal:restore", "child:stop"]);
+			expect(f.writes).toHaveLength(1);
+			expect(f.writes[0]?.terminalRestored).toBe(true);
+		} finally { rmSync(root, { recursive: true, force: true }); }
 	});
 
 	it("arms host signals before releasing the entry owner", async () => {
@@ -122,6 +335,7 @@ describe("RpcHostLifecycle", () => {
 			throw new RpcChildExitError("RPC child exited before host adoption code=100 signal=null.", { code: 100, signal: null });
 		})).toBe(100);
 		expect(f.trace).toContain("exit:100");
+		expect(f.writes).toEqual([]);
 	});
 
 	it("starts once and stops an idle runtime exit once", async () => {
@@ -289,6 +503,7 @@ describe("RpcHostLifecycle", () => {
 		expect(f.trace.slice(-6)).toEqual(code === 100 ? ["terminal:preserve", ...shutdown.slice(1)] : shutdown);
 		expect(f.lifecycle.phase).toBe("stopped");
 		expect(f.signals.eventNames()).toEqual([]);
+		expect(f.writes).toEqual([]);
 	});
 
 	it.each([["SIGINT", 130], ["SIGTERM", 0]] as const)("characterizes lifecycle order: %s", async (signal, code) => {

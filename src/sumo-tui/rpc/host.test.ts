@@ -1202,6 +1202,7 @@ function exitDeps(overrides: Partial<RpcHostExitDependencies> = {}): RpcHostExit
 		notifications: { notify: vi.fn() },
 		requestRender: vi.fn(),
 		recordExitCode: vi.fn(),
+		recordChildCrash: vi.fn(),
 		stopHost: vi.fn(async () => undefined),
 		exit: vi.fn(),
 		updateRuntimeState: vi.fn(),

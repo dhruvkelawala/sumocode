@@ -524,7 +524,10 @@ export class SumoRpcClient {
 		}
 		const child = this.child;
 		if (child) {
-			this.detachChildStreams(child);
+			// Stop protocol delivery now, but drain stderr until reap/stdio close
+			// so post-restore crash diagnostics include the child's final output.
+			if (this.stdoutDataListener) child.stdout.removeListener("data", this.stdoutDataListener);
+			this.stdoutDataListener = undefined;
 			// Keep child ownership and the shared reap promise until stop finishes.
 			// Observe the automatic attempt without hiding rejection from stop() callers.
 			void this.stop().catch((cause: Error) => {

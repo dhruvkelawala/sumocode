@@ -967,6 +967,27 @@ describe("SumoRpcClient", () => {
 		expect(exits[0]?.message).toContain("final diagnostic");
 	});
 
+	it("retains final stderr while reaping a transport failure without repeating the exit", async () => {
+		const child = new FakeRpcChild();
+		child.kill.mockImplementation(() => true);
+		const exits = vi.fn();
+		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: asPreSpawnedChild(child) });
+		client.onExit(exits);
+		await client.start();
+
+		child.stderr.emit("data", "before failure\n");
+		child.emit("error", new Error("transport failed"));
+		child.stderr.emit("data", "final diagnostic\n");
+		child.signalCode = "SIGTERM";
+		child.emit("exit", null, "SIGTERM");
+		child.emit("close", null, "SIGTERM");
+		await client.stop();
+
+		expect(client.stderr).toBe("before failure\nfinal diagnostic\n");
+		expect(exits).toHaveBeenCalledOnce();
+		expect(child.stderr.listenerCount("data")).toBe(0);
+	});
+
 	it("bounds an unexpected exit when stdio close never arrives", async () => {
 		vi.useFakeTimers();
 		const child = new FakeRpcChild();

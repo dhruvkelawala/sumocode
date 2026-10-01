@@ -312,6 +312,22 @@ describe("RpcPromptScheduler auto delivery", () => {
 		expect(decideDelivery).toHaveBeenLastCalledWith("use vitest", "<skill name=\"tdd\">…</skill> fix the parser");
 	});
 
+	it("forgets a pending run task when the session rebinds", async () => {
+		const decideDelivery = vi.fn(async (): Promise<RpcPromptDeliveryMode> => "steer");
+		const scheduler = createRpcPromptScheduler({ getBusy: () => true, decideDelivery, sendPrompt: async () => undefined });
+
+		// agent_start arrives, then the stream drops before the run's prompt is seen.
+		scheduler.handleAgentEvent({ type: "agent_start" });
+		scheduler.rebindSession(undefined, "");
+		// The next user message is therefore a follow-up, not a task for the rebound session.
+		scheduler.handleAgentEvent({ type: "message_start", message: { role: "user", content: [{ type: "text", text: "carried over" }] } });
+		await scheduler.submit("next", { delivery: "auto" });
+		await flush();
+		await flush();
+
+		expect(decideDelivery).toHaveBeenCalledWith("next", undefined);
+	});
+
 	it("counts a queued message that starts a run as busy before Pi's agent_start", async () => {
 		let busy = true;
 		const first = deferredDelivery();

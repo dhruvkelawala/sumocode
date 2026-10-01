@@ -187,6 +187,7 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 		this.sessionId = sessionId;
 		this.lifecycleBusy = false;
 		this.awaitingRunStart = false;
+		this.runTaskPending = false;
 		this.currentTask = undefined;
 		return restored;
 	}

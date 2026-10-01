@@ -146,6 +146,9 @@ Active approval installation was retired by [Plan 076](plans/076-disable-approva
 | `/sumo:worktree` | Create or manage isolated worktrees |
 | `/reload` | Restart the host and continue the current session |
 | `/fast` | Toggle OpenAI/Codex priority service for this session |
+| `/queue` | Choose how a message sent while the agent works is delivered: `steer`, `follow-up`, or `auto` |
+
+When `TYPESAFE_API_KEY` is set, sessions start in `auto`: each message you type while the agent is busy, plus the prompt that started the run (up to 4,000 characters each), goes to TypeSafe's Jev API (`api.typesafe.ai`, or `TYPESAFE_BASE_URL`) to choose steer or follow-up, even with `--offline`. When Jev is slow or unsure, messages steer. `/queue steer` or `/queue follow-up` turns it off for the session; unset the key to turn it off entirely. Without a key, sessions start in `steer`.
 
 ## Themes and state
 

@@ -1,23 +1,24 @@
 import type { AgentSessionEvent, RpcSessionState, SessionStats } from "@earendil-works/pi-coding-agent";
 import type { CompactionReason } from "../../compaction-state.js";
-import type { RpcPromptDeliveryMode } from "./prompt-scheduler.js";
+import type { RpcQueueMode } from "./prompt-scheduler.js";
 import { isRpcThinkingLevel, type RpcThinkingLevel } from "./thinking-level.js";
 
 /** Hint-row copy for a delivery selection (`followUp` is Pi's id, not its label). */
-export const RPC_PROMPT_DELIVERY_LABELS = { steer: "steer", followUp: "follow-up" } as const satisfies Record<RpcPromptDeliveryMode, string>;
+export const RPC_PROMPT_DELIVERY_LABELS = { steer: "steer", followUp: "follow-up", auto: "auto" } as const satisfies Record<RpcQueueMode, string>;
 
-/** Flip the steering selection between Pi's two `deliverAs` values. */
-export function toggleRpcPromptDelivery(mode: RpcPromptDeliveryMode): RpcPromptDeliveryMode {
+/** Flip the steering selection between Pi's two `deliverAs` values; `auto` flips to steer. */
+export function toggleRpcPromptDelivery(mode: RpcQueueMode): RpcQueueMode {
 	return mode === "steer" ? "followUp" : "steer";
 }
 
 /** Parse a `/queue` argument; undefined when the text names no known mode. */
-export function rpcPromptDeliveryModeFrom(text: string): RpcPromptDeliveryMode | undefined {
+export function rpcPromptDeliveryModeFrom(text: string): RpcQueueMode | undefined {
 	switch (text.trim().toLowerCase()) {
 		case "steer": return "steer";
 		case "follow-up":
 		case "follow_up":
 		case "followup": return "followUp";
+		case "auto": return "auto";
 		default: return undefined;
 	}
 }
@@ -47,7 +48,7 @@ export interface RpcHostChromeState {
 	readonly compactionReason?: CompactionReason;
 	readonly messageCount: number;
 	readonly pendingMessageCount: number;
-	readonly promptDeliveryMode?: RpcPromptDeliveryMode;
+	readonly promptDeliveryMode?: RpcQueueMode;
 	readonly hasMessages: boolean;
 	readonly gitBranch?: string;
 	readonly lastEventType?: string;
@@ -280,7 +281,7 @@ export class RpcHostStateStore {
 		return this.getSnapshot();
 	}
 
-	public setPromptDeliveryMode(promptDeliveryMode: RpcPromptDeliveryMode): RpcHostChromeState {
+	public setPromptDeliveryMode(promptDeliveryMode: RpcQueueMode): RpcHostChromeState {
 		this.state = { ...this.state, promptDeliveryMode };
 		return this.getSnapshot();
 	}

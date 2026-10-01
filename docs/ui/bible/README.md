@@ -1,6 +1,6 @@
 # Cathedral Visual Bible
 
-Design targets for SumoCode visuals. Design locks record visual decisions, not proof that a runtime surface ships. The [V2 parity contract](../../visual/parity/CONTRACT.md) owns implementation verification: styled-cell comparisons, geometry audits and required approved-runtime crops.
+Design targets for SumoCode visuals. Design locks record visual decisions, not proof that a runtime surface ships. Memory-only targets were retired for v0.8; surviving pages are frozen and may still show the former MEMORY row until the [update inventory](../../visual/parity/V08_MEMORY_REMOVAL.md) is reviewed. The [V2 parity contract](../../visual/parity/CONTRACT.md) owns implementation verification: styled-cell comparisons, geometry audits and required approved-runtime crops.
 
 ## Run
 
@@ -78,24 +78,23 @@ viewing-context adjustment, not a palette change.
 
 See `CATHEDRAL_UX_SPEC_V2.md` for the spec. The bible contains standalone element mockups plus full-scene compositions that combine locked elements in the actual Cathedral shell.
 
-Inventory: **107 HTML mockups · 107 PNG renders**. Counts come from top-level HTML and renders/*.png files; the documentation checker compares them with the live inventory.
+Inventory: **95 HTML mockups · 0 PNG renders**. Counts come from top-level HTML and renders/*.png files; the documentation checker compares them with the live inventory. PNGs are ignored build artifacts and absent in this checkout; no baseline regeneration was performed for the v0.8 removal.
 
 | Prefix | Group | HTML files |
 |---|---|---:|
-| 01- | Sidebar | 21 |
-| 02- | Top bar | 11 |
+| 01- | Sidebar | 12 |
+| 02- | Top bar | 10 |
 | 03- | Splash | 2 |
 | 04- | Active input | 4 |
-| 05- | Footer | 7 |
-| 06- | Approval design | 3 |
-| 07- | Memory editor | 2 |
+| 05- | Footer | 6 |
+| 06- | Approval design | 5 |
 | 08- | Command palette | 6 |
 | 09- | Tool pills | 7 |
 | 10- | Code blocks | 2 |
 | 11- | Divine Query | 3 |
 | 12- | Scroll + scribe | 2 |
 | 13- | Chat messages | 4 |
-| scene- | Scenes | 25 |
+| scene- | Scenes | 24 |
 | skill- | Skill pill | 3 |
 | theme- | Themes | 5 |
 
@@ -106,7 +105,7 @@ Generated files establish design coverage; implementation status belongs to the 
 ### Element 1 — Sidebar
 - LOCKED: V2 EDITORIAL direction (magazine display, tracked-out masthead)
 - Width 30 cols (down from 49)
-- Sub-tabs: CONTEXT (`Ctrl+1`) + MEMORY (`Ctrl+2`)
+- Context-only registry; memory content and `Ctrl+1` / `Ctrl+2` navigation retired for v0.8
 - Tracked-out section names with narrow-no-break-space (`C O N T E X T`)
 - Thick `━` underline rules between sections
 - Hero project name (foreground weight) + `on <branch>` subtitle
@@ -123,7 +122,7 @@ Generated files establish design coverage; implementation status belongs to the 
 - Frame interior: `surface-recess` bg fill on every row
 
 ### Element 5 — Footer
-- Single row, cathedral state labels (READY / MEDITATING / ILLUMINATING / DEFERRING / INSCRIBING)
+- Single row, cathedral state labels (READY / MEDITATING / ILLUMINATING / DEFERRING)
 - Left zone: `● <STATE> · <model> · <thinking>`
 - Right zone: `<ctx>/<window> · $<cost>`
 - Project/branch live in sidebar when visible and hint row when sidebar is hidden
@@ -148,7 +147,6 @@ Generated files establish design coverage; implementation status belongs to the 
   - `scene-active-scroll-scribe.html`
   - `scene-approval-overlay.html`
   - `scene-divine-query-overlay.html`
-  - `scene-memory-scriptorium-overlay.html`
   - `scene-session-selectors.html`
   - `scene-palette-overlay.html`
 

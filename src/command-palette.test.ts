@@ -48,18 +48,18 @@ describe("renderCommandPalette", () => {
 		expect(caretIndex(empty)).toBeLessThan(empty.indexOf("what shall")); // caret leads the placeholder
 	});
 
-	it("renders the six Scriptorium mode rows in fixed order", () => {
+	it("renders the five Scriptorium mode rows in fixed order", () => {
 		const lines = plain(renderCommandPalette(snapshot(), 80)).join("\n");
 		expect(lines.indexOf("SESSION")).toBeLessThan(lines.indexOf("MODEL"));
 		expect(lines.indexOf("MODEL")).toBeLessThan(lines.indexOf("THINKING"));
-		expect(lines.indexOf("THINKING")).toBeLessThan(lines.indexOf("MEMORY"));
-		expect(lines.indexOf("MEMORY")).toBeLessThan(lines.indexOf("THEME"));
+		expect(lines.indexOf("THINKING")).toBeLessThan(lines.indexOf("THEME"));
+		expect(lines).not.toContain("MEMORY");
 		expect(lines.indexOf("THEME")).toBeLessThan(lines.indexOf("SETTINGS"));
 	});
 
-	it("renders the Scriptorium title, search prompt, and 17-row panel", () => {
+	it("renders the Scriptorium title, search prompt, and 16-row panel", () => {
 		const lines = plain(renderCommandPalette(snapshot({ activeIndex: 1 }), 80));
-		expect(lines).toHaveLength(17);
+		expect(lines).toHaveLength(16);
 		expect(lines.join("\n")).toContain("✾  COMMAND PALETTE  ✾");
 		expect(lines.join("\n")).toContain("❯   what shall we attend to…");
 		expect(lines.every((line) => line.length === 80)).toBe(true);
@@ -117,7 +117,6 @@ describe("updateCommandPaletteSnapshot", () => {
 		expect(result.snapshot.activeIndex).toBe(0);
 		expect(filterPaletteRows(result.snapshot.rows, result.snapshot.searchQuery).map((row) => row.label)).toEqual([
 			"MODEL",
-			"MEMORY",
 			"THEME",
 		]);
 	});
@@ -212,7 +211,6 @@ describe("buildPaletteSnapshot", () => {
 			"SESSION:refactor-auth-flow",
 			"MODEL:claude-opus-4-7",
 			"THINKING:xhigh",
-			"MEMORY:55 facts",
 			"THEME:cathedral",
 			"SETTINGS:",
 		]);

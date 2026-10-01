@@ -24,7 +24,6 @@ const ELEMENT_NAMES = {
 	"04": "Active input frame",
 	"05": "Footer",
 	"06": "Approval modal",
-	"07": "Memory editor",
 	"08": "Command palette",
 	"09": "Tool pills",
 	"10": "Code blocks",

@@ -13,7 +13,6 @@ import { registerRolesCommand } from "./commands/roles.js";
 import { installFastMode } from "./fast-mode.js";
 import { installHerdrRpcBridge } from "./herdr-rpc-bridge.js";
 import { installSumoInteractions } from "./interaction-registry.js";
-import { installMemoryExtraction } from "./memory-extraction.js";
 import { installQuestionTool } from "./question-tool.js";
 import { installSkillInlineExpansion } from "./skill-inline.js";
 import { installSubagents } from "./subagents/index.js";
@@ -142,7 +141,6 @@ export function installRpcChildProfile(pi: ExtensionAPI): void {
 		getRuntime: (ctx) => loginRuntimeWithAccountRefresh(ctx, getRpcLoginRuntime(ctx), { subscriptionLabel: claudeAccountSubscriptionLabel }),
 	});
 	registerRpcTreeNavigationCommand(pi);
-	installMemoryExtraction(pi);
 	installFastMode(pi);
 	installQuestionTool(toolPi);
 	installAnswerTool(toolPi);

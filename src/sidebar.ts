@@ -8,16 +8,12 @@ import {
 	getSessionUsage as getCachedSessionUsage,
 	sessionHasMessages as cachedSessionHasMessages,
 } from "./session-cache.js";
-import { createRemnicMemoryClient, type RemnicMemoryClient } from "./memory.js";
 import { MetricsHud } from "./sumo-tui/cathedral/metrics-hud.js";
-import { CancellableWorkerRuntime } from "./sumo-tui/runtime/worker-runtime.js";
 import {
-	SIDEBAR_SUB_TABS,
 	renderRegistrySidebarLines,
 	type McpServerSnapshot,
 	type RegistrySidebarSnapshot,
 	type SidebarSessionSnapshot,
-	type SidebarSubTab,
 } from "./sumo-tui/cathedral/sidebar-rendering.js";
 import { surfaceLine } from "./sumo-tui/cathedral/ansi.js";
 import { logDiagnostic } from "./sumo-tui/runtime/diagnostics.js";
@@ -31,10 +27,6 @@ export {
 	type SidebarAnchor,
 } from "./sidebar-placement.js";
 
-/** Debounce used when refreshing memories from user prompt changes. */
-export const SIDEBAR_MEMORY_DEBOUNCE_MS = 200;
-/** Retry cadence while Remnic is unavailable. */
-export const SIDEBAR_MEMORY_RETRY_MS = 5_000;
 /**
  * Deterministic MCP roster used by the visual-v2 fixture lane. The
  * fixture lane needs a stable, reproducible roster so cell-diff golden
@@ -61,8 +53,7 @@ setMcpDiagnosticHandler((event) => {
 	logDiagnostic(event.type, { path: event.path, importsCount: event.importsCount });
 });
 
-export { SIDEBAR_SUB_TABS };
-export type { McpServerSnapshot, SidebarSessionSnapshot, SidebarSubTab };
+export type { McpServerSnapshot, SidebarSessionSnapshot };
 
 export type SidebarSnapshot = RegistrySidebarSnapshot;
 
@@ -118,127 +109,6 @@ export function createSidebarPublication(
 	};
 }
 
-export type SidebarMemoryCache = {
-	/** Refreshes Remnic facts and returns true when the rendered memory snapshot changed. */
-	refresh(prompt: string): Promise<boolean>;
-	schedule(prompt: string, onChange: () => void): void;
-	snapshot(): Pick<SidebarSnapshot, "memory" | "memoryUnavailable">;
-};
-
-const MEMORY_DISPLAY_LIMIT = 5;
-const SIDEBAR_MEMORY_WORKER_GROUP = "sidebar-memory";
-
-export function createSidebarMemoryCache(
-	memoryClient: Pick<RemnicMemoryClient, "query">,
-	debounceMs = SIDEBAR_MEMORY_DEBOUNCE_MS,
-	workerRuntime = new CancellableWorkerRuntime(),
-): SidebarMemoryCache {
-	let memory: readonly string[] = [];
-	let memoryUnavailable = false;
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	let retryTimer: ReturnType<typeof setTimeout> | undefined;
-
-	function setSnapshot(nextMemory: readonly string[], nextUnavailable: boolean): boolean {
-		const changed = memoryUnavailable !== nextUnavailable || memory.length !== nextMemory.length || memory.some((item, index) => item !== nextMemory[index]);
-		memory = nextMemory;
-		memoryUnavailable = nextUnavailable;
-		return changed;
-	}
-
-	async function refresh(prompt: string): Promise<boolean> {
-		const handle = workerRuntime.start({
-			name: "sidebar-memory.refresh",
-			exclusiveGroup: SIDEBAR_MEMORY_WORKER_GROUP,
-			run: async ({ signal }) => {
-				try {
-					const facts = await memoryClient.query(prompt, MEMORY_DISPLAY_LIMIT);
-					if (signal.aborted) return false;
-					return setSnapshot(facts.map((fact) => fact.text), false);
-				} catch {
-					if (signal.aborted) return false;
-					return setSnapshot([], true);
-				}
-			},
-		});
-		const result = await handle.result;
-		return result.status === "completed" ? result.value : false;
-	}
-
-	function clearRetry(): void {
-		if (retryTimer) clearTimeout(retryTimer);
-		retryTimer = undefined;
-	}
-
-	function scheduleRetry(prompt: string, onChange: () => void): void {
-		if (prompt.trim().length === 0) return;
-		clearRetry();
-		retryTimer = setTimeout(() => {
-			void refresh(prompt).then((changed) => {
-				if (changed) onChange();
-				if (memoryUnavailable) scheduleRetry(prompt, onChange);
-			});
-		}, SIDEBAR_MEMORY_RETRY_MS);
-		retryTimer.unref?.();
-	}
-
-	return {
-		refresh,
-		schedule(prompt: string, onChange: () => void): void {
-			if (timer) clearTimeout(timer);
-			clearRetry();
-			workerRuntime.cancelGroup(SIDEBAR_MEMORY_WORKER_GROUP);
-			const normalizedPrompt = prompt.trim();
-			if (normalizedPrompt.length === 0) return;
-			timer = setTimeout(() => {
-				void refresh(normalizedPrompt).then((changed) => {
-					if (changed) onChange();
-					if (memoryUnavailable) scheduleRetry(normalizedPrompt, onChange);
-				});
-			}, debounceMs);
-			timer.unref?.();
-		},
-		snapshot(): Pick<SidebarSnapshot, "memory" | "memoryUnavailable"> {
-			return { memory, memoryUnavailable };
-		},
-	};
-}
-
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- predicate over an untyped Pi message; the typeof check is the sanctioned parse.
-function isObjectMessage(value: unknown): value is { role?: unknown; content?: unknown } {
-	return typeof value === "object" && value !== null;
-}
-
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- predicate over an untyped Pi message field; the typeof check is the sanctioned parse.
-function isString(value: unknown): value is string {
-	return typeof value === "string";
-}
-
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- predicate over an untyped Pi message part; the typeof checks are the sanctioned parse.
-function isTextPart(value: unknown): value is { type: "text"; text: string } {
-	if (typeof value !== "object" || value === null) return false;
-	// SAFETY: guarded by the object check above; only the type/text fields are read.
-	const record = value as { type?: unknown; text?: unknown };
-	return record.type === "text" && isString(record.text);
-}
-
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- boundary decoder for untyped Pi message payloads; narrowing happens in the predicates below.
-function messageText(message: unknown): string {
-	if (!isObjectMessage(message)) return "";
-	const maybe = message;
-	if (maybe.role !== "user") return "";
-	if (isString(maybe.content)) return maybe.content;
-	if (Array.isArray(maybe.content)) {
-		return maybe.content
-			.map((part) => {
-				if (isTextPart(part)) return part.text;
-				return undefined;
-			})
-			.filter((part): part is string => typeof part === "string")
-			.join("\n");
-	}
-	return "";
-}
-
 function isNumber(value: number | null | undefined): value is number {
 	return typeof value === "number";
 }
@@ -249,8 +119,6 @@ function sessionHasMessages(ctx: ExtensionContext): boolean {
 
 function snapshotFromContext(
 	ctx: ExtensionContext,
-	memorySnapshot: Pick<SidebarSnapshot, "memory" | "memoryUnavailable">,
-	activeSubTab: SidebarSubTab,
 	metrics: SidebarSnapshot["metrics"],
 ): SidebarSnapshot {
 	const { input, output, cost } = getCachedSessionUsage(ctx);
@@ -272,10 +140,6 @@ function snapshotFromContext(
 		cumulativeTokens: input + output,
 		costUsd: cost,
 		mcpServers: getCachedMcpRoster({ cwd: ctx.cwd, piAgentDir: resolvePiAgentDir() }),
-		memory: memorySnapshot.memory,
-		memoryTotal: memorySnapshot.memory.length,
-		memoryUnavailable: memorySnapshot.memoryUnavailable,
-		activeSubTab,
 		metrics,
 	};
 }
@@ -287,30 +151,10 @@ function snapshotFromContext(
  */
 export function installSidebar(pi: ExtensionAPI): void {
 	let requestRender: (() => void) | undefined;
-	let memoryCache: SidebarMemoryCache | undefined;
 	let activeMetricsHud: MetricsHud | undefined;
-	let activeSubTab: SidebarSubTab = "CONTEXT";
-
-	pi.registerShortcut("ctrl+1", {
-		description: "sidebar: show CONTEXT sub-tab",
-		handler: () => {
-			activeSubTab = "CONTEXT";
-			requestRender?.();
-		},
-	});
-	pi.registerShortcut("ctrl+2", {
-		description: "sidebar: show MEMORY sub-tab",
-		handler: () => {
-			activeSubTab = "MEMORY";
-			requestRender?.();
-		},
-	});
 
 	pi.on("session_start", (_event, ctx) => {
 		if (!ctx.hasUI) return;
-
-		activeSubTab = "CONTEXT";
-		memoryCache = createSidebarMemoryCache(createRemnicMemoryClient());
 
 		ctx.ui.setWidget("sumocode-sidebar-dock", (tui): Component & { dispose(): void } => {
 			// `requestRender(false)` lets Pi's differential renderer diff the sidebar
@@ -332,7 +176,7 @@ export function installSidebar(pi: ExtensionAPI): void {
 				});
 			}
 			const sidebarComponent = createSidebarComponent(
-				() => snapshotFromContext(ctx, memoryCache?.snapshot() ?? { memory: [] }, activeSubTab, metricsHud.snapshot()),
+				() => snapshotFromContext(ctx, metricsHud.snapshot()),
 				undefined,
 				// SAFETY: the TUI terminal exposes an optional rows field; a missing
 				// value falls back to the default overlay row target.
@@ -352,12 +196,6 @@ export function installSidebar(pi: ExtensionAPI): void {
 				},
 			};
 		});
-	});
-
-	pi.on("message_start", (event) => {
-		const prompt = messageText(event.message);
-		if (!prompt) return;
-		memoryCache?.schedule(prompt, () => requestRender?.());
 	});
 
 	// Kick a render whenever counters or cost might have moved.

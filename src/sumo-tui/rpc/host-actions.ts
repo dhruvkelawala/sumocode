@@ -9,19 +9,7 @@ import {
 	type CommandPaletteSnapshot,
 	type PaletteMode,
 } from "../../command-palette.js";
-import {
-	createRemnicMemoryClient,
-	MemoryClientError,
-	type MemoryFact,
-	type RemnicMemoryClient,
-} from "../../memory.js";
 import { isBackgroundTaskWakeMessage } from "../../background-tasks/task-types.js";
-import { groupFactsByPanel } from "../../memory-categorization.js";
-import {
-	MemoryEditorComponent,
-	formatMemoryStatus,
-	type MemoryEditorSnapshot,
-} from "../../memory-editor.js";
 import { renderThemeCheck, type ThemeBgSlot, type ThemeFgSlot, type ThemeReader } from "../../theme-check.js";
 import { activeThemeColors, getActiveTheme, listThemes, nextThemeName, setActiveTheme } from "../../themes/index.js";
 import { saveSumoCodeConfigPatch } from "../../config/sumocode-config.js";
@@ -68,7 +56,6 @@ export interface RpcHostSlashCommand {
 type HostModals = Pick<ModalManager, "select" | "confirm" | "input" | "editor">;
 type HostInlineSelectors = Pick<InlineSelectorHost, "select" | "selectTabs">;
 type HostNotifications = Pick<NotificationCenter, "notify"> & Partial<Pick<NotificationCenter, "dismissSticky">>;
-type MemoryClientFactory = () => RemnicMemoryClient;
 
 export interface RpcHostActionsOptions {
 	readonly controls: RpcHostControls;
@@ -89,7 +76,6 @@ export interface RpcHostActionsOptions {
 	readonly inlineSelectors: HostInlineSelectors;
 	readonly notifications: HostNotifications;
 	readonly editorText?: EditorTextController;
-	readonly createMemoryClient?: MemoryClientFactory;
 	readonly onStateChange?: (state?: RpcHostChromeState) => void;
 	readonly onRenderRequest?: () => void;
 	readonly getMermaidRenderingMode?: () => MermaidRenderingMode;
@@ -164,7 +150,6 @@ export const RPC_HOST_SLASH_COMMANDS: readonly RpcHostSlashCommand[] = Object.fr
 	{ name: "copy", description: "Copy the last assistant response to the clipboard" },
 	{ name: "export", description: "Export the session transcript to HTML" },
 	{ name: "quit", description: "Quit SumoCode" },
-	{ name: "sumo:memory", description: "Open or update SumoCode memory" },
 	{ name: "sumo:theme-check", description: "Preview current theme tokens" },
 	{ name: "sumo:palette", description: "Open the command palette" },
 	{ name: "hotkeys", description: "Show the RPC host's keyboard shortcuts" },
@@ -285,7 +270,7 @@ function slotColor(slot: ThemeFgSlot): string {
 	if (slot === "error") return colors.states.approval;
 	if (slot === "border" || slot === "borderMuted" || slot === "mdHr" || slot === "mdQuoteBorder" || slot === "toolDiffContext") return colors.divider;
 	if (slot === "muted" || slot === "dim" || slot === "toolOutput" || slot === "bashMode") return colors.foregroundDim;
-	if (slot === "toolDiffAdded") return colors.states.learning;
+	if (slot === "toolDiffAdded") return colors.states.idle;
 	if (slot === "toolDiffRemoved") return colors.states.approval;
 	return colors.foreground;
 }
@@ -294,7 +279,7 @@ function bgSlotColor(slot: ThemeBgSlot): string {
 	const colors = activeThemeColors();
 	if (slot === "selectedBg") return colors.surfaceLifted;
 	if (slot === "toolErrorBg") return colors.states.approval;
-	if (slot === "toolSuccessBg") return colors.states.learning;
+	if (slot === "toolSuccessBg") return colors.states.idle;
 	return colors.surface;
 }
 
@@ -523,7 +508,6 @@ export class RpcHostActions {
 	private readonly inlineSelectors: HostInlineSelectors;
 	private readonly notifications: HostNotifications;
 	private readonly editorText: EditorTextController | undefined;
-	private readonly createMemoryClient: MemoryClientFactory;
 	private readonly onStateChange: (state?: RpcHostChromeState) => void;
 	private readonly onRenderRequest: () => void;
 	private readonly getMermaidRenderingMode: () => MermaidRenderingMode;
@@ -551,7 +535,6 @@ export class RpcHostActions {
 		this.inlineSelectors = options.inlineSelectors;
 		this.notifications = options.notifications;
 		this.editorText = options.editorText;
-		this.createMemoryClient = options.createMemoryClient ?? createRemnicMemoryClient;
 		this.onStateChange = options.onStateChange ?? (() => undefined);
 		this.onRenderRequest = options.onRenderRequest ?? (() => undefined);
 		this.getMermaidRenderingMode = options.getMermaidRenderingMode ?? (() => "streaming");
@@ -691,9 +674,6 @@ export class RpcHostActions {
 			case "/quit":
 				this.onExitRequest(0);
 				return true;
-			case "/sumo:memory":
-				await this.handleMemoryCommand(args);
-				return true;
 			case "/sumo:theme-check":
 				await this.openThemeCheck();
 				return true;
@@ -826,7 +806,6 @@ export class RpcHostActions {
 		if (selection === "MODEL") await this.openModelSelector();
 		else if (selection === "THINKING") await this.openThinkingSelector();
 		else if (selection === "SESSION") await this.openSessionControls();
-		else if (selection === "MEMORY") await this.openMemoryEditor();
 		else if (selection === "THEME") await this.openThemeSelector();
 		else if (selection === "SETTINGS") await this.openSettings();
 	}
@@ -1383,71 +1362,6 @@ export class RpcHostActions {
 		);
 	}
 
-	public async openMemoryEditor(): Promise<void> {
-		let facts: MemoryFact[];
-		const client = this.createMemoryClient();
-		try {
-			facts = await client.browse({ status: "active", limit: 500 });
-		} catch (error) {
-			const message = error instanceof MemoryClientError ? error.message : String(error);
-			notify(this.notifications, `memory unavailable: ${message}`, "warning", { sticky: true });
-			return;
-		}
-		const initial: MemoryEditorSnapshot = {
-			searchQuery: "",
-			groups: groupFactsByPanel(facts),
-			factsTotal: facts.length,
-			focusedFactId: null,
-		};
-		await this.overlays.show<void>(
-			"memoryEditor",
-			(done) => new MemoryEditorComponent(initial, {
-				client,
-				notify: (message, level) => notify(this.notifications, message, level ?? "info"),
-				invalidate: this.onRenderRequest,
-				close: () => done(),
-			}),
-		);
-	}
-
-	public async handleMemoryCommand(args: string): Promise<void> {
-		const { command, args: rest } = firstArg(args);
-		const client = this.createMemoryClient();
-		if (command === "" || command === "edit") {
-			await this.openMemoryEditor();
-			return;
-		}
-		if (command === "status") {
-			await notifyOnError(async () => {
-				notify(this.notifications, formatMemoryStatus(await client.status()), "info");
-			}, this.notifications);
-			return;
-		}
-		if (command === "add") {
-			const text = rest.trim();
-			if (!text) {
-				notify(this.notifications, "usage: /sumo:memory add <text>", "info");
-				return;
-			}
-			await notifyOnError(async () => {
-				await client.add(text);
-			}, this.notifications);
-			return;
-		}
-		if (command === "forget") {
-			const id = rest.trim();
-			if (!id) {
-				notify(this.notifications, "usage: /sumo:memory forget <fact-id>", "info");
-				return;
-			}
-			await notifyOnError(async () => {
-				await client.forget(id);
-			}, this.notifications);
-			return;
-		}
-		notify(this.notifications, "usage: /sumo:memory [edit|add <text>|forget <id>|status]", "info");
-	}
-
 	private buildPaletteSnapshot(): CommandPaletteSnapshot {
 		const state = this.stateStore.getSnapshot();
 		return {
@@ -1457,7 +1371,6 @@ export class RpcHostActions {
 				{ label: "SESSION", currentValue: state.sessionName ?? state.sessionId ?? "current session" },
 				{ label: "MODEL", currentValue: state.modelLabel ?? "model pending" },
 				{ label: "THINKING", currentValue: state.thinkingLevel ?? "medium" },
-				{ label: "MEMORY", currentValue: "host" },
 				{ label: "THEME", currentValue: getActiveTheme().name },
 				{ label: "SETTINGS", currentValue: "host controls" },
 			],

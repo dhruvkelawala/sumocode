@@ -1,5 +1,7 @@
 # Ultraviolet Core design contract
 
+> **v0.8 override:** the `learning` state below is retired design history, not memory support. Current tokens/chrome live in [the theme implementation](../../../../src/themes/ultraviolet-core.ts); existing Bible pages await separate visual review.
+
 Ultraviolet Core is SumoCode's high-impact terminal alternative: deep violet-black chassis, violet focus/routing, pale lavender body text, ice secondary signal, localized amber tool execution, and pink approval/failure.
 
 ## Core roles

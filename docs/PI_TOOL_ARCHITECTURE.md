@@ -76,7 +76,6 @@ Pi agent event → producer adapter → ChatMessageViewModel → ChatBlock (acti
 |--------------------|---------------------------|-------------------------------------|
 | Command Palette    | `src/command-palette.ts`  | `Ctrl+/` keybinding                 |
 | Divine Query       | `src/divine-query.ts`     | `showDivineQuery()` from SumoCode code |
-| Memory Editor      | `src/memory-editor.ts`    | `Ctrl+M` keybinding                 |
 
 Classic extension overlays use `ctx.ui.custom` with overlay placement. RPC children cannot paint the foreground terminal: `showDivineQuery()` uses `ctx.ui.select`, which sends an `extension_ui_request`. The host routes it through `src/sumo-tui/rpc/extension-ui-responder.ts` and the host modal manager, then returns an `extension_ui_response`.
 

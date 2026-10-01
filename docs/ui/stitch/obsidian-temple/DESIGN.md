@@ -1,5 +1,7 @@
 # DESIGN SYSTEM: OBSIDIAN TEMPLE
 
+> **v0.8 override:** memory items, memory glow, and the `learning` state are retired design history. Current tokens/chrome live in [the theme implementation](../../../../src/themes/obsidian.ts); existing Bible pages await separate visual review.
+
 > "The Alchemist's Console" — a digital priest's working terminal.
 > Dystopian sacred-tech: ancient stone meets neon glow.
 > NOT literal Egypt. Subtle, polished, slightly Blade Runner.

@@ -41,7 +41,6 @@ export const ULTRAVIOLET_CORE_THEME: Theme = {
 				thinking: "#B974FF",
 				tool: "#FFC857",
 				approval: "#FF668F",
-				learning: "#75E8FF",
 			},
 		},
 	},
@@ -61,12 +60,11 @@ export const ULTRAVIOLET_CORE_THEME: Theme = {
 	chrome: {
 		...DEFAULT_CHROME,
 		frame: { topLeft: "╭", topRight: "╮", bottomLeft: "╰", bottomRight: "╯", horizontal: "─", vertical: "│" },
-		sectionGlyphs: { context: ">", memory: "+", mcp: "*", session: "~", registry: "#" },
+		sectionGlyphs: { context: ">", mcp: "*", session: "~", registry: "#" },
 		sectionTracked: false,
 		ruleChar: "─",
 		tabActive: ">",
 		tabInactive: ".",
-		bullet: ">",
 	},
 	applicationRoles: {
 		toolLedger: {

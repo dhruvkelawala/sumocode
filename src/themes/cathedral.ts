@@ -28,7 +28,6 @@ export const CATHEDRAL_THEME: Theme = {
 				thinking: "#E8B339",
 				tool: "#5B9BD5",
 				approval: "#C1443E",
-				learning: "#8E7AB5",
 			},
 		},
 	},

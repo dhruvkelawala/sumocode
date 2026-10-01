@@ -23,14 +23,14 @@ SumoCode is the terminal UX layer I daily-drive on top of Pi. Pi remains the age
 The installed interactive path is **native and RPC-first**. The release's `sumocode` executable in its bin directory is a Bun-compiled foreground host; it launches the bundled `sumocode-pi` child with `--mode rpc`, and the two processes communicate over Pi's JSONL RPC protocol. Contributors keep [`bin/sumocode.sh`](./bin/sumocode.sh) as the source/Jiti development path. SumoCode no longer depends on a private Pi constructor patch.
 
 > [!NOTE]
-> This is a personal, opinionated project rather than a polished general-purpose distribution. The code is public and MIT licensed; the maintainer's persona, memory, settings, MCP configuration, and skills live in a separate private repository.
+> This is a personal, opinionated project rather than a polished general-purpose distribution. The code is public and MIT licensed; the maintainer's persona, settings, MCP configuration, and skills live in a separate private repository.
 
 ## What ships
 
 - **Retained SumoTUI shell** — Yoga layout, cell compositor, incremental frame diff, in-app scrollback, mouse routing, selection, modal layers, and signal-safe terminal cleanup.
 - **Structured transcript** — Markdown, code, diffs, Mermaid, inline images, tool calls, skills, questions, background terminals, and delegated agents render as typed blocks instead of flattened strings.
 - **Agent orchestration** — durable `terminal_*` jobs, headless and visible `subagent_*` delegation, role presets, bounded activity cards, cancellation, and isolated git worktrees.
-- **Cathedral workflows** — command palette, Divine Query, Memory Scriptorium, model/session selectors, `/sumo:review`, `/sumo:worktree`, `/sumo:roles`, `/reload`, and `/fast`.
+- **Cathedral workflows** — command palette, Divine Query, model/session selectors, `/sumo:review`, `/sumo:worktree`, `/sumo:roles`, `/reload`, and `/fast`.
 - **Five themes** — Cathedral, Amber CRT, Obsidian Temple, Herdr Terminal, and Ultraviolet Core. Each theme owns its palette, chrome, state colours, and working indicator.
 - **Deterministic visual verification** — component, fixture, and real-runtime lanes converge on styled-cell diffs, geometry audits, and review screenshots.
 
@@ -136,11 +136,12 @@ Active approval installation was retired by [Plan 076](plans/076-disable-approva
 
 ## Everyday controls
 
+Memory/Remnic support is removed for v0.8. Persona (`/sumo:persona` and Pi's `~/.pi/agent/APPEND_SYSTEM.md`) remains supported; existing private memory data is not migrated or deleted.
+
 | Control | Action |
 |---|---|
 | `Ctrl+/` | Open the command palette |
 | `Ctrl+Shift+T` | Cycle themes |
-| `/sumo:memory` | Open persistent memory |
 | `/sumo:roles` | Inspect and choose subagent roles |
 | `/sumo:review` | Launch a tracked code-review agent |
 | `/sumo:worktree` | Create or manage isolated worktrees |
@@ -149,7 +150,7 @@ Active approval installation was retired by [Plan 076](plans/076-disable-approva
 
 ## Themes and state
 
-SumoCode exposes five preattentive agent states — `idle`, `thinking`, `tool`, `approval`, and `learning`. The active theme maps those states to its own colour and motion language while preserving the same semantic contract.
+SumoCode exposes four preattentive agent states — `idle`, `thinking`, `tool`, and `approval`. The active theme maps those states to its own colour and motion language while preserving the same semantic contract.
 
 Theme order:
 

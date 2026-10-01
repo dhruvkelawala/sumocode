@@ -1,5 +1,7 @@
 # Cathedral UX Implementation Spec — v2
 
+> **v0.8 override:** memory/Remnic support is removed, not deferred. Element 7, sidebar MEMORY content/navigation, palette MEMORY mode, related commands/keybindings, and `learning` / `INSCRIBING` below are historical design decisions, not current requirements. Persona remains supported. Existing non-memory Bible pages are frozen pending separate review; see [the exact update inventory](../visual/parity/V08_MEMORY_REMOVAL.md). [README](../../README.md) describes the current product.
+
 > **Status**: locked decisions, post-grill 2026-04-28.
 > **Supersedes**: `CATHEDRAL_UX_SPEC.md` v0.1 (2026-04-26).
 > **Source decisions**: `CATHEDRAL_DECISIONS.md` (Elements 1–8) + this session (Elements 9–13 + cross-cutting).

@@ -47,7 +47,6 @@ describe("ULTRAVIOLET_CORE_THEME", () => {
 				thinking: "#B974FF",
 				tool: "#FFC857",
 				approval: "#FF668F",
-				learning: "#75E8FF",
 			},
 		});
 	});
@@ -120,7 +119,6 @@ describe("ULTRAVIOLET_CORE_THEME", () => {
 			chrome.ruleChar,
 			chrome.tabActive,
 			chrome.tabInactive,
-			chrome.bullet,
 		];
 		for (const glyph of glyphs) {
 			expect(glyph.length, `glyph ${JSON.stringify(glyph)}`).toBe(1);

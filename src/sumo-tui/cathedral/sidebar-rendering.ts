@@ -1,11 +1,7 @@
 import { activeThemeChrome, activeThemeColors, type SumoCodeState } from "../../themes/index.js";
 import { formatTokenCount } from "../../footer.js";
-import { VOICE } from "../../voice.js";
 import { fgHex, padAnsiToWidth, SIDEBAR_INDENT, stripAnsi, visibleLength } from "./ansi.js";
 import type { MetricsHudSnapshot } from "./metrics-hud.js";
-
-export type SidebarSubTab = "CONTEXT" | "MEMORY";
-export const SIDEBAR_SUB_TABS: readonly SidebarSubTab[] = ["CONTEXT", "MEMORY"];
 
 export type McpServerStatus = "ok" | "idle" | "in-flight" | "error" | "down";
 export type McpServerStatusLike = McpServerStatus | SumoCodeState;
@@ -32,26 +28,15 @@ export interface RegistrySidebarSnapshot {
 	readonly cumulativeTokens?: number;
 	readonly costUsd: number;
 	readonly mcpServers: readonly McpServerSnapshot[];
-	readonly memory: readonly string[];
-	/** Total memories in the store; used to compute the 'N more · ⌘M' footer. */
-	readonly memoryTotal?: number;
-	readonly memoryUnavailable?: boolean;
-	readonly activeSubTab?: SidebarSubTab;
 	readonly sessions?: readonly SidebarSessionSnapshot[];
 	readonly metrics?: MetricsHudSnapshot;
 }
 
 const TOKEN_BAR_CELLS = 22;
-const MEMORY_DISPLAY_LIMIT = 5;
 const FG_RESET = "\u001b[39m";
-const DIM_OFF = "\u001b[22m";
 
 function colorHex(text: string, hex: string): string {
 	return `${fgHex(hex)}${text}${FG_RESET}`;
-}
-
-function dim(text: string): string {
-	return `\u001b[2m${text}${DIM_OFF}`;
 }
 
 function tokenUsageRatio(used: number, total: number): number {
@@ -149,8 +134,6 @@ export function normalizeMcpStatus(status: McpServerStatusLike): McpServerStatus
 			return "in-flight";
 		case "approval":
 			return "error";
-		case "learning":
-			return "ok";
 	}
 }
 
@@ -188,73 +171,29 @@ function mcpLines(snapshot: RegistrySidebarSnapshot, width: number): string[] {
 	return lines;
 }
 
-export function renderMemoryFactLine(item: string, width: number): string {
-	const available = Math.max(0, width - visibleLength(SIDEBAR_INDENT) - 2);
-	const chrome = activeThemeChrome();
-	const bullet = colorHex(chrome.bullet, chrome.bulletColor ?? activeThemeColors().accent);
-	const text = colorHex(truncatePlainText(item, available), activeThemeColors().foreground);
-	return padAnsiToWidth(indented(`${bullet} ${text}`), width);
-}
-
-function memoryLines(snapshot: RegistrySidebarSnapshot, width: number): string[] {
-	const lines = [row(colorHex(sectionLabel("MEMORY"), activeThemeColors().foregroundDim), width), blank(width)];
-	if (snapshot.memoryUnavailable) {
-		lines.push(row(dim(VOICE.errors.daemonDown), width));
-		return lines;
-	}
-	if (snapshot.memory.length === 0) {
-		lines.push(row(dim(VOICE.empty.memory), width));
-		return lines;
-	}
-
-	const shown = snapshot.memory.slice(0, MEMORY_DISPLAY_LIMIT);
-	for (const item of shown) lines.push(renderMemoryFactLine(item, width));
-
-	const total = snapshot.memoryTotal ?? snapshot.memory.length;
-	const hidden = Math.max(0, total - shown.length);
-	if (hidden > 0) {
-		lines.push(blank(width));
-		lines.push(rule(width));
-		lines.push(row(colorHex(`${hidden} more · ⌘M`, activeThemeColors().foregroundDim), width));
-	}
-	return lines;
-}
-
-export function renderRegistryHeaderLines(snapshot: RegistrySidebarSnapshot, width: number): string[] {
-	const active = snapshot.activeSubTab ?? "CONTEXT";
-	const lines: string[] = [
+export function renderRegistryHeaderLines(width: number): string[] {
+	const marker = colorHex(activeThemeChrome().tabActive, activeThemeColors().accent);
+	const label = colorHex(sectionLabel("CONTEXT"), activeThemeColors().foreground);
+	return [
 		blank(width),
 		row(colorHex("REGISTRY", activeThemeColors().accent), width),
 		blank(width),
+		row(`${marker} ${label}`, width),
+		blank(width),
+		rule(width),
+		blank(width),
 	];
-
-	for (const tab of SIDEBAR_SUB_TABS) {
-		const isActive = tab === active;
-		const chrome = activeThemeChrome();
-		const marker = colorHex(isActive ? chrome.tabActive : chrome.tabInactive, isActive ? activeThemeColors().accent : activeThemeColors().foregroundDim);
-		const label = colorHex(sectionLabel(tab), isActive ? activeThemeColors().foreground : activeThemeColors().foregroundDim);
-		lines.push(padAnsiToWidth(indented(`${marker} ${label}`), width));
-	}
-	lines.push(blank(width));
-	lines.push(rule(width));
-	lines.push(blank(width));
-	return lines;
 }
 
 export function renderRegistrySidebarLines(snapshot: RegistrySidebarSnapshot, width: number): string[] {
-	const active = snapshot.activeSubTab ?? "CONTEXT";
-	const lines = [...renderRegistryHeaderLines(snapshot, width)];
-
-	if (active === "CONTEXT") {
-		lines.push(...contextLines(snapshot, width));
-		lines.push(blank(width));
-		lines.push(rule(width));
-		lines.push(blank(width));
-		lines.push(...mcpLines(snapshot, width));
-	} else {
-		lines.push(...memoryLines(snapshot, width));
-	}
-
+	const lines = [
+		...renderRegistryHeaderLines(width),
+		...contextLines(snapshot, width),
+		blank(width),
+		rule(width),
+		blank(width),
+		...mcpLines(snapshot, width),
+	];
 	return lines.map((line) => padAnsiToWidth(line, width));
 }
 

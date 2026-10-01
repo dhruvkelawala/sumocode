@@ -12,7 +12,6 @@ interface FixturePayload {
 }
 import { Key } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { MemoryFact, MemoryStatus, RemnicMemoryClient } from "../../memory.js";
 import { getActiveTheme, resetThemeRegistryForTests } from "../../themes/index.js";
 import type { EditorTextController } from "../pi-compat/extension-ui-adapter.js";
 import { MAX_CLIPBOARD_BYTES } from "../input/selection.js";
@@ -220,44 +219,6 @@ class FakeControls {
 	}
 }
 
-class FakeMemoryClient implements RemnicMemoryClient {
-	public readonly calls: string[] = [];
-	public readonly facts: MemoryFact[] = [{
-		id: "fact-1",
-		text: "host-rendered memory fact",
-		tags: ["sumocode:project"],
-		status: "active",
-	}];
-
-	public async query(): Promise<MemoryFact[]> {
-		this.calls.push("query");
-		return this.facts;
-	}
-
-	public async status(): Promise<MemoryStatus> {
-		this.calls.push("status");
-		return { ok: true, factCount: this.facts.length, lastExtractionAt: "2026-07-02T10:00:00Z" };
-	}
-
-	public async add(text: string): Promise<MemoryFact> {
-		this.calls.push(`add:${text}`);
-		return { id: "fact-2", text };
-	}
-
-	public async forget(factId: string): Promise<void> {
-		this.calls.push(`forget:${factId}`);
-	}
-
-	public async observe(): Promise<void> {
-		this.calls.push("observe");
-	}
-
-	public async browse(): Promise<MemoryFact[]> {
-		this.calls.push("browse");
-		return this.facts;
-	}
-}
-
 class FakeEditorText implements EditorTextController {
 	public text = "";
 
@@ -328,7 +289,6 @@ function renderOverlayText(overlays: RpcHostOverlayManager, width = 100): string
 }
 
 function setup(options: {
-	readonly memory?: FakeMemoryClient;
 	readonly onExitRequest?: (code: number) => void;
 	readonly writeClipboardSequence?: (sequence: string) => boolean;
 	readonly sessionFile?: string;
@@ -366,7 +326,6 @@ function setup(options: {
 	const inlineSelectors = new InlineSelectorHost(new FakeInlineEditor());
 	const notifications: Notification[] = [];
 	const dismissSticky = vi.fn();
-	const memory = options.memory ?? new FakeMemoryClient();
 	const editorText = new FakeEditorText();
 	const rehydrateCalls: number[] = [];
 	const rehydrateTranscript = async (): Promise<void> => {
@@ -390,7 +349,6 @@ function setup(options: {
 			dismissSticky,
 		},
 		editorText,
-		createMemoryClient: () => memory,
 		onExitRequest: options.onExitRequest,
 		onStateChange: (state) => {
 			stateChanges.push(state);
@@ -414,7 +372,7 @@ function setup(options: {
 		},
 	});
 
-	return { actions, controls, modals, overlays, inlineSelectors, notifications, dismissSticky, memory, editorText, rehydrateCalls, stateChanges, persistedThemes };
+	return { actions, controls, modals, overlays, inlineSelectors, notifications, dismissSticky, editorText, rehydrateCalls, stateChanges, persistedThemes };
 }
 
 function rpcCommand(name: string, source: RpcSlashCommand["source"] = "prompt"): RpcSlashCommand {
@@ -2049,8 +2007,8 @@ describe("RpcHostActions", () => {
 		expect(notifications).toContainEqual({ message: "exported: /tmp/custom-export.html", level: "info" });
 	});
 
-	it("renders theme check and memory editor as host overlays", async () => {
-		const { actions, overlays, memory } = setup();
+	it("renders theme check as a host overlay", async () => {
+		const { actions, overlays } = setup();
 
 		const themeCheck = actions.handleSubmittedText("/sumo:theme-check");
 		await flush();
@@ -2059,13 +2017,6 @@ describe("RpcHostActions", () => {
 		overlays.handleInput("x");
 		await themeCheck;
 
-		const memoryEditor = actions.handleSubmittedText("/sumo:memory");
-		await flush();
-		expect(overlays.getActiveKind()).toBe("memoryEditor");
-		expect(renderOverlayText(overlays)).toContain("MEMORY SCRIPTORIUM");
-		overlays.handleInput(Key.escape);
-		await memoryEditor;
-		expect(memory.calls).toContain("browse");
 	});
 
 	it("renders the RPC host's own hotkey reference as an overlay, closing on any key", async () => {
@@ -2159,24 +2110,14 @@ describe("RpcHostActions", () => {
 		expect(notifications).toContainEqual({ message: "theme: amber-crt (not persisted: disk full)", level: "warning" });
 	});
 
-	it("supports direct host memory and theme commands without falling through to Pi prompt text", async () => {
-		const { actions, memory, notifications } = setup();
+	it("supports direct host theme commands without falling through to Pi prompt text", async () => {
+		const { actions, notifications } = setup();
 
-		await expect(actions.handleSubmittedText("/sumo:memory status")).resolves.toBe(true);
-		await expect(actions.handleSubmittedText("/sumo:memory add remember this")).resolves.toBe(true);
-		await expect(actions.handleSubmittedText("/sumo:memory forget fact-1")).resolves.toBe(true);
 		await expect(actions.handleSubmittedText("/sumo:theme amber-crt")).resolves.toBe(true);
 		await expect(actions.handleSubmittedText("ordinary prompt")).resolves.toBe(false);
 
-		expect(memory.calls).toEqual([
-			"status",
-			"add:remember this",
-			"forget:fact-1",
-		]);
 		expect(getActiveTheme().name).toBe("amber-crt");
-		// Issue 481: the add/forget/theme confirmations are dropped noise; only
-		// the memory status report survives.
-		expect(notifications.filter((entry) => entry.message.startsWith("memory added:") || entry.message.startsWith("memory forgotten:") || entry.message.startsWith("theme:"))).toEqual([]);
+		expect(notifications).toEqual([]);
 	});
 
 	it("opens /theme's picker through the in-place InlineSelectorHost, not modals.select", async () => {
@@ -2194,18 +2135,17 @@ describe("RpcHostActions", () => {
 		expect(notifications).toEqual([]);
 	});
 
-	it("notifies memory client failures without throwing from direct memory commands", async () => {
-		const memory = new FakeMemoryClient();
-		memory.add = async (text: string) => {
-			memory.calls.push(`add:${text}`);
-			throw new Error("memory offline");
-		};
-		const { actions, notifications } = setup({ memory });
+	it("treats removed memory commands as unknown without opening an overlay or sending prompt text", async () => {
+		const { actions, controls, overlays, notifications } = setup();
 
-		await expect(actions.handleSubmittedText("/sumo:memory add remember this")).resolves.toBe(true);
+		for (const suffix of ["", " edit", " status", " add remember this", " forget fact-1"]) {
+			await expect(actions.handleSubmittedText(`/sumo:memory${suffix}`)).resolves.toBe(true);
+		}
 
-		expect(memory.calls).toEqual(["add:remember this"]);
-		expect(notifications).toContainEqual({ message: "rpc error: memory offline", level: "error" });
+		expect(RPC_HOST_SLASH_COMMANDS.some((command) => command.name === "sumo:memory")).toBe(false);
+		expect(overlays.getActiveKind()).toBeUndefined();
+		expect(controls.calls).toEqual(Array(5).fill("getCommands"));
+		expect(notifications).toEqual(Array(5).fill({ message: "unknown command: /sumo:memory", level: "warning" }));
 	});
 
 	it("handles /quit through the injected exit request", async () => {

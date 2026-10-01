@@ -179,8 +179,6 @@ ${stageTable(legacySummary)}
 
 Dominant Sumo-owned cost was full chat-history replay. The fix bulk-hydrates resumed transcripts, keeps only the active ${latest?.metadata.renderedMessages ?? 200}-message window as retained nodes, represents older history as a virtual archive count, and schedules one render for the resumed transcript.
 
-Remnic memory is not on the synchronous resume hot path in this checkout: sidebar memory refreshes are debounce-triggered and run through \`CancellableWorkerRuntime\`.
-
 No retained render loop idle wake is covered by \`FrameScheduler\` tests: after the coalesced resume render drains, no timer remains scheduled.
 `;
 

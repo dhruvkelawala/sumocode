@@ -1,5 +1,7 @@
 # Herdr Terminal — Design Contract (v7)
 
+> **v0.8 override:** the memory section sigil and `learning` state below are retired design history. Current tokens/chrome live in [the theme implementation](../../../../src/themes/herdr.ts); existing Bible pages await separate visual review.
+
 - **Theme name:** `herdr`
 - **Display name:** Herdr Terminal
 - **Description:** Electric-green operator terminal — phosphor focus, amber execution, sharp hacker chrome.

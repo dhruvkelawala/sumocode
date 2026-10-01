@@ -8,7 +8,6 @@ import {
 	type McpServerSnapshot,
 	type RegistrySidebarSnapshot,
 	type SidebarSessionSnapshot,
-	type SidebarSubTab,
 } from "./sidebar-rendering.js";
 import type { MetricsHudSnapshot } from "./metrics-hud.js";
 
@@ -22,7 +21,6 @@ export interface SidebarLayoutSnapshot {
 	readonly sessionHasMessages: boolean;
 	readonly dockMinWidth?: number;
 	readonly sidebarWidth?: number;
-	readonly activeSubTab?: SidebarSubTab;
 	readonly sessions?: readonly SidebarSessionMarker[];
 	readonly projectName?: string;
 	readonly branch?: string;
@@ -32,9 +30,6 @@ export interface SidebarLayoutSnapshot {
 	readonly contextWindow?: number;
 	readonly costUsd?: number;
 	readonly mcpServers?: readonly McpServerSnapshot[];
-	readonly memory?: readonly string[];
-	readonly memoryTotal?: number;
-	readonly memoryUnavailable?: boolean;
 	readonly metrics?: MetricsHudSnapshot;
 }
 
@@ -69,10 +64,6 @@ function registrySnapshot(snapshot: SidebarLayoutSnapshot): RegistrySidebarSnaps
 		contextWindow: snapshot.contextWindow ?? 0,
 		costUsd: snapshot.costUsd ?? 0,
 		mcpServers: snapshot.mcpServers ?? DEFAULT_MCP_SERVERS,
-		memory: snapshot.memory ?? [],
-		memoryTotal: snapshot.memoryTotal,
-		memoryUnavailable: snapshot.memoryUnavailable,
-		activeSubTab: snapshot.activeSubTab,
 		sessions: snapshot.sessions,
 		metrics: snapshot.metrics,
 	};

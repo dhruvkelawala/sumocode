@@ -901,7 +901,7 @@ describe("RpcShellAdapter above-editor working indicator (D3 parity)", () => {
 			expect(frame).toBeDefined();
 			const text = Array.from({ length: 30 }, (_, row) => frame!.toPlainRow(row)).join("\n");
 			expect(text).toContain("Compacting…");
-			expect(text).toContain("INSCRIBING");
+			expect(text).toContain("MEDITATING");
 			expect(text).not.toContain("Working…");
 		} finally {
 			adapter.dispose();

@@ -4,7 +4,7 @@
  * Replaces Pi's default `ctx.ui.select` rendering with a Scriptorium-themed
  * overlay when SumoCode is active. Painting helpers (lifted bg, floral title,
  * focus marker, split rule) come from `./cathedral/scriptorium-chrome.js` so
- * Memory Scriptorium and Approval Modal share the exact same look without
+ * Cathedral overlays share the exact same look without
  * duplicate copies of `persistentBg` etc.
  *
  * Visual:

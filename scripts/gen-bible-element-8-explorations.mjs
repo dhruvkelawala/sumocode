@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Element 8 — Command palette DESIGN EXPLORATIONS.
 // 3 distinct aesthetic directions, each with a different search bar treatment.
-// Same content (6 modes, MODEL focused) so user grades the IDEA not the data.
+// Same content (5 modes, MODEL focused) so user grades the IDEA not the data.
 
 import { writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
@@ -31,9 +31,8 @@ const MODES = [
 	{ key: "SESSION",  num: "1", glyph: "\uf064", value: "auth-flow-refactor" },  // arrow-circle-right
 	{ key: "MODEL",    num: "2", glyph: "\uf2db", value: "claude-opus-4-7" },     // microchip
 	{ key: "THINKING", num: "3", glyph: "\uf0eb", value: "xhigh" },                // lightbulb
-	{ key: "MEMORY",   num: "4", glyph: "\uf1c0", value: "55 facts" },             // database
-	{ key: "THEME",    num: "5", glyph: "\uf53f", value: "cathedral" },            // palette
-	{ key: "SETTINGS", num: "6", glyph: "\uf013", value: "" },                     // gear
+	{ key: "THEME",    num: "4", glyph: "\uf53f", value: "cathedral" },            // palette
+	{ key: "SETTINGS", num: "5", glyph: "\uf013", value: "" },                     // gear
 ];
 
 // ─────────────────────────────────────────────────────────────────────────

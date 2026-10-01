@@ -33,7 +33,7 @@ export const HERDR_INDICATOR_INTERVAL_MS = 110;
  * Host literals remain valid for decorative/non-text use only.
  *
  * Mood: green-black operator terminal. Electric green is dominant across
- * body, focus, frames and cursor; amber owns tools/warnings/learning; red
+ * body, focus, frames and cursor; amber owns tools/warnings; red
  * owns approval/failure/interruption. No cyan/teal/blue/purple, no glow, no
  * gradients — hierarchy comes from surface depth, weight, labels and chrome.
  */
@@ -56,7 +56,6 @@ export const HERDR_THEME: Theme = {
 				thinking: "#39FF14",   // active reasoning/routing
 				tool: "#FFB000",       // tool execution and warning
 				approval: "#FF706D",   // text-safe derivative of host error #FF625F
-				learning: "#FFD166",   // durable write / learned state / bright amber
 			},
 		},
 	},
@@ -69,11 +68,10 @@ export const HERDR_THEME: Theme = {
 		// Sharp 90-degree box chrome and single-cell ASCII sigils — terminal
 		// identity without changing layout measurements or double-width risk.
 		frame: { topLeft: "┌", topRight: "┐", bottomLeft: "└", bottomRight: "┘", horizontal: "─", vertical: "│" },
-		sectionGlyphs: { context: ">", memory: "#", mcp: "@", session: "$", registry: "%" },
+		sectionGlyphs: { context: ">", mcp: "@", session: "$", registry: "%" },
 		sectionTracked: false,
 		ruleChar: "─",
 		tabActive: "▸",
 		tabInactive: "·",
-		bullet: ">",
 	},
 };

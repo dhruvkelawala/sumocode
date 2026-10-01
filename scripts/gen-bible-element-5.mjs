@@ -3,7 +3,7 @@
 // Per CATHEDRAL_UX_SPEC_V2.md §3.5:
 //   Left:  ● <STATE> · <model> · <thinking>
 //   Right: <ctx>/<window> · $<cost> (project/branch live in sidebar or hint row)
-// 5 state variants, plus narrow + splash-with-version.
+// 4 state variants, plus narrow + splash-with-version.
 
 import { writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
@@ -20,7 +20,6 @@ const STATES = {
 	thinking:  { label: "MEDITATING",   dotClass: "fg-think"   },
 	tool:      { label: "ILLUMINATING", dotClass: "fg-tool"    },
 	approval:  { label: "DEFERRING",    dotClass: "fg-approve" },
-	learning:  { label: "INSCRIBING",   dotClass: "fg-learn"   },
 };
 
 /** Build a footer row. Returns inner HTML for one <pre.grid> row. */
@@ -118,7 +117,7 @@ const standardSpec = {
 };
 
 const variants = [
-	// 5 state variants in landscape (160 cols)
+	// 4 state variants in landscape (160 cols)
 	{
 		filename: "05-footer-idle.html",
 		title: "Bible · Element 5 · footer · READY",
@@ -146,13 +145,6 @@ const variants = [
 		label: "element 5 · footer · DEFERRING (approval) · 160×1",
 		cols: 160, rows: 1,
 		footerSpec: { state: "approval", ...standardSpec },
-	},
-	{
-		filename: "05-footer-learning.html",
-		title: "Bible · Element 5 · footer · INSCRIBING",
-		label: "element 5 · footer · INSCRIBING (learning) · 160×1",
-		cols: 160, rows: 1,
-		footerSpec: { state: "learning", ...standardSpec },
 	},
 
 	// Narrow / portrait variant (60 cols → drops project, branch, $cost)

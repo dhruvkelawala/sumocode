@@ -1,7 +1,6 @@
 import type { RegisteredCommand } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { installCommandPalette } from "../../src/command-palette.js";
-import { registerMemoryCommand } from "../../src/memory-editor.js";
 import { registerPersonaCommand } from "../../src/commands/persona.js";
 import { registerSpinnerCommand } from "../../src/commands/spinner.js";
 import { registerTabsCommand } from "../../src/commands/tabs.js";
@@ -37,12 +36,10 @@ describe("Phase 4 slash command pipe", () => {
 		});
 		registerSpinnerCommand(pi);
 		registerThemeCheckCommand(pi);
-		registerMemoryCommand(pi);
 
 		const suggestions = [...commands.keys()].filter((name) => name.startsWith("sumo:")).sort();
 
 		expect(suggestions).toEqual([
-			"sumo:memory",
 			"sumo:persona",
 			"sumo:spinner",
 			"sumo:tabs",

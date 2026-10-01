@@ -7,7 +7,7 @@ import { surfaceLine } from "./sumo-tui/cathedral/ansi.js";
  * (Responsive), the wide layout is ≥ 120 cols: chat + gutter + the locked
  * 30-column V2 editorial sidebar fit comfortably. Below this — including the canonical
  * 60x100 portrait runtime — V1 collapses to chat-only and lets sidebar info come
- * through the hint/footer row plus `/sumo:memory` etc.
+ * through the hint/footer row.
  */
 export const SIDEBAR_MIN_TERMINAL_WIDTH = 120;
 /** Render width for the V2 editorial sidebar (Bible Element 1). */

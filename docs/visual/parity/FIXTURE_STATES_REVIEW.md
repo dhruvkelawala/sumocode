@@ -47,6 +47,6 @@ http://127.0.0.1:7781/bible-verify/
 
 - Rich block-specific renderers (tool ledger cards, code frames, skill pills, Divine Query, delegation cards) still need dedicated component slices. The fixture lane provides deterministic scene reachability first.
 - Command palette overlay is now fixtured as review evidence only; visual approval is still required before any crop is promoted.
-- Additional overlays (approval modal, Divine Query, memory scriptorium) should follow the fixture lane pattern once their renderers match the Bible.
+- Additional overlays (approval modal, Divine Query) should follow the fixture lane pattern once their renderers match the Bible.
 - Real runtime harness fixture injection via `SUMOCODE_HARNESS_FIXTURE` remains optional future work if we need Pi extension/session chrome involved in completed states.
 - Fixture crops are review evidence only until Dhruv explicitly approves a runtime/fixture golden promotion.

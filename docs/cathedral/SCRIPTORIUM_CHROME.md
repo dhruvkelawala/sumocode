@@ -6,7 +6,6 @@ painting vocabulary used by every Cathedral overlay modal:
 | Modal | File | Bible source |
 |---|---|---|
 | Divine Query (Element 11) | `src/divine-query.ts` | `docs/ui/bible/11-divine-query-*.html` |
-| Memory Scriptorium (Element 7) | `src/memory-editor.ts` | `docs/ui/bible/07-memory-editor*.html`, `scene-memory-scriptorium-overlay.html` |
 
 Pi's overlay host already provides the surrounding chrome (centered box, focus
 capture, escape routing). Modals are intentionally unframed at the outer edge
@@ -138,5 +137,4 @@ render via `tui.requestRender()`, etc.).
 
 If a new modal needs a primitive that two modals would share, add it to
 `scriptorium-chrome.ts` rather than duplicating it in the modal file. The
-goal is that `divine-query.ts` and `memory-editor.ts` contain only
-modal-specific composition — never bg-painting plumbing.
+goal is that modal renderers contain only modal-specific composition — never bg-painting plumbing.

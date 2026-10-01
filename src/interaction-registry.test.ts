@@ -24,20 +24,20 @@ describe("InteractionRegistry", () => {
 		);
 
 		registry.install("first", (api) => {
-			api.registerCommand("sumo:memory", { description: "first", handler: async () => undefined });
+			api.registerCommand("sumo:test", { description: "first", handler: async () => undefined });
 		});
 		registry.install("second", (api) => {
-			api.registerCommand("sumo:memory", { description: "second", handler: async () => undefined });
+			api.registerCommand("sumo:test", { description: "second", handler: async () => undefined });
 		});
 		registry.flushDiagnostics();
 
 		expect(pi.registerCommand).toHaveBeenCalledTimes(1);
-		expect(pi.registerCommand).toHaveBeenCalledWith("sumo:memory", expect.objectContaining({ description: "first" }));
+		expect(pi.registerCommand).toHaveBeenCalledWith("sumo:test", expect.objectContaining({ description: "first" }));
 		expect(reported).toEqual([
 			[
 				{
 					kind: "command",
-					id: "sumo:memory",
+					id: "sumo:test",
 					owner: "second",
 					conflictsWith: "first",
 					action: "skipped",
@@ -92,7 +92,6 @@ describe("InteractionRegistry", () => {
 			"sumo:bootstrap",
 			"sumo:cursor",
 			"sumo:diff",
-			"sumo:memory",
 			"sumo:persona",
 			"sumo:query",
 			"sumo:review",
@@ -104,9 +103,9 @@ describe("InteractionRegistry", () => {
 			"sumo:theme-check",
 			"sumo:worktree",
 		]);
-		expect(snapshot.shortcuts.map(([id]) => id).sort()).toEqual(["alt+t", "ctrl+/", "ctrl+1", "ctrl+2", "ctrl+shift+t"]);
-		expect(pi.registerCommand).toHaveBeenCalledTimes(16);
-		expect(pi.registerShortcut).toHaveBeenCalledTimes(5);
+		expect(snapshot.shortcuts.map(([id]) => id).sort()).toEqual(["alt+t", "ctrl+/", "ctrl+shift+t"]);
+		expect(pi.registerCommand).toHaveBeenCalledTimes(15);
+		expect(pi.registerShortcut).toHaveBeenCalledTimes(3);
 	});
 });
 

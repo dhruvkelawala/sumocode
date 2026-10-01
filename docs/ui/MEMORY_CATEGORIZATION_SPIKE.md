@@ -1,3 +1,5 @@
+> **Historical research:** memory/Remnic support is removed for v0.8. This spike is preserved as research, not implementation guidance; [README](../../README.md) describes the current product.
+
 # Memory Categorization Spike
 
 Date: 2026-04-26  

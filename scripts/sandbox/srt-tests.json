@@ -1,0 +1,47 @@
+{
+  "filesystem": {
+    "denyRead": [
+      "/Users",
+      "/Volumes",
+      "~/.pi",
+      "~/.config",
+      "~/.sumocode",
+      "~/.ssh",
+      "~/.aws",
+      "~/.config/gh",
+      "~/.npmrc",
+      "~/.netrc",
+      "~/.gnupg",
+      "~/.kube",
+      "~/.docker",
+      "~/.claude",
+      "~/.codex",
+      "~/Library/Keychains"
+    ],
+    "allowRead": [
+      ".",
+      "/Users/sumodeus/.npm/_npx/1c56de6e9acc34f8/node_modules/node",
+      "/Users/sumodeus/.npm/_npx/2a8f335dab1edcb2/node_modules/pnpm"
+    ],
+    "allowWrite": ["."],
+    "denyWrite": [
+      "/tmp",
+      "/private/tmp",
+      "~/.npm",
+      "~/.claude",
+      ".git",
+      "scripts/sandbox"
+    ]
+  },
+  "network": {
+    "allowedDomains": [],
+    "deniedDomains": ["127.0.0.1:7749", "localhost:7749", "[::1]:7749"],
+    "allowLocalBinding": false,
+    "allowUnixSockets": [],
+    "allowAllUnixSockets": false
+  },
+  "allowPty": true,
+  "allowAppleEvents": false,
+  "enableWeakerNetworkIsolation": false,
+  "enableWeakerNestedSandbox": false
+}

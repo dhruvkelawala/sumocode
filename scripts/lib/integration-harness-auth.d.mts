@@ -14,4 +14,5 @@ interface AuthenticatedSpawnRegistration extends SpawnRegistrationTuple {
 }
 
 export function signSpawnRegistration(registration: SpawnRegistrationTuple, runId: string, signingKey: BinaryLike | KeyObject): string;
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- This predicate validates untrusted manifest/owner-state inputs; narrowing its parameters would hide that boundary.
 export function spawnRegistrationHmacIsValid(registration: AuthenticatedSpawnRegistration | null | undefined, runId: unknown, signingKey: unknown): boolean;

@@ -64,11 +64,12 @@ interface GroupRegistration {
 }
 
 interface ReapOptions {
+	// oxlint-disable-next-line anti-slop/no-unknown-returns -- Injected census output is untrusted; the reaper validates the complete table before permitting signals.
 	readProcessTable?: () => unknown;
 	currentPgid?: number;
 	readProcessStart?: (pid: number) => string | undefined;
 	kill?: SignalProcess;
-	wait?: () => Promise<unknown>;
+	wait?: () => Promise<void | boolean>;
 }
 
 type ReapResult =
@@ -82,7 +83,7 @@ interface FixOptions {
 	readRows?: () => ProcessRow[];
 	currentPgid?: number;
 	kill?: SignalProcess;
-	wait?: () => Promise<unknown>;
+	wait?: () => Promise<void | boolean>;
 }
 
 interface FixReport {

@@ -390,6 +390,23 @@ describe("RpcPromptScheduler auto delivery", () => {
 		expect(decideDelivery).toHaveBeenLastCalledWith("use the gh CLI", undefined);
 	});
 
+	it("judges a message held by compaction once compaction ends, against the agent's state then", async () => {
+		let compacting = true;
+		let busy = false;
+		const decideDelivery = vi.fn(async (): Promise<RpcPromptDeliveryMode> => "followUp");
+		const sendPrompt = vi.fn(async () => undefined);
+		const scheduler = createRpcPromptScheduler({ getCompacting: () => compacting, getBusy: () => busy, decideDelivery, sendPrompt });
+
+		await scheduler.submit("after that, open a PR", { delivery: "auto" });
+		expect(scheduler.getSnapshot().localQueue).toEqual([{ text: "after that, open a PR", delivery: "auto" }]);
+		compacting = false;
+		busy = true;
+		scheduler.handleAgentEvent({ type: "compaction_end" });
+		await flush();
+		await flush();
+		expect(sendPrompt.mock.calls).toEqual([["after that, open a PR", { streamingBehavior: "followUp" }]]);
+	});
+
 	it("steers when the decider rejects", async () => {
 		const sendPrompt = vi.fn(async () => undefined);
 		const scheduler = createRpcPromptScheduler({

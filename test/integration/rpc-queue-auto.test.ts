@@ -129,7 +129,7 @@ describe("RPC /queue auto", () => {
 		app = booted.app;
 
 		app.sendInput(`/queue auto${ENTER}`);
-		await waitForScreen(app, (screen) => screen.text.includes("auto needs TYPESAFE_API_KEY · steering"), { cols: COLS, rows: ROWS, timeoutMs: 5_000 });
+		await waitForScreen(app, (screen) => screen.text.includes("no TYPESAFE_API_KEY · still steer"), { cols: COLS, rows: ROWS, timeoutMs: 5_000 });
 		app.sendInput(`prompt A${ENTER}`);
 		await app.waitForOutput("MEDITATING", 5_000);
 		app.sendInput(`after that, open a PR${ENTER}`);

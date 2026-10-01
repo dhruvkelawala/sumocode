@@ -15,8 +15,8 @@ landed between the original scaffold and this release.
   classifier picks steer or follow-up for each message sent while the agent is
   busy. The message and the prompt that started the run go to TypeSafe; Jev
   must be confident to choose follow-up, and anything else, including a
-  missing `TYPESAFE_API_KEY`, a timeout, or an error, steers as before. Auto is
-  opt-in per session, and the delivery toggle key leaves it for `steer`.
+  timeout or an error, steers. Without `TYPESAFE_API_KEY`, `/queue auto` keeps
+  the current mode and says so. Auto is opt-in per session, and the delivery toggle key leaves it for `steer`.
   `TYPESAFE_BASE_URL` overrides the API root, as in TypeSafe's SDKs. The
   classifier call lives in a reusable `judgeChoice` primitive (`src/judgment.ts`).
   #615

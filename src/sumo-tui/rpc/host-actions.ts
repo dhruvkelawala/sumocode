@@ -740,10 +740,9 @@ export class RpcHostActions {
 	}
 
 	private setQueueDeliveryMode(mode: RpcQueueMode): void {
-		// Without a key auto could only ever steer, so select steer and say why.
+		// Without a key auto is unavailable: keep the current selection and name it.
 		if (mode === "auto" && !this.autoDeliveryAvailable) {
-			this.onStateChange(this.stateStore.setPromptDeliveryMode("steer"));
-			notify(this.notifications, "auto needs TYPESAFE_API_KEY · steering", "warning");
+			notify(this.notifications, `no TYPESAFE_API_KEY · still ${RPC_PROMPT_DELIVERY_LABELS[this.currentQueueDeliveryMode()]}`, "warning");
 			return;
 		}
 		this.onStateChange(this.stateStore.setPromptDeliveryMode(mode));

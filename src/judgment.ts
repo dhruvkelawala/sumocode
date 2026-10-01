@@ -57,7 +57,7 @@ export function typesafeChoiceClassifier(apiKey: string, baseUrl = TYPESAFE_DEFA
 			method: "POST",
 			signal,
 			headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-			body: JSON.stringify({ model: "jev-latest", state, questions: { answer: { type: "choice", ...question } } }),
+			body: JSON.stringify({ model: "jev-latest", state, questions: { answer: { ...question, type: "choice" } } }),
 		});
 		if (!response.ok) return undefined;
 		let body: unknown;

@@ -1,0 +1,29 @@
+
+ RUN  v4.1.11 /private/tmp/sumocode-main-baseline
+
+ ❯ src/sumo-tui/rpc/prompt-scheduler.test.ts (15 tests | 1 failed) 7ms
+     × judges a message typed after an idle prompt is sent but before Pi reports agent_start 2ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/sumo-tui/rpc/prompt-scheduler.test.ts > RpcPromptScheduler auto delivery > judges a message typed after an idle prompt is sent but before Pi reports agent_start
+AssertionError: expected "vi.fn()" to be called with arguments: [ 'after that, open a PR', …(1) ]
+
+Number of calls: 0
+
+ ❯ src/sumo-tui/rpc/prompt-scheduler.test.ts:243:26
+    241|   await flush();
+    242|
+    243|   expect(decideDelivery).toHaveBeenCalledWith("after that, open a PR",…
+       |                          ^
+    244|   expect(sendPrompt.mock.calls.at(-1)).toEqual(["after that, open a PR…
+    245|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 14 passed (15)
+   Start at  13:38:26
+   Duration  162ms (transform 18ms, setup 0ms, import 25ms, tests 7ms, environment 0ms)
+

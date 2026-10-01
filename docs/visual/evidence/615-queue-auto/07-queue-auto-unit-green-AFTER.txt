@@ -1,0 +1,10 @@
+$ vitest run src/judgment.test.ts src/sumo-tui/rpc/auto-delivery.test.ts src/sumo-tui/rpc/prompt-scheduler.test.ts src/sumo-tui/rpc/host-actions.test.ts src/sumo-tui/rpc/host.test.ts
+
+ RUN  v4.1.11 /Users/sumodeus/code/sumocode.sumo-worktrees/sumo__wt-mupgg0i9
+
+
+ Test Files  5 passed (5)
+      Tests  250 passed (250)
+   Start at  14:11:49
+   Duration  942ms (transform 747ms, setup 0ms, import 1.38s, tests 484ms, environment 0ms)
+

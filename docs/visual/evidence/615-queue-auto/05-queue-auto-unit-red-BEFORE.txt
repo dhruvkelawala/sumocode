@@ -1,0 +1,222 @@
+
+ RUN  v4.1.11 /private/tmp/sumocode-main-baseline
+
+ ❯ src/sumo-tui/rpc/auto-delivery.test.ts (0 test)
+ ❯ src/judgment.test.ts (0 test)
+ ❯ src/sumo-tui/rpc/prompt-scheduler.test.ts (15 tests | 6 failed) 12ms
+     × lets the decider pick a busy submission's delivery, with the run's prompt as context 3ms
+     × keeps later submissions behind a message whose delivery is still being decided 0ms
+     × skips the decider when idle, for commands, and when no decider is wired 1ms
+     × judges a message typed after an idle prompt is sent but before Pi reports agent_start 0ms
+     × steers when the decider rejects 0ms
+     × drops the send when the queue is restored to the editor while Jev decides 0ms
+ ❯ src/sumo-tui/rpc/host-actions.test.ts (90 tests | 2 failed) 347ms
+     × changes the session queue delivery mode through /queue 4ms
+     × selects auto through /queue auto only, and says when Jev is unreachable 0ms
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/judgment.test.ts [ src/judgment.test.ts ]
+Error: Cannot find module './judgment.js' imported from /private/tmp/sumocode-main-baseline/src/judgment.test.ts
+ ❯ src/judgment.test.ts:2:1
+      1| import { describe, expect, it } from "vitest";
+      2| import { judgeChoice, typesafeChoiceClassifier, type ChoiceClassifier,…
+       | ^
+      3|
+      4| const question: ChoiceQuestion<"yes" | "no"> = {
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/10]⎯
+
+ FAIL  src/sumo-tui/rpc/auto-delivery.test.ts [ src/sumo-tui/rpc/auto-delivery.test.ts ]
+Error: Cannot find module './auto-delivery.js' imported from /private/tmp/sumocode-main-baseline/src/sumo-tui/rpc/auto-delivery.test.ts
+ ❯ src/sumo-tui/rpc/auto-delivery.test.ts:3:1
+      1| import { describe, expect, it, vi } from "vitest";
+      2| import type { ChoiceClassifier } from "../../judgment.js";
+      3| import { createJevDeliveryDecider } from "./auto-delivery.js";
+       | ^
+      4|
+      5| function jevAnswering(choice: string, confidence: number): ReturnType<…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/10]⎯
+
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 8 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/sumo-tui/rpc/host-actions.test.ts > RpcHostActions > changes the session queue delivery mode through /queue
+AssertionError: expected { …(2) } to deeply equal { …(2) }
+
+- Expected
++ Received
+
+  {
+    "level": "warning",
+-   "message": "queue mode takes steer, follow-up, or auto",
++   "message": "queue mode takes steer or follow-up",
+  }
+
+ ❯ src/sumo-tui/rpc/host-actions.test.ts:594:32
+    592|   await expect(actions.handleSubmittedText("/queue sideways")).resolve…
+    593|   expect(stateChanges).toHaveLength(3);
+    594|   expect(notifications.at(-1)).toEqual({ message: "queue mode takes st…
+       |                                ^
+    595|  });
+    596|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/10]⎯
+
+ FAIL  src/sumo-tui/rpc/host-actions.test.ts > RpcHostActions > selects auto through /queue auto only, and says when Jev is unreachable
+AssertionError: expected undefined to be 'auto' // Object.is equality
+
+- Expected:
+"auto"
+
++ Received:
+undefined
+
+ ❯ src/sumo-tui/rpc/host-actions.test.ts:600:61
+    598|   const available = setup({ autoDeliveryAvailable: true });
+    599|   await available.actions.handleSubmittedText("/queue auto");
+    600|   expect(available.stateChanges.at(-1)?.promptDeliveryMode).toBe("auto…
+       |                                                             ^
+    601|   expect(available.notifications).toEqual([{ message: "Queue mode: aut…
+    602|   // The toggle key leaves auto for steer; it never cycles into auto.
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/10]⎯
+
+ FAIL  src/sumo-tui/rpc/prompt-scheduler.test.ts > RpcPromptScheduler auto delivery > lets the decider pick a busy submission's delivery, with the run's prompt as context
+AssertionError: expected 'sent' to be 'queued' // Object.is equality
+
+Expected: "queued"
+Received: "sent"
+
+ ❯ src/sumo-tui/rpc/prompt-scheduler.test.ts:177:87
+    175|   await scheduler.submit("refactor the scheduler", { delivery: "auto" …
+    176|   busy = true;
+    177|   await expect(scheduler.submit("after that, look at issue 412", { del…
+       |                                                                                       ^
+    178|   expect(scheduler.getSnapshot().queuedMessages).toEqual(["after that,…
+    179|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/10]⎯
+
+ FAIL  src/sumo-tui/rpc/prompt-scheduler.test.ts > RpcPromptScheduler auto delivery > keeps later submissions behind a message whose delivery is still being decided
+AssertionError: expected 'sent' to be 'queued' // Object.is equality
+
+Expected: "queued"
+Received: "sent"
+
+ ❯ src/sumo-tui/rpc/prompt-scheduler.test.ts:202:65
+    200|
+    201|   await scheduler.submit("first", { delivery: "auto" });
+    202|   await expect(scheduler.submit("second", { delivery: "steer" })).reso…
+       |                                                                 ^
+    203|   expect(sent).toEqual([]);
+    204|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/10]⎯
+
+ FAIL  src/sumo-tui/rpc/prompt-scheduler.test.ts > RpcPromptScheduler auto delivery > skips the decider when idle, for commands, and when no decider is wired
+AssertionError: expected [ [ 'start', …(1) ], …(2) ] to deeply equal [ [ 'start', …(1) ], …(2) ]
+
+- Expected
++ Received
+
+  [
+    [
+      "start",
+      {
+-       "streamingBehavior": "steer",
++       "streamingBehavior": "auto",
+      },
+    ],
+    [
+      "/skill:review",
+      {
+-       "streamingBehavior": "steer",
++       "streamingBehavior": "auto",
+      },
+    ],
+    [
+      "no key",
+      {
+-       "streamingBehavior": "steer",
++       "streamingBehavior": "auto",
+      },
+    ],
+  ]
+
+ ❯ src/sumo-tui/rpc/prompt-scheduler.test.ts:226:33
+    224|
+    225|   expect(decideDelivery).not.toHaveBeenCalled();
+    226|   expect(sendPrompt.mock.calls).toEqual([
+       |                                 ^
+    227|    ["start", { streamingBehavior: "steer" }],
+    228|    ["/skill:review", { streamingBehavior: "steer" }],
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/10]⎯
+
+ FAIL  src/sumo-tui/rpc/prompt-scheduler.test.ts > RpcPromptScheduler auto delivery > judges a message typed after an idle prompt is sent but before Pi reports agent_start
+AssertionError: expected "vi.fn()" to be called with arguments: [ 'after that, open a PR', …(1) ]
+
+Number of calls: 0
+
+ ❯ src/sumo-tui/rpc/prompt-scheduler.test.ts:243:26
+    241|   await flush();
+    242|
+    243|   expect(decideDelivery).toHaveBeenCalledWith("after that, open a PR",…
+       |                          ^
+    244|   expect(sendPrompt.mock.calls.at(-1)).toEqual(["after that, open a PR…
+    245|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/10]⎯
+
+ FAIL  src/sumo-tui/rpc/prompt-scheduler.test.ts > RpcPromptScheduler auto delivery > steers when the decider rejects
+AssertionError: expected [ [ 'fix it', …(1) ] ] to deeply equal [ [ 'fix it', …(1) ] ]
+
+- Expected
++ Received
+
+  [
+    [
+      "fix it",
+      {
+-       "streamingBehavior": "steer",
++       "streamingBehavior": "auto",
+      },
+    ],
+  ]
+
+ ❯ src/sumo-tui/rpc/prompt-scheduler.test.ts:279:33
+    277|   await flush();
+    278|   await flush();
+    279|   expect(sendPrompt.mock.calls).toEqual([["fix it", { streamingBehavio…
+       |                                 ^
+    280|  });
+    281|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/10]⎯
+
+ FAIL  src/sumo-tui/rpc/prompt-scheduler.test.ts > RpcPromptScheduler auto delivery > drops the send when the queue is restored to the editor while Jev decides
+AssertionError: expected '' to be 'maybe later' // Object.is equality
+
+- Expected
++ Received
+
+- maybe later
+
+ ❯ src/sumo-tui/rpc/prompt-scheduler.test.ts:288:41
+    286|
+    287|   await scheduler.submit("maybe later", { delivery: "auto" });
+    288|   expect(scheduler.restoreAll("").text).toBe("maybe later");
+       |                                         ^
+    289|   decision.resolve("followUp");
+    290|   await flush();
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/10]⎯
+
+
+ Test Files  4 failed (4)
+      Tests  8 failed | 97 passed (105)
+   Start at  13:38:17
+   Duration  1.26s (transform 383ms, setup 0ms, import 808ms, tests 359ms, environment 0ms)
+

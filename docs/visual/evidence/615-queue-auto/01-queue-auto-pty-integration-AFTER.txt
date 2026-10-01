@@ -1,0 +1,15 @@
+$ pnpm vitest run test/integration/rpc-queue-auto.test.ts --reporter=verbose   # HEAD 10e242ac, clean env
+$ vitest run test/integration/rpc-queue-auto.test.ts --reporter=verbose
+
+ RUN  v4.1.11 /Users/sumodeus/code/sumocode.sumo-worktrees/sumo__wt-mupgg0i9
+
+ ✓ test/integration/rpc-queue-auto.test.ts > RPC /queue auto > lets Jev pick each busy message's delivery, with the run's prompt as context 1447ms
+[focused harness] zero-survivor audit: 0 survivors across 2 registered process group(s)
+ ✓ test/integration/rpc-queue-auto.test.ts > RPC /queue auto > warns without TYPESAFE_API_KEY and keeps steering 1085ms
+
+ Test Files  1 passed (1)
+      Tests  2 passed (2)
+   Start at  14:11:44
+   Duration  2.81s (transform 50ms, setup 0ms, import 81ms, tests 2.61s, environment 0ms)
+
+exit=0

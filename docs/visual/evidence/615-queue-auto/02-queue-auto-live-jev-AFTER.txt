@@ -1,0 +1,11 @@
+$ node_modules/.bin/jiti 02-queue-auto-live-decider.ts   # from the repo root at HEAD 10e242ac, against api.typesafe.ai
+current_task: Refactor prompt-scheduler.ts to extract the compaction queue
+live jev               steer       274ms  use a Map instead of an array
+live jev               steer       294ms  wait, don't touch host.ts
+live jev               steer       377ms  make sure it handles attachments too
+live jev               followUp    223ms  after that, look at issue 412
+live jev               followUp    211ms  then open a PR
+live jev               steer       237ms  and run the tests
+invalid key (401)      steer       174ms  after that, look at issue 412
+no answer (timeout)    steer      1502ms  after that, look at issue 412
+exit=0

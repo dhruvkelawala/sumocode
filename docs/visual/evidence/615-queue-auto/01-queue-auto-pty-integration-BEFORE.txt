@@ -1,0 +1,42 @@
+
+ RUN  v4.1.11 /private/tmp/sumocode-base-queue-auto
+
+[focused harness] zero-survivor audit: 0 survivors across 2 registered process group(s)
+ ❯ test/integration/rpc-queue-auto.test.ts (2 tests | 2 failed) 14683ms
+     × lets Jev pick each busy message's delivery, with the run's prompt as context 8404ms
+     × warns without TYPESAFE_API_KEY and keeps steering 6200ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  test/integration/rpc-queue-auto.test.ts > RPC /queue auto > lets Jev pick each busy message's delivery, with the run's prompt as context
+WaitForScreenTimeoutError: waitForScreen: predicate did not hold for two consecutive observations within 5000ms. Evidence: /var/folders/gx/hrgjtdbj6mg775bn0yy842yr0000gn/T/sumocode-harness-v2-focused-nIlzy9/evidence/worker-43068/001-sumocode.sh
+ ❯ waitForScreen test/integration/spawn-pi-pty.ts:544:10
+    542|   if (Date.now() >= deadline) {
+    543|    const evidenceDir = await pty.captureEvidence(snapshot.text);
+    544|    throw new WaitForScreenTimeoutError(timeoutMs, evidenceDir);
+       |          ^
+    545|   }
+    546|   await new Promise<void>((resolve) => setTimeout(resolve, pollInterva…
+ ❯ test/integration/rpc-queue-auto.test.ts:103:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  test/integration/rpc-queue-auto.test.ts > RPC /queue auto > warns without TYPESAFE_API_KEY and keeps steering
+WaitForScreenTimeoutError: waitForScreen: predicate did not hold for two consecutive observations within 5000ms. Evidence: /var/folders/gx/hrgjtdbj6mg775bn0yy842yr0000gn/T/sumocode-harness-v2-focused-nIlzy9/evidence/worker-43068/002-sumocode.sh
+ ❯ waitForScreen test/integration/spawn-pi-pty.ts:544:10
+    542|   if (Date.now() >= deadline) {
+    543|    const evidenceDir = await pty.captureEvidence(snapshot.text);
+    544|    throw new WaitForScreenTimeoutError(timeoutMs, evidenceDir);
+       |          ^
+    545|   }
+    546|   await new Promise<void>((resolve) => setTimeout(resolve, pollInterva…
+ ❯ test/integration/rpc-queue-auto.test.ts:132:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  2 failed (2)
+   Start at  13:38:34
+   Duration  14.96s (transform 69ms, setup 0ms, import 112ms, tests 14.68s, environment 0ms)
+

@@ -209,9 +209,9 @@ export class RpcShellAdapter {
 		this.selection = new SelectionController({
 			readBuffer: () => this.renderer.getLastFrame(),
 			onLinkActivated: (url) => {
-				void (options.openLink ?? openWebLink)(url).then((opened) => {
+				void (options.openLink ?? openWebLink)(url).catch(() => false).then((opened) => {
 					if (!opened) this.notifications?.notify?.("unable to open link in the browser", "error");
-				}).catch(() => this.notifications?.notify?.("unable to open link in the browser", "error"));
+				});
 			},
 			emitClipboard: (sequence) => {
 				options.terminal.writeClipboardSequence?.(sequence);

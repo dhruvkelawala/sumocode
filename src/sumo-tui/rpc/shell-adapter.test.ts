@@ -776,8 +776,7 @@ describe("RpcShellAdapter mouse drag-select + OSC52 copy", () => {
 
 			openLink.mockResolvedValueOnce(false);
 			router.handleInput(sgr(0, start.col, "M") + sgr(0, start.col, "m"));
-			await Promise.resolve();
-			expect(notifications.notifications).toContainEqual({ message: "unable to open link in the browser", level: "error" });
+			await vi.waitFor(() => expect(notifications.notifications).toEqual([{ message: "unable to open link in the browser", level: "error" }]));
 
 			openLink.mockRejectedValueOnce(new Error("browser bridge unavailable"));
 			router.handleInput(sgr(0, start.col, "M") + sgr(0, start.col, "m"));

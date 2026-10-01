@@ -113,7 +113,6 @@ export interface ThemeChrome {
 
 	/** Inactive tab marker glyph. */
 	tabInactive: string;
-
 }
 
 /** Cathedral chrome — the baseline structural vocabulary. Spread this in new themes. */

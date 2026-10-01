@@ -5,7 +5,7 @@
  * lifted-bg panel painted by `wrapPanelRow`, a floral title `\u2728  TITLE  \u2728`,
  * a `splitRule` divider, focused / unfocused marker glyphs, and a centered
  * footer hint. This module is the single source of truth for those primitives
- * so any new Cathedral modal (Memory Scriptorium etc.) reuses the same look
+ * so any new Cathedral modal reuses the same look
  * without each module re-implementing background painting.
  *
  * The painting is intentionally simple:

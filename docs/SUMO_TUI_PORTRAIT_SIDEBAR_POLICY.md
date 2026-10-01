@@ -19,7 +19,7 @@ In practice:
 - The sidebar is visible only when the runtime policy says the wide layout is available: currently `W >= 120`, the session has messages, and the user has not hidden it.
 - Portrait and other narrow layouts are chat-first, full-width surfaces.
 - Project/branch/context hints move to the hint row/footer when the sidebar is hidden.
-- `/sumo:memory`, command palette entries, and future shortcuts remain the access path for rich registry detail while portrait is collapsed.
+- The command palette remains available when portrait is collapsed; memory support is retired for v0.8.
 
 ## Options evaluated
 

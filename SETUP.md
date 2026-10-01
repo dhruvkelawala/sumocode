@@ -1,6 +1,6 @@
 # SumoCode setup and durable state
 
-Choose the native release or portable source setup in [README.md](README.md#install). Source development commands run from the repository root; see [DEV_LOOP.md](DEV_LOOP.md). The public MIT repository contains product code. Persona, memory, settings, MCP and personal skills belong in the separate private sumocode-config repository and the user's Pi agent directory.
+Choose the native release or portable source setup in [README.md](README.md#install). Source development commands run from the repository root; see [DEV_LOOP.md](DEV_LOOP.md). The public MIT repository contains product code. Persona, settings, MCP and personal skills belong in the separate private sumocode-config repository and the user's Pi agent directory.
 
 ## Authentication presence
 
@@ -17,6 +17,8 @@ fi
 This checks the environment variable only; it does not test credentials or inspect Pi's saved authentication.
 
 ## State ownership
+
+SumoCode no longer connects to Remnic or reads its auth token. Removing support does not uninstall an independently managed Remnic daemon or delete private memory data; persona remains Pi-owned through `~/.pi/agent/APPEND_SYSTEM.md`.
 
 The agent directory defaults to ~/.pi/agent and may be selected by `PI_CODING_AGENT_DIR`. These are user-owned runtime data, never source files to commit.
 

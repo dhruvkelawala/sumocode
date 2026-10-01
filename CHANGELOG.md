@@ -10,6 +10,9 @@ landed between the original scaffold and this release.
 
 ## [Unreleased]
 
+### Removed
+- Memory/Remnic support: extraction, sidebar memory, Memory Scriptorium, `/sumo:memory`, palette entries, and the `learning` / `INSCRIBING` indicator. Persona and `APPEND_SYSTEM.md` support are unchanged; existing private memory data is untouched.
+
 ## [0.7.6] — 2026-09-30
 
 The Herdr sidebar can show what each SumoCode agent is working on.

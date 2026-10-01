@@ -47,7 +47,7 @@ describe("HERDR_THEME", () => {
 		});
 	});
 
-	it("keeps the five state colours distinct", () => {
+	it("keeps the four state colours distinct", () => {
 		const stateValues = Object.values(colors.states);
 		expect(new Set(stateValues).size).toBe(stateValues.length);
 	});

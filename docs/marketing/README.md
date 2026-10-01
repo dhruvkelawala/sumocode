@@ -1,3 +1,5 @@
+> **Status: historical/superseded as of 2026-10-01** — [Current product](../../README.md). These v0.3 announce assets are preserved history, not v0.8 feature claims. Memory support and its Bible source/generator have been removed; do not regenerate or reuse `03-memory-scriptorium.png` for current releases.
+
 # Marketing assets
 
 Hero screenshots for the v0.3 announce. All five are sourced from the V2

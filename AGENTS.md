@@ -6,7 +6,7 @@ This file is the canonical instruction file for AI coding agents working in this
 
 SumoCode is a **Pi extension** for `@earendil-works/pi-coding-agent`. It owns the UX layer — splash, top chrome, footer, sidebar, working indicator, slash commands, theme, retained terminal renderer — while Pi keeps the agent loop, LLM, sessions, MCP, skills, and provider/runtime machinery.
 
-User-specific state (persona, memory, settings, MCP, skills) lives in the separate private repo `sumocode-config` and is symlinked into `~/.pi/agent/`. **Never put user state in this repo.**
+User-specific state (persona, settings, MCP, skills) lives in the separate private repo `sumocode-config` and is symlinked into `~/.pi/agent/`. **Never put user state in this repo.**
 
 ## Non-negotiables
 
@@ -128,11 +128,11 @@ Read `docs/PI_TOOL_ARCHITECTURE.md` before adding, overriding, or intercepting t
 
 - `docs/ui/CATHEDRAL_UX_SPEC_V2.md`
 - `docs/ui/bible/*.html`
-- `docs/ui/bible/renders/*.png`
+- `docs/ui/bible/renders/` (generated PNG targets)
 - `docs/visual/parity/CONTRACT.md`
 - `docs/visual/parity/scenarios.json`
 
-Color and state tokens are centralized in `src/tokens.ts` (`CATHEDRAL_TOKENS`, `SUMOCODE_STATES`). Five preattentive states: `idle / thinking / tool / approval / learning`.
+Color and state tokens are centralized in `src/tokens.ts` (`CATHEDRAL_TOKENS`, `SUMOCODE_STATES`). Four preattentive states: `idle / thinking / tool / approval`. Memory/Remnic support is retired for v0.8; keep persona and Pi's `~/.pi/agent/APPEND_SYSTEM.md` handling independent.
 
 ### Do not hand-roll new ANSI for Cathedral surfaces
 
@@ -222,7 +222,7 @@ Required crops gate against committed approved runtime goldens. Bible diffs rema
 - Pi-bundled deps belong in `peerDependencies`, not `dependencies`. `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, and `typebox` are peer-only.
 - `ctx.ui.*` calls must happen inside an event handler (`session_start`, `message_start`, etc.). Calling them at module top level fires before Pi's TUI exists and is silently dropped.
 - Be TTY-defensive: guard interactive UI so `acpx pi`, `pi --print`, and `--mode rpc` keep working.
-- Voice is enforced by `src/voice.ts`. State labels are uppercase Cathedral verbs (`READY / MEDITATING / ILLUMINATING / DEFERRING / INSCRIBING`); other product copy is lowercase, terse, no exclamation marks, no apologies, no decorative emoji.
+- Voice is enforced by `src/voice.ts`. State labels are uppercase Cathedral verbs (`READY / MEDITATING / ILLUMINATING / DEFERRING`); other product copy is lowercase, terse, no exclamation marks, no apologies, no decorative emoji.
 - The reserved src/spike/ directory is for throwaway exploration. Do not import from `spike/` outside its own directory; promote a spike by moving it into a real module.
 
 ## Visual conventions
@@ -274,7 +274,7 @@ Reference exemplar: `~/.agent/diagrams/sumocode-bg-task-final-product.html` — 
 - `docs/SUMO_TUI_RENDER_PRIMITIVES.md` — typed render primitive contract.
 - `docs/SUMO_TUI_TEST_BACKEND.md` — headless retained-renderer test backend contract.
 - `docs/SUMO_TUI_TRANSCRIPT_MODEL.md` — structured transcript view-model contract.
-- `docs/cathedral/SCRIPTORIUM_CHROME.md` — shared modal painting contract; read this before adding any new Cathedral overlay (Divine Query / Approval / Memory Scriptorium share it).
+- `docs/cathedral/SCRIPTORIUM_CHROME.md` — shared modal painting contract; read this before adding any new Cathedral overlay (Divine Query and dormant Approval designs share it).
 - `docs/visual/parity/PORTRAIT_REVIEW.md` — portrait scene composition review.
 - `docs/visual/parity/FIXTURE_STATES_REVIEW.md` — fixture lane and deterministic state review.
 - `docs/prd.md` / `docs/prd.html` — historical product design; README.md describes the current product.

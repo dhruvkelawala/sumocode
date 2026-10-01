@@ -1,10 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { IDisposable, IEvent, IPty } from "node-pty";
 import { describe, expect, it } from "vitest";
+import { loadClaudeSubscriptions, resolveAccountsConfigPath } from "../../src/commands/accounts.js";
 import { createChildEvidenceContext, HARNESS_SIGNATURE, HARNESS_SIGNATURE_ENV_KEY, recordPtyExit, requireHarnessAuth, spawnSupervisedPty } from "./harness-supervisor.js";
 import { buildSpawnEnv, isUnexpectedPtyFailure, spawnPiPty, waitForScreenText, WaitForScreenTimeoutError, type SpawnPiPtyOptions } from "./spawn-pi-pty.js";
 
@@ -198,6 +199,100 @@ describe("buildSpawnEnv", () => {
 	});
 });
 
+describe("native fixture account-config isolation", () => {
+	it.each([
+		{ name: "absent ambient config", ambient: undefined, agentOverride: false, configOverride: false },
+		{ name: "hostile ambient config", ambient: "/outside/config", agentOverride: false, configOverride: false },
+		{ name: "effective owned agent override", ambient: "/outside/config", agentOverride: true, configOverride: false },
+		{ name: "deliberate separate owned config override", ambient: "/outside/config", agentOverride: true, configOverride: true },
+	])("contains $name after public evidence/auth construction", ({ ambient, agentOverride, configOverride }) => {
+		const root = mkdtempSync(join(tmpdir(), "sumocode-native-config-"));
+		const other = mkdtempSync(join(tmpdir(), "sumocode-native-config-other-"));
+		const parent = { HOME: "/Users/parent", SUMOCODE_CONFIG_DIR: ambient, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "test.sentinel", GIT_CONFIG_VALUE_0: "unchanged" };
+		const original = { ...parent };
+		const selectedAgent = agentOverride ? other : root;
+		const selectedConfig = join(configOverride ? root : selectedAgent, configOverride ? "deliberate-config" : "config");
+		try {
+			const overrides: NodeJS.ProcessEnv = { PI_BIN: "" };
+			if (agentOverride) overrides.PI_CODING_AGENT_DIR = other;
+			if (configOverride) overrides.SUMOCODE_CONFIG_DIR = selectedConfig;
+			const env = buildSpawnEnv(parent, overrides, { agentDir: root, roots: [root, other] });
+			const evidence = createChildEvidenceContext(["unused-native-config-probe"], env);
+			env.SUMO_TUI_DIAG_FILE = evidence.diagPath;
+			env[HARNESS_SIGNATURE_ENV_KEY] = HARNESS_SIGNATURE;
+			requireHarnessAuth(env);
+			expect(env.SUMOCODE_CONFIG_DIR).toBe(selectedConfig);
+			expect(env.PI_CODING_AGENT_DIR).toBe(selectedAgent);
+			expect(env.SUMOCODE_STATE_DIR).toBeUndefined();
+			expect(env.SUMO_TUI_DIAG_FILE).toBe(join(evidence.evidenceDir, "diagnostics-live.jsonl"));
+			expect(env.TMPDIR).toBe(join(resolve(evidence.evidenceDir, "../../.."), "tmp"));
+			expect(env.HOME).toBe(parent.HOME);
+			expect(env.GIT_CONFIG_COUNT).toBeUndefined();
+			expect(env.GIT_CONFIG_KEY_0).toBeUndefined();
+			expect(env.GIT_CONFIG_VALUE_0).toBeUndefined();
+			expect(parent).toEqual(original);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(other, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps public accounts fallback and managed-link creation within the selected owned agent", () => {
+		const root = mkdtempSync(join(tmpdir(), "sumocode-native-config-"));
+		const other = mkdtempSync(join(tmpdir(), "sumocode-native-config-other-"));
+		try {
+			const env = buildSpawnEnv({ HOME: "/unused-synthetic-home", SUMOCODE_CONFIG_DIR: "/outside/config" }, { PI_CODING_AGENT_DIR: other }, { agentDir: root, roots: [root, other] });
+			// Refuse before calling the real loader if the regression could reach ambient config.
+			const configDir = join(other, "config");
+			expect(env.SUMOCODE_CONFIG_DIR).toBe(configDir);
+			const deps = { env, homeDir: env.HOME };
+			const fallback = [{ provider: "anthropic", index: 2, label: "owned fallback" }];
+			const managed = [{ provider: "anthropic", index: 3, label: "owned managed" }];
+			const target = resolveAccountsConfigPath(deps);
+			expect(target).toBe(join(other, "claude-accounts.json"));
+			writeFileSync(target, JSON.stringify({ subscriptions: fallback }), { mode: 0o600 });
+			expect(loadClaudeSubscriptions(deps)).toEqual(fallback);
+			mkdirSync(configDir, { mode: 0o700 });
+			const source = join(configDir, "claude-accounts.json");
+			writeFileSync(source, JSON.stringify({ subscriptions: managed }), { mode: 0o600 });
+			expect(loadClaudeSubscriptions(deps)).toEqual(managed);
+			expect(readlinkSync(target)).toBe(source);
+			expect(realpathSync(target)).toBe(join(realpathSync(other), "config", "claude-accounts.json"));
+			expect(statSync(configDir).mode & 0o777).toBe(0o700);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(other, { recursive: true, force: true });
+		}
+	});
+
+	it.each([false, true])("rejects an escaped default config subdir (dangling=%s)", (dangling) => {
+		const root = mkdtempSync(join(tmpdir(), "sumocode-native-config-"));
+		const outside = mkdtempSync(join(tmpdir(), "sumocode-native-config-outside-"));
+		try {
+			symlinkSync(dangling ? join(outside, "missing") : outside, join(root, "config"));
+			expect(() => buildSpawnEnv({}, undefined, { agentDir: root, roots: [root] })).toThrow(/native fixture SUMOCODE_CONFIG_DIR/);
+			expect(() => buildSpawnEnv({}, { SUMOCODE_CONFIG_DIR: `${root}/config/../accounts` }, { agentDir: root, roots: [root] })).toThrow(/native fixture SUMOCODE_CONFIG_DIR contains traversal/);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(outside, { recursive: true, force: true });
+		}
+	});
+
+	it("leaves non-native config omission, ambient scrubbing and unvalidated explicit overrides unchanged", () => {
+		const parent = { HOME: "/Users/parent", SUMOCODE_CONFIG_DIR: "/outside/config" };
+		const omitted = buildSpawnEnv(parent, undefined);
+		expect(omitted.SUMOCODE_CONFIG_DIR).toBeUndefined();
+		expect(omitted.PI_CODING_AGENT_DIR).toBeUndefined();
+		expect(omitted.SUMOCODE_STATE_DIR).toBeUndefined();
+		expect(omitted.SUMO_TUI_DIAG_FILE).toBeUndefined();
+		for (const config of ["", "relative", "/outside/deliberate-config"]) {
+			const env = buildSpawnEnv(parent, { SUMOCODE_CONFIG_DIR: config });
+			expect(env.SUMOCODE_CONFIG_DIR).toBe(config);
+			expect(env.HOME).toBe(parent.HOME);
+		}
+	});
+});
+
 describe("native fixture environment isolation", () => {
 	it("defaults final child agent and diagnostics paths without changing HOME or the parent", () => {
 		const root = mkdtempSync(join(tmpdir(), "sumocode-native-env-"));
@@ -235,6 +330,7 @@ describe("native fixture environment isolation", () => {
 			env.SUMO_TUI_DIAG_FILE = evidence.diagPath;
 			env[HARNESS_SIGNATURE_ENV_KEY] = HARNESS_SIGNATURE;
 			requireHarnessAuth(env);
+			expect(env.SUMOCODE_CONFIG_DIR).toBe(join(root, "config"));
 			expect(env.PI_CODING_AGENT_DIR).toBe(root);
 			expect(env.SUMOCODE_STATE_DIR).toBeUndefined();
 			expect(env.SUMO_TUI_DIAG_FILE).toBe(join(evidence.evidenceDir, "diagnostics-live.jsonl"));

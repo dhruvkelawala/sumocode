@@ -364,6 +364,26 @@ describe("RpcPromptScheduler auto delivery", () => {
 		expect(sendPrompt.mock.calls.at(-1)).toEqual(["after that, C", { streamingBehavior: "followUp" }]);
 	});
 
+	it("stops counting a run as starting when Pi reports an input hook handled the prompt", async () => {
+		const scheduler = createRpcPromptScheduler({ getBusy: () => false, sendPrompt: async () => "handled" });
+		await scheduler.submit("handled by an extension", { delivery: "auto" });
+		await flush();
+		expect(scheduler.getSnapshot().busy).toBe(false);
+	});
+
+	it("leaves the task unknown when the run opens with an image and no text", async () => {
+		const decideDelivery = vi.fn(async (): Promise<RpcPromptDeliveryMode> => "steer");
+		const scheduler = createRpcPromptScheduler({ getBusy: () => true, decideDelivery, sendPrompt: async () => undefined });
+		scheduler.handleAgentEvent({ type: "agent_start" });
+		scheduler.handleAgentEvent({ type: "message_start", message: { role: "user", content: [{ type: "image" }] } });
+		// A later user message in the same run is a steer or follow-up, never the task.
+		scheduler.handleAgentEvent({ type: "message_start", message: { role: "user", content: "after that, open a PR" } });
+		await scheduler.submit("use the gh CLI", { delivery: "auto" });
+		await flush();
+		await flush();
+		expect(decideDelivery).toHaveBeenLastCalledWith("use the gh CLI", undefined);
+	});
+
 	it("steers when the decider rejects", async () => {
 		const sendPrompt = vi.fn(async () => undefined);
 		const scheduler = createRpcPromptScheduler({

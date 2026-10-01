@@ -67,7 +67,8 @@ export interface RpcPromptScheduler {
 
 export interface RpcPromptSchedulerOptions {
 	readonly sessionId?: string;
-	readonly sendPrompt: (message: string, delivery: RpcPromptDelivery) => Promise<void>;
+	/** Resolves with Pi's prompt disposition when the response carries one. */
+	readonly sendPrompt: (message: string, delivery: RpcPromptDelivery) => Promise<string | void>;
 	readonly getBusy?: () => boolean;
 	readonly getCompacting?: () => boolean;
 	readonly handleHostCommand?: (message: string) => boolean | Promise<boolean>;
@@ -161,7 +162,8 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 			// follow-ups continue the same run, and a run that restarts emits agent_start again.
 			const task = userMessageText(event.message);
 			if (task !== undefined) {
-				this.currentTask = task;
+				// An opener without text (an image alone) leaves the task unknown rather than empty.
+				this.currentTask = task.length > 0 ? task : undefined;
 				this.runTaskPending = false;
 			}
 		}
@@ -254,7 +256,9 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 		this.dispatchCount += 1;
 		this.options.onDispatchStart?.(entry.text);
 		try {
-			await this.options.sendPrompt(entry.text, { streamingBehavior: entry.delivery });
+			const disposition = await this.options.sendPrompt(entry.text, { streamingBehavior: entry.delivery });
+			// An input hook that handled the prompt started no run: no agent_start will clear the latch.
+			if (disposition === "handled") this.awaitingRunStart = false;
 			return generation === this.generation;
 		} catch (error) {
 			// A failed send started no run, or its agent_start will say otherwise.

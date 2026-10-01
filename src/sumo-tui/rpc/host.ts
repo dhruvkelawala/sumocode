@@ -451,7 +451,7 @@ export interface RpcPromptSendOptions {
 	readonly images?: ImageContent[];
 }
 
-export async function sendRpcPrompt(message: string, options: RpcPromptSendOptions): Promise<void> {
+export async function sendRpcPrompt(message: string, options: RpcPromptSendOptions): Promise<string | undefined> {
 	// Pi 0.85.1+ clear_queue returns text only. Image prompts must omit
 	// streamingBehavior so Pi atomically rejects an idle-to-busy race instead
 	// of creating an attachment queue entry SumoCode cannot recover.
@@ -468,7 +468,7 @@ export async function sendRpcPrompt(message: string, options: RpcPromptSendOptio
 			throw new RpcPromptPreflightRejection(error instanceof Error ? error.message : String(error));
 		}
 	}
-	responseData(response, "prompt");
+	return responseData(response, "prompt")?.disposition;
 }
 
 interface DirectBashCompletion {

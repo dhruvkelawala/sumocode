@@ -55,7 +55,7 @@ describe("theme registry", () => {
 		expect(activeThemeColors().states.thinking).toBe("#F0F0F0");
 		expect(activeThemeColors().states.tool).toBe("#00E5FF");
 		expect(activeThemeColors().states.approval).toBe("#FF5500");
-		expect(activeThemeColors().states.learning).toBe("#FF66FF");
+		expect(activeThemeColors().states.tool).toBe("#00E5FF");
 	});
 
 	it("swaps active colors when switching to Obsidian", () => {

@@ -23,10 +23,9 @@ export const AMBER_CRT_INDICATOR_INTERVAL_MS = 90;
  *     ("SumoCode v0.1 — Amber CRT")
  *
  * Mood: warm dark brown-black CRT chassis with classic amber P3 phosphor
- * text, sharp 90-degree corners, double-line ASCII chrome, fleur-de-lis
- * memory bullets carried over from Cathedral. The five preattentive states
- * map to canonical CRT phosphor colours (green / white / cyan / red /
- * magenta) so they stay semantically distinct from Cathedral's earth tones
+ * text, sharp 90-degree corners, double-line ASCII chrome. The four
+ * preattentive states map to canonical CRT phosphor colours
+ * (green / white / cyan / red) so they stay semantically distinct from Cathedral's earth tones
  * and Obsidian's sacred-tech neons.
  */
 export const AMBER_CRT_THEME: Theme = {
@@ -48,7 +47,6 @@ export const AMBER_CRT_THEME: Theme = {
 				thinking: "#F0F0F0",   // white phosphor — electric cogitation
 				tool: "#00E5FF",       // cyan phosphor — tooling
 				approval: "#FF5500",   // CRT-orange-red phosphor — danger
-				learning: "#FF66FF",   // magenta phosphor — sacred memory writes
 			},
 		},
 	},
@@ -75,10 +73,5 @@ export const AMBER_CRT_THEME: Theme = {
 		// affordance and read as live LED indicators.
 		tabActive: "●",
 		tabInactive: "○",
-		// Stitch ref keeps the fleur-de-lis memory bullet from Cathedral; the
-		// shared glyph reinforces "SumoCode" identity across themes while the
-		// override colour pulls it into the CRT palette.
-		bullet: "❧",
-		bulletColor: "#FFD700",        // amber-gold bullets stand out against the chassis
 	},
 };

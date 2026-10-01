@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 
 export const EXPECTED_HOST_COMMANDS = Object.freeze([
 	"settings", "login", "model", "thinking", "queue", "theme", "sumo:theme", "compact", "new", "clone", "fork", "sessions", "resume",
-	"tree", "session", "name", "copy", "export", "quit", "sumo:memory", "sumo:theme-check", "sumo:palette", "hotkeys", "lovely-web", "changelog",
+	"tree", "session", "name", "copy", "export", "quit", "sumo:theme-check", "sumo:palette", "hotkeys", "lovely-web", "changelog",
 ]);
 const EXPECTED_PI_BUILTIN_COMMANDS = Object.freeze([
 	"settings", "model", "tree", "thinking", "scoped-models", "export", "import", "share", "copy", "name", "session", "changelog", "hotkeys",
@@ -13,12 +13,12 @@ const EXPECTED_PI_BUILTIN_COMMANDS = Object.freeze([
 const PI_MIRRORED_HOST_COMMANDS = Object.freeze([
 	"settings", "login", "model", "thinking", "compact", "new", "clone", "fork", "resume", "tree", "session", "name", "copy", "export", "quit", "hotkeys", "changelog",
 ]);
-const HOST_OWNED_COMMANDS = Object.freeze(["theme", "sumo:theme", "sessions", "sumo:memory", "sumo:theme-check", "sumo:palette", "lovely-web", "queue"]);
+const HOST_OWNED_COMMANDS = Object.freeze(["theme", "sumo:theme", "sessions", "sumo:theme-check", "sumo:palette", "lovely-web", "queue"]);
 const EXPECTED_ROUTED_CHILD_COMMANDS = Object.freeze(["mcp", "mcp-auth"]);
 export const EXPECTED_SUMOCODE_EXTENSION_COMMANDS = Object.freeze([
 	"login", "sumo:login-cancel", "sumo:rpc-tree-navigate", "fast", "answer", "reload", "sumo:roles", "accounts", "sumo:cursor", "sumo:diff",
 	"sumo:query", "exit", "slate", "sumo:persona", "sumo:review", "sumo:ship", "sumo:spinner", "sumo:sync", "sumo:bootstrap", "sumo:tabs",
-	"sumo:theme", "sumo:theme-check", "sumo:worktree", "sumo:memory",
+	"sumo:theme", "sumo:theme-check", "sumo:worktree",
 ]);
 export const REQUIRED_RPC_COMMANDS = Object.freeze([
 	"prompt", "abort", "new_session", "get_state", "set_model", "cycle_model", "get_available_models", "set_thinking_level", "cycle_thinking_level",

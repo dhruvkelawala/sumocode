@@ -1,14 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { MemoryClientError, type RemnicMemoryClient } from "./memory.js";
 import {
-	SIDEBAR_MEMORY_DEBOUNCE_MS,
-	SIDEBAR_MEMORY_RETRY_MS,
 	SIDEBAR_MIN_TERMINAL_WIDTH,
 	SIDEBAR_WIDTH,
 	StaticSidebarDock,
 	dockStaticSidebar,
 	chooseSidebarAnchor,
-	createSidebarMemoryCache,
 	renderSidebar,
 	type SidebarSnapshot,
 } from "./sidebar.js";
@@ -17,25 +13,6 @@ import {
 const ANSI = /\u001b\[[0-9;]*m/g;
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
 const untrack = (s: string): string => s.replace(/\u202F/g, "");
-
-function memoryClient(query: RemnicMemoryClient["query"]): RemnicMemoryClient {
-	return {
-		query,
-		status: vi.fn(),
-		add: vi.fn(),
-		forget: vi.fn(),
-		observe: vi.fn(async () => undefined),
-		browse: vi.fn(async () => []),
-	};
-}
-
-function deferred<T>() {
-	let resolve!: (value: T) => void;
-	const promise = new Promise<T>((resolvePromise) => {
-		resolve = resolvePromise;
-	});
-	return { promise, resolve };
-}
 
 function component(lines: string[]) {
 	const renderCalls: number[] = [];
@@ -63,12 +40,6 @@ function snapshot(overrides: Partial<SidebarSnapshot> = {}): SidebarSnapshot {
 			{ name: "github", status: "idle" },
 			{ name: "stitch", status: "tool" },
 		],
-		memory: [
-			"prefers pnpm",
-			"never autoformat go",
-			"writes commits in cathedral voice",
-		],
-		memoryTotal: 3,
 		...overrides,
 	};
 }
@@ -137,7 +108,7 @@ describe("StaticSidebarDock", () => {
 	});
 
 	it("sidebar stays identical when chat content changes (scroll independence)", () => {
-		const sidebarNode = component(["REGISTRY", "CONTEXT", "MEMORY"]).node;
+		const sidebarNode = component(["REGISTRY", "CONTEXT", "MCP"]).node;
 
 		// First render: short chat
 		const chatShort = component(["msg 1", "msg 2"]);
@@ -209,165 +180,6 @@ describe("dockStaticSidebar", () => {
 	});
 });
 
-describe("createSidebarMemoryCache", () => {
-	it("queries Remnic and exposes the latest fact text for rendering", async () => {
-		const cache = createSidebarMemoryCache(memoryClient(vi.fn(async () => [
-			{ id: "1", text: "prefers pnpm" },
-			{ id: "2", text: "uses Cathedral" },
-		])));
-
-		await cache.refresh("package manager");
-
-		expect(cache.snapshot()).toEqual({
-			memory: ["prefers pnpm", "uses Cathedral"],
-			memoryUnavailable: false,
-		});
-	});
-
-	it("marks memory unavailable when Remnic cannot answer", async () => {
-		const cache = createSidebarMemoryCache(memoryClient(vi.fn(async () => {
-			throw new MemoryClientError("daemon_down", "memory unavailable");
-		})));
-
-		await cache.refresh("anything");
-
-		expect(cache.snapshot()).toEqual({ memory: [], memoryUnavailable: true });
-	});
-
-	it("invalidates stale in-flight prompt refreshes when a newer refresh wins", async () => {
-		const oldRefresh = deferred<Awaited<ReturnType<RemnicMemoryClient["query"]>>>();
-		const newRefresh = deferred<Awaited<ReturnType<RemnicMemoryClient["query"]>>>();
-		const query = vi.fn<RemnicMemoryClient["query"]>((prompt) => prompt === "old" ? oldRefresh.promise : newRefresh.promise);
-		const cache = createSidebarMemoryCache(memoryClient(query));
-
-		const stale = cache.refresh("old");
-		const latest = cache.refresh("new");
-		newRefresh.resolve([{ id: "new", text: "new fact" }]);
-
-		await expect(latest).resolves.toBe(true);
-		expect(cache.snapshot()).toEqual({ memory: ["new fact"], memoryUnavailable: false });
-
-		oldRefresh.resolve([{ id: "old", text: "old fact" }]);
-		await expect(stale).resolves.toBe(false);
-		expect(cache.snapshot()).toEqual({ memory: ["new fact"], memoryUnavailable: false });
-	});
-
-	it("debounces prompt refreshes and only queries the latest prompt", async () => {
-		vi.useFakeTimers();
-		try {
-			const query = vi.fn(async () => [{ id: "latest", text: "convex preference" }]);
-			const onChange = vi.fn();
-			const cache = createSidebarMemoryCache(memoryClient(query));
-
-			cache.schedule("auth", onChange);
-			cache.schedule("convex", onChange);
-			expect(query).not.toHaveBeenCalled();
-
-			await vi.advanceTimersByTimeAsync(SIDEBAR_MEMORY_DEBOUNCE_MS);
-
-			expect(query).toHaveBeenCalledTimes(1);
-			expect(query).toHaveBeenCalledWith("convex", 5);
-			expect(cache.snapshot().memory).toEqual(["convex preference"]);
-			expect(onChange).toHaveBeenCalledTimes(1);
-		} finally {
-			vi.useRealTimers();
-		}
-	});
-
-	it("cancels a stale scheduled session refresh when the prompt changes", async () => {
-		vi.useFakeTimers();
-		try {
-			const oldRefresh = deferred<Awaited<ReturnType<RemnicMemoryClient["query"]>>>();
-			const newRefresh = deferred<Awaited<ReturnType<RemnicMemoryClient["query"]>>>();
-			const query = vi.fn<RemnicMemoryClient["query"]>((prompt) => prompt === "session-a" ? oldRefresh.promise : newRefresh.promise);
-			const onChange = vi.fn();
-			const cache = createSidebarMemoryCache(memoryClient(query));
-
-			cache.schedule("session-a", onChange);
-			await vi.advanceTimersByTimeAsync(SIDEBAR_MEMORY_DEBOUNCE_MS);
-			expect(query).toHaveBeenCalledWith("session-a", 5);
-
-			cache.schedule("session-b", onChange);
-			await vi.advanceTimersByTimeAsync(SIDEBAR_MEMORY_DEBOUNCE_MS);
-			expect(query).toHaveBeenCalledWith("session-b", 5);
-
-			newRefresh.resolve([{ id: "new", text: "new session" }]);
-			await vi.advanceTimersByTimeAsync(0);
-			expect(cache.snapshot()).toEqual({ memory: ["new session"], memoryUnavailable: false });
-			expect(onChange).toHaveBeenCalledTimes(1);
-
-			oldRefresh.resolve([{ id: "old", text: "old session" }]);
-			await vi.advanceTimersByTimeAsync(0);
-			expect(cache.snapshot()).toEqual({ memory: ["new session"], memoryUnavailable: false });
-			expect(onChange).toHaveBeenCalledTimes(1);
-		} finally {
-			vi.useRealTimers();
-		}
-	});
-
-	it("does not query or retry for an empty splash prompt", async () => {
-		vi.useFakeTimers();
-		try {
-			const query = vi.fn(async () => [{ id: "unused", text: "unused" }]);
-			const onChange = vi.fn();
-			const cache = createSidebarMemoryCache(memoryClient(query));
-
-			cache.schedule("   ", onChange);
-			await vi.advanceTimersByTimeAsync(SIDEBAR_MEMORY_DEBOUNCE_MS + SIDEBAR_MEMORY_RETRY_MS);
-
-			expect(query).not.toHaveBeenCalled();
-			expect(onChange).not.toHaveBeenCalled();
-			expect(cache.snapshot()).toEqual({ memory: [], memoryUnavailable: false });
-		} finally {
-			vi.useRealTimers();
-		}
-	});
-
-	it("auto-retries after daemon-down and recovers without a new prompt", async () => {
-		vi.useFakeTimers();
-		try {
-			const query = vi
-				.fn<RemnicMemoryClient["query"]>()
-				.mockRejectedValueOnce(new MemoryClientError("daemon_down", "memory unavailable"))
-				.mockResolvedValueOnce([{ id: "recovered", text: "memory is back" }]);
-			const onChange = vi.fn();
-			const cache = createSidebarMemoryCache(memoryClient(query));
-
-			cache.schedule("sumocode", onChange);
-			await vi.advanceTimersByTimeAsync(SIDEBAR_MEMORY_DEBOUNCE_MS);
-			expect(cache.snapshot()).toEqual({ memory: [], memoryUnavailable: true });
-
-			await vi.advanceTimersByTimeAsync(SIDEBAR_MEMORY_RETRY_MS);
-
-			expect(query).toHaveBeenCalledTimes(2);
-			expect(query).toHaveBeenLastCalledWith("sumocode", 5);
-			expect(cache.snapshot()).toEqual({ memory: ["memory is back"], memoryUnavailable: false });
-			expect(onChange).toHaveBeenCalledTimes(2);
-		} finally {
-			vi.useRealTimers();
-		}
-	});
-
-	it("suppresses repeated daemon-down renders while continuing retry probes", async () => {
-		vi.useFakeTimers();
-		try {
-			const query = vi.fn<RemnicMemoryClient["query"]>().mockRejectedValue(new MemoryClientError("daemon_down", "memory unavailable"));
-			const onChange = vi.fn();
-			const cache = createSidebarMemoryCache(memoryClient(query));
-
-			cache.schedule("sumocode", onChange);
-			await vi.advanceTimersByTimeAsync(SIDEBAR_MEMORY_DEBOUNCE_MS);
-			await vi.advanceTimersByTimeAsync(SIDEBAR_MEMORY_RETRY_MS * 2);
-
-			expect(query).toHaveBeenCalledTimes(3);
-			expect(cache.snapshot()).toEqual({ memory: [], memoryUnavailable: true });
-			expect(onChange).toHaveBeenCalledTimes(1);
-		} finally {
-			vi.useRealTimers();
-		}
-	});
-});
-
 describe("sidebar layout constants", () => {
 	it("defaults to the cathedral 30-column sidebar", () => {
 		expect(SIDEBAR_WIDTH).toBe(30);
@@ -434,81 +246,15 @@ describe("renderSidebar — mcp section", () => {
 	});
 });
 
-describe("renderSidebar — MEMORY sub-tab active", () => {
-	it("renders each memory item with a ❧ bullet (when activeSubTab=MEMORY)", () => {
-		const lines = renderSidebar(snapshot({ activeSubTab: "MEMORY" }), SIDEBAR_WIDTH);
-		const memoryLines = lines.map(stripAnsi).filter((l) => /^\s*❧/.test(l));
-
-		expect(memoryLines.length).toBe(3);
-		expect(memoryLines[0]).toContain("prefers pnpm");
-		expect(memoryLines[1]).toContain("never autoformat go");
-	});
-
-	it("caps display at the first 5 memory items even if more are supplied", () => {
-		const many = snapshot({
-			activeSubTab: "MEMORY",
-			memory: ["a", "b", "c", "d", "e", "f", "g"],
-		});
-		const lines = renderSidebar(many, SIDEBAR_WIDTH);
-		const memoryLines = lines.map(stripAnsi).filter((l) => /^\s*❧/.test(l));
-
-		expect(memoryLines.length).toBe(5);
-		expect(memoryLines[4]).toContain("e");
-		expect(memoryLines.some((l) => l.includes("f"))).toBe(false);
-	});
-
-	it("shows dim no-match copy when memory is healthy but empty", () => {
-		const lines = renderSidebar(snapshot({ activeSubTab: "MEMORY", memory: [], memoryUnavailable: false }), SIDEBAR_WIDTH);
-		const row = lines.find((line) => stripAnsi(line).includes("no memory match"));
-
-		expect(row).toBeDefined();
-		expect(row).toContain("\u001b[2m");
-		expect(lines.map(stripAnsi).filter((line) => /^\s*❧/.test(line))).toHaveLength(0);
-	});
-
-	it("shows dim memory unavailable copy when the daemon is down", () => {
-		const lines = renderSidebar(snapshot({ activeSubTab: "MEMORY", memory: [], memoryUnavailable: true }), SIDEBAR_WIDTH);
-		const row = lines.find((line) => stripAnsi(line).includes("memory unavailable"));
-
-		expect(row).toBeDefined();
-		expect(row).toContain("\u001b[2m");
-		expect(lines.map(stripAnsi).filter((line) => /^\s*❧/.test(line))).toHaveLength(0);
-	});
-
-	it("shows a 'N more · ⌘M' footer when memoryTotal exceeds shown facts", () => {
-		const lines = renderSidebar(snapshot({
-			activeSubTab: "MEMORY",
-			memory: ["a", "b", "c", "d", "e"],
-			memoryTotal: 53,
-		}), SIDEBAR_WIDTH);
-		const blob = lines.map(stripAnsi).join("\n");
-
-		expect(blob).toContain("48 more · ⌘M");
-	});
-
-	it("omits the 'N more · ⌘M' footer when memoryTotal equals shown facts", () => {
-		const lines = renderSidebar(snapshot({
-			activeSubTab: "MEMORY",
-			memory: ["a", "b", "c"],
-			memoryTotal: 3,
-		}), SIDEBAR_WIDTH);
-		const blob = lines.map(stripAnsi).join("\n");
-
-		expect(blob).not.toContain("more · ⌘M");
-	});
-});
-
-describe("renderSidebar — sub-tab navigation", () => {
-	it("defaults to CONTEXT sub-tab (no activeSubTab field)", () => {
-		const lines = renderSidebar(snapshot(), SIDEBAR_WIDTH);
-		const blob = untrack(lines.map(stripAnsi).join("\n"));
+describe("renderSidebar — registry", () => {
+	it("shows context and MCP without memory navigation or daemon copy", () => {
+		const lines = renderSidebar(snapshot(), SIDEBAR_WIDTH).map(stripAnsi);
+		const blob = untrack(lines.join("\n"));
 		expect(blob).toContain("REGISTRY");
-		expect(blob).toContain("CONTEXT");
-		expect(blob).toContain("MEMORY");
-		// CONTEXT sub-tab content shown
+		expect(blob).toContain("◆ CONTEXT");
 		expect(blob).toContain("main-app");
 		expect(blob).toContain("github");
-		expect(lines.map(stripAnsi).filter((line) => /^\s*❧/.test(line))).toHaveLength(0);
+		expect(blob).not.toMatch(/MEMORY|memory|⌘M|▢|❧/);
 	});
 
 	it("renders REGISTRY header without version metadata", () => {
@@ -524,41 +270,6 @@ describe("renderSidebar — sub-tab navigation", () => {
 		const blob = lines.join("\n");
 		expect(blob).toContain("sumocode");
 		expect(blob).toContain("on main");
-	});
-
-	it("marks active sub-tab with ◆ (filled) and inactive with ▢ (outlined)", () => {
-		const lines = renderSidebar(snapshot({ activeSubTab: "CONTEXT" }), SIDEBAR_WIDTH).map(stripAnsi);
-		const contextRow = lines.find((l) => untrack(l).includes("CONTEXT"));
-		const memoryRow = lines.find((l) => untrack(l).includes("MEMORY"));
-		expect(contextRow).toBeDefined();
-		expect(memoryRow).toBeDefined();
-		expect(contextRow).toContain("◆");
-		expect(memoryRow).toContain("▢");
-	});
-
-	it("switching activeSubTab swaps content (CONTEXT → MEMORY)", () => {
-		const contextLines = renderSidebar(snapshot({ activeSubTab: "CONTEXT" }), SIDEBAR_WIDTH).map(stripAnsi);
-		const memoryLines = renderSidebar(snapshot({ activeSubTab: "MEMORY" }), SIDEBAR_WIDTH).map(stripAnsi);
-
-		const contextHasMcp = contextLines.some((l) => l.includes("github"));
-		const memoryHasMcp = memoryLines.some((l) => l.includes("github"));
-		expect(contextHasMcp).toBe(true);
-		expect(memoryHasMcp).toBe(false);
-
-		const memoryHasBullets = memoryLines.some((l) => /^\s*❧/.test(l));
-		expect(memoryHasBullets).toBe(true);
-	});
-});
-
-describe("renderSidebar — memory section bullet indent", () => {
-	it("renders each memory item with a leading two-space indent before ❧", () => {
-		const lines = renderSidebar(snapshot({ activeSubTab: "MEMORY" }), SIDEBAR_WIDTH);
-		const memoryLines = lines.map(stripAnsi).filter((line) => /^\s*❧/.test(line));
-
-		expect(memoryLines.length).toBeGreaterThan(0);
-		for (const line of memoryLines) {
-			expect(line.startsWith("  ❧"), `expected '  ❧...' indent on: ${line}`).toBe(true);
-		}
 	});
 });
 

@@ -1,4 +1,4 @@
-export const SUMOCODE_STATE_NAMES = ["idle", "thinking", "tool", "approval", "learning"] as const;
+export const SUMOCODE_STATE_NAMES = ["idle", "thinking", "tool", "approval"] as const;
 
 export type SumoCodeState = (typeof SUMOCODE_STATE_NAMES)[number];
 
@@ -79,7 +79,7 @@ export interface ResolvedThemeWorkingIndicator {
  * conventions that give each theme its visual personality beyond color.
  *
  * Every rendering surface that emits structural characters (frame corners,
- * section banners, dividers, bullets) reads from the active theme's chrome
+ * section banners, dividers) reads from the active theme's chrome
  * via `activeThemeChrome()` instead of hardcoding glyphs.
  *
  * To build a new theme, spread `DEFAULT_CHROME` and override what matters.
@@ -97,7 +97,7 @@ export interface ThemeChrome {
 
 	/**
 	 * Sidebar section header glyph prefixes.
-	 * Key = lowercase section id ("context", "memory", "mcp", "session", "registry").
+	 * Key = lowercase section id ("context", "mcp", "session", "registry").
 	 * Value = glyph string prepended to the header. Empty string = no glyph.
 	 */
 	sectionGlyphs: Partial<Record<string, string>>;
@@ -114,11 +114,6 @@ export interface ThemeChrome {
 	/** Inactive tab marker glyph. */
 	tabInactive: string;
 
-	/** Memory / list item bullet glyph. */
-	bullet: string;
-
-	/** Bullet color hex override. Falls back to theme `accent` if omitted. */
-	bulletColor?: string;
 }
 
 /** Cathedral chrome — the baseline structural vocabulary. Spread this in new themes. */
@@ -129,7 +124,6 @@ export const DEFAULT_CHROME: ThemeChrome = {
 	ruleChar: "━",
 	tabActive: "◆",
 	tabInactive: "▢",
-	bullet: "❧",
 };
 
 export interface Theme {

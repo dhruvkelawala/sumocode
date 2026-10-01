@@ -6,7 +6,7 @@ import type { ThinkingLevel } from "./footer.js";
 import { showDivineQuery } from "./divine-query.js";
 import { activeThemeColors, getActiveTheme } from "./themes/index.js";
 
-export type PaletteMode = "SESSION" | "MODEL" | "THINKING" | "MEMORY" | "THEME" | "SETTINGS";
+export type PaletteMode = "SESSION" | "MODEL" | "THINKING" | "THEME" | "SETTINGS";
 
 export type PaletteRow = {
 	/**
@@ -60,7 +60,6 @@ export const COMMAND_PALETTE_MODE_ROWS: readonly PaletteRow[] = [
 	{ label: "SESSION", currentValue: "auth-flow-refactor" },
 	{ label: "MODEL", currentValue: "claude-opus-4-7" },
 	{ label: "THINKING", currentValue: "xhigh" },
-	{ label: "MEMORY", currentValue: "55 facts" },
 	{ label: "THEME", currentValue: "cathedral" },
 	{ label: "SETTINGS", currentValue: "" },
 ];
@@ -298,7 +297,6 @@ export function buildPaletteSnapshot(ctx: PaletteSnapshotContext): CommandPalett
 			{ label: "SESSION", currentValue: sessionLabel },
 			{ label: "MODEL", currentValue: modelId },
 			{ label: "THINKING", currentValue: thinkingLevel },
-			{ label: "MEMORY", currentValue: "55 facts" },
 			{ label: "THEME", currentValue: themeName },
 			{ label: "SETTINGS", currentValue: "" },
 		],
@@ -338,11 +336,6 @@ export async function handlePaletteSelection(mode: PaletteMode | undefined, ctx:
 			// SAFETY: guarded by the includes() membership check against levels.
 			pi.setThinkingLevel(selected as ThinkingLevel);
 		}
-		return;
-	}
-
-	if (mode === "MEMORY") {
-		ctx.ui.setEditorText("/sumo:memory");
 		return;
 	}
 

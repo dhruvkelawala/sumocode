@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SUMOCODE_STATES } from "./tokens.js";
 import { VOICE } from "./voice.js";
 
-const REQUIRED_SECTIONS = ["context", "mcp", "memory"] as const;
+const REQUIRED_SECTIONS = ["context", "mcp"] as const;
 
 describe("VOICE.status", () => {
 	it("has a label for every SumoCodeState", () => {
@@ -22,12 +22,12 @@ describe("VOICE.status", () => {
 		}
 	});
 
-	it("uses the cathedral state vocabulary (READY/MEDITATING/ILLUMINATING/DEFERRING/INSCRIBING)", () => {
+	it("uses the cathedral state vocabulary (READY/MEDITATING/ILLUMINATING/DEFERRING)", () => {
 		expect(VOICE.status.idle).toBe("READY");
 		expect(VOICE.status.thinking).toBe("MEDITATING");
 		expect(VOICE.status.tool).toBe("ILLUMINATING");
 		expect(VOICE.status.approval).toBe("DEFERRING");
-		expect(VOICE.status.learning).toBe("INSCRIBING");
+		expect(SUMOCODE_STATES).toEqual(["idle", "thinking", "tool", "approval"]);
 	});
 });
 
@@ -40,17 +40,5 @@ describe("VOICE.sections", () => {
 			expect(label).toBe(label.toLowerCase());
 			expect(label).not.toContain("!");
 		}
-	});
-});
-
-describe("VOICE.empty", () => {
-	it("defines terse empty memory copy", () => {
-		expect(VOICE.empty.memory).toBe("no memory match");
-	});
-});
-
-describe("VOICE.errors", () => {
-	it("defines terse daemon-down copy", () => {
-		expect(VOICE.errors.daemonDown).toBe("memory unavailable");
 	});
 });

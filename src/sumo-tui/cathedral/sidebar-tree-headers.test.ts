@@ -14,7 +14,6 @@ function snapshot(overrides: Partial<RegistrySidebarSnapshot> = {}): RegistrySid
 		cumulativeTokens: 3_400_000,
 		costUsd: 0.42,
 		mcpServers: [{ name: "stitch", status: "ok" }],
-		memory: ["prefers TypeScript strict"],
 		...overrides,
 	};
 }
@@ -60,7 +59,7 @@ describe("sidebar-tree headers", () => {
 
 		expect(plain).toContain("REGISTRY");
 		expect(plain).toContain("◆ CONTEXT");
-		expect(plain).toContain("▢ MEMORY");
+		expect(plain).not.toContain("MEMORY");
 		expect(plain).toContain("━━━━━━━━━━━━━━━━━━━━━━━━━━");
 		expect(plain).not.toContain("┌ ACTIVE_CONTEXT");
 		expect(plain).not.toContain("┌ METRICS");

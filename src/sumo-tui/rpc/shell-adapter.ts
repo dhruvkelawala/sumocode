@@ -625,7 +625,7 @@ function normalizeThinkingLevel(value: string | undefined): ThinkingLevel {
 }
 
 function sumoState(state: RpcHostChromeState): SumoCodeState {
-	if (state.branchSummaryBusy || state.isCompacting) return "learning";
+	if (state.branchSummaryBusy || state.isCompacting) return "thinking";
 	if (state.lastEventType === "tool_call" || state.lastEventType === "tool_execution_update") return "tool";
 	if (state.isStreaming) return "thinking";
 	return "idle";
@@ -661,9 +661,6 @@ function sidebarSnapshot(state: RpcHostChromeState): SidebarSnapshot {
 		cumulativeTokens: visualHarness ? VISUAL_SIDEBAR_CUMULATIVE_TOKENS : undefined,
 		costUsd: visualHarness ? VISUAL_SIDEBAR_COST_USD : state.costUsd,
 		mcpServers: visualHarness ? PLACEHOLDER_MCP : getCachedMcpRoster({ cwd, piAgentDir: resolvePiAgentDir() }),
-		memory: [],
-		memoryTotal: 0,
-		activeSubTab: "CONTEXT",
 		sessions: [{ name: sessionLabel(state), branch: state.gitBranch, active: true }],
 	};
 }

@@ -58,7 +58,6 @@ export const OBSIDIAN_THEME: Theme = {
 				thinking: "#00E5FF",   // neon cyan — thinking ignition
 				tool: "#F0B400",       // electrum gold — tool action
 				approval: "#B91C1C",   // carnelian / burial red
-				learning: "#FF00AA",   // neon magenta — sacred memory writes
 			},
 		},
 	},
@@ -69,12 +68,10 @@ export const OBSIDIAN_THEME: Theme = {
 	chrome: {
 		...DEFAULT_CHROME,
 		frame: { topLeft: "┌", topRight: "┐", bottomLeft: "└", bottomRight: "┘", horizontal: "─", vertical: "│" },
-		sectionGlyphs: { context: "𓂀", memory: "𓏛", mcp: "⚛", session: "𓊝", registry: "𓋹" },
+		sectionGlyphs: { context: "𓂀", mcp: "⚛", session: "𓊝", registry: "𓋹" },
 		sectionTracked: false,
 		ruleChar: "─",
 		tabActive: "◆",
 		tabInactive: "◇",
-		bullet: "❧",
-		bulletColor: "#FF00AA",
 	},
 };

@@ -156,7 +156,7 @@ export function renderThemeCheck(theme: ThemeReader, width: number): string[] {
 	lines.push(row(theme, "warning", "thinking"));
 	lines.push(row(theme, "border", "tool"));
 	lines.push(row(theme, "error", "needs you"));
-	lines.push(row(theme, "borderAccent", "learning"));
+	lines.push(`  ${theme.fg("borderAccent", "accent border sample")}`);
 	lines.push("");
 
 	lines.push(sectionHeading(theme, "SURFACES"));

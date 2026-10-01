@@ -15,7 +15,6 @@ import { registerThemeCommand } from "./commands/theme.js";
 import { registerThemeCheckCommand } from "./commands/theme-check.js";
 import { registerWorktreeCommand, type WorktreeCommandOptions } from "./commands/worktree.js";
 import { RetainedRuntime } from "./subagents/retained-runtime.js";
-import { registerMemoryCommand } from "./memory-editor.js";
 
 export type InteractionKind = "command" | "shortcut";
 export type InteractionConflictAction = "skipped";
@@ -154,7 +153,6 @@ export function installSumoInteractions(pi: ExtensionAPI, options: InstallSumoIn
 		resolveResultRegistry: options.resolveWorktreeResultRegistry ?? ((id, ctx) =>
 			retained.registry(ctx.sessionManager.getSessionId()).discover().find(({ record }) => record.id === id)?.registry),
 	}));
-	registry.install("commands.memory", registerMemoryCommand);
 	registry.flushDiagnostics();
 	return registry.getSnapshot();
 }

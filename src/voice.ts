@@ -10,7 +10,7 @@
  *
  * Voice rules for SumoCode product UI (Element 5 from CATHEDRAL_DECISIONS.md):
  *   - state labels are UPPERCASE cathedral verbs:
- *       READY / MEDITATING / ILLUMINATING / DEFERRING / INSCRIBING
+ *       READY / MEDITATING / ILLUMINATING / DEFERRING
  *   - other product copy stays lowercase, terse, no exclamation marks,
  *     no apologies, no hedging
  *   - punctuation only when necessary; never trailing periods on labels
@@ -24,7 +24,6 @@
  *   thinking       →  MEDITATING     contemplative thought
  *   tool           →  ILLUMINATING   the scribe writes / decorates
  *   approval       →  DEFERRING      agent defers decision to user
- *   learning       →  INSCRIBING     writing into the codex (memory)
  */
 
 export const VOICE = {
@@ -33,18 +32,10 @@ export const VOICE = {
 		thinking: "MEDITATING",
 		tool: "ILLUMINATING",
 		approval: "DEFERRING",
-		learning: "INSCRIBING",
 	},
 	sections: {
 		context: "context",
 		mcp: "mcp",
-		memory: "memory",
-	},
-	errors: {
-		daemonDown: "memory unavailable",
-	},
-	empty: {
-		memory: "no memory match",
 	},
 } as const;
 

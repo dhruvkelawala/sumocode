@@ -61,7 +61,7 @@ describe("sidebar-tree", () => {
 		root.dispose();
 	});
 
-	it("renders REGISTRY chrome with editorial sub-tabs and memory content", async () => {
+	it("renders REGISTRY chrome with context only", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());
 		root.flexDirection = FLEX_DIRECTION_COLUMN;
@@ -71,7 +71,6 @@ describe("sidebar-tree", () => {
 			terminalWidth: 140,
 			terminalHeight: 24,
 			sessionHasMessages: true,
-			activeSubTab: "MEMORY",
 			sessions: [
 				{ name: "sumocode", branch: "main", active: true },
 				{ name: "sumocode", branch: "other-branch", active: false },
@@ -86,8 +85,8 @@ describe("sidebar-tree", () => {
 		const normalized = sidebarText.replace(/\u202F/g, "");
 		expect(normalized).toContain("REGISTRY");
 		expect(normalized).not.toContain("v 1.0.0");
-		expect(normalized).toContain("▢ CONTEXT");
-		expect(normalized).toContain("◆ MEMORY");
+		expect(normalized).toContain("◆ CONTEXT");
+		expect(normalized).not.toContain("MEMORY");
 		root.dispose();
 	});
 });

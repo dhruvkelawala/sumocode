@@ -28,7 +28,6 @@ import { publishClaudeAccountStatus } from "./claude-account-status-publication.
 import { installFooter } from "./footer.js";
 import { installSumoInteractions } from "./interaction-registry.js";
 import { installSumoUiSurfaces } from "./interaction-ui-surfaces.js";
-import { installMemoryExtraction } from "./memory-extraction.js";
 import { installQuestionTool } from "./question-tool.js";
 import { installRenderDiagnostics } from "./render-diagnostics.js";
 import { installSessionCache } from "./session-cache.js";
@@ -272,7 +271,6 @@ export default function sumocode(pi: ExtensionAPI): void {
 		subscriptionLabel: claudeAccountSubscriptionLabel,
 	});
 	requestFooterRender = footer.requestRender;
-	installMemoryExtraction(pi);
 	installCathedralEditor(pi);
 	installInputHints(pi);
 	installSkillInlineExpansion(pi);

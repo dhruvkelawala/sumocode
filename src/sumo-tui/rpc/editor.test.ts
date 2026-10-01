@@ -5,7 +5,6 @@ import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { delimiter as pathDelimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RemnicMemoryClient } from "../../memory.js";
 import { activeThemeColors, resetThemeRegistryForTests } from "../../themes/index.js";
 import { SumoTuiTestBackend, type TestBackendFrame } from "../testing/test-backend.js";
 import { ModalManager } from "../widgets/modal.js";
@@ -31,11 +30,6 @@ import { isRpcHostSlashCommandName, RpcHostActions, RPC_HOST_SLASH_COMMANDS } fr
 import { RpcHostOverlayManager } from "./host-overlays.js";
 import { InlineSelectorHost } from "./inline-selector.js";
 import { RpcHostStateStore, type RpcHostChromeState } from "./state.js";
-import type { MemoryFact } from "../../memory.js";
-
-interface MemoryBrowseStub {
-	browse(): Promise<MemoryFact[]>;
-}
 import type { RpcResponseData } from "./response.js";
 import type { RpcSessionStats } from "./controls.js";
 
@@ -914,9 +908,6 @@ describe("advertised host slash-command dispatch invariant", () => {
 		const overlays = new RpcHostOverlayManager();
 		const inlineSelectors = new InlineSelectorHost(new FakeSelectorEditor());
 		const notifications: { message: string; level: NotificationLevel }[] = [];
-		const browseStub: MemoryBrowseStub = { browse: async () => [] };
-		/* SAFETY: memory browse results are rendered opaquely; an empty list satisfies the client surface these tests exercise. */
-		const memoryClient = browseStub as typeof browseStub & RemnicMemoryClient;
 		const actions = new RpcHostActions({
 			// SAFETY: FakeDispatchControls implements the dispatch surface these
 			// tests drive; unrelated controls members are never invoked.
@@ -934,7 +925,6 @@ describe("advertised host slash-command dispatch invariant", () => {
 					return notifications.length;
 				},
 			},
-			createMemoryClient: () => memoryClient,
 			changelogRoot,
 		});
 		return { actions, controls, modals, overlays, inlineSelectors, notifications };

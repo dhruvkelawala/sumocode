@@ -397,7 +397,7 @@ describe("RPC host retained runtime frame", () => {
 		}, 90, 24);
 
 		expect(Array.from({ length: 24 }, (_, row) => streaming.toPlainRow(row)).join("\n")).toContain("MEDITATING");
-		expect(Array.from({ length: 24 }, (_, row) => compacting.toPlainRow(row)).join("\n")).toContain("INSCRIBING");
+		expect(Array.from({ length: 24 }, (_, row) => compacting.toPlainRow(row)).join("\n")).toContain("MEDITATING");
 	});
 
 	it("renders compacting status rows in full retained frames", async () => {
@@ -427,10 +427,10 @@ describe("RPC host retained runtime frame", () => {
 		const manualText = Array.from({ length: 24 }, (_, row) => manual.toPlainRow(row)).join("\n");
 		const autoText = Array.from({ length: 100 }, (_, row) => auto.toPlainRow(row)).join("\n");
 		expect(manualText).toContain("Compacting…");
-		expect(manualText).toContain("INSCRIBING");
+		expect(manualText).toContain("MEDITATING");
 		expect(manualText).not.toContain("Working…");
 		expect(autoText).toContain("Auto-compacting…");
-		expect(autoText).toContain("INSCRIBING");
+		expect(autoText).toContain("MEDITATING");
 	});
 
 	it("renders updated runtime transcripts through terminal frame patches", async () => {

@@ -43,7 +43,6 @@ describe("HERDR_THEME", () => {
 				thinking: "#39FF14",
 				tool: "#FFB000",
 				approval: "#FF706D",
-				learning: "#FFD166",
 			},
 		});
 	});
@@ -73,7 +72,6 @@ describe("HERDR_THEME", () => {
 			chrome.ruleChar,
 			chrome.tabActive,
 			chrome.tabInactive,
-			chrome.bullet,
 		];
 		for (const glyph of glyphs) {
 			expect(glyph.length, `glyph ${JSON.stringify(glyph)}`).toBe(1);
@@ -83,7 +81,7 @@ describe("HERDR_THEME", () => {
 			expect(codePoint).toBeLessThan(0x3000);
 		}
 		expect(chrome.sectionTracked).toBe(false);
-		expect(chrome.sectionGlyphs).toEqual({ context: ">", memory: "#", mcp: "@", session: "$", registry: "%" });
+		expect(chrome.sectionGlyphs).toEqual({ context: ">", mcp: "@", session: "$", registry: "%" });
 	});
 
 	it("uses eight unique width-1 ASCII packet frames at 110ms", () => {

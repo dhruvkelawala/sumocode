@@ -116,7 +116,7 @@ describe("sumocode RPC host shell integration", () => {
 
 	it("pre-spawns Pi before a slow host-bundle freshness scan", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-slow-bundle-scan-"));
-		const piBin = join(directory, "stalled-pi");
+		const piBin = join(directory, "stalled-pi.cjs");
 		const pidFile = join(directory, "pid");
 		await writeFile(
 			piBin,
@@ -146,7 +146,7 @@ describe("sumocode RPC host shell integration", () => {
 
 	it("reaps the pre-spawned child when forced host main rejects before adoption", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-rejected-host-main-"));
-		const piBin = join(directory, "stalled-pi");
+		const piBin = join(directory, "stalled-pi.cjs");
 		const pidFile = join(directory, "pid");
 		await writeFile(
 			piBin,
@@ -598,7 +598,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 
 	it("reaps the pre-spawned child across repeated signals before host adoption", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-early-signal-"));
-		const piBin = join(directory, "stalled-pi");
+		const piBin = join(directory, "stalled-pi.cjs");
 		const pidFile = join(directory, "pid");
 		const exitCodeFile = join(directory, "exit-code");
 		await writeFile(
@@ -633,7 +633,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 
 	it("never adopts or enters altscreen when a signal lands in the import-tail window", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-import-tail-signal-"));
-		const piBin = join(directory, "stalled-pi");
+		const piBin = join(directory, "stalled-pi.cjs");
 		const pidFile = join(directory, "pid");
 		const exitCodeFile = join(directory, "exit-code");
 		// The child ignores SIGTERM, so early cleanup must escalate to SIGKILL while
@@ -669,7 +669,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 
 	it("never adopts or enters altscreen when a signal lands during main() pre-adoption setup", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-pre-adoption-main-signal-"));
-		const piBin = join(directory, "stalled-pi");
+		const piBin = join(directory, "stalled-pi.cjs");
 		const pidFile = join(directory, "pid");
 		const exitCodeFile = join(directory, "exit-code");
 		await writeFile(
@@ -704,7 +704,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 
 	it("restores a retained reload when signalled after child adoption but before runtime creation", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-post-adoption-reload-signal-"));
-		const piBin = join(directory, "stalled-pi");
+		const piBin = join(directory, "stalled-pi.cjs");
 		const pidFile = join(directory, "pid");
 		await writeFile(
 			piBin,
@@ -735,7 +735,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 
 	it("awaits the adopted protocol-failure reap before publishing host exit", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-adopted-protocol-reap-"));
-		const piBin = join(directory, "stalled-pi");
+		const piBin = join(directory, "stalled-pi.cjs");
 		const pidFile = join(directory, "pid");
 		const exitCodeFile = join(directory, "exit-code");
 		await writeFile(piBin, `#!/usr/bin/env node
@@ -767,7 +767,7 @@ setInterval(() => {}, 1000);
 
 	it("reaps an adopted SIGTERM-ignoring child across repeated signals", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-adopted-repeat-signal-"));
-		const piBin = join(directory, "stalled-pi");
+		const piBin = join(directory, "stalled-pi.cjs");
 		const pidFile = join(directory, "pid");
 		const exitCodeFile = join(directory, "exit-code");
 		await writeFile(
@@ -799,7 +799,9 @@ setInterval(() => {}, 1000);
 
 	it("restores altscreen when shutdown starts during adopted branch lookup", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-adopted-branch-signal-"));
-		const piBin = join(directory, "stalled-pi");
+		const piBin = join(directory, "stalled-pi.cjs");
+		// PATH requires the extensionless name; pin its package scope instead.
+		await writeFile(join(directory, "package.json"), '{"type":"commonjs"}\n');
 		const gitBin = join(directory, "git");
 		const pidFile = join(directory, "pid");
 		const gitStartedFile = join(directory, "git-started");
@@ -846,6 +848,7 @@ setInterval(() => {}, 1000);
 			initialHydrationRace: true,
 			initialHydrationDelayMs: 50,
 		});
+		await writeFile(join(directory, "package.json"), '{"type":"commonjs"}\n');
 		const gitBin = join(directory, "git");
 		const gitStartedFile = join(directory, "git-started");
 		const gitFinishedFile = join(directory, "git-finished");
@@ -878,7 +881,7 @@ setInterval(() => {}, 1000);
 
 	it("exits promptly when startup hydration is stalled", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-stalled-hydration-"));
-		const piBin = join(directory, "stalled-pi");
+		const piBin = join(directory, "stalled-pi.cjs");
 		await writeFile(piBin, "#!/usr/bin/env node\nprocess.stdin.resume();\nsetInterval(() => {}, 1000);\n", { mode: 0o700 });
 		app = spawnSumocodePty({
 			env: { PI_BIN: piBin, PI_CODING_AGENT_DIR: join(directory, "agent") },
@@ -896,7 +899,7 @@ setInterval(() => {}, 1000);
 
 	it("handles /quit while startup hydration is stalled", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-stalled-quit-"));
-		const piBin = join(directory, "stalled-pi");
+		const piBin = join(directory, "stalled-pi.cjs");
 		await writeFile(piBin, "#!/usr/bin/env node\nprocess.stdin.resume();\nsetInterval(() => {}, 1000);\n", { mode: 0o700 });
 		app = spawnSumocodePty({
 			env: { PI_BIN: piBin, PI_CODING_AGENT_DIR: join(directory, "agent") },
